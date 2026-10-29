@@ -3444,7 +3444,7 @@ MUTANTS += [
     ("M1161", "the current version released again: equal is not greater (REL1)", RELS,
      "new <= semver(current)", "new < semver(current)"),
     ("M1162", "an empty [Unreleased] released: a version with nothing in it (REL1)", RELS,
-     "    if not unreleased(changelog).strip():\n        refused.append(", "    if False:\n        refused.append("),
+     "    if not has_content(unreleased(changelog)):\n        refused.append(", "    if False:\n        refused.append("),
     ("M1163", "a release cut from a HEAD that is not origin/main (REL1)", RELS,
      "    if head != main:\n", "    if False:\n"),
     ("M1164", "a draft created for a tag that exists already (REL1)", RELS,
@@ -3462,6 +3462,29 @@ MUTANTS += [
      "        release_published(event, cfg)\n", "        pass\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1160, 1170)})
+# REL1 after its 5.5 review: M1430–M1436.
+ADS = "scripts/agents_discord.py"
+MUTANTS += [
+    ("M1430", "a push or a pull request that fails after the branch exists said « nothing written » (REL1)", RELS,
+     "        raise Halfway(_halfway(step, branch, str(e))) from None\n", "        raise\n"),
+    ("M1431", "an [Unreleased] of headings only released: a version with nothing in it (REL1)", RELS,
+     '    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())\n',
+     "    return bool(text.strip())\n"),
+    ("M1432", "ids from a release's notes delete any message of #agents' webhook (REL1)", NDS,
+     '    if ping and _titled(cfg, ping, "🙋 " + release_waiting(tag)):\n', "    if ping:\n"),
+    ("M1433", "ids from a release's notes rewrite any message as if it were the board (REL1)", NDS,
+     "    msg = _titled(cfg, board, BOARD_TITLE) if board else None\n",
+     '    msg = fetch("GET", f"{cfg.agents}/messages/{board}", "webhook #agents") if board else None\n'),
+    ("M1434", "the line notify.yml took off put back by the next refresh (REL1)", ADS,
+     "    if not items or not (due or any([_ping_gone(cfg, w) for w in items])):\n",
+     "    if not items or not due:\n"),
+    ("M1435", "a draft made again keeps the stale link and ping (REL1)", ADS,
+     '        if old.get("url", "") == item.get("url", ""):\n', "        if True:\n"),
+    ("M1436", "#agents' webhook given to notify.yml on every event (REL1)", ".github/workflows/notify.yml",
+     "${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}",
+     "${{ secrets.EREGION_DISCORD_WEBHOOK_AGENTS }}"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1430, 1437)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

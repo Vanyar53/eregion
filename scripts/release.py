@@ -2,7 +2,7 @@
 """release — a release in two commands: the version's pull request, then the draft (REL1, #269).
 
   release.py prepare X.Y.Z --title TEXT [--dry-run]   make release VERSION=X.Y.Z TITLE="…" [DRY_RUN=1]
-  release.py draft X.Y.Z [--notes FILE] [--dry-run]   make release-draft VERSION=X.Y.Z [NOTES=file] [DRY_RUN=1]
+  release.py release-draft X.Y.Z [--notes FILE] [--dry-run]   make release-draft VERSION=X.Y.Z [NOTES=file] [DRY_RUN=1]
 
 `prepare`, on an up-to-date origin/main with a clean tree: [Unreleased] becomes
 [X.Y.Z] — <date> — "<title>" (an empty [Unreleased] above it), the version of pyproject.toml
@@ -51,6 +51,11 @@ class Refused(Exception):
     """A check that does not hold: nothing was written."""
 
 
+class Halfway(Exception):
+    """A step that failed past the point of no return: the release branch exists. Its text says
+    what is left and how to go on, or back."""
+
+
 # ── the tools ───────────────────────────────────────────────────────────────────────
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess:
@@ -92,6 +97,11 @@ def unreleased(changelog: str) -> str:
     rest = changelog.split(UNRELEASED, 1)[1]
     m = SECTION.search(rest)
     return rest[: m.start()] if m else rest
+
+
+def has_content(text: str) -> bool:
+    """At least one line that is not blank nor a heading: headings alone hold nothing."""
+    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())
 
 
 def cut(changelog: str, version: str, day: str, title: str) -> str:
@@ -153,8 +163,8 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
     current = version_of(pyproject)
     if new is not None and (semver(current) is None or new <= semver(current)):
         refused.append(f"{version} n'est pas plus grande que la version courante ({current or '—'})")
-    if not unreleased(changelog).strip():
-        refused.append("[Unreleased] est vide au CHANGELOG : rien à publier")
+    if not has_content(unreleased(changelog)):
+        refused.append("[Unreleased] est vide au CHANGELOG (ou n'a que des titres) : rien à publier")
     if new is not None and re.search(rf"(?m)^## \[{re.escape(version)}\]", changelog):
         refused.append(f"le CHANGELOG a déjà une section [{version}]")
     if len(STATUS.findall(readme)) != 1:
@@ -175,7 +185,7 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
         return 1
 
     edits = {}
-    if new is not None and unreleased(changelog).strip() and title and current:
+    if new is not None and has_content(unreleased(changelog)) and title and current:
         edits = {"pyproject.toml": PROJECT_VERSION.sub(f'version = "{version}"', pyproject, count=1),
                  "CHANGELOG.md": cut(changelog, version, day, title),
                  "README.md": STATUS.sub(f"**Status — v{version}.**", readme, count=1)}
@@ -207,14 +217,37 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
         return 1 if refused else 0
 
     run(commands[0], root)                       # the branch first: main's tree is never touched
-    for name, text in edits.items():
-        (root / name).write_text(text, encoding="utf-8")
-    for c in commands[1:]:
-        out = run(c, root)
-        if c[0] == "gh":
-            say(out.stdout.strip())
+    step = "write"
+    try:
+        for name, text in edits.items():
+            (root / name).write_text(text, encoding="utf-8")
+        for c in commands[1:]:
+            step = c[1]
+            out = run(c, root)
+            if c is commands[-1]:   # the pull request: its URL
+                say(out.stdout.strip())
+    except (Refused, OSError) as e:
+        raise Halfway(_halfway(step, branch, str(e))) from None
     say(f"\nPR ouverte. Après sa fusion : make release-draft VERSION={version}")
     return 0
+
+
+def _halfway(step: str, branch: str, why: str) -> str:
+    """What is left after a failure past `git switch -c`, and how to go on or back."""
+    back = f"git checkout -- . && git switch - && git branch -D {branch}"
+    left, on = {
+        "write": ("la branche, des fichiers peut-être à moitié écrits",
+                  "revenir en arrière (ci-dessous), corriger, puis relancer make release"),
+        "add": ("la branche, les fichiers changés, rien de commité", "git add … && git commit, puis push et PR"),
+        "commit": ("la branche, les fichiers changés, rien de commité", "git commit, puis push et PR"),
+        "push": ("la branche et son commit, en local seulement",
+                 f"git push -u origin {branch} && gh pr create --base main --head {branch}"),
+        "pr": ("la branche, son commit, poussée ; pas de PR", f"gh pr create --base main --head {branch}"),
+    }[step]
+    if step in ("pr",):
+        back = f"git switch - && git branch -D {branch} && git push origin --delete {branch}"
+    return (f"échec à l'étape « {step} », après la création de {branch} : {why}\n"
+            f"  Reste : {left}.\n  Reprendre : {on}.\n  Ou revenir en arrière : {back}.")
 
 
 # ── draft: the release, a draft, never published ────────────────────────────────────
@@ -268,8 +301,8 @@ def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = Fal
             text = Path(notes_file).expanduser().read_text(encoding="utf-8").strip("\n")
         except OSError as e:
             refused.append(f"NOTES illisible : {type(e).__name__}")
-    if not text.strip():
-        refused.append("des notes vides")
+    if not has_content(text):
+        refused.append("des notes vides (ou rien que des titres)")
     title = f"{tag} — {heading}" if heading else tag
 
     say(f"Brouillon {tag} « {title} » sur origin/main {sha}")
@@ -302,8 +335,8 @@ def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = Fal
                              + "\n", encoding="utf-8")
             edit = run(["gh", "release", "edit", tag, "--notes-file", str(notes)], root, check=False)
             if edit.returncode != 0:
-                print("atelier: not sent — the draft's notes: its #agents line goes at the next refresh",
-                      file=sys.stderr)
+                print("atelier: not sent — les notes du brouillon : sa ligne de #agents part au "
+                      "rafraîchissement suivant", file=sys.stderr)
             say("Sur #agents : la ligne du brouillon et son ping, effacés à la publication.")
     return 0
 
@@ -318,7 +351,7 @@ def main(argv=None) -> int:
     p.add_argument("--title", default=os.environ.get("EREGION_RELEASE_TITLE", ""))
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--date", default=None, help=argparse.SUPPRESS)
-    d = sub.add_parser("draft")
+    d = sub.add_parser("release-draft")
     d.add_argument("version", nargs="?", default=os.environ.get("EREGION_RELEASE_VERSION", ""))
     d.add_argument("--notes", default=os.environ.get("EREGION_RELEASE_NOTES", ""))
     d.add_argument("--dry-run", action="store_true")
@@ -331,6 +364,9 @@ def main(argv=None) -> int:
     except Refused as r:
         say(f"Refusé : {r}")
         return 1
+    except Halfway as h:
+        say(f"Arrêté en route — {h}")
+        return 2
 
 
 if __name__ == "__main__":

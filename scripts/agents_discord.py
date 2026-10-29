@@ -256,7 +256,7 @@ def board_card(state: dict, now: int) -> dict:
         text = run["text"] if len(run["text"]) <= 600 else run["text"][:599] + "…"   # its lines kept
         lines += ["", f"**🏁 Dernier run** · <t:{run['at']}:f>", text]
     color = nd.ORANGE if state["waiting"] else nd.BLUE if rows else nd.GREY
-    card = nd.embed("📋 elrond", "\n".join(lines), color)
+    card = nd.embed(nd.BOARD_TITLE, "\n".join(lines), color)
     card["timestamp"] = datetime.fromtimestamp(now, timezone.utc).isoformat()
     return card
 
@@ -282,8 +282,10 @@ def await_(cfg: nd.Config, state: dict, item: dict, delay: int = 0) -> None:
     """Something waits for Jonathan: on the board at once, pinged at the next refresh after `delay`.
     Said again, it keeps its ping: one push per thing."""
     if old := next((w for w in state["waiting"] if w["key"] == item["key"]), None):
-        old.update(title=item["title"], text=item.get("text", ""))
-        return
+        if old.get("url", "") == item.get("url", ""):
+            old.update(title=item["title"], text=item.get("text", ""))
+            return
+        settle(cfg, state, lambda w: w is old)   # another draft of that tag: its link and ping are stale
     state["waiting"].append({**item, "ping_at": item["since"] + delay})
     if delay:
         _later("tick", str(delay))
@@ -334,11 +336,27 @@ def _merged_prs(cfg: nd.Config, state: dict, now: int, force: bool) -> None:
                     f"https://github.com/{_repo()}/pull/{w['pr']}", "PR")
 
 
+def _ping_gone(cfg: nd.Config, w: dict) -> bool:
+    """Its ping deleted in Discord: by notify.yml when the release was published (or by hand)."""
+    if not (cfg.agents and w.get("ping")) or w.get("ping_gone"):
+        return False
+    try:
+        nd.fetch("GET", f"{cfg.agents}/messages/{w['ping']}", "webhook #agents")
+    except nd.Failure as f:
+        if f.code == 404:
+            w["ping_gone"] = True   # asked once: a ping deleted by hand is not asked again
+            return True
+        nd.say(f)
+    return False
+
+
 def _published_releases(cfg: nd.Config, state: dict, now: int, force: bool) -> None:
     """A draft Jonathan published no longer waits. GitHub knows a release by its tag once it is
-    published only (a draft has no tag yet: 404); asked, never often."""
+    published only (a draft has no tag yet: 404); asked, never often — at once, though, when its
+    ping is gone: notify.yml took its line off the board, which must not put it back."""
     items = [w for w in state["waiting"] if w["kind"] == "release"]
-    if not items or (not force and now - state.get("releases_checked", 0) < PR_CHECK_S):
+    due = force or now - state.get("releases_checked", 0) >= PR_CHECK_S
+    if not items or not (due or any([_ping_gone(cfg, w) for w in items])):
         return
     state["releases_checked"] = now
     api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
@@ -351,7 +369,7 @@ def _published_releases(cfg: nd.Config, state: dict, now: int, force: bool) -> N
             if f.code != 404:   # 404: still a draft
                 nd.say(f)
             continue
-        if rel.get("draft") is False:
+        if rel.get("published_at"):
             settle(cfg, state, lambda x: x is w)
             _recent(state, w["tag"], f"release {w['tag']} publiée", now, rel.get("html_url", ""), "release")
 

@@ -491,22 +491,29 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   (`gh pr create`). Refusé, sans rien écrire :
   - un arbre modifié, ou un HEAD qui n'est pas `origin/main` ;
   - une version qui n'est pas X.Y.Z, ou pas plus grande que la courante ;
-  - un `[Unreleased]` vide, ou une section `[X.Y.Z]` déjà là ;
+  - un `[Unreleased]` vide ou qui n'a que des titres, ou une section `[X.Y.Z]` déjà là ;
   - la branche ou le tag `vX.Y.Z` qui existe déjà ;
   - un titre vide, sur deux lignes, ou avec un guillemet droit.
+
+  **Un échec en route n'est pas un refus.** Si le commit, le push ou la PR échoue après la création de la
+  branche, la commande s'arrête en code 2. Elle dit ce qui reste, comment reprendre
+  (`gh pr create --base main --head chore/release-X.Y.Z`…) et comment revenir en arrière
+  (`git switch -`, `git branch -D chore/release-X.Y.Z`, et la branche distante si elle a été poussée).
 - **`make release-draft`**, après la fusion : le **brouillon** `vX.Y.Z — <titre>`, sur le sha complet
   d'`origin/main`. Celui-ci doit tenir la version : son `pyproject.toml` et la section `[X.Y.Z]` de son
-  CHANGELOG. Les notes : `NOTES=fichier`, sinon cette section. Refusé si le tag ou une release `vX.Y.Z`
-  existe déjà, brouillon compris. Le brouillon est posé sur le tableau de `#agents`, avec un ping
+  CHANGELOG. Les notes : `NOTES=fichier`, sinon cette section, avec au moins une ligne qui n'est pas un
+  titre. Refusé si le tag ou une release `vX.Y.Z` existe déjà, brouillon compris. Le brouillon est posé sur le tableau de `#agents`, avec un ping
   (`docs/atelier-discord.md`) ; sans configuration Discord, rien n'est envoyé et la commande réussit.
-- **Aucun chemin ne publie** : rien ne fait d'un brouillon une release (`tests/unit/test_release.py`
-  lit le code). Publier déploie H0 (son CD, H1) : **Jonathan publie**, sur GitHub.
+- **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
+  lit le code sur une liste blanche : quatre commandes `gh` seulement (`pr create`, `release list`,
+  `release create` avec `--draft`, `release edit` des seules notes), jamais `gh api`. Aucun texte ne dit
+  `draft`, sauf ce `--draft`. Une URL de `releases` n'est jamais appelée qu'en lecture. Publier déploie H0 (son CD, H1) : **Jonathan publie**, sur GitHub.
 - `DRY_RUN=1` : tout est montré, rien n'est écrit, poussé, créé ni envoyé.
 - `VERSION`, `TITLE` et `NOTES` se donnent sur la ligne de commande. Venus de l'environnement, ils sont
   refusés, comme `REF` : le script les lit dans son environnement, make ne les développe pas.
 
 Tests : `tests/unit/test_release.py`, sur un dépôt git jetable (un `origin` nu dans `tmp_path`) avec un
-faux `gh` et le faux Discord. Mutants M1160–M1169.
+faux `gh` et le faux Discord. Mutants M1160–M1169, M1430–M1436.
 
 ---
 

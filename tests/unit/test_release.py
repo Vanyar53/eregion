@@ -5,6 +5,7 @@ PATH that records every call and answers as GitHub's CLI does, and the fake Disc
 (tests/unit/fake_discord.py) for #agents. Nothing reaches GitHub nor Discord: no tag, no release,
 no remote branch but the throwaway origin's.
 """
+import ast
 import importlib.util
 import json
 import os
@@ -65,6 +66,9 @@ state = Path(os.environ["FAKE_GH_STATE"])
 data = json.loads(state.read_text()) if state.exists() else {"releases": [], "calls": []}
 args = sys.argv[1:]
 call = {"args": args}
+if " ".join(args[:2]) == os.environ.get("FAKE_GH_FAIL"):
+    print("HTTP 502: Bad Gateway", file=sys.stderr)
+    sys.exit(1)
 if "--notes-file" in args:
     call["notes"] = Path(args[args.index("--notes-file") + 1]).read_text()
 data["calls"].append(call)
@@ -248,6 +252,14 @@ def _empty_unreleased(work):
     git(work, "push", "-q", "origin", "main")
 
 
+def _headings_only(work):
+    text = (CHANGELOG.split("## [Unreleased]\n")[0] + "## [Unreleased]\n\n### Added\n\n### Fixed\n\n## [0.4.3]"
+            + CHANGELOG.split("## [0.4.3]")[1])
+    (work / "CHANGELOG.md").write_text(text, encoding="utf-8")
+    git(work, "commit", "-qam", "headings only")
+    git(work, "push", "-q", "origin", "main")
+
+
 def _remote_branch(work):
     git(work, "push", "-q", "origin", "main:refs/heads/chore/release-0.4.4")
 
@@ -278,6 +290,7 @@ def _local_tag(work):
     (None, "v0.4.4", "n'est pas X.Y.Z"),
     (None, "0.04.4", "n'est pas X.Y.Z"),
     (_empty_unreleased, "0.4.4", "[Unreleased] est vide"),
+    (_headings_only, "0.4.4", "[Unreleased] est vide au CHANGELOG (ou n'a que des titres)"),
     (_remote_branch, "0.4.4", "la branche chore/release-0.4.4 existe déjà"),
     (_local_branch, "0.4.4", "la branche chore/release-0.4.4 existe déjà"),
     (_remote_tag, "0.4.4", "le tag v0.4.4 existe déjà"),
@@ -317,7 +330,7 @@ def test_release_draft_creates_a_draft_on_main_s_full_sha_with_the_changelog_s_s
     capsys.readouterr()
     sha = git(repo, "rev-parse", "origin/main")
     git(repo, "switch", "-q", "--detach", "HEAD~1")                       # wherever HEAD is: main's sha
-    assert rel.main(["draft", "0.4.4"]) == 0, capsys.readouterr().out
+    assert rel.main(["release-draft", "0.4.4"]) == 0, capsys.readouterr().out
     (create,) = [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]]
     args = create["args"]
     assert args[2] == "v0.4.4" and "--draft" in args
@@ -334,7 +347,7 @@ def test_release_draft_takes_the_notes_given(repo, tmp_path, capsys):
     prepared(repo, capsys)
     notes = tmp_path / "notes.md"
     notes.write_text("**0.4.4 — x.** The lead paragraph.\n\n### Added\n- one\n", encoding="utf-8")
-    assert rel.main(["draft", "0.4.4", "--notes", str(notes)]) == 0
+    assert rel.main(["release-draft", "0.4.4", "--notes", str(notes)]) == 0
     (create,) = [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]]
     assert create["notes"] == "**0.4.4 — x.** The lead paragraph.\n\n### Added\n- one\n"
 
@@ -342,7 +355,7 @@ def test_release_draft_takes_the_notes_given(repo, tmp_path, capsys):
 def test_release_draft_dry_run_creates_nothing(repo, tmp_path, capsys):
     prepared(repo, capsys)
     capsys.readouterr()
-    assert rel.main(["draft", "0.4.4", "--dry-run"]) == 0
+    assert rel.main(["release-draft", "0.4.4", "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "gh release create v0.4.4 --draft --target" in out and "### Added" in out
     assert [c for c in gh_calls(tmp_path) if c["args"][0] == "release" and c["args"][1] != "list"] == []
@@ -364,12 +377,18 @@ def _notes_unreadable(work):
     return ["--notes", str(work.parent / "absent.md")]
 
 
+def _notes_headings_only(work):
+    (work.parent / "headings.md").write_text("### Added\n\n### Fixed\n", encoding="utf-8")
+    return ["--notes", str(work.parent / "headings.md")]
+
+
 @pytest.mark.parametrize("setup, said", [
     (_no_release_merged, "est en 0.4.3, pas 0.4.4"),
     (_remote_tag, "le tag v0.4.4 existe déjà"),
     (_local_tag, "le tag v0.4.4 existe déjà"),
     (_draft_exists, "une release v0.4.4 existe déjà (brouillon compris)"),
     (_notes_unreadable, "NOTES illisible"),
+    (_notes_headings_only, "des notes vides (ou rien que des titres)"),
 ], ids=lambda x: getattr(x, "__name__", str(x))[:40])
 def test_release_draft_refuses_and_creates_nothing(repo, tmp_path, capsys, setup, said):
     assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
@@ -377,7 +396,7 @@ def test_release_draft_refuses_and_creates_nothing(repo, tmp_path, capsys, setup
         merge_release(repo)
     extra = setup(repo) or []
     capsys.readouterr()
-    assert rel.main(["draft", "0.4.4", *extra]) == 1
+    assert rel.main(["release-draft", "0.4.4", *extra]) == 1
     out = capsys.readouterr().out
     assert refused(out, said) and "rien n'a été créé" in out
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] in (["release", "create"], ["release", "edit"])] == []
@@ -388,15 +407,97 @@ def test_release_draft_refuses_a_version_main_s_changelog_does_not_hold(repo, tm
     (repo / "pyproject.toml").write_text(PYPROJECT.replace("0.4.3", "0.4.4"), encoding="utf-8")
     git(repo, "commit", "-qam", "bump by hand")
     git(repo, "push", "-q", "origin", "main")
-    assert rel.main(["draft", "0.4.4"]) == 1
+    assert rel.main(["release-draft", "0.4.4"]) == 1
     assert "✗ le CHANGELOG d'origin/main n'a pas de section [0.4.4]" in capsys.readouterr().out
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "create"]] == []
 
 
 # ── no path publishes ───────────────────────────────────────────────────────────────
+# An allow-list, read in the code's syntax tree (never a pattern of what would publish: gh's
+# boolean flags take f, F, FALSE, 0…, and a value can be built, concatenated, formatted).
+# - In release.py, every list that starts with "gh" is one of four commands, never `gh api`;
+#   `release create` holds the literal "--draft" followed by another flag, and `release edit` is
+#   exactly [gh, release, edit, <tag>, --notes-file, <path>]. "gh" appears nowhere else but in
+#   shutil.which; release.py opens no HTTP connection of its own.
+# - Everywhere (release.py, agents_discord.py, notify_discord.py, the make recipes), no string
+#   says `draft` as a word, a flag or a field — but the literal "--draft" of `create`. The names
+#   `release-draft` (the make target, the subcommand) and `release_draft` (a function) are names.
+# - In agents_discord.py and notify_discord.py, a URL that holds `releases` is only ever read
+#   (GET), by fetch(method, url, …) as by the bot's call(method, path, …).
 
-PUBLISHES = re.compile(r"""--draft[= ]+(?:false|0)|draft["']?\s*[:=]\s*(?:false|False|0)\b|--publish|"publish"|"""
-                       r"""["']--draft["'],\s*["'](?:false|0)["']|releases/\{?[\w}]*\}?["']?,?\s*["']PATCH""")
+GH_COMMANDS = {("pr", "create"), ("release", "list"), ("release", "create"), ("release", "edit")}
+DRAFT_WORD = re.compile(r"(?i)(?<![a-z_-])-*draft")
+SCRIPTS = ("release.py", "agents_discord.py", "notify_discord.py")
+
+
+def _const(node) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _docstrings(tree) -> set[int]:
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and _const(first.value) is not None:
+                out.add(id(first.value))
+    return out
+
+
+def _gh_lists(tree) -> list:
+    return [n for n in ast.walk(tree) if isinstance(n, ast.List) and n.elts and _const(n.elts[0]) == "gh"]
+
+
+def publishes_gh(source: str) -> list[str]:
+    """What, in release.py's code, could run another gh command than the four allowed."""
+    tree, bad = ast.parse(source), []
+    lists = _gh_lists(tree)
+    for n in lists:
+        head = tuple(_const(e) for e in n.elts[1:3])
+        if head not in GH_COMMANDS:
+            bad.append(f"gh {head}")
+            continue
+        consts = [_const(e) for e in n.elts]
+        if head == ("release", "create"):
+            at = [i for i, c in enumerate(consts) if c == "--draft"]
+            if len(at) != 1 or not (at[0] + 1 < len(consts) and (consts[at[0] + 1] or "").startswith("--")):
+                bad.append("create without its --draft, or --draft given a value")
+        if head == ("release", "edit"):
+            if len(n.elts) != 6 or consts[4] != "--notes-file" or consts[3] is not None or consts[5] is not None:
+                bad.append(f"edit is not [gh, release, edit, <tag>, --notes-file, <path>]: {consts}")
+    ghs = sum(_const(n) == "gh" for n in ast.walk(tree))
+    whiches = sum(isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "which" for n in ast.walk(tree))
+    if ghs != len(lists) + whiches:
+        bad.append("gh named outside a command list")
+    drafts = sum(_const(n) == "--draft" for n in ast.walk(tree))
+    if drafts != sum(1 for n in lists if tuple(_const(e) for e in n.elts[1:3]) == ("release", "create")):
+        bad.append("a --draft outside release create")
+    for n in ast.walk(tree):
+        names = [a.name for a in n.names] if isinstance(n, ast.Import) else [n.module or ""] if isinstance(
+            n, ast.ImportFrom) else []
+        bad += [f"import {m}" for m in names if m.split(".")[0] in ("urllib", "http", "requests", "socket")]
+    return bad
+
+
+def publishes_words(source: str) -> list[str]:
+    """Every string of the code (docstrings aside) that says draft, but "--draft" itself."""
+    tree = ast.parse(source)
+    skip = _docstrings(tree)
+    return [c for n in ast.walk(tree) if id(n) not in skip and (c := _const(n)) is not None
+            and c != "--draft" and DRAFT_WORD.search(c)]
+
+
+def publishes_http(source: str) -> list[str]:
+    """A URL holding `releases` called with another method than GET."""
+    bad = []
+    for n in ast.walk(ast.parse(source)):
+        name = getattr(n.func, "attr", None) or getattr(n.func, "id", None) if isinstance(n, ast.Call) else None
+        if name not in ("fetch", "call", "Request", "urlopen") or len(n.args) < 2:
+            continue
+        url = "".join(c for x in ast.walk(n.args[1]) if (c := _const(x)) is not None)
+        if "releases" in url and _const(n.args[0]) != "GET":
+            bad.append(f"{_const(n.args[0])} {url}")
+    return bad
 
 
 def _recipes(text: str, *targets: str) -> str:
@@ -410,23 +511,44 @@ def _recipes(text: str, *targets: str) -> str:
 
 def test_no_path_publishes_in_the_code():
     """Publishing deploys H0: nothing in the release's code turns a draft into a release."""
-    code = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+    code = {n: (ROOT / "scripts" / n).read_text(encoding="utf-8") for n in SCRIPTS}
+    assert publishes_gh(code["release.py"]) == []
+    assert len(_gh_lists(ast.parse(code["release.py"]))) == 4      # pr create, release list/create/edit
+    for name, text in code.items():
+        assert publishes_words(text) == [], name
+    for name in ("agents_discord.py", "notify_discord.py"):
+        assert publishes_http(code[name]) == [], name
     make = _recipes((ROOT / "Makefile").read_text(encoding="utf-8"), "release", "release-draft")
-    for name, text in (("release.py", code), ("Makefile", make),
-                       ("agents_discord.py", (ROOT / "scripts" / "agents_discord.py").read_text(encoding="utf-8")),
-                       ("notify_discord.py", (ROOT / "scripts" / "notify_discord.py").read_text(encoding="utf-8"))):
-        assert PUBLISHES.findall(text) == [], name
-    creates = re.findall(r"\[[^\]]*\"release\",\s*\"create\"[^\]]*\]", code)
-    assert creates and all('"--draft"' in c for c in creates)
-    edits = re.findall(r"\[[^\]]*\"release\",\s*\"edit\"[^\]]*\]", code)
-    assert edits and all("--draft" not in e for e in edits)
-    assert "gh release" not in make and "api.github.com" not in code
+    assert DRAFT_WORD.findall(make) == [] and "gh " not in make and "curl" not in make
 
 
-def test_the_pattern_sees_a_path_that_would_publish():
-    for bad in ('"gh", "release", "edit", tag, "--draft=false"', "gh release edit v1 --draft false",
-                '{"draft": False}', '"--draft", "false"'):
-        assert PUBLISHES.search(bad), bad
+@pytest.mark.parametrize("snippet", [
+    '["gh", "release", "edit", tag, "--draft=f"]',
+    'x = ["gh", "release", "edit", tag, "--notes-file", "--draft=F"]',
+    'x = "--draft=FALSE"',
+    '["gh", "release", "create", tag, "--draft", "False", "--target", sha]',
+    '["gh", "release", "create", tag, "--draft", "--target", sha, "--draft", "0"]',
+    'x = "--draft=" + "false"',
+    'x = f"--draft={value}"',
+    '["gh", "api", "-X", "PATCH", f"repos/o/r/releases/{rid}", "-F", "draft=f"]',
+    '["gh", "api", "--method", "PATCH", "repos/o/r/releases/1", "--input", path]',
+    '["gh", *args]',
+    'cmd = ["gh"] + ["release", "edit", tag, "--draft=false"]',
+    'subprocess.run(["gh", "release", "edit", tag, "--notes-file", p, "--prerelease"])',
+    'import urllib.request',
+    'nd.fetch("PATCH", f"{api}/repos/o/r/releases/{rid}", "GitHub API", {"draft": False})',
+    'fetch("POST", api + "/repos/o/r/releases", "x", body)',
+    'fetch(method, f"{api}/releases/{rid}", "x")',
+    'x = {"Draft": 0}',
+    'x = "publish -F draft=f"',
+], ids=lambda s: s[:40])
+def test_the_allow_list_sees_a_path_that_would_publish(snippet):
+    assert publishes_gh(snippet) or publishes_words(snippet) or publishes_http(snippet), snippet
+
+
+def test_the_makefile_check_sees_a_recipe_that_would_publish():
+    for recipe in ("\tgh release edit v1 --draft=false\n", "\tgh api -X PATCH repos/o/r/releases/1 -F draft=f\n"):
+        assert DRAFT_WORD.findall(recipe) or "gh " in recipe
 
 
 def test_no_call_publishes(repo, tmp_path, capsys, monkeypatch):
@@ -435,15 +557,17 @@ def test_no_call_publishes(repo, tmp_path, capsys, monkeypatch):
     try:
         _discord(monkeypatch, f)
         prepared(repo, capsys)
-        assert rel.main(["draft", "0.4.4"]) == 0
+        assert rel.main(["release-draft", "0.4.4"]) == 0
     finally:
         f.close()
     calls = [c["args"] for c in gh_calls(tmp_path)]
     assert [c[:2] for c in calls] == [["pr", "create"], ["release", "list"], ["release", "create"],
                                       ["release", "edit"]]
-    for c in calls:
-        assert not any(re.fullmatch(r"--draft=?(false|0)?|--publish|false", a) for a in c if a != "--draft"), c
-    assert "--draft" in calls[2] and "--draft" not in " ".join(calls[3])
+    create, edit = calls[2], calls[3]
+    assert [a for a in create if "draft" in a.lower()] == ["--draft"]
+    assert create[create.index("--draft") + 1].startswith("--")
+    assert edit[:4] == ["release", "edit", "v0.4.4", "--notes-file"] and len(edit) == 5
+    assert Path(edit[4]).name == "notes.md"
     assert all(r["draft"] for r in gh_releases(tmp_path))
 
 
@@ -459,11 +583,18 @@ def _discord(monkeypatch, f):
 
 
 @pytest.fixture
-def fake(monkeypatch):
+def fake(monkeypatch, tmp_path):
+    """The fake Discord; the local state and the configuration file in tmp_path, never the operator's."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("EREGION_DISCORD_ENV", str(tmp_path / "absent.env"))
     f = FakeDiscord()
     _discord(monkeypatch, f)
     yield f
     f.close()
+
+
+PUBLISHED = {"tag_name": "v0.4.4", "draft": False, "published_at": "2026-10-30T09:00:00Z",
+             "html_url": "https://github.com/o/r/releases/tag/v0.4.4"}
 
 
 def _board(f):
@@ -483,7 +614,7 @@ def _published(tmp_path, monkeypatch, body):
 
 def test_the_draft_is_on_the_board_and_pinged_then_both_go_when_published(repo, tmp_path, capsys, fake, monkeypatch):
     prepared(repo, capsys)
-    assert rel.main(["draft", "0.4.4"]) == 0
+    assert rel.main(["release-draft", "0.4.4"]) == 0
     url = "https://github.com/o/r/releases/tag/untagged-0001"
     line = "🙋 release v0.4.4 en brouillon, à publier"
 
@@ -516,8 +647,7 @@ def test_the_draft_is_on_the_board_and_pinged_then_both_go_when_published(repo, 
     assert fake.messages[state["board"]]["allowed_mentions"] == {"parse": []}
 
     # And the local board, asked of GitHub, settles it for good: never back on the board.
-    fake.gh["releases"]["v0.4.4"] = {"tag_name": "v0.4.4", "draft": False,
-                                     "html_url": "https://github.com/o/r/releases/tag/v0.4.4"}
+    fake.gh["releases"]["v0.4.4"] = PUBLISHED
     assert ad.main(["board"]) == 0
     board, state = _board(fake)
     assert state["waiting"] == [] and line not in board["description"]
@@ -532,10 +662,10 @@ def gh_gh_release_notes(tmp_path):
 def test_published_without_the_ci_the_local_board_settles_it(repo, tmp_path, capsys, fake):
     """notify.yml without #agents' webhook (the secret not set): the board's next refresh does it."""
     prepared(repo, capsys)
-    assert rel.main(["draft", "0.4.4"]) == 0
+    assert rel.main(["release-draft", "0.4.4"]) == 0
     board, state = _board(fake)
     ping_id = state["waiting"][0]["ping"]
-    fake.gh["releases"]["v0.4.4"] = {"tag_name": "v0.4.4", "draft": False, "html_url": ""}
+    fake.gh["releases"]["v0.4.4"] = PUBLISHED
     assert ad.main(["board"]) == 0
     board, state = _board(fake)
     assert state["waiting"] == [] and ping_id not in fake.messages
@@ -544,7 +674,7 @@ def test_published_without_the_ci_the_local_board_settles_it(repo, tmp_path, cap
 
 def test_a_draft_can_be_cleared_by_hand(repo, capsys, fake):
     prepared(repo, capsys)
-    assert rel.main(["draft", "0.4.4"]) == 0
+    assert rel.main(["release-draft", "0.4.4"]) == 0
     assert ad.main(["clear", "v0.4.4"]) == 0
     board, state = _board(fake)
     assert state["waiting"] == [] and "en brouillon" not in board["description"]
@@ -566,7 +696,7 @@ def test_a_published_release_s_ping_already_gone_is_no_error(tmp_path, monkeypat
 
 def test_without_discord_the_draft_succeeds_and_nothing_is_sent(repo, tmp_path, capsys):
     prepared(repo, capsys)
-    assert rel.main(["draft", "0.4.4"]) == 0
+    assert rel.main(["release-draft", "0.4.4"]) == 0
     assert gh_releases(tmp_path)[0]["draft"] is True
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "edit"]] == []
     assert not (tmp_path / "state").exists()                     # not even the local state
@@ -575,7 +705,7 @@ def test_without_discord_the_draft_succeeds_and_nothing_is_sent(repo, tmp_path, 
 def test_a_discord_that_fails_never_fails_the_draft(repo, tmp_path, capsys, fake):
     fake.fail["/api/webhooks"] = 500
     prepared(repo, capsys)
-    assert rel.main(["draft", "0.4.4"]) == 0
+    assert rel.main(["release-draft", "0.4.4"]) == 0
     assert gh_releases(tmp_path)[0]["draft"] is True
     err = capsys.readouterr().err
     assert "atelier: not sent — webhook #agents: HTTP 500" in err and AGENTS_TOKEN not in err
@@ -647,7 +777,7 @@ def test_make_passes_the_title_by_the_environment_never_on_the_command_line(make
     assert "python3 scripts/release.py prepare --dry-run" in out.stdout
     assert "$(shell id)" not in out.stdout and "`id`" not in out.stdout and "uid=" not in out.stdout
     draft = _make(make_env, ROOT, "-n", "release-draft", "VERSION=0.4.4", "NOTES=notes.md")
-    assert "python3 scripts/release.py draft\n" in draft.stdout and "notes.md" not in draft.stdout
+    assert "python3 scripts/release.py release-draft\n" in draft.stdout and "notes.md" not in draft.stdout
 
 
 @pytest.mark.parametrize("target", ["release", "release-draft"])
@@ -657,3 +787,98 @@ def test_make_refuses_a_version_from_the_environment(make_env, tmp_path, target)
     assert out.returncode != 0 and "vient de l'environnement" in out.stderr
     given = _make(make_env, tmp_path, target, "VERSION=1.0.0", "TITLE=x")
     assert "vient de l'environnement" not in given.stderr and "scripts/release.py" in given.stderr   # past the guard
+
+
+# ── a failure past the point of no return ───────────────────────────────────────────
+
+def test_a_pull_request_that_fails_says_what_is_left_and_how_to_go_on(repo, tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("FAKE_GH_FAIL", "pr create")
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 2
+    out = capsys.readouterr().out
+    assert "rien n'a été écrit" not in out and "Refusé" not in out
+    assert "Arrêté en route — échec à l'étape « pr », après la création de chore/release-0.4.4" in out
+    assert "HTTP 502" in out and "Reste : la branche, son commit, poussée ; pas de PR" in out
+    assert "Reprendre : gh pr create --base main --head chore/release-0.4.4" in out
+    assert "git push origin --delete chore/release-0.4.4" in out
+    assert git(repo, "branch", "--show-current") == "chore/release-0.4.4"      # it is there, as said
+
+
+def test_a_push_that_fails_says_what_is_left_and_how_to_go_back(repo, tmp_path, capsys):
+    hook = tmp_path / "origin.git" / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\necho 'refused by the test' >&2\nexit 1\n")
+    hook.chmod(0o755)
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 2
+    out = capsys.readouterr().out
+    assert "échec à l'étape « push »" in out and "Reste : la branche et son commit, en local seulement" in out
+    assert "git push -u origin chore/release-0.4.4 && gh pr create --base main --head chore/release-0.4.4" in out
+    assert "git switch - && git branch -D chore/release-0.4.4" in out
+    assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["pr", "create"]] == []
+
+
+# ── notify.yml reads ids from the notes: only this draft's ping, only the board ─────
+
+def test_ids_in_the_notes_never_delete_another_message(repo, tmp_path, capsys, fake, monkeypatch):
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    hook = f"{fake.base}/api/webhooks/2/{AGENTS_TOKEN}"
+    other = nd.post_webhook(hook, {"embeds": [{"title": "⛔ A3 bloqué"}]}, "t")
+    fake_board = nd.post_webhook(hook, {"embeds": [{"title": "⛔ A4 bloqué",
+                                                    "description": "🙋 release v0.4.4 en brouillon, à publier"}]}, "t")
+    before = {k: json.dumps(v, sort_keys=True) for k, v in fake.messages.items()}
+    _published(tmp_path, monkeypatch, f"x\n\n<!-- #agents (REL1) : ping={other} board={fake_board} — effacés -->")
+    assert {k: json.dumps(v, sort_keys=True) for k, v in fake.messages.items()} == before
+    assert [r for r in fake.requests if r["method"] in ("DELETE", "PATCH") and "/webhooks/" in r["path"]
+            and r["path"].rsplit("/", 1)[1] in (other, fake_board)] == []
+
+
+def test_another_release_s_ping_is_not_this_one_s(repo, tmp_path, capsys, fake, monkeypatch):
+    """The ping of v0.4.4 named in the notes of a v0.4.5 published: left alone."""
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    _, state = _board(fake)
+    ping = state["waiting"][0]["ping"]
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"action": "published", "release": {
+        "tag_name": "v0.4.5", "body": f"<!-- #agents (REL1) : ping={ping} board={state['board']} -->"}}))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "release")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    assert nd.github() == 0
+    assert ping in fake.messages and "release v0.4.4 en brouillon" in fake.messages[state["board"]]["embeds"][0][
+        "description"]
+
+
+# ── the local board after notify.yml, and a draft made again ────────────────────────
+
+def test_the_line_notify_yml_took_off_never_comes_back(repo, tmp_path, capsys, fake, monkeypatch):
+    """The board refreshed right after the publication (GitHub asked a minute ago): its ping
+    gone, GitHub is asked at once, and the line stays off."""
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    assert ad.main(["board"]) == 0                        # GitHub asked now: still a draft
+    (edit,) = [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "edit"]]
+    _published(tmp_path, monkeypatch, edit["notes"])
+    fake.gh["releases"]["v0.4.4"] = PUBLISHED
+    asked = len([r for r in fake.requests if "/releases/tags/" in r["path"]])
+    ad.command({}, nd.load_config())                      # an elrond event within the five minutes
+    board, state = _board(fake)
+    assert len([r for r in fake.requests if "/releases/tags/" in r["path"]]) == asked + 1
+    assert state["waiting"] == [] and "en brouillon" not in board["description"]
+
+
+def test_a_draft_made_again_replaces_the_stale_link_and_ping(fake, tmp_path):
+    cfg = nd.load_config()
+    first = ad.release_draft("v0.4.4", "https://github.com/o/r/releases/tag/untagged-old")
+    second = ad.release_draft("v0.4.4", "https://github.com/o/r/releases/tag/untagged-new")
+    assert first["ping"] != second["ping"] and first["ping"] not in fake.messages
+    board, state = _board(fake)
+    assert "untagged-new" in board["description"] and "untagged-old" not in board["description"]
+    assert [w["url"] for w in state["waiting"]] == ["https://github.com/o/r/releases/tag/untagged-new"]
+    assert cfg.agents
+
+
+def test_the_agents_webhook_is_given_to_release_events_only():
+    import yaml
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "notify.yml").read_text(encoding="utf-8"))
+    (step,) = [s for s in doc["jobs"]["notify"]["steps"] if s.get("name") == "Discord"]
+    assert step["env"]["EREGION_DISCORD_WEBHOOK_AGENTS"] == (
+        "${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}")

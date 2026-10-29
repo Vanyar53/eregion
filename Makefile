@@ -951,7 +951,7 @@ release:
 
 release-draft:
 	@case " $$EREGION_RELEASE_ORIGIN " in *:environment*) echo "VERSION ou NOTES vient de l'environnement : rien n'est fait. Sur la ligne de commande : make release-draft VERSION=X.Y.Z" >&2; exit 1;; esac
-	python3 scripts/release.py draft$(if $(DRY_RUN), --dry-run)
+	python3 scripts/release.py release-draft$(if $(DRY_RUN), --dry-run)
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

@@ -56,8 +56,8 @@ jobs:
         env:
           EREGION_DISCORD_WEBHOOK_CI: ${{ secrets.EREGION_DISCORD_WEBHOOK_CI }}
           # REL1: a published release deletes its draft's line and ping on #agents (the board's
-          # webhook: it edits and deletes only its own messages).
-          EREGION_DISCORD_WEBHOOK_AGENTS: ${{ secrets.EREGION_DISCORD_WEBHOOK_AGENTS }}
+          # webhook: it edits and deletes only its own messages). Given to release events only.
+          EREGION_DISCORD_WEBHOOK_AGENTS: ${{ github.event_name == 'release' && secrets.EREGION_DISCORD_WEBHOOK_AGENTS || '' }}
           EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
           EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
           GITHUB_TOKEN: ${{ github.token }}

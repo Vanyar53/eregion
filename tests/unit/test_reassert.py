@@ -74,11 +74,92 @@ def test_human_only_alerts_without_reapplying():
 
 
 def test_a_bypass_is_not_a_missing_rule():
-    """Re-applying doesn't fix an allow evaluated before the deny: verify reports it."""
+    """Re-applying doesn't fix an allow evaluated before the deny: not put back — said, on a
+    card of its own (V-16, SEC4b), never folded into the drift card."""
     _isolated()
     c = _connector({"verified": False, "shadowed_by": [{"rule": "allow-ssh"}]})
-    assert reassert_active(c, _ACT) == []
+    assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["bypassed"]
     c.isolate_vm.assert_not_called()
+    assert [e["escalation_type"] for e in escalations.pending()] == ["bypassed"]
+
+
+# ── V-16 (SEC4b): an isolation or a block bypassed by someone else's allow ──────────────
+
+_ALLOW = {"rule": "allow-ssh", "priority": 150, "direction": "inbound", "ports": "22",
+          "nsg": "rg/nsg-subnet", "threat_port_open": True}
+
+
+def _bypass(*allows):
+    return {"verified": False, "method": "nsg_check", "shadowed_by": [dict(a) for a in allows]}
+
+
+def _bypass_cards(status=None):
+    return [e for e in escalations.all_escalations() if e["escalation_type"] == "bypassed"
+            and (status is None or e["status"] == status)]
+
+
+def test_a_bypassed_isolation_is_said_once_per_change_and_never_fixed():
+    """An allow of someone else's before our deny, on the NIC's or the subnet's NSG: the
+    reassertion was silent (V-16). Said once — not at every pass, not again once
+    acknowledged — and the rule is never touched (I2): no write at all."""
+    _isolated()
+    c = _connector(_bypass(_ALLOW))
+    for _ in range(3):
+        reassert_active(c, _ACT)
+    (card,) = _bypass_cards()
+    assert card["status"] == "pending" and card["action"] == "review_bypass" and card["resource_id"] == _RID
+    assert "allow-ssh" in card["reason"] and "rg/nsg-subnet" in card["reason"] and card["severity"] == "high"
+    assert card["occurrences"] == 1 and card["suggested_steps"]
+    assert {n for n, *_ in c.mock_calls} <= {"verify_isolation", "recent_changes", "nsg_listing",
+                                            "find_altered_quarantines", "find_orphan_rules"}, c.mock_calls
+    escalations.resolve(card["id"])                       # acknowledged
+    assert reassert_active(c, _ACT) == [] and not _bypass_cards("pending")
+
+
+def test_a_changed_bypass_is_a_new_card_and_a_holding_isolation_closes_it():
+    _isolated()
+    c = _connector(_bypass(_ALLOW))
+    reassert_active(c, _ACT)
+    c.verify_isolation.return_value = _bypass(_ALLOW, {**_ALLOW, "rule": "allow-rdp", "ports": "3389"})
+    reassert_active(c, _ACT)
+    (now,) = _bypass_cards("pending")
+    assert "allow-rdp" in now["reason"] and len(_bypass_cards()) == 2
+    c.verify_isolation.return_value = {"verified": False, "uncovered_nics": ["nic-a"]}
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    assert _bypass_cards("pending") == [now]              # rules gone: precedence unread, kept
+    c.verify_isolation.return_value = {"verified": True}
+    reassert_active(c, _ACT)
+    assert not _bypass_cards("pending") and "bypass_said" not in _load_isolation_state("vm")
+    c.verify_isolation.return_value = _bypass(_ALLOW)     # back: a new episode, said again
+    reassert_active(c, _ACT)
+    assert len(_bypass_cards("pending")) == 1
+
+
+def test_an_unreadable_precedence_keeps_the_bypass_card():
+    _isolated()
+    c = _connector(_bypass(_ALLOW))
+    reassert_active(c, _ACT)
+    c.verify_isolation.return_value = {"verified": None, "precedence_unknown": ["rg/nsg-subnet"]}
+    reassert_active(c, _ACT)
+    assert len(_bypass_cards("pending")) == 1
+
+
+def test_a_bypassed_block_is_said_on_its_own_card():
+    """Each IP its card; the isolation's card of the same VM is another (SEC2: one per address)."""
+    ip = "203.0.113.9"
+    _save_block_state("vm", ip, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    _isolated()
+    c = _connector(_bypass(_ALLOW), _bypass({**_ALLOW, "direction": "outbound", "ports": "*"}))
+    report = reassert_active(c, _ACT)
+    assert sorted(r["kind"] for r in report) == ["block", "isolation"]
+    cards = _bypass_cards("pending")
+    assert len(cards) == 2 and {(e["action_params"] or {}).get("ip") for e in cards} == {None, ip}
+    c.block_suspicious_ip.assert_not_called()
+    assert _load_block_entries("vm")[0]["bypass_said"]
+    c.verify_block_ip.return_value = {"verified": True}
+    reassert_active(c, _ACT)
+    assert [(e["action_params"] or {}).get("ip") for e in _bypass_cards("pending")] == [None]
 
 
 def test_vanished_block_is_put_back_once_with_its_threat_port():

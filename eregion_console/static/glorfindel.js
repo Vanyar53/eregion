@@ -22,6 +22,8 @@ const ACTION_LABELS = {
   escalate_permissions: 'Permissions escalated',
   activate_autonomy:    'Autonomous response held',
   review_isolation:     'Isolation to review (TTL)',
+  review_bypass:        'Bypass to review (someone else\'s rule)',
+  repair_local_state:   'Local state to repair',
 };
 
 // Verb forms — used for actions not yet executed (mode_hold: recommended, pending approval)
@@ -62,6 +64,8 @@ const ESC_LABELS = {
   identity_change:     'Entra ID identity changed (detection only)',
   protected_address:   'protected address (never blocked)',
   uncontained_detection: 'detection not contained (snapshot only)',
+  bypassed:            'bypassed (an allow before our deny)',
+  state_unreadable:    'local state unreadable',
 };
 
 // Cards anchored on a VM the detection does not name (an Activity Log row, an identity,
@@ -71,7 +75,7 @@ const ESC_LABELS = {
 const _ANCHORED_TYPES = new Set(['control_plane_change', 'identity_change', 'unattributed_signal']);
 const _DETECTION_ONLY = new Set(['control_plane_change', 'identity_change']);
 const _NOT_DECISIONS = new Set(['posture_gap', 'orphan_rule', 'quarantine_altered', 'proposed_rule',
-  'readiness_hold', 'ttl_exceeded', 'detection_blocked']);
+  'readiness_hold', 'ttl_exceeded', 'detection_blocked', 'bypassed', 'state_unreadable']);
 function _isAnchored(e) { return _ANCHORED_TYPES.has(e.escalation_type); }
 // A card on an NSG (a quarantine altered, an orphan rule no VM holds) gets an NSG tile.
 function _isNsgId(rid) { return /\/providers\/microsoft\.network\/networksecuritygroups\//i.test(rid || ''); }
@@ -109,6 +113,8 @@ const _ESC_TITLES = {
   proposed_action:'Unknown action proposed',
   cycle_failed:   'Signal not processed — triage by hand',
   quarantine_altered:   'Quarantine NSG altered',
+  bypassed:             'Isolation or block bypassed',
+  state_unreadable:     'Local state unreadable',
   control_plane_change: 'Control-plane change',
   identity_change:      'Entra ID identity change',
 };

@@ -10,11 +10,14 @@ from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_i
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import (
     _clear_isolation_state,
+    _held_in_quarantine,
+    _isolation_unreadable,
     _legacy_claimed,
     _load_isolation_state,
     _recorded_original,
     _save_isolation_state,
     _UNKNOWN,
+    StateUnreadable,
 )
 
 
@@ -111,7 +114,10 @@ class ReleaseMixin:
         except Exception as read:
             if not _is_not_found(read):
                 return exc
-        recorded = _recorded_original(nic_id)
+        try:
+            recorded = _recorded_original(nic_id)
+        except StateUnreadable:
+            recorded = _UNKNOWN
         tag = "" if not q or (isinstance(recorded, str) and _same_id(recorded, original)) else (
             f", ou poser le tag {self._orig_tag(nic_id)}={self._NO_ORIGINAL} sur {q['nsg_name']} "
             "pour qu'elle reste sans NSG")
@@ -250,6 +256,10 @@ class ReleaseMixin:
         # while a NIC stayed cut off (L24).
         failed += self._sweep_isolation(rg, vm_name, remaining)
 
+        if failed and _isolation_unreadable(resource_id):
+            # Its state kept as it is: written over, what it held was gone, and the next
+            # release read our tag in its place (SEC4b).
+            return {"status": "release_partial", "resource_id": resource_id, "failed": failed}
         if failed:
             from datetime import datetime, timezone
             _save_isolation_state(resource_id, {
@@ -303,6 +313,10 @@ class ReleaseMixin:
                 # written. Our tag still says what it carried (seventh review, U2).
                 try:
                     original, q_bare = self._bare_nic_original(t0, rg)
+                    if q_bare is None:
+                        # Bare by design, or in our quarantine for a state that can't be
+                        # read: unknown, never released on a guess (SEC4b).
+                        _held_in_quarantine(t0["nic_id"])
                     if q_bare is not None:
                         if original:
                             try:

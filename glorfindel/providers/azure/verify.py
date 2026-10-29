@@ -7,7 +7,7 @@ from glorfindel.providers.azure.nsg import _describe_shadowing, _rule_name, _sha
 from glorfindel.providers.azure.quarantine import _is_quarantine_nsg, PLATFORM_OPEN_NOTE
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
-from glorfindel.response.state import _held_in_quarantine, _load_isolation_state, _UNKNOWN
+from glorfindel.response.state import _held_in_quarantine, _load_isolation_state, _UNKNOWN, StateUnreadable
 
 
 class VerifyMixin:
@@ -203,7 +203,14 @@ class VerifyMixin:
                     continue
                 if original is _UNKNOWN or tagged is not _UNKNOWN:
                     original = tagged
-            if original is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):
+            try:
+                held = original is _UNKNOWN and _held_in_quarantine(t0["nic_id"])
+            except StateUnreadable as exc:
+                # A state that can't be read may hold it in quarantine: read as bare by
+                # design, it said released on an unknown (SEC4b).
+                unknown.append(f'{t0["nic_short"]} : sans NSG, {_first_line(exc)[:_ERR_MAX]}')
+                continue
+            if held:
                 # In quarantine for our state, its original unknown there (state and
                 # tags lost before a re-isolation, Q7) and no tag: someone left it bare.
                 # Bare is not its design for all we know — read as released, an old

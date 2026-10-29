@@ -262,7 +262,7 @@ class NetworkMixin:
         """True when a NIC not in `counted` belongs behind this NSG while it is away from
         it — in our quarantine, or left bare —: our tag on the quarantine NSG names this
         NSG as its original, or, its tag lost, the local state does. None when that can't
-        be read: unknown, the fixed names are left and said (_unattributable_fixed).
+        be read — a listing, or a local state (SEC4b): unknown, the fixed names are left and said (_unattributable_fixed).
 
         Counted from what is attached, the NSG of a VM away in quarantine read as the
         new VM's alone there, and its reset took the older version's isolation of the
@@ -272,7 +272,7 @@ class NetworkMixin:
         if not any(_fixed_name(_rule_name(r), self.ISOLATION_RULE_NAME)
                    for r in (getattr(nsg, "security_rules", None) or [])):
             return False
-        from glorfindel.response.state import active_isolations
+        from glorfindel.response.state import _unreadable_isolations, active_isolations
         nsg_id = getattr(nsg, "id", "") or ""
         mine = {self._orig_tag(n) for n in counted if n}
 
@@ -298,6 +298,8 @@ class NetworkMixin:
         tied -= mine
         if tied & held:
             return True
+        if _unreadable_isolations():
+            return None                       # a state that can't be read may tie one (SEC4b)
         if not tied:
             return False
         # Tied to this NSG, not in our quarantine: left bare (our NSG taken off it, the

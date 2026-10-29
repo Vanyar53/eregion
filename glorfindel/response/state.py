@@ -18,22 +18,51 @@ _ISOLATION_STATE_DIR = Path.home() / ".glorfindel" / "isolation"
 _UNKNOWN = object()
 
 
+class StateUnreadable(RuntimeError):
+    """An isolation state file can't be read: what it holds is unknown — never "nothing"
+    (SEC4b). Raised by a reader that would otherwise answer "no state records it"."""
+
+
+def _unreadable_isolations() -> list[str]:
+    """The isolation state files that can't be read (`unreadable_states`, isolations only)."""
+    return [f for f in unreadable_states() if f.startswith(f"{_ISOLATION_STATE_DIR.name}/")]
+
+
+def _raise_if_unreadable(what: str) -> None:
+    unread = _unreadable_isolations()
+    if unread:
+        more = f" (+{len(unread) - 3})" if len(unread) > 3 else ""
+        raise StateUnreadable(
+            f"état local illisible ({', '.join(unread[:3])}{more}) : {what} — le réparer ou le "
+            "retirer à la main, puis relancer")
+
+
+def _quarantine_placements(nic_id: str) -> list[dict]:
+    """This NIC's quarantine placements in every readable isolation state."""
+    return [p for iso in active_isolations() for p in iso.get("placements") or []
+            if p.get("kind") == "quarantine" and _same_id(p.get("nic_id") or "", nic_id)]
+
+
 def _recorded_original(nic_id: str):
     """The original NSG recorded in local state for this NIC (None = it had none), or
-    _UNKNOWN when no state records it."""
-    for iso in active_isolations():
-        for p in iso.get("placements") or []:
-            if p.get("kind") == "quarantine" and _same_id(p.get("nic_id", ""), nic_id) \
-                    and "original_nsg_id" in p:
-                return p["original_nsg_id"]
+    _UNKNOWN when no state records it. None readable records it while a state can't be
+    read: StateUnreadable — that one may, and our tag read in its place could undo the
+    original it records (SEC4b)."""
+    for p in _quarantine_placements(nic_id):
+        if "original_nsg_id" in p:
+            return p["original_nsg_id"]
+    _raise_if_unreadable(f"le NSG d'origine de {nic_id.rstrip('/').rsplit('/', 1)[-1]} y est peut-être")
     return _UNKNOWN
 
 
 def _held_in_quarantine(nic_id: str) -> bool:
     """A local state records this NIC in our quarantine — its original known or not.
-    Not known there (lost with the tags, Q7), it is an unknown: never "none" (I8F)."""
-    return any(p.get("kind") == "quarantine" and _same_id(p.get("nic_id", ""), nic_id)
-               for iso in active_isolations() for p in iso.get("placements") or [])
+    Not known there (lost with the tags, Q7), it is an unknown: never "none" (I8F). None
+    readable records it while a state can't be read: StateUnreadable, never "no" (SEC4b)."""
+    if _quarantine_placements(nic_id):
+        return True
+    _raise_if_unreadable(f"{nic_id.rstrip('/').rsplit('/', 1)[-1]} y est peut-être en quarantaine")
+    return False
 
 
 _BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
@@ -214,19 +243,31 @@ def _load_isolation_state(vm_ref: str) -> dict | None:
 
     An unreadable file is reported, not raised: release_isolation then recomputes the
     rule names on every NIC (they are deterministic), so a corrupt file can no longer
-    make an isolation impossible to lift from the CLI.
+    make an isolation impossible to lift from the CLI. A NIC in our quarantine waits for
+    it: the original it may record is unknown (`_recorded_original`, SEC4b).
     """
     f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
     if f is None:
         return None
     try:
-        return json.loads(f.read_text())
+        data = json.loads(f.read_text())
+        if not _readable_shape(data, dict):
+            raise ValueError("pas la forme d'un état d'isolation")
+        return data
     except (OSError, ValueError) as e:
         _console.print(
-            f"[yellow]État d'isolation illisible pour {_vm_ref(vm_ref)[0]} ({e}) — traité comme "
-            "absent ; les règles sont retrouvées par leur nom sur chaque NIC.[/yellow]"
+            f"[yellow]État d'isolation illisible pour {_vm_ref(vm_ref)[0]} ({e}) — les règles sont "
+            "retrouvées par leur nom sur chaque NIC ; une carte en quarantaine attend qu'il soit "
+            "réparé ou retiré.[/yellow]"
         )
         return None
+
+
+def _isolation_unreadable(vm_ref: str) -> bool:
+    """This VM's isolation state file is there and can't be read (SEC4b): a write over it
+    would lose what it holds — left as it is, for the operator."""
+    f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
+    return f is not None and f"{_ISOLATION_STATE_DIR.name}/{f.name}" in unreadable_states()
 
 
 def _legacy_claimed(nsg_rg: str, nsg_name: str, rule: str) -> bool:
@@ -268,23 +309,34 @@ def unreadable_states() -> list[str]:
                 data = json.loads(f.read_text())
             except (OSError, ValueError):
                 data = None
-            if not isinstance(data, shape) or (shape is list and not all(isinstance(e, dict) for e in data)):
+            if not _readable_shape(data, shape):
                 out.append(f"{directory.name}/{f.name}")
     return sorted(out)
 
 
+def _readable_shape(data, shape) -> bool:
+    """The shape Glorfindel writes: an object per isolation whose placements, when it has
+    some, are a list of objects (SEC4b); a list of objects per block file."""
+    if shape is list:
+        return isinstance(data, list) and all(isinstance(e, dict) for e in data)
+    placements = data.get("placements") if isinstance(data, dict) else None
+    return isinstance(data, dict) and (placements is None or (
+        isinstance(placements, list) and all(isinstance(p, dict) for p in placements)))
+
+
 def active_isolations() -> list[dict]:
-    """Return all active isolation state files (VMs that Glorfindel has isolated). An
-    unreadable file is left out here — `unreadable_states` lists it."""
+    """Return all active isolation state files (VMs that Glorfindel has isolated), of the
+    shape Glorfindel writes. An unreadable file is left out here — `unreadable_states`
+    lists it: a reader that would conclude from its absence asks that too (SEC4b)."""
     result = []
     for f in _ISOLATION_STATE_DIR.glob("*.json"):
         try:
             state = json.loads(f.read_text())
-            if state.get("resource_id"):
-                result.append({**state, "vm_name": state["resource_id"].rstrip("/").rsplit("/", 1)[-1],
-                               "state_key": f.stem})
-        except Exception:
-            pass
+        except (OSError, ValueError):
+            continue
+        rid = state.get("resource_id") if _readable_shape(state, dict) else None
+        if rid and isinstance(rid, str):
+            result.append({**state, "vm_name": rid.rstrip("/").rsplit("/", 1)[-1], "state_key": f.stem})
     return result
 
 

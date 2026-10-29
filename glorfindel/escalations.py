@@ -72,6 +72,8 @@ _ACTION_LABELS = {
     "investigate_detection_gap": "Détection empêchée — enquête requise",
     "activate_autonomy": "Réponse autonome en attente de confirmation",
     "review_isolation": "Isolation à revoir (TTL dépassé)",
+    "review_bypass": "Contournement à revoir (règle d'un tiers)",
+    "repair_local_state": "État local à réparer",
 }
 
 _ESCALATION_LABELS = {
@@ -99,6 +101,8 @@ _ESCALATION_LABELS = {
     "identity_change": "identité modifiée dans Entra ID (détection seule)",
     "protected_address": "adresse protégée (jamais bloquée)",
     "uncontained_detection": "détection non contenue (instantané seul)",
+    "bypassed": "contournée (une règle d'autorisation passe avant le deny)",
+    "state_unreadable": "état local illisible",
 }
 
 
@@ -438,7 +442,7 @@ VERDICTS = ("right", "wrong", "unsure")
 DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
 # Cards that are not a decision on a detection: posture, housekeeping, proposals.
 _NOT_DECISIONS = {"posture_gap", "orphan_rule", "quarantine_altered", "proposed_rule", "readiness_hold",
-                  "ttl_exceeded", "detection_blocked"}
+                  "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable"}
 
 
 def all_escalations() -> list[dict]:

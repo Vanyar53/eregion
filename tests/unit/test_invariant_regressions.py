@@ -1876,3 +1876,143 @@ def test_an_unblock_of_a_deleted_vm_with_a_state_unreadable_says_it(monkeypatch,
         assert any(f"{d.name}/" in f and "illisible" in f for f in out["failed"]), out
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+# ── I5Q (#327): an orphan's deny that holds back one of our rules someone turned ──────
+
+_EDGE_NSG = _NSG.format(rg="rg-edge", name="nsg-edge")
+_API_NSG = "/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Network/networkSecurityGroups/nsg-api-nic"
+_API_BLOCK = "glorfindel-block-192-31-196-7-api-api-nic-c272f2"     # api's NIC, in the IP's block
+_API_ISO = "glorfindel-iso-api-api-nic-c272f2"
+_PERIMETER = "glorfindel-block-192-31-196-7"
+_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+
+
+def _edge_net():
+    """api on an NSG of its own that lets SSH in from anywhere; its subnet's NSG empty."""
+    return {**_net(api_nic={"own": "dedicated", "rules": [_rule("allow-ssh", 101, dict(
+        access="Allow", direction="Inbound", source_address_prefix="*",
+        destination_address_prefix="*", destination_port_range="22"))]}), "edge_nsg": []}
+
+
+def test_the_sequence_the_machine_found_on_i5_after_an_address_reused(monkeypatch):
+    """Graine 101 at 500 sequences (RB1's fourth review; on `main` too), shrunk from 14
+    steps to 4: api blocked, then blocked on its subnet as well — its own rule at 200,
+    the perimeter rule at 210 —, its own rule turned into an allow; api isolated by
+    rules, deleted, and a new VM given its address and its NSG. The orphan sweep of the
+    reassertion took api's isolation off the new VM: the attacker, let through the
+    subnet's NSG by the turned rule, reached it on 22 — the perimeter block behind."""
+    _run(monkeypatch, _edge_net(),
+         ("block", API, API, None, 22),
+         ("block_turned_then_reasserted", API, API, None, "both", 22, (key(_EDGE_NSG), _API_BLOCK),
+          "non_disruptive"),
+         ("address_reused", API, API, None, True, False, "rg-new", "web", _API_NSG, "Linux", False),
+         ("reassert", "non_disruptive", None))
+
+
+@pytest.mark.parametrize("turned", [_API_BLOCK, _PERIMETER])
+def test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes(monkeypatch, turned):
+    """The deny a deleted VM left, cutting the VM that took its address and NSG, is the
+    last thing keeping the attacker out: one of our rules on the subnet's NSG, turned
+    into an allow by someone, lets them past the block. The reassertion keeps it and
+    says why — the card names the turned rule; never the opening. Once the operator puts
+    that rule back, the next pass takes the deny off: the VM is no longer cut off, the
+    attacker still out. Whichever rule is turned — the VM's, or the perimeter one (aimed
+    at every address of the subnet)."""
+    import shutil
+
+    from glorfindel import escalations, reassert
+
+    from .test_invariants import _CURRENT
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_edge_net())
+        c, g = m.connector, m.fake.nsgs[key(_EDGE_NSG)]
+        first, then = ("vm", "subnet") if turned == _API_BLOCK else ("subnet", "vm")
+        for scope in (first, then):
+            assert c.block_suspicious_ip(ATTACKER, API, scope=scope, threat_port=22)["status"] == "blocked"
+        assert g["rules"][turned]["priority"] == 200, g["rules"][turned]
+        g["rules"][turned]["access"] = "Allow"
+        assert c.isolate_vm(API)["status"] == "isolated"
+        m._delete_vm(API)
+        m._create_vm(Script("rg-new", "web", _API_NSG, "Linux"), "northeurope", reuse_nsg=_API_NSG)
+        assert _NEW_WEB in m.live and not _reached_in(m, _NEW_WEB)
+        _CURRENT.mode = "non_disruptive"
+        reassert.reassert_pass(c, None)
+        assert not _reached_in(m, _NEW_WEB), "the orphan sweep let the attacker in"
+        assert _API_ISO in m.fake.nsgs[key(_API_NSG)]["rules"]
+        said = [e for e in escalations.pending() if e.get("action") == "remove_orphan_rule"
+                and turned in (e.get("reason") or "")]
+        assert said and "retournée en autorisation" in said[0]["reason"], escalations.pending()
+        g["rules"][turned]["access"] = "Deny"                     # the operator, from the card
+        reassert.reassert_pass(c, None)
+        assert not _reached_in(m, _NEW_WEB)
+        assert _API_ISO not in m.fake.nsgs[key(_API_NSG)]["rules"]
+        assert any(f[2] == "in" and f[4] == 22 for f in m._open(_NEW_WEB)), "the new VM still cut off"
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("state", ["kept", "isolation lost"])
+def test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release(monkeypatch, state):
+    """The same hole on the other path that takes a deleted VM's denies off: its release
+    — found by the machine once `turned_then_address_reused` was added (seed 322 at 500:
+    « I4: an operation on …/rg-edge/…/api opened flows of …/rg-app2/…/api »). api blocked
+    for itself (200), then on its subnet (210), isolated there by rules (100); its own
+    block rule turned into an allow; api deleted, a new VM at its address on the same
+    subnet. The release took the isolation off: the attacker reached the new VM through
+    the turned rule. The deny stays, said (`release_partial`, the turned rule named);
+    once that rule is put back, the next release takes it off. Whether the release reads
+    the isolation's placements (`kept`) or looks for its names on every NSG, its state
+    lost and the block's naming the NIC (I7S's `_gone_vm_rules`)."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build({**_net(), "edge_nsg": []})
+        c, g = m.connector, m.fake.nsgs[key(_EDGE_NSG)]
+        for scope in ("vm", "subnet"):
+            assert c.block_suspicious_ip(ATTACKER, API, scope=scope, threat_port=22)["status"] == "blocked"
+        g["rules"][_API_BLOCK]["access"] = "Allow"
+        assert c.isolate_vm(API)["status"] == "isolated"
+        if state == "isolation lost":
+            m._lose_state(API)
+        m._delete_vm(API)
+        m._create_vm(Script("rg-app2", "api", None, "Linux"), "northeurope")
+        new = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api"
+        assert new in m.live and not _reached_in(m, new)
+        out = c.release_isolation(API)
+        assert not _reached_in(m, new), "the release of the deleted VM let the attacker in"
+        assert out["status"] == "release_partial", out
+        assert any(_API_BLOCK in f and "retournée en autorisation" in f for f in out["failed"]), out
+        g["rules"][_API_BLOCK]["access"] = "Deny"                 # the operator, from what was said
+        out = c.release_isolation(API)
+        assert out["status"] == "released", out
+        assert not _reached_in(m, new)
+        assert not [n for n in g["rules"] if n.startswith(_API_ISO)]
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch):
+    """The guard is for another VM at the address: api, alive, its own block rule turned
+    into an allow, is released as usual — what that rule lets through is someone's doing
+    on api's own address (I1 judges it so), not an opening of another VM."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build({**_net(), "edge_nsg": []})
+        c, g = m.connector, m.fake.nsgs[key(_EDGE_NSG)]
+        for scope in ("vm", "subnet"):
+            assert c.block_suspicious_ip(ATTACKER, API, scope=scope, threat_port=22)["status"] == "blocked"
+        g["rules"][_API_BLOCK]["access"] = "Allow"
+        assert c.isolate_vm(API)["status"] == "isolated"
+        assert c.release_isolation(API)["status"] == "released"
+        assert not [n for n in g["rules"] if n.startswith(_API_ISO)]
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)

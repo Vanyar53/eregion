@@ -140,6 +140,33 @@ def test_an_orphan_behind_an_nsg_that_doesnt_govern_the_holder_stays(monkeypatch
     assert "Gardée : ne coupe aucune carte vivante derrière ce NSG" in cards[0]["reason"]
 
 
+@pytest.mark.parametrize("aimed, kept", [("*", True), ("10.0.0.0/24", True), ("VirtualNetwork", True),
+                                         ("10.0.0.99", False)])
+def test_an_orphan_deny_behind_our_rule_turned_into_an_allow_stays(monkeypatch, aimed, kept):
+    """I5Q (#327): web blocked on its subnet and isolated there by rules, deleted with its
+    state lost; a new VM at its address. Someone turned the perimeter block into an
+    allow: web's inbound deny is the last thing holding back what that allow lets pass —
+    kept, said with the turned rule, never taken off. Aimed at the new VM's address (`*`,
+    a prefix holding it, a tag read as holding it); aimed elsewhere, it doesn't hold
+    anything back and goes. The outbound deny goes either way: the turned rule is inbound."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.block_suspicious_ip(ATTACKER, WEB, scope="subnet")["status"] == "blocked"
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = next(n for n in g["rules"] if n.startswith("glorfindel-block-") and not n.endswith("-out"))
+    g["rules"][perimeter].update(access="Allow", destination_address_prefix=aimed)
+    _delete(f, WEB)
+    new = _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c)
+    iso = {n for n in g["rules"] if n.startswith("glorfindel-iso-")}
+    assert any(not n.endswith("-out") for n in iso) is kept, iso
+    assert not any(n.endswith("-out") for n in iso), iso
+    if kept:
+        assert not {fl for fl in open_flows(_world_view(f), new) if fl[2] == "in"}
+        (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+        assert perimeter in card["reason"] and "retournée en autorisation" in card["reason"], card["reason"]
+
+
 def _twin_vnet(f, subnet_nsg):
     """A second VNet whose address space overlaps the hub's, its subnet behind the same NSG."""
     return f.add_subnet("rg-net", "vnet-twin", "app", subnet_nsg)

@@ -1788,6 +1788,24 @@ class IsolationMachine(RuleBasedStateMachine):
             st.just("non_disruptive"), st.sampled_from(["human_only", "non_disruptive"]))))
 
     @rule(data=st.data())
+    def turned_then_address_reused(self, data):
+        """A rare state made common (I5Q): a VM blocked, then blocked on its subnet, for
+        itself or both, one of our denies turned into an allow (block_turned_then_reasserted)
+        — its own rule written first keeps the smaller number, before the perimeter one —;
+        then the VM isolated or blocked, deleted, its address (and its NSG, offered) given
+        to a new VM (address_reused), and the reassertion runs, unfaulted, outside
+        human_only more often. Drawn one by one, the steps met on one seed at 500
+        sequences (101, RB1's fourth review); M1730 went unseen by the machine alone."""
+        if len(self.live) <= 2 or len(self.vms) >= len(_VMS) + 3:
+            return
+        vm, rid, _ = self._draw(data)
+        self.block(_Drawn(data, vm=vm, rid=rid, fault=None))
+        self.block_turned_then_reasserted(_Drawn(data, vm=vm, rid=rid, fault=None))
+        self.address_reused(_Drawn(data, vm=vm, rid=rid, fault=None))
+        self.reassert(_Drawn(data, fault=None, mode=st.one_of(
+            st.just("non_disruptive"), st.sampled_from(["human_only", "non_disruptive"]))))
+
+    @rule(data=st.data())
     def joins_an_old_isolation(self, data):
         """A rare state made common (I4F): a new VM on the NSG where an older version's
         isolation of another VM lies, isolated — its NIC then away from that NSG, in
@@ -2024,6 +2042,10 @@ class IsolationMachine(RuleBasedStateMachine):
         for (k, n), (before, _) in self.tampered.items():
             if before is None:
                 self.fake.nsgs.get(k, {}).get("rules", {}).pop(n, None)
+        # A deleted VM's deny kept behind one of our rules turned into an allow (I5Q) is
+        # said, by its release or the orphan sweep: the operator puts that rule back as it
+        # was, as the card asks — before the releases, which keep the deny until then.
+        self._operator_puts_turned_back()
         deleted_records = {vm: self._recorded_rules(self._state(vm)) for vm in self.deleted}
         for vm in self.vms:
             if lose_state and vm not in self.deleted and actions._ISOLATION_STATE_DIR.exists():
@@ -2051,6 +2073,7 @@ class IsolationMachine(RuleBasedStateMachine):
         # mode, as the operator gives it to free them (D-A): in human_only only a card,
         # and a mode left by an earlier sequence's rule made the teardown flaky.
         _CURRENT.mode = "non_disruptive"
+        self._operator_puts_turned_back()           # and those the releases left (I5Q)
         self._orphan_sweep()
         for vm in self.live:
             assert self._released(vm), f"U1: {vm} still cut off by a deleted VM's rule after the orphan sweep"
@@ -2243,6 +2266,51 @@ class IsolationMachine(RuleBasedStateMachine):
                     out.add((k, name))
         return out
 
+    def _operator_puts_turned_back(self):
+        """I5Q: the rules turned into an allow that a deleted VM's deny holds back, put
+        back as they were by the operator (the card names them)."""
+        self._behind_turned(self._cutting_orphans())
+        for k, n in sorted(self.turned_behind):
+            self.fake.nsgs[k]["rules"][n] = dict(self.tampered[(k, n)][0])
+
+    def _behind_turned(self, cutting: set) -> dict:
+        """I5Q: the orphan rules (of _cutting_orphans) that hold back one of our rules
+        someone turned into an allow — the test's journal (`tampered`), the rule still as
+        they left it —, on an NSG that governs a NIC the orphan cuts, on the same side,
+        aimed at that NIC's address (or at all: `*`). Taken off, the orphan would let
+        through what that allow lets pass: I5 keeps it, said. (NSG, rule) → the VMs it
+        cuts there; `self.turned_behind` → the turned rules, for the operator."""
+        import ipaddress
+
+        def takes_in(r, side, ip):
+            values = [v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or []) if v]
+            for v in values or ["*"]:
+                try:
+                    if v == "*" or ipaddress.ip_address(ip) in ipaddress.ip_network(v, strict=False):
+                        return True
+                except ValueError:
+                    return True                     # a tag: taken as taking it in
+            return False
+
+        turned = [(k, n, after) for (k, n), (before, after) in self.tampered.items()
+                  if before is not None and n.startswith(("glorfindel-iso-", "glorfindel-block-"))
+                  and after["access"].lower() == "allow" and self.fake.nsgs.get(k, {}).get("rules", {}).get(n) == after]
+        out: dict = {}
+        self.turned_behind = set()
+        for k, name in cutting:
+            r = self.fake.nsgs[k]["rules"][name]
+            side = "destination" if r["direction"].lower() == "inbound" else "source"
+            ips = {v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or []) if v}
+            for vm in self.live:
+                for nic in self._nics(vm):
+                    chain = {key(g) for g in (nic["nsg"], self.fake.subnets[key(nic["subnet"])]["nsg"]) if g}
+                    for tk, tn, t in turned:
+                        if (k in chain and tk in chain and t["direction"].lower() == r["direction"].lower()
+                                and any(takes_in(t, side, ip) for ip in ips & set(nic["ips"]))):
+                            out.setdefault((k, name), set()).add(key(vm))
+                            self.turned_behind.add((tk, tn))
+        return out
+
     def _orphan_sweep(self):
         """The sweep of the orphan rules, as the watch's pass runs it (orphans.py); the
         cut VM's mode is the sequence's (invariant_env)."""
@@ -2283,7 +2351,18 @@ class IsolationMachine(RuleBasedStateMachine):
         assert {k: n["nsg"] for k, n in self.fake.nics.items()} == nics_before, "U1: the orphan sweep wrote a NIC"
         if fault is None and err is None and not self.fake.write_denied and _CURRENT.mode != "human_only":
             left = self._cutting_orphans(spare=self._held())
-            assert not left, f"U1: live VMs still cut off by orphan rules after the sweep: {sorted(left)}"
+            # Kept by I5 (I5Q): taken off, it would let through what one of our rules,
+            # turned into an allow by someone, lets pass — then it is said, not taken off.
+            behind = self._behind_turned(left)
+            assert not left - set(behind), (
+                f"U1: live VMs still cut off by orphan rules after the sweep: {sorted(left - set(behind))}")
+            # Said: a card on the VM it cuts, or on its NSG (said before it cut anyone: a
+            # rule said is not said again while it stands), or one that names it.
+            cards = [e for e in escalations.pending() if e.get("action") == "remove_orphan_rule"]
+            for (k, name), vms in behind.items():
+                assert any(key(e.get("resource_id", "")) in vms | {k} or name.lower() in (e.get("reason") or "").lower()
+                           for e in cards), (f"U1: the orphan rule {name} kept behind a rule turned into an "
+                                             f"allow, cutting {sorted(vms)}, not said")
 
     @invariant()
     def orphans_are_reported(self):

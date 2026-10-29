@@ -5,6 +5,7 @@ The NSG listing the watch's pass shares, and one quarantine NSG read by its id (
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _nic_hash, _nic_owns, _rule_name
+from glorfindel.providers.azure.readers import _behind_turned, _turned_allows
 from glorfindel.providers.azure.sdk import _enum_text, _is_not_found
 from glorfindel.response.ids import (
     _parse_nsg_resource_id, _parse_vm_resource_id, _same_id, _subscription_of,
@@ -339,7 +340,9 @@ class SweepMixin:
         unread = self._unreadable_reason()
         gone: dict[str, str | None] = {}      # mark of a NIC in our state → None (gone) or why kept
         orphans: list[dict] = []
-        for nsg in (self._network.network_security_groups.list_all() if nsgs is None else nsgs):
+        listing = list(self._network.network_security_groups.list_all() if nsgs is None else nsgs)
+        turned = _turned_allows(listing)      # our rules someone turned into an allow (I5Q)
+        for nsg in listing:
             nsg_key = nsg.id.rstrip("/").lower()
             subnets = {s.id.rstrip("/").lower() for s in (getattr(nsg, "subnets", None) or []) if getattr(s, "id", None)}
             attached = {n.id.rstrip("/").lower() for n in (getattr(nsg, "network_interfaces", None) or [])
@@ -372,6 +375,8 @@ class SweepMixin:
                 elif unread:
                     kept = unread
                 elif why := self._held_reason(cut, held):
+                    kept = why
+                elif why := _behind_turned(cut, side, turned, nic_nsg, nic_subnets):
                     kept = why
                 elif attached - listed:
                     kept = "une carte attachée à ce NSG manque à la liste des cartes (droits de lecture ?)"

@@ -2420,13 +2420,14 @@ def test_the_machine_finds_a_perimeter_deleted_after_its_card_is_acknowledged(mo
 _EDGE = _NSG.format(rg="rg-edge", name="nsg-edge")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "outside RB1, present on main (1996a49): api blocked, its inbound rule turned into an allow by "
-    "someone, its IP changed, a new VM given the old address, then api blocked again — I4: the "
-    "operation on api changes the new VM's flows. Hypothesis, not established: the block written "
-    "again rewrites under its name the rule turned toward the old address, now the new VM's. "
-    "Found by RB1's machine, seed 8675 at 500; for a lot of its own"))
 def test_a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address(monkeypatch):
+    """I4A (#328), found by RB1's machine (seed 8675 at 500), present on main before it: api
+    blocked on its subnet's NSG, its inbound rule turned into an allow by someone, its IP
+    changed, a new VM given the old address — the turned rule now lets the attacker reach
+    that VM. api blocked again: the block rewrote its rule by name, a deny for api's new
+    address — the allow gone, the new VM cut off from flows an operation on api must not
+    touch. Now the block leaves that rule as it is, writes its deny under the NIC's second
+    name, and says what it left."""
     net = _net()
     net["edge_nsg"] = []
     _run(monkeypatch, net,
@@ -2475,5 +2476,189 @@ def test_the_same_perimeter_gone_twice_is_said_twice(monkeypatch):
         (card,) = _cards(m)
         assert "disparu" in card, card
         assert m._attacker_flows(WEB1, None)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+_API_BASE = "glorfindel-block-192-31-196-7-api-api-nic-c272f2"
+_API_SECOND = "glorfindel-block-192-31-196-7-api-api-nic-b-c272f2"
+_NEW_API_VM = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+
+
+def _address_taken(monkeypatch, turn=True, reuse=True):
+    """api blocked on nsg-edge (no NSG of its own), its inbound rule turned into an allow
+    (or not), its IP changed, a new VM api in rg-app1 given the old address (or not)."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    net = _net()
+    net["edge_nsg"] = []
+    m.build(net)
+    assert m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)["status"] == "blocked"
+    rules = m.fake.nsgs[key(_EDGE)]["rules"]
+    old = rules[_API_BASE]["destination_address_prefixes"]
+    if turn:
+        rules[_API_BASE]["access"] = "Allow"
+    m.customer_changes_ip(data=Script(_nic("rg-edge", "api-nic"), 0, 4))
+    if reuse:
+        m.create_vm(data=Script("northeurope", "rg-app1", "api", None, "Linux"))
+        assert m.fake.nics[_nic("rg-app1", "api-nic-4")]["ips"] == old
+    return m, rules, old
+
+
+def test_a_turned_rule_on_an_address_handed_to_another_vm_is_left_and_said(monkeypatch):
+    """I4A: the block written again leaves the turned rule (it lets the attacker reach the
+    new VM — an operation on api never changes that VM's flows), writes api's deny under
+    the NIC's second name, for api's address only; the reassertion says what was left, on
+    one card, once."""
+    import shutil
+
+    from glorfindel import escalations
+
+    m, rules, old = _address_taken(monkeypatch)
+    try:
+        reach = m._attacker_flows(_NEW_API_VM, None)
+        assert reach
+        out = m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        assert out["status"] == "blocked", out
+        assert rules[_API_BASE]["access"] == "Allow" and rules[_API_BASE]["destination_address_prefixes"] == old
+        now = m.fake.nics[_nic("rg-edge", "api-nic")]["ips"]
+        for name, side in ((_API_SECOND, "destination"), (f"{_API_SECOND}-out", "source")):
+            assert rules[name]["access"] == "Deny" and rules[name][f"{side}_address_prefixes"] == now, rules[name]
+        # Our -out deny, on the old address, cut the new VM's way out: taken off, given back.
+        assert f"{_API_BASE}-out" not in rules
+        assert not m._attacker_flows(API, None)
+        assert reach < m._attacker_flows(_NEW_API_VM, None)
+        reach = m._attacker_flows(_NEW_API_VM, None)
+        (left,) = out["left_rules"]
+        assert left["rule"] == _API_BASE and left["to"] == old[0] and left["on"] == "api", left
+        assert m.connector.verify_block_ip(ATTACKER, API)["verified"] is True
+        for _ in range(2):
+            m.reassert(Script("human_only", None))
+            cards = [e for e in escalations.pending() if e["escalation_type"] == "rule_left"]
+            assert len(cards) == 1, cards
+        assert _API_BASE in cards[0]["reason"] and old[0] in cards[0]["reason"], cards[0]["reason"]
+        escalations.resolve(cards[0]["id"])                  # acknowledged: not said again
+        m.reassert(Script("human_only", None))
+        assert not [e for e in escalations.pending() if e["escalation_type"] == "rule_left"]
+        # Blocked a third time, the same: nothing more written over the turned rule.
+        assert m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)["status"] == "blocked"
+        assert rules[_API_BASE]["access"] == "Allow"
+        assert m._attacker_flows(_NEW_API_VM, None) == reach
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)       # the rule turned by hand isn't the machine's
+
+
+def test_a_turned_rule_on_an_address_nobody_has_is_written_again_as_before(monkeypatch):
+    """The old address handed to nobody: the turned rule changes no VM's flows — written
+    again under its own name, for api's new address (I7S), nothing left, nothing said."""
+    import shutil
+
+    m, rules, _ = _address_taken(monkeypatch, reuse=False)
+    try:
+        out = m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        assert out["status"] == "blocked" and "left_rules" not in out, out
+        now = m.fake.nics[_nic("rg-edge", "api-nic")]["ips"]
+        assert rules[_API_BASE]["access"] == "Deny" and rules[_API_BASE]["destination_address_prefixes"] == now
+        assert _API_SECOND not in rules
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_our_deny_on_an_address_handed_to_another_vm_is_written_for_the_vm_it_blocks(monkeypatch):
+    """Our deny, never turned, left on the old address: it cuts the new VM off. Written
+    again by name, for api's address, it gives the new VM back what it cut — as before."""
+    m, rules, old = _address_taken(monkeypatch, turn=False)
+    try:
+        assert not m._attacker_flows(_NEW_API_VM, None)
+        out = m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        assert out["status"] == "blocked" and "left_rules" not in out, out
+        assert rules[_API_BASE]["destination_address_prefixes"] != old and _API_SECOND not in rules
+        assert m._attacker_flows(_NEW_API_VM, None) and not m._attacker_flows(API, None)
+    finally:
+        m.teardown()
+
+
+def test_whose_the_old_address_is_unknown_the_turned_rule_is_left(monkeypatch):
+    """The NICs unreadable: who holds the old address is unknown — never read as nobody
+    (A0): the turned rule is left, and said as unknown."""
+    import shutil
+
+    from .fake_azure import throttled
+
+    m, rules, _ = _address_taken(monkeypatch)
+    try:
+        def unreadable():
+            raise throttled("nic.list")
+        monkeypatch.setattr(m.connector._network.network_interfaces, "list_all", unreadable)
+        out = m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        assert out["status"] == "blocked", out
+        assert rules[_API_BASE]["access"] == "Allow"
+        (left,) = out["left_rules"]
+        assert left["on"].startswith("inconnu"), left
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("lift", ["verify", "unblock", "reset"])
+def test_a_block_under_its_second_name_is_found_without_its_state(monkeypatch, lift):
+    """Under its second name, the block is still the NIC's (same hash): its state lost, the
+    verification finds it, the unblock and the reset take it off."""
+    import shutil
+
+    from glorfindel import actions
+
+    m, rules, _ = _address_taken(monkeypatch)
+    try:
+        m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        for f in actions._BLOCK_STATE_DIR.glob("api--*.json"):
+            f.unlink()
+        if lift == "verify":
+            assert m.connector.verify_block_ip(ATTACKER, API)["verified"] is True
+            return
+        out = (m.connector.unblock_ip(ATTACKER, API) if lift == "unblock"
+               else m.connector.sweep_vm_rules(API))
+        assert out["status"] in ("unblocked", "swept"), out
+        assert _API_SECOND not in rules and f"{_API_SECOND}-out" not in rules, sorted(rules)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_turned_rule_widened_to_any_on_a_shared_nsg_is_left(monkeypatch):
+    """Turned into an allow and widened to any address by hand, on the subnet's NSG a new VM
+    sits behind: it lets the attacker reach that VM. Blocked again, the block leaves it as
+    it is — and says the bypass it makes for api: never « blocked » alone."""
+    import shutil
+
+    m, rules, _ = _address_taken(monkeypatch, reuse=False)
+    try:
+        m.create_vm(data=Script("northeurope", "rg-app1", "api", None, "Linux"))
+        rules[_API_BASE].pop("destination_address_prefixes")
+        rules[_API_BASE]["destination_address_prefix"] = "*"
+        reach = m._attacker_flows(_NEW_API_VM, None)
+        assert reach
+        out = m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        assert rules[_API_BASE]["access"] == "Allow" and rules[_API_BASE]["destination_address_prefix"] == "*"
+        (left,) = out["left_rules"]
+        assert left["to"] == "*" and "derrière ce NSG" in left["on"], left
+        assert out.get("bypass"), out
+        assert m._attacker_flows(_NEW_API_VM, None) >= reach
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_turned_rule_aimed_at_a_range_is_left(monkeypatch):
+    """Turned into an allow and aimed at a range by hand: who is in it is unknown — never
+    read as nobody (A0): left, said as unknown."""
+    import shutil
+
+    m, rules, _ = _address_taken(monkeypatch)
+    try:
+        rules[_API_BASE]["destination_address_prefixes"] = ["10.1.0.0/24"]
+        reach = m._attacker_flows(_NEW_API_VM, None)
+        out = m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        assert rules[_API_BASE]["access"] == "Allow", out
+        (left,) = out["left_rules"]
+        assert left["to"] == "10.1.0.0/24" and left["on"].startswith("inconnu"), left
+        assert m._attacker_flows(_NEW_API_VM, None) >= reach
     finally:
         shutil.rmtree(m.home, ignore_errors=True)

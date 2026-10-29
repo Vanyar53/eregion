@@ -117,6 +117,41 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
                    "outcome": "bypassed", "detail": reason})
 
 
+LEFT_TYPE = "rule_left"
+_LEFT_ACTION = "review_left_rule"
+_LEFT_PREFIX = "reassert-left-"
+
+
+def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: str = "") -> None:
+    """A rule of this block left as it was by the block that wrote it (I4A): someone
+    turned it into an allow, and it aims at an address that is no longer the VM's —
+    another VM's now, or nobody knows. Rewritten, it changed that VM's flows; taken off,
+    too. Said on one card per set of such rules, once (`left_said`, after the card),
+    never a write."""
+    from glorfindel import escalations
+    from glorfindel.actions import _rid_hash, _update_block_entry
+    left = [x for p in entry.get("placements") or [] for x in p.get("left") or [] if isinstance(x, dict)]
+    if not left:
+        return
+    sid = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-" + _digest(f"{x.get('nsg')}/{x.get('rule')}" for x in left)
+    if entry.get("left_said") == sid:
+        return                                  # said: pending, or acknowledged
+    what = " ; ".join(f"{x.get('rule')} ({x.get('nsg')}) vise {x.get('to')}, qui est à {x.get('on')}" for x in left)
+    reason = (f"Le blocage de {ip} sur {vm} a laissé telle quelle une règle à son nom, retournée en "
+              f"autorisation par un tiers et visant une adresse qui n'est plus celle de {vm} : {what}. "
+              "La réécrire ou la retirer changerait les flux de cette autre VM ; le blocage de "
+              f"{vm} est posé sous un second nom.")
+    steps = [f"Lire {', '.join(sorted({str(x.get('nsg')) for x in left}))} : qui a retourné "
+             f"{', '.join(sorted({str(x.get('rule')) for x in left}))} (journal d'activité), et pourquoi.",
+             "Si elle n'est plus voulue : la retirer à la main (az network nsg rule delete) ; "
+             "si elle l'est, la remplacer par une règle du client, hors du nom de Glorfindel."]
+    if not any(e.get("signal_id") == sid for e in escalations.pending()):
+        escalations.record(signal_id=sid, resource_id=rid, action=_LEFT_ACTION, escalation_type=LEFT_TYPE,
+                           reason=reason, severity="medium", suggested_steps=steps, action_params={"ip": ip})
+    _update_block_entry(ref or vm, ip, left_said=sid)
+    report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
+
+
 def _alerts_path():
     """Beside the isolation states (~/.glorfindel/state_alerts.json): which set of
     unreadable state files was said."""

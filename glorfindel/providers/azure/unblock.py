@@ -217,7 +217,7 @@ class UnblockMixin:
         uncovered = []
         found: dict[str, tuple] = {}
         for t0 in targets:
-            bases = (self._placement_rule_base(prefix, vm_name, t0["nic_short"], t0["nic_id"]),
+            bases = (*self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"]),
                      self._legacy_rule_base(prefix, vm_name, t0["nic_short"], t0["nic_id"]))
             hit = next(((t, base) for t in self._nic_nsg_views(t0) for base in bases
                         if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"])), None)
@@ -342,7 +342,7 @@ class UnblockMixin:
         only on an NSG that governs this VM alone (on a shared one it is a perimeter
         block, an operator's decision covering every VM)."""
         prefix = self._block_rule_prefix(ip)
-        bases = [self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]),
+        bases = [*self._placement_rule_bases(prefix, vm_name, t["nic_short"], t["nic_id"]),
                  self._legacy_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"]),
                  self._block_rule_name(ip, vm_name, "subnet")]
         if not _ip_scoped(t):
@@ -382,10 +382,11 @@ class UnblockMixin:
                     failed.append(f'{t["nsg_rg"]}/{t["nsg_name"]} : règles illisibles, déblocage non vérifié')
                     continue
                 names = self._block_names_for_target(ip, vm_name, t)
-                base = self._placement_rule_base(self._block_rule_prefix(ip), vm_name, t["nic_short"], t["nic_id"])
+                hashed = {n for b in self._placement_rule_bases(self._block_rule_prefix(ip), vm_name,
+                                                                t["nic_short"], t["nic_id"]) for n in (b, f"{b}-out")}
                 for r in rules:
                     name = _rule_name(r)
-                    if _nic_owns(r, {base, f"{base}-out"}, names, t.get("private_ips") or None):
+                    if _nic_owns(r, hashed, names, t.get("private_ips") or None):
                         err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
                         (failed if err else deleted).append(err or name)
                 failed += self._unattributable_plain_block(ip, t, rules)

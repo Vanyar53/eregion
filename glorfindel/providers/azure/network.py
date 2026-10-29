@@ -348,6 +348,16 @@ class NetworkMixin:
             base = f"{prefix}-{vm_name[:room]}-{_nic_hash(nic_id, 8)}"
         return base.lower()
 
+    def _placement_rule_bases(self, prefix: str, vm_name: str, nic_short: str, nic_id: str) -> tuple[str, str]:
+        """The NIC's rule-name base, then its second (I4A): a block is written under the
+        second only when its first pair is held by a rule someone turned into an allow,
+        aimed at an address that is no longer the NIC's — another VM's now, or nobody
+        knows: rewritten, it changed that VM's flows. Same mark at the end (the NIC's
+        hash): whatever reads our rules by it reads both."""
+        base = self._placement_rule_base(prefix, vm_name, nic_short, nic_id)
+        head, mark = base.rsplit("-", 1)
+        return base, f"{head[:80 - 4 - 3 - len(mark)]}-b-{mark}"
+
     @staticmethod
     def _legacy_rule_base(prefix: str, vm_name: str, nic_short: str, nic_id: str) -> str:
         """The name before the NIC hash (isolations and blocks placed before L24)."""

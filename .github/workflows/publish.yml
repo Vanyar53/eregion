@@ -1,0 +1,156 @@
+name: Publish
+
+# CI3 (#267, step 2; P-02, V-22): every commit of main gets its two images, built and proven as
+# in images.yml (CI1), then published to GHCR — ghcr.io/vanyar53/eregion-glorfindel and
+# -annatar, tagged sha-<commit> — with a SLSA provenance and an SBOM attested
+# (actions/attest-build-provenance, actions/attest-sbom) and a keyless signature (cosign, GitHub's
+# OIDC: no long-lived key), then verified here as H0 verifies them (scripts/published_image.py).
+#
+# Why every commit of main: the draft of a release targets a commit of main (make release-draft,
+# origin/main's sha), and H0's CD deploys it as soon as Jonathan publishes. Its image is then
+# already there, attested: this job is a check run of that commit, and the CD waits for it (or
+# refuses a commit without it). The registry's tag is a hint only: the CD trusts the signature,
+# which names this workflow, on main, at that commit (docs/operations.md, « Les images publiées »).
+#
+# The only workflow that may write packages, mint an OIDC token or write attestations
+# (tests/unit/test_workflows.py), and only on a push to this repository's main — never on a pull
+# request, a fork's included: no `pull_request*`, no `workflow_run`, the job guarded by its
+# repository and ref. Nothing chosen by an outsider reaches a `run:`.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One publication per commit at a time; a newer commit never cancels an older one's.
+concurrency:
+  group: publish-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish (${{ matrix.image }})
+    if: github.repository == 'Vanyar53/eregion' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write        # push to GHCR
+      id-token: write        # the OIDC token sigstore certifies (attestations, signature)
+      attestations: write    # GitHub's attestation store
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [glorfindel, annatar]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Names and labels
+        id: meta
+        env:
+          IMAGE: ${{ matrix.image }}
+          COMMIT: ${{ github.sha }}
+        run: python3 scripts/published_image.py meta "$IMAGE" --commit "$COMMIT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
+
+      # As images.yml builds it, plus what the hosts need: the user of H0 and Orodruin (1000), the
+      # reference and the commit (labels, and the console's header). Loaded, not pushed: pushed
+      # only once proven, below. No buildx attestations: the image is a single manifest, and its
+      # provenance is GitHub's, below.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc   # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.image }}/Dockerfile
+          tags: ${{ steps.meta.outputs.ref }}
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          build-args: |
+            UID=${{ steps.meta.outputs.uid }}
+            GID=${{ steps.meta.outputs.gid }}
+            EREGION_REF=${{ steps.meta.outputs.version }}
+            EREGION_REVISION=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/Vanyar53/eregion
+          cache-from: type=gha,scope=${{ matrix.image }}
+
+      - name: In the image (nothing started, no network, no secret)
+        env:
+          IMAGE: ${{ matrix.image }}
+          REF: ${{ steps.meta.outputs.ref }}
+        run: python3 scripts/image_check.py "$IMAGE" --image "$REF"
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f   # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        id: push
+        env:
+          IMAGE: ${{ matrix.image }}
+          REF: ${{ steps.meta.outputs.ref }}
+        run: python3 scripts/published_image.py pushed "$IMAGE" --ref "$REF"
+
+      - name: SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26   # v0.24.2
+        with:
+          image: ${{ steps.meta.outputs.ref }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8   # v4.2.2
+        with:
+          subject-name: ${{ steps.meta.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e   # v4.1.0
+        with:
+          subject-name: ${{ steps.meta.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+
+      # The same cosign H0 runs, pinned by its sha256 (scripts/published_image.py, COSIGN_*): no
+      # installer action, the very binary that verifies on H0 signs here.
+      - name: cosign
+        run: python3 scripts/published_image.py install-cosign "$RUNNER_TEMP/cosign"
+
+      - name: Sign (keyless)
+        env:
+          NAME: ${{ steps.meta.outputs.name }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: '"$RUNNER_TEMP/cosign" sign --yes "$NAME@$DIGEST"'
+
+      # As H0 verifies it: the signature and the provenance of this workflow, on main, at this
+      # commit, with the pinned cosign.
+      - name: Verified as H0 verifies it
+        env:
+          IMAGE: ${{ matrix.image }}
+          COMMIT: ${{ github.sha }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: python3 scripts/published_image.py verify "$IMAGE" --commit "$COMMIT" --digest "$DIGEST" --cosign "$RUNNER_TEMP/cosign"
+
+      # H0 reads the registry without a token: a package still private (GHCR's default for a new
+      # one, to check at the first run) is said here as a warning — Jonathan makes it public once.
+      - name: Readable without a token
+        continue-on-error: true
+        env:
+          IMAGE: ${{ matrix.image }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          python3 scripts/published_image.py resolve "$IMAGE" --commit "$COMMIT" \
+            || { echo "::warning::paquet illisible sans jeton : H0 refusera cette image tant qu'il n'est pas public"; exit 1; }

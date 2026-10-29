@@ -5,11 +5,13 @@ The routes the scripts use, as Discord answers them: the webhooks (a message pos
 deleted), the Eregion bot's forum (#lots: its tags, active and archived threads, posts, a file
 sent as multipart), its #roadmap channel (pins, last messages, a message posted or edited),
 GitHub's API (workflow runs, milestones, issues, pull requests, the latest release, a commit's
-check runs, a release by its tag) under /gh, and H0's console under /console. Nothing leaves the machine; every request
-is kept for the tests.
+check runs, a release by its tag) under /gh, H0's console under /console, and a registry as GHCR answers
+it anonymously (a token, then a manifest by tag or digest, CI3) under /registry. Nothing leaves the machine;
+every request is kept for the tests.
 """
 import email.parser
 import email.policy
+import hashlib
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +47,11 @@ class FakeDiscord:
         self.gh = {"milestones": [], "issues": [], "pulls": [], "release": None, "checks": {},
                    "releases": {}}   # by tag: published ones only, as GitHub answers (a draft: 404)
         self.console_token, self.console_status = "", 200
+        # CI3: repository → {"tags": {tag: digest}, "blobs": {digest: bytes}}; `lie`: a digest header
+        # that is not the body's; `private`: repositories answered 401 without a token.
+        self.registry: dict = {}
+        self.registry_lie: dict[str, str] = {}
+        self.registry_private: set[str] = set()
         self.fail: dict[str, int] = {}       # path prefix → status (once if listed in self.once)
         self.once: set[str] = set()
         self.lock, self.next_id = threading.Lock(), 100
@@ -59,7 +66,7 @@ class FakeDiscord:
                 raw, ctype = (self.rfile.read(n) if n else b""), self.headers.get("Content-Type", "")
                 body = _multipart(ctype, raw) if ctype.startswith("multipart/") else json.loads(raw) if raw else None
                 status, out, headers = fake.handle(self.command, self.path, body, dict(self.headers))
-                raw = b"" if status == 204 else json.dumps(out).encode()
+                raw = b"" if status == 204 else out if isinstance(out, bytes) else json.dumps(out).encode()
                 self.send_response(status)
                 for k, v in headers.items():
                     self.send_header(k, v)
@@ -109,6 +116,8 @@ class FakeDiscord:
             parts = p.strip("/").split("/")
             if p.startswith("/gh/"):
                 return self._github(p, query)
+            if p.startswith("/registry/"):
+                return self._registry(p, query, headers)
             if p == "/console/api/sections":
                 if headers.get("Authorization") != f"Bearer {self.console_token}":
                     return 401, {"detail": "token"}, {}
@@ -202,10 +211,36 @@ class FakeDiscord:
             return (200, self.gh["release"], {}) if self.gh["release"] else (404, {"message": "Not Found"}, {})
         if p.startswith("/gh/repos/o/r/commits/") and p.endswith("/check-runs"):
             sha = p.split("/")[-2]
-            runs = self.gh["checks"].get(sha, [{"name": "lint + tests (py3.12)", "status": "completed",
-                                                "conclusion": "success"}])
+            runs = self.gh["checks"].get(sha, [{"name": n, "status": "completed", "conclusion": "success"}
+                                               for n in ("lint + tests (py3.12)", "publish (glorfindel)")])
             return 200, {"total_count": len(runs), "check_runs": runs}, {}
         return 404, {}, {}
+
+    def image(self, repo, tag, manifest):
+        """A manifest published under `tag` (None: by its digest only); its digest returned."""
+        raw = json.dumps(manifest, sort_keys=True).encode()
+        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        entry = self.registry.setdefault(repo, {"tags": {}, "blobs": {}})
+        entry["blobs"][digest] = raw
+        if tag:
+            entry["tags"][tag] = digest
+        return digest
+
+    def _registry(self, p, query, headers):
+        if p == "/registry/token":
+            scope = (query.get("scope") or [""])[0]
+            return 200, {"token": f"anon:{scope}"}, {}
+        if not p.startswith("/registry/v2/") or "/manifests/" not in p:
+            return 404, {}, {}
+        repo, ref = p[len("/registry/v2/"):].split("/manifests/", 1)
+        if repo in self.registry_private or headers.get("Authorization") != f"Bearer anon:repository:{repo}:pull":
+            return 401, {"errors": [{"code": "UNAUTHORIZED"}]}, {}
+        entry = self.registry.get(repo) or {"tags": {}, "blobs": {}}
+        digest = entry["tags"].get(ref, ref if ref.startswith("sha256:") else "")
+        raw = entry["blobs"].get(digest)
+        if raw is None:
+            return 404, {"errors": [{"code": "MANIFEST_UNKNOWN"}]}, {}
+        return 200, raw, {"Docker-Content-Digest": self.registry_lie.get(digest, digest)}
 
     def webhook_posts(self, token):
         return [r["body"] for r in self.requests if r["method"] == "POST" and token in r["path"]]

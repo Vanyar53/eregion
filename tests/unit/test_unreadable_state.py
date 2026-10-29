@@ -55,8 +55,12 @@ def _quarantined(m, nic: str) -> tuple[str, str]:
 
 # ── point 1: each reader of the state ─────────────────────────────────────────────────
 
-@pytest.mark.parametrize("text", [_BROKEN, json.dumps([1]), json.dumps({"resource_id": WEB1, "placements": "x"})],
-                         ids=["cut-short", "a-list", "placements-not-a-list"])
+@pytest.mark.parametrize("text", [
+    _BROKEN, json.dumps([1]), json.dumps({"resource_id": WEB1, "placements": "x"}),
+    json.dumps({"placements": []}), json.dumps({"resource_id": "", "placements": []}),
+    json.dumps({"resource_id": 5, "placements": []})],
+    ids=["cut-short", "a-list", "placements-not-a-list", "no-resource-id", "empty-resource-id",
+         "resource-id-not-text"])
 def test_verify_release_never_says_released_on_an_unreadable_state(world, text):
     """_held_in_quarantine, read by verify_release (I3F): web in quarantine, its state
     unreadable, our tag lost, left bare by hand. The state may hold it — it read as "not
@@ -146,6 +150,90 @@ def test_the_readers_still_answer_from_a_readable_state_beside_an_unreadable_one
     assert key(_recorded_original(nic_id)) == key(own) and _held_in_quarantine(nic_id) is True
     with pytest.raises(StateUnreadable, match="other--00000000"):
         _held_in_quarantine(API.replace("virtualMachines/api", "networkInterfaces/nope"))
+
+
+# ── relecture : l'isolation n'est jamais arrêtée par un état illisible ─────────────────
+
+def _other_broken() -> None:
+    actions._ISOLATION_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (actions._ISOLATION_STATE_DIR / "other--00000000.json").write_text(_BROKEN)
+
+
+@pytest.mark.parametrize("subnet_nsg", [None, []], ids=["no-subnet-nsg", "subnet-nsg"])
+def test_a_bare_nic_isolates_beside_another_vms_unreadable_state(world, subnet_nsg):
+    """Review of SEC4b: a NIC with no NSG, another VM's state unreadable — isolate_vm raised
+    StateUnreadable (refused, or fell back to rules with `quarantine_error`): containment
+    lost. It isolates by quarantine now; the original, unknown, is left unwritten (no tag),
+    so the release keeps the NIC in quarantine until it is known — the tag it names."""
+    m = world(_net(quarantine=True, subnet_nsg=subnet_nsg))
+    nic = _nic("rg-app1", "web-nic")
+    _other_broken()
+    out = m.connector.isolate_vm(WEB1)
+    assert out["status"] == "isolated" and not out.get("quarantine_refused"), out
+    q = m.fake.nics[nic]["nsg"]
+    assert q and "quarantine" in q
+    tag = actions.AzureConnector._orig_tag(m.fake.nics[nic]["id"])
+    assert tag not in m.fake.nsgs[key(q)]["tags"]                       # unknown: not written
+    assert (actions._ISOLATION_STATE_DIR / "other--00000000.json").read_text() == _BROKEN
+    assert m.connector.release_isolation(WEB1)["status"] == "release_partial"
+    (actions._ISOLATION_STATE_DIR / "other--00000000.json").unlink()
+    out = m.connector.release_isolation(WEB1)
+    assert out["status"] == "release_partial" and any(tag in e for e in out["failed"]), out
+    assert key(m.fake.nics[nic]["nsg"]) == key(q)                       # still contained
+    m.fake.nsgs[key(q)]["tags"][tag] = "none"                           # the operator says it
+    assert m.connector.release_isolation(WEB1)["status"] == "released"
+    assert m.fake.nics[nic]["nsg"] is None
+
+
+def test_a_reisolation_beside_its_own_unreadable_state_sets_it_aside(world):
+    """Review of SEC4b: a VM in quarantine, its own state unreadable, isolated again —
+    StateUnreadable escaped isolate_vm. It isolates (the original from our tag); the
+    unreadable file is set aside, never written over, and still said."""
+    m = world(_net(quarantine=True, web_nic={"own": "dedicated"}))
+    nic = _nic("rg-app1", "web-nic")
+    own, q = _quarantined(m, nic)
+    (f,) = _break_state()
+    assert m.connector.isolate_vm(WEB1)["status"] == "isolated"
+    aside = f.with_name(f"{f.stem}.unreadable.json")
+    assert aside.read_text() == _BROKEN
+    from glorfindel.response.state import unreadable_states
+    assert unreadable_states() == [f"isolation/{aside.name}"]
+    assert actions._load_isolation_state(WEB1)["resource_id"]            # the new state, readable
+    aside.unlink()
+    assert m.connector.release_isolation(WEB1)["status"] == "released"
+    assert key(m.fake.nics[nic]["nsg"]) == key(own)
+
+
+def test_an_unblock_behind_the_quarantine_says_an_unreadable_state(world):
+    """Review of SEC4b: blocked, then isolated by quarantine, the state unreadable —
+    StateUnreadable escaped unblock_ip after its deletions, `unblocking_at` left and no
+    `unblock_failed`. It ends unblock_partial now, naming the file."""
+    m = world(_net(quarantine=True, web_nic={"own": "dedicated"}))
+    ip = "203.0.113.7"
+    assert m.connector.block_suspicious_ip(ip, WEB1)["status"] == "blocked"
+    _quarantined(m, _nic("rg-app1", "web-nic"))
+    _break_state()
+    out = m.connector.unblock_ip(ip, WEB1)
+    assert out["status"] == "unblock_partial", out
+    assert any("illisible" in e and "web--" in e for e in out["failed"]), out
+    (entry,) = actions._load_block_entries(WEB1)
+    assert entry.get("unblock_failed")
+
+
+def test_the_card_says_what_waits_for_which_file(world):
+    """Only a block file unreadable: the orphan sweep waits, not the release."""
+    from glorfindel.reassert_cards import say_unreadable_states
+    world(_net())
+    blocks = actions._ISOLATION_STATE_DIR.parent / "blocks"
+    blocks.mkdir(parents=True, exist_ok=True)
+    (blocks / "db--00000000.json").write_text("{}")
+    say_unreadable_states([])
+    (card,) = _state_cards("pending")
+    assert "orpheline" in card["reason"] and "levée" not in card["reason"], card["reason"]
+    _other_broken()
+    say_unreadable_states([])
+    (card,) = _state_cards("pending")
+    assert "levée" in card["reason"] and "isolation se fait quand même" in card["reason"]
 
 
 # ── point 1: the reassertion says it ──────────────────────────────────────────────────

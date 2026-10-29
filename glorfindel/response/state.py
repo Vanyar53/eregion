@@ -65,6 +65,25 @@ def _held_in_quarantine(nic_id: str) -> bool:
     return False
 
 
+def _recorded_or_unknown(nic_id: str):
+    """For an isolation: what a state records for this NIC, unknown while a state can't
+    be read — an unreadable state never stops an isolation (SEC4b); the unknown is left
+    unwritten, and the release keeps the NIC in quarantine until it is known."""
+    try:
+        return _recorded_original(nic_id)
+    except StateUnreadable:
+        return _UNKNOWN
+
+
+def _held_or_unreadable(nic_id: str) -> bool:
+    """For an isolation: held in quarantine by a state — or a state can't be read, which
+    may hold it (SEC4b)."""
+    try:
+        return _held_in_quarantine(nic_id)
+    except StateUnreadable:
+        return True
+
+
 _BLOCK_STATE_DIR = Path.home() / ".glorfindel" / "blocks"
 
 
@@ -235,7 +254,24 @@ def migrate_state_files() -> int:
 
 
 def _save_isolation_state(vm_ref: str, state: dict) -> None:
-    _write_state(_ISOLATION_STATE_DIR, vm_ref, str(state.get("resource_id") or ""), state)
+    rid = str(state.get("resource_id") or "")
+    _set_aside_unreadable(rid or vm_ref)
+    _write_state(_ISOLATION_STATE_DIR, vm_ref, rid, state)
+
+
+def _set_aside_unreadable(vm_ref: str) -> None:
+    """This VM's state file, unreadable, moved aside before a new state is written for it
+    (`<file>.unreadable.json`; SEC4b): an isolation is never stopped by it, and what it
+    holds is never written over — it stays unreadable (`unreadable_states`, its card)
+    until the operator repairs or removes it. Read by no lookup of a VM's state."""
+    if not _isolation_unreadable(vm_ref):
+        return
+    f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
+    n, aside = 1, f.with_name(f"{f.stem}.unreadable.json")
+    while aside.exists():
+        n += 1
+        aside = f.with_name(f"{f.stem}.unreadable-{n}.json")
+    os.replace(f, aside)
 
 
 def _load_isolation_state(vm_ref: str) -> dict | None:
@@ -316,12 +352,18 @@ def unreadable_states() -> list[str]:
 
 def _readable_shape(data, shape) -> bool:
     """The shape Glorfindel writes: an object per isolation whose placements, when it has
-    some, are a list of objects (SEC4b); a list of objects per block file."""
+    some, are a list of objects, beside its resource id — a non-empty string, written with
+    every state since placements exist (#8, 06/19); only an older single-NSG state may
+    lack it (SEC4b). A list of objects per block file."""
     if shape is list:
         return isinstance(data, list) and all(isinstance(e, dict) for e in data)
-    placements = data.get("placements") if isinstance(data, dict) else None
-    return isinstance(data, dict) and (placements is None or (
-        isinstance(placements, list) and all(isinstance(p, dict) for p in placements)))
+    if not isinstance(data, dict):
+        return False
+    if "placements" not in data:
+        return True
+    placements, rid = data["placements"], data.get("resource_id")
+    return (isinstance(rid, str) and bool(rid.strip()) and isinstance(placements, list)
+            and all(isinstance(p, dict) for p in placements))
 
 
 def active_isolations() -> list[dict]:

@@ -146,6 +146,7 @@ def say_unreadable_states(report: list[dict]) -> None:
     """The local state files that can't be read, said on one card per set of files (once,
     acknowledged or not, while that set stands); closed once every file reads again."""
     from glorfindel import escalations
+    from glorfindel import actions
     from glorfindel.actions import unreadable_states
     files = unreadable_states()
     sid = f"{_STATE_PREFIX}{_digest(files)}" if files else ""
@@ -161,10 +162,15 @@ def say_unreadable_states(report: list[dict]) -> None:
     if alerts.get("unreadable_states") == sid:
         return
     more = f" (+{len(files) - 5})" if len(files) > 5 else ""
+    # What waits depends on which: a block file stops the orphan sweep only; an isolation
+    # file, the release, the reset and verify_release of a NIC in quarantine or bare too.
+    isolations = any(f.startswith(f"{actions._ISOLATION_STATE_DIR.name}/") for f in files)
     reason = (f"État local illisible : {', '.join(files[:5])}{more} — ce qu'il tient est inconnu. "
-              "Tant qu'il l'est, la réaffirmation ne le vérifie pas, aucune règle orpheline n'est "
-              "retirée, et la levée, le reset et la vérification d'une carte en quarantaine ou "
-              "sans NSG s'arrêtent : rien n'est retiré ni dit levé sur une inconnue.")
+              "Tant qu'il l'est, la réaffirmation ne le vérifie pas et aucune règle orpheline n'est "
+              "retirée" + (" ; la levée, le reset et la vérification d'une carte en quarantaine ou "
+                           "sans NSG s'arrêtent : rien n'est retiré ni dit levé sur une inconnue. "
+                           "Une isolation se fait quand même (son original inconnu n'est pas écrit)"
+                           if isolations else "") + ".")
     steps = ["Lire ces fichiers sous ~/.glorfindel/ : les réparer s'ils sont récupérables "
              "(la forme qu'écrit Glorfindel).",
              "Sinon les retirer à la main, puis relancer ce qui attendait ; `glorfindel reset "

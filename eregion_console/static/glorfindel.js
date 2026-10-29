@@ -79,6 +79,9 @@ const _NOT_DECISIONS = new Set(['posture_gap', 'orphan_rule', 'quarantine_altere
 function _isAnchored(e) { return _ANCHORED_TYPES.has(e.escalation_type); }
 // A card on an NSG (a quarantine altered, an orphan rule no VM holds) gets an NSG tile.
 function _isNsgId(rid) { return /\/providers\/microsoft\.network\/networksecuritygroups\//i.test(rid || ''); }
+// A card about Glorfindel's local state (SEC4b: `~/.glorfindel`, no cloud resource) gets
+// no tile: it was a phantom VM, counted among the unprotected ones. It stays in the feed.
+function _isLocalState(rid) { return /^~\//.test(rid || ''); }
 
 // An autonomous action a gate held back: recommended, NOT executed. It used to read
 // "VM isolated from network" as if done, with only an Ack (third review, T14). Say it
@@ -727,6 +730,7 @@ function renderInfra() {
     }
   });
   vmEscs.forEach(e => {
+    if (_isLocalState(e.resource_id)) return;
     // An escalation on an AKS node (e.g. a stale posture_gap) folds into its cluster —
     // it must not spawn a bare node card. Actionable node states come via `resources`.
     const parentId = _clusterKey(e.resource_id, '');
@@ -741,7 +745,7 @@ function renderInfra() {
   // What Glorfindel closed itself in the last day keeps its tile, VM or NSG.
   (_state.handled || []).forEach(h => {
     const name = (h.resource_id || '').split('/').pop();
-    if (name && !_clusterKey(h.resource_id, '') && ![...resourceMap.values()].some(r => r.vm_name === name))
+    if (name && !_isLocalState(h.resource_id) && !_clusterKey(h.resource_id, '') && ![...resourceMap.values()].some(r => r.vm_name === name))
       resourceMap.set(h.resource_id, { resource_id: h.resource_id, vm_name: name, states: [],
                                        is_nsg: _isNsgId(h.resource_id) });
   });

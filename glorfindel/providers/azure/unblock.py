@@ -330,8 +330,10 @@ class UnblockMixin:
                 # In quarantine, the NIC's own NSG — where a block lies — is off it, out
                 # of sight until the release puts it back. Unblocked meanwhile, `not_found`
                 # was answered and the IP was blocked again at the release (L27).
-                original = _recorded_original(t0["nic_id"])
                 try:
+                    # In the try: a state that can't be read fails the unblock, named —
+                    # it escaped after the deletions, `unblocking_at` left (SEC4b).
+                    original = _recorded_original(t0["nic_id"])
                     if original is _UNKNOWN:
                         original = self._original_from_tags(t0["quarantine"], t0["nic_id"])
                     elif original is None:

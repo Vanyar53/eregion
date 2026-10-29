@@ -19,6 +19,9 @@ from glorfindel.memory import CycleMemory
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# An attack_started's moment is bounded (SEC4a): a recent one.
+_NOW = __import__("time").time()
+
 _RESOURCE_ID = (
     "/subscriptions/s/resourceGroups/rg"
     "/providers/Microsoft.Compute/virtualMachines/vm"
@@ -128,7 +131,7 @@ def test_poll_detection_updates_event_to_detection_on_alert():
         "detection_source": "azure_monitor",
         "detection_query": "Syslog | ...",
         "detection_timeout_s": 300,
-        "attack_time": 1000.0,
+        "attack_time": _NOW - 120,
         "log_analytics_workspace_id": "ws-123",
     }
     mock_detector = MagicMock()
@@ -138,7 +141,8 @@ def test_poll_detection_updates_event_to_detection_on_alert():
         result = poll_detection(state)
 
     assert result["signal"]["event"] == "detection"
-    assert result["signal"]["raw_signal"]["detection_time_s"] == 60.0
+    # Measured from the attack (attack_time, 120 s ago), not the poll's own 60 s.
+    assert result["signal"]["raw_signal"]["detection_time_s"] >= 120
     assert result["signal"]["raw_signal"]["detected_data"]["SourceIP"] == "185.220.101.1"
 
 
@@ -169,7 +173,7 @@ def test_poll_detection_updates_event_to_timeout_on_no_alert():
         "detection_source": "azure_monitor",
         "detection_query": "...",
         "detection_timeout_s": 10,
-        "attack_time": 1000.0,
+        "attack_time": _NOW - 120,
         "log_analytics_workspace_id": "ws-123",
     }
     mock_detector = MagicMock()
@@ -188,7 +192,7 @@ def test_poll_detection_unknown_source_falls_back_to_timeout():
     state["signal"]["raw_signal"] = {
         "detection_source": "unknown_siem",
         "detection_timeout_s": 10,
-        "attack_time": 1000.0,
+        "attack_time": _NOW - 120,
     }
     with patch("glorfindel.detectors.detector_for", side_effect=ValueError("unknown source")):
         result = poll_detection(state)
@@ -210,7 +214,7 @@ def test_poll_detection_expected_latency_overrides_signal_timeout():
     state["signal"]["ttp"] = "T1136.001"
     state["signal"]["raw_signal"] = {
         "detection_timeout_s": 300,  # scenario says 300s
-        "attack_time": 1000.0,
+        "attack_time": _NOW - 120,
     }
     mock_rule = DetectionRule(
         name="t1136-001-rule",
@@ -243,7 +247,7 @@ def test_poll_detection_signal_timeout_preserved_when_higher_than_latency():
     state["signal"]["ttp"] = "T1486"
     state["signal"]["raw_signal"] = {
         "detection_timeout_s": 300,  # scenario says 300s
-        "attack_time": 1000.0,
+        "attack_time": _NOW - 120,
     }
     mock_rule = DetectionRule(
         name="ransomware-disk-write",
@@ -327,7 +331,7 @@ def test_resolve_attack_started_passes_glorfindel_cfg_to_find_rule(tmp_path):
         "ttp": "T1548.003",
         "raw_signal": {
             "detection_timeout_s": 1,
-            "attack_time": 0.0,
+            "attack_time": _NOW - 120,
         },
     }
     cfg = GlorfindelConfig(monitoring_backends=[
@@ -371,6 +375,7 @@ def test_load_context_retrieves_past_cycles(tmp_path, tmp_incidents):
         "reasoning": "Isolated VM after ransomware",
         "action": "isolate_vm",
         "outcome": "isolated",
+        "source": "real",   # a real signal is given real cycles only (SEC4a)
     })
 
     result = load_context(_state(), memory=mem, incidents=tmp_incidents)

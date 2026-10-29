@@ -1285,6 +1285,18 @@ l'autre. Remesurés sur six tours : 28/48 avant, 33/48 après, instables d'au mo
 (M09 5/6 → 3/6, M26 3/6 → 2/6, M29 0/6 → 4/6). Aucun n'est perdu : un mutant à 0/2 par la machine
 reste attrapé par ses séquences figées.
 
+**Le verrou des escalades, hors de l'ordonnanceur (29/10, #292).** Sur cette branche, le job macOS
+de la CI restait bloqué dans la machine. La pile écrite par `faulthandler` l'a montré : dans une
+course où les deux opérations laissent une carte, l'une, arrêtée par l'ordonnanceur à son écriture
+pendant qu'elle tenait le verrou du magasin (SEC3), laissait l'autre bloquée dans ce verrou, hors
+de sa vue ; le teardown attendait ensuite derrière. C'était aussi le « op-2 never came back »
+d'I11, qu'on croyait dû à la charge. Le défaut était dans le banc, latent sur `main` depuis SEC3 :
+tout verrou réel qu'une course peut prendre doit être celui de l'ordonnanceur (`_scheduled`).
+`_file_lock` prend un `timeout` comme `_vm_lock`, et la machine l'essaie sans attendre ; la
+régression `test_a_race_whose_two_operations_rewrite_the_escalations_store` rejoue la course, et le
+mutant M1395 (le verrou qui ignore son délai) y est attrapé. Le job macOS est borné (25 min) et un
+test qui dure plus de 8 min y écrit la pile de ses fils.
+
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de
 quarantaine **partagé**. Toutes les VMs en quarantaine du même groupe étaient rouvertes. La

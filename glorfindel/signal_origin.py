@@ -8,9 +8,11 @@ which the watch does not read), each for what it is:
   attack_started    "look": the watch runs ITS detection rule for the line's technique. From
                     the line come the VM it names (`resource_id`), the technique (`ttp`) and
                     the moment (`attack_time`, where the rule's search starts); from the
-                    monitoring, the detection itself — the row the rule finds, which the
-                    cycle then pins to the line's VM. Not checked here, yet: that the row
-                    names that VM, and a bound on `attack_time` (SEC4);
+                    monitoring, the detection itself — the row the rule finds. That row
+                    must name the line's VM, or the actions aimed at it are held
+                    (`resolve_attack_started`, SEC4a); and `attack_time` is bounded — at
+                    most ATTACK_TIME_MAX_AGE_S old, at most ATTACK_TIME_FUTURE_S ahead —
+                    or the line is refused here (`attack_time_refusal`);
   detection_missed  a rule proposal: a card, never an action.
 
 and, of each, only the fields the injector writes (`_FIELDS`): a line cannot hand the
@@ -62,6 +64,35 @@ _LOCK = threading.Lock()
 _REFUSED: dict[str, int] = {}
 _VOUCHED: set[str] = set()
 
+# The moment an attack_started gives is where the rule's search starts (SEC4a): never more
+# than 2 h back — the longest exercise window (eregion_core/exercise.py) — nor more than
+# 5 min ahead (clocks drift; the exercise windows allow as much).
+ATTACK_TIME_MAX_AGE_S = 2 * 3600
+ATTACK_TIME_FUTURE_S = 300
+
+
+def attack_time_refusal(value, now: float | None = None) -> str:
+    """Why an attack_started's `attack_time` is refused, or "" when it is a moment within
+    the bounds (an epoch, in seconds). Never raises."""
+    import math
+    import time
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"attack_time n'est pas un instant ({type(value).__name__})"
+    try:
+        t = float(value)
+    except (OverflowError, ValueError):
+        return "attack_time n'est pas un instant"
+    if not math.isfinite(t):
+        return "attack_time n'est pas un instant fini"
+    now = time.time() if now is None else now
+    if now - t > ATTACK_TIME_MAX_AGE_S:
+        return (f"attack_time trop ancien ({int((now - t) // 60)} min, au plus "
+                f"{ATTACK_TIME_MAX_AGE_S // 60} min)")
+    if t - now > ATTACK_TIME_FUTURE_S:
+        return f"attack_time dans le futur (+{int(t - now)} s, au plus {ATTACK_TIME_FUTURE_S} s)"
+    return ""
+
 
 class Admission:
     """What the watch makes of one line of runs/: `signal` (cleaned) and `what` (poll,
@@ -92,6 +123,10 @@ def admit(data: dict) -> Admission:
         return Admission(None, refused=f"identifiant de run invalide ({str(run_id)[:40]!r})")
     if not isinstance(clean["resource_id"], str):
         return Admission(None, refused="resource_id n'est pas une chaîne")
+    if event == "attack_started" and "attack_time" in clean["raw_signal"]:
+        why = attack_time_refusal(clean["raw_signal"]["attack_time"])
+        if why:
+            return Admission(None, refused=why)
     return Admission(clean, CHANNEL_EVENTS[event], dropped=dropped)
 
 

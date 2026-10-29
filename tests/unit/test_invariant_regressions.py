@@ -1275,7 +1275,7 @@ def test_a_race_whose_two_operations_rewrite_the_escalations_store(monkeypatch):
     from glorfindel import escalations
     from .test_invariants import _CURRENT, _Chaos, _Scheduler
     invariant_env(monkeypatch)
-    _CURRENT.chaos = _Chaos()
+    monkeypatch.setattr(_CURRENT, "chaos", _Chaos())
 
     @escalations._locked
     def rewrite(n):

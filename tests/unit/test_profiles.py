@@ -311,3 +311,11 @@ def test_what_each_service_writes_is_a_writable_volume():
             mounts[target] = ro
         for t in targets:
             assert mounts.get(t) is False, (name, t)
+
+
+def test_the_injectors_image_never_opens_the_analysis_index():
+    """Why Annatar's read-only container mounts neither ~/.eregion/analysis nor ~/.cache/chroma:
+    the index needs chromadb, which the injectors' image does not hold (its report goes to
+    runs/). Should chromadb enter it, the mounts must come with it."""
+    lock = (ROOT / "requirements" / "annatar.txt").read_text(encoding="utf-8")
+    assert not re.search(r"(?m)^chromadb==", lock)

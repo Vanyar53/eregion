@@ -59,22 +59,32 @@ export GLORFINDEL_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # export EREGION_CONSOLE_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # export GLORFINDEL_BOT_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # export GLORFINDEL_BOT_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# Les écritures approuvées de la console et du bot sont celles de Glorfindel (AL1) :
-# export GLORFINDEL_OWN_CALLERS=<appId-console>,<appId-bot>
+# Les écritures approuvées de la console et du bot sont celles de Glorfindel (AL1) : le compose
+# ajoute leurs deux …_CLIENT_ID à GLORFINDEL_OWN_CALLERS pour la watch. Une watch lancée depuis
+# le venv ne les connaît que par là — sinon chaque écriture approuvée devient une carte :
+# export GLORFINDEL_OWN_CALLERS=$EREGION_CONSOLE_AZURE_CLIENT_ID,$GLORFINDEL_BOT_AZURE_CLIENT_ID
 export AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 #
-# AZURE_CLIENT_* : ce que lit la CLI lancée sur ce poste (glorfindel restore, release…), le
-# chemin d'un humain comme la console — son principal ; et, dans le compose, ce que prend un
-# service dont la variable est vide (le principal unique d'avant, à remplacer).
-export AZURE_CLIENT_ID=${EREGION_CONSOLE_AZURE_CLIENT_ID:-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
-export AZURE_CLIENT_SECRET=${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+# AZURE_CLIENT_* : ce que lit Glorfindel lancé depuis ce poste (le venv : glorfindel watch,
+# glorfindel …) et le repli de tout service du compose dont la paire est vide. Le principal le
+# moins large qui écrit : celui de la watch, jamais celui de la console (il restaure). Les
+# injecteurs ne le prennent jamais (ANNATAR_AZURE_CLIENT_* seulement).
+export AZURE_CLIENT_ID=$GLORFINDEL_AZURE_CLIENT_ID
+export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
+# Un restore depuis la CLI de ce poste, le chemin d'un humain comme la console : sa paire, pour
+# cette commande seulement —
+#   AZURE_CLIENT_ID=$EREGION_CONSOLE_AZURE_CLIENT_ID AZURE_CLIENT_SECRET=$EREGION_CONSOLE_AZURE_CLIENT_SECRET \
+#     glorfindel restore <resource_id> --before <ISO8601> --yes
+# Une paire va ensemble : un …_CLIENT_ID posé sans son …_SECRET mélange deux principaux (les
+# replis se tirent variable par variable) — la watch le dit au démarrage.
 
 # az account show --query id -o tsv
 export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 # Annatar et Gothmog : sur ce poste, un injecteur reste passif (valider, lister, --dry-run) ; il
 # agit depuis Orodruin, avec l'identité managée qu'y crée make orodruin-up (ses droits par VM
-# inscrite). ANNATAR_AZURE_CLIENT_* seulement pour lire depuis ce poste (Reader sur le banc).
+# inscrite). ANNATAR_AZURE_CLIENT_* seulement pour lire depuis ce poste (Reader sur le banc) ;
+# vides, make annatar-* ne passe aucun principal (jamais AZURE_CLIENT_* en repli).
 # export ANNATAR_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # export ANNATAR_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 

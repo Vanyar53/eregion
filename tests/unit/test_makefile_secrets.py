@@ -2,8 +2,9 @@
 
 `docker run -e AZURE_CLIENT_SECRET=$(…)` showed the value in `ps`, in the shell's history and
 in `make -n`. Each secret now goes to the container by its NAME (`-e AZURE_CLIENT_SECRET`); the
-value is chosen by the recipe's shell (ANNATAR_/GLORFINDEL_AZURE_CLIENT_* first, then
-AZURE_CLIENT_*) and set in the environment of `docker run` only.
+value is chosen by the recipe's shell (GLORFINDEL_AZURE_CLIENT_* first, then AZURE_CLIENT_*;
+ANNATAR_AZURE_CLIENT_* alone, never the shared one — SEC7) and set in the environment of `docker
+run` only.
 
 The canary renders every target with `make -n`, with a fake value for every secret the
 Makefile names, and looks for those values in what would run. Then the recipes that start a
@@ -148,7 +149,21 @@ def test_the_container_gets_its_own_principal_by_name(tmp_path, target, side):
         assert env == "ENV own-id hy1-canary-own", env
     assert "hy1-canary" not in output
 
-    # Without its own principal, the shared one.
+    # Without its own principal: Glorfindel takes the shared one; the red container none (SEC7,
+    # V-17 — the shared principal, or one of Glorfindel's, isolates and restores).
     del secrets[f"{side}_AZURE_CLIENT_ID"], secrets[f"{side}_AZURE_CLIENT_SECRET"]
     runs, _ = _docker_calls(tmp_path, target, secrets)
-    assert [env for _, env in runs] == ["ENV shared-id hy1-canary-shared"] * len(runs)
+    if side == "GLORFINDEL":
+        assert [env for _, env in runs] == ["ENV shared-id hy1-canary-shared"] * len(runs)
+    else:
+        assert [env.split() for _, env in runs] == [["ENV"]] * len(runs)
+
+
+@pytest.mark.parametrize("target", ["annatar-dry-run", "annatar-shell"])
+def test_the_red_container_never_takes_the_shared_principal(tmp_path, target):
+    """SEC7 (V-17): only AZURE_CLIENT_* set — the former shared principal, or one of
+    Glorfindel's: `make annatar-*` hands the container no principal at all."""
+    secrets = {"AZURE_CLIENT_ID": "shared-id", "AZURE_CLIENT_SECRET": "hy1-canary-shared"}
+    runs, output = _docker_calls(tmp_path, target, secrets)
+    for argv, env in runs:
+        assert "shared" not in env and "hy1-canary" not in env + argv + output, env

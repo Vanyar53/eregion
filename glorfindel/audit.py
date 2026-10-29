@@ -387,8 +387,8 @@ def _check_permissions(resource_id: str, connector) -> AuditCheck | list:
     return AuditCheck(
         action, name, "fail",
         f"Droits manquants — {detail}",
-        fix=("Rôles intégrés suffisants : Network Contributor + Virtual Machine Contributor "
-             "sur le resource group (ou un rôle personnalisé avec ces seules actions)."),
+        fix=("Le rôle « Eregion Glorfindel Response » (infra/identities/glorfindel-response.json) "
+             "sur le resource group — docs/operations.md, « Identités Azure »."),
         data={"missing_permissions": missing},
     )
 
@@ -509,7 +509,7 @@ def _check_nsg(resource_id: str, connector) -> AuditCheck:
             message=f"IAM: no permission on NSG — {err}",
             fix=(
                 f"az role assignment create --assignee $AZURE_CLIENT_ID "
-                f"--role 'Network Contributor' "
+                f"--role 'Eregion Glorfindel Response' "
                 f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{rg}"
             ),
         )
@@ -573,7 +573,7 @@ def _check_backup(resource_id: str, connector, vault: str, vault_rg: str = "") -
             message=f"IAM: no access to vault '{vault}' — {err}",
             fix=(
                 f"az role assignment create --assignee $AZURE_CLIENT_ID "
-                f"--role 'Backup Contributor' "
+                f"--role 'Eregion Glorfindel Restore' "
                 f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{vrg}"
             ),
         )
@@ -632,7 +632,7 @@ def _check_compute(resource_id: str, connector) -> AuditCheck:
             message=f"IAM: no access to VM {vm} — {err}",
             fix=(
                 f"az role assignment create --assignee $AZURE_CLIENT_ID "
-                f"--role 'Virtual Machine Contributor' "
+                f"--role 'Eregion Glorfindel Response' "
                 f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{rg}"
             ),
         )

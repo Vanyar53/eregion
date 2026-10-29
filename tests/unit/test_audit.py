@@ -219,7 +219,7 @@ def test_run_nsg_fail_iam():
     nsg_check = next(ch for ch in result.checks if ch.name == "NSG access")
     assert nsg_check.status == "fail"
     assert "IAM" in nsg_check.message
-    assert "Network Contributor" in nsg_check.fix
+    assert "--role 'Eregion Glorfindel Response'" in nsg_check.fix   # SEC7: never a broad built-in role
 
 
 def test_run_nsg_fail_no_nsg():
@@ -236,7 +236,7 @@ def test_run_backup_fail_iam():
     bk = next(ch for ch in result.checks if ch.name == "Backup vault")
     assert bk.status == "fail"
     assert "IAM" in bk.message
-    assert "Backup Contributor" in bk.fix
+    assert "--role 'Eregion Glorfindel Restore'" in bk.fix
 
 
 def test_run_backup_fail_not_configured():
@@ -288,7 +288,7 @@ def test_run_compute_fail_iam():
     result = run(RESOURCE_ID, c)
     cp = next(ch for ch in result.checks if ch.name == "Compute access")
     assert cp.status == "fail"
-    assert "Virtual Machine Contributor" in cp.fix
+    assert "--role 'Eregion Glorfindel Response'" in cp.fix
 
 
 def test_run_compute_fail_not_found():

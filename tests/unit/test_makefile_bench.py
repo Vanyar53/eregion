@@ -152,6 +152,9 @@ def test_orodruin_is_not_planned_without_the_hosted_watch_state(tmp_path, target
     assert "glorfindel-host ne se lit pas" in err and "NO_WATCH=1" in err
     code, out, err = _oro(tmp_path, target, principal=PRINCIPAL)          # the subnet missing
     assert code != 0 and "terraform" not in out.replace("terraform init", "")
+    for no in ("0", "yes", "true"):                                         # 1 only, said
+        code, out, err = _oro(tmp_path, target, f"NO_WATCH={no}")
+        assert code != 0 and "glorfindel-host ne se lit pas" in err, no
 
 
 def test_orodruin_plans_with_the_hosted_watch_state_or_no_watch_said(tmp_path):

@@ -25,13 +25,14 @@ TOPO     ?=
 # que des noms. Le canary : tests/unit/test_makefile_secrets.py rend chaque cible par
 # `make -n` avec des secrets factices, et aucune valeur ne doit y paraître.
 #
-# Annatar — ANNATAR_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
-# Sur ce poste, un injecteur reste passif : il agit depuis Orodruin, avec son identité managée
-# (SEC5). Jamais Contributor sur l'abonnement (V-17, docs/operations.md « Identités Azure »).
+# Annatar — ANNATAR_AZURE_CLIENT_* seulement, jamais AZURE_CLIENT_* en repli (SEC7, V-17 : comme
+# x-injector dans le compose) ; vides, le conteneur rouge n'a pas d'identité. Le principal
+# partagé, ou celui d'un service de Glorfindel, isole et restaure : jamais au rouge. Sur ce poste,
+# un injecteur reste passif : il agit depuis Orodruin, avec son identité managée (SEC5).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
 ANNATAR_AZURE_PICK = \
-	AZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
-	AZURE_CLIENT_SECRET="$${ANNATAR_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
+	AZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-}" \
+	AZURE_CLIENT_SECRET="$${ANNATAR_AZURE_CLIENT_SECRET:-}"
 # GLORFINDEL_LLM_MODEL : le rapport de fin de `campaign run` s'écrit dans ce conteneur, et
 # l'IA d'analyse y refuse le modèle de Glorfindel (IA1) — sans lui, elle ne verrait que le défaut.
 ANNATAR_AZURE_ENV := \
@@ -348,6 +349,13 @@ check-azure-env:
 	  echo "  or run with ALLOW_NO_AZURE=1 for a demo without Azure."; \
 	  exit 1; \
 	fi
+	@# SEC7 (V-17) : le compose tire chaque repli variable par variable — un …_CLIENT_ID sans son
+	@# …_SECRET (ou l'inverse) donnerait à ce service l'id d'un principal et le secret d'un autre.
+	@for p in GLORFINDEL EREGION_CONSOLE GLORFINDEL_BOT; do \
+	  id=$$([ -n "$$(printenv $${p}_AZURE_CLIENT_ID)" ] && echo 1); \
+	  se=$$([ -n "$$(printenv $${p}_AZURE_CLIENT_SECRET)" ] && echo 1); \
+	  [ "$$id" = "$$se" ] || echo "⚠ $${p}_AZURE_CLIENT_ID / $${p}_AZURE_CLIENT_SECRET : paire incomplète — ce service mélangerait deux principaux (docs/operations.md, « Identités Azure »)."; \
+	done
 
 glorfindel-start: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
@@ -750,9 +758,10 @@ orodruin-init:
 
 # SEC7 (relecture de SEC5) : sans l'état de glorfindel-host lisible sur ce poste, l'identité et le
 # sous-réseau de H0 seraient vides, et le plan retirerait la lecture du canal par la watch et
-# l'accès de son sous-réseau. NO_WATCH=1 : un Orodruin sans Glorfindel hébergé, voulu.
+# l'accès de son sous-réseau. NO_WATCH=1 : un Orodruin sans Glorfindel hébergé, voulu — 1 seulement
+# (NO_WATCH=0, ou toute autre valeur, ne contourne rien).
 orodruin-watch-guard:
-	@if [ -z "$(NO_WATCH)" ] && { [ -z "$(ORO_WATCH_ID)" ] || [ -z "$(ORO_WATCH_SUBNET)" ]; }; then \
+	@if [ "$(NO_WATCH)" != 1 ] && { [ -z "$(ORO_WATCH_ID)" ] || [ -z "$(ORO_WATCH_SUBNET)" ]; }; then \
 	  echo "✗ L'état de infra/glorfindel-host ne se lit pas ici (principal_id, subnet_id) : le plan retirerait" >&2; \
 	  echo "  à la watch hébergée la lecture du canal et l'accès de son sous-réseau. make glorfindel-host-init" >&2; \
 	  echo "  sur ce poste, ou NO_WATCH=1 pour un Orodruin sans Glorfindel hébergé." >&2; exit 1; fi

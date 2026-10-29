@@ -54,15 +54,18 @@ x-env: &env
 #                                               bloquer, instantané) — jamais le restore ;
 #   la console  EREGION_CONSOLE_AZURE_CLIENT_*  lecture + réponse + restore (ce qu'un humain approuve) ;
 #   le bot      GLORFINDEL_BOT_AZURE_CLIENT_*   lecture + réponse + restore (Restore, Revert).
-# Vide, chacun prend AZURE_CLIENT_* (le principal unique d'avant : rien ne casse). Sur H0, tout est
-# vide : l'identité managée de la VM, lectrice.
+# Vide, chacun prend AZURE_CLIENT_* (le principal unique d'avant : rien ne casse). Le repli se tire
+# variable par variable : un …_CLIENT_ID sans son …_SECRET mélangerait deux principaux — une paire
+# va ensemble, et la watch dit au démarrage une paire incomplète. Sur H0, tout est vide : l'identité
+# managée de la VM, lectrice.
 x-azure: &azure
   AZURE_CLIENT_ID: ${GLORFINDEL_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
   AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}
   AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
-  # Les identités de la console et du bot (leurs ids, aucun secret) : leurs écritures dans le
-  # journal d'activité sont celles de Glorfindel (AL1).
-  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-}
+  # Les identités de la console et du bot (leurs ids, aucun secret), ajoutées à celles que
+  # l'opérateur liste : leurs écritures approuvées dans le journal d'activité sont celles de
+  # Glorfindel (AL1), pas une carte du plan de contrôle chacune. Les vides sont ignorés.
+  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-},${EREGION_CONSOLE_AZURE_CLIENT_ID:-},${GLORFINDEL_BOT_AZURE_CLIENT_ID:-}
 
 x-console-azure: &console-azure
   AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
@@ -257,7 +260,10 @@ services:
     restart: "no"
     profiles: ["annatar"]
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
-    # n'écrit que dans ses montages (runs/, ~/.annatar) et /tmp.
+    # n'écrit que dans ses montages (runs/, ~/.annatar) et /tmp. Ni ~/.eregion/analysis ni
+    # ~/.cache/chroma : le rapport de fin de campagne s'écrit dans runs/, et l'index de l'IA
+    # d'analyse ne s'ouvre jamais ici — chromadb n'est pas dans l'image des injecteurs
+    # (requirements/annatar.txt) ; la watch tient cet index (son montage ~/.eregion/analysis).
     read_only: true
     tmpfs:
       - /tmp

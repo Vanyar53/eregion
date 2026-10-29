@@ -147,7 +147,7 @@ def _render(spec: str, env: dict) -> str:
     return env.get(m.group(1)) or _render(m.group(2), env)
 
 
-def test_each_service_of_glorfindel_has_its_own_principal_and_the_single_one_as_fallback():
+def test_each_service_of_glorfindel_has_its_own_principal_and_the_single_one_as_fallback(monkeypatch):
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     env = {name: s.get("environment") or {} for name, s in compose["services"].items()}
     own = {"watch": "GLORFINDEL_AZURE_CLIENT", "war-room": "EREGION_CONSOLE_AZURE_CLIENT",
@@ -162,5 +162,60 @@ def test_each_service_of_glorfindel_has_its_own_principal_and_the_single_one_as_
     rendered = {s: {_render(str(v), dotenv) for v in e.values()} for s, e in env.items()}
     for service, value in each.items():
         assert {s for s, values in rendered.items() if value in values} == {service}, service
-    # The console's and the bot's identities, so that their approved writes are Glorfindel's (AL1).
-    assert "GLORFINDEL_OWN_CALLERS" in env["watch"]
+    # The console's and the bot's identities, so that their approved writes are Glorfindel's (AL1):
+    # added to the operator's list, an empty one ignored.
+    own = str(env["watch"]["GLORFINDEL_OWN_CALLERS"]).split(",")
+    rendered = [_render(x, {"GLORFINDEL_OWN_CALLERS": "app-x", "EREGION_CONSOLE_AZURE_CLIENT_ID": "console-id",
+                            "GLORFINDEL_BOT_AZURE_CLIENT_ID": "bot-id"}) for x in own]
+    assert rendered == ["app-x", "console-id", "bot-id"]
+    assert [_render(x, {}) for x in own] == ["", "", ""]
+    from glorfindel.providers.azure.activity import configured_identities
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.setenv("GLORFINDEL_OWN_CALLERS", ",console-id,")
+    assert configured_identities() == {"console-id"}
+
+
+@pytest.mark.skipif(__import__("shutil").which("make") is None, reason="make not installed")
+@pytest.mark.parametrize("env, said", [
+    ({"EREGION_CONSOLE_AZURE_CLIENT_ID": "console-id"}, "EREGION_CONSOLE_AZURE_CLIENT_ID"),
+    ({"GLORFINDEL_BOT_AZURE_CLIENT_SECRET": "x"}, "GLORFINDEL_BOT_AZURE_CLIENT_ID"),
+    ({"GLORFINDEL_AZURE_CLIENT_ID": "w", "GLORFINDEL_AZURE_CLIENT_SECRET": "x"}, None),
+    ({}, None),
+])
+def test_a_principal_without_its_pair_is_said_at_start(env, said):
+    """SEC7 (V-17): the compose's fallbacks are drawn one variable at a time — an id without its
+    secret would mix two principals. `make glorfindel-start` (check-azure-env) says so."""
+    import os
+    import subprocess
+    base = {k: v for k, v in os.environ.items() if "AZURE_CLIENT" not in k}
+    res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "check-azure-env",
+                          "AZURE_SUBSCRIPTION_ID=s"], env={**base, **env}, capture_output=True, text=True,
+                         timeout=60)
+    assert res.returncode == 0, res.stderr
+    if said:
+        assert "paire incomplète" in res.stdout and said in res.stdout
+    else:
+        assert "paire incomplète" not in res.stdout
+    secret = {"GLORFINDEL_BOT_AZURE_CLIENT_SECRET": "hy1-canary-bot"}
+    res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "check-azure-env",
+                          "AZURE_SUBSCRIPTION_ID=s"], env={**base, **secret}, capture_output=True, text=True,
+                         timeout=60)
+    assert "hy1-canary" not in res.stdout + res.stderr          # a secret's value is never said
+
+
+def test_the_audit_and_the_readiness_name_eregion_s_roles_never_a_broad_built_in_one():
+    """SEC7: what the audit and the readiness tell an operator to grant is one of the two roles
+    of infra/identities/, never Network, Backup or Virtual Machine Contributor."""
+    import inspect
+
+    from glorfindel import audit, readiness
+    names = {json.loads(p.read_text(encoding="utf-8"))["Name"] for p in ROLES.glob("*.json")}
+    assert names == {"Eregion Glorfindel Response", "Eregion Glorfindel Restore"}
+    for module in (audit, readiness):
+        text = inspect.getsource(module)
+        fixes = re.findall(r"--role '([^']+)'", text) + re.findall(r"« (Eregion Glorfindel \w+) »", text)
+        assert fixes and set(fixes) <= names, (module.__name__, fixes)
+        for broad in ("Network Contributor", "Backup Contributor"):
+            assert broad not in text, (module.__name__, broad)
+    # The one place a broad role is named: what to take away from the watch.
+    assert inspect.getsource(audit).count("Virtual Machine Contributor") == 0

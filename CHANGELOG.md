@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-10-29 — "held at the source"
+
 ### Changed
 - **H0's CD judges the harness's attestation against the lock in service, not in absolute terms** (H3, #324, 29/10; `infra/glorfindel-host/README.md`, « L'attestation du harnais »). The model H0 runs refuses a temperature, and the same lock (litellm 1.100.4) drew 51/51 and no overconfident error, then 50/51 and one: the pair « brute force after root » drew `isolate_vm` twice, then `block_suspicious_ip` at 0.80. Only 15 cases out of 17 drew one action on each pass. The absolute rule (everything right, no overconfident error, one pass) refused at random and asked for the harness again until green.
   - **Two passes, one file.** `make llm-compare MODELS=<H0's model> RUNS=3 ATTEST=1 [BASE=<tag>]` (`scripts/harness_attest.py`) runs the harness on the reference first: the lock of the release in service (the latest `v*` tag, or `BASE`), installed with `--require-hashes` in a throwaway venv under `~/.cache/eregion/`. Then it runs on the candidate (the checkout's `.venv`, refused when it does not follow the lock). The code and the cases are the same; only the dependencies differ. `requirements/harness.json` (`eregion.harness/2`) keeps each pass's `lock_sha256` and `runs`, and per case every draw: right or not, the action, the confidence. Nothing of the logs. It costs twice one pass, about 260 calls to the model (306 at most).

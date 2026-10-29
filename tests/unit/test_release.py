@@ -429,9 +429,12 @@ def test_release_draft_refuses_a_version_main_s_changelog_does_not_hold(repo, tm
 #   `release-draft` (the make target, the subcommand) and `release_draft` (a function) are names.
 # - In agents_discord.py and notify_discord.py, a URL that holds `releases` is only ever read
 #   (GET), by fetch(method, url, …) as by the bot's call(method, path, …), positional or named;
-#   and no call, whatever its name (getattr…), takes a method that writes with such a URL.
+#   and no call, whatever its name (getattr…), takes a method that writes with such a URL — a
+#   method in one word too (`--method=PATCH`, `-XPATCH`) — in release.py as well (SEC7).
+# - No module renamed on import (`import os as o`, `import subprocess as sp`), no importlib.
 # What no reading of the text can see: a method AND a URL both computed at run time (a join, a
-# lookup) behind a function looked up by a computed name. The dynamic tests cover it: no request
+# lookup) behind a function looked up by a computed name; a wrapper whose URL comes in by a
+# parameter (its happy path only, below). The dynamic tests cover it: no request
 # but GET ever reaches the fake GitHub (test_the_draft_is_on_the_board_…), and every gh call is
 # compared argument by argument (test_no_call_publishes).
 
@@ -521,6 +524,14 @@ def publishes_code(source: str) -> list[str]:
             bad.append(f"from {n.module} import")
         if isinstance(n, ast.Import) and any(a.name.split(".")[0] in ("pty", "multiprocessing") for a in n.names):
             bad.append("import pty/multiprocessing")
+        # SEC7 (review of REL1): a module renamed escapes the names read below (`import os as o`,
+        # then o.system), and importlib loads one by a computed name.
+        if isinstance(n, ast.Import) and any(a.name.split(".")[0] in ("os", "subprocess") and a.asname
+                                             for a in n.names):
+            bad.append("import os/subprocess as …")
+        if (isinstance(n, ast.Import) and any(a.name.split(".")[0] == "importlib" for a in n.names)) or (
+                isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "importlib"):
+            bad.append("importlib")
         if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
             if n.value.id == "os" and FORBIDDEN_OS.fullmatch(n.attr):
                 bad.append(f"os.{n.attr}")
@@ -569,8 +580,18 @@ def _arg(call: ast.Call, at: int, *names: str):
     return next((k.value for k in call.keywords if k.arg in names), None)
 
 
+# A method given in one word, as gh and curl take it: `--method=PATCH`, `-XPATCH`, `-X=PATCH`.
+_METHOD_FLAG = re.compile(r"^(?:--method=|-X=?)(\w+)$", re.IGNORECASE)
+
+
+def _method_of(text: str) -> str:
+    m = _METHOD_FLAG.match(text.strip())
+    return m.group(1).upper() if m else text.strip().upper()
+
+
 def publishes_http(source: str) -> list[str]:
-    """A URL holding `releases` called with another method than GET."""
+    """A URL holding `releases` called with another method than GET. A wrapper whose URL comes in
+    by a parameter stays out of a static view: the dynamic tests cover its happy path only."""
     bad = []
     for n in ast.walk(ast.parse(source)):
         if not isinstance(n, ast.Call):
@@ -578,7 +599,8 @@ def publishes_http(source: str) -> list[str]:
         args = [*n.args, *(k.value for k in n.keywords)]
         texts = ["".join(c for x in ast.walk(a) if (c := _const(x)) is not None) for a in args]
         texts += [f for a in args if (f := _folded(a))]
-        if any(t in WRITES for t in texts) and any("releases" in t for t in texts):
+        texts += [c for a in args for x in ast.walk(a) if (c := _const(x)) is not None]
+        if any(_method_of(t) in WRITES for t in texts) and any("releases" in t for t in texts):
             bad.append(f"a write on releases: {texts}")
             continue
         name = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
@@ -617,7 +639,7 @@ def test_no_path_publishes_in_the_code():
                                                       ("release", "edit")])   # each command shown and run
     for name, text in code.items():
         assert publishes_words(text) == [], name
-    for name in ("agents_discord.py", "notify_discord.py"):
+    for name in ("release.py", "agents_discord.py", "notify_discord.py"):
         assert publishes_http(code[name]) == [], name
     make = _recipes((ROOT / "Makefile").read_text(encoding="utf-8"), "release", "release-draft")
     assert DRAFT_WORD.findall(make) == [] and "gh " not in make and "curl" not in make
@@ -674,9 +696,27 @@ def test_the_releases_label_is_a_label_and_nothing_else():
     'x = {"Draft": 0}',
     'x = "publish -F draft=f"',
     'x = "undraft"',
+    # SEC7 (review of REL1): a renamed module, a computed import, a method in one word.
+    'import os as o\no.system("gh release edit v1")',
+    'import subprocess as sp\nsp.run(["gh", "api", "-X", "PATCH", "repos/o/r/releases/1"])',
+    'import importlib\nimportlib.import_module("sub" + "process")',
+    'from importlib import import_module',
+    'run(["gh", "api", "--method=PATCH", "repos/o/r/releases/1"], root)',
+    'run(["gh", "api", "-XPATCH", "repos/o/r/releases/1"], root)',
 ], ids=lambda s: s[:40])
 def test_the_allow_list_sees_a_path_that_would_publish(snippet):
     assert publishes(snippet), snippet
+
+
+@pytest.mark.parametrize("snippet", [
+    'run(["gh", "api", "--method=PATCH", "repos/o/r/releases/1"], root)',
+    'run(["gh", "api", "-XPATCH", "repos/o/r/releases/1"], root)',
+    'sh(["curl", "-X=DELETE", f"{api}/repos/o/r/releases/{rid}"])',
+    'fetch("--method=POST", api + "/repos/o/r/releases", "x")',
+], ids=lambda s: s[:40])
+def test_the_http_check_reads_a_method_in_one_word(snippet):
+    """SEC7: `--method=PATCH`, `-XPATCH`, `-X=DELETE` — one argument, the method in it."""
+    assert publishes_http(snippet), snippet
 
 
 @pytest.mark.parametrize("snippet", ['x = "make release-draft VERSION=1"', "def release_draft(): pass",

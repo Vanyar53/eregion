@@ -174,23 +174,103 @@ def _save_messages(messages: dict[str, int]) -> None:
     _MESSAGES_STORE.write_text(json.dumps(messages))
 
 
-def _views_to_restore(escs: list[dict], messages: dict[str, int], now=None) -> list[tuple[dict, int]]:
-    """(escalation, message id) whose buttons must answer again after a restart: every card
-    posted in the last _RESTORE_DAYS days — pending, or acknowledged but still to judge."""
+def _posted_at(esc: dict):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(esc.get("first_seen") or esc.get("timestamp")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _posted_within(escs: list[dict], messages: dict[str, int], now=None) -> list[tuple[dict, int]]:
+    """(escalation, message id) of every card posted in the last _RESTORE_DAYS days — what the
+    sync keeps in line with its card, settled ones included (their buttons greyed)."""
     from datetime import datetime, timedelta, timezone
     now = now or datetime.now(timezone.utc)
     out = []
     for e in escs:
         mid = messages.get(e.get("id", ""))
-        if not mid:
-            continue
-        try:
-            when = datetime.fromisoformat(str(e.get("first_seen") or e.get("timestamp")).replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if now - when <= timedelta(days=_RESTORE_DAYS):
+        when = _posted_at(e) if mid else None
+        if when is not None and now - when <= timedelta(days=_RESTORE_DAYS):
             out.append((e, mid))
     return out
+
+
+def _known_vms() -> set[str] | None:
+    """The VMs the discovery knows (lowercase resource ids), or None when it knows none — an
+    empty or unreadable registry says nothing of a VM, never that it is gone."""
+    try:
+        from glorfindel.discovery import AssetRegistry
+        known = {a.resource_id.lower() for a in AssetRegistry().all() if a.resource_id}
+    except Exception:
+        return None
+    return known or None
+
+
+# What a button does: `act` (the card's action, its ack, its command — while it is pending) or
+# `judge` (its verdict — a decision not judged yet, acknowledged or not).
+_JUDGE_PREFIX = "glorfindel_verdict_"
+
+
+def _button_kind(custom_id: str) -> str:
+    return "judge" if str(custom_id or "").startswith(_JUDGE_PREFIX) else "act"
+
+
+def _stale_reason(esc: dict | None, kind: str, now=None, known_vms: set[str] | None = None) -> str:
+    """Why a button of this card no longer does anything ("" while it still waits) — V-08: a
+    card settled, expired, or whose VM the discovery no longer knows has no live button."""
+    from datetime import datetime, timedelta, timezone
+    if not isinstance(esc, dict):
+        return "carte introuvable"
+    now = now or datetime.now(timezone.utc)
+    when = _posted_at(esc)
+    if when is None or now - when > timedelta(days=_RESTORE_DAYS):
+        return f"expirée (plus de {_RESTORE_DAYS} jours)"
+    rid = str(esc.get("resource_id") or "").lower()
+    if (known_vms is not None and esc.get("escalation_type") not in _ANCHORED_TYPES
+            and "/virtualmachines/" in rid and rid.rstrip("/") not in known_vms):
+        return "sa VM n'est plus dans la découverte"
+    if kind == "judge":
+        if not esc_module.is_decision(esc):
+            return "rien à juger"
+        if esc.get("verdict"):
+            return f"déjà jugée ({esc['verdict']})"
+        return ""
+    if esc.get("status") != "pending":
+        return "acquittée"
+    return ""
+
+
+def _waits(esc: dict, now=None, known_vms: set[str] | None = None) -> bool:
+    """The card still waits for something: its action or ack, or its verdict."""
+    return not _stale_reason(esc, "act", now, known_vms) or not _stale_reason(esc, "judge", now, known_vms)
+
+
+def _views_to_restore(escs: list[dict], messages: dict[str, int], now=None,
+                      known_vms: set[str] | None = None) -> list[tuple[dict, int]]:
+    """(escalation, message id) whose buttons must answer again after a restart: the cards
+    posted in the last _RESTORE_DAYS days that still wait — pending, or a decision still to
+    judge (V-08). A card acknowledged and judged, expired, or whose VM is gone is not
+    re-armed: its buttons stay greyed, and a click on one answers « carte réglée »."""
+    return [(e, mid) for e, mid in _posted_within(escs, messages, now) if _waits(e, now, known_vms)]
+
+
+def _current(esc_id: str) -> dict | None:
+    """The card as the store holds it now — never as it was when its view was built."""
+    return next((e for e in esc_module.all_escalations() if e.get("id") == esc_id), None)
+
+
+async def _still_waits(interaction: discord.Interaction, esc_id: str, kind: str) -> bool:
+    """At the click, the card read again (V-08): a button of a card settled since its view was
+    built — acknowledged or judged elsewhere, expired, its VM gone — runs nothing, and says so."""
+    why = _stale_reason(_current(esc_id), kind, known_vms=_known_vms())
+    if not why:
+        return True
+    custom_id = (getattr(interaction, "data", None) or {}).get("custom_id", "?")
+    _console.print(f"[dim]Stale button on {esc_id[:8]} [{custom_id}] — {why}[/dim]")
+    await interaction.response.send_message(
+        f"✓ Carte réglée — {why} : ce bouton ne lance plus rien.", ephemeral=True)
+    return False
 
 
 def _load_synced() -> dict[str, str]:
@@ -482,7 +562,8 @@ class _RestoreModal(discord.ui.Modal):
         self.add_item(self.field)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return await _allowed(interaction, self.esc["id"])
+        return (await _allowed(interaction, self.esc["id"])
+                and await _still_waits(interaction, self.esc["id"], "act"))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         from glorfindel import restore_plan
@@ -537,7 +618,8 @@ class _RestoreConfirmView(discord.ui.View):
         self.card_message, self.card_view = card_message, card_view
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return await _allowed(interaction, self.esc["id"])
+        return (await _allowed(interaction, self.esc["id"])
+                and await _still_waits(interaction, self.esc["id"], "act"))
 
     @discord.ui.button(label="🔄 Confirmer le restore", style=discord.ButtonStyle.primary)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -646,10 +728,13 @@ class EscalationView(discord.ui.View):
         """Every button of the card, before its callback (M-3): the clicker must be allowed
         by the bot's ButtonPolicy. No policy, or an empty one: refused."""
         policy = getattr(interaction.client, "button_policy", None)
-        if isinstance(policy, ButtonPolicy) and policy.allows(interaction.user):
-            return True
-        await _refuse(interaction, self.esc_id, policy)
-        return False
+        if not (isinstance(policy, ButtonPolicy) and policy.allows(interaction.user)):
+            await _refuse(interaction, self.esc_id, policy)
+            return False
+        # Then the card as it is now (V-08): a view re-armed after a restart, or built before
+        # the card was settled elsewhere, runs nothing on a card that no longer waits.
+        custom_id = (getattr(interaction, "data", None) or {}).get("custom_id", "")
+        return await _still_waits(interaction, self.esc_id, _button_kind(custom_id))
 
     @discord.ui.button(
         label="✓ Acknowledge",
@@ -707,11 +792,32 @@ def _build_embed(esc: dict) -> discord.Embed:
     return embed
 
 
-def _build_view(esc: dict) -> EscalationView:
-    """A closed card keeps its buttons, greyed; a judged one, its verdict buttons greyed."""
+class _SettledView(discord.ui.View):
+    """The buttons of a posted card that waits for nothing any more (V-08): every custom id a
+    card's message can carry, none of them doing anything — a click says « carte réglée »."""
+
+    def __init__(self, esc_id: str) -> None:
+        super().__init__(timeout=None)
+        self.esc_id = esc_id
+        short = str(esc_id)[:8]
+        ids = ["glorfindel_ack", "glorfindel_cmd", f"glorfindel_exec_{short}",
+               *(f"{_JUDGE_PREFIX}{v}_{short}" for v in _VERDICT_WORDS)]
+        for cid in ids:
+            self.add_item(discord.ui.Button(label=cid, custom_id=cid, disabled=True))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        await interaction.response.send_message(
+            "✓ Carte réglée : ce bouton ne lance plus rien.", ephemeral=True)
+        return False
+
+
+def _build_view(esc: dict, known_vms: set[str] | None = None) -> EscalationView:
+    """A button that no longer does anything is greyed (V-08, the rule of the click,
+    `_stale_reason`): an acknowledged card's action, ack and command; a judged card's verdict;
+    every button of an expired card or of a VM the discovery no longer knows."""
     view = EscalationView(esc)
     for item in view.children:
-        if esc.get("status") == "resolved" or (esc.get("verdict") and isinstance(item, _VerdictButton)):
+        if _stale_reason(esc, _button_kind(getattr(item, "custom_id", "")), known_vms=known_vms):
             item.disabled = True  # type: ignore[attr-defined]
     return view
 
@@ -764,16 +870,25 @@ class GlorfindelBot(discord.Client):
         self._restore_views()
 
     def _restore_views(self) -> int:
-        """Give the messages posted before this start their buttons back."""
-        restored = 0
-        for esc, message_id in _views_to_restore(esc_module.all_escalations(), self._messages):
+        """Give the messages posted before this start their buttons back: the cards that still
+        wait their own view; every other posted message a settled one (V-08), whose click
+        answers « carte réglée » — never « l'interaction a échoué », never an action, even when
+        its message still shows live buttons (a card expired, its VM gone, never synced)."""
+        restored = settled = 0
+        escs = esc_module.all_escalations()
+        waiting = {e.get("id"): e for e, _ in _views_to_restore(escs, self._messages, known_vms=_known_vms())}
+        for esc_id, message_id in self._messages.items():
             try:
-                self.add_view(EscalationView(esc), message_id=message_id)
-                restored += 1
+                if esc_id in waiting:
+                    self.add_view(EscalationView(waiting[esc_id]), message_id=message_id)
+                    restored += 1
+                else:
+                    self.add_view(_SettledView(esc_id), message_id=message_id)
+                    settled += 1
             except Exception as exc:  # one bad card must not stop the bot
-                _console.print(f"[yellow]View not restored for {esc.get('id', '')[:8]}: {exc}[/yellow]")
-        if restored:
-            _console.print(f"[dim]  → {restored} message(s) given their buttons back[/dim]")
+                _console.print(f"[yellow]View not restored for {str(esc_id)[:8]}: {exc}[/yellow]")
+        if restored or settled:
+            _console.print(f"[dim]  → {restored} message(s) given their buttons back, {settled} settled[/dim]")
         return restored
 
     async def on_ready(self) -> None:
@@ -899,7 +1014,8 @@ class GlorfindelBot(discord.Client):
         War Room → buttons off and the state said; repeats → « N× »; a VM with nothing
         left pending → its thread archived. Returns the number of messages edited."""
         edited, touched, changed = 0, set(), False
-        for esc, message_id in _views_to_restore(esc_module.all_escalations(), self._messages):
+        known_vms = _known_vms()
+        for esc, message_id in _posted_within(esc_module.all_escalations(), self._messages):
             sig = _card_signature(esc)
             if self._synced.get(esc["id"]) == sig:
                 continue
@@ -917,7 +1033,7 @@ class GlorfindelBot(discord.Client):
                     await thread.edit(archived=False, reason="Card updated")
                 try:
                     await thread.get_partial_message(message_id).edit(
-                        embed=_build_embed(esc), view=_build_view(esc))
+                        embed=_build_embed(esc), view=_build_view(esc, known_vms))
                 except discord.HTTPException as exc:
                     if exc.code != 50083:
                         raise
@@ -925,7 +1041,7 @@ class GlorfindelBot(discord.Client):
                     # THREAD_UPDATE (#169, 20/10): reopen it, try again once.
                     await thread.edit(archived=False, reason="Card updated")
                     await thread.get_partial_message(message_id).edit(
-                        embed=_build_embed(esc), view=_build_view(esc))
+                        embed=_build_embed(esc), view=_build_view(esc, known_vms))
             except discord.NotFound:
                 # The message is gone (deleted in Discord): forget it.
                 self._messages.pop(esc["id"], None)

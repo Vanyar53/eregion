@@ -13,12 +13,16 @@ name: Images
 # required check « expected » on a pull request it skips. The first step decides instead: a pull
 # request whose diff touches nothing that goes into an image (scripts/image_check.py, IMAGE_PATHS —
 # tests/unit/test_image_check.py reads each Dockerfile's COPY against it) skips the build and
-# passes green; a push to main, or a diff that cannot be read, builds.
+# passes green; a push to main, a merge queue, a diff that cannot be read or a HEAD that is not the
+# merge commit builds. The later steps run unless the decision says `false` (a missing output
+# builds), and the first step fails in the CI when it cannot write its output (SEC7).
 
 on:
   push:
     branches: [main]
   pull_request:
+  # A merge queue, if one is ever turned on: its checks are the same, always built (SEC7).
+  merge_group:
 
 permissions:
   contents: read
@@ -48,7 +52,7 @@ jobs:
 
       # BuildKit in a container: the driver that can read and write GitHub's cache.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
-        if: steps.touched.outputs.build == 'true'
+        if: steps.touched.outputs.build != 'false'
 
       # The same build as `python3 scripts/image_check.py <image> --build` (make images-check):
       # its Dockerfile, the repository as context, no build argument (the image's default
@@ -56,7 +60,7 @@ jobs:
       # cache is read everywhere and written by main's pushes only: a pull request cannot evict
       # main's.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc   # v7.4.0
-        if: steps.touched.outputs.build == 'true'
+        if: steps.touched.outputs.build != 'false'
         with:
           context: .
           file: ${{ matrix.image }}/Dockerfile
@@ -67,7 +71,7 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.image) || '' }}
 
       - name: In the image (nothing started, no network, no secret)
-        if: steps.touched.outputs.build == 'true'
+        if: steps.touched.outputs.build != 'false'
         env:
           IMAGE: ${{ matrix.image }}
         run: python3 scripts/image_check.py "$IMAGE"

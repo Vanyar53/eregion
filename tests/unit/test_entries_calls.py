@@ -914,6 +914,54 @@ def test_a_claim_left_by_a_dead_process_stops_holding(tmp_path):
     assert jobs.restore_in_progress("vm-example-01") == ""
 
 
+def test_a_claim_held_by_a_live_restore_holds_past_its_age(tmp_path):
+    """SEC7: a `--wait` restore of a large disk writes no job file and lasts hours; its claim
+    held the VM 2 h, then a second restore was let through while the first still ran. The claim
+    is an flock now, held for the restore's length: whatever its age, a live holder refuses.
+    Once its process is gone (the lock released), the age counts again."""
+    import os
+
+    from glorfindel import jobs
+    claim = jobs.restore_claim("vm-example-01")
+    claim.__enter__()
+    try:
+        old = time.time() - jobs._CLAIM_MAX_AGE_S - 600
+        os.utime(claim.path, (old, old))
+        busy = jobs.restore_in_progress("vm-example-01")
+        assert busy and "son processus vit" in busy
+        with pytest.raises(jobs.RestoreBusy):
+            jobs.restore_claim("vm-example-01").__enter__()
+    finally:
+        claim._fh.close()                 # the process dies: the system releases its lock
+        claim._fh = None
+    assert jobs.restore_in_progress("vm-example-01") == ""
+
+
+def test_a_claim_left_behind_says_where_it_is_until_when_and_what_to_check(tmp_path):
+    from glorfindel import jobs
+    jobs._JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    claim = jobs._JOBS_DIR / "vm-example-01.restore-claim"
+    claim.write_text("20261029T080000Z host 4242 dead\n")            # nobody holds it
+    said = jobs.restore_in_progress("vm-example-01")
+    assert str(claim) in said and "UTC" in said and "s'est arrêté" in said
+    assert "az backup job list" in said
+
+
+def test_a_restore_leaving_removes_its_own_claim_only(tmp_path):
+    """A claim removed by hand while its restore ran, then taken by another restore: the first
+    one, leaving, must not remove the second's."""
+    from glorfindel import jobs
+    first = jobs.restore_claim("vm-example-01")
+    first.__enter__()
+    first.path.write_text("20261029T090000Z other 7 another-token\n")
+    first.__exit__(None, None, None)
+    assert first.path.read_text().startswith("20261029T090000Z other")
+    second = jobs.restore_claim("vm-example-02")
+    with second:
+        assert second.path.exists()
+    assert not second.path.exists()
+
+
 def test_the_proposal_never_falls_after_the_isolation(tmp_path, monkeypatch):
     """The card is written after the isolation and the autonomous snapshot: the field takes
     the isolation when it came first, and a point taken after it is marked."""

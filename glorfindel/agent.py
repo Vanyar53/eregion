@@ -357,7 +357,7 @@ def resolve_attack_started(signal: dict, ip_owners=None) -> dict:
     `private_ip_owners`; none: an address names no VM).
     """
     from glorfindel.detectors import detector_for, is_control_plane_source, is_identity_source
-    from glorfindel.detection_rules import _reads_entra_table
+    from glorfindel.detection_rules import _reads_activity_table, _reads_entra_table
     from glorfindel.signal_origin import attack_time_refusal
 
     raw = signal.get("raw_signal", {})
@@ -405,9 +405,13 @@ def resolve_attack_started(signal: dict, ip_owners=None) -> dict:
     # A query on one of Entra ID's tables, whatever its source (C2): an identity
     # detection — decided by the code, its UPN never sent to the model.
     entra_query = _reads_entra_table(query) and not is_control_plane_source(source)
+    # The same for Azure's Activity Log read by another source (N-10): the control plane.
+    activity_query = (not entra_query and not is_identity_source(source)
+                      and not is_control_plane_source(source) and _reads_activity_table(query))
     # The data plane: a row says which VM it is about. The control plane and identities
     # are detection only, whatever row (AL1, C2): their rows name an NSG, a role, a user.
-    data_plane = not (is_control_plane_source(source) or is_identity_source(source) or entra_query)
+    data_plane = not (is_control_plane_source(source) or is_identity_source(source)
+                      or entra_query or activity_query)
     vm_rid = signal.get("resource_id") or ""
     names_vm = _row_reader(vm_rid, ip_owners) if data_plane else None
 
@@ -430,6 +434,8 @@ def resolve_attack_started(signal: dict, ip_owners=None) -> dict:
         context = dict(signal.get("context") or {})
         if entra_query:
             context["plane"] = "identity"
+        elif activity_query:
+            context["plane"] = "control"
         if data_plane and names_vm(detected_row) is not True:
             # The row names no VM (aggregated by address, a storage account): the line's
             # VM is a guess — the same hold as an unattributed row of the RulePoller.
@@ -915,15 +921,17 @@ def _is_control_plane(signal: dict) -> bool:
     """A detection on what was done to the cloud's resources (AzureActivity, AL1): the
     RulePoller says so (`context.plane`), and so does the source it read. In depth, the
     row itself: an AzureActivity row read by a rule of another source (`azure_monitor`,
-    a backend of another type) loses both — its `OperationNameValue`, or its normalised
-    indicator, still says so."""
+    a backend of another type) loses both — its `OperationNameValue`, its table (`Type`), or
+    its normalised indicator, still says so; and a rule of another source whose query reads
+    AzureActivity carries `plane: control` from its query (N-10), whatever it projects."""
     from glorfindel.detectors import is_control_plane_source
     ctx = signal.get("context") or {}
     raw = signal.get("raw_signal") or {}
     if ctx.get("plane") == "control" or is_control_plane_source(str(raw.get("detection_source") or "")):
         return True
-    rows = (raw.get("first_result_row") or {}, raw.get("detected_data") or {})
-    return (any(isinstance(r, dict) and r.get("OperationNameValue") for r in rows)
+    rows = [r for r in (raw.get("first_result_row"), raw.get("detected_data")) if isinstance(r, dict)]
+    return (any(r.get("OperationNameValue") for r in rows)
+            or any(str(r.get("Type") or "").lower() == "azureactivity" for r in rows)
             or (raw.get("normalized_signal") or {}).get("indicator_key") == "control_plane_operation")
 
 

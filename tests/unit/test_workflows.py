@@ -204,3 +204,36 @@ def test_every_workflow_a_push_a_pull_request_or_the_night_runs_is_announced_whe
     assert due - listed == set()
     assert listed - {doc["name"] for doc in docs.values()} == set(), "a name listed that no workflow has"
     assert set(NOT_ANNOUNCED) <= set(docs)
+
+
+# ── CI2, after its review (SEC7) : `issues: write`, the dependency audit's alone ──────────
+# The audit's issues are read back only when their author is github-actions[bot] (CI2): any
+# other workflow that may write issues writes them under that same author, and could forge a
+# key that silences an advisory. So `issues: write` (or write-all) is pip-audit.yml's alone,
+# at the workflow's level or a job's — and every workflow says its permissions (no default).
+
+def _permission_sets(doc: dict) -> list:
+    sets = [doc.get("permissions")]
+    sets += [job.get("permissions") for job in (doc.get("jobs") or {}).values() if isinstance(job, dict)]
+    return [p for p in sets if p is not None]
+
+
+def _writes_issues(perms) -> bool:
+    if isinstance(perms, str):
+        return perms.strip() == "write-all"
+    return isinstance(perms, dict) and str(perms.get("issues", "")).strip() == "write"
+
+
+def test_only_the_dependency_audit_may_write_issues():
+    docs = {p.name: _load(p) for p in WORKFLOWS}
+    assert all("permissions" in doc for doc in docs.values()), "a workflow without its permissions"
+    writers = {name for name, doc in docs.items() if any(_writes_issues(p) for p in _permission_sets(doc))}
+    assert writers == {"pip-audit.yml"}
+
+
+@pytest.mark.parametrize("perms, writes", [
+    ({"contents": "read", "issues": "write"}, True), ("write-all", True), ({"issues": "read"}, False),
+    ("read-all", False), ({}, False),
+])
+def test_what_counts_as_writing_issues(perms, writes):
+    assert _writes_issues(perms) is writes

@@ -29,7 +29,9 @@ Contrat (garanties, vérifications, kill, mutants) :
 - Pas de tag `eregion-target` : Orodruin n'est pas une cible.
 - **Le canal des fenêtres d'exercice** : un conteneur `exercises` (compte `storodruin…`, sans clé
   partagée). Orodruin y écrit, le Glorfindel hébergé le lit (`watch_principal_id`, lu dans l'état
-  de `infra/glorfindel-host`). Dans `orodruin.env` : `EREGION_EXERCISE_CHANNEL` (`terraform output
+  de `infra/glorfindel-host` ; cet état illisible sur le poste, `orodruin-plan`, `-up` et `-lock`
+  refusent : le plan retirerait à la watch l'accès au canal — `NO_WATCH=1` pour un Orodruin sans
+  Glorfindel hébergé, SEC7). Dans `orodruin.env` : `EREGION_EXERCISE_CHANNEL` (`terraform output
   channel_url`) et `EREGION_CHANNEL_SCOPE` (`channel_scope`). Dans le `host.env` de Glorfindel :
   `EREGION_EXERCISE_CHANNEL`. L'opérateur (qui applique ce module) y écrit aussi, pour que
   `orodruin-kill` ferme les fenêtres restées ouvertes (`channel_operator`, M-1).

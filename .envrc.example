@@ -36,47 +36,57 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # export GLORFINDEL_LLM_MODEL=openai/mistral-7b
 # export GLORFINDEL_LLM_BASE_URL=http://my-server:8000
 
-# ── Azure — Service Principal ──────────────────────────────────────────────────
+# ── Azure — un principal par service (V-17) ──────────────────────────────────
 #
-# Option A — SP unique Contributor (démarrage rapide)
-# az ad sp create-for-rbac --name "eregion" --role Contributor \
-#                           --scopes /subscriptions/<SUBSCRIPTION_ID>
+# Jamais Contributor sur l'abonnement. Deux rôles personnalisés (infra/identities/) et un
+# principal par service, sur les groupes de ressources inscrits — les commandes complètes,
+# la rotation des secrets et le retrait d'un ancien principal : docs/operations.md,
+# « Identités Azure ».
+#   watch    Reader + Log Analytics Reader + « Eregion Glorfindel Response »
+#   console  Reader + Log Analytics Reader + Response + « Eregion Glorfindel Restore »
+#   bot      Reader + Response + Restore
+# Observe-only (évaluation) : un seul principal, Reader + Log Analytics Reader, et
+# GLORFINDEL_READ_ONLY=1 — aucune écriture.
+#
+# az ad sp create-for-rbac --name "eregion-glorfindel-watch"     # sans rôle à la création
+# az role assignment create --assignee <appId> --role Reader \
+#   --scope /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RG>
 # Retourne : appId (CLIENT_ID), password (CLIENT_SECRET), tenant (TENANT_ID)
 #
-export AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-export AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export GLORFINDEL_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+export GLORFINDEL_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# export EREGION_CONSOLE_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# export EREGION_CONSOLE_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# export GLORFINDEL_BOT_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# export GLORFINDEL_BOT_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# Les écritures approuvées de la console et du bot sont celles de Glorfindel (AL1) : le compose
+# ajoute leurs deux …_CLIENT_ID à GLORFINDEL_OWN_CALLERS pour la watch. Une watch lancée depuis
+# le venv ne les connaît que par là — sinon chaque écriture approuvée devient une carte :
+# export GLORFINDEL_OWN_CALLERS=$EREGION_CONSOLE_AZURE_CLIENT_ID,$GLORFINDEL_BOT_AZURE_CLIENT_ID
 export AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+#
+# AZURE_CLIENT_* : ce que lit Glorfindel lancé depuis ce poste (le venv : glorfindel watch,
+# glorfindel …) et le repli de tout service du compose dont la paire est vide. Le principal le
+# moins large qui écrit : celui de la watch, jamais celui de la console (il restaure). Les
+# injecteurs ne le prennent jamais (ANNATAR_AZURE_CLIENT_* seulement).
+export AZURE_CLIENT_ID=$GLORFINDEL_AZURE_CLIENT_ID
+export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
+# Un restore depuis la CLI de ce poste, le chemin d'un humain comme la console : sa paire, pour
+# cette commande seulement —
+#   AZURE_CLIENT_ID=$EREGION_CONSOLE_AZURE_CLIENT_ID AZURE_CLIENT_SECRET=$EREGION_CONSOLE_AZURE_CLIENT_SECRET \
+#     glorfindel restore <resource_id> --before <ISO8601> --yes
+# Une paire va ensemble : un …_CLIENT_ID posé sans son …_SECRET mélange deux principaux (les
+# replis se tirent variable par variable) — make glorfindel-start le dit (check-azure-env).
 
 # az account show --query id -o tsv
 export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
-# Option B — SPs séparés (Glorfindel Reader + Annatar Contributor)
-# Utiliser pour tester le mode observe-only sans bloquer Annatar.
-# Annatar a besoin de Contributor (RunCommand). Glorfindel peut tourner en
-# Reader + Log Analytics Reader (GLORFINDEL_READ_ONLY=1, human_only par défaut).
-#
-# AZURE_TENANT_ID est partagé (même tenant Azure pour tous les SP).
-# Seuls CLIENT_ID et CLIENT_SECRET diffèrent entre SP.
-#
-# SP Glorfindel — Reader + Log Analytics Reader
-# az ad sp create-for-rbac --name "glorfindel" --role Reader \
-#                           --scopes /subscriptions/<SUBSCRIPTION_ID>
-# az role assignment create --assignee <appId> \
-#   --role "Log Analytics Reader" --scope /subscriptions/<SUBSCRIPTION_ID>
-# export GLORFINDEL_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-# export GLORFINDEL_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-#
-# SP Annatar — Contributor
-# az ad sp create-for-rbac --name "annatar" --role Contributor \
-#                           --scopes /subscriptions/<SUBSCRIPTION_ID>
+# Annatar et Gothmog : sur ce poste, un injecteur reste passif (valider, lister, --dry-run) ; il
+# agit depuis Orodruin, avec l'identité managée qu'y crée make orodruin-up (ses droits par VM
+# inscrite). ANNATAR_AZURE_CLIENT_* seulement pour lire depuis ce poste (Reader sur le banc) ;
+# vides, make annatar-* ne passe aucun principal (jamais AZURE_CLIENT_* en repli).
 # export ANNATAR_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # export ANNATAR_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-#
-# Note : docker compose utilise AZURE_CLIENT_* directement (Glorfindel uniquement).
-# En Option B, pointer AZURE_CLIENT_* vers le SP Glorfindel Reader :
-# export AZURE_CLIENT_ID=$GLORFINDEL_AZURE_CLIENT_ID
-# export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
-# Les commandes `make annatar-*` liront ANNATAR_AZURE_CLIENT_* avec fallback sur AZURE_CLIENT_*.
 
 # ── Glorfindel — détection continue ──────────────────────────────────────────
 # Plus de variable workspace_id / VM ici : le Log Analytics Workspace est défini
@@ -109,7 +119,7 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # Mode forensique — ne pas libérer automatiquement
 # export GLORFINDEL_KEEP_ISOLATED=1
 
-# Mode observe-only — SP Reader (pas Contributor) — aucune action write exécutée
+# Mode observe-only — principal Reader + Log Analytics Reader — aucune action write exécutée
 # Combine avec human_only (défaut) pour un déploiement zéro-risque en évaluation.
 # Voir CLAUDE.md → "Mode observe-only" pour le workflow complet.
 # export GLORFINDEL_READ_ONLY=1

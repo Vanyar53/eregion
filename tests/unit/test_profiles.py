@@ -276,3 +276,46 @@ def test_team_start_starts_its_glorfindel(tmp_path, fake_docker, bot, argv):
     assert "http://localhost:7101" in res.stdout
     for sub in ("runs", ".glorfindel", ".cache/chroma", ".eregion/analysis"):
         assert (d / sub).is_dir(), sub
+
+
+# ── V-34 (SEC7) : chaque conteneur durci ──────────────────────────────────────────────────
+# No capability, no privilege gained, the root filesystem read-only: a process that takes a
+# container (a dependency, a crafted log line) cannot write the image's code nor gain rights.
+# What each one writes is a volume (the oracle, written here: what the code writes) or /tmp.
+WRITES = {
+    "watch": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma", "/root/.eregion/analysis"},
+    "war-room": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma", "/app/glorfindel-config.yaml"},
+    "bot": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma"},
+    "annatar": {"/app/runs", "/root/.annatar"},
+    "gothmog": {"/app/runs"},
+}
+
+
+def test_every_service_is_hardened():
+    assert set(SERVICES) == set(WRITES)
+    for name, s in SERVICES.items():
+        assert s.get("read_only") is True, name
+        assert s.get("cap_drop") == ["ALL"], name
+        assert "no-new-privileges:true" in (s.get("security_opt") or []), name
+        assert "/tmp" in (s.get("tmpfs") or []), name
+        assert not s.get("privileged") and not s.get("cap_add"), name
+
+
+def test_what_each_service_writes_is_a_writable_volume():
+    for name, targets in WRITES.items():
+        mounts = {}
+        for v in SERVICES[name]["volumes"]:
+            parts = v.split(":")
+            # ${HOME}/x:/root/x[:ro] — the source may hold a ${VAR:-default} with its own colon.
+            target, ro = (parts[-2], True) if parts[-1] == "ro" else (parts[-1], False)
+            mounts[target] = ro
+        for t in targets:
+            assert mounts.get(t) is False, (name, t)
+
+
+def test_the_injectors_image_never_opens_the_analysis_index():
+    """Why Annatar's read-only container mounts neither ~/.eregion/analysis nor ~/.cache/chroma:
+    the index needs chromadb, which the injectors' image does not hold (its report goes to
+    runs/). Should chromadb enter it, the mounts must come with it."""
+    lock = (ROOT / "requirements" / "annatar.txt").read_text(encoding="utf-8")
+    assert not re.search(r"(?m)^chromadb==", lock)

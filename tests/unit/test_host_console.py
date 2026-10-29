@@ -285,7 +285,7 @@ def test_an_existing_host_env_under_the_old_name_is_never_rewritten(tmp_path, mo
 
 def test_push_checks_the_token_before_anything_reaches_the_vm():
     text = (ROOT / "Makefile").read_text(encoding="utf-8")
-    recipe = text.split("\nglorfindel-host-push:\n", 1)[1].split("\n\n", 1)[0]
+    recipe = text.split("\nglorfindel-host-push: glorfindel-host-known\n", 1)[1].split("\n\n", 1)[0]
     check = recipe.index("host_env.py --check infra/glorfindel-host/host.env")
     assert check < recipe.index("scp ")
 

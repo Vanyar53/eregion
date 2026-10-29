@@ -823,10 +823,23 @@ _ENTRA_TABLE_RE = re.compile(
     r"aadmanagedidentitysigninlogs)\b", re.IGNORECASE)
 
 
+def _query_code(query: str) -> str:
+    return "\n".join(line.split("//", 1)[0] for line in (query or "").splitlines())
+
+
 def _reads_entra_table(query: str) -> bool:
     """The query reads one of Entra ID's tables (comments left out)."""
-    code = "\n".join(line.split("//", 1)[0] for line in (query or "").splitlines())
-    return bool(_ENTRA_TABLE_RE.search(code))
+    return bool(_ENTRA_TABLE_RE.search(_query_code(query)))
+
+
+_ACTIVITY_TABLE_RE = re.compile(r"\bazureactivity\b", re.IGNORECASE)
+
+
+def _reads_activity_table(query: str) -> bool:
+    """The query reads Azure's Activity Log (comments left out) — N-10, as `_reads_entra_table`
+    for the identity plane: a rule of another source on AzureActivity is the control plane,
+    whatever it projects."""
+    return bool(_ACTIVITY_TABLE_RE.search(_query_code(query)))
 
 
 def _looks_numeric(value: str) -> bool:
@@ -1347,6 +1360,10 @@ class RulePoller:
         # says Entra (`summarize … by UserPrincipalName, IPAddress`). The query says so.
         if plane == "data" and _reads_entra_table(rule.query):
             plane = "identity"
+        # The same for Azure's Activity Log (N-10): a rule of another source on AzureActivity
+        # that projects no OperationNameValue (`project Caller, _ResourceId`) — the query says so.
+        elif plane == "data" and _reads_activity_table(rule.query):
+            plane = "control"
         control = plane in ("control", "identity")
         grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
         return {

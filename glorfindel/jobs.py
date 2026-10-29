@@ -234,11 +234,37 @@ def start_restore(
 # TUI — would each deallocate it and swap its disks. A restore claims the VM before it starts
 # (a file, under a file lock), holds the claim while it runs, and is refused while another one
 # claims it or its job is still InProgress.
+#
+# SEC7: the claim is held by an flock on its file for as long as the restore runs — a `--wait`
+# restore of a large disk lasts hours, and writes no job file. The system releases the lock when
+# the process dies: a claim no process holds any more is one left behind, still refusing for
+# _CLAIM_MAX_AGE_S after it was taken (its restore may still run on Azure), and said with its
+# path, its expiry and what to check before removing it. Each claim carries its own token:
+# leaving, a restore removes its own claim only.
 _CLAIM_MAX_AGE_S = 2 * 3600       # a claim left by a process that died stops holding the VM
 
 
 class RestoreBusy(RuntimeError):
     """Another restore of this VM is in progress."""
+
+
+def _claim_held(path: Path) -> bool | None:
+    """Is the claim's file locked by a live process? None when it cannot be known (no flock
+    here, the file unreadable): then only its age counts."""
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            return False
+    except OSError:
+        return None
 
 
 def restore_in_progress(vm_name: str) -> str:
@@ -253,11 +279,21 @@ def restore_in_progress(vm_name: str) -> str:
                 f"lancé le {job.get('started_at', '?')}) — `glorfindel jobs {vm_name} --refresh`")
     claim = _JOBS_DIR / f"{vm_name}.restore-claim"
     try:
-        age = time.time() - claim.stat().st_mtime
+        taken = claim.stat().st_mtime
     except OSError:
         return ""
+    age = time.time() - taken
+    held = _claim_held(claim)
+    if held:
+        return f"un restore de {vm_name} est en train de partir ou en cours (depuis {int(age)} s, son processus vit)"
     if age < _CLAIM_MAX_AGE_S:
-        return f"un restore de {vm_name} est en train de partir (depuis {int(age)} s)"
+        expires = datetime.fromtimestamp(taken + _CLAIM_MAX_AGE_S, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        if held is False:
+            return (f"un restore de {vm_name} a été lancé il y a {int(age)} s par un processus qui s'est arrêté : "
+                    f"sa réclamation, {claim}, tient jusqu'à {expires}. Avant de la retirer, vérifier qu'aucun "
+                    f"restore ne tourne encore sur Azure (le coffre, ses jobs : `az backup job list "
+                    f"--status InProgress`) et que la VM n'est pas en cours d'échange de disques")
+        return f"un restore de {vm_name} est en train de partir (depuis {int(age)} s ; réclamation {claim}, jusqu'à {expires})"
     return ""
 
 
@@ -267,20 +303,53 @@ class restore_claim:
     def __init__(self, vm_name: str) -> None:
         self.vm_name = vm_name
         self.path = _JOBS_DIR / f"{vm_name}.restore-claim"
+        self._fh = None
+        self._token = ""
 
     def __enter__(self):
+        import os
+        import secrets
+        import socket
         from glorfindel.response.locks import _file_lock
         _JOBS_DIR.mkdir(parents=True, exist_ok=True)
         with _file_lock(_JOBS_DIR / f"{self.vm_name}.restore.lock"):
             busy = restore_in_progress(self.vm_name)
             if busy:
                 raise RestoreBusy(busy)
-            _atomic_write(self.path, _now())
+            self._token = f"{_now()} {socket.gethostname()} {os.getpid()} {secrets.token_hex(8)}"
+            # Opened in place, never replaced: the lock lives on this file for the restore's
+            # length; a claim left behind (no holder) is the same file, taken over.
+            fh = open(self.path, "a+")
+            try:
+                import fcntl
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except ImportError:
+                pass
+            except BlockingIOError:
+                fh.close()
+                raise RestoreBusy(f"un restore de {self.vm_name} est en cours (sa réclamation est tenue)")
+            fh.seek(0)
+            fh.truncate()
+            fh.write(self._token + "\n")
+            fh.flush()
+            os.utime(self.path)
+            self._fh = fh
         return self
 
     def __exit__(self, *exc) -> bool:
         try:
-            self.path.unlink()
+            if self._read_token() == self._token:
+                self.path.unlink()
         except OSError:
             pass
+        finally:
+            if self._fh is not None:
+                self._fh.close()          # the lock goes with it
+                self._fh = None
         return False
+
+    def _read_token(self) -> str:
+        try:
+            return self.path.read_text().strip()
+        except OSError:
+            return ""

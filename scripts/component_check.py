@@ -123,6 +123,7 @@ TOGETHER = (
     "test_repo_hermetic.py",
     "test_run_channel.py", "test_watch_channel.py", "test_watch_gate.py",
     "test_workflows.py", "test_readme.py", "test_image_check.py", "test_release.py",
+    "test_host_ssh.py", "test_azure_roles.py",
 )
 
 # Modules of a component that exist to meet another one: each is imported only by a command

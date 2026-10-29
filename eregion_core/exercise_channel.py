@@ -327,7 +327,11 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
                 new = json.loads(body)
             except ValueError:
                 new = None
-            why = rewrite_refusal(old, new)
+            # A copy here that cannot be read (corrupt, a permission) is never replaced: what was
+            # pulled first cannot be compared, so no rewrite is known to be a closure (SEC7). One
+            # deleted here comes again as new, bounded by its blob's creation (V-20).
+            why = ("the copy pulled before cannot be read here" if not isinstance(old, dict)
+                   else rewrite_refusal(old, new))
             if why:
                 _refused_rewrites[key] = modified or ""
                 say(f"[exercise-channel] window {name} refused, the copy pulled before kept: {why}")

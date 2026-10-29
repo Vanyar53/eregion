@@ -1,0 +1,23 @@
+{
+  "Name": "Eregion Glorfindel Response",
+  "IsCustom": true,
+  "Description": "V-17 (SEC7): the writes of Glorfindel's response only - isolate and release a VM (its NICs, the quarantine NSG and its rules, the sessions cut by Run Command), block and unblock an IP (deny rules), an on-demand backup (snapshot). Never a restore, a deletion, an identity or a role. Assigned on each resource group that holds an enrolled VM, its NICs, NSGs and VNet, and on the vault's. Reads come from Reader and Log Analytics Reader.",
+  "Actions": [
+    "Microsoft.Network/networkInterfaces/write",
+    "Microsoft.Network/virtualNetworks/subnets/join/action",
+    "Microsoft.Network/networkSecurityGroups/write",
+    "Microsoft.Network/networkSecurityGroups/join/action",
+    "Microsoft.Network/networkSecurityGroups/securityRules/write",
+    "Microsoft.Network/networkSecurityGroups/securityRules/delete",
+    "Microsoft.Network/publicIPAddresses/join/action",
+    "Microsoft.Network/applicationSecurityGroups/joinIpConfiguration/action",
+    "Microsoft.Network/loadBalancers/backendAddressPools/join/action",
+    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",
+    "Microsoft.Compute/virtualMachines/runCommand/action",
+    "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/backup/action"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": ["/subscriptions/<SUBSCRIPTION_ID>"]
+}

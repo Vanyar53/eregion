@@ -874,3 +874,59 @@ def test_a_control_plane_rule_without_correlation_id_is_said(tmp_path):
     # The shipped rules project it: nothing said.
     shipped = load_config(SHIPPED, glorfindel_cfg=_cfg(), client_layer=False).notes
     assert not any("CorrelationId" in n for n in shipped)
+
+
+# ── N-10 : une règle d'une autre source qui lit AzureActivity sans OperationNameValue ───────
+# The identity plane read the query (C2: a rule of another source on an Entra table is an
+# identity, whatever it projects); the control plane read only the source and the row's
+# columns. A client's rule `source: azure_monitor` on AzureActivity projecting the caller,
+# its address and the target — no OperationNameValue — went to the data plane: to the model,
+# the caller's UPN with it. The query says so now, as for Entra (SEC7).
+
+def _client_activity_rule(tmp_path):
+    p = tmp_path / "rules.yaml"
+    p.write_text("rules:\n  - name: client-activity\n    enabled: true\n    source: azure_monitor\n"
+                 "    ttp: T1562.007\n    assets: [auto]\n    query: |\n"
+                 "      AzureActivity  // the control plane\n      | where TimeGenerated > ago(2h)\n"
+                 "      | project TimeGenerated, Caller, CallerIpAddress, _ResourceId, CorrelationId\n")
+    return next(r for r in load_config(p, glorfindel_cfg=_cfg(), client_layer=False).rules)
+
+
+def test_a_client_rule_on_azure_activity_projecting_no_operation_is_the_control_plane(
+        tmp_path, monkeypatch):
+    rule = _client_activity_rule(tmp_path)
+    assert rule.source == "azure_monitor"
+    monkeypatch.setattr(AzureMonitorDetector, "run_query", lambda self, q, timespan=None: [
+        {"TimeGenerated": "2026-10-27T10:00:00Z", "Caller": OUTSIDER, "CallerIpAddress": "203.0.113.7",
+         "_ResourceId": f"{NSG}/securityrules/allow-web", "CorrelationId": "c-n10"}])
+    p, sent = _poller(AzureMonitorDetector("ws-test"), rule, VM1)
+    p.poll_once(rule)
+    assert len(sent) == 1 and sent[0]["context"]["plane"] == "control"
+    connector = MagicMock(dry_run=False)
+    with patch("litellm.completion", return_value=_llm("isolate_vm")) as llm:
+        final = _graph(tmp_path, monkeypatch, connector).invoke(_initial(sent[0]))
+    llm.assert_not_called()
+    connector.isolate_vm.assert_not_called()
+    assert final["outcome"]["escalation_type"] == "control_plane_change"
+
+
+def test_respond_on_an_activity_query_of_another_source_is_the_control_plane(monkeypatch):
+    from glorfindel.agent import _is_control_plane, decide, resolve_attack_started
+    monkeypatch.setattr(AzureMonitorDetector, "poll_alert", lambda self, *a, **k: (
+        5, {"Caller": OUTSIDER, "CallerIpAddress": "203.0.113.7", "_ResourceId": NSG}))
+    out = resolve_attack_started({"event": "attack_started", "ttp": "T1562.007", "resource_id": VM1,
+                                  "raw_signal": {
+                                      "detection_source": "azure_monitor", "log_analytics_workspace_id": "ws",
+                                      "detection_query": "AzureActivity | project Caller, CallerIpAddress, _ResourceId",
+                                      "detection_timeout_s": 1}})
+    assert out["event"] == "detection" and out["context"]["plane"] == "control"
+    assert "attribution" not in out["context"]        # never pinned to the VM as a data-plane row
+    with patch("litellm.completion", return_value=_llm("isolate_vm")) as llm:
+        d = decide(_initial(out), model="claude-test")
+    llm.assert_not_called()
+    assert d["held_by"] == "control_plane"
+    # In depth, the row's table: an AzureActivity row (its `Type`) says so without its plane.
+    assert _is_control_plane({"context": {}, "raw_signal": {"detection_source": "azure_monitor",
+                                                            "first_result_row": {"Type": "AzureActivity"}}})
+    # A data-plane query that only names the table in a comment stays the data plane.
+    assert not dr._reads_activity_table("Perf // not AzureActivity\n| where CounterName == 'x'")

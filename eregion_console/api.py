@@ -931,8 +931,9 @@ async def feed_ws(ws: WebSocket) -> None:
 
 _IAM_GAP_MSG = (
     "Permission denied — the service principal lacks the Azure role to perform this "
-    "action (IAM gap, not the read-only flag). Grant the required role (e.g. Network "
-    "Contributor on the NSG) or run the action via the CLI."
+    "action (IAM gap, not the read-only flag). Grant the console's principal the role it "
+    "needs on the resource group — \"Eregion Glorfindel Response\", or \"Eregion Glorfindel "
+    "Restore\" for a restore (docs/operations.md, « Identités Azure ») — or run the action via the CLI."
 )
 
 

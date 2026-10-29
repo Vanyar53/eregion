@@ -406,7 +406,7 @@ def test_make_glorfindel_host_start_never_deploys_a_ref_from_the_environment(rep
 
 
 def test_the_recipe_no_longer_pulls_a_branch():
-    recipe = (ROOT / "Makefile").read_text(encoding="utf-8").split("\nglorfindel-host-start:\n")[1].split("\n\n")[0]
+    recipe = (ROOT / "Makefile").read_text(encoding="utf-8").split("\nglorfindel-host-start: glorfindel-host-known\n")[1].split("\n\n")[0]
     assert "git pull" not in recipe and "infra/glorfindel-host/deploy.sh" in recipe
     status = (ROOT / "infra" / "glorfindel-host" / "status.sh").read_text(encoding="utf-8")
     assert "--show" in status and "git log --oneline" not in status

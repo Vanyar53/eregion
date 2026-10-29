@@ -25,13 +25,14 @@ TOPO     ?=
 # que des noms. Le canary : tests/unit/test_makefile_secrets.py rend chaque cible par
 # `make -n` avec des secrets factices, et aucune valeur ne doit y paraître.
 #
-# Annatar — ANNATAR_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
-# Annatar a besoin de Contributor (RunCommand). Définir ANNATAR_AZURE_CLIENT_*
-# pour séparer ses creds de ceux de Glorfindel (Reader pour observe-only).
+# Annatar — ANNATAR_AZURE_CLIENT_* seulement, jamais AZURE_CLIENT_* en repli (SEC7, V-17 : comme
+# x-injector dans le compose) ; vides, le conteneur rouge n'a pas d'identité. Le principal
+# partagé, ou celui d'un service de Glorfindel, isole et restaure : jamais au rouge. Sur ce poste,
+# un injecteur reste passif : il agit depuis Orodruin, avec son identité managée (SEC5).
 # AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
 ANNATAR_AZURE_PICK = \
-	AZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
-	AZURE_CLIENT_SECRET="$${ANNATAR_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
+	AZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-}" \
+	AZURE_CLIENT_SECRET="$${ANNATAR_AZURE_CLIENT_SECRET:-}"
 # GLORFINDEL_LLM_MODEL : le rapport de fin de `campaign run` s'écrit dans ce conteneur, et
 # l'IA d'analyse y refuse le modèle de Glorfindel (IA1) — sans lui, elle ne verrait que le défaut.
 ANNATAR_AZURE_ENV := \
@@ -112,8 +113,8 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
 	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
-	glorfindel-host-model glorfindel-host-campaign-report celebrimbor-workload \
-	orodruin-init orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
+	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-known celebrimbor-workload \
+	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run \
@@ -348,6 +349,13 @@ check-azure-env:
 	  echo "  or run with ALLOW_NO_AZURE=1 for a demo without Azure."; \
 	  exit 1; \
 	fi
+	@# SEC7 (V-17) : le compose tire chaque repli variable par variable — un …_CLIENT_ID sans son
+	@# …_SECRET (ou l'inverse) donnerait à ce service l'id d'un principal et le secret d'un autre.
+	@for p in GLORFINDEL EREGION_CONSOLE GLORFINDEL_BOT; do \
+	  id=$$([ -n "$$(printenv $${p}_AZURE_CLIENT_ID)" ] && echo 1); \
+	  se=$$([ -n "$$(printenv $${p}_AZURE_CLIENT_SECRET)" ] && echo 1); \
+	  [ "$$id" = "$$se" ] || echo "⚠ $${p}_AZURE_CLIENT_ID / $${p}_AZURE_CLIENT_SECRET : paire incomplète — ce service mélangerait deux principaux (docs/operations.md, « Identités Azure »)."; \
+	done
 
 glorfindel-start: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
@@ -523,10 +531,20 @@ OPERATOR_CIDR ?= $(shell curl -fsS --max-time 5 https://api.ipify.org 2>/dev/nul
 HOST_VARS      = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
 HOST_IP        = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
 # HOST_SSH_KEY : la clé privée qui va avec admin_ssh_public_key (terraform.tfvars), si ton agent
-# SSH ne la propose pas. accept-new : la clé d'hôte d'une VM neuve est acceptée au premier contact.
+# SSH ne la propose pas. SSH_OPTS (Orodruin) : accept-new, la clé d'hôte d'une VM neuve acceptée au
+# premier contact, un changement refusé.
 HOST_SSH_KEY  ?=
-SSH_OPTS       = -o StrictHostKeyChecking=accept-new $(if $(HOST_SSH_KEY),-i $(HOST_SSH_KEY) -o IdentitiesOnly=yes)
-HOST_SSH       = ssh $(SSH_OPTS) $(HOST_USER)@$(HOST_IP)
+SSH_KEY_OPTS   = $(if $(HOST_SSH_KEY),-i $(HOST_SSH_KEY) -o IdentitiesOnly=yes)
+SSH_OPTS       = -o StrictHostKeyChecking=accept-new $(SSH_KEY_OPTS)
+# V-32 (SEC7) : la clé d'hôte de H0, épinglée par son empreinte. HOST_SSH_FINGERPRINT (SHA256:…,
+# dans ton environnement, jamais dans le dépôt : relevée sur la VM, infra/glorfindel-host/README.md,
+# « SSH ») ; glorfindel-host-known écrit HOST_KNOWN_HOSTS à partir d'elle, et chaque commande vers H0
+# n'accepte que ce fichier (StrictHostKeyChecking=yes) : une autre clé refuse. Sans elle, accept-new
+# reste, et chaque commande le dit.
+HOST_SSH_FINGERPRINT ?=
+HOST_KNOWN_HOSTS ?= $(HOME)/.eregion/h0_known_hosts
+HOST_SSH_OPTS  = $(if $(HOST_SSH_FINGERPRINT),-o StrictHostKeyChecking=yes -o UserKnownHostsFile=$(HOST_KNOWN_HOSTS) -o HostKeyAlgorithms=ssh-ed25519,-o StrictHostKeyChecking=accept-new) $(SSH_KEY_OPTS)
+HOST_SSH       = ssh $(HOST_SSH_OPTS) $(HOST_USER)@$(HOST_IP)
 HOST_ENV      ?= infra/glorfindel-host/host.env
 # Local copies of the VM's ~/.glorfindel (verdicts, memory, state): the observation's data
 # lives on one disk otherwise. Outside the repo — they hold real cards.
@@ -559,16 +577,21 @@ glorfindel-host-down:
 glorfindel-host-env:
 	@.venv/bin/python infra/glorfindel-host/host_env.py infra/glorfindel-host/host.env
 
+# V-32 : avant chaque commande vers H0 — la clé d'hôte vérifiée par HOST_SSH_FINGERPRINT, ou dit
+# qu'elle ne l'est pas (infra/glorfindel-host/known_host.sh).
+glorfindel-host-known:
+	@HOST_SSH_FINGERPRINT="$(HOST_SSH_FINGERPRINT)" bash infra/glorfindel-host/known_host.sh "$(HOST_IP)" "$(HOST_KNOWN_HOSTS)"
+
 # host.env → ~/eregion/.env (lu par docker compose), et la config locale avec
 # autonomy forcé à human_only (pré-observation : Glorfindel ne décide jamais seul).
-glorfindel-host-push:
+glorfindel-host-push: glorfindel-host-known
 	@test -f infra/glorfindel-host/host.env || { echo "infra/glorfindel-host/host.env manquant (voir host.env.example)"; exit 1; }
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@.venv/bin/python infra/glorfindel-host/host_env.py --check infra/glorfindel-host/host.env
 	@cfg=$$(mktemp); \
 	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg && \
-	 scp -q $(SSH_OPTS) infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
-	 scp -q $(SSH_OPTS) $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
+	 scp -q $(HOST_SSH_OPTS) infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
+	 scp -q $(HOST_SSH_OPTS) $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
 	 $(HOST_SSH) 'chmod 600 eregion/.env eregion/glorfindel-config.yaml'; \
 	 rc=$$?; rm -f $$cfg; exit $$rc
 	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
@@ -584,7 +607,7 @@ glorfindel-host-push:
 REF ?=
 unexport REF
 glorfindel-host-start: export EREGION_DEPLOY_REF = $(value REF)
-glorfindel-host-start:
+glorfindel-host-start: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est déployé. La donner sur la ligne de commande : make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
@@ -594,21 +617,21 @@ glorfindel-host-start:
 	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."
 	@echo "  Console → make glorfindel-host-tunnel : il affiche l'URL avec son jeton, puis tient le tunnel"
 
-glorfindel-host-stop:
+glorfindel-host-stop: glorfindel-host-known
 	$(HOST_SSH) 'cd eregion && docker compose stop'
 
-glorfindel-host-logs:
+glorfindel-host-logs: glorfindel-host-known
 	$(HOST_SSH) 'cd eregion && docker compose logs --tail 100'
 
 # Is everything running? Azure VMs and backups, containers, errors, discovery, bot, cards
 # to judge — read-only, one look (infra/glorfindel-host/status.sh).
-glorfindel-host-status:
+glorfindel-host-status: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
-	@HOST_IP=$(HOST_IP) HOST_USER=$(HOST_USER) SSH_OPTS="$(SSH_OPTS)" HOST_BACKUPS=$(HOST_BACKUPS) bash infra/glorfindel-host/status.sh
+	@HOST_IP=$(HOST_IP) HOST_USER=$(HOST_USER) SSH_OPTS="$(HOST_SSH_OPTS)" HOST_BACKUPS=$(HOST_BACKUPS) bash infra/glorfindel-host/status.sh
 
 # A copy of the VM's ~/.glorfindel on this machine (the verdicts of the observation, the
 # memory, the state) — the 30 latest kept. The model cache (~/.cache/chroma) re-downloads.
-glorfindel-host-pull:
+glorfindel-host-pull: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@mkdir -p $(HOST_BACKUPS) && f=$(HOST_BACKUPS)/glorfindel-$$(date -u +%Y%m%dT%H%M%SZ).tgz && \
 	 $(HOST_SSH) 'tar czf - -C $$HOME .glorfindel' > $$f && test -s $$f && \
@@ -621,7 +644,7 @@ glorfindel-host-pull:
 # IA1: then says whether the analysis AI still reasons with another model (analysis/separation.py):
 # Glorfindel's model shared with the analysis makes every campaign report refused on H0. Its
 # advice on a refusal (exit 2) only; an error (1, an image before IA1) is said; never fails.
-glorfindel-host-model:
+glorfindel-host-model: glorfindel-host-known
 	@test -n "$(MODEL)" || { echo "MODEL=anthropic/<modèle> requis (ou MODEL=default)"; exit 1; }
 	@case "$(MODEL)" in *[!A-Za-z0-9._/:-]*) echo "MODEL invalide : $(MODEL)"; exit 1;; esac
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
@@ -636,11 +659,11 @@ glorfindel-host-model:
 	   [ $$rc -ne 1 ] || echo "  (contrôle de séparation indisponible sur cette image : avant IA1 ?)"; \
 	   true; }'
 
-glorfindel-host-report:
+glorfindel-host-report: glorfindel-host-known
 	$(HOST_SSH) 'docker exec eregion-watch glorfindel report --since $(or $(SINCE),7d)'
 
 # IA0 (#167) : le rapport d'une campagne lancée depuis Orodruin, écrit par la watch de la VM.
-glorfindel-host-campaign-report:
+glorfindel-host-campaign-report: glorfindel-host-known
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
 	@case "$(CAMPAIGN)" in *[!A-Za-z0-9._-]*) echo "CAMPAIGN invalide : $(CAMPAIGN)"; exit 1;; esac
 	$(HOST_SSH) 'cat eregion/runs/campaigns/$(CAMPAIGN)/report.md 2>/dev/null || { cat eregion/runs/campaigns/$(CAMPAIGN)/report.error 2>/dev/null; echo "pas encore de rapport pour $(CAMPAIGN)"; exit 1; }'
@@ -651,13 +674,13 @@ glorfindel-host-url:
 	 echo "http://localhost:7007/?token=$$t"
 
 # Affiche l'URL avec son jeton, puis tient le tunnel ouvert (Ctrl+C pour fermer).
-glorfindel-host-tunnel:
+glorfindel-host-tunnel: glorfindel-host-known
 	@if [ -f $(HOST_ENV) ]; then t="$(CONSOLE_TOKEN)"; \
 	 if [ -n "$$t" ]; then echo "  Console → http://localhost:7007/?token=$$t"; else echo "  ⚠ $(NO_CONSOLE_TOKEN)"; fi; \
 	 echo "  (Ctrl+C ferme le tunnel)"; fi
-	ssh $(SSH_OPTS) -N -L 7007:127.0.0.1:7007 $(HOST_USER)@$(HOST_IP)
+	ssh $(HOST_SSH_OPTS) -N -L 7007:127.0.0.1:7007 $(HOST_USER)@$(HOST_IP)
 
-glorfindel-host-ssh:
+glorfindel-host-ssh: glorfindel-host-known
 	$(HOST_SSH)
 
 # ── Le CD de H0 (H1, #244) : la release que Jonathan publie arrive seule sur H0 ──────────
@@ -668,35 +691,35 @@ glorfindel-host-ssh:
 HOST_CD_FILES = infra/glorfindel-host/cd/eregion_cd.py infra/glorfindel-host/cd/install.sh \
                 infra/glorfindel-host/cd/eregion-cd.service infra/glorfindel-host/cd/eregion-cd.timer \
                 infra/glorfindel-host/deploy.sh scripts/notify_discord.py glorfindel/chat_text.py
-HOST_SSH_TTY   = ssh -t $(SSH_OPTS) $(HOST_USER)@$(HOST_IP)
+HOST_SSH_TTY   = ssh -t $(HOST_SSH_OPTS) $(HOST_USER)@$(HOST_IP)
 
-glorfindel-host-cd-install:
+glorfindel-host-cd-install: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@lines=$$(python3 infra/glorfindel-host/cd/eregion_cd.py export-discord-env) || exit 1; \
 	 $(HOST_SSH) 'mkdir -p .eregion-cd && chmod 700 .eregion-cd' && \
-	 scp -q $(SSH_OPTS) $(HOST_CD_FILES) $(HOST_USER)@$(HOST_IP):.eregion-cd/ && \
+	 scp -q $(HOST_SSH_OPTS) $(HOST_CD_FILES) $(HOST_USER)@$(HOST_IP):.eregion-cd/ && \
 	 printf '%s\n' "$$lines" | $(HOST_SSH) 'umask 077 && cat > .eregion-cd/discord.env' && \
 	 git rev-parse HEAD | $(HOST_SSH) 'cat > .eregion-cd/installed-from'
 	$(HOST_SSH_TTY) 'sudo bash .eregion-cd/install.sh'
 
-glorfindel-host-cd-check:
+glorfindel-host-cd-check: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py check'
 
-glorfindel-host-cd-enable:
+glorfindel-host-cd-enable: glorfindel-host-known
 	$(HOST_SSH_TTY) 'sudo systemctl enable --now eregion-cd.timer && systemctl list-timers eregion-cd.timer --no-pager'
 
-glorfindel-host-cd-disable:
+glorfindel-host-cd-disable: glorfindel-host-known
 	$(HOST_SSH_TTY) 'sudo systemctl disable --now eregion-cd.timer'
 
-glorfindel-host-cd-status:
+glorfindel-host-cd-status: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py status; echo "  timer : $$(systemctl is-enabled eregion-cd.timer 2>/dev/null || echo absent)"; journalctl -u eregion-cd --since -1d -n 15 --no-pager -o cat 2>/dev/null | sed "s/^/  | /"'
 
-glorfindel-host-cd-retry:
+glorfindel-host-cd-retry: glorfindel-host-known
 	$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py retry'
 
-glorfindel-host-cd-uninstall:
+glorfindel-host-cd-uninstall: glorfindel-host-known
 	$(HOST_SSH_TTY) 'sudo bash .eregion-cd/install.sh --remove'
 
 # ── Orodruin (O1) — l'hôte d'où les injecteurs agissent ───────────────────────
@@ -733,16 +756,26 @@ ORO_CHANNEL    = $(or $(CHANNEL),$(shell $(ORO_TF) output -no-color -raw channel
 orodruin-init:
 	$(ORO_TF) init -upgrade
 
-orodruin-plan: orodruin-init
+# SEC7 (relecture de SEC5) : sans l'état de glorfindel-host lisible sur ce poste, l'identité et le
+# sous-réseau de H0 seraient vides, et le plan retirerait la lecture du canal par la watch et
+# l'accès de son sous-réseau. NO_WATCH=1 : un Orodruin sans Glorfindel hébergé, voulu — 1 seulement
+# (NO_WATCH=0, ou toute autre valeur, ne contourne rien).
+orodruin-watch-guard:
+	@if [ "$(NO_WATCH)" != 1 ] && { [ -z "$(ORO_WATCH_ID)" ] || [ -z "$(ORO_WATCH_SUBNET)" ]; }; then \
+	  echo "✗ L'état de infra/glorfindel-host ne se lit pas ici (principal_id, subnet_id) : le plan retirerait" >&2; \
+	  echo "  à la watch hébergée la lecture du canal et l'accès de son sous-réseau. make glorfindel-host-init" >&2; \
+	  echo "  sur ce poste, ou NO_WATCH=1 pour un Orodruin sans Glorfindel hébergé." >&2; exit 1; fi
+
+orodruin-plan: orodruin-init orodruin-watch-guard
 	$(ORO_TF) plan $(ORO_VARS)
 
 # Premier apply : sortie ouverte, le temps d'installer Docker. Ensuite orodruin-lock.
 # YES=1 : sans confirmation (-auto-approve), pour un lancement non interactif.
-orodruin-up: orodruin-init
+orodruin-up: orodruin-init orodruin-watch-guard
 	$(ORO_TF) apply $(ORO_VARS) -var="egress_locked=false"$(if $(YES), -auto-approve)
 	@echo "" && echo "  VM prête quand ~/.orodruin-ready existe (make orodruin-ssh) ; puis make orodruin-lock"
 
-orodruin-lock: orodruin-init
+orodruin-lock: orodruin-init orodruin-watch-guard
 	$(ORO_TF) apply $(ORO_VARS)$(if $(YES), -auto-approve)
 
 # L'image arrive par SSH : la sortie de la VM reste fermée. UID 1000 = l'utilisateur de la VM.

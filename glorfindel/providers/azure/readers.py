@@ -29,6 +29,13 @@ class ReadersMixin:
         ("block_suspicious_ip", "Microsoft.Network/networkSecurityGroups/securityRules/delete"),
     )
 
+    # What the response never needs, and the restore does (SEC7, V-17): the watch's identity
+    # holding one of them on the VM's group could deallocate or restore on its own.
+    BEYOND_RESPONSE = (
+        "Microsoft.Compute/virtualMachines/deallocate/action",
+        "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/recoveryPoints/restore/action",
+    )
+
     def _permission_scopes(self, rg: str, vm_name: str) -> dict[str, tuple[str, set]]:
         """Resource group → the (used_by, action) pairs needed THERE (third review, T12).
         Only the VM's and the quarantine's groups were read: a NIC, a VNet or the
@@ -83,6 +90,7 @@ class ReadersMixin:
             scopes = self._permission_scopes(rg, vm_name)
             token = self._credential.get_token("https://management.azure.com/.default").token
             missing: list[dict] = []
+            beyond: list[str] = []
             for scope_rg, needed in scopes.values():
                 url = (f"https://management.azure.com/subscriptions/{self._subscription_id}"
                        f"/resourceGroups/{scope_rg}/providers/Microsoft.Authorization/permissions")
@@ -107,7 +115,10 @@ class ReadersMixin:
                 for used_by, action in sorted(needed):
                     if not allowed(action):
                         missing.append({"scope": scope_rg, "action": action, "used_by": used_by})
-            return {"ok": True, "missing": missing, "scopes": [g for g, _ in scopes.values()]}
+                if scope_rg.lower() == rg.lower():
+                    beyond = [a for a in self.BEYOND_RESPONSE if allowed(a)]
+            return {"ok": True, "missing": missing, "scopes": [g for g, _ in scopes.values()],
+                    "beyond": beyond}
         except Exception as e:
             return {"ok": False, "error": _first_line(e)[:_ERR_MAX]}
 

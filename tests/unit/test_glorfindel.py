@@ -2900,6 +2900,36 @@ def test_check_permissions_lists_what_is_missing(monkeypatch):
         ("rg", "Microsoft.Network/networkInterfaces/write"),
         ("rg-net", "Microsoft.Network/virtualNetworks/subnets/join/action")]
     assert any("page2" in u for u in calls)
+    # SEC7 (V-17): virtualMachines/* on the VM's group holds the restore's deallocate too.
+    assert res["beyond"] == ["Microsoft.Compute/virtualMachines/deallocate/action"]
+
+
+def test_readiness_says_an_identity_that_holds_more_than_the_response(caplog):
+    """SEC7 (V-17): the watch's principal holding deallocate or restore is said — an info
+    reason, never a hold — and the watch logs it once."""
+    import logging
+
+    from glorfindel import readiness
+    from glorfindel.readiness import assess
+    c = MagicMock(read_only=False, _subscription_id=None)
+    c.vm_os.return_value = "linux"
+    c.check_nsg_access.return_value = {"ok": True, "precedence": []}
+    c.check_permissions.return_value = {"ok": True, "missing": [], "beyond": [
+        "Microsoft.Compute/virtualMachines/deallocate/action"]}
+    a = assess(_RID, c)
+    beyond = [r for r in a["reasons"] if r["code"] == "identity_beyond_response"]
+    assert beyond and beyond[0]["level"] == "info" and "deallocate" in beyond[0]["message"]
+    assert "Eregion Glorfindel Response" in beyond[0]["message"]
+    c.check_permissions.return_value = {"ok": True, "missing": []}
+    lean = assess(_RID, c)
+    assert lean["verdict"] == a["verdict"]
+    assert not [r for r in lean["reasons"] if r["code"] == "identity_beyond_response"]
+    tracker = readiness.ReadinessTracker(c)
+    readiness.ReadinessTracker._beyond_said = False
+    with caplog.at_level(logging.WARNING, logger="glorfindel.readiness"):
+        tracker._say_beyond(a)
+        tracker._say_beyond(a)
+    assert sum("more than its response" in r.message for r in caplog.records) == 1
 
 
 def test_readiness_flags_a_release_that_cannot_put_the_customer_nsg_back():

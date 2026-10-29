@@ -1313,6 +1313,14 @@ Au même budget (60 séquences, deux tours, `--jobs 4`), les 95 mutants de `stat
 après (M865, M1212 et M1340 suivent le code déplacé : 2/2). Aucun n'est perdu : M10 et M36 survivent
 des deux côtés, les autres écarts sont des tours de moins ou de plus. Remesurés sur six tours, M01,
 M07 et M28 font 6/6 après ; M26, 3/6 avant comme après.
+La relecture a trouvé ce que la première version cassait à côté : un état illisible d'une autre
+VM empêchait d'isoler une carte sans NSG (l'isolation levait `StateUnreadable`), un déblocage
+derrière la quarantaine la laissait échapper après ses suppressions, une ré-isolation à côté de
+son propre état illisible levait. L'isolation lit maintenant l'illisible comme inconnu (jamais
+arrêtée, l'original inconnu non écrit), le déblocage finit `unblock_partial`, et l'état illisible
+de la VM est mis de côté au lieu d'être écrit par-dessus. Mutants M1520–M1526, attrapés par leurs
+tests ; M678 et M860, restés sur l'ancien texte, suivent le code (2/2). Ces chemins ne changent
+rien quand aucun état n'est illisible : la machine, qui n'en écrit jamais, ne les voit pas.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de

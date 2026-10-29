@@ -319,10 +319,14 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 CI : job macOS (APFS insensible à la casse) ; `main` protégée, checks requis.
   blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
                                 **Illisible = inconnu (SEC3, SEC4b)** : un fichier d'isolation ou de blocage qui ne se lit
-                                pas (JSON cassé, autre forme — `unreadable_states`) n'est jamais lu « rien » : balayage des
-                                orphelines, levée, `reset --from-azure` et `verify_release` d'une carte en quarantaine ou
-                                sans NSG s'arrêtent et le disent ; le fichier n'est jamais réécrit par-dessus ; la
-                                réaffirmation le dit (`state_unreadable`). Le réparer ou le retirer à la main.
+                                pas (JSON cassé, autre forme — dont des `placements` sans `resource_id` —, `unreadable_states`)
+                                n'est jamais lu « rien ». Un fichier de blocage arrête le balayage des orphelines ; un
+                                fichier d'isolation arrête aussi la levée, `reset --from-azure` et `verify_release` d'une
+                                carte en quarantaine ou sans NSG, qui le disent — jamais l'isolation (son original inconnu
+                                n'est pas écrit). Une levée en échec ne l'écrit pas ; un nouvel état de sa VM (isolation,
+                                ré-isolation) le met de côté, `<fichier>.unreadable.json`, toujours illisible et dit ; une
+                                levée ou un reset réussis d'une isolation sans carte en quarantaine ni nue l'effacent avec
+                                l'état. La réaffirmation le dit (`state_unreadable`). Le réparer ou le retirer à la main.
                                 Isolation : `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
                                 oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte

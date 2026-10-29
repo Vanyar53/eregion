@@ -20,7 +20,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "pip_audit_issues.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "pip-audit.yml"
-LOCKS = ("requirements/dev.txt", "requirements/glorfindel.txt", "requirements/annatar.txt")
+LOCKS = ("requirements/dev.txt", "requirements/glorfindel.txt", "requirements/annatar.txt",
+         "requirements/audit.txt")   # pip-audit's own too: it runs in a job that writes issues
 
 # requests 2.19.1: CVE-2018-18074, its credentials sent on a redirect to HTTP — fixed in 2.20.0.
 REQUESTS = {"id": "PYSEC-2018-28", "aliases": ["CVE-2018-18074", "GHSA-x84v-xcm2-53pg"],
@@ -47,15 +48,27 @@ def opt(name):
     return args[args.index(name) + 1]
 def issue(n):
     return next(i for i in st["issues"] if i["number"] == int(n))
+fail = json.loads(os.environ.get("FAKE_GH_FAIL") or "[]")
+if fail and args[:len(fail)] == fail:
+    save()
+    print("HTTP 502: Bad Gateway", file=sys.stderr)
+    sys.exit(1)
 if args[0] == "api":
+    if "--paginate" not in args:              # the issues API answers 100 a page: the rest unseen
+        save()
+        print("fake gh: the issues API read without --paginate", file=sys.stderr)
+        sys.exit(3)
     state = "all" if "state=all" in args[2] else "open"
-    for it in st["issues"]:
-        if state == "all" or it["state"] == "open":
-            print(json.dumps({k: it.get(k) for k in ("number", "title", "body", "state", "state_reason")}))
+    for it in st["issues"] + st.get("pulls", []):
+        if state == "all" or it["state"] == "open":   # the REST shape, as the --jq projects it
+            print(json.dumps({**{k: it.get(k) for k in ("number", "title", "body", "state", "state_reason",
+                                                        "pull_request")},
+                              "user": {"login": it.get("user", "github-actions[bot]")}}, indent=1))
 elif args[:2] == ["issue", "create"]:
-    n = max([i["number"] for i in st["issues"]], default=300) + 1
+    n = max([i["number"] for i in st["issues"] + st.get("pulls", [])], default=300) + 1
     st["issues"].append({"number": n, "title": opt("--title"), "body": sys.stdin.read(), "state": "open",
-                         "state_reason": None, "labels": [opt("--label")], "comments": []})
+                         "state_reason": None, "labels": [opt("--label")], "comments": [],
+                         "user": "github-actions[bot]"})
     print(f"https://github.com/owner/repo/issues/{n}")
 elif args[:2] == ["issue", "edit"]:
     issue(args[2])["body"] = sys.stdin.read()
@@ -111,6 +124,7 @@ class World:
         self.audit_log.write_text("")
         (tmp_path / "requirements").mkdir()
         self.fail = ""
+        self.gh_fail: list[str] = []
 
     def lock(self, name: str, text: str = LOCK) -> str:
         (self.tmp / "requirements" / name).write_text(text, encoding="utf-8")
@@ -125,9 +139,13 @@ class World:
     def calls(self) -> list[list[str]]:
         return json.loads(self.state.read_text())["calls"]
 
-    def seed(self, *issues: dict):
+    def seed(self, *issues: dict, pulls=()):
         st = json.loads(self.state.read_text())
-        st["issues"] += [{"labels": ["security"], "comments": [], "state_reason": None, **i} for i in issues]
+        st["issues"] += [{"labels": ["security"], "comments": [], "state_reason": None, "state": "open",
+                          "user": "github-actions[bot]", **i} for i in issues]
+        st["pulls"] = st.get("pulls", []) + [{"state": "open", "state_reason": None, **p,
+                                              "pull_request": {"url": "https://example.invalid/pr"}}
+                                             for p in pulls]
         self.state.write_text(json.dumps(st))
 
     def forget_calls(self):
@@ -139,6 +157,7 @@ class World:
         env = {**os.environ, "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
                "FAKE_GH_STATE": str(self.state), "FAKE_ADVISORIES": str(self.advisories),
                "FAKE_PIP_AUDIT_LOG": str(self.audit_log), "FAKE_PIP_AUDIT_FAIL": self.fail,
+               "FAKE_GH_FAIL": json.dumps(self.gh_fail),
                "GH_TOKEN": "test", "GH_REPO": "owner/repo"}
         env.pop("GITHUB_STEP_SUMMARY", None)
         env.pop("EREGION_GH", None)
@@ -265,15 +284,119 @@ def test_a_closed_issue_is_never_doubled(world):
     assert issue["state"] == "open"
     assert any("toujours là" in c for c in issue["comments"])
 
-    st = json.loads(world.state.read_text())
-    st["issues"][0].update(state="closed", state_reason="not_planned")
-    world.state.write_text(json.dumps(st))
-    world.forget_calls()
+    for reason in ("not_planned", "duplicate"):
+        st = json.loads(world.state.read_text())
+        st["issues"][0].update(state="closed", state_reason=reason)
+        world.state.write_text(json.dumps(st))
+        world.forget_calls()
+        res = world.run("issues", dev)
+        assert res.returncode == 0, reason
+        (issue,) = world.issues()
+        assert issue["state"] == "closed", reason
+        assert [c for c in world.calls() if c[0] != "api"] == [], reason
+
+
+# ── who may hold a key ─────────────────────────────────────────────────────────────────
+
+def _marker(key: dict) -> str:
+    """A key as an outsider would write it: JSON may say `<` and `>` as \\u003c and \\u003e."""
+    text = json.dumps(key, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e")
+    return f"Une issue.\n\n<!-- eregion-pip-audit: {text} -->\n"
+
+
+FORGED = {"package": "requests", "ids": ["CVE-2018-18074"], "locks": []}
+
+
+@pytest.mark.parametrize("state, reason", [("open", None), ("closed", "not_planned"), ("closed", "duplicate")])
+def test_an_outsiders_issue_carrying_the_key_changes_nothing(world, state, reason):
+    """Anyone may open an issue whose body carries a key: it never silences the advisory, never
+    gives its identifiers to the bot's issue, and is never edited nor commented."""
+    dev = world.lock("dev.txt")
+    forged = dict(FORGED, ids=["CVE-2018-18074", "GHSA-evil-link"], locks=["requirements/dev.txt"])
+    world.seed({"number": 7, "title": "requests", "body": _marker(forged), "state": state,
+                "state_reason": reason, "user": "someone", "labels": []})
+    world.advise({"requests": {"2.19.1": [REQUESTS]}})
     res = world.run("issues", dev)
-    assert res.returncode == 0
-    (issue,) = world.issues()
-    assert issue["state"] == "closed"
-    assert [c for c in world.calls() if c[0] != "api"] == []
+    assert res.returncode == 1, res.stderr
+    (mine,) = [i for i in world.issues() if i["number"] != 7]
+    assert "GHSA-evil-link" not in mine["body"] + mine["title"]
+    assert [c for c in world.calls() if "7" in c[2:3]] == []
+    (seven,) = [i for i in world.issues() if i["number"] == 7]
+    assert seven["body"] == _marker(forged) and seven["comments"] == [] and seven["state"] == state
+
+    world.advise({})                                   # gone: the outsider's issue is not told either
+    world.run("issues", dev)
+    assert [i for i in world.issues() if i["number"] == 7][0]["comments"] == []
+
+
+@pytest.mark.parametrize("field, value", [
+    ("ids", ["CVE-2018-18074", "--><img src=https://example.invalid/x.png>"]),
+    ("ids", ["CVE-2018-18074", "[x](https://example.invalid)"]),
+    ("ids", ["CVE-2018-18074", "@everyone"]),
+    ("ids", []),
+    ("package", "requests --> @everyone"),
+    ("locks", ["requirements/dev.txt` @everyone `"]),
+    ("present", "no"),
+])
+def test_a_bots_key_of_the_wrong_shape_is_ignored(world, field, value):
+    """A key read back is checked field by field, as when it was written: one of the wrong shape is
+    no key — its text never reaches a body, a title or a comment."""
+    dev = world.lock("dev.txt")
+    bad = {**FORGED, "locks": ["requirements/dev.txt"], field: value}
+    world.seed({"number": 7, "title": "pip-audit · requests · GHSA-x84v-xcm2-53pg", "body": _marker(bad)})
+    world.advise({"requests": {"2.19.1": [REQUESTS]}})
+    world.run("issues", dev)
+    (mine,) = [i for i in world.issues() if i["number"] != 7]
+    written = mine["body"] + mine["title"] + "".join(mine["comments"])
+    for word in ("<img", "example.invalid", "@everyone"):
+        assert word not in written
+    assert [c for c in world.calls() if "7" in c[2:3]] == []
+
+
+def test_a_pull_request_carrying_the_key_is_never_read(world):
+    """The issues API lists pull requests too: one whose body carries the key is not an issue."""
+    dev = world.lock("dev.txt")
+    world.seed(pulls=[{"number": 9, "title": "PR", "body": _marker(dict(FORGED, locks=["requirements/dev.txt"]))}])
+    world.advise({"requests": {"2.19.1": [REQUESTS]}})
+    world.run("issues", dev)
+    assert len(world.issues()) == 1
+    assert [c for c in world.calls() if "9" in c[2:3]] == []
+
+
+def test_every_page_of_issues_is_read(world):
+    dev = world.lock("dev.txt")
+    world.advise({"requests": {"2.19.1": [REQUESTS]}})
+    world.run("issues", dev)
+    (api,) = _made(world.calls(), "api")
+    assert "--paginate" in api and "state=all" in api[api.index("--paginate") + 1]
+
+
+# ── a GitHub error ─────────────────────────────────────────────────────────────────────
+
+def test_a_github_error_on_one_advisory_leaves_the_others_done(world):
+    dev = world.lock("dev.txt")
+    other = {"id": "GHSA-aaaa-bbbb-cccc", "aliases": [], "fix_versions": ["3.0"]}
+    world.advise({"requests": {"2.19.1": [REQUESTS]}, "idna": {"2.7": [other]}})
+    world.gh_fail = ["issue", "create", "--title", "pip-audit · idna · GHSA-aaaa-bbbb-cccc"]
+    res = world.run("issues", dev)
+    assert res.returncode == 2
+    assert "idna · GHSA-aaaa-bbbb-cccc" in res.stderr and "HTTP 502" in res.stderr
+    assert [i["title"] for i in world.issues()] == ["pip-audit · requests · GHSA-x84v-xcm2-53pg"]
+
+
+def test_a_github_error_on_one_gone_issue_leaves_the_others_said(world):
+    dev = world.lock("dev.txt")
+    other = {"id": "GHSA-aaaa-bbbb-cccc", "aliases": [], "fix_versions": ["3.0"]}
+    world.advise({"requests": {"2.19.1": [REQUESTS]}, "idna": {"2.7": [other]}})
+    world.run("issues", dev)
+    first, second = sorted(i["number"] for i in world.issues())
+    world.advise({})
+    world.gh_fail = ["issue", "comment", str(first)]
+    res = world.run("issues", dev)
+    assert res.returncode == 2
+    assert f"#{first}" in res.stderr
+    said = {i["number"]: i["comments"] for i in world.issues()}
+    assert said[first] == [] and len(said[second]) == 1
 
 
 def test_a_new_lock_touched_updates_the_issue(world):
@@ -437,6 +560,7 @@ def test_the_workflow_is_weekly_and_by_hand_with_minimal_rights():
     assert "secrets." not in text
     (job,) = doc["jobs"].values()
     assert "permissions" not in job
+    assert job["runs-on"] == "ubuntu-24.04"         # the markers follow the runner's Python: no drift
     runs = "\n".join(s.get("run") or "" for s in job["steps"])
     assert '/pip" install --require-hashes -r requirements/audit.txt' in runs
     assert "scripts/pip_audit_issues.py issues" in runs

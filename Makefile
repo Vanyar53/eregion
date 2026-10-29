@@ -130,7 +130,7 @@ help:
 	@echo "  make venv           Create .venv (python3 -m venv)"
 	@echo "  make install        Create .venv + install dev dependencies (from the lock, hashes checked)"
 	@echo "  make lock           Regenerate the dependency lock (uv; UPGRADE=1 bumps all) — docs/operations.md"
-	@echo "  make audit          Known advisories of the three locks (pip-audit, read as locked; CI2)"
+	@echo "  make audit          Known advisories of the locks, pip-audit's own too (read as locked; CI2)"
 	@echo "  make test           Run all tests (104, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
@@ -925,13 +925,14 @@ lock:
 	$(UV) pip compile requirements/audit.in $(LOCK_FLAGS) -o requirements/audit.txt
 	-@$(MAKE) --no-print-directory audit
 
-# CI2 (#268) : les avis connus des trois verrous, tels qu'ils sont (pip-audit --require-hashes
-# --disable-pip : rien n'est résolu, seul le service des avis est interrogé). pip-audit vient de
+# CI2 (#268) : les avis connus des trois verrous et de celui de pip-audit, tels qu'ils sont
+# (pip-audit --require-hashes --disable-pip : rien n'est résolu, seul le service des avis est
+# interrogé). pip-audit vient de
 # son propre verrou (requirements/audit.txt, empreintes), dans un venv à part ; le workflow
 # hebdomadaire (pip-audit.yml) en fait une issue par avis. Ici, il le dit seulement.
 AUDIT_VENV ?= .venv-audit
 PIP_AUDIT  ?= $(AUDIT_VENV)/bin/pip-audit
-LOCKS       = requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt
+LOCKS       = requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt requirements/audit.txt
 audit:
 	@[ -x "$(PIP_AUDIT)" ] || { python3 -m venv $(AUDIT_VENV) \
 	  && $(AUDIT_VENV)/bin/pip install -q --require-hashes -r requirements/audit.txt; }

@@ -13,9 +13,11 @@ one advisory.
 `issues`, through `gh` (GH_TOKEN, GH_REPO: the workflow's GITHUB_TOKEN, nothing else):
 - an advisory with no issue opens one, label `security`: the package, the version of each lock
   it touches, the fixed versions, the identifiers. The issue keeps a key in its body (the
-  package, every identifier seen, the locks): an issue whose key names the package and shares
-  one identifier is that advisory's, open or closed, whatever its title or labels became — the
-  same advisory never gets a second issue;
+  package, every identifier seen, the locks): an issue the workflow opened (its author
+  github-actions[bot]) whose key names the package and shares one identifier is that advisory's,
+  open or closed, whatever its title or labels became — the same advisory never gets a second
+  issue. Anyone else's issue is never read: a key there neither silences an advisory nor puts
+  its words in the bot's; a key whose fields are not of their shape is ignored;
 - its issue open: its body rewritten when what it says changed (a lock, a version, a fix, an
   alias); closed as done (`completed`) while the advisory is still there: reopened, with a
   comment; closed as not planned (or a duplicate): a human's decision, left alone;
@@ -26,7 +28,8 @@ one advisory.
 
 Exit 1 when a human has something new to see — an issue opened or reopened, an advisory back —
 or when an audit failed: a red scheduled run is announced in #ci (notify.yml); an issue the
-workflow's token opens triggers no workflow. Exit 0 otherwise.
+workflow's token opens triggers no workflow. Exit 2 on a GitHub error — the other advisories
+and issues still done. Exit 0 otherwise.
 
 Text from outside (an advisory's identifiers, a package's name, a version) is checked against
 its shape before it reaches an issue: anything else is dropped; an advisory's description never
@@ -43,6 +46,9 @@ import sys
 from dataclasses import dataclass, field
 
 LABEL = "security"
+# The author of every issue the workflow opens (GITHUB_TOKEN). Only its issues are read for a key:
+# anyone can open an issue carrying one — to silence an advisory, or to put words in the bot's.
+BOT = "github-actions[bot]"
 MARKER = re.compile(r"<!-- eregion-pip-audit: (\{[^<>]*\}) -->")
 ID = re.compile(r"^[A-Za-z][A-Za-z0-9]*-[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 PACKAGE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,98}[a-z0-9])?$")
@@ -183,7 +189,19 @@ def with_present(text: str, present: bool) -> str:
     return MARKER.sub(sub, text, count=1)
 
 
+def _valid_key(k) -> bool:
+    """Every field of a key of the shape the workflow writes — never a text JSON decoded into
+    something else (a `-->`, a link, a mention)."""
+    return (isinstance(k, dict) and isinstance(k.get("package"), str) and bool(PACKAGE.match(k["package"]))
+            and isinstance(k.get("ids"), list) and bool(k["ids"])
+            and all(isinstance(i, str) and ID.match(i) for i in k["ids"])
+            and isinstance(k.get("locks", []), list)
+            and all(isinstance(x, str) and LOCK.match(x) for x in k.get("locks", []))
+            and isinstance(k.get("present", True), bool))
+
+
 def parse_key(text: str) -> dict | None:
+    """The key of an issue's body; None when there is none, or one field is not of its shape."""
     m = MARKER.search(text or "")
     if not m:
         return None
@@ -191,12 +209,10 @@ def parse_key(text: str) -> dict | None:
         k = json.loads(m.group(1))
     except ValueError:
         return None
-    if not (isinstance(k, dict) and isinstance(k.get("package"), str) and isinstance(k.get("ids"), list)):
+    if not _valid_key(k):
         return None
-    k["ids"] = {i for i in k["ids"] if isinstance(i, str)}
-    k["locks"] = {x for x in k.get("locks") or [] if isinstance(x, str)}
-    k["present"] = k.get("present", True) is not False
-    return k
+    return {"package": k["package"], "ids": set(k["ids"]), "locks": set(k.get("locks", [])),
+            "present": k.get("present", True)}
 
 
 # ── gh ─────────────────────────────────────────────────────────────────────────────────
@@ -210,16 +226,30 @@ def gh(*args: str, stdin: str | None = None) -> str:
     return res.stdout
 
 
+def _stream(text: str):
+    """The JSON values `gh --jq` prints, one after another (one per line, or not)."""
+    dec, i = json.JSONDecoder(), 0
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            return
+        value, i = dec.raw_decode(text, i)
+        yield value
+
+
 def load_issues() -> list[Issue]:
-    """Every issue of the repository, open or closed, that carries a key — by its body, whatever
-    its labels (one removed must not make a second issue)."""
-    out = gh("api", "--paginate", "repos/{owner}/{repo}/issues?state=all&per_page=100",
-             "--jq", ".[] | select(.pull_request | not) | {number, title, body, state, state_reason}")
+    """Every issue the workflow opened, open or closed, that carries a key — by its author and its
+    body, whatever its labels (one removed must not make a second issue). Every page is read; a
+    pull request (the issues API lists them too) and an issue of anyone else are never read."""
+    out = gh("api", "--paginate", "repos/{owner}/{repo}/issues?state=all&per_page=100", "--jq",
+             ".[] | {number, title, body, state, state_reason, pull_request, user: {login: .user.login}}")
     issues = []
-    for line in out.splitlines():
-        if not line.strip():
+    for it in _stream(out):
+        if not isinstance(it, dict) or it.get("pull_request"):
             continue
-        it = json.loads(line)
+        if (it.get("user") or {}).get("login") != BOT:
+            continue
         if k := parse_key(it.get("body") or ""):
             issues.append(Issue(int(it["number"]), it.get("title") or "", it.get("body") or "",
                                 it.get("state") or "", it.get("state_reason") or "", k))
@@ -230,60 +260,77 @@ def _same(text: str) -> str:
     return text.replace("\r\n", "\n").strip()
 
 
-def reconcile(advs: list[Advisory], audited: set[str], issues: list[Issue]) -> tuple[list[str], bool]:
-    """Open, update, reopen, say gone. (what was done, a human has something new to see)."""
-    done, new, matched = [], False, set()
+def _one(adv: Advisory, audited: set[str], issues: list[Issue], matched: set[int], done: list[str]) -> bool:
+    """Open, update or reopen the issue of one advisory; True when a human has something new."""
+    mine = [i for i in issues if i.key["package"] == adv.package and i.key["ids"] & adv.ids]
+    if mine and mine[0].number in matched:           # two advisories now, one issue's key: said once
+        done.append(f"#{mine[0].number} : {adv.primary} aussi")
+        return False
+    if not mine:
+        url = gh("issue", "create", "--title", title(adv), "--label", LABEL, "--body-file", "-",
+                 stdin=body(adv)).strip()
+        done.append(f"ouverte : {title(adv)} {url}")
+        return True
+    issue = mine[0]
+    matched.update(i.number for i in mine)
+    adv.ids |= issue.key["ids"]                      # the key only grows: an alias seen once stays
+    text = body(adv)
+    if issue.state == "closed":
+        if issue.reason in ("not_planned", "duplicate"):   # a human's decision
+            done.append(f"#{issue.number} fermée ({issue.reason}) : laissée")
+            return False
+        gh("issue", "reopen", str(issue.number))
+        gh("issue", "comment", str(issue.number), "--body-file", "-",
+           stdin=f"L'avis est toujours là, dans {', '.join(f'`{x}`' for x in sorted(adv.locks))} : "
+                 "issue rouverte (CI2).")
+        gh("issue", "edit", str(issue.number), "--body-file", "-", stdin=text)
+        done.append(f"#{issue.number} rouverte")
+        return True
+    new = False
+    if not issue.key["present"]:
+        gh("issue", "comment", str(issue.number), "--body-file", "-",
+           stdin=f"L'avis est de nouveau trouvé, dans {', '.join(f'`{x}`' for x in sorted(adv.locks))} (CI2).")
+        new = True
+    if not issue.key["locks"] <= audited:          # a lock of its own not read this run:
+        if not issue.key["present"]:                # what it says is kept, back said once
+            gh("issue", "edit", str(issue.number), "--body-file", "-", stdin=with_present(issue.body, True))
+        done.append(f"#{issue.number} : laissée (verrou non lu)")
+        return new
+    if _same(issue.body) != _same(text):
+        gh("issue", "edit", str(issue.number), "--body-file", "-", stdin=text)
+        done.append(f"#{issue.number} mise à jour")
+    return new
+
+
+def _gone(issue: Issue, done: list[str]) -> None:
+    gh("issue", "comment", str(issue.number), "--body-file", "-",
+       stdin="L'avis n'est plus trouvé dans "
+             f"{', '.join(f'`{x}`' for x in sorted(issue.key['locks']))} : la montée est faite ? "
+             "Le workflow ne ferme pas l'issue : à fermer par un humain, une fois vérifié (CI2).")
+    gh("issue", "edit", str(issue.number), "--body-file", "-", stdin=with_present(issue.body, False))
+    done.append(f"#{issue.number} : l'avis n'est plus trouvé (commentaire)")
+
+
+def reconcile(advs: list[Advisory], audited: set[str],
+              issues: list[Issue]) -> tuple[list[str], bool, list[str]]:
+    """Open, update, reopen, say gone: (what was done, a human has something new to see, errors).
+    A GitHub error on one advisory or one issue is kept, and the others are still done."""
+    done, new, matched, errors = [], False, set(), []
     for adv in advs:
-        mine = [i for i in issues if i.key["package"] == adv.package and i.key["ids"] & adv.ids]
-        if mine and mine[0].number in matched:           # two advisories now, one issue's key: said once
-            done.append(f"#{mine[0].number} : {adv.primary} aussi")
-            continue
-        if not mine:
-            url = gh("issue", "create", "--title", title(adv), "--label", LABEL, "--body-file", "-",
-                     stdin=body(adv)).strip()
-            done.append(f"ouverte : {title(adv)} {url}")
-            new = True
-            continue
-        issue = mine[0]
-        matched.update(i.number for i in mine)
-        adv.ids |= issue.key["ids"]                      # the key only grows: an alias seen once stays
-        text = body(adv)
-        if issue.state == "closed":
-            if issue.reason in ("not_planned", "duplicate"):   # a human's decision
-                done.append(f"#{issue.number} fermée (non prévue) : laissée")
-                continue
-            gh("issue", "reopen", str(issue.number))
-            gh("issue", "comment", str(issue.number), "--body-file", "-",
-               stdin=f"L'avis est toujours là, dans {', '.join(f'`{x}`' for x in sorted(adv.locks))} : "
-                     "issue rouverte (CI2).")
-            gh("issue", "edit", str(issue.number), "--body-file", "-", stdin=text)
-            done.append(f"#{issue.number} rouverte")
-            new = True
-            continue
-        if not issue.key["present"]:
-            gh("issue", "comment", str(issue.number), "--body-file", "-",
-               stdin=f"L'avis est de nouveau trouvé, dans {', '.join(f'`{x}`' for x in sorted(adv.locks))} (CI2).")
-            new = True
-        if not issue.key["locks"] <= audited:          # a lock of its own not read this run:
-            if not issue.key["present"]:                # what it says is kept, back said once
-                gh("issue", "edit", str(issue.number), "--body-file", "-", stdin=with_present(issue.body, True))
-            done.append(f"#{issue.number} : laissée (verrou non lu)")
-            continue
-        if _same(issue.body) != _same(text):
-            gh("issue", "edit", str(issue.number), "--body-file", "-", stdin=text)
-            done.append(f"#{issue.number} mise à jour")
+        try:
+            new = _one(adv, audited, issues, matched, done) or new
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            errors.append(f"{adv.package} · {adv.primary} : {e}")
     for issue in issues:
         if issue.number in matched or issue.state != "open" or not issue.key["present"]:
             continue
         if not issue.key["locks"] or not issue.key["locks"] <= audited:
             continue                                     # a lock not read this run: nothing known
-        gh("issue", "comment", str(issue.number), "--body-file", "-",
-           stdin="L'avis n'est plus trouvé dans "
-                 f"{', '.join(f'`{x}`' for x in sorted(issue.key['locks']))} : la montée est faite ? "
-                 "Le workflow ne ferme pas l'issue : à fermer par un humain, une fois vérifié (CI2).")
-        gh("issue", "edit", str(issue.number), "--body-file", "-", stdin=with_present(issue.body, False))
-        done.append(f"#{issue.number} : l'avis n'est plus trouvé (commentaire)")
-    return done, new
+        try:
+            _gone(issue, done)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            errors.append(f"#{issue.number} : {e}")
+    return done, new, errors
 
 
 # ── main ───────────────────────────────────────────────────────────────────────────────
@@ -322,14 +369,20 @@ def main(argv=None) -> int:
     if args.mode == "report":
         return 0
     try:
-        done, new = reconcile(advs, set(reports), load_issues())
+        issues = load_issues()
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as e:
         print(f"GitHub : {e}", file=sys.stderr)
         return 2
+    done, new, errors = reconcile(advs, set(reports), issues)
     print("\n".join(done) or "Rien à changer dans les issues.")
+    for e in errors:
+        print(f"GitHub : {e}", file=sys.stderr)
     if path := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(path, "a", encoding="utf-8") as f:
-            f.write(summary(advs) + "\n\n" + ("\n".join(f"- {d}" for d in done) or "Rien à changer.") + "\n")
+            f.write(summary(advs) + "\n\n" + ("\n".join(f"- {d}" for d in done) or "Rien à changer.") + "\n"
+                    + "".join(f"- erreur GitHub : {e}\n" for e in errors))
+    if errors:
+        return 2
     return 1 if failed or new else 0
 
 

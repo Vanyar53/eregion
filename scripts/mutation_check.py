@@ -3480,24 +3480,54 @@ MUTANTS += [
      "                same = [a for a in out if a.package == package and a.ids & ids]\n",
      "                same = [a for a in out if a.package == package and a.ids & ids and lock in a.locks]\n"),
     ("M1154", "an advisory gone closes its issue: the workflow decides the bump was made (CI2)", PAI,
-     '        gh("issue", "comment", str(issue.number), "--body-file", "-",\n'
-     '           stdin="L\'avis n\'est plus trouvé dans "',
-     '        gh("issue", "close", str(issue.number))\n'
-     '        gh("issue", "comment", str(issue.number), "--body-file", "-",\n'
-     '           stdin="L\'avis n\'est plus trouvé dans "'),
+     '    gh("issue", "comment", str(issue.number), "--body-file", "-",\n'
+     '       stdin="L\'avis n\'est plus trouvé dans "',
+     '    gh("issue", "close", str(issue.number))\n'
+     '    gh("issue", "comment", str(issue.number), "--body-file", "-",\n'
+     '       stdin="L\'avis n\'est plus trouvé dans "'),
     ("M1155", "an advisory gone said every week: the issue's key never told (CI2)", PAI,
      'stdin=with_present(issue.body, False))', "stdin=issue.body)"),
     ("M1156", "a lock whose audit failed reads as clean: its advisories said gone (CI2)", PAI,
      '        if not issue.key["locks"] or not issue.key["locks"] <= audited:\n',
      '        if not issue.key["locks"]:\n'),
     ("M1157", "an issue never rewritten: a new lock, a fix, an alias never said (CI2)", PAI,
-     "        if _same(issue.body) != _same(text):\n", "        if False:\n"),
+     "    if _same(issue.body) != _same(text):\n", "    if False:\n"),
     ("M1158", "pip-audit resolves the lock with pip instead of reading it (CI2, N-16)", PAI,
      '"--require-hashes", "--disable-pip",', '"--require-hashes",'),
     ("M1159", "make lock fails when its audit cannot run (CI2, N-16)", MAKE,
      "\t-@$(MAKE) --no-print-directory audit\n", "\t@$(MAKE) --no-print-directory audit\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_pip_audit_issues.py" for n in range(1150, 1160)})
+# CI2, after the 5.5 review: who may hold a key (the workflow's issues only, every field of its
+# shape), every page and no pull request read, a GitHub error stopping nothing else. M1490–M1497.
+MUTANTS += [
+    ("M1490", "anyone's issue read for a key: an outsider's silences an advisory (CI2, review)", PAI,
+     '        if (it.get("user") or {}).get("login") != BOT:\n            continue\n', ""),
+    ("M1491", "a key's identifiers read back unchecked: an outsider's text in the bot's issue (CI2, review)", PAI,
+     '            and all(isinstance(i, str) and ID.match(i) for i in k["ids"])\n',
+     '            and all(isinstance(i, str) for i in k["ids"])\n'),
+    ("M1492", "the first page of issues only: an advisory's issue past it doubled (CI2, review)", PAI,
+     'out = gh("api", "--paginate", "repos/', 'out = gh("api", "repos/'),
+    ("M1493", "a pull request read as an issue: its key silences an advisory (CI2, review)", PAI,
+     '        if not isinstance(it, dict) or it.get("pull_request"):\n',
+     "        if not isinstance(it, dict):\n"),
+    ("M1494", "one GitHub error on an advisory stops every other one (CI2, review)", PAI,
+     "        try:\n            new = _one(adv, audited, issues, matched, done) or new\n"
+     "        except (RuntimeError, OSError, subprocess.SubprocessError) as e:\n"
+     '            errors.append(f"{adv.package} · {adv.primary} : {e}")\n',
+     "        new = _one(adv, audited, issues, matched, done) or new\n"),
+    ("M1495", "a key's locks read back unchecked: an outsider's text in a comment (CI2, review)", PAI,
+     '            and all(isinstance(x, str) and LOCK.match(x) for x in k.get("locks", []))\n',
+     '            and all(isinstance(x, str) for x in k.get("locks", []))\n'),
+    ("M1496", "an issue closed as a duplicate reopened: a human's decision undone (CI2, review)", PAI,
+     'if issue.reason in ("not_planned", "duplicate"):', 'if issue.reason in ("not_planned",):'),
+    ("M1497", "one GitHub error on a gone issue stops the others (CI2, review)", PAI,
+     "        try:\n            _gone(issue, done)\n"
+     "        except (RuntimeError, OSError, subprocess.SubprocessError) as e:\n"
+     '            errors.append(f"#{issue.number} : {e}")\n',
+     "        _gone(issue, done)\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_pip_audit_issues.py" for n in range(1490, 1498)})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -1,9 +1,10 @@
 name: Dependency audit
 
 # CI2 (#268): the advisories of the three locks (requirements/dev.txt, glorfindel.txt, annatar.txt),
-# one issue per advisory, label `security` (scripts/pip_audit_issues.py). pip-audit reads each lock
-# as it is (`--require-hashes --disable-pip`): nothing is resolved, only the advisory service is
-# asked. Never a pull request: a bump goes through `make lock`, then the harness (Jonathan) —
+# and of pip-audit's own (audit.txt: it runs in a job that writes issues), one issue per
+# advisory, label `security` (scripts/pip_audit_issues.py), opened by the workflow (only its own
+# issues are read back). pip-audit reads each lock as it is (`--require-hashes --disable-pip`):
+# nothing is resolved, only the advisory service is asked. Never a pull request: a bump goes through `make lock`, then the harness (Jonathan) —
 # docs/operations.md, « Verrou des dépendances ».
 #
 # Red when a human has something new to see (an issue opened or reopened, an advisory back) or
@@ -25,7 +26,9 @@ concurrency:
 
 jobs:
   audit:
-    runs-on: ubuntu-latest
+    # Pinned: pip-audit evaluates the locks' markers for the runner's Python (3.12 here, the
+    # image's); a moving ubuntu-latest would change what is read, silently.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
@@ -45,4 +48,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: >-
           python3 scripts/pip_audit_issues.py issues --pip-audit "$RUNNER_TEMP/audit/bin/pip-audit"
-          requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt
+          requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt requirements/audit.txt

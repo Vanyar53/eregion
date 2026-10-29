@@ -1207,9 +1207,11 @@ MUTANTS = [
      '    _has_alerting = bool(os.environ.get("GLORFINDEL_WEBHOOK_URL") '
      'or os.environ.get("DISCORD_CHANNEL_ID"))\n'),
     ("M524", "REF=--checkout-only reaches deploy.sh as an option (M-3, review)", MAKE,
-     'in -*|*[!A-Za-z0-9._-]*) echo "REF invalide', 'in *[!A-Za-z0-9._-]*) echo "REF invalide'),
+     'make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac\n\t@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide',
+     'make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac\n\t@case "$$EREGION_DEPLOY_REF" in *[!A-Za-z0-9._-]*) echo "REF invalide'),
     ("M525", "a REF exported in the environment is deployed in silence (M-3, review)", MAKE,
-     '@case "$(origin REF)" in environment*)', '@case "$(origin REF)" in nowhere*)'),
+     '@case "$(origin REF)" in environment*) echo "REF vient de l\'environnement (« $$EREGION_DEPLOY_REF ») : rien n\'est déployé',
+     '@case "$(origin REF)" in nowhere*) echo "REF vient de l\'environnement (« $$EREGION_DEPLOY_REF ») : rien n\'est déployé'),
     ("M526", "make expands a refused REF while exporting it: $(shell …) runs (M-3, review)", MAKE,
      "REF ?=\nunexport REF\n", "REF ?=\n"),
     ("M527", "the ssh line copies REF into the recipe: make expands it before it is checked (M-3, review)",

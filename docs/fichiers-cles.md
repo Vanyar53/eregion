@@ -324,10 +324,12 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 fichier d'isolation arrête aussi la levée, `reset --from-azure` et `verify_release` d'une
                                 carte en quarantaine ou sans NSG, qui le disent — jamais l'isolation (son original inconnu
                                 n'est pas écrit). Une levée en échec ne l'écrit pas ; un nouvel état de sa VM (isolation,
-                                ré-isolation) le met de côté, `<fichier>.unreadable.json`, toujours illisible et dit ; une
+                                ré-isolation) le met de côté dans `isolation/aside/` (jamais plus un état, réparé ou non ; listé tant qu'il existe : le lire,
+                                reporter à la main dans l'état courant, le retirer) ; une
                                 levée ou un reset réussis d'une isolation sans carte en quarantaine ni nue l'effacent avec
                                 l'état. La réaffirmation le dit (`state_unreadable`). Le réparer ou le retirer à la main.
-                                Isolation : `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
+                                Isolation : `original_unknown` — les cartes en quarantaine dont l'original est inconnu
+                                (la levée demandera le tag). `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
                                 oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte
   state_alerts.json           → SEC4b : la liste des fichiers d'état illisibles déjà dite (carte `state_unreadable`) ;

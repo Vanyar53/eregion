@@ -1318,8 +1318,11 @@ VM empêchait d'isoler une carte sans NSG (l'isolation levait `StateUnreadable`)
 derrière la quarantaine la laissait échapper après ses suppressions, une ré-isolation à côté de
 son propre état illisible levait. L'isolation lit maintenant l'illisible comme inconnu (jamais
 arrêtée, l'original inconnu non écrit), le déblocage finit `unblock_partial`, et l'état illisible
-de la VM est mis de côté au lieu d'être écrit par-dessus. Mutants M1520–M1526, attrapés par leurs
-tests ; M678 et M860, restés sur l'ancien texte, suivent le code (2/2). Ces chemins ne changent
+de la VM est mis de côté au lieu d'être écrit par-dessus. La seconde relecture : mis de côté sous `<fichier>.unreadable.json`, puis réparé,
+le fichier redevenait un état actif (deux isolations de la VM, et la migration remettait l'ancien
+état à la place du courant) : il va dans `isolation/aside/`, hors des états, listé tant qu'il existe.
+Une isolation dont l'original reste inconnu le dit tout de suite (`original_unknown`). Mutants
+M1520–M1531, attrapés par leurs tests ; M678 et M860, restés sur l'ancien texte, suivent le code (2/2). Ces chemins ne changent
 rien quand aucun état n'est illisible : la machine, qui n'en écrit jamais, ne les voit pas.
 
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de

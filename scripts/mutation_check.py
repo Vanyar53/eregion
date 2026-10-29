@@ -3510,7 +3510,7 @@ MUTANTS += [
      "    return (isinstance(rid, str) and bool(rid.strip()) and isinstance(placements, list)\n"
      "            and all(isinstance(p, dict) for p in placements))\n", "    return True\n"),
 ]
-# SEC4b's review (M1520–M1534): the isolation never stopped by an unreadable state, the
+# SEC4b's review (M1520–M1531): the isolation never stopped by an unreadable state, the
 # unblock behind the quarantine says it, the VM's own file set aside, the console's tile,
 # a state with placements and no resource id, the card's words.
 JSG = "eregion_console/static/glorfindel.js"
@@ -3540,6 +3540,23 @@ MUTANTS += [
 TESTS.update({mid: "tests/unit/test_unreadable_state.py" for mid in
               ("M1520", "M1521", "M1522", "M1523", "M1525", "M1526")})
 TESTS["M1524"] = "tests/unit/test_console.py -k local_state"
+# Second review: a file set aside is never a state again, an unknown original said at the
+# isolation, the card's steps for a file set aside and for the tag a release will ask.
+MUTANTS += [
+    ("M1527", "a file set aside stays among the states: repaired, it is a second isolation (SEC4b, review 2)",
+     STA, "    n, aside = 1, _ISOLATION_STATE_DIR / ASIDE_DIR / f.name\n",
+     "    n, aside = 1, f.with_name(f\"{f.stem}.unreadable.json\")\n"),
+    ("M1528", "a file set aside, repaired, leaves the unreadable list (SEC4b, review 2)", STA,
+     '        out += [f"{_ISOLATION_STATE_DIR.name}/{ASIDE_DIR}/{f.name}" for f in aside.iterdir() if f.is_file()]\n',
+     "        pass\n"),
+    ("M1529", "an isolation whose original is unknown says nothing until its release (SEC4b, review 2)", ISO,
+     "        unknown = original_unknown_nics(merged)\n", "        unknown = []\n"),
+    ("M1530", "the card asks to repair a file set aside — repaired, it would not be read (SEC4b, review 2)", RCA,
+     "    if aside:\n        # Set aside", "    if False:\n        # Set aside"),
+    ("M1531", "the card does not say the tag the releases will ask for (SEC4b, review 2)", RCA,
+     "    if isolations:\n        steps.append(", "    if False:\n        steps.append("),
+]
+TESTS.update({mid: "tests/unit/test_unreadable_state.py" for mid in ("M1527", "M1528", "M1529", "M1530", "M1531")})
 TESTS.update({mid: "tests/unit/test_unreadable_state.py" for mid in
               ("M1250", "M1251", "M1252", "M1253", "M1254", "M1255", "M1394")})
 TESTS.update({mid: "tests/unit/test_reassert.py tests/unit/test_unreadable_state.py" for mid in

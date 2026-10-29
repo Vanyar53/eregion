@@ -20,7 +20,7 @@ Lot D1 (#81). Eregion est auto-hébergé : il tourne sur ton poste, ou dans une 
 
   Lance un injecteur **après `make profile-…`**. La cible crée d'abord, à ton nom, les dossiers que les services montent : `~/.glorfindel`, `~/.cache/chroma`, et `~/.annatar` pour Annatar. Sans elle, docker les crée au nom de root, et ta CLI ne peut plus y écrire.
 
-  Chaque injecteur dépend de la watch (`depends_on`). Le lancer démarre donc Glorfindel, s'il ne tourne pas encore, mais n'attend pas son battement. Dans la première minute, le temps que la watch démarre et publie son premier battement, l'injecteur peut refuser d'agir (V1) : relance-le un peu plus tard.
+  Chaque injecteur dépend de la watch (`depends_on`). Le lancer démarre donc Glorfindel, s'il ne tourne pas encore, mais n'attend pas son battement. Dans la première minute, le temps que la watch démarre et publie son premier battement, l'injecteur peut refuser d'agir (V1) : relance-le un peu plus tard. Le battement porte le périmètre de la watch (un condensé de son abonnement, SEC5) : l'injecteur refuse aussi une watch vivante d'un autre abonnement, et relit le garde avant chaque action d'un run, `annatar clean` compris.
 - **Cibles Make.** Il y en a une par profil, listées dans `make help`, section « Profils d'usage ». Chacune démarre Glorfindel (`glorfindel-start`), puis prépare ce que le profil ajoute.
 - **Une page par profil** : pour qui, ce qui tourne et où, comment l'installer, ce que la console en montre, les limites.
 

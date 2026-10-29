@@ -3,7 +3,9 @@
 _Conception — 2026-10-14, relue en Opus 5.5 le 2026-10-15 — statut : **implémenté et mesuré sur le banc le 19/10** (O1 : `eregion_core/orodruin.py`,
 `infra/orodruin/`, mutants M64–M70), canal des fenêtres d'exercice compris (voir « Le canal
 des fenêtres d'exercice ») ; canal retour de la watch (#159, M109–M115) le 20/10 ; arrêt
-d'urgence revu et mesuré sur le banc le 26/10 (M-1, M191–M194)._
+d'urgence revu et mesuré sur le banc le 26/10 (M-1, M191–M194) ; droits par VM inscrite, journal
+hors de l'hôte, pare-feu du canal, tirages bornés et garde V1 lié à la watch le 29/10 (SEC5, #276,
+M1260–M1279 — **Terraform écrit et validé, pas encore appliqué**)._
 
 ## Ce qu'Orodruin est, et ce qu'il n'est pas
 
@@ -29,11 +31,11 @@ Six garanties. Chacune a un mécanisme, et une vérification qui ne demande **au
 | Garantie | Mécanisme | Vérifiée par |
 |---|---|---|
 | Périmètre réseau | sortie limitée au banc, aux API de contrôle du cloud et à l'API du modèle | une connexion hors périmètre échoue |
-| Identité limitée | identité d'exécution restreinte au groupe de ressources du banc | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc |
+| Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque |
 | Cibles inscrites | l'inscription est revérifiée à chaque injection | refus sans inscription (O0, déjà en place) |
 | Plafond | limite de l'orchestrateur, ou quota | configuration effective lue |
 | Arrêt d'urgence | révoquer l'identité, tout arrêter | essai à blanc en CI |
-| Audit | chaque appel d'un injecteur journalisé **avant** exécution | l'écriture précède l'appel |
+| Audit | chaque appel d'un injecteur journalisé **avant** exécution, sur l'hôte puis dans le canal (SEC5) | l'écriture précède l'appel |
 
 ### `orodruin-check` — la porte
 
@@ -206,8 +208,8 @@ par un conteneur de stockage à Orodruin (`eregion_core/exercise_channel.py`) :
   portée de conteneur. Une portée plus large déclarée comme canal (abonnement, groupe, compte)
   n'autorise rien (M68).
 - **Sortie** : `Storage.FranceCentral` en 443. Le tag couvre tous les comptes de la région :
-  c'est une voie de sortie possible, bornée à la région. À resserrer par un point de
-  terminaison privé si Orodruin quitte le banc.
+  c'est une voie de sortie possible, bornée à la région. Côté compte, depuis SEC5, son pare-feu
+  n'admet qu'Orodruin et H0 (voir « SEC5 »).
 
 **Mesuré le 19/10** :
 - avec `EREGION_CHANNEL_SCOPE` déclarée, `armed` ; sans elle, `passive`
@@ -353,6 +355,86 @@ test `test_a_wrong_cli_context_never_concludes_nothing_to_revoke` qui le couvre.
 Limites : un Run Command ne se liste pas (action, pas ressource) : le kill le déduit des fenêtres,
 il ne le voit pas. Une expérience hors du groupe du banc n'est pas lue : l'identité d'Orodruin
 n'agit que sur le banc.
+
+## SEC5 — les injecteurs et leurs canaux (#276, 29/10)
+
+L'audit externe du 27/10 et son contre-audit du 28/10 ont trouvé onze points sur les injecteurs
+et leurs canaux. Ce qui change pour le contrat et ce qu'il porte :
+
+**Les droits par VM inscrite (V-29, #182).** L'identité d'Orodruin avait le rôle injecteur sur
+tout le groupe du banc : Run Command sur bree, la VM de la pré-observation, jamais inscrite,
+était à sa portée. Désormais trois rôles (`infra/orodruin/main.tf`) :
+
+| Rôle | Actions | Portée |
+|---|---|---|
+| `injector_read` | lire le groupe, les VM, les NSG, les expériences et leurs exécutions | le groupe du banc |
+| `injector_vm` | `start`, `runCommand` | chaque VM qui porte `eregion-target=<banc>` (`data "azurerm_resources"`, `required_tags`) |
+| `injector_chaos` | démarrer, annuler une expérience | chaque expérience du groupe |
+
+Le contrat (`assess_identity`) le relit : les lectures doivent être effectives sur le groupe, chaque
+écriture accordée sur au moins une ressource de son type dans le groupe, et **aucune écriture sur le
+groupe entier** — ni dans les attributions listées, ni dans les droits effectifs relus sur le
+groupe (`identity_group_wide` → `passive`). Une VM inscrite après l'apply n'a pas de droit tant que
+`make orodruin-lock` ne l'a pas relue. À mesurer après l'apply : que les droits effectifs relus sur
+le groupe n'incluent pas ceux accordés sur ses VM (sinon le contrat dirait `identity_group_wide`
+à tort, et resterait passif — l'échec est fermé). Le contrat ne relit pas lui-même l'inscription
+des VM sur lesquelles l'identité écrit : c'est Terraform qui la tire des tags, et l'inscription
+(O0) reste revérifiée à chaque run.
+
+**Le journal hors de l'hôte (V-29).** Chaque ligne du journal (`Session`) est écrite sur le disque
+d'Orodruin (fsync), puis ajoutée au blob d'ajout `audit/<run_id>.jsonl` du conteneur `exercises`
+(même attribution, même portée : rien ne change au contrat), avant l'appel. Au mieux : un envoi qui
+échoue est écrit au journal local (`offhost_failed`) et dit, et l'appel se fait (le refuser pourrait
+laisser une cible à moitié nettoyée). Ce que cela donne : la trace survit à la perte ou à
+l'effacement de l'hôte. Ce que cela ne donne pas : une défense contre un hôte compromis, qui peut
+cesser d'envoyer, ou effacer ce que son identité a écrit (Contributor sur le conteneur). Aucun
+tirage ne lit `audit/` : celui des fenêtres ne liste plus que la racine du conteneur.
+
+**Le pare-feu du compte du canal (V-31).** Le point de terminaison public reste, fermé par défaut
+(`network_rules`, `default_action = "Deny"`, rien ne contourne). Entrent : les sous-réseaux
+d'Orodruin et de H0, par un point de terminaison de service `Microsoft.Storage` (gratuit) — une
+règle d'IP n'a pas d'effet pour un client de la même région que le compte, ce qui est leur cas
+(francecentral) —, et les IP publiques d'Orodruin, de H0 (si l'un d'eux change de région) et de
+l'opérateur (l'arrêt d'urgence ferme les fenêtres depuis son poste ; une IP qui a changé depuis le
+dernier apply : le kill dit que les fenêtres n'ont pas été fermées, et quand elles expirent). Un
+point de terminaison privé n'est pas gratuit : 0,0088 € l'heure l'un (API publique des prix
+d'Azure, compteur « Standard Private Endpoint », 29/10), environ 6,4 € par mois, plus le trafic ;
+il en faudrait deux, les VNet n'étant pas appairés. À mesurer après l'apply : `orodruin-check`,
+une fenêtre publiée et tirée par H0, le kill qui la ferme.
+
+**Le garde « jamais sans Glorfindel » (N-03, N-04).** Ce qu'il prouve : qu'une watch configurée
+pour l'abonnement de l'injecteur a écrit ce fichier (ou ce blob) il y a moins de 90 s — ou que
+quelqu'un qui peut écrire là l'a fait. Le battement porte un condensé de l'abonnement que la watch
+lit (`perimeter`, 16 hex du sha256 ; jamais l'abonnement lui-même), que l'injecteur compare au
+sien : l'abonnement plutôt que l'hôte, parce que c'est ce que les deux côtés savent des mêmes
+cibles (un nom d'hôte ne se compare à rien : Orodruin et H0 sont deux hôtes, les conteneurs locaux
+deux autres). Ce qu'il ne prouve pas : une authentification (le condensé n'est pas un secret, le
+fichier est écrivable par l'hôte, le blob par la watch), ni que les workspaces de la watch voient
+la cible, ni sa santé au-delà de sa boucle de battement. Le garde est relu avant chaque action d'un
+run (chaque étape, la commande de l'atomic, le démarrage de la panne) ; `annatar clean` y passe.
+`--without-glorfindel` est refusé en zone `production`, et écrit au journal (`declared`).
+
+**Les fenêtres d'exercice (V-20).** Une fenêtre tirée du canal porte la date de création de son
+blob (`channel_created`, ce que dit la liste, écrit par-dessus ce que la fenêtre dirait, et gardé
+depuis son premier tirage) : elle ne peut pas commencer plus de 5 min avant. MAX_DURATION_S la
+plafonne toujours. Sur une VM en zone `production` (ses tags, lus par la watch), une fenêtre ne
+marque rien, sauf une technique non destructive (`kind: technique`, `destructive: false`, que
+l'injecteur écrit d'après le catalogue). À mesurer : qu'Azure garde la date de création d'un blob
+réécrit (sinon, une fenêtre vue pour la première fois déjà fermée serait refusée : ses cycles
+restent « real », le sens sûr).
+
+**Les canaux bornés (V-21, N-15).** Un tirage lit en flux, coupé au-delà de sa borne (jamais lu en
+entier puis contrôlé) : un blob au plus `MAX_BLOB_BYTES` (1 Mio), une page de liste au plus
+`MAX_LISTING_BYTES` (8 Mio), au plus `MAX_BLOBS` noms listés (2 000) et `MAX_DOWNLOADS` blobs
+téléchargés (200) par tirage ; ce qui dépasse est dit, laissé au tirage suivant ou écarté, jamais
+écrit. Le jeton de stockage ne part que vers `https://<compte>.blob.core.windows.net` (ou
+`.blob.core.chinacloudapi.cn`, `.blob.core.usgovcloudapi.net`), port 443, sans utilisateur dans
+l'URL : toute autre URL est refusée avant qu'un jeton soit demandé.
+
+**Ce qu'il reste à faire, avec Jonathan** : appliquer `infra/glorfindel-host` (le point de
+terminaison de service de H0), puis `infra/orodruin`, puis reconstruire et pousser l'image
+(`make orodruin-push`) — dans cet ordre : un contrat neuf sur l'ancien rôle de groupe dit
+`identity_group_wide`, et un pare-feu posé avant le point de terminaison de H0 lui coupe le canal.
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 

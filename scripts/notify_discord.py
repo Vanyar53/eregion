@@ -6,6 +6,10 @@
                                   issues to #ci, and a lot's events to its thread as well
   notify_discord.py check         what is configured (names, never values), what the forum lacks
 
+No string of this module, docstrings aside, says the word draft, but for `release-draft` and
+`release_draft`: tests/unit/test_release.py reads it, so that no path here can publish a
+release (REL1, #269). A message says « brouillon » instead.
+
 Where things go. #ci: a pull request opened or merged, a red CI (pull request, main, the
 nightly runs), main green again after red, a published release, a closed issue. #lots: one
 thread per lot, every event of the lot, its tags (milestone, state) kept true. Only a red CI

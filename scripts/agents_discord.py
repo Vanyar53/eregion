@@ -10,6 +10,10 @@
   agents_discord.py board         the board rewritten, merged pull requests dropped
   (scripts/release.py)            a release's draft: on the board, pinged — release_draft() (REL1)
 
+No string of this module, docstrings aside, says the word draft, but for `release-draft` and
+`release_draft`: tests/unit/test_release.py reads it, so that no path here can publish a
+release (REL1, #269). A message says « brouillon » instead.
+
 #agents is what waits for Jonathan, and nothing else. One board, rewritten in place: 🙋 what
 waits for him, 🔄 the agents running (resumed ones too), ✅ what came back lately, 🏁 the last
 run — each line with its links (the lot's thread, the pull request, the report). For each thing

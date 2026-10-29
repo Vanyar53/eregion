@@ -13,7 +13,7 @@ by its CD (infra/glorfindel-host/cd/eregion_cd.py), on the operator's machine fo
 
 What is trusted, and what is not (docs/operations.md, « Les images publiées ») :
 - **A registry tag is a hint, never a proof.** The workflow pushes ghcr.io/vanyar53/eregion-<image>
-  :sha-<commit> for each commit of main. Its digest is read anonymously (GHCR's public API, no
+  :sha-<commit> for the head of each push to main. Its digest is read anonymously (GHCR's public API, no
   token: the packages are public) and the manifest's own sha256 must be that digest.
 - **The proof is the signature**, keyless (sigstore: a certificate from GitHub's OIDC, no
   long-lived key): `cosign verify` and `cosign verify-attestation` (SLSA provenance v1, made by
@@ -83,14 +83,28 @@ class Unverified(Exception):
 
 
 class Unavailable(Exception):
-    """The registry or the network did not answer: nothing proven, try again later."""
+    """The registry, sigstore or the network did not answer: nothing proven, try again later.
+    `detail`: what a tool said, for a journal."""
+
+    def __init__(self, text: str, detail: str = ""):
+        super().__init__(text)
+        self.detail = detail
 
 
 Runner = Callable[[list], "subprocess.CompletedProcess[str]"]
+# A docker pull of an image of a gigabyte, cosign's two verifications: bounded (SEC4c). A tool
+# cut at its bound is code 124, « timeout » — nothing proven, never a refusal.
+TOOL_TIMEOUT_S = 600
+COSIGN_TIMEOUT = "3m"
+TIMEOUT_CODE = 124
 
 
-def run(argv: list) -> subprocess.CompletedProcess:
-    return subprocess.run([str(a) for a in argv], capture_output=True, text=True, check=False)
+def run(argv: list, timeout: float = TOOL_TIMEOUT_S) -> subprocess.CompletedProcess:
+    argv = [str(a) for a in argv]
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, TIMEOUT_CODE, "", f"timeout: cut after {timeout:g} s")
 
 
 def repository(image: str) -> str:
@@ -136,6 +150,11 @@ def _token(image: str, api: str) -> str:
     try:
         body, _ = _open(url, {}, 64 * 1024)
     except urllib.error.HTTPError as e:
+        # GHCR refuses the anonymous token itself (403) for a private package, or one that does
+        # not exist (measured on 29/10, review of CI3): a refusal, never a wait.
+        if e.code in (401, 403):
+            raise Unverified(f"{reference(image)} illisible sans jeton (HTTP {e.code}) : le paquet doit être "
+                             "public, ou n'existe pas") from None
         raise Unavailable(f"jeton anonyme du registre refusé : HTTP {e.code}") from None
     try:
         token = json.loads(body).get("token") or json.loads(body).get("access_token")
@@ -163,7 +182,9 @@ def manifest(image: str, ref: str, api: str = "") -> tuple[str, dict]:
     digest = "sha256:" + hashlib.sha256(body).hexdigest()
     said = (headers.get("Docker-Content-Digest") or "").strip()
     if said and said != digest:
-        raise Unverified(f"le registre dit {said[:19]}… pour un manifeste de {digest[:19]}…")
+        # What the registry says is quoted only when it is a digest (it may reach #deploy).
+        shown = f"{said[:19]}…" if DIGEST_RE.fullmatch(said) else "un en-tête illisible"
+        raise Unverified(f"le registre dit {shown} pour un manifeste de {digest[:19]}…")
     if ref.startswith("sha256:") and ref != digest:
         raise Unverified(f"le manifeste lu n'est pas {ref[:19]}…")
     try:
@@ -223,8 +244,27 @@ def cosign_args(kind: str, ref: str, commit: str, slug: str = SOURCE) -> list[st
            "--certificate-github-workflow-repository", slug, "--certificate-github-workflow-ref", BRANCH_REF,
            "--certificate-github-workflow-trigger", TRIGGER, "--certificate-github-workflow-sha", commit]
     if kind == "signature":
-        return ["verify", *who, ref]
-    return ["verify-attestation", "--type", PROVENANCE, *who, ref]
+        return ["verify", *who, "--timeout", COSIGN_TIMEOUT, ref]
+    return ["verify-attestation", "--type", PROVENANCE, *who, "--timeout", COSIGN_TIMEOUT, ref]
+
+
+# What cosign says when what it read is absent or not what was asked (measured on 29/10, cosign
+# v3.1.3): a refusal. Anything else — the network, sigstore's TUF mirror (« error updating to TUF
+# remote mirror », review of CI3), a timeout — proves nothing either way: a wait.
+COSIGN_REFUSALS = re.compile(r"no signatures found|no matching signatures|no matching attestations"
+                             r"|none of the attestations matched|failed to verify certificate identity"
+                             r"|\bexpected\b")
+# What `cosign sign` writes; cosign v3's `verify` also accepts an attestation's bundle as a
+# signature (measured on 29/10: an image attested, never signed, « verified » with type
+# https://slsa.dev/provenance/v1) — the signature is one of this type.
+SIGNATURE_TYPE = "https://sigstore.dev/cosign/sign/v1"
+
+
+def _cosign_failed(res, what: str):
+    said = f"{res.stderr or ''}\n{res.stdout or ''}"
+    if res.returncode != TIMEOUT_CODE and COSIGN_REFUSALS.search(said):
+        return Unverified(f"{what} absente, ou d'un autre workflow, dépôt, branche ou commit", _last(res))
+    return Unavailable(f"cosign n'a rien pu prouver ({what}) : réseau, sigstore ou délai", _last(res))
 
 
 def _lines(stdout: str) -> list[dict]:
@@ -245,7 +285,7 @@ def check_provenance(statement: dict, image: str, digest: str, commit: str, slug
     """The statement cosign verified, read again: this image, this digest, built by the
     publishing workflow of `slug` on main, from a push, at `commit`, on GitHub's runners."""
     if statement.get("predicateType") != PROVENANCE:
-        raise Unverified(f"provenance d'un autre type : {statement.get('predicateType')!r}")
+        raise Unverified("provenance d'un autre type", repr(statement.get("predicateType"))[:200])
     hexd = digest.split(":", 1)[1]
     subjects = [s for s in statement.get("subject") or [] if isinstance(s, dict)]
     if not any(s.get("name") == reference(image) and (s.get("digest") or {}).get("sha256") == hexd for s in subjects):
@@ -256,13 +296,14 @@ def check_provenance(statement: dict, image: str, digest: str, commit: str, slug
     want = {"workflow": (wf.get("path"), WORKFLOW), "dépôt": (wf.get("repository"), f"https://github.com/{slug}"),
             "référence": (wf.get("ref"), BRANCH_REF), "événement": (gh.get("event_name"), TRIGGER),
             "runner": (gh.get("runner_environment"), "github-hosted")}
-    wrong = [f"{what} {got!r}" for what, (got, ok) in want.items() if got != ok]
+    wrong = [what for what, (got, ok) in want.items() if got != ok]
     if wrong:
-        raise Unverified(f"provenance d'ailleurs : {', '.join(wrong)}")
+        raise Unverified(f"provenance d'ailleurs : {', '.join(wrong)}",
+                         "; ".join(f"{w} {want[w][0]!r}" for w in wrong)[:400])
     commits = {str((d.get("digest") or {}).get("gitCommit") or "") for d in bd.get("resolvedDependencies") or []
                if isinstance(d, dict)}
     if commits != {commit}:
-        raise Unverified(f"provenance d'un autre commit : {', '.join(sorted(c[:12] for c in commits)) or 'aucun'}")
+        raise Unverified("provenance d'un autre commit", ", ".join(sorted(c[:40] for c in commits))[:400] or "aucun")
 
 
 def verify(image: str, digest: str, commit: str, cosign: Path, slug: str = SOURCE, runner: Runner = run) -> None:
@@ -277,13 +318,16 @@ def verify(image: str, digest: str, commit: str, cosign: Path, slug: str = SOURC
     ref = f"{reference(image)}@{digest}"
     res = runner([str(cosign), *cosign_args("signature", ref, commit, slug)])
     if res.returncode != 0:
-        raise Unverified("signature absente, ou d'un autre workflow, dépôt, branche ou commit", _last(res))
-    signed = [((d.get("critical") or {}).get("image") or {}).get("docker-manifest-digest") for d in _lines(res.stdout)]
+        raise _cosign_failed(res, "signature")
+    found = [d.get("critical") or {} for d in _lines(res.stdout)]
+    signed = [(c.get("image") or {}).get("docker-manifest-digest") for c in found]
     if not signed or any(s != digest for s in signed):
         raise Unverified("la signature ne porte pas sur ce digest")
+    if not any(c.get("type") == SIGNATURE_TYPE for c in found):
+        raise Unverified("signature absente : seule une attestation porte sur ce digest")
     res = runner([str(cosign), *cosign_args("provenance", ref, commit, slug)])
     if res.returncode != 0:
-        raise Unverified("provenance absente, ou d'un autre workflow, dépôt, branche ou commit", _last(res))
+        raise _cosign_failed(res, "provenance")
     statements = []
     for env in _lines(res.stdout):
         try:
@@ -334,13 +378,17 @@ def pull(image: str, digest: str, name: str, commit: str, version: str = "", run
     ref = f"{reference(image)}@{digest}"
     res = runner(["docker", "pull", "-q", ref])
     if res.returncode != 0:
-        raise Unavailable(f"docker pull {ref[:60]}… : {_last(res)}")
+        raise Unavailable(f"docker pull {digest[:19]}… en échec (code {res.returncode})", _last(res))
     runner(["docker", "tag", ref, name])
     runner(["docker", "image", "rm", ref])
     ver, rev = labels(name, runner)
     if rev != commit or (version and ver != version):
         runner(["docker", "image", "rm", name])
-        raise Unverified(f"l'image dit {ver or '?'} ({rev[:12] or '?'}), pas {version or '…'} ({commit[:12]})")
+        # The labels are quoted only when they are what a label of ours looks like.
+        said_ver = ver if re.fullmatch(r"v?[0-9A-Za-z._-]{1,40}", ver) else "?"
+        said_rev = rev[:12] if COMMIT_RE.fullmatch(rev) else "?"
+        raise Unverified(f"l'image dit {said_ver} ({said_rev}), pas {version or '…'} ({commit[:12]})",
+                         f"étiquettes : {ver!r} {rev!r}"[:400])
 
 
 def commit_of(ref: str, runner: Runner = run) -> str:
@@ -389,7 +437,7 @@ def pushed(image: str, ref: str, runner: Runner = run) -> str:
     the image checked before, under that digest."""
     res = runner(["docker", "push", "-q", ref])
     if res.returncode != 0:
-        raise Unavailable(f"docker push : {_last(res)}")
+        raise Unavailable(f"docker push en échec (code {res.returncode})", _last(res))
     res = runner(["docker", "image", "inspect", "-f", "{{json .RepoDigests}}", ref])
     try:
         digests = json.loads(res.stdout) if res.returncode == 0 else []
@@ -416,13 +464,15 @@ def default_cosign() -> Path:
 
 def main(argv: list | None = None, runner: Runner = run) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("cmd", choices=["resolve", "verify", "fetch", "loaded", "install-cosign", "meta", "pushed"])
+    p.add_argument("cmd", choices=["resolve", "verify", "fetch", "ids", "loaded", "install-cosign", "meta",
+                                   "pushed"])
     p.add_argument("image", nargs="?", default="")
     p.add_argument("--commit", default="")
     p.add_argument("--digest", default="")
     p.add_argument("--ref", default="")
     p.add_argument("--tag", default="")
     p.add_argument("--id", default="")
+    p.add_argument("--expect", default="", help="loaded: the ids `ids` printed before the image left")
     p.add_argument("--cosign", default="")
     a = p.parse_args(argv)
     cosign = Path(a.cosign) if a.cosign else default_cosign()
@@ -444,8 +494,11 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
             verify(a.image, digest, commit, cosign, runner=runner)
             pull(a.image, digest, a.tag or f"{NAMES[a.image]}:{ref}", commit, runner=runner)
             _output({"ref": ref, "commit": commit, "digest": digest})
+        elif a.cmd == "ids":
+            print(" ".join(sorted(ids(a.image, a.digest))))
         elif a.cmd == "loaded":
-            if a.id.strip() not in ids(a.image, a.digest):
+            expected = set(a.expect.split()) if a.expect.strip() else ids(a.image, a.digest)
+            if not all(DIGEST_RE.fullmatch(x) for x in expected) or a.id.strip() not in expected:
                 print(f"✗ l'image chargée ({a.id.strip()[:19] or '?'}…) n'est pas {a.digest[:19]}…", file=sys.stderr)
                 return 1
             print(f"✓ l'image chargée est {reference(a.image)}@{a.digest}")
@@ -457,7 +510,7 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
         print(f"✗ {e}" + (f"\n  {e.detail}" if e.detail else ""), file=sys.stderr)
         return 1
     except Unavailable as e:
-        print(f"✗ {e} — rien n'est prouvé, réessayer", file=sys.stderr)
+        print(f"✗ {e} — rien n'est prouvé, réessayer" + (f"\n  {e.detail}" if e.detail else ""), file=sys.stderr)
         return 3
     return 0
 

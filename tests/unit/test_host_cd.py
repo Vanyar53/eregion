@@ -1364,7 +1364,8 @@ def test_a_cosign_that_is_not_the_pinned_one_is_never_run(h0):
     assert "cosign absent ou altéré" in _refusal(h0)[1] and h0.sig.calls() == []
 
 
-@pytest.mark.parametrize("env", [{"EREGION_REGISTRY_API": "http://127.0.0.1:9/registry"}, {"FAKE_PULL_FAIL": "1"}])
+@pytest.mark.parametrize("env", [{"EREGION_REGISTRY_API": "http://127.0.0.1:9/registry"}, {"FAKE_PULL_FAIL": "1"},
+                                 {"FAKE_COSIGN_NETWORK": "1"}])
 def test_a_registry_that_does_not_answer_is_waited_for_said_once_never_a_refusal(h0, env):
     assert h0.run(**env).returncode == 0 and h0.run(**env).returncode == 0
     _nothing_moved(h0)
@@ -1380,7 +1381,8 @@ def test_a_release_without_the_publishing_job_waits_an_hour_then_is_refused_neve
     assert h0.run().returncode == 0
     assert _titles(h0) == ["⏳ v0.4.0 attend son image publiée"]
     state = json.loads((h0.cd / "state.json").read_text())
-    state["waits"]["v0.4.0"] = 12
+    assert state["waits"] == {"v0.4.0 publish (glorfindel)": 1}        # its own count, not the CI's
+    state["waits"]["v0.4.0 publish (glorfindel)"] = 12
     (h0.cd / "state.json").write_text(json.dumps(state))
     assert h0.run().returncode == 1
     _nothing_moved(h0)
@@ -1400,6 +1402,27 @@ def test_cosign_is_asked_for_every_claim_of_the_publishing_workflow(h0):
         assert {k: call[call.index(k) + 1] for k in want} == want
         assert call[-1] == f"ghcr.io/{GHCR_REPO}@{h0.digest}"
     assert att[:3] == ["verify-attestation", "--type", "https://slsa.dev/provenance/v1"]
+
+
+def test_a_registry_or_sigstore_out_of_reach_an_hour_long_is_refused_and_said(h0):
+    """Review of CI3: a wait is bounded — 12 passes, then a refusal with the mention."""
+    assert h0.run(FAKE_COSIGN_NETWORK="1").returncode == 0 and h0.outcome("v0.4.0") is None
+    state = json.loads((h0.cd / "state.json").read_text())
+    assert state["unavailable"] == {"v0.4.0": 1}
+    state["unavailable"]["v0.4.0"] = 12
+    (h0.cd / "state.json").write_text(json.dumps(state))
+    res = h0.run(FAKE_COSIGN_NETWORK="1")
+    assert res.returncode == 1 and h0.outcome("v0.4.0") == "refused"
+    _nothing_moved(h0)
+    _, desc = _refusal(h0)
+    assert "depuis une heure" in desc and "TUF" not in desc and "TUF" in res.stdout   # cosign's words: the journal
+
+
+def test_a_private_package_is_refused_at_once_never_waited_for(h0):
+    """GHCR's 403 at the anonymous token (measured): refused on the first pass, with the mention."""
+    h0.fake.registry_private.add(GHCR_REPO)
+    assert h0.run().returncode == 1 and h0.outcome("v0.4.0") == "refused"
+    assert "doit être public" in _refusal(h0)[1]
 
 
 def test_the_installation_carries_the_verifier():

@@ -228,7 +228,12 @@ class FakeDiscord:
 
     def _registry(self, p, query, headers):
         if p == "/registry/token":
+            # As GHCR: the anonymous token itself refused (403, DENIED) for a private repository
+            # or one that does not exist (measured on 29/10, review of CI3).
             scope = (query.get("scope") or [""])[0]
+            repo = scope.removeprefix("repository:").removesuffix(":pull")
+            if repo in self.registry_private or repo not in self.registry:
+                return 403, {"errors": [{"code": "DENIED", "message": "requested access to the resource is denied"}]}, {}
             return 200, {"token": f"anon:{scope}"}, {}
         if not p.startswith("/registry/v2/") or "/manifests/" not in p:
             return 404, {}, {}

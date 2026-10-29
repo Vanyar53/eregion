@@ -21,6 +21,10 @@ args = sys.argv[1:]
 with open(os.environ["FAKE_COSIGN_LOG"], "a") as f:
     f.write(json.dumps(args) + "\n")
 st = json.loads(open(os.environ["FAKE_COSIGN_STATE"]).read())
+if os.environ.get("FAKE_COSIGN_NETWORK"):
+    # As cosign v3.1.3 says it with sigstore's TUF mirror out of reach (review of CI3, measured).
+    sys.exit("Error: error updating to TUF remote mirror: invalid key: Get https://tuf-repo-cdn.sigstore.dev/"
+             "timestamp.json: dial tcp: lookup tuf-repo-cdn.sigstore.dev: no such host")
 cmd, ref = args[0], args[-1]
 digest = ref.rsplit("@", 1)[1] if "@" in ref else ""
 flags = {"--certificate-identity": "identity", "--certificate-oidc-issuer": "issuer",
@@ -39,7 +43,8 @@ if cmd == "verify":
         sys.exit(f"Error: no matching signatures: {why}")
     print(json.dumps([{"critical": {"identity": {"docker-reference": ref.split("@")[0]},
                                     "image": {"docker-manifest-digest": st.get("signed_digest", {}).get(digest, digest)},
-                                    "type": "https://sigstore.dev/cosign/sign/v1"}, "optional": {}}]))
+                                    "type": st.get("signed_type", {}).get(digest, "https://sigstore.dev/cosign/sign/v1")},
+                       "optional": {}}]))
 elif cmd == "verify-attestation":
     kind = args[args.index("--type") + 1]
     atts = [a for a in st.get("attested", {}).get(digest, []) if a["statement"].get("predicateType") == kind]
@@ -84,7 +89,7 @@ class Sigstore:
         path.write_text(FAKE_COSIGN.replace("#!PYTHON", f"#!{sys.executable}"))
         path.chmod(0o755)
         self.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
-        self.data = {"signed": {}, "attested": {}, "signed_digest": {}}
+        self.data = {"signed": {}, "attested": {}, "signed_digest": {}, "signed_type": {}}
         self.save()
         log.write_text("")
 

@@ -98,6 +98,26 @@ def test_a_manifest_read_by_its_digest_must_be_that_digest(pim, reg):
         pim.manifest("glorfindel", other)
 
 
+@pytest.mark.parametrize("private", [True, False])
+def test_a_private_or_absent_package_is_refused_at_its_token(pim, reg, private):
+    """GHCR answers 403 at the anonymous token for a private package or one that does not exist
+    (measured, review of CI3): a refusal, never a wait without end."""
+    if private:
+        reg.image(GLOR, f"sha-{C2}", _manifest(C2))
+        reg.registry_private.add(GLOR)
+    with pytest.raises(pim.Unverified, match="doit être public, ou n'existe pas"):
+        pim.resolve("glorfindel", C2)
+    assert not [r for r in reg.requests if "/manifests/" in r["path"]]
+
+
+def test_a_digest_header_that_is_no_digest_is_never_quoted(pim, reg):
+    digest = reg.image(GLOR, f"sha-{C2}", _manifest(C2))
+    reg.registry_lie[digest] = "[x](https://evil.example) @everyone"
+    with pytest.raises(pim.Unverified) as e:
+        pim.resolve("glorfindel", C2)
+    assert "en-tête illisible" in str(e.value) and "evil" not in str(e.value)
+
+
 def test_a_registry_that_does_not_answer_is_unavailable_not_refused(pim, monkeypatch):
     monkeypatch.setattr(pim, "REGISTRY_API", "http://127.0.0.1:9")
     with pytest.raises(pim.Unavailable):
@@ -183,6 +203,49 @@ def test_a_signature_over_another_digest_is_unverified(pim, sig):
         pim.verify("glorfindel", digest, C2, sig.path)
 
 
+def test_an_image_attested_but_never_signed_is_unverified(pim, sig):
+    """cosign v3's `verify` takes an attestation's bundle for a signature (measured on 29/10: an
+    image attested, never signed, verified with type …/provenance/v1): a signature is sign/v1."""
+    digest = "sha256:" + "a" * 64
+    _signed(pim, sig, digest)
+    sig.data["signed_type"][digest] = "https://slsa.dev/provenance/v1"
+    sig.save()
+    with pytest.raises(pim.Unverified, match="seule une attestation"):
+        pim.verify("glorfindel", digest, C2, sig.path)
+
+
+@pytest.mark.parametrize("kind", ["network", "timeout"])
+def test_a_cosign_that_could_not_reach_sigstore_proves_nothing_either_way(pim, sig, monkeypatch, kind):
+    """Review of CI3, measured: sigstore's TUF mirror out of reach, cosign exits 1 even with its
+    cache filled — a wait, never a refusal; a cut at its bound too, whatever it printed."""
+    digest = "sha256:" + "a" * 64
+    _signed(pim, sig, digest)
+    if kind == "network":
+        monkeypatch.setenv("FAKE_COSIGN_NETWORK", "1")
+        runner = pim.run
+    else:
+        def runner(argv):
+            return _done(argv, pim.TIMEOUT_CODE, "", "expected nothing: timeout: cut after 600 s")
+    with pytest.raises(pim.Unavailable, match="rien pu prouver") as e:
+        pim.verify("glorfindel", digest, C2, sig.path, runner=runner)
+    assert ("TUF" if kind == "network" else "timeout") in e.value.detail
+
+
+@pytest.mark.parametrize("said", ["Error: no signatures found", "Error: no matching signatures: x",
+                                  "Error: no matching attestations: ",
+                                  "Error: none of the attestations matched the predicate type: x",
+                                  "failed to verify certificate identity", 'expected SAN value "x", got "y"'])
+def test_what_cosign_says_of_an_absent_or_other_signature_is_a_refusal(pim, said):
+    assert isinstance(pim._cosign_failed(_done([], 1, "", said), "signature"), pim.Unverified)
+    assert isinstance(pim._cosign_failed(_done([], 1, "", "unexpected EOF"), "signature"), pim.Unavailable)
+
+
+def test_a_tool_cut_at_its_bound_is_code_124(pim):
+    res = pim.run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.2)
+    assert res.returncode == pim.TIMEOUT_CODE and "timeout" in res.stderr
+    assert pim.cosign_args("signature", "r", C2)[-3:] == ["--timeout", "3m", "r"]
+
+
 def test_a_signed_image_without_provenance_is_unverified(pim, sig):
     digest = "sha256:" + "a" * 64
     sig.sign(digest, claims("Vanyar53/eregion", C2))
@@ -239,7 +302,8 @@ def test_every_provenance_cosign_returns_is_read(pim, sig):
 
     def runner(argv):
         if argv[1] == "verify":
-            return _done(argv, 0, json.dumps([{"critical": {"image": {"docker-manifest-digest": digest}}}]))
+            return _done(argv, 0, json.dumps([{"critical": {"image": {"docker-manifest-digest": digest},
+                                                            "type": "https://sigstore.dev/cosign/sign/v1"}}]))
         return _done(argv, 0, envelope(_st()) + "\n" + envelope(_st(commit=C1)) + "\n")
     with pytest.raises(pim.Unverified, match="autre commit"):
         pim.verify("glorfindel", digest, C2, sig.path, runner=runner)
@@ -293,9 +357,27 @@ def test_an_image_whose_labels_name_another_commit_or_version_is_removed_and_unv
     assert docker.images == {}
 
 
-def test_a_failed_pull_is_unavailable(pim):
-    with pytest.raises(pim.Unavailable):
-        pim.pull("glorfindel", "sha256:" + "a" * 64, "x", C2, runner=lambda argv: _done(argv, 1, "", "network"))
+def test_a_failed_pull_is_unavailable_its_words_in_the_detail_only(pim):
+    with pytest.raises(pim.Unavailable) as e:
+        pim.pull("glorfindel", "sha256:" + "a" * 64, "x", C2,
+                 runner=lambda argv: _done(argv, 1, "", "[x](https://evil.example) network"))
+    assert "evil" not in str(e.value) and "evil" in e.value.detail
+
+
+def test_labels_that_are_no_label_of_ours_are_never_quoted(pim):
+    docker = Docker({"version": "[x](https://evil.example)", "revision": "@everyone"})
+    with pytest.raises(pim.Unverified) as e:
+        pim.pull("glorfindel", "sha256:" + "a" * 64, "n", C2, version="v0.4.6", runner=docker)
+    assert "evil" not in str(e.value) and "everyone" not in str(e.value) and "evil" in e.value.detail
+
+
+def test_loaded_with_the_ids_computed_before_the_image_left(pim):
+    good = "sha256:" + "c" * 64
+    assert pim.main(["loaded", "annatar", "--digest", "sha256:" + "a" * 64, "--expect", f"sha256:{'a' * 64} {good}",
+                     "--id", good]) == 0
+    assert pim.main(["loaded", "annatar", "--digest", "sha256:" + "a" * 64, "--expect", good,
+                     "--id", "sha256:" + "f" * 64]) == 1
+    assert pim.main(["loaded", "annatar", "--digest", "sha256:" + "a" * 64, "--expect", "x y", "--id", "x"]) == 1
 
 
 # ── the operator's side: a reference of main only ─────────────────────────────────────────────
@@ -415,7 +497,7 @@ def test_the_pinned_cosign_is_the_one_measured():
 
 def test_the_cli_says_refused_or_unavailable(pim, reg, sig, monkeypatch, capsys):
     assert pim.main(["verify", "glorfindel", "--commit", C2, "--cosign", str(sig.path)]) == 1
-    assert "aucune image" in capsys.readouterr().err
+    assert "doit être public, ou n'existe pas" in capsys.readouterr().err      # GHCR: 403 at the token
     monkeypatch.setattr(pim, "REGISTRY_API", "http://127.0.0.1:9")
     assert pim.main(["verify", "glorfindel", "--commit", C2, "--cosign", str(sig.path)]) == 3
     digest = reg.image(GLOR, f"sha-{C2}", _manifest(C2))
@@ -445,10 +527,105 @@ def test_orodruin_gets_the_published_image_verified_here_never_one_built_here():
     assert '--ref "$EREGION_DEPLOY_REF" --tag eregion-annatar:orodruin' in lines[fetch]
     assert "|| exit 1" in lines[fetch]
     rest = "\n".join(lines[fetch:])
-    assert rest.index("docker save eregion-annatar:orodruin") < rest.index("published_image.py loaded annatar")
-    assert 'docker image inspect -f "{{.Id}}" eregion-annatar:orodruin' in rest
-    assert rest.index("published_image.py loaded annatar") < rest.index("cat > .eregion-image")
+    order = [rest.index(s) for s in ("published_image.py ids annatar", "rm -f .eregion-image",
+                                     "docker save eregion-annatar:incoming", "published_image.py loaded annatar",
+                                     "docker tag eregion-annatar:incoming eregion-annatar:orodruin",
+                                     "cat > .eregion-image")]
+    assert order == sorted(order)
+    assert 'docker image inspect -f "{{.Id}}" eregion-annatar:incoming' in rest
     assert "install-cosign" in out and "environment*" in out
+
+
+PUSH_FAKES = {
+    # The operator's docker: `save` writes the image's id; the rest is kept in $LOCAL.
+    "docker": r'''#!/bin/bash
+state="${DOCKER_STATE:?}"; mkdir -p "$state"
+case "$1" in
+  tag) cp "$state/${2//[:\/]/_}" "$state/${3//[:\/]/_}" ;;
+  save) cat "$state/${2//[:\/]/_}" ;;
+  load) id=$(cat); [ -n "${FAKE_LOAD_ID:-}" ] && id="$FAKE_LOAD_ID"; echo "$id" > "$state/eregion-annatar_incoming"; echo "Loaded" ;;
+  image)
+    case "$2" in
+      rm) rm -f "$state/${3//[:\/]/_}" ;;
+      inspect) cat "$state/${5//[:\/]/_}" ;;
+    esac ;;
+esac
+''',
+    # ssh to Orodruin: the remote command, run here with Orodruin's own docker state and home.
+    "ssh": r'''#!/bin/bash
+cmd="${!#}"
+cd "$REMOTE_HOME" && DOCKER_STATE="$REMOTE_STATE" bash -c "$cmd"
+''',
+    "scp": "#!/bin/sh\nexit 0\n",
+    "git": "#!/bin/sh\nexit 0\n",
+    # python3: fetch and ids answered as published_image.py would; `loaded`, the real one.
+    "python3": r'''#!/bin/bash
+case "$2" in
+  install-cosign) exit 0 ;;
+  fetch) echo "ref=v0.4.6"; echo "commit=$FAKE_COMMIT"; echo "digest=$FAKE_DIGEST"
+         echo "$FAKE_CONFIG" > "$DOCKER_STATE/eregion-annatar_orodruin" ;;
+  ids) echo "$FAKE_DIGEST $FAKE_CONFIG" ;;
+  *) exec "$REAL_PYTHON" "$REAL_SCRIPT" "${@:2}" ;;
+esac
+''',
+}
+
+
+def _push(tmp_path, **env):
+    import os
+    import shutil
+    if shutil.which("make") is None or shutil.which("gzip") is None:
+        pytest.skip("make and gzip needed")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(exist_ok=True)
+    for name, text in PUSH_FAKES.items():
+        (bin_ / name).write_text(text)
+        (bin_ / name).chmod(0o755)
+    work, remote = tmp_path / "work", tmp_path / "orodruin"
+    (work / "infra" / "orodruin").mkdir(parents=True, exist_ok=True)
+    (work / "infra" / "orodruin" / "orodruin.env").write_text("X=1\n")
+    for d in (remote / "home", remote / "docker", tmp_path / "local"):
+        d.mkdir(parents=True, exist_ok=True)
+    config = "sha256:" + "c" * 64
+    full = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "DOCKER_STATE": str(tmp_path / "local"),
+            "REMOTE_HOME": str(remote / "home"), "REMOTE_STATE": str(remote / "docker"),
+            "FAKE_COMMIT": C2, "FAKE_DIGEST": "sha256:" + "a" * 64, "FAKE_CONFIG": config,
+            "REAL_PYTHON": sys.executable, "REAL_SCRIPT": str(SCRIPT), **env}
+    full.pop("REF", None)
+    res = subprocess.run(["make", "--no-print-directory", "-C", str(work), "-f", str(ROOT / "Makefile"),
+                          "orodruin-push", "REF=v0.4.6", "ORO_IP=203.0.113.7",
+                          "ORO_SSH=ssh orodruin@203.0.113.7"], env=full, capture_output=True, text=True,
+                         timeout=120)
+    return res, remote, config
+
+
+def test_orodruin_keeps_its_image_until_the_one_loaded_is_proven(tmp_path):
+    """Review of CI3: the image arrives under a waiting tag; only an id under the verified digest
+    becomes eregion-annatar:orodruin, and ~/.eregion-image is written only then."""
+    remote = tmp_path / "orodruin"
+    (remote / "docker").mkdir(parents=True)
+    (remote / "home").mkdir(parents=True)
+    (remote / "docker" / "eregion-annatar_orodruin").write_text("sha256:" + "0" * 64 + "\n")   # what ran before
+    (remote / "home" / ".eregion-image").write_text("old\n")
+    res, remote, config = _push(tmp_path)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (remote / "docker" / "eregion-annatar_orodruin").read_text().strip() == config
+    assert not (remote / "docker" / "eregion-annatar_incoming").exists()
+    assert (remote / "home" / ".eregion-image").read_text().split() == [C2, "sha256:" + "a" * 64]
+
+
+def test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_changes(tmp_path):
+    remote = tmp_path / "orodruin"
+    (remote / "docker").mkdir(parents=True)
+    (remote / "home").mkdir(parents=True)
+    before = "sha256:" + "0" * 64
+    (remote / "docker" / "eregion-annatar_orodruin").write_text(before + "\n")
+    (remote / "home" / ".eregion-image").write_text("old\n")
+    res, remote, _ = _push(tmp_path, FAKE_LOAD_ID="sha256:" + "f" * 64)
+    assert res.returncode != 0 and "retirée" in res.stderr
+    assert (remote / "docker" / "eregion-annatar_orodruin").read_text().strip() == before
+    assert not (remote / "docker" / "eregion-annatar_incoming").exists()
+    assert not (remote / "home" / ".eregion-image").exists()       # never one naming the old image
 
 
 def test_the_development_path_says_it_is_unverified():

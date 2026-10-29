@@ -787,9 +787,12 @@ orodruin-lock: orodruin-init orodruin-watch-guard
 # son digest lu sur GHCR pour le commit de REF (un tag, ou un commit de main ; sans REF, le dernier
 # tag v*), sa signature et sa provenance vérifiées par cosign (le workflow de publication, sur
 # main, à ce commit), tirée par ce digest. Puis chargée par SSH : la sortie d'Orodruin reste
-# fermée (son contrat). Sur Orodruin, l'identifiant de l'image chargée est relu contre le digest
-# vérifié, et ~/.eregion-image garde « commit digest ». REF se donne sur la ligne de commande,
-# comme pour glorfindel-host-start. UID 1000 = l'utilisateur de la VM, celui de l'image publiée.
+# fermée (son contrat). Les identifiants attendus sont calculés avant l'envoi ; l'image arrive sous
+# un tag d'attente (eregion-annatar:incoming) et ne devient eregion-annatar:orodruin que si son
+# identifiant relu sur Orodruin est l'un d'eux — sinon elle est retirée, rien n'a changé.
+# ~/.eregion-image est effacé avant, et n'est écrit (« commit digest ») qu'au succès. REF se donne
+# sur la ligne de commande, comme pour glorfindel-host-start. UID 1000 = l'utilisateur de la VM.
+ORO_INCOMING  := eregion-annatar:incoming
 orodruin-push: export EREGION_DEPLOY_REF = $(value REF)
 orodruin-push:
 	@test -f infra/orodruin/orodruin.env || { echo "!! infra/orodruin/orodruin.env manquant (copier orodruin.env.example)"; exit 1; }
@@ -799,10 +802,18 @@ orodruin-push:
 	@python3 scripts/published_image.py install-cosign
 	@out=$$(python3 scripts/published_image.py fetch annatar --ref "$$EREGION_DEPLOY_REF" --tag $(ORO_IMAGE)) || exit 1; \
 	 echo "$$out"; digest=$$(echo "$$out" | sed -n 's/^digest=//p'); commit=$$(echo "$$out" | sed -n 's/^commit=//p'); \
-	 docker save $(ORO_IMAGE) | gzip | $(ORO_SSH) 'gunzip | docker load' && \
-	 id=$$($(ORO_SSH) 'docker image inspect -f "{{.Id}}" $(ORO_IMAGE)') && \
-	 python3 scripts/published_image.py loaded annatar --digest "$$digest" --id "$$id" && \
-	 echo "$$commit $$digest" | $(ORO_SSH) 'cat > .eregion-image'
+	 ids=$$(python3 scripts/published_image.py ids annatar --digest "$$digest") || exit 1; \
+	 $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \
+	 docker tag $(ORO_IMAGE) $(ORO_INCOMING) || exit 1; \
+	 if docker save $(ORO_INCOMING) | gzip | $(ORO_SSH) 'gunzip | docker load' \
+	    && id=$$($(ORO_SSH) 'docker image inspect -f "{{.Id}}" $(ORO_INCOMING)') \
+	    && python3 scripts/published_image.py loaded annatar --digest "$$digest" --expect "$$ids" --id "$$id"; then \
+	   docker image rm $(ORO_INCOMING) >/dev/null; \
+	   $(ORO_SSH) 'docker tag $(ORO_INCOMING) $(ORO_IMAGE) && docker image rm $(ORO_INCOMING) >/dev/null' \
+	   && echo "$$commit $$digest" | $(ORO_SSH) 'cat > .eregion-image'; \
+	 else docker image rm $(ORO_INCOMING) >/dev/null 2>&1; $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \
+	   echo "✗ l'image arrivée sur Orodruin n'est pas celle vérifiée : retirée, eregion-annatar:orodruin n'a pas changé" >&2; \
+	   exit 1; fi
 	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
 
 # Le chemin de développement, dit comme tel : l'image construite sur ce poste, jamais vérifiée —

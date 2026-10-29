@@ -280,15 +280,17 @@ def verify(tag: str, commit: str, dep_commit: str, state: dict) -> None:
         raise Quiet(f"{tag} : CI en cours")
     # Another workflow may finish before the CI's job is even created: waited for, an hour. The
     # job that publishes the image too (CI3): a release from before it has none — refused then.
+    # Each check has its own count: an hour for the CI's job, then an hour for the image's.
     for name, what, kind in ((MAIN_CHECK, "sa CI principale", "ci-main"), (PUBLISH_CHECK, "son image publiée", "ci-image")):
         if any(str(r.get("name", "")).startswith(name) for r in runs):
             continue
         waits = state.setdefault("waits", {})
-        waits[tag] = waits.get(tag, 0) + 1
-        if waits[tag] <= MAIN_CHECK_PASSES:
+        key = tag if name == MAIN_CHECK else f"{tag} {name}"
+        waits[key] = waits.get(key, 0) + 1
+        if waits[key] <= MAIN_CHECK_PASSES:
             say_once(state, tag, kind, f"⏳ {tag} attend {what}", f"pas encore de « {name} » "
                      f"sur {commit[:12]}", color=nd.BLUE)
-            raise Quiet(f"{tag} : « {name} » absent ({waits[tag]}/{MAIN_CHECK_PASSES})")
+            raise Quiet(f"{tag} : « {name} » absent ({waits[key]}/{MAIN_CHECK_PASSES})")
         if name == MAIN_CHECK:
             raise Refused(f"la CI principale ({MAIN_CHECK}) n'a pas tourné sur {commit[:12]}, en une heure")
         raise Refused(f"aucune image publiée pour {commit[:12]} (« {PUBLISH_CHECK} » absent en une heure : une "
@@ -377,7 +379,12 @@ def aside(commit: str) -> None:
 
 
 def _run(argv: list) -> subprocess.CompletedProcess:
-    return sh(*[str(a) for a in argv], check=False)
+    """docker and cosign, bounded (SEC4c): cut at its bound, code 124 — nothing proven."""
+    return pim.run(argv)
+
+
+# A registry or sigstore that does not answer: waited for an hour (12 passes), then refused, said.
+UNAVAILABLE_PASSES = 12
 
 
 def fetch(tag: str, commit: str, state: dict, name: str = "") -> str:
@@ -396,11 +403,21 @@ def fetch(tag: str, commit: str, state: dict, name: str = "") -> str:
         pim.verify("glorfindel", digest, commit, COSIGN, slug=SLUG, runner=_run)
         pim.pull("glorfindel", digest, local, commit, version=tag, runner=_run)
     except pim.Unverified as e:
-        raise Refused(f"image de {tag} refusée : {e} — H0 ne construit pas d'image", e.detail) from None
+        # What a tool said stays in the detail (the journal); the reason, escaped (SEC6).
+        raise Refused(f"image de {tag} refusée : {discord_text(str(e))} — H0 ne construit pas d'image",
+                      e.detail) from None
     except pim.Unavailable as e:
-        say_once(state, tag, "registry", f"⏳ {tag} : son image ne se lit pas encore", f"{e} — le CD repasse "
-                 "toutes les 5 minutes", color=nd.BLUE)
-        raise Quiet(f"{tag} : {e}") from None
+        if e.detail:
+            print(e.detail)
+        tries = state.setdefault("unavailable", {})
+        tries[tag] = tries.get(tag, 0) + 1
+        if tries[tag] > UNAVAILABLE_PASSES:
+            raise Refused(f"image de {tag} illisible ou non prouvée depuis une heure : {discord_text(str(e))} — le "
+                          "détail : make glorfindel-host-cd-status", e.detail) from None
+        say_once(state, tag, "registry", f"⏳ {tag} : son image ne se lit pas encore", f"{discord_text(str(e))} — "
+                 "le CD repasse toutes les 5 minutes", color=nd.BLUE)
+        raise Quiet(f"{tag} : {e} ({tries[tag]}/{UNAVAILABLE_PASSES})") from None
+    state.get("unavailable", {}).pop(tag, None)
     seen.setdefault(tag, digest)
     fits(local)
     print(f"{local} : {pim.reference('glorfindel')}@{digest}, signée et attestée ({pim.WORKFLOW}, {commit[:12]})")
@@ -410,8 +427,8 @@ def fetch(tag: str, commit: str, state: dict, name: str = "") -> str:
 def fits(img: str) -> None:
     """The published image runs as H0's user (published_image.UID): else it could write neither
     ~/.glorfindel nor runs/ — refused before anything moves."""
-    res = sh("docker", "run", "--rm", "--network", "none", img, "python", "-c",
-             "import os; print(os.getuid(), os.getgid())", check=False)
+    res = pim.run(["docker", "run", "--rm", "--network", "none", img, "python", "-c",
+                   "import os; print(os.getuid(), os.getgid())"], timeout=120)
     said, mine = " ".join(res.stdout.split()), f"{os.getuid()} {os.getgid()}"
     if res.returncode != 0 or said != mine:
         sh("docker", "image", "rm", img, check=False)
@@ -948,7 +965,7 @@ def run_pass(check: bool = False) -> int:
     finally:
         save_state(state)
     if check:
-        say(f"✅ À blanc : {tag} est prête", f"vérifiée, construite, préflight passé ; H0 reste sur {dep_ref}. "
+        say(f"✅ À blanc : {tag} est prête", f"vérifiée, son image publiée tirée par son digest et prouvée, préflight passé ; H0 reste sur {dep_ref}. "
             "make glorfindel-host-cd-enable pour que le CD la déploie.", color=nd.GREEN, url=url)
         return 0
     started = time.monotonic()
@@ -1040,6 +1057,7 @@ def main(argv: list[str]) -> int:
             state["said"].clear()
             state.pop("waits", None)
             state.pop("interrupts", None)
+            state.pop("unavailable", None)
             save_state(state)
         try:
             return run_pass(check=mode == "check")

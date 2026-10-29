@@ -103,6 +103,14 @@ elif cmd == "exec":
     sys.stderr.write(os.environ.get(pre + "ERR", ""))
     print(out)
     sys.exit(int(os.environ.get(pre + "RC") or 0))
+elif cmd == "logs":
+    # V-34: what each container's journal says since the switch — FAKE_BASE_LOGS for what ran
+    # (v0.3.1), FAKE_RULES_LOGS for the candidate.
+    c = st["containers"].get(args[-1])
+    if not c:
+        sys.exit(1)
+    pre = "FAKE_BASE_" if c["version"] == "v0.3.1" else "FAKE_RULES_"
+    sys.stderr.write(os.environ.get(pre + "LOGS", ""))
 elif cmd == "compose":
     if "config" in args:
         sys.exit(1 if os.environ.get("FAKE_COMPOSE_FAIL") else 0)
@@ -416,6 +424,39 @@ def test_a_host_deployed_before_h1_can_still_go_back(h0):
     assert calls.index("tag eregion-glorfindel eregion-glorfindel:v0.3.1") < calls.index(
         "tag eregion-glorfindel:v0.4.0 eregion-glorfindel")
     assert h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") == "rolled back"
+
+
+READ_ONLY = "OSError: [Errno 30] Read-only file system: '/app/glorfindel/x.json'\n"
+
+
+def test_a_release_that_writes_outside_its_mounts_is_rolled_back(h0):
+    """V-34 (SEC7): the root filesystem read-only, a write outside the mounts fails in the
+    candidate's journal — a regression: H0 goes back, said, with the reason."""
+    assert h0.run(FAKE_RULES_LOGS=READ_ONLY).returncode == 1
+    assert h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") == "rolled back"
+    (alert,) = _alerts(h0)
+    assert "Read-only file system" in alert["embeds"][0]["description"]
+    assert any(c.startswith("logs --since") for c in h0.calls())
+
+
+def test_a_read_only_error_that_ran_before_the_switch_is_no_regression(h0):
+    """H2's rule: only a regression goes back. What ran already logged it: the release is kept."""
+    assert h0.run(FAKE_BASE_LOGS=READ_ONLY, FAKE_RULES_LOGS=READ_ONLY).returncode == 0
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+
+
+def test_the_way_back_is_never_judged_on_the_read_only_probe(agent, monkeypatch):
+    seen = []
+    monkeypatch.setattr(agent, "read_only_errors", lambda since: seen.append(since) or ["eregion-watch"])
+    monkeypatch.setattr(agent, "health_once", lambda ref, since: "")
+    monkeypatch.setattr(agent, "HEALTH_S", 0.0)
+    monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: {"state": "ok", "rules": []})
+    assert agent.health("v0.3.1", 0.0) == ("", {}) and seen == []
+    why, _ = agent.health("v0.4.0", 5.0, rules=True, base={"state": "ok", "rules": []})
+    assert "Read-only file system" in why and seen == [5.0]
+    why, _ = agent.health("v0.4.0", 5.0, rules=True, base={"state": "absent", "rules": [],
+                                                           "read_only": ["eregion-watch"]})
+    assert "Read-only" not in why
 
 
 def test_a_heartbeat_from_before_the_switch_is_not_health(h0):
@@ -1012,6 +1053,7 @@ def agent(monkeypatch):
     spec = importlib.util.spec_from_file_location("eregion_cd_h2", AGENT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    mod.read_only_errors = lambda since: []      # no real docker here (V-34's own tests set it)
     return mod
 
 

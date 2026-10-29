@@ -158,16 +158,23 @@ si op-1 tient A et veut B pendant qu'op-2 tient B et veut A, chacun rend son tou
 chaque tour revient à temps, et I11 ne tombait jamais — la course tournait sans fin. L'ordonnanceur
 compte maintenant les tours d'affilée passés seulement sur des verrous trouvés pris : au-delà de
 2 000, I11 tombe, « livelock (deadlock between driven locks?) », par le même chemin d'abandon
-(`test_two_driven_locks_taken_in_reverse_order_fail_fast`, M1349 ; une seconde environ). Mesuré sur
-les graines 210, 203, 1 et 2 à 500 séquences, le plus long de ces passages dans une vraie course
-est de 10 tours. Ce qui est tenu : un interblocage entre verrous pilotés échoue en bien moins d'un
+(`test_two_driven_locks_taken_in_reverse_order_fail_fast`, M1349 ; une seconde environ). Mesuré à
+500 séquences, le plus long de ces passages dans une vraie course est de 10 à 16 tours selon les
+graines, pour une limite de 2 000. Ce qui est tenu : un interblocage entre verrous pilotés échoue en bien moins d'un
 tour de délai ; un fil bloqué hors de la vue de l'ordonnanceur (un verrou non piloté, une attente
 quelconque) échoue au bout d'un tour, 20 s. Un tel fil ne se déroule pas : l'échec le nomme
 (« still running, never unwound »), et le teardown de la machine saute alors la remise à plat qui
-attendrait derrière ses verrous — I11 a déjà échoué
-(`test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown`, M1440). Ce qui ne l'est
-pas : un fil qui boucle sans jamais rendre son tour ni prendre de verrou piloté n'est vu que par
-la borne du job. Les jobs qui lancent la machine sont bornés : CI Linux 30 min, macOS 25 min, nuit
+attendrait derrière ses verrous — I11 a déjà échoué (M1440). Ce qu'il tient reste tenu : les
+registres de verrous du processus (`locks._VM_LOCKS`, `_QUARANTINE_LOCKS`, `_FILE_LOCKS`) ne sont
+jamais remis à zéro entre deux exemples, et l'exemple suivant — Hypothesis en rejoue pendant la
+réduction — attendait derrière lui à sa première écriture sur la même VM. Les courses suivantes
+reçoivent des registres neufs (le `flock` ne gêne pas : un nouvel exemple a un nouveau HOME, donc de
+nouveaux fichiers), et chaque fil d'une course a un nom à elle (`op-1#7`, les messages d'I11 disent
+`op-1`) : réveillé plus tard, un tel fil n'entre jamais dans une course suivante
+(`test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown`, M1442). Ce qui ne l'est
+pas : un fil qui boucle sans jamais rendre son tour ni prendre de verrou piloté, et un fil qui
+boucle **en rendant son tour** — des appels Azure sans fin, chaque tour productif — ne sont vus que
+par la borne du job. Les jobs qui lancent la machine sont bornés : CI Linux 30 min, macOS 25 min, nuit
 150 min (M1347, M1348) ; sur Linux comme sur macOS, un test qui dure plus de 8 min écrit la pile de
 ses fils (M1441).
 

@@ -254,9 +254,10 @@ class _Abandoned(BaseException):
 # Turns in a row where every thread only tried a driven lock and found it taken: a
 # deadlock between driven locks (op-1 holds A and wants B, op-2 holds B and wants A) —
 # each thread gives its turn away at every try, and no turn ever times out (U3F review).
-# A real race's longest such run, over seeds 210 and 203 at 500 sequences, is measured in
-# docs/design/preuves.md; the limit is far above it, and is reached in well under a second.
+# A real race's longest such run is 10 to 16 turns depending on the seed (measured at 500
+# sequences, docs/design/preuves.md); the limit is far above it, reached in under a second.
 _IDLE_TURNS = 2000
+_RACES_RUN = [0]                   # numbers each race's threads: a name is never reused
 _LONGEST_IDLE = [0]                # the longest run of idle turns seen (STATS)
 
 
@@ -303,10 +304,19 @@ class _Scheduler:
                 raise _Abandoned(me)
             self.state[me] = "run"
 
+    def _seen(self) -> dict:
+        """The state by the operations' own names (op-1, op-2), for the messages."""
+        return {self.short.get(n, n): s for n, s in self.state.items()}
+
     def run(self, ops: list) -> dict:
         results: dict = {}
+        # Each thread's name is unique to this race (op-1#7): a thread of an earlier race
+        # that never unwound, woken later, is never taken for one of this race's (_me).
+        _RACES_RUN[0] += 1
+        self.short = {f"{name}#{_RACES_RUN[0]}": name for name, _ in ops}
+        ops = [(f"{name}#{_RACES_RUN[0]}", name, fn) for name, fn in ops]
 
-        def body(name, fn):
+        def body(uid, name, fn):
             try:
                 self.point()
                 results[name] = (fn(), None)
@@ -314,13 +324,13 @@ class _Scheduler:
                 results[name] = (None, exc)
             finally:
                 with self.cv:
-                    self.state[name] = "done"
-                    if self.turn == name:
+                    self.state[uid] = "done"
+                    if self.turn == uid:
                         self.turn = None
                     self.cv.notify_all()
 
         with self.cv:
-            self.state.update({name: "start" for name, _ in ops})
+            self.state.update({uid: "start" for uid, _, _ in ops})
         threads = [threading.Thread(target=body, args=op, name=op[0], daemon=True) for op in ops]
         for th in threads:
             th.start()
@@ -334,7 +344,7 @@ class _Scheduler:
                     and (any(s == "wait" for s in self.state.values())
                          or all(s == "done" for s in self.state.values())), timeout=self.timeout)
                 if not ok:
-                    stuck = f"I11: operations stuck (deadlock?): {self.state}"
+                    stuck = f"I11: operations stuck (deadlock?): {self._seen()}"
                     break
                 ready = sorted(n for n, s in self.state.items() if s == "wait")
                 if not ready:
@@ -343,14 +353,14 @@ class _Scheduler:
                 self.turn, self.state[pick] = pick, "go"
                 self.cv.notify_all()
                 if not self.cv.wait_for(lambda: self.state[pick] in settled, timeout=self.timeout):
-                    stuck = f"I11: {pick} never came back: {self.state}"
+                    stuck = f"I11: {self.short[pick]} never came back: {self._seen()}"
                     break
                 if self.state[pick] == "wait" and self.retried.get(pick):
                     idle += 1
                     _LONGEST_IDLE[0] = max(_LONGEST_IDLE[0], idle)
                     if idle > self.idle_turns:
                         stuck = (f"I11: livelock (deadlock between driven locks?): {idle} turns "
-                                 f"in a row only found taken locks: {self.state}")
+                                 f"in a row only found taken locks: {self._seen()}")
                         break
                 else:
                     idle = 0
@@ -363,9 +373,20 @@ class _Scheduler:
             th.join(timeout=min(5, self.timeout))
         # A thread blocked out of the scheduler's sight doesn't unwind: whatever it holds
         # stays held, and whoever runs next must not wait behind it (the teardown, _race).
-        self.hung = [th.name for th in threads if th.is_alive()]
+        self.hung = [self.short[th.name] for th in threads if th.is_alive()]
+        if self.hung:
+            # It holds the real locks it took — objects of the process-wide registries, never
+            # reset between examples: Hypothesis replays one while shrinking, and its first
+            # write on that VM waited forever. Those that come next get registries of their
+            # own (the flock is no matter: a new example has a new home, new lock files).
+            _fresh_lock_registries()
         assert stuck is None, stuck + (f" — still running, never unwound: {self.hung}" if self.hung else "")
         return results
+
+
+def _fresh_lock_registries() -> None:
+    """New registries of in-process locks: nothing shared with a thread that never unwound."""
+    locks._VM_LOCKS, locks._QUARANTINE_LOCKS, locks._FILE_LOCKS = {}, {}, {}
 
 
 def _scheduled(real):

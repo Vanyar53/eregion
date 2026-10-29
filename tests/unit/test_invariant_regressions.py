@@ -1458,7 +1458,10 @@ def test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown(monkeyp
     """A race whose thread blocks out of the scheduler's sight while it holds a driven
     lock — web's: it never unwinds. I11 fails, and the teardown's recovery, which takes
     web's lock, used to wait behind it forever. The failure names the thread, and the
-    teardown skips the recovery behind it (I11 has failed already)."""
+    teardown skips the recovery behind it (I11 has failed already). The next example —
+    Hypothesis replays one while shrinking — then wrote on web behind the same lock, a
+    process-wide object: it gets registries of its own now, and the thread's name is
+    never one of a later race's."""
     import functools
     import threading
     from glorfindel import actions
@@ -1482,6 +1485,23 @@ def test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown(monkeyp
         th.start()
         th.join(10)
         assert done.is_set(), "the teardown waited behind the thread that never unwound"
+        # The next example: a new machine, a write on web, one call after the other.
+        m2, out = IsolationMachine(), {}
+        m2.build(_net(quarantine=True))
+        def write():
+            try:
+                out["isolate"] = m2.connector.isolate_vm(WEB1)
+            except BaseException as exc:
+                out["isolate"] = {"status": repr(exc)}
+        th = threading.Thread(target=write, daemon=True)
+        th.start()
+        th.join(10)
+        assert not th.is_alive(), "the next example's write on web waited behind the thread that never unwound"
+        assert out["isolate"]["status"] == "isolated", out
+        m2.teardown()
+        sched = test_invariants._Scheduler(0, timeout=0.5)
+        sched.run([("op-1", lambda: None)])
+        assert set(sched.state) != {"op-1"} and set(sched._seen()) == {"op-1"}, sched.state
     finally:
         gone.set()
         if not done.is_set():

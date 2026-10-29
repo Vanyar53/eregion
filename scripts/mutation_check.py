@@ -3351,6 +3351,13 @@ MUTANTS += [
 TESTS.update({"M1349": "tests/unit/test_invariant_regressions.py -k reverse_order",
               "M1440": "tests/unit/test_invariant_regressions.py -k out_of_sight_holding",
               "M1441": "tests/unit/test_workflows.py -k hang"})
+# U3F, second review: a thread that never unwound holds objects of the process-wide lock
+# registries — the next example (a replay while shrinking) waited behind them.
+MUTANTS += [
+    ("M1442", "a thread that never unwound keeps its locks for the next example: registries shared (U3F)",
+     INVARIANTS, "            _fresh_lock_registries()\n", "            pass\n"),
+]
+TESTS.update({"M1442": "tests/unit/test_invariant_regressions.py -k out_of_sight_holding"})
 # SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
 # or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
 NDS = "scripts/notify_discord.py"

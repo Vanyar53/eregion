@@ -4688,6 +4688,45 @@ TESTS["M1575"] = "tests/unit/test_glorfindel.py"
 TESTS.update({mid: "tests/unit/test_azure_roles.py" for mid in ("M1576", "M1577", "M1579")})
 TESTS["M1578"] = "tests/unit/test_makefile_bench.py"
 
+# I5Q (#327): the orphan sweep took off a deleted VM's deny that was the last thing keeping the
+# attacker out of the VM given its address and NSG — one of our rules, turned into an allow by
+# someone, let them past the perimeter block (I5, seed 101 at 500). Such a deny stays, said.
+# Measured by the sequences frozen in test_invariant_regressions.py, then the machine. M1730–M1733.
+RDR = "glorfindel/providers/azure/readers.py"
+_I5Q = ("tests/unit/test_invariant_regressions.py::test_the_sequence_the_machine_found_on_i5_after_an_address_reused "
+        "tests/unit/test_invariant_regressions.py::test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes "
+        "tests/unit/test_orphan_sweep.py::test_an_orphan_deny_behind_our_rule_turned_into_an_allow_stays")
+MUTANTS += [
+    ("M1730", "the orphan sweep reads no rule turned into an allow: the deny behind it taken off, the VM opened (I5Q)",
+     SWP, "        turned = _turned_allows(listing)      # our rules someone turned into an allow (I5Q)\n",
+     "        turned = []\n"),
+    ("M1731", "a turned rule counted on the other side only: the inbound deny behind an inbound allow taken off (I5Q)",
+     RDR, '            if governs and t_side == side and _takes_in(values, h["ip"]):\n',
+     '            if governs and t_side != side and _takes_in(values, h["ip"]):\n'),
+    ("M1732", "a turned rule aimed at `*` (the perimeter's) read as aimed at no one (I5Q)", RDR,
+     '        if v == "*":\n            return True\n', '        if v == "*":\n            continue\n'),
+    ("M1733", "a turned rule on the subnet's NSG not counted: only the NIC's own NSG read (I5Q)", RDR,
+     '            governs = nic_nsg.get(nid) == nsg_key or bool(nic_subnets.get(nid, set()) & subnets)\n',
+     "            governs = nic_nsg.get(nid) == nsg_key\n"),
+]
+TESTS.update({mid: f"{_I5Q} {INVARIANTS}" for mid in ("M1730", "M1731", "M1732", "M1733")})
+# The same hole on a deleted VM's release (found by the machine once its composite rule was added,
+# seed 322 at 500: I4). M1734–M1736.
+_I5Q_REL = ("tests/unit/test_invariant_regressions.py::test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release "
+            "tests/unit/test_invariant_regressions.py::test_a_live_vms_release_is_not_held_by_its_own_turned_rule")
+MUTANTS += [
+    ("M1734", "a deleted VM's release takes its placements' denies off, a turned rule behind them: the new VM opened (I5Q)",
+     REL, '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))\n'
+          "                        or self._delete_rule(p_rg, p_name, name)\n",
+     "                        self._delete_rule(p_rg, p_name, name)\n"),
+    ("M1735", "a deleted VM's release, its state lost, takes its denies off everywhere, a turned rule behind (I5Q)",
+     REL, "                    if why := held_back(nsg, r):\n", "                    if False and (why := held_back(nsg, r)):\n"),
+    ("M1736", "a live VM's release held by its own turned rule: `release_partial` forever (I5Q)", RDR,
+     '               if ip in holders and holders[ip] != own.rstrip("/").lower()\n',
+     "               if ip in holders\n"),
+]
+TESTS.update({mid: f"{_I5Q_REL} {INVARIANTS}" for mid in ("M1734", "M1735", "M1736")})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

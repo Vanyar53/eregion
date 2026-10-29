@@ -3288,8 +3288,8 @@ MUTANTS += [
     ("M1323", "ssh-brute-force loses a line written before authentication ([preauth]) (SEC2)", RULES_YAML,
      r'port \d+( ssh2)?( \[preauth\])?\]?\s*$"', r'port \d+( ssh2)?\]?\s*$"'),
     ("M1324", "the investigation takes a user name holding « Accepted » for a login (SEC2)", "glorfindel/agent.py",
-     '| where SyslogMessage startswith "Accepted " and SyslogMessage has "{ip}"',
-     '| where SyslogMessage has "Accepted" and SyslogMessage has "{ip}"'),
+     '| where SyslogMessage startswith "Accepted " and SyslogMessage has {ip}',
+     '| where SyslogMessage has "Accepted" and SyslogMessage has {ip}'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_forged_logs.py" for n in range(1320, 1325)})
 
@@ -3529,7 +3529,7 @@ MUTANTS += [
     ("M1330", "an attack_started's poll takes a row naming another VM (SEC4a)", AGT,
      "match_row=lambda row: names_vm(row) is not False)", "match_row=None)"),
     ("M1331", "the runs/ channel admits an attack_started of any moment (SEC4a)", SIG,
-     '        why = attack_time_refusal(clean["raw_signal"]["attack_time"])\n', '        why = ""\n'),
+     '        why = attack_time_refusal(clean["raw_signal"]["attack_time"], now=now)\n', '        why = ""\n'),
     ("M1332", "resolve_attack_started searches from any moment (SEC4a)", AGT,
      '        refused = attack_time_refusal(raw.get("attack_time"))\n', '        refused = ""\n'),
     ("M1333", "an attack_time in the future admitted (SEC4a)", SIG,
@@ -3549,12 +3549,11 @@ MUTANTS += [
      '        s, ip_owners=getattr(connector, "private_ip_owners", None)))',
      "        s, ip_owners=None))"),
     ("M1338", "the floor ignores an isolation in place: « not isolated » on an isolated VM (SEC4a)", AGT,
-     '        if iso is not None and not iso.get("partial"):\n            return True, ""\n', ""),
+     '        if iso is not None and not incomplete:\n            return True, ""\n', ""),
     ("M1339", "the floor ignores the source already blocked (SEC4a)", AGT,
      '    if ip and ip in blocked:\n        return True, ""\n', ""),
     ("M1360", "a partial isolation read as contained by the floor (SEC4a)", AGT,
-     '        if iso is not None and not iso.get("partial"):\n',
-     "        if iso is not None:\n"),
+     '    if iso.get("partial"):\n        return "isolation partielle"\n', ""),
     ("M1361", "a confidence above 1 read as sent (SEC4a)", AGT,
      "        if raw_conf is not None and not 0.0 <= confidence <= 1.0:\n",
      "        if raw_conf is not None and not 0.0 <= confidence:\n"),
@@ -3573,6 +3572,138 @@ TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
               + [f"M{n}" for n in range(1360, 1365)]})
 TESTS["M1361"] = "tests/unit/test_dependency_failures.py"
 
+
+# SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values
+# in a query, the timeouts, the short names, the floor, the T1136 rule, the private IPs.
+KQL = "glorfindel/kql.py"
+AUD = "glorfindel/audit.py"
+MUTANTS += [
+    ("M1370", "the restore takes an attack_started of any VM (SEC4c)", SIG,
+     '            if adm.signal is None or adm.signal["resource_id"].rstrip("/").lower() != want:\n',
+     "            if adm.signal is None:\n"),
+    ("M1371", "the restore takes the LAST attack line: a later one moves the point past the attack (SEC4c)", SIG,
+     "            if best is None or float(at) < best[0]:\n", "            if best is None or float(at) > best[0]:\n"),
+    ("M1372", "the moment bounded around now only: a restore after 2 h never finds it (SEC4c)", SIG,
+     "            adm = admit(data, now=ref)\n", "            adm = admit(data)\n"),
+    ("M1373", "no moment known: the restore goes on, the newest point taken (SEC4c)", GCLI,
+     "        raise click.ClickException(why_before)\n", "        pass\n"),
+    ("M1374", "the provider takes the newest point without a moment (SEC4c)", RST,
+     "        if not before_attack_time:\n            raise RuntimeError(\n",
+     "        if False:\n            raise RuntimeError(\n"),
+    ("M1375", "a point taken after the attack is restored (SEC4c)", RST,
+     "            if _rp_time(rp) is not None and _rp_time(rp) < attack_dt\n",
+     "            if _rp_time(rp) is not None\n"),
+    ("M1376", "a quote in a value ends its KQL literal (SEC4c)", KQL,
+     "_QUOTE: _BACKSLASH + _QUOTE}", "_QUOTE: _QUOTE}"),
+    ("M1377", "a backslash in a value escapes the literal's closing quote (SEC4c)", KQL,
+     "{_BACKSLASH: _BACKSLASH * 2,", "{_BACKSLASH: _BACKSLASH,"),
+    ("M1378", "an address with a zone (anything after '%') taken as an address (SEC4c)", KQL,
+     '    if not text or "%" in text:\n', "    if not text:\n"),
+    ("M1379", "a query run with a value refused (SEC4c)", AGT,
+     "        if any(v is None for v in values.values()):\n", "        if False:\n"),
+    ("M1380", "the source address of a detection enters the query unchecked (SEC4c)", AGT,
+     "            ip=value(kql.ip, source_ip))\n", "            ip=kql.literal(str(source_ip)))\n"),
+    ("M1381", "the audit takes any text for a resource id (SEC4c)", AUD,
+     "        rid = kql.resource_id(resource_id)\n", "        rid = resource_id\n"),
+    ("M1382", "a REST call to the vault without a timeout: the command hangs (SEC4c)", SDK,
+     "        return requests.post(url, timeout=REST_TIMEOUT_S, **kw)\n", "        return requests.post(url, **kw)\n"),
+    ("M1383", "a short name resolved to the first VM of the local state (SEC4c)", GCLI,
+     '    for entry in (*active_isolations(), *active_blocks()):\n        add(entry.get("resource_id"))\n',
+     '    for entry in (*active_isolations(), *active_blocks()):\n        add(entry.get("resource_id"))\n'
+     "        if found:\n            return next(iter(found.values()))\n"),
+    ("M1384", "one VM whose id differs in case taken for two (SEC4c)", GCLI,
+     "            found.setdefault(key, rid)\n", "            found.setdefault(rid, rid)\n"),
+    ("M1385", "an isolation being lifted read as contained by the floor (SEC4c)", AGT,
+     "    if iso.get(\"releasing_at\"):\n", "    if False:\n"),
+    ("M1386", "an isolation whose lifting failed read as contained by the floor (SEC4c)", AGT,
+     "    if iso.get(\"release_failed\"):\n", "    if False:\n"),
+    ("M1387", "the T1136 rule reads « new user » from any writer (SEC4c)", RUL,
+     '      | where ProcessName == "useradd"\n', ""),
+    ("M1388", "the watch lists the private IPs again for each attack_started line (SEC4c)", GCLI,
+     "                    resolved = resolve_attack_started(data, ip_owners=_ip_owners)\n",
+     "                    resolved = resolve_attack_started(\n"
+     "                        data, ip_owners=None if dry_run else AzureConnector(dry_run=False).private_ip_owners)\n"),
+    ("M1389", "the private IP map read again at each call (SEC4c)", DRU,
+     "            if at and time.time() - at < _IP_OWNERS_TTL_S:\n", "            if False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py" for n in range(1370, 1390)})
+
+# SEC4c, the correction (M1396–M1409): the restore asks its moment — console, bot, TUI —, a line
+# dated after the isolation, the moment around an isolation hours old, a file read from its end.
+RPL = "glorfindel/restore_plan.py"
+BOT = "glorfindel/bot.py"
+TUI = "glorfindel/tui.py"
+MUTANTS += [
+    ("M1396", "an attack line dated after the isolation taken for its moment (SEC4c)", SIG,
+     "            if isolated_at is not None and float(at) > isolated_at:\n                continue\n", ""),
+    ("M1397", "the moment bounded around now: a VM isolated hours ago never finds it (SEC4c)", RPL,
+     "    found = attack_moment(resource_id, runs_dir=runs_dir, isolated_at=isolated_at)\n",
+     "    found = attack_moment(resource_id, runs_dir=runs_dir)\n"),
+    ("M1398", "each runs/ file read whole, whatever its size (SEC4c)", SIG,
+     "            lines = _tail_lines(path)\n", '            lines = path.read_text(errors="replace").splitlines()\n'),
+    ("M1399", "the console restores without a moment (SEC4c)", CON,
+     '        return {"error": f"The moment to restore before is required: {exc}"}\n', '        before = ""\n'),
+    ("M1400", "the console runs the restore without --before (SEC4c)", CON,
+     "                [_bin(), *restore_plan.restore_args(resource_id, before)],\n",
+     '                [_bin(), "restore", resource_id, "--yes"],\n'),
+    ("M1401", "the console never reads the restore's return code: a refusal in silence (SEC4c)", CON,
+     "        error = (None if proc.returncode == 0 else\n", "        error = (None if True else\n"),
+    ("M1402", "the restore's field ignores the exercise's moment (SEC4c)", RPL,
+     '    if before:\n        return {"before": before, "source": "exercise", "why": why}\n', ""),
+    ("M1403", "the restore's field filled with the card's last detection, not its first (SEC4c)", RPL,
+     '    first = str((esc or {}).get("first_seen") or (esc or {}).get("timestamp") or "")\n',
+     '    first = str((esc or {}).get("timestamp") or "")\n'),
+    ("M1404", "the points shown include points taken after the moment (SEC4c)", RPL,
+     '              if datetime.fromisoformat(p["time"]) < limit]\n', "              if p]\n"),
+    ("M1405", "the bot acknowledges a card whose command was refused (SEC4c)", BOT,
+     "        if code != 0:\n", "        if False:\n"),
+    ("M1406", "the bot runs the restore without --before (SEC4c)", BOT,
+     '        args = restore_plan.restore_args(self.esc["resource_id"], self.before)\n',
+     '        args = ["restore", self.esc["resource_id"], "--yes"]\n'),
+    ("M1407", "the bot's restore form takes anyone's moment (SEC4c)", BOT,
+     '        return await _allowed(interaction, self.esc["id"])\n\n    async def on_submit',
+     "        return True\n\n    async def on_submit"),
+    ("M1408", "the TUI runs the restore without --before (SEC4c)", TUI,
+     "        return [restore_plan.restore_args(rid, before)] if _can_restore(esc) and before else []\n",
+     '        return [["restore", rid, "--yes"]] if _can_restore(esc) else []\n'),
+    ("M1409", "the TUI says a refused restore started (SEC4c)", TUI,
+     "            ok = proc.returncode == 0\n", "            ok = True\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py tests/unit/test_restore_moment.py tests/unit/test_console.py"
+              for n in range(1396, 1410)})
+
+# SEC4c, the second correction (M1460–M1469): one restore at a time per VM, a moment that is
+# one, the proposal never after the isolation, the restore's window its own, the failures kept.
+JOBS = "glorfindel/jobs.py"
+JSP = "eregion_console/static/glorfindel.js"
+MUTANTS += [
+    ("M1460", "a restore of a VM whose restore job is InProgress goes on (SEC4c)", JOBS,
+     '    if job and job.get("type") == "restore" and job.get("status") == "InProgress":\n', "    if False:\n"),
+    ("M1461", "two restores of one VM start together: no claim (SEC4c)", JOBS,
+     "            busy = restore_in_progress(self.vm_name)\n            if busy:\n                raise RestoreBusy(busy)\n", ""),
+    ("M1462", "the bot runs a second confirmation of one card (SEC4c)", BOT,
+     "        if esc_id in _RESTORING:\n", "        if False:\n"),
+    ("M1463", "a moment in the future taken: the newest point restored (SEC4c)", RPL,
+     "    if epoch > now + FUTURE_MARGIN_S:\n", "    if False:\n"),
+    ("M1464", "a year at the calendar's edge raises past every face: the TUI falls (SEC4c)", RPL,
+     '    except (ValueError, OverflowError, OSError):\n        raise ValueError(',
+     "    except ValueError:\n        raise ValueError("),
+    ("M1465", "the proposed moment falls after the isolation (SEC4c)", RPL,
+     "    if before and isolated_at is not None and isolated_at < datetime.fromisoformat(before).timestamp():\n",
+     "    if False:\n"),
+    ("M1466", "a point taken during the incident shown as any other (SEC4c)", RPL,
+     '        p["during_incident"] = (isolated_at is not None\n', '        p["during_incident"] = (False\n'),
+    ("M1467", "the restore's answer fills a window opened meanwhile (SEC4c)", JSP,
+     "  if (!_stillMine()) return;\n", ""),
+    ("M1468", "the restore failures kept without a bound (SEC4c)", CON,
+     '                      key=lambda kv: str(kv[1].get("at") or ""))[-_RESTORE_FAILURES_KEPT:]\n',
+     '                      key=lambda kv: str(kv[1].get("at") or ""))\n'),
+    ("M1469", "the failures of resolved cards kept forever (SEC4c)", CON,
+     "        kept = sorted(((k, v) for k, v in data.items() if k in pending),\n",
+     "        kept = sorted(((k, v) for k, v in data.items()),\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py tests/unit/test_restore_moment.py"
+              for n in range(1460, 1470)})
 
 # REL1 (#269): a release in two commands — the version's pull request (`make release`), then the
 # draft (`make release-draft`), seen on #agents and cleared when published. Measured by

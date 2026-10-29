@@ -215,6 +215,8 @@ def start_restore(
         "vault_rg": result.get("vault_rg") or vault_rg,
         "recovery_point": result.get("recovery_point"),
         "recovery_point_time": str(result.get("recovery_point_time", "")),
+        "recovery_point_vault_tier": bool(result.get("recovery_point_vault_tier")),
+        "before_attack_time": before_attack_time,
         "status": "InProgress",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": None,
@@ -225,3 +227,60 @@ def start_restore(
         "resource_id": resource_id,
     }))
     return job
+
+
+# ── One restore at a time per VM (SEC4c) ───────────────────────────────────────
+# Two restores of one VM — two forms in Discord, a double click, two tabs of the console, the
+# TUI — would each deallocate it and swap its disks. A restore claims the VM before it starts
+# (a file, under a file lock), holds the claim while it runs, and is refused while another one
+# claims it or its job is still InProgress.
+_CLAIM_MAX_AGE_S = 2 * 3600       # a claim left by a process that died stops holding the VM
+
+
+class RestoreBusy(RuntimeError):
+    """Another restore of this VM is in progress."""
+
+
+def restore_in_progress(vm_name: str) -> str:
+    """Why a restore of `vm_name` is in progress, or ""."""
+    import time
+    try:
+        job = get_job(vm_name)
+    except (OSError, ValueError):
+        job = None
+    if job and job.get("type") == "restore" and job.get("status") == "InProgress":
+        return (f"un restore de {vm_name} est en cours (job {job.get('restore_job_name') or job.get('job_id')}, "
+                f"lancé le {job.get('started_at', '?')}) — `glorfindel jobs {vm_name} --refresh`")
+    claim = _JOBS_DIR / f"{vm_name}.restore-claim"
+    try:
+        age = time.time() - claim.stat().st_mtime
+    except OSError:
+        return ""
+    if age < _CLAIM_MAX_AGE_S:
+        return f"un restore de {vm_name} est en train de partir (depuis {int(age)} s)"
+    return ""
+
+
+class restore_claim:
+    """`with restore_claim(vm):` — the VM claimed for one restore, or RestoreBusy."""
+
+    def __init__(self, vm_name: str) -> None:
+        self.vm_name = vm_name
+        self.path = _JOBS_DIR / f"{vm_name}.restore-claim"
+
+    def __enter__(self):
+        from glorfindel.response.locks import _file_lock
+        _JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        with _file_lock(_JOBS_DIR / f"{self.vm_name}.restore.lock"):
+            busy = restore_in_progress(self.vm_name)
+            if busy:
+                raise RestoreBusy(busy)
+            _atomic_write(self.path, _now())
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+        return False

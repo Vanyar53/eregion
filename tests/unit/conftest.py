@@ -329,6 +329,7 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     try:
         import eregion_console.api as api
         monkeypatch.setattr(api, "_RESTORE_TRACKING", home / "restore_in_progress.json")
+        monkeypatch.setattr(api, "_RESTORE_FAILURES", home / "restore_failures.json")  # SEC4c
     except ImportError:  # war-room extra not installed
         pass
 

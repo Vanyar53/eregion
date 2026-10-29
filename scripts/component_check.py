@@ -75,7 +75,8 @@ COMPONENTS: dict[str, Component] = {
         tests=(
             "test_actions_split.py", "test_agent_nodes.py", "test_audit.py", "test_aws_adapter.py",
             "test_bot.py", "test_chat_escaping.py", "test_cli.py", "test_config.py", "test_detection_authoring.py",
-            "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_forged_logs.py",
+            "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_entries_calls.py",
+            "test_forged_logs.py",
             "test_glorfindel.py",
             "test_invariant_regressions.py", "test_invariants.py", "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",
@@ -109,6 +110,7 @@ TOGETHER = (
     "test_activity_logs.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
+    "test_restore_moment.py",
     "test_signal_origin.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
     "test_docs_budget.py", "test_exercise.py", "test_githooks.py", "test_exercise_guard.py",

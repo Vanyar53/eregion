@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from eregion_core.models import glorfindel_model
 
+import contextlib
 import json
 import os
 import sys
@@ -109,6 +110,20 @@ def _read_new_signals(path: Path, offset: int, on_error) -> tuple[list, int]:
     return out, offset
 
 
+def _shared_private_ips():
+    """The watch's one private IP → VM map (detection_rules.IpOwners): the connector made
+    at its first read, the listing cached 5 min."""
+    from glorfindel.detection_rules import IpOwners
+    made: list = []
+
+    def listing() -> dict:
+        if not made:
+            from glorfindel.actions import AzureConnector
+            made.append(AzureConnector(dry_run=False))
+        return made[0].private_ip_owners()
+    return IpOwners(listing)
+
+
 def _find_rules_file() -> str | None:
     """Look for detection_rules.yaml in canonical locations."""
     for candidate in (
@@ -128,28 +143,36 @@ def _resolve_resource_id(arg: str) -> str:
     ("Nothing to reset" on a VM that IS blocked) or crashes in _parse_vm_resource_id.
     Resolve via the active isolation/block state, then the discovered VMs (`audit
     vm-celebrimbor-bree` answered « not found in ? », 16/10). Two VMs of that name in two
-    resource groups → refused, never the first one (third review, T1). A full id (contains
-    '/') or an unknown name is returned unchanged — the command then reports 'nothing to
-    do' rather than crash on an unresolvable name.
+    resource groups → refused, never the first one (third review, T1) — the state and the
+    discovery together (SEC4c): one isolated, the other blocked, is two VMs too. A full id
+    (contains '/') or an unknown name is returned unchanged — the command then reports
+    'nothing to do' rather than crash on an unresolvable name.
     """
     if "/" in arg:
         return arg
     from glorfindel.actions import active_blocks, active_isolations
     target = arg.lower()
+    found: dict[str, str] = {}             # one entry per VM: ids differ in case only
+
+    def add(rid) -> None:
+        rid = str(rid or "")
+        key = rid.rstrip("/").lower()
+        if key and key.rsplit("/", 1)[-1] == target:
+            found.setdefault(key, rid)
+
     for entry in (*active_isolations(), *active_blocks()):
-        rid = entry.get("resource_id", "")
-        if rid and rid.rsplit("/", 1)[-1].lower() == target:
-            return rid
+        add(entry.get("resource_id"))
     try:
         from glorfindel.discovery import AssetRegistry
-        found = sorted({a.resource_id for a in AssetRegistry().all()
-                        if a.resource_id and a.resource_id.rsplit("/", 1)[-1].lower() == target})
+        for a in AssetRegistry().all():
+            add(a.resource_id)
     except Exception:  # an unreadable cache must not break a command
-        found = []
+        pass
     if len(found) > 1:
         raise click.ClickException(
-            f"{arg}: several VMs have this name — pass the full id:\n  " + "\n  ".join(found))
-    return found[0] if found else arg
+            f"{arg}: several VMs have this name — pass the full id:\n  "
+            + "\n  ".join(sorted(found.values())))
+    return next(iter(found.values()), arg)
 
 
 class _GlorfindelCli(click.Group):
@@ -587,6 +610,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             t.start()
         return _resource_queues[key]
 
+    # Private IP → VM: one Azure listing, cached 5 min, read by the RulePoller and by every
+    # attack_started line alike (SEC4c) — a line used to list them all again.
+    _ip_owners = None if dry_run else _shared_private_ips()
+
     def _dispatch(data: dict, sig: Signal) -> None:
         """Route signal to its resource worker queue.
 
@@ -611,10 +638,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     console.print(f"  Event    : attack_started → polling {src}...\n")
                 try:
                     # The row is read as the RulePoller reads it, the private IPs included
-                    # (SEC4a): one Azure listing for this attack.
-                    from glorfindel.actions import AzureConnector as _Conn
-                    owners = None if dry_run else _Conn(dry_run=False).private_ip_owners
-                    resolved = resolve_attack_started(data, ip_owners=owners)
+                    # (SEC4a), from the listing it reads too (SEC4c).
+                    resolved = resolve_attack_started(data, ip_owners=_ip_owners)
                 except Exception as exc:
                     # A persistent backend failure raises (detectors no longer swallow
                     # it). This thread used to die with it: the attack was never
@@ -839,9 +864,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     })
                     _dispatch(signal_data, sig)
 
-                # Private IP → VM (one Azure call, cached 5 min): routes a row made
-                # FROM a VM (T1041 storage calls) to that VM.
-                _ip_owners = None if dry_run else AzureConnector(dry_run=False).private_ip_owners
+                # Private IP → VM (the shared listing, above): routes a row made FROM a
+                # VM (T1041 storage calls) to that VM.
                 _rule_poller = RulePoller(rules, _rule_dispatch, dry_run=dry_run, ip_owners=_ip_owners)
                 _rule_poller.start()
 
@@ -1130,8 +1154,9 @@ def jobs(resource_id: str, refresh: bool):
               help="Skip recovery_complete signal — VM stays isolated after restore. "
                    "Also honoured via GLORFINDEL_KEEP_ISOLATED=1.")
 @click.option("--before", default=None, metavar="ISO8601",
-              help="Select recovery point before this timestamp (ISO8601). "
-                   "Prevents restoring a backup taken after the attack. "
+              help="Restore the newest recovery point before this moment (ISO8601, UTC "
+                   "when no offset): when the attack began. Without it, read from the "
+                   "attack_started of THIS VM in runs/; unknown → the command asks for it. "
                    "Example: 2026-05-24T13:44:00+00:00")
 @click.option("--model", default=lambda: glorfindel_model(), show_default=True)
 @click.option("--memory-path", default=None)
@@ -1144,10 +1169,12 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     with 'az vm start' and then run 'glorfindel release'. Use --wait for the
     old blocking behavior that handles post-restore steps automatically.
 
-    Use --before <ISO8601> to ensure the recovery point predates the attack.
+    The recovery point is the newest one before the attack began (SEC4c): --before, or
+    the attack_started of this VM in runs/; never the newest point when neither says when.
     """
     from glorfindel.actions import AzureConnector
 
+    resource_id = _resolve_resource_id(resource_id)
     connector = AzureConnector(dry_run=dry_run)
 
     # Resolve vault + staging storage from glorfindel-config.yaml (source of truth,
@@ -1158,23 +1185,34 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     console.rule("[bold yellow]Glorfindel — Restore from Backup[/bold yellow]")
     console.print(f"  Resource : {resource_id}")
     console.print(f"  Vault    : {vault}")
+    before, why_before = _restore_before(resource_id, before)
     if before:
-        console.print(f"  Before   : {before}")
+        console.print(f"  Before   : {before}  [dim]({_esc_markup(why_before)})[/dim]")
+        from glorfindel.restore_plan import moment_warning
+        warning = moment_warning(resource_id, before)
+        if warning:
+            console.print(f"  [yellow]⚠ {_esc_markup(warning)}[/yellow]")
     console.print(f"  Dry-run  : {dry_run}")
     console.print(f"  Wait     : {wait}\n")
+
+    if not before:
+        # Never the newest point by default: it may have been taken after the attack.
+        if dry_run:
+            console.print(f"[yellow]{_esc_markup(why_before)}[/yellow]")
+            console.print("[yellow]DRY RUN — no changes made.[/yellow]")
+            return
+        raise click.ClickException(why_before)
+
+    # One restore at a time per VM (SEC4c): another one running, or about to, refuses this one.
+    from glorfindel.jobs import restore_in_progress
+    busy = restore_in_progress(resource_id.rstrip("/").split("/")[-1])
+    if busy and not dry_run:
+        raise click.ClickException(f"Restore refusé : {busy}.")
 
     if not dry_run and not yes:
         if not click.confirm("Trigger Azure Backup restore on this VM?", default=False):
             console.print("Aborted.")
             return
-
-    if not before and not dry_run:
-        before = _find_last_attack_time()
-        if before:
-            console.print(f"  [dim]Auto-detected attack time: {before} (from last attack_started signal)[/dim]")
-        else:
-            console.print("  [yellow]Warning: --before not set and no attack_started signal found in runs/. "
-                          "May restore a post-attack backup.[/yellow]")
 
     if dry_run:
         console.print("[yellow]DRY RUN — no changes made.[/yellow]")
@@ -1183,12 +1221,14 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     if not wait:
         from glorfindel.jobs import start_restore
         console.print("[cyan]->[/cyan] Triggering restore (fire-and-forget — VM deallocation ~1-2 min)...")
-        job = start_restore(resource_id, connector, vault, before,
-                            staging_storage=staging_storage, vault_rg=vault_rg)
+        with _restore_claimed(resource_id):
+            job = start_restore(resource_id, connector, vault, before,
+                                staging_storage=staging_storage, vault_rg=vault_rg)
         console.print("[green]✓ Restore job started.[/green]")
         console.print(f"  job_id  : [dim]{job['job_id']}[/dim]")
         console.print(f"  azure_job: [dim]{job.get('restore_job_name', '?')}[/dim]")
         console.print(f"  RP      : [dim]{job.get('recovery_point_time', '?')}[/dim]")
+        _say_recovery_point(job, before, why_before)
         console.print(f"\n[dim]Check status : glorfindel jobs {resource_id} --refresh[/dim]")
         console.print("[dim]When Completed: az vm start + glorfindel release (or the console)[/dim]")
         _record_manual_action("restore", resource_id, {"status": "InProgress", "job": job.get("restore_job_name")})
@@ -1197,12 +1237,14 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     import time as _time
     console.print("[cyan]->[/cyan] Triggering restore (blocking ~15-30 min)...")
     t0 = _time.time()
-    result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True,
-                                           staging_storage=staging_storage, vault_rg=vault_rg)
+    with _restore_claimed(resource_id):
+        result = connector.restore_from_backup(resource_id, vault=vault, before_attack_time=before, wait=True,
+                                               staging_storage=staging_storage, vault_rg=vault_rg)
     rto_s = round(_time.time() - t0)
 
     restore_label = f"{rto_s // 60}min {rto_s % 60}s"
     console.print(f"[green]✓ Restore complete.[/green]  restore_time: {restore_label}  RP: {result.get('recovery_point_time')}")
+    _say_recovery_point(result, before, why_before)
     if result.get("run_command_neutralized") is True:
         console.print("[dim]✓ Run Command neutralisée avant le restore (pas de rejeu de la "
                       "dernière commande au démarrage).[/dim]")
@@ -1295,6 +1337,16 @@ def _render_escalation(e: dict) -> None:
 
 
 
+def _card_moment(e: dict) -> str:
+    """The card's first detection (UTC), the moment a restore's --before starts from: the
+    attack began before it (SEC4c)."""
+    from glorfindel.restore_plan import parse_moment
+    try:
+        return parse_moment(str(e.get("first_seen") or e.get("timestamp") or ""))
+    except ValueError:
+        return "<ISO8601>"
+
+
 def _render_next_steps(e: dict) -> None:
     rid = e["resource_id"]
     action = e["action"]
@@ -1311,12 +1363,14 @@ def _render_next_steps(e: dict) -> None:
     if esc_type == "low_confidence" and action == "snapshot":
         steps = [
             f"Check VM state: az vm show -g <rg> -n {rid.split('/')[-1]} --query powerState",
-            f"If compromise confirmed: glorfindel restore {rid} --yes",
+            f"If compromise confirmed: glorfindel restore {rid} --yes --before {_card_moment(e)}"
+            "   # un instant avant le début de l'attaque",
             f"If false positive: glorfindel ack {e['id']}",
         ]
     elif action == "restore_from_backup":
         steps = [
-            f"glorfindel restore {rid} --yes",
+            f"glorfindel restore {rid} --yes --before {_card_moment(e)}"
+            "   # un instant avant le début de l'attaque",
             "Glorfindel releases isolation automatically after restore (~20 min)",
         ]
     elif action == "release_isolation":
@@ -1843,24 +1897,53 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
     })
 
 
-def _find_last_attack_time() -> str | None:
-    """Extract attack_time from the most recent attack_started signal in runs/."""
-    from datetime import datetime, timezone
-    candidates = sorted(Path("runs").glob("*_signals.jsonl"), reverse=True)
-    for path in candidates:
+def _restore_before(resource_id: str, before: str | None) -> tuple[str, str]:
+    """(the moment the recovery point must precede, ISO 8601 UTC; why that one) — or
+    ("", what to do) when nothing says when the attack on this VM began (SEC4c).
+
+    --before wins (UTC when it has no offset). Otherwise the attack_started of THIS VM
+    that runs/ admits (glorfindel/restore_plan.py, signal_origin.attack_moment: the
+    channel's rules, the bounds of SEC4a around the VM's isolation and never after it, the
+    earliest line) — never the last line of any VM, from any writer."""
+    from glorfindel import restore_plan
+    if before:
         try:
-            for line in reversed(path.read_text().splitlines()):
-                if not line.strip():
-                    continue
-                sig = json.loads(line)
-                if sig.get("event") == "attack_started":
-                    attack_time = sig.get("raw_signal", {}).get("attack_time")
-                    if attack_time:
-                        dt = datetime.fromtimestamp(float(attack_time), tz=timezone.utc)
-                        return dt.isoformat()
-        except Exception:
-            continue
-    return None
+            return restore_plan.parse_moment(before), "--before"
+        except ValueError as exc:
+            raise click.ClickException(f"--before : {exc}")
+    found, why = restore_plan.exercise_moment(resource_id)
+    if found:
+        return found, why
+    _, isolated = restore_plan.isolation_time(resource_id)
+    hint = f" La VM est isolée depuis {isolated} : l'attaque a commencé avant." if isolated else ""
+    vm = resource_id.rstrip("/").split("/")[-1]
+    return "", (f"Moment de l'attaque inconnu pour {vm} : aucune ligne attack_started de "
+                "cette VM admise dans runs/ (au plus 2 h avant son isolation, ou avant "
+                "maintenant). Le point le plus récent peut être postérieur à l'attaque : "
+                "passer --before <ISO8601>, un instant avant son début." + hint)
+
+
+@contextlib.contextmanager
+def _restore_claimed(resource_id: str):
+    """The VM claimed for this restore while it starts (glorfindel/jobs.py, SEC4c), or the
+    command refused: another restore of it is running or about to."""
+    from glorfindel.jobs import RestoreBusy, restore_claim
+    claim = restore_claim(resource_id.rstrip("/").split("/")[-1])
+    try:
+        claim.__enter__()
+    except RestoreBusy as exc:
+        raise click.ClickException(f"Restore refusé : {exc}.")
+    try:
+        yield
+    finally:
+        claim.__exit__(None, None, None)
+
+
+def _say_recovery_point(result: dict, before: str, why: str) -> None:
+    """The point chosen, and why that one."""
+    tier = " (niveau coffre, immuable)" if result.get("recovery_point_vault_tier") else ""
+    console.print(f"  Point de restauration : {_esc_markup(str(result.get('recovery_point_time') or '?'))}"
+                  f"{tier} — le plus récent avant {before} ({_esc_markup(why)})")
 
 
 def _write_signal(signal: dict) -> Path:

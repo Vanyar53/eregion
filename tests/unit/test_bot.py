@@ -417,6 +417,7 @@ class _Click:
         self.user, self.client, self.data = user, _Client(policy), {"custom_id": custom_id}
         self.ephemeral, self.edits, self.sent = [], [], []
         self.card_edits, self.posted = [], []        # the card's message, the thread
+        self.modals = []                             # a form the click opens (the restore, SEC4c)
 
         class _Message:
             async def edit(self, **kw):
@@ -437,6 +438,9 @@ class _Click:
 
             async def edit_message(self, **kw):
                 click.edits.append(kw)
+
+            async def send_modal(self, modal):
+                click.modals.append(modal)
 
             async def defer(self):
                 pass
@@ -527,23 +531,22 @@ def test_a_refused_restore_never_runs(monkeypatch):
     esc_id = escalations.record("rule-ransomware-0123abcd", VM, "restore_from_backup",
                                 "destructive_action", "restore needs a human")
     ran = []
-    monkeypatch.setattr(bot._ExecuteButton, "_run", lambda self: ran.append(self.cli_args) or "ok")
+    monkeypatch.setattr(bot, "_run_cli", lambda args: ran.append(args) or (0, "ok"))
     policy = bot.ButtonPolicy(users=frozenset({ALLOWED}))
 
     def restore(view):
-        return next(i for i in view.children if isinstance(i, bot._ExecuteButton))
+        return next(i for i in view.children if isinstance(i, bot._RestoreButton))
 
     click = _press(_stored(esc_id), _User(STRANGER), policy, restore)
     assert ran == [] and click.ephemeral and _stored(esc_id)["status"] == "pending"
-    assert click.card_edits == [] and click.posted == []
+    assert click.card_edits == [] and click.posted == [] and click.modals == []
 
-    # The witness: the same click by an allowed user runs the restore — so the refusal
-    # above is what stopped it, not the fake click.
+    # The witness: the same click by an allowed user opens the restore's form, which asks
+    # for the moment (SEC4c) — so the refusal above is what stopped it, not the fake click.
+    # Nothing runs, nothing is acknowledged, until the moment is confirmed.
     click = _press(_stored(esc_id), _User(ALLOWED), policy, restore)
-    assert ran == [["restore", VM, "--yes"]] and click.ephemeral == []
-    assert _stored(esc_id)["status"] != "pending"            # the card is resolved
-    assert click.card_edits and all(i.disabled for i in click.card_edits[0]["view"].children)
-    assert click.posted[-1] == "```\nok\n```"
+    assert len(click.modals) == 1 and click.ephemeral == [] and ran == []
+    assert _stored(esc_id)["status"] == "pending"
 
 
 def test_the_allowed_ids_come_from_the_environment(monkeypatch):

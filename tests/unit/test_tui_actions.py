@@ -50,9 +50,13 @@ def test_no_restore_nor_undo_on_an_anchored_card(esc_type):
 
 
 def test_restore_on_a_restore_card_only():
-    assert tui._commands("r", _card(action="restore_from_backup", escalation_type="destructive_action")) == [
-        ["restore", RID, "--yes"]]
-    assert tui._commands("r", _card(action="snapshot", escalation_type="low_confidence")) == []
+    # With the moment the operator gave, never without (SEC4c).
+    card = _card(action="restore_from_backup", escalation_type="destructive_action")
+    assert tui._commands("r", card, before="2026-10-29T07:00:00Z") == [
+        ["restore", RID, "--yes", "--before", "2026-10-29T07:00:00+00:00"]]
+    assert tui._commands("r", card) == []
+    assert tui._commands("r", _card(action="snapshot", escalation_type="low_confidence"),
+                         before="2026-10-29T07:00:00Z") == []
 
 
 def test_the_hint_offers_only_the_keys_that_act():

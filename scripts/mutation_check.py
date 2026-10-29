@@ -4219,6 +4219,45 @@ MUTANTS += [
 TESTS.update({mid: "tests/unit/test_notify_discord.py tests/unit/test_release.py"
               for mid in ("M1580", "M1581", "M1582", "M1583", "M1584")})
 
+# I5R (#311): a deny written again keeps its place or moves up, never down — the reassertion
+# put a perimeter block back at 220, under an allow at 210, and opened the VM (I5); and the
+# unblock of a deleted VM looks for the block its states name (the unblock's side of I7S).
+# Measured by the sequences frozen in test_invariant_regressions.py, then the machine. M1590–M1599.
+_I5R = "tests/unit/test_invariant_regressions.py::test_"
+_I5R_KEEP = (f"{_I5R}a_perimeter_block_put_back_keeps_its_place {_I5R}the_sequence_the_machine_found_on_i5 "
+             f"{_I5R}a_block_written_again_never_moves_down {_I5R}an_isolation_written_again_never_moves_down")
+MUTANTS += [
+    ("M1590", "a rule of ours keeps no smaller number: the first free one only, a split pair moves down (I5R)",
+     NSG, "        if (direction and isinstance(prio, int) and prio < out[direction]\n",
+     "        if (False and direction and isinstance(prio, int) and prio < out[direction]\n"),
+    ("M1591", "a rewrite counts its own numbers as taken: moved to the first free one, under an allow (I5R)",
+     NSG, '    own = {in_name.lower(): "inbound", out_name.lower(): "outbound"}\n', "    own = {}\n"),
+    ("M1592", "a perimeter block written again moves down (I5R)", "glorfindel/providers/azure/blocks.py",
+     '        priority = _pair_priorities(existing, rule_name, f"{rule_name}-out", 200, 10)\n',
+     '        priority = _pair_priorities(existing, "", "", 200, 10)\n'),
+    ("M1593", "a VM's block written again moves down (I5R)", "glorfindel/providers/azure/blocks.py",
+     "        priority = _pair_priorities(existing, *own, 200, 10, assigned.get(nsg_key, set()))\n",
+     '        priority = _pair_priorities(existing, "", "", 200, 10, assigned.get(nsg_key, set()))\n'),
+    ("M1594", "an isolation by rules written again moves down (I5R)", ISO,
+     "        priority = _pair_priorities(existing, *own, self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))\n",
+     '        priority = _pair_priorities(existing, "", "", self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))\n'),
+    ("M1595", "the unblock of a deleted VM looks nowhere: `not_found`, the block left (I5R, I7S's cause)", UNB,
+     "                return self._gone_vm_blocks(resource_id, vm_name, ip, entry)\n",
+     "                return [], []\n"),
+    ("M1596", "the unblock of a deleted VM forgets the NICs its isolation's state names (I5R)", UNB,
+     "        for record in (entry or {}, _load_isolation_state(resource_id) or {}):\n",
+     "        for record in (entry or {},):\n"),
+    ("M1597", "the unblock of a deleted VM takes the block of its old NIC, now on another VM (I5R)", UNB,
+     "                continue                          # on another VM now: its rules are its own\n",
+     "                pass\n"),
+    ("M1598", "the unblock of a deleted VM reads an unreadable state as nothing (I5R, SEC4b)", UNB,
+     "        bad = set(_state.unreadable_states())\n", "        bad = set()\n"),
+    ("M1599", "the unblock of a deleted VM leaves in silence the rules nothing names (I5R)", UNB,
+     "                elif name == mine or (name.startswith(", "                elif False and (name.startswith("),
+]
+TESTS.update({mid: f"{_I5R_KEEP} {INVARIANTS}" for mid in ("M1590", "M1591", "M1592", "M1593", "M1594")})
+TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k deleted_vm" for n in range(1595, 1600)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

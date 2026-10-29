@@ -11,6 +11,11 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
   - **Without the webhook, nothing changes**: the pull request and the publication stay in `#ci`, the draft has no card; a Discord error is one line, and the command or the job succeeds. `notify_discord.py check` names the new key.
   - Tests `tests/unit/test_notify_discord.py`, `tests/unit/test_release.py` (the fake `gh` moves a draft's URL at each edit), mutants M1540–M1549, M1580–M1584.
 
+### Fixed
+- **A reassertion no longer opens a VM: a rule written again keeps its place** (I5R, #311, 29/10; `docs/azure.md`, `docs/design/preuves.md`). Found by the invariant machine, present on 0.4.4. A VM blocked on its subnet (priority 200) and for itself (210); someone turned the VM's rule into an allow; the reassertion put the block back and rewrote the perimeter rule at the first free number, its own counted as taken — 220, under that allow: the attacker reached the VM on every port. A block or an isolation by rules written again now keeps each rule's number, or a smaller one in its direction, never a larger one. What the reassertion can't put back is said by its drift card, as before.
+- **The unblock of a deleted VM looks for its block** (I5R). The VM gone, `unblock` answered `not_found` without looking, and a block whose state entry was lost stayed on a shared NSG, cutting the attacker's address off the next VM given it. The rules named for the NICs the local state names are now looked for on every NSG of the subscription and removed, except on a NIC now attached to another VM; a rule named for that VM whose NIC nothing names is left and said (`unblock_partial`), as is a state that can't be read.
+  - Tests `tests/unit/test_invariant_regressions.py`; mutants M1590–M1599.
+
 ## [0.4.4] — 2026-10-29 — "held at the core"
 
 ### Security

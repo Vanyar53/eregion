@@ -1481,6 +1481,16 @@ machine ne débloque pas une VM supprimée : tests figés (`test_an_unblock_of_a
 M1595–M1599 attrapés ; ces tests mesurent aussi les mutants d'I7S (`-k deleted_vm`), 12/12
 attrapés.
 
+**Mesures d'I5R.** Invariants sur le code final, la règle composée comprise : 500 séquences sur
+les graines 1, 42, 203, 210, 322 et 777, puis 2 000 sur 42 et 322, verts (la 322 tombait sur I7
+avant I7S). Au même budget (60 séquences, deux tours), les 124 mutants des modules touchés
+(blocage, isolation, NSG, déblocage, levée, réaffirmation), ceux qu'I7S avait choisis et les
+siens, avant (`main` avec I7S) et après : 92 attrapés à chaque tour avant, 95 après. M03 suivait
+l'ancien texte de l'isolation (attrapé 2/2 une fois corrigé). Un seul a semblé perdu : M761 (une
+règle d'une carte vivante prise pour orpheline), 2/2 avant, 0/2 après. Remesuré sur six tours :
+5/6 avant, 2/6 après, 5/6 après sans la règle composée, qui dilue les tirages ; à 500 séquences,
+3/3 avant comme après. Aucun mutant n'est perdu au budget de la CI.
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

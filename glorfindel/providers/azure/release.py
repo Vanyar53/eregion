@@ -159,6 +159,7 @@ class ReleaseMixin:
                     # The state's original wins (None = the NIC had no NSG); the tag
                     # is read only when the state doesn't say. Unknown original, or
                     # an original that didn't come back → the NIC stays in quarantine.
+                    bare = False
                     try:
                         now = self._nic_nsg_id(p["nic_id"])
                         if now and not _same_id(now, p["nsg_id"]):
@@ -168,8 +169,22 @@ class ReleaseMixin:
                             # forever (L26).
                             self._forget_original(p, p["nic_id"])
                             continue
-                        original = (p["original_nsg_id"] if "original_nsg_id" in p
-                                    else self._original_from_tags(p, p["nic_id"]))
+                        bare = now is None
+                        try:
+                            original = (p["original_nsg_id"] if "original_nsg_id" in p
+                                        else self._original_from_tags(p, p["nic_id"]))
+                        except OriginalUnknown:
+                            if not bare:
+                                raise
+                            # Left bare by someone, its original unknown: it is not "in
+                            # quarantine", as the error said — the operator has to know
+                            # it carries no NSG at all (I3F, #287).
+                            tag = self._orig_tag(p["nic_id"])
+                            raise RuntimeError(
+                                f"NSG d'origine inconnu : ni l'état local ni le tag {tag} de "
+                                f"{p['nsg_name']} ne le disent. Poser sur la carte le NSG qu'elle "
+                                f"doit porter, ou le tag ({tag}=<id du NSG> ou "
+                                f"{tag}={self._NO_ORIGINAL}), puis relancer la levée")
                         if original is None and "original_nsg_id" in p:
                             original = self._tag_over_none(p, p["nic_id"])
                         if now is None:
@@ -192,8 +207,10 @@ class ReleaseMixin:
                         self._unquarantine(p["nic_id"], p, original)
                     except Exception as exc:
                         if not self._nic_gone(p["nic_id"]):
-                            failed.append(f'{p["nic_id"].split("/")[-1]}: NSG de quarantaine '
-                                          f"non détaché : {_first_line(exc)[:_ERR_MAX]}")
+                            what = ("carte sans NSG, NSG d'origine non remis" if bare
+                                    else "NSG de quarantaine non détaché")
+                            failed.append(f'{p["nic_id"].split("/")[-1]}: {what} : '
+                                          f"{_first_line(exc)[:_ERR_MAX]}")
                             remaining.append(p)
                     continue
                 p_rg, p_name = p["nsg_rg"], p["nsg_name"]

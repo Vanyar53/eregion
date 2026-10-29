@@ -170,3 +170,62 @@ def test_concurrent_writers_lose_no_card_and_no_reader_sees_half_a_store(tmp_pat
     assert got["reads"] > 0
     assert {k: got[k] for k in ("lost", "duplicated", "resolve_lost", "verdict_lost", "bad")} == {
         "lost": 0, "duplicated": 0, "resolve_lost": 0, "verdict_lost": 0, "bad": 0}, got
+
+
+_FILE_HOLDER = textwrap.dedent("""
+    import sys, time
+    from pathlib import Path
+    from glorfindel.response.locks import _file_lock
+    lock_file, ready, hold = Path(sys.argv[1]), Path(sys.argv[2]), float(sys.argv[3])
+    with _file_lock(lock_file):
+        ready.write_text("in")
+        time.sleep(hold)
+""")
+
+
+def test_the_store_lock_gives_up_within_its_timeout(tmp_path):
+    """`_file_lock(timeout=…)` (I3F, #292), what the invariant machine's scheduler takes it
+    with: behind another process's flock, or another thread of this one, it raises
+    TimeoutError within its bound and holds nothing — the lock is free again after."""
+    import threading
+    from glorfindel.response.locks import _file_lock
+    lock_file = tmp_path / "escalations.jsonl.lock"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    holder = subprocess.Popen([sys.executable, "-c", _FILE_HOLDER, str(lock_file),
+                               str(tmp_path / "ready"), "3"], env=env)
+    try:
+        deadline = time.monotonic() + 30
+        while not (tmp_path / "ready").exists():
+            assert time.monotonic() < deadline, "the holder never took the lock"
+            time.sleep(0.05)
+        for timeout in (0, 0.5):
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                with _file_lock(lock_file, timeout=timeout):
+                    pass
+            assert time.monotonic() - started < 2.5
+    finally:
+        holder.wait(timeout=60)
+    with _file_lock(lock_file, timeout=0):          # the other process gone: free, nothing held here
+        pass
+
+    taken, release = threading.Event(), threading.Event()
+
+    def hold():
+        with _file_lock(lock_file):
+            taken.set()
+            release.wait(10)
+
+    th = threading.Thread(target=hold)
+    th.start()
+    try:
+        assert taken.wait(10)
+        with pytest.raises(TimeoutError):
+            with _file_lock(lock_file, timeout=0):
+                pass
+    finally:
+        release.set()
+        th.join(10)
+    with _file_lock(lock_file, timeout=0):
+        with _file_lock(lock_file, timeout=0):      # re-entrant within a thread
+            pass

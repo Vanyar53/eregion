@@ -3353,6 +3353,17 @@ TESTS["M1351"] = "tests/unit/test_workflows.py -k fingerprint"
 TESTS.update({f"M{n}": "tests/unit/test_chat_escaping.py" for n in (1352, 1353, 1354)})
 
 
+# SEC5 (#276, V-35): the TUI's keys do what they say, on the cards the console allows.
+MUTANTS += [
+    ("M1266", "the TUI restores an anchored card (SEC5, V-35)", "glorfindel/tui.py",
+     '    return esc.get("action") == "restore_from_backup" and not _anchored(esc)',
+     '    return esc.get("action") == "restore_from_backup"'),
+    ("M1279", "the TUI's unblock runs a full reset (SEC5, V-35)", "glorfindel/tui.py",
+     '        return [["unblock", ip, rid, "--yes"] for ip in ips]', '        return [["reset", rid, "--yes"]]'),
+]
+TESTS.update({mid: "tests/unit/test_tui_actions.py" for mid in ("M1266", "M1279")})
+
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

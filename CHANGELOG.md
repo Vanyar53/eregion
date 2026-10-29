@@ -4,6 +4,12 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added
+- **A release in two commands** (REL1, #269; `docs/operations.md`, « Packaging et version »). `make release VERSION=X.Y.Z TITLE="…"` cuts `[Unreleased]` into `[X.Y.Z] — <date> — "<title>"` (an empty `[Unreleased]` kept above), bumps `pyproject.toml` and the README's status, and opens the pull request `chore/release-X.Y.Z`. It refuses a modified tree, a HEAD that is not an up-to-date `origin/main`, a version not greater than the current one, an empty `[Unreleased]`, and a branch or tag that exists. `make release-draft VERSION=X.Y.Z [NOTES=file]`, after the merge, creates the **draft** on `origin/main`'s full sha (which must hold the version), with the notes given or the CHANGELOG's section. It refuses a tag or a release that exists. **No path publishes**: publishing deploys H0, and Jonathan alone publishes. `DRY_RUN=1` shows everything and writes nothing. `scripts/release.py`, standard library only.
+  - **The draft seen on `#agents`**: a 🙋 line on the board, with a link to the draft (visible to the repository's members only), and a ping. Both are deleted when the release is published: `notify.yml` (`release: published`, with the new secret `EREGION_DISCORD_WEBHOOK_AGENTS`) finds their ids in an HTML comment of the draft's notes, and the local board asks GitHub as well. Without Discord's configuration, nothing is sent and the command succeeds (`docs/atelier-discord.md`).
+  - **One source of version**: `annatar.__version__` reads `pyproject.toml`; it no longer holds a copy.
+  - Tests `tests/unit/test_release.py` (a throwaway git repository, a fake `gh`, the fake Discord), mutants M1160–M1169.
+
 ### Security
 - **The decision facing a model, a memory or a line it did not expect** (SEC4a, #275, 28/10; `docs/glorfindel.md`, « gardes de `decide` », « Source d'un cycle », « Le canal runs/ »).
   - **The model's answer is read field by field, for its type.** An action that is not text, a confidence that is not a number of [0, 1] (a boolean, NaN, an infinity, 5.0: unknown, held by the confidence gate — no longer brought back into the range), steps that are not a list: the field is unreadable and the cycle escalates — it no longer raises. Only the decision schema's fields are kept from the answer. A property test over arbitrary JSON keeps it so.

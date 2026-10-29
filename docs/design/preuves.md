@@ -1460,8 +1460,9 @@ réaffirmation ne remet pas (la règle de la VM retournée), elle le dit : la ca
 les étapes ne se rencontraient presque jamais : la machine seule laissait M1590 et M1591 à 0/2 à
 500 séquences. Une règle composée (`block_turned_then_reasserted` : bloquer sur le subnet, pour
 la VM ou les deux, passer un de nos deny en allow — celui de la VM une fois sur deux —, puis
-réaffirmer hors faute, hors `human_only` plus souvent) les rend courantes : M1591 et M1592
-attrapés 2/3 à 500 séquences par la machine seule. M1590 (une paire séparée dont le numéro est
+réaffirmer hors faute, hors `human_only` plus souvent) rend M1592 courant : attrapé par la
+machine seule à 500 séquences (2/3, puis 2/2 à la relecture) ; M1591 rarement (2 sur 5 en
+cumulant les deux mesures), tenu surtout par les séquences figées. M1590 (une paire séparée dont le numéro est
 pris par une autre règle), M1593 et M1594 restent aux séquences figées : il y faut une règle
 d'autorisation posée entre nos deux numéros, que la machine ne pose pas.
 
@@ -1486,10 +1487,12 @@ les graines 1, 42, 203, 210, 322 et 777, puis 2 000 sur 42 et 322, verts (la 322
 avant I7S). Au même budget (60 séquences, deux tours), les 124 mutants des modules touchés
 (blocage, isolation, NSG, déblocage, levée, réaffirmation), ceux qu'I7S avait choisis et les
 siens, avant (`main` avec I7S) et après : 92 attrapés à chaque tour avant, 95 après. M03 suivait
-l'ancien texte de l'isolation (attrapé 2/2 une fois corrigé). Un seul a semblé perdu : M761 (une
-règle d'une carte vivante prise pour orpheline), 2/2 avant, 0/2 après. Remesuré sur six tours :
-5/6 avant, 2/6 après, 5/6 après sans la règle composée, qui dilue les tirages ; à 500 séquences,
-3/3 avant comme après. Aucun mutant n'est perdu au budget de la CI.
+l'ancien texte de l'isolation (attrapé 2/2 une fois corrigé). Deux ont semblé perdus, dilués par
+la règle composée. M761 (une règle d'une carte vivante prise pour orpheline) : 2/2 avant, 0/2
+après ; remesuré sur six tours, 5/6 avant, 2/6 après, 5/6 après sans la règle composée ; à 500
+séquences, 3/3 avant comme après. M831 (`nsg.py`, relevé à la relecture) : 3/3 puis 5/6 avant,
+0/1, 1/3 puis 1/6 après à 60 séquences ; à 500, 3/3 après (graines 11, 99, 1234). Aucun mutant
+n'est perdu au budget de la CI (500).
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

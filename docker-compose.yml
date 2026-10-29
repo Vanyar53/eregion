@@ -11,8 +11,8 @@
 # host.env poussé) pour remplacer les ${…} ci-dessous, et rien d'autre : un conteneur ne voit
 # que les variables de sa liste `environment`. Les blocs :
 #   env     : réglages sans secret, pour les trois ;
-#   azure   : le principal de service (vide sur H0 : l'identité managée) — watch, console
-#             (« Approve & execute ») et bot (boutons Restore / Revert) ;
+#   azure   : le principal de service de chacun (V-17, ci-dessous ; vide sur H0 : l'identité
+#             managée) — watch, console (« Approve & execute ») et bot (boutons Restore / Revert) ;
 #   models  : les clés des modèles — la watch seule (décisions, rapport de campagne) ;
 #   webhook : son URL porte un jeton — watch et console (cartes enregistrées) ; avec elle,
 #             GLORFINDEL_DISCORD_BOT, "1" si DISCORD_BOT_TOKEN est posé, "" sinon (jamais sa
@@ -49,9 +49,29 @@ x-env: &env
   EREGION_ANALYSIS_TIMEOUT_S: ${EREGION_ANALYSIS_TIMEOUT_S:-}
   ORT_LOGGING_LEVEL_DEFAULT: "3"
 
+# V-17 (SEC7) : un principal par service, au moindre droit (docs/operations.md, « Identités Azure ») :
+#   la watch    GLORFINDEL_AZURE_CLIENT_*       lecture + le rôle de la réponse (isoler, lever,
+#                                               bloquer, instantané) — jamais le restore ;
+#   la console  EREGION_CONSOLE_AZURE_CLIENT_*  lecture + réponse + restore (ce qu'un humain approuve) ;
+#   le bot      GLORFINDEL_BOT_AZURE_CLIENT_*   lecture + réponse + restore (Restore, Revert).
+# Vide, chacun prend AZURE_CLIENT_* (le principal unique d'avant : rien ne casse). Sur H0, tout est
+# vide : l'identité managée de la VM, lectrice.
 x-azure: &azure
-  AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
-  AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+  AZURE_CLIENT_ID: ${GLORFINDEL_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
+  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}
+  AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+  # Les identités de la console et du bot (leurs ids, aucun secret) : leurs écritures dans le
+  # journal d'activité sont celles de Glorfindel (AL1).
+  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-}
+
+x-console-azure: &console-azure
+  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
+  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}
+  AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+
+x-bot-azure: &bot-azure
+  AZURE_CLIENT_ID: ${GLORFINDEL_BOT_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
+  AZURE_CLIENT_SECRET: ${GLORFINDEL_BOT_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}
   AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
 
 x-models: &models
@@ -67,8 +87,8 @@ x-webhook: &webhook
   GLORFINDEL_DISCORD_BOT: ${DISCORD_BOT_TOKEN:+1}
 
 # D1 : les injecteurs, Annatar et Gothmog (profils `annatar` et `gothmog`). Leur principal de
-# service est le leur, ANNATAR_AZURE_CLIENT_* (Contributor sur le banc), jamais celui de
-# Glorfindel ; vide, ils n'ont pas d'identité. Le contrat d'Orodruin (cap, portées des canaux,
+# service est le leur, ANNATAR_AZURE_CLIENT_* (sur un poste : lire, ils y restent passifs), jamais
+# celui de Glorfindel ; vide, ils n'ont pas d'identité. Le contrat d'Orodruin (cap, portées des canaux,
 # groupe du banc) : vide, le verdict est `passive` — un injecteur n'agit que depuis un Orodruin
 # armé (docs/design/orodruin-contract.md) ; ici, sur un poste : valider, lister, --dry-run,
 # `gothmog preflight`. Le canal retour : le battement de la watch hébergée (V1).
@@ -91,6 +111,13 @@ services:
     container_name: ${EREGION_INSTANCE:-eregion}-watch
     command: glorfindel watch /app/runs
     restart: unless-stopped
+    # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Elle
+    # n'écrit que dans ses montages (runs/, ~/.glorfindel, ~/.cache/chroma, ~/.eregion/analysis) et /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       <<: [*env, *azure, *models, *webhook]
     volumes:
@@ -129,8 +156,15 @@ services:
     command: glorfindel bot
     restart: unless-stopped
     profiles: ["bot"]
+    # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
+    # n'écrit que dans ses montages (runs/, ~/.glorfindel, ~/.cache/chroma) et /tmp ; la CLI qu'il lance aussi.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
-      <<: [*env, *azure]
+      <<: [*env, *bot-azure]
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_PING_ROLE: ${DISCORD_PING_ROLE:-}
       # M-3 : qui peut cliquer les boutons (ids Discord). Vides : tous refusent (fermé par défaut).
@@ -161,10 +195,18 @@ services:
     # reached under in EREGION_CONSOLE_HOSTS.
     command: eregion console --host 0.0.0.0 --port 7007
     restart: unless-stopped
+    # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Elle
+    # n'écrit que dans ses montages (runs/, ~/.glorfindel, ~/.cache/chroma, la config : réécrite sur
+    # place sous verrou, glorfindel/config.py) et /tmp ; la CLI qu'elle lance aussi.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     ports:
       - "127.0.0.1:${EREGION_CONSOLE_PORT:-7007}:7007"
     environment:
-      <<: [*env, *azure, *webhook]
+      <<: [*env, *console-azure, *webhook]
       # The console's token; its former name still works (H0's host.env has only that one):
       # the console takes EREGION_CONSOLE_TOKEN when it is not empty, else the former.
       EREGION_CONSOLE_TOKEN: ${EREGION_CONSOLE_TOKEN:-}
@@ -214,6 +256,13 @@ services:
     command: ["--help"]
     restart: "no"
     profiles: ["annatar"]
+    # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
+    # n'écrit que dans ses montages (runs/, ~/.annatar) et /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       <<: *injector
       # Le planificateur de campagne (`annatar campaign plan --llm`), comme sur Orodruin.
@@ -238,6 +287,13 @@ services:
     command: ["--help"]
     restart: "no"
     profiles: ["gothmog"]
+    # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
+    # n'écrit que dans runs/ et /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       <<: *injector
       EREGION_BENCH_WORKSPACE: ${EREGION_BENCH_WORKSPACE:-}

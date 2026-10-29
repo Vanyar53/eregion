@@ -3939,8 +3939,9 @@ MUTANTS += [
      '        Check("ni Glorfindel, ni la console, ni leurs dépendances (D1)",\n'
      '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n', ""),
     ("M1481", "the injectors' image no longer checked for root (CI1)", IMC,
-     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n        Check("pas root", ("python", "-c", NOT_ROOT)),\n',
-     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n        Check("pas root", ("python", "-c", NOT_ROOT)),\n'
+     '    )),\n}\n',
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n    )),\n}\n'),
     ("M1482", "Annatar and Gothmog no longer imported in their image (CI1)", IMC,
      '        Check("Annatar et Gothmog importent", ("python", "-c", f"import {INJECTOR_IMPORTS}")),\n', ""),
     ("M1483", "an unreadable diff skips the build: the job green on what it never built (CI1)", IMC,
@@ -3965,6 +3966,25 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1480, 1490)})
 TESTS["M1486"] = "tests/unit/test_workflows.py"
+# DEP1 (#282): litellm's call path proven in each image — a tool call answered by litellm's
+# mock, no network (1.106.0 imported, then failed on the call). M1610–M1614.
+MUTANTS += [
+    ("M1610", "the litellm check imports only: 1.106.0's call that fails unseen (DEP1)", IMC,
+     '    "import litellm\\n"\n', '    "import litellm\\nsys.exit(0)\\n"\n'),
+    ("M1611", "the litellm check passes an answer without its tool call (DEP1)", IMC,
+     "true}') else 1)", "true}') else 0)"),
+    ("M1612", "the litellm check fetches the cost map from the network (DEP1)", IMC,
+     '    "os.environ[\'LITELLM_LOCAL_MODEL_COST_MAP\'] = \'True\'\\n"\n', ""),
+    ("M1613", "Glorfindel's image no longer makes the litellm call: its lock unproven before the harness (DEP1)", IMC,
+     "              mounts=((REPO / EXAMPLE_CONFIG, CONFIG_IN_IMAGE),)),\n"
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n',
+     "              mounts=((REPO / EXAMPLE_CONFIG, CONFIG_IN_IMAGE),)),\n"),
+    ("M1614", "the injectors' image no longer makes the litellm call: the planner's lock unproven (DEP1)", IMC,
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n',
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1610, 1615)})
 
 
 # SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values

@@ -1196,11 +1196,12 @@ class IsolationMachine(RuleBasedStateMachine):
         perimeter = any(e.get("scoped") is False for vm in self.vms for e in actions._load_block_entries(vm))
         vanished = [vm for vm in self.live if self._block_vanished(vm)]
         cards_before = {e["id"] for e in escalations.pending()}
+        cut_before = {vm for vm in self.live if self._perimeter_cuts(vm)}
         report, err = self._run(fault, lambda: reassert.reassert_pass(self.connector, None))
         for r in report or []:
             _note(f"reassert ({_CURRENT.mode}): {r['outcome']}")
         if fault is None and err is None:
-            self._block_cards_true(cards_before)
+            self._block_cards_true(cards_before, cut_before)
             # Liveness: a block whose rules all vanished from Azure is put back, or told
             # about — not left gone in silence.
             told = {key(e.get("resource_id", "")) for e in escalations.pending()
@@ -1243,12 +1244,14 @@ class IsolationMachine(RuleBasedStateMachine):
             assert {k: n["nsg"] for k, n in self.fake.nics.items()} == nics_before
         self._config_honoured({k: v for k, v in nics_before.items() if v}, "the reassertion")
 
-    def _block_cards_true(self, cards_before: set):
+    def _block_cards_true(self, cards_before: set, cut_before: set):
         """I3 for what the reassertion's block cards say (RB1), on the cards this pass
         made: "reposé une fois" or "reste bloquée" means the attacker is cut off from the
         VM; "n'est plus bloquée" is never said of a VM our perimeter block, intact on the
-        subnet of each of its NICs, still cuts off on every port. Judged from the world,
-        never from the verification the code ran."""
+        subnet of each of its NICs, cuts off on every port — before the pass and after it
+        (`cut_before`: the same pass may put back, for another VM's entry, the perimeter
+        someone turned; said before that, the card was true). Judged from the world, never
+        from the verification the code ran."""
         for e in escalations.pending():
             if (e["id"] in cards_before or e.get("action") != "block_suspicious_ip"
                     or not (e.get("signal_id") or "").startswith("reassert-")):
@@ -1268,11 +1271,15 @@ class IsolationMachine(RuleBasedStateMachine):
                 assert not reached, (
                     f"I3: the reassertion said the block on {vm} holds ({reason[:100]}…), {ATTACKER} reaches it")
             if "n'est plus bloquée" in reason:
-                cuts = (self._behind_our_perimeter(vm) and not self._perimeter_only(vm)
-                        and self._perimeter_only(vm, keep=False))
-                assert not cuts, (
+                assert not (vm in cut_before and self._perimeter_cuts(vm)), (
                     f"I3: the reassertion said {ATTACKER} no longer blocked on {vm}; "
                     "our perimeter block still cuts it off")
+
+    def _perimeter_cuts(self, vm: str) -> bool:
+        """Our perimeter block, intact on the subnet of each of the VM's NICs, cuts the
+        attacker off alone — what nothing else of ours does."""
+        return bool(self._behind_our_perimeter(vm) and not self._perimeter_only(vm)
+                    and self._perimeter_only(vm, keep=False))
 
     def _perimeter_only(self, vm: str, keep: bool = True) -> frozenset:
         """The attacker's flows to the VM with none of Glorfindel's denies but the perimeter

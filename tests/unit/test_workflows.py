@@ -169,3 +169,20 @@ def test_what_counts_as_pinned(text, pinned):
 ])
 def test_what_counts_as_a_chosen_value(run, chosen):
     assert _chosen(run) is chosen
+
+
+# Workflows whose red run is not announced in #ci, with their reason. Notify itself; Roadmap is a
+# Discord job that stays green by design (N2: a Discord or GitHub error is one line in its log).
+NOT_ANNOUNCED = {"notify.yml": "the announcer itself", "roadmap.yml": "green by design, Discord's own job (N2)"}
+
+
+def test_every_workflow_a_push_a_pull_request_or_the_night_runs_is_announced_when_red():
+    """notify.yml's workflow_run lists by name every workflow a push, a pull request or a schedule
+    runs: one left out turns red unseen in #ci (CI1: Images)."""
+    listed = set(_load(ROOT / ".github" / "workflows" / "notify.yml")["on"]["workflow_run"]["workflows"])
+    docs = {p.name: _load(p) for p in WORKFLOWS}
+    due = {doc["name"] for name, doc in docs.items()
+           if _events(doc) & {"push", "pull_request", "schedule"} and name not in NOT_ANNOUNCED}
+    assert due - listed == set()
+    assert listed - {doc["name"] for doc in docs.values()} == set(), "a name listed that no workflow has"
+    assert set(NOT_ANNOUNCED) <= set(docs)

@@ -118,7 +118,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
-	team-check team-init team-start team-stop team-logs team-config components-check
+	team-check team-init team-start team-stop team-logs team-config components-check images-check
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -231,6 +231,7 @@ help:
 	@echo "  make team-start TEAM=<nom> [BOT=1]  Son Glorfindel, sa console sur son port ; team-stop, team-logs"
 	@echo "  make profiles-check         Chaque profil compose rend ses services (docker, rien ne démarre)"
 	@echo "  make components-check [COMPONENT=annatar]  Chaque composant tourne seul (ses tests, les autres absents)"
+	@echo "  make images-check           Les deux images construites et éprouvées comme en CI (eregion-*:ci, rien ne démarre)"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -856,6 +857,15 @@ profiles-check:
 	  && grep -q "AZURE_SUBSCRIPTION_ID: team-sub" "$$d/out" && ! grep -q "shell-sub" "$$d/out" && ok=1; rm -rf "$$d"; \
 	  if [ $$ok = 1 ]; then echo "  ✓ une instance par équipe : ses noms, son port, son abonnement — pas celui du shell"; \
 	  else echo "  ✗ l'instance d'une équipe ne prend pas son team.env seul"; exit 1; fi
+
+# CI1 (#267) : les deux images construites comme le job de CI (.github/workflows/images.yml) —
+# leur Dockerfile, le dépôt pour contexte, aucun build-arg, sans le cache de GitHub — puis
+# éprouvées dedans (scripts/image_check.py : --version, imports, config d'exemple sous A3), sans
+# réseau, rien ne démarre. Tags eregion-glorfindel:ci et eregion-annatar:ci : les images de
+# make build (:latest, UID/GID de l'opérateur) ne bougent pas.
+images-check:
+	python3 scripts/image_check.py glorfindel --build
+	python3 scripts/image_check.py annatar --build
 
 # Plusieurs équipes : une instance de Glorfindel par équipe, tout son état dans
 # ~/.eregion/teams/<équipe>/ — team.env, glorfindel-config.yaml, runs/, et le HOME que lit

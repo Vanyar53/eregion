@@ -3034,13 +3034,14 @@ MUTANTS += [
     ("M1009", "a new lock deployed without the harness: the guard never runs (H1)", CD,
      '    if dep_commit and git("diff", "--quiet", dep_commit, commit, "--", LOCK, check=False).returncode == 0:\n'
      "        return\n", "    return\n"),
-    ("M1010", "an attestation for another lock accepted (H1)", CD,
-     '    if att.get("lock_sha256") != hashlib.sha256(lock).hexdigest():', "    if False:"),
-    ("M1011", "an attestation for another model accepted: H0's own is never checked (H1)", CD,
-     '    entry = next((m for m in att.get("models") or [] if m.get("model") == model), None)',
-     '    entry = next(iter(att.get("models") or []), None)'),
-    ("M1012", "an attestation with overconfident errors accepted (H1)", CD,
-     '    if entry.get("overconfident_errors") != 0:', "    if False:"),
+    # M1010–M1012 follow the attestation of H3 (#324): two passes, judged case by case.
+    ("M1010", "an attestation for another lock accepted (H1, H3)", CD,
+     '    if cand.get("lock_sha256") != hashlib.sha256(shown.stdout.encode()).hexdigest():', "    if False:"),
+    ("M1011", "an attestation for another model accepted: H0's own is never checked (H1, H3)", CD,
+     '    entry = next((m for m in side.get("models") or [] if m.get("model") == model), None)',
+     '    entry = next(iter(side.get("models") or []), None)'),
+    ("M1012", "overconfident on every draw where the reference never was: accepted, the gate no longer stops them (H1, H3)",
+     CD, "    if every:\n", "    if False:\n"),
     ("M1013", "H0's config refused by A3 and the release switched to anyway: the watch exits 2 (H1)", CD,
      '        if res.returncode != 0:\n            raise Refused("préflight : la config de H0',
      '        if False:\n            raise Refused("préflight : la config de H0'),
@@ -3974,6 +3975,57 @@ MUTANTS += [
      "    if args.json:\n        import json\n        from pathlib import Path\n        Path(args.json)"),
 ]
 TESTS["M1617"] = _SMOKE_T
+# H3 (#324, M1670–M1689): the harness's attestation judged against the lock in service — two
+# passes, each case's draws (scripts/llm_smoke.py, scripts/harness_attest.py), and the CD's rule
+# (`attested`): only a regression refuses, what varies is said. M1010–M1012 retargeted above.
+_ATT = "scripts/harness_attest.py"
+MUTANTS += [
+    ("M1670", "an attestation of the old format (one pass, no reference) judged as the new one (H3)", CD,
+     '    if att.get("schema") != HARNESS_SCHEMA:\n', "    if False:\n"),
+    ("M1671", "the harness's pass drops each case's draws: the CD has totals only (H3)", "scripts/llm_smoke.py",
+     '"draws": [_draw(s) for s in c["slots"]]}', '"draws": []}'),
+    ("M1672", "a candidate whose model no longer calls the tool deployed (H3)", CD,
+     '    if parsed < slots or int(entry.get("integration") or 0) < int(entry.get("slots") or 0):\n',
+     "    if False:\n"),
+    ("M1673", "an attestation without a reference judged anyway (H3)", CD,
+     "    if not isinstance(ref, dict):\n        raise Refused(f\"l'attestation du harnais n'a pas de référence",
+     "    if False:\n        raise Refused(f\"l'attestation du harnais n'a pas de référence"),
+    ("M1674", "a reference on another lock than the one in service accepted (H3)", CD,
+     '    if running.returncode != 0 or ref.get("lock_sha256") != hashlib.sha256(running.stdout.encode()).hexdigest():\n',
+     "    if False:\n"),
+    ("M1675", "a net regression (right on every draw before, wrong on every draw now) deployed (H3)", CD,
+     "    if regressed:\n", "    if False:\n"),
+    ("M1676", "a case that varies on the candidate refused as a regression: the absolute rule again (H3)", CD,
+     "and not any(g for g, _a, _x in c[lb][1])]", "and not all(g for g, _a, _x in c[lb][1])]"),
+    ("M1677", "--attest without --reference runs the paid pass anyway (H3)", "scripts/llm_smoke.py",
+     "    if args.attest and not args.reference:\n", "    if False:\n"),
+    ("M1678", "new overconfidence on several cases deployed (H3)", CD,
+     "    if len(new_over) > NEW_OVERCONFIDENT_CASES:\n", "    if False:\n"),
+    ("M1679", "no overconfident draw tolerated: the noise of one lock against itself refused (H3)", CD,
+     "NEW_OVERCONFIDENT_CASES = 1\n", "NEW_OVERCONFIDENT_CASES = 0\n"),
+    ("M1680", "a decision steered by an injection or the memory, on the candidate only, deployed (H3)", CD,
+     "    if steered:\n", "    if False:\n"),
+    ("M1681", "a decision steered on both sides refused: noise taken for a regression (H3)", CD,
+     "               and all(g for g, _a, _x in r[lb][1])]\n", "               ]\n"),
+    ("M1682", "a pass of fewer than 3 runs accepted (H3)", CD,
+     "    if runs < HARNESS_MIN_RUNS:\n", "    if False:\n"),
+    ("M1683", "a reference that does not match (runs, model) found after the paid pass (H3)", "scripts/llm_smoke.py",
+     '        if why:\n            print(f"→ {why} — nothing run")', '        if False:\n            print(f"→ {why} — nothing run")'),
+    ("M1684", "a pass on some kinds of case only (--kinds) accepted (H3)", CD,
+     '    if side.get("kinds") != "all":\n', "    if False:\n"),
+    ("M1685", "a case drawn fewer times than the runs accepted: an empty reference is right « on every draw » (H3)", CD,
+     '        if len(draws) != runs or str(c["label"]) in cases:\n', '        if str(c["label"]) in cases:\n'),
+    ("M1686", "what the harness did not prove never said on #deploy (H3)", CD,
+     '        if harness.get("orange"):', "        if False:"),
+    ("M1687", "a .venv that does not follow the lock attested under its sha256 (H3)", _ATT,
+     "        if have != pinned:\n", "        if False:\n"),
+    ("M1688", "a committed attestation on another lock passes the CI (H3, DEP1)", _SMOKE_T,
+     '    if cand.get("lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():\n', "    if False:\n"),
+    ("M1689", "a committed attestation without its reference passes the CI (H3, DEP1)", _SMOKE_T,
+     "    if not ref:\n        problems.append", "    if False:\n        problems.append"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1670, 1690)})
+TESTS.update({mid: _SMOKE_T for mid in ("M1671", "M1677", "M1683", "M1687", "M1688", "M1689")})
 
 
 # SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values

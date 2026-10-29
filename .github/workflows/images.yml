@@ -1,0 +1,87 @@
+name: Images
+
+# CI1 (#267): the images of Glorfindel and of the injectors (Annatar, Gothmog), built and proven
+# in the pull request — before, only H0's CD built Glorfindel's (a broken Dockerfile or lock
+# refused at its preflight, the release burnt) and the injectors' was built on the operator's
+# machine (make orodruin-push). Built with GitHub's cache, never pushed: no registry, no login,
+# no secret. Then, in the image, scripts/image_check.py: `--version`, the imports, the example
+# config under A3's strict reading — each a `docker run --network none`, nothing started
+# (docs/operations.md, « La CI des images »). Locally, the same build and checks: make images-check.
+#
+# Only when what goes into an image changes: its Dockerfile, the lock, pyproject.toml, the
+# packages and files it copies — tests/unit/test_image_check.py reads each Dockerfile's COPY and
+# fails when one is not below.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/images.yml"
+      - ".dockerignore"
+      - "glorfindel/**"
+      - "annatar/**"
+      - "gothmog/**"
+      - "eregion_core/**"
+      - "eregion_console/**"
+      - "analysis/**"
+      - "scripts/**"
+      - "requirements/**"
+      - "pyproject.toml"
+      - "technique_catalog.yaml"
+      - "glorfindel-config.yaml.example"
+      - "docker-compose.yml"
+  pull_request:
+    paths:   # the same list (tests/unit/test_image_check.py)
+      - ".github/workflows/images.yml"
+      - ".dockerignore"
+      - "glorfindel/**"
+      - "annatar/**"
+      - "gothmog/**"
+      - "eregion_core/**"
+      - "eregion_console/**"
+      - "analysis/**"
+      - "scripts/**"
+      - "requirements/**"
+      - "pyproject.toml"
+      - "technique_catalog.yaml"
+      - "glorfindel-config.yaml.example"
+      - "docker-compose.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: image (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    # A cold build takes a few minutes (docs/operations.md); bounded so a hung one cannot run six hours.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [glorfindel, annatar]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+
+      # BuildKit in a container: the driver that can read and write GitHub's cache.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
+
+      # The same build as `python3 scripts/image_check.py <image> --build` (make images-check):
+      # its Dockerfile, the repository as context, no build argument (the image's default
+      # UID/GID: nothing is mounted here). Loaded into the runner's docker, never pushed.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc   # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.image }}/Dockerfile
+          tags: eregion-${{ matrix.image }}:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: In the image (nothing started, no network, no secret)
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: python3 scripts/image_check.py "$IMAGE"

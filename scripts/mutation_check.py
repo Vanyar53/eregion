@@ -3462,6 +3462,42 @@ TESTS.update({mid: "tests/unit/test_unexpected_decision.py"
               + [f"M{n}" for n in range(1360, 1365)]})
 TESTS["M1361"] = "tests/unit/test_dependency_failures.py"
 
+# CI1 (#267): the images built and proven in CI — scripts/image_check.py and its workflow,
+# measured by tests/unit/test_image_check.py (a fake docker; the in-image code run here). M1140–M1149.
+IMC = "scripts/image_check.py"
+IMW = ".github/workflows/images.yml"
+MUTANTS += [
+    ("M1140", "the checks run with the network: a check reaching Azure or a registry goes unseen (CI1)", IMC,
+     '    argv = ["docker", "run", "--rm", "--network", "none"]\n', '    argv = ["docker", "run", "--rm"]\n'),
+    ("M1141", "a --version other than pyproject's passes: a stale package goes to H0 (CI1)", IMC,
+     "        if said != want:\n", "        if False:\n"),
+    ("M1142", "the config loaded without being opened: an absent example passes as an empty config (CI1)", IMC,
+     '               f"open({CONFIG_IN_IMAGE!r}).close(); load({CONFIG_IN_IMAGE!r})")\n',
+     '               f"load({CONFIG_IN_IMAGE!r})")\n'),
+    ("M1143", "the first failure stops the checks: the log hides what else is wrong (CI1)", IMC,
+     "            ok = False\n        else:\n", "            return False\n        else:\n"),
+    ("M1144", "the example config mounted read-write in the image (CI1)", IMC,
+     '        argv += ["-v", f"{host}:{inside}:ro"]\n', '        argv += ["-v", f"{host}:{inside}"]\n'),
+    ("M1145", "the absence check always passes: Glorfindel's code in the injectors' image unseen (D1, CI1)", IMC,
+     '          "sys.exit(1 if found else 0)\\n")\n', '          "sys.exit(0)\\n")\n'),
+    ("M1146", "the image pushed (CI1)", IMW, "          push: false\n", "          push: true\n"),
+    ("M1147", "a pull request changing the lock builds no image (CI1)", IMW,
+     '    paths:   # the same list (tests/unit/test_image_check.py)\n      - ".github/workflows/images.yml"\n'
+     '      - ".dockerignore"\n      - "glorfindel/**"\n      - "annatar/**"\n      - "gothmog/**"\n'
+     '      - "eregion_core/**"\n      - "eregion_console/**"\n      - "analysis/**"\n      - "scripts/**"\n'
+     '      - "requirements/**"\n',
+     '    paths:   # the same list (tests/unit/test_image_check.py)\n      - ".github/workflows/images.yml"\n'
+     '      - ".dockerignore"\n      - "glorfindel/**"\n      - "annatar/**"\n      - "gothmog/**"\n'
+     '      - "eregion_core/**"\n      - "eregion_console/**"\n      - "analysis/**"\n      - "scripts/**"\n'),
+    ("M1148", "the console's import left out: the CI passes an image the CD's preflight refuses (CI1)", IMC,
+     'GLORFINDEL_IMPORTS = "glorfindel.cli, glorfindel.bot, eregion_console.api"\n',
+     'GLORFINDEL_IMPORTS = "glorfindel.cli, glorfindel.bot"\n'),
+    ("M1149", "a failed check exits 0: the job green on a broken image (CI1)", IMC,
+     "        return 0 if check_image(args.name, image, runner) else 1\n",
+     "        check_image(args.name, image, runner)\n        return 0\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1140, 1150)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

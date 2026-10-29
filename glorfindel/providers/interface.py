@@ -198,6 +198,11 @@ class CloudConnector(ABC):
         """
         ...
 
+    def list_recovery_points(self, resource_id: str, vault: str = "", vault_rg: str = "") -> list[dict]:
+        """The VM's recovery points, read only (SEC4c): [{"name", "time" (ISO 8601 UTC),
+        "vault_tier"}], newest first. A provider that can't list them says so."""
+        raise NotImplementedError(f"{type(self).__name__}: no recovery points to list")
+
     @abstractmethod
     def verify_block_ip(self, ip: str, resource_id: str) -> dict:
         """Confirm that the deny rule for this IP is active on the NSG."""

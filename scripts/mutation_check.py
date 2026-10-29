@@ -3478,7 +3478,7 @@ MUTANTS += [
     ("M1386", "an isolation whose lifting failed read as contained by the floor (SEC4c)", AGT,
      "    if iso.get(\"release_failed\"):\n", "    if False:\n"),
     ("M1387", "the T1136 rule reads « new user » from any writer (SEC4c)", RUL,
-     '      | where ProcessName in ("useradd", "adduser")\n', ""),
+     '      | where ProcessName == "useradd"\n', ""),
     ("M1388", "the watch lists the private IPs again for each attack_started line (SEC4c)", GCLI,
      "                    resolved = resolve_attack_started(data, ip_owners=_ip_owners)\n",
      "                    resolved = resolve_attack_started(\n"
@@ -3487,6 +3487,50 @@ MUTANTS += [
      "            if at and time.time() - at < _IP_OWNERS_TTL_S:\n", "            if False:\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py" for n in range(1370, 1390)})
+
+# SEC4c, the correction (M1396–M1409): the restore asks its moment — console, bot, TUI —, a line
+# dated after the isolation, the moment around an isolation hours old, a file read from its end.
+RPL = "glorfindel/restore_plan.py"
+BOT = "glorfindel/bot.py"
+TUI = "glorfindel/tui.py"
+MUTANTS += [
+    ("M1396", "an attack line dated after the isolation taken for its moment (SEC4c)", SIG,
+     "            if isolated_at is not None and float(at) > isolated_at:\n                continue\n", ""),
+    ("M1397", "the moment bounded around now: a VM isolated hours ago never finds it (SEC4c)", RPL,
+     "    found = attack_moment(resource_id, runs_dir=runs_dir, isolated_at=isolated_at)\n",
+     "    found = attack_moment(resource_id, runs_dir=runs_dir)\n"),
+    ("M1398", "each runs/ file read whole, whatever its size (SEC4c)", SIG,
+     "            lines = _tail_lines(path)\n", '            lines = path.read_text(errors="replace").splitlines()\n'),
+    ("M1399", "the console restores without a moment (SEC4c)", CON,
+     '        return {"error": f"The moment to restore before is required: {exc}"}\n', '        before = ""\n'),
+    ("M1400", "the console runs the restore without --before (SEC4c)", CON,
+     "                [_bin(), *restore_plan.restore_args(resource_id, before)],\n",
+     '                [_bin(), "restore", resource_id, "--yes"],\n'),
+    ("M1401", "the console never reads the restore's return code: a refusal in silence (SEC4c)", CON,
+     "        error = (None if proc.returncode == 0 else\n", "        error = (None if True else\n"),
+    ("M1402", "the restore's field ignores the exercise's moment (SEC4c)", RPL,
+     '    if before:\n        return {"before": before, "source": "exercise", "why": why}\n', ""),
+    ("M1403", "the restore's field filled with the card's last detection, not its first (SEC4c)", RPL,
+     '    first = str((esc or {}).get("first_seen") or (esc or {}).get("timestamp") or "")\n',
+     '    first = str((esc or {}).get("timestamp") or "")\n'),
+    ("M1404", "the points shown include points taken after the moment (SEC4c)", RPL,
+     '              if datetime.fromisoformat(p["time"]) < limit]\n', "              if p]\n"),
+    ("M1405", "the bot acknowledges a card whose command was refused (SEC4c)", BOT,
+     "        if code != 0:\n", "        if False:\n"),
+    ("M1406", "the bot runs the restore without --before (SEC4c)", BOT,
+     '        args = restore_plan.restore_args(self.esc["resource_id"], self.before)\n',
+     '        args = ["restore", self.esc["resource_id"], "--yes"]\n'),
+    ("M1407", "the bot's restore form takes anyone's moment (SEC4c)", BOT,
+     '        return await _allowed(interaction, self.esc["id"])\n\n    async def on_submit',
+     "        return True\n\n    async def on_submit"),
+    ("M1408", "the TUI runs the restore without --before (SEC4c)", TUI,
+     '            proc = subprocess.run([_bin(), *restore_plan.restore_args(esc["resource_id"], before)],\n',
+     '            proc = subprocess.run([_bin(), "restore", esc["resource_id"], "--yes"],\n'),
+    ("M1409", "the TUI says a refused restore started (SEC4c)", TUI,
+     "            ok = proc.returncode == 0\n", "            ok = True\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_entries_calls.py tests/unit/test_restore_moment.py tests/unit/test_console.py"
+              for n in range(1396, 1410)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

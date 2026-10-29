@@ -1320,6 +1320,16 @@ def _render_escalation(e: dict) -> None:
 
 
 
+def _card_moment(e: dict) -> str:
+    """The card's first detection (UTC), the moment a restore's --before starts from: the
+    attack began before it (SEC4c)."""
+    from glorfindel.restore_plan import parse_moment
+    try:
+        return parse_moment(str(e.get("first_seen") or e.get("timestamp") or ""))
+    except ValueError:
+        return "<ISO8601>"
+
+
 def _render_next_steps(e: dict) -> None:
     rid = e["resource_id"]
     action = e["action"]
@@ -1336,12 +1346,14 @@ def _render_next_steps(e: dict) -> None:
     if esc_type == "low_confidence" and action == "snapshot":
         steps = [
             f"Check VM state: az vm show -g <rg> -n {rid.split('/')[-1]} --query powerState",
-            f"If compromise confirmed: glorfindel restore {rid} --yes",
+            f"If compromise confirmed: glorfindel restore {rid} --yes --before {_card_moment(e)}"
+            "   # un instant avant le début de l'attaque",
             f"If false positive: glorfindel ack {e['id']}",
         ]
     elif action == "restore_from_backup":
         steps = [
-            f"glorfindel restore {rid} --yes",
+            f"glorfindel restore {rid} --yes --before {_card_moment(e)}"
+            "   # un instant avant le début de l'attaque",
             "Glorfindel releases isolation automatically after restore (~20 min)",
         ]
     elif action == "release_isolation":
@@ -1873,37 +1885,20 @@ def _restore_before(resource_id: str, before: str | None) -> tuple[str, str]:
     ("", what to do) when nothing says when the attack on this VM began (SEC4c).
 
     --before wins (UTC when it has no offset). Otherwise the attack_started of THIS VM
-    that runs/ admits (signal_origin.attack_moment: the channel's rules, the bounds of
-    SEC4a around the VM's isolation, the earliest line) — never the last line of any VM,
-    from any writer."""
-    from datetime import datetime, timezone
+    that runs/ admits (glorfindel/restore_plan.py, signal_origin.attack_moment: the
+    channel's rules, the bounds of SEC4a around the VM's isolation and never after it, the
+    earliest line) — never the last line of any VM, from any writer."""
+    from glorfindel import restore_plan
     if before:
         try:
-            dt = datetime.fromisoformat(before.strip().replace("Z", "+00:00"))
-        except ValueError:
-            raise click.ClickException(
-                f"--before {before!r} : pas un instant ISO 8601 (ex. 2026-05-24T13:44:00+00:00)")
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc).isoformat(), "--before"
-    from glorfindel.actions import _load_isolation_state
-    from glorfindel.signal_origin import attack_moment
-    try:
-        iso = _load_isolation_state(resource_id) or {}
-    except Exception:
-        iso = {}
-    isolated_at = None
-    try:
-        isolated_at = datetime.fromisoformat(str(iso.get("isolated_at") or "")).timestamp()
-    except (TypeError, ValueError, OverflowError):
-        pass
-    found = attack_moment(resource_id, ref=isolated_at)
+            return restore_plan.parse_moment(before), "--before"
+        except ValueError as exc:
+            raise click.ClickException(f"--before : {exc}")
+    found, why = restore_plan.exercise_moment(resource_id)
     if found:
-        at, source = found
-        return (datetime.fromtimestamp(at, tz=timezone.utc).isoformat(),
-                f"début de l'attaque sur cette VM : attack_started de runs/{source}")
-    hint = (f" La VM est isolée depuis {iso['isolated_at']} : l'attaque a commencé avant."
-            if iso.get("isolated_at") else "")
+        return found, why
+    _, isolated = restore_plan.isolation_time(resource_id)
+    hint = f" La VM est isolée depuis {isolated} : l'attaque a commencé avant." if isolated else ""
     vm = resource_id.rstrip("/").split("/")[-1]
     return "", (f"Moment de l'attaque inconnu pour {vm} : aucune ligne attack_started de "
                 "cette VM admise dans runs/ (au plus 2 h avant son isolation, ou avant "

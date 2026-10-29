@@ -82,7 +82,8 @@ glorfindel pending --watch                   # alerting temps réel
 #   les deux → glorfindel reset (reset complet)
 #
 # Console :   ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux)
-# TUI :       x:release  u:unblock  v:reset  r:restore
+# TUI :       x:release  u:unblock  v:reset  r:restore (demande le moment, pré-rempli ; Entrée :
+#             les points d'avant, y : --before ; le refus reste à l'écran — SEC4c)
 #
 glorfindel release <resource_id> --yes       # lever isolation NSG (post-restore, VM de retour)
 glorfindel unblock <ip> <resource_id> --yes  # supprimer une règle block IP

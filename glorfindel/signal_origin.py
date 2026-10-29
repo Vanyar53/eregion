@@ -194,22 +194,44 @@ def write_recovery_signal(signal: dict) -> Path:
     return out
 
 
-def attack_moment(resource_id: str, runs_dir="runs", ref: float | None = None):
+# What attack_moment reads of each runs/*_signals.jsonl: its last MiB. An injector's file
+# holds one run (a few lines); a file grown past that — written by anyone — is read from
+# its end, never whole.
+MOMENT_TAIL_BYTES = 1 << 20
+
+
+def _tail_lines(path: Path, limit: int | None = None) -> list[str]:
+    """The lines of the last `limit` bytes of `path` (default MOMENT_TAIL_BYTES; a line cut
+    at the start dropped)."""
+    limit = MOMENT_TAIL_BYTES if limit is None else limit
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - limit))
+        data = f.read(limit)
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    return lines[1:] if size > limit else lines
+
+
+def attack_moment(resource_id: str, runs_dir="runs", isolated_at: float | None = None):
     """When the attack on `resource_id` began, as the runs/ channel admits it (SEC4c):
     `(epoch, file name)`, or None when nothing says so.
 
     Only an attack_started line `admit` takes, naming THIS VM (ids compared without case),
-    whose `attack_time` lies within the bounds of SEC4a around `ref` — the moment the VM was
-    isolated, when it is (the attack came before), else now. Of those, the earliest: a line
-    written later — by any writer of runs/ — can never move the moment past the first one,
-    so never toward a point taken after the attack. Never raises."""
+    whose `attack_time` lies within the bounds of SEC4a around the moment the VM was
+    isolated (`isolated_at`), else around now. An isolated VM's attack came before its
+    isolation: a line dated after it — the 5 min SEC4a allows ahead included — is never
+    taken. Of the lines left, the earliest: a line written later, by any writer of runs/,
+    never moves the moment past the first one, so never toward a point taken after the
+    attack — an earlier exercise's line can take it further back, the safe way. Each file
+    is read from its end (MOMENT_TAIL_BYTES). Never raises."""
     import json
     import time
 
     want = str(resource_id or "").rstrip("/").lower()
     if not want:
         return None
-    ref = time.time() if ref is None else ref
+    ref = time.time() if isolated_at is None else isolated_at
     best = None
     try:
         files = sorted(Path(runs_dir).glob("*_signals.jsonl"))
@@ -217,7 +239,7 @@ def attack_moment(resource_id: str, runs_dir="runs", ref: float | None = None):
         return None
     for path in files:
         try:
-            lines = path.read_text(errors="replace").splitlines()
+            lines = _tail_lines(path)
         except OSError:
             continue
         for line in lines:
@@ -232,6 +254,8 @@ def attack_moment(resource_id: str, runs_dir="runs", ref: float | None = None):
                 continue
             at = adm.signal["raw_signal"].get("attack_time")
             if at is None:
+                continue
+            if isolated_at is not None and float(at) > isolated_at:
                 continue
             if best is None or float(at) < best[0]:
                 best = (float(at), path.name)

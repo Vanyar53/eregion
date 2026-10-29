@@ -664,6 +664,7 @@ async def state() -> dict:
         "escalations": pending_escalations,
         "handled": handled,
         "restores": _active_restores(),
+        "restore_failures": _restore_failures(),
         "discovered_assets": discovered,
         "posture_gaps": posture_gaps,
         "active_jobs": _all_jobs(),
@@ -1405,7 +1406,7 @@ def _restore_refusal(esc_id: str, vm_name: str) -> tuple[str | None, str]:
     from the console is its card's (SEC1): pending, a restore, on this VM, and never an
     anchored one — as the page and the bot."""
     from glorfindel import escalations as _esc
-    cli = "glorfindel restore <resource_id> --yes"
+    cli = "glorfindel restore <resource_id> --yes --before <ISO8601>"
     if not esc_id:
         return f"A restore from the console goes through its card — else the CLI: {cli}", ""
     esc = next((e for e in _esc.pending() if e.get("id") == esc_id), None)
@@ -1422,16 +1423,51 @@ def _restore_refusal(esc_id: str, vm_name: str) -> tuple[str | None, str]:
     return None, rid
 
 
-@app.post("/api/action/restore/{vm_name}")
-async def action_restore(vm_name: str, body: dict) -> dict:
-    """Azure Backup restore of the VM of a restore card (`{"escalation": <id>}`), in the
-    background (`glorfindel restore`)."""
-    refusal, resource_id = _restore_refusal(str(body.get("escalation") or ""), vm_name)
+@app.get("/api/restore/plan/{vm_name}")
+async def restore_plan_view(vm_name: str, escalation: str = "", before: str = "") -> dict:
+    """What a card's restore asks (SEC4c), read only: the moment the field is filled with —
+    the exercise's attack_started for this VM, else the card's first detection — and the
+    recovery points from before the moment given (`before`, else that one)."""
+    from glorfindel import escalations as _esc
+    from glorfindel import restore_plan
+    refusal, resource_id = _restore_refusal(escalation, vm_name)
     if refusal:
         return {"error": refusal}
+    esc = next((e for e in _esc.pending() if e.get("id") == escalation), None)
+    proposed = restore_plan.proposed_moment(resource_id, esc)
+    try:
+        moment = restore_plan.parse_moment(before) if before else proposed["before"]
+    except ValueError as exc:
+        return {**proposed, "resource_id": resource_id, "error": str(exc)}
+    out = {**proposed, "resource_id": resource_id, "moment": moment, "points": [], "points_error": ""}
+    if not moment:
+        return out
+    loop = asyncio.get_running_loop()
+    try:
+        out["points"] = await loop.run_in_executor(
+            None, lambda: restore_plan.points_before(resource_id, moment))
+    except Exception as exc:  # unreadable vault: said, the restore stays possible
+        out["points_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    return out
+
+
+@app.post("/api/action/restore/{vm_name}")
+async def action_restore(vm_name: str, body: dict) -> dict:
+    """Azure Backup restore of the VM of a restore card (`{"escalation": <id>, "before":
+    <ISO 8601>}`), in the background (`glorfindel restore --before`). The moment is asked
+    (SEC4c): without it, refused — never the newest point."""
+    esc_id = str(body.get("escalation") or "")
+    refusal, resource_id = _restore_refusal(esc_id, vm_name)
+    if refusal:
+        return {"error": refusal}
+    from glorfindel import restore_plan
+    try:
+        before = restore_plan.parse_moment(body.get("before"))
+    except ValueError as exc:
+        return {"error": f"The moment to restore before is required: {exc}"}
     _restore_start(vm_name, resource_id)
-    asyncio.create_task(_bg_restore(resource_id, vm_name))
-    return {"status": "started", "resource_id": resource_id}
+    asyncio.create_task(_bg_restore(resource_id, vm_name, before, esc_id))
+    return {"status": "started", "resource_id": resource_id, "before": before}
 
 
 @app.post("/api/action/ack/{esc_id}")
@@ -1765,15 +1801,57 @@ def _active_restores() -> list[dict]:
         return []
 
 
-async def _bg_restore(resource_id: str, vm_name: str = "") -> None:
+# A card's restore the command refused or failed (SEC4c): the card says why, never silence.
+_RESTORE_FAILURES = Path.home() / ".glorfindel" / "restore_failures.json"
+
+
+def _restore_failures() -> dict[str, dict]:
+    """escalation id → {"vm_name", "error", "at"}."""
+    import json as _json
+    try:
+        data = _json.loads(_RESTORE_FAILURES.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _note_restore_failure(esc_id: str, vm_name: str, error: str | None) -> None:
+    """Keep (error) or clear (None) what a card's last restore said."""
+    import json as _json
+    from glorfindel.response.state import _atomic_write_text
+    data = _restore_failures()
+    if error is None:
+        if esc_id not in data:
+            return
+        data.pop(esc_id, None)
+    else:
+        data[esc_id] = {"vm_name": vm_name, "error": error[-600:],
+                        "at": datetime.now(timezone.utc).isoformat()}
+    _atomic_write_text(_RESTORE_FAILURES, _json.dumps(data))
+
+
+async def _bg_restore(resource_id: str, vm_name: str = "", before: str = "", esc_id: str = "") -> None:
+    """`glorfindel restore --before` in the background; its refusal or failure is kept for the
+    card (SEC4c): the return code and the output are read."""
+    from glorfindel import restore_plan
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None,
-        lambda: subprocess.run(
-            [_bin(), "restore", resource_id, "--yes"],
-            capture_output=True, text=True, timeout=1800,
-        ),
-    )
+    try:
+        proc = await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(
+                [_bin(), *restore_plan.restore_args(resource_id, before)],
+                capture_output=True, text=True, timeout=1800,
+            ),
+        )
+        error = (None if proc.returncode == 0 else
+                 restore_plan.failure_text(proc.returncode, (proc.stdout or "") + (proc.stderr or "")))
+    except Exception as exc:  # the command did not run, or not to its end
+        error = f"{type(exc).__name__}: {str(exc)[:400]}"
+    if esc_id:
+        try:
+            _note_restore_failure(esc_id, vm_name, error)
+        except Exception:
+            pass
     if vm_name:
         _restore_done(vm_name)
 

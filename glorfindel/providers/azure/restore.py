@@ -9,8 +9,43 @@ from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _console, _ERR_MAX, _first_line
 
 
+def _has_vault_tier(rp) -> bool:
+    """The point is in the vault tier (immutable), not only a snapshot."""
+    return any(
+        t.type == "HardenedRP" and getattr(t, "status", "") == "Valid"
+        for t in (getattr(rp.properties, "recovery_point_tier_details", None) or [])
+    )
+
+
+def _rp_time(rp):
+    return getattr(rp.properties, "recovery_point_time", None)
+
+
 class RestoreMixin:
     """The restore from backup (part of AzureConnector)."""
+
+    def list_recovery_points(self, resource_id: str, vault: str = "", vault_rg: str = "") -> list[dict]:
+        """The VM's recovery points, read only (SEC4c): [{"name", "time" (ISO 8601 UTC),
+        "vault_tier"}], newest first — what an operator chooses a restore's moment from. A
+        point without a time is left out (a restore never takes it)."""
+        if self.dry_run:
+            return []
+        if not vault:
+            from glorfindel.config import NO_VAULT_MSG
+            raise RuntimeError(NO_VAULT_MSG)
+        from datetime import timezone
+        from azure.mgmt.recoveryservicesbackup import RecoveryServicesBackupClient
+
+        self._ensure_clients()
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        v_rg = vault_rg or rg
+        client = RecoveryServicesBackupClient(self._credential, self._subscription_id)
+        container, item = self._resolve_backup_item_names(client, vault, v_rg, rg, vm_name)
+        out = [{"name": rp.name, "time": _rp_time(rp).astimezone(timezone.utc).isoformat(),
+                "vault_tier": _has_vault_tier(rp)}
+               for rp in client.recovery_points.list(vault, v_rg, "Azure", container, item)
+               if _rp_time(rp) is not None]
+        return sorted(out, key=lambda p: p["time"], reverse=True)
 
     def restore_from_backup(
         self,
@@ -56,15 +91,6 @@ class RestoreMixin:
         rps = list(backup_client.recovery_points.list(vault, v_rg, fabric, container_name, item_name))
         if not rps:
             raise RuntimeError(f"No recovery points in vault {vault}")
-
-        def _has_vault_tier(rp) -> bool:
-            return any(
-                t.type == "HardenedRP" and getattr(t, "status", "") == "Valid"
-                for t in (getattr(rp.properties, "recovery_point_tier_details", None) or [])
-            )
-
-        def _rp_time(rp):
-            return getattr(rp.properties, "recovery_point_time", None)
 
         # The most recent clean recovery point — it must predate the attack, or the
         # restored disk already holds what the attack did. A point without a time can't be

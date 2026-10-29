@@ -82,8 +82,8 @@ def test_the_moment_is_this_vm_s_earliest_admitted_attack(tmp_path):
     # Later, another VM's — and a line for this one written by anyone, even later:
     _write_runs(runs, "20261029T095000Z", [_attack(OTHER, now - 60, "20261029T095000Z"),
                                            _attack(VM, now - 30, "20261029T095000Z")])
-    at, source = signal_origin.attack_moment(VM, runs_dir=runs, ref=now)
-    assert at == pytest.approx(now - 1800) and source == "20261029T090000Z_signals.jsonl"
+    at, source = signal_origin.attack_moment(VM, runs_dir=runs)
+    assert at == pytest.approx(now - 1800, abs=1) and source == "20261029T090000Z_signals.jsonl"
 
 
 @pytest.mark.parametrize("line", [
@@ -107,10 +107,10 @@ def test_the_moment_is_bounded_around_the_isolation(tmp_path):
     _write_runs(runs, "a", [_attack(VM, isolated_at - 3 * 86400, "a")])     # days before
     _write_runs(runs, "b", [_attack(VM, isolated_at + 3600, "b")])          # after it
     assert signal_origin.attack_moment(VM, runs_dir=runs) is None           # 8 h old: refused
-    assert signal_origin.attack_moment(VM, runs_dir=runs, ref=isolated_at) is None
+    assert signal_origin.attack_moment(VM, runs_dir=runs, isolated_at=isolated_at) is None
     _write_runs(runs, "c", [_attack(VM, isolated_at - 1200, "c")])
-    assert signal_origin.attack_moment(VM, runs_dir=runs, ref=isolated_at) == (
-        pytest.approx(isolated_at - 1200), "c_signals.jsonl")
+    assert signal_origin.attack_moment(VM, runs_dir=runs, isolated_at=isolated_at) == (
+        pytest.approx(isolated_at - 1200, abs=1), "c_signals.jsonl")
 
 
 def _restore_env(tmp_path, monkeypatch, iso=None):
@@ -179,6 +179,109 @@ def test_restore_resolves_a_short_name_and_refuses_two(tmp_path, monkeypatch):
     monkeypatch.setattr("glorfindel.discovery.AssetRegistry", lambda: SimpleNamespace(all=lambda: []))
     out = CliRunner().invoke(cli.cli, ["restore", "vm-example-01", "--yes", "--before", "2026-10-29T07:30:00Z"])
     assert out.exit_code != 0 and started == [] and RG_B in out.output
+
+
+def test_a_line_dated_after_the_isolation_is_never_the_moment(tmp_path):
+    """The 5 min SEC4a allows ahead do not apply past an isolation: the attack came before."""
+    isolated_at = time.time() - 3600
+    runs = tmp_path / "runs"
+    _write_runs(runs, "a", [_attack(VM, isolated_at + 290, "a")])
+    assert signal_origin.attack_moment(VM, runs_dir=runs, isolated_at=isolated_at) is None
+    _write_runs(runs, "b", [_attack(VM, isolated_at, "b")])
+    assert signal_origin.attack_moment(VM, runs_dir=runs, isolated_at=isolated_at) == (
+        pytest.approx(isolated_at, abs=1), "b_signals.jsonl")
+
+
+def test_restore_finds_the_moment_of_a_vm_isolated_hours_ago(tmp_path, monkeypatch):
+    """The command reads the moment around the isolation, not around now: a restore 8 h after
+    the isolation still takes the attack line of 20 min before it."""
+    isolated_at = datetime.now(timezone.utc) - timedelta(hours=8)
+    cli, started = _restore_env(tmp_path, monkeypatch, iso={"isolated_at": isolated_at.isoformat()})
+    t0 = isolated_at.timestamp() - 1200
+    _write_runs(tmp_path / "runs", "20261029T020000Z", [_attack(VM, t0, "20261029T020000Z")])
+    out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes"])
+    assert out.exit_code == 0, out.output
+    assert started == [(VM, datetime.fromtimestamp(t0, tz=timezone.utc).isoformat())]
+
+
+def test_a_long_runs_file_is_read_from_its_end(tmp_path, monkeypatch):
+    """attack_moment reads the last MOMENT_TAIL_BYTES of each file, never a whole one."""
+    monkeypatch.setattr(signal_origin, "MOMENT_TAIL_BYTES", 2048)
+    runs = tmp_path / "runs"
+    now = time.time()
+    _write_runs(runs, "big", [_attack(VM, now - 1800, "big")] + [_attack(OTHER, now - 60, "big")] * 20
+                + [_attack(VM, now - 600, "big")])
+    assert (runs / "big_signals.jsonl").stat().st_size > 4 * 2048
+    at, _ = signal_origin.attack_moment(VM, runs_dir=runs)
+    assert at == pytest.approx(now - 600, abs=1)                 # the head, past the last 2 KiB, unread
+
+
+def test_the_proposed_moment_is_the_exercise_s_else_the_card_s(tmp_path, monkeypatch):
+    from glorfindel import restore_plan
+    monkeypatch.setattr("glorfindel.actions._load_isolation_state", lambda rid: None)
+    card = {"first_seen": "2026-10-29T08:12:00+00:00", "timestamp": "2026-10-29T09:00:00+00:00"}
+    got = restore_plan.proposed_moment(VM, card, runs_dir=tmp_path / "runs")
+    assert got["before"] == "2026-10-29T08:12:00+00:00" and got["source"] == "card"
+    assert "l'attaque a commencé avant" in got["why"]
+    t0 = time.time() - 900
+    _write_runs(tmp_path / "runs", "20261029T100000Z", [_attack(VM, t0)])
+    got = restore_plan.proposed_moment(VM, card, runs_dir=tmp_path / "runs")
+    assert got["source"] == "exercise" and got["before"] == datetime.fromtimestamp(t0, tz=timezone.utc).isoformat()
+    assert restore_plan.proposed_moment(OTHER, {}, runs_dir=tmp_path / "runs")["before"] == ""
+
+
+def test_the_points_before_a_moment_put_the_one_restored_first(monkeypatch):
+    from glorfindel import restore_plan
+    monkeypatch.setattr("glorfindel.config.resolve_backup_vault", lambda v=None: ("rsv-example", "rg-backup", "st"))
+    asked = []
+
+    class _Conn:
+        def list_recovery_points(self, rid, vault="", vault_rg=""):
+            asked.append((rid, vault, vault_rg))
+            return [{"name": "rp-after", "time": "2026-10-29T09:00:00+00:00", "vault_tier": True},
+                    {"name": "rp-snap", "time": "2026-10-29T07:00:00+00:00", "vault_tier": False},
+                    {"name": "rp-vault", "time": "2026-10-28T22:00:00+00:00", "vault_tier": True},
+                    {"name": "rp-old", "time": "2026-10-27T22:00:00+00:00", "vault_tier": True}]
+    got = restore_plan.points_before(VM, "2026-10-29T08:00:00Z", connector=_Conn())
+    assert [p["name"] for p in got] == ["rp-vault", "rp-snap", "rp-old"]     # never after; vault first
+    assert asked == [(VM, "rsv-example", "rg-backup")]
+    assert restore_plan.restore_args(VM, "2026-10-29T08:00:00") == [
+        "restore", VM, "--yes", "--before", "2026-10-29T08:00:00+00:00"]
+
+
+def test_the_provider_lists_its_points_read_only(monkeypatch):
+    from tests.unit.test_glorfindel import _RID, _backup_env
+    when = datetime(2026, 10, 29, 7, tzinfo=timezone.utc)
+    connector, client, posted, now = _backup_env(monkeypatch, rps=[
+        _rp("rp-1", when - timedelta(days=1)), _rp("rp-2", when, vaulted=False)], jobs=[])
+    nodate = _rp("rp-x", when)
+    nodate.properties.recovery_point_time = None
+    client.recovery_points.list.return_value = [*client.recovery_points.list.return_value, nodate]
+    got = connector.list_recovery_points(_RID, vault="rsv")
+    assert got == [{"name": "rp-2", "time": when.isoformat(), "vault_tier": False},
+                   {"name": "rp-1", "time": (when - timedelta(days=1)).isoformat(), "vault_tier": True}]
+    assert posted == [] and not connector._compute.virtual_machines.begin_deallocate.called
+
+
+def test_every_copyable_restore_command_asks_for_the_moment():
+    """The commands to copy — the CLI's next steps, the bot's, the TUI's, the console's —
+    show --before."""
+    from glorfindel import cli
+    import io
+    from rich.console import Console
+    buf = io.StringIO()
+    monkey = Console(file=buf, width=300)
+    real, cli.console = cli.console, monkey
+    try:
+        cli._render_next_steps({"resource_id": VM, "action": "restore_from_backup", "escalation_type": "destructive_action",
+                                "id": "e1", "first_seen": "2026-10-29T08:12:00+00:00"})
+    finally:
+        cli.console = real
+    assert f"glorfindel restore {VM} --yes --before 2026-10-29T08:12:00+00:00" in buf.getvalue()
+    for rel in ("glorfindel/bot.py", "glorfindel/tui.py", "eregion_console/static/glorfindel.js"):
+        text = (ROOT / rel).read_text()
+        assert "--yes --before" in text, rel
+        assert not re.search(r"glorfindel restore [^\n]*--yes(?! --before)[`\"\\n]", text), rel
 
 
 def _rp(name: str, when: datetime, vaulted: bool = True):
@@ -337,32 +440,92 @@ def test_the_audit_runs_no_query_on_an_id_that_is_not_one(check, hostile):
 
 # ── 3. Timeouts ───────────────────────────────────────────────────────────────────────
 
-_VERBS = {"get", "post", "put", "patch", "delete", "head", "options", "request"}
+_VERBS = {"get", "post", "put", "patch", "delete", "head", "options", "request", "stream", "urlopen"}
+_HTTP_MODULES = {"requests", "httpx", "urllib3", "urllib.request"}
+_SESSIONS = {"Session", "Client", "AsyncClient", "PoolManager"}
 
 
-def _requests_verb(node) -> bool:
-    if isinstance(node, ast.Attribute):
-        return node.attr in _VERBS and isinstance(node.value, ast.Name) and node.value.id == "requests"
-    if isinstance(node, ast.BoolOp):
-        return any(_requests_verb(v) for v in node.values)
-    return False
+class _HttpReader:
+    """The HTTP calls of a module, as written: the modules `requests`, `httpx`, `urllib3` and
+    `urllib.request` under any name (`import requests as rq`, `from requests import post`),
+    their verbs and the names bound to them (`get = g or requests.get`), their sessions
+    (`requests.Session()`, `httpx.Client()`, `urllib3.PoolManager()`) and the names that
+    hold one (`s = …`, `self.session = …`, `with … as s`)."""
+
+    def __init__(self, tree: ast.AST) -> None:
+        self.mods = {"requests", "httpx", "urllib3", "urllib"}
+        self.funcs: set[str] = set()
+        self.classes: set[str] = set()
+        self.sessions: set[str] = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    if a.name in _HTTP_MODULES:
+                        self.mods.add(a.asname or a.name.split(".")[0])
+            elif isinstance(n, ast.ImportFrom) and n.module in _HTTP_MODULES:
+                for a in n.names:
+                    if a.name in _VERBS:
+                        self.funcs.add(a.asname or a.name)
+                    elif a.name in _SESSIONS:
+                        self.classes.add(a.asname or a.name)
+        for _ in range(2):                    # a name bound from a name bound above
+            for n in ast.walk(tree):
+                pairs = []
+                if isinstance(n, ast.Assign):
+                    pairs = [(t, n.value) for t in n.targets]
+                elif isinstance(n, ast.AnnAssign) and n.value is not None:
+                    pairs = [(n.target, n.value)]
+                elif isinstance(n, (ast.With, ast.AsyncWith)):
+                    pairs = [(i.optional_vars, i.context_expr) for i in n.items if i.optional_vars]
+                for target, value in pairs:
+                    name = self._name(target)
+                    if name and self.verb(value):
+                        self.funcs.add(name)
+                    elif name and self.session(value):
+                        self.sessions.add(name)
+
+    @staticmethod
+    def _name(node) -> str:
+        return node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else ""
+
+    def module(self, node) -> bool:
+        while isinstance(node, ast.Attribute):
+            node = node.value
+        return isinstance(node, ast.Name) and node.id in self.mods
+
+    def verb(self, node) -> bool:
+        if isinstance(node, ast.Attribute):
+            return node.attr in _VERBS and self.module(node.value)
+        if isinstance(node, ast.Name):
+            return node.id in self.funcs or node.id == "urlopen"
+        if isinstance(node, ast.BoolOp):
+            return any(self.verb(v) for v in node.values)
+        return False
+
+    def session(self, node) -> bool:
+        if isinstance(node, ast.Call):
+            f = node.func
+            return ((isinstance(f, ast.Attribute) and f.attr in _SESSIONS and self.module(f.value))
+                    or (isinstance(f, ast.Name) and f.id in self.classes))
+        return self._name(node) in self.sessions
+
+    def http_call(self, call: ast.Call) -> bool:
+        f = call.func
+        return (self.verb(f) or (isinstance(f, ast.Attribute) and f.attr == "urlopen")
+                or (isinstance(f, ast.Attribute) and f.attr in _VERBS and self.session(f.value)))
 
 
 def _calls_without_timeout(source: str) -> list[int]:
+    """The lines of the HTTP calls without a timeout — none given, or `timeout=None`."""
     tree = ast.parse(source)
-    aliases = {t.id for n in ast.walk(tree) if isinstance(n, ast.Assign) and _requests_verb(n.value)
-               for t in n.targets if isinstance(t, ast.Name)}
+    reader = _HttpReader(tree)
     bad = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        f = node.func
-        http = (_requests_verb(f) or (isinstance(f, ast.Name) and f.id in aliases)
-                or (isinstance(f, ast.Attribute) and f.attr == "urlopen")
-                or (isinstance(f, ast.Name) and f.id == "urlopen"))
-        if http and not any(k.arg == "timeout" for k in node.keywords):
-            bad.append(node.lineno)
-    return bad
+        if isinstance(node, ast.Call) and reader.http_call(node):
+            given = [k.value for k in node.keywords if k.arg == "timeout"]
+            if not given or (isinstance(given[0], ast.Constant) and given[0].value is None):
+                bad.append(node.lineno)
+    return sorted(bad)
 
 
 def _python_files() -> list[str]:
@@ -388,6 +551,28 @@ def test_the_reader_sees_a_call_without_a_timeout():
     src = ("import requests\nrequests.post(u)\nget = g or requests.get\nget(u)\n"
            "(put or requests.put)(u, timeout=3)\nurllib.request.urlopen(r)\n")
     assert _calls_without_timeout(src) == [2, 4, 6]
+
+
+def test_the_reader_follows_aliases_sessions_and_a_none_timeout():
+    src = "\n".join([
+        "import requests as rq",                       # 1
+        "from requests import post as p",              # 2
+        "import httpx, urllib3",                       # 3
+        "rq.get(u)",                                   # 4  an aliased module
+        "p(u)",                                        # 5  an imported verb, renamed
+        "httpx.post(u, timeout=None)",                 # 6  a timeout of None
+        "s = rq.Session()",                            # 7
+        "s.post(u)",                                   # 8  a session
+        "rq.Session().put(u)",                         # 9  a session, chained
+        "with httpx.Client() as c:",                   # 10
+        "    c.get(u)",                                # 11 a client
+        "pool = urllib3.PoolManager()",                # 12
+        "pool.request('GET', u)",                      # 13 a pool
+        "self.session = requests.Session()",           # 14
+        "self.session.delete(u)",                      # 15 a session held by an attribute
+        "rq.get(u, timeout=5); s.post(u, timeout=(3, 9)); d.get(u)",   # 16 bounded, or not HTTP
+    ])
+    assert _calls_without_timeout(src) == [4, 5, 6, 8, 9, 11, 13, 15]
 
 
 @pytest.mark.parametrize("call", ["snapshot", "restore"])
@@ -506,24 +691,35 @@ def _t1136(rows):
     return kql_subset.run(_RULE["query"], rows, now=datetime.now(timezone.utc))
 
 
-# Lines in the form shadow's useradd writes them (account names made up).
+# The forms measured on H0's Syslog (30 days to 29/10: 16 lines, all tagged useradd), names
+# and numbers made up: with `from=` (authpriv) and without (auth), the shells seen.
 _USERADD = [
-    "new user: name=svc-example, UID=2001, GID=2001, home=/home/svc-example, shell=/bin/bash, from=/dev/pts/0",
-    "new user: name=evil_example, UID=998, GID=100, home=/home/evil_example, shell=/bin/bash, from=none",
+    ("new user: name=svc-example, UID=2001, GID=2001, home=/home/svc-example, shell=/bin/bash, from=none",
+     "authpriv"),
+    ("new user: name=evil_example, UID=998, GID=100, home=/home/evil_example, shell=/bin/bash, from=none",
+     "authpriv"),
+    ("new user: name=svc-example2, UID=2002, GID=2002, home=/home/svc-example2, shell=/usr/sbin/nologin, from=none",
+     "authpriv"),
+    ("new user: name=svc-example3, UID=2003, GID=2003, home=/home/svc-example3, shell=/sbin/nologin",
+     "auth"),
 ]
 
 
-@pytest.mark.parametrize("message", _USERADD)
-@pytest.mark.parametrize("process", ["useradd", "adduser"])
-def test_an_account_tool_s_creation_is_detected(message, process):
-    assert len(_t1136([_syslog(message, process)])) == 1
+@pytest.mark.parametrize("message, facility", _USERADD)
+def test_useradd_s_creation_is_detected(message, facility):
+    assert len(_t1136([_syslog(message, "useradd", facility)])) == 1
 
 
-@pytest.mark.parametrize("process", ["root", "logger", "sshd", "sudo", "cron", ""])
+def test_a_package_s_system_account_stays_out_whatever_the_form():
+    line = "new user: name=svc-pkg, UID=112, GID=118, home=/nonexistent, shell=/usr/sbin/nologin"
+    assert _t1136([_syslog(line, "useradd", "auth"), _syslog(line + ", from=none", "useradd")]) == []
+
+
+@pytest.mark.parametrize("process", ["root", "logger", "sshd", "sudo", "cron", "", "adduser"])
 def test_the_same_words_written_by_anything_else_are_no_account(process):
     """`logger -p auth.info "new user: name=…"` from any user, or a user name holding the
     words in sshd's line: no account was created."""
-    assert _t1136([_syslog(_USERADD[0], process, facility="auth")]) == []
+    assert _t1136([_syslog(_USERADD[0][0], process, facility="auth")]) == []
 
 
 def test_the_bench_simulation_is_still_detected():

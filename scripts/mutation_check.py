@@ -4289,8 +4289,8 @@ MUTANTS += [
      "            if False:\n                return (f\"{', '.join(ro)} : « {READ_ONLY_FS} »"),
     ("M1574", "a read-only error that ran before rolls H0 back: no regression (SEC7, V-34, H2)",
      "infra/glorfindel-host/cd/eregion_cd.py",
-     "            ro = [n for n in read_only_errors(since) if n not in known_ro]\n",
-     "            ro = read_only_errors(since)\n"),
+     "            ro = [n for n in found if n not in known_ro]\n",
+     "            ro = found\n"),
     ("M1575", "the watch's principal holding the restore's rights never said (SEC7, V-17)",
      "glorfindel/providers/azure/readers.py",
      "                    beyond = [a for a in self.BEYOND_RESPONSE if allowed(a)]\n",
@@ -4304,8 +4304,11 @@ MUTANTS += [
      "  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-}\n"),
     ("M1578", "NO_WATCH=0 bypasses Orodruin's guard (SEC7)", MAKE,
      '\t@if [ "$(NO_WATCH)" != 1 ] &&', '\t@if [ -z "$(NO_WATCH)" ] &&'),
-    ("M1579", "the audit advises Backup Contributor again (SEC7, V-17)", "glorfindel/audit.py",
-     "                f\"--role 'Eregion Glorfindel Restore' \"", "                f\"--role 'Backup Contributor' \""),
+    ("M1579", "the audit run in the watch advises it the restore's role (SEC7, V-17)", "glorfindel/audit.py",
+     '                f"--role Reader "\n'
+     '                f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{vrg} "',
+     '                f"--role \'Eregion Glorfindel Restore\' "\n'
+     '                f"--scope /subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/{vrg} "'),
 ]
 TESTS["M1570"] = "tests/unit/test_makefile_secrets.py"
 TESTS.update({mid: "tests/unit/test_bot.py" for mid in ("M1571", "M1572")})

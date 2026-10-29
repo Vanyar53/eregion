@@ -76,7 +76,7 @@ export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
 #   AZURE_CLIENT_ID=$EREGION_CONSOLE_AZURE_CLIENT_ID AZURE_CLIENT_SECRET=$EREGION_CONSOLE_AZURE_CLIENT_SECRET \
 #     glorfindel restore <resource_id> --before <ISO8601> --yes
 # Une paire va ensemble : un …_CLIENT_ID posé sans son …_SECRET mélange deux principaux (les
-# replis se tirent variable par variable) — la watch le dit au démarrage.
+# replis se tirent variable par variable) — make glorfindel-start le dit (check-azure-env).
 
 # az account show --query id -o tsv
 export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx

@@ -111,6 +111,7 @@ elif cmd == "logs":
         sys.exit(1)
     pre = "FAKE_BASE_" if c["version"] == "v0.3.1" else "FAKE_RULES_"
     sys.stderr.write(os.environ.get(pre + "LOGS", ""))
+    sys.exit(int(os.environ.get(pre + "LOGS_RC") or 0))
 elif cmd == "compose":
     if "config" in args:
         sys.exit(1 if os.environ.get("FAKE_COMPOSE_FAIL") else 0)
@@ -447,7 +448,7 @@ def test_a_read_only_error_that_ran_before_the_switch_is_no_regression(h0):
 
 def test_the_way_back_is_never_judged_on_the_read_only_probe(agent, monkeypatch):
     seen = []
-    monkeypatch.setattr(agent, "read_only_errors", lambda since: seen.append(since) or ["eregion-watch"])
+    monkeypatch.setattr(agent, "read_only_errors", lambda since: seen.append(since) or (["eregion-watch"], []))
     monkeypatch.setattr(agent, "health_once", lambda ref, since: "")
     monkeypatch.setattr(agent, "HEALTH_S", 0.0)
     monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: {"state": "ok", "rules": []})
@@ -457,6 +458,15 @@ def test_the_way_back_is_never_judged_on_the_read_only_probe(agent, monkeypatch)
     why, _ = agent.health("v0.4.0", 5.0, rules=True, base={"state": "absent", "rules": [],
                                                            "read_only": ["eregion-watch"]})
     assert "Read-only" not in why
+
+
+def test_a_journal_that_cannot_be_read_is_said_in_orange_never_a_rollback(h0):
+    """SEC7, second review: `docker logs` failing proves nothing — H2's rule: said in orange
+    with the success, H0 kept."""
+    assert h0.run(FAKE_RULES_LOGS_RC="1").returncode == 0
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+    said = json.dumps(h0.posts(), ensure_ascii=False)
+    assert "journaux illisibles" in said and "non prouvée" in said
 
 
 def test_a_heartbeat_from_before_the_switch_is_not_health(h0):
@@ -1053,7 +1063,7 @@ def agent(monkeypatch):
     spec = importlib.util.spec_from_file_location("eregion_cd_h2", AGENT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    mod.read_only_errors = lambda since: []      # no real docker here (V-34's own tests set it)
+    mod.read_only_errors = lambda since: ([], [])   # no real docker here (V-34's own tests set it)
     return mod
 
 

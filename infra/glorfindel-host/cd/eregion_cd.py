@@ -439,14 +439,28 @@ def activate(ref: str) -> None:
 READ_ONLY_FS = "Read-only file system"
 
 
-def read_only_errors(since: float) -> list[str]:
-    """The containers whose journal says « Read-only file system » since `since` (a Unix time).
-    A journal that cannot be read says nothing."""
-    out = []
+def read_only_errors(since: float) -> tuple[list[str], list[str]]:
+    """(the containers whose journal says « Read-only file system » since `since`, a Unix time;
+    those whose journal could not be read — nothing proven there, said in orange, never a
+    rollback: H2's rule for a check that proves nothing)."""
+    found, unread = [], []
     for name in CONTAINERS:
         res = sh("docker", "logs", "--since", str(int(since)), name, check=False)
         if READ_ONLY_FS in (res.stdout or "") + (res.stderr or ""):
-            out.append(name)
+            found.append(name)
+        elif res.returncode != 0:
+            unread.append(name)
+    return found, unread
+
+
+def _with_unread(proof: dict, unread: set) -> dict:
+    """The health's proof, with the journals the last look could not read said in orange."""
+    if not unread:
+        return proof
+    out = dict(proof)
+    line = (f"journaux illisibles ({', '.join(sorted(unread))}) : l'absence de « {READ_ONLY_FS} » "
+            "non prouvée (V-34)")
+    out["orange"] = f"{out['orange']}\n{line}" if out.get("orange") else line
     return out
 
 
@@ -628,7 +642,7 @@ def reference_check() -> dict:
         print(f"règles avant la bascule : {base.get('state')} (en {base.get('seconds', 0)} s)")
     # V-34: what ran already writing outside its mounts, in its last hour — the same after the
     # switch is no regression (H2's rule).
-    read_only = read_only_errors(time.time() - 3600)
+    read_only, _ = read_only_errors(time.time() - 3600)
     if read_only:
         print(f"avant la bascule : « {READ_ONLY_FS} » dans le journal de {', '.join(read_only)}")
     return {"state": base.get("state"), "rules": [{"name": r["name"], "status": r["status"]}
@@ -645,13 +659,16 @@ def health(ref: str, since: float, rules: bool = False, base: dict | None = None
     deadline = time.monotonic() + HEALTH_S
     proof: dict | None = None
     known_ro = set((base or {}).get("read_only") or [])
+    unread: set = set()
     while True:
         why = health_once(ref, since)
         if rules and not why:
             # V-34 (SEC7): a write the read-only root refuses, since the switch, in a container whose
             # journal said nothing of it before — a regression, H0 goes back. The way back
-            # (rules=False) is never judged on it.
-            ro = [n for n in read_only_errors(since) if n not in known_ro]
+            # (rules=False) is never judged on it; a journal that cannot be read, said (the last look).
+            found, missed = read_only_errors(since)
+            unread = set(missed)
+            ro = [n for n in found if n not in known_ro]
             if ro:
                 return (f"{', '.join(ro)} : « {READ_ONLY_FS} » dans le journal depuis la bascule — une "
                         "écriture hors des montages, que la racine en lecture seule refuse (V-34)"), proof or {}
@@ -661,7 +678,7 @@ def health(ref: str, since: float, rules: bool = False, base: dict | None = None
                 return proof["why"], proof
             continue        # the last look is never one from before the check
         if time.monotonic() >= deadline:
-            return why, proof or {}
+            return why, _with_unread(proof or {}, unread)
         time.sleep(STEP_S)
 
 

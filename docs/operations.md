@@ -485,7 +485,7 @@ du rôle existant, puis l'attribuer comme ci-dessous :
 ```bash
 SUB2=<SECOND_SUBSCRIPTION_ID>
 for r in "Eregion Glorfindel Response" "Eregion Glorfindel Restore"; do
-  az role definition list --name "$r" --query '[0]' -o json \
+  az role definition list --name "$r" --scope /subscriptions/$SUB --query '[0]' -o json \
     | python3 -c 'import json,sys; d=json.load(sys.stdin); d["assignableScopes"].append(sys.argv[1]); print(json.dumps(d))' \
         "/subscriptions/$SUB2" > /tmp/eregion-role.json
   az role definition update --role-definition @/tmp/eregion-role.json
@@ -558,7 +558,7 @@ campagne s'écrit dans `runs/`, et l'index de l'IA d'analyse ne s'ouvre jamais d
 le journal de chaque conteneur depuis la bascule : un « Read-only file system » que la release
 d'avant ne montrait pas (relu dans sa dernière heure, avant la bascule) est une régression, et
 H0 revient en arrière (`infra/glorfindel-host/cd/eregion_cd.py`, `read_only_errors`) ; le même
-avant et après est dit, jamais un retour.
+avant et après est dit, jamais un retour ; un journal illisible est dit en orange, non prouvé.
 
 ---
 

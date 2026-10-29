@@ -56,7 +56,7 @@ x-env: &env
 #   le bot      GLORFINDEL_BOT_AZURE_CLIENT_*   lecture + réponse + restore (Restore, Revert).
 # Vide, chacun prend AZURE_CLIENT_* (le principal unique d'avant : rien ne casse). Le repli se tire
 # variable par variable : un …_CLIENT_ID sans son …_SECRET mélangerait deux principaux — une paire
-# va ensemble, et la watch dit au démarrage une paire incomplète. Sur H0, tout est vide : l'identité
+# va ensemble, et make glorfindel-start (check-azure-env) dit une paire incomplète. Sur H0, tout est vide : l'identité
 # managée de la VM, lectrice.
 x-azure: &azure
   AZURE_CLIENT_ID: ${GLORFINDEL_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}

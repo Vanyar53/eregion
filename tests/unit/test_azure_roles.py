@@ -203,19 +203,51 @@ def test_a_principal_without_its_pair_is_said_at_start(env, said):
     assert "hy1-canary" not in res.stdout + res.stderr          # a secret's value is never said
 
 
-def test_the_audit_and_the_readiness_name_eregion_s_roles_never_a_broad_built_in_one():
-    """SEC7: what the audit and the readiness tell an operator to grant is one of the two roles
-    of infra/identities/, never Network, Backup or Virtual Machine Contributor."""
+BROAD_BUILT_IN = re.compile(r"\b(?:Network|Backup|Virtual Machine)?\s*Contributor\b|\bOwner\b")
+
+
+def test_the_audit_and_the_readiness_advise_no_broad_role_and_never_the_restore_to_the_watch():
+    """SEC7: what the audit and the readiness tell an operator to grant is Reader for a read
+    that failed, « Eregion Glorfindel Response » for a write that is missing — never a broad
+    built-in role (Contributor, Network, Backup, Virtual Machine Contributor). The restore's role
+    is never advised to `$AZURE_CLIENT_ID` (the audit runs in the watch): the console and the bot
+    only."""
     import inspect
 
     from glorfindel import audit, readiness
     names = {json.loads(p.read_text(encoding="utf-8"))["Name"] for p in ROLES.glob("*.json")}
     assert names == {"Eregion Glorfindel Response", "Eregion Glorfindel Restore"}
     for module in (audit, readiness):
-        text = inspect.getsource(module)
-        fixes = re.findall(r"--role '([^']+)'", text) + re.findall(r"« (Eregion Glorfindel \w+) »", text)
-        assert fixes and set(fixes) <= names, (module.__name__, fixes)
-        for broad in ("Network Contributor", "Backup Contributor"):
-            assert broad not in text, (module.__name__, broad)
-    # The one place a broad role is named: what to take away from the watch.
-    assert inspect.getsource(audit).count("Virtual Machine Contributor") == 0
+        text = re.sub(r"""["']\s*\n\s*f?["']""", "", inspect.getsource(module))
+        roles = re.findall(r"--role\s+(?:'([^']+)'|(\S+))", text)
+        roles = [a or b for a, b in roles] + re.findall(r"« (Eregion Glorfindel \w+) »", text)
+        assert roles, module.__name__
+        for role in roles:
+            assert not BROAD_BUILT_IN.search(role), (module.__name__, role)
+            assert role in names | {"Reader", "Log Analytics Reader"}, (module.__name__, role)
+        for m in re.finditer(r"--assignee \$AZURE_CLIENT_ID\s+--role\s+(?:'([^']+)'|(\S+))", text):
+            assert "Restore" not in (m.group(1) or m.group(2)), (module.__name__, m.group(0))
+        assert not re.search(r"\b(?:Network|Backup|Virtual Machine) Contributor\b", text), module.__name__
+    fixes = {c.name: c.fix for c in _audit_checks_failing_on_iam()}
+    assert set(fixes) == {"NSG access", "Backup vault", "Compute access"}
+    for name, fix in fixes.items():
+        assert "--role Reader " in fix, (name, fix)
+    assert "Eregion Glorfindel Restore" in fixes["Backup vault"] and "console et au bot" in fixes["Backup vault"]
+
+
+def _audit_checks_failing_on_iam():
+    """The three reads of the audit, each refused by Azure (an IAM error)."""
+    from unittest.mock import MagicMock
+
+    from glorfindel import audit
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    c = MagicMock()
+    c.check_nsg_access.return_value = {"ok": False, "iam": True, "error": "AuthorizationFailed"}
+    c.check_backup_points.return_value = {"ok": False, "iam": True, "error": "AuthorizationFailed"}
+    c.check_compute_access.return_value = {"ok": False, "iam": True, "error": "AuthorizationFailed"}
+    out = []
+    for fn, args in ((audit._check_nsg, (rid, c)), (audit._check_backup, (rid, c, "rsv", "rg-backup")),
+                     (audit._check_compute, (rid, c))):
+        got = fn(*args)
+        out += got if isinstance(got, list) else [got]
+    return [x for x in out if x.status == "fail"]

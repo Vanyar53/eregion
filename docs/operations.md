@@ -754,9 +754,113 @@ job par image décide lui-même, dans son premier step, de construire ou de pass
 la nuit y figure, sauf ses exceptions écrites (Notify lui-même, Roadmap, vert par conception).
 
 **Et le CD de H0** : il exige que tous les checks du commit d'une release soient verts. Un job
-`image` rouge sur `main` fait donc refuser la release, avant même son préflight. L'étape 2 de #267
-(publier l'image éprouvée sur GHCR avec sa provenance, et la faire tirer par son digest par H0 et
-Orodruin) se décide avec Jonathan.
+`image` rouge sur `main` fait donc refuser la release, avant même son préflight. L'étape 2 de #267,
+décidée par Jonathan le 29/10 : la section suivante.
+
+## Les images publiées (CI3, #267, 29/10)
+
+Avant CI3, H0 construisait l'image de Glorfindel de chaque release (son CD, `deploy.sh
+--build-only`), et l'image des injecteurs se construisait sur le poste de l'opérateur (`make
+orodruin-push`). Rien ne liait l'image qui tourne à ce que la CI avait éprouvé, ni à un commit
+signé (contre-audit : P-02, ni SBOM ni signature ; V-22, des tags non signés).
+
+**Ce qui est publié.** La tête de chaque push sur `main` (le commit de fusion d'une PR, en squash) a ses deux images, `ghcr.io/vanyar53/eregion-glorfindel`
+et `ghcr.io/vanyar53/eregion-annatar`, étiquetées `sha-<commit complet>`, par
+`.github/workflows/publish.yml` (jobs `publish (glorfindel)`, `publish (annatar)`) :
+1. construites comme dans `images.yml` (CI1), plus ce que les hôtes demandent : l'utilisateur de
+   H0 et d'Orodruin (UID/GID 1000, le premier utilisateur d'une VM Ubuntu d'Azure), et les
+   étiquettes `org.opencontainers.image.version` (`v` + la version de `pyproject.toml`, que dit
+   `glorfindel --version`) et `.revision` (le commit) ;
+2. éprouvées dans l'image (`scripts/image_check.py`, les vérifications de CI1) **avant** d'être
+   poussées : une image qui échoue n'atteint jamais le registre ;
+3. poussées (`scripts/published_image.py pushed` : le digest est celui que docker a enregistré
+   pour ce dépôt, celui de l'image éprouvée) ;
+4. **attestées** : une provenance SLSA v1 (`actions/attest-build-provenance`) et un SBOM SPDX
+   (`anchore/sbom-action`, puis `actions/attest-sbom`), toutes deux poussées dans le registre à côté
+   de l'image et gardées dans le magasin d'attestations de GitHub ;
+5. **signées sans clé** : `cosign sign`, un certificat de sigstore délivré sur le jeton OIDC de
+   GitHub (aucune clé de longue durée, aucun secret) ;
+6. **vérifiées comme H0 les vérifie** (`published_image.py verify`, le même cosign épinglé) ;
+7. lues sans jeton, ou un avertissement : un paquet encore privé est dit dans le run.
+
+Ce workflow est le seul qui peut écrire un paquet, demander un jeton OIDC ou écrire une
+attestation (`packages`, `id-token`, `attestations: write`, au niveau du job), et il ne tourne que
+sur un push sur `main` de ce dépôt : jamais sur une PR, celle d'un fork comprise
+(`tests/unit/test_workflows.py`). Ses actions sont épinglées par commit. Un run rouge est annoncé dans
+`#ci` (`notify.yml`).
+
+**Quand : à chaque push sur `main`, pas à la release.** Le brouillon d'une release vise un commit
+de `main` (`make release-draft`, le sha d'`origin/main`), et le CD de H0 la déploie dès que
+Jonathan la publie. Publier à la release (un workflow sur l'événement `release`) laisserait H0
+chercher une image qui n'existe pas encore ; publier sur la PR de version seule manquerait un
+brouillon posé sur un commit plus récent. Le dépôt fusionne en squash : chaque commit de `main` est la tête
+d'un push, et l'image de n'importe quelle release
+existe déjà, attestée, quand elle est publiée : le job `publish (glorfindel)` est un check du commit,
+que le CD attend comme la CI principale (absent une heure : refus). Le coût : deux constructions de
+plus par fusion (le cache de `images.yml` est relu, la couche des dépendances reste), le stockage
+public de GHCR est gratuit.
+
+**Le digest, retrouvé sans faire confiance au tag.** Le tag `sha-<commit>` peut être déplacé par
+quiconque peut écrire le paquet : il n'est qu'une indication. Le lecteur (`published_image.py`) :
+- lit le manifeste du tag sur l'API du registre, **sans jeton** (le jeton anonyme de GHCR, pour un
+  paquet public), et prend pour digest le sha256 des octets lus (l'en-tête du registre doit dire le
+  même) ;
+- exige de cosign (v3.1.3, son sha256 épinglé, vérifié avant chaque usage, borné à 3 min) la
+  **signature** (de type `cosign/sign/v1` : cosign v3 prend aussi une attestation pour une signature,
+  mesuré le 29/10) et la **provenance** de ce digest, chacune par un certificat dont l'identité est le workflow de
+  publication de ce dépôt, sur `refs/heads/main`, déclenché par un push, **à ce commit**
+  (`--certificate-identity`, `--certificate-oidc-issuer`, `--certificate-github-workflow-repository`,
+  `-ref`, `-trigger`, `-sha`) ;
+- relit la provenance vérifiée : son sujet est cette image et ce digest, son workflow, son dépôt,
+  sa référence, son événement, son commit source sont ceux demandés, sur un runner de GitHub ;
+- tire l'image **par son digest** (docker vérifie les octets), l'étiquette sous son nom local, et
+  lit ses étiquettes : le commit, et la version.
+
+Une image non signée, signée par un autre workflow, un autre dépôt, une autre branche ou pour un
+autre commit, sans provenance, ou dont la provenance dit autre chose : refusée. Un paquet privé ou
+absent aussi : GHCR refuse alors le jeton anonyme lui-même (403, mesuré par la relecture). Ce que dit
+cosign est classé : une signature ou une attestation absente ou contraire (« no signatures found »,
+« no matching … », « failed to verify certificate identity », « expected … ») est un refus ; le reste
+— le réseau, le miroir TUF de sigstore, un délai — ne prouve rien : le CD attend, une heure au plus
+(12 passages), puis refuse en le disant. `docker pull` et cosign sont bornés à 10 min. Mesuré le 29/10 avec
+cosign v3.1.3, sans aucun jeton, sur des images publiques de GHCR : une provenance
+d'`actions/attest-build-provenance` vérifiée avec ces six options, un autre commit et un autre
+workflow refusés (« expected GithubWorkflowSHA… », « expected SAN value… »). La vérification ne
+contacte que le registre (`ghcr.io`, ses blobs sur `pkg-containers.githubusercontent.com`) et la
+racine de confiance de sigstore (`tuf-repo-cdn.sigstore.dev`), **à chaque vérification** : cosign
+met à jour sa racine depuis ce miroir et sort en erreur s'il ne le joint pas, même avec
+`~/.sigstore/root` rempli (mesuré par la relecture) ; le journal de transparence, lui, est vérifié
+hors ligne, dans le paquet de la signature.
+
+**Vérifier à la main** (sur un poste, sans jeton) :
+
+```bash
+python3 scripts/published_image.py install-cosign              # ~/.eregion/cosign/cosign-v3.1.3, sha256 vérifié
+python3 scripts/published_image.py verify glorfindel --commit "$(git rev-parse v0.4.6^{commit})"
+# → ✓ ghcr.io/vanyar53/eregion-glorfindel@sha256:… : signée et attestée par .github/workflows/publish.yml sur main, au commit …
+gh attestation verify oci://ghcr.io/vanyar53/eregion-glorfindel@sha256:<digest> --repo Vanyar53/eregion \
+  --signer-workflow Vanyar53/eregion/.github/workflows/publish.yml   # gh ≥ 2.49, connecté (non mesuré ici : le gh du poste, 2.45, n'a pas `attestation`)
+gh attestation verify oci://ghcr.io/vanyar53/eregion-glorfindel@sha256:<digest> --repo Vanyar53/eregion \
+  --predicate-type https://spdx.dev/Document/v2.3                    # le SBOM
+```
+
+**H0** tire l'image de chaque release par son digest et la vérifie avant de la préflighter : son CD
+ne construit plus (`infra/glorfindel-host/README.md`, « Le CD de H0 »). **Orodruin** reçoit l'image
+d'Annatar publiée, vérifiée sur le poste : `make orodruin-push [REF=<tag|commit>]` (sans `REF`, le
+dernier tag `v*` : tant qu'il est d'avant CI3, il n'a pas d'image, donner `REF=`), sa sortie restant fermée (`docs/design/orodruin-contract.md`, « L'image des
+injecteurs »). `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
+**non vérifiée**, pour essayer une branche : `~/.eregion-image` sur Orodruin le dit (`dev <commit>`).
+
+**L'image publique** : le dépôt l'est, l'image n'a aucun secret (elle n'a que le code et ses
+dépendances verrouillées ; les secrets sont dans `host.env` et `orodruin.env`, montés ou passés au
+démarrage). La rendre publique ne montre rien de plus que le dépôt et ses verrous ; elle permet à
+H0 et à n'importe qui de la tirer et de la vérifier sans jeton. Un paquet neuf de GHCR est privé par
+défaut (à vérifier au premier run) : Jonathan le passe en public une fois, dans les réglages de
+chaque paquet (« Change visibility »).
+
+Tests : `tests/unit/test_published_image.py` (un faux registre, un faux cosign qui répond comme
+cosign v3.1.3, un faux docker), `tests/unit/test_host_cd.py` (le CD de bout en bout),
+`tests/unit/test_workflows.py`. Mutants M1650–M1669.
 
 ### Les avis de vulnérabilité des verrous (CI2)
 
@@ -870,6 +974,11 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   releases du dépôt, où le brouillon est en tête : GitHub change l'URL d'un brouillon à chaque
   édition (mesuré sur la 0.4.4). La PR de version et la publication vont aussi dans `#releases`
   (`docs/atelier-discord.md`) ; sans configuration Discord, rien n'est envoyé et la commande réussit.
+- **L'image de la release** (CI3) : le commit que vise le brouillon a déjà ses deux images publiées,
+  attestées et signées (`publish.yml` tourne sur la tête de chaque push sur `main`, « Les images publiées »).
+  Avant de cliquer « Publish », les checks `publish (glorfindel)` et `publish (annatar)` de ce commit
+  doivent être verts : sinon le CD de H0 attend une heure, puis refuse la release, sans jamais la
+  construire.
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
   lit le code sur une liste blanche : quatre commandes `gh` seulement (`pr create`, `release list`,
   `release create` avec `--draft`, `release edit` des seules notes), jamais `gh api`. Une commande ne

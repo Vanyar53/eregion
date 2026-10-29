@@ -79,7 +79,9 @@ resource "azurerm_subnet" "host" {
 
 # Entrée : SSH depuis l'IP de l'opérateur seulement. La War Room reste sur 127.0.0.1 de la VM
 # (docker-compose.yml) et s'ouvre par un tunnel SSH. Sortie : celle d'Azure par défaut (API
-# d'Azure, API du modèle, Discord, GitHub et registres pour construire l'image).
+# d'Azure, API du modèle, Discord, GitHub ; CI3 : ghcr.io et pkg-containers.githubusercontent.com
+# pour tirer l'image publiée, tuf-repo-cdn.sigstore.dev pour la racine de confiance de cosign).
+# Aucune règle sortante ici : la règle par défaut AllowInternetOutBound les laisse passer.
 resource "azurerm_network_security_group" "host" {
   name                = "nsg-${local.name}"
   location            = azurerm_resource_group.host.location

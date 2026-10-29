@@ -42,6 +42,18 @@ class PerimeterMixin:
             out = "unknown" if st == "unknown" else out
         return out
 
+    def _left_to_perimeter(self, cache: dict, perimeter, t0: dict | None, ip: str, port) -> bool:
+        """A NIC of a merged entry with no placement of its own, behind the entry's perimeter
+        — on an NSG that governs it, the pair holding: covered by design, nothing missing.
+        A promotion leaves it so (its own block taken off, RB1): read as a NIC added since,
+        its rules gone, the next pass said a drift that wasn't, and put them back over the
+        promotion (RB1, second review)."""
+        if perimeter is None or t0 is None:
+            return False
+        governs = (perimeter[0].lower(), perimeter[1].lower()) in {
+            (v["nsg_rg"].lower(), v["nsg_name"].lower()) for v in self._nic_nsg_views(t0) if v.get("nsg_rg")}
+        return governs and self._perimeter_holds(cache, t0, ip, port) == "holds"
+
     def _off_perimeter(self, rg: str, vm_name: str, nsg_rg: str, nsg_name: str) -> list[dict]:
         """The VM's NICs no NSG of which is the perimeter's: on another subnet (the perimeter
         lies on the primary NIC's). A perimeter block said `blocked` while one of them stayed

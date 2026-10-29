@@ -90,7 +90,8 @@ class UnblockMixin:
                     (unsure if holds == "unknown" else open_nics).append(short)
             if current is not None and any(p.get("nic_id") for p in entry["placements"]):
                 for n in [n for n in current if n not in groups]:       # a NIC added since
-                    _lost(targets.get(n), [n.rsplit("/", 1)[-1]])
+                    if not self._left_to_perimeter(cache, perimeter, targets.get(n), ip, port):
+                        _lost(targets.get(n), [n.rsplit("/", 1)[-1]])
             for nic, ps in groups.items():
                 # Only an NSG that governs the NIC NOW blocks anything: in quarantine, the
                 # NIC's own NSG — where the block lies — is off it until the release. The

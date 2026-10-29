@@ -1098,8 +1098,10 @@ class IsolationMachine(RuleBasedStateMachine):
 
     def _block(self, vm, rid, fault, port):
         flows, states = self._before()
+        clean, start = self._chain_start()
         out, err = self._run(fault, lambda: self.connector.block_suspicious_ip(
             ATTACKER, rid, scope="vm", threat_port=port), "block")
+        self._chain_end(clean, start, fault is None and err is None)
         if out and out.get("status") == "blocked" and not out.get("bypass"):
             assert not self._attacker_flows(vm, port), f"I3: block said blocked, {ATTACKER} reaches {vm}"
             check, _ = self._run(None, lambda: self.connector.verify_block_ip(ATTACKER, rid))
@@ -1114,8 +1116,10 @@ class IsolationMachine(RuleBasedStateMachine):
         vm, rid, fault = self._draw(data)
         replace = data.draw(st.booleans(), label="replace")
         flows, states = self._before()
+        clean, start = self._chain_start()
         out, err = self._run(fault, lambda: self.connector.block_suspicious_ip(
             ATTACKER, rid, scope="subnet", replace=replace), "block_perimeter" + (" (promote)" if replace else ""))
+        self._chain_end(clean, start, fault is None and err is None)
         if out and out.get("status") in ("blocked", "blocked_partial") and not out.get("bypass"):
             # The VM blocked: every one of its NICs is cut off — behind the perimeter, or, on
             # another subnet (RB1's second subnet), by its own block — but those it names as
@@ -1211,11 +1215,15 @@ class IsolationMachine(RuleBasedStateMachine):
         vanished = [vm for vm in self.live if self._block_vanished(vm)]
         cards_before = {e["id"] for e in escalations.pending()}
         journal_at = len(self.fake.journal)
+        quiet = self._chain_start()[0] if getattr(self, "chain", None) else None
+        named = {vm: self._named_block_rules(vm) for vm in self.live} if quiet else {}
+        self.chain = None                       # the pass writes: the chain ends here
         report, err = self._run(fault, lambda: reassert.reassert_pass(self.connector, None))
         for r in report or []:
             _note(f"reassert ({_CURRENT.mode}): {r['outcome']}")
         if fault is None and err is None:
             self._block_cards_true(cards_before, journal_at)
+            self._no_drift_on_untouched(cards_before, quiet, named)
             # Liveness: a block whose rules all vanished from Azure is put back, or told
             # about — not left gone in silence.
             told = {key(e.get("resource_id", "")) for e in escalations.pending()
@@ -1257,6 +1265,57 @@ class IsolationMachine(RuleBasedStateMachine):
         if _CURRENT.mode == "human_only":
             assert {k: n["nsg"] for k, n in self.fake.nics.items()} == nics_before
         self._config_honoured({k: v for k, v in nics_before.items() if v}, "the reassertion")
+
+    def _chain_start(self) -> tuple[set, int]:
+        """The rules Glorfindel wrote with nothing else touching the world since (`chain`:
+        the journal's length and the world as its last block left them, those rules) —
+        empty when anything moved: a customer's change, a fault, another operation."""
+        chain = getattr(self, "chain", None)
+        start = len(self.fake.journal)
+        if chain and chain[0] == start and self.fake.snapshot() == chain[1]:
+            return set(chain[2]), start
+        return set(), start
+
+    def _chain_end(self, clean: set, start: int, ok: bool):
+        if not ok:
+            self.chain = None
+            return
+        done = self.fake.journal[start:]
+        clean -= {(e["nsg"], e["rule"]) for e in done if e.get("op") == "rule.delete"}
+        clean |= {(e["nsg"], e["rule"]) for e in done if e.get("op") == "rule.write"}
+        self.chain = (len(self.fake.journal), self.fake.snapshot(), clean)
+
+    def _named_block_rules(self, vm: str) -> set:
+        """(NSG, rule) of every rule the VM's block entry names — where to look on Azure."""
+        from .fake_azure import nsg_id
+        entry = next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), None)
+        if not entry:
+            return set()
+        named = {(key(nsg_id(p["nsg_rg"], p["nsg_name"])), f"{p['rule']}{x}".lower())
+                 for p in entry.get("placements") or [] for x in ("", "-out")}
+        if entry.get("scoped") is False and "/" in (entry.get("nsg") or ""):
+            named |= {(key(nsg_id(*entry["nsg"].split("/", 1))), f"{entry['rule']}{x}".lower())
+                      for x in ("", "-out")}
+        return named
+
+    def _no_drift_on_untouched(self, cards_before: set, quiet: set | None, named: dict):
+        """I3, a drift that wasn't (RB1, second review): a block whose every rule — as its
+        entry named them before the pass — Glorfindel wrote, nothing touching the world
+        since (the blocks and promotions in a row, then this pass), gets no card that it
+        vanished. A promotion leaves a NIC to the perimeter; read as a NIC added since, its
+        rules gone, the pass said a drift and, outside human_only, put them back over the
+        promotion."""
+        if not quiet:
+            return
+        for e in escalations.pending():
+            if (e["id"] in cards_before or e.get("action") != "block_suspicious_ip"
+                    or "disparu" not in (e.get("reason") or "")):
+                continue
+            vm = next((v for v in self.live if key(v) == key(e.get("resource_id") or "")), None)
+            rules = named.get(vm) or set()
+            assert not rules or not rules <= quiet, (
+                f"I3: the reassertion said the block on {vm} vanished; every one of its rules is as "
+                f"Glorfindel wrote it, nothing touched since ({e.get('reason', '')[:100]}…)")
 
     def _block_cards_true(self, cards_before: set, journal_at: int):
         """I3 for what the reassertion's block cards say (RB1), NIC by NIC, on the NICs a

@@ -2156,7 +2156,9 @@ def test_a_promotion_keeps_the_block_of_a_nic_the_perimeter_doesnt_cover(monkeyp
 def test_a_perimeter_block_alone_is_verified_on_every_nic(monkeypatch):
     """A perimeter block alone was verified on its rule pair only: true, db-nic-1 open.
     Now its verification reads the VM's NICs it doesn't cover — false, and the
-    reassertion's card names it."""
+    reassertion's card names it: never covered, not gone (second review: « a disparu
+    d'Azure — l'IP n'est plus bloquée sur db-nic-1 », and the perimeter written again for
+    nothing) — said once, nothing written, in either mode."""
     import shutil
 
     invariant_env(monkeypatch)
@@ -2167,9 +2169,13 @@ def test_a_perimeter_block_alone_is_verified_on_every_nic(monkeypatch):
         c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
         v = c.verify_block_ip(ATTACKER, DB)
         assert v["verified"] is False and v["uncovered_nics"] == ["db-nic-1"], v
-        m.reassert(Script("human_only", None))
+        writes = len(m.fake.journal)
+        m.reassert(Script("non_disruptive", None))
         (card,) = _cards(m)
-        assert "n'est plus bloquée sur db-nic-1" in card, card
+        assert "ne couvre pas db-nic-1" in card and "scope vm" in card and "disparu" not in card, card
+        assert not [e for e in m.fake.journal[writes:] if e["op"].endswith((".write", ".delete"))]
+        m.reassert(Script("non_disruptive", None))
+        assert len(_cards(m)) == 1 and not [e for e in m.fake.journal[writes:] if e["op"].endswith(".write")]
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
 
@@ -2235,3 +2241,53 @@ def test_a_perimeter_block_reads_the_other_nics_own_block_on_azure(monkeypatch):
          ("block", DB, DB, None, 22),
          ("terraform_apply", key(_DATA)),
          ("block_perimeter", DB, DB, None, False))
+
+
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_promotion_is_no_drift_for_the_next_pass(monkeypatch, mode):
+    """RB1, second review: Db--01 blocked for itself on its two subnets, then promoted —
+    db-nic-0 left to the perimeter, db-nic-1 keeping its own block. The next pass read
+    db-nic-0, absent from the placements, as a NIC added since whose rules are gone: « a
+    disparu d'Azure en partie (db-nic-0) » in human_only; outside it, the VM's rules written
+    again on db-nic-0 — the promotion undone — and `reasserted_at` set, the next real drift
+    escalated without being put back. A NIC the entry's perimeter covers is covered by
+    design: no card, no write (and the machine's oracle on an untouched block)."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("block", DB, DB, None, 22),
+         ("block_perimeter", DB, DB, None, True),
+         ("reassert", mode, None))
+
+
+def test_a_promotion_leaves_the_next_pass_silent_and_writes_nothing(monkeypatch):
+    """The same, said by the cards and the journal: two passes outside human_only, no card,
+    no write, no `reasserted_at`."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        c = m.connector
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=22)["status"] == "blocked"
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="subnet", replace=True)["status"] == "blocked"
+        writes = len(m.fake.journal)
+        for _ in range(2):
+            m.reassert(Script("non_disruptive", None))
+        assert not _cards(m)
+        assert not [e for e in m.fake.journal[writes:] if e["op"].endswith((".write", ".delete"))]
+        entry = next(e for e in actions._load_block_entries(DB) if e["ip"] == ATTACKER)
+        assert not entry.get("reasserted_at") and c.verify_block_ip(ATTACKER, DB)["verified"] is True
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_nic_left_to_a_perimeter_someone_turned_is_open(monkeypatch):
+    """A NIC a promotion left to the perimeter is covered by design only while the
+    perimeter holds: turned into an allow, it is open — never « reste bloquée »."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("block", DB, DB, None, 22),
+         ("block_perimeter", DB, DB, None, True),
+         ("tamper_with_our_rule", "access", (key(_SUBNET), _PERIMETER)),
+         ("reassert", "human_only", None))

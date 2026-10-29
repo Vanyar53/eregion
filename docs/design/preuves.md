@@ -1566,6 +1566,27 @@ ses règles retirées depuis (un `terraform apply`), `blocked` dit. Ce qui la bl
 Azure (`verify_block_ip`) ; séquence `test_a_perimeter_block_reads_the_other_nics_own_block_on_azure`,
 mutant M1641.
 
+**Seconde relecture : une dérive qui n'existait pas.** Introduite par la reprise : après
+`block(Db--01)` puis `block_perimeter(Db--01, replace=True)` sur deux subnets, l'entrée ne garde
+que le placement de db-nic-1 ; la vérification lisait db-nic-0, absente des placements, comme une
+carte ajoutée depuis aux règles manquantes (`held_missing`). En `human_only`, « a disparu d'Azure
+en partie (db-nic-0) » — c'est la promotion qui l'avait retirée ; ailleurs, les règles de la VM
+réécrites sur db-nic-0, la promotion défaite, « reposé une fois », et `reasserted_at` posé : la
+vraie dérive suivante escaladée sans être reposée. **Correctif** (`perimeter.py`,
+`_left_to_perimeter`) : une carte d'une entrée fusionnée sans placement, derrière la paire de
+périmètre de l'entrée sur un NSG qui la gouverne, et que cette paire tient, est couverte par
+conception ; le périmètre retourné, elle est ouverte. Et un périmètre seul sur une VM dont une carte
+est sur un autre subnet ne dit plus « a disparu — l'IP n'est plus bloquée sur db-nic-1 » d'une carte
+jamais bloquée, et ne réécrit plus le périmètre pour rien : « ne couvre pas db-nic-1 … non couverte
+depuis le blocage (autre subnet) — bloquer aussi la VM (scope vm) », une fois, sans écriture. **La
+machine** gagne un oracle (aucun retiré ni restreint) : une suite de blocages et de promotions
+réussis, sans faute ni rien d'autre qui touche le monde entre eux (le journal du faux Azure et une
+image du monde à la fin de chacun), puis une passe — une entrée dont toutes les règles nommées avant
+la passe sont des écritures de cette suite n'a aucune carte « disparu »
+(`_no_drift_on_untouched`). Séquences `test_a_promotion_is_no_drift_for_the_next_pass` (les deux
+modes : l'oracle les fait tomber sur le code d'avant), `test_a_promotion_leaves_the_next_pass_silent_and_writes_nothing`,
+`test_a_nic_left_to_a_perimeter_someone_turned_is_open` ; mutants M1642–M1644.
+
 **Le déblocage d'une VM supprimée (RB1).** Ce qu'il laisse porte sa commande
 (`az network nsg rule delete -g … --nsg-name … -n …`) et le dit redit tant que la règle reste — la
 retirer met fin à l'`unblock_partial`, le déblocage suivant aboutit. L'entrée perdue, un blocage de
@@ -1575,10 +1596,10 @@ dit (`not_found`) : dit et laissé (il couvre tout un subnet). **Notre `-out` re
 entrait en collision, Azure refusait, rien n'était reposé ; seule une règle à nous dans sa propre
 direction libère le sien.
 
-**Séquences figées** (`test_invariant_regressions.py`) : seize tests, vingt cas, relecture
-comprise ; dix-sept échouent sur `main` pour la raison dite, les trois autres (un périmètre contourné
+**Séquences figées** (`test_invariant_regressions.py`) : les séquences de RB1, relectures
+comprises ; vingt cas échouent sur `main` pour la raison dite, les autres (un périmètre contourné
 sur le port de la menace, un périmètre d'une autre VM au déblocage, l'entrée gardée) gardent des
-mutants ; tests de `test_reassert.py`. Mutants M1620–M1641 attrapés par elles ; M1599 réaligné. Conséquence
+mutants ; tests de `test_reassert.py`. Mutants M1620–M1644 attrapés par elles ; M1599 réaligné. Conséquence
 voulue de la relecture après repose : un blocage tenu par la quarantaine dont les règles, sur le
 NSG propre de la carte (hors de la carte jusqu'à la levée), ont disparu n'est plus dit « reposé » —
 la repose écrit sur le NSG qui gouverne la carte, celles-là manquent toujours : `partial`, dit.

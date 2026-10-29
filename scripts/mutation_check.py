@@ -4423,7 +4423,10 @@ _RB1 = " ".join([f"{_I5R}{t}" for t in (
     "a_perimeter_block_alone_is_verified_on_every_nic",
     "a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off",
     "a_write_that_failed_is_never_said_put_back",
-    "a_perimeter_block_reads_the_other_nics_own_block_on_azure")] + ["tests/unit/test_reassert.py"])
+    "a_perimeter_block_reads_the_other_nics_own_block_on_azure",
+    "a_promotion_is_no_drift_for_the_next_pass",
+    "a_promotion_leaves_the_next_pass_silent_and_writes_nothing",
+    "a_nic_left_to_a_perimeter_someone_turned_is_open")] + ["tests/unit/test_reassert.py"])
 MUTANTS += [
     ("M1620", "a merged block put back on its perimeter alone: the VM's rule left turned (RB1)", R,
      '    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]\n',
@@ -4491,6 +4494,21 @@ MUTANTS += [
      BLK, "            off, off_ids, unread = [], None, _first_line(exc)\n", '            off, off_ids, unread = [], set(), ""\n'),
 ]
 TESTS.update({f"M{n}": _RB1 for n in range(1635, 1642)})
+# RB1, second review: a NIC a promotion left to the perimeter is no drift; a NIC the
+# perimeter never covered is no disappearance. M1642–M1644.
+MUTANTS += [
+    ("M1642", "a NIC a promotion left to the perimeter read as added since, its rules gone: a drift said, "
+              "the promotion undone (RB1, second review)", UNB,
+     "                    if not self._left_to_perimeter(cache, perimeter, targets.get(n), ip, port):\n",
+     "                    if True:\n"),
+    ("M1643", "a NIC left to the perimeter covered whether the perimeter holds or not (RB1, second review)", PER,
+     '        return governs and self._perimeter_holds(cache, t0, ip, port) == "holds"\n',
+     "        return governs\n"),
+    ("M1644", "a NIC the perimeter never covered said vanished, the perimeter written again (RB1, second review)",
+     R, '    if verification.get("uncovered_nics") and not verification.get("missing_rules"):\n',
+     "    if False:\n"),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1642, 1645)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

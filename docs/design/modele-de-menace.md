@@ -51,13 +51,13 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 | | Menace | Ce qui la tient |
 |---|---|---|
 | S | Une ligne de `runs/` se fait passer pour Glorfindel (un `recovery_complete` qui lève une isolation) | La watch ne prend de `runs/` que ce qu'un injecteur émet, chaque champ vérifié ; un `recovery_complete` ne lève seul que s'il vient du chemin propre de Glorfindel (`glorfindel/signal_origin.py`, SEC3) |
-| T | Un état illisible ou tronqué est lu comme « pas d'état » et libère une VM | Illisible n'est jamais absent : le balayage ne retire rien et le dit ; état écrit entier, en 0600 (dossiers 0700) ; escalades sous `flock`, réécrites entières (SEC3) |
+| T | Un état illisible ou tronqué est lu comme « pas d'état » et libère une VM | Illisible n'est jamais absent : le balayage ne retire rien et le dit (SEC3) ; la levée, le reset et `verify_release` ne retirent rien d'une carte en quarantaine ou sans NSG et ne disent pas levé, la réaffirmation le dit (SEC4b) ; état écrit entier, en 0600 (dossiers 0700) ; escalades (SEC3) et règles proposées (SEC4b) sous `flock`, réécrites entières |
 | R | Une ligne refusée disparaît sans bruit | Elle est journalisée et comptée (`~/.glorfindel/channel_refusals.json`, SEC3) |
 | I | Un injecteur lit l'état du bleu (ce qui est isolé, bloqué, escaladé) | Les conteneurs des injecteurs ne montent que `~/.glorfindel/injectors`, en lecture seule, où la watch copie son battement (SEC3) |
 | D | Un flot de lignes dans `runs/` | Refusées une à une, sans appel au modèle ni au cloud |
 | E | Une fenêtre d'exercice déclarée pour faire passer une vraie attaque pour un exercice | Fenêtre bornée en durée et en avance (`MAX_DURATION_S`, `FUTURE_SKEW_S`), qui doit nommer une VM inscrite ; une fenêtre refusée l'est pour de bon (B2, `eregion_core/exercise.py`) |
 
-**Où c'est dans le code** : `glorfindel/signal_origin.py`, `glorfindel/response/state.py`, `glorfindel/response/locks.py`, `eregion_core/exercise.py` ; tests `tests/unit/test_signal_origin.py`, `tests/unit/test_locks.py`, `tests/unit/test_exercise_guard.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), « Le canal runs/ » ; [`docs/fichiers-cles.md`](../fichiers-cles.md).
+**Où c'est dans le code** : `glorfindel/signal_origin.py`, `glorfindel/response/state.py`, `glorfindel/response/locks.py`, `glorfindel/reassert_cards.py`, `glorfindel/proposed_rules.py`, `eregion_core/exercise.py` ; tests `tests/unit/test_signal_origin.py`, `tests/unit/test_locks.py`, `tests/unit/test_unreadable_state.py`, `tests/unit/test_exercise_guard.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), « Le canal runs/ » ; [`docs/fichiers-cles.md`](../fichiers-cles.md).
 
 **Ouvert** : d'autres points de l'état local — planifié : #275.
 

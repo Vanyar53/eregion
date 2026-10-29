@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **`make llm-compare ATTEST=1` writes its attestation** (DEP1, #282, 29/10). A `from pathlib import Path` in the harness's `--json` branch made `Path` local to its `main`: without `--json`, the attestation of a full, paid run was lost to an error at its very end. Test `test_make_llm_compare_attest_writes_the_attestation_without_json`, mutant M1617.
+
 ### Security
 - **LiteLLM 1.86.1 → 1.100.4** (DEP1, #282, 29/10; `docs/operations.md`, « Verrou des dépendances »). The first release that fixes the three advisories on the locks: GHSA-3cv6-jpf6-8222 (authenticated SSRF through request-body routing parameters, #316), GHSA-g5ff-637f-6q2m (arbitrary local file read through `vertex_ai_credentials`, #317) and GHSA-7hp6-4w63-5g45 (high: privilege escalation to proxy admin through the salt key reused across domains, introduced in 1.91.0 — 1.95.1, the first candidate, carried it). All three sit in LiteLLM's proxy, which Eregion does not run.
   - **What enters with it**, same resolution date as the lock before (26/10): 1.100.4 declares `boto3` and `pydantic-settings` on top of 1.86.1's dependencies. boto3, botocore, s3transfer and jmespath enter the three locks; pydantic-settings, python-dateutil and six enter the injectors' too (chromadb already brought them to the others). python-dateutil goes back from 3.0.0 to 2.9.0.post0 in `dev.txt` and `glorfindel.txt` (botocore requires `<3.0.0`), and tzdata, pulled by 3.0.0 only, leaves. The AWS SDK is installed by litellm, never imported outside a provider's adapter (`tests/unit/test_provider_boundary.py`).

@@ -498,7 +498,6 @@ def main() -> int:
 
     if args.json:
         import json
-        from pathlib import Path
         Path(args.json).write_text(json.dumps(
             {"runs": runs, "draws": os.environ.get("GLORFINDEL_DECISION_DRAWS") or "3",
              "models": results}, indent=2, ensure_ascii=False, default=str))

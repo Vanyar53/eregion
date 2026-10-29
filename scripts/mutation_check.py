@@ -3996,7 +3996,13 @@ MUTANTS += [
      '    if model not in [m.get("model") for m in att.get("models") or []]:\n',
      "    if False:\n"),
 ]
-TESTS.update({mid: _SMOKE_T for mid in ("M1615", "M1616")})
+MUTANTS += [
+    ("M1617", "main's --json branch imports Path: `make llm-compare ATTEST=1` loses the attestation (DEP1)",
+     "scripts/llm_smoke.py",
+     "    if args.json:\n        import json\n        Path(args.json)",
+     "    if args.json:\n        import json\n        from pathlib import Path\n        Path(args.json)"),
+]
+TESTS.update({mid: _SMOKE_T for mid in ("M1615", "M1616", "M1617")})
 
 
 # SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values

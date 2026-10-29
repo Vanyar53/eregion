@@ -4269,6 +4269,52 @@ TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1564", "M1565", "M
 TESTS["M1567"] = "tests/unit/test_workflows.py"
 
 
+# SEC7, after its 5.5 review: the red container without the shared principal, settled messages
+# answered, H0's CD reading the read-only errors, the watch's broad rights said, the pairs, the
+# console's and the bot's ids in OWN_CALLERS, NO_WATCH=1 only, the audit's roles. M1570–M1579.
+MUTANTS += [
+    ("M1570", "the red container takes the shared principal again: it could isolate and restore (SEC7, V-17)", MAKE,
+     '\tAZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-}" \\\n',
+     '\tAZURE_CLIENT_ID="$${ANNATAR_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \\\n'),
+    ("M1571", "a message not re-armed answers « interaction failed » (SEC7, V-08)", BOT,
+     "                    self.add_view(_SettledView(esc_id), message_id=message_id)\n                    settled += 1\n",
+     "                    pass\n"),
+    ("M1572", "a settled message's click answers nothing (SEC7, V-08)", BOT,
+     '        await interaction.response.send_message(\n'
+     '            "✓ Carte réglée : ce bouton ne lance plus rien.", ephemeral=True)\n        return False',
+     "        return False"),
+    ("M1573", "a release whose writes the read-only root refuses kept on H0 (SEC7, V-34)",
+     "infra/glorfindel-host/cd/eregion_cd.py",
+     "            if ro:\n                return (f\"{', '.join(ro)} : « {READ_ONLY_FS} »",
+     "            if False:\n                return (f\"{', '.join(ro)} : « {READ_ONLY_FS} »"),
+    ("M1574", "a read-only error that ran before rolls H0 back: no regression (SEC7, V-34, H2)",
+     "infra/glorfindel-host/cd/eregion_cd.py",
+     "            ro = [n for n in read_only_errors(since) if n not in known_ro]\n",
+     "            ro = read_only_errors(since)\n"),
+    ("M1575", "the watch's principal holding the restore's rights never said (SEC7, V-17)",
+     "glorfindel/providers/azure/readers.py",
+     "                    beyond = [a for a in self.BEYOND_RESPONSE if allowed(a)]\n",
+     "                    beyond = []\n"),
+    ("M1576", "a principal's id without its secret said nothing: two principals mixed (SEC7, V-17)", MAKE,
+     '\t  [ "$$id" = "$$se" ] || echo', "\t  true || echo"),
+    ("M1577", "the console's and the bot's ids out of OWN_CALLERS: each approved write a card (SEC7, V-17)",
+     "docker-compose.yml",
+     "  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-},${EREGION_CONSOLE_AZURE_CLIENT_ID:-},"
+     "${GLORFINDEL_BOT_AZURE_CLIENT_ID:-}\n",
+     "  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-}\n"),
+    ("M1578", "NO_WATCH=0 bypasses Orodruin's guard (SEC7)", MAKE,
+     '\t@if [ "$(NO_WATCH)" != 1 ] &&', '\t@if [ -z "$(NO_WATCH)" ] &&'),
+    ("M1579", "the audit advises Backup Contributor again (SEC7, V-17)", "glorfindel/audit.py",
+     "                f\"--role 'Eregion Glorfindel Restore' \"", "                f\"--role 'Backup Contributor' \""),
+]
+TESTS["M1570"] = "tests/unit/test_makefile_secrets.py"
+TESTS.update({mid: "tests/unit/test_bot.py" for mid in ("M1571", "M1572")})
+TESTS.update({mid: "tests/unit/test_host_cd.py" for mid in ("M1573", "M1574")})
+TESTS["M1575"] = "tests/unit/test_glorfindel.py"
+TESTS.update({mid: "tests/unit/test_azure_roles.py" for mid in ("M1576", "M1577", "M1579")})
+TESTS["M1578"] = "tests/unit/test_makefile_bench.py"
+
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

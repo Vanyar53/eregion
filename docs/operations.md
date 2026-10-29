@@ -391,8 +391,8 @@ Limites connues :
 (`annatar-run`, `annatar-dry-run`, `annatar-shell`, `glorfindel-watch`, `-list`, `-shell`…)
 donnent chaque secret à `docker run` par son nom, `-e AZURE_CLIENT_SECRET`, jamais par sa valeur :
 `-e AZURE_CLIENT_SECRET=…` se lisait dans `ps`, l'historique du shell et `make -n`. Le shell de la
-recette choisit la valeur (`ANNATAR_AZURE_CLIENT_*` ou `GLORFINDEL_AZURE_CLIENT_*` d'abord, puis
-`AZURE_CLIENT_*`) et la pose dans l'environnement de `docker run` seulement (`*_AZURE_PICK`, devant
+recette choisit la valeur (`GLORFINDEL_AZURE_CLIENT_*` d'abord, puis `AZURE_CLIENT_*` ;
+`ANNATAR_AZURE_CLIENT_*` seul, jamais le partagé — SEC7) et la pose dans l'environnement de `docker run` seulement (`*_AZURE_PICK`, devant
 la commande). Le canary, `tests/unit/test_makefile_secrets.py` : chaque cible rendue par `make -n`
 avec des secrets factices, aucune valeur sur une ligne de commande ; puis les recettes des
 conteneurs lancées contre un faux `docker` (le bon principal dans son environnement, rien dans
@@ -433,9 +433,30 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
 - **Les variables** : `GLORFINDEL_AZURE_CLIENT_ID` / `…_SECRET` (la watch),
   `EREGION_CONSOLE_AZURE_CLIENT_ID` / `…_SECRET` (la console), `GLORFINDEL_BOT_AZURE_CLIENT_ID` /
   `…_SECRET` (le bot) ; vides, chacun prend `AZURE_CLIENT_ID` / `…_SECRET`, le principal unique
-  d'avant (rien ne casse). `GLORFINDEL_OWN_CALLERS` (la watch) : les `appId` de la console et du
-  bot, pour que leurs écritures approuvées se lisent dans le journal d'activité comme celles de
-  Glorfindel (AL1), pas comme celles d'un autre.
+  d'avant (rien ne casse).
+  - **Une paire va ensemble.** Le compose tire chaque repli variable par variable : un
+    `…_CLIENT_ID` posé sans son `…_SECRET` (ou l'inverse) donne au service l'id d'un principal
+    et le secret d'un autre. `make glorfindel-start` (`check-azure-env`) dit une paire
+    incomplète, sans jamais en dire la valeur.
+  - **`AZURE_CLIENT_*`, le repli de tout le reste** : la watch lancée depuis le venv
+    (`DefaultAzureCredential`), et tout service du compose dont la paire est vide. Y mettre le
+    principal de la watch (`.envrc.example`), jamais celui de la console : il restaure. Un
+    restore depuis la CLI du poste prend la paire de la console pour cette commande seulement
+    (`AZURE_CLIENT_ID=$EREGION_CONSOLE_AZURE_CLIENT_ID AZURE_CLIENT_SECRET=… glorfindel restore …`).
+  - **Les injecteurs ne prennent jamais `AZURE_CLIENT_*`** : `x-injector` dans le compose, et
+    `make annatar-*` / `annatar-shell` (`ANNATAR_AZURE_PICK`) ne lisent que
+    `ANNATAR_AZURE_CLIENT_*` ; vides, le conteneur rouge n'a pas d'identité
+    (`tests/unit/test_makefile_secrets.py`).
+  - **`GLORFINDEL_OWN_CALLERS`** (la watch) : les deux `…_CLIENT_ID` de la console et du bot
+    doivent y être, sinon chaque écriture approuvée devient une carte du plan de contrôle (AL1)
+    — ce que la console ou le bot ont levé ou débloqué se lirait comme l'écriture d'un autre.
+    Le compose les y ajoute de lui-même (`${GLORFINDEL_OWN_CALLERS},${EREGION_CONSOLE_…_ID},
+    ${GLORFINDEL_BOT_…_ID}`, les vides ignorés) ; une watch lancée depuis le venv ne les
+    connaît que si l'opérateur les y met.
+  - **Ce que la watch tient de trop est dit** : la préparation lit les droits sur le groupe de
+    la VM, et un principal qui tient `deallocate` ou le restore du coffre y reçoit une ligne
+    `identity_beyond_response` (information, jamais une retenue) ; la watch le journalise une
+    fois.
 - **La frontière qui reste** : la console et le bot écrivent sur Azure avec leur propre
   identité (la CLI qu'ils lancent tourne dans leur conteneur). Les rendre lecteurs seuls, c'est
   confier l'action approuvée à la watch (une file sous `~/.glorfindel`, signée par la console),
@@ -444,7 +465,7 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   (`Reader` sur le banc, `Log Analytics Reader` sur son workspace) : une identité par conteneur
   ne s'y sépare pas (le point de jeton de la VM répond à chacun d'eux), et il n'écrit rien.
 
-**Créer** (une fois par abonnement pour les rôles ; `<…>` à remplacer, rien de réel ici) :
+**Créer** (une fois par tenant pour les rôles ; `<…>` à remplacer, rien de réel ici) :
 
 ```bash
 SUB=<SUBSCRIPTION_ID>; RG=<groupe des VM inscrites>; VAULT_RG=<groupe du coffre>
@@ -455,6 +476,20 @@ for r in response restore; do
 done
 # Un principal par service, sans rôle à sa création (appId → …_CLIENT_ID, password → …_SECRET).
 for s in watch console bot; do az ad sp create-for-rbac --name "eregion-glorfindel-$s"; done
+```
+
+Le nom d'un rôle personnalisé est unique dans le tenant : pour un **second abonnement du même
+tenant**, `az role definition create` refuse (le nom existe). Ajouter l'abonnement aux portées
+du rôle existant, puis l'attribuer comme ci-dessous :
+
+```bash
+SUB2=<SECOND_SUBSCRIPTION_ID>
+for r in "Eregion Glorfindel Response" "Eregion Glorfindel Restore"; do
+  az role definition list --name "$r" --query '[0]' -o json \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); d["assignableScopes"].append(sys.argv[1]); print(json.dumps(d))' \
+        "/subscriptions/$SUB2" > /tmp/eregion-role.json
+  az role definition update --role-definition @/tmp/eregion-role.json
+done
 ```
 
 **Attribuer** (`<appId-…>` : ce que la création a rendu) :
@@ -473,11 +508,13 @@ for a in <appId-watch> <appId-console>; do
   az role assignment create --assignee $a --role "Log Analytics Reader" --scope $LAW
 done
 # Le compte de transit du restore (restore_staging_storage), s'il est dans un autre groupe :
-#   az role assignment create --assignee <appId-console> --role "Eregion Glorfindel Restore" --scope <son groupe>
+#   for a in <appId-console> <appId-bot>; do
+#     az role assignment create --assignee $a --role "Eregion Glorfindel Restore" --scope <son groupe>
+#   done
 ```
 
-Puis dans `.envrc` les trois paires `…_CLIENT_ID` / `…_SECRET`, et
-`GLORFINDEL_OWN_CALLERS=<appId-console>,<appId-bot>` ; `make glorfindel-restart` ; et, par
+Puis dans `.envrc` les trois paires `…_CLIENT_ID` / `…_SECRET`, et `AZURE_CLIENT_*` sur celle
+de la watch (`.envrc.example`) ; `make glorfindel-restart` (aucun « paire incomplète ») ; et, par
 conteneur, `docker exec eregion-watch glorfindel audit <resource_id>` (la console : sa page
 Audit) — un droit manquant y est nommé.
 
@@ -496,9 +533,11 @@ réinitialisation : un service à la fois.
 az role assignment list --assignee <appId-ancien> --all -o table
 az role assignment delete --assignee <appId-ancien> --role Contributor --scope /subscriptions/$SUB
 az ad sp delete --id <appId-ancien>
+az ad app delete --id <appId-ancien>      # l'inscription d'application, que sp delete laisse
 ```
 
-Le principal `annatar` d'avant (`Contributor` sur l'abonnement) se retire de même : sur un
+Le principal `annatar` d'avant (`Contributor` sur l'abonnement) se retire de même (les trois
+commandes) : sur un
 poste, un injecteur reste passif ; il agit depuis Orodruin, avec l'identité managée qu'y crée
 `make orodruin-up` (ses droits par VM inscrite, SEC5).
 
@@ -513,7 +552,13 @@ exige les quatre clés sur chaque service. Mesuré le 29/10 sur Docker (compose 
 écritures de chaque service (escalades, état, découverte, ChromaDB, l'index d'analyse, la
 config, `/tmp`) passent, l'image et `/root` refusent, `CapEff` à zéro, `NoNewPrivs` à 1. Les
 `docker run` de `make glorfindel-shell` / `annatar-shell` et du préflight du CD ne passent pas par
-le compose.
+le compose. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : son rapport de
+campagne s'écrit dans `runs/`, et l'index de l'IA d'analyse ne s'ouvre jamais dans son conteneur
+(chromadb n'est pas dans son image, `tests/unit/test_profiles.py`). Sur H0, la santé du CD lit
+le journal de chaque conteneur depuis la bascule : un « Read-only file system » que la release
+d'avant ne montrait pas (relu dans sa dernière heure, avant la bascule) est une régression, et
+H0 revient en arrière (`infra/glorfindel-host/cd/eregion_cd.py`, `read_only_errors`) ; le même
+avant et après est dit, jamais un retour.
 
 ---
 

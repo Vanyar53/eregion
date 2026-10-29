@@ -410,6 +410,12 @@ sur la VM et ne se connecte à aucun hôte par SSH. Orodruin garde `accept-new` 
   trois conteneurs `Up`, aucune erreur) et `make glorfindel-host-logs` sans « Read-only file
   system » ; `docker inspect eregion-watch --format '{{.HostConfig.ReadonlyRootfs}}
   {{.HostConfig.CapDrop}}'` → `true [ALL]`.
+- **La santé du CD lit les journaux (V-34)** : un « Read-only file system » depuis la bascule,
+  que la release d'avant ne montrait pas, fait revenir H0 en arrière (la règle de H2 : une
+  régression seulement). Cette sonde vit dans l'agent du CD : elle n'arrive sur H0 qu'avec
+  `make glorfindel-host-cd-install` depuis un commit qui la porte (le CD le signale : « Agent de CD
+  à mettre à jour »). La première release SEC7 est donc déployée par l'agent d'avant, sans elle :
+  les vérifications ci-dessus se font à la main.
 - **Les identités (V-17)** : rien. Les variables de chaque service sont vides sur H0 ; ses trois
   conteneurs gardent l'identité managée de la VM, lectrice.
 

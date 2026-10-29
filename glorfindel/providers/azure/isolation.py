@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 
-from glorfindel.providers.azure.nsg import _describe_shadowing, _rule_name, _scope_to_nic, _shadowing_rules
+from glorfindel.providers.azure.nsg import _describe_shadowing, _pair_priorities, _scope_to_nic, _shadowing_rules
 from glorfindel.providers.azure.quarantine import _remember_quarantine_outcome, PLATFORM_OPEN_NOTE
 from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.response.ids import _parse_vm_resource_id
@@ -105,7 +105,7 @@ class IsolationMixin:
                         nsg_rg, nsg_name, nsg_key = alt["nsg_rg"], alt["nsg_name"], alt_plan["nsg_key"]
                         plan = alt_plan
                 priority = plan["priority"]
-                placement["priority"] = priority
+                placement["priority"] = priority["inbound"]
                 ips = t["private_ips"]
                 if plan["ip_scoped"]:
                     if not ips:
@@ -113,15 +113,15 @@ class IsolationMixin:
                             f"NIC {t['nic_short']} has no private IP — cannot scope isolation "
                             "on its shared NSG"
                         )
-                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dsts=ips)
+                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority["inbound"], src="*", dsts=ips)
                     placement["applied"].append(in_name)
-                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, srcs=ips, dst="*")
+                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority["outbound"], srcs=ips, dst="*")
                     placement["applied"].append(out_name)
                 else:
                     # NSG governing this VM only: any/any affects nobody else.
-                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority, src="*", dst="*")
+                    self._put_deny_rule(nsg_rg, nsg_name, in_name, "Inbound", priority["inbound"], src="*", dst="*")
                     placement["applied"].append(in_name)
-                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority, src="*", dst="*")
+                    self._put_deny_rule(nsg_rg, nsg_name, out_name, "Outbound", priority["outbound"], src="*", dst="*")
                     placement["applied"].append(out_name)
                 # Still recorded when no alternative was clean: verify escalates on it.
                 placement["shadowed_by"] = plan["shadowed"]
@@ -132,7 +132,7 @@ class IsolationMixin:
                     raise
                 raise partial from exc
 
-            assigned.setdefault(nsg_key, set()).add(priority)
+            assigned.setdefault(nsg_key, set()).update(priority.values())
             placements.append(placement)
 
         # Persist state ONLY after every deny rule is confirmed on Azure (a 403 mid-way
@@ -325,16 +325,14 @@ class IsolationMixin:
         )
 
     def _plan_isolation(self, t: dict, nsg_rg: str, nsg_name: str, ip_scoped: bool,
-                        assigned: dict, own: tuple = ()) -> dict:
+                        assigned: dict, own: tuple[str, str]) -> dict:
         """Priority an isolation deny would take on this NSG, and the customer ALLOW
         rules that would be evaluated before it (nothing written). `own`: our rule
-        names — a re-application keeps their priority instead of moving them."""
+        names — a re-application keeps their place or moves them up, never down
+        (_pair_priorities)."""
         nsg_key = f"{nsg_rg}/{nsg_name}"
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
-        own_low = {n.lower() for n in own}
-        used = ({r.priority for r in existing if _rule_name(r).lower() not in own_low}
-                | assigned.get(nsg_key, set()))
-        priority = next(p for p in range(self.ISOLATION_PRIORITY, 4000) if p not in used)
+        priority = _pair_priorities(existing, *own, self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))
         ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=None, inbound_dst=ips,
                                     outbound_src=ips, outbound_dst=None)

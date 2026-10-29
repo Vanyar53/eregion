@@ -1506,3 +1506,108 @@ def test_a_thread_out_of_sight_holding_a_lock_does_not_hang_the_teardown(monkeyp
         gone.set()
         if not done.is_set():
             done.wait(30)
+
+
+_SUBNET = _NSG.format(rg="rg-net", name="nsg-subnet")
+_WEB2_BLOCK = "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"     # web2's NIC, in the IP's block
+
+
+def test_a_perimeter_block_put_back_keeps_its_place(monkeypatch):
+    """Found by the machine during I7S, shrunk to four steps (I5R, #311): web2 blocked on
+    the perimeter (200), then for itself (210); someone turns the VM's rule into an allow;
+    the reassertion puts the block back — the perimeter rule rewritten at the first number
+    free, 220, under that allow: the attacker reached web2 on every port. A rewrite now
+    keeps its place."""
+    _run(monkeypatch, _net(quarantine=True, subnet_nsg=[]),
+         ("block_perimeter", WEB2, WEB2, None, False),
+         ("block", WEB2, WEB2, None, 22),
+         ("tamper_with_our_rule", "access", (key(_SUBNET), _WEB2_BLOCK)),
+         ("reassert", "non_disruptive", None))
+
+
+def test_the_sequence_the_machine_found_on_i5(monkeypatch):
+    """The same, as the machine drew it (I7S's run, shrunk): a crash drawn in the
+    perimeter block, a 429 under the VM's, the reassertion inside a quarantine altered
+    on another VM."""
+    _run(monkeypatch, _net(quarantine=True, quarantine_rg="rg-sec", subnet_nsg=[]),
+         ("block_perimeter", WEB2, WEB2, (11, "before-crash"), False),
+         ("block", WEB2, key(WEB2), (10, "before-429"), 22),
+         ("tamper_with_our_rule", "access", (key(_SUBNET), _WEB2_BLOCK)),
+         ("quarantine_altered_then_reasserted", API, key(API), (8, "before-crash"), False, False,
+          "protocol", (key(_NSG.format(rg="rg-sec", name="nsg-glorfindel-quarantine-northeurope")),
+                       "glorfindel-quarantine-deny-in"), "non_disruptive", "no"))
+
+
+def _allow_from_attacker(m, nsg: str, priority: int, direction: str = "Inbound"):
+    FakeAzure._put_rule(m.fake.nsgs[key(nsg)], _rule_record(_rule(
+        f"customer-allow-{priority}-{direction.lower()}", priority, dict(
+            access="Allow", direction=direction,
+            source_address_prefix=ATTACKER if direction == "Inbound" else "*",
+            destination_address_prefix="*" if direction == "Inbound" else ATTACKER,
+            destination_port_range="*"))))
+
+
+def _reached_in(m, vm: str) -> set:
+    return {f for f in m._open(vm, forensic=None) if f[3] == ATTACKER and f[2] == "in"}
+
+
+@pytest.mark.parametrize("scope", ["vm", "subnet"])
+@pytest.mark.parametrize("split", [False, True])
+def test_a_block_written_again_never_moves_down(monkeypatch, scope, split):
+    """A block written again — the reassertion, or the operator blocking twice — rewrites
+    its rules under their names: each keeps the number it holds, or a smaller one. An
+    allow put since, after the deny, stays after it. `split`: our outbound rule moved
+    away by hand, and its number taken by another outbound rule — the inbound one keeps
+    its own; the pair no longer shares a number."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        c, g = m.connector, m.fake.nsgs[key(_SUBNET)]
+        assert c.block_suspicious_ip(ATTACKER, WEB2, scope=scope, threat_port=22)["status"] == "blocked"
+        ours = {n: r["priority"] for n, r in g["rules"].items() if n.startswith("glorfindel-block-")}
+        assert set(ours.values()) == {200}, ours
+        if split:
+            g["rules"][next(n for n in ours if n.endswith("-out"))]["priority"] = 4000
+            _allow_from_attacker(m, _SUBNET, 200, "Outbound")
+        _allow_from_attacker(m, _SUBNET, 205)
+        assert not _reached_in(m, WEB2)
+        c.block_suspicious_ip(ATTACKER, WEB2, scope=scope, threat_port=22)
+        assert not _reached_in(m, WEB2), "the rewrite fell behind the allow at 205"
+        now = {n: r["priority"] for n, r in g["rules"].items() if n.startswith("glorfindel-block-")}
+        inbound = next(n for n in ours if not n.endswith("-out"))
+        assert now[inbound] == 200, now
+        if not split:
+            assert all(now[n] <= ours[n] for n in ours), (ours, now)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)       # the allows aren't the machine's
+
+
+def test_an_isolation_written_again_never_moves_down(monkeypatch):
+    """The same for an isolation by rules (no quarantine): our outbound rule moved away by
+    hand, its number taken by another outbound rule, an allow put after our inbound deny —
+    isolated again, the inbound deny kept its number; moved to the first one free, it fell
+    behind the allow."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        c, g = m.connector, m.fake.nsgs[key(_SUBNET)]
+        assert c.isolate_vm(WEB2)["status"] == "isolated"
+        ours = {n: r["priority"] for n, r in g["rules"].items() if n.startswith("glorfindel-iso")}
+        p = c.ISOLATION_PRIORITY
+        assert set(ours.values()) == {p}, ours
+        g["rules"][next(n for n in ours if n.endswith("-out"))]["priority"] = 4000
+        _allow_from_attacker(m, _SUBNET, p, "Outbound")
+        _allow_from_attacker(m, _SUBNET, p + 1)
+        assert not _reached_in(m, WEB2)
+        c.isolate_vm(WEB2)
+        assert not _reached_in(m, WEB2), "the rewrite fell behind the allow"
+        now = {n: r["priority"] for n, r in g["rules"].items() if n.startswith("glorfindel-iso")}
+        assert now[next(n for n in ours if not n.endswith("-out"))] == p, now
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)       # the allows aren't the machine's

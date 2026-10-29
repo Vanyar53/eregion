@@ -1109,6 +1109,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 | I4S | NSG jugé sans la carte d'une autre VM partie en quarantaine (ou nue) | le reset (ou la levée) de la VM restée seule supprimait l'ancienne isolation de l'autre : aucun flux, mais plus rien au retour de sa carte hors de Glorfindel |
+| I7S | isolation par règles sur un NSG partagé, état perdu, carte laissée nue, réisolée sur le NSG du subnet (lectures des NSG en 429), VM supprimée | la levée de la VM supprimée ne cherchait rien : `released`, la première isolation restée sur le NSG partagé, visant l'adresse que reçoit la VM suivante |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
 séquences) a fait tomber I1 à l'étape même où quelqu'un passe le deny entrant de la quarantaine
@@ -1385,11 +1386,55 @@ changent à chaque tour ; aucun perdu — tout mutant attrapé avant l'est aprè
 par ses séquences figées, et seul M36 survit après (M10 et M36 avant). Remesurés sur quatre
 tours, les sept qui avaient bougé donnent 5/7 attrapés à chaque tour après, 4/7 avant.
 
-**Graine 322 (29/10, ouverte).** Trouvée pendant U3F, présente sur `main` (3da56f7), déterministe
-et sans lien avec la charge : « I7: rules of the deleted …/web left: ['nsg-tier/glorfindel-iso-web-web-nic-…', …-out] »,
-au `recover` qui suit un `address_reused` (`web` isolée par règles sur `nsg-tier` pendant que
-`nsg.get` répond 429 à chaque appel, supprimée, une autre `web` créée), après
-`bare_with_an_unknown_original` sur `web-nic`. Non réduite ; à traiter dans un lot à part.
+**I7S (29/10, #303) : les règles d'une VM supprimée sur un NSG partagé.** Trouvée pendant U3F, la
+graine 322 à 500 séquences faisait tomber I7 de façon déterministe, sur `main` aussi : « I7: rules
+of the deleted …/web left: ['nsg-tier/glorfindel-iso-web-web-nic-…', …-out] ». Réduite à la main
+(une étape retirée à la fois, tant que l'échec reste), la séquence tient en trois étapes et le
+`recover` du démontage : `block_then_isolate` sur `web` (quarantaine éteinte : isolée par règles
+sur `nsg-tier`, NSG qu'elle partage), `bare_with_an_unknown_original` (quarantaine allumée, isolée,
+état et tags perdus — l'état qui nommait les règles de `nsg-tier` avec eux —, réisolée, carte
+laissée nue, levée deux fois : l'original inconnu), puis `address_reused` : isolée pendant que
+`nsg.get` répond 429 (la quarantaine refusée, la carte nue isolée par règles sur le NSG du subnet,
+l'état réécrit ne nomme plus que celui-là), puis supprimée. **Cause**
+(`providers/azure/release.py`, `_sweep_isolation`) : la levée d'une VM supprimée défaisait les
+placements de son état, trouvait la VM absente et s'arrêtait là (`return []` : « la VM est
+partie, ses cartes avec elle ») — `released`. Les règles de la première isolation restaient sur
+`nsg-tier`, nommées pour `web-nic` et visant son adresse : la VM suivante qui la reçoit derrière ce
+NSG est coupée (une action disruptive à tort ; jamais une ouverture). Le balayage des orphelines
+le disait déjà (`orphans_are_reported`), et ne la retire que si elle coupe une VM vivante, en
+`non_disruptive`. Correctif (`_gone_vm_rules`) : la VM absente, la levée cherche les règles nommées
+pour les cartes que ses états nomment (placements de l'isolation, des blocages, et celles qu'une
+levée partielle a gardées, `known_nics`) sur tous les NSG de l'abonnement — l'empreinte de la carte
+dans le nom ne désigne qu'elle — et les retire ; une liste qui échoue donne `release_partial`
+(A0 : jamais « levée » sur un inconnu), l'état et ses cartes gardés pour le nouvel essai. Séquences
+figées : `test_a_deleted_vm_leaves_no_isolation_on_a_shared_nsg` (la graine réduite) et
+`test_a_deleted_vms_rules_go_with_its_release_or_are_said` (l'état réécrit ou le seul blocage qui
+nomme la carte ; une VM recréée à la même adresse, coupée et dite avant la levée, revenue à sa
+conception après ; la liste en 429). Mutants M1550–M1555 attrapés par ces séquences (M1550 aussi
+par la machine, graine 322 à 500) ; M07 suit l'appel déplacé. L'oracle n'a pas bougé. Invariants :
+500 séquences sur six graines (322, 210, 203, 1, 42, 777) et 2 000 sur 322, 210 et 203, vertes.
+Au même budget (60 séquences, deux tours, `--jobs 4`), les 76 mutants mesurables par la machine
+de `providers/azure/`, de `response/`, de la réaffirmation et des orphelines : 44/74 attrapés à
+chaque tour avant comme après ; aucun perdu — tout mutant attrapé avant (par la machine ou ses
+séquences figées) l'est après, M761 attrapé après seulement ; M10, M36 et M864 survivent des deux
+côtés. Les huit qui avaient bougé, remesurés sur quatre tours : 1/8 attrapés à chaque tour des deux
+côtés. Le harnais a aussi trouvé, sur sa graine du moment, un échec d'I5 sans lien (« the
+reassertion opened flows of …/web », l'attaquant sur 443), présent sur `main` : réduit à quatre
+étapes (`block_perimeter` coupé, `block` sous 429, notre blocage passé en allow par quelqu'un,
+`quarantine_altered_then_reasserted`), à traiter dans un lot à part.
+La relecture 5.5 a trouvé deux trous que la machine ne voit pas (elle n'écrit jamais d'état
+illisible, et sa suppression d'une VM emporte ses cartes). Un état illisible de la VM supprimée
+(isolation ou blocage) : `released`, les règles laissées, et le seul fichier qui nommait la carte
+effacé — maintenant `release_partial`, le fichier gardé (M1556–M1558). Une carte qu'Azure garde
+après sa VM (`az vm delete` et Terraform la détachent par défaut), rattachée à une autre VM du même
+nom que Glorfindel isole : la levée retirait l'isolation de celle-ci, qui porte les mêmes noms —
+la carte est maintenant lue d'abord ; 404, détachée ou sur une VM d'un autre nom, ses règles sont
+cherchées ; sur un homonyme, elles restent et c'est dit ; illisible, « non vérifiée » (M1559,
+M1600, M1601 ; c'est la garde « Azure dit 404 » d'A3, étendue). Séquences figées : quatre cas de
+plus à `test_a_deleted_vms_rules_go_with_its_release_or_are_said`,
+`test_a_deleted_vms_nic_that_azure_kept_is_read_first` (quatre cas). Seuls les noms actuels à
+empreinte sont cherchés — ni ceux d'avant L24 ni ceux suffixés par la VM, partagés par des
+homonymes : voulu, pour I2.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
@@ -1428,7 +1473,10 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
 - **VM supprimée et état perdu** : les règles qu'une isolation par règles a laissées sur un
   NSG partagé se retrouvent par l'empreinte de leur nom et sont retirées quand elles coupent une
   VM vivante en `non_disruptive` ou plus (A3) ; la VM reste coupée jusqu'au passage suivant de la
-  watch (une minute), ou, en `human_only`, jusqu'à ce qu'un humain agisse. Une liste des cartes
+  watch (une minute), ou, en `human_only`, jusqu'à ce qu'un humain agisse. Tant qu'un état de la
+  VM (isolation, blocage) nomme encore la carte, sa levée les cherche sur tous les NSG (I7S),
+  sous leurs seuls noms actuels à empreinte (ni ceux d'avant L24 ni ceux suffixés par la VM : I2) ;
+  un NSG que l'identité ne lit plus manque à cette liste sans erreur (hypothèse I1S). Une liste des cartes
   partielle (droits de lecture), des VNets qui se recouvrent et une carte recréée sous une VM
   vivante ne sont pas dans la machine : des tests unitaires couvrent les gardes
   (`test_orphan_sweep.py`). La garde « liste partielle » ne lit que les NSG attachés aux cartes :

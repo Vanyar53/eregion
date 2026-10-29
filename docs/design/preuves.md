@@ -1644,7 +1644,12 @@ M1590–M1599, 35/35 par leurs séquences figées ; invariants à 500 sur les gr
 puis 2 000 sur 322, verts ; harnais avant/après (60 séquences, deux tours) sur les mutants des
 modules touchés (déblocage, périmètre, réaffirmation et ce qui en est sorti) : 32 attrapés à chaque
 tour avant comme après, aucun perdu (M830, 1/2 avant, ne l'est plus qu'aux séquences figées), et
-les vingt nouveaux à chaque tour.
+les vingt nouveaux à chaque tour. Après la troisième : M1620–M1647 et M1590–M1599, 38/38 par leurs
+séquences figées ; M1645 par la machine seule, 0/2 à 500 (la séquence n'est pas tirée) ; invariants
+à 500 sur huit graines et 2 000 sur 322, verts, la règle d'acquittement comprise ; harnais
+avant/après (60 séquences, deux tours) sur les mutants du déblocage, du périmètre et de la
+réaffirmation : 34 attrapés à chaque tour avant, 35 après, aucun perdu (M13 2/2 → 1/2, M19 et M830
+attrapés à chaque tour après), les vingt-trois nouveaux à chaque tour.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

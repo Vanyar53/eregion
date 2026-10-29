@@ -20,6 +20,7 @@ from glorfindel.response.state import (
     _save_isolation_state,
     _UNKNOWN,
     _update_block_entry,
+    StateUnreadable,
     unreadable_states,
 )
 
@@ -102,7 +103,13 @@ class SweepMixin:
         for t0 in targets:
             if t0.get("quarantine") or t0.get("own_nsg_id"):
                 continue
-            recorded = _recorded_original(t0["nic_id"])
+            try:
+                recorded = _recorded_original(t0["nic_id"])
+            except StateUnreadable as exc:
+                # A state that can't be read may record it: bare by design or not is
+                # unknown — nothing put back, nothing cleared (SEC4b).
+                failed_early.append(f'{t0["nic_short"]}: carte sans NSG, {_first_line(exc)[:_ERR_MAX]}')
+                continue
             try:
                 original, q_bare = self._bare_nic_original(t0, rg)
             except Exception as exc:

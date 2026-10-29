@@ -101,6 +101,49 @@ def test_approve_marks_status(tmp_path):
     assert proposal["approved_at"] is not None
 
 
+def test_every_write_of_the_store_is_whole_and_under_its_lock(tmp_path, monkeypatch):
+    """SEC4b (as SEC3 for the escalations): record appended, approve and reject read the
+    store and wrote it back with no lock — a proposal recorded meanwhile was lost, and a
+    reader could see half a file. Each write now goes through a temporary file and
+    os.replace, inside `<store>.lock` — taken through `locks._file_lock`, read at call
+    time: the invariant machine's scheduler drives it (I3F). Measured between processes
+    in test_locks.py."""
+    import contextlib
+    from pathlib import Path
+
+    from glorfindel import actions
+    from glorfindel.response import locks
+    store = tmp_path / "proposed_rules.jsonl"
+    real_lock, real_write = locks._file_lock, actions._atomic_write_text
+    held: list[str] = []
+    writes: list[tuple[str, list]] = []
+
+    @contextlib.contextmanager
+    def lock(path, timeout=None):
+        held.append(Path(path).name)
+        try:
+            with real_lock(path, timeout=timeout):
+                yield
+        finally:
+            held.pop()
+
+    def write(path, text, mode=0o600):
+        writes.append((Path(path).name, list(held)))
+        real_write(path, text, mode)
+
+    monkeypatch.setattr(locks, "_file_lock", lock)
+    monkeypatch.setattr(actions, "_atomic_write_text", write)
+    rules_file = tmp_path / "detection_rules.yaml"
+    rules_file.write_text("rules:\n")
+    a, b = _sample_proposal(rule_name="rule-a"), _sample_proposal(rule_name="rule-b")
+    reject(a)
+    approve(b, rules_file)
+    ours = [w for w in writes if w[0] == store.name]
+    assert len(ours) == 4, writes
+    assert all(store.name + ".lock" in locked for _, locked in ours), ours
+    assert [json.loads(ln)["status"] for ln in store.read_text().splitlines()] == ["rejected", "approved"]
+
+
 def test_approve_writes_the_client_layer_not_the_base(tmp_path):
     """P1: the rule goes to the client's layer; the base file is not touched."""
     pid = _sample_proposal(

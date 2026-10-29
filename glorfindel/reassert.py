@@ -12,13 +12,15 @@ the few isolated/blocked VMs are read. A check that holds records `verified_at`.
 - rules missing again after that → alert only. Two removals look deliberate (a person,
   or a pipeline that will keep deleting them): Glorfindel does not fight it.
 
-Only MISSING rules trigger this. A bypass (an allow before the deny) or an unreadable
-rule list is not fixed by re-applying; verification already reports those.
+Only MISSING rules are put back. A bypass (an allow before the deny) is said, once per
+change, never fixed (reassert_cards, V-16); an unreadable rule list, neither.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+
+from glorfindel.reassert_cards import say_bypass, say_unreadable_states
 
 log = logging.getLogger(__name__)
 
@@ -57,8 +59,7 @@ def _alert(signal_id: str, **kwargs) -> None:
     escalations.record(signal_id=signal_id, escalation_type="verification_failed", **kwargs)
 
 
-def _who_changed(connector, iso: dict) -> str:
-    """Who wrote the VM's NICs lately (activity log, best effort) — the alert says it."""
+def _who_changed(connector, iso: dict) -> str:   # who wrote its NICs lately, best effort
     nics = {p.get("nic_id") for p in iso.get("placements") or [] if p.get("nic_id")}
     lines = []
     for nic in sorted(nics):
@@ -77,8 +78,7 @@ def _mark_alerted(vm: str, now: str) -> None:
 
 
 def _mode(autonomy, vm_name: str, ref: str = "") -> str:
-    """The EFFECTIVE mode: a VM configured autonomous but held by its readiness (L6)
-    gets an alert, not a re-application."""
+    """The EFFECTIVE mode: a VM held by its readiness (L6) gets an alert, not a re-application."""
     try:
         if autonomy is None:
             return "human_only"
@@ -141,6 +141,7 @@ def _whatever_the_state(connector, autonomy, report: list[dict]) -> None:
     back): one listing of the NSGs for both, read after those writes. Listing failed →
     each lists for itself, and says it can't."""
     from glorfindel.orphans import sweep_orphan_rules
+    say_unreadable_states(report)             # what it can't read, said (SEC4b)
     nsgs = None
     lister = getattr(connector, "nsg_listing", None)
     if lister is not None and getattr(connector, "dry_run", False) is not True:
@@ -158,8 +159,7 @@ _SAID_ELSEWHERE: set[str] = set()     # cards' NSGs of another subscription, sai
 
 
 def _quarantine_alerts_path():
-    """Beside the isolation states (~/.glorfindel/quarantine_alerts.json): which change
-    of which quarantine NSG was said — the `drift_alerted_at` of an NSG no state names."""
+    """~/.glorfindel/quarantine_alerts.json: the change said — the `drift_alerted_at` of an NSG no state names."""
     from glorfindel import actions
     return actions._ISOLATION_STATE_DIR.parent / "quarantine_alerts.json"
 
@@ -299,14 +299,12 @@ _LOCK_WAIT_S = 30
 _STALE_MARKER_S = 1800
 
 
-def _held_by_an_operation(state: dict, failed_key: str, running_key: str) -> bool:
-    """Partial, half-failed or in-progress work belongs to whoever started it."""
+def _held_by_an_operation(state: dict, failed_key: str, running_key: str) -> bool:   # whoever started it
     return bool(state.get("partial") or state.get(failed_key) or state.get(running_key))
 
 
 def _stale(marker: str | None) -> bool:
-    """An intent marker older than 30 min: the release/unblock was cut off (War Room
-    timeout, crash) and nobody is finishing it (fourth review, Q10)."""
+    """An intent marker older than 30 min: the release/unblock was cut off, nobody finishes it (Q10)."""
     if not marker:
         return False
     try:
@@ -340,6 +338,7 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
     except Exception as exc:                                   # VM gone, API down
         log.warning("reassert: isolation of %s not checked (%s)", vm, exc)
         return
+    say_bypass(vm, rid, verification, report, ref=ref)
     if verification.get("verified") is True:
         state = _load_isolation_state(ref or vm)
         if state is not None:
@@ -415,6 +414,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     except Exception as exc:
         log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
         return
+    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)
     if verification.get("verified") is True and not verification.get("held_missing"):
         _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None)
         return

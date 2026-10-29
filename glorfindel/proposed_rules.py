@@ -1,11 +1,32 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 _STORE = Path.home() / ".glorfindel" / "proposed_rules.jsonl"
+
+
+# SEC4b (as SEC3 for the escalations, V-10): the watch records, the console and the CLI
+# approve and reject. Each read-modify-write holds an flock on `<store>.lock`, and the store
+# is rewritten whole (temporary file + os.replace): no proposal lost between two writers, no
+# reader ever sees half a file.
+@contextlib.contextmanager
+def _locked():
+    from glorfindel.response.locks import _file_lock      # read at call time: the invariant
+    with _file_lock(_STORE.with_name(_STORE.name + ".lock")):   # machine's scheduler drives it
+        yield
+
+
+def _lines() -> list[str]:
+    return [ln for ln in _STORE.read_text().splitlines() if ln.strip()] if _STORE.exists() else []
+
+
+def _write(lines: list[str]) -> None:
+    from glorfindel.response.state import _atomic_write_text
+    _atomic_write_text(_STORE, "\n".join(lines) + "\n")
 
 # A proposal named like a shipped rule gets this suffix (SEC2): approved, it would have
 # replaced the shipped rule in the client's layer, in silence.
@@ -74,9 +95,8 @@ def record(
         "status": "pending",
         "approved_at": None,
     }
-    _STORE.parent.mkdir(parents=True, exist_ok=True)
-    with open(_STORE, "a") as f:
-        f.write(json.dumps(proposal) + "\n")
+    with _locked():
+        _write(_lines() + [json.dumps(proposal)])
     return proposal["id"]
 
 
@@ -127,17 +147,19 @@ def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
 
     if not _STORE.exists():
         raise ValueError(f"Proposal {proposal_id} not found")
+    with _locked():
+        return _approve(proposal_id, rules_yaml_path, rule_layers)
 
-    lines = _STORE.read_text().splitlines()
+
+def _approve(proposal_id: str, rules_yaml_path: str | Path, rule_layers) -> dict:
+    """approve(), under the store's lock: read, rule written, proposal marked, rewritten."""
+    lines = _lines()
     proposal: dict | None = None
-    updated: list[dict] = []
-    for line in lines:
-        if not line.strip():
-            continue
+    at = -1
+    for i, line in enumerate(lines):
         p = json.loads(line)
         if p["id"] == proposal_id and p["status"] == "pending" and proposal is None:
-            proposal = p
-        updated.append(p)
+            proposal, at = p, i
 
     if proposal is None:
         raise ValueError(f"Proposal {proposal_id} not found or already approved")
@@ -152,7 +174,8 @@ def approve(proposal_id: str, rules_yaml_path: str | Path) -> dict:
 
     proposal["status"] = "approved"
     proposal["approved_at"] = datetime.now(timezone.utc).isoformat()
-    _STORE.write_text("\n".join(json.dumps(p) for p in updated) + "\n")
+    lines[at] = json.dumps(proposal)
+    _write(lines)
     bound = "assets" in rule
     reason = "" if bound else (
         "aucun backend unique de glorfindel-config.yaml ne surveille son workspace"
@@ -177,22 +200,20 @@ def reject(proposal_id: str) -> dict:
     if not _STORE.exists():
         raise ValueError(f"Proposal {proposal_id} not found")
 
-    lines = _STORE.read_text().splitlines()
-    proposal: dict | None = None
-    updated = []
-    for line in lines:
-        if not line.strip():
-            continue
-        p = json.loads(line)
-        if p["id"] == proposal_id and p["status"] == "pending":
-            p["status"] = "rejected"
-            proposal = p
-        updated.append(json.dumps(p))
+    with _locked():
+        lines = _lines()
+        proposal: dict | None = None
+        for i, line in enumerate(lines):
+            p = json.loads(line)
+            if p["id"] == proposal_id and p["status"] == "pending":
+                p["status"] = "rejected"
+                proposal = p
+                lines[i] = json.dumps(p)
 
-    if proposal is None:
-        raise ValueError(f"Proposal {proposal_id} not found or not pending")
+        if proposal is None:
+            raise ValueError(f"Proposal {proposal_id} not found or not pending")
 
-    _STORE.write_text("\n".join(updated) + "\n")
+        _write(lines)
     return proposal
 
 

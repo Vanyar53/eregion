@@ -404,6 +404,37 @@ def test_the_console_leaves_out_of_to_judge_what_glorfindel_does():
     assert _js_set("_NOT_DECISIONS") == escalations._NOT_DECISIONS
 
 
+def test_an_isolation_whose_original_is_unknown_says_it_on_its_card():
+    """SEC4b, second review: a NIC in our quarantine whose original nothing recorded — its
+    release, autonomous too, will ask for our tag. /api/state carries it, the card says it."""
+    import inspect
+    nic = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/vm-nic"
+    assert api._original_unknown_nics([{"nic_id": nic, "kind": "quarantine"}]) == ["vm-nic"]
+    assert api._original_unknown_nics([{"nic_id": nic, "kind": "quarantine", "original_nsg_id": None}]) == []
+    assert '"original_unknown": _original_unknown_nics(' in inspect.getsource(api)
+    page = _glorfindel_page()
+    chip = page[page.index("if (Array.isArray(s.original_unknown) && s.original_unknown.length) {"):][:900]
+    assert "⚠ original unknown" in chip and "_attr(why)" in chip
+
+
+def test_a_card_about_the_local_state_makes_no_vm_tile():
+    """SEC4b: the `state_unreadable` card's resource is the local state (`~/.glorfindel`),
+    no VM — it made a tile `.glorfindel`, counted among the unprotected VMs. Neither the
+    pending cards nor the ones Glorfindel closed make one for it; Azure ids still do."""
+    import re
+    from glorfindel.reassert_cards import _STATE_RESOURCE
+    page = _glorfindel_page()
+    m = re.search(r"function _isLocalState\(rid\) \{ return /(.*?)/\.test\(rid \|\| ''\); \}", page)
+    assert m, "no _isLocalState"
+    local = re.compile(m.group(1).replace("\\/", "/"))
+    assert local.match(_STATE_RESOURCE)
+    assert not local.match("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm")
+    tiles = page[page.index("  vmEscs.forEach(e => {"):]
+    assert tiles.splitlines()[1].strip() == "if (_isLocalState(e.resource_id)) return;"
+    handled = page[page.index("(_state.handled || []).forEach(h => {"):][:400]
+    assert "!_isLocalState(h.resource_id)" in handled
+
+
 def test_the_feed_says_what_held_a_decision_without_action():
     entry = api._parse({"action": "", "escalate": True, "held_by": "control_plane",
                         "signal": {"ttp": "T1562.007", "resource_id": "/x/vm-a"}}, "action")

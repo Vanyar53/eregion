@@ -533,6 +533,8 @@ async def state() -> dict:
                 "release_failed": _iso.get("release_failed", []),
                 # NICs isolated by rules only: Azure's DNS / IMDS still reachable (S7).
                 "platform_open": _platform_open_nics(_iso.get("placements", [])),
+                # In our quarantine, its original unknown: the release will ask for the tag (SEC4b).
+                "original_unknown": _original_unknown_nics(_iso.get("placements", [])),
                 # Last time the watch re-read Azure and found the isolation in place.
                 "verified_at": _iso.get("verified_at", ""),
                 # Open sessions cut after the rules? (drain: drained|partial|failed|unsupported)
@@ -680,6 +682,11 @@ async def state() -> dict:
 def _platform_open_nics(placements) -> list[str]:
     from glorfindel.actions import platform_open_nics
     return platform_open_nics(placements)
+
+
+def _original_unknown_nics(placements) -> list[str]:
+    from glorfindel.actions import original_unknown_nics
+    return original_unknown_nics(placements)
 
 
 def _state_flags(placements: list) -> dict:

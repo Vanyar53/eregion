@@ -22,6 +22,8 @@ const ACTION_LABELS = {
   escalate_permissions: 'Permissions escalated',
   activate_autonomy:    'Autonomous response held',
   review_isolation:     'Isolation to review (TTL)',
+  review_bypass:        'Bypass to review (someone else\'s rule)',
+  repair_local_state:   'Local state to repair',
 };
 
 // Verb forms — used for actions not yet executed (mode_hold: recommended, pending approval)
@@ -62,6 +64,8 @@ const ESC_LABELS = {
   identity_change:     'Entra ID identity changed (detection only)',
   protected_address:   'protected address (never blocked)',
   uncontained_detection: 'detection not contained (snapshot only)',
+  bypassed:            'bypassed (an allow before our deny)',
+  state_unreadable:    'local state unreadable',
 };
 
 // Cards anchored on a VM the detection does not name (an Activity Log row, an identity,
@@ -71,10 +75,13 @@ const ESC_LABELS = {
 const _ANCHORED_TYPES = new Set(['control_plane_change', 'identity_change', 'unattributed_signal']);
 const _DETECTION_ONLY = new Set(['control_plane_change', 'identity_change']);
 const _NOT_DECISIONS = new Set(['posture_gap', 'orphan_rule', 'quarantine_altered', 'proposed_rule',
-  'readiness_hold', 'ttl_exceeded', 'detection_blocked']);
+  'readiness_hold', 'ttl_exceeded', 'detection_blocked', 'bypassed', 'state_unreadable']);
 function _isAnchored(e) { return _ANCHORED_TYPES.has(e.escalation_type); }
 // A card on an NSG (a quarantine altered, an orphan rule no VM holds) gets an NSG tile.
 function _isNsgId(rid) { return /\/providers\/microsoft\.network\/networksecuritygroups\//i.test(rid || ''); }
+// A card about Glorfindel's local state (SEC4b: `~/.glorfindel`, no cloud resource) gets
+// no tile: it was a phantom VM, counted among the unprotected ones. It stays in the feed.
+function _isLocalState(rid) { return /^~\//.test(rid || ''); }
 
 // An autonomous action a gate held back: recommended, NOT executed. It used to read
 // "VM isolated from network" as if done, with only an Ack (third review, T14). Say it
@@ -109,6 +116,8 @@ const _ESC_TITLES = {
   proposed_action:'Unknown action proposed',
   cycle_failed:   'Signal not processed — triage by hand',
   quarantine_altered:   'Quarantine NSG altered',
+  bypassed:             'Isolation or block bypassed',
+  state_unreadable:     'Local state unreadable',
   control_plane_change: 'Control-plane change',
   identity_change:      'Entra ID identity change',
 };
@@ -203,6 +212,15 @@ function _healthNote(s) {
       + ':\nAzure DNS and IMDS stay reachable (a rule can only deny them for every NIC behind an NSG).'
       + '\nA DNS tunnel or a managed-identity token remains possible. The quarantine NSG closes both.';
     out += ` <span style="${warn}" title="${_attr(why)}">⚠ DNS/IMDS</span>`;
+  }
+  // In our quarantine, its original NSG unknown (SEC4b): the release, autonomous too,
+  // stops until the operator sets our tag — said on the card now, not first at the release.
+  if (Array.isArray(s.original_unknown) && s.original_unknown.length) {
+    const warn = 'font-size:8px;font-weight:700;padding:0 4px;border-radius:3px;flex-shrink:0;color:var(--orange);border:1px solid color-mix(in srgb,var(--orange) 45%,transparent);background:color-mix(in srgb,var(--orange) 10%,transparent)';
+    const why = 'Original NSG unknown for ' + s.original_unknown.join(', ')
+      + ':\nthe release will ask for the tag glorfindel-orig-<hash> on the quarantine NSG'
+      + ' (=<NSG id>, or =none).';
+    out += ` <span style="${warn}" title="${_attr(why)}">⚠ original unknown</span>`;
   }
   return out;
 }
@@ -734,6 +752,7 @@ function renderInfra() {
     }
   });
   vmEscs.forEach(e => {
+    if (_isLocalState(e.resource_id)) return;
     // An escalation on an AKS node (e.g. a stale posture_gap) folds into its cluster —
     // it must not spawn a bare node card. Actionable node states come via `resources`.
     const parentId = _clusterKey(e.resource_id, '');
@@ -748,7 +767,7 @@ function renderInfra() {
   // What Glorfindel closed itself in the last day keeps its tile, VM or NSG.
   (_state.handled || []).forEach(h => {
     const name = (h.resource_id || '').split('/').pop();
-    if (name && !_clusterKey(h.resource_id, '') && ![...resourceMap.values()].some(r => r.vm_name === name))
+    if (name && !_isLocalState(h.resource_id) && !_clusterKey(h.resource_id, '') && ![...resourceMap.values()].some(r => r.vm_name === name))
       resourceMap.set(h.resource_id, { resource_id: h.resource_id, vm_name: name, states: [],
                                        is_nsg: _isNsgId(h.resource_id) });
   });

@@ -1332,6 +1332,34 @@ régression `test_a_race_whose_two_operations_rewrite_the_escalations_store` rej
 mutant M1395 (le verrou qui ignore son délai) y est attrapé. Le job macOS est borné (25 min) et un
 test qui dure plus de 8 min y écrit la pile de ses fils.
 
+**SEC4b (29/10, #275) : un état illisible, un contournement, des propositions perdues.** La
+machine n'écrit jamais d'état illisible : les lecteurs qui concluaient « personne » d'un fichier
+qu'ils ne lisaient pas (`_held_in_quarantine` pour `verify_release`, `_recorded_original` pour la
+levée et le reset, `_tied_while_away`, la passe de réaffirmation) sont mesurés par
+`tests/unit/test_unreadable_state.py`, sur le faux Azure de la machine : chaque cas échoue sur
+`main` (16 tests, avec ceux de `test_reassert.py`). Le contournement (V-16) y est aussi, de bout en
+bout : notre deny passé derrière une allow d'un tiers, une carte, aucune écriture sur Azure, la
+règle toujours là. Le magasin des règles proposées est mesuré entre vrais processus
+(`measure_proposals`, `test_locks.py`) : sur `main`, 28 propositions perdues sur 60, 5 approbations
+et 1 rejet perdus, 2 lectures d'un fichier à moitié écrit ; aucune après. Mutants M1250–M1259,
+M1390–M1394 : 15/15 attrapés par ces tests. Invariants à 500 séquences, deux graines : verts.
+Au même budget (60 séquences, deux tours, `--jobs 4`), les 95 mutants de `state.py`, `network.py`,
+`release.py`, `verify.py`, `sweep.py` et `reassert.py` : 78/94 attrapés à chaque tour avant, 75/94
+après (M865, M1212 et M1340 suivent le code déplacé : 2/2). Aucun n'est perdu : M10 et M36 survivent
+des deux côtés, les autres écarts sont des tours de moins ou de plus. Remesurés sur six tours, M01,
+M07 et M28 font 6/6 après ; M26, 3/6 avant comme après.
+La relecture a trouvé ce que la première version cassait à côté : un état illisible d'une autre
+VM empêchait d'isoler une carte sans NSG (l'isolation levait `StateUnreadable`), un déblocage
+derrière la quarantaine la laissait échapper après ses suppressions, une ré-isolation à côté de
+son propre état illisible levait. L'isolation lit maintenant l'illisible comme inconnu (jamais
+arrêtée, l'original inconnu non écrit), le déblocage finit `unblock_partial`, et l'état illisible
+de la VM est mis de côté au lieu d'être écrit par-dessus. La seconde relecture : mis de côté sous `<fichier>.unreadable.json`, puis réparé,
+le fichier redevenait un état actif (deux isolations de la VM, et la migration remettait l'ancien
+état à la place du courant) : il va dans `isolation/aside/`, hors des états, listé tant qu'il existe.
+Une isolation dont l'original reste inconnu le dit tout de suite (`original_unknown`). Mutants
+M1520–M1531, attrapés par leurs tests ; M678 et M860, restés sur l'ancien texte, suivent le code (2/2). Ces chemins ne changent
+rien quand aucun état n'est illisible : la machine, qui n'en écrit jamais, ne les voit pas.
+
 **U3F (29/10, #293) : « introuvable » sur une règle laissée.** À 500 séquences, la graine 210
 faisait tomber I3 de façon déterministe, sur `main` aussi : « unblock said not_found, rules left
 for …/api: ['glorfindel-block-…-api-api-nic-…'] ». Hypothesis s'est arrêté de réduire au bout de

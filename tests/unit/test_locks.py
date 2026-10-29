@@ -229,3 +229,73 @@ def test_the_store_lock_gives_up_within_its_timeout(tmp_path):
     with _file_lock(lock_file, timeout=0):
         with _file_lock(lock_file, timeout=0):      # re-entrant within a thread
             pass
+
+
+# ── SEC4b: the proposed rules' store, written by several processes ────────────────────
+
+_PROPOSALS_WRITER = textwrap.dedent("""
+    import sys
+    from pathlib import Path
+    from glorfindel import proposed_rules
+    store, me, n, base = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4]
+    proposed_rules._STORE = store
+    for i in range(n):
+        pid = proposed_rules.record(
+            run_id=f"{me}-{i}", ttp="T1486", resource_id=f"/subscriptions/s/vm/{me}-{i}",
+            rule_name=f"rule-{me}-{i}", source="azure_monitor", workspace_id="", query="Perf",
+            interval_s=60, explanation="e", confidence=0.5, analysis="a")
+        if i % 3 == 0:
+            proposed_rules.reject(pid)
+        elif i % 3 == 1:
+            proposed_rules.approve(pid, base)
+""")
+
+
+def measure_proposals(tmp_path: Path, writers: int = 4, proposals: int = 15) -> dict:
+    """`writers` processes each record `proposals` proposals, rejecting a third and approving
+    a third, while a reader reads the store in a loop: what is lost, what was read
+    half-written. PYTHONPATH from SEC4B_STORE_PYTHONPATH measures another checkout (before
+    and after, in SEC4b's report). Their HOME is the test's: approve writes the client's
+    layer there."""
+    store = tmp_path / "proposed_rules.jsonl"
+    stop, out = tmp_path / "stop", tmp_path / "reader.json"
+    root = Path(__file__).resolve().parents[2]
+    (tmp_path / "home").mkdir()
+    env = {**os.environ, "HOME": str(tmp_path / "home"),
+           "PYTHONPATH": os.environ.get("SEC4B_STORE_PYTHONPATH") or str(root)}
+    base = str(root / "rules" / "azure" / "detection_rules.yaml")
+    reader = subprocess.Popen([sys.executable, "-c", _STORE_READER, str(store), str(stop), str(out)],
+                              env=env, cwd=tmp_path)
+    procs = [subprocess.Popen([sys.executable, "-c", _PROPOSALS_WRITER, str(store), f"w{k}", str(proposals), base],
+                              env=env, cwd=tmp_path) for k in range(writers)]
+    try:
+        codes = [p.wait(timeout=300) for p in procs]
+    finally:
+        stop.touch()
+        reader.wait(timeout=60)
+    entries = []
+    for line in store.read_text().splitlines():
+        try:
+            entries.append(json.loads(line))
+        except ValueError:
+            pass
+    by_run = {e["run_id"]: e for e in entries}
+    want = {f"w{k}-{i}" for k in range(writers) for i in range(proposals)}
+
+    def status_lost(mod: int, status: str) -> int:
+        return len({r for r in want if int(r.rsplit("-", 1)[1]) % 3 == mod and r in by_run
+                    and by_run[r]["status"] != status})
+    return {"codes": codes, "written": writers * proposals, "lost": len(want - set(by_run)),
+            "duplicated": len(entries) - len(by_run), "reject_lost": status_lost(0, "rejected"),
+            "approve_lost": status_lost(1, "approved"), **json.loads(out.read_text())}
+
+
+def test_concurrent_proposals_lose_none_and_no_reader_sees_half_a_store(tmp_path):
+    """record appended, approve and reject read the whole store and wrote it back over the
+    others' (as the escalations before SEC3, V-10). Under the store's lock, rewritten
+    whole: nothing lost, nothing read half-written."""
+    got = measure_proposals(tmp_path)
+    assert got["codes"] == [0] * 4
+    assert got["reads"] > 0
+    assert {k: got[k] for k in ("lost", "duplicated", "reject_lost", "approve_lost", "bad")} == {
+        "lost": 0, "duplicated": 0, "reject_lost": 0, "approve_lost": 0, "bad": 0}, got

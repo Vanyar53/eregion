@@ -10,7 +10,7 @@ from glorfindel.providers.azure.nsg import _rule_name, _rule_signature
 from glorfindel.providers.azure.sdk import _enum_text, _is_not_found
 from glorfindel.response.ids import _parse_nsg_resource_id, _same_id
 from glorfindel.response.locks import _quarantine_lock
-from glorfindel.response.state import _held_in_quarantine, _recorded_original, _UNKNOWN
+from glorfindel.response.state import _held_or_unreadable, _recorded_or_unknown, _UNKNOWN
 
 
 # Lot L4 — Glorfindel's own quarantine NSG, attached to a NIC that has none of its own.
@@ -105,7 +105,7 @@ class QuarantineMixin:
             # The state knows the original; the tag is the fallback. Neither says →
             # unknown, never recorded as "none" (the placement then carries no
             # original, and the release keeps the NIC in quarantine rather than guess).
-            original = _recorded_original(t["nic_id"])
+            original = _recorded_or_unknown(t["nic_id"])
             if original is _UNKNOWN:
                 try:
                     original = self._original_from_tags(q, t["nic_id"])
@@ -119,7 +119,7 @@ class QuarantineMixin:
                 # someone else: what was recorded then (state, or our tag) still stands.
                 # Re-isolating it recorded "none" over it, and the release then left it
                 # with no NSG (seventh review, U2).
-                recorded = prior = _recorded_original(t["nic_id"])
+                recorded = prior = _recorded_or_unknown(t["nic_id"])
                 unread = False
                 if prior is _UNKNOWN or prior is None:
                     try:
@@ -138,7 +138,7 @@ class QuarantineMixin:
                     # Nor is the state's "none" written over it: another host may have
                     # recorded there the NSG the NIC got since — the release reads it (I8S).
                     tag_unread = True
-                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):
+                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_or_unreadable(t["nic_id"]):
                     # Our state has it in quarantine, its original unknown (state and
                     # tags lost before a re-isolation), and someone left it bare: the
                     # bare NIC is theirs, not its design. Recorded "none", the release

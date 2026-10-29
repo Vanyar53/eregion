@@ -2,8 +2,8 @@
 """notify_discord — the workshop's news in Discord (N1, #242; docs/atelier-discord.md).
 
   notify_discord.py github        in GitHub Actions (notify.yml): reads $GITHUB_EVENT_NAME and
-                                  $GITHUB_EVENT_PATH — CI results, pull requests, releases, closed
-                                  issues to #ci, and a lot's events to its thread as well
+                                  $GITHUB_EVENT_PATH — CI results, pull requests, closed issues to
+                                  #ci, a release's steps to #releases, a lot's events to its thread
   notify_discord.py check         what is configured (names, never values), what the forum lacks
 
 No string of this module, docstrings aside, says the word draft, but for `release-draft` and
@@ -11,14 +11,20 @@ No string of this module, docstrings aside, says the word draft, but for `releas
 release (REL1, #269). A message says « brouillon » instead.
 
 Where things go. #ci: a pull request opened or merged, a red CI (pull request, main, the
-nightly runs), main green again after red, a published release, a closed issue. #lots: one
-thread per lot, every event of the lot, its tags (milestone, state) kept true. Only a red CI
-and a release notify; the rest is silent. elrond's lots and #agents: scripts/agents_discord.py
-(N3), which shares this module's plumbing; a published release deletes its draft's line and
-ping there (REL1, EREGION_DISCORD_WEBHOOK_AGENTS).
+nightly runs), main green again after red, a closed issue. #lots: one thread per lot, every
+event of the lot, its tags (milestone, state) kept true. Only a red CI notifies; the rest is
+silent. #releases (REL2, EREGION_DISCORD_WEBHOOK_RELEASES): a release's whole story, a card per
+step, silent, never deleted — the version's pull request (chore/release-X.Y.Z, this repository's
+own: a fork's stays in #ci) opened and merged, its draft ready (release_ready, from
+scripts/release.py), the release published, with a word on #deploy, where the CD of H0 says the
+rest. Without that webhook, the pull request and the publication stay in #ci, as before.
+elrond's lots and #agents: scripts/agents_discord.py (N3), which shares this module's plumbing;
+a published release deletes its draft's line and ping there (REL1,
+EREGION_DISCORD_WEBHOOK_AGENTS).
 
 Configuration: the environment, over ~/.config/eregion/discord.env (KEY=value lines; another
-file: EREGION_DISCORD_ENV) — EREGION_DISCORD_WEBHOOK_CI, EREGION_DISCORD_WEBHOOK_AGENTS (webhook URLs),
+file: EREGION_DISCORD_ENV) — EREGION_DISCORD_WEBHOOK_CI, EREGION_DISCORD_WEBHOOK_AGENTS,
+EREGION_DISCORD_WEBHOOK_RELEASES (webhook URLs),
 EREGION_DISCORD_BOT_TOKEN and EREGION_DISCORD_LOTS_FORUM (the Eregion bot, the workshop's, never Glorfindel's, and the forum's
 id), EREGION_DISCORD_MENTION (a user id). What is not configured is not sent. A Discord error never
 fails the caller: one line on stderr, without the URL or the token, and exit 0.
@@ -26,6 +32,7 @@ fails the caller: one line on stderr, without the URL or the token, and exit 0.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -41,7 +48,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KEYS = ("EREGION_DISCORD_WEBHOOK_CI", "EREGION_DISCORD_WEBHOOK_AGENTS", "EREGION_DISCORD_BOT_TOKEN",
         "EREGION_DISCORD_LOTS_FORUM", "EREGION_DISCORD_MENTION", "EREGION_DISCORD_API",
-        "EREGION_DISCORD_ROADMAP_CHANNEL", "EREGION_DISCORD_WEBHOOK_DEPLOY")
+        "EREGION_DISCORD_ROADMAP_CHANNEL", "EREGION_DISCORD_WEBHOOK_DEPLOY", "EREGION_DISCORD_WEBHOOK_RELEASES")
 UA = "DiscordBot (https://github.com/Vanyar53/eregion, 1)"
 SILENT = 1 << 12  # SUPPRESS_NOTIFICATIONS: shown in the channel, no push, no sound
 RED, GREEN, BLUE, PURPLE, ORANGE, GREY = 0xE5484D, 0x30A46C, 0x3E63DD, 0x8E4EC6, 0xF76B15, 0x8B8D98
@@ -53,6 +60,12 @@ LOT_ID = r"[A-Z]{1,3}-?\d+[A-Z]?"
 # Who may move a lot's thread through an issue (SEC6, N-11): its author holds a role in the
 # repository. Anyone may open an issue, and close their own.
 MEMBERS = {"OWNER", "MEMBER", "COLLABORATOR"}
+# The version's pull request (scripts/release.py, `make release`): its head branch, a semver.
+VERSION_BRANCH = re.compile(r"chore/release-(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
+# #releases' label, a name and not a literal in the call: tests/unit/test_release.py reads a
+# write method beside a literal holding `releases` as a write on GitHub's releases. This one
+# names a Discord channel; the URL is the webhook's.
+RELEASES_HOOK = "webhook #releases"
 
 
 class Failure(Exception):
@@ -72,6 +85,7 @@ class Config:
     mention: str = ""
     roadmap: str = ""
     deploy: str = ""   # #deploy's webhook: the CD of H0 posts with it (H1), never the bot's token
+    releases: str = ""  # #releases' webhook (REL2): notify.yml and scripts/release.py, never H0
     api: str = "https://discord.com/api/v10"
 
     @property
@@ -99,6 +113,7 @@ def load_config(environ=os.environ) -> Config:
                   mention=mention if mention.isdigit() else "",
                   roadmap=values.get("EREGION_DISCORD_ROADMAP_CHANNEL", ""),
                   deploy=values.get("EREGION_DISCORD_WEBHOOK_DEPLOY", "").rstrip("/"),
+                  releases=values.get("EREGION_DISCORD_WEBHOOK_RELEASES", "").rstrip("/"),
                   api=(values.get("EREGION_DISCORD_API") or Config.api).rstrip("/"))
 
 
@@ -305,13 +320,18 @@ class Notice:
     milestone: str | None = None
     create: bool = True
     archive: bool = False
+    releases: bool = False        # a release's step: #releases instead of #ci, when its webhook is set
+    button: list | None = None    # #releases' link button (link_button)
 
 
 def deliver(notices: list[Notice], cfg: Config) -> None:
-    """Each piece on its own: a thread that fails does not keep #ci from its card."""
+    """Each piece on its own: a thread that fails does not keep #ci from its card. A release's
+    step goes to #releases, and no longer to #ci; to #ci, as before, while #releases is not set."""
     forum = Forum(cfg) if cfg.lots else None
     for n in notices:
-        if n.ci and cfg.ci:
+        if n.releases and cfg.releases:
+            post_releases(cfg, n.card, n.button)
+        elif n.ci and cfg.ci:
             try:
                 post_webhook(cfg.ci, message(n.card, silent=n.silent), "webhook #ci")
             except Failure as e:
@@ -398,6 +418,8 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
             lot = issue = ""   # a fork's pull request: #ci only, never a lot's thread (its title names any lot)
         milestone = (pr.get("milestone") or {}).get("title")
         head = f"#{pr.get('number')} {pr.get('title', '')}"
+        if version_pull(pr):
+            return version_notices(pr, action)
         if action == "opened":
             return [Notice(embed(f"📬 PR ouverte · {head}", "", BLUE, pr.get("html_url", "")),
                            lot=lot, issue=issue, title=pr.get("title", ""), milestone=milestone, create=bool(lot))]
@@ -409,8 +431,10 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
     if name == "release" and event.get("action") == "published":
         rel = event.get("release") or {}
         pre = " (pré-version)" if rel.get("prerelease") else ""
-        return [Notice(embed(f"🏷️ {rel.get('tag_name', '?')} publiée{pre}", rel.get("name") or "", GREEN,
-                             rel.get("html_url", "")), silent=False)]
+        url = _https(rel.get("html_url"))
+        said = "\n".join(x for x in (inert(rel.get("name") or ""), "le CD de H0 la déploie : voir #deploy") if x)
+        return [Notice(embed(f"🏷️ {inert(rel.get('tag_name') or '?')} publiée{pre}", said, GREEN, url),
+                       silent=False, releases=True, button=link_button("Voir la release", url))]
     if name == "issues" and event.get("action") == "closed":
         it = event.get("issue") or {}
         lot, _ = lot_of(title=it.get("title", ""))
@@ -423,6 +447,116 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
                        lot=lot, issue=number, title=it.get("title", ""), state="fait",
                        milestone=(it.get("milestone") or {}).get("title"), archive=True, create=bool(lot))]
     return []
+
+
+# ── #releases (REL2) ────────────────────────────────────────────────────────────────
+
+def _chat_text():
+    """glorfindel/chat_text.py's discord_text (SEC6), read from its file, never through the
+    glorfindel package (it imports the agent): beside this file where it is installed alone, else
+    in glorfindel/ (notify.yml's sparse checkout brings it). Missing or broken: a strict filter."""
+    here = Path(__file__).resolve().parent
+    for path in (here / "chat_text.py", ROOT / "glorfindel" / "chat_text.py"):
+        if path.is_file():
+            try:
+                spec = importlib.util.spec_from_file_location("eregion_chat_text", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod.discord_text
+            except Exception:
+                break
+    return lambda text: re.sub(r"[^\w .,:;!?'’«»/=+-]", "·", "" if text is None else str(text))
+
+
+_INERT = []
+
+
+def inert(text) -> str:
+    """Text a member of the repository may write (a release's notes, its name, a pull request's
+    title): no Markdown, no masked link, no mention (SEC6, glorfindel/chat_text.py)."""
+    if not _INERT:
+        _INERT.append(_chat_text())
+    return _INERT[0](text)
+
+
+def _https(url) -> str:
+    """A link Discord takes in a card or a button: https, in one piece; anything else, none."""
+    url = str(url or "")
+    return url if re.fullmatch(r"https://[^\s<>\"]{1,500}", url) else ""
+
+
+def link_button(label: str, url: str) -> list | None:
+    """A link button (style 5): Discord opens the URL; no interaction reaches anyone."""
+    if not _https(url):
+        return None
+    return [{"type": 1, "components": [{"type": 2, "style": 5, "label": label[:80], "url": url}]}]
+
+
+def post_releases(cfg: Config, card: dict, button: list | None = None) -> str:
+    """A card on #releases: silent, no mention, never deleted. The message's id; "" when not
+    sent. A webhook made in the channel's settings sends a link button only with
+    `with_components=true` (Discord's documentation; not measured): a card refused with its
+    button (400) is sent again without it — its title links there as well."""
+    payload = message(card)
+    if button:
+        payload["components"] = button
+    for query in ("?wait=true&with_components=true", "?wait=true"):
+        try:
+            return str(fetch("POST", cfg.releases + query, RELEASES_HOOK, payload).get("id") or "")
+        except Failure as e:
+            if not (e.code == 400 and "components" in payload):
+                say(e)
+                return ""
+            payload = {k: v for k, v in payload.items() if k != "components"}
+    return ""
+
+
+def version_pull(pr: dict) -> bool:
+    """The version's pull request (`make release`): its head branch chore/release-X.Y.Z, from
+    this repository. A fork's branch is whatever its author names it: #ci (SEC6)."""
+    head, base = ((pr.get("head") or {}).get("repo") or {}), ((pr.get("base") or {}).get("repo") or {})
+    return bool(VERSION_BRANCH.fullmatch((pr.get("head") or {}).get("ref") or "")
+                and head.get("full_name") and head.get("full_name") == base.get("full_name"))
+
+
+def version_notices(pr: dict, action: str) -> list[Notice]:
+    """The version's pull request, opened or merged: #releases (#ci without it), never a thread."""
+    url = _https(pr.get("html_url"))
+    head = f"#{pr.get('number')} {inert(pr.get('title') or '')}"
+    if action == "opened":
+        return [Notice(embed(f"📬 PR de version ouverte · {head}", "", BLUE, url), releases=True,
+                       button=link_button("Voir la PR", url))]
+    if action == "closed" and pr.get("merged"):
+        return [Notice(embed(f"🔀 PR de version fusionnée · {head}", "ensuite : make release-draft", PURPLE,
+                             url), releases=True, button=link_button("Voir la PR", url))]
+    return []
+
+
+def notes_summary(text: str, items: int = 3) -> str:
+    """A release's notes in a few lines: its section titles, then its first entries, cut, inert."""
+    lines = [x.rstrip() for x in str(text or "").splitlines() if x.strip() and not x.lstrip().startswith("<!--")]
+    heads = [x.lstrip().lstrip("#").strip() for x in lines if x.lstrip().startswith("#")]
+    tops = [x for x in lines if re.match(r"[-*] ", x)] or [x for x in lines if not x.lstrip().startswith("#")]
+    out = [" · ".join(inert(_cut(h, 60)) for h in heads[:6])] if heads else []
+    out += ["• " + inert(_cut(re.sub(r"^[-*]\s+", "", x).replace("**", ""), 160)) for x in tops[:items]]
+    if len(tops) > items:
+        out.append(f"… et {len(tops) - items} de plus")
+    return "\n".join(out)
+
+
+def release_ready(tag: str, heading: str, url: str, notes: str, cfg: Config | None = None) -> str:
+    """scripts/release.py's draft, ready (REL2): its card on #releases, its notes in short, a
+    button to the repository's releases, where the draft comes first (`url`: the list, never
+    the draft's own URL, which changes at each edit — release.py's releases_page); the draft is
+    seen by the repository's members only. No ping: #agents pings (REL1). The message's id;
+    "" without #releases, or when Discord fails."""
+    cfg = cfg or load_config()
+    if not cfg.releases:
+        return ""
+    title = f"📦 {inert(tag)} en brouillon" + (f" — {inert(heading)}" if heading else "")
+    said = "\n".join(x for x in (notes_summary(notes), "En tête des releases du dépôt, pour ses membres.") if x)
+    return post_releases(cfg, embed(title, said, ORANGE, _https(url)),
+                         link_button("Ouvrir les releases (le brouillon en tête)", url))
 
 
 BOARD_TITLE = "📋 elrond"   # #agents' board (scripts/agents_discord.py)
@@ -488,7 +622,7 @@ def release_published(event: dict, cfg: Config) -> None:
 
 def github(environ=os.environ) -> int:
     cfg = load_config(environ)
-    if not (cfg.ci or cfg.lots or cfg.agents):
+    if not (cfg.ci or cfg.lots or cfg.agents or cfg.releases):
         return 0
     try:
         event = json.loads(Path(environ.get("GITHUB_EVENT_PATH", "")).read_text(encoding="utf-8"))
@@ -514,7 +648,8 @@ def github(environ=os.environ) -> int:
 def check(cfg: Config) -> int:
     names = {"EREGION_DISCORD_WEBHOOK_CI": cfg.ci, "EREGION_DISCORD_WEBHOOK_AGENTS": cfg.agents,
              "EREGION_DISCORD_BOT_TOKEN": cfg.token, "EREGION_DISCORD_LOTS_FORUM": cfg.forum,
-             "EREGION_DISCORD_MENTION": cfg.mention, "EREGION_DISCORD_ROADMAP_CHANNEL": cfg.roadmap}
+             "EREGION_DISCORD_MENTION": cfg.mention, "EREGION_DISCORD_ROADMAP_CHANNEL": cfg.roadmap,
+             "EREGION_DISCORD_WEBHOOK_RELEASES": cfg.releases}
     for k, v in names.items():
         print(f"  {'✓' if v else '·'} {k}")
     if cfg.lots:

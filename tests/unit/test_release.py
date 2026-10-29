@@ -76,13 +76,14 @@ out, code = "", 0
 if args[:2] == ["release", "list"]:
     out = json.dumps([{"tagName": r["tag"]} for r in data["releases"]])
 elif args[:2] == ["release", "create"]:
-    n = len(data["releases"]) + 1
-    data["releases"].append({"tag": args[2], "draft": "--draft" in args, "notes": call.get("notes", "")})
-    out = f"https://github.com/o/r/releases/tag/untagged-{n:04x}"
+    out = f"https://github.com/o/r/releases/tag/untagged-{len(data['calls']):04x}c"
+    data["releases"].append({"tag": args[2], "draft": "--draft" in args, "notes": call.get("notes", ""),
+                             "url": out})
 elif args[:2] == ["release", "edit"]:
+    # GitHub moves a draft's URL at each edit (measured on the 0.4.4, 29/10): a new untagged-<hash>.
     r = next(r for r in data["releases"] if r["tag"] == args[2])
     r["notes"] = call.get("notes", r["notes"])
-    out = f"https://github.com/o/r/releases/tag/untagged-{data['releases'].index(r) + 1:04x}"
+    out = r["url"] = f"https://github.com/o/r/releases/tag/untagged-{len(data['calls']):04x}e"
 elif args[:2] == ["pr", "create"]:
     out = "https://github.com/o/r/pull/300"
 else:
@@ -338,7 +339,8 @@ def test_release_draft_creates_a_draft_on_main_s_full_sha_with_the_changelog_s_s
     assert args[args.index("--title") + 1] == "v0.4.4 — two commands"
     assert create["notes"] == ("### Added\n- **A release in two commands** (REL1).\n\n"
                                "### Fixed\n- Something that was wrong.\n")
-    assert gh_releases(tmp_path) == [{"tag": "v0.4.4", "draft": True, "notes": create["notes"]}]
+    assert [{k: v for k, v in r.items() if k != "url"} for r in gh_releases(tmp_path)] == [
+        {"tag": "v0.4.4", "draft": True, "notes": create["notes"]}]
     assert not git(repo, "ls-remote", "--tags", "origin")                 # no tag: a draft has none
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "edit"]] == []   # no Discord
 
@@ -740,7 +742,7 @@ def _published(tmp_path, monkeypatch, body):
 def test_the_draft_is_on_the_board_and_pinged_then_both_go_when_published(repo, tmp_path, capsys, fake, monkeypatch):
     prepared(repo, capsys)
     assert rel.main(["release-draft", "0.4.4"]) == 0
-    url = "https://github.com/o/r/releases/tag/untagged-0001"
+    url = "https://github.com/o/r/releases"
     line = "🙋 release v0.4.4 en brouillon, à publier"
 
     # Pinged, with Jonathan's mention and the draft's link; on the board, its link too.
@@ -836,6 +838,135 @@ def test_a_discord_that_fails_never_fails_the_draft(repo, tmp_path, capsys, fake
     err = capsys.readouterr().err
     assert "atelier: not sent — webhook #agents: HTTP 500" in err and AGENTS_TOKEN not in err
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "edit"]] == []
+
+
+# ── #releases (REL2): the draft ready, then published, never deleted ────────────────
+
+RELEASES_TOKEN = "RELEASES-SECRET-rel"
+ZWSP = "​"
+
+
+@pytest.fixture
+def releases(fake, monkeypatch):
+    monkeypatch.setenv("EREGION_DISCORD_WEBHOOK_RELEASES", f"{fake.base}/api/webhooks/3/{RELEASES_TOKEN}")
+    return fake
+
+
+def _releases_cards(f):
+    return [(r["body"]["embeds"][0], r["body"]) for r in f.requests
+            if r["method"] == "POST" and RELEASES_TOKEN in r["path"]]
+
+
+def test_a_release_s_story_on_releases_the_draft_then_the_publication(repo, tmp_path, capsys, releases,
+                                                                     monkeypatch):
+    prepared(repo, capsys, title="two commands")
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    url = "https://github.com/o/r/releases"
+
+    # The draft, ready: its card, a button to it, its notes in short; no ping, no mention.
+    ((card, body),) = _releases_cards(releases)
+    assert card["title"] == "📦 v0.4.4 en brouillon — two commands" and card["url"] == url
+    assert card["description"] == ("Added · Fixed\n• A release in two commands \\(REL1\\).\n"
+                                   "• Something that was wrong.\nEn tête des releases du dépôt, pour ses membres.")
+    assert body["components"] == [{"type": 1, "components": [
+        {"type": 2, "style": 5, "label": "Ouvrir les releases (le brouillon en tête)", "url": url}]}]
+    assert "content" not in body and body["allowed_mentions"] == {"parse": []} and body["flags"] == nd.SILENT
+    assert "Sur #releases : sa carte" in capsys.readouterr().out
+
+    # #agents keeps its line and its ping (REL1), unchanged.
+    (ping,) = [b for b in releases.webhook_posts(AGENTS_TOKEN) if b.get("content")]
+    assert ping["content"] == "<@42>" and ping["embeds"][0]["title"] == "🙋 release v0.4.4 en brouillon, à publier"
+
+    # Published: its card on #releases, the draft's card kept; the ping on #agents deleted (REL1).
+    (edit,) = [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "edit"]]
+    monkeypatch.setenv("EREGION_DISCORD_WEBHOOK_CI", f"{releases.base}/api/webhooks/1/CI-SECRET-rel")
+    _published(tmp_path, monkeypatch, edit["notes"])
+    cards = _releases_cards(releases)
+    assert [c["title"] for c, _ in cards] == ["📦 v0.4.4 en brouillon — two commands", "🏷️ v0.4.4 publiée"]
+    assert cards[1][0]["description"] == "v0.4.4 — x\nle CD de H0 la déploie : voir #deploy"
+    assert releases.webhook_posts("CI-SECRET-rel") == []                       # it left #ci
+    ids = [m for m, v in releases.messages.items() if v["embeds"][0]["title"] in [c["title"] for c, _ in cards]]
+    assert len(ids) == 2                                                        # never deleted
+    assert all(r["method"] == "POST" for r in releases.requests if RELEASES_TOKEN in r["path"])
+    assert [r for r in releases.requests if r["path"].startswith("/gh/") and r["method"] != "GET"] == []
+
+
+def test_the_link_posted_never_moves_when_github_moves_the_draft_s(repo, tmp_path, capsys, releases):
+    """Measured on the 0.4.4 (29/10): GitHub gives a draft a new untagged-<hash> URL at each edit,
+    and release-draft edits it (the ids of #agents in its notes). The link posted is the
+    repository's releases, where the draft comes first: it survives that edit, and Jonathan's."""
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    given = [c for c in gh_calls(tmp_path) if c["args"][:2] in (["release", "create"], ["release", "edit"])]
+    assert len(given) == 2
+    urls = {r["url"] for r in gh_releases(tmp_path)}
+    first = "https://github.com/o/r/releases/tag/untagged-0003c"
+    assert urls == {"https://github.com/o/r/releases/tag/untagged-0004e"} and first not in urls   # moved
+    sent = json.dumps([r["body"] for r in releases.requests if r["method"] in ("POST", "PATCH")])
+    assert "untagged-" not in sent                                    # neither the first URL nor the last
+    (ping,) = [b for b in releases.webhook_posts(AGENTS_TOKEN) if b.get("content")]
+    assert ping["embeds"][0]["url"] == "https://github.com/o/r/releases"
+    assert "[brouillon](https://github.com/o/r/releases)" in _board(releases)[0]["description"]
+    ((card, body),) = _releases_cards(releases)
+    assert card["url"] == body["components"][0]["components"][0]["url"] == "https://github.com/o/r/releases"
+    assert "en tête de https://github.com/o/r/releases" in capsys.readouterr().out
+
+
+def test_the_releases_page_is_read_from_the_url_gh_gives():
+    assert rel.releases_page("https://github.com/o/r/releases/tag/untagged-2c21dc7acd54ed0e3386") == (
+        "https://github.com/o/r/releases")
+    for bad in ("", "not a url", "http://github.com/o/r/releases/tag/x", "https://github.com/o/r/pull/3"):
+        assert rel.releases_page(bad) == ""
+
+
+def test_the_draft_s_notes_are_inert_on_releases(repo, tmp_path, capsys, releases):
+    """SEC6: notes a member wrote (NOTES=file) — a mention, a masked link, a heading — shown, never applied."""
+    prepared(repo, capsys, title="t [x](https://evil.example) @here")
+    notes = tmp_path / "notes.md"
+    notes.write_text("### Added @everyone\n- [Support](https://evil.example) <@&1> `x`\n# big\n", encoding="utf-8")
+    assert rel.main(["release-draft", "0.4.4", "--notes", str(notes)]) == 0
+    ((card, body),) = _releases_cards(releases)
+    said = card["title"] + "\n" + card["description"]
+    assert "@everyone" not in said and "@here" not in said and f"@{ZWSP}everyone" in said
+    assert "](" not in said.replace("\\](", "") and "\\[Support\\]\\(" in said and "\\<@&1\\>" in said
+    assert body["allowed_mentions"] == {"parse": []}
+
+
+def test_without_releases_the_draft_is_as_before(repo, tmp_path, capsys, fake):
+    """No #releases webhook: #agents as in REL1, nothing else sent, the command succeeds."""
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    assert "Sur #releases" not in capsys.readouterr().out
+    assert [r for r in fake.requests if "/webhooks/3/" in r["path"]] == []
+    assert [b for b in fake.webhook_posts(AGENTS_TOKEN) if b.get("content")]
+
+
+def test_a_failing_releases_webhook_never_fails_the_draft_nor_keeps_agents(repo, tmp_path, capsys, releases):
+    releases.fail["/api/webhooks/3"] = 500
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    assert gh_releases(tmp_path)[0]["draft"] is True
+    captured = capsys.readouterr()
+    assert "atelier: not sent — webhook #releases: HTTP 500" in captured.err and RELEASES_TOKEN not in captured.err
+    assert "Sur #releases" not in captured.out
+    # #agents still got its line and ping, and the marker went into the notes.
+    (edit,) = [c for c in gh_calls(tmp_path) if c["args"][:2] == ["release", "edit"]]
+    assert "<!-- #agents (REL1) : ping=" in edit["notes"]
+
+
+def test_a_failing_agents_webhook_never_keeps_the_releases_card(repo, tmp_path, capsys, releases):
+    releases.fail["/api/webhooks/2"] = 500
+    prepared(repo, capsys)
+    assert rel.main(["release-draft", "0.4.4"]) == 0
+    assert [c["title"] for c, _ in _releases_cards(releases)] == ["📦 v0.4.4 en brouillon — x"]
+
+
+def test_the_dry_run_sends_nothing_to_releases(repo, tmp_path, capsys, releases):
+    prepared(repo, capsys)
+    capsys.readouterr()
+    assert rel.main(["release-draft", "0.4.4", "--dry-run"]) == 0
+    assert "sa carte sur #releases" in capsys.readouterr().out
+    assert releases.requests == []
 
 
 # ── one source of version ───────────────────────────────────────────────────────────

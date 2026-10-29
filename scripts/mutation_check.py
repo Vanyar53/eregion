@@ -4163,6 +4163,41 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1437", "M1438", "M1439", "M1470")})
 
+# REL2 (#309): #releases, a release's story — the version's pull request, the draft ready, the
+# publication — in one channel, silent, never deleted; #ci keeps the rest. Measured by
+# tests/unit/test_notify_discord.py and tests/unit/test_release.py, the fake Discord. M1540–M1549.
+MUTANTS += [
+    ("M1540", "a published release still posted to #ci beside #releases (REL2)", NDS,
+     "            post_releases(cfg, n.card, n.button)\n        elif n.ci and cfg.ci:\n",
+     "            post_releases(cfg, n.card, n.button)\n        if n.ci and cfg.ci:\n"),
+    ("M1541", "#releases' webhook given to notify.yml on every event (REL2)", ".github/workflows/notify.yml",
+     "${{ (github.event_name == 'release' || github.event_name == 'pull_request_target') "
+     "&& secrets.EREGION_DISCORD_WEBHOOK_RELEASES || '' }}",
+     "${{ secrets.EREGION_DISCORD_WEBHOOK_RELEASES }}"),
+    ("M1542", "a release's notes reach #releases raw: a masked link, a mention (REL2, SEC6)", NDS,
+     '    out += ["• " + inert(_cut(', '    out += ["• " + (_cut('),
+    ("M1543", "a release's name reaches #releases raw (REL2, SEC6)", NDS,
+     'inert(rel.get("name") or "")', '(rel.get("name") or "")'),
+    ("M1544", "make release-draft never posts the draft's card on #releases (REL2)", RELS,
+     "        if notify_discord.release_ready(tag, heading, url, text):\n", "        if False:\n"),
+    ("M1545", "a card refused with its button (400) is lost, never sent again without it (REL2)", NDS,
+     '            if not (e.code == 400 and "components" in payload):\n', "            if True:\n"),
+    ("M1546", "a fork's chore/release-X.Y.Z taken for the version's pull request (REL2, SEC6)", NDS,
+     '    return bool(VERSION_BRANCH.fullmatch((pr.get("head") or {}).get("ref") or "")\n'
+     '                and head.get("full_name") and head.get("full_name") == base.get("full_name"))\n',
+     '    return bool(VERSION_BRANCH.fullmatch((pr.get("head") or {}).get("ref") or ""))\n'),
+    ("M1547", "any branch that starts like chore/release-X.Y.Z is the version's pull request (REL2)", NDS,
+     "VERSION_BRANCH.fullmatch(", "VERSION_BRANCH.match("),
+    ("M1548", "without #releases, the publication and the version's pull request said nowhere (REL2)", NDS,
+     "        elif n.ci and cfg.ci:\n", "        elif n.ci and cfg.ci and not n.releases:\n"),
+    ("M1549", "the draft's own URL posted: GitHub moves it at the next edit, the link leads nowhere (REL2)",
+     RELS, "        url = releases_page(url[0])\n", '        url = url[0] if url[0].startswith("https://") else ""\n'),
+]
+TESTS.update({mid: "tests/unit/test_notify_discord.py tests/unit/test_release.py"
+              for mid in ("M1540", "M1542", "M1543", "M1545", "M1546", "M1547", "M1548")})
+TESTS.update({"M1541": "tests/unit/test_notify_discord.py", "M1544": "tests/unit/test_release.py",
+              "M1549": "tests/unit/test_release.py"})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

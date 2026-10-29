@@ -137,7 +137,7 @@ help:
 	@echo ""
 	@echo "Release (REL1) — a draft only: Jonathan publishes (publishing deploys H0)"
 	@echo "  make release VERSION=X.Y.Z TITLE=\"…\" [DRY_RUN=1]  The version's PR: CHANGELOG cut, version, README"
-	@echo "  make release-draft VERSION=X.Y.Z [NOTES=file] [DRY_RUN=1]  After its merge: the draft, seen on #agents"
+	@echo "  make release-draft VERSION=X.Y.Z [NOTES=file] [DRY_RUN=1]  After its merge: the draft, seen on #agents and #releases"
 	@echo ""
 	@echo "Build"
 	@echo "  make build          Build both Docker images"

@@ -21,6 +21,10 @@ jobs:
   invariants:
     name: invariants (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Bounded (U3F): ten thousand sequences take about an hour on Linux (52-63 min, 14-26/10)
+    # and 33-41 min on macOS; a failure adds its shrinking (Hypothesis stops it at 5 min a
+    # pass). A job without a bound runs six hours.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:

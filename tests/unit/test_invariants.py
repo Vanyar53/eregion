@@ -244,17 +244,27 @@ class _Chaos:
 _CURRENT = SimpleNamespace(chaos=None, fake=None, mode="human_only", scheduler=None, clock=0)
 
 
+class _Abandoned(BaseException):
+    """The race failed (I11): a thread waiting for its turn unwinds — not an Exception,
+    so no `except Exception` of the code under test swallows it — and its locks go with
+    it. It used to wait there forever, holding them, and the teardown behind it: the job
+    hung instead of failing (I3F's review, U3F)."""
+
+
 class _Scheduler:
     """Glorfindel operations at once, one Azure call (or state write) at a time, in an
     order drawn from a seed (L27). A thread waits for its turn before each call; a lock
-    that is taken costs it a turn (see _scheduled) — the real locks decide."""
+    that is taken costs it a turn (see _scheduled) — the real locks decide.
+    `timeout`: the seconds a turn may take (real time) before the race is called stuck."""
 
-    def __init__(self, seed: int):
+    def __init__(self, seed: int, timeout: float = 20):
         import random
         self.cv = threading.Condition()
         self.rng = random.Random(seed)
         self.state: dict[str, str] = {}
         self.turn = None
+        self.timeout = timeout
+        self.abandoned = False
 
     def _me(self):
         name = threading.current_thread().name
@@ -267,17 +277,21 @@ class _Scheduler:
                 return
             if self.turn == me:
                 self.turn = None
+            if self.abandoned:
+                raise _Abandoned(me)
             self.state[me] = "wait"
             self.cv.notify_all()
-            self.cv.wait_for(lambda: self.turn == me)
+            self.cv.wait_for(lambda: self.turn == me or self.abandoned)
+            if self.abandoned:
+                raise _Abandoned(me)
             self.state[me] = "run"
 
     def run(self, ops: list) -> dict:
         results: dict = {}
 
         def body(name, fn):
-            self.point()
             try:
+                self.point()
                 results[name] = (fn(), None)
             except BaseException as exc:            # a Crash ends this thread only
                 results[name] = (None, exc)
@@ -294,23 +308,33 @@ class _Scheduler:
         for th in threads:
             th.start()
         settled = ("wait", "blocked", "done")
+        stuck = None
         with self.cv:
             while True:
                 ok = self.cv.wait_for(
                     lambda: all(s in settled for s in self.state.values())
                     and (any(s == "wait" for s in self.state.values())
-                         or all(s == "done" for s in self.state.values())), timeout=20)
-                assert ok, f"I11: operations stuck (deadlock?): {self.state}"
+                         or all(s == "done" for s in self.state.values())), timeout=self.timeout)
+                if not ok:
+                    stuck = f"I11: operations stuck (deadlock?): {self.state}"
+                    break
                 ready = sorted(n for n, s in self.state.items() if s == "wait")
                 if not ready:
                     break
                 pick = ready[self.rng.randrange(len(ready))]
                 self.turn, self.state[pick] = pick, "go"
                 self.cv.notify_all()
-                assert self.cv.wait_for(lambda: self.state[pick] in settled, timeout=20), (
-                    f"I11: {pick} never came back: {self.state}")
+                if not self.cv.wait_for(lambda: self.state[pick] in settled, timeout=self.timeout):
+                    stuck = f"I11: {pick} never came back: {self.state}"
+                    break
+            if stuck:
+                # Every thread waiting for a turn unwinds, its locks released, before the
+                # failure is raised: the teardown takes them next (_Abandoned).
+                self.abandoned = True
+                self.cv.notify_all()
         for th in threads:
-            th.join(timeout=5)
+            th.join(timeout=min(5, self.timeout))
+        assert stuck is None, stuck
         return results
 
 

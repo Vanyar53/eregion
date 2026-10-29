@@ -12,6 +12,10 @@ jobs:
   test:
     name: lint + tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # Bounded, as the macOS job: 4-10 min usually (80 jobs measured, 15-29/10) — a race of
+    # the invariants that never comes back fails in its turn's time (I11), but a hang
+    # elsewhere would run six hours (U3F).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

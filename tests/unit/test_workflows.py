@@ -169,3 +169,12 @@ def test_what_counts_as_pinned(text, pinned):
 ])
 def test_what_counts_as_a_chosen_value(run, chosen):
     assert _chosen(run) is chosen
+
+
+@pytest.mark.parametrize("workflow,job", [("ci.yml", "test"), ("ci.yml", "test-macos"),
+                                          ("invariants.yml", "invariants")])
+def test_the_jobs_that_run_the_invariants_are_bounded(workflow, job):
+    """A job without a bound runs six hours: a race of the invariant machine that hung its
+    teardown did so on macOS (I3F); each job that runs them is bounded (U3F)."""
+    bound = _load(ROOT / ".github" / "workflows" / workflow)["jobs"][job].get("timeout-minutes")
+    assert isinstance(bound, int) and 0 < bound <= 180, bound

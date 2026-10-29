@@ -3323,6 +3323,18 @@ MUTANTS += [
      UNB, "        if q_bare is not None:\n            return tagged\n", ""),
 ]
 TESTS.update({"M1343": f"{_U3F} {INVARIANTS}", "M1344": _U3F, "M1345": _U3F})
+# U3F: a race that never comes back fails, its waiting threads unwound — the job no longer
+# hangs; the jobs that run the invariants are bounded.
+MUTANTS += [
+    ("M1346", "a stuck race: the threads waiting for a turn stay there, their locks held (U3F)",
+     INVARIANTS, "                self.abandoned = True\n", "                pass\n"),
+    ("M1347", "the CI's Linux tests unbounded again (U3F)", ".github/workflows/ci.yml",
+     "    timeout-minutes: 30\n", ""),
+    ("M1348", "the nightly invariants unbounded again (U3F)", ".github/workflows/invariants.yml",
+     "    timeout-minutes: 150\n", ""),
+]
+TESTS.update({"M1346": "tests/unit/test_invariant_regressions.py -k stuck_race",
+              "M1347": "tests/unit/test_workflows.py -k bounded", "M1348": "tests/unit/test_workflows.py -k bounded"})
 # SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
 # or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
 NDS = "scripts/notify_discord.py"

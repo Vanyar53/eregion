@@ -1346,3 +1346,52 @@ def test_an_unblock_of_a_bare_nic_takes_the_block_or_says_it(monkeypatch, known_
             assert not left
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_stuck_race_fails_and_lets_the_teardown_through(monkeypatch):
+    """A race that blocks on purpose: op-1 holds the VM's lock and waits for its turn;
+    op-2 waits, out of the scheduler's sight, for op-1 to be gone — and never comes back.
+    I11 failed, but op-1 stayed in its wait, the lock held, and the teardown that takes
+    it next waited forever: the job hung instead of failing (I3F's review). Now the
+    waiting thread unwinds, its lock goes with it, and the failure is what is seen."""
+    import threading
+    from glorfindel import actions
+    from .test_invariants import _CURRENT, _Abandoned, _Chaos, _Scheduler
+    invariant_env(monkeypatch)
+    monkeypatch.setattr(_CURRENT, "chaos", _Chaos())
+    gone = threading.Event()
+
+    def holder():
+        ev = gone
+        try:
+            with actions._vm_lock("u3f-vm"):              # the scheduler's: turns inside
+                for _ in range(4):
+                    _CURRENT.scheduler.point()
+        finally:
+            ev.set()
+
+    def outside():
+        ev = gone
+        _CURRENT.scheduler.point()
+        ev.wait(30)                                       # out of the scheduler's sight
+
+    stuck = 0
+    try:
+        for seed in range(8):
+            gone = threading.Event()
+            _CURRENT.scheduler = sched = _Scheduler(seed, timeout=0.3)
+            try:
+                out = sched.run([("op-1", holder), ("op-2", outside)])
+            except AssertionError as exc:
+                assert "I11" in str(exc), exc
+                stuck += 1
+            else:
+                assert all(exc is None for _, exc in out.values()), out
+            _CURRENT.scheduler = None
+            with actions._vm_lock("u3f-vm", timeout=3):   # the teardown's turn
+                pass
+            gone.set()                                    # a thread still out of sight goes
+    finally:
+        _CURRENT.scheduler = None
+    assert stuck, "no seed made the race stick: the test proves nothing"
+    assert issubclass(_Abandoned, BaseException) and not issubclass(_Abandoned, Exception)

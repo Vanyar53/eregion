@@ -173,8 +173,7 @@ def test_a_bare_nic_isolates_beside_another_vms_unreadable_state(world, subnet_n
     # Said now, not first at the release (second review): the result, the state, the card.
     assert out["original_unknown"] == ["web-nic"] and "glorfindel-orig-" in out["original_note"], out
     assert actions._load_isolation_state(WEB1)["original_unknown"] == ["web-nic"]
-    from eregion_console import api
-    assert api._original_unknown_nics(actions._load_isolation_state(WEB1)["placements"]) == ["web-nic"]
+    # The console's reading of it: test_console.py (D1: no console in Glorfindel's own tests).
     q = m.fake.nics[nic]["nsg"]
     assert q and "quarantine" in q
     tag = actions.AzureConnector._orig_tag(m.fake.nics[nic]["id"])

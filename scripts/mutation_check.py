@@ -130,8 +130,8 @@ MUTANTS = [
      "    _atomic_write_text(target, json.dumps(payload))\n",
      "    _atomic_write_text(target, json.dumps(payload))\n    if name != name.lower():\n        target.unlink()\n"),
     ("M07", "release sweeps the NICs only when there is no state", REL,
-     "        failed += self._sweep_isolation(rg, vm_name, remaining)",
-     "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining)"),
+     "        failed += self._sweep_isolation(rg, vm_name, remaining, known)",
+     "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining, known)"),
     ("M08", "fallback deny any/any on an NSG that only looks dedicated", NSG,
      '    return bool(target.get("private_ips")) or _ip_scoped(target)',
      "    return _ip_scoped(target)"),
@@ -4162,6 +4162,31 @@ MUTANTS += [
      '    if not cmd or cmd[0] not in ("git", "gh"):\n        raise ValueError("git or gh only")\n', ""),
 ]
 TESTS.update({mid: "tests/unit/test_release.py" for mid in ("M1437", "M1438", "M1439", "M1470")})
+# I7S (#303): the release of a deleted VM looks for the rules named for the NICs its records
+# name on every NSG of the subscription — an isolation whose state was lost or rewritten
+# since stayed on a shared NSG, aimed at the address the next VM gets; a listing that fails is
+# said, the NICs kept for the retry. Seed 322 at 500 found it (M1550: the machine too).
+_I7S = "tests/unit/test_invariant_regressions.py -k deleted_vm"
+MUTANTS += [
+    ("M1550", "a deleted VM's release looks nowhere: its rules left on a shared NSG, `released` (I7S)", REL,
+     "                return self._gone_vm_rules(vm_name, list(known_nics), stuck)\n",
+     "                return []\n"),
+    ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", REL,
+     '            return [f"{vm_name} supprimée : les règles de ses cartes n\'ont pas été cherchées sur les NSG "\n'
+     '                    f"de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), levée non vérifiée"]\n',
+     "            return []\n"),
+    ("M1552", "a failed release of a deleted VM forgets its NICs: the retry looks for nothing (I7S)", REL,
+     '                **({"known_nics": known} if known else {}),\n', ""),
+    ("M1553", "the NICs a failed release kept are not read again (I7S)", REL,
+     '        kept = state.get("known_nics") if isinstance(state, dict) else None\n',
+     "        kept = None\n"),
+    ("M1554", "the NICs of a deleted VM's blocks are not looked for (I7S)", REL,
+     "        entries = [state, *(blocks if isinstance(blocks, list) else [])]\n",
+     "        entries = [state]\n"),
+    ("M1555", "a deleted VM's outbound rule left: only the inbound name looked for (I7S)", REL,
+     '            names |= {base, f"{base}-out"}\n', "            names |= {base}\n"),
+]
+TESTS.update({"M1550": f"{_I7S} {INVARIANTS}", **{f"M{n}": _I7S for n in range(1551, 1556)}})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

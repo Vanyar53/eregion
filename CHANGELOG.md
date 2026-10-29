@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **The release of a deleted VM no longer leaves its isolation rules on a shared NSG** (I7S, #303, 29/10; `docs/azure.md`, `docs/design/preuves.md`). Found by the invariant machine (seed 322 at 500 sequences), present on `main`. Take a VM isolated by rules on an NSG it shares, whose state is lost, whose NIC is then left bare and isolated again on its subnet's NSG; the VM is deleted. Its release undid what the state named, found the VM gone and stopped there: `released`, while the first isolation stayed on the shared NSG, aimed at the address Azure hands to the next VM — which is then cut off (a disruptive action by mistake, never an opening). Now, the VM gone, the release looks for the rules named for the NICs its states name (the isolation's placements, the blocks', those a partial release kept) on every NSG of the subscription and takes them off. A listing that fails gives `release_partial`, the state and its NICs kept for the retry. Without any state naming the NIC, the orphan sweep (A3) is still the net.
+
 ## [0.4.4] — 2026-10-29 — "held at the core"
 
 ### Security

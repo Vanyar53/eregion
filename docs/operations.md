@@ -674,10 +674,18 @@ une fois. Cela fait environ 130 appels au modèle par passage, 153 au plus, et e
 les deux, 306 au plus. La première fois, l'installation du venv de référence prend en plus
 quelques minutes (un `pip install` du verrou).
 
+**Une PR de verrou ne porte pas de code qui exige ses nouvelles dépendances.** La référence fait
+tourner le code du checkout sur l'ancien verrou : un code qui importe une dépendance que ce verrou
+n'a pas échoue à l'import, et rien n'est attesté (`harness_attest.py` le dit). Il faut séparer
+les PR : le verrou d'abord, attesté et déployé, puis le code qui s'en sert. Le harnais mesure le
+verrou, pas le code : un recul dû au code d'une release qui change aussi le verrou paraît des
+deux côtés (« faux des deux côtés »), dit, jamais refusé.
+
 Rien n'est lancé, donc rien n'est payé, dans quatre cas :
-- `RUNS` est sous 3 ;
+- `RUNS` est sous 3, ou `--kinds` est passé avec `--attest` ou `--pass-out` ;
 - le `.venv` ne suit pas le verrou ;
-- le verrou du checkout est celui de la référence ;
+- le verrou du checkout est celui de la référence (« ce verrou est déjà celui de <tag> : donne
+  BASE=<la release d'avant> ») ;
 - `--attest` est passé sans référence, ou avec une référence qui ne correspond pas (runs,
   modèles).
 

@@ -62,3 +62,6 @@ infra/orodruin/.terraform.lock.hcl
 infra/orodruin/terraform.tfstate*
 infra/orodruin/*.tfplan
 infra/orodruin/orodruin.env
+
+# pip-audit, son venv à part (make audit, CI2)
+.venv-audit/

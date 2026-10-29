@@ -17,7 +17,7 @@ name: Notify
 # before this file existed is not announced.
 on:
   workflow_run:
-    workflows: [CI, Components, Images, "Invariants (deep)", Mutants, canary-azurerm]
+    workflows: [CI, Components, Images, "Invariants (deep)", Mutants, canary-azurerm, "Dependency audit"]
     types: [completed]
   pull_request_target:
     types: [opened, closed]

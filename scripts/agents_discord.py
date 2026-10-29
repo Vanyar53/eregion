@@ -8,13 +8,14 @@
   agents_discord.py run-end TEXT  elrond: the end-of-run summary
   agents_discord.py clear ID|all  what waits on a lot, settled by hand (its pings deleted)
   agents_discord.py board         the board rewritten, merged pull requests dropped
+  (scripts/release.py)            a release's draft: on the board, pinged — release_draft() (REL1)
 
 #agents is what waits for Jonathan, and nothing else. One board, rewritten in place: 🙋 what
 waits for him, 🔄 the agents running (resumed ones too), ✅ what came back lately, 🏁 the last
 run — each line with its links (the lot's thread, the pull request, the report). For each thing
 that waits, a short ping that mentions EREGION_DISCORD_MENTION, deleted once settled: a lot
 stopped (blocked, a review not obtained), the elrond session waiting for a permission or an
-answer, a pull request to merge by hand, the end of a run. The rest (launched, returned, a
+answer, a pull request to merge by hand, a release's draft to publish (REL1), the end of a run. The rest (launched, returned, a
 review's verdict, a worker's fallback) goes silently into the lot's thread, with the report.
 
 The hooks (scripts/elrond-hooks.sh): PreToolUse on Agent|SendMessage|SubagentHandback|AskUserQuestion
@@ -23,7 +24,8 @@ a hand-back comes before its SubagentStop, and that one before elrond can resume
 PostToolUse on AskUserQuestion, Notification and Stop. A hook only appends to a local queue and
 returns; one process at a time delivers the queue, in order. A pull request waiting to be merged
 is asked of GitHub by a detached watcher too, every five minutes, two days at most: Jonathan
-merges it after the run, when no event is left to see it.
+merges it after the run, when no event is left to see it. A release's draft likewise: published by
+Jonathan on GitHub, its line and its ping go (notify.yml deletes them at once; here, GitHub asked).
 Configuration: notify_discord.load_config. What is not configured is not sent; a Discord error
 never fails the caller.
 """
@@ -55,7 +57,9 @@ WATCH_MAX_S = 2 * 86400  # the watcher of pull requests to merge gives up after 
 REPORT_HEAD = 1500       # the report's head in the thread's card; the whole report comes as a file
 ATTACH_MAX = 1_000_000   # a report beyond it is cut in its file (the real ones: 1 to 15 KB on 28/10)
 AGENTS_KEEP_S = 7 * 86400  # an agent not back for a week is forgotten: elrond resumes within a run
-ICON = {"blocked": "⛔", "not-obtained": "⚠️", "merge": "🔀", "question": "❓", "permission": "🔐"}
+ICON = {"blocked": "⛔", "not-obtained": "⚠️", "merge": "🔀", "question": "❓", "permission": "🔐",
+        "release": "🙋"}
+WATCHED = ("merge", "release")   # what GitHub settles: a pull request merged, a release published
 
 
 # ── the queue and the state ─────────────────────────────────────────────────────────
@@ -223,6 +227,8 @@ def _thread_url(state: dict, lot: str) -> str:
 
 def _links(state: dict, w: dict) -> str:
     out = []
+    if w.get("kind") == "release" and w.get("url"):
+        out.append(f"[brouillon]({w['url']})")   # seen by the repository's members only
     if w.get("pr"):
         out.append(f"[PR #{w['pr']}](https://github.com/{_repo()}/pull/{w['pr']})")
     if url := _thread_url(state, w.get("lot", "")):
@@ -281,7 +287,7 @@ def await_(cfg: nd.Config, state: dict, item: dict, delay: int = 0) -> None:
     state["waiting"].append({**item, "ping_at": item["since"] + delay})
     if delay:
         _later("tick", str(delay))
-    if item["kind"] == "merge":
+    if item["kind"] in WATCHED:
         _later("watch")
 
 
@@ -328,12 +334,35 @@ def _merged_prs(cfg: nd.Config, state: dict, now: int, force: bool) -> None:
                     f"https://github.com/{_repo()}/pull/{w['pr']}", "PR")
 
 
+def _published_releases(cfg: nd.Config, state: dict, now: int, force: bool) -> None:
+    """A draft Jonathan published no longer waits. GitHub knows a release by its tag once it is
+    published only (a draft has no tag yet: 404); asked, never often."""
+    items = [w for w in state["waiting"] if w["kind"] == "release"]
+    if not items or (not force and now - state.get("releases_checked", 0) < PR_CHECK_S):
+        return
+    state["releases_checked"] = now
+    api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+    auth = {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}"} if os.environ.get("GITHUB_TOKEN") else {}
+    for w in items:
+        try:
+            rel = nd.fetch("GET", f"{api}/repos/{_repo()}/releases/tags/{w['tag']}", "GitHub API",
+                           headers={"Accept": "application/vnd.github+json", **auth})
+        except nd.Failure as f:
+            if f.code != 404:   # 404: still a draft
+                nd.say(f)
+            continue
+        if rel.get("draft") is False:
+            settle(cfg, state, lambda x: x is w)
+            _recent(state, w["tag"], f"release {w['tag']} publiée", now, rel.get("html_url", ""), "release")
+
+
 def refresh(cfg: nd.Config, state: dict, now: int | None = None, force: bool = False) -> None:
     """The pings that are due, then the board rewritten in place (a new one if it was deleted)."""
     now = now or int(time.time())
     state["running"] = {k: r for k, r in state["running"].items() if now - r.get("since", 0) < STALE_S}
     state["agents"] = {k: a for k, a in state["agents"].items() if now - a.get("returned_at", now) < AGENTS_KEEP_S}
     _merged_prs(cfg, state, now, force)
+    _published_releases(cfg, state, now, force)
     if not cfg.agents:
         return
     for mid in state.pop("unping", []):   # a deletion that failed, tried again
@@ -341,7 +370,8 @@ def refresh(cfg: nd.Config, state: dict, now: int | None = None, force: bool = F
     for w in state["waiting"]:
         if not w.get("ping") and w["ping_at"] <= now:
             card = nd.embed(f"{ICON[w['kind']]} {w['title']}", "\n".join(x for x in (w.get("text"), _links(state, w)) if x),
-                            nd.RED if w["kind"] == "blocked" else nd.ORANGE, _thread_url(state, w.get("lot", "")))
+                            nd.RED if w["kind"] == "blocked" else nd.ORANGE,
+                            w.get("url") or _thread_url(state, w.get("lot", "")))
             try:
                 w["ping"] = _post_ping(cfg, card)
             except nd.Failure as f:
@@ -539,6 +569,11 @@ def on_elrond(e, cfg, state, forum) -> None:
                                                    nd.PURPLE, f"https://github.com/{_repo()}/pull/{pr}"))
         await_(cfg, state, {"key": f"merge:{pr}", "kind": "merge", "lot": lot, "pr": pr,
                             "title": f"{lot} : PR #{pr} à fusionner", "text": note, "since": at})
+    elif kind == "release":
+        tag = e.get("tag", "")
+        await_(cfg, state, {"key": f"release:{tag}", "kind": "release", "lot": tag, "tag": tag,
+                            "url": e.get("url", ""), "title": nd.release_waiting(tag),
+                            "text": "publier déploie H0 (son CD) : Jonathan seul publie", "since": at})
     elif kind == "run-end":
         _unping(cfg, state, (state.get("last_run") or {}).get("ping"))
         state["last_run"] = {"text": note, "at": at}
@@ -640,7 +675,7 @@ def watch(cfg: nd.Config) -> int:
     with open(d / "discord.watch.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         end = time.time() + WATCH_MAX_S
-        while time.time() < end and any(w.get("kind") == "merge" for w in _peek().get("waiting", [])):
+        while time.time() < end and any(w.get("kind") in WATCHED for w in _peek().get("waiting", [])):
             time.sleep(PR_CHECK_S)
             command({}, cfg, force=True)
     return 0
@@ -657,6 +692,19 @@ def command(event: dict, cfg: nd.Config, force: bool = False, always: bool = Tru
     except Exception as x:   # a read-only state folder: said, exit 0 (SKILL.md)
         nd.say(x if isinstance(x, nd.Failure) else nd.Failure("elrond", why=type(x).__name__))
     return 0
+
+
+def release_draft(tag: str, url: str, cfg: nd.Config | None = None) -> dict:
+    """scripts/release.py's draft (REL1): on the board, pinged at once. The ids of its ping and
+    of the board, for notify.yml to delete them when the release is published — it runs on
+    GitHub, without this state; {} when #agents is not configured."""
+    cfg = cfg or nd.load_config()
+    if not cfg.agents:
+        return {}
+    command({"kind": "release", "tag": tag, "url": url}, cfg)
+    state = _peek()
+    w = next((w for w in state.get("waiting", []) if w.get("key") == f"release:{tag}"), {})
+    return {k: str(v) for k, v in (("ping", w.get("ping")), ("board", state.get("board"))) if v}
 
 
 def main(argv=None) -> int:

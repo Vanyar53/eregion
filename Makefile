@@ -105,7 +105,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-pending glorfindel-check-ttl \
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui console-url \
 	annatar-shell glorfindel-shell \
-	venv install lock test test-unit lint annatar-simulate annatar-simulate-gap clean \
+	venv install lock test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
@@ -133,6 +133,10 @@ help:
 	@echo "  make test           Run all tests (104, 0 Azure, 0 LLM calls)"
 	@echo "  make lint           Ruff linter"
 	@echo "  make clean          Remove build artifacts"
+	@echo ""
+	@echo "Release (REL1) — a draft only: Jonathan publishes (publishing deploys H0)"
+	@echo "  make release VERSION=X.Y.Z TITLE=\"…\" [DRY_RUN=1]  The version's PR: CHANGELOG cut, version, README"
+	@echo "  make release-draft VERSION=X.Y.Z [NOTES=file] [DRY_RUN=1]  After its merge: the draft, seen on #agents"
 	@echo ""
 	@echo "Build"
 	@echo "  make build          Build both Docker images"
@@ -928,6 +932,26 @@ test-unit:
 
 lint:
 	.venv/bin/ruff check .
+
+# REL1 (#269) : une release en deux commandes (docs/operations.md, « Packaging et version »).
+# `release` coupe [Unreleased], change la version et la ligne « Status » du README, ouvre la PR
+# chore/release-X.Y.Z ; `release-draft`, après sa fusion, crée le BROUILLON sur le sha complet
+# d'origin/main et le pose sur #agents. Aucune ne publie : Jonathan publie (son CD déploie H0).
+# Comme REF : VERSION, TITLE et NOTES se donnent sur la ligne de commande, lus par le script
+# dans son environnement, jamais développés par make ni recopiés dans la commande.
+RELEASE_ARGS = VERSION TITLE NOTES
+unexport VERSION TITLE NOTES
+release release-draft: export EREGION_RELEASE_VERSION = $(value VERSION)
+release release-draft: export EREGION_RELEASE_TITLE = $(value TITLE)
+release release-draft: export EREGION_RELEASE_NOTES = $(value NOTES)
+release release-draft: export EREGION_RELEASE_ORIGIN = $(foreach v,$(RELEASE_ARGS),$(v):$(firstword $(origin $(v))))
+release:
+	@case " $$EREGION_RELEASE_ORIGIN " in *:environment*) echo "VERSION, TITLE ou NOTES vient de l'environnement : rien n'est fait. Sur la ligne de commande : make release VERSION=X.Y.Z TITLE=\"…\"" >&2; exit 1;; esac
+	python3 scripts/release.py prepare$(if $(DRY_RUN), --dry-run)
+
+release-draft:
+	@case " $$EREGION_RELEASE_ORIGIN " in *:environment*) echo "VERSION ou NOTES vient de l'environnement : rien n'est fait. Sur la ligne de commande : make release-draft VERSION=X.Y.Z" >&2; exit 1;; esac
+	python3 scripts/release.py draft$(if $(DRY_RUN), --dry-run)
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

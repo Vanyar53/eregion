@@ -2,7 +2,8 @@ name: Notify
 
 # N1 (#242): the workshop's news in Discord (docs/atelier-discord.md). #ci: a pull request
 # opened or merged, a red run (pull request, main, nightly), main green again after red, a
-# published release, a closed issue; a lot's events in its #lots thread too. What is worth
+# published release (and, on #agents, its draft's line and ping deleted: REL1), a closed
+# issue; a lot's events in its #lots thread too. What is worth
 # saying is decided by scripts/notify_discord.py (`github`), from the event's JSON.
 #
 # Never checks out nor runs a pull request's code: pull_request_target and workflow_run run
@@ -54,6 +55,9 @@ jobs:
       - name: Discord
         env:
           EREGION_DISCORD_WEBHOOK_CI: ${{ secrets.EREGION_DISCORD_WEBHOOK_CI }}
+          # REL1: a published release deletes its draft's line and ping on #agents (the board's
+          # webhook: it edits and deletes only its own messages).
+          EREGION_DISCORD_WEBHOOK_AGENTS: ${{ secrets.EREGION_DISCORD_WEBHOOK_AGENTS }}
           EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
           EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
           GITHUB_TOKEN: ${{ github.token }}

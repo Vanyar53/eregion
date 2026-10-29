@@ -610,7 +610,11 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     )
                     console.print(f"  Event    : attack_started → polling {src}...\n")
                 try:
-                    resolved = resolve_attack_started(data)
+                    # The row is read as the RulePoller reads it, the private IPs included
+                    # (SEC4a): one Azure listing for this attack.
+                    from glorfindel.actions import AzureConnector as _Conn
+                    owners = None if dry_run else _Conn(dry_run=False).private_ip_owners
+                    resolved = resolve_attack_started(data, ip_owners=owners)
                 except Exception as exc:
                     # A persistent backend failure raises (detectors no longer swallow
                     # it). This thread used to die with it: the attack was never

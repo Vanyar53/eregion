@@ -1135,6 +1135,7 @@ def test_store_cycle_includes_run_id(tmp_path):
         "reasoning": "test",
         "action": "isolate_vm",
         "outcome": "isolated",
+        "source": "real",   # a real signal is given real cycles only (SEC4a)
     })
     results = mem.retrieve_similar({"ttp": "T1486", "severity": "critical", "event": "detection"}, n=1)
     assert results[0]["run_id"] == "20260101T000000Z"
@@ -1197,6 +1198,7 @@ def test_memory_store_and_retrieve(tmp_path):
         "reasoning": "Ransomware detected — isolated VM",
         "action": "isolate_vm",
         "outcome": "isolated",
+        "source": "real",
     })
     assert mem.count() == 1
 

@@ -7,7 +7,7 @@ from glorfindel.providers.azure.nsg import _describe_shadowing, _rule_name, _sha
 from glorfindel.providers.azure.quarantine import _is_quarantine_nsg, PLATFORM_OPEN_NOTE
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
-from glorfindel.response.state import _load_isolation_state, _UNKNOWN
+from glorfindel.response.state import _held_in_quarantine, _load_isolation_state, _UNKNOWN
 
 
 class VerifyMixin:
@@ -178,6 +178,7 @@ class VerifyMixin:
         rg, vm_name = _parse_vm_resource_id(resource_id)
         still: list[str] = []
         unknown: list[str] = []
+        untraced: list[str] = []         # bare, held in our quarantine, its original unknown
         targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
         still += [f'{t0["nic_short"]}:{t0["quarantine"]["nsg_name"]} (NSG de quarantaine attaché)'
                   for t0 in targets if t0.get("quarantine")]
@@ -202,6 +203,14 @@ class VerifyMixin:
                     continue
                 if original is _UNKNOWN or tagged is not _UNKNOWN:
                     original = tagged
+            if original is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):
+                # In quarantine for our state, its original unknown there (state and
+                # tags lost before a re-isolation, Q7) and no tag: someone left it bare.
+                # Bare is not its design for all we know — read as released, an old
+                # isolation stayed on its own NSG while this said verified (I3F, #287).
+                untraced.append(f'{t0["nic_short"]} : sans NSG, NSG d\'origine inconnu '
+                                "(ni l'état local ni le tag ne le disent)")
+                continue
             if original and original is not _UNKNOWN:
                 still.append(f'{t0["nic_short"]} : sans NSG, '
                              f'{original.rstrip("/").rsplit("/", 1)[-1]} non remis')
@@ -226,9 +235,10 @@ class VerifyMixin:
             else:
                 still += [f"{l_name}:{_rule_name(r)} (état ancien)" for r in rules
                           if _rule_name(r).lower() in names and f"{l_name}:{_rule_name(r)}" not in still]
-        if still or unknown:
-            detail = ", ".join(still + [f"{u} (lecture impossible)" for u in unknown])
+        if still or unknown or untraced:
+            detail = ", ".join(still + untraced + [f"{u} (lecture impossible)" for u in unknown])
             return {"verified": False, "method": "nsg_check",
                     "still_isolated": still, "unreadable": unknown,
+                    **({"original_unknown": untraced} if untraced else {}),
                     "error": f"isolation toujours présente : {detail}"}
         return {"verified": True, "method": "nsg_check"}

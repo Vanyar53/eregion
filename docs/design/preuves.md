@@ -1069,6 +1069,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I8F | original inconnu (état et tags perdus), carte laissée nue puis réisolée | « aucun NSG » écrit par-dessus l'inconnu : `released`, carte sans son NSG, une ancienne isolation restée sur ce NSG sans état |
 | I8F | même carte nue, `reset --from-azure` | carte sautée : `swept`, état effacé, même reste |
 | I8F | même carte nue, un 429 à la lecture de notre tag (relecture) | l'erreur lue « aucun NSG » et écrite : même reste |
+| I3F | original inconnu (état et tags perdus), carte réisolée puis laissée nue | `verify_release` : `verified: True`, carte sans son NSG, une ancienne isolation restée sur ce NSG ; `glorfindel release`, qui le consulte d'abord, effaçait l'état |
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
@@ -1248,6 +1249,54 @@ dit « aucun » lit maintenant le tag, et un 429 la fait échouer ; les séquenc
 quatre attrapés 2/2 ; la relecture, une autre passe de deux tours, a eu M19 (un blocage, sans lien
 avec le lot) à 1/2.
 
+**I3F (28/10, #287) : un inconnu lu comme levé.** Le harnais de SEC3 a fait tomber I3 une fois
+sur le code non muté, ancien (`main` aussi) : « verify_release True, …/api not back to its design ».
+Réduite, la séquence tient en trois étapes, dans un monde où une ancienne version a isolé `api`
+sur son propre NSG : `an_old_isolations_vm_goes_away` (`api` en quarantaine, les tags perdus, la
+carte laissée nue, une nouvelle VM sur ce NSG remise à zéro), `config_changes` (le groupe de la
+quarantaine devient celui de la VM), puis `bare_with_an_unknown_original`. Dans cette dernière, la
+carte nue est réisolée dans une seconde quarantaine (l'original est lu dans l'état), perd cet état
+et les tags de ce NSG, est réisolée — son original inconnu maintenant (Q7) — puis laissée nue.
+Jusque-là, `verify_release` répondait « api-nic : sans NSG, nsg-api-nic non remis » ; ensuite,
+`verified: True`. **Cause** (`providers/azure/verify.py`) : pour une carte nue, `verify_release`
+cherchait l'original dans l'état, puis dans notre tag, et ne trouvant ni l'un ni l'autre, ne
+disait rien. Une carte que l'état tient en quarantaine sans original était donc lue comme
+levée. C'est le trou d'I8F, resté dans la vérification. Il pesait plus qu'un mot :
+`glorfindel release` consulte `verify_release` d'abord, et sur un `True` efface l'état sans rien
+lever. Correctif : une telle carte est un inconnu, `verified: False`, et `original_unknown` la
+nomme (M1340). La levée gardait déjà le placement ; elle disait « la carte reste en quarantaine »,
+« NSG de quarantaine non détaché », d'une carte qui n'avait plus de NSG. Elle dit maintenant
+« carte sans NSG, NSG d'origine non remis » et comment en sortir : poser le NSG sur la carte, ou
+le tag (M1341, M1342 ; `test_a_bare_nic_whose_original_is_unknown_is_said_bare`).
+**L'oracle laissait passer le même cas, plus courant** : l'exemption d'une carte nue
+(`_untraceable`) valait dès que le test avait perdu l'état et les tags après que Glorfindel avait
+noté l'original. Or, dans la règle composée d'I8F, l'état d'après (celui de la réisolation) tenait
+la carte en quarantaine sans original, et Glorfindel pouvait le lire. Six séquences déjà figées
+(I8F) passaient ainsi sur le code non corrigé. La séquence de SEC3 ne tombait que parce que
+l'original avait été réécrit en tag sur l'*autre* NSG de quarantaine (`retagged_at`). I3 n'exempte
+plus une carte nue que le test a vue tenue en quarantaine sans original par un état, depuis la
+dernière perte de cet état (`_held_unknown`) : pour `verify_release`, pour la levée et pour le reset.
+Sans le correctif, ces six séquences et la nouvelle tombent ; avec lui, elles passent.
+Par la machine seule, M1340 est attrapé 5/5 à 60 séquences et 3/3 à 500. Invariants : 500
+séquences sur cinq graines, et 2 000 sur deux graines, verts. Au même budget (60 séquences, deux
+tours), les 64 mutants mesurables de `verify.py`, `release.py`, `quarantine.py` et `sweep.py`
+donnent 51/64 attrapés à chaque tour, avant comme après. Huit d'entre eux bougent d'un côté à
+l'autre. Remesurés sur six tours : 28/48 avant, 33/48 après, instables d'au moins un côté (M15 attrapé 6/6 des deux côtés)
+(M09 5/6 → 3/6, M26 3/6 → 2/6, M29 0/6 → 4/6). Aucun n'est perdu : un mutant à 0/2 par la machine
+reste attrapé par ses séquences figées.
+
+**Le verrou des escalades, hors de l'ordonnanceur (29/10, #292).** Sur cette branche, le job macOS
+de la CI restait bloqué dans la machine. La pile écrite par `faulthandler` l'a montré : dans une
+course où les deux opérations laissent une carte, l'une, arrêtée par l'ordonnanceur à son écriture
+pendant qu'elle tenait le verrou du magasin (SEC3), laissait l'autre bloquée dans ce verrou, hors
+de sa vue ; le teardown attendait ensuite derrière. C'était aussi le « op-2 never came back »
+d'I11, qu'on croyait dû à la charge. Le défaut était dans le banc, latent sur `main` depuis SEC3 :
+tout verrou réel qu'une course peut prendre doit être celui de l'ordonnanceur (`_scheduled`).
+`_file_lock` prend un `timeout` comme `_vm_lock`, et la machine l'essaie sans attendre ; la
+régression `test_a_race_whose_two_operations_rewrite_the_escalations_store` rejoue la course, et le
+mutant M1395 (le verrou qui ignore son délai) y est attrapé. Le job macOS est borné (25 min) et un
+test qui dure plus de 8 min y écrit la pile de ses fils.
+
 Le plus grave : après une levée qui échoue en partie, une seconde levée lisait les champs de
 rétro-compatibilité de l'état comme un ancien format, et supprimait les deny du NSG de
 quarantaine **partagé**. Toutes les VMs en quarantaine du même groupe étaient rouvertes. La
@@ -1297,6 +1346,10 @@ Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à s
   fois qu'il a vu un état tenir la carte en quarantaine *pendant qu'elle était nue*. Un état qui
   l'a tenue après la perte, mais pas nue, puis que le code abandonne, laisse l'exemption à une
   carte que quelqu'un détache ensuite. Aucun mutant naturel ne l'exploite ; le journal ne dit
-  pas mieux sans lire l'état comme le code l'a laissé (A0).
+  pas mieux sans lire l'état comme le code l'a laissé (A0). Pour I3 depuis I3F, une carte nue que le test a vue tenue
+  en quarantaine **sans original** par un état, depuis la dernière perte de cet état, ne gagne plus
+  l'exemption (`_held_unknown`) : cela lit l'absence d'original dans l'état, mais ne rend l'oracle
+  que plus strict — un code qui perd un original connu n'y gagne rien, un code qui en écrit un faux
+  est jugé comme avant.
 - **Le monde simulé AWS** (MC1) : rien n'y est mesuré. Ses seize hypothèses attendent le banc AWS
   (MC2), et la cohérence à terme des lectures d'EC2 n'est pas modélisée ([`monde-aws.md`](monde-aws.md)).

@@ -61,6 +61,7 @@ const ESC_LABELS = {
   control_plane_change: 'control plane changed (detection only)',
   identity_change:     'Entra ID identity changed (detection only)',
   protected_address:   'protected address (never blocked)',
+  uncontained_detection: 'detection not contained (snapshot only)',
 };
 
 // Cards anchored on a VM the detection does not name (an Activity Log row, an identity,

@@ -28,7 +28,8 @@ here first, with the same imports (tests/unit/test_image_check.py keeps them in 
 whose diff (its merge commit against the base, `git diff --no-renames -z`) names no path of
 IMAGE_PATHS skips the build and the job passes green — so the job runs on every pull request and its
 checks can be required, never left « expected ». A push to main always builds, and so does a diff
-that cannot be read: it fails closed. Written to $GITHUB_OUTPUT when the CI sets it.
+that cannot be read, or a HEAD that is not the pull request's merge commit: it fails closed. Written to
+$GITHUB_OUTPUT when the CI sets it; in the CI without it (GITHUB_ACTIONS set), exit 1.
 
 Exit 0 when every check passes, 1 otherwise (each failure says which, with the command's last
 lines), 2 when docker cannot run at all. Python 3.11+, standard library only.
@@ -192,6 +193,10 @@ def touched(event: str, runner: Runner = run) -> tuple[bool, str]:
     """Whether the change goes into an image: (build, why). Fails closed."""
     if event != "pull_request":
         return True, f"{event or 'événement inconnu'} : toujours construit"
+    # The diff is the merge commit's against its first parent, the base: a HEAD that is not a
+    # merge (a checkout of the PR's head, another event's) has no base there — built (SEC7).
+    if runner(["git", "rev-parse", "--verify", "-q", "HEAD^2"]).returncode != 0:
+        return True, "HEAD n'est pas le commit de fusion de la PR : construit"
     res = runner(["git", "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"])
     if res.returncode != 0:
         return True, "le diff de la PR est illisible : construit"
@@ -208,6 +213,11 @@ def say_touched(event: str, runner: Runner = run) -> int:
     if out:
         with open(out, "a", encoding="utf-8") as f:
             f.write(f"build={'true' if build_it else 'false'}\n")
+    elif os.environ.get("GITHUB_ACTIONS"):
+        # In the CI without its output, the decision would reach no step: red, never a silent
+        # skip (SEC7; the steps' `!= 'false'` builds on a missing output too).
+        print("✗ GITHUB_ACTIONS sans GITHUB_OUTPUT : la décision n'atteint aucune étape")
+        return 1
     return 0
 
 

@@ -831,7 +831,7 @@ python3 scripts/published_image.py install-cosign              # ~/.eregion/cosi
 python3 scripts/published_image.py verify glorfindel --commit "$(git rev-parse v0.4.6^{commit})"
 # → ✓ ghcr.io/vanyar53/eregion-glorfindel@sha256:… : signée et attestée par .github/workflows/publish.yml sur main, au commit …
 gh attestation verify oci://ghcr.io/vanyar53/eregion-glorfindel@sha256:<digest> --repo Vanyar53/eregion \
-  --signer-workflow Vanyar53/eregion/.github/workflows/publish.yml   # gh récent ; il demande un jeton
+  --signer-workflow Vanyar53/eregion/.github/workflows/publish.yml   # gh ≥ 2.49, connecté (non mesuré ici : le gh du poste, 2.45, n'a pas `attestation`)
 gh attestation verify oci://ghcr.io/vanyar53/eregion-glorfindel@sha256:<digest> --repo Vanyar53/eregion \
   --predicate-type https://spdx.dev/Document/v2.3                    # le SBOM
 ```

@@ -497,9 +497,10 @@ l'envoyait par SSH : rien ne liait ce qu'Orodruin exécute à ce que la CI avait
 
 **Pourquoi Orodruin ne tire pas lui-même.** Le contrat garantit une sortie limitée au banc, aux API
 de contrôle du cloud et à l'API du modèle, vérifiée par une connexion hors périmètre qui échoue.
-Tirer depuis GHCR demanderait `ghcr.io` et `pkg-containers.githubusercontent.com` : le second est un
-CDN partagé de GitHub (des adresses de Fastly, mesuré le 29/10), qui sert aussi n'importe quel
-contenu d'utilisateur ; un NSG ne filtre que par adresse. L'ouvrir ouvrirait un chemin de sortie bien
+Tirer depuis GHCR demanderait `ghcr.io` et `pkg-containers.githubusercontent.com`, où ses blobs sont
+servis : un nom de `*.githubusercontent.com`, le domaine que GitHub donne aussi pour le contenu de ses
+utilisateurs (`api.github.com/meta`, `domains.packages`, lu le 29/10), et un NSG ne filtre que par
+adresse, pas par nom. L'ouvrir ouvrirait un chemin de sortie bien
 plus large que l'image. Vérifier sur le poste, puis relire l'identifiant sur Orodruin, garde la
 garantie et prouve l'image. Aucun changement Terraform n'est donc nécessaire pour CI3 (le
 commentaire du `custom_data` seul a changé : il est hors du heredoc, un plan ne montre rien).

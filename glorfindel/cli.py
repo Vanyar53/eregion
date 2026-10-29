@@ -2083,15 +2083,19 @@ def reject_rule(proposal_id: str) -> None:
 
 # ── P1: the client's layer of rules ──────────────────────────────────────────────
 
-@cli.command("rules")
+@cli.group("rules", invoke_without_command=True)
 @click.option("--rules", "rules_file", default=None, metavar="PATH",
               help="The shipped base detection_rules.yaml (default: auto-detected).")
-def rules_cmd(rules_file: str | None) -> None:
+@click.pass_context
+def rules_cmd(ctx: click.Context, rules_file: str | None) -> None:
     """The detection rules loaded: the shipped base, then the client's layer over it.
 
     Each rule says its layer; what the client's layer does to the base (a rule replaced,
-    one disabled) is said under the table.
+    one disabled) is said under the table. `glorfindel rules check [--live]`: each rule
+    bound to its backend, and (--live) its query run once, read-only (H2).
     """
+    if ctx.invoked_subcommand:
+        return
     from glorfindel.detection_rules import client_rules_path, load_config
 
     target = rules_file or _find_rules_file()
@@ -2133,6 +2137,28 @@ def rules_cmd(rules_file: str | None) -> None:
     for name in cfg.disabled_base:
         console.print(f"[bold red]⚠ Règle livrée « {_esc_markup(name)} » désactivée par la couche du "
                       "client[/bold red] — sa technique n'est plus détectée.")
+
+
+@rules_cmd.command("check")
+@click.option("--rules", "rules_file", default=None, metavar="PATH",
+              help="The shipped base detection_rules.yaml (default: auto-detected).")
+@click.option("--live", is_flag=True, help="Run each rule's query once, read-only, on its backend.")
+@click.option("--json", "as_json", is_flag=True, help="One JSON object (what H0's CD reads), errors reduced.")
+@click.option("--query-timeout", "query_timeout_s", type=click.FloatRange(0.1, 600), default=30.0,
+              show_default=True, help="Seconds a query is waited for.")
+@click.option("--total", "total_s", type=click.FloatRange(0.1, 3600), default=120.0, show_default=True,
+              help="Seconds for the whole check: the rules left past it are not run, and said.")
+@click.pass_context
+def rules_check_cmd(ctx: click.Context, rules_file: str | None, live: bool, as_json: bool,
+                    query_timeout_s: float, total_s: float) -> None:
+    """Each loaded rule (base, client's layer, approved): bound to its backend, and with
+    --live its query run once — ok (zero rows included), error (syntax, a table absent, no
+    backend bound), timeout. No model, no write, no action. Exit 0 ok, 1 an error, 3
+    timeouts only (H2, docs/operations.md)."""
+    from glorfindel.rule_check import main as _check
+    target = rules_file or ctx.parent.params.get("rules_file") or _find_rules_file()
+    ctx.exit(_check(target, live=live, as_json=as_json, query_timeout_s=query_timeout_s, total_s=total_s,
+                    echo=click.echo, console=console, echo_err=lambda line: click.echo(line, err=True)))
 
 
 @cli.command("migrate-rules")

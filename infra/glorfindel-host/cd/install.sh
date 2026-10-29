@@ -25,7 +25,7 @@ if [ "${1:-}" = "--remove" ]; then
   exit 0
 fi
 
-for f in eregion_cd.py deploy.sh notify_discord.py eregion-cd.service eregion-cd.timer; do
+for f in eregion_cd.py deploy.sh notify_discord.py chat_text.py eregion-cd.service eregion-cd.timer; do
   [ -f "$SRC/$f" ] || die "$SRC/$f manque : make glorfindel-host-cd-install le copie"
 done
 command -v python3 >/dev/null || die "python3 manque"

@@ -87,6 +87,22 @@ elif cmd == "run":
         print("glorfindel, version", os.environ.get("FAKE_PKG_VERSION") or st["images"][img]["version"].lstrip("v"))
     elif "load_glorfindel_config" in rest and os.environ.get("FAKE_CONFIG_FAIL"):
         sys.exit("glorfindel-config.yaml refusé — clé inconnue : quarantaine_nsg")
+elif cmd == "exec":
+    # H2: `glorfindel rules check --live --json` in the watch's container, said as FAKE_RULES_OUT says.
+    import time
+    st.setdefault("execs", []).append({"container": args[1], "on": st["containers"][args[1]]["version"],
+                                       "args": args[2:]})
+    save()
+    # What runs before the switch (v0.3.1) says FAKE_BASE_*; the candidate, FAKE_RULES_*.
+    pre = "FAKE_BASE_" if st["containers"][args[1]]["version"] == "v0.3.1" else "FAKE_RULES_"
+    time.sleep(float(os.environ.get(pre + "SLEEP") or 0))
+    out = os.environ.get(pre + "OUT")
+    if out is None:
+        out = json.dumps({"schema": "eregion.rules-check/1", "live": True, "error": "",
+                          "rules": [{"name": "ssh-brute-force", "status": "ok", "rows": 0, "kind": "", "error": ""}]})
+    sys.stderr.write(os.environ.get(pre + "ERR", ""))
+    print(out)
+    sys.exit(int(os.environ.get(pre + "RC") or 0))
 elif cmd == "compose":
     if "config" in args:
         sys.exit(1 if os.environ.get("FAKE_COMPOSE_FAIL") else 0)
@@ -150,7 +166,8 @@ class H0:
         # The agent, installed as make glorfindel-host-cd-install does.
         self.cd = self.home / ".eregion-cd"
         self.cd.mkdir()
-        for src in (AGENT, ROOT / "infra" / "glorfindel-host" / "deploy.sh", ROOT / "scripts" / "notify_discord.py"):
+        for src in (AGENT, ROOT / "infra" / "glorfindel-host" / "deploy.sh", ROOT / "scripts" / "notify_discord.py",
+                    ROOT / "glorfindel" / "chat_text.py"):
             shutil.copy(src, self.cd / src.name)
         (self.cd / "discord.env").write_text(
             f"EREGION_DISCORD_WEBHOOK_DEPLOY={fake.base}/api/webhooks/9/{SECRET}\nEREGION_DISCORD_MENTION=42\n")
@@ -753,7 +770,8 @@ def test_an_agent_whose_origin_is_lost_says_it_once_without_the_mention(tmp_path
 def test_a_newer_release_with_the_same_agent_says_nothing(tmp_path, fake):
     """The release is newer than the agent, its three files are the installed ones: nothing to update."""
     same = {path: (ROOT / path).read_text(encoding="utf-8") for path in (
-        "infra/glorfindel-host/cd/eregion_cd.py", "infra/glorfindel-host/deploy.sh", "scripts/notify_discord.py")}
+        "infra/glorfindel-host/cd/eregion_cd.py", "infra/glorfindel-host/deploy.sh", "scripts/notify_discord.py",
+        "glorfindel/chat_text.py")}
     h0 = H0(tmp_path, fake, c2_files=same)
     res = h0.run()
     assert res.returncode == 0, res.stdout + res.stderr
@@ -766,3 +784,359 @@ def test_the_installation_writes_the_commit_it_installs_from():
                           "HOST_IP=203.0.113.9"], capture_output=True, text=True, timeout=60)
     assert res.returncode == 0, res.stderr
     assert "git rev-parse HEAD |" in res.stdout and "cat > .eregion-cd/installed-from" in res.stdout
+
+
+# ── H2 (#266): every rule the release loads runs once after the switch ─────────────────
+# Placeholders only (never a real infrastructure): what an error may carry, that #deploy never says.
+WS = "00000000-0000-0000-0000-0000000000aa"
+SUB = "00000000-0000-0000-0000-0000000000bb"
+LEAKS = (WS, SUB, "/subscriptions/", "rg-example", "vm-example-01", "internal.example.net", "10.0.0.4")
+NO_CHECK = "Usage: glorfindel rules [OPTIONS]\nTry 'glorfindel rules --help' for help.\n\nError: No such option: --live\n"
+
+
+def _rules(*rules, error=""):
+    return json.dumps({"schema": "eregion.rules-check/1", "live": True, "error": error, "rules": list(rules)})
+
+
+def _rule(name, status="ok", kind="", error="", code=""):
+    return {"name": name, "status": status, "rows": 0 if status == "ok" else None, "kind": kind, "error": error,
+            "code": code}
+
+
+def _execs(h0):
+    return h0.docker().get("execs", [])
+
+
+def _desc(post):
+    return post["embeds"][0]["description"]
+
+
+def _titled(h0, start):
+    return [p for p in h0.posts() if p["embeds"][0]["title"].startswith(start)]
+
+
+def _arg(args, flag):
+    return float(args[args.index(flag) + 1])
+
+
+BROKEN = _rule("sudo-root", "error", "syntax", f"Query could not be parsed at 'BROKEN' — workspace {WS} at "
+               f"/subscriptions/{SUB}/resourceGroups/rg-example on vm-example-01.internal.example.net (10.0.0.4)",
+               "SYN0002")
+
+
+def test_the_rules_run_once_before_and_once_after_the_switch(h0):
+    res = h0.run(FAKE_RULES_OUT=_rules(_rule("ssh-brute-force"), _rule("sudo-root")))
+    assert res.returncode == 0, res.stdout + res.stderr
+    before, after = _execs(h0)                                # once each, never again
+    assert (before["container"], before["on"]) == ("eregion-watch", "v0.3.1")   # what ran, before it moved
+    assert (after["container"], after["on"]) == ("eregion-watch", "v0.4.0")     # the candidate, switched to
+    for ex in (before, after):
+        assert ex["args"][:5] == ["glorfindel", "rules", "check", "--live", "--json"]
+        assert 0 < _arg(ex["args"], "--query-timeout") <= _arg(ex["args"], "--total")
+    calls = h0.calls()
+    assert calls.index(next(c for c in calls if c.startswith("exec "))) < calls.index(
+        "tag eregion-glorfindel:v0.4.0 eregion-glorfindel")
+    (ok,) = _titled(h0, "✅")
+    assert "règles : 2 sur 2" in _desc(ok) and h0.outcome("v0.4.0") == "deployed"
+    assert not _titled(h0, "⚠️")
+
+
+def test_a_rule_without_rows_is_no_error(h0):
+    """Zero rows is the usual answer of a rule: nothing happened."""
+    assert h0.run(FAKE_RULES_OUT=_rules(_rule("quiet"))).returncode == 0
+    assert h0.running() == {"v0.4.0"} and not _alerts(h0)
+
+
+@pytest.mark.parametrize("rule, said", [
+    (BROKEN, "requête invalide (SYN0002)"),
+    (_rule("sudo-root", "error", "table", "'where' operator: Failed to resolve table 'NoSuchTable'", "SEM0100"),
+     "table ou colonne absente (SEM0100)"),
+    (_rule("sudo-root", "error", "backend", "workspace en ligne sans backend"), "backend non lié"),
+])
+def test_a_rule_ok_before_and_broken_after_rolls_back_said_by_name_kind_and_code(h0, rule, said):
+    base = _rules(_rule("ssh-brute-force"), _rule("sudo-root"))
+    out = _rules(_rule("ssh-brute-force"), rule)
+    assert h0.run(FAKE_BASE_OUT=base, FAKE_RULES_OUT=out, FAKE_RULES_RC="1").returncode == 1
+    assert h0.running() == {"v0.3.1"} and h0.head() == h0.commits["c1"] and h0.outcome("v0.4.0") == "rolled back"
+    (alert,) = _alerts(h0)
+    assert alert["embeds"][0]["title"].startswith("↩️")
+    assert "« sudo-root »" in _desc(alert) and said in _desc(alert) and "cassée(s) par cette release" in _desc(alert)
+    posted = json.dumps(h0.posts(), ensure_ascii=False)
+    assert "BROKEN" not in posted and "Failed to resolve" not in posted     # the error's words: the journal only
+    for leak in LEAKS:
+        assert leak not in posted, leak
+    assert [e["on"] for e in _execs(h0)] == ["v0.3.1", "v0.4.0"]           # the way back runs no check
+
+
+def test_a_new_rule_broken_in_the_release_rolls_back(h0):
+    """Absent before, in a lasting error after: this release brought it."""
+    assert h0.run(FAKE_RULES_OUT=_rules(_rule("ssh-brute-force"), BROKEN), FAKE_RULES_RC="1").returncode == 1
+    assert h0.running() == {"v0.3.1"} and "« sudo-root »" in _desc(_alerts(h0)[0])
+
+
+def test_a_rule_broken_before_as_after_is_said_with_the_mention_never_a_rollback(h0):
+    """A table the workspace never had (C2's AuditLogs on H0, maybe), a client rule broken, a role
+    taken away: the release did not bring it — H0 keeps it, Jonathan is told."""
+    base = _rules(_rule("ssh-brute-force"), _rule("entra-app-consent", "error", "table", "x", "SEM0100"))
+    out = _rules(_rule("ssh-brute-force"), _rule("entra-app-consent", "error", "table", "x", "SEM0100"))
+    res = h0.run(FAKE_BASE_OUT=base, FAKE_BASE_RC="1", FAKE_RULES_OUT=out, FAKE_RULES_RC="1")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+    (warn,) = _titled(h0, "⚠️")
+    assert warn.get("content") == "<@42>"
+    assert "« entra-app-consent »" in _desc(warn) and "avant la bascule" in _desc(warn)
+
+
+def test_a_reference_without_the_command_compares_nothing_and_rolls_nothing_back(h0):
+    """v0.4.3 and before: no `rules check` in what runs — « non comparé », in orange."""
+    res = h0.run(FAKE_BASE_OUT=NO_CHECK, FAKE_BASE_RC="2", FAKE_RULES_OUT=_rules(_rule("ssh-brute-force"), BROKEN),
+                 FAKE_RULES_RC="1")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+    (warn,) = _titled(h0, "⚠️")
+    assert "non comparé" in _desc(warn) and "« sudo-root »" in _desc(warn) and warn.get("content") == "<@42>"
+
+
+def test_a_reference_with_an_error_that_may_pass_rolls_nothing_back(h0):
+    """sudo-root unproven before (a 429): nothing says it was ok — no rollback, said."""
+    base = _rules(_rule("ssh-brute-force"), _rule("sudo-root", "unproven", "throttled", "Too Many Requests", "429"))
+    res = h0.run(FAKE_BASE_OUT=base, FAKE_BASE_RC="3", FAKE_RULES_OUT=_rules(_rule("ssh-brute-force"), BROKEN),
+                 FAKE_RULES_RC="1")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"} and "« sudo-root »" in _desc(_titled(h0, "⚠️")[0])
+
+
+@pytest.mark.parametrize("status", ["unproven", "error"])
+@pytest.mark.parametrize("kind, code", [("throttled", "429"), ("service", "503"), ("network", "ServiceRequestError"),
+                                        ("auth", "ClientAuthenticationError"), ("partial", "RuntimeError"),
+                                        ("other", "Exception")])
+def test_an_error_that_may_pass_keeps_the_release(h0, kind, code, status):
+    """The command says these unproven; the CD rolls back on its own list of lasting kinds only —
+    even for one a command would call an error."""
+    out = _rules(_rule("ssh-brute-force"), _rule("sudo-root", status, kind, "x", code))
+    res = h0.run(FAKE_RULES_OUT=out, FAKE_RULES_RC="3")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+    (warn,) = _titled(h0, "⚠️")
+    assert "« sudo-root »" in _desc(warn)
+    if status == "unproven":
+        assert "non prouvée" in _desc(warn) and not warn.get("content")
+
+
+def test_what_a_rule_says_is_escaped_for_discord(h0):
+    """SEC6: a rule's name and code are text from outside — no masked link, no mention."""
+    out = _rules(_rule("[Support](https://evil.example.com) @everyone", "error", "syntax", "**bold**", "SEM`0100"))
+    assert h0.run(FAKE_RULES_OUT=out, FAKE_RULES_RC="1").returncode == 1
+    text = _desc(_alerts(h0)[0])
+    assert "\\[Support\\]" in text and "evil.example.com" not in text and "@​everyone" in text
+    assert "bold" not in text and "`" not in text
+
+
+def test_rules_without_an_answer_are_said_never_a_rollback(h0):
+    out = _rules(_rule("ssh-brute-force"), _rule("slow-one", "timeout", "timeout", "pas de réponse en 20 s"))
+    res = h0.run(FAKE_RULES_OUT=out, FAKE_RULES_RC="3")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed" and not _alerts(h0)
+    (slow,) = _titled(h0, "⚠️")
+    assert "slow-one" in _desc(slow) and "délai dépassé" in _desc(slow)
+    assert len(_execs(h0)) == 2                                # said, not tried again
+
+
+def test_a_check_that_never_ends_is_cut_said_and_the_release_kept(h0):
+    import time
+    started = time.monotonic()
+    res = h0.run(FAKE_RULES_SLEEP="20", EREGION_CD_RULES_MARGIN_S="0.5")
+    assert time.monotonic() - started < 15                    # cut at its budget, never waited for
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"} and len(_execs(h0)) == 2
+    assert "non prouvées" in _desc(_titled(h0, "⚠️")[0])
+
+
+def test_a_release_from_before_h2_is_kept_its_rules_unproven(h0):
+    """Its `glorfindel rules` takes no `check`: click's code 2 and its words — said, not a rollback."""
+    res = h0.run(FAKE_RULES_OUT=NO_CHECK, FAKE_RULES_RC="2")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "non vérifiées" in _desc(_titled(h0, "✅")[0])
+
+
+def test_a_code_2_that_is_no_missing_command_is_said_in_orange(h0):
+    res = h0.run(FAKE_RULES_OUT="", FAKE_RULES_ERR="Error: Invalid value for '--total': 9999 is not in the range",
+                 FAKE_RULES_RC="2")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "refusé ses options" in _desc(_titled(h0, "⚠️")[0]) and "non vérifiées" not in json.dumps(h0.posts())
+
+
+@pytest.mark.parametrize("out, rc, said", [
+    ("Traceback (most recent call last):\n  ImportError: boom", "1", "rien dit de lisible"),
+    (_rules(error="glorfindel-config.yaml refusé par la lecture stricte (A3)"), "1", "A3"),
+    (_rules(), "0", "aucune règle chargée"),
+])
+def test_a_check_that_proves_nothing_where_the_reference_was_checked_rolls_back(h0, out, rc, said):
+    assert h0.run(FAKE_RULES_OUT=out, FAKE_RULES_RC=rc).returncode == 1
+    assert h0.running() == {"v0.3.1"} and said in _desc(_alerts(h0)[0])
+
+
+def test_the_full_words_go_to_the_journal_only(h0):
+    res = h0.run(FAKE_RULES_OUT=_rules(_rule("ssh-brute-force"), BROKEN), FAKE_RULES_RC="1",
+                 FAKE_RULES_ERR=f"sudo-root [error/syntax] : (BadArgumentError) workspace {WS}\n")
+    assert WS in res.stdout                                    # the journal (journalctl, private)
+    assert WS not in json.dumps(h0.posts())
+
+
+def test_a_switch_taken_up_after_a_cut_compares_with_what_was_checked_before(h0):
+    import time
+    c2 = h0.commits["c2"]
+    st = h0.docker()
+    st["images"]["eregion-glorfindel:v0.4.0"] = {"version": "v0.4.0", "revision": c2, "n": 5}
+    st["images"]["eregion-glorfindel"] = dict(st["images"]["eregion-glorfindel:v0.4.0"])
+    for c in st["containers"].values():
+        c.update(version="v0.4.0", revision=c2)
+    h0.state.write_text(json.dumps(st))
+    _git(h0.vm, h0.env, "checkout", "-q", "--detach", c2)
+    base = {"state": "ok", "rules": [{"name": "sudo-root", "status": "ok"}]}
+    (h0.cd / "state.json").write_text(json.dumps({"outcomes": {"v0.4.0": {
+        "result": "switching", "from": "v0.3.1", "url": "", "why": "", "at": time.time() - 2, "base": base}},
+        "said": {}}))
+    h0.heartbeat.parent.mkdir(parents=True, exist_ok=True)
+    h0.heartbeat.write_text("now")
+    res = h0.run(FAKE_RULES_OUT=_rules(BROKEN), FAKE_RULES_RC="1")
+    assert "reprise" in res.stdout and res.returncode == 1
+    assert h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") == "rolled back"
+
+
+# The agent, imported as a module (its functions alone): sys.path is put back after.
+@pytest.fixture
+def agent(monkeypatch):
+    import importlib.util
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    spec = importlib.util.spec_from_file_location("eregion_cd_h2", AGENT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("budget", [3.0, 40.0, 180.0, 900.0])
+def test_the_rules_check_fits_in_what_is_left_of_the_health(agent, monkeypatch, budget):
+    seen = {}
+
+    def run(args, **kw):
+        seen.update(args=args, timeout=kw["timeout"])
+        return subprocess.CompletedProcess(args, 0, _rules(_rule("a")), "")
+    monkeypatch.setattr(agent.subprocess, "run", run)
+    assert agent.run_rules_check(budget, "t")["state"] == "ok"
+    total, query = _arg(seen["args"], "--total"), _arg(seen["args"], "--query-timeout")
+    assert seen["timeout"] <= budget                                   # within the health
+    assert seen["timeout"] <= agent.RULES_S + agent.RULES_MARGIN_S       # and bounded on its own
+    assert total <= seen["timeout"] - agent.RULES_MARGIN_S or total <= 0.1
+    assert 0 < query <= min(agent.RULE_QUERY_S, total)
+
+
+@pytest.mark.parametrize("env, want", [
+    ({"EREGION_CD_RULES_S": "99999", "EREGION_CD_RULE_QUERY_S": "0"}, (3600, 1)),
+    ({"EREGION_CD_RULES_S": "inf", "EREGION_CD_RULE_QUERY_S": "nan"}, (90, 20)),
+    ({"EREGION_CD_RULES_S": "x", "EREGION_CD_RULE_QUERY_S": "700"}, (90, 600)),
+])
+def test_the_rules_settings_stay_within_what_the_command_accepts(monkeypatch, env, want):
+    import importlib.util
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    spec = importlib.util.spec_from_file_location("eregion_cd_h2_env", AGENT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert (mod.RULES_S, mod.RULE_QUERY_S) == want
+
+
+def test_the_rules_run_once_the_watch_is_healthy_even_at_the_last_look(agent, monkeypatch):
+    """The rules run once the containers are healthy — once: healthy only at the health's last
+    look, they still run, with the one second run_rules_check grants (then said unproven)."""
+    import time
+    end = time.monotonic() + 0.15
+    budgets = []
+    monkeypatch.setattr(agent, "HEALTH_S", 0.15)
+    monkeypatch.setattr(agent, "STEP_S", 0.03)
+    monkeypatch.setattr(agent, "health_once", lambda ref, since: "" if time.monotonic() >= end else "pas encore")
+    monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: budgets.append(budget) or {
+        "state": "ok", "rules": [_rule("a")]})
+    why, proof = agent.health("v0.4.0", 0.0, rules=True, base={"state": "ok", "rules": []})
+    assert why == "" and proof["note"].startswith("règles : 1 sur 1")
+    assert len(budgets) == 1 and budgets[0] <= 0.05
+    assert agent.health("v0.3.1", 0.0) == ("", {}) and len(budgets) == 1    # the way back: no rule check
+
+
+def test_the_last_look_comes_after_the_check(agent, monkeypatch):
+    """The check took the rest of the health: the containers are looked at once more — a watch
+    that died meanwhile is no green health."""
+    import time
+    looks = iter(["", "eregion-bot : exited, 0 redémarrage(s)"])
+    monkeypatch.setattr(agent, "HEALTH_S", 0.05)
+    monkeypatch.setattr(agent, "health_once", lambda ref, since: next(looks, "eregion-bot : exited"))
+    monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: time.sleep(0.1) or {
+        "state": "ok", "rules": [_rule("a")]})
+    why, _ = agent.health("v0.4.0", 0.0, rules=True, base=None)
+    assert why.startswith("eregion-bot")
+
+
+def test_a_regression_ends_the_health_at_once(agent, monkeypatch):
+    import time
+    monkeypatch.setattr(agent, "HEALTH_S", 30)
+    monkeypatch.setattr(agent, "health_once", lambda ref, since: "")
+    monkeypatch.setattr(agent, "run_rules_check", lambda budget, label: {"state": "ok", "rules": [
+        _rule("a", "error", "syntax", code="SYN0002")]})
+    started = time.monotonic()
+    why, _ = agent.health("v0.4.0", 0.0, rules=True, base={"state": "ok", "rules": [{"name": "a", "status": "ok"}]})
+    assert "cassée(s)" in why and time.monotonic() - started < 5   # no need to watch 30 s: H0 goes back now
+
+
+def test_the_scrub_keeps_what_is_no_host(agent):
+    s = agent.scrubbed("LogsQueryStatus.PARTIAL ssh.v2 client_rules.yaml vm-a.internal.example.net example.com")
+    assert "LogsQueryStatus.PARTIAL" in s and "ssh.v2" in s and "client\\_rules.yaml" in s
+    assert "internal.example.net" not in s and "example.com" not in s
+
+
+def test_the_commands_json_is_what_the_cd_reads(agent, monkeypatch, tmp_path):
+    """The contract, end to end without Docker: `glorfindel rules check --live --json` on a
+    fake backend, read and judged by the CD."""
+    from click.testing import CliRunner
+
+    import glorfindel.config as config
+    import glorfindel.detectors as detectors
+    from glorfindel.cli import cli
+    from glorfindel.config import GlorfindelConfig, MonitoringBackendConfig
+
+    class Throttled(Exception):
+        status_code = 429
+
+    class Backend:
+        def run_query(self, query, timespan=None):
+            if "BROKEN" in query:
+                raise Exception(f'(BadArgumentError) syntax error in workspace {WS} {{"code": "SYN0002"}}')
+            if "SLOW" in query:
+                raise Throttled("Too Many Requests")
+            return []
+    monkeypatch.setattr(detectors, "detector_for", lambda source, **kw: Backend())
+    monkeypatch.setattr(config, "load_glorfindel_config", lambda *a, **k: GlorfindelConfig(monitoring_backends=[
+        MonitoringBackendConfig(name="law-main", type="azure_monitor", workspace_id=WS)]))
+    base = tmp_path / "base.yaml"
+    rule = "  - name: {}\n    assets: [auto]\n    query: |\n      {}\n"
+
+    def check(*rules):
+        base.write_text("rules:\n" + "".join(rule.format(n, q) for n, q in rules))
+        res = CliRunner().invoke(cli, ["rules", "check", "--rules", str(base), "--live", "--json"])
+        return agent.read_rules_check(res.exit_code, res.stdout, res.stderr)
+
+    before = check(("good", "Syslog | take 1"), ("bad", "Syslog | take 1"))
+    after = check(("good", "Syslog | take 1"), ("bad", "BROKEN("), ("slow", "Syslog // SLOW"))
+    proof = agent.verdict(after, before)
+    assert "« bad »" in proof["why"] and "SYN0002" in proof["why"] and WS not in json.dumps(proof)
+    assert "« slow »" in proof["orange"] and "limité (429)" in proof["orange"]
+
+
+def test_the_installation_carries_chat_text():
+    """SEC6's escaping goes to H0 with the agent: install.sh refuses an agent without it."""
+    assert "chat_text.py" in (ROOT / "infra" / "glorfindel-host" / "cd" / "install.sh").read_text()
+    if shutil.which("make") is None:
+        pytest.skip("make not installed")
+    res = subprocess.run(["make", "-n", "--no-print-directory", "-C", str(ROOT), "glorfindel-host-cd-install",
+                          "HOST_IP=203.0.113.9"], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0 and "glorfindel/chat_text.py" in res.stdout

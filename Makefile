@@ -667,7 +667,7 @@ glorfindel-host-ssh:
 # de ton environnement ou de ~/.config/eregion/discord.env, par stdin — jamais le jeton du bot.
 HOST_CD_FILES = infra/glorfindel-host/cd/eregion_cd.py infra/glorfindel-host/cd/install.sh \
                 infra/glorfindel-host/cd/eregion-cd.service infra/glorfindel-host/cd/eregion-cd.timer \
-                infra/glorfindel-host/deploy.sh scripts/notify_discord.py
+                infra/glorfindel-host/deploy.sh scripts/notify_discord.py glorfindel/chat_text.py
 HOST_SSH_TTY   = ssh -t $(SSH_OPTS) $(HOST_USER)@$(HOST_IP)
 
 glorfindel-host-cd-install:

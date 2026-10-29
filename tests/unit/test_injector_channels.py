@@ -93,6 +93,67 @@ def test_a_closed_window_keeps_the_creation_of_its_first_pull(tmp_path):
     assert loaded["end"] and loaded[channel.CREATED] == first.isoformat()
 
 
+def test_a_window_pulled_again_may_only_close(tmp_path):
+    """M1451 (the 5.5 review's case): a window created 110 minutes ago, pulled, then rewritten
+    now with a target added and no end — the rewrite is refused, the copy pulled first kept,
+    and the victim never covered. Only its closure replaces it."""
+    c, d, said = FakeContainer(), tmp_path / "exercises", []
+    now = _now()
+    first = now - timedelta(minutes=110)
+    w = {**_window(start=first), "expires": (first + timedelta(hours=2)).isoformat()}
+    channel.publish(w, channel=URL, credential=CRED, put=c.put)
+    c.created["R1.json"] = first
+    channel.pull(d, channel=URL, credential=CRED, get=c.get, say=said.append)
+    os.utime(d / "R1.json", (0, 0))   # older than what comes next
+    victim = VM.replace("gondolin", "victim").lower()
+    channel.publish({**w, "targets": [*w["targets"], victim]}, channel=URL, credential=CRED, put=c.put)
+    assert channel.pull(d, channel=URL, credential=CRED, get=c.get, say=said.append) == 0
+    assert any("refused, the copy pulled before kept" in s and "targets" in s for s in said)
+    windows = exercise.load_windows(d)
+    assert exercise.covering_runs(victim, now - timedelta(minutes=10), windows,
+                                  enrolled=lambda rid: True) == []
+    # Refused once, said once: not downloaded again while the blob stays as it is.
+    gets = len(c.gets)
+    channel.pull(d, channel=URL, credential=CRED, get=c.get, say=said.append)
+    assert len(c.gets) == gets
+    # Its closure is taken: the same window, an end.
+    channel.publish({**w, "end": now.isoformat()}, channel=URL, credential=CRED, put=c.put)
+    assert channel.pull(d, channel=URL, credential=CRED, get=c.get, say=said.append) == 1
+    assert json.loads((d / "R1.json").read_text())["end"] == now.isoformat()
+
+
+@pytest.mark.parametrize("change", [
+    {"start": "2026-01-01T00:00:00+00:00"}, {"expires": "2099-01-01T00:00:00+00:00"},
+    {"kind": "fault"}, {"destructive": True}, {"end": "1999-01-01T00:00:00+00:00"},
+])
+def test_any_rewrite_but_the_closure_is_refused(change):
+    old = _window()
+    assert channel.rewrite_refusal(old, {**old, **change})
+    closed = {**old, "end": _now().isoformat()}
+    assert channel.rewrite_refusal(old, closed) == ""
+    assert channel.rewrite_refusal(old, {**closed, "closed_by": "orodruin-kill"}) == ""
+    assert channel.rewrite_refusal(closed, {**closed, "end": None})            # end withdrawn
+    assert channel.rewrite_refusal(closed, {**closed, "end": (_now() + timedelta(hours=1)).isoformat()})
+    assert channel.rewrite_refusal({"run_id": "R1", "purged_at": "x"}, old)
+
+
+def test_beyond_the_listing_s_bound_the_newest_windows_are_lost(tmp_path, monkeypatch):
+    """Why the channel needs a retention (V-21, infra/orodruin/main.tf): the listing is
+    alphabetical and the run_ids are timestamps — past MAX_BLOBS names, the newest windows (and
+    the injectors named after them) are the ones never listed, never pulled."""
+    monkeypatch.setattr(channel, "MAX_BLOBS", 4)
+    c, said = FakeContainer(), []
+    old = [f"2026100{i}T100000Z" for i in range(1, 5)]
+    for rid in old:
+        channel.publish(_window(rid), channel=URL, credential=CRED, put=c.put)
+    for rid in ("20261029T100000Z", "gothmog-20261029T100000Z"):
+        channel.publish(_window(rid), channel=URL, credential=CRED, put=c.put)
+    d = tmp_path / "w"
+    channel.pull(d, channel=URL, credential=CRED, get=c.get, say=said.append)
+    assert sorted(p.stem for p in d.glob("*.json")) == old
+    assert any("listing stopped" in s for s in said)
+
+
 def test_the_duration_is_capped(tmp_path):
     now = _now()
     w = _window(start=now)
@@ -407,6 +468,57 @@ def test_a_push_that_fails_is_journaled_here_and_the_call_goes_on(monkeypatch, c
 def test_no_channel_no_push(monkeypatch):
     monkeypatch.setattr(requests, "put", lambda *a, **k: pytest.fail("pushed without a channel"))
     orodruin.Session("R1", "annatar", 5).before_call("run_command", VM, "x")
+
+
+def _arm_get(experiments_answer):
+    """A fake ARM for read_identity: the identity's assignments as main.tf gives them, and
+    the bench's experiments answered as asked."""
+    import base64
+    bench = "/subscriptions/s/resourceGroups/rg-celebrimbor"
+    roles = {"/r/read": list(orodruin.READ_ACTIONS), "/r/vm": list(orodruin.VM_ACTIONS)}
+    payload = base64.urlsafe_b64encode(json.dumps({"oid": "o"}).encode()).decode().rstrip("=")
+
+    def get(url, headers=None, params=None, timeout=None):
+        ok = SimpleNamespace(ok=True, status_code=200, text="")
+        if url.endswith("/roleAssignments"):
+            return SimpleNamespace(**vars(ok), json=lambda: {"value": [
+                {"properties": {"scope": bench, "roleDefinitionId": "/r/read"}},
+                {"properties": {"scope": f"{bench}/providers/Microsoft.Compute/virtualMachines/v",
+                                "roleDefinitionId": "/r/vm"}}]})
+        if url.endswith("/subscriptions/s/providers/Microsoft.Authorization/permissions"):
+            return SimpleNamespace(**vars(ok), json=lambda: {"value": [
+                {"actions": ["Microsoft.Authorization/roleAssignments/read"]}]})
+        if url.endswith("/permissions"):
+            return SimpleNamespace(**vars(ok), json=lambda: {"value": [{"actions": list(orodruin.READ_ACTIONS)}]})
+        if url.endswith("/experiments"):
+            return experiments_answer
+        definition = url[len(orodruin.ARM):]
+        return SimpleNamespace(**vars(ok), json=lambda: {"properties": {"permissions": [
+            {"actions": roles.get(definition, [])}]}})
+    cred = SimpleNamespace(get_token=lambda scope: SimpleNamespace(token=f"h.{payload}.s"))
+    return get, cred
+
+
+@pytest.mark.parametrize("answer, armed", [
+    (SimpleNamespace(ok=True, status_code=200, text="", json=lambda: {"value": []}), True),
+    (SimpleNamespace(ok=False, status_code=404, text=""), True),
+    (SimpleNamespace(ok=False, status_code=400, text='{"error":{"code":"NoRegisteredProviderFound"}}'), True),
+    (SimpleNamespace(ok=True, status_code=200, text="", json=lambda: {"value": [{"id": "e"}]}), False),
+])
+def test_without_an_experiment_the_chaos_rights_are_not_asked(monkeypatch, answer, armed):
+    """M1452: Celebrimbor's chaos is off by default — no experiment, nothing to start: Annatar
+    stays armed. With one, its rights are asked (here missing: passive)."""
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "s")
+    get, cred = _arm_get(answer)
+    missing = orodruin.read_identity(credential=cred, get=get)
+    assert (missing == []) is armed, missing
+
+
+def test_an_unreadable_list_of_experiments_is_no_contract(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "s")
+    get, cred = _arm_get(SimpleNamespace(ok=False, status_code=403, text=""))
+    with pytest.raises(RuntimeError, match="listing the bench's experiments"):
+        orodruin.read_identity(credential=cred, get=get)
 
 
 def test_the_contract_refuses_a_write_on_the_whole_group():

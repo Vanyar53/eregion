@@ -181,7 +181,8 @@ def unbound(beat: Beat, own: str) -> str:
         return NO_OWN_PERIMETER
     if not beat.perimeter:
         return (f"{beat.where}: the heartbeat names no perimeter — a watch older than this "
-                "injector (update Glorfindel)")
+                "injector (update Glorfindel), a watch without AZURE_SUBSCRIPTION_ID, or its "
+                "copy for the injectors (~/.glorfindel/injectors/watch_heartbeat) not written")
     if beat.perimeter != own:
         return (f"{beat.where}: the live watch watches another subscription than this "
                 "injector's targets")

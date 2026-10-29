@@ -1,8 +1,9 @@
-"""SEC5 (V-35): the TUI's keys do what they say, on the cards the console allows.
+"""SEC5 (V-35): the TUI's keys do what they say, on the cards the bot and the console allow.
 
 « unblock » removes the VM's IP blocks — never its isolation (it used to run a full reset);
-Restore is offered and run only on a restore card that is not anchored (the bot's and the
-console's ``_ANCHORED_TYPES``: the card's VM may not be the one the detection concerns).
+Restore is offered and run only on a restore card that is not anchored (``_ANCHORED_TYPES``:
+the card's VM may not be the one the detection concerns). The set is compared here with the
+bot's; tests/unit/test_console.py compares the console's with the bot's too.
 No subprocess is started: ``_commands`` is what ``_execute`` would run.
 """
 from __future__ import annotations

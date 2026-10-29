@@ -191,14 +191,61 @@ def test_an_atomic_the_catalog_does_not_pin_is_unknown():
     assert catalog_destructive("T1041", scripts=["scripts/vm/other.sh"]) is None
 
 
+def _scenario_file(cdir: Path, name: str, source: Path) -> str:
+    (cdir / "scenarios").mkdir(exist_ok=True)
+    shutil.copy(source, cdir / "scenarios" / name)
+    return f"scenarios/{name}"
+
+
 def test_a_hand_edited_manifest_cannot_call_a_destructive_technique_harmless(tmp_path):
-    """M1264: the campaign's destructive policy reads the catalog, not the manifest's flag."""
-    cdir = _campaign(tmp_path, [_entry(1, ttp="T1486", destructive=False)],
-                     budget=Budget(max_scenarios=5, allow_destructive=False))
+    """M1264: the campaign's destructive policy reads the scenario the run will play — not the
+    manifest's flag, nor its ttp. Here the manifest says T1041, not destructive; the file is
+    T1486's ransomware: skipped without allow_destructive."""
+    cdir = _campaign(tmp_path, [])
+    m = CampaignManifest.load(cdir)
+    m.scenarios = [_entry(1, ttp="T1041", destructive=False,
+                          scenario_file=_scenario_file(cdir, "01.yaml", RANSOM))]
+    m.save(cdir)
     engine = _Engine([RunOutcome("r1", "detected")])
     m = CampaignRunner(cdir, reset_fn=lambda rid: "reset", engine_factory=lambda: engine).run()
     assert engine.calls == []
     assert m.scenarios[0].status == "skipped" and "allow_destructive" in m.scenarios[0].error
+
+
+def test_the_campaign_runs_what_its_file_says_is_harmless(tmp_path):
+    """The control: the file is T1041's exfiltration — it runs, whatever the manifest's ttp."""
+    cdir = _campaign(tmp_path, [])
+    m = CampaignManifest.load(cdir)
+    m.scenarios = [_entry(1, ttp="T1486", scenario_file=_scenario_file(cdir, "01.yaml", EXFIL))]
+    m.save(cdir)
+    engine = _Engine([RunOutcome("r1", "detected")])
+    m = CampaignRunner(cdir, reset_fn=lambda rid: "reset", engine_factory=lambda: engine).run()
+    assert len(engine.calls) == 1 and m.scenarios[0].status == "executed"
+
+
+def test_an_engine_that_raised_resets_nothing_and_says_so(tmp_path):
+    """M1450 (V-18): an engine that raised gives no proof it touched the target, nor that its
+    zone allows a reset — none, and the manifest says to do it by hand if needed."""
+    class Raises:
+        def run(self, path, skip_confirm=False):
+            raise RuntimeError("tags unreadable")
+    cdir = _campaign(tmp_path, [_entry(1), _entry(2)])
+    resets = []
+    m = CampaignRunner(cdir, reset_fn=lambda rid: resets.append(rid) or "reset",
+                       engine_factory=lambda: Raises()).run()
+    assert resets == []
+    assert all(e.status == "error" and e.reset.startswith("not run: the engine raised") for e in m.scenarios)
+
+
+def test_a_passive_contract_is_a_refusal(tmp_path, monkeypatch):
+    """Orodruin passive: nothing touched — RunOutcome.refused, so a campaign resets nothing."""
+    import annatar.runner.engine as engine_module
+    monkeypatch.setattr(engine_module, "arm", lambda run_id, injector: (
+        orodruin.Verdict(orodruin.PASSIVE, [orodruin._miss("network_open", "1.1.1.1:443")]), None))
+    executor = _executor()
+    out = _run(tmp_path, monkeypatch, EXFIL, executor)
+    assert out.refused is True and out.error.startswith("passive:")
+    executor.get_vm_tags.assert_not_called()
 
 
 def test_the_window_says_what_the_catalog_says(tmp_path, monkeypatch):

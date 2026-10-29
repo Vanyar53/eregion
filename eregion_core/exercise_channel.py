@@ -252,12 +252,40 @@ def _stamped(body: bytes, blob, local: Path) -> bytes:
     return json.dumps(window, indent=2).encode()
 
 
+# A window, once pulled, may come again only closed (V-20): every field as it was, ``end`` from
+# null to a date not before its start (``closed_by`` beside it, the kill's). Anything else —
+# a target added, a start moved, its expiry pushed, ``end`` withdrawn or moved — is refused,
+# the local copy kept. When it was refused, by blob: said once, not downloaded again.
+_KEPT_AS_PULLED = {CREATED, "end", "closed_by"}
+_refused_rewrites: dict[str, str] = {}
+
+
+def rewrite_refusal(old, new) -> str:
+    """Why a window pulled again may not replace its local copy — "" when it is its closure."""
+    from eregion_core.exercise import _parse  # exercise imports this module lazily
+
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return "" if not isinstance(old, dict) else "not a JSON object"
+    if old.get("purged_at"):
+        return "purged here already"
+    changed = sorted(k for k in (set(old) | set(new)) - _KEPT_AS_PULLED if old.get(k) != new.get(k))
+    if changed:
+        return f"rewritten after it was pulled: {', '.join(changed)} changed"
+    if old.get("end") == new.get("end"):
+        return ""
+    start, end = _parse(old.get("start")), _parse(new.get("end"))
+    if old.get("end") is None and end is not None and start is not None and end >= start:
+        return ""
+    return "its end withdrawn or moved after it was pulled"
+
+
 def pull(directory: Path, *, channel: str | None = None, credential=None, get=None,
          say=print) -> int:
     """Copy into ``directory`` every window of the channel that is new or changed since the
     local copy, page after page of the listing — the container's root only (the windows; the
     prefixes are other pulls'), within the bounds of V-21. Each window carries when its blob
-    was created (``CREATED``, V-20). Returns how many were written."""
+    was created (``CREATED``, V-20); one pulled already is replaced only by its closure
+    (``rewrite_refusal``). Returns how many were written."""
     url = channel if channel is not None else channel_url()
     if not url:
         return 0
@@ -274,6 +302,9 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
             remote_ts = parsedate_to_datetime(modified).timestamp()
             if remote_ts <= local.stat().st_mtime:
                 continue
+        key = f"{directory}/{name}"
+        if modified and _refused_rewrites.get(key) == modified:
+            continue  # refused already, said already: not downloaded again
         if downloads >= MAX_DOWNLOADS:
             say(f"[exercise-channel] {MAX_DOWNLOADS} windows downloaded: the rest waits for "
                 "the next pull")
@@ -286,6 +317,22 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
             continue
         if not r.ok:
             continue
+        if local.exists():
+            import json
+            try:
+                old = json.loads(local.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                old = None
+            try:
+                new = json.loads(body)
+            except ValueError:
+                new = None
+            why = rewrite_refusal(old, new)
+            if why:
+                _refused_rewrites[key] = modified or ""
+                say(f"[exercise-channel] window {name} refused, the copy pulled before kept: {why}")
+                continue
+        _refused_rewrites.pop(key, None)
         tmp = local.with_suffix(".json.tmp")
         tmp.write_bytes(_stamped(body, blob, local))
         tmp.replace(local)  # atomic: the watch never reads half a window

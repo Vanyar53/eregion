@@ -36,6 +36,10 @@ REFUSED_NO_RESET = "not run: the run was refused before it touched the target"
 # The refusals of the target itself (eregion_core/inscription.py, Orodruin's contract): the
 # next runs on that target would be refused too — the campaign stops there for it.
 TARGET_REFUSALS = ("safety:", "passive:")
+# An engine that raised: no proof it touched the target, nor that its zone allows a reset.
+ENGINE_RAISED = "engine raised:"
+RAISED_NO_RESET = ("not run: the engine raised — whether it touched the target is unknown; "
+                   "reset it by hand if it did (glorfindel reset <resource_id> --yes)")
 
 
 class CampaignRefused(ValueError):
@@ -188,7 +192,7 @@ class CampaignRunner:
 
             # destructive policy — the catalog's word, not the manifest's (SEC5, V-19): a
             # hand-edited manifest cannot call a destructive technique harmless.
-            if self._destructive(entry) and not budget.allow_destructive:
+            if self._destructive(entry, self.campaign_dir) and not budget.allow_destructive:
                 entry.status = "skipped"
                 entry.error = "destructive but budget.allow_destructive is false"
                 m.save(self.campaign_dir)
@@ -201,6 +205,12 @@ class CampaignRunner:
                 # The watch died mid-campaign: every next run would be refused too.
                 aborted = True
                 break
+            if (entry.error or "").startswith(ENGINE_RAISED):
+                # Raised: whether it touched the target is unknown — a reset could release an
+                # isolation on a VM the run never reached (its zone unread). None, and said.
+                entry.reset = RAISED_NO_RESET
+                m.save(self.campaign_dir)
+                continue
             if outcome is not None and outcome.refused:
                 # Refused before it touched the target: nothing to reset, and the manifest
                 # says so. A refusal of the target itself stops the campaign there.
@@ -228,12 +238,23 @@ class CampaignRunner:
 
     # ── internals ────────────────────────────────────────────────────────────
     @staticmethod
-    def _destructive(entry) -> bool:
-        """Destructive if the manifest says so, or if the catalog does not say it is not
-        (annatar/campaign/catalog.py ``catalog_destructive``: unknown is destructive)."""
+    def _destructive(entry, campaign_dir: Path) -> bool:
+        """Destructive if the manifest says so, or if the scenario the run will play is — read
+        from its file, as the engine reads it (``scenario_destructive``: the catalog's word on
+        its technique and source, unknown is destructive), never from the manifest's ``ttp``.
+        A file that does not parse falls back to the manifest's ``ttp`` in the catalog: the
+        engine refuses that scenario anyway."""
         from annatar.campaign.catalog import catalog_destructive
+        from annatar.runner.engine import scenario_destructive
+        from annatar.runner.parser import ScenarioParser
 
-        return bool(entry.destructive) or catalog_destructive(entry.ttp) is not False
+        if entry.destructive:
+            return True
+        try:
+            scenario = ScenarioParser().load(str(campaign_dir / entry.scenario_file))
+        except Exception:
+            return catalog_destructive(entry.ttp) is not False
+        return scenario_destructive(scenario)[0]
 
     def _execute(self, entry, m: CampaignManifest) -> RunOutcome | None:
         path = self.campaign_dir / entry.scenario_file
@@ -250,7 +271,7 @@ class CampaignRunner:
             )
         except Exception as e:  # unexpected engine failure → error, continue campaign
             entry.status = "error"
-            entry.error = f"engine raised: {e}"
+            entry.error = f"{ENGINE_RAISED} {e}"
             entry.finished_at = _utcnow()
             m.save(self.campaign_dir)
             return None

@@ -306,12 +306,19 @@ resource "azurerm_role_definition" "injector_chaos" {
   assignable_scopes = [data.azurerm_resource_group.bench.id]
 }
 
-# Les VM inscrites : le tag que Celebrimbor pose à la construction (O0). Une VM inscrite après
-# cet apply n'a pas de droit tant que `make orodruin-lock` ne l'a pas relu.
+# Les VM inscrites : le tag que Celebrimbor pose à la construction (O0) — `celebrimbor` pour le
+# banc canonique (rg-celebrimbor), `celebrimbor-<instance>` pour une instance nommée
+# (rg-celebrimbor-<instance>) : tiré du nom du groupe, sauf bench_id donné. Une VM inscrite (ou
+# un Celebrimbor reconstruit) après cet apply n'a pas de droit tant que
+# `make orodruin-lock YES=1` ne l'a pas relue : les attributions portent l'id de la VM.
+locals {
+  bench_id = var.bench_id != "" ? var.bench_id : trimprefix(var.bench_resource_group, "rg-")
+}
+
 data "azurerm_resources" "enrolled_vms" {
   resource_group_name = data.azurerm_resource_group.bench.name
   type                = "Microsoft.Compute/virtualMachines"
-  required_tags       = { "eregion-target" = var.bench_id }
+  required_tags       = { "eregion-target" = local.bench_id }
 }
 
 data "azurerm_resources" "experiments" {
@@ -409,6 +416,55 @@ resource "azurerm_storage_account" "channel" {
     bypass                     = ["None"]
     virtual_network_subnet_ids = compact([azurerm_subnet.host.id, var.watch_subnet_id])
     ip_rules                   = compact([azurerm_public_ip.host.ip_address, var.watch_public_ip, local.operator_ip])
+  }
+
+  lifecycle {
+    # Une watch hébergée déclarée sans son sous-réseau : le pare-feu lui couperait le canal sans
+    # rien dire (ses runs finiraient en `unknown`). Refusé au plan.
+    precondition {
+      condition     = var.watch_principal_id == "" || var.watch_subnet_id != ""
+      error_message = "watch_principal_id est donné mais watch_subnet_id est vide : appliquer d'abord infra/glorfindel-host (output subnet_id), puis make orodruin-lock."
+    }
+  }
+}
+
+# SEC5 (V-21) : une rétention, sans quoi la liste — alphabétique, des run_id horodatés — finirait
+# par dépasser MAX_BLOBS et laisser au-delà les fenêtres les plus récentes. Les blobs de bloc
+# (fenêtres à la racine, campaigns/, runs/, et du côté de `watch` les détections) partent
+# 9 jours après leur dernière écriture : la watch purge une fenêtre 7 jours après son dernier
+# moment (PURGE_AFTER_S), le dernier moment suit la dernière écriture de 2 h 15 au plus, d'où
+# 2 jours de marge. heartbeat.json, réécrit chaque minute, ne vieillit jamais. Le journal
+# d'Orodruin (blobs d'ajout, audit/) reste 90 jours : le temps de revenir sur un incident d'un
+# trimestre, pour quelques Ko par run. La politique est gratuite ; seules les opérations de
+# suppression qu'elle fait sont des opérations de stockage ordinaires (négligeables ici).
+resource "azurerm_storage_management_policy" "channel" {
+  storage_account_id = azurerm_storage_account.channel.id
+
+  rule {
+    name    = "channel-blobs"
+    enabled = true
+    filters {
+      blob_types = ["blockBlob"]
+    }
+    actions {
+      base_blob {
+        delete_after_days_since_modification_greater_than = var.channel_retention_days
+      }
+    }
+  }
+
+  rule {
+    name    = "orodruin-journal"
+    enabled = true
+    filters {
+      blob_types   = ["appendBlob"]
+      prefix_match = ["exercises/audit/"]
+    }
+    actions {
+      base_blob {
+        delete_after_days_since_modification_greater_than = var.journal_retention_days
+      }
+    }
   }
 }
 

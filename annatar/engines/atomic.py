@@ -22,8 +22,10 @@ faithfully (fail closed), so a run never half-executes a test it could not prepa
     upstream atomics tree is not on the VM, so the path does not exist there).
 
 The file is checked against its sha256 in ``annatar/atomics/PIN`` before it is read, at every
-run (SEC5, V-30) — not only in CI: a vendored atomic edited in the image, or a file the PIN
-does not list, is refused before anything touches the target.
+run (SEC5, V-30) — not only in CI: a vendored atomic edited alone, or a file the PIN does not
+list, is refused before anything touches the target. The PIN lives beside the YAML, in the
+same image: an edit that changes both together is not seen — this catches a drifted or
+half-edited file, not a hostile image (that is the image's provenance, M-3).
 
 The command and cleanup we hand the runner carry an explicit ``#!/bin/<executor>`` shebang:
 Run Command's default interpreter is not guaranteed to be the test's executor (``bash`` vs

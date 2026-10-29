@@ -100,10 +100,19 @@ def test_a_write_on_the_whole_bench_group_is_missing():
 
 
 def test_a_write_granted_on_no_enrolled_resource_is_missing():
+    """With an experiment in the group, its rights are asked; without one (Celebrimbor's chaos
+    off, the default), they are not — Annatar stays armed (SEC5, after the 5.5 review)."""
     missing = orodruin.assess_identity(_enrolled()[:2], _roles(), ALL_RIGHTS, BENCH,
                                        sees_subscription=True)
     assert [m["code"] for m in missing] == ["identity_missing_right"] * 2
     assert all("Microsoft.Chaos/experiments" in m["detail"] for m in missing)
+    assert orodruin.assess_identity(_enrolled()[:2], _roles(), ALL_RIGHTS, BENCH,
+                                    sees_subscription=True, experiments=False) == []
+    # The VM's writes are asked whatever the experiments.
+    missing = orodruin.assess_identity(_enrolled()[:1], _roles(), ALL_RIGHTS, BENCH,
+                                       sees_subscription=True, experiments=False)
+    assert [m["code"] for m in missing] == ["identity_missing_right"] * 2
+    assert all("virtualMachines" in m["detail"] for m in missing)
     # A VM's write right on a NIC (not a VM) grants nothing on a VM.
     nic = BENCH + "/providers/Microsoft.Network/networkInterfaces/nic-1"
     missing = orodruin.assess_identity(
@@ -435,7 +444,10 @@ def test_the_writes_go_to_each_enrolled_vm_never_to_the_group():
     assert "for_each" in vm and "data.azurerm_resources.enrolled_vms.resources" in vm
     assert "scope              = each.value" in vm and "injector_vm" in vm
     enrolled = _tf().split('data "azurerm_resources" "enrolled_vms"')[1].split("\n}\n")[0]
-    assert 'required_tags       = { "eregion-target" = var.bench_id }' in enrolled
+    assert 'required_tags       = { "eregion-target" = local.bench_id }' in enrolled
+    # The tag Celebrimbor sets: celebrimbor, or celebrimbor-<instance> for a named instance.
+    assert ('bench_id = var.bench_id != "" ? var.bench_id : trimprefix(var.bench_resource_group, "rg-")'
+            in _tf())
     chaos = _block("azurerm_role_assignment", "experiment_injector")
     assert "data.azurerm_resources.experiments.resources" in chaos and "injector_chaos" in chaos
     # No assignment of a write role at the group's scope.
@@ -456,6 +468,26 @@ def test_the_channel_account_is_closed_to_all_but_orodruin_and_h0():
     assert 'service_endpoints = ["Microsoft.Storage"]' in host
     outputs = (ORODRUIN.parent / "glorfindel-host" / "outputs.tf").read_text(encoding="utf-8")
     assert 'output "subnet_id"' in outputs
+    # A hosted watch declared without its subnet: refused at the plan, never cut off silently.
+    assert 'condition     = var.watch_principal_id == "" || var.watch_subnet_id != ""' in account
+
+
+def test_the_channel_keeps_its_blobs_for_a_bounded_time():
+    """SEC5 (V-21): without a retention, the listing — alphabetical, the run_ids timestamps —
+    would pass MAX_BLOBS and leave out the newest windows. The block blobs go once older than
+    the watch's purge plus a margin; Orodruin's journal is kept longer."""
+    from eregion_core.exercise import GRACE_AFTER_S, MAX_DURATION_S, PURGE_AFTER_S
+    policy = _block("azurerm_storage_management_policy", "channel")
+    assert "azurerm_storage_account.channel.id" in policy
+    blocks, journal = policy.split("rule {")[1], policy.split("rule {")[2]
+    assert 'blob_types = ["blockBlob"]' in blocks and "var.channel_retention_days" in blocks
+    assert 'prefix_match = ["exercises/audit/"]' in journal and "var.journal_retention_days" in journal
+    variables = (ORODRUIN / "variables.tf").read_text(encoding="utf-8")
+    days = int(re.search(r'variable "channel_retention_days" \{.*?default     = (\d+)', variables, re.S)[1])
+    floor = int(re.search(r"var.channel_retention_days >= (\d+)", variables)[1])
+    assert floor * 86400 > PURGE_AFTER_S + MAX_DURATION_S + GRACE_AFTER_S and days >= floor
+    journal_days = int(re.search(r'variable "journal_retention_days" \{.*?default     = (\d+)', variables, re.S)[1])
+    assert journal_days > days
 
 
 def test_the_host_acts_on_the_bench_only_and_is_no_target():
@@ -489,7 +521,7 @@ def test_the_host_acts_on_the_bench_only_and_is_no_target():
     assert "count       = var.contract_reader ? 1 : 0" in reader
     # Orodruin is no target: its own tags never enroll it (the enrolled VMs' filter aside).
     assert "eregion-target" not in tf.replace("PAS de `eregion-target`", "").replace(
-        'required_tags       = { "eregion-target" = var.bench_id }', "").replace(
+        'required_tags       = { "eregion-target" = local.bench_id }', "").replace(
         "La lecture porte sur le groupe", "")
 
 

@@ -4,8 +4,10 @@ guardrails hold — otherwise the injector stays passive and touches nothing.
         guarantee         checked by (nothing is written)
         identity          its role assignments, at every scope, all inside the bench's
                           resource group (but the two channels'); its effective rights
-                          there cover what the injectors read; what they write, granted
-                          on each enrolled VM and experiment, never on the whole group
+                          there cover what the injectors read; what they write, granted at
+                          the scope of a VM or an experiment of it, never on the whole
+                          group (which VMs: Terraform's choice, by their tags — the
+                          contract does not read their inscription; O0 does, at each run)
         network           a connection outside the perimeter fails
         cap               the declared cap is read and compared to the ceiling
         kill              revoke the identity, cancel the chaos experiments, stop the
@@ -191,7 +193,7 @@ def _grants(action: str, actions: set[str]) -> bool:
 
 def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[str]],
                     perms: list[dict], bench: str, *, sees_subscription: bool,
-                    channel: str = "", watch: str = "") -> list[dict]:
+                    channel: str = "", watch: str = "", experiments: bool = True) -> list[dict]:
     """The identity guarantee from what was read: every assignment inside the bench (or a
     pure role-assignment read, the exercise channel's container, a read-only role on the
     return channel's), and the injectors' actions allowed on the bench.
@@ -246,10 +248,28 @@ def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[
         missing.append(_miss("identity_group_wide",
                              f"{', '.join(wide)} effective on the whole of {bench}"))
     for action, scopes in granted_on.items():
-        if not scopes:
+        # No experiment in the group (Celebrimbor's chaos is off by default): nothing to start
+        # or cancel, and Gothmog finds no experiment to run — the chaos rights are not asked.
+        if not scopes and (experiments or action not in CHAOS_ACTIONS):
             missing.append(_miss("identity_missing_right",
                                  f"{action} on no enrolled resource of {bench}"))
     return missing
+
+
+CHAOS_API = "2024-01-01"
+
+
+def _has_experiments(get, headers: dict, bench: str) -> bool:
+    """Does the bench's group hold a Chaos Studio experiment? A provider not registered in the
+    subscription (400 NoRegisteredProviderFound) or no such collection (404): none. Any other
+    failure raises — the contract is then unreadable, passive."""
+    r = get(f"{ARM}{bench}/providers/Microsoft.Chaos/experiments", headers=headers,
+            params={"api-version": CHAOS_API}, timeout=20)
+    if r.status_code == 404 or (r.status_code == 400 and "NoRegisteredProvider" in (r.text or "")):
+        return False
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code} listing the bench's experiments")
+    return bool(r.json().get("value"))
 
 
 def read_identity(*, credential=None, get=None) -> list[dict]:
@@ -307,7 +327,8 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
     return assess_identity(
         assignments, role_actions, perms, bench,
         sees_subscription=_allowed("Microsoft.Authorization/roleAssignments/read", sub_perms),
-        channel=channel_scope(), watch=watch_scope())
+        channel=channel_scope(), watch=watch_scope(),
+        experiments=_has_experiments(get, headers, bench))
 
 
 def read_network(*, probes=NETWORK_PROBES, connect=None) -> list[dict]:

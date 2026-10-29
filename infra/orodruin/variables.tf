@@ -45,9 +45,26 @@ variable "bench_resource_group" {
 }
 
 variable "bench_id" {
-  description = "La valeur du tag eregion-target des VM inscrites (O0) : seules elles reçoivent le droit d'agir d'Orodruin (SEC5)."
+  description = "La valeur du tag eregion-target des VM inscrites (O0) : seules elles reçoivent le droit d'agir d'Orodruin (SEC5). Vide (défaut) → tirée du groupe du banc : rg-celebrimbor → celebrimbor, rg-celebrimbor-<instance> → celebrimbor-<instance>, comme Celebrimbor la pose."
   type        = string
-  default     = "celebrimbor"
+  default     = ""
+}
+
+variable "channel_retention_days" {
+  description = "Jours après sa dernière écriture où un blob de bloc du canal (fenêtre, campagne, rapport de run, détection) est supprimé (SEC5, V-21). Doit dépasser la purge de la watch (7 jours après le dernier moment d'une fenêtre, soit 7 jours + 2 h 15 après sa dernière écriture)."
+  type        = number
+  default     = 9
+
+  validation {
+    condition     = var.channel_retention_days >= 8
+    error_message = "channel_retention_days doit dépasser la purge de la watch (7 jours + 2 h 15) : au moins 8."
+  }
+}
+
+variable "journal_retention_days" {
+  description = "Jours où le journal d'Orodruin poussé dans le canal (audit/) est gardé (SEC5, V-29)."
+  type        = number
+  default     = 90
 }
 
 variable "watch_subnet_id" {

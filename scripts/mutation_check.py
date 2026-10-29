@@ -3384,9 +3384,9 @@ MUTANTS += [
      '    destructive = own if isinstance(own, bool) else said is not False\n'),
     ("M1263", "the catalog vouches for a technique whatever script the scenario runs (SEC5, V-19)",
      "annatar/campaign/catalog.py", "    elif scripts:\n", "    elif False:\n"),
-    ("M1264", "the campaign's destructive policy reads the manifest's flag only (SEC5, V-19)", CRUN,
-     "        return bool(entry.destructive) or catalog_destructive(entry.ttp) is not False",
-     "        return bool(entry.destructive)"),
+    ("M1264", "the campaign's destructive policy reads the manifest's ttp, not its scenario (SEC5, V-19)",
+     CRUN, "        return scenario_destructive(scenario)[0]",
+     "        return catalog_destructive(entry.ttp) is not False"),
     ("M1265", "the watch read once per run: a watch that dies mid-run lets the next steps run (SEC5, N-03)",
      ENG, "            lost = self._watch_lost()\n            if lost:\n                return self._lost(run_id, lost)\n"
           "            self._execute_action(executor, step)\n",
@@ -3428,6 +3428,32 @@ TESTS["M1268"] = f"{_SEC5_GUARDS} {_SEC5_CHANNELS}"
 TESTS.update({mid: _SEC5_CHANNELS for mid in ("M1272", "M1273", "M1274", "M1275", "M1276", "M1277")})
 TESTS["M1278"] = f"{_SEC5_CHANNELS} tests/unit/test_orodruin.py"
 TESTS["M1261"] = "tests/unit/test_orodruin.py"
+# SEC5, after the 5.5 review: a window rewritten after its pull, the chaos rights asked without
+# an experiment, an engine that raised then reset, the channel without a retention.
+MUTANTS += [
+    ("M1450", "a campaign resets the target of an engine that raised (SEC5, V-18)", CRUN,
+     '            if (entry.error or "").startswith(ENGINE_RAISED):\n', "            if False:\n"),
+    ("M1451", "a window pulled again replaces its copy whatever changed (SEC5, V-20)", XCH,
+     "            why = rewrite_refusal(old, new)\n", '            why = ""\n'),
+    ("M1452", "the chaos rights asked with no experiment in the group: Orodruin passive for all (SEC5, V-29)",
+     "eregion_core/orodruin.py",
+     "        if not scopes and (experiments or action not in CHAOS_ACTIONS):", "        if not scopes:"),
+    ("M1453", "the channel's blobs kept for ever: the listing's bound cuts the newest (SEC5, V-21)",
+     "infra/orodruin/main.tf",
+     "        delete_after_days_since_modification_greater_than = var.channel_retention_days",
+     "        delete_after_days_since_modification_greater_than = 36500"),
+    ("M1454", "a hosted watch declared without its subnet: the firewall cuts it off silently (SEC5, V-31)",
+     "infra/orodruin/main.tf",
+     '      condition     = var.watch_principal_id == "" || var.watch_subnet_id != ""',
+     "      condition     = true"),
+    ("M1455", "a named Celebrimbor's VMs never get Orodruin's rights: the tag fixed to celebrimbor (SEC5, V-29)",
+     "infra/orodruin/main.tf", 'trimprefix(var.bench_resource_group, "rg-")', '"celebrimbor"'),
+    ("M1456", "a passive Orodruin is not a refusal: the campaign resets the target (SEC5, V-18)", ENG,
+     'error=f"passive: {verdict.reasons()}", refused=True)', 'error=f"passive: {verdict.reasons()}")'),
+]
+TESTS.update({"M1450": _SEC5_GUARDS, "M1456": _SEC5_GUARDS, "M1451": _SEC5_CHANNELS,
+              "M1452": f"{_SEC5_CHANNELS} tests/unit/test_orodruin.py"})
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M1453", "M1454", "M1455")})
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

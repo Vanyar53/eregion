@@ -4868,6 +4868,16 @@ MUTANTS += [
      "               if ip in holders\n"),
 ]
 TESTS.update({mid: f"{_I5Q_REL} {INVARIANTS}" for mid in ("M1734", "M1735", "M1736")})
+# The card two orphan rules share, closed when one goes while the other stays kept (seed 101
+# after RB1: the deny kept behind a turned rule, no longer said). M1737.
+MUTANTS += [
+    ("M1737", "an orphan rule taken off resolves the card it shares with a rule still kept: not said (I5Q)",
+     "glorfindel/orphans.py",
+     "                if card and _pending(card) and card not in alerts.values():   # shared: still said (I5Q)\n",
+     "                if card and _pending(card):\n"),
+]
+TESTS["M1737"] = ("tests/unit/test_orphan_sweep.py::test_a_card_two_rules_share_stays_open_while_one_stands "
+                  f"{INVARIANTS}")
 
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

@@ -1688,6 +1688,62 @@ l'ancienne adresse, api bloquée de nouveau — l'opération change les flux de 
 supposée, non établie), pour un lot à part. Harnais avant/après (60 séquences, deux tours, mêmes
 modules) : 33 attrapés à chaque tour avant comme après, aucun perdu, les nouveaux à chaque tour.
 
+**I5Q (29/10, #327) : une réaffirmation qui ouvrait une VM après une adresse reprise.** Trouvée
+par la quatrième relecture de RB1, graine 101 à 500 séquences (« I5: the reassertion opened flows
+of …/rg-new/…/web », l'attaquant sur 22), présente sur `main` avant RB1. Réduite de 14 étapes à
+quatre : `block` d'`api` (sa règle à 200), `block_turned_then_reasserted` (`both` : la règle de
+périmètre à 210, puis celle d'`api` passée en allow par quelqu'un), `address_reused` (`api` isolée
+par règles sur son NSG, supprimée, une nouvelle VM `rg-new/web` à son adresse et sur ce NSG), puis
+la réaffirmation en `non_disruptive`. **Cause** (`providers/azure/sweep.py`, `find_orphan_rules`) :
+le balayage des orphelines retirait l'isolation d'`api`, qui coupait la nouvelle VM — mais ce refus
+était le dernier à tenir l'attaquant dehors : sur le NSG du subnet, notre règle retournée le laisse
+passer avant le blocage de périmètre, et le NSG de la carte l'autorise sur 22. Le balayage ne lisait
+que nos refus ; une de nos règles devenue autorisation ne comptait pas. Correctif
+(`readers.py`, `_turned_allows`, `_behind_turned`) : un refus d'une carte disparue reste, « Gardée :
+notre règle … retournée en autorisation … », quand une de nos règles (`glorfindel-iso-*`,
+`glorfindel-block-*`) passée en allow, du même côté, visant l'adresse de la carte qu'il coupe ou
+toutes (`*`, un préfixe qui la contient, une étiquette — lue comme la contenant), se tient sur un
+NSG qui gouverne cette carte. La carte le dit ; remise en refus ou retirée, la règle retournée
+libère le passage suivant, qui retire le refus. La VM reste coupée en attendant — jamais ouverte.
+
+**La levée d'une VM supprimée, le même trou.** Une règle composée (`turned_then_address_reused` :
+`block`, `block_turned_then_reasserted` et `address_reused` sur la même VM, puis la réaffirmation
+hors faute, hors `human_only` plus souvent) rend l'état courant ; à 500 séquences, la graine 322 y a
+trouvé la levée : « I4: an operation on …/rg-edge/…/api opened flows of …/rg-app2/…/api ». La
+levée de la VM supprimée défait les placements de son état, ou cherche ses noms sur tous les NSG
+(I7S) : elle retirait le même refus. Correctif (`release.py` ; `readers.py`, `_held_by_turned` sur
+les placements, `_turned_guard` dans `_gone_vm_rules`) : le refus reste, `release_partial`, la
+règle retournée nommée ; la levée suivante le retire une fois celle-ci remise. Une VM vivante qui
+tient elle-même l'adresse n'est jamais retenue par sa propre règle retournée (ce qu'elle laisse
+passer est le fait de quelqu'un, sur l'adresse de la VM : I1 le juge ainsi). Le déblocage d'une VM
+supprimée retire avec ses refus ses propres règles retournées : rien n'y attend derrière.
+
+**L'oracle.** I5 n'a pas bougé. La vivacité d'U1 (après le balayage en `non_disruptive`, plus
+aucune VM coupée par une orpheline) contredisait I5 dans cet état : une orpheline gardée derrière
+une règle retournée en est exemptée, lue du journal du test (`tampered`, la règle encore telle que
+quelqu'un l'a laissée), jamais des cartes du code, et elle doit être dite (une carte en attente sur
+la VM qu'elle coupe, sur son NSG, ou qui la nomme). Au démontage, l'opérateur remet les règles
+retournées que de tels refus retiennent, comme la carte le demande, avant les levées ; I7 et U1
+restent entiers ensuite. Séquences figées : `test_the_sequence_the_machine_found_on_i5_after_an_address_reused`
+(la graine réduite), `test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes` (la règle de
+la VM ou celle du périmètre), `test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release`
+(placements, ou état perdu), `test_a_live_vms_release_is_not_held_by_its_own_turned_rule`, et dans
+`test_orphan_sweep.py` les adresses (`*`, un préfixe, une étiquette, une autre adresse). Mutants
+M1730–M1736, attrapés à chaque tour ; par la machine seule à 500 séquences, M1730 et M1734 1/3
+(M1730 0/6 avant la règle composée).
+
+**Mesures d'I5Q.** Invariants à 500 séquences sur les graines 101, 202, 322, 1, 42 et 777, puis
+2 000 sur 101, 322 et 42, verts, avant la reprise de RB1 ; après elle, la séquence du relecteur
+rejouée et les invariants de nouveau (ci-dessous). Au même budget (60 séquences, deux tours,
+`--jobs 4`), les 80 mutants mesurables par la machine de `providers/azure/`, de `response/`, de la
+réaffirmation et des orphelines, avant (`b83cb92`) et après : 51/80 attrapés à chaque tour avant,
+50/80 après (57/87 avec M1730–M1736). Aucun perdu : M19 et M26, attrapés par la machine avant, ne
+l'étaient plus que par leurs séquences figées après ; remesurés sur quatre tours, 2/4 puis 1/4
+(M19), 2/4 puis 2/4 (M26), et 2/2 chacun à 500 après. M02, M18, M32, M34, M830 et M831 gagnent un
+tour, M04, M14 et M20 aussi ; M08, M09, M12 et M17 en perdent un (remesurés sur quatre tours : entre
+1/4 et 4/4 des deux côtés). À 500, le code d'avant tombe déjà, sur une graine du moment, sur une
+autre propriété (« I4: … cut off … », hors de ce lot) : la mesure d'avant à 500 n'a pas pu tourner.
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

@@ -167,6 +167,28 @@ def test_an_orphan_deny_behind_our_rule_turned_into_an_allow_stays(monkeypatch, 
         assert perimeter in card["reason"] and "retournée en autorisation" in card["reason"], card["reason"]
 
 
+def test_a_card_two_rules_share_stays_open_while_one_stands(monkeypatch):
+    """I5Q, seed 101 at 500 after RB1: the in and out denies of a deleted VM cut the same
+    VM, said on one card in human_only (the store merges by VM). Given non_disruptive,
+    the outbound one goes, the inbound one stays behind the turned rule — the removal
+    resolved the card they share: the deny kept, no longer said. It stays pending."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.block_suspicious_ip(ATTACKER, WEB, scope="subnet")["status"] == "blocked"
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = next(n for n in g["rules"] if n.startswith("glorfindel-block-") and not n.endswith("-out"))
+    g["rules"][perimeter]["access"] = "Allow"
+    _delete(f, WEB)
+    _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (card,) = _orphan_cards()
+    assert card["status"] == "pending"
+    _watch_pass(c, "non_disruptive")
+    iso = {n for n in g["rules"] if n.startswith("glorfindel-iso-")}
+    assert iso and not any(n.endswith("-out") for n in iso), iso
+    assert [e["status"] for e in _orphan_cards()] == ["pending"], _orphan_cards()
+
+
 def _twin_vnet(f, subnet_nsg):
     """A second VNet whose address space overlaps the hub's, its subnet behind the same NSG."""
     return f.add_subnet("rg-net", "vnet-twin", "app", subnet_nsg)

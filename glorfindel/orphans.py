@@ -133,7 +133,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             if out.get("removed") is True:
                 card = alerts.pop(k, None)
                 note = f"Règle {o['rule']} retirée par Glorfindel (A3)."
-                if card and _pending(card):
+                if card and _pending(card) and card not in alerts.values():   # shared: still said (I5Q)
                     escalations.resolve(card, note=note)
                     report.append({"kind": "orphan", "vm": victims[0], "outcome": "removed", "detail": note})
                     continue

@@ -1288,3 +1288,61 @@ def test_a_race_whose_two_operations_rewrite_the_escalations_store(monkeypatch):
             assert all(exc is None for _, exc in out.values()), out
     finally:
         _CURRENT.scheduler = None
+
+
+@pytest.mark.parametrize("k", [7, 8])
+def test_an_unblock_looks_behind_a_quarantine_taken_off(monkeypatch, k):
+    """Seed 210 at 500 sequences, shrunk by hand (U3F, #293): api blocked, the block cut
+    off before its state (after its inbound rule, or after both), then isolated by
+    quarantine, and someone takes our NSG off the NIC, left bare. The block lies on the
+    NIC's own NSG, away from it; the unblock looked behind a quarantine only — `not_found`
+    while the rules stayed, and the release then put the NSG back with the IP blocked."""
+    _run(monkeypatch, _net(quarantine=True, api_nic={"own": "dedicated"}),
+         ("block", API, API, (k, "before-crash"), 22),
+         ("isolate", API, API, None),
+         ("someone_detaches_the_quarantine", _nic("rg-edge", "api-nic")),
+         ("unblock", API, API, None),
+         ("release", API, API, None))
+
+
+@pytest.mark.parametrize("known_by", ["state", "tag", "nothing"])
+def test_an_unblock_of_a_bare_nic_takes_the_block_or_says_it(monkeypatch, known_by):
+    """The same, said (U3F): the NIC's own NSG known by the state, or by our tag (the
+    state lost), the block on it goes — `unblocked`. Known by nothing (state and tags
+    lost before a re-isolation, Q7), the NSG the block may lie on can't be named: never
+    `not_found` — `unblock_partial`, the NIC named, the rules as they were."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, api_nic={"own": "dedicated"}))
+        f, c, nic = m.fake, m.connector, _nic("rg-edge", "api-nic")
+        own = key(f.nics[nic]["nsg"])
+        assert c.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)["status"] == "blocked"
+        for p in actions._BLOCK_STATE_DIR.glob("*.json"):
+            p.unlink()                                            # the block's state never written
+        ours = {n for n in f.nsgs[own]["rules"] if n.startswith("glorfindel-block-")}
+        assert len(ours) == 2, ours
+        assert c.isolate_vm(API)["status"] == "isolated"
+        q = key(f.nics[nic]["nsg"])
+        if known_by != "state":
+            for p in actions._ISOLATION_STATE_DIR.glob("*.json"):
+                p.unlink()
+        if known_by == "nothing":
+            f.nsgs[q]["tags"].pop(actions.AzureConnector._orig_tag(f.nics[nic]["id"]))
+            assert c.isolate_vm(API)["status"] == "isolated"       # its original unknown now
+        f.nics[nic]["nsg"] = None                                  # ours taken off by hand
+        out = c.unblock_ip(ATTACKER, API)
+        left = {n for n in f.nsgs[own]["rules"] if n.startswith("glorfindel-block-")}
+        if known_by == "nothing":
+            assert out["status"] == "unblock_partial", out
+            assert any(e.startswith("api-nic") and "inconnu" in e for e in out["failed"]), out
+            assert left == ours
+        else:
+            assert out["status"] == "unblocked" and {r.lower() for r in out["deleted_rules"]} == ours, out
+            assert not left
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)

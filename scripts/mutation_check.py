@@ -3311,6 +3311,18 @@ MUTANTS += [
      "        raise TimeoutError(f\"{path.name} busy (another write in progress)\")\n"),
 ]
 TESTS.update({"M1395": "tests/unit/test_invariant_regressions.py -k escalations_store"})
+# U3F (#293): the unblock looks for the block on a NIC's own NSG when it is off the NIC — behind
+# our quarantine, or the NIC left bare; never `not_found` on a NIC whose original is unknown.
+_U3F = "tests/unit/test_invariant_regressions.py -k an_unblock"
+MUTANTS += [
+    ("M1343", "the unblock looks behind a quarantine only: a bare NIC's own NSG unread (U3F)", UNB,
+     '        if not q and t0.get("own_nsg_id"):\n            return None', "        if not q:\n            return None"),
+    ("M1344", "a bare NIC held in quarantine, its original unknown: nothing away, `not_found` (U3F)",
+     UNB, "        if original is _UNKNOWN and _held_in_quarantine(nic_id):\n", "        if False:\n"),
+    ("M1345", "a bare NIC's own NSG read from the state only: our tag ignored, the state lost (U3F)",
+     UNB, "        if q_bare is not None:\n            return tagged\n", ""),
+]
+TESTS.update({"M1343": f"{_U3F} {INVARIANTS}", "M1344": _U3F, "M1345": _U3F})
 # SEC6 (#277): the security process — the CI's actions and inputs, the lot threads against a fork
 # or an outsider, text from outside made inert in the chats, the bench's apply confirmed.
 NDS = "scripts/notify_discord.py"

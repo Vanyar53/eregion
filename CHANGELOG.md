@@ -5,6 +5,12 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 ## [Unreleased]
 
 ### Security
+- **The decision facing a model, a memory or a line it did not expect** (SEC4a, #275, 28/10; `docs/glorfindel.md`, « gardes de `decide` », « Source d'un cycle », « Le canal runs/ »).
+  - **The model's answer is read field by field, for its type.** An action that is not text, a confidence that is not a number of [0, 1] (a boolean, NaN, an infinity, 5.0: unknown, held by the confidence gate — no longer brought back into the range), steps that are not a list: the field is unreadable and the cycle escalates — it no longer raises. Only the decision schema's fields are kept from the answer. A property test over arbitrary JSON keeps it so.
+  - **Every signal, an exercise too, is given real past cycles only**: an exercise's cycles, or cycles of unknown source, are no longer retrieved — so what the model is shown never tells it whether the current signal is an exercise. A cycle's identifier in the memory is drawn by the memory: a cycle is added, never overwritten; a replayed `respond` is retrieved once.
+  - **An `attack_started` from `runs/`**: the detection row the rule finds is read as the rule poller reads it (its resource, its host name, the private IP that made the call — one shared reading) and must name the VM the line names — a row naming another VM is never taken for it, and a row naming no VM leaves the actions aimed at that VM (isolation, block) held for a human (`unattributed_signal`). Its `attack_time` must be a moment within 2 h back and 5 min ahead, or the line is refused (counted with the other refusals).
+  - **What the model sees changes**: fewer past cycles (real ones only, for every signal), and the attribution of an `attack_started`'s detection in its context — an end-to-end run comes with BL1 (#280).
+- Tests `tests/unit/test_unexpected_decision.py`, mutants M1240–M1249, M1330–M1339, M1360–M1364.
 - **The security process: where to report, the boundaries, a README that says true, a hardened CI** (SEC6, #277, 28/10).
   - **`SECURITY.md`**: the supported version (the latest 0.4.x), how to report (a private advisory on GitHub, « Report a vulnerability » — no e-mail address), indicative delays, the scope (this repository's code; not the maintainer's bench nor hosts), and what is not a vulnerability (`human_only` by default, observation, a wrong model a guard holds).
   - **The threat model** (`docs/design/modele-de-menace.md`): one page per boundary — the console, `runs/` and the local state, Discord and the webhooks, the model's provider, the hosts, the CI and the CD — who is trusted, what crosses it, STRIDE, what holds it (with the code and the lot), what is still open, said as « planifié : #n ». I8S's choice (the quarantine tag wins over the state's « none ») is written as an assumed decision. `.github/CODEOWNERS`: the maintainer on everything, named again on `glorfindel/response/`, `glorfindel/providers/`, `infra/`, `.github/`.
@@ -18,6 +24,7 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 - **`make celebrimbor-up` shows the plan and asks**, like the other Terraform targets; `YES=1` applies it unread. It passed `--auto-approve` unconditionally.
 
 ### Fixed
+- **A characterized detection answered by a snapshot alone now leaves a card** (SEC4a, #275): the snapshot still runs on its own, and a card `uncontained_detection` (no action to approve) asks a human whether to contain — unless the VM is already isolated, or the detection's source already blocked, by an earlier cycle. It used to end with the snapshot's notification only.
 - **Tests no longer depend on when they run**: the five files that took `NOW` at import take it when each test starts, and the two tests that compared it with the clock of the code under test — the console's heartbeat, a window declared for later — no longer fail when the suite runs longer than a minute.
 
 ## [0.4.3] — 2026-10-28 — "held at the edges"

@@ -3983,8 +3983,8 @@ MUTANTS += [
     ("M1654", "cosign not asked for the repository: a fork's image deployed (CI3)", PIM,
      '"--certificate-github-workflow-repository", slug, ', ""),
     ("M1655", "a refused signature let through to the provenance (CI3)", PIM,
-     '        raise Unverified("signature absente, ou d\'un autre workflow, dépôt, branche ou commit", _last(res))\n',
-     "        pass\n"),
+     '    if res.returncode != 0:\n        raise _cosign_failed(res, "signature")\n',
+     "    if res.returncode != 0:\n        pass\n"),
     ("M1656", "a signature over another digest accepted (CI3)", PIM,
      "    if not signed or any(s != digest for s in signed):\n", "    if not signed:\n"),
     ("M1657", "a provenance of two commits accepted when one of them is asked (CI3)", PIM,
@@ -4002,7 +4002,7 @@ MUTANTS += [
     ("M1663", "a reference off main sent to Orodruin (CI3)", PIM,
      "    if on_main.returncode != 0:\n", "    if False:\n"),
     ("M1664", "any image id accepted on Orodruin after the load (CI3)", PIM,
-     "            if a.id.strip() not in ids(a.image, a.digest):\n", "            if False:\n"),
+     " or a.id.strip() not in expected:", ":"),
     ("M1665", "a digest that moved since the release was first seen deployed (V-22, CI3)", CD,
      "        if seen.get(tag, digest) != digest:\n", "        if False:\n"),
     ("M1666", "the publishing job not waited for: a release from before CI3 refused at once, or deployed "
@@ -4011,7 +4011,8 @@ MUTANTS += [
     ("M1667", "the image's user not compared with H0's: a release that cannot write its state deployed (CI3)", CD,
      "    if res.returncode != 0 or said != mine:\n", "    if res.returncode != 0:\n"),
     ("M1668", "an unverified image made a silent wait instead of a refusal said with the mention (CI3)", CD,
-     '        raise Refused(f"image de {tag} refusée : {e} — H0 ne construit pas d\'image", e.detail) from None\n',
+     '        raise Refused(f"image de {tag} refusée : {discord_text(str(e))} — H0 ne construit pas d\'image",\n'
+     '                      e.detail) from None\n',
      '        raise Quiet(f"{tag} : {e}") from None\n'),
     ("M1669", "the publishing workflow run on pull requests too (a fork's included) (CI3)", PUB,
      "on:\n  push:\n    branches: [main]\n", "on:\n  push:\n    branches: [main]\n  pull_request:\n"),
@@ -4019,6 +4020,36 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(1650, 1665)})
 TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1665, 1669)})
 TESTS["M1669"] = "tests/unit/test_workflows.py"
+# CI3 after its review (29/10): a private package refused, cosign's exit classified (a network
+# error waits, bounded; an absent or other signature refuses), the signature's own type, nothing
+# raw in #deploy, Orodruin's image tagged only once proven. M1690–M1699.
+MUTANTS += [
+    ("M1690", "a private package's 403 at the token made a wait without end (CI3, review)", PIM,
+     "    except urllib.error.HTTPError as e:\n        # GHCR refuses the anonymous token itself",
+     "    except urllib.error.HTTPError as e:\n        e.code = 0  # GHCR refuses the anonymous token itself"),
+    ("M1691", "every failure of cosign a refusal: a sigstore outage burns the release (CI3, review)", PIM,
+     "    if res.returncode != TIMEOUT_CODE and COSIGN_REFUSALS.search(said):\n", "    if True:\n"),
+    ("M1692", "every failure of cosign a wait: an image signed by another never refused (CI3, review)", PIM,
+     "    if res.returncode != TIMEOUT_CODE and COSIGN_REFUSALS.search(said):\n", "    if False:\n"),
+    ("M1693", "a cosign cut at its bound read as a refusal (CI3, review)", PIM,
+     "    if res.returncode != TIMEOUT_CODE and COSIGN_REFUSALS.search(said):\n",
+     "    if COSIGN_REFUSALS.search(said):\n"),
+    ("M1694", "an attestation taken for the signature: an image never signed accepted (CI3, review)", PIM,
+     "    if not any(c.get(\"type\") == SIGNATURE_TYPE for c in found):\n", "    if False:\n"),
+    ("M1695", "a registry or sigstore out of reach waited for without end (CI3, review)", CD,
+     "        if tries[tag] > UNAVAILABLE_PASSES:\n", "        if False:\n"),
+    ("M1696", "the CI's wait and the image's share one count (CI3, review)", CD,
+     '        key = tag if name == MAIN_CHECK else f"{tag} {name}"\n', "        key = tag\n"),
+    ("M1697", "the registry's header quoted as it came, toward #deploy (SEC6, CI3, review)", PIM,
+     'shown = f"{said[:19]}…" if DIGEST_RE.fullmatch(said) else "un en-tête illisible"', "shown = said"),
+    ("M1698", "~/.eregion-image left naming the old image when the new one fails (CI3, review)", "Makefile",
+     "\t $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \\\n", ""),
+    ("M1699", "an image refused on Orodruin left there under its waiting tag (CI3, review)", "Makefile",
+     "\t else docker image rm $(ORO_INCOMING) >/dev/null 2>&1; $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n",
+     "\t else true; \\\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in (1690, 1691, 1692, 1693, 1694, 1697, 1698, 1699)})
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in (1695, 1696)})
 
 
 # SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values

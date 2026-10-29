@@ -374,6 +374,45 @@ seulement, avec sa provenance) : changer de modèle, c'est changer qui décide.
 Sans la variable, le défaut du code (`eregion_core/models.py`, une seule définition). Depuis
 le 19/10, la VM d'observation tourne sur `claude-sonnet-5-5` (issue #139 pour en faire le défaut).
 
+## SSH : la clé d'hôte épinglée (V-32, SEC7)
+
+Chaque commande du poste vers H0 (`glorfindel-host-push`, `-start`, `-status`, `-tunnel`, `-ssh`,
+`-cd-*`…) passe d'abord par `glorfindel-host-known` (`infra/glorfindel-host/known_host.sh`) :
+
+- **avec `HOST_SSH_FINGERPRINT`** (dans ton environnement, jamais dans le dépôt) : un `known_hosts`
+  dédié, `HOST_KNOWN_HOSTS` (défaut `~/.eregion/h0_known_hosts`, mode 600), est écrit à partir de la
+  clé que présente la VM seulement si elle a cette empreinte ; ssh et scp n'acceptent ensuite que
+  ce fichier (`StrictHostKeyChecking=yes`, `ssh-ed25519`). Une clé d'une autre empreinte, présentée
+  ou enregistrée, refuse avant que rien ne parte ;
+- **sans elle** : `accept-new` reste (la clé acceptée au premier contact, un changement refusé), et
+  chaque commande le dit.
+
+Relever l'empreinte **sur la VM** (une session SSH déjà sûre : la console série d'Azure, ou la
+première connexion vérifiée autrement), une fois, et la poser dans `.envrc` :
+
+```bash
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub     # → 256 SHA256:… root@… (ED25519)
+export HOST_SSH_FINGERPRINT=SHA256:…                  # la deuxième colonne
+```
+
+La VM reconstruite (`glorfindel-host-down` puis `-up`) a une autre clé : relever la nouvelle,
+la poser, retirer `~/.eregion/h0_known_hosts`. Le CD de H0 (H1) n'est pas concerné : il tourne
+sur la VM et ne se connecte à aucun hôte par SSH. Orodruin garde `accept-new` (`SSH_OPTS`).
+
+## Ce que SEC7 change au prochain déploiement de H0
+
+- **Les conteneurs durcis (V-34)** : `cap_drop: [ALL]`, `no-new-privileges`, la racine en lecture
+  seule et `/tmp` en tmpfs, sur la watch, la console et le bot. Le CD n'a rien à faire de plus :
+  son préflight relit le compose de la candidate (`docker compose config -q`) avec le `.env` de H0,
+  et ses `docker run` de vérification ne passent pas par le compose. À vérifier au premier
+  déploiement : `docker compose version` sur la VM (la valeur par défaut imbriquée,
+  `${A:-${B:-}}`, est lue par compose v2 ; mesuré en 5.5), puis `make glorfindel-host-status` (les
+  trois conteneurs `Up`, aucune erreur) et `make glorfindel-host-logs` sans « Read-only file
+  system » ; `docker inspect eregion-watch --format '{{.HostConfig.ReadonlyRootfs}}
+  {{.HostConfig.CapDrop}}'` → `true [ALL]`.
+- **Les identités (V-17)** : rien. Les variables de chaque service sont vides sur H0 ; ses trois
+  conteneurs gardent l'identité managée de la VM, lectrice.
+
 ## Mesuré au premier démarrage (16/10)
 
 - **Identité managée** : prise par `DefaultAzureCredential` seulement depuis le correctif de la

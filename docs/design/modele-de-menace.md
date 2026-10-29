@@ -55,7 +55,7 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 | R | Une ligne refusée disparaît sans bruit | Elle est journalisée et comptée (`~/.glorfindel/channel_refusals.json`, SEC3) |
 | I | Un injecteur lit l'état du bleu (ce qui est isolé, bloqué, escaladé) | Les conteneurs des injecteurs ne montent que `~/.glorfindel/injectors`, en lecture seule, où la watch copie son battement (SEC3) |
 | D | Un flot de lignes dans `runs/` | Refusées une à une, sans appel au modèle ni au cloud |
-| E | Une fenêtre d'exercice déclarée pour faire passer une vraie attaque pour un exercice | Fenêtre bornée en durée et en avance (`MAX_DURATION_S`, `FUTURE_SKEW_S`), qui doit nommer une VM inscrite ; une fenêtre refusée l'est pour de bon (B2, `eregion_core/exercise.py`) |
+| E | Une fenêtre d'exercice déclarée pour faire passer une vraie attaque pour un exercice | Fenêtre bornée en durée et en avance (`MAX_DURATION_S`, `FUTURE_SKEW_S`), qui doit nommer une VM inscrite ; une fenêtre refusée l'est pour de bon (B2, `eregion_core/exercise.py`) ; une fenêtre tirée dont la copie locale ne se lit plus n'est jamais remplacée (SEC7) |
 
 **Où c'est dans le code** : `glorfindel/signal_origin.py`, `glorfindel/response/state.py`, `glorfindel/response/locks.py`, `glorfindel/reassert_cards.py`, `glorfindel/proposed_rules.py`, `eregion_core/exercise.py` ; tests `tests/unit/test_signal_origin.py`, `tests/unit/test_locks.py`, `tests/unit/test_unreadable_state.py`, `tests/unit/test_exercise_guard.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), « Le canal runs/ » ; [`docs/fichiers-cles.md`](../fichiers-cles.md).
 
@@ -82,6 +82,7 @@ Trois canaux, à ne pas confondre :
 | I | Un jeton fuit | Le jeton du bot de Glorfindel seulement dans son conteneur (la watch et la console savent qu'il existe, pas sa valeur) ; celui de l'atelier jamais sur H0 ni dans un conteneur (testé) ; une URL de webhook est un secret, jamais imprimée |
 | D | Discord tombe | Une escalade est d'abord écrite localement et visible dans la console ; la watch dit au démarrage quand rien n'alerte |
 | E | Un bouton exécute plus que prévu | Il lance la CLI de Glorfindel avec des arguments qu'il a lui-même fixés, en liste (sans shell) ; une carte ancrée (contrôle d'Azure, identité) n'a aucun bouton d'action |
+| E | Un bouton d'une carte déjà réglée, ou réarmé par un redémarrage, relance une action | Seules les cartes en attente ou encore à juger retrouvent leurs boutons ; au clic, la carte est relue : acquittée, jugée, expirée ou sa VM sortie de la découverte, le bouton répond « carte réglée » et rien ne part (SEC7) ; un restore à la fois par VM, sa réclamation tenue tant que son processus vit (SEC4c, SEC7) |
 
 **Où c'est dans le code** : `glorfindel/bot.py` (`ButtonPolicy`, `allowed_mentions`), `glorfindel/chat_text.py`, `glorfindel/escalations.py` (le webhook), `scripts/notify_discord.py` ; tests `tests/unit/test_bot.py`, `tests/unit/test_chat_escaping.py`, `tests/unit/test_notify_discord.py`.
 
@@ -98,7 +99,7 @@ Trois canaux, à ne pas confondre :
 - pour proposer une règle (`propose-rules`, la boucle purple) : la technique visée et les colonnes des tables de journaux (`getschema`) ;
 - pour le rapport d'une campagne (IA0) : les faits de la campagne et les décisions de Glorfindel, à son propre modèle (`EREGION_ANALYSIS_MODEL`).
 
-**Ce qui ne part jamais** : les détections du plan de contrôle d'Azure et d'Entra ID (AL1, C2) — leur décision est construite par le code, sans appel au modèle, aucun UPN ne sort ; la mémoire et son modèle d'embeddings, qui tournent en local.
+**Ce qui ne part jamais** : les détections du plan de contrôle d'Azure et d'Entra ID (AL1, C2) — leur décision est construite par le code, sans appel au modèle, aucun UPN ne sort ; une règle d'une autre source qui lit leurs tables l'est aussi, quoi qu'elle projette : la requête le dit (C2, SEC7) ; la mémoire et son modèle d'embeddings, qui tournent en local.
 
 **Ce qui revient** : un appel d'outil — l'action, ses paramètres, une confiance, une explication, des étapes.
 
@@ -134,10 +135,16 @@ Trois canaux, à ne pas confondre :
 | S | Un battement de watch qui ne parle pas des cibles, une fenêtre d'exercice antidatée | Le battement porte le périmètre de la watch, comparé à celui de l'injecteur et relu avant chaque action ; une fenêtre est bornée par la création de son blob, et ne marque une VM de production que pour une technique non destructive (SEC5) |
 | T | Une URL de canal mal réglée, un blob démesuré | Le jeton ne part que vers un point de terminaison Azure Storage ; un tirage lit en flux borné (taille, nombre), et dit ce qui dépasse (SEC5) |
 | I | Un secret de l'hôte fuit | Identités managées plutôt que des secrets ; `host.env` hors du dépôt ; le jeton du bot de l'atelier jamais sur H0 |
+| E | Une identité de Glorfindel qui peut tout sur l'abonnement | Un principal par service (watch, console, bot), chacun avec ce que son code appelle, sur les groupes inscrits : la réponse à la watch, le restore à la console et au bot seulement (deux rôles personnalisés, `infra/identities/`) ; jamais `Contributor` sur un abonnement, ni dans la doc ni dans un script (SEC7, testé) |
+| S | Un autre hôte répond à l'adresse de H0 | Sa clé d'hôte épinglée par son empreinte, relevée sur la VM, dans l'environnement de l'opérateur : une autre clé refuse avant toute commande ; sans l'empreinte, la première clé acceptée, et c'est dit (SEC7) |
+| E | Un processus qui prend un conteneur (une dépendance, une ligne forgée) | Aucune capacité, aucun gain de privilège, la racine en lecture seule : il n'écrit que dans ses montages (SEC7, testé) |
+| T | Un plan d'Orodruin, sur un poste sans l'état de H0, retire à la watch hébergée l'accès au canal | Refusé, sauf `NO_WATCH=1` dit (SEC7) |
 | D | Un injecteur qui s'emballe | Plafond, arrêt d'urgence, fenêtres bornées (O1, B2) |
 | E | Le Glorfindel hébergé est poussé à écrire | Il n'en a pas les droits (Reader) et tourne en lecture seule, `human_only` forcé au push |
 
-**Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié ; le durcissement des conteneurs — planifié.
+**Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`.
+
+**Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule — planifié ; une identité managée par conteneur sur un même hôte — planifié.
 
 ---
 
@@ -153,11 +160,11 @@ Trois canaux, à ne pas confondre :
 | T | Une action tierce déplacée sous son tag, dans un job qui tient un secret | Tout workflow qui tient un secret, ou tourne sur un événement qu'un fork déclenche, épingle ses actions par commit ; le canari installe Terraform depuis le dépôt signé de HashiCorp, sa clé vérifiée par son empreinte, sans action tierce (SEC6, `tests/unit/test_workflows.py`) |
 | T | Une valeur choisie (entrée d'un `workflow_dispatch`, titre d'une PR) exécutée comme du shell | Aucun `run:` ne prend `inputs.*`, `github.event.*` ni `github.head_ref` dans son texte : ces valeurs passent par `env:` (SEC6, testé) |
 | T | Une dépendance changée sous son numéro, ou prise sous un autre nom | Dépendances verrouillées, chaque fichier vérifié par son empreinte (M-3, `requirements/`) ; Eregion s'installe depuis le dépôt (README) |
-| T | Une dépendance verrouillée qui a un avis de vulnérabilité, et que personne ne voit | Chaque semaine, `pip-audit` lit les quatre verrous tels quels (empreintes, rien de résolu). Il ouvre une issue par avis, label `security`, jamais deux pour le même avis. Seules les issues ouvertes par le workflow sont relues, et leur clé est vérifiée champ par champ : une issue d'un autre auteur ne fait taire aucun avis et ne fait rien écrire au bot. Le run est rouge dans `#ci` quand il y a du neuf. `make lock` dit les avis du verrou qu'il écrit. Jamais de PR de montée automatique : la montée passe par le harnais (CI2, `scripts/pip_audit_issues.py`) |
+| T | Une dépendance verrouillée qui a un avis de vulnérabilité, et que personne ne voit | Chaque semaine, `pip-audit` lit les quatre verrous tels quels (empreintes, rien de résolu). Il ouvre une issue par avis, label `security`, jamais deux pour le même avis. Seules les issues ouvertes par le workflow sont relues, et leur clé est vérifiée champ par champ : une issue d'un autre auteur ne fait taire aucun avis et ne fait rien écrire au bot ; et aucun autre workflow ne peut écrire une issue (`issues: write` à celui-là seul, SEC7, testé). Le run est rouge dans `#ci` quand il y a du neuf. `make lock` dit les avis du verrou qu'il écrit. Jamais de PR de montée automatique : la montée passe par le harnais (CI2, `scripts/pip_audit_issues.py`) |
 | R | Une release sans histoire | `CHANGELOG.md`, une issue par lot ; les sessions préparent une release en brouillon, le mainteneur la publie |
 | I | Un secret exposé au code d'une PR | `pull_request_target` et `workflow_run` ne récupèrent ni n'exécutent jamais le code d'une PR (récupération partielle du seul script, sans identifiants persistés) ; des permissions en lecture seulement, partout |
 | D | Une CI rouge passée inaperçue | Annoncée dans `#ci`, avec mention : chaque workflow lancé par un push, une PR ou la nuit est dans la liste de `notify.yml`, ses exceptions écrites (CI1, testé) ; le CD de H0 attend une CI verte |
-| D | Un Dockerfile ou un verrou cassé vu seulement au préflight de H0 : la release brûlée | Les deux images construites et éprouvées dans la PR et sur `main` (CI1, `images.yml`) : `--version`, les imports du préflight du CD, la config d'exemple sous A3, pas root, rien de Glorfindel dans l'image des injecteurs. Construites sans push, sans registre, sans secret, actions épinglées par commit, le cache écrit par `main` seulement ; chaque vérification est un `docker run --network none` (`scripts/image_check.py`, testé). Sans filtre `paths` : ses checks peuvent être requis |
+| D | Un Dockerfile ou un verrou cassé vu seulement au préflight de H0 : la release brûlée | Les deux images construites et éprouvées dans la PR et sur `main` (CI1, `images.yml`) : `--version`, les imports du préflight du CD, la config d'exemple sous A3, pas root, rien de Glorfindel dans l'image des injecteurs. Construites sans push, sans registre, sans secret, actions épinglées par commit, le cache écrit par `main` seulement ; chaque vérification est un `docker run --network none` (`scripts/image_check.py`, testé). Sans filtre `paths` : ses checks peuvent être requis ; une décision absente, un HEAD qui n'est pas le commit de fusion ou une file de fusion construisent (SEC7) |
 | E | Une release piégée déployée sur H0 | Le CD exige un tag sur `origin/main`, jamais réécrit, tous les checks verts, un préflight dans la candidate, et revient en arrière si la santé échoue (H1) |
 
 **Où c'est** : `.github/workflows/`, `.github/CODEOWNERS`, `scripts/notify_discord.py`, `scripts/pip_audit_issues.py`, `scripts/image_check.py`, `infra/glorfindel-host/` (le CD) ; tests `tests/unit/test_workflows.py`, `tests/unit/test_notify_discord.py`, `tests/unit/test_host_cd.py`, `tests/unit/test_dependency_lock.py`, `tests/unit/test_pip_audit_issues.py`, `tests/unit/test_image_check.py`.
@@ -172,6 +179,9 @@ Trois canaux, à ne pas confondre :
 ---
 
 ## Décisions assumées
+
+- **La revue de conception sans responsable désigné** (T-05). Ce qui la tient : `CODEOWNERS` sur tout le dépôt (SEC6), la relecture de chaque lot par elrond, et le mainteneur, seul à publier une release.
+- **Le banc ouvert à Internet, par conception** (V-37) : c'est une cible d'exercice. Ce qui le borne : il est jetable, inscrit `bench`, et ne porte aucune charge réelle.
 
 - **`human_only` par défaut.** Rien ne s'exécute sans humain tant que l'opérateur n'a pas donné l'autonomie, actif par actif ; l'autonomie se décide sur une mesure (`docs/observation.md`), jamais sur la confiance du modèle.
 - **Deux hôtes Glorfindel, deux états : le tag de quarantaine l'emporte sur l'« aucun » de l'état** (I8S, #245, N-08). Quand l'état local dit qu'une carte réseau n'avait pas de NSG et que notre tag en nomme un, le tag fait foi, à la levée comme au `reset --from-azure`. Conséquence acceptée : dans un cas marginal (deux groupes de quarantaine, un tag périmé dans l'un), une carte peut recevoir à la levée un NSG de plus qu'elle n'en avait — jamais un de moins. L'autre option, un tag manquant ou illisible toujours tenu pour inconnu, garderait en quarantaine toute carte nue par conception dont les tags sont perdus. Détail : [`docs/azure.md`](../azure.md).

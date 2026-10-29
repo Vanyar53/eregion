@@ -635,7 +635,10 @@ premier step qui décide (`python3 scripts/image_check.py touched`).
   `technique_catalog.yaml`). `tests/unit/test_image_check.py` lit les `COPY` de chaque Dockerfile
   (lignes continuées jointes, casse ignorée) et échoue si un chemin copié manque à la liste.
 - Un push sur `main` construit toujours, sans lire le diff. Un diff illisible construit aussi : la
-  décision échoue fermée.
+  décision échoue fermée. De même (SEC7) : un HEAD qui n'est pas le commit de fusion de la PR
+  (`HEAD^2` absent : le diff n'aurait pas de base), une file de fusion (`merge_group`, si elle est
+  activée un jour), et une décision absente — les étapes ne sautent que sur un `false` explicite
+  (`!= 'false'`), et `touched` sort en 1 dans la CI (`GITHUB_ACTIONS`) sans `GITHUB_OUTPUT`.
 
 La CI des images ne rend pas compose : chaque profil est rendu par `make profiles-check`
 (`components.yml`, `tests/unit/test_profiles.py`).

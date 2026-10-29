@@ -1247,10 +1247,12 @@ MUTANTS = [
      "    how = rule_layers.write_client_rule(rule)\n\n"
      '    proposal["status"] = "approved"\n'
      '    proposal["approved_at"] = datetime.now(timezone.utc).isoformat()\n'
-     '    _STORE.write_text("\\n".join(json.dumps(p) for p in updated) + "\\n")\n',
+     "    lines[at] = json.dumps(proposal)\n"
+     "    _write(lines)\n",
      '    proposal["status"] = "approved"\n'
      '    proposal["approved_at"] = datetime.now(timezone.utc).isoformat()\n'
-     '    _STORE.write_text("\\n".join(json.dumps(p) for p in updated) + "\\n")\n'
+     "    lines[at] = json.dumps(proposal)\n"
+     "    _write(lines)\n"
      "    rule = rule_from_proposal(proposal, Path(rules_yaml_path))\n"
      "    how = rule_layers.write_client_rule(rule)\n"),
     ("M685", "migrate moves only new rules: a base rule changed on the VM is lost (P1)", "glorfindel/rule_layers.py",
@@ -1682,7 +1684,7 @@ MUTANTS += [
 MUTANTS += [
     ("M860", "a bare NIC isolated again records 'none' over an unknown original: released bare, an old "
              "isolation left without state (I8F, I8)", QUA,
-     '                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_in_quarantine(t["nic_id"]):',
+     '                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_or_unreadable(t["nic_id"]):',
      "                elif False:"),
     ("M861", "reset skips a bare NIC whose original is unknown: swept, an old isolation left without "
              "state (I8F, I8)", SWP,
@@ -3505,8 +3507,39 @@ MUTANTS += [
      ("    with _locked():\n        return _approve(", "    with _locked():\n        lines = _lines()"),
      ("    if True:\n        return _approve(", "    if True:\n        lines = _lines()")),
     ("M1394", "a state of another shape read as readable: its placements read as « nothing » (SEC4b)", STA,
-     '    placements = data.get("placements") if isinstance(data, dict) else None\n', "    placements = None\n"),
+     "    return (isinstance(rid, str) and bool(rid.strip()) and isinstance(placements, list)\n"
+     "            and all(isinstance(p, dict) for p in placements))\n", "    return True\n"),
 ]
+# SEC4b's review (M1520–M1534): the isolation never stopped by an unreadable state, the
+# unblock behind the quarantine says it, the VM's own file set aside, the console's tile,
+# a state with placements and no resource id, the card's words.
+JSG = "eregion_console/static/glorfindel.js"
+MUTANTS += [
+    ("M1520", "an unreadable state stops the isolation of a NIC without an NSG (SEC4b, review)", STA,
+     "    try:\n        return _recorded_original(nic_id)\n    except StateUnreadable:\n        return _UNKNOWN\n",
+     "    return _recorded_original(nic_id)\n"),
+    ("M1521", "beside an unreadable state, a bare NIC recorded « none »: the release would leave it bare "
+              "(SEC4b, review)", STA,
+     "    try:\n        return _held_in_quarantine(nic_id)\n    except StateUnreadable:\n        return True\n",
+     "    try:\n        return _held_in_quarantine(nic_id)\n    except StateUnreadable:\n        return False\n"),
+    ("M1522", "an unreadable state escapes unblock_ip after its deletions (SEC4b, review)", UNB,
+     "                try:\n                    # In the try: a state that can't be read fails the unblock, named —\n"
+     "                    # it escaped after the deletions, `unblocking_at` left (SEC4b).\n"
+     "                    original = _recorded_original(t0[\"nic_id\"])\n",
+     "                original = _recorded_original(t0[\"nic_id\"])\n                try:\n"),
+    ("M1523", "a new state written over the VM's unreadable one (SEC4b, review)", STA,
+     "    if not _isolation_unreadable(vm_ref):\n        return\n    f = _state_file(", "    return\n    f = _state_file("),
+    ("M1524", "the local state's card makes a VM tile, counted unprotected (SEC4b, review)", JSG,
+     "    if (_isLocalState(e.resource_id)) return;\n", ""),
+    ("M1525", "a state with placements and no resource id read as readable (SEC4b, review)", STA,
+     "isinstance(rid, str) and bool(rid.strip()) and isinstance(placements, list)",
+     "isinstance(placements, list)"),
+    ("M1526", "the card says the release waits when only a block file is unreadable (SEC4b, review)", RCA,
+     "                           if isolations else \"\") + \".\")", "                           if True else \"\") + \".\")"),
+]
+TESTS.update({mid: "tests/unit/test_unreadable_state.py" for mid in
+              ("M1520", "M1521", "M1522", "M1523", "M1525", "M1526")})
+TESTS["M1524"] = "tests/unit/test_console.py -k local_state"
 TESTS.update({mid: "tests/unit/test_unreadable_state.py" for mid in
               ("M1250", "M1251", "M1252", "M1253", "M1254", "M1255", "M1394")})
 TESTS.update({mid: "tests/unit/test_reassert.py tests/unit/test_unreadable_state.py" for mid in

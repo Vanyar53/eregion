@@ -4426,7 +4426,9 @@ _RB1 = " ".join([f"{_I5R}{t}" for t in (
     "a_perimeter_block_reads_the_other_nics_own_block_on_azure",
     "a_promotion_is_no_drift_for_the_next_pass",
     "a_promotion_leaves_the_next_pass_silent_and_writes_nothing",
-    "a_nic_left_to_a_perimeter_someone_turned_is_open")] + ["tests/unit/test_reassert.py"])
+    "a_nic_left_to_a_perimeter_someone_turned_is_open",
+    "a_perimeter_gone_after_its_uncovered_card_is_acknowledged_is_put_back_or_said",
+    "an_uncovered_card_is_said_again_when_the_uncovered_nics_change")] + ["tests/unit/test_reassert.py"])
 MUTANTS += [
     ("M1620", "a merged block put back on its perimeter alone: the VM's rule left turned (RB1)", R,
      '    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]\n',
@@ -4509,6 +4511,21 @@ MUTANTS += [
      "    if False:\n"),
 ]
 TESTS.update({f"M{n}": _RB1 for n in range(1642, 1645)})
+# RB1, third review: the card « ne couvre pas » has its own mark. M1645–M1647.
+MUTANTS += [
+    ("M1645", "the uncovered card marked with the drift marker: acknowledged, the perimeter's later "
+              "disappearance neither put back nor said (RB1, third review)", R,
+     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)\n",
+     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=now)\n"),
+    ("M1646", "the uncovered card checked after the drift marker: an episode before it silences it, and the "
+              "next disappearance (RB1, third review)", R,
+     '        if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):\n',
+     '        if b.get("uncovered_said") != nics:\n'),
+    ("M1647", "the uncovered card said once for ever, whatever the NICs it doesn't cover become (RB1, third review)",
+     R, '        if b.get("uncovered_said") != nics:\n            reason =',
+     '        if not b.get("uncovered_said"):\n            reason ='),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1645, 1648)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

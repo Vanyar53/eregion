@@ -1228,6 +1228,13 @@ class IsolationMachine(RuleBasedStateMachine):
             # about — not left gone in silence.
             told = {key(e.get("resource_id", "")) for e in escalations.pending()
                     if e.get("action") == "block_suspicious_ip"}
+            # A drift card the operator acknowledged (`operator_acknowledges`) stays said
+            # for its episode — one card per disappearance, by design — while Glorfindel
+            # wrote none of the block's rules again since.
+            acked = getattr(self, "acked_drift", {})
+            told |= {key(v) for v, at in acked.items()
+                     if not {(e["nsg"], e["rule"]) for e in self.fake.journal[at:] if e.get("op") == "rule.write"}
+                     & self._named_block_rules(v)}
             for vm in vanished:
                 assert not self._block_vanished(vm) or key(vm) in told, (
                     f"L1: the block on {vm} vanished from Azure; the reassertion neither put it back nor said so")
@@ -2024,6 +2031,25 @@ class IsolationMachine(RuleBasedStateMachine):
             self.reset_from_azure(_Drawn(data, vm=vm, fault=None))
         else:
             self._release(vm, vm, None)
+
+    @rule(data=st.data())
+    def operator_acknowledges(self, data):
+        """The operator acknowledges a pending card of the reassertion's about a block (RB1,
+        third review): an acknowledged card that silenced whatever followed went unseen — a
+        card « ne couvre pas » set the drift marker, and the perimeter's later disappearance
+        was neither put back nor said. Block cards only: the other kinds (quarantine,
+        orphans, bypass) stay said by design once acknowledged, and their oracles count
+        pending cards. A drift card acknowledged stays said for its episode (L1)."""
+        cards = sorted((e["id"], e.get("resource_id") or "", e.get("reason") or "") for e in escalations.pending()
+                       if e.get("action") == "block_suspicious_ip"
+                       and (e.get("signal_id") or "").startswith("reassert-"))
+        if not cards:
+            return
+        cid, rid, reason = data.draw(st.sampled_from(cards), label="card acknowledged")
+        escalations.resolve(cid)
+        vm = next((v for v in self.live if key(v) == key(rid)), None)
+        if vm and ("disparu" in reason or "a échoué" in reason):
+            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: len(self.fake.journal)}
 
     @rule()
     def time_passes(self):

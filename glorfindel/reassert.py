@@ -276,25 +276,29 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         return
     say_bypass(vm, rid, verification, report, ip=ip, ref=ref)
     if verification.get("verified") is True and not verification.get("held_missing"):
-        _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None)
+        _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None, uncovered_said=None)
+        return
+    if verification.get("uncovered_nics") and not verification.get("missing_rules"):
+        # Never covered, not gone: a perimeter block alone on a VM with a NIC on another
+        # subnet. Said once per set of NICs, nothing written — putting the perimeter back
+        # covers nothing more (RB1, second review). Its own mark, never `drift_alerted_at`:
+        # acknowledged, the card silenced the pair's later disappearance for ever (RB1,
+        # third review). The pair whole again, a drift episode before is over.
+        nics = sorted(verification["uncovered_nics"])
+        if b.get("uncovered_said") != nics:
+            reason = (f"Le blocage de périmètre de {ip} ne couvre pas {', '.join(nics)} de {vm} : non couverte(s) "
+                      f"depuis le blocage (autre subnet), l'IP les atteint. Bloquer aussi la VM (scope vm) : "
+                      f"`glorfindel block {ip} {rid}`.")
+            _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
+                   reason=reason, action_params={"ip": ip})
+            report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
+        if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):
+            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)
         return
     if not _missing(verification):
         return
     if b.get("drift_alerted_at"):
         return                      # one alert per disappearance (see isolations)
-    if verification.get("uncovered_nics") and not verification.get("missing_rules"):
-        # Never covered, not gone: a perimeter block alone on a VM with a NIC on another
-        # subnet. Said once, nothing written — putting the perimeter back covers nothing
-        # more (RB1, second review).
-        nics = ", ".join(verification["uncovered_nics"])
-        reason = (f"Le blocage de périmètre de {ip} ne couvre pas {nics} de {vm} : non couverte(s) depuis "
-                  f"le blocage (autre subnet), l'IP les atteint. Bloquer aussi la VM (scope vm) : "
-                  f"`glorfindel block {ip} {rid}`.")
-        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
-               reason=reason, action_params={"ip": ip})
-        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
-        report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
-        return
     if b.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
         reason = (_block_drift(ip, vm, verification, again=bool(b.get("reasserted_at")))
                   + f" Glorfindel ne le repose pas : `glorfindel unblock {ip} {rid} --yes` si c'est voulu, "

@@ -2291,3 +2291,75 @@ def test_a_nic_left_to_a_perimeter_someone_turned_is_open(monkeypatch):
          ("block_perimeter", DB, DB, None, True),
          ("tamper_with_our_rule", "access", (key(_SUBNET), _PERIMETER)),
          ("reassert", "human_only", None))
+
+
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_perimeter_gone_after_its_uncovered_card_is_acknowledged_is_put_back_or_said(monkeypatch, mode):
+    """RB1, third review: a perimeter block alone on Db--01 (db-nic-1 on another subnet),
+    the pass says it doesn't cover db-nic-1, the operator acknowledges that card, then
+    someone deletes the perimeter pair. The card had set `drift_alerted_at`, cleared only on
+    a verification that holds — never, for this entry: every later pass stopped there, the
+    perimeter (the IP cut off for the whole subnet) neither put back nor said. Its own mark
+    now: the disappearance follows the usual way."""
+    import shutil
+
+    from glorfindel import escalations
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        assert m.connector.block_suspicious_ip(ATTACKER, DB, scope="subnet")["status"] == "blocked_partial"
+        m.reassert(Script(mode, None))
+        (card,) = _cards(m)
+        assert "ne couvre pas db-nic-1" in card, card
+        for e in escalations.pending():
+            escalations.resolve(e["id"])                       # the operator acknowledges it
+        rules = m.fake.nsgs[key(_SUBNET)]["rules"]
+        for n in (_PERIMETER, f"{_PERIMETER}-out"):
+            del rules[n]
+        m.reassert(Script(mode, None))
+        if mode == "non_disruptive":
+            assert {_PERIMETER, f"{_PERIMETER}-out"} <= set(rules), "the perimeter was not put back"
+            # Whole again, the episode is over: deleted once more, it is said (put back once).
+            m.reassert(Script(mode, None))
+            for e in escalations.pending():
+                escalations.resolve(e["id"])
+            for n in (_PERIMETER, f"{_PERIMETER}-out"):
+                del rules[n]
+            m.reassert(Script(mode, None))
+            (card,) = _cards(m)
+            assert "deuxième fois" in card, card
+        else:
+            (card,) = _cards(m)
+            assert "disparu" in card and _PERIMETER in card, card
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_an_uncovered_card_is_said_again_when_the_uncovered_nics_change(monkeypatch):
+    """Said once per set of NICs: a third NIC of Db--01 on the other subnet — the card says
+    the two; the same set, nothing more."""
+    import shutil
+
+    from .fake_azure import nic_id
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        m.connector.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        m.reassert(Script("human_only", None))
+        assert len(_cards(m)) == 1
+        m.reassert(Script("human_only", None))
+        assert len(_cards(m)) == 1                              # the same NICs: not said again
+        f = m.fake
+        extra = nic_id("rg-app1", "db-nic-2")
+        f.nics[key(extra)] = {**f.nics[_nic("rg-app1", "db-nic-1")], "id": extra, "ips": ["10.0.0.9"]}
+        f.vms[key(DB)]["nics"].append(extra)
+        m.design = f.snapshot()                                  # the customer's design, a NIC more
+        m.reassert(Script("human_only", None))
+        (card,) = _cards(m)
+        assert "db-nic-1, db-nic-2" in card, card
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)

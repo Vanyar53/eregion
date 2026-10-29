@@ -1587,6 +1587,27 @@ la passe sont des écritures de cette suite n'a aucune carte « disparu »
 modes : l'oracle les fait tomber sur le code d'avant), `test_a_promotion_leaves_the_next_pass_silent_and_writes_nothing`,
 `test_a_nic_left_to_a_perimeter_someone_turned_is_open` ; mutants M1642–M1644.
 
+**Troisième relecture : un acquittement qui faisait taire la suite.** La carte « ne couvre pas »
+posait `drift_alerted_at`, que seule une vérification vraie efface — jamais, pour cette entrée.
+Acquittée, puis la paire de périmètre supprimée par un tiers : chaque passe s'arrêtait sur le
+marqueur, le périmètre (l'IP coupée pour tout le subnet) ni reposé ni dit ; une régression de RB1
+(sur la base, ce blocage se vérifiait vrai, sa disparition reposée ou dite). **Correctif** : la
+carte a son propre marqueur, `uncovered_said` (l'ensemble des cartes non couvertes, redite s'il
+change), et la paire lue entière, un épisode de dérive d'avant est clos (`drift_alerted_at`
+effacé) ; une disparition ultérieure suit le chemin normal. **La machine** gagne une règle,
+`operator_acknowledges` : l'opérateur acquitte une carte de blocage en attente de la réaffirmation,
+tirée au hasard — les cartes de blocage seulement : les autres (quarantaine, orphelines,
+contournement) restent dites par conception une fois acquittées, et leurs oracles comptent les
+cartes en attente. L1 tient une carte de dérive acquittée pour dite, pour son épisode (tant que
+Glorfindel n'a réécrit aucune règle du blocage depuis), comme le code le veut. Stable : 500 séquences
+vertes sur huit graines (1, 42, 203, 322, 777, 1234, 2718, 8675), et 2 000 sur 322 ; sur le code
+d'avant, quatre graines à 500 n'atteignent pas la séquence (il y faut un périmètre seul sur Db--01,
+sa carte acquittée, la paire supprimée, une passe) — elle reste aux séquences figées
+`test_a_perimeter_gone_after_its_uncovered_card_is_acknowledged_is_put_back_or_said` (les deux
+modes, et une seconde disparition après la repose) et
+`test_an_uncovered_card_is_said_again_when_the_uncovered_nics_change`, qui échouent sur le code
+d'avant ; mutants M1645–M1647.
+
 **Le déblocage d'une VM supprimée (RB1).** Ce qu'il laisse porte sa commande
 (`az network nsg rule delete -g … --nsg-name … -n …`) et le dit redit tant que la règle reste — la
 retirer met fin à l'`unblock_partial`, le déblocage suivant aboutit. L'entrée perdue, un blocage de
@@ -1599,7 +1620,7 @@ direction libère le sien.
 **Séquences figées** (`test_invariant_regressions.py`) : les séquences de RB1, relectures
 comprises ; vingt cas échouent sur `main` pour la raison dite, les autres (un périmètre contourné
 sur le port de la menace, un périmètre d'une autre VM au déblocage, l'entrée gardée) gardent des
-mutants ; tests de `test_reassert.py`. Mutants M1620–M1644 attrapés par elles ; M1599 réaligné. Conséquence
+mutants ; tests de `test_reassert.py`. Mutants M1620–M1647 attrapés par elles ; M1599 réaligné. Conséquence
 voulue de la relecture après repose : un blocage tenu par la quarantaine dont les règles, sur le
 NSG propre de la carte (hors de la carte jusqu'à la levée), ont disparu n'est plus dit « reposé » —
 la repose écrit sur le NSG qui gouverne la carte, celles-là manquent toujours : `partial`, dit.

@@ -4335,7 +4335,8 @@ _RB1 = " ".join([f"{_I5R}{t}" for t in (
     "a_promotion_keeps_the_block_of_a_nic_the_perimeter_doesnt_cover",
     "a_perimeter_block_alone_is_verified_on_every_nic",
     "a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off",
-    "a_write_that_failed_is_never_said_put_back")] + ["tests/unit/test_reassert.py"])
+    "a_write_that_failed_is_never_said_put_back",
+    "a_perimeter_block_reads_the_other_nics_own_block_on_azure")] + ["tests/unit/test_reassert.py"])
 MUTANTS += [
     ("M1620", "a merged block put back on its perimeter alone: the VM's rule left turned (RB1)", R,
      '    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]\n',
@@ -4387,8 +4388,9 @@ MUTANTS += [
      BLK, "                if off_ids is None or (pl.get(\"nic_id\") or \"\").rstrip(\"/\").lower() in off_ids:\n",
      "                if False:\n"),
     ("M1636", "a perimeter block never names the NICs it doesn't cover: `blocked` said (RB1, review)", BLK,
-     '        uncovered = [t["nic_short"] for t in off if t["nic_id"].rstrip("/").lower() not in own]\n',
-     "        uncovered = []\n"),
+     '        uncovered = [t["nic_short"] for t in off]\n', "        uncovered = []\n"),
+    ("M1641", "a NIC off the perimeter's subnet read as blocked from the state: its rules gone, `blocked` (RB1, review)",
+     BLK, "                check = self.verify_block_ip(ip, resource_id)\n", '                check = {"verified": True}\n'),
     ("M1637", "a perimeter block alone verified on its pair only: a NIC off its subnet open, true said (RB1, review)",
      UNB, "                if entry.get(\"scoped\") is False:     # the VM's NICs it doesn't cover (RB1, review)\n",
      "                if False:\n"),
@@ -4401,7 +4403,7 @@ MUTANTS += [
     ("M1640", "NICs unreadable read as all behind the perimeter: their blocks taken off, `blocked` (RB1, review)",
      BLK, "            off, off_ids, unread = [], None, _first_line(exc)\n", '            off, off_ids, unread = [], set(), ""\n'),
 ]
-TESTS.update({f"M{n}": _RB1 for n in range(1635, 1641)})
+TESTS.update({f"M{n}": _RB1 for n in range(1635, 1642)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

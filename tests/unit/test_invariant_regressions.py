@@ -2224,3 +2224,14 @@ def test_a_write_that_failed_is_never_said_put_back(monkeypatch):
     finally:
         m.fake.unreadable.discard(key(_SUBNET))
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_perimeter_block_reads_the_other_nics_own_block_on_azure(monkeypatch):
+    """Found by the machine on the review's fix (seed 777 at 500): Db--01 blocked for
+    itself, db-nic-1's rules removed since (a `terraform apply` on its subnet's NSG), then
+    a perimeter block. The state still named db-nic-1's block: `blocked` said, db-nic-1
+    open. What blocks a NIC off the perimeter's subnet is read on Azure."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("block", DB, DB, None, 22),
+         ("terraform_apply", key(_DATA)),
+         ("block_perimeter", DB, DB, None, False))

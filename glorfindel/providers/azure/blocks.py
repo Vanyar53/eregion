@@ -250,9 +250,22 @@ class BlockMixin:
             nsg=f"{nsg_rg}/{nsg_name}", nsg_scope="subnet", rule=rule_name, scoped=False,
             placements=kept if replace else None, threat_port=threat_port,
         )
-        entry = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None) or {}
-        own = {(p.get("nic_id") or "").rstrip("/").lower() for p in entry.get("placements") or []}
-        uncovered = [t["nic_short"] for t in off if t["nic_id"].rstrip("/").lower() not in own]
+        # A NIC off the perimeter's subnet is blocked only by its own block — as Azure reads
+        # it, never as the state remembers it (a partial one, rules gone since).
+        uncovered = [t["nic_short"] for t in off]
+        if uncovered:
+            try:
+                check = self.verify_block_ip(ip, resource_id)
+            except Exception as exc:
+                check = {"verified": None, "error": _first_line(exc)}
+            if check.get("verified") is True:
+                uncovered = []
+            elif check.get("verified") is False:
+                open_ = {*(check.get("open_nics") or []), *(check.get("uncovered_nics") or []),
+                         *(check.get("perimeter_unread") or [])}
+                uncovered = [n for n in uncovered if n in open_] if open_ else uncovered
+            else:
+                unread = unread or check.get("error") or "illisible"
         # Same precedence report as the VM-scoped block (verify fails on it as well).
         shadowed = _shadowing_rules(
             existing, priority, inbound_src=[ip], inbound_dst=None,

@@ -126,7 +126,11 @@ glorfindel/
                           AuditCheck (+ champ `data` structuré : nsg/nsg_scope + nsgs[] multi-NIC, points/protected), AuditResult,
                           run() — NSG/backup/compute readiness checks en parallèle, IAM gap detection
   proposed_rules.py     → record/pending/approve()/reject() — detection rule proposal lifecycle ; approve() écrit
-                          la règle dans la couche du client (P1), jamais dans la base livrée
+                          la règle dans la couche du client (P1), jamais dans la base livrée ; chaque écriture du
+                          magasin sous son verrou, réécrite entière (SEC4b)
+  reassert_cards.py     → SEC4b : ce que la réaffirmation dit sans agir — say_bypass (V-16 : une allow d'un tiers
+                          avant nos refus, carte `bypassed` une fois par changement, jamais retirée) et
+                          say_unreadable_states (carte `state_unreadable`, state_alerts.json)
   rule_layers.py        → P1 : la couche du client — write_client_rule (atomique, verrou, refuse d'écrire sur une
                           couche illisible), migrate (règles approuvées dans la base avant P1 → couche ; une
                           règle au workspace en ligne liée à son backend). P1 n'exporte pas : l'export d'une règle généralisée, sans identifiant, est reporté à un lot rattaché à P2 (relu par un humain avant tout envoi)
@@ -314,11 +318,22 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 sont le même fichier : cinquième passe C1) ; `migrate_state_files()` au démarrage du watch.
                                 CI : job macOS (APFS insensible à la casse) ; `main` protégée, checks requis.
   blocks/<vm>--<h>.json       → IPs bloquées par VM (même clé)
+                                **Illisible = inconnu (SEC3, SEC4b)** : un fichier d'isolation ou de blocage qui ne se lit
+                                pas (JSON cassé, autre forme — `unreadable_states`) n'est jamais lu « rien » : balayage des
+                                orphelines, levée, `reset --from-azure` et `verify_release` d'une carte en quarantaine ou
+                                sans NSG s'arrêtent et le disent ; le fichier n'est jamais réécrit par-dessus ; la
+                                réaffirmation le dit (`state_unreadable`). Le réparer ou le retirer à la main.
+                                Isolation : `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
                                 oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte
+  state_alerts.json           → SEC4b : la liste des fichiers d'état illisibles déjà dite (carte `state_unreadable`) ;
+                                oubliée quand tout se lit de nouveau — un acquittement ne relève pas de carte
   orphan_alerts.json          → A3 : règle orpheline (NSG/règle) → sa carte `orphan_rule` ; une règle dite ne l'est pas de nouveau
                                 tant qu'elle reste ; oubliée (carte fermée) quand elle n'est plus orpheline ou a été retirée
-  proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation)
+  proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation). SEC4b : chaque `record`,
+                                `approve`, `reject` sous un flock (`proposed_rules.jsonl.lock`), réécrit entier (fichier
+                                temporaire + `os.replace`) — plus de proposition perdue entre deux écrivains (la watch, la
+                                console, la CLI), jamais un fichier à moitié lu
   client_rules.yaml           → P1 : la couche du client — règles approuvées (`approve-rule`, War Room), règles de
                                 base remplacées (même nom) ou désactivées (`disable:`), chargée par-dessus la base
                                 livrée. Hors du dépôt : une mise à jour ne la touche jamais (conteneurs : base `:ro`)

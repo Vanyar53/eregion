@@ -121,3 +121,41 @@ def test_the_attestation_names_its_lock_and_each_models_result(smoke, tmp_path):
     assert att["lock_sha256"] == hashlib.sha256(lock.read_bytes()).hexdigest()
     assert att["models"][1] == {"model": "ollama/qwen3", "integration": 24, "judgment": 19,
                                 "slots": 24, "overconfident_errors": 3}
+
+
+# DEP1 (#282): a committed attestation that no longer matches the lock fails here, in CI —
+# not at H0's CD, where it would refuse the release. Without the file, nothing to check.
+ROOT = SMOKE.parents[1]
+
+
+def _attestation_problems(att_path: Path, lock_path: Path, model: str) -> list[str]:
+    import hashlib
+    import json
+    if not att_path.is_file():
+        return []
+    att = json.loads(att_path.read_text(encoding="utf-8"))
+    problems = []
+    if att.get("lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():
+        problems.append(f"{att_path.name} porte sur un autre {lock_path.name} : make llm-compare … ATTEST=1")
+    if model not in [m.get("model") for m in att.get("models") or []]:
+        problems.append(f"{att_path.name} ne couvre pas le modèle par défaut ({model})")
+    return problems
+
+
+def test_the_committed_attestation_is_the_locks_and_covers_the_default_model():
+    from eregion_core.models import DEFAULT_LLM_MODEL
+    assert _attestation_problems(ROOT / "requirements" / "harness.json",
+                                 ROOT / "requirements" / "glorfindel.txt", DEFAULT_LLM_MODEL) == []
+
+
+def test_a_stale_or_partial_attestation_is_refused_and_none_passes(smoke, tmp_path):
+    import json
+    lock, att = tmp_path / "glorfindel.txt", tmp_path / "harness.json"
+    lock.write_text("litellm==1.100.4 \\\n    --hash=sha256:00\n")
+    assert _attestation_problems(att, lock, "m/a") == [], "no attestation yet: nothing to check"
+    results = [{"model": "m/a", "integration": 24, "judgment": 24, "slots": 24, "overconf": 0}]
+    att.write_text(json.dumps(smoke.attestation(results, 3, lock)))
+    assert _attestation_problems(att, lock, "m/a") == []
+    assert len(_attestation_problems(att, lock, "m/b")) == 1, "another model than the default"
+    lock.write_text("litellm==1.100.5 \\\n    --hash=sha256:00\n")
+    assert len(_attestation_problems(att, lock, "m/a")) == 1, "the lock moved after the harness"

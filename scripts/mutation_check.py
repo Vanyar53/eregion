@@ -3985,6 +3985,18 @@ MUTANTS += [
      '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1610, 1615)})
+# DEP1, after its review: a committed attestation that no longer matches the lock, or misses
+# the default model, fails in CI, not at H0's CD (tests/unit/test_llm_smoke.py). M1615–M1616.
+_SMOKE_T = "tests/unit/test_llm_smoke.py"
+MUTANTS += [
+    ("M1615", "a stale attestation passes the CI: the release refused at H0's CD only (DEP1)", _SMOKE_T,
+     '    if att.get("lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():\n',
+     "    if False:\n"),
+    ("M1616", "an attestation without the default model passes the CI (DEP1)", _SMOKE_T,
+     '    if model not in [m.get("model") for m in att.get("models") or []]:\n',
+     "    if False:\n"),
+]
+TESTS.update({mid: _SMOKE_T for mid in ("M1615", "M1616")})
 
 
 # SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values

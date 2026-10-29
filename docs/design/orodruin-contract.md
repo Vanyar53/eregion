@@ -468,7 +468,7 @@ pare-feu posé avant le point de terminaison de H0 lui coupe le canal :
    puis `make glorfindel-host-up YES=1` ;
 3. `make orodruin-plan` : deux sous-réseaux dans `network_rules`, les rôles et attributions
    ci-dessus, la politique de rétention ; puis `make orodruin-lock YES=1`, sans run en cours ;
-4. `make orodruin-push` (l'image des injecteurs, et son contrat) ;
+4. `make orodruin-push` (l'image des injecteurs, publiée et vérifiée depuis CI3, et son contrat) ;
 5. `make orodruin-check` : `armed`.
 
 Un retour en arrière du CD de H0 vers une version sans SEC5 rend un battement sans périmètre :
@@ -476,6 +476,42 @@ tous les injecteurs neufs refusent (« names no perimeter »), le sens fermé �
 version SEC5 ; `--without-glorfindel` reste possible hors production. En profil local, un vieil
 injecteur (une image d'avant SEC5) lit la copie de la watch neuve, devenue du JSON, comme une date
 illisible, et refuse aussi : `make build`.
+
+## L'image des injecteurs (CI3, #267, 29/10)
+
+Avant CI3, `make orodruin-push` construisait l'image d'Annatar sur le poste de l'opérateur et
+l'envoyait par SSH : rien ne liait ce qu'Orodruin exécute à ce que la CI avait éprouvé (P-02).
+
+**Maintenant, `make orodruin-push [REF=<tag|commit>]`** (sans `REF`, le dernier tag `v*`) :
+1. **Sur le poste**, `scripts/published_image.py fetch annatar` : le commit de `REF`, qui doit être
+   sur `origin/main` ; le digest de `ghcr.io/vanyar53/eregion-annatar:sha-<commit>`, lu sans jeton ;
+   sa **signature** et sa **provenance** vérifiées par cosign (épinglé par son sha256) — le workflow
+   `.github/workflows/publish.yml` de ce dépôt, sur `main`, déclenché par un push, **à ce commit** —,
+   la provenance relue ; l'image tirée **par ce digest**, ses étiquettes relues (le commit), étiquetée
+   `eregion-annatar:orodruin`. Un échec à n'importe quelle étape : rien n'est envoyé.
+2. **Par SSH**, `docker save | docker load`, comme avant : **la sortie d'Orodruin reste fermée**.
+3. **Sur Orodruin**, l'identifiant de l'image chargée est relu (`docker image inspect -f {{.Id}}`) et
+   doit être une adresse de contenu sous le digest vérifié : le digest lui-même, son manifeste
+   linux/amd64, ou la configuration de ce manifeste (l'identifiant du magasin classique de docker).
+   Autre chose : refusé. `~/.eregion-image` garde « commit digest ».
+
+**Pourquoi Orodruin ne tire pas lui-même.** Le contrat garantit une sortie limitée au banc, aux API
+de contrôle du cloud et à l'API du modèle, vérifiée par une connexion hors périmètre qui échoue.
+Tirer depuis GHCR demanderait `ghcr.io` et `pkg-containers.githubusercontent.com` : le second est un
+CDN partagé de GitHub (des adresses de Fastly, mesuré le 29/10), qui sert aussi n'importe quel
+contenu d'utilisateur ; un NSG ne filtre que par adresse. L'ouvrir ouvrirait un chemin de sortie bien
+plus large que l'image. Vérifier sur le poste, puis relire l'identifiant sur Orodruin, garde la
+garantie et prouve l'image. Aucun changement Terraform n'est donc nécessaire pour CI3 (le
+commentaire du `custom_data` seul a changé : il est hors du heredoc, un plan ne montre rien).
+
+**Le chemin de développement**, dit comme tel : `make orodruin-push-dev` construit l'image sur le
+poste, **non vérifiée**, pour essayer une branche avant sa fusion ; `~/.eregion-image` dit
+`dev <commit>`. Le contrat ne lit pas ce fichier : c'est une trace pour l'opérateur, pas une garde.
+
+**Ce qui reste ouvert** : l'image n'est vérifiée que sur le poste qui l'envoie ; un poste compromis
+enverrait autre chose et la relecture de l'identifiant, faite depuis ce même poste, ne le verrait
+pas. Le contrat (`orodruin-check`) ne lit pas encore la provenance de l'image qu'il exécute —
+planifié.
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 

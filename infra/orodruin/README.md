@@ -51,7 +51,8 @@ make orodruin-up YES=1             # 1er apply, sortie ouverte : la VM installe 
 make orodruin-ssh                  # attendre ~/.orodruin-ready, puis exit
 make orodruin-lock YES=1           # 2e apply : la sortie se referme (YES=1 : sans confirmation)
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env   # abonnement, plafond
-make orodruin-push                 # image d'Annatar (docker save | ssh) + orodruin.env ; dépendances du verrou requirements/annatar.txt (HY1)
+make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, signature et provenance vérifiés ici, puis docker save | ssh ; + orodruin.env
+                                   # REF=<tag|commit> (défaut : le dernier tag v*) ; make orodruin-push-dev : construite ici, non vérifiée (développement)
 make orodruin-check                # le contrat lu depuis la VM : armed ou passive
 ```
 

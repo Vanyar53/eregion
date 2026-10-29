@@ -1106,6 +1106,8 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I3F | original inconnu (état et tags perdus), carte réisolée puis laissée nue | `verify_release` : `verified: True`, carte sans son NSG, une ancienne isolation restée sur ce NSG ; `glorfindel release`, qui le consulte d'abord, effaçait l'état |
 | U3F | blocage coupé avant son état, VM isolée par quarantaine, notre NSG retiré de la carte laissée nue | `unblock` : `not_found`, la règle de blocage restée sur le NSG propre de la carte ; la levée remettait ce NSG, l'IP de nouveau bloquée |
 | I5R | blocage de périmètre (200) puis de la VM (210), la règle de la VM passée en allow par un tiers, réaffirmation | la règle de périmètre réécrite au premier numéro libre (220), sous cet allow : **l'attaquant atteignait la VM sur tous ses ports** |
+| RB1 | blocage de périmètre puis de la VM (une entrée), la règle de la VM passée en allow par un tiers, deux réaffirmations (ou une en `human_only`) | seul le périmètre réécrit ; « l'IP n'est plus bloquée » alors que le périmètre la coupait encore (faux, du côté prudent) |
+| RB1 | même chose, la seconde carte de Db--01 sur un autre subnet (tirage ajouté) | « reposé une fois » alors que la seconde carte restait ouverte à l'attaquant |
 | I5R | VM supprimée, l'entrée de son blocage perdue | `unblock` : `not_found` sans avoir cherché, le blocage resté sur le NSG partagé pour la VM suivante à cette adresse (trouvé en relecture d'I7S, hors de la machine) |
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
@@ -1493,6 +1495,70 @@ après ; remesuré sur six tours, 5/6 avant, 2/6 après, 5/6 après sans la règ
 séquences, 3/3 avant comme après. M831 (`nsg.py`, relevé à la relecture) : 3/3 puis 5/6 avant,
 0/1, 1/3 puis 1/6 après à 60 séquences ; à 500, 3/3 après (graines 11, 99, 1234). Aucun mutant
 n'est perdu au budget de la CI (500).
+
+**RB1 (29/10, #321) : ce que dit la carte d'un blocage fusionné.** Trouvé à la relecture d'I5R,
+présent sur `main` ; rien ne s'ouvrait par Glorfindel, les cartes se trompaient. Un
+`block_perimeter` et un `block` de la même VM partagent une entrée (`scoped: false`). La règle de
+la VM passée en allow par un tiers, la réaffirmation ne reposait que le périmètre (l'entrée dit
+« sous-réseau »). **Cause** : `verify_block_ip` ne lisait, pour une entrée à placements, que les
+règles de la VM — le périmètre ni compté là où il tient une carte, ni vérifié lui-même — et
+`_reassert_block` reposait le blocage dans la portée de l'entrée, puis disait « reposé » sur la foi
+de l'écriture. Sur un seul subnet, le périmètre coupait encore l'attaquant, et la passe suivante
+(ou la première en `human_only`) disait « l'IP n'est plus bloquée » ; sur une VM dont la seconde
+carte est sur un autre subnet (le périmètre couvre celui de la carte primaire), « reposé une fois »
+avec cette carte ouverte. **Correctif** : la vérification compte, carte par carte, un blocage de
+périmètre de l'IP sur un NSG qui gouverne la carte — celui de l'entrée, ou celui d'une autre VM du
+subnet : la machine l'a trouvé sur le premier correctif, graines 1 et 203 à 500 séquences
+(`held_by_perimeter`, `open_nics`, `perimeter_unread` : illisible n'est ni tenu ni ouvert), et
+vérifie la paire de périmètre de l'entrée (supprimée, elle disparaissait en silence pour les autres
+VM du subnet) ; la réaffirmation repose le périmètre **puis** les placements de la VM, relit Azure,
+et ne dit « reposé une fois » que d'un blocage entier — sinon `partial`, dit une fois par épisode ;
+sa carte ne dit plus « n'est plus bloquée » d'une IP que le périmètre ou la quarantaine coupe
+encore (`reassert.py::_block_drift`, `providers/azure/perimeter.py`). **La machine** gagne un tirage
+(la seconde carte de Db--01 sur un subnet à elle, `data_subnet`, tiré en dernier) et un oracle sur
+ce que disent les cartes de blocage d'une passe (`_block_cards_true`, jugé sur le monde) :
+« reposé une fois » ou « reste bloquée » → l'attaquant n'atteint pas la VM (pour un périmètre seul,
+les cartes de son subnet) ; « n'est plus bloquée » → jamais quand notre périmètre, intact sur le
+subnet de chaque carte, coupe seul l'attaquant, avant la passe et après (le NSG du subnet seul, sans
+nos autres deny, les règles qu'un tiers a retournées gardées : une isolation, ou le NSG propre d'une
+carte qui ferme aussi le port, ne comptent pas pour le périmètre — le modèle de préséance du code,
+un NSG à la fois ; et une carte dite avant que la même passe repose le périmètre pour l'entrée d'une
+autre VM était vraie quand elle a été écrite). Ces deux bornes viennent de la machine elle-même
+(graines 42 et 322 à 2 000 séquences, sur le correctif) : l'oracle les jugeait fausses à tort. Le contrôle de
+préséance du blocage tiré pour un périmètre (I3 de `block_perimeter`) ne regarde que les cartes de
+son subnet, comme il le dit ; I3 sur `verify_block_ip` couvre aussi une entrée fusionnée. Aucune
+règle retirée. Sur `main`, la machine seule fait tomber l'oracle aux graines 1, 322 et 1234 (500
+séquences), sur les deux formes du constat.
+
+**Le déblocage d'une VM supprimée (RB1).** Ce qu'il laisse porte sa commande
+(`az network nsg rule delete -g … --nsg-name … -n …`) et le dit redit tant que la règle reste — la
+retirer met fin à l'`unblock_partial`, le déblocage suivant aboutit. L'entrée perdue, un blocage de
+périmètre de l'IP (nom simple) qu'aucune entrée d'une autre VM n'enregistre n'était ni cherché ni
+dit (`not_found`) : dit et laissé (il couvre tout un subnet). **Notre `-out` retourné en Inbound**
+(`nsg.py`, `_pair_priorities`, d'avant I5R) : son numéro comptait comme libre, la règle entrante y
+entrait en collision, Azure refusait, rien n'était reposé ; seule une règle à nous dans sa propre
+direction libère le sien.
+
+**Séquences figées** (`test_invariant_regressions.py`) : dix tests, quatorze cas ; onze échouent sur
+`main` pour la raison dite, les trois autres (un périmètre contourné sur le port de la menace, un
+périmètre d'une autre VM, l'entrée gardée) gardent des mutants ; tests de `test_reassert.py`. Mutants M1620–M1634 attrapés par elles ; M1599 réaligné. Conséquence
+voulue de la relecture après repose : un blocage tenu par la quarantaine dont les règles, sur le
+NSG propre de la carte (hors de la carte jusqu'à la levée), ont disparu n'est plus dit « reposé » —
+la repose écrit sur le NSG qui gouverne la carte, celles-là manquent toujours : `partial`, dit.
+
+**Mesures de RB1.** Invariants sur le code final : 500 séquences sur les graines 1, 11, 42, 99,
+203, 322, 777 et 1234, puis 2 000 sur 42, 322 et 1234, verts. Les quinze mutants M1620–M1634 sont
+attrapés 15/15 par leurs séquences figées (et `test_reassert.py`) ; par la machine seule, à 500
+séquences et deux tours : M1621, M1625 et M1634 à chaque tour, M1622 une fois sur deux, M1627
+jamais (tenu par `test_reassert.py`), les dix autres par les séquences figées seulement — la
+relecture après repose suffit à rendre vraie la carte d'une repose incomplète (M1620), c'est la
+séquence figée qui voit la règle de la VM restée retournée. Harnais avant/après au même budget (60
+séquences, deux tours, `--jobs 4`) sur les mutants des modules du chemin d'isolation (blocage,
+déblocage, NSG, réseau, quarantaine, isolation, levée, vérification, état, réaffirmation) :
+138 avant (`main`), les mêmes et M1620–M1634 après ; attrapés à chaque tour, 113/138 avant,
+115/138 après, et 130/153 avec les nouveaux ; aucun perdu — tout mutant attrapé avant (machine ou
+séquences figées) l'est après ; M36 et M864 survivent des deux côtés. M761 et M831, dilués à 60
+séquences depuis I5R : à 500, 2/2 avant comme après.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

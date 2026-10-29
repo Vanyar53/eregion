@@ -2016,8 +2016,8 @@ MUTANTS += [
 MUTANTS += [
     ("M900", "a block that could not be put back marked alerted before its card (L1F, L1)", R,
      ('        outcome = "failed"\n    _alert(_alert_id(vm, rid, ip),',
-      "        # silence (L1F, invariant machine).\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"),
-     ('        outcome = "failed"\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n'
+      "        # silence (L1F, invariant machine).\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"),
+     ('        outcome = "failed"\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n'
       "    _alert(_alert_id(vm, rid, ip),",
       "        # silence (L1F, invariant machine).\n        pass\n")),
     ("M901", "an isolation that could not be put back marked alerted before its card (L1F)", R,
@@ -2029,8 +2029,8 @@ MUTANTS += [
     ("M902", "a block gone in human_only marked alerted before its card (L1F, L1)", R,
      ('        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n'
-      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n        report.append(",),
-     ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"
+      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n        report.append(",),
+     ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"
       '        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n        report.append(',)),
 ]
@@ -4428,7 +4428,9 @@ _RB1 = " ".join([f"{_I5R}{t}" for t in (
     "a_promotion_leaves_the_next_pass_silent_and_writes_nothing",
     "a_nic_left_to_a_perimeter_someone_turned_is_open",
     "a_perimeter_gone_after_its_uncovered_card_is_acknowledged_is_put_back_or_said",
-    "an_uncovered_card_is_said_again_when_the_uncovered_nics_change")] + ["tests/unit/test_reassert.py"])
+    "an_uncovered_card_is_said_again_when_the_uncovered_nics_change",
+    "a_drift_card_acknowledged_is_said_again_only_when_it_worsens",
+    "the_machine_finds_a_perimeter_deleted_after_its_card_is_acknowledged")] + ["tests/unit/test_reassert.py"])
 MUTANTS += [
     ("M1620", "a merged block put back on its perimeter alone: the VM's rule left turned (RB1)", R,
      '    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]\n',
@@ -4520,12 +4522,26 @@ MUTANTS += [
     ("M1646", "the uncovered card checked after the drift marker: an episode before it silences it, and the "
               "next disappearance (RB1, third review)", R,
      '        if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):\n',
-     '        if b.get("uncovered_said") != nics:\n'),
+     '        if b.get("uncovered_said") != nics:\n',
+     "EQUIVALENT: since the 4th review a drift worse than what its card said is said again — for a "
+     "perimeter alone, any later disappearance adds a rule gone, so the marker left set changes nothing"),
     ("M1647", "the uncovered card said once for ever, whatever the NICs it doesn't cover become (RB1, third review)",
      R, '        if b.get("uncovered_said") != nics:\n            reason =',
      '        if not b.get("uncovered_said"):\n            reason ='),
 ]
 TESTS.update({f"M{n}": _RB1 for n in range(1645, 1648)})
+# RB1, fourth review: a drift card said again when it worsens, never when it doesn't. M1648–M1649.
+MUTANTS += [
+    ("M1648", "a drift worse than its card never said again: acknowledged, a perimeter deleted after it "
+              "opened the VM in silence (RB1, 4th review)", R,
+     "    if not isinstance(said, dict):\n        return False\n    return bool(",
+     "    return False\n    return bool("),
+    ("M1649", "a drift card said again at every pass, the same or better: one card per disappearance no more "
+              "(RB1, 4th review)", R,
+     '    return bool((said.get("blocked") and not now["blocked"])\n',
+     '    return bool(True or (said.get("blocked") and not now["blocked"])\n'),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1648, 1650)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

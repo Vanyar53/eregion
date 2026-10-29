@@ -1608,6 +1608,30 @@ modes, et une seconde disparition après la repose) et
 `test_an_uncovered_card_is_said_again_when_the_uncovered_nics_change`, qui échouent sur le code
 d'avant ; mutants M1645–M1647.
 
+**Quatrième relecture : ce qui empire après un acquittement.** L'assouplissement de L1 (une carte
+de dérive acquittée vaut dite tant que Glorfindel n'a réécrit aucune règle du blocage) laissait
+passer un vrai silence, introduit par RB1. Une entrée fusionnée sur web2, ses règles propres
+passées en allow : en `human_only`, « … l'IP reste bloquée sur web-nic par la règle de périmètre »
+— vrai alors ; acquittée, puis la paire de périmètre supprimée par un tiers : `drift_alerted_at`
+encore posé (l'entrée jamais relue entière), chaque passe muette, l'attaquant sur web2. Sur la
+base, la carte disait « n'est plus bloquée », que rien ne contredisait ensuite. **Correctif**
+(`reassert.py`, `_situation`, `_worse`) : l'entrée garde ce que la carte a dit (`drift_said` :
+les règles manquantes, les cartes tenues, ouvertes, inconnues, l'IP bloquée ou non) ; la carte
+est redite quand c'est pire — une carte tenue devenue ouverte ou inconnue, une règle de plus qui
+manque, l'IP plus bloquée ; pareil ou mieux, rien n'est redit (une carte par disparition). Une
+entrée d'une version d'avant, sans ce qui a été dit, se tait comme avant. **L'oracle** : l'exemption
+de L1 ne vaut que tant que les règles de l'entrée sur Azure, paire de périmètre comprise, sont
+identiques à un instantané pris à l'acquittement ; `_block_vanished` compte la paire de périmètre
+d'une entrée fusionnée. La règle `operator_acknowledges` tire son indice avant de lire les cartes
+en attente, avec des bornes fixes : tiré parmi elles, il changeait d'une relecture à l'autre de la
+même séquence (Hypothesis : « FlakyStrategyDefinition », graine 1). Séquences
+`test_a_drift_card_acknowledged_is_said_again_only_when_it_worsens` (la paire supprimée : redite ;
+rien, ou mieux : rien) et `test_the_machine_finds_a_perimeter_deleted_after_its_card_is_acknowledged`
+(par les règles de la machine, L1) ; les deux cas « pire » échouent sur le code d'avant. Mutants
+M1648 (jamais redite) et M1649 (redite à chaque passe) ; M900 et M902 suivent la ligne du marqueur ;
+M1646 devient équivalent (une disparition après la carte « ne couvre pas » ajoute toujours une
+règle manquante : elle est redite par `_worse`, le marqueur laissé ou non).
+
 **Le déblocage d'une VM supprimée (RB1).** Ce qu'il laisse porte sa commande
 (`az network nsg rule delete -g … --nsg-name … -n …`) et le dit redit tant que la règle reste — la
 retirer met fin à l'`unblock_partial`, le déblocage suivant aboutit. L'entrée perdue, un blocage de
@@ -1620,7 +1644,7 @@ direction libère le sien.
 **Séquences figées** (`test_invariant_regressions.py`) : les séquences de RB1, relectures
 comprises ; vingt cas échouent sur `main` pour la raison dite, les autres (un périmètre contourné
 sur le port de la menace, un périmètre d'une autre VM au déblocage, l'entrée gardée) gardent des
-mutants ; tests de `test_reassert.py`. Mutants M1620–M1647 attrapés par elles ; M1599 réaligné. Conséquence
+mutants ; tests de `test_reassert.py`. Mutants M1620–M1649 attrapés par elles (M1646 équivalent) ; M1599 réaligné. Conséquence
 voulue de la relecture après repose : un blocage tenu par la quarantaine dont les règles, sur le
 NSG propre de la carte (hors de la carte jusqu'à la levée), ont disparu n'est plus dit « reposé » —
 la repose écrit sur le NSG qui gouverne la carte, celles-là manquent toujours : `partial`, dit.
@@ -1649,7 +1673,15 @@ séquences figées ; M1645 par la machine seule, 0/2 à 500 (la séquence n'est 
 à 500 sur huit graines et 2 000 sur 322, verts, la règle d'acquittement comprise ; harnais
 avant/après (60 séquences, deux tours) sur les mutants du déblocage, du périmètre et de la
 réaffirmation : 34 attrapés à chaque tour avant, 35 après, aucun perdu (M13 2/2 → 1/2, M19 et M830
-attrapés à chaque tour après), les vingt-trois nouveaux à chaque tour.
+attrapés à chaque tour après), les vingt-trois nouveaux à chaque tour. Après la quatrième :
+M1620–M1649, M1590–M1599 et M900–M902, 42/42 par leurs séquences figées (M1646 équivalent) ;
+invariants à 500 sur les graines 1, 42, 777, 2718 verts, 2 000 sur 322 vert ; la graine 8675 à 500
+tombe sur I4, un défaut **hors de RB1**, présent sur `main` (1996a49) : rejoué à l'identique sur la
+base, figé en `xfail` strict (`test_a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address` :
+api bloquée, sa règle entrante retournée en allow par un tiers, son IP changée, une nouvelle VM à
+l'ancienne adresse, api bloquée de nouveau — l'opération change les flux de la nouvelle VM ; cause
+supposée, non établie), pour un lot à part. Harnais avant/après (60 séquences, deux tours, mêmes
+modules) : 33 attrapés à chaque tour avant comme après, aucun perdu, les nouveaux à chaque tour.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

@@ -297,15 +297,19 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         return
     if not _missing(verification):
         return
-    if b.get("drift_alerted_at"):
-        return                      # one alert per disappearance (see isolations)
+    said = verification
+    if b.get("drift_alerted_at") and not _worse(b.get("drift_said"), _situation(verification)):
+        # One alert per disappearance (see isolations) — but said again when it worsens: a
+        # NIC held turned open or unknown, a rule more gone. Acknowledged, a card « reste
+        # bloquée » silenced the perimeter's deletion that opened the VM (RB1, 4th review).
+        return
     if b.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
         reason = (_block_drift(ip, vm, verification, again=bool(b.get("reasserted_at")))
                   + f" Glorfindel ne le repose pas : `glorfindel unblock {ip} {rid} --yes` si c'est voulu, "
                   "sinon re-bloquer.")
         _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
-        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
+        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         return
     # A merged entry (RB1): its perimeter AND its VM's placements, each put back — the
@@ -333,6 +337,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
             outcome = "reapplied"
         else:
             say_bypass(vm, rid, after, report, ip=ip, ref=ref)
+            said = after
             reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure ; ses règles réécrites une fois"
                       + (f" (échec : {' ; '.join(errors)})" if errors else "")
                       + ", il ne tient pas en entier — " + _block_drift(ip, vm, after, said=True)
@@ -349,11 +354,30 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         # crash in between (or a full disk on the card) left the marker without the
         # card: every later pass returned on the marker, and the block stayed gone in
         # silence (L1F, invariant machine).
-        _update_block_entry(ref or vm, ip, drift_alerted_at=now)
+        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
 
 
 _SCOPE_WORDS = {"subnet": "règle de périmètre", "vm": "règles de la VM"}
+
+
+def _situation(v: dict) -> dict:
+    """What a block card said (RB1, 4th review): the rules gone, the NICs still held, open,
+    unknown, whether the IP stayed blocked — kept in the entry to tell a worse one."""
+    return {"gone": sorted({str(n) for n in (v.get("missing_rules") or []) + (v.get("held_missing") or [])}),
+            "held": sorted(v.get("held_by_perimeter") or []), "open": sorted(v.get("open_nics") or []),
+            "unsure": sorted(v.get("perimeter_unread") or []), "blocked": v.get("verified") is True}
+
+
+def _worse(said, now: dict) -> bool:
+    """Worse than what the card said: blocked no more, a rule more gone, a NIC more open or
+    unknown. Better or the same: nothing said again. No record (an older entry): as before."""
+    if not isinstance(said, dict):
+        return False
+    return bool((said.get("blocked") and not now["blocked"])
+                or set(now["gone"]) - set(said.get("gone") or [])
+                or set(now["open"]) - set(said.get("open") or [])
+                or set(now["unsure"]) - set(said.get("unsure") or []) - set(said.get("open") or []))
 
 
 def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = False) -> str:

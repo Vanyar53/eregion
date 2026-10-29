@@ -1166,8 +1166,10 @@ class IsolationMachine(RuleBasedStateMachine):
                 or any(entry.get(k) for k in ("partial", "unblock_failed", "unblocking_at"))):
             return False
         where = [(p["nsg_rg"], p["nsg_name"], p["rule"]) for p in entry.get("placements") or [] if p.get("rule")]
-        if not where and entry.get("nsg") and entry.get("rule"):
-            where = [(*entry["nsg"].split("/", 1), entry["rule"])]
+        if entry.get("nsg") and entry.get("rule") and "/" in entry["nsg"] and (
+                not where or entry.get("scoped") is False):
+            # A perimeter alone — or merged with the VM's own block: its pair too (RB1).
+            where.append((*entry["nsg"].split("/", 1), entry["rule"]))
         if not where:
             return False
         from .fake_azure import nsg_id
@@ -1229,12 +1231,12 @@ class IsolationMachine(RuleBasedStateMachine):
             told = {key(e.get("resource_id", "")) for e in escalations.pending()
                     if e.get("action") == "block_suspicious_ip"}
             # A drift card the operator acknowledged (`operator_acknowledges`) stays said
-            # for its episode — one card per disappearance, by design — while Glorfindel
-            # wrote none of the block's rules again since.
+            # for its episode — one card per disappearance, by design — only while the
+            # entry's rules on Azure, its perimeter pair included, are exactly as they were
+            # at the acknowledgement: anything worse since must be said again (RB1, 4th
+            # review — "no rewrite by Glorfindel" let a perimeter deleted after it pass).
             acked = getattr(self, "acked_drift", {})
-            told |= {key(v) for v, at in acked.items()
-                     if not {(e["nsg"], e["rule"]) for e in self.fake.journal[at:] if e.get("op") == "rule.write"}
-                     & self._named_block_rules(v)}
+            told |= {key(v) for v, seen in acked.items() if self._block_rules_now(v) == seen}
             for vm in vanished:
                 assert not self._block_vanished(vm) or key(vm) in told, (
                     f"L1: the block on {vm} vanished from Azure; the reassertion neither put it back nor said so")
@@ -1304,6 +1306,11 @@ class IsolationMachine(RuleBasedStateMachine):
             named |= {(key(nsg_id(*entry["nsg"].split("/", 1))), f"{entry['rule']}{x}".lower())
                       for x in ("", "-out")}
         return named
+
+    def _block_rules_now(self, vm: str) -> dict:
+        """Each rule the VM's block entry names, as Azure has it now (None: absent)."""
+        return {(k, n): copy.deepcopy(self.fake.nsgs.get(k, {}).get("rules", {}).get(n))
+                for k, n in sorted(self._named_block_rules(vm))}
 
     def _no_drift_on_untouched(self, cards_before: set, quiet: set | None, named: dict):
         """I3, a drift that wasn't (RB1, second review): a block whose every rule — as its
@@ -2043,13 +2050,17 @@ class IsolationMachine(RuleBasedStateMachine):
         cards = sorted((e["id"], e.get("resource_id") or "", e.get("reason") or "") for e in escalations.pending()
                        if e.get("action") == "block_suspicious_ip"
                        and (e.get("signal_id") or "").startswith("reassert-"))
+        # Drawn first, with constraints that never depend on the state: what is pending may
+        # differ between two replays of a sequence (the race runner), and Hypothesis calls
+        # a draw that changes with it flaky.
+        pick = data.draw(st.integers(0, 7), label="card acknowledged")
         if not cards:
             return
-        cid, rid, reason = data.draw(st.sampled_from(cards), label="card acknowledged")
+        cid, rid, reason = cards[pick % len(cards)]
         escalations.resolve(cid)
         vm = next((v for v in self.live if key(v) == key(rid)), None)
         if vm and ("disparu" in reason or "a échoué" in reason):
-            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: len(self.fake.journal)}
+            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}
 
     @rule()
     def time_passes(self):

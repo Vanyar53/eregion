@@ -2363,3 +2363,75 @@ def test_an_uncovered_card_is_said_again_when_the_uncovered_nics_change(monkeypa
         assert "db-nic-1, db-nic-2" in card, card
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("then", ["perimeter deleted", "nothing", "better"])
+def test_a_drift_card_acknowledged_is_said_again_only_when_it_worsens(monkeypatch, then):
+    """RB1, fourth review: a merged entry on web2 (one subnet), its own rules turned into
+    allows; in human_only the card says the IP stays blocked on web-nic, by the perimeter
+    — true. The operator acknowledges it; someone deletes the perimeter pair: the attacker
+    reaches web2, and every pass returned on `drift_alerted_at` — silent. The card now
+    keeps what it said, and is said again when it worsens (a NIC held turned open, a rule
+    more gone); the same, or better, says nothing: one card per disappearance."""
+    import shutil
+
+    from glorfindel import escalations
+
+    m = _merged_world(monkeypatch, _net(subnet_nsg=[]))
+    try:
+        rules = m.fake.nsgs[key(_SUBNET)]["rules"]
+        for n in (_WEB2_BLOCK, f"{_WEB2_BLOCK}-out"):
+            rules[n]["access"] = "Allow"
+        m.reassert(Script("human_only", None))
+        (card,) = _cards(m)
+        assert "l'IP reste bloquée sur web-nic" in card, card
+        for e in escalations.pending():
+            escalations.resolve(e["id"])                       # the operator acknowledges it
+        if then == "perimeter deleted":
+            for n in (_PERIMETER, f"{_PERIMETER}-out"):
+                del rules[n]
+        elif then == "better":
+            rules[_WEB2_BLOCK]["access"] = "Deny"               # one of the two set right by hand
+        m.reassert(Script("human_only", None))
+        cards = _cards(m)
+        if then == "perimeter deleted":
+            assert len(cards) == 1 and "n'est plus bloquée" in cards[0] and _PERIMETER in cards[0], cards
+            assert m._attacker_flows(WEB2, None)
+        else:
+            assert not cards, cards
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_the_machine_finds_a_perimeter_deleted_after_its_card_is_acknowledged(monkeypatch):
+    """The same through the machine's rules: L1 holds an acknowledged card for said only
+    while the entry's rules — its perimeter pair included — are as they were when it was
+    acknowledged."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block_perimeter", WEB2, WEB2, None, False),
+         ("block", WEB2, WEB2, None, 22),
+         ("tamper_with_our_rule", "access", (key(_SUBNET), _WEB2_BLOCK)),
+         ("reassert", "human_only", None),
+         ("operator_acknowledges", 0),
+         ("terraform_apply", key(_SUBNET)),
+         ("reassert", "human_only", None))
+
+
+_EDGE = _NSG.format(rg="rg-edge", name="nsg-edge")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "outside RB1, present on main (1996a49): api blocked, its inbound rule turned into an allow by "
+    "someone, its IP changed, a new VM given the old address, then api blocked again — I4: the "
+    "operation on api changes the new VM's flows. Hypothesis, not established: the block written "
+    "again rewrites under its name the rule turned toward the old address, now the new VM's. "
+    "Found by RB1's machine, seed 8675 at 500; for a lot of its own"))
+def test_a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address(monkeypatch):
+    net = _net()
+    net["edge_nsg"] = []
+    _run(monkeypatch, net,
+         ("block_turned_then_reasserted", API, API, None, "vm", 22,
+          (key(_EDGE), "glorfindel-block-192-31-196-7-api-api-nic-c272f2"), "human_only"),
+         ("customer_changes_ip", _nic("rg-edge", "api-nic"), 0, 4),
+         ("create_vm", "northeurope", "rg-app1", "api", None, "Linux"),
+         ("address_reused", API, API, None, False, 22, False, "rg-new", "x", None, "Linux", False))

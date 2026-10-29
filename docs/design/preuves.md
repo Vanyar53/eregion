@@ -1618,7 +1618,12 @@ réaffirmation) : 138 avant (`main`), les mêmes et M1620–M1641 après ; attra
 113/138 avant, 112/138 après, 134/160 avec les nouveaux. Aucun perdu : M10 (un subnet illisible lu
 « sans NSG »), 1/2 avant et 0/2 après à ce budget, remesuré — 1/6 avant, 4/6 après à 60 séquences,
 2/2 des deux côtés à 500 ; M36 et M864 survivent des deux côtés. M761 et M831, dilués à 60
-séquences depuis I5R : à 500, 2/2 avant comme après.
+séquences depuis I5R : à 500, 2/2 avant comme après. Après la seconde relecture : M1620–M1644 et
+M1590–M1599, 35/35 par leurs séquences figées ; invariants à 500 sur les graines 1, 777 et 2718,
+puis 2 000 sur 322, verts ; harnais avant/après (60 séquences, deux tours) sur les mutants des
+modules touchés (déblocage, périmètre, réaffirmation et ce qui en est sorti) : 32 attrapés à chaque
+tour avant comme après, aucun perdu (M830, 1/2 avant, ne l'est plus qu'aux séquences figées), et
+les vingt nouveaux à chaque tour.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

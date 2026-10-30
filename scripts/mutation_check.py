@@ -4830,6 +4830,49 @@ TESTS["M1575"] = "tests/unit/test_glorfindel.py"
 TESTS.update({mid: "tests/unit/test_azure_roles.py" for mid in ("M1576", "M1577", "M1579")})
 TESTS["M1578"] = "tests/unit/test_makefile_bench.py"
 
+# ID1 (#281): the bench's diagnostic settings, off by default, switched by a variable, the
+# categories the rules read and no other, the Make targets that touch them alone. M1790–M1799,
+# measured by tests/unit/test_bench_logs.py (and infra/terraform/tests/, by hand).
+_TFV = "infra/terraform/variables.tf"
+_TFA = "infra/terraform/activity_log.tf"
+_TFE = "infra/terraform/entra_logs.tf"
+MUTANTS += [
+    ("M1790", "the subscription's Activity Log sent by default (ID1)", _TFV,
+     '  description = "Journal d\'activité de l\'abonnement (catégorie Administrative) → le workspace du banc : '
+     'la table AzureActivity des règles d\'AL1. Droit : écrire un paramètre de diagnostic sur l\'abonnement '
+     '(Monitoring Contributor). Défaut false."\n  type        = bool\n  default     = false\n',
+     '  description = "Journal d\'activité de l\'abonnement (catégorie Administrative) → le workspace du banc : '
+     'la table AzureActivity des règles d\'AL1. Droit : écrire un paramètre de diagnostic sur l\'abonnement '
+     '(Monitoring Contributor). Défaut false."\n  type        = bool\n  default     = true\n'),
+    ("M1791", "the whole tenant's Entra logs sent by default (ID1)", _TFV,
+     'pas un rôle Azure. Défaut false."\n  type        = bool\n  default     = false\n',
+     'pas un rôle Azure. Défaut false."\n  type        = bool\n  default     = true\n'),
+    ("M1792", "an ephemeral stack poses the subscription's setting too: a second one, duplicate rows (ID1)",
+     _TFA, '  activity_log_enabled = var.activity_log_enabled && local.instance == "default"',
+     "  activity_log_enabled = var.activity_log_enabled"),
+    ("M1793", "an ephemeral stack poses the tenant's setting too (ID1)",
+     _TFE, '  entra_logs_enabled = var.entra_logs_enabled && local.instance == "default"',
+     "  entra_logs_enabled = var.entra_logs_enabled"),
+    ("M1794", "Defender's alerts sent with the Activity Log, read by no rule (ID1)", _TFA,
+     '  enabled_log {\n    category = "Administrative"\n  }\n',
+     '  enabled_log {\n    category = "Administrative"\n  }\n\n  enabled_log {\n    category = "Security"\n  }\n'),
+    ("M1795", "every user's interactive sign-ins sent, read by no rule, billed per GB (ID1)", _TFE,
+     '  enabled_log {\n    category = "AuditLogs"\n  }\n',
+     '  enabled_log {\n    category = "AuditLogs"\n  }\n\n  enabled_log {\n    category = "SignInLogs"\n  }\n'),
+    ("M1796", "the service principals' sign-ins not sent: entra-sp-unusual-signin blind (ID1)", _TFE,
+     '\n  enabled_log {\n    category = "ServicePrincipalSignInLogs"\n  }\n', "\n"),
+    ("M1797", "make celebrimbor-logs-plan plans the whole bench: a pending drift in the logs' plan (ID1)", MAKE,
+     "plan) $(LOGS_TARGETS)\n", "plan)\n"),
+    ("M1798", "make celebrimbor-logs-up applies without confirmation, plan never read (ID1)", MAKE,
+     "apply$(if $(YES), -auto-approve),plan)", "apply -auto-approve,plan)"),
+    ("M1799", "make celebrimbor-logs-* on an ephemeral instance: a plan that says nothing (ID1)", MAKE,
+     '\t@if [ "$(INSTANCE)" != "default" ]; then \\\n'
+     "\t   echo \"!! $@ : instance '$(INSTANCE)' refusée",
+     '\t@if false; then \\\n'
+     "\t   echo \"!! $@ : instance '$(INSTANCE)' refusée"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_bench_logs.py" for n in range(1790, 1800)})
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -608,9 +608,8 @@ def test_the_disabled_proposal_reads_nothing_of_the_tenant_and_sends_only_what_r
     assert "data \"" not in tf                                   # nothing read of the tenant
     cats = [line.split('"')[1] for line in tf.splitlines() if line.strip().startswith("category")]
     assert cats == ["AuditLogs", "ServicePrincipalSignInLogs"]
-    import yaml
-    cfg = yaml.safe_load((ROOT / "infra/terraform/config.yaml").read_text())
-    assert cfg["entra_logs"] == {"enabled": False}
+    # ID1: switched by a Terraform variable, false by default (tests/unit/test_bench_logs.py).
+    assert "entra_logs_enabled = var.entra_logs_enabled && local.instance == \"default\"" in tf
 
 
 # ── after the 5.5 review (27/10): range M940–M949 ─────────────────────────────

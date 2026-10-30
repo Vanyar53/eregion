@@ -2225,6 +2225,18 @@ reset, levée, isolation, règles retournées, périmètre, réaffirmation) : 15
 tour sur `main` f2b4333, 155/170 après (hors les dix nouveaux). M13 mieux après ; M07, M830 et M26,
 attrapés avant et à moitié ou pas après à 60, remesurés à 500 : 2/2 des deux côtés. Aucun perdu.
 
+**Après la relecture d'I4C.** La levée qui garde le refus total d'une ancienne version réécrivait son
+état avec `placements: []` : la levée suivante ne le lisait plus comme ancien, le refus total restait
+« VM inconnue : laissée » pour toujours. L'état ancien reste ancien ; figé
+(`test_an_older_isolations_kept_deny_all_goes_once_the_turned_rule_is_put_back`, M1970). L'opérateur
+du démontage le masquait : il retire une règle à nom fixe sur un NSG partagé que l'état « ne nomme
+pas » — lu dans l'état écrit par le code, que le défaut avait réécrit. Borne plus étroite proposée
+(non appliquée ici) : « nommé » lu du journal du test (l'état ancien posé par `_legacy_isolation`,
+jamais perdu par le test ni remplacé par une isolation de la VM depuis), ou un contrôle qu'une levée
+partielle d'un état ancien le laisse ancien. `_cuts_all` sert aussi l'isolation réécrite et le
+balayage de la levée : figé (`test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind`,
+M1971).
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

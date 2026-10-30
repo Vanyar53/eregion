@@ -2707,8 +2707,22 @@ réancrés sur le nouveau contrôle (le refus d'un autre nom ; `and` changé en 
 refuse suffit, le `-out` disparu tu) ; le filtre « autre nom que le sien » de L1B n'existe plus — sa
 propre paire, entière, n'a rien de disparu, et en partie ne refuse pas.
 
-**Mesures de L1C.** `pytest` complet : 4 577 réussis, 7 sautés, 4 `xfail` (l'I5 de la graine 1618,
-#363, #366, #368 : hors du lot) ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants
+**Après la relecture de L1C.** (1) Dès qu'une demi-paire était lue contournée, seules ses règles
+passaient à ce qui manque : un autre placement de la carte, entièrement parti (sur le NSG du
+sous-réseau, par exemple), était jeté — la carte de dérive disait moins que `main`, et `_worse` pouvait
+juger « pas pire ». Tout ce qui manque sur la carte est dit
+(`test_a_half_bypassed_pair_keeps_another_placement_gone_on_the_nic`, M2236). (2) Deux demi-paires
+(premier nom et `-b-`) ou deux placements sur un NSG nommaient deux fois la même allow : dédoublonnée
+dans l'ordre (`test_two_half_pairs_behind_one_allow_name_it_once`, M2237). Les deux tests sont rouges
+sans le correctif. M2232 est réancré. (3) Laissé tel quel : une demi-paire contournée à côté d'un
+placement illisible donne `verified: False` (avant, `None`) — la même préséance que le cas existant,
+une paire entière contournée à côté d'un placement illisible ; la carte de dérive reste prudente.
+Mutants M2230–M2237, M2045 et M2046 : 10/10 par leurs tests à chaque tour (60 séquences, deux tours).
+
+**Mesures de L1C.** `pytest` complet, après la relecture et la fusion de `main` (0.4.9) : 4 651
+réussis, 7 sautés, 5 `xfail` (l'I5 de la graine 1618, #363, #366 deux fois, #368 : hors du lot) ;
+`ruff` propre ; `scripts/mutant_anchors.py` sans faute. Après la relecture, invariants à 500
+séquences sur 31337 et 42, verts. Invariants
 sur l'arbre final : 500 séquences sur les graines 31337, 42, 777, 1, 322, 101, 8675, 555 et 7, puis
 2 000 sur 31337, 42, 777 et 8675, verts. Harnais avant/après (60 séquences, deux tours, `--jobs 4`,
 graine 4242) sur les 85 mutants de la vérification (`verify.py`, `verify_block.py`) et de la

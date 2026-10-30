@@ -12,6 +12,7 @@ from glorfindel.providers.azure.blocks import BlockMixin
 from glorfindel.providers.azure.capabilities import CAPABILITIES as AZURE_CAPABILITIES
 from glorfindel.providers.azure.isolation import IsolationMixin
 from glorfindel.providers.azure.network import NetworkMixin
+from glorfindel.providers.azure.older import OlderIsolationMixin
 from glorfindel.providers.azure.perimeter import PerimeterMixin
 from glorfindel.providers.azure.quarantine import QuarantineMixin
 from glorfindel.providers.azure.readers import ReadersMixin
@@ -32,6 +33,7 @@ class AzureConnector(
     QuarantineMixin,
     IsolationMixin,
     ReleaseMixin,
+    OlderIsolationMixin,
     VerifyMixin,
     BlockMixin,
     VerifyBlockMixin,

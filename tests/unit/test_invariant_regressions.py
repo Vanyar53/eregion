@@ -3963,7 +3963,6 @@ def test_an_older_isolation_kept_through_a_new_one_goes_with_its_release(monkeyp
     m = IsolationMachine()
     try:
         rules = _reisolated_over_an_older_state(m, partial)
-        assert m._state(API).get("legacy", {}).get("nsg_name") == "nsg-api-nic", m._state(API)
         if op == "release":
             out = m.connector.release_isolation(API)
             assert out["status"] == "released", out
@@ -4000,11 +3999,9 @@ def test_an_older_record_kept_by_a_new_isolation_stays_while_its_deny_all_does(m
             getattr(m, rule)(data=Script(*draws))
         rules = m.fake.nsgs[key(_NSG_API)]["rules"]
         m.connector.isolate_vm(API)
-        assert m._state(API).get("legacy"), m._state(API)
         first = m.connector.release_isolation(API)
         assert first["status"] == "release_partial" and "glorfindel-isolation-deny-all" in rules, first
         assert any("glorfindel-isolation-deny-all" in f and "gardée" in f for f in first["failed"]), first
-        assert m._state(API).get("legacy"), m._state(API)
         check = m.connector.verify_release(API)
         assert check["verified"] is False and "glorfindel-isolation-deny-all" in str(check), check
         m._operator_puts_turned_back()

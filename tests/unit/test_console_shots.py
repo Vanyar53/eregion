@@ -197,23 +197,42 @@ def _probes(code: str, tmp_path: Path) -> dict[str, str]:
     return dict(line.split(" ", 1) for line in r.stdout.splitlines() if " " in line) or {"stderr": r.stderr}
 
 
-def test_the_guard_starts_no_program_but_git(tmp_path):
+def test_the_guard_starts_no_program_but_git_reading_its_checkout(tmp_path):
     """The console starts programs (release, reset, restore; git for its commit): under the guard,
-    git only — a program, a shell, an exec, a spawn are refused."""
-    said = _probes("""
-probe("git", lambda: subprocess.run(["git", "--version"], capture_output=True, check=True))
+    the system's git only, ``rev-parse`` or ``describe`` and no option before — git is a C program
+    no Python patch follows (``fetch``, ``ls-remote`` reach the network). A program, a shell, an
+    exec, a spawn, another file named git are refused."""
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    said = _probes(f"""
+import shutil
+probe("git-rev-parse", lambda: subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True))
+probe("git-describe", lambda: subprocess.run(["git", "describe", "--always"], capture_output=True))
+probe("git-version", lambda: subprocess.run(["git", "--version"], capture_output=True))
+probe("git-ls-remote", lambda: subprocess.run(["git", "ls-remote", "origin"], capture_output=True))
+probe("git-fetch", lambda: subprocess.run(["git", "fetch"], capture_output=True))
+probe("git-c", lambda: subprocess.run(["git", "-c", "x=y", "rev-parse", "HEAD"], capture_output=True))
+probe("git-elsewhere", lambda: subprocess.run([{str(fake)!r}, "rev-parse", "HEAD"], capture_output=True))
 probe("python", lambda: subprocess.run([sys.executable, "-c", "pass"], check=True))
 probe("az", lambda: subprocess.check_output(["az", "account", "show"]))
-probe("shell", lambda: subprocess.run("git --version", shell=True, check=True))
+probe("shell", lambda: subprocess.run("git rev-parse HEAD", shell=True, check=True))
 probe("system", lambda: os.system("true"))
 probe("popen", lambda: os.popen("true").read())
 probe("spawn", lambda: os.posix_spawn("/bin/true", ["true"], dict(os.environ)))
 probe("exec", lambda: os.execv("/bin/true", ["true"]))
+probe("exec-git", lambda: os.execv(shutil.which("git"), ["git", "fetch"]))
 """, tmp_path)
-    assert said.pop("git") == "PASSED", said
-    assert said == {k: f"refused console_shots: no program started but git ({v})" for k, v in (
-        ("python", sys.executable), ("az", "az"), ("shell", "a shell"), ("system", "a shell"),
-        ("popen", "a shell"), ("spawn", "/bin/true"), ("exec", "/bin/true"))}
+    assert said.pop("git-rev-parse") == "PASSED" and said.pop("git-describe") == "PASSED", said
+    command = "refused console_shots: git {} refused: rev-parse or describe only"
+    assert said == {
+        "git-version": command.format("--version"), "git-ls-remote": command.format("ls-remote"),
+        "git-fetch": command.format("fetch"), "git-c": command.format("-c"),
+        "exec-git": command.format("fetch"),
+        **{k: f"refused console_shots: no program started but git ({v})" for k, v in (
+            ("git-elsewhere", str(fake)), ("python", sys.executable), ("az", "az"), ("shell", "a shell"),
+            ("system", "a shell"), ("popen", "a shell"), ("spawn", "/bin/true"), ("exec", "/bin/true"))}}
 
 
 def test_the_guard_sends_no_datagram_and_resolves_no_name_off_the_loopback(tmp_path):

@@ -54,6 +54,7 @@ OUT = REPO / "docs" / "images" / "dagorlad"
 MANIFEST = "shots.json"
 MARK = ".dagorlad-sample"          # in the throwaway directory: the sample's sha256
 CONFIG = "glorfindel-config.yaml"   # Glorfindel's configuration, written there from the sample
+GIT_READS = ("rev-parse", "describe")   # what the sample's console may ask git: its checkout
 ZERO_SUBSCRIPTION = "00000000-0000-0000-0000-000000000000"
 WIDTH, HEIGHT = 1440, 900
 BOARD_HEIGHT = 1100
@@ -251,9 +252,12 @@ def loopback_only() -> None:
     asyncio's), a datagram sent to an address (``sendto``, ``sendmsg``), a name resolved
     (``getaddrinfo``, ``gethostbyname``, ``gethostbyname_ex``, ``gethostbyaddr``,
     ``getnameinfo``), a program started (``subprocess.Popen`` and so ``run``, asyncio's, ``os.popen``;
-    ``os.system``, ``os.exec*``, ``os.posix_spawn*``) — but ``git``, which the header asks the
-    commit of and which reaches no network. Open: a C extension that opens its own sockets or
-    starts its own programs, outside Python's modules — none of the console's does."""
+    ``os.system``, ``os.exec*``, ``os.posix_spawn*``) — but the system's git (the one the PATH
+    finds, never another file named git) reading its checkout: ``git rev-parse`` or ``git
+    describe``, no option before the command. The header asks the commit that way; git is a C
+    program no patch here follows, so nothing else of it is let through (``fetch``,
+    ``ls-remote``, ``-c``…). Open: a C extension that opens its own sockets or starts its own
+    programs, outside Python's modules — none of the console's does."""
     real_connect, real_connect_ex, real_getaddrinfo = (socket.socket.connect, socket.socket.connect_ex,
                                                       socket.getaddrinfo)
     real_sendto, real_sendmsg = socket.socket.sendto, socket.socket.sendmsg
@@ -306,26 +310,41 @@ def loopback_only() -> None:
             return real(*args, **kwargs)
         return guarded
 
-    def _program(args, kwargs) -> str:
-        if kwargs.get("shell"):
-            return "a shell"
-        if kwargs.get("executable"):
-            return os.fsdecode(kwargs["executable"])
-        argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
-        return os.fsdecode(argv[0]) if argv else ""
+    git = shutil.which("git")
 
-    def _start(program: str) -> None:
-        if Path(program).name != "git":
+    def _argv(args, kwargs) -> list[str]:
+        if kwargs.get("shell"):
+            return ["a shell"]
+        argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
+        argv = [os.fsdecode(a) for a in argv]
+        if kwargs.get("executable"):
+            argv[:1] = [os.fsdecode(kwargs["executable"])]
+        return argv
+
+    def _start(argv: list[str]) -> None:
+        """The system's git (the one the PATH finds), reading its checkout — ``rev-parse`` or
+        ``describe``, as its first word: no option before it (``-c``, ``-C``, ``--exec-path``),
+        no other command (``fetch``, ``ls-remote`` reach the network). Nothing else."""
+        program = argv[0] if argv else ""
+        found = shutil.which(program) if program and program != "a shell" else None
+        if not (git and Path(program).name == "git" and found
+                and os.path.realpath(found) == os.path.realpath(git)):
             raise PermissionError(f"console_shots: no program started but git ({program})")
+        if len(argv) < 2 or argv[1] not in GIT_READS:
+            raise PermissionError(f"console_shots: git {' '.join(argv[1:2])} refused: "
+                                  f"{' or '.join(GIT_READS)} only")
 
     class Popen(real_popen):
         def __init__(self, args, *rest, **kwargs):
-            _start(_program(args, kwargs))
+            _start(_argv(args, kwargs))
             super().__init__(args, *rest, **kwargs)
 
     def _checked(real, name):
         def guarded(path, *args, **kwargs):     # os.system's is a command line: a shell, refused
-            _start("a shell" if name == "system" else os.fsdecode(path))
+            if name == "system":
+                _start(["a shell"])
+            argv = [os.fsdecode(a) for a in (args[0] if args else [])]
+            _start([os.fsdecode(path), *argv[1:]])
             return real(path, *args, **kwargs)
         return guarded
 

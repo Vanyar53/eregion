@@ -2,17 +2,26 @@ name: canary-azurerm
 
 # Daily: re-checks, on the latest release of each azurerm major line customers run, the
 # Terraform behavior Glorfindel's just-in-time isolation relies on
-# (infra/canary/jit-terraform). Fails if it changed. Needs repository secrets
-# AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID (a
-# principal allowed to create a resource group); WITHOUT them the run FAILS — a canary
-# that stays green while testing nothing is worse than none (third review, T16).
-# Creates only free resources (resource group, VNet, NSG, NICs), deleted at the end.
+# (infra/canary/jit-terraform). Fails if it changed.
 #
-# This job holds a long-lived Azure secret: every action is pinned by commit, and no third
-# party's action runs beside the secret — Terraform comes from HashiCorp's signed apt
-# repository, the publisher the canary trusts anyway since its binary runs with the secret
-# (tests/unit/test_workflows.py). Planned, Jonathan's step: a federated identity (OIDC) in
-# place of the client secret (docs/design/modele-de-menace.md, « La CI et le CD »).
+# No long-lived secret (P-04): the job asks GitHub for a short-lived OIDC token (`id-token:
+# write`, this job's alone) and exchanges it with Entra ID for the principal `eregion-canary`,
+# whose federated credential trusts this repository's main only
+# (repo:Vanyar53/eregion:ref:refs/heads/main). Needs repository SECRETS — never variables, which
+# print in clear in public logs — CANARY_AZURE_CLIENT_ID, CANARY_AZURE_TENANT_ID and
+# CANARY_AZURE_SUBSCRIPTION_ID; WITHOUT them, or off main, the run FAILS — a canary that stays
+# green while testing nothing is worse than none (third review, T16). Jonathan's setup:
+# docs/operations.md, « Le canari azurerm, sans secret ».
+#
+# Least privilege: the principal is Contributor on one group, rg-eregion-canary, created once by
+# Jonathan; the canary creates no group. Each run creates free resources only (VNet, NSG, NICs),
+# named with its run's suffix — the three lines of the matrix run side by side in that group —
+# and deletes them at the end, success or not; never the group.
+#
+# Every action is pinned by commit, and no third party's action runs beside the token —
+# Terraform comes from HashiCorp's signed apt repository, the publisher the canary trusts
+# anyway since its binary runs with the token; the login is the runner's own az, fed the
+# token by curl (tests/unit/test_workflows.py).
 on:
   schedule:
     - cron: "0 6 * * *"
@@ -25,21 +34,29 @@ jobs:
   canary:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
         azurerm: ["~> 3.0", "~> 4.0", "~> 5.0"]
     env:
-      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: "true"
+      # Terraform authenticates with the OIDC token alone, never with the az login below.
+      ARM_USE_CLI: "false"
+      ARM_CLIENT_ID: ${{ secrets.CANARY_AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.CANARY_AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.CANARY_AZURE_SUBSCRIPTION_ID }}
+      CANARY_RESOURCE_GROUP: rg-eregion-canary
     steps:
       - name: Check credentials
         id: creds
         run: |
-          if [ -z "$ARM_CLIENT_ID" ] || [ -z "$ARM_SUBSCRIPTION_ID" ]; then
+          if [ -z "$ARM_CLIENT_ID" ] || [ -z "$ARM_TENANT_ID" ] || [ -z "$ARM_SUBSCRIPTION_ID" ]; then
             echo "::error::Azure secrets not configured — the canary tests nothing."; exit 1
+          elif [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::The canary's federated credential trusts main only, not $GITHUB_REF."; exit 1
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
           fi
@@ -72,14 +89,27 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
           sudo apt-get update -qq && sudo apt-get install -y -qq terraform
           terraform version
-      - name: Azure login
+      # The az CLI the canary uses outside Terraform (the quarantine NSG), logged in with a token
+      # of GitHub's own OIDC endpoint, valid minutes: no secret, no third party's action.
+      - name: Azure login (OIDC)
         if: steps.creds.outputs.ok == 'true'
         run: |
-          az login --service-principal -u "$ARM_CLIENT_ID" -p "$ARM_CLIENT_SECRET" --tenant "$ARM_TENANT_ID" -o none
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::No OIDC endpoint: the job needs id-token: write."; exit 1
+          fi
+          jwt=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                  "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange" \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          if [ -z "$jwt" ]; then
+            echo "::error::GitHub gave no OIDC token."; exit 1
+          fi
+          echo "::add-mask::$jwt"
+          az login --service-principal -u "$ARM_CLIENT_ID" --tenant "$ARM_TENANT_ID" \
+            --federated-token "$jwt" -o none
           az account set --subscription "$ARM_SUBSCRIPTION_ID"
       - name: Run canary
         if: steps.creds.outputs.ok == 'true'
         env:
-          CANARY_SUFFIX: gh${{ github.run_id }}-${{ strategy.job-index }}
+          CANARY_SUFFIX: gh${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
           AZURERM_CONSTRAINT: ${{ matrix.azurerm }}
         run: infra/canary/jit-terraform/run.sh

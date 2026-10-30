@@ -6,6 +6,7 @@ from __future__ import annotations
 from glorfindel.providers.azure.nsg import _describe_shadowing, _rule_name, _shadowing_rules
 from glorfindel.providers.azure.quarantine import _is_quarantine_nsg, PLATFORM_OPEN_NOTE
 from glorfindel.response.ids import _parse_vm_resource_id
+from glorfindel.response.legacy_state import _older_record
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import _held_in_quarantine, _load_isolation_state, _UNKNOWN, StateUnreadable
 
@@ -230,13 +231,15 @@ class VerifyMixin:
                 continue
             still += [f'{t["nic_short"]}:{_rule_name(r)}' for r in self._iso_rules_on(vm_name, t, rules)]
             unknown += self._unattributable_fixed(t, rules)
-        # An older version's single-NSG state names its rules: there, whatever the NSG's
-        # sharing now (its fixed names only count on a dedicated NSG) — the release
-        # deletes them by that record, the verification must look for them too (A0).
-        if "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):
-            l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
+        # An older version's single-NSG record names its rules — its state, or kept by a
+        # later isolation (I4E): there, whatever the NSG's sharing now (its fixed names only
+        # count on a dedicated NSG) — the release deletes them by that record, the
+        # verification must look for them too (A0).
+        older = _older_record(state)
+        if older and not _is_quarantine_nsg(older["nsg_name"]):
+            l_rg, l_name = older["nsg_rg"] or rg, older["nsg_name"]
             rules = self._list_rules(cache, l_rg, l_name)
-            names = {n.lower() for n in state.get("rule_names", [])}
+            names = {n.lower() for n in older["rule_names"]}
             if rules is None:
                 unknown.append(f"{l_name} (état ancien)")
             else:

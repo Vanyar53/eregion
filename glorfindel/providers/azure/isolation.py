@@ -17,6 +17,7 @@ from glorfindel.providers.azure.quarantine import _remember_quarantine_outcome, 
 from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned
 from glorfindel.response.ids import _parse_vm_resource_id
+from glorfindel.response.legacy_state import _kept_legacy
 from glorfindel.response.policy import _ERR_MAX, _first_line, original_unknown_nics, PartialActionError
 from glorfindel.response.state import (
     _load_isolation_state,
@@ -159,7 +160,8 @@ class IsolationMixin:
         # the flat nsg/nsg_scope/rule_names fields keep /api/state + legacy paths working.
         from datetime import datetime, timezone
         first = placements[0]
-        merged = _merge_isolation_placements(_previous_placements(resource_id), placements)
+        previous = _load_isolation_state(resource_id)
+        merged = _merge_isolation_placements(list((previous or {}).get("placements") or []), placements)
         # In our quarantine, its original unknown (Q7, or beside a state that can't be
         # read): its release will ask for the tag — said now, not first then (SEC4b).
         unknown = original_unknown_nics(merged)
@@ -171,6 +173,9 @@ class IsolationMixin:
             "nsg_rg": first["nsg_rg"], "nsg_name": first["nsg_name"], "nsg_scope": first["scope"],
             "rule_names": [p["rule_in"] for p in placements] + [p["rule_out"] for p in placements],
             **({"original_unknown": unknown} if unknown else {}),
+            # An older version's record, its rules still on Azure: kept, never written over —
+            # lost, its deny-all on an NSG shared since was « VM inconnue » for ever (I4E).
+            **_kept_legacy(previous, rg),
         })
 
         out = {
@@ -339,6 +344,7 @@ class IsolationMixin:
             "placements": _merge_isolation_placements(_previous_placements(resource_id), kept),
             "nsg_rg": first["nsg_rg"], "nsg_name": first["nsg_name"], "nsg_scope": first["scope"],
             "rule_names": [p["rule_in"] for p in kept] + [p["rule_out"] for p in kept],
+            **_kept_legacy(_load_isolation_state(resource_id), _parse_vm_resource_id(resource_id)[0]),
         })
         return PartialActionError(
             f"Isolation partielle de {vm_name} : {len(done)}/{total} NIC(s) couverte(s), "

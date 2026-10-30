@@ -13,6 +13,7 @@ from glorfindel.providers.azure.sdk import _enum_text, _is_not_found
 from glorfindel.response.ids import (
     _parse_nsg_resource_id, _parse_vm_resource_id, _same_id, _subscription_of,
 )
+from glorfindel.response.legacy_state import _older_record
 from glorfindel.response.policy import _ERR_MAX, WrongSubscriptionError, _first_line
 from glorfindel.response.state import (
     _clear_block_state,
@@ -69,9 +70,9 @@ class SweepMixin:
         targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
         own_state = _load_isolation_state(resource_id) or {}
         legacy_named: dict[tuple, set] = {}
-        if "placements" not in own_state and own_state.get("nsg_name"):
-            legacy_named[((own_state.get("nsg_rg") or rg).lower(), own_state["nsg_name"].lower())] = {
-                n.lower() for n in own_state.get("rule_names", [])}
+        if older := _older_record(own_state):              # its state, or kept by a later isolation (I4E)
+            legacy_named[((older["nsg_rg"] or rg).lower(), older["nsg_name"].lower())] = {
+                n.lower() for n in older["rule_names"]}
         quarantined = [t0 for t0 in targets if t0.get("quarantine")]
         unreadable += [f'{t0["nic_short"]}: NSG du subnet illisible' for t0 in targets if t0.get("subnet_unreadable")]
         originals: dict[str, str | None] = {}

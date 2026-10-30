@@ -116,7 +116,7 @@ TOGETHER = (
     "test_docs_budget.py", "test_exercise.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
-    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_secrets.py",
+    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_secrets.py", "test_bench_logs.py",
     "test_notify_discord.py", "test_observation.py", "test_orodruin_kill.py", "test_palantir.py",
     "test_pip_audit_issues.py",
     "test_provider_boundary.py", "test_roadmap_discord.py",

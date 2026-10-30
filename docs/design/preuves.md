@@ -2482,7 +2482,7 @@ l'I7 réglé, la machine va plus loin et tombe sur un **U1 présent sur `main` 9
 rule glorfindel-iso-web-web-nic-8b70f2 kept behind a rule turned into an allow (…), cutting
 […/api]: no pending card names it ») — la carte d'orpheline de la posture, pas le chemin de
 l'isolation ; cinq étapes figées en `xfail` strict
-(`test_an_orphan_kept_behind_a_turned_rule_is_said`), à router.
+(`test_an_orphan_kept_behind_a_turned_rule_is_said`), pour #372.
 
 **I4E (30/10, #361) : une nouvelle isolation garde l'état ancien de la VM ; le démontage ne lit plus
 l'état écrit par le code.** Trouvé par la seconde relecture d'I4C. **Le défaut, sur `main` 91dae76** :

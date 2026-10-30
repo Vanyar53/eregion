@@ -233,3 +233,36 @@ def test_a_wire_is_removed_by_its_own_cross_never_by_drawing_it_again():
     add = js[start:js.index("\n}\n", start)]
     assert "already drawn" in add and "splice" not in add
     assert js.count("_on('click', 'unwire', k)") == 2
+
+
+def test_a_target_isolated_now_is_said_on_its_wire(client, monkeypatch):
+    """The run would measure the isolation, not the detection (task B, 30/07)."""
+    base = api.state
+
+    async def isolated():
+        s = await base()
+        return {**s, "resources": [{"resource_id": GONDOLIN, "vm_name": "vm-celebrimbor-gondolin",
+                                    "states": [{"type": "isolated"}]}]}
+    monkeypatch.setattr(api, "state", isolated)
+    w = _plan(client, f"T1110.001@{GONDOLIN}")["wires"][0]
+    assert w["code"] == "" and "isolated_now" in [x["code"] for x in w["warnings"]]
+
+
+def test_a_read_only_deployment_shows_every_target_human_only():
+    """H0: whatever a VM's configured mode, nothing is executed — the card says it."""
+    state = {"read_only": True, "autonomy_modes": {"vm-celebrimbor-gondolin": "non_disruptive"},
+             "discovered_assets": [], "resources": []}
+    card = board.blue_cards([VMS[0]], state, [], bench="celebrimbor")[0]
+    assert card["mode"] == "human_only" and card["read_only"] is True
+    state["read_only"] = False
+    assert board.blue_cards([VMS[0]], state, [], bench="celebrimbor")[0]["mode"] == "non_disruptive"
+
+
+def test_glorfindel_never_names_the_consoles_own_directory():
+    """A request (phase b) and a drill (DG-d) live in the console's own directory, ~/.eregion/,
+    out of ~/.glorfindel/ and runs/: no module of Glorfindel names it — what its decision reads
+    never holds the red side's plan (§7, « Glorfindel reste aveugle »)."""
+    from pathlib import Path
+    import glorfindel
+    named = [p.name for p in Path(glorfindel.__file__).parent.rglob("*.py") if ".eregion" in p.read_text(encoding="utf-8")]
+    assert named == []

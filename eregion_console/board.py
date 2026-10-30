@@ -152,7 +152,7 @@ def expected(e: Experiment, card: dict | None, rules: list[dict], threshold: flo
     else:
         what = "A card to judge; a human acts" + (f" — held: {hold}." if hold else ".")
         short = "card"
-    if e.destructive:
+    if e.destructive is not False:   # destructive, or not declared (A0)
         what += " A restore is never autonomous: at most an isolation and a snapshot, the restore waits for a human."
     return {"summary": f"{seen} · {short}", "rules": sorted(r["name"] for r in detecting),
             "latency_s": latency, "glorfindel": what, "mode": mode}

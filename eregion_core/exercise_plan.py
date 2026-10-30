@@ -158,9 +158,12 @@ def judge(experiment_id: str, target_id: str, target: Target | None, *,
         elif target.name.lower() not in {n.lower() for n in aimed}:
             return v.refuse("no_engine", f"{e.id}'s engine aims at {', '.join(aimed) or 'no VM'}, "
                                          f"not {target.name}")
-    if e.kind == "technique" and e.destructive:
-        v.warnings.append({"code": "typed_name", "text": "destructive: the target's name will be "
-                           "typed to run it, and checked again by Orodruin"})
+    # Destructive, or nobody declared it is not (A0): the name is typed — an unknown is never
+    # taken for harmless, here as in production (check_zone), and DG-b makes this a guard.
+    if e.kind == "technique" and e.destructive is not False:
+        what = "destructive" if e.destructive else "destructiveness not declared"
+        v.warnings.append({"code": "typed_name", "text": f"{what}: the target's name will be typed "
+                           "to run it, and checked by Orodruin"})
     return v
 
 
@@ -170,7 +173,9 @@ def plan(wires: list[tuple[str, str]], targets: dict[str, Target], *,
          scope: Scope | None = None) -> list[Verdict]:
     """Every wire of a request, in the order drawn — the same pair once — and their rank: they
     run one after the other (Jonathan, 30/10). Past Orodruin's ceilings (``CEILING_INJECTIONS``
-    wires at least one injection each, ``CEILING_RUN_S`` in all), a wire is refused."""
+    wires at least one injection each, ``CEILING_RUN_S`` in all), a wire is refused. With today's
+    estimates the time comes first (12 techniques fill 2 h before 20 wires do); the count holds
+    should an estimate shrink."""
     seen: set[tuple[str, str]] = set()
     out: list[Verdict] = []
     rank, total = 0, 0

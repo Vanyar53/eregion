@@ -4168,7 +4168,7 @@ MUTANTS += [
     ("M1986", "a fault allowed on a VM its engine does not aim at (DG-a)", EP,
      "        elif target.name.lower() not in {n.lower() for n in aimed}:\n", "        elif False:\n"),
     ("M1987", "a destructive technique without the name to type (DG-a)", EP,
-     '    if e.kind == "technique" and e.destructive:\n', "    if False:\n"),
+     '    if e.kind == "technique" and e.destructive is not False:\n', "    if False:\n"),
     ("M1988", "Orodruin's ceilings ignored by the plan (DG-a)", EP,
      "            if rank + 1 > CEILING_INJECTIONS or total + estimate > CEILING_RUN_S:\n",
      "            if False:\n"),
@@ -4189,6 +4189,26 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_exercise_plan.py" for n in range(1980, 1989)})
 TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py tests/unit/test_console_exercises.py "
               "tests/unit/test_console_escaping.py" for n in range(1989, 1995)})
+# DG-a, the review of #338 (M2000–M2004): a zone outside the three, a target isolated now, the
+# reader's next page outside ARM, the count ceiling, a read-only deployment on the blue card.
+MUTANTS += [
+    ("M2000", "a zone outside the three (« Production », « prod ») passes: only production refused (DG-a)", EP,
+     "    if not zone.allowed:\n        return v.refuse(\"zone_forbids\"",
+     "    if zone.zone == \"production\" and not zone.allowed:\n        return v.refuse(\"zone_forbids\""),
+    ("M2001", "a target isolated now not said on its wire (DG-a)", BOARD,
+     '    if card.get("holds_now"):\n', "    if False:\n"),
+    ("M2002", "the reader's token follows a next page outside Azure Resource Manager (DG-a)",
+     "eregion_core/inscription.py",
+     '                if not url.startswith(ARM + "/"):\n', "                if False:\n"),
+    ("M2003", "Orodruin's count ceiling dropped: only the time counts (DG-a)", EP,
+     "            if rank + 1 > CEILING_INJECTIONS or total + estimate > CEILING_RUN_S:\n",
+     "            if total + estimate > CEILING_RUN_S:\n"),
+    ("M2004", "a read-only deployment's target card shows its configured mode (DG-a)", BOARD,
+     '            "mode": "human_only" if state.get("read_only") else modes.get(',
+     '            "mode": modes.get('),
+]
+TESTS.update({f"M{n}": "tests/unit/test_exercise_plan.py" for n in (2000, 2002, 2003)})
+TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py" for n in (2001, 2004)})
 
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake

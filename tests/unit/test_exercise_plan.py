@@ -152,11 +152,11 @@ def test_the_bench_vms_are_read_page_after_page_in_the_benchs_groups_only():
     pages = {
         f"{ARM}/subscriptions/s/resourcegroups": {
             "value": [{"name": "rg-celebrimbor", "tags": {"eregion-target": "celebrimbor"}}],
-            "nextLink": "next-rgs"},
-        "next-rgs": {"value": [{"name": "rg-prod", "tags": {}}]},
+            "nextLink": f"{ARM}/next-rgs"},
+        f"{ARM}/next-rgs": {"value": [{"name": "rg-prod", "tags": {}}]},
         f"{ARM}/subscriptions/s/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines": {
-            "value": [{"id": vm + "vm-a", "name": "vm-a", "tags": {"eregion-zone": "bench"}}], "nextLink": "next-vms"},
-        "next-vms": {"value": [{"id": vm + "vm-b", "name": "vm-b"}]},
+            "value": [{"id": vm + "vm-a", "name": "vm-a", "tags": {"eregion-zone": "bench"}}], "nextLink": f"{ARM}/next-vms"},
+        f"{ARM}/next-vms": {"value": [{"id": vm + "vm-b", "name": "vm-b"}]},
     }
 
     def get(url, headers=None, params=None, timeout=None):
@@ -177,3 +177,45 @@ def test_the_bench_vms_unreadable_raise_never_an_empty_bench():
         reader.vms("s")
     with pytest.raises(ValueError, match="AZURE_SUBSCRIPTION_ID"):
         reader.vms("")
+
+
+def test_a_technique_nobody_declared_non_destructive_asks_for_the_name_too():
+    """A0: an unknown is never taken for harmless — refused in production (check_zone), the name
+    typed on the bench; DG-b makes this a guard on Orodruin."""
+    v = _judge("T1099")
+    assert v.status == "warn" and [w["code"] for w in v.warnings] == ["typed_name"]
+    assert "not declared" in v.warnings[0]["text"]
+
+
+def test_a_zone_outside_the_three_is_refused_whatever_its_spelling():
+    """Azure keeps tag values as written: « Production » or « prod » is no zone — refused."""
+    for zone in ("Production", "prod", "BENCH"):
+        v = _judge("T1110.001", target=_target(GONDOLIN, zone=zone))
+        assert v.code == "zone_forbids", zone
+
+
+def test_the_count_ceiling_holds_should_an_estimate_shrink(monkeypatch):
+    """Today the time ceiling comes first; with more time, the count stops the wires past it."""
+    import eregion_core.exercise_plan as ep
+    monkeypatch.setattr(ep, "CEILING_RUN_S", 10 ** 7)
+    cat = _cat(*[Experiment(f"T9{i:03d}", "technique", "x", "azure_vm", "implemented", False, "atomic")
+                 for i in range(CEILING_INJECTIONS + 3)])
+    out = ep.plan([(f"T9{i:03d}", GONDOLIN) for i in range(CEILING_INJECTIONS + 3)],
+                  {GONDOLIN.lower(): _target(GONDOLIN)}, catalog=cat, scope=SCOPE)
+    assert [v.order for v in out[:CEILING_INJECTIONS]] == list(range(1, CEILING_INJECTIONS + 1))
+    assert {v.code for v in out[CEILING_INJECTIONS:]} == {"over_cap"}
+
+
+def test_a_next_page_outside_arm_is_refused_and_never_fetched():
+    """N-15's rule for the reader's token: Azure Resource Manager only."""
+    import pytest
+    from eregion_core.inscription import ARM, TagEnrollment
+    asked = []
+
+    def get(url, headers=None, params=None, timeout=None):
+        asked.append(url)
+        return _Resp({"value": [{"name": "rg-celebrimbor", "tags": {}}], "nextLink": "https://elsewhere.example/next"})
+
+    with pytest.raises(RuntimeError, match="outside Azure Resource Manager"):
+        TagEnrollment(credential=_Cred(), get=get).vms("s")
+    assert all(u.startswith(ARM + "/") for u in asked)

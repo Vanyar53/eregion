@@ -307,6 +307,10 @@ class TagEnrollment:
                 url, params = body.get("nextLink") or "", None
                 if not url:
                     return
+                # The token goes to Azure Resource Manager only (N-15's rule): a next page
+                # elsewhere is refused, never followed.
+                if not url.startswith(ARM + "/"):
+                    raise RuntimeError("a listing's next page outside Azure Resource Manager: refused")
 
         out = []
         for rg in pages(f"{ARM}/subscriptions/{subscription}/resourcegroups", _RG_API):

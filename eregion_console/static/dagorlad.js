@@ -113,7 +113,7 @@ function glorfindelCard(g) {
   const live = !g.gate;
   const backends = Array.isArray(g.backends) && g.backends.length ? g.backends.join(', ') : 'no backend';
   return `<div class="gcard">
-    <div><b>GLORFINDEL</b> <span class="${live ? 'r-ok' : 'r-bad'}">● ${live ? `watching · ${Number(w.age_s)}s ago` : 'no live watch'}</span></div>
+    <div><b>GLORFINDEL</b> <span class="${live ? 'r-ok' : 'r-bad'}">● ${live ? `watching${Number.isFinite(Number(w.age_s)) ? ` · ${Number(w.age_s)}s ago` : ''}` : 'no live watch'}</span></div>
     <div class="bmeta">${Number(g.rules)} rules${g.client_rules ? ` (${Number(g.client_rules)} yours)` : ''} · ${esc(backends)} · default ${esc(g.default_mode)}${g.read_only ? ' · read-only' : ''}</div>
     <div class="bmeta">never told what the red side plans</div>
     ${g.gate ? `<div class="err">${esc(g.gate)}</div>` : ''}
@@ -220,10 +220,13 @@ function drawWires() {
 }
 
 // ── The plan ──────────────────────────────────────────────────────────────────────────
-const STATUS = { ok: ['c-ok', 'MAY RUN'], warn: ['c-warn', 'MAY RUN · ⚠'], refused: ['c-bad', 'REFUSED'] };
+const STATUS = { ok: ['c-ok', 'MAY RUN'], warn: ['c-warn', 'MAY RUN · ⚠'], refused: ['c-bad', 'REFUSED'],
+                 unknown: ['c-warn', 'MAY RUN · ?'] };
 function planRow(v) {
   const k = S.wires.findIndex(w => w[0] === v.experiment && same(w[1], v.target));
-  const st = STATUS[v.status] || ['', ''];
+  // A fault whose engine's targets this host cannot read: not a warning, an unknown.
+  const unread = v.status === 'warn' && (v.warnings || []).every(w => w.code === 'engine_unknown');
+  const st = STATUS[unread ? 'unknown' : v.status] || ['', ''];
   const x = v.expected || {};
   const rules = Array.isArray(x.rules) && x.rules.length ? `rule: ${x.rules.join(', ')}` : '';
   const what = v.code

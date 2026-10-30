@@ -1,31 +1,21 @@
+"""An Annatar run's report: ``runs/<run_id>.json``, the run format shared with Gothmog
+(``eregion_core/run_report.py``, C1). Here, only how Annatar prints it."""
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from rich.console import Console
+
+from eregion_core import run_report
 
 console = Console()
 RUNS_DIR = Path("runs")
 
 
-@dataclass
-class RunReport:
-    scenario: str
-    run_id: str
-    mitre: str
-    result: str
-    metrics: dict
-    thresholds: dict
-    checks: dict
-
-    def save(self):
-        RUNS_DIR.mkdir(exist_ok=True)
-        path = RUNS_DIR / f"{self.run_id}.json"
-        with open(path, "w") as f:
-            json.dump(asdict(self), f, indent=2)
-        return path
+class RunReport(run_report.RunReport):
+    def save(self, runs_dir: str | Path | None = None) -> Path:
+        return super().save(RUNS_DIR if runs_dir is None else runs_dir)
 
     def render(self):
         color = "green" if self.result == "PASS" else "red"

@@ -522,6 +522,7 @@ glorfindel memory-stats                         # ChromaDB cycle count
 glorfindel bot                                  # start the interactive Discord bot
 glorfindel dashboard                            # full-screen TUI: resources + feed + escalations
 eregion console [--sections annatar,gothmog]    # web console on http://localhost:7007 (pip install -e '.[console]' from the clone); loopback by default, always a token (drawn at the first start, or EREGION_CONSOLE_TOKEN)
+eregion coverage [--json] [--check]             # the coverage matrix from runs/ (C1): each technique and fault, its last proof and state; --check exits 1 on a regression
 
 # Annatar
 annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
@@ -638,11 +639,12 @@ eregion_console/       → the Eregion console (`eregion console`, docs/design/c
                          (EREGION_CONSOLE_TOKEN, else GLORFINDEL_WARROOM_TOKEN), Glorfindel's API
                          (/api/state, /api/feed WS, /api/config, /api/audit, /api/discovered, /api/pending/rules,
                          /api/autonomy/{vm}, /api/action/{release,revert,restore,ack,approve-rule,approve/<id>,…}),
-                         the injectors' (/api/exercises, /api/campaigns, /api/catalog, /api/channel, GET only),
+                         the injectors' (/api/exercises, /api/campaigns, /api/catalog, /api/coverage, /api/channel, GET only),
                          /api/sections; /atelier and /api/atelier/* redirect
   sections.py          → which sections are active: Glorfindel always, Annatar and Gothmog when this host
                          holds their runs, or as --sections / EREGION_CONSOLE_SECTIONS chooses
-  cli.py               → `eregion console [--host] [--port] [--sections]`
+  cli.py               → `eregion console [--host] [--port] [--sections]`, `eregion coverage [--json] [--check]`
+  coverage.py          → the coverage matrix (C1): per technique and fault, last run, last proof, state, evolution
   static/              → console.js + console.css (the shared header), overview.html, injector.html
                          (Annatar's and Gothmog's pages), exercises.js (what Glorfindel did in an exercise),
                          each page's script as a file (overview.js, glorfindel.js, injector.js: the CSP

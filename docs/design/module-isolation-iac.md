@@ -244,7 +244,7 @@ l'état local). Glorfindel crée le NSG au premier besoin (un par région) dans 
 Terraform reste un renfort optionnel. Repli si l'échange est refusé (Azure Policy, droits) : règles L3.
 
 **Dépendance au provider** : ce comportement est celui d'azurerm 4.81.0. `make canary-jit`
-(`infra/canary/jit-terraform/run.sh`, et chaque semaine en CI : `.github/workflows/canary-azurerm.yml`)
+(`infra/canary/jit-terraform/run.sh`, et chaque jour en CI, sans secret : `.github/workflows/canary-azurerm.yml`)
 le revérifie sur la dernière version du provider et échoue s'il a changé. Premier passage le 07/10 : PASS.
 
 Implémenté (`isolate_vm` / `release_isolation` / vérifications / `reset --from-azure`) ; détails dans

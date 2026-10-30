@@ -3334,7 +3334,6 @@ _S101_NSG = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/netw
 _S101_API2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api"
 
 
-@pytest.mark.xfail(strict=True, reason="L1 outside L2C (to route): present on origin/main ba657a0, without L2C's rule")
 def test_a_block_put_back_on_a_new_vm_stays_said_after_an_acknowledgement(monkeypatch):
     """Seed 101 at 500 sequences on L2C's final code, shrunk: none of L2C's steps nor its
     fault, and it fails as well with glorfindel/ of origin/main (ba657a0) — « L1: the block
@@ -3347,7 +3346,7 @@ def test_a_block_put_back_on_a_new_vm_stays_said_after_an_acknowledgement(monkey
     `verify_block.py` puts the perimeter's absence in `held_missing`, then returns
     `_block_bypassed`, which drops it: the pass sees « bypassed », never « gone »; and the
     perimeter's deletion after the acknowledgement is not said again (`_worse` never
-    reached). Nothing opens; frozen for its own lot."""
+    reached). Nothing opens. Frozen in xfail by L2C; passes since I4C (#344, 91dae76)."""
     _run(monkeypatch, _S101_NET,
          ("address_reused", WEB1, WEB1, None, False, 22, False, "rg-app1", "api", None, "Linux", True, None,
           "human_only"),
@@ -3392,7 +3391,6 @@ _S42_NET = {
     "legacy": None, "data_subnet": None}
 
 
-@pytest.mark.xfail(strict=True, reason="L1 outside L2C (to route): present on origin/main ba657a0, without L2C's rule")
 def test_a_merged_block_whose_perimeter_terraform_removed_is_said(monkeypatch):
     """Seed 42 at 2 000 sequences on L2C's final code, shrunk — then its last step, L2C's
     rule, replaced by a plain pass: it fails the same, and with glorfindel/ of origin/main
@@ -3403,7 +3401,7 @@ def test_a_merged_block_whose_perimeter_terraform_removed_is_said(monkeypatch):
     Cause (established by L2C's review): the merged block's VM rules stand but a customer's
     allow passes them — `verify_block.py` puts the perimeter's absence in `held_missing`,
     then returns `_block_bypassed`, which drops it: the pass sees « bypassed », never
-    « gone ». Nothing opens; frozen for its own lot."""
+    « gone ». Nothing opens. Frozen in xfail by L2C; passes since I4C (#344, 91dae76)."""
     _run(monkeypatch, _S42_NET,
          ("race", WEB1, ("release", "reassert"), 0),
          ("block_perimeter", DB, DB, None, False),
@@ -3840,3 +3838,314 @@ def test_the_nightly_isolation_after_an_address_reused_under_a_turned_rule(monke
           "networkSecurityGroups/nsg-tier", "Linux"),
          ("customer_changes_ip", _nic("rg-app2", "web-nic"), 0, 4),
          ("interrupted_release", WEB1, WEB1, None, 1, "before-crash", False))
+
+
+# ── I4C (#344): what the unblock, the reset and the release keep is said; a lifted perimeter
+# exempts only what it alone closed. The oracle's own checks, on hand-made outcomes (A0). ──
+
+_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+
+
+def test_a_perimeter_lifted_by_a_neighbour_is_said_behind_a_bypass(monkeypatch):
+    """I4C, found by the harness's unmutated run (60 sequences, a seed at random) once
+    perimeter_lifted_beside_a_block made the state common; 20 steps, reduced by hand to 6.
+    A new web on the hub subnet blocked there (its entry holds the perimeter pair), web of
+    rg-app1 too (promoted), then the new web for itself — its rule behind the subnet's
+    allow-ssh at 150: bypassed —, then web of rg-app1 unblocked: the perimeter pair, one for
+    the subnet, goes. The new web's verification said the bypass alone (`shadowed_by`), the
+    pair's disappearance dropped; the reassertion found nothing missing: « L1: the block on
+    …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so »
+    (red on `main` f2b4333). Now the bypass carries what is gone (`held_missing`), and the
+    reassertion says it."""
+    net = _net(subnet_nsg=[_rule("allow-ssh", 150, dict(
+        access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+        destination_port_range="22"))])
+    _run(monkeypatch, net,
+         ("create_vm", "westeurope", "rg-new", "web", None, "Linux"),
+         ("block_perimeter", _NEW_WEB, _NEW_WEB, None, False),
+         ("block_perimeter", WEB1, WEB1, None, True),
+         ("block", _NEW_WEB, _NEW_WEB, None, 22),
+         ("unblock", WEB1, WEB1, None),
+         ("reassert", "non_disruptive", None))
+
+
+def _kept_world(monkeypatch, isolate=False):
+    """api on nsg-api-nic of its own (no quarantine), blocked or isolated by rules, its inbound
+    rule turned into an allow by someone (the test's journal, `tampered`), its IP changed, a
+    new VM api in rg-app1 given the old address on the same NSG."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    m.build(_net(api_nic={"own": "dedicated"}))
+    api_nsg = _NSG.format(rg="rg-edge", name="nsg-api-nic")
+    if isolate:
+        assert m.connector.isolate_vm(API)["status"] == "isolated"
+        name = "glorfindel-iso-api-api-nic-c272f2"
+    else:
+        assert m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)["status"] == "blocked"
+        name = _API_BASE
+    m._tamper_with_our_rule(Script("access", (key(api_nsg), name)))
+    m.customer_changes_ip(data=Script(_nic("rg-edge", "api-nic"), 0, 20))
+    m.create_vm(data=Script("northeurope", "rg-app1", "api", api_nsg, "Linux"))
+    assert [n for _k, n in m._kept(API, ("glorfindel-",))] == [name]
+    return m, name
+
+
+@pytest.mark.parametrize("op", ["unblock", "reset", "release"])
+def test_the_machine_refuses_a_rule_kept_unsaid(monkeypatch, op):
+    """I4C: a rule of api kept because it lets the attacker reach the VM that took the old
+    address (taken off, that VM lost the flows, I4B) is said by the code — partial, the rule
+    named, « gardée » —, and the machine checks it now (_kept_said): `unblocked`, `swept`,
+    `released`, or a partial outcome that doesn't name it, are refused. Before, only frozen
+    sequences saw it: I3 at the unblock counts the rules on the VM's addresses alone, at the
+    reset it reads the world without the turned rules."""
+    import shutil
+
+    m, name = _kept_world(monkeypatch, isolate=op == "release")
+    try:
+        c = m.connector
+        out = {"unblock": lambda: c.unblock_ip(ATTACKER, API), "reset": lambda: c.sweep_vm_rules(API),
+               "release": lambda: c.release_isolation(API)}[op]()
+        prefixes = ("glorfindel-iso-",) if op == "release" else ("glorfindel-block-", "glorfindel-iso-")
+        done = {"unblock": ("unblocked", "not_found"), "reset": ("swept",), "release": ("released",)}[op]
+        m._kept_said(API, out, None, op, done, prefixes)                     # the code says it
+        assert out["status"].endswith("_partial"), out
+        for forged in ({"status": done[0], "deleted_rules": [name]},
+                       {"status": out["status"], "failed": [f"{name} : refusée (429)"]}):
+            with pytest.raises(AssertionError, match="I3 \\(said\\)"):
+                m._kept_said(API, forged, None, op, done, prefixes)
+        # Faulted, a partial outcome need not name it — never a success.
+        m._kept_said(API, {"status": out["status"], "failed": ["coupée"]}, ("nsg.get", "always-429"), op, done,
+                     prefixes)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_lifted_perimeter_exempts_only_what_it_alone_closed(monkeypatch):
+    """I4C: the unblock of a VM that lifts a perimeter opens the attacker's flows of the other
+    VMs behind it — I4B exempted every one of them then (`_perimeter_lifted_for`), the wrong
+    delete of another VM's own block in the same operation too. Now only what the lifted rules
+    alone closed (_lifted_alone): Db--01, behind the perimeter only, gets the attacker's flows
+    back when it goes; web of rg-app2, blocked for itself too, gets nothing back — its own
+    block deleted with the perimeter, its flows opened are refused."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    m.build(_net(subnet_nsg=[_rule("allow-in", 1100, dict(
+        access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+        destination_port_range="*"))]))
+    try:
+        c = m.connector
+        assert c.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")["status"] == "blocked"
+        assert c.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)["status"] == "blocked"
+        plain = "glorfindel-block-192-31-196-7"
+        theirs = sorted(n for n in m.fake.nsgs[key(_SUBNET)]["rules"] if n.startswith(plain + "-web-"))
+        assert theirs
+        for wrong in (False, True):
+            flows, _ = m._before()
+            for n in [plain, f"{plain}-out", *(theirs if wrong else [])]:
+                assert c._delete_rule("rg-net", "nsg-subnet", n) is None
+            after = m._flows()
+            assert {f for f in after[DB] - flows[DB] if f[3] == ATTACKER} and m._perimeter_lifted_for(DB)
+            m._attacker_never_cut(DB, flows[DB], after[DB], "I4: probe")                   # exempt
+            opened = {f for f in after[WEB2] - flows[WEB2] if f[3] == ATTACKER}
+            assert m._perimeter_lifted_for(WEB2) and bool(opened) == wrong
+            if wrong:
+                with pytest.raises(AssertionError, match="opened flows of"):
+                    m._attacker_never_cut(WEB2, flows[WEB2], after[WEB2], "I4: probe")
+            else:
+                m._attacker_never_cut(WEB2, flows[WEB2], after[WEB2], "I4: probe")
+                for n in (plain, f"{plain}-out"):                        # put back for the second pass
+                    m.fake.nsgs[key(_SUBNET)]["rules"][n] = m.world_before["nsgs"][key(_SUBNET)]["rules"][n]
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_lifted_perimeter_and_a_leftover_both_taken_back(monkeypatch):
+    """I4C, the machine at 400 (seed 25; 8 steps, 2 left) on the first `_lifted_alone`: web of
+    rg-app2 blocked on its subnet and for itself, its inbound rule turned into an allow, its
+    IP changed, a new VM at the old address; its unblock lifts the perimeter and takes back its
+    own `-out` deny, still aimed at that address — the new VM's way out to the attacker, closed
+    by both, opens; and the turned rule, kept, said, lets the attacker in once the perimeter
+    is gone. Each is the operation's to do (the perimeter lifted, a leftover of another NIC
+    taken back: `reopenable`); `_lifted_alone` reads the world before without the lifted rules
+    as it is and as the VM's own (its neighbours' leftovers out of it), and exempts either."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block_turned_then_reasserted", WEB2, WEB2, None, "both", 22,
+          (key(_SUBNET), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"), "non_disruptive"),
+         ("kept_at_the_lift", WEB2, WEB2, (1, "before-429"), "unblock", 22,
+          (key(_SUBNET), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"), _nic("rg-app2", "web-nic"), 0, 4,
+          "rg-app1", "api", None, "Linux", False))
+
+
+def test_a_rule_kept_out_of_sight_is_never_a_success(monkeypatch):
+    """I4C, the machine at 500 (a seed at random) on its first « said » check: web blocked,
+    its rule turned into an allow, its IP changed, a new VM at the old address on web's NSG;
+    then web's NIC left bare, its original unknown to Glorfindel (state and tag lost). The
+    turned rule lies on that NSG, out of the reset's sight: `swept_partial`, the NIC said
+    (« carte sans NSG, NSG d'origine inconnu ») — never `swept` —, the rule not named. The
+    « said » check names only what lies where the operation looks (I4B's open item: no
+    search of every NSG for a bare NIC at the reset or the release)."""
+    nsg_web = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Network/networkSecurityGroups/nsg-web-nic"
+    net = {**_net(web_nic={"own": "dedicated", "rules": [_rule("allow-https", 100, dict(
+        access="Allow", direction="Inbound", source_address_prefix="Internet", destination_address_prefix="*",
+        destination_port_range="443"))]}),
+        "config": {"rg": "rg-sec", "readable": True, "quarantine": True, "forensic": ["10.9.0.0/16"]},
+        "legacy": ("web-nic", True), "data_subnet": []}
+    _run(monkeypatch, net,
+         ("address_reused_under_a_turned_rule", WEB1, WEB1, (12, "before-429"), None,
+          (key(nsg_web), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"), _nic("rg-app1", "web-nic"), 0, 4,
+          "rg-app2", "api", nsg_web, "Windows"),
+         ("an_old_isolations_vm_goes_away", (key(nsg_web), WEB1), False, True, "rg-app1", "api", "Linux", False),
+         ("bare_with_an_unknown_original", WEB2, WEB2.lower(), None, _nic("rg-app2", "web-nic"), "reset"),
+         ("bare_with_an_unknown_original", WEB1, WEB1.lower(), (13, "before-429"), _nic("rg-app1", "web-nic"),
+          "reset"))
+
+
+def test_a_deleted_vms_release_answers_for_what_its_state_recorded(monkeypatch):
+    """I4C, the machine at 500 (seed 555; 28 steps, 5 left): web of rg-app2 put in quarantine,
+    its state lost; then isolated by rules on the subnet's NSG, its rule turned into an allow, its IP changed, a new VM at the old
+    address; the reset keeps the rule, said; then web deleted with its NICs, nothing left
+    recording them, and released: `released`, the turned rule named for its NIC still on the
+    subnet's NSG. As I3 judges a deleted VM's release (only what its state recorded), the
+    « said » check asks only for those rules: no record of the NIC is left to tie the rule to
+    this VM (the release of a gone VM has no `_unnamed_blocks` of its own — an open point)."""
+    ssh = _rule("allow-ssh", 100, dict(access="Allow", direction="Inbound", source_address_prefix="*",
+                                       destination_address_prefix="*", destination_port_range="22"))
+    out = _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                               destination_address_prefix="VirtualNetwork", destination_port_range="*"))
+    lat = _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                             destination_address_prefix="*", destination_port_range="*"))
+    https = _rule("allow-https", 100, dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                                           destination_address_prefix="*", destination_port_range="443"))
+    _run(monkeypatch, _net(quarantine=True, subnet_nsg=[ssh, out, lat], tier_rules=[https, out],
+                           web_nic={"policy": True, "rules": [out, lat]},
+                           db_nic_0={"policy": True, "rules": [ssh]},
+                           db_nic_1={"own": "dedicated", "rules": [ssh, out, lat]},
+                           api_nic={"rules": [ssh]}),
+         ("quarantine_altered_then_reasserted", WEB2, WEB2, None, True, False, "protocol",
+          (key(_NSG.format(rg="rg-app2", name="nsg-glorfindel-quarantine-westeurope")), "glorfindel-quarantine-deny-in"),
+          "human_only", "no"),
+         ("config_changes", {"quarantine": False, "rg": "", "forensic": [], "readable": True}, False),
+         ("kept_at_the_lift", WEB2, WEB2, None, "reset", True,
+          (key(_SUBNET), "glorfindel-iso-web-web-nic-80ab3c"), _nic("rg-app2", "web-nic"), 0, 4,
+          "rg-app1", "api", None, "Linux", True),
+         ("address_reused", WEB2, WEB2, None, False, 22, False, "rg-app1", "web", True, None, "human_only"),
+         ("release", WEB2, WEB2, (12, "before-crash")))
+
+
+_NSG_API = "/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Network/networkSecurityGroups/nsg-api-nic"
+_APP1_API = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+
+
+def _deny_all_world():
+    """api on nsg-api-nic of its own, an older version's isolation there (its fixed-name
+    deny-all, state kept); then blocked, its rule turned into an allow, its IP changed, a
+    new VM api in rg-app1 given the old address and api's NSG."""
+    net = _net(quarantine=True, legacy=("api-nic", True), data_subnet=[
+        _rule("allow-ssh", 100, dict(access="Allow", direction="Inbound", source_address_prefix="*",
+                                     destination_address_prefix="*", destination_port_range="22")),
+        _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                           destination_address_prefix="*", destination_port_range="*"))],
+        api_nic={"own": "dedicated", "policy": True, "rules": [
+            _rule("allow-https", 100, dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                                           destination_address_prefix="*", destination_port_range="443")),
+            _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound",
+                                               source_address_prefix="VirtualNetwork",
+                                               destination_address_prefix="*", destination_port_range="*"))]},
+        db_nic_1={"rules": [_rule("allow-lateral-out", 100, dict(
+            access="Allow", direction="Outbound", source_address_prefix="*",
+            destination_address_prefix="VirtualNetwork", destination_port_range="*"))]})
+    reused = ("address_reused_under_a_turned_rule", API, API, ("nic.get", "always-429"), 22,
+              (key(_NSG_API), "glorfindel-block-192-31-196-7-api-api-nic-c272f2"), _nic("rg-edge", "api-nic"), 0, 4,
+              "rg-app1", "api", _NSG_API, "Linux")
+    return net, [reused]
+
+
+@pytest.mark.parametrize("op", ["release", "reset_from_azure"])
+def test_an_older_isolations_deny_all_holding_back_a_turned_rule_stays(monkeypatch, op):
+    """I4C, the machine at 500 (seed 7; 6 steps, read by hand): api's isolation by an older
+    version (fixed-name deny-all on its own NSG, its state kept), api blocked, its rule
+    turned into an allow, its IP changed, a new VM given the old address and api's NSG — the
+    deny-all cuts it off, the turned rule waits behind it; the new VM's IP changed and it
+    blocked in its turn. The release (and the reset) of api took the deny-all off by its
+    name, unasked: the turned rule let the attacker reach the new VM on 22 — « I4: an
+    operation on …/rg-edge/…/api opened flows of …/rg-app1/…/api » (red on `main` f2b4333,
+    both). The guard's question is asked now (`_held_by_turned`, as every removal by name),
+    and a deny on every address cuts every NIC its NSG governs (`turned._cuts_all`): it
+    stays, said."""
+    net, steps = _deny_all_world()
+    _run(monkeypatch, net, *steps,
+         ("customer_changes_ip", _nic("rg-app1", "api-nic-4"), 0, 4),
+         ("address_reused_under_a_turned_rule", _APP1_API, _APP1_API, None, 22,
+          (key(_NSG_API), "glorfindel-block-192-31-196-7-api-api-nic-4-679cdb"), _nic("rg-app1", "api-nic-4"), 0, 4,
+          "rg-app1", "web"),
+         (op, API, API, None))
+
+
+def test_an_older_isolations_kept_deny_all_goes_once_the_turned_rule_is_put_back(monkeypatch):
+    """I4C, the review: the release that keeps an older version's deny-all (above) rewrote its
+    state with `placements: []`, a key such a state never had — the next release no longer read
+    it as an older version's (`"placements" not in state`), nor did `_legacy_claimed` tie the
+    deny-all to api: « VM inconnue : laissée », for ever, api cut off until a reset. The turned
+    rule put back by the operator, as the card asks, the next release takes the deny-all off."""
+    import shutil
+
+    net, steps = _deny_all_world()
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(net)
+        for rule, *draws in [*steps,
+                             ("customer_changes_ip", _nic("rg-app1", "api-nic-4"), 0, 4),
+                             ("address_reused_under_a_turned_rule", _APP1_API, _APP1_API, None, 22,
+                              (key(_NSG_API), "glorfindel-block-192-31-196-7-api-api-nic-4-679cdb"),
+                              _nic("rg-app1", "api-nic-4"), 0, 4, "rg-app1", "web")]:
+            getattr(m, rule)(data=Script(*draws))
+        rules = m.fake.nsgs[key(_NSG_API)]["rules"]
+        first = m.connector.release_isolation(API)
+        assert first["status"] == "release_partial" and "glorfindel-isolation-deny-all" in rules, first
+        assert any("glorfindel-isolation-deny-all" in f and "gardée" in f for f in first["failed"]), first
+        m._operator_puts_turned_back()
+        again = m.connector.release_isolation(API)
+        assert again["status"] == "released", again
+        assert not [n for n in rules if n.startswith("glorfindel-isolation")], sorted(rules)
+    finally:
+        m.teardown()
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind(monkeypatch):
+    """I4C, the review: `_aims_elsewhere` counts an isolation's deny on every address
+    (`turned._cuts_all`), and the isolation written again asks the guard for it too. Today's
+    isolation addresses the NIC's IPs (`_scope_to_nic`, L24): `*` is what a version before
+    L24 wrote on an NSG that governed the VM alone — written here by hand, as it left it. api
+    isolated so, blocked, its block rule turned into an allow, its IP changed, a new VM at the
+    old address on api's NSG — cut off by the deny-all, the turned rule waiting behind.
+    Isolated again, api leaves that pair as it is, said (`left_rules`), and writes under the
+    NIC's second name; rewritten in place, the deny-all came off the new VM, which the
+    turned rule opened."""
+    import shutil
+
+    nsg = _NSG.format(rg="rg-edge", name="nsg-api-nic")
+    iso = "glorfindel-iso-api-api-nic-c272f2"
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(api_nic={"own": "dedicated"}))
+        m.isolate(data=Script(API, API, None))
+        rules = m.fake.nsgs[key(nsg)]["rules"]
+        rules[iso].update(destination_address_prefix="*", destination_address_prefixes=None)
+        rules[f"{iso}-out"].update(source_address_prefix="*", source_address_prefixes=None)
+        m.block(data=Script(API, API, None, 22))
+        m._tamper_with_our_rule(Script("access", (key(nsg), _API_BASE)))
+        m.customer_changes_ip(data=Script(_nic("rg-edge", "api-nic"), 0, 20))
+        m.create_vm(data=Script("northeurope", "rg-app1", "api", nsg, "Linux"))
+        out = m.connector.isolate_vm(API)
+        assert iso in rules and rules[iso]["destination_address_prefix"] == "*", rules.get(iso)
+        assert any(iso in str(x) for x in out.get("left_rules") or []), out
+        assert "glorfindel-iso-api-api-nic-b-c272f2" in rules, sorted(rules)
+        m.never_more_open_than_designed()
+    finally:
+        m.teardown()
+        shutil.rmtree(m.home, ignore_errors=True)

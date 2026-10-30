@@ -30,9 +30,11 @@ log = logging.getLogger(__name__)
 
 def _missing(verification: dict) -> bool:
     """Rules gone: the check fails on them — or holds only thanks to the quarantine while
-    the block's own rules are gone (`held_missing`, A0)."""
+    the block's own rules are gone (`held_missing`, A0) — or fails on a bypass while some
+    are gone too (`held_missing` next to `shadowed_by`: a merged perimeter's pair, I4C)."""
     return (verification.get("verified") is False and bool(
-        verification.get("uncovered_nics") or verification.get("missing_rules"))) or bool(
+        verification.get("uncovered_nics") or verification.get("missing_rules")
+        or verification.get("held_missing"))) or bool(
         verification.get("verified") is True and verification.get("held_missing"))
 
 

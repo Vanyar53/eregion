@@ -640,7 +640,9 @@ eregion_console/       → the Eregion console (`eregion console`, docs/design/c
                          (EREGION_CONSOLE_TOKEN, else GLORFINDEL_WARROOM_TOKEN), Glorfindel's API
                          (/api/state, /api/feed WS, /api/config, /api/audit, /api/discovered, /api/pending/rules,
                          /api/autonomy/{vm}, /api/action/{release,revert,restore,ack,approve-rule,approve/<id>,…}),
-                         the injectors' (/api/exercises, /api/campaigns, /api/catalog, /api/coverage, /api/channel, GET only),
+                         the injectors' (/api/exercises, /api/campaigns, /api/catalog, /api/coverage, /api/channel, GET only;
+                         Dagorlad's one write, POST /api/dagorlad/requests: a request for Orodruin in the console's own
+                         directory, carried by `make orodruin-exercise REQUEST=<id>` — never a launch, DG-b),
                          /api/sections; /atelier and /api/atelier/* redirect
   sections.py          → which sections are active: Glorfindel always, Annatar and Gothmog when this host
                          holds their runs, or as --sections / EREGION_CONSOLE_SECTIONS chooses
@@ -796,7 +798,7 @@ A claim such as "the VM is isolated" must be true, not likely. Each layer of evi
 
 ```mermaid
 flowchart BT
-    U["Unit tests<br/>~3,000, 1 min"]
+    U["Unit tests<br/>~4,500, 3 min"]
     I["Property-based invariants<br/>in-memory Azure, a moving world,<br/>faults, two writers at once"]
     M["Mutation check<br/>real past bugs re-injected"]
     L["Cross-process locks<br/>real flock"]
@@ -828,7 +830,7 @@ flowchart BT
 ```bash
 make install          # the locked dependencies, hashes checked (requirements/dev.txt) — as CI and the image
 pytest
-# ~3,000 tests (about a minute) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
+# ~4,500 tests (about three minutes) — 0 Azure calls, 0 LLM calls, 0 writes to ~/.glorfindel
 GLORFINDEL_INVARIANT_EXAMPLES=5000 pytest tests/unit/test_invariants.py   # deep run (~8 min)
 python scripts/mutation_check.py --examples 500 --rounds 2                # measure the invariants
 ```

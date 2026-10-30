@@ -125,8 +125,26 @@ def _turned_guard(network, nsgs: list):
         cut = [{"ip": ip, "nic_id": holders[ip]} for ip in ips
                if ip in holders and holders[ip] != own.rstrip("/").lower()
                and (nic_nsg.get(holders[ip]) == k or nic_subnets.get(holders[ip], set()) & subnets)]
+        if _cuts_all(rule):
+            # I4C: an isolation's deny on every address cuts every NIC its NSG governs — a
+            # VM given that NSG and an old address since: one of our turned rules waiting
+            # behind for it keeps the deny too (the machine, seed 7 at 500).
+            mine = {o.rstrip("/").lower() for o in (own, *mates) if o}
+            cut += [{"ip": ip, "nic_id": nid} for ip, nid in holders.items()
+                    if nid not in mine and (nic_nsg.get(nid) == k or nic_subnets.get(nid, set()) & subnets)]
         return _behind_turned(cut, side, turned, nic_nsg, nic_subnets)
     return why
+
+
+def _cuts_all(rule) -> bool:
+    """An isolation's deny on every address of its own side (`*`, as an older version's
+    fixed-name rules, or ours on an NSG that governed this VM alone): it cuts every NIC
+    its NSG governs. Never a block's: on `*`, that is the perimeter, an operator's
+    subnet-wide decision its unblock lifts on purpose (I4B)."""
+    name = (getattr(rule, "name", "") or "").lower()
+    if name.startswith("glorfindel-block-") or _enum_text(getattr(rule, "access", "")) != "deny":
+        return False
+    return any(v.strip().lower() in ("*", "any", "0.0.0.0/0") for v in _side_values(rule) or ["*"])
 
 
 def _held_by_turned(network, cache: dict, nsg_rg: str, nsg_name: str, name: str, nic_id: str,
@@ -190,7 +208,8 @@ def _aims_elsewhere(rule, own_ips) -> bool:
     own = {ip.strip().lower() for ip in own_ips or [] if ip}
     values = [v.strip().lower() for v in _side_values(rule)]
     if _enum_text(getattr(rule, "access", "")) == "deny":
-        return any(v not in own and v not in ("*", "any") for v in values)
+        # An isolation's deny on every address cuts every NIC behind its NSG (I4C).
+        return any(v not in own and v not in ("*", "any") for v in values) or _cuts_all(rule)
     return any(v not in own for v in values or ["*"])
 
 

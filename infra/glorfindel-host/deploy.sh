@@ -123,6 +123,9 @@ build() {
 }
 
 start() {
+  # Created as the operator before compose mounts them: left to docker, they would be root's,
+  # and the console could not write its requests (DG-b), nor the watch its index (IA0).
+  mkdir -p "$HOME/.eregion/analysis" "$HOME/.eregion/console/requests"
   docker compose --profile bot up -d watch war-room bot
 }
 

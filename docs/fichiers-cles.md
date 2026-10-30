@@ -302,7 +302,16 @@ eregion_core/experiment.py        → validate_experiment() / validate_catalog()
 eregion_core/exercise_plan.py     → Dagorlad (§7 de docs/design/console.md) : un fil peut-il tourner, et sinon
                                     pourquoi — les règles d'Orodruin (périmètre, inscription, zone, règle de
                                     production) plus le catalogue, la watch vivante, le moteur d'une panne, les
-                                    plafonds ; codes stables (REFUSALS) ; pur, la console conseille, Orodruin décidera
+                                    plafonds ; codes stables (REFUSALS) ; pur, la console conseille, Orodruin décide
+eregion_core/exercise_request.py  → DG-b : la demande pour Orodruin (id, heure ; par fil l'expérience, la cible, le
+                                    rang — rien d'autre), son seul lecteur (read : un champ de plus refusé), les noms
+                                    tapés à part (read_typed), le statut publié par Orodruin (read_status) ; écrite par
+                                    la console dans ~/.eregion/console/requests/ (EREGION_REQUESTS_DIR) ; `confirm`, sur
+                                    le poste (make orodruin-exercise) : affichée, les noms tapés
+eregion_core/exercise_runner.py   → DG-b, sur Orodruin : la demande jugée (contrat, codes de la console, nom tapé
+                                    comparé au nom lu) puis ses fils l'un après l'autre (annatar wire, gothmog run
+                                    --request), le plafond sur la demande entière ; statut dans runs/orodruin/requests/
+                                    et le canal (orodruin/…)
 infra/terraform/              → module Celebrimbor : infra de test Azure modulaire, namespacée, jetable.
                                 Celebrimbor = le bâtisseur (annatar=rouge, glorfindel=bleu, celebrimbor=infra).
                                 Pilotée par config.yaml (yamldecode + for_each). instance = WORKSPACE Terraform :

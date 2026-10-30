@@ -2049,7 +2049,7 @@ comme elles le disent — en plus des règles retournées que retiennent nos ref
 retournées qui visent une autre carte (`_turned_aimed_elsewhere`, la convention et le journal du
 test, jamais les marques du code) — jusqu'à ce qu'il n'en reste aucune : remise, une allow redevient un refus des nôtres sur l'adresse d'une autre carte, qui peut à son tour retenir une autre règle retournée (graine 101 à 500 sur le code d'I4B, le trou de l'opérateur et non du code, figée : `test_a_turned_rule_put_back_may_hold_back_another_in_its_turn`). Aucune règle de la machine retirée ni restreinte.
 
-**Limites de l'oracle, relevées par la relecture d'I4B** (pour un lot de suite, non réglées ici) :
+**Limites de l'oracle, relevées par la relecture d'I4B** (réglées par I4C, ci-dessous) :
 la machine ne vérifie pas que ce que le déblocage garde est **dit** — seules les séquences figées le
 voient (`unblock_partial`, la règle nommée) ; et l'exemption « périmètre levé » (`_perimeter_lifted_for`)
 exempte toute ouverture des flux de l'attaquant vers la VM dans l'opération, alors qu'elle pourrait
@@ -2265,7 +2265,8 @@ mutants de la relecture, code final : 8/8, M902 de même ; M13 bruité à 60 (1/
   périmètre dans `held_missing`, puis `if bypass:` renvoie `_block_bypassed`, qui laisse tomber ce
   `held_missing` : la passe ne voit que « contourné », jamais « disparu ». Pour la graine 101, la
   suppression du périmètre après l'acquittement n'est pas redite (`_worse` n'est jamais atteint).
-  Ni l'un ni l'autre n'ouvre rien. Le même mécanisme vaut pour une isolation (graine 42 à 500, la
+  Ni l'un ni l'autre n'ouvre rien. **Réglés par I4C** (#344, 91dae76) : à la fusion de `main`, les
+  deux séquences passent, leur `xfail` est retiré. Le même mécanisme vaut pour une isolation (graine 42 à 500, la
   branche « disparu ») : ses règles retirées sur une carte dont le NSG porte une allow lue avant
   notre deny, la vérification rend « contournée » sans les règles manquantes ; l'oracle de la
   branche compte la carte de contournement, en attendant le lot de suite. Cet assouplissement de
@@ -2277,6 +2278,111 @@ mutants de la relecture, code final : 8/8, M902 de même ; M13 bruité à 60 (1/
   `address_reused_under_a_turned_rule` sur Db--01, puis notre NSG de quarantaine vidé, l'état perdu
   et la réaffirmation hors de `human_only` — elle ouvre db-nic-1 en entrée sur le port 22 (depuis
   10.9.9.9, 203.0.113.7 et 192.31.196.7). Cause non établie.
+
+**I4C (30/10, #344) : ce que le déblocage, le reset et la levée gardent est dit ; l'exemption
+« périmètre levé » resserrée.** Les deux limites relevées par la relecture d'I4B, dans l'oracle
+(A0 : il refuse plus, jamais moins ; aucune règle de la machine retirée ni restreinte).
+(1) **Gardé = dit** (`_kept_said`). Une de nos règles nommée pour une carte de la VM, restée sur Azure
+parce que la retirer changerait les flux d'une autre VM — retournée en allow et visant une autre carte
+(`_turned_aimed_elsewhere`), ou notre refus sur l'adresse d'une autre carte qu'une règle retournée attend
+derrière (`_behind_turned`) —, d'après la convention de nommage et le journal du test (`tampered`),
+jamais les marques du code : le déblocage, le reset et la levée ne disent alors jamais `unblocked`
+(ni `not_found`), `swept`, `released` ; sans panne, leur sortie la nomme, « gardée », quand elle est
+là où l'opération regarde (un NSG qui gouverne une carte de la VM ; partout pour une VM supprimée,
+cherchée sur tous les NSG). Pour deux opérations à la fois, le statut seul. Avant, I3 ne comptait au déblocage que les règles qui touchent
+les adresses actuelles de la VM (`_block_rules_for`), et le reset lisait le monde sans les règles
+retournées (`_world`) : une règle gardée en silence n'était vue que des séquences figées.
+(2) **L'exemption resserrée** (`_lifted_alone`). Un périmètre levé dans l'opération sur un NSG d'une
+autre VM n'exempte plus toute ouverture de ses flux de l'attaquant : seulement ceux que les règles de
+périmètre retirées (le journal du faux : une suppression n'y est écrite que si la règle existait)
+fermaient **seules** — ouverts dans une copie du monde d'avant l'opération (`world_before`, prise par
+`_before`) une fois ces règles ôtées, fermés avec elles ; ce monde lu tel quel ou comme celui de la VM
+(sans les règles bornées nommées pour d'autres cartes, leurs restes que la même opération peut
+reprendre : `reopenable` ; la graine 25 à 400 sur la première version, une règle `-out` de la VM
+débloquée visant l'adresse reprise). Un blocage propre de cette VM qui les fermait aussi les garde
+fermés là, dans les deux lectures : son retrait à tort dans la même opération est vu
+(`test_a_lifted_perimeter_and_a_leftover_both_taken_back`). (Remettre le périmètre
+dans le monde « après », comme la fiche le proposait, ne le voyait pas : le périmètre remis ferme
+aussi ce que le blocage retiré fermait.)
+(3) **La machine atteint ces états** : `kept_at_the_lift` (une VM bloquée ou isolée par règles, une de
+ses règles retournée en allow, l'IP de sa carte changée, une nouvelle VM à l'ancienne adresse, l'état
+de la VM — l'isolation ou l'entrée du blocage — perdu ou non, puis le déblocage, le reset ou la levée,
+sans panne ; isolée en quarantaine, elle n'a pas de règle à elle : bloquée à la place) et
+`perimeter_lifted_beside_a_block` (une VM bloquée sur son subnet, une voisine bloquée pour elle-même,
+puis la première débloquée). Les contrôles de l'oracle eux-mêmes, sur des sorties fabriquées :
+`test_the_machine_refuses_a_rule_kept_unsaid` (déblocage, reset, levée),
+`test_a_lifted_perimeter_exempts_only_what_it_alone_closed`.
+
+**Ce qu'il a trouvé.** D'abord rien : sur `main` f2b4333, l'oracle durci seul puis avec ses deux
+règles, 500 séquences sur les graines 1, 42, 101, 322, 8675 et 31337, puis 2 000 sur 42, 322 et 8675,
+vertes — le code d'I4B dit ce qu'il garde. Puis, aux passages à vide du harnais et sur d'autres
+graines, deux défauts anciens du code (corrigés ici, de la famille) et trois portées de l'oracle à
+régler (réglées sans rien retirer à l'ancien oracle). **La nouvelle règle du périmètre, un défaut ancien
+(L1)**, trouvé par le passage à vide du harnais (60 séquences, une graine au hasard ; 20 étapes, réduites
+à la main à 6) : une VM dont l'entrée tient la paire de périmètre du subnet (RB1) et ses propres règles,
+celles-ci présentes mais contournées (une allow du client à 150 avant elles) ; une voisine débloquée,
+la paire (une pour le subnet) s'en va. La vérification ne rendait que le contournement (`shadowed_by`),
+la disparition de la paire perdue (`held_missing` n'était rendu que d'un blocage vérifié) ; la
+réaffirmation, ne trouvant rien de manquant, ne la reposait ni ne la disait : « L1: the block on
+…/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so ». Corrigé : le
+contournement porte ce qui manque (`verify_block.py`), la réaffirmation le lit comme manquant
+(`_missing`) — elle repose, puis dit ce qui ne tient toujours pas. Figé :
+`test_a_perimeter_lifted_by_a_neighbour_is_said_behind_a_bypass` (rouge sur `main` avec le même
+message) ; mutants M1965 (le contournement sans ce qui manque) et M1966 (la réaffirmation aveugle à
+`held_missing` à côté d'un contournement), 2/2 par la séquence figée ; par la machine seule, 0/3 à
+500 (graines 1, 42, 8675) — l'état reste rare. **Le contrôle « dit », trop large d'abord** (la machine
+à 500, une graine au hasard ; 24 étapes, réduites à 4) : la carte de web laissée nue, son NSG d'origine
+inconnu de Glorfindel (état et tag perdus), la règle retournée gardée sur ce NSG — hors de la vue du
+reset, qui dit `swept_partial` et la carte (« carte sans NSG, NSG d'origine inconnu : la remettre à la
+main ») sans nommer la règle. Pas un défaut du code de ce lot : le point ouvert d'I4B (ni le reset ni
+la levée ne cherchent sur tous les NSG pour une carte nue). Le contrôle du statut reste entier ; le nom
+n'est exigé que là où l'opération regarde. Figé : `test_a_rule_kept_out_of_sight_is_never_a_success`.
+De même pour la levée d'une VM supprimée (graine 555 à 500 ; 28 étapes, 5 restées) : sans état ni
+carte qui la nomme, la règle retournée nommée pour sa carte ne peut lui être rattachée — le contrôle
+ne lui demande que les règles que son état enregistrait, comme I3 juge cette levée
+(`test_a_deleted_vms_release_answers_for_what_its_state_recorded` ; point ouvert : la levée d'une VM
+supprimée n'a pas l'équivalent de `_unnamed_blocks`). **Un défaut ancien du chemin d'isolation (I4)**
+(graine 7 à 500 ; 6 étapes, lues à la main ; rouge sur `main` f2b4333, la levée comme le reset) : une
+isolation d'une ancienne version (son refus total à nom fixe sur le NSG propre d'api, l'état gardé),
+api bloquée, sa règle retournée en allow, son IP changée, une nouvelle VM à l'ancienne adresse sur le
+NSG d'api — coupée par ce refus total, la règle retournée attendant derrière lui. La levée d'api (le
+chemin de l'état ancien ne demandait rien à la garde) et le reset le retiraient : l'attaquant joignait
+la nouvelle VM sur 22 (« I4: an operation on …/rg-edge/…/api opened flows of …/rg-app1/…/api »).
+Corrigé : les deux demandent la garde, qui compte toutes les cartes derrière le refus d'une isolation
+sur `*` (`turned._cuts_all`, jamais un blocage : là, `*` est le périmètre) ; il reste, dit. Figé :
+`test_an_older_isolations_deny_all_holding_back_a_turned_rule_stays` (levée, reset) ; mutants
+M1967–M1969, 2/2 par la séquence figée.
+
+**Mutants M1960–M1964**, par la machine seule (rien dans `TESTS`), 500 séquences, graines 1, 42 et
+8675 : M1960 (une règle gardée n'est pas un échec : le déblocage dit `unblocked`) 3/3 ; M1961 (le
+balayage du déblocage la compte retirée, le prototype de la relecture) 2/3 ; M1962 (le reset se tait,
+`swept`) 3/3 ; M1963 (le balayage de la levée se tait) 2/3 ; M1964 (levant un périmètre, le déblocage
+retire tous les blocages de l'IP sur son NSG, ceux des voisines avec) 3/3. Sur `main` (l'ancien oracle,
+sans les deux règles) : 0/3 chacun. Avec les deux règles mais l'ancien oracle : M1960, M1961 et M1962
+0/3 (le contrôle « dit » les attrape seul), M1963 2/3 (I3 de la levée, `_named_leftovers`, le voyait
+déjà) ; M1964 0/3 sous l'ancienne exemption (le resserrement l'attrape seul). Le même silence aux placements du
+déblocage ou de la levée n'est pas un mutant : leurs balayages retrouvent la règle, demandent la garde
+et la disent — la sortie est la même (mesuré : 0/3 pour l'un et l'autre).
+
+**Mesures d'I4C.** `pytest` complet : 4 157 réussis, 7 sautés, 1 `xfail` (L2, du lot L2Q) ; `ruff`
+propre. Invariants sur l'arbre final : 500 séquences sur les graines 1, 7, 25, 35 à 45, 101, 322, 555,
+8675 et 31337, puis 2 000 sur 42, 322 et 8675, verts. Harnais avant/après (60 séquences, deux tours,
+`--jobs 4`) sur les 170 mutants des modules touchés (déblocage, vérification du blocage, blocage,
+reset, levée, isolation, règles retournées, périmètre, réaffirmation) : 155/170 attrapés à chaque
+tour sur `main` f2b4333, 155/170 après (hors les dix nouveaux). M13 mieux après ; M07, M830 et M26,
+attrapés avant et à moitié ou pas après à 60, remesurés à 500 : 2/2 des deux côtés. Aucun perdu.
+
+**Après la relecture d'I4C.** La levée qui garde le refus total d'une ancienne version réécrivait son
+état avec `placements: []` : la levée suivante ne le lisait plus comme ancien, le refus total restait
+« VM inconnue : laissée » pour toujours. L'état ancien reste ancien ; figé
+(`test_an_older_isolations_kept_deny_all_goes_once_the_turned_rule_is_put_back`, M1970). L'opérateur
+du démontage le masquait : il retire une règle à nom fixe sur un NSG partagé que l'état « ne nomme
+pas » — lu dans l'état écrit par le code, que le défaut avait réécrit. Borne plus étroite proposée
+(non appliquée ici) : « nommé » lu du journal du test (l'état ancien posé par `_legacy_isolation`,
+jamais perdu par le test ni remplacé par une isolation de la VM depuis), ou un contrôle qu'une levée
+partielle d'un état ancien le laisse ancien. `_cuts_all` sert aussi l'isolation réécrite et le
+balayage de la levée : figé (`test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind`,
+M1971).
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

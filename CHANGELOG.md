@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added
+- **The cycle of a session, written** (`docs/sessions.md`, `CLAUDE.md`). How a Claude session finds and talks to the Orchestre, asks for a lot's issue and a mutant range, works on a branch in a worktree, pushes, gets its PR reviewed by Opus 5.5 and merged, and what stays with Jonathan. `scripts/mutant_anchors.py` checks the mutants before a push: every id unique, every replaced text present once.
+
 ## [0.4.7] — 2026-10-30 — "held to proof"
 
 ### Security

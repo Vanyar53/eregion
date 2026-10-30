@@ -68,6 +68,7 @@ elrond ne remplace pas les sessions par composant (`CLAUDE_<RÔLE>.md`, coordonn
 - Chaque fiche indique les sessions concernées.
 - L'exécutant lit les fichiers de rôle de ces sessions, ainsi que leur inbox, en lecture seule.
 - Seule la session principale écrit dans `collab/`. Elle y range les impacts transverses que remontent les exécutants.
+- Les sessions spécialisées font relire et fusionner leurs PR par la session principale, l'Orchestre : [sessions.md](sessions.md).
 
 ## À plusieurs
 

@@ -549,8 +549,10 @@ les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`.
      approuvée dont la vérification échoue, une levée ou un déblocage interrompus. La surveillance
      va de la relecture à la fin de la fenêtre du run, grâce comprise, sans dépasser le début du
      run suivant sur la même VM. Sans fenêtre, elle dure 15 min. Elle s'arrête aussi à la
-     première levée connue de la VM : une action de l'opérateur (`runs/manual_actions.jsonl` :
-     release, reset, unblock) ou la levée de la watch sur un `recovery_complete`.
+     première levée connue de ce confinement sur la VM : une action de l'opérateur
+     (`runs/manual_actions.jsonl`) ou la levée de la watch sur un `recovery_complete`. Une levée
+     ne compte que pour ce qu'elle lève (release : une isolation ; unblock : un blocage ; reset :
+     les deux), et seulement entière : une levée partielle, ou relue fausse, n'arrête rien.
 - **Le temps pour contenir** d'un incident contenu seul va du T0 à la relecture sur Azure. C'est
   `outcome.verified_at`, que `verify_action` pose depuis BL1 après une relecture qui a conclu
   (vraie ou fausse ; jamais sans contrôle, ni quand il a levé) ; pour une ligne d'avant, la ligne du

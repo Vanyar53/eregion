@@ -200,6 +200,15 @@ def test_a_technique_proven_before_and_missed_since_is_regressed(runs):
     assert m["summary"]["techniques"]["regressed"] == ["T1110.001"]
 
 
+def test_a_regression_between_two_runs_of_the_same_second(runs):
+    """Two runs may share a time (a forged or a copied report): the matrix says the
+    regression, never fails on it."""
+    _proven(runs, "r-a", "T1110.001", 3)
+    _attack(runs, "r-b", "T1110.001", 3, detection="missed", latency=None)
+    m = _matrix(runs)
+    assert _row(m, "T1110.001")["state"] in ("regressed", "proven")
+
+
 @pytest.mark.parametrize("since", [
     {"detection": "unknown", "latency": None},                    # nothing measured
     {"detection": "unknown", "latency": None, "without_glorfindel": True},   # not measured, by choice

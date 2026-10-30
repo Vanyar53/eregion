@@ -79,7 +79,8 @@ def regression(runs: list[dict]) -> dict | None:
     good = [r for r in measured if outcome(r) == GOOD[r["kind"]]]
     if not good:
         return None
-    first_bad = next(r for r in measured if r["at"] > good[-1]["at"])
+    # The first failure after the last success, by position (two runs may share a time).
+    first_bad = measured[max(i for i, r in enumerate(measured) if r is good[-1]) + 1]
     return {"held_by": good[-1]["run_id"], "held_at": iso(good[-1]["at"]),
             "lost_by": first_bad["run_id"], "lost_at": iso(first_bad["at"]),
             "last": measured[-1]["run_id"]}

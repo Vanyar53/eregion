@@ -104,20 +104,12 @@ log_retention_days:               30
 perf_sampling_frequency:          10
 disk_write_alert_threshold_bytes: 52428800 # 50 MB/s
 
-# Journal d'activité de l'abonnement → le workspace (activity_log.tf, AL1) : la table
-# AzureActivity que lisent les règles du plan de contrôle de Glorfindel. PROPOSITION,
-# désactivée : à activer avec Jonathan (paramètre de diagnostic d'ABONNEMENT, posé par
-# l'instance canonique seule).
-activity_log:
-  enabled: false
-
-# Journaux d'Entra ID du tenant → le workspace (entra_logs.tf, C2) : les tables AuditLogs
-# et AADServicePrincipalSignInLogs que lisent les règles d'identité de Glorfindel.
-# PROPOSITION, désactivée : à activer avec Jonathan (paramètre de diagnostic du TENANT —
-# il voit toutes les identités du tenant ; licence P1/P2 pour les connexions ; posé par
-# l'instance canonique seule).
-entra_logs:
-  enabled: false
+# Journal d'activité de l'abonnement (activity_log.tf, AL1) et journaux d'Entra ID du
+# tenant (entra_logs.tf, C2) → le workspace : PAS ici. Ce sont des paramètres de
+# l'abonnement et du tenant, une décision de l'opérateur : les variables
+# `activity_log_enabled` et `entra_logs_enabled` (variables.tf), dans terraform.tfvars,
+# désactivées par défaut (ID1 ; docs/operations.md, « Les journaux d'activité et d'Entra
+# ID au banc »). Une clé `activity_log:` ou `entra_logs:` ici n'est plus lue.
 
 # ── Topologies de test (jetables, enabled:false par défaut) ───────────────────
 # PAS un asset : une FORME d'arrangement d'infra montée pour valider un handling

@@ -632,11 +632,20 @@ verrou, chaque reconstruction de l'image prenait la dernière version de tout.
   la même commande donne le même verrou ; la date est dans l'en-tête du fichier.
 - Le premier verrou (26/10) fige la résolution de ce jour-là : celle qu'une reconstruction de
   l'image aurait prise ; la suite de tests passe dessus en 3.11 et en 3.12, et l'image se
-  construit. LiteLLM reste épinglée dans `pyproject.toml` (`==1.86.1`). Il monte nettement de
+  construit. LiteLLM reste épinglée dans `pyproject.toml` (`==1.86.1` alors, `==1.100.4` depuis
+  DEP1, ci-dessous). Il monte nettement de
   versions par rapport aux postes et à la CI d'avant (anthropic 0.104 → 2.3, fastapi 0.136 →
   0.162, langgraph 1.2.1 → 1.2.17) : **le harnais avant le premier redéploiement de H0 sur ce
   verrou n'est pas facultatif** (`infra/glorfindel-host/README.md`, « Redéployer H0 après M-3 »,
   étape 4).
+- DEP1 (#282, 29/10) : litellm 1.86.1 → 1.100.4, à la même date de résolution (`LOCK_DATE`
+  2026-10-26). 1.100.4 déclare en plus `boto3` et `pydantic-settings`. Entrent dans les trois
+  verrous boto3, botocore, s3transfer et jmespath. Dans celui des injecteurs entrent aussi
+  pydantic-settings, python-dateutil et six : chromadb les apportait déjà aux deux autres.
+  python-dateutil redescend de 3.0.0 à 2.9.0.post0 dans `dev.txt` et `glorfindel.txt`, car
+  botocore exige `<3.0.0`, et tzdata, que seule la 3.0.0 tirait, en sort. Le SDK d'AWS est
+  installé par litellm, jamais importé hors d'un adaptateur de fournisseur
+  (`tests/unit/test_provider_boundary.py`, aussi une étape de la CI).
 
 **Mettre à jour** (une PR, jamais directement sur H0) :
 
@@ -680,6 +689,11 @@ n'a pas échoue à l'import, et rien n'est attesté (`harness_attest.py` le dit)
 les PR : le verrou d'abord, attesté et déployé, puis le code qui s'en sert. Le harnais mesure le
 verrou, pas le code : un recul dû au code d'une release qui change aussi le verrou paraît des
 deux côtés (« faux des deux côtés »), dit, jamais refusé.
+
+Avant le harnais, la CI a déjà éprouvé l'appel : dans chaque image, un appel d'outil par litellm,
+répondu par son propre mock, sans réseau (DEP1, « La CI des images » ci-dessous). `import litellm`
+ne suffit pas : 1.106.0 (19/10) s'importait, puis chaque appel échouait (« No module named
+'mcp' »).
 
 Rien n'est lancé, donc rien n'est payé, dans quatre cas :
 - `RUNS` est sous 3, ou `--kinds` est passé avec `--attest` ou `--pass-out` ;
@@ -745,10 +759,16 @@ La CI des images ne rend pas compose : chaque profil est rendu par `make profile
      étape 5). Un test lit chaque `docker run` de ce préflight et exige sa vérification ici ; le
      rendu de compose avec le `.env` de H0 est la seule exception, écrite. `glorfindel-config.yaml.example` passe la lecture stricte
      d'A3 : il est monté en lecture seule là où compose monte la config, puis ouvert avant d'être
-     lu, car un fichier absent se lirait comme une config vide. L'image ne tourne pas en root.
+     lu, car un fichier absent se lirait comme une config vide. Un appel d'outil passe par
+     litellm, comme la décision le fait (`eregion_core/llm_call.py`), répondu par le mock de
+     litellm : ni clé, ni modèle, ni réseau (DEP1). La carte des coûts locale est vérifiée par le
+     message de litellm (« Failed to fetch remote model cost map », derrière un proxy fermé, dans
+     `tests/unit/test_image_check.py`). Sous `--network none`, une version qui changerait ce texte
+     coûterait une lenteur, jamais une fausse réussite. L'image ne tourne pas en root.
    - Annatar (l'image des injecteurs) : `annatar --version` est la version de `pyproject.toml`.
      Annatar et Gothmog importent. Ni Glorfindel, ni la console, ni leurs dépendances (la liste de
-     D1, `scripts/component_check.py`) ne sont dans l'image. Elle ne tourne pas en root.
+     D1, `scripts/component_check.py`) ne sont dans l'image. Le même appel d'outil par litellm
+     (celui du planificateur). Elle ne tourne pas en root.
 
    Toutes les vérifications tournent, même après un échec : le journal dit tout ce qui ne va pas
    d'un coup. Le script sort en 0 si tout passe, en 1 sinon, en 2 si docker manque.
@@ -767,6 +787,7 @@ cache de GitHub (`python3 scripts/image_check.py <image> --build`), puis les ép
 | `requirements/annatar.txt` : une dépendance (click) retirée du verrou | la construction : pip refuse (« all requirements must have their versions pinned ») |
 | `annatar/Dockerfile` : un `COPY` d'un fichier qui n'existe pas | la construction (« not found ») |
 | `glorfindel/Dockerfile` sans `COPY eregion_console/` : l'image se construit | la vérification : « la watch, le bot et la console importent », code 1 (`No module named 'eregion_console'`) |
+| litellm 1.106.0 à la place de 1.100.4 (DEP1, mesuré le 29/10 dans un venv jetable, sans réseau) : `import litellm` passe | la vérification : « un appel d'outil par litellm », code 1 (`No module named 'mcp'`) |
 
 **Durées mesurées** (29/10, poste de l'opérateur, WSL2, image de base déjà tirée, sans le cache de
 GitHub) :
@@ -1036,8 +1057,373 @@ faux `gh` et le faux Discord. Mutants M1160–M1169, M1430–M1439, M1470.
 
 ---
 
+## Les journaux d'activité et d'Entra ID au banc (ID1, #281)
+
+AL1 (le journal d'activité) et C2 (Entra ID) sont livrés en détection seule, mais **aveugles** : leurs
+tables (`AzureActivity`, `AuditLogs`, `AADServicePrincipalSignInLogs`) n'arrivent dans le workspace
+du banc (`law-celebrimbor-amonsul`) que par deux paramètres de diagnostic qui ne vivent pas dans le
+groupe du banc — l'un sur l'**abonnement** (`infra/terraform/activity_log.tf`), l'autre sur le
+**tenant** Entra ID (`infra/terraform/entra_logs.tf`). Le Terraform est prêt, désactivé. Ce qui suit
+se fait avec Jonathan : rien ici n'a été planifié ni appliqué. Les noms sont ceux du banc ; `<…>` est
+à remplacer, rien de réel dans ce dépôt.
+
+### Ce que le Terraform pose, et sous quelle variable
+
+| Variable (`terraform.tfvars`) | Ressource | Catégories | Tables (lues par) |
+|---|---|---|---|
+| `activity_log_enabled = true` | `azurerm_monitor_diagnostic_setting.activity_log` (`diag-celebrimbor-activity`), sur l'abonnement du provider | `Administrative` | `AzureActivity` (les 3 règles d'AL1) |
+| `entra_logs_enabled = true` | `azurerm_monitor_aad_diagnostic_setting.entra` (`diag-celebrimbor-entra`), sur le tenant du provider | `AuditLogs`, `ServicePrincipalSignInLogs` | `AuditLogs` (3 règles de C2), `AADServicePrincipalSignInLogs` (`entra-sp-unusual-signin`) |
+
+- **Désactivées par défaut**, dans `terraform.tfvars` (ignoré par git) : jamais dans `config.yaml`
+  (suivi, public — un fork qui applique enverrait les journaux de son tenant), jamais en `-var` d'une
+  commande (le prochain apply sans lui retirerait le paramètre).
+- **Instance canonique seule** (workspace Terraform `default`) : une autre instance ne les pose pas,
+  et le plan le dit (`check "diagnostic_settings_on_the_canonical_instance"`).
+- **Rien d'autre** : `Security` (Defender for Cloud), `SignInLogs`, `NonInteractiveUserSignInLogs`,
+  `ManagedIdentitySignInLogs` ne sont lues par aucune règle. `tests/unit/test_bench_logs.py` vérifie
+  que les catégories envoyées sont exactement celles que lisent les règles livrées ; un lot qui lira
+  une autre table ajoutera sa catégorie avec sa règle.
+- Le contrat planifié contre un faux azurerm, sans Azure : `terraform -chdir=infra/terraform test`
+  (`infra/terraform/tests/diagnostic_settings.tftest.hcl`, après un `init -backend=false`).
+
+### Les droits
+
+| Paramètre | Qui l'applique | Droit | Source |
+|---|---|---|---|
+| Abonnement | l'opérateur sous `az login` (le Makefile ne passe que `ARM_SUBSCRIPTION_ID` : azurerm prend la CLI) | **Monitoring Contributor** sur l'abonnement (ou un rôle qui le contient) : `Microsoft.Insights/DiagnosticSettings/*`, et `Microsoft.OperationalInsights/workspaces/sharedKeys/action` pour le workspace | [Monitoring Contributor](https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/monitor), [rôles d'Azure Monitor](https://learn.microsoft.com/azure/azure-monitor/roles-permissions-security) |
+| Tenant | l'opérateur sous `az login`, **rôle d'Entra actif** | **Administrateur de la sécurité** (« the least privileged role required to configure diagnostic settings »), ou Administrateur général — un rôle d'Entra, pas un rôle Azure sur l'abonnement. Un principal de service demanderait `Contributor` à la portée `/providers/Microsoft.aadiam`, attribué par un administrateur à l'accès élevé à la racine : ne pas le faire, appliquer sous `az login` | [Entra : accès aux journaux](https://learn.microsoft.com/entra/identity/monitoring-health/howto-access-activity-logs), [paramètres de diagnostic d'Entra](https://learn.microsoft.com/entra/identity/monitoring-health/howto-configure-diagnostic-settings), documentation du provider azurerm (`monitor_aad_diagnostic_setting`) |
+| Lecture (Glorfindel, H0 compris) | — | rien de plus : `Log Analytics Reader` sur le workspace ; aucun droit sur Entra ID | |
+
+Licence : la page des licences d'Entra donne « Audit logs : Yes » et « Sign-in logs : Yes » pour
+Entra ID **Free** ([licences](https://learn.microsoft.com/entra/fundamentals/licensing), « Microsoft
+Entra monitoring and health ») ; ce qu'exige l'**envoi** des connexions des principaux de service vers
+un workspace n'y est pas dit. La doc d'AL1 et de C2 supposait P1 ou P2 : hypothèse E2, tranchée par
+l'apply.
+
+### Le coût
+
+| Table | Prix | Volume attendu sur le banc | Par mois |
+|---|---|---|---|
+| `AzureActivity` | **gratuite** : « There are no data ingestion charges for activity logs » ([journal d'activité](https://learn.microsoft.com/azure/azure-monitor/fundamentals/activity-log)) ; table exclue de la facturation ([coût des journaux](https://learn.microsoft.com/azure/azure-monitor/logs/cost-logs), `_IsBillable` faux) | quelques centaines d'opérations par jour | 0 |
+| `AuditLogs` | Analytics Logs : **2,99 USD le Go** en West Europe (2,63 EUR), au-delà des 5 premiers Go du mois par compte de facturation | ~2 Ko par événement ; 50 à 500 événements par jour sur un tenant de banc → 0,1 à 1 Mo/jour | < 0,10 USD |
+| `AADServicePrincipalSignInLogs` | idem | ~11,5 Ko par connexion ; 100 à 1 000 connexions de principaux par jour (console, bot, watch locale, Annatar, CI ; un jeton vit environ une heure) → 1 à 12 Mo/jour | < 1 USD |
+| Rétention | 31 jours inclus ; au-delà 0,13 USD le Go par mois (West Europe) | le workspace garde 30 jours (`log_retention_days`) | 0 |
+
+Sources : l'API publique des prix d'Azure, lue le 30/10/2026
+(`https://prices.azure.com/api/retail/prices`, `serviceName eq 'Log Analytics'`, `westeurope` :
+« Analytics Logs Data Ingestion » 2,99 USD au-delà de 5 Go, « Analytics Logs Data Retention » 0,13
+USD le Go par mois ; francecentral 2,76 et 0,12) ; la [page des prix d'Azure
+Monitor](https://azure.microsoft.com/pricing/details/monitor/) (« The first 5 GB/month per billing
+account in this tier are free », « 31 days – data ingested into Analytics Logs ») ; les tailles par
+événement : [Entra, options d'intégration](https://learn.microsoft.com/entra/identity/monitoring-health/concept-log-monitoring-integration-options-considerations)
+(« Audit log events use around 2 KB », « Sign-in log events use on average 11.5 KB »). Les volumes
+du banc sont une **estimation** : la mesure (requête `Usage`, ci-dessous) la remplace après 24 h,
+puis 7 jours. Total attendu : moins de 2 USD par mois.
+
+### Avant le plan (lecture seule, par Jonathan)
+
+```bash
+az account show --query "{tenant:tenantId, user:user.name, type:user.type}" -o table   # le tenant et l'identité que prendra Terraform
+env | grep '^ARM_CLIENT' || echo "pas de principal : azurerm prendra az login"        # rien attendu
+az monitor diagnostic-settings subscription list -o table                              # ≤ 4 déjà ; aucun n'envoie Administrative à law-celebrimbor-amonsul
+az rest --method GET --url "https://management.azure.com/providers/microsoft.aadiam/diagnosticSettings?api-version=2017-04-01-preview" \
+  --query "value[].{name:name, ws:properties.workspaceId}" -o table                    # les paramètres du tenant déjà là
+```
+
+À trancher **avant** l'apply d'Entra : le paramètre envoie les journaux de **tout le tenant** de
+l'abonnement du banc (celui du provider), pas seulement ceux du banc. Un tenant de test dédié
+demanderait un banc dans ce tenant ; s'il n'y en a pas, c'est le tenant de l'abonnement, ou rien.
+
+### Activer, vérifier le plan, appliquer
+
+```bash
+# 1. Dans infra/terraform/terraform.tfvars (persistant, ignoré par git) — l'un, l'autre, ou les deux :
+#      activity_log_enabled = true
+#      entra_logs_enabled   = true
+make celebrimbor-logs-plan          # plan ciblé : ces deux paramètres seuls (lecture seule)
+make celebrimbor-logs-up YES=1      # une fois le plan relu
+```
+
+`celebrimbor-logs-plan` / `-up` planifient et appliquent avec `-target` sur les deux paramètres, rien
+d'autre du banc : une dérive en attente sur le baseline n'y passe pas. Instance `default` seulement :
+une autre est refusée avant tout appel. **Le plan doit montrer**, et rien d'autre :
+- `data.azurerm_subscription.current[0]` lu (journal d'activité seulement) ;
+- `+ azurerm_monitor_diagnostic_setting.activity_log[0]` : `name = "diag-celebrimbor-activity"`,
+  `target_resource_id = "/subscriptions/<…>"`, `log_analytics_workspace_id` qui finit par
+  `/workspaces/law-celebrimbor-amonsul`, un seul `enabled_log { category = "Administrative" }` ;
+- `+ azurerm_monitor_aad_diagnostic_setting.entra[0]` : `name = "diag-celebrimbor-entra"`, le même
+  workspace, deux `enabled_log` : `AuditLogs`, `ServicePrincipalSignInLogs` ;
+- `Plan: 1 to add` (ou 2), `0 to change, 0 to destroy`, et l'avertissement de Terraform sur le
+  ciblage (« Resource targeting is in effect ») — attendu.
+
+Un changement sur `azurerm_log_analytics_workspace.celebrimbor` ou sur le groupe (leurs dépendances,
+une dérive de tags en attente) : **s'arrêter**, et le traiter à part par `make celebrimbor-plan`.
+
+**Revenir en arrière** : la variable à `false` (ou la ligne retirée), puis `make
+celebrimbor-logs-plan` — il doit montrer `1 to destroy` (ou 2) sur ces ressources seules — et `make
+celebrimbor-logs-up YES=1`. Les lignes déjà ingérées restent jusqu'à la fin de la rétention (30
+jours). `make celebrimbor-down CONFIRM=default` les retire aussi, avec le reste.
+
+**Les premières lignes** : « within 90 minutes » après la création d'un paramètre (Azure Monitor,
+[paramètres de diagnostic](https://learn.microsoft.com/azure/azure-monitor/data-collection/diagnostic-settings)) ;
+pour Entra, « up to three days for the logs to start appearing » ([Entra](https://learn.microsoft.com/entra/identity/monitoring-health/howto-configure-diagnostic-settings)).
+Attendre `AzureActivity | take 1` et `AuditLogs | take 1` non vides avant les opérations de test.
+
+**Ce que H0 verra aussitôt** : la watch hébergée lit ce workspace ; chaque vraie opération du banc
+devient une carte `control_plane_change` (un apply Terraform qui écrit le NSG, une attribution de
+rôle, une sauvegarde si l'hypothèse A2 se vérifie) et chaque événement d'Entra retenu une carte
+`identity_change` — jamais une action (détection seule, deux verrous). Une fois Entra activé, chaque
+carte `identity_change` sur une action d'administration de **tout le tenant** part dans Discord,
+avec l'UPN de l'acteur. Le paramètre lui-même
+(`Microsoft.Insights/diagnosticSettings/write`) n'est lu par aucune règle ; le prochain
+`celebrimbor-up` qui réécrit le NSG du banc, si.
+
+### Les opérations de test
+
+Chacune est connue, réversible, et défaite aussitôt. Noter l'heure UTC juste avant chacune
+(`date -u +%FT%TZ`) : c'est le T0 de la latence de bout en bout.
+
+**Droits des opérations de test — à vérifier avant de commencer**, pour ne pas s'arrêter au milieu
+avec une application et un identifiant déjà créés :
+- **C2** : Administrateur général actif ; ou bien Administrateur d'application cloud pour le
+  consentement (`az ad app permission admin-consent` : « You must login as a global
+  administrator » dans l'aide d'`az`, un rôle d'administration des applications suffit au
+  portail) et Administrateur de rôle privilégié pour attribuer Security Reader ; plus le droit
+  d'enregistrer une application (les utilisateurs du tenant l'ont par défaut ; sinon Développeur
+  d'applications).
+- **AL1** : `Contributor` sur `rg-celebrimbor` suffit pour la règle de NSG, l'instantané et la
+  sauvegarde ; l'attribution de `Reader` demande User Access Administrator ou Owner sur ce groupe.
+
+**C2 — Entra ID, d'abord** (dans le tenant tranché ; l'application de test sert aussi à AL1) :
+
+```bash
+APP=$(az ad app create --display-name eregion-id1-test --query appId -o tsv)          # « Add application »
+APPOBJ=$(az ad app show --id "$APP" --query id -o tsv)                                 # pour le retrait définitif
+SP=$(az ad sp create --id "$APP" --query id -o tsv)                                    # « Add service principal »
+# entra-credential-added (T1098.001) : un certificat ajouté, valable 7 jours, sa clé gardée hors du dépôt en 0600.
+# Un certificat plutôt qu'un secret : la connexion ci-dessous ne met que le chemin du fichier dans la ligne de
+# commande, jamais la clé (un secret passé à `az login -p` serait visible par `ps`, az ne le lit pas d'un fichier).
+PEM=$(az ad app credential reset --id "$APP" --append --create-cert --display-name id1 \
+  --end-date "$(date -u -d '+7 days' +%Y-%m-%d)" --query fileWithCertAndPrivateKey -o tsv)
+mv "$PEM" ~/.eregion-id1.pem && chmod 600 ~/.eregion-id1.pem
+# entra-app-consent (T1528) : User.Read de Microsoft Graph (identifiants publics de Graph), puis le consentement d'administrateur
+az ad app permission add --id "$APP" --api 00000003-0000-0000-c000-000000000000 --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
+az ad app permission admin-consent --id "$APP"
+# entra-privileged-role-assigned (T1098.003) : Security Reader (un rôle qu'Entra marque privilégié, en lecture) au principal de test
+RID=$(az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?\$filter=displayName eq 'Security Reader'" --query "value[0].id" -o tsv)
+ASSIGN=$(az rest --method POST --url https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments \
+  --body "{\"principalId\":\"$SP\",\"roleDefinitionId\":\"$RID\",\"directoryScopeId\":\"/\"}" --query id -o tsv)
+az rest --method DELETE --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/$ASSIGN"
+# entra-sp-unusual-signin (T1078.004) : une connexion du principal, dans une config az jetable (ton az login n'est pas touché).
+# Selon la version d'az : --certificate <fichier> (récente) ou -p <fichier> (ancienne) — le chemin, pas la clé.
+AZURE_CONFIG_DIR=$(mktemp -d) sh -c 'az login --service-principal -u "$0" --certificate ~/.eregion-id1.pem --tenant <tenant> --allow-no-subscriptions -o none; rm -rf "$AZURE_CONFIG_DIR"' "$APP"
+```
+
+`entra-sp-unusual-signin` ne voit qu'un principal **qui a un historique** (vu au moins 3 jours de sa
+base de 14 jours, la dernière heure exclue) : la connexion ci-dessus, une fois par jour depuis le poste
+pendant au moins 3 jours, puis une fois depuis une autre adresse (Cloud Shell, le fichier `.pem` copié
+le temps de la connexion, puis `rm ~/.eregion-id1.pem` dans Cloud Shell : son `$HOME` persiste sur
+Azure Files) — c'est celle-là qui fait la carte. Le certificat expire au bout de 7 jours ;
+pour une base plus longue, en ajouter un autre (une carte `entra-credential-added` de plus, attendue).
+
+**AL1 — le journal d'activité** (sur le groupe du banc) :
+
+```bash
+# nsg-change-outside-glorfindel (T1562.007) : une règle de refus inoffensive, puis retirée → 2 opérations
+az network nsg rule create -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-test-deny --priority 4000 \
+  --direction Inbound --access Deny --protocol Tcp --source-address-prefixes 203.0.113.0/24 --destination-port-ranges 9
+az network nsg rule delete -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-test-deny
+
+# role-assignment-write (T1098.003) : Reader sur le groupe du banc au principal de test d'Entra ($APP, ci-dessus)
+RG_ID=$(az group show -n rg-celebrimbor --query id -o tsv)
+az role assignment create --assignee "$APP" --role Reader --scope "$RG_ID"
+az role assignment delete --assignee "$APP" --role Reader --scope "$RG_ID"
+
+# snapshot-by-unexpected-caller (T1578.001) : un instantané du disque de données de gondolin, un accès de téléchargement
+DISK=$(az disk show -g rg-celebrimbor -n disk-celebrimbor-gondolin-data --query id -o tsv)
+az snapshot create -g rg-celebrimbor -n snap-id1-test --source "$DISK" --incremental true -o none
+az snapshot grant-access -g rg-celebrimbor -n snap-id1-test --duration-in-seconds 600 -o none   # l'URL SAS n'est pas affichée
+az snapshot revoke-access -g rg-celebrimbor -n snap-id1-test
+az snapshot delete -g rg-celebrimbor -n snap-id1-test
+
+# Hypothèse A2 : une sauvegarde Azure Backup à la demande de gondolin (ce que fait l'action `snapshot` de Glorfindel)
+az backup item list -g rg-celebrimbor -v rsv-celebrimbor-erebor --backup-management-type AzureIaasVM -o table
+az backup protection backup-now -g rg-celebrimbor -v rsv-celebrimbor-erebor --backup-management-type AzureIaasVM \
+  -c <conteneur de la liste> -i <élément de la liste> --retain-until <jj-mm-aaaa, dans 2 jours>
+```
+
+L'attribution de rôle et la règle de NSG n'ont pas besoin de Glorfindel. La règle `id1-test-deny`
+n'est pas dans le Terraform du banc : retirée aussitôt (sinon le prochain `celebrimbor-up` la
+retirerait). Facultatif, avec Jonathan, coûteux : un `glorfindel restore` de gondolin (hypothèse A3,
+~20 min, la VM désallouée) ; une isolation puis une levée de gondolin par une watch locale (hypothèse
+A4) — jamais par H0, qui est en lecture seule.
+
+**Le retrait — un seul bloc**, à la fin des mesures, **ou dès un abandon en cours de route** (chaque
+ligne tolère ce qui n'a pas encore été créé ; dans un nouveau shell, `APP` est retrouvée par son nom
+exact ; dans Cloud Shell, s'il a servi, `rm ~/.eregion-id1.pem` aussi) :
+
+```bash
+# Ce qui ne dépend pas de l'application : le snapshot (l'accès SAS révoqué d'abord), la règle de NSG
+az snapshot revoke-access -g rg-celebrimbor -n snap-id1-test 2>/dev/null
+az snapshot delete -g rg-celebrimbor -n snap-id1-test 2>/dev/null
+az network nsg rule delete -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-test-deny 2>/dev/null
+# L'application, retrouvée par son nom exact (--display-name filtre par « commence par »)
+APP=${APP:-$(az ad app list --filter "displayName eq 'eregion-id1-test'" --query "[0].appId" -o tsv)}
+if [ -n "$APP" ]; then
+  APPOBJ=${APPOBJ:-$(az ad app show --id "$APP" --query id -o tsv)}
+  SP=${SP:-$(az ad sp show --id "$APP" --query id -o tsv 2>/dev/null)}
+  az role assignment delete --assignee "$APP" --scope "$(az group show -n rg-celebrimbor --query id -o tsv)" 2>/dev/null
+  # Security Reader (ou tout rôle d'annuaire) encore attribué au principal : retiré explicitement
+  if [ -n "$SP" ]; then
+    for a in $(az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?\$filter=principalId eq '$SP'" --query "value[].id" -o tsv); do
+      az rest --method DELETE --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/$a"
+    done
+  fi
+  for k in $(az ad app credential list --id "$APP" --cert --query "[].keyId" -o tsv); do
+    az ad app credential delete --id "$APP" --key-id "$k" --cert
+  done
+  for k in $(az ad app credential list --id "$APP" --query "[].keyId" -o tsv); do
+    az ad app credential delete --id "$APP" --key-id "$k"
+  done
+  az ad app delete --id "$APP"                       # l'application et son principal
+  # Retrait définitif de l'application et du principal : sinon restaurables 30 jours, avec leurs identifiants.
+  [ -n "$APPOBJ" ] && az rest --method DELETE --url "https://graph.microsoft.com/v1.0/directory/deletedItems/$APPOBJ"
+  [ -n "$SP" ] && az rest --method DELETE --url "https://graph.microsoft.com/v1.0/directory/deletedItems/$SP" 2>/dev/null
+fi
+rm -f ~/.eregion-id1.pem
+```
+
+### Les requêtes de mesure
+
+Dans le workspace du banc (portail : Logs), ou depuis le poste :
+`az monitor log-analytics query -w <customerId de law-celebrimbor-amonsul> --analytics-query "<requête>" --timespan P1D -o table`
+(une extension d'`az`, installée au premier appel). Le `--timespan` borne ce que la requête peut lire :
+il doit couvrir son `ago(…)` le plus long — `P1D` pour les requêtes sur un jour, `P7D` pour le coût
+sur une semaine, `P15D` pour les règles (la base de connexions remonte à 14 jours).
+
+**Chaque règle voit son opération** — la requête de la règle, **telle qu'écrite** :
+
+```bash
+rule() { python -c "import sys,yaml; print(next(r['query'] for r in yaml.safe_load(open('glorfindel/rules/azure/detection_rules.yaml'))['rules'] if r['name']==sys.argv[1]))" "$1"; }
+for r in nsg-change-outside-glorfindel role-assignment-write snapshot-by-unexpected-caller \
+         entra-credential-added entra-app-consent entra-privileged-role-assigned entra-sp-unusual-signin; do
+  # P15D : la base d'entra-sp-unusual-signin lit ago(14d) .. ago(1h) ; chaque règle borne elle-même sa fenêtre
+  echo "== $r"; az monitor log-analytics query -w <customerId> --analytics-query "$(rule $r)" --timespan P15D -o table
+done
+```
+
+Attendu : au moins une ligne par opération de test (`entra-sp-unusual-signin` après les 3 jours de
+base), et sur H0 la carte correspondante (`control_plane_change`, `identity_change`) ;
+`glorfindel rules check --live` sur H0 dit `ok` pour les sept.
+
+**La latence, de l'événement à l'ingestion** (le T0 noté donne le bout en bout ; la carte de H0
+ajoute l'intervalle de la règle, 60 s pour AL1, 120 à 300 s pour C2 ; `--timespan P1D`) :
+
+```kusto
+AzureActivity
+| where TimeGenerated > ago(6h)
+| where OperationNameValue has_any ("SECURITYRULES", "ROLEASSIGNMENTS", "SNAPSHOTS", "BEGINGETACCESS")
+| extend Ingested = ingestion_time(), Delay_s = datetime_diff('second', ingestion_time(), TimeGenerated)
+| project TimeGenerated, Ingested, Delay_s, OperationNameValue, ActivityStatusValue, CorrelationId
+| order by TimeGenerated asc
+```
+
+```kusto
+union withsource=Table AuditLogs, AADServicePrincipalSignInLogs
+| where TimeGenerated > ago(6h)
+| where tostring(TargetResources) has "eregion-id1-test" or tostring(InitiatedBy) has "eregion-id1-test"
+     or ServicePrincipalName == "eregion-id1-test"
+| extend Delay_s = datetime_diff('second', ingestion_time(), TimeGenerated)
+| project Table, TimeGenerated, Ingested = ingestion_time(), Delay_s, OperationName, Category, Result, IPAddress, CorrelationId
+| order by TimeGenerated asc
+```
+
+Sur 24 h, toute la table (le p95 contre `expected_latency_s` des règles : 1 200 s pour AL1, 1 800 s
+pour C2 ; `--timespan P1D`) :
+
+```kusto
+union withsource=Table AzureActivity, AuditLogs, AADServicePrincipalSignInLogs
+| where TimeGenerated > ago(1d)
+| extend Delay_s = datetime_diff('second', ingestion_time(), TimeGenerated)
+| summarize Rows = count(), p50 = percentile(Delay_s, 50), p95 = percentile(Delay_s, 95), Max = max(Delay_s) by Table
+```
+
+**Le coût** (après 24 h, `--timespan P1D` ; puis 7 jours, `ago(7d)` et `--timespan P7D` ; `Quantity` en Mo) :
+
+```kusto
+Usage
+| where TimeGenerated > ago(1d)
+| where DataType in ("AzureActivity", "AuditLogs", "AADServicePrincipalSignInLogs")
+| summarize MB = sum(Quantity), BillableMB = sumif(Quantity, IsBillable == true) by DataType
+```
+
+**Les hypothèses** (une requête chacune, ci-dessous ; `--timespan P1D`) :
+
+```kusto
+// A2, A3 : qui fait les snapshots et les accès de téléchargement (Azure Backup, un restore) ?
+AzureActivity
+| where TimeGenerated > ago(1d)
+| where OperationNameValue has_any ("SNAPSHOTS", "BEGINGETACCESS", "RECOVERYSERVICES")
+| extend CallerAppId = tostring(parse_json(Claims).appid)
+| summarize Ops = make_set(OperationNameValue), Rows = count() by Caller, CallerAppId, ResourceProviderValue
+
+// A5, A6 : les lignes d'une opération, et les identifiants de l'appelant tirés de Claims
+AzureActivity
+| where TimeGenerated > ago(6h)
+| where OperationNameValue has_any ("SECURITYRULES", "ROLEASSIGNMENTS", "SNAPSHOTS")
+| extend CallerAppId = tostring(parse_json(Claims).appid),
+         CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
+| summarize Lines = count(), Statuses = make_set(ActivityStatusValue), Callers = make_set(Caller),
+            AppIds = make_set(CallerAppId), ObjectIds = make_set(CallerObjectId) by CorrelationId, OperationNameValue
+
+// E4, E5, E6 : les noms d'opérations et la forme de TargetResources / modifiedProperties
+AuditLogs
+| where TimeGenerated > ago(6h)
+| where tostring(TargetResources) has "eregion-id1-test" or tostring(TargetResources) has "Security Reader"
+| mv-expand T = TargetResources
+| mv-expand P = T.modifiedProperties
+| project TimeGenerated, OperationName, Category, Result, TType = tostring(T.type), TName = tostring(T.displayName),
+          Prop = tostring(P.displayName), Old = tostring(P.oldValue), New = tostring(P.newValue), CorrelationId
+```
+
+### Les hypothèses à trancher
+
+Chacune avec sa mesure et ce qui change selon le résultat. Un changement de règle ou d'adaptateur
+est un lot de la session Glorfindel ; ID1 ne le fait pas.
+
+| | Hypothèse (d'où) | Mesure | Si elle tient | Sinon |
+|---|---|---|---|---|
+| **D1** | L'apply de l'abonnement passe sous `az login` avec Monitoring Contributor (ou plus) | l'apply | rien | le rôle manquant, sur l'abonnement, pas plus |
+| **D2** | Aucun paramètre de l'abonnement n'envoie déjà `Administrative` au workspace (5 au plus par ressource) | `az monitor diagnostic-settings subscription list` | apply | des lignes en double : retirer l'autre, ou ne pas appliquer celui-ci |
+| **A1** | `AzureActivity` arrive en 3 à 20 min (Microsoft Learn), sous `expected_latency_s: 1200` et la fenêtre `ago(1h)` des règles d'AL1 | latence, p95 sur 24 h | rien | p95 > 20 min : relever `expected_latency_s` ; > 45 min : élargir la fenêtre |
+| **A2** | Azure Backup (la sauvegarde planifiée, et l'action `snapshot` de Glorfindel) ne produit ni `SNAPSHOTS/WRITE` ni `BEGINGETACCESS` visibles dans le journal de l'abonnement (`snapshot-by-unexpected-caller`, `docs/azure.md`) | `backup-now`, la sauvegarde de la nuit, requête A2 | rien | une carte à chaque sauvegarde : exclure l'appelant d'Azure Backup (son `CallerAppId` mesuré), dans la couche du client ou dans la règle livrée |
+| **A3** | Un `glorfindel restore` ne produit pas de `BEGINGETACCESS` sous l'identité de la console (sinon : `GlorfindelIdentity`, carte critique à chaque restore) | un restore (facultatif), requête A2 | rien | déclarer l'opération du restore dans les capacités, ou l'exclure pour l'identité de la console |
+| **A4** | Les écritures de Glorfindel (isolation, levée) portent son `appid`/`oid` dans `Claims` et sont écartées | une isolation par une watch locale, requête A5 | rien | comparer `Caller`, `CallerAppId`, `CallerObjectId` à `GLORFINDEL_OWN_CALLERS` ; corriger la lecture de l'identité |
+| **A5** | Une opération = plusieurs lignes (`Start`, `Accept`, `Success`) d'un même `CorrelationId` : une carte | requête A5 | rien | deux cartes pour une opération : revoir la clé de déduplication |
+| **A6** | `Claims` porte `appid` et `objectidentifier`, pour un utilisateur comme pour un principal | requête A5 (`AppIds`, `ObjectIds` non vides) | rien | l'identité de Glorfindel n'est lue que par `Caller` : le dire dans l'adaptateur |
+| **E1** | L'apply du tenant passe sous `az login` avec Administrateur de la sécurité actif, sans rôle Azure à `/providers/Microsoft.aadiam` | l'apply | rien | poser le paramètre au portail (mêmes nom et catégories), puis `terraform import 'azurerm_monitor_aad_diagnostic_setting.entra[0]' /providers/Microsoft.AADIAM/diagnosticSettings/diag-celebrimbor-entra` |
+| **E2** | `ServicePrincipalSignInLogs` s'envoie sans P1/P2 (la page des licences : Free « Yes ») — la doc de C2 supposait P1/P2 | l'apply, puis `AADServicePrincipalSignInLogs \| take 1` après la connexion du principal de test | corriger la doc de C2 (aucune licence) | retirer la catégorie, `entra-sp-unusual-signin` dite aveugle sans P1/P2 ; les trois autres règles gardent `AuditLogs` |
+| **E3** | Entra arrive en quelques minutes (lots d'environ 5 min), sous `expected_latency_s: 1800` et `ago(1h)` | latence, p95 sur 24 h | rien | relever `expected_latency_s` ; élargir la fenêtre au-delà de 45 min |
+| **E4** | Les noms d'opérations des règles (« Add service principal », « Update application – Certificates and secrets management », « Consent to application », « Add delegated permission grant », « Add app role assignment to service principal », « Add member to role ») | requête E4 | rien | une règle aveugle sur ce nom : la corriger |
+| **E5** | `modifiedProperties` : `KeyDescription` (ancien et nouvel ensemble), `Role.DisplayName`, `ConsentAction.Permissions`, `ConsentContext.IsAdminConsent`, `ServicePrincipal.ObjectID` | requête E4 | rien | `entra-credential-added` filtre sur `KeyDescription` : un autre nom la rend aveugle ; les autres cartes perdent une précision |
+| **E6** | Le consentement d'administrateur par `az` donne « Consent to application », ou seulement l'octroi, dont la cible serait Microsoft Graph (`entra.py`) | requête E4 | rien | la carte ne propose pas de blocage (déjà le cas) ; noter le nom réel |
+| **E7** | `entra-sp-unusual-signin` se tait les 3 premiers jours, puis voit une adresse nouvelle d'un principal connu | la connexion du principal de test, 3 jours puis Cloud Shell | rien | lire la base (`history`), le seuil `MIN_BASELINE_DAYS` |
+| **E8** | La connexion de l'identité managée de H0 n'est pas dans `AADServicePrincipalSignInLogs` (autre catégorie, non envoyée) | `AADServicePrincipalSignInLogs` sur 24 h | la limite reste écrite | ses connexions visibles : la marque `GlorfindelIdentity` les lit |
+| **E9** | Le volume d'Entra reste sous 1 Go par mois | `Usage` à 24 h, à 7 jours | rien | au-delà : retirer `ServicePrincipalSignInLogs`, ou décider d'en payer le prix |
+
+Non mesuré par ID1 : `Company Administrator` (l'ancien nom de Global Administrator) dans les journaux
+— il faudrait attribuer Administrateur général à un principal de test.
+
+**La suite, R2 (#79)** : R2 attend d'ID1 les trois tables alimentées sur le banc, leur latence mesurée
+et ces hypothèses tranchées, pour que les techniques de Stratus Red Team jouées depuis Orodruin sur le
+plan de contrôle et sur Entra aient une détection attendue — et qu'un raté y soit celui d'une règle,
+pas d'un journal absent.
+
+---
+
 ## Coûts réels (West Europe)
 
 - **Infra existante** : LLM API uniquement (Anthropic défaut), <$2/mois (~$0.05–0.10 par run)
 - **Infra Celebrimbor (Terraform)** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Jetable — `make celebrimbor-stop` pour pauser sans détruire. `make celebrimbor-up` montre le plan et demande « yes » ; `YES=1` l'applique sans le relire (SEC6, comme les autres cibles Terraform). ⚠️ **`celebrimbor-down` est GARDÉ** (suite incident 2026-06-25 où un `down` non scopé a emporté tout le baseline) : il est **symétrique de `up`** et **protège le baseline**. `make celebrimbor-down TOPO=multinic` → destruction **scopée** d'une topo (via `-target` sur son RG), baseline intact. `make celebrimbor-down` **sans arg refuse** et exige `CONFIRM=<instance>` pour un teardown total (baseline inclus). Retirer une topo proprement = `enabled: false` dans `config.yaml` + `make celebrimbor-up`. Convention : chaque topo définit `azurerm_resource_group.<topo>` (count) = la cible `-target`.
+- **Journaux d'activité et d'Entra ID au banc (ID1)**, s'ils sont activés : `AzureActivity` gratuite ; `AuditLogs` et `AADServicePrincipalSignInLogs` à 2,99 USD le Go en West Europe au-delà des 5 Go gratuits du mois — estimés à moins de 2 USD par mois sur le banc, à mesurer (« Les journaux d'activité et d'Entra ID au banc », ci-dessus).
 - **Chaos Studio (G0)** : facturé à l'usage des expériences (une panne de 5 min sur une VM). Feu vert du 15/10 sur une estimation de 11 à 42 € par mois pour 2 à 4 campagnes (ROADMAP) ; le coût réel est à relever sur la facture après le premier run.

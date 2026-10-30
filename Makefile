@@ -108,6 +108,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	annatar-shell glorfindel-shell \
 	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
+	celebrimbor-logs-plan celebrimbor-logs-up \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
@@ -183,6 +184,8 @@ help:
 	@echo "  make celebrimbor-stop / celebrimbor-start         Éteint/rallume le banc (sans détruire) ; VM=<nom> pour une seule"
 	@echo "                                                    VM ; stop épargne les VM always-on (bree), sauf ALL=1"
 	@echo "  make celebrimbor-output [INSTANCE=]         Fragment glorfindel-config.yaml généré"
+	@echo "  make celebrimbor-logs-plan                  Plan des seuls paramètres de diagnostic (abonnement, tenant : ID1)"
+	@echo "  make celebrimbor-logs-up [YES=1]            Les applique (activity_log_enabled / entra_logs_enabled du tfvars)"
 	@echo ""
 	@echo "Glorfindel hébergé (H0 : pré-observation, état Terraform séparé)"
 	@echo "  make glorfindel-host-plan [OPERATOR_CIDR=]   Plan (lecture seule)"
@@ -494,6 +497,27 @@ celebrimbor-down:
 celebrimbor-output:
 	@$(TF) workspace select $(INSTANCE)
 	@$(TF) output -raw glorfindel_config_fragment
+
+# ID1 : les paramètres de diagnostic de l'abonnement (journal d'activité, AL1) et du tenant
+# (Entra ID, C2), seuls — plan et apply ciblés, sans rien d'autre du banc (une dérive en
+# attente sur le baseline n'y passe pas ; seules leurs dépendances, le workspace et son
+# groupe, y paraîtraient si elles changeaient : alors s'arrêter). Ce qu'ils posent vient de
+# terraform.tfvars (activity_log_enabled, entra_logs_enabled : persistant), jamais d'un -var
+# d'ici — le prochain apply sans lui retirerait le paramètre. Remis à false, le même
+# `celebrimbor-logs-up` les retire (le retour en arrière). Instance canonique seulement :
+# une autre ne les pose pas (activity_log.tf), la cible le refuse avant tout appel.
+#   make celebrimbor-logs-plan                 # lecture seule
+#   make celebrimbor-logs-up [YES=1]           # YES=1 : sans confirmation, plan relu avant
+LOGS_TARGETS = -target=azurerm_monitor_diagnostic_setting.activity_log -target=azurerm_monitor_aad_diagnostic_setting.entra
+
+celebrimbor-logs-plan celebrimbor-logs-up:
+	@if [ "$(INSTANCE)" != "default" ]; then \
+	   echo "!! $@ : instance '$(INSTANCE)' refusée — les paramètres de l'abonnement et du tenant ne sont posés que par l'instance canonique (default)."; \
+	   exit 1; \
+	 fi
+	@$(TF) init -upgrade
+	@$(TF) workspace select default
+	@$(TF) $(if $(filter celebrimbor-logs-up,$@),apply$(if $(YES), -auto-approve),plan) $(LOGS_TARGETS)
 
 # H0 : la charge réelle de bree (petit site + routine d'admin), par Run Command —
 # jamais par le custom_data (le changer remplace la VM). Idempotent.

@@ -191,6 +191,59 @@ def test_the_injectors_image_holds_none_of_glorfindels_dependencies():
     assert set(ic.NOT_IN_INJECTORS) >= {"glorfindel", "eregion_console", *cc.GLORFINDEL_ONLY_DEPS}
 
 
+# DEP1 (#282): litellm's call path, in this interpreter's environment — the dev lock in CI; each
+# image's own lock in images.yml, where the same code runs with `--network none`. No key, no
+# model, no network: litellm's mock answers, and its cost map is its local copy. Here every
+# proxy is a closed port: a request the check would make fails, and litellm says so.
+_NO_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AZURE_API_KEY", "GLORFINDEL_LLM_MODEL",
+            "GLORFINDEL_LLM_BASE_URL", "LITELLM_LOCAL_MODEL_COST_MAP", "NO_PROXY", "no_proxy")
+_DEAD_PROXY = "http://127.0.0.1:9"
+
+
+def _litellm_call(tmp_path, monkeypatch, pythonpath=""):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for key in _NO_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    for key in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.setenv(key, _DEAD_PROXY)
+    if pythonpath:
+        monkeypatch.setenv("PYTHONPATH", pythonpath)
+    return _python(ic.LITELLM_CALL)
+
+
+def test_the_litellm_check_makes_a_tool_call_here(tmp_path, monkeypatch):
+    pytest.importorskip("litellm")
+    res = _litellm_call(tmp_path, monkeypatch)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert res.stdout.split() == ["probe", '{"ok":', "true}"]
+    assert "Failed to fetch remote model cost map" not in res.stderr, "the check reached the network"
+
+
+def test_the_litellm_check_fails_on_a_release_that_imports_but_cannot_call(tmp_path, monkeypatch):
+    """19/10's shape: `import litellm` passes, the call raises « No module named 'mcp' »."""
+    fake = tmp_path / "fake"
+    (fake / "litellm").mkdir(parents=True)
+    (fake / "litellm" / "__init__.py").write_text(
+        "suppress_debug_info = False\n"
+        "def completion(**kw):\n"
+        "    raise ModuleNotFoundError(\"No module named 'mcp'\")\n")
+    res = _litellm_call(tmp_path, monkeypatch, pythonpath=str(fake))
+    assert res.returncode != 0
+    assert "No module named 'mcp'" in res.stderr
+
+
+def test_the_litellm_check_fails_on_an_answer_without_its_tool_call(tmp_path, monkeypatch):
+    fake = tmp_path / "fake"
+    (fake / "litellm").mkdir(parents=True)
+    (fake / "litellm" / "__init__.py").write_text(
+        "from types import SimpleNamespace as N\n"
+        "suppress_debug_info = False\n"
+        "def completion(**kw):\n"
+        "    fn = N(name='other', arguments='{}')\n"
+        "    return N(choices=[N(message=N(tool_calls=[N(function=fn)]))])\n")
+    assert _litellm_call(tmp_path, monkeypatch, pythonpath=str(fake)).returncode == 1
+
+
 def test_the_root_check_refuses_root_only():
     if __import__("os").getuid() == 0:
         pytest.skip("the suite runs as root here")
@@ -205,9 +258,10 @@ def test_each_image_keeps_its_checks():
     names = {name: [c.name for c in image.checks] for name, image in ic.IMAGES.items()}
     assert names == {
         "glorfindel": ["glorfindel --version", "la watch, le bot et la console importent",
-                       "glorfindel-config.yaml.example sous la lecture stricte d'A3", "pas root"],
+                       "glorfindel-config.yaml.example sous la lecture stricte d'A3", ic.LITELLM_CHECK,
+                       "pas root"],
         "annatar": ["annatar --version", "Annatar et Gothmog importent",
-                    "ni Glorfindel, ni la console, ni leurs dépendances (D1)", "pas root"],
+                    "ni Glorfindel, ni la console, ni leurs dépendances (D1)", ic.LITELLM_CHECK, "pas root"],
     }
     argv = {name: [c.argv for c in image.checks] for name, image in ic.IMAGES.items()}
     assert ("glorfindel", "--version") in argv["glorfindel"] and ("annatar", "--version") in argv["annatar"]
@@ -217,7 +271,8 @@ def test_each_image_keeps_its_checks():
     assert ("python", "-c", ic.ABSENT, *ic.NOT_IN_INJECTORS) in argv["annatar"]
     for name in ic.IMAGES:
         assert ("python", "-c", ic.NOT_ROOT) in argv[name]
-        assert [c.says_version for c in ic.IMAGES[name].checks] == [True, False, False, False]
+        assert ("python", "-c", ic.LITELLM_CALL) in argv[name]
+        assert [c.says_version for c in ic.IMAGES[name].checks] == [True, False, False, False, False]
     assert ic.INJECTOR_IMPORTS == "annatar.cli, gothmog.cli"
 
 

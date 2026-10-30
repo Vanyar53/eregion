@@ -797,6 +797,22 @@ Chaque fil devient une ligne de la chronologie (écran 2), tirée de ce qui arri
 - **Les cartes bleues** prennent l'état de leur cible : isolée et vérifiée, une carte à juger.
 - **Rien n'est écrit** en (c) : comme les pages d'aujourd'hui, elle ne fait que lire.
 
+### La vie d'un fil
+
+Décidée par Jonathan le 30/10, question par question. Tirer un fil ne lance rien : on en tire autant
+qu'on veut, plusieurs vers une même cible compris, puis **un seul geste, « Lancer », fait partir tous
+les fils du plan** en une demande, l'un après l'autre.
+
+| État | Ce qu'on voit | Ce qu'on peut faire |
+|---|---|---|
+| **Brouillon** (phase a) | le fil, son verdict et ce qu'on doit en attendre | le retirer par le ✕ de sa pastille, sur le tracé, ou de sa ligne du plan ; « Clear wires ». Re-tirer une paire déjà tirée ne la retire pas : la page dit « already drawn » |
+| **Demandé, en cours** (b, c) | les fils figés en une demande `r-…`, leur rang ; chacun dit où il en est (en file, lancé, détecté, contenu) | rien sur un fil : ils sont verrouillés jusqu'à la fin de la demande, et l'on n'en tire pas d'autres. Pour arrêter, « Stop all », l'arrêt d'urgence d'Orodruin, arrête tout. La console n'a pas de canal pour dire à Orodruin de sauter un fil (la commande portée, question 1) |
+| **Fini** (c) | les fils déverrouillés gardent leur dernier résultat sur la pastille (« ✓ detected +1m47 · contained 2m31 », « ✗ missed ») et un lien « run ▸ » vers Runs | les retirer, en ajouter, tout effacer, ou **relancer la même demande** d'un geste — ce qui garde la dernière preuve sous 30 jours |
+
+Écartés : des fils figés avec un brouillon de la demande suivante à côté (deux états mêlés sur le
+tableau) ; retirer un fil encore en file (il faudrait un canal vers Orodruin) ; des fils qui
+disparaissent ou pâlissent une fois la demande finie ; sélectionner un fil puis le supprimer.
+
 ### Glorfindel reste aveugle
 
 Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
@@ -893,7 +909,8 @@ Posées une à une. La réponse est reportée ici avec sa date.
 - **La page** : on choisit une carte rouge puis une ou plusieurs cibles (au clavier aussi), ou l'on
   glisse sa poignée sur une cible. Les fils sont un SVG calculé par la page, leurs pastilles ne se
   chevauchent pas. Le panneau du plan liste chaque fil, son rang, son verdict ou ce qu'on doit
-  attendre, ses avertissements, et un ✕ pour le retirer. Les fils restent dans le navigateur
+  attendre, ses avertissements, et un ✕ pour le retirer — sur sa pastille comme sur sa ligne ; re-tirer
+  une paire ne la retire pas (« already drawn »). Les fils restent dans le navigateur
   (`localStorage`). Rien du dehors n'est écrit brut, chaque geste passe par le répartiteur
   (`data-on-*`, la table `ACTIONS`) ; le lecteur (`scripts/console_escaping.py`) lit la page.
 - **Vérifié dans Chromium** (chrome-headless-shell, console locale sur un HOME jetable, cibles, règles

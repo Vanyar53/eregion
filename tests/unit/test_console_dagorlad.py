@@ -222,3 +222,14 @@ def test_the_page_dispatches_to_a_closed_table_with_primitive_arguments():
     named = set(re.findall(r"^  (\w+)\(", table, re.M))
     used = set(re.findall(r"_on\('[a-z]+', '(\w+)'", js))
     assert used and used <= named, sorted(used - named)
+
+
+def test_a_wire_is_removed_by_its_own_cross_never_by_drawing_it_again():
+    """Several wires go to one target: drawing a pair again removes nothing, the page says it is
+    drawn already; a wire is removed by its ✕, on its pill and on its plan line (Jonathan, 30/10)."""
+    from pathlib import Path
+    js = (Path(api.__file__).parent / "static" / "dagorlad.js").read_text()
+    start = js.index("function addWire(")
+    add = js[start:js.index("\n}\n", start)]
+    assert "already drawn" in add and "splice" not in add
+    assert js.count("_on('click', 'unwire', k)") == 2

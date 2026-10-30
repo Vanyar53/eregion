@@ -101,10 +101,16 @@
   #wires .w-refused { stroke: var(--red); stroke-dasharray: 7 5; }
   #wires .w-wait, #wires .w-drag { stroke: var(--dim); stroke-dasharray: 4 4; }
   .pill {
-    position: absolute; transform: translate(-50%, -50%); max-width: 280px; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; font-size: 10px; padding: 1px 8px; border-radius: 10px;
-    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    position: absolute; transform: translate(-50%, -50%); max-width: 300px; display: flex; gap: 6px;
+    align-items: baseline; font-size: 10px; padding: 1px 4px 1px 8px; border-radius: 10px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--text); pointer-events: auto;
   }
+  .pill .pt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .pill .px {
+    flex-shrink: 0; background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 10px;
+    padding: 0 3px; border-radius: 8px;
+  }
+  .pill .px:hover { color: var(--red); background: var(--bg2); }
   .pill.w-ok { border-color: var(--blue); }
   .pill.w-warn { border-color: var(--yellow); }
   .pill.w-fault { border-color: var(--orange); }

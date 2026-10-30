@@ -12,6 +12,7 @@ $('page-title').innerHTML = '<b>DAGORLAD</b> <span>— attacks and faults drawn 
 // ── State ─────────────────────────────────────────────────────────────────────────────
 const S = {
   board: null, plan: null, err: '', planErr: '',
+  note: '',         // what the last gesture did not do (a pair drawn already)
   wires: [],        // [experiment id, target resource id], in the order drawn — this browser only
   picked: null,     // the red card picked (its index), waiting for a target
   drag: null,       // {i, x, y}: a red card's handle being dragged
@@ -23,16 +24,14 @@ const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S.wires)); } catch (_) { /* private mode */ }
 }
-function addWire(experiment, target) {
-  if (S.wires.length >= MAX_WIRES || S.wires.some(w => w[0] === experiment && same(w[1], target))) return;
-  S.wires.push([experiment, target]);
-  save(); refreshPlan();
-}
-function toggleWire(experiment, target) {
-  const k = S.wires.findIndex(w => w[0] === experiment && same(w[1], target));
-  if (k < 0) { addWire(experiment, target); return; }
-  S.wires.splice(k, 1);
-  save(); refreshPlan();
+// A wire is drawn once: drawing the same pair again removes nothing (several wires go to one
+// target) — the page says so. A wire is removed by its own ✕, on its pill or its plan line.
+function addWire(experiment, target, name) {
+  S.note = '';
+  if (S.wires.some(w => w[0] === experiment && same(w[1], target))) S.note = `already drawn: ${experiment} → ${name}`;
+  else if (S.wires.length >= MAX_WIRES) S.note = `at most ${MAX_WIRES} wires`;
+  else { S.wires.push([experiment, target]); save(); }
+  refreshPlan();
 }
 
 // ── Actions: each element names its own, the dispatcher calls it from this closed table ──
@@ -47,10 +46,10 @@ const ACTIONS = {
     S.picked = S.picked === i ? null : i;
     renderBoard();
   },
-  toggle(j) {
+  aim(j) {
     const t = S.board && S.board.targets[j];
     const r = S.board && S.picked !== null ? S.board.reds[S.picked] : null;
-    if (t && r) toggleWire(r.id, t.resource_id);
+    if (t && r) addWire(r.id, t.resource_id, t.name);
   },
   grab(i) {
     const r = S.board && S.board.reds[i];
@@ -63,14 +62,15 @@ const ACTIONS = {
     const t = S.board && S.board.targets[j];
     const r = S.board && S.drag ? S.board.reds[S.drag.i] : null;
     S.drag = null;
-    if (t && r) addWire(r.id, t.resource_id); else drawWires();
+    if (t && r) addWire(r.id, t.resource_id, t.name); else drawWires();
   },
   unwire(k) {
     if (k < 0 || k >= S.wires.length) return;
     S.wires.splice(k, 1);
+    S.note = '';
     save(); refreshPlan();
   },
-  clear() { S.wires = []; S.picked = null; save(); refreshPlan(); },
+  clear() { S.wires = []; S.picked = null; S.note = ''; save(); refreshPlan(); },
 };
 const _EVENTS = { click: 'click', pointerdown: 'pointerdown', pointerup: 'pointerup' };
 function _dispatch(ev, name) {
@@ -124,7 +124,7 @@ function blueCard(t, j) {
   const holds = (Array.isArray(t.holds_now) ? t.holds_now : [])
     .map(h => `<span class="chip c-bad">${esc(String(h).toUpperCase())}</span>`).join(' ');
   const seen = t.seen ? `seen ${ago(t.seen)} ago · ${t.backend}` : 'not seen by the watch now';
-  return `<button type="button" class="bcard${wired ? ' wired' : ''}${S.picked !== null ? ' armed' : ''}" id="blue-${j}" ${_on('click', 'toggle', j)} ${_on('pointerup', 'drop', j)} title="${esc(t.resource_id)}">
+  return `<button type="button" class="bcard${wired ? ' wired' : ''}${S.picked !== null ? ' armed' : ''}" id="blue-${j}" ${_on('click', 'aim', j)} ${_on('pointerup', 'drop', j)} title="${esc(t.resource_id)}">
     <span class="bname">${esc(t.name)}</span>
     <span class="bchips"><span class="chip ${esc(ZONE_CLS[t.zone] || '')}">${esc(String(t.zone).toUpperCase())}</span>
       <span class="chip${t.mode === 'non_disruptive' ? ' c-warn' : ''}">${esc(MODE_LABEL[t.mode] || t.mode)}</span>${t.read_only ? ' <span class="chip">READ-ONLY</span>' : ''} ${holds}</span>
@@ -207,7 +207,8 @@ function drawWires() {
     for (let n = 0; n < 8 && placed.some(q => Math.abs(q.x - p.x) < q.half + half && Math.abs(q.y - p.y) < 19); n++) p.y += 20;
     placed.push({ x: p.x, y: p.y, half });
     paths += `<path class="${style}" d="M${a.x} ${a.y} C${c.c1.x} ${c.c1.y} ${c.c2.x} ${c.c2.y} ${b.x} ${b.y}"/>`;
-    labels += `<div class="pill ${style}" style="left:${p.x}px;top:${p.y}px" title="${esc(text)}">${esc(text)}</div>`;
+    labels += `<div class="pill ${style}" style="left:${p.x}px;top:${p.y}px" title="${esc(text)}"><span class="pt">${esc(text)}</span>` +
+      `<button type="button" class="px" ${_on('click', 'unwire', k)} title="Remove this wire">✕</button></div>`;
   });
   if (S.drag && $(`red-${S.drag.i}`)) {
     const a = point($(`red-${S.drag.i}`), 'right', box);
@@ -238,9 +239,10 @@ function planRow(v) {
 function renderPlan() {
   const box = $('plan');
   if (!S.wires.length) {
-    box.innerHTML = `<div class="plan-head"><b>PLAN</b> <span class="meta">no wire yet · phase (a): a plan only</span></div>
-      <div class="empty">Pick a red card, then one or more targets — or drag a red card's handle onto a target.
-      The server judges each wire as Orodruin would, and says what to expect; nothing is launched, nothing is written.</div>`;
+    box.innerHTML = `<div class="plan-head"><b>PLAN</b> <span class="meta">no wire yet · phase (a): a plan only</span>${S.note ? ` <span class="r-warn">${esc(S.note)}</span>` : ''}</div>
+      <div class="empty">Pick a red card, then one or more targets — or drag a red card's handle onto a target;
+      several wires may go to one target, and a wire's ✕ removes it. The server judges each wire as Orodruin would,
+      and says what to expect; nothing is launched, nothing is written.</div>`;
     return;
   }
   if (S.planErr) { box.innerHTML = `<div class="err">${esc(S.planErr)}</div>`; return; }
@@ -254,7 +256,8 @@ function renderPlan() {
   box.innerHTML = `<div class="plan-head"><b>PLAN</b>
       <span>${Number(t.wires)} wire(s) · ${Number(t.refused)} refused · ~${Math.round(Number(t.estimate_s) / 60)} min · one after the other</span>
       <span class="meta">what Orodruin will check before anything runs — phase (a): nothing is launched</span>
-      <button type="button" class="mini" ${_on('click', 'clear')}>Clear wires</button></div>
+      <button type="button" class="mini" ${_on('click', 'clear')}>Clear wires</button>
+      ${S.note ? `<span class="r-warn">${esc(S.note)}</span>` : ''}</div>
     <div class="checks">${checks}</div>
     <table class="t">${(p.wires || []).map(planRow).join('')}</table>`;
 }

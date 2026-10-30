@@ -4141,3 +4141,101 @@ def test_a_block_beside_a_lifted_perimeter_vanishes_under_a_quarantine_change(mo
     machine, replayed step by step): not I4E's family, routed to a follow-up lot (#363). Strict: once
     fixed, this fails, and the mark goes."""
     _run(monkeypatch, _L1_SEED42_NET, *_L1_SEED42_STEPS)
+
+
+_I3_SEED1999_NET = {
+    'subnet_nsg': None,
+    'edge_nsg': [
+        _rule('allow-ssh', 150, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')),
+        _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*')),
+    ],
+    'tier_rules': [
+        _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')),
+    ],
+    'nics': {
+        'web-nic': {
+            'own': None,
+            'rules': [
+                _rule('allow-https', 100, dict(access='Allow', direction='Inbound', source_address_prefix='Internet', destination_address_prefix='*', destination_port_range='443')),
+                _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*')),
+            ],
+            'policy': False,
+        },
+        'db-nic-0': {
+            'own': None,
+            'rules': [
+                _rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')),
+                _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')),
+            ],
+            'policy': False,
+        },
+        'db-nic-1': {
+            'own': 'tier',
+            'rules': [
+                _rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')),
+                _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')),
+            ],
+            'policy': True,
+        },
+        'api-nic': {
+            'own': None,
+            'rules': [
+                _rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')),
+                _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')),
+            ],
+            'policy': False,
+        },
+    },
+    'windows': None,
+    'config': {
+        'quarantine': True,
+        'rg': 'rg-sec',
+        'forensic': [],
+        'readable': True,
+    },
+    'legacy': None,
+    'data_subnet': None,
+}
+_I3_SEED1999_STEPS = [
+    ('terraform_apply', '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-edge'),
+    ('customer_edits_rule', '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-edge', 'deny-lateral-in', ('source_address_prefix', '*')),
+    ('turned_then_address_reused', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22, 'both', 22, 'non_disruptive', False, 22, True, 'rg-app1', 'api', None, 'Linux', False, 'non_disruptive'),
+    ('recover',),
+    ('quarantine_altered_then_reasserted', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None, False, True, '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'human_only', 'no'),
+    ('recover',),
+    ('recover',),
+    ('recover',),
+    ('recover',),
+    ('address_reused_under_a_turned_rule', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None, 22),
+    ('recover',),
+    ('delete_vm', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api'),
+    ('block_then_isolate', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', None, 22, None, False, False),
+    ('lose_everything', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None, '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-northeurope', 'reisolate+redeploy'),
+    ('unblock', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None),
+    ('quarantine_altered_then_reasserted', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None, True, True, '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'human_only', 'role removed', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 2, 'human_only', 'human_only'),
+    ('perimeter_lifted_beside_a_block', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None, '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', False, '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', 22),
+    ('tags_lost', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-northeurope'),
+    ('recover',),
+    ('customer_deletes_nsg', '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-edge'),
+    ('race', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', ('release', 'reassert'), 300),
+    ('address_reused', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.compute/virtualmachines/web', ('nic.get', 'always-429'), True, True, 'rg-app2', 'api', None, 'Windows', True, (8, 'before-crash'), 'human_only'),
+    ('customer_changes_ip', '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-1', 0, 20),
+    ('kept_at_the_lift', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.compute/virtualmachines/api', None, 'reset', False, 22),
+    ('recover',),
+    ('recover',),
+    ('tags_lost', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope'),
+    ('turned_then_address_reused', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.compute/virtualmachines/api', (8, 'before-crash'), 22, 'both', 22, ('/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-edge', 'glorfindel-block-192-31-196-7-api-api-nic-c272f2'), 'human_only'),
+]
+
+
+# I4E's review: the machine at 2 000 (seed 1999), no step of an older version's state. The same failure
+# on `main` 91dae76: an older defect of the reassertion of a block beside our perimeter, routed to #366.
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#366: I3, the reassertion says an IP no longer blocked while our perimeter block cuts it off")
+def test_the_reassertion_says_unblocked_where_our_perimeter_block_still_cuts(monkeypatch):
+    """I4E's review, the machine at 2 000 (seed 1999): « I3: the reassertion said 192.31.196.7 no
+    longer blocked on …/rg-edge/…/api (['api-nic']); our perimeter block still cuts it off ». No step
+    of an older version's state (I4E's rule, a no-op there, left out); it fails on `main` 91dae76
+    too: not I4E's family, routed to a follow-up lot (#366). Strict: once fixed, this fails, and the
+    mark goes."""
+    _run(monkeypatch, _I3_SEED1999_NET, *_I3_SEED1999_STEPS)

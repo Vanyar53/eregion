@@ -85,8 +85,11 @@ class ReleaseMixin:
             return []
         fixed = {self.ISOLATION_RULE_NAME.lower(), f"{self.ISOLATION_RULE_NAME}-out".lower()}
         how = "au partage illisible" if t.get("sharing_unknown") else "partagé"
+        # The record of an older isolation written over before I4E is not coming back: the
+        # operator is told what to do (I4E, review), or the release says this for ever.
         return [f'{t["nic_short"]}:{_rule_name(r)} (NSG {t["nsg_name"]} {how} : isolation d\'une ancienne '
-                "version, VM inconnue)"
+                "version, VM inconnue ; à retirer à la main si c'est la vôtre : az network nsg rule delete "
+                f'-g {t["nsg_rg"]} --nsg-name {t["nsg_name"]} -n {_rule_name(r)})'
                 for r in rules if _rule_name(r).lower() in fixed and _deny_applies(r, t.get("private_ips") or None)
                 and not _legacy_claimed(t["nsg_rg"], t["nsg_name"], _rule_name(r))]
 

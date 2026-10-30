@@ -2259,7 +2259,7 @@ complète et partielle : quatre cas, rouges sur `main` par leur comportement —
 monde du refus total d'I4C, api isolée de nouveau : la levée garde le refus et `legacy`, la
 vérification le voit, la règle retournée remise, la levée suivante le retire ; rouge sur `main`).
 Limite : un enregistrement déjà écrasé avant ce correctif ne revient pas — le reset dit « VM
-inconnue », le refus est à retirer à la main.
+inconnue », le refus est à retirer à la main ; depuis la relecture, le message (`_unattributable_fixed`) en donne la commande `az`, figé par `test_an_older_deny_all_no_record_names_says_how_to_take_it_off` (levée, reset, `verify_release`).
 
 **Les deux bornes** (A0 : l'oracle refuse plus, jamais moins ; aucune règle retirée ni restreinte).
 (1) **Le démontage** (`_recover_everything`) retirait une règle à nom fixe sur un NSG partagé quand

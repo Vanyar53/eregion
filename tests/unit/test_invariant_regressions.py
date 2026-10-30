@@ -3977,6 +3977,30 @@ def test_an_older_isolation_kept_through_a_new_one_goes_with_its_release(monkeyp
         shutil.rmtree(m.home, ignore_errors=True)
 
 
+@pytest.mark.parametrize("op", ["release", "reset", "verify"])
+def test_an_older_deny_all_no_record_names_says_how_to_take_it_off(monkeypatch, op):
+    """I4E, the review: an older version's record written over before I4E (or lost) does not
+    come back — on the NSG shared since, its deny-all stays « VM inconnue » and every release
+    says `release_partial`. The message now says what to do: the `az` command that removes it,
+    with its group, NSG and name, if it is the operator's VM's."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(legacy=("api-nic", False), api_nic={"own": "dedicated"}))
+        m.create_vm(data=Script("northeurope", "rg-app1", "api", _NSG_API, "Linux"))
+        out = {"release": m.connector.release_isolation, "reset": m.connector.sweep_vm_rules,
+               "verify": m.connector.verify_release}[op](API)
+        assert out.get("status") in ("release_partial", "swept_partial", None) and out.get("verified") is not True, out
+        for name in ("glorfindel-isolation-deny-all", "glorfindel-isolation-deny-all-out"):
+            assert (f"VM inconnue ; à retirer à la main si c'est la vôtre : az network nsg rule delete -g rg-edge "
+                    f"--nsg-name nsg-api-nic -n {name})") in str(out), out
+    finally:
+        m.teardown()
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
 def test_an_older_record_kept_by_a_new_isolation_stays_while_its_deny_all_does(monkeypatch):
     """I4E: api's older-version isolation, then the world of I4C's deny-all (api blocked, its
     rule turned into an allow, its IP changed, a new VM at the old address on api's NSG, cut

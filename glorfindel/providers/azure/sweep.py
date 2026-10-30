@@ -158,18 +158,19 @@ class SweepMixin:
                 m = block_re.match(name)
                 if m:
                     prefix = name[: m.start("rest") - 1]
-                    hashed = self._placement_rule_base(prefix, vm_name, t["nic_short"], t["nic_id"])
+                    hashed = {n for b in self._placement_rule_bases(prefix, vm_name, t["nic_short"], t["nic_id"])
+                              for n in (b, f"{b}-out")}
                     owned = {f"{prefix}-{x}".lower() for x in (
                         vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}")}
                     owned = {n for b in owned for n in (b, f"{b}-out")}
                 else:
-                    hashed, owned = iso_base, iso_names
+                    hashed, owned = {iso_base, f"{iso_base}-out"}, iso_names
                 # Named for this VM is not enough: a homonym behind the same NSG has the
                 # same legacy names — only a rule that applies to THIS NIC goes (L24),
                 # unless its name carries this NIC's hash (_nic_owns). A rule of the VM's
                 # other NIC waits for that NIC's pass (it used to be marked seen here,
                 # and skipped there).
-                if _nic_owns(r, {hashed, f"{hashed}-out"}, owned, t.get("private_ips") or None):
+                if _nic_owns(r, hashed, owned, t.get("private_ips") or None):
                     seen.add((nsg_key, name.lower()))
                     to_delete.append((t["nsg_rg"], t["nsg_name"], name))
                 elif m is None and name.startswith("glorfindel-block-"):

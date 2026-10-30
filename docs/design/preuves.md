@@ -1108,6 +1108,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I5R | blocage de périmètre (200) puis de la VM (210), la règle de la VM passée en allow par un tiers, réaffirmation | la règle de périmètre réécrite au premier numéro libre (220), sous cet allow : **l'attaquant atteignait la VM sur tous ses ports** |
 | RB1 | blocage de périmètre puis de la VM (une entrée), la règle de la VM passée en allow par un tiers, deux réaffirmations (ou une en `human_only`) | seul le périmètre réécrit ; « l'IP n'est plus bloquée » alors que le périmètre la coupait encore (faux, du côté prudent) |
 | RB1 | même chose, la seconde carte de Db--01 sur un autre subnet (tirage ajouté) | « reposé une fois » alors que la seconde carte restait ouverte à l'attaquant |
+| I4A | VM bloquée, sa règle entrante passée en allow par un tiers, son IP changée, une nouvelle VM à l'ancienne adresse, VM bloquée de nouveau (graine 8675 à 500, trouvé par la machine de RB1) | le blocage réécrivait sa règle par son nom, pour la nouvelle adresse : l'allow ôtée, **la nouvelle VM coupée** de flux qu'une opération sur l'autre ne doit pas toucher (I4) |
 | I5R | VM supprimée, l'entrée de son blocage perdue | `unblock` : `not_found` sans avoir cherché, le blocage resté sur le NSG partagé pour la VM suivante à cette adresse (trouvé en relecture d'I7S, hors de la machine) |
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
@@ -1687,6 +1688,69 @@ api bloquée, sa règle entrante retournée en allow par un tiers, son IP chang�
 l'ancienne adresse, api bloquée de nouveau — l'opération change les flux de la nouvelle VM ; cause
 supposée, non établie), pour un lot à part. Harnais avant/après (60 séquences, deux tours, mêmes
 modules) : 33 attrapés à chaque tour avant comme après, aucun perdu, les nouveaux à chaque tour.
+
+**I4A (29–30/10, #328) : un blocage réécrit sur une adresse reprise.** Le défaut figé par RB1 en
+`xfail` strict (graine 8675 à 500), présent sur `main` avant RB1. **Cause, établie** : api bloquée sur
+le NSG de son subnet, sa règle entrante (`glorfindel-block-<ip>-api-api-nic-<empreinte>`) passée en
+allow par un tiers ; l'IP d'api change, Azure donne l'ancienne à une nouvelle VM (la plus basse
+libre) — l'allow retournée laisse maintenant l'attaquant joindre cette VM. api bloquée de nouveau
+(`block`, ou la réaffirmation hors `human_only`) : `_block_ip_vm` (`providers/azure/blocks.py`)
+écrivait sa paire sous les mêmes noms (`_put_deny_rule`, un `create_or_update`), pour la nouvelle
+adresse d'api ; l'allow disparaissait, la nouvelle VM perdait les flux qu'elle lui ouvrait. Ce
+n'est pas une ouverture : une action disruptive sur la mauvaise VM (I4).
+
+**Correctif.** Avant d'écrire, le blocage lit la paire en place (`_plan_block`) ; une règle qui,
+réécrite ou retirée, changerait les flux d'une autre VM est **laissée** (`_left_on_others`) : une
+allow à notre nom dont une adresse n'est plus celle de la carte et qu'une autre carte tient (la
+liste des cartes, une fois par blocage), ou dont on ne sait pas qui la tient (cartes illisibles,
+une plage, une étiquette — jamais lu « personne », A0), ou `*` sur un NSG que d'autres partagent.
+La paire va alors sous le **second nom** de la carte (`…-<carte>-b-<empreinte>`,
+`_placement_rule_bases`) : même empreinte en fin de nom, la vérification sans état, le déblocage,
+le reset, la VM supprimée et le balayage des orphelines la lisent comme la première. L'autre règle
+de la première paire, à nous et ne visant aucune autre VM, est retirée une fois la paire posée
+(elle coupait la nouvelle VM : la retirer ne rend que ce qu'elle coupait). L'ancienne adresse à
+personne : réécrite comme avant (I7S). Ce qui est laissé est dit (`left_rules`, la commande qui
+le retire) et gardé dans le placement ; la passe suivante le dit sur une carte `rule_left`, une
+fois par ensemble (`left_said`), sans écrire.
+
+**Trouvé par la machine sur le premier correctif** (sa nouvelle règle, graine 42 à 2 000, présent
+sur `main` aussi, rejoué à la main sur 171a242) : web2 bloquée sur son NSG, sa règle sur le NSG du
+subnet (un placement plus ancien) passée en allow ; batch créée sur le NSG de web2 à l'ancienne
+adresse. Le blocage réécrit déplaçait **notre deny** vers la nouvelle adresse : l'allow retournée,
+derrière lui, laissait l'attaquant joindre batch sur 22 — une ouverture. Notre deny sur une
+adresse d'une autre VM est donc gardé aussi quand une règle du blocage de la carte, sur un NSG de
+la carte, est passée en allow pour cette adresse (`_turned_behind`) ; ces NSG illisibles, il est
+gardé (le garder n'ouvre rien). Même principe que I5Q pour la levée et le balayage (un deny qu'une
+règle retournée attend derrière ne part pas).
+
+**La relecture 5.5** a trouvé trois manques, corrigés : l'allow retournée qui attend derrière notre deny était cherchée par son adresse exacte — une plage (`10.0.0.0/16`) ou une étiquette (`VirtualNetwork`) lues « rien », le blocage ouvrait batch sur 22 (un inconnu lu « rien », A0) : `_takes_in` (`nsg.py`, la règle d'I5Q, à partager à la fusion) prend l'adresse, `*`, une plage qui la contient, et compte une étiquette ou une valeur illisible comme la prenant ; l'échec du retrait de la règle de la première paire était écrit où rien ne le lisait, `blocked` dit alors que notre deny `-out` restait sur l'adresse de la nouvelle VM — dit maintenant (`drop_failed`) ; la vérification sans état prenait la première paire présente par son nom — elle lit d'abord celle qui bloque la carte telle qu'elle est (deux deny de l'attaquant pour ses adresses), une allow avant la seconde paire n'est plus cachée. **Reste ouvert** (I4B, #333, avec le pendant de l'isolation) : le déblocage et le reset retirent une règle à l'empreinte de la carte quoi qu'elle soit devenue (`_nic_owns`) — l'allow retournée que le blocage laisse aussi : la VM qui a reçu l'ancienne adresse perd encore ces flux, au déblocage et non plus au blocage. La machine ne le voit pas : `unblock` et le reset jugent I4 sans les flux de l'attaquant (`perimeter=True`). Figé en `xfail` strict (`test_the_unblock_and_the_reset_leave_the_new_owner_of_the_old_address`, avec et sans re-blocage). « Personne » veut dire aucune carte de VM : une instance de VMSS qui tient l'adresse n'est pas vue (angle mort ancien).
+
+**La machine** tire maintenant la séquence (`address_reused_under_a_turned_rule` : bloquer, une
+règle du blocage retournée, l'IP changée, une VM créée à la plus basse adresse libre, bloquer de
+nouveau ; I4 vérifié par `_block`). Aucune règle retirée ni restreinte, aucun oracle affaibli.
+**Séquences figées** : la séquence de 8675 (plus `xfail`), l'adresse reprise dite sur une carte une
+fois (redite après acquittement : non), l'adresse à personne réécrite, notre deny réécrit pour la
+VM qu'il bloque, le détenteur inconnu, une plage, `*` sur un NSG partagé (le contournement dit), le
+second nom trouvé sans état (vérification, déblocage — l'IP changée de nouveau —, reset), le deny
+gardé quand une allow retournée attend derrière (NSG lisible ou non). **Hors du lot, figé en
+`xfail` strict** : le pendant de l'isolation (même séquence, api isolée par règles puis réisolée —
+la réisolation réécrit l'allow retournée par son nom, la nouvelle VM coupée), trouvé en sondant ce
+lot.
+
+**Mesures d'I4A.** `pytest` complet : 4 018 réussis, 7 sautés, 1 `xfail` ; `ruff` propre. Invariants :
+500 séquences sur les graines 8675, 1, 777 et 2718, puis 2 000 sur 42 et 322, verts (sur le premier
+correctif, 2 000 sur 42 tombait sur l'ouverture ci-dessus). Mutants M1755–M1769 (blocage,
+déblocage, reset, réseau, réaffirmation) : 15/15 par leurs séquences figées, à chaque tour. Par la
+machine seule : M1755 (la règle retournée réécrite) une graine sur deux à 500 (1 : I4 ; 2 : non),
+M1768 (notre deny levé devant l'allow retournée) sur 42 à 2 000. Harnais avant/après (60 séquences,
+deux tours, `--jobs 4`) sur les 144 mutants des modules touchés (blocage, déblocage, reset, levée,
+réseau, réaffirmation, ses cartes) : 123 attrapés à chaque tour avant (171a242) comme après, et les
+quinze nouveaux ; M1555 (le nom `-out` de la VM supprimée) réaligné sur la ligne réécrite.
+Aucun perdu : M20 et M830, 2/2 avant et 1/2 après à ce budget, remesurés à 500 séquences — 2/2 des deux côtés ; M02, M16, M23, M24, M26 et M761 mieux après (bruit à 60).
+Après la relecture : `pytest` complet 4 027 réussis, 7 sautés, 5 `xfail` (le pendant de
+l'isolation, le déblocage et le reset après une adresse reprise) ; M1755–M1769 et M1920–M1923,
+19/19 par leurs séquences figées à chaque tour ; invariants à 500 sur 8675 et 31337, puis 2 000
+sur 42, verts.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

@@ -1,0 +1,28 @@
+# BL1 (#280) — la boucle avec la réponse exécutée : une technique publique et une panne déclarée,
+# dans la même campagne, sur une VM du banc en non_disruptive. Glorfindel isole (ou bloque) seul,
+# vérifie sur Azure ; la reprise lève l'isolation ; la panne ne doit déclencher rien de disruptif.
+#
+# Vérifiée contre le catalogue avant tout plan (annatar/campaign/declared.py, `problems`) :
+# techniques implémentées, d'une bibliothèque publique (jamais un script maison), non
+# destructives ; panne implémentée, non destructive, déclarée sur les mêmes cibles, zone bench.
+#
+# Joué pas à pas : docs/banc-bl1.md. Mesuré : analysis/containment.py (temps pour contenir, part
+# contenue seule ; une panne prise pour une attaque comptée à part).
+id: bl1-reponse
+description: >
+  La panne d'abord (arrêt propre de gondolin, 5 min : rien de disruptif attendu), puis la création
+  d'un compte local par l'atomic épinglé (T1136.001 : isoler ou bloquer seul, vérifié), puis la
+  reprise (la levée de l'isolation, vérifiée). La panne avant la technique : une VM isolée
+  n'envoie plus sa télémétrie, et le retour de la panne se vérifie par le Heartbeat.
+zone: bench
+autonomy: non_disruptive
+targets: [vm-celebrimbor-gondolin]
+steps:
+  - kind: fault
+    ref: vm-shutdown              # technique_catalog.yaml (faults) ; gothmog/experiments/vm-shutdown.yaml
+    expect: no_disruptive_action  # aucune isolation ni blocage sur gondolin pendant sa fenêtre
+  - kind: technique
+    ref: T1136.001                # Atomic Red Team, épinglé (annatar/atomics/PIN)
+    expect: contain               # isolate_vm ou block_suspicious_ip, exécuté seul, vérifié, qui tient
+  - kind: recovery
+    expect: release               # glorfindel release <vm> --yes : l'isolation levée, vérifiée

@@ -305,6 +305,15 @@ campaign-report:
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (ls runs/campaigns)"; exit 1; }
 	$(PYTHON) -m analysis.campaign_report runs/campaigns/$(CAMPAIGN)
 
+# BL1 — le temps pour contenir et la part contenue seule d'une campagne, calculés depuis ses fichiers
+# (analysis/containment.py) ; aucun modèle, rien d'écrit. FAULT_RUNS=<run Gothmog>[,<run>] : une
+# panne à rattacher en plus de celles qui la chevauchent sur une de ses cibles ; JSON=1 : en JSON.
+BL1_COMMA := ,
+campaign-containment:
+	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (ls runs/campaigns)"; exit 1; }
+	@case "$(CAMPAIGN)$(FAULT_RUNS)" in *[!A-Za-z0-9._,-]*) echo "CAMPAIGN ou FAULT_RUNS invalide"; exit 1;; esac
+	$(PYTHON) -m analysis.containment runs/campaigns/$(CAMPAIGN)$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)
+
 # IA0 harness: fidelity and a planted instruction, against the real analysis model.
 report-eval:
 	$(PYTHON) scripts/report_eval.py --runs $(or $(RUNS),3)
@@ -886,9 +895,12 @@ CAMPAIGN_MAX ?= 5
 
 # @ : la commande porte CAMPAIGN_TARGET (un resource_id, avec l'abonnement) — on ne la répète
 # pas à l'écran (même convention qu'orodruin-stop).
+# BL1 : CAMPAIGN_DECLARED=<fichier sous annatar/campaign/declared/> — exactement ses techniques,
+# vérifiées contre le catalogue (docs/banc-bl1.md) ; sans lui, le planificateur.
 orodruin-campaign-plan:
 	@test -n "$(CAMPAIGN_TARGET)" || { echo "CAMPAIGN_TARGET=<resource_id de la VM inscrite> requis"; exit 1; }
-	@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX))" && $(ORO_SSH) '$(ORO_RUN) annatar campaign plan --target "$(CAMPAIGN_TARGET)" --max-scenarios $(CAMPAIGN_MAX)'
+	@case "$(CAMPAIGN_DECLARED)" in *[!A-Za-z0-9._/-]*|*..*) echo "CAMPAIGN_DECLARED invalide : $(CAMPAIGN_DECLARED)"; exit 1;; esac
+	@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX)$(if $(CAMPAIGN_DECLARED),$(BL1_COMMA) déclarée $(CAMPAIGN_DECLARED)))" && $(ORO_SSH) '$(ORO_RUN) annatar campaign plan --target "$(CAMPAIGN_TARGET)" --max-scenarios $(CAMPAIGN_MAX)$(if $(CAMPAIGN_DECLARED), --declared /app/$(CAMPAIGN_DECLARED))'
 
 orodruin-campaign-run:
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }

@@ -1208,6 +1208,9 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | RB1 | blocage de périmètre puis de la VM (une entrée), la règle de la VM passée en allow par un tiers, deux réaffirmations (ou une en `human_only`) | seul le périmètre réécrit ; « l'IP n'est plus bloquée » alors que le périmètre la coupait encore (faux, du côté prudent) |
 | RB1 | même chose, la seconde carte de Db--01 sur un autre subnet (tirage ajouté) | « reposé une fois » alors que la seconde carte restait ouverte à l'attaquant |
 | I4A | VM bloquée, sa règle entrante passée en allow par un tiers, son IP changée, une nouvelle VM à l'ancienne adresse, VM bloquée de nouveau (graine 8675 à 500, trouvé par la machine de RB1) | le blocage réécrivait sa règle par son nom, pour la nouvelle adresse : l'allow ôtée, **la nouvelle VM coupée** de flux qu'une opération sur l'autre ne doit pas toucher (I4) |
+| I4B | après la séquence d'I4A (une allow retournée laissée sur l'ancienne adresse, une nouvelle VM dessus), `unblock` ou `reset` (graines 42 et 8675 à 500, une fois l'oracle durci) | la règle retirée à l'empreinte de la carte : **la nouvelle VM coupée** des flux que l'allow lui donnait (I4) |
+| I4B | VM isolée par règles, sa règle d'isolation entrante passée en allow, son IP changée, une nouvelle VM à l'ancienne adresse, VM réisolée (ou réaffirmée, graine 322 à 2 000) | l'isolation réécrite par son nom : la nouvelle VM coupée ; ou notre refus déplacé de l'ancienne adresse où une de nos règles retournée attendait : **la nouvelle VM ouverte** (I4, I5) |
+| I4B | blocage coupé avant son état, VM isolée par quarantaine, état et tags perdus, quarantaine retirée par quelqu'un, VM réisolée (CI macOS, graine au hasard à 500) | la levée remet la carte nue ; `unblock` : `not_found`, le blocage resté sur le NSG que la carte portait (I7) |
 | I5R | VM supprimée, l'entrée de son blocage perdue | `unblock` : `not_found` sans avoir cherché, le blocage resté sur le NSG partagé pour la VM suivante à cette adresse (trouvé en relecture d'I7S, hors de la machine) |
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
@@ -1990,6 +1993,90 @@ Après la relecture : `pytest` complet 4 027 réussis, 7 sautés, 5 `xfail` (le 
 l'isolation, le déblocage et le reset après une adresse reprise) ; M1755–M1769 et M1920–M1923,
 19/19 par leurs séquences figées à chaque tour ; invariants à 500 sur 8675 et 31337, puis 2 000
 sur 42, verts.
+
+**I4B (30/10, #333) : le déblocage, le reset, la levée et l'isolation, sur une adresse reprise.**
+La suite d'I4A, relevée par sa relecture. **L'oracle d'abord** : au déblocage et au reset,
+`perimeter=True` retirait tous les flux de l'attaquant des autres VM de la comparaison (un
+déblocage peut lever un périmètre, qui les ouvre). Durci sans rien affaiblir : ces flux d'une
+autre VM ne sont plus jamais retirés (`_attacker_never_cut`, sauf une VM en quarantaine, comme
+`_only_sealed`), et ils ne s'ouvrent que derrière un périmètre réellement levé — une règle au nom
+de l'IP seule retirée d'un NSG qui gouverne la VM, d'après le journal du faux
+(`_perimeter_lifted_for`) — ou là où seule la règle restée d'une autre carte fermait ; de même dans
+deux opérations à la fois. Sur `main`, 500 séquences : les graines 42 et 8675 tombent (« I4: an
+operation on …/api cut off …/rg-app1/…/api », le déblocage), 1, 101, 322 et 31337 passent ; aucune
+séquence n'a ouvert à tort.
+
+**Causes et correctifs.** (1) **Le déblocage et le reset** (`xfail` d'I4A, quatre cas) retiraient
+une règle à l'empreinte de la carte quoi qu'elle soit devenue (`_nic_owns`) : l'allow retournée
+laissée par I4A, qui vise la VM ayant repris l'adresse, partait avec — cette VM perdait ce qu'elle
+lui ouvrait. (2) **La garde d'I5Q** (`_turned_guard`) laissait partir une allow (`!= deny`). Une
+seule garde maintenant pour toute suppression d'une de nos règles par son nom
+(`turned._held_by_turned`) : une règle passée en allow qui vise une autre carte vivante qu'un de
+ses NSG gouverne — son adresse, `*` sur un NSG d'autres cartes, une plage ou une étiquette (A0) —
+reste (`_opens_another`), comme notre refus qu'une règle retournée attend derrière (I5Q). Le
+déblocage (placements et balayage), le reset et le balayage de la levée la demandent, le premier
+pour toute règle, les autres quand la règle vise autre chose que les adresses de la VM
+(`_aims_elsewhere`) ; ce qui reste est dit (`unblock_partial`, `swept_partial`, `release_partial`).
+(3) **L'isolation réécrite** (`xfail` ancien) : réisolée après le changement d'IP, elle réécrivait
+par son nom l'allow retournée qui vise la nouvelle VM. (4) **La réaffirmation** (graine 322 à
+2 000) et (5) **la levée interrompue** (même graine, 18 étapes — la cause, non établie par I5Q,
+est l'isolation par laquelle l'étape commence, pas la levée) : l'isolation réécrite déplaçait notre
+refus de l'ancienne adresse, où une règle de blocage de la VM, retournée, attendait derrière lui sur
+le NSG du subnet — la nouvelle VM s'ouvrait. L'isolation fait maintenant comme le blocage d'I4A
+(`_plan_isolation`) : elle lit sa paire, laisse ce que la garde garde (`left_rules`, `left_note`, la
+carte de la réaffirmation), s'écrit sous le second nom de la carte (`…-b-<empreinte>`, lu par la
+vérification, la levée et le reset) et retire l'autre paire. Les deux séquences de 322 échouaient
+dans leur dernière étape ; elles reçoivent les tirages de la fin de l'étape, jamais atteinte avant.
+(6) **Le quatrième point de la fiche** : la garde du blocage (`_turned_behind`, I4A) ne lisait que
+les règles du blocage de la carte, sur ses NSG ; elle lit aussi toute règle retournée des nôtres sur
+un NSG qui gouverne le détenteur de l'adresse (`_waits_for`) — une isolation retournée derrière notre
+refus le laissait lever ; illisibles : gardé.
+
+**Le septième cas, trouvé par la CI macOS** (graine au hasard, 500 séquences ; présent sur `main`
+897cd21) : « I7: block rules of …/api left after unblock ». Rejoué à l'identique sur `main`, puis
+instrumenté : la levée du démontage remet la carte d'api **nue** (son original, enregistré « aucun »
+après que quelqu'un a retiré la quarantaine), et le déblocage, l'entrée du blocage perdue (un crash
+après les écritures), ne regardait que les NSG que la carte porte — aucun : `not_found`, le blocage
+resté sur `nsg-api-nic`. **Le code, pas la machine** : ses règles portent l'empreinte de la carte,
+d'aucune autre ; le déblocage les cherche maintenant sur tous les NSG de l'abonnement quand la carte
+n'a pas de NSG à elle que rien n'enregistre (`_unplaced_blocks`, comme pour une VM supprimée). La
+séquence de 39 étapes, réduite à la main à 7, est figée
+(`test_the_unblock_finds_the_block_of_a_nic_left_with_no_nsg_it_knows`, entrée perdue : rouge sur
+`main` avec le même message ; entrée gardée : verte des deux côtés).
+
+**Le démontage** : ce que les opérations gardent maintenant, l'opérateur le remet comme il était,
+comme elles le disent — en plus des règles retournées que retiennent nos refus (I5Q), les règles
+retournées qui visent une autre carte (`_turned_aimed_elsewhere`, la convention et le journal du
+test, jamais les marques du code) — jusqu'à ce qu'il n'en reste aucune : remise, une allow redevient un refus des nôtres sur l'adresse d'une autre carte, qui peut à son tour retenir une autre règle retournée (graine 101 à 500 sur le code d'I4B, le trou de l'opérateur et non du code, figée : `test_a_turned_rule_put_back_may_hold_back_another_in_its_turn`). Aucune règle de la machine retirée ni restreinte.
+
+**Limites de l'oracle, relevées par la relecture d'I4B** (pour un lot de suite, non réglées ici) :
+la machine ne vérifie pas que ce que le déblocage garde est **dit** — seules les séquences figées le
+voient (`unblock_partial`, la règle nommée) ; et l'exemption « périmètre levé » (`_perimeter_lifted_for`)
+exempte toute ouverture des flux de l'attaquant vers la VM dans l'opération, alors qu'elle pourrait
+n'exempter que les flux que les règles de périmètre retirées fermaient.
+
+**Après la relecture.** La garde de la recherche sur tous les NSG a sa séquence
+(`test_the_search_on_every_nsg_keeps_a_turned_rule_aimed_at_the_vm_that_took_the_address`, rouge sur
+`main`) et son mutant M1906 ; la séquence de la CI de la PR #342, rejouée tirage par tirage, est figée
+(`test_the_sequence_of_pr_342_reasserts_without_opening_the_vm_at_the_old_address` : rouge sur `main`,
+« I5: the reassertion opened flows of …/rg-app2/…/api » ; la seule qui attrape M1898 hors des siennes) ;
+l'aperçu du reset demande la garde (`test_the_reset_preview_says_what_it_keeps`).
+
+**Mesures d'I4B.** `pytest` complet : 4 143 réussis, 7 sautés, 1 `xfail` (L2, du lot L2Q) ; `ruff`
+propre. Invariants : 500 séquences sur les graines 1, 42, 101, 322, 8675 et 31337, puis 2 000 sur 42,
+322 et 8675, verts (101 à 500 tombait sur le trou de l'opérateur avant sa reprise). Mutants
+M1890–M1905 : 16/16 par leurs séquences figées, à chaque tour (60 séquences, deux tours). Par la
+machine seule, une graine au hasard à 500 : M1900 (les lecteurs aveugles au second nom de
+l'isolation) ; M1890 (la garde qui laisse partir une allow) sur 42 et 8675 à 500 ; M1898
+(l'isolation réécrite par-dessus) ni sur 322 ni sur 42 à 2 000 — ses séquences figées seulement.
+Harnais avant/après (60 séquences, deux tours, `--jobs 4`) sur les 150 mutants des modules touchés
+(déblocage, vérification du blocage, blocage, reset, levée, isolation, règles retournées,
+réaffirmation) : 134 attrapés à chaque tour sur `main` 897cd21, 147/166 après (les seize nouveaux
+compris). Deux perdus à la première mesure, rendus : M1345 (le tag d'une carte nue ignoré) et M1761
+(le balayage du déblocage aveugle au second nom) — la recherche sur tous les NSG
+(`_unplaced_blocks`) faisait le même travail par un autre chemin ; chacun a maintenant une séquence
+où rien ne le remplace (la liste des NSG refusée ; la carte a un NSG à elle). M03 et M761, attrapés
+avant et à moitié après à 60, remesurés à 500 : 2/2 des deux côtés ; M830 et M21 mieux après.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

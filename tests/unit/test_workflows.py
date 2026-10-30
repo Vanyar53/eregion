@@ -463,7 +463,7 @@ def test_the_canary_logs_az_in_with_githubs_token_never_a_secret(tmp_path, endpo
     bin_.mkdir()
     log = tmp_path / "log"
     _fake(bin_ / "curl", f'echo "curl $*" >> {log}; echo \'{{"value": "jwt-from-github"}}\'\n')
-    _fake(bin_ / "az", f'echo "az $*" >> {log}\n')
+    _fake(bin_ / "az", f'echo "az $*" >> {log}; echo "AZ-CALLED $1"\n')
     step = _canary_step(_canary_job(), "az login")
     env = {"ARM_CLIENT_ID": "app", "ARM_TENANT_ID": "tenant", "ARM_SUBSCRIPTION_ID": "sub",
            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "bearer-x"}
@@ -479,7 +479,9 @@ def test_the_canary_logs_az_in_with_githubs_token_never_a_secret(tmp_path, endpo
     assert "Authorization: bearer bearer-x" in calls[0]
     (login,) = [c for c in calls if c.startswith("az login")]
     assert "--service-principal -u app --tenant tenant --federated-token jwt-from-github" in login
-    assert "::add-mask::jwt-from-github" in res.stdout
+    # The JWT is said once, to mask it, before az is called — never traced, never on stderr.
+    assert res.stdout.count("jwt-from-github") == 1 and "jwt-from-github" not in res.stderr, res
+    assert res.stdout.index("::add-mask::jwt-from-github") < res.stdout.index("AZ-CALLED login"), res.stdout
 
 
 def test_each_run_of_the_matrix_has_its_own_suffix():

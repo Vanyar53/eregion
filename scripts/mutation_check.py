@@ -5659,6 +5659,8 @@ MUTANTS += [
      "az role assignment create --role Contributor \\\n"),
     ("M2114", "the runner's second signal cuts the canary's cleanup short: the quarantine NSG left (P04)", JIT_SH,
      "  trap '' INT TERM\n  echo \"== cleanup\"\n", "  echo \"== cleanup\"\n"),
+    ("M2115", "the canary's login traced: the OIDC token written whole into the job's log (P04)", CAN,
+     "          jwt=$(curl -fsS", "          set -x\n          jwt=$(curl -fsS"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
 

@@ -2122,6 +2122,9 @@ def _slim_cycle(rec: dict) -> dict | None:
         # ends there (eregion_core/run_report.timeline); else at the record's.
         "verified_at": outcome.get("verified_at"),
         "cycle_error": bool(rec.get("cycle_error")),
+        # BL1: what the share contained alone reads besides (analysis/containment.py).
+        "signal_id": sig.get("signal_id", ""), "escalation_type": outcome.get("escalation_type", ""),
+        "unverified": bool(outcome.get("unverified")),
     }
 
 
@@ -2346,18 +2349,27 @@ async def campaign(cid: str) -> dict:
     if not (cdir / "manifest.json").is_file():
         return {"error": f"unknown campaign: {cid}"}
     from dataclasses import asdict
+    from analysis import containment
     from analysis.campaign_report import collect_facts
+    from glorfindel import escalations as esc_module
     skipped: list[str] = []
     try:
         facts = await asyncio.to_thread(collect_facts, cdir, _RUNS, skipped.append)
     except Exception as exc:
         return {"error": f"campaign unreadable: {exc}"}
+    # BL1: the time to contain and the share contained alone of this campaign, from the same
+    # files, and the cards of this host (an isolation that did not hold) — said, never raised.
+    try:
+        contained = (await asyncio.to_thread(
+            containment.load, cdir, _RUNS, cards=esc_module.all_escalations())).as_dict()
+    except Exception as exc:
+        contained = {"error": f"response not computed: {type(exc).__name__}: {str(exc)[:160]}"}
     try:
         report = (cdir / "report.md").read_text(encoding="utf-8")
     except OSError:
         report = ""
     return {"campaign_id": cid, "facts": [asdict(f) for f in facts], "skipped": skipped,
-            "report_md": report}
+            "report_md": report, "containment": contained}
 
 
 def _published_heartbeat() -> dict:
@@ -2437,6 +2449,26 @@ async def coverage_route(kind: str = "") -> dict:
     return m
 
 
+def _manual_liftings(since: float) -> list:
+    """The operator's lifts of a containment (runs/manual_actions.jsonl: release, reset,
+    unblock) since ``since`` — where the overview stops watching an isolation (BL1)."""
+    from analysis import containment
+    try:
+        lines = (_RUNS / "manual_actions.jsonl").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    out = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        lift = containment.lifting_of(rec)
+        if lift is not None and lift[1] is not None and lift[1] >= since:
+            out.append(lift)
+    return out
+
+
 @app.get("/api/indicators")
 async def indicators() -> dict:
     """The five indicators of the finality, for the overview (UI-2, #206): computed from the run
@@ -2457,14 +2489,16 @@ async def indicators() -> dict:
     def gather() -> dict:
         runs = ind.read_runs(_run_reports(), since.timestamp())
         cycles = _watch_cycles(since.timestamp())
-        cards = [e for e in esc_module.all_escalations() if e.get("exercise_run")]
+        every = esc_module.all_escalations()
+        cards = [e for e in every if e.get("exercise_run")]
         r30 = esc_module.observation_report(since=since)
         r7 = esc_module.observation_report(since=now - timedelta(days=7))
         t = _time.time()
         # A run dated in the future is left out here as in the matrix (C1).
         runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]
         out = ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
-                          r7.get("disruptive") or {}, confidence_threshold(), t)
+                          r7.get("disruptive") or {}, confidence_threshold(), t,
+                          all_cards=every, liftings=_manual_liftings(since.timestamp()))
         return coverage.feed(out, coverage_matrix(t))
     return await asyncio.to_thread(gather)
 

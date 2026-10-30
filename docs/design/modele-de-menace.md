@@ -143,7 +143,33 @@ Trois canaux, à ne pas confondre :
 | E | Un processus qui prend un conteneur (une dépendance, une ligne forgée) | Aucune capacité, aucun gain de privilège, la racine en lecture seule : il n'écrit que dans ses montages (SEC7, testé) |
 | T | Un plan d'Orodruin, sur un poste sans l'état de H0, retire à la watch hébergée l'accès au canal | Refusé, sauf `NO_WATCH=1` dit (SEC7) |
 | D | Un injecteur qui s'emballe | Plafond, arrêt d'urgence, fenêtres bornées (O1, B2) |
-| E | Le Glorfindel hébergé est poussé à écrire | Il n'en a pas les droits (Reader) et tourne en lecture seule, `human_only` forcé au push |
+| E | Le Glorfindel hébergé est poussé à écrire | Il n'en a pas les droits (Reader) et tourne en lecture seule, `human_only` forcé au push. **Exception temporaire, décision de Jonathan pour BL1 (30/10)** : le temps de la session de banc, voir l'encadré ci-dessous |
+
+**L'exception de BL1 (décision de Jonathan, 30/10 ; temporaire).**
+
+Le temps de la session de banc de BL1 ([`docs/banc-bl1.md`](../banc-bl1.md)), l'identité managée de H0
+reçoit le rôle « Eregion Glorfindel Response », et `GLORFINDEL_READ_ONLY=0`. Il s'agit de mesurer
+le confinement.
+
+- **Portée** : `rg-celebrimbor` seul, le groupe du banc. Rien sur l'abonnement, rien sur le
+  groupe de H0, jamais le restore.
+- **Ce qui tient pendant la session** :
+  - bree reste en `human_only` : la watch n'y fait rien seule ;
+  - seule gondolin, inscrite `bench`, passe en `non_disruptive`, après son contrôle de préparation ;
+  - les écritures autonomes hors cycle (le retrait d'une règle orpheline) restent gardées par le
+    mode de la VM qu'elles touchent (`glorfindel/orphans.py`, `_ALONE`) ;
+  - la console reste derrière le tunnel SSH et son jeton : un clic qui écrit est le geste d'un
+    humain ;
+  - le CD est en pause (`make glorfindel-host-cd-disable`) : aucune release ne redéploie H0 au
+    milieu de la campagne.
+- **Ce qui est défait à la fin, et comment le vérifier** :
+  - le rôle est retiré : `az role assignment list --assignee <principal> --all` ne montre plus que
+    `Reader` et `Log Analytics Reader` ;
+  - `GLORFINDEL_READ_ONLY=1` est repoussé : le bandeau « lecture seule » de la console revient, et
+    `make glorfindel-host-status` ne montre aucune erreur ;
+  - gondolin revient en `human_only` : `glorfindel list` le montre, et le push de la config force
+    de nouveau `human_only` ;
+  - le CD est réactivé : `make glorfindel-host-cd-enable`, puis `make glorfindel-host-cd-status`.
 
 **Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`.
 

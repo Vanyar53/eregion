@@ -90,7 +90,8 @@ COMPONENTS: dict[str, Component] = {
         absent_deps=GLORFINDEL_ONLY_DEPS,
         tests=(
             "test_annatar_atomic.py", "test_annatar_cli.py", "test_annatar_detection.py",
-            "test_annatar_run_exit.py", "test_campaign_channel.py", "test_campaign_manifest.py",
+            "test_annatar_run_exit.py", "test_campaign_channel.py", "test_campaign_declared.py",
+            "test_campaign_manifest.py",
             "test_campaign_planner.py", "test_campaign_runner.py", "test_campaign_synthesizer.py",
             "test_engine.py", "test_injector_guards.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
             "test_signals.py",
@@ -110,7 +111,7 @@ COMPONENTS: dict[str, Component] = {
 TOGETHER = (
     "test_activity_logs.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
-    "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
+    "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
     "test_coverage.py",
     "test_restore_moment.py",
     "test_signal_origin.py",

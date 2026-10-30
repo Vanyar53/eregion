@@ -219,3 +219,13 @@ def test_a_next_page_outside_arm_is_refused_and_never_fetched():
     with pytest.raises(RuntimeError, match="outside Azure Resource Manager"):
         TagEnrollment(credential=_Cred(), get=get).vms("s")
     assert all(u.startswith(ARM + "/") for u in asked)
+    # A host that only begins like ARM's is another host.
+    asked.clear()
+
+    def get_lookalike(url, headers=None, params=None, timeout=None):
+        asked.append(url)
+        return _Resp({"value": [], "nextLink": "https://management.azure.com.evil.example/next"})
+
+    with pytest.raises(RuntimeError, match="outside Azure Resource Manager"):
+        TagEnrollment(credential=_Cred(), get=get_lookalike).vms("s")
+    assert all(u.startswith(ARM + "/") for u in asked)

@@ -2541,7 +2541,67 @@ l'élagage des placements après un `unblock_partial`). Atteinte à 60 séquence
 La graine 31337 à 2 000 (15 étapes, 4 restées) : un blocage de web dont les règles sont retournées deux
 fois, le rôle retiré, puis un contournement sous `nsg.get` toujours en 429 — « L1: the block of …/web is
 bypassed by a customer allow ; the reassertion doesn't say so »
-(`test_a_bypassed_block_is_said_while_its_nsg_cannot_be_read`, routé vers #369).
+(`test_a_bypassed_block_is_said_while_its_nsg_cannot_be_read`, routé vers #369). **Réglée par L1C**
+(ci-dessous) ; la lecture « sous `nsg.get` toujours en 429 » était fausse.
+
+**L1C (30/10, #369) : un contournement dit quand une règle de sa paire a disparu ; un autre nom ne
+remplace que s'il refuse.** Le cas figé par L1B (la graine 31337 à 2 000), et la réserve de sa relecture.
+**Cause, établie par les tests** (rouges sur `origin/main` e75d527). Ni une lecture refusée, ni le
+disque plein : la règle `said_then_back_after_a_full_disk` tire une faute (`nsg.get`, `always-429`) que
+sa branche « contournement » n'emploie jamais (`vm, rid, _ = self._draw(data)`), et la séquence tombe
+à la première passe, avant le disque plein. Le blocage de web sur le NSG du sous-réseau : sa règle
+`-out` retournée puis partie (deux `block_turned_then_reasserted`), dite (une carte de dérive), le rôle
+retiré (aucune écriture ne la repose) ; puis l'allow-https du client à 110, avant notre deny entrant à
+210, élargie en allow de tout. `verify_block_ip` lisait la paire `absent` (`_block_pair_state`), la
+rangeait dans ce qui manque et passait à la suivante : ce qui restait de la paire — un deny entrant en
+place, une allow avant lui qui laisse passer la menace — n'était jamais lu, et la vérification ne
+rendait que `missing_rules`. La réaffirmation (`say_bypass`, `_bypassing`) n'écrit une carte de
+contournement que sur `shadowed_by` : aucune, tant que la règle manquait (L1). Le même retour perdait
+aussi un contournement lu sur une autre carte de la VM dès qu'une carte avait perdu ses règles. Et le
+même défaut pour une isolation (construit à la main, rouge sur e75d527) : son `-out` changé à la main
+(une allow, un port, un protocole), la carte « non couverte » seule (`uncovered_nics`), sans lire le deny
+entrant qui restait, contourné.
+**Correctif.** `verify_block_ip` lit ce qui reste d'une demi-paire (`_half_bypassed` : le sens encore
+en place, un deny du bloc de l'attaquant, et les allows avant lui ; pour un blocage, seulement ce qui
+laisse passer la menace) et le rend en `shadowed_by` à côté de `missing_rules` — ces règles de la
+demi-paire sont rangées comme disparues (`_lost`), le contournement d'une autre carte aussi porté par
+le retour « manquant ». `verify_isolation` de même pour une carte non couverte (`_half_shadowed`). La
+réaffirmation écrit les deux cartes : la dérive (reposée hors `human_only`, dite sinon) et le
+contournement. **La réserve de la relecture de L1B** (`_recorded_gone`, `if present & others`) : un
+autre nom de la carte ne remplace un placement sur un NSG que s'il y forme un refus — sa paire, les deux
+deny qui coupent la carte (`_deny_isolates`) —, jamais une règle seulement présente. Le premier nom
+retourné en allow (visant une autre adresse), l'isolation écrite sous `-b-`, une ancienne paire
+contournée sur le NSG de la carte, la paire `-b-` retirée : la carte nommait le `-out` du premier nom
+— la mauvaise règle —, ou, ce `-out` resté (un `drop_failed`), rien de disparu. La paire de son propre
+nom, entière, n'a rien de disparu ; en partie, elle ne refuse pas : le filtre « autre nom » n'est plus
+nécessaire.
+**Figé** : `test_a_bypassed_block_is_said_while_a_rule_of_its_pair_is_gone` (la séquence de la graine,
+son `xfail` levé, complétée jusqu'au bout de la branche — le disque plein à la 1re, 3e ou 6e écriture,
+`human_only` ou `non_disruptive`), `test_a_bypassed_isolation_is_said_while_a_rule_of_its_pair_is_gone`
+(son pendant, `access`, `port`, `protocol`) ; `test_glorfindel.py` :
+`…block_half_gone_and_bypassed_says_both`, `…bypass_on_one_nic_is_said_beside_rules_gone_on_another`,
+`…isolation_half_gone_and_bypassed_says_both`, `…turned_first_name_never_supersedes_the_second_gone`
+(les deux variantes de la relecture), `…superseding_pair_must_cut_the_nic_both_ways`. Les onze rouges
+sur `origin/main`. Aucun oracle touché : la machine n'a rien de nouveau, elle atteignait déjà l'état.
+
+**Mutants M2230–M2235** (le blocage : la demi-paire jamais lue, le contournement perdu par le retour
+« manquant », la règle de la demi-paire perdue, une allow qui laisse la menace dehors lue contournante ;
+l'isolation : la demi-paire jamais lue ; un nom seulement présent qui remplace un placement) : 6/6 par
+leurs tests, à chaque tour. Par la machine seule (500 séquences, graines 1, 42 et 8675) : M2230, M2231,
+M2232 et M2234 0/3 — l'état (une règle de la paire partie, l'allow élargie avant l'autre, aucune
+écriture qui la repose) reste rare, comme M2040 et M1965 ; la séquence figée les tient. M2045 et M2046
+réancrés sur le nouveau contrôle (le refus d'un autre nom ; `and` changé en `or` : un seul sens qui
+refuse suffit, le `-out` disparu tu) ; le filtre « autre nom que le sien » de L1B n'existe plus — sa
+propre paire, entière, n'a rien de disparu, et en partie ne refuse pas.
+
+**Mesures de L1C.** `pytest` complet : 4 577 réussis, 7 sautés, 4 `xfail` (l'I5 de la graine 1618,
+#363, #366, #368 : hors du lot) ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants
+sur l'arbre final : 500 séquences sur les graines 31337, 42, 777, 1, 322, 101, 8675, 555 et 7, puis
+2 000 sur 31337, 42, 777 et 8675, verts. Harnais avant/après (60 séquences, deux tours, `--jobs 4`,
+graine 4242) sur les 85 mutants de la vérification (`verify.py`, `verify_block.py`) et de la
+réaffirmation (`reassert.py`, `reassert_cards.py`) : 78/85 attrapés à chaque tour sur e75d527, 78/85
+après, plus les six nouveaux (84/91) ; M13, M21, M31, M34, M37 et M38 par leurs seules séquences
+figées des deux côtés, M1645 survit des deux côtés (déjà vrai avant). Aucun perdu.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

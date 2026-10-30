@@ -39,6 +39,7 @@ ISO = "glorfindel/providers/azure/isolation.py"
 REL = "glorfindel/providers/azure/release.py"
 VER = "glorfindel/providers/azure/verify.py"
 UNB = "glorfindel/providers/azure/unblock.py"
+VBL = "glorfindel/providers/azure/verify_block.py"   # out of unblock.py (I4B)
 SWP = "glorfindel/providers/azure/sweep.py"
 SDK = "glorfindel/providers/azure/sdk.py"
 FAC = "glorfindel/actions.py"                 # the façade (A1)
@@ -160,7 +161,7 @@ MUTANTS = [
      "        from glorfindel.config import load_glorfindel_config\n        iso = load_glorfindel_config().isolation\n",
      "        from glorfindel.config import load_glorfindel_config\n        try:\n            iso = load_glorfindel_config().isolation\n"
      "        except Exception:\n            return True, \"\"\n"),
-    ("M16", "blocks verified by rule name, not content (S2)", UNB,
+    ("M16", "blocks verified by rule name, not content (S2)", VBL,
      "        altered = [n for n, r, d in zip(names, found, (\"inbound\", \"outbound\")) if not _deny_blocks(r, d, ip, ips)]",
      "        altered = []"),
     ("M17", "per-VM lock inoperative", AZC,
@@ -170,13 +171,13 @@ MUTANTS = [
     ("M18", "a NIC's old-IP rule recognised by content only (L26)", NSG,
      "    if name in hashed:\n        # Only Glorfindel names a rule with a NIC's hash",
      "    if name in hashed and _deny_applies(rule, ips):\n        # Only Glorfindel names a rule with a NIC's hash"),
-    ("M19", "a block verified against the IPs recorded at block time (L26)", UNB,
+    ("M19", "a block verified against the IPs recorded at block time (L26)", VBL,
      "                now = current.get(nic) if current is not None and isinstance(nic, str) else None",
      "                now = None"),
     ("M20", "release asks for the original of a NIC no longer in quarantine (L26)", REL,
      "                        if now and not _same_id(now, p[\"nsg_id\"]):",
      "                        if False:"),
-    ("M21", "a block counted on an NSG that no longer governs the NIC (L26)", UNB,
+    ("M21", "a block counted on an NSG that no longer governs the NIC (L26)", VBL,
      '                    off = [p for p in ps if (p["nsg_rg"].lower(), p["nsg_name"].lower()) not in governing]',
      "                    off = []"),
     ("M22", "a partial release's flat fields read as a legacy state (L26)", REL,
@@ -235,7 +236,7 @@ MUTANTS = [
     ("M37", "reassertion alerts keyed by the VM's name (A0, L1)", "glorfindel/reassert.py",
      '    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")',
      '    return f"reassert-{vm}" + (f"-{ip}" if ip else "")'),
-    ("M38", "a block gone behind the quarantine not reported (A0, L1)", UNB,
+    ("M38", "a block gone behind the quarantine not reported (A0, L1)", VBL,
      "                                    held_missing += names",
      "                                    pass"),
     ("M39", "reset reads a bare NIC's original from the tag only (A0)", SWP,
@@ -3349,6 +3350,9 @@ MUTANTS += [
      UNB, "        if q_bare is not None:\n            return tagged\n", ""),
 ]
 TESTS.update({"M1343": f"{_U3F} {INVARIANTS}", "M1344": _U3F, "M1345": _U3F})
+# I4B: the search on every NSG (_unplaced_blocks) stands in for M1345's NIC when the subscription's NSGs
+# can be listed — refused, it can't: measured there too.
+TESTS["M1345"] = f"{_U3F} tests/unit/test_invariant_regressions.py::test_an_unblock_reads_a_bare_nics_tag_where_its_block_lies"
 # U3F: a race that never comes back fails, its waiting threads unwound — the job no longer
 # hangs; the jobs that run the invariants are bounded.
 MUTANTS += [
@@ -4608,17 +4612,17 @@ MUTANTS += [
     ("M1621", "« reposé » said from the writes alone, Azure not read again (RB1, A0)", R,
      "            after = connector.verify_block_ip(ip, rid)\n",
      '            after = {"verified": True}\n'),
-    ("M1622", "only the entry's own perimeter counted: another VM's on the subnet still blocks (RB1)", UNB,
+    ("M1622", "only the entry's own perimeter counted: another VM's on the subnet still blocks (RB1)", VBL,
      "                holds = self._perimeter_holds(cache, t0, ip, port)\n",
      '                holds = self._perimeter_holds(cache, t0, ip, port) if perimeter else "no"\n'),
-    ("M1623", "a perimeter that can't be read counted as holding (RB1, A0)", UNB,
+    ("M1623", "a perimeter that can't be read counted as holding (RB1, A0)", VBL,
      '                if holds == "holds":\n', '                if holds in ("holds", "unknown"):\n'),
-    ("M1624", "a merged entry's own perimeter pair not checked: gone in silence (RB1)", UNB,
+    ("M1624", "a merged entry's own perimeter pair not checked: gone in silence (RB1)", VBL,
      '                if st in ("absent", "altered"):\n                    (missing if missing else held_missing)',
      '                if False:\n                    (missing if missing else held_missing)'),
     ("M1625", "rules gone while the IP stays blocked said « n'est plus bloquée » (RB1)", R,
      '    if v.get("verified") is True:\n        where =', '    if False:\n        where ='),
-    ("M1626", "the NICs the perimeter still holds left out of the card (RB1)", UNB,
+    ("M1626", "the NICs the perimeter still holds left out of the card (RB1)", VBL,
      "                    held_by.append(short)\n", ""),
     ("M1627", "a block put back that still doesn't hold said again at every pass (RB1)", R,
      '    if outcome != "reapplied":\n', '    if outcome == "failed":\n'),
@@ -4656,12 +4660,12 @@ MUTANTS += [
     ("M1641", "a NIC off the perimeter's subnet read as blocked from the state: its rules gone, `blocked` (RB1, review)",
      BLK, "                check = self.verify_block_ip(ip, resource_id)\n", '                check = {"verified": True}\n'),
     ("M1637", "a perimeter block alone verified on its pair only: a NIC off its subnet open, true said (RB1, review)",
-     UNB, "                if entry.get(\"scoped\") is False:     # the VM's NICs it doesn't cover (RB1, review)\n",
+     VBL, "                if entry.get(\"scoped\") is False:     # the VM's NICs it doesn't cover (RB1, review)\n",
      "                if False:\n"),
     ("M1638", "a write that failed said « reposé » when the reading holds (RB1, review, A0)", R,
      '        if after.get("verified") is True and not after.get("held_missing") and not errors:\n',
      '        if after.get("verified") is True and not after.get("held_missing"):\n'),
-    ("M1639", "a merged entry's perimeter pair unread counted as nothing (RB1, review, A0)", UNB,
+    ("M1639", "a merged entry's perimeter pair unread counted as nothing (RB1, review, A0)", VBL,
      '                elif st == "unknown":            # never read as there (RB1, review)\n',
      "                elif False:\n"),
     ("M1640", "NICs unreadable read as all behind the perimeter: their blocks taken off, `blocked` (RB1, review)",
@@ -4672,7 +4676,7 @@ TESTS.update({f"M{n}": _RB1 for n in range(1635, 1642)})
 # perimeter never covered is no disappearance. M1642–M1644.
 MUTANTS += [
     ("M1642", "a NIC a promotion left to the perimeter read as added since, its rules gone: a drift said, "
-              "the promotion undone (RB1, second review)", UNB,
+              "the promotion undone (RB1, second review)", VBL,
      "                    if not self._left_to_perimeter(cache, perimeter, targets.get(n), ip, port):\n",
      "                    if True:\n"),
     ("M1643", "a NIC left to the perimeter covered whether the perimeter holds or not (RB1, second review)", PER,
@@ -4748,7 +4752,7 @@ MUTANTS += [
      '                                                                t["nic_short"], t["nic_id"]) for n',
      '                hashed = {n for b in self._placement_rule_bases(self._block_rule_prefix(ip), vm_name,\n'
      '                                                                t["nic_short"], t["nic_id"])[:1] for n'),
-    ("M1762", "the verification without state blind to the second name (I4A)", UNB,
+    ("M1762", "the verification without state blind to the second name (I4A)", VBL,
      '            bases = (*self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"]),\n',
      '            bases = (*self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"])[:1],\n'),
     ("M1763", "the reset blind to the second name: `swept`, the block's deny left (I4A)", SWP,
@@ -4770,6 +4774,9 @@ MUTANTS += [
      "        if found is None:\n            return True\n", "        if found is None:\n            return False\n"),
 ]
 TESTS.update({f"M{n}": _I4A for n in range(1755, 1770)})
+# I4B: on a NIC with no NSG of its own, the search on every NSG (_unplaced_blocks) finds the second name
+# M1761 hides; on its own NSG, nothing stands in for it.
+TESTS["M1761"] = ("tests/unit/test_invariant_regressions.py::test_the_unblock_sweep_reads_the_second_name_on_a_nics_own_nsg " + _I4A)
 # I4A, review (5.5): a turned allow aimed at a range or a tag waits behind our deny too
 # (`_takes_in`, nsg.py — the same rule as I5Q's); a failed take-off of the first pair's
 # rule is said; the verification without state reads the pair that blocks the NIC now.
@@ -4787,11 +4794,94 @@ MUTANTS += [
      '                        placement.setdefault("left", []).append({\n',
      '                        placement.setdefault("drop_failed", []).append({\n'),
     ("M1923", "the verification without state takes the first pair present by name, whatever it "
-              "blocks: a bypass of the pair that does hidden (I4A, review)", UNB,
+              "blocks: a bypass of the pair that does hidden (I4A, review)", VBL,
      "            hit = next((h for h in present if self._block_pair_state(\n",
      "            hit = next((h for h in present if True or self._block_pair_state(\n"),
 ]
 TESTS.update({f"M{n}": _I4A for n in range(1920, 1924)})
+
+# I4B (#333): the unblock, the reset, the release and the isolation never cut off nor open the VM
+# that took an address — one guard for every removal by name (_held_by_turned, now for one of our
+# rules turned into an allow too), the isolation's rewrite under the NIC's second name, the block's
+# guard reading every turned rule (the lot's fourth point), and the unblock that looks for a NIC's
+# block on every NSG when nothing places it (the CI's macOS run). Measured by the sequences frozen
+# in test_invariant_regressions.py, then the machine. M1890–M1905.
+_I4B_TESTS = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in (
+    "test_the_unblock_and_the_reset_leave_the_new_owner_of_the_old_address",
+    "test_a_block_under_its_second_name_is_found_without_its_state",
+    "test_a_turned_rule_aimed_at_any_or_a_range_stays_at_the_unblock",
+    "test_any_turned_rule_of_ours_behind_our_deny_keeps_it_at_the_block",
+    "test_whose_the_old_address_is_unknown_the_turned_rule_is_left",
+    "test_an_isolation_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address",
+    "test_an_isolation_written_again_leaves_the_turned_rule_said_under_its_second_name",
+    "test_a_reassertion_says_what_the_isolation_left",
+    "test_a_reasserted_isolation_moves_off_the_old_address_a_turned_rule_waits_behind",
+    "test_an_interrupted_release_after_an_ip_change_opens_the_new_owner",
+    "test_the_unblock_finds_the_block_of_a_nic_left_with_no_nsg_it_knows",
+    "test_the_search_on_every_nsg_keeps_a_turned_rule_aimed_at_the_vm_that_took_the_address",
+    "test_the_sequence_of_pr_342_reasserts_without_opening_the_vm_at_the_old_address",
+    "test_the_reset_preview_says_what_it_keeps",
+    "test_the_nightly_isolation_after_an_address_reused_under_a_turned_rule"))
+_I4B = f"{_I4B_TESTS} {INVARIANTS}"
+MUTANTS += [
+    ("M1890", "a turned allow asked about before it goes read as nothing to keep (`!= deny`): the VM given "
+              "the old address loses what it opens it (I4B)", "glorfindel/providers/azure/turned.py",
+     "            return _opens_another(nsg, rule, {own, *mates}, holders, nic_nsg, nic_subnets)\n",
+     '            return ""\n'),
+    ("M1891", "the unblock takes its placements' rules off by name, unread: the turned allow with them (I4B)", UNB,
+     "                err = (_held_by_turned(self._network, guard, p_rg, p_name, nm, nic_id, mates)\n"
+     "                       or self._delete_rule(p_rg, p_name, nm))\n",
+     "                err = self._delete_rule(p_rg, p_name, nm)\n"),
+    ("M1892", "the unblock's sweep takes off by the NIC's mark whatever the rule became (I4B)", UNB,
+     "                        err = (_aims_elsewhere(r, own_ips) and _held_by_turned(\n",
+     "                        err = (False and _held_by_turned(\n"),
+    ("M1893", "the reset takes off by the NIC's mark whatever the rule became (I4B)", SWP,
+     "                    if _aims_elsewhere(r, own_ips) and (why := _held_by_turned(\n",
+     "                    if False and (why := _held_by_turned(\n"),
+    ("M1894", "the release's sweep, its state lost, takes off a turned allow aimed at the new VM (I4B)", REL,
+     "                    err = (_aims_elsewhere(r, own_ips) and _held_by_turned(\n",
+     "                    err = (False and _held_by_turned(\n"),
+    ("M1895", "an allow of ours aimed elsewhere read as aimed at the VM's own addresses: never asked about (I4B)",
+     "glorfindel/providers/azure/turned.py", '    return any(v not in own for v in values or ["*"])\n', "    return False\n"),
+    ("M1896", "a turned allow aimed at a range or a tag read as aimed at nobody: taken off (I4B, A0)", "glorfindel/providers/azure/turned.py",
+     '            return _opens_text(name, v, "inconnu (une plage ou une étiquette : qui elle prend n\'est pas lu)")\n',
+     "            continue\n"),
+    ("M1897", "a turned allow aimed at any address read as no one's, on an NSG others share (I4B)", "glorfindel/providers/azure/turned.py",
+     "            if others:\n                return _opens_text(",
+     "            if False:\n                return _opens_text("),
+    ("M1898", "the isolation written again over a rule that would change another VM's flows (I4B)", ISO,
+     "            own = own or (pair if not held else None)\n", "            own = own or pair\n"),
+    ("M1899", "the isolation's first pair left beside the second: its -out deny cuts the new VM's way out (I4B)",
+     ISO, '                for nm in plan["drop"]:\n', "                for nm in []:\n"),
+    ("M1900", "the readers of an isolation blind to its second name: verified False, put back for ever (I4B)", REL,
+     '        bases = [*self._placement_rule_bases("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),\n',
+     '        bases = [self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),\n'),
+    ("M1901", "a NIC with no NSG it knows: its block looked for nowhere else, `not_found` (I4B, macOS run)", UNB,
+     "        if unplaced:\n", "        if False:\n"),
+    ("M1902", "the block's guard reads only the NIC's own block rules: a turned isolation rule behind our "
+              "deny not seen, the new VM opened (I4B, the lot's fourth point)", BLK,
+     '                or _waits_for(self._network, holders.setdefault("world", {}),\n',
+     '                or False and _waits_for(self._network, holders.setdefault("world", {}),\n'),
+    ("M1903", "the NSGs or NICs unreadable read as no turned rule behind our deny: lifted (I4B, A0)", "glorfindel/providers/azure/turned.py",
+     "    except Exception:\n        return True\n    nid = holders.get(addr)\n",
+     "    except Exception:\n        return False\n    nid = holders.get(addr)\n"),
+    ("M1904", "what the isolation left kept out of its outcome: nothing said (I4B)", ISO,
+     '        if left:\n            out["left_rules"] = left\n', '        if False:\n            out["left_rules"] = left\n'),
+    ("M1905", "the reassertion's card silent on what the isolation it put back left (I4B)", R,
+     """                  + (f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""))\n""",
+     "                  )\n"),
+]
+TESTS.update({f"M{n}": _I4B for n in range(1890, 1906)})
+# The review of I4B: the search on every NSG asks the guard too — a turned allow there, aimed at the
+# VM that took the address and its NSG, stays. M1906.
+MUTANTS += [
+    ("M1906", "the search on every NSG takes off a turned allow aimed at the VM that took the address: "
+              "cut off (I4B, review)", UNB,
+     "                err = (_held_by_turned(self._network, guard, n_rg, n_name, name, owner[name.lower()], mates)\n"
+     "                       or self._delete_rule(n_rg, n_name, name))\n",
+     "                err = self._delete_rule(n_rg, n_name, name)\n"),
+]
+TESTS["M1906"] = _I4B
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

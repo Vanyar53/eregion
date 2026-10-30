@@ -9,6 +9,7 @@ import re
 from glorfindel.providers.azure.nsg import _describe_shadowing, _pair_priorities, _scope_to_nic, _shadowing_rules
 from glorfindel.providers.azure.quarantine import _remember_quarantine_outcome, PLATFORM_OPEN_NOTE
 from glorfindel.providers.azure.sdk import _enum_text
+from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line, original_unknown_nics, PartialActionError
 from glorfindel.response.state import (
@@ -48,6 +49,8 @@ class IsolationMixin:
 
         placements: list[dict] = []
         assigned: dict[str, set] = {}  # nsg_key → priorities used during THIS call
+        guard: dict = {}               # I4B: what a rewrite would change for another VM, read once
+        mates = [t["nic_id"] for t in targets]
         for t in targets:
             # L4: a NIC with no NSG of its own gets Glorfindel's quarantine NSG — nothing
             # of the customer's touched, nothing evaluated before its deny, untouched by a
@@ -73,8 +76,9 @@ class IsolationMixin:
                     "cannot isolate (enable `isolation.quarantine_nsg` or add an NSG)")
             nsg_rg, nsg_name, scope = t["nsg_rg"], t["nsg_name"], t["scope"]
             nsg_key = f"{nsg_rg}/{nsg_name}"
-            base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
-            in_name, out_name = base, f"{base}-out"
+            pairs = [(b, f"{b}-out") for b in
+                     self._placement_rule_bases("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])]
+            in_name, out_name = pairs[0]
             placement = {
                 "nic_id": t["nic_id"], "nsg_rg": nsg_rg, "nsg_name": nsg_name,
                 "scope": scope, "shared_nsg": bool(t.get("shared_nsg", False)),
@@ -91,11 +95,11 @@ class IsolationMixin:
                 # ALLOW evaluated before it would let its traffic through — then use the
                 # NIC's other NSG if it has one: traffic must pass both, a deny in either
                 # holds. Plan both before writing anything.
-                own = (in_name, out_name)
-                plan = self._plan_isolation(t, nsg_rg, nsg_name, _scope_to_nic(t), assigned, own)
+                plan = self._plan_isolation(t, nsg_rg, nsg_name, _scope_to_nic(t), assigned, pairs, guard, mates)
                 alt = t.get("alt_nsg")
                 if plan["shadowed"] and alt:
-                    alt_plan = self._plan_isolation(t, alt["nsg_rg"], alt["nsg_name"], True, assigned, own)
+                    alt_plan = self._plan_isolation(t, alt["nsg_rg"], alt["nsg_name"], True, assigned, pairs,
+                                                    guard, mates)
                     if not alt_plan["shadowed"]:
                         placement.update({
                             "nsg_rg": alt["nsg_rg"], "nsg_name": alt["nsg_name"],
@@ -106,6 +110,8 @@ class IsolationMixin:
                         plan = alt_plan
                 priority = plan["priority"]
                 placement["priority"] = priority["inbound"]
+                in_name, out_name = plan["own"]
+                placement.update({"rule_in": in_name, "rule_out": out_name})
                 ips = t["private_ips"]
                 if plan["ip_scoped"]:
                     if not ips:
@@ -125,6 +131,13 @@ class IsolationMixin:
                     placement["applied"].append(out_name)
                 # Still recorded when no alternative was clean: verify escalates on it.
                 placement["shadowed_by"] = plan["shadowed"]
+                if plan["left"]:
+                    placement["left"] = plan["left"]
+                # The other pair's rules: ours, aimed at no other VM — the deny now holds (I4B).
+                for nm in plan["drop"]:
+                    if err := self._delete_rule(nsg_rg, nsg_name, nm):
+                        placement.setdefault("left", []).append(
+                            {"nsg": f"{nsg_rg}/{nsg_name}", "rule": nm, "why": f"{nsg_rg}/{nsg_name}/{nm} n'a pas pu être retirée : {err}"})
             except Exception as exc:
                 partial = self._record_partial_isolation(
                     vm_name, resource_id, placements, placement, exc, total=len(targets))
@@ -183,6 +196,10 @@ class IsolationMixin:
                 "NSG shared with other NICs involved — isolation scoped to this VM's "
                 "private IP(s) only (no impact on the other VMs behind that NSG)."
             )
+        left = [x for p in placements for x in p.get("left", [])]
+        if left:
+            out["left_rules"] = left
+            out["left_note"] = _describe_iso_left(left)
         if any(p.get("kind") == "quarantine" for p in placements):
             out["note"] = (
                 "Glorfindel's quarantine NSG on the NIC(s) for the time of the isolation — "
@@ -325,16 +342,41 @@ class IsolationMixin:
         )
 
     def _plan_isolation(self, t: dict, nsg_rg: str, nsg_name: str, ip_scoped: bool,
-                        assigned: dict, own: tuple[str, str]) -> dict:
+                        assigned: dict, pairs: list[tuple[str, str]], guard: dict, mates: list) -> dict:
         """Priority an isolation deny would take on this NSG, and the customer ALLOW
         rules that would be evaluated before it (nothing written). `own`: our rule
         names — a re-application keeps their place or moves them up, never down
-        (_pair_priorities)."""
+        (_pair_priorities): the first of `pairs` (the NIC's name, then its second, I4B)
+        none of whose rules present would change another VM's flows, rewritten — one of
+        ours turned into an allow that opens the VM given the NIC's old address, or our
+        deny there a turned rule waits behind (_held_by_turned: the unblock's, the
+        release's guard). Those stay as they are (`left`, said); the other pair's rules
+        present go once the deny holds (`drop`). Both pairs held: this NIC fails."""
         nsg_key = f"{nsg_rg}/{nsg_name}"
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
+        by_name = {(getattr(r, "name", "") or "").lower(): r for r in existing}
+        left: list[dict] = []
+        own = None
+        for pair in pairs:
+            held = [{"nsg": nsg_key, "rule": n, "why": why} for n in pair if n.lower() in by_name
+                    and _aims_elsewhere(by_name[n.lower()], t["private_ips"])
+                    and (why := _held_by_turned(self._network, guard, nsg_rg, nsg_name, n, t["nic_id"], mates))]
+            own = own or (pair if not held else None)
+            left += held
+        if own is None:
+            raise RuntimeError(f"NIC {t['nic_short']} : les noms de son isolation sur {nsg_name} sont pris par des "
+                               "règles qui changeraient les flux d'une autre VM — rien n'est écrit par-dessus. "
+                               + _describe_iso_left(left))
+        taken = {x["rule"].lower() for x in left}
+        drop = [n for pair in pairs if pair != own for n in pair if n.lower() in by_name and n.lower() not in taken]
         priority = _pair_priorities(existing, *own, self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))
         ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=None, inbound_dst=ips,
                                     outbound_src=ips, outbound_dst=None)
         return {"nsg_key": nsg_key, "priority": priority, "ip_scoped": ip_scoped,
-                "shadowed": shadowed}
+                "shadowed": shadowed, "own": own, "left": left, "drop": drop}
+
+
+def _describe_iso_left(left: list[dict]) -> str:
+    """What an isolation left as it was (I4B), and why."""
+    return "Laissée(s) telle(s) quelle(s) : " + " ; ".join(f"{x['why']}" for x in left) + "."

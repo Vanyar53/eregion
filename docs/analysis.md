@@ -544,11 +544,16 @@ les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`.
      qu'un humain approuve part d'une carte, jamais du cycle) ;
   2. l'action est relue sur Azure (`verified` vrai) ;
   3. elle a tenu : aucune carte de la réaffirmation ne dit, sur cette VM, qu'elle a disparu ou
-     qu'elle est contournée. La surveillance va de la relecture à la fin de la fenêtre du run,
-     grâce comprise, sans dépasser le début du run suivant sur la même VM. Sans fenêtre, elle dure
-     15 min.
+     qu'elle est contournée. Seules comptent les cartes sur une isolation ou un blocage, et
+     celles qui disent la règle contournée. Une carte sur une levée n'en dit rien : une levée
+     approuvée dont la vérification échoue, une levée ou un déblocage interrompus. La surveillance
+     va de la relecture à la fin de la fenêtre du run, grâce comprise, sans dépasser le début du
+     run suivant sur la même VM. Sans fenêtre, elle dure 15 min. Elle s'arrête aussi à la
+     première levée connue de la VM : une action de l'opérateur (`runs/manual_actions.jsonl` :
+     release, reset, unblock) ou la levée de la watch sur un `recovery_complete`.
 - **Le temps pour contenir** d'un incident contenu seul va du T0 à la relecture sur Azure. C'est
-  `outcome.verified_at`, que `verify_action` pose depuis BL1 ; pour une ligne d'avant, la ligne du
+  `outcome.verified_at`, que `verify_action` pose depuis BL1 après une relecture qui a conclu
+  (vraie ou fausse ; jamais sans contrôle, ni quand il a levé) ; pour une ligne d'avant, la ligne du
   cycle, écrite juste après. Celui de la campagne est la médiane sur ses incidents contenus seuls.
   Aucun incident contenu : `None`, jamais 0.
 - **La part contenue seule** est le nombre d'incidents contenus seuls sur **tous** les incidents de
@@ -558,7 +563,11 @@ les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`.
   chevauche ou tombe dans l'heure qui l'entoure. Une décision d'isoler ou de bloquer sur une de ses
   cibles, vue pendant sa fenêtre, est **une panne prise pour une attaque**. Elle est comptée à part
   et dite, exécutée ou seulement recommandée ; exécutée, c'est une action disruptive à tort. Une
-  décision déjà rattachée à un incident ne compte jamais deux fois.
+  décision déjà rattachée à un incident ne compte jamais deux fois. Une décision sur la technique
+  d'un run de la campagne, vue dans la fenêtre de ce run, est celle du run (tardive, ou non
+  rattachée), jamais celle de la panne.
+- **Une décision, un incident.** Si deux runs tombent sur la même détection, elle va au plus
+  ancien. L'autre a une décision inconnue (« décision déjà rattachée à <run> »).
 
 ### Les cas limites, chacun dit
 
@@ -567,7 +576,7 @@ les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`.
 | contenu seul | isolation ou blocage exécuté dans le cycle, relu vrai, qui a tenu | oui | T0 → relecture |
 | contenu, puis l'isolation n'a pas tenu | une carte `verification_failed` (réaffirmation : règles retirées, reposées une fois ou non) ou `bypassed` sur la VM, dans la surveillance | non | — |
 | exécuté, vérification échouée | relu faux sur Azure, ou impossible à relire (`unverified`) | non | — |
-| action tentée, en échec | `write_blocked` (droits) ou `action_failed` | non | — |
+| action tentée, en échec | `write_blocked` (droits) ou `action_failed`, lu dans le type de la carte (le graphe réécrit le statut en `escalated`) | non | — |
 | retenu par un garde-fou | `mode_hold` (`human_only`), `readiness_hold`, garde de signal, attribution, télémétrie, accord des tirages, adresse protégée | non : à un humain | — |
 | escaladé à un humain | confiance insuffisante, action inconnue, cycle interrompu | non | — |
 | aucune action qui contient | un instantané, une enquête, aucune action | non | — |

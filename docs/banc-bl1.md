@@ -49,21 +49,22 @@ campagne d'Annatar ne joue pas encore elle-même une panne. Deux cas :
 
 H0 est lecteur : identité managée `Reader` et `Log Analytics Reader`, `GLORFINDEL_READ_ONLY=1`, et
 la config est forcée en `human_only` au push (SEC7). Pour que Glorfindel isole seul, une watch doit
-pouvoir écrire sur le groupe du banc, le temps de la campagne. Rien n'est appliqué ici : c'est à
-trancher par Jonathan.
+pouvoir écrire sur le groupe du banc, le temps de la campagne. **Jonathan a retenu (a) le 30/10** ;
+(c) est le repli, (b) est écartée. L'exception est écrite au modèle de menace
+([`design/modele-de-menace.md`](design/modele-de-menace.md), §5).
 
-| | (a) H0, rôle « Response » sur le banc | (b) une watch sur le poste de Jonathan | (c) H0, avec un principal propre à la watch |
+| | (a) **retenue** : H0, rôle « Response » sur le banc | (b) **écartée** : une watch sur le poste de Jonathan | (c) **repli** : H0, avec un principal propre à la watch |
 |---|---|---|---|
 | Ce qui écrit | l'identité managée de H0 : watch, console et bot | le principal de réponse de Jonathan (`.envrc`) | la watch seule (`GLORFINDEL_AZURE_CLIENT_*`) ; la console et le bot restent lecteurs |
 | Règle de production | tenue : rôle sur `rg-celebrimbor` seul ; gondolin `bench` ; bree reste en `human_only` | tenue, même portée | tenue, même portée |
 | Le canal retour (V1) | inchangé : H0 publie son battement, Orodruin le lit | **cassé** : seule l'identité de H0 écrit le battement et les détections. Il faut soit ouvrir l'écriture du conteneur `watch` à l'opérateur et arrêter la watch de H0, soit lancer `--without-glorfindel`, qui annule la mesure | inchangé |
 | La console | celle de H0 : bandeau « lecture seule » levé, boutons actifs (toutes les VM) | une console locale : les fichiers de la campagne arrivent sur H0, pas sur le poste | celle de H0 : les approbations échouent (`write_blocked`), la console reste de fait lectrice |
-| Le CD | ne publier aucune release pendant la session (le CD redéploierait H0 au milieu) | intact | idem (a) |
+| Le CD | en pause pendant la session (`make glorfindel-host-cd-disable`, étape 3) : il redéploierait H0 au milieu | intact | idem (a) |
 | L'observation de bree | continue (`human_only`) | **trou** : la watch de H0 arrêtée | continue |
 | Secret | aucun | celui du poste | un secret client sur H0, le temps de la session |
-| À défaire | le rôle, `READ_ONLY=1`, gondolin en `human_only`, push, redémarrage | le rôle du canal, redémarrer la watch de H0 | les variables vidées, le secret révoqué, `READ_ONLY=1`, gondolin en `human_only` |
+| À défaire | le rôle, `READ_ONLY=1`, gondolin en `human_only`, push, redémarrage, le CD réactivé | le rôle du canal, redémarrer la watch de H0 | les variables vidées, le secret révoqué, `READ_ONLY=1`, gondolin en `human_only` |
 
-**Recommandation : (a).**
+**Retenue : (a)** (décision de Jonathan, 30/10).
 - Une seule watch et un seul battement.
 - Les cartes, le rapport de la campagne et les deux indicateurs sont au même endroit (H0, sa
   console), comme le sera une vraie exploitation.
@@ -72,7 +73,7 @@ trancher par Jonathan.
 Ce que (a) ouvre de plus que (c) : pendant la session, un clic dans la console peut écrire sur le
 banc, bree compris. C'est un humain qui agit, et la session est courte. Si Jonathan veut une
 console qui reste lectrice, (c) est le repli, au prix d'un secret sur H0. (b) casse le canal
-retour : à écarter.
+retour : écartée.
 
 ## Le déroulé (environ 1 h 30 à 2 h)
 
@@ -98,6 +99,10 @@ az vm show -g rg-celebrimbor -n vm-celebrimbor-gondolin --query tags     # eregi
 az group show -n rg-celebrimbor --query tags                             # idem sur le groupe
 ```
 
+Ces deux lectures sont la vraie vérification de la zone. La déclaration de la campagne ne dit
+`bench` que sur le papier : `declared.py` ne lit aucun tag. Les injecteurs relisent l'inscription
+avant d'agir (O0), mais c'est ici qu'on le voit.
+
 ### 2. Orodruin (5 min ; 30 min s'il faut le recréer)
 
 ```bash
@@ -112,6 +117,8 @@ S'il a été détruit, suivre `infra/orodruin/README.md`, « Déroulé » : `oro
 ### 3. La watch qui répond — option (a) (10 min)
 
 ```bash
+make glorfindel-host-cd-disable        # le CD en pause : aucune release ne redéploie H0 pendant la session
+make glorfindel-host-cd-status         # attendu : en pause
 P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment create --assignee-object-id ${P} --assignee-principal-type ServicePrincipal \
@@ -121,6 +128,9 @@ make glorfindel-host-push              # .env et config (encore human_only parto
 make glorfindel-host-start REF=<le même commit>
 make glorfindel-host-tunnel            # la console : page Glorfindel, gondolin → non_disruptive
 ```
+
+`glorfindel-host-start REF=…` **construit** l'image sur la VM (`deploy.sh`) : c'est le chemin de
+secours, hors de la vérification de CI3 (`infra/glorfindel-host/README.md`, « Au quotidien »).
 
 Le passage en `non_disruptive` ouvre le contrôle de préparation. Attendu : `ready`, puisque les
 droits viennent d'arriver. Une réserve se lit et se confirme, ou la session s'arrête là. bree reste
@@ -132,10 +142,16 @@ montre le mode résolu par VM.
 ```bash
 make gothmog-preflight                 # watch vivante, contrat, cibles, état normal : rien d'écrit
 make gothmog-run                       # la panne et son retour vérifié (~15 min) ; noter son run_id
+# attendre la fin de la grâce de la panne : 15 min après sa fin (fault_end du rapport)
 make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de gondolin> \
   CAMPAIGN_DECLARED=annatar/campaign/declared/bl1-reponse.yaml   # rend l'id de la campagne
 make orodruin-campaign-run CAMPAIGN=<id>   # T1136.001 ; Glorfindel doit isoler seul, puis vérifier
 ```
+
+**Pourquoi attendre la grâce de la panne.** Une détection de T1136.001 vue pendant la fenêtre de
+la panne serait comptée « prise pour une attaque » : le calcul écarte celles qui tombent dans la
+fenêtre d'un run de la technique, mais une décision tardive ou non rattachée resterait ambiguë.
+Lancer la campagne après la grâce sépare les deux fenêtres.
 
 Pendant la campagne, dans la console : la carte de l'action autonome, et gondolin `ISOLATED`.
 
@@ -163,12 +179,17 @@ Dans la console, à trois endroits :
 
 ```bash
 # console : gondolin → human_only ; plus aucune isolation ni blocage (glorfindel list)
+# P et SCOPE viennent de l'étape 3 ; shell rouvert, les recalculer :
+P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
+SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment delete --assignee ${P} --role "Eregion Glorfindel Response" --scope ${SCOPE}
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=1
 make glorfindel-host-push              # config de nouveau forcée en human_only
 make glorfindel-host-start REF=<le tag publié en service>   # la release d'avant, celle du CD
 make glorfindel-host-status            # bandeau lecture seule, aucune erreur
 az role assignment list --assignee ${P} --all -o table      # Reader et Log Analytics Reader seulement
+make glorfindel-host-cd-enable         # le CD reprend
+make glorfindel-host-cd-status         # actif ; la release en service est celle d'avant
 make orodruin-stop
 make celebrimbor-stop                  # bree (always-on) épargnée
 ```

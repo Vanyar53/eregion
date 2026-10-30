@@ -2,7 +2,7 @@
 
 Conception du 26/10/2026, session War Room. **Décidé par Jonathan le 26/10**, question par question.
 **UI-1 construit et déployé sur H0 le 26/10** (#209, #210, #212, #216) ; **UI-2 construit le 27/10** (#206), définitions décidées le 27/10.
-**Dagorlad (§7) : conception du 30/10, sans code** ; ses trois questions tranchées par Jonathan le 30/10.
+**Dagorlad (§7) : conception du 30/10**, ses trois questions tranchées par Jonathan le 30/10 ; **le Board construit le 30/10** (DG-a, première partie).
 Ce document sert aux sessions qui implémentent : le lot UI-1 (le socle, #205), le lot UI-2 (les cinq
 indicateurs, #206), et le lot d'Annatar et de Gothmog qui vérifie, avant chaque run, que Glorfindel
 tourne.
@@ -608,7 +608,7 @@ PLAN · 4 wires · 1 refused   ✓ watch live  ? Orodruin unknown here  ✓ enro
 | destructive ou non | le catalogue, seul : jamais le navigateur, jamais une demande |
 | implémentée ou prévue | le catalogue (`status`) : une entrée prévue est grisée, sans poignée |
 | ce qu'on attend : la règle et le délai ; pour une panne, rien de disruptif | voir « Le résultat attendu » |
-| dernière preuve et état de sa ligne (`proven`, `aging`, `stale`, `regressed`, `never`) | la matrice de C1 (`eregion_console/coverage.py`), sur tout ce que l'hôte garde |
+| dernière preuve et état de sa ligne (`proven`, `aging`, `stale`, `regressed`, `never`) | la matrice de C1 (`eregion_console/coverage.py`), sur tout ce que l'hôte garde — avec la vue Runs, après la fusion de C1 |
 
 Un injecteur absent laisse ses cartes grisées, avec ce qu'il ajouterait (la page d'installation
 d'aujourd'hui, §3, règle 5).
@@ -663,7 +663,8 @@ l'emporte :
 | `over_cap` | plus d'injections que le plafond d'Orodruin, ou plus de 2 h en tout | `EREGION_MAX_INJECTIONS` ≤ 20, `EREGION_MAX_RUN_S` ≤ 2 h |
 
 **Avertissements.** Le fil reste valide, et sa pastille le dit :
-- `typed_name` : une technique destructive (banc ou jumeau). En (b), le nom de la cible sera tapé.
+- `typed_name` : une technique destructive, ou dont personne n'a déclaré qu'elle ne l'est pas (A0 :
+  un inconnu n'est jamais pris pour inoffensif, comme en production). En (b), le nom de la cible sera tapé.
 - `isolated_now` : la cible est isolée, ou des adresses y sont bloquées. Le run mesurerait
   l'isolation, pas la détection (la tâche B, 30/07).
 - `not_seen` : Glorfindel ne voit pas la VM en ce moment (désallouée, ou hors de ses workspaces).
@@ -671,8 +672,11 @@ l'emporte :
   fermé, jamais un raté.
 - `no_rule` : Glorfindel n'a aucune règle pour cette technique sur ce backend. Il est aveugle : le run
   doit finir en `missed`, et la boucle violette proposer une règle.
-- `orodruin_unknown` : l'état du contrat d'Orodruin n'est pas connu sur cet hôte (« Ce qui manque
-  ailleurs »).
+- `engine_unknown` : une panne dont cet hôte ne lit pas les cibles du moteur (l'image de H0 ne porte
+  pas Gothmog). Le preflight de Gothmog en décide, sur Orodruin.
+
+L'état du contrat d'Orodruin, inconnu sur cet hôte tant qu'il ne le publie pas (« Ce qui manque
+ailleurs »), est dit une fois, dans les vérifications du plan, plutôt que sur chaque fil.
 
 **Jamais sans Glorfindel.** `--without-glorfindel` n'est pas proposé par la page. Un run de
 développement reste un geste sur Orodruin.
@@ -696,7 +700,7 @@ aveugle »).
   | déploiement en lecture seule (H0) | il détecte et recommande ; rien n'est exécuté |
   | `human_only`, ou `non_disruptive` retenu par la préparation | une carte à juger ; un humain agit |
   | `non_disruptive`, prête | il isole ou bloque seul si chaque garde passe (confiance, signal caractérisé et attribué, télémétrie lue, tirages d'accord), puis vérifie sur Azure ; sinon une carte qui nomme la garde |
-  | zone `production` (J1) | mode ombre : détection seule |
+  | zone `production` | l'enveloppe de son mode : Glorfindel ne lit pas encore la zone ; J1 y forcera le mode ombre (détection seule) |
 
   Une action destructive (restaurer) n'est jamais autonome, quel que soit le mode. Pour une technique
   destructive, la ligne le rappelle : T1486 donne au plus une isolation et un instantané, la
@@ -739,14 +743,19 @@ L'état normal est relu avant et après (les sondes de Gothmog : `vm-running`, `
   avec sa propre identité. S'il refuse, il le dit avec les mêmes codes.
 - **Ce que porte une demande** :
   - un identifiant et son heure ;
-  - pour chaque fil : l'expérience, la cible, son rang, et le nom tapé si le fil est destructif.
+  - pour chaque fil : l'expérience, la cible, son rang.
+
+  Jamais un nom tapé : la console n'en garde aucun (le point suivant).
 
   Rien d'autre : ni zone, ni « destructive », ni résultat attendu, ni mode de la cible. Orodruin
   recalcule tout. Annatar et Gothmog restent aveugles à Glorfindel, comme Glorfindel l'est à eux (la
   boucle aveugle, 30/06).
-- **Un fil destructif exige le nom de la cible, tapé** (le nom de la VM, tel qu'Azure l'écrit). La
-  page le compare, et **Orodruin aussi**, au nom qu'il lit de la cible. Une demande forgée sans lui
-  est refusée là où elle s'exécute.
+- **Un fil destructif exige le nom de la cible, tapé dans la commande, jamais dans la console**
+  (relecture 5.5 de #338, 30/10). La commande **affiche les fils de la demande**, puis fait taper à
+  l'opérateur, sur son poste, le nom de la cible de chaque fil destructif (le nom de la VM, tel
+  qu'Azure l'écrit) ; Orodruin le compare au nom qu'il lit de la cible. Un nom tapé que la console
+  aurait gardé ne prouverait rien : une demande forgée sur un H0 compromis passerait sous le geste
+  humain sans être vue. La page peut montrer ce qui sera demandé, elle ne le recueille pas.
 - **Une fenêtre d'exercice par fil.** L'injecteur l'ouvre quand il touche sa cible, comme
   aujourd'hui. Elle porte l'identifiant de la demande : c'est ce qui relie le fil à son run.
 - **Les fils tournent l'un après l'autre** (Jonathan, 30/10, question 2), dans l'ordre où ils sont
@@ -768,9 +777,12 @@ L'état normal est relu avant et après (les sondes de Gothmog : `vm-running`, `
   - ce qu'elle arrêtera : les fenêtres vivantes et leurs cibles ;
   - ce qui restera en vol (M-1).
 - **Le transport : une commande portée par l'opérateur** (Jonathan, 30/10, question 1). La console
-  écrit la demande sur son propre hôte, hors de `runs/` et de `~/.glorfindel/`, et donne une
-  commande : `make orodruin-exercise REQUEST=<id>`. La commande copie la demande par SSH, comme
-  `orodruin-push`, et la lance sur Orodruin. Ce choix garde trois choses :
+  écrit la demande dans son propre répertoire (`~/.eregion/console/requests/`, hors de `runs/` et
+  de `~/.glorfindel/`), et donne une commande : `make orodruin-exercise REQUEST=<id>`. Elle part du
+  poste de l'opérateur, comme les autres cibles d'Orodruin : elle tire la demande de l'hôte de la
+  console (sur H0, par SSH, comme `make glorfindel-host-*`), l'affiche, fait taper les noms (le point
+  précédent), puis la copie sur Orodruin par SSH, comme `orodruin-push`, et l'y lance. À la fiche de
+  DG-b d'en fixer le détail. Ce choix garde trois choses :
   - rien de neuf dans le canal ;
   - aucun droit de plus pour l'identité de H0, qui reste un observateur ;
   - un geste humain entre la console et Orodruin.
@@ -804,13 +816,81 @@ Chaque fil devient une ligne de la chronologie (écran 2), tirée de ce qui arri
 - **Les cartes bleues** prennent l'état de leur cible : isolée et vérifiée, une carte à juger.
 - **Rien n'est écrit** en (c) : comme les pages d'aujourd'hui, elle ne fait que lire.
 
+### La vie d'un fil
+
+Décidée par Jonathan le 30/10, question par question. Tirer un fil ne lance rien : on en tire autant
+qu'on veut, plusieurs vers une même cible compris, puis **un seul geste, « Lancer », fait partir tous
+les fils du plan** en une demande, l'un après l'autre.
+
+| État | Ce qu'on voit | Ce qu'on peut faire |
+|---|---|---|
+| **Brouillon** (phase a) | le fil, son verdict et ce qu'on doit en attendre | le retirer par le ✕ de sa pastille, sur le tracé, ou de sa ligne du plan ; « Clear wires ». Re-tirer une paire déjà tirée ne la retire pas : la page dit « already drawn » |
+| **Demandé, en cours** (b, c) | les fils figés en une demande `r-…`, leur rang ; chacun dit où il en est (en file, lancé, détecté, contenu) | rien sur un fil : ils sont verrouillés jusqu'à la fin de la demande, et l'on n'en tire pas d'autres. Pour arrêter, « Stop all », l'arrêt d'urgence d'Orodruin, arrête tout. La console n'a pas de canal pour dire à Orodruin de sauter un fil (la commande portée, question 1) |
+| **Fini** (c) | les fils déverrouillés gardent leur dernier résultat sur la pastille (« ✓ detected +1m47 · contained 2m31 », « ✗ missed ») et un lien « run ▸ » vers Runs | les retirer, en ajouter, tout effacer, ou **relancer la même demande** d'un geste — ce qui garde la dernière preuve sous 30 jours |
+
+Écartés : des fils figés avec un brouillon de la demande suivante à côté (deux états mêlés sur le
+tableau) ; retirer un fil encore en file (il faudrait un canal vers Orodruin) ; des fils qui
+disparaissent ou pâlissent une fois la demande finie ; sélectionner un fil puis le supprimer.
+
+### Les drills
+
+Un **drill** : des attaques et des pannes tirées vers des cibles, qu'on garde et qu'on rejoue. C'est
+un exercice qu'on répète pour rester prêt, et qui garde la dernière preuve sous 30 jours. Son
+exécution reste une **demande** (`r-…`), et chacun de ses fils, un run.
+
+Le mot (Jonathan, 30/10, sur une analyse hors du dépôt). Écartés :
+- « jeu » : ludique en anglais (« game »), l'écueil de « Playground » ;
+- « campagne » : aujourd'hui une exécution, et liée à Annatar ;
+- « muster » : peu connu.
+
+Les cinq décisions, prises une à une le 30/10 :
+
+1. **Un objet de l'instance**, distinct d'Annatar et de Gothmog, avec un nom et un auteur :
+   l'opérateur, Annatar ou Eregion. Son format vit dans le cœur partagé (D1), comme le verdict
+   d'un fil.
+2. **En couches**, comme les règles depuis P1 :
+   - **livrés** : `drills/<nom>.yaml` dans le dépôt, relus en PR — les drills de référence ;
+   - **instance** : ceux du client, dans le répertoire propre à la console (`~/.eregion/console/drills/`),
+     **hors de `~/.glorfindel/` et de `runs/`** — un drill porte le plan rouge, que la décision ne
+     lit jamais (« Glorfindel reste aveugle ») —, jamais écrasés par une mise à jour, comme la couche
+     de règles du client (en SaaS, le magasin du tenant). Dagorlad les enregistre (« Save as
+     drill »), les liste et les charge sur le tableau ;
+   - **session** : le brouillon, dans le navigateur (déjà le cas) ;
+   - **export** : le même YAML, pour Git chez le client, le jumeau, ou proposer un drill à la base.
+
+   L'enregistrement est la première écriture de Dagorlad. Elle tient dans la frontière de la
+   console (SEC1 : jeton, origine, corps JSON) et n'écrit qu'un fichier de l'instance, jamais sur le
+   cloud.
+3. **Les campagnes d'Annatar deviennent des drills dont Annatar est l'auteur.**
+   - Son planificateur propose : « Ask Annatar for a drill » trace une chaîne en brouillon sur le
+     tableau. L'opérateur la corrige, la lance, la garde.
+   - Rejouer relance la même chaîne, et D-2 compare deux demandes du même drill.
+   - `annatar campaign plan` et `run` continuent, en écrivant un drill et une demande ; les
+     manifestes déjà écrits restent lisibles (l'index de D-2, la vue Runs).
+   - La boucle reste aveugle : le planificateur lit le catalogue et la cible, jamais les règles ni
+     les modes de Glorfindel.
+4. **Les cibles** : par nom dans un drill du client, par sélecteur (zone, rôle) dans un drill livré.
+   Jamais par l'identifiant de la ressource, qui change quand Celebrimbor reconstruit le banc. Au
+   lancement, la console résout un sélecteur en VM inscrites et montre la liste ; Orodruin rejuge
+   chaque fil.
+5. **Le partage** : un drill appartient à l'instance. Son auteur et sa dernière modification sont
+   notés, tous les opérateurs le voient, le lancent et le modifient. Des drills privés attendront les
+   rôles (1.x), comme le veut le choix assumé de la console : un jeton, tous les droits.
+
+Lancer un drill : `make orodruin-exercise DRILL=<nom>`, ou la demande que Dagorlad prépare.
+
 ### Glorfindel reste aveugle
 
 Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
 1. **La demande n'est jamais là où la watch lit.** Elle n'est ni dans `runs/` (signaux, journaux de
    debug), ni dans `runs/exercises/`, ni dans `~/.glorfindel/` (état, escalades), ni dans la mémoire.
-   Elle a son propre répertoire. Deux tests l'établissent :
-   - aucun module de `glorfindel/` ne nomme ce répertoire ;
+   Elle a son propre répertoire, celui de la console : `~/.eregion/console/` (`requests/`,
+   `drills/`). Pas `~/.eregion/` entier : il porte aussi `analysis/`, que la watch monte en écriture,
+   `teams/`, `cosign/`, `h0_known_hosts`, `host-backups/`. Ce qui l'établit :
+   - aucun module de `glorfindel/` ne nomme ce répertoire — déjà en place :
+     `test_glorfindel_never_names_the_consoles_own_directory` ;
+   - DG-b : seul le service de la console monte `~/.eregion/console/` ; aucun service watch ni bot ne
+     monte `~/.eregion` ni ces sous-répertoires (`test_profiles.py`) ;
    - un cycle de `decide` rejoué avec une demande présente envoie au modèle le même message, à l'octet
      près.
 2. **Le résultat attendu n'est écrit nulle part.** Il est calculé à la demande de la page, sans
@@ -885,3 +965,45 @@ Posées une à une. La réponse est reportée ici avec sa date.
 | DG-a | `/dagorlad` en lecture seule : Board (tableau, plan, simulation) et Runs (les listes d'aujourd'hui, les deux injecteurs ensemble) ; `eregion_core/exercise_plan.py` ; redirections ; tests sans Azure ni modèle, mutants | C1 fusionné, pour Runs et les redirections |
 | DG-b | la demande, le nom tapé, « Stop all » ; Orodruin, Annatar, Gothmog ; le modèle de menace | DG-a, la question 1, BL1 |
 | DG-c | le suivi en direct | DG-b, BL1 |
+| DG-d | les drills : leur format (cœur partagé), « Save as drill », la liste et le chargement dans Dagorlad, `make orodruin-exercise DRILL=`, les premiers drills de référence | C1, DG-b |
+| DG-e | Annatar : `campaign plan` et `run` écrivent un drill et une demande ; « Ask Annatar for a drill » dans Dagorlad | DG-d, avec la session Annatar |
+
+### Construit : le Board (DG-a, première partie, 30/10)
+
+- **Le cœur** : `eregion_core/exercise_plan.py`, le verdict d'un fil (`judge`) et d'une demande (`plan`,
+  les fils dans l'ordre tracé, une fois par paire, refusés au-delà des plafonds d'Orodruin), bâti sur
+  `Scope.check`, `enrollment` et `check_zone` d'O0. Les cibles se lisent par
+  `inscription.TagEnrollment.vms` : les VM des groupes du banc, avec leurs tags et ceux du groupe, par
+  l'identité de la console, en cache une minute ; une lecture en échec est dite, jamais un banc vide.
+- **La console** : `eregion_console/board.py` (cartes, avertissements du côté de Glorfindel, attendu),
+  `GET /api/dagorlad/board`, `GET /api/dagorlad/plan` (100 fils au plus), la page `/dagorlad`
+  (`dagorlad.html`, `dagorlad.js`). Les règles sont celles que la watch charge, base et couche du
+  client : sans backend configuré, aucune n'est active, et chaque fil d'une technique dit « no rule ».
+- **La page** : on choisit une carte rouge puis une ou plusieurs cibles (au clavier aussi), ou l'on
+  glisse sa poignée sur une cible. Les fils sont un SVG calculé par la page, leurs pastilles ne se
+  chevauchent pas. Le panneau du plan liste chaque fil, son rang, son verdict ou ce qu'on doit
+  attendre, ses avertissements, et un ✕ pour le retirer — sur sa pastille comme sur sa ligne ; re-tirer
+  une paire ne la retire pas (« already drawn »). Les fils restent dans le navigateur
+  (`localStorage`). Rien du dehors n'est écrit brut, chaque geste passe par le répartiteur
+  (`data-on-*`, la table `ACTIONS`) ; le lecteur (`scripts/console_escaping.py`) lit la page.
+- **Vérifié dans Chromium** (chrome-headless-shell, console locale sur un HOME jetable, cibles, règles
+  et watch remplacées, une VM au nom piégé `<img onerror>`) à 1440 et 1600 px : six fils tirés, cinq au
+  clic et un à la souris ; aucune erreur JS, aucune violation de CSP, aucune image injectée.
+- **La relecture 5.5 (30/10)** a fait corriger :
+  - une technique au caractère destructif non déclaré demande aussi le nom tapé (A0) ;
+  - une zone hors des trois (« Production », « prod ») est épinglée par un test ;
+  - `isolated_now` et la carte d'un déploiement en lecture seule sont testés ;
+  - la page suivante d'une liste ARM n'est suivie que vers ARM ;
+  - le plafond en nombre est testé (le temps vient d'abord) ;
+  - la carte de Glorfindel sans âge de battement, et « MAY RUN · ? » pour une panne au moteur illisible.
+
+  Mutants M2000–M2004.
+- **Mutants M1980–M1994** (`tests/unit/test_exercise_plan.py`, `test_console_dagorlad.py`) : la règle de
+  production sautée, le caractère destructif pris pour faux, un fil sans watch, une cible non inscrite
+  ou hors du périmètre, une entrée prévue, une panne hors des cibles de son moteur, le nom à taper
+  oublié, les plafonds ignorés, une carte pour une VM non inscrite, un déploiement en lecture seule
+  montré capable de contenir, la route du plan qui accepte POST, une action hors de la table de la
+  page, un nom de VM écrit brut, une technique sans règle non dite aveugle.
+- **Reste pour DG-a**, après la fusion de C1 : la vue Runs, les redirections de `/annatar`, `/gothmog`
+  et `/runs/<id>`, l'onglet (Dagorlad n'est pas encore dans l'en-tête : on l'ouvre par son adresse),
+  la dernière preuve sur les cartes rouges.

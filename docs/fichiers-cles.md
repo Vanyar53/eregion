@@ -201,7 +201,13 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           d'exercice et ce que Glorfindel a fait dans chacune, campagnes (faits + report.md),
                           techniques ou pannes du catalogue ; grisée, ce que l'injecteur ajouterait
   static/exercises.js   → ce que Glorfindel a fait dans une fenêtre (partagé par l'accueil et les injecteurs)
-  static/*.js           → le script de chaque page, un fichier (overview.js, glorfindel.js, injector.js) : la
+  board.py              → Dagorlad (docs/design/console.md, §7, phase a) : cartes rouges (le catalogue), bleues
+                          (Glorfindel, les cibles inscrites lues par l'identité de la console), le plan des fils
+                          et ce qu'on doit en attendre (enveloppe du mode, jamais le modèle) ;
+                          `GET /api/dagorlad/board`, `GET /api/dagorlad/plan?wire=<expérience>@<cible>` — lecture seule
+  static/dagorlad.html  → /dagorlad : on tire des fils des cartes rouges vers les cibles (clic, ou glisser la
+                          poignée), le serveur juge chaque fil ; les fils tracés restent dans le navigateur
+  static/*.js           → le script de chaque page, un fichier (overview.js, glorfindel.js, injector.js, dagorlad.js) : la
                           CSP n'admet que les scripts servis par la console (#257) ; dans glorfindel.js,
                           _on et le répartiteur des événements (ACTIONS, data-on-*)
   static/glorfindel.html → page Glorfindel (/glorfindel, /config) — TO JUDGE (seul endroit où l'on juge
@@ -291,6 +297,10 @@ schemas/technique_catalog.schema.json → E1 : schéma du catalogue. Pannes dans
                                     une technique sur un autre moteur que local-script : `engine_ref`, pas de script ni d'étapes
 eregion_core/experiment.py        → validate_experiment() / validate_catalog() (jsonschema, import paresseux ;
                                     dev/CI, pas sur le hot-path) — la CI valide le catalogue via les tests
+eregion_core/exercise_plan.py     → Dagorlad (§7 de docs/design/console.md) : un fil peut-il tourner, et sinon
+                                    pourquoi — les règles d'Orodruin (périmètre, inscription, zone, règle de
+                                    production) plus le catalogue, la watch vivante, le moteur d'une panne, les
+                                    plafonds ; codes stables (REFUSALS) ; pur, la console conseille, Orodruin décidera
 infra/terraform/              → module Celebrimbor : infra de test Azure modulaire, namespacée, jetable.
                                 Celebrimbor = le bâtisseur (annatar=rouge, glorfindel=bleu, celebrimbor=infra).
                                 Pilotée par config.yaml (yamldecode + for_each). instance = WORKSPACE Terraform :

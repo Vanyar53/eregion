@@ -82,7 +82,7 @@ def _cycle(runs, name, *, at, resource_id=VM, ttp="T1110.001", action="block_sus
 
 
 INJECTOR_ROUTES = ("/api/exercises", "/api/campaigns", "/api/catalog", "/api/channel",
-                   "/api/atelier", "/atelier", "/annatar", "/gothmog", "/runs/")
+                   "/api/atelier", "/atelier", "/annatar", "/gothmog", "/runs/", "/api/dagorlad", "/dagorlad")
 
 
 def test_every_injector_route_is_a_read():

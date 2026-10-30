@@ -203,6 +203,55 @@ def load_typed(path: str | Path | None, request: Request) -> dict[int, str]:
     return read_typed(_load_json(Path(path), "the names typed"), request)
 
 
+# ── What Orodruin says of a request: its status, read by one reader too ─────────────────
+
+STATUS_FIELDS = ("request", "state", "at", "codes", "wires")
+STATUS_WIRE_FIELDS = ("rank", "state", "code", "runs", "result")
+STATES = ("judging", "refused", "judged", "running", "finished")
+WIRE_STATES = ("queued", "refused", "skipped", "running", "done", "failed")
+_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_RUN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+_RESULT = re.compile(r"^[A-Za-z0-9_,.-]{0,80}$")
+
+
+def read_status(doc) -> dict:
+    """A request's status as Orodruin publishes it (eregion_core/exercise_runner.py), or
+    ``RequestRefused``: exactly its fields — the request's id, a state, the time, codes, and per
+    wire its rank, state, code, runs and result. Never an experiment, a target or a name: what
+    reaches the console's host through the channel stays blind to the red side's plan."""
+    _exact(doc, STATUS_FIELDS, "the status")
+    if not valid_id(doc["request"]):
+        raise RequestRefused("the status names no request id")
+    if doc["state"] not in STATES:
+        raise RequestRefused(f"the status's state is not one of {', '.join(STATES)}")
+    try:
+        at = datetime.fromisoformat(doc["at"]) if isinstance(doc["at"], str) else None
+    except ValueError:
+        at = None
+    if at is None or at.tzinfo is None:
+        raise RequestRefused("the status's time is not an ISO time with its zone")
+    codes = doc["codes"]
+    if not isinstance(codes, list) or len(codes) > 20 or not all(isinstance(c, str) and _CODE.match(c) for c in codes):
+        raise RequestRefused("the status's codes are not a list of codes")
+    wires = doc["wires"]
+    if not isinstance(wires, list) or len(wires) > MAX_WIRES:
+        raise RequestRefused(f"the status's wires are not a list of at most {MAX_WIRES}")
+    for i, w in enumerate(wires, 1):
+        _exact(w, STATUS_WIRE_FIELDS, f"the status of wire {i}")
+        if isinstance(w["rank"], bool) or w["rank"] != i:
+            raise RequestRefused(f"the status of wire {i}: its rank is not {i}")
+        if w["state"] not in WIRE_STATES:
+            raise RequestRefused(f"the status of wire {i}: its state is not one of {', '.join(WIRE_STATES)}")
+        if not isinstance(w["code"], str) or (w["code"] and not _CODE.match(w["code"])):
+            raise RequestRefused(f"the status of wire {i}: its code is not a code")
+        runs = w["runs"]
+        if not isinstance(runs, list) or len(runs) > 10 or not all(isinstance(r, str) and _RUN.match(r) for r in runs):
+            raise RequestRefused(f"the status of wire {i}: its runs are not run ids")
+        if not isinstance(w["result"], str) or not _RESULT.match(w["result"]):
+            raise RequestRefused(f"the status of wire {i}: its result is not a result")
+    return doc
+
+
 # ── On the operator's machine: show the request, have the names typed ───────────────────
 
 def asks_name(destructive: bool | None, kind: str) -> bool:

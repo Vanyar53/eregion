@@ -286,3 +286,25 @@ def test_each_journal_line_of_a_wire_names_its_request_and_the_runner_counts_the
     r, _, _, _ = _runner(tmp_path)
     assert r._calls_used("r-20261030T080000Z-abcdef", T0 - timedelta(days=3650)) == 2
     assert r._calls_used("r-20261030T080000Z-ffffff", T0 - timedelta(days=3650)) == 0
+
+
+def test_orodruin_publishes_its_verdict_and_the_requests_status_to_the_channel(tmp_path, monkeypatch):
+    """Part 6: at the judgment, the verdict (orodruin/contract.json); at each step, the status
+    (orodruin/requests/<id>.json) — the same container as the windows, no right more."""
+    from eregion_core import exercise_channel as xc
+    from tests.unit.fake_container import CRED, URL, FakeContainer
+    c = FakeContainer()
+    monkeypatch.setenv(xc.CHANNEL_ENV, URL)
+    monkeypatch.setattr(xc, "_credential", CRED)
+    monkeypatch.setattr("requests.put", c.put)
+    clock = Clock()
+    r = er.Runner(check=lambda: ARMED, watch=lambda: "", read_target=lambda rid: TARGETS[rid],
+                  fault_targets=lambda: {}, isolated=lambda rid: "",
+                  launch=Injectors(tmp_path / "runs", clock), catalog=load_catalog(),
+                  runs_dir=tmp_path / "runs", now=clock, sleep=clock.sleep, say=lambda *_: None)
+    req = _req(("T1110.001", GONDOLIN))
+    r.run(req, {})
+    name = f"orodruin/requests/{req.id}.json"
+    assert c.puts[0] == "orodruin/contract.json" and name in c.puts
+    assert json.loads(c.blobs[name][0])["state"] == "finished"
+    assert xr.read_status(json.loads(c.blobs[name][0]))

@@ -400,6 +400,46 @@ def check(readers: dict | None = None) -> Verdict:
     return Verdict(PASSIVE if missing else ARMED, missing, cap)
 
 
+# ── The verdict, published for the console (DG-b) ─────────────────────────────────────
+
+CONTRACT_BLOB = "orodruin/contract.json"
+_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def contract_doc(verdict: Verdict, now: datetime | None = None) -> dict:
+    """What Orodruin publishes of its contract: armed or passive, the codes of what is missing,
+    the time — never a detail (a scope, a group, a subscription), never an identifier."""
+    return {"verdict": verdict.verdict, "codes": sorted({m["code"] for m in verdict.missing}),
+            "at": (now or datetime.now(timezone.utc)).isoformat()}
+
+
+def read_contract(doc) -> dict:
+    """The verdict as published, or ValueError: exactly its three fields, armed without a code,
+    passive with at least one, codes only, an ISO time with its zone."""
+    if not isinstance(doc, dict) or set(doc) != {"verdict", "codes", "at"}:
+        raise ValueError("not Orodruin's verdict: exactly verdict, codes, at")
+    codes = doc["codes"]
+    if not isinstance(codes, list) or len(codes) > 20 or not all(isinstance(c, str) and _CODE.match(c) for c in codes):
+        raise ValueError("its codes are not a list of codes")
+    if doc["verdict"] not in (ARMED, PASSIVE) or (doc["verdict"] == ARMED) != (not codes):
+        raise ValueError("armed without a code, or passive with its codes")
+    try:
+        at = datetime.fromisoformat(doc["at"]) if isinstance(doc["at"], str) else None
+    except ValueError:
+        at = None
+    if at is None or at.tzinfo is None:
+        raise ValueError("its time is not an ISO time with its zone")
+    return doc
+
+
+def publish_contract(verdict: Verdict, **kw) -> bool:
+    """The verdict to the exercise channel (``orodruin/contract.json``: the same container, the
+    same assignment — no right more), for the watch of H0 to pull and the console to show.
+    False without a channel; a refused write raises to its caller."""
+    from eregion_core import exercise_channel
+    return exercise_channel.publish_doc(CONTRACT_BLOB, contract_doc(verdict), **kw)
+
+
 # ── Audit — the journal precedes the call ─────────────────────────────────────────────
 
 def audit_path() -> Path:
@@ -526,8 +566,13 @@ def kill(revoke: Callable[[], None], cancel: Callable[[], None], stop: Callable[
 
 
 def main() -> int:
-    """``orodruin-check`` on the host: the verdict and what is missing; exit 0 if armed."""
+    """``orodruin-check`` on the host: the verdict and what is missing; exit 0 if armed. The
+    verdict is published for the console (DG-b), best effort: said when it fails."""
     verdict = check()
+    try:
+        publish_contract(verdict)
+    except Exception as e:
+        print(f"  (verdict not published for the console: {type(e).__name__}: {e})"[:300])
     print(f"orodruin: {verdict.verdict}")
     for m in verdict.missing:
         print(f"  ✗ {m['code']}: {m['detail']}")

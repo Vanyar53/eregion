@@ -94,6 +94,12 @@ _CHUNK = 64 * 1024
 CREATED = "channel_created"
 # SEC5 (V-29): Orodruin's journal, one append blob per run.
 AUDIT = "audit"
+# DG-b: what Orodruin says to the console — its contract's verdict, each request's status —
+# under its own prefix of the same container; the watch of H0 pulls it into runs/orodruin/,
+# each blob read against its shape (eregion_core/orodruin.py read_contract,
+# eregion_core/exercise_request.py read_status).
+ORODRUIN = "orodruin"
+_ORODRUIN_BLOB = re.compile(r"^orodruin/(?:contract|requests/(?P<rid>r-\d{8}T\d{6}Z-[0-9a-f]{6}))\.json$")
 
 _last_pull = 0.0
 _pull_lock = threading.Lock()
@@ -651,5 +657,98 @@ def pull_runs(directory: Path, *, refusal, channel: str | None = None, credentia
         tmp = local.with_suffix(".json.tmp")
         tmp.write_bytes(content)
         tmp.replace(local)  # atomic: the console never reads half a report
+        written += 1
+    return written, skipped
+
+
+# ── Orodruin's word for the console (DG-b): its contract, each request's status ───────────
+
+def publish_doc(name: str, doc: dict, *, channel: str | None = None, credential=None, put=None) -> bool:
+    """Write ``orodruin/contract.json`` or ``orodruin/requests/<id>.json``. False without a
+    channel; any other name raises."""
+    import json
+    import requests
+
+    if not _ORODRUIN_BLOB.match(name):
+        raise ValueError(f"not one of Orodruin's blobs: {name!r}")
+    url = channel if channel is not None else channel_url()
+    if not url:
+        return False
+    headers = {**auth_headers(credential, url), "x-ms-blob-type": "BlockBlob",
+               "Content-Type": "application/json"}
+    r = (put or requests.put)(f"{url}/{name}", headers=headers, data=json.dumps(doc).encode(),
+                              timeout=15)
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code} publishing {name}")
+    return True
+
+
+def orodruin_refusal(name: str, doc) -> str:
+    """Why a blob of Orodruin's is not believed — "" when it has its shape."""
+    from eregion_core.exercise_request import RequestRefused, read_status
+    from eregion_core.orodruin import read_contract
+    m = _ORODRUIN_BLOB.match(name)
+    if not m:
+        return "not one of Orodruin's blobs"
+    try:
+        if m["rid"] is None:
+            read_contract(doc)
+        else:
+            read_status(doc)
+            if doc["request"] != m["rid"]:
+                return "the status of another request"
+    except (ValueError, RequestRefused) as e:
+        return str(e)
+    return ""
+
+
+def pull_orodruin(directory: Path, *, channel: str | None = None, credential=None,
+                  get=None) -> tuple[int, dict[str, str]]:
+    """Copy into ``directory`` (``runs/orodruin`` on H0) Orodruin's verdict (``contract.json``)
+    and the status of each request (``requests/<id>.json``), new or changed since the local
+    copy, each read against its shape first (``orodruin_refusal``) — a refused one is never
+    written. Within the bounds of V-21. Returns how many were written, and why each one that was
+    not, by blob."""
+    import json
+
+    url = channel if channel is not None else channel_url()
+    if not url:
+        return 0, {}
+    headers = auth_headers(credential, url)
+    directory = Path(directory)
+    written, skipped, downloads = 0, {}, 0
+    for blob in _blobs(get, url, headers, f"{ORODRUIN}/"):
+        name = blob.findtext("Name") or ""
+        if not _ORODRUIN_BLOB.match(name):
+            continue
+        local = directory / name[len(ORODRUIN) + 1:]
+        modified = blob.findtext("Properties/Last-Modified")
+        if local.exists() and modified and parsedate_to_datetime(modified).timestamp() <= local.stat().st_mtime:
+            continue
+        if downloads >= MAX_DOWNLOADS:
+            skipped[name] = f"not pulled yet: {MAX_DOWNLOADS} downloaded by this pull"
+            continue
+        downloads += 1
+        try:
+            r, body = fetch(get, f"{url}/{name}", headers, what=name)
+        except TooLarge as e:
+            skipped[name] = f"refused: {e}"
+            continue
+        if not r.ok:
+            skipped[name] = f"HTTP {r.status_code} downloading it"
+            continue
+        try:
+            doc = json.loads(body)
+        except ValueError:
+            skipped[name] = "refused: not JSON"
+            continue
+        why = orodruin_refusal(name, doc)
+        if why:
+            skipped[name] = f"refused: {why}"
+            continue
+        local.parent.mkdir(parents=True, exist_ok=True)
+        tmp = local.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(doc), encoding="utf-8")
+        tmp.replace(local)
         written += 1
     return written, skipped

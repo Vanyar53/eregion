@@ -142,6 +142,13 @@ def fault_targets() -> dict[str, list[str] | None]:
     return {str(k): [str(n) for n in v] if isinstance(v, list) else None for k, v in data.items()}
 
 
+def publish_status(status: "Status") -> bool:
+    """The status to the exercise channel, for the console (no channel: kept here only)."""
+    from eregion_core import exercise_channel
+    return exercise_channel.publish_doc(f"{exercise_channel.ORODRUIN}/requests/{status.request}.json",
+                                        status.to_dict())
+
+
 def launch(argv: list[str], env: dict) -> int:
     """A wire: its injector's own run, its own process, the operator's terminal for its output."""
     return subprocess.run(argv, env={**os.environ, **env}, check=False).returncode
@@ -162,7 +169,9 @@ class Runner:
     def __init__(self, *, check: Callable = None, watch: Callable = None,
                  read_target: Callable = read_target, fault_targets: Callable = fault_targets,
                  isolated: Callable = isolated, launch: Callable = launch,
-                 publish: Callable | None = None, catalog: dict | None = None,
+                 publish: Callable | None = publish_status,
+                 publish_contract: Callable | None = orodruin.publish_contract,
+                 catalog: dict | None = None,
                  runs_dir: Path | str = "runs", scope: Scope | None = None, now=_now,
                  sleep=time.sleep, wait_isolation_s: float = WAIT_ISOLATION_S,
                  poll_s: float = POLL_S, say=print):
@@ -171,6 +180,7 @@ class Runner:
         self.read_target, self.fault_targets = read_target, fault_targets
         self.isolated, self.launch = isolated, launch
         self.publish = publish or (lambda status: None)
+        self.publish_contract = publish_contract or (lambda verdict: None)
         self.catalog = catalog
         self.runs_dir = Path(runs_dir)
         self.scope = scope or Scope.for_bench()
@@ -251,6 +261,10 @@ class Runner:
         the names read, the fault targets."""
         status = Status(req.id, wires=[WireStatus(w.rank) for w in req.wires])
         verdict = self.check()
+        try:
+            self.publish_contract(verdict)
+        except Exception as e:  # the console says « unknown here »; the judgment goes on
+            self.say(f"[request] Orodruin's verdict not published: {e}")
         if not verdict.armed:
             status.state = "refused"
             status.codes = ["passive"] + [m["code"] for m in verdict.missing]

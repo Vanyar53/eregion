@@ -136,11 +136,13 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
     sid = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-" + _digest(f"{x.get('nsg')}/{x.get('rule')}" for x in left)
     if entry.get("left_said") == sid:
         return                                  # said: pending, or acknowledged
-    what = " ; ".join(f"{x.get('rule')} ({x.get('nsg')}) vise {x.get('to')}, qui est à {x.get('on')}" for x in left)
-    reason = (f"Le blocage de {ip} sur {vm} a laissé telle quelle une règle à son nom, retournée en "
-              f"autorisation par un tiers et visant une adresse qui n'est plus celle de {vm} : {what}. "
-              "La réécrire ou la retirer changerait les flux de cette autre VM ; le blocage de "
-              f"{vm} est posé sous un second nom.")
+    what = " ; ".join(f"{x.get('rule')} ({x.get('nsg')}), "
+                      + ("notre deny, qu'une règle à notre nom retournée attend derrière, "
+                         if x.get("kind") == "deny" else "retournée en autorisation par un tiers, ")
+                      + f"vise {x.get('to')}, qui est à {x.get('on')}" for x in left)
+    reason = (f"Le blocage de {ip} sur {vm} a laissé telles quelles des règles à son nom qui visent une adresse "
+              f"qui n'est plus celle de {vm} : {what}. Les réécrire ou les retirer changerait les flux de cette "
+              f"autre VM ; le blocage de {vm} est posé sous un second nom.")
     steps = [f"Lire {', '.join(sorted({str(x.get('nsg')) for x in left}))} : qui a retourné "
              f"{', '.join(sorted({str(x.get('rule')) for x in left}))} (journal d'activité), et pourquoi.",
              "Si elle n'est plus voulue : la retirer à la main (az network nsg rule delete) ; "

@@ -2666,3 +2666,82 @@ def test_a_turned_rule_aimed_at_a_range_is_left(monkeypatch):
         assert m._attacker_flows(_NEW_API_VM, None) >= reach
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "outside I4A (blocks), found at its work, the isolation's side of the same defect: api isolated "
+    "by rules on nsg-edge, its inbound isolation rule turned into an allow by someone, its IP changed, "
+    "a new VM given the old address, api isolated again — I4: the isolation, written again by name for "
+    "api's new address, takes the allow off and cuts the new VM off. For a lot of its own"))
+def test_an_isolation_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address(monkeypatch):
+    net = _net()
+    net["edge_nsg"] = []
+    _run(monkeypatch, net,
+         ("isolate", API, API, None),
+         ("tamper_with_our_rule", "access", (key(_EDGE), "glorfindel-iso-api-api-nic-c272f2")),
+         ("customer_changes_ip", _nic("rg-edge", "api-nic"), 0, 4),
+         ("create_vm", "northeurope", "rg-app1", "api", None, "Linux"),
+         ("isolate", API, API, None))
+
+
+_NSG_WEB2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Network/networkSecurityGroups/nsg-web-nic"
+_BATCH = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/batch"
+
+
+def _turned_behind_world(monkeypatch):
+    """web2 blocked on its own NSG (allow-ssh after our deny), its rule on the subnet's NSG
+    too — an earlier placement there — turned into an allow; web2's IP changed, batch
+    created on web2's NSG, given the old address: our deny there cuts it off, the turned
+    allow on the subnet's NSG waits behind it."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    ssh = _rule("allow-ssh", 1000, dict(access="Allow", direction="Inbound", source_address_prefix="*",
+                                        destination_address_prefix="*", destination_port_range="22"))
+    m.build(_net(subnet_nsg=[], web_nic={"own": "dedicated", "rules": [ssh]}))
+    assert m.connector.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)["status"] == "blocked"
+    own = m.fake.nsgs[key(_NSG_WEB2)]["rules"]
+    old = own[_WEB2_BLOCK]["destination_address_prefixes"]
+    FakeAzure._put_rule(m.fake.nsgs[key(_SUBNET)], _rule_record(_rule(_WEB2_BLOCK, 300, dict(
+        access="Allow", direction="Inbound", source_address_prefix=ATTACKER,
+        destination_address_prefixes=list(old), destination_port_range="*"))))
+    m.customer_changes_ip(data=Script(_nic("rg-app2", "web-nic"), 0, 20))
+    m.create_vm(data=Script("westeurope", "rg-app2", "batch", _NSG_WEB2, "Linux"))
+    assert m.fake.nics[_nic("rg-app2", "batch-nic-4")]["ips"] == old
+    return m, own, old
+
+
+@pytest.mark.parametrize("subnet_nsg", ["readable", "unreadable"])
+def test_our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner(monkeypatch, subnet_nsg):
+    """I4A, seed 42 at 2 000 (the machine's new rule), present on main: the block written
+    again rewrote our deny on web2's NSG for web2's new address — and the turned allow on
+    the subnet's NSG let the attacker reach batch on 22: an operation on web2 opened
+    another VM. Now that deny stays (its pair under the second name), said; the subnet's
+    NSG unreadable, whether an allow waits is unknown — kept too (A0)."""
+    import shutil
+
+    from .fake_azure import throttled
+
+    m, own, old = _turned_behind_world(monkeypatch)
+    try:
+        rules = m.connector._network.security_rules
+        listing = rules.list
+
+        def partly(rg, name):
+            if name == "nsg-subnet" and subnet_nsg == "unreadable":
+                raise throttled("rule.list")
+            return listing(rg, name)
+        rules.list = partly
+        try:
+            out = m.connector.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)
+        finally:
+            rules.list = listing
+        assert out["status"] == "blocked", out
+        assert own[_WEB2_BLOCK]["access"] == "Deny" and own[_WEB2_BLOCK]["destination_address_prefixes"] == old
+        # Unknown, the -out deny on the old address is kept as well: keeping one never opens.
+        assert len(out["left_rules"]) == (1 if subnet_nsg == "readable" else 2), out["left_rules"]
+        left = next(x for x in out["left_rules"] if x["rule"] == _WEB2_BLOCK)
+        assert left["kind"] == "deny" and left["on"] == "batch" and left["to"] == old[0], left
+        assert not {f for f in m._attacker_flows(_BATCH, None) if f[2] == "in"}
+        assert not m._attacker_flows(WEB2, None)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)

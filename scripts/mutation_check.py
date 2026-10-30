@@ -4680,9 +4680,10 @@ MUTANTS += [
 TESTS.update({f"M{n}": _RB1 for n in range(1648, 1650)})
 # I4A (#328): a block written again leaves a rule of its own that someone turned into an
 # allow, aimed at an address that is no longer the VM's — another VM's now, or nobody knows —,
-# writes its deny under the NIC's second name, and says what it left. Measured by the sequences
+# and our deny there while such an allow waits behind it (seed 42 at 2 000); writes its deny
+# under the NIC's second name, and says what it left. Measured by the sequences
 # frozen in test_invariant_regressions.py, then by the machine (address_reused_under_a_turned_rule,
-# I4 at the block). M1755–M1767.
+# I4 at the block). M1755–M1769.
 _I4A_TESTS = " ".join(f"{_I5R}{t}" for t in (
     "a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address",
     "a_turned_rule_on_an_address_handed_to_another_vm_is_left_and_said",
@@ -4691,12 +4692,13 @@ _I4A_TESTS = " ".join(f"{_I5R}{t}" for t in (
     "whose_the_old_address_is_unknown_the_turned_rule_is_left",
     "a_block_under_its_second_name_is_found_without_its_state",
     "a_turned_rule_widened_to_any_on_a_shared_nsg_is_left",
-    "a_turned_rule_aimed_at_a_range_is_left"))
+    "a_turned_rule_aimed_at_a_range_is_left",
+    "our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner"))
 _I4A = f"{_I4A_TESTS} {INVARIANTS}"
 MUTANTS += [
     ("M1755", "a turned rule aimed at another VM's address written again by name: that VM cut off (I4A)", BLK,
-     '        if _enum_text(getattr(rule, "access", "")) == "deny":\n            return []\n        side',
-     "        if True:\n            return []\n        side"),
+     "            if addr in mine or (deny and not self._turned_behind(t, direction, addr, holders, pairs)):\n",
+     "            if addr in mine or not deny or not self._turned_behind(t, direction, addr, holders, pairs):\n"),
     ("M1756", "who holds the old address unknown read as nobody: the turned rule written over (I4A, A0)", BLK,
      "            return f\"inconnu (cartes illisibles : {holders['error']})\"\n", "            return None\n"),
     ("M1757", "an allow widened to any, on an NSG others share, written over (I4A)", BLK,
@@ -4726,8 +4728,14 @@ MUTANTS += [
      '        if "/" in addr or not addr[:1].isdigit():\n', "        if False:\n"),
     ("M1767", "the second name without the NIC's mark: the block no longer the NIC's (I4A)", NET,
      '        return base, f"{head[:80 - 4 - 3 - len(mark)]}-b-{mark}"\n', '        return base, f"{head}-b"\n'),
+    ("M1768", "our deny on another VM's address lifted while a turned rule of ours waits behind it: "
+              "that VM opened (I4A, seed 42)", BLK,
+     "            if addr in mine or (deny and not self._turned_behind(t, direction, addr, holders, pairs)):\n",
+     "            if addr in mine or deny:\n"),
+    ("M1769", "whether a turned rule waits behind our deny unknown, read as no: the deny lifted (I4A, A0)", BLK,
+     "        if found is None:\n            return True\n", "        if found is None:\n            return False\n"),
 ]
-TESTS.update({f"M{n}": _I4A for n in range(1755, 1768)})
+TESTS.update({f"M{n}": _I4A for n in range(1755, 1770)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

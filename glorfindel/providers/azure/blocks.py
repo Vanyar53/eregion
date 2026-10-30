@@ -72,14 +72,14 @@ class BlockMixin:
         own = None
         for pair in pairs:
             kept = [x for n in pair if n.lower() in by_name
-                    for x in self._left_on_others(by_name[n.lower()], t, shared, nsg_key, holders)]
+                    for x in self._left_on_others(by_name[n.lower()], t, shared, nsg_key, holders, pairs)]
             if not kept:
                 own = own or pair
             left += kept
         if own is None:
             raise RuntimeError(
                 f"NIC {t['nic_short']} : les noms de son blocage sur {nsg_name} sont pris par des règles "
-                "retournées en autorisation qui visent d'autres VM — rien n'est écrit par-dessus. "
+                "qui visent d'autres VM — rien n'est écrit par-dessus. "
                 + _describe_left(left))
         taken = {x["rule"].lower() for x in left}
         drop = [n for pair in pairs if pair != own for n in pair if n.lower() in by_name and n.lower() not in taken]
@@ -91,27 +91,59 @@ class BlockMixin:
                 "shadowed": shadowed, "own": own, "left": left, "drop": drop,
                 "bypassed": [x for x in shadowed if x.get("threat_port_open", True)]}
 
-    def _left_on_others(self, rule, t: dict, shared: bool, nsg_key: str, holders: dict) -> list[dict]:
-        """A rule of this NIC's block that someone turned into an allow, aimed at an
-        address that is no longer the NIC's: another VM's now, or nobody knows (A0) —
-        any address, on an NSG others share. Rewritten, it changed that VM's flows (I4A,
-        seed 8675: the old address handed to a new VM). Our deny is never one: rewritten,
-        it only gives back what it cut. Nobody's address: rewritten as before."""
-        if _enum_text(getattr(rule, "access", "")) == "deny":
-            return []
-        side = "destination" if _enum_text(getattr(rule, "direction", "")) == "inbound" else "source"
+    def _left_on_others(self, rule, t: dict, shared: bool, nsg_key: str, holders: dict,
+                        pairs: list[tuple[str, str]]) -> list[dict]:
+        """A rule of this NIC's block that rewritten (or taken off) would change another
+        VM's flows (I4A), aimed at an address that is no longer the NIC's — another VM's
+        now, or nobody knows (A0) — or at any address, on an NSG others share:
+        - one someone turned into an allow: rewritten, that VM was cut off (seed 8675, the
+          old address handed to a new VM);
+        - our deny, while a rule of this NIC's turned into an allow waits behind it for
+          that address, on an NSG of the NIC (_turned_behind): lifted, it let that allow
+          open that VM (seed 42 at 2 000). Otherwise our deny is never one: rewritten, it
+          only gives back what it cut.
+        Nobody's address: rewritten as before."""
+        deny = _enum_text(getattr(rule, "access", "")) == "deny"
+        direction = _enum_text(getattr(rule, "direction", ""))
+        side = "destination" if direction == "inbound" else "source"
         mine = {a.lower() for a in t["private_ips"] or []}
         out = []
         for addr in _prefixes(rule, side) or ("*",):
-            if addr in mine:
+            if addr in mine or (deny and not self._turned_behind(t, direction, addr, holders, pairs)):
                 continue
             if addr in ("*", "any", "0.0.0.0/0"):
                 on = "toutes les cartes derrière ce NSG" if shared else None
             else:
                 on = self._address_holder(addr, t["nic_id"], holders)
             if on:
-                out.append({"nsg": nsg_key, "rule": _rule_name(rule), "to": addr, "on": on})
+                out.append({"nsg": nsg_key, "rule": _rule_name(rule), "to": addr, "on": on,
+                            "kind": "deny" if deny else "turned"})
         return out
+
+    def _turned_behind(self, t: dict, direction: str, addr: str, holders: dict,
+                       pairs: list[tuple[str, str]]) -> bool:
+        """A rule of this NIC's block (by its names), on an NSG of the NIC, turned into an
+        allow for `addr` in this direction (or any address). The NSGs unreadable: unknown,
+        read as yes — keeping our deny never opens anything (A0). Listed once per NIC."""
+        key = ("turned", t["nic_id"])
+        if key not in holders:
+            names = {n.lower() for pair in pairs for n in pair}
+            found: set | None = set()
+            try:
+                for v in self._nic_nsg_views(t):
+                    for r in self._network.security_rules.list(v["nsg_rg"], v["nsg_name"]):
+                        if _rule_name(r).lower() in names and _enum_text(getattr(r, "access", "")) != "deny":
+                            d = _enum_text(getattr(r, "direction", ""))
+                            found |= {(d, a) for a in _prefixes(r, "destination" if d == "inbound" else "source")
+                                      or ("*",)}
+            except Exception:
+                found = None
+            holders[key] = found
+        found = holders[key]
+        if found is None:
+            return True
+        return bool({(direction, addr), (direction, "*")} & found) or (
+            addr in ("*", "any", "0.0.0.0/0") and any(d == direction for d, _ in found))
 
     def _address_holder(self, addr: str, nic_id: str, holders: dict) -> str | None:
         """Who holds this address now, this NIC aside: VM names; None for nobody; an
@@ -377,7 +409,11 @@ class BlockMixin:
 def _describe_left(left: list[dict]) -> str:
     """What a block left as it was (I4A), and how to take it off."""
     return "Laissée(s) telle(s) quelle(s) : " + " ; ".join(
-        f"{x['rule']} ({x['nsg']}), règle du blocage retournée en autorisation par un tiers, vise {x['to']} — "
-        f"plus une adresse de la VM bloquée : {x['on']}. La réécrire changerait les flux de cette VM ; "
-        f"à retirer à la main si elle n'est plus voulue (az network nsg rule delete -g {x['nsg'].split('/', 1)[0]} "
+        f"{x['rule']} ({x['nsg']}), " + (
+            f"notre deny sur {x['to']}, plus une adresse de la VM bloquée : {x['on']} — une règle à notre nom "
+            "passée en autorisation par un tiers l'attend derrière, le retirer ouvrirait cette VM ; "
+            if x.get("kind") == "deny" else
+            f"règle du blocage retournée en autorisation par un tiers, vise {x['to']} — plus une adresse de la VM "
+            f"bloquée : {x['on']}. La réécrire changerait les flux de cette VM ; ")
+        + f"à retirer à la main si elle n'est plus voulue (az network nsg rule delete -g {x['nsg'].split('/', 1)[0]} "
         f"--nsg-name {x['nsg'].split('/', 1)[-1]} -n {x['rule']})" for x in left) + "."

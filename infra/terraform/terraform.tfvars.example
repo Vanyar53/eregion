@@ -5,3 +5,9 @@ vm_shutdown_email    = "you@example.com"
 # Optionnel — sinon le provider lit ARM_SUBSCRIPTION_ID de l'env (le Makefile le
 # dérive de AZURE_SUBSCRIPTION_ID). Décommenter pour figer l'abonnement ici.
 # subscription_id = "00000000-0000-0000-0000-000000000000"
+
+# Optionnel (ID1) — les journaux du plan de contrôle et d'Entra ID vers le workspace du banc.
+# Désactivés par défaut ; à poser ici (persistant), jamais en -var d'une seule commande.
+# Puis : make celebrimbor-logs-plan, et make celebrimbor-logs-up YES=1 (docs/operations.md).
+# activity_log_enabled = true   # paramètre de l'ABONNEMENT (Monitoring Contributor)
+# entra_logs_enabled   = true   # paramètre du TENANT (Administrateur de la sécurité d'Entra)

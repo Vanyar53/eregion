@@ -319,8 +319,18 @@ const OUTCOME = {
   detected: { mark: '✓', cls: 'ok' }, pass: { mark: '✓', cls: 'ok' },
   missed: { mark: '✗', cls: 'bad' }, fail: { mark: '✗', cls: 'bad' },
   unknown: { mark: '?', cls: 'warn' }, not_measured: { mark: '·', cls: 'wait' }, refused: { mark: '·', cls: 'wait' },
+  not_started: { mark: '·', cls: 'wait' },
 };
 const SPARK = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+const num = x => (Number.isFinite(Number(x)) ? Number(x) : 0);   // a count the server did not send is 0, never NaN
+const WINDOW_KEPT_S = 7 * 86400;   // an exercise window is emptied 7 days after its end (H-1)
+// A run's link opens its window row (?run=), which exists 7 days only; past that, the run is
+// named, not linked to a row that is gone.
+function runLink(runId, at, text) {
+  const d = toDate(at);
+  if (d && (Date.now() - d) / 1000 > WINDOW_KEPT_S) return `<span title="${esc(runId)} — its window is gone after 7 days (runs/${esc(runId)}.json stays)">${esc(text)}</span>`;
+  return `<a href="?run=${encodeURIComponent(runId)}" title="${esc(runId)}">${esc(text)}</a>`;
+}
 const matrixRows = () => (S.cat && (ABOUT.kind === 'fault' ? S.cat.faults : S.cat.techniques)) || [];
 
 function historyStrip(r) {
@@ -334,9 +344,9 @@ function evolutionLine() {
   const pts = S.cat.evolution || [];
   if (!pts.length) return '';
   const s = (S.cat.summary || {})[ABOUT.kind === 'fault' ? 'faults' : 'techniques'] || {};
-  const of = ABOUT.kind === 'fault' ? Math.max(1, ...pts.map(p => Number(p.faults_pass))) : Math.max(1, Number(s.implemented));
+  const of = ABOUT.kind === 'fault' ? Math.max(1, ...pts.map(p => num(p.faults_pass))) : Math.max(1, num(s.implemented));
   const bars = pts.map(p => {
-    const v = ABOUT.kind === 'fault' ? Number(p.faults_pass) : Number(p.implemented_detected);
+    const v = ABOUT.kind === 'fault' ? num(p.faults_pass) : num(p.implemented_detected);
     const lost = (p.regressed || []).length;
     const what = ABOUT.kind === 'fault' ? `${v} fault run(s) PASS` : `${v} / ${Number(s.implemented)} implemented detected · ${Number(p.catalog_detected)} of the catalogue`;
     return `<span class="r-${lost ? 'bad' : 'ok'}" title="${esc(hms(p.at))}: ${what} in the ${Number(S.cat.window_days)} days before${lost ? ' · regressed: ' + esc(p.regressed.join(', ')) : ''}">${SPARK[Math.min(7, Math.round(v / of * 7))]}</span>`;
@@ -355,13 +365,13 @@ function runText(v) {
   if (d && d.action) bits.push(`→ ${esc(d.action)} ${esc(pct(d.confidence))}${d.executed === true ? (d.verified === true ? ' · executed ✓' : ' · executed, not verified') : d.escalated ? ' · held' : ''}`);
   else if (v.outcome === 'detected') bits.push('<span style="color:var(--dim)">no decision attached</span>');
   if (v.contain_s != null) bits.push(`contained +${dur(Number(v.contain_s))}`);
-  return `<a href="?run=${encodeURIComponent(v.run_id)}" title="${esc(v.run_id)}${v.campaign ? ' · campaign ' + esc(v.campaign) : ''}">${esc(hms(v.at))}</a> ${bits.join(' ')}`;
+  return `${runLink(v.run_id, v.at, hms(v.at))}${v.campaign ? ` <span style="color:var(--dim)">campaign ${esc(v.campaign)}</span>` : ''} ${bits.join(' ')}`;
 }
 
 function matrixDetail(r) {
   const reg = r.regression;
   return `<div class="mdetail">
-    ${reg ? `<div class="r-bad">regressed: held by <a href="?run=${encodeURIComponent(reg.held_by)}">${esc(reg.held_by)}</a> (${esc(hms(reg.held_at))}), lost by <a href="?run=${encodeURIComponent(reg.lost_by)}">${esc(reg.lost_by)}</a> (${esc(hms(reg.lost_at))})</div>` : ''}
+    ${reg ? `<div class="r-bad">regressed: held by ${runLink(reg.held_by, reg.held_at, reg.held_by)} (${esc(hms(reg.held_at))}), lost by ${runLink(reg.lost_by, reg.lost_at, reg.lost_by)} (${esc(hms(reg.lost_at))})</div>` : ''}
     <div><span class="k">last run</span> ${runText(r.last_run)}</div>
     <div><span class="k">last proof</span> ${r.last_proof ? `${runText(r.last_proof)} · ${dur(Number(r.last_proof.age_s))} ago` : '<span style="color:var(--dim)">none</span>'}</div>
     <div><span class="k">runs</span> ${Number(r.runs)}${r.in_catalog ? '' : ' · <span class="r-warn">outside the catalogue</span>'}</div>
@@ -372,7 +382,11 @@ function renderCatalog() {
   const list = $('cat-list');
   if (S.errors.cat) { list.innerHTML = `<div class="err">${esc(S.errors.cat)}</div>`; return; }
   if (!S.cat) return;
-  if (S.cat.error && !matrixRows().length) { list.innerHTML = `<div class="err">${esc(S.cat.error)}</div>`; return; }
+  // The catalogue unreadable: said above the rows the runs still give, never hidden by them.
+  const banner = S.cat.error ? `<div class="err">${esc(S.cat.error)}</div>` : '';
+  // A run dated in the future is in no row (C1): said, so that it is not lost either.
+  const future = (S.cat.future || []).filter(f => f.kind === ABOUT.kind);
+  const ahead = future.length ? `<div class="evo r-warn" title="${esc(future.map(f => f.run_id + ' · ' + f.at).join('\n'))}">${Number(future.length)} run(s) dated in the future — left out of the matrix</div>` : '';
   const rows = matrixRows();
   const s = (S.cat.summary || {})[ABOUT.kind === 'fault' ? 'faults' : 'techniques'] || {};
   const lost = s.regressed || [];
@@ -383,7 +397,7 @@ function renderCatalog() {
     (groups[g] = groups[g] || []).push(r);
   }
   const rank = r => (r.state === 'regressed' ? 0 : r.status === 'implemented' || r.runs ? 1 : 2);
-  list.innerHTML = evolutionLine() + Object.entries(groups).map(([g, rs]) => {
+  list.innerHTML = banner + ahead + evolutionLine() + Object.entries(groups).map(([g, rs]) => {
     rs.sort((a, b) => rank(a) - rank(b) || String(a.id).localeCompare(String(b.id)));
     return `<div class="cat-group">${esc(g)}</div>` + rs.map(r => {
       const st = STATE[r.state] || STATE.never, key = 'm:' + r.id, isOpen = S.open.has(key);

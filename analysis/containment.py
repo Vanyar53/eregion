@@ -301,9 +301,9 @@ def fault_run(run_id: str, fault: str, targets, start, end, records, *, window_u
     """A Gothmog run of the campaign, and Glorfindel's decisions to isolate or to block on one
     of its targets seen between its start and the end of its window (else its end plus the
     grace) — a fault taken for an attack. ``taken``: the signal ids already attached to an
-    incident (never counted twice); ``played``: ``(technique, from, until)`` of the campaign's
-    technique runs — a decision on that technique inside that run's window is the run's (late,
-    or not attached), never the fault's."""
+    incident (never counted twice); ``played``: ``(technique, VM, from, until)`` of the
+    campaign's technique runs — a decision on that technique, on that VM, inside that run's window
+    is the run's (late, or not attached), never the fault's."""
     targets = [str(t) for t in targets or () if t]
     start = _ts(start)
     until = _ts(window_until)
@@ -327,8 +327,9 @@ def fault_run(run_id: str, fault: str, targets, start, end, records, *, window_u
             continue
         if d["seen_at"] is None or not start <= d["seen_at"] <= until:
             continue
-        if any(d["ttp"] == ttp and a is not None and b is not None and a <= d["seen_at"] <= b
-               for ttp, a, b in played):
+        if any(d["ttp"] == ttp and (not vm or _same(d["resource_id"], vm))
+               and a is not None and b is not None and a <= d["seen_at"] <= b
+               for ttp, vm, a, b in played):
             continue
         fr.mistaken.append({"action": d["action"], "executed": d["executed"] is True,
                             "resource_id": d["resource_id"], "signal_id": d["signal_id"],
@@ -563,7 +564,10 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
             continue
         report = cr._read_json(campaign_dir / "runs" / f"{rid}.json", runs_dir / f"{rid}.json")
         dec, why, _ = cr.run_decision(s, rid, campaign_dir, runs_dir, watch_records)
-        rows.append((s, rid, _ts((report.get("metrics") or {}).get("attack_time")), dec, why))
+        metrics = report.get("metrics") if isinstance(report.get("metrics"), dict) else {}
+        if not s.get("target_resource_id") and isinstance(metrics.get("resource_id"), str):
+            s = {**s, "target_resource_id": metrics["resource_id"]}     # C1: the run names its VM
+        rows.append((s, rid, _ts(metrics.get("attack_time")), dec, why))
     # One decision, one incident (the earliest run): a later run whose search falls on the same
     # signal has no decision of its own in the files — unknown, said.
     rows.sort(key=lambda r: (r[2] is None, r[2] or 0.0, r[1]))
@@ -586,7 +590,7 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
                  and _same(s2.get("target_resource_id"), target)]
         if later:
             until = min(later) if until is None else min(until, min(later))
-        played.append((s.get("ttp") or "", t0, until if until is not None
+        played.append((s.get("ttp") or "", target, t0, until if until is not None
                        else (t0 + HOLD_WATCH_S if t0 is not None else None)))
         incidents.append(incident(rid, s.get("ttp") or "", target, t0,
                                   s.get("detection") or "unknown", dec, why, until, cards,

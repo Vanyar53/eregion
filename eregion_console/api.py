@@ -2128,7 +2128,10 @@ def _watch_cycles(since_ts: float | None) -> list[dict]:
     """Glorfindel's cycles from every debug file written since ``since_ts`` — the watch's
     ``watch-*`` files, and a run's own on a host that has both."""
     out = []
-    for path in sorted(_RUNS.glob("*_debug.jsonl")):
+    paths = sorted(_RUNS.glob("*_debug.jsonl"))
+    for gone in set(list(_cycle_cache)) - set(paths):   # a file deleted is dropped from the cache (C1)
+        _cycle_cache.pop(gone, None)   # two requests (threads) can evict at once
+    for path in paths:
         try:
             st = path.stat()
         except OSError:
@@ -2384,19 +2387,46 @@ def _published_heartbeat() -> dict:
     return value
 
 
+# The matrix is computed again only when a file it reads changed — the run reports, the
+# watch's debug files, the catalog (paths, mtimes, sizes) — or after MATRIX_TTL_S (its ages
+# and states move with the clock). The overview asks for it every 30 s.
+MATRIX_TTL_S = 30.0
+_matrix_cache: dict = {"key": None, "at": 0.0, "value": None}
+
+
+def _matrix_fingerprint(reports: dict[str, Path]) -> tuple:
+    from eregion_core.experiment import CATALOG
+
+    def stat(p) -> tuple:
+        try:
+            st = Path(p).stat()
+            return (str(Path(p).absolute()), st.st_mtime_ns, st.st_size)
+        except OSError:
+            return (str(p), None, None)
+    return (tuple(sorted(stat(p) for p in reports.values())),
+            tuple(stat(p) for p in sorted(_RUNS.glob("*_debug.jsonl"))), stat(CATALOG))
+
+
 def coverage_matrix(now: float | None = None) -> dict:
     """The coverage matrix (C1, eregion_console/coverage.py): every run report this host keeps,
     in the run format both injectors share, every cycle of the watch, the catalog — over the
-    whole history, read only, nothing from the cloud."""
+    whole history, read only, nothing from the cloud. A copy: the caller may drop a half."""
     import time as _time
     from eregion_console import coverage
     from eregion_core import run_report
+    t = _time.time() if now is None else now
+    reports = _run_reports()
+    key = _matrix_fingerprint(reports)
+    cached = _matrix_cache
+    if cached["value"] is not None and cached["key"] == key and 0 <= t - cached["at"] < MATRIX_TTL_S:
+        return dict(cached["value"])
     cat = _catalog_entries()
-    m = coverage.matrix(run_report.read_reports(_run_reports()), _watch_cycles(None),
-                        cat.get("entries", []), _time.time() if now is None else now)
+    m = coverage.matrix(run_report.read_reports(reports), _watch_cycles(None),
+                        cat.get("entries", []), t)
     if cat.get("error"):
         m["error"] = cat["error"]
-    return m
+    _matrix_cache.update(key=key, at=t, value=m)
+    return dict(m)
 
 
 @app.get("/api/coverage")
@@ -2460,6 +2490,8 @@ async def indicators() -> dict:
         r30 = esc_module.observation_report(since=since)
         r7 = esc_module.observation_report(since=now - timedelta(days=7))
         t = _time.time()
+        # A run dated in the future is left out here as in the matrix (C1).
+        runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]
         out = ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
                           r7.get("disruptive") or {}, confidence_threshold(), t,
                           all_cards=every, liftings=_manual_liftings(since.timestamp()))

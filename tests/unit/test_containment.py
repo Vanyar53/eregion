@@ -273,12 +273,16 @@ def test_what_is_not_a_fault_taken_for_an_attack(rec):
 def test_a_decision_on_a_technique_the_campaign_played_in_its_window_is_not_the_faults():
     """M1914: a detection of the campaign's technique, inside that run's window, is the run's
     (late, or not attached) — never a fault taken for an attack; another technique still is."""
-    played = [("T1136.001", FS + 100, FS + 400)]
+    played = [("T1136.001", VM, FS + 100, FS + 400)]
     own = _line(seen=FS + 120, signal_id="s-own")
     other = _line(seen=FS + 120, ttp="T1110.001", signal_id="s-other")
     after = _line(seen=FS + 500, signal_id="s-after")            # outside the run's window
     f = _fault([own, other, after], played=played)
     assert [m["signal_id"] for m in f.mistaken] == ["s-other", "s-after"]
+    # The run's VM is the join (C1's resource_id): a decision on another VM is not the run's.
+    elsewhere = _line(seen=FS + 120, resource=OTHER, signal_id="s-elsewhere")
+    f = ct.fault_run("g1", "vm-shutdown", [VM, OTHER], _iso(FS), _iso(FE), [elsewhere], played=played)
+    assert [m["signal_id"] for m in f.mistaken] == ["s-elsewhere"]
 
 
 def test_verified_at_is_set_only_after_a_read_back():

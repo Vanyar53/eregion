@@ -27,6 +27,7 @@ names no VM, and its window is gone after a week.
 from __future__ import annotations
 
 import statistics
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -53,16 +54,55 @@ def read_runs(reports: dict[str, Path], since: float) -> list[dict]:
     return runs
 
 
-def decision_of(run: dict, cycles: list[dict]) -> dict | None:
+class Detections:
+    """The watch's detection records with a decision, indexed once by technique and sorted by
+    their signal's time — so that a run's decision is found by bisection, not by reading every
+    cycle for every run (C1: the matrix reads the whole history at every refresh). A run's
+    decision is kept by run id for the life of the index (one computation)."""
+
+    def __init__(self, cycles: list[dict]):
+        by_ttp: dict[str, list[tuple[float, dict]]] = {}
+        for c in cycles:
+            if c.get("event") == "detection" and c.get("action") \
+                    and (t := _ts(c.get("signal_at"))) is not None:
+                by_ttp.setdefault(str(c.get("ttp") or ""), []).append((t, c))
+        self.by_ttp = {ttp: ([t for t, _ in rows], [c for _, c in rows])
+                       for ttp, rows in ((k, sorted(v, key=lambda x: x[0])) for k, v in by_ttp.items())}
+        self.memo: dict[str, dict | None] = {}
+        # BL1: every cycle as given — a release on a recovery, a decision on a fault's VM.
+        self.cycles = list(cycles)
+
+
+def detections(cycles) -> Detections:
+    return cycles if isinstance(cycles, Detections) else Detections(cycles)
+
+
+def decision_of(run: dict, cycles) -> dict | None:
     """The watch's decision on the detection the run counted, or None: a run not detected, or
-    without its latency, has none that can be told apart."""
+    without its latency, has none that can be told apart. ``cycles``: the watch's cycles, or
+    their ``Detections`` index.
+
+    The record of the run's own technique (its experiment, which for an attack is its
+    ``mitre``), seen at the run's attack time plus its latency to a few seconds, on the run's
+    VM when its report names one (``metrics.resource_id``, C1); among several, the closest to
+    that time."""
     if run["kind"] != "technique" or run["detection"] != "detected" or run["latency"] is None:
         return None
+    if run.get("experiment", run["ttp"]) != run["ttp"]:
+        return None
+    index = detections(cycles)
+    if run["run_id"] in index.memo:
+        return index.memo[run["run_id"]]
     seen_at = run["at"] + run["latency"]
-    found = [c for c in cycles
-             if c.get("event") == "detection" and c.get("action") and c.get("ttp") == run["ttp"]
-             and (t := _ts(c.get("signal_at"))) is not None and abs(t - seen_at) <= MATCH_SLACK_S]
-    return min(found, key=lambda c: _ts(c["signal_at"])) if found else None
+    times, cands = index.by_ttp.get(run["ttp"], ([], []))
+    lo = bisect_left(times, seen_at - MATCH_SLACK_S)
+    hi = bisect_right(times, seen_at + MATCH_SLACK_S)
+    vm = str(run.get("resource_id") or "").lower()
+    found = [(t, c) for t, c in zip(times[lo:hi], cands[lo:hi])
+             if not vm or str(c.get("resource_id") or "").lower() == vm]
+    best = min(found, key=lambda tc: (abs(tc[0] - seen_at), tc[0]))[1] if found else None
+    index.memo[run["run_id"]] = best
+    return best
 
 
 def _median(values: list[float]) -> float | None:
@@ -78,6 +118,8 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     from analysis import containment
     attacks = [r for r in runs if r["kind"] == "technique"]
     detected = [r for r in attacks if r["detection"] == "detected"]
+    cycles = detections(cycles)
+    every_cycle = cycles.cycles
     judged_wrong = {c.get("exercise_run") for c in cards if c.get("verdict") == "wrong"}
     detect, decide, contain = [], [], []
     alone = shadow = 0
@@ -85,7 +127,7 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     taken: set[str] = set()
     # The lifts of a containment the watch's cycles show (a release on a recovery); the
     # operator's own are in runs/manual_actions.jsonl, passed by the API.
-    liftings = [x for c in cycles if (x := containment.lifting_of(c)) is not None] + list(liftings or ())
+    liftings = [x for c in every_cycle if (x := containment.lifting_of(c)) is not None] + list(liftings or ())
     for r in detected:
         if r["latency"] is not None:
             detect.append(r["latency"])
@@ -97,10 +139,12 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
         if decided_at is not None and decided_at >= r["at"]:
             decide.append(decided_at - r["at"])
         disruptive = d.get("action") in DISRUPTIVE
-        # BL1: one definition with the campaign report's (analysis/containment.py) — executed in
-        # the cycle, read back on Azure, held; the time ends at the read-back.
-        inc = containment.incident(r["run_id"], r["ttp"], d.get("resource_id", ""), r["at"],
-                                   "detected", d, cards=all_cards or (), liftings=liftings)
+        # The one definition of the time to contain on the overview (C1 and BL1 merged): BL1's
+        # (analysis/containment.py) — executed in the cycle, read back on Azure, held — whose
+        # time is run_report.timeline's, the matrix's. The VM: the run's own (C1), else the
+        # decision's.
+        inc = containment.incident(r["run_id"], r["ttp"], r.get("resource_id") or d.get("resource_id", ""),
+                                   r["at"], "detected", d, cards=all_cards or (), liftings=liftings)
         if inc.outcome == containment.CONTAINED:
             alone += 1
             if inc.time_to_contain_s is not None:
@@ -116,7 +160,7 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     covered = {r["ttp"] for r in detected}
     faults = [r for r in runs if r["kind"] == "fault"]
     checked = [containment.fault_run(f["run_id"], f.get("experiment", ""), f.get("targets") or [],
-                                     f["at"], f.get("ended_at"), cycles, taken=taken - {""},
+                                     f["at"], f.get("ended_at"), every_cycle, taken=taken - {""},
                                      without_glorfindel=f.get("without_glorfindel") is True)
                for f in faults]
 

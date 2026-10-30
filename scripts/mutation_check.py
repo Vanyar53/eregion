@@ -1326,9 +1326,13 @@ MUTANTS = [
     # UI-2 (#206) — the five indicators: a run's own decision, nothing invented in human-only,
     # the shadow bounded by the verdicts, 30 days from the reports, a proof is detection AND
     # decision, coverage counts what was detected.
+    # Retargeted at C1's review (30/10): the decision is found by bisection in an index; the
+    # bug, as it was — any record of the technique after the attack, the oldest first.
     ("M560", "a run takes any decision of its technique, not the one at its detection (UI-2)", IND,
-     "             and (t := _ts(c.get(\"signal_at\"))) is not None and abs(t - seen_at) <= MATCH_SLACK_S]\n",
-     "             and (t := _ts(c.get(\"signal_at\"))) is not None and t >= run[\"at\"]]\n"),
+     ("    found = [(t, c) for t, c in zip(times[lo:hi], cands[lo:hi])\n",
+      "    best = min(found, key=lambda tc: (abs(tc[0] - seen_at), tc[0]))[1] if found else None\n"),
+     ("    found = [(t, c) for t, c in zip(times, cands) if t >= run[\"at\"]\n",
+      "    best = min(found, key=lambda tc: tc[0])[1] if found else None\n")),
     ("M561", "a recommendation counts as contained alone in human-only (UI-2)", IND,
      '        if disruptive and d.get("executed") is True and d.get("verified") is True:\n',
      "        if disruptive:\n"),
@@ -2794,7 +2798,7 @@ MUTANTS += [
      'RUN pip install --no-cache-dir -e ".[annatar]"\n'),
     ("M917", "Annatar's extra without litellm: the planner fails in the image (HY1)", "pyproject.toml",
      "    # The campaign planner (`annatar campaign plan --llm`) — the same pin as Glorfindel's (HY1).\n"
-     '    "litellm==1.86.1",\n',
+     '    "litellm==1.100.4",\n',
      ""),
     ("M918", "Annatar's targets pass the client secret by value again (L23)", MAKE,
      "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \\\n\t-e ANTHROPIC_API_KEY",
@@ -3943,8 +3947,9 @@ MUTANTS += [
      '        Check("ni Glorfindel, ni la console, ni leurs dépendances (D1)",\n'
      '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n', ""),
     ("M1481", "the injectors' image no longer checked for root (CI1)", IMC,
-     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n        Check("pas root", ("python", "-c", NOT_ROOT)),\n',
-     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n        Check("pas root", ("python", "-c", NOT_ROOT)),\n'
+     '    )),\n}\n',
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n    )),\n}\n'),
     ("M1482", "Annatar and Gothmog no longer imported in their image (CI1)", IMC,
      '        Check("Annatar et Gothmog importent", ("python", "-c", f"import {INJECTOR_IMPORTS}")),\n', ""),
     ("M1483", "an unreadable diff skips the build: the job green on what it never built (CI1)", IMC,
@@ -3969,6 +3974,25 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1480, 1490)})
 TESTS["M1486"] = "tests/unit/test_workflows.py"
+# DEP1 (#282): litellm's call path proven in each image — a tool call answered by litellm's
+# mock, no network (1.106.0 imported, then failed on the call). M1610–M1614.
+MUTANTS += [
+    ("M1610", "the litellm check imports only: 1.106.0's call that fails unseen (DEP1)", IMC,
+     '    "import litellm\\n"\n', '    "import litellm\\nsys.exit(0)\\n"\n'),
+    ("M1611", "the litellm check passes an answer without its tool call (DEP1)", IMC,
+     "true}') else 1)", "true}') else 0)"),
+    ("M1612", "the litellm check fetches the cost map from the network (DEP1)", IMC,
+     '    "os.environ[\'LITELLM_LOCAL_MODEL_COST_MAP\'] = \'True\'\\n"\n', ""),
+    ("M1613", "Glorfindel's image no longer makes the litellm call: its lock unproven before the harness (DEP1)", IMC,
+     "              mounts=((REPO / EXAMPLE_CONFIG, CONFIG_IN_IMAGE),)),\n"
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n',
+     "              mounts=((REPO / EXAMPLE_CONFIG, CONFIG_IN_IMAGE),)),\n"),
+    ("M1614", "the injectors' image no longer makes the litellm call: the planner's lock unproven (DEP1)", IMC,
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n',
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1610, 1615)})
 # DEP1 (#282): `make llm-compare ATTEST=1` passes --attest without --json (M1617).
 _SMOKE_T = "tests/unit/test_llm_smoke.py"
 MUTANTS += [
@@ -3978,6 +4002,14 @@ MUTANTS += [
      "    if args.json:\n        import json\n        from pathlib import Path\n        Path(args.json)"),
 ]
 TESTS["M1617"] = _SMOKE_T
+# DEP1, after its review: the CI's guard of a committed attestation reads it for the default
+# model, never for the model the attestation names itself (tests/unit/test_llm_smoke.py). M1616.
+MUTANTS += [
+    ("M1616", "the CI's guard reads an attestation for its own model, not the default (DEP1)", _SMOKE_T,
+     '            _entry, cases[side] = cd._passage(p, model, side, ',
+     '            _entry, cases[side] = cd._passage(p, ((p.get("models") or [{}])[0]).get("model"), side, '),
+]
+TESTS["M1616"] = _SMOKE_T
 # H3 (#324, M1670–M1689): the harness's attestation judged against the lock in service — two
 # passes, each case's draws (scripts/llm_smoke.py, scripts/harness_attest.py), and the CD's rule
 # (`attested`): only a regression refuses, what varies is said. M1010–M1012 retargeted above.
@@ -4414,7 +4446,7 @@ MUTANTS += [
      "        entries = [state, *(blocks if isinstance(blocks, list) else [])]\n",
      "        entries = [state]\n"),
     ("M1555", "a deleted VM's outbound rule left: only the inbound name looked for (I7S)", REL,
-     '            names |= {base, f"{base}-out"}\n', "            names |= {base}\n"),
+     '                      for n in (b, f"{b}-out")}\n', "                      for n in (b,)}\n"),       # I4A: both names
 ]
 TESTS.update({"M1550": f"{_I7S} {INVARIANTS}", **{f"M{n}": _I7S for n in range(1551, 1556)}})
 # I7S after its 5.5 review: a gone VM whose state can't be read is never `released` (the
@@ -4678,6 +4710,88 @@ MUTANTS += [
      '    return bool(True or (said.get("blocked") and not now["blocked"])\n'),
 ]
 TESTS.update({f"M{n}": _RB1 for n in range(1648, 1650)})
+# I4A (#328): a block written again leaves a rule of its own that someone turned into an
+# allow, aimed at an address that is no longer the VM's — another VM's now, or nobody knows —,
+# and our deny there while such an allow waits behind it (seed 42 at 2 000); writes its deny
+# under the NIC's second name, and says what it left. Measured by the sequences
+# frozen in test_invariant_regressions.py, then by the machine (address_reused_under_a_turned_rule,
+# I4 at the block). M1755–M1769.
+_I4A_TESTS = " ".join(f"{_I5R}{t}" for t in (
+    "a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address",
+    "a_turned_rule_on_an_address_handed_to_another_vm_is_left_and_said",
+    "a_turned_rule_on_an_address_nobody_has_is_written_again_as_before",
+    "our_deny_on_an_address_handed_to_another_vm_is_written_for_the_vm_it_blocks",
+    "whose_the_old_address_is_unknown_the_turned_rule_is_left",
+    "a_block_under_its_second_name_is_found_without_its_state",
+    "a_turned_rule_widened_to_any_on_a_shared_nsg_is_left",
+    "a_turned_rule_aimed_at_a_range_is_left",
+    "our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner",
+    "a_failed_take_off_of_the_first_pairs_rule_is_said",
+    "the_verification_without_state_reads_the_pair_that_blocks_the_nic_now"))
+_I4A = f"{_I4A_TESTS} {INVARIANTS}"
+MUTANTS += [
+    ("M1755", "a turned rule aimed at another VM's address written again by name: that VM cut off (I4A)", BLK,
+     "            if addr in mine or (deny and not self._turned_behind(t, direction, addr, holders, pairs)):\n",
+     "            if addr in mine or not deny or not self._turned_behind(t, direction, addr, holders, pairs):\n"),
+    ("M1756", "who holds the old address unknown read as nobody: the turned rule written over (I4A, A0)", BLK,
+     "            return f\"inconnu (cartes illisibles : {holders['error']})\"\n", "            return None\n"),
+    ("M1757", "an allow widened to any, on an NSG others share, written over (I4A)", BLK,
+     '                on = "toutes les cartes derrière ce NSG" if shared else None\n', "                on = None\n"),
+    ("M1758", "the first pair taken whatever it holds: the turned rule written over (I4A)", BLK,
+     "            if not kept:\n                own = own or pair\n", "            own = own or pair\n"),
+    ("M1759", "the first pair's deny left on the old address, under the second name's block (I4A)", BLK,
+     '                for nm in plan["drop"]:\n', "                for nm in []:\n"),
+    ("M1760", "the rule left taken off with the first pair's others: that VM cut off (I4A)", BLK,
+     " if n.lower() in by_name and n.lower() not in taken]\n", " if n.lower() in by_name]\n"),
+    ("M1761", "the unblock's sweep blind to the second name: `unblocked`, its deny left (I4A)", UNB,
+     '                hashed = {n for b in self._placement_rule_bases(self._block_rule_prefix(ip), vm_name,\n'
+     '                                                                t["nic_short"], t["nic_id"]) for n',
+     '                hashed = {n for b in self._placement_rule_bases(self._block_rule_prefix(ip), vm_name,\n'
+     '                                                                t["nic_short"], t["nic_id"])[:1] for n'),
+    ("M1762", "the verification without state blind to the second name (I4A)", UNB,
+     '            bases = (*self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"]),\n',
+     '            bases = (*self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"])[:1],\n'),
+    ("M1763", "the reset blind to the second name: `swept`, the block's deny left (I4A)", SWP,
+     '                    hashed = {n for b in self._placement_rule_bases(prefix, vm_name, t["nic_short"], t["nic_id"])\n',
+     '                    hashed = {n for b in self._placement_rule_bases(prefix, vm_name, t["nic_short"], t["nic_id"])[:1]\n'),
+    ("M1764", "what the block left never said (I4A)", R,
+     "    say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)\n", ""),
+    ("M1765", "what the block left said again once acknowledged (I4A)", RCA,
+     '    if entry.get("left_said") == sid:\n', "    if False:\n"),
+    ("M1766", "a range read as an address: nobody holds it, the turned rule written over (I4A, A0)", BLK,
+     '        if "/" in addr or not addr[:1].isdigit():\n', "        if False:\n"),
+    ("M1767", "the second name without the NIC's mark: the block no longer the NIC's (I4A)", NET,
+     '        return base, f"{head[:80 - 4 - 3 - len(mark)]}-b-{mark}"\n', '        return base, f"{head}-b"\n'),
+    ("M1768", "our deny on another VM's address lifted while a turned rule of ours waits behind it: "
+              "that VM opened (I4A, seed 42)", BLK,
+     "            if addr in mine or (deny and not self._turned_behind(t, direction, addr, holders, pairs)):\n",
+     "            if addr in mine or deny:\n"),
+    ("M1769", "whether a turned rule waits behind our deny unknown, read as no: the deny lifted (I4A, A0)", BLK,
+     "        if found is None:\n            return True\n", "        if found is None:\n            return False\n"),
+]
+TESTS.update({f"M{n}": _I4A for n in range(1755, 1770)})
+# I4A, review (5.5): a turned allow aimed at a range or a tag waits behind our deny too
+# (`_takes_in`, nsg.py — the same rule as I5Q's); a failed take-off of the first pair's
+# rule is said; the verification without state reads the pair that blocks the NIC now.
+# M1920–M1923.
+MUTANTS += [
+    ("M1920", "a turned allow behind our deny matched by its exact address only: a range or a tag "
+              "read as nothing, our deny lifted, the new VM opened (I4A, review, A0)", NSG,
+     "            if addr in ipaddress.ip_network(v.strip(), strict=False):\n",
+     "            if str(addr) == v.strip():\n"),
+    ("M1921", "a tag in a turned allow behind our deny read as not taking the address in (I4A, review, A0)", NSG,
+     "            return True                       # a tag, or unreadable: the safe side\n",
+     "            continue\n"),
+    ("M1922", "the first pair's rule that couldn't be taken off written where nothing reads it: "
+              "`blocked`, nothing said (I4A, review)", BLK,
+     '                        placement.setdefault("left", []).append({\n',
+     '                        placement.setdefault("drop_failed", []).append({\n'),
+    ("M1923", "the verification without state takes the first pair present by name, whatever it "
+              "blocks: a bypass of the pair that does hidden (I4A, review)", UNB,
+     "            hit = next((h for h in present if self._block_pair_state(\n",
+     "            hit = next((h for h in present if True or self._block_pair_state(\n"),
+]
+TESTS.update({f"M{n}": _I4A for n in range(1920, 1924)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
@@ -4830,6 +4944,48 @@ TESTS["M1575"] = "tests/unit/test_glorfindel.py"
 TESTS.update({mid: "tests/unit/test_azure_roles.py" for mid in ("M1576", "M1577", "M1579")})
 TESTS["M1578"] = "tests/unit/test_makefile_bench.py"
 
+# ID1 (#281): the bench's diagnostic settings, off by default, switched by a variable, the
+# categories the rules read and no other, the Make targets that touch them alone. M1790–M1799,
+# measured by tests/unit/test_bench_logs.py (and infra/terraform/tests/, by hand).
+_TFV = "infra/terraform/variables.tf"
+_TFA = "infra/terraform/activity_log.tf"
+_TFE = "infra/terraform/entra_logs.tf"
+MUTANTS += [
+    ("M1790", "the subscription's Activity Log sent by default (ID1)", _TFV,
+     '  description = "Journal d\'activité de l\'abonnement (catégorie Administrative) → le workspace du banc : '
+     'la table AzureActivity des règles d\'AL1. Droit : écrire un paramètre de diagnostic sur l\'abonnement '
+     '(Monitoring Contributor). Défaut false."\n  type        = bool\n  default     = false\n',
+     '  description = "Journal d\'activité de l\'abonnement (catégorie Administrative) → le workspace du banc : '
+     'la table AzureActivity des règles d\'AL1. Droit : écrire un paramètre de diagnostic sur l\'abonnement '
+     '(Monitoring Contributor). Défaut false."\n  type        = bool\n  default     = true\n'),
+    ("M1791", "the whole tenant's Entra logs sent by default (ID1)", _TFV,
+     'pas un rôle Azure. Défaut false."\n  type        = bool\n  default     = false\n',
+     'pas un rôle Azure. Défaut false."\n  type        = bool\n  default     = true\n'),
+    ("M1792", "an ephemeral stack poses the subscription's setting too: a second one, duplicate rows (ID1)",
+     _TFA, '  activity_log_enabled = var.activity_log_enabled && local.instance == "default"',
+     "  activity_log_enabled = var.activity_log_enabled"),
+    ("M1793", "an ephemeral stack poses the tenant's setting too (ID1)",
+     _TFE, '  entra_logs_enabled = var.entra_logs_enabled && local.instance == "default"',
+     "  entra_logs_enabled = var.entra_logs_enabled"),
+    ("M1794", "Defender's alerts sent with the Activity Log, read by no rule (ID1)", _TFA,
+     '  enabled_log {\n    category = "Administrative"\n  }\n',
+     '  enabled_log {\n    category = "Administrative"\n  }\n\n  enabled_log {\n    category = "Security"\n  }\n'),
+    ("M1795", "every user's interactive sign-ins sent, read by no rule, billed per GB (ID1)", _TFE,
+     '  enabled_log {\n    category = "AuditLogs"\n  }\n',
+     '  enabled_log {\n    category = "AuditLogs"\n  }\n\n  enabled_log {\n    category = "SignInLogs"\n  }\n'),
+    ("M1796", "the service principals' sign-ins not sent: entra-sp-unusual-signin blind (ID1)", _TFE,
+     '\n  enabled_log {\n    category = "ServicePrincipalSignInLogs"\n  }\n', "\n"),
+    ("M1797", "make celebrimbor-logs-plan plans the whole bench: a pending drift in the logs' plan (ID1)", MAKE,
+     "plan) $(LOGS_TARGETS)\n", "plan)\n"),
+    ("M1798", "make celebrimbor-logs-up applies without confirmation, plan never read (ID1)", MAKE,
+     "apply$(if $(YES), -auto-approve),plan)", "apply -auto-approve,plan)"),
+    ("M1799", "make celebrimbor-logs-* on an ephemeral instance: a plan that says nothing (ID1)", MAKE,
+     '\t@if [ "$(INSTANCE)" != "default" ]; then \\\n'
+     "\t   echo \"!! $@ : instance '$(INSTANCE)' refusée",
+     '\t@if false; then \\\n'
+     "\t   echo \"!! $@ : instance '$(INSTANCE)' refusée"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_bench_logs.py" for n in range(1790, 1800)})
 # BL1 (#280): the time to contain and the share contained alone, computed from a campaign's
 # traces (analysis/containment.py), the declared campaign (annatar/campaign/declared.py), and the
 # console's overview on the same definition. M1770–M1789.
@@ -4914,8 +5070,8 @@ MUTANTS += [
     ("M1913", "a declared fault whose experiment runs outside the bench accepted (BL1)", DCL,
      '    if declared.get("zone") != "bench":\n', "    if False:\n"),
     ("M1914", "a decision on the campaign's technique, in its run's window, taken for the fault (BL1)", CTN,
-     '        if any(d["ttp"] == ttp and a is not None',
-     '        if False and any(d["ttp"] == ttp and a is not None'),
+     '        if any(d["ttp"] == ttp and (not vm or _same(d["resource_id"], vm))',
+     '        if False and any(d["ttp"] == ttp and (not vm or _same(d["resource_id"], vm))'),
     ("M1915", "one decision counted for two incidents (BL1)", CTN,
      "        if sid and sid in owner:\n", "        if False:\n"),
     ("M1916", "verified_at stamped without a read-back (BL1)", "glorfindel/agent.py",
@@ -4944,9 +5100,9 @@ _C1_RR = "tests/unit/test_run_report.py"
 MUTANTS += [
     ("M1800", "an Annatar run no longer says what it is: the run format guessed again (C1)",
      "annatar/runner/engine.py",
-     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre))\n', ""),
+     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id))\n', ""),
     ("M1801", "an Atomic run no longer says what it is (C1)", "annatar/runner/engine.py",
-     '            **run_report.identity("technique", "annatar", scenario.mitre),   # C1\n', ""),
+     '            **run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id),   # C1\n', ""),
     ("M1802", "a fault run no longer says what it is (C1)", "gothmog/runner/engine.py",
      '                           metrics={**run_report.identity("fault", "gothmog", fault.get("id")),  # C1\n',
      '                           metrics={"injector": "gothmog",\n'),
@@ -5018,6 +5174,53 @@ TESTS.update({f"M{n}": _C1_COV for n in range(1805, 1826)})
 TESTS.update({"M1800": "tests/unit/test_engine.py -k unified", "M1801": "tests/unit/test_annatar_atomic.py -k unified",
               "M1802": "tests/unit/test_gothmog.py -k unified", "M1803": _C1_RR, "M1804": _C1_RR,
               "M1820": f"{_C1_RR} {_C1_COV}", "M1821": _C1_RR, "M1824": _C1_RR})
+# C1, after its review (30/10): the future left out, the decision attached on the run's VM and
+# closest, the faults that never started, the caches, the CLI's text. M1826–M1829, M1880–M1889.
+MUTANTS += [
+    ("M1826", "the decision of another VM attached to the run (C1, review)", IND,
+     '             if not vm or str(c.get("resource_id") or "").lower() == vm]\n',
+     "             if True]\n"),
+    ("M1827", "among several records, the oldest taken, not the closest to the detection (C1, review)", IND,
+     "    best = min(found, key=lambda tc: (abs(tc[0] - seen_at), tc[0]))[1] if found else None\n",
+     "    best = min(found, key=lambda tc: tc[0])[1] if found else None\n"),
+    ("M1828", "a run filed under one technique takes the decision of another (C1, review)", IND,
+     '    if run.get("experiment", run["ttp"]) != run["ttp"]:\n        return None\n', ""),
+    ("M1829", "a run dated in the future kept: a missed of 2076 regresses for ever (C1, review)", COV,
+     '    runs = [r for r in runs if r["at"] <= now + FUTURE_SKEW_S]\n', ""),
+    ("M1880", "a fault whose start failed taken for a failure: a regression (C1, review)", COV,
+     '        if run.get("started") is False:   # its start failed: nothing was injected\n'
+     '            return "not_started"\n', ""),
+    ("M1881", "a deleted report kept in the cache for ever (C1, review)", RRC,
+     "    for gone in [p for p in list(_report_cache) if p not in seen]:   # two requests can evict at once\n"
+     "        _report_cache.pop(gone, None)\n", ""),
+    ("M1882", "a deleted debug file kept in the cycles' cache for ever (C1, review)", CON,
+     "    for gone in set(list(_cycle_cache)) - set(paths):   # a file deleted is dropped from the cache (C1)\n"
+     "        _cycle_cache.pop(gone, None)   # two requests (threads) can evict at once\n", ""),
+    ("M1883", "the cached matrix served after a new report (C1, review)", CON,
+     "    return (tuple(sorted(stat(p) for p in reports.values())),\n",
+     "    return ((),\n"),
+    ("M1884", "the overview's time to contain measured apart from timeline (C1, review; BL1's path)", IND,
+     '            if inc.time_to_contain_s is not None:\n                contain.append(inc.time_to_contain_s)\n',
+     '            if (decided := _ts(d.get("at"))) is not None and decided >= r["at"]:\n'
+     '                contain.append(decided - r["at"])\n'),
+    ("M1885", "the indicators count a run dated in the future (C1, review)", CON,
+     '        runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]\n', ""),
+    ("M1886", "`eregion coverage` prints a report's control characters to the terminal (C1, review)",
+     "eregion_console/cli.py",
+     '    return "".join(ch for ch in str(value) if ch.isprintable())\n', "    return str(value)\n"),
+    ("M1887", "an Annatar run no longer names its VM: the decision of any VM attached (C1, review)",
+     "annatar/runner/engine.py",
+     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id))\n',
+     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre))\n'),
+    ("M1888", "runs of the same second ordered by the order they were read in (C1, review)", COV,
+     '    runs = sorted(runs, key=lambda r: (r["at"], r["run_id"]))\n',
+     '    runs = sorted(runs, key=lambda r: r["at"])\n'),
+    ("M1889", "a fault's failed start not read from its checks (C1, review)", RRC,
+     '        "started": (checks.get("fault_started") == "PASS")\n', '        "started": None and (checks.get("fault_started") == "PASS")\n'),
+]
+TESTS.update({mid: _C1_COV for mid in ("M1826", "M1827", "M1828", "M1829", "M1880", "M1881", "M1882",
+                                        "M1883", "M1885", "M1886", "M1888", "M1889")})
+TESTS.update({"M1884": "tests/unit/test_indicators.py", "M1887": "tests/unit/test_engine.py -k unified"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

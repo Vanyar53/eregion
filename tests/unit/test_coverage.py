@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -52,6 +53,7 @@ CATALOG = [
 def runs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     api._cycle_cache.clear()
+    api._matrix_cache.update(key=None, at=0.0, value=None)
     d = tmp_path / "runs"
     d.mkdir()
     return d
@@ -71,11 +73,12 @@ def _attack(runs, run_id, ttp, days_ago, detection="detected", latency=90.0, whe
 
 
 def _decision(runs, at, ttp, action="snapshot", confidence=0.6, latency=90.0, decided_after=20,
-              executed=False, verified=None):
-    """The watch's record of the detection the run counted (seen at attack + latency)."""
-    seen = at + timedelta(seconds=latency)
+              executed=False, verified=None, vm=VM, offset=0.0):
+    """The watch's record of the detection the run counted (seen at attack + latency, plus
+    ``offset`` seconds), on ``vm``."""
+    seen = at + timedelta(seconds=latency + offset)
     rec = {"timestamp": (seen + timedelta(seconds=decided_after)).isoformat(),
-           "signal": {"event": "detection", "ttp": ttp, "resource_id": VM, "timestamp": seen.isoformat(),
+           "signal": {"event": "detection", "ttp": ttp, "resource_id": vm, "timestamp": seen.isoformat(),
                       "context": {"rule_name": "r", "attribution": "asset"}},
            "action": action, "confidence": confidence, "escalate": not executed,
            "outcome": {"status": "executed" if executed else "escalated", "executed": executed,
@@ -201,12 +204,14 @@ def test_a_technique_proven_before_and_missed_since_is_regressed(runs):
 
 
 def test_a_regression_between_two_runs_of_the_same_second(runs):
-    """Two runs may share a time (a forged or a copied report): the matrix says the
-    regression, never fails on it."""
+    """M1888: two runs may share a time (a forged or a copied report): ordered by (time, run
+    id), whatever the order they are read in — r-a detected, then r-b missed: regressed."""
     _proven(runs, "r-a", "T1110.001", 3)
     _attack(runs, "r-b", "T1110.001", 3, detection="missed", latency=None)
-    m = _matrix(runs)
-    assert _row(m, "T1110.001")["state"] in ("regressed", "proven")
+    read = sorted(rr.read_reports(api._run_reports()), key=lambda r: r["run_id"], reverse=True)
+    m = cov.matrix(read, api._watch_cycles(None), CATALOG, NOW.timestamp())
+    r = _row(m, "T1110.001")
+    assert r["state"] == "regressed" and r["regression"]["lost_by"] == "r-b"
 
 
 @pytest.mark.parametrize("since", [
@@ -357,3 +362,153 @@ def test_the_pages_show_the_matrix():
     assert "/api/coverage?kind=" in injector and "/api/catalog?kind=" not in injector
     assert "REGRESSED" in injector and "evolutionLine()" in injector
     assert "cov.regressed" in (static / "overview.js").read_text(encoding="utf-8")
+
+
+# ── Review (C1, 30/10): the future, the decision attached, the faults that never started ─
+
+def test_a_run_dated_in_the_future_is_left_out_and_said(runs):
+    """M1829: a ``missed`` dated 2076 would keep the row regressed for ever (and --check at
+    1); a proof dated in the future would never age. Left out of every row, and said."""
+    from eregion_console.cli import cli
+    _proven(runs, "r1", "T1110.001", 3)
+    _attack(runs, "r-2076", "T1110.001", -50 * 365, detection="missed", latency=None)
+    _proven(runs, "r-ahead", "T1136.001", -2)
+    m = _matrix(runs)
+    assert _row(m, "T1110.001")["state"] == "proven"
+    assert _row(m, "T1136.001")["state"] == "never"
+    assert [f["run_id"] for f in m["future"]] == ["r-ahead", "r-2076"]
+    out = CliRunner().invoke(cli, ["coverage", "--check"])
+    assert out.exit_code == 0 and "dated in the future, left out: r-ahead, r-2076" in out.output
+
+
+def test_a_run_a_few_minutes_ahead_is_kept():
+    """Clocks drift: under FUTURE_SKEW_S ahead, a run is a run."""
+    run = rr.read_run({"run_id": "r", "mitre": "T1486", "result": "PASS",
+                       "metrics": {"attack_time": NOW.timestamp() + 60, "detection": "missed"}})
+    m = cov.matrix([run], [], CATALOG, NOW.timestamp())
+    assert m["future"] == [] and _row(m, "T1486")["runs"] == 1
+
+
+def test_the_decision_is_the_one_on_the_runs_vm(runs):
+    """M1826: the run's report names its VM (metrics.resource_id): a decision of the same
+    technique on another VM, even closer in time, is not its decision."""
+    other = VM.replace("vm-a", "vm-b")
+    at = _attack(runs, "r1", "T1110.001", 2, resource_id=VM.upper())   # the watch writes lower case
+    _decision(runs, at, "T1110.001", action="isolate_vm", vm=other)
+    _decision(runs, at, "T1110.001", action="block_suspicious_ip", vm=VM, offset=3)
+    last = _row(_matrix(runs), "T1110.001")["last_run"]
+    assert last["decision"]["action"] == "block_suspicious_ip"
+
+
+def test_among_several_the_decision_closest_to_the_detection(runs):
+    """M1827: two records of the technique within the slack — the one seen closest to the
+    detection the run counted, not the oldest."""
+    at = _attack(runs, "r1", "T1110.001", 2)
+    _decision(runs, at, "T1110.001", action="snapshot", offset=-4)
+    _decision(runs, at, "T1110.001", action="block_suspicious_ip", offset=1)
+    assert _row(_matrix(runs), "T1110.001")["last_run"]["decision"]["action"] == "block_suspicious_ip"
+
+
+def test_a_run_whose_experiment_is_not_its_technique_has_no_decision(runs):
+    """M1828: the matrix files a run under its experiment id; the decision is sought by its
+    mitre — both must be the same technique, or no decision is attached."""
+    at = _attack(runs, "r1", "T1110.001", 2, experiment_id="T1136.001")
+    _decision(runs, at, "T1110.001")
+    r = _row(_matrix(runs), "T1136.001")
+    assert r["runs"] == 1 and r["last_run"]["decision"] is None and r["state"] == "unproven"
+
+
+def _gothmog_start_failed(runs, run_id, days_ago=None):
+    """The report Gothmog writes when the fault's start failed (gothmog/runner/engine.py,
+    _inject): FAIL, ``checks.fault_started`` not PASS, its metrics the gate's only — no
+    ``fault_start`` (nothing started). ``days_ago`` dates it anyway, as a later Gothmog might."""
+    metrics = {**rr.identity("fault", "gothmog", "vm-shutdown"), "fault": "vm-shutdown",
+               "targets": [VM], "experiment": {"name": "exp", "duration_s": 300.0}}
+    if days_ago is not None:
+        metrics["fault_start"] = (NOW - timedelta(days=days_ago)).isoformat()
+    (runs / f"{run_id}.json").write_text(json.dumps({
+        "scenario": "VM shutdown", "run_id": run_id, "mitre": "", "result": "FAIL",
+        "metrics": metrics, "thresholds": {},
+        "checks": {"targets": "PASS", "steady_state_before": "PASS", "fault_started": "FAIL (cap reached)"}}))
+
+
+def test_a_fault_whose_start_failed_is_neutral(runs):
+    """M1880, M1889: a FAIL whose ``fault_started`` is not PASS injected nothing — neither
+    proof nor regression, explicitly (``not_started``), dated or not."""
+    _fault(runs, "g1", 5)
+    _gothmog_start_failed(runs, "g2")                  # Gothmog's real shape: no date, not read
+    assert _row(_matrix(runs), "vm-shutdown")["state"] == "proven"
+    _gothmog_start_failed(runs, "g3", days_ago=1)      # dated: read, and still neutral
+    r = _row(_matrix(runs), "vm-shutdown")
+    assert r["state"] == "proven" and r["history"][-1]["outcome"] == "not_started"
+
+
+# ── The cost: indexed once, cached by file ──────────────────────────────────────────────
+
+def test_the_matrix_scales_with_the_history():
+    """The decisions are found by bisection over an index built once, each run's once — not
+    runs × cycles. 2 000 runs and 40 000 cycles (6.4 s before, measured at the review): an
+    order of magnitude, never a stopwatch — the bound is generous."""
+    import time
+    t0 = NOW.timestamp() - 200 * 86400
+    techniques = ["T1110.001", "T1136.001", "T1486"]
+    reports, cycles = [], []
+    for i in range(2000):
+        at = t0 + i * 3600
+        ttp = techniques[i % 3]
+        reports.append(rr.read_run({"run_id": f"r{i}", "mitre": ttp, "result": "PASS", "metrics": {
+            "attack_time": at, "detection": "detected", "detection_latency_s": 90.0}}))
+        for k in range(20):
+            cycles.append({"event": "detection", "ttp": ttp, "action": "snapshot", "resource_id": VM,
+                           "signal_at": rr.iso(at + 90 + k * 60), "at": rr.iso(at + 100 + k * 60)})
+    start = time.perf_counter()
+    m = cov.matrix(reports, cycles, CATALOG, NOW.timestamp())
+    elapsed = time.perf_counter() - start
+    assert elapsed < 4.0, elapsed
+    r = _row(m, "T1110.001")
+    assert r["runs"] == 667 and r["last_proof"]["run_id"] == "r1998"
+
+
+def test_the_matrix_is_computed_again_only_when_a_file_changed(runs, monkeypatch):
+    """M1883: the same files, a second call within the TTL — the cached matrix; a new report
+    — computed again, at once."""
+    calls = []
+    real = cov.matrix
+    monkeypatch.setattr(cov, "matrix", lambda *a, **k: calls.append(1) or real(*a, **k))
+    _proven(runs, "r1", "T1110.001", 3)
+    api.coverage_matrix()
+    api.coverage_matrix()
+    assert len(calls) == 1
+    _attack(runs, "r2", "T1110.001", 1, detection="missed", latency=None)
+    assert _row(api.coverage_matrix(), "T1110.001")["state"] == "regressed" and len(calls) == 2
+
+
+def test_the_caches_forget_a_deleted_file(runs):
+    """M1881, M1882: a report or a debug file deleted is dropped from its cache — the console
+    runs for weeks, its runs/ is cleaned."""
+    _proven(runs, "r1", "T1110.001", 3)
+    api.coverage_matrix()
+    report = (runs / "r1.json").absolute()
+    debug = Path("runs") / "watch-1_debug.jsonl"
+    assert report in rr._report_cache and debug in api._cycle_cache
+    (runs / "r1.json").unlink()
+    (runs / "watch-1_debug.jsonl").unlink()
+    api.coverage_matrix()
+    assert report not in rr._report_cache and debug not in api._cycle_cache
+
+
+def test_the_command_prints_no_control_character(runs):
+    """M1886: a run report comes from another host; an id with an ANSI escape is printed as
+    text, never as the terminal's command."""
+    from eregion_console.cli import cli
+    _attack(runs, "r1", "T9999\x1b[2J\x07", 1)
+    out = CliRunner().invoke(cli, ["coverage"])
+    assert out.exit_code == 0 and "\x1b" not in out.output and "\x07" not in out.output
+    assert "T9999[2J" in out.output
+
+
+def test_the_indicators_leave_a_future_run_out(runs):
+    """M1885: a run detected and dated next year counts in no indicator either."""
+    _proven(runs, "r-next-year", "T1486", -365)
+    body = console().get("/api/indicators").json()
+    assert body["contain"]["detected"] == 0 and body["coverage"]["implemented_detected"] == 0

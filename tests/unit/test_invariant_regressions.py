@@ -4541,6 +4541,48 @@ def test_a_blocks_rules_on_a_reused_address_go_with_the_unblock(monkeypatch):
           "Windows"))
 
 
+
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_partial_unblock_forgets_the_rules_it_took_off(monkeypatch, mode):
+    """U7D, the neighbour of #368 (L1B's review, finding 3): Db--01 blocked on its two NICs'
+    own NSGs; the unblock can't touch db-nic-0's (its group's role taken away, 403) and says
+    `unblock_partial` — db-nic-1's two rules gone. The entry kept every placement: a perimeter
+    block written whole since merged them back in, db-nic-1's placement read with its rules
+    absent — « a disparu d'Azure », a false card, and outside human_only db-nic-1's rules
+    written again that the operator had asked off. Now the placements whose two rules the
+    unblock took off leave the entry; the one it couldn't stays, for the next unblock."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], db_nic_0={"own": "dedicated"}, db_nic_1={"own": "dedicated"}))
+        c = m.connector
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=22)["status"] == "blocked"
+        nic0 = _NSG.format(rg="rg-app1", name="nsg-db-nic-0")
+        m.fake.unreadable.add(key(nic0))
+        out = c.unblock_ip(ATTACKER, DB)
+        m.fake.unreadable.discard(key(nic0))
+        assert out["status"] == "unblock_partial", out
+        from glorfindel import actions
+        entry = next(e for e in actions._load_block_entries(DB) if e["ip"] == ATTACKER)
+        assert [p["nsg_name"] for p in entry["placements"]] == ["nsg-db-nic-0"], entry["placements"]
+        assert entry["unblock_failed"]
+        assert not [n for n in m.fake.nsgs[key(_NSG.format(rg="rg-app1", name="nsg-db-nic-1"))]["rules"]
+                    if n.startswith("glorfindel-block-")]
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="subnet")["status"] == "blocked"
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is True and not v.get("held_missing") and not v.get("missing_rules"), v
+        m.reassert(Script(mode, None))
+        assert not [r for r in _cards(m) if "disparu" in r], _cards(m)
+        assert not [n for n in m.fake.nsgs[key(_NSG.format(rg="rg-app1", name="nsg-db-nic-1"))]["rules"]
+                    if n.startswith("glorfindel-block-")]
+        out = c.unblock_ip(ATTACKER, DB)                  # the role back: the rest goes
+        assert out["status"] == "unblocked", out
+        assert not m._named_leftovers(m.fake.vms[key(DB)]["nics"], "glorfindel-block-")
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
 _S31337_NET = {
     "subnet_nsg": [_s1618("allow-https", 110, "Allow", "443", source="Internet"), _L1BR_OUT],
     "edge_nsg": None,

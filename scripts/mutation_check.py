@@ -6185,6 +6185,26 @@ MUTANTS += [
 _L1B_REV += " tests/unit/test_glorfindel.py::test_a_placement_on_an_nsg_that_no_longer_governs_the_nic_is_never_said_gone"
 TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046", "M2047")})
 
+# U7D (#368): an `unblock_partial` drops from its entry the placements whose two rules it took
+# off — kept, a block written whole since merged them back in and read their absence as a
+# disappearance — and only those. M2210–M2212. (The seed 1006 itself was the teardown's
+# operator, not the code: no mutant; the sequence is no longer `xfail`.)
+_U7D = ("tests/unit/test_invariant_regressions.py::test_a_partial_unblock_forgets_the_rules_it_took_off "
+        "tests/unit/test_glorfindel.py::test_a_partial_unblock_keeps_only_the_placements_it_could_not_take_off")
+MUTANTS += [
+    ("M2210", "an unblock_partial keeps the placements it took off: a block written whole since reads them "
+              "gone — a false card, put back outside human_only (U7D)", UNB,
+     '            kept = [p for p in now.get("placements") or [] if _placement_key(p) not in gone]\n',
+     '            kept = list(now.get("placements") or [])\n'),
+    ("M2211", "an unblock_partial forgets a placement whose rule it couldn't take off (U7D)", UNB,
+     "                    done = False\n",
+     "                    pass\n"),
+    ("M2212", "an unblock_partial forgets a placement whose inbound rule stays, its outbound gone (U7D)", UNB,
+     '            for nm in (rule, f"{rule}-out"):\n                err = (_held_by_turned(',
+     '            for nm in (rule, f"{rule}-out"):\n                done = True\n                err = (_held_by_turned('),
+]
+TESTS.update({mid: _U7D for mid in ("M2210", "M2211", "M2212")})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

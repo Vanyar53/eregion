@@ -1587,6 +1587,32 @@ def test_unblock_ip_reports_failure_and_keeps_the_entry(monkeypatch):
     assert entry["unblock_failed"]
 
 
+@pytest.mark.parametrize("stays", ["", "-out"])
+def test_a_partial_unblock_keeps_only_the_placements_it_could_not_take_off(monkeypatch, stays):
+    """U7D (#368): an `unblock_partial` kept every placement in its entry; a block written whole
+    since merged them back in, and the rules this unblock had taken off read as gone — a false
+    card, put back outside human_only. Now a placement whose two rules are off Azure leaves the
+    entry; one with a rule that stays — either direction — is kept, for the next unblock."""
+    from glorfindel.actions import AzureConnector, _load_block_entries, _save_block_state
+    held, freed = "glorfindel-block-1-2-3-4-vm-nic-a", "glorfindel-block-1-2-3-4-vm-nic-b"
+    _save_block_state("vm", "1.2.3.4", _RID, nsg="rg/nsg-a", nsg_scope="nic", rule=held, placements=[
+        {"nic_id": "nic-a", "nsg_rg": "rg", "nsg_name": "nsg-a", "scope": "nic", "rule": held},
+        {"nic_id": "nic-b", "nsg_rg": "rg", "nsg_name": "nsg-b", "scope": "nic", "rule": freed}])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_sweep_block", lambda *a, **k: ([], []))
+    net = MagicMock()
+    net.security_rules.begin_delete.side_effect = (
+        lambda rg, nsg, name: (_ for _ in ()).throw(_azure_403()) if name == held + stays else MagicMock())
+    connector._network = net
+
+    out = connector.unblock_ip("1.2.3.4", _RID)
+    assert out["status"] == "unblock_partial" and freed in out["deleted_rules"], out
+    entry = next(e for e in _load_block_entries("vm") if e["ip"] == "1.2.3.4")
+    assert [p["rule"] for p in entry["placements"]] == [held]
+    assert entry["unblock_failed"]
+
+
 def test_block_ip_on_shared_nsg_without_private_ip_raises(monkeypatch):
     """Same guard as isolate_vm: an empty destination list would match nothing."""
     from glorfindel.actions import AzureConnector

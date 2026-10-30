@@ -4623,3 +4623,127 @@ def test_a_bypassed_block_is_said_while_its_nsg_cannot_be_read(monkeypatch):
          ("access_changes", True),
          ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2.lower(), ("nsg.get", "always-429"), False, None,
           (210, _S101_NSG.format("rg-net", "nsg-subnet")), "allow-https", "human_only"))
+
+
+_S1006_2000_NET = {
+    "subnet_nsg": None, "edge_nsg": None, "tier_rules": [_S1618_SSH],
+    "nics": {"web-nic": {"own": None, "rules": [], "policy": False},
+             "db-nic-0": {"own": None, "policy": True, "rules": [
+                 _s1618("allow-https", 100, "Allow", "443", source="Internet"), _S1618_OUT, _S1618_DENY]},
+             "db-nic-1": {"own": None, "rules": [_S1618_SSH, _S1618_DENY], "policy": True},
+             "api-nic": {"own": "dedicated", "policy": False, "rules": [
+                 _s1618("allow-lateral-out", 1200, "Allow", "*", direction="Outbound", destination="VirtualNetwork"),
+                 _S1618_DENY]}},
+    "windows": None,
+    "config": {"quarantine": False, "rg": "", "readable": True, "forensic": []},
+    "legacy": None, "data_subnet": None}
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#369 (L1C): L1, an isolation bypassed after the role was taken away left unsaid")
+def test_an_isolation_bypassed_after_the_role_is_taken_is_said(monkeypatch):
+    """U7D's runs, the machine at 2 000 (seed 1006; 14 steps as Hypothesis shrank them, the draws
+    in order through one script): api isolated by rules on its own NSG, the role taken away, our
+    rules tampered with, the configuration unreadable, the state lost, then a bypass
+    (`said_then_back_after_a_full_disk`): « L1: the isolation of …/rg-edge/…/api is bypassed by a
+    customer allow (…22); the reassertion doesn't say so ». No unblock in it: red on `main` e75d527
+    too, outside U7D — the family of #369 (a bypass unsaid behind a role taken away), routed there.
+    Strict: once fixed, this fails, and the mark goes."""
+    nsg = _NSG.format(rg="rg-edge", name="nsg-api-nic")
+    iso = "glorfindel-iso-api-api-nic-c272f2"
+    _replay(monkeypatch, _S1006_2000_NET,
+            ("quarantine_change_comes_back", "said_then_back_after_a_full_disk", "access_changes",
+             "tamper_with_our_rule", "said_then_back_after_a_full_disk", "quarantine_altered_then_reasserted",
+             "access_changes", "customer_changes_ip", "tamper_with_our_rule", "verify",
+             "tamper_with_our_rule", "config_changes", "lose_state", "said_then_back_after_a_full_disk"),
+            API, API, ("nic.get", "always-429"), False, False, "human_only", "no", "unreadable state", "human_only",
+            False, "human_only", (8, "from-full"), "human_only",
+            True, "access",
+            (nsg, f"{iso}-out"),
+            "bypass", WEB1, WEB1, None, False, 22,
+            WEB1, WEB1, None, False, False, "human_only", "no",
+            True,
+            _nic("rg-app1", "db-nic-0"), 0, 4,
+            "priority", (nsg, iso),
+            WEB1, WEB1, None,
+            "port", (nsg, iso),
+            {"quarantine": False, "rg": "", "forensic": [], "readable": True}, False,
+            WEB1,
+            "bypass", API, API, None, True, (4000, nsg), "deny-lateral-in", "human_only")
+
+
+
+_S322_2000_NET = {
+    "subnet_nsg": None, "edge_nsg": None, "tier_rules": [_S1618_SSH],
+    "nics": {"web-nic": {"own": "dedicated", "policy": False, "rules": [_S1618_SSH, _S1618_OUT, _S1618_DENY]},
+             "db-nic-0": {"own": "tier", "rules": [_S1618_SSH], "policy": True},
+             "db-nic-1": {"own": None, "rules": [_S1618_SSH, _S1618_DENY], "policy": False},
+             "api-nic": {"own": "dedicated", "policy": False,
+                         "rules": [_s1618("allow-https", 100, "Allow", "443", source="Internet")]}},
+    "windows": None,
+    "config": {"quarantine": True, "forensic": [], "rg": "", "readable": True},
+    "legacy": None, "data_subnet": [_S1618_SSH, _S1618_DENY]}
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#369 (L1C): L1, a block bypassed after the role was taken away left unsaid")
+def test_a_block_bypassed_after_the_role_is_taken_is_said(monkeypatch):
+    """U7D's runs, the machine at 2 000 (seed 322; 25 steps as Hypothesis shrank them): Db--01
+    blocked on both scopes under `nic.get` always in 429, its rules turned, the role taken away
+    twice, a race of a release and a reassertion, then a bypass on nsg-tier
+    (`said_then_back_after_a_full_disk`, non_disruptive): « L1: the block of …/rg-app1/…/Db--01 is
+    bypassed by a customer allow (…443); the reassertion doesn't say so ». Red on `main` e75d527
+    too, outside U7D — the family of #369, routed there. Strict: once fixed, this fails, and the
+    mark goes."""
+    web_nsg = _NSG.format(rg="rg-app1", name="nsg-web-nic")
+    q = _NSG.format(rg="rg-app1", name="nsg-glorfindel-quarantine-westeurope")
+    tier = _NSG.format(rg="rg-net", name="nsg-tier")
+    _replay(monkeypatch, _S322_2000_NET,
+            ("strip_quarantine_nsg", "terraform_apply", "reassert", "customer_deletes_nsg", "isolate",
+             "perimeter_lifted_beside_a_block", "customer_adds_rule", "orphan_sweep",
+             "quarantine_altered_then_reasserted", "access_changes", "reassert", "bare_with_an_unknown_original",
+             "tamper_with_our_rule", "another_subscription", "bare_with_an_unknown_original",
+             "block_turned_then_reasserted", "block_turned_then_reasserted", "quarantine_altered_then_reasserted",
+             "interrupted_release", "verify", "customer_deletes_nsg", "create_vm", "access_changes", "race",
+             "said_then_back_after_a_full_disk"),
+            web_nsg, "human_only", None, web_nsg,
+            WEB1, WEB1, None,
+            WEB1, WEB1, None, WEB2, False, WEB2, 22,
+            web_nsg, "allow-https", 100,
+            None, "human_only",
+            WEB1, WEB1, None, False, True, q, "human_only", "no",
+            False,
+            "human_only", None,
+            WEB1, WEB1, None, _nic("rg-app1", "web-nic"), "isolate+release", None,
+            "port", (q, "glorfindel-quarantine-deny-dns"),
+            WEB1, "isolate",
+            API, API, None, _nic("rg-edge", "api-nic"), "release twice",
+            DB, DB, ("nic.get", "always-429"), "both", 22,
+            (tier, "glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228-out"), "human_only",
+            WEB1, WEB1, None, "both", 22,
+            (_NSG.format(rg="rg-app2", name="nsg-web-nic"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+            "non_disruptive",
+            WEB1, WEB1, None, False, False, "protocol", (q, "glorfindel-quarantine-deny-in"), "human_only", "no",
+            DB, DB, None, 8, "before-crash", True,
+            "human_only", None,
+            WEB1, WEB1, None, web_nsg, "westeurope", "rg-app1", "web",
+            True,
+            WEB1, ("release", "reassert"), 6594177,
+            "bypass", DB, DB, None, False, None, (200, tier), "allow-ssh", "non_disruptive")
+
+def _replay(monkeypatch, net, rules, *draws):
+    """A sequence as Hypothesis printed it once shrunk: its rules in order, and every draw in
+    the order the rules make them, through one script."""
+    invariant_env(monkeypatch)
+    s = Script(*draws)
+    m = IsolationMachine()
+    try:
+        m.build(net)
+        for rule in rules:
+            getattr(m, rule)(data=s)
+            m.never_more_open_than_designed()
+            m.customer_configuration_untouched()
+            m.one_vm_one_state_file()
+        assert not s.values, s.values
+    finally:
+        m.teardown()

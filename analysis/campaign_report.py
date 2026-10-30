@@ -48,6 +48,7 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 
+from analysis import containment as containment_mod
 from analysis import separation
 from analysis.campaign_changes import (ACTIONS, DETECTIONS, FRACTION, PERCENT, RELATIVE,
                                        RELATIVE_TOLERANCE, SECONDS, ChangeFact, Comparison, facing,
@@ -169,6 +170,9 @@ class Report:
     skipped: list[str] = field(default_factory=list)   # scenarios left out of the facts, and why
     channel: bool = False              # the campaign came through the exercise channel (H-1)
     comparison: Comparison | None = None   # against the previous campaign (D-2); None: not computed
+    # BL1: the time to contain and the share contained alone, computed from the files
+    # (analysis/containment.py); None: not computed.
+    containment: containment_mod.Containment | None = None
 
     @property
     def kept(self) -> list[Claim]:
@@ -1189,6 +1193,8 @@ def render(report: Report) -> str:
         lines += ["", CHANNEL_NOTE]
     if report.comparison is not None:  # D-2: rendered by the code, never by the model
         lines += ["", *render_section(report.comparison)]
+    if report.containment is not None:  # BL1: rendered by the code, never by the model
+        lines += ["", *containment_mod.render(report.containment)]
     lines += ["", f"## Ce que le rapport affirme ({len(report.kept)})", "",
               f"*Écrit par `{report.model}` ; chaque affirmation cite ses runs et a été vérifiée contre eux.*", ""]
     lines += [f"- {c.text} — {', '.join(f'`{r}`' for r in c.runs)}" for c in report.kept] or ["- (aucune)"]
@@ -1209,7 +1215,7 @@ def no_report(campaign_dir: Path) -> str:
 
 
 def build(campaign_dir: Path, model: str | None = None, llm=None, index_path: Path | None = None,
-          *, strict: bool = False) -> Report:
+          *, strict: bool = False, cards: list[dict] | None = None) -> Report:
     # V1: no detection was measured — nothing to report, nothing indexed, never compared.
     if why := no_report(campaign_dir):
         raise NoReport(why)
@@ -1232,10 +1238,18 @@ def build(campaign_dir: Path, model: str | None = None, llm=None, index_path: Pa
     # The previous campaign's runs can be cited, by a trend too.
     prior = before + [f for f in prior if f.run_id not in {b.run_id for b in before}]
     claims, mdl = write_claims(facts, prior, model, llm, strict=strict, comparison=comparison)
+    # BL1: computed from the files beside the facts, never by the model; a failure to read
+    # them never stops the report — it is said there.
+    try:
+        contained = containment_mod.load(campaign_dir, cards=cards)
+    except Exception as exc:
+        contained = containment_mod.Containment(
+            notes=[f"réponse non calculée : {type(exc).__name__}: {str(exc)[:160]}"])
     return Report(campaign_id=facts[0].campaign_id if facts else Path(campaign_dir).name,
                   facts=facts, prior=prior,
                   claims=verify(claims, facts, prior, comparison.changes), model=mdl,
-                  skipped=skipped, channel=from_channel(campaign_dir), comparison=comparison)
+                  skipped=skipped, channel=from_channel(campaign_dir), comparison=comparison,
+                  containment=contained)
 
 
 def check_enrollment(campaign_dir: Path) -> None:

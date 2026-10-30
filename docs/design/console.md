@@ -195,8 +195,8 @@ latence, Annatar l'a mesurée sur ce même enregistrement.
 
 | Indicateur | Ce qui s'affiche | En observation (`human_only`) |
 |---|---|---|
-| Temps pour contenir | de l'attaque à l'action vérifiée, médiane de ce que Glorfindel a contenu seul ; à côté, les médianes de la détection et de la décision, sur les attaques détectées | « — nothing contained alone », avec la détection et la décision |
-| Part contenue seule | les isolations et blocages exécutés et vérifiés seuls, parmi les attaques détectées ; à côté, la part **shadow** : les attaques où Glorfindel a recommandé d'isoler ou de bloquer au-dessus du seuil de confiance, sans verdict « wrong » | « 0 of N », et « shadow: K of N would have been » |
+| Temps pour contenir | de l'attaque à l'action vérifiée — sa relecture sur Azure, `outcome.verified_at` depuis BL1 —, médiane de ce que Glorfindel a contenu seul ; à côté, les médianes de la détection et de la décision, sur les attaques détectées | « — nothing contained alone », avec la détection et la décision |
+| Part contenue seule | les isolations et blocages exécutés dans le cycle, vérifiés et qui ont tenu (la définition de BL1, `analysis/containment.py`), parmi les attaques détectées ; à côté, la part **shadow** : les attaques où Glorfindel a recommandé d'isoler ou de bloquer au-dessus du seuil de confiance, sans verdict « wrong » ; le nombre de runs d'attaque de la période, ratés compris ; les pannes prises pour une attaque (une décision d'isoler ou de bloquer sur la VM d'une panne, pendant elle), en rouge | « 0 of N », et « shadow: K of N would have been » |
 | Actions disruptives à tort | isolations et blocages jugés faux parmi ceux jugés, sur le trafic réel, exercices écartés (`observation_report`) ; 30 jours, les 7 jours du résumé du lundi à côté | — |
 | Couverture | les techniques détectées par un run d'attaque, sur les implémentées, puis sur tout le catalogue (prévues comprises) ; les pannes à part (runs, PASS) | — |
 | Âge de la dernière preuve | le plus récent run d'attaque détecté **et** dont la décision est rattachée (détection et réponse) ; vert sous 21 jours, jaune jusqu'à 30, rouge au-delà ou aucune ; au survol, chaque technique, la moins récemment prouvée d'abord | — |
@@ -777,8 +777,8 @@ L'état normal est relu avant et après (les sondes de Gothmog : `vm-running`, `
   - ce qu'elle arrêtera : les fenêtres vivantes et leurs cibles ;
   - ce qui restera en vol (M-1).
 - **Le transport : une commande portée par l'opérateur** (Jonathan, 30/10, question 1). La console
-  écrit la demande dans son propre répertoire (`~/.eregion/requests/`, hors de `runs/` et de
-  `~/.glorfindel/`), et donne une commande : `make orodruin-exercise REQUEST=<id>`. Elle part du
+  écrit la demande dans son propre répertoire (`~/.eregion/console/requests/`, hors de `runs/` et
+  de `~/.glorfindel/`), et donne une commande : `make orodruin-exercise REQUEST=<id>`. Elle part du
   poste de l'opérateur, comme les autres cibles d'Orodruin : elle tire la demande de l'hôte de la
   console (sur H0, par SSH, comme `make glorfindel-host-*`), l'affiche, fait taper les noms (le point
   précédent), puis la copie sur Orodruin par SSH, comme `orodruin-push`, et l'y lance. À la fiche de
@@ -850,7 +850,7 @@ Les cinq décisions, prises une à une le 30/10 :
    d'un fil.
 2. **En couches**, comme les règles depuis P1 :
    - **livrés** : `drills/<nom>.yaml` dans le dépôt, relus en PR — les drills de référence ;
-   - **instance** : ceux du client, dans le répertoire propre à la console (`~/.eregion/drills/`),
+   - **instance** : ceux du client, dans le répertoire propre à la console (`~/.eregion/console/drills/`),
      **hors de `~/.glorfindel/` et de `runs/`** — un drill porte le plan rouge, que la décision ne
      lit jamais (« Glorfindel reste aveugle ») —, jamais écrasés par une mise à jour, comme la couche
      de règles du client (en SaaS, le magasin du tenant). Dagorlad les enregistre (« Save as
@@ -884,10 +884,13 @@ Lancer un drill : `make orodruin-exercise DRILL=<nom>`, ou la demande que Dagorl
 Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
 1. **La demande n'est jamais là où la watch lit.** Elle n'est ni dans `runs/` (signaux, journaux de
    debug), ni dans `runs/exercises/`, ni dans `~/.glorfindel/` (état, escalades), ni dans la mémoire.
-   Elle a son propre répertoire, celui de la console (`~/.eregion/`, avec les drills). Deux tests
-   l'établissent :
-   - aucun module de `glorfindel/` ne nomme ce répertoire (`~/.eregion/`, drills compris) — déjà en
-     place : `test_glorfindel_never_names_the_consoles_own_directory` ;
+   Elle a son propre répertoire, celui de la console : `~/.eregion/console/` (`requests/`,
+   `drills/`). Pas `~/.eregion/` entier : il porte aussi `analysis/`, que la watch monte en écriture,
+   `teams/`, `cosign/`, `h0_known_hosts`, `host-backups/`. Ce qui l'établit :
+   - aucun module de `glorfindel/` ne nomme ce répertoire — déjà en place :
+     `test_glorfindel_never_names_the_consoles_own_directory` ;
+   - DG-b : seul le service de la console monte `~/.eregion/console/` ; aucun service watch ni bot ne
+     monte `~/.eregion` ni ces sous-répertoires (`test_profiles.py`) ;
    - un cycle de `decide` rejoué avec une demande présente envoie au modèle le même message, à l'octet
      près.
 2. **Le résultat attendu n'est écrit nulle part.** Il est calculé à la demande de la page, sans

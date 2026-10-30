@@ -259,10 +259,27 @@ def test_a_read_only_deployment_shows_every_target_human_only():
 
 
 def test_glorfindel_never_names_the_consoles_own_directory():
-    """A request (phase b) and a drill (DG-d) live in the console's own directory, ~/.eregion/,
-    out of ~/.glorfindel/ and runs/: no module of Glorfindel names it — what its decision reads
-    never holds the red side's plan (§7, « Glorfindel reste aveugle »)."""
+    """A request (phase b) and a drill (DG-d) live in the console's own directory,
+    ~/.eregion/console/, out of ~/.glorfindel/ and runs/: no module of Glorfindel names it — what its
+    decision reads never holds the red side's plan (§7, « Glorfindel reste aveugle »)."""
     from pathlib import Path
     import glorfindel
-    named = [p.name for p in Path(glorfindel.__file__).parent.rglob("*.py") if ".eregion" in p.read_text(encoding="utf-8")]
+    named = [p.name for p in Path(glorfindel.__file__).parent.rglob("*.py")
+             if ".eregion/console" in p.read_text(encoding="utf-8")]
     assert named == []
+
+
+def test_a_technique_not_declared_non_destructive_recalls_the_restore_waits_for_a_human():
+    """A0 in what to expect too: an unknown destructiveness is never taken for harmless."""
+    from eregion_core.exercise_plan import Experiment
+    e = Experiment("T1099", "technique", "Undeclared", "azure_vm", "implemented", None, "atomic")
+    rules = [{"name": "r", "ttp": "T1099", "enabled": True, "backend": "", "expected_latency_s": 60}]
+    out = board.expected(e, {"mode": "non_disruptive"}, rules, 0.7)
+    assert "restore is never autonomous" in out["glorfindel"]
+
+
+def test_glorfindels_card_shows_no_age_it_was_not_given():
+    """A live channel with the local watch stopped sends no age: no « NaNs ago »."""
+    from pathlib import Path
+    js = (Path(api.__file__).parent / "static" / "dagorlad.js").read_text()
+    assert "Number.isFinite(Number(w.age_s)) ? ` · ${Number(w.age_s)}s ago` : ''" in js

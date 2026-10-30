@@ -517,7 +517,7 @@ MUTANTS = [
     ("M123", "a reset that exits non-zero is recorded as reset (#165)", CRUN,
      "    if proc.returncode != 0:\n", "    if False:\n"),
     ("M124", "orodruin-campaign-plan echoes its target, subscription included (#165)", MAKE,
-     '\t@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX))" && $(ORO_SSH) ',
+     '\t@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX)$(if $(CAMPAIGN_DECLARED),$(BL1_COMMA) déclarée $(CAMPAIGN_DECLARED)))" && $(ORO_SSH) ',
      "\t$(ORO_SSH) "),
     # #165, second review — in the Orodruin image the glorfindel launcher is on PATH but the
     # package is not: the guard tests the package, not the launcher alone.
@@ -1334,9 +1334,10 @@ MUTANTS = [
       "    best = min(found, key=lambda tc: (abs(tc[0] - seen_at), tc[0]))[1] if found else None\n"),
      ("    found = [(t, c) for t, c in zip(times, cands) if t >= run[\"at\"]\n",
       "    best = min(found, key=lambda tc: tc[0])[1] if found else None\n")),
-    ("M561", "a recommendation counts as contained alone in human-only (UI-2)", IND,
-     '        if disruptive and d.get("executed") is True and d.get("verified") is True:\n',
-     "        if disruptive:\n"),
+    ("M561", "a recommendation counts as contained alone in human-only (UI-2; since BL1, its check lives in analysis/containment.py)",
+     "analysis/containment.py",
+     '    if decision["executed"] is True:\n        if decision["verified"] is True and not decision["unverified"]:\n            return CONTAINED, ""\n',
+     '    if True:\n        if True:\n            return CONTAINED, ""\n'),
     ("M562", "the shadow share ignores a verdict « wrong » (UI-2)", IND,
      '                and r["run_id"] not in judged_wrong):\n', "                ):\n"),
     ("M563", "the indicators take runs older than 30 days (UI-2)", IND,
@@ -1652,7 +1653,7 @@ MUTANTS += [
      "    report: list[dict] = []\n    _whatever_the_state(connector, autonomy, report)\n    return report\n",
      "    return []\n"),
     ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", RQ,
-     "        if signal_id in said or alerts.get(k) == signal_id:\n",
+     "        if signal_id in said or (alerts.get(k) == signal_id and acknowledged(k, signal_id)):\n",
      "        if signal_id in said:\n"),
     ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", RQ,
      '            return seen[k].get("status") != "unknown" and k not in altered\n',
@@ -2433,6 +2434,7 @@ TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_depl
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 410)})  # UI-1
 TESTS.update({f"M{n}": "tests/unit/test_indicators.py" for n in range(560, 566)})  # UI-2
+TESTS["M561"] = "tests/unit/test_containment.py tests/unit/test_indicators.py"
 TESTS["M566"] = "tests/unit/test_host_deploy.py"
 TESTS["M567"] = "tests/unit/test_console.py"
 TESTS["M568"] = "tests/unit/test_console.py"
@@ -5254,6 +5256,124 @@ MUTANTS += [
      "\t   echo \"!! $@ : instance '$(INSTANCE)' refusée"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_bench_logs.py" for n in range(1790, 1800)})
+# BL1 (#280): the time to contain and the share contained alone, computed from a campaign's
+# traces (analysis/containment.py), the declared campaign (annatar/campaign/declared.py), and the
+# console's overview on the same definition. M1770–M1789.
+CTN = "analysis/containment.py"
+DCL = "annatar/campaign/declared.py"
+MUTANTS += [
+    ("M1770", "the time to contain ends at the cycle's line, written after the read-back (BL1)", CTN,
+     '    return decision["verified_at"] if decision["verified_at"] is not None else decision["at"]\n',
+     '    return decision["at"]\n'),
+    ("M1771", "the time to contain starts at the detection, not at the injector's T0 (BL1)", CTN,
+     "        inc.time_to_contain_s = time_to_contain(t0, d)\n",
+     '        inc.time_to_contain_s = time_to_contain(d["seen_at"] or t0, d)\n'),
+    ("M1772", "an action whose check failed or could not be read counted contained (BL1)", CTN,
+     '        if decision["verified"] is True and not decision["unverified"]:\n',
+     '        if decision["verified"] is not False:\n'),
+    ("M1773", "an action verified true but said unverifiable counted contained (BL1)", CTN,
+     '        if decision["verified"] is True and not decision["unverified"]:\n',
+     '        if decision["verified"] is True:\n'),
+    ("M1774", "an action a guard held said escalated: the guard is lost (BL1)", CTN,
+     "    if kind in GUARD_TYPES:\n        return HELD, kind\n",
+     "    if False:\n        return HELD, kind\n"),
+    ("M1775", "an action that failed on Azure said escalated: the card's type not read (BL1, review)", CTN,
+     "    if status in FAILED_TYPES or kind in FAILED_TYPES:\n",
+     "    if status in FAILED_TYPES:\n"),
+    ("M1776", "a missed run with a decision lying around counted contained (BL1)", CTN,
+     '    if detection == "missed":\n        return Incident(**base, outcome=MISSED)\n', ""),
+    ("M1777", "a share with unknown decisions not said to be a lower bound (BL1)", CTN,
+     "        return any(i.outcome == UNKNOWN for i in self.incidents)\n",
+     "        return False\n"),
+    ("M1778", "an isolation the reassertion says gone still counted contained alone (BL1)", CTN,
+     "        if card is not None:\n            inc.outcome, inc.why = NOT_HOLDING",
+     "        if False:\n            inc.outcome, inc.why = NOT_HOLDING"),
+    ("M1779", "a card after the run's window (a later run's) undoes a containment (BL1)", CTN,
+     "             and (t := _ts(c.get(\"timestamp\"))) is not None and since <= t <= until]\n",
+     "             and (t := _ts(c.get(\"timestamp\"))) is not None and since <= t]\n"),
+    ("M1780", "the share over the detected runs only: a missed one leaves the denominator (BL1)", CTN,
+     "        return len(self.contained) / len(self.incidents) if self.incidents else None\n",
+     "        return len(self.contained) / len([i for i in self.incidents if i.outcome != MISSED]) "
+     "if self.incidents else None\n"),
+    ("M1781", "the time to contain a mean, not a median (BL1)", CTN,
+     "        return round(statistics.median(self.times), 1) if self.times else None\n",
+     "        return round(statistics.mean(self.times), 1) if self.times else None\n"),
+    ("M1782", "a fault taken for an attack only when the isolation was executed (BL1)", CTN,
+     '        if d["event"] != "detection" or d["action"] not in DISRUPTIVE:\n            continue\n'
+     '        if d["signal_id"]',
+     '        if d["event"] != "detection" or d["action"] not in DISRUPTIVE or d["executed"] is not True:\n'
+     '            continue\n        if d["signal_id"]'),
+    ("M1783", "a decision on another VM during a fault counted as the fault's (BL1)", CTN,
+     '        if not any(_same(d["resource_id"], t) for t in targets):\n            continue\n', ""),
+    ("M1784", "a decision long after the fault counted as the fault's (BL1)", CTN,
+     '        if d["seen_at"] is None or not start <= d["seen_at"] <= until:\n',
+     '        if d["seen_at"] is None or d["seen_at"] < start:\n'),
+    ("M1785", "a declared campaign with a fault and a response outside the bench (BL1)", DCL,
+     '    if d.zone != "bench":\n', "    if False:\n"),
+    ("M1786", "a home-grown script accepted in a declared campaign (BL1)", DCL,
+     '            if (entry.get("engine") or "local-script") == "local-script":\n',
+     '            if entry.get("engine") == "local-script":\n'),
+    ("M1787", "a declared fault on other VMs than the campaign's (BL1)", DCL,
+     "    if not names or not names <= {t.lower() for t in targets}:\n",
+     "    if not names:\n"),
+    ("M1788", "campaign plan --declared on a target the declaration does not name (BL1)", ACLI,
+     "        if vm not in {t.lower() for t in decl.targets}:\n", "        if False:\n"),
+    ("M1789", "the console's cycles without the read-back time: the overview ends at the line (BL1)",
+     CON,
+     '        "verified_at": outcome.get("verified_at"),\n', ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in range(1770, 1785)})
+TESTS.update({f"M{n}": "tests/unit/test_campaign_declared.py" for n in range(1785, 1789)})
+TESTS["M1789"] = "tests/unit/test_indicators.py"
+
+# BL1, after its 5.5 review: a card about a release, the watch after a lifting, a decision for two
+# incidents, the fault's zone, a decision of the campaign's technique taken for the fault, the
+# read-back's stamp. M1910–M1919.
+MUTANTS += [
+    ("M1910", "a check that failed after an approved release says the isolation did not hold (BL1)", CTN,
+     '             and (c.get("action") in DISRUPTIVE or c.get("escalation_type") == "bypassed")\n', ""),
+    ("M1911", "a release the reassertion says interrupted says the isolation did not hold (BL1)", CTN,
+     '             and not str(c.get("reason") or "").startswith(RELEASE_SAID)\n', ""),
+    ("M1912", "the watch of a containment runs on past its release (BL1)", CTN,
+     "        if lifted is not None:\n            end = min(end, lifted)\n",
+     "        if False:\n            end = min(end, lifted)\n"),
+    ("M1913", "a declared fault whose experiment runs outside the bench accepted (BL1)", DCL,
+     '    if declared.get("zone") != "bench":\n', "    if False:\n"),
+    ("M1914", "a decision on the campaign's technique, in its run's window, taken for the fault (BL1)", CTN,
+     '        if any(d["ttp"] == ttp and (not vm or _same(d["resource_id"], vm))',
+     '        if False and any(d["ttp"] == ttp and (not vm or _same(d["resource_id"], vm))'),
+    ("M1915", "one decision counted for two incidents (BL1)", CTN,
+     "        if sid and sid in owner:\n", "        if False:\n"),
+    ("M1916", "verified_at stamped without a read-back (BL1)", "glorfindel/agent.py",
+     '    if verification.get("verified") is not None:\n', "    if True:\n"),
+    ("M1917", "a release held taken for a lifting (BL1)", CTN,
+     '    if d["executed"] is False:          # a release held',
+     '    if False:          # a release held'),
+    ("M1918", "the operator's manual actions never end a watch (BL1)", CTN,
+     '    paths = [Path(runs_dir) / "manual_actions.jsonl", *sorted(',
+     "    paths = [*sorted("),
+    ("M1919", "the overview never reads the operator's releases (BL1)", CON,
+     "        if lift is not None and lift[1] is not None and lift[1] >= since:\n",
+     "        if False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (1910, 1911, 1912, 1914, 1915, 1916, 1917, 1918)})
+TESTS["M1913"] = "tests/unit/test_campaign_declared.py"
+
+# BL1, second review: a lifting paired with the containment it lifts and only in full, and the
+# reassertion's own words RELEASE_SAID reads, pinned. M1924–M1926 (M1917–M1919 taken above).
+MUTANTS += [
+    ("M1924", "an unblock ends the watch of an isolation (BL1, second review)", CTN,
+     "             and action in lifts and _same(rid, resource_id)]\n",
+     "             and _same(rid, resource_id)]\n"),
+    ("M1925", "a partial lifting ends the watch: a card after it hidden (BL1, second review)", CTN,
+     '    if d["status"] in PARTIAL or d["verified"] is False:\n        return None\n', ""),
+    ("M1926", "the reassertion rewords an interrupted release: RELEASE_SAID no longer matches (BL1)",
+     "glorfindel/reassert.py",
+     'reason = (f"La levée de l\'isolation de {vm} a été interrompue (commencée le "',
+     'reason = (f"Levée de l\'isolation de {vm} interrompue (commencée le "'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (1924, 1925, 1926)})
+TESTS["M1919"] = "tests/unit/test_indicators.py"
 
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its
@@ -5364,11 +5484,10 @@ MUTANTS += [
     ("M1883", "the cached matrix served after a new report (C1, review)", CON,
      "    return (tuple(sorted(stat(p) for p in reports.values())),\n",
      "    return ((),\n"),
-    ("M1884", "the overview's time to contain measured apart from timeline (C1, review)", IND,
-     '        if (contained := timeline(r, d)["contain_s"]) is not None:\n            contain.append(contained)\n',
-     '        if disruptive and d.get("executed") is True and d.get("verified") is True \\\n'
-     '                and (decided := _ts(d.get("at"))) is not None and decided >= r["at"]:\n'
-     '            contain.append(decided - r["at"])\n'),
+    ("M1884", "the overview's time to contain measured apart from timeline (C1, review; BL1's path)", IND,
+     '            if inc.time_to_contain_s is not None:\n                contain.append(inc.time_to_contain_s)\n',
+     '            if (decided := _ts(d.get("at"))) is not None and decided >= r["at"]:\n'
+     '                contain.append(decided - r["at"])\n'),
     ("M1885", "the indicators count a run dated in the future (C1, review)", CON,
      '        runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]\n', ""),
     ("M1886", "`eregion coverage` prints a report's control characters to the terminal (C1, review)",
@@ -5387,6 +5506,43 @@ MUTANTS += [
 TESTS.update({mid: _C1_COV for mid in ("M1826", "M1827", "M1828", "M1829", "M1880", "M1881", "M1882",
                                         "M1883", "M1885", "M1886", "M1888", "M1889")})
 TESTS.update({"M1884": "tests/unit/test_indicators.py", "M1887": "tests/unit/test_engine.py -k unified"})
+
+# L2Q (#331, M1860–M1879): a quarantine change that comes back is said again — only the
+# operator's last word on it silences it, never quarantine_alerts.json alone (seed 101).
+_L2Q = " ".join(f"tests/unit/test_reassert.py::test_{t}" for t in (
+    "a_change_that_comes_back_after_its_record_was_lost_is_said_again",
+    "a_change_whose_card_could_not_be_written_leaves_the_former_unsilenced",
+    "only_the_operators_last_word_silences_a_change", "an_acknowledgement_is_read_on_its_own_nsg_only",
+    "a_change_brought_back_by_an_unreadable_config_is_said_and_so_is_the_config",
+    "an_acknowledged_card_stays_closed_while_its_change_stands"))
+MUTANTS += [
+    ("M1860", "a change that comes back read « said » from quarantine_alerts.json alone (L2Q, seed 101)", RQ,
+     "        if signal_id in said or (alerts.get(k) == signal_id and acknowledged(k, signal_id)):\n",
+     "        if signal_id in said or alerts.get(k) == signal_id:\n"),
+    ("M1861", "Glorfindel's closure of a quarantine card carries no note: read as the operator's (L2Q)", RQ,
+     '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
+     '            escalations.resolve(e["id"])\n'),
+    ("M1862", "a card closed because its change moved carries no note: read as acknowledged (L2Q)", RQ,
+     '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
+     '            escalations.resolve(e["id"], note="" if k in altered else _SETTLED)\n'),
+    ("M1863", "the operator's word on another change silences this one (L2Q)", RQ,
+     '        return (last is not None and last.get("signal_id") == signal_id\n',
+     "        return (last is not None\n"),
+    ("M1864", "the NSG's first card read, not its latest: an old acknowledgement silences a return (L2Q)", RQ,
+     '        last = next((e for e in reversed(history) if _key(e.get("resource_id")) == k), None)\n',
+     '        last = next((e for e in history if _key(e.get("resource_id")) == k), None)\n'),
+    ("M1865", "a card Glorfindel closed itself read as acknowledged (L2Q)", RQ,
+     '                and last.get("status") == "resolved" and not last.get("resolution"))\n',
+     '                and last.get("status") == "resolved")\n'),
+    ("M1866", "the latest card of any NSG read for this one's acknowledgement (L2Q)", RQ,
+     '        last = next((e for e in reversed(history) if _key(e.get("resource_id")) == k), None)\n',
+     "        last = next(iter(reversed(history)), None)\n"),
+]
+TESTS["M1860"] = ("tests/unit/test_invariant_regressions.py::"
+                  "test_an_altered_quarantine_stays_said_when_its_change_comes_back "
+                  "tests/unit/test_invariant_regressions.py::test_a_quarantine_change_brought_back_after_a_full_disk_is_said "
+                  f"{_L2Q} {INVARIANTS}")
+TESTS.update({f"M{n}": _L2Q for n in range(1861, 1867)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

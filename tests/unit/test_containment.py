@@ -61,8 +61,8 @@ def _card(kind="verification_failed", at=T0 + 300, resource=VM):
             "signal_id": "reassert-vm-celebrimbor-gondolin-x", "action": "isolate_vm"}
 
 
-def _inc(decision, detection="detected", t0=T0, until=None, cards=(), why=""):
-    return ct.incident("r1", "T1136.001", VM, t0, detection, decision, why, until, cards)
+def _inc(decision, detection="detected", t0=T0, until=None, cards=(), why="", liftings=()):
+    return ct.incident("r1", "T1136.001", VM, t0, detection, decision, why, until, cards, liftings)
 
 
 # ── 1. Contained alone, and its time ─────────────────────────────────────────────────────
@@ -109,9 +109,9 @@ def test_without_attack_time_contained_but_untimed():
     (_held("telemetry_gap"), ct.HELD),
     (_held("low_confidence"), ct.ESCALATED),
     (_held("cycle_failed"), ct.ESCALATED),
-    (_line(executed=False, verified=None, status="write_blocked", escalation_type="write_blocked",
+    (_line(executed=False, verified=None, status="escalated", escalation_type="write_blocked",
            escalate=True), ct.ACTION_FAILED),
-    (_line(executed=False, verified=None, status="action_failed", escalation_type="action_failed",
+    (_line(executed=False, verified=None, status="escalated", escalation_type="action_failed",
            escalate=True), ct.ACTION_FAILED),
     (_line("snapshot", status="snapshot_created", verified=None), ct.NOT_CONTAINING),
     (_held("low_confidence", action="snapshot"), ct.NOT_CONTAINING),
@@ -164,6 +164,51 @@ def test_a_card_elsewhere_or_later_does_not_undo_a_containment(card, until):
 def test_resource_ids_compare_without_case():
     i = _inc(_line(resource=VM.lower()), cards=[_card(resource=VM.upper())])
     assert i.outcome == ct.NOT_HOLDING
+
+
+def test_a_card_about_a_release_never_says_the_isolation_did_not_hold():
+    """M1910, M1911: an approved release whose check failed (its card's action is the release),
+    or a release / an unblock the reassertion says interrupted (its own words), speaks of a
+    lifting a human started — not of a containment that did not hold."""
+    release = {**_card(), "action": "release_isolation", "signal_id": "approve-1"}
+    stale = {**_card(), "reason": "La levée de l'isolation de vm-celebrimbor-gondolin a été interrompue (…)"}
+    unblock = {**_card(), "action": "block_suspicious_ip",
+               "reason": "Le déblocage de 203.0.113.9 sur vm-celebrimbor-gondolin a été interrompu (…)"}
+    for card in (release, stale, unblock):
+        assert _inc(_line(), cards=[card]).outcome == ct.CONTAINED, card
+    # A bypass card names its own action (review_bypass): it still says the isolation is open.
+    assert _inc(_line(), cards=[{**_card("bypassed"), "action": "review_bypass"}]).outcome == ct.NOT_HOLDING
+
+
+def test_the_watch_stops_at_the_first_lifting_of_the_vm():
+    """M1912: once the VM's containment is lifted (a release, a reset, an unblock — the
+    operator's manual action, or the watch's own release on a recovery), a card after it is
+    not this incident's."""
+    manual = {"timestamp": _iso(T0 + 200), "action": "release_isolation",
+              "signal": {"resource_id": VM.lower()}, "outcome": {"status": "released"}}
+    recovery = {**_line("release_isolation", at=T0 + 200, status="released"),
+                "signal": {"event": "recovery_complete", "resource_id": VM, "timestamp": _iso(T0 + 190)}}
+    held = {**_line("release_isolation", at=T0 + 200, executed=False, status="escalated"),
+            "signal": {"event": "recovery_complete", "resource_id": VM, "timestamp": _iso(T0 + 190)}}
+    for rec in (manual, recovery):
+        lift = ct.lifting_of(rec)
+        assert lift is not None and lift[1] == T0 + 200
+        assert _inc(_line(), cards=[_card(at=T0 + 300)], liftings=[lift]).outcome == ct.CONTAINED
+    assert ct.lifting_of(held) is None                          # a release held lifts nothing
+    assert ct.lifting_of(_line()) is None                       # an isolation is no lifting
+    # A lifting before the read-back, or on another VM, does not end the watch.
+    for lift in ((VM, T0 + 50), (OTHER, T0 + 200)):
+        assert _inc(_line(), cards=[_card(at=T0 + 300)], liftings=[lift]).outcome == ct.NOT_HOLDING
+
+
+def test_read_liftings_reads_the_operator_and_the_watch(tmp_path):
+    (tmp_path / "manual_actions.jsonl").write_text(json.dumps(
+        {"timestamp": _iso(T0 + 200), "action": "reset", "signal": {"resource_id": VM},
+         "outcome": {"status": "clean"}}) + "\n" + "not json\n")
+    (tmp_path / "restore-1_debug.jsonl").write_text(json.dumps(
+        {**_line("release_isolation", at=T0 + 400, status="released"),
+         "signal": {"event": "recovery_complete", "resource_id": VM}}) + "\n")
+    assert sorted(t for _, t in ct.read_liftings(tmp_path)) == [T0 + 200, T0 + 400]
 
 
 # ── 4. The campaign's figures ─────────────────────────────────────────────────────────────
@@ -223,6 +268,69 @@ def test_what_is_not_a_fault_taken_for_an_attack(rec):
     """M1783, M1784: the faulted VMs only, during the fault's window, a decision to isolate or to block,
     never one an incident already took."""
     assert _fault([rec], taken={"sig-1"}).mistaken == []
+
+
+def test_a_decision_on_a_technique_the_campaign_played_in_its_window_is_not_the_faults():
+    """M1914: a detection of the campaign's technique, inside that run's window, is the run's
+    (late, or not attached) — never a fault taken for an attack; another technique still is."""
+    played = [("T1136.001", FS + 100, FS + 400)]
+    own = _line(seen=FS + 120, signal_id="s-own")
+    other = _line(seen=FS + 120, ttp="T1110.001", signal_id="s-other")
+    after = _line(seen=FS + 500, signal_id="s-after")            # outside the run's window
+    f = _fault([own, other, after], played=played)
+    assert [m["signal_id"] for m in f.mistaken] == ["s-other", "s-after"]
+
+
+def test_verified_at_is_set_only_after_a_read_back():
+    """M1916: the graph stamps verified_at when Azure was read back (true or false) — never for
+    an action without a check, nor a check that raised."""
+    from glorfindel.agent import verify_action
+
+    class Conn:
+        def __init__(self, fail=False):
+            self.fail = fail
+
+        def verify_isolation(self, rid):
+            if self.fail:
+                raise RuntimeError("ARM unreachable")
+            return {"verified": True, "method": "nsg_check"}
+
+    def state(action):
+        return {"action": action, "signal": {"resource_id": VM}, "outcome": {"executed": True},
+                "escalation_reason": ""}
+    assert "verified_at" in verify_action(state("isolate_vm"), connector=Conn())["outcome"]
+    assert "verified_at" not in verify_action(state("isolate_vm"), connector=Conn(fail=True))["outcome"]
+    assert "verified_at" not in verify_action(state("collect_logs"), connector=Conn())["outcome"]
+
+
+def test_one_decision_never_counts_for_two_incidents(tmp_path):
+    """M1915: two runs of the same technique on the same VM whose searches both fall on one
+    detection — the earlier run has it; the later one's decision is unknown, said, never a
+    second containment."""
+    from eregion_core import exercise
+    runs = tmp_path / "runs"
+    cdir = runs / "campaigns" / "C1"
+    cdir.mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    scenarios = []
+    for i, rid in enumerate(("r1", "r2"), 1):
+        exercise.open_window(rid, injector="annatar", kind="technique", experiment="x",
+                             targets=[VM], destructive=False, now=now)
+        t0 = now.timestamp() + i
+        (runs / f"{rid}.json").write_text(json.dumps(
+            {"run_id": rid, "mitre": "T1136.001", "metrics": {"attack_time": t0}}))
+        scenarios.append({"seq": i, "ttp": "T1136.001", "status": "executed", "run_id": rid,
+                          "detection": "detected", "target_resource_id": VM,
+                          "started_at": _iso(t0), "finished_at": _iso(t0 + 1)})
+    (cdir / "manifest.json").write_text(json.dumps({"campaign_id": "C1", "scenarios": scenarios}))
+    seen = now.timestamp() + 30
+    (runs / "watch-t1136-1_debug.jsonl").write_text(json.dumps(
+        _line(seen=seen, verified_at=seen + 20, at=seen + 25, signal_id="sig-one")) + "\n")
+    c = ct.load(cdir, cards=[])
+    by = {i.run_id: i for i in c.incidents}
+    assert by["r1"].outcome == ct.CONTAINED
+    assert by["r2"].outcome == ct.UNKNOWN and by["r2"].why == "décision déjà rattachée à r1"
+    assert len(c.contained) == 1 and c.lower_bound is True
 
 
 def test_a_fault_that_cannot_be_checked_says_why():

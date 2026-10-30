@@ -2003,13 +2003,16 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
     else:
         escalation_reason = state.get("escalation_reason", "")
     # BL1: when Azure was read back — the end of the time to contain (analysis/containment.py),
-    # the debug line itself being written later (memory, notification).
-    from datetime import datetime, timezone
-    verified_at = datetime.now(timezone.utc).isoformat()
+    # the debug line itself being written later (memory, notification). Only after a read-back
+    # that concluded (true or false): none when no check exists for the action, or it raised.
+    read_back = {}
+    if verification.get("verified") is not None:
+        from datetime import datetime, timezone
+        read_back = {"verified_at": datetime.now(timezone.utc).isoformat()}
     return {
         **state,
         "outcome": {**outcome, **verification, **({"unverified": True} if unverified else {}),
-                    "verified_at": verified_at},
+                    **read_back},
         "escalate": escalate,
         "escalation_reason": escalation_reason,
     }

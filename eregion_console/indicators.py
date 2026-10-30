@@ -71,7 +71,7 @@ def _median(values: list[float]) -> float | None:
 
 def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: list[dict],
             wrong_30: dict, wrong_7: dict, threshold: float, now: float,
-            all_cards: list[dict] | None = None) -> dict:
+            all_cards: list[dict] | None = None, liftings=()) -> dict:
     """The five indicators, from what ``read_runs`` and the watch's files give (the API reads
     them). ``wrong_*``: ``glorfindel.escalations.observation_report``'s ``disruptive``.
     ``all_cards``: every card of the host — an isolation that did not hold is one (BL1)."""
@@ -83,6 +83,9 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     alone = shadow = 0
     proofs = []
     taken: set[str] = set()
+    # The lifts of a containment the watch's cycles show (a release on a recovery); the
+    # operator's own are in runs/manual_actions.jsonl, passed by the API.
+    liftings = [x for c in cycles if (x := containment.lifting_of(c)) is not None] + list(liftings or ())
     for r in detected:
         if r["latency"] is not None:
             detect.append(r["latency"])
@@ -97,7 +100,7 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
         # BL1: one definition with the campaign report's (analysis/containment.py) — executed in
         # the cycle, read back on Azure, held; the time ends at the read-back.
         inc = containment.incident(r["run_id"], r["ttp"], d.get("resource_id", ""), r["at"],
-                                   "detected", d, cards=all_cards or ())
+                                   "detected", d, cards=all_cards or (), liftings=liftings)
         if inc.outcome == containment.CONTAINED:
             alone += 1
             if inc.time_to_contain_s is not None:

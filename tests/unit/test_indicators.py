@@ -223,13 +223,21 @@ def test_an_isolation_that_did_not_hold_is_not_contained_alone(runs):
     a = NOW - timedelta(hours=3)
     _report(runs, "r1", "T1136.001", a, latency=60.0)
     _contained(runs, a + timedelta(seconds=60), verified_after=20, written_after=45)
-    card = {"escalation_type": "verification_failed", "resource_id": VM,
+    card = {"escalation_type": "verification_failed", "resource_id": VM, "action": "isolate_vm",
             "timestamp": (a + timedelta(minutes=5)).isoformat()}
     since = ind.since_window(NOW)
     out = ind.compute(ind.read_runs(api._run_reports(), since.timestamp()),
                       api._watch_cycles(since.timestamp()), [], CATALOG, {}, {}, 0.7, NOW.timestamp(),
                       all_cards=[card])
     assert out["alone"]["contained"] == 0 and out["contain"]["contain_s"] is None
+    # The operator released it before the card: the card is no longer this containment's.
+    (runs / "manual_actions.jsonl").write_text(json.dumps(
+        {"timestamp": (a + timedelta(minutes=3)).isoformat(), "action": "release_isolation",
+         "signal": {"resource_id": VM}, "outcome": {"status": "released"}}) + "\n")
+    out = ind.compute(ind.read_runs(api._run_reports(), since.timestamp()),
+                      api._watch_cycles(since.timestamp()), [], CATALOG, {}, {}, 0.7, NOW.timestamp(),
+                      all_cards=[card], liftings=api._manual_liftings(since.timestamp()))
+    assert out["alone"]["contained"] == 1
 
 
 def test_a_fault_taken_for_an_attack_is_counted_apart_never_an_attack(runs):

@@ -60,6 +60,18 @@ GUARD_TYPES = frozenset({
     "control_plane_change", "identity_change",
 })
 
+# An action attempted that did not complete (glorfindel/agent.py execute_action).
+FAILED_TYPES = ("write_blocked", "action_failed")
+# The reassertion's cards about a release or an unblock that was interrupted (glorfindel/
+# reassert.py): an isolate_vm / block_suspicious_ip card like those of a disappearance, but they
+# speak of a lifting a human started — never of a containment that did not hold. Told apart by
+# the reassertion's own words, the only mark they carry.
+RELEASE_SAID = ("La levée de l'isolation", "Le déblocage de")
+# What lifts a containment, as the watch and the operator write it: the manual actions
+# (runs/manual_actions.jsonl, glorfindel/cli.py _record_manual_action) and the watch's own
+# release on a recovery (recovery_complete → release_isolation).
+LIFTING = ("release_isolation", "reset", "unblock_ip")
+
 CONTAINED = "contained_alone"
 NOT_HOLDING = "not_holding"
 VERIFICATION_FAILED = "verification_failed"
@@ -147,8 +159,10 @@ def outcome_of(decision: dict) -> tuple[str, str]:
             return CONTAINED, ""
         return VERIFICATION_FAILED, ("non vérifiable" if decision["verified"] is None
                                      else "relue fausse sur Azure")
-    if status in ("write_blocked", "action_failed"):
-        return ACTION_FAILED, status
+    # escalate_to_human rewrites the status to "escalated" and keeps the failure in the card's
+    # type: both are read (the status alone, as the action wrote it, too).
+    if status in FAILED_TYPES or kind in FAILED_TYPES:
+        return ACTION_FAILED, kind if kind in FAILED_TYPES else status
     if kind in GUARD_TYPES:
         return HELD, kind
     return ESCALATED, kind or "escalade"
@@ -168,12 +182,37 @@ def time_to_contain(t0: float, decision: dict) -> float | None:
 
 def not_holding(resource_id: str, since: float, until: float, cards) -> dict | None:
     """The first card of the reassertion that says, on this VM, between ``since`` and ``until``,
-    that its containment no longer holds."""
+    that its containment no longer holds: a card about an isolation or a block (a check that
+    failed after an approved release, ``release_isolation``, speaks of the release), or one that
+    says it is bypassed — never one about a release or an unblock interrupted."""
     found = [c for c in cards or () if isinstance(c, dict)
              and c.get("escalation_type") in NOT_HOLDING_TYPES
+             and (c.get("action") in DISRUPTIVE or c.get("escalation_type") == "bypassed")
+             and not str(c.get("reason") or "").startswith(RELEASE_SAID)
              and _same(c.get("resource_id"), resource_id)
              and (t := _ts(c.get("timestamp"))) is not None and since <= t <= until]
     return min(found, key=lambda c: _ts(c["timestamp"])) if found else None
+
+
+def first_lifting(resource_id: str, since: float, liftings) -> float | None:
+    """When the containment of this VM was first lifted after ``since`` — a release, a reset, an
+    unblock, by an operator or by the watch on a recovery (``liftings``: ``(resource id, epoch)``
+    pairs, ``read_liftings``) — else None. Its watch ends there: what follows is not its."""
+    found = [t for rid, t in liftings or () if t is not None and t >= since and _same(rid, resource_id)]
+    return min(found) if found else None
+
+
+def lifting_of(rec: dict) -> tuple[str, float | None] | None:
+    """``(resource id, when)`` when this line lifts a containment: a manual action of the
+    operator, or the watch's own release on a recovery; else None."""
+    if not isinstance(rec, dict):
+        return None
+    d = view(rec)
+    if d["action"] not in LIFTING and d["event"] != "recovery_complete":
+        return None
+    if d["executed"] is False:          # a release held (release_hold), or that failed to start
+        return None
+    return d["resource_id"], d["at"]
 
 
 @dataclass
@@ -196,11 +235,13 @@ class Incident:
 
 
 def incident(run_id: str, ttp: str, target: str, t0, detection: str, decision: dict | None,
-             unknown_why: str = "", until: float | None = None, cards=()) -> Incident:
+             unknown_why: str = "", until: float | None = None, cards=(),
+             liftings=()) -> Incident:
     """One technique run of the campaign and how it ended. ``decision``: Glorfindel's on the
     detection the run counted (a debug line or a slim cycle), ``None``/``{}`` when not
     attached; ``unknown_why``: why not (analysis/campaign_report.py REASONS); ``until``: the
-    end of the run's exercise window, grace included (epoch)."""
+    end of the run's exercise window, grace included (epoch); ``liftings``: when containments
+    were lifted (``read_liftings``) — the watch stops at the first one on the VM."""
     t0 = _ts(t0)
     base = {"run_id": run_id, "ttp": ttp, "target": target, "t0": t0}
     if detection == "missed":
@@ -220,6 +261,9 @@ def incident(run_id: str, ttp: str, target: str, t0, detection: str, decision: d
     inc.contained_at = at
     if at is not None:
         end = until if until is not None else at + HOLD_WATCH_S
+        lifted = first_lifting(target or d["resource_id"], at, liftings)
+        if lifted is not None:
+            end = min(end, lifted)
         card = not_holding(target or d["resource_id"], at, end, cards)
         if card is not None:
             inc.outcome, inc.why = NOT_HOLDING, card.get("escalation_type", "")
@@ -252,11 +296,14 @@ class FaultRun:
 
 
 def fault_run(run_id: str, fault: str, targets, start, end, records, *, window_until=None,
-              taken: set[str] = frozenset(), without_glorfindel: bool = False) -> FaultRun:
+              taken: set[str] = frozenset(), without_glorfindel: bool = False,
+              played=()) -> FaultRun:
     """A Gothmog run of the campaign, and Glorfindel's decisions to isolate or to block on one
     of its targets seen between its start and the end of its window (else its end plus the
     grace) — a fault taken for an attack. ``taken``: the signal ids already attached to an
-    incident (never counted twice)."""
+    incident (never counted twice); ``played``: ``(technique, from, until)`` of the campaign's
+    technique runs — a decision on that technique inside that run's window is the run's (late,
+    or not attached), never the fault's."""
     targets = [str(t) for t in targets or () if t]
     start = _ts(start)
     until = _ts(window_until)
@@ -279,6 +326,9 @@ def fault_run(run_id: str, fault: str, targets, start, end, records, *, window_u
         if not any(_same(d["resource_id"], t) for t in targets):
             continue
         if d["seen_at"] is None or not start <= d["seen_at"] <= until:
+            continue
+        if any(d["ttp"] == ttp and a is not None and b is not None and a <= d["seen_at"] <= b
+               for ttp, a, b in played):
             continue
         fr.mistaken.append({"action": d["action"], "executed": d["executed"] is True,
                             "resource_id": d["resource_id"], "signal_id": d["signal_id"],
@@ -434,6 +484,29 @@ def read_cards(path: Path | None = None) -> list[dict]:
     return out
 
 
+def read_liftings(runs_dir: Path, since: float = 0.0) -> list[tuple[str, float | None]]:
+    """When containments were lifted, from the files: the operator's manual actions
+    (``runs/manual_actions.jsonl``), the watch's own releases (the debug files of ``runs/``
+    written since ``since``, a minute of slack) — ``(resource id, epoch)``."""
+    out = []
+    paths = [Path(runs_dir) / "manual_actions.jsonl", *sorted(Path(runs_dir).glob("*_debug.jsonl"))]
+    for path in paths:
+        try:
+            if path.stat().st_mtime < since - 60:
+                continue
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in lines:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if (lift := lifting_of(rec)) is not None:
+                out.append(lift)
+    return out
+
+
 def _gothmog_reports(runs_dir: Path) -> dict[str, dict]:
     out = {}
     for path in sorted(Path(runs_dir).glob("*.json")):
@@ -481,6 +554,7 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
         return last.timestamp() if last else None
 
     rows = []
+    liftings = read_liftings(runs_dir, campaign_span(manifest)[0] or 0.0)
     for s, rid in cr._scenarios(manifest, warn):
         if s.get("status") != "executed" or not rid:
             continue
@@ -489,10 +563,19 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
             continue
         report = cr._read_json(campaign_dir / "runs" / f"{rid}.json", runs_dir / f"{rid}.json")
         dec, why, _ = cr.run_decision(s, rid, campaign_dir, runs_dir, watch_records)
-        sid = ((dec.get("signal") or {}).get("signal_id")) if dec else ""
-        if sid:
-            taken.add(sid)
         rows.append((s, rid, _ts((report.get("metrics") or {}).get("attack_time")), dec, why))
+    # One decision, one incident (the earliest run): a later run whose search falls on the same
+    # signal has no decision of its own in the files — unknown, said.
+    rows.sort(key=lambda r: (r[2] is None, r[2] or 0.0, r[1]))
+    owner: dict[str, str] = {}
+    for i, (s, rid, t0, dec, why) in enumerate(rows):
+        sid = ((dec.get("signal") or {}).get("signal_id")) if dec else ""
+        if sid and sid in owner:
+            rows[i] = (s, rid, t0, {}, f"décision déjà rattachée à {owner[sid]}")
+        elif sid:
+            owner[sid] = rid
+            taken.add(sid)
+    played = []
     for s, rid, t0, dec, why in rows:
         target = str(s.get("target_resource_id") or "")
         # A containment is watched until the end of its run's window — and never into the next
@@ -503,8 +586,11 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
                  and _same(s2.get("target_resource_id"), target)]
         if later:
             until = min(later) if until is None else min(until, min(later))
+        played.append((s.get("ttp") or "", t0, until if until is not None
+                       else (t0 + HOLD_WATCH_S if t0 is not None else None)))
         incidents.append(incident(rid, s.get("ttp") or "", target, t0,
-                                  s.get("detection") or "unknown", dec, why, until, cards))
+                                  s.get("detection") or "unknown", dec, why, until, cards,
+                                  liftings))
 
     start, end = campaign_span(manifest)
     reports = _gothmog_reports(runs_dir)
@@ -526,7 +612,7 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
                        m.get("fault_start"), m.get("fault_end"),
                        watch_records(since if since != float("inf") else 0.0),
                        window_until=until_of(rid), taken=taken,
-                       without_glorfindel=m.get("without_glorfindel") is True)
+                       without_glorfindel=m.get("without_glorfindel") is True, played=played)
         fr.attached = how
         faults.append(fr)
     return compute(incidents, faults, notes)

@@ -67,6 +67,21 @@ def test_what_keeps_a_declaration_from_being_played(tmp_path, change, said):
     assert any(said in p for p in found), found
 
 
+def test_a_fault_whose_experiment_runs_outside_the_bench_is_refused(tmp_path):
+    """M1913: the fault's own experiment file says its zone — one outside the bench is refused,
+    whatever the declaration says of itself."""
+    faults = tmp_path / "experiments"
+    faults.mkdir()
+    shipped = (declared.FAULTS_DIR / "vm-shutdown.yaml").read_text(encoding="utf-8")
+    assert "  zone: bench\n" in shipped
+    (faults / "vm-shutdown.yaml").write_text(shipped.replace("  zone: bench\n", "  zone: twin\n"),
+                                             encoding="utf-8")
+    d = declared.load(_write(tmp_path, GOOD))
+    assert declared.problems(d, faults_dir=declared.FAULTS_DIR) == []
+    found = declared.problems(d, faults_dir=faults)
+    assert any("does not run in the zone bench" in p for p in found), found
+
+
 def test_a_file_that_is_not_a_declaration_is_refused(tmp_path):
     with pytest.raises(ValueError):
         declared.load(_write(tmp_path, "- a list\n"))

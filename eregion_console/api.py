@@ -2415,6 +2415,26 @@ async def coverage_route(kind: str = "") -> dict:
     return m
 
 
+def _manual_liftings(since: float) -> list:
+    """The operator's lifts of a containment (runs/manual_actions.jsonl: release, reset,
+    unblock) since ``since`` — where the overview stops watching an isolation (BL1)."""
+    from analysis import containment
+    try:
+        lines = (_RUNS / "manual_actions.jsonl").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    out = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        lift = containment.lifting_of(rec)
+        if lift is not None and lift[1] is not None and lift[1] >= since:
+            out.append(lift)
+    return out
+
+
 @app.get("/api/indicators")
 async def indicators() -> dict:
     """The five indicators of the finality, for the overview (UI-2, #206): computed from the run
@@ -2442,7 +2462,7 @@ async def indicators() -> dict:
         t = _time.time()
         out = ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
                           r7.get("disruptive") or {}, confidence_threshold(), t,
-                          all_cards=every)
+                          all_cards=every, liftings=_manual_liftings(since.timestamp()))
         return coverage.feed(out, coverage_matrix(t))
     return await asyncio.to_thread(gather)
 

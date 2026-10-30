@@ -16,6 +16,11 @@ technique implemented, on a public library's engine (never ``local-script``: no 
 of our own), not destructive; each fault implemented, not destructive, declared by its
 experiment file on the same targets, in the zone ``bench``; the zone ``bench`` (a fault and a
 response run nowhere else — the production rule, O0) and the mode ``non_disruptive``.
+
+These are the declaration's own words, checked on paper: ``problems`` reads no tag and no
+watch. That each VM really is enrolled in ``bench`` is checked by the injectors before they act
+(the inscription, O0, on its tags) and read by the operator at step 1 of the session
+(docs/banc-bl1.md); that the watch really holds it in ``non_disruptive``, at step 3.
 """
 from __future__ import annotations
 

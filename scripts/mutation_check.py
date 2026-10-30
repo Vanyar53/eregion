@@ -4851,9 +4851,9 @@ MUTANTS += [
     ("M1774", "an action a guard held said escalated: the guard is lost (BL1)", CTN,
      "    if kind in GUARD_TYPES:\n        return HELD, kind\n",
      "    if False:\n        return HELD, kind\n"),
-    ("M1775", "an action that failed on Azure said escalated (BL1)", CTN,
-     '    if status in ("write_blocked", "action_failed"):\n',
-     '    if status in ("write_blocked",):\n'),
+    ("M1775", "an action that failed on Azure said escalated: the card's type not read (BL1, review)", CTN,
+     "    if status in FAILED_TYPES or kind in FAILED_TYPES:\n",
+     "    if status in FAILED_TYPES:\n"),
     ("M1776", "a missed run with a decision lying around counted contained (BL1)", CTN,
      '    if detection == "missed":\n        return Incident(**base, outcome=MISSED)\n', ""),
     ("M1777", "a share with unknown decisions not said to be a lower bound (BL1)", CTN,
@@ -4899,6 +4899,40 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in range(1770, 1785)})
 TESTS.update({f"M{n}": "tests/unit/test_campaign_declared.py" for n in range(1785, 1789)})
 TESTS["M1789"] = "tests/unit/test_indicators.py"
+
+# BL1, after its 5.5 review: a card about a release, the watch after a lifting, a decision for two
+# incidents, the fault's zone, a decision of the campaign's technique taken for the fault, the
+# read-back's stamp. M1910–M1919.
+MUTANTS += [
+    ("M1910", "a check that failed after an approved release says the isolation did not hold (BL1)", CTN,
+     '             and (c.get("action") in DISRUPTIVE or c.get("escalation_type") == "bypassed")\n', ""),
+    ("M1911", "a release the reassertion says interrupted says the isolation did not hold (BL1)", CTN,
+     '             and not str(c.get("reason") or "").startswith(RELEASE_SAID)\n', ""),
+    ("M1912", "the watch of a containment runs on past its release (BL1)", CTN,
+     "        if lifted is not None:\n            end = min(end, lifted)\n",
+     "        if False:\n            end = min(end, lifted)\n"),
+    ("M1913", "a declared fault whose experiment runs outside the bench accepted (BL1)", DCL,
+     '    if declared.get("zone") != "bench":\n', "    if False:\n"),
+    ("M1914", "a decision on the campaign's technique, in its run's window, taken for the fault (BL1)", CTN,
+     '        if any(d["ttp"] == ttp and a is not None',
+     '        if False and any(d["ttp"] == ttp and a is not None'),
+    ("M1915", "one decision counted for two incidents (BL1)", CTN,
+     "        if sid and sid in owner:\n", "        if False:\n"),
+    ("M1916", "verified_at stamped without a read-back (BL1)", "glorfindel/agent.py",
+     '    if verification.get("verified") is not None:\n', "    if True:\n"),
+    ("M1917", "a release held taken for a lifting (BL1)", CTN,
+     '    if d["executed"] is False:          # a release held',
+     '    if False:          # a release held'),
+    ("M1918", "the operator's manual actions never end a watch (BL1)", CTN,
+     '    paths = [Path(runs_dir) / "manual_actions.jsonl", *sorted(',
+     "    paths = [*sorted("),
+    ("M1919", "the overview never reads the operator's releases (BL1)", CON,
+     "        if lift is not None and lift[1] is not None and lift[1] >= since:\n",
+     "        if False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (1910, 1911, 1912, 1914, 1915, 1916, 1917, 1918)})
+TESTS["M1913"] = "tests/unit/test_campaign_declared.py"
+TESTS["M1919"] = "tests/unit/test_indicators.py"
 
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its

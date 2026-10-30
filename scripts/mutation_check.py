@@ -6203,8 +6203,12 @@ MUTANTS += [
      SHOTS, "    config._DEFAULT_PATHS[:] = [work / \"cwd\" / CONFIG]",
      "    config._DEFAULT_PATHS.append(work / \"cwd\" / CONFIG)"),
 ]
+MUTANTS += [
+    ("M2250", "the sample's console lets git run any command — fetch, ls-remote, -c (DOC1 review 2)", SHOTS,
+     "        if len(argv) < 2 or argv[1] not in GIT_READS:", "        if False:"),
+]
 TESTS.update({mid: "tests/unit/test_console_shots.py"
-              for mid in ("M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
+              for mid in ("M2250", "M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

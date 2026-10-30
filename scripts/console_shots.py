@@ -63,7 +63,7 @@ MAX_LOOP = 3 * 1024 * 1024
 # A subscription or a tenant is a GUID: only the zero one. An address: only the documentation's
 # ranges (RFC 5737). A name of the bench: its public ones. A host: none but these.
 GUID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
-IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
+IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\w|\.\d)")
 DOC_NETS = tuple(ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"))
 HOST = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|app|cloud|fr|eu|internal|local)\b", re.I)
 ALLOWED_HOSTS = ("github.com", "vanyar53.github.io", "example.com", "example.org", "example.net")

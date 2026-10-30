@@ -55,7 +55,10 @@ def _with(path: list, value) -> dict:
     (["targets", 0, "name"], "vm-prod-db", "vm-prod-db"),
     (["targets", 0, "resource_group"], "rg-customer", "rg-customer"),
     (["runs", 0, "note"], "glorfindel.westeurope.cloudapp.azure.com", "cloudapp.azure.com"),
-], ids=["subscription", "guid", "private-ip", "public-ip", "vm-name", "group", "host"])
+    (["runs", 0, "note"], "H0 is at 10.20.30.40.", "10.20.30.40"),
+    (["runs", 0, "note"], "subscription 3F2B8C1E-7D4A-4E9B-9A61-2C5D8E0F1A7B", "3F2B8C1E"),
+], ids=["subscription", "guid", "private-ip", "public-ip", "vm-name", "group", "host", "ip-ending-a-sentence",
+        "guid-in-capitals"])
 def test_a_sample_with_a_real_identifier_is_refused(path, value, said):
     reason = cs.doc_refusal(_with(path, value))
     assert reason and said in reason

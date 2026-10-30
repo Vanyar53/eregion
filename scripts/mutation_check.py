@@ -6125,6 +6125,15 @@ MUTANTS += [
      "    if args.video and _inside_repo(args.video):", "    if False:"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_console_shots.py" for n in range(2170, 2180)})
+# DOC1, its review: what the guards let through.
+MUTANTS += [
+    ("M2207", "an address that ends a sentence passes (DOC1 review)", SHOTS,
+     r'''\d{1,3}(?!\w|\.\d)")''', r'''\d{1,3}(?![\w.])")'''),
+    ("M2209", "a GUID written in capitals passes (DOC1 review)", SHOTS,
+     'GUID = re.compile(r"\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")',
+     'GUID = re.compile(r"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b")'),
+]
+TESTS.update({mid: "tests/unit/test_console_shots.py" for mid in ("M2207", "M2209")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

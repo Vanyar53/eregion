@@ -2237,6 +2237,68 @@ partielle d'un état ancien le laisse ancien. `_cuts_all` sert aussi l'isolation
 balayage de la levée : figé (`test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind`,
 M1971).
 
+**I4E (30/10, #361) : une nouvelle isolation garde l'état ancien de la VM ; le démontage ne lit plus
+l'état écrit par le code.** Trouvé par la seconde relecture d'I4C. **Le défaut, sur `main` 91dae76** :
+api porte une isolation d'une ancienne version (son refus total à nom fixe sur nsg-api-nic, son état à
+un seul NSG gardé) ; une nouvelle VM reçoit ce NSG ; api est isolée de nouveau — la paire nouvelle,
+bornée à son adresse sur le NSG partagé maintenant. Le nouvel état était écrit par-dessus l'ancien
+(`isolation.py`) : l'enregistrement perdu, `_legacy_claimed` ne rattachait plus le refus total à api,
+et `_unattributable_fixed` le classait « isolation d'une ancienne version, VM inconnue : laissée » —
+chaque levée `release_partial`, chaque reset `swept_partial`, api coupée pour toujours, et ce que
+disait la levée faux. **Le correctif** : la nouvelle isolation, complète ou partielle, garde
+l'enregistrement sous `legacy` (`response/legacy_state.py`, `_kept_legacy`) ; tous ceux qui lisaient
+l'état ancien le lisent là aussi (`_older_record`) : la levée retire la paire nouvelle **et** le refus
+ancien (`providers/azure/older.py`, sorti de `release.py` qui touchait 500 lignes ; sous la garde
+d'I4C, qui peut le garder et le dire — `legacy` reste alors dans l'état, et ne part qu'avec ses
+règles), le reset aussi, `verify_release` le cherche, `_legacy_claimed` le rattache, le lecteur du
+journal d'activité compte ses règles comme les nôtres. Un état ancien seul reste ancien (I4C).
+`_legacy_claimed` quitte `state.py` (499 lignes) pour `legacy_state.py`. Figé :
+`test_an_older_isolation_kept_through_a_new_one_goes_with_its_release` (levée et reset, isolation
+complète et partielle : quatre cas, rouges sur `main` par leur comportement — `release_partial`,
+`swept_partial`) et `test_an_older_record_kept_by_a_new_isolation_stays_while_its_deny_all_does` (le
+monde du refus total d'I4C, api isolée de nouveau : la levée garde le refus et `legacy`, la
+vérification le voit, la règle retournée remise, la levée suivante le retire ; rouge sur `main`).
+Limite : un enregistrement déjà écrasé avant ce correctif ne revient pas — le reset dit « VM
+inconnue », le refus est à retirer à la main.
+
+**Les deux bornes** (A0 : l'oracle refuse plus, jamais moins ; aucune règle retirée ni restreinte).
+(1) **Le démontage** (`_recover_everything`) retirait une règle à nom fixe sur un NSG partagé quand
+l'état « ne la nommait pas » — lu dans l'état écrit par le code, que le défaut avait réécrit : il
+masquait le défaut. « Nommé » se lit maintenant dans le journal du test : `legacy_owned`, rempli par
+`_legacy_isolation(keep_state=True)`, vidé par `_lose_state` (et par la perte de l'état au second
+passage du démontage). (2) **L'oracle** : dans `_release`, si l'état d'avant n'a pas `placements` mais
+a `rule_names` et que la levée dit `release_partial`, l'état d'après existe et reste sans
+`placements` (le défaut de M1970). (3) **La machine atteint l'état** : `an_old_isolations_vm_isolated_again`
+(la VM d'une isolation ancienne, son état gardé d'après le journal, une nouvelle VM sur ce NSG ou non,
+la VM isolée de nouveau sous une panne tirée ou non, puis levée, levée deux fois, ou reset).
+
+**Ce que les bornes ont fait tomber, sur `main` 91dae76.** Les deux bornes seules, 500 séquences :
+les graines 1, 42, 7 et 31337 tombent sur « I7: …/rg-edge/…/api could not be released » (le refus
+total « VM inconnue : laissée ») — le défaut, plus rien d'autre ; 322, 8675, 101 et 555 passent (la
+relecture : 4 sur 4). Avec la nouvelle règle en plus, trois de ces quatre-là tombent aussi (101, 555,
+8675 : web ou api « could not be released »). La borne (2) seule ne fait rien tomber. Aucune autre
+séquence, aucun autre défaut.
+
+**Mesures d'I4E.** `pytest` complet : 4 487 réussis, 7 sautés ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 0 défaut. Invariants sur le correctif avec les deux bornes : 500
+séquences sur les graines 1, 7, 25, 42, 101, 322, 555, 8675 et 31337, puis 2 000 sur 42, 322 et 8675,
+verts ; avec la nouvelle règle, 500 sur 1, 7, 42, 101, 322 et 8675, puis 2 000 sur 322 et 8675,
+verts — à 2 000, la graine 42 tombe sur L1 (« the block on …/Db--01 vanished from Azure; the reassertion neither put it back nor said so » : un blocage, la VM en quarantaine, la quarantaine vidée, `quarantine_change_comes_back` ; aucune étape de l'état ancien) : hors du lot, remonté. **Mutants M2130–M2137** (l'enregistrement écrasé par l'isolation, par l'isolation partielle ;
+`_legacy_claimed` aveugle à `legacy` ; une levée partielle qui le jette ; la levée, le reset,
+`verify_release`, le lecteur du journal d'activité qui l'ignorent) : 8/8 par leurs séquences figées
+(M2137 par `test_activity_logs.py`), à chaque tour. Par la machine seule (500 séquences, deux tours,
+graines au hasard) : M2130, M2134 et M2135 2/2 avec les bornes seules ; avec la nouvelle règle, M2134
+2/2, M2130 1/2, M2135 0/2 (la variance de deux tours) ; M2131 (l'isolation partielle), M2133 (la garde
+qui tient l'ancien refus) et M2136 (la vérification) 0/2 — états rares, leurs séquences figées
+seulement. **M1970 par la machine seule** : 0/2 avec les bornes, 1/2 avec la nouvelle règle (la
+relecture l'avait vu attrapé par la borne (2) ; ici, pas à chaque tour). M22 et M1968 réancrés (le
+chemin de l'état ancien est maintenant `older.py`, l'enregistrement lu par `_older_record`). Harnais
+avant/après (60 séquences, deux tours, `--jobs 4`) sur les 122 mutants des modules touchés
+(isolation, levée, vérification, reset, journal d'activité, état ; la machine sans la nouvelle règle) : 106/121 attrapés à chaque tour sur
+`main` 91dae76, 109/121 après (hors les huit nouveaux, 8/8) — M20, M761, M1962 et M1963 mieux après ;
+M07, attrapé avant et à moitié après à 60, remesuré à 500 : 2/2 des deux côtés. Aucun perdu. M36 et
+M1552 survivent des deux côtés (déjà vrai avant).
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

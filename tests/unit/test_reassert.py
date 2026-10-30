@@ -1350,7 +1350,8 @@ def test_an_episode_is_known_over_before_any_write_of_its_pass(monkeypatch):
 
 def test_a_state_refused_on_one_vm_does_not_stop_the_pass(monkeypatch):
     """A full disk on the first VM's state: the pass went no further — the next VM, held
-    again, never seen so, its drift mark kept. Each VM is read; the refusal is logged."""
+    again, never seen so, its drift mark kept. Each VM is read; each refusal is said in the
+    pass's report (and logged), with what it risks."""
     from glorfindel import reassert_cards
     from glorfindel.actions import _save_isolation_state
     other = _RID.replace("/vm", "/vm2")
@@ -1359,9 +1360,31 @@ def test_a_state_refused_on_one_vm_does_not_stop_the_pass(monkeypatch):
                                     "placements": [], "drift_alerted_at": "2026-10-06T09:00:00+00:00"})
     c = _connector()
     give_back = _unwritable(monkeypatch, "/isolation/")
-    reassert_active(c, _HUMAN)
+    report = reassert_active(c, _HUMAN)
     give_back()
     assert {(k.rsplit("/", 1)[-1], ip) for k, ip in reassert_cards._EPISODE_OVER} == {("vm", ""), ("vm2", "")}
+    failed = [r for r in report if r["outcome"] == "failed"]
+    assert sorted(r["vm"] for r in failed) == ["vm", "vm2"] and all(r["kind"] == "isolation" for r in failed)
+    assert all("État local non écrit" in r["detail"] and "redite" in r["detail"] for r in failed), failed
+
+
+def test_a_state_refused_on_a_block_is_printed_by_the_watch(monkeypatch):
+    """The watch prints a refused write of a block's state as any other failure of the pass."""
+    import io
+    from rich.console import Console
+    from glorfindel import cli
+    c = _gone("block")
+    reassert_active(c, _HUMAN)
+    c.verify_block_ip.return_value = {"verified": True}
+    out = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=out, width=200))
+    give_back = _unwritable(monkeypatch, "/blocks/")
+    report = cli._watch_reassert_pass(c, "human_only")
+    give_back()
+    (failed,) = [r for r in report if r["outcome"] == "failed"]
+    assert failed["kind"] == "block" and failed["ip"] == _IP and "non écrit" in failed["detail"]
+    assert f"reassert block vm {_IP} → failed" in out.getvalue()
+
 
 def test_a_drift_card_closed_with_a_note_is_no_acknowledgement():
     """Gone, said; the card then closed with a note — Glorfindel's way, as `_alert` closes

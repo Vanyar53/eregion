@@ -5711,8 +5711,8 @@ TESTS.update({f"M{n}": ("tests/unit/test_invariant_regressions.py::"
 _RT = "tests/unit/test_reassert.py::test_"
 MUTANTS += [
     ("M2120", "a state write refused on one isolation stops the whole pass (L2C, review, 9b38af3)", R,
-     "        except OSError as exc:\n            # Its state not written (a full disk): the others are still read — a pass cut\n",
-     "        except KeyError as exc:\n            # Its state not written (a full disk): the others are still read — a pass cut\n"),
+     "        except OSError as exc:\n            # Its state not written (a full disk): said, and the others still read — a pass\n",
+     "        except KeyError as exc:\n            # Its state not written (a full disk): said, and the others still read — a pass\n"),
     ("M2121", "a block's rules back but bypassed never end its disappearance (L2C, review, 60135ea)", R,
      "            drift_over(ref or vm, ip)            # its rules back, an allow passes them (L2C, review)\n",
      "            pass\n"),
@@ -5729,6 +5729,17 @@ TESTS.update({
     "M2121": f"{_RT}a_disappearance_is_over_once_its_rules_are_back_even_bypassed {INVARIANTS}",
     "M2122": f"{_RT}an_episode_is_known_over_before_any_write_of_its_pass {INVARIANTS}",
 })
+# L2C, its second review: a refused state write said in the pass's report, not only logged.
+MUTANTS += [
+    ("M2123", "an isolation's refused state write only logged, not in the pass's report (L2C, review 2)", R,
+     '            report.append(unrecorded(snapshot["vm_name"], exc))\n',
+     '            unrecorded(snapshot["vm_name"], exc)\n'),
+    ("M2124", "a block's refused state write only logged, not in the pass's report (L2C, review 2)", R,
+     '            report.append(unrecorded(snapshot["vm_name"], exc, snapshot.get("ip", "")))\n',
+     '            unrecorded(snapshot["vm_name"], exc, snapshot.get("ip", ""))\n'),
+]
+TESTS.update({"M2123": f"{_RT}a_state_refused_on_one_vm_does_not_stop_the_pass",
+              "M2124": f"{_RT}a_state_refused_on_a_block_is_printed_by_the_watch"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

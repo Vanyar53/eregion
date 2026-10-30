@@ -95,6 +95,18 @@ def episode(key: str, ip: str, over: bool) -> None:
     (_EPISODE_OVER.add if over else _EPISODE_OVER.discard)((key.lower(), ip))
 
 
+def unrecorded(vm: str, exc: Exception, ip: str = "") -> dict:
+    """A VM's local state not written during the pass (a full disk): the pass goes on with
+    the others, and says it — logged and in the pass's report, which the watch prints."""
+    what = f"le blocage de {ip} sur {vm}" if ip else f"l'isolation de {vm}"
+    detail = (f"État local non écrit ({exc}) : {what} n'a pas pu enregistrer ce que la passe a vu. "
+              "Une disparition peut être redite à la passe suivante, ou une marque (déjà dit, contourné) "
+              "rester jusqu'à ce que l'écriture repasse ; libérer le disque de ~/.glorfindel.")
+    log.warning("reassert: %s", detail)
+    return {"kind": "block" if ip else "isolation", "vm": vm, **({"ip": ip} if ip else {}),
+            "outcome": "failed", "detail": detail}
+
+
 def drift_over(key: str, ip: str = "") -> None:
     """Its rules back, an allow of someone else's passing them (said on its own card): the
     disappearance is over — the next one said, whether the mark goes or its write is refused.

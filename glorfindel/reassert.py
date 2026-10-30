@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timezone
 
 from glorfindel.reassert_cards import (
-    drift_over, drift_said, episode, new_pass, say_bypass, say_left, say_unreadable_states,
+    drift_over, drift_said, episode, new_pass, say_bypass, say_left, say_unreadable_states, unrecorded,
 )
 from glorfindel.reassert_quarantine import _report_altered_quarantines
 
@@ -116,9 +116,9 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         except TimeoutError:
             continue          # a write is running on this VM: next pass
         except OSError as exc:
-            # Its state not written (a full disk): the others are still read — a pass cut
-            # off at the first VM never saw the next one held again (L2C, review).
-            log.warning("reassert: %s not recorded (%s)", snapshot["vm_name"], exc)
+            # Its state not written (a full disk): said, and the others still read — a pass
+            # cut off at the first VM never saw the next one held again (L2C, review).
+            report.append(unrecorded(snapshot["vm_name"], exc))
     for snapshot in active_blocks():
         if not snapshot.get("resource_id"):
             continue
@@ -129,7 +129,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
         except TimeoutError:
             continue
         except OSError as exc:
-            log.warning("reassert: block on %s not recorded (%s)", snapshot["vm_name"], exc)
+            report.append(unrecorded(snapshot["vm_name"], exc, snapshot.get("ip", "")))
     _whatever_the_state(connector, autonomy, report)
     return report
 

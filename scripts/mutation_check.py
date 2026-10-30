@@ -5172,6 +5172,100 @@ MUTANTS += [
 ]
 TESTS["M1906"] = _I4B
 
+# I4C (#344): the machine checks that what the unblock, the reset and the release keep is said
+# (_kept_said: never `unblocked`, `swept`, `released` with one of our rules kept, and the rule
+# named, « gardée »), and that a perimeter lifted in an operation exempts only the flows it alone
+# closed (_lifted_alone). Two rules make the states common (kept_at_the_lift,
+# perimeter_lifted_beside_a_block). Measured by the machine alone: nothing in TESTS. The same
+# silence at the placements of the unblock or of the release is no mutant: their sweeps find the
+# rule again, ask the guard and say it — the outcome is the same. M1960–M1964.
+MUTANTS += [
+    ("M1960", "a rule kept is not a failure: the unblock says `unblocked` and clears its entry while it "
+              "keeps one (I4C)", UNB,
+     "        if failed:\n            # Keep the entry: the rules that are still there keep blocking the IP, and a\n",
+     '        if [f for f in failed if "gardée" not in f]:\n'
+     "            # Keep the entry: the rules that are still there keep blocking the IP, and a\n"),
+    ("M1961", "the unblock's sweep keeps a turned rule aimed at the VM that took the address, and counts "
+              "it removed (I4C, I4B's review)", UNB,
+     "                        (failed if err else deleted).append(err or name)\n",
+     '                        (failed if err and "gardée" not in err else deleted).append(\n'
+     '                            name if err and "gardée" in err else (err or name))\n'),
+    ("M1962", "the reset keeps a turned rule aimed at the VM that took the address, and says nothing: "
+              "`swept` (I4C, I4B's review)", SWP,
+     "                        unreadable.append(why)\n                        continue\n",
+     "                        continue\n"),
+    ("M1963", "the release's sweep keeps a turned rule aimed elsewhere, and says nothing (I4C)", REL,
+     "                    if err:\n                        failed.append(err)\n"
+     '                failed += [f"{u} : laissée" for u in self._unattributable_fixed(t, rules)]\n',
+     '                    if err and "gardée" not in err:\n                        failed.append(err)\n'
+     '                failed += [f"{u} : laissée" for u in self._unattributable_fixed(t, rules)]\n'),
+    ("M1964", "lifting a perimeter, the unblock takes off every block of the IP on its NSG, the other "
+              "VMs' with it — hidden by the exemption « périmètre levé » (I4C)", UNB,
+     '            if (r_rg, r_name, entry["rule"]) not in done:\n                _del(r_rg, r_name, entry["rule"])\n',
+     '            if (r_rg, r_name, entry["rule"]) not in done:\n                _del(r_rg, r_name, entry["rule"])\n'
+     "                for r0 in self._list_rules({}, r_rg, r_name) or []:\n"
+     '                    if _rule_name(r0).lower().startswith(entry["rule"].lower() + "-") '
+     'and not _rule_name(r0).lower().endswith("-out"):\n'
+     "                        _del(r_rg, r_name, _rule_name(r0))\n"),
+]
+# The harness's unmutated run on I4C's machine: a merged perimeter's pair lifted by a neighbour's
+# unblock, the VM's own rules bypassed — the bypass alone was said, the pair's disappearance
+# dropped (L1). Its frozen sequence, then the machine. M1965–M1966.
+_I4C = ("tests/unit/test_invariant_regressions.py::test_a_perimeter_lifted_by_a_neighbour_is_said_behind_a_bypass "
+        f"{INVARIANTS}")
+MUTANTS += [
+    ("M1965", "a bypassed block drops what is gone: the perimeter's pair lifted by a neighbour, unsaid (I4C)", VBL,
+     '                return {**self._block_bypassed(ip, bypass), **({"held_missing": held_missing} if held_missing else {})}\n',
+     "                return self._block_bypassed(ip, bypass)\n"),
+    ("M1966", "the reassertion reads a bypass with rules gone as nothing missing: silent (I4C)", R,
+     "        verification.get(\"uncovered_nics\") or verification.get(\"missing_rules\")\n"
+     "        or verification.get(\"held_missing\"))) or bool(\n",
+     "        verification.get(\"uncovered_nics\") or verification.get(\"missing_rules\"))) or bool(\n"),
+]
+TESTS.update({"M1965": _I4C, "M1966": _I4C})
+# The machine at 500 (seed 7) on I4C's tree, on `main` too: an older version's deny-all on api's own
+# NSG, a VM given that NSG and api's old address, our turned rule waiting behind for it — the
+# release and the reset took the deny-all off unasked; the guard read no NIC behind `*`. M1967–M1969.
+_I4C_ALL = " ".join(
+    f"tests/unit/test_invariant_regressions.py::test_an_older_isolations_deny_all_holding_back_a_turned_rule_stays[{op}]"
+    for op in ("release", "reset_from_azure")) + f" {INVARIANTS}"
+MUTANTS += [
+    ("M1967", "an isolation's deny on every address read as cutting no other NIC: taken off, the VM given its "
+              "NSG opened (I4C)", "glorfindel/providers/azure/turned.py",
+     '    return any(v.strip().lower() in ("*", "any", "0.0.0.0/0") for v in _side_values(rule) or ["*"])\n',
+     "    return False\n"),
+    ("M1968", "the release of an older version's isolation takes its deny-all off unasked (I4C)", REL,
+     '                err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)\n'
+     "                       or self._delete_rule(l_rg, l_name, name))\n",
+     "                err = self._delete_rule(l_rg, l_name, name)\n"),
+    ("M1969", "the reset takes an older version's deny-all off unasked (I4C)", SWP,
+     '                    if why := _held_by_turned(self._network, guard, t["nsg_rg"], t["nsg_name"], name, "", mates):\n',
+     '                    if False and (why := _held_by_turned(self._network, guard, t["nsg_rg"], t["nsg_name"], name, "", mates)):\n'),
+]
+TESTS.update({mid: _I4C_ALL for mid in ("M1967", "M1968", "M1969")})
+# I4C's review: the release that keeps an older version's deny-all wrote `placements: []` into its
+# state — the next one no longer read it as an older version's: kept for ever. M1970.
+MUTANTS += [
+    ("M1970", "a partial release turns an older version's state into a new one: its deny-all kept for ever "
+              "(I4C, review)", REL,
+     '                **({"placements": remaining if state.get("placements") else state["placements"]}\n'
+     '                   if "placements" in state else {}),\n',
+     '                "placements": remaining if state.get("placements") else state.get("placements", []),\n'),
+]
+TESTS["M1970"] = ("tests/unit/test_invariant_regressions.py::"
+                  f"test_an_older_isolations_kept_deny_all_goes_once_the_turned_rule_is_put_back {INVARIANTS}")
+# I4C's review: `_cuts_all` reaches the isolation written again (and the release's sweep): an
+# isolation pair on every address that a turned rule waits behind is left, said. M1971.
+MUTANTS += [
+    ("M1971", "the isolation written again reads its pair on every address as cutting no one: rewritten, the "
+              "VM given its NSG opened (I4C, review)", ISO,
+     '                    and _aims_elsewhere(by_name[n.lower()], t["private_ips"])\n',
+     '                    and _aims_elsewhere(by_name[n.lower()], t["private_ips"])\n'
+     '                    and getattr(by_name[n.lower()], "destination_address_prefix", None) != "*"\n'),
+]
+TESTS["M1971"] = ("tests/unit/test_invariant_regressions.py::"
+                  f"test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind {INVARIANTS}")
+
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
 # from the query (N-10), H0's host key pinned (V-32), the containers hardened (V-34), one principal

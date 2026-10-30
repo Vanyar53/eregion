@@ -5062,6 +5062,17 @@ MUTANTS += [
 ]
 TESTS["M1970"] = ("tests/unit/test_invariant_regressions.py::"
                   f"test_an_older_isolations_kept_deny_all_goes_once_the_turned_rule_is_put_back {INVARIANTS}")
+# I4C's review: `_cuts_all` reaches the isolation written again (and the release's sweep): an
+# isolation pair on every address that a turned rule waits behind is left, said. M1971.
+MUTANTS += [
+    ("M1971", "the isolation written again reads its pair on every address as cutting no one: rewritten, the "
+              "VM given its NSG opened (I4C, review)", ISO,
+     '                    and _aims_elsewhere(by_name[n.lower()], t["private_ips"])\n',
+     '                    and _aims_elsewhere(by_name[n.lower()], t["private_ips"])\n'
+     '                    and getattr(by_name[n.lower()], "destination_address_prefix", None) != "*"\n'),
+]
+TESTS["M1971"] = ("tests/unit/test_invariant_regressions.py::"
+                  f"test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind {INVARIANTS}")
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

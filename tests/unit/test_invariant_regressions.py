@@ -3881,3 +3881,39 @@ def test_an_older_isolations_kept_deny_all_goes_once_the_turned_rule_is_put_back
     finally:
         m.teardown()
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind(monkeypatch):
+    """I4C, the review: `_aims_elsewhere` counts an isolation's deny on every address
+    (`turned._cuts_all`), and the isolation written again asks the guard for it too. Today's
+    isolation addresses the NIC's IPs (`_scope_to_nic`, L24): `*` is what a version before
+    L24 wrote on an NSG that governed the VM alone — written here by hand, as it left it. api
+    isolated so, blocked, its block rule turned into an allow, its IP changed, a new VM at the
+    old address on api's NSG — cut off by the deny-all, the turned rule waiting behind.
+    Isolated again, api leaves that pair as it is, said (`left_rules`), and writes under the
+    NIC's second name; rewritten in place, the deny-all came off the new VM, which the
+    turned rule opened."""
+    import shutil
+
+    nsg = _NSG.format(rg="rg-edge", name="nsg-api-nic")
+    iso = "glorfindel-iso-api-api-nic-c272f2"
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(api_nic={"own": "dedicated"}))
+        m.isolate(data=Script(API, API, None))
+        rules = m.fake.nsgs[key(nsg)]["rules"]
+        rules[iso].update(destination_address_prefix="*", destination_address_prefixes=None)
+        rules[f"{iso}-out"].update(source_address_prefix="*", source_address_prefixes=None)
+        m.block(data=Script(API, API, None, 22))
+        m._tamper_with_our_rule(Script("access", (key(nsg), _API_BASE)))
+        m.customer_changes_ip(data=Script(_nic("rg-edge", "api-nic"), 0, 20))
+        m.create_vm(data=Script("northeurope", "rg-app1", "api", nsg, "Linux"))
+        out = m.connector.isolate_vm(API)
+        assert iso in rules and rules[iso]["destination_address_prefix"] == "*", rules.get(iso)
+        assert any(iso in str(x) for x in out.get("left_rules") or []), out
+        assert "glorfindel-iso-api-api-nic-b-c272f2" in rules, sorted(rules)
+        m.never_more_open_than_designed()
+    finally:
+        m.teardown()
+        shutil.rmtree(m.home, ignore_errors=True)

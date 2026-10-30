@@ -813,6 +813,51 @@ les fils du plan** en une demande, l'un après l'autre.
 tableau) ; retirer un fil encore en file (il faudrait un canal vers Orodruin) ; des fils qui
 disparaissent ou pâlissent une fois la demande finie ; sélectionner un fil puis le supprimer.
 
+### Les drills
+
+Un **drill** : des attaques et des pannes tirées vers des cibles, qu'on garde et qu'on rejoue. C'est
+un exercice qu'on répète pour rester prêt, et qui garde la dernière preuve sous 30 jours. Son
+exécution reste une **demande** (`r-…`), et chacun de ses fils, un run.
+
+Le mot (Jonathan, 30/10, sur une analyse hors du dépôt). Écartés :
+- « jeu » : ludique en anglais (« game »), l'écueil de « Playground » ;
+- « campagne » : aujourd'hui une exécution, et liée à Annatar ;
+- « muster » : peu connu.
+
+Les cinq décisions, prises une à une le 30/10 :
+
+1. **Un objet de l'instance**, distinct d'Annatar et de Gothmog, avec un nom et un auteur :
+   l'opérateur, Annatar ou Eregion. Son format vit dans le cœur partagé (D1), comme le verdict
+   d'un fil.
+2. **En couches**, comme les règles depuis P1 :
+   - **livrés** : `drills/<nom>.yaml` dans le dépôt, relus en PR — les drills de référence ;
+   - **instance** : ceux du client, dans l'état de son instance, à côté de `client_rules.yaml`,
+     jamais écrasés par une mise à jour (en SaaS, le magasin du tenant). Dagorlad les enregistre
+     (« Save as drill »), les liste et les charge sur le tableau ;
+   - **session** : le brouillon, dans le navigateur (déjà le cas) ;
+   - **export** : le même YAML, pour Git chez le client, le jumeau, ou proposer un drill à la base.
+
+   L'enregistrement est la première écriture de Dagorlad. Elle tient dans la frontière de la
+   console (SEC1 : jeton, origine, corps JSON) et n'écrit qu'un fichier de l'instance, jamais sur le
+   cloud.
+3. **Les campagnes d'Annatar deviennent des drills dont Annatar est l'auteur.**
+   - Son planificateur propose : « Ask Annatar for a drill » trace une chaîne en brouillon sur le
+     tableau. L'opérateur la corrige, la lance, la garde.
+   - Rejouer relance la même chaîne, et D-2 compare deux demandes du même drill.
+   - `annatar campaign plan` et `run` continuent, en écrivant un drill et une demande ; les
+     manifestes déjà écrits restent lisibles (l'index de D-2, la vue Runs).
+   - La boucle reste aveugle : le planificateur lit le catalogue et la cible, jamais les règles ni
+     les modes de Glorfindel.
+4. **Les cibles** : par nom dans un drill du client, par sélecteur (zone, rôle) dans un drill livré.
+   Jamais par l'identifiant de la ressource, qui change quand Celebrimbor reconstruit le banc. Au
+   lancement, la console résout un sélecteur en VM inscrites et montre la liste ; Orodruin rejuge
+   chaque fil.
+5. **Le partage** : un drill appartient à l'instance. Son auteur et sa dernière modification sont
+   notés, tous les opérateurs le voient, le lancent et le modifient. Des drills privés attendront les
+   rôles (1.x), comme le veut le choix assumé de la console : un jeton, tous les droits.
+
+Lancer un drill : `make orodruin-exercise DRILL=<nom>`, ou la demande que Dagorlad prépare.
+
 ### Glorfindel reste aveugle
 
 Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
@@ -894,6 +939,8 @@ Posées une à une. La réponse est reportée ici avec sa date.
 | DG-a | `/dagorlad` en lecture seule : Board (tableau, plan, simulation) et Runs (les listes d'aujourd'hui, les deux injecteurs ensemble) ; `eregion_core/exercise_plan.py` ; redirections ; tests sans Azure ni modèle, mutants | C1 fusionné, pour Runs et les redirections |
 | DG-b | la demande, le nom tapé, « Stop all » ; Orodruin, Annatar, Gothmog ; le modèle de menace | DG-a, la question 1, BL1 |
 | DG-c | le suivi en direct | DG-b, BL1 |
+| DG-d | les drills : leur format (cœur partagé), « Save as drill », la liste et le chargement dans Dagorlad, `make orodruin-exercise DRILL=`, les premiers drills de référence | C1, DG-b |
+| DG-e | Annatar : `campaign plan` et `run` écrivent un drill et une demande ; « Ask Annatar for a drill » dans Dagorlad | DG-d, avec la session Annatar |
 
 ### Construit : le Board (DG-a, première partie, 30/10)
 

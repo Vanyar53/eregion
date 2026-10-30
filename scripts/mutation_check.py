@@ -5338,11 +5338,11 @@ MUTANTS += [
      '                left.append({"nsg": nsg_key, "rule": n, "why": (\n',
      '                ({"nsg": nsg_key, "rule": n, "why": (\n'),
     ("M2063", "the block keeps the deny before the allow, said as a turned rule (I4D)", BLK,
-     '                             "on": ", ".join(passed), "kind": "before_allow"})\n',
-     '                             "on": ", ".join(passed), "kind": "turned"})\n'),
+     '                             "on": ", ".join(passed), "kind": "before_allow",\n',
+     '                             "on": ", ".join(passed), "kind": "turned",\n'),
     ("M2064", "the reassertion's card says a deny kept before an allow as a turned rule (I4D)", RCA,
-     "                         f\"la retirer ouvrirait {vm}\" if x.get(\"kind\") == \"before_allow\" else\n",
-     "                         f\"la retirer ouvrirait {vm}\" if False else\n"),
+     "                         if x.get(\"kind\") == \"before_allow\" else\n",
+     "                         if False else\n"),
     ("M2065", "the guard reads the replacement's number in the inbound direction only: an outbound deny "
               "taken off past an allow (I4D)", NSG,
      "    low, high = getattr(rule, \"priority\", None), priority.get(direction)\n",
@@ -5363,6 +5363,15 @@ MUTANTS += [
      "    if not isinstance(low, int) or not isinstance(high, int):\n        return []\n"),
 ]
 TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2067, 2068)})
+# I4D's review: the kept deny says the other VM it cuts off (the addresses no longer the NIC's).
+MUTANTS += [
+    ("M2069", "a kept deny never says the VM it cuts off (I4D, review)", BLK,
+     '        return " ; ".join(said)\n\n    def _block_ip_vm(', '        return ""\n\n    def _block_ip_vm('),
+    ("M2070", "the reassertion's card leaves out the VM a kept deny cuts off (I4D, review)", RCA,
+     """f"la retirer ouvrirait {vm}" + (f" ; il couvre aussi {x['also']}" if x.get("also") else "")""",
+     """f"la retirer ouvrirait {vm}" + "\""""),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2069, 2070)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

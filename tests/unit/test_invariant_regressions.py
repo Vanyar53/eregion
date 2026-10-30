@@ -3518,6 +3518,8 @@ def test_an_isolation_written_again_keeps_the_deny_before_an_allow_and_says_it(m
         assert rules[_DB1_ISO_SECOND]["priority"] == 102
         kept = [x for x in out["left_rules"] if x["rule"] == _DB1_ISO]
         assert len(kept) == 1 and "allow-ssh" in kept[0]["why"] and "ouvrirait db-nic-1" in kept[0]["why"], kept
+        # I4D's review: the other VM it cuts off, said — .7 is now rg-new/api's.
+        assert "il couvre aussi 10.0.0.7, à api, qu'il coupe" in kept[0]["why"], kept
         assert f"{_DB1_ISO}," in out["left_note"] and "102" in out["left_note"]
         assert m._open(DB) <= before
         assert m.connector.verify_isolation(DB)["verified"] is not True
@@ -3541,7 +3543,7 @@ def test_a_reassertion_says_the_deny_it_kept_before_an_allow(monkeypatch):
         assert rules[_DB1_ISO]["priority"] == 100 and _DB1_ISO_SECOND in rules
         said = [e["reason"] for e in escalations.pending() if e.get("action") == "isolate_vm"]
         assert any("reposée une fois" in r and f"{_DB1_ISO}, notre deny, passe avant allow-ssh" in r
-                   for r in said), said
+                   and "10.0.0.7, à api, qu'il coupe" in r for r in said), said
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
 
@@ -3569,13 +3571,16 @@ def test_a_block_written_again_keeps_the_deny_before_an_allow_and_says_it(monkey
         assert rules[_DB1_BLOCK]["access"] == "Deny" and rules[_DB1_BLOCK_SECOND]["priority"] == 220, rules
         kept = [x for x in out["left_rules"] if x["rule"] == _DB1_BLOCK]
         assert kept == [{"nsg": "rg-net/nsg-subnet", "rule": _DB1_BLOCK, "to": "10.0.0.7, 10.0.0.8",
-                         "on": "partner-allow", "kind": "before_allow"}], out["left_rules"]
+                         "on": "partner-allow", "kind": "before_allow",
+                         "also": "10.0.0.7, à api, qu'il coupe"}], out["left_rules"]
         assert "avant partner-allow ; celle qui la remplace passe après" in out["note"]
+        assert "ouvrirait la VM bloquée ; il couvre aussi 10.0.0.7, à api, qu'il coupe ;" in out["note"]
         assert m._attacker_flows(DB, None) <= reach
         m.reassert(Script("non_disruptive", None))
         said = [e["reason"] for e in escalations.pending() if e.get("action") == "review_left_rule"]
         assert any(f"{_DB1_BLOCK} (rg-net/nsg-subnet), notre deny, vise 10.0.0.7, 10.0.0.8, passe avant "
-                   "partner-allow et sa remplaçante après : la retirer ouvrirait Db--01" in r for r in said), said
+                   "partner-allow et sa remplaçante après : la retirer ouvrirait Db--01 ; il couvre aussi "
+                   "10.0.0.7, à api, qu'il coupe" in r for r in said), said
         m.connector.unblock_ip(ATTACKER, DB)
         assert _DB1_BLOCK not in rules and _DB1_BLOCK_SECOND not in rules
     finally:

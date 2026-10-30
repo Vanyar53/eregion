@@ -392,7 +392,9 @@ class IsolationMixin:
                 new_at = priority.get(_enum_text(getattr(by_name[n.lower()], "direction", "")), "?")
                 left.append({"nsg": nsg_key, "rule": n, "why": (
                     f"{nsg_key}/{n}, notre deny, passe avant {', '.join(passed)} ; la règle qui la remplace "
-                    f"passe après (priorité {new_at}) : la retirer ouvrirait {t['nic_short']}")})
+                    f"passe après (priorité {new_at}) : la retirer ouvrirait {t['nic_short']}"
+                    + (f" ; il couvre aussi {also}" if (also := self._also_cuts(
+                        by_name[n.lower()], t, guard.setdefault("holders", {}))) else ""))})
         ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=None, inbound_dst=ips,
                                     outbound_src=ips, outbound_dst=None)

@@ -97,7 +97,9 @@ class BlockMixin:
                                                            t["private_ips"]):
                 drop.remove(n)
                 left.append({"nsg": nsg_key, "rule": n, "to": ", ".join(drop_to.pop(n)) or "?",
-                             "on": ", ".join(passed), "kind": "before_allow"})
+                             "on": ", ".join(passed), "kind": "before_allow",
+                             **({"also": also} if (also := self._also_cuts(by_name[n.lower()], t, holders))
+                                else {})})
         vm_ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=[ip], inbound_dst=vm_ips,
                                     outbound_src=vm_ips, outbound_dst=[ip], port=threat_port)
@@ -183,6 +185,21 @@ class BlockMixin:
         if "/" in addr or not addr[:1].isdigit():
             return "inconnu (une plage ou une étiquette, pas une adresse)"
         return ", ".join(sorted(holders["map"].get(addr, ()))) or None
+
+    def _also_cuts(self, rule, t: dict, holders: dict) -> str:
+        """I4D's review: what a deny of ours, kept, covers on its NIC side that is no longer
+        the NIC's address, and who holds it now — the VM it cuts off, said (as `drop_failed`
+        says it). The isolation's as the block's."""
+        side = "destination" if _enum_text(getattr(rule, "direction", "")) == "inbound" else "source"
+        mine = {a.lower() for a in t["private_ips"] or []}
+        said = []
+        for addr in _prefixes(rule, side) or ("*",):
+            if addr in mine:
+                continue
+            on = ("toutes les cartes derrière ce NSG" if addr in ("*", "any", "0.0.0.0/0")
+                  else self._address_holder(addr, t["nic_id"], holders))
+            said.append(f"{addr}, à {on}, qu'il coupe" if on else f"{addr}, à personne")
+        return " ; ".join(said)
 
     def _block_ip_vm(self, ip: str, resource_id: str, rg: str, vm_name: str,
                      threat_port: int | None = None) -> dict:
@@ -435,7 +452,8 @@ def _describe_left(left: list[dict]) -> str:
             f"à nous, sur {x['to']}, n'a pas pu être retirée ({x['on']}) — si elle vise l'ancienne adresse, elle "
             "coupe la VM qui l'a reçue ; " if x.get("kind") == "drop_failed" else
             f"notre deny sur {x['to']}, avant {x['on']} ; celle qui la remplace passe après — la retirer "
-            "ouvrirait la VM bloquée ; " if x.get("kind") == "before_allow" else
+            "ouvrirait la VM bloquée" + (f" ; il couvre aussi {x['also']}" if x.get("also") else "") + " ; "
+            if x.get("kind") == "before_allow" else
             f"notre deny sur {x['to']}, plus une adresse de la VM bloquée : {x['on']} — une règle à notre nom "
             "passée en autorisation par un tiers l'attend derrière, le retirer ouvrirait cette VM ; "
             if x.get("kind") == "deny" else

@@ -417,14 +417,14 @@ def _save_block_state(
             "threat_port": threat_port,
         })
     else:
-        # The IP is already recorded (a retry after a partial block, or a block of
-        # another scope). Previously this call was silently dropped, so the rules it
-        # had just placed were unknown to unblock. Merge instead: every rule in place
-        # stays recorded, and a subnet-wide rule becomes the entry's single rule.
+        # The IP already recorded (a retry, another scope): merged, every rule known to unblock.
+        # Written whole, it supersedes a failed or cut-off unblock: its marks go (L1B, #355).
         if not scoped:
             prev.update(nsg=nsg, nsg_scope=nsg_scope, rule=rule, scoped=False)
         prev["placements"] = _merge_placements(prev.get("placements") or [], placements or [])
         prev["partial"] = partial
+        for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):
+            prev.pop(mark, None)
         if threat_port is not None:
             prev["threat_port"] = threat_port
     _write_state(_BLOCK_STATE_DIR, vm_name, resource_id, entries)

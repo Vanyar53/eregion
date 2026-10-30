@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.4.9] — 2026-10-30 — "held in check"
+
 ### Security
 - **The azurerm canary without a long-lived secret, at least privilege** (P04, P-04 of the counter-audit, 30/10; `docs/operations.md`, « Le canari azurerm, sans secret »). The daily canary held a client secret, and its principal could create a resource group in the subscription.
   - **OIDC**: the canary's job alone asks GitHub for a short-lived token (`id-token: write`), which Entra ID exchanges for the principal `eregion-canary`, trusted for the repository's environment `canary` only (`repo:Vanyar53/eregion:environment:canary`), which only `main` deploys: no other job, `publish.yml`'s included, gets that principal. Terraform reads the token itself (`ARM_USE_OIDC`, never the az session: `ARM_USE_CLI=false`), on each line of the matrix — documented by the provider at v3.117.1, v4.81.0 and v5.12.0; `az` gets the same kind of token from `curl`. No third party's action beside it; no `CLIENT_SECRET` left in the workflow. Its identifiers are the environment's secrets (`CANARY_AZURE_*`), never variables; without them, or off `main`, the run fails.

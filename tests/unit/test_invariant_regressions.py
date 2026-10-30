@@ -3754,6 +3754,44 @@ def test_an_older_versions_turned_deny_all_put_back_by_the_operator_lets_the_rel
           "/subscriptions/s/resourcegroups/rg-new/providers/microsoft.network/networkinterfaces/api-nic-5",
           0, 4, "rg-app2", "api", None, "Linux"))
 
+
+_U1_9001_NET = {
+    "subnet_nsg": [], "edge_nsg": None, "tier_rules": [_tpl("allow-https", 100), _tpl("allow-lateral-out", 100)],
+    "nics": {"web-nic": {"own": "tier", "policy": False, "rules": [
+                 _tpl("allow-ssh", 100), _tpl("allow-lateral-out", 100), _tpl("deny-lateral-in", 130)]},
+             "db-nic-0": {"own": None, "policy": True,
+                          "rules": [_tpl("allow-lateral-out", 100), _tpl("deny-lateral-in", 130)]},
+             "db-nic-1": {"own": "tier", "policy": False, "rules": [_tpl("allow-lateral-out", 100)]},
+             "api-nic": {"own": "dedicated", "policy": False, "rules": []}},
+    "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+    "legacy": None, "data_subnet": [_tpl("allow-lateral-out", 100), _tpl("deny-lateral-in", 130)]}
+_RG_NEW_WEB_ID = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="U1 outside I4D (to route): an orphan rule kept behind a turned rule, its card missing")
+def test_an_orphan_kept_behind_a_turned_rule_is_said(monkeypatch):
+    """Seed 9001 at 2 000 on I4D's review branch (once its I7 settled), present on `main` 9f72a91
+    too, shrunk to five steps: « U1: the orphan rule glorfindel-iso-web-web-nic-8b70f2 kept behind a
+    rule turned into an allow (['glorfindel-block-…-web-web-nic-8b70f2']), cutting […/rg-app1/…/api]:
+    no pending card names it ». Two isolations of web at once, then three `turned_then_address_reused`
+    (web of rg-app1, of rg-app2 under a throttled read, the new web of rg-new) and an address
+    changed. The posture's orphan card (`orphans.py`), not the isolation's path: not I4D's family,
+    frozen for its own lot. Strict: once fixed, this fails, and the mark goes."""
+    _run(monkeypatch, _U1_9001_NET,
+         ("isolate_two", WEB1, WEB1, None, WEB1, WEB1, None, False),
+         ("turned_then_address_reused", WEB1, WEB1, None, 22, "both", None,
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"),
+          "non_disruptive", False, 22, True, "rg-app2", "batch", None, "Linux", True, "human_only", "human_only"),
+         ("turned_then_address_reused", WEB2, WEB2, (4, "before-429"), 22, "both", 22,
+          (_S101_NSG.format("rg-net", "nsg-tier"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+          "human_only", False, 22, False, "rg-new", "web", None, "Linux", False, "human_only"),
+         ("customer_changes_ip",
+          "/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.network/networkinterfaces/batch-nic-4", 0, 4),
+         ("turned_then_address_reused", _RG_NEW_WEB_ID, _RG_NEW_WEB_ID, None, 22, "both", 22,
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-5-6b7ab3-out"),
+          "human_only", False, 22, False, "rg-app1", "api", None, "Linux", True, "non_disruptive"))
+
 _S42_ISO_NET = {
     "subnet_nsg": [], "edge_nsg": None, "tier_rules": [],
     "nics": {"web-nic": {"own": "dedicated", "policy": False, "rules": [

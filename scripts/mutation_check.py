@@ -6137,6 +6137,53 @@ TESTS["M2125"] = " ".join(f"{_RT}{t}" for t in (
 TESTS.update({"M2123": f"{_RT}a_state_refused_on_one_vm_does_not_stop_the_pass",
               "M2124": f"{_RT}a_state_refused_on_a_block_is_printed_by_the_watch"})
 
+# L1B (#355): a disappearance said behind a bypass (an isolation), and after an unblock that
+# failed or was cut off (a block written again whole). M2040–M2043.
+_L1B_ISO = ("tests/unit/test_invariant_regressions.py::test_an_isolation_gone_under_a_bypass_is_said_gone "
+            "tests/unit/test_glorfindel.py::test_a_bypassed_isolation_says_the_recorded_rules_that_are_gone "
+            f"{_RT}rules_gone_behind_a_bypass_are_said_gone_and_put_back_once")
+_L1B_BLK = ("tests/unit/test_invariant_regressions.py::test_a_block_written_again_after_an_unblock_is_said_gone "
+            f"{_RT}a_block_written_again_after_a_failed_unblock_is_checked "
+            f"{_RT}only_a_whole_block_supersedes_a_cut_off_unblock")
+MUTANTS += [
+    ("M2040", "a bypassed isolation drops the recorded rules that are gone: neither put back nor said (L1B)", VER,
+     "            gone = self._recorded_gone(resource_id, vm_name, bypassed, cache)\n",
+     "            gone = []\n"),
+    ("M2041", "a block written again whole keeps an unblock's marks: never checked again (L1B)", STA,
+     '        for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):\n',
+     "        for mark in ():\n"),
+    ("M2042", "a listing that can't be read says the isolation's rules gone (L1B)", VER,
+     "            gone += [n for n in names if rules is not None and n.lower() not in present and n not in gone]\n",
+     "            gone += [n for n in names if n.lower() not in present and n not in gone]\n"),
+    ("M2043", "a partial block written again ends a cut-off unblock: its interruption unsaid (L1B)", STA,
+     '        for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):\n',
+     '        for mark in ("unblock_failed", "unblocking_at", "stale_alerted_at"):\n'),
+]
+TESTS.update({"M2040": f"{_L1B_ISO} {INVARIANTS}", "M2041": f"{_L1B_BLK} {INVARIANTS}",
+              "M2042": _L1B_ISO, "M2043": _L1B_BLK})
+# L1B, its review: only the bypassed NICs answer for what is gone, and a placement superseded
+# by another name of the NIC on its NSG is never said gone. M2044–M2046.
+_L1B_REV = " ".join(f"tests/unit/test_glorfindel.py::test_{t}" for t in (
+    "a_superseded_second_name_is_never_said_gone", "a_nic_that_holds_is_never_said_gone_beside_a_bypassed_one",
+    "one_direction_gone_behind_a_bypass_is_said"))
+MUTANTS += [
+    ("M2044", "a NIC that holds answers for what is gone beside a bypassed one: a stale placement said gone (L1B, review)",
+     VER, "            gone = self._recorded_gone(resource_id, vm_name, bypassed, cache)\n",
+     "            gone = self._recorded_gone(resource_id, vm_name, targets, cache)\n"),
+    ("M2045", "a placement superseded by the NIC's other name said gone: a false drift card (L1B, review)", VER,
+     "            if present & others:\n                continue                                   # superseded on this NSG\n",
+     "            if False:\n                continue                                   # superseded on this NSG\n"),
+    ("M2046", "a placement whose own inbound rule stands skipped: its outbound one gone unsaid (L1B, review)", VER,
+     '                      for n in (b, f"{b}-out")} - {n.lower() for n in names}\n',
+     '                      for n in (b, f"{b}-out")}\n'),
+]
+MUTANTS += [
+    ("M2047", "a placement on an NSG that no longer governs its NIC said gone (L1B, review)", VER,
+     '            if not names or where not in views.get((p.get("nic_id") or "").rstrip("/").lower(), set()):\n',
+     "            if not names:\n"),
+]
+_L1B_REV += " tests/unit/test_glorfindel.py::test_a_placement_on_an_nsg_that_no_longer_governs_the_nic_is_never_said_gone"
+TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046", "M2047")})
 # DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
 # (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
 # environment and its connections, the video kept outside the repository.

@@ -87,6 +87,7 @@ class VerifyMixin:
         # deny was read from.
         shadowed: list[dict] = []
         unknown: list[str] = []
+        bypassed: list[dict] = []           # the NICs no deny of ours holds (L1B)
         for t in targets:
             scope = {"inbound_src": None, "inbound_dst": t["private_ips"] or None,
                      "outbound_src": t["private_ips"] or None, "outbound_dst": None}
@@ -105,11 +106,20 @@ class VerifyMixin:
                     unknown += [u for u in nic_unknown if u not in unknown]
                 else:
                     shadowed += nic_shadowed
+                    bypassed += [t] if nic_shadowed else []
         if shadowed:
+            # What is gone goes with the bypass (L1B, as I4C for a block): an older pair
+            # bypassed on the NIC's NSG, the rules the state records gone from the subnet's
+            # — « contournée » alone dropped them, and the reassertion, finding nothing
+            # missing, neither put them back nor said so (L1). Only the bypassed NICs answer:
+            # one that holds is not gone, whatever stale placement it keeps (review).
+            gone = self._recorded_gone(resource_id, vm_name, bypassed, cache)
             return {
                 "verified": False, "method": "nsg_check", "shadowed_by": shadowed,
+                **({"missing_rules": gone} if gone else {}),
                 "error": "isolation contournée : " + _describe_shadowing(shadowed)
-                         + " passe avant le deny de Glorfindel",
+                         + " passe avant le deny de Glorfindel"
+                         + (f" ; règles disparues : {', '.join(gone)}" if gone else ""),
             }
         if unknown:
             return self._precedence_unknown(unknown, nics_covered=len(targets))
@@ -117,6 +127,34 @@ class VerifyMixin:
         platform_open = [t["nic_short"] for t in targets if t["nic_id"] not in held]
         return {"verified": True, "method": "nsg_check", "nics_covered": len(targets),
                 **({"platform_open": platform_open, "note": PLATFORM_OPEN_NOTE} if platform_open else {})}
+
+    def _recorded_gone(self, resource_id: str, vm_name: str, targets: list[dict], cache: dict) -> list[str]:
+        """The rules the state's placements record, absent from the listing of an NSG that
+        governs their NIC now — `targets`, the bypassed NICs (one our quarantine holds is
+        never bypassed: nothing of ours to compare, I1F). An unreadable state or listing
+        claims nothing: what can't be read is never said gone. A placement whose NSG carries
+        another name of the NIC (its first or second, I4B) was superseded there — a rewrite
+        took it off and the merge kept its record: never said gone (L1B, review)."""
+        state = _load_isolation_state(resource_id) or {}
+        views = {t0["nic_id"].rstrip("/").lower(): {(v["nsg_rg"].lower(), v["nsg_name"].lower())
+                                                    for v in self._nic_nsg_views(t0)}
+                 for t0 in targets}
+        gone: list[str] = []
+        for p in state.get("placements") or []:
+            names = [n for n in (p.get("rule_in"), p.get("rule_out")) if n]
+            where = (str(p.get("nsg_rg") or "").lower(), str(p.get("nsg_name") or "").lower())
+            if not names or where not in views.get((p.get("nic_id") or "").rstrip("/").lower(), set()):
+                continue
+            rules = self._list_rules(cache, p["nsg_rg"], p["nsg_name"])
+            present = {_rule_name(r).lower() for r in rules or []}
+            t0 = next(t for t in targets if t["nic_id"].rstrip("/").lower() == p["nic_id"].rstrip("/").lower())
+            others = {n.lower() for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"],
+                                                                     t0["nic_id"])
+                      for n in (b, f"{b}-out")} - {n.lower() for n in names}
+            if present & others:
+                continue                                   # superseded on this NSG
+            gone += [n for n in names if rules is not None and n.lower() not in present and n not in gone]
+        return gone
 
     def _shadowed_deny(
         self, cache: dict, nsg_rg: str, nsg_name: str, rule_name: str, **scope,

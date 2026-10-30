@@ -144,7 +144,7 @@ Glorfindel chose the right action on all six by reasoning from raw signal indica
 
 ### Caught in the wild
 
-On 2026-06-14, Glorfindel detected a **real SSH brute force** against the exposed sandbox VM — a genuine internet attacker (IP `95.47.246.223`, 26 failed attempts), not an Annatar scenario. Running in `human_only` / observe-only mode, it:
+On 2026-06-14, Glorfindel detected a **real SSH brute force** against the exposed sandbox VM — a genuine internet attacker (26 failed attempts), not an Annatar scenario. Running in `human_only` / observe-only mode, it:
 
 - detected the attack from live Log Analytics Syslog data;
 - ran `investigate` → found `successful_auth_from_ip` empty → the brute force **failed**, attacker still outside;

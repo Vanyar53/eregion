@@ -3637,6 +3637,7 @@ def test_a_perimeter_lifted_by_a_neighbour_is_said_behind_a_bypass(monkeypatch):
          ("unblock", WEB1, WEB1, None),
          ("reassert", "non_disruptive", None))
 
+
 def _kept_world(monkeypatch, isolate=False):
     """api on nsg-api-nic of its own (no quarantine), blocked or isolated by rules, its inbound
     rule turned into an allow by someone (the test's journal, `tampered`), its IP changed, a

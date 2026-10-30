@@ -3564,3 +3564,30 @@ def test_the_sequence_of_pr_342_reasserts_without_opening_the_vm_at_the_old_addr
     new VM opened. The only sequence that catches M1898 (the isolation written over what the
     guard keeps) outside its own."""
     _run(monkeypatch, _PR342_NET, *_PR342_STEPS)
+
+
+
+# ── I4B: the nightly run of 30/10 on 897cd21, replayed by every macOS job since (its database) ──
+
+def test_the_nightly_isolation_after_an_address_reused_under_a_turned_rule(monkeypatch):
+    """The nightly run of 30/10 (897cd21), saved in Hypothesis's cached database and replayed
+    by the macOS job of every PR since: « I4: an operation on …/rg-app1/…/web opened flows of
+    …/rg-app1/…/batch ». web isolated on the tier NSG (a 429 at its eighth call), blocked, its
+    rule turned into an allow there, its IP changed, batch at the old address on that NSG; a
+    customer IP change elsewhere; then web isolated again as its interrupted release begins.
+    I4B's seventh case: the isolation written again moved our deny off the old address, the
+    turned rule behind it — batch opened. On I4B the blob no longer reproduces (the step goes
+    on): here the rest of the step's draws — the release cut at its first call, no
+    reassertion."""
+    tier = "/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-tier"
+    _run(monkeypatch, {**_net(web_nic={"own": "tier"}, api_nic={"rules": [_rule(
+        "deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                     destination_address_prefix="*", destination_port_range="*"))]},
+        data_subnet=[]), "config": {"forensic": ["10.9.9.9"], "rg": "", "quarantine": False, "readable": True}},
+         ("isolate", WEB1, WEB1, (8, "before-429")),
+         ("address_reused_under_a_turned_rule", WEB1, WEB1, None, 22,
+          (tier, "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"), _nic("rg-app1", "web-nic"), 0, 4,
+          "rg-app1", "batch", "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/"
+          "networkSecurityGroups/nsg-tier", "Linux"),
+         ("customer_changes_ip", _nic("rg-app2", "web-nic"), 0, 4),
+         ("interrupted_release", WEB1, WEB1, None, 1, "before-crash", False))

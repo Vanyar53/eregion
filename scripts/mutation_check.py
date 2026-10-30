@@ -4820,7 +4820,8 @@ _I4B_TESTS = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in 
     "test_the_unblock_finds_the_block_of_a_nic_left_with_no_nsg_it_knows",
     "test_the_search_on_every_nsg_keeps_a_turned_rule_aimed_at_the_vm_that_took_the_address",
     "test_the_sequence_of_pr_342_reasserts_without_opening_the_vm_at_the_old_address",
-    "test_the_reset_preview_says_what_it_keeps"))
+    "test_the_reset_preview_says_what_it_keeps",
+    "test_the_nightly_isolation_after_an_address_reused_under_a_turned_rule"))
 _I4B = f"{_I4B_TESTS} {INVARIANTS}"
 MUTANTS += [
     ("M1890", "a turned allow asked about before it goes read as nothing to keep (`!= deny`): the VM given "

@@ -5652,6 +5652,8 @@ MUTANTS += [
      "docs/operations.md",
      """    [ "${(P)id}" = "$OLD" ] && [ "${${(P)sec}[1,3]}" = "$h" ] && echo""",
      """    [ "${(P)id}" = "$OLD" ] && echo"""),
+    ("M2112", "the canary's job outside its environment: its credential back on refs/heads/main, publish.yml's "
+              "token takes its principal (P04)", CAN, "    environment: canary\n", ""),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
 

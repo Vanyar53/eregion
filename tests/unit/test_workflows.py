@@ -682,3 +682,26 @@ def test_the_old_principal_goes_without_cutting_the_operators_machine():
     deletes = [m.start() for m in re.finditer(r"az ad app credential delete", removal)]
     assert deletes and compare < min(deletes)
     assert all("--key-id <keyId de cet identifiant>" in removal[d:d + 80] for d in deletes)
+
+
+def _environment(job: dict) -> str | None:
+    env = job.get("environment")
+    return env.get("name") if isinstance(env, dict) else env
+
+
+def test_the_canarys_token_names_its_environment_which_no_other_job_enters():
+    """publish.yml holds `id-token: write` on main too: a federated credential on refs/heads/main
+    would hand its pinned third-party actions the canary's principal. The canary's job is in the
+    environment `canary`, which only main deploys; the credential's subject names it, and no
+    other job enters it; its identifiers are that environment's secrets (P04 review)."""
+    assert _environment(_canary_job()) == "canary"
+    others = [(p.name, n) for p in WORKFLOWS if p != CANARY
+              for n, j in (_load(p).get("jobs") or {}).items() if isinstance(j, dict) and _environment(j) == "canary"]
+    assert others == []
+    section = _canary_section()
+    assert re.findall(r'"subject": "([^"]+)"', section) == ["repo:Vanyar53/eregion:environment:canary"]
+    put = section.index('gh api -X PUT "repos/$REPO/environments/canary"')
+    assert '"protected_branches": false, "custom_branch_policies": true' in section[put:put + 200]
+    assert 'deployment-branch-policies" -f name=main -f type=branch' in section[put:]
+    sets = [line for line in section.splitlines() if "gh secret set" in line]
+    assert len(sets) == 3 and all("--env canary" in line for line in sets), sets

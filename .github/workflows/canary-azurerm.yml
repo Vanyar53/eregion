@@ -6,12 +6,13 @@ name: canary-azurerm
 #
 # No long-lived secret (P-04): the job asks GitHub for a short-lived OIDC token (`id-token:
 # write`, this job's alone) and exchanges it with Entra ID for the principal `eregion-canary`,
-# whose federated credential trusts this repository's main only
-# (repo:Vanyar53/eregion:ref:refs/heads/main). Needs repository SECRETS — never variables, which
-# print in clear in public logs — CANARY_AZURE_CLIENT_ID, CANARY_AZURE_TENANT_ID and
-# CANARY_AZURE_SUBSCRIPTION_ID; WITHOUT them, or off main, the run FAILS — a canary that stays
-# green while testing nothing is worse than none (third review, T16). Jonathan's setup:
-# docs/operations.md, « Le canari azurerm, sans secret ».
+# whose federated credential trusts this repository's environment `canary` only
+# (repo:Vanyar53/eregion:environment:canary), which deploys from main only: no other job — not
+# publish.yml's, whose token names refs/heads/main — gets that principal. Needs the environment's
+# SECRETS — never variables, which print in clear in public logs — CANARY_AZURE_CLIENT_ID,
+# CANARY_AZURE_TENANT_ID and CANARY_AZURE_SUBSCRIPTION_ID; WITHOUT them, or off main, the run
+# FAILS — a canary that stays green while testing nothing is worse than none (third review,
+# T16). Jonathan's setup: docs/operations.md, « Le canari azurerm, sans secret ».
 #
 # Least privilege: the principal is Contributor on one group, rg-eregion-canary, created once by
 # Jonathan; the canary creates no group. Each run creates free resources only (VNet, NSG, NICs),
@@ -34,6 +35,8 @@ jobs:
   canary:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The OIDC token's subject: repo:Vanyar53/eregion:environment:canary, the one Entra ID trusts.
+    environment: canary
     permissions:
       contents: read
       id-token: write

@@ -252,7 +252,7 @@ function renderPlan() {
     return `<span class="${cls}">${mark} ${esc(c.text)}</span>`;
   }).join('');
   box.innerHTML = `<div class="plan-head"><b>PLAN</b>
-      <span>${Number(t.wires)} wire(s) · ${Number(t.refused)} refused · ~${esc(dur(Number(t.estimate_s)))} · one after the other</span>
+      <span>${Number(t.wires)} wire(s) · ${Number(t.refused)} refused · ~${Math.round(Number(t.estimate_s) / 60)} min · one after the other</span>
       <span class="meta">what Orodruin will check before anything runs — phase (a): nothing is launched</span>
       <button type="button" class="mini" ${_on('click', 'clear')}>Clear wires</button></div>
     <div class="checks">${checks}</div>

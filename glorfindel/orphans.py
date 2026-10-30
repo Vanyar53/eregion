@@ -9,7 +9,9 @@ it cuts is not one Glorfindel isolates or blocks) AND the VM it cuts runs in
 `non_disruptive` or `full_auto` — taking off a rule of ours that cuts a VM by mistake
 disrupts nothing. In `human_only` the card is all: no write, it says what to run (D-A,
 27/10). A rule said is not said again while it stands (orphan_alerts.json): its card
-stays, or, acknowledged, stays closed; it closes once the rule is no longer an orphan.
+stays, or, acknowledged, stays closed; it closes once the rule is no longer an orphan. A
+card says what the rule cuts — the VM, its NIC —: once the address passes to another VM,
+the card is replaced, the rule said again for the one it cuts now (U1O).
 """
 from __future__ import annotations
 
@@ -60,6 +62,12 @@ def _save_alerts(alerts: dict) -> None:
 
 def _short(ref: str) -> str:
     return (ref or "").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _who(h: dict) -> str:
+    """What a rule cuts, said (U1O): the VM and its NIC — the NIC alone when no VM holds it."""
+    vm, nic = _short(h.get("vm_id") or ""), _short(h.get("nic_id") or "")
+    return f"{vm} (carte {nic})" if vm and nic else vm or nic
 
 
 def _resource(o: dict) -> str:
@@ -130,6 +138,26 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
     def _pending(card: str) -> bool:
         return any(e.get("id") == card for e in escalations.pending())
 
+    # U1O: a card is about the VM the rule cut when it was said (the store merges by VM).
+    # The address it aims at may pass to another VM since — its holder's IP changed, or
+    # the holder deleted, and Azure hands the address to the next NIC: the card then says
+    # a VM is cut that no longer is, and the one cut now is named by none. Replaced: a
+    # pending card closed and every rule it spoke for said again; an acknowledged one stays
+    # closed — it was about the other VM —, the rule said again for the one it cuts now.
+    about = {e.get("id"): (e.get("resource_id") or "").lower() for e in escalations.all_escalations()}
+    for o in orphans:
+        k = f"orphan-{o['nsg_id']}/{o['rule']}".lower()
+        card = alerts.get(k)
+        if card not in about or about[card] == _resource(o).lower():
+            continue
+        spoke_for = [k]
+        if _pending(card):
+            escalations.resolve(card, note=f"Remplacée : {o['rule']} vise une adresse passée depuis à "
+                                           f"{_short(_resource(o))} (U1O).")
+            spoke_for = [x for x, c in alerts.items() if c == card]
+        for x in spoke_for:
+            del alerts[x]
+
     # I5Q: a deny kept behind one of our rules turned into an allow is said with that rule,
     # never with its delete alone. The store merges the cards of a VM (its first reason
     # stays): the card of the VM's kept denies names every turned rule they wait behind.
@@ -189,11 +217,11 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         if k in alerts:
             continue                              # said: its card pending, or acknowledged
         if hit:
-            victim = _short(hit["vm_id"] or hit["nic_id"])
             reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus, elle "
-                      f"vise {hit['ip']} — adresse de {victim} aujourd'hui, "
+                      f"vise {hit['ip']} — adresse de {_who(hit)} aujourd'hui, "
                       + ("qui est donc coupé(e)." if cut else
                          "que ce NSG ne gouverne pas : coupé(e) s'il passe derrière."))
+            reason += "".join(f" Elle coupe aussi {h['ip']}, adresse de {_who(h)}." for h in cut[1:])
         else:
             reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus "
                       f"(vise {', '.join(o['ips']) or '*'}). Aucune carte ne porte cette adresse aujourd'hui.")

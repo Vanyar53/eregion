@@ -6346,6 +6346,37 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_console_shots.py"
               for mid in ("M2251", "M2250", "M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
+# U1O (#372): an orphan said for a VM whose address passed to another since — the card stayed on
+# the VM it no longer cuts, the one it cuts named by none (seed 9001 at 2 000); what it cuts said
+# with the NIC, every holder. M2260–M2265.
+_U1O = " ".join(f"tests/unit/test_orphan_sweep.py::test_{t}" for t in (
+    "a_kept_deny_whose_address_passed_to_another_vm_is_said_for_it",
+    "an_orphan_said_for_a_vm_is_said_again_when_its_address_passes_to_another",
+    "an_orphan_whose_address_nobody_holds_any_more_is_said_of_its_nsg",
+    "a_card_two_rules_share_when_one_moves_off_its_vm", "an_orphan_cutting_two_vms_says_both_with_their_nics"))
+MUTANTS += [
+    ("M2260", "an orphan's card about a VM it no longer cuts kept: the VM cut now named by none (U1O)", ORP,
+     "        if card not in about or about[card] == _resource(o).lower():\n",
+     "        if True:\n"),
+    ("M2261", "a card replaced leaves the other rules it spoke for unsaid (U1O)", ORP,
+     "            spoke_for = [x for x, c in alerts.items() if c == card]\n",
+     "            spoke_for = [k]\n"),
+    ("M2262", "an acknowledged card: the rules still about its VM said again (U1O)", ORP,
+     "        spoke_for = [k]\n",
+     "        spoke_for = [x for x, c in alerts.items() if c == card]\n"),
+    ("M2263", "the card names the VM cut, not its NIC (U1O)", ORP,
+     '    return f"{vm} (carte {nic})" if vm and nic else vm or nic\n',
+     "    return vm or nic\n"),
+    ("M2264", "a rule cutting two VMs says the first only (U1O)", ORP,
+     """            reason += "".join(f" Elle coupe aussi {h['ip']}, adresse de {_who(h)}." for h in cut[1:])\n""",
+     "\n"),
+    ("M2265", "the card replaced stays pending: it still says the former VM cut (U1O)", ORP,
+     "            escalations.resolve(card, note=f\"Remplacée : {o['rule']} vise ",
+     "            dict(card=card, note=f\"Remplacée : {o['rule']} vise "),
+]
+TESTS.update({mid: f"{_U1O} tests/unit/test_invariant_regressions.py::test_an_orphan_kept_behind_a_turned_rule_is_said"
+              for mid in ("M2260", "M2261", "M2262", "M2263", "M2264", "M2265")})
+TESTS["M2260"] += f" {INVARIANTS}"
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

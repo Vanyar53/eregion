@@ -90,7 +90,8 @@ def test_a_detected_attack_gives_its_times_and_its_proof(runs):
     assert out["contain"] == {"detect_s": 100.0, "decide_s": 125.0, "contain_s": None,
                               "detected": 1, "decided": 1, "contained": 0}
     assert out["last_proof"]["run_id"] == "r1" and out["last_proof"]["ttp"] == "T1110.001"
-    assert out["alone"] == {"contained": 0, "shadow": 1, "of": 1, "threshold": 0.7}
+    assert out["alone"] == {"contained": 0, "shadow": 1, "of": 1, "threshold": 0.7, "attacks": 1,
+                            "faults_mistaken": 0, "disruptive_on_faults": 0, "faults_unchecked": 0}
 
 
 def test_nothing_contained_alone_in_human_only_and_the_shadow_is_bounded(runs):
@@ -205,3 +206,66 @@ def test_the_time_to_contain_has_one_definition(runs):
     path.write_text(json.dumps(rec) + "\n")
     out = _compute(runs)
     assert out["alone"]["contained"] == 1 and out["contain"]["contain_s"] == 100.0
+
+
+# ── BL1 (#280): one definition with the campaign report's (analysis/containment.py) ──────────
+
+def _contained(runs, seen, verified_after, written_after, signal_id="s-1"):
+    """A cycle of the watch that isolated alone, read back ``verified_after`` s after the signal,
+    its line written later (memory, notification)."""
+    rec = {"timestamp": (seen + timedelta(seconds=written_after)).isoformat(),
+           "signal": {"event": "detection", "ttp": "T1136.001", "resource_id": VM, "signal_id": signal_id,
+                      "timestamp": seen.isoformat(), "context": {"rule_name": "r", "attribution": "asset"}},
+           "action": "isolate_vm", "confidence": 0.9, "escalate": False,
+           "outcome": {"status": "isolated", "executed": True, "verified": True,
+                       "verified_at": (seen + timedelta(seconds=verified_after)).isoformat()},
+           "resolved_autonomy_mode": "non_disruptive"}
+    with open(runs / "watch-1_debug.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def test_the_time_to_contain_ends_at_the_read_back_on_azure(runs):
+    """M1789: the overview's time to contain ends at the read-back (verified_at), as the
+    campaign's — not at the cycle's line, written after it."""
+    a = NOW - timedelta(hours=3)
+    _report(runs, "r1", "T1136.001", a, latency=60.0)
+    _contained(runs, a + timedelta(seconds=60), verified_after=20, written_after=45)
+    out = _compute(runs)
+    assert out["alone"]["contained"] == 1 and out["contain"]["contain_s"] == 80.0
+
+
+def test_an_isolation_that_did_not_hold_is_not_contained_alone(runs):
+    a = NOW - timedelta(hours=3)
+    _report(runs, "r1", "T1136.001", a, latency=60.0)
+    _contained(runs, a + timedelta(seconds=60), verified_after=20, written_after=45)
+    card = {"escalation_type": "verification_failed", "resource_id": VM, "action": "isolate_vm",
+            "timestamp": (a + timedelta(minutes=5)).isoformat()}
+    since = ind.since_window(NOW)
+    out = ind.compute(ind.read_runs(api._run_reports(), since.timestamp()),
+                      api._watch_cycles(since.timestamp()), [], CATALOG, {}, {}, 0.7, NOW.timestamp(),
+                      all_cards=[card])
+    assert out["alone"]["contained"] == 0 and out["contain"]["contain_s"] is None
+    # The operator released it before the card: the card is no longer this containment's.
+    (runs / "manual_actions.jsonl").write_text(json.dumps(
+        {"timestamp": (a + timedelta(minutes=3)).isoformat(), "action": "release_isolation",
+         "signal": {"resource_id": VM}, "outcome": {"status": "released"}}) + "\n")
+    out = ind.compute(ind.read_runs(api._run_reports(), since.timestamp()),
+                      api._watch_cycles(since.timestamp()), [], CATALOG, {}, {}, 0.7, NOW.timestamp(),
+                      all_cards=[card], liftings=api._manual_liftings(since.timestamp()))
+    assert out["alone"]["contained"] == 1
+
+
+def test_a_fault_taken_for_an_attack_is_counted_apart_never_an_attack(runs):
+    """A decision to isolate on a fault's VM during the fault: counted apart, never among the
+    attacks; the attacks of the period, missed ones included, beside the detected."""
+    start = NOW - timedelta(hours=6)
+    (runs / "g1.json").write_text(json.dumps({
+        "run_id": "g1", "mitre": "", "result": "PASS", "scenario": "VM shutdown",
+        "metrics": {"injector": "gothmog", "fault": "vm-shutdown", "targets": [VM],
+                    "fault_start": start.isoformat(),
+                    "fault_end": (start + timedelta(minutes=5)).isoformat()}}))
+    _contained(runs, start + timedelta(minutes=2), verified_after=10, written_after=20, signal_id="f-1")
+    _report(runs, "r2", "T1136.001", NOW - timedelta(hours=1), detection="missed", latency=None)
+    out = _compute(runs)
+    assert out["alone"]["faults_mistaken"] == 1 and out["alone"]["disruptive_on_faults"] == 1
+    assert out["alone"]["contained"] == 0 and out["alone"]["of"] == 0 and out["alone"]["attacks"] == 1

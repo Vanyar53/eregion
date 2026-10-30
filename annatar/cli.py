@@ -271,7 +271,10 @@ def campaign():
 @click.option("--allow-destructive", is_flag=True, help="Permit destructive (testdata-only) techniques.")
 @click.option("--llm/--no-llm", "use_llm", default=False, help="Use the LLM planner (default: deterministic).")
 @click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
-def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, runs_dir):
+@click.option("--declared", "declared_path", default=None, type=click.Path(dir_okay=False),
+              help="A declared campaign (BL1): exactly its techniques, in its order — no planner. "
+                   "Checked against the catalog first (annatar/campaign/declared.py).")
+def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, runs_dir, declared_path):
     """Plan a kill-chain and materialize its scenarios (state: planned)."""
     from annatar.campaign.catalog import load_catalog
     from annatar.campaign.manifest import (
@@ -299,7 +302,30 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
         raise SystemExit(1)
 
     catalog = load_catalog()
-    plan = plan_campaign(objective=objective, max_scenarios=max_scenarios, use_llm=use_llm)
+    if declared_path:
+        # BL1: the techniques a human declared, checked against the catalog — never the planner's.
+        from annatar.campaign import declared
+        from annatar.campaign.planner import CampaignPlan, PlannedTechnique
+        try:
+            decl = declared.load(declared_path)
+        except ValueError as e:
+            console.print(f"[red]Declared campaign refused:[/red] {e}")
+            raise SystemExit(1)
+        problems = declared.problems(decl, catalog)
+        vm = target.rstrip("/").rsplit("/", 1)[-1].lower()
+        if vm not in {t.lower() for t in decl.targets}:
+            problems.append(f"target {vm} is not one of the declaration's ({', '.join(decl.targets)})")
+        if problems:
+            console.print(f"[red]Declared campaign {decl.id or declared_path} refused:[/red]")
+            for p in problems:
+                console.print(f"  • {p}")
+            raise SystemExit(1)
+        plan = CampaignPlan(objective=objective or f"declared: {decl.id}", techniques=[
+            PlannedTechnique(ttp=ttp, tactic=catalog[ttp].get("tactic", ""), name=catalog[ttp].get("name", ""))
+            for ttp in decl.techniques])
+        max_scenarios = max(max_scenarios, len(plan.techniques))
+    else:
+        plan = plan_campaign(objective=objective, max_scenarios=max_scenarios, use_llm=use_llm)
 
     cid = new_campaign_id()
     cdir = campaign_dir(cid, runs_dir=runs_dir)
@@ -350,6 +376,9 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
         f"\n[dim]Review {cdir}/manifest.json, then:[/dim] "
         f"annatar campaign run {cid} --yes"
     )
+    if declared_path and decl.faults:
+        console.print(f"[dim]Its fault(s), played by Gothmog on the same target(s): "
+                      f"{', '.join(decl.faults)} (gothmog run <id>, docs/banc-bl1.md).[/dim]")
 
 
 @campaign.command(name="run")

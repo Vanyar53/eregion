@@ -22,8 +22,8 @@ Les incidents cloud courants sont contenus seuls, en quelques minutes, de façon
 
 | Indicateur | Ce qu'il mesure | Aujourd'hui |
 |---|---|---|
-| Temps pour contenir | de la première action malveillante à l'action vérifiée | détection par le RulePoller en 84 s à 3 min 30 (runs du 05 au 07/10) ; ransomware : RTO 21 à 25 min |
-| Part contenue seule | incidents contenus sans humain, sur tous les incidents | non mesurée |
+| Temps pour contenir | de la première action malveillante à l'action vérifiée | **calculé, à mesurer au banc** (BL1, 30/10 : `analysis/containment.py`, rapport de campagne, console) ; détection par le RulePoller en 84 s à 3 min 30 (runs du 05 au 07/10) ; ransomware : RTO 21 à 25 min |
+| Part contenue seule | incidents contenus sans humain, sur tous les incidents | **calculée, à mesurer au banc** (BL1, 30/10) ; une panne prise pour une attaque comptée à part |
 | Actions disruptives à tort | isolations et blocages jugés faux, parmi ceux qui sont jugés | pré-observation sur le banc depuis le 16/10 (H0, bree) : cartes jugées dans la War Room (TO JUDGE) ou Discord, résumé chaque lundi, `make glorfindel-host-report` ; le critère « parc réel » reste ouvert |
 | Couverture | techniques cloud pertinentes détectées, sur le catalogue | 6 TTPs validés en réel (`technique_catalog.yaml`) ; **calculée par la matrice de couverture (C1, 30/10)** : pour chaque technique et chaque panne, la dernière preuve et son âge, l'évolution sur douze semaines, une technique prouvée puis ratée dite en rouge — dans la console (Annatar, Gothmog, l'accueil) et `eregion coverage --check` |
 | Âge de la dernière preuve | depuis le dernier run qui a prouvé détection et réponse | objectif : moins de 30 jours ; dernier run Azure de bout en bout : 07/10 |
@@ -168,7 +168,7 @@ Le 28/10 : la **0.4.1** (échappement de la console, trois suites d'isolation), 
 **0.4.4** : la suite de la revue — SEC4 (la décision face à un modèle ou une mémoire imprévus, #275), SEC5 (les injecteurs et leurs canaux, #276), SEC6 (le processus : SECURITY.md, modèle de menace, README, CI, #277) — avec I3F (un défaut ancien de la vérification d'une levée, #287) et ADM1 (les `sudo` attendus des administrateurs, #284, après une semaine de cartes jugées sur H0 ; avant toute autonomie). Puis CI1 (#267), CI2 (#268), H2 (#266), REL1 (#269).
 
 **Ensuite, dans cet ordre** (décidé par Jonathan le 28/10) :
-1. **BL1** (#280) — la boucle avec la réponse exécutée sur le banc (`non_disruptive`, une technique et une panne dans la même campagne) : elle remplit le temps pour contenir et la part contenue seule, les deux indicateurs encore vides.
+1. **BL1** (#280) — la boucle avec la réponse exécutée sur le banc (`non_disruptive`, une technique et une panne dans la même campagne) : elle remplit le temps pour contenir et la part contenue seule, les deux indicateurs encore vides. **Préparé le 30/10** (`lot/bl1-boucle-reponse`, par un agent) : les deux indicateurs calculés depuis les traces d'une campagne (`analysis/containment.py` ; définitions et cas limites dans `docs/analysis.md`), publiés dans le rapport de campagne et la console ; la campagne déclarée (`annatar/campaign/declared/bl1-reponse.yaml` : `vm-shutdown`, puis T1136.001 par l'atomic, puis la reprise ; `annatar campaign plan --declared`) ; la watch qui répond proposée (H0 avec le rôle « Response » sur le seul groupe du banc, le temps de la campagne) ; test de bout en bout sur le faux Azure, mutants M1770–M1789. **Reste, avec Jonathan** : la session de banc, `docs/banc-bl1.md` (~1 h 30 à 2 h).
 2. **ID1** (#281) — rendre réels AL1 et C2 : les journaux d'activité et d'Entra ID envoyés au workspace du banc, mesurés ; puis R2 (#79).
 3. **DEP1** (#282) — litellm ≥ 1.95.0 avec le harnais ; puis B3 (#74) et B4 (#75).
 4. **J1** (#82) et **J2** (#83) — la preuve en production : détection seule, VM sentinelle.

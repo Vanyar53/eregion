@@ -42,6 +42,25 @@ def test_campaign_targets_have_their_help_lines():
     assert "make orodruin-campaign-run" in help_
 
 
+def test_bl1_targets_check_what_reaches_the_shell():
+    """BL1 (#280): the declared campaign and the containment targets, phony, with the names they
+    pass checked before any ssh — a campaign id or a run id is a plain name, a declaration a path
+    under the image without « .. »."""
+    phony = MAKEFILE.split(".PHONY:", 1)[1].split("\n\n", 1)[0]
+    lines = MAKEFILE.splitlines()
+    for target in ("campaign-containment", "glorfindel-host-containment"):
+        start = next(i for i, ln in enumerate(lines) if ln.split(" ")[0] == f"{target}:")
+        recipe = "\n".join(ln for ln in lines[start + 1:start + 4] if ln.startswith("\t"))
+        assert target in phony
+        assert '*[!A-Za-z0-9._,-]*) echo "CAMPAIGN ou FAULT_RUNS invalide"; exit 1' in recipe
+        assert "analysis.containment runs/campaigns/$(CAMPAIGN)" in recipe
+    plan = _recipe("orodruin-campaign-plan")
+    check = next(i for i, ln in enumerate(plan) if "CAMPAIGN_DECLARED invalide" in ln)
+    run = next(i for i, ln in enumerate(plan) if "annatar campaign plan" in ln)
+    assert check < run and "*..*" in plan[check]
+    assert "--declared /app/$(CAMPAIGN_DECLARED)" in plan[run]
+
+
 def test_campaign_plan_does_not_echo_the_target():
     # CAMPAIGN_TARGET is a resource_id that carries the subscription: the recipe line that
     # holds it is silenced with @ (convention of orodruin-stop), and prints a neutral line.

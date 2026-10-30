@@ -2523,6 +2523,10 @@ propres noms ne le sautent pas (une direction retirée reste dite — la version
 relecture la sautait). L'ancienne paire à noms fixes de la graine 42 n'est pas un nom de la carte : elle
 reste dite. Tests `test_glorfindel.py` (`…superseded_second_name…`, `…nic_that_holds…`,
 `…one_direction_gone…`, les deux premiers rouges sans le correctif) ; mutants M2044–M2046.
+(2) **Deux gardes de `_recorded_gone` sans test.** Un placement sur un NSG qui ne gouverne plus sa
+carte, ses règles absentes, n'est jamais dit disparu (`…no_longer_governs_the_nic…`, M2047). L'exception
+des cartes tenues par notre quarantaine est retirée : seules les cartes contournées arrivent là, et une
+carte en quarantaine ne l'est jamais (rien à nous à comparer) — son mutant était équivalent.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

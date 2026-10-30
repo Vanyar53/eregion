@@ -6147,7 +6147,7 @@ _L1B_BLK = ("tests/unit/test_invariant_regressions.py::test_a_block_written_agai
             f"{_RT}only_a_whole_block_supersedes_a_cut_off_unblock")
 MUTANTS += [
     ("M2040", "a bypassed isolation drops the recorded rules that are gone: neither put back nor said (L1B)", VER,
-     "            gone = self._recorded_gone(resource_id, vm_name, bypassed, held, cache)\n",
+     "            gone = self._recorded_gone(resource_id, vm_name, bypassed, cache)\n",
      "            gone = []\n"),
     ("M2041", "a block written again whole keeps an unblock's marks: never checked again (L1B)", STA,
      '        for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):\n',
@@ -6168,8 +6168,8 @@ _L1B_REV = " ".join(f"tests/unit/test_glorfindel.py::test_{t}" for t in (
     "one_direction_gone_behind_a_bypass_is_said"))
 MUTANTS += [
     ("M2044", "a NIC that holds answers for what is gone beside a bypassed one: a stale placement said gone (L1B, review)",
-     VER, "            gone = self._recorded_gone(resource_id, vm_name, bypassed, held, cache)\n",
-     "            gone = self._recorded_gone(resource_id, vm_name, targets, held, cache)\n"),
+     VER, "            gone = self._recorded_gone(resource_id, vm_name, bypassed, cache)\n",
+     "            gone = self._recorded_gone(resource_id, vm_name, targets, cache)\n"),
     ("M2045", "a placement superseded by the NIC's other name said gone: a false drift card (L1B, review)", VER,
      "            if present & others:\n                continue                                   # superseded on this NSG\n",
      "            if False:\n                continue                                   # superseded on this NSG\n"),
@@ -6177,7 +6177,13 @@ MUTANTS += [
      '                      for n in (b, f"{b}-out")} - {n.lower() for n in names}\n',
      '                      for n in (b, f"{b}-out")}\n'),
 ]
-TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046")})
+MUTANTS += [
+    ("M2047", "a placement on an NSG that no longer governs its NIC said gone (L1B, review)", VER,
+     '            if not names or where not in views.get((p.get("nic_id") or "").rstrip("/").lower(), set()):\n',
+     "            if not names:\n"),
+]
+_L1B_REV += " tests/unit/test_glorfindel.py::test_a_placement_on_an_nsg_that_no_longer_governs_the_nic_is_never_said_gone"
+TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046", "M2047")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

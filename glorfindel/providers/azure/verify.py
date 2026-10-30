@@ -113,7 +113,7 @@ class VerifyMixin:
             # — « contournée » alone dropped them, and the reassertion, finding nothing
             # missing, neither put them back nor said so (L1). Only the bypassed NICs answer:
             # one that holds is not gone, whatever stale placement it keeps (review).
-            gone = self._recorded_gone(resource_id, vm_name, bypassed, held, cache)
+            gone = self._recorded_gone(resource_id, vm_name, bypassed, cache)
             return {
                 "verified": False, "method": "nsg_check", "shadowed_by": shadowed,
                 **({"missing_rules": gone} if gone else {}),
@@ -128,17 +128,17 @@ class VerifyMixin:
         return {"verified": True, "method": "nsg_check", "nics_covered": len(targets),
                 **({"platform_open": platform_open, "note": PLATFORM_OPEN_NOTE} if platform_open else {})}
 
-    def _recorded_gone(self, resource_id: str, vm_name: str, targets: list[dict], held: set[str],
-                       cache: dict) -> list[str]:
+    def _recorded_gone(self, resource_id: str, vm_name: str, targets: list[dict], cache: dict) -> list[str]:
         """The rules the state's placements record, absent from the listing of an NSG that
-        governs their NIC now (not held by our quarantine). An unreadable state or listing
+        governs their NIC now — `targets`, the bypassed NICs (one our quarantine holds is
+        never bypassed: nothing of ours to compare, I1F). An unreadable state or listing
         claims nothing: what can't be read is never said gone. A placement whose NSG carries
         another name of the NIC (its first or second, I4B) was superseded there — a rewrite
         took it off and the merge kept its record: never said gone (L1B, review)."""
         state = _load_isolation_state(resource_id) or {}
         views = {t0["nic_id"].rstrip("/").lower(): {(v["nsg_rg"].lower(), v["nsg_name"].lower())
                                                     for v in self._nic_nsg_views(t0)}
-                 for t0 in targets if t0["nic_id"] not in held}
+                 for t0 in targets}
         gone: list[str] = []
         for p in state.get("placements") or []:
             names = [n for n in (p.get("rule_in"), p.get("rule_out")) if n]

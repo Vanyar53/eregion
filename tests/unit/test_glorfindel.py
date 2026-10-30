@@ -2332,6 +2332,18 @@ def test_a_nic_that_holds_is_never_said_gone_beside_a_bypassed_one(monkeypatch):
     assert out["verified"] is False and out["shadowed_by"] and "missing_rules" not in out
 
 
+def test_a_placement_on_an_nsg_that_no_longer_governs_the_nic_is_never_said_gone(monkeypatch):
+    """L1B, review: the NIC bypassed; a placement of it on an NSG that governs it no more
+    (the NIC moved to another NSG since), its rules absent there: nothing to say — they cut
+    nothing wherever they are."""
+    from glorfindel.actions import _save_isolation_state
+    _save_isolation_state(_RID, {"resource_id": _RID, "placements": [
+        _iso_placement("nic-a", "nsg-old", _iso_name())]})
+    older = [_nsg_rule(**_BENCH_ALLOW_SSH), *_deny_pair("glorfindel-isolation-deny-all-vm", 101, ip="10.0.0.5")]
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")], {"nsg-nic": older, "nsg-old": []})
+    assert out["verified"] is False and out["shadowed_by"] and "missing_rules" not in out
+
+
 def test_one_direction_gone_behind_a_bypass_is_said(monkeypatch):
     """Its own inbound rule still there, its outbound one gone, the older pair bypassed:
     the outbound one is said gone — a placement is skipped only for another name of the NIC."""

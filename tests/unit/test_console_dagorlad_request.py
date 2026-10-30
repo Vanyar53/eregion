@@ -163,3 +163,93 @@ def test_the_page_sends_two_identifiers_per_wire_and_takes_no_name():
     assert "<input" not in js and "<input" not in html and "<textarea" not in js + html
     assert "wires: S.wires.map(w => ({ experiment: w[0], target: w[1] }))" in js
     assert "fetch('/api/dagorlad/requests', { method: 'POST'" in js
+
+
+# ── What Orodruin says (part 6): its verdict, the request's status — pulled by the watch ──────
+
+def _plan_check(client) -> dict:
+    r = client.get("/api/dagorlad/plan", params=[("wire", f"T1110.001@{GONDOLIN}")]).json()
+    [check] = [c for c in r["checks"] if c["text"].startswith("Orodruin")]
+    return check
+
+
+def _contract(tmp_path, doc):
+    d = tmp_path / "runs" / "orodruin"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "contract.json").write_text(json.dumps(doc))
+
+
+def test_without_orodruins_verdict_the_page_says_unknown_here(client):
+    check = _plan_check(client)
+    assert check["ok"] is None and check["text"].startswith("Orodruin: unknown here")
+
+
+def test_orodruins_verdict_as_it_published_it(client, tmp_path):
+    _contract(tmp_path, {"verdict": "armed", "codes": [], "at": "2026-10-30T08:00:00+00:00"})
+    assert _plan_check(client)["ok"] is True
+    _contract(tmp_path, {"verdict": "passive", "codes": ["network_open"], "at": "2026-10-30T08:00:00+00:00"})
+    check = _plan_check(client)
+    assert check["ok"] is False and "network_open" in check["text"]
+
+
+@pytest.mark.parametrize("doc", [
+    {"verdict": "armed", "codes": [], "at": "2026-10-30T08:00:00+00:00", "subscription": "0000"},
+    {"verdict": "armed", "codes": ["network_open"], "at": "2026-10-30T08:00:00+00:00"},
+    "armed",
+])
+def test_a_verdict_not_of_its_shape_is_unknown_here(client, tmp_path, doc):
+    _contract(tmp_path, doc)
+    assert _plan_check(client)["ok"] is None
+
+
+def test_the_requests_status_is_what_orodruin_published(client, tmp_path):
+    rid = _post(client, ("T1110.001", GONDOLIN)).json()["request"]
+    first = client.get(f"/api/dagorlad/requests/{rid}").json()
+    assert first["written_here"] is True and first["status"] is None
+    d = tmp_path / "runs" / "orodruin" / "requests"
+    d.mkdir(parents=True)
+    status = {"request": rid, "state": "running", "at": "2026-10-30T08:00:00+00:00", "codes": [],
+              "wires": [{"rank": 1, "state": "running", "code": "", "runs": [], "result": ""}]}
+    (d / f"{rid}.json").write_text(json.dumps(status))
+    assert client.get(f"/api/dagorlad/requests/{rid}").json()["status"] == status
+    (d / f"{rid}.json").write_text(json.dumps({**status, "target": GONDOLIN}))
+    assert client.get(f"/api/dagorlad/requests/{rid}").json()["status"] is None
+    assert client.get("/api/dagorlad/requests/..%2Fx").status_code in (400, 404)
+    assert client.get("/api/dagorlad/requests/r-1").status_code == 400
+
+
+# ── « Stop all » (part 7): the command, what it stops, what stays in flight ───────────────────
+
+def _window(run_id, *, start, end=None, expires, targets=(GONDOLIN,), **extra):
+    from eregion_core.exercise import exercises_dir
+    d = exercises_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{run_id}.json").write_text(json.dumps({
+        "run_id": run_id, "injector": "annatar", "kind": "technique", "experiment": "T1110.001 ssh",
+        "targets": [t.lower() for t in targets], "start": start, "end": end, "expires": expires,
+        "destructive": False, **extra}))
+
+
+def test_stop_all_gives_the_kill_what_it_stops_and_what_stays_in_flight(client):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    iso = lambda d: (now + d).isoformat()  # noqa: E731
+    _window("open-1", start=iso(timedelta(minutes=-5)), expires=iso(timedelta(hours=1)),
+            request="r-20261030T080000Z-abcdef")
+    _window("grace-1", start=iso(timedelta(minutes=-30)), end=iso(timedelta(minutes=-5)),
+            expires=iso(timedelta(hours=1)))
+    _window("old-1", start=iso(timedelta(days=-2)), end=iso(timedelta(days=-2, minutes=10)),
+            expires=iso(timedelta(days=-1)))
+    s = client.get("/api/dagorlad/stop").json()
+    assert s["command"] == "make orodruin-kill"
+    assert [(w["run_id"], w["targets"], w["request"]) for w in s["stops"]] == [
+        ("open-1", ["vm-celebrimbor-gondolin"], "r-20261030T080000Z-abcdef")]
+    assert [w["run_id"] for w in s["grace"]] == ["grace-1"]
+    assert len(s["in_flight"]) == 3 and "revokes nothing" in s["never"]
+
+
+def test_stop_all_is_a_read_the_console_revokes_nothing():
+    [route] = [r for r in api.app.routes if getattr(r, "path", "") == "/api/dagorlad/stop"]
+    assert route.methods == {"GET"}
+    js = (Path(api.__file__).parent / "static" / "dagorlad.js").read_text(encoding="utf-8")
+    assert "stopAll()" in js and "getJSON('/api/dagorlad/stop')" in js

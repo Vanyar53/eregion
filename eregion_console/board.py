@@ -246,6 +246,34 @@ def orodruin_check(contract: dict | None) -> dict:
             + (f" ({codes})" if codes else "") + " — a request would be refused"}
 
 
+# What « Stop all » stops, and what stays in flight (M-1: docs/design/orodruin-contract.md).
+STOP_COMMAND = "make orodruin-kill"
+STOP_IN_FLIGHT = (
+    "an Annatar Run Command already sent runs to its end on its VM; its atomic's cleanup may not "
+    "have run — `annatar run <scenario> --dry-run` shows it, to replay by hand",
+    "a Gothmog fault cancelled may leave its VM stopped (az vm start); an execution still "
+    "Cancelling is said",
+    "a closed window still labels its targets for its grace (15 min)",
+)
+
+
+def stop_view(windows: list[dict], states: dict[str, str]) -> dict:
+    """« Stop all »: the command, what it stops — each window still open, its injector, what it
+    runs and its targets (the kill closes them) — what labels its targets still (in its grace),
+    and what stays in flight."""
+    def row(w):
+        return {"run_id": w["run_id"], "injector": str(w.get("injector") or ""),
+                "kind": str(w.get("kind") or ""), "experiment": str(w.get("experiment") or ""),
+                "request": str(w.get("request") or ""),
+                "targets": [str(t).rstrip("/").rsplit("/", 1)[-1] for t in w.get("targets") or []]}
+    return {"command": STOP_COMMAND,
+            "stops": [row(w) for w in windows if states.get(w["run_id"]) == "open"],
+            "grace": [row(w) for w in windows if states.get(w["run_id"]) == "grace"],
+            "in_flight": list(STOP_IN_FLIGHT),
+            "never": "the console revokes nothing: Orodruin's identity is revoked from your machine, "
+                     "by the command"}
+
+
 def request_view(req, judged: list[dict], plan: dict) -> dict:
     """What the page shows once a request is written: its id, the command that carries it to
     Orodruin, each wire and whether its target's name will be typed there — never here."""
@@ -259,4 +287,5 @@ def request_view(req, judged: list[dict], plan: dict) -> dict:
                                      for x in by_rank[w.rank].get("warnings") or [])}
                   for w in req.wires],
         "checks": plan.get("checks") or [],
+        "stop": {"command": STOP_COMMAND},
     }

@@ -20,6 +20,9 @@ const S = {
   drag: null,       // {i, x, y}: a red card's handle being dragged
   request: null,    // the request written (phase b): the wires stay as they are until « New plan »
   requestErr: '',
+  status: null,     // what Orodruin says of it, pulled by the watch (GET /api/dagorlad/requests/<id>)
+  stop: null,       // « Stop all »: the command, what it stops, what stays in flight
+  stopErr: '',
 };
 const KEY = 'console.dagorlad.wires';
 const MAX_WIRES = 100;
@@ -81,7 +84,9 @@ const ACTIONS = {
   },
   // Phase (b): the request, written by the console in its own directory — never a launch.
   request() { if (!S.request) sendRequest(); },
-  newPlan() { S.request = null; S.requestErr = ''; renderPlan(); },
+  newPlan() { S.request = null; S.requestErr = ''; S.status = null; renderPlan(); },
+  // « Stop all »: the console revokes nothing — it shows Orodruin's emergency stop, to run.
+  stopAll() { if (S.stop) { S.stop = null; renderPlan(); } else loadStop(); },
 };
 const _EVENTS = { click: 'click', pointerdown: 'pointerdown', pointerup: 'pointerup' };
 function _dispatch(ev, name) {
@@ -264,7 +269,9 @@ function planRow(v) {
 function renderPlan() {
   const box = $('plan');
   if (!S.wires.length) {
-    box.innerHTML = `<div class="plan-head"><b>PLAN</b> <span class="meta">no wire yet · phase (a): a plan only</span>${S.note ? ` <span class="r-warn">${esc(S.note)}</span>` : ''}</div>
+    box.innerHTML = `<div class="plan-head"><b>PLAN</b> <span class="meta">no wire yet</span>${S.note ? ` <span class="r-warn">${esc(S.note)}</span>` : ''}
+      <button type="button" class="mini stopbtn" ${_on('click', 'stopAll')} title="Orodruin's emergency stop: the command, what it stops, what stays in flight">Stop all</button></div>
+      ${stopBox()}
       <div class="empty">Pick a red card, then one or more targets — or drag a red card's handle onto a target;
       several wires may go to one target, and a wire's ✕ removes it. The server judges each wire as Orodruin would,
       and says what to expect; nothing is launched, nothing is written.</div>`;
@@ -286,7 +293,9 @@ function renderPlan() {
       <span class="meta">what Orodruin will check before anything runs — the page launches nothing</span>
       ${ask}
       ${S.request ? '' : `<button type="button" class="mini" ${_on('click', 'clear')}>Clear wires</button>`}
+      <button type="button" class="mini stopbtn" ${_on('click', 'stopAll')} title="Orodruin's emergency stop: the command, what it stops, what stays in flight">Stop all</button>
       ${S.note ? `<span class="r-warn">${esc(S.note)}</span>` : ''}</div>
+    ${stopBox()}
     ${requestBox()}
     <div class="checks">${checks}</div>
     <table class="t">${(p.wires || []).map(planRow).join('')}</table>`;
@@ -307,7 +316,49 @@ function requestBox() {
       <div>On your machine, run: <code>${esc(q.command)}</code></div>
       <div class="meta">It pulls the request from this host, shows it wire by wire${typed.length ? `, asks you to type the name of ${Number(typed.length)} target(s)` : ''},
         then carries it to Orodruin, which judges it again and runs the wires one after the other. This page never asks for a name.</div>
-      <table class="t">${rows}</table></div>`;
+      <table class="t">${rows}</table>${statusLine()}</div>`;
+}
+// What Orodruin said of the request — its state and each wire's, by rank (never what the wire is).
+const WSTATE = { queued: '', refused: 'r-bad', skipped: 'r-warn', running: 'r-warn', done: 'r-ok', failed: 'r-bad' };
+function statusLine() {
+  const st = S.status;
+  if (!st) return '<div class="meta">Orodruin: not heard from yet — the request runs once you carry it there.</div>';
+  const wires = (st.wires || []).map(w => `<span class="${esc(WSTATE[w.state] || '')}">#${Number(w.rank)} ${esc(w.state)}${w.code ? ' · ' + esc(w.code) : ''}</span>`).join(' ');
+  return `<div>Orodruin: <b>${esc(st.state)}</b>${(st.codes || []).length ? ` (${esc(st.codes.join(', '))})` : ''}
+    <span class="meta">at ${esc(st.at)}</span> ${wires}</div>`;
+}
+function stopBox() {
+  if (S.stopErr) return `<div class="err">${esc(S.stopErr)}</div>`;
+  const s = S.stop;
+  if (!s) return '';
+  const row = w => `<li><span class="rid">${esc(w.run_id)}</span> ${esc(w.injector)} · ${esc(w.experiment)} → ${esc((w.targets || []).join(', '))}${w.request ? ` <span class="meta">${esc(w.request)}</span>` : ''}</li>`;
+  return `<div class="request stop">
+      <div><b>STOP ALL</b> <span class="meta">${esc(s.never)}</span>
+        <button type="button" class="mini" ${_on('click', 'stopAll')}>Close</button></div>
+      <div>On your machine, run: <code>${esc(s.command)}</code> — it revokes Orodruin's identity, cancels the chaos, stops its VM, closes the windows.</div>
+      <div>It will stop ${(s.stops || []).length ? '' : '<span class="meta">no open window on this host</span>'}<ul>${(s.stops || []).map(row).join('')}</ul></div>
+      ${(s.grace || []).length ? `<div class="meta">Already ended, still labelling their targets (grace):</div><ul>${s.grace.map(row).join('')}</ul>` : ''}
+      <div class="meta">What stays in flight:</div><ul>${(s.in_flight || []).map(t => `<li class="meta">${esc(t)}</li>`).join('')}</ul></div>`;
+}
+async function loadStop() {
+  S.stopErr = '';
+  try {
+    const d = await getJSON('/api/dagorlad/stop');
+    if (d.error) throw new Error(d.error);
+    S.stop = d;
+  } catch (e) {
+    S.stopErr = `/api/dagorlad/stop — ${e.message}`;
+  }
+  renderPlan();
+}
+async function refreshStatus() {
+  if (!S.request) return;
+  try {
+    const d = await getJSON('/api/dagorlad/requests/' + encodeURIComponent(S.request.request));
+    if (!S.request || d.request !== S.request.request) return;
+    S.status = d.status || null;
+  } catch (_) { return; }
+  renderPlan();
 }
 async function sendRequest() {
   S.requestErr = '';
@@ -318,6 +369,7 @@ async function sendRequest() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
     S.request = d;
+    S.status = null;
   } catch (e) {
     S.requestErr = `/api/dagorlad/requests — ${e.message}`;
   }
@@ -364,6 +416,7 @@ async function refreshPlan() {
   } catch (_) { /* private mode, or something else there */ }
   loadBoard().then(refreshPlan);
   setInterval(() => loadBoard().then(refreshPlan), 30000);
+  setInterval(refreshStatus, 10000);
   window.addEventListener('resize', drawWires);
   $('red-list').addEventListener('scroll', drawWires, { passive: true });
   $('blue-list').addEventListener('scroll', drawWires, { passive: true });

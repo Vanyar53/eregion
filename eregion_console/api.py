@@ -2699,8 +2699,45 @@ async def _judged(pairs: list[tuple[str, str]]) -> dict:
 
 
 def _orodruin_contract() -> dict | None:
-    """Orodruin's contract as it last published it (pulled by the watch), or None: unknown here."""
-    return None
+    """Orodruin's contract as it last published it (``runs/orodruin/contract.json``, pulled by the
+    watch from the exercise channel, DG-b) and read against its shape again — or None: unknown
+    here. Never an identifier: the verdict, its codes, its time."""
+    from eregion_core.orodruin import read_contract
+    try:
+        return read_contract(json.loads((_RUNS / "orodruin" / "contract.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+
+
+@app.get("/api/dagorlad/requests/{request_id}")
+async def exercise_request_status(request_id: str) -> JSONResponse:
+    """A request as this host knows it: written here or not, and what Orodruin says of it — its
+    status, pulled by the watch (``runs/orodruin/requests/<id>.json``), read against its shape
+    again — or nothing yet. Read only."""
+    from eregion_core import exercise_request as xr
+    if not xr.valid_id(request_id):
+        return JSONResponse({"error": "not a request id"}, status_code=400)
+    status = None
+    try:
+        status = xr.read_status(json.loads(
+            (_RUNS / "orodruin" / "requests" / f"{request_id}.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError, xr.RequestRefused):
+        status = None
+    from eregion_console import board
+    return JSONResponse({"request": request_id,
+                         "written_here": (xr.requests_dir() / f"{request_id}.json").is_file(),
+                         "status": status, "orodruin": board.orodruin_check(_orodruin_contract())})
+
+
+@app.get("/api/dagorlad/stop")
+async def stop_all() -> dict:
+    """« Stop all » (DG-b): the console revokes nothing and cannot — it gives Orodruin's emergency
+    stop (``make orodruin-kill``), what it will stop (the live windows and their targets) and what
+    stays in flight (M-1). Read only."""
+    from eregion_console import board
+    now = datetime.now(timezone.utc)
+    windows = await asyncio.to_thread(_read_windows)
+    return board.stop_view(windows, {str(w["run_id"]): _window_state(w, now) for w in windows})
 
 
 @app.post("/api/dagorlad/requests")

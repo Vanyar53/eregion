@@ -5324,7 +5324,9 @@ _I4D = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in (
     "test_the_allows_a_rewrite_would_pass",
     "test_the_guard_keeps_only_a_deny_that_holds_the_nics_address",
     "test_the_guard_keeps_a_deny_whose_number_cannot_be_read",
-    "test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off"))
+    "test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off",
+    "test_a_deny_on_an_address_another_nic_of_the_vm_took_stays",
+    "test_a_block_deny_on_an_address_another_nic_of_the_vm_took_stays"))
 MUTANTS += [
     ("M2060", "the isolation written again under its second name takes the first pair's deny off past an "
               "allow: the VM opened (I4D)", ISO,
@@ -5381,6 +5383,21 @@ MUTANTS += [
 ]
 TESTS["M2071"] = ("tests/unit/test_invariant_regressions.py::"
                   f"test_a_release_never_keeps_a_rule_for_another_nic_of_its_own_vm {INVARIANTS}")
+# I4D's second review: the guard reads every NIC of the VM — a deny on an address another NIC of the
+# same VM took since closes the VM still; said « de la même VM ».
+MUTANTS += [
+    ("M2072", "the isolation's guard reads this NIC's addresses only: a deny on its other NIC's address goes, "
+              "that NIC opened (I4D, second review)", ISO,
+     "                                                           list(guard.get(\"vm_nics\") or {})):\n",
+     "                                                           t[\"private_ips\"]):\n"),
+    ("M2073", "the block's guard reads this NIC's addresses only (I4D, second review)", BLK,
+     "                                                           list(holders.get(\"vm_nics\") or {})):\n",
+     "                                                           t[\"private_ips\"]):\n"),
+    ("M2074", "a kept deny says another NIC of the same VM as another VM (I4D, second review)", BLK,
+     "            if addr in vm_nics:\n                said.append(",
+     "            if False:\n                said.append("),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2072, 2073, 2074)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

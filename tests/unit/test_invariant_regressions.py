@@ -3678,6 +3678,82 @@ def test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off(monkeypa
         shutil.rmtree(m.home, ignore_errors=True)
 
 
+
+def _mate_took_the_address(monkeypatch):
+    """I4D's second review: Db--01 isolated and blocked, db-nic-1's block -out turned, both of
+    db-nic-1's addresses changed (.7 and .8 to .20 and .21), api given .7, db-nic-0 — another NIC
+    of the same VM — given .8; an apply wipes db-nic-0's pair on its own NSG and puts an
+    allow-any there at 100, and the customer adds an allow-any at 101 on the subnet's NSG."""
+    from .fake_azure import FakeAzure
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    m.build(_net(quarantine=False, subnet_nsg=[], db_nic_0={"own": "dedicated", "rules": []}))
+    assert m.connector.isolate_vm(DB)["status"] == "isolated"
+    m.connector.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=None)
+    subnet = m.fake.nsgs[key(_S101_NSG.format("rg-net", "nsg-subnet"))]
+    subnet["rules"][f"{_DB1_BLOCK}-out"]["access"] = "Allow"
+    m._customer_changes_ip(Script(_nic("rg-app1", "db-nic-1"), 0, 20))
+    m._customer_changes_ip(Script(_nic("rg-app1", "db-nic-1"), 1, 20))
+    m._create_vm(Script("rg-new", "api", None, "Linux"), "westeurope")
+    nic0 = m.fake.nics[_nic("rg-app1", "db-nic-0")]
+    m._customer_changes_ip(Script(_nic("rg-app1", "db-nic-0"), 0, 4))
+    assert nic0["ips"] == ["10.0.0.8"], nic0["ips"]
+    own = m.fake.nsgs[key(nic0["nsg"])]
+    for n in [n for n in own["rules"] if n.startswith("glorfindel-")]:
+        del own["rules"][n]
+    allow = dict(access="Allow", direction="Inbound", source_address_prefix="*",
+                 destination_address_prefix="*", destination_port_range="*")
+    FakeAzure._put_rule(own, _rule_record(_rule("allow-any", 100, allow)))
+    FakeAzure._put_rule(subnet, _rule_record(_rule("allow-any", 101, allow)))
+    return m, subnet["rules"]
+
+
+def test_a_deny_on_an_address_another_nic_of_the_vm_took_stays(monkeypatch):
+    """I4D's second review: the first pair's inbound deny at 100 on the subnet's NSG covers .7
+    and .8 — none of db-nic-1's addresses now, but .8 is db-nic-0's, a NIC of the same VM. Read
+    against db-nic-1's addresses only, it went: db-nic-0 opened on 22 and 443 (« I5: isolate_vm
+    opened flows of …/Db--01 »). The guard reads every NIC of the VM: it stays, said — it would
+    open db-nic-0, and .8 is db-nic-0's, « de la même VM »."""
+    import shutil
+
+    m, rules = _mate_took_the_address(monkeypatch)
+    try:
+        before = m._open(DB)
+        m._isolate(DB, DB, None)                     # the machine's own check: I5, nothing opened
+        assert rules[_DB1_ISO]["access"] == "Deny" and rules[_DB1_ISO]["priority"] == 100, rules.get(_DB1_ISO)
+        assert m._open(DB) <= before
+        (kept,) = [x for x in m.connector.isolate_vm(DB)["left_rules"] if x["rule"] == _DB1_ISO]
+        assert "la retirer ouvrirait db-nic-0" in kept["why"], kept
+        assert "10.0.0.8, à db-nic-0 de la même VM" in kept["why"] and "10.0.0.7, à api, qu'il coupe" in kept["why"]
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_block_deny_on_an_address_another_nic_of_the_vm_took_stays(monkeypatch):
+    """I4D's second review, the block's side (same code shape): the same world, a customer's
+    allow at 205 between db-nic-1's first block pair and its replacement. The first pair's
+    inbound deny covers .8, db-nic-0's now: kept, said « de la même VM »; the attacker reaches
+    nothing more of Db--01."""
+    import shutil
+
+    m, rules = _mate_took_the_address(monkeypatch)
+    try:
+        from .fake_azure import FakeAzure
+        subnet = m.fake.nsgs[key(_S101_NSG.format("rg-net", "nsg-subnet"))]
+        FakeAzure._put_rule(subnet, _rule_record(_rule("partner-allow", 205, dict(
+            access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+            destination_port_range="*"))))
+        reach = m._attacker_flows(DB, None)
+        m._block(DB, DB, None, None)                 # the machine's own check: I5, nothing opened
+        assert m._attacker_flows(DB, None) <= reach
+        out = m.connector.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=None)
+        kept = [x for x in out.get("left_rules") or [] if x["rule"] == _DB1_BLOCK]
+        assert rules[_DB1_BLOCK]["access"] == "Deny", rules.get(_DB1_BLOCK)
+        assert kept and kept[0]["kind"] == "before_allow" and "10.0.0.8, à db-nic-0 de la même VM" in kept[0]["also"], kept
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
 _S9001_HTTPS = _s1618("allow-https", 100, "Allow", "443", source="Internet")
 _S9001_NET = {
     "subnet_nsg": [], "edge_nsg": [_S1618_SSH, _S1618_OUT], "tier_rules": [_S9001_HTTPS, _S1618_OUT],

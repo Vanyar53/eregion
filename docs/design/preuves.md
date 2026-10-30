@@ -2473,6 +2473,19 @@ posée). Quatre points, chacun son commit et son test rouge sans lui :
 La réécriture en place de la première paire (l'alternative : la nouvelle adresse de la carte coupée à
 100, api rendue) va à un lot de suite.
 
+**La seconde relecture : une autre carte de la même VM.** Le resserrement de la première relecture
+lisait les adresses de **cette** carte seulement : db-nic-1 passée de .7/.8 à .20/.21, api à .7, et
+db-nic-0 — une carte de la **même** VM — à .8 ; un `apply` retire la paire de db-nic-0 sur son NSG et y
+met une allow de tout à 100, le client une autre à 101 sur le NSG du subnet. Réisolée, la paire de
+db-nic-1 passe au second nom à 102 ; la règle entrante de la première paire, à 100, sur .7 et .8, ne
+tenait aucune adresse de db-nic-1 : retirée, db-nic-0 s'ouvrait sur 22 et 443 (« I5: isolate_vm opened
+flows of …/Db--01 », la machine). La garde lit maintenant les adresses de **toutes** les cartes de la
+VM (les cibles d'`isolate_vm` et de `_block_ip_vm`) ; la note dit la carte qu'elle ouvrirait et
+« 10.0.0.8, à db-nic-0 de la même VM ». Le blocage a la même forme (n'y ouvrait rien, mesuré) : figé
+aussi. `test_a_deny_on_an_address_another_nic_of_the_vm_took_stays`,
+`test_a_block_deny_on_an_address_another_nic_of_the_vm_took_stays`, rouges sur 0570e4f ; mutants
+M2072–M2074.
+
 **Mesures de la relecture.** `pytest` complet : 4 575 réussis, 7 sautés, 5 `xfail` (6 avec le U1
 ci-dessous) ; `ruff` propre ; `mutant_anchors.py` sans faute. Mutants M2060–M2071 et M1734 : 13/13 par
 leurs tests, deux tours. Harnais avant/après sur les 42 mutants de la levée et d'`older.py` (60

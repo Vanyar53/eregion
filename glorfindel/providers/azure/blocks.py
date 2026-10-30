@@ -94,12 +94,12 @@ class BlockMixin:
         # I4D: a deny of the other pair before an allow its replacement comes after stays.
         for n in list(drop):
             if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,
-                                                           t["private_ips"]):
+                                                           list(holders.get("vm_nics") or {})):
                 drop.remove(n)
                 left.append({"nsg": nsg_key, "rule": n, "to": ", ".join(drop_to.pop(n)) or "?",
                              "on": ", ".join(passed), "kind": "before_allow",
-                             **({"also": also} if (also := self._also_cuts(by_name[n.lower()], t, holders))
-                                else {})})
+                             **({"also": also} if (also := self._also_cuts(
+                                 by_name[n.lower()], t, holders, holders.get("vm_nics") or {})) else {})})
         vm_ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=[ip], inbound_dst=vm_ips,
                                     outbound_src=vm_ips, outbound_dst=[ip], port=threat_port)
@@ -186,15 +186,19 @@ class BlockMixin:
             return "inconnu (une plage ou une étiquette, pas une adresse)"
         return ", ".join(sorted(holders["map"].get(addr, ()))) or None
 
-    def _also_cuts(self, rule, t: dict, holders: dict) -> str:
+    def _also_cuts(self, rule, t: dict, holders: dict, vm_nics: dict) -> str:
         """I4D's review: what a deny of ours, kept, covers on its NIC side that is no longer
         the NIC's address, and who holds it now — the VM it cuts off, said (as `drop_failed`
-        says it). The isolation's as the block's."""
+        says it); another NIC of the same VM (`vm_nics`: address → NIC), said as such. The
+        isolation's as the block's."""
         side = "destination" if _enum_text(getattr(rule, "direction", "")) == "inbound" else "source"
         mine = {a.lower() for a in t["private_ips"] or []}
         said = []
         for addr in _prefixes(rule, side) or ("*",):
             if addr in mine:
+                continue
+            if addr in vm_nics:
+                said.append(f"{addr}, à {vm_nics[addr]} de la même VM")
                 continue
             on = ("toutes les cartes derrière ce NSG" if addr in ("*", "any", "0.0.0.0/0")
                   else self._address_holder(addr, t["nic_id"], holders))
@@ -214,7 +218,8 @@ class BlockMixin:
         targets = self._get_vm_nic_targets(rg, vm_name)
         placements: list[dict] = []
         assigned: dict[str, set] = {}
-        holders: dict = {}
+        # I4D's second review: every NIC's addresses, the VM's own (see isolate_vm).
+        holders: dict = {"vm_nics": {a.lower(): x["nic_short"] for x in targets for a in x.get("private_ips") or []}}
         for t in targets:
             nsg_rg, nsg_name, scope_t = t["nsg_rg"], t["nsg_name"], t["scope"]
             nsg_key = f"{nsg_rg}/{nsg_name}"

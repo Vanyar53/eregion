@@ -1058,8 +1058,7 @@ def test_a_bypass_that_comes_back_after_its_mark_was_kept_is_said_again(monkeypa
     (a,) = _bypass_cards("pending")
     _read(c, kind)
     give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
-    with pytest.raises(OSError):
-        reassert_active(c, _ACT)
+    reassert_active(c, _ACT)                                  # not written: logged
     give_back()
     assert not _bypass_cards("pending") and _bypass_cards("resolved")[0]["resolution"]
     assert _mark(kind) == a["signal_id"]                      # the mark kept A
@@ -1080,8 +1079,7 @@ def test_a_bypass_back_to_its_former_change_closes_the_stale_card(monkeypatch, k
     (a,) = _bypass_cards("pending")
     _read(c, kind, _ALLOW, _RDP)
     give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
-    with pytest.raises(OSError):
-        reassert_active(c, _ACT)
+    reassert_active(c, _ACT)                                  # not written: logged
     give_back()
     (b,) = _bypass_cards("pending")
     assert "allow-rdp" in b["reason"] and _mark(kind) == a["signal_id"]
@@ -1103,8 +1101,7 @@ def test_the_operators_word_on_another_bypass_does_not_silence_this_one(monkeypa
     reassert_active(c, _ACT)
     _read(c, "isolation", _ALLOW, _RDP)
     give_back = _unwritable(monkeypatch, "/isolation/")
-    with pytest.raises(OSError):
-        reassert_active(c, _ACT)
+    reassert_active(c, _ACT)                                  # not written: logged
     give_back()
     (b,) = _bypass_cards("pending")
     escalations.resolve(b["id"])                              # the operator
@@ -1305,8 +1302,7 @@ def test_a_disappearance_after_one_acknowledged_and_held_again_is_said(monkeypat
     verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
     verify.return_value = held
     give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
-    with pytest.raises(OSError):
-        reassert_active(c, _HUMAN)
+    reassert_active(c, _HUMAN)                                  # not written: logged
     give_back()
     assert _drift_mark(kind)                                  # the mark kept
     verify.return_value = gone
@@ -1314,6 +1310,22 @@ def test_a_disappearance_after_one_acknowledged_and_held_again_is_said(monkeypat
         reassert_active(c, _HUMAN)
     assert len(_drift_cards("pending")) == 1 and len(_drift_cards()) == 2
 
+
+
+def test_a_state_refused_on_one_vm_does_not_stop_the_pass(monkeypatch):
+    """A full disk on the first VM's state: the pass went no further — the next VM, held
+    again, never seen so, its drift mark kept. Each VM is read; the refusal is logged."""
+    from glorfindel import reassert_cards
+    from glorfindel.actions import _save_isolation_state
+    other = _RID.replace("/vm", "/vm2")
+    for rid in (_RID, other):
+        _save_isolation_state(rid, {"resource_id": rid, "isolated_at": "2026-10-06T08:00:00+00:00",
+                                    "placements": [], "drift_alerted_at": "2026-10-06T09:00:00+00:00"})
+    c = _connector()
+    give_back = _unwritable(monkeypatch, "/isolation/")
+    reassert_active(c, _HUMAN)
+    give_back()
+    assert {(k.rsplit("/", 1)[-1], ip) for k, ip in reassert_cards._EPISODE_OVER} == {("vm", ""), ("vm2", "")}
 
 def test_a_drift_card_closed_with_a_note_is_no_acknowledgement():
     """Gone, said; the card then closed with a note — Glorfindel's way, as `_alert` closes

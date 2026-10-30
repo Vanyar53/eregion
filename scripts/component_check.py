@@ -65,6 +65,7 @@ COMPONENTS: dict[str, Component] = {
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
             "test_exercise_channel.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
+            "test_run_report.py",
         ),
     ),
     # Glorfindel — the watch, the graph, the response, its providers. The console

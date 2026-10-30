@@ -342,3 +342,19 @@ def test_scenario_destructive_is_the_catalog_s_word():
     assert scenario_destructive(sc({"destructive": "no"}, "T9999")) == (True, "")
     destructive, lie = scenario_destructive(sc({"destructive": False}, "T9999"))
     assert destructive is True and "unknown is destructive" in lie
+
+
+def test_a_local_script_run_writes_the_unified_run_format(tmp_path, monkeypatch):
+    """C1 (M1800): the run's report says it is an attack, by Annatar, of its technique — the
+    format Gothmog shares (eregion_core/run_report.py), read the same by the console."""
+    from eregion_core.run_report import RUN_FORMAT, read_run
+    monkeypatch.chdir(tmp_path)
+    engine = Engine()
+    with patch.object(engine, "_get_executor_collector", return_value=(_make_executor(), _make_collector())), \
+         patch.object(engine, "_wait_and_emit_feedback"):
+        engine.run(EXFIL_YAML, skip_confirm=True)
+    report = json.loads(next((tmp_path / "runs").glob("2*.json")).read_text())
+    m = report["metrics"]
+    assert (m["run_format"], m["kind"], m["injector"], m["experiment_id"]) == (RUN_FORMAT, "technique", "annatar", "T1041")
+    run = read_run(report)
+    assert run["kind"] == "technique" and run["experiment"] == "T1041" and run["at"] == m["attack_time"]

@@ -35,7 +35,7 @@ import yaml
 from rich.console import Console
 from rich.prompt import Confirm
 
-from eregion_core import watch_gate
+from eregion_core import run_report, watch_gate
 from eregion_core.exercise import close_window, open_window
 from eregion_core.exercise_channel import carry_run
 from eregion_core.inscription import BENCH_ENV, DEFAULT_BENCH, Scope, check_target, rg_from_id
@@ -387,8 +387,8 @@ class Engine:
 
     def _record(self, fault, run_id, result, metrics, checks, error=None) -> RunOutcome:
         report = RunReport(scenario=fault["name"], run_id=run_id, mitre="", result=result,
-                           metrics={"injector": "gothmog", "fault": fault.get("id"),
-                                    **self._without, **metrics},
+                           metrics={**run_report.identity("fault", "gothmog", fault.get("id")),  # C1
+                                    "fault": fault.get("id"), **self._without, **metrics},
                            thresholds={}, checks=checks)
         path = report.save(self.runs_dir)
         report.render()

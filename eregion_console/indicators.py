@@ -22,52 +22,30 @@ names no VM, and its window is gone after a week.
 """
 from __future__ import annotations
 
-import json
 import statistics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from eregion_core import run_report
+from eregion_core.run_report import CONTAINING as DISRUPTIVE
+from eregion_core.run_report import epoch as _ts
 
 WINDOW_DAYS = 30
 # The detection a run counted was measured from the watch's own record (annatar/runner/
 # detection.py): its signal time is the run's attack time plus that latency, to rounding.
 MATCH_SLACK_S = 5.0
-DISRUPTIVE = ("isolate_vm", "block_suspicious_ip")
-
-
-def _ts(value) -> float | None:
-    """Epoch seconds from a number or an ISO time; None otherwise (NaN included)."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value) if value == value and abs(value) != float("inf") else None
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
 
 
 def read_runs(reports: dict[str, Path], since: float) -> list[dict]:
-    """The runs of the period, from their reports: an attack (``technique``) is dated by its
-    attack time, a fault by its start. A report without a date in the period is left out."""
+    """The runs of the period, from their reports, in the unified view of C1
+    (``eregion_core.run_report.read_run``): an attack (``technique``) is dated by its attack
+    time, a fault by its start. A report without a date in the period is left out."""
     runs = []
-    for run_id, path in reports.items():
-        try:
-            r = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(r, dict):
-            continue
-        m = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
-        fault = m.get("injector") == "gothmog"
-        at = _ts(m.get("fault_start") if fault else m.get("attack_time"))
+    for run in run_report.read_reports(reports):
+        at = run["at"]
         if at is None or at < since:
             continue
-        latency = m.get("detection_latency_s")
-        runs.append({"run_id": str(r.get("run_id") or run_id), "kind": "fault" if fault else "technique",
-                     "ttp": str(r.get("mitre") or ""), "at": at, "result": r.get("result", ""),
-                     "detection": m.get("detection") or "unknown",
-                     "latency": float(latency) if _ts(latency) is not None and latency >= 0 else None})
+        runs.append(run)
     return runs
 
 

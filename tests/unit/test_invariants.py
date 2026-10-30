@@ -2582,8 +2582,9 @@ class IsolationMachine(RuleBasedStateMachine):
                 turned = {t.lower() for t in self.turned_for.get((k, name), ())}
                 # By the whole name: the perimeter's begins every VM rule of its IP.
                 import re
-                naming = [e for e in cards if any(re.search(re.escape(t) + r"(?![\w-])", (e.get("reason") or "").lower())
-                                                  for t in turned)]
+                naming = [e for e in cards if key(e.get("resource_id", "")) in vms | {k}       # its VM, or its NSG
+                          and any(re.search(re.escape(t) + r"(?![\w-])", (e.get("reason") or "").lower())
+                                  for t in turned)]
                 assert naming, (f"U1: the orphan rule {name} kept behind a rule turned into an allow "
                                 f"({sorted(turned)}), cutting {sorted(vms)}: no pending card names it")
                 assert all(not (e.get("suggested_steps") or [""])[0].startswith("az network nsg rule delete")

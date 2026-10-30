@@ -2627,12 +2627,14 @@ def test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release(monkeypa
         shutil.rmtree(m.home, ignore_errors=True)
 
 
-@pytest.mark.parametrize("listing", ["read", "refused"])
+@pytest.mark.parametrize("listing", ["read", "refused", "refused, address moved"])
 def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch, listing):
     """The guard is for another VM at the address: api, alive, its own block rule turned
     into an allow, is released as usual — what that rule lets through is someone's doing
     on api's own address (I1 judges it so), not an opening of another VM. The NSGs'
-    listing refused: its NIC is read, alive — released too (the review of I5Q)."""
+    listing refused: its NIC is read, alive — released too (the review of I5Q); unless the
+    NIC no longer holds every address the rule denies (its second review): another VM may
+    hold it now — kept, `release_partial`."""
     import shutil
 
     invariant_env(monkeypatch)
@@ -2644,7 +2646,7 @@ def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch, list
             assert c.block_suspicious_ip(ATTACKER, API, scope=scope, threat_port=22)["status"] == "blocked"
         g["rules"][_Q_API_BLOCK]["access"] = "Allow"
         assert c.isolate_vm(API)["status"] == "isolated"
-        if listing == "refused":                              # the guard's listing, once
+        if listing.startswith("refused"):                     # the guard's listing, once
             real, calls = m.fake.network.network_security_groups.list_all, []
 
             def refused(*a, **k):
@@ -2653,6 +2655,12 @@ def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch, list
                     raise RuntimeError("(AuthorizationFailed) no list")
                 return real(*a, **k)
             monkeypatch.setattr(m.fake.network.network_security_groups, "list_all", refused)
+        if listing.endswith("moved"):
+            m.fake.nics[_nic("rg-edge", "api-nic")]["ips"] = ["10.1.0.40"]
+            out = c.release_isolation(API)
+            assert out["status"] == "release_partial" and any("gardée" in f for f in out["failed"]), out
+            assert [n for n in g["rules"] if n.startswith(_Q_API_ISO)]
+            return
         assert c.release_isolation(API)["status"] == "released"
         assert not [n for n in g["rules"] if n.startswith(_Q_API_ISO)]
     finally:

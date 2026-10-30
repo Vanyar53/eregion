@@ -164,12 +164,26 @@ def _held_by_turned(network, cache: dict, nsg_rg: str, nsg_name: str, name: str,
                      if (getattr(r, "name", "") or "").lower() == name.lower()), None)
         why = cache["why"](nsg, rule, nic_id) if rule is not None else ""
     except Exception as exc:
-        # Unread: kept only if the placement's NIC is gone, or can't be read — a live VM's
-        # own placement goes as before (its own address: nothing of another VM waits).
+        # Unread: kept unless the placement's NIC, alive, still holds every address the rule
+        # denies — a live VM's own placement then goes as before (its own addresses: nothing
+        # of another VM waits). Its NIC gone, unread, or an address moved: kept.
         why = f"NSG de l'abonnement illisibles, aucune règle retournée exclue ({_first_line(exc)[:_ERR_MAX]})"
         try:
-            if nic_id and network.network_interfaces.get(*_parse_nic_resource_id(nic_id)) is not None:
+            if nic_id and _holds_all(network, nsg_rg, nsg_name, name, nic_id):
                 why = ""
         except Exception:
             pass
     return f"{nsg_rg}/{nsg_name}/{name} gardée : {why}" if why else ""
+
+
+def _holds_all(network, nsg_rg: str, nsg_name: str, name: str, nic_id: str) -> bool:
+    """The rule, read by its name, denies only addresses this NIC holds now (I5Q, its
+    second review). Raises if either can't be read."""
+    nic = network.network_interfaces.get(*_parse_nic_resource_id(nic_id))
+    held = {getattr(c, "private_ip_address", None) for c in (getattr(nic, "ip_configurations", None) or [])}
+    rule = network.security_rules.get(nsg_rg, nsg_name, name)
+    side = "destination" if _enum_text(getattr(rule, "direction", "")) == "inbound" else "source"
+    single = getattr(rule, f"{side}_address_prefix", None)
+    ips = [v for v in ([single] if single else []) + list(getattr(rule, f"{side}_address_prefixes", None) or [])
+           if v and v != "*"]
+    return bool(ips) and set(ips) <= held

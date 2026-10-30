@@ -1781,6 +1781,16 @@ après la relecture : M1730–M1745 attrapés à chaque tour ; invariants à 500
 14/22 après (27/35 avec les nouveaux) ; aucun perdu — M12 (1/2 puis ses séquences figées seules)
 et M33 (2/2 puis 1/2), remesurés sur quatre tours après : 2/4 et 3/4.
 
+**La seconde relecture d'I5Q.** Un refus gardé nouveau, sans carte à lui, se fondait dans la carte
+en attente de sa VM (celle d'une orpheline non gardée), dont le magasin garde la première raison :
+l'opérateur ne voyait que le retrait d'un refus déjà parti, le refus gardé nommé nulle part pendant
+une passe. La carte en attente de la VM est lue aussi, et remplacée si elle ne nomme pas tout le
+groupe (`test_a_new_kept_deny_never_merges_into_a_stale_card_of_its_vm`, M1746). La levée d'une VM
+vivante, la liste des NSG refusée, ne lâche son refus que si sa carte tient encore toutes les
+adresses qu'il vise (`test_a_live_vms_release_is_not_held_by_its_own_turned_rule[refused, address
+moved]`, M1747). L'oracle d'U1 exige que la carte qui nomme la règle retournée porte sur une VM que
+le refus coupe, ou sur son NSG.
+
 **Trouvé en chemin, hors d'I5Q : L2.** La même graine tombe ensuite sur L2 (« the quarantine NSG
 …/rg-sec/…/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5]; the
 reassertion neither put it back nor said so ») : réduite à 14 étapes écrites avec les règles de

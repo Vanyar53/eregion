@@ -268,6 +268,37 @@ def test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter(monke
     assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus"), card["suggested_steps"]
 
 
+def test_a_new_kept_deny_never_merges_into_a_stale_card_of_its_vm(monkeypatch):
+    """I5Q, its second review (the reviewer's probe): the VM has a pending card for an
+    orphan rule that is not kept (web's outbound deny, said in human_only). A new deny
+    of a gone NIC appears, kept behind the perimeter someone turned — no card of its own
+    yet: the store folded it into the VM's pending card, which keeps its first reason.
+    The operator saw only the delete of a deny already gone, the kept one named nowhere
+    for a pass. That card is read too, and replaced."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.block_suspicious_ip(ATTACKER, WEB, scope="subnet")["status"] == "blocked"
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = "glorfindel-block-" + ATTACKER.replace(".", "-")
+    iso_in = next(n for n in g["rules"] if n.startswith("glorfindel-iso-") and not n.endswith("-out"))
+    del g["rules"][iso_in]
+    _delete(f, WEB)
+    new = _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    FakeAzure._put_rule(g, _rule_record(_rule("glorfindel-iso-ghost-ghost-nic-abcdef", 150, dict(
+        access="Deny", direction="Inbound", source_address_prefix="*", destination_address_prefix="10.0.0.4",
+        destination_port_range="*"))))
+    g["rules"][perimeter]["access"] = "Allow"
+    _watch_pass(c, "non_disruptive")
+    assert "glorfindel-iso-ghost-ghost-nic-abcdef" in g["rules"]
+    assert not {fl for fl in open_flows(_world_view(f), new) if fl[2] == "in" and fl[3] == ATTACKER}
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"]
+    assert f"notre règle {perimeter} (" in card["reason"], card["reason"]
+    assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus"), card["suggested_steps"]
+
+
 def test_a_rule_turned_after_the_listing_stops_the_removal(monkeypatch):
     """I5Q, the review: the pass lists the NSGs, then someone turns the perimeter block
     before the removal — the guard is played again on the NSGs that govern the VM cut,

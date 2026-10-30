@@ -4932,7 +4932,7 @@ MUTANTS += [
      "            return f\"NSG {k.rsplit('/', 1)[-1]} non relu avant le retrait ({_first_line(exc)[:_ERR_MAX]})\"\n",
      "            continue\n"),
     ("M1743", "a live VM's release held by a refused listing: its own placement kept (I5Q)", TRN,
-     "            if nic_id and network.network_interfaces.get(*_parse_nic_resource_id(nic_id)) is not None:\n",
+     "            if nic_id and _holds_all(network, nsg_rg, nsg_name, name, nic_id):\n",
      "            if False:\n"),
 ]
 MUTANTS += [
@@ -4951,6 +4951,22 @@ _I5Q_CARD += (" tests/unit/test_orphan_sweep.py::test_the_card_of_a_vm_names_eve
 TESTS.update({mid: _I5Q_CARD for mid in ("M1738", "M1739", "M1740", "M1744", "M1745")})
 TESTS.update({mid: _I5Q_RACE for mid in ("M1741", "M1742")})
 TESTS["M1743"] = "tests/unit/test_invariant_regressions.py -k live_vms_release"
+# The second review of I5Q: a new kept deny folded into the VM's pending card, whose first reason
+# stays; a live VM's placement let go on a refused listing though its NIC no longer holds the
+# address. M1746–M1747.
+MUTANTS += [
+    ("M1746", "a new kept deny folded into the VM's stale pending card: named nowhere for a pass (I5Q)",
+     "glorfindel/orphans.py",
+     '        for card in ({alerts.get(f"orphan-{o[\'nsg_id\']}/{o[\'rule\']}".lower())} | pending_of.get(res, set())) - {None}:\n',
+     '        for card in ({alerts.get(f"orphan-{o[\'nsg_id\']}/{o[\'rule\']}".lower())} | set()) - {None}:\n'),
+    ("M1747", "a refused listing lets a live VM's deny go though its NIC moved off the address (I5Q)",
+     "glorfindel/providers/azure/turned.py",
+     "            if nic_id and _holds_all(network, nsg_rg, nsg_name, name, nic_id):\n",
+     "            if nic_id and network.network_interfaces.get(*_parse_nic_resource_id(nic_id)) is not None:\n"),
+]
+TESTS["M1746"] = ("tests/unit/test_orphan_sweep.py::test_a_new_kept_deny_never_merges_into_a_stale_card_of_its_vm "
+                  f"{INVARIANTS}")
+TESTS["M1747"] = "tests/unit/test_invariant_regressions.py -k live_vms_release"
 # ID1 (#281): the bench's diagnostic settings, off by default, switched by a variable, the
 # categories the rules read and no other, the Make targets that touch them alone. M1790–M1799,
 # measured by tests/unit/test_bench_logs.py (and infra/terraform/tests/, by hand).

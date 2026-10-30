@@ -140,15 +140,24 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
     for o in orphans:
         if o.get("turned"):
             group.setdefault(_resource(o).lower(), []).append(o)
+    # A kept deny not said yet merges into the VM's pending card too (the store keeps its
+    # first reason): that card is read as well (the second review of I5Q).
     said = {e.get("id"): (e.get("reason") or "").lower() for e in escalations.all_escalations()}
+    pending_of: dict[str, set] = {}
+    for e in escalations.pending():
+        if e.get("action") == "remove_orphan_rule":
+            pending_of.setdefault((e.get("resource_id") or "").lower(), set()).add(e.get("id"))
     for o in orphans:
-        card = alerts.get(f"orphan-{o['nsg_id']}/{o['rule']}".lower())
-        if o.get("turned") and card and not all(_names(said.get(card, ""), g) for g in group[_resource(o).lower()]):
-            if _pending(card):
-                escalations.resolve(card, note=f"Remplacée : {o['rule']} est gardée derrière "
-                                               f"{o['turned']['rule']}, retournée en autorisation (I5Q).")
-            for k in [k for k, c in alerts.items() if c == card]:
-                del alerts[k]
+        if not o.get("turned"):
+            continue
+        res = _resource(o).lower()
+        for card in ({alerts.get(f"orphan-{o['nsg_id']}/{o['rule']}".lower())} | pending_of.get(res, set())) - {None}:
+            if not all(_names(said.get(card, ""), g) for g in group[res]):
+                if _pending(card):
+                    escalations.resolve(card, note=f"Remplacée : {o['rule']} est gardée derrière "
+                                                   f"{o['turned']['rule']}, retournée en autorisation (I5Q).")
+                for k in [k for k, c in alerts.items() if c == card]:
+                    del alerts[k]
     orphans = sorted(orphans, key=lambda o: not o.get("turned"))
 
     for o in orphans:

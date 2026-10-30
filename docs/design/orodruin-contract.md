@@ -550,7 +550,9 @@ un fil est refusé :
    - le plafond déclaré (`EREGION_MAX_INJECTIONS`, `EREGION_MAX_RUN_S`), au lieu du seul plafond
      absolu.
 4. Le nom tapé est comparé au nom qu'Orodruin lit de la VM (`typed_name`), pour chaque fil qui le
-   demande : une technique destructive, ou que personne n'a déclarée inoffensive (A0).
+   demande : un fil destructif, technique ou panne, ou que personne n'a déclaré inoffensif (A0).
+   `vm-shutdown` (`destructive: false`) n'en demande pas. Gothmog le recompare au nom qu'il lit,
+   avant de démarrer une panne destructive.
 
 **Les fils, l'un après l'autre.** Chacun est un run de son injecteur, dans son propre processus (D1) :
 `annatar wire <technique> <vm> --request <id> [--typed-name <nom>]`, `gothmog run <panne> --yes

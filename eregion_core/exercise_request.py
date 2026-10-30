@@ -259,10 +259,10 @@ def read_status(doc) -> dict:
 
 # ── On the operator's machine: show the request, have the names typed ───────────────────
 
-def asks_name(destructive: bool | None, kind: str) -> bool:
-    """A technique destructive, or that nobody declared non-destructive (A0): its target's
-    name is typed. The catalogue decides — never the request."""
-    return kind == "technique" and destructive is not False
+def asks_name(destructive: bool | None, kind: str = "") -> bool:
+    """A wire destructive — a technique or a fault —, or that nobody declared non-destructive
+    (A0): its target's name is typed. The catalogue decides — never the request."""
+    return destructive is not False
 
 
 def shown(text) -> str:

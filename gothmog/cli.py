@@ -40,7 +40,10 @@ _WITHOUT_HELP = ("Development run: no live Glorfindel watch required. The report
 @click.option("--without-glorfindel", is_flag=True, help=_WITHOUT_HELP)
 @click.option("--request", default="", help="A wire of a Dagorlad request (its id): written in the window.")
 @click.option("--target", default="", help="With --request: the VM of the wire, one the fault declares.")
-def run(fault: str, yes: bool, dry_run: bool, without_glorfindel: bool, request: str, target: str):
+@click.option("--typed-name", default="", help="With --request: the VM's name as the operator typed it "
+              "(a destructive fault).")
+def run(fault: str, yes: bool, dry_run: bool, without_glorfindel: bool, request: str, target: str,
+        typed_name: str):
     """Run a fault (a path, or a name in gothmog/experiments/).
 
         gothmog run vm-shutdown --yes
@@ -62,7 +65,7 @@ def run(fault: str, yes: bool, dry_run: bool, without_glorfindel: bool, request:
         for r in doc.get("revert") or []:
             console.print(f"  Revert  : {r['name']}")
         return
-    wire = {"request": request, "target": target} if request else {}
+    wire = {"request": request, "target": target, "typed_name": typed_name} if request else {}
     outcome = Engine().run(fault, skip_confirm=yes, without_glorfindel=without_glorfindel, **wire)
     raise SystemExit(0 if outcome.result == "PASS" else 1)
 

@@ -167,7 +167,7 @@ class World:
             return Resp(200, {"value": [self._execution()] if self.started_at else []})
         if low.endswith("/virtualmachines/vm-celebrimbor-gondolin"):
             state = "PowerState/running" if self.running() else "PowerState/stopped"
-            return Resp(200, {"tags": self.vm_tags, "properties": {"instanceView": {
+            return Resp(200, {"name": "vm-celebrimbor-gondolin", "tags": self.vm_tags, "properties": {"instanceView": {
                 "statuses": [{"code": "ProvisioningState/succeeded"}, {"code": state}],
                 "vmAgent": {"statuses": [{"displayStatus": "Ready" if self.running() else "Not Ready"}]}}}})
         if low.endswith("/resourcegroups/rg-celebrimbor"):
@@ -774,3 +774,32 @@ def test_a_wire_on_a_vm_of_the_same_name_in_another_group_is_refused_before_the_
     out = engine().run("vm-shutdown", skip_confirm=True, request=REQ, target=twin)
     assert out.result == "REFUSED" and out.error.startswith("no_engine:")
     assert w.writes == [] and _no_window()
+
+
+def _destructive_fault(tmp_path):
+    doc = yaml.safe_load((engine_mod.EXPERIMENTS_DIR / "vm-shutdown.yaml").read_text())
+    doc["destructive"] = True
+    path = tmp_path / "vm-wipe.yaml"
+    path.write_text(yaml.safe_dump(doc))
+    return str(path)
+
+
+@pytest.mark.parametrize("typed", ["", "vm-celebrimbor-bree"])
+def test_a_destructive_fault_from_a_request_runs_only_on_the_vm_typed(bench, tmp_path, typed):
+    """§7, DG-b review: the name typed for a destructive fault, compared to the name Azure gives
+    the VM, before the fault starts."""
+    clock, world, engine = bench
+    w = world()
+    out = engine().run(_destructive_fault(tmp_path), skip_confirm=True, request=REQ, target=VM,
+                       typed_name=typed)
+    assert out.result == "REFUSED" and out.error.startswith("typed_name:")
+    assert w.writes == [] and _no_window()
+
+
+def test_a_destructive_fault_with_its_name_typed_starts(bench, tmp_path):
+    clock, world, engine = bench
+    w = world()
+    out = engine().run(_destructive_fault(tmp_path), skip_confirm=True, request=REQ, target=VM,
+                       typed_name="vm-celebrimbor-gondolin")
+    assert out.result == "PASS", out.error
+    assert [x for x, _ in w.writes] == ["start"]

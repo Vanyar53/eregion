@@ -166,8 +166,9 @@ def judge(experiment_id: str, target_id: str, target: Target | None, *,
             return v.refuse("no_engine", f"{e.id}'s engine aims at {', '.join(aimed)}: a wire "
                                          f"takes {target.name} alone")
     # Destructive, or nobody declared it is not (A0): the name is typed — an unknown is never
-    # taken for harmless, here as in production (check_zone), and DG-b makes this a guard.
-    if e.kind == "technique" and e.destructive is not False:
+    # taken for harmless, here as in production (check_zone), and DG-b makes this a guard. A
+    # technique or a fault alike (§7: « chaque fil destructif »).
+    if e.destructive is not False:
         what = "destructive" if e.destructive else "destructiveness not declared"
         v.warnings.append({"code": "typed_name", "text": f"{what}: the target's name will be typed "
                            "to run it, and checked by Orodruin"})

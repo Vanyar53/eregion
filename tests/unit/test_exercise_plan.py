@@ -236,3 +236,16 @@ def test_a_next_page_outside_arm_is_refused_and_never_fetched():
     with pytest.raises(RuntimeError, match="outside Azure Resource Manager"):
         TagEnrollment(credential=_Cred(), get=get_lookalike).vms("s")
     assert all(u.startswith(ARM + "/") for u in asked)
+
+
+def test_a_destructive_fault_or_one_not_declared_asks_for_the_name_typed_too():
+    """§7: « chaque fil destructif » — a fault as a technique (A0: undeclared is destructive)."""
+    cat = _cat(Experiment("vm-wipe", "fault", "Disk wipe", "azure_vm", "implemented", True, "chaos-studio"),
+               Experiment("vm-odd", "fault", "Undeclared", "azure_vm", "implemented", None, "chaos-studio"))
+    targets = {"vm-wipe": ["vm-celebrimbor-gondolin"], "vm-odd": ["vm-celebrimbor-gondolin"],
+               "vm-shutdown": ["vm-celebrimbor-gondolin"]}
+    for fid in ("vm-wipe", "vm-odd"):
+        v = judge(fid, GONDOLIN, _target(GONDOLIN), catalog=cat, scope=SCOPE, fault_targets=targets)
+        assert [w["code"] for w in v.warnings] == ["typed_name"], fid
+    v = judge("vm-shutdown", GONDOLIN, _target(GONDOLIN), catalog=cat, scope=SCOPE, fault_targets=targets)
+    assert v.warnings == []

@@ -239,7 +239,8 @@ class Engine:
     # ── The run ───────────────────────────────────────────────────────────────────────
 
     def run(self, name_or_path: str, *, skip_confirm: bool = False,
-            without_glorfindel: bool = False, request: str = "", target: str = "") -> RunOutcome:
+            without_glorfindel: bool = False, request: str = "", target: str = "",
+            typed_name: str = "") -> RunOutcome:
         """``request`` and ``target``: a wire of a Dagorlad request (DG-b) — the target must be
         one the fault declares, the request's id goes to the window, the journal and the report."""
         fault = load_fault(name_or_path)
@@ -294,6 +295,16 @@ class Engine:
             console.print(f"[red]Refused:[/red] {why}")
             return self._record(fault, run_id, "REFUSED", {"refusal": why, **seen},
                                 {"targets": "FAIL"}, error=why)
+        if request and fault["destructive"] is not False:
+            # DG-b: a destructive fault of a request runs only on the VM whose name the operator
+            # typed, compared to the name Azure gives it.
+            names = {str(bench.vm(vm).get("name") or "") for vm in seen["targets"]}
+            if names != {typed_name}:
+                why = (f"typed_name: the name typed ({typed_name or 'none'}) is not the target's "
+                       f"({', '.join(sorted(names))})")
+                console.print(f"[red]Refused:[/red] {why}")
+                return self._record(fault, run_id, "REFUSED", {"refusal": why, **seen},
+                                    {"targets": "FAIL"}, error=why)
 
         # 4–6, inside an exercise window: what Glorfindel sees on the target meanwhile is
         # labelled ``exercise`` (eregion_core/exercise.py), on the hosted watch too.

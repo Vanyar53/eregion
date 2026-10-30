@@ -250,3 +250,15 @@ def test_the_request_pulled_is_the_one_asked_for():
     out = xr.confirm(xr.read(_doc()), load_catalog(), ask=lambda p: asked.append(p) or "y",
                      say=lambda *_: None, expect="r-20261030T075200Z-ffffff")
     assert out is None and asked == []
+
+
+def test_the_operator_types_the_name_of_a_destructive_faults_target_not_of_vm_shutdown():
+    from eregion_core.exercise_plan import Experiment
+    cat = {"vm-wipe": Experiment("vm-wipe", "fault", "Disk wipe", "azure_vm", "implemented", True, "chaos-studio"),
+           "vm-shutdown": Experiment("vm-shutdown", "fault", "VM shutdown", "azure_vm", "implemented", False, "chaos-studio")}
+    asked = []
+    out = xr.confirm(xr.read(_doc(wires=[{"experiment": "vm-shutdown", "target": VM, "rank": 1},
+                                         {"experiment": "vm-wipe", "target": VM, "rank": 2}])), cat,
+                     ask=lambda p: asked.append(p) or ("vm-gondolin" if p.startswith("Wire") else "y"),
+                     say=lambda *_: None)
+    assert out["typed"] == {"2": "vm-gondolin"} and [a.split(":")[0] for a in asked][0] == "Wire 2"

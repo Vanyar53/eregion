@@ -4170,7 +4170,7 @@ MUTANTS += [
     ("M1986", "a fault allowed on a VM its engine does not aim at (DG-a)", EP,
      "        elif target.name.lower() not in {n.lower() for n in aimed}:\n", "        elif False:\n"),
     ("M1987", "a destructive technique without the name to type (DG-a)", EP,
-     '    if e.kind == "technique" and e.destructive is not False:\n', "    if False:\n"),
+     "    if e.destructive is not False:\n        what = ", "    if False:\n        what = "),
     ("M1988", "Orodruin's ceilings ignored by the plan (DG-a)", EP,
      "            if rank + 1 > max_injections or total + estimate > max_run_s:\n",
      "            if False:\n"),
@@ -4418,6 +4418,18 @@ MUTANTS += [
      '    lines.append("\\nAnalyse ce signal et prends une décision de réponse.")\n'),
 ]
 TESTS["M2104"] = "tests/unit/test_dagorlad_blind.py"
+
+MUTANTS += [
+    ("M2105", "a destructive fault judged without the name to type, as before (DG-b review)", EP,
+     "    if e.destructive is not False:\n        what = ",
+     '    if e.kind == "technique" and e.destructive is not False:\n        what = '),
+    ("M2106", "Gothmog runs a destructive fault of a request whatever the name typed (DG-b review)",
+     "gothmog/runner/engine.py", "            if names != {typed_name}:\n", "            if False:\n"),
+    ("M2107", "the operator's command asks no name for a destructive fault (DG-b review)", XRQ,
+     "    return destructive is not False\n", '    return kind == "technique" and destructive is not False\n'),
+]
+TESTS.update({"M2105": "tests/unit/test_exercise_plan.py tests/unit/test_exercise_runner.py",
+              "M2106": "tests/unit/test_gothmog.py", "M2107": "tests/unit/test_exercise_request.py"})
 
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake

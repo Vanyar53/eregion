@@ -378,3 +378,17 @@ def test_an_injector_that_cannot_start_fails_its_wire_and_stops_the_rest(tmp_pat
     assert status.state == "finished"
     assert [(w.state, w.code) for w in status.wires] == [("failed", "launch_failed"), ("skipped", "launch_failed")]
     assert published[-1]["state"] == "finished" and published[-1]["wires"][0]["state"] == "failed"
+
+
+def test_a_destructive_fault_without_its_name_typed_is_refused_by_orodruin(tmp_path):
+    from eregion_core.exercise_plan import Experiment
+    cat = {**load_catalog(), "vm-wipe": Experiment("vm-wipe", "fault", "Disk wipe", "azure_vm", "implemented",
+                                                   True, "chaos-studio")}
+    r, inj, _, _ = _runner(tmp_path)
+    r.catalog = cat
+    r.fault_targets = lambda: {"vm-wipe": ["vm-celebrimbor-gondolin"]}
+    status = r.run(_req(("vm-wipe", GONDOLIN)), {})
+    assert status.wire(1).code == "typed_name" and inj.launched == []
+    status = r.run(_req(("vm-wipe", GONDOLIN)), {1: "vm-celebrimbor-gondolin"})
+    assert status.wire(1).state == "done"
+    assert inj.launched[0][0][-2:] == ["--typed-name", "vm-celebrimbor-gondolin"]

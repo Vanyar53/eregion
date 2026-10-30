@@ -1046,7 +1046,8 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
     tapé. Elle ne recueille aucun nom. Les fils restent figés jusqu'à « New plan ».
 - **La commande portée** : `make orodruin-exercise REQUEST=<id> [DRY_RUN=1] [REQUEST_FROM=local]`.
   - Elle tire la demande de H0 par SSH, clé d'hôte vérifiée, et la relit.
-  - Elle l'affiche fil par fil et fait taper le nom de chaque cible destructive, ou non déclarée (A0).
+  - Elle l'affiche fil par fil et fait taper le nom de chaque cible destructive, technique ou panne,
+    ou non déclarée (A0).
   - Elle la copie sur Orodruin et l'y lance.
   - Testée avec de faux `ssh` et `scp`.
 - **Orodruin juge et lance** (`eregion_core/exercise_runner.py`).

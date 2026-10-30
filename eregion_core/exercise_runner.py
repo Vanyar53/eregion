@@ -149,7 +149,7 @@ def argv_for(experiment, wire: xr.Wire, request_id: str, typed: str = "") -> lis
     """The injector's command for a wire: Annatar for a technique, Gothmog for a fault."""
     if experiment.kind == "fault":
         return ["gothmog", "run", experiment.id, "--yes", "--request", request_id,
-                "--target", wire.target]
+                "--target", wire.target] + (["--typed-name", typed] if typed else [])
     return ["annatar", "wire", experiment.id, wire.target, "--request", request_id] + (
         ["--typed-name", typed] if typed else [])
 

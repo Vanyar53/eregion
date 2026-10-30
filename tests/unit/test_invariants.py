@@ -201,11 +201,12 @@ _FAULTS = st.one_of(
 class _Chaos:
     def __init__(self):
         self.plan = None
-        self.calls = self.writes = 0
+        self.calls = self.writes = self.state_writes = 0
         self.fired = False
 
     def arm(self, fault):
         self.plan, self.calls, self.writes, self.fired = fault, 0, 0, False
+        self.state_writes = 0
 
     def __call__(self, op: str, phase: str, write: bool):
         if phase == "before":
@@ -217,6 +218,15 @@ class _Chaos:
         if not self.plan:
             return
         when, what = self.plan[1].split("-")
+        if when == "from":
+            # The disk fills up at the n-th write of the local state, and stays full for the
+            # rest of the operation (L2Q): what was written before it holds, nothing after.
+            if phase == "before" and op == "state.write":
+                self.state_writes += 1
+                if self.state_writes >= self.plan[0]:
+                    self.fired = True
+                    raise OSError(28, "No space left on device")
+            return
         if what == "foreign":
             # after: once; always: every write of the operation (a second watch that
             # keeps reasserting what it saw).
@@ -1958,6 +1968,25 @@ class IsolationMachine(RuleBasedStateMachine):
         self.l2_held_on = set()
         self.reassert(_Drawn(data, fault=None))
         self._out_of_sight(data)
+
+    @rule(data=st.data())
+    def quarantine_change_comes_back(self, data):
+        """A rare state made common (L2Q, #331): our quarantine NSG altered and said, then
+        the forensic access changes and its diff with it, during a pass where the disk fills
+        up (from its n-th write of the local state on) — and the access goes back as it was, or the configuration
+        turns unreadable and hides it: the diff may be the first change's again. Drawn one by
+        one, the steps met once (seed 101 at 500, a single fault on the one write that
+        mattered): a change that came back read « said » with no card left."""
+        self.quarantine_altered_then_reasserted(data)
+        if not self.l2_held_on:
+            return
+        before = dict(self.config)
+        self.config = {**before, "forensic": [] if before["forensic"] else [LATERAL], "readable": True}
+        self._write_config()
+        self.reassert(_Drawn(data, fault=st.tuples(st.integers(1, 4), st.just("from-full"))))
+        self.config = {**before, "readable": data.draw(st.booleans(), label="readable after")}
+        self._write_config()
+        self.reassert(_Drawn(data, fault=None))
 
     def _out_of_sight(self, data):
         """Said, then out of the listing (I1S, #231): the role removed on its group — the

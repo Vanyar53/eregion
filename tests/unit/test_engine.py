@@ -356,5 +356,6 @@ def test_a_local_script_run_writes_the_unified_run_format(tmp_path, monkeypatch)
     report = json.loads(next((tmp_path / "runs").glob("2*.json")).read_text())
     m = report["metrics"]
     assert (m["run_format"], m["kind"], m["injector"], m["experiment_id"]) == (RUN_FORMAT, "technique", "annatar", "T1041")
+    assert m["resource_id"] == RESOURCE_ID      # M1887: the VM the watch's decision is attached on
     run = read_run(report)
     assert run["kind"] == "technique" and run["experiment"] == "T1041" and run["at"] == m["attack_time"]

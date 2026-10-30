@@ -1102,6 +1102,26 @@ injecteur.
 | M1824 | le temps pour contenir s'arrête à l'enregistrement | idem, dans le calcul |
 | M1825 | `/api/coverage` prend n'importe quel `kind` | un paramètre non vérifié |
 
+Après la relecture (30/10), quatorze de plus, tous attrapés ; M560 (UI-2) est reciblé sur la
+recherche indexée (bissection) qui remplace la lecture de tous les cycles.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M1826 | la décision d'une autre VM rattachée au run | une preuve tirée d'une autre machine |
+| M1827 | entre plusieurs enregistrements, le plus ancien | la décision d'une détection voisine |
+| M1828 | un run rangé sous une technique prend la décision d'une autre | une preuve croisée |
+| M1829 | un run daté dans le futur gardé | un `missed` de 2076 fait régresser pour toujours |
+| M1880 | une panne au démarrage échoué prise pour un échec | une régression sans rien d'injecté |
+| M1881 | un rapport supprimé gardé en cache | le cache grossit sans fin |
+| M1882 | un fichier de la watch supprimé gardé en cache | idem |
+| M1883 | la matrice en cache servie après un nouveau rapport | une régression dite 30 s trop tard, ou jamais |
+| M1884 | le temps pour contenir de l'accueil mesuré à part de `timeline` | deux définitions |
+| M1885 | les indicateurs comptent un run daté dans le futur | une couverture qui n'existe pas |
+| M1886 | `eregion coverage` imprime les caractères de contrôle d'un rapport | un rapport forgé pilote le terminal |
+| M1887 | un run d'Annatar ne nomme plus sa VM | la décision de n'importe quelle VM |
+| M1888 | deux runs de la même seconde dans l'ordre de lecture | l'état dépend du système de fichiers |
+| M1889 | le démarrage échoué d'une panne non lu dans ses `checks` | idem M1880, côté lecteur |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

@@ -47,7 +47,14 @@ def console(host: str, port: int, chosen: str | None):
 
 
 _MARK = {"detected": "✓", "pass": "✓", "missed": "✗", "fail": "✗", "unknown": "?",
-         "not_measured": "·", "refused": "·"}
+         "not_measured": "·", "refused": "·", "not_started": "·"}
+
+
+def _printable(value) -> str:
+    """What a run report names, without its control characters (an ANSI escape, a carriage
+    return): the report comes from another host — printed as text, never as the terminal's
+    commands (as glorfindel/tui.py keeps a key)."""
+    return "".join(ch for ch in str(value) if ch.isprintable())
 
 
 def _age(seconds) -> str:
@@ -89,7 +96,7 @@ def coverage(as_json: bool, check: bool):
                 last, proof = r["last_run"], r["last_proof"]
                 run = f"{_age(now - (epoch(last['at']) or now))} ago {last['outcome']}" if last else "—"
                 shown = f"{_age(proof['age_s'])} ago" if proof else "—"
-                click.echo(f"{str(r['id'])[:13]:<14}{r['state']:<11}{run[:25]:<26}{shown:<12}"
+                click.echo(f"{_printable(r['id'])[:13]:<14}{r['state']:<11}{run[:25]:<26}{shown:<12}"
                            f"{''.join(_MARK.get(h['outcome'], '?') for h in r['history'])}"
                            f"{'' if r['in_catalog'] else '  (outside the catalog)'}")
             click.echo("")
@@ -98,6 +105,9 @@ def coverage(as_json: bool, check: bool):
         click.echo(f"coverage: {point.get('implemented_detected', 0)} / {s['implemented']} implemented "
                    f"techniques detected in {m['window_days']} d · stale {s['stale']} · "
                    f"never proven {s['never'] + s['unproven']}")
-        click.echo("regressed: " + (", ".join(regressed) if regressed else "none"))
+        click.echo("regressed: " + (", ".join(_printable(i) for i in regressed) if regressed else "none"))
+        if m.get("future"):   # left out of every row: a date ahead of the clock
+            click.echo("dated in the future, left out: "
+                       + ", ".join(_printable(f["run_id"]) for f in m["future"]))
     if check and regressed:
         raise SystemExit(1)

@@ -1326,9 +1326,13 @@ MUTANTS = [
     # UI-2 (#206) — the five indicators: a run's own decision, nothing invented in human-only,
     # the shadow bounded by the verdicts, 30 days from the reports, a proof is detection AND
     # decision, coverage counts what was detected.
+    # Retargeted at C1's review (30/10): the decision is found by bisection in an index; the
+    # bug, as it was — any record of the technique after the attack, the oldest first.
     ("M560", "a run takes any decision of its technique, not the one at its detection (UI-2)", IND,
-     "             and (t := _ts(c.get(\"signal_at\"))) is not None and abs(t - seen_at) <= MATCH_SLACK_S]\n",
-     "             and (t := _ts(c.get(\"signal_at\"))) is not None and t >= run[\"at\"]]\n"),
+     ("    found = [(t, c) for t, c in zip(times[lo:hi], cands[lo:hi])\n",
+      "    best = min(found, key=lambda tc: (abs(tc[0] - seen_at), tc[0]))[1] if found else None\n"),
+     ("    found = [(t, c) for t, c in zip(times, cands) if t >= run[\"at\"]\n",
+      "    best = min(found, key=lambda tc: tc[0])[1] if found else None\n")),
     ("M561", "a recommendation counts as contained alone in human-only (UI-2)", IND,
      '        if disruptive and d.get("executed") is True and d.get("verified") is True:\n',
      "        if disruptive:\n"),
@@ -4868,9 +4872,9 @@ _C1_RR = "tests/unit/test_run_report.py"
 MUTANTS += [
     ("M1800", "an Annatar run no longer says what it is: the run format guessed again (C1)",
      "annatar/runner/engine.py",
-     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre))\n', ""),
+     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id))\n', ""),
     ("M1801", "an Atomic run no longer says what it is (C1)", "annatar/runner/engine.py",
-     '            **run_report.identity("technique", "annatar", scenario.mitre),   # C1\n', ""),
+     '            **run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id),   # C1\n', ""),
     ("M1802", "a fault run no longer says what it is (C1)", "gothmog/runner/engine.py",
      '                           metrics={**run_report.identity("fault", "gothmog", fault.get("id")),  # C1\n',
      '                           metrics={"injector": "gothmog",\n'),
@@ -4942,6 +4946,53 @@ TESTS.update({f"M{n}": _C1_COV for n in range(1805, 1826)})
 TESTS.update({"M1800": "tests/unit/test_engine.py -k unified", "M1801": "tests/unit/test_annatar_atomic.py -k unified",
               "M1802": "tests/unit/test_gothmog.py -k unified", "M1803": _C1_RR, "M1804": _C1_RR,
               "M1820": f"{_C1_RR} {_C1_COV}", "M1821": _C1_RR, "M1824": _C1_RR})
+# C1, after its review (30/10): the future left out, the decision attached on the run's VM and
+# closest, the faults that never started, the caches, the CLI's text. M1826–M1829, M1880–M1889.
+MUTANTS += [
+    ("M1826", "the decision of another VM attached to the run (C1, review)", IND,
+     '             if not vm or str(c.get("resource_id") or "").lower() == vm]\n',
+     "             if True]\n"),
+    ("M1827", "among several records, the oldest taken, not the closest to the detection (C1, review)", IND,
+     "    best = min(found, key=lambda tc: (abs(tc[0] - seen_at), tc[0]))[1] if found else None\n",
+     "    best = min(found, key=lambda tc: tc[0])[1] if found else None\n"),
+    ("M1828", "a run filed under one technique takes the decision of another (C1, review)", IND,
+     '    if run.get("experiment", run["ttp"]) != run["ttp"]:\n        return None\n', ""),
+    ("M1829", "a run dated in the future kept: a missed of 2076 regresses for ever (C1, review)", COV,
+     '    runs = [r for r in runs if r["at"] <= now + FUTURE_SKEW_S]\n', ""),
+    ("M1880", "a fault whose start failed taken for a failure: a regression (C1, review)", COV,
+     '        if run.get("started") is False:   # its start failed: nothing was injected\n'
+     '            return "not_started"\n', ""),
+    ("M1881", "a deleted report kept in the cache for ever (C1, review)", RRC,
+     "    for gone in [p for p in _report_cache if p not in seen]:\n        del _report_cache[gone]\n", ""),
+    ("M1882", "a deleted debug file kept in the cycles' cache for ever (C1, review)", CON,
+     "    for gone in set(_cycle_cache) - set(paths):   # a file deleted is dropped from the cache (C1)\n"
+     "        del _cycle_cache[gone]\n", ""),
+    ("M1883", "the cached matrix served after a new report (C1, review)", CON,
+     "    return (tuple(sorted(stat(p) for p in reports.values())),\n",
+     "    return ((),\n"),
+    ("M1884", "the overview's time to contain measured apart from timeline (C1, review)", IND,
+     '        if (contained := timeline(r, d)["contain_s"]) is not None:\n            contain.append(contained)\n',
+     '        if disruptive and d.get("executed") is True and d.get("verified") is True \\\n'
+     '                and (decided := _ts(d.get("at"))) is not None and decided >= r["at"]:\n'
+     '            contain.append(decided - r["at"])\n'),
+    ("M1885", "the indicators count a run dated in the future (C1, review)", CON,
+     '        runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]\n', ""),
+    ("M1886", "`eregion coverage` prints a report's control characters to the terminal (C1, review)",
+     "eregion_console/cli.py",
+     '    return "".join(ch for ch in str(value) if ch.isprintable())\n', "    return str(value)\n"),
+    ("M1887", "an Annatar run no longer names its VM: the decision of any VM attached (C1, review)",
+     "annatar/runner/engine.py",
+     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id))\n',
+     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre))\n'),
+    ("M1888", "runs of the same second ordered by the order they were read in (C1, review)", COV,
+     '    runs = sorted(runs, key=lambda r: (r["at"], r["run_id"]))\n',
+     '    runs = sorted(runs, key=lambda r: r["at"])\n'),
+    ("M1889", "a fault's failed start not read from its checks (C1, review)", RRC,
+     '        "started": (checks.get("fault_started") == "PASS")\n', '        "started": None and (checks.get("fault_started") == "PASS")\n'),
+]
+TESTS.update({mid: _C1_COV for mid in ("M1826", "M1827", "M1828", "M1829", "M1880", "M1881", "M1882",
+                                        "M1883", "M1885", "M1886", "M1888", "M1889")})
+TESTS.update({"M1884": "tests/unit/test_indicators.py", "M1887": "tests/unit/test_engine.py -k unified"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

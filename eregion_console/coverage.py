@@ -21,8 +21,11 @@ watch running — one run ``--without-glorfindel`` measured nothing of Glorfinde
 **The state of a row**, the first that holds:
 
 - ``regressed`` — the non-regression: its last measured run failed (missed, or a fault FAIL)
-  after an earlier one succeeded (detected, or PASS). A run that measured nothing
-  (``unknown``, ``--without-glorfindel``, a fault REFUSED) neither proves nor regresses;
+  after an earlier one succeeded (detected, or PASS). **It is the detection that regresses**:
+  the earlier success needs no decision attached — a technique detected, then missed, has lost
+  its detection whether its response was ever proven or not. A run that measured nothing
+  (``unknown``, ``--without-glorfindel``, a fault REFUSED or whose start failed — its
+  ``checks.fault_started`` not PASS) neither proves nor regresses;
 - ``proven`` (last proof under 21 days), ``aging`` (21 to 30), ``stale`` (over 30 days: the
   alert of the indicator « age of the last proof »);
 - ``unproven`` — runs, none a proof;
@@ -34,10 +37,21 @@ the faults PASS, and the rows regressed that day.
 
 It feeds two indicators of the finality (``feed``): the coverage (the regressed techniques
 beside the detected ones) and the age of the last proof (over the whole history).
+
+**A run dated in the future** (more than ``FUTURE_SKEW_S`` ahead of the clock, the windows'
+bound, eregion_core/exercise.py) is left out of every row, and said (``future``): a ``missed``
+dated 2076 would keep a row regressed for ever, a proof dated in the future would never age.
+
+**What a report can make it say** (the threat model, frontier 2): a run report reaches H0
+through the exercise channel, written on Orodruin. A forged ``missed`` can make a row
+regressed — a false alarm, said in red, never a proof: a proof needs the watch's own record
+of the decision, which only Glorfindel writes. A forged ``detected`` counts in the 30 days'
+coverage, as it did before C1.
 """
 from __future__ import annotations
 
-from eregion_console.indicators import WINDOW_DAYS, decision_of
+from eregion_console.indicators import WINDOW_DAYS, decision_of, detections
+from eregion_core.exercise import FUTURE_SKEW_S
 from eregion_core.run_report import iso, timeline
 
 DAY = 86400.0
@@ -56,6 +70,8 @@ def outcome(run: dict) -> str:
     if run["kind"] == "fault":
         if run["result"] == "REFUSED":
             return "refused"
+        if run.get("started") is False:   # its start failed: nothing was injected
+            return "not_started"
         if run["without_glorfindel"]:
             return "not_measured"
         return "pass" if run["result"] == "PASS" else "fail"
@@ -111,7 +127,7 @@ def state(runs: list[dict], proof: dict | None, regressed: dict | None, now: flo
 
 def row(entry: dict, runs: list[dict], cycles: list[dict], now: float) -> dict:
     """One row of the matrix: an entry of the catalog and its runs (any order)."""
-    runs = sorted(runs, key=lambda r: r["at"])
+    runs = sorted(runs, key=lambda r: (r["at"], r["run_id"]))
     proofs = [r for r in runs if is_proof(r, cycles)]
     proof = proofs[-1] if proofs else None
     lost = regression(runs)
@@ -164,7 +180,7 @@ def evolution(runs: list[dict], catalog: list[dict], now: float,
         for r in seen:
             by_row.setdefault((r["kind"], r["experiment"]), []).append(r)
         regressed = sorted(e for (_, e), rs in by_row.items()
-                           if regression(sorted(rs, key=lambda r: r["at"])))
+                           if regression(sorted(rs, key=lambda r: (r["at"], r["run_id"]))))
         points.append({"at": iso(t), "implemented_detected": len(implemented & detected),
                        "catalog_detected": len(techniques & detected),
                        "faults_pass": sum(1 for r in window if r["kind"] == "fault" and outcome(r) == "pass"),
@@ -175,7 +191,11 @@ def evolution(runs: list[dict], catalog: list[dict], now: float,
 def matrix(runs: list[dict], cycles: list[dict], catalog: list[dict], now: float) -> dict:
     """The matrix: a row per entry of the catalog (``/api/catalog``'s entries), techniques and
     faults apart, a row more per experiment run outside it; their summaries; the last proof
-    of an attack over the whole history; the evolution of the coverage."""
+    of an attack over the whole history; the evolution of the coverage; the runs dated in the
+    future, left out. ``cycles``: the watch's cycles, or their ``Detections`` index."""
+    future = [r for r in runs if r["at"] > now + FUTURE_SKEW_S]
+    runs = [r for r in runs if r["at"] <= now + FUTURE_SKEW_S]
+    cycles = detections(cycles)   # indexed once; each run's decision found once
     by_key: dict[tuple, list[dict]] = {}
     for r in runs:
         by_key.setdefault((r["kind"], r["experiment"]), []).append(r)
@@ -203,6 +223,8 @@ def matrix(runs: list[dict], cycles: list[dict], catalog: list[dict], now: float
         "stalest": [{"ttp": r["id"], "at": r["last_proof"]["at"] if r["last_proof"] else None}
                     for r in stalest],
         "evolution": evolution(runs, entries, now),
+        "future": [{"run_id": r["run_id"], "kind": r["kind"], "experiment": r["experiment"],
+                    "at": iso(r["at"])} for r in sorted(future, key=lambda r: (r["at"], r["run_id"]))],
     }
 
 

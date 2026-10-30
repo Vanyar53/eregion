@@ -15,7 +15,9 @@ What C1 adds to the format, compatibly — every key optional, an older report r
 - ``metrics.injector``: ``annatar`` or ``gothmog`` (Gothmog already wrote it);
 - ``metrics.experiment_id``: the technique's ATT&CK id, or the fault's id (as the catalog and
   the exercise windows name it — Gothmog's ``metrics.experiment`` is the Chaos Studio
-  experiment, kept as it was).
+  experiment, kept as it was);
+- ``metrics.resource_id``: an attack's target VM (Annatar's), so that the watch's decision is
+  attached on that VM only — a fault may have several targets, and writes none.
 
 A report without them is told apart as before: ``metrics.injector == "gothmog"`` is a fault,
 anything else an attack; its technique is ``mitre``, its fault ``metrics.fault``.
@@ -64,13 +66,17 @@ class RunReport:
         return path
 
 
-def identity(kind: str, injector: str, experiment: str) -> dict:
+def identity(kind: str, injector: str, experiment: str, resource_id: str = "") -> dict:
     """What every run writes in its ``metrics`` so that a reader tells it apart without
-    guessing: the format, an attack or a fault, who ran it, and what."""
+    guessing: the format, an attack or a fault, who ran it, and what — and, for an attack,
+    on which VM (``resource_id``, left out when not given)."""
     if kind not in KINDS:
         raise ValueError(f"a run is a technique or a fault, not {kind!r}")
-    return {"run_format": RUN_FORMAT, "kind": kind, "injector": injector,
-            "experiment_id": str(experiment or "")}
+    out = {"run_format": RUN_FORMAT, "kind": kind, "injector": injector,
+           "experiment_id": str(experiment or "")}
+    if isinstance(resource_id, str) and resource_id:
+        out["resource_id"] = resource_id
+    return out
 
 
 def epoch(value) -> float | None:
@@ -141,24 +147,46 @@ def read_run(report, run_id: str = "", campaign: str = "") -> dict | None:
         "without_glorfindel": m.get("without_glorfindel") is True,
         "campaign": campaign,
         "run_format": fmt if isinstance(fmt, int) and not isinstance(fmt, bool) else 0,
+        "resource_id": m["resource_id"] if isinstance(m.get("resource_id"), str) else "",
+        # A fault whose start failed says so in its checks (Gothmog: ``fault_started`` FAIL):
+        # nothing was injected — False; None when the report says nothing.
+        "started": (checks.get("fault_started") == "PASS")
+        if isinstance(checks := report.get("checks"), dict) and "fault_started" in checks else None,
     }
+
+
+# A report is read once per version of its file (absolute path; mtime_ns, size, inode): the console reads them
+# all at every refresh. Files gone from the listing are dropped from the cache.
+_report_cache: dict[Path, tuple[tuple[int, int, int], dict | None]] = {}
 
 
 def read_reports(reports: dict[str, Path]) -> list[dict]:
     """Every run of ``reports`` (run id → path), unified, whatever its date — a report that
     cannot be read, or has no date, is left out. A report under ``campaigns/<id>/runs/`` is
-    given its campaign."""
+    given its campaign. Each file is parsed once per version (``_report_cache``)."""
     runs = []
+    seen = set()
     for run_id, path in reports.items():
+        path = Path(path).absolute()
+        seen.add(path)
         try:
-            r = json.loads(Path(path).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            st = path.stat()
+        except OSError:
             continue
-        parent = Path(path).parent
-        campaign = parent.parent.name if parent.name == "runs" and parent.parent.parent.name == "campaigns" else ""
-        run = read_run(r, run_id, campaign)
-        if run is not None:
-            runs.append(run)
+        key = (st.st_mtime_ns, st.st_size, st.st_ino)
+        hit = _report_cache.get(path)
+        if hit is None or hit[0] != key:
+            try:
+                r = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeDecodeError):
+                r = None
+            parent = path.parent
+            campaign = parent.parent.name if parent.name == "runs" and parent.parent.parent.name == "campaigns" else ""
+            hit = _report_cache[path] = (key, read_run(r, run_id, campaign) if r is not None else None)
+        if hit[1] is not None:
+            runs.append(dict(hit[1]))
+    for gone in [p for p in _report_cache if p not in seen]:
+        del _report_cache[gone]
     return runs
 
 
@@ -170,7 +198,12 @@ def timeline(run: dict, decision: dict | None) -> dict:
     ``at``, ``action``, ``confidence``, ``escalate``, ``executed``, ``verified``, ``mode``, and
     ``verified_at`` when the watch writes one). Contained: an isolation or a block executed
     AND verified — its time is the verification's when written, else the record's, which the
-    watch writes once the action is verified. A time before the attack is no time (None)."""
+    watch writes once the action is verified. A time before the attack is no time (None).
+
+    One record only: an incident contained at a later cycle — an action a human approved
+    afterwards, an isolation decided at the next cycle — has no ``contain_s`` here (BL1
+    extends it). The console's indicators and its matrix both measure the time to contain
+    here, and nowhere else."""
     at = run["at"]
     detected = run.get("detected_at")
     out = {"attack_at": at, "detected_at": detected, "decided_at": None, "contained_at": None,

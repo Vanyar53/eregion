@@ -2132,6 +2132,153 @@ flows of …/rg-app1/…/api », `address_reused_under_a_turned_rule` puis
 `block_turned_then_reasserted`) — un blocage, une règle retournée, une adresse reprise : le terrain
 d'I4B (#333), sans rapport avec la quarantaine.
 
+**L2C (30/10, #343) : les autres cartes de la réaffirmation, lues « déjà dites » quand le changement
+revient.** Relevé par la relecture de L2Q. Trois cartes de `glorfindel/reassert_cards.py` gardent
+leur propre marque de ce qui a été dit : le contournement (`bypass_said` dans l'état de l'isolation
+ou du blocage, V-16), l'état local illisible (`state_alerts.json`, SEC4b), les règles qu'un blocage a
+laissées (`left_said`, I4A). **Cause, établie par les tests** (rouges sur `origin/main`) : la marque
+s'écrit après la carte (L1F), mais une écriture qui échoue (disque plein) garde l'ancienne ; la
+situation revenue à ce changement, la passe le lit « dit, ou acquitté » et se tait.
+- Contournement : il tient de nouveau, la carte se ferme (avec sa note), la marque ne s'efface pas ;
+  la même allow revient : aucune carte. Ou A dit, puis B (la carte A fermée, la carte B écrite, la
+  marque restée sur A) ; retour à A : la passe s'arrêtait avant de fermer B, périmée — elle nomme une
+  allow qui ne passe plus —, et une fois B fermée par l'opérateur, A n'était plus jamais dit.
+- État illisible : le même jeu de fichiers de nouveau illisible, ou revenu à un jeu déjà dit : rien.
+- Règles laissées : un autre jeu était fondu par le magasin des escalades (même ressource, action,
+  type et adresse) dans la carte de l'ancien, qui le nommait encore ; le retour à l'ancien, la marque
+  restée, se taisait.
+
+**Correctif.** La règle de L2Q, partagée (`_last_word`) : un changement présent dans la marque ne se
+tait que si sa carte attend, seule, ou si la dernière carte de la ressource (ses identifiants de
+signal, dans l'ordre du magasin) est la sienne, fermée par un humain. Les fermetures de Glorfindel
+portent une note — déjà vrai pour le contournement et l'état illisible ; pour les règles laissées,
+un autre jeu ferme maintenant l'ancienne carte (« Autres règles laissées : une nouvelle carte les
+dit »), comme une carte de contournement périmée. **Chaque `resolve()` sans note qui peut fermer ces
+cartes est un chemin humain** : `glorfindel ack`, la console (acquittement, approbation), le bot
+Discord, la TUI ; `reassert._alert` ne ferme que les cartes `verification_failed` de son
+identifiant ; `readiness`, `posture` et `resolve_by_*` touchent d'autres types. Sur `main` déjà,
+Glorfindel ne fermait aucune carte de ces trois types sans note (celles des règles laissées, jamais) :
+la limite de L2Q (une carte fermée par Glorfindel sans note, lue comme acquittée) ne joue pas ici.
+
+**La machine** tire la séquence (`said_then_back_after_a_full_disk`, sur le modèle de
+`quarantine_change_comes_back`) : un contournement — une isolation par règles ou un blocage, puis la
+règle du client placée avant notre deny élargie en allow de tout, contourné au jugement du test seul
+(elle ouvre des flux de la VM, de l'attaquant pour un blocage, fermés sans elle) — ou un fichier
+d'état illisible (celui d'aucune VM, retiré en fin de règle), dit ; puis il change pendant une passe
+où le disque se remplit (la faute `(n, "from-full")` de L2Q), et revient tel quel. L'oracle, après
+chaque passe sans faute : une carte de contournement en attente sur la VM (`review_bypass` ; pour un
+blocage, de l'adresse de l'attaquant), ou une carte sur l'état local — L1 et L2 étendus à ces
+cartes. Aucune règle retirée ni restreinte, aucun oracle affaibli. Limite de l'oracle : la carte
+périmée du cas « A, B, A » est une carte de contournement en attente, elle le satisfait ; ce cas est
+tenu par les tests unitaires (M1931).
+
+L'oracle du contournement suit la définition de L1 (`_block_vanished`) : il laisse ce qu'une
+opération tient (le journal du test, les marques `partial`, `unblock_failed` / `release_failed`,
+`unblocking_at` / `releasing_at`). La graine 777 à 2 000 l'a montré : un déblocage échoué marque
+l'entrée, un nouveau blocage entier la fusionne (`_save_block_state`, qui ne retire jamais la
+marque) et la passe ne l'appelle plus jamais : ses règles disparues, `verify_block_ip` n'est pas
+appelé, rien n'est dit. **C'est un défaut connu, présent sur `main`**, une marque d'opération périmée
+— une autre famille que L2C —, routé vers un lot de suite et figé en `xfail` strict
+(`test_reassert.py::test_a_block_written_again_after_a_failed_unblock_is_checked`) ; l'exemption de
+l'oracle suit L1 en attendant.
+
+**La relecture de L2C : une disparition dite de nouveau après une acquittée.** La même famille, la
+plus grave : une VM qui n'est plus isolée, en silence. L'isolation (ou le blocage) disparaît, une
+carte le dit (`verification_failed`) et `drift_alerted_at` le marque ; l'opérateur l'acquitte —
+dite pour son épisode, pas de nouveau tant qu'elle reste disparue. Une passe la relit en place, mais
+la marque ne s'efface pas (disque plein) ; elle disparaît de nouveau : la marque lue « déjà dit »,
+aucune carte. **Correctif** : une marque ne fait taire une disparition que si la dernière carte de
+son alerte (son identifiant exact) attend, ou a été fermée par l'opérateur — les fermetures de
+`reassert._alert` portent maintenant une note (les autres `resolve()` sans note de ces cartes sont
+humains : `glorfindel ack`, la console, le bot, la TUI) —, et si **ce processus** a vu l'épisode
+ouvert (`reassert_cards.episode`) : ouvert quand sa marque s'écrit après sa carte, fermé dès qu'une
+passe relit les règles en place, avant toute écriture. Rien d'écrit ne peut porter ce qu'une
+écriture refusée n'a pas écrit, et la mémoire est celle du processus du watch : **la seconde
+relecture a choisi une reprise bruyante** (décision de Jonathan, 30/10) — d'abord, la mémoire
+gardait les épisodes vus finis, et un redémarrage entre « remise en place, disque plein » et la
+disparition suivante la faisait taire. Maintenant, au démarrage, chaque disparition acquittée et
+toujours là est redite une fois (une carte nouvelle), puis se tait (mutant M2125). Hors de
+`human_only`, ce premier passage **redit et retente une fois** la remise en place qui avait
+échoué (décision de Jonathan, 30/10) : une écriture qui ferme, déjà permise par le mode, au plus
+une fois par redémarrage (`test_after_a_restart_a_failed_reapplication_is_said_and_tried_once_more`).
+Une écriture
+d'état refusée sur une VM n'arrête plus la passe (`reassert_active`) et elle est dite : une entrée
+`failed` du rapport de la passe, « état local non écrit », que la watch affiche (M2123, M2124) ;
+la machine l'a montré à
+500 séquences (graines 322 et 1), la passe coupée à la première VM ne voyait jamais la suivante
+remise en place, sa marque restée, sa disparition suivante tue. Enfin, seule une tenue finissait
+l'épisode : des règles remises mais contournées (une allow du client avant elles, dite sur sa propre
+carte) le gardaient pour toujours, et la disparition suivante était tue (graine 322 à 500) ; les
+règles revenues le finissent maintenant (`drift_over`). Et l'épisode se sait fini dès que la
+vérification relit les règles, avant toute écriture de la VM : la première de sa passe (sa marque
+de contournement retirée) refusée, il ne l'était jamais (graine 777 à 2 000). La machine le tire : la
+branche « disparu » de `said_then_back_after_a_full_disk` (nos règles retirées par le test, dites,
+acquittées, remises pendant le disque plein, retirées de nouveau ; l'oracle de L1 pour un blocage,
+le même pour une isolation par règles), deux séquences figées. Mutants M1942–M1949. Les cartes de la
+réaffirmation se lisent une fois par passe (`reassert_cards._history`, relue après chacune de ses
+écritures), plus une fois par changement acquitté.
+
+**Mesures de L2C.** `pytest` complet : 4 300 réussis, 7 sautés, 4 `xfail` (ci-dessous et dans `test_reassert.py`) ; `ruff` propre. Sur `origin/main` (ba657a0),
+échouent huit des dix tests de `tests/unit/test_reassert.py` (les deux autres : le retour des règles
+laissées, que le magasin masquait en fondant les cartes, rouge sous M1933 ; une carte acquittée lue
+sur sa propre ressource, pour M1941) et les quatre séquences figées ; pour la relecture, sur la
+branche avant son correctif, les quatre tests de la dérive (`-k "acknowledged_and_held_again or
+closed_with_a_note or replaces_with_a_note"`) et ses deux séquences figées. La machine seule, sur
+`main` avec la nouvelle règle : l'état illisible à 500 séquences sur les six graines essayées (101,
+202, 322, 42, 777, 1) ; le contournement, avec la règle sans la branche de l'état illisible, sur les
+graines 101 et 42 de quatre. Mutants M1930–M1941 : 12/12 par leurs tests à chaque tour ; par la
+machine seule, M1930 (la marque seule pour un contournement) à 500 sur 322, 42 et 1 de six graines
+(202, 777, 8675 non), M1932 (le fichier seul pour un état illisible) à 60 sur 202, 322 et 777 de
+six. Mutants de la relecture M1942–M1949 : 8/8 par leurs tests à chaque tour ; M1942–M1945 aussi
+par les deux séquences figées de la machine ; M1948 (`_last_word` lu sur toutes les cartes de règles
+laissées) survivait, attrapé par le test à deux blocages. M1257, M1259, M1765, M902 et M1936
+réalignés sur les lignes réécrites. Deux points de plus, trouvés par la branche « disparu » à 500
+(sans mutant : la plage du lot est pleine, tenus par leurs tests, rouges sans eux) : la passe
+coupée par une écriture refusée, et l'épisode gardé par des règles remises mais contournées.
+Invariants sur le code de la première relecture : 500 séquences sur 202, 322, 42, 777 et 1, et
+2 000 sur 202, 322, 777, 1 et 8675, verts (la 101 à 500 et la 42 à 2 000 : ci-dessous). Harnais
+avant/après (60 séquences, deux tours, `--jobs 4`) sur les 51 mutants de `reassert.py`,
+`reassert_cards.py` et `reassert_quarantine.py` : 50/51 attrapés à chaque tour avant (ba657a0),
+50/51 après plus les douze nouveaux (62/63) ; M37 attrapé par ses seules séquences figées des deux
+côtés ; aucun perdu. Après la relecture, sur les 71 (les 51 voisins et M1930–M1949) : 70/71, M37 de
+même ; aucun perdu.
+Invariants sur le code final (après la fusion de `main`, 0.4.8) : 500 séquences sur 42, 1, 202 et
+101, et 2 000 sur 777 et 322, verts ; avant la fusion, 500 sur 42, 322, 777 et 1 et 2 000 sur 202,
+et à 60 séquences douze graines fixées et dix au hasard, verts. Deux suites complètes lancées avec
+une graine au hasard ont fait tomber `test_isolation_invariants` sur la branche « disparu » : la
+seconde (graine 128987538955873571962454344647035300307) est l'épisode pas su fini avant la
+première écriture, corrigé et rejoué vert ; la sortie de la première est perdue. Harnais sur les
+mutants de la relecture, code final : 8/8, M902 de même ; M13 bruité à 60 (1/2), 2/2 à 500.
+
+**Hors du lot : deux L1 anciens et un I5**, trouvés par ces runs ou leur relecture, présents sur
+`origin/main` sans la règle de L2C ni sa faute, figés en `xfail` strict dans
+`tests/unit/test_invariant_regressions.py`, pour un lot de suite.
+- La graine 101 à 500 (`test_a_block_put_back_on_a_new_vm_stays_said_after_an_acknowledgement`) :
+  un `api` nouveau reprend le NSG d'une ancienne isolation, bloqué sur son sous-réseau et pour
+  lui-même, une règle retournée, une carte acquittée, un `terraform apply`, une adresse changée — le
+  blocage disparu n'est ni reposé ni dit.
+- La graine 42 à 2 000 (`test_a_merged_block_whose_perimeter_terraform_removed_is_said`) : un
+  blocage de périmètre puis un blocage et une isolation sous une lecture du sous-réseau refusée
+  (429), un `terraform apply` qui retire le périmètre — de même.
+- **Leur cause, établie par la relecture** : un blocage fusionné (périmètre et VM) dont les règles
+  de la VM sont là mais contournées par une allow du client ; `verify_block.py` range l'absence du
+  périmètre dans `held_missing`, puis `if bypass:` renvoie `_block_bypassed`, qui laisse tomber ce
+  `held_missing` : la passe ne voit que « contourné », jamais « disparu ». Pour la graine 101, la
+  suppression du périmètre après l'acquittement n'est pas redite (`_worse` n'est jamais atteint).
+  Ni l'un ni l'autre n'ouvre rien. **Réglés par I4C** (#344, 91dae76) : à la fusion de `main`, les
+  deux séquences passent, leur `xfail` est retiré. Le même mécanisme vaut pour une isolation (graine 42 à 500, la
+  branche « disparu ») : ses règles retirées sur une carte dont le NSG porte une allow lue avant
+  notre deny, la vérification rend « contournée » sans les règles manquantes ; l'oracle de la
+  branche compte la carte de contournement, en attendant le lot de suite. Cet assouplissement de
+  `_gone_said` sera retiré avec L1B (#355) ; d'ici là, la séquence réduite (deux étapes) est
+  figée en `xfail` strict avec la vérification d'avant, qui exige une carte `isolate_vm`
+  (`test_an_isolation_gone_under_a_bypass_is_said_gone`).
+- La graine 1618 à 2 000 (`test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address`),
+  un **I5** (une ouverture) : Db--01 isolée deux fois en même temps,
+  `address_reused_under_a_turned_rule` sur Db--01, puis notre NSG de quarantaine vidé, l'état perdu
+  et la réaffirmation hors de `human_only` — elle ouvre db-nic-1 en entrée sur le port 22 (depuis
+  10.9.9.9, 203.0.113.7 et 192.31.196.7). Cause non établie.
+
 **I4C (30/10, #344) : ce que le déblocage, le reset et la levée gardent est dit ; l'exemption
 « périmètre levé » resserrée.** Les deux limites relevées par la relecture d'I4B, dans l'oracle
 (A0 : il refuse plus, jamais moins ; aucune règle de la machine retirée ni restreinte).

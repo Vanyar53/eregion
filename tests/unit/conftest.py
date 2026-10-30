@@ -408,3 +408,15 @@ def isolated_bot_state(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "_MESSAGES_STORE", tmp_path / "bot_messages.json")
     monkeypatch.setattr(bot, "_SYNCED_STORE", tmp_path / "bot_synced.json")
     monkeypatch.setattr(bot, "_WEEKLY_STORE", tmp_path / "bot_weekly.json")
+
+
+@pytest.fixture(autouse=True)
+def fresh_reassertion_memory(monkeypatch):
+    """The reassertion's memory of one process (L2C): its cards read once per pass, and the
+    disappearances it saw open — fresh for every test."""
+    try:
+        from glorfindel import reassert_cards
+    except ImportError:  # another component's tests, alone (D1)
+        return
+    monkeypatch.setattr(reassert_cards, "_HISTORY", {})
+    monkeypatch.setattr(reassert_cards, "_EPISODE_OPEN", set())

@@ -3263,6 +3263,237 @@ def test_a_quarantine_change_brought_back_after_a_full_disk_is_said(monkeypatch,
           "human_only", (3, "from-full"), readable, "human_only"))
 
 
+# ── L2C (#343): the other cards of the reassertion, after a full disk ──────────────────
+
+_NSG_WEB = "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-web-nic"
+
+
+@pytest.mark.parametrize("isolation, rule", [(False, "allow-https"), (True, "deny-lateral-in")],
+                         ids=["block", "isolation"])
+def test_a_bypass_brought_back_after_a_full_disk_is_said(monkeypatch, isolation, rule):
+    """The machine's own rule (`said_then_back_after_a_full_disk`, L2C): web blocked (port
+    22), or isolated by rules, on its own NSG — our deny at 101, behind a rule of the
+    customer's at 100 —; that rule widened into an allow of all: bypassed, said (A). Put
+    back as it was during a pass where the disk fills up from its second write of the
+    local state: our deny holds again, A's card closed (Glorfindel's note), its mark not
+    taken off. Widened again: A, read « said » from the mark — no card, before L2C.
+    (Back to another allow instead — a mark kept on A, B's card pending —: the stale card
+    stays until L2C, tests/unit/test_reassert.py; this oracle takes any card on the VM.)"""
+    tpl = (dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                destination_address_prefix="*", destination_port_range="443") if rule == "allow-https" else
+           dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                destination_address_prefix="*", destination_port_range="*"))
+    _run(monkeypatch, _net(web_nic={"own": "dedicated", "rules": [_rule(rule, 100, tpl)]}),
+         ("said_then_back_after_a_full_disk", "bypass", WEB1, WEB1, None, isolation, *([] if isolation else [22]),
+          (101, _NSG_WEB), rule, "human_only", "human_only", (2, "from-full"), "human_only"))
+
+
+@pytest.mark.parametrize("another, n", [(False, 2), (True, 3)], ids=["reads_again", "another_file_too"])
+def test_an_unreadable_state_brought_back_after_a_full_disk_is_said(monkeypatch, another, n):
+    """The same rule for a local state file (SEC4b): one unreadable, said (A); it reads
+    again — or a second one turns unreadable too (B) — during a pass where the disk fills
+    up: A's card closed, state_alerts.json not written (it keeps A). The first set again:
+    read « said » from the record, no card, before L2C. Found by the machine alone on
+    `main` at 500 sequences, seeds 101, 202, 322, 42, 777 and 1."""
+    _run(monkeypatch, _net(),
+         ("said_then_back_after_a_full_disk", "unreadable state", "human_only", another, "human_only", (n, "from-full"),
+          "human_only"))
+
+
+@pytest.mark.parametrize("isolation", [True, False], ids=["isolation", "block"])
+def test_a_disappearance_after_one_acknowledged_and_held_again_is_said_by_the_machine(monkeypatch, isolation):
+    """The same rule, its branch for the review of L2C: web isolated by rules on its own
+    NSG, or blocked there; our rules taken off — said; the operator acknowledges it; the
+    rules put back during a pass where the disk is full from its first write of the local
+    state (the drift mark not taken off); taken off again. Before the review's fix: read
+    « already said » from the mark — no card, the VM open again."""
+    _run(monkeypatch, _net(web_nic={"own": "dedicated"}),
+         ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, isolation, *([] if isolation else [22]),
+          (1, "from-full")))
+
+
+_S101_SSH = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+                 destination_port_range="22")
+_S101_DENY = dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                  destination_address_prefix="*", destination_port_range="*")
+_S101_NET = {
+    "subnet_nsg": None,
+    "edge_nsg": [_rule("allow-ssh", 100, _S101_SSH), _rule("deny-lateral-in", 130, _S101_DENY),
+                 _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                                      destination_address_prefix="VirtualNetwork",
+                                                      destination_port_range="*"))],
+    "tier_rules": [],
+    "nics": {"web-nic": {"own": "tier", "rules": [], "policy": True},
+             "db-nic-0": {"own": "dedicated", "rules": [], "policy": False},
+             "db-nic-1": {"own": None, "rules": [], "policy": False},
+             "api-nic": {"own": "dedicated", "policy": False,
+                         "rules": [_rule("allow-ssh", 100, _S101_SSH), _rule("deny-lateral-in", 130, _S101_DENY)]}},
+    "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+    "legacy": ("api-nic", False), "data_subnet": None}
+_S101_NSG = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/networksecuritygroups/{}"
+_S101_API2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api"
+
+
+def test_a_block_put_back_on_a_new_vm_stays_said_after_an_acknowledgement(monkeypatch):
+    """Seed 101 at 500 sequences on L2C's final code, shrunk: none of L2C's steps nor its
+    fault, and it fails as well with glorfindel/ of origin/main (ba657a0) — « L1: the block
+    on …/rg-app2/…/api vanished from Azure; the reassertion neither put it back nor said
+    so ». An old isolation's VM gone, a new `api` given its NSG, blocked on its subnet and
+    for itself, one of its block denies turned into an allow and reasserted; the operator
+    acknowledges a card, `terraform apply` on the subnet's NSG, an IP changed, then web of
+    rg-app2 blocked the same way. Cause (established by L2C's review): a merged block
+    (perimeter and VM) whose VM rules stand but a customer's allow passes —
+    `verify_block.py` puts the perimeter's absence in `held_missing`, then returns
+    `_block_bypassed`, which drops it: the pass sees « bypassed », never « gone »; and the
+    perimeter's deletion after the acknowledgement is not said again (`_worse` never
+    reached). Nothing opens. Frozen in xfail by L2C; passes since I4C (#344, 91dae76)."""
+    _run(monkeypatch, _S101_NET,
+         ("address_reused", WEB1, WEB1, None, False, 22, False, "rg-app1", "api", None, "Linux", True, None,
+          "human_only"),
+         ("time_passes",), ("time_passes",),
+         ("access_changes", False),
+         ("terraform_apply", _S101_NSG.format("rg-app1", "nsg-db-nic-0")),
+         ("an_old_isolations_vm_goes_away", (_S101_NSG.format("rg-edge", "nsg-api-nic"), API), False, False,
+          "rg-app2", "api", "Linux", True, _S101_API2),
+         ("block_turned_then_reasserted", _S101_API2, _S101_API2, None, "both", 22,
+          (_S101_NSG.format("rg-edge", "nsg-api-nic"), "glorfindel-block-192-31-196-7-api-api-nic-5-cdd247"),
+          "non_disruptive"),
+         *[("time_passes",)] * 8,
+         ("operator_acknowledges", 0),
+         ("time_passes",),
+         ("terraform_apply", _S101_NSG.format("rg-edge", "nsg-edge")),
+         ("customer_changes_ip", "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/"
+                                 "networkinterfaces/api-nic-4", 0, 4),
+         ("time_passes",),
+         ("block_turned_then_reasserted", WEB2, WEB2, None, "both", 22,
+          (_S101_NSG.format("rg-net", "nsg-tier"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+          "non_disruptive"))
+
+
+_S42_SSH = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+                destination_port_range="22")
+_S42_NET = {
+    "subnet_nsg": [], "edge_nsg": None,
+    "tier_rules": [_rule("allow-ssh", 100, _S42_SSH),
+                   _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound",
+                                                        source_address_prefix="*",
+                                                        destination_address_prefix="VirtualNetwork",
+                                                        destination_port_range="*"))],
+    "nics": {"web-nic": {"own": None, "rules": [], "policy": False},
+             "db-nic-0": {"own": "dedicated", "rules": [], "policy": False},
+             "db-nic-1": {"own": "tier", "policy": False, "rules": [
+                 _rule("allow-ssh", 100, _S42_SSH),
+                 _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound",
+                                                    source_address_prefix="VirtualNetwork",
+                                                    destination_address_prefix="*", destination_port_range="*"))]},
+             "api-nic": {"own": "dedicated", "rules": [], "policy": False}},
+    "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+    "legacy": None, "data_subnet": None}
+
+
+def test_a_merged_block_whose_perimeter_terraform_removed_is_said(monkeypatch):
+    """Seed 42 at 2 000 sequences on L2C's final code, shrunk — then its last step, L2C's
+    rule, replaced by a plain pass: it fails the same, and with glorfindel/ of origin/main
+    (ba657a0). Db--01 blocked on its subnet, then blocked and isolated under a throttled
+    subnet read (always 429); `terraform apply` on the subnet's NSG takes our perimeter
+    rules off, someone detaches the quarantine, time passes: « L1: the block on
+    …/Db--01 vanished from Azure; the reassertion neither put it back nor said so ».
+    Cause (established by L2C's review): the merged block's VM rules stand but a customer's
+    allow passes them — `verify_block.py` puts the perimeter's absence in `held_missing`,
+    then returns `_block_bypassed`, which drops it: the pass sees « bypassed », never
+    « gone ». Nothing opens. Frozen in xfail by L2C; passes since I4C (#344, 91dae76)."""
+    _run(monkeypatch, _S42_NET,
+         ("race", WEB1, ("release", "reassert"), 0),
+         ("block_perimeter", DB, DB, None, False),
+         ("access_changes", False),
+         ("block_then_isolate", DB, DB, ("subnet.get", "always-429"), 22, None, False, False),
+         ("terraform_apply", _S101_NSG.format("rg-net", "nsg-subnet")),
+         ("someone_detaches_the_quarantine", None),
+         ("time_passes",), ("time_passes",), ("time_passes",),
+         ("reassert", "human_only", None))
+
+
+def _s1618(name, priority, access, port, source="*", direction="Inbound", destination="*"):
+    return _rule(name, priority, dict(access=access, direction=direction, source_address_prefix=source,
+                                      destination_address_prefix=destination, destination_port_range=port))
+
+
+_S1618_SSH = _s1618("allow-ssh", 100, "Allow", "22")
+_S1618_OUT = _s1618("allow-lateral-out", 100, "Allow", "*", direction="Outbound", destination="VirtualNetwork")
+_S1618_DENY = _s1618("deny-lateral-in", 130, "Deny", "*", source="VirtualNetwork")
+_S1618_NET = {
+    "subnet_nsg": [_s1618("allow-ssh", 101, "Allow", "22"), _S1618_DENY],
+    "edge_nsg": [_S1618_SSH], "tier_rules": [_S1618_SSH],
+    "nics": {"web-nic": {"own": None, "rules": [], "policy": True},
+             "db-nic-0": {"own": "tier", "policy": False,
+                          "rules": [_s1618("allow-https", 100, "Allow", "443", source="Internet"), _S1618_OUT]},
+             "db-nic-1": {"own": None, "rules": [_S1618_SSH], "policy": True},
+             "api-nic": {"own": None, "rules": [_S1618_SSH, _S1618_OUT, _S1618_DENY], "policy": False}},
+    "windows": None, "config": {"quarantine": True, "readable": True, "forensic": [], "rg": ""},
+    "legacy": None, "data_subnet": None}
+_RG_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+
+
+@pytest.mark.xfail(strict=True, reason="I5 outside L2C (to route): present on origin/main, without L2C's rule")
+def test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address(monkeypatch):
+    """Seed 1618 at 2 000 sequences (L2C's review), shrunk by hand to three steps of rules
+    `main` has: Db--01 isolated twice at once (the other VM's turn interleaved);
+    `address_reused_under_a_turned_rule` on Db--01 (db-nic-1's address changed, rg-new/api
+    created); our quarantine NSG stripped, the state lost, the reassertion outside
+    human_only — « I5: the reassertion opened flows of …/Db--01 »: db-nic-1, inbound, port
+    22, from 10.9.9.9, 203.0.113.7 and 192.31.196.7. Frozen for its own lot."""
+    _run(monkeypatch, _S1618_NET,
+         ("concurrently", DB, "isolate", 2, "isolate", "human_only", 8644),
+         ("address_reused_under_a_turned_rule", DB, DB.lower(), None, None,
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-db--01-db-nic-1-1232a8-out"),
+          "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-1",
+          0, 20, "rg-new", "api", None, "Linux"),
+         ("quarantine_altered_then_reasserted", _RG_NEW_WEB, _RG_NEW_WEB, (7, "before-crash"), True, True,
+          _S101_NSG.format("rg-app1", "nsg-glorfindel-quarantine-westeurope"), "non_disruptive"))
+
+
+_S42_ISO_NET = {
+    "subnet_nsg": [], "edge_nsg": None, "tier_rules": [],
+    "nics": {"web-nic": {"own": "dedicated", "policy": False, "rules": [
+                 _s1618("allow-https", 100, "Allow", "443", source="Internet"), _S1618_OUT]},
+             "db-nic-0": {"own": None, "rules": [], "policy": False},
+             "db-nic-1": {"own": None, "rules": [], "policy": False},
+             "api-nic": {"own": None, "rules": [_S1618_OUT, _S1618_DENY], "policy": False}},
+    "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+    "legacy": ("web-nic", False), "data_subnet": None}
+
+
+def _gone_said_strictly(self, vm: str, isolation: bool):
+    """`_gone_said` as L1 asks it, before its loosening (d3c2691): a drift card — the
+    isolation said gone —, a bypass card no longer counts."""
+    from glorfindel import escalations
+    if not isolation:
+        return
+    record = self._state(vm)
+    if record is None or any(record.get(k) for k in ("partial", "release_failed", "releasing_at")):
+        return
+    said = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)
+            and e.get("action") == "isolate_vm" and (e.get("signal_id") or "").startswith("reassert-")]
+    assert said, f"L1: the isolation of {vm} vanished from Azure; the reassertion neither put it back nor said so"
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="L1B (#355): an isolation's missing rules dropped under a bypass — routed from L2C")
+def test_an_isolation_gone_under_a_bypass_is_said_gone(monkeypatch):
+    """Seed 42 at 500 (L2C's second review), shrunk to two steps: web of rg-app2 blocked,
+    a block rule turned, its address given to a new web of rg-app1; then web (rg-app1)
+    isolated by rules on its own NSG — an allow of the customer's read before our deny —
+    and our rules taken off. The verification returns « bypassed », the missing rules
+    dropped: no drift card (« L1: the isolation of …/rg-app1/…/web vanished »). The
+    machine's oracle counts the bypass card meanwhile; that loosening goes with L1B."""
+    monkeypatch.setattr(IsolationMachine, "_gone_said", _gone_said_strictly)
+    _run(monkeypatch, _S42_ISO_NET,
+         ("turned_then_address_reused", WEB2, WEB2, None, 22, "both", 22,
+          (_S101_NSG.format("rg-app2", "nsg-web-nic"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+          "non_disruptive", False, 22, False, "rg-app1", "web", False, "non_disruptive"),
+         ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, True))
+
+
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────
 
 _S322_NET_KEPT = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}

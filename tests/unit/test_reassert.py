@@ -1002,3 +1002,480 @@ def test_a_write_that_failed_is_never_said_put_back_even_read_whole():
     (card,) = _block_cards()
     assert report[0]["outcome"] == "partial", report
     assert "reposé" not in card["reason"] and "AuthorizationFailed" in card["reason"], card["reason"]
+
+
+# ── L2C (#343): the other cards of the reassertion, said again when a change comes back ──
+
+def _unwritable(monkeypatch, part: str):
+    """The local state files whose path holds `part` can't be written (a full disk) —
+    every other write goes through. Returns what gives the disk back."""
+    from glorfindel import actions
+    real = actions._atomic_write_text
+
+    def write(path, text):
+        if part in str(path):
+            raise OSError(28, "No space left on device")
+        real(path, text)
+    monkeypatch.setattr(actions, "_atomic_write_text", write)
+    return lambda: monkeypatch.setattr(actions, "_atomic_write_text", real)
+
+
+_IP = "203.0.113.9"
+_RDP = {**_ALLOW, "rule": "allow-rdp", "ports": "3389"}
+_STATE_DIR = {"isolation": "/isolation/", "block": "/blocks/"}
+
+
+def _bypassed(kind: str, *allows):
+    """An isolation, or a block of _IP, that `allows` pass before."""
+    c = _connector()
+    if kind == "isolation":
+        _isolated()
+    else:
+        _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                          threat_port=22)
+    _read(c, kind, *allows)
+    return c
+
+
+def _read(c, kind: str, *allows) -> None:
+    """What the next verification reads: `allows` before our deny, or (none) it holds."""
+    v = _bypass(*allows) if allows else {"verified": True}
+    (c.verify_isolation if kind == "isolation" else c.verify_block_ip).return_value = v
+
+
+def _mark(kind: str):
+    return (_load_isolation_state("vm") if kind == "isolation" else _load_block_entries("vm")[0]).get("bypass_said")
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_bypass_that_comes_back_after_its_mark_was_kept_is_said_again(monkeypatch, kind):
+    """L2C: a bypass said (A); it holds again — the card closes, with Glorfindel's note — but
+    the mark can't be taken off (a full disk): it keeps A. The same allow back: the mark read
+    « A said, or acknowledged » left the bypass with no card. Said again; and once said,
+    not at every pass."""
+    c = _bypassed(kind, _ALLOW)
+    reassert_active(c, _ACT)
+    (a,) = _bypass_cards("pending")
+    _read(c, kind)
+    give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
+    reassert_active(c, _ACT)                                  # not written: logged
+    give_back()
+    assert not _bypass_cards("pending") and _bypass_cards("resolved")[0]["resolution"]
+    assert _mark(kind) == a["signal_id"]                      # the mark kept A
+    _read(c, kind, _ALLOW)
+    for _ in range(2):
+        reassert_active(c, _ACT)
+    (card,) = _bypass_cards("pending")
+    assert card["signal_id"] == a["signal_id"] and len(_bypass_cards()) == 2
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_bypass_back_to_its_former_change_closes_the_stale_card(monkeypatch, kind):
+    """A said; B (another allow too): A's card closed, B's written, the mark not (it keeps A).
+    Back to A: B's card no longer says what passes — closed, with a note — and A is said.
+    Then A acknowledged by the operator: never said again while it stands."""
+    c = _bypassed(kind, _ALLOW)
+    reassert_active(c, _ACT)
+    (a,) = _bypass_cards("pending")
+    _read(c, kind, _ALLOW, _RDP)
+    give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
+    reassert_active(c, _ACT)                                  # not written: logged
+    give_back()
+    (b,) = _bypass_cards("pending")
+    assert "allow-rdp" in b["reason"] and _mark(kind) == a["signal_id"]
+    _read(c, kind, _ALLOW)
+    reassert_active(c, _ACT)
+    (card,) = _bypass_cards("pending")
+    assert card["signal_id"] == a["signal_id"] and "allow-rdp" not in card["reason"]
+    assert all(e.get("resolution") for e in _bypass_cards("resolved"))
+    escalations.resolve(card["id"])                           # the operator
+    for _ in range(2):
+        reassert_active(c, _ACT)
+    assert not _bypass_cards("pending") and len(_bypass_cards()) == 3
+
+
+def test_the_operators_word_on_another_bypass_does_not_silence_this_one(monkeypatch):
+    """A said; B said, the mark kept A; the operator closes B (its allow gone, say). Back to
+    A: the operator's last word was on B, not on A — said again."""
+    c = _bypassed("isolation", _ALLOW)
+    reassert_active(c, _ACT)
+    _read(c, "isolation", _ALLOW, _RDP)
+    give_back = _unwritable(monkeypatch, "/isolation/")
+    reassert_active(c, _ACT)                                  # not written: logged
+    give_back()
+    (b,) = _bypass_cards("pending")
+    escalations.resolve(b["id"])                              # the operator
+    _read(c, "isolation", _ALLOW)
+    reassert_active(c, _ACT)
+    (card,) = _bypass_cards("pending")
+    assert "allow-rdp" not in card["reason"]
+
+
+def test_a_bypass_acknowledgement_is_read_on_its_own_card_only():
+    """The isolation's bypass acknowledged; the block's of the same VM said after it, still
+    pending: the latest card of the isolation's own is read — it stays silent."""
+    c = _bypassed("isolation", _ALLOW)
+    reassert_active(c, _ACT)
+    (iso,) = _bypass_cards("pending")
+    escalations.resolve(iso["id"])                            # the operator
+    _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    _read(c, "block", _ALLOW)
+    for _ in range(2):
+        reassert_active(c, _ACT)
+    assert [(e["action_params"] or {}).get("ip") for e in _bypass_cards("pending")] == [_IP]
+    assert len(_bypass_cards()) == 2
+
+
+def _broken(name: str) -> None:
+    from glorfindel import actions
+    actions._ISOLATION_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (actions._ISOLATION_STATE_DIR / name).write_text('{"resource_id": ')
+
+
+def _state_cards(status=None):
+    return [e for e in escalations.all_escalations() if e["escalation_type"] == "state_unreadable"
+            and (status is None or e["status"] == status)]
+
+
+def test_an_unreadable_state_that_comes_back_after_its_record_was_kept_is_said_again(monkeypatch):
+    """L2C: a state file unreadable, said; it reads again — the card closes, with its note —
+    but state_alerts.json can't be written (a full disk) and keeps that set. The same file
+    unreadable again: read « said, or acknowledged » — no card. Said again, once."""
+    from glorfindel import actions
+    from glorfindel.reassert_cards import _load_alerts, say_unreadable_states
+    _broken("a--00000000.json")
+    say_unreadable_states([])
+    (a,) = _state_cards("pending")
+    (actions._ISOLATION_STATE_DIR / "a--00000000.json").unlink()
+    give_back = _unwritable(monkeypatch, "state_alerts.json")
+    say_unreadable_states([])
+    give_back()
+    assert not _state_cards("pending") and _load_alerts() == {"unreadable_states": a["signal_id"]}
+    _broken("a--00000000.json")
+    for _ in range(2):
+        say_unreadable_states([])
+    (card,) = _state_cards("pending")
+    assert card["signal_id"] == a["signal_id"] and len(_state_cards()) == 2
+
+
+def test_an_unreadable_set_back_to_its_former_files_is_said_again(monkeypatch):
+    """A (one file) said; B (a second file too): A's card closed, B's written, the record
+    not (it keeps A). The second file read again: back to A — B's card closed, with its
+    note, and A said, not read « said » from the record. The operator then acknowledges
+    A: never said again while it stands."""
+    from glorfindel import actions
+    from glorfindel.reassert_cards import say_unreadable_states
+    _broken("a--00000000.json")
+    say_unreadable_states([])
+    (a,) = _state_cards("pending")
+    _broken("b--00000000.json")
+    give_back = _unwritable(monkeypatch, "state_alerts.json")
+    say_unreadable_states([])
+    give_back()
+    (b,) = _state_cards("pending")
+    assert b["signal_id"] != a["signal_id"]
+    (actions._ISOLATION_STATE_DIR / "b--00000000.json").unlink()
+    say_unreadable_states([])
+    (card,) = _state_cards("pending")
+    assert card["signal_id"] == a["signal_id"] and all(e.get("resolution") for e in _state_cards("resolved"))
+    escalations.resolve(card["id"])                           # the operator
+    for _ in range(2):
+        say_unreadable_states([])
+    assert not _state_cards("pending") and len(_state_cards()) == 3
+
+
+def _left(*rules):
+    """The block of _IP on vm, whose placement left `rules` (I4A) — read back as the pass does."""
+    from glorfindel.actions import _update_block_entry
+    if not _load_block_entries("vm"):
+        _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                          threat_port=22)
+    left = [{"nsg": "rg/nsg", "rule": r, "to": "10.0.0.9", "on": "other", "kind": "turned"} for r in rules]
+    _update_block_entry("vm", _IP, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r", "left": left}])
+    return _load_block_entries("vm")[0]
+
+
+def _left_cards(status=None):
+    return [e for e in escalations.all_escalations() if e["escalation_type"] == "rule_left"
+            and (status is None or e["status"] == status)]
+
+
+def test_a_changed_set_of_left_rules_gets_its_own_card():
+    """I4A's card names the rules a block left; another set left since (the block written
+    again) was folded into the former card by the store, which kept naming the former
+    rules. The former card closes, with a note; the new set has its own card."""
+    from glorfindel.reassert_cards import say_left
+    say_left("vm", _RID, _IP, _left("glorfindel-block-a"), [], _RID)
+    say_left("vm", _RID, _IP, _left("glorfindel-block-b"), [], _RID)
+    (card,) = _left_cards("pending")
+    assert "glorfindel-block-b" in card["reason"] and "glorfindel-block-a" not in card["reason"]
+    assert _left_cards("resolved")[0]["resolution"]
+
+
+def test_left_rules_back_to_a_set_already_said_are_said_again(monkeypatch):
+    """A said; B said, its mark not written (a full disk: left_said keeps A); back to A —
+    read « said, or acknowledged » from the mark, with B's card naming rules no longer
+    left. B closed, A said again; the operator acknowledges A: never said again while it
+    stands."""
+    from glorfindel.reassert_cards import say_left
+    say_left("vm", _RID, _IP, _left("glorfindel-block-a"), [], _RID)
+    (a,) = _left_cards("pending")
+    entry = _left("glorfindel-block-b")
+    give_back = _unwritable(monkeypatch, "/blocks/")
+    with pytest.raises(OSError):
+        say_left("vm", _RID, _IP, entry, [], _RID)
+    give_back()
+    assert _load_block_entries("vm")[0]["left_said"] == a["signal_id"]
+    say_left("vm", _RID, _IP, _left("glorfindel-block-a"), [], _RID)
+    (card,) = _left_cards("pending")
+    assert card["signal_id"] == a["signal_id"] and "glorfindel-block-b" not in card["reason"]
+    escalations.resolve(card["id"])                           # the operator
+    for _ in range(2):
+        say_left("vm", _RID, _IP, _left("glorfindel-block-a"), [], _RID)
+    assert not _left_cards("pending")
+
+
+def test_left_rules_acknowledged_are_read_on_their_own_block_only():
+    """Two blocks of the VM, each with rules it left: the first's card acknowledged, the
+    second's said after it and still pending — the latest card of the first block's own
+    is read: it stays silent (L2C, review)."""
+    from glorfindel.actions import _update_block_entry
+    from glorfindel.reassert_cards import say_left
+    other = "198.51.100.4"
+    for ip in (_IP, other):
+        _save_block_state("vm", ip, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                          threat_port=22)
+        _update_block_entry("vm", ip, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r", "left": [
+            {"nsg": "rg/nsg", "rule": f"glorfindel-block-{ip}", "to": "10.0.0.9", "on": "x", "kind": "turned"}]}])
+
+    def entry(ip):
+        return next(e for e in _load_block_entries("vm") if e["ip"] == ip)
+    say_left("vm", _RID, _IP, entry(_IP), [], _RID)
+    escalations.resolve(_left_cards("pending")[0]["id"])     # the operator
+    say_left("vm", _RID, other, entry(other), [], _RID)
+    for _ in range(2):
+        say_left("vm", _RID, _IP, entry(_IP), [], _RID)
+    assert [(e["action_params"] or {}).get("ip") for e in _left_cards("pending")] == [other]
+    assert len(_left_cards()) == 2
+
+
+# ── L2C, its review: a disappearance said again after one acknowledged ───────────────────
+
+_HUMAN = AutonomyConfig(default="human_only")
+
+
+def _drift_cards(status=None):
+    return [e for e in escalations.all_escalations() if e["escalation_type"] == "verification_failed"
+            and (status is None or e["status"] == status)]
+
+
+def _gone(kind: str):
+    """An isolation, or a block of _IP, whose rules are gone from Azure."""
+    if kind == "isolation":
+        _isolated()
+        return _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    return _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+
+
+def _drift_mark(kind: str):
+    return (_load_isolation_state("vm") if kind == "isolation" else _load_block_entries("vm")[0]).get(
+        "drift_alerted_at")
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_disappearance_after_one_acknowledged_and_held_again_is_said(monkeypatch, kind):
+    """The review of L2C: gone, said; the operator acknowledges — said for its episode, not
+    again while it stays gone. Held again, but the mark can't be taken off (a full disk);
+    gone again: the mark read « already said » left the VM unisolated (or unblocked) with
+    no card. A new episode is said, once."""
+    c = _gone(kind)
+    reassert_active(c, _HUMAN)
+    (card,) = _drift_cards("pending")
+    escalations.resolve(card["id"])                           # the operator
+    reassert_active(c, _HUMAN)
+    assert not _drift_cards("pending")                        # its episode: acknowledged
+    held, gone = {"verified": True}, dict((c.verify_isolation if kind == "isolation"
+                                           else c.verify_block_ip).return_value)
+    verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    verify.return_value = held
+    give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
+    reassert_active(c, _HUMAN)                                  # not written: logged
+    give_back()
+    assert _drift_mark(kind)                                  # the mark kept
+    verify.return_value = gone
+    for _ in range(2):
+        reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1 and len(_drift_cards()) == 2
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_disappearance_is_over_once_its_rules_are_back_even_bypassed(kind):
+    """Gone, said, acknowledged; its rules put back, but an allow of the customer's passes
+    them — bypassed, said on its own card. Only a hold ended the episode: gone again, the
+    mark read « already said » for ever. The rules back end it; the next one is said."""
+    c = _gone(kind)
+    reassert_active(c, _HUMAN)
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    gone = verify.return_value
+    verify.return_value = _bypass(_ALLOW)
+    reassert_active(c, _HUMAN)
+    assert _bypass_cards("pending") and not _drift_mark(kind)
+    verify.return_value = gone
+    reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1
+
+
+def test_an_episode_is_known_over_before_any_write_of_its_pass(monkeypatch):
+    """Graine 777 at 2 000 (L2C, review): the block held again, but the first write of its
+    pass — its bypass mark taken off, before the drift mark — refused; the episode was not
+    known over, the next disappearance unsaid. Known over from the reading itself."""
+    from glorfindel.actions import _update_block_entry
+    c = _gone("block")
+    reassert_active(c, _HUMAN)
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    _update_block_entry("vm", _IP, bypass_said="reassert-bypass-block-vm-x")
+    gone = c.verify_block_ip.return_value
+    c.verify_block_ip.return_value = {"verified": True}
+    give_back = _unwritable(monkeypatch, "/blocks/")
+    reassert_active(c, _HUMAN)
+    give_back()
+    assert _drift_mark("block")
+    c.verify_block_ip.return_value = gone
+    reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1
+
+
+def test_a_state_refused_on_one_vm_does_not_stop_the_pass(monkeypatch):
+    """A full disk on the first VM's state: the pass went no further — the next VM, held
+    again, never seen so, its drift mark kept. Each VM is read; each refusal is said in the
+    pass's report (and logged), with what it risks."""
+    from glorfindel import reassert_cards
+    from glorfindel.actions import _save_isolation_state
+    other = _RID.replace("/vm", "/vm2")
+    for rid in (_RID, other):
+        _save_isolation_state(rid, {"resource_id": rid, "isolated_at": "2026-10-06T08:00:00+00:00",
+                                    "placements": [], "drift_alerted_at": "2026-10-06T09:00:00+00:00"})
+    c = _connector()
+    give_back = _unwritable(monkeypatch, "/isolation/")
+    report = reassert_active(c, _HUMAN)
+    give_back()
+    assert not reassert_cards._EPISODE_OPEN                # both seen held again: over
+    failed = [r for r in report if r["outcome"] == "failed"]
+    assert sorted(r["vm"] for r in failed) == ["vm", "vm2"] and all(r["kind"] == "isolation" for r in failed)
+    assert all("État local non écrit" in r["detail"] and "redite" in r["detail"] for r in failed), failed
+
+
+def test_a_state_refused_on_a_block_is_printed_by_the_watch(monkeypatch):
+    """The watch prints a refused write of a block's state as any other failure of the pass."""
+    import io
+    from rich.console import Console
+    from glorfindel import cli
+    c = _gone("block")
+    reassert_active(c, _HUMAN)
+    c.verify_block_ip.return_value = {"verified": True}
+    out = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=out, width=200))
+    give_back = _unwritable(monkeypatch, "/blocks/")
+    report = cli._watch_reassert_pass(c, "human_only")
+    give_back()
+    (failed,) = [r for r in report if r["outcome"] == "failed"]
+    assert failed["kind"] == "block" and failed["ip"] == _IP and "non écrit" in failed["detail"]
+    assert f"reassert block vm {_IP} → failed" in out.getvalue()
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_disappearance_held_again_then_gone_after_a_restart_is_said(monkeypatch, kind):
+    """The second review's probe: gone, said, acknowledged; held again with the disk full
+    (the mark kept); the watch restarted (its memory empty); gone again — said."""
+    from glorfindel import reassert_cards
+    c = _gone(kind)
+    reassert_active(c, _HUMAN)
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    gone = verify.return_value
+    verify.return_value = {"verified": True}
+    give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
+    reassert_active(c, _HUMAN)
+    give_back()
+    assert _drift_mark(kind)
+    reassert_cards._EPISODE_OPEN.clear()                      # the watch restarted
+    verify.return_value = gone
+    reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_an_acknowledged_disappearance_still_there_at_start_is_said_once(kind):
+    """Decided 30/10 (Jonathan): a restart is noisy, never silent. Gone, said, acknowledged,
+    still gone when the watch restarts: said again once — a new card —, then silent."""
+    from glorfindel import reassert_cards
+    c = _gone(kind)
+    reassert_active(c, _HUMAN)
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    reassert_active(c, _HUMAN)
+    assert not _drift_cards("pending")
+    reassert_cards._EPISODE_OPEN.clear()                      # the watch restarted
+    for _ in range(3):
+        reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1 and len(_drift_cards()) == 2
+
+
+def test_after_a_restart_a_failed_reapplication_is_said_and_tried_once_more():
+    """Decided 30/10 (Jonathan): outside human_only, the first pass after a restart says
+    again, and tries once more, a putting back that had failed — a write that closes, which
+    the mode already allows, once per restart. Then nothing more."""
+    from glorfindel import reassert_cards
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    c.isolate_vm.side_effect = RuntimeError("AuthorizationFailed")
+    reassert_active(c, _ACT)
+    assert c.isolate_vm.call_count == 1 and _load_isolation_state("vm").get("drift_alerted_at")
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    reassert_active(c, _ACT)
+    assert c.isolate_vm.call_count == 1                       # acknowledged: not tried again
+    reassert_cards._EPISODE_OPEN.clear()                      # the watch restarted
+    reassert_cards._HISTORY.clear()
+    for _ in range(3):
+        reassert_active(c, _ACT)
+    assert c.isolate_vm.call_count == 2 and len(_drift_cards("pending")) == 1
+    assert "a échoué" in _drift_cards("pending")[0]["reason"]
+
+
+def test_a_drift_card_closed_with_a_note_is_no_acknowledgement():
+    """Gone, said; the card then closed with a note — Glorfindel's way, as `_alert` closes
+    the card it replaces — and no card after it: only the operator's word silences a
+    disappearance, never the mark alone. Said again."""
+    c = _gone("isolation")
+    reassert_active(c, _HUMAN)
+    (card,) = _drift_cards("pending")
+    escalations.resolve(card["id"], note="Remplacée par une nouvelle alerte.")
+    reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1
+
+
+def test_an_alert_closes_the_card_it_replaces_with_a_note():
+    """`_alert`'s closures carry a note: read as Glorfindel's, never as acknowledged."""
+    from glorfindel.reassert import _alert
+    _alert("reassert-vm-x", resource_id=_RID, action="isolate_vm", reason="a")
+    _alert("reassert-vm-x", resource_id=_RID, action="isolate_vm", reason="b")
+    (closed,) = _drift_cards("resolved")
+    assert closed["resolution"] and [e["reason"] for e in _drift_cards("pending")] == ["b"]
+
+
+@pytest.mark.xfail(strict=True, reason="a stale operation mark (unblock_failed): its own lot, routed from L2C's review")
+def test_a_block_written_again_after_a_failed_unblock_is_checked():
+    """A block, an unblock that failed (`unblock_failed`), then the block written again,
+    whole: `_save_block_state` merges it into the entry and keeps the mark. Its rules then
+    vanish: the pass leaves it to the operator, `verify_block_ip` never called — nothing
+    said. Present on `main`; the oracle of the machine exempts it as L1 does meanwhile."""
+    from glorfindel.actions import _update_block_entry
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)
+    _update_block_entry("vm", _IP, unblock_failed=["r: (AuthorizationFailed)"])
+    _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)     # blocked again
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    reassert_active(c, _HUMAN)
+    assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]

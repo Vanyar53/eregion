@@ -77,12 +77,15 @@ FILE_EXTENSIONS = frozenset({"md", "py", "pyc", "json", "jsonl", "yaml", "yml", 
 ALLOWED_HOSTS = ("github.com", "vanyar53.github.io", "example.com", "example.org", "example.net",
                  "microsoft.compute")   # the provider of a VM's resource id, no host
 BENCH_NAME = re.compile(r"(?:rg-celebrimbor[a-z0-9-]*|vm-celebrimbor-[a-z0-9-]+|vm-sentinel)")
+# A file attached on GitHub (the tour's video) is named by a GUID of GitHub's, not of a deployment:
+# the whole URL is taken out before the GUIDs are looked for — a GUID anywhere else still counts.
+ATTACHMENT = re.compile(r"https://github\.com/user-attachments/assets/[0-9a-fA-F-]{36}\b")
 
 
 def identifiers(text: str) -> list[str]:
     """What in ``text`` could name a real deployment: a GUID that is not the zero one, an IPv4
     address outside the documentation's ranges, a host name outside the allowed ones."""
-    found = [g for g in GUID.findall(text) if g != ZERO_SUBSCRIPTION]
+    found = [g for g in GUID.findall(ATTACHMENT.sub("", text)) if g != ZERO_SUBSCRIPTION]
     for a in IPV4.findall(text):
         try:
             ip = ipaddress.ip_address(a)

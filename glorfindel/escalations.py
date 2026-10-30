@@ -74,6 +74,7 @@ _ACTION_LABELS = {
     "review_isolation": "Isolation à revoir (TTL dépassé)",
     "review_bypass": "Contournement à revoir (règle d'un tiers)",
     "repair_local_state": "État local à réparer",
+    "review_left_rule": "Règle laissée à revoir (elle vise une autre VM)",
 }
 
 _ESCALATION_LABELS = {
@@ -103,6 +104,7 @@ _ESCALATION_LABELS = {
     "uncontained_detection": "détection non contenue (instantané seul)",
     "bypassed": "contournée (une règle d'autorisation passe avant le deny)",
     "state_unreadable": "état local illisible",
+    "rule_left": "règle du blocage laissée (retournée, elle vise une autre VM)",
 }
 
 
@@ -442,7 +444,7 @@ VERDICTS = ("right", "wrong", "unsure")
 DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
 # Cards that are not a decision on a detection: posture, housekeeping, proposals.
 _NOT_DECISIONS = {"posture_gap", "orphan_rule", "quarantine_altered", "proposed_rule", "readiness_hold",
-                  "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable"}
+                  "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable", "rule_left"}
 
 
 def all_escalations() -> list[dict]:

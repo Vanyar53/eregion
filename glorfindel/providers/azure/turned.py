@@ -8,6 +8,7 @@ closes. The orphan sweep (sweep.py) keeps it and says it; the release of a delet
 """
 from __future__ import annotations
 
+from glorfindel.providers.azure.nsg import _takes_in      # I4A's, one rule for both
 from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.response.ids import _parse_nic_resource_id, _parse_nsg_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
@@ -30,21 +31,6 @@ def _turned_allows(nsgs) -> list[tuple[str, set, str, str, list]]:
             values = ([single] if single else []) + list(getattr(r, f"{side}_address_prefixes", None) or [])
             out.append((nsg.id.rstrip("/").lower(), subnets, side, name, values))
     return out
-
-
-def _takes_in(values: list, ip: str) -> bool:
-    """An address field that takes `ip` in: empty, `*`, the address, a prefix holding
-    it — or a tag, read as taking it in (the safe side: the deny stays)."""
-    import ipaddress
-    for v in [v for v in values if v] or ["*"]:
-        if v == "*":
-            return True
-        try:
-            if ipaddress.ip_address(ip) in ipaddress.ip_network(v, strict=False):
-                return True
-        except ValueError:
-            return True                       # a tag (VirtualNetwork…): the safe side
-    return False
 
 
 def _chain(nic_nsg: dict, nic_subnets: dict):

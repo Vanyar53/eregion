@@ -363,8 +363,8 @@ class ReleaseMixin:
             if why:
                 failed.append(why)
                 continue
-            base = self._placement_rule_base(prefix, vm_name, nid.rsplit("/", 1)[-1], nid)
-            names |= {base, f"{base}-out"}
+            names |= {n for b in self._placement_rule_bases(prefix, vm_name, nid.rsplit("/", 1)[-1], nid)
+                      for n in (b, f"{b}-out")}
         if not names:
             return failed
         try:

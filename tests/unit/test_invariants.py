@@ -1996,6 +1996,33 @@ class IsolationMachine(RuleBasedStateMachine):
             st.just("non_disruptive"), st.sampled_from(["human_only", "non_disruptive"]))))
 
     @rule(data=st.data())
+    def address_reused_under_a_turned_rule(self, data):
+        """A rare state made common (I4A, #328): a VM blocked, one of its block rules turned
+        into an allow by someone, the NIC's IP changed, a new VM given the lowest free
+        address — the old one, often: the turned rule lets the attacker reach it —, then
+        the VM blocked again. I4 is checked by _block: the new VM's flows are not the
+        operation's to change. Drawn one by one, the steps met once (RB1's run, seed 8675
+        at 500)."""
+        if len(self.vms) >= len(_VMS) + 3:
+            return
+        vm, rid, _ = self._draw(data)
+        port = data.draw(st.sampled_from([22, None]), label="threat_port")
+        self._block(vm, rid, None, port)
+        marks = {_nic_hash(n) for n in self.fake.vms[key(vm)]["nics"]}
+        mine = sorted((k, n) for k, g in self.fake.nsgs.items() for n, r in g["rules"].items()
+                      if n.startswith("glorfindel-block-") and r["access"].lower() == "deny"
+                      and n.removesuffix("-out").rsplit("-", 1)[-1] in marks)
+        if not mine:
+            return
+        self._tamper_with_our_rule(_Drawn(data, how="access", rule=st.sampled_from(mine)))
+        nic = data.draw(st.sampled_from(sorted(key(n) for n in self.fake.vms[key(vm)]["nics"])), label="nic")
+        self._customer_changes_ip(_Drawn(data, nic=nic))
+        self._create_vm(data, self.fake.nics[nic]["location"],
+                        reuse_nsg=self.fake.nics[nic]["design_nsg"])
+        self._claims_after_a_change()
+        self._block(vm, rid, None, port)
+
+    @rule(data=st.data())
     def joins_an_old_isolation(self, data):
         """A rare state made common (I4F): a new VM on the NSG where an older version's
         isolation of another VM lies, isolated — its NIC then away from that NSG, in
@@ -2499,13 +2526,21 @@ class IsolationMachine(RuleBasedStateMachine):
         import ipaddress
 
         def takes_in(r, side, ip):
+            """As nsg._takes_in (I4A's, the code's): empty, `*` or `any`, a prefix holding the
+            address — a tag or an unreadable value taken as taking it in."""
             values = [v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or []) if v]
+            try:
+                addr = ipaddress.ip_address(ip)
+            except ValueError:
+                return True
             for v in values or ["*"]:
+                if v.strip().lower() in ("*", "any"):
+                    return True
                 try:
-                    if v == "*" or ipaddress.ip_address(ip) in ipaddress.ip_network(v, strict=False):
+                    if addr in ipaddress.ip_network(v.strip(), strict=False):
                         return True
                 except ValueError:
-                    return True                     # a tag: taken as taking it in
+                    return True                     # a tag, or unreadable: the safe side
             return False
 
         turned = [(k, n, after) for (k, n), (before, after) in self.tampered.items()

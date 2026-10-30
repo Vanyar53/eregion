@@ -555,6 +555,129 @@ commandes) : sur un
 poste, un injecteur reste passif ; il agit depuis Orodruin, avec l'identité managée qu'y crée
 `make orodruin-up` (ses droits par VM inscrite, SEC5).
 
+## Le canari azurerm, sans secret (P-04, 30/10)
+
+Le canari (`.github/workflows/canary-azurerm.yml`, chaque jour ; `make canary-jit` sur un poste)
+revérifie, sur la dernière version de chaque ligne d'azurerm (3.x, 4.x, 5.x), le comportement de
+Terraform dont dépend l'isolation juste à temps (`docs/design/module-isolation-iac.md`). Il tenait
+un secret client de longue durée, et son principal pouvait créer un groupe dans l'abonnement
+(constat P-04 du contre-audit). Maintenant :
+
+- **Aucun secret de longue durée.** Le job demande à GitHub un jeton OIDC (`id-token: write`, à ce
+  seul job), valable quelques minutes, qu'Entra ID échange contre le principal `eregion-canary`.
+  Son identifiant fédéré ne fait confiance qu'à `main` de ce dépôt
+  (`repo:Vanyar53/eregion:ref:refs/heads/main`) : un run lancé sur une autre branche, une PR ou un
+  fork n'obtient rien. Terraform lit le jeton lui-même (`ARM_USE_OIDC`, et
+  `ACTIONS_ID_TOKEN_REQUEST_URL` / `…_TOKEN`, que le runner pose) ; `az`, dont le canari se sert
+  pour le NSG de quarantaine, se connecte avec le même genre de jeton (`az login
+  --federated-token`), tiré par `curl` : aucune action tierce. `ARM_USE_CLI=false` : Terraform
+  ne se rabat jamais sur cette session `az`, un canari vert prouve l'OIDC du fournisseur.
+- **Ses identifiants sont des secrets du dépôt** — `CANARY_AZURE_CLIENT_ID`,
+  `CANARY_AZURE_TENANT_ID`, `CANARY_AZURE_SUBSCRIPTION_ID` —, jamais des variables, qui
+  s'impriment en clair dans un journal public. Sans eux, ou hors de `main`, le run échoue (T16).
+- **Au moindre droit.** Le principal est `Contributor` sur un seul groupe, `rg-eregion-canary`,
+  créé une fois par Jonathan ; le canari ne crée ni ne supprime de groupe. Chaque run y crée des
+  ressources gratuites (VNet, NSG, NIC) nommées avec son suffixe (`gh<run>-<tentative>-<ligne>`)
+  et marquées `canary-run=<suffixe>` : les trois lignes du `matrix` tournent côte à côte sans
+  collision. Il les détruit à la fin, en succès comme en échec (`terraform destroy`, puis le NSG
+  de quarantaine créé hors de Terraform ; un destroy qui échoue laisse place à un balayage par
+  l'étiquette du run, les NIC d'abord). Le fournisseur n'enregistre aucun fournisseur de
+  ressources (3.x : `ARM_SKIP_PROVIDER_REGISTRATION=true` ; 4.x et 5.x :
+  `ARM_RESOURCE_PROVIDER_REGISTRATIONS=none`) : ce droit est à l'abonnement, le principal ne l'a pas.
+- **Ce que le canari éprouve ne change pas** : les mêmes ressources, le même NSG posé hors de
+  Terraform sur une NIC dont le NSG est dans le code puis sur une NIC sans NSG, le même `apply`
+  qui met la NIC à jour, le même NSG d'origine remis, les mêmes six vérifications et les mêmes
+  codes de sortie. Ce qui change : le groupe existe d'avance (sa région fait celle des
+  ressources), les noms portent le suffixe, les NIC portent deux étiquettes de plus.
+- **Sur un poste**, `make canary-jit` travaille dans le même groupe (`CANARY_RESOURCE_GROUP`
+  pour un autre), avec la session `az` de l'opérateur ; sans le groupe, il s'arrête (code 2)
+  sans rien créer.
+
+**Les gestes de Jonathan, dans l'ordre** (une fois ; `<…>` à remplacer, rien de réel ici). Rien
+ne se lance depuis une session : ces commandes écrivent dans Entra ID, dans l'abonnement et dans
+les secrets du dépôt.
+
+```bash
+REPO=Vanyar53/eregion
+az account set --subscription <nom ou id de l'abonnement du banc>
+SUB=$(az account show --query id -o tsv)          # lu, jamais tapé : rien dans l'historique
+
+# 1. L'inscription eregion-canary et son principal — sans secret ni certificat.
+APP=$(az ad app create --display-name eregion-canary --query appId -o tsv)
+az ad sp create --id "$APP" -o none
+
+# 2. L'identifiant fédéré : main de ce dépôt seulement.
+cat > /tmp/eregion-canary-fic.json <<'EOF'
+{"name": "eregion-canary-main",
+ "issuer": "https://token.actions.githubusercontent.com",
+ "subject": "repo:Vanyar53/eregion:ref:refs/heads/main",
+ "audiences": ["api://AzureADTokenExchange"],
+ "description": "canary-azurerm.yml, on main"}
+EOF
+az ad app federated-credential create --id "$APP" --parameters @/tmp/eregion-canary-fic.json
+az ad app federated-credential list --id "$APP" -o table   # un seul, ce sujet-là
+
+# 3. Le groupe, et Contributor sur lui seul (jamais sur l'abonnement).
+az group create -n rg-eregion-canary -l westeurope --tags purpose=eregion-canary-jit -o none
+az role assignment create --assignee "$APP" --role Contributor \
+  --scope /subscriptions/$SUB/resourceGroups/rg-eregion-canary
+az role assignment list --assignee "$APP" --all -o table      # ce seul rôle, ce seul groupe
+
+# 4. Les secrets du dépôt, la valeur par l'entrée standard : ni sur la ligne de commande, ni
+#    dans l'historique du shell.
+printf %s "$APP" | gh secret set CANARY_AZURE_CLIENT_ID --repo "$REPO"
+az account show --query tenantId -o tsv | tr -d '\n' | gh secret set CANARY_AZURE_TENANT_ID --repo "$REPO"
+printf %s "$SUB" | gh secret set CANARY_AZURE_SUBSCRIPTION_ID --repo "$REPO"
+
+# 5. Le premier run (quelques minutes après le rôle : sa propagation), sur main.
+gh workflow run canary-azurerm.yml --repo "$REPO" --ref main
+sleep 10                                                     # le temps que le run apparaisse
+gh run watch --repo "$REPO" \
+  "$(gh run list --repo "$REPO" --workflow canary-azurerm.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+az resource list -g rg-eregion-canary -o table               # vide : tout a été détruit
+```
+
+**Puis, après un canari vert seulement** : retirer l'ancien secret du dépôt et l'identifiant de
+l'ancien principal. D'abord, qui d'autre s'en sert :
+
+```bash
+OLD=<appId de l'ancien principal du canari>
+az role assignment list --assignee "$OLD" --all -o table   # ses droits, partout
+az ad app credential list --id "$OLD" -o table             # ses secrets : lequel est celui du canari
+gh secret list --repo "$REPO"                              # les AZURE_* d'avant
+# Le même principal sur le poste ou dans un service ? Comparer, sans l'afficher :
+#   source .envrc; for v in AZURE_CLIENT_ID GLORFINDEL_AZURE_CLIENT_ID EREGION_CONSOLE_AZURE_CLIENT_ID \
+#     GLORFINDEL_BOT_AZURE_CLIENT_ID ANNATAR_AZURE_CLIENT_ID; do [ "${(P)v}" = "$OLD" ] && echo "$v"; done
+#   (zsh ; en bash : "${!v}")
+```
+
+S'il a d'autres rôles que ceux du canari, ou si un service s'en sert encore, ne retirer que le
+secret du canari (`az ad app credential delete --id "$OLD" --key-id <keyId>`), jamais le
+principal. Sinon :
+
+```bash
+for s in AZURE_CLIENT_SECRET AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+  gh secret delete "$s" --repo "$REPO"
+done
+gh secret list --repo "$REPO"        # restent les trois CANARY_AZURE_*, et ceux de Discord
+az role assignment list --assignee "$OLD" --all --query "[].[roleDefinitionName,scope]" -o tsv
+az role assignment delete --assignee "$OLD" --role <rôle lu ci-dessus> --scope <portée lue ci-dessus>
+az ad sp delete --id "$OLD"
+az ad app delete --id "$OLD"         # l'inscription, que sp delete laisse
+```
+
+**Ce qui reste à mesurer au premier run** (hypothèses, rien n'a tourné sur Azure dans ce lot) :
+que `az login` voit l'abonnement d'un principal qui n'a de rôle que sur un groupe ; que les
+trois lignes s'authentifient par OIDC avec `ARM_USE_CLI=false` (lu dans la doc du fournisseur à
+v3.117.1, v4.81.0 et v5.12.0, et les noms des variables trouvés dans chacun de ces binaires,
+30/10) ; que `Contributor` sur le groupe suffit au `data "azurerm_resource_group"`, aux NIC et
+à `az resource list --tag` ; qu'aucune ressource ne reste dans le groupe après le run.
+**Ce qui reste ouvert** : un runner tué (pas d'`EXIT`) laisse les ressources de son run dans le
+groupe, gratuites et marquées par leur suffixe (`az resource list -g rg-eregion-canary -o
+table`) ; et le principal, `Contributor` sur son groupe, pourrait le supprimer ou y créer une
+ressource payante — seul un job de `main` qui tient `id-token: write` obtient son jeton (le sujet
+ne nomme pas le workflow ; deux le tiennent, le canari et `publish.yml`, `tests/unit/test_workflows.py`).
+
 ## Les conteneurs durcis (V-34, SEC7)
 
 Chaque service du compose tourne sans capacité (`cap_drop: [ALL]`), sans gain de privilège

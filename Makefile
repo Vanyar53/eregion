@@ -113,11 +113,11 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
 	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
-	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-known celebrimbor-workload \
+	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
 	gothmog-preflight gothmog-run \
-	orodruin-campaign-plan orodruin-campaign-run \
+	orodruin-campaign-plan orodruin-campaign-run campaign-containment \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
 	team-check team-init team-start team-stop team-logs team-config components-check images-check
 
@@ -224,6 +224,9 @@ help:
 	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (watch H0 en human_only)"
 	@echo "  make glorfindel-host-campaign-report CAMPAIGN=<id>  Son rapport, écrit seul sur H0"
 	@echo "    (#167 : code, tests et mutants — rien de mesuré sur le banc)"
+	@echo "  CAMPAIGN_DECLARED=annatar/campaign/declared/bl1-reponse.yaml  Le plan : exactement ses techniques (BL1)"
+	@echo "  make glorfindel-host-containment CAMPAIGN=<id> [FAULT_RUNS=<run>]  Temps pour contenir, part contenue seule"
+	@echo "    (BL1, docs/banc-bl1.md : la session de banc, pas à pas)"
 	@echo ""
 	@echo "Profils d'usage (D1) — Glorfindel toujours là ; docs/profils/ :"
 	@echo "  make profile-discover       Glorfindel seul, en observation : découvrir"
@@ -681,6 +684,14 @@ glorfindel-host-campaign-report: glorfindel-host-known
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
 	@case "$(CAMPAIGN)" in *[!A-Za-z0-9._-]*) echo "CAMPAIGN invalide : $(CAMPAIGN)"; exit 1;; esac
 	$(HOST_SSH) 'cat eregion/runs/campaigns/$(CAMPAIGN)/report.md 2>/dev/null || { cat eregion/runs/campaigns/$(CAMPAIGN)/report.error 2>/dev/null; echo "pas encore de rapport pour $(CAMPAIGN)"; exit 1; }'
+
+# BL1 (#280) : le temps pour contenir et la part contenue seule d'une campagne, calculés sur H0
+# depuis ses fichiers (analysis/containment.py) — lecture seule, aucun modèle. FAULT_RUNS= : une
+# panne de Gothmog à rattacher en plus ; JSON=1 : en JSON.
+glorfindel-host-containment: glorfindel-host-known
+	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
+	@case "$(CAMPAIGN)$(FAULT_RUNS)" in *[!A-Za-z0-9._,-]*) echo "CAMPAIGN ou FAULT_RUNS invalide"; exit 1;; esac
+	$(HOST_SSH) 'docker exec eregion-watch python -m analysis.containment runs/campaigns/$(CAMPAIGN)$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)'
 
 glorfindel-host-url:
 	@test -f $(HOST_ENV) || { echo "$(HOST_ENV) manquant (make glorfindel-host-env)"; exit 1; }

@@ -193,7 +193,7 @@ python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure
 "Tu es la session Review d'Eregion. Lis CLAUDE.md. Ta mission : challenger les décisions architecturales, les implémentations critiques et les choix de sécurité. Commence par lire inbox_review.md."
 
 # Orchestre (session principale d'elrond)
-"Tu es l'Orchestre d'Eregion. Lis CLAUDE.md et docs/sessions.md, puis inbox_general.md, puis lance /elrond run."
+"Tu es l'Orchestre d'Eregion. Lis CLAUDE.md et docs/sessions.md, puis inbox_general.md, puis /elrond status. Ne lance (/elrond run <lots>) que les lots que Jonathan a nommés ou délégués."
 
 # Session General (coordination)
 "Tu es la session General d'Eregion. Lis CLAUDE.md. Ta mission : coordonner les sessions spécialisées, router les items cross-cutting, mettre à jour CLAUDE.md/README.md/ROADMAP.md. Commence par lire inbox_general.md."
@@ -203,9 +203,9 @@ python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure
 
 **Le cycle d'une session** (détail : `docs/sessions.md`) :
 - **L'Orchestre** : au démarrage, `ListAgents`. Si « Orchestre » tourne, présente-toi par `SendMessage` (`to: "Orchestre"`), sinon écris dans `collab/inbox_general.md`. Demande-lui l'issue d'un lot, une plage de mutants (jamais choisie seul : les branches en vol ne se voient pas), la relecture et la fusion d'une PR, et tout ce qui touche un autre composant.
-- **Le travail** : une branche depuis `origin/main` dans un worktree, jamais sur `main`. Les commits sont en français, chacun vert. Fusionne `origin/main` en dernier : une entrée de CHANGELOG rangée sous une version publiée revient sous `[Unreleased]`. Puis `ruff`, la suite complète et `python scripts/mutant_anchors.py`.
-- **Pousser, fusionner** : les sessions poussent leur branche et ouvrent la PR (« Ferme #N », en français) sans attendre Jonathan (30/10). Une PR fusionne avec la CI verte et une relecture Opus 5.5 « ok » (demandée à l'Orchestre, qui tient l'ordre des fusions). Commente l'issue à chaque PR.
-- **Jamais** : force-push, publier une release, `terraform apply` ou `YES=1`, le banc, H0, un appel payant au modèle, lire un fichier de secrets. Ces gestes restent à Jonathan. Les questions de conception se posent à Jonathan une à la fois (`AskUserQuestion`).
+- **Le travail** : une branche depuis `origin/main` dans un worktree, jamais sur `main`. Les commits sont en français, chacun vert. Fusionne `origin/main` en dernier, par un merge (jamais un rebase d'une branche poussée) : une entrée de CHANGELOG rangée sous une version publiée revient sous `[Unreleased]`. Puis `ruff`, la suite complète et `python scripts/mutant_anchors.py`.
+- **Pousser, fusionner** : les sessions poussent leur branche et ouvrent la PR (« Ferme #N », en français) sans attendre Jonathan (30/10). Une PR fusionne avec la CI verte et une relecture Opus 5.5 « ok » (demandée à l'Orchestre, qui tient l'ordre des fusions) ; un edit du prompt attend aussi le run de bout en bout, par Jonathan. Commente l'issue à chaque PR.
+- **Jamais seule** : force-push, publier une release, `terraform apply` ou `YES=1`, une attaque ou une panne sur le banc, H0, un appel payant au modèle ; et jamais lire `.envrc`, `~/.config/eregion/` ou `host.env`. Ces gestes restent à Jonathan. Aucun identifiant réel dans le dépôt ; une issue de sécurité reste neutre. Les questions de conception se posent à Jonathan une à la fois (`AskUserQuestion`), l'option recommandée en premier.
 
 **Mode orchestré, elrond** (`.claude/skills/elrond/`, documenté dans `docs/elrond.md`). Pour dérouler les lots de la feuille de route, une session principale lance `/elrond run`.
 - Chaque lot part dans un sous-agent Opus 5.5, dans son propre worktree (`.claude/worktrees/`, ignoré par Git).

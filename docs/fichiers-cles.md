@@ -253,6 +253,11 @@ scripts/image_check.py → CI1 : les images de Glorfindel et des injecteurs épr
                         les injecteurs ; chaque vérification en docker run --network none. CI : images.yml ; local :
                         make images-check ; tests : tests/unit/test_image_check.py.
 
+scripts/mutant_anchors.py → avant un push (docs/sessions.md) : chaque mutant du harnais et du jeu de contrôle a un
+                        id unique, et le harnais pourra l'appliquer comme son measure() — le fichier à renommer
+                        existe, old et new s'apparient, chaque texte est trouvé une seule fois, dans un fichier
+                        suivi par git (sinon STALE). Accepte le chemin d'un autre worktree ; sort en 1 sur une faute.
+
 annatar/
   runner/engine.py    → inscription (`eregion_core.inscription.check_target` : périmètre du banc + tags `eregion-target`/`eregion-zone`
                         sur le groupe ET la VM + zone ; `scenario_destructive()` = le catalogue décide — la technique et sa source épinglée, inconnu = destructif, un scénario qui se dit non destructif contre lui refusé (SEC5) ; `annatar clean` gardé aussi, destructif, et derrière le garde V1) → setup → integrity check → attack

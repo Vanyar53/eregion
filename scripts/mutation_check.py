@@ -4817,7 +4817,8 @@ _I4B_TESTS = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in 
     "test_a_reassertion_says_what_the_isolation_left",
     "test_a_reasserted_isolation_moves_off_the_old_address_a_turned_rule_waits_behind",
     "test_an_interrupted_release_after_an_ip_change_opens_the_new_owner",
-    "test_the_unblock_finds_the_block_of_a_nic_left_with_no_nsg_it_knows"))
+    "test_the_unblock_finds_the_block_of_a_nic_left_with_no_nsg_it_knows",
+    "test_the_search_on_every_nsg_keeps_a_turned_rule_aimed_at_the_vm_that_took_the_address"))
 _I4B = f"{_I4B_TESTS} {INVARIANTS}"
 MUTANTS += [
     ("M1890", "a turned allow asked about before it goes read as nothing to keep (`!= deny`): the VM given "
@@ -4868,6 +4869,16 @@ MUTANTS += [
      "                  )\n"),
 ]
 TESTS.update({f"M{n}": _I4B for n in range(1890, 1906)})
+# The review of I4B: the search on every NSG asks the guard too — a turned allow there, aimed at the
+# VM that took the address and its NSG, stays. M1906.
+MUTANTS += [
+    ("M1906", "the search on every NSG takes off a turned allow aimed at the VM that took the address: "
+              "cut off (I4B, review)", UNB,
+     "                err = (_held_by_turned(self._network, guard, n_rg, n_name, name, owner[name.lower()], mates)\n"
+     "                       or self._delete_rule(n_rg, n_name, name))\n",
+     "                err = self._delete_rule(n_rg, n_name, name)\n"),
+]
+TESTS["M1906"] = _I4B
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

@@ -3346,6 +3346,43 @@ def test_the_unblock_finds_the_block_of_a_nic_left_with_no_nsg_it_knows(monkeypa
     _run(monkeypatch, _net(api_nic={"own": "dedicated"}), *steps)
 
 
+def test_the_search_on_every_nsg_keeps_a_turned_rule_aimed_at_the_vm_that_took_the_address(monkeypatch):
+    """The search above, asked about too (review of I4B): api blocked on its own NSG, its
+    entry lost, its inbound rule turned into an allow by someone; api's IP changed, its NSG
+    taken off it (the NIC bare) and given to a new VM at the old address. The unblock finds
+    api's rules on that NSG by its mark — the turned allow lets the attacker reach the new
+    VM: taken off, that VM lost those flows (I4). It stays, said; the -out deny on the old
+    address, nothing waiting behind it, goes."""
+    import shutil
+
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(api_nic={"own": "dedicated"}))
+        assert m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)["status"] == "blocked"
+        for f in actions._BLOCK_STATE_DIR.glob("api--*.json"):
+            f.unlink()
+        rules = m.fake.nsgs[key(_Q_API_NSG)]["rules"]
+        old = rules[_Q_API_BLOCK]["destination_address_prefixes"]
+        rules[_Q_API_BLOCK]["access"] = "Allow"
+        m.customer_changes_ip(data=Script(_nic("rg-edge", "api-nic"), 0, 20))
+        m.fake.nics[_nic("rg-edge", "api-nic")]["nsg"] = None                  # someone, by hand
+        m.create_vm(data=Script("northeurope", "rg-app1", "api", _Q_API_NSG, "Linux"))
+        assert m.fake.nics[_nic("rg-app1", "api-nic-4")]["ips"] == old
+        reach = m._attacker_flows(_NEW_API_VM, None)
+        assert reach
+        out = m.connector.unblock_ip(ATTACKER, API)
+        assert m._attacker_flows(_NEW_API_VM, None) >= reach
+        assert rules[_Q_API_BLOCK]["access"] == "Allow"
+        assert out["status"] == "unblock_partial", out
+        assert any(_Q_API_BLOCK in f and "gardée" in f and old[0] in f for f in out["failed"]), out
+        assert f"{_Q_API_BLOCK}-out" not in rules
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
 # ── I4B: seed 101 at 500 once the unblock keeps what it must — a gap of the teardown's operator ──
 
 _S101_EDGE = "/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-edge"

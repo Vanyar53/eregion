@@ -129,6 +129,11 @@ def test_annatars_and_gothmogs_pages_lead_to_dagorlads_runs_with_what_they_asked
     assert go("/gothmog?run=g-1").headers["location"] == "/dagorlad?view=runs&injector=gothmog&run=g-1"
     assert go("/annatar?campaign=c-1").headers["location"] == "/dagorlad?view=runs&injector=annatar&campaign=c-1"
     assert go("/gothmog").status_code == 308
+    # Never another view or injector than its own, and never off the console.
+    assert go("/annatar?view=board&run=r-1").headers["location"] == "/dagorlad?view=runs&injector=annatar&run=r-1"
+    assert go("/gothmog?injector=annatar").headers["location"] == "/dagorlad?view=runs&injector=gothmog"
+    for odd in ("/annatar?next=//evil.com", "/gothmog?x=%0d%0aLocation:%20//evil.com", "/annatar?r=%2F%2Fevil.com"):
+        assert go(odd).headers["location"].startswith("/dagorlad?"), odd
 
 
 def test_a_run_id_is_a_plain_name(client):

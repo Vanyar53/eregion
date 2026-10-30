@@ -663,7 +663,8 @@ l'emporte :
 | `over_cap` | plus d'injections que le plafond d'Orodruin, ou plus de 2 h en tout | `EREGION_MAX_INJECTIONS` ≤ 20, `EREGION_MAX_RUN_S` ≤ 2 h |
 
 **Avertissements.** Le fil reste valide, et sa pastille le dit :
-- `typed_name` : une technique destructive (banc ou jumeau). En (b), le nom de la cible sera tapé.
+- `typed_name` : une technique destructive, ou dont personne n'a déclaré qu'elle ne l'est pas (A0 :
+  un inconnu n'est jamais pris pour inoffensif, comme en production). En (b), le nom de la cible sera tapé.
 - `isolated_now` : la cible est isolée, ou des adresses y sont bloquées. Le run mesurerait
   l'isolation, pas la détection (la tâche B, 30/07).
 - `not_seen` : Glorfindel ne voit pas la VM en ce moment (désallouée, ou hors de ses workspaces).
@@ -742,14 +743,19 @@ L'état normal est relu avant et après (les sondes de Gothmog : `vm-running`, `
   avec sa propre identité. S'il refuse, il le dit avec les mêmes codes.
 - **Ce que porte une demande** :
   - un identifiant et son heure ;
-  - pour chaque fil : l'expérience, la cible, son rang, et le nom tapé si le fil est destructif.
+  - pour chaque fil : l'expérience, la cible, son rang.
+
+  Jamais un nom tapé : la console n'en garde aucun (le point suivant).
 
   Rien d'autre : ni zone, ni « destructive », ni résultat attendu, ni mode de la cible. Orodruin
   recalcule tout. Annatar et Gothmog restent aveugles à Glorfindel, comme Glorfindel l'est à eux (la
   boucle aveugle, 30/06).
-- **Un fil destructif exige le nom de la cible, tapé** (le nom de la VM, tel qu'Azure l'écrit). La
-  page le compare, et **Orodruin aussi**, au nom qu'il lit de la cible. Une demande forgée sans lui
-  est refusée là où elle s'exécute.
+- **Un fil destructif exige le nom de la cible, tapé dans la commande, jamais dans la console**
+  (relecture 5.5 de #338, 30/10). La commande **affiche les fils de la demande**, puis fait taper à
+  l'opérateur, sur son poste, le nom de la cible de chaque fil destructif (le nom de la VM, tel
+  qu'Azure l'écrit) ; Orodruin le compare au nom qu'il lit de la cible. Un nom tapé que la console
+  aurait gardé ne prouverait rien : une demande forgée sur un H0 compromis passerait sous le geste
+  humain sans être vue. La page peut montrer ce qui sera demandé, elle ne le recueille pas.
 - **Une fenêtre d'exercice par fil.** L'injecteur l'ouvre quand il touche sa cible, comme
   aujourd'hui. Elle porte l'identifiant de la demande : c'est ce qui relie le fil à son run.
 - **Les fils tournent l'un après l'autre** (Jonathan, 30/10, question 2), dans l'ordre où ils sont
@@ -771,9 +777,12 @@ L'état normal est relu avant et après (les sondes de Gothmog : `vm-running`, `
   - ce qu'elle arrêtera : les fenêtres vivantes et leurs cibles ;
   - ce qui restera en vol (M-1).
 - **Le transport : une commande portée par l'opérateur** (Jonathan, 30/10, question 1). La console
-  écrit la demande sur son propre hôte, hors de `runs/` et de `~/.glorfindel/`, et donne une
-  commande : `make orodruin-exercise REQUEST=<id>`. La commande copie la demande par SSH, comme
-  `orodruin-push`, et la lance sur Orodruin. Ce choix garde trois choses :
+  écrit la demande dans son propre répertoire (`~/.eregion/requests/`, hors de `runs/` et de
+  `~/.glorfindel/`), et donne une commande : `make orodruin-exercise REQUEST=<id>`. Elle part du
+  poste de l'opérateur, comme les autres cibles d'Orodruin : elle tire la demande de l'hôte de la
+  console (sur H0, par SSH, comme `make glorfindel-host-*`), l'affiche, fait taper les noms (le point
+  précédent), puis la copie sur Orodruin par SSH, comme `orodruin-push`, et l'y lance. À la fiche de
+  DG-b d'en fixer le détail. Ce choix garde trois choses :
   - rien de neuf dans le canal ;
   - aucun droit de plus pour l'identité de H0, qui reste un observateur ;
   - un geste humain entre la console et Orodruin.
@@ -841,9 +850,11 @@ Les cinq décisions, prises une à une le 30/10 :
    d'un fil.
 2. **En couches**, comme les règles depuis P1 :
    - **livrés** : `drills/<nom>.yaml` dans le dépôt, relus en PR — les drills de référence ;
-   - **instance** : ceux du client, dans l'état de son instance, à côté de `client_rules.yaml`,
-     jamais écrasés par une mise à jour (en SaaS, le magasin du tenant). Dagorlad les enregistre
-     (« Save as drill »), les liste et les charge sur le tableau ;
+   - **instance** : ceux du client, dans le répertoire propre à la console (`~/.eregion/drills/`),
+     **hors de `~/.glorfindel/` et de `runs/`** — un drill porte le plan rouge, que la décision ne
+     lit jamais (« Glorfindel reste aveugle ») —, jamais écrasés par une mise à jour, comme la couche
+     de règles du client (en SaaS, le magasin du tenant). Dagorlad les enregistre (« Save as
+     drill »), les liste et les charge sur le tableau ;
    - **session** : le brouillon, dans le navigateur (déjà le cas) ;
    - **export** : le même YAML, pour Git chez le client, le jumeau, ou proposer un drill à la base.
 
@@ -873,8 +884,10 @@ Lancer un drill : `make orodruin-exercise DRILL=<nom>`, ou la demande que Dagorl
 Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
 1. **La demande n'est jamais là où la watch lit.** Elle n'est ni dans `runs/` (signaux, journaux de
    debug), ni dans `runs/exercises/`, ni dans `~/.glorfindel/` (état, escalades), ni dans la mémoire.
-   Elle a son propre répertoire. Deux tests l'établissent :
-   - aucun module de `glorfindel/` ne nomme ce répertoire ;
+   Elle a son propre répertoire, celui de la console (`~/.eregion/`, avec les drills). Deux tests
+   l'établissent :
+   - aucun module de `glorfindel/` ne nomme ce répertoire (`~/.eregion/`, drills compris) — déjà en
+     place : `test_glorfindel_never_names_the_consoles_own_directory` ;
    - un cycle de `decide` rejoué avec une demande présente envoie au modèle le même message, à l'octet
      près.
 2. **Le résultat attendu n'est écrit nulle part.** Il est calculé à la demande de la page, sans
@@ -973,6 +986,15 @@ Posées une à une. La réponse est reportée ici avec sa date.
 - **Vérifié dans Chromium** (chrome-headless-shell, console locale sur un HOME jetable, cibles, règles
   et watch remplacées, une VM au nom piégé `<img onerror>`) à 1440 et 1600 px : six fils tirés, cinq au
   clic et un à la souris ; aucune erreur JS, aucune violation de CSP, aucune image injectée.
+- **La relecture 5.5 (30/10)** a fait corriger :
+  - une technique au caractère destructif non déclaré demande aussi le nom tapé (A0) ;
+  - une zone hors des trois (« Production », « prod ») est épinglée par un test ;
+  - `isolated_now` et la carte d'un déploiement en lecture seule sont testés ;
+  - la page suivante d'une liste ARM n'est suivie que vers ARM ;
+  - le plafond en nombre est testé (le temps vient d'abord) ;
+  - la carte de Glorfindel sans âge de battement, et « MAY RUN · ? » pour une panne au moteur illisible.
+
+  Mutants M2000–M2004.
 - **Mutants M1980–M1994** (`tests/unit/test_exercise_plan.py`, `test_console_dagorlad.py`) : la règle de
   production sautée, le caractère destructif pris pour faux, un fil sans watch, une cible non inscrite
   ou hors du périmètre, une entrée prévue, une panne hors des cibles de son moteur, le nom à taper
@@ -997,3 +1019,6 @@ Posées une à une. La réponse est reportée ici avec sa date.
 - **Mutants M1995–M1999** : `/annatar` qui ne mène plus aux Runs, la redirection qui perd sa requête, un
   lien de run qui ouvre le Board, une carte rouge sans sa preuve, l'en-tête qui garde l'onglet
   d'Annatar. M404 suit la nouvelle page.
+- **La relecture 5.5 de #353** : une matrice illisible donne « proof unreadable » sur les cartes, avec
+  son message, jamais « never run » (A0, M2005) ; la redirection ne recopie ni `view` ni `injector`, et sa
+  cible commence toujours par `/dagorlad?` (test).

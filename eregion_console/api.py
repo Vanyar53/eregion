@@ -450,9 +450,12 @@ async def dagorlad_page(view: str = ""):
 async def injector_moved(request: Request):
     """Annatar's and Gothmog's pages became Dagorlad's Runs (§7, decision of 30/10): their address
     leads there, filtered on that injector, with what it asked for (``?run=``), until 1.0."""
-    q = request.url.query
+    from urllib.parse import parse_qsl, urlencode
+    # What it asked for (?run=, ?campaign=), never another view or injector: the target is this one.
+    kept = urlencode([(k, v) for k, v in parse_qsl(request.url.query, keep_blank_values=True)
+                      if k not in ("view", "injector")])
     where = f"/dagorlad?view=runs&injector={request.url.path.strip('/')}"
-    return RedirectResponse(where + (f"&{q}" if q else ""), status_code=308)
+    return RedirectResponse(where + (f"&{kept}" if kept else ""), status_code=308)
 
 
 @app.get("/runs/{run_id}", include_in_schema=False)
@@ -2613,11 +2616,13 @@ async def exercise_board() -> dict:
         found = await asyncio.to_thread(sections.status, _RUNS)
     except ValueError:
         found = {"sections": []}
+    proof_error = ""
     try:
         matrix = await asyncio.to_thread(coverage_matrix)
-    except Exception:
-        matrix = {}
-    return {"reds": board.red_cards(catalog_, rules, found, matrix),
+    except Exception as exc:   # unknown, said — never « never run » on every card (A0)
+        matrix, proof_error = None, f"the coverage matrix unreadable: {exc}"[:300]
+    return {"reds": board.red_cards(catalog_, rules, found, matrix, proof_error=proof_error),
+            "proof_error": proof_error,
             "glorfindel": board.glorfindel_card(await watch_status(), rules, st, gate),
             "targets": board.blue_cards(vms, st, rules, bench=_bench()),
             "targets_error": targets_error, "other_types": board.other_types(catalog_)}

@@ -266,3 +266,46 @@ def test_a_run_link_in_the_runs_stays_in_the_runs():
     from pathlib import Path
     js = (Path(api.__file__).parent / "static" / "injector.js").read_text()
     assert 'href="?view=runs&run=' in js and 'href="?run=' not in js
+
+
+def test_a_target_isolated_now_is_said_on_its_wire(client, monkeypatch):
+    """The run would measure the isolation, not the detection (task B, 30/07)."""
+    base = api.state
+
+    async def isolated():
+        s = await base()
+        return {**s, "resources": [{"resource_id": GONDOLIN, "vm_name": "vm-celebrimbor-gondolin",
+                                    "states": [{"type": "isolated"}]}]}
+    monkeypatch.setattr(api, "state", isolated)
+    w = _plan(client, f"T1110.001@{GONDOLIN}")["wires"][0]
+    assert w["code"] == "" and "isolated_now" in [x["code"] for x in w["warnings"]]
+
+
+def test_a_read_only_deployment_shows_every_target_human_only():
+    """H0: whatever a VM's configured mode, nothing is executed — the card says it."""
+    state = {"read_only": True, "autonomy_modes": {"vm-celebrimbor-gondolin": "non_disruptive"},
+             "discovered_assets": [], "resources": []}
+    card = board.blue_cards([VMS[0]], state, [], bench="celebrimbor")[0]
+    assert card["mode"] == "human_only" and card["read_only"] is True
+    state["read_only"] = False
+    assert board.blue_cards([VMS[0]], state, [], bench="celebrimbor")[0]["mode"] == "non_disruptive"
+
+
+def test_glorfindel_never_names_the_consoles_own_directory():
+    """A request (phase b) and a drill (DG-d) live in the console's own directory, ~/.eregion/,
+    out of ~/.glorfindel/ and runs/: no module of Glorfindel names it — what its decision reads
+    never holds the red side's plan (§7, « Glorfindel reste aveugle »)."""
+    from pathlib import Path
+    import glorfindel
+    named = [p.name for p in Path(glorfindel.__file__).parent.rglob("*.py") if ".eregion" in p.read_text(encoding="utf-8")]
+    assert named == []
+
+
+def test_an_unreadable_matrix_says_unknown_never_never_run(client, monkeypatch):
+    """A0: proofs that cannot be read are unknown, said — not « never run » on every card."""
+    def fail(now=None):
+        raise OSError("runs/ unreadable")
+    monkeypatch.setattr(api, "coverage_matrix", fail)
+    b = client.get("/api/dagorlad/board").json()
+    assert "runs/ unreadable" in b["proof_error"]
+    assert {r["proof"]["state"] for r in b["reds"]} == {"unknown"}

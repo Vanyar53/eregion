@@ -58,7 +58,7 @@ def proofs(matrix: dict | None) -> dict[str, dict]:
 
 
 def red_cards(catalog: dict[str, Experiment], rules: list[dict], sections: dict,
-              matrix: dict | None = None) -> list[dict]:
+              matrix: dict | None = None, proof_error: str = "") -> list[dict]:
     """Every entry of the catalogue: what runs first (techniques, then faults), then what is only
     planned, each with its last proof (the coverage matrix). ``available`` is false for an entry
     nothing runs yet, or whose injector is not set up here — a card without a handle."""
@@ -79,6 +79,9 @@ def red_cards(catalog: dict[str, Experiment], rules: list[dict], sections: dict,
             "rules": sorted({r["name"] for r in detecting}), "available": not why, "why": why,
             "proof": proof.get(e.id) or {"state": "never", "proof_age_s": None, "last_run": "", "last_run_at": ""},
         })
+        if proof_error:   # the matrix unreadable: its proof is unknown, never « never run » (A0)
+            out[-1]["proof"] = {"state": "unknown", "proof_age_s": None, "last_run": "", "last_run_at": "",
+                                "error": proof_error}
     return out
 
 
@@ -167,7 +170,7 @@ def expected(e: Experiment, card: dict | None, rules: list[dict], threshold: flo
     else:
         what = "A card to judge; a human acts" + (f" — held: {hold}." if hold else ".")
         short = "card"
-    if e.destructive:
+    if e.destructive is not False:   # destructive, or not declared (A0)
         what += " A restore is never autonomous: at most an isolation and a snapshot, the restore waits for a human."
     return {"summary": f"{seen} · {short}", "rules": sorted(r["name"] for r in detecting),
             "latency_s": latency, "glorfindel": what, "mode": mode}

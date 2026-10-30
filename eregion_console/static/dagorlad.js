@@ -91,11 +91,12 @@ for (const [type, name] of Object.entries(_EVENTS)) document.addEventListener(ty
 const PROOF = {
   proven: ['c-ok', 'proven'], aging: ['c-warn', 'aging'], stale: ['c-bad', 'stale'],
   regressed: ['c-bad', 'REGRESSED'], unproven: ['c-warn', 'no proof'], never: ['', 'never run'],
+  unknown: ['c-warn', 'proof unreadable'],
 };
 function proofChip(p) {
-  const [cls, label] = PROOF[(p || {}).state] || PROOF.never;
+  const [cls, label] = p && Object.hasOwn(PROOF, p.state) ? PROOF[p.state] : PROOF.never;
   const age = p && p.proof_age_s != null && p.state !== 'regressed' ? ` ${dur(Number(p.proof_age_s))}` : '';
-  const tip = p && p.last_run ? `last run ${p.last_run} · see it in Runs` : 'no run of it on this host';
+  const tip = p && p.error ? p.error : p && p.last_run ? `last run ${p.last_run} · see it in Runs` : 'no run of it on this host';
   return `<span class="chip ${esc(cls)}" title="${esc(tip)}">${esc(label)}${esc(age)}</span>`;
 }
 function redCard(r, i) {
@@ -123,7 +124,7 @@ function glorfindelCard(g) {
   const live = !g.gate;
   const backends = Array.isArray(g.backends) && g.backends.length ? g.backends.join(', ') : 'no backend';
   return `<div class="gcard">
-    <div><b>GLORFINDEL</b> <span class="${live ? 'r-ok' : 'r-bad'}">● ${live ? `watching · ${Number(w.age_s)}s ago` : 'no live watch'}</span></div>
+    <div><b>GLORFINDEL</b> <span class="${live ? 'r-ok' : 'r-bad'}">● ${live ? `watching${Number.isFinite(Number(w.age_s)) ? ` · ${Number(w.age_s)}s ago` : ''}` : 'no live watch'}</span></div>
     <div class="bmeta">${Number(g.rules)} rules${g.client_rules ? ` (${Number(g.client_rules)} yours)` : ''} · ${esc(backends)} · default ${esc(g.default_mode)}${g.read_only ? ' · read-only' : ''}</div>
     <div class="bmeta">never told what the red side plans</div>
     ${g.gate ? `<div class="err">${esc(g.gate)}</div>` : ''}
@@ -230,10 +231,13 @@ function drawWires() {
 }
 
 // ── The plan ──────────────────────────────────────────────────────────────────────────
-const STATUS = { ok: ['c-ok', 'MAY RUN'], warn: ['c-warn', 'MAY RUN · ⚠'], refused: ['c-bad', 'REFUSED'] };
+const STATUS = { ok: ['c-ok', 'MAY RUN'], warn: ['c-warn', 'MAY RUN · ⚠'], refused: ['c-bad', 'REFUSED'],
+                 unknown: ['c-warn', 'MAY RUN · ?'] };
 function planRow(v) {
   const k = S.wires.findIndex(w => w[0] === v.experiment && same(w[1], v.target));
-  const st = STATUS[v.status] || ['', ''];
+  // A fault whose engine's targets this host cannot read: not a warning, an unknown.
+  const unread = v.status === 'warn' && (v.warnings || []).every(w => w.code === 'engine_unknown');
+  const st = STATUS[unread ? 'unknown' : v.status] || ['', ''];
   const x = v.expected || {};
   const rules = Array.isArray(x.rules) && x.rules.length ? `rule: ${x.rules.join(', ')}` : '';
   const what = v.code

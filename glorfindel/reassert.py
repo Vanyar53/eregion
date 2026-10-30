@@ -229,14 +229,16 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
         report.append({"kind": "isolation", "vm": vm, "outcome": "escalated", "detail": reason})
         return
     try:
-        connector.isolate_vm(rid)
+        put = connector.isolate_vm(rid)
         state = _load_isolation_state(ref or vm) or {}
         # Keep the original isolation time (TTL); record the re-application.
         _save_isolation_state(ref or vm, {**state, "isolated_at": iso.get("isolated_at", state.get("isolated_at")),
                                    "reasserted_at": now})
         reason = (f"L'isolation de {vm} avait disparu d'Azure (modification hors "
                   "Glorfindel) : reposée une fois. Si elle disparaît encore, "
-                  "Glorfindel alertera sans la reposer." + who)
+                  "Glorfindel alertera sans la reposer." + who
+                  # I4B: what the rewrite left as it was, aimed at another VM — on the card.
+                  + (f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""))
         outcome = "reapplied"
     except Exception as exc:
         reason = f"L'isolation de {vm} a disparu d'Azure ; la reposer a échoué : {exc}"

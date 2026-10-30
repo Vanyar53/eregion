@@ -4,6 +4,12 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Security
+- **LiteLLM 1.86.1 → 1.100.4** (DEP1, #282, 29/10; `docs/operations.md`, « Verrou des dépendances »). The first release that fixes the three advisories on the locks: GHSA-3cv6-jpf6-8222 (authenticated SSRF through request-body routing parameters, #316), GHSA-g5ff-637f-6q2m (arbitrary local file read through `vertex_ai_credentials`, #317) and GHSA-7hp6-4w63-5g45 (high: privilege escalation to proxy admin through the salt key reused across domains, introduced in 1.91.0 — 1.95.1, the first candidate, carried it). All three sit in LiteLLM's proxy, which Eregion does not run.
+  - **What enters with it**, same resolution date as the lock before (26/10): 1.100.4 declares `boto3` and `pydantic-settings` on top of 1.86.1's dependencies. boto3, botocore, s3transfer and jmespath enter the three locks; pydantic-settings, python-dateutil and six enter the injectors' too (chromadb already brought them to the others). python-dateutil goes back from 3.0.0 to 2.9.0.post0 in `dev.txt` and `glorfindel.txt` (botocore requires `<3.0.0`), and tzdata, pulled by 3.0.0 only, leaves. The AWS SDK is installed by litellm, never imported outside a provider's adapter (`tests/unit/test_provider_boundary.py`).
+  - **The call proven in each image before the harness** (CI1): a tool call through litellm, the way the decision makes it (`eregion_core/llm_call.py`), answered by litellm's own mock — no key, no model, no network (`--network none`). `import litellm` was not enough: 1.106.0 (19/10) imported, then failed on every call (« No module named 'mcp' »); measured again on 29/10 in a throwaway venv, the check fails on it. Tests `tests/unit/test_image_check.py`, mutants M1610–M1614.
+  - The four advisories of chromadb 1.5.9 have no fix yet. The release that carries this lock waits for the harness's attestation in H3's format (`requirements/harness.json`, `eregion.harness/2`: two passes, the lock in service then this one, judged case by case): H0's CD refuses it without one. A committed attestation on another lock, without its reference, or that misses the default model fails in CI first (`tests/unit/test_llm_smoke.py`, mutant M1616).
+
 ## [0.4.6] — 2026-10-29 — "held at the source"
 
 ### Security

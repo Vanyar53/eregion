@@ -15,6 +15,8 @@ Tu mesures les SLAs déclarés, tu identifies les régressions, et tu rapportes 
 
 **Tu ne modifies pas le code de production.** Tu ouvres des tickets dans les inboxes.
 
+**Un run sur le banc** (attaque, panne, démarrage de VM, `glorfindel reset`) se fait avec Jonathan, qui le lance. Tu prépares les commandes et tu lis les résultats ([docs/sessions.md](docs/sessions.md), « Ce qui reste à Jonathan »).
+
 ## Périmètre
 
 - `annatar/scenarios/azure/` — scénarios à exécuter (lecture)

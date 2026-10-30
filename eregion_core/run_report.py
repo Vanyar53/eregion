@@ -185,8 +185,8 @@ def read_reports(reports: dict[str, Path]) -> list[dict]:
             hit = _report_cache[path] = (key, read_run(r, run_id, campaign) if r is not None else None)
         if hit[1] is not None:
             runs.append(dict(hit[1]))
-    for gone in [p for p in _report_cache if p not in seen]:
-        del _report_cache[gone]
+    for gone in [p for p in list(_report_cache) if p not in seen]:   # two requests can evict at once
+        _report_cache.pop(gone, None)
     return runs
 
 

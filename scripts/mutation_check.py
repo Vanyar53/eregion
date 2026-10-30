@@ -4963,10 +4963,11 @@ MUTANTS += [
      '        if run.get("started") is False:   # its start failed: nothing was injected\n'
      '            return "not_started"\n', ""),
     ("M1881", "a deleted report kept in the cache for ever (C1, review)", RRC,
-     "    for gone in [p for p in _report_cache if p not in seen]:\n        del _report_cache[gone]\n", ""),
+     "    for gone in [p for p in list(_report_cache) if p not in seen]:   # two requests can evict at once\n"
+     "        _report_cache.pop(gone, None)\n", ""),
     ("M1882", "a deleted debug file kept in the cycles' cache for ever (C1, review)", CON,
-     "    for gone in set(_cycle_cache) - set(paths):   # a file deleted is dropped from the cache (C1)\n"
-     "        del _cycle_cache[gone]\n", ""),
+     "    for gone in set(list(_cycle_cache)) - set(paths):   # a file deleted is dropped from the cache (C1)\n"
+     "        _cycle_cache.pop(gone, None)   # two requests (threads) can evict at once\n", ""),
     ("M1883", "the cached matrix served after a new report (C1, review)", CON,
      "    return (tuple(sorted(stat(p) for p in reports.values())),\n",
      "    return ((),\n"),

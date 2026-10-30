@@ -2126,8 +2126,8 @@ def _watch_cycles(since_ts: float | None) -> list[dict]:
     ``watch-*`` files, and a run's own on a host that has both."""
     out = []
     paths = sorted(_RUNS.glob("*_debug.jsonl"))
-    for gone in set(_cycle_cache) - set(paths):   # a file deleted is dropped from the cache (C1)
-        del _cycle_cache[gone]
+    for gone in set(list(_cycle_cache)) - set(paths):   # a file deleted is dropped from the cache (C1)
+        _cycle_cache.pop(gone, None)   # two requests (threads) can evict at once
     for path in paths:
         try:
             st = path.stat()

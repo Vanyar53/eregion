@@ -11,7 +11,7 @@
 # « Les journaux d'activité et d'Entra ID au banc »). Contraintes :
 #   - un paramètre de diagnostic d'abonnement vit à l'échelle de l'abonnement, pas du
 #     groupe : 5 au plus par ressource (« Each resource can have up to five diagnostic
-#     settings », learn.microsoft.com/azure/azure-monitor/platform/diagnostic-settings) ;
+#     settings », learn.microsoft.com/azure/azure-monitor/data-collection/diagnostic-settings) ;
 #     deux paramètres qui envoient la même catégorie au même workspace doublent les lignes
 #     → posé seulement par l'instance canonique (workspace Terraform "default"), jamais par
 #     une stack éphémère ;
@@ -23,7 +23,7 @@
 # Lecture côté Glorfindel : aucun droit de plus (Log Analytics Reader sur le workspace).
 #
 # Coût : aucun à l'ingestion — « There are no data ingestion charges for activity logs »
-# (learn.microsoft.com/azure/azure-monitor/platform/activity-log) ; AzureActivity est une
+# (learn.microsoft.com/azure/azure-monitor/fundamentals/activity-log) ; AzureActivity est une
 # table gratuite (learn.microsoft.com/azure/azure-monitor/logs/cost-logs).
 #
 # Catégorie : Administrative seule — « all create, update, delete, and action operations

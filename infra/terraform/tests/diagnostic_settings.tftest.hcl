@@ -24,14 +24,18 @@ mock_provider "null" {}
 variables {
   # Une clé jetable, générée pour ce test (sa clé privée n'a jamais été gardée).
   admin_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHJsmbq1cw7yKD96VpcLp0pc+ghC6Shc4ZG5t9jktOyi id1-test"
+  # Hermétique face au terraform.tfvars de l'opérateur (qui peut les activer) : chaque run part
+  # des deux à false ; le défaut lui-même est tenu par tests/unit/test_bench_logs.py.
+  activity_log_enabled = false
+  entra_logs_enabled   = false
 }
 
-run "disabled_by_default_nothing_of_the_subscription_nor_the_tenant" {
+run "both_off_nothing_of_the_subscription_nor_the_tenant" {
   command = plan
 
   assert {
     condition     = length(azurerm_monitor_diagnostic_setting.activity_log) == 0
-    error_message = "le journal d'activité est posé par défaut"
+    error_message = "le journal d'activité est posé alors que la variable est à false"
   }
   assert {
     condition     = length(data.azurerm_subscription.current) == 0
@@ -39,7 +43,7 @@ run "disabled_by_default_nothing_of_the_subscription_nor_the_tenant" {
   }
   assert {
     condition     = length(azurerm_monitor_aad_diagnostic_setting.entra) == 0
-    error_message = "les journaux du tenant sont envoyés par défaut"
+    error_message = "les journaux du tenant sont envoyés alors que la variable est à false"
   }
 }
 

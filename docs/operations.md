@@ -1083,7 +1083,7 @@ l'apply.
 
 | Table | Prix | Volume attendu sur le banc | Par mois |
 |---|---|---|---|
-| `AzureActivity` | **gratuite** : « There are no data ingestion charges for activity logs » ([journal d'activité](https://learn.microsoft.com/azure/azure-monitor/platform/activity-log)) ; table exclue de la facturation ([coût des journaux](https://learn.microsoft.com/azure/azure-monitor/logs/cost-logs), `_IsBillable` faux) | quelques centaines d'opérations par jour | 0 |
+| `AzureActivity` | **gratuite** : « There are no data ingestion charges for activity logs » ([journal d'activité](https://learn.microsoft.com/azure/azure-monitor/fundamentals/activity-log)) ; table exclue de la facturation ([coût des journaux](https://learn.microsoft.com/azure/azure-monitor/logs/cost-logs), `_IsBillable` faux) | quelques centaines d'opérations par jour | 0 |
 | `AuditLogs` | Analytics Logs : **2,99 USD le Go** en West Europe (2,63 EUR), au-delà des 5 premiers Go du mois par compte de facturation | ~2 Ko par événement ; 50 à 500 événements par jour sur un tenant de banc → 0,1 à 1 Mo/jour | < 0,10 USD |
 | `AADServicePrincipalSignInLogs` | idem | ~11,5 Ko par connexion ; 100 à 1 000 connexions de principaux par jour (console, bot, watch locale, Annatar, CI ; un jeton vit environ une heure) → 1 à 12 Mo/jour | < 1 USD |
 | Rétention | 31 jours inclus ; au-delà 0,13 USD le Go par mois (West Europe) | le workspace garde 30 jours (`log_retention_days`) | 0 |
@@ -1144,14 +1144,16 @@ celebrimbor-logs-up YES=1`. Les lignes déjà ingérées restent jusqu'à la fin
 jours). `make celebrimbor-down CONFIRM=default` les retire aussi, avec le reste.
 
 **Les premières lignes** : « within 90 minutes » après la création d'un paramètre (Azure Monitor,
-[paramètres de diagnostic](https://learn.microsoft.com/azure/azure-monitor/platform/diagnostic-settings)) ;
+[paramètres de diagnostic](https://learn.microsoft.com/azure/azure-monitor/data-collection/diagnostic-settings)) ;
 pour Entra, « up to three days for the logs to start appearing » ([Entra](https://learn.microsoft.com/entra/identity/monitoring-health/howto-configure-diagnostic-settings)).
 Attendre `AzureActivity | take 1` et `AuditLogs | take 1` non vides avant les opérations de test.
 
 **Ce que H0 verra aussitôt** : la watch hébergée lit ce workspace ; chaque vraie opération du banc
 devient une carte `control_plane_change` (un apply Terraform qui écrit le NSG, une attribution de
 rôle, une sauvegarde si l'hypothèse A2 se vérifie) et chaque événement d'Entra retenu une carte
-`identity_change` — jamais une action (détection seule, deux verrous). Le paramètre lui-même
+`identity_change` — jamais une action (détection seule, deux verrous). Une fois Entra activé, chaque
+carte `identity_change` sur une action d'administration de **tout le tenant** part dans Discord,
+avec l'UPN de l'acteur. Le paramètre lui-même
 (`Microsoft.Insights/diagnosticSettings/write`) n'est lu par aucune règle ; le prochain
 `celebrimbor-up` qui réécrit le NSG du banc, si.
 
@@ -1159,6 +1161,48 @@ rôle, une sauvegarde si l'hypothèse A2 se vérifie) et chaque événement d'En
 
 Chacune est connue, réversible, et défaite aussitôt. Noter l'heure UTC juste avant chacune
 (`date -u +%FT%TZ`) : c'est le T0 de la latence de bout en bout.
+
+**Droits des opérations de test — à vérifier avant de commencer**, pour ne pas s'arrêter au milieu
+avec une application et un identifiant déjà créés :
+- **C2** : Administrateur général actif ; ou bien Administrateur d'application cloud pour le
+  consentement (`az ad app permission admin-consent` : « You must login as a global
+  administrator » dans l'aide d'`az`, un rôle d'administration des applications suffit au
+  portail) et Administrateur de rôle privilégié pour attribuer Security Reader ; plus le droit
+  d'enregistrer une application (les utilisateurs du tenant l'ont par défaut ; sinon Développeur
+  d'applications).
+- **AL1** : `Contributor` sur `rg-celebrimbor` suffit pour la règle de NSG, l'instantané et la
+  sauvegarde ; l'attribution de `Reader` demande User Access Administrator ou Owner sur ce groupe.
+
+**C2 — Entra ID, d'abord** (dans le tenant tranché ; l'application de test sert aussi à AL1) :
+
+```bash
+APP=$(az ad app create --display-name eregion-id1-test --query appId -o tsv)          # « Add application »
+APPOBJ=$(az ad app show --id "$APP" --query id -o tsv)                                 # pour le retrait définitif
+SP=$(az ad sp create --id "$APP" --query id -o tsv)                                    # « Add service principal »
+# entra-credential-added (T1098.001) : un certificat ajouté, valable 7 jours, sa clé gardée hors du dépôt en 0600.
+# Un certificat plutôt qu'un secret : la connexion ci-dessous ne met que le chemin du fichier dans la ligne de
+# commande, jamais la clé (un secret passé à `az login -p` serait visible par `ps`, az ne le lit pas d'un fichier).
+PEM=$(az ad app credential reset --id "$APP" --append --create-cert --display-name id1 \
+  --end-date "$(date -u -d '+7 days' +%Y-%m-%d)" --query fileWithCertAndPrivateKey -o tsv)
+mv "$PEM" ~/.eregion-id1.pem && chmod 600 ~/.eregion-id1.pem
+# entra-app-consent (T1528) : User.Read de Microsoft Graph (identifiants publics de Graph), puis le consentement d'administrateur
+az ad app permission add --id "$APP" --api 00000003-0000-0000-c000-000000000000 --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
+az ad app permission admin-consent --id "$APP"
+# entra-privileged-role-assigned (T1098.003) : Security Reader (un rôle qu'Entra marque privilégié, en lecture) au principal de test
+RID=$(az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?\$filter=displayName eq 'Security Reader'" --query "value[0].id" -o tsv)
+ASSIGN=$(az rest --method POST --url https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments \
+  --body "{\"principalId\":\"$SP\",\"roleDefinitionId\":\"$RID\",\"directoryScopeId\":\"/\"}" --query id -o tsv)
+az rest --method DELETE --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/$ASSIGN"
+# entra-sp-unusual-signin (T1078.004) : une connexion du principal, dans une config az jetable (ton az login n'est pas touché).
+# Selon la version d'az : --certificate <fichier> (récente) ou -p <fichier> (ancienne) — le chemin, pas la clé.
+AZURE_CONFIG_DIR=$(mktemp -d) sh -c 'az login --service-principal -u "$0" --certificate ~/.eregion-id1.pem --tenant <tenant> --allow-no-subscriptions -o none; rm -rf "$AZURE_CONFIG_DIR"' "$APP"
+```
+
+`entra-sp-unusual-signin` ne voit qu'un principal **qui a un historique** (vu au moins 3 jours de sa
+base de 14 jours, la dernière heure exclue) : la connexion ci-dessus, une fois par jour depuis le poste
+pendant au moins 3 jours, puis une fois depuis une autre adresse (Cloud Shell, le fichier `.pem` copié
+le temps de la connexion) — c'est celle-là qui fait la carte. Le certificat expire au bout de 7 jours ;
+pour une base plus longue, en ajouter un autre (une carte `entra-credential-added` de plus, attendue).
 
 **AL1 — le journal d'activité** (sur le groupe du banc) :
 
@@ -1168,8 +1212,7 @@ az network nsg rule create -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-t
   --direction Inbound --access Deny --protocol Tcp --source-address-prefixes 203.0.113.0/24 --destination-port-ranges 9
 az network nsg rule delete -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-test-deny
 
-# role-assignment-write (T1098.003) : Reader sur le groupe du banc au principal de test d'Entra
-# ($APP : les deux premières lignes du bloc C2 ci-dessous, à lancer d'abord)
+# role-assignment-write (T1098.003) : Reader sur le groupe du banc au principal de test d'Entra ($APP, ci-dessus)
 RG_ID=$(az group show -n rg-celebrimbor --query id -o tsv)
 az role assignment create --assignee "$APP" --role Reader --scope "$RG_ID"
 az role assignment delete --assignee "$APP" --role Reader --scope "$RG_ID"
@@ -1193,34 +1236,36 @@ retirerait). Facultatif, avec Jonathan, coûteux : un `glorfindel restore` de go
 ~20 min, la VM désallouée) ; une isolation puis une levée de gondolin par une watch locale (hypothèse
 A4) — jamais par H0, qui est en lecture seule.
 
-**C2 — Entra ID** (dans le tenant tranché ; une application de test, retirée à la fin) :
+**Le retrait — un seul bloc**, à la fin des mesures, **ou dès un abandon en cours de route** (chaque
+ligne tolère ce qui n'a pas encore été créé ; dans un nouveau shell, `APP` est retrouvée par son nom) :
 
 ```bash
-APP=$(az ad app create --display-name eregion-id1-test --query appId -o tsv)          # « Add application »
-SP=$(az ad sp create --id "$APP" --query id -o tsv)                                    # « Add service principal »
-# entra-credential-added (T1098.001) : un secret ajouté, gardé hors du dépôt, en 0600
-(umask 077; az ad app credential reset --id "$APP" --append --display-name id1 --years 1 --query password -o tsv > ~/.eregion-id1-secret)
-# entra-app-consent (T1528) : User.Read de Microsoft Graph (identifiants publics de Graph), puis le consentement d'administrateur
-az ad app permission add --id "$APP" --api 00000003-0000-0000-c000-000000000000 --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
-az ad app permission admin-consent --id "$APP"
-# entra-privileged-role-assigned (T1098.003) : Security Reader (un rôle qu'Entra marque privilégié, en lecture) au principal de test
-RID=$(az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?\$filter=displayName eq 'Security Reader'" --query "value[0].id" -o tsv)
-ASSIGN=$(az rest --method POST --url https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments \
-  --body "{\"principalId\":\"$SP\",\"roleDefinitionId\":\"$RID\",\"directoryScopeId\":\"/\"}" --query id -o tsv)
-az rest --method DELETE --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/$ASSIGN"
-# entra-sp-unusual-signin (T1078.004) : une connexion du principal, dans une config az jetable (ton az login n'est pas touché)
-AZURE_CONFIG_DIR=$(mktemp -d) sh -c 'az login --service-principal -u "$0" -p "$(cat ~/.eregion-id1-secret)" --tenant <tenant> --allow-no-subscriptions -o none && rm -rf "$AZURE_CONFIG_DIR"' "$APP"
+APP=${APP:-$(az ad app list --display-name eregion-id1-test --query "[0].appId" -o tsv)}
+if [ -n "$APP" ]; then
+  APPOBJ=${APPOBJ:-$(az ad app show --id "$APP" --query id -o tsv)}
+  az snapshot delete -g rg-celebrimbor -n snap-id1-test 2>/dev/null
+  az network nsg rule delete -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-test-deny 2>/dev/null
+  az role assignment delete --assignee "$APP" --scope "$(az group show -n rg-celebrimbor --query id -o tsv)" 2>/dev/null
+  for k in $(az ad app credential list --id "$APP" --cert --query "[].keyId" -o tsv); do
+    az ad app credential delete --id "$APP" --key-id "$k" --cert
+  done
+  for k in $(az ad app credential list --id "$APP" --query "[].keyId" -o tsv); do
+    az ad app credential delete --id "$APP" --key-id "$k"
+  done
+  az ad app delete --id "$APP"                       # l'application et son principal (son rôle d'annuaire avec)
+  # Retrait définitif : sinon l'objet reste restaurable 30 jours, avec ses identifiants.
+  [ -n "$APPOBJ" ] && az rest --method DELETE --url "https://graph.microsoft.com/v1.0/directory/deletedItems/$APPOBJ"
+fi
+rm -f ~/.eregion-id1.pem
 ```
-
-`entra-sp-unusual-signin` ne voit qu'un principal **qui a un historique** (vu au moins 3 jours de sa
-base de 14 jours, la dernière heure exclue) : la connexion ci-dessus, une fois par jour depuis le poste
-pendant au moins 3 jours, puis une fois depuis une autre adresse (Cloud Shell) — c'est celle-là qui
-fait la carte. Ensuite seulement : `az ad app delete --id "$APP"` et `rm ~/.eregion-id1-secret`.
 
 ### Les requêtes de mesure
 
 Dans le workspace du banc (portail : Logs), ou depuis le poste :
-`az monitor log-analytics query -w <customerId de law-celebrimbor-amonsul> --analytics-query "<requête>" --timespan PT6H -o table`.
+`az monitor log-analytics query -w <customerId de law-celebrimbor-amonsul> --analytics-query "<requête>" --timespan P1D -o table`
+(une extension d'`az`, installée au premier appel). Le `--timespan` borne ce que la requête peut lire :
+il doit couvrir son `ago(…)` le plus long — `P1D` pour les requêtes sur un jour, `P7D` pour le coût
+sur une semaine, `P15D` pour les règles (la base de connexions remonte à 14 jours).
 
 **Chaque règle voit son opération** — la requête de la règle, **telle qu'écrite** :
 
@@ -1228,7 +1273,8 @@ Dans le workspace du banc (portail : Logs), ou depuis le poste :
 rule() { python -c "import sys,yaml; print(next(r['query'] for r in yaml.safe_load(open('glorfindel/rules/azure/detection_rules.yaml'))['rules'] if r['name']==sys.argv[1]))" "$1"; }
 for r in nsg-change-outside-glorfindel role-assignment-write snapshot-by-unexpected-caller \
          entra-credential-added entra-app-consent entra-privileged-role-assigned entra-sp-unusual-signin; do
-  echo "== $r"; az monitor log-analytics query -w <customerId> --analytics-query "$(rule $r)" --timespan PT2H -o table
+  # P15D : la base d'entra-sp-unusual-signin lit ago(14d) .. ago(1h) ; chaque règle borne elle-même sa fenêtre
+  echo "== $r"; az monitor log-analytics query -w <customerId> --analytics-query "$(rule $r)" --timespan P15D -o table
 done
 ```
 
@@ -1237,7 +1283,7 @@ base), et sur H0 la carte correspondante (`control_plane_change`, `identity_chan
 `glorfindel rules check --live` sur H0 dit `ok` pour les sept.
 
 **La latence, de l'événement à l'ingestion** (le T0 noté donne le bout en bout ; la carte de H0
-ajoute l'intervalle de la règle, 60 s pour AL1, 120 à 300 s pour C2) :
+ajoute l'intervalle de la règle, 60 s pour AL1, 120 à 300 s pour C2 ; `--timespan P1D`) :
 
 ```kusto
 AzureActivity
@@ -1259,7 +1305,7 @@ union withsource=Table AuditLogs, AADServicePrincipalSignInLogs
 ```
 
 Sur 24 h, toute la table (le p95 contre `expected_latency_s` des règles : 1 200 s pour AL1, 1 800 s
-pour C2) :
+pour C2 ; `--timespan P1D`) :
 
 ```kusto
 union withsource=Table AzureActivity, AuditLogs, AADServicePrincipalSignInLogs
@@ -1268,7 +1314,7 @@ union withsource=Table AzureActivity, AuditLogs, AADServicePrincipalSignInLogs
 | summarize Rows = count(), p50 = percentile(Delay_s, 50), p95 = percentile(Delay_s, 95), Max = max(Delay_s) by Table
 ```
 
-**Le coût** (après 24 h, puis 7 jours ; `Quantity` en Mo) :
+**Le coût** (après 24 h, `--timespan P1D` ; puis 7 jours, `ago(7d)` et `--timespan P7D` ; `Quantity` en Mo) :
 
 ```kusto
 Usage
@@ -1277,7 +1323,7 @@ Usage
 | summarize MB = sum(Quantity), BillableMB = sumif(Quantity, IsBillable == true) by DataType
 ```
 
-**Les hypothèses** (une requête chacune, ci-dessous) :
+**Les hypothèses** (une requête chacune, ci-dessous ; `--timespan P1D`) :
 
 ```kusto
 // A2, A3 : qui fait les snapshots et les accès de téléchargement (Azure Backup, un restore) ?

@@ -64,11 +64,18 @@ def test_the_tables_are_found_in_every_shipped_rule():
 
 def test_each_table_a_rule_reads_is_sent_and_nothing_more():
     needed: dict[str, set[str]] = {"activity_log.tf": set(), "entra_logs.tf": set()}
+    read: set[str] = set()
     for r in _rules():
         for table in _tables(r["query"]):
             assert table in CATEGORY, f"{r['name']} reads {table}: which category sends it?"
             tf_file, category = CATEGORY[table]
             needed[tf_file].add(category)
+            read.add(table)
+    # A table the line-start parsing missed (a `union`, a `join` on another table) would be
+    # read without its category sent: no known table outside `read` may appear in a query.
+    for r in _rules():
+        for table in set(CATEGORY) - read:
+            assert not re.search(rf"\b{table}\b", r["query"], re.IGNORECASE), (r["name"], table)
     assert needed == {"activity_log.tf": {"Administrative"},
                       "entra_logs.tf": {"AuditLogs", "ServicePrincipalSignInLogs"}}
     for tf_file, cats in needed.items():

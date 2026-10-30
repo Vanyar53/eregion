@@ -4794,6 +4794,75 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": _I4A for n in range(1920, 1924)})
 
+# I4B (#333): the unblock, the reset, the release and the isolation never cut off nor open the VM
+# that took an address — one guard for every removal by name (_held_by_turned, now for one of our
+# rules turned into an allow too), the isolation's rewrite under the NIC's second name, the block's
+# guard reading every turned rule (the lot's fourth point), and the unblock that looks for a NIC's
+# block on every NSG when nothing places it (the CI's macOS run). Measured by the sequences frozen
+# in test_invariant_regressions.py, then the machine. M1890–M1905.
+_I4B_TESTS = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in (
+    "test_the_unblock_and_the_reset_leave_the_new_owner_of_the_old_address",
+    "test_a_block_under_its_second_name_is_found_without_its_state",
+    "test_a_turned_rule_aimed_at_any_or_a_range_stays_at_the_unblock",
+    "test_any_turned_rule_of_ours_behind_our_deny_keeps_it_at_the_block",
+    "test_whose_the_old_address_is_unknown_the_turned_rule_is_left",
+    "test_an_isolation_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address",
+    "test_an_isolation_written_again_leaves_the_turned_rule_said_under_its_second_name",
+    "test_a_reassertion_says_what_the_isolation_left",
+    "test_a_reasserted_isolation_moves_off_the_old_address_a_turned_rule_waits_behind",
+    "test_an_interrupted_release_after_an_ip_change_opens_the_new_owner",
+    "test_the_unblock_finds_the_block_of_a_nic_left_with_no_nsg_it_knows"))
+_I4B = f"{_I4B_TESTS} {INVARIANTS}"
+MUTANTS += [
+    ("M1890", "a turned allow asked about before it goes read as nothing to keep (`!= deny`): the VM given "
+              "the old address loses what it opens it (I4B)", "glorfindel/providers/azure/turned.py",
+     "            return _opens_another(nsg, rule, {own, *mates}, holders, nic_nsg, nic_subnets)\n",
+     '            return ""\n'),
+    ("M1891", "the unblock takes its placements' rules off by name, unread: the turned allow with them (I4B)", UNB,
+     "                err = (_held_by_turned(self._network, guard, p_rg, p_name, nm, nic_id, mates)\n"
+     "                       or self._delete_rule(p_rg, p_name, nm))\n",
+     "                err = self._delete_rule(p_rg, p_name, nm)\n"),
+    ("M1892", "the unblock's sweep takes off by the NIC's mark whatever the rule became (I4B)", UNB,
+     "                        err = (_aims_elsewhere(r, own_ips) and _held_by_turned(\n",
+     "                        err = (False and _held_by_turned(\n"),
+    ("M1893", "the reset takes off by the NIC's mark whatever the rule became (I4B)", SWP,
+     "                    if not dry_run and _aims_elsewhere(r, own_ips) and (why := _held_by_turned(\n",
+     "                    if False and (why := _held_by_turned(\n"),
+    ("M1894", "the release's sweep, its state lost, takes off a turned allow aimed at the new VM (I4B)", REL,
+     "                    err = (_aims_elsewhere(r, own_ips) and _held_by_turned(\n",
+     "                    err = (False and _held_by_turned(\n"),
+    ("M1895", "an allow of ours aimed elsewhere read as aimed at the VM's own addresses: never asked about (I4B)",
+     "glorfindel/providers/azure/turned.py", '    return any(v not in own for v in values or ["*"])\n', "    return False\n"),
+    ("M1896", "a turned allow aimed at a range or a tag read as aimed at nobody: taken off (I4B, A0)", "glorfindel/providers/azure/turned.py",
+     '            return _opens_text(name, v, "inconnu (une plage ou une étiquette : qui elle prend n\'est pas lu)")\n',
+     "            continue\n"),
+    ("M1897", "a turned allow aimed at any address read as no one's, on an NSG others share (I4B)", "glorfindel/providers/azure/turned.py",
+     "            if others:\n                return _opens_text(",
+     "            if False:\n                return _opens_text("),
+    ("M1898", "the isolation written again over a rule that would change another VM's flows (I4B)", ISO,
+     "            own = own or (pair if not held else None)\n", "            own = own or pair\n"),
+    ("M1899", "the isolation's first pair left beside the second: its -out deny cuts the new VM's way out (I4B)",
+     ISO, '                for nm in plan["drop"]:\n', "                for nm in []:\n"),
+    ("M1900", "the readers of an isolation blind to its second name: verified False, put back for ever (I4B)", REL,
+     '        bases = [*self._placement_rule_bases("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),\n',
+     '        bases = [self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),\n'),
+    ("M1901", "a NIC with no NSG it knows: its block looked for nowhere else, `not_found` (I4B, macOS run)", UNB,
+     "        if unplaced:\n", "        if False:\n"),
+    ("M1902", "the block's guard reads only the NIC's own block rules: a turned isolation rule behind our "
+              "deny not seen, the new VM opened (I4B, the lot's fourth point)", BLK,
+     '                or _waits_for(self._network, holders.setdefault("world", {}),\n',
+     '                or False and _waits_for(self._network, holders.setdefault("world", {}),\n'),
+    ("M1903", "the NSGs or NICs unreadable read as no turned rule behind our deny: lifted (I4B, A0)", "glorfindel/providers/azure/turned.py",
+     "    except Exception:\n        return True\n    nid = holders.get(addr)\n",
+     "    except Exception:\n        return False\n    nid = holders.get(addr)\n"),
+    ("M1904", "what the isolation left kept out of its outcome: nothing said (I4B)", ISO,
+     '        if left:\n            out["left_rules"] = left\n', '        if False:\n            out["left_rules"] = left\n'),
+    ("M1905", "the reassertion's card silent on what the isolation it put back left (I4B)", R,
+     """                  + (f" {put['left_note']}" if isinstance(put, dict) and put.get("left_note") else ""))\n""",
+     "                  )\n"),
+]
+TESTS.update({f"M{n}": _I4B for n in range(1890, 1906)})
+
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
 # from the query (N-10), H0's host key pinned (V-32), the containers hardened (V-34), one principal

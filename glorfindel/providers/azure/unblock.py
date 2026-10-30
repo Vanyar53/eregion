@@ -12,6 +12,7 @@ from glorfindel.providers.azure.nsg import (
 )
 from glorfindel.providers.azure.quarantine import OriginalUnknown
 from glorfindel.providers.azure.sdk import _is_not_found
+from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned
 from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import (
@@ -48,18 +49,24 @@ class UnblockMixin:
             _update_block_entry(resource_id, ip, unblocking_at=datetime.now(timezone.utc).isoformat())
         deleted: list[str] = []
         failed: list[str] = []
+        # I4B: a rule of ours that, taken off, would change another VM's flows stays, said
+        # (_held_by_turned) — one turned into an allow that opens the VM given an old
+        # address, a deny that holds back such a rule. The NSGs listed once.
+        guard: dict = {}
+        mates = [x.get("nic_id", "") for x in (entry or {}).get("placements", [])]
 
-        def _del(p_rg: str, p_name: str, rule: str) -> None:
+        def _del(p_rg: str, p_name: str, rule: str, nic_id: str = "") -> None:
             for nm in (rule, f"{rule}-out"):
-                err = self._delete_rule(p_rg, p_name, nm)
+                err = (_held_by_turned(self._network, guard, p_rg, p_name, nm, nic_id, mates)
+                       or self._delete_rule(p_rg, p_name, nm))
                 if err:
-                    failed.append(err)
+                    failed.extend([err] if err not in failed else [])
                 else:
                     deleted.append(nm)
 
         # 1) Every per-NIC placement recorded at block time (multi-NIC VM block).
         for p in (entry or {}).get("placements", []):
-            _del(p["nsg_rg"], p["nsg_name"], p["rule"])
+            _del(p["nsg_rg"], p["nsg_name"], p["rule"], p.get("nic_id", ""))
 
         # 2) The recorded single rule (perimeter / legacy entry). A VM-scoped entry also
         # mirrors its first placement in nsg/rule: skip it then (deleted in step 1 — the
@@ -74,9 +81,9 @@ class UnblockMixin:
         # rules no entry knows — and the legacy lookup (primary NIC, old names) counted
         # a delete of a rule that wasn't there as done, so `unblocked` was said while
         # the rules stayed (L24, blocks in the invariant machine).
-        s_deleted, s_failed = self._sweep_block(rg, vm_name, ip, resource_id)
+        s_deleted, s_failed = self._sweep_block(rg, vm_name, ip, resource_id, guard, mates)
         deleted += [d for d in s_deleted if d not in deleted]
-        failed += s_failed
+        failed += [f for f in s_failed if f not in failed]
 
         if failed:
             # Keep the entry: the rules that are still there keep blocking the IP, and a
@@ -106,11 +113,13 @@ class UnblockMixin:
             bases.append(prefix)
         return {n.lower() for b in bases for n in (b, f"{b}-out")}
 
-    def _sweep_block(self, rg: str, vm_name: str, ip: str, resource_id: str = "") -> tuple[list[str], list[str]]:
+    def _sweep_block(self, rg: str, vm_name: str, ip: str, resource_id: str = "",
+                     guard: dict | None = None, named=()) -> tuple[list[str], list[str]]:
         """(deleted, failed): the block rules of `ip` still on any NSG of this VM's NICs —
         named for it and applying to the NIC's addresses. Only rules that existed are
         counted as deleted; an unreadable NIC or rule list is a failure. The VM gone:
-        _gone_vm_blocks."""
+        _gone_vm_blocks. One aimed elsewhere than the VM's addresses asks the guard first
+        (I4B, `guard`: its cache). `named`: the NICs the block's entry places."""
         try:
             targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
         except Exception as exc:
@@ -120,6 +129,12 @@ class UnblockMixin:
         deleted: list[str] = []
         failed: list[str] = []
         cache: dict = {}
+        guard = {} if guard is None else guard
+        own_ips = [a for t0 in targets for a in t0.get("private_ips") or []]
+        mates = [t0["nic_id"] for t0 in targets]
+        unplaced: list[str] = []
+        seen: set = set()
+        known = {n.rstrip("/").lower() for n in named if n}
         for t0 in targets:
             if t0.get("subnet_unreadable"):
                 failed.append(f'{t0["nic_short"]} : NSG du subnet illisible, déblocage non vérifié')
@@ -130,6 +145,9 @@ class UnblockMixin:
                 failed.append(f'{t0["nic_short"]} : NSG d\'origine inconnu, déblocage non vérifié '
                               f"({_first_line(exc)[:_ERR_MAX]})")
                 original = None
+            else:
+                if original is None and not t0.get("own_nsg_id") and t0["nic_id"].rstrip("/").lower() not in known:
+                    unplaced.append(t0)
             if original:
                 o_rg, o_name = _parse_nsg_resource_id(original)
                 views = views + [{**t0, "nsg_rg": o_rg, "nsg_name": o_name, "scope": "nic", "ip_scoped": True}]
@@ -144,10 +162,44 @@ class UnblockMixin:
                 for r in rules:
                     name = _rule_name(r)
                     if _nic_owns(r, hashed, names, t.get("private_ips") or None):
-                        err = self._delete_rule(t["nsg_rg"], t["nsg_name"], name)
+                        seen.add((t["nsg_rg"].lower(), t["nsg_name"].lower(), name.lower()))
+                        err = (_aims_elsewhere(r, own_ips) and _held_by_turned(
+                            self._network, guard, t["nsg_rg"], t["nsg_name"], name, t0["nic_id"], mates)
+                               or self._delete_rule(t["nsg_rg"], t["nsg_name"], name))
                         (failed if err else deleted).append(err or name)
                 failed += self._unattributable_plain_block(ip, t, rules)
+        if unplaced:
+            failed += self._unplaced_blocks(vm_name, ip, unplaced, seen, guard, mates, deleted)
         return deleted, failed
+
+    def _unplaced_blocks(self, vm_name: str, ip: str, nics: list[dict], seen: set, guard: dict, mates: list,
+                         deleted: list) -> list[str]:
+        """NICs with no NSG of their own whose NSG nothing records — taken off by someone, no
+        entry placing them: their block lies out of their views' sight, and `not_found` was
+        said while it stood on the NSG they carried (the CI's macOS run, I4B). Their names
+        carry their hash, no other NIC's: looked for on every NSG of the subscription, as a
+        deleted VM's are (I7S, I5R), each asked about first (_held_by_turned). `seen`: what
+        the views already took off or kept. A listing that fails is said. The failures."""
+        prefix = self._block_rule_prefix(ip)
+        owner = {n.lower(): t0["nic_id"] for t0 in nics
+                 for b in self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"])
+                 for n in (b, f"{b}-out")}
+        try:
+            nsgs = list(self._network.network_security_groups.list_all())
+        except Exception as exc:
+            return [f'{", ".join(t0["nic_short"] for t0 in nics)} : sans NSG connu, son blocage non cherché sur les '
+                    f"NSG de l'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), déblocage non vérifié"]
+        failed: list[str] = []
+        for nsg in nsgs:
+            n_rg, n_name = _parse_nsg_resource_id(nsg.id)
+            for r in getattr(nsg, "security_rules", None) or []:
+                name = _rule_name(r)
+                if name.lower() not in owner or (n_rg.lower(), n_name.lower(), name.lower()) in seen:
+                    continue
+                err = (_held_by_turned(self._network, guard, n_rg, n_name, name, owner[name.lower()], mates)
+                       or self._delete_rule(n_rg, n_name, name))
+                (failed if err else deleted).append(err or name)
+        return failed
 
     def _gone_vm_blocks(self, resource_id: str, vm_name: str, ip: str) -> tuple[list[str], list[str]]:
         """(deleted, failed) for a VM gone, its NICs with it: nothing to sweep NIC by NIC.

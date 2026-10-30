@@ -15,6 +15,7 @@ from glorfindel.providers.azure.nsg import (
     _takes_in,
 )
 from glorfindel.providers.azure.sdk import _enum_text
+from glorfindel.providers.azure.turned import _waits_for
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _first_line, PartialActionError, blockable_ip
 from glorfindel.response.state import _clear_block_state, _load_block_entries, _save_block_state
@@ -129,7 +130,8 @@ class BlockMixin:
         allow that takes `addr` in, in this direction: the address, any, a prefix holding
         it, or a tag (`_takes_in`: a tag or an unreadable value counts as yes). The NSGs
         unreadable: unknown, read as yes — keeping our deny never opens anything (A0).
-        Listed once per NIC."""
+        Listed once per NIC. Or any of our rules turned, on an NSG that governs the NIC
+        holding the address now (_waits_for, I4B: the unblock's and the release's guard)."""
         key = ("turned", t["nic_id"])
         if key not in holders:
             names = {n.lower() for pair in pairs for n in pair}
@@ -146,7 +148,9 @@ class BlockMixin:
         found = holders[key]
         if found is None:
             return True
-        return any(d == direction and _takes_in(values, addr) for d, values in found)
+        return (any(d == direction and _takes_in(values, addr) for d, values in found)
+                or _waits_for(self._network, holders.setdefault("world", {}),
+                              "destination" if direction == "inbound" else "source", addr, t["nic_id"]))
 
     def _address_holder(self, addr: str, nic_id: str, holders: dict) -> str | None:
         """Who holds this address now, this NIC aside: VM names; None for nobody; an

@@ -2550,9 +2550,53 @@ class IsolationMachine(RuleBasedStateMachine):
         VM's, or a live VM's aimed at the old address another VM took (an IP changed:
         its release keeps the deny, `release_partial`, the turned rule named) —, put back
         as they were by the operator, as the card or the release asks."""
-        self._behind_turned(self._cutting_orphans() | self._cutting_others())
-        for k, n in sorted(self.turned_behind):
-            self.fake.nsgs[k]["rules"][n] = dict(self.tampered[(k, n)][0])
+        # I4B: a turned allow put back is a deny again — one of ours on another NIC's address,
+        # which may hold back another turned rule in its turn (seed 101 at 500): until none is left.
+        for _ in range(len(self.tampered) + 1):
+            self._behind_turned(self._cutting_orphans() | self._cutting_others())
+            todo = sorted(self.turned_behind | self._turned_aimed_elsewhere())
+            if not todo:
+                break
+            for k, n in todo:
+                self.fake.nsgs[k]["rules"][n] = dict(self.tampered[(k, n)][0])
+
+    def _turned_aimed_elsewhere(self) -> set:
+        """I4B: our rules someone turned into an allow, still as they left them, that let
+        through to a live NIC other than their own VM's what they name — its address on an
+        NSG that governs it, any address (`*`) on an NSG that governs another NIC, or a
+        range or a tag (who it takes in is not read). The unblock, the reset, the release
+        keep them, said (taken off, that VM lost the flows): the operator puts them back
+        as they were, as said. The convention (the rule's NIC by its hash), the test's
+        records (`tampered`)."""
+        import ipaddress
+        out = set()
+        for (k, n), (before, after) in self.tampered.items():
+            r = self.fake.nsgs.get(k, {}).get("rules", {}).get(n)
+            if (before is None or r != after or r["access"].lower() != "allow"
+                    or not n.startswith(("glorfindel-iso-", "glorfindel-block-"))):
+                continue
+            side = "destination" if r["direction"].lower() == "inbound" else "source"
+            values = [v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or [])
+                      if v] or ["*"]
+            mine = {key(c) for vm in self.fake.vms.values() if any(_nic_hash(c) in n for c in vm["nics"])
+                    for c in vm["nics"]}
+            others = [c for ck, c in self.fake.nics.items() if ck not in mine and k in {
+                key(g) for g in (c["nsg"], self.fake.subnets[key(c["subnet"])]["nsg"]) if g}]
+            for v in values:
+                low = v.strip().lower()
+                if low in ("*", "any", "0.0.0.0/0"):
+                    hit = bool(others)
+                else:
+                    try:
+                        ipaddress.ip_address(low)
+                    except ValueError:
+                        hit = True
+                    else:
+                        hit = any(low in c["ips"] for c in others)
+                if hit:
+                    out.add((k, n))
+                    break
+        return out
 
     def _cutting_others(self) -> set:
         """(NSG, rule) of our denies named for one NIC, aimed at an address another live

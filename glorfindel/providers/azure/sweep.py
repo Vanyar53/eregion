@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _nic_hash, _nic_owns, _rule_name
 from glorfindel.providers.azure.turned import (
-    _chain, _governed_by, _turned_allows, _turned_behind, _turned_still, _turned_text,
+    _aims_elsewhere, _chain, _governed_by, _held_by_turned, _turned_allows, _turned_behind, _turned_still,
+    _turned_text,
 )
 from glorfindel.providers.azure.sdk import _enum_text, _is_not_found
 from glorfindel.response.ids import (
@@ -137,11 +138,17 @@ class SweepMixin:
             bare[t0["nic_id"]] = (original, q_bare)
             if original:
                 views.append(self._original_view(t0, original))
+        # I4B: a rule of ours aimed elsewhere than the VM's addresses asks the guard before it
+        # goes (_held_by_turned): one turned into an allow that opens the VM given an old
+        # address, or a deny that holds back such a rule, stays — said, `swept_partial`.
+        guard: dict = {}
+        own_ips = [a for t0 in targets for a in t0.get("private_ips") or []]
+        mates = [t0["nic_id"] for t0 in targets]
         for t in views:
             nsg_key = (t["nsg_rg"].lower(), t["nsg_name"].lower())
             h = hashlib.sha1(t["nic_id"].encode()).hexdigest()[:8]
             iso_names = {n.lower() for n in self._isolation_names_for_target(vm_name, t)}
-            iso_base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
+            iso_bases = self._placement_rule_bases("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
             rules = self._list_rules({}, t["nsg_rg"], t["nsg_name"])
             if rules is None:
                 # Unreadable: nothing found is not nothing there — keep the local state.
@@ -167,7 +174,7 @@ class SweepMixin:
                         vm_name, f"{vm_name}-{t['nic_short']}", f"{vm_name[:40]}-{h}")}
                     owned = {n for b in owned for n in (b, f"{b}-out")}
                 else:
-                    hashed, owned = {iso_base, f"{iso_base}-out"}, iso_names
+                    hashed, owned = {n for b in iso_bases for n in (b, f"{b}-out")}, iso_names
                 # Named for this VM is not enough: a homonym behind the same NSG has the
                 # same legacy names — only a rule that applies to THIS NIC goes (L24),
                 # unless its name carries this NIC's hash (_nic_owns). A rule of the VM's
@@ -175,6 +182,10 @@ class SweepMixin:
                 # and skipped there).
                 if _nic_owns(r, hashed, owned, t.get("private_ips") or None):
                     seen.add((nsg_key, name.lower()))
+                    if not dry_run and _aims_elsewhere(r, own_ips) and (why := _held_by_turned(
+                            self._network, guard, t["nsg_rg"], t["nsg_name"], name, t["nic_id"], mates)):
+                        unreadable.append(why)
+                        continue
                     to_delete.append((t["nsg_rg"], t["nsg_name"], name))
                 elif m is None and name.startswith("glorfindel-block-"):
                     seen.add((nsg_key, name.lower()))

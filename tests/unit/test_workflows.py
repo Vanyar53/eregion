@@ -180,6 +180,57 @@ def test_the_jobs_that_run_the_invariants_are_bounded(workflow, job):
     assert isinstance(bound, int) and 0 < bound <= 180, bound
 
 
+_MACHINES = ("tests/unit/test_invariants.py", "tests/unit/test_invariants_aws.py")
+
+
+def test_the_night_runs_both_machines_and_keeps_their_failures():
+    """Each machine, Azure's and AWS's, runs every night at the night's budget with the
+    cached database, and the database is saved: a failure is kept to be replayed. The AWS
+    machine ran at the push budget only, its failures kept nowhere (AWS1, #334).
+
+    The save comes after every machine's step, whatever their outcome (`always()`); each
+    machine's step has its own bound, their sum under the job's: one that runs over fails
+    its step, never cancels the job — the next machine still runs (`!cancelled()`) and the
+    database is still saved (AWS1, review)."""
+    job = _load(ROOT / ".github" / "workflows" / "invariants.yml")["jobs"]["invariants"]
+    steps = job["steps"]
+    saves = [i for i, s in enumerate(steps) if "actions/cache/save" in (s.get("uses") or "")
+             and (s.get("with") or {}).get("path") == ".hypothesis-invariants"]
+    assert len(saves) == 1, saves
+    save = steps[saves[0]]
+    assert "always()" in str(save.get("if") or ""), save
+    bounds = []
+    for n, machine in enumerate(_MACHINES):
+        at = [i for i, s in enumerate(steps) if machine in (s.get("run") or "").split()]
+        assert len(at) == 1, f"{machine} run {len(at)} times at night"
+        step = steps[at[0]]
+        env = step.get("env") or {}
+        assert env.get("GLORFINDEL_INVARIANT_DB") == ".hypothesis-invariants", (machine, env)
+        assert "10000" in str(env.get("GLORFINDEL_INVARIANT_EXAMPLES")), (machine, env)
+        assert at[0] < saves[0], f"{machine} runs after the database is saved: its failures are lost"
+        cond = str(step.get("if") or "")
+        if n:
+            assert "!cancelled()" in cond or "always()" in cond, (
+                f"{machine} skipped when the machine before it failed: {cond}")
+        bound = step.get("timeout-minutes")
+        assert isinstance(bound, int) and bound > 0, (machine, bound)
+        bounds.append(bound)
+    assert sum(bounds) < job["timeout-minutes"], (bounds, job["timeout-minutes"])
+
+
+def test_a_push_replays_the_failures_the_night_kept_on_both_machines():
+    """ci.yml's Linux job restores the database and runs every test with it — both
+    machines among them, at the push budget."""
+    steps = _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"]["test"]["steps"]
+    assert any("actions/cache/restore" in (s.get("uses") or "") and
+               (s.get("with") or {}).get("path") == ".hypothesis-invariants" for s in steps)
+    runs = [s for s in steps if "pytest tests/ " in (s.get("run") or "")]
+    assert runs and all((ROOT / m).is_file() for m in _MACHINES), runs     # under tests/, run by it
+    env = runs[0].get("env") or {}
+    assert env.get("GLORFINDEL_INVARIANT_DB") == ".hypothesis-invariants", env
+    assert env.get("GLORFINDEL_INVARIANT_EXAMPLES") == "500", env
+
+
 @pytest.mark.parametrize("job", ["test", "test-macos"])
 def test_a_hang_of_the_ci_tests_says_where_it_waits(job):
     """The CI's test steps write every thread's stack when a test outlasts 8 min: a hang is

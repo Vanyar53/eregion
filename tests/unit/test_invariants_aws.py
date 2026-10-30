@@ -1209,7 +1209,7 @@ class AwsIsolationMachine(RuleBasedStateMachine):
                 f"I2: customer rules of {k} changed")
         for k, acl in self.design["acls"].items():
             live = {key: e for key, e in self.fake.acls[k]["entries"].items()
-                    if (k, *key) not in self.fake.authored and (k, *key) not in self.tampered}
+                    if not self._not_customers(k, key, e)}
             assert live == acl["entries"], f"I2: customer entries of {k} changed"
         for k, s in self.design["subnets"].items():
             assert self.fake.subnets[k]["acl"] == s["acl"], f"I2: the ACL of {k} changed"
@@ -1221,6 +1221,13 @@ class AwsIsolationMachine(RuleBasedStateMachine):
                 len(e["groups"]) == 1 and _ours(self.fake.sgs.get(e["groups"][0]))
             ) or (k in self.detached and self._on_default(e))
             assert ok, f"I2: {k} carries {e['groups']}, designed {e['design_groups']}"
+
+    def _not_customers(self, acl: str, key: tuple, e: dict) -> bool:
+        """An entry Glorfindel wrote, still as it wrote it, or what someone turned one of
+        them into — by its content, never by its number alone: a number is freed (the
+        operator takes off what someone turned around; the fake keeps the record of what
+        Glorfindel wrote there) and the customer takes it again (AWS1, #334)."""
+        return e == self.fake.authored.get((acl, *key)) or e == self.tampered.get((acl, *key), (None, None))[1]
 
     @invariant()
     def every_entry_of_glorfindel_is_recorded(self):

@@ -34,7 +34,7 @@ Dans le dépôt, depuis une session Claude Code :
 3. `/elrond run` lance les prochains lots prêts ; `/elrond run O1 R1` lance des lots précis.
 4. `/elrond status` donne l'avancement. `/elrond review <lot>` force une relecture.
 
-Chaque lot produit une branche locale `lot/<id>-…`. elrond ne pousse rien et n'ouvre aucune PR sans demande explicite dans la session. Quand c'est demandé, la PR suit le modèle du dépôt, qui indique le modèle et le verdict de relecture.
+Chaque lot produit une branche locale `lot/<id>-…`. elrond ne pousse rien et n'ouvre aucune PR sans demande explicite dans la session. Pour les lots que Jonathan délègue, la session principale pousse, ouvre la PR et fusionne après une CI verte et une relecture Opus 5.5 « ok » ([sessions.md](sessions.md)). La PR suit le modèle du dépôt, qui indique le modèle et le verdict de relecture.
 
 ## Le plan et le journal
 
@@ -67,7 +67,8 @@ Pour travailler en Opus 5.5 sur du contenu cyber défensif, la voie officielle e
 elrond ne remplace pas les sessions par composant (`CLAUDE_<RÔLE>.md`, coordonnées par `collab/`) : il les complète pour dérouler la feuille de route.
 - Chaque fiche indique les sessions concernées.
 - L'exécutant lit les fichiers de rôle de ces sessions, ainsi que leur inbox, en lecture seule.
-- Seule la session principale écrit dans `collab/`. Elle y range les impacts transverses que remontent les exécutants.
+- Parmi les agents d'elrond, seule la session principale écrit dans `collab/` ; les exécutants n'y écrivent pas. Elle y range les impacts transverses qu'ils remontent.
+- Les sessions spécialisées font relire et fusionner leurs PR par la session principale, l'Orchestre : [sessions.md](sessions.md).
 
 ## À plusieurs
 

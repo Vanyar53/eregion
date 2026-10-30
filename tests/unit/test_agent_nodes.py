@@ -856,14 +856,14 @@ def test_escalate_block_ip_carries_ip_in_action_params():
     state["escalation_reason"] = "mode human_only"
     state["mode_hold"] = True
     state["signal"]["raw_signal"] = {
-        "first_result_row": {"SourceIP": "95.47.246.223", "FailedAttempts": "26"},
+        "first_result_row": {"SourceIP": "192.31.196.47", "FailedAttempts": "26"},
     }
 
     with patch.object(esc_module, "record") as mock_record:
         escalate_to_human(state)
 
     _, kwargs = mock_record.call_args
-    assert kwargs.get("action_params") == {"ip": "95.47.246.223"}
+    assert kwargs.get("action_params") == {"ip": "192.31.196.47"}
 
 
 def test_escalate_non_param_action_has_no_action_params():

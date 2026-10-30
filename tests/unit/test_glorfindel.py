@@ -735,16 +735,16 @@ def test_block_ip_subnet_nsg_scopes_to_vm_ip(monkeypatch):
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
     connector._network = net
 
-    out = connector.block_suspicious_ip("95.47.246.223", _RID)
+    out = connector.block_suspicious_ip("192.31.196.47", _RID)
     assert out["nsg_scope"] == "subnet"
     assert "warning" not in out
     assert "note" in out and "scoped" in out["note"].lower()
-    assert out["rule"].startswith("glorfindel-block-95-47-246-223-vm-nic-a-")  # per NIC
+    assert out["rule"].startswith("glorfindel-block-192-31-196-47-vm-nic-a-")  # per NIC
     rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
     addrs = [_sd(r) for r in rules]
     # inbound: attacker → THIS VM's IPs ; outbound: THIS VM's IPs → attacker (not any/*)
-    assert ("95.47.246.223", ["10.0.0.5"]) in addrs
-    assert (["10.0.0.5"], "95.47.246.223") in addrs
+    assert ("192.31.196.47", ["10.0.0.5"]) in addrs
+    assert (["10.0.0.5"], "192.31.196.47") in addrs
 
 
 def test_block_ip_multi_nic_covers_every_nic(tmp_path, monkeypatch):
@@ -764,11 +764,11 @@ def test_block_ip_multi_nic_covers_every_nic(tmp_path, monkeypatch):
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
     connector._network = net
 
-    out = connector.block_suspicious_ip("95.47.246.223", _RID)
+    out = connector.block_suspicious_ip("192.31.196.47", _RID)
     assert out["nics_covered"] == 2
     nsgs = {(c.args[0], c.args[1]) for c in net.security_rules.begin_create_or_update.call_args_list}
     assert ("rg1", "nsg-a") in nsgs and ("rg2", "nsg-b") in nsgs
-    entry = next(e for e in _load_block_entries("vm") if e["ip"] == "95.47.246.223")
+    entry = next(e for e in _load_block_entries("vm") if e["ip"] == "192.31.196.47")
     assert len(entry["placements"]) == 2
 
 
@@ -787,9 +787,9 @@ def test_block_state_records_nsg_scope(tmp_path, monkeypatch):
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
     connector._network = net
 
-    out = connector.block_suspicious_ip("95.47.246.223", _RID)
+    out = connector.block_suspicious_ip("192.31.196.47", _RID)
     assert out["scoped"] is True          # live outcome carries the flag too
-    blocks = [b for b in active_blocks() if b["ip"] == "95.47.246.223"]
+    blocks = [b for b in active_blocks() if b["ip"] == "192.31.196.47"]
     assert len(blocks) == 1
     assert blocks[0]["nsg_scope"] == "subnet"
     assert blocks[0]["nsg"] == "nsgrg/subnetnsg"
@@ -817,7 +817,7 @@ def test_block_ip_promote_replace_create_then_delete(tmp_path, monkeypatch):
     connector._network = net
 
     # 1) a VM-scoped block exists (one placement on the subnet NSG)
-    connector.block_suspicious_ip("95.47.246.223", _RID)  # scope=vm
+    connector.block_suspicious_ip("192.31.196.47", _RID)  # scope=vm
     # 2) promote it to subnet-wide
     order = []
     net.security_rules.begin_create_or_update.side_effect = (
@@ -825,21 +825,21 @@ def test_block_ip_promote_replace_create_then_delete(tmp_path, monkeypatch):
     net.security_rules.begin_delete.side_effect = (
         lambda *a, **k: order.append(("delete", a[2])) or MagicMock())
 
-    out = connector.block_suspicious_ip("95.47.246.223", _RID, scope="subnet", replace=True)
+    out = connector.block_suspicious_ip("192.31.196.47", _RID, scope="subnet", replace=True)
 
     assert out["scoped"] is False
-    assert out["rule"] == "glorfindel-block-95-47-246-223"            # subnet-wide (no suffix)
+    assert out["rule"] == "glorfindel-block-192-31-196-47"            # subnet-wide (no suffix)
     assert [r for r in out["promoted_from"]
-            if r.startswith("glorfindel-block-95-47-246-223-vm-nic-a-")]   # removed VM rule
+            if r.startswith("glorfindel-block-192-31-196-47-vm-nic-a-")]   # removed VM rule
     # create-then-delete: the subnet rule is created BEFORE the VM rule is deleted
     first_create = next(i for i, (op, _) in enumerate(order) if op == "create")
     first_delete = next(i for i, (op, _) in enumerate(order) if op == "delete")
     assert first_create < first_delete
     # state replaced: single entry, now subnet-wide
-    blocks = [b for b in active_blocks() if b["ip"] == "95.47.246.223"]
+    blocks = [b for b in active_blocks() if b["ip"] == "192.31.196.47"]
     assert len(blocks) == 1
     assert blocks[0]["scoped"] is False
-    assert blocks[0]["rule"] == "glorfindel-block-95-47-246-223"
+    assert blocks[0]["rule"] == "glorfindel-block-192-31-196-47"
 
 
 def test_block_ip_scope_subnet_one_any_rule_on_subnet_nsg(monkeypatch):
@@ -858,16 +858,16 @@ def test_block_ip_scope_subnet_one_any_rule_on_subnet_nsg(monkeypatch):
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
     connector._network = net
 
-    out = connector.block_suspicious_ip("95.47.246.223", _RID, scope="subnet")
+    out = connector.block_suspicious_ip("192.31.196.47", _RID, scope="subnet")
     assert out["nsg"] == "rg/subnet-nsg"
     assert out["nsg_scope"] == "subnet"
     assert out["scoped"] is False          # → War Room ⚠ subnet-wide chip
-    assert out["rule"] == "glorfindel-block-95-47-246-223"  # shared, no VM suffix
+    assert out["rule"] == "glorfindel-block-192-31-196-47"  # shared, no VM suffix
     assert "perimeter" in out["note"].lower() or "all" in out["note"].lower()
     rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
     addrs = [(r.source_address_prefix, r.destination_address_prefix) for r in rules]
-    assert ("95.47.246.223", "*") in addrs   # perimeter: attacker → any
-    assert ("*", "95.47.246.223") in addrs
+    assert ("192.31.196.47", "*") in addrs   # perimeter: attacker → any
+    assert ("*", "192.31.196.47") in addrs
 
 
 def test_block_ip_scope_subnet_requires_subnet_nsg(monkeypatch):
@@ -903,13 +903,13 @@ def test_block_ip_on_a_nic_nsg_addresses_the_vm_too(monkeypatch):
     net.security_rules.begin_create_or_update.return_value.result.return_value = None
     connector._network = net
 
-    out = connector.block_suspicious_ip("95.47.246.223", _RID)
+    out = connector.block_suspicious_ip("192.31.196.47", _RID)
     assert out["nsg_scope"] == "nic"
     assert "note" not in out and "warning" not in out
     rules = [c.args[3] for c in net.security_rules.begin_create_or_update.call_args_list]
     addrs = [_sd(r) for r in rules]
-    assert ("95.47.246.223", ["10.0.0.5"]) in addrs
-    assert (["10.0.0.5"], "95.47.246.223") in addrs
+    assert ("192.31.196.47", ["10.0.0.5"]) in addrs
+    assert (["10.0.0.5"], "192.31.196.47") in addrs
 
 
 def test_isolate_vm_nic_nsg_no_blast_radius_warning(tmp_path, monkeypatch):
@@ -1865,7 +1865,7 @@ def test_prefix_coverage_rules():
     assert _prefix_covers("*", "10.0.0.5")
     assert _prefix_covers("VirtualNetwork", "10.0.0.5")
     assert not _prefix_covers("Internet", "10.0.0.5")
-    assert _prefix_covers("Internet", "95.47.246.223")
+    assert _prefix_covers("Internet", "192.31.196.47")
     assert _prefix_covers("10.0.0.0/24", "10.0.0.5")
     assert not _prefix_covers("10.0.1.0/24", "10.0.0.5")
     assert not _prefix_covers("Storage", "10.0.0.5")
@@ -1878,8 +1878,8 @@ def test_bench_allow_ssh_shadows_isolation_and_block():
     rules = [_nsg_rule(**_BENCH_ALLOW_SSH), _nsg_rule("deny-inbound-default", 4096, access="Deny")]
     iso = _shadowing_rules(rules, 101, inbound_src=None, inbound_dst=["10.0.0.5"],
                            outbound_src=["10.0.0.5"], outbound_dst=None)
-    blk = _shadowing_rules(rules, 200, inbound_src=["95.47.246.223"], inbound_dst=["10.0.0.5"],
-                           outbound_src=["10.0.0.5"], outbound_dst=["95.47.246.223"])
+    blk = _shadowing_rules(rules, 200, inbound_src=["192.31.196.47"], inbound_dst=["10.0.0.5"],
+                           outbound_src=["10.0.0.5"], outbound_dst=["192.31.196.47"])
     assert [s["rule"] for s in iso] == ["allow-ssh"]
     assert [s["rule"] for s in blk] == ["allow-ssh"]
     assert iso[0]["ports"] == "22"
@@ -1986,18 +1986,18 @@ def test_verify_block_ip_fails_when_allow_ssh_precedes_it(monkeypatch):
     """A block of an SSH brute forcer at priority 200 does nothing while allow-ssh at
     100 matches first — the T1110 response on the bench."""
     from glorfindel.actions import AzureConnector, _save_block_state
-    rule = "glorfindel-block-95-47-246-223-vm-nic-a"
-    _save_block_state("vm", "95.47.246.223", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
+    rule = "glorfindel-block-192-31-196-47-vm-nic-a"
+    _save_block_state("vm", "192.31.196.47", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
                       placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "scope": "subnet",
                                    "rule": rule, "ips": ["10.0.0.5"]}])
     connector = AzureConnector(dry_run=False)
     monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
     net = MagicMock()
     net.security_rules.get.return_value = MagicMock()
-    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH), *_block_pair(rule, "95.47.246.223")]
+    net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH), *_block_pair(rule, "192.31.196.47")]
     connector._network = net
 
-    out = connector.verify_block_ip("95.47.246.223", _RID)
+    out = connector.verify_block_ip("192.31.196.47", _RID)
     assert out["verified"] is False
     assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"]
 
@@ -2128,7 +2128,7 @@ def test_sweep_vm_rules_removes_only_this_vms_rules(monkeypatch):
         *_deny_pair(new_iso, 101, ip="10.0.0.5"),                                 # ours
         *_deny_pair("glorfindel-block-1-2-3-4-web-nic1", 200, ip="10.0.0.5"),     # ours
         *_deny_pair(new_block, 210, ip="10.0.0.5"),                               # ours
-        _nsg_rule(f"glorfindel-block-95-47-246-223-web-{h}", 220, access="Deny",
+        _nsg_rule(f"glorfindel-block-192-31-196-47-web-{h}", 220, access="Deny",
                   dst="10.0.0.5", port="*"),                                      # ours, hashed
         _named("glorfindel-block-5-6-7-8-app-web-nic1"),                         # another VM
         _named("glorfindel-iso-app-web-nic9"),                                   # another VM
@@ -2142,7 +2142,7 @@ def test_sweep_vm_rules_removes_only_this_vms_rules(monkeypatch):
     assert deleted == {
         "glorfindel-iso-web-nic1", "glorfindel-iso-web-nic1-out", new_iso, f"{new_iso}-out",
         "glorfindel-block-1-2-3-4-web-nic1", "glorfindel-block-1-2-3-4-web-nic1-out",
-        new_block, f"{new_block}-out", f"glorfindel-block-95-47-246-223-web-{h}",
+        new_block, f"{new_block}-out", f"glorfindel-block-192-31-196-47-web-{h}",
     }
     assert out["status"] == "swept"
     assert out["kept_perimeter"] == ["rg/nsg/glorfindel-block-9-9-9-9"]
@@ -2302,8 +2302,8 @@ def _raise_not_found():
 
 def test_verify_block_ip_unreadable_precedence_is_not_verified(monkeypatch):
     from glorfindel.actions import AzureConnector, _save_block_state
-    rule = "glorfindel-block-95-47-246-223-vm-nic-a"
-    _save_block_state("vm", "95.47.246.223", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
+    rule = "glorfindel-block-192-31-196-47-vm-nic-a"
+    _save_block_state("vm", "192.31.196.47", _RID, nsg="rg/nsg", nsg_scope="subnet", rule=rule,
                       placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "scope": "subnet",
                                    "rule": rule, "ips": ["10.0.0.5"]}])
     connector = AzureConnector(dry_run=False)
@@ -2313,7 +2313,7 @@ def test_verify_block_ip_unreadable_precedence_is_not_verified(monkeypatch):
     net.security_rules.list.side_effect = RuntimeError("timeout")
     connector._network = net
 
-    out = connector.verify_block_ip("95.47.246.223", _RID)
+    out = connector.verify_block_ip("192.31.196.47", _RID)
     assert out["verified"] is None                          # the rules are read by content now
     assert out["unreadable_rules"] == [rule, f"{rule}-out"]
 
@@ -2332,7 +2332,7 @@ def test_perimeter_block_reports_the_allow_that_bypasses_it(monkeypatch):
     net.security_rules.list.return_value = [_nsg_rule(**_BENCH_ALLOW_SSH)]
     connector._network = net
 
-    out = connector.block_suspicious_ip("95.47.246.223", _RID, scope="subnet")
+    out = connector.block_suspicious_ip("192.31.196.47", _RID, scope="subnet")
     assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"]
     assert "contourné" in out["bypass"]
 

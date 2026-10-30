@@ -2197,7 +2197,11 @@ passe relit les règles en place, avant toute écriture. Rien d'écrit ne peut p
 relecture a choisi une reprise bruyante** (décision de Jonathan, 30/10) — d'abord, la mémoire
 gardait les épisodes vus finis, et un redémarrage entre « remise en place, disque plein » et la
 disparition suivante la faisait taire. Maintenant, au démarrage, chaque disparition acquittée et
-toujours là est redite une fois (une carte nouvelle), puis se tait (mutant M2125). Une écriture
+toujours là est redite une fois (une carte nouvelle), puis se tait (mutant M2125). Hors de
+`human_only`, ce premier passage **redit et retente une fois** la remise en place qui avait
+échoué (décision de Jonathan, 30/10) : une écriture qui ferme, déjà permise par le mode, au plus
+une fois par redémarrage (`test_after_a_restart_a_failed_reapplication_is_said_and_tried_once_more`).
+Une écriture
 d'état refusée sur une VM n'arrête plus la passe (`reassert_active`) et elle est dite : une entrée
 `failed` du rapport de la passe, « état local non écrit », que la watch affiche (M2123, M2124) ;
 la machine l'a montré à

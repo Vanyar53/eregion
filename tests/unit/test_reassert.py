@@ -1423,6 +1423,27 @@ def test_an_acknowledged_disappearance_still_there_at_start_is_said_once(kind):
     assert len(_drift_cards("pending")) == 1 and len(_drift_cards()) == 2
 
 
+def test_after_a_restart_a_failed_reapplication_is_said_and_tried_once_more():
+    """Decided 30/10 (Jonathan): outside human_only, the first pass after a restart says
+    again, and tries once more, a putting back that had failed — a write that closes, which
+    the mode already allows, once per restart. Then nothing more."""
+    from glorfindel import reassert_cards
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    c.isolate_vm.side_effect = RuntimeError("AuthorizationFailed")
+    reassert_active(c, _ACT)
+    assert c.isolate_vm.call_count == 1 and _load_isolation_state("vm").get("drift_alerted_at")
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    reassert_active(c, _ACT)
+    assert c.isolate_vm.call_count == 1                       # acknowledged: not tried again
+    reassert_cards._EPISODE_OPEN.clear()                      # the watch restarted
+    reassert_cards._HISTORY.clear()
+    for _ in range(3):
+        reassert_active(c, _ACT)
+    assert c.isolate_vm.call_count == 2 and len(_drift_cards("pending")) == 1
+    assert "a échoué" in _drift_cards("pending")[0]["reason"]
+
+
 def test_a_drift_card_closed_with_a_note_is_no_acknowledgement():
     """Gone, said; the card then closed with a note — Glorfindel's way, as `_alert` closes
     the card it replaces — and no card after it: only the operator's word silences a

@@ -284,6 +284,45 @@ class TagEnrollment:
             out.append(r.json().get("tags") or {})
         return out[0], out[1]
 
+    def vms(self, subscription: str, *, max_pages: int = 20) -> list[dict]:
+        """The VMs of the bench's resource groups (``SANDBOX_RG_PATTERNS``), each with its tags
+        and its group's — every one, enrolled or not: ``enrollment`` judges, never this list.
+        Read now with the reader's own identity (the console's: Reader on the bench, on H0); a
+        group it cannot read, Azure does not list. For the targets of Dagorlad (§7 of
+        docs/design/console.md). An error raises: the caller says the targets are unreadable."""
+        import requests
+        if not subscription:
+            raise ValueError("AZURE_SUBSCRIPTION_ID not set: the bench's VMs cannot be listed")
+        get = self._get or requests.get
+        headers = self._headers()
+
+        def pages(url: str, api: str):
+            params: dict | None = {"api-version": api}
+            for _ in range(max_pages):
+                r = get(url, headers=headers, params=params, timeout=15)
+                if not r.ok:
+                    raise RuntimeError(f"HTTP {r.status_code} listing {url.rsplit('/', 1)[-1]}")
+                body = r.json()
+                yield from body.get("value") or []
+                url, params = body.get("nextLink") or "", None
+                if not url:
+                    return
+
+        out = []
+        for rg in pages(f"{ARM}/subscriptions/{subscription}/resourcegroups", _RG_API):
+            name = str(rg.get("name") or "")
+            if not any(fnmatch.fnmatch(name.lower(), p) for p in SANDBOX_RG_PATTERNS):
+                continue
+            url = (f"{ARM}/subscriptions/{subscription}/resourceGroups/{name}"
+                   "/providers/Microsoft.Compute/virtualMachines")
+            for vm in pages(url, _VM_API):
+                rid = str(vm.get("id") or "")
+                if rid:
+                    out.append({"resource_id": rid, "name": str(vm.get("name") or rid.rsplit("/", 1)[-1]),
+                                "resource_group": name, "rg_tags": rg.get("tags") or {},
+                                "tags": vm.get("tags") or {}})
+        return out
+
     def _verdict(self, resource_id: str) -> tuple[bool, str]:
         """(enrolled, its zone — "" when not enrolled), cached."""
         key = resource_id.lower()

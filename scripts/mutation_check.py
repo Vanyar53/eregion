@@ -4106,6 +4106,54 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1721, 1723)})
 TESTS.update({mid: _SMOKE_T for mid in ("M1671", "M1677", "M1683", "M1687", "M1688", "M1689")})
 
+# Dagorlad, the Board (DG-a, 30/10; docs/design/console.md, §7): a wire judged as Orodruin judges it,
+# from two identifiers; what to expect from the configuration; the page's closed table (M1900–M1914).
+EP = "eregion_core/exercise_plan.py"
+BOARD = "eregion_console/board.py"
+DG_JS = "eregion_console/static/dagorlad.js"
+MUTANTS += [
+    ("M1900", "the production rule skipped: every zone judged as the bench (DG-a)", EP,
+     "    zone = check_zone(enrolled.zone, kind=e.kind, destructive=e.destructive)\n",
+     '    zone = check_zone("bench", kind=e.kind, destructive=e.destructive)\n'),
+    ("M1901", "an entry's destructiveness taken as declared false, whatever the catalogue says (DG-a)", EP,
+     "    zone = check_zone(enrolled.zone, kind=e.kind, destructive=e.destructive)\n",
+     "    zone = check_zone(enrolled.zone, kind=e.kind, destructive=False)\n"),
+    ("M1902", "a wire allowed without a live watch (V1) (DG-a)", EP,
+     "    if watch_refusal:\n        return v.refuse(\"no_watch\"",
+     "    if False:\n        return v.refuse(\"no_watch\""),
+    ("M1903", "a target not enrolled allowed (DG-a)", EP,
+     "    if not enrolled.allowed:\n        return v.refuse(\"not_enrolled\", enrolled.reason)",
+     "    if False:\n        return v.refuse(\"not_enrolled\", enrolled.reason)"),
+    ("M1904", "a target outside the bench's perimeter allowed (DG-a)", EP,
+     "    if not inside.allowed:\n        return v.refuse(\"outside_scope\"",
+     "    if False:\n        return v.refuse(\"outside_scope\""),
+    ("M1905", "a planned entry of the catalogue allowed (DG-a)", EP,
+     '    if e.status != "implemented":\n', "    if False:\n"),
+    ("M1906", "a fault allowed on a VM its engine does not aim at (DG-a)", EP,
+     "        elif target.name.lower() not in {n.lower() for n in aimed}:\n", "        elif False:\n"),
+    ("M1907", "a destructive technique without the name to type (DG-a)", EP,
+     '    if e.kind == "technique" and e.destructive:\n', "    if False:\n"),
+    ("M1908", "Orodruin's ceilings ignored by the plan (DG-a)", EP,
+     "            if rank + 1 > CEILING_INJECTIONS or total + estimate > CEILING_RUN_S:\n",
+     "            if False:\n"),
+    ("M1909", "a VM not enrolled given a blue card (bree, the VM with a real load) (DG-a)", BOARD,
+     "        if not verdict.allowed:\n            continue\n", "        if False:\n            continue\n"),
+    ("M1910", "a read-only deployment shown as able to contain alone (DG-a)", BOARD,
+     '    if card.get("read_only"):\n', "    if False:\n"),
+    ("M1911", "the plan's route answers a POST (DG-a)", "eregion_console/api.py",
+     '@app.get("/api/dagorlad/plan")\n', '@app.api_route("/api/dagorlad/plan", methods=["GET", "POST"])\n'),
+    ("M1912", "the page calls an action not in its table (DG-a)", DG_JS,
+     "  if (!Object.hasOwn(ACTIONS, action)) return;\n", ""),
+    ("M1913", "a target's name from Azure written raw into the page (DG-a)", DG_JS,
+     '    <span class="bname">${esc(t.name)}</span>\n', '    <span class="bname">${t.name}</span>\n'),
+    ("M1914", "a technique without a rule not said blind (DG-a)", BOARD,
+     '    if e.kind == "technique" and not rules_for(e.id, rules, card.get("backend") or None):\n',
+     "    if False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_exercise_plan.py" for n in range(1900, 1909)})
+TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py tests/unit/test_console_exercises.py "
+              "tests/unit/test_console_escaping.py" for n in range(1909, 1915)})
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.

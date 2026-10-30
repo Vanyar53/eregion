@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 try:
-    from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
 except ImportError as e:
@@ -332,7 +332,7 @@ app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 # The pages, served as files: one per section (/config is the Glorfindel page, opened on its
 # configuration; /annatar and /gothmog share one page, filtered by the path).
 _PAGES = {"/": "overview.html", "/glorfindel": "glorfindel.html", "/config": "glorfindel.html",
-          "/annatar": "injector.html", "/gothmog": "injector.html"}
+          "/annatar": "injector.html", "/gothmog": "injector.html", "/dagorlad": "dagorlad.html"}
 
 
 # Defence in depth for pages that show what other hosts wrote (manifests from Orodruin): never
@@ -2433,6 +2433,141 @@ async def delivered(run_id: str) -> dict:
     except Exception as exc:
         return {"error": f"return channel unreadable: {exc}"[:300]}
     return {"configured": True, "detections": detections}
+
+
+# ── Dagorlad's board (docs/design/console.md, §7, phase a): read only ───────────────────────
+# The red cards, the blue ones, and the plan of the wires drawn between them, judged as Orodruin
+# judges them (eregion_core/exercise_plan.py) on what is read now. Two GETs: nothing launched,
+# nothing written, the model never called — a request to Orodruin is the phase (b).
+
+# Tests replace it — (subscription) -> the bench's VMs; else the console's identity reads them.
+READ_TARGETS = None
+_TARGETS_TTL_S = 60.0
+_targets_cache: dict = {"at": 0.0, "value": None}
+MAX_WIRES = 100
+
+
+def _bench_vms() -> tuple[list[dict], str]:
+    """The VMs of the bench's resource groups with their tags, read with the console's identity
+    (Reader on the bench, on H0), cached a minute — or why they could not be read."""
+    import time as _time
+    from eregion_core.inscription import TagEnrollment
+    if _targets_cache["value"] is not None and _time.monotonic() - _targets_cache["at"] < _TARGETS_TTL_S:
+        return _targets_cache["value"]
+    try:
+        read = READ_TARGETS or TagEnrollment().vms
+        value = (list(read(os.environ.get("AZURE_SUBSCRIPTION_ID", ""))), "")
+    except Exception as exc:
+        value = ([], f"the bench's VMs unreadable: {exc}"[:300])
+    _targets_cache.update(at=_time.monotonic(), value=value)
+    return value
+
+
+def _board_rules() -> list[dict]:
+    """Glorfindel's rules, base and client layer, as the watch loads them: name, technique,
+    enabled, backend, expected latency."""
+    path = _base_rules_path()
+    if not path:
+        return []
+    from glorfindel.config import load_glorfindel_config
+    from glorfindel.detection_rules import load_config
+    try:
+        cfg = load_config(path, glorfindel_cfg=load_glorfindel_config())
+    except Exception:
+        return []
+    return [{"name": r.name, "ttp": r.ttp, "enabled": r.enabled, "backend": r.monitoring_backend_name,
+             "expected_latency_s": r.expected_latency_s, "layer": r.layer} for r in cfg.rules]
+
+
+def _fault_targets(catalog: dict) -> dict[str, list[str] | None]:
+    """For each fault, the VMs its engine aims at, as its Gothmog experiment declares them
+    (gothmog/experiments/<id>.yaml) — None when this host has no such file (H0's image carries no
+    Gothmog): Gothmog's preflight decides, on Orodruin."""
+    import yaml
+    from eregion_core.exercise_channel import safe_part
+    root = Path(__file__).resolve().parents[1] / "gothmog" / "experiments"
+    out: dict[str, list[str] | None] = {}
+    for e in catalog.values():
+        if e.kind != "fault":
+            continue
+        out[e.id] = None
+        if not safe_part(e.id):
+            continue
+        try:
+            doc = yaml.safe_load((root / f"{e.id}.yaml").read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        names = (doc.get("targets") or {}).get("names") if isinstance(doc, dict) else None
+        if isinstance(names, list):
+            out[e.id] = [str(n) for n in names]
+    return out
+
+
+def _watch_refusal() -> str:
+    """Why no live watch of these targets stands behind a run, as an injector reads it (V1,
+    SEC5) — "" when one does."""
+    from eregion_core import watch_gate
+    try:
+        return watch_gate.refusal()
+    except Exception as exc:
+        return f"the watch's heartbeat unreadable: {exc}"[:300]
+
+
+def _bench() -> str:
+    from eregion_core.inscription import BENCH_ENV, DEFAULT_BENCH
+    return os.environ.get(BENCH_ENV, DEFAULT_BENCH)
+
+
+@app.get("/api/dagorlad/board")
+async def exercise_board() -> dict:
+    """The board: the catalogue's entries (red), Glorfindel and the enrolled targets (blue)."""
+    from eregion_console import board, sections
+    from eregion_core.exercise_plan import load_catalog
+    try:
+        catalog_ = load_catalog()
+    except Exception as exc:
+        return {"error": f"catalogue unreadable: {exc}"[:300]}
+    st = await state()
+    rules = await asyncio.to_thread(_board_rules)
+    vms, targets_error = await asyncio.to_thread(_bench_vms)
+    gate = await asyncio.to_thread(_watch_refusal)
+    try:
+        found = await asyncio.to_thread(sections.status, _RUNS)
+    except ValueError:
+        found = {"sections": []}
+    return {"reds": board.red_cards(catalog_, rules, found),
+            "glorfindel": board.glorfindel_card(await watch_status(), rules, st, gate),
+            "targets": board.blue_cards(vms, st, rules, bench=_bench()),
+            "targets_error": targets_error, "other_types": board.other_types(catalog_)}
+
+
+@app.get("/api/dagorlad/plan")
+async def exercise_plan(wire: list[str] = Query(default=[])) -> dict:
+    """The plan of the wires drawn — ``wire=<experiment>@<target's resource id>``, repeated, in
+    their order: each judged as Orodruin would judge it now, with what to expect. Only those two
+    identifiers come from the browser; the server reads and judges everything else."""
+    from eregion_console import board
+    from eregion_core.exercise_plan import load_catalog
+    from glorfindel.config import confidence_threshold
+    if len(wire) > MAX_WIRES:
+        return {"error": f"at most {MAX_WIRES} wires"}
+    pairs = []
+    for w in wire:
+        red, sep, target = w.partition("@")
+        if not (sep and red.strip() and target.strip()):
+            return {"error": "a wire is <experiment>@<target's resource id>"}
+        pairs.append((red.strip(), target.strip()))
+    try:
+        catalog_ = load_catalog()
+    except Exception as exc:
+        return {"error": f"catalogue unreadable: {exc}"[:300]}
+    st = await state()
+    rules = await asyncio.to_thread(_board_rules)
+    vms, targets_error = await asyncio.to_thread(_bench_vms)
+    gate = await asyncio.to_thread(_watch_refusal)
+    return board.plan_view(pairs, catalog=catalog_, vms=vms, state=st, rules=rules, watch_refusal=gate,
+                           bench=_bench(), fault_targets=_fault_targets(catalog_),
+                           threshold=min(confidence_threshold(), 1.0), targets_error=targets_error)
 
 
 def serve(host: str = "127.0.0.1", port: int = 7007) -> None:

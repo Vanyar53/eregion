@@ -19,10 +19,11 @@ en 5 secondes et agir en 2 clics.
 
 **Tu travailles sur :**
 - `eregion_console/static/` — `console.js` et `console.css` (l'en-tête commun), `overview.html` (`/`),
-  `glorfindel.html` (`/glorfindel`, `/config`), `injector.html` (`/annatar`, `/gothmog`, lecture seule) ;
-  leur script dans un fichier à part (`overview.js`, `glorfindel.js` ~3000 lignes, `injector.js`),
+  `glorfindel.html` (`/glorfindel`, `/config`), `injector.html` (`/annatar`, `/gothmog`, lecture seule),
+  `dagorlad.html` (`/dagorlad`, le terrain d'exercice, §7 de `docs/design/console.md`) ;
+  leur script dans un fichier à part (`overview.js`, `glorfindel.js` ~3000 lignes, `injector.js`, `dagorlad.js`),
   `exercises.js` partagé ; vanilla JS + CSS variables, sans étape de build
-- `eregion_console/api.py`, `sections.py`, `cli.py` — tu peux proposer de nouveaux endpoints si l'UI en a besoin
+- `eregion_console/api.py`, `sections.py`, `cli.py`, `board.py` — tu peux proposer de nouveaux endpoints si l'UI en a besoin
 
 **Tu lis mais ne modifies pas :**
 - `glorfindel/tui.py` — TUI Rich (dashboard terminal) — inspiration pour la densité d'info
@@ -56,6 +57,8 @@ GET  /api/exercises?since=7d[&injector=…]  → fenêtres d'exercice + cycles, 
 GET  /api/campaigns[/<id>]            → manifestes ; en détail, faits du rapport de campagne + report.md
 GET  /api/channel                     → battement local, fenêtres vivantes, battement publié (canal retour)
 GET  /api/channel/detections/<run_id> → détections livrées au run
+GET  /api/dagorlad/board              → cartes rouges (catalogue), Glorfindel, cibles inscrites (zone, mode)
+GET  /api/dagorlad/plan?wire=<exp>@<rid>… → chaque fil jugé comme Orodruin le jugerait, et l'attendu
      (injecteurs : GET seulement — un run part d'Orodruin armé, jamais d'une route de la console)
 
 POST /api/action/release/<vm>         → lever isolation NSG

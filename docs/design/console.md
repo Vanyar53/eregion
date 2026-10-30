@@ -2,7 +2,7 @@
 
 Conception du 26/10/2026, session War Room. **Décidé par Jonathan le 26/10**, question par question.
 **UI-1 construit et déployé sur H0 le 26/10** (#209, #210, #212, #216) ; **UI-2 construit le 27/10** (#206), définitions décidées le 27/10.
-**Dagorlad (§7) : conception du 30/10, sans code** ; ses trois questions tranchées par Jonathan le 30/10.
+**Dagorlad (§7) : conception du 30/10**, ses trois questions tranchées par Jonathan le 30/10 ; **le Board construit le 30/10** (DG-a, première partie).
 Ce document sert aux sessions qui implémentent : le lot UI-1 (le socle, #205), le lot UI-2 (les cinq
 indicateurs, #206), et le lot d'Annatar et de Gothmog qui vérifie, avant chaque run, que Glorfindel
 tourne.
@@ -598,7 +598,7 @@ PLAN · 4 wires · 1 refused   ✓ watch live  ? Orodruin unknown here  ✓ enro
 | destructive ou non | le catalogue, seul : jamais le navigateur, jamais une demande |
 | implémentée ou prévue | le catalogue (`status`) : une entrée prévue est grisée, sans poignée |
 | ce qu'on attend : la règle et le délai ; pour une panne, rien de disruptif | voir « Le résultat attendu » |
-| dernière preuve et état de sa ligne (`proven`, `aging`, `stale`, `regressed`, `never`) | la matrice de C1 (`eregion_console/coverage.py`), sur tout ce que l'hôte garde |
+| dernière preuve et état de sa ligne (`proven`, `aging`, `stale`, `regressed`, `never`) | la matrice de C1 (`eregion_console/coverage.py`), sur tout ce que l'hôte garde — avec la vue Runs, après la fusion de C1 |
 
 Un injecteur absent laisse ses cartes grisées, avec ce qu'il ajouterait (la page d'installation
 d'aujourd'hui, §3, règle 5).
@@ -661,8 +661,11 @@ l'emporte :
   fermé, jamais un raté.
 - `no_rule` : Glorfindel n'a aucune règle pour cette technique sur ce backend. Il est aveugle : le run
   doit finir en `missed`, et la boucle violette proposer une règle.
-- `orodruin_unknown` : l'état du contrat d'Orodruin n'est pas connu sur cet hôte (« Ce qui manque
-  ailleurs »).
+- `engine_unknown` : une panne dont cet hôte ne lit pas les cibles du moteur (l'image de H0 ne porte
+  pas Gothmog). Le preflight de Gothmog en décide, sur Orodruin.
+
+L'état du contrat d'Orodruin, inconnu sur cet hôte tant qu'il ne le publie pas (« Ce qui manque
+ailleurs »), est dit une fois, dans les vérifications du plan, plutôt que sur chaque fil.
 
 **Jamais sans Glorfindel.** `--without-glorfindel` n'est pas proposé par la page. Un run de
 développement reste un geste sur Orodruin.
@@ -686,7 +689,7 @@ aveugle »).
   | déploiement en lecture seule (H0) | il détecte et recommande ; rien n'est exécuté |
   | `human_only`, ou `non_disruptive` retenu par la préparation | une carte à juger ; un humain agit |
   | `non_disruptive`, prête | il isole ou bloque seul si chaque garde passe (confiance, signal caractérisé et attribué, télémétrie lue, tirages d'accord), puis vérifie sur Azure ; sinon une carte qui nomme la garde |
-  | zone `production` (J1) | mode ombre : détection seule |
+  | zone `production` | l'enveloppe de son mode : Glorfindel ne lit pas encore la zone ; J1 y forcera le mode ombre (détection seule) |
 
   Une action destructive (restaurer) n'est jamais autonome, quel que soit le mode. Pour une technique
   destructive, la ligne le rappelle : T1486 donne au plus une isolation et un instantané, la
@@ -875,3 +878,33 @@ Posées une à une. La réponse est reportée ici avec sa date.
 | DG-a | `/dagorlad` en lecture seule : Board (tableau, plan, simulation) et Runs (les listes d'aujourd'hui, les deux injecteurs ensemble) ; `eregion_core/exercise_plan.py` ; redirections ; tests sans Azure ni modèle, mutants | C1 fusionné, pour Runs et les redirections |
 | DG-b | la demande, le nom tapé, « Stop all » ; Orodruin, Annatar, Gothmog ; le modèle de menace | DG-a, la question 1, BL1 |
 | DG-c | le suivi en direct | DG-b, BL1 |
+
+### Construit : le Board (DG-a, première partie, 30/10)
+
+- **Le cœur** : `eregion_core/exercise_plan.py`, le verdict d'un fil (`judge`) et d'une demande (`plan`,
+  les fils dans l'ordre tracé, une fois par paire, refusés au-delà des plafonds d'Orodruin), bâti sur
+  `Scope.check`, `enrollment` et `check_zone` d'O0. Les cibles se lisent par
+  `inscription.TagEnrollment.vms` : les VM des groupes du banc, avec leurs tags et ceux du groupe, par
+  l'identité de la console, en cache une minute ; une lecture en échec est dite, jamais un banc vide.
+- **La console** : `eregion_console/board.py` (cartes, avertissements du côté de Glorfindel, attendu),
+  `GET /api/dagorlad/board`, `GET /api/dagorlad/plan` (100 fils au plus), la page `/dagorlad`
+  (`dagorlad.html`, `dagorlad.js`). Les règles sont celles que la watch charge, base et couche du
+  client : sans backend configuré, aucune n'est active, et chaque fil d'une technique dit « no rule ».
+- **La page** : on choisit une carte rouge puis une ou plusieurs cibles (au clavier aussi), ou l'on
+  glisse sa poignée sur une cible. Les fils sont un SVG calculé par la page, leurs pastilles ne se
+  chevauchent pas. Le panneau du plan liste chaque fil, son rang, son verdict ou ce qu'on doit
+  attendre, ses avertissements, et un ✕ pour le retirer. Les fils restent dans le navigateur
+  (`localStorage`). Rien du dehors n'est écrit brut, chaque geste passe par le répartiteur
+  (`data-on-*`, la table `ACTIONS`) ; le lecteur (`scripts/console_escaping.py`) lit la page.
+- **Vérifié dans Chromium** (chrome-headless-shell, console locale sur un HOME jetable, cibles, règles
+  et watch remplacées, une VM au nom piégé `<img onerror>`) à 1440 et 1600 px : six fils tirés, cinq au
+  clic et un à la souris ; aucune erreur JS, aucune violation de CSP, aucune image injectée.
+- **Mutants M1900–M1914** (`tests/unit/test_exercise_plan.py`, `test_console_dagorlad.py`) : la règle de
+  production sautée, le caractère destructif pris pour faux, un fil sans watch, une cible non inscrite
+  ou hors du périmètre, une entrée prévue, une panne hors des cibles de son moteur, le nom à taper
+  oublié, les plafonds ignorés, une carte pour une VM non inscrite, un déploiement en lecture seule
+  montré capable de contenir, la route du plan qui accepte POST, une action hors de la table de la
+  page, un nom de VM écrit brut, une technique sans règle non dite aveugle.
+- **Reste pour DG-a**, après la fusion de C1 : la vue Runs, les redirections de `/annatar`, `/gothmog`
+  et `/runs/<id>`, l'onglet (Dagorlad n'est pas encore dans l'en-tête : on l'ouvre par son adresse),
+  la dernière preuve sur les cartes rouges.

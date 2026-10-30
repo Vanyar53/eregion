@@ -31,7 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "eregion_console" / "static"
-PAGES = ("glorfindel.html", "overview.html", "injector.html")
+PAGES = ("glorfindel.html", "overview.html", "injector.html", "dagorlad.html")
 
 # The page's escapes, by where the value lands (_context): the page's text or a double-quoted
 # attribute; the start of a URL (an escaped `javascript:` is still one, and `/${x}` with x =

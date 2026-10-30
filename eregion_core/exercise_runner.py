@@ -333,21 +333,36 @@ class Runner:
         for i, w in enumerate(req.wires):
             ws = status.wire(w.rank)
             e = catalog[w.experiment]
-            left_s = int(cap["max_run_s"] - (self.now() - start).total_seconds())
-            left_calls = cap["max_injections"] - self._calls_used(req.id, start)
+
+            def left() -> tuple[int, int]:
+                return (int(cap["max_run_s"] - (self.now() - start).total_seconds()),
+                        cap["max_injections"] - self._calls_used(req.id, start))
+
+            def stop_rest(code: str, why: str) -> None:
+                for rest in req.wires[i:]:
+                    status.wire(rest.rank).state, status.wire(rest.rank).code = "skipped", code
+                self.say(f"  ✗ {why} — wires {w.rank}– skipped")
+
+            over = (f"Orodruin's cap reached ({cap['max_injections']} calls, "
+                    f"{cap['max_run_s'] // 60} min for the request)")
+            left_s, left_calls = left()
             if left_s <= 0 or left_calls <= 0:
-                for rest in req.wires[i:]:
-                    status.wire(rest.rank).state, status.wire(rest.rank).code = "skipped", "over_cap"
-                self.say(f"  ✗ Orodruin's cap reached ({cap['max_injections']} calls, "
-                         f"{cap['max_run_s'] // 60} min for the request): wires {w.rank}– skipped")
+                stop_rest("over_cap", over)
                 break
-            lost = self.watch()
-            if lost:
-                for rest in req.wires[i:]:
-                    status.wire(rest.rank).state, status.wire(rest.rank).code = "skipped", "no_watch"
-                self.say(f"  ✗ no live Glorfindel watch: {lost} — wires {w.rank}– skipped")
-                break
-            why = self._before_wire(w, e, typed, faults, not_returned, left_s)
+            # First the wait (a VM without its return, a VM held by Glorfindel), then everything
+            # read again: the watch, the target, its zone and its name are those of the moment the
+            # wire leaves, never of before a wait of minutes (DG-b review, point 6).
+            why = self._wait(w, not_returned, left_s)
+            if not why:
+                left_s, left_calls = left()
+                if left_s <= 0 or left_calls <= 0:
+                    stop_rest("over_cap", over)
+                    break
+                lost = self.watch()
+                if lost:
+                    stop_rest("no_watch", f"no live Glorfindel watch: {lost}")
+                    break
+                why = self._recheck(w, typed, faults)
             if why:
                 ws.state, ws.code = ("refused" if why[0] in ("refused_now", "typed_name") else "skipped"), why[0]
                 self.say(f"  ✗ wire {w.rank} {ws.state} — {why[0]}: {why[1]}")
@@ -356,7 +371,6 @@ class Runner:
             ws.state = "running"
             self._emit(status)
             before = set(self._windows(req.id))
-            left_s = int(cap["max_run_s"] - (self.now() - start).total_seconds())
             env = {orodruin.MAX_INJECTIONS_ENV: str(left_calls), orodruin.MAX_RUN_S_ENV: str(max(left_s, 1))}
             self.say(f"→ wire {w.rank}: {e.kind} {e.id} on {w.target_name}")
             code = self.launch(argv_for(e, w, req.id, typed.get(w.rank, "")), env)
@@ -378,9 +392,9 @@ class Runner:
         self.say(f"Request {req.id} finished: {done}/{len(status.wires)} wire(s) run.")
         return status
 
-    def _before_wire(self, w, e, typed, faults, not_returned, left_s) -> tuple[str, str] | None:
-        """At each injection (O0): the target read again and judged again, its name again; a VM
-        whose fault did not come back; a VM isolated, waited for. None: the wire may run."""
+    def _recheck(self, w, typed, faults) -> tuple[str, str] | None:
+        """At each injection (O0), right before it: the target read again and judged again, its
+        name again. None: the wire may run."""
         try:
             target, name = self.read_target(w.target)
         except Exception as ex:
@@ -393,6 +407,11 @@ class Runner:
             why = self._typed_refusal(w, typed, {w.target.lower(): name})
             if why:
                 return "typed_name", why
+        return None
+
+    def _wait(self, w, not_returned, left_s) -> tuple[str, str] | None:
+        """A VM whose fault did not come back takes no wire; a VM held by Glorfindel is waited for,
+        within the request's time left. None: the VM is free now."""
         if w.target.lower() in not_returned:
             return "not_returned", (f"a fault on {w.target_name} did not verify its return: no other "
                                     "wire runs on it")

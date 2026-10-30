@@ -338,3 +338,31 @@ def test_a_second_request_while_one_runs_is_refused_between_two_processes(tmp_pa
     # The holder gone (a crash included), the lock goes with it.
     r, inj, _, _ = _runner(tmp_path)
     assert r.run(_req(("T1110.001", GONDOLIN)), {}).state == "finished"
+
+
+# ── The review of DG-b, point 6: read again after the wait, not before ─────────────────────
+
+def test_a_target_re_tagged_production_during_the_isolation_wait_never_gets_its_wire(tmp_path):
+    clock = Clock()
+    held_until = T0 + timedelta(seconds=2 * er.POLL_S)
+    r, inj, _, _ = _runner(tmp_path, clock=clock,
+                           isolated=lambda rid: "Glorfindel's glorfindel-iso-x" if clock.t < held_until else "")
+
+    def read(rid):
+        zone = "production" if clock.t >= held_until else "bench"
+        return Target(rid, BENCH_RG, {"eregion-target": "celebrimbor", "eregion-zone": zone}), "vm-celebrimbor-gondolin"
+    r.read_target = read
+    status = r.run(_req(("T1486", GONDOLIN)), {1: "vm-celebrimbor-gondolin"})
+    assert [(w.state, w.code) for w in status.wires] == [("refused", "refused_now")]
+    assert inj.launched == []
+
+
+def test_the_watch_lost_during_the_isolation_wait_stops_the_wire(tmp_path):
+    clock = Clock()
+    held_until = T0 + timedelta(seconds=2 * er.POLL_S)
+    r, inj, _, _ = _runner(tmp_path, clock=clock,
+                           isolated=lambda rid: "Glorfindel's glorfindel-iso-x" if clock.t < held_until else "",
+                           watch=lambda: "" if clock.t < held_until else "the heartbeat is 5 min old")
+    status = r.run(_req(("T1110.001", GONDOLIN)), {})
+    assert [(w.state, w.code) for w in status.wires] == [("skipped", "no_watch")]
+    assert inj.launched == []

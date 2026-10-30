@@ -4277,10 +4277,11 @@ MUTANTS += [
     ("M2021", "the watch not read again between two wires (V1) (DG-b)", XRN,
      "            lost = self.watch()\n", "            lost = \"\"\n"),
     ("M2022", "Orodruin's call cap per wire, not on the whole request (DG-b)", XRN,
-     '            left_calls = cap["max_injections"] - self._calls_used(req.id, start)\n',
-     '            left_calls = cap["max_injections"]\n'),
+     '                        cap["max_injections"] - self._calls_used(req.id, start))\n',
+     '                        cap["max_injections"])\n'),
     ("M2023", "Orodruin's time cap not held on the whole request (DG-b)", XRN,
-     "            if left_s <= 0 or left_calls <= 0:\n", "            if left_calls <= 0:\n"),
+     '                return (int(cap["max_run_s"] - (self.now() - start).total_seconds()),\n',
+     '                return (cap["max_run_s"],\n'),
     ("M2024", "the cap Orodruin declares ignored at the judgment: only the ceilings (DG-b)", XRN,
      '                        max_injections=cap.get("max_injections", 0), max_run_s=cap.get("max_run_s", 0))\n',
      "                        )\n"),
@@ -4385,6 +4386,13 @@ MUTANTS += [
      "            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
 ]
 TESTS["M2100"] = "tests/unit/test_exercise_runner.py"
+
+MUTANTS += [
+    ("M2101", "the watch, the target, its zone and its name read before a wait of minutes, not after (DG-b review)",
+     XRN, "            why = self._wait(w, not_returned, left_s)\n            if not why:\n",
+     "            why = self._recheck(w, typed, faults) or self._wait(w, not_returned, left_s)\n            if False:\n"),
+]
+TESTS["M2101"] = "tests/unit/test_exercise_runner.py"
 
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake

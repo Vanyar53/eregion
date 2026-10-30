@@ -31,6 +31,8 @@ Every reader is a parameter: the tests run it on fakes, no Azure, no injector.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import subprocess
@@ -51,7 +53,7 @@ from eregion_core.inscription import Scope, TagEnrollment, rg_from_id, subscript
 WAIT_ISOLATION_S = 20 * 60
 POLL_S = 30.0
 # Request-level codes, besides the wires' (exercise_plan.REFUSALS).
-REQUEST_REFUSALS = ("unreadable", "passive", "refused_wires")
+REQUEST_REFUSALS = ("unreadable", "passive", "refused_wires", "busy")
 # Why a wire did not run, once the request was judged.
 SKIPS = ("over_cap", "no_watch", "isolated", "not_returned", "refused_now")
 
@@ -150,6 +152,30 @@ def argv_for(experiment, wire: xr.Wire, request_id: str, typed: str = "") -> lis
                 "--target", wire.target]
     return ["annatar", "wire", experiment.id, wire.target, "--request", request_id] + (
         ["--typed-name", typed] if typed else [])
+
+
+class Busy(RuntimeError):
+    """Another request (or this one, launched again) runs on this Orodruin."""
+
+
+@contextlib.contextmanager
+def request_lock(runs_dir: Path | str):
+    """One request at a time on this Orodruin (DG-b review, point 5): an exclusive ``flock`` on
+    ``runs/orodruin/requests/.lock``, never waited for — two requests side by side would overlap
+    on a VM and double Orodruin's cap. Held while the request runs; the kernel lets it go with the
+    process, a crash included."""
+    path = Path(runs_dir) / "orodruin" / "requests" / ".lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Busy("another request runs on this Orodruin: one at a time — wait for its end, "
+                       "or stop it (make orodruin-kill)") from None
+        yield
+    finally:
+        os.close(fd)
 
 
 # ── The runner ────────────────────────────────────────────────────────────────────────
@@ -281,6 +307,16 @@ class Runner:
         return status, verdicts, cap, names, faults
 
     def run(self, req: xr.Request, typed: dict[int, str]) -> Status:
+        try:
+            with request_lock(self.runs_dir):
+                return self._run(req, typed)
+        except Busy as e:
+            # Nothing judged, nothing published: the status of the request that runs stays its own.
+            self.say(f"Request {req.id} refused — busy: {e}")
+            return Status(req.id, state="refused", codes=["busy"],
+                          wires=[WireStatus(w.rank, "refused", "busy") for w in req.wires])
+
+    def _run(self, req: xr.Request, typed: dict[int, str]) -> Status:
         start = self.now()
         status, verdicts, cap, names, faults = self.judge(req, typed)
         for w, v in zip(req.wires, verdicts):

@@ -302,3 +302,39 @@ def test_main_refuses_a_file_that_holds_another_request(tmp_path, capsys):
                              "wires": [{"experiment": "T1110.001", "target": GONDOLIN, "rank": 1}]}))
     assert er.main([str(p)]) == 1
     assert "holds r-20261030T075200Z-ffffff" in capsys.readouterr().err
+
+
+# ── The review of DG-b, point 5: one request at a time on Orodruin ──────────────────────────
+
+_HOLDER = """
+import sys, time
+from pathlib import Path
+from eregion_core.exercise_runner import request_lock
+with request_lock(Path(sys.argv[1])):
+    print("held", flush=True)
+    time.sleep(30)
+"""
+
+
+def test_a_second_request_while_one_runs_is_refused_between_two_processes(tmp_path):
+    """Two `make orodruin-exercise` side by side: the second is refused, launches nothing and
+    publishes nothing — the first one's status stays its own."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    holder = subprocess.Popen([sys.executable, "-c", _HOLDER, str(tmp_path / "runs")],
+                              stdout=subprocess.PIPE, text=True, env=env)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        r, inj, published, _ = _runner(tmp_path)
+        status = r.run(_req(("T1110.001", GONDOLIN)), {})
+        assert status.state == "refused" and status.codes == ["busy"]
+        assert inj.launched == [] and published == []
+    finally:
+        holder.kill()
+        holder.wait(timeout=30)
+    # The holder gone (a crash included), the lock goes with it.
+    r, inj, _, _ = _runner(tmp_path)
+    assert r.run(_req(("T1110.001", GONDOLIN)), {}).state == "finished"

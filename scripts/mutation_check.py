@@ -4380,6 +4380,12 @@ MUTANTS += [
 TESTS.update({"M2098": "tests/unit/test_exercise_request.py tests/unit/test_makefile_exercise.py",
               "M2099": "tests/unit/test_exercise_runner.py"})
 
+MUTANTS += [
+    ("M2100", "two requests side by side on Orodruin: no lock, overlapping wires, the cap doubled (DG-b review)", XRN,
+     "            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
+]
+TESTS["M2100"] = "tests/unit/test_exercise_runner.py"
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.

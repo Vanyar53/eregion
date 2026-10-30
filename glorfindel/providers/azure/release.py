@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _deny_applies, _deny_isolates, _ip_scoped, _nic_owns, _rule_name
 from glorfindel.providers.azure.quarantine import OriginalUnknown, _is_quarantine_nsg
+from glorfindel.providers.azure.turned import _held_by_turned, _turned_guard
 from glorfindel.providers.azure.sdk import _is_not_found
 from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_id, _same_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
@@ -159,6 +160,7 @@ class ReleaseMixin:
 
         failed: list[str] = []
         remaining: list[dict] = []
+        turned: dict = {}                    # the I5Q guard, the NSGs listed once if a rule is to go
         if state.get("placements"):
             # Multi-NIC: undo each placement on its own NSG. Delete our denies first —
             # a customer rule can only go back to priority 100 once ours is gone.
@@ -226,7 +228,8 @@ class ReleaseMixin:
                 p_rg, p_name = p["nsg_rg"], p["nsg_name"]
                 p_failed = [
                     err for err in (
-                        self._delete_rule(p_rg, p_name, name)
+                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))
+                        or self._delete_rule(p_rg, p_name, name)
                         for name in (p.get("rule_in"), p.get("rule_out")) if name
                     ) if err
                 ]
@@ -366,6 +369,7 @@ class ReleaseMixin:
             return failed
         try:
             nsgs = list(self._network.network_security_groups.list_all())
+            held_back = _turned_guard(self._network, nsgs)      # I5Q: a deny no turned rule waits behind
         except Exception as exc:
             return failed + [f"{vm_name} supprimée : les règles de ses cartes n'ont pas été cherchées sur les "
                              f"NSG de l'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), "
@@ -375,6 +379,9 @@ class ReleaseMixin:
             for r in (getattr(nsg, "security_rules", None) or []):
                 name = _rule_name(r)
                 if name.lower() in names and (n_rg.lower(), n_name.lower(), name.lower()) not in stuck:
+                    if why := held_back(nsg, r):
+                        failed.append(f"{name} ({n_name}) gardée : {why}")
+                        continue
                     err = self._delete_rule(n_rg, n_name, name)
                     if err:
                         failed.append(err)

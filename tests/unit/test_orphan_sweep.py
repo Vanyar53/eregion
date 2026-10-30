@@ -140,6 +140,188 @@ def test_an_orphan_behind_an_nsg_that_doesnt_govern_the_holder_stays(monkeypatch
     assert "Gardée : ne coupe aucune carte vivante derrière ce NSG" in cards[0]["reason"]
 
 
+@pytest.mark.parametrize("aimed, kept", [("*", True), ("10.0.0.0/24", True), ("VirtualNetwork", True),
+                                         ("10.0.0.99", False)])
+def test_an_orphan_deny_behind_our_rule_turned_into_an_allow_stays(monkeypatch, aimed, kept):
+    """I5Q (#327): web blocked on its subnet and isolated there by rules, deleted with its
+    state lost; a new VM at its address. Someone turned the perimeter block into an
+    allow: web's inbound deny is the last thing holding back what that allow lets pass —
+    kept, said with the turned rule, never taken off. Aimed at the new VM's address (`*`,
+    a prefix holding it, a tag read as holding it); aimed elsewhere, it doesn't hold
+    anything back and goes. The outbound deny goes either way: the turned rule is inbound."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.block_suspicious_ip(ATTACKER, WEB, scope="subnet")["status"] == "blocked"
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = next(n for n in g["rules"] if n.startswith("glorfindel-block-") and not n.endswith("-out"))
+    g["rules"][perimeter].update(access="Allow", destination_address_prefix=aimed)
+    _delete(f, WEB)
+    new = _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c)
+    iso = {n for n in g["rules"] if n.startswith("glorfindel-iso-")}
+    assert any(not n.endswith("-out") for n in iso) is kept, iso
+    assert not any(n.endswith("-out") for n in iso), iso
+    if kept:
+        assert not {fl for fl in open_flows(_world_view(f), new) if fl[2] == "in"}
+        (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+        assert perimeter in card["reason"] and "retournée en autorisation" in card["reason"], card["reason"]
+
+
+def test_a_card_two_rules_share_stays_open_while_one_stands(monkeypatch):
+    """I5Q, seed 101 at 500 after RB1: the in and out denies of a deleted VM cut the same
+    VM, said on one card in human_only (the store merges by VM). Given non_disruptive,
+    the outbound one goes, the inbound one stays behind the turned rule — the removal
+    resolved the card they share: the deny kept, no longer said. It stays pending."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.block_suspicious_ip(ATTACKER, WEB, scope="subnet")["status"] == "blocked"
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = next(n for n in g["rules"] if n.startswith("glorfindel-block-") and not n.endswith("-out"))
+    g["rules"][perimeter]["access"] = "Allow"
+    _delete(f, WEB)
+    _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (card,) = _orphan_cards()
+    assert card["status"] == "pending"
+    _watch_pass(c, "non_disruptive")
+    iso = {n for n in g["rules"] if n.startswith("glorfindel-iso-")}
+    assert iso and not any(n.endswith("-out") for n in iso), iso
+    assert [e["status"] for e in _orphan_cards()] == ["pending"], _orphan_cards()
+
+
+def _held_world(monkeypatch, out: bool = False):
+    """web blocked on its subnet and isolated there by rules, deleted with its state lost;
+    `batch` at its address, cut off by web's denies (in and out). `out`: the perimeter's
+    outbound rule is the one to turn."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.block_suspicious_ip(ATTACKER, WEB, scope="subnet")["status"] == "blocked"
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = next(n for n in g["rules"] if n.startswith("glorfindel-block-") and n.endswith("-out") is out)
+    _delete(f, WEB)
+    return f, c, g, perimeter, _new_vm_at(f, subnet, "10.0.0.4")
+
+
+@pytest.mark.parametrize("side", ["in", "out"])
+@pytest.mark.parametrize("then", ["human_only", "non_disruptive"])
+def test_a_card_said_before_the_turn_is_replaced_by_one_naming_it(monkeypatch, then, side):
+    """I5Q, the review: the in and out denies said first in human_only, on one card — its
+    only step the delete. Then someone turns a perimeter rule into an allow: the deny on
+    its side is now the last thing keeping the attacker out. The card said before was
+    never written again — it still said to delete it, which would open the VM. It is
+    replaced: the pending card names the turned rule, and says first to put it back as a
+    deny; the delete only after. `out`: the kept deny is the outbound one, listed after
+    the inbound — the card the two share must still name the turned rule."""
+    f, c, g, perimeter, new = _held_world(monkeypatch, out=side == "out")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    assert old["suggested_steps"][0].startswith("az network nsg rule delete")
+    g["rules"][perimeter]["access"] = "Allow"
+    _watch_pass(c, then)
+    assert not {fl for fl in open_flows(_world_view(f), new) if fl[2] == side and fl[3] == ATTACKER}
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"]
+    assert perimeter in card["reason"] and "retournée en autorisation" in card["reason"], card["reason"]
+    assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus") \
+        and "--access Deny" in card["suggested_steps"][0], card["suggested_steps"]
+    assert not any(s.startswith("az network nsg rule delete") for s in card["suggested_steps"])
+    _watch_pass(c, then)                                    # said once: no new card
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+
+
+def test_the_card_of_a_vm_names_every_rule_its_kept_denies_wait_behind(monkeypatch):
+    """I5Q, seed 31337 at 500 (the review's fixes): the inbound and outbound denies of the
+    deleted VM, kept behind two different turned rules — the perimeter's in, and its out.
+    The store merges the cards of a VM: the card named the first only, the other deny
+    kept unsaid. It names both, and puts both back first."""
+    f, c, g, perimeter, new = _held_world(monkeypatch)
+    g["rules"][perimeter]["access"] = "Allow"
+    g["rules"][f"{perimeter}-out"]["access"] = "Allow"
+    _watch_pass(c, "non_disruptive")
+    assert {n for n in g["rules"] if n.startswith("glorfindel-iso-")}, "a kept deny went"
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    for rule in (perimeter, f"{perimeter}-out"):
+        assert f"notre règle {rule} (" in card["reason"], card["reason"]
+    assert all(s.startswith("Remettre ") for s in card["suggested_steps"][:2]), card["suggested_steps"]
+
+
+def test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter(monkeypatch):
+    """I5Q, seed 31337: the perimeter's name begins every VM rule of its IP. web blocked for
+    itself and on its subnet, deleted; its own block deny, said in human_only, names
+    `glorfindel-block-<ip>-web-…` — read as a substring, that card « named » the turned
+    perimeter, and was kept: still telling to delete the deny. It is replaced."""
+    f, c, subnet = _world(monkeypatch)
+    for scope in ("vm", "subnet"):
+        assert c.block_suspicious_ip(ATTACKER, WEB, scope=scope, threat_port=22)["status"] == "blocked"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = "glorfindel-block-" + ATTACKER.replace(".", "-")
+    assert perimeter in g["rules"]
+    _delete(f, WEB)
+    _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    assert perimeter in old["reason"] and f"notre règle {perimeter} (" not in old["reason"]
+    g["rules"][perimeter]["access"] = "Allow"
+    _watch_pass(c, "non_disruptive")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert f"notre règle {perimeter} (" in card["reason"], card["reason"]
+    assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus"), card["suggested_steps"]
+
+
+def test_a_new_kept_deny_never_merges_into_a_stale_card_of_its_vm(monkeypatch):
+    """I5Q, its second review (the reviewer's probe): the VM has a pending card for an
+    orphan rule that is not kept (web's outbound deny, said in human_only). A new deny
+    of a gone NIC appears, kept behind the perimeter someone turned — no card of its own
+    yet: the store folded it into the VM's pending card, which keeps its first reason.
+    The operator saw only the delete of a deny already gone, the kept one named nowhere
+    for a pass. That card is read too, and replaced."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.block_suspicious_ip(ATTACKER, WEB, scope="subnet")["status"] == "blocked"
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = "glorfindel-block-" + ATTACKER.replace(".", "-")
+    iso_in = next(n for n in g["rules"] if n.startswith("glorfindel-iso-") and not n.endswith("-out"))
+    del g["rules"][iso_in]
+    _delete(f, WEB)
+    new = _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    FakeAzure._put_rule(g, _rule_record(_rule("glorfindel-iso-ghost-ghost-nic-abcdef", 150, dict(
+        access="Deny", direction="Inbound", source_address_prefix="*", destination_address_prefix="10.0.0.4",
+        destination_port_range="*"))))
+    g["rules"][perimeter]["access"] = "Allow"
+    _watch_pass(c, "non_disruptive")
+    assert "glorfindel-iso-ghost-ghost-nic-abcdef" in g["rules"]
+    assert not {fl for fl in open_flows(_world_view(f), new) if fl[2] == "in" and fl[3] == ATTACKER}
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"]
+    assert f"notre règle {perimeter} (" in card["reason"], card["reason"]
+    assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus"), card["suggested_steps"]
+
+
+def test_a_rule_turned_after_the_listing_stops_the_removal(monkeypatch):
+    """I5Q, the review: the pass lists the NSGs, then someone turns the perimeter block
+    before the removal — the guard is played again on the NSGs that govern the VM cut,
+    read by their id just before the delete. One that can't be read keeps the rule."""
+    f, c, g, perimeter, new = _held_world(monkeypatch)
+    (orphan,) = [o for o in c.find_orphan_rules() if not o["rule"].endswith("-out")]
+    assert orphan["removable"] is True and orphan["cut"][0]["governed_by"]
+    g["rules"][perimeter]["access"] = "Allow"
+    out = c.remove_orphan_rule(orphan)
+    assert out["removed"] is False and perimeter in out["why"], out
+    assert orphan["rule"].lower() in {n.lower() for n in g["rules"]}
+    g["rules"][perimeter]["access"] = "Deny"
+    real = f.network.network_security_groups.get
+
+    def refused(*a, **k):
+        raise RuntimeError("(AuthorizationFailed) no read")
+    monkeypatch.setattr(f.network.network_security_groups, "get", refused)
+    out = c.remove_orphan_rule(orphan)
+    assert out["removed"] is False and "non relu" in out["why"], out
+    monkeypatch.setattr(f.network.network_security_groups, "get", real)
+    assert c.remove_orphan_rule(orphan)["removed"] is True
+
+
 def _twin_vnet(f, subnet_nsg):
     """A second VNet whose address space overlaps the hub's, its subnet behind the same NSG."""
     return f.add_subnet("rg-net", "vnet-twin", "app", subnet_nsg)

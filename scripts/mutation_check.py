@@ -5648,6 +5648,10 @@ TESTS.update({f"M{n}": "tests/unit/test_workflows.py"
 MUTANTS += [
     ("M2110", "the canary's sweep deletes every NIC, NSG and VNet of the group: another run's too (P04)", JIT_SH,
      """--query "[?tags.\\"canary-run\\"=='$SUFFIX'].id" -o tsv)""", """--query "[].id" -o tsv)"""),
+    ("M2111", "the old principal's credentials no longer compared with the machine's: its own may go (P04)",
+     "docs/operations.md",
+     """    [ "${(P)id}" = "$OLD" ] && [ "${${(P)sec}[1,3]}" = "$h" ] && echo""",
+     """    [ "${(P)id}" = "$OLD" ] && echo"""),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
 

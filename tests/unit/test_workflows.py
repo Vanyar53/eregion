@@ -658,3 +658,27 @@ def test_the_provider_never_registers_resource_providers(tmp_path, constraint, s
 def test_a_suffix_that_could_collide_or_inject_is_refused(tmp_path, suffix):
     res, calls = _run_canary(tmp_path, CANARY_SUFFIX=suffix)
     assert res.returncode == 2 and not calls, (res.stdout, calls)
+
+
+OPS = ROOT / "docs" / "operations.md"
+
+
+def _canary_section() -> str:
+    text = OPS.read_text(encoding="utf-8")
+    start = text.index("## Le canari azurerm, sans secret")
+    return text[start:text.index("\n## ", start + 1)]
+
+
+def test_the_old_principal_goes_without_cutting_the_operators_machine():
+    """The repository's four AZURE_* secrets go in every case: no workflow reads them any more. A
+    credential of the old principal is deleted only once its hint was compared with the machine's
+    secrets, and only by its keyId: the one the machine holds never goes (P04 review)."""
+    assert not [p.name for p in WORKFLOWS if re.search(r"secrets\.AZURE_", p.read_text(encoding="utf-8"))]
+    removal = _canary_section().split("**Puis, après un canari vert seulement**", 1)[1]
+    loop = removal.index('gh secret delete "$s"')
+    assert loop < removal.index("Si l'ancien principal sert ailleurs")
+    assert "for s in AZURE_CLIENT_SECRET AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do" in removal[:loop]
+    compare = removal.index('[ "${${(P)sec}[1,3]}" = "$h" ]')
+    deletes = [m.start() for m in re.finditer(r"az ad app credential delete", removal)]
+    assert deletes and compare < min(deletes)
+    assert all("--key-id <keyId de cet identifiant>" in removal[d:d + 80] for d in deletes)

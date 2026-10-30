@@ -637,29 +637,43 @@ gh run watch --repo "$REPO" \
 az resource list -g rg-eregion-canary -o table               # vide : tout a été détruit
 ```
 
-**Puis, après un canari vert seulement** : retirer l'ancien secret du dépôt et l'identifiant de
-l'ancien principal. D'abord, qui d'autre s'en sert :
-
-```bash
-OLD=<appId de l'ancien principal du canari>
-az role assignment list --assignee "$OLD" --all -o table   # ses droits, partout
-az ad app credential list --id "$OLD" -o table             # ses secrets : lequel est celui du canari
-gh secret list --repo "$REPO"                              # les AZURE_* d'avant
-# Le même principal sur le poste ou dans un service ? Comparer, sans l'afficher :
-#   source .envrc; for v in AZURE_CLIENT_ID GLORFINDEL_AZURE_CLIENT_ID EREGION_CONSOLE_AZURE_CLIENT_ID \
-#     GLORFINDEL_BOT_AZURE_CLIENT_ID ANNATAR_AZURE_CLIENT_ID; do [ "${(P)v}" = "$OLD" ] && echo "$v"; done
-#   (zsh ; en bash : "${!v}")
-```
-
-S'il a d'autres rôles que ceux du canari, ou si un service s'en sert encore, ne retirer que le
-secret du canari (`az ad app credential delete --id "$OLD" --key-id <keyId>`), jamais le
-principal. Sinon :
+**Puis, après un canari vert seulement** : retirer l'ancien secret du dépôt, puis l'identifiant
+de l'ancien principal. Les quatre secrets `AZURE_*` du dépôt partent dans tous les cas : aucun
+autre workflow ne les lit.
 
 ```bash
 for s in AZURE_CLIENT_SECRET AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
   gh secret delete "$s" --repo "$REPO"
 done
 gh secret list --repo "$REPO"        # restent les trois CANARY_AZURE_*, et ceux de Discord
+```
+
+Ensuite, qui d'autre se sert de l'ancien principal, et lequel de ses identifiants (secrets) est
+celui du poste. `az ad app credential list` en donne le `hint`, les trois premiers caractères ;
+on le compare à chaque secret de `.envrc` qui va avec cet appId, sans rien afficher (zsh) :
+
+```bash
+OLD=<appId de l'ancien principal du canari>
+az role assignment list --assignee "$OLD" --all -o table              # ses droits, partout
+az ad app credential list --id "$OLD" --query "[].[keyId,hint,endDateTime]" -o tsv
+source .envrc
+for h in $(az ad app credential list --id "$OLD" --query "[].hint" -o tsv); do
+  for v in AZURE GLORFINDEL_AZURE EREGION_CONSOLE_AZURE GLORFINDEL_BOT_AZURE ANNATAR_AZURE; do
+    id="${v}_CLIENT_ID"; sec="${v}_CLIENT_SECRET"
+    [ "${(P)id}" = "$OLD" ] && [ "${${(P)sec}[1,3]}" = "$h" ] && echo "hint $h : $sec, le poste s'en sert"
+  done
+done
+```
+
+- **Un identifiant dont le `hint` est celui d'un secret du poste ne se supprime jamais** : ce
+  serait couper le poste (la watch, la console, le bot ou l'injecteur qui le tient).
+- **Si l'ancien principal sert ailleurs** (un rôle hors du canari, ou une variable du poste qui
+  nomme son appId) : ne supprimer que l'identifiant du canari, un `hint` qu'aucun secret du poste
+  ne partage — `az ad app credential delete --id "$OLD" --key-id <keyId de cet identifiant>` —,
+  jamais le principal.
+- **Sinon** (il ne servait qu'au canari) :
+
+```bash
 az role assignment list --assignee "$OLD" --all --query "[].[roleDefinitionName,scope]" -o tsv
 az role assignment delete --assignee "$OLD" --role <rôle lu ci-dessus> --scope <portée lue ci-dessus>
 az ad sp delete --id "$OLD"

@@ -5570,6 +5570,41 @@ TESTS["M1860"] = ("tests/unit/test_invariant_regressions.py::"
                   "tests/unit/test_invariant_regressions.py::test_a_quarantine_change_brought_back_after_a_full_disk_is_said "
                   f"{_L2Q} {INVARIANTS}")
 TESTS.update({f"M{n}": _L2Q for n in range(1861, 1867)})
+# AWS1 (#334): the oracle of I2 on AWS, not the adapter. It left out of the customer's ACL
+# entries any entry at a key Glorfindel once wrote, so the customer's entry at a number
+# freed and taken again went missing — a false alarm, about 1 run in 24 at 500 sequences.
+# By content now. Measured by the frozen sequence (tests/unit/test_invariant_regressions_aws.py).
+_AWS1_ORACLE = ('            live = {key: e for key, e in self.fake.acls[k]["entries"].items()\n'
+                '                    if not self._not_customers(k, key, e)}\n')
+MUTANTS += [
+    ("M1950", "the I2 oracle on AWS leaves out an ACL entry by its key: the customer's entry at a "
+              "number Glorfindel once held reads as changed (AWS1)", AWS_INVARIANTS,
+     _AWS1_ORACLE,
+     '            live = {key: e for key, e in self.fake.acls[k]["entries"].items()\n'
+     '                    if (k, *key) not in self.fake.authored and (k, *key) not in self.tampered}\n'),
+    ("M1951", "the I2 oracle on AWS leaves that key out of both sides: the customer's entry there, "
+              "changed or deleted, out of its sight (AWS1, the fix that weakens)", AWS_INVARIANTS,
+     _AWS1_ORACLE + '            assert live == acl["entries"], f"I2: customer entries of {k} changed"\n',
+     '            live = {key: e for key, e in self.fake.acls[k]["entries"].items()\n'
+     '                    if (k, *key) not in self.fake.authored and (k, *key) not in self.tampered}\n'
+     '            assert live == {key: e for key, e in acl["entries"].items() if (k, *key) not in self.fake.authored}, (\n'
+     '                f"I2: customer entries of {k} changed")\n'),
+]
+TESTS.update({mid: "tests/unit/test_invariant_regressions_aws.py" for mid in ("M1950", "M1951")})
+# AWS1: the AWS machine runs every night, its failures kept in the cached database.
+MUTANTS += [
+    ("M1952", "the nightly run no longer runs the AWS machine: its failures kept nowhere (AWS1)",
+     ".github/workflows/invariants.yml",
+     "        run: python -m pytest tests/unit/test_invariants_aws.py -q -s\n",
+     "        run: echo skipped\n"),
+]
+MUTANTS += [
+    ("M1953", "the database saved only when the night is green: a failing machine's sequence kept "
+              "nowhere (AWS1, review)", ".github/workflows/invariants.yml",
+     "        if: always() && matrix.os == 'ubuntu-latest'\n",
+     "        if: success() && matrix.os == 'ubuntu-latest'\n"),
+]
+TESTS.update({mid: "tests/unit/test_workflows.py -k night_runs_both" for mid in ("M1952", "M1953")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

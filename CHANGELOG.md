@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-10-30 — "held to proof"
+
 ### Added
 - **The coverage matrix, its evolution and the non-regression, in the console** (C1, #80, 30/10; `docs/glorfindel.md`, « Matrice de couverture »; `docs/architecture.md`, « Le run, unifié »; `docs/design/console.md`).
   - **One run format for an attack and a fault.** Annatar and Gothmog write the same report, `runs/<run_id>.json`, from one class in the shared core (`eregion_core/run_report.RunReport`; each injector keeps only how it prints it). The report now says what it is, in `metrics`: `run_format` (1), `kind` (`technique` or `fault`), `injector`, `experiment_id` (the ATT&CK id or the fault's id). A compatible addition: a report written before reads as before, `schemas/run_report.schema.json` already allows other fields, and the signal contract (`eregion_core/signals.py`) does not change. One reader (`read_run`) gives the view the console shares; `timeline` joins the watch's decision and gives an incident's times — attack, detection, decision, verified action (`outcome.verified_at` when the watch writes it, else the record's time) — the format BL1 measures the time to contain on.

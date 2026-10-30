@@ -457,8 +457,13 @@ class Session:
     calls: int = 0
     offhost: Callable | None = None   # push_offhost unless a test swaps it
     _pushed: bool = False
+    # DG-b: the request this run is a wire of — each line says it, and Orodruin counts the
+    # request's calls against its cap (eregion_core/exercise_runner.py).
+    request: str = ""
 
     def _journal(self, record: dict) -> None:
+        if self.request:
+            record = {**record, "request": self.request}
         _append(self.path, record)
         try:
             (self.offhost or push_offhost)(self.run_id, json.dumps(record) + "\n",
@@ -490,12 +495,14 @@ class Session:
         })
 
 
-def arm(run_id: str, injector: str, verdict: Verdict | None = None) -> tuple[Verdict, Session | None]:
-    """The gate at the start of a run: a session only when the contract holds."""
+def arm(run_id: str, injector: str, verdict: Verdict | None = None,
+        request: str = "") -> tuple[Verdict, Session | None]:
+    """The gate at the start of a run: a session only when the contract holds. ``request``: the
+    request this run is a wire of (DG-b), written on each line of the journal."""
     verdict = verdict or check()
     if not verdict.armed:
         return verdict, None
-    return verdict, Session(run_id, injector, verdict.cap["max_injections"])
+    return verdict, Session(run_id, injector, verdict.cap["max_injections"], request=request)
 
 
 # ── Kill — revoke first, then stop ────────────────────────────────────────────────────

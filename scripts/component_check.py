@@ -64,7 +64,7 @@ COMPONENTS: dict[str, Component] = {
         own=("eregion_core",),
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
-            "test_exercise_channel.py", "test_exercise_plan.py", "test_exercise_request.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
+            "test_exercise_channel.py", "test_exercise_plan.py", "test_exercise_request.py", "test_exercise_runner.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
             "test_run_report.py",
         ),
     ),

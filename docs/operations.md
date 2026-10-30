@@ -577,8 +577,18 @@ un secret client de longue durée, et son principal pouvait créer un groupe dan
 - **Ses identifiants sont des secrets de l'environnement `canary`** — `CANARY_AZURE_CLIENT_ID`,
   `CANARY_AZURE_TENANT_ID`, `CANARY_AZURE_SUBSCRIPTION_ID` —, jamais des variables, qui
   s'impriment en clair dans un journal public. Sans eux, ou hors de `main`, le run échoue (T16).
-- **Au moindre droit.** Le principal est `Contributor` sur un seul groupe, `rg-eregion-canary`,
-  créé une fois par Jonathan ; le canari ne crée ni ne supprime de groupe. Chaque run y crée des
+- **Au moindre droit.** Le principal est `Network Contributor` sur un seul groupe,
+  `rg-eregion-canary`, créé une fois par Jonathan ; le canari ne crée ni ne supprime de groupe.
+  Le rôle intégré `Network Contributor` (ses actions, lues le 30/10 dans « Azure built-in roles
+  for Networking », learn.microsoft.com) : `Microsoft.Network/*`,
+  `Microsoft.Resources/subscriptions/resourceGroups/read`, `Microsoft.Resources/deployments/*`,
+  et des lectures (`Microsoft.Authorization/*/read`, `Microsoft.Insights/alertRules/*`,
+  `Microsoft.ResourceHealth/availabilityStatuses/read`, `Microsoft.Support/*`) — de quoi lire le
+  groupe (`data "azurerm_resource_group"`, `az group show`) et créer, joindre, modifier, lister et
+  supprimer VNet, sous-réseau, NSG et NIC ; ni supprimer le groupe, ni créer une VM, ni attribuer
+  un rôle. Le balayage passe par `az network … list` et `delete`, pas par `az resource`, dont la
+  liste d'un groupe demande `Microsoft.Resources/subscriptions/resourceGroups/resources/read`,
+  hors du rôle. Chaque run y crée des
   ressources gratuites (VNet, NSG, NIC) nommées avec son suffixe (`gh<run>-<tentative>-<ligne>`)
   et marquées `canary-run=<suffixe>` : les trois lignes du `matrix` tournent côte à côte sans
   collision. Il les détruit à la fin, en succès comme en échec (`terraform destroy`, puis le NSG
@@ -628,9 +638,13 @@ EOF
 az ad app federated-credential create --id "$APP" --parameters @/tmp/eregion-canary-fic.json
 az ad app federated-credential list --id "$APP" -o table   # un seul, ce sujet-là
 
-# 4. Le groupe, et Contributor sur lui seul (jamais sur l'abonnement).
+# 4. Le groupe, et Network Contributor sur lui seul (jamais sur l'abonnement). Par l'id d'objet
+#    du principal : juste après `az ad sp create`, Graph ne l'a pas toujours répliqué, et
+#    l'attribution par appId échoue.
 az group create -n rg-eregion-canary -l westeurope --tags purpose=eregion-canary-jit -o none
-az role assignment create --assignee "$APP" --role Contributor \
+az role assignment create --role "Network Contributor" \
+  --assignee-object-id "$(az ad sp show --id "$APP" --query id -o tsv)" \
+  --assignee-principal-type ServicePrincipal \
   --scope /subscriptions/$SUB/resourceGroups/rg-eregion-canary
 az role assignment list --assignee "$APP" --all -o table      # ce seul rôle, ce seul groupe
 
@@ -696,13 +710,26 @@ az ad app delete --id "$OLD"         # l'inscription, que sp delete laisse
 que `az login` voit l'abonnement d'un principal qui n'a de rôle que sur un groupe ; que les
 trois lignes s'authentifient par OIDC avec `ARM_USE_CLI=false` (lu dans la doc du fournisseur à
 v3.117.1, v4.81.0 et v5.12.0, et les noms des variables trouvés dans chacun de ces binaires,
-30/10) ; que `Contributor` sur le groupe suffit au `data "azurerm_resource_group"`, aux NIC et
-au balayage (`az network nic|nsg|vnet list` filtré sur l'étiquette côté client — `az` refuse
+30/10) ; que `Network Contributor` sur le groupe suffit au `data "azurerm_resource_group"`, aux
+NIC, aux NSG et à leurs jointures, et au balayage (`az network nic|nsg|vnet list` filtré sur l'étiquette côté client — `az` refuse
 `--tag` avec `-g` —, puis `delete --ids`) ; qu'aucune ressource ne reste dans le groupe après le run.
+**Si le rôle ne suffit pas** : le job échoue sur un 403 qui nomme l'action refusée (son journal).
+Le repli, dit et jamais silencieux : `Contributor` sur ce même groupe à la place (jamais plus
+large), noté dans le modèle de menace (« Décisions assumées ») avec l'action qui l'a demandé :
+
+```bash
+# Seulement après un 403 hors de Microsoft.Network, l'action notée :
+OBJ=$(az ad sp show --id "$APP" --query id -o tsv)
+az role assignment create --role Contributor --assignee-object-id "$OBJ" \
+  --assignee-principal-type ServicePrincipal --scope /subscriptions/$SUB/resourceGroups/rg-eregion-canary
+az role assignment delete --role "Network Contributor" --assignee "$OBJ" \
+  --scope /subscriptions/$SUB/resourceGroups/rg-eregion-canary
+```
+
 **Ce qui reste ouvert** : un runner tué (pas d'`EXIT`) laisse les ressources de son run dans le
 groupe, gratuites et marquées par leur suffixe (`az resource list -g rg-eregion-canary -o
-table`) ; et le principal, `Contributor` sur son groupe, pourrait le supprimer ou y créer une
-ressource payante — seul un job de l'environnement `canary`, que seul `main` déploie, obtient son
+table`) ; et le principal, `Network Contributor` sur son groupe, pourrait y créer une ressource
+réseau payante (une IP publique, une passerelle) — seul un job de l'environnement `canary`, que seul `main` déploie, obtient son
 jeton (`tests/unit/test_workflows.py`).
 
 ## Les conteneurs durcis (V-34, SEC7)

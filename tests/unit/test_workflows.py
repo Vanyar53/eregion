@@ -705,3 +705,20 @@ def test_the_canarys_token_names_its_environment_which_no_other_job_enters():
     assert 'deployment-branch-policies" -f name=main -f type=branch' in section[put:]
     sets = [line for line in section.splitlines() if "gh secret set" in line]
     assert len(sets) == 3 and all("--env canary" in line for line in sets), sets
+
+
+def test_the_canarys_principal_is_network_contributor_on_its_group_alone():
+    """Network Contributor, not Contributor: Microsoft.Network/* and the group's read, never the
+    group deleted, a VM created or a role granted. Assigned by the principal's object id (Graph
+    may not have replicated a principal just created). Contributor on that same group is the
+    fallback, written after a 403 only (P04 review)."""
+    section = _canary_section()
+    joined = re.sub(r"\\\n\s*", "", section)
+    creates = [line for line in joined.splitlines() if line.startswith("az role assignment create")]
+    first = creates[0]
+    assert '--role "Network Contributor"' in first, first
+    assert '--assignee-object-id "$(az ad sp show --id "$APP" --query id -o tsv)"' in first, first
+    assert "--assignee-principal-type ServicePrincipal" in first and "--assignee " not in first, first
+    assert all(c.rstrip().endswith("--scope /subscriptions/$SUB/resourceGroups/rg-eregion-canary") for c in creates)
+    fallback = joined.index("# Seulement après un 403")
+    assert all(joined.index(c) > fallback for c in creates if '"Network Contributor"' not in c)

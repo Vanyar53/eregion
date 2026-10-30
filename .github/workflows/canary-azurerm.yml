@@ -14,7 +14,7 @@ name: canary-azurerm
 # FAILS — a canary that stays green while testing nothing is worse than none (third review,
 # T16). Jonathan's setup: docs/operations.md, « Le canari azurerm, sans secret ».
 #
-# Least privilege: the principal is Contributor on one group, rg-eregion-canary, created once by
+# Least privilege: the principal is Network Contributor on one group, rg-eregion-canary, created once by
 # Jonathan; the canary creates no group. Each run creates free resources only (VNet, NSG, NICs),
 # named with its run's suffix — the three lines of the matrix run side by side in that group —
 # and deletes them at the end, success or not; never the group.

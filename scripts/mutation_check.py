@@ -5654,6 +5654,9 @@ MUTANTS += [
      """    [ "${(P)id}" = "$OLD" ] && echo"""),
     ("M2112", "the canary's job outside its environment: its credential back on refs/heads/main, publish.yml's "
               "token takes its principal (P04)", CAN, "    environment: canary\n", ""),
+    ("M2113", "the canary's principal Contributor on its group: it may delete the group, create a VM (P04)",
+     "docs/operations.md", 'az role assignment create --role "Network Contributor" \\\n',
+     "az role assignment create --role Contributor \\\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
 

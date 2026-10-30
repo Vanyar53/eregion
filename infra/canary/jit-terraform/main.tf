@@ -8,7 +8,7 @@
 # Throwaway stack: own state, no VM, free resources only (VNet, NSG, NICs), destroyed by
 # run.sh, success or not. Least privilege (P-04): it creates NO resource group — it works in
 # one that exists, created once (rg-eregion-canary), where the canary's principal is
-# Contributor and nothing more. Every name carries the run's suffix: the three lines of the
+# Network Contributor and nothing more. Every name carries the run's suffix: the three lines of the
 # CI's matrix run side by side in that group.
 terraform {
   required_providers {

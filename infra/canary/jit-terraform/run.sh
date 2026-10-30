@@ -19,7 +19,7 @@ export ARM_SUBSCRIPTION_ID="${ARM_SUBSCRIPTION_ID:-${AZURE_SUBSCRIPTION_ID:-}}"
 RG="${CANARY_RESOURCE_GROUP:-rg-eregion-canary}"
 SUFFIX="${CANARY_SUFFIX:-$(date +%s)}"
 [[ "$SUFFIX" =~ ^[a-z0-9-]{1,40}$ ]] || { echo "CANARY_SUFFIX: 1 to 40 of a-z, 0-9, -"; exit 2; }
-# The principal may not register resource providers (Contributor on one group): the provider
+# The principal may not register resource providers (Network Contributor on one group): the provider
 # must not try. 3.x reads skip_provider_registration; 4.x and 5.x resource_provider_registrations.
 case "$CONSTRAINT" in
   *" 3."*|"3."*|*"=3."*) export ARM_SKIP_PROVIDER_REGISTRATION=true ;;

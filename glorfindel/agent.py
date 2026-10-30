@@ -2002,9 +2002,14 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
                              f"{verification.get('error', 'Azure unreadable')} — check it by hand")
     else:
         escalation_reason = state.get("escalation_reason", "")
+    # BL1: when Azure was read back — the end of the time to contain (analysis/containment.py),
+    # the debug line itself being written later (memory, notification).
+    from datetime import datetime, timezone
+    verified_at = datetime.now(timezone.utc).isoformat()
     return {
         **state,
-        "outcome": {**outcome, **verification, **({"unverified": True} if unverified else {})},
+        "outcome": {**outcome, **verification, **({"unverified": True} if unverified else {}),
+                    "verified_at": verified_at},
         "escalate": escalate,
         "escalation_reason": escalation_reason,
     }

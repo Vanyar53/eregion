@@ -36,7 +36,11 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
 
 ![Dagorlad's board on sample data: five wires drawn from the red cards to the enrolled targets, one refused by the production rule, one that will ask for the VM's name](docs/images/dagorlad/board.png)
 
-The whole tour, as a video, is not published yet. How to use the board (French): [`docs/dagorlad.md`](docs/dagorlad.md).
+The whole tour, on sample data (53 s):
+
+https://github.com/user-attachments/assets/95f55619-2a5f-4ea0-9c8c-fbac66f78abb
+
+How to use the board (French): [`docs/dagorlad.md`](docs/dagorlad.md).
 
 ## How it works
 

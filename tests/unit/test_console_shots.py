@@ -77,6 +77,15 @@ def test_the_files_of_the_repository_are_no_hosts():
     assert cs.identifiers(text) == []
 
 
+def test_a_github_attachment_is_no_identifier_but_its_guid_elsewhere_is():
+    """The tour's video is attached on GitHub, named by a GUID of GitHub's: only inside that URL is
+    the GUID allowed — the same GUID anywhere else (a tenant, a subscription) is still refused."""
+    guid = "95f55619-2a5f-4ea0-9c8c-fbac66f78abb"
+    assert cs.identifiers(f"the tour: https://github.com/user-attachments/assets/{guid}") == []
+    assert cs.identifiers(f"tenant {guid}") == [guid]
+    assert cs.identifiers(f"https://example.com/user-attachments/assets/{guid}") == [guid]
+
+
 def test_the_documentation_addresses_and_the_zero_guid_are_allowed():
     doc = _with(["runs", 0, "note"], "from 192.0.2.10, 198.51.100.7 and 203.0.113.250, "
                                      "subscription 00000000-0000-0000-0000-000000000000")

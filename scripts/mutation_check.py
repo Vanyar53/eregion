@@ -6278,7 +6278,7 @@ MUTANTS += [
     ("M2170", "the renderer takes any sample, not the shipped one (DOC1)", SHOTS,
      "        if Path(path).resolve() != SAMPLE.resolve():", "        if False:"),
     ("M2171", "a GUID other than the zero one passes in the sample (DOC1)", SHOTS,
-     "    found = [g for g in GUID.findall(text) if g != ZERO_SUBSCRIPTION]", "    found = []"),
+     "    found = [g for g in GUID.findall(ATTACHMENT.sub(\"\", text)) if g != ZERO_SUBSCRIPTION]", "    found = []"),
     ("M2172", "an address outside the documentation's ranges passes (DOC1)", SHOTS,
      "        if not any(ip in n for n in DOC_NETS):", "        if False:"),
     ("M2173", "a target's name outside the bench's public ones passes (DOC1)", SHOTS,
@@ -6339,9 +6339,13 @@ MUTANTS += [
 MUTANTS += [
     ("M2250", "the sample's console lets git run any command — fetch, ls-remote, -c (DOC1 review 2)", SHOTS,
      "        if len(argv) < 2 or argv[1] not in GIT_READS:", "        if False:"),
+    ("M2251", "a GitHub attachment's URL is not taken out: the GUID of any URL ending like it is allowed "
+              "(the tour's video, 30/10)", SHOTS,
+     'ATTACHMENT = re.compile(r"https://github\\.com/user-attachments/assets/[0-9a-fA-F-]{36}\\b")',
+     'ATTACHMENT = re.compile(r"https://[^/]+/user-attachments/assets/[0-9a-fA-F-]{36}\\b")'),
 ]
 TESTS.update({mid: "tests/unit/test_console_shots.py"
-              for mid in ("M2250", "M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
+              for mid in ("M2251", "M2250", "M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

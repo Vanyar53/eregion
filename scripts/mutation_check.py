@@ -6095,6 +6095,37 @@ TESTS["M2125"] = " ".join(f"{_RT}{t}" for t in (
 TESTS.update({"M2123": f"{_RT}a_state_refused_on_one_vm_does_not_stop_the_pass",
               "M2124": f"{_RT}a_state_refused_on_a_block_is_printed_by_the_watch"})
 
+# DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
+# (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
+# environment and its connections, the video kept outside the repository.
+SHOTS = "scripts/console_shots.py"
+MUTANTS += [
+    ("M2170", "the renderer takes any sample, not the shipped one (DOC1)", SHOTS,
+     "        if Path(path).resolve() != SAMPLE.resolve():", "        if False:"),
+    ("M2171", "a GUID other than the zero one passes in the sample (DOC1)", SHOTS,
+     "    found = [g for g in GUID.findall(text) if g != ZERO_SUBSCRIPTION]", "    found = []"),
+    ("M2172", "an address outside the documentation's ranges passes (DOC1)", SHOTS,
+     "        if not any(ip in n for n in DOC_NETS):", "        if False:"),
+    ("M2173", "a target's name outside the bench's public ones passes (DOC1)", SHOTS,
+     "    bad = [n for n in names if not (isinstance(n, str) and BENCH_NAME.fullmatch(n))]", "    bad = []"),
+    ("M2174", "the sample's console starts with an Azure variable in its environment (DOC1)", SHOTS,
+     "    if azure:\n        return f\"an Azure variable", "    if False:\n        return f\"an Azure variable"),
+    ("M2175", "the sample's console starts with another HOME, marked or not (DOC1)", SHOTS,
+     "        if Path(d).resolve() != want.resolve():", "        if False:"),
+    ("M2176", "a socket of the sample's console connects off the loopback (DOC1)", SHOTS,
+     "        if not _local(address):\n            raise PermissionError(f\"console_shots: no connection off the loopback ({address[0]})\")\n"
+     "        return real_connect(self, address)",
+     "        return real_connect(self, address)"),
+    ("M2177", "the sample's console started without its loopback guard (DOC1)", SHOTS,
+     "    loopback_only()\n    sys.path.insert(0, str(REPO))", "    sys.path.insert(0, str(REPO))"),
+    ("M2178", "the sample's console inherits the operator's environment (DOC1)", SHOTS,
+     '    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work / "home"),',
+     '    return {**os.environ, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work / "home"),'),
+    ("M2179", "the whole tour written inside the repository (DOC1)", SHOTS,
+     "    if args.video and _inside_repo(args.video):", "    if False:"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console_shots.py" for n in range(2170, 2180)})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

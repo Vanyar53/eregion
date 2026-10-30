@@ -112,7 +112,7 @@ COMPONENTS: dict[str, Component] = {
 TOGETHER = (
     "test_activity_logs.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
-    "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_dagorlad_request.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
+    "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_shots.py", "test_console_dagorlad_request.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
     "test_coverage.py",
     "test_restore_moment.py",
     "test_signal_origin.py",

@@ -1,0 +1,10 @@
+{
+  "rendered_by": "scripts/console_shots.py",
+  "sample": "tests/fixtures/dagorlad_sample.json",
+  "sample_sha256": "928c31316241222839d98f2839a87a5ffd920804f66c97a820b9e92e02e07f54",
+  "images": {
+    "board.png": "78a3985f999f4e99a73c6f61b8dc7f3240f9a42f372f425dc0a5f97e8469104a",
+    "loop.webp": "9e89333d21a78fbb15cf03b18da8e51fd574321d392af22d236b9acf5851fb6a",
+    "runs.png": "0e6dc9cf7a2c8e03d18c215bc0066352d3518f6406de945f5b11f7937d5a9094"
+  }
+}

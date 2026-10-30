@@ -7,10 +7,14 @@ Nothing is invented: what cannot be measured is ``None``, and the page says why.
 
 Definitions decided by Jonathan on 27/10 (docs/design/console.md, §3):
 - time to contain: the median time to detect and to decide, over the detected attacks of the
-  last 30 days; to contain, only over what was contained alone (nothing, in human-only);
-- contained alone: the real share (executed and verified), and the shadow one — the detected
-  attacks on which Glorfindel recommended to isolate or to block at or above the confidence
-  gate, and that no verdict says was wrong;
+  last 30 days; to contain, only over what was contained alone (nothing, in human-only) — from
+  the attack to the read-back on Azure (BL1: ``outcome.verified_at``, else the cycle's line);
+- contained alone: the real share (executed in the cycle, verified, and held — the definition of
+  analysis/containment.py, BL1), and the shadow one — the detected attacks on which Glorfindel
+  recommended to isolate or to block at or above the confidence gate, and that no verdict says
+  was wrong; beside them, every attack run of the period (missed ones included: the campaign's
+  denominator, BL1) and the faults taken for an attack (a decision to isolate or to block on a
+  fault's target during it);
 - disruptive actions judged wrong: over 30 days, the 7 days aside (``glorfindel report``);
 - coverage: the techniques detected by a run in 30 days, over the implemented ones and over the
   whole catalog; the faults aside;
@@ -67,7 +71,12 @@ def read_runs(reports: dict[str, Path], since: float) -> list[dict]:
         runs.append({"run_id": str(r.get("run_id") or run_id), "kind": "fault" if fault else "technique",
                      "ttp": str(r.get("mitre") or ""), "at": at, "result": r.get("result", ""),
                      "detection": m.get("detection") or "unknown",
-                     "latency": float(latency) if _ts(latency) is not None and latency >= 0 else None})
+                     "latency": float(latency) if _ts(latency) is not None and latency >= 0 else None,
+                     # A fault's targets and end (BL1: a decision on them during it was one taken
+                     # for an attack); without Glorfindel, its reaction was not measured.
+                     **({"fault": str(m.get("fault") or ""), "end": m.get("fault_end"),
+                         "targets": [str(x) for x in m.get("targets") or [] if x],
+                         "without_glorfindel": m.get("without_glorfindel") is True} if fault else {})})
     return runs
 
 
@@ -88,15 +97,19 @@ def _median(values: list[float]) -> float | None:
 
 
 def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: list[dict],
-            wrong_30: dict, wrong_7: dict, threshold: float, now: float) -> dict:
+            wrong_30: dict, wrong_7: dict, threshold: float, now: float,
+            all_cards: list[dict] | None = None) -> dict:
     """The five indicators, from what ``read_runs`` and the watch's files give (the API reads
-    them). ``wrong_*``: ``glorfindel.escalations.observation_report``'s ``disruptive``."""
+    them). ``wrong_*``: ``glorfindel.escalations.observation_report``'s ``disruptive``.
+    ``all_cards``: every card of the host — an isolation that did not hold is one (BL1)."""
+    from analysis import containment
     attacks = [r for r in runs if r["kind"] == "technique"]
     detected = [r for r in attacks if r["detection"] == "detected"]
     judged_wrong = {c.get("exercise_run") for c in cards if c.get("verdict") == "wrong"}
     detect, decide, contain = [], [], []
     alone = shadow = 0
     proofs = []
+    taken: set[str] = set()
     for r in detected:
         if r["latency"] is not None:
             detect.append(r["latency"])
@@ -108,10 +121,15 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
         if decided_at is not None and decided_at >= r["at"]:
             decide.append(decided_at - r["at"])
         disruptive = d.get("action") in DISRUPTIVE
-        if disruptive and d.get("executed") is True and d.get("verified") is True:
+        # BL1: one definition with the campaign report's (analysis/containment.py) — executed in
+        # the cycle, read back on Azure, held; the time ends at the read-back.
+        inc = containment.incident(r["run_id"], r["ttp"], d.get("resource_id", ""), r["at"],
+                                   "detected", d, cards=all_cards or ())
+        if inc.outcome == containment.CONTAINED:
             alone += 1
-            if decided_at is not None and decided_at >= r["at"]:
-                contain.append(decided_at - r["at"])
+            if inc.time_to_contain_s is not None:
+                contain.append(inc.time_to_contain_s)
+        taken.add(d.get("signal_id") or "")
         conf = d.get("confidence")
         if (disruptive and isinstance(conf, (int, float)) and conf >= threshold
                 and r["run_id"] not in judged_wrong):
@@ -121,6 +139,10 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     implemented = {e["id"] for e in techniques if e.get("status") == "implemented"}
     covered = {r["ttp"] for r in detected}
     faults = [r for r in runs if r["kind"] == "fault"]
+    checked = [containment.fault_run(f["run_id"], f.get("fault", ""), f.get("targets") or [], f["at"],
+                                     f.get("end"), cycles, taken=taken - {""},
+                                     without_glorfindel=f.get("without_glorfindel") is True)
+               for f in faults]
 
     last = max(proofs, key=lambda r: r["at"]) if proofs else None
     proven_at = {}
@@ -138,7 +160,11 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
                     "contain_s": _median(contain), "detected": len(detected),
                     "decided": len(decide), "contained": len(contain)},
         "alone": {"contained": alone, "shadow": shadow, "of": len(detected),
-                  "threshold": threshold if threshold != float("inf") else None},
+                  "threshold": threshold if threshold != float("inf") else None,
+                  "attacks": len(attacks),
+                  "faults_mistaken": sum(1 for f in checked if f.mistaken),
+                  "disruptive_on_faults": sum(f.executed for f in checked),
+                  "faults_unchecked": sum(1 for f in checked if f.why)},
         "wrong": {"days_30": rate(wrong_30), "days_7": rate(wrong_7)},
         "coverage": {"implemented": len(implemented), "implemented_detected": len(implemented & covered),
                      "catalog": len(techniques),

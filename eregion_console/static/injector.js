@@ -266,12 +266,40 @@ function renderCampaignDetail(c) {
   return `<div class="detail">
     <div class="dsec s-blue"><div class="dtitle">GLORFINDEL'S DECISION ON EACH RUN (read from the files, as the campaign report reads them)</div>
       <table class="t"><tr><th>#</th><th>ttp</th><th>target</th><th>decision</th><th>reasoning (excerpt)</th></tr>${rows}</table></div>
+    ${renderContainment(d.containment)}
     ${(d.skipped || []).length ? `<div class="dsec" style="border-color:var(--yellow)"><div class="dtitle">LEFT OUT OF THE FACTS (and of the report)</div>
       ${(d.skipped || []).map(s => `<div style="color:var(--yellow)">${esc(s)}</div>`).join('')}</div>` : ''}
     <div class="dsec s-purple"><div class="dtitle">REPORT</div>${d.report_md
       ? `<button class="mini" data-report="${esc(c.dir)}">${showing ? 'hide' : 'show'} report.md</button>${showing ? `<pre class="report">${esc(d.report_md)}</pre>` : ''}`
       : '<span style="color:var(--dim)">not written (yet) — on H0 it waits for the decisions, up to ~25 min after the end</span>'}</div>
   </div>`;
+}
+
+// BL1: the time to contain and the share contained alone of a campaign (analysis/containment.py),
+// computed from the same files as its facts.
+function secs(s) {
+  if (s == null) return '—';
+  if (s < 60) return `${Number(s).toFixed(1)} s`;
+  const m = Math.floor(Math.round(s) / 60), r = Math.round(s) % 60;
+  return `${m} min ${String(r).padStart(2, '0')} s`;
+}
+
+function renderContainment(c) {
+  if (!c) return '';
+  if (c.error) return `<div class="dsec" style="border-color:var(--yellow)"><div class="dtitle">RESPONSE</div><span style="color:var(--yellow)">${esc(c.error)}</span></div>`;
+  const s = c.summary || {};
+  const share = s.incidents ? `${s.lower_bound ? 'at least ' : ''}${esc(s.contained)} of ${esc(s.incidents)}` : 'no incident';
+  const rows = (c.incidents || []).map(i => `<tr><td>${esc(i.run_id)}</td><td>${esc(i.ttp)}</td>
+    <td title="${esc(i.target || '')}">${esc(vmName(i.target) || '—')}</td>
+    <td class="wrap" style="color:${i.outcome === 'contained_alone' ? 'var(--green)' : 'var(--dim)'}">${esc(i.label)}</td>
+    <td>${i.action ? esc(i.action) + ' ' + pct(i.confidence) : '—'}</td><td>${esc(secs(i.time_to_contain_s))}</td></tr>`).join('');
+  const faults = (c.faults || []).map(f => `<div style="color:${f.mistaken && f.mistaken.length ? 'var(--red)' : 'var(--dim)'}">fault ${esc(f.run_id)} (${esc(f.fault || '—')}) — ${f.why
+    ? 'not checked: ' + esc(f.why)
+    : (f.mistaken && f.mistaken.length ? 'taken for an attack: ' + f.mistaken.map(m => esc(m.action) + (m.executed ? ' (executed)' : ' (recommended)')).join(', ') : 'no decision to isolate or to block during it')}</div>`).join('');
+  return `<div class="dsec s-blue"><div class="dtitle">RESPONSE — contained alone ${share} · time to contain ${s.median_s != null ? esc(secs(s.median_s)) + ' (median)' : '— nothing contained alone'} (computed from the files, BL1)</div>
+    ${rows ? `<table class="t"><tr><th>run</th><th>ttp</th><th>target</th><th>outcome</th><th>action</th><th>to contain</th></tr>${rows}</table>` : ''}
+    ${faults || '<div style="color:var(--dim)">no fault in this campaign</div>'}
+    ${(c.notes || []).map(n => `<div style="color:var(--yellow)">${esc(n)}</div>`).join('')}</div>`;
 }
 
 // ── Catalogue: this injector's techniques or faults ───────────────────────────────────

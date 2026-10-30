@@ -2109,6 +2109,9 @@ def _slim_cycle(rec: dict) -> dict | None:
         "status": outcome.get("status", ""), "executed": outcome.get("executed"),
         "verified": outcome.get("verified"), "mode": rec.get("resolved_autonomy_mode", ""),
         "cycle_error": bool(rec.get("cycle_error")),
+        # BL1: what the time to contain and the share contained alone read (analysis/containment.py).
+        "signal_id": sig.get("signal_id", ""), "escalation_type": outcome.get("escalation_type", ""),
+        "unverified": bool(outcome.get("unverified")), "verified_at": outcome.get("verified_at", ""),
     }
 
 
@@ -2330,18 +2333,27 @@ async def campaign(cid: str) -> dict:
     if not (cdir / "manifest.json").is_file():
         return {"error": f"unknown campaign: {cid}"}
     from dataclasses import asdict
+    from analysis import containment
     from analysis.campaign_report import collect_facts
+    from glorfindel import escalations as esc_module
     skipped: list[str] = []
     try:
         facts = await asyncio.to_thread(collect_facts, cdir, _RUNS, skipped.append)
     except Exception as exc:
         return {"error": f"campaign unreadable: {exc}"}
+    # BL1: the time to contain and the share contained alone of this campaign, from the same
+    # files, and the cards of this host (an isolation that did not hold) — said, never raised.
+    try:
+        contained = (await asyncio.to_thread(
+            containment.load, cdir, _RUNS, cards=esc_module.all_escalations())).as_dict()
+    except Exception as exc:
+        contained = {"error": f"response not computed: {type(exc).__name__}: {str(exc)[:160]}"}
     try:
         report = (cdir / "report.md").read_text(encoding="utf-8")
     except OSError:
         report = ""
     return {"campaign_id": cid, "facts": [asdict(f) for f in facts], "skipped": skipped,
-            "report_md": report}
+            "report_md": report, "containment": contained}
 
 
 def _published_heartbeat() -> dict:
@@ -2380,11 +2392,13 @@ async def indicators() -> dict:
     def gather() -> dict:
         runs = ind.read_runs(_run_reports(), since.timestamp())
         cycles = _watch_cycles(since.timestamp())
-        cards = [e for e in esc_module.all_escalations() if e.get("exercise_run")]
+        every = esc_module.all_escalations()
+        cards = [e for e in every if e.get("exercise_run")]
         r30 = esc_module.observation_report(since=since)
         r7 = esc_module.observation_report(since=now - timedelta(days=7))
         return ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
-                           r7.get("disruptive") or {}, confidence_threshold(), _time.time())
+                           r7.get("disruptive") or {}, confidence_threshold(), _time.time(),
+                           all_cards=every)
     return await asyncio.to_thread(gather)
 
 

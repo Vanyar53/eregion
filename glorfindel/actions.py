@@ -56,6 +56,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.providers.azure.release",
     "glorfindel.providers.azure.verify",
     "glorfindel.providers.azure.blocks",
+    "glorfindel.providers.azure.verify_block",
     "glorfindel.providers.azure.unblock",
     "glorfindel.providers.azure.perimeter",
     "glorfindel.providers.azure.backup",

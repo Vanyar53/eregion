@@ -1,13 +1,15 @@
-// Dagorlad (docs/design/console.md, §7, phase a): the red cards (the catalogue's techniques and
-// faults), the blue ones (Glorfindel, the enrolled targets), and the plan of the wires drawn
-// between them. Read only: the page sends two identifiers per wire, the server judges each one as
-// Orodruin would (GET /api/dagorlad/plan) and says what to expect; nothing is launched, nothing
-// is written, Glorfindel is never told. Needs console.js and exercises.js.
+// Dagorlad (docs/design/console.md, §7, phases a and b): the red cards (the catalogue's techniques
+// and faults), the blue ones (Glorfindel, the enrolled targets), and the plan of the wires drawn
+// between them. The page sends two identifiers per wire, the server judges each one as Orodruin
+// would (GET /api/dagorlad/plan) and says what to expect. « Request run » writes a request for
+// Orodruin (POST /api/dagorlad/requests, the same two identifiers per wire), and the page shows the
+// command that carries it there: nothing is launched from here, no name is typed here, Glorfindel
+// is never told. Needs console.js and exercises.js.
 Console.init('dagorlad');
 document.title = 'Eregion — Dagorlad';
 const $ = id => document.getElementById(id);
 $('page-title').innerHTML = '<b>DAGORLAD</b> <span>— attacks and faults drawn against Glorfindel. ' +
-  'Plan only: this page launches nothing, and Glorfindel is never told · times UTC</span>';
+  'This page launches nothing: a request goes to Orodruin by a command you run, and Glorfindel is never told · times UTC</span>';
 
 // ── State ─────────────────────────────────────────────────────────────────────────────
 const S = {
@@ -16,6 +18,8 @@ const S = {
   wires: [],        // [experiment id, target resource id], in the order drawn — this browser only
   picked: null,     // the red card picked (its index), waiting for a target
   drag: null,       // {i, x, y}: a red card's handle being dragged
+  request: null,    // the request written (phase b): the wires stay as they are until « New plan »
+  requestErr: '',
 };
 const KEY = 'console.dagorlad.wires';
 const MAX_WIRES = 100;
@@ -28,7 +32,8 @@ function save() {
 // target) — the page says so. A wire is removed by its own ✕, on its pill or its plan line.
 function addWire(experiment, target, name) {
   S.note = '';
-  if (S.wires.some(w => w[0] === experiment && same(w[1], target))) S.note = `already drawn: ${experiment} → ${name}`;
+  if (S.request) S.note = `locked: request ${S.request.request} — « New plan » to draw again`;
+  else if (S.wires.some(w => w[0] === experiment && same(w[1], target))) S.note = `already drawn: ${experiment} → ${name}`;
   else if (S.wires.length >= MAX_WIRES) S.note = `at most ${MAX_WIRES} wires`;
   else { S.wires.push([experiment, target]); save(); }
   refreshPlan();
@@ -65,12 +70,18 @@ const ACTIONS = {
     if (t && r) addWire(r.id, t.resource_id, t.name); else drawWires();
   },
   unwire(k) {
-    if (k < 0 || k >= S.wires.length) return;
+    if (S.request || k < 0 || k >= S.wires.length) return;
     S.wires.splice(k, 1);
     S.note = '';
     save(); refreshPlan();
   },
-  clear() { S.wires = []; S.picked = null; S.note = ''; save(); refreshPlan(); },
+  clear() {
+    if (S.request) return;
+    S.wires = []; S.picked = null; S.note = ''; save(); refreshPlan();
+  },
+  // Phase (b): the request, written by the console in its own directory — never a launch.
+  request() { if (!S.request) sendRequest(); },
+  newPlan() { S.request = null; S.requestErr = ''; renderPlan(); },
 };
 const _EVENTS = { click: 'click', pointerdown: 'pointerdown', pointerup: 'pointerup' };
 function _dispatch(ev, name) {
@@ -248,7 +259,7 @@ function planRow(v) {
     <td style="white-space:nowrap"><span class="rid">${esc(v.experiment)}</span> → ${esc(v.target_name)}${v.zone ? ` <span class="meta">${esc(v.zone)}</span>` : ''}</td>
     <td><span class="chip ${esc(st[0])}">${esc(st[1])}</span></td>
     <td class="wrap">${what}${warns}</td>
-    <td>${k >= 0 ? `<button type="button" class="mini" ${_on('click', 'unwire', k)} title="Remove this wire">✕</button>` : ''}</td></tr>`;
+    <td>${k >= 0 && !S.request ? `<button type="button" class="mini" ${_on('click', 'unwire', k)} title="Remove this wire">✕</button>` : ''}</td></tr>`;
 }
 function renderPlan() {
   const box = $('plan');
@@ -267,13 +278,50 @@ function renderPlan() {
     const [cls, mark] = c.ok === true ? ['r-ok', '✓'] : c.ok === false ? ['r-bad', '✕'] : ['r-warn', '?'];
     return `<span class="${cls}">${mark} ${esc(c.text)}</span>`;
   }).join('');
+  const may = Number(t.allowed) > 0 && Number(t.refused) === 0;
+  const ask = S.request ? '' : `<button type="button" class="mini" ${_on('click', 'request')}${may ? '' : ' disabled'}
+      title="${may ? 'Write a request for Orodruin — the page gives the command that carries it' : 'Remove the refused wires first'}">Request run from Orodruin</button>`;
   box.innerHTML = `<div class="plan-head"><b>PLAN</b>
       <span>${Number(t.wires)} wire(s) · ${Number(t.refused)} refused · ~${Math.round(Number(t.estimate_s) / 60)} min · one after the other</span>
-      <span class="meta">what Orodruin will check before anything runs — phase (a): nothing is launched</span>
-      <button type="button" class="mini" ${_on('click', 'clear')}>Clear wires</button>
+      <span class="meta">what Orodruin will check before anything runs — the page launches nothing</span>
+      ${ask}
+      ${S.request ? '' : `<button type="button" class="mini" ${_on('click', 'clear')}>Clear wires</button>`}
       ${S.note ? `<span class="r-warn">${esc(S.note)}</span>` : ''}</div>
+    ${requestBox()}
     <div class="checks">${checks}</div>
     <table class="t">${(p.wires || []).map(planRow).join('')}</table>`;
+}
+
+// ── The request (phase b): the command that carries it, what it will ask there ─────────
+function requestBox() {
+  if (S.requestErr) return `<div class="err">${esc(S.requestErr)}</div>`;
+  const q = S.request;
+  if (!q) return '';
+  const typed = (q.wires || []).filter(w => w.typed_name);
+  const rows = (q.wires || []).map(w => `<tr><td class="ord">#${Number(w.rank)}</td>
+      <td style="white-space:nowrap"><span class="rid">${esc(w.experiment)}</span> → ${esc(w.target_name)}</td>
+      <td class="wrap">${w.typed_name ? '<span class="r-warn">its target\'s name is typed in the command</span>' : ''}</td></tr>`).join('');
+  return `<div class="request">
+      <div><b>REQUEST</b> <span class="rid">${esc(q.request)}</span> <span class="meta">written ${esc(q.at)} · the wires are locked</span>
+        <button type="button" class="mini" ${_on('click', 'newPlan')}>New plan</button></div>
+      <div>On your machine, run: <code>${esc(q.command)}</code></div>
+      <div class="meta">It pulls the request from this host, shows it wire by wire${typed.length ? `, asks you to type the name of ${Number(typed.length)} target(s)` : ''},
+        then carries it to Orodruin, which judges it again and runs the wires one after the other. This page never asks for a name.</div>
+      <table class="t">${rows}</table></div>`;
+}
+async function sendRequest() {
+  S.requestErr = '';
+  const body = { wires: S.wires.map(w => ({ experiment: w[0], target: w[1] })) };
+  try {
+    const r = await fetch('/api/dagorlad/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                     body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+    S.request = d;
+  } catch (e) {
+    S.requestErr = `/api/dagorlad/requests — ${e.message}`;
+  }
+  renderPlan();
 }
 
 // ── Fetching ──────────────────────────────────────────────────────────────────────────

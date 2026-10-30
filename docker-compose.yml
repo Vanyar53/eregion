@@ -200,7 +200,8 @@ services:
     restart: unless-stopped
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Elle
     # n'écrit que dans ses montages (runs/, ~/.glorfindel, ~/.cache/chroma, la config : réécrite sur
-    # place sous verrou, glorfindel/config.py) et /tmp ; la CLI qu'elle lance aussi.
+    # place sous verrou, glorfindel/config.py ; ~/.eregion/console, ses demandes, DG-b) et /tmp ;
+    # la CLI qu'elle lance aussi.
     read_only: true
     tmpfs:
       - /tmp
@@ -226,6 +227,11 @@ services:
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       # Optional: mount glorfindel-config.yaml if it exists
       - ${EREGION_CONFIG:-./glorfindel-config.yaml}:/app/glorfindel-config.yaml
+      # DG-b : le répertoire propre de la console — les demandes pour Orodruin (requests/), qu'elle
+      # seule écrit. Aucun autre service ne le monte, ni ~/.eregion entier : une demande porte le
+      # plan rouge, que la décision ne lit jamais (docs/design/console.md, §7, « Glorfindel reste
+      # aveugle » ; tests/unit/test_profiles.py).
+      - ${HOME}/.eregion/console:/root/.eregion/console
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     depends_on:
       - watch

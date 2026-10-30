@@ -185,7 +185,7 @@ def _minutes(seconds: int | None) -> str:
 def plan_view(wires: list[tuple[str, str]], *, catalog: dict[str, Experiment], vms: list[dict],
               state: dict, rules: list[dict], watch_refusal: str, bench: str,
               fault_targets: dict[str, list[str] | None], threshold: float | None,
-              targets_error: str = "") -> dict:
+              targets_error: str = "", orodruin: dict | None = None) -> dict:
     """The plan of the wires drawn: each one judged as Orodruin would judge it now (the shared
     core), with what only Glorfindel's side knows and what to expect; then what the phase (b)
     will check before anything runs. Nothing is launched, nothing is written."""
@@ -212,7 +212,7 @@ def plan_view(wires: list[tuple[str, str]], *, catalog: dict[str, Experiment], v
         {"ok": not targets_error, "text": "targets enrolled, zone read per wire"
          + (f" — {targets_error}" if targets_error else "")},
         {"ok": True, "text": "the catalogue decides what is destructive"},
-        {"ok": None, "text": "Orodruin's contract: unknown here — it checks it before anything runs"},
+        orodruin_check(orodruin),
     ]
     return {"wires": out, "checks": checks, "phase": "a",
             "total": {"wires": len(out), "allowed": len(allowed),
@@ -232,3 +232,31 @@ def _side_warnings(v: Verdict, e: Experiment, card: dict | None, rules: list[dic
     if e.kind == "technique" and not rules_for(e.id, rules, card.get("backend") or None):
         v.warnings.append({"code": "no_rule", "text": "no enabled rule of this technique on the target's "
                            "backend: Glorfindel is blind to it, the run should end missed"})
+
+
+def orodruin_check(contract: dict | None) -> dict:
+    """Orodruin's contract as it last published it — or unknown here: it checks it again before
+    anything runs, whatever this says."""
+    if not contract:
+        return {"ok": None, "text": "Orodruin: unknown here — it checks its contract before anything runs"}
+    codes = ", ".join(contract.get("codes") or [])
+    if contract.get("verdict") == "armed":
+        return {"ok": True, "text": f"Orodruin: armed at {contract.get('at')} — checked again before anything runs"}
+    return {"ok": False, "text": f"Orodruin: passive at {contract.get('at')}"
+            + (f" ({codes})" if codes else "") + " — a request would be refused"}
+
+
+def request_view(req, judged: list[dict], plan: dict) -> dict:
+    """What the page shows once a request is written: its id, the command that carries it to
+    Orodruin, each wire and whether its target's name will be typed there — never here."""
+    by_rank = {i: v for i, v in enumerate(judged, 1)}
+    return {
+        "request": req.id, "at": req.at,
+        "command": f"make orodruin-exercise REQUEST={req.id}",
+        "wires": [{"rank": w.rank, "experiment": w.experiment, "target": w.target,
+                   "target_name": by_rank[w.rank].get("target_name") or w.target_name,
+                   "typed_name": any(x.get("code") == "typed_name"
+                                     for x in by_rank[w.rank].get("warnings") or [])}
+                  for w in req.wires],
+        "checks": plan.get("checks") or [],
+    }

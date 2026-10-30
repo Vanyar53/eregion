@@ -80,8 +80,13 @@ class RunOutcome:
 
 class Engine:
     def __init__(self, dry_run: bool = False, skip_preflight: bool = False,
-                 publish_report: bool = False, without_glorfindel: bool = False):
+                 publish_report: bool = False, without_glorfindel: bool = False,
+                 request: str = "", typed_name: str = ""):
         self.dry_run = dry_run
+        # DG-b: a wire of a Dagorlad request — its id goes to the window, the journal and the
+        # report; a destructive technique then runs only on the target whose name was typed.
+        self.request = request
+        self.typed_name = typed_name
         self.skip_preflight = skip_preflight
         # V1 (#214): a development run, without a live Glorfindel watch — its report says so
         # and its detection is not measured (eregion_core/watch_gate.py).
@@ -95,6 +100,11 @@ class Engine:
 
     def run(self, scenario_path: str, skip_confirm: bool = False):
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        if self.request:
+            # DG-b: two wires of a request may start within a second (one refused at once): each
+            # run keeps its own window and report, which link it to its wire.
+            import secrets
+            run_id += f"-{secrets.token_hex(2)}"
         self._detection_result = "unknown"
         self._detection_latency_s = None
 
@@ -152,7 +162,7 @@ class Engine:
 
         # Orodruin (eregion_core/orodruin.py): the contract before the target is even read.
         # Passive → the run touches nothing and says why.
-        verdict, session = arm(run_id, "annatar")
+        verdict, session = arm(run_id, "annatar", request=self.request)
         if session is None:
             console.print(f"[red]Orodruin passive — nothing touched:[/red] {verdict.reasons()}")
             return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}", refused=True)
@@ -198,6 +208,15 @@ class Engine:
             console.print(f"[red]Safety check failed:[/red] {NO_WITHOUT_IN_PRODUCTION}")
             return RunOutcome(run_id, "unknown", error=f"safety: {NO_WITHOUT_IN_PRODUCTION}",
                               refused=True)
+        if self.request and destructive:
+            # DG-b: the operator typed the target's name on their machine; compared here to the
+            # name Azure gives the VM — a request forged on H0 never runs a destructive technique.
+            name = executor.get_vm_name()
+            if self.typed_name != name:
+                why = (f"the name typed ({self.typed_name or 'none'}) is not the target's "
+                       f"({name}): a destructive wire runs only on the VM typed")
+                console.print(f"[red]Safety check failed:[/red] {why}")
+                return RunOutcome(run_id, "unknown", error=f"safety: {why}", refused=True)
         if guard.legacy:
             console.print(
                 "[yellow]Target enrolled by the old 'annatar-test' tag (migration) — "
@@ -222,7 +241,8 @@ class Engine:
         # `exercise` (eregion_core/exercise.py).
         open_window(run_id, injector="annatar", kind="technique",
                     experiment=f"{scenario.mitre} {scenario.name}",
-                    targets=[executor.resource_id], destructive=destructive)
+                    targets=[executor.resource_id], destructive=destructive,
+                    request=self.request)
         try:
             if scenario.engine == "atomic":
                 return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)
@@ -281,7 +301,8 @@ class Engine:
 
         metrics = watch_gate.without_metrics(self.without_glorfindel)
         # C1: the run format shared with Gothmog — an attack, by Annatar, of this technique.
-        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id))
+        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id,
+                                           request=self.request))
         checks = {}
 
         # Setup runs first — cleans residuals from previous attack before we check state. The
@@ -412,7 +433,8 @@ class Engine:
             "engine": "atomic",
             "engine_ref": scenario.engine_ref,
             "atomic_guid": resolved.guid,
-            **run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id),   # C1
+            **run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id,
+                                  request=self.request),   # C1
             **watch_gate.without_metrics(self.without_glorfindel),
         }
 

@@ -98,6 +98,24 @@ def find_fault(name_or_path: str) -> Path:
     raise FileNotFoundError(f"no fault {name_or_path!r} (a path, or a name in {EXPERIMENTS_DIR.name}/)")
 
 
+def declared_targets(directory: Path = EXPERIMENTS_DIR) -> dict[str, list[str]]:
+    """Each fault's VMs, as its experiment declares them (``targets.names``) — read from the
+    files, without Orodruin nor Azure: what Dagorlad judges ``no_engine`` by (DG-b). The run
+    still reads the experiment itself and refuses a mismatch (``_gate``)."""
+    out: dict[str, list[str]] = {}
+    for path in sorted(Path(directory).glob("*.yaml")):
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(doc, dict) or doc.get("kind") != "fault":
+            continue
+        names = (doc.get("targets") or {}).get("names")
+        if isinstance(names, list):
+            out[str(doc.get("id") or path.stem)] = [str(n) for n in names]
+    return out
+
+
 def load_fault(name_or_path: str) -> dict:
     doc = yaml.safe_load(find_fault(name_or_path).read_text(encoding="utf-8"))
     errors = fault_errors(doc)
@@ -132,6 +150,7 @@ class Engine:
         self.abort_margin_s = abort_margin_s
         self.restore_timeout_s = restore_timeout_s
         self._without: dict = {}   # what a run --without-glorfindel adds to its report (V1)
+        self._request = ""         # the Dagorlad request a run is a wire of (DG-b)
 
     # ── 1–3: everything before the fault, nothing written ─────────────────────────────
 
@@ -220,10 +239,19 @@ class Engine:
     # ── The run ───────────────────────────────────────────────────────────────────────
 
     def run(self, name_or_path: str, *, skip_confirm: bool = False,
-            without_glorfindel: bool = False) -> RunOutcome:
+            without_glorfindel: bool = False, request: str = "", target: str = "") -> RunOutcome:
+        """``request`` and ``target``: a wire of a Dagorlad request (DG-b) — the target must be
+        one the fault declares, the request's id goes to the window, the journal and the report."""
         fault = load_fault(name_or_path)
         start = self._now()
         run_id = "gothmog-" + start.strftime("%Y%m%dT%H%M%SZ")
+        self._request = request
+        if target and target.rstrip("/").rsplit("/", 1)[-1].lower() not in {
+                n.lower() for n in fault["targets"]["names"]}:
+            why = (f"no_engine: {fault.get('id')} aims at {', '.join(fault['targets']['names'])}, "
+                   f"not {target.rstrip('/').rsplit('/', 1)[-1]}")
+            console.print(f"[red]Refused:[/red] {why}")
+            return RunOutcome(run_id, "REFUSED", error=why)
         console.rule(f"[bold red]Gothmog — {fault['name']}[/bold red]")
         console.print(f"  Engine  : {fault['engine']} / {fault['engine_ref']}")
         console.print(f"  Targets : {', '.join(fault['targets']['names'])}\n")
@@ -237,7 +265,7 @@ class Engine:
             return RunOutcome(run_id, "REFUSED", error="not confirmed")
 
         # 1. The contract before the target is even read.
-        verdict, session = arm(run_id, "gothmog")
+        verdict, session = arm(run_id, "gothmog", request=request)
         if session is None:
             console.print(f"[red]Orodruin passive — nothing touched:[/red] {verdict.reasons()}")
             return RunOutcome(run_id, "PASSIVE", error=verdict.reasons())
@@ -262,7 +290,8 @@ class Engine:
         # labelled ``exercise`` (eregion_core/exercise.py), on the hosted watch too.
         vms = seen["targets"]
         open_window(run_id, injector="gothmog", kind="fault",
-                    experiment=f"{fault.get('id') or fault['name']} {fault['name']}", targets=vms)
+                    experiment=f"{fault.get('id') or fault['name']} {fault['name']}", targets=vms,
+                    request=request)
         try:
             return self._inject(fault, run_id, bench, vms, seen, verdict, start)
         finally:
@@ -387,7 +416,8 @@ class Engine:
 
     def _record(self, fault, run_id, result, metrics, checks, error=None) -> RunOutcome:
         report = RunReport(scenario=fault["name"], run_id=run_id, mitre="", result=result,
-                           metrics={**run_report.identity("fault", "gothmog", fault.get("id")),  # C1
+                           metrics={**run_report.identity("fault", "gothmog", fault.get("id"),  # C1
+                                                          request=self._request),
                                     "fault": fault.get("id"),
                                     **self._without, **metrics},
                            thresholds={}, checks=checks)

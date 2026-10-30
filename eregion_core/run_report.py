@@ -66,16 +66,20 @@ class RunReport:
         return path
 
 
-def identity(kind: str, injector: str, experiment: str, resource_id: str = "") -> dict:
+def identity(kind: str, injector: str, experiment: str, resource_id: str = "",
+             request: str = "") -> dict:
     """What every run writes in its ``metrics`` so that a reader tells it apart without
     guessing: the format, an attack or a fault, who ran it, and what — and, for an attack,
-    on which VM (``resource_id``, left out when not given)."""
+    on which VM (``resource_id``, left out when not given); for a wire of a Dagorlad request,
+    the request's id (``request``, DG-b)."""
     if kind not in KINDS:
         raise ValueError(f"a run is a technique or a fault, not {kind!r}")
     out = {"run_format": RUN_FORMAT, "kind": kind, "injector": injector,
            "experiment_id": str(experiment or "")}
     if isinstance(resource_id, str) and resource_id:
         out["resource_id"] = resource_id
+    if isinstance(request, str) and request:
+        out["request"] = request
     return out
 
 
@@ -149,6 +153,7 @@ def read_run(report, run_id: str = "", campaign: str = "") -> dict | None:
         "campaign": campaign,
         "run_format": fmt if isinstance(fmt, int) and not isinstance(fmt, bool) else 0,
         "resource_id": m["resource_id"] if isinstance(m.get("resource_id"), str) else "",
+        "request": m["request"] if isinstance(m.get("request"), str) else "",
         # A fault whose start failed says so in its checks (Gothmog: ``fault_started`` FAIL):
         # nothing was injected — False; None when the report says nothing.
         "started": (checks.get("fault_started") == "PASS")

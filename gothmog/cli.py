@@ -38,11 +38,17 @@ _WITHOUT_HELP = ("Development run: no live Glorfindel watch required. The report
 @click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.option("--dry-run", is_flag=True, help="Show the declared fault; read and write nothing on Azure.")
 @click.option("--without-glorfindel", is_flag=True, help=_WITHOUT_HELP)
-def run(fault: str, yes: bool, dry_run: bool, without_glorfindel: bool):
+@click.option("--request", default="", help="A wire of a Dagorlad request (its id): written in the window.")
+@click.option("--target", default="", help="With --request: the VM of the wire, one the fault declares.")
+def run(fault: str, yes: bool, dry_run: bool, without_glorfindel: bool, request: str, target: str):
     """Run a fault (a path, or a name in gothmog/experiments/).
 
         gothmog run vm-shutdown --yes
     """
+    if request:
+        from eregion_core.exercise_request import valid_id
+        if not valid_id(request) or without_glorfindel:
+            raise click.UsageError("--request takes a request id (r-…), never with --without-glorfindel")
     from gothmog.runner.engine import Engine, load_fault
 
     if dry_run:
@@ -56,8 +62,26 @@ def run(fault: str, yes: bool, dry_run: bool, without_glorfindel: bool):
         for r in doc.get("revert") or []:
             console.print(f"  Revert  : {r['name']}")
         return
-    outcome = Engine().run(fault, skip_confirm=yes, without_glorfindel=without_glorfindel)
+    wire = {"request": request, "target": target} if request else {}
+    outcome = Engine().run(fault, skip_confirm=yes, without_glorfindel=without_glorfindel, **wire)
     raise SystemExit(0 if outcome.result == "PASS" else 1)
+
+
+@cli.command()
+@click.option("--json", "as_json", is_flag=True, help="As JSON: {fault id: [VM names]}.")
+def targets(as_json: bool):
+    """The VMs each declared fault's experiment aims at — read from gothmog/experiments/, without
+    Orodruin nor Azure (Dagorlad's no_engine)."""
+    import json
+
+    from gothmog.runner.engine import declared_targets
+
+    found = declared_targets()
+    if as_json:
+        click.echo(json.dumps(found))
+        return
+    for fid, names in found.items():
+        console.print(f"  {fid}: {', '.join(names)}")
 
 
 @cli.command()

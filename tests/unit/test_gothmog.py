@@ -182,13 +182,13 @@ class World:
 
 
 def _armed(max_injections=10, max_run_s=3600):
-    def fake(run_id, injector, verdict=None):
+    def fake(run_id, injector, verdict=None, request=""):
         v = orodruin.Verdict(orodruin.ARMED, cap={"max_injections": max_injections, "max_run_s": max_run_s})
-        return v, orodruin.Session(run_id, injector, max_injections)
+        return v, orodruin.Session(run_id, injector, max_injections, request=request)
     return fake
 
 
-def _passive(run_id, injector, verdict=None):
+def _passive(run_id, injector, verdict=None, request=""):
     return orodruin.Verdict(orodruin.PASSIVE, [orodruin._miss("network_open", "1.1.1.1:443 reachable")]), None
 
 
@@ -712,3 +712,54 @@ def test_a_fault_run_writes_the_unified_run_format(bench, tmp_path):
     assert (m["run_format"], m["kind"], m["injector"], m["experiment_id"]) == (RUN_FORMAT, "fault", "gothmog", "vm-shutdown")
     run = read_run(saved)
     assert run["kind"] == "fault" and run["experiment"] == "vm-shutdown" and run["result"] == "PASS"
+
+
+# ── DG-b: a wire of a Dagorlad request; the VMs each experiment aims at, read without Orodruin ──
+
+REQ = "r-20261030T080000Z-abcdef"
+
+
+def test_a_fault_from_a_request_writes_its_id_in_the_window_the_journal_and_the_report(bench, tmp_path):
+    clock, world, engine = bench
+    world()
+    out = engine().run("vm-shutdown", skip_confirm=True, request=REQ, target=VM)
+    assert out.result == "PASS", out.report["checks"]
+    assert _window(out.run_id)["request"] == REQ
+    assert {line["request"] for line in _audit()} == {REQ}
+    saved = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    assert saved["metrics"]["request"] == REQ and saved["metrics"]["experiment_id"] == "vm-shutdown"
+
+
+def test_a_wire_on_a_vm_the_fault_does_not_declare_is_refused_before_anything(bench, monkeypatch):
+    clock, world, engine = bench
+    w = world()
+
+    def no_arm(*a, **k):
+        raise AssertionError("armed for a VM the fault does not aim at")
+    monkeypatch.setattr(engine_mod, "arm", no_arm)
+    out = engine().run("vm-shutdown", skip_confirm=True, request=REQ, target=OTHER_VM)
+    assert out.result == "REFUSED" and out.error.startswith("no_engine:")
+    assert w.writes == [] and _audit() == [] and _no_window()
+
+
+def test_the_targets_of_each_fault_are_read_without_orodruin(monkeypatch):
+    from click.testing import CliRunner
+
+    from gothmog.cli import cli
+
+    def no_arm(*a, **k):
+        raise AssertionError("Orodruin armed to read declared targets")
+    monkeypatch.setattr(engine_mod, "arm", no_arm)
+    res = CliRunner().invoke(cli, ["targets", "--json"], catch_exceptions=False)
+    assert res.exit_code == 0
+    assert json.loads(res.output) == {"vm-shutdown": ["vm-celebrimbor-gondolin"]}
+    assert engine_mod.declared_targets() == {"vm-shutdown": ["vm-celebrimbor-gondolin"]}
+
+
+def test_a_request_id_is_checked_and_never_goes_without_glorfindel():
+    from click.testing import CliRunner
+
+    from gothmog.cli import cli
+    for args in (["--request", "../x"], ["--request", REQ, "--without-glorfindel"]):
+        res = CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes", *args])
+        assert res.exit_code != 0 and "--request takes a request id" in res.output

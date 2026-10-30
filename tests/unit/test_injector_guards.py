@@ -240,7 +240,7 @@ def test_an_engine_that_raised_resets_nothing_and_says_so(tmp_path):
 def test_a_passive_contract_is_a_refusal(tmp_path, monkeypatch):
     """Orodruin passive: nothing touched — RunOutcome.refused, so a campaign resets nothing."""
     import annatar.runner.engine as engine_module
-    monkeypatch.setattr(engine_module, "arm", lambda run_id, injector: (
+    monkeypatch.setattr(engine_module, "arm", lambda run_id, injector, request="": (
         orodruin.Verdict(orodruin.PASSIVE, [orodruin._miss("network_open", "1.1.1.1:443")]), None))
     executor = _executor()
     out = _run(tmp_path, monkeypatch, EXFIL, executor)

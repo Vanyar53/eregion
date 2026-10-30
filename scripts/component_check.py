@@ -91,7 +91,7 @@ COMPONENTS: dict[str, Component] = {
         absent_deps=GLORFINDEL_ONLY_DEPS,
         tests=(
             "test_annatar_atomic.py", "test_annatar_cli.py", "test_annatar_detection.py",
-            "test_annatar_run_exit.py", "test_campaign_channel.py", "test_campaign_declared.py",
+            "test_annatar_run_exit.py", "test_annatar_wire.py", "test_campaign_channel.py", "test_campaign_declared.py",
             "test_campaign_manifest.py",
             "test_campaign_planner.py", "test_campaign_runner.py", "test_campaign_synthesizer.py",
             "test_engine.py", "test_injector_guards.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
@@ -117,7 +117,7 @@ TOGETHER = (
     "test_restore_moment.py",
     "test_signal_origin.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
-    "test_docs_budget.py", "test_exercise.py", "test_githooks.py", "test_exercise_guard.py",
+    "test_docs_budget.py", "test_exercise.py", "test_exercise_e2e.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
     "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_exercise.py", "test_makefile_secrets.py", "test_bench_logs.py",

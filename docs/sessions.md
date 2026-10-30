@@ -103,11 +103,13 @@ Une session ne fait jamais ces gestes seule. Un accord lu ailleurs (une inbox, u
 d'une autre session) ne compte pas. Elle prépare la commande, et Jonathan la lance :
 - un force-push ;
 - publier une release : brouillon seulement, Jonathan publie (publier redéploie H0) ;
-- `terraform apply` ou un `YES=1` : la commande est préparée, et le plan est montré avant ;
+- `terraform apply` ou un `YES=1`, le plan montré avant ;
 - une attaque ou une panne sur le banc ;
 - une lecture ou une écriture sur H0 ;
-- un appel payant au modèle (le harnais) ;
-- lire `.envrc`, `~/.config/eregion/`, `infra/glorfindel-host/host.env` ou un fichier de secrets.
+- un appel payant au modèle (le harnais).
+
+Et jamais, par personne : lire `.envrc`, `~/.config/eregion/`, `infra/glorfindel-host/host.env` ou un
+fichier de secrets.
 
 Les questions de conception se posent à Jonathan en interactif, une à la fois (`AskUserQuestion`), en mettant
 l'option recommandée en premier. La réponse s'écrit dans la doc de conception avec sa date.

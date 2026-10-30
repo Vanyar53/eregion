@@ -24,9 +24,9 @@ def _fault(mutant, rename: object, root: Path, tracked: set[str]) -> str | None:
     mid, _title, rel, old, new = mutant[:5]
     path = root / rel
     if old is rename:
-        return None if path.exists() else f"{mid}: the file to rename is gone ({rel})"
-    if rel not in tracked:
-        return f"{mid}: {rel} is not tracked by git, the harness will not copy it"
+        return None if rel in tracked and path.exists() else f"{mid}: the file to rename is gone ({rel})"
+    if rel not in tracked or not path.exists():
+        return f"{mid}: {rel} is missing, or not tracked by git (the harness copies only tracked files)"
     if isinstance(old, tuple) != isinstance(new, tuple) or (isinstance(old, tuple) and len(old) != len(new)):
         return f"{mid}: old and new replacements do not pair up"
     text = path.read_text()

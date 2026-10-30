@@ -3918,3 +3918,99 @@ def test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind
     finally:
         m.teardown()
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+def _reisolated_over_an_older_state(m, fail_the_second_rule=False):
+    """api carries an older version's isolation (its fixed-name deny-all on nsg-api-nic, its
+    single-NSG state kept); a new VM is given that NSG, and api is isolated again — scoped to
+    its address on the NSG shared now. `fail_the_second_rule`: the new isolation cut off after
+    its inbound rule, a partial state written."""
+    m.build(_net(legacy=("api-nic", True), api_nic={"own": "dedicated"}))
+    rules = m.fake.nsgs[key(_NSG_API)]["rules"]
+    assert "glorfindel-isolation-deny-all" in rules, sorted(rules)
+    m.create_vm(data=Script("northeurope", "rg-app1", "api", _NSG_API, "Linux"))
+    if not fail_the_second_rule:
+        assert m.connector.isolate_vm(API)["status"] == "isolated"
+        return rules
+    put, calls = m.connector._put_deny_rule, []
+
+    def second_refused(*a, **k):
+        calls.append(a)
+        if len(calls) == 2:
+            raise RuntimeError("429 Too Many Requests")
+        return put(*a, **k)
+    m.connector._put_deny_rule = second_refused
+    with pytest.raises(Exception, match="partielle"):
+        m.connector.isolate_vm(API)
+    del m.connector._put_deny_rule
+    assert m._state(API).get("partial") is True, m._state(API)
+    return rules
+
+
+@pytest.mark.parametrize("partial", [False, True], ids=["isolated", "partial isolation"])
+@pytest.mark.parametrize("op", ["release", "reset"])
+def test_an_older_isolation_kept_through_a_new_one_goes_with_its_release(monkeypatch, op, partial):
+    """I4E (#361), found by I4C's second review: api's older-version isolation, then api
+    isolated again on its NSG shared since (`_reisolated_over_an_older_state`). The new state
+    was written over the old record: the deny-all, owned by no state any more on a shared NSG,
+    read « isolation d'une ancienne version, VM inconnue : laissée », and every release after
+    said `release_partial` (the reset `swept_partial`), api cut off for ever (red on `main`
+    91dae76, every case). The old record survives the new isolation, complete or partial
+    (`legacy`): the release, the reset take off the new pair and the old deny-all."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        rules = _reisolated_over_an_older_state(m, partial)
+        assert m._state(API).get("legacy", {}).get("nsg_name") == "nsg-api-nic", m._state(API)
+        if op == "release":
+            out = m.connector.release_isolation(API)
+            assert out["status"] == "released", out
+        else:
+            out = m.connector.sweep_vm_rules(API)
+            assert out["status"] == "swept", out
+        assert not [n for n in rules if n.startswith("glorfindel-")], sorted(rules)
+        assert m._released(API, own=True)
+        m.never_more_open_than_designed()
+    finally:
+        m.teardown()
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_an_older_record_kept_by_a_new_isolation_stays_while_its_deny_all_does(monkeypatch):
+    """I4E: api's older-version isolation, then the world of I4C's deny-all (api blocked, its
+    rule turned into an allow, its IP changed, a new VM at the old address on api's NSG, cut
+    off by the deny-all, the turned rule waiting behind it), then api isolated again. Its
+    release keeps the deny-all (I4C), said, and keeps the older record with it — dropped,
+    the next release read the deny-all « VM inconnue » for ever. The verification sees it
+    still there; the turned rule put back, the next release takes it off."""
+    import shutil
+
+    net, steps = _deny_all_world()
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(net)
+        for rule, *draws in [*steps,
+                             ("customer_changes_ip", _nic("rg-app1", "api-nic-4"), 0, 4),
+                             ("address_reused_under_a_turned_rule", _APP1_API, _APP1_API, None, 22,
+                              (key(_NSG_API), "glorfindel-block-192-31-196-7-api-api-nic-4-679cdb"),
+                              _nic("rg-app1", "api-nic-4"), 0, 4, "rg-app1", "web")]:
+            getattr(m, rule)(data=Script(*draws))
+        rules = m.fake.nsgs[key(_NSG_API)]["rules"]
+        m.connector.isolate_vm(API)
+        assert m._state(API).get("legacy"), m._state(API)
+        first = m.connector.release_isolation(API)
+        assert first["status"] == "release_partial" and "glorfindel-isolation-deny-all" in rules, first
+        assert any("glorfindel-isolation-deny-all" in f and "gardée" in f for f in first["failed"]), first
+        assert m._state(API).get("legacy"), m._state(API)
+        check = m.connector.verify_release(API)
+        assert check["verified"] is False and "glorfindel-isolation-deny-all" in str(check), check
+        m._operator_puts_turned_back()
+        again = m.connector.release_isolation(API)
+        assert again["status"] == "released", again
+        assert not [n for n in rules if n.startswith("glorfindel-iso")], sorted(rules)
+    finally:
+        m.teardown()
+        shutil.rmtree(m.home, ignore_errors=True)

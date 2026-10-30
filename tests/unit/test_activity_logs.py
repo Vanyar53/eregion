@@ -823,6 +823,18 @@ def test_the_rules_its_states_name_are_its_own_with_their_subscription():
     elsewhere = _row(caller=OWN_OID, corr="c-e", target=f"{NSG}/securityrules/glorfindel-block-a".replace(
         sub, "11111111-1111-1111-1111-111111111111"))
     assert activity.prepare_rows([elsewhere], {OWN_OID}, rec)[0]["GlorfindelIdentity"] is True
+    # An older version's record kept by a later isolation beside its placements (I4E): its
+    # rules and the customer rule it moved are still Glorfindel's — their removal by its release
+    # is not a change of the customer's.
+    (actions._ISOLATION_STATE_DIR / "vm4.json").write_text(json.dumps(
+        {"resource_id": VM2.replace("vm2", "vm4"), "placements": [
+            {"nsg_rg": "rg-bench", "nsg_name": "nsg-old4", "rule_in": "glorfindel-iso-new4"}],
+         "legacy": {"nsg_rg": "rg-bench", "nsg_name": "nsg-old4", "rule_names": ["glorfindel-isolation-deny-all"],
+                    "bumped": [{"name": "allow-https"}]}}))
+    rec = activity.recorded_targets()
+    for key in ("rg-bench/nsg-old4/glorfindel-iso-new4", "rg-bench/nsg-old4/glorfindel-isolation-deny-all",
+                "rg-bench/nsg-old4/allow-https"):
+        assert f"{sub}/{key}" in rec, key
     # Its quarantine NSG is its own by name: it is Glorfindel's NSG, not the customer's.
     quarantine = _row(caller=OWN_OID, corr="c-q", target=f"{RG}/microsoft.network/networksecuritygroups/"
                       "nsg-glorfindel-quarantine-westeurope/securityrules/glorfindel-quarantine-deny-in")

@@ -181,8 +181,9 @@ MUTANTS = [
      '                    off = [p for p in ps if (p["nsg_rg"].lower(), p["nsg_name"].lower()) not in governing]',
      "                    off = []"),
     ("M22", "a partial release's flat fields read as a legacy state (L26)", REL,
-     '        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):',
-     '        elif state.get("nsg_name"):'),
+     # Re-anchored by I4E: the older version's record read by `_older_record`, undone in older.py.
+     '        older = _older_record(state)\n        if older and not _is_quarantine_nsg(older["nsg_name"]):\n',
+     '        older = _older_record({k: v for k, v in state.items() if k != "placements"})\n        if older:\n'),
     ("M23", "an unblock doesn't look behind the quarantine (L27)", UNB,
      # Followed into _original_away (U3F), which looks behind a bare NIC too.
      '        if not q and t0.get("own_nsg_id"):\n            return None',
@@ -5234,10 +5235,11 @@ MUTANTS += [
               "NSG opened (I4C)", "glorfindel/providers/azure/turned.py",
      '    return any(v.strip().lower() in ("*", "any", "0.0.0.0/0") for v in _side_values(rule) or ["*"])\n',
      "    return False\n"),
-    ("M1968", "the release of an older version's isolation takes its deny-all off unasked (I4C)", REL,
-     '                err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)\n'
-     "                       or self._delete_rule(l_rg, l_name, name))\n",
-     "                err = self._delete_rule(l_rg, l_name, name)\n"),
+    ("M1968", "the release of an older version's isolation takes its deny-all off unasked (I4C)",
+     "glorfindel/providers/azure/older.py",          # moved out of release.py by I4E
+     '            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)\n'
+     "                   or self._delete_rule(l_rg, l_name, name))\n",
+     "            err = self._delete_rule(l_rg, l_name, name)\n"),
     ("M1969", "the reset takes an older version's deny-all off unasked (I4C)", SWP,
      '                    if why := _held_by_turned(self._network, guard, t["nsg_rg"], t["nsg_name"], name, "", mates):\n',
      '                    if False and (why := _held_by_turned(self._network, guard, t["nsg_rg"], t["nsg_name"], name, "", mates)):\n'),
@@ -5265,6 +5267,46 @@ MUTANTS += [
 ]
 TESTS["M1971"] = ("tests/unit/test_invariant_regressions.py::"
                   f"test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind {INVARIANTS}")
+# I4E (#361): a new isolation wrote its state over an older version's record — on an NSG shared
+# since, its deny-all was « VM inconnue : laissée » for ever. Kept under `legacy`, read by the
+# release, the reset, the verification, `_legacy_claimed` and the Activity Log's reader. The
+# machine's teardown no longer reads « named » in the code's state (A0). M2130–M2137.
+LEG = "glorfindel/response/legacy_state.py"
+_I4E = ("tests/unit/test_invariant_regressions.py::test_an_older_isolation_kept_through_a_new_one_goes_with_its_release "
+        "tests/unit/test_invariant_regressions.py::test_an_older_record_kept_by_a_new_isolation_stays_while_its_deny_all_does")
+MUTANTS += [
+    ("M2130", "a new isolation writes over an older version's record: its deny-all « VM inconnue » for ever (I4E)",
+     ISO, "            **_kept_legacy(previous, rg),\n", ""),
+    ("M2131", "a partial isolation writes over an older version's record (I4E)", ISO,
+     "            **_kept_legacy(_load_isolation_state(resource_id), _parse_vm_resource_id(resource_id)[0]),\n", ""),
+    ("M2132", "an older version's record kept by a new isolation claims no rule: the reset says its deny-all "
+              "« VM inconnue » (I4E)", LEG,
+     "            rec = _older_record(json.loads(f.read_text()))\n",
+     "            s = json.loads(f.read_text())\n"
+     '            rec = _older_record(s) if "placements" not in s else None\n'),
+    ("M2133", "a partial release drops the older version's record while its deny-all stays (I4E)", REL,
+     '                **{k: v for k, v in state.items() if k != "legacy" or older_failed},\n',
+     '                **{k: v for k, v in state.items() if k != "legacy"},\n'),
+    ("M2134", "the release ignores an older version's record kept beside placements: `released`, the VM cut "
+              "off (I4E)", REL,
+     "        older = _older_record(state)\n",
+     '        older = _older_record(state) if "placements" not in state else None\n'),
+    ("M2135", "the reset ignores an older version's record kept beside placements: `swept`, the VM cut off "
+              "(I4E)", SWP,
+     "        if older := _older_record(own_state):",
+     '        if (older := _older_record(own_state)) and "placements" not in own_state:'),
+    ("M2136", "the release's verification ignores an older version's record kept beside placements: "
+              "verified, the deny-all there (I4E)", VER,
+     "        older = _older_record(state)\n",
+     '        older = _older_record(state) if "placements" not in state else None\n'),
+    ("M2137", "the Activity Log's reader ignores an older version's record kept beside placements: our "
+              "release of it read as the customer's change (I4E)", ACT,
+     "        if older := _older_record(st):",
+     '        if (older := _older_record(st)) and "placements" not in st:'),
+]
+TESTS.update({mid: f"{_I4E} {INVARIANTS}" for mid in ("M2130", "M2131", "M2133", "M2134", "M2135", "M2136")})
+TESTS["M2132"] = _I4E
+TESTS["M2137"] = "tests/unit/test_activity_logs.py"
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

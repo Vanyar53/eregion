@@ -305,24 +305,6 @@ def _isolation_unreadable(vm_ref: str) -> bool:
     return f is not None and f"{_ISOLATION_STATE_DIR.name}/{f.name}" in unreadable_states()
 
 
-def _legacy_claimed(nsg_rg: str, nsg_name: str, rule: str) -> bool:
-    """An older version's single-NSG state names this rule: it has an owner, whose
-    release deletes it by that record."""
-    if not _ISOLATION_STATE_DIR.exists():
-        return False
-    for f in _ISOLATION_STATE_DIR.glob("*.json"):
-        try:
-            s = json.loads(f.read_text())
-        except Exception:
-            continue
-        if (isinstance(s, dict) and "placements" not in s
-                and (s.get("nsg_name") or "").lower() == nsg_name.lower()
-                and (s.get("nsg_rg") or "").lower() == (nsg_rg or "").lower()
-                and rule.lower() in {n.lower() for n in s.get("rule_names", [])}):
-            return True
-    return False
-
-
 def _clear_isolation_state(vm_ref: str) -> None:
     f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
     if f is not None and f.exists():

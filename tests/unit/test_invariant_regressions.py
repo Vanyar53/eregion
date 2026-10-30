@@ -3497,3 +3497,52 @@ def test_the_unblock_sweep_reads_the_second_name_on_a_nics_own_nsg(monkeypatch):
     finally:
         import shutil
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+
+# ── I4B, its review: the sequence of PR #342's CI (I5), replayed draw by draw ──────────────
+
+_PR342_LAT = _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                                 destination_address_prefix="*", destination_port_range="*"))
+_PR342_NET = {"subnet_nsg": [_rule("allow-ssh", 100, dict(access="Allow", direction="Inbound", source_address_prefix="*",
+                                                          destination_address_prefix="*", destination_port_range="22")),
+                             _PR342_LAT],
+              "edge_nsg": None, "tier_rules": [],
+              "nics": {"web-nic": {"own": "tier", "rules": [], "policy": True},
+                       "db-nic-0": {"own": None, "rules": [], "policy": False},
+                       "db-nic-1": {"own": None, "rules": [], "policy": False},
+                       "api-nic": {"own": "dedicated", "rules": [_PR342_LAT], "policy": False}},
+              "windows": None, "config": {"quarantine": False, "readable": True, "forensic": [], "rg": ""},
+              "legacy": ("api-nic", False), "data_subnet": [_PR342_LAT]}
+_PR342_NSG = "/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/"
+_PR342_DB_RULE = (_PR342_NSG + "nsg-data", "glorfindel-block-192-31-196-7-db--01-db-nic-1-1232a8")
+_PR342_STEPS = [
+    ("reset_from_azure", WEB1, WEB1, None),
+    ("someone_detaches_the_quarantine", None),                 # draws nothing here: no NIC in quarantine
+    ("isolate_two", WEB1, WEB1, ("nic.get", "always-429"), WEB2, WEB2, None, False),
+    ("verify", WEB1, WEB1, None),
+    ("turned_then_address_reused", DB, DB, None, 22, "both", 22, _PR342_DB_RULE, "non_disruptive", False, 22, False,
+     "rg-app1", "web", False, "non_disruptive"),
+    ("block_turned_then_reasserted", WEB1, WEB1, None, "both", 22, _PR342_DB_RULE, "human_only"),
+    ("strip_quarantine_nsg", None),                            # draws nothing here: no quarantine NSG
+    ("joins_an_old_isolation", "/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/"
+     "networksecuritygroups/nsg-api-nic", "rg-new", "web", "Linux", False, False),
+    ("address_reused_under_a_turned_rule", WEB2, WEB2, None, 22,
+     (_PR342_NSG + "nsg-tier", "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+     "/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.network/networkinterfaces/web-nic", 0, 4,
+     "rg-app2", "api", "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/"
+     "nsg-tier", "Linux"),
+    ("block_turned_then_reasserted", WEB1, WEB1, None, "both", 22,
+     (_PR342_NSG + "nsg-tier", "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"), "non_disruptive"),
+]
+
+
+def test_the_sequence_of_pr_342_reasserts_without_opening_the_vm_at_the_old_address(monkeypatch):
+    """The CI of PR #342, replayed draw by draw by I4B's review; on `main` 897cd21: « I5: the
+    reassertion opened flows of …/rg-app2/…/api ». web2's IP changed under a turned block rule
+    of its own on the tier NSG, a new VM api at the old address; web1 blocked, its rule turned
+    on the same NSG, then reasserted outside human_only — the isolation or the block written
+    again moved our deny off the old address, a turned rule of ours waiting behind it: the
+    new VM opened. The only sequence that catches M1898 (the isolation written over what the
+    guard keeps) outside its own."""
+    _run(monkeypatch, _PR342_NET, *_PR342_STEPS)

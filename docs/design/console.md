@@ -973,7 +973,7 @@ Posées une à une. La réponse est reportée ici avec sa date.
 - **Vérifié dans Chromium** (chrome-headless-shell, console locale sur un HOME jetable, cibles, règles
   et watch remplacées, une VM au nom piégé `<img onerror>`) à 1440 et 1600 px : six fils tirés, cinq au
   clic et un à la souris ; aucune erreur JS, aucune violation de CSP, aucune image injectée.
-- **Mutants M1900–M1914** (`tests/unit/test_exercise_plan.py`, `test_console_dagorlad.py`) : la règle de
+- **Mutants M1980–M1994** (`tests/unit/test_exercise_plan.py`, `test_console_dagorlad.py`) : la règle de
   production sautée, le caractère destructif pris pour faux, un fil sans watch, une cible non inscrite
   ou hors du périmètre, une entrée prévue, une panne hors des cibles de son moteur, le nom à taper
   oublié, les plafonds ignorés, une carte pour une VM non inscrite, un déploiement en lecture seule

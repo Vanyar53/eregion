@@ -2357,6 +2357,64 @@ def test_one_direction_gone_behind_a_bypass_is_said(monkeypatch):
     assert out["missing_rules"] == [f"{_iso_name()}-out"]
 
 
+@pytest.mark.parametrize("first_out_left", [False, True])
+def test_a_turned_first_name_never_supersedes_the_second_gone(monkeypatch, first_out_left):
+    """L1C (#369), L1B's review's reserve: the NIC's first name turned into an allow (aimed at
+    another address), the isolation then written under its second (`-b-`, I4B), an older
+    pair bypassed on the NIC's NSG; the `-b-` pair taken off. A name merely present counted
+    as a replacement: the card named the first name's `-out` rule — the wrong one —, or,
+    that rule left behind (a `drop_failed`), said nothing gone. Only a refusal supersedes."""
+    from glorfindel.actions import AzureConnector, _save_isolation_state
+    first, second = AzureConnector()._placement_rule_bases("glorfindel-iso", "vm", "nic-a", "nic-a")
+    _save_isolation_state(_RID, {"resource_id": _RID, "placements": [
+        _iso_placement("nic-a", "nsg-subnet", second, "subnet"), _iso_placement("nic-a", "nsg-subnet", first, "subnet")]})
+    t = {**_nic_target(nsg_name="nsg-nic", scope="nic"), "alt_nsg": {"nsg_rg": "rg", "nsg_name": "nsg-subnet"}}
+    turned = [_nsg_rule(first, 100, access="Allow", dst="10.0.0.9", port="*")]
+    turned += _deny_pair(first, 100, ip="10.0.0.5")[1:] if first_out_left else []
+    older = [_nsg_rule(**_BENCH_ALLOW_SSH), *_deny_pair("glorfindel-isolation-deny-all-vm", 101, ip="10.0.0.5")]
+    out = _verifying(monkeypatch, [t], {"nsg-nic": older, "nsg-subnet": turned})
+    assert out["verified"] is False and out["shadowed_by"]
+    assert {second, f"{second}-out"} <= set(out.get("missing_rules") or []), out
+    from glorfindel.reassert import _missing
+    assert _missing(out)
+
+
+def test_a_superseding_pair_must_cut_the_nic_both_ways(monkeypatch):
+    """L1C: the second name's pair a refusal (both denies cutting the NIC) supersedes the
+    first's stale placement — never said gone; the same pair with its outbound rule turned
+    into an allow supersedes nothing: the first's rules gone are said."""
+    from glorfindel.actions import AzureConnector, _save_isolation_state
+    first, second = AzureConnector()._placement_rule_bases("glorfindel-iso", "vm", "nic-a", "nic-a")
+    _save_isolation_state(_RID, {"resource_id": _RID, "placements": [_iso_placement("nic-a", "nsg-nic", first)]})
+    whole = _deny_pair(second, 101, ip="10.0.0.5")
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), *whole]})
+    assert out["shadowed_by"] and "missing_rules" not in out
+    out_turned = _nsg_rule(f"{second}-out", 101, direction="Outbound", access="Allow", src="10.0.0.5", port="*")
+    older = _deny_pair("glorfindel-isolation-deny-all-vm", 102, ip="10.0.0.5")       # bypassed, it isolates
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), whole[0], out_turned, *older]})
+    assert out["shadowed_by"]
+    assert out.get("missing_rules") == [first, f"{first}-out"], out
+
+
+def test_an_isolation_half_gone_and_bypassed_says_both(monkeypatch):
+    """L1C (#369): the pair's outbound rule turned into an allow by hand, an allow before its
+    inbound deny. The NIC was said uncovered alone — the bypass of what was left never read,
+    never carded (L1). Both now; an allow after the deny bypasses nothing."""
+    out_turned = _nsg_rule(f"{_iso_name()}-out", 101, direction="Outbound", access="Allow", src="10.0.0.5", port="*")
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), _deny_pair(_iso_name(), 101, ip="10.0.0.5")[0],
+                                  out_turned]})
+    assert out["uncovered_nics"] == ["nic-a"] and [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
+    from glorfindel.reassert_cards import _bypassing
+    assert _bypassing(out, "")                            # the reassertion's bypass card reads it
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule("allow-ssh", 200), _deny_pair(_iso_name(), 101, ip="10.0.0.5")[0],
+                                  out_turned]})
+    assert out["uncovered_nics"] == ["nic-a"] and "shadowed_by" not in out
+
+
 def test_an_unreadable_subnet_is_not_a_subnet_without_nsg(monkeypatch):
     """A 429 on the subnet read meant "no subnet NSG": a release without state swept
     nothing and said released while the isolation stayed on the subnet NSG (L24)."""
@@ -3518,6 +3576,59 @@ def test_a_sound_block_is_not_read_as_bypassed_because_of_an_older_placement(mon
     assert connector.verify_block_ip("192.31.196.7", _RID)["verified"] is True
     _listings(net, {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), *_block_pair(rule_nic, "192.31.196.7")]})
     assert connector.verify_block_ip("192.31.196.7", _RID)["verified"] is False
+
+
+def _blocked_on(monkeypatch, rules: dict, nics=(("nic-a", "10.0.0.5"),)):
+    """A VM block, one placement per NIC on its own NSG (`nsg-<nic>`), read from `rules`."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    names = {n: f"glorfindel-block-192-31-196-7-vm-{n}-1" for n, _ in nics}
+    _save_block_state("vm", "192.31.196.7", _RID, nsg=f"rg/nsg-{nics[0][0]}", nsg_scope="nic",
+                      rule=names[nics[0][0]], threat_port=22,
+                      placements=[{"nic_id": n, "nsg_rg": "rg", "nsg_name": f"nsg-{n}", "rule": names[n],
+                                   "ips": [ip]} for n, ip in nics])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    targets = [{"nic_id": n, "nic_short": n, "private_ips": [ip], "nsg_rg": "rg", "nsg_name": f"nsg-{n}",
+                "scope": "nic"} for n, ip in nics]
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm, allow_no_nsg=False: targets)
+    net = MagicMock()
+    _listings(net, {f"nsg-{n}": rules[n](names[n]) for n, _ in nics})
+    connector._network = net
+    return connector
+
+
+def test_a_block_half_gone_and_bypassed_says_both(monkeypatch):
+    """L1C (#369), seed 31337 at 2 000: the block's `-out` rule gone (said, a drift card),
+    then an allow of the customer's widened before its inbound deny. The verification
+    returned the missing rule alone — what was left of the pair, bypassed, never read — and
+    the reassertion never said the bypass (L1). Both now: the rule gone, the allow."""
+    from glorfindel import escalations
+    from glorfindel.reassert import _missing, _reassert_block
+    wide = _nsg_rule("allow-https", 110, port="*")
+    connector = _blocked_on(monkeypatch, {"nic-a": lambda r: [wide, _block_pair(r, "192.31.196.7")[0]]})
+    out = connector.verify_block_ip("192.31.196.7", _RID)
+    assert out["missing_rules"] == ["glorfindel-block-192-31-196-7-vm-nic-a-1-out"] and _missing(out)
+    assert [s["rule"] for s in out["shadowed_by"]] == ["allow-https"], out
+    _reassert_block(connector, None, "vm", "192.31.196.7", [], ref=_RID)
+    said = {e["escalation_type"] for e in escalations.pending()}
+    assert {"bypassed", "verification_failed"} <= said, said
+    # Only an allow that lets the threat through: an https one leaves the block's half alone.
+    connector = _blocked_on(monkeypatch, {"nic-a": lambda r: [_nsg_rule("allow-https", 110, port="443"),
+                                                              _block_pair(r, "192.31.196.7")[0]]})
+    out = connector.verify_block_ip("192.31.196.7", _RID)
+    assert out["missing_rules"] and "shadowed_by" not in out
+
+
+def test_a_bypass_on_one_nic_is_said_beside_rules_gone_on_another(monkeypatch):
+    """L1C: nic-a's block rules gone, nic-b's bypassed by an allow before them. The rules
+    missing were returned alone, the bypass dropped: no bypass card while they stayed gone."""
+    connector = _blocked_on(monkeypatch, {
+        "nic-a": lambda r: [],
+        "nic-b": lambda r: [_nsg_rule("allow-ssh", 100), *_block_pair(r, "192.31.196.7", vm_ip="10.0.0.6")]},
+        nics=(("nic-a", "10.0.0.5"), ("nic-b", "10.0.0.6")))
+    out = connector.verify_block_ip("192.31.196.7", _RID)
+    assert out["missing_rules"] and out["open_nics"] == ["nic-a"]
+    assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
 
 
 # ── Sixième passe (L25) : S1, une config illisible ou changée ne fait plus perdre l'original ──

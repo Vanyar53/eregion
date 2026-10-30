@@ -3300,6 +3300,60 @@ def test_an_unreadable_state_brought_back_after_a_full_disk_is_said(monkeypatch,
           "human_only"))
 
 
+_S101_SSH = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+                 destination_port_range="22")
+_S101_DENY = dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                  destination_address_prefix="*", destination_port_range="*")
+_S101_NET = {
+    "subnet_nsg": None,
+    "edge_nsg": [_rule("allow-ssh", 100, _S101_SSH), _rule("deny-lateral-in", 130, _S101_DENY),
+                 _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                                      destination_address_prefix="VirtualNetwork",
+                                                      destination_port_range="*"))],
+    "tier_rules": [],
+    "nics": {"web-nic": {"own": "tier", "rules": [], "policy": True},
+             "db-nic-0": {"own": "dedicated", "rules": [], "policy": False},
+             "db-nic-1": {"own": None, "rules": [], "policy": False},
+             "api-nic": {"own": "dedicated", "policy": False,
+                         "rules": [_rule("allow-ssh", 100, _S101_SSH), _rule("deny-lateral-in", 130, _S101_DENY)]}},
+    "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+    "legacy": ("api-nic", False), "data_subnet": None}
+_S101_NSG = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/networksecuritygroups/{}"
+_S101_API2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api"
+
+
+@pytest.mark.xfail(strict=True, reason="L1 outside L2C (to route): present on origin/main ba657a0, without L2C's rule")
+def test_a_block_put_back_on_a_new_vm_stays_said_after_an_acknowledgement(monkeypatch):
+    """Seed 101 at 500 sequences on L2C's final code, shrunk: none of L2C's steps nor its
+    fault, and it fails as well with glorfindel/ of origin/main (ba657a0) — « L1: the block
+    on …/rg-app2/…/api vanished from Azure; the reassertion neither put it back nor said
+    so ». An old isolation's VM gone, a new `api` given its NSG, blocked on its subnet and
+    for itself, one of its block denies turned into an allow and reasserted; the operator
+    acknowledges a card, `terraform apply` on the subnet's NSG, an IP changed, then web of
+    rg-app2 blocked the same way. Cause not established; frozen for its own lot."""
+    _run(monkeypatch, _S101_NET,
+         ("address_reused", WEB1, WEB1, None, False, 22, False, "rg-app1", "api", None, "Linux", True, None,
+          "human_only"),
+         ("time_passes",), ("time_passes",),
+         ("access_changes", False),
+         ("terraform_apply", _S101_NSG.format("rg-app1", "nsg-db-nic-0")),
+         ("an_old_isolations_vm_goes_away", (_S101_NSG.format("rg-edge", "nsg-api-nic"), API), False, False,
+          "rg-app2", "api", "Linux", True, _S101_API2),
+         ("block_turned_then_reasserted", _S101_API2, _S101_API2, None, "both", 22,
+          (_S101_NSG.format("rg-edge", "nsg-api-nic"), "glorfindel-block-192-31-196-7-api-api-nic-5-cdd247"),
+          "non_disruptive"),
+         *[("time_passes",)] * 8,
+         ("operator_acknowledges", 0),
+         ("time_passes",),
+         ("terraform_apply", _S101_NSG.format("rg-edge", "nsg-edge")),
+         ("customer_changes_ip", "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/"
+                                 "networkinterfaces/api-nic-4", 0, 4),
+         ("time_passes",),
+         ("block_turned_then_reasserted", WEB2, WEB2, None, "both", 22,
+          (_S101_NSG.format("rg-net", "nsg-tier"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+          "non_disruptive"))
+
+
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────
 
 _S322_NET_KEPT = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}

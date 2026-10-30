@@ -24,6 +24,24 @@ Three agents form a closed loop: Annatar attacks, Gothmog breaks, Glorfindel det
 
 *The Eregion console's overview on the Eregion bench, in observe-only (27 October 2026). Over 30 days: nothing contained alone — human-only —, but Glorfindel would have contained 3 of the 5 attacks it detected (shadow); detection in 107 s and a decision in 2 min (medians); 0 % of the 20 isolations and blocks it recommended on real traffic were judged wrong; 4 of the 5 implemented techniques proven in the last 30 days. Glorfindel's page holds the cards to judge; Annatar's and Gothmog's, what they ran and what Glorfindel made of it.*
 
+## Dagorlad, the exercise board
+
+![Dagorlad: a wire drawn and its verdict, a refused one removed, a destructive one that asks for its target's name, then the request and the command it gives](docs/images/dagorlad/loop.webp)
+
+- **The red side and the blue side**: Annatar's techniques and Gothmog's faults on the left; Glorfindel and the targets Celebrimbor enrolled, with their zone and autonomy mode, on the right.
+- **Draw a wire** from a red card to a target: the server judges it as Orodruin will (enrollment, zone, the production rule, a live watch) and says what to expect — the rule that detects, its delay, what Glorfindel may do — or why it is refused, with a stable code.
+- **« Request run from Orodruin »** writes a request and gives a command: you carry it to Orodruin, where the name of each destructive target is typed; Orodruin judges it again and runs the wires one after the other. The console launches nothing; « Stop all » gives Orodruin's kill switch.
+- **Glorfindel is never told**: it meets the exercise as a real attack. The Runs view shows what it made of it, and the last proof of every technique and fault.
+- **Sample data only**: these images are replayed from a fictitious bench (`make console-shots`), never a real one.
+
+![Dagorlad's board on sample data: five wires drawn from the red cards to the enrolled targets, one refused by the production rule, one that will ask for the VM's name](docs/images/dagorlad/board.png)
+
+The whole tour, on sample data (53 s):
+
+https://github.com/user-attachments/assets/95f55619-2a5f-4ea0-9c8c-fbac66f78abb
+
+How to use the board (French): [`docs/dagorlad.md`](docs/dagorlad.md).
+
 ## How it works
 
 ```mermaid

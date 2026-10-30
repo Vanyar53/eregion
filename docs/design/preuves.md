@@ -2279,7 +2279,7 @@ mutants de la relecture, code final : 8/8, M902 de même ; M13 bruité à 60 (1/
   un **I5** (une ouverture) : Db--01 isolée deux fois en même temps,
   `address_reused_under_a_turned_rule` sur Db--01, puis notre NSG de quarantaine vidé, l'état perdu
   et la réaffirmation hors de `human_only` — elle ouvre db-nic-1 en entrée sur le port 22 (depuis
-  10.9.9.9, 203.0.113.7 et 192.31.196.7). Cause non établie.
+  10.9.9.9, 203.0.113.7 et 192.31.196.7). Cause non établie ici ; **réglée par I4D** (#356, ci-dessous).
 
 **I4C (30/10, #344) : ce que le déblocage, le reset et la levée gardent est dit ; l'exemption
 « périmètre levé » resserrée.** Les deux limites relevées par la relecture d'I4B, dans l'oracle
@@ -2385,6 +2385,119 @@ jamais perdu par le test ni remplacé par une isolation de la VM depuis), ou un 
 partielle d'un état ancien le laisse ancien. `_cuts_all` sert aussi l'isolation réécrite et le
 balayage de la levée : figé (`test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind`,
 M1971).
+
+**I4D (30/10, #356) : sous le second nom, un refus ne passe jamais derrière une allow.** L'I5 de la
+graine 1618 à 2 000, figé en `xfail` par L2C. **Cause, établie** (la séquence rejouée pas à pas, le
+monde vidé avant et après la passe) : ni la quarantaine vidée ni l'état perdu. Db--01 est isolée,
+db-nic-1 par des règles sur le NSG de son subnet (sa politique refuse la quarantaine), à 100, devant
+`allow-ssh` à 101. `address_reused_under_a_turned_rule` la bloque, retourne la règle `-out` du blocage
+de db-nic-1, change l'adresse de la carte et donne l'ancienne à rg-new/api. La passe suivante trouve
+l'isolation manquante pour la nouvelle adresse et la repose (`isolate_vm`). `_plan_isolation` lit la
+première paire : sa règle `-out` retient la règle retournée qui vise api (I4B, `_held_by_turned`) —
+l'isolation passe au second nom, au premier numéro libre, **102**, derrière `allow-ssh` ; la règle
+entrante de la première paire, qui ne retient rien, est retirée (`drop`). La règle d'I5R
+(`_pair_priorities` : une règle réécrite garde son numéro, jamais plus bas) ne valait que pour les noms
+réécrits, pas pour une paire remplacée par l'autre : ce que le refus à 100 coupait, `allow-ssh` le
+laissait passer (db-nic-1, 10.0.0.8, port 22, de toute source). Trois étapes suffisent : l'isolation,
+`address_reused_under_a_turned_rule`, puis la réaffirmation hors de `human_only` — ou une isolation à la
+main, que la machine ne voyait pas : une isolation contournée (`bypass`) n'était pas regardée.
+
+**Correctif.** Un refus de l'autre paire qu'une allow suit, dans sa direction, avant le numéro de sa
+remplaçante, reste (`nsg._allows_passed_by_its_replacement` : toute allow entre les deux numéros,
+quoi qu'elle couvre — le garder n'ouvre rien, A0) et **est dit** : `left_rules` et `left_note` de
+l'isolation (« passe avant allow-ssh ; la règle qui la remplace passe après (priorité 102) : la retirer
+ouvrirait db-nic-1 »), donc la carte de la réaffirmation. Le blocage avait le même chemin
+(`_plan_block`, I4A) : vu à la lecture, pas par la machine — ses allows du client (100 à 150, puis
+1000 et plus) ne tombent jamais entre nos numéros de blocage (200 et plus) ; figé par un test, une
+allow à 215 entre la paire à 210 et sa remplaçante à 220 : l'attaquant joignait la carte. Il garde et
+dit de même (`kind: before_allow`, sa note, la carte `rule_left`). La nouvelle paire, derrière l'allow,
+est dite contournée, comme avant : elle l'est, pour la nouvelle adresse. La levée et le déblocage
+retirent les deux paires.
+
+**La machine.** Aucune règle retirée ni restreinte, aucun oracle affaibli : deux contrôles de plus.
+Une isolation, et un blocage, n'ouvrent jamais la VM sur laquelle ils agissent, contournés ou non,
+sous faute ou non — sauf ce que seule la règle restée d'une autre carte fermait, comme pour la
+réaffirmation (`_isolate`, `_block`). Avant, un résultat `bypass` n'était pas regardé.
+
+**Mesures d'I4D.** `pytest` complet : 4 558 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ;
+`mutant_anchors.py` sans faute. Sur `origin/main` (d380df5), échouent : la séquence de la graine 1618
+(« I5: the reassertion opened flows of …/Db--01 »), ses trois étapes, isolation à la main (« I5:
+isolate_vm opened flows », le contrôle nouveau) comme réaffirmation, et les tests de ce qui est gardé
+et dit (isolation, réaffirmation, blocage). Invariants sur le correctif : 500 séquences sur les graines
+1, 42, 101, 322, 777, 1618, 8675 et 31337, puis 2 000 sur 1618, 322 et 42, verts. Mutants M2060–M2066
+(les deux gardes retirées, le refus gardé tu ou mal dit, la garde lue dans la mauvaise direction ou
+sur toutes) : 7/7 par leurs tests à chaque tour. Par la machine seule : M2060 0/3 à 500 (graines au
+hasard), et pas à 2 000 sur la graine 1618 sur cet arbre — ses séquences figées seulement ; M2061
+(le blocage) 1/3 au harnais à 500, 0/8 à 500 sur des graines fixées : non établi. Harnais avant/après
+(60 séquences, graine Hypothesis fixée, `--jobs 4`) sur les 109 mutants de l'isolation, du blocage,
+de `nsg.py`, des règles retournées, de la réaffirmation et de ses cartes : graine 42, 104/109 avant
+(d380df5) et 104/109 après plus 7/7 nouveaux, les mêmes cinq non attrapés des deux côtés (M08, M13,
+M37 et M831 par leurs séquences figées, M1645 survit) ; graine 101, 106/109 des deux côtés (M32 et
+M37 par leurs séquences figées, M1645 survit), 7/7 nouveaux ; aucun perdu. La graine fixée : avec une graine
+au hasard, le harnais sur `main` s'arrêtait deux fois sur le code non muté (ci-dessous).
+
+**Trouvés par le passage à vide du harnais** sur `origin/main` (d380df5, 60 séquences, graine au
+hasard), sans rapport avec le correctif, réglés ou routés par la relecture :
+- **I7, une exemption de l'oracle qui manquait** (pas un défaut du code) : le refus total d'une
+  ancienne version (`glorfindel-isolation-deny-all` sur nsg-web-nic) retourné en allow, une nouvelle VM
+  sur ce NSG ; au démontage, la levée de web le garde, le dit (`release_partial`, « gardée : … vise * »)
+  et demande qu'on le remette — l'opérateur du démontage ne remettait que les noms `glorfindel-iso-` et
+  `glorfindel-block-`. Il remet maintenant aussi une règle d'une ancienne version, sa VM lue du journal
+  du test (`legacy`), jamais de l'état du code (A0). Quatre étapes figées
+  (`test_an_older_versions_turned_deny_all_put_back_by_the_operator_lets_the_release_go`, rouges avec
+  l'ancien opérateur).
+- **I3** : « the reassertion said 192.31.196.7 no longer blocked on …/Db--01 ([]); our perimeter block
+  still cuts it off » — rien d'ouvert, ce qui est dit est faux. Le mécanisme de #366 (graine 1999 à 2 000),
+  sur la branche où la carte ne nomme aucune carte réseau (`len(cut) < len(nics)`) : un second cas de
+  #366, figé en `xfail` strict (`test_the_reassertion_says_unblocked_naming_no_nic_where_our_perimeter_still_cuts`).
+
+**La relecture d'I4D.** Fermée dans les deux sens, le blocage compris (sondes garde ôtée, garde
+posée). Quatre points, chacun son commit et son test rouge sans lui :
+- **Un refus gardé seulement s'il tient une adresse actuelle de la carte** : les deux adresses de
+  db-nic-1 changées (.7 et .8 devenues .20 et .21), api à .7, la règle entrante de la première paire, sur
+  .7 et .8, était gardée — elle ne coupait plus rien de db-nic-1, mais api toujours, et sa note « la
+  retirer ouvrirait db-nic-1 » était fausse. La garde lit maintenant le côté carte du refus (la
+  destination en entrée, la source en sortie) : gardé seulement s'il prend une adresse actuelle de la
+  carte (`_takes_in` : `*`, une étiquette ou une valeur illisible comptent, A0) ; sinon retiré comme avant
+  (`test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off`, M2067). Un numéro illisible,
+  du refus ou d'une allow, garde (M2068).
+- **Le refus gardé dit la VM qu'il coupe** : les adresses qui ne sont plus celles de la carte, et qui les
+  tient (`_also_cuts`, comme `drop_failed` d'I4A) — « il couvre aussi 10.0.0.7, à api, qu'il coupe » —
+  dans le `why` de l'isolation, le champ `also` du blocage, sa note et la carte de la réaffirmation
+  (M2069, M2070). Le nom est celui de la VM, sans son groupe, comme I4A.
+- **La levée demande la garde avec les cartes de la VM** (graine 9001 à 2 000, I7) : `release.py`
+  appelait `_held_by_turned` sans `mates` pour ses placements — ses deux autres appels les passent. Une
+  règle retournée visant l'adresse qu'a prise depuis une autre carte de la **même** VM était gardée
+  « pour une autre VM » : `release_partial` à chaque levée. Les cartes vivantes de la VM (`_own_nics`,
+  partagé avec `older.py` ; pas celles des placements, qu'une levée partielle réduit). Trois étapes
+  figées (`test_a_release_never_keeps_a_rule_for_another_nic_of_its_own_vm`), M2071 ; M1734 réancré.
+- **L'exemption de l'oracle** pour la règle d'une ancienne version (ci-dessus, I7).
+La réécriture en place de la première paire (l'alternative : la nouvelle adresse de la carte coupée à
+100, api rendue) va à un lot de suite.
+
+**La seconde relecture : une autre carte de la même VM.** Le resserrement de la première relecture
+lisait les adresses de **cette** carte seulement : db-nic-1 passée de .7/.8 à .20/.21, api à .7, et
+db-nic-0 — une carte de la **même** VM — à .8 ; un `apply` retire la paire de db-nic-0 sur son NSG et y
+met une allow de tout à 100, le client une autre à 101 sur le NSG du subnet. Réisolée, la paire de
+db-nic-1 passe au second nom à 102 ; la règle entrante de la première paire, à 100, sur .7 et .8, ne
+tenait aucune adresse de db-nic-1 : retirée, db-nic-0 s'ouvrait sur 22 et 443 (« I5: isolate_vm opened
+flows of …/Db--01 », la machine). La garde lit maintenant les adresses de **toutes** les cartes de la
+VM (les cibles d'`isolate_vm` et de `_block_ip_vm`) ; la note dit la carte qu'elle ouvrirait et
+« 10.0.0.8, à db-nic-0 de la même VM ». Le blocage a la même forme (n'y ouvrait rien, mesuré) : figé
+aussi. `test_a_deny_on_an_address_another_nic_of_the_vm_took_stays`,
+`test_a_block_deny_on_an_address_another_nic_of_the_vm_took_stays`, rouges sur 0570e4f ; mutants
+M2072–M2074.
+
+**Mesures de la relecture.** `pytest` complet : 4 575 réussis, 7 sautés, 5 `xfail` (6 avec le U1
+ci-dessous) ; `ruff` propre ; `mutant_anchors.py` sans faute. Mutants M2060–M2071 et M1734 : 13/13 par
+leurs tests, deux tours. Harnais avant/après sur les 42 mutants de la levée et d'`older.py` (60
+séquences, graine 42) : 38/42 des deux côtés, les mêmes quatre (M07, M1963, M33 par leurs séquences
+figées, M1552 survit). Invariants : 500 sur 42 et 2718, 2 000 sur 1618, verts ; 2 000 sur **9001** :
+l'I7 réglé, la machine va plus loin et tombe sur un **U1 présent sur `main` 9f72a91** (« the orphan
+rule glorfindel-iso-web-web-nic-8b70f2 kept behind a rule turned into an allow (…), cutting
+[…/api]: no pending card names it ») — la carte d'orpheline de la posture, pas le chemin de
+l'isolation ; cinq étapes figées en `xfail` strict
+(`test_an_orphan_kept_behind_a_turned_rule_is_said`), pour #372.
 
 **I4E (30/10, #361) : une nouvelle isolation garde l'état ancien de la VM ; le démontage ne lit plus
 l'état écrit par le code.** Trouvé par la seconde relecture d'I4C. **Le défaut, sur `main` 91dae76** :

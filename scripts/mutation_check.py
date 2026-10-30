@@ -5313,6 +5313,92 @@ TESTS.update({mid: f"{_I4E} {INVARIANTS}" for mid in ("M2130", "M2131", "M2133",
 TESTS["M2132"] = _I4E
 TESTS["M2137"] = "tests/unit/test_activity_logs.py"
 
+# I4D (#356): written again under the NIC's second name (I4B), the first pair's deny before an
+# allow the new one comes after was taken off — the VM opened (seed 1618 at 2 000). It stays, said.
+_I4D = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in (
+    "test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address",
+    "test_an_isolation_written_again_never_moves_its_deny_past_an_allow",
+    "test_an_isolation_written_again_keeps_the_deny_before_an_allow_and_says_it",
+    "test_a_reassertion_says_the_deny_it_kept_before_an_allow",
+    "test_a_block_written_again_keeps_the_deny_before_an_allow_and_says_it",
+    "test_the_allows_a_rewrite_would_pass",
+    "test_the_guard_keeps_only_a_deny_that_holds_the_nics_address",
+    "test_the_guard_keeps_a_deny_whose_number_cannot_be_read",
+    "test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off",
+    "test_a_deny_on_an_address_another_nic_of_the_vm_took_stays",
+    "test_a_block_deny_on_an_address_another_nic_of_the_vm_took_stays"))
+MUTANTS += [
+    ("M2060", "the isolation written again under its second name takes the first pair's deny off past an "
+              "allow: the VM opened (I4D)", ISO,
+     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n",
+     "            if passed := [] and _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n"),
+    ("M2061", "the block written again under its second name takes the first pair's deny off past an allow: "
+              "the attacker reaches the VM (I4D)", BLK,
+     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n",
+     "            if passed := [] and _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n"),
+    ("M2062", "the isolation keeps the deny before the allow, unsaid (I4D)", ISO,
+     '                left.append({"nsg": nsg_key, "rule": n, "why": (\n',
+     '                ({"nsg": nsg_key, "rule": n, "why": (\n'),
+    ("M2063", "the block keeps the deny before the allow, said as a turned rule (I4D)", BLK,
+     '                             "on": ", ".join(passed), "kind": "before_allow",\n',
+     '                             "on": ", ".join(passed), "kind": "turned",\n'),
+    ("M2064", "the reassertion's card says a deny kept before an allow as a turned rule (I4D)", RCA,
+     "                         if x.get(\"kind\") == \"before_allow\" else\n",
+     "                         if False else\n"),
+    ("M2065", "the guard reads the replacement's number in the inbound direction only: an outbound deny "
+              "taken off past an allow (I4D)", NSG,
+     "    low, high = getattr(rule, \"priority\", None), priority.get(direction)\n",
+     "    low, high = getattr(rule, \"priority\", None), priority.get(\"inbound\")\n"),
+    ("M2066", "the guard counts the allows of any direction (I4D)", NSG,
+     "            if _enum_text(getattr(r, \"direction\", \"\")) == direction\n"
+     "            and _enum_text(getattr(r, \"access\", \"\")) == \"allow\"\n",
+     "            if _enum_text(getattr(r, \"access\", \"\")) == \"allow\"\n"),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in range(2060, 2067)})
+# I4D's review: a deny kept only when it holds a current address of the NIC; an unread number keeps it.
+MUTANTS += [
+    ("M2067", "the guard keeps a deny aimed only at addresses no longer the NIC's: the VM given them stays "
+              "cut off, « la retirer ouvrirait » said falsely (I4D, review)", NSG,
+     "    if ips and not any(_takes_in(values, ip) for ip in ips):\n        return []\n", ""),
+    ("M2068", "the guard drops a deny whose number can't be read (I4D, review)", NSG,
+     "    if not isinstance(low, int) or not isinstance(high, int):\n        return [UNREAD_PRIORITY]\n",
+     "    if not isinstance(low, int) or not isinstance(high, int):\n        return []\n"),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2067, 2068)})
+# I4D's review: the kept deny says the other VM it cuts off (the addresses no longer the NIC's).
+MUTANTS += [
+    ("M2069", "a kept deny never says the VM it cuts off (I4D, review)", BLK,
+     '        return " ; ".join(said)\n\n    def _block_ip_vm(', '        return ""\n\n    def _block_ip_vm('),
+    ("M2070", "the reassertion's card leaves out the VM a kept deny cuts off (I4D, review)", RCA,
+     """f"la retirer ouvrirait {vm}" + (f" ; il couvre aussi {x['also']}" if x.get("also") else "")""",
+     """f"la retirer ouvrirait {vm}" + "\""""),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2069, 2070)})
+# I4D's review, seed 9001: the release's guard asked without the VM's NICs — a rule aimed at its other NIC
+# kept « for another VM », `release_partial` for ever (I7).
+MUTANTS += [
+    ("M2071", "the release's guard reads the VM's other NIC as another VM: kept for ever (I4D, review)", REL,
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n',
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))\n'),
+]
+TESTS["M2071"] = ("tests/unit/test_invariant_regressions.py::"
+                  f"test_a_release_never_keeps_a_rule_for_another_nic_of_its_own_vm {INVARIANTS}")
+# I4D's second review: the guard reads every NIC of the VM — a deny on an address another NIC of the
+# same VM took since closes the VM still; said « de la même VM ».
+MUTANTS += [
+    ("M2072", "the isolation's guard reads this NIC's addresses only: a deny on its other NIC's address goes, "
+              "that NIC opened (I4D, second review)", ISO,
+     "                                                           list(guard.get(\"vm_nics\") or {})):\n",
+     "                                                           t[\"private_ips\"]):\n"),
+    ("M2073", "the block's guard reads this NIC's addresses only (I4D, second review)", BLK,
+     "                                                           list(holders.get(\"vm_nics\") or {})):\n",
+     "                                                           t[\"private_ips\"]):\n"),
+    ("M2074", "a kept deny says another NIC of the same VM as another VM (I4D, second review)", BLK,
+     "            if addr in vm_nics:\n                said.append(",
+     "            if False:\n                said.append("),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2072, 2073, 2074)})
+
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
 # from the query (N-10), H0's host key pinned (V-32), the containers hardened (V-34), one principal
@@ -5495,7 +5581,7 @@ _I5Q_REL = ("tests/unit/test_invariant_regressions.py::test_a_deleted_vms_deny_b
             "tests/unit/test_invariant_regressions.py::test_a_live_vms_release_is_not_held_by_its_own_turned_rule")
 MUTANTS += [
     ("M1734", "a deleted VM's release takes its placements' denies off, a turned rule behind them: the new VM opened (I5Q)",
-     REL, '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))\n'
+     REL, '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n'
           "                        or self._delete_rule(p_rg, p_name, name)\n",
      "                        self._delete_rule(p_rg, p_name, name)\n"),
     ("M1735", "a deleted VM's release, its state lost, takes its denies off everywhere, a turned rule behind (I5Q)",
@@ -6184,6 +6270,82 @@ MUTANTS += [
 ]
 _L1B_REV += " tests/unit/test_glorfindel.py::test_a_placement_on_an_nsg_that_no_longer_governs_the_nic_is_never_said_gone"
 TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046", "M2047")})
+# DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
+# (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
+# environment and its connections, the video kept outside the repository.
+SHOTS = "scripts/console_shots.py"
+MUTANTS += [
+    ("M2170", "the renderer takes any sample, not the shipped one (DOC1)", SHOTS,
+     "        if Path(path).resolve() != SAMPLE.resolve():", "        if False:"),
+    ("M2171", "a GUID other than the zero one passes in the sample (DOC1)", SHOTS,
+     "    found = [g for g in GUID.findall(ATTACHMENT.sub(\"\", text)) if g != ZERO_SUBSCRIPTION]", "    found = []"),
+    ("M2172", "an address outside the documentation's ranges passes (DOC1)", SHOTS,
+     "        if not any(ip in n for n in DOC_NETS):", "        if False:"),
+    ("M2173", "a target's name outside the bench's public ones passes (DOC1)", SHOTS,
+     "    bad = [n for n in names if not (isinstance(n, str) and BENCH_NAME.fullmatch(n))]", "    bad = []"),
+    ("M2174", "the sample's console starts with an Azure variable in its environment (DOC1)", SHOTS,
+     "    if azure:\n        return f\"an Azure variable", "    if False:\n        return f\"an Azure variable"),
+    ("M2175", "the sample's console starts with another HOME, marked or not (DOC1)", SHOTS,
+     "        if Path(d).resolve() != want.resolve():", "        if False:"),
+    ("M2176", "a socket of the sample's console connects off the loopback (DOC1)", SHOTS,
+     "        if not _local(address):\n            raise PermissionError(f\"console_shots: no connection off the loopback ({address[0]})\")\n"
+     "        return real_connect(self, address)",
+     "        return real_connect(self, address)"),
+    ("M2177", "the sample's console started without its loopback guard (DOC1)", SHOTS,
+     "    loopback_only()\n    sys.path.insert(0, str(REPO))", "    sys.path.insert(0, str(REPO))"),
+    ("M2178", "the sample's console inherits the operator's environment (DOC1)", SHOTS,
+     '    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work / "home"),',
+     '    return {**os.environ, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work / "home"),'),
+    ("M2179", "the whole tour written inside the repository (DOC1)", SHOTS,
+     "    if args.video and _inside_repo(args.video):", "    if False:"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console_shots.py" for n in range(2170, 2180)})
+# DOC1, its review: what the guards let through.
+MUTANTS += [
+    ("M2207", "an address that ends a sentence passes (DOC1 review)", SHOTS,
+     r'''\d{1,3}(?!\w|\.\d)")''', r'''\d{1,3}(?![\w.])")'''),
+    ("M2209", "a GUID written in capitals passes (DOC1 review)", SHOTS,
+     'GUID = re.compile(r"\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")',
+     'GUID = re.compile(r"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b")'),
+]
+MUTANTS += [
+    ("M2208", "a host under .me, .ai, .co or a country passes (DOC1 review)", SHOTS,
+     'HOST = re.compile(r"\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}\\b", re.I)',
+     'HOST = re.compile(r"\\b(?:[a-z0-9-]+\\.)+(?:com|net|org|io|dev|app|cloud|fr|eu|internal|local)\\b", re.I)'),
+]
+MUTANTS += [
+    ("M2204", "the sample's console resolves any name (DOC1 review)", SHOTS,
+     "        if host is not None and not _local((host, 0)):", "        if False:"),
+    ("M2205", "connect_ex of the sample's console reaches off the loopback (DOC1 review)", SHOTS,
+     "        if not _local(address):\n            raise PermissionError(f\"console_shots: no connection off the loopback ({address[0]})\")\n"
+     "        return real_connect_ex(self, address)",
+     "        return real_connect_ex(self, address)"),
+]
+MUTANTS += [
+    ("M2202", "the sample's console starts any program (DOC1 review)", SHOTS,
+     "    subprocess.Popen = Popen\n", ""),
+    ("M2203", "the sample's console sends a datagram off the loopback (DOC1 review)", SHOTS,
+     "    socket.socket.sendto, socket.socket.sendmsg = sendto, sendmsg\n", ""),
+    ("M2206", "the sample's console resolves a name by gethostbyname (DOC1 review)", SHOTS,
+     "    socket.gethostbyname = _resolving(real_byname, lambda host: host)\n", ""),
+]
+MUTANTS += [
+    ("M2200", "the sample's console reads glorfindel-config.yaml at the repository's root (DOC1 review)", SHOTS,
+     "    confine_config(work)\n    import uvicorn\n", "    import uvicorn\n"),
+    ("M2201", "the sample's configuration added after the package's paths, not in their place (DOC1 review)",
+     SHOTS, "    config._DEFAULT_PATHS[:] = [work / \"cwd\" / CONFIG]",
+     "    config._DEFAULT_PATHS.append(work / \"cwd\" / CONFIG)"),
+]
+MUTANTS += [
+    ("M2250", "the sample's console lets git run any command — fetch, ls-remote, -c (DOC1 review 2)", SHOTS,
+     "        if len(argv) < 2 or argv[1] not in GIT_READS:", "        if False:"),
+    ("M2251", "a GitHub attachment's URL is not taken out: the GUID of any URL ending like it is allowed "
+              "(the tour's video, 30/10)", SHOTS,
+     'ATTACHMENT = re.compile(r"https://github\\.com/user-attachments/assets/[0-9a-fA-F-]{36}\\b")',
+     'ATTACHMENT = re.compile(r"https://[^/]+/user-attachments/assets/[0-9a-fA-F-]{36}\\b")'),
+]
+TESTS.update({mid: "tests/unit/test_console_shots.py"
+              for mid in ("M2251", "M2250", "M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
 
 # U7D (#368): an `unblock_partial` drops from its entry the placements whose two rules it took
 # off — kept, a block written whole since merged them back in and read their absence as a

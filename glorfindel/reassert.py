@@ -211,14 +211,14 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
     except Exception as exc:                                   # VM gone, API down
         log.warning("reassert: isolation of %s not checked (%s)", vm, exc)
         return
+    if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):
+        episode(ref or vm, "", over=True)        # back: a new episode next time, whatever write fails
     say_bypass(vm, rid, verification, report, ref=ref)
     if verification.get("verified") is True:
         state = _load_isolation_state(ref or vm)
         if state is not None:
             # Back in place: a later disappearance is a new episode, alerted again — also
-            # when the mark can't be taken off (L2C, review).
-            if state.get("drift_alerted_at"):
-                episode(ref or vm, "", over=True)
+            # when the mark can't be taken off, here or in say_bypass (L2C, review).
             state.pop("drift_alerted_at", None)
             _save_isolation_state(ref or vm, {**state, "verified_at": now})
             episode(ref or vm, "", over=False)
@@ -296,10 +296,10 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     except Exception as exc:
         log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
         return
+    if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):
+        episode(ref or vm, ip, over=True)        # back: a new episode next time, whatever write fails
     say_bypass(vm, rid, verification, report, ip=ip, ref=ref)
     if verification.get("verified") is True and not verification.get("held_missing"):
-        if b.get("drift_alerted_at"):
-            episode(ref or vm, ip, over=True)           # the mark may fail to go (L2C, review)
         _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None, uncovered_said=None)
         episode(ref or vm, ip, over=False)
         return

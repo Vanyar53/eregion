@@ -1328,6 +1328,26 @@ def test_a_disappearance_is_over_once_its_rules_are_back_even_bypassed(kind):
     assert len(_drift_cards("pending")) == 1
 
 
+def test_an_episode_is_known_over_before_any_write_of_its_pass(monkeypatch):
+    """Graine 777 at 2 000 (L2C, review): the block held again, but the first write of its
+    pass — its bypass mark taken off, before the drift mark — refused; the episode was not
+    known over, the next disappearance unsaid. Known over from the reading itself."""
+    from glorfindel.actions import _update_block_entry
+    c = _gone("block")
+    reassert_active(c, _HUMAN)
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    _update_block_entry("vm", _IP, bypass_said="reassert-bypass-block-vm-x")
+    gone = c.verify_block_ip.return_value
+    c.verify_block_ip.return_value = {"verified": True}
+    give_back = _unwritable(monkeypatch, "/blocks/")
+    reassert_active(c, _HUMAN)
+    give_back()
+    assert _drift_mark("block")
+    c.verify_block_ip.return_value = gone
+    reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1
+
+
 def test_a_state_refused_on_one_vm_does_not_stop_the_pass(monkeypatch):
     """A full disk on the first VM's state: the pass went no further — the next VM, held
     again, never seen so, its drift mark kept. Each VM is read; the refusal is logged."""

@@ -6146,7 +6146,16 @@ MUTANTS += [
      "        return real_connect_ex(self, address)",
      "        return real_connect_ex(self, address)"),
 ]
-TESTS.update({mid: "tests/unit/test_console_shots.py" for mid in ("M2204", "M2205", "M2207", "M2208", "M2209")})
+MUTANTS += [
+    ("M2202", "the sample's console starts any program (DOC1 review)", SHOTS,
+     "    subprocess.Popen = Popen\n", ""),
+    ("M2203", "the sample's console sends a datagram off the loopback (DOC1 review)", SHOTS,
+     "    socket.socket.sendto, socket.socket.sendmsg = sendto, sendmsg\n", ""),
+    ("M2206", "the sample's console resolves a name by gethostbyname (DOC1 review)", SHOTS,
+     "    socket.gethostbyname = _resolving(real_byname, lambda host: host)\n", ""),
+]
+TESTS.update({mid: "tests/unit/test_console_shots.py"
+              for mid in ("M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -12,8 +12,9 @@ a throwaway directory that is the server's HOME and working directory — never 
 ``runs/`` or a real bench. The script refuses (exit 2) another sample, a sample that carries an
 identifier outside the allowed ones (``identifiers``), a video written inside the repository.
 The server it starts refuses to run anywhere but in that directory, with an Azure variable in
-its environment, or without the sample's mark (``serve_refusal``); it connects nowhere but the
-loopback (``loopback_only``). No Azure call, no model, no H0.
+its environment, or without the sample's mark (``serve_refusal``); through Python, it reaches
+the loopback only — connections, datagrams, names — and starts no program but git
+(``loopback_only``, which says what stays open). No Azure call, no model, no H0.
 
 **The tools are the workstation's**, never the CI's nor a dependency of the package: a Chromium
 (``--chromium``, ``EREGION_CHROMIUM``, the PATH, or Playwright's cache: ``chrome-headless-shell``),
@@ -240,10 +241,21 @@ def serve_refusal(work: Path, environ, home: Path, cwd: Path) -> str:
 
 
 def loopback_only() -> None:
-    """Every connection of this process to the loopback, or PermissionError: the console started
-    on the sample reaches no cloud, no model, no host — even by a path the patches missed."""
+    """What this process reaches through Python, the loopback only, or PermissionError: the
+    console started on the sample reaches no cloud, no model, no host — even by a path the
+    patches missed. Closed: a connection (``connect``, ``connect_ex``, and so ``create_connection``,
+    asyncio's), a datagram sent to an address (``sendto``, ``sendmsg``), a name resolved
+    (``getaddrinfo``, ``gethostbyname``, ``gethostbyname_ex``, ``gethostbyaddr``,
+    ``getnameinfo``), a program started (``subprocess.Popen`` and so ``run``, asyncio's, ``os.popen``;
+    ``os.system``, ``os.exec*``, ``os.posix_spawn*``) — but ``git``, which the header asks the
+    commit of and which reaches no network. Open: a C extension that opens its own sockets or
+    starts its own programs, outside Python's modules — none of the console's does."""
     real_connect, real_connect_ex, real_getaddrinfo = (socket.socket.connect, socket.socket.connect_ex,
                                                       socket.getaddrinfo)
+    real_sendto, real_sendmsg = socket.socket.sendto, socket.socket.sendmsg
+    real_byname, real_byname_ex, real_byaddr, real_nameinfo = (
+        socket.gethostbyname, socket.gethostbyname_ex, socket.gethostbyaddr, socket.getnameinfo)
+    real_popen = subprocess.Popen
 
     def _local(address) -> bool:
         if not isinstance(address, tuple):   # a Unix socket
@@ -271,7 +283,58 @@ def loopback_only() -> None:
             raise PermissionError(f"console_shots: no name resolved off the loopback ({host})")
         return real_getaddrinfo(host, *args, **kwargs)
 
+    def sendto(self, data, *args):
+        if not _local(args[-1]):
+            raise PermissionError(f"console_shots: no datagram off the loopback ({args[-1][0]})")
+        return real_sendto(self, data, *args)
+
+    def sendmsg(self, buffers, *args, **kwargs):
+        address = kwargs.get("address", args[2] if len(args) > 2 else None)
+        if address is not None and not _local(address):
+            raise PermissionError(f"console_shots: no datagram off the loopback ({address[0]})")
+        return real_sendmsg(self, buffers, *args, **kwargs)
+
+    def _resolving(real, host_of):
+        def guarded(*args, **kwargs):
+            host = host_of(*args)
+            if not _local((host, 0)):
+                raise PermissionError(f"console_shots: no name resolved off the loopback ({host})")
+            return real(*args, **kwargs)
+        return guarded
+
+    def _program(args, kwargs) -> str:
+        if kwargs.get("shell"):
+            return "a shell"
+        if kwargs.get("executable"):
+            return os.fsdecode(kwargs["executable"])
+        argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
+        return os.fsdecode(argv[0]) if argv else ""
+
+    def _start(program: str) -> None:
+        if Path(program).name != "git":
+            raise PermissionError(f"console_shots: no program started but git ({program})")
+
+    class Popen(real_popen):
+        def __init__(self, args, *rest, **kwargs):
+            _start(_program(args, kwargs))
+            super().__init__(args, *rest, **kwargs)
+
+    def _checked(real, name):
+        def guarded(path, *args, **kwargs):     # os.system's is a command line: a shell, refused
+            _start("a shell" if name == "system" else os.fsdecode(path))
+            return real(path, *args, **kwargs)
+        return guarded
+
     socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo = connect, connect_ex, getaddrinfo
+    socket.socket.sendto, socket.socket.sendmsg = sendto, sendmsg
+    socket.gethostbyname = _resolving(real_byname, lambda host: host)
+    socket.gethostbyname_ex = _resolving(real_byname_ex, lambda host: host)
+    socket.gethostbyaddr = _resolving(real_byaddr, lambda host: host)
+    socket.getnameinfo = _resolving(real_nameinfo, lambda sockaddr, *flags: sockaddr[0])
+    subprocess.Popen = Popen
+    for name in ("system", "execv", "execve", "posix_spawn", "posix_spawnp"):
+        if hasattr(os, name):
+            setattr(os, name, _checked(getattr(os, name), name))
 
 
 def install(api, doc: dict, put=setattr) -> None:

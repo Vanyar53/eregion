@@ -205,8 +205,10 @@ python scripts/console_shots.py --check     # quels outils sont là ; ne rend ri
     `vm-celebrimbor-…`, `vm-sentinel`).
   - Le script refuse (code 2) un autre jeu, ou un jeu qui porte un autre GUID, une adresse hors des
     plages de documentation, un autre nom.
-  - Le serveur qu'il démarre refuse une variable Azure dans son environnement, ou un autre HOME. Il ne
-    se connecte qu'à la boucle locale.
+  - Le serveur qu'il démarre refuse une variable Azure dans son environnement, ou un autre HOME.
+  - Par Python, il ne joint que la boucle locale : connexions, datagrammes, résolution de noms. Il ne
+    lance aucun programme, sauf `git`, qui lit le commit de l'en-tête. Reste ouverte une extension C
+    qui ouvrirait ses propres sockets ou lancerait ses propres programmes : la console n'en a pas.
 - **Les outils sont ceux du poste**, jamais des dépendances du paquet :
   - un Chromium (`--chromium`, `EREGION_CHROMIUM`, le PATH, ou le cache de Playwright :
     `chrome-headless-shell`), piloté par le protocole DevTools avec `websockets` ;

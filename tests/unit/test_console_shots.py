@@ -176,6 +176,69 @@ for label, (how, where) in probes.items():
     assert said == {"connect": off, "connect_ex": off, "resolve": unresolved,
                     "create_connection": unresolved}, r.stdout + r.stderr
 
+_GUARDED = f"""
+import importlib.util, os, socket, subprocess, sys
+spec = importlib.util.spec_from_file_location("cs", {str(SCRIPT)!r})
+cs = importlib.util.module_from_spec(spec); spec.loader.exec_module(cs)
+cs.loopback_only()
+def probe(label, how):
+    try:
+        how()
+        print(label, "PASSED")
+    except PermissionError as e:
+        print(label, "refused", e)
+    except OSError as e:
+        print(label, "OTHER", e)
+"""
+
+
+def _probes(code: str, tmp_path: Path) -> dict[str, str]:
+    r = _in_a_process(_GUARDED + code, {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)}, tmp_path)
+    return dict(line.split(" ", 1) for line in r.stdout.splitlines() if " " in line) or {"stderr": r.stderr}
+
+
+def test_the_guard_starts_no_program_but_git(tmp_path):
+    """The console starts programs (release, reset, restore; git for its commit): under the guard,
+    git only — a program, a shell, an exec, a spawn are refused."""
+    said = _probes("""
+probe("git", lambda: subprocess.run(["git", "--version"], capture_output=True, check=True))
+probe("python", lambda: subprocess.run([sys.executable, "-c", "pass"], check=True))
+probe("az", lambda: subprocess.check_output(["az", "account", "show"]))
+probe("shell", lambda: subprocess.run("git --version", shell=True, check=True))
+probe("system", lambda: os.system("true"))
+probe("popen", lambda: os.popen("true").read())
+probe("spawn", lambda: os.posix_spawn("/bin/true", ["true"], dict(os.environ)))
+probe("exec", lambda: os.execv("/bin/true", ["true"]))
+""", tmp_path)
+    assert said.pop("git") == "PASSED", said
+    assert said == {k: f"refused console_shots: no program started but git ({v})" for k, v in (
+        ("python", sys.executable), ("az", "az"), ("shell", "a shell"), ("system", "a shell"),
+        ("popen", "a shell"), ("spawn", "/bin/true"), ("exec", "/bin/true"))}
+
+
+def test_the_guard_sends_no_datagram_and_resolves_no_name_off_the_loopback(tmp_path):
+    said = _probes("""
+udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+here = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); here.bind(("127.0.0.1", 0))
+probe("sendto-loopback", lambda: udp.sendto(b"x", here.getsockname()))
+probe("sendto", lambda: udp.sendto(b"x", ("192.0.2.1", 53)))
+probe("sendto-flags", lambda: udp.sendto(b"x", 0, ("192.0.2.1", 53)))
+probe("sendmsg", lambda: udp.sendmsg([b"x"], [], 0, ("192.0.2.1", 53)))
+probe("byname-localhost", lambda: socket.gethostbyname("localhost"))
+probe("byname", lambda: socket.gethostbyname("example.com"))
+probe("byname_ex", lambda: socket.gethostbyname_ex("example.com"))
+probe("byaddr", lambda: socket.gethostbyaddr("192.0.2.1"))
+probe("nameinfo", lambda: socket.getnameinfo(("192.0.2.1", 80), 0))
+""", tmp_path)
+    datagram = "refused console_shots: no datagram off the loopback (192.0.2.1)"
+    assert said == {"sendto-loopback": "PASSED", "sendto": datagram, "sendto-flags": datagram, "sendmsg": datagram,
+                    "byname-localhost": "PASSED",
+                    "byname": "refused console_shots: no name resolved off the loopback (example.com)",
+                    "byname_ex": "refused console_shots: no name resolved off the loopback (example.com)",
+                    "byaddr": "refused console_shots: no name resolved off the loopback (192.0.2.1)",
+                    "nameinfo": "refused console_shots: no name resolved off the loopback (192.0.2.1)"}
+
+
 def test_the_server_reaches_nothing_once_started(tmp_path):
     """serve() as the script runs it, uvicorn replaced by a connection to the documentation's
     address: refused by the guard, before anything listens."""

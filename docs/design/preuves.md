@@ -2532,6 +2532,16 @@ autre VM rendait aux marques de web le pouvoir de tenir son blocage. Seule la VM
 maintenant (son identifiant, `unblock_ip` et `sweep_vm_rules`) : l'oracle refuse plus (A0). Le contrôle de
 l'oracle lui-même : `test_another_vms_unblock_never_lets_the_marks_hold_a_block_again` (les marques remises
 à la main, comme avant L1B ; rouge avec le journal vidé pour toutes).
+(4) **Deux échecs de `main` d380df5, hors du lot, figés en `xfail` strict** (réduits à la main, rejoués
+rouges sur d380df5 avec le même message). La graine 1006 à 60 (29 étapes, 5 restées) : Db--01 bloquée et
+isolée en quarantaine, le périmètre de web et une règle de Db--01 retournée, la levée de web coupée,
+l'adresse de db-nic-0 changée et l'ancienne reprise — au démontage, « I7: block rules of …/Db--01 left
+after unblock » (`test_a_blocks_rules_on_a_reused_address_go_with_the_unblock`, routé vers #368, avec
+l'élagage des placements après un `unblock_partial`). Atteinte à 60 séquences, donc par la CI de toute PR.
+La graine 31337 à 2 000 (15 étapes, 4 restées) : un blocage de web dont les règles sont retournées deux
+fois, le rôle retiré, puis un contournement sous `nsg.get` toujours en 429 — « L1: the block of …/web is
+bypassed by a customer allow ; the reassertion doesn't say so »
+(`test_a_bypassed_block_is_said_while_its_nsg_cannot_be_read`, routé vers #369).
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

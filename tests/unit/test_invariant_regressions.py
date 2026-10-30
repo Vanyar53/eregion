@@ -4493,3 +4493,87 @@ def test_the_reassertion_says_unblocked_where_our_perimeter_block_still_cuts(mon
     too: not I4E's family, routed to a follow-up lot (#366). Strict: once fixed, this fails, and the
     mark goes."""
     _run(monkeypatch, _I3_SEED1999_NET, *_I3_SEED1999_STEPS)
+
+
+# L1B's review: two failures of `main` d380df5, outside the lot, frozen for their own lots.
+_L1BR_OUT = _s1618("allow-lateral-out", 120, "Allow", "*", direction="Outbound", destination="VirtualNetwork")
+_L1BR_DENY = _s1618("deny-lateral-in", 1300, "Deny", "*", source="VirtualNetwork")
+_S1006_NET = {
+    "subnet_nsg": [_s1618("allow-lateral-out", 1200, "Allow", "*", direction="Outbound", destination="VirtualNetwork")],
+    "edge_nsg": None,
+    "tier_rules": [_s1618("allow-ssh", 1000, "Allow", "22"), _s1618("allow-https", 110, "Allow", "443", source="Internet"),
+                   _L1BR_DENY],
+    "nics": {"web-nic": {"own": "tier", "rules": [_L1BR_OUT, _L1BR_DENY], "policy": False},
+             "db-nic-0": {"own": "tier", "rules": [_s1618("allow-ssh", 1000, "Allow", "22"), _L1BR_DENY], "policy": False},
+             "db-nic-1": {"own": "tier", "rules": [], "policy": True},
+             "api-nic": {"own": None, "policy": False, "rules": [
+                 _s1618("allow-ssh", 150, "Allow", "22"), _s1618("allow-https", 1100, "Allow", "443", source="Internet"),
+                 _L1BR_OUT, _L1BR_DENY]}},
+    "windows": "Db--01",
+    "config": {"readable": True, "rg": "rg-sec", "quarantine": True, "forensic": ["10.9.0.0/16"]},
+    "legacy": ("web-nic", False),
+    "data_subnet": [_s1618("allow-ssh", 101, "Allow", "22"), _L1BR_DENY]}
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#368: I7, a block's rules on its NIC's old address left after the unblock")
+def test_a_blocks_rules_on_a_reused_address_go_with_the_unblock(monkeypatch):
+    """L1B's review, the machine at 60 (seed 1006; 29 steps, reduced to 5): Db--01 blocked and
+    isolated in quarantine (the block cut by a 429 after its 6th write); web's perimeter block,
+    one of Db--01's rules turned (`block_turned_then_reasserted`, cut by a 429); web's release cut
+    off; db-nic-0's address changed, a new api given web's old one. At the teardown, « I7: block
+    rules of …/rg-app1/…/Db--01 left after unblock: [nsg-tier/…-db-nic-0-0d0228,
+    nsg-subnet/…-db-nic-0-0d0228] ». Fails on `main` d380df5 too, outside L1B: routed to #368 (with
+    the placements left after an `unblock_partial`). Reached at 60 sequences: any PR's CI. Strict:
+    once fixed, this fails, and the mark goes."""
+    _run(monkeypatch, _S1006_NET,
+         ("block_then_isolate", DB, DB, (6, "after-429"), 22, None, True,
+          _S101_NSG.format("rg-sec", "nsg-glorfindel-quarantine-westeurope"), False),
+         ("block_turned_then_reasserted", WEB2, WEB2, (3, "before-429"), "subnet",
+          (_S101_NSG.format("rg-net", "nsg-tier"), "glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228"),
+          "non_disruptive"),
+         ("interrupted_release", WEB2, WEB2, (7, "before-429"), 1, "after-crash", False),
+         ("customer_changes_ip", _nic("rg-app1", "db-nic-0"), 0, 4),
+         ("address_reused_under_a_turned_rule", WEB2, WEB2.lower(), None, 22,
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+          _nic("rg-app2", "web-nic"), 0, 4, "rg-app1", "api",
+          "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-tier",
+          "Windows"))
+
+
+_S31337_NET = {
+    "subnet_nsg": [_s1618("allow-https", 110, "Allow", "443", source="Internet"), _L1BR_OUT],
+    "edge_nsg": None,
+    "tier_rules": [_s1618("allow-lateral-out", 100, "Allow", "*", direction="Outbound", destination="VirtualNetwork"),
+                   _s1618("deny-lateral-in", 130, "Deny", "*", source="VirtualNetwork")],
+    "nics": {"web-nic": {"own": None, "rules": [_L1BR_OUT, _L1BR_DENY], "policy": False},
+             "db-nic-0": {"own": "tier", "policy": False,
+                          "rules": [_s1618("allow-https", 100, "Allow", "443", source="Internet"), _L1BR_OUT]},
+             "db-nic-1": {"own": "tier", "rules": [], "policy": True},
+             "api-nic": {"own": None, "rules": [_s1618("allow-https", 1100, "Allow", "443", source="Internet")],
+                         "policy": True}},
+    "windows": "Db--01",
+    "config": {"quarantine": False, "rg": "", "readable": True, "forensic": ["10.9.0.0/16"]},
+    "legacy": ("web-nic", True),
+    "data_subnet": None}
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#369: L1, a block bypassed behind an unreadable NSG left unsaid")
+def test_a_bypassed_block_is_said_while_its_nsg_cannot_be_read(monkeypatch):
+    """L1B's review, the machine at 2 000 (seed 31337; 15 steps, reduced to 4): web (rg-app2)
+    blocked on its subnet, its rules turned twice (`block_turned_then_reasserted`, the first cut
+    by a crash), the role taken away (`access_changes`), then `said_then_back_after_a_full_disk`
+    (« bypass », every `nsg.get` answering 429, human_only): « L1: the block of …/rg-app2/…/web is
+    bypassed by a customer allow (…22); the reassertion doesn't say so ». Fails on `main` d380df5
+    too, outside L1B: routed to #369. Strict: once fixed, this fails, and the mark goes."""
+    _run(monkeypatch, _S31337_NET,
+         ("block_turned_then_reasserted", WEB2, WEB2, (7, "after-crash"), "both", 22,
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+          "non_disruptive"),
+         ("block_turned_then_reasserted", WEB2, WEB2, None, "both", None,
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c-out"),
+          "non_disruptive"),
+         ("access_changes", True),
+         ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2.lower(), ("nsg.get", "always-429"), False, None,
+          (210, _S101_NSG.format("rg-net", "nsg-subnet")), "allow-https", "human_only"))

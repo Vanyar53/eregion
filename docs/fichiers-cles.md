@@ -133,7 +133,7 @@ glorfindel/
                           say_unreadable_states (carte `state_unreadable`, state_alerts.json)
   reassert_quarantine.py → I1F, I1S, ISU : les NSG de quarantaine modifiés, lus à chaque passe quel que soit
                           l'état local — _report_altered_quarantines, quarantine_alerts.json (sorti de
-                          reassert.py par RB1, sans changement de comportement)
+                          reassert.py par RB1, sans changement de comportement ; L2Q : un changement qui revient est redit)
   rule_layers.py        → P1 : la couche du client — write_client_rule (atomique, verrou, refuse d'écrire sur une
                           couche illisible), migrate (règles approuvées dans la base avant P1 → couche ; une
                           règle au workspace en ligne liée à son backend). P1 n'exporte pas : l'export d'une règle généralisée, sans identifiant, est reporté à un lot rattaché à P2 (relu par un humain avant tout envoi)
@@ -353,6 +353,7 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 (la levée demandera le tag). `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
                                 oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte
+                                L2Q : ne fait taire un changement que si la dernière carte du NSG est la sienne, fermée par un humain (sans note)
   state_alerts.json           → SEC4b : la liste des fichiers d'état illisibles déjà dite (carte `state_unreadable`) ;
                                 oubliée quand tout se lit de nouveau — un acquittement ne relève pas de carte
   orphan_alerts.json          → A3 : règle orpheline (NSG/règle) → sa carte `orphan_rule` ; une règle dite ne l'est pas de nouveau

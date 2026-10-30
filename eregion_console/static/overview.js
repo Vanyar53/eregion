@@ -85,9 +85,13 @@ function indicators() {
     : `no detected attack in ${days} d`;
   const contain = box('TIME TO CONTAIN', c.contain_s != null ? dur(c.contain_s) : '— nothing contained alone',
     timed, '', 'From the attack to the verified action — only what Glorfindel contained alone. Detect: from the attack to the detection the run counted; decide: to the recommendation (run reports and the watch\'s cycles, ' + days + ' days).');
+  // BL1: every attack run beside the detected ones, and the faults taken for an attack.
+  const faultLine = a.faults_mistaken ? ` · <span style="color:var(--red)">faults taken for an attack: ${esc(a.faults_mistaken)}${a.disruptive_on_faults ? ' (' + esc(a.disruptive_on_faults) + ' acted on)' : ''}</span>` : '';
   const alone = box('CONTAINED ALONE', a.of ? `${esc(a.contained)} of ${esc(a.of)}` : '—',
-    a.of ? `shadow: ${esc(a.shadow)} of ${esc(a.of)} would have been` : `no detected attack in ${days} d`, '',
-    `Real: isolations and blocks executed and verified alone. Shadow: the detected attacks on which Glorfindel recommended to isolate or to block at or above the confidence gate (${a.threshold == null ? 'unreadable: every action held' : Math.round(a.threshold * 100) + '%'}), not judged wrong — what it would have contained, had it been allowed to act (${days} days).`);
+    (a.of ? `shadow: ${esc(a.shadow)} of ${esc(a.of)} would have been` : `no detected attack in ${days} d`)
+      + (a.attacks != null && a.attacks !== a.of ? ` · ${esc(a.attacks)} attack run${a.attacks > 1 ? 's' : ''} in all` : '') + faultLine,
+    a.faults_mistaken ? 'warn' : '',
+    `Real: isolations and blocks executed in Glorfindel's own cycle, read back on Azure and that held (no card saying they disappeared or were bypassed). Shadow: the detected attacks on which Glorfindel recommended to isolate or to block at or above the confidence gate (${a.threshold == null ? 'unreadable: every action held' : Math.round(a.threshold * 100) + '%'}), not judged wrong — what it would have contained, had it been allowed to act (${days} days). A fault taken for an attack: a decision to isolate or to block on a fault's target during it (counted apart, never an attack).`);
   const w30 = w.days_30, w7 = w.days_7;
   const wrong = box('WRONG DISRUPTIVE', w30.judged ? `${pc(w30.rate)} of ${esc(w30.judged)} judged` : '— none judged',
     `real traffic, ${days} d · 7 d: ${w7.judged ? pc(w7.rate) + ' of ' + esc(w7.judged) : 'none judged'}`,

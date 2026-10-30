@@ -88,6 +88,23 @@ def test_a_bypass_is_not_a_missing_rule():
     assert [e["escalation_type"] for e in escalations.pending()] == ["bypassed"]
 
 
+def test_rules_gone_behind_a_bypass_are_said_gone_and_put_back_once():
+    """L1B (#355): an isolation bypassed (an older pair, an allow before it) while the rules
+    the state records are gone: the bypass on its card, the disappearance on its own —
+    said in human_only, put back once outside it, as any rule gone (L1)."""
+    _isolated()
+    gone = {"verified": False, "method": "nsg_check", "shadowed_by": [{"rule": "allow-ssh"}],
+            "missing_rules": ["glorfindel-iso-vm-nic-a", "glorfindel-iso-vm-nic-a-out"]}
+    c = _connector(gone)
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["bypassed", "escalated"]
+    c.isolate_vm.assert_not_called()
+    assert sorted(e["action"] for e in escalations.pending()) == ["isolate_vm", "review_bypass"]
+    _isolated()
+    escalations._STORE.unlink()
+    assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["bypassed", "reapplied"]
+    c.isolate_vm.assert_called_once()
+
+
 # ── V-16 (SEC4b): an isolation or a block bypassed by someone else's allow ──────────────
 
 _ALLOW = {"rule": "allow-ssh", "priority": 150, "direction": "inbound", "ports": "22",

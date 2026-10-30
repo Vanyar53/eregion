@@ -2254,6 +2254,36 @@ def test_a_bypassed_leftover_does_not_hide_a_sound_deny(monkeypatch):
     assert connector.verify_isolation(_RID)["verified"] is False       # the bypassed one alone
 
 
+def test_a_bypassed_isolation_says_the_recorded_rules_that_are_gone(monkeypatch):
+    """L1B (#355), seed 42 at 500: the isolation placed on the subnet's NSG (an allow before
+    our deny on the NIC's), an older pair bypassed on the NIC's NSG. Our rules taken off
+    the subnet's: the verification said « contournée » alone, the missing rules dropped —
+    the reassertion neither put them back nor said them gone (L1). They go with the
+    bypass now; a listing that can't be read claims nothing."""
+    from glorfindel.actions import AzureConnector, _save_isolation_state
+    t = {**_nic_target(nsg_name="nsg-nic", scope="nic"), "alt_nsg": {"nsg_rg": "rg", "nsg_name": "nsg-subnet"}}
+    _save_isolation_state(_RID, {"resource_id": _RID, "placements": [
+        {"nic_id": "nic-a", "nsg_rg": "rg", "nsg_name": "nsg-subnet", "scope": "subnet",
+         "rule_in": _iso_name(), "rule_out": f"{_iso_name()}-out"}]})
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm, **_k: [t])
+    net = MagicMock()
+    older = [_nsg_rule(**_BENCH_ALLOW_SSH), *_deny_pair("glorfindel-isolation-deny-all-vm", 101, ip="10.0.0.5")]
+    _listings(net, {"nsg-nic": older, "nsg-subnet": []})
+    connector._network = net
+    out = connector.verify_isolation(_RID)
+    assert out["verified"] is False and [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"]
+    assert out["missing_rules"] == [_iso_name(), f"{_iso_name()}-out"]
+    from glorfindel.reassert import _missing
+    assert _missing(out)                                  # the reassertion reads it as gone
+    _listings(net, {"nsg-nic": older, "nsg-subnet": RuntimeError("(TooManyRequests) 429")})
+    assert connector.verify_isolation(_RID)["verified"] is False
+    assert "missing_rules" not in connector.verify_isolation(_RID)     # unread: never said gone
+    _listings(net, {"nsg-nic": older, "nsg-subnet": _deny_pair(_iso_name(), 100, ip="10.0.0.5")})
+    assert connector.verify_isolation(_RID)["verified"] is True        # back: it holds
+
+
 def test_an_unreadable_subnet_is_not_a_subnet_without_nsg(monkeypatch):
     """A 429 on the subnet read meant "no subnet NSG": a release without state swept
     nothing and said released while the isolation stayed on the subnet NSG (L24)."""

@@ -3463,35 +3463,19 @@ _S42_ISO_NET = {
     "legacy": ("web-nic", False), "data_subnet": None}
 
 
-def _gone_said_strictly(self, vm: str, isolation: bool):
-    """`_gone_said` as L1 asks it, before its loosening (d3c2691): a drift card — the
-    isolation said gone —, a bypass card no longer counts."""
-    from glorfindel import escalations
-    if not isolation:
-        return
-    record = self._state(vm)
-    if record is None or any(record.get(k) for k in ("partial", "release_failed", "releasing_at")):
-        return
-    said = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)
-            and e.get("action") == "isolate_vm" and (e.get("signal_id") or "").startswith("reassert-")]
-    assert said, f"L1: the isolation of {vm} vanished from Azure; the reassertion neither put it back nor said so"
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="L1B (#355): an isolation's missing rules dropped under a bypass — routed from L2C")
 def test_an_isolation_gone_under_a_bypass_is_said_gone(monkeypatch):
     """Seed 42 at 500 (L2C's second review), shrunk to two steps: web of rg-app2 blocked,
     a block rule turned, its address given to a new web of rg-app1; then web (rg-app1)
-    isolated by rules on its own NSG — an allow of the customer's read before our deny —
-    and our rules taken off. The verification returns « bypassed », the missing rules
-    dropped: no drift card (« L1: the isolation of …/rg-app1/…/web vanished »). The
-    machine's oracle counts the bypass card meanwhile; that loosening goes with L1B."""
-    monkeypatch.setattr(IsolationMachine, "_gone_said", _gone_said_strictly)
+    isolated by rules — on its subnet's NSG, an allow of the customer's before an older
+    version's deny on its own — and our rules taken off. The verification returned
+    « bypassed » (the older deny), the missing rules dropped: no drift card (« L1: the
+    isolation of …/rg-app1/…/web vanished »). L1B: the bypass carries what is gone, the
+    reassertion says it; the machine's oracle no longer counts the bypass card."""
     _run(monkeypatch, _S42_ISO_NET,
          ("turned_then_address_reused", WEB2, WEB2, None, 22, "both", 22,
           (_S101_NSG.format("rg-app2", "nsg-web-nic"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
           "non_disruptive", False, 22, False, "rg-app1", "web", False, "non_disruptive"),
-         ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, True))
+         ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, True, (1, "from-full")))
 
 
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────

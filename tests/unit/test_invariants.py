@@ -2133,9 +2133,9 @@ class IsolationMachine(RuleBasedStateMachine):
         """L1 for an isolation as for a block (the block's is the reassert rule's own): the
         test took its rules off, its record stands, no operation holds it — a pending card
         of the reassertion's on the VM says it does not hold. Called before the acknowledgement,
-        and after a new episode. A bypass card counts: an allow the code reads before our deny
-        hides the rules' absence (the verification returns « bypassed », its missing rules
-        dropped — the mechanism of the two older L1 on a block, routed; seed 42 at 500)."""
+        and after a new episode. A bypass card no longer counts (L1B, #355): an allow the code
+        reads before our deny hid the rules' absence (the verification returned « bypassed »,
+        its missing rules dropped; seed 42 at 500) — L2C's loosening, taken back."""
         if not isolation:
             return                                          # the reassert rule's L1 judged it
         record = self._state(vm)
@@ -2143,7 +2143,7 @@ class IsolationMachine(RuleBasedStateMachine):
                 or any(record.get(k) for k in ("partial", "release_failed", "releasing_at"))):
             return
         said = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)
-                and e.get("action") in ("isolate_vm", "review_bypass") and (e.get("signal_id") or "").startswith("reassert-")
+                and e.get("action") == "isolate_vm" and (e.get("signal_id") or "").startswith("reassert-")
                 and not (e.get("action_params") or {}).get("ip")]
         assert said, f"L1: the isolation of {vm} vanished from Azure; the reassertion neither put it back nor said so"
 

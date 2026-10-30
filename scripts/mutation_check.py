@@ -5657,6 +5657,8 @@ MUTANTS += [
     ("M2113", "the canary's principal Contributor on its group: it may delete the group, create a VM (P04)",
      "docs/operations.md", 'az role assignment create --role "Network Contributor" \\\n',
      "az role assignment create --role Contributor \\\n"),
+    ("M2114", "the runner's second signal cuts the canary's cleanup short: the quarantine NSG left (P04)", JIT_SH,
+     "  trap '' INT TERM\n  echo \"== cleanup\"\n", "  echo \"== cleanup\"\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
 

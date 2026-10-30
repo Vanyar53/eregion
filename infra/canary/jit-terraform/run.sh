@@ -50,6 +50,9 @@ sweep() {
 }
 
 cleanup() {
+  # A second signal (the runner's SIGTERM some 7.5 s after its SIGINT) must not cut the cleanup
+  # short: ignored from here on. SIGKILL, which follows, cannot be.
+  trap '' INT TERM
   echo "== cleanup"
   terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 || sweep
   # Created outside Terraform, as Glorfindel does: never in its state.
@@ -57,7 +60,7 @@ cleanup() {
   cd / && rm -rf "$WORK"
 }
 trap cleanup EXIT
-# A cancelled job (SIGINT, SIGTERM) still cleans up.
+# A cancelled or timed-out job (SIGINT, then SIGTERM, then SIGKILL) tries to clean up.
 trap 'exit 130' INT TERM
 
 nic_nsg() { az network nic show -g "$RG" -n "$1" --query networkSecurityGroup.id -o tsv | awk -F/ '{print $NF}'; }

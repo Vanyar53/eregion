@@ -523,6 +523,10 @@ def test_the_canary_stack_creates_no_group_and_names_each_resource_with_its_suff
 
 
 _FAKE_TERRAFORM = r'''echo "terraform $* SKIP=${ARM_SKIP_PROVIDER_REGISTRATION:-} RPR=${ARM_RESOURCE_PROVIDER_REGISTRATIONS:-}" >> "$FAKE_LOG"
+case " ${FAKE_BLOCK:-} " in       # FAKE_BLOCK="apply destroy": wait there until the test says go
+  *" $1 "*) touch "$FAKE_STATE/at-$1"
+            for _ in $(seq 200); do [ -e "$FAKE_STATE/go-$1" ] && break; sleep 0.05; done ;;
+esac
 case "$1" in
   version) echo '{"provider_selections": {"registry.terraform.io/hashicorp/azurerm": "4.81.0"}}' ;;
   destroy) exit "${FAKE_DESTROY_RC:-0}" ;;
@@ -722,3 +726,48 @@ def test_the_canarys_principal_is_network_contributor_on_its_group_alone():
     assert all(c.rstrip().endswith("--scope /subscriptions/$SUB/resourceGroups/rg-eregion-canary") for c in creates)
     fallback = joined.index("# Seulement après un 403")
     assert all(joined.index(c) > fallback for c in creates if '"Network Contributor"' not in c)
+
+
+def test_a_cancelled_canary_cleans_up_through_the_runners_second_signal(tmp_path):
+    """On a cancel, the runner sends SIGINT, SIGTERM some 7.5 s later, then SIGKILL. The first
+    starts the cleanup; the second, arriving during the destroy, must not cut it short: the
+    quarantine NSG is still deleted after the destroy (P04 review)."""
+    import os
+    import signal
+    import subprocess
+    import time
+    bin_, state = tmp_path / "bin", tmp_path / "state"
+    bin_.mkdir()
+    state.mkdir()
+    _fake(bin_ / "terraform", _FAKE_TERRAFORM)
+    _fake_py(bin_ / "az", _FAKE_AZ)
+    log = tmp_path / "log"
+    env = {"PATH": f"{bin_}:{os.environ.get('PATH', '')}", "HOME": str(tmp_path), "TMPDIR": str(tmp_path),
+           "FAKE_LOG": str(log), "FAKE_STATE": str(state), "FAKE_BLOCK": "apply destroy",
+           "ARM_SUBSCRIPTION_ID": "sub", "CANARY_SUFFIX": "gh1-1-0"}
+
+    def reach(name):
+        for _ in range(200):
+            if (state / name).exists():
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"never reached {name}: {log.read_text() if log.exists() else ''}")
+
+    proc = subprocess.Popen(["bash", str(JIT / "run.sh")], env=env, cwd=tmp_path,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        reach("at-apply")
+        proc.send_signal(signal.SIGINT)
+        (state / "go-apply").touch()
+        reach("at-destroy")
+        proc.send_signal(signal.SIGTERM)
+        (state / "go-destroy").touch()
+        out, err = proc.communicate(timeout=30)
+    finally:
+        proc.kill()
+    calls = log.read_text().splitlines()
+    assert proc.returncode == 130, (out, err)
+    destroy = next(i for i, c in enumerate(calls) if c.startswith("terraform destroy"))
+    assert calls[destroy + 1:] == [
+        "az network nsg delete -g rg-eregion-canary -n nsg-glorfindel-quarantine-canary-gh1-1-0 -o none"], calls
+    assert not list(tmp_path.glob("tmp.*")), "the stack's copy left behind"

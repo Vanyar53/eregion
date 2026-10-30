@@ -726,8 +726,10 @@ az role assignment delete --role "Network Contributor" --assignee "$OBJ" \
   --scope /subscriptions/$SUB/resourceGroups/rg-eregion-canary
 ```
 
-**Ce qui reste ouvert** : un runner tué (pas d'`EXIT`) laisse les ressources de son run dans le
-groupe, gratuites et marquées par leur suffixe (`az resource list -g rg-eregion-canary -o
+**Ce qui reste ouvert** : un job annulé ou hors délai tente de nettoyer (le runner envoie SIGINT,
+SIGTERM environ 7,5 s plus tard, puis SIGKILL ; le nettoyage ignore le second signal, pas le
+dernier) ; s'il n'a pas le temps, comme un runner tué (pas d'`EXIT`), il laisse les ressources de
+son run dans le groupe, gratuites et marquées par leur suffixe (`az resource list -g rg-eregion-canary -o
 table`) ; et le principal, `Network Contributor` sur son groupe, pourrait y créer une ressource
 réseau payante (une IP publique, une passerelle) — seul un job de l'environnement `canary`, que seul `main` déploie, obtient son
 jeton (`tests/unit/test_workflows.py`).

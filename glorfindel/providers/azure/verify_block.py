@@ -146,7 +146,11 @@ class VerifyBlockMixin:
                 return {"verified": False, "method": "nsg_check", "missing_rules": missing,
                         "open_nics": open_nics, **said, "error": f"rules missing: {', '.join(missing)}"}
             if bypass:
-                return self._block_bypassed(ip, bypass)
+                # What is gone goes with the bypass (I4C): the merged perimeter's pair lifted
+                # by another VM's unblock, the VM's own rules there but bypassed — the bypass
+                # alone was said, the pair's disappearance dropped, and the reassertion,
+                # finding nothing missing, neither put it back nor said so (L1).
+                return {**self._block_bypassed(ip, bypass), **({"held_missing": held_missing} if held_missing else {})}
             if unread:
                 return {"verified": None, "method": "nsg_check", "unreadable_rules": unread,
                         "error": "blocage non vérifiable : règles illisibles (" + ", ".join(unread) + ")"}

@@ -3591,3 +3591,32 @@ def test_the_nightly_isolation_after_an_address_reused_under_a_turned_rule(monke
           "networkSecurityGroups/nsg-tier", "Linux"),
          ("customer_changes_ip", _nic("rg-app2", "web-nic"), 0, 4),
          ("interrupted_release", WEB1, WEB1, None, 1, "before-crash", False))
+
+
+# ── I4C (#344): what the unblock, the reset and the release keep is said; a lifted perimeter
+# exempts only what it alone closed. The oracle's own checks, on hand-made outcomes (A0). ──
+
+_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+
+
+def test_a_perimeter_lifted_by_a_neighbour_is_said_behind_a_bypass(monkeypatch):
+    """I4C, found by the harness's unmutated run (60 sequences, a seed at random) once
+    perimeter_lifted_beside_a_block made the state common; 20 steps, reduced by hand to 6.
+    A new web on the hub subnet blocked there (its entry holds the perimeter pair), web of
+    rg-app1 too (promoted), then the new web for itself — its rule behind the subnet's
+    allow-ssh at 150: bypassed —, then web of rg-app1 unblocked: the perimeter pair, one for
+    the subnet, goes. The new web's verification said the bypass alone (`shadowed_by`), the
+    pair's disappearance dropped; the reassertion found nothing missing: « L1: the block on
+    …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so »
+    (red on `main` f2b4333). Now the bypass carries what is gone (`held_missing`), and the
+    reassertion says it."""
+    net = _net(subnet_nsg=[_rule("allow-ssh", 150, dict(
+        access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+        destination_port_range="22"))])
+    _run(monkeypatch, net,
+         ("create_vm", "westeurope", "rg-new", "web", None, "Linux"),
+         ("block_perimeter", _NEW_WEB, _NEW_WEB, None, False),
+         ("block_perimeter", WEB1, WEB1, None, True),
+         ("block", _NEW_WEB, _NEW_WEB, None, 22),
+         ("unblock", WEB1, WEB1, None),
+         ("reassert", "non_disruptive", None))

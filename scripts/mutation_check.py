@@ -4883,6 +4883,22 @@ MUTANTS += [
 ]
 TESTS["M1906"] = _I4B
 
+# The harness's unmutated run on I4C's machine: a merged perimeter's pair lifted by a neighbour's
+# unblock, the VM's own rules bypassed — the bypass alone was said, the pair's disappearance
+# dropped (L1). Its frozen sequence, then the machine. M1965–M1966.
+_I4C = ("tests/unit/test_invariant_regressions.py::test_a_perimeter_lifted_by_a_neighbour_is_said_behind_a_bypass "
+        f"{INVARIANTS}")
+MUTANTS += [
+    ("M1965", "a bypassed block drops what is gone: the perimeter's pair lifted by a neighbour, unsaid (I4C)", VBL,
+     '                return {**self._block_bypassed(ip, bypass), **({"held_missing": held_missing} if held_missing else {})}\n',
+     "                return self._block_bypassed(ip, bypass)\n"),
+    ("M1966", "the reassertion reads a bypass with rules gone as nothing missing: silent (I4C)", R,
+     "        verification.get(\"uncovered_nics\") or verification.get(\"missing_rules\")\n"
+     "        or verification.get(\"held_missing\"))) or bool(\n",
+     "        verification.get(\"uncovered_nics\") or verification.get(\"missing_rules\"))) or bool(\n"),
+]
+TESTS.update({"M1965": _I4C, "M1966": _I4C})
+
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
 # from the query (N-10), H0's host key pinned (V-32), the containers hardened (V-34), one principal

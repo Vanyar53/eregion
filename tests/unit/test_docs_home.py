@@ -113,6 +113,16 @@ def test_the_pages_that_show_dagorlad_carry_no_identifier():
         assert cs.identifiers(text) == [], name
 
 
+def test_the_guide_says_what_the_code_does():
+    """The board is rendered 1100 high (BOARD_HEIGHT) to show every red card: the guide does not
+    claim it holds in 900. The name typed is asked of an experiment, a technique or a fault
+    (eregion_core/exercise_plan.py), and Orodruin refuses a wire whose name is missing or wrong."""
+    guide = (DOCS / "dagorlad.md").read_text(encoding="utf-8")
+    assert "tient à 1440 × 900" not in guide and cs.BOARD_HEIGHT == 1100
+    assert "- `typed_name` : une expérience" in guide
+    assert re.search(r"^\| `typed_name` \|.*Orodruin", guide, re.M)
+
+
 def test_the_readme_shows_dagorlad_and_links_its_guide():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Dagorlad, the exercise board", 1)[1].split("\n## ", 1)[0]

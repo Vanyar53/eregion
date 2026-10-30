@@ -28,7 +28,8 @@ Glorfindel voit », plus bas).
 
 ## Les deux vues
 
-- **Board** (`/dagorlad`) : les cartes, les fils et le plan. Le tableau tient à 1440 × 900.
+- **Board** (`/dagorlad`) : les cartes, les fils et le plan. Quand ses cartes dépassent l'écran,
+  la colonne rouge défile ; la capture ci-dessus est rendue en 1440 × 1100 pour les montrer toutes.
 - **Runs** (`/dagorlad?view=runs`) : ce qui a tourné, des deux injecteurs. On y trouve :
   - les fenêtres d'exercice, et pour chacune ce que Glorfindel a fait pendant ;
   - les campagnes ;
@@ -73,10 +74,12 @@ Les refus ont des codes stables, les mêmes que ceux d'`orodruin-check`. Le prem
 | `no_watch` | aucune watch de Glorfindel vivante derrière ces cibles : tous les fils |
 | `no_engine` | une panne dont aucune expérience Chaos Studio ne vise cette VM |
 | `over_cap` | au-delà du plafond d'Orodruin : 20 injections, 2 h en tout |
+| `typed_name` | côté Orodruin seulement : le nom tapé de la cible manque, ou n'est pas celui qu'Orodruin lit |
 
 Les avertissements laissent le fil valide :
-- `typed_name` : une technique destructive, ou que personne n'a déclarée inoffensive. Son nom de
-  cible sera tapé (« Demander un exercice »).
+- `typed_name` : une expérience (technique ou panne) destructive, ou que personne n'a déclarée
+  inoffensive. Le nom de sa cible sera tapé (« Demander un exercice ») ; s'il manque ou diffère,
+  Orodruin refuse le fil avec ce code.
 - `isolated_now` : la cible est isolée, ou des adresses y sont bloquées. Le run mesurerait
   l'isolation, pas la détection.
 - `not_seen` : Glorfindel ne voit pas la VM en ce moment. Si elle ne remonte pas, le run finit en

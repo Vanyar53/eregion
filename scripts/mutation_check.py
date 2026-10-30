@@ -516,7 +516,7 @@ MUTANTS = [
     ("M123", "a reset that exits non-zero is recorded as reset (#165)", CRUN,
      "    if proc.returncode != 0:\n", "    if False:\n"),
     ("M124", "orodruin-campaign-plan echoes its target, subscription included (#165)", MAKE,
-     '\t@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX))" && $(ORO_SSH) ',
+     '\t@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX)$(if $(CAMPAIGN_DECLARED),$(BL1_COMMA) déclarée $(CAMPAIGN_DECLARED)))" && $(ORO_SSH) ',
      "\t$(ORO_SSH) "),
     # #165, second review — in the Orodruin image the glorfindel launcher is on PATH but the
     # package is not: the guard tests the package, not the launcher alone.
@@ -1333,9 +1333,10 @@ MUTANTS = [
       "    best = min(found, key=lambda tc: (abs(tc[0] - seen_at), tc[0]))[1] if found else None\n"),
      ("    found = [(t, c) for t, c in zip(times, cands) if t >= run[\"at\"]\n",
       "    best = min(found, key=lambda tc: tc[0])[1] if found else None\n")),
-    ("M561", "a recommendation counts as contained alone in human-only (UI-2)", IND,
-     '        if disruptive and d.get("executed") is True and d.get("verified") is True:\n',
-     "        if disruptive:\n"),
+    ("M561", "a recommendation counts as contained alone in human-only (UI-2; since BL1, its check lives in analysis/containment.py)",
+     "analysis/containment.py",
+     '    if decision["executed"] is True:\n        if decision["verified"] is True and not decision["unverified"]:\n            return CONTAINED, ""\n',
+     '    if True:\n        if True:\n            return CONTAINED, ""\n'),
     ("M562", "the shadow share ignores a verdict « wrong » (UI-2)", IND,
      '                and r["run_id"] not in judged_wrong):\n', "                ):\n"),
     ("M563", "the indicators take runs older than 30 days (UI-2)", IND,
@@ -2432,6 +2433,7 @@ TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py tests/unit/test_host_depl
 TESTS.update({f"M{n}": "tests/unit/test_rule_layers.py" for n in range(713, 717)})
 TESTS.update({f"M{n}": "tests/unit/test_console.py" for n in range(400, 410)})  # UI-1
 TESTS.update({f"M{n}": "tests/unit/test_indicators.py" for n in range(560, 566)})  # UI-2
+TESTS["M561"] = "tests/unit/test_containment.py tests/unit/test_indicators.py"
 TESTS["M566"] = "tests/unit/test_host_deploy.py"
 TESTS["M567"] = "tests/unit/test_console.py"
 TESTS["M568"] = "tests/unit/test_console.py"

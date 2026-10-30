@@ -4883,6 +4883,42 @@ MUTANTS += [
 ]
 TESTS["M1906"] = _I4B
 
+# I4C (#344): the machine checks that what the unblock, the reset and the release keep is said
+# (_kept_said: never `unblocked`, `swept`, `released` with one of our rules kept, and the rule
+# named, « gardée »), and that a perimeter lifted in an operation exempts only the flows it alone
+# closed (_lifted_alone). Two rules make the states common (kept_at_the_lift,
+# perimeter_lifted_beside_a_block). Measured by the machine alone: nothing in TESTS. The same
+# silence at the placements of the unblock or of the release is no mutant: their sweeps find the
+# rule again, ask the guard and say it — the outcome is the same. M1960–M1964.
+MUTANTS += [
+    ("M1960", "a rule kept is not a failure: the unblock says `unblocked` and clears its entry while it "
+              "keeps one (I4C)", UNB,
+     "        if failed:\n            # Keep the entry: the rules that are still there keep blocking the IP, and a\n",
+     '        if [f for f in failed if "gardée" not in f]:\n'
+     "            # Keep the entry: the rules that are still there keep blocking the IP, and a\n"),
+    ("M1961", "the unblock's sweep keeps a turned rule aimed at the VM that took the address, and counts "
+              "it removed (I4C, I4B's review)", UNB,
+     "                        (failed if err else deleted).append(err or name)\n",
+     '                        (failed if err and "gardée" not in err else deleted).append(\n'
+     '                            name if err and "gardée" in err else (err or name))\n'),
+    ("M1962", "the reset keeps a turned rule aimed at the VM that took the address, and says nothing: "
+              "`swept` (I4C, I4B's review)", SWP,
+     "                        unreadable.append(why)\n                        continue\n",
+     "                        continue\n"),
+    ("M1963", "the release's sweep keeps a turned rule aimed elsewhere, and says nothing (I4C)", REL,
+     "                    if err:\n                        failed.append(err)\n"
+     '                failed += [f"{u} : laissée" for u in self._unattributable_fixed(t, rules)]\n',
+     '                    if err and "gardée" not in err:\n                        failed.append(err)\n'
+     '                failed += [f"{u} : laissée" for u in self._unattributable_fixed(t, rules)]\n'),
+    ("M1964", "lifting a perimeter, the unblock takes off every block of the IP on its NSG, the other "
+              "VMs' with it — hidden by the exemption « périmètre levé » (I4C)", UNB,
+     '            if (r_rg, r_name, entry["rule"]) not in done:\n                _del(r_rg, r_name, entry["rule"])\n',
+     '            if (r_rg, r_name, entry["rule"]) not in done:\n                _del(r_rg, r_name, entry["rule"])\n'
+     "                for r0 in self._list_rules({}, r_rg, r_name) or []:\n"
+     '                    if _rule_name(r0).lower().startswith(entry["rule"].lower() + "-") '
+     'and not _rule_name(r0).lower().endswith("-out"):\n'
+     "                        _del(r_rg, r_name, _rule_name(r0))\n"),
+]
 # The harness's unmutated run on I4C's machine: a merged perimeter's pair lifted by a neighbour's
 # unblock, the VM's own rules bypassed — the bypass alone was said, the pair's disappearance
 # dropped (L1). Its frozen sequence, then the machine. M1965–M1966.

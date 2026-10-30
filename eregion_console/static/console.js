@@ -1,5 +1,6 @@
-// The console's shared header (docs/design/console.md): EREGION, a tab per section —
-// Glorfindel always, Annatar and Gothmog active or greyed (/api/sections) —, then on the right
+// The console's shared header (docs/design/console.md): EREGION, then the tabs — Overview,
+// Glorfindel always, Dagorlad (Annatar's and Gothmog's runs, §7) greyed while neither injector is
+// set up (/api/sections) —, then on the right
 // the watch's beat, the return channel when an injector is active, Config, and the clock in
 // UTC, like every time shown in the console. The same on every page: what belongs to one page
 // (the live feed's dot) stays in that page. Each page calls Console.init(<its tab>) first.
@@ -7,8 +8,7 @@ const Console = (() => {
   const TABS = [
     { id: 'overview',   label: 'Overview',   href: '/',           role: 'Eregion at a glance' },
     { id: 'glorfindel', label: 'Glorfindel', href: '/glorfindel' },
-    { id: 'annatar',    label: 'Annatar',    href: '/annatar' },
-    { id: 'gothmog',    label: 'Gothmog',    href: '/gothmog' },
+    { id: 'dagorlad',   label: 'Dagorlad',   href: '/dagorlad',   role: 'attacks and faults drawn against Glorfindel, and their runs' },
   ];
   // On the right, where the War Room had it (Jonathan, 26/10).
   const CONFIG = { id: 'config', label: '⚙ Config', href: '/config', role: 'how Glorfindel and this console are set' };
@@ -25,8 +25,10 @@ const Console = (() => {
 
   function tab(t) {
     const s = section(t.id);
-    const greyed = s && !s.active;
-    const title = s ? `${s.label} — ${s.role}${greyed ? ' · not set up here: what it would add' : ''}` : `${t.label.replace('⚙ ', '')} — ${t.role}`;
+    // Dagorlad holds both injectors: greyed only once the sections say neither is set up here.
+    const greyed = t.id === 'dagorlad' ? Boolean(sections) && !injectorActive() : Boolean(s && !s.active);
+    const title = s ? `${s.label} — ${s.role}${greyed ? ' · not set up here: what it would add' : ''}`
+      : `${t.label.replace('⚙ ', '')} — ${t.role}${greyed ? ' · neither Annatar nor Gothmog is set up here' : ''}`;
     const badge = t.id === 'glorfindel' && judge ? `<span class="badge" title="Cards to judge (7 days)">${judge}</span>` : '';
     return `<a class="tab${t.id === active ? ' active' : ''}${greyed ? ' greyed' : ''}" href="${t.href}" title="${esc(title)}">${esc(t.label)}${badge}</a>`;
   }

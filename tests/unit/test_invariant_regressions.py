@@ -3233,18 +3233,34 @@ _L2_STEPS = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="L2 outside I5Q (lot L2Q, #331): present on origin/main 171a242")
 def test_an_altered_quarantine_stays_said_when_its_change_comes_back(monkeypatch):
     """Graine 101 at 500 sequences, after RB1 (I5Q's run), shrunk to 14 steps — written
-    with the rules of the machine as `main` has them: it fails there too, glorfindel/ of
+    with the rules of the machine as `main` has them: it failed there too, glorfindel/ of
     171a242 and b83cb92 (« L2: the quarantine NSG …/nsg-glorfindel-quarantine-westeurope
     was altered, holds […/api-nic-5] »). The configuration is readable at every step.
-    Cause (the review of I5Q, reassert_quarantine._report_altered_quarantines): the write
-    of quarantine_alerts.json failed (a full disk) after a forensic access changed the
-    NSG's diff, so the file kept the former change's signal id; once the access is taken
-    off, the diff comes back to that change, read as « said, or acknowledged » — no card,
-    the NSG still stripped. Lot L2Q."""
+    Cause (reassert_quarantine._report_altered_quarantines): step 9 strips the NSG, a card
+    says change A; step 11 adds a forensic access, change B — card A closed, card B
+    written, but the write of quarantine_alerts.json fails (the 14th write, a full disk):
+    the file keeps A; step 12 takes the access off, the diff comes back to A; step 13's
+    pass closes card B and read A in the file as « said, or acknowledged » — no card, the
+    NSG still stripped. Now only the operator's word silences a change: the latest card of
+    the NSG is A's, closed without Glorfindel's note (L2Q, #331)."""
     _run(monkeypatch, _L2_NET, *_L2_STEPS)
+
+
+_Q_APP1 = "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope"
+
+
+@pytest.mark.parametrize("readable", [True, False], ids=["access_taken_off", "config_unreadable"])
+def test_a_quarantine_change_brought_back_after_a_full_disk_is_said(monkeypatch, readable):
+    """The machine's own rule for it (`quarantine_change_comes_back`, L2Q): web isolated in
+    our quarantine, its state lost, the NSG stripped — said (A). A forensic access added:
+    change B, the disk full from the pass's third write of the local state (A's card closed,
+    B's written, quarantine_alerts.json not). The access taken off, or the configuration
+    unreadable and hiding it: the diff is A's again — said again."""
+    _run(monkeypatch, _net(quarantine=True),
+         ("quarantine_change_comes_back", WEB1, WEB1, None, True, True, _Q_APP1, "human_only", "no",
+          "human_only", (3, "from-full"), readable, "human_only"))
 
 
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────

@@ -72,6 +72,11 @@ def isolated_escalations_store(tmp_path, monkeypatch):
     Prevents test runs from writing pending escalations to ~/.glorfindel/,
     which the Discord bot would then pick up as real incidents.
     """
+    if _present("analysis"):
+        # BL1: the campaign report reads the cards (an isolation that did not hold) from the
+        # same store, never the operator's ~/.glorfindel.
+        import analysis.containment as containment
+        monkeypatch.setattr(containment, "_cards_file", lambda: tmp_path / "escalations.jsonl")
     if not GLORFINDEL:
         return
     import glorfindel.escalations as esc_module

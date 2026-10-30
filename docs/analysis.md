@@ -10,6 +10,7 @@ make report-eval                       # harnais : fidélité et instruction pla
 python -m analysis.triage runs/campaigns/<id>                   # → triage.md, triage.json (IA1)
 python -m analysis.triage decide runs/campaigns/<id> tri-1 approve --by <nom>
 python scripts/analysis_eval.py        # harnais : les cas d'analyse du tri, modèle réel
+make campaign-containment CAMPAIGN=<id> [FAULT_RUNS=<run>]       # BL1 : temps pour contenir, part contenue seule
 ```
 
 **Les faits viennent des fichiers, jamais d'un modèle** : le manifeste de la campagne
@@ -520,6 +521,122 @@ docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
   et lancer `python -m analysis.campaign_report runs/campaigns/<id>` (le code d'aujourd'hui
   l'indexe, et un appel au modèle écrit son rapport), ou la commande ci-dessus, une fois ce
   code déployé. Dans les deux cas, les faits entrés dans l'index ne sont plus recalculés.
+
+## Temps pour contenir et part contenue seule (BL1, #280)
+
+_30/10 : le code, ses tests et ses mutants (M1770–M1789). Rien de mesuré sur le banc : c'est la
+session de [`banc-bl1.md`](banc-bl1.md)._
+
+Deux indicateurs de la finalité, calculés par le code depuis les fichiers d'une campagne
+([`analysis/containment.py`](../analysis/containment.py)), jamais par le modèle. Le rapport les
+rend dans sa section « Réponse ». La page de la campagne dans la console les recalcule, depuis les
+mêmes fichiers. `python -m analysis.containment runs/campaigns/<id> [--fault-run <run>] [--json]`
+les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`.
+
+### Les définitions
+
+- **Un incident** est un run de technique exécuté de la campagne. Son T0 est la première action
+  malveillante datée par l'injecteur : `attack_time`, celui que porte `attack_started`.
+- **La décision** de Glorfindel sur un incident est celle que le rapport rattache déjà au run : la
+  règle de #157, sur la même technique, la même VM et dans la fenêtre du run.
+- **Contenu seul** veut dire trois choses à la fois :
+  1. la décision est une isolation ou un blocage, exécuté dans le cycle de Glorfindel (une action
+     qu'un humain approuve part d'une carte, jamais du cycle) ;
+  2. l'action est relue sur Azure (`verified` vrai) ;
+  3. elle a tenu : aucune carte de la réaffirmation ne dit, sur cette VM, qu'elle a disparu ou
+     qu'elle est contournée. Seules comptent les cartes sur une isolation ou un blocage, et
+     celles qui disent la règle contournée. Une carte sur une levée n'en dit rien : une levée
+     approuvée dont la vérification échoue, une levée ou un déblocage interrompus. La surveillance
+     va de la relecture à la fin de la fenêtre du run, grâce comprise, sans dépasser le début du
+     run suivant sur la même VM. Sans fenêtre, elle dure 15 min. Elle s'arrête aussi à la
+     première levée connue de ce confinement sur la VM : une action de l'opérateur
+     (`runs/manual_actions.jsonl`) ou la levée de la watch sur un `recovery_complete`. Une levée
+     ne compte que pour ce qu'elle lève (release : une isolation ; unblock : un blocage ; reset :
+     les deux), et seulement entière : une levée partielle, ou relue fausse, n'arrête rien.
+- **Le temps pour contenir** d'un incident contenu seul va du T0 à la relecture sur Azure. C'est
+  `outcome.verified_at`, que `verify_action` pose depuis BL1 après une relecture qui a conclu
+  (vraie ou fausse ; jamais sans contrôle, ni quand il a levé) ; pour une ligne d'avant, la ligne du
+  cycle, écrite juste après. Celui de la campagne est la médiane sur ses incidents contenus seuls.
+  Aucun incident contenu : `None`, jamais 0.
+- **La part contenue seule** est le nombre d'incidents contenus seuls sur **tous** les incidents de
+  la campagne, ratés compris.
+- **Une panne** est un run de Gothmog rattaché à la campagne, jamais un incident. Elle est
+  rattachée si elle est nommée (`--fault-run`), ou si elle vise une des VM de la campagne et la
+  chevauche ou tombe dans l'heure qui l'entoure. Une décision d'isoler ou de bloquer sur une de ses
+  cibles, vue pendant sa fenêtre, est **une panne prise pour une attaque**. Elle est comptée à part
+  et dite, exécutée ou seulement recommandée ; exécutée, c'est une action disruptive à tort. Une
+  décision déjà rattachée à un incident ne compte jamais deux fois. Une décision sur la technique
+  d'un run de la campagne, vue dans la fenêtre de ce run, est celle du run (tardive, ou non
+  rattachée), jamais celle de la panne.
+- **Une décision, un incident.** Si deux runs tombent sur la même détection, elle va au plus
+  ancien. L'autre a une décision inconnue (« décision déjà rattachée à <run> »).
+
+### Les cas limites, chacun dit
+
+| Issue | Quand | Contenu seul ? | Temps |
+|---|---|---|---|
+| contenu seul | isolation ou blocage exécuté dans le cycle, relu vrai, qui a tenu | oui | T0 → relecture |
+| contenu, puis l'isolation n'a pas tenu | une carte `verification_failed` (réaffirmation : règles retirées, reposées une fois ou non) ou `bypassed` sur la VM, dans la surveillance | non | — |
+| exécuté, vérification échouée | relu faux sur Azure, ou impossible à relire (`unverified`) | non | — |
+| action tentée, en échec | `write_blocked` (droits) ou `action_failed`, lu dans le type de la carte (le graphe réécrit le statut en `escalated`) | non | — |
+| retenu par un garde-fou | `mode_hold` (`human_only`), `readiness_hold`, garde de signal, attribution, télémétrie, accord des tirages, adresse protégée | non : à un humain | — |
+| escaladé à un humain | confiance insuffisante, action inconnue, cycle interrompu | non | — |
+| aucune action qui contient | un instantané, une enquête, aucune action | non | — |
+| à blanc (dry run) | rien n'a été exécuté | non | — |
+| non détecté | le run dit `missed` | non, et compté dans la part | — |
+| décision inconnue | détecté, ou détection inconnue, mais la décision n'est pas retrouvée dans les fichiers (« fenêtre absente », etc.) | non compté contenu, mais pas « non contenu » non plus : la part devient une borne basse, « au moins » | — |
+
+Deux autres cas limites :
+- **Une relecture datée avant le T0** : les horloges de deux hôtes, ou des faits faux. Elle donne
+  un temps inconnu, et c'est dit. Jamais un temps négatif.
+- **Une panne sans début, sans fin ou sans cible** : elle n'est pas vérifiée, et c'est dit. Une
+  panne lancée `--without-glorfindel` non plus : la réaction de Glorfindel n'y est pas mesurée,
+  par choix.
+
+### Où ils sont publiés
+
+- **Le rapport de campagne** (`report.md`), section « Réponse » : la part, la médiane, une ligne par
+  incident (issue, action, T0, temps) et les pannes rattachées. Si le calcul échoue, le rapport
+  s'écrit quand même et le dit. Sur H0, le rapport s'écrit environ 25 min après la fin : une carte
+  de la réaffirmation plus tardive n'y figure pas. La console, elle, recalcule.
+- **La console**, page Annatar, détail d'une campagne : l'encadré **RESPONSE**
+  (`GET /api/campaigns/<id>`, champ `containment`).
+- **L'accueil de la console**, sur 30 jours : la même définition par attaque détectée
+  (`eregion_console/indicators.py`). On y trouve :
+  - la fin à la relecture ;
+  - la tenue ;
+  - à côté, le nombre de runs d'attaque de la période, ratés compris ;
+  - les pannes prises pour une attaque.
+
+  La part de l'accueil reste celle décidée le 27/10 : sur les attaques détectées.
+  [`design/console.md`](design/console.md) en donne le détail.
+
+### Avec le run unifié de C1
+
+Le calcul s'appuie sur le format de run de C1 (`eregion_core/run_report.py`), sans en créer un
+second :
+- **le temps** est celui de `run_report.timeline` : la relecture (`verified_at`, sinon la ligne du
+  cycle), rien avant l'attaque. La matrice de couverture, l'accueil et le rapport donnent donc le
+  même temps pour un même incident ;
+- **le type d'un run** se lit par `run_report.kind_of` (`metrics.kind`, sinon Gothmog) ;
+- **une panne** donne, dans la vue unifiée (`read_run`), sa fin (`ended_at`) et ses cibles
+  (`targets`) : BL1 les y a ajoutées.
+
+**Une seule différence, voulue.** Pour `timeline`, un incident est contenu dès que l'isolation ou
+le blocage est exécuté et vérifié. BL1 ajoute deux exigences :
+- que l'action ait tenu (le cas limite « isolation qui ne tient pas » de la fiche) ;
+- qu'elle ait été exécutée dans le cycle, donc sans humain.
+
+La part contenue seule de BL1 peut donc être plus petite que le décompte « contenu » de la matrice.
+Le temps, lui, est le même.
+
+Le calcul lit aussi :
+- le manifeste de la campagne (`status`, `detection`, `run_id`, `target_resource_id`,
+  `started_at`, `finished_at`) ;
+- les fenêtres d'exercice, les lignes de débogage de la watch et ses cartes.
+
+Une campagne de C1 qui jouerait elle-même ses pannes en ferait des runs de la campagne. Le
+rattachement par l'heure ne servirait plus, ni `--fault-run`.
 
 ## Le tri, la mémoire et le modèle séparés (IA1, #88)
 

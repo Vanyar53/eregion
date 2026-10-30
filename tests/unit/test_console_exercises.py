@@ -82,7 +82,7 @@ def _cycle(runs, name, *, at, resource_id=VM, ttp="T1110.001", action="block_sus
 
 
 INJECTOR_ROUTES = ("/api/exercises", "/api/campaigns", "/api/catalog", "/api/channel",
-                   "/api/atelier", "/atelier", "/annatar", "/gothmog", "/runs/")
+                   "/api/atelier", "/atelier", "/annatar", "/gothmog", "/runs/", "/api/dagorlad", "/dagorlad")
 
 
 def test_every_injector_route_is_a_read():
@@ -95,13 +95,13 @@ def test_every_injector_route_is_a_read():
 
 
 def test_the_page_is_served_behind_the_token(client, monkeypatch):
-    page = client.get("/annatar").text
+    page = client.get("/dagorlad?view=runs").text
     assert "injector.html" not in page  # the page itself, not a listing
     assert '<script src="/static/injector.js"></script>' in page        # its script, a file (#257)
     assert "INJECTOR" in client.get("/static/injector.js").text
     monkeypatch.setenv("EREGION_CONSOLE_TOKEN", "s3cret")
     assert client.get("/api/exercises").status_code == 401
-    assert client.get("/annatar", headers={"accept": "application/json"}).status_code == 401
+    assert client.get("/dagorlad?view=runs", headers={"accept": "application/json"}).status_code == 401
 
 
 def test_catalog_lists_techniques_and_faults(client):

@@ -22,7 +22,7 @@ from .console_client import ORIGIN, TOKEN, WS, console  # noqa: E402
 import eregion_console.api as api  # noqa: E402
 from eregion_console import sections  # noqa: E402
 
-PAGES = ("/", "/glorfindel", "/annatar", "/gothmog", "/config")
+PAGES = ("/", "/glorfindel", "/dagorlad", "/dagorlad?view=runs", "/config", "/annatar", "/gothmog")
 NOW = datetime.now(timezone.utc)
 
 
@@ -64,8 +64,9 @@ def _window(tmp_path, run_id, injector, kind="technique"):
 # ── Pages ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("path, page", [("/", "overview.html"), ("/glorfindel", "glorfindel.html"),
-                                        ("/config", "glorfindel.html"), ("/annatar", "injector.html"),
-                                        ("/gothmog", "injector.html")])
+                                        ("/config", "glorfindel.html"), ("/dagorlad", "dagorlad.html"),
+                                        ("/dagorlad?view=runs", "injector.html"),
+                                        ("/dagorlad?view=board", "dagorlad.html")])
 def test_each_section_has_its_page(client, path, page):
     r = client.get(path)
     assert r.status_code == 200
@@ -110,18 +111,29 @@ def test_the_atelier_api_redirects_to_its_resource_with_its_query(client):
     assert client.get("/api/atelier/exercises?since=7d").json() == {"exercises": []}
 
 
-def test_a_run_opens_in_the_section_of_its_injector(client, runs, tmp_path):
-    """A card knows only its run id: /runs/<id> finds the injector in the window, else in the
-    report (Gothmog's names itself), else Annatar."""
+def test_a_run_opens_in_dagorlads_runs(client, runs, tmp_path):
+    """A card knows only its run id: /runs/<id> opens it in Dagorlad's Runs, where both
+    injectors' windows are (§7, 30/10)."""
     _window(tmp_path, "g-1", "gothmog", kind="fault")
-    _window(tmp_path, "a-1", "annatar")
-    (runs / "g-2.json").write_text(json.dumps({"metrics": {"injector": "gothmog"}}))
     go = lambda rid: client.get(f"/runs/{rid}", follow_redirects=False)  # noqa: E731
-    assert go("g-1").headers["location"] == "/gothmog?run=g-1"
-    assert go("a-1").headers["location"] == "/annatar?run=a-1"
-    assert go("g-2").headers["location"] == "/gothmog?run=g-2"
-    assert go("unknown").headers["location"] == "/annatar?run=unknown"
+    assert go("g-1").headers["location"] == "/dagorlad?view=runs&run=g-1"
+    assert go("unknown").headers["location"] == "/dagorlad?view=runs&run=unknown"
     assert go("g-1").status_code == 302
+
+
+def test_annatars_and_gothmogs_pages_lead_to_dagorlads_runs_with_what_they_asked(client):
+    """Until 1.0, the former pages lead to the Runs, filtered on their injector, the query kept
+    (a card's ?run=, a campaign's ?campaign=)."""
+    go = lambda path: client.get(path, follow_redirects=False)  # noqa: E731
+    assert go("/annatar").headers["location"] == "/dagorlad?view=runs&injector=annatar"
+    assert go("/gothmog?run=g-1").headers["location"] == "/dagorlad?view=runs&injector=gothmog&run=g-1"
+    assert go("/annatar?campaign=c-1").headers["location"] == "/dagorlad?view=runs&injector=annatar&campaign=c-1"
+    assert go("/gothmog").status_code == 308
+    # Never another view or injector than its own, and never off the console.
+    assert go("/annatar?view=board&run=r-1").headers["location"] == "/dagorlad?view=runs&injector=annatar&run=r-1"
+    assert go("/gothmog?injector=annatar").headers["location"] == "/dagorlad?view=runs&injector=gothmog"
+    for odd in ("/annatar?next=//evil.com", "/gothmog?x=%0d%0aLocation:%20//evil.com", "/annatar?r=%2F%2Fevil.com"):
+        assert go(odd).headers["location"].startswith("/dagorlad?"), odd
 
 
 def test_a_run_id_is_a_plain_name(client):

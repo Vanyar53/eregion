@@ -463,8 +463,9 @@ glorfindel-shell: build-glorfindel
 #   Convention : chaque topo doit définir `azurerm_resource_group.<topo>` (count) → la cible -target.
 
 # Canary of the just-in-time isolation: re-checks, on the latest azurerm provider, the
-# Terraform behavior Glorfindel's isolation relies on (throwaway stack, own RG, ~5 min,
-# free resources only). Exit 1 = the behavior changed. Also weekly in CI (canary-azurerm).
+# Terraform behavior Glorfindel's isolation relies on (throwaway stack, ~5 min, free resources
+# only, in the group rg-eregion-canary — CANARY_RESOURCE_GROUP — that it never creates nor
+# deletes). Exit 1 = the behavior changed. Also daily in CI (canary-azurerm, OIDC).
 canary-jit:
 	@infra/canary/jit-terraform/run.sh
 

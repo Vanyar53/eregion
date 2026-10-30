@@ -296,18 +296,24 @@ def test_what_counts_as_writing_issues(perms, writes):
 # workflow holds them, at a job's level, and only on a push to this repository's main.
 PUBLISHING = ("packages", "id-token", "attestations")
 PUBLISH = ROOT / ".github" / "workflows" / "publish.yml"
+CANARY = ROOT / ".github" / "workflows" / "canary-azurerm.yml"
 
 
-def _publishes(perms) -> bool:
+def _publishes(perms, rights=PUBLISHING) -> bool:
     if isinstance(perms, str):
         return perms.strip() == "write-all"
-    return isinstance(perms, dict) and any(str(perms.get(p, "")).strip() == "write" for p in PUBLISHING)
+    return isinstance(perms, dict) and any(str(perms.get(p, "")).strip() == "write" for p in rights)
 
 
-def test_only_the_publishing_workflow_may_write_packages_mint_tokens_or_attest():
+def test_only_the_publishing_workflow_may_write_packages_or_attest_and_the_canary_alone_mints_beside_it():
+    """`id-token: write` has a second holder since P-04: the canary's job, whose token Entra ID
+    exchanges for its principal (never for a signature H0 trusts: the CD checks the workflow)."""
     docs = {p.name: _load(p) for p in WORKFLOWS}
-    writers = {name for name, doc in docs.items() if any(_publishes(p) for p in _permission_sets(doc))}
+    writers = {name for name, doc in docs.items()
+               if any(_publishes(p, ("packages", "attestations")) for p in _permission_sets(doc))}
     assert writers == {"publish.yml"}
+    minters = {name for name, doc in docs.items() if any(_publishes(p, ("id-token",)) for p in _permission_sets(doc))}
+    assert minters == {"publish.yml", CANARY.name}
     doc = docs["publish.yml"]
     assert doc["permissions"] == {"contents": "read"}               # the workflow's level: nothing more
     (job,) = doc["jobs"].values()
@@ -361,3 +367,413 @@ def test_the_publishing_workflow_is_the_identity_h0_trusts():
 ])
 def test_what_counts_as_publishing(perms, publishes):
     assert _publishes(perms) is publishes
+
+
+# ── P04: the azurerm canary without a long-lived secret (OIDC), at least privilege ────────────
+# The canary held a client secret, and its principal could create a resource group in the
+# subscription. Now: a short-lived OIDC token, this job's alone, exchanged for a principal that
+# is Contributor on one group, rg-eregion-canary, which the canary never creates nor deletes.
+# Read from the files; the steps' scripts and run.sh run against fake `curl`, `az` and
+# `terraform` — no Azure, no network.
+JIT = ROOT / "infra" / "canary" / "jit-terraform"
+CANARY_SECRETS = {"ARM_CLIENT_ID": "CANARY_AZURE_CLIENT_ID", "ARM_TENANT_ID": "CANARY_AZURE_TENANT_ID",
+                  "ARM_SUBSCRIPTION_ID": "CANARY_AZURE_SUBSCRIPTION_ID"}
+
+
+def _canary_job() -> dict:
+    (job,) = _load(CANARY)["jobs"].values()
+    return job
+
+
+def _canary_step(job: dict, needle: str) -> dict:
+    (step,) = [s for s in job["steps"] if needle in str(s.get("run") or "")]
+    return step
+
+
+def test_the_canary_job_alone_holds_its_oidc_token_and_only_on_a_schedule_or_a_dispatch():
+    """`id-token: write` on the canary's job, never on the workflow (another job added there would
+    hold it too); the token never reaches a pull request's code: no pull_request*, no workflow_run,
+    no push of another branch."""
+    doc = _load(CANARY)
+    assert doc["permissions"] == {"contents": "read"}
+    assert _canary_job()["permissions"] == {"contents": "read", "id-token": "write"}
+    assert set(doc["on"]) == {"schedule", "workflow_dispatch"}
+
+
+def test_the_canary_holds_no_client_secret_and_takes_its_identifiers_from_secrets():
+    """Secrets, never repository variables (`vars.*` print in clear in a public log); OIDC on, and
+    Terraform kept off the az login (use_cli false): a green canary proves the provider's OIDC."""
+    text = CANARY.read_text(encoding="utf-8")
+    assert "CLIENT_SECRET" not in text.upper() and "--password" not in text
+    assert not re.search(r"\baz\s+login\b[^\n]*\s-p\s", text)
+    assert "vars." not in text
+    env = _canary_job()["env"]
+    for arm, secret in CANARY_SECRETS.items():
+        assert env[arm] == "${{ secrets.%s }}" % secret, (arm, env.get(arm))
+    assert set(re.findall(r"secrets\.(\w+)", text)) == set(CANARY_SECRETS.values())
+    assert str(env["ARM_USE_OIDC"]).lower() == "true" and str(env["ARM_USE_CLI"]).lower() == "false"
+
+
+def test_the_canary_runs_no_third_partys_action_beside_its_token():
+    """GitHub's own checkout, pinned; Terraform from HashiCorp's signed apt repository; the login
+    by the runner's az — never azure/login, hashicorp/setup-terraform or any other owner's."""
+    used = _actions(_load(CANARY))
+    assert used and all(a.startswith("actions/checkout@") and PINNED.match(a) for a in used), used
+
+
+def _sh(script: str, env: dict, tmp_path: Path, path_dir: Path | None = None):
+    import os
+    import subprocess
+    base = {"PATH": (f"{path_dir}:" if path_dir else "") + os.environ.get("PATH", ""),
+            "HOME": str(tmp_path), "TMPDIR": str(tmp_path)}
+    return subprocess.run(["bash", "-e", "-c", script], env={**base, **env}, capture_output=True,
+                          text=True, timeout=60, cwd=tmp_path)
+
+
+@pytest.mark.parametrize("missing", [None, "ARM_CLIENT_ID", "ARM_TENANT_ID", "ARM_SUBSCRIPTION_ID", "ref"])
+def test_the_canary_fails_without_its_identifiers_or_off_main(tmp_path, missing):
+    """T16: a canary green while testing nothing is worse than none. The check fails, and every
+    later step waits on its output."""
+    job = _canary_job()
+    check = _canary_step(job, "GITHUB_OUTPUT")
+    out = tmp_path / "out"
+    env = {k: "x" for k in CANARY_SECRETS} | {"GITHUB_OUTPUT": str(out), "GITHUB_REF": "refs/heads/main"}
+    if missing == "ref":
+        env["GITHUB_REF"] = "refs/heads/feature"
+    elif missing:
+        env[missing] = ""
+    res = _sh(check["run"], env, tmp_path)
+    if missing:
+        assert res.returncode == 1 and "::error::" in res.stdout and not out.exists(), res
+    else:
+        assert res.returncode == 0 and out.read_text() == "ok=true\n", res
+    later = job["steps"][job["steps"].index(check) + 1:]
+    assert later and all(s.get("if") == "steps.creds.outputs.ok == 'true'" for s in later)
+    assert check.get("id") == "creds"
+
+
+def _fake(path: Path, body: str) -> None:
+    path.write_text("#!/usr/bin/env bash\n" + body)
+    path.chmod(0o755)
+
+
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_the_canary_logs_az_in_with_githubs_token_never_a_secret(tmp_path, endpoint):
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    log = tmp_path / "log"
+    _fake(bin_ / "curl", f'echo "curl $*" >> {log}; echo \'{{"value": "jwt-from-github"}}\'\n')
+    _fake(bin_ / "az", f'echo "az $*" >> {log}; echo "AZ-CALLED $1"\n')
+    step = _canary_step(_canary_job(), "az login")
+    env = {"ARM_CLIENT_ID": "app", "ARM_TENANT_ID": "tenant", "ARM_SUBSCRIPTION_ID": "sub",
+           "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "bearer-x"}
+    if endpoint:
+        env["ACTIONS_ID_TOKEN_REQUEST_URL"] = "https://token.example/x?api-version=2.0"
+    res = _sh(step["run"], env, tmp_path, bin_)
+    if not endpoint:
+        assert res.returncode == 1 and "id-token: write" in res.stdout and not log.exists(), res
+        return
+    assert res.returncode == 0, res
+    calls = log.read_text().splitlines()
+    assert calls[0].startswith("curl ") and "&audience=api://AzureADTokenExchange" in calls[0]
+    assert "Authorization: bearer bearer-x" in calls[0]
+    (login,) = [c for c in calls if c.startswith("az login")]
+    assert "--service-principal -u app --tenant tenant --federated-token jwt-from-github" in login
+    # The JWT is said once, to mask it, before az is called — never traced, never on stderr.
+    assert res.stdout.count("jwt-from-github") == 1 and "jwt-from-github" not in res.stderr, res
+    assert res.stdout.index("::add-mask::jwt-from-github") < res.stdout.index("AZ-CALLED login"), res.stdout
+
+
+def test_each_run_of_the_matrix_has_its_own_suffix():
+    """The three lines run side by side in one group: the suffix names the run, its attempt (a
+    re-run after a killed one) and the line."""
+    step = _canary_step(_canary_job(), "jit-terraform/run.sh")
+    assert step["run"].strip() == "exec infra/canary/jit-terraform/run.sh"     # a cancel's signals reach it
+    suffix = step["env"]["CANARY_SUFFIX"]
+    for part in ("${{ github.run_id }}", "${{ github.run_attempt }}", "${{ strategy.job-index }}"):
+        assert part in suffix, suffix
+    assert _canary_job()["env"]["CANARY_RESOURCE_GROUP"] == "rg-eregion-canary"
+
+
+def _blocks(tf: str) -> dict[tuple[str, str], str]:
+    """Each top-level `resource "type" "name" { … }` of a Terraform file, its text."""
+    out, cur, body = {}, None, []
+    for line in tf.splitlines():
+        m = re.match(r'^resource "(\w+)" "(\w+)" \{', line)
+        if m:
+            cur, body = (m.group(1), m.group(2)), []
+            continue
+        if cur and line == "}":
+            out[cur] = "\n".join(body)
+            cur = None
+        elif cur:
+            body.append(line)
+    return out
+
+
+def test_the_canary_stack_creates_no_group_and_names_each_resource_with_its_suffix():
+    tf = (JIT / "main.tf").read_text(encoding="utf-8")
+    blocks = _blocks(tf)
+    assert len(blocks) >= 6
+    assert not [k for k in blocks if k[0] == "azurerm_resource_group"]
+    assert 'data "azurerm_resource_group" "t"' in tf
+    for (kind, name), body in blocks.items():
+        if kind in ("azurerm_subnet", "azurerm_network_interface_security_group_association"):
+            continue                                    # a VNet's child; an association has no name
+        own = re.search(r'^  name\s+=\s+"([^"]+)"', body, re.M)
+        assert own and "${var.suffix}" in own.group(1), (kind, name)
+        assert re.search(r"^  tags\s+=.*local\.tags", body, re.M), (kind, name)    # the sweep finds it
+
+
+_FAKE_TERRAFORM = r'''echo "terraform $* SKIP=${ARM_SKIP_PROVIDER_REGISTRATION:-} RPR=${ARM_RESOURCE_PROVIDER_REGISTRATIONS:-}" >> "$FAKE_LOG"
+case " ${FAKE_BLOCK:-} " in       # FAKE_BLOCK="apply destroy": wait there until the test says go
+  *" $1 "*) touch "$FAKE_STATE/at-$1"
+            for _ in $(seq 200); do [ -e "$FAKE_STATE/go-$1" ] && break; sleep 0.05; done ;;
+esac
+case "$1" in
+  version) echo '{"provider_selections": {"registry.terraform.io/hashicorp/azurerm": "4.81.0"}}' ;;
+  destroy) exit "${FAKE_DESTROY_RC:-0}" ;;
+esac
+exit 0
+'''
+# A fake az, in Python: what the canary calls, as the real CLI answers it. `az resource list`
+# refuses --tag with -g, as azure-cli does (2.85.0, resource/custom.py: IncorrectUsageError);
+# a list's --query is evaluated in the two forms the sweep may use, any other is refused.
+_FAKE_AZ = r'''import os, re, sys
+from pathlib import Path
+a = sys.argv[1:]
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write("az " + " ".join(a) + "\n")
+
+
+def opt(name):
+    return a[a.index(name) + 1] if name in a else ""
+
+
+if a[:2] == ["resource", "list"] and "--tag" in a and ("-g" in a or "--resource-group" in a):
+    print("ERROR: you cannot use '--tag' with '--resource-group'", file=sys.stderr)
+    sys.exit(2)
+state, name = Path(os.environ["FAKE_STATE"]), opt("-n")
+if a[:2] == ["group", "show"]:
+    sys.exit(int(os.environ.get("FAKE_GROUP_RC", "0")))
+elif a[:3] == ["network", "nsg", "show"]:
+    print(f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/{name}")
+elif a[:3] == ["network", "nic", "update"]:
+    (state / name).write_text(opt("--network-security-group"))
+elif a[:3] == ["network", "nic", "show"]:
+    print((state / name).read_text())
+elif a[:1] == ["network"] and a[2:3] == ["list"]:
+    # The group holds, of each kind, this run's resource, another run's, and one without the tag.
+    items = [{"id": f"/{a[1]}/{run or 'untagged'}", "tags": {"canary-run": run} if run else {}}
+             for run in ("gh1-1-0", "gh9-9-9", "")]
+    q = opt("--query")
+    m = re.fullmatch(r"""\[\?tags\."canary-run"=='([^']*)'\]\.id""", q)
+    if m:
+        print("\n".join(i["id"] for i in items if i["tags"].get("canary-run") == m.group(1)))
+    elif q == "[].id":
+        print("\n".join(i["id"] for i in items))
+    else:
+        print(f"fake az: query not understood: {q}", file=sys.stderr)
+        sys.exit(3)
+'''
+
+
+def _fake_py(path: Path, body: str) -> None:
+    import sys
+    path.write_text(f"#!{sys.executable}\n" + body)
+    path.chmod(0o755)
+
+
+def _run_canary(tmp_path: Path, **env):
+    bin_, state = tmp_path / "bin", tmp_path / "state"
+    bin_.mkdir()
+    state.mkdir()
+    _fake(bin_ / "terraform", _FAKE_TERRAFORM)
+    _fake_py(bin_ / "az", _FAKE_AZ)
+    log = tmp_path / "log"
+    env = {"FAKE_LOG": str(log), "FAKE_STATE": str(state), "ARM_SUBSCRIPTION_ID": "sub",
+           "CANARY_SUFFIX": "gh1-1-0"} | env
+    res = _sh(f"exec {JIT / 'run.sh'}", env, tmp_path, bin_)
+    return res, (log.read_text().splitlines() if log.exists() else [])
+
+
+def test_the_canary_works_in_its_group_named_by_its_suffix_and_cleans_up(tmp_path):
+    res, calls = _run_canary(tmp_path)
+    assert res.returncode == 0 and "PASS" in res.stdout, res.stdout + res.stderr
+    az = [c for c in calls if c.startswith("az ")]
+    assert not [c for c in az if c.startswith(("az group create", "az group delete"))]
+    assert az[0].startswith("az group show -n rg-eregion-canary")
+    for c in az[1:]:
+        assert "-g rg-eregion-canary" in c, c
+        assert re.search(r" -n \S+-gh1-1-0 ", c) or " -n " not in c, c
+    tf = [c for c in calls if c.startswith(("terraform apply", "terraform plan", "terraform destroy"))]
+    assert tf and all("suffix=gh1-1-0" in c and "resource_group=rg-eregion-canary" in c for c in tf)
+    # the end: Terraform's stack destroyed, then the quarantine NSG it never knew
+    destroy = next(i for i, c in enumerate(calls) if c.startswith("terraform destroy"))
+    assert calls[destroy + 1] == \
+        "az network nsg delete -g rg-eregion-canary -n nsg-glorfindel-quarantine-canary-gh1-1-0 -o none"
+    assert not list(tmp_path.glob("tmp.*")), "the stack's copy left behind"
+
+
+def test_a_failed_destroy_sweeps_this_runs_resources_by_their_tag_nics_first(tmp_path):
+    """Only this run's resources, by their tag compared on the client (az refuses --tag with -g:
+    the sweep deleted nothing on the real CLI, its error hidden), NICs first; never another
+    run's, never one without the tag, never the group."""
+    res, calls = _run_canary(tmp_path, FAKE_DESTROY_RC="1")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "sweeping" in res.stdout and "fake az" not in res.stderr and "cannot use" not in res.stderr, res.stderr
+    lists = [c for c in calls if " list " in c]
+    assert [c.split()[2] for c in lists] == ["nic", "nsg", "vnet"]
+    assert all("-g rg-eregion-canary" in c and "--tag" not in c for c in lists), lists
+    deleted = [c for c in calls if " delete --ids " in c]
+    assert deleted == [f"az network {k} delete --ids /{k}/gh1-1-0 -o none" for k in ("nic", "nsg", "vnet")]
+    assert not [c for c in calls if c.startswith("az group delete")]
+
+
+def test_the_fake_az_refuses_a_tag_with_a_group_as_the_real_one_does(tmp_path):
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    _fake_py(bin_ / "az", _FAKE_AZ)
+    env = {"FAKE_LOG": str(tmp_path / "log"), "FAKE_STATE": str(tmp_path)}
+    res = _sh("az resource list -g rg --tag canary-run=x", env, tmp_path, bin_)
+    assert res.returncode == 2 and "you cannot use '--tag' with '--resource-group'" in res.stderr
+    res = _sh(r"""az network nic list -g rg --query "[?tags.\"canary-run\"=='gh9-9-9'].id" -o tsv""",
+              env, tmp_path, bin_)
+    assert res.returncode == 0 and res.stdout == "/nic/gh9-9-9\n", res
+
+
+def test_without_its_group_the_canary_creates_nothing_and_fails(tmp_path):
+    res, calls = _run_canary(tmp_path, FAKE_GROUP_RC="3")
+    assert res.returncode == 2 and "create it once" in res.stdout, res.stdout
+    assert not [c for c in calls if c.startswith(("terraform", "az network", "az group create"))]
+
+
+@pytest.mark.parametrize("constraint, skip, rpr", [
+    ("~> 3.0", "true", ""), ("~> 4.0", "", "none"), ("~> 5.0", "", "none"),
+])
+def test_the_provider_never_registers_resource_providers(tmp_path, constraint, skip, rpr):
+    """The principal may not register one (Contributor on a group): 3.x is told by
+    skip_provider_registration, 4.x and 5.x by resource_provider_registrations = none (the
+    provider's docs at v3.117.1, v4.81.0, v5.12.0)."""
+    res, calls = _run_canary(tmp_path, AZURERM_CONSTRAINT=constraint)
+    assert res.returncode == 0, res.stdout + res.stderr
+    tf = [c for c in calls if c.startswith(("terraform apply", "terraform plan"))]
+    assert tf and all(c.endswith(f"SKIP={skip} RPR={rpr}") for c in tf), tf
+
+
+@pytest.mark.parametrize("suffix", ["GH1", "a b", "x" * 41, "a;rm"])
+def test_a_suffix_that_could_collide_or_inject_is_refused(tmp_path, suffix):
+    res, calls = _run_canary(tmp_path, CANARY_SUFFIX=suffix)
+    assert res.returncode == 2 and not calls, (res.stdout, calls)
+
+
+OPS = ROOT / "docs" / "operations.md"
+
+
+def _canary_section() -> str:
+    text = OPS.read_text(encoding="utf-8")
+    start = text.index("## Le canari azurerm, sans secret")
+    return text[start:text.index("\n## ", start + 1)]
+
+
+def test_the_old_principal_goes_without_cutting_the_operators_machine():
+    """The repository's four AZURE_* secrets go in every case: no workflow reads them any more. A
+    credential of the old principal is deleted only once its hint was compared with the machine's
+    secrets, and only by its keyId: the one the machine holds never goes (P04 review)."""
+    assert not [p.name for p in WORKFLOWS if re.search(r"secrets\.AZURE_", p.read_text(encoding="utf-8"))]
+    removal = _canary_section().split("**Puis, après un canari vert seulement**", 1)[1]
+    loop = removal.index('gh secret delete "$s"')
+    assert loop < removal.index("Si l'ancien principal sert ailleurs")
+    assert "for s in AZURE_CLIENT_SECRET AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do" in removal[:loop]
+    compare = removal.index('[ "${${(P)sec}[1,3]}" = "$h" ]')
+    # A hint is the start of a secret: compared, never shown — only the keyId and the variable.
+    assert "hint" not in re.sub(r'--query "\[\]\.\[keyId,hint\]" -o tsv \| while read -r k h', "", removal.split("```bash", 2)[2].split("```")[0])
+    assert 'echo "keyId $k : $sec, le poste s\'en sert"' in removal
+    deletes = [m.start() for m in re.finditer(r"az ad app credential delete", removal)]
+    assert deletes and compare < min(deletes)
+    assert all("--key-id <keyId de cet identifiant>" in removal[d:d + 80] for d in deletes)
+
+
+def _environment(job: dict) -> str | None:
+    env = job.get("environment")
+    return env.get("name") if isinstance(env, dict) else env
+
+
+def test_the_canarys_token_names_its_environment_which_no_other_job_enters():
+    """publish.yml holds `id-token: write` on main too: a federated credential on refs/heads/main
+    would hand its pinned third-party actions the canary's principal. The canary's job is in the
+    environment `canary`, which only main deploys; the credential's subject names it, and no
+    other job enters it; its identifiers are that environment's secrets (P04 review)."""
+    assert _environment(_canary_job()) == "canary"
+    others = [(p.name, n) for p in WORKFLOWS if p != CANARY
+              for n, j in (_load(p).get("jobs") or {}).items() if isinstance(j, dict) and _environment(j) == "canary"]
+    assert others == []
+    section = _canary_section()
+    assert re.findall(r'"subject": "([^"]+)"', section) == ["repo:Vanyar53/eregion:environment:canary"]
+    put = section.index('gh api -X PUT "repos/$REPO/environments/canary"')
+    assert '"protected_branches": false, "custom_branch_policies": true' in section[put:put + 200]
+    assert 'deployment-branch-policies" -f name=main -f type=branch' in section[put:]
+    sets = [line for line in section.splitlines() if "gh secret set" in line]
+    assert len(sets) == 3 and all("--env canary" in line for line in sets), sets
+
+
+def test_the_canarys_principal_is_network_contributor_on_its_group_alone():
+    """Network Contributor, not Contributor: Microsoft.Network/* and the group's read, never the
+    group deleted, a VM created or a role granted. Assigned by the principal's object id (Graph
+    may not have replicated a principal just created). Contributor on that same group is the
+    fallback, written after a 403 only (P04 review)."""
+    section = _canary_section()
+    joined = re.sub(r"\\\n\s*", "", section)
+    creates = [line for line in joined.splitlines() if line.startswith("az role assignment create")]
+    first = creates[0]
+    assert '--role "Network Contributor"' in first, first
+    assert '--assignee-object-id "$(az ad sp show --id "$APP" --query id -o tsv)"' in first, first
+    assert "--assignee-principal-type ServicePrincipal" in first and "--assignee " not in first, first
+    assert all(c.rstrip().endswith("--scope /subscriptions/$SUB/resourceGroups/rg-eregion-canary") for c in creates)
+    fallback = joined.index("# Seulement après un 403")
+    assert all(joined.index(c) > fallback for c in creates if '"Network Contributor"' not in c)
+
+
+def test_a_cancelled_canary_cleans_up_through_the_runners_second_signal(tmp_path):
+    """On a cancel, the runner sends SIGINT, SIGTERM some 7.5 s later, then SIGKILL. The first
+    starts the cleanup; the second, arriving during the destroy, must not cut it short: the
+    quarantine NSG is still deleted after the destroy (P04 review)."""
+    import os
+    import signal
+    import subprocess
+    import time
+    bin_, state = tmp_path / "bin", tmp_path / "state"
+    bin_.mkdir()
+    state.mkdir()
+    _fake(bin_ / "terraform", _FAKE_TERRAFORM)
+    _fake_py(bin_ / "az", _FAKE_AZ)
+    log = tmp_path / "log"
+    env = {"PATH": f"{bin_}:{os.environ.get('PATH', '')}", "HOME": str(tmp_path), "TMPDIR": str(tmp_path),
+           "FAKE_LOG": str(log), "FAKE_STATE": str(state), "FAKE_BLOCK": "apply destroy",
+           "ARM_SUBSCRIPTION_ID": "sub", "CANARY_SUFFIX": "gh1-1-0"}
+
+    def reach(name):
+        for _ in range(200):
+            if (state / name).exists():
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"never reached {name}: {log.read_text() if log.exists() else ''}")
+
+    proc = subprocess.Popen(["bash", str(JIT / "run.sh")], env=env, cwd=tmp_path,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        reach("at-apply")
+        proc.send_signal(signal.SIGINT)
+        (state / "go-apply").touch()
+        reach("at-destroy")
+        proc.send_signal(signal.SIGTERM)
+        (state / "go-destroy").touch()
+        out, err = proc.communicate(timeout=30)
+    finally:
+        proc.kill()
+    calls = log.read_text().splitlines()
+    assert proc.returncode == 130, (out, err)
+    destroy = next(i for i, c in enumerate(calls) if c.startswith("terraform destroy"))
+    assert calls[destroy + 1:] == [
+        "az network nsg delete -g rg-eregion-canary -n nsg-glorfindel-quarantine-canary-gh1-1-0 -o none"], calls
+    assert not list(tmp_path.glob("tmp.*")), "the stack's copy left behind"

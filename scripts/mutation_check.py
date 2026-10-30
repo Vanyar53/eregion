@@ -5891,6 +5891,66 @@ MUTANTS += [
      "        if: success() && matrix.os == 'ubuntu-latest'\n"),
 ]
 TESTS.update({mid: "tests/unit/test_workflows.py -k night_runs_both" for mid in ("M1952", "M1953")})
+# P04 (P-04): the azurerm canary without a long-lived secret (OIDC), Contributor on its group alone.
+CAN = ".github/workflows/canary-azurerm.yml"
+JIT_TF, JIT_SH = "infra/canary/jit-terraform/main.tf", "infra/canary/jit-terraform/run.sh"
+MUTANTS += [
+    ("M2080", "the canary's OIDC token held at the workflow's level: any job added there mints it (P04)", CAN,
+     "permissions:\n  contents: read\n\njobs:\n", "permissions:\n  contents: read\n  id-token: write\n\njobs:\n"),
+    ("M2081", "the canary holds a client secret again (P04)", CAN,
+     "      ARM_CLIENT_ID: ${{ secrets.CANARY_AZURE_CLIENT_ID }}\n",
+     "      ARM_CLIENT_ID: ${{ secrets.CANARY_AZURE_CLIENT_ID }}\n"
+     "      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}\n"),
+    ("M2082", "the canary's client id from a repository variable: printed in clear in a public log (P04)", CAN,
+     "      ARM_CLIENT_ID: ${{ secrets.CANARY_AZURE_CLIENT_ID }}\n",
+     "      ARM_CLIENT_ID: ${{ vars.CANARY_AZURE_CLIENT_ID }}\n"),
+    ("M2083", "the canary goes on without its tenant: it fails at the login, never « not configured » (P04, T16)", CAN,
+     '          if [ -z "$ARM_CLIENT_ID" ] || [ -z "$ARM_TENANT_ID" ] || [ -z "$ARM_SUBSCRIPTION_ID" ]; then\n',
+     '          if [ -z "$ARM_CLIENT_ID" ] || [ -z "$ARM_SUBSCRIPTION_ID" ]; then\n'),
+    ("M2084", "a third party's login action beside the canary's token (P04)", CAN,
+     "      - name: Azure login (OIDC)\n",
+     "      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5   # v2.3.0\n"
+     "        if: steps.creds.outputs.ok == 'true'\n"
+     "        with:\n          client-id: ${{ secrets.CANARY_AZURE_CLIENT_ID }}\n"
+     "      - name: Azure login (OIDC)\n"),
+    ("M2085", "Terraform may fall back on the az session: a green canary no longer proves the provider's OIDC (P04)",
+     CAN, '      ARM_USE_CLI: "false"\n', '      ARM_USE_CLI: "true"\n'),
+    ("M2086", "the canary's stack creates its own resource group again (P04)", JIT_TF,
+     'data "azurerm_resource_group" "t" {\n  name = var.resource_group\n}\n',
+     'resource "azurerm_resource_group" "t" {\n  name     = "rg-eregion-canary-jit-${var.suffix}"\n'
+     '  location = "westeurope"\n}\n'),
+    ("M2087", "a resource of the canary named without its run's suffix: the matrix's lines collide (P04)", JIT_TF,
+     '  name                = "nic-no-nsg-${var.suffix}"\n', '  name                = "nic-no-nsg"\n'),
+    ("M2088", "a failed destroy deletes the canary's group, as the old fallback did (P04)", JIT_SH,
+     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 || sweep\n',
+     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 \\\n'
+     '    || az group delete -n "$RG" --yes --no-wait >/dev/null 2>&1\n'),
+    ("M2089", "azurerm 4.x and 5.x try to register resource providers the principal may not (P04)", JIT_SH,
+     "  *) export ARM_RESOURCE_PROVIDER_REGISTRATIONS=none ;;\n", "  *) ;;\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py"
+              for n in range(2080, 2090)})
+# P04, after its review (M2110–M2119).
+MUTANTS += [
+    ("M2110", "the canary's sweep deletes every NIC, NSG and VNet of the group: another run's too (P04)", JIT_SH,
+     """--query "[?tags.\\"canary-run\\"=='$SUFFIX'].id" -o tsv)""", """--query "[].id" -o tsv)"""),
+    ("M2111", "the old principal's credentials no longer compared with the machine's: its own may go (P04)",
+     "docs/operations.md",
+     """    [ "${(P)id}" = "$OLD" ] && [ "${${(P)sec}[1,3]}" = "$h" ] && echo""",
+     """    [ "${(P)id}" = "$OLD" ] && echo"""),
+    ("M2112", "the canary's job outside its environment: its credential back on refs/heads/main, publish.yml's "
+              "token takes its principal (P04)", CAN, "    environment: canary\n", ""),
+    ("M2113", "the canary's principal Contributor on its group: it may delete the group, create a VM (P04)",
+     "docs/operations.md", 'az role assignment create --role "Network Contributor" \\\n',
+     "az role assignment create --role Contributor \\\n"),
+    ("M2114", "the runner's second signal cuts the canary's cleanup short: the quarantine NSG left (P04)", JIT_SH,
+     "  trap '' INT TERM\n  echo \"== cleanup\"\n", "  echo \"== cleanup\"\n"),
+    ("M2115", "the canary's login traced: the OIDC token written whole into the job's log (P04)", CAN,
+     "          jwt=$(curl -fsS", "          set -x\n          jwt=$(curl -fsS"),
+    ("M2116", "the canary's step runs run.sh as a child: a cancel's signals reach the step's bash only (P04)",
+     CAN, "        run: exec infra/canary/jit-terraform/run.sh\n", "        run: infra/canary/jit-terraform/run.sh\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

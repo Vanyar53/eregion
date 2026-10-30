@@ -55,7 +55,7 @@ POLL_S = 30.0
 # Request-level codes, besides the wires' (exercise_plan.REFUSALS).
 REQUEST_REFUSALS = ("unreadable", "passive", "refused_wires", "busy")
 # Why a wire did not run, once the request was judged.
-SKIPS = ("over_cap", "no_watch", "isolated", "not_returned", "refused_now")
+SKIPS = ("over_cap", "no_watch", "isolated", "not_returned", "refused_now", "launch_failed")
 
 
 def _now() -> datetime:
@@ -373,7 +373,18 @@ class Runner:
             before = set(self._windows(req.id))
             env = {orodruin.MAX_INJECTIONS_ENV: str(left_calls), orodruin.MAX_RUN_S_ENV: str(max(left_s, 1))}
             self.say(f"→ wire {w.rank}: {e.kind} {e.id} on {w.target_name}")
-            code = self.launch(argv_for(e, w, req.id, typed.get(w.rank, "")), env)
+            try:
+                code = self.launch(argv_for(e, w, req.id, typed.get(w.rank, "")), env)
+            except Exception as ex:
+                # DG-b review, point 7: an injector that could not even start — whether it touched
+                # its target is unknown. The wire fails, the status says it, the rest does not run.
+                ws.state, ws.code = "failed", "launch_failed"
+                ws.runs = sorted(k for k in self._windows(req.id) if k not in before)
+                for rest in req.wires[i + 1:]:
+                    status.wire(rest.rank).state, status.wire(rest.rank).code = "skipped", "launch_failed"
+                self.say(f"  ✗ wire {w.rank} failed to launch ({type(ex).__name__}: {ex}) — "
+                         f"wires {w.rank + 1}– not run")
+                break
             windows = {k: v for k, v in self._windows(req.id).items() if k not in before}
             ws.runs = sorted(windows)
             reports = [self._report(r) for r in ws.runs]

@@ -366,3 +366,15 @@ def test_the_watch_lost_during_the_isolation_wait_stops_the_wire(tmp_path):
     status = r.run(_req(("T1110.001", GONDOLIN)), {})
     assert [(w.state, w.code) for w in status.wires] == [("skipped", "no_watch")]
     assert inj.launched == []
+
+
+def test_an_injector_that_cannot_start_fails_its_wire_and_stops_the_rest(tmp_path):
+    """DG-b review, point 7: the launch raises — the runner does not fall, its status never stays
+    « running »: the wire failed, the next ones do not run, and it is published."""
+    def boom(argv, env):
+        raise FileNotFoundError("annatar")
+    r, _, published, _ = _runner(tmp_path, injectors=boom)
+    status = r.run(_req(("T1110.001", GONDOLIN), ("T1548.003", GONDOLIN)), {})
+    assert status.state == "finished"
+    assert [(w.state, w.code) for w in status.wires] == [("failed", "launch_failed"), ("skipped", "launch_failed")]
+    assert published[-1]["state"] == "finished" and published[-1]["wires"][0]["state"] == "failed"

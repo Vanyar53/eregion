@@ -4394,6 +4394,13 @@ MUTANTS += [
 ]
 TESTS["M2101"] = "tests/unit/test_exercise_runner.py"
 
+MUTANTS += [
+    ("M2102", "an injector that cannot start brings the runner down, its status left « running » (DG-b review)",
+     XRN, "            except Exception as ex:\n                # DG-b review, point 7",
+     "            except ZeroDivisionError as ex:\n                # DG-b review, point 7"),
+]
+TESTS["M2102"] = "tests/unit/test_exercise_runner.py"
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.

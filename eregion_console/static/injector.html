@@ -44,7 +44,7 @@
   .col:last-child { border-right: 0; }
   #col-ex { flex: 1.25; min-width: 0; }
   #col-camp { flex: 1; min-width: 0; }
-  #col-side { width: 400px; flex-shrink: 0; }
+  #col-side { width: 500px; flex-shrink: 0; }
   .col-header {
     padding: 10px 16px 8px; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: var(--dim);
     border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; gap: 10px; align-items: baseline;
@@ -110,12 +110,23 @@
     padding: 8px; max-height: 420px; overflow-y: auto;
   }
 
-  /* ── Side column: the catalogue's techniques or faults ── */
+  /* ── Side column: the coverage matrix (C1) — the catalogue's techniques or faults, each with
+     its last outcomes and the age of its last proof; a regressed row in red ── */
   .cat-group { padding: 6px 14px 2px; font-size: 9px; font-weight: 700; letter-spacing: 1px; color: var(--dim); }
-  .cat { display: grid; grid-template-columns: 12px 78px 1fr auto; gap: 6px; align-items: baseline;
-         padding: 2px 14px; font-size: 11px; }
+  .cat { display: grid; grid-template-columns: 12px 78px 1fr auto 9ch; gap: 6px; align-items: baseline;
+         padding: 2px 14px 2px 12px; font-size: 11px; cursor: pointer; border-left: 2px solid transparent; }
   .cat:hover { background: var(--bg1); }
   .cat.planned { opacity: .45; }
+  .cat.st-regressed { border-left-color: var(--red); background: color-mix(in srgb, var(--red) 9%, transparent); }
+  .cat.st-stale { border-left-color: color-mix(in srgb, var(--red) 55%, transparent); }
+  .cat .hist { font-size: 10px; letter-spacing: 1px; white-space: nowrap; }
+  .cat .last { text-align: right; }
+  .evo { padding: 6px 14px; font-size: 10px; color: var(--dim); border-bottom: 1px solid var(--border);
+         display: flex; gap: 10px; align-items: baseline; }
+  .evo .bars { font-size: 13px; letter-spacing: 1px; }
+  .mdetail { margin: 0 14px 6px 32px; padding: 3px 8px; font-size: 10px; border-left: 2px solid var(--border);
+             display: flex; flex-direction: column; gap: 2px; }
+  .mdetail .k { color: var(--dim); display: inline-block; width: 9ch; }
   .cat .id { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cat .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
   .cat .nm small { color: var(--dim); }

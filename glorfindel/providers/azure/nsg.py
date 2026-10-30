@@ -191,6 +191,27 @@ def _rule_name(rule) -> str:
     return getattr(rule, "name", "") or ""
 
 
+def _takes_in(values: list, ip: str) -> bool:
+    """An address field that takes `ip` in: empty, `*`, the address, a prefix holding
+    it — or a tag (VirtualNetwork…) or a value that can't be read, taken as taking it in:
+    the safe side when it decides whether a deny of ours stays (I4A, I5Q — the same rule
+    for both). `ip` not an address (`*`, a prefix): any value takes it in."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return True
+    for v in [v for v in values if v] or ["*"]:
+        if v.strip().lower() in ("*", "any"):
+            return True
+        try:
+            if addr in ipaddress.ip_network(v.strip(), strict=False):
+                return True
+        except ValueError:
+            return True                       # a tag, or unreadable: the safe side
+    return False
+
+
 def _pair_priorities(rules, in_name: str, out_name: str, start: int, step: int,
                      taken=frozenset()) -> dict:
     """Priorities for a deny pair about to be written — {"inbound": …, "outbound": …}.

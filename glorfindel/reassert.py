@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from glorfindel.reassert_cards import say_bypass, say_unreadable_states
+from glorfindel.reassert_cards import say_bypass, say_left, say_unreadable_states
 from glorfindel.reassert_quarantine import _report_altered_quarantines
 
 log = logging.getLogger(__name__)
@@ -258,6 +258,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     rid = b.get("resource_id", "")
     if not rid or not ip:
         return
+    say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)
     if _stale(b.get("unblocking_at")) and not b.get("stale_alerted_at"):
         reason = (f"Le déblocage de {ip} sur {vm} a été interrompu (commencé le "
                   f"{b['unblocking_at']}) : des règles peuvent rester. Relancer "

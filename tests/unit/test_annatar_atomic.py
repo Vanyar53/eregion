@@ -520,3 +520,13 @@ def test_atomic_dry_run_shows_command_and_cleanup(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Engine(dry_run=True).run(ATOMIC_YAML, skip_confirm=True)
     assert list((tmp_path / "runs").glob("*_signals.jsonl")) == []
+
+
+def test_atomic_run_writes_the_unified_run_format(tmp_path, monkeypatch):
+    """C1 (M1801): an Atomic run's report carries the run format both injectors share."""
+    from eregion_core.run_report import read_run
+    _run_atomic(tmp_path, monkeypatch, _atomic_executor())
+    report = _report(tmp_path)
+    m = report["metrics"]
+    assert (m["kind"], m["injector"], m["experiment_id"]) == ("technique", "annatar", "T1136.001")
+    assert m["engine"] == "atomic" and read_run(report)["kind"] == "technique"

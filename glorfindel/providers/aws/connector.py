@@ -1,6 +1,7 @@
 """AwsConnector: the AWS implementation of CloudConnector (MC1), written against an
 injected EC2 client (client.Ec2Client) — the simulated world of the invariants
-(tests/unit/fake_aws.py) until MC2 brings boto3 and an AWS bench.
+(tests/unit/fake_aws.py) until MC2 and an AWS bench. boto3 is installed by litellm (DEP1),
+used only at MC2.
 
 The guards Azure's writes go through, transposed: the account-and-region guard (an ARN of
 another account or region is refused, H14 — I12), and the instance's lock on writes.

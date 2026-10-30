@@ -20,9 +20,11 @@ here first, with the same imports (tests/unit/test_image_check.py keeps them in 
   glorfindel  `glorfindel --version` is pyproject.toml's version; the watch, the bot and the
               console import; glorfindel-config.yaml.example passes A3's strict reading (the file
               mounted read-only where compose mounts the config, and read: an absent file would
-              load as an empty config); the image does not run as root.
+              load as an empty config); a tool call through litellm, mocked (DEP1); the image
+              does not run as root.
   annatar     `annatar --version` is pyproject.toml's version; Annatar and Gothmog import;
-              neither Glorfindel, the console nor their dependencies are in it (D1); not root.
+              neither Glorfindel, the console nor their dependencies are in it (D1); a tool call
+              through litellm, mocked (DEP1: the planner's); not root.
 
 `touched` decides, in the job's first step, whether the change goes into an image: a pull request
 whose diff (its merge commit against the base, `git diff --no-renames -z`) names no path of
@@ -70,6 +72,29 @@ ABSENT = ("import importlib.util, sys\n"
           "print(' '.join(found))\n"
           "sys.exit(1 if found else 0)\n")
 NOT_IN_INJECTORS = ("glorfindel", "eregion_console", *GLORFINDEL_ONLY_DEPS)
+# DEP1 (#282): a tool call through litellm, the way Glorfindel, the planner and the analysis AI
+# ask it (eregion_core/llm_call.py), answered by litellm's own mock — no network, no key, no
+# model. `import litellm` alone is not enough: 1.106.0 (19/10) imported, and failed on the call
+# (« No module named 'mcp' »), every decision with it. The cost map is litellm's local copy:
+# otherwise it fetches it from GitHub at import. tests/unit/test_image_check.py runs it here.
+LITELLM_CALL = (
+    "import os, sys\n"
+    "os.environ['LITELLM_LOCAL_MODEL_COST_MAP'] = 'True'\n"
+    "import litellm\n"
+    "from eregion_core.llm_call import completion_with_tool\n"
+    "from eregion_core.models import DEFAULT_LLM_MODEL\n"
+    "tool = {'type': 'function', 'function': {'name': 'probe', 'description': 'probe',\n"
+    "        'parameters': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}}}\n"
+    "call = {'id': 'call_probe', 'type': 'function',\n"
+    "        'function': {'name': 'probe', 'arguments': '{\"ok\": true}'}}\n"
+    "system = [{'type': 'text', 'text': 'probe', 'cache_control': {'type': 'ephemeral'}}]\n"
+    "resp = completion_with_tool(litellm, 'probe', temperature=0, model=DEFAULT_LLM_MODEL,\n"
+    "    max_tokens=16, timeout=5, tools=[tool], mock_response='', mock_tool_calls=[call],\n"
+    "    messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': 'probe'}])\n"
+    "(got,) = resp.choices[0].message.tool_calls\n"
+    "print(got.function.name, got.function.arguments)\n"
+    "sys.exit(0 if (got.function.name, got.function.arguments) == ('probe', '{\"ok\": true}') else 1)\n")
+LITELLM_CHECK = "un appel d'outil par litellm, sans réseau (le piège mcp de 1.106.0)"
 TAIL = 20
 # What goes into an image, or decides how it is checked: the Dockerfiles and what they COPY
 # (tests/unit/test_image_check.py reads each COPY against this list), the lock, the checks. A path
@@ -102,6 +127,7 @@ IMAGES = {
         Check("la watch, le bot et la console importent", ("python", "-c", f"import {GLORFINDEL_IMPORTS}")),
         Check(f"{EXAMPLE_CONFIG} sous la lecture stricte d'A3", ("python", "-c", READ_CONFIG),
               mounts=((REPO / EXAMPLE_CONFIG, CONFIG_IN_IMAGE),)),
+        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),
         Check("pas root", ("python", "-c", NOT_ROOT)),
     )),
     "annatar": Image("annatar/Dockerfile", "eregion-annatar:ci", (
@@ -109,6 +135,7 @@ IMAGES = {
         Check("Annatar et Gothmog importent", ("python", "-c", f"import {INJECTOR_IMPORTS}")),
         Check("ni Glorfindel, ni la console, ni leurs dépendances (D1)",
               ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),
+        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),
         Check("pas root", ("python", "-c", NOT_ROOT)),
     )),
 }

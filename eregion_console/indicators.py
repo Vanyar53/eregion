@@ -22,65 +22,82 @@ names no VM, and its window is gone after a week.
 """
 from __future__ import annotations
 
-import json
 import statistics
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from eregion_core import run_report
+from eregion_core.run_report import CONTAINING as DISRUPTIVE
+from eregion_core.run_report import epoch as _ts
+from eregion_core.run_report import timeline
 
 WINDOW_DAYS = 30
 # The detection a run counted was measured from the watch's own record (annatar/runner/
 # detection.py): its signal time is the run's attack time plus that latency, to rounding.
 MATCH_SLACK_S = 5.0
-DISRUPTIVE = ("isolate_vm", "block_suspicious_ip")
-
-
-def _ts(value) -> float | None:
-    """Epoch seconds from a number or an ISO time; None otherwise (NaN included)."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value) if value == value and abs(value) != float("inf") else None
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
 
 
 def read_runs(reports: dict[str, Path], since: float) -> list[dict]:
-    """The runs of the period, from their reports: an attack (``technique``) is dated by its
-    attack time, a fault by its start. A report without a date in the period is left out."""
+    """The runs of the period, from their reports, in the unified view of C1
+    (``eregion_core.run_report.read_run``): an attack (``technique``) is dated by its attack
+    time, a fault by its start. A report without a date in the period is left out."""
     runs = []
-    for run_id, path in reports.items():
-        try:
-            r = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(r, dict):
-            continue
-        m = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
-        fault = m.get("injector") == "gothmog"
-        at = _ts(m.get("fault_start") if fault else m.get("attack_time"))
+    for run in run_report.read_reports(reports):
+        at = run["at"]
         if at is None or at < since:
             continue
-        latency = m.get("detection_latency_s")
-        runs.append({"run_id": str(r.get("run_id") or run_id), "kind": "fault" if fault else "technique",
-                     "ttp": str(r.get("mitre") or ""), "at": at, "result": r.get("result", ""),
-                     "detection": m.get("detection") or "unknown",
-                     "latency": float(latency) if _ts(latency) is not None and latency >= 0 else None})
+        runs.append(run)
     return runs
 
 
-def decision_of(run: dict, cycles: list[dict]) -> dict | None:
+class Detections:
+    """The watch's detection records with a decision, indexed once by technique and sorted by
+    their signal's time — so that a run's decision is found by bisection, not by reading every
+    cycle for every run (C1: the matrix reads the whole history at every refresh). A run's
+    decision is kept by run id for the life of the index (one computation)."""
+
+    def __init__(self, cycles: list[dict]):
+        by_ttp: dict[str, list[tuple[float, dict]]] = {}
+        for c in cycles:
+            if c.get("event") == "detection" and c.get("action") \
+                    and (t := _ts(c.get("signal_at"))) is not None:
+                by_ttp.setdefault(str(c.get("ttp") or ""), []).append((t, c))
+        self.by_ttp = {ttp: ([t for t, _ in rows], [c for _, c in rows])
+                       for ttp, rows in ((k, sorted(v, key=lambda x: x[0])) for k, v in by_ttp.items())}
+        self.memo: dict[str, dict | None] = {}
+
+
+def detections(cycles) -> Detections:
+    return cycles if isinstance(cycles, Detections) else Detections(cycles)
+
+
+def decision_of(run: dict, cycles) -> dict | None:
     """The watch's decision on the detection the run counted, or None: a run not detected, or
-    without its latency, has none that can be told apart."""
+    without its latency, has none that can be told apart. ``cycles``: the watch's cycles, or
+    their ``Detections`` index.
+
+    The record of the run's own technique (its experiment, which for an attack is its
+    ``mitre``), seen at the run's attack time plus its latency to a few seconds, on the run's
+    VM when its report names one (``metrics.resource_id``, C1); among several, the closest to
+    that time."""
     if run["kind"] != "technique" or run["detection"] != "detected" or run["latency"] is None:
         return None
+    if run.get("experiment", run["ttp"]) != run["ttp"]:
+        return None
+    index = detections(cycles)
+    if run["run_id"] in index.memo:
+        return index.memo[run["run_id"]]
     seen_at = run["at"] + run["latency"]
-    found = [c for c in cycles
-             if c.get("event") == "detection" and c.get("action") and c.get("ttp") == run["ttp"]
-             and (t := _ts(c.get("signal_at"))) is not None and abs(t - seen_at) <= MATCH_SLACK_S]
-    return min(found, key=lambda c: _ts(c["signal_at"])) if found else None
+    times, cands = index.by_ttp.get(run["ttp"], ([], []))
+    lo = bisect_left(times, seen_at - MATCH_SLACK_S)
+    hi = bisect_right(times, seen_at + MATCH_SLACK_S)
+    vm = str(run.get("resource_id") or "").lower()
+    found = [(t, c) for t, c in zip(times[lo:hi], cands[lo:hi])
+             if not vm or str(c.get("resource_id") or "").lower() == vm]
+    best = min(found, key=lambda tc: (abs(tc[0] - seen_at), tc[0]))[1] if found else None
+    index.memo[run["run_id"]] = best
+    return best
 
 
 def _median(values: list[float]) -> float | None:
@@ -93,6 +110,7 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     them). ``wrong_*``: ``glorfindel.escalations.observation_report``'s ``disruptive``."""
     attacks = [r for r in runs if r["kind"] == "technique"]
     detected = [r for r in attacks if r["detection"] == "detected"]
+    cycles = detections(cycles)
     judged_wrong = {c.get("exercise_run") for c in cards if c.get("verdict") == "wrong"}
     detect, decide, contain = [], [], []
     alone = shadow = 0
@@ -110,8 +128,9 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
         disruptive = d.get("action") in DISRUPTIVE
         if disruptive and d.get("executed") is True and d.get("verified") is True:
             alone += 1
-            if decided_at is not None and decided_at >= r["at"]:
-                contain.append(decided_at - r["at"])
+        # The time to contain, measured in one place (run_report.timeline, which BL1 extends).
+        if (contained := timeline(r, d)["contain_s"]) is not None:
+            contain.append(contained)
         conf = d.get("confidence")
         if (disruptive and isinstance(conf, (int, float)) and conf >= threshold
                 and r["run_id"] not in judged_wrong):

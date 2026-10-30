@@ -2100,7 +2100,7 @@ class IsolationMachine(RuleBasedStateMachine):
     def _bypass_said(self, vm: str, isolation: bool, opened: frozenset):
         """L1 and L2 for a bypass (V-16, L2C): an isolation or a block of the VM, recorded,
         that a customer's allow passes — flows it opens (`opened`, the test's judgement) —
-        is said after an unfaulted pass: a pending card on the VM (for a block, about the
+        is said after an unfaulted pass: a pending bypass card on the VM (for a block, about the
         attacker's address). Once said, it stays said while the allow stands. As for L1
         (_block_vanished): only while no operation holds it — the test's journal, and the
         record's own partial or failure marks. A block written again after a failed unblock
@@ -2115,7 +2115,7 @@ class IsolationMachine(RuleBasedStateMachine):
             return
         ip = None if isolation else ATTACKER
         said = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)
-                and ((e.get("action_params") or {}).get("ip") or None) == ip]
+                and e.get("action") == "review_bypass" and ((e.get("action_params") or {}).get("ip") or None) == ip]
         assert said, (f"L1: the {'isolation' if isolation else 'block'} of {vm} is bypassed by a customer allow "
                       f"({sorted(opened)[:2]}); the reassertion doesn't say so")
 

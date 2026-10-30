@@ -100,7 +100,7 @@ _V1_ANNATAR_GATE = (
     "            if no_watch:\n"
     '                console.print(f"[red]Refused — no live Glorfindel watch:[/red] {no_watch}")\n'
     '                return RunOutcome(run_id, "unknown", error=f"glorfindel: {no_watch}", refused=True)\n')
-_V1_ANNATAR_ARM = '        verdict, session = arm(run_id, "annatar")\n'
+_V1_ANNATAR_ARM = '        verdict, session = arm(run_id, "annatar", request=self.request)\n'
 _V1_GOTHMOG_GATE = (
     "        refused = self._no_watch(run_id, without_glorfindel)\n"
     "        if refused:\n"
@@ -4238,6 +4238,100 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_exercise_plan.py" for n in (2000, 2002, 2003)})
 TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py" for n in (2001, 2004)})
+
+# Dagorlad, phase (b) (DG-b, #348; docs/design/console.md, §7): the request, its one reader, where
+# the console writes it, the command the operator carries, Orodruin's judgment and its run, the
+# injectors' wires, Orodruin's word for the console, « Stop all » (M2010–M2039).
+XRQ = "eregion_core/exercise_request.py"
+XRN = "eregion_core/exercise_runner.py"
+MUTANTS += [
+    ("M2010", "the request's reader takes a field more (a zone, a name typed, a verdict) (DG-b)", XRQ,
+     "    if extra:\n        raise RequestRefused(", "    if False:\n        raise RequestRefused("),
+    ("M2011", "the console writes its requests under runs/, where the watch reads (DG-b)", XRQ,
+     '    return Path(os.environ.get(REQUESTS_ENV) or Path.home() / ".eregion" / "console" / "requests")\n',
+     '    return Path("runs") / "requests"\n'),
+    ("M2012", "the console writes a request with a refused wire (DG-b)", CON,
+     "    if refused:\n        return JSONResponse({\"error\": f\"{len(refused)} wire(s) refused",
+     "    if False:\n        return JSONResponse({\"error\": f\"{len(refused)} wire(s) refused"),
+    ("M2013", "the console takes from the browser a wire's field more (a name typed, a zone) (DG-b)", CON,
+     '        if not (isinstance(w, dict) and set(w) == {"experiment", "target"}\n',
+     '        if not (isinstance(w, dict) and {"experiment", "target"} <= set(w)\n'),
+    ("M2014", "the watch mounts ~/.eregion whole, the console's requests with it (DG-b)", "docker-compose.yml",
+     "      - ${HOME}/.eregion/analysis:/root/.eregion/analysis\n",
+     "      - ${HOME}/.eregion:/root/.eregion\n"),
+    ("M2015", "the operator's command takes any name typed for a destructive wire (DG-b)", XRQ,
+     "        if got != w.target_name:\n", "        if False:\n"),
+    ("M2016", "make orodruin-exercise reaches H0 before the request id is checked (DG-b)", "Makefile",
+     '\t@$(PYTHON) -m eregion_core.exercise_request check-id "$$EREGION_REQUEST_ID"\n', ""),
+    ("M2017", "Orodruin judges a request with a passive contract (DG-b)", XRN,
+     "        if not verdict.armed:\n            status.state = \"refused\"",
+     "        if False:\n            status.state = \"refused\""),
+    ("M2018", "Orodruin accepts a destructive wire without its name typed, at the judgment (DG-b)", XRN,
+     "                if why:\n                    v.refuse(\"typed_name\", why)",
+     "                if False:\n                    v.refuse(\"typed_name\", why)"),
+    ("M2019", "Orodruin compares the name typed to the request's, not to the name it reads (DG-b)", XRN,
+     '        got, want = typed.get(wire.rank, ""), names.get(wire.target.lower(), "")\n',
+     '        got, want = typed.get(wire.rank, ""), wire.target_name\n'),
+    ("M2020", "the zone and the enrollment not read again before each injection (O0) (DG-b)", XRN,
+     "        if v.code:\n            return \"refused_now\"", "        if False:\n            return \"refused_now\""),
+    ("M2021", "the watch not read again between two wires (V1) (DG-b)", XRN,
+     "            lost = self.watch()\n", "            lost = \"\"\n"),
+    ("M2022", "Orodruin's call cap per wire, not on the whole request (DG-b)", XRN,
+     '            left_calls = cap["max_injections"] - self._calls_used(req.id, start)\n',
+     '            left_calls = cap["max_injections"]\n'),
+    ("M2023", "Orodruin's time cap not held on the whole request (DG-b)", XRN,
+     "            if left_s <= 0 or left_calls <= 0:\n", "            if left_calls <= 0:\n"),
+    ("M2024", "the cap Orodruin declares ignored at the judgment: only the ceilings (DG-b)", XRN,
+     '                        max_injections=cap.get("max_injections", 0), max_run_s=cap.get("max_run_s", 0))\n',
+     "                        )\n"),
+    ("M2025", "a technique on a VM whose fault did not verify its return (DG-b)", XRN,
+     "        if w.target.lower() in not_returned:\n", "        if False:\n"),
+    ("M2026", "a wire runs on a VM Glorfindel still isolates, after the wait (DG-b)", XRN,
+     "        if held:\n            return \"isolated\"", "        if False:\n            return \"isolated\""),
+    ("M2027", "an isolation that cannot be read taken for a free VM (DG-b)", XRN,
+     '        return f"its isolation unreadable: {e}"[:200]\n', '        return ""\n'),
+    ("M2028", "one wire refused, the others still run (DG-b)", XRN,
+     '        status.state = "refused" if refused else "judged"\n', '        status.state = "judged"\n'),
+    ("M2029", "the request's id never written in the window: a wire not linked to its run (DG-b)", XW,
+     '    if request:\n        window["request"] = request\n', ""),
+    ("M2030", "Annatar runs a destructive wire without comparing the name typed (DG-b)", "annatar/runner/engine.py",
+     "        if self.request and destructive:\n", "        if False:\n"),
+    ("M2031", "Gothmog runs a wire on a VM the fault does not declare (DG-b)", "gothmog/runner/engine.py",
+     "        if target and target.rstrip(\"/\").rsplit(\"/\", 1)[-1].lower() not in {\n",
+     "        if False and target.rstrip(\"/\").rsplit(\"/\", 1)[-1].lower() not in {\n"),
+    ("M2032", "Orodruin's journal does not say the request a call belongs to (DG-b)", "eregion_core/orodruin.py",
+     "        if self.request:\n            record = {**record, \"request\": self.request}\n", ""),
+    ("M2033", "Annatar makes a destructive wire's scenario without a name typed (DG-b)", "annatar/cli.py",
+     "seq=1, allow_destructive=bool(typed_name))\n", "seq=1, allow_destructive=True)\n"),
+    ("M2034", "Orodruin publishes its verdict with the details (scopes, the subscription) (DG-b)",
+     "eregion_core/orodruin.py",
+     '    return {"verdict": verdict.verdict, "codes": sorted({m["code"] for m in verdict.missing}),\n',
+     '    return {"verdict": verdict.verdict, "codes": sorted({m["code"] + ": " + m["detail"] for m in verdict.missing}),\n'),
+    ("M2035", "the watch writes a blob of Orodruin's without reading its shape (DG-b)", XCH,
+     "        why = orodruin_refusal(name, doc)\n", '        why = ""\n'),
+    ("M2036", "the status of another request taken for this one's (DG-b)", XCH,
+     '            if doc["request"] != m["rid"]:\n', "            if False:\n"),
+    ("M2037", "the console says Orodruin armed whatever its verdict (DG-b)", BOARD,
+     '    if contract.get("verdict") == "armed":\n', "    if True:\n"),
+    ("M2038", "« Stop all » leaves a live window out of what it stops (DG-b)", BOARD,
+     '            "stops": [row(w) for w in windows if states.get(w["run_id"]) == "open"],\n',
+     '            "stops": [row(w) for w in windows if states.get(w["run_id"]) == "closed"],\n'),
+    ("M2039", "the Orodruin status's reader takes a field more (an experiment, a target) (DG-b)", XRQ,
+     '    _exact(doc, STATUS_FIELDS, "the status")\n', ""),
+]
+TESTS.update({mid: "tests/unit/test_exercise_request.py tests/unit/test_makefile_exercise.py"
+              for mid in ("M2010", "M2011", "M2015")})
+TESTS.update({mid: "tests/unit/test_console_dagorlad_request.py tests/unit/test_console_exercises.py"
+              for mid in ("M2012", "M2013", "M2037", "M2038")})
+TESTS.update({"M2014": "tests/unit/test_profiles.py", "M2016": "tests/unit/test_makefile_exercise.py"})
+TESTS.update({f"M{n}": "tests/unit/test_exercise_runner.py tests/unit/test_exercise_e2e.py"
+              for n in range(2017, 2029)})
+TESTS.update({mid: "tests/unit/test_annatar_wire.py tests/unit/test_gothmog.py tests/unit/test_exercise_e2e.py"
+              for mid in ("M2029", "M2030", "M2031", "M2033")})
+TESTS.update({"M2032": "tests/unit/test_exercise_runner.py",
+              "M2034": "tests/unit/test_orodruin_word.py", "M2035": "tests/unit/test_orodruin_word.py",
+              "M2036": "tests/unit/test_orodruin_word.py",
+              "M2039": "tests/unit/test_orodruin_word.py tests/unit/test_console_dagorlad_request.py"})
 
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake

@@ -301,8 +301,9 @@ class Engine:
 
         metrics = watch_gate.without_metrics(self.without_glorfindel)
         # C1: the run format shared with Gothmog — an attack, by Annatar, of this technique.
-        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id,
-                                           request=self.request))
+        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id))
+        if self.request:   # DG-b: the wire's request, in the unified run
+            metrics["request"] = self.request
         checks = {}
 
         # Setup runs first — cleans residuals from previous attack before we check state. The
@@ -433,8 +434,8 @@ class Engine:
             "engine": "atomic",
             "engine_ref": scenario.engine_ref,
             "atomic_guid": resolved.guid,
-            **run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id,
-                                  request=self.request),   # C1
+            **run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id),   # C1
+            **({"request": self.request} if self.request else {}),   # DG-b
             **watch_gate.without_metrics(self.without_glorfindel),
         }
 

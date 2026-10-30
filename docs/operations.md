@@ -1201,7 +1201,8 @@ AZURE_CONFIG_DIR=$(mktemp -d) sh -c 'az login --service-principal -u "$0" --cert
 `entra-sp-unusual-signin` ne voit qu'un principal **qui a un historique** (vu au moins 3 jours de sa
 base de 14 jours, la dernière heure exclue) : la connexion ci-dessus, une fois par jour depuis le poste
 pendant au moins 3 jours, puis une fois depuis une autre adresse (Cloud Shell, le fichier `.pem` copié
-le temps de la connexion) — c'est celle-là qui fait la carte. Le certificat expire au bout de 7 jours ;
+le temps de la connexion, puis `rm ~/.eregion-id1.pem` dans Cloud Shell : son `$HOME` persiste sur
+Azure Files) — c'est celle-là qui fait la carte. Le certificat expire au bout de 7 jours ;
 pour une base plus longue, en ajouter un autre (une carte `entra-credential-added` de plus, attendue).
 
 **AL1 — le journal d'activité** (sur le groupe du banc) :
@@ -1237,24 +1238,36 @@ retirerait). Facultatif, avec Jonathan, coûteux : un `glorfindel restore` de go
 A4) — jamais par H0, qui est en lecture seule.
 
 **Le retrait — un seul bloc**, à la fin des mesures, **ou dès un abandon en cours de route** (chaque
-ligne tolère ce qui n'a pas encore été créé ; dans un nouveau shell, `APP` est retrouvée par son nom) :
+ligne tolère ce qui n'a pas encore été créé ; dans un nouveau shell, `APP` est retrouvée par son nom
+exact ; dans Cloud Shell, s'il a servi, `rm ~/.eregion-id1.pem` aussi) :
 
 ```bash
-APP=${APP:-$(az ad app list --display-name eregion-id1-test --query "[0].appId" -o tsv)}
+# Ce qui ne dépend pas de l'application : le snapshot (l'accès SAS révoqué d'abord), la règle de NSG
+az snapshot revoke-access -g rg-celebrimbor -n snap-id1-test 2>/dev/null
+az snapshot delete -g rg-celebrimbor -n snap-id1-test 2>/dev/null
+az network nsg rule delete -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-test-deny 2>/dev/null
+# L'application, retrouvée par son nom exact (--display-name filtre par « commence par »)
+APP=${APP:-$(az ad app list --filter "displayName eq 'eregion-id1-test'" --query "[0].appId" -o tsv)}
 if [ -n "$APP" ]; then
   APPOBJ=${APPOBJ:-$(az ad app show --id "$APP" --query id -o tsv)}
-  az snapshot delete -g rg-celebrimbor -n snap-id1-test 2>/dev/null
-  az network nsg rule delete -g rg-celebrimbor --nsg-name nsg-celebrimbor -n id1-test-deny 2>/dev/null
+  SP=${SP:-$(az ad sp show --id "$APP" --query id -o tsv 2>/dev/null)}
   az role assignment delete --assignee "$APP" --scope "$(az group show -n rg-celebrimbor --query id -o tsv)" 2>/dev/null
+  # Security Reader (ou tout rôle d'annuaire) encore attribué au principal : retiré explicitement
+  if [ -n "$SP" ]; then
+    for a in $(az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?\$filter=principalId eq '$SP'" --query "value[].id" -o tsv); do
+      az rest --method DELETE --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/$a"
+    done
+  fi
   for k in $(az ad app credential list --id "$APP" --cert --query "[].keyId" -o tsv); do
     az ad app credential delete --id "$APP" --key-id "$k" --cert
   done
   for k in $(az ad app credential list --id "$APP" --query "[].keyId" -o tsv); do
     az ad app credential delete --id "$APP" --key-id "$k"
   done
-  az ad app delete --id "$APP"                       # l'application et son principal (son rôle d'annuaire avec)
-  # Retrait définitif : sinon l'objet reste restaurable 30 jours, avec ses identifiants.
+  az ad app delete --id "$APP"                       # l'application et son principal
+  # Retrait définitif de l'application et du principal : sinon restaurables 30 jours, avec leurs identifiants.
   [ -n "$APPOBJ" ] && az rest --method DELETE --url "https://graph.microsoft.com/v1.0/directory/deletedItems/$APPOBJ"
+  [ -n "$SP" ] && az rest --method DELETE --url "https://graph.microsoft.com/v1.0/directory/deletedItems/$SP" 2>/dev/null
 fi
 rm -f ~/.eregion-id1.pem
 ```

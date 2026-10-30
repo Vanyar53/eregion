@@ -6184,6 +6184,78 @@ MUTANTS += [
 ]
 _L1B_REV += " tests/unit/test_glorfindel.py::test_a_placement_on_an_nsg_that_no_longer_governs_the_nic_is_never_said_gone"
 TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046", "M2047")})
+# DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
+# (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
+# environment and its connections, the video kept outside the repository.
+SHOTS = "scripts/console_shots.py"
+MUTANTS += [
+    ("M2170", "the renderer takes any sample, not the shipped one (DOC1)", SHOTS,
+     "        if Path(path).resolve() != SAMPLE.resolve():", "        if False:"),
+    ("M2171", "a GUID other than the zero one passes in the sample (DOC1)", SHOTS,
+     "    found = [g for g in GUID.findall(text) if g != ZERO_SUBSCRIPTION]", "    found = []"),
+    ("M2172", "an address outside the documentation's ranges passes (DOC1)", SHOTS,
+     "        if not any(ip in n for n in DOC_NETS):", "        if False:"),
+    ("M2173", "a target's name outside the bench's public ones passes (DOC1)", SHOTS,
+     "    bad = [n for n in names if not (isinstance(n, str) and BENCH_NAME.fullmatch(n))]", "    bad = []"),
+    ("M2174", "the sample's console starts with an Azure variable in its environment (DOC1)", SHOTS,
+     "    if azure:\n        return f\"an Azure variable", "    if False:\n        return f\"an Azure variable"),
+    ("M2175", "the sample's console starts with another HOME, marked or not (DOC1)", SHOTS,
+     "        if Path(d).resolve() != want.resolve():", "        if False:"),
+    ("M2176", "a socket of the sample's console connects off the loopback (DOC1)", SHOTS,
+     "        if not _local(address):\n            raise PermissionError(f\"console_shots: no connection off the loopback ({address[0]})\")\n"
+     "        return real_connect(self, address)",
+     "        return real_connect(self, address)"),
+    ("M2177", "the sample's console started without its loopback guard (DOC1)", SHOTS,
+     "    loopback_only()\n    sys.path.insert(0, str(REPO))", "    sys.path.insert(0, str(REPO))"),
+    ("M2178", "the sample's console inherits the operator's environment (DOC1)", SHOTS,
+     '    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work / "home"),',
+     '    return {**os.environ, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work / "home"),'),
+    ("M2179", "the whole tour written inside the repository (DOC1)", SHOTS,
+     "    if args.video and _inside_repo(args.video):", "    if False:"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console_shots.py" for n in range(2170, 2180)})
+# DOC1, its review: what the guards let through.
+MUTANTS += [
+    ("M2207", "an address that ends a sentence passes (DOC1 review)", SHOTS,
+     r'''\d{1,3}(?!\w|\.\d)")''', r'''\d{1,3}(?![\w.])")'''),
+    ("M2209", "a GUID written in capitals passes (DOC1 review)", SHOTS,
+     'GUID = re.compile(r"\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")',
+     'GUID = re.compile(r"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b")'),
+]
+MUTANTS += [
+    ("M2208", "a host under .me, .ai, .co or a country passes (DOC1 review)", SHOTS,
+     'HOST = re.compile(r"\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}\\b", re.I)',
+     'HOST = re.compile(r"\\b(?:[a-z0-9-]+\\.)+(?:com|net|org|io|dev|app|cloud|fr|eu|internal|local)\\b", re.I)'),
+]
+MUTANTS += [
+    ("M2204", "the sample's console resolves any name (DOC1 review)", SHOTS,
+     "        if host is not None and not _local((host, 0)):", "        if False:"),
+    ("M2205", "connect_ex of the sample's console reaches off the loopback (DOC1 review)", SHOTS,
+     "        if not _local(address):\n            raise PermissionError(f\"console_shots: no connection off the loopback ({address[0]})\")\n"
+     "        return real_connect_ex(self, address)",
+     "        return real_connect_ex(self, address)"),
+]
+MUTANTS += [
+    ("M2202", "the sample's console starts any program (DOC1 review)", SHOTS,
+     "    subprocess.Popen = Popen\n", ""),
+    ("M2203", "the sample's console sends a datagram off the loopback (DOC1 review)", SHOTS,
+     "    socket.socket.sendto, socket.socket.sendmsg = sendto, sendmsg\n", ""),
+    ("M2206", "the sample's console resolves a name by gethostbyname (DOC1 review)", SHOTS,
+     "    socket.gethostbyname = _resolving(real_byname, lambda host: host)\n", ""),
+]
+MUTANTS += [
+    ("M2200", "the sample's console reads glorfindel-config.yaml at the repository's root (DOC1 review)", SHOTS,
+     "    confine_config(work)\n    import uvicorn\n", "    import uvicorn\n"),
+    ("M2201", "the sample's configuration added after the package's paths, not in their place (DOC1 review)",
+     SHOTS, "    config._DEFAULT_PATHS[:] = [work / \"cwd\" / CONFIG]",
+     "    config._DEFAULT_PATHS.append(work / \"cwd\" / CONFIG)"),
+]
+MUTANTS += [
+    ("M2250", "the sample's console lets git run any command — fetch, ls-remote, -c (DOC1 review 2)", SHOTS,
+     "        if len(argv) < 2 or argv[1] not in GIT_READS:", "        if False:"),
+]
+TESTS.update({mid: "tests/unit/test_console_shots.py"
+              for mid in ("M2250", "M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

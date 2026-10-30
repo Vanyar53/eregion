@@ -120,7 +120,8 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
-	team-check team-init team-start team-stop team-logs team-config components-check images-check
+	team-check team-init team-start team-stop team-logs team-config components-check images-check \
+	console-shots
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
@@ -243,6 +244,7 @@ help:
 	@echo "  make profiles-check         Chaque profil compose rend ses services (docker, rien ne démarre)"
 	@echo "  make components-check [COMPONENT=annatar]  Chaque composant tourne seul (ses tests, les autres absents)"
 	@echo "  make images-check           Les deux images construites et éprouvées comme en CI (eregion-*:ci, rien ne démarre)"
+	@echo "  make console-shots [VIDEO=~/dagorlad.mp4]  Captures et boucle de Dagorlad, sur le jeu d'exemple (Chromium du poste)"
 	@echo ""
 	@echo "Variables"
 	@echo "  SCENARIO    Path to scenario YAML (default: $(SCENARIO))"
@@ -1089,6 +1091,12 @@ team-config: team-check
 components-check:
 	@for c in $(or $(COMPONENT),core glorfindel annatar gothmog); do \
 	  $(PYTHON) scripts/component_check.py $$c --imports && $(PYTHON) scripts/component_check.py $$c || exit 1; done
+
+# DOC1: Dagorlad's captures and loop (docs/images/dagorlad/), replayed from the sample data only
+# (tests/fixtures/dagorlad_sample.json); the whole tour with VIDEO=<path outside the repository>.
+# The workstation's Chromium and ffmpeg — never the CI's (docs/dagorlad.md, « Les images »).
+console-shots:
+	$(PYTHON) scripts/console_shots.py$(if $(VIDEO), --video $(VIDEO))
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 

@@ -5,8 +5,11 @@
 # nor reverts that change. run.sh re-checks it on the LATEST provider version and fails
 # if it changed, so we learn it before an apply silently lifts an isolation.
 #
-# Throwaway stack: own state, own resource group, no VM. Free resources only
-# (resource group, VNet, NSG, NICs). Destroyed by run.sh, success or not.
+# Throwaway stack: own state, no VM, free resources only (VNet, NSG, NICs), destroyed by
+# run.sh, success or not. Least privilege (P-04): it creates NO resource group — it works in
+# one that exists, created once (rg-eregion-canary), where the canary's principal is
+# Network Contributor and nothing more. Every name carries the run's suffix: the three lines of the
+# CI's matrix run side by side in that group.
 terraform {
   required_providers {
     azurerm = { source = "hashicorp/azurerm", version = "~> 4.0" }
@@ -14,19 +17,21 @@ terraform {
 }
 
 provider "azurerm" {
-  features {
-    # The quarantine NSG is created outside Terraform, in this resource group.
-    resource_group { prevent_deletion_if_contains_resources = false }
-  }
+  features {}
 }
 
 variable "suffix" {
   type = string
+  validation {
+    condition     = can(regex("^[a-z0-9-]{1,40}$", var.suffix))
+    error_message = "suffix: 1 to 40 of a-z, 0-9, -."
+  }
 }
 
-variable "location" {
+# The group the canary works in, never created nor deleted here.
+variable "resource_group" {
   type    = string
-  default = "westeurope"
+  default = "rg-eregion-canary"
 }
 
 variable "nic_tag" {
@@ -34,39 +39,45 @@ variable "nic_tag" {
   default = "v1"
 }
 
-resource "azurerm_resource_group" "t" {
-  name     = "rg-eregion-canary-jit-${var.suffix}"
-  location = var.location
-  tags     = { purpose = "eregion-canary-jit" }
+data "azurerm_resource_group" "t" {
+  name = var.resource_group
+}
+
+locals {
+  location = data.azurerm_resource_group.t.location
+  # What run.sh's sweep finds when a destroy fails: this run's resources, by their tag.
+  tags = { purpose = "eregion-canary-jit", "canary-run" = var.suffix }
 }
 
 resource "azurerm_virtual_network" "t" {
-  name                = "vnet-canary"
+  name                = "vnet-canary-${var.suffix}"
   address_space       = ["10.250.0.0/16"]
-  location            = var.location
-  resource_group_name = azurerm_resource_group.t.name
+  location            = local.location
+  resource_group_name = data.azurerm_resource_group.t.name
+  tags                = local.tags
 }
 
 resource "azurerm_subnet" "t" {
   name                 = "default"
-  resource_group_name  = azurerm_resource_group.t.name
+  resource_group_name  = data.azurerm_resource_group.t.name
   virtual_network_name = azurerm_virtual_network.t.name
   address_prefixes     = ["10.250.1.0/24"]
 }
 
 # The customer's NSG, managed as code.
 resource "azurerm_network_security_group" "customer" {
-  name                = "nsg-customer"
-  location            = var.location
-  resource_group_name = azurerm_resource_group.t.name
+  name                = "nsg-customer-${var.suffix}"
+  location            = local.location
+  resource_group_name = data.azurerm_resource_group.t.name
+  tags                = local.tags
 }
 
 # A NIC whose NSG is set as code (association resource).
 resource "azurerm_network_interface" "with_nsg" {
-  name                = "nic-with-nsg"
-  location            = var.location
-  resource_group_name = azurerm_resource_group.t.name
-  tags                = { rev = var.nic_tag }
+  name                = "nic-with-nsg-${var.suffix}"
+  location            = local.location
+  resource_group_name = data.azurerm_resource_group.t.name
+  tags                = merge(local.tags, { rev = var.nic_tag })
   ip_configuration {
     name                          = "ipconfig1"
     subnet_id                     = azurerm_subnet.t.id
@@ -81,10 +92,10 @@ resource "azurerm_network_interface_security_group_association" "with_nsg" {
 
 # A NIC with no NSG of its own.
 resource "azurerm_network_interface" "no_nsg" {
-  name                = "nic-no-nsg"
-  location            = var.location
-  resource_group_name = azurerm_resource_group.t.name
-  tags                = { rev = var.nic_tag }
+  name                = "nic-no-nsg-${var.suffix}"
+  location            = local.location
+  resource_group_name = data.azurerm_resource_group.t.name
+  tags                = merge(local.tags, { rev = var.nic_tag })
   ip_configuration {
     name                          = "ipconfig1"
     subnet_id                     = azurerm_subnet.t.id

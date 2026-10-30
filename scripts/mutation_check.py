@@ -2036,8 +2036,10 @@ MUTANTS += [
     ("M902", "a block gone in human_only marked alerted before its card (L1F, L1)", R,
      ('        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n'
-      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n        report.append(",),
+      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"
+      "        episode(ref or vm, ip, over=False)\n        report.append(",),
      ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"
+      "        episode(ref or vm, ip, over=False)\n"
       '        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n        report.append(',)),
 ]
@@ -3670,11 +3672,13 @@ MUTANTS += [
     ("M1256", "an unreadable state never said by the reassertion (SEC4b)", RCA,
      "    files = unreadable_states()\n", "    files = []\n"),
     ("M1257", "an unreadable state said again at every pass, its acknowledgement undone (SEC4b)", RCA,
-     '    if alerts.get("unreadable_states") == sid:\n        return\n', ""),
+     '    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):\n',
+     "    if False:\n"),
     ("M1258", "a bypassed isolation never said by the reassertion (SEC4b, V-16)", R,
      "    say_bypass(vm, rid, verification, report, ref=ref)\n", ""),
     ("M1259", "a bypass said again at every pass, its acknowledgement undone (SEC4b, V-16)", RCA,
-     "    if mark == sid:\n        return", "    if False:\n        return"),
+     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n        return',
+     "    if False:\n        return"),
     ("M1390", "a bypassed block never said by the reassertion (SEC4b, V-16)", R,
      "    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)\n", ""),
     ("M1391", "a bypass card closed on a precedence that could not be read (SEC4b, V-16)", RCA,
@@ -5051,7 +5055,8 @@ MUTANTS += [
     ("M1764", "what the block left never said (I4A)", R,
      "    say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)\n", ""),
     ("M1765", "what the block left said again once acknowledged (I4A)", RCA,
-     '    if entry.get("left_said") == sid:\n', "    if False:\n"),
+     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
+     "    if False:\n"),
     ("M1766", "a range read as an address: nobody holds it, the turned rule written over (I4A, A0)", BLK,
      '        if "/" in addr or not addr[:1].isdigit():\n', "        if False:\n"),
     ("M1767", "the second name without the NIC's mark: the block no longer the NIC's (I4A)", NET,
@@ -5876,7 +5881,7 @@ MUTANTS += [
      "        if signal_id in said or alerts.get(k) == signal_id:\n"),
     ("M1861", "Glorfindel's closure of a quarantine card carries no note: read as the operator's (L2Q)", RQ,
      '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
-     '            escalations.resolve(e["id"])\n'),
+     '            _resolve(e["id"], note="")\n'),
     ("M1862", "a card closed because its change moved carries no note: read as acknowledged (L2Q)", RQ,
      '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
      '            escalations.resolve(e["id"], note="" if k in altered else _SETTLED)\n'),
@@ -5933,6 +5938,204 @@ MUTANTS += [
      "        if: success() && matrix.os == 'ubuntu-latest'\n"),
 ]
 TESTS.update({mid: "tests/unit/test_workflows.py -k night_runs_both" for mid in ("M1952", "M1953")})
+# P04 (P-04): the azurerm canary without a long-lived secret (OIDC), Contributor on its group alone.
+CAN = ".github/workflows/canary-azurerm.yml"
+JIT_TF, JIT_SH = "infra/canary/jit-terraform/main.tf", "infra/canary/jit-terraform/run.sh"
+MUTANTS += [
+    ("M2080", "the canary's OIDC token held at the workflow's level: any job added there mints it (P04)", CAN,
+     "permissions:\n  contents: read\n\njobs:\n", "permissions:\n  contents: read\n  id-token: write\n\njobs:\n"),
+    ("M2081", "the canary holds a client secret again (P04)", CAN,
+     "      ARM_CLIENT_ID: ${{ secrets.CANARY_AZURE_CLIENT_ID }}\n",
+     "      ARM_CLIENT_ID: ${{ secrets.CANARY_AZURE_CLIENT_ID }}\n"
+     "      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}\n"),
+    ("M2082", "the canary's client id from a repository variable: printed in clear in a public log (P04)", CAN,
+     "      ARM_CLIENT_ID: ${{ secrets.CANARY_AZURE_CLIENT_ID }}\n",
+     "      ARM_CLIENT_ID: ${{ vars.CANARY_AZURE_CLIENT_ID }}\n"),
+    ("M2083", "the canary goes on without its tenant: it fails at the login, never « not configured » (P04, T16)", CAN,
+     '          if [ -z "$ARM_CLIENT_ID" ] || [ -z "$ARM_TENANT_ID" ] || [ -z "$ARM_SUBSCRIPTION_ID" ]; then\n',
+     '          if [ -z "$ARM_CLIENT_ID" ] || [ -z "$ARM_SUBSCRIPTION_ID" ]; then\n'),
+    ("M2084", "a third party's login action beside the canary's token (P04)", CAN,
+     "      - name: Azure login (OIDC)\n",
+     "      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5   # v2.3.0\n"
+     "        if: steps.creds.outputs.ok == 'true'\n"
+     "        with:\n          client-id: ${{ secrets.CANARY_AZURE_CLIENT_ID }}\n"
+     "      - name: Azure login (OIDC)\n"),
+    ("M2085", "Terraform may fall back on the az session: a green canary no longer proves the provider's OIDC (P04)",
+     CAN, '      ARM_USE_CLI: "false"\n', '      ARM_USE_CLI: "true"\n'),
+    ("M2086", "the canary's stack creates its own resource group again (P04)", JIT_TF,
+     'data "azurerm_resource_group" "t" {\n  name = var.resource_group\n}\n',
+     'resource "azurerm_resource_group" "t" {\n  name     = "rg-eregion-canary-jit-${var.suffix}"\n'
+     '  location = "westeurope"\n}\n'),
+    ("M2087", "a resource of the canary named without its run's suffix: the matrix's lines collide (P04)", JIT_TF,
+     '  name                = "nic-no-nsg-${var.suffix}"\n', '  name                = "nic-no-nsg"\n'),
+    ("M2088", "a failed destroy deletes the canary's group, as the old fallback did (P04)", JIT_SH,
+     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 || sweep\n',
+     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 \\\n'
+     '    || az group delete -n "$RG" --yes --no-wait >/dev/null 2>&1\n'),
+    ("M2089", "azurerm 4.x and 5.x try to register resource providers the principal may not (P04)", JIT_SH,
+     "  *) export ARM_RESOURCE_PROVIDER_REGISTRATIONS=none ;;\n", "  *) ;;\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py"
+              for n in range(2080, 2090)})
+# P04, after its review (M2110–M2119).
+MUTANTS += [
+    ("M2110", "the canary's sweep deletes every NIC, NSG and VNet of the group: another run's too (P04)", JIT_SH,
+     """--query "[?tags.\\"canary-run\\"=='$SUFFIX'].id" -o tsv)""", """--query "[].id" -o tsv)"""),
+    ("M2111", "the old principal's credentials no longer compared with the machine's: its own may go (P04)",
+     "docs/operations.md",
+     """    [ "${(P)id}" = "$OLD" ] && [ "${${(P)sec}[1,3]}" = "$h" ] && echo""",
+     """    [ "${(P)id}" = "$OLD" ] && echo"""),
+    ("M2112", "the canary's job outside its environment: its credential back on refs/heads/main, publish.yml's "
+              "token takes its principal (P04)", CAN, "    environment: canary\n", ""),
+    ("M2113", "the canary's principal Contributor on its group: it may delete the group, create a VM (P04)",
+     "docs/operations.md", 'az role assignment create --role "Network Contributor" \\\n',
+     "az role assignment create --role Contributor \\\n"),
+    ("M2114", "the runner's second signal cuts the canary's cleanup short: the quarantine NSG left (P04)", JIT_SH,
+     "  trap '' INT TERM\n  echo \"== cleanup\"\n", "  echo \"== cleanup\"\n"),
+    ("M2115", "the canary's login traced: the OIDC token written whole into the job's log (P04)", CAN,
+     "          jwt=$(curl -fsS", "          set -x\n          jwt=$(curl -fsS"),
+    ("M2116", "the canary's step runs run.sh as a child: a cancel's signals reach the step's bash only (P04)",
+     CAN, "        run: exec infra/canary/jit-terraform/run.sh\n", "        run: infra/canary/jit-terraform/run.sh\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
+
+# L2C (#343, M1930–M1949): the other cards of the reassertion — a bypass, an unreadable
+# state, the rules a block left — follow L2Q's rule: a change in the mark is silent only
+# on the operator's last word on it; a change that came back is said again.
+_L2C = " ".join(f"tests/unit/test_reassert.py::test_{t}" for t in (
+    "a_bypass_that_comes_back_after_its_mark_was_kept_is_said_again",
+    "a_bypass_back_to_its_former_change_closes_the_stale_card",
+    "the_operators_word_on_another_bypass_does_not_silence_this_one",
+    "a_bypass_acknowledgement_is_read_on_its_own_card_only",
+    "an_unreadable_state_that_comes_back_after_its_record_was_kept_is_said_again",
+    "an_unreadable_set_back_to_its_former_files_is_said_again",
+    "a_changed_set_of_left_rules_gets_its_own_card", "left_rules_back_to_a_set_already_said_are_said_again",
+    "a_bypassed_isolation_is_said_once_per_change_and_never_fixed",
+    "a_changed_bypass_is_a_new_card_and_a_holding_isolation_closes_it"))
+MUTANTS += [
+    ("M1930", "a bypass that came back read « said » from its mark alone (L2C)", RCA,
+     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     "    if mark == sid:\n"),
+    ("M1931", "a bypass back to its marked change while another's card is pending: that card stays (L2C)", RCA,
+     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     '    if mark == sid and (cards or _last_word(f"{prefix}-", sid)):\n'),
+    ("M1932", "an unreadable state that came back read « said » from state_alerts.json alone (L2C)", RCA,
+     '    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):\n',
+     '    if alerts.get("unreadable_states") == sid:\n'),
+    ("M1933", "left rules back to a set already said read « said » from their mark alone (L2C)", RCA,
+     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
+     '    if entry.get("left_said") == sid:\n'),
+    ("M1934", "another set of left rules folded into the former card, which keeps naming the former (L2C)", RCA,
+     '    for e in stale:\n        # Another set: the store folded its card into this one, which kept naming the\n',
+     '    for e in []:\n        # Another set: the store folded its card into this one, which kept naming the\n'),
+    ("M1935", "a card Glorfindel closed itself read as the operator's acknowledgement (L2C)", RCA,
+     '            and last.get("status") == "resolved" and not last.get("resolution"))\n',
+     '            and last.get("status") == "resolved")\n'),
+    ("M1936", "the resource's first card read, not its latest: an old acknowledgement silences a return (L2C)", RCA,
+     '    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").startswith(prefix)), None)\n',
+     '    last = next((e for e in _history() if (e.get("signal_id") or "").startswith(prefix)), None)\n'),
+    ("M1937", "the operator's word on another change silences this one (L2C)", RCA,
+     '    return (last is not None and last.get("signal_id") == sid\n',
+     "    return (last is not None\n"),
+    ("M1938", "a bypass card closed because it holds again carries no note: read as acknowledged (L2C)", RCA,
+     '            _resolve(e["id"], note="Plus contourné : le deny de Glorfindel tient de nouveau.")\n',
+     '            _resolve(e["id"], note="")\n'),
+    ("M1939", "an unreadable-state card closed by Glorfindel carries no note: read as acknowledged (L2C)", RCA,
+     '            _resolve(e["id"], note="État local lisible de nouveau, ou autres fichiers illisibles.")\n',
+     '            _resolve(e["id"], note="")\n'),
+    ("M1940", "a left-rules card closed by Glorfindel carries no note: read as acknowledged (L2C)", RCA,
+     '        _resolve(e["id"], note="Autres règles laissées : une nouvelle carte les dit.")\n',
+     '        _resolve(e["id"], note="")\n'),
+    ("M1941", "the latest bypass card of any resource read for this one's acknowledgement (L2C)", RCA,
+     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     '    if mark == sid and not stale and (cards or _last_word(_BYPASS_PREFIX, sid)):\n'),
+]
+TESTS.update({f"M{n}": _L2C for n in range(1930, 1942)})
+_L2C_SEQ = "tests/unit/test_invariant_regressions.py::test_{}_brought_back_after_a_full_disk_is_said"
+for _mid, _what in (("M1930", "a_bypass"), ("M1932", "an_unreadable_state"), ("M1935", "a_bypass"),
+                    ("M1938", "a_bypass"), ("M1939", "an_unreadable_state")):
+    TESTS[_mid] = f"{_L2C_SEQ.format(_what)} {_L2C} {INVARIANTS}"
+
+# L2C, its review (M1942–M1949): a disappearance acknowledged, held again with its mark kept
+# (a full disk), then gone again — said; and the rules a block left, read on their own block.
+_L2C_DRIFT = " ".join(f"tests/unit/test_reassert.py::test_{t}" for t in (
+    "a_disappearance_after_one_acknowledged_and_held_again_is_said",
+    "a_drift_card_closed_with_a_note_is_no_acknowledgement",
+    "an_alert_closes_the_card_it_replaces_with_a_note",
+    "left_rules_acknowledged_are_read_on_their_own_block_only", "an_episode_is_known_over_before_any_write_of_its_pass",
+    "one_alert_per_disappearance_not_one_per_minute"))
+MUTANTS += [
+    ("M1942", "an isolation gone again read « already said » from its drift mark alone (L2C, review)", R,
+     '    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):\n',
+     '    if iso.get("drift_alerted_at"):\n'),
+    ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", R,
+     "            and drift_said(ref or vm, ip, _alert_id(vm, rid, ip))):\n", "            ):\n"),
+    ("M1944", "an isolation held again, its mark kept: the episode not known over (L2C, review)", R,
+     '    if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
+     '    if False:\n'),
+    ("M1945", "a block held again, its mark kept: the episode not known over (L2C, review)", R,
+     '    if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
+     '    if False:\n'),
+    ("M1946", "a reassertion alert closes the card it replaces without a note: read as acknowledged (L2C, review)", R,
+     '            escalations.resolve(e["id"], note="Remplacée : une nouvelle alerte de réaffirmation la suit.")\n',
+     '            escalations.resolve(e["id"])\n'),
+    ("M1947", "a drift card Glorfindel closed read as the operator's acknowledgement (L2C, review)", RCA,
+     '    return last is not None and (last.get("status") == "pending" or not last.get("resolution"))\n',
+     "    return last is not None\n"),
+    ("M1948", "the latest left-rules card of any block read for this one's acknowledgement (L2C, review)", RCA,
+     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
+     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(_LEFT_PREFIX, sid)):\n'),
+    ("M1949", "an episode known over stays so once a new one is marked: said again at every pass (L2C, review)", RCA,
+     "    (_EPISODE_OPEN.discard if over else _EPISODE_OPEN.add)((key.lower(), ip))\n",
+     "    _EPISODE_OPEN.discard((key.lower(), ip))\n"),
+]
+TESTS.update({f"M{n}": _L2C_DRIFT for n in range(1942, 1950)})
+TESTS.update({f"M{n}": ("tests/unit/test_invariant_regressions.py::"
+                        "test_a_disappearance_after_one_acknowledged_and_held_again_is_said_by_the_machine "
+                        f"{_L2C_DRIFT} {INVARIANTS}") for n in range(1942, 1946)})
+
+# L2C, what the machine found after the review (M2120–M2129): a pass cut off by one VM's
+# refused write, an episode kept by rules back but bypassed, an episode known over too late.
+_RT = "tests/unit/test_reassert.py::test_"
+MUTANTS += [
+    ("M2120", "a state write refused on one isolation stops the whole pass (L2C, review, 9b38af3)", R,
+     "        except OSError as exc:\n            # Its state not written (a full disk): said, and the others still read — a pass\n",
+     "        except KeyError as exc:\n            # Its state not written (a full disk): said, and the others still read — a pass\n"),
+    ("M2121", "a block's rules back but bypassed never end its disappearance (L2C, review, 60135ea)", R,
+     "            drift_over(ref or vm, ip)            # its rules back, an allow passes them (L2C, review)\n",
+     "            pass\n"),
+    ("M2122", "a block's episode known over only after the pass's first write: refused, never (L2C, review, ea1b153)", R,
+     ('    if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n'
+      "        episode(ref or vm, ip, over=True)        # back: a new episode next time, whatever write fails\n"
+      "    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)\n"),
+     ("    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)\n"
+      '    if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n'
+      "        episode(ref or vm, ip, over=True)        # back: a new episode next time, whatever write fails\n")),
+]
+TESTS.update({
+    "M2120": f"{_RT}a_state_refused_on_one_vm_does_not_stop_the_pass {INVARIANTS}",
+    "M2121": f"{_RT}a_disappearance_is_over_once_its_rules_are_back_even_bypassed {INVARIANTS}",
+    "M2122": f"{_RT}an_episode_is_known_over_before_any_write_of_its_pass {INVARIANTS}",
+})
+# L2C, its second review: a refused state write said in the pass's report, not only logged.
+MUTANTS += [
+    ("M2123", "an isolation's refused state write only logged, not in the pass's report (L2C, review 2)", R,
+     '            report.append(unrecorded(snapshot["vm_name"], exc))\n',
+     '            unrecorded(snapshot["vm_name"], exc)\n'),
+    ("M2124", "a block's refused state write only logged, not in the pass's report (L2C, review 2)", R,
+     '            report.append(unrecorded(snapshot["vm_name"], exc, snapshot.get("ip", "")))\n',
+     '            unrecorded(snapshot["vm_name"], exc, snapshot.get("ip", ""))\n'),
+]
+MUTANTS += [
+    ("M2125", "a drift mark silences an episode this process never saw open: after a restart, silent (L2C, review 2)", RCA,
+     "    if (key.lower(), ip) not in _EPISODE_OPEN:\n        return False\n",
+     "    if False:\n        return False\n"),
+]
+TESTS["M2125"] = " ".join(f"{_RT}{t}" for t in (
+    "a_disappearance_held_again_then_gone_after_a_restart_is_said",
+    "an_acknowledged_disappearance_still_there_at_start_is_said_once"))
+TESTS.update({"M2123": f"{_RT}a_state_refused_on_one_vm_does_not_stop_the_pass",
+              "M2124": f"{_RT}a_state_refused_on_a_block_is_printed_by_the_watch"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

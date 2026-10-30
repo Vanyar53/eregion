@@ -3350,6 +3350,9 @@ MUTANTS += [
      UNB, "        if q_bare is not None:\n            return tagged\n", ""),
 ]
 TESTS.update({"M1343": f"{_U3F} {INVARIANTS}", "M1344": _U3F, "M1345": _U3F})
+# I4B: the search on every NSG (_unplaced_blocks) stands in for M1345's NIC when the subscription's NSGs
+# can be listed — refused, it can't: measured there too.
+TESTS["M1345"] = f"{_U3F} tests/unit/test_invariant_regressions.py::test_an_unblock_reads_a_bare_nics_tag_where_its_block_lies"
 # U3F: a race that never comes back fails, its waiting threads unwound — the job no longer
 # hangs; the jobs that run the invariants are bounded.
 MUTANTS += [
@@ -4771,6 +4774,9 @@ MUTANTS += [
      "        if found is None:\n            return True\n", "        if found is None:\n            return False\n"),
 ]
 TESTS.update({f"M{n}": _I4A for n in range(1755, 1770)})
+# I4B: on a NIC with no NSG of its own, the search on every NSG (_unplaced_blocks) finds the second name
+# M1761 hides; on its own NSG, nothing stands in for it.
+TESTS["M1761"] = ("tests/unit/test_invariant_regressions.py::test_the_unblock_sweep_reads_the_second_name_on_a_nics_own_nsg " + _I4A)
 # I4A, review (5.5): a turned allow aimed at a range or a tag waits behind our deny too
 # (`_takes_in`, nsg.py — the same rule as I5Q's); a failed take-off of the first pair's
 # rule is said; the verification without state reads the pair that blocks the NIC now.

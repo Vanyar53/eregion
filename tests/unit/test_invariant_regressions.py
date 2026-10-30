@@ -3399,3 +3399,64 @@ def test_a_turned_rule_put_back_may_hold_back_another_in_its_turn(monkeypatch):
          ("unblock", WEB2, WEB2, None),
          ("block_turned_then_reasserted", _S101_API1, _S101_API1, None, "vm", 22,
           (_S101_EDGE, "glorfindel-block-192-31-196-7-api-api-nic-6-c89eaa-out"), "human_only"))
+
+
+
+# ── I4B: what the search on every NSG (_unplaced_blocks) would hide, held by its own tests ──
+
+def test_an_unblock_reads_a_bare_nics_tag_where_its_block_lies(monkeypatch):
+    """U3F's case, the subscription's NSGs unlisted: web blocked on its own NSG, its entry
+    lost, isolated by quarantine, the quarantine taken off by someone — the NIC bare, the
+    isolation's state lost too, our tag still naming its NSG. The unblock reads the tag and takes the block off there,
+    without listing the subscription's NSGs; reading the state alone (M1345), the NIC
+    looked unplaced and the search on every NSG, refused, left it said, not done."""
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(quarantine=True, web_nic={"own": "dedicated"}))
+        m.block(Script(WEB1, WEB1, None, 22))
+        m.isolate(Script(WEB1, WEB1, None))
+        actions._clear_block_state(WEB1, ATTACKER)
+        m.someone_detaches_the_quarantine(Script(_nic("rg-app1", "web-nic")))
+        m._lose_state(WEB1)                       # the isolation's too: only our tag says it
+
+        def refused(*a, **k):
+            raise RuntimeError("(AuthorizationFailed) no list")
+        monkeypatch.setattr(m.fake.network.network_security_groups, "list_all", refused)
+        out = m.connector.unblock_ip(ATTACKER, WEB1)
+        assert out["status"] == "unblocked", out
+        assert not m._named_leftovers(m.fake.vms[key(WEB1)]["nics"], "glorfindel-block-")
+    finally:
+        import shutil
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_the_unblock_sweep_reads_the_second_name_on_a_nics_own_nsg(monkeypatch):
+    """I4A's second name on a NIC's own NSG, its entry lost, the NIC's IP changed since:
+    the deny is on an address no longer the NIC's — only its mark says it is its own. The
+    sweep reads both names by the mark (M1761); the NIC has an NSG of its own, so the
+    search on every NSG doesn't stand in for it."""
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(api_nic={"own": "dedicated"}))
+        assert m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)["status"] == "blocked"
+        g = m.fake.nsgs[key(_Q_API_NSG)]
+        nic = m.fake.vms[key(API)]["nics"][0]
+        first, second = m.connector._placement_rule_bases(m.connector._block_rule_prefix(ATTACKER), "api",
+                                                          "api-nic", nic)
+        for suffix in ("", "-out"):
+            g["rules"][f"{second}{suffix}"] = {**g["rules"].pop(f"{first}{suffix}"), "name": f"{second}{suffix}"}
+        for f in actions._BLOCK_STATE_DIR.glob("api--*.json"):
+            f.unlink()
+        m.customer_changes_ip(data=Script(_nic("rg-edge", "api-nic"), 0, 20))
+        out = m.connector.unblock_ip(ATTACKER, API)
+        assert out["status"] == "unblocked", out
+        assert not [n for n in g["rules"] if n.startswith(second)], sorted(g["rules"])
+    finally:
+        import shutil
+        shutil.rmtree(m.home, ignore_errors=True)

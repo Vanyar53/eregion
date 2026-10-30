@@ -113,3 +113,12 @@ le rapport donne aussi les effectifs.
   confirmées) — lesquelles en premier ?
 
 Ces seuils sont une décision de l'opérateur, pas du code.
+
+## Et le confinement ?
+
+L'observation mesure la décision, jamais le confinement : en `human_only`, rien ne s'exécute. Le
+temps pour contenir et la part contenue seule restent donc vides sur H0. Ils se mesurent sur le
+banc, sur une VM `bench` en `non_disruptive`, le temps d'une campagne déclarée (BL1, #280) :
+[`banc-bl1.md`](banc-bl1.md). Les définitions sont dans [`analysis.md`](analysis.md), « Temps
+pour contenir et part contenue seule ». Les cartes de cette campagne sont des cartes d'exercice
+(B2) : elles n'entrent pas dans le taux de recommandations disruptives fausses de l'observation.

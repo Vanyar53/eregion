@@ -229,6 +229,13 @@ gothmog report <run_id>                      # runs/<run_id>.json (même forme q
 
 # Campagne (kill-chain générative + rapport IA0) — depuis Orodruin, sur le modèle de gothmog
 make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAMPAIGN_MAX=5]
+#   BL1 (#280) : CAMPAIGN_DECLARED=annatar/campaign/declared/bl1-reponse.yaml — exactement les
+#   techniques déclarées, dans leur ordre, vérifiées contre le catalogue (bibliothèque publique,
+#   implémentée, non destructive ; zone bench, mode non_disruptive) ; le planner n'y choisit rien.
+#   La session de banc pas à pas : docs/banc-bl1.md. Après la campagne :
+#   make glorfindel-host-containment CAMPAIGN=<id> [FAULT_RUNS=<run Gothmog>]   (sur H0)
+#   make campaign-containment CAMPAIGN=<id> [FAULT_RUNS=…] [JSON=1]               (ici, runs/)
+#   — le temps pour contenir et la part contenue seule (docs/analysis.md), lecture seule.
 #   Planifie une kill-chain depuis le catalogue (annatar campaign plan) et rend un id. Le planner
 #   choisit, le synthétiseur assemble : une entrée engine: atomic (T1136.001) devient une expérience
 #   E1 (aucune étape, engine_ref résolu au plan contre les atomics de l'image, sondes comprises) ;

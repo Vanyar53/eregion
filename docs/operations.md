@@ -681,12 +681,12 @@ on le compare à chaque secret de `.envrc` qui va avec cet appId, sans rien affi
 ```bash
 OLD=<appId de l'ancien principal du canari>
 az role assignment list --assignee "$OLD" --all -o table              # ses droits, partout
-az ad app credential list --id "$OLD" --query "[].[keyId,hint,endDateTime]" -o tsv
+az ad app credential list --id "$OLD" --query "[].[keyId,displayName,endDateTime]" -o tsv
 source .envrc
-for h in $(az ad app credential list --id "$OLD" --query "[].hint" -o tsv); do
+az ad app credential list --id "$OLD" --query "[].[keyId,hint]" -o tsv | while read -r k h; do
   for v in AZURE GLORFINDEL_AZURE EREGION_CONSOLE_AZURE GLORFINDEL_BOT_AZURE ANNATAR_AZURE; do
     id="${v}_CLIENT_ID"; sec="${v}_CLIENT_SECRET"
-    [ "${(P)id}" = "$OLD" ] && [ "${${(P)sec}[1,3]}" = "$h" ] && echo "hint $h : $sec, le poste s'en sert"
+    [ "${(P)id}" = "$OLD" ] && [ "${${(P)sec}[1,3]}" = "$h" ] && echo "keyId $k : $sec, le poste s'en sert"
   done
 done
 ```

@@ -115,4 +115,5 @@ jobs:
         env:
           CANARY_SUFFIX: gh${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
           AZURERM_CONSTRAINT: ${{ matrix.azurerm }}
-        run: infra/canary/jit-terraform/run.sh
+        # exec: a cancel's SIGINT and SIGTERM reach run.sh itself, not only the step's bash.
+        run: exec infra/canary/jit-terraform/run.sh

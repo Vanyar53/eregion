@@ -488,6 +488,7 @@ def test_each_run_of_the_matrix_has_its_own_suffix():
     """The three lines run side by side in one group: the suffix names the run, its attempt (a
     re-run after a killed one) and the line."""
     step = _canary_step(_canary_job(), "jit-terraform/run.sh")
+    assert step["run"].strip() == "exec infra/canary/jit-terraform/run.sh"     # a cancel's signals reach it
     suffix = step["env"]["CANARY_SUFFIX"]
     for part in ("${{ github.run_id }}", "${{ github.run_attempt }}", "${{ strategy.job-index }}"):
         assert part in suffix, suffix
@@ -685,6 +686,9 @@ def test_the_old_principal_goes_without_cutting_the_operators_machine():
     assert loop < removal.index("Si l'ancien principal sert ailleurs")
     assert "for s in AZURE_CLIENT_SECRET AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do" in removal[:loop]
     compare = removal.index('[ "${${(P)sec}[1,3]}" = "$h" ]')
+    # A hint is the start of a secret: compared, never shown — only the keyId and the variable.
+    assert "hint" not in re.sub(r'--query "\[\]\.\[keyId,hint\]" -o tsv \| while read -r k h', "", removal.split("```bash", 2)[2].split("```")[0])
+    assert 'echo "keyId $k : $sec, le poste s\'en sert"' in removal
     deletes = [m.start() for m in re.finditer(r"az ad app credential delete", removal)]
     assert deletes and compare < min(deletes)
     assert all("--key-id <keyId de cet identifiant>" in removal[d:d + 80] for d in deletes)

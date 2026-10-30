@@ -5661,6 +5661,8 @@ MUTANTS += [
      "  trap '' INT TERM\n  echo \"== cleanup\"\n", "  echo \"== cleanup\"\n"),
     ("M2115", "the canary's login traced: the OIDC token written whole into the job's log (P04)", CAN,
      "          jwt=$(curl -fsS", "          set -x\n          jwt=$(curl -fsS"),
+    ("M2116", "the canary's step runs run.sh as a child: a cancel's signals reach the step's bash only (P04)",
+     CAN, "        run: exec infra/canary/jit-terraform/run.sh\n", "        run: infra/canary/jit-terraform/run.sh\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
 

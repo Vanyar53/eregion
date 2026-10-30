@@ -1335,3 +1335,18 @@ def test_an_alert_closes_the_card_it_replaces_with_a_note():
     (closed,) = _drift_cards("resolved")
     assert closed["resolution"] and [e["reason"] for e in _drift_cards("pending")] == ["b"]
 
+
+@pytest.mark.xfail(strict=True, reason="a stale operation mark (unblock_failed): its own lot, routed from L2C's review")
+def test_a_block_written_again_after_a_failed_unblock_is_checked():
+    """A block, an unblock that failed (`unblock_failed`), then the block written again,
+    whole: `_save_block_state` merges it into the entry and keeps the mark. Its rules then
+    vanish: the pass leaves it to the operator, `verify_block_ip` never called — nothing
+    said. Present on `main`; the oracle of the machine exempts it as L1 does meanwhile."""
+    from glorfindel.actions import _update_block_entry
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)
+    _update_block_entry("vm", _IP, unblock_failed=["r: (AuthorizationFailed)"])
+    _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)     # blocked again
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    reassert_active(c, _HUMAN)
+    assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]

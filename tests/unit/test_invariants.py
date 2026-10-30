@@ -2103,8 +2103,9 @@ class IsolationMachine(RuleBasedStateMachine):
         is said after an unfaulted pass: a pending card on the VM (for a block, about the
         attacker's address). Once said, it stays said while the allow stands. As for L1
         (_block_vanished): only while no operation holds it — the test's journal, and the
-        record's own partial or failure marks (a failed unblock or release is the operator's;
-        the reassertion leaves it alone, by design)."""
+        record's own partial or failure marks. A block written again after a failed unblock
+        keeps its mark and goes unchecked: a known defect, present on `main`, routed to a lot
+        of its own (test_reassert.py, xfail); the exemption follows L1 meanwhile."""
         record = (self._state(vm) if isolation
                   else next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), None))
         marks = ("partial", "release_failed", "releasing_at") if isolation else (

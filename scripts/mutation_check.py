@@ -4358,6 +4358,19 @@ MUTANTS += [
 ]
 TESTS.update({"M2093": "tests/unit/test_gothmog.py", "M2094": "tests/unit/test_exercise_plan.py"})
 
+MUTANTS += [
+    ("M2095", "the request's reader matches a target's start only (a newline, an escape after it) (DG-b review)", XRQ,
+     '        if not isinstance(t, str) or not _VM_ID.fullmatch(t) or ".." in t:\n',
+     "        if not isinstance(t, str) or not _VM_ID.match(t):\n"),
+    ("M2096", "the ARM reader sends a path with a query to Azure (another resource's tags read) (DG-b review)",
+     "eregion_core/inscription.py",
+     "        path = safe_path(path)   # no query, no fragment, no escape: the path ARM was asked (DG-b review)\n", ""),
+    ("M2097", "the operator's terminal prints the request's characters raw (DG-b review)", XRQ,
+     '    return "".join(c if c.isprintable() else f"\\\\u{ord(c):04x}" for c in str(text))\n',
+     "    return str(text)\n"),
+]
+TESTS.update({mid: "tests/unit/test_exercise_request.py" for mid in ("M2095", "M2096", "M2097")})
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.

@@ -32,7 +32,9 @@ from eregion_core.exercise_plan import Target, load_catalog  # noqa: E402
 from gothmog.engines.chaos_studio import ChaosStudio  # noqa: E402
 
 from .console_client import console  # noqa: E402
-from .test_gothmog import SUB, Clock, Cred, World  # noqa: E402
+from .test_gothmog import Clock, Cred, World, _experiment  # noqa: E402
+
+SUB = "00000000-0000-0000-0000-000000000000"
 
 VM = f"/subscriptions/{SUB}/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
 ENROLLED = {"eregion-target": "celebrimbor", "eregion-zone": "bench"}
@@ -50,7 +52,8 @@ def stage(tmp_path, monkeypatch):
     api._targets_cache.update(at=0.0, value=None)
     monkeypatch.setattr(api, "_board_rules", lambda: [])
     clock = Clock()
-    world = World(clock)
+    world = World(clock, experiment=_experiment(
+        targets=(f"{VM}/providers/Microsoft.Chaos/targets/Microsoft-VirtualMachine",)))
     executor = MagicMock()
     executor.resource_id = VM
     executor.get_resource_group_tags.return_value = dict(ENROLLED)

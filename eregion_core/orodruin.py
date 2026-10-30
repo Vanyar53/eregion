@@ -407,7 +407,7 @@ def check(readers: dict | None = None) -> Verdict:
 # ── The verdict, published for the console (DG-b) ─────────────────────────────────────
 
 CONTRACT_BLOB = "orodruin/contract.json"
-_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_CODE = re.compile(r"[a-z][a-z0-9_]{0,39}")
 
 
 def contract_doc(verdict: Verdict, now: datetime | None = None) -> dict:
@@ -423,7 +423,7 @@ def read_contract(doc) -> dict:
     if not isinstance(doc, dict) or set(doc) != {"verdict", "codes", "at"}:
         raise ValueError("not Orodruin's verdict: exactly verdict, codes, at")
     codes = doc["codes"]
-    if not isinstance(codes, list) or len(codes) > 20 or not all(isinstance(c, str) and _CODE.match(c) for c in codes):
+    if not isinstance(codes, list) or len(codes) > 20 or not all(isinstance(c, str) and _CODE.fullmatch(c) for c in codes):
         raise ValueError("its codes are not a list of codes")
     if doc["verdict"] not in (ARMED, PASSIVE) or (doc["verdict"] == ARMED) != (not codes):
         raise ValueError("armed without a code, or passive with its codes")

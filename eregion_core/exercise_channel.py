@@ -99,7 +99,7 @@ AUDIT = "audit"
 # each blob read against its shape (eregion_core/orodruin.py read_contract,
 # eregion_core/exercise_request.py read_status).
 ORODRUIN = "orodruin"
-_ORODRUIN_BLOB = re.compile(r"^orodruin/(?:contract|requests/(?P<rid>r-\d{8}T\d{6}Z-[0-9a-f]{6}))\.json$")
+_ORODRUIN_BLOB = re.compile(r"orodruin/(?:contract|requests/(?P<rid>r-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}))\.json")
 
 _last_pull = 0.0
 _pull_lock = threading.Lock()
@@ -669,7 +669,7 @@ def publish_doc(name: str, doc: dict, *, channel: str | None = None, credential=
     import json
     import requests
 
-    if not _ORODRUIN_BLOB.match(name):
+    if not _ORODRUIN_BLOB.fullmatch(name):
         raise ValueError(f"not one of Orodruin's blobs: {name!r}")
     url = channel if channel is not None else channel_url()
     if not url:
@@ -687,7 +687,7 @@ def orodruin_refusal(name: str, doc) -> str:
     """Why a blob of Orodruin's is not believed — "" when it has its shape."""
     from eregion_core.exercise_request import RequestRefused, read_status
     from eregion_core.orodruin import read_contract
-    m = _ORODRUIN_BLOB.match(name)
+    m = _ORODRUIN_BLOB.fullmatch(name)
     if not m:
         return "not one of Orodruin's blobs"
     try:
@@ -719,7 +719,7 @@ def pull_orodruin(directory: Path, *, channel: str | None = None, credential=Non
     written, skipped, downloads = 0, {}, 0
     for blob in _blobs(get, url, headers, f"{ORODRUIN}/"):
         name = blob.findtext("Name") or ""
-        if not _ORODRUIN_BLOB.match(name):
+        if not _ORODRUIN_BLOB.fullmatch(name):
             continue
         local = directory / name[len(ORODRUIN) + 1:]
         modified = blob.findtext("Properties/Last-Modified")

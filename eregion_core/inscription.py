@@ -271,8 +271,9 @@ class TagEnrollment:
         """One read of Azure Resource Manager with the reader's identity (Orodruin's, for the
         request it judges: eregion_core/exercise_runner.py, DG-b). An error raises."""
         import requests
-        if not path.startswith("/subscriptions/"):
-            raise ValueError(f"not an ARM path: {path!r}")
+
+        from eregion_core.held import safe_path
+        path = safe_path(path)   # no query, no fragment, no escape: the path ARM was asked (DG-b review)
         r = (self._get or requests.get)(f"{ARM}{path}", headers=self._headers(),
                                         params={"api-version": api}, timeout=15)
         if not r.ok:

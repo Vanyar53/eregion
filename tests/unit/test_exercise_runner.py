@@ -20,7 +20,7 @@ from eregion_core import orodruin
 from eregion_core.exercise import exercises_dir
 from eregion_core.exercise_plan import Target, load_catalog
 
-RG = "/subscriptions/s/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/"
+RG = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/"
 GONDOLIN, SENTINEL, BREE = RG + "vm-celebrimbor-gondolin", RG + "vm-sentinel", RG + "vm-celebrimbor-bree"
 BENCH_RG = {"eregion-target": "celebrimbor"}
 TARGETS = {

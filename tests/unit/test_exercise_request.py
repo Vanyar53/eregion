@@ -11,8 +11,8 @@ import pytest
 
 from eregion_core import exercise_request as xr
 
-VM = "/subscriptions/s/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-gondolin"
-VM2 = "/subscriptions/s/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-bree"
+VM = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-gondolin"
+VM2 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-bree"
 NOW = datetime(2026, 10, 30, 7, 52, tzinfo=timezone.utc)
 
 
@@ -64,7 +64,7 @@ def test_a_missing_field_is_refused():
 
 @pytest.mark.parametrize("wire, said", [
     ({"experiment": "T1486; rm", "target": VM, "rank": 1}, "catalogue id"),
-    ({"experiment": "T1486", "target": "/subscriptions/s/resourceGroups/rg/providers/"
+    ({"experiment": "T1486", "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/"
       "Microsoft.Storage/storageAccounts/a", "rank": 1}, "VM's resource id"),
     ({"experiment": "T1486", "target": VM, "rank": 2}, "rank is not 1"),
     ({"experiment": "T1486", "target": VM, "rank": True}, "rank is not 1"),
@@ -183,3 +183,61 @@ def test_check_id_says_a_bad_id(capsys):
     assert xr.main(["check-id", "r-20261030T075200Z-a1b2c3"]) == 0
     assert xr.main(["check-id", "../etc"]) == 1
     assert "not a request id" in capsys.readouterr().err
+
+
+# ── The review of DG-b, point 3: the one reader is strict ───────────────────────────────────
+
+GUID = "00000000-0000-0000-0000-000000000000"
+_RG = f"/subscriptions/{GUID}/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/"
+
+
+@pytest.mark.parametrize("target", [
+    _RG + "vm\x1b[6Dbench1",                         # an escape: printed as « bench1 »
+    _RG + "vm-gondolin\n",                           # « $ » took a trailing newline
+    _RG + "vm‮gondolin",                        # a bidirectional override
+    _RG + "vm١",                                # another script's digit
+    _RG.replace("rg-celebrimbor", "rg-celebrimbor?x=") + "vm-gondolin",   # a query in the URL
+    _RG.replace("rg-celebrimbor", "rg-celebrimbor#") + "vm-gondolin",
+    _RG.replace("rg-celebrimbor", "rg%2Fcelebrimbor") + "vm-gondolin",
+    _RG.replace("rg-celebrimbor", "..") + "vm-gondolin",
+    _RG + "vm..x",
+    _RG.replace(GUID, "s") + "vm-gondolin",          # a subscription is a GUID
+])
+def test_a_target_outside_azures_characters_is_refused(target):
+    with pytest.raises(xr.RequestRefused, match="VM's resource id"):
+        xr.read(_doc(wires=[{"experiment": "T1486", "target": target, "rank": 1}]))
+
+
+@pytest.mark.parametrize("rid", ["r-20261030T075200Z-a1b2c3\n", "r-２０２６1030T075200Z-a1b2c3",
+                                 "r-20261030T075200Z-A1B2C3"])
+def test_an_id_matched_whole_ascii_only(rid):
+    assert not xr.valid_id(rid)
+    with pytest.raises(xr.RequestRefused, match="id"):
+        xr.read(_doc(id=rid))
+
+
+@pytest.mark.parametrize("name", ["vm-gondolin\n", "vm\x1b]0;x\x07", "vm‮"])
+def test_a_typed_name_matched_whole(name):
+    r = xr.read(_doc())
+    with pytest.raises(xr.RequestRefused, match="VM's name"):
+        xr.read_typed({"request": r.id, "typed": {"1": name}}, r)
+
+
+def test_what_the_operator_reads_is_printable_only():
+    assert xr.shown("vm\x1b[6Dbench1‮") == "vm\\u001b[6Dbench1\\u202e"
+    said = []
+    from eregion_core.exercise_plan import load_catalog
+    xr.confirm(xr.read(_doc()), load_catalog(), ask=lambda p: "n", say=said.append)
+    assert all(line.isprintable() for line in said)
+
+
+def test_the_arm_reader_never_sends_a_query_a_fragment_or_an_escape():
+    from eregion_core.inscription import TagEnrollment
+    asked = []
+    reader = TagEnrollment(credential=type("C", (), {"get_token": lambda self, s: type("T", (), {"token": "t"})()})(),
+                           get=lambda *a, **k: asked.append(a))
+    for path in (f"/subscriptions/{GUID}/resourceGroups/rg-celebrimbor?x=", f"/subscriptions/{GUID}/resourceGroups/rg#x",
+                 f"/subscriptions/{GUID}/resourceGroups/rg%2F..", "https://evil.example/x"):
+        with pytest.raises(ValueError):
+            reader.arm_get(path, "2021-04-01")
+    assert asked == []

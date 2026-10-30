@@ -44,12 +44,17 @@ MAX_WIRES = CEILING_INJECTIONS
 MAX_BYTES = 64 * 1024
 
 REQUESTS_ENV = "EREGION_REQUESTS_DIR"
-_ID = re.compile(r"^r-\d{8}T\d{6}Z-[0-9a-f]{6}$")
-_EXPERIMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_VM_ID = re.compile(r"^/subscriptions/[^/\s]+/resourceGroups/[^/\s]+/providers/"
-                    r"Microsoft\.Compute/virtualMachines/[^/\s]+$", re.IGNORECASE)
+# Matched whole (``fullmatch``: ``$`` would take a trailing newline), ASCII only (``\d`` and ``\w``
+# take other scripts' digits and letters), in Azure's own character sets (DG-b review, point 3):
+# what the operator's terminal prints and what Orodruin puts in a URL is exactly what was checked.
+_ID = re.compile(r"r-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}")
+_EXPERIMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_GUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+_VM_ID = re.compile(rf"/subscriptions/{_GUID}/resourceGroups/[-\w._()]{{1,90}}/providers/"
+                    r"Microsoft\.Compute/virtualMachines/[A-Za-z0-9][A-Za-z0-9._-]{0,63}",
+                    re.IGNORECASE | re.ASCII)
 # A VM name as Azure writes it (1–64: letters, digits, '-', '_', '.').
-_VM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_VM_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
 class RequestRefused(ValueError):
@@ -80,7 +85,7 @@ class Request:
 
 
 def valid_id(value) -> bool:
-    return isinstance(value, str) and bool(_ID.match(value))
+    return isinstance(value, str) and bool(_ID.fullmatch(value))
 
 
 def _exact(doc, fields: tuple[str, ...], what: str) -> None:
@@ -116,9 +121,9 @@ def read(doc) -> Request:
     for i, w in enumerate(wires, 1):
         _exact(w, WIRE_FIELDS, f"wire {i}")
         e, t, rank = w["experiment"], w["target"], w["rank"]
-        if not isinstance(e, str) or not _EXPERIMENT.match(e):
+        if not isinstance(e, str) or not _EXPERIMENT.fullmatch(e):
             raise RequestRefused(f"wire {i}: its experiment is not a catalogue id")
-        if not isinstance(t, str) or not _VM_ID.match(t):
+        if not isinstance(t, str) or not _VM_ID.fullmatch(t) or ".." in t:
             raise RequestRefused(f"wire {i}: its target is not a VM's resource id")
         if isinstance(rank, bool) or not isinstance(rank, int) or rank != i:
             raise RequestRefused(f"wire {i}: its rank is not {i} (the wires run in their order)")
@@ -190,7 +195,7 @@ def read_typed(doc, request: Request) -> dict[int, str]:
     for k, v in typed.items():
         if not (isinstance(k, str) and k.isdigit() and int(k) in ranks):
             raise RequestRefused(f"a name typed for a wire this request does not hold: {k!r}")
-        if not isinstance(v, str) or not _VM_NAME.match(v):
+        if not isinstance(v, str) or not _VM_NAME.fullmatch(v):
             raise RequestRefused(f"the name typed for wire {k} is not a VM's name")
         out[int(k)] = v
     return out
@@ -209,9 +214,9 @@ STATUS_FIELDS = ("request", "state", "at", "codes", "wires")
 STATUS_WIRE_FIELDS = ("rank", "state", "code", "runs", "result")
 STATES = ("judging", "refused", "judged", "running", "finished")
 WIRE_STATES = ("queued", "refused", "skipped", "running", "done", "failed")
-_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
-_RUN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
-_RESULT = re.compile(r"^[A-Za-z0-9_,.-]{0,80}$")
+_CODE = re.compile(r"[a-z][a-z0-9_]{0,39}")
+_RUN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
+_RESULT = re.compile(r"[A-Za-z0-9_,.-]{0,80}")
 
 
 def read_status(doc) -> dict:
@@ -231,7 +236,7 @@ def read_status(doc) -> dict:
     if at is None or at.tzinfo is None:
         raise RequestRefused("the status's time is not an ISO time with its zone")
     codes = doc["codes"]
-    if not isinstance(codes, list) or len(codes) > 20 or not all(isinstance(c, str) and _CODE.match(c) for c in codes):
+    if not isinstance(codes, list) or len(codes) > 20 or not all(isinstance(c, str) and _CODE.fullmatch(c) for c in codes):
         raise RequestRefused("the status's codes are not a list of codes")
     wires = doc["wires"]
     if not isinstance(wires, list) or len(wires) > MAX_WIRES:
@@ -242,12 +247,12 @@ def read_status(doc) -> dict:
             raise RequestRefused(f"the status of wire {i}: its rank is not {i}")
         if w["state"] not in WIRE_STATES:
             raise RequestRefused(f"the status of wire {i}: its state is not one of {', '.join(WIRE_STATES)}")
-        if not isinstance(w["code"], str) or (w["code"] and not _CODE.match(w["code"])):
+        if not isinstance(w["code"], str) or (w["code"] and not _CODE.fullmatch(w["code"])):
             raise RequestRefused(f"the status of wire {i}: its code is not a code")
         runs = w["runs"]
-        if not isinstance(runs, list) or len(runs) > 10 or not all(isinstance(r, str) and _RUN.match(r) for r in runs):
+        if not isinstance(runs, list) or len(runs) > 10 or not all(isinstance(r, str) and _RUN.fullmatch(r) for r in runs):
             raise RequestRefused(f"the status of wire {i}: its runs are not run ids")
-        if not isinstance(w["result"], str) or not _RESULT.match(w["result"]):
+        if not isinstance(w["result"], str) or not _RESULT.fullmatch(w["result"]):
             raise RequestRefused(f"the status of wire {i}: its result is not a result")
     return doc
 
@@ -260,21 +265,27 @@ def asks_name(destructive: bool | None, kind: str) -> bool:
     return kind == "technique" and destructive is not False
 
 
+def shown(text) -> str:
+    """``text`` as a terminal may print it: every character that is not printable (an escape, a
+    control, a bidirectional override) written as its code — never sent raw (DG-b review)."""
+    return "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in str(text))
+
+
 def confirm(request: Request, catalog: dict, *, ask=input, say=print) -> dict | None:
     """Show the request wire by wire, and have the operator type the name of each wire's
     target that asks for one. Returns the names typed (``read_typed``'s shape), or None when
     the operator stops or types another name: nothing is sent. The name is compared here to
     the target the request names, to fail early; Orodruin compares it to the name it reads."""
-    say(f"Request {request.id}, written {request.at} — {len(request.wires)} wire(s), "
+    say(f"Request {shown(request.id)}, written {shown(request.at)} — {len(request.wires)} wire(s), "
         "one after the other:")
     for w in request.wires:
         e = catalog.get(w.experiment)
-        what = f"{e.kind} {e.id} {e.name}" if e else f"{w.experiment} (not in this catalogue)"
+        what = shown(f"{e.kind} {e.id} {e.name}" if e else f"{w.experiment} (not in this catalogue)")
         flag = ""
         if e is None or asks_name(e.destructive, e.kind):
             flag = "  ← DESTRUCTIVE" if e is not None and e.destructive else "  ← name to type"
-        say(f"  {w.rank:>2}. {what}  →  {w.target_name}  (group "
-            f"{w.target.split('/')[4]}){flag}")
+        say(f"  {w.rank:>2}. {what}  →  {shown(w.target_name)}  (group "
+            f"{shown(w.target.split('/')[4])}){flag}")
     typed: dict[str, str] = {}
     for w in request.wires:
         e = catalog.get(w.experiment)
@@ -282,7 +293,7 @@ def confirm(request: Request, catalog: dict, *, ask=input, say=print) -> dict | 
             continue
         got = ask(f"Wire {w.rank}: type the name of its target VM to run it: ").strip()
         if got != w.target_name:
-            say(f"✗ wire {w.rank}: « {got} » is not its target — nothing is sent.")
+            say(f"✗ wire {w.rank}: « {shown(got)} » is not its target — nothing is sent.")
             return None
         typed[str(w.rank)] = got
     answer = ask(f"Run these {len(request.wires)} wire(s) from Orodruin? [y/N] ").strip().lower()

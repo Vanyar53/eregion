@@ -22,7 +22,7 @@ MAKEFILE = (ROOT / "Makefile").read_text(encoding="utf-8")
 needs_make = pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
 
 RID = "r-20261030T075200Z-a1b2c3"
-VM = "/subscriptions/s/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
+VM = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
 REQUEST = {"id": RID, "at": "2026-10-30T07:52:00+00:00",
            "wires": [{"experiment": "T1110.001", "target": VM, "rank": 1},
                      {"experiment": "T1486", "target": VM, "rank": 2}]}

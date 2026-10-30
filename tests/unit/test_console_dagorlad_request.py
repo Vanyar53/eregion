@@ -23,7 +23,7 @@ import eregion_console.api as api  # noqa: E402
 from eregion_core import exercise_request as xr  # noqa: E402
 from eregion_core import watch_gate  # noqa: E402
 
-RG = "/subscriptions/s/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/"
+RG = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/"
 GONDOLIN, SENTINEL, BREE = RG + "vm-celebrimbor-gondolin", RG + "vm-sentinel", RG + "vm-celebrimbor-bree"
 BENCH_RG = {"eregion-target": "celebrimbor"}
 

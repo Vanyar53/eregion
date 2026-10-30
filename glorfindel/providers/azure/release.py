@@ -8,12 +8,12 @@ from glorfindel.providers.azure.quarantine import OriginalUnknown, _is_quarantin
 from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned, _turned_guard
 from glorfindel.providers.azure.sdk import _is_not_found
 from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_id, _same_id
+from glorfindel.response.legacy_state import _legacy_claimed, _older_record
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import (
     _clear_isolation_state,
     _held_in_quarantine,
     _isolation_unreadable,
-    _legacy_claimed,
     _load_isolation_state,
     _recorded_original,
     _save_isolation_state,
@@ -85,8 +85,11 @@ class ReleaseMixin:
             return []
         fixed = {self.ISOLATION_RULE_NAME.lower(), f"{self.ISOLATION_RULE_NAME}-out".lower()}
         how = "au partage illisible" if t.get("sharing_unknown") else "partagé"
+        # The record of an older isolation written over before I4E is not coming back: the
+        # operator is told what to do (I4E, review), or the release says this for ever.
         return [f'{t["nic_short"]}:{_rule_name(r)} (NSG {t["nsg_name"]} {how} : isolation d\'une ancienne '
-                "version, VM inconnue)"
+                "version, VM inconnue ; à retirer à la main si c'est la vôtre : az network nsg rule delete "
+                f'-g {t["nsg_rg"]} --nsg-name {t["nsg_name"]} -n {_rule_name(r)})'
                 for r in rules if _rule_name(r).lower() in fixed and _deny_applies(r, t.get("private_ips") or None)
                 and not _legacy_claimed(t["nsg_rg"], t["nsg_name"], _rule_name(r))]
 
@@ -160,6 +163,7 @@ class ReleaseMixin:
             _save_isolation_state(resource_id, {**state, "releasing_at": datetime.now(timezone.utc).isoformat()})
 
         failed: list[str] = []
+        older_failed: list[str] = []         # the older version's record's (I4E)
         remaining: list[dict] = []
         turned: dict = {}                    # the I5Q guard, the NSGs listed once if a rule is to go
         if state.get("placements"):
@@ -242,28 +246,15 @@ class ReleaseMixin:
                     # Keep the placement for a retry: its rule names (deleting an absent
                     # rule is a no-op) and only the bumps still to put back.
                     remaining.append({**p, "bumped": left})
-        elif "placements" not in state and state.get("nsg_name") and not _is_quarantine_nsg(state["nsg_name"]):
-            # Legacy single-NSG state: recorded rule names + bumps live on the recorded NSG.
-            # Only a state written before placements existed: a partial release leaves
-            # `placements: []` next to the flat fields kept for /api/state, which name the
-            # FIRST placement — the shared quarantine NSG and its deny rules. Read as a
-            # legacy state, the next release deleted them: every VM in quarantine in the
-            # region was open again (L26, invariant machine).
-            l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
-            # Its deny-all may hold back one of our turned rules for a VM given this NSG and
-            # an old address since: asked first, as every removal by name (I4C).
-            try:
-                mates = [t0["nic_id"] for t0 in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)]
-            except Exception:
-                mates = []                # unread: its own NICs count too — kept, said (A0)
-            for name in state.get("rule_names", []):
-                err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)
-                       or self._delete_rule(l_rg, l_name, name))
-                if err:
-                    failed.append(err)
-            left = self._restore_bumped(l_rg, l_name, state.get("bumped", []))
-            failed += [f"{l_rg}/{l_name}/{b['name']} (priorité non restaurée) : {b['error']}"
-                       for b in left]
+        # An older version's record: its state (written before placements existed), or kept
+        # by a later isolation beside its placements (`legacy`, I4E) — both undone. Never the
+        # flat fields of a partial release (`placements: []`), which name the FIRST
+        # placement: read as an older state, the shared quarantine NSG lost its deny rules,
+        # every VM in quarantine in the region open again (L26, invariant machine).
+        older = _older_record(state)
+        if older and not _is_quarantine_nsg(older["nsg_name"]):
+            older_failed = self._undo_older(older, rg, vm_name, turned)
+            failed += older_failed
 
         # Then what the state doesn't know, state or not: a crash between Azure and the
         # state file, an answer lost after Azure applied a write, a placement replaced
@@ -279,7 +270,8 @@ class ReleaseMixin:
         if failed:
             from datetime import datetime, timezone
             _save_isolation_state(resource_id, {
-                **state,
+                # The older version's record kept by a later isolation goes with its rules (I4E).
+                **{k: v for k, v in state.items() if k != "legacy" or older_failed},
                 "resource_id": state.get("resource_id") or resource_id,
                 "isolated_at": state.get("isolated_at") or datetime.now(timezone.utc).isoformat(),
                 # An older version's state stays one (I4C, review): `placements: []` made the

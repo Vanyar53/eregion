@@ -6,6 +6,7 @@ The code that lived here (4 394 lines) is split by concern, nothing changed in i
     policy.py                   which actions run alone, errors, verdicts
     ids.py                      resource ids
     state.py                    local state (~/.glorfindel/isolation, blocks)
+    legacy_state.py             an older version's isolation record, kept by a new one (I4E)
     locks.py                    one writer per VM, per quarantine NSG
   glorfindel/providers/         the provider interface (MC0)
     interface.py                CloudConnector, DetectionConnector, declared capabilities
@@ -16,6 +17,7 @@ The code that lived here (4 394 lines) is split by concern, nothing changed in i
     network.py                  NICs and NSGs: reads, rule writes, names
     quarantine.py               the quarantine NSG
     isolation.py, release.py, verify.py      isolation by quarantine or by rules
+    older.py                    an older version's isolation undone by its record (I4E)
     blocks.py, unblock.py       IP blocks
     perimeter.py                a perimeter block merged with a VM block (RB1)
     backup.py, restore.py       restore points
@@ -44,6 +46,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.response.policy",
     "glorfindel.response.ids",
     "glorfindel.response.state",
+    "glorfindel.response.legacy_state",
     "glorfindel.response.locks",
     "glorfindel.providers.interface",
     "glorfindel.providers.azure.sdk",
@@ -54,6 +57,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.providers.azure.network",
     "glorfindel.providers.azure.isolation",
     "glorfindel.providers.azure.release",
+    "glorfindel.providers.azure.older",
     "glorfindel.providers.azure.verify",
     "glorfindel.providers.azure.blocks",
     "glorfindel.providers.azure.verify_block",

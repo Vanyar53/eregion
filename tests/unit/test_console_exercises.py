@@ -85,13 +85,18 @@ INJECTOR_ROUTES = ("/api/exercises", "/api/campaigns", "/api/catalog", "/api/cha
                    "/api/atelier", "/atelier", "/annatar", "/gothmog", "/runs/", "/api/dagorlad", "/dagorlad")
 
 
+# DG-b: the one write among them — a request for Orodruin, in the console's own directory, never
+# a launch (tests/unit/test_console_dagorlad_request.py).
+REQUEST_ROUTE = "/api/dagorlad/requests"
+
+
 def test_every_injector_route_is_a_read():
-    """The console never launches: a run starts from Orodruin, armed — a button, later,
-    goes through that contract, never through a console route (M403)."""
+    """The console never launches: a run starts from Orodruin, armed — the console writes a
+    request at most, carried there by the operator, never a console route that runs (M403)."""
     routes = [r for r in api.app.routes if getattr(r, "path", "").startswith(INJECTOR_ROUTES)]
-    assert len(routes) >= 11
+    assert len(routes) >= 12
     for r in routes:
-        assert r.methods == {"GET"}, r.path
+        assert r.methods == ({"POST"} if r.path == REQUEST_ROUTE else {"GET"}), r.path
 
 
 def test_the_page_is_served_behind_the_token(client, monkeypatch):

@@ -274,7 +274,7 @@ def test_team_start_starts_its_glorfindel(tmp_path, fake_docker, bot, argv):
     assert call["argv"][:5] == ["compose", "-p", "eregion-blue", "--env-file", f"{d}/team.env"]
     assert call["argv"][5:] == argv
     assert "http://localhost:7101" in res.stdout
-    for sub in ("runs", ".glorfindel", ".cache/chroma", ".eregion/analysis"):
+    for sub in ("runs", ".glorfindel", ".cache/chroma", ".eregion/analysis", ".eregion/console/requests"):
         assert (d / sub).is_dir(), sub
 
 
@@ -284,7 +284,8 @@ def test_team_start_starts_its_glorfindel(tmp_path, fake_docker, bot, argv):
 # What each one writes is a volume (the oracle, written here: what the code writes) or /tmp.
 WRITES = {
     "watch": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma", "/root/.eregion/analysis"},
-    "war-room": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma", "/app/glorfindel-config.yaml"},
+    "war-room": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma", "/app/glorfindel-config.yaml",
+                 "/root/.eregion/console"},
     "bot": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma"},
     "annatar": {"/app/runs", "/root/.annatar"},
     "gothmog": {"/app/runs"},
@@ -319,3 +320,33 @@ def test_the_injectors_image_never_opens_the_analysis_index():
     runs/). Should chromadb enter it, the mounts must come with it."""
     lock = (ROOT / "requirements" / "annatar.txt").read_text(encoding="utf-8")
     assert not re.search(r"(?m)^chromadb==", lock)
+
+
+# ── DG-b : la demande d'exercice, dans le répertoire propre de la console ─────────────────────
+def _home_sources(service: str) -> list[str]:
+    return [v.split(":", 1)[0] for v in SERVICES[service]["volumes"] if v.startswith("${HOME}")]
+
+
+def test_only_the_console_mounts_its_own_directory():
+    """A request for Orodruin carries the red side's plan: it lives in ~/.eregion/console/, which
+    the console alone mounts. No other service — the watch and the bot above all — mounts
+    ~/.eregion whole, nor the console's directory or what is under it (§7, « Glorfindel reste
+    aveugle »)."""
+    console_dir = "${HOME}/.eregion/console"
+    assert console_dir in _home_sources("war-room")
+    for name in SERVICES:
+        for src in _home_sources(name):
+            assert src.rstrip("/") != "${HOME}/.eregion", (name, src)
+            assert src.rstrip("/") != "${HOME}", (name, src)
+            if name != "war-room":
+                assert not src.startswith(console_dir), (name, src)
+
+
+def test_h0_creates_the_consoles_directory_before_compose_mounts_it():
+    """By hand (glorfindel-host-start) and by the CD (deploy.sh, its start): created as the
+    operator, never by docker as root — the console could not write its requests."""
+    [line] = [ln for ln in MAKEFILE.splitlines() if "deploy.sh" in ln and ln.startswith("\t$(HOST_SSH)")]
+    assert line.index(".eregion/console/requests") < line.index("deploy.sh")
+    deploy = (ROOT / "infra" / "glorfindel-host" / "deploy.sh").read_text(encoding="utf-8")
+    start = deploy.split("start() {", 1)[1].split("}", 1)[0]
+    assert start.index(".eregion/console/requests") < start.index("docker compose")

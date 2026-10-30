@@ -23,7 +23,7 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 
 **De confiance** : l'opérateur qui tient le jeton, depuis un navigateur sur la boucle locale (sur H0, à travers le tunnel SSH). **Pas de confiance** : les autres sites que ce navigateur ouvre, les autres utilisateurs de la machine, le texte qu'affichent les cartes.
 
-**Ce qui la traverse** : des lectures (cartes, état, indicateurs) ; des actions qui touchent Azure (lever, restaurer, approuver, passer un actif en `non_disruptive`) ; du texte venu du dehors (explications du modèle, noms de VM et d'applications, lignes de journaux).
+**Ce qui la traverse** : des lectures (cartes, état, indicateurs) ; des actions qui touchent Azure (lever, restaurer, approuver, passer un actif en `non_disruptive`) ; du texte venu du dehors (explications du modèle, noms de VM et d'applications, lignes de journaux). Depuis DG-b (#348), la console fait aussi agir sur le cloud, de loin : elle écrit une **demande d'exercice** pour Orodruin. Elle ne la lance pas : l'opérateur la porte, Orodruin la juge et la lance.
 
 | | Menace | Ce qui la tient |
 |---|---|---|
@@ -33,10 +33,14 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 | I | Le jeton ou des identifiants fuient | Le jeton retiré de l'URL après la première ouverture, jamais sur une ligne de commande ; ni schéma OpenAPI ni `/docs` ; Config masque abonnement, tenant et client (SEC1) |
 | D | La console tombe ou est inondée | Elle est un processus à part : la watch détecte et le bot alerte sans elle |
 | E | Un texte du dehors s'exécute dans la page | Rien du dehors écrit brut, aucun script ni gestionnaire en ligne, CSP `default-src 'self'` (#254, #257, SEC1) ; un restore depuis la console n'accepte que la carte de restauration de cette VM, jamais une carte ancrée |
+| T | Une page tierce, ou un H0 compromis, fait lancer une attaque ou une panne | La demande passe par SEC1 : jeton, origine, corps JSON. Elle est jugée par le cœur partagé avant d'être écrite ; un fil refusé, rien n'est écrit. La console n'écrit qu'un fichier, dans son propre répertoire (`~/.eregion/console/requests/`), jamais sur le cloud. Rien ne part sans le geste de l'opérateur (`make orodruin-exercise`), qui voit la demande fil par fil sur son poste. Orodruin la rejuge : contrat armé, inscription et zone relues, règle de production, watch vivante, plafond sur la demande entière. Un fil destructif exige le nom de sa cible, tapé sur le poste et jamais dans la console, qu'Orodruin compare au nom qu'il lit (DG-b) |
+| S | Le navigateur dit ce que vaut un fil (« non destructif », « zone bench », un nom tapé) | Il n'envoie que deux identifiants par fil ; un champ de plus est refusé, à la console comme au lecteur de la demande. Le serveur, puis Orodruin, recalculent tout (DG-b) |
+| I | Le plan rouge entre dans ce que lit la décision | Seul le service de la console monte `~/.eregion/console/` ; aucun service watch ni bot ne monte `~/.eregion`, ni le répertoire de la console. Aucun module de `glorfindel/` ne le nomme. Ce qu'Orodruin publie ne nomme ni l'expérience ni la cible (DG-b, `tests/unit/test_profiles.py`) |
+| E | La console reçoit le droit de faire agir Orodruin | Aucun droit ni canal de plus : ni pour la console, ni pour l'identité de H0, ni pour le canal. La demande voyage par SSH, portée par l'opérateur. « Stop all » donne `make orodruin-kill` : la console ne révoque rien et ne le peut pas (DG-b) |
 
-**Où c'est dans le code** : `eregion_console/api.py` (middleware du jeton, de l'hôte et de l'origine ; en-têtes), `eregion_console/static/glorfindel.js` (`_post`, `_seg`), `scripts/console_escaping.py` ; tests `tests/unit/test_console.py`, `tests/unit/test_console_escaping.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), « Console — exposition ».
+**Où c'est dans le code** : `eregion_console/api.py` (middleware du jeton, de l'hôte et de l'origine ; en-têtes ; `POST /api/dagorlad/requests`), `eregion_console/static/glorfindel.js` (`_post`, `_seg`), `eregion_core/exercise_request.py` (le seul lecteur de la demande), `scripts/console_escaping.py` ; tests `tests/unit/test_console.py`, `tests/unit/test_console_escaping.py`, `tests/unit/test_console_dagorlad_request.py`, `tests/unit/test_profiles.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), « Console — exposition » ; Dagorlad : [`docs/design/console.md`](console.md), §7.
 
-**Choix assumé** : un jeton, tous les droits de la console — ni comptes ni rôles avant la 1.x.
+**Choix assumé** : un jeton, tous les droits de la console — ni comptes ni rôles avant la 1.x. Une demande n'est pas signée par la console : ce qui la tient, c'est le geste de l'opérateur et le jugement d'Orodruin, pas sa provenance.
 
 **Ouvert** : rien de connu à cette frontière au-delà de ce choix.
 
@@ -143,6 +147,10 @@ Trois canaux, à ne pas confondre :
 | E | Un processus qui prend un conteneur (une dépendance, une ligne forgée) | Aucune capacité, aucun gain de privilège, la racine en lecture seule : il n'écrit que dans ses montages (SEC7, testé) |
 | T | Un plan d'Orodruin, sur un poste sans l'état de H0, retire à la watch hébergée l'accès au canal | Refusé, sauf `NO_WATCH=1` dit (SEC7) |
 | D | Un injecteur qui s'emballe | Plafond, arrêt d'urgence, fenêtres bornées (O1, B2) |
+| S | Une demande de Dagorlad forgée sur l'hôte de la console fait agir Orodruin | Orodruin ne tire rien : l'opérateur porte la demande par SSH, après l'avoir vue et confirmée. Elle est relue par son seul lecteur (un champ de plus la refuse). Le contrat doit être armé. Chaque fil est jugé avec les codes de la console, sur ce qu'Orodruin lit maintenant ; un fil refusé, rien ne part. Le nom tapé d'un fil destructif est comparé au nom qu'Orodruin lit, puis à celui qu'Annatar lit (DG-b) |
+| D | Une demande qui s'emballe | Les fils tournent l'un après l'autre. Le plafond d'Orodruin porte sur la demande entière : ses appels journalisés, chaque ligne nommant la demande, et son temps. « Stop all » est l'arrêt d'urgence (DG-b) |
+| T | Un exercice défait ce que Glorfindel a fait, ou frappe une VM encore en panne | Une VM tenue par Glorfindel (ses règles d'isolation ou de quarantaine sur le NSG de chaque carte et de chaque sous-réseau de la VM ; illisible vaut tenue, `eregion_core/held.py`, la même règle au preflight d'Annatar) est attendue, puis son fil est sauté : jamais levée. Pour lire cartes et sous-réseaux, le rôle de lecture d'Orodruin gagne deux lectures sur le banc, rien en écriture. Une VM dont la panne n'a pas vérifié son retour ne prend plus de fil (DG-b) |
+| I | Ce qu'Orodruin publie pour la console | Le verdict (`armed` ou `passive`, les codes, l'heure) et le statut des demandes, sans identifiant, sans expérience ni cible ; même conteneur, même attribution. H0 relit chaque blob contre sa forme avant de l'écrire (DG-b) |
 | E | Le Glorfindel hébergé est poussé à écrire | Il n'en a pas les droits (Reader) et tourne en lecture seule, `human_only` forcé au push. **Exception temporaire, décision de Jonathan pour BL1 (30/10)** : le temps de la session de banc, voir l'encadré ci-dessous |
 
 **L'exception de BL1 (décision de Jonathan, 30/10 ; temporaire).**
@@ -171,7 +179,7 @@ le confinement.
     de nouveau `human_only` ;
   - le CD est réactivé : `make glorfindel-host-cd-enable`, puis `make glorfindel-host-cd-status`.
 
-**Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`.
+**Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`. La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
 
 **Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule — planifié ; une identité managée par conteneur sur un même hôte — planifié.
 

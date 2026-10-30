@@ -38,6 +38,11 @@ class AzureVMExecutor:
         rg = client.resource_groups.get(rg_name)
         return rg.tags or {}
 
+    def get_vm_name(self) -> str:
+        """The VM's name as Azure writes it — what a typed name is compared to (DG-b)."""
+        vm = self._compute.virtual_machines.get(self.resource_group, self.vm_name)
+        return str(vm.name or "")
+
     def get_vm_tags(self) -> dict:
         """Tags of the target VM — the per-VM chaos authorization (safety/guard.py)."""
         vm = self._compute.virtual_machines.get(self.resource_group, self.vm_name)
@@ -140,25 +145,28 @@ class AzureVMExecutor:
         except Exception as e:
             issues.append(f"Cannot check VM power state: {e}")
 
-        # Glorfindel isolation — scan NSGs in the resource group for isolation rules
-        try:
-            from azure.mgmt.network import NetworkManagementClient
-            network = NetworkManagementClient(self._credential, self._subscription_id)
-            for nsg in network.network_security_groups.list(self.resource_group):
-                isolation_rules = [
-                    r.name for r in (nsg.security_rules or [])
-                    if r.name.startswith("glorfindel-isolation-")
-                ]
-                if isolation_rules:
-                    issues.append(
-                        f"VM '{self.vm_name}' is isolated by Glorfindel "
-                        f"(NSG '{nsg.name}', {len(isolation_rules)} rule(s))\n"
-                        f"  → glorfindel revert {self.resource_id} --yes"
-                    )
-        except Exception as e:
-            console.print(f"  [dim yellow]Preflight NSG check skipped: {e}[/dim yellow]")
-
+        # Glorfindel's hold — its isolation or quarantine rules on the NSGs of the VM's NICs and
+        # of their subnets, wherever they live (eregion_core/held.py, the rule Orodruin reads
+        # too). Unreadable holds the VM: the run waits for a human, never goes on blind.
+        from eregion_core import held
+        why = held.holding(self.resource_id, self._arm_get)
+        if why:
+            issues.append(f"VM '{self.vm_name}' is held by Glorfindel ({why})\n"
+                          f"  → glorfindel revert {self.resource_id} --yes")
         return issues
+
+    def _arm_get(self, path: str, api: str) -> dict:
+        """A read of Azure Resource Manager with this executor's identity."""
+        import requests
+
+        from eregion_core.held import safe_path
+        token = self._credential.get_token("https://management.azure.com/.default").token
+        r = requests.get(f"https://management.azure.com{safe_path(path)}",
+                         headers={"Authorization": f"Bearer {token}"},
+                         params={"api-version": api}, timeout=15)
+        if not r.ok:
+            raise RuntimeError(f"HTTP {r.status_code} reading {path.rsplit('/', 1)[-1]}")
+        return r.json()
 
     def verify_restore_integrity(self, script_path: str = "scripts/vm/verify_restore.sh") -> bool:
         """Run the integrity check script on the VM. Returns True if PASS."""

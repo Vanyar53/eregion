@@ -2283,7 +2283,7 @@ séquence, aucun autre défaut.
 `scripts/mutant_anchors.py` : 0 défaut. Invariants sur le correctif avec les deux bornes : 500
 séquences sur les graines 1, 7, 25, 42, 101, 322, 555, 8675 et 31337, puis 2 000 sur 42, 322 et 8675,
 verts ; avec la nouvelle règle, 500 sur 1, 7, 42, 101, 322 et 8675, puis 2 000 sur 322 et 8675,
-verts — à 2 000, la graine 42 tombe sur L1 (« the block on …/Db--01 vanished from Azure; the reassertion neither put it back nor said so » : un blocage, la VM en quarantaine, la quarantaine vidée, `quarantine_change_comes_back` ; aucune étape de l'état ancien ; rejouée pas à pas, la même sur `main` 91dae76, son code et sa machine) : un défaut ancien, hors du lot, remonté. **Mutants M2130–M2137** (l'enregistrement écrasé par l'isolation, par l'isolation partielle ;
+verts — à 2 000, la graine 42 tombe sur L1 (« the block on …/Db--01 vanished from Azure; the reassertion neither put it back nor said so » : un blocage, la VM en quarantaine, la quarantaine vidée, `quarantine_change_comes_back` ; aucune étape de l'état ancien ; rejouée pas à pas, la même sur `main` 91dae76, son code et sa machine) : un défaut ancien, hors du lot, routé vers un lot de suite (#363) ; figé en `xfail` strict (`test_a_block_beside_a_lifted_perimeter_vanishes_under_a_quarantine_change`, 25 règles), le job de nuit la gardant en mémoire. **Mutants M2130–M2137** (l'enregistrement écrasé par l'isolation, par l'isolation partielle ;
 `_legacy_claimed` aveugle à `legacy` ; une levée partielle qui le jette ; la levée, le reset,
 `verify_release`, le lecteur du journal d'activité qui l'ignorent) : 8/8 par leurs séquences figées
 (M2137 par `test_activity_logs.py`), à chaque tour. Par la machine seule (500 séquences, deux tours,

@@ -2,7 +2,7 @@
 
 Conception du 26/10/2026, session War Room. **Décidé par Jonathan le 26/10**, question par question.
 **UI-1 construit et déployé sur H0 le 26/10** (#209, #210, #212, #216) ; **UI-2 construit le 27/10** (#206), définitions décidées le 27/10.
-**Exercises (§7) : conception du 30/10, sans code** ; ses trois questions tranchées par Jonathan le 30/10.
+**Dagorlad (§7) : conception du 30/10, sans code** ; ses trois questions tranchées par Jonathan le 30/10.
 Ce document sert aux sessions qui implémentent : le lot UI-1 (le socle, #205), le lot UI-2 (les cinq
 indicateurs, #206), et le lot d'Annatar et de Gothmog qui vérifie, avant chaque run, que Glorfindel
 tourne.
@@ -532,7 +532,7 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
 
 - **La place de TO JUDGE** sur la page Glorfindel : à revoir à l'usage.
 - **Les boutons de lancement** : par le contrat d'Orodruin, jamais par une route de la console.
-  Conçus dans Exercises (§7, phase b) : la console écrit une demande, Orodruin juge et lance.
+  Conçus dans Dagorlad (§7, phase b) : la console écrit une demande, Orodruin juge et lance.
 - **Les rôles** : avec le multi-opérateur.
 - **Un statut d'Orodruin** : le registre lui garde une place.
 - **Les packs d'un SaaS** : la page d'installation en est l'emplacement.
@@ -540,16 +540,24 @@ EXERCISES · 11          windows [7 days ▾] │ CAMPAIGNS · 1    [30 days ▾
   `base-uri 'none'` et `form-action 'self'` sont en place depuis #222. Un `script-src` attendra que
   les gestionnaires `onclick` en ligne de la page Glorfindel disparaissent.
 
-## 7. Exercises, le terrain d'exercice
+## 7. Dagorlad, le terrain d'exercice
 
 Conception du 30/10, session Console, d'après la maquette de Jonathan et de l'orchestre (hors du
 dépôt, comme les captures : écran 1, préparer ; écran 2, exercice en cours). **Étape 1, sans code.**
 La phase (a) se construit après le choix de Jonathan, et après la fusion de C1 (#80), qui touche les
-pages qu'Exercises remplace (`injector.html`, `injector.js`).
+pages que Dagorlad remplace (`injector.html`, `injector.js`).
+
+**Le nom** (Jonathan, 30/10) : **Dagorlad**, « la Plaine de la Bataille », devant la Porte Noire,
+où la Dernière Alliance des Elfes et des Hommes affronta l'armée de Sauron. Annatar est Sauron
+déguisé : c'est le terrain où l'on fait face à ses forces. Un nom de lieu, comme Eregion, pour la
+page qui réunit deux agents face au troisième ; l'onglet garde le nom seul, le rôle au survol (§0).
+Écartés : « Exercises », qui désigne déjà les fenêtres d'exercice du code (`runs/exercises/`, la
+source `exercise`, le canal) ; « Playground », un bac à sable sans conséquence, alors que la
+phase (b) fait lancer de vraies attaques.
 
 ### Ce que c'est
 
-Une page, `/exercises`, qui remplace `/annatar` et `/gothmog`. À gauche, les **cartes rouges** : les
+Une page, `/dagorlad`, qui remplace `/annatar` et `/gothmog`. À gauche, les **cartes rouges** : les
 techniques d'Annatar, les pannes de Gothmog. À droite, les **cartes bleues** : Glorfindel, et les
 cibles que Celebrimbor a inscrites, avec leur zone et leur mode d'autonomie. Les deux côtés ne se
 connaissent pas. L'opérateur tire un fil d'une carte rouge vers une ou plusieurs cartes bleues ; le
@@ -562,7 +570,7 @@ serveur dit si chaque fil est valide, et ce qu'on doit en attendre.
 | (c) Suivre | le run en direct, depuis ses signaux | rien |
 
 ```
-EREGION  Overview  Glorfindel 3  [Exercises]           ● watch · 12s ago  ● Orodruin · armed  07:52 UTC
+EREGION  Overview  Glorfindel 3  [Dagorlad]            ● watch · 12s ago  ● Orodruin · armed  07:52 UTC
 ───────────────────────────────────────────────────────────────────────────────────────────────────────
 EXERCISES  Plan only — this page launches nothing. Glorfindel is never told.
 RED · TECHNIQUES & FAULTS                                              BLUE · ENROLLED TARGETS
@@ -694,8 +702,8 @@ L'état normal est relu avant et après (les sondes de Gothmog : `vm-running`, `
 
 #### (a) Préparer, en lecture seule
 
-- La page charge les deux colonnes (`GET /api/exercises/board`). À chaque fil tracé, elle demande le
-  plan (`GET /api/exercises/plan?wire=<carte rouge>@<cible>&wire=…`). Deux GET : aucune route POST
+- La page charge les deux colonnes (`GET /api/dagorlad/board`). À chaque fil tracé, elle demande le
+  plan (`GET /api/dagorlad/plan?wire=<carte rouge>@<cible>&wire=…`). Deux GET : aucune route POST
   n'est ajoutée, et M403 le tient déjà pour les routes d'exercices.
 - **Le plan**, le panneau du bas, donne :
   - les fils valides, ceux qui portent un avertissement, ceux qui sont refusés ;
@@ -815,20 +823,20 @@ Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
 
 ### Ce que deviennent les pages Annatar et Gothmog
 
-**Un onglet Runs dans Exercises** (Jonathan, 30/10, question 3, choisie sur une page de schémas et
-de pour et contre). `/exercises` a deux vues :
-- **Board** (`/exercises`) : les fils, le plan, le run en cours (phases a à c). Le tableau entier tient
+**Un onglet Runs dans Dagorlad** (Jonathan, 30/10, question 3, choisie sur une page de schémas et
+de pour et contre). `/dagorlad` a deux vues :
+- **Board** (`/dagorlad`) : les fils, le plan, le run en cours (phases a à c). Le tableau entier tient
   à 1440 × 900 sans défiler : rouges, fils, bleues et plan ;
-- **Runs** (`/exercises?view=runs`) : les fenêtres et les campagnes des deux injecteurs, dans une
+- **Runs** (`/dagorlad?view=runs`) : les fenêtres et les campagnes des deux injecteurs, dans une
   liste, avec un filtre par injecteur et leur détail d'aujourd'hui (cycles, cartes, rapport, sondes,
   canal retour). Une demande qui mêle une technique et une panne y reste ensemble. Un run fini quitte
   le Board et arrive ici.
 
 Les adresses, jusqu'à la 1.0 comme `/atelier` :
-- `/annatar` mène à `/exercises?view=runs&injector=annatar`, et `/gothmog` de même ;
-- `/runs/<id>` mène à `/exercises?view=runs&run=<id>`, et `?campaign=<id>` se garde.
+- `/annatar` mène à `/dagorlad?view=runs&injector=annatar`, et `/gothmog` de même ;
+- `/runs/<id>` mène à `/dagorlad?view=runs&run=<id>`, et `?campaign=<id>` se garde.
 
-L'en-tête n'a plus que trois onglets : Overview, Glorfindel, Exercises. Exercises est actif si Annatar
+L'en-tête n'a plus que trois onglets : Overview, Glorfindel, Dagorlad. Dagorlad est actif si Annatar
 ou Gothmog l'est ; grisé, il mène à la page d'installation. Le catalogue ne s'affiche qu'une fois, en
 cartes rouges, et une carte rouge mène à son dernier run dans Runs.
 
@@ -857,13 +865,13 @@ Posées une à une. La réponse est reportée ici avec sa date.
    conteneur de demandes dans le compte du canal ? **La commande portée** (30/10).
 2. **L'ordre des fils d'une demande** : l'un après l'autre, ou en parallèle d'une VM à l'autre ?
    **L'un après l'autre** (30/10).
-3. **L'historique** (fenêtres, campagnes) : un onglet dans Exercises, sous le tableau, ou les deux
+3. **L'historique** (fenêtres, campagnes) : un onglet dans Dagorlad, sous le tableau, ou les deux
    pages gardées en historique ? **Un onglet Runs** (30/10).
 
 ### Lots
 
 | Lot | Contenu | Après |
 |---|---|---|
-| EX-a | `/exercises` en lecture seule : Board (tableau, plan, simulation) et Runs (les listes d'aujourd'hui, les deux injecteurs ensemble) ; `eregion_core/exercise_plan.py` ; redirections ; tests sans Azure ni modèle, mutants | C1 fusionné, pour Runs et les redirections |
-| EX-b | la demande, le nom tapé, « Stop all » ; Orodruin, Annatar, Gothmog ; le modèle de menace | EX-a, la question 1, BL1 |
-| EX-c | le suivi en direct | EX-b, BL1 |
+| DG-a | `/dagorlad` en lecture seule : Board (tableau, plan, simulation) et Runs (les listes d'aujourd'hui, les deux injecteurs ensemble) ; `eregion_core/exercise_plan.py` ; redirections ; tests sans Azure ni modèle, mutants | C1 fusionné, pour Runs et les redirections |
+| DG-b | la demande, le nom tapé, « Stop all » ; Orodruin, Annatar, Gothmog ; le modèle de menace | DG-a, la question 1, BL1 |
+| DG-c | le suivi en direct | DG-b, BL1 |

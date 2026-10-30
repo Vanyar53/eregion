@@ -1773,7 +1773,13 @@ pour nommer le périmètre, et restait. La carte d'une VM nomme maintenant chaqu
 ses refus gardés attendent (« notre règle X (… », le nom entier) et les remet toutes en refus
 d'abord ; l'oracle lit le nom entier. Séquence figée `test_a_card_names_the_turned_rule_by_its_whole_name`,
 tests `test_the_card_of_a_vm_names_every_rule_its_kept_denies_wait_behind`,
-`test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter` ; M1744, M1745.
+`test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter` ; M1744, M1745. Mesures
+après la relecture : M1730–M1745 attrapés à chaque tour ; invariants à 500 verts sur les graines
+31337, 4242 et 9001 (la 101 rouge sur L2 seule), à 2 000 vert sur 322. Harnais au même budget
+(60 séquences, deux tours) sur les modules touchés (`sweep.py`, `release.py`, `readers.py`,
+`turned.py`, `orphans.py`), avant (`56fc9f0`) et après : 13/22 attrapés à chaque tour avant,
+14/22 après (27/35 avec les nouveaux) ; aucun perdu — M12 (1/2 puis ses séquences figées seules)
+et M33 (2/2 puis 1/2), remesurés sur quatre tours après : 2/4 et 3/4.
 
 **Trouvé en chemin, hors d'I5Q : L2.** La même graine tombe ensuite sur L2 (« the quarantine NSG
 …/rg-sec/…/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5]; the

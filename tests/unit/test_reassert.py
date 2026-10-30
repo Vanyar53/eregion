@@ -1239,6 +1239,30 @@ def test_left_rules_back_to_a_set_already_said_are_said_again(monkeypatch):
     assert not _left_cards("pending")
 
 
+def test_left_rules_acknowledged_are_read_on_their_own_block_only():
+    """Two blocks of the VM, each with rules it left: the first's card acknowledged, the
+    second's said after it and still pending — the latest card of the first block's own
+    is read: it stays silent (L2C, review)."""
+    from glorfindel.actions import _update_block_entry
+    from glorfindel.reassert_cards import say_left
+    other = "198.51.100.4"
+    for ip in (_IP, other):
+        _save_block_state("vm", ip, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                          threat_port=22)
+        _update_block_entry("vm", ip, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r", "left": [
+            {"nsg": "rg/nsg", "rule": f"glorfindel-block-{ip}", "to": "10.0.0.9", "on": "x", "kind": "turned"}]}])
+
+    def entry(ip):
+        return next(e for e in _load_block_entries("vm") if e["ip"] == ip)
+    say_left("vm", _RID, _IP, entry(_IP), [], _RID)
+    escalations.resolve(_left_cards("pending")[0]["id"])     # the operator
+    say_left("vm", _RID, other, entry(other), [], _RID)
+    for _ in range(2):
+        say_left("vm", _RID, _IP, entry(_IP), [], _RID)
+    assert [(e["action_params"] or {}).get("ip") for e in _left_cards("pending")] == [other]
+    assert len(_left_cards()) == 2
+
+
 # ── L2C, its review: a disappearance said again after one acknowledged ───────────────────
 
 _HUMAN = AutonomyConfig(default="human_only")

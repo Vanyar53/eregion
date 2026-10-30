@@ -5544,6 +5544,7 @@ _L2C_DRIFT = " ".join(f"tests/unit/test_reassert.py::test_{t}" for t in (
     "a_disappearance_after_one_acknowledged_and_held_again_is_said",
     "a_drift_card_closed_with_a_note_is_no_acknowledgement",
     "an_alert_closes_the_card_it_replaces_with_a_note",
+    "left_rules_acknowledged_are_read_on_their_own_block_only",
     "one_alert_per_disappearance_not_one_per_minute"))
 MUTANTS += [
     ("M1942", "an isolation gone again read « already said » from its drift mark alone (L2C, review)", R,
@@ -5563,6 +5564,9 @@ MUTANTS += [
     ("M1947", "a drift card Glorfindel closed read as the operator's acknowledgement (L2C, review)", RCA,
      '    return last is not None and (last.get("status") == "pending" or not last.get("resolution"))\n',
      "    return last is not None\n"),
+    ("M1948", "the latest left-rules card of any block read for this one's acknowledgement (L2C, review)", RCA,
+     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
+     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(_LEFT_PREFIX, sid)):\n'),
     ("M1949", "an episode known over stays so once a new one is marked: said again at every pass (L2C, review)", RCA,
      "    (_EPISODE_OVER.add if over else _EPISODE_OVER.discard)((key.lower(), ip))\n",
      "    if over:\n        _EPISODE_OVER.add((key.lower(), ip))\n"),

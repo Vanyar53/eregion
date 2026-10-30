@@ -6095,6 +6095,31 @@ TESTS["M2125"] = " ".join(f"{_RT}{t}" for t in (
 TESTS.update({"M2123": f"{_RT}a_state_refused_on_one_vm_does_not_stop_the_pass",
               "M2124": f"{_RT}a_state_refused_on_a_block_is_printed_by_the_watch"})
 
+# L1B (#355): a disappearance said behind a bypass (an isolation), and after an unblock that
+# failed or was cut off (a block written again whole). M2040–M2043.
+_L1B_ISO = ("tests/unit/test_invariant_regressions.py::test_an_isolation_gone_under_a_bypass_is_said_gone "
+            "tests/unit/test_glorfindel.py::test_a_bypassed_isolation_says_the_recorded_rules_that_are_gone "
+            f"{_RT}rules_gone_behind_a_bypass_are_said_gone_and_put_back_once")
+_L1B_BLK = ("tests/unit/test_invariant_regressions.py::test_a_block_written_again_after_an_unblock_is_said_gone "
+            f"{_RT}a_block_written_again_after_a_failed_unblock_is_checked "
+            f"{_RT}only_a_whole_block_supersedes_a_cut_off_unblock")
+MUTANTS += [
+    ("M2040", "a bypassed isolation drops the recorded rules that are gone: neither put back nor said (L1B)", VER,
+     "            gone = self._recorded_gone(resource_id, targets, held, cache)\n",
+     "            gone = []\n"),
+    ("M2041", "a block written again whole keeps an unblock's marks: never checked again (L1B)", STA,
+     '        for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):\n',
+     "        for mark in ():\n"),
+    ("M2042", "a listing that can't be read says the isolation's rules gone (L1B)", VER,
+     "            gone += [n for n in names if rules is not None and n.lower() not in present and n not in gone]\n",
+     "            gone += [n for n in names if n.lower() not in present and n not in gone]\n"),
+    ("M2043", "a partial block written again ends a cut-off unblock: its interruption unsaid (L1B)", STA,
+     '        for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):\n',
+     '        for mark in ("unblock_failed", "unblocking_at", "stale_alerted_at"):\n'),
+]
+TESTS.update({"M2040": f"{_L1B_ISO} {INVARIANTS}", "M2041": f"{_L1B_BLK} {INVARIANTS}",
+              "M2042": _L1B_ISO, "M2043": _L1B_BLK})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

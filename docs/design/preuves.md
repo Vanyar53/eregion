@@ -2180,7 +2180,8 @@ marque) et la passe ne l'appelle plus jamais : ses règles disparues, `verify_bl
 appelé, rien n'est dit. **C'est un défaut connu, présent sur `main`**, une marque d'opération périmée
 — une autre famille que L2C —, routé vers un lot de suite et figé en `xfail` strict
 (`test_reassert.py::test_a_block_written_again_after_a_failed_unblock_is_checked`) ; l'exemption de
-l'oracle suit L1 en attendant.
+l'oracle suit L1 en attendant. **Réglé par L1B** (#355, ci-dessous) : un blocage entier efface ces marques,
+et l'exemption se lit dans le journal du test.
 
 **La relecture de L2C : une disparition dite de nouveau après une acquittée.** La même famille, la
 plus grave : une VM qui n'est plus isolée, en silence. L'isolation (ou le blocage) disparaît, une
@@ -2272,7 +2273,8 @@ mutants de la relecture, code final : 8/8, M902 de même ; M13 bruité à 60 (1/
   branche compte la carte de contournement, en attendant le lot de suite. Cet assouplissement de
   `_gone_said` sera retiré avec L1B (#355) ; d'ici là, la séquence réduite (deux étapes) est
   figée en `xfail` strict avec la vérification d'avant, qui exige une carte `isolate_vm`
-  (`test_an_isolation_gone_under_a_bypass_is_said_gone`).
+  (`test_an_isolation_gone_under_a_bypass_is_said_gone`). **Retiré par L1B** (ci-dessous), la
+  séquence passe.
 - La graine 1618 à 2 000 (`test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address`),
   un **I5** (une ouverture) : Db--01 isolée deux fois en même temps,
   `address_reused_under_a_turned_rule` sur Db--01, puis notre NSG de quarantaine vidé, l'état perdu
@@ -2383,6 +2385,68 @@ jamais perdu par le test ni remplacé par une isolation de la VM depuis), ou un 
 partielle d'un état ancien le laisse ancien. `_cuts_all` sert aussi l'isolation réécrite et le
 balayage de la levée : figé (`test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind`,
 M1971).
+
+**L1B (30/10, #355) : une disparition dite derrière un contournement, et après un déblocage
+échoué.** Les deux cas que L2C avait figés en `xfail` strict (L1 : une dérive reste dite tant qu'elle
+existe ; rien ne s'ouvrait, une alerte se taisait). **Causes, établies par les tests** (rouges sur
+`origin/main` d380df5 avec l'oracle resserré).
+(1) **Une isolation contournée cache sa disparition** (graine 42 à 500, la branche « disparu » de
+`said_then_back_after_a_full_disk`). web isolée par règles : notre paire sur le NSG du sous-réseau
+(une allow du client avant notre deny sur celui de la carte, `moved_from`), et une ancienne paire à
+noms fixes (`_legacy_isolation`) sur le NSG de la carte, contournée par cette allow. Le test retire
+notre paire ; `verify_isolation` trouve encore une paire (l'ancienne), la lit contournée et rend
+`shadowed_by` seul — `_missing` faux, la réaffirmation ne repose ni ne dit rien. Le mécanisme qu'I4C
+avait réglé pour un blocage (`held_missing` porté avec `shadowed_by`). **Correctif** : le contournement
+porte ce qui manque (`missing_rules`, `_recorded_gone`) — les règles que les placements de l'état
+enregistrent, absentes de la liste d'un NSG qui gouverne leur carte maintenant (une carte que notre
+quarantaine tient exceptée) ; une liste ou un état illisible ne dit rien disparu. La réaffirmation le
+lit comme une disparition : reposée une fois hors `human_only`, dite sinon, à côté de la carte du
+contournement. **L'assouplissement de `_gone_said` (d3c2691) est retiré** : une carte de contournement
+ne compte plus pour une isolation disparue — seule une carte `isolate_vm` de la réaffirmation (A0 :
+l'oracle refuse plus). La séquence réduite passe, son `xfail` retiré
+(`test_an_isolation_gone_under_a_bypass_is_said_gone`, complétée de la fin de la branche : remise
+pendant le disque plein, retirée de nouveau, redite).
+(2) **Un blocage écrit de nouveau après un déblocage échoué n'est plus vérifié** (graine 777 à
+2 000, L2C). Un déblocage qui échoue (`unblock_failed`) ou qu'on coupe (`unblocking_at`) garde
+l'entrée ; un nouveau blocage entier s'y fusionnait (`_save_block_state`) sans retirer ces marques, et
+`_held_by_an_operation` sortait à chaque passe : ses règles disparues, rien n'était dit, ni disparition
+ni contournement. **Correctif** : un blocage écrit en entier remplace le déblocage — ses marques
+s'effacent, celle de la carte « interrompu » aussi (`stale_alerted_at` : sinon un déblocage coupé plus
+tard se taisait) ; un blocage écrit en partie les garde (l'opération n'est pas finie, l'interruption
+reste dite). Les autres chemins : une isolation entière réécrit son état sans `release_failed` ni
+`releasing_at` (Azure et AWS) ; la levée et le reset ne posent ces marques que sur un échec, et les
+effacent avec l'état sur un succès. `state.py` reste à 499 lignes (le commentaire de la fusion
+resserré, rien découpé : I4E et I4D touchent le même fichier). **L'exemption de l'oracle, resserrée**
+(`_block_held`, partagée par L1 et le contrôle du contournement) : un déblocage tient le blocage tant
+que le test l'a commencé sans le voir finir, ou que les marques `unblock_failed` / `unblocking_at`
+sont là **et** que le test n'a pas vu le blocage écrit en entier depuis le dernier déblocage ou reset
+(`reblocked`, son propre journal : `unblock_ip` et `sweep_vm_rules` du connecteur enveloppés le
+vident) ; un blocage entier (`block`, `block_perimeter`, statut `blocked`, sans faute) finit aussi le
+déblocage du journal, comme une isolation finit la levée qu'elle remplace (I9). L'exemption d'avant
+contient la nouvelle : rien n'est relâché. Figées : `test_a_block_written_again_after_an_unblock_is_said_gone`
+(déblocage échoué par un 429, coupé par un crash ; rouges sur l'arbre sans le correctif, « L1: the
+block on …/web vanished »), `test_reassert.py` (`…_after_a_failed_unblock_is_checked`, son `xfail`
+retiré ; `test_only_a_whole_block_supersedes_a_cut_off_unblock`).
+
+**Mutants M2040–M2043.** M2040 (le contournement sans ce qui manque) : par sa séquence figée et
+ses tests ; par la machine seule, 0/6 à 500 (graines 1, 42, 101, 322, 777, 8675) — l'état (une
+ancienne paire contournée, la nôtre sur le sous-réseau) reste rare, comme M1965 d'I4C. M2041 (un
+blocage entier garde les marques du déblocage, le défaut d'avant) : par ses séquences figées et ses
+tests ; par la machine seule, 1/6 à 500 (graine 8675 : « L1: the block on …/rg-app2/…/web vanished »)
+— avec l'oracle d'avant, qui suivait les marques, elle ne pouvait pas l'être. M2042 (une liste
+illisible dite disparue) et M2043 (un blocage partiel efface l'interruption) : par leurs tests.
+
+**Mesures de L1B.** `pytest` complet : 4 549 réussis, 7 sautés, 1 `xfail` (l'I5 de la graine
+1618, hors du lot) ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants sur l'arbre
+final : 500 séquences sur les graines 42, 777, 1, 322, 101 et 8675, puis 2 000 sur 42 et 777, verts.
+La graine 8675 à 500 sur `origin/main` (le code d'avant, l'oracle d'avant) : verte — la même graine
+fait tomber M2041 sous l'oracle resserré. Harnais avant/après (60 séquences, deux tours, `--jobs 4`)
+sur les 112 mutants de la vérification (de l'isolation et du blocage), de la réaffirmation
+(`reassert.py`, `reassert_cards.py`, `reassert_quarantine.py`) et de l'état : 103/112 attrapés à
+chaque tour sur d380df5, 104/112 après, plus les quatre nouveaux (108/116). M34 mieux après ; M19 et
+M21 bougent d'un tour à 60 (M19 de « séquences figées seules » à 1/2, M21 de 1/2 à « séquences figées
+seules »), remesurés à 500 : M19 2/2 des deux côtés, M21 4/4 des deux côtés. M36 et M1645 survivent
+des deux côtés, comme avant. Aucun perdu.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

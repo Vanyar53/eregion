@@ -87,7 +87,18 @@ function _dispatch(ev, name) {
 }
 for (const [type, name] of Object.entries(_EVENTS)) document.addEventListener(type, ev => _dispatch(ev, name), true);
 
-// ── Red cards: the catalogue ──────────────────────────────────────────────────────────
+// ── Red cards: the catalogue, each with its last proof (the coverage matrix, C1) ───────
+const PROOF = {
+  proven: ['c-ok', 'proven'], aging: ['c-warn', 'aging'], stale: ['c-bad', 'stale'],
+  regressed: ['c-bad', 'REGRESSED'], unproven: ['c-warn', 'no proof'], never: ['', 'never run'],
+  unknown: ['c-warn', 'proof unreadable'],
+};
+function proofChip(p) {
+  const [cls, label] = p && Object.hasOwn(PROOF, p.state) ? PROOF[p.state] : PROOF.never;
+  const age = p && p.proof_age_s != null && p.state !== 'regressed' ? ` ${dur(Number(p.proof_age_s))}` : '';
+  const tip = p && p.error ? p.error : p && p.last_run ? `last run ${p.last_run} · see it in Runs` : 'no run of it on this host';
+  return `<span class="chip ${esc(cls)}" title="${esc(tip)}">${esc(label)}${esc(age)}</span>`;
+}
 function redCard(r, i) {
   const fault = r.kind === 'fault';
   const destr = r.destructive === true ? '<span class="chip c-bad">DESTRUCTIVE · bench, twin</span>'
@@ -99,7 +110,7 @@ function redCard(r, i) {
   const tip = r.available ? 'Pick it, then one or more targets — or drag its handle onto a target' : r.why;
   return `<button type="button" class="rcard${r.available ? '' : ' off'}${S.picked === i ? ' sel' : ''}" id="red-${i}" ${_on('click', 'pick', i)} title="${esc(tip)}">
     <span><span class="rid${fault ? ' fault' : ''}">${esc(r.id)}</span> <span class="rname">${esc(r.name)}</span></span>
-    <span class="meta">${esc(meta)}</span>
+    <span class="meta">${esc(meta)} ${proofChip(r.proof)}</span>
     <span class="rfoot">${destr} <span class="rexp">${esc(r.available ? expect : r.why)}</span></span>
     ${r.available ? `<span class="handle${fault ? ' fault' : ''}" ${_on('pointerdown', 'grab', i)} title="Drag onto a target"></span>` : ''}
   </button>`;

@@ -1316,7 +1316,7 @@ MUTANTS = [
      '@app.get("/api/exercises")\n', '@app.api_route("/api/exercises", methods=["GET", "POST"])\n'),
     ("M404", "a new page is served without the token (UI-1)", CON,
      '        if not (by_bearer or by_cookie):\n',
-     '        if not (by_bearer or by_cookie) and scope.get("path") != "/annatar":\n'),
+     '        if not (by_bearer or by_cookie) and scope.get("path") != "/dagorlad":\n'),
     ("M405", "/runs/<id> takes a path for a run id (UI-1)", CON,
      "    if not safe_part(run_id):\n", "    if not run_id:\n"),
     ("M406", "--sections removes Glorfindel (UI-1)", SEC,
@@ -4191,6 +4191,33 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_exercise_plan.py" for n in range(1980, 1989)})
 TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py tests/unit/test_console_exercises.py "
               "tests/unit/test_console_escaping.py" for n in range(1989, 1995)})
+# The end of DG-a (#347): the Runs, the redirects, the tab, the last proof (M1995–M1999).
+MUTANTS += [
+    ("M1995", "Annatar's page no longer leads to Dagorlad's Runs (DG-a)", "eregion_console/api.py",
+     "    where = f\"/dagorlad?view=runs&injector={request.url.path.strip('/')}\"\n",
+     "    where = \"/\"\n"),
+    ("M1996", "the redirect of Annatar's and Gothmog's pages loses what they asked (?run=) (DG-a)",
+     "eregion_console/api.py",
+     '    return RedirectResponse(where + (f"&{kept}" if kept else ""), status_code=308)\n',
+     "    return RedirectResponse(where, status_code=308)\n"),
+    ("M1997", "a run's link in the Runs opens the Board (DG-a)", "eregion_console/static/injector.js",
+     'return `<a href="?view=runs&run=${encodeURIComponent(runId)}"',
+     'return `<a href="?run=${encodeURIComponent(runId)}"'),
+    ("M1998", "a red card without its last proof (DG-a)", BOARD,
+     '            "proof": proof.get(e.id) or {"state": "never", "proof_age_s": None, "last_run": "", "last_run_at": ""},\n',
+     '            "proof": {"state": "never", "proof_age_s": None, "last_run": "", "last_run_at": ""},\n'),
+    ("M1999", "the header keeps Annatar's tab beside Dagorlad (DG-a)", "eregion_console/static/console.js",
+     "    { id: 'dagorlad',   label: 'Dagorlad',   href: '/dagorlad',",
+     "    { id: 'annatar', label: 'Annatar', href: '/annatar' },\n    { id: 'dagorlad',   label: 'Dagorlad',   href: '/dagorlad',"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py tests/unit/test_console.py" for n in range(1995, 2000)})
+# The review of #353 (M2005): an unreadable coverage matrix.
+MUTANTS += [
+    ("M2005", "an unreadable coverage matrix shown as « never run » on every red card (DG-a)", BOARD,
+     "        if proof_error:   # the matrix unreadable: its proof is unknown, never « never run » (A0)\n",
+     "        if False:\n"),
+]
+TESTS.update({"M2005": "tests/unit/test_console_dagorlad.py"})
 # DG-a, the review of #338 (M2000–M2004): a zone outside the three, a target isolated now, the
 # reader's next page outside ARM, the count ceiling, a read-only deployment on the blue card.
 MUTANTS += [

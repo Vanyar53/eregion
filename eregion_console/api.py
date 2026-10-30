@@ -330,9 +330,9 @@ app.add_middleware(_TokenAuthMiddleware)
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 # The pages, served as files: one per section (/config is the Glorfindel page, opened on its
-# configuration; /annatar and /gothmog share one page, filtered by the path).
-_PAGES = {"/": "overview.html", "/glorfindel": "glorfindel.html", "/config": "glorfindel.html",
-          "/annatar": "injector.html", "/gothmog": "injector.html", "/dagorlad": "dagorlad.html"}
+# configuration). Dagorlad's two views have their own route below; /annatar and /gothmog lead
+# to its Runs.
+_PAGES = {"/": "overview.html", "/glorfindel": "glorfindel.html", "/config": "glorfindel.html"}
 
 
 # Defence in depth for pages that show what other hosts wrote (manifests from Orodruin): never
@@ -358,7 +358,7 @@ async def _page_headers(request, call_next):
     on every load (ETag): after a redeployment, a page left in the browser's cache showed the
     old console on H0 (#197)."""
     response = await call_next(request)
-    if request.url.path in _PAGES or request.url.path.startswith("/static/"):
+    if request.url.path in _PAGES or request.url.path == "/dagorlad" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
     response.headers.update(_HEADERS)
     return response
@@ -438,30 +438,34 @@ async def atelier_api_moved(rest: str, request: Request):
     return RedirectResponse(_with_query(f"/api/{rest}", request), status_code=308)
 
 
+@app.get("/dagorlad", include_in_schema=False)
+async def dagorlad_page(view: str = ""):
+    """Dagorlad (docs/design/console.md, §7): the Board — the wires drawn and their plan — or, with
+    ``view=runs``, the Runs: the windows and campaigns of both injectors, and the coverage matrix."""
+    return FileResponse(_STATIC / ("injector.html" if view == "runs" else "dagorlad.html"))
+
+
+@app.get("/annatar", include_in_schema=False)
+@app.get("/gothmog", include_in_schema=False)
+async def injector_moved(request: Request):
+    """Annatar's and Gothmog's pages became Dagorlad's Runs (§7, decision of 30/10): their address
+    leads there, filtered on that injector, with what it asked for (``?run=``), until 1.0."""
+    from urllib.parse import parse_qsl, urlencode
+    # What it asked for (?run=, ?campaign=), never another view or injector: the target is this one.
+    kept = urlencode([(k, v) for k, v in parse_qsl(request.url.query, keep_blank_values=True)
+                      if k not in ("view", "injector")])
+    where = f"/dagorlad?view=runs&injector={request.url.path.strip('/')}"
+    return RedirectResponse(where + (f"&{kept}" if kept else ""), status_code=308)
+
+
 @app.get("/runs/{run_id}", include_in_schema=False)
 async def run_page(run_id: str):
-    """A run's page, in the section of its injector — what a card knows is the run id only."""
+    """A run's page: its row in Dagorlad's Runs, both injectors — what a card knows is the run id
+    only."""
     from eregion_core.exercise_channel import safe_part
     if not safe_part(run_id):
         return JSONResponse({"error": "run id: a plain name"}, status_code=400)
-    return RedirectResponse(f"/{_injector_of(run_id)}?run={quote(run_id)}", status_code=302)
-
-
-def _injector_of(run_id: str) -> str:
-    """Gothmog when its window or its report says so; Annatar otherwise (a purged window's
-    tombstone names no injector; Annatar's reports do not name theirs)."""
-    from eregion_core.exercise import exercises_dir
-    for path in (exercises_dir(_RUNS) / f"{run_id}.json", _run_reports().get(run_id)):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8")) if path else None
-        except (OSError, ValueError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
-        if "gothmog" in (data.get("injector"), metrics.get("injector")):
-            return "gothmog"
-    return "annatar"
+    return RedirectResponse(f"/dagorlad?view=runs&run={quote(run_id)}", status_code=302)
 
 
 @app.get("/api/sections")
@@ -2646,7 +2650,13 @@ async def exercise_board() -> dict:
         found = await asyncio.to_thread(sections.status, _RUNS)
     except ValueError:
         found = {"sections": []}
-    return {"reds": board.red_cards(catalog_, rules, found),
+    proof_error = ""
+    try:
+        matrix = await asyncio.to_thread(coverage_matrix)
+    except Exception as exc:   # unknown, said — never « never run » on every card (A0)
+        matrix, proof_error = None, f"the coverage matrix unreadable: {exc}"[:300]
+    return {"reds": board.red_cards(catalog_, rules, found, matrix, proof_error=proof_error),
+            "proof_error": proof_error,
             "glorfindel": board.glorfindel_card(await watch_status(), rules, st, gate),
             "targets": board.blue_cards(vms, st, rules, bench=_bench()),
             "targets_error": targets_error, "other_types": board.other_types(catalog_)}

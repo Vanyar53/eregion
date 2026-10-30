@@ -635,7 +635,8 @@ glorfindel/
   tui.py               → Rich full-screen TUI: resources + feed + escalations, keyboard shortcuts a/r/v
 
 eregion_console/       → the Eregion console (`eregion console`, docs/design/console.md)
-  api.py               → FastAPI: the pages (/, /glorfindel, /annatar, /gothmog, /config), the token
+  api.py               → FastAPI: the pages (/, /glorfindel, /dagorlad — Board and Runs —, /config; /annatar and
+                         /gothmog lead to Dagorlad's Runs), the token
                          (EREGION_CONSOLE_TOKEN, else GLORFINDEL_WARROOM_TOKEN), Glorfindel's API
                          (/api/state, /api/feed WS, /api/config, /api/audit, /api/discovered, /api/pending/rules,
                          /api/autonomy/{vm}, /api/action/{release,revert,restore,ack,approve-rule,approve/<id>,…}),

@@ -2989,19 +2989,24 @@ class IsolationMachine(RuleBasedStateMachine):
         range or a tag (who it takes in is not read). The unblock, the reset, the release
         keep them, said (taken off, that VM lost the flows): the operator puts them back
         as they were, as said. The convention (the rule's NIC by its hash), the test's
-        records (`tampered`)."""
+        records (`tampered`). And an older version's fixed-name rule (`glorfindel-isolation-
+        deny-all[-out]`, no hash: its VM from the test's journal, `legacy`, never the code's
+        state — A0): the release keeps it turned, said, and asks for it put back (I4D's
+        review: never put back, the teardown's release said `release_partial` for ever)."""
         import ipaddress
         out = set()
         for (k, n), (before, after) in self.tampered.items():
             r = self.fake.nsgs.get(k, {}).get("rules", {}).get(n)
+            owner = self.legacy.get((k, n.lower()))
             if (before is None or r != after or r["access"].lower() != "allow"
-                    or not n.startswith(("glorfindel-iso-", "glorfindel-block-"))):
+                    or not (n.startswith(("glorfindel-iso-", "glorfindel-block-")) or owner)):
                 continue
             side = "destination" if r["direction"].lower() == "inbound" else "source"
             values = [v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or [])
                       if v] or ["*"]
-            mine = {key(c) for vm in self.fake.vms.values() if any(_nic_hash(c) in n for c in vm["nics"])
-                    for c in vm["nics"]}
+            mine = ({key(c) for c in self.fake.vms.get(key(owner), {}).get("nics", [])} if owner else
+                    {key(c) for vm in self.fake.vms.values() if any(_nic_hash(c) in n for c in vm["nics"])
+                     for c in vm["nics"]})
             others = [c for ck, c in self.fake.nics.items() if ck not in mine and k in {
                 key(g) for g in (c["nsg"], self.fake.subnets[key(c["subnet"])]["nsg"]) if g}]
             for v in values:

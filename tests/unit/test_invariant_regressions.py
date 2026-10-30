@@ -3711,6 +3711,49 @@ def test_a_release_never_keeps_a_rule_for_another_nic_of_its_own_vm(monkeypatch)
          ("customer_changes_ip",
           "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-0", 0, 4))
 
+
+def _tpl(name, priority):
+    from .test_invariants import _TEMPLATES
+    return _rule(name, priority, _TEMPLATES[name])
+
+
+_OLD_WEB_NSG = _S101_NSG.format("rg-app1", "nsg-web-nic")
+_I7_LEGACY_NET = {
+    "subnet_nsg": None, "edge_nsg": [], "tier_rules": [_tpl("allow-https", 1100)],
+    "nics": {"web-nic": {"own": "dedicated", "policy": True, "rules": [
+                 _tpl("allow-ssh", 150), _tpl("allow-https", 1100), _tpl("deny-lateral-in", 1300)]},
+             "db-nic-0": {"own": "dedicated", "policy": True,
+                          "rules": [_tpl("allow-ssh", 101), _tpl("allow-https", 110)]},
+             "db-nic-1": {"own": "dedicated", "policy": True,
+                          "rules": [_tpl("allow-lateral-out", 120), _tpl("deny-lateral-in", 1300)]},
+             "api-nic": {"own": None, "policy": True, "rules": [_tpl("deny-lateral-in", 1300)]}},
+    "windows": None, "config": {"readable": True, "quarantine": False, "forensic": [ATTACKER], "rg": ""},
+    "legacy": ("web-nic", True), "data_subnet": []}
+
+
+def test_an_older_versions_turned_deny_all_put_back_by_the_operator_lets_the_release_go(monkeypatch):
+    """Found by the harness's dry run on `main` d380df5 (60 sequences, a random seed; I4D),
+    shrunk to four steps: web's older isolation (its deny-all on nsg-web-nic, its state
+    kept), the deny-all turned into an allow by someone; a new VM, rg-new/api, given that
+    NSG; api blocked, its rule turned, its address reused. At the teardown, web's release
+    keeps the turned deny-all (taken off, api would lose what it gives it — said,
+    `release_partial`) and asks for it put back; the machine's operator never did — it
+    read only `glorfindel-iso-`/`glorfindel-block-` names —, and I7 refused. Not a defect
+    of the code: the operator now puts back an older version's rule too, its VM from the
+    test's journal (`legacy`)."""
+    _run(monkeypatch, _I7_LEGACY_NET,
+         ("tamper_with_our_rule", "access", (_OLD_WEB_NSG, "glorfindel-isolation-deny-all")),
+         ("create_vm", "westeurope", "rg-new", "batch", None, "Windows"),
+         ("joins_an_old_isolation", _OLD_WEB_NSG, "rg-new", "api", "Windows", False, True,
+          "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/api"),
+         ("address_reused_under_a_turned_rule",
+          "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/api",
+          "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/api",
+          (13, "before-crash"), 22,
+          (_OLD_WEB_NSG, "glorfindel-block-192-31-196-7-api-api-nic-5-e561b2-out"),
+          "/subscriptions/s/resourcegroups/rg-new/providers/microsoft.network/networkinterfaces/api-nic-5",
+          0, 4, "rg-app2", "api", None, "Linux"))
+
 _S42_ISO_NET = {
     "subnet_nsg": [], "edge_nsg": None, "tier_rules": [],
     "nics": {"web-nic": {"own": "dedicated", "policy": False, "rules": [

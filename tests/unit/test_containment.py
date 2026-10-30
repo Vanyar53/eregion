@@ -198,7 +198,7 @@ def _fault(records, **kw):
 
 
 def test_a_disruptive_decision_on_a_fault_target_during_it_is_counted_apart():
-    """M1782, M1783: recommended or executed, an isolation on the faulted VM during the fault
+    """M1782: recommended or executed, an isolation on the faulted VM during the fault
     is a fault taken for an attack — never an incident; executed, a disruptive action wrongly
     taken."""
     rec = _line(seen=FS + 120, at=FS + 150, verified_at=FS + 140, signal_id="sig-f")
@@ -213,14 +213,14 @@ def test_a_disruptive_decision_on_a_fault_target_during_it_is_counted_apart():
 
 
 @pytest.mark.parametrize("rec", [
-    _line(seen=FS + 120, resource=OTHER),                     # another VM
-    _line(seen=FS - 60),                                      # before the fault
-    _line(seen=FE + ct.HOLD_WATCH_S + 60),                    # after it and its grace
-    _line("snapshot", seen=FS + 120, verified=None),          # nothing disruptive
+    _line(seen=FS + 120, resource=OTHER, signal_id="s-a"),     # another VM
+    _line(seen=FS - 60, signal_id="s-b"),                     # before the fault
+    _line(seen=FE + ct.HOLD_WATCH_S + 60, signal_id="s-c"),   # after it and its grace
+    _line("snapshot", seen=FS + 120, verified=None, signal_id="s-d"),  # nothing disruptive
     _line(seen=FS + 120, signal_id="sig-1"),                  # an incident's own decision
 ])
 def test_what_is_not_a_fault_taken_for_an_attack(rec):
-    """M1784: the faulted VMs only, during the fault's window, a decision to isolate or to block,
+    """M1783, M1784: the faulted VMs only, during the fault's window, a decision to isolate or to block,
     never one an incident already took."""
     assert _fault([rec], taken={"sig-1"}).mistaken == []
 

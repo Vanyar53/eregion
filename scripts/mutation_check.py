@@ -4830,6 +4830,77 @@ TESTS["M1575"] = "tests/unit/test_glorfindel.py"
 TESTS.update({mid: "tests/unit/test_azure_roles.py" for mid in ("M1576", "M1577", "M1579")})
 TESTS["M1578"] = "tests/unit/test_makefile_bench.py"
 
+# BL1 (#280): the time to contain and the share contained alone, computed from a campaign's
+# traces (analysis/containment.py), the declared campaign (annatar/campaign/declared.py), and the
+# console's overview on the same definition. M1770–M1789.
+CTN = "analysis/containment.py"
+DCL = "annatar/campaign/declared.py"
+MUTANTS += [
+    ("M1770", "the time to contain ends at the cycle's line, written after the read-back (BL1)", CTN,
+     '    return decision["verified_at"] if decision["verified_at"] is not None else decision["at"]\n',
+     '    return decision["at"]\n'),
+    ("M1771", "the time to contain starts at the detection, not at the injector's T0 (BL1)", CTN,
+     "        inc.time_to_contain_s = round(at - t0, 1)\n",
+     '        inc.time_to_contain_s = round(at - (d["seen_at"] or t0), 1)\n'),
+    ("M1772", "an action whose check failed or could not be read counted contained (BL1)", CTN,
+     '        if decision["verified"] is True and not decision["unverified"]:\n',
+     '        if decision["verified"] is not False:\n'),
+    ("M1773", "an action verified true but said unverifiable counted contained (BL1)", CTN,
+     '        if decision["verified"] is True and not decision["unverified"]:\n',
+     '        if decision["verified"] is True:\n'),
+    ("M1774", "an action a guard held said escalated: the guard is lost (BL1)", CTN,
+     "    if kind in GUARD_TYPES:\n        return HELD, kind\n",
+     "    if False:\n        return HELD, kind\n"),
+    ("M1775", "an action that failed on Azure said escalated (BL1)", CTN,
+     '    if status in ("write_blocked", "action_failed"):\n',
+     '    if status in ("write_blocked",):\n'),
+    ("M1776", "a missed run with a decision lying around counted contained (BL1)", CTN,
+     '    if detection == "missed":\n        return Incident(**base, outcome=MISSED)\n', ""),
+    ("M1777", "a share with unknown decisions not said to be a lower bound (BL1)", CTN,
+     "        return any(i.outcome == UNKNOWN for i in self.incidents)\n",
+     "        return False\n"),
+    ("M1778", "an isolation the reassertion says gone still counted contained alone (BL1)", CTN,
+     "        if card is not None:\n            inc.outcome, inc.why = NOT_HOLDING",
+     "        if False:\n            inc.outcome, inc.why = NOT_HOLDING"),
+    ("M1779", "a card after the run's window (a later run's) undoes a containment (BL1)", CTN,
+     "             and (t := _ts(c.get(\"timestamp\"))) is not None and since <= t <= until]\n",
+     "             and (t := _ts(c.get(\"timestamp\"))) is not None and since <= t]\n"),
+    ("M1780", "the share over the detected runs only: a missed one leaves the denominator (BL1)", CTN,
+     "        return len(self.contained) / len(self.incidents) if self.incidents else None\n",
+     "        return len(self.contained) / len([i for i in self.incidents if i.outcome != MISSED]) "
+     "if self.incidents else None\n"),
+    ("M1781", "the time to contain a mean, not a median (BL1)", CTN,
+     "        return round(statistics.median(self.times), 1) if self.times else None\n",
+     "        return round(statistics.mean(self.times), 1) if self.times else None\n"),
+    ("M1782", "a fault taken for an attack only when the isolation was executed (BL1)", CTN,
+     '        if d["event"] != "detection" or d["action"] not in DISRUPTIVE:\n            continue\n'
+     '        if d["signal_id"]',
+     '        if d["event"] != "detection" or d["action"] not in DISRUPTIVE or d["executed"] is not True:\n'
+     '            continue\n        if d["signal_id"]'),
+    ("M1783", "a decision on another VM during a fault counted as the fault's (BL1)", CTN,
+     '        if not any(_same(d["resource_id"], t) for t in targets):\n            continue\n', ""),
+    ("M1784", "a decision long after the fault counted as the fault's (BL1)", CTN,
+     '        if d["seen_at"] is None or not start <= d["seen_at"] <= until:\n',
+     '        if d["seen_at"] is None or d["seen_at"] < start:\n'),
+    ("M1785", "a declared campaign with a fault and a response outside the bench (BL1)", DCL,
+     '    if d.zone != "bench":\n', "    if False:\n"),
+    ("M1786", "a home-grown script accepted in a declared campaign (BL1)", DCL,
+     '            if (entry.get("engine") or "local-script") == "local-script":\n',
+     '            if entry.get("engine") == "local-script":\n'),
+    ("M1787", "a declared fault on other VMs than the campaign's (BL1)", DCL,
+     "    if not names or not names <= {t.lower() for t in targets}:\n",
+     "    if not names:\n"),
+    ("M1788", "campaign plan --declared on a target the declaration does not name (BL1)", ACLI,
+     "        if vm not in {t.lower() for t in decl.targets}:\n", "        if False:\n"),
+    ("M1789", "the console's cycles without the read-back time: the overview ends at the line (BL1)",
+     CON,
+     '        "unverified": bool(outcome.get("unverified")), "verified_at": outcome.get("verified_at", ""),\n',
+     '        "unverified": bool(outcome.get("unverified")),\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in range(1770, 1785)})
+TESTS.update({f"M{n}": "tests/unit/test_campaign_declared.py" for n in range(1785, 1789)})
+TESTS["M1789"] = "tests/unit/test_indicators.py"
+
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

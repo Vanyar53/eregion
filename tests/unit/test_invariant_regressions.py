@@ -3620,3 +3620,52 @@ def test_a_perimeter_lifted_by_a_neighbour_is_said_behind_a_bypass(monkeypatch):
          ("block", _NEW_WEB, _NEW_WEB, None, 22),
          ("unblock", WEB1, WEB1, None),
          ("reassert", "non_disruptive", None))
+
+
+_NSG_API = "/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Network/networkSecurityGroups/nsg-api-nic"
+_APP1_API = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+
+
+def _deny_all_world():
+    """api on nsg-api-nic of its own, an older version's isolation there (its fixed-name
+    deny-all, state kept); then blocked, its rule turned into an allow, its IP changed, a
+    new VM api in rg-app1 given the old address and api's NSG."""
+    net = _net(quarantine=True, legacy=("api-nic", True), data_subnet=[
+        _rule("allow-ssh", 100, dict(access="Allow", direction="Inbound", source_address_prefix="*",
+                                     destination_address_prefix="*", destination_port_range="22")),
+        _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                           destination_address_prefix="*", destination_port_range="*"))],
+        api_nic={"own": "dedicated", "policy": True, "rules": [
+            _rule("allow-https", 100, dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                                           destination_address_prefix="*", destination_port_range="443")),
+            _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound",
+                                               source_address_prefix="VirtualNetwork",
+                                               destination_address_prefix="*", destination_port_range="*"))]},
+        db_nic_1={"rules": [_rule("allow-lateral-out", 100, dict(
+            access="Allow", direction="Outbound", source_address_prefix="*",
+            destination_address_prefix="VirtualNetwork", destination_port_range="*"))]})
+    reused = ("address_reused_under_a_turned_rule", API, API, ("nic.get", "always-429"), 22,
+              (key(_NSG_API), "glorfindel-block-192-31-196-7-api-api-nic-c272f2"), _nic("rg-edge", "api-nic"), 0, 4,
+              "rg-app1", "api", _NSG_API, "Linux")
+    return net, [reused]
+
+
+@pytest.mark.parametrize("op", ["release", "reset_from_azure"])
+def test_an_older_isolations_deny_all_holding_back_a_turned_rule_stays(monkeypatch, op):
+    """I4C, the machine at 500 (seed 7; 6 steps, read by hand): api's isolation by an older
+    version (fixed-name deny-all on its own NSG, its state kept), api blocked, its rule
+    turned into an allow, its IP changed, a new VM given the old address and api's NSG — the
+    deny-all cuts it off, the turned rule waits behind it; the new VM's IP changed and it
+    blocked in its turn. The release (and the reset) of api took the deny-all off by its
+    name, unasked: the turned rule let the attacker reach the new VM on 22 — « I4: an
+    operation on …/rg-edge/…/api opened flows of …/rg-app1/…/api » (red on `main` f2b4333,
+    both). The guard's question is asked now (`_held_by_turned`, as every removal by name),
+    and a deny on every address cuts every NIC its NSG governs (`turned._cuts_all`): it
+    stays, said."""
+    net, steps = _deny_all_world()
+    _run(monkeypatch, net, *steps,
+         ("customer_changes_ip", _nic("rg-app1", "api-nic-4"), 0, 4),
+         ("address_reused_under_a_turned_rule", _APP1_API, _APP1_API, None, 22,
+          (key(_NSG_API), "glorfindel-block-192-31-196-7-api-api-nic-4-679cdb"), _nic("rg-app1", "api-nic-4"), 0, 4,
+          "rg-app1", "web"),
+         (op, API, API, None))

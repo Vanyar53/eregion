@@ -163,7 +163,10 @@ class SweepMixin:
                     continue
                 if name.lower() in legacy_named.get(nsg_key, set()):
                     seen.add((nsg_key, name.lower()))
-                    to_delete.append((t["nsg_rg"], t["nsg_name"], name))
+                    if why := _held_by_turned(self._network, guard, t["nsg_rg"], t["nsg_name"], name, "", mates):
+                        unreadable.append(why)       # its deny-all holds back a turned rule (I4C)
+                    else:
+                        to_delete.append((t["nsg_rg"], t["nsg_name"], name))
                     continue
                 m = block_re.match(name)
                 if m:

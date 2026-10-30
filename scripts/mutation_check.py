@@ -4898,6 +4898,26 @@ MUTANTS += [
      "        verification.get(\"uncovered_nics\") or verification.get(\"missing_rules\"))) or bool(\n"),
 ]
 TESTS.update({"M1965": _I4C, "M1966": _I4C})
+# The machine at 500 (seed 7) on I4C's tree, on `main` too: an older version's deny-all on api's own
+# NSG, a VM given that NSG and api's old address, our turned rule waiting behind for it — the
+# release and the reset took the deny-all off unasked; the guard read no NIC behind `*`. M1967–M1969.
+_I4C_ALL = " ".join(
+    f"tests/unit/test_invariant_regressions.py::test_an_older_isolations_deny_all_holding_back_a_turned_rule_stays[{op}]"
+    for op in ("release", "reset_from_azure")) + f" {INVARIANTS}"
+MUTANTS += [
+    ("M1967", "an isolation's deny on every address read as cutting no other NIC: taken off, the VM given its "
+              "NSG opened (I4C)", "glorfindel/providers/azure/turned.py",
+     '    return any(v.strip().lower() in ("*", "any", "0.0.0.0/0") for v in _side_values(rule) or ["*"])\n',
+     "    return False\n"),
+    ("M1968", "the release of an older version's isolation takes its deny-all off unasked (I4C)", REL,
+     '                err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)\n'
+     "                       or self._delete_rule(l_rg, l_name, name))\n",
+     "                err = self._delete_rule(l_rg, l_name, name)\n"),
+    ("M1969", "the reset takes an older version's deny-all off unasked (I4C)", SWP,
+     '                    if why := _held_by_turned(self._network, guard, t["nsg_rg"], t["nsg_name"], name, "", mates):\n',
+     '                    if False and (why := _held_by_turned(self._network, guard, t["nsg_rg"], t["nsg_name"], name, "", mates)):\n'),
+]
+TESTS.update({mid: _I4C_ALL for mid in ("M1967", "M1968", "M1969")})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

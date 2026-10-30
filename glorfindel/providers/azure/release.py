@@ -250,8 +250,15 @@ class ReleaseMixin:
             # legacy state, the next release deleted them: every VM in quarantine in the
             # region was open again (L26, invariant machine).
             l_rg, l_name = state.get("nsg_rg", rg), state["nsg_name"]
+            # Its deny-all may hold back one of our turned rules for a VM given this NSG and
+            # an old address since: asked first, as every removal by name (I4C).
+            try:
+                mates = [t0["nic_id"] for t0 in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)]
+            except Exception:
+                mates = []                # unread: its own NICs count too — kept, said (A0)
             for name in state.get("rule_names", []):
-                err = self._delete_rule(l_rg, l_name, name)
+                err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)
+                       or self._delete_rule(l_rg, l_name, name))
                 if err:
                     failed.append(err)
             left = self._restore_bumped(l_rg, l_name, state.get("bumped", []))

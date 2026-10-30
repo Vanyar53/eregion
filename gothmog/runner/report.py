@@ -1,33 +1,20 @@
-"""A Gothmog run, recorded like Annatar's (``annatar/runner/report.py``): ``runs/<run_id>.json``
-with the same keys — ``annatar report`` reads it too. What a fault adds (its execution, its
-probes, its return) goes in ``metrics`` and ``checks``; a fault has no ATT&CK id."""
+"""A Gothmog run, recorded like Annatar's: ``runs/<run_id>.json``, the run format both share
+(``eregion_core/run_report.py``, C1) — ``annatar report`` reads it too. What a fault adds (its
+execution, its probes, its return) goes in ``metrics`` and ``checks``; a fault has no ATT&CK
+id. Here, only how Gothmog prints it."""
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from rich.console import Console
 
+from eregion_core import run_report
+
 console = Console()
 
 
-@dataclass
-class RunReport:
-    scenario: str
-    run_id: str
-    mitre: str
-    result: str
-    metrics: dict
-    thresholds: dict
-    checks: dict
-
-    def save(self, runs_dir: str | Path = "runs") -> Path:
-        path = Path(runs_dir) / f"{self.run_id}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
-        return path
-
+class RunReport(run_report.RunReport):
     def render(self) -> None:
         color = {"PASS": "green", "REFUSED": "yellow"}.get(self.result, "red")
         console.print(f"\n[bold]Run:[/bold] {self.run_id}")

@@ -104,7 +104,7 @@ Les propriétés, vérifiées après chaque étape :
 | I12 | une VM d'un autre abonnement n'est jamais touchée, ni déclarée isolée |
 | L1 | un blocage dont les règles ont disparu est reposé ou signalé, même derrière la quarantaine |
 | L2 | un NSG de quarantaine que quelqu'un a modifié, et qui porte encore des cartes, est reposé ou signalé — l'état de ces cartes perdu compris (I1F) ; signalé, il le reste quand il sort de la liste : rôle retiré sur son groupe, notre tag retiré (I1S) |
-| U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée, puis retirée par le balayage — rien d'autre ne bouge ; en fin de séquence, chaque VM vivante revient à sa conception en entier (A3) |
+| U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée, puis retirée par le balayage — sauf si une de nos règles retournée en autorisation se tient derrière elle : gardée et dite (I5Q) ; rien d'autre ne bouge ; en fin de séquence, chaque VM vivante revient à sa conception en entier (A3) |
 
 **Des oracles qui ne demandent rien au code.** Ce qu'une propriété juge vient du journal du test :
 la levée qu'il a demandée (I9), ce qu'il a perdu et quand (une carte « intraçable »), qui a écrit
@@ -1061,6 +1061,67 @@ markdown-it).
 | M877 | une ligne ne finit que sur `\n` | un `\r` du modèle ouvre un item de liste à côté des vraies propositions |
 | M878 | la raison d'une proposition inconnue cite le texte du modèle | le modèle écrit dans la colonne du code |
 
+### Le run unifié, la matrice de couverture, la non-régression (C1)
+
+Un run d'attaque et un run de panne écrivent le même rapport (`eregion_core/run_report.py`), qui
+dit ce qu'il est (`metrics.run_format`, `kind`, `injector`, `experiment_id`) ; la matrice
+(`eregion_console/coverage.py`) en tire, pour chaque technique du catalogue et chaque panne, la
+dernière preuve, son âge, l'évolution et la non-régression. Les tests rejouent des runs factices
+(rapports et enregistrements de la watch dans un `runs/` temporaire) : aucun appel au cloud ni au
+modèle. Vingt-six mutants, mesurés par `tests/unit/test_coverage.py`, `tests/unit/test_run_report.py`
+et les tests des injecteurs (`-k unified`), tous attrapés (30/10) ; M1803 a survécu au premier
+passage (le cas de test le donnait par son injecteur), attrapé depuis par une panne d'un autre
+injecteur.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M1800 | un run d'Annatar (script) ne dit plus ce qu'il est | le format deviné de nouveau |
+| M1801 | un run Atomic ne dit plus ce qu'il est | idem |
+| M1802 | un run de panne ne dit plus ce qu'il est | idem, côté Gothmog |
+| M1803 | le `kind` du rapport ignoré | une panne d'un autre moteur prise pour une attaque |
+| M1804 | une isolation exécutée mais non vérifiée comptée contenue | un temps pour contenir sans preuve |
+| M1805 | la ligne perd son temps pour contenir | l'incident contenu affiché sans son temps |
+| M1806 | une détection sans décision rattachée vaut preuve | « prouvé » sans la réponse |
+| M1807 | pas d'« aging » entre 21 et 30 jours | l'alerte arrive sans le jaune d'avant |
+| M1808 | l'indicateur garde sa preuve sur 30 jours | une preuve de 40 jours dite « none » |
+| M1809 | la non-régression ne se déclenche jamais | une technique perdue reste « proven » |
+| M1810 | une détection inconnue prise pour un raté | un run qui n'a rien mesuré fait régresser |
+| M1811 | tout raté de l'histoire fait régresser | une technique détectée de nouveau reste rouge |
+| M1812 | jamais détectée dite régressée | une régression sans rien de perdu |
+| M1813 | une panne PASS `--without-glorfindel` vaut preuve | une preuve de Glorfindel sans Glorfindel |
+| M1814 | une panne refusée prise pour un échec | un refus du garde-fou fait régresser |
+| M1815 | l'évolution compte tout l'avant, pas ses 30 jours | la couverture ne baisse jamais |
+| M1816 | les indicateurs ne sont plus nourris par la matrice | ni régression dite, ni preuve au-delà de 30 jours |
+| M1817 | `eregion coverage --check` n'échoue jamais | la non-régression muette |
+| M1818 | une technique prévue jamais jouée comptée en manque | un trou qui n'en est pas un |
+| M1819 | un run hors du catalogue disparaît | une technique jouée cachée |
+| M1820 | les runs d'une campagne perdent leur campagne | d'où vient la preuve, perdu |
+| M1821 | une date qu'aucun calendrier ne tient prise pour une date | un rapport forgé casse la page |
+| M1822 | les pages d'Annatar et de Gothmog lisent le catalogue, pas la matrice | la matrice absente de la console |
+| M1823 | le temps de la vérification retiré du cycle | le temps pour contenir s'arrête à l'enregistrement (BL1) |
+| M1824 | le temps pour contenir s'arrête à l'enregistrement | idem, dans le calcul |
+| M1825 | `/api/coverage` prend n'importe quel `kind` | un paramètre non vérifié |
+
+Après la relecture (30/10), quatorze de plus, tous attrapés ; M560 (UI-2) est reciblé sur la
+recherche indexée (bissection) qui remplace la lecture de tous les cycles.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M1826 | la décision d'une autre VM rattachée au run | une preuve tirée d'une autre machine |
+| M1827 | entre plusieurs enregistrements, le plus ancien | la décision d'une détection voisine |
+| M1828 | un run rangé sous une technique prend la décision d'une autre | une preuve croisée |
+| M1829 | un run daté dans le futur gardé | un `missed` de 2076 fait régresser pour toujours |
+| M1880 | une panne au démarrage échoué prise pour un échec | une régression sans rien d'injecté |
+| M1881 | un rapport supprimé gardé en cache | le cache grossit sans fin |
+| M1882 | un fichier de la watch supprimé gardé en cache | idem |
+| M1883 | la matrice en cache servie après un nouveau rapport | une régression dite 30 s trop tard, ou jamais |
+| M1884 | le temps pour contenir de l'accueil mesuré à part de `timeline` | deux définitions |
+| M1885 | les indicateurs comptent un run daté dans le futur | une couverture qui n'existe pas |
+| M1886 | `eregion coverage` imprime les caractères de contrôle d'un rapport | un rapport forgé pilote le terminal |
+| M1887 | un run d'Annatar ne nomme plus sa VM | la décision de n'importe quelle VM |
+| M1888 | deux runs de la même seconde dans l'ordre de lecture | l'état dépend du système de fichiers |
+| M1889 | le démarrage échoué d'une panne non lu dans ses `checks` | idem M1880, côté lecteur |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.
@@ -1108,6 +1169,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I5R | blocage de périmètre (200) puis de la VM (210), la règle de la VM passée en allow par un tiers, réaffirmation | la règle de périmètre réécrite au premier numéro libre (220), sous cet allow : **l'attaquant atteignait la VM sur tous ses ports** |
 | RB1 | blocage de périmètre puis de la VM (une entrée), la règle de la VM passée en allow par un tiers, deux réaffirmations (ou une en `human_only`) | seul le périmètre réécrit ; « l'IP n'est plus bloquée » alors que le périmètre la coupait encore (faux, du côté prudent) |
 | RB1 | même chose, la seconde carte de Db--01 sur un autre subnet (tirage ajouté) | « reposé une fois » alors que la seconde carte restait ouverte à l'attaquant |
+| I4A | VM bloquée, sa règle entrante passée en allow par un tiers, son IP changée, une nouvelle VM à l'ancienne adresse, VM bloquée de nouveau (graine 8675 à 500, trouvé par la machine de RB1) | le blocage réécrivait sa règle par son nom, pour la nouvelle adresse : l'allow ôtée, **la nouvelle VM coupée** de flux qu'une opération sur l'autre ne doit pas toucher (I4) |
 | I5R | VM supprimée, l'entrée de son blocage perdue | `unblock` : `not_found` sans avoir cherché, le blocage resté sur le NSG partagé pour la VM suivante à cette adresse (trouvé en relecture d'I7S, hors de la machine) |
 | I8S | deux hôtes aux états séparés : « aucun » de l'hôte 1, tag X de l'hôte 2 (la carte a reçu X entre-temps) | la levée suivait l'« aucun » périmé : `released`, carte sans NSG, tag X effacé (trouvé en relecture, hors de la machine) |
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
@@ -1687,6 +1749,209 @@ api bloquée, sa règle entrante retournée en allow par un tiers, son IP chang�
 l'ancienne adresse, api bloquée de nouveau — l'opération change les flux de la nouvelle VM ; cause
 supposée, non établie), pour un lot à part. Harnais avant/après (60 séquences, deux tours, mêmes
 modules) : 33 attrapés à chaque tour avant comme après, aucun perdu, les nouveaux à chaque tour.
+
+**I5Q (29/10, #327) : une réaffirmation qui ouvrait une VM après une adresse reprise.** Trouvée
+par la quatrième relecture de RB1, graine 101 à 500 séquences (« I5: the reassertion opened flows
+of …/rg-new/…/web », l'attaquant sur 22), présente sur `main` avant RB1. Réduite de 14 étapes à
+quatre : `block` d'`api` (sa règle à 200), `block_turned_then_reasserted` (`both` : la règle de
+périmètre à 210, puis celle d'`api` passée en allow par quelqu'un), `address_reused` (`api` isolée
+par règles sur son NSG, supprimée, une nouvelle VM `rg-new/web` à son adresse et sur ce NSG), puis
+la réaffirmation en `non_disruptive`. **Cause** (`providers/azure/sweep.py`, `find_orphan_rules`) :
+le balayage des orphelines retirait l'isolation d'`api`, qui coupait la nouvelle VM — mais ce refus
+était le dernier à tenir l'attaquant dehors : sur le NSG du subnet, notre règle retournée le laisse
+passer avant le blocage de périmètre, et le NSG de la carte l'autorise sur 22. Le balayage ne lisait
+que nos refus ; une de nos règles devenue autorisation ne comptait pas. Correctif
+(`providers/azure/turned.py`, `_turned_allows`, `_turned_behind`) : un refus d'une carte disparue reste, « Gardée :
+notre règle … retournée en autorisation … », quand une de nos règles (`glorfindel-iso-*`,
+`glorfindel-block-*`) passée en allow, du même côté, visant l'adresse de la carte qu'il coupe ou
+toutes (`*`, un préfixe qui la contient, une étiquette — lue comme la contenant), se tient sur un
+NSG qui gouverne cette carte. La carte le dit ; remise en refus ou retirée, la règle retournée
+libère le passage suivant, qui retire le refus. La VM reste coupée en attendant — jamais ouverte.
+
+**La levée d'une VM supprimée, le même trou.** Une règle composée (`turned_then_address_reused` :
+`block`, `block_turned_then_reasserted` et `address_reused` sur la même VM, puis la réaffirmation
+hors faute, hors `human_only` plus souvent) rend l'état courant ; à 500 séquences, la graine 322 y a
+trouvé la levée : « I4: an operation on …/rg-edge/…/api opened flows of …/rg-app2/…/api ». La
+levée de la VM supprimée défait les placements de son état, ou cherche ses noms sur tous les NSG
+(I7S) : elle retirait le même refus. Correctif (`release.py` ; `turned.py`, `_held_by_turned` sur
+les placements, `_turned_guard` dans `_gone_vm_rules`) : le refus reste, `release_partial`, la
+règle retournée nommée ; la levée suivante le retire une fois celle-ci remise. Une VM vivante qui
+tient elle-même l'adresse n'est jamais retenue par sa propre règle retournée (ce qu'elle laisse
+passer est le fait de quelqu'un, sur l'adresse de la VM : I1 le juge ainsi). Le déblocage d'une VM
+supprimée retire avec ses refus ses propres règles retournées : rien n'y attend derrière.
+
+**L'oracle.** I5 n'a pas bougé. La vivacité d'U1 (après le balayage en `non_disruptive`, plus
+aucune VM coupée par une orpheline) contredisait I5 dans cet état : une orpheline gardée derrière
+une règle retournée en est exemptée, lue du journal du test (`tampered`, la règle encore telle que
+quelqu'un l'a laissée), jamais des cartes du code, et elle doit être dite avec ce qui la retient :
+une carte en attente nomme une règle que le journal dit retournée derrière elle, et ne dit pas d'abord
+de retirer le refus. **L'exemption est volontairement prudente, plus large que le seul conflit avec
+I5** : le code garde le refus dès qu'une de nos règles retournée, du même côté, vise l'adresse sur un
+NSG de la carte — sans évaluer si une sonde passerait (une règle retournée sur un autre port, un NSG
+de carte sans autorisation : le retrait n'ouvrirait rien, le refus reste quand même, dit), et
+l'oracle l'exempte de même. Borner l'exemption aux retraits qui ouvriraient vraiment un flux absent
+de la conception de la VM demanderait au code d'évaluer les NSG comme Azure ; une VM coupée à tort,
+dite, plutôt qu'ouverte. Au démontage, l'opérateur remet les règles
+retournées que de tels refus retiennent, comme la carte le demande, avant les levées ; I7 et U1
+restent entiers ensuite. Séquences figées : `test_the_sequence_the_machine_found_on_i5_after_an_address_reused`
+(la graine réduite), `test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes` (la règle de
+la VM ou celle du périmètre), `test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release`
+(placements, ou état perdu), `test_a_live_vms_release_is_not_held_by_its_own_turned_rule`, et dans
+`test_orphan_sweep.py` les adresses (`*`, un préfixe, une étiquette, une autre adresse). Mutants
+M1730–M1736, attrapés à chaque tour ; par la machine seule à 500 séquences, M1730 et M1734 1/3
+(M1730 0/6 avant la règle composée).
+
+**La carte partagée.** Après la reprise de RB1, la graine 101 à 500 a trouvé la suite : « U1: the
+orphan rule glorfindel-iso-web-… kept behind a rule turned into an allow, cutting […/batch], not
+said ». Les refus entrant et sortant de la VM supprimée coupent la même VM : dits en `human_only`,
+ils partagent une carte (le magasin fusionne par VM). Passée en `non_disruptive`, la passe retire
+le sortant (la règle retournée est entrante) et résolvait la carte, que l'entrant, gardé, partageait :
+le refus restait, plus dit. Correctif (`orphans.py`) : une carte qu'une orpheline encore suivie
+partage reste ouverte. Test `test_a_card_two_rules_share_stays_open_while_one_stands` ; M1737
+attrapé.
+
+**La relecture d'I5Q.** La séquence figée de la graine ne prouvait plus rien sur `main` : depuis
+RB1, la réaffirmation lancée dans `block_turned_then_reasserted` en `non_disruptive` remet la règle
+retournée en refus, et l'état fautif n'est jamais atteint. L'étape 2 tourne maintenant en
+`human_only` : la séquence tombe sur I5 avec `glorfindel/` de `56fc9f0`, passe sur la branche. Une
+carte dite avant le retournement (en `human_only`, ou partagée avec l'autre refus de la VM) n'était
+jamais réécrite : elle disait encore de retirer le refus (`az network nsg rule delete`), seul pas
+proposé, ce qui ouvrirait la VM. Correctif (`orphans.py`) : la carte d'un refus gardé qui ne nomme
+pas la règle retournée est fermée et réécrite, les refus qu'elle couvrait dits de nouveau, les gardés
+d'abord ; son premier pas dit de remettre la règle en refus (`az network nsg rule update …
+--access Deny`), le retrait seulement après. La liste des NSG peut dater d'un passage : juste avant
+le retrait, `remove_orphan_rule` relit par leur id les NSG qui gouvernent la carte coupée (le sien
+et celui du subnet) et rejoue la garde ; une lecture refusée garde la règle. La levée d'une VM ne
+consulte plus la garde pour un placement dont la carte vit encore quand la liste des NSG est
+refusée : sa propre adresse, rien d'une autre VM n'y attend. Tests
+`test_a_card_said_before_the_turn_is_replaced_by_one_naming_it` (le second passage en `human_only`
+ou en `non_disruptive`, la carte partagée par les deux refus), `test_a_rule_turned_after_the_listing_stops_the_removal`,
+`test_a_live_vms_release_is_not_held_by_its_own_turned_rule[refused]` ; mutants M1738–M1743.
+L'oracle resserré a aussitôt trouvé deux suites (graine 31337 à 500) : les deux refus d'une VM
+gardés derrière deux règles retournées différentes — la carte que le magasin fusionne par VM ne
+nommait que la première ; et le nom de la règle de périmètre commence celui de chaque règle de VM de
+son IP — lu comme une sous-chaîne, une carte ancienne qui disait de retirer une règle de VM passait
+pour nommer le périmètre, et restait. La carte d'une VM nomme maintenant chaque règle retournée que
+ses refus gardés attendent (« notre règle X (… », le nom entier) et les remet toutes en refus
+d'abord ; l'oracle lit le nom entier. Séquence figée `test_a_card_names_the_turned_rule_by_its_whole_name`,
+tests `test_the_card_of_a_vm_names_every_rule_its_kept_denies_wait_behind`,
+`test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter` ; M1744, M1745. Mesures
+après la relecture : M1730–M1745 attrapés à chaque tour ; invariants à 500 verts sur les graines
+31337, 4242 et 9001 (la 101 rouge sur L2 seule), à 2 000 vert sur 322. Harnais au même budget
+(60 séquences, deux tours) sur les modules touchés (`sweep.py`, `release.py`, `readers.py`,
+`turned.py`, `orphans.py`), avant (`56fc9f0`) et après : 13/22 attrapés à chaque tour avant,
+14/22 après (27/35 avec les nouveaux) ; aucun perdu — M12 (1/2 puis ses séquences figées seules)
+et M33 (2/2 puis 1/2), remesurés sur quatre tours après : 2/4 et 3/4.
+
+**La seconde relecture d'I5Q.** Un refus gardé nouveau, sans carte à lui, se fondait dans la carte
+en attente de sa VM (celle d'une orpheline non gardée), dont le magasin garde la première raison :
+l'opérateur ne voyait que le retrait d'un refus déjà parti, le refus gardé nommé nulle part pendant
+une passe. La carte en attente de la VM est lue aussi, et remplacée si elle ne nomme pas tout le
+groupe (`test_a_new_kept_deny_never_merges_into_a_stale_card_of_its_vm`, M1746). La levée d'une VM
+vivante, la liste des NSG refusée, ne lâche son refus que si sa carte tient encore toutes les
+adresses qu'il vise (`test_a_live_vms_release_is_not_held_by_its_own_turned_rule[refused, address
+moved]`, M1747). L'oracle d'U1 exige que la carte qui nomme la règle retournée porte sur une VM que
+le refus coupe, ou sur son NSG. Après la reprise d'I4A, une seule règle dit si une adresse est
+visée : `nsg._takes_in` d'I4A (plus précis sur les valeurs entourées d'espaces) remplace celui
+d'I5Q, et le `takes_in` de l'oracle s'y aligne ; M1732 le suit.
+La graine 322 à 2 000, après I4A, a trouvé trois échecs. Un est d'I5Q : la levée d'une VM vivante
+dont l'IP a changé garde son refus sur l'ancienne adresse, que la règle composée d'I4A donne à une
+nouvelle VM, une règle retournée derrière (`release_partial`, voulu) ; l'opérateur du démontage ne
+remettait que ce que retiennent les refus des VM supprimées — il remet maintenant ce que retient tout
+refus des nôtres sur l'adresse d'une autre carte (`_cutting_others`), puis I7 tient
+(`test_a_live_vm_whose_deny_waits_before_a_turned_rule_is_released_once_it_is_put_back`). Les deux
+autres échouent aussi avec `glorfindel/` de `20cb5b5` (I4A), de la famille qu'I4A a laissée ouverte
+(une IP changée) : une isolation réaffirmée sous ses noms quitte l'ancienne adresse où attend une règle
+retournée (I5), et une levée interrompue ouvre la nouvelle VM (I4) — figées en `xfail` strict
+(`test_a_reasserted_isolation_moves_off_the_old_address_a_turned_rule_waits_behind`,
+`test_an_interrupted_release_after_an_ip_change_opens_the_new_owner`), pour la suite d'I4A.
+
+**Trouvé en chemin, hors d'I5Q : L2.** La même graine tombe ensuite sur L2 (« the quarantine NSG
+…/rg-sec/…/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5]; the
+reassertion neither put it back nor said so ») : réduite à 14 étapes écrites avec les règles de
+`main`, elle échoue de même avec `glorfindel/` de `171a242` (RB1) et de `b83cb92` (avant RB1).
+La configuration est lisible à chaque étape. Cause (établie par la relecture d'I5Q,
+`reassert_quarantine._report_altered_quarantines`) : un accès forensique change le diff du NSG, la
+carte du nouveau changement est écrite mais pas `quarantine_alerts.json` (disque plein), qui garde
+l'identifiant de l'ancien ; l'accès retiré, le diff revient à l'ancien changement, lu « déjà dit ou
+acquitté » — aucune carte, le NSG toujours vidé. Figée en `xfail` strict
+(`test_an_altered_quarantine_stays_said_when_its_change_comes_back`) pour le lot L2Q (#331). La graine 101 à 500 reste rouge sur L2 jusqu'à lui.
+
+**Mesures d'I5Q.** Avant la reprise de RB1 : invariants à 500 séquences sur les graines 101, 202,
+322, 1, 42 et 777, puis 2 000 sur 101, 322 et 42, verts. Sur le code final (RB1 et la 0.4.6 repris) :
+la séquence du relecteur (graine 101, 14 étapes) passe, et tombe toujours sur I5 avec `glorfindel/`
+de `b83cb92` ; à 500 séquences, verts sur les graines 202, 322, 1, 42, 777 et 2718, la 101 rouge sur L2 seule (ci-dessus) ; à 2 000, verts sur 322, 42 et 777. Au même budget (60 séquences,
+deux tours, `--jobs 4`), les 80 mutants mesurables par la machine de `providers/azure/`, de
+`response/`, de la réaffirmation et des orphelines, avant (`b83cb92`) et après (avant la reprise de
+RB1) : 51/80 attrapés à chaque tour avant, 50/80 après (57/87 avec M1730–M1736). Aucun perdu : M19
+et M26, attrapés par la machine avant, ne l'étaient plus que par leurs séquences figées après ;
+remesurés sur quatre tours, 2/4 puis 1/4 (M19), 2/4 puis 2/4 (M26), et 2/2 chacun à 500 après. M02,
+M04, M14, M18, M20, M32, M34, M830 et M831 gagnent un tour ; M08, M09, M12 et M17 en perdent un
+(remesurés sur quatre tours : entre 1/4 et 4/4 des deux côtés). À 500, le code d'avant tombe déjà,
+sur une graine du moment, sur une autre propriété (« I4: … cut off … », hors de ce lot) : la mesure
+d'avant à 500 n'a pas pu tourner.
+**I4A (29–30/10, #328) : un blocage réécrit sur une adresse reprise.** Le défaut figé par RB1 en
+`xfail` strict (graine 8675 à 500), présent sur `main` avant RB1. **Cause, établie** : api bloquée sur
+le NSG de son subnet, sa règle entrante (`glorfindel-block-<ip>-api-api-nic-<empreinte>`) passée en
+allow par un tiers ; l'IP d'api change, Azure donne l'ancienne à une nouvelle VM (la plus basse
+libre) — l'allow retournée laisse maintenant l'attaquant joindre cette VM. api bloquée de nouveau
+(`block`, ou la réaffirmation hors `human_only`) : `_block_ip_vm` (`providers/azure/blocks.py`)
+écrivait sa paire sous les mêmes noms (`_put_deny_rule`, un `create_or_update`), pour la nouvelle
+adresse d'api ; l'allow disparaissait, la nouvelle VM perdait les flux qu'elle lui ouvrait. Ce
+n'est pas une ouverture : une action disruptive sur la mauvaise VM (I4).
+
+**Correctif.** Avant d'écrire, le blocage lit la paire en place (`_plan_block`) ; une règle qui,
+réécrite ou retirée, changerait les flux d'une autre VM est **laissée** (`_left_on_others`) : une
+allow à notre nom dont une adresse n'est plus celle de la carte et qu'une autre carte tient (la
+liste des cartes, une fois par blocage), ou dont on ne sait pas qui la tient (cartes illisibles,
+une plage, une étiquette — jamais lu « personne », A0), ou `*` sur un NSG que d'autres partagent.
+La paire va alors sous le **second nom** de la carte (`…-<carte>-b-<empreinte>`,
+`_placement_rule_bases`) : même empreinte en fin de nom, la vérification sans état, le déblocage,
+le reset, la VM supprimée et le balayage des orphelines la lisent comme la première. L'autre règle
+de la première paire, à nous et ne visant aucune autre VM, est retirée une fois la paire posée
+(elle coupait la nouvelle VM : la retirer ne rend que ce qu'elle coupait). L'ancienne adresse à
+personne : réécrite comme avant (I7S). Ce qui est laissé est dit (`left_rules`, la commande qui
+le retire) et gardé dans le placement ; la passe suivante le dit sur une carte `rule_left`, une
+fois par ensemble (`left_said`), sans écrire.
+
+**Trouvé par la machine sur le premier correctif** (sa nouvelle règle, graine 42 à 2 000, présent
+sur `main` aussi, rejoué à la main sur 171a242) : web2 bloquée sur son NSG, sa règle sur le NSG du
+subnet (un placement plus ancien) passée en allow ; batch créée sur le NSG de web2 à l'ancienne
+adresse. Le blocage réécrit déplaçait **notre deny** vers la nouvelle adresse : l'allow retournée,
+derrière lui, laissait l'attaquant joindre batch sur 22 — une ouverture. Notre deny sur une
+adresse d'une autre VM est donc gardé aussi quand une règle du blocage de la carte, sur un NSG de
+la carte, est passée en allow pour cette adresse (`_turned_behind`) ; ces NSG illisibles, il est
+gardé (le garder n'ouvre rien). Même principe que I5Q pour la levée et le balayage (un deny qu'une
+règle retournée attend derrière ne part pas).
+
+**La relecture 5.5** a trouvé trois manques, corrigés : l'allow retournée qui attend derrière notre deny était cherchée par son adresse exacte — une plage (`10.0.0.0/16`) ou une étiquette (`VirtualNetwork`) lues « rien », le blocage ouvrait batch sur 22 (un inconnu lu « rien », A0) : `_takes_in` (`nsg.py`, la règle d'I5Q, à partager à la fusion) prend l'adresse, `*`, une plage qui la contient, et compte une étiquette ou une valeur illisible comme la prenant ; l'échec du retrait de la règle de la première paire était écrit où rien ne le lisait, `blocked` dit alors que notre deny `-out` restait sur l'adresse de la nouvelle VM — dit maintenant (`drop_failed`) ; la vérification sans état prenait la première paire présente par son nom — elle lit d'abord celle qui bloque la carte telle qu'elle est (deux deny de l'attaquant pour ses adresses), une allow avant la seconde paire n'est plus cachée. **Reste ouvert** (I4B, #333, avec le pendant de l'isolation) : le déblocage et le reset retirent une règle à l'empreinte de la carte quoi qu'elle soit devenue (`_nic_owns`) — l'allow retournée que le blocage laisse aussi : la VM qui a reçu l'ancienne adresse perd encore ces flux, au déblocage et non plus au blocage. La machine ne le voit pas : `unblock` et le reset jugent I4 sans les flux de l'attaquant (`perimeter=True`). Figé en `xfail` strict (`test_the_unblock_and_the_reset_leave_the_new_owner_of_the_old_address`, avec et sans re-blocage). « Personne » veut dire aucune carte de VM : une instance de VMSS qui tient l'adresse n'est pas vue (angle mort ancien).
+
+**La machine** tire maintenant la séquence (`address_reused_under_a_turned_rule` : bloquer, une
+règle du blocage retournée, l'IP changée, une VM créée à la plus basse adresse libre, bloquer de
+nouveau ; I4 vérifié par `_block`). Aucune règle retirée ni restreinte, aucun oracle affaibli.
+**Séquences figées** : la séquence de 8675 (plus `xfail`), l'adresse reprise dite sur une carte une
+fois (redite après acquittement : non), l'adresse à personne réécrite, notre deny réécrit pour la
+VM qu'il bloque, le détenteur inconnu, une plage, `*` sur un NSG partagé (le contournement dit), le
+second nom trouvé sans état (vérification, déblocage — l'IP changée de nouveau —, reset), le deny
+gardé quand une allow retournée attend derrière (NSG lisible ou non). **Hors du lot, figé en
+`xfail` strict** : le pendant de l'isolation (même séquence, api isolée par règles puis réisolée —
+la réisolation réécrit l'allow retournée par son nom, la nouvelle VM coupée), trouvé en sondant ce
+lot.
+
+**Mesures d'I4A.** `pytest` complet : 4 018 réussis, 7 sautés, 1 `xfail` ; `ruff` propre. Invariants :
+500 séquences sur les graines 8675, 1, 777 et 2718, puis 2 000 sur 42 et 322, verts (sur le premier
+correctif, 2 000 sur 42 tombait sur l'ouverture ci-dessus). Mutants M1755–M1769 (blocage,
+déblocage, reset, réseau, réaffirmation) : 15/15 par leurs séquences figées, à chaque tour. Par la
+machine seule : M1755 (la règle retournée réécrite) une graine sur deux à 500 (1 : I4 ; 2 : non),
+M1768 (notre deny levé devant l'allow retournée) sur 42 à 2 000. Harnais avant/après (60 séquences,
+deux tours, `--jobs 4`) sur les 144 mutants des modules touchés (blocage, déblocage, reset, levée,
+réseau, réaffirmation, ses cartes) : 123 attrapés à chaque tour avant (171a242) comme après, et les
+quinze nouveaux ; M1555 (le nom `-out` de la VM supprimée) réaligné sur la ligne réécrite.
+Aucun perdu : M20 et M830, 2/2 avant et 1/2 après à ce budget, remesurés à 500 séquences — 2/2 des deux côtés ; M02, M16, M23, M24, M26 et M761 mieux après (bruit à 60).
+Après la relecture : `pytest` complet 4 027 réussis, 7 sautés, 5 `xfail` (le pendant de
+l'isolation, le déblocage et le reset après une adresse reprise) ; M1755–M1769 et M1920–M1923,
+19/19 par leurs séquences figées à chaque tour ; invariants à 500 sur 8675 et 31337, puis 2 000
+sur 42, verts.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

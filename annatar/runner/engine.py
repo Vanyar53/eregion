@@ -14,7 +14,7 @@ from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RUNS_DIR, RunReport
 from eregion_core.inscription import check_target
 from annatar.signals.emitter import SignalEmitter
-from eregion_core import watch_channel, watch_gate
+from eregion_core import run_report, watch_channel, watch_gate
 from eregion_core.exercise import close_window, open_window
 from eregion_core.exercise_channel import carry_run
 from eregion_core.orodruin import arm
@@ -280,6 +280,8 @@ class Engine:
         )
 
         metrics = watch_gate.without_metrics(self.without_glorfindel)
+        # C1: the run format shared with Gothmog — an attack, by Annatar, of this technique.
+        metrics.update(run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id))
         checks = {}
 
         # Setup runs first — cleans residuals from previous attack before we check state. The
@@ -410,6 +412,7 @@ class Engine:
             "engine": "atomic",
             "engine_ref": scenario.engine_ref,
             "atomic_guid": resolved.guid,
+            **run_report.identity("technique", "annatar", scenario.mitre, emitter.resource_id),   # C1
             **watch_gate.without_metrics(self.without_glorfindel),
         }
 

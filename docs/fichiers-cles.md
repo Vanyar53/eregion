@@ -187,9 +187,13 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           /api/atelier/* → /api/* (308, jusqu'à la 1.0)
   sections.py           → sections actives : Glorfindel toujours, Annatar et Gothmog dès que l'hôte a leurs runs
                           (fenêtre, rapport, campagne), ou ce que --sections / EREGION_CONSOLE_SECTIONS choisit
-  cli.py                → `eregion console [--host] [--port] [--sections]`
+  cli.py                → `eregion console [--host] [--port] [--sections]`, `eregion coverage [--json] [--check]`
   indicators.py         → les cinq indicateurs de la finalité (UI-2) : sur 30 jours, rapports de run, cycles de la
                           watch, cartes, catalogue — jamais les fenêtres ; `GET /api/indicators`
+  coverage.py           → C1 : la matrice de couverture — par technique du catalogue et par panne, dernier run,
+                          dernière preuve, état (proven, aging, stale, regressed, unproven, never), évolution sur
+                          douze semaines ; toute l'histoire des rapports et des cycles ; nourrit la couverture et
+                          l'âge de la dernière preuve ; `GET /api/coverage`, `eregion coverage [--json] [--check]`
   static/console.js     → en-tête commun : onglets (actifs ou grisés), battement de la watch, canal retour,
                           cartes à juger, horloge UTC ; console.css, la palette
   static/overview.html  → l'accueil : une ligne par section, les canaux ; les cinq indicateurs avec UI-2 (#206)
@@ -233,6 +237,10 @@ eregion_core/
                         (défaut `celebrimbor`, instance nommée `celebrimbor-<nom>`). Tout inconnu est refusé.
   signals.py          → D1 : le contrat des signaux (Signal + severity_for_ttp), écrit par les injecteurs, lu par
                         la watch — dans le cœur, pour que Glorfindel tourne sans Annatar (ex-annatar/signals/schema.py).
+  run_report.py       → C1 : le run au format commun d'Annatar et de Gothmog — `RunReport` (`runs/<run_id>.json`,
+                        les sept clés), `identity` (`metrics.run_format`, `kind`, `injector`, `experiment_id`),
+                        `read_run` / `read_reports` (la vue unifiée, rapports d'avant C1 compris), `timeline`
+                        (attaque, détection, décision, action vérifiée d'un incident).
 
 scripts/console_escaping.py → #254, #257 : rien du dehors n'est écrit brut dans la console — suit ce que peut
                         contenir chaque ${…} d'un gabarit HTML, chaque valeur donnée à innerHTML et chaque

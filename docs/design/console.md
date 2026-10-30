@@ -203,8 +203,18 @@ latence, Annatar l'a mesurée sur ce même enregistrement.
 
 **Sans injecteur**, la couverture et la dernière preuve disent qu'il n'y a rien sur 30 jours.
 
-**Plus loin** : la matrice de C1 trouvera sa place dans Annatar et dans Gothmog, avec son résumé sur
-l'accueil.
+**La matrice de C1 (#80, 30/10)** a trouvé sa place dans Annatar et dans Gothmog, avec son résumé
+sur l'accueil. La colonne de droite de chaque page (« COVERAGE · TECHNIQUES », « COVERAGE ·
+FAULTS ») est la matrice (`GET /api/coverage?kind=…`, `eregion_console/coverage.py`) : une ligne
+par entrée du catalogue, ses derniers résultats (✓ ✗ ? ·), l'âge de sa dernière preuve, son état ;
+en tête, l'évolution sur douze semaines. Une ligne ouverte donne le dernier run et la dernière
+preuve (date, détecté ou non, temps de détection, décision, temps pour contenir). Une technique
+prouvée avant et ratée depuis est rouge (`REGRESSED`) : c'est la non-régression. Sur l'accueil,
+la couverture dit les régressions (rouge, lien vers la page) et les preuves périmées ; l'âge de la
+dernière preuve se lit désormais sur toute l'histoire que l'hôte garde — au-delà de 30 jours il
+est dit, rouge, au lieu de « none in 30 d ». Les fenêtres ne servent pas : la matrice lit les
+rapports de run, gardés, et les cycles de la watch. Détail : `docs/glorfindel.md`, « Matrice de
+couverture » ; le run au format commun : `docs/architecture.md`, « Le run, unifié ».
 
 ### Les cartes (#248)
 

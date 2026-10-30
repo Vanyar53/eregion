@@ -65,6 +65,7 @@ COMPONENTS: dict[str, Component] = {
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
             "test_exercise_channel.py", "test_exercise_plan.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
+            "test_run_report.py",
         ),
     ),
     # Glorfindel — the watch, the graph, the response, its providers. The console
@@ -110,13 +111,14 @@ TOGETHER = (
     "test_activity_logs.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
+    "test_coverage.py",
     "test_restore_moment.py",
     "test_signal_origin.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
     "test_docs_budget.py", "test_exercise.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
-    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_secrets.py",
+    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_secrets.py", "test_bench_logs.py",
     "test_notify_discord.py", "test_observation.py", "test_orodruin_kill.py", "test_palantir.py",
     "test_pip_audit_issues.py",
     "test_provider_boundary.py", "test_roadmap_discord.py",

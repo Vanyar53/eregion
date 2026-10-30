@@ -62,6 +62,25 @@ def _short(ref: str) -> str:
     return (ref or "").rstrip("/").rsplit("/", 1)[-1]
 
 
+def _resource(o: dict) -> str:
+    """What the card of an orphan rule is about: the VM it cuts (or would), else its NSG."""
+    hit = (o.get("cut", o["now_on"]) or o["now_on"] or [None])[0]
+    return (hit.get("vm_id") or o["nsg_id"]) if hit else o["nsg_id"]
+
+
+def _names(text: str, o: dict) -> bool:
+    """The card says the turned rule this kept deny waits behind (I5Q) — by the words that
+    say it, not a substring: the perimeter's name begins every VM rule of its IP."""
+    return f"notre règle {o['turned']['rule']} (".lower() in text.lower()
+
+
+def _put_back(t: dict) -> str:
+    from glorfindel.actions import _parse_nsg_resource_id
+    rg, name = _parse_nsg_resource_id(t["nsg_id"])
+    return (f"Remettre {t['rule']} en refus : az network nsg rule update -g {rg} --nsg-name {name} "
+            f"-n {t['rule']} --access Deny")
+
+
 def _remove(connector, orphan: dict, victims: list[str]) -> dict:
     """Under the lock of each VM it cuts: an isolation or a release of that VM runs
     first, and remove_orphan_rule reads the state again after it."""
@@ -111,6 +130,36 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
     def _pending(card: str) -> bool:
         return any(e.get("id") == card for e in escalations.pending())
 
+    # I5Q: a deny kept behind one of our rules turned into an allow is said with that rule,
+    # never with its delete alone. The store merges the cards of a VM (its first reason
+    # stays): the card of the VM's kept denies names every turned rule they wait behind.
+    # A card said before — in human_only, before the turn, or for another rule of the VM —
+    # that doesn't name them all is replaced: closed, and every rule it spoke for said
+    # again below, the kept ones first.
+    group: dict[str, list[dict]] = {}
+    for o in orphans:
+        if o.get("turned"):
+            group.setdefault(_resource(o).lower(), []).append(o)
+    # A kept deny not said yet merges into the VM's pending card too (the store keeps its
+    # first reason): that card is read as well (the second review of I5Q).
+    said = {e.get("id"): (e.get("reason") or "").lower() for e in escalations.all_escalations()}
+    pending_of: dict[str, set] = {}
+    for e in escalations.pending():
+        if e.get("action") == "remove_orphan_rule":
+            pending_of.setdefault((e.get("resource_id") or "").lower(), set()).add(e.get("id"))
+    for o in orphans:
+        if not o.get("turned"):
+            continue
+        res = _resource(o).lower()
+        for card in ({alerts.get(f"orphan-{o['nsg_id']}/{o['rule']}".lower())} | pending_of.get(res, set())) - {None}:
+            if not all(_names(said.get(card, ""), g) for g in group[res]):
+                if _pending(card):
+                    escalations.resolve(card, note=f"Remplacée : {o['rule']} est gardée derrière "
+                                                   f"{o['turned']['rule']}, retournée en autorisation (I5Q).")
+                for k in [k for k, c in alerts.items() if c == card]:
+                    del alerts[k]
+    orphans = sorted(orphans, key=lambda o: not o.get("turned"))
+
     for o in orphans:
         sid = f"orphan-{o['nsg_id']}/{o['rule']}"
         k = sid.lower()
@@ -133,7 +182,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             if out.get("removed") is True:
                 card = alerts.pop(k, None)
                 note = f"Règle {o['rule']} retirée par Glorfindel (A3)."
-                if card and _pending(card):
+                if card and _pending(card) and card not in alerts.values():   # shared: still said (I5Q)
                     escalations.resolve(card, note=note)
                     report.append({"kind": "orphan", "vm": victims[0], "outcome": "removed", "detail": note})
                     continue
@@ -149,12 +198,18 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus "
                       f"(vise {', '.join(o['ips']) or '*'}). Aucune carte ne porte cette adresse aujourd'hui.")
         steps = [delete]
+        mates = group.get(_resource(o).lower(), []) if o.get("turned") else []
+        if mates:
+            steps = list(dict.fromkeys(_put_back(g["turned"]) for g in mates)) + [
+                f"Ensuite seulement, la watch retire {', '.join(g['rule'] for g in mates)} à son passage "
+                "suivant (mode non_disruptive) — jamais avant : la VM serait ouverte."]
         if out.get("removed") is True:
             reason += " Glorfindel l'a retirée."
         elif out:
             reason += f" Glorfindel n'a pas pu la retirer : {out.get('why') or 'échec'}."
         elif o.get("removable") is not True:
             reason += f" Gardée : {o.get('kept') or 'non retirable'}."
+            reason += "".join(f" Gardée aussi, {g['rule']} : {g['kept']}." for g in mates if g is not o)
         elif not can_write:
             reason += " Droits en lecture seule : Glorfindel ne la retire pas."
         else:
@@ -166,7 +221,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
                          "glorfindel-config.yaml, ou la console) : la watch retire la règle seule.")
         card = escalations.record(
             signal_id=sid,
-            resource_id=(hit["vm_id"] or o["nsg_id"]) if hit else o["nsg_id"],
+            resource_id=_resource(o),
             action="remove_orphan_rule",
             escalation_type="orphan_rule",
             reason=reason,

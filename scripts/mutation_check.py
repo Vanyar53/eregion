@@ -4414,7 +4414,7 @@ MUTANTS += [
      "        entries = [state, *(blocks if isinstance(blocks, list) else [])]\n",
      "        entries = [state]\n"),
     ("M1555", "a deleted VM's outbound rule left: only the inbound name looked for (I7S)", REL,
-     '            names |= {base, f"{base}-out"}\n', "            names |= {base}\n"),
+     '                      for n in (b, f"{b}-out")}\n', "                      for n in (b,)}\n"),       # I4A: both names
 ]
 TESTS.update({"M1550": f"{_I7S} {INVARIANTS}", **{f"M{n}": _I7S for n in range(1551, 1556)}})
 # I7S after its 5.5 review: a gone VM whose state can't be read is never `released` (the

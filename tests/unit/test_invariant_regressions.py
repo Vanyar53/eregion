@@ -2685,7 +2685,7 @@ def test_an_isolation_written_again_after_an_ip_change_leaves_the_new_owner_of_t
 
 
 _NSG_WEB2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Network/networkSecurityGroups/nsg-web-nic"
-_BATCH = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/batch"
+_BATCH_APP2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/batch"
 
 
 def _turned_behind_world(monkeypatch):
@@ -2741,7 +2741,7 @@ def test_our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner(monkeypat
         assert len(out["left_rules"]) == (1 if subnet_nsg == "readable" else 2), out["left_rules"]
         left = next(x for x in out["left_rules"] if x["rule"] == _WEB2_BLOCK)
         assert left["kind"] == "deny" and left["on"] == "batch" and left["to"] == old[0], left
-        assert not {f for f in m._attacker_flows(_BATCH, None) if f[2] == "in"}
+        assert not {f for f in m._attacker_flows(_BATCH_APP2, None) if f[2] == "in"}
         assert not m._attacker_flows(WEB2, None)
     finally:
         shutil.rmtree(m.home, ignore_errors=True)

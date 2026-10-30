@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _deny_applies, _deny_isolates, _ip_scoped, _nic_owns, _rule_name
 from glorfindel.providers.azure.quarantine import OriginalUnknown, _is_quarantine_nsg
-from glorfindel.providers.azure.readers import _held_by_turned, _turned_guard
+from glorfindel.providers.azure.turned import _held_by_turned, _turned_guard
 from glorfindel.providers.azure.sdk import _is_not_found
 from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_id, _same_id
 from glorfindel.response.policy import _ERR_MAX, _first_line

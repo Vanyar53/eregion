@@ -2512,7 +2512,7 @@ class IsolationMachine(RuleBasedStateMachine):
                   if before is not None and n.startswith(("glorfindel-iso-", "glorfindel-block-"))
                   and after["access"].lower() == "allow" and self.fake.nsgs.get(k, {}).get("rules", {}).get(n) == after]
         out: dict = {}
-        self.turned_behind = set()
+        self.turned_behind, self.turned_for = set(), {}
         for k, name in cutting:
             r = self.fake.nsgs[k]["rules"][name]
             side = "destination" if r["direction"].lower() == "inbound" else "source"
@@ -2525,6 +2525,7 @@ class IsolationMachine(RuleBasedStateMachine):
                                 and any(takes_in(t, side, ip) for ip in ips & set(nic["ips"]))):
                             out.setdefault((k, name), set()).add(key(vm))
                             self.turned_behind.add((tk, tn))
+                            self.turned_for.setdefault((k, name), set()).add(tn)
         return out
 
     def _orphan_sweep(self):
@@ -2572,13 +2573,18 @@ class IsolationMachine(RuleBasedStateMachine):
             behind = self._behind_turned(left)
             assert not left - set(behind), (
                 f"U1: live VMs still cut off by orphan rules after the sweep: {sorted(left - set(behind))}")
-            # Said: a card on the VM it cuts, or on its NSG (said before it cut anyone: a
-            # rule said is not said again while it stands), or one that names it.
+            # Said with what holds it (the review of I5Q): a pending card names a rule the
+            # test's journal says turned behind it, and doesn't say first to delete the
+            # deny — that would open the VM. A card said before the turn that never names
+            # it is not enough.
             cards = [e for e in escalations.pending() if e.get("action") == "remove_orphan_rule"]
             for (k, name), vms in behind.items():
-                assert any(key(e.get("resource_id", "")) in vms | {k} or name.lower() in (e.get("reason") or "").lower()
-                           for e in cards), (f"U1: the orphan rule {name} kept behind a rule turned into an "
-                                             f"allow, cutting {sorted(vms)}, not said")
+                turned = {t.lower() for t in self.turned_for.get((k, name), ())}
+                naming = [e for e in cards if any(t in (e.get("reason") or "").lower() for t in turned)]
+                assert naming, (f"U1: the orphan rule {name} kept behind a rule turned into an allow "
+                                f"({sorted(turned)}), cutting {sorted(vms)}: no pending card names it")
+                assert all(not (e.get("suggested_steps") or [""])[0].startswith("az network nsg rule delete")
+                           for e in naming), f"U1: the card of {name}, kept, says first to delete it"
 
     @invariant()
     def orphans_are_reported(self):

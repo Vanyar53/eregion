@@ -111,6 +111,22 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
     def _pending(card: str) -> bool:
         return any(e.get("id") == card for e in escalations.pending())
 
+    # I5Q: a deny kept behind one of our rules turned into an allow is said with that rule,
+    # never with its delete alone. A card said before — in human_only, before the turn, or
+    # shared with another rule of the VM (the store merges by VM: its first reason stays) —
+    # that doesn't name it is replaced: closed, and every rule it spoke for said again
+    # below, the held ones first, so that the card the VM's rules share names the rule.
+    said = {e.get("id"): (e.get("reason") or "").lower() for e in escalations.all_escalations()}
+    for o in orphans:
+        card = alerts.get(f"orphan-{o['nsg_id']}/{o['rule']}".lower())
+        if o.get("turned") and card and o["turned"]["rule"].lower() not in said.get(card, ""):
+            if _pending(card):
+                escalations.resolve(card, note=f"Remplacée : {o['rule']} est gardée derrière "
+                                               f"{o['turned']['rule']}, retournée en autorisation (I5Q).")
+            for k in [k for k, c in alerts.items() if c == card]:
+                del alerts[k]
+    orphans = sorted(orphans, key=lambda o: not o.get("turned"))
+
     for o in orphans:
         sid = f"orphan-{o['nsg_id']}/{o['rule']}"
         k = sid.lower()
@@ -149,6 +165,12 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus "
                       f"(vise {', '.join(o['ips']) or '*'}). Aucune carte ne porte cette adresse aujourd'hui.")
         steps = [delete]
+        if t := o.get("turned"):
+            t_rg, t_name = _parse_nsg_resource_id(t["nsg_id"])
+            steps = [f"Remettre {t['rule']} en refus : az network nsg rule update -g {t_rg} --nsg-name {t_name} "
+                     f"-n {t['rule']} --access Deny",
+                     f"Ensuite seulement, la watch retire {o['rule']} à son passage suivant (mode non_disruptive), "
+                     f"ou : `{delete}` — jamais avant : la VM serait ouverte."]
         if out.get("removed") is True:
             reason += " Glorfindel l'a retirée."
         elif out:

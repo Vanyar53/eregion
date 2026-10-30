@@ -189,6 +189,69 @@ def test_a_card_two_rules_share_stays_open_while_one_stands(monkeypatch):
     assert [e["status"] for e in _orphan_cards()] == ["pending"], _orphan_cards()
 
 
+def _held_world(monkeypatch, out: bool = False):
+    """web blocked on its subnet and isolated there by rules, deleted with its state lost;
+    `batch` at its address, cut off by web's denies (in and out). `out`: the perimeter's
+    outbound rule is the one to turn."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.block_suspicious_ip(ATTACKER, WEB, scope="subnet")["status"] == "blocked"
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = next(n for n in g["rules"] if n.startswith("glorfindel-block-") and n.endswith("-out") is out)
+    _delete(f, WEB)
+    return f, c, g, perimeter, _new_vm_at(f, subnet, "10.0.0.4")
+
+
+@pytest.mark.parametrize("side", ["in", "out"])
+@pytest.mark.parametrize("then", ["human_only", "non_disruptive"])
+def test_a_card_said_before_the_turn_is_replaced_by_one_naming_it(monkeypatch, then, side):
+    """I5Q, the review: the in and out denies said first in human_only, on one card — its
+    only step the delete. Then someone turns a perimeter rule into an allow: the deny on
+    its side is now the last thing keeping the attacker out. The card said before was
+    never written again — it still said to delete it, which would open the VM. It is
+    replaced: the pending card names the turned rule, and says first to put it back as a
+    deny; the delete only after. `out`: the kept deny is the outbound one, listed after
+    the inbound — the card the two share must still name the turned rule."""
+    f, c, g, perimeter, new = _held_world(monkeypatch, out=side == "out")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    assert old["suggested_steps"][0].startswith("az network nsg rule delete")
+    g["rules"][perimeter]["access"] = "Allow"
+    _watch_pass(c, then)
+    assert not {fl for fl in open_flows(_world_view(f), new) if fl[2] == side and fl[3] == ATTACKER}
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"]
+    assert perimeter in card["reason"] and "retournée en autorisation" in card["reason"], card["reason"]
+    assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus") \
+        and "--access Deny" in card["suggested_steps"][0], card["suggested_steps"]
+    assert not any(s.startswith("az network nsg rule delete") for s in card["suggested_steps"])
+    _watch_pass(c, then)                                    # said once: no new card
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+
+
+def test_a_rule_turned_after_the_listing_stops_the_removal(monkeypatch):
+    """I5Q, the review: the pass lists the NSGs, then someone turns the perimeter block
+    before the removal — the guard is played again on the NSGs that govern the VM cut,
+    read by their id just before the delete. One that can't be read keeps the rule."""
+    f, c, g, perimeter, new = _held_world(monkeypatch)
+    (orphan,) = [o for o in c.find_orphan_rules() if not o["rule"].endswith("-out")]
+    assert orphan["removable"] is True and orphan["cut"][0]["governed_by"]
+    g["rules"][perimeter]["access"] = "Allow"
+    out = c.remove_orphan_rule(orphan)
+    assert out["removed"] is False and perimeter in out["why"], out
+    assert orphan["rule"].lower() in {n.lower() for n in g["rules"]}
+    g["rules"][perimeter]["access"] = "Deny"
+    real = f.network.network_security_groups.get
+
+    def refused(*a, **k):
+        raise RuntimeError("(AuthorizationFailed) no read")
+    monkeypatch.setattr(f.network.network_security_groups, "get", refused)
+    out = c.remove_orphan_rule(orphan)
+    assert out["removed"] is False and "non relu" in out["why"], out
+    monkeypatch.setattr(f.network.network_security_groups, "get", real)
+    assert c.remove_orphan_rule(orphan)["removed"] is True
+
+
 def _twin_vnet(f, subnet_nsg):
     """A second VNet whose address space overlaps the hub's, its subnet behind the same NSG."""
     return f.add_subnet("rg-net", "vnet-twin", "app", subnet_nsg)

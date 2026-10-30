@@ -2502,11 +2502,14 @@ def test_the_sequence_the_machine_found_on_i5_after_an_address_reused(monkeypatc
     the perimeter rule at 210 —, its own rule turned into an allow; api isolated by
     rules, deleted, and a new VM given its address and its NSG. The orphan sweep of the
     reassertion took api's isolation off the new VM: the attacker, let through the
-    subnet's NSG by the turned rule, reached it on 22 — the perimeter block behind."""
+    subnet's NSG by the turned rule, reached it on 22 — the perimeter block behind.
+    The reassertion inside step 2 runs in human_only: since RB1, in non_disruptive it
+    puts the turned rule back as a deny, and the state is never reached (the sequence
+    then passed on `main` too — the review of I5Q)."""
     _run(monkeypatch, _edge_net(),
          ("block", API, API, None, 22),
          ("block_turned_then_reasserted", API, API, None, "both", 22, (key(_Q_EDGE_NSG), _Q_API_BLOCK),
-          "non_disruptive"),
+          "human_only"),
          ("address_reused", API, API, None, True, False, "rg-new", "web", _Q_API_NSG, "Linux", False),
          ("reassert", "non_disruptive", None))
 
@@ -2598,10 +2601,12 @@ def test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release(monkeypa
         shutil.rmtree(m.home, ignore_errors=True)
 
 
-def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch):
+@pytest.mark.parametrize("listing", ["read", "refused"])
+def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch, listing):
     """The guard is for another VM at the address: api, alive, its own block rule turned
     into an allow, is released as usual — what that rule lets through is someone's doing
-    on api's own address (I1 judges it so), not an opening of another VM."""
+    on api's own address (I1 judges it so), not an opening of another VM. The NSGs'
+    listing refused: its NIC is read, alive — released too (the review of I5Q)."""
     import shutil
 
     invariant_env(monkeypatch)
@@ -2613,6 +2618,15 @@ def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch):
             assert c.block_suspicious_ip(ATTACKER, API, scope=scope, threat_port=22)["status"] == "blocked"
         g["rules"][_Q_API_BLOCK]["access"] = "Allow"
         assert c.isolate_vm(API)["status"] == "isolated"
+        if listing == "refused":                              # the guard's listing, once
+            real, calls = m.fake.network.network_security_groups.list_all, []
+
+            def refused(*a, **k):
+                calls.append(1)
+                if len(calls) == 1:
+                    raise RuntimeError("(AuthorizationFailed) no list")
+                return real(*a, **k)
+            monkeypatch.setattr(m.fake.network.network_security_groups, "list_all", refused)
         assert c.release_isolation(API)["status"] == "released"
         assert not [n for n in g["rules"] if n.startswith(_Q_API_ISO)]
     finally:
@@ -2640,13 +2654,15 @@ _L2_STEPS = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="L2 outside I5Q: present on origin/main 171a242, for a lot of its own")
-def test_an_altered_quarantine_said_while_the_config_is_unreadable(monkeypatch):
+@pytest.mark.xfail(strict=True, reason="L2 outside I5Q (lot L2Q, #331): present on origin/main 171a242")
+def test_an_altered_quarantine_stays_said_when_its_change_comes_back(monkeypatch):
     """Graine 101 at 500 sequences, after RB1 (I5Q's run), shrunk to 14 steps — written
     with the rules of the machine as `main` has them: it fails there too, glorfindel/ of
-    171a242. A quarantine NSG altered (stripped) and out of sight, then the quarantine
-    switched off and the configuration unreadable, a NIC held by it; the reassertion in
-    non_disruptive neither puts it back nor says it (« L2: the quarantine NSG
-    …/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5] »). Cause
-    not established."""
+    171a242 and b83cb92 (« L2: the quarantine NSG …/nsg-glorfindel-quarantine-westeurope
+    was altered, holds […/api-nic-5] »). The configuration is readable at every step.
+    Cause (the review of I5Q, reassert_quarantine._report_altered_quarantines): the write
+    of quarantine_alerts.json failed (a full disk) after a forensic access changed the
+    NSG's diff, so the file kept the former change's signal id; once the access is taken
+    off, the diff comes back to that change, read as « said, or acknowledged » — no card,
+    the NSG still stripped. Lot L2Q."""
     _run(monkeypatch, _L2_NET, *_L2_STEPS)

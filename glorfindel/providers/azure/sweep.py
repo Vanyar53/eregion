@@ -5,7 +5,9 @@ The NSG listing the watch's pass shares, and one quarantine NSG read by its id (
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _nic_hash, _nic_owns, _rule_name
-from glorfindel.providers.azure.readers import _behind_turned, _turned_allows
+from glorfindel.providers.azure.turned import (
+    _chain, _governed_by, _turned_allows, _turned_behind, _turned_still, _turned_text,
+)
 from glorfindel.providers.azure.sdk import _enum_text, _is_not_found
 from glorfindel.response.ids import (
     _parse_nsg_resource_id, _parse_vm_resource_id, _same_id, _subscription_of,
@@ -369,15 +371,16 @@ class SweepMixin:
                           for ip in ips if ip in holders]
                 cut = [h for h in now_on if nic_nsg.get(h["nic_id"].rstrip("/").lower()) == nsg_key
                        or nic_subnets.get(h["nic_id"].rstrip("/").lower(), set()) & subnets]
-                kept = ""
+                _governed_by(cut, nic_nsg, nic_subnets, listing)
+                kept, t = "", None
                 if not cut:
                     kept = "ne coupe aucune carte vivante derrière ce NSG"
                 elif unread:
                     kept = unread
                 elif why := self._held_reason(cut, held):
                     kept = why
-                elif why := _behind_turned(cut, side, turned, nic_nsg, nic_subnets):
-                    kept = why
+                elif t := _turned_behind(cut, side, turned, _chain(nic_nsg, nic_subnets)):
+                    kept = _turned_text(t)
                 elif attached - listed:
                     kept = "une carte attachée à ce NSG manque à la liste des cartes (droits de lecture ?)"
                 elif mark in state_nics and gone.get(mark):
@@ -385,7 +388,8 @@ class SweepMixin:
                 elif _subscription_of(nsg.id).lower() != (self._subscription_id or "").lower():
                     kept = "NSG d'un autre abonnement"
                 orphans.append({"nsg_id": nsg.id, "rule": _rule_name(r), "ips": ips, "now_on": now_on,
-                                "cut": cut, "removable": not kept, "kept": kept})
+                                "cut": cut, "removable": not kept, "kept": kept, "side": side,
+                                "turned": {"nsg_id": t[0], "rule": t[1]} if t else None})
         return orphans
 
     @staticmethod
@@ -465,9 +469,9 @@ class SweepMixin:
             if why is not None:
                 return {"removed": False, "why": ("une isolation ou un blocage enregistré depuis nomme sa carte"
                                                   if why == "alive" else why)}
-        why = self._held_reason(orphan.get("cut") or [], self._held_vms())
+        why = self._held_reason(orphan.get("cut") or [], self._held_vms()) or _turned_still(self._network, orphan)
         if why:
-            return {"removed": False, "why": why}
+            return {"removed": False, "why": why}       # I5Q: a rule turned since the listing too
         from glorfindel.response.ids import _parse_nsg_resource_id
         nsg_rg, nsg_name = _parse_nsg_resource_id(orphan["nsg_id"])
         err = self._delete_rule(nsg_rg, nsg_name, orphan["rule"])

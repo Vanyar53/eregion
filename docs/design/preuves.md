@@ -1699,7 +1699,7 @@ le balayage des orphelines retirait l'isolation d'`api`, qui coupait la nouvelle
 était le dernier à tenir l'attaquant dehors : sur le NSG du subnet, notre règle retournée le laisse
 passer avant le blocage de périmètre, et le NSG de la carte l'autorise sur 22. Le balayage ne lisait
 que nos refus ; une de nos règles devenue autorisation ne comptait pas. Correctif
-(`readers.py`, `_turned_allows`, `_behind_turned`) : un refus d'une carte disparue reste, « Gardée :
+(`providers/azure/turned.py`, `_turned_allows`, `_turned_behind`) : un refus d'une carte disparue reste, « Gardée :
 notre règle … retournée en autorisation … », quand une de nos règles (`glorfindel-iso-*`,
 `glorfindel-block-*`) passée en allow, du même côté, visant l'adresse de la carte qu'il coupe ou
 toutes (`*`, un préfixe qui la contient, une étiquette — lue comme la contenant), se tient sur un
@@ -1711,7 +1711,7 @@ libère le passage suivant, qui retire le refus. La VM reste coupée en attendan
 hors faute, hors `human_only` plus souvent) rend l'état courant ; à 500 séquences, la graine 322 y a
 trouvé la levée : « I4: an operation on …/rg-edge/…/api opened flows of …/rg-app2/…/api ». La
 levée de la VM supprimée défait les placements de son état, ou cherche ses noms sur tous les NSG
-(I7S) : elle retirait le même refus. Correctif (`release.py` ; `readers.py`, `_held_by_turned` sur
+(I7S) : elle retirait le même refus. Correctif (`release.py` ; `turned.py`, `_held_by_turned` sur
 les placements, `_turned_guard` dans `_gone_vm_rules`) : le refus reste, `release_partial`, la
 règle retournée nommée ; la levée suivante le retire une fois celle-ci remise. Une VM vivante qui
 tient elle-même l'adresse n'est jamais retenue par sa propre règle retournée (ce qu'elle laisse
@@ -1721,8 +1721,15 @@ supprimée retire avec ses refus ses propres règles retournées : rien n'y atte
 **L'oracle.** I5 n'a pas bougé. La vivacité d'U1 (après le balayage en `non_disruptive`, plus
 aucune VM coupée par une orpheline) contredisait I5 dans cet état : une orpheline gardée derrière
 une règle retournée en est exemptée, lue du journal du test (`tampered`, la règle encore telle que
-quelqu'un l'a laissée), jamais des cartes du code, et elle doit être dite (une carte en attente sur
-la VM qu'elle coupe, sur son NSG, ou qui la nomme). Au démontage, l'opérateur remet les règles
+quelqu'un l'a laissée), jamais des cartes du code, et elle doit être dite avec ce qui la retient :
+une carte en attente nomme une règle que le journal dit retournée derrière elle, et ne dit pas d'abord
+de retirer le refus. **L'exemption est volontairement prudente, plus large que le seul conflit avec
+I5** : le code garde le refus dès qu'une de nos règles retournée, du même côté, vise l'adresse sur un
+NSG de la carte — sans évaluer si une sonde passerait (une règle retournée sur un autre port, un NSG
+de carte sans autorisation : le retrait n'ouvrirait rien, le refus reste quand même, dit), et
+l'oracle l'exempte de même. Borner l'exemption aux retraits qui ouvriraient vraiment un flux absent
+de la conception de la VM demanderait au code d'évaluer les NSG comme Azure ; une VM coupée à tort,
+dite, plutôt qu'ouverte. Au démontage, l'opérateur remet les règles
 retournées que de tels refus retiennent, comme la carte le demande, avant les levées ; I7 et U1
 restent entiers ensuite. Séquences figées : `test_the_sequence_the_machine_found_on_i5_after_an_address_reused`
 (la graine réduite), `test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes` (la règle de
@@ -1741,14 +1748,34 @@ le refus restait, plus dit. Correctif (`orphans.py`) : une carte qu'une orphelin
 partage reste ouverte. Test `test_a_card_two_rules_share_stays_open_while_one_stands` ; M1737
 attrapé.
 
+**La relecture d'I5Q.** La séquence figée de la graine ne prouvait plus rien sur `main` : depuis
+RB1, la réaffirmation lancée dans `block_turned_then_reasserted` en `non_disruptive` remet la règle
+retournée en refus, et l'état fautif n'est jamais atteint. L'étape 2 tourne maintenant en
+`human_only` : la séquence tombe sur I5 avec `glorfindel/` de `56fc9f0`, passe sur la branche. Une
+carte dite avant le retournement (en `human_only`, ou partagée avec l'autre refus de la VM) n'était
+jamais réécrite : elle disait encore de retirer le refus (`az network nsg rule delete`), seul pas
+proposé, ce qui ouvrirait la VM. Correctif (`orphans.py`) : la carte d'un refus gardé qui ne nomme
+pas la règle retournée est fermée et réécrite, les refus qu'elle couvrait dits de nouveau, les gardés
+d'abord ; son premier pas dit de remettre la règle en refus (`az network nsg rule update …
+--access Deny`), le retrait seulement après. La liste des NSG peut dater d'un passage : juste avant
+le retrait, `remove_orphan_rule` relit par leur id les NSG qui gouvernent la carte coupée (le sien
+et celui du subnet) et rejoue la garde ; une lecture refusée garde la règle. La levée d'une VM ne
+consulte plus la garde pour un placement dont la carte vit encore quand la liste des NSG est
+refusée : sa propre adresse, rien d'une autre VM n'y attend. Tests
+`test_a_card_said_before_the_turn_is_replaced_by_one_naming_it` (le second passage en `human_only`
+ou en `non_disruptive`, la carte partagée par les deux refus), `test_a_rule_turned_after_the_listing_stops_the_removal`,
+`test_a_live_vms_release_is_not_held_by_its_own_turned_rule[refused]` ; mutants M1738–M1743.
+
 **Trouvé en chemin, hors d'I5Q : L2.** La même graine tombe ensuite sur L2 (« the quarantine NSG
 …/rg-sec/…/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5]; the
 reassertion neither put it back nor said so ») : réduite à 14 étapes écrites avec les règles de
 `main`, elle échoue de même avec `glorfindel/` de `171a242` (RB1) et de `b83cb92` (avant RB1).
-La carte `restore_quarantine_nsg` de ce NSG se ferme au passage où la configuration devient
-illisible (la quarantaine éteinte), le NSG toujours modifié et tenant une carte. Cause non établie ;
-figée en `xfail` strict (`test_an_altered_quarantine_said_while_the_config_is_unreadable`) pour un
-lot à part. La graine 101 à 500 reste rouge sur L2 jusqu'à lui.
+La configuration est lisible à chaque étape. Cause (établie par la relecture d'I5Q,
+`reassert_quarantine._report_altered_quarantines`) : un accès forensique change le diff du NSG, la
+carte du nouveau changement est écrite mais pas `quarantine_alerts.json` (disque plein), qui garde
+l'identifiant de l'ancien ; l'accès retiré, le diff revient à l'ancien changement, lu « déjà dit ou
+acquitté » — aucune carte, le NSG toujours vidé. Figée en `xfail` strict
+(`test_an_altered_quarantine_stays_said_when_its_change_comes_back`) pour le lot L2Q (#331). La graine 101 à 500 reste rouge sur L2 jusqu'à lui.
 
 **Mesures d'I5Q.** Avant la reprise de RB1 : invariants à 500 séquences sur les graines 101, 202,
 322, 1, 42 et 777, puis 2 000 sur 101, 322 et 42, verts. Sur le code final (RB1 et la 0.4.6 repris) :

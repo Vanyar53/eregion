@@ -241,3 +241,12 @@ def test_the_arm_reader_never_sends_a_query_a_fragment_or_an_escape():
         with pytest.raises(ValueError):
             reader.arm_get(path, "2021-04-01")
     assert asked == []
+
+
+def test_the_request_pulled_is_the_one_asked_for():
+    """DG-b review, point 4: H0 answers REQUEST=<id> with another request — nothing is asked, nothing sent."""
+    asked = []
+    from eregion_core.exercise_plan import load_catalog
+    out = xr.confirm(xr.read(_doc()), load_catalog(), ask=lambda p: asked.append(p) or "y",
+                     say=lambda *_: None, expect="r-20261030T075200Z-ffffff")
+    assert out is None and asked == []

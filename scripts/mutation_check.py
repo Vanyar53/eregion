@@ -4371,6 +4371,15 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_exercise_request.py" for mid in ("M2095", "M2096", "M2097")})
 
+MUTANTS += [
+    ("M2098", "the operator's command sends another request than the one it asked H0 for (DG-b review)", XRQ,
+     "    if expect is not None and request.id != expect:\n", "    if False:\n"),
+    ("M2099", "Orodruin runs a file that holds another request than its name (DG-b review)", XRN,
+     "    if req.id != path.stem:\n", "    if False:\n"),
+]
+TESTS.update({"M2098": "tests/unit/test_exercise_request.py tests/unit/test_makefile_exercise.py",
+              "M2099": "tests/unit/test_exercise_runner.py"})
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.

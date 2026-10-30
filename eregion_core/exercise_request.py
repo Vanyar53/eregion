@@ -271,11 +271,15 @@ def shown(text) -> str:
     return "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in str(text))
 
 
-def confirm(request: Request, catalog: dict, *, ask=input, say=print) -> dict | None:
+def confirm(request: Request, catalog: dict, *, ask=input, say=print, expect: str | None = None) -> dict | None:
     """Show the request wire by wire, and have the operator type the name of each wire's
     target that asks for one. Returns the names typed (``read_typed``'s shape), or None when
     the operator stops or types another name: nothing is sent. The name is compared here to
     the target the request names, to fail early; Orodruin compares it to the name it reads."""
+    if expect is not None and request.id != expect:
+        # DG-b review: what was pulled is the request asked for, or nothing is sent.
+        say(f"✗ the request pulled is {shown(request.id)}, not {shown(expect)} — nothing is sent.")
+        return None
     say(f"Request {shown(request.id)}, written {shown(request.at)} — {len(request.wires)} wire(s), "
         "one after the other:")
     for w in request.wires:
@@ -314,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("request")
     c.add_argument("typed")
     c.add_argument("--catalog", default=None)
+    c.add_argument("--expect", required=True, help="the request id asked for (REQUEST=)")
     k = sub.add_parser("check-id")
     k.add_argument("id")
     args = ap.parse_args(argv)
@@ -328,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     except RequestRefused as e:
         print(f"✗ request refused: {e} — nothing is sent", file=sys.stderr)
         return 1
-    typed = confirm(request, load_catalog(args.catalog))
+    typed = confirm(request, load_catalog(args.catalog), expect=args.expect)
     if typed is None:
         return 1
     fd = os.open(args.typed, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

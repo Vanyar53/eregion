@@ -174,3 +174,14 @@ def test_h0_is_reached_only_once_its_host_key_is_checked():
     assert "glorfindel-host-known" in head
     recipe = MAKEFILE.split(head, 1)[1].split("\n\n", 1)[0]
     assert '$(HOST_SSH) "cat .eregion/console/requests/$$id.json"' in recipe
+
+
+@needs_make
+def test_another_request_served_under_this_id_sends_nothing(fake_hosts):
+    """DG-b review, point 4: the content's id is the one asked for, or nothing goes to Orodruin."""
+    bindir, h0, oro, calls = fake_hosts
+    other = {**REQUEST, "id": "r-20261030T075200Z-ffffff"}
+    (h0 / f"{RID}.json").write_text(json.dumps(other))
+    res = _make(fake_hosts, f"REQUEST={RID}", stdin="vm-celebrimbor-gondolin\ny\n")
+    assert res.returncode != 0 and "not r-20261030T075200Z-a1b2c3" in res.stdout
+    assert [c["cmd"] for c in calls()] == ["ssh"] and not any(oro.iterdir())

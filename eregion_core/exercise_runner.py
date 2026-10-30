@@ -385,6 +385,10 @@ def main(argv: list[str] | None = None) -> int:
     except xr.RequestRefused as e:
         print(f"✗ request refused — unreadable: {e}. Nothing runs.", file=sys.stderr)
         return 1
+    if req.id != path.stem:
+        # DG-b review: the file names the request carried; its content is that one, or nothing runs.
+        print(f"✗ request refused — {path.name} holds {xr.shown(req.id)}. Nothing runs.", file=sys.stderr)
+        return 1
     status = Runner().run(req, typed)
     return 0 if status.state == "finished" and all(w.state == "done" for w in status.wires) else 1
 

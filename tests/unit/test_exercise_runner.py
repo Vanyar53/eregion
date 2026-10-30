@@ -293,3 +293,12 @@ def test_orodruin_publishes_its_verdict_and_the_requests_status_to_the_channel(t
     assert c.puts[0] == "orodruin/contract.json" and name in c.puts
     assert json.loads(c.blobs[name][0])["state"] == "finished"
     assert xr.read_status(json.loads(c.blobs[name][0]))
+
+
+def test_main_refuses_a_file_that_holds_another_request(tmp_path, capsys):
+    """DG-b review, point 4: the file carried is named by its request; another inside, nothing runs."""
+    p = tmp_path / "r-20261030T075200Z-a1b2c3.json"
+    p.write_text(json.dumps({"id": "r-20261030T075200Z-ffffff", "at": T0.isoformat(),
+                             "wires": [{"experiment": "T1110.001", "target": GONDOLIN, "rank": 1}]}))
+    assert er.main([str(p)]) == 1
+    assert "holds r-20261030T075200Z-ffffff" in capsys.readouterr().err

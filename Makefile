@@ -922,7 +922,7 @@ orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known)
 	   test -n "$(HOST_IP)" || { echo "✗ Pas de H0 (HOST_IP) : make glorfindel-host-up, ou REQUEST_FROM=local" >&2; exit 1; }; \
 	   $(HOST_SSH) "cat .eregion/console/requests/$$id.json" > "$$d/$$id.json"; \
 	 fi || { echo "✗ la demande $$id ne se lit pas sur l'hôte de la console : rien n'est envoyé" >&2; exit 1; }; \
-	 $(PYTHON) -m eregion_core.exercise_request confirm "$$d/$$id.json" "$$d/$$id.typed.json" || exit 1; \
+	 $(PYTHON) -m eregion_core.exercise_request confirm "$$d/$$id.json" "$$d/$$id.typed.json" --expect "$$id" || exit 1; \
 	 if [ -n "$(DRY_RUN)" ]; then \
 	   echo "DRY_RUN : rien n'est envoyé. Sans lui :"; \
 	   echo "  scp $$id.json $$id.typed.json → $(ORO_USER)@<orodruin>:requests/"; \

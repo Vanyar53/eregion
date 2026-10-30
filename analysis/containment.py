@@ -461,9 +461,9 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
          warn=None) -> Containment:
     """The containment of a campaign, from its files: each executed technique run with
     Glorfindel's decision as the campaign report attaches it (``run_decision``), and the
-    Gothmog runs of the campaign — named (``fault_runs``), or whose fault overlaps the campaign
-    (from its first start to its last end). ``cards``: Glorfindel's cards, else read from its
-    state (read only)."""
+    Gothmog runs of the campaign — named (``fault_runs``), or on one of its VMs within the hour
+    around it (``around``). ``cards``: Glorfindel's cards, else read from its state (read
+    only)."""
     from analysis import campaign_report as cr
     from eregion_core.exercise import last_moment, window_refusal
 
@@ -561,7 +561,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("campaign_dir")
     ap.add_argument("--runs-dir", default=None)
     ap.add_argument("--fault-run", action="append", default=[],
-                    help="un run de Gothmog de la campagne (répétable) ; sinon, ceux qui la chevauchent")
+                    help="un run de Gothmog à rattacher (répétable) ; en plus de ceux sur une de ses VM dans l'heure qui l'entoure")
     ap.add_argument("--json", action="store_true", help="les chiffres et chaque incident, en JSON")
     args = ap.parse_args(argv)
     cdir = Path(args.campaign_dir)

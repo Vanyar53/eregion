@@ -65,8 +65,14 @@ MAX_LOOP = 3 * 1024 * 1024
 GUID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\w|\.\d)")
 DOC_NETS = tuple(ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"))
-HOST = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|app|cloud|fr|eu|internal|local)\b", re.I)
-ALLOWED_HOSTS = ("github.com", "vanyar53.github.io", "example.com", "example.org", "example.net")
+# A host: any dotted name ending in a word of letters (.com, .me, .ai, .de, .sh…) — but a file of
+# the repository (its extension) is no host.
+HOST = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.I)
+FILE_EXTENSIONS = frozenset({"md", "py", "pyc", "json", "jsonl", "yaml", "yml", "png", "webp", "gif", "svg",
+                             "html", "css", "js", "txt", "toml", "lock", "cfg", "ini", "tf", "tfvars", "hcl",
+                             "mp4", "webm", "log", "patch", "diff", "example"})
+ALLOWED_HOSTS = ("github.com", "vanyar53.github.io", "example.com", "example.org", "example.net",
+                 "microsoft.compute")   # the provider of a VM's resource id, no host
 BENCH_NAME = re.compile(r"(?:rg-celebrimbor[a-z0-9-]*|vm-celebrimbor-[a-z0-9-]+|vm-sentinel)")
 
 
@@ -81,7 +87,8 @@ def identifiers(text: str) -> list[str]:
             continue
         if not any(ip in n for n in DOC_NETS):
             found.append(a)
-    found += [h for h in HOST.findall(text) if h.lower() not in ALLOWED_HOSTS]
+    found += [h for h in HOST.findall(text)
+              if h.lower() not in ALLOWED_HOSTS and h.rsplit(".", 1)[-1].lower() not in FILE_EXTENSIONS]
     return found
 
 

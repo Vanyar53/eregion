@@ -6133,7 +6133,12 @@ MUTANTS += [
      'GUID = re.compile(r"\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")',
      'GUID = re.compile(r"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b")'),
 ]
-TESTS.update({mid: "tests/unit/test_console_shots.py" for mid in ("M2207", "M2209")})
+MUTANTS += [
+    ("M2208", "a host under .me, .ai, .co or a country passes (DOC1 review)", SHOTS,
+     'HOST = re.compile(r"\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}\\b", re.I)',
+     'HOST = re.compile(r"\\b(?:[a-z0-9-]+\\.)+(?:com|net|org|io|dev|app|cloud|fr|eu|internal|local)\\b", re.I)'),
+]
+TESTS.update({mid: "tests/unit/test_console_shots.py" for mid in ("M2207", "M2208", "M2209")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

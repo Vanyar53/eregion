@@ -64,6 +64,19 @@ def test_a_sample_with_a_real_identifier_is_refused(path, value, said):
     assert reason and said in reason
 
 
+@pytest.mark.parametrize("host", ["h0.example.me", "console.team.ai", "bench.acme.co", "eregion.my-company.de",
+                                  "watch.internal.sh", "glorfindel.contoso.onmicrosoft.com", "H0.Example.ME"])
+def test_a_host_under_any_domain_is_an_identifier(host):
+    assert cs.identifiers(f"the console of {host}, reached at night") == [host]
+
+
+def test_the_files_of_the_repository_are_no_hosts():
+    text = ("docs/dagorlad.md, scripts/console_shots.py, shots.json, glorfindel-config.yaml, ci.yml, board.png, "
+            "loop.webp, index.html, notes.txt, pyproject.toml, uv.lock, console.js, console.css, main.tf, tour.mp4, "
+            "tour.webm, debug.jsonl")
+    assert cs.identifiers(text) == []
+
+
 def test_the_documentation_addresses_and_the_zero_guid_are_allowed():
     doc = _with(["runs", 0, "note"], "from 192.0.2.10, 198.51.100.7 and 203.0.113.250, "
                                      "subscription 00000000-0000-0000-0000-000000000000")

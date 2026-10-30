@@ -5000,8 +5000,8 @@ _I5Q_RACE = "tests/unit/test_orphan_sweep.py::test_a_rule_turned_after_the_listi
 MUTANTS += [
     ("M1738", "a card said before the turn is kept: it still says to delete the deny that holds the VM shut (I5Q)",
      "glorfindel/orphans.py",
-     '        if o.get("turned") and card and not all(_names(said.get(card, ""), g) for g in group[_resource(o).lower()]):\n',
-     '        if False and o.get("turned") and card:\n'),
+     '            if not all(_names(said.get(card, ""), g) for g in group[res]):\n',
+     '            if False:\n'),
     ("M1739", "the card of a kept deny says to delete it, its only step (I5Q)", "glorfindel/orphans.py",
      '        mates = group.get(_resource(o).lower(), []) if o.get("turned") else []\n',
      '        mates = []\n'),

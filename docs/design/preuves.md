@@ -1793,6 +1793,17 @@ moved]`, M1747). L'oracle d'U1 exige que la carte qui nomme la règle retournée
 le refus coupe, ou sur son NSG. Après la reprise d'I4A, une seule règle dit si une adresse est
 visée : `nsg._takes_in` d'I4A (plus précis sur les valeurs entourées d'espaces) remplace celui
 d'I5Q, et le `takes_in` de l'oracle s'y aligne ; M1732 le suit.
+La graine 322 à 2 000, après I4A, a trouvé trois échecs. Un est d'I5Q : la levée d'une VM vivante
+dont l'IP a changé garde son refus sur l'ancienne adresse, que la règle composée d'I4A donne à une
+nouvelle VM, une règle retournée derrière (`release_partial`, voulu) ; l'opérateur du démontage ne
+remettait que ce que retiennent les refus des VM supprimées — il remet maintenant ce que retient tout
+refus des nôtres sur l'adresse d'une autre carte (`_cutting_others`), puis I7 tient
+(`test_a_live_vm_whose_deny_waits_before_a_turned_rule_is_released_once_it_is_put_back`). Les deux
+autres échouent aussi avec `glorfindel/` de `20cb5b5` (I4A), de la famille qu'I4A a laissée ouverte
+(une IP changée) : une isolation réaffirmée sous ses noms quitte l'ancienne adresse où attend une règle
+retournée (I5), et une levée interrompue ouvre la nouvelle VM (I4) — figées en `xfail` strict
+(`test_a_reasserted_isolation_moves_off_the_old_address_a_turned_rule_waits_behind`,
+`test_an_interrupted_release_after_an_ip_change_opens_the_new_owner`), pour la suite d'I4A.
 
 **Trouvé en chemin, hors d'I5Q : L2.** La même graine tombe ensuite sur L2 (« the quarantine NSG
 …/rg-sec/…/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5]; the

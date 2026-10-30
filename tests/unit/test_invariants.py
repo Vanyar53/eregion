@@ -2510,11 +2510,29 @@ class IsolationMachine(RuleBasedStateMachine):
         return out
 
     def _operator_puts_turned_back(self):
-        """I5Q: the rules turned into an allow that a deleted VM's deny holds back, put
-        back as they were by the operator (the card names them)."""
-        self._behind_turned(self._cutting_orphans())
+        """I5Q: the rules turned into an allow that a deny of ours holds back — a deleted
+        VM's, or a live VM's aimed at the old address another VM took (an IP changed:
+        its release keeps the deny, `release_partial`, the turned rule named) —, put back
+        as they were by the operator, as the card or the release asks."""
+        self._behind_turned(self._cutting_orphans() | self._cutting_others())
         for k, n in sorted(self.turned_behind):
             self.fake.nsgs[k]["rules"][n] = dict(self.tampered[(k, n)][0])
+
+    def _cutting_others(self) -> set:
+        """(NSG, rule) of our denies named for one NIC, aimed at an address another live
+        NIC holds now, on an NSG that governs it — the test's records, the convention."""
+        out = set()
+        for k, g in self.fake.nsgs.items():
+            for name, r in g["rules"].items():
+                if not name.startswith(("glorfindel-iso-", "glorfindel-block-")) or r["access"].lower() != "deny":
+                    continue
+                side = "destination" if r["direction"].lower() == "inbound" else "source"
+                ips = set([r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or []))
+                for n in self.fake.nics.values():
+                    governs = k in {key(x) for x in (n["nsg"], self.fake.subnets[key(n["subnet"])]["nsg"]) if x}
+                    if governs and ips & set(n["ips"]) and _nic_hash(n["id"]) not in name:
+                        out.add((k, name))
+        return out
 
     def _behind_turned(self, cutting: set) -> dict:
         """I5Q: the orphan rules (of _cutting_orphans) that hold back one of our rules

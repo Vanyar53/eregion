@@ -1518,3 +1518,31 @@ def test_only_a_whole_block_supersedes_a_cut_off_unblock():
     reassert_active(c, _HUMAN)
     c.verify_block_ip.assert_called()
     assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+
+
+def test_a_block_written_again_after_an_acknowledged_drift_is_said_again():
+    """L1Q (#363): a merged block's perimeter pair gone, said, the card acknowledged — said
+    for its episode. Then the IP blocked again on the VM, whole: a new block, a new episode,
+    as a re-isolation writes its state anew. The drift mark used to survive the merge: the
+    pair, still named and still gone, read « already said » under rules rewritten since — no
+    card. A partial block written again keeps the episode (the entry is held: nothing read)."""
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    pair = {"nsg": "rg/nsg", "nsg_scope": "subnet", "rule": "glorfindel-block-203-0-113-9", "scoped": False}
+    _save_block_state("vm", _IP, _RID, **pair, placements=placed, threat_port=22)
+    gone = {"verified": True, "held_missing": ["glorfindel-block-203-0-113-9"]}
+    c = _connector(verify_blk=gone)
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    (card,) = escalations.pending()
+    escalations.resolve(card["id"])                                   # the operator acknowledges
+    assert reassert_active(c, _HUMAN) == [] and escalations.pending() == []     # said, its episode
+    _save_block_state("vm", _IP, _RID, placements=placed, partial=True, threat_port=22)
+    (entry,) = _load_block_entries("vm")
+    assert entry.get("drift_alerted_at")                              # held: its episode kept
+    _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)       # blocked again, whole
+    (entry,) = _load_block_entries("vm")
+    assert not {"drift_alerted_at", "drift_said"} & set(entry)
+    assert entry["scoped"] is False                                   # the pair still named
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    (card,) = escalations.pending()
+    assert "disparu" in card["reason"] and _IP in card["reason"]
+    c.block_suspicious_ip.assert_not_called()                         # human_only: said, never written

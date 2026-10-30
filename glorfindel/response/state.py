@@ -425,6 +425,12 @@ def _save_block_state(
         prev["partial"] = partial
         for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):
             prev.pop(mark, None)
+        # And the disappearance said before it: a new block, a new episode — as a re-isolation
+        # writes its state anew. Kept, the drift mark of a card the operator had acknowledged
+        # silenced what the new entry still names and Azure no longer has (a merged perimeter
+        # lifted by another VM's unblock), its rules rewritten since (L1Q, #363).
+        for mark in () if partial else ("drift_alerted_at", "drift_said"):
+            prev.pop(mark, None)
         if threat_port is not None:
             prev["threat_port"] = threat_port
     _write_state(_BLOCK_STATE_DIR, vm_name, resource_id, entries)

@@ -4794,23 +4794,45 @@ _L1_SEED42_STEPS = [
     ('block_perimeter', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', ('nic.get', 'always-429'), False),
     ('perimeter_lifted_beside_a_block', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None),
     ('block_then_isolate', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, 22, None, True, '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', False),
-    ('quarantine_change_comes_back', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, False, False, 'protocol', ('/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'glorfindel-quarantine-deny-in'), 'human_only'),
+    # The rule's draws after its first pass (L1Q): the machine's sequence ended on the failure
+    # there; these are the simplest that carry on (nothing out of sight, a pass under a full disk
+    # from its first write, the configuration readable again).
+    ('quarantine_change_comes_back', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, False, False, 'protocol', ('/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'glorfindel-quarantine-deny-in'), 'human_only',
+     'no', 'human_only', (1, 'from-full'), True, 'human_only'),
 ]
 
 
 # I4E: the machine at 2 000 (seed 42), once I4E's rule shifted the draws — shrunk to 25 rules, no step
 # of an older version's state. The same failure on `main` 91dae76, its code and its machine: an older
-# defect of the block, the perimeter and the quarantine's reassertion, routed to a follow-up lot (#363).
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#363: L1, a block vanished under a quarantine change, neither put back nor said")
+# defect, of the block's entry written again (L1Q, #363) — not of the perimeter nor of the quarantine.
 def test_a_block_beside_a_lifted_perimeter_vanishes_under_a_quarantine_change(monkeypatch):
-    """I4E's machine at 2 000 (seed 42), shrunk: Db--01 blocked, its perimeter lifted beside the block,
-    then blocked and isolated, the quarantine NSG stripped, and its change coming back
-    (`quarantine_change_comes_back`) — « L1: the block on …/Db--01 vanished from Azure; the
-    reassertion neither put it back nor said so ». It fails on `main` 91dae76 too (its code and its
-    machine, replayed step by step): not I4E's family, routed to a follow-up lot (#363). Strict: once
-    fixed, this fails, and the mark goes."""
+    """I4E's machine at 2 000 (seed 42), shrunk: Db--01 blocked on its subnet and for itself (one
+    merged entry), its perimeter rule lifted by another VM's unblock (the same rule, one per IP and
+    subnet) — said, the card acknowledged by the operator —, then Db--01 blocked again and isolated,
+    and a change to the quarantine that triggers a pass in human_only — « L1: the block on …/Db--01
+    vanished from Azure; the reassertion neither put it back nor said so ». The block written again
+    kept the drift mark of the acknowledged card: the pair, still named and still gone, read
+    « already said » under rules rewritten since (their priorities moved). The quarantine's change
+    only brings the pass (L1Q: test_a_block_written_again_after_an_acknowledged_drift_is_said_again
+    has it without one)."""
     _run(monkeypatch, _L1_SEED42_NET, *_L1_SEED42_STEPS)
+
+
+def test_a_block_written_again_after_an_acknowledged_drift_is_said_again(monkeypatch):
+    """L1Q (#363), seed 42's sequence reduced to its cause, no quarantine: Db--01 blocked on its
+    subnet and for itself (one merged entry); web1, on the same subnet, blocked there and unblocked
+    — the perimeter rule, shared, lifted beside Db--01's block; the reassertion says Db--01's pair
+    gone, the operator acknowledges it; Db--01 blocked again, whole — its rules rewritten. The
+    next pass, in human_only, said nothing: the entry kept the drift mark of the card acknowledged,
+    and the pair it still names, gone, read « already said »."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block_perimeter", DB, DB, None, False),
+         ("block", DB, DB, None, 22),
+         ("perimeter_lifted_beside_a_block", WEB1, WEB1, None, DB, False, DB, 22),
+         ("reassert", "human_only", None),
+         ("operator_acknowledges", 0),
+         ("block", DB, DB, None, 22),
+         ("reassert", "human_only", None))
 
 
 _I3_SEED1999_NET = {

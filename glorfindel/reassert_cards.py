@@ -83,16 +83,16 @@ def _last_word(prefix: str, sid: str) -> bool:
             and last.get("status") == "resolved" and not last.get("resolution"))
 
 
-# Disappearances seen over while their mark could not be taken off (a full disk), by
-# (state key, ip): the next one is a new episode, said (L2C, review). This process only —
-# what can't be written is known nowhere else.
-_EPISODE_OVER: set[tuple[str, str]] = set()
+# Disappearances this process saw open — its mark written after its card —, by (state key,
+# ip). Only these are silenced by their mark (L2C, second review): one seen over, its mark
+# kept (a full disk), or one from before a restart, is said again — once, then silent.
+_EPISODE_OPEN: set[tuple[str, str]] = set()
 
 
 def episode(key: str, ip: str, over: bool) -> None:
-    """Before taking a drift mark off (`over`), or once one is written: what the next
-    disappearance is, whatever the write of the mark did."""
-    (_EPISODE_OVER.add if over else _EPISODE_OVER.discard)((key.lower(), ip))
+    """Once a drift mark is written after its card: open. Seen over (its rules read back),
+    before any write of the pass: no longer — whatever the write of the mark does."""
+    (_EPISODE_OPEN.discard if over else _EPISODE_OPEN.add)((key.lower(), ip))
 
 
 def unrecorded(vm: str, exc: Exception, ip: str = "") -> dict:
@@ -120,15 +120,15 @@ def drift_over(key: str, ip: str = "") -> None:
         if state is not None:
             state.pop("drift_alerted_at", None)
             _save_isolation_state(key, state)
-    episode(key, ip, over=False)
 
 
 def drift_said(key: str, ip: str, sid: str) -> bool:
-    """A disappearance whose mark stands is already said only while its episode is not
-    seen over, and the latest card of its alert (`sid`, exact) is pending or closed by the
-    operator — `_alert`'s closures carry a note. Read on the mark alone, acknowledged once
-    and held again with the mark kept, the VM's next disappearance went unsaid."""
-    if (key.lower(), ip) in _EPISODE_OVER:
+    """A disappearance whose mark stands is already said only if this process saw it open
+    (not seen over since, nor from before a restart), and the latest card of its alert
+    (`sid`, exact) is pending or closed by the operator — `_alert`'s closures carry a note.
+    Read on the mark alone, acknowledged once and held again with the mark kept, the VM's
+    next disappearance went unsaid; after a restart, the memory empty, too (L2C, review 2)."""
+    if (key.lower(), ip) not in _EPISODE_OPEN:
         return False
     last = next((e for e in reversed(_history()) if e.get("signal_id") == sid), None)
     return last is not None and (last.get("status") == "pending" or not last.get("resolution"))

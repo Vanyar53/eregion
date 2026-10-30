@@ -2190,12 +2190,17 @@ la marque ne s'efface pas (disque plein) ; elle disparaît de nouveau : la marqu
 aucune carte. **Correctif** : une marque ne fait taire une disparition que si la dernière carte de
 son alerte (son identifiant exact) attend, ou a été fermée par l'opérateur — les fermetures de
 `reassert._alert` portent maintenant une note (les autres `resolve()` sans note de ces cartes sont
-humains : `glorfindel ack`, la console, le bot, la TUI) —, et si l'épisode n'a pas été vu fini par
-ce processus : avant d'effacer la marque, la passe note l'épisode fini en mémoire
-(`reassert_cards.episode`), et l'oublie une fois la marque effacée ou une nouvelle écrite. Rien
-d'écrit ne peut porter ce qu'une écriture refusée n'a pas écrit : la mémoire est celle du processus
-du watch ; un redémarrage pendant que le disque est plein la perd (limite). Et une écriture d'état
-refusée sur une VM n'arrête plus la passe (`reassert_active`, journalisée) : la machine l'a montré à
+humains : `glorfindel ack`, la console, le bot, la TUI) —, et si **ce processus** a vu l'épisode
+ouvert (`reassert_cards.episode`) : ouvert quand sa marque s'écrit après sa carte, fermé dès qu'une
+passe relit les règles en place, avant toute écriture. Rien d'écrit ne peut porter ce qu'une
+écriture refusée n'a pas écrit, et la mémoire est celle du processus du watch : **la seconde
+relecture a choisi une reprise bruyante** (décision de Jonathan, 30/10) — d'abord, la mémoire
+gardait les épisodes vus finis, et un redémarrage entre « remise en place, disque plein » et la
+disparition suivante la faisait taire. Maintenant, au démarrage, chaque disparition acquittée et
+toujours là est redite une fois (une carte nouvelle), puis se tait (mutant M2125). Une écriture
+d'état refusée sur une VM n'arrête plus la passe (`reassert_active`) et elle est dite : une entrée
+`failed` du rapport de la passe, « état local non écrit », que la watch affiche (M2123, M2124) ;
+la machine l'a montré à
 500 séquences (graines 322 et 1), la passe coupée à la première VM ne voyait jamais la suivante
 remise en place, sa marque restée, sa disparition suivante tue. Enfin, seule une tenue finissait
 l'épisode : des règles remises mais contournées (une allow du client avant elles, dite sur sa propre

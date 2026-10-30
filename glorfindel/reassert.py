@@ -221,7 +221,6 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
             # when the mark can't be taken off, here or in say_bypass (L2C, review).
             state.pop("drift_alerted_at", None)
             _save_isolation_state(ref or vm, {**state, "verified_at": now})
-            episode(ref or vm, "", over=False)
         return
     if not _missing(verification):
         if verification.get("verified") is False and iso.get("drift_alerted_at"):
@@ -301,7 +300,6 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     say_bypass(vm, rid, verification, report, ip=ip, ref=ref)
     if verification.get("verified") is True and not verification.get("held_missing"):
         _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None, uncovered_said=None)
-        episode(ref or vm, ip, over=False)
         return
     if verification.get("uncovered_nics") and not verification.get("missing_rules"):
         # Never covered, not gone: a perimeter block alone on a VM with a NIC on another
@@ -321,7 +319,6 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
             if b.get("drift_alerted_at"):
                 episode(ref or vm, ip, over=True)
             _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)
-            episode(ref or vm, ip, over=False)
         return
     if not _missing(verification):
         if verification.get("verified") is False and b.get("drift_alerted_at"):

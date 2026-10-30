@@ -1362,7 +1362,7 @@ def test_a_state_refused_on_one_vm_does_not_stop_the_pass(monkeypatch):
     give_back = _unwritable(monkeypatch, "/isolation/")
     report = reassert_active(c, _HUMAN)
     give_back()
-    assert {(k.rsplit("/", 1)[-1], ip) for k, ip in reassert_cards._EPISODE_OVER} == {("vm", ""), ("vm2", "")}
+    assert not reassert_cards._EPISODE_OPEN                # both seen held again: over
     failed = [r for r in report if r["outcome"] == "failed"]
     assert sorted(r["vm"] for r in failed) == ["vm", "vm2"] and all(r["kind"] == "isolation" for r in failed)
     assert all("État local non écrit" in r["detail"] and "redite" in r["detail"] for r in failed), failed
@@ -1384,6 +1384,43 @@ def test_a_state_refused_on_a_block_is_printed_by_the_watch(monkeypatch):
     (failed,) = [r for r in report if r["outcome"] == "failed"]
     assert failed["kind"] == "block" and failed["ip"] == _IP and "non écrit" in failed["detail"]
     assert f"reassert block vm {_IP} → failed" in out.getvalue()
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_disappearance_held_again_then_gone_after_a_restart_is_said(monkeypatch, kind):
+    """The second review's probe: gone, said, acknowledged; held again with the disk full
+    (the mark kept); the watch restarted (its memory empty); gone again — said."""
+    from glorfindel import reassert_cards
+    c = _gone(kind)
+    reassert_active(c, _HUMAN)
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    gone = verify.return_value
+    verify.return_value = {"verified": True}
+    give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
+    reassert_active(c, _HUMAN)
+    give_back()
+    assert _drift_mark(kind)
+    reassert_cards._EPISODE_OPEN.clear()                      # the watch restarted
+    verify.return_value = gone
+    reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_an_acknowledged_disappearance_still_there_at_start_is_said_once(kind):
+    """Decided 30/10 (Jonathan): a restart is noisy, never silent. Gone, said, acknowledged,
+    still gone when the watch restarts: said again once — a new card —, then silent."""
+    from glorfindel import reassert_cards
+    c = _gone(kind)
+    reassert_active(c, _HUMAN)
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    reassert_active(c, _HUMAN)
+    assert not _drift_cards("pending")
+    reassert_cards._EPISODE_OPEN.clear()                      # the watch restarted
+    for _ in range(3):
+        reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1 and len(_drift_cards()) == 2
 
 
 def test_a_drift_card_closed_with_a_note_is_no_acknowledgement():

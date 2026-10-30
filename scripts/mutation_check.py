@@ -5698,8 +5698,8 @@ MUTANTS += [
      '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
      '    if entry.get("left_said") == sid and not stale and (cards or _last_word(_LEFT_PREFIX, sid)):\n'),
     ("M1949", "an episode known over stays so once a new one is marked: said again at every pass (L2C, review)", RCA,
-     "    (_EPISODE_OVER.add if over else _EPISODE_OVER.discard)((key.lower(), ip))\n",
-     "    if over:\n        _EPISODE_OVER.add((key.lower(), ip))\n"),
+     "    (_EPISODE_OPEN.discard if over else _EPISODE_OPEN.add)((key.lower(), ip))\n",
+     "    _EPISODE_OPEN.discard((key.lower(), ip))\n"),
 ]
 TESTS.update({f"M{n}": _L2C_DRIFT for n in range(1942, 1950)})
 TESTS.update({f"M{n}": ("tests/unit/test_invariant_regressions.py::"
@@ -5738,6 +5738,14 @@ MUTANTS += [
      '            report.append(unrecorded(snapshot["vm_name"], exc, snapshot.get("ip", "")))\n',
      '            unrecorded(snapshot["vm_name"], exc, snapshot.get("ip", ""))\n'),
 ]
+MUTANTS += [
+    ("M2125", "a drift mark silences an episode this process never saw open: after a restart, silent (L2C, review 2)", RCA,
+     "    if (key.lower(), ip) not in _EPISODE_OPEN:\n        return False\n",
+     "    if False:\n        return False\n"),
+]
+TESTS["M2125"] = " ".join(f"{_RT}{t}" for t in (
+    "a_disappearance_held_again_then_gone_after_a_restart_is_said",
+    "an_acknowledged_disappearance_still_there_at_start_is_said_once"))
 TESTS.update({"M2123": f"{_RT}a_state_refused_on_one_vm_does_not_stop_the_pass",
               "M2124": f"{_RT}a_state_refused_on_a_block_is_printed_by_the_watch"})
 

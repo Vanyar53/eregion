@@ -4769,25 +4769,25 @@ TESTS.update({f"M{n}": _I4A for n in range(1755, 1770)})
 # I4A, review (5.5): a turned allow aimed at a range or a tag waits behind our deny too
 # (`_takes_in`, nsg.py — the same rule as I5Q's); a failed take-off of the first pair's
 # rule is said; the verification without state reads the pair that blocks the NIC now.
-# M1880–M1883.
+# M1920–M1923.
 MUTANTS += [
-    ("M1880", "a turned allow behind our deny matched by its exact address only: a range or a tag "
+    ("M1920", "a turned allow behind our deny matched by its exact address only: a range or a tag "
               "read as nothing, our deny lifted, the new VM opened (I4A, review, A0)", NSG,
      "            if addr in ipaddress.ip_network(v.strip(), strict=False):\n",
      "            if str(addr) == v.strip():\n"),
-    ("M1881", "a tag in a turned allow behind our deny read as not taking the address in (I4A, review, A0)", NSG,
+    ("M1921", "a tag in a turned allow behind our deny read as not taking the address in (I4A, review, A0)", NSG,
      "            return True                       # a tag, or unreadable: the safe side\n",
      "            continue\n"),
-    ("M1882", "the first pair's rule that couldn't be taken off written where nothing reads it: "
+    ("M1922", "the first pair's rule that couldn't be taken off written where nothing reads it: "
               "`blocked`, nothing said (I4A, review)", BLK,
      '                        placement.setdefault("left", []).append({\n',
      '                        placement.setdefault("drop_failed", []).append({\n'),
-    ("M1883", "the verification without state takes the first pair present by name, whatever it "
+    ("M1923", "the verification without state takes the first pair present by name, whatever it "
               "blocks: a bypass of the pair that does hidden (I4A, review)", UNB,
      "            hit = next((h for h in present if self._block_pair_state(\n",
      "            hit = next((h for h in present if True or self._block_pair_state(\n"),
 ]
-TESTS.update({f"M{n}": _I4A for n in range(1880, 1884)})
+TESTS.update({f"M{n}": _I4A for n in range(1920, 1924)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

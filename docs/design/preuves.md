@@ -1748,7 +1748,7 @@ réseau, réaffirmation, ses cartes) : 123 attrapés à chaque tour avant (171a2
 quinze nouveaux ; M1555 (le nom `-out` de la VM supprimée) réaligné sur la ligne réécrite.
 Aucun perdu : M20 et M830, 2/2 avant et 1/2 après à ce budget, remesurés à 500 séquences — 2/2 des deux côtés ; M02, M16, M23, M24, M26 et M761 mieux après (bruit à 60).
 Après la relecture : `pytest` complet 4 027 réussis, 7 sautés, 5 `xfail` (le pendant de
-l'isolation, le déblocage et le reset après une adresse reprise) ; M1755–M1769 et M1880–M1883,
+l'isolation, le déblocage et le reset après une adresse reprise) ; M1755–M1769 et M1920–M1923,
 19/19 par leurs séquences figées à chaque tour ; invariants à 500 sur 8675 et 31337, puis 2 000
 sur 42, verts.
 

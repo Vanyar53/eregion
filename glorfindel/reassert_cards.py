@@ -40,6 +40,19 @@ def _describe(found: list[dict]) -> str:
                      for f in found)
 
 
+def _last_word(prefix: str, sid: str) -> bool:
+    """The operator's word is the last on this change: the latest card of the resource
+    (its signal ids start with `prefix`) is `sid`'s, closed by a human — Glorfindel's own
+    closures carry a note. A mark alone is never enough (L2Q, L2C): its write fails (a full
+    disk) after the card closed or after another change was said, it keeps the former
+    change, and once the situation comes back to it, read « said » with no card left."""
+    from glorfindel import escalations
+    last = next((e for e in reversed(escalations.all_escalations())
+                 if (e.get("signal_id") or "").startswith(prefix)), None)
+    return (last is not None and last.get("signal_id") == sid
+            and last.get("status") == "resolved" and not last.get("resolution"))
+
+
 def _bypassing(verification: dict, ip: str) -> list[dict] | None:
     """The allows that pass before our deny, [] when it holds, None when that wasn't read
     (unknown, or rules missing: the drift card's case)."""
@@ -56,7 +69,8 @@ def _bypassing(verification: dict, ip: str) -> list[dict] | None:
 def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: str = "", ref: str = "") -> None:
     """The isolation (or, with `ip`, the block) of `vm` read as bypassed: one card, once
     per change — marked `bypass_said` in its state after the card exists (L1F) — never a
-    write to Azure. Held again: the card closes, the mark goes."""
+    write to Azure. Held again: the card closes, the mark goes. The mark silences a change
+    only while its card is pending, or once the operator closed it last (`_last_word`)."""
     from glorfindel import escalations
     from glorfindel.actions import (
         _load_block_entries, _load_isolation_state, _rid_hash, _save_isolation_state, _update_block_entry,
@@ -94,11 +108,11 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
             remember(None)
         return
     sid = f"{prefix}-{_digest(_allow_key(f) for f in found)}"
-    if mark == sid:
-        return                                  # said: pending, or acknowledged
-    for e in cards:
-        if e.get("signal_id") != sid:
-            escalations.resolve(e["id"], note="Contournement changé : une nouvelle carte le dit.")
+    stale = [e for e in cards if e.get("signal_id") != sid]
+    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):
+        return                                  # said: pending, or acknowledged (L2C)
+    for e in stale:
+        escalations.resolve(e["id"], note="Contournement changé : une nouvelle carte le dit.")
     what = f"Le blocage de {ip} sur {vm}" if ip else f"L'isolation de {vm}"
     reason = (f"{what} est contourné{'' if ip else 'e'} : {_describe(found)} passe avant le deny "
               "de Glorfindel (NSG de la carte ou du sous-réseau). Remettre les règles n'y change rien ; "
@@ -127,15 +141,22 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
     turned it into an allow, and it aims at an address that is no longer the VM's —
     another VM's now, or nobody knows. Rewritten, it changed that VM's flows; taken off,
     too. Said on one card per set of such rules, once (`left_said`, after the card),
-    never a write."""
+    never a write; another set closes the former card, with a note (L2C)."""
     from glorfindel import escalations
     from glorfindel.actions import _rid_hash, _update_block_entry
     left = [x for p in entry.get("placements") or [] for x in p.get("left") or [] if isinstance(x, dict)]
     if not left:
         return
-    sid = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-" + _digest(f"{x.get('nsg')}/{x.get('rule')}" for x in left)
-    if entry.get("left_said") == sid:
-        return                                  # said: pending, or acknowledged
+    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-"
+    sid = prefix + _digest(f"{x.get('nsg')}/{x.get('rule')}" for x in left)
+    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").startswith(prefix)]
+    stale = [e for e in cards if e.get("signal_id") != sid]
+    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):
+        return                                  # said: pending, or acknowledged (L2C)
+    for e in stale:
+        # Another set: the store folded its card into this one, which kept naming the
+        # former rules (L2C).
+        escalations.resolve(e["id"], note="Autres règles laissées : une nouvelle carte les dit.")
     what = " ; ".join(f"{x.get('rule')} ({x.get('nsg')}), "
                       + (f"à nous, vise {x.get('to')} et n'a pas pu être retirée ({x.get('on')})"
                          if x.get("kind") == "drop_failed" else
@@ -149,7 +170,7 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
              f"{', '.join(sorted({str(x.get('rule')) for x in left}))} (journal d'activité), et pourquoi.",
              "Si elle n'est plus voulue : la retirer à la main (az network nsg rule delete) ; "
              "si elle l'est, la remplacer par une règle du client, hors du nom de Glorfindel."]
-    if not any(e.get("signal_id") == sid for e in escalations.pending()):
+    if not any(e.get("signal_id") == sid for e in cards):
         escalations.record(signal_id=sid, resource_id=rid, action=_LEFT_ACTION, escalation_type=LEFT_TYPE,
                            reason=reason, severity="medium", suggested_steps=steps, action_params={"ip": ip})
     _update_block_entry(ref or vm, ip, left_said=sid)
@@ -183,7 +204,8 @@ def _save_alerts(alerts: dict) -> None:
 
 def say_unreadable_states(report: list[dict]) -> None:
     """The local state files that can't be read, said on one card per set of files (once,
-    acknowledged or not, while that set stands); closed once every file reads again."""
+    acknowledged or not, while that set stands); closed once every file reads again. The
+    record (state_alerts.json) alone never silences a set (L2C): its write may have failed."""
     from glorfindel import escalations
     from glorfindel import actions
     from glorfindel.actions import unreadable_states
@@ -198,8 +220,9 @@ def say_unreadable_states(report: list[dict]) -> None:
         if alerts.pop("unreadable_states", None) is not None:
             _save_alerts(alerts)
         return
-    if alerts.get("unreadable_states") == sid:
-        return
+    said = any(e.get("signal_id") == sid for e in cards)
+    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):
+        return                                  # said: pending, or acknowledged (L2C)
     more = f" (+{len(files) - 5})" if len(files) > 5 else ""
     # What waits depends on which: a block file stops the orphan sweep only; an isolation
     # file, the release, the reset and verify_release of a NIC in quarantine or bare too.
@@ -226,7 +249,7 @@ def say_unreadable_states(report: list[dict]) -> None:
                      "levée, le tag glorfindel-orig-<hash> sur le NSG de quarantaine (« original "
                      "unknown » sur leur carte).")
     steps.append("La carte se ferme d'elle-même quand tout se lit de nouveau et que rien n'est mis de côté.")
-    if not any(e.get("signal_id") == sid for e in cards):
+    if not said:
         escalations.record(signal_id=sid, resource_id=_STATE_RESOURCE, action=_STATE_ACTION,
                            escalation_type=STATE_TYPE, reason=reason, severity="high", suggested_steps=steps)
     alerts["unreadable_states"] = sid

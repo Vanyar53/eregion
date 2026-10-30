@@ -3669,11 +3669,13 @@ MUTANTS += [
     ("M1256", "an unreadable state never said by the reassertion (SEC4b)", RCA,
      "    files = unreadable_states()\n", "    files = []\n"),
     ("M1257", "an unreadable state said again at every pass, its acknowledgement undone (SEC4b)", RCA,
-     '    if alerts.get("unreadable_states") == sid:\n        return\n', ""),
+     '    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):\n',
+     "    if False:\n"),
     ("M1258", "a bypassed isolation never said by the reassertion (SEC4b, V-16)", R,
      "    say_bypass(vm, rid, verification, report, ref=ref)\n", ""),
     ("M1259", "a bypass said again at every pass, its acknowledgement undone (SEC4b, V-16)", RCA,
-     "    if mark == sid:\n        return", "    if False:\n        return"),
+     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n        return',
+     "    if False:\n        return"),
     ("M1390", "a bypassed block never said by the reassertion (SEC4b, V-16)", R,
      "    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)\n", ""),
     ("M1391", "a bypass card closed on a precedence that could not be read (SEC4b, V-16)", RCA,
@@ -4763,7 +4765,8 @@ MUTANTS += [
     ("M1764", "what the block left never said (I4A)", R,
      "    say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)\n", ""),
     ("M1765", "what the block left said again once acknowledged (I4A)", RCA,
-     '    if entry.get("left_said") == sid:\n', "    if False:\n"),
+     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
+     "    if False:\n"),
     ("M1766", "a range read as an address: nobody holds it, the turned rule written over (I4A, A0)", BLK,
      '        if "/" in addr or not addr[:1].isdigit():\n', "        if False:\n"),
     ("M1767", "the second name without the NIC's mark: the block no longer the NIC's (I4A)", NET,
@@ -5475,6 +5478,59 @@ TESTS["M1860"] = ("tests/unit/test_invariant_regressions.py::"
                   "tests/unit/test_invariant_regressions.py::test_a_quarantine_change_brought_back_after_a_full_disk_is_said "
                   f"{_L2Q} {INVARIANTS}")
 TESTS.update({f"M{n}": _L2Q for n in range(1861, 1867)})
+
+# L2C (#343, M1930–M1949): the other cards of the reassertion — a bypass, an unreadable
+# state, the rules a block left — follow L2Q's rule: a change in the mark is silent only
+# on the operator's last word on it; a change that came back is said again.
+_L2C = " ".join(f"tests/unit/test_reassert.py::test_{t}" for t in (
+    "a_bypass_that_comes_back_after_its_mark_was_kept_is_said_again",
+    "a_bypass_back_to_its_former_change_closes_the_stale_card",
+    "the_operators_word_on_another_bypass_does_not_silence_this_one",
+    "a_bypass_acknowledgement_is_read_on_its_own_card_only",
+    "an_unreadable_state_that_comes_back_after_its_record_was_kept_is_said_again",
+    "an_unreadable_set_back_to_its_former_files_is_said_again",
+    "a_changed_set_of_left_rules_gets_its_own_card", "left_rules_back_to_a_set_already_said_are_said_again",
+    "a_bypassed_isolation_is_said_once_per_change_and_never_fixed",
+    "a_changed_bypass_is_a_new_card_and_a_holding_isolation_closes_it"))
+MUTANTS += [
+    ("M1930", "a bypass that came back read « said » from its mark alone (L2C)", RCA,
+     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     "    if mark == sid:\n"),
+    ("M1931", "a bypass back to its marked change while another's card is pending: that card stays (L2C)", RCA,
+     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     '    if mark == sid and (cards or _last_word(f"{prefix}-", sid)):\n'),
+    ("M1932", "an unreadable state that came back read « said » from state_alerts.json alone (L2C)", RCA,
+     '    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):\n',
+     '    if alerts.get("unreadable_states") == sid:\n'),
+    ("M1933", "left rules back to a set already said read « said » from their mark alone (L2C)", RCA,
+     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
+     '    if entry.get("left_said") == sid:\n'),
+    ("M1934", "another set of left rules folded into the former card, which keeps naming the former (L2C)", RCA,
+     '    for e in stale:\n        # Another set: the store folded its card into this one, which kept naming the\n',
+     '    for e in []:\n        # Another set: the store folded its card into this one, which kept naming the\n'),
+    ("M1935", "a card Glorfindel closed itself read as the operator's acknowledgement (L2C)", RCA,
+     '            and last.get("status") == "resolved" and not last.get("resolution"))\n',
+     '            and last.get("status") == "resolved")\n'),
+    ("M1936", "the resource's first card read, not its latest: an old acknowledgement silences a return (L2C)", RCA,
+     "    last = next((e for e in reversed(escalations.all_escalations())\n",
+     "    last = next((e for e in escalations.all_escalations()\n"),
+    ("M1937", "the operator's word on another change silences this one (L2C)", RCA,
+     '    return (last is not None and last.get("signal_id") == sid\n',
+     "    return (last is not None\n"),
+    ("M1938", "a bypass card closed because it holds again carries no note: read as acknowledged (L2C)", RCA,
+     '            escalations.resolve(e["id"], note="Plus contourné : le deny de Glorfindel tient de nouveau.")\n',
+     '            escalations.resolve(e["id"])\n'),
+    ("M1939", "an unreadable-state card closed by Glorfindel carries no note: read as acknowledged (L2C)", RCA,
+     '            escalations.resolve(e["id"], note="État local lisible de nouveau, ou autres fichiers illisibles.")\n',
+     '            escalations.resolve(e["id"])\n'),
+    ("M1940", "a left-rules card closed by Glorfindel carries no note: read as acknowledged (L2C)", RCA,
+     '        escalations.resolve(e["id"], note="Autres règles laissées : une nouvelle carte les dit.")\n',
+     '        escalations.resolve(e["id"])\n'),
+    ("M1941", "the latest bypass card of any resource read for this one's acknowledgement (L2C)", RCA,
+     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     '    if mark == sid and not stale and (cards or _last_word(_BYPASS_PREFIX, sid)):\n'),
+]
+TESTS.update({f"M{n}": _L2C for n in range(1930, 1942)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

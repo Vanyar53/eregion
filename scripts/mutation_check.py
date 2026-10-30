@@ -6138,7 +6138,15 @@ MUTANTS += [
      'HOST = re.compile(r"\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}\\b", re.I)',
      'HOST = re.compile(r"\\b(?:[a-z0-9-]+\\.)+(?:com|net|org|io|dev|app|cloud|fr|eu|internal|local)\\b", re.I)'),
 ]
-TESTS.update({mid: "tests/unit/test_console_shots.py" for mid in ("M2207", "M2208", "M2209")})
+MUTANTS += [
+    ("M2204", "the sample's console resolves any name (DOC1 review)", SHOTS,
+     "        if host is not None and not _local((host, 0)):", "        if False:"),
+    ("M2205", "connect_ex of the sample's console reaches off the loopback (DOC1 review)", SHOTS,
+     "        if not _local(address):\n            raise PermissionError(f\"console_shots: no connection off the loopback ({address[0]})\")\n"
+     "        return real_connect_ex(self, address)",
+     "        return real_connect_ex(self, address)"),
+]
+TESTS.update({mid: "tests/unit/test_console_shots.py" for mid in ("M2204", "M2205", "M2207", "M2208", "M2209")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

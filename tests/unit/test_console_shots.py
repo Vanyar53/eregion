@@ -152,22 +152,29 @@ cs.loopback_only()
 srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
 socket.create_connection(srv.getsockname(), timeout=2).close()
 print("loopback ok")
-def raw(where):
+def connect(where):
     s = socket.socket(); s.settimeout(1); s.connect(where)
-for how, where in ((raw, ("192.0.2.1", 443)), (socket.create_connection, ("192.0.2.1", 443)),
-                   (socket.create_connection, ("example.com", 443))):
+def connect_ex(where):
+    s = socket.socket(); s.settimeout(1); print("connect_ex returned", s.connect_ex(where))
+probes = {{"connect": (connect, ("192.0.2.1", 443)), "connect_ex": (connect_ex, ("192.0.2.1", 443)),
+          "resolve": (lambda w: socket.getaddrinfo(*w), ("example.com", 443)),
+          "create_connection": (socket.create_connection, ("example.com", 443))}}
+for label, (how, where) in probes.items():
     try:
         how(where)
-        print("REACHED", where)
+        print(label, "REACHED")
     except PermissionError as e:
-        print("refused", e)
+        print(label, "refused", e)
     except OSError as e:
-        print("OTHER", where, e)
+        print(label, "OTHER", e)
 """
     r = _in_a_process(code, {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)}, tmp_path)
     assert "loopback ok" in r.stdout, r.stderr
-    assert r.stdout.count("refused console_shots: no") == 3, r.stdout + r.stderr
-
+    said = dict(line.split(" ", 1) for line in r.stdout.splitlines()[1:])
+    off = "refused console_shots: no connection off the loopback (192.0.2.1)"
+    unresolved = "refused console_shots: no name resolved off the loopback (example.com)"
+    assert said == {"connect": off, "connect_ex": off, "resolve": unresolved,
+                    "create_connection": unresolved}, r.stdout + r.stderr
 
 def test_the_server_reaches_nothing_once_started(tmp_path):
     """serve() as the script runs it, uvicorn replaced by a connection to the documentation's

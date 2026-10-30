@@ -372,7 +372,7 @@ Quatorze mutants pour ce qu'A1 et MC0 ajoutent (M460–M463 après la relecture)
 Les invariants tournent aussi sur un faux AWS (`tests/unit/fake_aws.py`), avec l'adaptateur AWS
 écrit contre lui (`glorfindel/providers/aws/`) : `tests/unit/test_invariants_aws.py`, la même
 machine, le même harnais (pannes, deux opérations à la fois avec les vrais verrous, journal par
-auteur), les mêmes réglages `GLORFINDEL_INVARIANT_*` ; en CI, à 500 séquences avec le reste. Code
+auteur), les mêmes réglages `GLORFINDEL_INVARIANT_*` ; en CI, à 500 séquences avec le reste, et chaque nuit à 10 000 (AWS1). Code
 seul : aucun appel AWS, aucun compte. **La sémantique d'AWS du faux monde est faite d'hypothèses
 tirées de la documentation, toutes à mesurer sur le banc AWS (MC2)** : leur liste (H1–H14), ce
 qu'isoler, bloquer et lever veulent dire sur AWS et la transposition de chaque invariant sont dans
@@ -457,8 +457,14 @@ environ) et au même numéro (un sur sept). Sur la base, **1 run sur 24 à 500 s
 100–123, `--hypothesis-seed`, sans réduction : la graine 101, même empreinte, sur `acl-default-vpc-b`) ;
 après, 24 sur 24 verts sur les mêmes graines, et verts à 2 000 séquences (graines 2000 et 101).
 La base Hypothesis de la CI ne pouvait pas la rejouer : au push, le cache `.hypothesis-invariants` est
-seulement restauré ; seul le job de nuit l'enregistre, et il ne lance que `test_invariants.py` (Azure) —
-un échec de la machine AWS n'est gardé nulle part, une autre branche tire de nouvelles graines.
+seulement restauré ; seul le job de nuit l'enregistre, et il ne lançait que `test_invariants.py` (Azure) —
+un échec de la machine AWS n'était gardé nulle part, une autre branche tirait de nouvelles graines.
+**Depuis AWS1, la machine AWS tourne aussi chaque nuit** (`.github/workflows/invariants.yml`, une étape
+à elle, lancée même si celle d'Azure échoue), au même budget (10 000) et dans la même base, que le job
+Linux du push restaure et rejoue pour les deux machines (`pytest tests/`, 500). Durée estimée : 19 min
+en local à 10 000 (2 000 en 225 s), 20 à 40 min sur un runner, soit 75 à 105 min avec Azure sur Linux,
+sous la borne de 150 min — à mesurer au premier run de nuit. Tenu par `tests/unit/test_workflows.py`
+(`-k night_runs_both`, `-k push_replays`) ; mutant M1952 (l'étape AWS ôtée), attrapé.
 
 **Le jeu de contrôle sur AWS.** Seize bugs plausibles de l'adaptateur, M630–M645, écrits et commités
 avant la machine AWS (dans le même commit que l'adaptateur) et jamais utilisés pour l'orienter, dans la
@@ -1997,7 +2003,7 @@ machine ne l'a trouvé qu'à 5 000 séquences.
 ```mermaid
 flowchart LR
     push["chaque push"] --> ci["ruff, tests unitaires<br/>py3.11, py3.12, macOS<br/>invariants 500 + rejeu"]
-    nuit["chaque nuit"] --> inv["invariants 10 000<br/>Linux et macOS"]
+    nuit["chaque nuit"] --> inv["invariants 10 000<br/>Azure et AWS<br/>Linux et macOS"]
     inv -. "séquences en échec<br/>gardées dans la base" .-> ci
     jour["chaque jour"] --> can["canary azurerm<br/>sur Azure"]
     lundi["chaque lundi"] --> mut["mutation, 1 000 séquences<br/>rouge sous 14 attrapés"]
@@ -2008,7 +2014,8 @@ flowchart LR
 ```
 
 Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à sa correction, puis
-écrite dans `tests/unit/test_invariant_regressions.py`.
+écrite dans `tests/unit/test_invariant_regressions.py` (Azure) ou
+`tests/unit/test_invariant_regressions_aws.py` (AWS).
 
 ## Ce qui n'est pas couvert
 

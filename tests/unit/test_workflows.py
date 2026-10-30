@@ -180,6 +180,37 @@ def test_the_jobs_that_run_the_invariants_are_bounded(workflow, job):
     assert isinstance(bound, int) and 0 < bound <= 180, bound
 
 
+_MACHINES = ("tests/unit/test_invariants.py", "tests/unit/test_invariants_aws.py")
+
+
+def test_the_night_runs_both_machines_and_keeps_their_failures():
+    """Each machine, Azure's and AWS's, runs every night at the night's budget with the
+    cached database, and the database is saved: a failure is kept to be replayed. The AWS
+    machine ran at the push budget only, its failures kept nowhere (AWS1, #334)."""
+    steps = _load(ROOT / ".github" / "workflows" / "invariants.yml")["jobs"]["invariants"]["steps"]
+    for machine in _MACHINES:
+        runs = [s for s in steps if machine in (s.get("run") or "").split()]
+        assert runs, f"{machine} not run at night"
+        env = runs[0].get("env") or {}
+        assert env.get("GLORFINDEL_INVARIANT_DB") == ".hypothesis-invariants", (machine, env)
+        assert "10000" in str(env.get("GLORFINDEL_INVARIANT_EXAMPLES")), (machine, env)
+    assert any("actions/cache/save" in (s.get("uses") or "") and
+               (s.get("with") or {}).get("path") == ".hypothesis-invariants" for s in steps)
+
+
+def test_a_push_replays_the_failures_the_night_kept_on_both_machines():
+    """ci.yml's Linux job restores the database and runs every test with it — both
+    machines among them, at the push budget."""
+    steps = _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"]["test"]["steps"]
+    assert any("actions/cache/restore" in (s.get("uses") or "") and
+               (s.get("with") or {}).get("path") == ".hypothesis-invariants" for s in steps)
+    runs = [s for s in steps if "pytest tests/ " in (s.get("run") or "")]
+    assert runs and all((ROOT / m).is_file() for m in _MACHINES), runs     # under tests/, run by it
+    env = runs[0].get("env") or {}
+    assert env.get("GLORFINDEL_INVARIANT_DB") == ".hypothesis-invariants", env
+    assert env.get("GLORFINDEL_INVARIANT_EXAMPLES") == "500", env
+
+
 @pytest.mark.parametrize("job", ["test", "test-macos"])
 def test_a_hang_of_the_ci_tests_says_where_it_waits(job):
     """The CI's test steps write every thread's stack when a test outlasts 8 min: a hang is

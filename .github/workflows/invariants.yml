@@ -1,19 +1,24 @@
 name: Invariants (deep)
 
-# The invariant tests (tests/unit/test_invariants.py) run 500 random sequences on every
-# push. Every night, ten thousand: new seeds each time, on both kinds of file system. A
-# failure prints the shortest sequence that breaks a property, and is kept (Hypothesis
-# database, cached): every push replays it first until it is fixed. Once fixed, write
-# it down in tests/unit/test_invariant_regressions.py.
+# The invariant tests run 500 random sequences on every push: the machine on Azure
+# (tests/unit/test_invariants.py) and the same machine on the simulated AWS
+# (tests/unit/test_invariants_aws.py, MC1). Every night, ten thousand each: new seeds each
+# time, on both kinds of file system. A failure prints the shortest sequence that breaks a
+# property, and is kept (Hypothesis database, cached, one for both machines): every push
+# replays it first until it is fixed (ci.yml's Linux job runs both with it). Once fixed,
+# write it down in tests/unit/test_invariant_regressions.py (Azure) or
+# tests/unit/test_invariant_regressions_aws.py (AWS). Before AWS1 (#334) the AWS machine
+# ran at the push budget only, its failures kept nowhere: one seen once was lost.
 on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       examples:
-        # The job is bounded to 150 min whatever this asks (timeout-minutes): about 20 000
-        # sequences on Linux, 30 000 on macOS. More is cancelled at the bound, unreported.
-        description: "Number of random sequences (the job stops at 150 min: about 20000 on Linux)"
+        # The job is bounded to 150 min whatever this asks (timeout-minutes), for both
+        # machines: about 13 000 sequences each on Linux (estimated, AWS1), 20 000 on macOS.
+        # More is cancelled at the bound, unreported.
+        description: "Number of random sequences per machine (the job stops at 150 min: about 13000 on Linux)"
         default: "10000"
 
 permissions:
@@ -24,7 +29,9 @@ jobs:
     name: invariants (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Bounded (U3F): ten thousand sequences take about an hour on Linux (52-63 min, 14-26/10)
-    # and 33-41 min on macOS; a failure adds its shrinking (Hypothesis gives up on it after
+    # and 33-41 min on macOS on Azure; on AWS, about 19 min locally (2 000 in 225 s, AWS1,
+    # 30/10), so 20-40 min estimated on a runner — 75-105 min for both on Linux, unmeasured
+    # on GitHub yet. A failure adds its shrinking (Hypothesis gives up on it after
     # about 300 s, the whole phase). A job without a bound runs six hours. A manual run asks
     # for its own number of sequences: the bound stays, see `examples` below.
     timeout-minutes: 150
@@ -57,6 +64,16 @@ jobs:
           GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
           GLORFINDEL_INVARIANT_STATS: "1"
         run: python -m pytest tests/unit/test_invariants.py -q -s
+
+      # The same machine on the simulated AWS (MC1), the same budget and database; run
+      # even when Azure's failed, so one failure doesn't hide the other.
+      - name: The same on the simulated AWS (MC1)
+        if: ${{ !cancelled() }}
+        env:
+          GLORFINDEL_INVARIANT_EXAMPLES: ${{ inputs.examples || '10000' }}
+          GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
+          GLORFINDEL_INVARIANT_STATS: "1"
+        run: python -m pytest tests/unit/test_invariants_aws.py -q -s
 
       # Kept whatever the outcome — a failure above is what must be replayed.
       - uses: actions/cache/save@v5

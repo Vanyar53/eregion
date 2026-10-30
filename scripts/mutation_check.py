@@ -5250,6 +5250,14 @@ MUTANTS += [
      '                f"I2: customer entries of {k} changed")\n'),
 ]
 TESTS.update({mid: "tests/unit/test_invariant_regressions_aws.py" for mid in ("M1950", "M1951")})
+# AWS1: the AWS machine runs every night, its failures kept in the cached database.
+MUTANTS += [
+    ("M1952", "the nightly run no longer runs the AWS machine: its failures kept nowhere (AWS1)",
+     ".github/workflows/invariants.yml",
+     "        run: python -m pytest tests/unit/test_invariants_aws.py -q -s\n",
+     "        run: echo skipped\n"),
+]
+TESTS["M1952"] = "tests/unit/test_workflows.py -k night_runs_both"
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

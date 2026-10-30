@@ -2473,6 +2473,17 @@ posée). Quatre points, chacun son commit et son test rouge sans lui :
 La réécriture en place de la première paire (l'alternative : la nouvelle adresse de la carte coupée à
 100, api rendue) va à un lot de suite.
 
+**Mesures de la relecture.** `pytest` complet : 4 575 réussis, 7 sautés, 5 `xfail` (6 avec le U1
+ci-dessous) ; `ruff` propre ; `mutant_anchors.py` sans faute. Mutants M2060–M2071 et M1734 : 13/13 par
+leurs tests, deux tours. Harnais avant/après sur les 42 mutants de la levée et d'`older.py` (60
+séquences, graine 42) : 38/42 des deux côtés, les mêmes quatre (M07, M1963, M33 par leurs séquences
+figées, M1552 survit). Invariants : 500 sur 42 et 2718, 2 000 sur 1618, verts ; 2 000 sur **9001** :
+l'I7 réglé, la machine va plus loin et tombe sur un **U1 présent sur `main` 9f72a91** (« the orphan
+rule glorfindel-iso-web-web-nic-8b70f2 kept behind a rule turned into an allow (…), cutting
+[…/api]: no pending card names it ») — la carte d'orpheline de la posture, pas le chemin de
+l'isolation ; cinq étapes figées en `xfail` strict
+(`test_an_orphan_kept_behind_a_turned_rule_is_said`), à router.
+
 **I4E (30/10, #361) : une nouvelle isolation garde l'état ancien de la VM ; le démontage ne lit plus
 l'état écrit par le code.** Trouvé par la seconde relecture d'I4C. **Le défaut, sur `main` 91dae76** :
 api porte une isolation d'une ancienne version (son refus total à nom fixe sur nsg-api-nic, son état à

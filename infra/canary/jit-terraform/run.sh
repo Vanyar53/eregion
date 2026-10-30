@@ -36,13 +36,16 @@ Q="nsg-glorfindel-quarantine-canary-$SUFFIX"
 FAILED=0
 
 # This run's resources, found by their tag, NICs first: an NSG or a VNet still in use cannot go.
+# The tag is filtered on the client, by equality: az refuses --tag with -g. One list per type,
+# by the network commands (Network Contributor's own reads; the suffix is validated above).
+# Their errors are left on stderr: a sweep that fails is seen in the job's log.
 sweep() {
-  local type ids
-  for type in networkInterfaces networkSecurityGroups virtualNetworks; do
-    ids=$(az resource list -g "$RG" --tag "canary-run=$SUFFIX" \
-            --query "[?type=='Microsoft.Network/$type'].id" -o tsv 2>/dev/null)
+  local kind ids
+  echo "   destroy failed: sweeping this run's resources by their tag"
+  for kind in nic nsg vnet; do
+    ids=$(az network "$kind" list -g "$RG" --query "[?tags.\"canary-run\"=='$SUFFIX'].id" -o tsv)
     # shellcheck disable=SC2086
-    [ -z "$ids" ] || az resource delete --ids $ids -o none >/dev/null 2>&1
+    [ -z "$ids" ] || az network "$kind" delete --ids $ids -o none >/dev/null
   done
 }
 

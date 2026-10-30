@@ -529,20 +529,52 @@ case "$1" in
 esac
 exit 0
 '''
-_FAKE_AZ = r'''echo "az $*" >> "$FAKE_LOG"
-name=""; nsg=""; args=("$@")
-for ((i = 0; i < ${#args[@]}; i++)); do
-  case "${args[i]}" in -n) name="${args[i+1]}" ;; --network-security-group) nsg="${args[i+1]}" ;; esac
-done
-case "$1 $2 $3" in
-  "group show "*) exit "${FAKE_GROUP_RC:-0}" ;;
-  "network nsg show") echo "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/$name" ;;
-  "network nic update") echo "$nsg" > "$FAKE_STATE/$name" ;;
-  "network nic show") cat "$FAKE_STATE/$name" ;;
-  "resource list "*) echo "/id/$(echo "$*" | sed -E "s/.*Microsoft.Network\/([a-zA-Z]+).*/\1/")" ;;
-esac
-exit 0
+# A fake az, in Python: what the canary calls, as the real CLI answers it. `az resource list`
+# refuses --tag with -g, as azure-cli does (2.85.0, resource/custom.py: IncorrectUsageError);
+# a list's --query is evaluated in the two forms the sweep may use, any other is refused.
+_FAKE_AZ = r'''import os, re, sys
+from pathlib import Path
+a = sys.argv[1:]
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write("az " + " ".join(a) + "\n")
+
+
+def opt(name):
+    return a[a.index(name) + 1] if name in a else ""
+
+
+if a[:2] == ["resource", "list"] and "--tag" in a and ("-g" in a or "--resource-group" in a):
+    print("ERROR: you cannot use '--tag' with '--resource-group'", file=sys.stderr)
+    sys.exit(2)
+state, name = Path(os.environ["FAKE_STATE"]), opt("-n")
+if a[:2] == ["group", "show"]:
+    sys.exit(int(os.environ.get("FAKE_GROUP_RC", "0")))
+elif a[:3] == ["network", "nsg", "show"]:
+    print(f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/{name}")
+elif a[:3] == ["network", "nic", "update"]:
+    (state / name).write_text(opt("--network-security-group"))
+elif a[:3] == ["network", "nic", "show"]:
+    print((state / name).read_text())
+elif a[:1] == ["network"] and a[2:3] == ["list"]:
+    # The group holds, of each kind, this run's resource, another run's, and one without the tag.
+    items = [{"id": f"/{a[1]}/{run or 'untagged'}", "tags": {"canary-run": run} if run else {}}
+             for run in ("gh1-1-0", "gh9-9-9", "")]
+    q = opt("--query")
+    m = re.fullmatch(r"""\[\?tags\."canary-run"=='([^']*)'\]\.id""", q)
+    if m:
+        print("\n".join(i["id"] for i in items if i["tags"].get("canary-run") == m.group(1)))
+    elif q == "[].id":
+        print("\n".join(i["id"] for i in items))
+    else:
+        print(f"fake az: query not understood: {q}", file=sys.stderr)
+        sys.exit(3)
 '''
+
+
+def _fake_py(path: Path, body: str) -> None:
+    import sys
+    path.write_text(f"#!{sys.executable}\n" + body)
+    path.chmod(0o755)
 
 
 def _run_canary(tmp_path: Path, **env):
@@ -550,7 +582,7 @@ def _run_canary(tmp_path: Path, **env):
     bin_.mkdir()
     state.mkdir()
     _fake(bin_ / "terraform", _FAKE_TERRAFORM)
-    _fake(bin_ / "az", _FAKE_AZ)
+    _fake_py(bin_ / "az", _FAKE_AZ)
     log = tmp_path / "log"
     env = {"FAKE_LOG": str(log), "FAKE_STATE": str(state), "ARM_SUBSCRIPTION_ID": "sub",
            "CANARY_SUFFIX": "gh1-1-0"} | env
@@ -577,13 +609,30 @@ def test_the_canary_works_in_its_group_named_by_its_suffix_and_cleans_up(tmp_pat
 
 
 def test_a_failed_destroy_sweeps_this_runs_resources_by_their_tag_nics_first(tmp_path):
+    """Only this run's resources, by their tag compared on the client (az refuses --tag with -g:
+    the sweep deleted nothing on the real CLI, its error hidden), NICs first; never another
+    run's, never one without the tag, never the group."""
     res, calls = _run_canary(tmp_path, FAKE_DESTROY_RC="1")
     assert res.returncode == 0, res.stdout + res.stderr
-    lists = [c for c in calls if c.startswith("az resource list")]
-    assert lists and all("-g rg-eregion-canary --tag canary-run=gh1-1-0" in c for c in lists)
-    deleted = [c.split("--ids ")[1].split()[0] for c in calls if c.startswith("az resource delete")]
-    assert deleted == ["/id/networkInterfaces", "/id/networkSecurityGroups", "/id/virtualNetworks"]
+    assert "sweeping" in res.stdout and "fake az" not in res.stderr and "cannot use" not in res.stderr, res.stderr
+    lists = [c for c in calls if " list " in c]
+    assert [c.split()[2] for c in lists] == ["nic", "nsg", "vnet"]
+    assert all("-g rg-eregion-canary" in c and "--tag" not in c for c in lists), lists
+    deleted = [c for c in calls if " delete --ids " in c]
+    assert deleted == [f"az network {k} delete --ids /{k}/gh1-1-0 -o none" for k in ("nic", "nsg", "vnet")]
     assert not [c for c in calls if c.startswith("az group delete")]
+
+
+def test_the_fake_az_refuses_a_tag_with_a_group_as_the_real_one_does(tmp_path):
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    _fake_py(bin_ / "az", _FAKE_AZ)
+    env = {"FAKE_LOG": str(tmp_path / "log"), "FAKE_STATE": str(tmp_path)}
+    res = _sh("az resource list -g rg --tag canary-run=x", env, tmp_path, bin_)
+    assert res.returncode == 2 and "you cannot use '--tag' with '--resource-group'" in res.stderr
+    res = _sh(r"""az network nic list -g rg --query "[?tags.\"canary-run\"=='gh9-9-9'].id" -o tsv""",
+              env, tmp_path, bin_)
+    assert res.returncode == 0 and res.stdout == "/nic/gh9-9-9\n", res
 
 
 def test_without_its_group_the_canary_creates_nothing_and_fails(tmp_path):

@@ -671,7 +671,8 @@ que `az login` voit l'abonnement d'un principal qui n'a de rôle que sur un grou
 trois lignes s'authentifient par OIDC avec `ARM_USE_CLI=false` (lu dans la doc du fournisseur à
 v3.117.1, v4.81.0 et v5.12.0, et les noms des variables trouvés dans chacun de ces binaires,
 30/10) ; que `Contributor` sur le groupe suffit au `data "azurerm_resource_group"`, aux NIC et
-à `az resource list --tag` ; qu'aucune ressource ne reste dans le groupe après le run.
+au balayage (`az network nic|nsg|vnet list` filtré sur l'étiquette côté client — `az` refuse
+`--tag` avec `-g` —, puis `delete --ids`) ; qu'aucune ressource ne reste dans le groupe après le run.
 **Ce qui reste ouvert** : un runner tué (pas d'`EXIT`) laisse les ressources de son run dans le
 groupe, gratuites et marquées par leur suffixe (`az resource list -g rg-eregion-canary -o
 table`) ; et le principal, `Contributor` sur son groupe, pourrait le supprimer ou y créer une

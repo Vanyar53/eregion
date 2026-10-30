@@ -5644,6 +5644,12 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_workflows.py"
               for n in range(2080, 2090)})
+# P04, after its review (M2110–M2119).
+MUTANTS += [
+    ("M2110", "the canary's sweep deletes every NIC, NSG and VNet of the group: another run's too (P04)", JIT_SH,
+     """--query "[?tags.\\"canary-run\\"=='$SUFFIX'].id" -o tsv)""", """--query "[].id" -o tsv)"""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py" for n in range(2110, 2120)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

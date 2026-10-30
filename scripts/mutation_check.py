@@ -4840,8 +4840,8 @@ MUTANTS += [
      '    return decision["verified_at"] if decision["verified_at"] is not None else decision["at"]\n',
      '    return decision["at"]\n'),
     ("M1771", "the time to contain starts at the detection, not at the injector's T0 (BL1)", CTN,
-     "        inc.time_to_contain_s = round(at - t0, 1)\n",
-     '        inc.time_to_contain_s = round(at - (d["seen_at"] or t0), 1)\n'),
+     "        inc.time_to_contain_s = time_to_contain(t0, d)\n",
+     '        inc.time_to_contain_s = time_to_contain(d["seen_at"] or t0, d)\n'),
     ("M1772", "an action whose check failed or could not be read counted contained (BL1)", CTN,
      '        if decision["verified"] is True and not decision["unverified"]:\n',
      '        if decision["verified"] is not False:\n'),
@@ -4894,8 +4894,7 @@ MUTANTS += [
      "        if vm not in {t.lower() for t in decl.targets}:\n", "        if False:\n"),
     ("M1789", "the console's cycles without the read-back time: the overview ends at the line (BL1)",
      CON,
-     '        "unverified": bool(outcome.get("unverified")), "verified_at": outcome.get("verified_at", ""),\n',
-     '        "unverified": bool(outcome.get("unverified")),\n'),
+     '        "verified_at": outcome.get("verified_at"),\n', ""),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in range(1770, 1785)})
 TESTS.update({f"M{n}": "tests/unit/test_campaign_declared.py" for n in range(1785, 1789)})

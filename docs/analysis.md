@@ -600,17 +600,32 @@ Deux autres cas limites :
   La part de l'accueil reste celle décidée le 27/10 : sur les attaques détectées.
   [`design/console.md`](design/console.md) en donne le détail.
 
-### Ce que le calcul attend du format de run (C1)
+### Avec le run unifié de C1
 
-Le calcul ne lit que ce que les injecteurs écrivent déjà :
+Le calcul s'appuie sur le format de run de C1 (`eregion_core/run_report.py`), sans en créer un
+second :
+- **le temps** est celui de `run_report.timeline` : la relecture (`verified_at`, sinon la ligne du
+  cycle), rien avant l'attaque. La matrice de couverture, l'accueil et le rapport donnent donc le
+  même temps pour un même incident ;
+- **le type d'un run** se lit par `run_report.kind_of` (`metrics.kind`, sinon Gothmog) ;
+- **une panne** donne, dans la vue unifiée (`read_run`), sa fin (`ended_at`) et ses cibles
+  (`targets`) : BL1 les y a ajoutées.
+
+**Une seule différence, voulue.** Pour `timeline`, un incident est contenu dès que l'isolation ou
+le blocage est exécuté et vérifié. BL1 ajoute deux exigences :
+- que l'action ait tenu (le cas limite « isolation qui ne tient pas » de la fiche) ;
+- qu'elle ait été exécutée dans le cycle, donc sans humain.
+
+La part contenue seule de BL1 peut donc être plus petite que le décompte « contenu » de la matrice.
+Le temps, lui, est le même.
+
+Le calcul lit aussi :
 - le manifeste de la campagne (`status`, `detection`, `run_id`, `target_resource_id`,
   `started_at`, `finished_at`) ;
-- le rapport de chaque run (`metrics.attack_time` ; pour une panne : `metrics.injector: gothmog`,
-  `fault`, `targets`, `fault_start`, `fault_end`, `without_glorfindel`) ;
 - les fenêtres d'exercice, les lignes de débogage de la watch et ses cartes.
 
-Le run unifié de C1 devra garder ces champs, ou en donner l'équivalent. Une panne y deviendra un
-run de la campagne : le rattachement par l'heure ne servira plus, et `--fault-run` non plus.
+Une campagne de C1 qui jouerait elle-même ses pannes en ferait des runs de la campagne. Le
+rattachement par l'heure ne servirait plus, ni `--fault-run`.
 
 ## Le tri, la mémoire et le modèle séparés (IA1, #88)
 

@@ -42,7 +42,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-DISRUPTIVE = ("isolate_vm", "block_suspicious_ip")
+from eregion_core import run_report
+from eregion_core.run_report import CONTAINING as DISRUPTIVE   # C1: one list of what contains
+
 # The exercise window's grace (eregion_core/exercise.py GRACE_AFTER_S): how long after the
 # read-back a containment is watched when the run has no window.
 HOLD_WATCH_S = 15 * 60
@@ -85,18 +87,8 @@ OUTCOMES = {
 
 
 def _ts(value) -> float | None:
-    """Epoch seconds from a finite number or an ISO time (UTC when naive); None otherwise."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value) if value == value and abs(value) != float("inf") else None
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
+    """Epoch seconds from a number or an ISO time (C1's reader, ``run_report.epoch``)."""
+    return run_report.epoch(value) if value is not None and value != "" else None
 
 
 def _same(a, b) -> bool:
@@ -163,8 +155,15 @@ def outcome_of(decision: dict) -> tuple[str, str]:
 
 
 def contained_at(decision: dict) -> float | None:
-    """When the containment was read back on Azure: ``verified_at``, else the cycle's line."""
+    """When the containment was read back on Azure: ``verified_at``, else the cycle's line —
+    the rule of C1's ``run_report.timeline``, before it is bounded by the attack."""
     return decision["verified_at"] if decision["verified_at"] is not None else decision["at"]
+
+
+def time_to_contain(t0: float, decision: dict) -> float | None:
+    """From the attack to the read-back, as C1's ``run_report.timeline`` gives it (one
+    definition for the run format, the coverage matrix and BL1): None before the attack."""
+    return run_report.timeline({"at": t0, "detected_at": None}, decision)["contain_s"]
 
 
 def not_holding(resource_id: str, since: float, until: float, cards) -> dict | None:
@@ -229,10 +228,10 @@ def incident(run_id: str, ttp: str, target: str, t0, detection: str, decision: d
         inc.why = "attack_time absent : temps inconnu"
     elif at is None:
         inc.why = "heure de la vérification absente : temps inconnu"
-    elif at < t0:
-        inc.why = "vérifiée avant l'attaque (horloges des deux hôtes ?) : temps inconnu"
     else:
-        inc.time_to_contain_s = round(at - t0, 1)
+        inc.time_to_contain_s = time_to_contain(t0, d)
+        if inc.time_to_contain_s is None:
+            inc.why = "vérifiée avant l'attaque (horloges des deux hôtes ?) : temps inconnu"
     return inc
 
 
@@ -443,7 +442,7 @@ def _gothmog_reports(runs_dir: Path) -> dict[str, dict]:
         except (OSError, ValueError, UnicodeDecodeError):
             continue
         if isinstance(r, dict) and isinstance(r.get("metrics"), dict) \
-                and r["metrics"].get("injector") == "gothmog":
+                and run_report.kind_of(r) == "fault":       # C1's word, else Gothmog's
             out[str(r.get("run_id") or path.stem)] = r
     return out
 
@@ -523,7 +522,7 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
         m = reports[rid]["metrics"]
         # The watch's files written since the fault started (or the campaign, the earlier).
         since = min(x for x in (start, _ts(m.get("fault_start")), float("inf")) if x is not None)
-        fr = fault_run(rid, str(m.get("fault") or ""), m.get("targets") or [],
+        fr = fault_run(rid, str(m.get("experiment_id") or m.get("fault") or ""), m.get("targets") or [],
                        m.get("fault_start"), m.get("fault_end"),
                        watch_records(since if since != float("inf") else 0.0),
                        window_until=until_of(rid), taken=taken,

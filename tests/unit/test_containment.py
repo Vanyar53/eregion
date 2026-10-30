@@ -401,7 +401,7 @@ def test_a_campaign_replayed_gives_both_indicators_and_the_fault_apart(bench):
     assert by["r1"].outcome == ct.CONTAINED and by["r1"].action == "isolate_vm"
     # The end is the graph's own read-back stamp (verify_action), not the line written after it.
     assert by["r1"].contained_at == ct._ts(final1["outcome"]["verified_at"])
-    assert 0 < by["r1"].time_to_contain_s < 60
+    assert by["r1"].time_to_contain_s is not None and 0 <= by["r1"].time_to_contain_s < 60
     assert by["r2"].outcome == ct.NOT_HOLDING
     assert by["r3"].outcome == ct.MISSED
     assert c.share == pytest.approx(1 / 3) and c.median_s == by["r1"].time_to_contain_s

@@ -64,7 +64,7 @@ COMPONENTS: dict[str, Component] = {
         own=("eregion_core",),
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
-            "test_exercise_channel.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
+            "test_exercise_channel.py", "test_exercise_plan.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
             "test_run_report.py",
         ),
     ),
@@ -79,7 +79,8 @@ COMPONENTS: dict[str, Component] = {
             "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_entries_calls.py",
             "test_forged_logs.py",
             "test_glorfindel.py",
-            "test_invariant_regressions.py", "test_invariants.py", "test_invariants_aws.py",
+            "test_invariant_regressions.py", "test_invariant_regressions_aws.py", "test_invariants.py",
+            "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",
             "test_reassert.py", "test_rule_layers.py", "test_rules_check.py", "test_tui_actions.py", "test_unexpected_decision.py", "test_unreadable_state.py",
         ),
@@ -111,7 +112,7 @@ COMPONENTS: dict[str, Component] = {
 TOGETHER = (
     "test_activity_logs.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
-    "test_components.py", "test_console.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
+    "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
     "test_coverage.py",
     "test_restore_moment.py",
     "test_signal_origin.py",

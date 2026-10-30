@@ -123,7 +123,7 @@ def test_scripts_come_from_the_consoles_files_only():
     import eregion_console.api as api
     directives = dict(d.strip().split(" ", 1) for d in api._CSP.split(";"))
     assert directives["script-src"] == "'self'" and directives["object-src"] == "'none'"
-    pages = {page: (STATIC / page).read_text() for page in ("glorfindel.html", "overview.html", "injector.html")}
+    pages = {page: (STATIC / page).read_text() for page in ("glorfindel.html", "overview.html", "injector.html", "dagorlad.html")}
     pages["the token page"] = api._TOKEN_PAGE
     for page, html in pages.items():
         assert not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html), page
@@ -136,7 +136,7 @@ def test_the_shared_escape_of_the_other_pages():
     assert "{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]" in js
 
 
-@pytest.mark.parametrize("page", ["glorfindel.html", "overview.html", "injector.html"])
+@pytest.mark.parametrize("page", ["glorfindel.html", "overview.html", "injector.html", "dagorlad.html"])
 def test_the_reader_reads_every_interpolation_of_the_scripts(page):
     """S6 of #256's review: as many ${…} read as the files hold, counted apart — a template the
     tokenizer skipped (a regex taken for a division…) would hide its writes."""
@@ -433,7 +433,7 @@ async function load() {
     assert found == ["e.k.replace(/x/g, '_')"]
 
 
-@pytest.mark.parametrize("page", ["glorfindel.html", "overview.html", "injector.html"])
+@pytest.mark.parametrize("page", ["glorfindel.html", "overview.html", "injector.html", "dagorlad.html"])
 def test_the_reader_reads_every_template_of_the_page(page):
     """No template is skipped: the reader sees as many HTML templates as the file has."""
     unit = ce.Unit(page)

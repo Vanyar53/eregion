@@ -173,7 +173,8 @@ glorfindel/
 
 eregion_console/                → la console d'Eregion (`eregion console`, docs/design/console.md, #205) ; jusqu'au
                                   26/10, glorfindel/api.py et glorfindel/static/ (la War Room et l'atelier)
-  api.py                → FastAPI — pages / (Overview), /glorfindel, /annatar, /gothmog, /config ; jeton
+  api.py                → FastAPI — pages / (Overview), /glorfindel, /dagorlad (Board, ou Runs avec ?view=runs ;
+                          /annatar et /gothmog y mènent, filtrés), /config ; jeton
                           (EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN) ;
                           /api/state (autonomy_modes, autonomy_default, read_only, capability), /api/feed (WS),
                           /api/config, /api/audit[/<vm>], /api/pending/rules,
@@ -202,7 +203,13 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           d'exercice et ce que Glorfindel a fait dans chacune, campagnes (faits + report.md),
                           techniques ou pannes du catalogue ; grisée, ce que l'injecteur ajouterait
   static/exercises.js   → ce que Glorfindel a fait dans une fenêtre (partagé par l'accueil et les injecteurs)
-  static/*.js           → le script de chaque page, un fichier (overview.js, glorfindel.js, injector.js) : la
+  board.py              → Dagorlad (docs/design/console.md, §7, phase a) : cartes rouges (le catalogue), bleues
+                          (Glorfindel, les cibles inscrites lues par l'identité de la console), le plan des fils
+                          et ce qu'on doit en attendre (enveloppe du mode, jamais le modèle) ;
+                          `GET /api/dagorlad/board`, `GET /api/dagorlad/plan?wire=<expérience>@<cible>` — lecture seule
+  static/dagorlad.html  → /dagorlad : on tire des fils des cartes rouges vers les cibles (clic, ou glisser la
+                          poignée), le serveur juge chaque fil ; les fils tracés restent dans le navigateur
+  static/*.js           → le script de chaque page, un fichier (overview.js, glorfindel.js, injector.js, dagorlad.js) : la
                           CSP n'admet que les scripts servis par la console (#257) ; dans glorfindel.js,
                           _on et le répartiteur des événements (ACTIONS, data-on-*)
   static/glorfindel.html → page Glorfindel (/glorfindel, /config) — TO JUDGE (seul endroit où l'on juge
@@ -254,6 +261,11 @@ scripts/image_check.py → CI1 : les images de Glorfindel et des injecteurs épr
                         les injecteurs ; chaque vérification en docker run --network none. CI : images.yml ; local :
                         make images-check ; tests : tests/unit/test_image_check.py.
 
+scripts/mutant_anchors.py → avant un push (docs/sessions.md) : chaque mutant du harnais et du jeu de contrôle a un
+                        id unique, et le harnais pourra l'appliquer comme son measure() — le fichier à renommer
+                        existe, old et new s'apparient, chaque texte est trouvé une seule fois, dans un fichier
+                        suivi par git (sinon STALE). Accepte le chemin d'un autre worktree ; sort en 1 sur une faute.
+
 annatar/
   runner/engine.py    → inscription (`eregion_core.inscription.check_target` : périmètre du banc + tags `eregion-target`/`eregion-zone`
                         sur le groupe ET la VM + zone ; `scenario_destructive()` = le catalogue décide — la technique et sa source épinglée, inconnu = destructif, un scénario qui se dit non destructif contre lui refusé (SEC5) ; `annatar clean` gardé aussi, destructif, et derrière le garde V1) → setup → integrity check → attack
@@ -287,6 +299,10 @@ schemas/technique_catalog.schema.json → E1 : schéma du catalogue. Pannes dans
                                     une technique sur un autre moteur que local-script : `engine_ref`, pas de script ni d'étapes
 eregion_core/experiment.py        → validate_experiment() / validate_catalog() (jsonschema, import paresseux ;
                                     dev/CI, pas sur le hot-path) — la CI valide le catalogue via les tests
+eregion_core/exercise_plan.py     → Dagorlad (§7 de docs/design/console.md) : un fil peut-il tourner, et sinon
+                                    pourquoi — les règles d'Orodruin (périmètre, inscription, zone, règle de
+                                    production) plus le catalogue, la watch vivante, le moteur d'une panne, les
+                                    plafonds ; codes stables (REFUSALS) ; pur, la console conseille, Orodruin décidera
 infra/terraform/              → module Celebrimbor : infra de test Azure modulaire, namespacée, jetable.
                                 Celebrimbor = le bâtisseur (annatar=rouge, glorfindel=bleu, celebrimbor=infra).
                                 Pilotée par config.yaml (yamldecode + for_each). instance = WORKSPACE Terraform :

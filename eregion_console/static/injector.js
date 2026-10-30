@@ -1,6 +1,16 @@
-// ── Which injector: the path says it ─────────────────────────────────────────────────
-const INJECTOR = location.pathname.replace(/\/+$/, '') === '/gothmog' ? 'gothmog' : 'annatar';
+// Dagorlad's Runs (docs/design/console.md, §7): the windows and campaigns of both injectors and
+// the coverage matrix — Annatar's and Gothmog's pages until 30/10, which lead here now.
+// ── Which injector: ?injector= keeps one; without it, both ────────────────────────────
+const _FILTER = { annatar: 'annatar', gothmog: 'gothmog' };
+const _asked = new URLSearchParams(location.search).get('injector') || '';
+const INJECTOR = Object.hasOwn(_FILTER, _asked) ? _FILTER[_asked] : '';
 const ABOUT = {
+  '': {
+    label: 'Annatar and Gothmog', kind: '', catalog: 'COVERAGE', icon: '⚔',
+    title: "attacks and faults run from Orodruin, armed, and what Glorfindel did",
+    adds: 'Proof that Glorfindel detects real techniques and holds when the infrastructure fails: each run, when Glorfindel saw it and what it decided, and the coverage of the catalogue.',
+    how: 'README.md, gothmog/README.md and infra/orodruin/README.md — then, on Orodruin: <code>annatar run &lt;scenario&gt;</code> or <code>gothmog run vm-shutdown --yes</code>.',
+  },
   annatar: {
     label: 'Annatar', kind: 'technique', catalog: 'COVERAGE · TECHNIQUES', icon: '⚔',
     title: 'attacks run from Orodruin, armed, and what Glorfindel did',
@@ -15,13 +25,14 @@ const ABOUT = {
   },
 }[INJECTOR];
 
-Console.init(INJECTOR);
-document.title = `Eregion — ${ABOUT.label}`;
-document.getElementById('page-title').className = INJECTOR;
+Console.init('dagorlad');
+document.title = `Eregion — Dagorlad · Runs${INJECTOR ? ' · ' + ABOUT.label : ''}`;
+document.getElementById('page-title').className = INJECTOR || 'both';
 document.getElementById('page-title').innerHTML =
-  `<b>${ABOUT.label.toUpperCase()}</b> <span>— ${esc(ABOUT.title)}. This page never launches a run · times UTC</span>`;
+  `<b>DAGORLAD · RUNS</b> <span>— ${esc(ABOUT.title)}. This page never launches a run · times UTC</span>`;
 document.getElementById('cat-title').textContent = ABOUT.catalog;
-if (INJECTOR !== 'annatar') document.getElementById('col-camp').remove();   // campaigns are Annatar's
+document.querySelectorAll('#views [data-filter]').forEach(a => a.classList.toggle('on', a.dataset.filter === INJECTOR));
+if (INJECTOR === 'gothmog') document.getElementById('col-camp').remove();   // campaigns are Annatar's
 
 // ── State ─────────────────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
@@ -57,8 +68,8 @@ function renderExercises() {
   const live = items.filter(w => w.state === 'open' || w.state === 'grace').length;
   $('ex-count').textContent = `${items.length}${live ? ` · ${live} live` : ''}`;
   if (!items.length) {
-    list.innerHTML = `<div class="empty">No ${ABOUT.label} exercise window in this period.<br>
-      A window opens when ${ABOUT.label} starts a run against an inscribed target
+    list.innerHTML = `<div class="empty">No ${INJECTOR ? ABOUT.label + ' ' : ''}exercise window in this period.<br>
+      A window opens when ${INJECTOR ? ABOUT.label : 'Annatar or Gothmog'} starts a run against an inscribed target
       (runs/exercises/, pulled from Orodruin by the watch). Windows are kept 7 days.</div>`;
     return;
   }
@@ -134,7 +145,7 @@ function renderWindowDetail(w) {
   // The VM's name, its full id on hover: the id carries the subscription (M-1 took it off the
   // contract's display too).
   const targets = (w.targets || []).map(t => `<span title="${esc(t)}">${esc(vmName(t))}</span>`).join(', ');
-  parts.push(`<div class="dsec ${INJECTOR === 'gothmog' ? 's-orange' : 's-purple'}"><div class="dtitle">WINDOW</div><div class="kv">
+  parts.push(`<div class="dsec ${w.injector === 'gothmog' ? 's-orange' : 's-purple'}"><div class="dtitle">WINDOW</div><div class="kv">
     <span><b>run</b> ${esc(w.run_id)}</span><span><b>kind</b> ${esc(w.kind)}</span>
     <span><b>start</b> ${hms(w.start)}</span><span><b>end</b> ${w.end ? hms(w.end) : '—'}</span>
     <span><b>expires</b> ${hms(w.expires)}</span><span><b>counts until</b> ${hms(w.last_moment)}</span>
@@ -329,9 +340,11 @@ const WINDOW_KEPT_S = 7 * 86400;   // an exercise window is emptied 7 days after
 function runLink(runId, at, text) {
   const d = toDate(at);
   if (d && (Date.now() - d) / 1000 > WINDOW_KEPT_S) return `<span title="${esc(runId)} — its window is gone after 7 days (runs/${esc(runId)}.json stays)">${esc(text)}</span>`;
-  return `<a href="?run=${encodeURIComponent(runId)}" title="${esc(runId)}">${esc(text)}</a>`;
+  return `<a href="?view=runs&run=${encodeURIComponent(runId)}" title="${esc(runId)}">${esc(text)}</a>`;
 }
-const matrixRows = () => (S.cat && (ABOUT.kind === 'fault' ? S.cat.faults : S.cat.techniques)) || [];
+// One injector, its half of the matrix; both, the techniques then the faults.
+const matrixRows = () => (!S.cat ? [] : ABOUT.kind === 'fault' ? S.cat.faults || []
+  : ABOUT.kind === 'technique' ? S.cat.techniques || [] : [...(S.cat.techniques || []), ...(S.cat.faults || [])]);
 
 function historyStrip(r) {
   return (r.history || []).map(h => {
@@ -385,12 +398,15 @@ function renderCatalog() {
   // The catalogue unreadable: said above the rows the runs still give, never hidden by them.
   const banner = S.cat.error ? `<div class="err">${esc(S.cat.error)}</div>` : '';
   // A run dated in the future is in no row (C1): said, so that it is not lost either.
-  const future = (S.cat.future || []).filter(f => f.kind === ABOUT.kind);
+  const future = (S.cat.future || []).filter(f => !ABOUT.kind || f.kind === ABOUT.kind);
   const ahead = future.length ? `<div class="evo r-warn" title="${esc(future.map(f => f.run_id + ' · ' + f.at).join('\n'))}">${Number(future.length)} run(s) dated in the future — left out of the matrix</div>` : '';
   const rows = matrixRows();
-  const s = (S.cat.summary || {})[ABOUT.kind === 'fault' ? 'faults' : 'techniques'] || {};
-  const lost = s.regressed || [];
-  $('cat-count').innerHTML = `${Number(s.implemented)} implemented · <span class="r-ok">${Number(s.proven) + Number(s.aging)} proven</span>${Number(s.stale) ? ` · <span class="r-bad">${Number(s.stale)} stale</span>` : ''}${lost.length ? ` · <span class="r-bad">${Number(lost.length)} regressed</span>` : ''}`;
+  // Each half of the matrix this page shows, counted apart: techniques, faults.
+  const halves = ABOUT.kind === 'fault' ? ['faults'] : ABOUT.kind === 'technique' ? ['techniques'] : ['techniques', 'faults'];
+  $('cat-count').innerHTML = halves.map(h => {
+    const s = (S.cat.summary || {})[h] || {}, lost = Array.isArray(s.regressed) ? s.regressed : [];
+    return `${halves.length > 1 ? (h === 'faults' ? 'faults ' : 'techniques ') : ''}${Number(s.implemented)} implemented · <span class="r-ok">${Number(s.proven) + Number(s.aging)} proven</span>${Number(s.stale) ? ` · <span class="r-bad">${Number(s.stale)} stale</span>` : ''}${lost.length ? ` · <span class="r-bad">${Number(lost.length)} regressed</span>` : ''}`;
+  }).join(' │ ');
   const groups = {};
   for (const r of rows) {
     const g = r.in_catalog ? String(r.resource_type || '').toUpperCase() : 'OUTSIDE THE CATALOGUE';
@@ -425,7 +441,7 @@ async function renderSetup(s, override) {
     channel = (c.exercise_channel || {}).configured ? 'the exercise channel is configured' : 'no exercise channel configured';
   } catch (e) { channel = ''; }
   const why = override ? `this console was started with <code>--sections ${esc(override.join(',') || '…')}</code>, which leaves ${ABOUT.label} out`
-    : `no ${ABOUT.label} run, window or campaign in runs/`;
+    : `no ${INJECTOR ? ABOUT.label : 'Annatar or Gothmog'} run, window or campaign in runs/`;
   box.innerHTML = `<h2>${ABOUT.label.toUpperCase()} <small>— ${esc(s.role)} · not set up here</small></h2>
     <div class="line"><span class="k">What it adds</span><span>${esc(ABOUT.adds)}</span></div>
     <div class="line"><span class="k">What it needs</span><span>Glorfindel's watch running — ${ABOUT.label} requires it, and checks it before acting;
@@ -433,7 +449,7 @@ async function renderSetup(s, override) {
       (<code>eregion-target</code>, <code>eregion-zone</code>); the exercise channel between Orodruin and this host.</span></div>
     <div class="line"><span class="k">How</span><span>${ABOUT.how}</span></div>
     <div class="line"><span class="k">Found here</span><span>${why}${channel ? '; ' + esc(channel) : ''}.<br>
-      To show this section anyway: <code>eregion console --sections ${INJECTOR}</code></span></div>`;
+      To show this section anyway: <code>eregion console --sections ${INJECTOR || 'annatar,gothmog'}</code></span></div>`;
 }
 function renderMain() { $('setup').hidden = true; $('main').hidden = false; }
 
@@ -457,7 +473,7 @@ async function refreshFast() {
   await load('ex', `/api/exercises?since=${S.since}&injector=${INJECTOR}`, renderExercises);
 }
 async function refreshSlow() {
-  if (INJECTOR !== 'annatar') return;
+  if (INJECTOR === 'gothmog') return;
   await load('camp', `/api/campaigns?since=${S.campSince}`, renderCampaigns);
   const c = S.focus && S.focus.startsWith('c:') ? S.focus.slice(2) : null;
   if (c && !S.campDetail[c]) loadCampaignDetail(c);
@@ -529,8 +545,12 @@ function start() {
   // Active or greyed: /api/sections decides. The page shows the runs as soon as the section
   // is active, and what it would add while it is greyed.
   Console.onSections(d => {
-    const s = (d.sections || []).find(x => x.id === INJECTOR);
-    if (s && !s.active) { renderSetup(s, d.override); return; }
+    // One injector: its section. Both: greyed only when neither is set up here.
+    const mine = (d.sections || []).filter(x => (INJECTOR ? x.id === INJECTOR : x.id === 'annatar' || x.id === 'gothmog'));
+    if (mine.length && !mine.some(x => x.active)) {
+      renderSetup(INJECTOR ? mine[0] : { role: 'attacks and faults run against Glorfindel' }, d.override);
+      return;
+    }
     renderMain(); start();
   });
 })();

@@ -372,7 +372,7 @@ Quatorze mutants pour ce qu'A1 et MC0 ajoutent (M460–M463 après la relecture)
 Les invariants tournent aussi sur un faux AWS (`tests/unit/fake_aws.py`), avec l'adaptateur AWS
 écrit contre lui (`glorfindel/providers/aws/`) : `tests/unit/test_invariants_aws.py`, la même
 machine, le même harnais (pannes, deux opérations à la fois avec les vrais verrous, journal par
-auteur), les mêmes réglages `GLORFINDEL_INVARIANT_*` ; en CI, à 500 séquences avec le reste. Code
+auteur), les mêmes réglages `GLORFINDEL_INVARIANT_*` ; en CI, à 500 séquences avec le reste, et chaque nuit à 10 000 (AWS1). Code
 seul : aucun appel AWS, aucun compte. **La sémantique d'AWS du faux monde est faite d'hypothèses
 tirées de la documentation, toutes à mesurer sur le banc AWS (MC2)** : leur liste (H1–H14), ce
 qu'isoler, bloquer et lever veulent dire sur AWS et la transposition de chaque invariant sont dans
@@ -430,6 +430,44 @@ isolée. Six mutants de plus, M618–M623, mesurés par leurs cas de `tests/unit
 | M621 | une instance sans interface dite isolée |
 | M622 | le groupe de quarantaine noté dans l'état ignoré une fois son tag perdu |
 | M623 | `verify_release` aveugle à un groupe nommé comme la quarantaine |
+
+**Un échec instable, c'était l'oracle** (AWS1, #334, 30/10). Vu une fois à la relecture de C1, passé à
+la relance. La séquence : notre blocage de `i-web1` (deny entrant et sortant au numéro 99, sous l'allow
+100 de l'ACL par défaut), l'entrée entrante retournée par quelqu'un, la remise en état (l'opérateur ôte
+ce qu'on a retourné, le déblocage ôte la sortante), puis le client pose sa propre entrée entrante au
+numéro 99, libre. I2 disait « customer entries changed » sur un monde tel que le client l'a écrit.
+Le faux garde, à `(ACL, sens, numéro)`, ce que Glorfindel a écrit tant que Glorfindel ne l'a pas ôté tel
+quel : l'opérateur l'ayant ôté hors de l'API, la trace restait. L'oracle écartait des entrées du client
+toute entrée à une clé de cette trace (ou d'une altération) : l'entrée du client au numéro repris
+manquait d'un côté, pas de l'autre. **Ni le faux ni l'adaptateur n'avaient tort** : un numéro libre se
+prend (AWS refuse un numéro pris, `NetworkAclEntryAlreadyExists`, et la suppression le libère : H5, à
+mesurer au banc, MC2 ; ici le numéro était libre, ce comportement ne décidait pas) ; le déblocage n'ôte
+qu'une entrée encore telle qu'il l'a écrite (`_is_our_deny`), celle du client n'est jamais touchée.
+**L'oracle écarte maintenant une entrée par son contenu** : celle de Glorfindel telle qu'il l'a écrite,
+ou ce que quelqu'un en a fait. Il n'écarte rien de plus qu'avant : la seule séquence qu'il laisse passer
+en plus est celle où l'entrée du client à cette clé est exactement celle du design (A0). Séquence
+figée, et son pendant — l'entrée du client à ce numéro, changée ou ôtée par un autre, se voit
+(`tests/unit/test_invariant_regressions_aws.py`). Deux mutants de l'oracle : M1950 (l'exclusion par la
+clé, le défaut), M1951 (la clé écartée des deux côtés, le correctif tentant qui affaiblit), attrapés à
+chaque tour.
+
+Pourquoi instable : il faut, dans l'ordre, un blocage, l'altération de l'une de ses entrées, une remise
+en état, puis une entrée du client sur la même ACL (une sur cinq), dans le même sens (une sur deux
+environ) et au même numéro (un sur sept). Sur la base, **1 run sur 24 à 500 séquences** (graines
+100–123, `--hypothesis-seed`, sans réduction : la graine 101, même empreinte, sur `acl-default-vpc-b`) ;
+après, 24 sur 24 verts sur les mêmes graines, et verts à 2 000 séquences (graines 2000 et 101).
+La base Hypothesis de la CI ne pouvait pas la rejouer : au push, le cache `.hypothesis-invariants` est
+seulement restauré ; seul le job de nuit l'enregistre, et il ne lançait que `test_invariants.py` (Azure) —
+un échec de la machine AWS n'était gardé nulle part, une autre branche tirait de nouvelles graines.
+**Depuis AWS1, la machine AWS tourne aussi chaque nuit** (`.github/workflows/invariants.yml`, une étape
+à elle, lancée même si celle d'Azure échoue), au même budget (10 000) et dans la même base, que le job
+Linux du push restaure et rejoue pour les deux machines (`pytest tests/`, 500). Durée estimée : 19 min
+en local à 10 000 (2 000 en 225 s), 20 à 40 min sur un runner, soit 75 à 105 min avec Azure sur Linux,
+sous la borne de 150 min — à mesurer au premier run de nuit. Chaque machine a sa borne d'étape
+(Azure 95 min, AWS 45) : un dépassement fait échouer son étape sans annuler le job, l'étape AWS tourne
+encore et la base est enregistrée après les deux (`always()`). Tenu par `tests/unit/test_workflows.py`
+(`-k night_runs_both`, `-k push_replays`) ; mutants M1952 (l'étape AWS ôtée) et M1953 (la base
+enregistrée seulement sur une nuit verte), attrapés.
 
 **Le jeu de contrôle sur AWS.** Seize bugs plausibles de l'adaptateur, M630–M645, écrits et commités
 avant la machine AWS (dans le même commit que l'adaptateur) et jamais utilisés pour l'orienter, dans la
@@ -2238,7 +2276,7 @@ machine ne l'a trouvé qu'à 5 000 séquences.
 ```mermaid
 flowchart LR
     push["chaque push"] --> ci["ruff, tests unitaires<br/>py3.11, py3.12, macOS<br/>invariants 500 + rejeu"]
-    nuit["chaque nuit"] --> inv["invariants 10 000<br/>Linux et macOS"]
+    nuit["chaque nuit"] --> inv["invariants 10 000<br/>Azure et AWS<br/>Linux et macOS"]
     inv -. "séquences en échec<br/>gardées dans la base" .-> ci
     jour["chaque jour"] --> can["canary azurerm<br/>sur Azure"]
     lundi["chaque lundi"] --> mut["mutation, 1 000 séquences<br/>rouge sous 14 attrapés"]
@@ -2249,7 +2287,8 @@ flowchart LR
 ```
 
 Une séquence trouvée la nuit est rejouée en premier à chaque push jusqu'à sa correction, puis
-écrite dans `tests/unit/test_invariant_regressions.py`.
+écrite dans `tests/unit/test_invariant_regressions.py` (Azure) ou
+`tests/unit/test_invariant_regressions_aws.py` (AWS).
 
 ## Ce qui n'est pas couvert
 

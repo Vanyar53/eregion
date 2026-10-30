@@ -1316,7 +1316,7 @@ MUTANTS = [
      '@app.get("/api/exercises")\n', '@app.api_route("/api/exercises", methods=["GET", "POST"])\n'),
     ("M404", "a new page is served without the token (UI-1)", CON,
      '        if not (by_bearer or by_cookie):\n',
-     '        if not (by_bearer or by_cookie) and scope.get("path") != "/annatar":\n'),
+     '        if not (by_bearer or by_cookie) and scope.get("path") != "/dagorlad":\n'),
     ("M405", "/runs/<id> takes a path for a run id (UI-1)", CON,
      "    if not safe_part(run_id):\n", "    if not run_id:\n"),
     ("M406", "--sections removes Glorfindel (UI-1)", SEC,
@@ -4148,6 +4148,101 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1721, 1723)})
 TESTS.update({mid: _SMOKE_T for mid in ("M1671", "M1677", "M1683", "M1687", "M1688", "M1689")})
 
+# Dagorlad, the Board (DG-a, 30/10; docs/design/console.md, §7): a wire judged as Orodruin judges it,
+# from two identifiers; what to expect from the configuration; the page's closed table (M1980–M1994).
+EP = "eregion_core/exercise_plan.py"
+BOARD = "eregion_console/board.py"
+DG_JS = "eregion_console/static/dagorlad.js"
+MUTANTS += [
+    ("M1980", "the production rule skipped: every zone judged as the bench (DG-a)", EP,
+     "    zone = check_zone(enrolled.zone, kind=e.kind, destructive=e.destructive)\n",
+     '    zone = check_zone("bench", kind=e.kind, destructive=e.destructive)\n'),
+    ("M1981", "an entry's destructiveness taken as declared false, whatever the catalogue says (DG-a)", EP,
+     "    zone = check_zone(enrolled.zone, kind=e.kind, destructive=e.destructive)\n",
+     "    zone = check_zone(enrolled.zone, kind=e.kind, destructive=False)\n"),
+    ("M1982", "a wire allowed without a live watch (V1) (DG-a)", EP,
+     "    if watch_refusal:\n        return v.refuse(\"no_watch\"",
+     "    if False:\n        return v.refuse(\"no_watch\""),
+    ("M1983", "a target not enrolled allowed (DG-a)", EP,
+     "    if not enrolled.allowed:\n        return v.refuse(\"not_enrolled\", enrolled.reason)",
+     "    if False:\n        return v.refuse(\"not_enrolled\", enrolled.reason)"),
+    ("M1984", "a target outside the bench's perimeter allowed (DG-a)", EP,
+     "    if not inside.allowed:\n        return v.refuse(\"outside_scope\"",
+     "    if False:\n        return v.refuse(\"outside_scope\""),
+    ("M1985", "a planned entry of the catalogue allowed (DG-a)", EP,
+     '    if e.status != "implemented":\n', "    if False:\n"),
+    ("M1986", "a fault allowed on a VM its engine does not aim at (DG-a)", EP,
+     "        elif target.name.lower() not in {n.lower() for n in aimed}:\n", "        elif False:\n"),
+    ("M1987", "a destructive technique without the name to type (DG-a)", EP,
+     '    if e.kind == "technique" and e.destructive is not False:\n', "    if False:\n"),
+    ("M1988", "Orodruin's ceilings ignored by the plan (DG-a)", EP,
+     "            if rank + 1 > CEILING_INJECTIONS or total + estimate > CEILING_RUN_S:\n",
+     "            if False:\n"),
+    ("M1989", "a VM not enrolled given a blue card (bree, the VM with a real load) (DG-a)", BOARD,
+     "        if not verdict.allowed:\n            continue\n", "        if False:\n            continue\n"),
+    ("M1990", "a read-only deployment shown as able to contain alone (DG-a)", BOARD,
+     '    if card.get("read_only"):\n', "    if False:\n"),
+    ("M1991", "the plan's route answers a POST (DG-a)", "eregion_console/api.py",
+     '@app.get("/api/dagorlad/plan")\n', '@app.api_route("/api/dagorlad/plan", methods=["GET", "POST"])\n'),
+    ("M1992", "the page calls an action not in its table (DG-a)", DG_JS,
+     "  if (!Object.hasOwn(ACTIONS, action)) return;\n", ""),
+    ("M1993", "a target's name from Azure written raw into the page (DG-a)", DG_JS,
+     '    <span class="bname">${esc(t.name)}</span>\n', '    <span class="bname">${t.name}</span>\n'),
+    ("M1994", "a technique without a rule not said blind (DG-a)", BOARD,
+     '    if e.kind == "technique" and not rules_for(e.id, rules, card.get("backend") or None):\n',
+     "    if False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_exercise_plan.py" for n in range(1980, 1989)})
+TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py tests/unit/test_console_exercises.py "
+              "tests/unit/test_console_escaping.py" for n in range(1989, 1995)})
+# The end of DG-a (#347): the Runs, the redirects, the tab, the last proof (M1995–M1999).
+MUTANTS += [
+    ("M1995", "Annatar's page no longer leads to Dagorlad's Runs (DG-a)", "eregion_console/api.py",
+     "    where = f\"/dagorlad?view=runs&injector={request.url.path.strip('/')}\"\n",
+     "    where = \"/\"\n"),
+    ("M1996", "the redirect of Annatar's and Gothmog's pages loses what they asked (?run=) (DG-a)",
+     "eregion_console/api.py",
+     '    return RedirectResponse(where + (f"&{kept}" if kept else ""), status_code=308)\n',
+     "    return RedirectResponse(where, status_code=308)\n"),
+    ("M1997", "a run's link in the Runs opens the Board (DG-a)", "eregion_console/static/injector.js",
+     'return `<a href="?view=runs&run=${encodeURIComponent(runId)}"',
+     'return `<a href="?run=${encodeURIComponent(runId)}"'),
+    ("M1998", "a red card without its last proof (DG-a)", BOARD,
+     '            "proof": proof.get(e.id) or {"state": "never", "proof_age_s": None, "last_run": "", "last_run_at": ""},\n',
+     '            "proof": {"state": "never", "proof_age_s": None, "last_run": "", "last_run_at": ""},\n'),
+    ("M1999", "the header keeps Annatar's tab beside Dagorlad (DG-a)", "eregion_console/static/console.js",
+     "    { id: 'dagorlad',   label: 'Dagorlad',   href: '/dagorlad',",
+     "    { id: 'annatar', label: 'Annatar', href: '/annatar' },\n    { id: 'dagorlad',   label: 'Dagorlad',   href: '/dagorlad',"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py tests/unit/test_console.py" for n in range(1995, 2000)})
+# The review of #353 (M2005): an unreadable coverage matrix.
+MUTANTS += [
+    ("M2005", "an unreadable coverage matrix shown as « never run » on every red card (DG-a)", BOARD,
+     "        if proof_error:   # the matrix unreadable: its proof is unknown, never « never run » (A0)\n",
+     "        if False:\n"),
+]
+TESTS.update({"M2005": "tests/unit/test_console_dagorlad.py"})
+# DG-a, the review of #338 (M2000–M2004): a zone outside the three, a target isolated now, the
+# reader's next page outside ARM, the count ceiling, a read-only deployment on the blue card.
+MUTANTS += [
+    ("M2000", "a zone outside the three (« Production », « prod ») passes: only production refused (DG-a)", EP,
+     "    if not zone.allowed:\n        return v.refuse(\"zone_forbids\"",
+     "    if zone.zone == \"production\" and not zone.allowed:\n        return v.refuse(\"zone_forbids\""),
+    ("M2001", "a target isolated now not said on its wire (DG-a)", BOARD,
+     '    if card.get("holds_now"):\n', "    if False:\n"),
+    ("M2002", "the reader's token follows a next page outside Azure Resource Manager (DG-a)",
+     "eregion_core/inscription.py",
+     '                if not url.startswith(ARM + "/"):\n', "                if False:\n"),
+    ("M2003", "Orodruin's count ceiling dropped: only the time counts (DG-a)", EP,
+     "            if rank + 1 > CEILING_INJECTIONS or total + estimate > CEILING_RUN_S:\n",
+     "            if total + estimate > CEILING_RUN_S:\n"),
+    ("M2004", "a read-only deployment's target card shows its configured mode (DG-a)", BOARD,
+     '            "mode": "human_only" if state.get("read_only") else modes.get(',
+     '            "mode": modes.get('),
+]
+TESTS.update({f"M{n}": "tests/unit/test_exercise_plan.py" for n in (2000, 2002, 2003)})
+TESTS.update({f"M{n}": "tests/unit/test_console_dagorlad.py" for n in (2001, 2004)})
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.
@@ -5480,6 +5575,41 @@ TESTS["M1860"] = ("tests/unit/test_invariant_regressions.py::"
                   "tests/unit/test_invariant_regressions.py::test_a_quarantine_change_brought_back_after_a_full_disk_is_said "
                   f"{_L2Q} {INVARIANTS}")
 TESTS.update({f"M{n}": _L2Q for n in range(1861, 1867)})
+# AWS1 (#334): the oracle of I2 on AWS, not the adapter. It left out of the customer's ACL
+# entries any entry at a key Glorfindel once wrote, so the customer's entry at a number
+# freed and taken again went missing — a false alarm, about 1 run in 24 at 500 sequences.
+# By content now. Measured by the frozen sequence (tests/unit/test_invariant_regressions_aws.py).
+_AWS1_ORACLE = ('            live = {key: e for key, e in self.fake.acls[k]["entries"].items()\n'
+                '                    if not self._not_customers(k, key, e)}\n')
+MUTANTS += [
+    ("M1950", "the I2 oracle on AWS leaves out an ACL entry by its key: the customer's entry at a "
+              "number Glorfindel once held reads as changed (AWS1)", AWS_INVARIANTS,
+     _AWS1_ORACLE,
+     '            live = {key: e for key, e in self.fake.acls[k]["entries"].items()\n'
+     '                    if (k, *key) not in self.fake.authored and (k, *key) not in self.tampered}\n'),
+    ("M1951", "the I2 oracle on AWS leaves that key out of both sides: the customer's entry there, "
+              "changed or deleted, out of its sight (AWS1, the fix that weakens)", AWS_INVARIANTS,
+     _AWS1_ORACLE + '            assert live == acl["entries"], f"I2: customer entries of {k} changed"\n',
+     '            live = {key: e for key, e in self.fake.acls[k]["entries"].items()\n'
+     '                    if (k, *key) not in self.fake.authored and (k, *key) not in self.tampered}\n'
+     '            assert live == {key: e for key, e in acl["entries"].items() if (k, *key) not in self.fake.authored}, (\n'
+     '                f"I2: customer entries of {k} changed")\n'),
+]
+TESTS.update({mid: "tests/unit/test_invariant_regressions_aws.py" for mid in ("M1950", "M1951")})
+# AWS1: the AWS machine runs every night, its failures kept in the cached database.
+MUTANTS += [
+    ("M1952", "the nightly run no longer runs the AWS machine: its failures kept nowhere (AWS1)",
+     ".github/workflows/invariants.yml",
+     "        run: python -m pytest tests/unit/test_invariants_aws.py -q -s\n",
+     "        run: echo skipped\n"),
+]
+MUTANTS += [
+    ("M1953", "the database saved only when the night is green: a failing machine's sequence kept "
+              "nowhere (AWS1, review)", ".github/workflows/invariants.yml",
+     "        if: always() && matrix.os == 'ubuntu-latest'\n",
+     "        if: success() && matrix.os == 'ubuntu-latest'\n"),
+]
+TESTS.update({mid: "tests/unit/test_workflows.py -k night_runs_both" for mid in ("M1952", "M1953")})
 
 # L2C (#343, M1930–M1949): the other cards of the reassertion — a bypass, an unreadable
 # state, the rules a block left — follow L2Q's rule: a change in the mark is silent only

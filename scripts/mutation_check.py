@@ -5706,6 +5706,30 @@ TESTS.update({f"M{n}": ("tests/unit/test_invariant_regressions.py::"
                         "test_a_disappearance_after_one_acknowledged_and_held_again_is_said_by_the_machine "
                         f"{_L2C_DRIFT} {INVARIANTS}") for n in range(1942, 1946)})
 
+# L2C, what the machine found after the review (M2120–M2129): a pass cut off by one VM's
+# refused write, an episode kept by rules back but bypassed, an episode known over too late.
+_RT = "tests/unit/test_reassert.py::test_"
+MUTANTS += [
+    ("M2120", "a state write refused on one isolation stops the whole pass (L2C, review, 9b38af3)", R,
+     "        except OSError as exc:\n            # Its state not written (a full disk): the others are still read — a pass cut\n",
+     "        except KeyError as exc:\n            # Its state not written (a full disk): the others are still read — a pass cut\n"),
+    ("M2121", "a block's rules back but bypassed never end its disappearance (L2C, review, 60135ea)", R,
+     "            drift_over(ref or vm, ip)            # its rules back, an allow passes them (L2C, review)\n",
+     "            pass\n"),
+    ("M2122", "a block's episode known over only after the pass's first write: refused, never (L2C, review, ea1b153)", R,
+     ('    if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n'
+      "        episode(ref or vm, ip, over=True)        # back: a new episode next time, whatever write fails\n"
+      "    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)\n"),
+     ("    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)\n"
+      '    if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n'
+      "        episode(ref or vm, ip, over=True)        # back: a new episode next time, whatever write fails\n")),
+]
+TESTS.update({
+    "M2120": f"{_RT}a_state_refused_on_one_vm_does_not_stop_the_pass {INVARIANTS}",
+    "M2121": f"{_RT}a_disappearance_is_over_once_its_rules_are_back_even_bypassed {INVARIANTS}",
+    "M2122": f"{_RT}an_episode_is_known_over_before_any_write_of_its_pass {INVARIANTS}",
+})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

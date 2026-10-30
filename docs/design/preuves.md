@@ -104,7 +104,7 @@ Les propriétés, vérifiées après chaque étape :
 | I12 | une VM d'un autre abonnement n'est jamais touchée, ni déclarée isolée |
 | L1 | un blocage dont les règles ont disparu est reposé ou signalé, même derrière la quarantaine |
 | L2 | un NSG de quarantaine que quelqu'un a modifié, et qui porte encore des cartes, est reposé ou signalé — l'état de ces cartes perdu compris (I1F) ; signalé, il le reste quand il sort de la liste : rôle retiré sur son groupe, notre tag retiré (I1S) |
-| U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée, puis retirée par le balayage — rien d'autre ne bouge ; en fin de séquence, chaque VM vivante revient à sa conception en entier (A3) |
+| U1 | une règle laissée par une carte qui n'existe plus, et qui coupe une carte vivante, est signalée, puis retirée par le balayage — sauf si une de nos règles retournée en autorisation se tient derrière elle : gardée et dite (I5Q) ; rien d'autre ne bouge ; en fin de séquence, chaque VM vivante revient à sa conception en entier (A3) |
 
 **Des oracles qui ne demandent rien au code.** Ce qu'une propriété juge vient du journal du test :
 la levée qu'il a demandée (I9), ce qu'il a perdu et quand (une carte « intraçable »), qui a écrit
@@ -1750,6 +1750,146 @@ l'ancienne adresse, api bloquée de nouveau — l'opération change les flux de 
 supposée, non établie), pour un lot à part. Harnais avant/après (60 séquences, deux tours, mêmes
 modules) : 33 attrapés à chaque tour avant comme après, aucun perdu, les nouveaux à chaque tour.
 
+**I5Q (29/10, #327) : une réaffirmation qui ouvrait une VM après une adresse reprise.** Trouvée
+par la quatrième relecture de RB1, graine 101 à 500 séquences (« I5: the reassertion opened flows
+of …/rg-new/…/web », l'attaquant sur 22), présente sur `main` avant RB1. Réduite de 14 étapes à
+quatre : `block` d'`api` (sa règle à 200), `block_turned_then_reasserted` (`both` : la règle de
+périmètre à 210, puis celle d'`api` passée en allow par quelqu'un), `address_reused` (`api` isolée
+par règles sur son NSG, supprimée, une nouvelle VM `rg-new/web` à son adresse et sur ce NSG), puis
+la réaffirmation en `non_disruptive`. **Cause** (`providers/azure/sweep.py`, `find_orphan_rules`) :
+le balayage des orphelines retirait l'isolation d'`api`, qui coupait la nouvelle VM — mais ce refus
+était le dernier à tenir l'attaquant dehors : sur le NSG du subnet, notre règle retournée le laisse
+passer avant le blocage de périmètre, et le NSG de la carte l'autorise sur 22. Le balayage ne lisait
+que nos refus ; une de nos règles devenue autorisation ne comptait pas. Correctif
+(`providers/azure/turned.py`, `_turned_allows`, `_turned_behind`) : un refus d'une carte disparue reste, « Gardée :
+notre règle … retournée en autorisation … », quand une de nos règles (`glorfindel-iso-*`,
+`glorfindel-block-*`) passée en allow, du même côté, visant l'adresse de la carte qu'il coupe ou
+toutes (`*`, un préfixe qui la contient, une étiquette — lue comme la contenant), se tient sur un
+NSG qui gouverne cette carte. La carte le dit ; remise en refus ou retirée, la règle retournée
+libère le passage suivant, qui retire le refus. La VM reste coupée en attendant — jamais ouverte.
+
+**La levée d'une VM supprimée, le même trou.** Une règle composée (`turned_then_address_reused` :
+`block`, `block_turned_then_reasserted` et `address_reused` sur la même VM, puis la réaffirmation
+hors faute, hors `human_only` plus souvent) rend l'état courant ; à 500 séquences, la graine 322 y a
+trouvé la levée : « I4: an operation on …/rg-edge/…/api opened flows of …/rg-app2/…/api ». La
+levée de la VM supprimée défait les placements de son état, ou cherche ses noms sur tous les NSG
+(I7S) : elle retirait le même refus. Correctif (`release.py` ; `turned.py`, `_held_by_turned` sur
+les placements, `_turned_guard` dans `_gone_vm_rules`) : le refus reste, `release_partial`, la
+règle retournée nommée ; la levée suivante le retire une fois celle-ci remise. Une VM vivante qui
+tient elle-même l'adresse n'est jamais retenue par sa propre règle retournée (ce qu'elle laisse
+passer est le fait de quelqu'un, sur l'adresse de la VM : I1 le juge ainsi). Le déblocage d'une VM
+supprimée retire avec ses refus ses propres règles retournées : rien n'y attend derrière.
+
+**L'oracle.** I5 n'a pas bougé. La vivacité d'U1 (après le balayage en `non_disruptive`, plus
+aucune VM coupée par une orpheline) contredisait I5 dans cet état : une orpheline gardée derrière
+une règle retournée en est exemptée, lue du journal du test (`tampered`, la règle encore telle que
+quelqu'un l'a laissée), jamais des cartes du code, et elle doit être dite avec ce qui la retient :
+une carte en attente nomme une règle que le journal dit retournée derrière elle, et ne dit pas d'abord
+de retirer le refus. **L'exemption est volontairement prudente, plus large que le seul conflit avec
+I5** : le code garde le refus dès qu'une de nos règles retournée, du même côté, vise l'adresse sur un
+NSG de la carte — sans évaluer si une sonde passerait (une règle retournée sur un autre port, un NSG
+de carte sans autorisation : le retrait n'ouvrirait rien, le refus reste quand même, dit), et
+l'oracle l'exempte de même. Borner l'exemption aux retraits qui ouvriraient vraiment un flux absent
+de la conception de la VM demanderait au code d'évaluer les NSG comme Azure ; une VM coupée à tort,
+dite, plutôt qu'ouverte. Au démontage, l'opérateur remet les règles
+retournées que de tels refus retiennent, comme la carte le demande, avant les levées ; I7 et U1
+restent entiers ensuite. Séquences figées : `test_the_sequence_the_machine_found_on_i5_after_an_address_reused`
+(la graine réduite), `test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes` (la règle de
+la VM ou celle du périmètre), `test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release`
+(placements, ou état perdu), `test_a_live_vms_release_is_not_held_by_its_own_turned_rule`, et dans
+`test_orphan_sweep.py` les adresses (`*`, un préfixe, une étiquette, une autre adresse). Mutants
+M1730–M1736, attrapés à chaque tour ; par la machine seule à 500 séquences, M1730 et M1734 1/3
+(M1730 0/6 avant la règle composée).
+
+**La carte partagée.** Après la reprise de RB1, la graine 101 à 500 a trouvé la suite : « U1: the
+orphan rule glorfindel-iso-web-… kept behind a rule turned into an allow, cutting […/batch], not
+said ». Les refus entrant et sortant de la VM supprimée coupent la même VM : dits en `human_only`,
+ils partagent une carte (le magasin fusionne par VM). Passée en `non_disruptive`, la passe retire
+le sortant (la règle retournée est entrante) et résolvait la carte, que l'entrant, gardé, partageait :
+le refus restait, plus dit. Correctif (`orphans.py`) : une carte qu'une orpheline encore suivie
+partage reste ouverte. Test `test_a_card_two_rules_share_stays_open_while_one_stands` ; M1737
+attrapé.
+
+**La relecture d'I5Q.** La séquence figée de la graine ne prouvait plus rien sur `main` : depuis
+RB1, la réaffirmation lancée dans `block_turned_then_reasserted` en `non_disruptive` remet la règle
+retournée en refus, et l'état fautif n'est jamais atteint. L'étape 2 tourne maintenant en
+`human_only` : la séquence tombe sur I5 avec `glorfindel/` de `56fc9f0`, passe sur la branche. Une
+carte dite avant le retournement (en `human_only`, ou partagée avec l'autre refus de la VM) n'était
+jamais réécrite : elle disait encore de retirer le refus (`az network nsg rule delete`), seul pas
+proposé, ce qui ouvrirait la VM. Correctif (`orphans.py`) : la carte d'un refus gardé qui ne nomme
+pas la règle retournée est fermée et réécrite, les refus qu'elle couvrait dits de nouveau, les gardés
+d'abord ; son premier pas dit de remettre la règle en refus (`az network nsg rule update …
+--access Deny`), le retrait seulement après. La liste des NSG peut dater d'un passage : juste avant
+le retrait, `remove_orphan_rule` relit par leur id les NSG qui gouvernent la carte coupée (le sien
+et celui du subnet) et rejoue la garde ; une lecture refusée garde la règle. La levée d'une VM ne
+consulte plus la garde pour un placement dont la carte vit encore quand la liste des NSG est
+refusée : sa propre adresse, rien d'une autre VM n'y attend. Tests
+`test_a_card_said_before_the_turn_is_replaced_by_one_naming_it` (le second passage en `human_only`
+ou en `non_disruptive`, la carte partagée par les deux refus), `test_a_rule_turned_after_the_listing_stops_the_removal`,
+`test_a_live_vms_release_is_not_held_by_its_own_turned_rule[refused]` ; mutants M1738–M1743.
+L'oracle resserré a aussitôt trouvé deux suites (graine 31337 à 500) : les deux refus d'une VM
+gardés derrière deux règles retournées différentes — la carte que le magasin fusionne par VM ne
+nommait que la première ; et le nom de la règle de périmètre commence celui de chaque règle de VM de
+son IP — lu comme une sous-chaîne, une carte ancienne qui disait de retirer une règle de VM passait
+pour nommer le périmètre, et restait. La carte d'une VM nomme maintenant chaque règle retournée que
+ses refus gardés attendent (« notre règle X (… », le nom entier) et les remet toutes en refus
+d'abord ; l'oracle lit le nom entier. Séquence figée `test_a_card_names_the_turned_rule_by_its_whole_name`,
+tests `test_the_card_of_a_vm_names_every_rule_its_kept_denies_wait_behind`,
+`test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter` ; M1744, M1745. Mesures
+après la relecture : M1730–M1745 attrapés à chaque tour ; invariants à 500 verts sur les graines
+31337, 4242 et 9001 (la 101 rouge sur L2 seule), à 2 000 vert sur 322. Harnais au même budget
+(60 séquences, deux tours) sur les modules touchés (`sweep.py`, `release.py`, `readers.py`,
+`turned.py`, `orphans.py`), avant (`56fc9f0`) et après : 13/22 attrapés à chaque tour avant,
+14/22 après (27/35 avec les nouveaux) ; aucun perdu — M12 (1/2 puis ses séquences figées seules)
+et M33 (2/2 puis 1/2), remesurés sur quatre tours après : 2/4 et 3/4.
+
+**La seconde relecture d'I5Q.** Un refus gardé nouveau, sans carte à lui, se fondait dans la carte
+en attente de sa VM (celle d'une orpheline non gardée), dont le magasin garde la première raison :
+l'opérateur ne voyait que le retrait d'un refus déjà parti, le refus gardé nommé nulle part pendant
+une passe. La carte en attente de la VM est lue aussi, et remplacée si elle ne nomme pas tout le
+groupe (`test_a_new_kept_deny_never_merges_into_a_stale_card_of_its_vm`, M1746). La levée d'une VM
+vivante, la liste des NSG refusée, ne lâche son refus que si sa carte tient encore toutes les
+adresses qu'il vise (`test_a_live_vms_release_is_not_held_by_its_own_turned_rule[refused, address
+moved]`, M1747). L'oracle d'U1 exige que la carte qui nomme la règle retournée porte sur une VM que
+le refus coupe, ou sur son NSG. Après la reprise d'I4A, une seule règle dit si une adresse est
+visée : `nsg._takes_in` d'I4A (plus précis sur les valeurs entourées d'espaces) remplace celui
+d'I5Q, et le `takes_in` de l'oracle s'y aligne ; M1732 le suit.
+La graine 322 à 2 000, après I4A, a trouvé trois échecs. Un est d'I5Q : la levée d'une VM vivante
+dont l'IP a changé garde son refus sur l'ancienne adresse, que la règle composée d'I4A donne à une
+nouvelle VM, une règle retournée derrière (`release_partial`, voulu) ; l'opérateur du démontage ne
+remettait que ce que retiennent les refus des VM supprimées — il remet maintenant ce que retient tout
+refus des nôtres sur l'adresse d'une autre carte (`_cutting_others`), puis I7 tient
+(`test_a_live_vm_whose_deny_waits_before_a_turned_rule_is_released_once_it_is_put_back`). Les deux
+autres échouent aussi avec `glorfindel/` de `20cb5b5` (I4A), de la famille qu'I4A a laissée ouverte
+(une IP changée) : une isolation réaffirmée sous ses noms quitte l'ancienne adresse où attend une règle
+retournée (I5), et une levée interrompue ouvre la nouvelle VM (I4) — figées en `xfail` strict
+(`test_a_reasserted_isolation_moves_off_the_old_address_a_turned_rule_waits_behind`,
+`test_an_interrupted_release_after_an_ip_change_opens_the_new_owner`), pour la suite d'I4A.
+
+**Trouvé en chemin, hors d'I5Q : L2.** La même graine tombe ensuite sur L2 (« the quarantine NSG
+…/rg-sec/…/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5]; the
+reassertion neither put it back nor said so ») : réduite à 14 étapes écrites avec les règles de
+`main`, elle échoue de même avec `glorfindel/` de `171a242` (RB1) et de `b83cb92` (avant RB1).
+La configuration est lisible à chaque étape. Cause (établie par la relecture d'I5Q,
+`reassert_quarantine._report_altered_quarantines`) : un accès forensique change le diff du NSG, la
+carte du nouveau changement est écrite mais pas `quarantine_alerts.json` (disque plein), qui garde
+l'identifiant de l'ancien ; l'accès retiré, le diff revient à l'ancien changement, lu « déjà dit ou
+acquitté » — aucune carte, le NSG toujours vidé. Figée en `xfail` strict
+(`test_an_altered_quarantine_stays_said_when_its_change_comes_back`) pour le lot L2Q (#331). La graine 101 à 500 reste rouge sur L2 jusqu'à lui.
+
+**Mesures d'I5Q.** Avant la reprise de RB1 : invariants à 500 séquences sur les graines 101, 202,
+322, 1, 42 et 777, puis 2 000 sur 101, 322 et 42, verts. Sur le code final (RB1 et la 0.4.6 repris) :
+la séquence du relecteur (graine 101, 14 étapes) passe, et tombe toujours sur I5 avec `glorfindel/`
+de `b83cb92` ; à 500 séquences, verts sur les graines 202, 322, 1, 42, 777 et 2718, la 101 rouge sur L2 seule (ci-dessus) ; à 2 000, verts sur 322, 42 et 777. Au même budget (60 séquences,
+deux tours, `--jobs 4`), les 80 mutants mesurables par la machine de `providers/azure/`, de
+`response/`, de la réaffirmation et des orphelines, avant (`b83cb92`) et après (avant la reprise de
+RB1) : 51/80 attrapés à chaque tour avant, 50/80 après (57/87 avec M1730–M1736). Aucun perdu : M19
+et M26, attrapés par la machine avant, ne l'étaient plus que par leurs séquences figées après ;
+remesurés sur quatre tours, 2/4 puis 1/4 (M19), 2/4 puis 2/4 (M26), et 2/2 chacun à 500 après. M02,
+M04, M14, M18, M20, M32, M34, M830 et M831 gagnent un tour ; M08, M09, M12 et M17 en perdent un
+(remesurés sur quatre tours : entre 1/4 et 4/4 des deux côtés). À 500, le code d'avant tombe déjà,
+sur une graine du moment, sur une autre propriété (« I4: … cut off … », hors de ce lot) : la mesure
+d'avant à 500 n'a pas pu tourner.
 **I4A (29–30/10, #328) : un blocage réécrit sur une adresse reprise.** Le défaut figé par RB1 en
 `xfail` strict (graine 8675 à 500), présent sur `main` avant RB1. **Cause, établie** : api bloquée sur
 le NSG de son subnet, sa règle entrante (`glorfindel-block-<ip>-api-api-nic-<empreinte>`) passée en

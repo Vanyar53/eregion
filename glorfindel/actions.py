@@ -12,6 +12,7 @@ The code that lived here (4 394 lines) is split by concern, nothing changed in i
   glorfindel/providers/azure/   the only adapter, and the only place the Azure SDK is imported
     connector.py                AzureConnector, the subscription guard, the VM lock on writes
     nsg.py                      reading security rules by content
+    turned.py                   our rules turned into an allow, the denies they wait behind (I5Q)
     network.py                  NICs and NSGs: reads, rule writes, names
     quarantine.py               the quarantine NSG
     isolation.py, release.py, verify.py      isolation by quarantine or by rules
@@ -48,6 +49,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.providers.azure.sdk",
     "glorfindel.providers.azure.capabilities",
     "glorfindel.providers.azure.nsg",
+    "glorfindel.providers.azure.turned",
     "glorfindel.providers.azure.quarantine",
     "glorfindel.providers.azure.network",
     "glorfindel.providers.azure.isolation",

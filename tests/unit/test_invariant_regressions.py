@@ -2854,3 +2854,306 @@ def test_the_unblock_and_the_reset_leave_the_new_owner_of_the_old_address(monkey
         assert m._attacker_flows(_NEW_API_VM, None) >= reach
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+# ── I5Q (#327): an orphan's deny that holds back one of our rules someone turned ──────
+
+_Q_EDGE_NSG = _NSG.format(rg="rg-edge", name="nsg-edge")
+_Q_API_NSG = "/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Network/networkSecurityGroups/nsg-api-nic"
+_Q_API_BLOCK = "glorfindel-block-192-31-196-7-api-api-nic-c272f2"     # api's NIC, in the IP's block
+_Q_API_ISO = "glorfindel-iso-api-api-nic-c272f2"
+_Q_PERIMETER = "glorfindel-block-192-31-196-7"
+_Q_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+
+
+def _edge_net():
+    """api on an NSG of its own that lets SSH in from anywhere; its subnet's NSG empty."""
+    return {**_net(api_nic={"own": "dedicated", "rules": [_rule("allow-ssh", 101, dict(
+        access="Allow", direction="Inbound", source_address_prefix="*",
+        destination_address_prefix="*", destination_port_range="22"))]}), "edge_nsg": []}
+
+
+def test_the_sequence_the_machine_found_on_i5_after_an_address_reused(monkeypatch):
+    """Graine 101 at 500 sequences (RB1's fourth review; on `main` too), shrunk from 14
+    steps to 4: api blocked, then blocked on its subnet as well — its own rule at 200,
+    the perimeter rule at 210 —, its own rule turned into an allow; api isolated by
+    rules, deleted, and a new VM given its address and its NSG. The orphan sweep of the
+    reassertion took api's isolation off the new VM: the attacker, let through the
+    subnet's NSG by the turned rule, reached it on 22 — the perimeter block behind.
+    The reassertion inside step 2 runs in human_only: since RB1, in non_disruptive it
+    puts the turned rule back as a deny, and the state is never reached (the sequence
+    then passed on `main` too — the review of I5Q)."""
+    _run(monkeypatch, _edge_net(),
+         ("block", API, API, None, 22),
+         ("block_turned_then_reasserted", API, API, None, "both", 22, (key(_Q_EDGE_NSG), _Q_API_BLOCK),
+          "human_only"),
+         ("address_reused", API, API, None, True, False, "rg-new", "web", _Q_API_NSG, "Linux", False),
+         ("reassert", "non_disruptive", None))
+
+
+@pytest.mark.parametrize("turned", [_Q_API_BLOCK, _Q_PERIMETER])
+def test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes(monkeypatch, turned):
+    """The deny a deleted VM left, cutting the VM that took its address and NSG, is the
+    last thing keeping the attacker out: one of our rules on the subnet's NSG, turned
+    into an allow by someone, lets them past the block. The reassertion keeps it and
+    says why — the card names the turned rule; never the opening. Once the operator puts
+    that rule back, the next pass takes the deny off: the VM is no longer cut off, the
+    attacker still out. Whichever rule is turned — the VM's, or the perimeter one (aimed
+    at every address of the subnet)."""
+    import shutil
+
+    from glorfindel import escalations, reassert
+
+    from .test_invariants import _CURRENT
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_edge_net())
+        c, g = m.connector, m.fake.nsgs[key(_Q_EDGE_NSG)]
+        first, then = ("vm", "subnet") if turned == _Q_API_BLOCK else ("subnet", "vm")
+        for scope in (first, then):
+            assert c.block_suspicious_ip(ATTACKER, API, scope=scope, threat_port=22)["status"] == "blocked"
+        assert g["rules"][turned]["priority"] == 200, g["rules"][turned]
+        g["rules"][turned]["access"] = "Allow"
+        assert c.isolate_vm(API)["status"] == "isolated"
+        m._delete_vm(API)
+        m._create_vm(Script("rg-new", "web", _Q_API_NSG, "Linux"), "northeurope", reuse_nsg=_Q_API_NSG)
+        assert _Q_NEW_WEB in m.live and not _reached_in(m, _Q_NEW_WEB)
+        _CURRENT.mode = "non_disruptive"
+        reassert.reassert_pass(c, None)
+        assert not _reached_in(m, _Q_NEW_WEB), "the orphan sweep let the attacker in"
+        assert _Q_API_ISO in m.fake.nsgs[key(_Q_API_NSG)]["rules"]
+        said = [e for e in escalations.pending() if e.get("action") == "remove_orphan_rule"
+                and turned in (e.get("reason") or "")]
+        assert said and "retournée en autorisation" in said[0]["reason"], escalations.pending()
+        g["rules"][turned]["access"] = "Deny"                     # the operator, from the card
+        reassert.reassert_pass(c, None)
+        assert not _reached_in(m, _Q_NEW_WEB)
+        assert _Q_API_ISO not in m.fake.nsgs[key(_Q_API_NSG)]["rules"]
+        assert any(f[2] == "in" and f[4] == 22 for f in m._open(_Q_NEW_WEB)), "the new VM still cut off"
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_card_names_the_turned_rule_by_its_whole_name(monkeypatch):
+    """Seed 31337 at 500 (I5Q, after its review), as the machine drew it. Two denies of a
+    deleted VM kept behind two turned rules (the perimeter's inbound, api's outbound), and
+    an older card of another orphan rule of the IP, said in human_only: the perimeter's
+    name begins every VM rule of its IP — read as a substring, that card « named » the
+    perimeter and was kept, still telling to delete; and the VM's card named only the
+    first turned rule. U1 asks a pending card naming each, by its whole name, that
+    doesn't say first to delete."""
+    _run(monkeypatch, {**_net(api_nic={"rules": [
+        _rule("allow-https", 100, dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                                        destination_address_prefix="*", destination_port_range="443")),
+        _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                              destination_address_prefix="VirtualNetwork",
+                                              destination_port_range="*"))]},
+        web_nic={"own": "dedicated"}), "edge_nsg": []},
+         ("turned_then_address_reused", API, API, None, 22, "both", 22, (key(_Q_EDGE_NSG), _Q_API_BLOCK),
+          "non_disruptive", False, 22, False, "rg-app2", "api", None, "Linux", False, "human_only"),
+         ("tamper_with_our_rule", "access", (key(_Q_EDGE_NSG), _Q_PERIMETER)),
+         ("time_passes",),
+         ("block_turned_then_reasserted", WEB1, WEB1, (1, "before-429"), "both", 22,
+          (key(_Q_EDGE_NSG), f"{_Q_API_BLOCK}-out"), "non_disruptive"),
+         ("address_reused", "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api",
+          "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api", None, True,
+          False, "rg-new", "web", None, "Linux", True, None, "non_disruptive"))
+
+
+@pytest.mark.parametrize("state", ["kept", "isolation lost"])
+def test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release(monkeypatch, state):
+    """The same hole on the other path that takes a deleted VM's denies off: its release
+    — found by the machine once `turned_then_address_reused` was added (seed 322 at 500:
+    « I4: an operation on …/rg-edge/…/api opened flows of …/rg-app2/…/api »). api blocked
+    for itself (200), then on its subnet (210), isolated there by rules (100); its own
+    block rule turned into an allow; api deleted, a new VM at its address on the same
+    subnet. The release took the isolation off: the attacker reached the new VM through
+    the turned rule. The deny stays, said (`release_partial`, the turned rule named);
+    once that rule is put back, the next release takes it off. Whether the release reads
+    the isolation's placements (`kept`) or looks for its names on every NSG, its state
+    lost and the block's naming the NIC (I7S's `_gone_vm_rules`)."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build({**_net(), "edge_nsg": []})
+        c, g = m.connector, m.fake.nsgs[key(_Q_EDGE_NSG)]
+        for scope in ("vm", "subnet"):
+            assert c.block_suspicious_ip(ATTACKER, API, scope=scope, threat_port=22)["status"] == "blocked"
+        g["rules"][_Q_API_BLOCK]["access"] = "Allow"
+        assert c.isolate_vm(API)["status"] == "isolated"
+        if state == "isolation lost":
+            m._lose_state(API)
+        m._delete_vm(API)
+        m._create_vm(Script("rg-app2", "api", None, "Linux"), "northeurope")
+        new = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api"
+        assert new in m.live and not _reached_in(m, new)
+        out = c.release_isolation(API)
+        assert not _reached_in(m, new), "the release of the deleted VM let the attacker in"
+        assert out["status"] == "release_partial", out
+        assert any(_Q_API_BLOCK in f and "retournée en autorisation" in f for f in out["failed"]), out
+        g["rules"][_Q_API_BLOCK]["access"] = "Deny"                 # the operator, from what was said
+        out = c.release_isolation(API)
+        assert out["status"] == "released", out
+        assert not _reached_in(m, new)
+        assert not [n for n in g["rules"] if n.startswith(_Q_API_ISO)]
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("listing", ["read", "refused", "refused, address moved"])
+def test_a_live_vms_release_is_not_held_by_its_own_turned_rule(monkeypatch, listing):
+    """The guard is for another VM at the address: api, alive, its own block rule turned
+    into an allow, is released as usual — what that rule lets through is someone's doing
+    on api's own address (I1 judges it so), not an opening of another VM. The NSGs'
+    listing refused: its NIC is read, alive — released too (the review of I5Q); unless the
+    NIC no longer holds every address the rule denies (its second review): another VM may
+    hold it now — kept, `release_partial`."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build({**_net(), "edge_nsg": []})
+        c, g = m.connector, m.fake.nsgs[key(_Q_EDGE_NSG)]
+        for scope in ("vm", "subnet"):
+            assert c.block_suspicious_ip(ATTACKER, API, scope=scope, threat_port=22)["status"] == "blocked"
+        g["rules"][_Q_API_BLOCK]["access"] = "Allow"
+        assert c.isolate_vm(API)["status"] == "isolated"
+        if listing.startswith("refused"):                     # the guard's listing, once
+            real, calls = m.fake.network.network_security_groups.list_all, []
+
+            def refused(*a, **k):
+                calls.append(1)
+                if len(calls) == 1:
+                    raise RuntimeError("(AuthorizationFailed) no list")
+                return real(*a, **k)
+            monkeypatch.setattr(m.fake.network.network_security_groups, "list_all", refused)
+        if listing.endswith("moved"):
+            m.fake.nics[_nic("rg-edge", "api-nic")]["ips"] = ["10.1.0.40"]
+            out = c.release_isolation(API)
+            assert out["status"] == "release_partial" and any("gardée" in f for f in out["failed"]), out
+            assert [n for n in g["rules"] if n.startswith(_Q_API_ISO)]
+            return
+        assert c.release_isolation(API)["status"] == "released"
+        assert not [n for n in g["rules"] if n.startswith(_Q_API_ISO)]
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+# ── Found on the way (I5Q), outside its cause: L2, frozen for a lot of its own ──────────
+
+_L2_NET = {'subnet_nsg': [_rule('allow-https', 100, dict(access='Allow', direction='Inbound', source_address_prefix='Internet', destination_address_prefix='*', destination_port_range='443')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*'))], 'edge_nsg': None, 'tier_rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))], 'nics': {'web-nic': {'own': None, 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [_rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*'))], 'policy': False}, 'db-nic-1': {'own': 'dedicated', 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*'))], 'policy': False}, 'api-nic': {'own': None, 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22'))], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'readable': True, 'forensic': [], 'rg': ''}, 'legacy': None, 'data_subnet': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))]}
+_L2_STEPS = [
+    ('block_then_isolate', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None, 22, None, True, False),
+    ('config_changes', {'quarantine': False, 'rg': 'rg-sec', 'readable': True, 'forensic': []}, False),
+    ('delete_vm', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web'),
+    ('block', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22),
+    ('block_turned_then_reasserted', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 'both', 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-80ab3c'), 'non_disruptive'),
+    ('address_reused', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, True, False, 'rg-new', 'web', None, 'Linux', False),
+    ('reassert', 'non_disruptive', None),
+    ('bare_with_an_unknown_original', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', None, '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networkinterfaces/api-nic', 'isolate+release', None),
+    ('address_reused', '/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web', ('nic.get', 'always-429'), True, True, 'rg-app1', 'api', None, 'Linux', False),
+    ('quarantine_altered_then_reasserted', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api', None, False, True, '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'human_only', 'role removed', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 1, 'human_only'),
+    ('config_changes', {'quarantine': True, 'forensic': ['10.9.9.9'], 'readable': True, 'rg': ''}, True),
+    ('reassert', 'human_only', (14, 'before-429')),
+    ('config_changes', {'quarantine': False, 'rg': '', 'readable': True, 'forensic': []}, False),
+    ('block_turned_then_reasserted', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, 'both', 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-80ab3c-out'), 'non_disruptive'),
+]
+
+
+@pytest.mark.xfail(strict=True, reason="L2 outside I5Q (lot L2Q, #331): present on origin/main 171a242")
+def test_an_altered_quarantine_stays_said_when_its_change_comes_back(monkeypatch):
+    """Graine 101 at 500 sequences, after RB1 (I5Q's run), shrunk to 14 steps — written
+    with the rules of the machine as `main` has them: it fails there too, glorfindel/ of
+    171a242 and b83cb92 (« L2: the quarantine NSG …/nsg-glorfindel-quarantine-westeurope
+    was altered, holds […/api-nic-5] »). The configuration is readable at every step.
+    Cause (the review of I5Q, reassert_quarantine._report_altered_quarantines): the write
+    of quarantine_alerts.json failed (a full disk) after a forensic access changed the
+    NSG's diff, so the file kept the former change's signal id; once the access is taken
+    off, the diff comes back to that change, read as « said, or acknowledged » — no card,
+    the NSG still stripped. Lot L2Q."""
+    _run(monkeypatch, _L2_NET, *_L2_STEPS)
+
+
+# ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────
+
+_S322_NET_KEPT = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}
+_S322_STEPS_KEPT = [
+    ('time_passes',),
+    ('interrupted_release', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', (1, 'before-429'), 1, 'before-crash', False),
+    ('time_passes',),
+    ('address_reused_under_a_turned_rule', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-8b70f2'), '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/web-nic', 0, 4, 'rg-app1', 'api', None, 'Linux'),
+]
+
+
+def test_a_live_vm_whose_deny_waits_before_a_turned_rule_is_released_once_it_is_put_back(monkeypatch):
+    """Seed 322 at 2 000 (I5Q after I4A): web blocked, its own rule turned into an allow,
+    its IP changed, a new VM at its old address (I4A's composite rule), then web's
+    release: its isolation's deny on the old address now cuts the new VM, and web's
+    turned rule waits behind it — the release keeps it, `release_partial`, the turned
+    rule named. The teardown's operator, who put back only what deleted VMs' denies held
+    back, now puts back what any deny of ours on another NIC's address holds back: I7."""
+    _run(monkeypatch, _S322_NET_KEPT, *_S322_STEPS_KEPT)
+
+
+_S322_NET_ISO = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}
+_S322_STEPS_ISO = [
+    ('time_passes',),
+    ('interrupted_release', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 1, 'before-crash', False),
+    ('time_passes',),
+    ('time_passes',),
+    ('address_reused_under_a_turned_rule', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-8b70f2'), '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/web-nic', 0, 4, 'rg-new', 'web', None, 'Linux'),
+    ('block_perimeter', '/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-new/providers/microsoft.compute/virtualmachines/web', None, False),
+    ('tamper_with_our_rule', 'retarget', ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7')),
+    ('turned_then_address_reused', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', (8, 'before-429'), None, 'both', 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-b-8b70f2'), 'non_disruptive'),
+]
+
+
+@pytest.mark.xfail(strict=True, reason="outside I5Q: I4A's open point (an isolation rewritten after an IP change), "
+                                       "fails with glorfindel/ of 20cb5b5 too")
+def test_a_reasserted_isolation_moves_off_the_old_address_a_turned_rule_waits_behind(monkeypatch):
+    """Seed 322 at 2 000 (I5Q after I4A). web's IP changed under a turned block rule of its
+    own (I4A's composite rule), a new VM at the old address; the reassertion puts web's
+    isolation back under the same names, now on its new address — the deny that held
+    the old address goes with it, and the new VM opens to the attacker through web's
+    turned rule (« I5: the reassertion opened flows of …/rg-new/…/web »). The isolation's
+    side of what I4A did for blocks (a second name), frozen there in
+    `test_an_isolation_written_again_after_an_ip_change_leaves_the_new_owner_of_the_old_address`."""
+    _run(monkeypatch, _S322_NET_ISO, *_S322_STEPS_ISO)
+
+
+_S322_NET_REL = {'subnet_nsg': [_rule('allow-https', 100, dict(access='Allow', direction='Inbound', source_address_prefix='Internet', destination_address_prefix='*', destination_port_range='443')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))], 'edge_nsg': None, 'tier_rules': [_rule('allow-https', 100, dict(access='Allow', direction='Inbound', source_address_prefix='Internet', destination_address_prefix='*', destination_port_range='443'))], 'nics': {'web-nic': {'own': None, 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))], 'policy': True}, 'db-nic-0': {'own': None, 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*'))], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [_rule('allow-https', 100, dict(access='Allow', direction='Inbound', source_address_prefix='Internet', destination_address_prefix='*', destination_port_range='443')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))], 'policy': True}, 'api-nic': {'own': 'dedicated', 'rules': [_rule('allow-ssh', 100, dict(access='Allow', direction='Inbound', source_address_prefix='*', destination_address_prefix='*', destination_port_range='22')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))], 'policy': False}}, 'windows': None, 'config': {'quarantine': True, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': [_rule('allow-https', 100, dict(access='Allow', direction='Inbound', source_address_prefix='Internet', destination_address_prefix='*', destination_port_range='443')), _rule('allow-lateral-out', 100, dict(access='Allow', direction='Outbound', source_address_prefix='*', destination_address_prefix='VirtualNetwork', destination_port_range='*')), _rule('deny-lateral-in', 130, dict(access='Deny', direction='Inbound', source_address_prefix='VirtualNetwork', destination_address_prefix='*', destination_port_range='*'))]}
+_S322_STEPS_REL = [
+    ('block_then_isolate', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22, None, False, False),
+    ('customer_edits_rule', '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-api-nic', 'allow-lateral-out', ('source_address_prefix', '10.9.0.0/16')),
+    ('reassert', 'human_only', None),
+    ('interrupted_release', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 7, 'before-crash', True, 'human_only', None),
+    ('isolate', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None),
+    ('config_changes', {'quarantine': True, 'rg': '', 'forensic': [], 'readable': True}, True),
+    ('time_passes',),
+    ('time_passes',),
+    ('customer_changes_ip', '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/web-nic', 0, 4),
+    ('joins_an_old_isolation', None),
+    ('interrupted_release', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, 1, 'before-crash', False),
+    ('address_reused_under_a_turned_rule', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-8b70f2'), '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/web-nic', 0, 4, 'rg-app1', 'web'),
+    ('block_then_isolate', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22, ('nic.get', 'always-429'), True, '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', False),
+    ('release', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', None),
+    ('reset_from_azure', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', None),
+    ('isolate_two', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, False),
+    ('address_reused_under_a_turned_rule', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None, 22, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-web-web-nic-8b70f2'), '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/web-nic', 0, 4, 'rg-app2', 'batch', None, 'Windows'),
+    ('lose_state', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api'),
+    ('interrupted_release', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', None),
+]
+
+
+@pytest.mark.xfail(strict=True, reason="outside I5Q: I4A's family (IP changed), fails with glorfindel/ of 20cb5b5 too")
+def test_an_interrupted_release_after_an_ip_change_opens_the_new_owner(monkeypatch):
+    """Seed 322 at 2 000 (I5Q after I4A), 18 steps, fails with glorfindel/ of 20cb5b5 too:
+    « I4: an operation on …/rg-app1/…/web opened flows of …/rg-app2/…/batch », in an
+    interrupted release of web after its IP changed and another VM took the old address.
+    Cause not established; for I4A's follow-up lot."""
+    _run(monkeypatch, _S322_NET_REL, *_S322_STEPS_REL)

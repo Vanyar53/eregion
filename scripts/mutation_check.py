@@ -1979,8 +1979,8 @@ MUTANTS += [
     ("M778", "the rule of a recreated NIC under a VM Glorfindel isolates found removable (A3, first review)", SWP,
      "                elif why := self._held_reason(cut, held):\n                    kept = why\n", ""),
     ("M779", "the removal doesn't read the state again: an isolation recorded since is lifted (A3, first review)",
-     SWP, "        why = self._held_reason(orphan.get(\"cut\") or [], self._held_vms())\n",
-     "        why = \"\"\n"),
+     SWP, "        why = self._held_reason(orphan.get(\"cut\") or [], self._held_vms()) or _turned_still(",
+     "        why = \"\" or _turned_still("),
     ("M880", "any error reading a NIC of our state taken for a 404: gone (A3, first review, X1)", SWP,
      "            if _is_not_found(exc):\n                return None\n            return f\"carte",
      "            if True:\n                return None\n            return f\"carte"),
@@ -4944,6 +4944,116 @@ TESTS["M1575"] = "tests/unit/test_glorfindel.py"
 TESTS.update({mid: "tests/unit/test_azure_roles.py" for mid in ("M1576", "M1577", "M1579")})
 TESTS["M1578"] = "tests/unit/test_makefile_bench.py"
 
+# I5Q (#327): the orphan sweep took off a deleted VM's deny that was the last thing keeping the
+# attacker out of the VM given its address and NSG — one of our rules, turned into an allow by
+# someone, let them past the perimeter block (I5, seed 101 at 500). Such a deny stays, said.
+# Measured by the sequences frozen in test_invariant_regressions.py, then the machine. M1730–M1733.
+RDR = "glorfindel/providers/azure/readers.py"
+_I5Q = ("tests/unit/test_invariant_regressions.py::test_the_sequence_the_machine_found_on_i5_after_an_address_reused "
+        "tests/unit/test_invariant_regressions.py::test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes "
+        "tests/unit/test_orphan_sweep.py::test_an_orphan_deny_behind_our_rule_turned_into_an_allow_stays "
+        "tests/unit/test_orphan_sweep.py::test_a_card_said_before_the_turn_is_replaced_by_one_naming_it")
+MUTANTS += [
+    ("M1730", "the orphan sweep reads no rule turned into an allow: the deny behind it taken off, the VM opened (I5Q)",
+     SWP, "        turned = _turned_allows(listing)      # our rules someone turned into an allow (I5Q)\n",
+     "        turned = []\n"),
+    ("M1731", "a turned rule counted on the other side only: the inbound deny behind an inbound allow taken off (I5Q)",
+     "glorfindel/providers/azure/turned.py",
+     '            if t_side == side and governs(h, nsg_key, subnets) and _takes_in(values, h["ip"]):\n',
+     '            if t_side != side and governs(h, nsg_key, subnets) and _takes_in(values, h["ip"]):\n'),
+    ("M1732", "a turned rule aimed at `*` (the perimeter's) read as aimed at no one (I5Q)", "glorfindel/providers/azure/nsg.py",
+     '        if v.strip().lower() in ("*", "any"):\n            return True\n',
+     '        if v.strip().lower() in ("*", "any"):\n            continue\n'),
+    ("M1733", "a turned rule on the subnet's NSG not counted: only the NIC's own NSG read (I5Q)", "glorfindel/providers/azure/turned.py",
+     '        return nic_nsg.get(nid) == nsg_key or bool(nic_subnets.get(nid, set()) & subnets)\n',
+     "        return nic_nsg.get(nid) == nsg_key\n"),
+]
+TESTS.update({mid: f"{_I5Q} {INVARIANTS}" for mid in ("M1730", "M1731", "M1732", "M1733")})
+# The same hole on a deleted VM's release (found by the machine once its composite rule was added,
+# seed 322 at 500: I4). M1734–M1736.
+_I5Q_REL = ("tests/unit/test_invariant_regressions.py::test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release "
+            "tests/unit/test_invariant_regressions.py::test_a_live_vms_release_is_not_held_by_its_own_turned_rule")
+MUTANTS += [
+    ("M1734", "a deleted VM's release takes its placements' denies off, a turned rule behind them: the new VM opened (I5Q)",
+     REL, '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))\n'
+          "                        or self._delete_rule(p_rg, p_name, name)\n",
+     "                        self._delete_rule(p_rg, p_name, name)\n"),
+    ("M1735", "a deleted VM's release, its state lost, takes its denies off everywhere, a turned rule behind (I5Q)",
+     REL, "                    if why := held_back(nsg, r):\n", "                    if False and (why := held_back(nsg, r)):\n"),
+    ("M1736", "a live VM's release held by its own turned rule: `release_partial` forever (I5Q)", "glorfindel/providers/azure/turned.py",
+     '               if ip in holders and holders[ip] != own.rstrip("/").lower()\n',
+     "               if ip in holders\n"),
+]
+TESTS.update({mid: f"{_I5Q_REL} {INVARIANTS}" for mid in ("M1734", "M1735", "M1736")})
+# The card two orphan rules share, closed when one goes while the other stays kept (seed 101
+# after RB1: the deny kept behind a turned rule, no longer said). M1737.
+MUTANTS += [
+    ("M1737", "an orphan rule taken off resolves the card it shares with a rule still kept: not said (I5Q)",
+     "glorfindel/orphans.py",
+     "                if card and _pending(card) and card not in alerts.values():   # shared: still said (I5Q)\n",
+     "                if card and _pending(card):\n"),
+]
+TESTS["M1737"] = ("tests/unit/test_orphan_sweep.py::test_a_card_two_rules_share_stays_open_while_one_stands "
+                  f"{INVARIANTS}")
+# The review of I5Q: a card said before the turn, never written again, still told to delete the
+# kept deny; the listing a pass old; a live VM's release held when the listing is refused. M1738–M1743.
+TRN = "glorfindel/providers/azure/turned.py"
+_I5Q_CARD = ("tests/unit/test_orphan_sweep.py::test_a_card_said_before_the_turn_is_replaced_by_one_naming_it "
+             f"{INVARIANTS}")
+_I5Q_RACE = "tests/unit/test_orphan_sweep.py::test_a_rule_turned_after_the_listing_stops_the_removal"
+MUTANTS += [
+    ("M1738", "a card said before the turn is kept: it still says to delete the deny that holds the VM shut (I5Q)",
+     "glorfindel/orphans.py",
+     '            if not all(_names(said.get(card, ""), g) for g in group[res]):\n',
+     '            if False:\n'),
+    ("M1739", "the card of a kept deny says to delete it, its only step (I5Q)", "glorfindel/orphans.py",
+     '        mates = group.get(_resource(o).lower(), []) if o.get("turned") else []\n',
+     '        mates = []\n'),
+    ("M1740", "the rules of a VM said again in any order: the card they share keeps the delete of the first (I5Q)",
+     "glorfindel/orphans.py", '    orphans = sorted(orphans, key=lambda o: not o.get("turned"))\n',
+     "    orphans = list(orphans)\n"),
+    ("M1741", "the removal trusts the listing: a rule turned since, the deny taken off (I5Q)", SWP,
+     '        why = self._held_reason(orphan.get("cut") or [], self._held_vms()) or _turned_still(self._network, orphan)\n',
+     '        why = self._held_reason(orphan.get("cut") or [], self._held_vms())\n'),
+    ("M1742", "an NSG not read again before the removal read as holding no turned rule (I5Q)", TRN,
+     "            return f\"NSG {k.rsplit('/', 1)[-1]} non relu avant le retrait ({_first_line(exc)[:_ERR_MAX]})\"\n",
+     "            continue\n"),
+    ("M1743", "a live VM's release held by a refused listing: its own placement kept (I5Q)", TRN,
+     "            if nic_id and _holds_all(network, nsg_rg, nsg_name, name, nic_id):\n",
+     "            if False:\n"),
+]
+MUTANTS += [
+    ("M1744", "a card « names » the turned rule by a substring: the perimeter's name begins every VM rule (I5Q)",
+     "glorfindel/orphans.py",
+     "    return f\"notre règle {o['turned']['rule']} (\".lower() in text.lower()\n",
+     "    return o['turned']['rule'].lower() in text.lower()\n"),
+    ("M1745", "the card of a VM names only the turned rule of its first kept deny (I5Q, seed 31337)",
+     "glorfindel/orphans.py",
+     '        mates = group.get(_resource(o).lower(), []) if o.get("turned") else []\n',
+     '        mates = [o] if o.get("turned") else []\n'),
+]
+_I5Q_CARD += (" tests/unit/test_orphan_sweep.py::test_the_card_of_a_vm_names_every_rule_its_kept_denies_wait_behind"
+              " tests/unit/test_invariant_regressions.py::test_a_card_names_the_turned_rule_by_its_whole_name"
+              " tests/unit/test_orphan_sweep.py::test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter")
+TESTS.update({mid: _I5Q_CARD for mid in ("M1738", "M1739", "M1740", "M1744", "M1745")})
+TESTS.update({mid: _I5Q_RACE for mid in ("M1741", "M1742")})
+TESTS["M1743"] = "tests/unit/test_invariant_regressions.py -k live_vms_release"
+# The second review of I5Q: a new kept deny folded into the VM's pending card, whose first reason
+# stays; a live VM's placement let go on a refused listing though its NIC no longer holds the
+# address. M1746–M1747.
+MUTANTS += [
+    ("M1746", "a new kept deny folded into the VM's stale pending card: named nowhere for a pass (I5Q)",
+     "glorfindel/orphans.py",
+     '        for card in ({alerts.get(f"orphan-{o[\'nsg_id\']}/{o[\'rule\']}".lower())} | pending_of.get(res, set())) - {None}:\n',
+     '        for card in ({alerts.get(f"orphan-{o[\'nsg_id\']}/{o[\'rule\']}".lower())} | set()) - {None}:\n'),
+    ("M1747", "a refused listing lets a live VM's deny go though its NIC moved off the address (I5Q)",
+     "glorfindel/providers/azure/turned.py",
+     "            if nic_id and _holds_all(network, nsg_rg, nsg_name, name, nic_id):\n",
+     "            if nic_id and network.network_interfaces.get(*_parse_nic_resource_id(nic_id)) is not None:\n"),
+]
+TESTS["M1746"] = ("tests/unit/test_orphan_sweep.py::test_a_new_kept_deny_never_merges_into_a_stale_card_of_its_vm "
+                  f"{INVARIANTS}")
+TESTS["M1747"] = "tests/unit/test_invariant_regressions.py -k live_vms_release"
 # ID1 (#281): the bench's diagnostic settings, off by default, switched by a variable, the
 # categories the rules read and no other, the Make targets that touch them alone. M1790–M1799,
 # measured by tests/unit/test_bench_logs.py (and infra/terraform/tests/, by hand).

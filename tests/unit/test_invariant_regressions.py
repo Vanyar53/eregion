@@ -3263,6 +3263,43 @@ def test_a_quarantine_change_brought_back_after_a_full_disk_is_said(monkeypatch,
           "human_only", (3, "from-full"), readable, "human_only"))
 
 
+# ── L2C (#343): the other cards of the reassertion, after a full disk ──────────────────
+
+_NSG_WEB = "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-web-nic"
+
+
+@pytest.mark.parametrize("isolation, rule", [(False, "allow-https"), (True, "deny-lateral-in")],
+                         ids=["block", "isolation"])
+def test_a_bypass_brought_back_after_a_full_disk_is_said(monkeypatch, isolation, rule):
+    """The machine's own rule (`said_then_back_after_a_full_disk`, L2C): web blocked (port
+    22), or isolated by rules, on its own NSG — our deny at 101, behind a rule of the
+    customer's at 100 —; that rule widened into an allow of all: bypassed, said (A). Put
+    back as it was during a pass where the disk fills up from its second write of the
+    local state: our deny holds again, A's card closed (Glorfindel's note), its mark not
+    taken off. Widened again: A, read « said » from the mark — no card, before L2C.
+    (Back to another allow instead — a mark kept on A, B's card pending —: the stale card
+    stays until L2C, tests/unit/test_reassert.py; this oracle takes any card on the VM.)"""
+    tpl = (dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                destination_address_prefix="*", destination_port_range="443") if rule == "allow-https" else
+           dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                destination_address_prefix="*", destination_port_range="*"))
+    _run(monkeypatch, _net(web_nic={"own": "dedicated", "rules": [_rule(rule, 100, tpl)]}),
+         ("said_then_back_after_a_full_disk", False, WEB1, WEB1, None, isolation, *([] if isolation else [22]),
+          (101, _NSG_WEB), rule, "human_only", "human_only", (2, "from-full"), "human_only"))
+
+
+@pytest.mark.parametrize("another, n", [(False, 2), (True, 3)], ids=["reads_again", "another_file_too"])
+def test_an_unreadable_state_brought_back_after_a_full_disk_is_said(monkeypatch, another, n):
+    """The same rule for a local state file (SEC4b): one unreadable, said (A); it reads
+    again — or a second one turns unreadable too (B) — during a pass where the disk fills
+    up: A's card closed, state_alerts.json not written (it keeps A). The first set again:
+    read « said » from the record, no card, before L2C. Found by the machine alone on
+    `main` at 500 sequences, seeds 101, 202, 322, 42, 777 and 1."""
+    _run(monkeypatch, _net(),
+         ("said_then_back_after_a_full_disk", True, "human_only", another, "human_only", (n, "from-full"),
+          "human_only"))
+
+
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────
 
 _S322_NET_KEPT = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}

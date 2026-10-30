@@ -5531,6 +5531,10 @@ MUTANTS += [
      '    if mark == sid and not stale and (cards or _last_word(_BYPASS_PREFIX, sid)):\n'),
 ]
 TESTS.update({f"M{n}": _L2C for n in range(1930, 1942)})
+_L2C_SEQ = "tests/unit/test_invariant_regressions.py::test_{}_brought_back_after_a_full_disk_is_said"
+for _mid, _what in (("M1930", "a_bypass"), ("M1932", "an_unreadable_state"), ("M1935", "a_bypass"),
+                    ("M1938", "a_bypass"), ("M1939", "an_unreadable_state")):
+    TESTS[_mid] = f"{_L2C_SEQ.format(_what)} {_L2C} {INVARIANTS}"
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

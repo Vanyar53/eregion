@@ -3354,6 +3354,47 @@ def test_a_block_put_back_on_a_new_vm_stays_said_after_an_acknowledgement(monkey
           "non_disruptive"))
 
 
+_S42_SSH = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+                destination_port_range="22")
+_S42_NET = {
+    "subnet_nsg": [], "edge_nsg": None,
+    "tier_rules": [_rule("allow-ssh", 100, _S42_SSH),
+                   _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound",
+                                                        source_address_prefix="*",
+                                                        destination_address_prefix="VirtualNetwork",
+                                                        destination_port_range="*"))],
+    "nics": {"web-nic": {"own": None, "rules": [], "policy": False},
+             "db-nic-0": {"own": "dedicated", "rules": [], "policy": False},
+             "db-nic-1": {"own": "tier", "policy": False, "rules": [
+                 _rule("allow-ssh", 100, _S42_SSH),
+                 _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound",
+                                                    source_address_prefix="VirtualNetwork",
+                                                    destination_address_prefix="*", destination_port_range="*"))]},
+             "api-nic": {"own": "dedicated", "rules": [], "policy": False}},
+    "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+    "legacy": None, "data_subnet": None}
+
+
+@pytest.mark.xfail(strict=True, reason="L1 outside L2C (to route): present on origin/main ba657a0, without L2C's rule")
+def test_a_merged_block_whose_perimeter_terraform_removed_is_said(monkeypatch):
+    """Seed 42 at 2 000 sequences on L2C's final code, shrunk — then its last step, L2C's
+    rule, replaced by a plain pass: it fails the same, and with glorfindel/ of origin/main
+    (ba657a0). Db--01 blocked on its subnet, then blocked and isolated under a throttled
+    subnet read (always 429); `terraform apply` on the subnet's NSG takes our perimeter
+    rules off, someone detaches the quarantine, time passes: « L1: the block on
+    …/Db--01 vanished from Azure; the reassertion neither put it back nor said so ».
+    Cause not established; frozen for its own lot."""
+    _run(monkeypatch, _S42_NET,
+         ("race", WEB1, ("release", "reassert"), 0),
+         ("block_perimeter", DB, DB, None, False),
+         ("access_changes", False),
+         ("block_then_isolate", DB, DB, ("subnet.get", "always-429"), 22, None, False, False),
+         ("terraform_apply", _S101_NSG.format("rg-net", "nsg-subnet")),
+         ("someone_detaches_the_quarantine", None),
+         ("time_passes",), ("time_passes",), ("time_passes",),
+         ("reassert", "human_only", None))
+
+
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────
 
 _S322_NET_KEPT = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}

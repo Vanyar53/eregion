@@ -2704,7 +2704,7 @@ M2211 0/2, attrapés par les séquences figées seules ; M2212 survit à la mach
 L'état (un déblocage partiel, puis un blocage entier qui ne réécrit pas le placement retiré, puis une
 lecture qui le compte) reste rare. Pas de mutant pour la graine 1006 : le correctif est dans le démontage.
 
-**Mesures d'U7D.** `pytest` complet : 4 567 réussis, 7 sautés, 4 `xfail` ; `ruff` propre ;
+**Mesures d'U7D.** `pytest` complet : 4 567 réussis, 7 sautés, 4 `xfail` avant les deux séquences figées ; après la fusion de `main` (d05eade, I4D compris), 4 639 réussis, 7 sautés, 7 `xfail` (les deux d’U7D ; #363, #366 deux fois, #369, #372) — et sur l'arbre fusionné, les 31 graines à 60 et 1006, 42, 322, 8675 à 500, vertes ; `ruff` propre ;
 `scripts/mutant_anchors.py` sans faute. Invariants : à 60 séquences, 31 graines (1 à 20, 25, 42, 101,
 202, 322, 555, 777, 1006, 1618, 8675, 31337), vertes avant (`main` e75d527 : 1006 n'y tombe plus — la
 machine de L1B tire autrement que celle de sa relecture) et après ; la graine 1006 à 60 tombe sur

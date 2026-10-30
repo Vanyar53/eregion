@@ -20,7 +20,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from glorfindel.reassert_cards import say_bypass, say_left, say_unreadable_states
+from glorfindel.reassert_cards import (
+    drift_said, episode, new_pass, say_bypass, say_left, say_unreadable_states,
+)
 from glorfindel.reassert_quarantine import _report_altered_quarantines
 
 log = logging.getLogger(__name__)
@@ -56,8 +58,10 @@ def _alert(signal_id: str, **kwargs) -> None:
     for e in escalations.pending():
         same_vm = (e.get("resource_id") or "").rstrip("/").lower() == rid
         if e.get("signal_id") == signal_id or (same_vm and (e.get("signal_id") or "").lower() == legacy):
-            escalations.resolve(e["id"])
+            # Glorfindel's closure, with its note: never read as acknowledged (L2C, review).
+            escalations.resolve(e["id"], note="Remplacée : une nouvelle alerte de réaffirmation la suit.")
     escalations.record(signal_id=signal_id, escalation_type="verification_failed", **kwargs)
+    new_pass()
 
 
 def _who_changed(connector, iso: dict) -> str:   # who wrote its NICs lately, best effort
@@ -76,6 +80,7 @@ def _mark_alerted(vm: str, now: str) -> None:
     state = _load_isolation_state(vm)
     if state is not None:
         _save_isolation_state(vm, {**state, "drift_alerted_at": now})
+        episode(vm, "", over=False)
 
 
 def _mode(autonomy, vm_name: str, ref: str = "") -> str:
@@ -97,6 +102,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
     """
     from glorfindel.actions import active_blocks, active_isolations, _vm_lock
 
+    new_pass()
     report: list[dict] = []
     for snapshot in active_isolations():
         # Under the VM's lock, from a fresh read: a release running in the War Room or
@@ -130,6 +136,7 @@ def reassert_pass(connector, autonomy=None) -> list[dict]:
     must close after the last release too) and the orphan rules (A3: a VM given a
     deleted VM's address is freed, or said, within the minute — discovery on or off)."""
     from glorfindel.actions import active_blocks, active_isolations
+    new_pass()
     if active_isolations() or active_blocks():
         return reassert_active(connector, autonomy)
     report: list[dict] = []
@@ -202,13 +209,17 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
     if verification.get("verified") is True:
         state = _load_isolation_state(ref or vm)
         if state is not None:
-            # Back in place: a later disappearance is a new episode, alerted again.
+            # Back in place: a later disappearance is a new episode, alerted again — also
+            # when the mark can't be taken off (L2C, review).
+            if state.get("drift_alerted_at"):
+                episode(ref or vm, "", over=True)
             state.pop("drift_alerted_at", None)
             _save_isolation_state(ref or vm, {**state, "verified_at": now})
+            episode(ref or vm, "", over=False)
         return
     if not _missing(verification):
         return
-    if iso.get("drift_alerted_at"):
+    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):
         # Already alerted for this disappearance: one alert per episode. Re-alerting
         # every minute flooded the webhook and undid every acknowledgement
         # (validation run, 2026-10-06).
@@ -279,7 +290,10 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         return
     say_bypass(vm, rid, verification, report, ip=ip, ref=ref)
     if verification.get("verified") is True and not verification.get("held_missing"):
+        if b.get("drift_alerted_at"):
+            episode(ref or vm, ip, over=True)           # the mark may fail to go (L2C, review)
         _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None, uncovered_said=None)
+        episode(ref or vm, ip, over=False)
         return
     if verification.get("uncovered_nics") and not verification.get("missing_rules"):
         # Never covered, not gone: a perimeter block alone on a VM with a NIC on another
@@ -296,12 +310,16 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
                    reason=reason, action_params={"ip": ip})
             report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):
+            if b.get("drift_alerted_at"):
+                episode(ref or vm, ip, over=True)
             _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)
+            episode(ref or vm, ip, over=False)
         return
     if not _missing(verification):
         return
     said = verification
-    if b.get("drift_alerted_at") and not _worse(b.get("drift_said"), _situation(verification)):
+    if (b.get("drift_alerted_at") and not _worse(b.get("drift_said"), _situation(verification))
+            and drift_said(ref or vm, ip, _alert_id(vm, rid, ip))):
         # One alert per disappearance (see isolations) — but said again when it worsens: a
         # NIC held turned open or unknown, a rule more gone. Acknowledged, a card « reste
         # bloquée » silenced the perimeter's deletion that opened the VM (RB1, 4th review).
@@ -313,6 +331,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
                reason=reason, action_params={"ip": ip})
         _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))
+        episode(ref or vm, ip, over=False)
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         return
     # A merged entry (RB1): its perimeter AND its VM's placements, each put back — the
@@ -358,6 +377,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         # card: every later pass returned on the marker, and the block stayed gone in
         # silence (L1F, invariant machine).
         _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))
+        episode(ref or vm, ip, over=False)
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": outcome, "detail": reason})
 
 

@@ -2035,8 +2035,10 @@ MUTANTS += [
     ("M902", "a block gone in human_only marked alerted before its card (L1F, L1)", R,
      ('        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n'
-      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n        report.append(",),
+      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"
+      "        episode(ref or vm, ip, over=False)\n        report.append(",),
      ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"
+      "        episode(ref or vm, ip, over=False)\n"
       '        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n        report.append(',)),
 ]
@@ -5456,7 +5458,7 @@ MUTANTS += [
      "        if signal_id in said or alerts.get(k) == signal_id:\n"),
     ("M1861", "Glorfindel's closure of a quarantine card carries no note: read as the operator's (L2Q)", RQ,
      '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
-     '            escalations.resolve(e["id"])\n'),
+     '            _resolve(e["id"], note="")\n'),
     ("M1862", "a card closed because its change moved carries no note: read as acknowledged (L2Q)", RQ,
      '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
      '            escalations.resolve(e["id"], note="" if k in altered else _SETTLED)\n'),
@@ -5512,20 +5514,20 @@ MUTANTS += [
      '            and last.get("status") == "resolved" and not last.get("resolution"))\n',
      '            and last.get("status") == "resolved")\n'),
     ("M1936", "the resource's first card read, not its latest: an old acknowledgement silences a return (L2C)", RCA,
-     "    last = next((e for e in reversed(escalations.all_escalations())\n",
-     "    last = next((e for e in escalations.all_escalations()\n"),
+     '    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").startswith(prefix)), None)\n',
+     '    last = next((e for e in _history() if (e.get("signal_id") or "").startswith(prefix)), None)\n'),
     ("M1937", "the operator's word on another change silences this one (L2C)", RCA,
      '    return (last is not None and last.get("signal_id") == sid\n',
      "    return (last is not None\n"),
     ("M1938", "a bypass card closed because it holds again carries no note: read as acknowledged (L2C)", RCA,
-     '            escalations.resolve(e["id"], note="Plus contourné : le deny de Glorfindel tient de nouveau.")\n',
-     '            escalations.resolve(e["id"])\n'),
+     '            _resolve(e["id"], note="Plus contourné : le deny de Glorfindel tient de nouveau.")\n',
+     '            _resolve(e["id"], note="")\n'),
     ("M1939", "an unreadable-state card closed by Glorfindel carries no note: read as acknowledged (L2C)", RCA,
-     '            escalations.resolve(e["id"], note="État local lisible de nouveau, ou autres fichiers illisibles.")\n',
-     '            escalations.resolve(e["id"])\n'),
+     '            _resolve(e["id"], note="État local lisible de nouveau, ou autres fichiers illisibles.")\n',
+     '            _resolve(e["id"], note="")\n'),
     ("M1940", "a left-rules card closed by Glorfindel carries no note: read as acknowledged (L2C)", RCA,
-     '        escalations.resolve(e["id"], note="Autres règles laissées : une nouvelle carte les dit.")\n',
-     '        escalations.resolve(e["id"])\n'),
+     '        _resolve(e["id"], note="Autres règles laissées : une nouvelle carte les dit.")\n',
+     '        _resolve(e["id"], note="")\n'),
     ("M1941", "the latest bypass card of any resource read for this one's acknowledgement (L2C)", RCA,
      '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
      '    if mark == sid and not stale and (cards or _last_word(_BYPASS_PREFIX, sid)):\n'),
@@ -5536,6 +5538,36 @@ for _mid, _what in (("M1930", "a_bypass"), ("M1932", "an_unreadable_state"), ("M
                     ("M1938", "a_bypass"), ("M1939", "an_unreadable_state")):
     TESTS[_mid] = f"{_L2C_SEQ.format(_what)} {_L2C} {INVARIANTS}"
 
+# L2C, its review (M1942–M1949): a disappearance acknowledged, held again with its mark kept
+# (a full disk), then gone again — said; and the rules a block left, read on their own block.
+_L2C_DRIFT = " ".join(f"tests/unit/test_reassert.py::test_{t}" for t in (
+    "a_disappearance_after_one_acknowledged_and_held_again_is_said",
+    "a_drift_card_closed_with_a_note_is_no_acknowledgement",
+    "an_alert_closes_the_card_it_replaces_with_a_note",
+    "one_alert_per_disappearance_not_one_per_minute"))
+MUTANTS += [
+    ("M1942", "an isolation gone again read « already said » from its drift mark alone (L2C, review)", R,
+     '    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):\n',
+     '    if iso.get("drift_alerted_at"):\n'),
+    ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", R,
+     "            and drift_said(ref or vm, ip, _alert_id(vm, rid, ip))):\n", "            ):\n"),
+    ("M1944", "an isolation held again, its mark kept: the episode not known over (L2C, review)", R,
+     '            if state.get("drift_alerted_at"):\n                episode(ref or vm, "", over=True)\n',
+     '            if False:\n                episode(ref or vm, "", over=True)\n'),
+    ("M1945", "a block held again, its mark kept: the episode not known over (L2C, review)", R,
+     "            episode(ref or vm, ip, over=True)           # the mark may fail to go (L2C, review)\n",
+     "            pass\n"),
+    ("M1946", "a reassertion alert closes the card it replaces without a note: read as acknowledged (L2C, review)", R,
+     '            escalations.resolve(e["id"], note="Remplacée : une nouvelle alerte de réaffirmation la suit.")\n',
+     '            escalations.resolve(e["id"])\n'),
+    ("M1947", "a drift card Glorfindel closed read as the operator's acknowledgement (L2C, review)", RCA,
+     '    return last is not None and (last.get("status") == "pending" or not last.get("resolution"))\n',
+     "    return last is not None\n"),
+    ("M1949", "an episode known over stays so once a new one is marked: said again at every pass (L2C, review)", RCA,
+     "    (_EPISODE_OVER.add if over else _EPISODE_OVER.discard)((key.lower(), ip))\n",
+     "    if over:\n        _EPISODE_OVER.add((key.lower(), ip))\n"),
+]
+TESTS.update({f"M{n}": _L2C_DRIFT for n in range(1942, 1950)})
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

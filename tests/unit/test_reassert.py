@@ -1237,3 +1237,77 @@ def test_left_rules_back_to_a_set_already_said_are_said_again(monkeypatch):
     for _ in range(2):
         say_left("vm", _RID, _IP, _left("glorfindel-block-a"), [], _RID)
     assert not _left_cards("pending")
+
+
+# ── L2C, its review: a disappearance said again after one acknowledged ───────────────────
+
+_HUMAN = AutonomyConfig(default="human_only")
+
+
+def _drift_cards(status=None):
+    return [e for e in escalations.all_escalations() if e["escalation_type"] == "verification_failed"
+            and (status is None or e["status"] == status)]
+
+
+def _gone(kind: str):
+    """An isolation, or a block of _IP, whose rules are gone from Azure."""
+    if kind == "isolation":
+        _isolated()
+        return _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    return _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+
+
+def _drift_mark(kind: str):
+    return (_load_isolation_state("vm") if kind == "isolation" else _load_block_entries("vm")[0]).get(
+        "drift_alerted_at")
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_disappearance_after_one_acknowledged_and_held_again_is_said(monkeypatch, kind):
+    """The review of L2C: gone, said; the operator acknowledges — said for its episode, not
+    again while it stays gone. Held again, but the mark can't be taken off (a full disk);
+    gone again: the mark read « already said » left the VM unisolated (or unblocked) with
+    no card. A new episode is said, once."""
+    c = _gone(kind)
+    reassert_active(c, _HUMAN)
+    (card,) = _drift_cards("pending")
+    escalations.resolve(card["id"])                           # the operator
+    reassert_active(c, _HUMAN)
+    assert not _drift_cards("pending")                        # its episode: acknowledged
+    held, gone = {"verified": True}, dict((c.verify_isolation if kind == "isolation"
+                                           else c.verify_block_ip).return_value)
+    verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    verify.return_value = held
+    give_back = _unwritable(monkeypatch, _STATE_DIR[kind])
+    with pytest.raises(OSError):
+        reassert_active(c, _HUMAN)
+    give_back()
+    assert _drift_mark(kind)                                  # the mark kept
+    verify.return_value = gone
+    for _ in range(2):
+        reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1 and len(_drift_cards()) == 2
+
+
+def test_a_drift_card_closed_with_a_note_is_no_acknowledgement():
+    """Gone, said; the card then closed with a note — Glorfindel's way, as `_alert` closes
+    the card it replaces — and no card after it: only the operator's word silences a
+    disappearance, never the mark alone. Said again."""
+    c = _gone("isolation")
+    reassert_active(c, _HUMAN)
+    (card,) = _drift_cards("pending")
+    escalations.resolve(card["id"], note="Remplacée par une nouvelle alerte.")
+    reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1
+
+
+def test_an_alert_closes_the_card_it_replaces_with_a_note():
+    """`_alert`'s closures carry a note: read as Glorfindel's, never as acknowledged."""
+    from glorfindel.reassert import _alert
+    _alert("reassert-vm-x", resource_id=_RID, action="isolate_vm", reason="a")
+    _alert("reassert-vm-x", resource_id=_RID, action="isolate_vm", reason="b")
+    (closed,) = _drift_cards("resolved")
+    assert closed["resolution"] and [e["reason"] for e in _drift_cards("pending")] == ["b"]
+

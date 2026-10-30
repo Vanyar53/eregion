@@ -5051,6 +5051,17 @@ MUTANTS += [
      '                    if False and (why := _held_by_turned(self._network, guard, t["nsg_rg"], t["nsg_name"], name, "", mates)):\n'),
 ]
 TESTS.update({mid: _I4C_ALL for mid in ("M1967", "M1968", "M1969")})
+# I4C's review: the release that keeps an older version's deny-all wrote `placements: []` into its
+# state — the next one no longer read it as an older version's: kept for ever. M1970.
+MUTANTS += [
+    ("M1970", "a partial release turns an older version's state into a new one: its deny-all kept for ever "
+              "(I4C, review)", REL,
+     '                **({"placements": remaining if state.get("placements") else state["placements"]}\n'
+     '                   if "placements" in state else {}),\n',
+     '                "placements": remaining if state.get("placements") else state.get("placements", []),\n'),
+]
+TESTS["M1970"] = ("tests/unit/test_invariant_regressions.py::"
+                  f"test_an_older_isolations_kept_deny_all_goes_once_the_turned_rule_is_put_back {INVARIANTS}")
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

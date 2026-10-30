@@ -282,7 +282,10 @@ class ReleaseMixin:
                 **state,
                 "resource_id": state.get("resource_id") or resource_id,
                 "isolated_at": state.get("isolated_at") or datetime.now(timezone.utc).isoformat(),
-                "placements": remaining if state.get("placements") else state.get("placements", []),
+                # An older version's state stays one (I4C, review): `placements: []` made the
+                # next release skip its path, and its deny-all read « VM inconnue » for ever.
+                **({"placements": remaining if state.get("placements") else state["placements"]}
+                   if "placements" in state else {}),
                 "release_failed": failed,
                 # The NICs it named, kept for the retry: a deleted VM's are known from
                 # nowhere else once its placements are undone (I7S).

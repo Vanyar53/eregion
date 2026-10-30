@@ -3849,3 +3849,35 @@ def test_an_older_isolations_deny_all_holding_back_a_turned_rule_stays(monkeypat
           (key(_NSG_API), "glorfindel-block-192-31-196-7-api-api-nic-4-679cdb"), _nic("rg-app1", "api-nic-4"), 0, 4,
           "rg-app1", "web"),
          (op, API, API, None))
+
+
+def test_an_older_isolations_kept_deny_all_goes_once_the_turned_rule_is_put_back(monkeypatch):
+    """I4C, the review: the release that keeps an older version's deny-all (above) rewrote its
+    state with `placements: []`, a key such a state never had — the next release no longer read
+    it as an older version's (`"placements" not in state`), nor did `_legacy_claimed` tie the
+    deny-all to api: « VM inconnue : laissée », for ever, api cut off until a reset. The turned
+    rule put back by the operator, as the card asks, the next release takes the deny-all off."""
+    import shutil
+
+    net, steps = _deny_all_world()
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(net)
+        for rule, *draws in [*steps,
+                             ("customer_changes_ip", _nic("rg-app1", "api-nic-4"), 0, 4),
+                             ("address_reused_under_a_turned_rule", _APP1_API, _APP1_API, None, 22,
+                              (key(_NSG_API), "glorfindel-block-192-31-196-7-api-api-nic-4-679cdb"),
+                              _nic("rg-app1", "api-nic-4"), 0, 4, "rg-app1", "web")]:
+            getattr(m, rule)(data=Script(*draws))
+        rules = m.fake.nsgs[key(_NSG_API)]["rules"]
+        first = m.connector.release_isolation(API)
+        assert first["status"] == "release_partial" and "glorfindel-isolation-deny-all" in rules, first
+        assert any("glorfindel-isolation-deny-all" in f and "gardée" in f for f in first["failed"]), first
+        m._operator_puts_turned_back()
+        again = m.connector.release_isolation(API)
+        assert again["status"] == "released", again
+        assert not [n for n in rules if n.startswith("glorfindel-isolation")], sorted(rules)
+    finally:
+        m.teardown()
+        shutil.rmtree(m.home, ignore_errors=True)

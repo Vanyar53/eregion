@@ -241,24 +241,38 @@ def _pair_priorities(rules, in_name: str, out_name: str, start: int, step: int,
     return out
 
 
-def _allows_passed_by_its_replacement(rules, rule, priority: dict) -> list[str]:
+UNREAD_PRIORITY = "(numéro illisible)"
+
+
+def _allows_passed_by_its_replacement(rules, rule, priority: dict, ips: list[str]) -> list[str]:
     """The allows a deny of ours precedes and the deny written in its place would not:
     `rule`, of the NIC's other pair of names (I4B), at an earlier number in its direction
     than `priority` gives the new one. Taken off, the traffic those allows take in and it
     denied went through — seed 1618 (I4D): the isolation's inbound deny at 100, its
     second name written at 102, `allow-ssh` at 101 between; the drop opened the VM on 22.
     _pair_priorities' rule for the other name: a rewrite never moves a deny down past an
-    allow. Any allow between counts, whatever it covers (A0: kept, it opens nothing)."""
+    allow. Any allow between counts, whatever it covers (A0: kept, it opens nothing).
+    Only a deny that holds a current address of the NIC (`ips`) on its own side — the
+    destination inbound, the source outbound —, `*`, a tag or an unreadable value taken
+    as holding it (`_takes_in`, A0): one aimed only at addresses no longer the NIC's
+    closes nothing of it, and goes as before (I4D's review). A number that can't be read
+    keeps it (`UNREAD_PRIORITY`)."""
     if _enum_text(getattr(rule, "access", "")) != "deny":
         return []
     direction = _enum_text(getattr(rule, "direction", ""))
+    side = "destination" if direction == "inbound" else "source"
+    values = [v for v in [getattr(rule, f"{side}_address_prefix", None)]
+              + list(getattr(rule, f"{side}_address_prefixes", None) or []) if v]
+    if ips and not any(_takes_in(values, ip) for ip in ips):
+        return []
     low, high = getattr(rule, "priority", None), priority.get(direction)
     if not isinstance(low, int) or not isinstance(high, int):
-        return []
-    return [_rule_name(r) for r in rules or []
+        return [UNREAD_PRIORITY]
+    return [_rule_name(r) if isinstance(getattr(r, "priority", None), int) else UNREAD_PRIORITY
+            for r in rules or []
             if _enum_text(getattr(r, "direction", "")) == direction
             and _enum_text(getattr(r, "access", "")) == "allow"
-            and isinstance(getattr(r, "priority", None), int) and low < r.priority < high]
+            and (not isinstance(getattr(r, "priority", None), int) or low < r.priority < high)]
 
 
 def _side_is_any(rule, side: str) -> bool:

@@ -386,12 +386,13 @@ class IsolationMixin:
         priority = _pair_priorities(existing, *own, self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))
         # I4D: a deny of the other pair before an allow its replacement comes after stays.
         for n in list(drop):
-            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority):
+            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,
+                                                           t["private_ips"]):
                 drop.remove(n)
+                new_at = priority.get(_enum_text(getattr(by_name[n.lower()], "direction", "")), "?")
                 left.append({"nsg": nsg_key, "rule": n, "why": (
                     f"{nsg_key}/{n}, notre deny, passe avant {', '.join(passed)} ; la règle qui la remplace "
-                    f"passe après (priorité {priority[_enum_text(by_name[n.lower()].direction)]}) : la retirer "
-                    f"ouvrirait {t['nic_short']}")})
+                    f"passe après (priorité {new_at}) : la retirer ouvrirait {t['nic_short']}")})
         ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=None, inbound_dst=ips,
                                     outbound_src=ips, outbound_dst=None)

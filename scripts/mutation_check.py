@@ -5321,19 +5321,19 @@ _I4D = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in (
     "test_an_isolation_written_again_keeps_the_deny_before_an_allow_and_says_it",
     "test_a_reassertion_says_the_deny_it_kept_before_an_allow",
     "test_a_block_written_again_keeps_the_deny_before_an_allow_and_says_it",
-    "test_the_allows_a_rewrite_would_pass"))
+    "test_the_allows_a_rewrite_would_pass",
+    "test_the_guard_keeps_only_a_deny_that_holds_the_nics_address",
+    "test_the_guard_keeps_a_deny_whose_number_cannot_be_read",
+    "test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off"))
 MUTANTS += [
     ("M2060", "the isolation written again under its second name takes the first pair's deny off past an "
               "allow: the VM opened (I4D)", ISO,
-     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority):\n"
-     "                drop.remove(n)\n                left.append(",
-     "            if False and (passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], "
-     "priority)):\n                drop.remove(n)\n                left.append("),
+     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n",
+     "            if passed := [] and _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n"),
     ("M2061", "the block written again under its second name takes the first pair's deny off past an allow: "
               "the attacker reaches the VM (I4D)", BLK,
-     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority):\n",
-     "            if False and (passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], "
-     "priority)):\n"),
+     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n",
+     "            if passed := [] and _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n"),
     ("M2062", "the isolation keeps the deny before the allow, unsaid (I4D)", ISO,
      '                left.append({"nsg": nsg_key, "rule": n, "why": (\n',
      '                ({"nsg": nsg_key, "rule": n, "why": (\n'),
@@ -5353,6 +5353,16 @@ MUTANTS += [
      "            if _enum_text(getattr(r, \"access\", \"\")) == \"allow\"\n"),
 ]
 TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in range(2060, 2067)})
+# I4D's review: a deny kept only when it holds a current address of the NIC; an unread number keeps it.
+MUTANTS += [
+    ("M2067", "the guard keeps a deny aimed only at addresses no longer the NIC's: the VM given them stays "
+              "cut off, « la retirer ouvrirait » said falsely (I4D, review)", NSG,
+     "    if ips and not any(_takes_in(values, ip) for ip in ips):\n        return []\n", ""),
+    ("M2068", "the guard drops a deny whose number can't be read (I4D, review)", NSG,
+     "    if not isinstance(low, int) or not isinstance(high, int):\n        return [UNREAD_PRIORITY]\n",
+     "    if not isinstance(low, int) or not isinstance(high, int):\n        return []\n"),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2067, 2068)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

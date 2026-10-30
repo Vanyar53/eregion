@@ -3602,11 +3602,75 @@ def test_the_allows_a_rewrite_would_pass(ours, access, same, at, expected):
     mine, theirs = ours.lower(), other_way[ours].lower()
     deny = SimpleNamespace(name="ours", access="Deny", direction=ours, priority=100)
     other = SimpleNamespace(name="between", access=access, direction=ours if same else other_way[ours], priority=at)
-    assert _allows_passed_by_its_replacement([deny, other], deny, {mine: 102, theirs: 100}) == expected
-    assert _allows_passed_by_its_replacement([deny, other], deny, {mine: 99, theirs: 102}) == []
+    assert _allows_passed_by_its_replacement([deny, other], deny, {mine: 102, theirs: 100}, ["10.0.0.8"]) == expected
+    assert _allows_passed_by_its_replacement([deny, other], deny, {mine: 99, theirs: 102}, ["10.0.0.8"]) == []
     turned = SimpleNamespace(**{**vars(deny), "access": "Allow"})
-    assert _allows_passed_by_its_replacement([turned, other], turned, {mine: 102, theirs: 102}) == []
+    assert _allows_passed_by_its_replacement([turned, other], turned, {mine: 102, theirs: 102}, ["10.0.0.8"]) == []
 
+
+
+@pytest.mark.parametrize("held, expected", [
+    ({"destination_address_prefixes": ["10.0.0.7", "10.0.0.8"]}, ["between"]),   # holds .8, the NIC's
+    ({"destination_address_prefixes": ["10.0.0.7"]}, []),          # only an address no longer the NIC's
+    ({"destination_address_prefix": "10.0.0.0/24"}, ["between"]),  # a prefix holding it
+    ({"destination_address_prefix": "VirtualNetwork"}, ["between"]),  # a tag: taken as holding it (A0)
+    ({"destination_address_prefix": "*"}, ["between"]),
+])
+def test_the_guard_keeps_only_a_deny_that_holds_the_nics_address(held, expected):
+    """I4D's review: a deny of the other pair is kept only when its NIC side takes in a
+    current address of the NIC — aimed only at the old ones, it closes nothing of the NIC
+    (its addresses both changed: kept, the note « la retirer ouvrirait » was false)."""
+    from types import SimpleNamespace
+
+    from glorfindel.providers.azure.nsg import _allows_passed_by_its_replacement
+
+    deny = SimpleNamespace(name="ours", access="Deny", direction="Inbound", priority=100, **held)
+    allow = SimpleNamespace(name="between", access="Allow", direction="Inbound", priority=101)
+    assert _allows_passed_by_its_replacement([deny, allow], deny, {"inbound": 102, "outbound": 100},
+                                             ["10.0.0.20", "10.0.0.8"]) == expected
+
+
+def test_the_guard_keeps_a_deny_whose_number_cannot_be_read():
+    """I4D's review: a number that can't be read keeps the deny (the safe side), said."""
+    from types import SimpleNamespace
+
+    from glorfindel.providers.azure.nsg import UNREAD_PRIORITY, _allows_passed_by_its_replacement
+
+    deny = SimpleNamespace(name="ours", access="Deny", direction="Inbound", priority=None)
+    assert _allows_passed_by_its_replacement([deny], deny, {"inbound": 102}, ["10.0.0.8"]) == [UNREAD_PRIORITY]
+    deny.priority = 100
+    unread = SimpleNamespace(name="between", access="Allow", direction="Inbound", priority=None)
+    assert _allows_passed_by_its_replacement([deny, unread], deny, {"inbound": 102}, ["10.0.0.8"]) == [
+        UNREAD_PRIORITY]
+    assert _allows_passed_by_its_replacement([deny], deny, {}, ["10.0.0.8"]) == [UNREAD_PRIORITY]
+
+
+def test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off(monkeypatch):
+    """I4D's review (`both_ips`): both of db-nic-1's addresses changed (.7 and .8 to .20
+    and .21), api given .7. The first pair's inbound deny, on .7 and .8, holds nothing of
+    db-nic-1 now: it goes, as before I4D — what it cut of api given back — and nothing of
+    Db--01 opens. Kept, it said « la retirer ouvrirait db-nic-1 », false."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_S1618_NET)
+        assert m.connector.isolate_vm(DB)["status"] == "isolated"
+        m.connector.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=None)
+        rules = m.fake.nsgs[key(_S101_NSG.format("rg-net", "nsg-subnet"))]["rules"]
+        rules[f"{_DB1_BLOCK}-out"]["access"] = "Allow"
+        m._customer_changes_ip(Script(_nic("rg-app1", "db-nic-1"), 0, 20))
+        m._customer_changes_ip(Script(_nic("rg-app1", "db-nic-1"), 1, 20))
+        m._create_vm(Script("rg-new", "api", None, "Linux"), "westeurope")
+        before, api_before = m._open(DB), m._open(_NEW_API)
+        out = m.connector.isolate_vm(DB)
+        assert _DB1_ISO not in rules, rules.get(_DB1_ISO)
+        assert not [x for x in out.get("left_rules") or [] if x["rule"] == _DB1_ISO], out.get("left_rules")
+        assert m._open(DB) <= before
+        assert m._open(_NEW_API) > api_before                    # given back what the old deny cut
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
 
 _S42_ISO_NET = {
     "subnet_nsg": [], "edge_nsg": None, "tier_rules": [],

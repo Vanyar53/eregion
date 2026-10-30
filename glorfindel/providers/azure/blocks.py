@@ -93,7 +93,8 @@ class BlockMixin:
         priority = _pair_priorities(existing, *own, 200, 10, assigned.get(nsg_key, set()))
         # I4D: a deny of the other pair before an allow its replacement comes after stays.
         for n in list(drop):
-            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority):
+            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,
+                                                           t["private_ips"]):
                 drop.remove(n)
                 left.append({"nsg": nsg_key, "rule": n, "to": ", ".join(drop_to.pop(n)) or "?",
                              "on": ", ".join(passed), "kind": "before_allow"})

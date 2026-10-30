@@ -9,6 +9,9 @@ name: Invariants (deep)
 # write it down in tests/unit/test_invariant_regressions.py (Azure) or
 # tests/unit/test_invariant_regressions_aws.py (AWS). Before AWS1 (#334) the AWS machine
 # ran at the push budget only, its failures kept nowhere: one seen once was lost.
+# Each machine's step has its own bound (Azure 95 min, AWS 45, under the job's 150): one
+# that runs over fails its step without cancelling the job, so the AWS step still runs
+# (`!cancelled()`) and the database is saved after both (`always()`).
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -59,6 +62,7 @@ jobs:
           restore-keys: invariants-db-
 
       - name: Isolation, release, blocks, reassertion, crashes, a world that moves
+        timeout-minutes: 95
         env:
           GLORFINDEL_INVARIANT_EXAMPLES: ${{ inputs.examples || '10000' }}
           GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
@@ -69,13 +73,15 @@ jobs:
       # even when Azure's failed, so one failure doesn't hide the other.
       - name: The same on the simulated AWS (MC1)
         if: ${{ !cancelled() }}
+        timeout-minutes: 45
         env:
           GLORFINDEL_INVARIANT_EXAMPLES: ${{ inputs.examples || '10000' }}
           GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
           GLORFINDEL_INVARIANT_STATS: "1"
         run: python -m pytest tests/unit/test_invariants_aws.py -q -s
 
-      # Kept whatever the outcome — a failure above is what must be replayed.
+      # Kept whatever the outcome, after both machines — a failure above is what must be
+      # replayed.
       - uses: actions/cache/save@v5
         if: always() && matrix.os == 'ubuntu-latest'
         with:

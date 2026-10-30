@@ -463,8 +463,11 @@ un échec de la machine AWS n'était gardé nulle part, une autre branche tirait
 à elle, lancée même si celle d'Azure échoue), au même budget (10 000) et dans la même base, que le job
 Linux du push restaure et rejoue pour les deux machines (`pytest tests/`, 500). Durée estimée : 19 min
 en local à 10 000 (2 000 en 225 s), 20 à 40 min sur un runner, soit 75 à 105 min avec Azure sur Linux,
-sous la borne de 150 min — à mesurer au premier run de nuit. Tenu par `tests/unit/test_workflows.py`
-(`-k night_runs_both`, `-k push_replays`) ; mutant M1952 (l'étape AWS ôtée), attrapé.
+sous la borne de 150 min — à mesurer au premier run de nuit. Chaque machine a sa borne d'étape
+(Azure 95 min, AWS 45) : un dépassement fait échouer son étape sans annuler le job, l'étape AWS tourne
+encore et la base est enregistrée après les deux (`always()`). Tenu par `tests/unit/test_workflows.py`
+(`-k night_runs_both`, `-k push_replays`) ; mutants M1952 (l'étape AWS ôtée) et M1953 (la base
+enregistrée seulement sur une nuit verte), attrapés.
 
 **Le jeu de contrôle sur AWS.** Seize bugs plausibles de l'adaptateur, M630–M645, écrits et commités
 avant la machine AWS (dans le même commit que l'adaptateur) et jamais utilisés pour l'orienter, dans la

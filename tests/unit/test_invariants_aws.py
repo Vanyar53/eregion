@@ -1208,7 +1208,8 @@ class AwsIsolationMachine(RuleBasedStateMachine):
             assert (live["ingress"], live["egress"]) == (sg["ingress"], sg["egress"]), (
                 f"I2: customer rules of {k} changed")
         for k, acl in self.design["acls"].items():
-            live = {key: e for key, e in self.fake.acls[k]["entries"].items() if not self._not_customers(k, key, e)}
+            live = {key: e for key, e in self.fake.acls[k]["entries"].items()
+                    if not self._not_customers(k, key, e)}
             assert live == acl["entries"], f"I2: customer entries of {k} changed"
         for k, s in self.design["subnets"].items():
             assert self.fake.subnets[k]["acl"] == s["acl"], f"I2: the ACL of {k} changed"

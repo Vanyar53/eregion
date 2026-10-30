@@ -5234,7 +5234,8 @@ TESTS.update({"M1884": "tests/unit/test_indicators.py", "M1887": "tests/unit/tes
 # entries any entry at a key Glorfindel once wrote, so the customer's entry at a number
 # freed and taken again went missing — a false alarm, about 1 run in 24 at 500 sequences.
 # By content now. Measured by the frozen sequence (tests/unit/test_invariant_regressions_aws.py).
-_AWS1_ORACLE = '            live = {key: e for key, e in self.fake.acls[k]["entries"].items() if not self._not_customers(k, key, e)}\n'
+_AWS1_ORACLE = ('            live = {key: e for key, e in self.fake.acls[k]["entries"].items()\n'
+                '                    if not self._not_customers(k, key, e)}\n')
 MUTANTS += [
     ("M1950", "the I2 oracle on AWS leaves out an ACL entry by its key: the customer's entry at a "
               "number Glorfindel once held reads as changed (AWS1)", AWS_INVARIANTS,
@@ -5257,7 +5258,13 @@ MUTANTS += [
      "        run: python -m pytest tests/unit/test_invariants_aws.py -q -s\n",
      "        run: echo skipped\n"),
 ]
-TESTS["M1952"] = "tests/unit/test_workflows.py -k night_runs_both"
+MUTANTS += [
+    ("M1953", "the database saved only when the night is green: a failing machine's sequence kept "
+              "nowhere (AWS1, review)", ".github/workflows/invariants.yml",
+     "        if: always() && matrix.os == 'ubuntu-latest'\n",
+     "        if: success() && matrix.os == 'ubuntu-latest'\n"),
+]
+TESTS.update({mid: "tests/unit/test_workflows.py -k night_runs_both" for mid in ("M1952", "M1953")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

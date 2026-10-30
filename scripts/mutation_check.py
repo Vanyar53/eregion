@@ -4902,6 +4902,90 @@ TESTS.update({f"M{n}": "tests/unit/test_campaign_declared.py" for n in range(178
 TESTS["M1789"] = "tests/unit/test_indicators.py"
 
 
+# C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its
+# non-regression (eregion_console/coverage.py), fed to the indicators and shown. M1800–M1825.
+RRC = "eregion_core/run_report.py"
+COV = "eregion_console/coverage.py"
+_C1_COV = "tests/unit/test_coverage.py"
+_C1_RR = "tests/unit/test_run_report.py"
+MUTANTS += [
+    ("M1800", "an Annatar run no longer says what it is: the run format guessed again (C1)",
+     "annatar/runner/engine.py",
+     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre))\n', ""),
+    ("M1801", "an Atomic run no longer says what it is (C1)", "annatar/runner/engine.py",
+     '            **run_report.identity("technique", "annatar", scenario.mitre),   # C1\n', ""),
+    ("M1802", "a fault run no longer says what it is (C1)", "gothmog/runner/engine.py",
+     '                           metrics={**run_report.identity("fault", "gothmog", fault.get("id")),  # C1\n',
+     '                           metrics={"injector": "gothmog",\n'),
+    ("M1803", "the run's own kind ignored: a report read by the guess of before C1", RRC,
+     "    if m.get(\"kind\") in KINDS:\n        return m[\"kind\"]\n", ""),
+    ("M1804", "an isolation executed but not verified counts as contained (C1)", RRC,
+     '        if out["action"] in CONTAINING and out["executed"] is True and out["verified"] is True:\n',
+     '        if out["action"] in CONTAINING and out["executed"] is True:\n'),
+    ("M1805", "the matrix drops the time to contain of a row (C1)", COV,
+     '        "detect_s": t["detect_s"], "decide_s": t["decide_s"], "contain_s": t["contain_s"],\n',
+     '        "detect_s": t["detect_s"], "decide_s": t["decide_s"], "contain_s": None,\n'),
+    ("M1806", "a detection without a decision attached counts as a proof (C1)", COV,
+     '    return outcome(run) == "detected" and decision_of(run, cycles) is not None\n',
+     '    return outcome(run) == "detected"\n'),
+    ("M1807", "no « aging » between 21 and 30 days: a proof is proven up to 30 (C1)", COV,
+     '        return "proven" if age < AGING_DAYS * DAY else "aging" if age <= STALE_DAYS * DAY else "stale"\n',
+     '        return "proven" if age <= STALE_DAYS * DAY else "stale"\n'),
+    ("M1808", "the indicator's last proof stays on 30 days: older, it says « none » (C1)", COV,
+     '    indicators["last_proof"] = m["last_proof"]\n', ""),
+    ("M1809", "the non-regression never fires: a technique proven then missed stays proven (C1)", COV,
+     '    if not measured or outcome(measured[-1]) != BAD[measured[-1]["kind"]]:\n',
+     "    if True:\n"),
+    ("M1810", "an unknown detection taken for a miss: a run that measured nothing regresses (C1)", COV,
+     '    return run["detection"] if run["detection"] in ("detected", "missed") else "unknown"\n',
+     '    return run["detection"] if run["detection"] == "detected" else "missed"\n'),
+    ("M1811", "any miss in the history regresses, even detected again since (C1)", COV,
+     '    if not measured or outcome(measured[-1]) != BAD[measured[-1]["kind"]]:\n',
+     '    if not any(outcome(r) == BAD[r["kind"]] for r in measured):\n'),
+    ("M1812", "a technique never detected said regressed (C1)", COV,
+     "    if not good:\n        return None\n", "    if not good:\n        good = measured[:1]\n"),
+    ("M1813", "a fault PASS --without-glorfindel counts as a proof of Glorfindel (C1)", COV,
+     '        if run["without_glorfindel"]:\n            return "not_measured"\n        return "pass"',
+     '        return "pass"'),
+    ("M1814", "a fault refused (nothing ran) taken for a failure: a regression (C1)", COV,
+     '        if run["result"] == "REFUSED":\n            return "refused"\n', ""),
+    ("M1815", "the evolution counts every run before the point, not its 30 days (C1)", COV,
+     '        window = [r for r in seen if r["at"] > t - WINDOW_DAYS * DAY]\n',
+     "        window = seen\n"),
+    ("M1816", "the indicators are not fed by the matrix: no regression said, no proof over 30 days (C1)",
+     CON, "        return coverage.feed(out, coverage_matrix(t))\n", "        return out\n"),
+    ("M1817", "`eregion coverage --check` never fails: the non-regression silent (C1)",
+     "eregion_console/cli.py", "    if check and regressed:\n", "    if False:\n"),
+    ("M1818", "a planned technique never run counted as a gap of the proof (C1)", COV,
+     '    counted = [r for r in rows if r["status"] == "implemented" or r["runs"]]\n',
+     "    counted = rows\n"),
+    ("M1819", "a run outside the catalog vanishes from the matrix (C1)", COV,
+     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now) for e in entries + outside]\n',
+     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now) for e in entries]\n'),
+    ("M1820", "a campaign's runs lose their campaign (C1)", RRC,
+     '        campaign = parent.parent.name if parent.name == "runs" and parent.parent.parent.name == "campaigns" else ""\n',
+     '        campaign = ""\n'),
+    ("M1821", "a date no calendar holds taken as a date: one forged report breaks the page (C1)", RRC,
+     "    if at is None or iso(at) is None:   # a date no calendar holds is no date\n",
+     "    if at is None:\n"),
+    ("M1822", "Annatar's and Gothmog's pages show the catalog, not the matrix (C1)",
+     "eregion_console/static/injector.js",
+     "async function refreshCatalog() { await load('cat', `/api/coverage?kind=${ABOUT.kind}`, renderCatalog); }",
+     "async function refreshCatalog() { await load('cat', `/api/catalog?kind=${ABOUT.kind}`, renderCatalog); }"),
+    ("M1823", "the verification's own time dropped from the watch's cycle (C1, for BL1)", CON,
+     '        "verified_at": outcome.get("verified_at"),\n', ""),
+    ("M1824", "the time to contain ends at the record, the verification's time ignored (C1)", RRC,
+     '            contained = verified_at if verified_at is not None else out["decided_at"]\n',
+     '            contained = out["decided_at"]\n'),
+    ("M1825", "/api/coverage takes any kind (C1)", CON,
+     '    if kind not in ("", "technique", "fault"):\n        return {"error": "kind: technique or fault"}\n',
+     ""),
+]
+TESTS.update({f"M{n}": _C1_COV for n in range(1805, 1826)})
+TESTS.update({"M1800": "tests/unit/test_engine.py -k unified", "M1801": "tests/unit/test_annatar_atomic.py -k unified",
+              "M1802": "tests/unit/test_gothmog.py -k unified", "M1803": _C1_RR, "M1804": _C1_RR,
+              "M1820": f"{_C1_RR} {_C1_COV}", "M1821": _C1_RR, "M1824": _C1_RR})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

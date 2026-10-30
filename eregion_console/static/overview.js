@@ -96,12 +96,18 @@ function indicators() {
   const wrong = box('WRONG DISRUPTIVE', w30.judged ? `${pc(w30.rate)} of ${esc(w30.judged)} judged` : '— none judged',
     `real traffic, ${days} d · 7 d: ${w7.judged ? pc(w7.rate) + ' of ' + esc(w7.judged) : 'none judged'}`,
     w30.wrong ? 'warn' : '', 'Isolations and blocks judged wrong, among those judged (right or wrong), on real traffic — exercise cards left out (glorfindel report). The last 7 days, those of the Monday summary, aside.');
+  // C1: the coverage matrix feeds it — a technique (or a fault) proven before and failed since
+  // is said here, red, with the way to its row.
+  const lost = (cov.regressed || []).concat(cov.faults_regressed || []);
   const coverage = box(`COVERAGE · ${days} d`, `${esc(cov.implemented_detected)} / ${esc(cov.implemented)} implemented`,
-    `${esc(cov.catalog_detected)} / ${esc(cov.catalog)} of the catalogue · faults: ${cov.faults ? esc(cov.faults) + ' run' + (cov.faults > 1 ? 's' : '') + ', ' + esc(cov.faults_pass) + ' PASS' : 'none'}`,
-    '', 'Techniques detected by an attack run of the last ' + days + ' days, over those the bench can play (implemented), then over the whole catalogue, planned ones included. Faults aside.');
+    `${esc(cov.catalog_detected)} / ${esc(cov.catalog)} of the catalogue · faults: ${cov.faults ? esc(cov.faults) + ' run' + (cov.faults > 1 ? 's' : '') + ', ' + esc(cov.faults_pass) + ' PASS' : 'none'}`
+      + (lost.length ? ` · <a class="bad" href="/${(cov.regressed || []).length ? 'annatar' : 'gothmog'}">✗ ${Number(lost.length)} regressed ▸</a>` : '')
+      + (Number(cov.stale) ? ` · <span class="warn">${Number(cov.stale)} stale</span>` : ''),
+    lost.length ? 'bad' : '', 'Techniques detected by an attack run of the last ' + days + ' days, over those the bench can play (implemented), then over the whole catalogue, planned ones included. Faults aside.'
+      + (lost.length ? ' Regressed — proven before, failed since: ' + lost.join(', ') + ' (the coverage matrix, Annatar and Gothmog).' : ''));
   const age = lp ? lp.age_s / 86400 : null;
-  const stale = (i.stalest || []).map(s => `${s.ttp}: ${s.at ? ago(s.at) + ' ago' : 'not in ' + days + ' d'}`).join(' · ');
-  const proof = box('LAST PROOF', lp ? `${ago(lp.at)} ago · ${esc(lp.ttp)}` : `none in ${days} d`,
+  const stale = (i.stalest || []).map(s => `${s.ttp}: ${s.at ? ago(s.at) + ' ago' : 'never proven'}`).join(' · ');
+  const proof = box('LAST PROOF', lp ? `${ago(lp.at)} ago · ${esc(lp.ttp)}` : 'none',
     lp ? (age < 21 ? '✓ under 30 days' : age <= 30 ? '⚠ nearly 30 days' : '✗ over 30 days') + ` · <a href="/runs/${encodeURIComponent(lp.run_id)}">run ▸</a>` : 'no attack detected with a decision',
     !lp || age > 30 ? 'bad' : age >= 21 ? 'warn' : 'ok',
     'The most recent attack detected with a decision of Glorfindel attached (detection and response). Each technique, the stalest first: ' + stale);

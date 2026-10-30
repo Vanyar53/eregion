@@ -698,3 +698,17 @@ def test_a_fault_without_glorfindel_is_written_to_orodruins_journal(bench, no_wa
     assert [(r["run_id"], r["action"]) for r in declared] == [(out.run_id, "without_glorfindel")]
     assert records.index(declared[0]) < next(i for i, r in enumerate(records)
                                              if r["outcome"] == "about_to_call")
+
+
+def test_a_fault_run_writes_the_unified_run_format(bench, tmp_path):
+    """C1 (M1802): a fault's report says it is a fault, by Gothmog, of its declared id — the
+    run format Annatar shares, so the coverage matrix gives it its row."""
+    from eregion_core.run_report import RUN_FORMAT, read_run
+    clock, world, engine = bench
+    world()
+    out = engine().run("vm-shutdown", skip_confirm=True)
+    saved = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    m = saved["metrics"]
+    assert (m["run_format"], m["kind"], m["injector"], m["experiment_id"]) == (RUN_FORMAT, "fault", "gothmog", "vm-shutdown")
+    run = read_run(saved)
+    assert run["kind"] == "fault" and run["experiment"] == "vm-shutdown" and run["result"] == "PASS"

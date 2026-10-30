@@ -4,6 +4,7 @@ subnet NSG (scope subnet) (moved from actions.py, A1).
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import (
+    _allows_passed_by_its_replacement,
     _describe_shadowing,
     _ip_scoped,
     _pair_priorities,
@@ -65,7 +66,9 @@ class BlockMixin:
         rewrite keeps their place or moves them up, see _pair_priorities), and the allows
         before it. The pair is the first of `pairs` none of whose rules aims at another
         VM (_left_on_others, I4A); `left`: those rules, kept as they are; `drop`: the other
-        pairs' rules present, taken off once the deny is written. `shared`: the NSG governs
+        pairs' rules present, taken off once the deny is written — but a deny of theirs before
+        an allow the new one comes after, kept and said (`before_allow`, I4D: taken off, the
+        attacker went through that allow). `shared`: the NSG governs
         other NICs (a subnet's, or a NIC's NSG another NIC joined)."""
         nsg_key = f"{nsg_rg}/{nsg_name}"
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
@@ -88,6 +91,12 @@ class BlockMixin:
         drop_to = {n: [a for d in ("destination", "source") for a in _prefixes(by_name[n.lower()], d)
                        if a not in ("*", ip.lower())] for n in drop}
         priority = _pair_priorities(existing, *own, 200, 10, assigned.get(nsg_key, set()))
+        # I4D: a deny of the other pair before an allow its replacement comes after stays.
+        for n in list(drop):
+            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority):
+                drop.remove(n)
+                left.append({"nsg": nsg_key, "rule": n, "to": ", ".join(drop_to.pop(n)) or "?",
+                             "on": ", ".join(passed), "kind": "before_allow"})
         vm_ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=[ip], inbound_dst=vm_ips,
                                     outbound_src=vm_ips, outbound_dst=[ip], port=threat_port)
@@ -424,6 +433,8 @@ def _describe_left(left: list[dict]) -> str:
         f"{x['rule']} ({x['nsg']}), " + (
             f"à nous, sur {x['to']}, n'a pas pu être retirée ({x['on']}) — si elle vise l'ancienne adresse, elle "
             "coupe la VM qui l'a reçue ; " if x.get("kind") == "drop_failed" else
+            f"notre deny sur {x['to']}, avant {x['on']} ; celle qui la remplace passe après — la retirer "
+            "ouvrirait la VM bloquée ; " if x.get("kind") == "before_allow" else
             f"notre deny sur {x['to']}, plus une adresse de la VM bloquée : {x['on']} — une règle à notre nom "
             "passée en autorisation par un tiers l'attend derrière, le retirer ouvrirait cette VM ; "
             if x.get("kind") == "deny" else

@@ -1045,6 +1045,13 @@ class IsolationMachine(RuleBasedStateMachine):
         if out and self.fake.vms[key(vm)]["os"] == "Windows":
             assert (out.get("drain") or {}).get("status") != "drained", (
                 f"I3: sessions said cut on the Windows VM {vm}")
+        if vm in flows:
+            # I5 (I4D): an isolation never opens the VM it isolates — bypassed or not, faulted
+            # or not — but what only another NIC's leftover rule closed, as the reassertion.
+            # Before, a bypassed isolation was not looked at: a rewrite under the NIC's second
+            # name that moved its deny down past an allow opened the VM, unseen (seed 1618).
+            assert self._open(vm) - flows[vm] <= flows[("own", vm)] - flows[vm], (
+                f"I5: isolate_vm opened flows of {vm}")
         if err is None:
             self._isolation_recorded(vm, "isolate_vm")
         self._config_honoured(nics, "isolate_vm")
@@ -1196,6 +1203,10 @@ class IsolationMachine(RuleBasedStateMachine):
             assert not self._attacker_flows(vm, port), f"I3: block said blocked, {ATTACKER} reaches {vm}"
             check, _ = self._run(None, lambda: self.connector.verify_block_ip(ATTACKER, rid))
             assert check and check.get("verified") is True, f"I3: fresh block on {vm} not verified: {check}"
+        if vm in flows:
+            # I5 (I4D): nor does a block open the VM it blocks, bypassed or not (_isolate).
+            assert self._open(vm) - flows[vm] <= flows[("own", vm)] - flows[vm], (
+                f"I5: block_suspicious_ip opened flows of {vm}")
         if err is None:
             self._block_recorded(vm, "block_suspicious_ip")
         self._others_unchanged(vm, flows, states)

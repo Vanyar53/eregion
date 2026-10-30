@@ -3432,24 +3432,180 @@ _S1618_NET = {
     "windows": None, "config": {"quarantine": True, "readable": True, "forensic": [], "rg": ""},
     "legacy": None, "data_subnet": None}
 _RG_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+_S1618_TURN = ("address_reused_under_a_turned_rule", DB, DB.lower(), None, None,
+               (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-db--01-db-nic-1-1232a8-out"),
+               "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-1",
+               0, 20, "rg-new", "api", None, "Linux")
 
 
-@pytest.mark.xfail(strict=True, reason="I5 outside L2C (to route): present on origin/main, without L2C's rule")
 def test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address(monkeypatch):
     """Seed 1618 at 2 000 sequences (L2C's review), shrunk by hand to three steps of rules
     `main` has: Db--01 isolated twice at once (the other VM's turn interleaved);
     `address_reused_under_a_turned_rule` on Db--01 (db-nic-1's address changed, rg-new/api
     created); our quarantine NSG stripped, the state lost, the reassertion outside
     human_only — « I5: the reassertion opened flows of …/Db--01 »: db-nic-1, inbound, port
-    22, from 10.9.9.9, 203.0.113.7 and 192.31.196.7. Frozen for its own lot."""
+    22, from 10.9.9.9, 203.0.113.7 and 192.31.196.7. Frozen in xfail by L2C.
+
+    Cause (I4D, #356): neither the quarantine nor the lost state — db-nic-1's address
+    changed, its isolation is missing for it and the pass writes it again (isolate_vm).
+    Its first pair holds back a turned rule aimed at rg-new/api (the -out deny, I4B): the
+    isolation goes under the second name, at the first free number, 102 — after
+    `allow-ssh` at 101 — and the first pair's inbound deny at 100, aimed at no other VM's
+    turned rule, was taken off: what it denied on 22, `allow-ssh` let through. It stays now,
+    said (`_allows_passed_by_its_replacement`)."""
     _run(monkeypatch, _S1618_NET,
          ("concurrently", DB, "isolate", 2, "isolate", "human_only", 8644),
-         ("address_reused_under_a_turned_rule", DB, DB.lower(), None, None,
-          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-db--01-db-nic-1-1232a8-out"),
-          "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-1",
-          0, 20, "rg-new", "api", None, "Linux"),
+         _S1618_TURN,
          ("quarantine_altered_then_reasserted", _RG_NEW_WEB, _RG_NEW_WEB, (7, "before-crash"), True, True,
-          _S101_NSG.format("rg-app1", "nsg-glorfindel-quarantine-westeurope"), "non_disruptive"))
+          _S101_NSG.format("rg-app1", "nsg-glorfindel-quarantine-westeurope"), "non_disruptive", "no"))
+
+
+# ── I4D (#356): a deny of the other pair never taken off past an allow ─────────────────────
+
+_DB1_ISO = "glorfindel-iso-db--01-db-nic-1-1232a8"
+_DB1_ISO_SECOND = "glorfindel-iso-db--01-db-nic-1-b-1232a8"
+_DB1_BLOCK = "glorfindel-block-192-31-196-7-db--01-db-nic-1-1232a8"
+_DB1_BLOCK_SECOND = "glorfindel-block-192-31-196-7-db--01-db-nic-1-b-1232a8"
+_NEW_API = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/api"
+
+
+@pytest.mark.parametrize("then", ["isolate", "reassert"])
+def test_an_isolation_written_again_never_moves_its_deny_past_an_allow(monkeypatch, then):
+    """Seed 1618, its three steps: Db--01 isolated (db-nic-1 by rules on the subnet's NSG,
+    at 100, before `allow-ssh` at 101), blocked, a block rule turned, db-nic-1's address
+    given to rg-new/api; then isolated again — by the operator, or by the reassertion.
+    Red on `main` (d380df5): « I5: isolate_vm opened flows of …/Db--01 » (the machine's
+    isolation looked at nothing once bypassed) and « I5: the reassertion opened flows »."""
+    _run(monkeypatch, _S1618_NET,
+         ("isolate", DB, DB, None),
+         _S1618_TURN,
+         ("isolate", DB, DB, None) if then == "isolate" else ("reassert", "non_disruptive", None))
+
+
+def _db1_moved(monkeypatch, net, block_first: bool):
+    """Db--01 blocked (and isolated before, when `block_first` is False), db-nic-1's block
+    -out turned into an allow by someone, db-nic-1's first address changed and given to a
+    new VM, rg-new/api — the turned allow now opens it."""
+    from glorfindel import actions
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    m.build(net)
+    if not block_first:
+        assert m.connector.isolate_vm(DB)["status"] == "isolated"
+    m.connector.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=None)
+    rules = m.fake.nsgs[key(_S101_NSG.format("rg-net", "nsg-subnet"))]["rules"]
+    rules[f"{_DB1_BLOCK}-out"]["access"] = "Allow"
+    m._customer_changes_ip(Script(_nic("rg-app1", "db-nic-1"), 0, 20))
+    m._create_vm(Script("rg-new", "api", None, "Linux"), "westeurope")
+    assert key(_NEW_API) in m.fake.vms and actions._load_block_entries(DB)
+    return m, rules
+
+
+def test_an_isolation_written_again_keeps_the_deny_before_an_allow_and_says_it(monkeypatch):
+    """I4D, what the sequence above holds, said: the first pair's inbound deny at 100 stays,
+    named in `left_rules` with the allow it precedes; the isolation under the second name
+    at 102, after `allow-ssh`, is said bypassed — it is, for the NIC's new address. Nothing
+    of Db--01 opened. The release takes both off: lifting, it may open."""
+    import shutil
+
+    m, rules = _db1_moved(monkeypatch, _S1618_NET, block_first=False)
+    try:
+        before = m._open(DB)
+        out = m.connector.isolate_vm(DB)
+        assert out["status"] == "isolated" and out.get("bypass"), out
+        assert rules[_DB1_ISO]["access"] == "Deny" and rules[_DB1_ISO]["priority"] == 100, rules[_DB1_ISO]
+        assert rules[_DB1_ISO_SECOND]["priority"] == 102
+        kept = [x for x in out["left_rules"] if x["rule"] == _DB1_ISO]
+        assert len(kept) == 1 and "allow-ssh" in kept[0]["why"] and "ouvrirait db-nic-1" in kept[0]["why"], kept
+        assert f"{_DB1_ISO}," in out["left_note"] and "102" in out["left_note"]
+        assert m._open(DB) <= before
+        assert m.connector.verify_isolation(DB)["verified"] is not True
+        again = m.connector.isolate_vm(DB)                      # stable: kept again, nothing moves
+        assert any(x["rule"] == _DB1_ISO for x in again["left_rules"]) and m._open(DB) <= before
+        m.connector.release_isolation(DB)
+        assert _DB1_ISO not in rules and _DB1_ISO_SECOND not in rules
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_reassertion_says_the_deny_it_kept_before_an_allow(monkeypatch):
+    """I4D: the same, written again by the reassertion — its card says the deny kept."""
+    import shutil
+
+    from glorfindel import escalations
+
+    m, rules = _db1_moved(monkeypatch, _S1618_NET, block_first=False)
+    try:
+        m.reassert(Script("non_disruptive", None))
+        assert rules[_DB1_ISO]["priority"] == 100 and _DB1_ISO_SECOND in rules
+        said = [e["reason"] for e in escalations.pending() if e.get("action") == "isolate_vm"]
+        assert any("reposée une fois" in r and f"{_DB1_ISO}, notre deny, passe avant allow-ssh" in r
+                   for r in said), said
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+_PARTNER = _s1618("partner-allow", 215, "Allow", "*")
+
+
+def test_a_block_written_again_keeps_the_deny_before_an_allow_and_says_it(monkeypatch):
+    """I4D, the block's side of the same rewrite (found by reading the code, not by the
+    machine: its customer allows never lie among our block numbers). db-nic-1's block at
+    210, someone's allow at 215; written again under the second name, at 220 — the first
+    pair's inbound deny taken off, the attacker reached db-nic-1 through that allow. It
+    stays, named (`before_allow`), in the outcome, its note and the reassertion's card;
+    the unblock takes it off."""
+    import shutil
+
+    from glorfindel import escalations
+
+    net = _net(subnet_nsg=[_PARTNER])
+    m, rules = _db1_moved(monkeypatch, net, block_first=True)
+    try:
+        assert rules[_DB1_BLOCK]["priority"] == 210
+        reach = m._attacker_flows(DB, None)
+        out = m.connector.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=None)
+        assert rules[_DB1_BLOCK]["access"] == "Deny" and rules[_DB1_BLOCK_SECOND]["priority"] == 220, rules
+        kept = [x for x in out["left_rules"] if x["rule"] == _DB1_BLOCK]
+        assert kept == [{"nsg": "rg-net/nsg-subnet", "rule": _DB1_BLOCK, "to": "10.0.0.7, 10.0.0.8",
+                         "on": "partner-allow", "kind": "before_allow"}], out["left_rules"]
+        assert "avant partner-allow ; celle qui la remplace passe après" in out["note"]
+        assert m._attacker_flows(DB, None) <= reach
+        m.reassert(Script("non_disruptive", None))
+        said = [e["reason"] for e in escalations.pending() if e.get("action") == "review_left_rule"]
+        assert any(f"{_DB1_BLOCK} (rg-net/nsg-subnet), notre deny, vise 10.0.0.7, 10.0.0.8, passe avant "
+                   "partner-allow et sa remplaçante après : la retirer ouvrirait Db--01" in r for r in said), said
+        m.connector.unblock_ip(ATTACKER, DB)
+        assert _DB1_BLOCK not in rules and _DB1_BLOCK_SECOND not in rules
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("ours", ["Inbound", "Outbound"])
+@pytest.mark.parametrize("access, same, at, expected", [
+    ("Allow", True, 101, ["between"]),                 # the allow it precedes, its replacement doesn't
+    ("Allow", False, 101, []),                        # the other direction: not this deny's traffic
+    ("Allow", True, 102, []),                         # at the replacement's own number: not between
+    ("Allow", True, 100, []),                         # at the deny's own number: not between
+    ("Deny", True, 101, []),                          # a deny between opens nothing
+])
+def test_the_allows_a_rewrite_would_pass(ours, access, same, at, expected):
+    """I4D's guard alone: the allows strictly between our deny and its replacement, in its
+    direction, read in that direction's number; none when the replacement keeps an earlier
+    number, or the rule isn't a deny."""
+    from types import SimpleNamespace
+
+    from glorfindel.providers.azure.nsg import _allows_passed_by_its_replacement
+
+    other_way = {"Inbound": "Outbound", "Outbound": "Inbound"}
+    mine, theirs = ours.lower(), other_way[ours].lower()
+    deny = SimpleNamespace(name="ours", access="Deny", direction=ours, priority=100)
+    other = SimpleNamespace(name="between", access=access, direction=ours if same else other_way[ours], priority=at)
+    assert _allows_passed_by_its_replacement([deny, other], deny, {mine: 102, theirs: 100}) == expected
+    assert _allows_passed_by_its_replacement([deny, other], deny, {mine: 99, theirs: 102}) == []
+    turned = SimpleNamespace(**{**vars(deny), "access": "Allow"})
+    assert _allows_passed_by_its_replacement([turned, other], turned, {mine: 102, theirs: 102}) == []
 
 
 _S42_ISO_NET = {

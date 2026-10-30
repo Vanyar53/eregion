@@ -5271,6 +5271,47 @@ MUTANTS += [
 TESTS["M1971"] = ("tests/unit/test_invariant_regressions.py::"
                   f"test_an_isolation_on_every_address_written_again_leaves_it_for_the_vm_behind {INVARIANTS}")
 
+# I4D (#356): written again under the NIC's second name (I4B), the first pair's deny before an
+# allow the new one comes after was taken off — the VM opened (seed 1618 at 2 000). It stays, said.
+_I4D = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in (
+    "test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address",
+    "test_an_isolation_written_again_never_moves_its_deny_past_an_allow",
+    "test_an_isolation_written_again_keeps_the_deny_before_an_allow_and_says_it",
+    "test_a_reassertion_says_the_deny_it_kept_before_an_allow",
+    "test_a_block_written_again_keeps_the_deny_before_an_allow_and_says_it",
+    "test_the_allows_a_rewrite_would_pass"))
+MUTANTS += [
+    ("M2060", "the isolation written again under its second name takes the first pair's deny off past an "
+              "allow: the VM opened (I4D)", ISO,
+     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority):\n"
+     "                drop.remove(n)\n                left.append(",
+     "            if False and (passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], "
+     "priority)):\n                drop.remove(n)\n                left.append("),
+    ("M2061", "the block written again under its second name takes the first pair's deny off past an allow: "
+              "the attacker reaches the VM (I4D)", BLK,
+     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority):\n",
+     "            if False and (passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], "
+     "priority)):\n"),
+    ("M2062", "the isolation keeps the deny before the allow, unsaid (I4D)", ISO,
+     '                left.append({"nsg": nsg_key, "rule": n, "why": (\n',
+     '                ({"nsg": nsg_key, "rule": n, "why": (\n'),
+    ("M2063", "the block keeps the deny before the allow, said as a turned rule (I4D)", BLK,
+     '                             "on": ", ".join(passed), "kind": "before_allow"})\n',
+     '                             "on": ", ".join(passed), "kind": "turned"})\n'),
+    ("M2064", "the reassertion's card says a deny kept before an allow as a turned rule (I4D)", RCA,
+     "                         f\"la retirer ouvrirait {vm}\" if x.get(\"kind\") == \"before_allow\" else\n",
+     "                         f\"la retirer ouvrirait {vm}\" if False else\n"),
+    ("M2065", "the guard reads the replacement's number in the inbound direction only: an outbound deny "
+              "taken off past an allow (I4D)", NSG,
+     "    low, high = getattr(rule, \"priority\", None), priority.get(direction)\n",
+     "    low, high = getattr(rule, \"priority\", None), priority.get(\"inbound\")\n"),
+    ("M2066", "the guard counts the allows of any direction (I4D)", NSG,
+     "            if _enum_text(getattr(r, \"direction\", \"\")) == direction\n"
+     "            and _enum_text(getattr(r, \"access\", \"\")) == \"allow\"\n",
+     "            if _enum_text(getattr(r, \"access\", \"\")) == \"allow\"\n"),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in range(2060, 2067)})
+
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
 # from the query (N-10), H0's host key pinned (V-32), the containers hardened (V-34), one principal

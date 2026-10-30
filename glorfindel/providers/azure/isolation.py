@@ -6,7 +6,13 @@ from __future__ import annotations
 
 import re
 
-from glorfindel.providers.azure.nsg import _describe_shadowing, _pair_priorities, _scope_to_nic, _shadowing_rules
+from glorfindel.providers.azure.nsg import (
+    _allows_passed_by_its_replacement,
+    _describe_shadowing,
+    _pair_priorities,
+    _scope_to_nic,
+    _shadowing_rules,
+)
 from glorfindel.providers.azure.quarantine import _remember_quarantine_outcome, PLATFORM_OPEN_NOTE
 from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned
@@ -351,7 +357,9 @@ class IsolationMixin:
         ours turned into an allow that opens the VM given the NIC's old address, or our
         deny there a turned rule waits behind (_held_by_turned: the unblock's, the
         release's guard). Those stay as they are (`left`, said); the other pair's rules
-        present go once the deny holds (`drop`). Both pairs held: this NIC fails."""
+        present go once the deny holds (`drop`) — but a deny of theirs before an allow the
+        new one comes after (I4D, seed 1618): taken off, that allow opened the VM; it stays,
+        said in `left`. Both pairs held: this NIC fails."""
         nsg_key = f"{nsg_rg}/{nsg_name}"
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
         by_name = {(getattr(r, "name", "") or "").lower(): r for r in existing}
@@ -370,6 +378,14 @@ class IsolationMixin:
         taken = {x["rule"].lower() for x in left}
         drop = [n for pair in pairs if pair != own for n in pair if n.lower() in by_name and n.lower() not in taken]
         priority = _pair_priorities(existing, *own, self.ISOLATION_PRIORITY, 1, assigned.get(nsg_key, set()))
+        # I4D: a deny of the other pair before an allow its replacement comes after stays.
+        for n in list(drop):
+            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority):
+                drop.remove(n)
+                left.append({"nsg": nsg_key, "rule": n, "why": (
+                    f"{nsg_key}/{n}, notre deny, passe avant {', '.join(passed)} ; la règle qui la remplace "
+                    f"passe après (priorité {priority[_enum_text(by_name[n.lower()].direction)]}) : la retirer "
+                    f"ouvrirait {t['nic_short']}")})
         ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=None, inbound_dst=ips,
                                     outbound_src=ips, outbound_dst=None)

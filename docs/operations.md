@@ -158,6 +158,13 @@ eregion console [--sections annatar,gothmog] # la console web sur http://localho
                                              # (ou --sections) ; `glorfindel war-room` reste un alias caché
                                              # toujours un jeton : EREGION_CONSOLE_TOKEN, sinon tiré au premier démarrage
                                              # (~/.glorfindel/console_token, 600) et affiché avec l'URL à ouvrir une fois
+eregion coverage [--json] [--check]          # la matrice de couverture (C1), depuis runs/ du répertoire courant : chaque
+                                             # technique du catalogue et chaque panne, son dernier run, sa dernière preuve,
+                                             # son état (proven, aging > 21 j, stale > 30 j, regressed, unproven, never) et
+                                             # ses derniers résultats (✓ ✗ ? ·) ; fichiers seulement, ni cloud ni modèle.
+                                             # --check : la non-régression, sort en 1 sur une technique ou une panne
+                                             # prouvée avant et ratée depuis (après un rejeu du catalogue sur le banc,
+                                             # depuis Orodruin, sur l'hôte de la watch : H0 garde les rapports et les cycles)
 glorfindel --version                         # 0.2.0
 
 # Annatar et Gothmog exigent Glorfindel (V1, #214) : avant chaque run (chaque run d'une campagne aussi),

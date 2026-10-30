@@ -3478,6 +3478,22 @@ def test_an_isolation_gone_under_a_bypass_is_said_gone(monkeypatch):
          ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, True, (1, "from-full")))
 
 
+@pytest.mark.parametrize("fault", [(3, "before-429"), (5, "before-crash")], ids=["failed", "cut_off"])
+def test_a_block_written_again_after_an_unblock_is_said_gone(monkeypatch, fault):
+    """L1B (#355), the shape of seed 777 at 2 000 (L2C): web blocked, its unblock failed
+    (a 429 on a delete: `unblock_failed`) or cut off (a crash: `unblocking_at`), then the IP
+    blocked again, whole — the entry merged, the marks kept; a `terraform apply` takes the
+    rules off: the pass left it to the operator, nothing said (« L1: the block on …/web
+    vanished »). The machine's oracle exempted it on the code's marks; it reads its own
+    journal now — a whole block since the unblock holds nothing (_block_held)."""
+    _run(monkeypatch, _net(web_nic={"own": "dedicated"}),
+         ("block", WEB1, WEB1, None, 22),
+         ("unblock", WEB1, WEB1, fault),
+         ("block", WEB1, WEB1, None, 22),
+         ("terraform_apply", _S101_NSG.format("rg-app1", "nsg-web-nic")),
+         ("reassert", "human_only", None))
+
+
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────
 
 _S322_NET_KEPT = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}

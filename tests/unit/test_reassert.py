@@ -1482,12 +1482,11 @@ def test_an_alert_closes_the_card_it_replaces_with_a_note():
     assert closed["resolution"] and [e["reason"] for e in _drift_cards("pending")] == ["b"]
 
 
-@pytest.mark.xfail(strict=True, reason="a stale operation mark (unblock_failed): its own lot, routed from L2C's review")
 def test_a_block_written_again_after_a_failed_unblock_is_checked():
     """A block, an unblock that failed (`unblock_failed`), then the block written again,
-    whole: `_save_block_state` merges it into the entry and keeps the mark. Its rules then
-    vanish: the pass leaves it to the operator, `verify_block_ip` never called — nothing
-    said. Present on `main`; the oracle of the machine exempts it as L1 does meanwhile."""
+    whole: `_save_block_state` merged it into the entry and kept the mark. Its rules then
+    vanished: the pass left it to the operator, `verify_block_ip` never called — nothing
+    said (seed 777 at 2 000, L2C). L1B: a whole block supersedes the unblock, its marks go."""
     from glorfindel.actions import _update_block_entry
     placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
     _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)
@@ -1495,4 +1494,27 @@ def test_a_block_written_again_after_a_failed_unblock_is_checked():
     _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)     # blocked again
     c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
     reassert_active(c, _HUMAN)
+    assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+
+
+def test_only_a_whole_block_supersedes_a_cut_off_unblock():
+    """L1B: an unblock cut off midway (`unblocking_at`), then the IP blocked again — in
+    part: the operation unfinished, the entry held, the interruption said; whole: its marks
+    go, the stale card's mark too (a later cut-off unblock is said again), and the block is
+    checked."""
+    from glorfindel.actions import _load_block_entries, _update_block_entry
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)
+    _update_block_entry("vm", _IP, unblocking_at="2026-10-06T08:00:00+00:00")
+    _save_block_state("vm", _IP, _RID, placements=placed, partial=True, threat_port=22)
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]       # interrupted
+    assert "interrompu" in escalations.pending()[0]["reason"]
+    reassert_active(c, _HUMAN)
+    c.verify_block_ip.assert_not_called()
+    _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)     # whole
+    (entry,) = _load_block_entries("vm")
+    assert not {"unblock_failed", "unblocking_at", "stale_alerted_at"} & set(entry)
+    reassert_active(c, _HUMAN)
+    c.verify_block_ip.assert_called()
     assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]

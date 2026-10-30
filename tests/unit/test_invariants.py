@@ -499,6 +499,10 @@ class IsolationMachine(RuleBasedStateMachine):
         _CURRENT.clock = 0                              # minutes the test clock is ahead
         self.releasing: set[str] = set()                # the test's own journal (I9)
         self.unblocking: set[str] = set()
+        # VMs whose block the test saw written whole since the last unblock or reset began
+        # (any VM's: the connector's own calls, wrapped in `build`). A whole block supersedes
+        # an unblock's marks (L1B): only before it do they hold the block (_block_held).
+        self.reblocked: set[str] = set()
         self.journal_seen = 0                           # I2 by author: entries checked
         self.journal_at = 0                             # I4: where the operation began (_before)
         # Untraceability from the test's own journal (A0): when Glorfindel recorded a NIC's
@@ -563,7 +567,15 @@ class IsolationMachine(RuleBasedStateMachine):
         c._network, c._compute = f.network, f.compute
         c._subscription_id = "s"                 # the subscription the clients act in
         c.recent_changes = lambda *a, **k: []
+        for name in ("unblock_ip", "sweep_vm_rules"):          # an unblock or a reset begins
+            c.__dict__[name] = self._lifting(getattr(c, name))
         self.connector = c
+
+    def _lifting(self, op):
+        def run(*a, **k):
+            self.reblocked.clear()
+            return op(*a, **k)
+        return run
 
     def _legacy_isolation(self, nic_name: str, keep_state: bool):
         """What an older version left: the fixed names, a deny any/any on what was then
@@ -1192,6 +1204,11 @@ class IsolationMachine(RuleBasedStateMachine):
         out, err = self._run(fault, lambda: self.connector.block_suspicious_ip(
             ATTACKER, rid, scope="vm", threat_port=port), "block")
         self._chain_end(clean, start, fault is None and err is None)
+        if out and out.get("status") == "blocked" and err is None:
+            # Written whole: an unblock before it, failed or cut off, is over (L1B) — as an
+            # isolation ends the release it supersedes (I9).
+            self.unblocking.discard(vm)
+            self.reblocked.add(vm)
         if out and out.get("status") == "blocked" and not out.get("bypass"):
             assert not self._attacker_flows(vm, port), f"I3: block said blocked, {ATTACKER} reaches {vm}"
             check, _ = self._run(None, lambda: self.connector.verify_block_ip(ATTACKER, rid))
@@ -1210,6 +1227,9 @@ class IsolationMachine(RuleBasedStateMachine):
         out, err = self._run(fault, lambda: self.connector.block_suspicious_ip(
             ATTACKER, rid, scope="subnet", replace=replace), "block_perimeter" + (" (promote)" if replace else ""))
         self._chain_end(clean, start, fault is None and err is None)
+        if out and out.get("status") == "blocked" and err is None:
+            self.unblocking.discard(vm)                     # written whole (L1B, see _block)
+            self.reblocked.add(vm)
         if out and out.get("status") in ("blocked", "blocked_partial") and not out.get("bypass"):
             # The VM blocked: every one of its NICs is cut off — behind the perimeter, or, on
             # another subnet (RB1's second subnet), by its own block — but those it names as
@@ -1249,12 +1269,10 @@ class IsolationMachine(RuleBasedStateMachine):
         self._others_unchanged(vm, flows, states, perimeter="lift")
 
     def _block_vanished(self, vm: str) -> bool:
-        """The VM's block of the attacker is recorded, no operation holds it (the test's
-        journal, and the entry's own partial/failure marks), and none of its rules is on
-        Azure any more."""
+        """The VM's block of the attacker is recorded, no operation holds it (_block_held),
+        and none of its rules is on Azure any more."""
         entry = next((e for e in actions._load_block_entries(vm) if e.get("ip") == ATTACKER), None)
-        if (entry is None or vm in self.unblocking
-                or any(entry.get(k) for k in ("partial", "unblock_failed", "unblocking_at"))):
+        if entry is None or self._block_held(vm, entry):
             return False
         from .fake_azure import nsg_id
 
@@ -1557,6 +1575,15 @@ class IsolationMachine(RuleBasedStateMachine):
             f"I12: {kind} on another subscription changed a local state")
 
     # ── two operations at once (L27) ────────────────────────────────────────────
+
+    def _block_held(self, vm: str, entry: dict) -> bool:
+        """L1's exemption for a block: an unblock the test began and didn't see finish, a
+        partial block (its own mark), or an unblock's or a reset's failure or interruption
+        marks — only while the test hasn't seen the block written whole since (`reblocked`,
+        its own journal). The marks alone held a block written again for ever, unchecked
+        (seed 777 at 2 000, L2C; L1B): the exemption followed the code it judges (A0)."""
+        return bool(vm in self.unblocking or entry.get("partial") or (
+            vm not in self.reblocked and any(entry.get(k) for k in ("unblock_failed", "unblocking_at"))))
 
     def _consistent(self, vm: str) -> bool:
         """The local state says what Azure has: an isolation on Azure is in the state and
@@ -2246,15 +2273,14 @@ class IsolationMachine(RuleBasedStateMachine):
         is said after an unfaulted pass: a pending bypass card on the VM (for a block, about the
         attacker's address). Once said, it stays said while the allow stands. As for L1
         (_block_vanished): only while no operation holds it — the test's journal, and the
-        record's own partial or failure marks. A block written again after a failed unblock
-        keeps its mark and goes unchecked: a known defect, present on `main`, routed to a lot
-        of its own (test_reassert.py, xfail); the exemption follows L1 meanwhile."""
+        record's own partial or failure marks; for a block, as L1 has it (_block_held: a block
+        written whole since an unblock is no longer held by its marks, L1B)."""
         record = (self._state(vm) if isolation
                   else next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), None))
-        marks = ("partial", "release_failed", "releasing_at") if isolation else (
-            "partial", "unblock_failed", "unblocking_at")
-        if (not opened or record is None or vm in (self.releasing if isolation else self.unblocking)
-                or any(record.get(k) for k in marks)):
+        marks = ("partial", "release_failed", "releasing_at")
+        if not opened or record is None or (
+                vm in self.releasing or any(record.get(k) for k in marks) if isolation
+                else self._block_held(vm, record)):
             return
         ip = None if isolation else ATTACKER
         said = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)

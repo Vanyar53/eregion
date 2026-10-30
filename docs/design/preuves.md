@@ -2200,14 +2200,16 @@ refusée sur une VM n'arrête plus la passe (`reassert_active`, journalisée) : 
 remise en place, sa marque restée, sa disparition suivante tue. Enfin, seule une tenue finissait
 l'épisode : des règles remises mais contournées (une allow du client avant elles, dite sur sa propre
 carte) le gardaient pour toujours, et la disparition suivante était tue (graine 322 à 500) ; les
-règles revenues le finissent maintenant (`drift_over`). La machine le tire : la
+règles revenues le finissent maintenant (`drift_over`). Et l'épisode se sait fini dès que la
+vérification relit les règles, avant toute écriture de la VM : la première de sa passe (sa marque
+de contournement retirée) refusée, il ne l'était jamais (graine 777 à 2 000). La machine le tire : la
 branche « disparu » de `said_then_back_after_a_full_disk` (nos règles retirées par le test, dites,
 acquittées, remises pendant le disque plein, retirées de nouveau ; l'oracle de L1 pour un blocage,
 le même pour une isolation par règles), deux séquences figées. Mutants M1942–M1949. Les cartes de la
 réaffirmation se lisent une fois par passe (`reassert_cards._history`, relue après chacune de ses
 écritures), plus une fois par changement acquitté.
 
-**Mesures de L2C.** `pytest` complet : 4 246 réussis, 7 sautés, 4 `xfail` (ci-dessous et dans `test_reassert.py`) ; `ruff` propre. Sur `origin/main` (ba657a0),
+**Mesures de L2C.** `pytest` complet : 4 300 réussis, 7 sautés, 4 `xfail` (ci-dessous et dans `test_reassert.py`) ; `ruff` propre. Sur `origin/main` (ba657a0),
 échouent huit des dix tests de `tests/unit/test_reassert.py` (les deux autres : le retour des règles
 laissées, que le magasin masquait en fondant les cartes, rouge sous M1933 ; une carte acquittée lue
 sur sa propre ressource, pour M1941) et les quatre séquences figées ; pour la relecture, sur la
@@ -2231,10 +2233,13 @@ avant/après (60 séquences, deux tours, `--jobs 4`) sur les 51 mutants de `reas
 50/51 après plus les douze nouveaux (62/63) ; M37 attrapé par ses seules séquences figées des deux
 côtés ; aucun perdu. Après la relecture, sur les 71 (les 51 voisins et M1930–M1949) : 70/71, M37 de
 même ; aucun perdu.
-Invariants sur le code final de la relecture : 500 séquences sur 42, 322, 777 et 1, et 2 000 sur
-202, verts ; à 60 séquences, douze graines fixées et dix au hasard, vertes. Une suite complète
-lancée sous la charge de cinq runs de la machine a vu une fois `test_isolation_invariants`
-échouer (graine au hasard, sortie perdue) ; pas reproduit depuis, à charge normale.
+Invariants sur le code final (après la fusion de `main`, 0.4.8) : 500 séquences sur 42, 1, 202 et
+101, et 2 000 sur 777 et 322, verts ; avant la fusion, 500 sur 42, 322, 777 et 1 et 2 000 sur 202,
+et à 60 séquences douze graines fixées et dix au hasard, verts. Deux suites complètes lancées avec
+une graine au hasard ont fait tomber `test_isolation_invariants` sur la branche « disparu » : la
+seconde (graine 128987538955873571962454344647035300307) est l'épisode pas su fini avant la
+première écriture, corrigé et rejoué vert ; la sortie de la première est perdue. Harnais sur les
+mutants de la relecture, code final : 8/8, M902 de même ; M13 bruité à 60 (1/2), 2/2 à 500.
 
 **Hors du lot : deux L1 anciens et un I5**, trouvés par ces runs ou leur relecture, présents sur
 `origin/main` sans la règle de L2C ni sa faute, figés en `xfail` strict dans

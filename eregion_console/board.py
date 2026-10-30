@@ -45,11 +45,25 @@ def _response(state: dict) -> dict[str, list[str]]:
     return out
 
 
-def red_cards(catalog: dict[str, Experiment], rules: list[dict], sections: dict) -> list[dict]:
+def proofs(matrix: dict | None) -> dict[str, dict]:
+    """Each entry's row of the coverage matrix (C1, eregion_console/coverage.py), by its id: its
+    state (proven, aging, stale, regressed, unproven, never), the age of its last proof, its last
+    run. An entry the matrix does not hold was never run here."""
+    out: dict[str, dict] = {}
+    for r in [*((matrix or {}).get("techniques") or []), *((matrix or {}).get("faults") or [])]:
+        lp, lr = r.get("last_proof") or {}, r.get("last_run") or {}
+        out[str(r.get("id") or "")] = {"state": str(r.get("state") or "never"), "proof_age_s": lp.get("age_s"),
+                                        "last_run": str(lr.get("run_id") or ""), "last_run_at": lr.get("at") or ""}
+    return out
+
+
+def red_cards(catalog: dict[str, Experiment], rules: list[dict], sections: dict,
+              matrix: dict | None = None) -> list[dict]:
     """Every entry of the catalogue: what runs first (techniques, then faults), then what is only
-    planned. ``available`` is false for an entry nothing runs yet, or whose injector is not set up
-    here — a card without a handle."""
+    planned, each with its last proof (the coverage matrix). ``available`` is false for an entry
+    nothing runs yet, or whose injector is not set up here — a card without a handle."""
     active = {s.get("id"): bool(s.get("active")) for s in sections.get("sections") or []}
+    proof = proofs(matrix)
     out = []
     for e in sorted(catalog.values(), key=lambda e: (e.status != "implemented", e.kind != "technique", e.id)):
         why = ""
@@ -63,6 +77,7 @@ def red_cards(catalog: dict[str, Experiment], rules: list[dict], sections: dict)
             "engine": e.engine, "resource_type": e.resource_type, "status": e.status,
             "destructive": e.destructive, "expected_latency_s": e.expected_latency_s,
             "rules": sorted({r["name"] for r in detecting}), "available": not why, "why": why,
+            "proof": proof.get(e.id) or {"state": "never", "proof_age_s": None, "last_run": "", "last_run_at": ""},
         })
     return out
 

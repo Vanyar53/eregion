@@ -40,7 +40,7 @@ function campaignLine() {
   // V1: a campaign run --without-glorfindel measured nothing, by choice — not « unknown ».
   const counts = c.without_glorfindel ? `${ex.length}/${Number(sc.length)} executed · <span class="dim">not measured, by choice (--without-glorfindel)</span>` : null;
   return `<div class="line"><span class="k">last campaign</span>
-    <a href="/annatar?campaign=${encodeURIComponent(c.dir)}">${esc(c.campaign_id || c.dir)}</a>
+    <a href="/dagorlad?view=runs&campaign=${encodeURIComponent(c.dir)}">${esc(c.campaign_id || c.dir)}</a>
     <span class="dim">${hms(c.created_at)}</span>
     <span>${counts || `${ex.length}/${Number(sc.length)} executed · <span class="ok">${n('detected')} detected</span>${n('missed') ? ` · <span class="bad">${n('missed')} missed</span>` : ''}${n('unknown') ? ` · <span class="warn">${n('unknown')} unknown</span>` : ''}`}</span></div>`;
 }

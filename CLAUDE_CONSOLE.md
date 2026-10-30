@@ -19,7 +19,7 @@ en 5 secondes et agir en 2 clics.
 
 **Tu travailles sur :**
 - `eregion_console/static/` — `console.js` et `console.css` (l'en-tête commun), `overview.html` (`/`),
-  `glorfindel.html` (`/glorfindel`, `/config`), `injector.html` (`/annatar`, `/gothmog`, lecture seule),
+  `glorfindel.html` (`/glorfindel`, `/config`), `injector.html` (la vue Runs de Dagorlad, `/dagorlad?view=runs`, lecture seule),
   `dagorlad.html` (`/dagorlad`, le terrain d'exercice, §7 de `docs/design/console.md`) ;
   leur script dans un fichier à part (`overview.js`, `glorfindel.js` ~3000 lignes, `injector.js`, `dagorlad.js`),
   `exercises.js` partagé ; vanilla JS + CSS variables, sans étape de build
@@ -47,8 +47,9 @@ GET  /api/actions/<vm>        → historique actions sur une VM (limit=5 par dé
 GET  /api/discovered          → assets découverts (AssetRegistry)
 GET  /api/pending/rules       → règles proposées en attente d'approbation
 
-GET  /  /glorfindel  /annatar  /gothmog  /config   → les pages (overview, glorfindel, injector)
-GET  /runs/<run_id>                   → 302 vers la page de son injecteur
+GET  /  /glorfindel  /dagorlad  /config   → les pages (overview, glorfindel, dagorlad ; /dagorlad?view=runs → injector)
+GET  /annatar, /gothmog               → 308 vers /dagorlad?view=runs&injector=…, la requête gardée (jusqu'à la 1.0)
+GET  /runs/<run_id>                   → 302 vers /dagorlad?view=runs&run=…
 GET  /atelier, /api/atelier/*         → 308 vers / et /api/* (jusqu'à la 1.0)
 GET  /api/sections                    → Glorfindel, chaque injecteur actif ou grisé et pourquoi, read_only
 GET  /api/indicators                  → les cinq indicateurs (30 jours) : contenir, contenu seul (+ shadow), à tort, couverture, dernière preuve
@@ -83,13 +84,15 @@ Feed WebSocket — événements possibles :
 
 ```
 En-tête (console.js), le même partout → EREGION + version déployée (tag, sinon version · commit) · onglets Overview, Glorfindel (cartes à juger),
-                       Annatar, Gothmog (grisés sans run sur l'hôte) … à droite : battement de la watch ·
+                       Dagorlad (grisé quand ni Annatar ni Gothmog n'a de run sur l'hôte) … à droite : battement de la watch ·
                        canal retour · ⚙ Config · UTC. Le point « live » est sur la colonne LIVE FEED.
 /            Overview → une ligne par section : à juger, part jugée fausse, dernier run, campagne, canaux
 /glorfindel  → TO JUDGE (seul endroit du verdict), fil live, carte de l'infra (DETECT/PROTECT/RECOVER,
                cartes VM : état, Approve & execute, Ack, Cmd, « to judge ▸ », Release/Unblock/Reset/Restore)
-/annatar     → fenêtres d'exercice, campagnes, techniques ; grisé : ce qu'Annatar ajouterait
-/gothmog     → fenêtres de panne avec les sondes avant/après, pannes du catalogue ; grisé : idem
+/dagorlad    → Board : on tire des fils des cartes rouges (catalogue, dernière preuve) vers les cibles inscrites,
+               le serveur juge chaque fil et dit l'attendu (phase a, lecture seule)
+/dagorlad?view=runs → Runs : fenêtres d'exercice (sondes d'une panne), campagnes, matrice de couverture, des
+               deux injecteurs ou d'un seul (filtre) ; grisé : ce qu'ils ajouteraient
 /config      → Azure, LLM, autonomie, sections
 ```
 

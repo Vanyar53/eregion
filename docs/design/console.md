@@ -126,10 +126,10 @@ Le tirage des rapports reste dans la watch de Glorfindel, qui est toujours là.
 ```
 /                        Overview           /?token=… once, then the cookie
 /glorfindel              Glorfindel         ?card=<id> highlights that card in TO JUDGE
-/annatar                 Annatar            ?run=<id> · ?campaign=<id>
-/gothmog                 Gothmog            ?run=<id>
+/dagorlad               Dagorlad (§7)      the Board; ?view=runs the Runs: ?injector=, ?run=<id>, ?campaign=<id>
+/annatar, /gothmog       → 308 /dagorlad?view=runs&injector=…[&…] (until 1.0; their pages until 30/10)
 /config                  Config
-/runs/<run_id>           → 302 to /annatar?run=… or /gothmog?run=…, by the injector of its window
+/runs/<run_id>           → 302 to /dagorlad?view=runs&run=…
 /atelier[?…]             → 308 /[?…]
 /api/exercises?injector=  /api/campaigns[/<id>]  /api/catalog?kind=  /api/channel[/detections/<id>]
                          GET only — the former /api/atelier/*, which redirects (308) until 1.0
@@ -979,6 +979,21 @@ Posées une à une. La réponse est reportée ici avec sa date.
   oublié, les plafonds ignorés, une carte pour une VM non inscrite, un déploiement en lecture seule
   montré capable de contenir, la route du plan qui accepte POST, une action hors de la table de la
   page, un nom de VM écrit brut, une technique sans règle non dite aveugle.
-- **Reste pour DG-a**, après la fusion de C1 : la vue Runs, les redirections de `/annatar`, `/gothmog`
-  et `/runs/<id>`, l'onglet (Dagorlad n'est pas encore dans l'en-tête : on l'ouvre par son adresse),
-  la dernière preuve sur les cartes rouges.
+
+### Construit : la fin de DG-a (#347, 30/10)
+
+- **La vue Runs**, `/dagorlad?view=runs` : la page des injecteurs d'avant, commune aux deux. Les
+  fenêtres d'exercice et leur détail (cycles, cartes, rapport du run, sondes d'une panne, canal
+  retour), les campagnes et la matrice de couverture de C1 (techniques puis pannes, comptées à part).
+  Un filtre, de simples liens (`?injector=annatar|gothmog`), en garde un ; sans lui, les deux. Un lien
+  vers un run reste dans les Runs (`?view=runs&run=`). Grisée quand ni Annatar ni Gothmog n'a de run
+  sur l'hôte : ce qu'ils ajouteraient.
+- **Les adresses** : `/annatar` et `/gothmog` mènent aux Runs filtrés sur leur injecteur, la requête
+  gardée (308, jusqu'à la 1.0) ; `/runs/<id>` mène aux Runs (302). Les vues ont leur bande, Board | Runs.
+- **L'en-tête** : trois onglets, Overview, Glorfindel, Dagorlad. Dagorlad est grisé quand aucun
+  injecteur n'est installé ici.
+- **La dernière preuve** sur chaque carte rouge du Board, lue dans la matrice de C1 : son état (proven,
+  aging, stale, REGRESSED, no proof, never run) et l'âge de sa dernière preuve.
+- **Mutants M1995–M1999** : `/annatar` qui ne mène plus aux Runs, la redirection qui perd sa requête, un
+  lien de run qui ouvre le Board, une carte rouge sans sa preuve, l'en-tête qui garde l'onglet
+  d'Annatar. M404 suit la nouvelle page.

@@ -233,3 +233,36 @@ def test_a_wire_is_removed_by_its_own_cross_never_by_drawing_it_again():
     add = js[start:js.index("\n}\n", start)]
     assert "already drawn" in add and "splice" not in add
     assert js.count("_on('click', 'unwire', k)") == 2
+
+
+# --- the end of DG-a: the Runs, the redirects, the tab, the last proof (#347) ---------------
+
+def test_a_red_card_carries_its_last_proof_from_the_coverage_matrix(client, monkeypatch):
+    """The coverage matrix (C1) gives each entry its state and the age of its last proof; an
+    entry it does not hold was never run here."""
+    matrix = {"techniques": [{"id": "T1110.001", "state": "proven", "last_proof": {"age_s": 518400, "run_id": "r-1"},
+                              "last_run": {"run_id": "r-1", "at": "2026-10-24T08:00:00+00:00"}}],
+              "faults": [{"id": "vm-shutdown", "state": "regressed", "last_proof": None,
+                          "last_run": {"run_id": "g-2", "at": "2026-10-29T08:00:00+00:00"}}]}
+    monkeypatch.setattr(api, "coverage_matrix", lambda now=None: matrix)
+    reds = {r["id"]: r for r in client.get("/api/dagorlad/board").json()["reds"]}
+    assert reds["T1110.001"]["proof"] == {"state": "proven", "proof_age_s": 518400, "last_run": "r-1",
+                                          "last_run_at": "2026-10-24T08:00:00+00:00"}
+    assert reds["vm-shutdown"]["proof"]["state"] == "regressed"
+    assert reds["T1486"]["proof"]["state"] == "never"
+
+
+def test_the_header_has_three_tabs_dagorlad_in_place_of_the_injectors():
+    """Overview, Glorfindel, Dagorlad: Annatar's and Gothmog's pages became its Runs (30/10)."""
+    from pathlib import Path
+    js = (Path(api.__file__).parent / "static" / "console.js").read_text()
+    tabs = js[js.index("const TABS = ["):js.index("];", js.index("const TABS = ["))]
+    assert "{ id: 'dagorlad'" in tabs and "href: '/dagorlad'" in tabs
+    assert "'/annatar'" not in tabs and "'/gothmog'" not in tabs
+
+
+def test_a_run_link_in_the_runs_stays_in_the_runs():
+    """A link to a run opens its row in the Runs, never the Board (?run= alone is the Board)."""
+    from pathlib import Path
+    js = (Path(api.__file__).parent / "static" / "injector.js").read_text()
+    assert 'href="?view=runs&run=' in js and 'href="?run=' not in js

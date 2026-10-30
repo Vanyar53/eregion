@@ -172,7 +172,8 @@ glorfindel/
 
 eregion_console/                → la console d'Eregion (`eregion console`, docs/design/console.md, #205) ; jusqu'au
                                   26/10, glorfindel/api.py et glorfindel/static/ (la War Room et l'atelier)
-  api.py                → FastAPI — pages / (Overview), /glorfindel, /annatar, /gothmog, /config ; jeton
+  api.py                → FastAPI — pages / (Overview), /glorfindel, /dagorlad (Board, ou Runs avec ?view=runs ;
+                          /annatar et /gothmog y mènent, filtrés), /config ; jeton
                           (EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN) ;
                           /api/state (autonomy_modes, autonomy_default, read_only, capability), /api/feed (WS),
                           /api/config, /api/audit[/<vm>], /api/pending/rules,

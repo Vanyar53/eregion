@@ -2101,10 +2101,16 @@ class IsolationMachine(RuleBasedStateMachine):
         """L1 and L2 for a bypass (V-16, L2C): an isolation or a block of the VM, recorded,
         that a customer's allow passes — flows it opens (`opened`, the test's judgement) —
         is said after an unfaulted pass: a pending card on the VM (for a block, about the
-        attacker's address). Once said, it stays said while the allow stands."""
-        recorded = (self._state(vm) is not None if isolation
-                    else any(b.get("ip") == ATTACKER for b in actions._load_block_entries(vm)))
-        if not opened or not recorded:
+        attacker's address). Once said, it stays said while the allow stands. As for L1
+        (_block_vanished): only while no operation holds it — the test's journal, and the
+        record's own partial or failure marks (a failed unblock or release is the operator's;
+        the reassertion leaves it alone, by design)."""
+        record = (self._state(vm) if isolation
+                  else next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), None))
+        marks = ("partial", "release_failed", "releasing_at") if isolation else (
+            "partial", "unblock_failed", "unblocking_at")
+        if (not opened or record is None or vm in (self.releasing if isolation else self.unblocking)
+                or any(record.get(k) for k in marks)):
             return
         ip = None if isolation else ATTACKER
         said = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)

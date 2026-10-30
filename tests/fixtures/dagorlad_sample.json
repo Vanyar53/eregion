@@ -1,0 +1,53 @@
+{
+  "sample": "Dagorlad's sample data: fictitious, the only data scripts/console_shots.py renders. Never a real bench: the subscription is the zero GUID, the names are the bench's public ones (docs/dagorlad.md).",
+  "subscription": "00000000-0000-0000-0000-000000000000",
+  "bench": "celebrimbor",
+  "backend": "bench-workspace",
+  "targets": [
+    {"name": "vm-celebrimbor-gondolin", "resource_group": "rg-celebrimbor", "zone": "bench", "seen_ago_s": 14},
+    {"name": "vm-celebrimbor-twin", "resource_group": "rg-celebrimbor", "zone": "twin", "seen_ago_s": 31},
+    {"name": "vm-sentinel", "resource_group": "rg-celebrimbor", "zone": "production", "seen_ago_s": 22},
+    {"name": "vm-celebrimbor-bree", "resource_group": "rg-celebrimbor", "zone": null, "seen_ago_s": 40}
+  ],
+  "rules": [
+    {"name": "ransomware-disk-write", "ttp": "T1486", "enabled": true, "expected_latency_s": 45},
+    {"name": "data-exfiltration-blob", "ttp": "T1041", "enabled": true, "expected_latency_s": 90},
+    {"name": "ssh-brute-force", "ttp": "T1110.001", "enabled": true, "expected_latency_s": 480},
+    {"name": "sudo-privilege-escalation", "ttp": "T1548.003", "enabled": true, "expected_latency_s": 480},
+    {"name": "t1136-001-local-account-creation-linux-v1", "ttp": "T1136.001", "enabled": true, "expected_latency_s": 480},
+    {"name": "nsg-change-outside-glorfindel", "ttp": "T1562.007", "enabled": true, "expected_latency_s": 1200},
+    {"name": "role-assignment-write", "ttp": "T1098.003", "enabled": true, "expected_latency_s": 1200},
+    {"name": "snapshot-by-unexpected-caller", "ttp": "T1578.001", "enabled": true, "expected_latency_s": 1200}
+  ],
+  "orodruin": {"verdict": "armed", "codes": [], "ago_s": 300},
+  "runs": [
+    {"experiment": "T1548.003", "target": "vm-celebrimbor-gondolin", "ago_h": 960, "detection": "detected", "latency_s": 212,
+     "decision": {"action": "isolate_vm", "confidence": 0.93, "escalate": true}},
+    {"experiment": "T1110.001", "target": "vm-celebrimbor-gondolin", "ago_h": 650, "detection": "detected", "latency_s": 301,
+     "decision": {"action": "block_suspicious_ip", "confidence": 0.9, "escalate": true}},
+    {"experiment": "T1486", "target": "vm-celebrimbor-gondolin", "ago_h": 580, "detection": "detected", "latency_s": 52,
+     "decision": {"action": "isolate_vm", "confidence": 0.96, "escalate": true}},
+    {"experiment": "T1136.001", "target": "vm-celebrimbor-gondolin", "ago_h": 480, "detection": "detected", "latency_s": 330,
+     "decision": {"action": "snapshot", "confidence": 0.41, "escalate": true}},
+    {"experiment": "T1110.001", "target": "vm-celebrimbor-gondolin", "ago_h": 312, "detection": "detected", "latency_s": 266,
+     "decision": {"action": "block_suspicious_ip", "confidence": 0.91, "escalate": true}},
+    {"experiment": "T1136.001", "target": "vm-celebrimbor-gondolin", "ago_h": 216, "detection": "missed", "window": true},
+    {"experiment": "T1110.001", "target": "vm-celebrimbor-gondolin", "ago_h": 140, "detection": "detected", "latency_s": 247, "window": true,
+     "decision": {"action": "block_suspicious_ip", "confidence": 0.92, "escalate": true}},
+    {"experiment": "vm-shutdown", "target": "vm-celebrimbor-gondolin", "ago_h": 70, "result": "PASS", "restore_s": 96, "window": true},
+    {"experiment": "T1110.001", "target": "vm-sentinel", "ago_h": 46, "detection": "detected", "latency_s": 238, "window": true,
+     "decision": {"action": "block_suspicious_ip", "confidence": 0.9, "escalate": true}}
+  ],
+  "board": [
+    ["T1110.001", "vm-celebrimbor-gondolin"],
+    ["T1486", "vm-celebrimbor-twin"],
+    ["T1486", "vm-sentinel"],
+    ["vm-shutdown", "vm-celebrimbor-gondolin"],
+    ["T1136.001", "vm-sentinel"]
+  ],
+  "loop": [
+    ["T1110.001", "vm-celebrimbor-gondolin"],
+    ["T1486", "vm-sentinel"],
+    ["T1486", "vm-celebrimbor-twin"]
+  ]
+}

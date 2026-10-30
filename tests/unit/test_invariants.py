@@ -1065,6 +1065,13 @@ class IsolationMachine(RuleBasedStateMachine):
         if out and self.fake.vms[key(vm)]["os"] == "Windows":
             assert (out.get("drain") or {}).get("status") != "drained", (
                 f"I3: sessions said cut on the Windows VM {vm}")
+        if vm in flows:
+            # I5 (I4D): an isolation never opens the VM it isolates — bypassed or not, faulted
+            # or not — but what only another NIC's leftover rule closed, as the reassertion.
+            # Before, a bypassed isolation was not looked at: a rewrite under the NIC's second
+            # name that moved its deny down past an allow opened the VM, unseen (seed 1618).
+            assert self._open(vm) - flows[vm] <= flows[("own", vm)] - flows[vm], (
+                f"I5: isolate_vm opened flows of {vm}")
         if err is None:
             self._isolation_recorded(vm, "isolate_vm")
         self._config_honoured(nics, "isolate_vm")
@@ -1228,6 +1235,10 @@ class IsolationMachine(RuleBasedStateMachine):
             assert not self._attacker_flows(vm, port), f"I3: block said blocked, {ATTACKER} reaches {vm}"
             check, _ = self._run(None, lambda: self.connector.verify_block_ip(ATTACKER, rid))
             assert check and check.get("verified") is True, f"I3: fresh block on {vm} not verified: {check}"
+        if vm in flows:
+            # I5 (I4D): nor does a block open the VM it blocks, bypassed or not (_isolate).
+            assert self._open(vm) - flows[vm] <= flows[("own", vm)] - flows[vm], (
+                f"I5: block_suspicious_ip opened flows of {vm}")
         if err is None:
             self._block_recorded(vm, "block_suspicious_ip")
         self._others_unchanged(vm, flows, states)
@@ -3008,19 +3019,24 @@ class IsolationMachine(RuleBasedStateMachine):
         range or a tag (who it takes in is not read). The unblock, the reset, the release
         keep them, said (taken off, that VM lost the flows): the operator puts them back
         as they were, as said. The convention (the rule's NIC by its hash), the test's
-        records (`tampered`)."""
+        records (`tampered`). And an older version's fixed-name rule (`glorfindel-isolation-
+        deny-all[-out]`, no hash: its VM from the test's journal, `legacy`, never the code's
+        state — A0): the release keeps it turned, said, and asks for it put back (I4D's
+        review: never put back, the teardown's release said `release_partial` for ever)."""
         import ipaddress
         out = set()
         for (k, n), (before, after) in self.tampered.items():
             r = self.fake.nsgs.get(k, {}).get("rules", {}).get(n)
+            owner = self.legacy.get((k, n.lower()))
             if (before is None or r != after or r["access"].lower() != "allow"
-                    or not n.startswith(("glorfindel-iso-", "glorfindel-block-"))):
+                    or not (n.startswith(("glorfindel-iso-", "glorfindel-block-")) or owner)):
                 continue
             side = "destination" if r["direction"].lower() == "inbound" else "source"
             values = [v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or [])
                       if v] or ["*"]
-            mine = {key(c) for vm in self.fake.vms.values() if any(_nic_hash(c) in n for c in vm["nics"])
-                    for c in vm["nics"]}
+            mine = ({key(c) for c in self.fake.vms.get(key(owner), {}).get("nics", [])} if owner else
+                    {key(c) for vm in self.fake.vms.values() if any(_nic_hash(c) in n for c in vm["nics"])
+                     for c in vm["nics"]})
             others = [c for ck, c in self.fake.nics.items() if ck not in mine and k in {
                 key(g) for g in (c["nsg"], self.fake.subnets[key(c["subnet"])]["nsg"]) if g}]
             for v in values:

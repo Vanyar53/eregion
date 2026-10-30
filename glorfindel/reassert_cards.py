@@ -241,6 +241,9 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
     what = " ; ".join(f"{x.get('rule')} ({x.get('nsg')}), "
                       + (f"à nous, vise {x.get('to')} et n'a pas pu être retirée ({x.get('on')})"
                          if x.get("kind") == "drop_failed" else
+                         f"notre deny, vise {x.get('to')}, passe avant {x.get('on')} et sa remplaçante après : "
+                         f"la retirer ouvrirait {vm}" + (f" ; il couvre aussi {x['also']}" if x.get("also") else "")
+                         if x.get("kind") == "before_allow" else
                          ("notre deny, qu'une règle à notre nom retournée attend derrière, "
                           if x.get("kind") == "deny" else "retournée en autorisation par un tiers, ")
                          + f"vise {x.get('to')}, qui est à {x.get('on')}") for x in left)

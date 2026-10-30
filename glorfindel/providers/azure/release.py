@@ -167,6 +167,9 @@ class ReleaseMixin:
         remaining: list[dict] = []
         turned: dict = {}                    # the I5Q guard, the NSGs listed once if a rule is to go
         if state.get("placements"):
+            # Its other NICs are no other VM (I4D's review, seed 9001): the live ones, not the
+            # placements' — a partial release keeps only those that failed.
+            mates = self._own_nics(rg, vm_name)
             # Multi-NIC: undo each placement on its own NSG. Delete our denies first —
             # a customer rule can only go back to priority 100 once ours is gone.
             for p in state["placements"]:
@@ -233,7 +236,7 @@ class ReleaseMixin:
                 p_rg, p_name = p["nsg_rg"], p["nsg_name"]
                 p_failed = [
                     err for err in (
-                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))
+                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)
                         or self._delete_rule(p_rg, p_name, name)
                         for name in (p.get("rule_in"), p.get("rule_out")) if name
                     ) if err

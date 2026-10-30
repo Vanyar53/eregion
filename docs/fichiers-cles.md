@@ -130,7 +130,8 @@ glorfindel/
                           magasin sous son verrou, réécrite entière (SEC4b)
   reassert_cards.py     → SEC4b : ce que la réaffirmation dit sans agir — say_bypass (V-16 : une allow d'un tiers
                           avant nos refus, carte `bypassed` une fois par changement, jamais retirée) et
-                          say_unreadable_states (carte `state_unreadable`, state_alerts.json)
+                          say_unreadable_states (carte `state_unreadable`, state_alerts.json), say_left (I4A,
+                          carte `rule_left`) ; L2C : une marque ne fait taire que la dernière carte, fermée par un humain
   reassert_quarantine.py → I1F, I1S, ISU : les NSG de quarantaine modifiés, lus à chaque passe quel que soit
                           l'état local — _report_altered_quarantines, quarantine_alerts.json (sorti de
                           reassert.py par RB1, sans changement de comportement ; L2Q : un changement qui revient est redit)
@@ -346,11 +347,14 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 l'état. La réaffirmation le dit (`state_unreadable`). Le réparer ou le retirer à la main.
                                 Isolation : `original_unknown` — les cartes en quarantaine dont l'original est inconnu
                                 (la levée demandera le tag). `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
+                                Blocage : `left_said` — les règles laissées déjà dites (I4A, carte `rule_left`). L2C : ces marques
+                                ne font taire un changement que si sa carte attend, ou si la dernière carte est la sienne, fermée par un humain
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
                                 oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte
                                 L2Q : ne fait taire un changement que si la dernière carte du NSG est la sienne, fermée par un humain (sans note)
   state_alerts.json           → SEC4b : la liste des fichiers d'état illisibles déjà dite (carte `state_unreadable`) ;
                                 oubliée quand tout se lit de nouveau — un acquittement ne relève pas de carte
+                                L2C : ne fait taire une liste que si sa carte attend, ou si la dernière est la sienne, fermée par un humain
   orphan_alerts.json          → A3 : règle orpheline (NSG/règle) → sa carte `orphan_rule` ; une règle dite ne l'est pas de nouveau
                                 tant qu'elle reste ; oubliée (carte fermée) quand elle n'est plus orpheline ou a été retirée
   proposed_rules.jsonl        → règles de détection proposées (en attente d'approbation). SEC4b : chaque `record`,

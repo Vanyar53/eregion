@@ -6147,7 +6147,7 @@ _L1B_BLK = ("tests/unit/test_invariant_regressions.py::test_a_block_written_agai
             f"{_RT}only_a_whole_block_supersedes_a_cut_off_unblock")
 MUTANTS += [
     ("M2040", "a bypassed isolation drops the recorded rules that are gone: neither put back nor said (L1B)", VER,
-     "            gone = self._recorded_gone(resource_id, targets, held, cache)\n",
+     "            gone = self._recorded_gone(resource_id, vm_name, bypassed, held, cache)\n",
      "            gone = []\n"),
     ("M2041", "a block written again whole keeps an unblock's marks: never checked again (L1B)", STA,
      '        for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):\n',
@@ -6161,6 +6161,23 @@ MUTANTS += [
 ]
 TESTS.update({"M2040": f"{_L1B_ISO} {INVARIANTS}", "M2041": f"{_L1B_BLK} {INVARIANTS}",
               "M2042": _L1B_ISO, "M2043": _L1B_BLK})
+# L1B, its review: only the bypassed NICs answer for what is gone, and a placement superseded
+# by another name of the NIC on its NSG is never said gone. M2044–M2046.
+_L1B_REV = " ".join(f"tests/unit/test_glorfindel.py::test_{t}" for t in (
+    "a_superseded_second_name_is_never_said_gone", "a_nic_that_holds_is_never_said_gone_beside_a_bypassed_one",
+    "one_direction_gone_behind_a_bypass_is_said"))
+MUTANTS += [
+    ("M2044", "a NIC that holds answers for what is gone beside a bypassed one: a stale placement said gone (L1B, review)",
+     VER, "            gone = self._recorded_gone(resource_id, vm_name, bypassed, held, cache)\n",
+     "            gone = self._recorded_gone(resource_id, vm_name, targets, held, cache)\n"),
+    ("M2045", "a placement superseded by the NIC's other name said gone: a false drift card (L1B, review)", VER,
+     "            if present & others:\n                continue                                   # superseded on this NSG\n",
+     "            if False:\n                continue                                   # superseded on this NSG\n"),
+    ("M2046", "a placement whose own inbound rule stands skipped: its outbound one gone unsaid (L1B, review)", VER,
+     '                      for n in (b, f"{b}-out")} - {n.lower() for n in names}\n',
+     '                      for n in (b, f"{b}-out")}\n'),
+]
+TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

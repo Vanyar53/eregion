@@ -2284,6 +2284,67 @@ def test_a_bypassed_isolation_says_the_recorded_rules_that_are_gone(monkeypatch)
     assert connector.verify_isolation(_RID)["verified"] is True        # back: it holds
 
 
+def _iso_placement(nic, nsg, name, scope="nic"):
+    return {"nic_id": nic, "nsg_rg": "rg", "nsg_name": nsg, "scope": scope, "rule_in": name, "rule_out": f"{name}-out"}
+
+
+def _verifying(monkeypatch, targets, listings):
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", lambda rg, vm, **_k: targets)
+    net = MagicMock()
+    _listings(net, listings)
+    connector._network = net
+    return connector.verify_isolation(_RID)
+
+
+def test_a_superseded_second_name_is_never_said_gone(monkeypatch):
+    """L1B, review: isolated under the NIC's second name (`-b-`, I4B), then again under its
+    first — the rewrite took `-b-` off, its placement stays recorded (the merge keeps the
+    earlier ones). An allow before the pair that holds: bypassed, and `-b-` was said gone —
+    a false drift card, and outside human_only a re-isolation more, then « a second time »."""
+    from glorfindel.actions import AzureConnector, _save_isolation_state
+    from glorfindel.response.state import _merge_isolation_placements
+    first, second = AzureConnector()._placement_rule_bases("glorfindel-iso", "vm", "nic-a", "nic-a")
+    _save_isolation_state(_RID, {"resource_id": _RID, "placements": _merge_isolation_placements(
+        [_iso_placement("nic-a", "nsg-nic", second)], [_iso_placement("nic-a", "nsg-nic", first)])})
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), *_deny_pair(first, 101, ip="10.0.0.5")]})
+    assert out["verified"] is False and out["shadowed_by"] and "missing_rules" not in out
+
+
+def test_a_nic_that_holds_is_never_said_gone_beside_a_bypassed_one(monkeypatch):
+    """L1B, review: nic-a bypassed; nic-b held on its own NSG, a stale placement of it on the
+    subnet's NSG that a `terraform apply` emptied — nic-b's rules were said gone. Only the
+    bypassed NICs answer for what is gone."""
+    from glorfindel.actions import _save_isolation_state
+    ta = _nic_target(nsg_name="nsg-a", scope="nic", nic_id="nic-a")
+    tb = {**_nic_target(nsg_name="nsg-b", scope="nic", nic_id="nic-b", ips=("10.0.0.6",)),
+          "alt_nsg": {"nsg_rg": "rg", "nsg_name": "nsg-subnet"}}
+    ia, ib = _iso_name("nic-a"), _iso_name("nic-b")
+    _save_isolation_state(_RID, {"resource_id": _RID, "placements": [
+        _iso_placement("nic-a", "nsg-a", ia), _iso_placement("nic-b", "nsg-b", ib),
+        _iso_placement("nic-b", "nsg-subnet", ib, "subnet")]})
+    out = _verifying(monkeypatch, [ta, tb], {
+        "nsg-a": [_nsg_rule(**_BENCH_ALLOW_SSH), *_deny_pair(ia, 101, ip="10.0.0.5")],
+        "nsg-b": _deny_pair(ib, 100, ip="10.0.0.6"), "nsg-subnet": []})
+    assert out["verified"] is False and out["shadowed_by"] and "missing_rules" not in out
+
+
+def test_one_direction_gone_behind_a_bypass_is_said(monkeypatch):
+    """Its own inbound rule still there, its outbound one gone, the older pair bypassed:
+    the outbound one is said gone — a placement is skipped only for another name of the NIC."""
+    from glorfindel.actions import _save_isolation_state
+    t = {**_nic_target(nsg_name="nsg-nic", scope="nic"), "alt_nsg": {"nsg_rg": "rg", "nsg_name": "nsg-subnet"}}
+    _save_isolation_state(_RID, {"resource_id": _RID, "placements": [
+        _iso_placement("nic-a", "nsg-subnet", _iso_name(), "subnet")]})
+    older = [_nsg_rule(**_BENCH_ALLOW_SSH), *_deny_pair("glorfindel-isolation-deny-all-vm", 101, ip="10.0.0.5")]
+    out = _verifying(monkeypatch, [t], {"nsg-nic": older,
+                                        "nsg-subnet": _deny_pair(_iso_name(), 100, ip="10.0.0.5")[:1]})
+    assert out["missing_rules"] == [f"{_iso_name()}-out"]
+
+
 def test_an_unreadable_subnet_is_not_a_subnet_without_nsg(monkeypatch):
     """A 429 on the subnet read meant "no subnet NSG": a release without state swept
     nothing and said released while the isolation stayed on the subnet NSG (L24)."""

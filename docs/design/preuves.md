@@ -2510,6 +2510,20 @@ M21 bougent d'un tour à 60 (M19 de « séquences figées seules » à 1/2, M21 
 seules »), remesurés à 500 : M19 2/2 des deux côtés, M21 4/4 des deux côtés. M36 et M1645 survivent
 des deux côtés, comme avant. Aucun perdu.
 
+**Après la relecture de L1B.** (1) **Une isolation qui tient, dite « disparue ».** `_recorded_gone`
+parcourait les placements de toutes les cartes, et `_merge_isolation_placements` garde ceux des
+isolations d'avant, dont certains sont périmés exprès : une isolation posée sous le second nom de la
+carte (`-b-`, I4B) puis de nouveau sous le premier (la réécriture retire `-b-`, son placement reste),
+une allow passée devant — `-b-` était dit disparu ; ou une carte qui tient sur son NSG, un placement
+périmé d'elle sur le NSG du sous-réseau vidé par un `terraform apply`, à côté d'une carte contournée.
+Une fausse carte de dérive, et hors `human_only` une isolation reposée de trop, puis « une deuxième
+fois ». Maintenant seules les cartes contournées répondent de ce qui manque, et un placement dont le
+NSG porte un autre nom de la carte (le premier ou le second) est remplacé là, jamais dit disparu ; ses
+propres noms ne le sautent pas (une direction retirée reste dite — la version d'abord essayée par la
+relecture la sautait). L'ancienne paire à noms fixes de la graine 42 n'est pas un nom de la carte : elle
+reste dite. Tests `test_glorfindel.py` (`…superseded_second_name…`, `…nic_that_holds…`,
+`…one_direction_gone…`, les deux premiers rouges sans le correctif) ; mutants M2044–M2046.
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

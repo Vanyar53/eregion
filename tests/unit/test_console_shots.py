@@ -239,6 +239,56 @@ probe("nameinfo", lambda: socket.getnameinfo(("192.0.2.1", 80), 0))
                     "nameinfo": "refused console_shots: no name resolved off the loopback (192.0.2.1)"}
 
 
+TRAP_CONFIG = "autonomy:\n  default: non_disruptive\n  allow_destructive: []\n  assets: []\n"
+
+
+def _trap(tmp_path: Path) -> Path:
+    """An operator's glorfindel-config.yaml where the package's default paths look: the root of
+    the repository (here a copy of that place in tmp — never the repository itself)."""
+    trap = tmp_path / "repository" / "glorfindel-config.yaml"
+    trap.parent.mkdir()
+    trap.write_text(TRAP_CONFIG, encoding="utf-8")
+    return trap
+
+
+def test_glorfindels_configuration_is_the_samples_never_the_repositorys(tmp_path, monkeypatch):
+    from glorfindel import config
+    trap = _trap(tmp_path)
+    monkeypatch.setattr(config, "_DEFAULT_PATHS", [Path("glorfindel-config.yaml"), trap,
+                                                    tmp_path / ".glorfindel" / "config.yaml"])
+    work = tmp_path / "w"
+    cs.materialize(SAMPLE, work)
+    cs.confine_config(work)
+    found = next(p for p in config._DEFAULT_PATHS if p.exists())
+    assert work in found.parents, found
+    assert config.load_glorfindel_config().autonomy.default == "human_only"
+
+
+def test_the_server_reads_the_samples_configuration_once_started(tmp_path):
+    """serve() as the script runs it, a trap placed first among the default paths, uvicorn
+    replaced by a reading of the configuration."""
+    trap, work = _trap(tmp_path), tmp_path / "w"
+    cs.materialize(SAMPLE, work)
+    code = f"""
+import importlib.util, sys, uvicorn
+from pathlib import Path
+from glorfindel import config
+config._DEFAULT_PATHS.insert(0, Path({str(trap)!r}))
+spec = importlib.util.spec_from_file_location("cs", {str(SCRIPT)!r})
+cs = importlib.util.module_from_spec(spec); spec.loader.exec_module(cs)
+def read(*a, **k):
+    print("found", next(p for p in config._DEFAULT_PATHS if p.exists()))
+    print("default", config.load_glorfindel_config().autonomy.default)
+uvicorn.run = read
+sys.exit(cs.serve(Path({str(work)!r}), 0))
+"""
+    env = cs.server_env(work, "t")
+    env["PYTHONPATH"] = str(ROOT)
+    r = _in_a_process(code, env, work / "cwd")
+    assert r.returncode == 0, r.stderr
+    assert f"found {work / 'cwd' / 'glorfindel-config.yaml'}" in r.stdout and "default human_only" in r.stdout, r.stdout
+
+
 def test_the_server_reaches_nothing_once_started(tmp_path):
     """serve() as the script runs it, uvicorn replaced by a connection to the documentation's
     address: refused by the guard, before anything listens."""

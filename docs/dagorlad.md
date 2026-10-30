@@ -200,7 +200,7 @@ python scripts/console_shots.py --check     # quels outils sont là ; ne rend ri
 
 - **Le jeu d'exemple, et rien d'autre.** La console démarre sur `tests/fixtures/dagorlad_sample.json`,
   écrit dans un répertoire jetable. Ce répertoire est son HOME et son répertoire de travail ; jamais
-  `~/.glorfindel`, `runs/` ni un banc réel.
+  `~/.glorfindel`, `runs/`, la `glorfindel-config.yaml` du dépôt ni un banc réel : la configuration de Glorfindel est celle du jeu, écrite dans ce répertoire.
   - L'abonnement est le GUID nul ; les noms sont ceux, publics, du banc (`rg-celebrimbor`,
     `vm-celebrimbor-…`, `vm-sentinel`).
   - Le script refuse (code 2) un autre jeu, ou un jeu qui porte un autre GUID, une adresse hors des

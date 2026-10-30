@@ -9,7 +9,7 @@
 **The sample data only.** The console is started on ``tests/fixtures/dagorlad_sample.json`` and
 nothing else: a fictitious bench (the zero subscription, the bench's public names), written into
 a throwaway directory that is the server's HOME and working directory — never ``~/.glorfindel``,
-``runs/`` or a real bench. The script refuses (exit 2) another sample, a sample that carries an
+``runs/``, the ``glorfindel-config.yaml`` at the repository's root (``confine_config``) or a real bench. The script refuses (exit 2) another sample, a sample that carries an
 identifier outside the allowed ones (``identifiers``), a video written inside the repository.
 The server it starts refuses to run anywhere but in that directory, with an Azure variable in
 its environment, or without the sample's mark (``serve_refusal``); through Python, it reaches
@@ -53,6 +53,7 @@ SAMPLE = REPO / "tests" / "fixtures" / "dagorlad_sample.json"
 OUT = REPO / "docs" / "images" / "dagorlad"
 MANIFEST = "shots.json"
 MARK = ".dagorlad-sample"          # in the throwaway directory: the sample's sha256
+CONFIG = "glorfindel-config.yaml"   # Glorfindel's configuration, written there from the sample
 ZERO_SUBSCRIPTION = "00000000-0000-0000-0000-000000000000"
 WIDTH, HEIGHT = 1440, 900
 BOARD_HEIGHT = 1100
@@ -150,6 +151,9 @@ def materialize(doc: dict, work: Path, now: datetime | None = None) -> dict:
     mark = sha256(SAMPLE) if SAMPLE.exists() else ""
     for d in (work, home, cwd):
         (d / MARK).write_text(mark, encoding="utf-8")
+    # Glorfindel's configuration, the sample's: its autonomy, nothing else (no backend, no vault).
+    (cwd / CONFIG).write_text(f"autonomy:\n  default: {doc.get('autonomy_default', 'human_only')}\n"
+                              "  allow_destructive: []\n  assets: []\n", encoding="utf-8")
     (home / ".glorfindel" / "watch_heartbeat").write_text(_iso(now - timedelta(seconds=12)), encoding="utf-8")
     by_name = {t["name"]: t for t in doc["targets"]}
     assets = [{"name": t["name"], "resource_id": resource_id(doc, t), "monitoring_backend": doc["backend"],
@@ -365,6 +369,15 @@ def install(api, doc: dict, put=setattr) -> None:
     put(watch_gate, "refusal", lambda now=None: "")
 
 
+def confine_config(work: Path) -> None:
+    """Glorfindel's configuration read from the throwaway directory only. Its default paths name
+    the root of the repository too (``glorfindel/config.py``, beside the package): an operator's
+    ``glorfindel-config.yaml`` there would give the board its modes, holds and threshold. The
+    list is changed in place: the console imports it by name (``sections.py``)."""
+    from glorfindel import config
+    config._DEFAULT_PATHS[:] = [work / "cwd" / CONFIG]
+
+
 def serve(work: Path, port: int) -> int:
     reason = serve_refusal(work, os.environ, Path.home(), Path.cwd())
     if reason:
@@ -372,6 +385,7 @@ def serve(work: Path, port: int) -> int:
         return 2
     loopback_only()
     sys.path.insert(0, str(REPO))
+    confine_config(work)
     import uvicorn
 
     import eregion_console.api as api

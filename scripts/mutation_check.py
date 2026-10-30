@@ -6154,8 +6154,15 @@ MUTANTS += [
     ("M2206", "the sample's console resolves a name by gethostbyname (DOC1 review)", SHOTS,
      "    socket.gethostbyname = _resolving(real_byname, lambda host: host)\n", ""),
 ]
+MUTANTS += [
+    ("M2200", "the sample's console reads glorfindel-config.yaml at the repository's root (DOC1 review)", SHOTS,
+     "    confine_config(work)\n    import uvicorn\n", "    import uvicorn\n"),
+    ("M2201", "the sample's configuration added after the package's paths, not in their place (DOC1 review)",
+     SHOTS, "    config._DEFAULT_PATHS[:] = [work / \"cwd\" / CONFIG]",
+     "    config._DEFAULT_PATHS.append(work / \"cwd\" / CONFIG)"),
+]
 TESTS.update({mid: "tests/unit/test_console_shots.py"
-              for mid in ("M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
+              for mid in ("M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -3677,6 +3677,40 @@ def test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off(monkeypa
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
 
+
+_S9001_HTTPS = _s1618("allow-https", 100, "Allow", "443", source="Internet")
+_S9001_NET = {
+    "subnet_nsg": [], "edge_nsg": [_S1618_SSH, _S1618_OUT], "tier_rules": [_S9001_HTTPS, _S1618_OUT],
+    "nics": {"web-nic": {"own": None, "rules": [_S1618_SSH, _S1618_DENY], "policy": False},
+             "db-nic-0": {"own": None, "rules": [_S1618_DENY], "policy": False},
+             "db-nic-1": {"own": "dedicated", "rules": [_S9001_HTTPS, _S1618_DENY], "policy": False},
+             "api-nic": {"own": None, "rules": [_S1618_DENY], "policy": False}},
+    "windows": None, "config": {"quarantine": False, "readable": True, "forensic": [], "rg": ""},
+    "legacy": None, "data_subnet": None}
+
+
+def test_a_release_never_keeps_a_rule_for_another_nic_of_its_own_vm(monkeypatch):
+    """Seed 9001 at 2 000 (I4D's review), shrunk to three steps: Db--01 isolated, its
+    inbound isolation rule on the subnet's NSG turned into an allow, db-nic-1's address
+    changed, a new VM (rg-app2/batch) given the old one, then the release — kept, said;
+    batch blocked, its rule turned, its address changed, reset; then the customer changes
+    db-nic-0's address — to db-nic-1's former one. At the teardown, the release of Db--01
+    said `release_partial` for ever (« I7: … could not be released »): the guard of its
+    placements (`_held_by_turned`) was asked without the VM's NICs (`mates`), so a turned
+    rule aimed at the address its other NIC holds now read as another VM's — kept on its
+    behalf. The release now passes the VM's live NICs, as its other two calls do."""
+    _run(monkeypatch, _S9001_NET,
+         ("kept_at_the_lift", DB, DB, None, "release",
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-iso-db--01-db-nic-1-1232a8"),
+          "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-1",
+          0, 4, "rg-app2", "batch", None, "Linux", False),
+         ("kept_at_the_lift", _BATCH_APP2, _BATCH_APP2, None, "reset", False, 22,
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-batch-batch-nic-4-290303"),
+          "/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.network/networkinterfaces/batch-nic-4",
+          0, 4, "rg-app2", "web", True),
+         ("customer_changes_ip",
+          "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-0", 0, 4))
+
 _S42_ISO_NET = {
     "subnet_nsg": [], "edge_nsg": None, "tier_rules": [],
     "nics": {"web-nic": {"own": "dedicated", "policy": False, "rules": [

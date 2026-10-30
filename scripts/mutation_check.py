@@ -5372,6 +5372,15 @@ MUTANTS += [
      """f"la retirer ouvrirait {vm}" + "\""""),
 ]
 TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2069, 2070)})
+# I4D's review, seed 9001: the release's guard asked without the VM's NICs — a rule aimed at its other NIC
+# kept « for another VM », `release_partial` for ever (I7).
+MUTANTS += [
+    ("M2071", "the release's guard reads the VM's other NIC as another VM: kept for ever (I4D, review)", REL,
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n',
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))\n'),
+]
+TESTS["M2071"] = ("tests/unit/test_invariant_regressions.py::"
+                  f"test_a_release_never_keeps_a_rule_for_another_nic_of_its_own_vm {INVARIANTS}")
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
@@ -5555,7 +5564,7 @@ _I5Q_REL = ("tests/unit/test_invariant_regressions.py::test_a_deleted_vms_deny_b
             "tests/unit/test_invariant_regressions.py::test_a_live_vms_release_is_not_held_by_its_own_turned_rule")
 MUTANTS += [
     ("M1734", "a deleted VM's release takes its placements' denies off, a turned rule behind them: the new VM opened (I5Q)",
-     REL, '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))\n'
+     REL, '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n'
           "                        or self._delete_rule(p_rg, p_name, name)\n",
      "                        self._delete_rule(p_rg, p_name, name)\n"),
     ("M1735", "a deleted VM's release, its state lost, takes its denies off everywhere, a turned rule behind (I5Q)",

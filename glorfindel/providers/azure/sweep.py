@@ -182,7 +182,7 @@ class SweepMixin:
                 # and skipped there).
                 if _nic_owns(r, hashed, owned, t.get("private_ips") or None):
                     seen.add((nsg_key, name.lower()))
-                    if not dry_run and _aims_elsewhere(r, own_ips) and (why := _held_by_turned(
+                    if _aims_elsewhere(r, own_ips) and (why := _held_by_turned(
                             self._network, guard, t["nsg_rg"], t["nsg_name"], name, t["nic_id"], mates)):
                         unreadable.append(why)
                         continue

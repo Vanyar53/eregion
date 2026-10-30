@@ -2578,6 +2578,24 @@ def test_our_deny_on_an_address_handed_to_another_vm_is_written_for_the_vm_it_bl
         m.teardown()
 
 
+def test_the_reset_preview_says_what_it_keeps(monkeypatch):
+    """`glorfindel reset --from-azure` shows the preview before the confirmation: it said
+    « supprimer …/glorfindel-block-…-c272f2 » — the turned allow aimed at the VM given the
+    old address —, the operator confirmed, and got `swept_partial … gardée` (I4B, review:
+    the guard was skipped in preview). It only reads: the preview says it is kept."""
+    import shutil
+
+    m, rules, _ = _address_taken(monkeypatch)
+    try:
+        journal = len(m.fake.journal)
+        out = m.connector.sweep_vm_rules(API, dry_run=True)
+        assert len(m.fake.journal) == journal, "a preview wrote"
+        assert out["status"] == "dry_run" and not any(_API_BASE == d.rsplit("/", 1)[-1] for d in out["deleted"]), out
+        assert any(_API_BASE in f and "gardée" in f for f in out["failed"]), out
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
 @pytest.mark.parametrize("aim", ["any", "range"])
 @pytest.mark.parametrize("lift", ["unblock", "reset"])
 def test_a_turned_rule_aimed_at_any_or_a_range_stays_at_the_unblock(monkeypatch, aim, lift):

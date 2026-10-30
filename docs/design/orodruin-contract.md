@@ -367,7 +367,7 @@ tout le groupe du banc : Run Command sur bree, la VM de la pré-observation, jam
 
 | Rôle | Actions | Portée |
 |---|---|---|
-| `injector_read` | lire le groupe, les VM, les NSG, les expériences et leurs exécutions | le groupe du banc |
+| `injector_read` | lire le groupe, les VM, les NSG, les cartes réseau et les sous-réseaux (DG-b), les expériences et leurs exécutions | le groupe du banc |
 | `injector_vm` | `start`, `runCommand` | chaque VM qui porte `eregion-target=<banc>` (`data "azurerm_resources"`, `required_tags`) |
 | `injector_chaos` | démarrer, annuler une expérience | chaque expérience du groupe |
 
@@ -562,10 +562,20 @@ un fil est refusé :
 - la cible relue et rejugée, et son nom (O0, à chaque injection) ;
 - une VM dont une panne n'a pas vérifié son retour ne prend plus de fil (`not_returned`) : une panne
   et une technique ne se chevauchent jamais ;
-- une VM isolée par Glorfindel (une règle `glorfindel-isolation-` ou `glorfindel-quarantine-` dans un
-  NSG de son groupe, comme la lit le preflight d'Annatar ; illisible vaut isolée) est attendue
-  `WAIT_ISOLATION_S` (20 min) au plus, puis son fil est sauté (`isolated`). Un injecteur ne défait
-  jamais ce que Glorfindel a fait.
+- une VM tenue par Glorfindel est attendue `WAIT_ISOLATION_S` (20 min) au plus, puis son fil est
+  sauté (`isolated`). Un injecteur ne défait jamais ce que Glorfindel a fait. « Tenue » se lit
+  dans `eregion_core/held.py`, la même règle que le preflight d'Annatar :
+  - une règle `glorfindel-iso…` ou `glorfindel-quarantine-` ;
+  - sur le NSG de chaque carte de la VM et de chaque sous-réseau de ces cartes, lus depuis son
+    `networkProfile`, quel que soit leur groupe ;
+  - ce qui ne se lit pas vaut « tenue » (A0).
+
+  Avant la relecture de DG-b, le preflight d'Annatar ne lisait que l'ancien nom fixe
+  (`glorfindel-isolation-`), et dans le seul groupe de la VM : les isolations d'aujourd'hui
+  (`glorfindel-iso-<vm>-<carte>-<empreinte>`) passaient. Lire les cartes et les sous-réseaux demande
+  deux lectures de plus au rôle `injector_read` (`networkInterfaces/read`,
+  `virtualNetworks/subnets/read`, sur le groupe du banc). Un NSG hors du banc ne se lit pas : la VM
+  est tenue, et son fil sauté.
 
 Chaque injecteur garde toutes ses gardes : Annatar compare aussi le nom tapé au nom de la VM qu'il lit
 avant toute écriture, et Gothmog refuse une VM que la panne ne déclare pas. La fenêtre de chaque run
@@ -592,8 +602,12 @@ fenêtres ouvertes qu'il fermera et leurs cibles, et ce qui reste en vol (voir p
 - `test_annatar_wire.py`, `test_gothmog.py` ;
 - `test_exercise_e2e.py` : de la console aux deux injecteurs, sur les faux.
 
-**À éprouver au banc, avec Jonathan** : le premier exercice réel ; que l'identité d'Orodruin lise
-bien les NSG du groupe (le preflight d'Annatar le fait déjà) ; le blob `orodruin/` tiré par H0.
+**À éprouver au banc, avec Jonathan** :
+- `make orodruin-lock YES=1` avant d'envoyer l'image : le contrat exige les deux lectures nouvelles,
+  et un Orodruin sans elles dit `identity_missing_right`, donc `passive` ;
+- le premier exercice réel ;
+- la lecture des cartes, des sous-réseaux et de leurs NSG par l'identité d'Orodruin ;
+- le blob `orodruin/` tiré par H0.
 
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 

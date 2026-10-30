@@ -53,6 +53,10 @@ READ_ACTIONS = (
     "Microsoft.Resources/subscriptions/resourceGroups/read",
     "Microsoft.Compute/virtualMachines/read",
     "Microsoft.Network/networkSecurityGroups/read",
+    # DG-b review: whether Glorfindel holds a VM is read on the NSGs of its NICs and of their
+    # subnets (eregion_core/held.py) — the NICs and the subnets read to find them.
+    "Microsoft.Network/networkInterfaces/read",
+    "Microsoft.Network/virtualNetworks/subnets/read",
     "Microsoft.Chaos/experiments/read",
     "Microsoft.Chaos/experiments/executions/read",
 )

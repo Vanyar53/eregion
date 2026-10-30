@@ -4288,7 +4288,7 @@ MUTANTS += [
      "        if w.target.lower() in not_returned:\n", "        if False:\n"),
     ("M2026", "a wire runs on a VM Glorfindel still isolates, after the wait (DG-b)", XRN,
      "        if held:\n            return \"isolated\"", "        if False:\n            return \"isolated\""),
-    ("M2027", "an isolation that cannot be read taken for a free VM (DG-b)", XRN,
+    ("M2027", "an isolation that cannot be read taken for a free VM (DG-b)", "eregion_core/held.py",
      '        return f"its isolation unreadable: {e}"[:200]\n', '        return ""\n'),
     ("M2028", "one wire refused, the others still run (DG-b)", XRN,
      '        status.state = "refused" if refused else "judged"\n', '        status.state = "judged"\n'),
@@ -4328,10 +4328,25 @@ TESTS.update({f"M{n}": "tests/unit/test_exercise_runner.py tests/unit/test_exerc
               for n in range(2017, 2029)})
 TESTS.update({mid: "tests/unit/test_annatar_wire.py tests/unit/test_gothmog.py tests/unit/test_exercise_e2e.py"
               for mid in ("M2029", "M2030", "M2031", "M2033")})
+TESTS["M2027"] = "tests/unit/test_held.py"
 TESTS.update({"M2032": "tests/unit/test_exercise_runner.py",
               "M2034": "tests/unit/test_orodruin_word.py", "M2035": "tests/unit/test_orodruin_word.py",
               "M2036": "tests/unit/test_orodruin_word.py",
               "M2039": "tests/unit/test_orodruin_word.py tests/unit/test_console_dagorlad_request.py"})
+
+# The review of DG-b (#348): its corrections, one mutant each at least (M2090–M2109).
+HELD = "eregion_core/held.py"
+MUTANTS += [
+    ("M2090", "Glorfindel's isolation of today (glorfindel-iso-<vm>-<nic>-<hash>) taken for a free VM (DG-b review)",
+     HELD, 'HOLD_PREFIXES = ("glorfindel-iso", "glorfindel-quarantine-")\n',
+     'HOLD_PREFIXES = ("glorfindel-isolation-", "glorfindel-quarantine-")\n'),
+    ("M2091", "the NSG of the VM's subnet never read: an isolation there unseen (DG-b review)", HELD,
+     "            if sub_nsg:\n                out.append(sub_nsg)\n", ""),
+    ("M2092", "Annatar's preflight goes on a VM Glorfindel holds (DG-b review)", "annatar/executors/azure_vm.py",
+     "        if why:\n            issues.append(f\"VM '{self.vm_name}' is held",
+     "        if False:\n            issues.append(f\"VM '{self.vm_name}' is held"),
+]
+TESTS.update({mid: "tests/unit/test_held.py" for mid in ("M2090", "M2091", "M2092")})
 
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake

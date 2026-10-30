@@ -267,6 +267,9 @@ resource "azurerm_role_definition" "injector_read" {
       "Microsoft.Resources/subscriptions/resourceGroups/read",
       "Microsoft.Compute/virtualMachines/read",
       "Microsoft.Network/networkSecurityGroups/read",
+      # DG-b : si Glorfindel tient une VM se lit sur les NSG de ses cartes et de leurs sous-réseaux.
+      "Microsoft.Network/networkInterfaces/read",
+      "Microsoft.Network/virtualNetworks/subnets/read",
       "Microsoft.Chaos/experiments/read",
       "Microsoft.Chaos/experiments/executions/read",
     ]

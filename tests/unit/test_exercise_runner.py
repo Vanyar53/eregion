@@ -236,14 +236,14 @@ def test_a_technique_waits_for_the_return_of_its_vm_after_a_fault(tmp_path):
 
 
 def test_a_vm_isolated_is_waited_for_then_its_wire_runs(tmp_path):
-    held = iter(["Glorfindel's glorfindel-isolation-deny-all in nsg-x"] * 3)
+    held = iter(["Glorfindel's glorfindel-iso-vm-celebrimbor-gondolin-nic-gondolin-3f2a1b in nsg-x"] * 3)
     r, inj, _, clock = _runner(tmp_path, isolated=lambda rid: next(held, ""))
     status = r.run(_req(("T1110.001", GONDOLIN)), {})
     assert status.wires[0].state == "done" and clock.t >= T0 + timedelta(seconds=3 * er.POLL_S)
 
 
 def test_a_vm_still_isolated_after_the_wait_is_skipped_never_released(tmp_path):
-    r, inj, _, clock = _runner(tmp_path, isolated=lambda rid: "Glorfindel's glorfindel-isolation-deny-all")
+    r, inj, _, clock = _runner(tmp_path, isolated=lambda rid: "Glorfindel's glorfindel-iso-vm-celebrimbor-gondolin-nic-gondolin-3f2a1b-out")
     status = r.run(_req(("T1110.001", GONDOLIN), ("T1548.003", GONDOLIN)), {})
     assert [(w.state, w.code) for w in status.wires] == [("skipped", "isolated"), ("skipped", "isolated")]
     assert inj.launched == []                     # nothing launched, and nothing to release either
@@ -256,21 +256,6 @@ def test_main_refuses_an_unreadable_request(tmp_path, capsys):
                              "wires": [{"experiment": "T1486", "target": GONDOLIN, "rank": 1, "zone": "bench"}]}))
     assert er.main([str(p)]) == 1
     assert "never holds" in capsys.readouterr().err
-
-
-def test_isolated_reads_glorfindels_rules_in_the_vms_group(monkeypatch):
-    bodies = {"x": {"value": [{"name": "nsg-a", "properties": {"securityRules": [{"name": "allow-ssh"}]}},
-                              {"name": "nsg-b", "properties": {"securityRules": [
-                                  {"name": "glorfindel-isolation-deny-all"}]}}]}}
-    monkeypatch.setattr(er, "_arm_get", lambda path, api: bodies["x"])
-    assert "glorfindel-isolation-deny-all" in er.isolated(GONDOLIN)
-    bodies["x"] = {"value": [{"name": "nsg-a", "properties": {"securityRules": [{"name": "allow-ssh"}]}}]}
-    assert er.isolated(GONDOLIN) == ""
-
-    def boom(path, api):
-        raise RuntimeError("HTTP 403")
-    monkeypatch.setattr(er, "_arm_get", boom)
-    assert "unreadable" in er.isolated(GONDOLIN)          # held, never taken for free
 
 
 def test_each_journal_line_of_a_wire_names_its_request_and_the_runner_counts_them(tmp_path):

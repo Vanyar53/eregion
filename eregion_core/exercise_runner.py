@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Callable
 
 from eregion_core import exercise_request as xr
-from eregion_core import orodruin, watch_gate
+from eregion_core import held, orodruin, watch_gate
 from eregion_core.exercise import exercises_dir
 from eregion_core.exercise_plan import Target, judge, load_catalog, plan
 from eregion_core.inscription import Scope, TagEnrollment, rg_from_id, subscription_from_id
@@ -54,7 +54,6 @@ POLL_S = 30.0
 REQUEST_REFUSALS = ("unreadable", "passive", "refused_wires")
 # Why a wire did not run, once the request was judged.
 SKIPS = ("over_cap", "no_watch", "isolated", "not_returned", "refused_now")
-ISOLATION_PREFIXES = ("glorfindel-isolation-", "glorfindel-quarantine-")
 
 
 def _now() -> datetime:
@@ -112,21 +111,11 @@ def read_target(resource_id: str) -> tuple[Target, str]:
 
 
 def isolated(resource_id: str) -> str:
-    """Why the VM is held by Glorfindel now — an isolation or a quarantine rule in a security
-    group of its resource group, as Annatar's preflight reads it — or "". Unreadable: said, held
-    (a wire never runs on a VM it cannot tell is free)."""
-    sub, rg = subscription_from_id(resource_id), rg_from_id(resource_id)
-    try:
-        body = _arm_get(f"/subscriptions/{sub}/resourceGroups/{rg}/providers/"
-                        "Microsoft.Network/networkSecurityGroups", "2023-09-01")
-    except Exception as e:
-        return f"its isolation unreadable: {e}"[:200]
-    for nsg in body.get("value") or []:
-        rules = [r.get("name", "") for r in (nsg.get("properties") or {}).get("securityRules") or []]
-        held = [r for r in rules if r.lower().startswith(ISOLATION_PREFIXES)]
-        if held:
-            return f"Glorfindel's {held[0]} in {nsg.get('name')}"
-    return ""
+    """Why the VM is held by Glorfindel now — an isolation or a quarantine rule on a security group
+    of one of its NICs or their subnets, wherever it lives (eregion_core/held.py, the rule Annatar's
+    preflight reads too) — or "". Unreadable: said, held (a wire never runs on a VM it cannot tell
+    is free)."""
+    return held.holding(resource_id, _arm_get)
 
 
 def fault_targets() -> dict[str, list[str] | None]:

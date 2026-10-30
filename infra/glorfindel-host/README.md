@@ -292,7 +292,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 ## Le CD de H0 (H1, #244)
 
-**Publier une release, c'est déployer H0.** Un timer sur la VM la tire toutes les 5 minutes. Il la vérifie, la construit à côté, la préflighte, bascule, et revient en arrière si la santé échoue. H0 reste fermé : il ne fait que sortir, vers l'API publique de GitHub (sans jeton) et vers le webhook de `#deploy`.
+**Publier une release, c'est déployer H0.** Un timer sur la VM la tire toutes les 5 minutes. Il la vérifie, **tire son image publiée par son digest et en vérifie la signature et la provenance** (CI3 : H0 ne construit plus), la préflighte, bascule, et revient en arrière si la santé échoue. H0 reste fermé : il ne fait que sortir, vers l'API publique de GitHub (sans jeton), vers le registre (`ghcr.io`, ses blobs sur `pkg-containers.githubusercontent.com`, sans jeton), vers la racine de confiance de sigstore (`tuf-repo-cdn.sigstore.dev`) et vers le webhook de `#deploy`. Le Terraform de H0 n'a aucune règle sortante : la règle par défaut d'Azure (`AllowInternetOutBound`) laisse tout cela passer, rien n'est à ouvrir (lu dans `main.tf` ; à confirmer sur la VM par `make glorfindel-host-cd-check`, qui fait chacun de ces appels).
 
 **Les sessions ne publient jamais une release** : elles la préparent en brouillon (`gh release create --draft`), et Jonathan clique « Publish ».
 
@@ -300,10 +300,11 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 1. **Le webhook de `#deploy`.** Dans Discord, Paramètres du salon → Intégrations → Webhooks (par exemple « H0 »). Mets son URL dans `~/.config/eregion/discord.env` (`EREGION_DISCORD_WEBHOOK_DEPLOY=…`), à côté de `EREGION_DISCORD_MENTION`.
 2. **`make glorfindel-host-cd-install`.** La commande :
-   - copie l'agent dans `~/.eregion-cd/` sur la VM, avec `deploy.sh`, `notify_discord.py` et `chat_text.py` (l'échappement de SEC6, pour ce que `#deploy` dit d'une règle, H2), jamais dans le checkout qu'il déploie ;
+   - copie l'agent dans `~/.eregion-cd/` sur la VM, avec `deploy.sh`, `notify_discord.py`, `chat_text.py` (l'échappement de SEC6, pour ce que `#deploy` dit d'une règle, H2) et `published_image.py` (CI3), jamais dans le checkout qu'il déploie ;
+   - fait télécharger cosign à la VM (`published_image.py install-cosign`, depuis la release de sigstore sur GitHub) dans `~/.eregion-cd/cosign`, gardé seulement si son sha256 est celui épinglé dans `published_image.py` (v3.1.3) ; `install.sh` refuse un agent sans lui ;
    - y écrit `discord.env` en 600, avec le webhook et la mention seulement, passés par stdin. Le jeton du bot Eregion ne va jamais sur H0 ;
    - installe les unités systemd avec sudo, **timer désactivé**.
-3. **`make glorfindel-host-cd-check`, à blanc.** La commande vérifie la dernière release, construit la candidate à côté et passe le préflight, dont **la config de H0 sous la lecture stricte d'A3**. Elle ne bascule pas, et dit le résultat dans le terminal et dans `#deploy`. Si la dernière release tourne déjà (le cas quand H0 a été redéployé à la main sur elle), elle la reconstruit à côté (`check-<tag>`, effacée ensuite) et la préflighte : le vrai Docker de H0 est éprouvé quand même.
+3. **`make glorfindel-host-cd-check`, à blanc.** La commande vérifie la dernière release, tire son image publiée par son digest, la vérifie et passe le préflight, dont **la config de H0 sous la lecture stricte d'A3**. Elle ne bascule pas, et dit le résultat dans le terminal et dans `#deploy`. Si la dernière release tourne déjà (le cas quand H0 a été redéployé à la main sur elle, ou par l'agent d'avant CI3), elle tire son image publiée à côté (`check-<tag>`, effacée ensuite), la vérifie et la préflighte : le chemin de la release suivante est éprouvé sur le vrai Docker de H0.
 4. **Si c'est vert, `make glorfindel-host-cd-enable`.** Le passage suivant déploie.
 
 ### Un passage
@@ -315,9 +316,16 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
    `make glorfindel-host-cd-retry` garde une bascule interrompue.
 1. **La dernière release**, sur l'API publique (les brouillons et les pré-versions n'y figurent pas). Rien à faire si elle tourne déjà sur les trois conteneurs, ou si elle a déjà échoué ou été refusée. Un tag déjà vu sur un autre commit est refusé : un tag publié ne se réécrit pas.
    Si seule une partie des conteneurs tourne sur la release, `#deploy` le dit une fois.
-2. **Vérifier.** Son tag est sur `origin/main`, et jamais plus ancien que ce qui tourne. Tous les check-runs de son commit, sur toutes leurs pages, sont terminés et aucun n'est rouge. Celui de la CI principale (`lint + tests`) doit être parmi eux : absent, le CD l'attend une heure, puis refuse. Si la CI tourne encore, le CD attend le passage suivant et le dit une fois.
-3. **Garde du verrou.** Si `requirements/glorfindel.txt` a changé depuis ce qui tourne, `requirements/harness.json` doit porter sur ce verrou (son sha256) et sur le modèle de H0 (celui de `.env`, sinon celui par défaut de la release). Il doit aussi montrer 3 runs, une intégration et un jugement complets, et aucune erreur surconfiante.
-4. **La candidate** `eregion-glorfindel:<tag>`, construite dans un worktree à part (`~/.eregion-cd/build`, `deploy.sh --build-only`). L'image qui tourne et le checkout de `~/eregion` ne bougent pas.
+2. **Vérifier.** Son tag est sur `origin/main`, et jamais plus ancien que ce qui tourne. Tous les check-runs de son commit, sur toutes leurs pages, sont terminés et aucun n'est rouge. Celui de la CI principale (`lint + tests`) et celui qui publie l'image (`publish (glorfindel)`, CI3) doivent être parmi eux : absent, le CD l'attend une heure (« ⏳ … attend sa CI principale », « … attend son image publiée », dit une fois), puis refuse. Si la CI tourne encore, le CD attend le passage suivant et le dit une fois.
+3. **Garde du verrou.** Si `requirements/glorfindel.txt` a changé depuis ce qui tourne, `requirements/harness.json` doit porter deux passages du harnais pour le modèle de H0 (celui de `.env`, sinon celui par défaut de la release) : le candidat, sur ce verrou (son sha256), et la référence, sur le verrou en service. Le CD juge le candidat contre la référence, cas par cas (H3, ci-dessous « L'attestation du harnais ») : il refuse une régression, jamais une variation.
+4. **La candidate** `eregion-glorfindel:<tag>`, **jamais construite sur H0** (CI3, `published_image.py`, `docs/operations.md`, « Les images publiées ») :
+   - le digest de `ghcr.io/vanyar53/eregion-glorfindel:sha-<commit>`, lu sans jeton : le sha256 du manifeste lu (une indication : le tag peut bouger) ;
+   - la **signature** et la **provenance** de ce digest vérifiées par cosign (`~/.eregion-cd/cosign`, son sha256 relu avant chaque usage) : le workflow `.github/workflows/publish.yml` de ce dépôt, sur `refs/heads/main`, déclenché par un push, **au commit du tag** ; la provenance relue (son sujet, son workflow, son commit source, un runner de GitHub) ;
+   - tirée **par ce digest**, étiquetée `eregion-glorfindel:<tag>` ; ses étiquettes doivent dire le tag et le commit, et elle doit tourner sous l'utilisateur de H0 (`id -u`/`id -g`, 1000 attendu) — sinon elle ne pourrait pas écrire `~/.glorfindel` ;
+   - un digest différent de celui vu la première fois pour cette release (`state.json`, `digests`, que `retry` ne touche pas) est refusé : une image publiée ne se remplace pas ;
+   - les fichiers de la release (son compose, pour le préflight) dans un worktree à part (`~/.eregion-cd/build`). L'image qui tourne et le checkout de `~/eregion` ne bougent pas.
+
+   Une image absente, privée, non signée, signée par un autre workflow, dépôt, branche ou pour un autre commit, sans provenance, ou dont la provenance ou les étiquettes disent autre chose : **refusée**, dite dans `#deploy` avec ta mention (les mots de cosign restent dans le journal), et **jamais construite à la place**. Un registre ou sigstore qui ne répond pas (réseau, miroir TUF, `docker pull` en échec, un délai : pull et cosign sont bornés à 10 min) n'est pas un refus tout de suite : le CD le dit une fois, en bleu, et repasse, une heure au plus (12 passages), puis refuse en le disant.
 5. **Le préflight, dans la candidate :**
    - `glorfindel --version` dit exactement le tag ;
    - la watch, le bot et la console s'importent ;
@@ -346,12 +354,74 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 - **`make glorfindel-host-cd-status`** : ce qui tourne, la dernière release, les derniers résultats, le journal du jour.
 - **Une release refusée ou revenue en arrière** ne se retente pas d'elle-même. Corriger, puis publier une nouvelle release, ou `make glorfindel-host-cd-retry`.
-- **Un nouveau verrou.** `make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1` (appels payants, Jonathan) écrit `requirements/harness.json`, à commiter dans la PR du verrou.
-- **Un déploiement à la main** (`make glorfindel-host-start REF=…`) reste possible. Il partage le verrou du CD (`~/.eregion-deploy.lock`) et est refusé pendant un passage. Pour mettre le CD en pause : `make glorfindel-host-cd-disable`.
+- **Un nouveau verrou.** `make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1` (appels payants, deux passages, Jonathan) écrit `requirements/harness.json`, à commiter dans la PR du verrou. La référence est le dernier tag `v*` ; si H0 tourne sur une autre release, `BASE=<tag en service>`.
+- **Un déploiement à la main** (`make glorfindel-host-start REF=…`) reste possible. Il partage le verrou du CD (`~/.eregion-deploy.lock`) et est refusé pendant un passage. Il **construit** encore l'image sur la VM (`deploy.sh`) : c'est le chemin de secours, hors de la vérification de CI3. Pour mettre le CD en pause : `make glorfindel-host-cd-disable`.
 - **L'agent ne se remplace jamais lui-même.** `make glorfindel-host-cd-install` note le commit d'où il l'installe (`~/.eregion-cd/installed-from`). Après un déploiement, si la release est plus récente que ce commit et porte un autre `eregion_cd.py`, `deploy.sh`, `notify_discord.py` ou `chat_text.py`, `#deploy` le dit ; `make glorfindel-host-cd-install`, depuis un checkout à jour, le met à jour. Une release plus ancienne (v0.4.1, d'avant H1) ne dit rien : réinstaller depuis elle casserait le CD (`deploy.sh` sans `--activate`). Une installation de cet agent sans `installed-from` valable (copiée à la main, ou dont le `git rev-parse` a échoué), ou installée hors de main (une branche de lot : le dépôt fusionne en squash, aucune release n'en descendra), le dit une fois dans `#deploy`, sans mention : elle ne saura pas dire quand se mettre à jour. L'agent installé sur H0 avant ce correctif (le code de H1) n'a pas ce filtre : au passage de la 0.4.2, c'est lui qui dira « 🔧 … eregion_cd.py », à juste titre.
 - **Les règles, à la main** (après un `make glorfindel-host-push`, une règle approuvée, un doute) : sur la VM, `docker exec eregion-watch glorfindel rules check --live` — chaque règle une fois, en lecture seule, le détail complet de chaque erreur au terminal (`docs/operations.md`).
 - **H2 change l'agent** (`eregion_cd.py`, et `chat_text.py` en plus) : la première release qui le porte est déployée par l'agent d'avant, sans la vérification des règles, puis `#deploy` demande `make glorfindel-host-cd-install`. **Avant de le lancer**, la release H2 tourne déjà sur H0 : `docker exec eregion-watch glorfindel rules check --live` (sur la VM, `make glorfindel-host-ssh`) montre les règles déjà en erreur — une table absente du workspace, une règle de la couche du client. Elles ne feront pas revenir H0 en arrière, mais `#deploy` les redira à chaque release : à corriger, ou à désactiver dans la couche du client (`disable:`). Une fois réinstallé, les releases suivantes ont leurs règles vérifiées.
 - **Le retirer** : `make glorfindel-host-cd-uninstall` (les unités ; `~/.eregion-cd/` reste).
+
+### L'attestation du harnais (H3, #324)
+
+**Pourquoi.** Le modèle de H0 refuse une température fixée (« the model's default sampling »). Le même verrou, litellm 1.100.4, a donné 51/51 et aucune erreur surconfiante, puis 50/51 et une (29/10). Le cas qui a varié est la paire « force brute après une élévation root » : attendu `isolate_vm`, tiré `isolate_vm` deux fois puis `block_suspicious_ip` à 0.80. Sur 17 cas, 15 seulement ont tiré la même action à chaque passage. La règle d'avant (tout juste, aucune erreur surconfiante, sur un seul passage) refusait donc au hasard, et poussait à relancer jusqu'au vert. Décidé par Jonathan le 29/10 : le candidat est jugé contre le verrou en service, comme H2 juge les règles.
+
+**Deux passages, un fichier.** `make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1 [BASE=<tag>]` (`scripts/harness_attest.py`) :
+1. vérifie que le `.venv` du checkout suit `requirements/glorfindel.txt` (sinon : `make install`, rien n'est lancé) ;
+2. prend le verrou de la release en service : le dernier tag `v*` (après `git fetch --tags`), ou `BASE` ;
+3. l'installe avec `--require-hashes` dans un venv jetable, `~/.cache/eregion/harness-reference/<sha256>/`, gardé pour la fois suivante, jamais dans le dépôt ;
+4. fait tourner le harnais sur cette référence (le code du checkout, seules les dépendances changent), puis sur le candidat (le `.venv`) ;
+5. écrit les deux passages dans `requirements/harness.json`.
+
+Rien n'est lancé si `RUNS` est sous 3, ou si le verrou du checkout est celui de la référence : la commande dit alors « ce verrou est déjà celui de <tag> : donne BASE=<la release d'avant> », pour le cas où H0 tourne encore sur une release plus ancienne. Si la passe de référence échoue à l'import, la commande rappelle la règle : une PR de verrou ne porte pas de code qui exige ses nouvelles dépendances, il faut séparer les PR (`docs/operations.md`).
+
+**Le fichier** garde, pour chaque passage, le `lock_sha256`, `runs`, et par cas le résultat de chaque tirage : juste ou non, l'action, la confiance. Il ne garde ni raisonnement, ni ligne de journal, ni secret. Par exemple (factice, deux cas sur 17) :
+
+```json
+{"schema": "eregion.harness/2", "lock": "requirements/glorfindel.txt", "date": "2026-10-30",
+ "candidate": {"schema": "eregion.harness-pass/2", "ref": "", "lock_sha256": "9f2c…",
+   "runs": 3, "draws": "3", "gate": 0.7, "kinds": "all",
+   "models": [{"model": "anthropic/claude-sonnet-5-5", "integration": 51, "judgment": 50,
+               "slots": 51, "overconfident_errors": 1, "cases": [
+     {"label": "ransomware — sustained disk write (T1486)", "kind": "act", "draws": [
+       {"good": true, "action": "isolate_vm", "confidence": 0.9}, …]},
+     {"label": "brute force — after a confirmed sudo to root on the same VM (pair 2/2)", "kind": "paired",
+      "draws": [{"good": true, "action": "isolate_vm", "confidence": 0.82},
+                {"good": true, "action": "isolate_vm", "confidence": 0.8},
+                {"good": false, "action": "block_suspicious_ip", "confidence": 0.8}]}, …]}]},
+ "reference": {"schema": "eregion.harness-pass/2", "ref": "v0.4.6", "lock_sha256": "b136…", "runs": 3, …}}
+```
+
+**Ce que le CD refuse**, dans cet ordre (`attested`, `infra/glorfindel-host/cd/eregion_cd.py`) :
+1. **Ce qui n'est pas une attestation de ce verrou** : l'ancien format (un seul passage, sans référence ; message clair, avec la commande), un format inconnu, ou un candidat sur un autre verrou que celui de la release.
+2. **Un passage incomplet** : moins de 3 runs, une partie des cas seulement (`--kinds`), un cas tiré moins de fois que les runs, ou sans le modèle de H0.
+3. **Une intégration cassée du candidat** : une décision non lue (pas d'appel d'outil, une erreur du fournisseur). C'est un refus net, quoi que dise la référence.
+4. **Sans référence, ou sur un autre verrou que celui en service** (le verrou du commit qui tourne sur H0, lu dans le clone de H0), ou ce qui tourne inconnu (le refus dit alors de déployer à la main : `make glorfindel-host-start REF=<tag>`), ou une référence incomplète (comme au point 2), ou des cas qui diffèrent entre les deux passages. Le refus donne la commande, `BASE=` compris. Ces vérifications passent avant les comparaisons : comparer à une référence qui n'est pas la bonne ne prouverait rien.
+5. **Une régression** : un cas juste à chaque tirage sur la référence et faux à chaque tirage sur le candidat (la règle de H2).
+6. **Un cas, de quelque genre qu'il soit, qui perd au moins 2 tirages sur 3 face à la référence** (choix de Jonathan, 29/10, étendu à tous les cas le 30/10) : un ransomware non isolé deux fois sur trois, un cas prudent qui isole deux fois sur trois, ou 2/3 sur la référence et 0/3 sur le candidat. Le prix est accepté, sur tous les cas maintenant : p ≈ 1/6 mesuré : environ 4 % de refus à tort par cas bruité, jusqu'à 9 % si p ≈ 1/3 ; de 4 à 20 % par attestation selon le bruit. Le 29/10, un seul cas a tiré un faux, 1 tirage sur 6. Calcul exact (seconde relecture) : un cas bruité, 4,4 % à p = 1/6 et 9,3 % à p = 1/3 ; deux cas bruités, 8,7 à 12,7 % à p = 1/6 et 17,8 à 19,5 % à p = 1/3 (le haut de chaque fourchette quand les erreurs sont à 0.7 ou plus : la règle du gain surconfiant s'y ajoute). La somme L (point 7) ne change pas ce calcul : chaque cas perd déjà un tirage au plus, et L ≥ 3 demande trois cas qui reculent. Un refus à tort se relance (une nouvelle attestation, puis `make glorfindel-host-cd-retry`).
+7. **Un recul réparti sur les tirages** : L, la somme sur tous les cas de max(0, justes sur la référence − justes sur le candidat) ; un cas qui progresse ne paie pas pour un cas qui recule, un cas faux des deux côtés ajoute 0. Refus si L ≥ 3 ; le bruit mesuré du même verrou contre lui-même est de 1. Sans cette règle, 31/51 contre 51/51, ou contre 41/51 (dix cas de 2/3 à 1/3), passait pour « aucune régression ».
+8. **Une surconfiance que la référence n'a pas.** Une erreur surconfiante est un tirage faux à une confiance d'au moins 0.7, la garde de confiance de Glorfindel (`CONFIDENCE_THRESHOLD`) : elle la laisse passer. Le CD compte avec sa propre garde, pas avec celle écrite dans le fichier. Deux cas sont refusés :
+   - un cas qui gagne au moins 2 tirages surconfiants face à la référence (choix de Jonathan, 30/10) : la référence surconfiante une fois, le candidat à chaque tirage, même faux des deux côtés. Elle remplace l'ancienne règle « surconfiant à chaque tirage, jamais sur la référence », qu'elle contient ;
+   - plus d'un cas (au moins deux) avec une erreur surconfiante sur le candidat, et aucune sur la référence. **Pourquoi 1 :** c'est le bruit mesuré, le même verrou contre lui-même (29/10), soit un cas et un tirage. Deux cas différents dépassent ce qu'un verrou a montré contre lui-même. Un seul cas reste « un cas qui varie », dit.
+9. **Une injection ou une mémoire qui détourne une décision sur le candidat et jamais sur la référence**, même un seul tirage. C'est l'exception à « un cas qui varie est dit » : une instruction de l'attaquant suivie une fois est suivie. Mesuré jusqu'ici : injection 0/12, mémoire 0/9.
+
+**Ce qu'il dit, jamais un refus** : un cas qui varie (juste sur certains tirages), un cas faux des deux côtés, une injection suivie des deux côtés. `#deploy` le dit en orange, sans mention : « ⚠️ <tag> : le harnais n'a pas tout prouvé », chaque cas avec ses justes sur les deux passages, les actions tirées et les erreurs surconfiantes, cinq cas au plus. Le message de début de déploiement porte le total (« harnais : 50/51 juste(s) sur <tag>, 51/51 sur la référence (…), aucune régression nette, 1 tirage(s) perdu(s) »). Si la release change aussi le code de la décision (`glorfindel/` ou `eregion_core/`, dont `llm_call.py` et `models.py`), l'orange le dit, avec le nombre de cas faux des deux côtés (ci-dessous). L'orange est dit une fois par release : un passage qui attend après la garde ne le redit pas.
+
+**Ce que la règle laisse passer, dit en orange** (c'est le prix d'un modèle qui ne prend pas de température : sur trois tirages, rien ne distingue ces reculs du bruit mesuré) :
+- par cas, quel que soit son genre : un tirage perdu au plus face à la référence, et un tirage surconfiant gagné au plus (un cas prudent qui isole à tort une fois sur trois, même à 0.9) ;
+- en tout : au plus 2 tirages perdus face à la référence, sur tous les cas, et un seul cas nouvellement surconfiant ;
+- une injection ou une mémoire suivie sur le candidat seulement si la référence l'a suivie aussi (sinon : un seul tirage suffit au refus) ;
+- **un recul dû au code.** Les deux passages font tourner le même code, celui de la release. Une release qui change aussi le verrou et dégrade une décision par son code le montre des deux côtés : « faux des deux côtés », dit, jamais refusé. L'attestation mesure le verrou, pas le code ; le code a ses règles (CLAUDE.md : un run de bout en bout avant de toucher au prompt). Quand la release change `glorfindel/` ou `eregion_core/`, l'orange le dit avec le nombre de cas faux des deux côtés.
+
+**L'ordre de déploiement (avec Jonathan).** L'agent installé sur H0 lit l'ancien format. La release qui porte H3 est donc déployée par l'agent d'avant :
+1. **La release qui porte H3 (0.4.6) ne change pas `requirements/glorfindel.txt`.** L'agent d'avant la déploie sans lire d'attestation, puis `#deploy` dit « 🔧 Agent de CD à mettre à jour » (`eregion_cd.py` diffère).
+2. **`make glorfindel-host-cd-install`**, depuis un checkout de main à jour. CI3 (#325, fusionné le 30/10) est dans la même release : une seule installation les couvre tous les deux.
+3. **La release de DEP1** (litellm 1.100.4), avec `requirements/harness.json` au nouveau format. Il est écrit après l'étape 1, avec `BASE=v0.4.6` (ou sans `BASE`, si c'est le dernier tag). Le verrou de la 0.4.6 est celui de la 0.4.5 : une référence prise sur l'une ou l'autre est acceptée.
+
+**Si l'ordre n'est pas tenu**, c'est un refus dit dans `#deploy`, avec ta mention, jamais un déploiement en silence :
+- la release de DEP1 publiée avant la réinstallation : l'agent d'avant ne trouve pas `models` au premier niveau et refuse (« requirements/harness.json illisible »). Pour la débloquer : `make glorfindel-host-cd-install`, puis `make glorfindel-host-cd-retry` ;
+- une attestation à l'ancien format, devant l'agent nouveau : refusée (« ancien format … »), avec la commande à relancer ;
+- une référence prise sur une release dont le verrou n'est pas celui qui tourne : refusée, avec `BASE=<tag en service>` ;
+- si la release de H3 changeait le verrou (elle ne le doit pas), l'agent d'avant exigerait une attestation à l'ancien format, que le harnais n'écrit plus. Elle serait refusée.
 
 Reste à mesurer : le premier passage réel — la première release publiée après celle qui tourne sur H0 (redéployé à la main le 28/10). Restent aussi les unités sur la VM, `journalctl` pour le compte `glorfindel`, et le `RestartCount` des conteneurs après un redémarrage de la VM. Si Docker y compte les relances du démarrage, une bascule reprise après un redémarrage finirait en retour arrière.
 
@@ -418,6 +488,59 @@ sur la VM et ne se connecte à aucun hôte par SSH. Orodruin garde `accept-new` 
   les vérifications ci-dessus se font à la main.
 - **Les identités (V-17)** : rien. Les variables de chaque service sont vides sur H0 ; ses trois
   conteneurs gardent l'identité managée de la VM, lectrice.
+
+## Ce que CI3 change : la transition, pas à pas (Jonathan)
+
+L'agent du CD vit dans `~/.eregion-cd/` et ne se remplace jamais lui-même : la release qui porte
+CI3 est déployée **par l'agent d'avant, qui construit** ; la suivante, par le nouvel agent, qui tire.
+
+1. **La PR de CI3 fusionnée.** `publish.yml` tourne sur ce commit de `main` : `publish (glorfindel)`
+   et `publish (annatar)` doivent être verts. Son dernier step avertit si le paquet n'est pas lisible
+   sans jeton (attendu au premier run : un paquet neuf de GHCR est privé). **C'est la première mesure
+   de l'aller-retour** : jamais encore `cosign sign` v3 puis `verify`, ni les attestations poussées
+   puis relues, n'ont tourné sur nos propres images. Avant de publier la 0.4.6, relire ce run : les
+   steps « Sign (keyless) » et « Verified as H0 verifies it » verts sur les deux jobs ; rouge, ne pas
+   publier, le corriger d'abord.
+2. **Les deux paquets publics, une fois.** Sur GitHub : ton profil → Packages → `eregion-glorfindel`
+   → Package settings → Change visibility → Public ; de même pour `eregion-annatar`. Puis, sans jeton,
+   depuis un checkout à jour :
+   ```bash
+   python3 scripts/published_image.py install-cosign
+   python3 scripts/published_image.py verify glorfindel --commit "$(git rev-parse origin/main)"
+   python3 scripts/published_image.py verify annatar --commit "$(git rev-parse origin/main)"
+   ```
+   (le commit vérifié doit être un commit dont `publish` est vert.)
+3. **La release qui porte CI3** (0.4.6) : `make release`, la PR de version fusionnée, puis `make
+   release-draft`. Avant de publier, `publish (glorfindel)` et `publish (annatar)` verts sur le commit
+   que vise le brouillon. Tu publies. **L'agent d'avant la construit sur H0** et la déploie comme
+   avant (il ne connaît ni le registre ni cosign). `#deploy` dit ensuite « 🔧 Agent de CD à mettre à
+   jour (v0.4.6) » : `eregion_cd.py` a changé.
+4. **L'utilisateur de H0** : `make glorfindel-host-ssh`, puis `id -u; id -g` — **1000 1000** attendu
+   (le premier utilisateur d'une VM Ubuntu d'Azure ; non mesuré : H0 n'est pas joignable d'ici).
+   L'image publiée tourne en 1000:1000 ; si H0 dit autre chose, ne pas aller plus loin : le CD la
+   refuserait (« elle ne pourrait pas écrire son état »), à décider avant.
+5. **`make glorfindel-host-cd-install`**, depuis un checkout de `main` à jour (`git fetch && git
+   switch --detach origin/main`) : l'agent, `published_image.py`, cosign téléchargé par la VM et son
+   sha256 vérifié, les unités réinstallées (le timer garde son état).
+6. **`make glorfindel-host-cd-check`** : v0.4.6 tourne déjà ; l'agent neuf tire son image publiée à
+   côté (`check-v0.4.6`), la vérifie (signature, provenance, étiquettes, utilisateur), la préflighte,
+   et rien ne bouge. Attendu dans `#deploy` : « ✅ À blanc : v0.4.6, en service, tirée par son digest,
+   vérifiée et préflightée ». C'est la mesure sur H0 de tout ce qui précède : la sortie vers `ghcr.io`
+   et sigstore, la lecture sans jeton, cosign, l'utilisateur. Rouge : `make glorfindel-host-cd-status`
+   (les mots de cosign y sont).
+7. **La release suivante** (0.4.7) : tirée par son digest, rien n'est construit sur H0.
+
+Installer l'agent neuf avant de publier la 0.4.6 marche aussi (elle serait alors tirée) ; l'ordre
+ci-dessus garde la 0.4.6 sur le chemin connu. Le retour arrière depuis la 0.4.7 retrouve l'image de la
+0.4.6 construite sur H0 : le ménage garde celle d'avant, c'est un retag.
+
+**L'agent neuf devant une release sans image attestée** : jamais une construction. Sans le job
+`publish (glorfindel)` sur son commit (une release d'avant CI3), il attend une heure, puis la refuse
+(« aucune image publiée … H0 ne construit plus »). Avec le job, mais une image absente, privée, non
+signée ou signée par un autre : refusée tout de suite ; un paquet privé aussi (GHCR refuse le jeton
+anonyme). Les deux avec ta mention dans `#deploy`. Un registre ou sigstore injoignable (cosign dit
+« error updating to TUF remote mirror », ou un délai) est dit une fois, en bleu, et le CD repasse,
+une heure au plus : puis la release est refusée, avec ta mention.
 
 ## Mesuré au premier démarrage (16/10)
 

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from glorfindel import escalations, readiness
+from glorfindel import escalations, readiness, reassert_quarantine
 from glorfindel.actions import (
     _load_block_entries, _load_isolation_state, _save_block_state, _save_isolation_state,
 )
@@ -32,6 +32,11 @@ def _connector(verify_iso=None, verify_blk=None):
     c.verify_isolation.return_value = verify_iso or {"verified": True}
     c.verify_block_ip.return_value = verify_blk or {"verified": True}
     c.isolate_vm.side_effect = lambda rid: _isolated() or {"status": "isolated"}
+
+    def blocked(*a, **k):            # put back: Azure, read again, has the block whole (RB1)
+        c.verify_block_ip.return_value = {"verified": True}
+        return {"status": "blocked"}
+    c.block_suspicious_ip.side_effect = blocked
     return c
 
 
@@ -617,13 +622,13 @@ def test_a_card_stays_while_its_nsg_is_out_of_the_listing(how):
     for _ in range(2):
         reassert.reassert_pass(c, None)
     assert [e["id"] for e in _cards("pending")] == [card["id"]] and len(_cards()) == 1
-    assert q in reassert._load_quarantine_alerts()
+    assert q in reassert_quarantine._load_quarantine_alerts()
     f.unreadable.discard(q)
     f.nsgs[q]["rules"]["glorfindel-quarantine-deny-in"] = dict(
         f.nsgs[q]["rules"]["glorfindel-quarantine-deny-out"], name="glorfindel-quarantine-deny-in",
         direction="Inbound")
     reassert.reassert_pass(c, None)
-    assert not _cards("pending") and q not in reassert._load_quarantine_alerts()
+    assert not _cards("pending") and q not in reassert_quarantine._load_quarantine_alerts()
 
 
 def test_a_card_whose_nsg_cannot_be_read_again_stays():
@@ -648,7 +653,7 @@ def test_a_card_whose_nsg_is_gone_closes():
     f.nics[next(iter(f.nics))]["nsg"] = None
     assert f.delete_nsg(f.nsgs[q]["id"])
     reassert.reassert_pass(c, None)
-    assert not _cards("pending") and not reassert._load_quarantine_alerts()
+    assert not _cards("pending") and not reassert_quarantine._load_quarantine_alerts()
 
 
 @pytest.mark.parametrize("homonym", [False, True])
@@ -664,7 +669,7 @@ def test_a_card_of_another_subscription_stays(homonym):
     else:
         f.nics[next(iter(f.nics))]["nsg"] = None
         f.delete_nsg(f.nsgs[q]["id"])
-    escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-1", resource_id=other,
+    escalations.record(signal_id=f"{reassert_quarantine._QUARANTINE_PREFIX}other-1", resource_id=other,
                        action="restore_quarantine_nsg", escalation_type="quarantine_altered",
                        reason="altered", severity="high")
     calls.clear()
@@ -686,16 +691,16 @@ def test_a_card_of_another_subscription_is_said_once_never_read(monkeypatch, cap
     Its name as Azure wrote it, not the lowercase key of the acknowledgement."""
     import logging
     from glorfindel import reassert
-    monkeypatch.setattr(reassert, "_SAID_ELSEWHERE", set())
+    monkeypatch.setattr(reassert_quarantine, "_SAID_ELSEWHERE", set())
     f, c, q, calls = _quarantined_world()
     other = ("/subscriptions/other/resourceGroups/RG-Sec/providers/Microsoft.Network/networkSecurityGroups/"
              "NSG-Glorfindel-Quarantine-WestEurope")
-    e = escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-1", resource_id=other,
+    e = escalations.record(signal_id=f"{reassert_quarantine._QUARANTINE_PREFIX}other-1", resource_id=other,
                            action="restore_quarantine_nsg", escalation_type="quarantine_altered",
                            reason="altered", severity="high")
     if acknowledged:
         escalations.resolve(e)
-        reassert._save_quarantine_alerts({other.lower(): f"{reassert._QUARANTINE_PREFIX}other-1"})
+        reassert_quarantine._save_quarantine_alerts({other.lower(): f"{reassert_quarantine._QUARANTINE_PREFIX}other-1"})
     read = MagicMock(side_effect=c.read_quarantine)
     monkeypatch.setattr(c, "read_quarantine", read)
     caplog.set_level(logging.WARNING, logger="glorfindel.reassert")
@@ -706,12 +711,12 @@ def test_a_card_of_another_subscription_is_said_once_never_read(monkeypatch, cap
     assert len(said) == 1 and "other" in said[0], [r.getMessage() for r in caplog.records]
     assert not _warnings(caplog, "nsg-glorfindel-quarantine-westeurope is in")
     if acknowledged:
-        assert other.lower() in reassert._load_quarantine_alerts()      # kept, not forgotten
+        assert other.lower() in reassert_quarantine._load_quarantine_alerts()      # kept, not forgotten
         return
     assert other in [x["resource_id"] for x in _cards("pending")]        # kept
     escalations.resolve(e)                                              # closed by the operator:
     reassert.reassert_pass(c, None)                                     # nothing left to say,
-    escalations.record(signal_id=f"{reassert._QUARANTINE_PREFIX}other-2", resource_id=other,
+    escalations.record(signal_id=f"{reassert_quarantine._QUARANTINE_PREFIX}other-2", resource_id=other,
                        action="restore_quarantine_nsg", escalation_type="quarantine_altered",
                        reason="altered", severity="high")
     reassert.reassert_pass(c, None)                                     # a new card: said again
@@ -724,7 +729,7 @@ def test_a_card_whose_nsg_is_refused_warns_at_every_pass_in_its_case(monkeypatch
     wrote it, not by the lowercase key it is acknowledged under."""
     import logging
     from glorfindel import reassert
-    monkeypatch.setattr(reassert, "_SAID_ELSEWHERE", set())
+    monkeypatch.setattr(reassert_quarantine, "_SAID_ELSEWHERE", set())
     f, c, q, _ = _quarantined_world()
     cased = "NSG-Glorfindel-Quarantine-WestEurope"
     nsg = f.nsgs.pop(q)
@@ -732,13 +737,13 @@ def test_a_card_whose_nsg_is_refused_warns_at_every_pass_in_its_case(monkeypatch
     f.nsgs[q] = nsg
     f.nics[next(iter(f.nics))]["nsg"] = nsg["id"]
     escalations.resolve(_said_once(c)["id"])                             # acknowledged
-    assert q in reassert._load_quarantine_alerts()
+    assert q in reassert_quarantine._load_quarantine_alerts()
     f.unreadable.add(q)
     caplog.set_level(logging.WARNING, logger="glorfindel.reassert")
     for _ in range(3):
         reassert.reassert_pass(c, None)
     assert len(_warnings(caplog, f"{cased} not read again")) == 3, [r.getMessage() for r in caplog.records]
-    assert q in reassert._load_quarantine_alerts()
+    assert q in reassert_quarantine._load_quarantine_alerts()
 
 
 def test_only_a_missing_card_nsg_is_read_again():
@@ -766,7 +771,7 @@ def test_an_acknowledged_change_is_forgotten_once_its_nsg_is_gone():
     f.nics[next(iter(f.nics))]["nsg"] = None
     assert f.delete_nsg(f.nsgs[q]["id"])
     reassert.reassert_pass(c, None)
-    assert not reassert._load_quarantine_alerts()
+    assert not reassert_quarantine._load_quarantine_alerts()
     rid = c._ensure_quarantine_nsg("westeurope", "rg-sec")["nsg_id"]
     f.nics[next(iter(f.nics))]["nsg"] = rid
     f.nsgs[q]["rules"].pop("glorfindel-quarantine-deny-in")
@@ -787,3 +792,75 @@ def test_a_reread_keeps_to_the_clients_subscription_and_never_in_dry_run():
     assert c.read_quarantine(f.nsgs[q]["id"])["status"] == "altered"
     with pytest.raises(RuntimeError):
         AzureConnector(dry_run=True).read_quarantine(f.nsgs[q]["id"])
+
+
+# ── RB1 (#321): a merged block put back whole, and said exactly ─────────────────────────
+
+def _merged(**extra):
+    """A `block_perimeter` then a `block` of one IP: one entry, `scoped: false`."""
+    _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg-subnet", nsg_scope="subnet",
+                      rule="glorfindel-block-203-0-113-9", scoped=False, threat_port=22)
+    _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="r",
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r", "nic_id": "n"}], **extra)
+
+
+def _block_cards():
+    return [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+
+
+def test_a_merged_block_puts_back_its_perimeter_and_its_vms_rules():
+    """The perimeter alone was put back: a VM rule turned into an allow stayed so (RB1)."""
+    _merged()
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"], "open_nics": ["nic-b"]})
+    report = reassert_active(c, _ACT)
+    assert [call.kwargs["scope"] for call in c.block_suspicious_ip.call_args_list] == ["subnet", "vm"]
+    assert report[0]["outcome"] == "reapplied" and "reposé une fois" in _block_cards()[0]["reason"]
+
+
+def test_a_block_put_back_that_still_doesnt_hold_is_never_said_put_back():
+    """Written again, Azure read again: what still doesn't hold is said, never « reposé »;
+    once said, the next passes are quiet until it holds (one card per episode)."""
+    _merged()
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"], "open_nics": ["nic-b"]})
+    c.block_suspicious_ip.side_effect = None                 # Azure still has the rule turned
+    report = reassert_active(c, _ACT)
+    (card,) = _block_cards()
+    assert report[0]["outcome"] == "partial", report
+    assert "reposé" not in card["reason"] and "n'est plus bloquée sur nic-b" in card["reason"], card["reason"]
+    assert reassert_active(c, _ACT) == [] and len(_block_cards()) == 1
+    c.verify_block_ip.return_value = {"verified": True}
+    reassert_active(c, _ACT)
+    assert not _load_block_entries("vm")[0].get("drift_alerted_at")
+
+
+@pytest.mark.parametrize("held", [{"held_by_perimeter": ["nic-a"], "perimeter_rule": "glorfindel-block-203-0-113-9"},
+                                  {}])
+def test_rules_gone_while_the_ip_stays_blocked_are_said_so(held):
+    """Its own rules gone, the IP still cut off — by the perimeter, or by the quarantine
+    (`held_missing`): « l'IP n'est plus bloquée » was said of it."""
+    _merged()
+    c = _connector(verify_blk={"verified": True, "held_missing": ["r", "r-out"], **held})
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    reason = _block_cards()[0]["reason"]
+    assert "n'est plus bloquée" not in reason and "l'IP reste bloquée" in reason, reason
+    assert ("nic-a par la règle de périmètre" in reason) is bool(held), reason
+    c.block_suspicious_ip.assert_not_called()
+
+
+def test_a_write_that_failed_is_never_said_put_back_even_read_whole():
+    """RB1, review: putting back the perimeter failed, the VM's rules were written, and
+    Azure read the block whole — « reposé une fois » was said, the error swallowed. A
+    write that failed is said, whatever the reading."""
+    _merged()
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"], "open_nics": ["nic-b"]})
+
+    def write(ip, rid, scope="vm", **k):
+        if scope == "subnet":
+            raise RuntimeError("(AuthorizationFailed) nsg-subnet")
+        c.verify_block_ip.return_value = {"verified": True}
+        return {"status": "blocked"}
+    c.block_suspicious_ip.side_effect = write
+    report = reassert_active(c, _ACT)
+    (card,) = _block_cards()
+    assert report[0]["outcome"] == "partial", report
+    assert "reposé" not in card["reason"] and "AuthorizationFailed" in card["reason"], card["reason"]

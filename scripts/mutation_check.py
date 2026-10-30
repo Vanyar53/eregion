@@ -44,6 +44,7 @@ SDK = "glorfindel/providers/azure/sdk.py"
 FAC = "glorfindel/actions.py"                 # the façade (A1)
 PIF = "glorfindel/providers/interface.py"
 R = "glorfindel/reassert.py"
+RQ = "glorfindel/reassert_quarantine.py"       # split out of reassert.py (RB1)
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
@@ -1207,9 +1208,11 @@ MUTANTS = [
      '    _has_alerting = bool(os.environ.get("GLORFINDEL_WEBHOOK_URL") '
      'or os.environ.get("DISCORD_CHANNEL_ID"))\n'),
     ("M524", "REF=--checkout-only reaches deploy.sh as an option (M-3, review)", MAKE,
-     'in -*|*[!A-Za-z0-9._-]*) echo "REF invalide', 'in *[!A-Za-z0-9._-]*) echo "REF invalide'),
+     'make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac\n\t@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide',
+     'make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac\n\t@case "$$EREGION_DEPLOY_REF" in *[!A-Za-z0-9._-]*) echo "REF invalide'),
     ("M525", "a REF exported in the environment is deployed in silence (M-3, review)", MAKE,
-     '@case "$(origin REF)" in environment*)', '@case "$(origin REF)" in nowhere*)'),
+     '@case "$(origin REF)" in environment*) echo "REF vient de l\'environnement (« $$EREGION_DEPLOY_REF ») : rien n\'est déployé',
+     '@case "$(origin REF)" in nowhere*) echo "REF vient de l\'environnement (« $$EREGION_DEPLOY_REF ») : rien n\'est déployé'),
     ("M526", "make expands a refused REF while exporting it: $(shell …) runs (M-3, review)", MAKE,
      "REF ?=\nunexport REF\n", "REF ?=\n"),
     ("M527", "the ssh line copies REF into the recipe: make expands it before it is checked (M-3, review)",
@@ -1635,7 +1638,7 @@ MUTANTS += [
              "in quarantine (I1F)", QUA,
      '                protocol="*", source_address_prefix="*", destination_address_prefix="*",\n',
      '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
-    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", R,
+    ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", RQ,
      "        if k in altered and altered[k][0] == sid:\n            said.add(sid)\n"
      "        elif k in altered or settled(k):\n",
      "        if k in altered or settled(k):\n"),
@@ -1643,10 +1646,10 @@ MUTANTS += [
     ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
      "    report: list[dict] = []\n    _whatever_the_state(connector, autonomy, report)\n    return report\n",
      "    return []\n"),
-    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", R,
+    ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", RQ,
      "        if signal_id in said or alerts.get(k) == signal_id:\n",
      "        if signal_id in said:\n"),
-    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", R,
+    ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", RQ,
      '            return seen[k].get("status") != "unknown" and k not in altered\n',
      "            return k not in altered\n"),
     ("M835", "the watch's thread hands over only when something is recorded (I1F, review)", GCLI,
@@ -1675,7 +1678,7 @@ MUTANTS += [
      "        if time.time() - _last_reassert[0] < _reassert_every_s:\n            return\n"
      "        from glorfindel.actions import active_blocks, active_isolations\n        if not active_isolations() and not active_blocks():\n"
      "            return\n"),
-    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", R,
+    ("M897", "a listing that fails reads as empty: every quarantine card closed (I1F, second review)", RQ,
      '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        return\n',
      '        log.warning("reassert: quarantine NSGs not checked (%s)", exc)\n        listing = []\n'),
     ("M898", "an unreadable configuration said at every pass (I1F, second review)", GCLI,
@@ -2013,8 +2016,8 @@ MUTANTS += [
 MUTANTS += [
     ("M900", "a block that could not be put back marked alerted before its card (L1F, L1)", R,
      ('        outcome = "failed"\n    _alert(_alert_id(vm, rid, ip),',
-      "        # silence (L1F, invariant machine).\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"),
-     ('        outcome = "failed"\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n'
+      "        # silence (L1F, invariant machine).\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"),
+     ('        outcome = "failed"\n        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n'
       "    _alert(_alert_id(vm, rid, ip),",
       "        # silence (L1F, invariant machine).\n        pass\n")),
     ("M901", "an isolation that could not be put back marked alerted before its card (L1F)", R,
@@ -2026,8 +2029,8 @@ MUTANTS += [
     ("M902", "a block gone in human_only marked alerted before its card (L1F, L1)", R,
      ('        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n'
-      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n        report.append(",),
-     ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now)\n"
+      "        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n        report.append(",),
+     ("        _update_block_entry(ref or vm, ip, drift_alerted_at=now, drift_said=_situation(said))\n"
       '        _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",\n'
       '               reason=reason, action_params={"ip": ip})\n        report.append(',)),
 ]
@@ -2487,7 +2490,7 @@ TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts" f
 # another subscription.
 MUTANTS += [
     ("M1020", "a quarantine card closed on the mere absence of its NSG from the listing: the role "
-              "removed, our tag taken off, another subscription (I1S)", R,
+              "removed, our tag taken off, another subscription (I1S)", RQ,
      "        return k in gone\n", "        return True\n"),
     ("M1021", "a quarantine NSG read again without our tag reads as not ours: its card closed (I1S)", SWP,
      "        return self._quarantine_as_read(nsg)\n",
@@ -2497,14 +2500,14 @@ MUTANTS += [
               "closes its card (I1S)", SWP,
      '        if not target or target.lower() != (self._subscription_id or "").lower():\n',
      "        if False:\n"),
-    ("M1023", "a quarantine NSG that can't be read again (403, 429) reads as gone: its card closed (I1S)", R,
+    ("M1023", "a quarantine NSG that can't be read again (403, 429) reads as gone: its card closed (I1S)", RQ,
      "exc)\n            continue\n        if q is None:\n",
      "exc)\n            gone.add(k)\n            continue\n        if q is None:\n"),
     ("M1024", "every quarantine card's NSG read again at every pass, listed or not: a get per card "
-              "per minute (I1S)", R,
+              "per minute (I1S)", RQ,
      "        if _key(rid) and _key(rid) not in seen:\n", "        if _key(rid):\n"),
     ("M1025", "an acknowledged change is not read again: its NSG deleted, the acknowledgement silences "
-              "the next one (I1S)", R,
+              "the next one (I1S)", RQ,
      '    for rid in [e.get("resource_id") or "" for e in cards] + list(alerts):\n',
      '    for rid in [e.get("resource_id") or "" for e in cards]:\n'),
     ("M1026", "a refusal (403) read again reads as not found: the card closed (I1S)", SWP,
@@ -2555,12 +2558,12 @@ MUTANTS += [
     ("M1108", "a NIC in quarantine whose original is gone: release and reset say only 'not found' (ISU)",
      QUA, "            raise self._original_gone(q, nic_id, original, exc)\n", "            raise\n"),
     ("M1109", "a card of another subscription handed to the reader: refused there, a warning at every "
-              "pass without end (ISU)", R,
+              "pass without end (ISU)", RQ,
      "    elsewhere = {k: w for k, rid in missing.items() if outside and isinstance(w := outside(rid), str) "
      "and w}\n", "    elsewhere = {}\n"),
-    ("M1110", "a card of another subscription said at every pass (ISU)", R,
+    ("M1110", "a card of another subscription said at every pass (ISU)", RQ,
      "    for k in elsewhere.keys() - _SAID_ELSEWHERE:\n", "    for k in elsewhere:\n"),
-    ("M1111", "an acknowledged change alone named by its lowercase key, not as Azure wrote it (ISU)", R,
+    ("M1111", "an acknowledged change alone named by its lowercase key, not as Azure wrote it (ISU)", RQ,
      "    missing = {k: cased.get(k) or rid for k, rid in missing.items()}\n", ""),
     ("M1112", "the connector never says an NSG is of another subscription: every pass, a warning (ISU)",
      SWP, '        return None if target and target.lower() == (self._subscription_id or "").lower() '
@@ -2572,7 +2575,7 @@ MUTANTS += [
      '**({"subnet_nsg_too": True} if own_id and subnet_nsg and tuple(',
      '**({"subnet_nsg_too": True} if False and subnet_nsg and tuple('),
     ("M1115", "a card of another subscription said once for ever: closed, then a new card on its NSG "
-              "unsaid (ISU)", R,
+              "unsaid (ISU)", RQ,
      "    _SAID_ELSEWHERE.intersection_update(elsewhere)\n", ""),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k two_hosts_an_unblock" for n in (1100, 1101)})
@@ -3034,13 +3037,14 @@ MUTANTS += [
     ("M1009", "a new lock deployed without the harness: the guard never runs (H1)", CD,
      '    if dep_commit and git("diff", "--quiet", dep_commit, commit, "--", LOCK, check=False).returncode == 0:\n'
      "        return\n", "    return\n"),
-    ("M1010", "an attestation for another lock accepted (H1)", CD,
-     '    if att.get("lock_sha256") != hashlib.sha256(lock).hexdigest():', "    if False:"),
-    ("M1011", "an attestation for another model accepted: H0's own is never checked (H1)", CD,
-     '    entry = next((m for m in att.get("models") or [] if m.get("model") == model), None)',
-     '    entry = next(iter(att.get("models") or []), None)'),
-    ("M1012", "an attestation with overconfident errors accepted (H1)", CD,
-     '    if entry.get("overconfident_errors") != 0:', "    if False:"),
+    # M1010–M1012 follow the attestation of H3 (#324): two passes, judged case by case.
+    ("M1010", "an attestation for another lock accepted (H1, H3)", CD,
+     '    if cand.get("lock_sha256") != hashlib.sha256(shown.stdout.encode()).hexdigest():', "    if False:"),
+    ("M1011", "an attestation for another model accepted: H0's own is never checked (H1, H3)", CD,
+     '    entry = next((m for m in side.get("models") or [] if m.get("model") == model), None)',
+     '    entry = next(iter(side.get("models") or []), None)'),
+    ("M1012", "a case gaining 2 overconfident draws over the reference accepted: the gate no longer stops them (H1, H3)",
+     CD, "    if gained:\n", "    if False:\n"),
     ("M1013", "H0's config refused by A3 and the release switched to anyway: the watch exits 2 (H1)", CD,
      '        if res.returncode != 0:\n            raise Refused("préflight : la config de H0',
      '        if False:\n            raise Refused("préflight : la config de H0'),
@@ -3985,24 +3989,235 @@ MUTANTS += [
      '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1610, 1615)})
-# DEP1, after its review: a committed attestation that no longer matches the lock, or misses
-# the default model, fails in CI, not at H0's CD (tests/unit/test_llm_smoke.py). M1615–M1616.
+# DEP1 (#282): `make llm-compare ATTEST=1` passes --attest without --json (M1617).
 _SMOKE_T = "tests/unit/test_llm_smoke.py"
-MUTANTS += [
-    ("M1615", "a stale attestation passes the CI: the release refused at H0's CD only (DEP1)", _SMOKE_T,
-     '    if att.get("lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():\n',
-     "    if False:\n"),
-    ("M1616", "an attestation without the default model passes the CI (DEP1)", _SMOKE_T,
-     '    if model not in [m.get("model") for m in att.get("models") or []]:\n',
-     "    if False:\n"),
-]
 MUTANTS += [
     ("M1617", "main's --json branch imports Path: `make llm-compare ATTEST=1` loses the attestation (DEP1)",
      "scripts/llm_smoke.py",
      "    if args.json:\n        import json\n        Path(args.json)",
      "    if args.json:\n        import json\n        from pathlib import Path\n        Path(args.json)"),
 ]
-TESTS.update({mid: _SMOKE_T for mid in ("M1615", "M1616", "M1617")})
+TESTS["M1617"] = _SMOKE_T
+# DEP1, after its review: the CI's guard of a committed attestation reads it for the default
+# model, never for the model the attestation names itself (tests/unit/test_llm_smoke.py). M1616.
+MUTANTS += [
+    ("M1616", "the CI's guard reads an attestation for its own model, not the default (DEP1)", _SMOKE_T,
+     '            _entry, cases[side] = cd._passage(p, model, side, ',
+     '            _entry, cases[side] = cd._passage(p, ((p.get("models") or [{}])[0]).get("model"), side, '),
+]
+TESTS["M1616"] = _SMOKE_T
+# H3 (#324, M1670–M1689): the harness's attestation judged against the lock in service — two
+# passes, each case's draws (scripts/llm_smoke.py, scripts/harness_attest.py), and the CD's rule
+# (`attested`): only a regression refuses, what varies is said. M1010–M1012 retargeted above.
+_ATT = "scripts/harness_attest.py"
+MUTANTS += [
+    ("M1670", "an attestation of the old format (one pass, no reference) judged as the new one (H3)", CD,
+     '    if att.get("schema") != HARNESS_SCHEMA:\n', "    if False:\n"),
+    ("M1671", "the harness's pass drops each case's draws: the CD has totals only (H3)", "scripts/llm_smoke.py",
+     '"draws": [_draw(s) for s in c["slots"]]}', '"draws": []}'),
+    ("M1672", "a candidate whose model no longer calls the tool deployed (H3)", CD,
+     '    if parsed < slots or int(entry.get("integration") or 0) < int(entry.get("slots") or 0):\n',
+     "    if False:\n"),
+    ("M1673", "an attestation without a reference judged anyway (H3)", CD,
+     "    if not isinstance(ref, dict):\n        raise Refused(f\"l'attestation du harnais n'a pas de référence",
+     "    if False:\n        raise Refused(f\"l'attestation du harnais n'a pas de référence"),
+    ("M1674", "a reference on another lock than the one in service accepted (H3)", CD,
+     '    if running.returncode != 0 or ref.get("lock_sha256") != hashlib.sha256(running.stdout.encode()).hexdigest():\n',
+     "    if False:\n"),
+    ("M1675", "a net regression (right on every draw before, wrong on every draw now) deployed (H3)", CD,
+     "    if regressed:\n", "    if False:\n"),
+    ("M1676", "a case that varies on the candidate refused as a regression: the absolute rule again (H3)", CD,
+     "and not any(g for g, _a, _x in c[lb][1])]", "and not all(g for g, _a, _x in c[lb][1])]"),
+    ("M1677", "--attest without --reference runs the paid pass anyway (H3)", "scripts/llm_smoke.py",
+     "    if args.attest and not args.reference:\n", "    if False:\n"),
+    ("M1678", "new overconfidence on several cases deployed (H3)", CD,
+     "    if len(new_over) > NEW_OVERCONFIDENT_CASES:\n", "    if False:\n"),
+    ("M1679", "no overconfident draw tolerated: the noise of one lock against itself refused (H3)", CD,
+     "NEW_OVERCONFIDENT_CASES = 1\n", "NEW_OVERCONFIDENT_CASES = 0\n"),
+    ("M1680", "a decision steered by an injection or the memory, on the candidate only, deployed (H3)", CD,
+     "    if steered:\n", "    if False:\n"),
+    ("M1681", "a decision steered on both sides refused: noise taken for a regression (H3)", CD,
+     "               and all(g for g, _a, _x in r[lb][1])]\n", "               ]\n"),
+    ("M1682", "a pass of fewer than 3 runs accepted (H3)", CD,
+     "    if runs < HARNESS_MIN_RUNS:\n", "    if False:\n"),
+    ("M1683", "a reference that does not match (runs, model) found after the paid pass (H3)", "scripts/llm_smoke.py",
+     '        if why:\n            print(f"→ {why} — nothing run")', '        if False:\n            print(f"→ {why} — nothing run")'),
+    ("M1684", "a pass on some kinds of case only (--kinds) accepted (H3)", CD,
+     '    if side.get("kinds") != "all":\n', "    if False:\n"),
+    ("M1685", "a case drawn fewer times than the runs accepted: an empty reference is right « on every draw » (H3)", CD,
+     '        if len(draws) != runs or str(c["label"]) in cases:\n', '        if str(c["label"]) in cases:\n'),
+    ("M1686", "what the harness did not prove never said on #deploy (H3)", CD,
+     '        elif harness.get("orange"):', "        elif False:"),
+    ("M1687", "a .venv that does not follow the lock attested under its sha256 (H3)", _ATT,
+     "        if have != pinned:\n", "        if False:\n"),
+    ("M1688", "a committed attestation on another lock passes the CI (H3, DEP1)", _SMOKE_T,
+     '    if cand.get("lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():\n', "    if False:\n"),
+    ("M1689", "a committed attestation without its reference passes the CI (H3, DEP1)", _SMOKE_T,
+     "    if not ref:\n        problems.append", "    if False:\n        problems.append"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1670, 1690)})
+# H3 after its review (30/10, M1700–M1719): a regression spread over draws, a case that acts
+# losing 2 of 3, the gate at exactly 0.7, the reference that varied, the code the attestation
+# does not measure, the orange said once, the CI reading each pass as the CD does.
+MUTANTS += [
+    ("M1700", "31/51 against 51/51 deployed as « no regression »: draws lost never summed (H3, review)", CD,
+     "    if lost >= LOST_DRAWS:\n", "    if False:\n"),
+    ("M1701", "3 draws lost tolerated: the threshold one too far (H3, review)", CD,
+     "    if lost >= LOST_DRAWS:\n", "    if lost > LOST_DRAWS:\n"),
+    ("M1702", "a case that improves pays for one that loses: draws lost netted, not capped at 0 (H3, review 2)", CD,
+     "    lost_by = {lb: max(0, right(r[lb][1]) - right(c[lb][1])) for lb in c}\n",
+     "    lost_by = {lb: right(r[lb][1]) - right(c[lb][1]) for lb in c}\n"),
+    ("M1703", "a ransomware not isolated twice out of three deployed (H3, Jonathan 29/10)", CD,
+     "    if lost_case:\n", "    if False:\n"),
+    ("M1704", "a case that acts must lose all 3 draws: 2/3 lost deployed (H3, review)", CD,
+     "CASE_LOST_DRAWS = 2\n", "CASE_LOST_DRAWS = 3\n"),
+    ("M1705", "the loss of 2 draws counted on act and paired only: a cautious case isolating twice deployed (H3, 30/10)",
+     CD, "    lost_case = [lb for lb in c if right(", '    lost_case = [lb for lb in c if c[lb][0] in ("act", "paired") and right('),
+    ("M1706", "a wrong draw at exactly the gate (0.7) not overconfident: the gate lets it through (H3, review)", CD,
+     "    return not good and conf is not None and float(conf) >= GATE\n",
+     "    return not good and conf is not None and float(conf) > GATE\n"),
+    ("M1707", "a regression where the reference varied: right on any draw before taken for right on every (H3, review)",
+     CD, "    regressed = [lb for lb in c if all(g for g, _a, _x in r[lb][1]) and",
+     "    regressed = [lb for lb in c if any(g for g, _a, _x in r[lb][1]) and"),
+    ("M1708", "a release that changes glorfindel/ with the lock: what the attestation does not measure unsaid (H3, review)",
+     CD, "    if code_changed:\n", "    if False:\n"),
+    ("M1709", "the orange said again at every pass that waits after the guard (H3, review, CI3)", CD,
+     '            say_once(state, tag, "harness", f"⚠️ {tag} : le harnais n\'a pas tout prouvé", harness["orange"],\n'
+     "                     color=nd.ORANGE, url=url)",
+     '            say(f"⚠️ {tag} : le harnais n\'a pas tout prouvé", harness["orange"],\n'
+     "                     color=nd.ORANGE, url=url)"),
+    ("M1710", "the command to run again loses BASE=<tag en service> (H3, review)", CD,
+     "            f\"BASE={dep_ref or '<tag en service>'}, dans la PR du verrou\")",
+     '            ", dans la PR du verrou")'),
+    ("M1711", "what runs unknown: the deployment by hand unsaid (H3, review)", CD,
+     '                      f"déploiement à la main : make glorfindel-host-start REF={tag}")',
+     '                      "")'),
+    ("M1712", "the CI reads a partial attestation without the CD's _passage (H3, review)", _SMOKE_T,
+     '            _entry, cases[side] = cd._passage(p, model, side, "make llm-compare … ATTEST=1")\n',
+     "            cases[side] = {}\n"),
+    ("M1713", "the CI never compares the two passes' cases (H3, review)", _SMOKE_T,
+     '    if len(cases) == 2 and cases["candidat"].keys() != cases["référence"].keys():\n', "    if False:\n"),
+    ("M1714", "the CI hands git a reference that names no release (H3, review)", _SMOKE_T,
+     '    if tag and not re.fullmatch(r"v\\d+\\.\\d+\\.\\d+", tag):\n', "    if False:\n"),
+    ("M1715", "--attest with --kinds or fewer than 3 runs pays a pass the CD refuses (H3, review)", "scripts/llm_smoke.py",
+     "    if (args.attest or args.pass_out) and (kinds or runs < 3):\n", "    if False:\n"),
+    ("M1716", "a reference that cannot import the code: the rule (separate the PRs) unsaid (H3, review)", _ATT,
+     '              "sépare les PR — le verrou d\'abord, attesté et déployé, puis le code qui s\'en sert.")',
+     '              "")'),
+    ("M1717", "the lock already the latest tag's: BASE=<the release before> unsaid (H3, review)", _ATT,
+     '        print(f"ce verrou est déjà celui de {tag} : si H0 tourne sur une release d\'avant, donne "\n'
+     '              f"BASE=<la release d\'avant {tag}> ; sinon le CD n\'a rien à attester — rien lancé")',
+     '        print("rien lancé")'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1700, 1712)})
+TESTS.update({f"M{n}": _SMOKE_T for n in range(1712, 1718)})
+# H3, Jonathan 30/10 (M1718–M1729): the loss of 2 draws on every kind, the gain of overconfidence.
+MUTANTS += [
+    ("M1718", "a case gaining 2 overconfident draws tolerated: the threshold one too far (H3, 30/10)", CD,
+     "OVERCONFIDENT_GAIN = 2\n", "OVERCONFIDENT_GAIN = 3\n"),
+    ("M1719", "the overconfident draws counted without the reference's: noise on both sides refused (H3, 30/10)", CD,
+     "    gained = [lb for lb in c if over(c[lb][1]) - over(r[lb][1]) >= OVERCONFIDENT_GAIN]\n",
+     "    gained = [lb for lb in c if over(c[lb][1]) >= OVERCONFIDENT_GAIN]\n"),
+    ("M1720", "one draw lost refused: the noise of 29/10 taken for a regression (H3, 30/10)", CD,
+     "CASE_LOST_DRAWS = 2\n", "CASE_LOST_DRAWS = 1\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1718, 1721)})
+# H3, second review (M1721–M1729): draws lost where the reference varied, the decision's code.
+MUTANTS += [
+    ("M1721", "draws lost counted only where the reference was right on every draw: 31/51 against 41/51 "
+     "deployed (H3, review 2)", CD,
+     "    lost_by = {lb: max(0, right(r[lb][1]) - right(c[lb][1])) for lb in c}\n",
+     "    lost_by = {lb: max(0, right(r[lb][1]) - right(c[lb][1])) for lb in c if all(g for g, _a, _x in r[lb][1])}\n"),
+    ("M1722", "a release changing eregion_core/ (llm_call.py, models.py) with the lock: unsaid (H3, review 2)", CD,
+     'DECISION_CODE = ("glorfindel/", "eregion_core/")\n', 'DECISION_CODE = ("glorfindel/",)\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1721, 1723)})
+TESTS.update({mid: _SMOKE_T for mid in ("M1671", "M1677", "M1683", "M1687", "M1688", "M1689")})
+
+# CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
+# verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
+# docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.
+PIM = "scripts/published_image.py"
+PUB = ".github/workflows/publish.yml"
+MUTANTS += [
+    ("M1650", "the registry's digest header believed over the bytes read: a lying registry unseen (CI3)", PIM,
+     "    if said and said != digest:\n", "    if False:\n"),
+    ("M1651", "a manifest read by a digest it is not passes (CI3)", PIM,
+     '    if ref.startswith("sha256:") and ref != digest:\n', "    if False:\n"),
+    ("M1652", "cosign not asked for the commit: an image signed for another commit deployed (CI3)", PIM,
+     '"--certificate-github-workflow-sha", commit]', "]"),
+    ("M1653", "cosign not asked for the trigger: an image of a dispatched run deployed (CI3)", PIM,
+     '"--certificate-github-workflow-trigger", TRIGGER, ', ""),
+    ("M1654", "cosign not asked for the repository: a fork's image deployed (CI3)", PIM,
+     '"--certificate-github-workflow-repository", slug, ', ""),
+    ("M1655", "a refused signature let through to the provenance (CI3)", PIM,
+     '    if res.returncode != 0:\n        raise _cosign_failed(res, "signature")\n',
+     "    if res.returncode != 0:\n        pass\n"),
+    ("M1656", "a signature over another digest accepted (CI3)", PIM,
+     "    if not signed or any(s != digest for s in signed):\n", "    if not signed:\n"),
+    ("M1657", "a provenance of two commits accepted when one of them is asked (CI3)", PIM,
+     "    if commits != {commit}:\n", "    if commit not in commits:\n"),
+    ("M1658", "the runner not read: an image built on a self-hosted runner accepted (CI3)", PIM,
+     ',\n            "runner": (gh.get("runner_environment"), "github-hosted")}', "}"),
+    ("M1659", "the provenance's subject name not read: another image's provenance accepted (CI3)", PIM,
+     's.get("name") == reference(image) and ', ""),
+    ("M1660", "cosign run without its pinned sha256 checked: an altered verifier trusted (CI3)", PIM,
+     "    if not cosign_ok(cosign):\n", "    if False:\n"),
+    ("M1661", "a downloaded cosign kept whatever its sha256 (CI3)", PIM,
+     "    if hashlib.sha256(body).hexdigest() != COSIGN_SHA256:\n", "    if False:\n"),
+    ("M1662", "the pulled image's commit label not read: another commit's image tagged as the release (CI3)", PIM,
+     "    if rev != commit or (version and ver != version):\n", "    if version and ver != version:\n"),
+    ("M1663", "a reference off main sent to Orodruin (CI3)", PIM,
+     "    if on_main.returncode != 0:\n", "    if False:\n"),
+    ("M1664", "any image id accepted on Orodruin after the load (CI3)", PIM,
+     " or a.id.strip() not in expected:", ":"),
+    ("M1665", "a digest that moved since the release was first seen deployed (V-22, CI3)", CD,
+     "        if seen.get(tag, digest) != digest:\n", "        if False:\n"),
+    ("M1666", "the publishing job not waited for: a release from before CI3 refused at once, or deployed "
+              "before its image is attested (CI3)", CD,
+     ', (PUBLISH_CHECK, "son image publiée", "ci-image")):', "):"),
+    ("M1667", "the image's user not compared with H0's: a release that cannot write its state deployed (CI3)", CD,
+     "    if res.returncode != 0 or said != mine:\n", "    if res.returncode != 0:\n"),
+    ("M1668", "an unverified image made a silent wait instead of a refusal said with the mention (CI3)", CD,
+     '        raise Refused(f"image de {tag} refusée : {discord_text(str(e))} — H0 ne construit pas d\'image",\n'
+     '                      e.detail) from None\n',
+     '        raise Quiet(f"{tag} : {e}") from None\n'),
+    ("M1669", "the publishing workflow run on pull requests too (a fork's included) (CI3)", PUB,
+     "on:\n  push:\n    branches: [main]\n", "on:\n  push:\n    branches: [main]\n  pull_request:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(1650, 1665)})
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1665, 1669)})
+TESTS["M1669"] = "tests/unit/test_workflows.py"
+# CI3 after its review (29/10): a private package refused, cosign's exit classified (a network
+# error waits, bounded; an absent or other signature refuses), the signature's own type, nothing
+# raw in #deploy, Orodruin's image tagged only once proven. M1690–M1699.
+MUTANTS += [
+    ("M1690", "a private package's 403 at the token made a wait without end (CI3, review)", PIM,
+     "    except urllib.error.HTTPError as e:\n        # GHCR refuses the anonymous token itself",
+     "    except urllib.error.HTTPError as e:\n        e.code = 0  # GHCR refuses the anonymous token itself"),
+    ("M1691", "every failure of cosign a refusal: a sigstore outage burns the release (CI3, review)", PIM,
+     "    if res.returncode != TIMEOUT_CODE and COSIGN_REFUSALS.search(said):\n", "    if True:\n"),
+    ("M1692", "every failure of cosign a wait: an image signed by another never refused (CI3, review)", PIM,
+     "    if res.returncode != TIMEOUT_CODE and COSIGN_REFUSALS.search(said):\n", "    if False:\n"),
+    ("M1693", "a cosign cut at its bound read as a refusal (CI3, review)", PIM,
+     "    if res.returncode != TIMEOUT_CODE and COSIGN_REFUSALS.search(said):\n",
+     "    if COSIGN_REFUSALS.search(said):\n"),
+    ("M1694", "an attestation taken for the signature: an image never signed accepted (CI3, review)", PIM,
+     "    if not any(c.get(\"type\") == SIGNATURE_TYPE for c in found):\n", "    if False:\n"),
+    ("M1695", "a registry or sigstore out of reach waited for without end (CI3, review)", CD,
+     "        if tries[tag] > UNAVAILABLE_PASSES:\n", "        if False:\n"),
+    ("M1696", "the CI's wait and the image's share one count (CI3, review)", CD,
+     '        key = tag if name == MAIN_CHECK else f"{tag} {name}"\n', "        key = tag\n"),
+    ("M1697", "the registry's header quoted as it came, toward #deploy (SEC6, CI3, review)", PIM,
+     'shown = f"{said[:19]}…" if DIGEST_RE.fullmatch(said) else "un en-tête illisible"', "shown = said"),
+    ("M1698", "~/.eregion-image left naming the old image when the new one fails (CI3, review)", "Makefile",
+     "\t $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \\\n", ""),
+    ("M1699", "an image refused on Orodruin left there under its waiting tag (CI3, review)", "Makefile",
+     "\t else docker image rm $(ORO_INCOMING) >/dev/null 2>&1; $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n",
+     "\t else true; \\\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in (1690, 1691, 1692, 1693, 1694, 1697, 1698, 1699)})
+TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in (1695, 1696)})
 
 
 # SEC4c (#275, M1370–M1389): the entries and the calls — the restore's moment, the values
@@ -4346,10 +4561,151 @@ MUTANTS += [
      '        failed = self._gone_vm_unknown(resource_id or vm_name, vm_name, "block")\n',
      "        failed = []\n"),
     ("M1599", "the unblock of a deleted VM leaves in silence the rules nothing names (I5R)", UNB,
-     "        failed += self._unnamed_blocks(vm_name, ip, known)\n", ""),
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id if lost else None)\n", ""),
 ]
 TESTS.update({mid: f"{_I5R_KEEP} {INVARIANTS}" for mid in ("M1590", "M1591", "M1592", "M1593", "M1594")})
 TESTS.update({f"M{n}": "tests/unit/test_invariant_regressions.py -k deleted_vm" for n in range(1595, 1600)})
+
+# RB1 (#321): a merged block — a perimeter and the VM's own, one entry — put back whole, and
+# its card says exactly what is back and what still holds; the unblock of a deleted VM says
+# how to take what it leaves, its perimeter block too; our `-out` rule turned Inbound frees
+# no number. Measured by the sequences frozen in test_invariant_regressions.py (and
+# test_reassert.py), then by the machine alone (its card oracle, the second subnet). M1620–M1634.
+PER = "glorfindel/providers/azure/perimeter.py"
+_RB1 = " ".join([f"{_I5R}{t}" for t in (
+    "a_merged_block_never_says_the_ip_unblocked_while_the_perimeter_holds",
+    "a_merged_block_puts_back_the_vms_rules_on_every_subnet",
+    "a_merged_block_card_says_what_is_back_and_what_still_holds",
+    "a_merged_blocks_perimeter_gone_is_put_back_or_said",
+    "a_merged_block_whose_perimeter_cant_be_read_is_never_said_held",
+    "a_merged_block_whose_perimeter_is_bypassed_is_never_said_held",
+    "an_unblock_of_a_deleted_vm_says_how_to_take_what_it_leaves",
+    "an_unblock_of_a_deleted_vm_says_a_perimeter_block_nothing_ties_elsewhere",
+    "our_outbound_rule_turned_inbound_never_collides_with_the_rewrite",
+    "a_vm_block_never_says_the_ip_unblocked_while_another_vms_perimeter_holds",
+    "a_perimeter_block_never_says_blocked_with_a_nic_left_open",
+    "a_promotion_keeps_the_block_of_a_nic_the_perimeter_doesnt_cover",
+    "a_perimeter_block_alone_is_verified_on_every_nic",
+    "a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off",
+    "a_write_that_failed_is_never_said_put_back",
+    "a_perimeter_block_reads_the_other_nics_own_block_on_azure",
+    "a_promotion_is_no_drift_for_the_next_pass",
+    "a_promotion_leaves_the_next_pass_silent_and_writes_nothing",
+    "a_nic_left_to_a_perimeter_someone_turned_is_open",
+    "a_perimeter_gone_after_its_uncovered_card_is_acknowledged_is_put_back_or_said",
+    "an_uncovered_card_is_said_again_when_the_uncovered_nics_change",
+    "a_drift_card_acknowledged_is_said_again_only_when_it_worsens",
+    "the_machine_finds_a_perimeter_deleted_after_its_card_is_acknowledged",
+    "the_same_perimeter_gone_twice_is_said_twice")] + ["tests/unit/test_reassert.py"])
+MUTANTS += [
+    ("M1620", "a merged block put back on its perimeter alone: the VM's rule left turned (RB1)", R,
+     '    scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]\n',
+     '    scopes = ["subnet"] if b.get("scoped") is False else ["vm"]\n'),
+    ("M1621", "« reposé » said from the writes alone, Azure not read again (RB1, A0)", R,
+     "            after = connector.verify_block_ip(ip, rid)\n",
+     '            after = {"verified": True}\n'),
+    ("M1622", "only the entry's own perimeter counted: another VM's on the subnet still blocks (RB1)", UNB,
+     "                holds = self._perimeter_holds(cache, t0, ip, port)\n",
+     '                holds = self._perimeter_holds(cache, t0, ip, port) if perimeter else "no"\n'),
+    ("M1623", "a perimeter that can't be read counted as holding (RB1, A0)", UNB,
+     '                if holds == "holds":\n', '                if holds in ("holds", "unknown"):\n'),
+    ("M1624", "a merged entry's own perimeter pair not checked: gone in silence (RB1)", UNB,
+     '                if st in ("absent", "altered"):\n                    (missing if missing else held_missing)',
+     '                if False:\n                    (missing if missing else held_missing)'),
+    ("M1625", "rules gone while the IP stays blocked said « n'est plus bloquée » (RB1)", R,
+     '    if v.get("verified") is True:\n        where =', '    if False:\n        where ='),
+    ("M1626", "the NICs the perimeter still holds left out of the card (RB1)", UNB,
+     "                    held_by.append(short)\n", ""),
+    ("M1627", "a block put back that still doesn't hold said again at every pass (RB1)", R,
+     '    if outcome != "reapplied":\n', '    if outcome == "failed":\n'),
+    ("M1628", "our rule turned to the other direction frees its number: the rewrite collides (RB1)", NSG,
+     '            if own.get(_rule_name(r).lower()) != _enum_text(getattr(r, "direction", ""))} | set(taken)\n',
+     '            if _rule_name(r).lower() not in own} | set(taken)\n'),
+    ("M1629", "the unblock of a deleted VM leaves a rule without saying how to take it off (RB1)", UNB,
+     '                                "rien ne nomme plus)" + how.format(" si aucune VM vivante de ce nom ne bloque "\n'
+     '                                                                   f"{ip} (glorfindel status)"))\n',
+     '                                "rien ne nomme plus) : laissée")\n'),
+    ("M1630", "the unblock of a deleted VM, its entry lost, never looks for its perimeter block (RB1)", UNB,
+     '                elif lost and name.removesuffix("-out") == prefix', '                elif False and name.removesuffix("-out") == prefix'),
+    ("M1631", "another VM's recorded perimeter said as the deleted VM's (RB1)", UNB,
+     '        tied = self._perimeters_recorded(ip, lost) if lost else set()\n', "        tied = set()\n"),
+    ("M1632", "a perimeter block said for a deleted VM whose entry is kept (RB1)", UNB,
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id if lost else None)\n",
+     "        failed += self._unnamed_blocks(vm_name, ip, known, resource_id)\n"),
+    ("M1633", "a merged entry read as a VM block: its own perimeter never recognised, nor checked (RB1)", PER,
+     '        if entry.get("scoped") is not False or not entry.get("nsg")',
+     '        if True or not entry.get("nsg")'),
+    ("M1634", "a perimeter an allow lets the threat through counted as holding (RB1)", PER,
+     "                if found is not None and not self._threat_open(found):\n",
+     "                if found is not None:\n"),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1620, 1635)})
+# RB1, review (5.5): a perimeter block covers the primary NIC's subnet only — named, kept,
+# verified; a write that failed is never « reposé ». M1635–M1640.
+BLK = "glorfindel/providers/azure/blocks.py"
+MUTANTS += [
+    ("M1635", "a promotion takes the block off every NIC, the ones off the perimeter's subnet too (RB1, review)",
+     BLK, "                if off_ids is None or (pl.get(\"nic_id\") or \"\").rstrip(\"/\").lower() in off_ids:\n",
+     "                if False:\n"),
+    ("M1636", "a perimeter block never names the NICs it doesn't cover: `blocked` said (RB1, review)", BLK,
+     '        uncovered = [t["nic_short"] for t in off]\n', "        uncovered = []\n"),
+    ("M1641", "a NIC off the perimeter's subnet read as blocked from the state: its rules gone, `blocked` (RB1, review)",
+     BLK, "                check = self.verify_block_ip(ip, resource_id)\n", '                check = {"verified": True}\n'),
+    ("M1637", "a perimeter block alone verified on its pair only: a NIC off its subnet open, true said (RB1, review)",
+     UNB, "                if entry.get(\"scoped\") is False:     # the VM's NICs it doesn't cover (RB1, review)\n",
+     "                if False:\n"),
+    ("M1638", "a write that failed said « reposé » when the reading holds (RB1, review, A0)", R,
+     '        if after.get("verified") is True and not after.get("held_missing") and not errors:\n',
+     '        if after.get("verified") is True and not after.get("held_missing"):\n'),
+    ("M1639", "a merged entry's perimeter pair unread counted as nothing (RB1, review, A0)", UNB,
+     '                elif st == "unknown":            # never read as there (RB1, review)\n',
+     "                elif False:\n"),
+    ("M1640", "NICs unreadable read as all behind the perimeter: their blocks taken off, `blocked` (RB1, review)",
+     BLK, "            off, off_ids, unread = [], None, _first_line(exc)\n", '            off, off_ids, unread = [], set(), ""\n'),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1635, 1642)})
+# RB1, second review: a NIC a promotion left to the perimeter is no drift; a NIC the
+# perimeter never covered is no disappearance. M1642–M1644.
+MUTANTS += [
+    ("M1642", "a NIC a promotion left to the perimeter read as added since, its rules gone: a drift said, "
+              "the promotion undone (RB1, second review)", UNB,
+     "                    if not self._left_to_perimeter(cache, perimeter, targets.get(n), ip, port):\n",
+     "                    if True:\n"),
+    ("M1643", "a NIC left to the perimeter covered whether the perimeter holds or not (RB1, second review)", PER,
+     '        return governs and self._perimeter_holds(cache, t0, ip, port) == "holds"\n',
+     "        return governs\n"),
+    ("M1644", "a NIC the perimeter never covered said vanished, the perimeter written again (RB1, second review)",
+     R, '    if verification.get("uncovered_nics") and not verification.get("missing_rules"):\n',
+     "    if False:\n"),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1642, 1645)})
+# RB1, third review: the card « ne couvre pas » has its own mark. M1645–M1647.
+MUTANTS += [
+    ("M1645", "the uncovered card marked with the drift marker: acknowledged, the perimeter's later "
+              "disappearance neither put back nor said (RB1, third review)", R,
+     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=None)\n",
+     "            _update_block_entry(ref or vm, ip, uncovered_said=nics, drift_alerted_at=now)\n"),
+    ("M1646", "the uncovered card checked after the drift marker: an episode before it silences it, and the "
+              "next disappearance (RB1, third review)", R,
+     '        if b.get("uncovered_said") != nics or b.get("drift_alerted_at"):\n',
+     '        if b.get("uncovered_said") != nics:\n'),
+    ("M1647", "the uncovered card said once for ever, whatever the NICs it doesn't cover become (RB1, third review)",
+     R, '        if b.get("uncovered_said") != nics:\n            reason =',
+     '        if not b.get("uncovered_said"):\n            reason ='),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1645, 1648)})
+# RB1, fourth review: a drift card said again when it worsens, never when it doesn't. M1648–M1649.
+MUTANTS += [
+    ("M1648", "a drift worse than its card never said again: acknowledged, a perimeter deleted after it "
+              "opened the VM in silence (RB1, 4th review)", R,
+     "    if not isinstance(said, dict):\n        return False\n    return bool(",
+     "    return False\n    return bool("),
+    ("M1649", "a drift card said again at every pass, the same or better: one card per disappearance no more "
+              "(RB1, 4th review)", R,
+     '    return bool((said.get("blocked") and not now["blocked"])\n',
+     '    return bool(True or (said.get("blocked") and not now["blocked"])\n'),
+]
+TESTS.update({f"M{n}": _RB1 for n in range(1648, 1650)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

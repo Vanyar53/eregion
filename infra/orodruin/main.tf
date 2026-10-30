@@ -230,7 +230,10 @@ resource "azurerm_linux_virtual_machine" "host" {
   }
 
   # Docker seulement, au premier démarrage, sortie encore ouverte. L'image d'Annatar arrive
-  # ensuite par `make orodruin-push` (docker save | ssh), sans rouvrir la sortie.
+  # ensuite par `make orodruin-push` (docker save | ssh), sans rouvrir la sortie : l'image que la
+  # CI a publiée, tirée par son digest et vérifiée sur le poste (CI3) — GHCR n'est pas dans la
+  # sortie d'Orodruin : ses blobs viennent de pkg-containers.githubusercontent.com, un nom du domaine
+  # du contenu des utilisateurs de GitHub, qu'un NSG ne sait pas filtrer par nom.
   custom_data = base64encode(<<-EOF
     #!/bin/bash
     set -eu

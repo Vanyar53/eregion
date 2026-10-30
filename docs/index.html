@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eregion</title>
+<meta name="description" content="Eregion: open-source cloud detection and response for teams without a SOC, proven by attack and by failure.">
+<!-- The project's one page on GitHub Pages (DOC1, #365): static, no script, nothing loaded from
+     elsewhere (tests/unit/test_docs_home.py). The README stays the reference. -->
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #0d1117; --bg1: #161b22; --border: #30363d; --text: #e6edf3; --dim: #8b949e;
+    --blue: #58a6ff; --red: #f85149; --orange: #e3b341; --green: #3fb950;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #ffffff; --bg1: #f6f8fa; --border: #d0d7de; --text: #1f2328; --dim: #57606a;
+            --blue: #0969da; --red: #cf222e; --orange: #9a6700; --green: #1a7f37; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font);
+         font-size: 17px; line-height: 1.55; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 16px 56px; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { font-family: var(--mono); font-size: 30px; letter-spacing: 3px; color: var(--blue); margin: 0 0 6px; }
+  h2 { font-size: 21px; margin: 40px 0 10px; }
+  .lead { font-size: 19px; margin: 0; }
+  .agents { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 8px; }
+  .agents li { padding-left: 14px; border-left: 3px solid var(--border); }
+  .agents .blue { border-color: var(--blue); }
+  .agents .red { border-color: var(--red); }
+  .agents .fault { border-color: var(--orange); }
+  .rule { margin: 22px 0 0; padding: 12px 14px; background: var(--bg1); border: 1px solid var(--border);
+          border-radius: 6px; font-size: 15px; }
+  figure { margin: 18px 0 0; }
+  figure img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; }
+  figcaption { color: var(--dim); font-size: 14px; margin-top: 8px; }
+  nav.links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+  nav.links a { padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; text-decoration: none; }
+  a { color: var(--blue); }
+  code { font-family: var(--mono); font-size: 0.9em; }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--dim); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>EREGION</h1>
+  <p class="lead"><strong>Cloud detection &amp; response, for teams without a SOC</strong> — and the proof it
+  works: measured in shadow on your production, with attacks and failures replayed on a disposable copy.</p>
+  <ul class="agents">
+    <li class="blue"><strong>Glorfindel</strong> (blue), the product: it detects on your cloud logs, responds
+      with the minimum effective action, verifies it on the cloud API and learns from every incident.</li>
+    <li class="red"><strong>Annatar</strong> (red) launches real MITRE ATT&amp;CK techniques from public
+      libraries (Atomic Red Team) to prove the defense works.</li>
+    <li class="fault"><strong>Gothmog</strong> (faults) runs declared failures with a public chaos engine
+      (Azure Chaos Studio): noise Glorfindel must not act on, a recovery timed.</li>
+  </ul>
+  <p class="rule"><strong>Production rule</strong> — never a fault or a destructive action on a real workload.
+  Every enrolled target carries its zone (<code>bench</code>, <code>twin</code> or <code>production</code>),
+  and every injector goes through one guard: anything unknown is refused.</p>
+  <nav class="links" aria-label="The project">
+    <a href="https://github.com/Vanyar53/eregion">Repository</a>
+    <a href="https://github.com/Vanyar53/eregion#readme">README</a>
+    <a href="https://github.com/Vanyar53/eregion/blob/main/ROADMAP.md">Roadmap</a>
+    <a href="https://github.com/Vanyar53/eregion/blob/main/SECURITY.md">Security</a>
+    <a href="https://github.com/Vanyar53/eregion/blob/main/CHANGELOG.md">Changelog</a>
+  </nav>
+</header>
+
+<section aria-labelledby="console">
+  <h2 id="console">The console</h2>
+  <p>Observe-only by default: Glorfindel recommends, you decide, and you grant it autonomy per asset as
+  you build trust. The overview gives the five indicators the project is judged by, over 30 days.</p>
+  <figure>
+    <img src="images/console-overview.png" width="1440" height="400" loading="lazy"
+         alt="The Eregion console's overview in observe-only: the five indicators of the finality, measured over 30 days, above a line per agent">
+    <figcaption>The overview on the Eregion bench, in observe-only.</figcaption>
+  </figure>
+</section>
+
+<section aria-labelledby="dagorlad">
+  <h2 id="dagorlad">Dagorlad, the exercise board</h2>
+  <p>The red side on the left — Annatar's techniques, Gothmog's faults —, the blue side on the right —
+  Glorfindel and the enrolled targets. Draw a wire from a red card to a target: the server judges it as
+  Orodruin, the host of the injectors, will judge it (zone, enrollment, production rule, a live watch),
+  and says what to expect, or why it is refused. A request is written for Orodruin and carried there by a
+  command you run, where the name of each destructive target is typed. The console launches nothing, and
+  Glorfindel is never told.</p>
+  <figure>
+    <img src="images/dagorlad/loop.webp" width="1080" height="675" loading="lazy"
+         alt="Dagorlad: a wire drawn and its verdict, a refused one removed, a destructive one that asks for its target's name, then the request and its command">
+    <figcaption>A wire, its verdict, a refusal, the request and the command it gives — on sample data.</figcaption>
+  </figure>
+  <figure>
+    <img src="images/dagorlad/board.png" width="1440" height="1100" loading="lazy"
+         alt="Dagorlad's board on sample data: five wires drawn from the red cards to the enrolled targets, one refused by the production rule">
+    <figcaption>The board: five wires, one refused (<code>zone_forbids</code>), one that will ask for the
+    VM's name.</figcaption>
+  </figure>
+  <figure>
+    <img src="images/dagorlad/runs.png" width="1440" height="900" loading="lazy"
+         alt="Dagorlad's Runs view on sample data: the exercise windows and the coverage matrix, one technique regressed">
+    <figcaption>The Runs view: what ran, what Glorfindel made of it, and the last proof of each
+    technique.</figcaption>
+  </figure>
+  <!-- The whole tour, once its address is known (a GitHub attachment, user-attachments):
+  <figure>
+    <video src="https://github.com/user-attachments/assets/…" controls muted playsinline width="1440" height="1100"></video>
+    <figcaption>The whole tour, on sample data.</figcaption>
+  </figure>
+  -->
+  <p>The images come from fictitious sample data, never a real bench. How to use the board (French):
+  <a href="https://github.com/Vanyar53/eregion/blob/main/docs/dagorlad.md">docs/dagorlad.md</a>.</p>
+</section>
+
+<footer>
+  Eregion is open source, under the Apache 2.0 license. Azure today; a provider interface is planned for
+  AWS and GCP. Report a vulnerability as <a href="https://github.com/Vanyar53/eregion/blob/main/SECURITY.md">SECURITY.md</a> says.
+</footer>
+</main>
+</body>
+</html>

@@ -570,13 +570,17 @@ class IsolationMachine(RuleBasedStateMachine):
         c._network, c._compute = f.network, f.compute
         c._subscription_id = "s"                 # the subscription the clients act in
         c.recent_changes = lambda *a, **k: []
-        for name in ("unblock_ip", "sweep_vm_rules"):          # an unblock or a reset begins
-            c.__dict__[name] = self._lifting(getattr(c, name))
+        # An unblock or a reset begins: its VM's block is no longer known written whole.
+        for name, at in (("unblock_ip", 1), ("sweep_vm_rules", 0)):
+            c.__dict__[name] = self._lifting(getattr(c, name), at)
         self.connector = c
 
-    def _lifting(self, op):
+    def _lifting(self, op, at: int):
+        """The operation, its VM (the resource id at `at`) taken out of `reblocked` first —
+        that VM's only: another's unblock writes nothing in its entry (L1B, review)."""
         def run(*a, **k):
-            self.reblocked.clear()
+            rid = a[at] if len(a) > at else k.get("resource_id", "")
+            self.reblocked = {v for v in self.reblocked if key(v) != key(str(rid))}
             return op(*a, **k)
         return run
 

@@ -2527,6 +2527,11 @@ reste dite. Tests `test_glorfindel.py` (`…superseded_second_name…`, `…nic_
 carte, ses règles absentes, n'est jamais dit disparu (`…no_longer_governs_the_nic…`, M2047). L'exception
 des cartes tenues par notre quarantaine est retirée : seules les cartes contournées arrivent là, et une
 carte en quarantaine ne l'est jamais (rien à nous à comparer) — son mutant était équivalent.
+(3) **Le journal `reblocked` vidé pour toutes les VM** à chaque déblocage ou reset : le déblocage d'une
+autre VM rendait aux marques de web le pouvoir de tenir son blocage. Seule la VM de l'opération en sort
+maintenant (son identifiant, `unblock_ip` et `sweep_vm_rules`) : l'oracle refuse plus (A0). Le contrôle de
+l'oracle lui-même : `test_another_vms_unblock_never_lets_the_marks_hold_a_block_again` (les marques remises
+à la main, comme avant L1B ; rouge avec le journal vidé pour toutes).
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

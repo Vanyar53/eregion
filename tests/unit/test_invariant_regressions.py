@@ -3494,6 +3494,29 @@ def test_a_block_written_again_after_an_unblock_is_said_gone(monkeypatch, fault)
          ("reassert", "human_only", None))
 
 
+def test_another_vms_unblock_never_lets_the_marks_hold_a_block_again(monkeypatch):
+    """The oracle's own control (L1B, review): web's block written again whole after a
+    failed unblock; another VM unblocked since — its unblock says nothing of web's entry.
+    Were web's marks kept (the defect before L1B, written back here by hand), its rules
+    gone unsaid must still be refused. The journal emptied for every VM at any unblock let
+    the marks hold it again."""
+    from glorfindel import actions
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(web_nic={"own": "dedicated"}))
+        m.block(data=Script(WEB1, WEB1, None, 22))
+        m.unblock(data=Script(WEB1, WEB1, (3, "before-429")))
+        m.block(data=Script(WEB1, WEB1, None, 22))
+        m.unblock(data=Script(API, API, None))                     # another VM's
+        actions._update_block_entry(WEB1, ATTACKER, unblock_failed=["kept by the code"])
+        m.terraform_apply(data=Script(_S101_NSG.format("rg-app1", "nsg-web-nic")))
+        with pytest.raises(AssertionError, match="L1: the block on .*/web vanished"):
+            m.reassert(data=Script("human_only", None))
+    finally:
+        m.teardown()
+
+
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────
 
 _S322_NET_KEPT = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}

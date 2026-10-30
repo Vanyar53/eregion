@@ -7,9 +7,9 @@ The file names what the campaign plays (``steps``: a technique by its ATT&CK id,
 id, a recovery between them), on which bench VMs (``targets``), in which zone and autonomy
 mode, and what Glorfindel is expected to do at each step (``expect``). Annatar plans its
 techniques from it (the synthesizer of the catalog, E1); Gothmog plays its faults
-(``gothmog run <id>``); the operator plays the recoveries. Until the unified run of C1, the
-campaign is these runs together: the campaign report attaches a fault run on one of its targets
-around it (analysis/containment.py).
+(``gothmog run <id>``); the operator plays the recoveries. Both write the run format of C1
+(``eregion_core/run_report.py``), but a campaign does not play its faults itself yet: the
+campaign report attaches a fault run on one of its targets around it (analysis/containment.py).
 
 ``problems`` checks a declaration against the catalog before anything is planned: each
 technique implemented, on a public library's engine (never ``local-script``: no offensive logic

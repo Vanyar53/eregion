@@ -39,8 +39,8 @@ est coupé, comme mesuré le 30/07. Le retour de la panne se vérifie pourtant p
 panne passe donc avant la technique. La campagne d'Annatar n'a qu'une technique : son lanceur ne
 lève pas l'isolation entre deux scénarios depuis Orodruin, où `glorfindel reset` n'existe pas.
 
-**Comment la panne est rattachée à la campagne.** Tant que le run unifié de C1 n'existe pas, deux
-cas :
+**Comment la panne est rattachée à la campagne.** Le format de run est commun depuis C1, mais une
+campagne d'Annatar ne joue pas encore elle-même une panne. Deux cas :
 - un run de Gothmog sur une des VM de la campagne, qui la chevauche ou tombe dans l'heure qui
   l'entoure, est rattaché seul, et le rapport dit comment ;
 - sinon, on le nomme : `FAULT_RUNS=<run>`.

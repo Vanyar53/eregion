@@ -532,7 +532,7 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
     return compute(incidents, faults, notes)
 
 
-# How a fault run belongs to a campaign, until C1's unified run makes it one of its runs: named
+# How a fault run belongs to a campaign, until a campaign plays its faults itself: named
 # by the operator, or a fault on one of the campaign's VMs that overlaps the campaign or the hour
 # around it (a declared campaign plays its fault just before or after its techniques, BL1).
 NAMED = "nommée"

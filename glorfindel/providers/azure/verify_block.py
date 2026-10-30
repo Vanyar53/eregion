@@ -114,7 +114,7 @@ class VerifyBlockMixin:
                         # What is left of the pair, an allow before it (L1C, #369): gone AND
                         # bypassed, both said — the bypass was never read, never carded.
                         half = self._half_bypassed(cache, p, ip, ips_of[id(p)] or None, port)
-                        nic_bypass += half
+                        nic_bypass += [f for f in half if f not in nic_bypass]
                         nic_half += names if half else []
                         continue
                     if st == "unknown":
@@ -127,15 +127,17 @@ class VerifyBlockMixin:
                     if found is None:
                         nic_unknown.append(f'{p["nsg_rg"]}/{p["nsg_name"]}')
                     elif self._threat_open(found):
-                        nic_bypass += found
+                        nic_bypass += [f for f in found if f not in nic_bypass]
                     else:
                         exposure += found
                         break                       # this NIC is blocked
                 else:
                     if nic_bypass:
-                        bypass += nic_bypass
+                        bypass += [f for f in nic_bypass if f not in bypass]
                         if nic_half:
-                            _lost(t0, nic_half)
+                            # Everything gone on the NIC, not only the half pair's: another
+                            # placement wholly gone was dropped — the card said less (review).
+                            _lost(t0, nic_missing)
                     elif nic_unread or nic_unknown:
                         unread += nic_unread
                         unknown += [u for u in nic_unknown if u not in unknown]

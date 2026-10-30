@@ -6358,8 +6358,8 @@ MUTANTS += [
      '                        "open_nics": open_nics, **said, **({"shadowed_by": bypass} if bypass else {}),\n',
      '                        "open_nics": open_nics, **said,\n'),
     ("M2232", "a block's pair half gone and bypassed: the rule gone dropped, the drift unsaid (L1C)", VBL,
-     "                        if nic_half:\n                            _lost(t0, nic_half)\n",
-     "                        if False:\n                            _lost(t0, nic_half)\n"),
+     "                        if nic_half:\n",
+     "                        if False:\n"),
     ("M2233", "a block's half pair read bypassed by an allow that leaves the threat out: a false card (L1C)", VBL,
      "        return found if self._threat_open(found) else []\n",
      "        return found\n"),
@@ -6381,6 +6381,19 @@ TESTS.update({
     "M2232": f"{_L1C_BLK} {INVARIANTS}", "M2233": _L1C_BLK, "M2234": f"{_L1C_ISO} {INVARIANTS}",
     "M2235": ("tests/unit/test_glorfindel.py::test_a_turned_first_name_never_supersedes_the_second_gone "
               "tests/unit/test_glorfindel.py::test_a_superseding_pair_must_cut_the_nic_both_ways"),
+})
+# L1C, its review: everything gone on the NIC beside a half pair read bypassed; each allow once.
+MUTANTS += [
+    ("M2236", "a half pair read bypassed: only its rule said gone, another placement wholly gone dropped (L1C, review)",
+     VBL, "(review).\n                            _lost(t0, nic_missing)\n",
+     "(review).\n                            _lost(t0, nic_half)\n"),
+    ("M2237", "two half pairs behind one allow name it twice: the card's text repeats (L1C, review)", VER,
+     "        return [f for i, f in enumerate(found) if f not in found[:i]]     # once each (two names' halves)\n",
+     "        return found\n"),
+]
+TESTS.update({
+    "M2236": "tests/unit/test_glorfindel.py::test_a_half_bypassed_pair_keeps_another_placement_gone_on_the_nic",
+    "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

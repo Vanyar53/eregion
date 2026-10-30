@@ -2415,6 +2415,17 @@ def test_an_isolation_half_gone_and_bypassed_says_both(monkeypatch):
     assert out["uncovered_nics"] == ["nic-a"] and "shadowed_by" not in out
 
 
+def test_two_half_pairs_behind_one_allow_name_it_once(monkeypatch):
+    """L1C's review: the NIC's first name and its second (`-b-`), each half gone, both inbound
+    denies passed by the same allow — named twice, the card's text said it twice."""
+    from glorfindel.actions import AzureConnector
+    first, second = AzureConnector()._placement_rule_bases("glorfindel-iso", "vm", "nic-a", "nic-a")
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), _deny_pair(first, 101, ip="10.0.0.5")[0],
+                                  _deny_pair(second, 102, ip="10.0.0.5")[0]]})
+    assert out["uncovered_nics"] == ["nic-a"] and [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
+
+
 def test_an_unreadable_subnet_is_not_a_subnet_without_nsg(monkeypatch):
     """A 429 on the subnet read meant "no subnet NSG": a release without state swept
     nothing and said released while the isolation stayed on the subnet NSG (L24)."""
@@ -3629,6 +3640,28 @@ def test_a_bypass_on_one_nic_is_said_beside_rules_gone_on_another(monkeypatch):
     out = connector.verify_block_ip("192.31.196.7", _RID)
     assert out["missing_rules"] and out["open_nics"] == ["nic-a"]
     assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
+
+
+def test_a_half_bypassed_pair_keeps_another_placement_gone_on_the_nic(monkeypatch):
+    """L1C's review: nic-a's placement on its NSG half gone (its `-out`), the inbound deny
+    passed by an allow of all; its placement on the subnet's NSG wholly gone. Only the half
+    pair's rule was said gone — the card said less than `main`, `_worse` could miss a
+    worse one. Everything gone on the NIC is said; the allow, once."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    r1, r2 = "glorfindel-block-x-nic", "glorfindel-block-x-sub"
+    _save_block_state("vm", "192.31.196.7", _RID, nsg="rg/nsg-nic", nsg_scope="nic", rule=r1, threat_port=22,
+                      placements=[{"nic_id": "nic-a", "nsg_rg": "rg", "nsg_name": n, "rule": r, "ips": ["10.0.0.5"]}
+                                  for n, r in (("nsg-nic", r1), ("nsg-sub", r2), ("nsg-nic", r1))])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    _nic_a(monkeypatch, connector, nsg="nsg-nic", alt="nsg-sub")
+    net = MagicMock()
+    _listings(net, {"nsg-nic": [_nsg_rule("wide", 110, port="*"), _block_pair(r1, "192.31.196.7")[0]],
+                    "nsg-sub": []})
+    connector._network = net
+    out = connector.verify_block_ip("192.31.196.7", _RID)
+    assert set(out["missing_rules"]) == {f"{r1}-out", r2, f"{r2}-out"}, out
+    assert [s["rule"] for s in out["shadowed_by"]] == ["wide"], out
 
 
 # ── Sixième passe (L25) : S1, une config illisible ou changée ne fait plus perdre l'original ──

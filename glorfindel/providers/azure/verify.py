@@ -72,7 +72,7 @@ class VerifyMixin:
             else:
                 # Not found: missing for sure, or only unreadable (no claim either way).
                 (unreadable if unknown else uncovered).append(t0["nic_short"])
-                halves += half if not unknown else []
+                halves += [f for f in half if f not in halves] if not unknown else []
 
         if uncovered:
             return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered,
@@ -183,7 +183,7 @@ class VerifyMixin:
             if len(prio) == 1:
                 found += [{**f, "nsg": f'{t["nsg_rg"]}/{t["nsg_name"]}'} for f in _shadowing_rules(
                     rules, prio, inbound_src=None, inbound_dst=ips, outbound_src=ips, outbound_dst=None)]
-        return found
+        return [f for i, f in enumerate(found) if f not in found[:i]]     # once each (two names' halves)
 
     def _shadowed_deny(
         self, cache: dict, nsg_rg: str, nsg_name: str, rule_name: str, **scope,

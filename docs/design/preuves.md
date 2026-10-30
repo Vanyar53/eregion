@@ -431,6 +431,35 @@ isolée. Six mutants de plus, M618–M623, mesurés par leurs cas de `tests/unit
 | M622 | le groupe de quarantaine noté dans l'état ignoré une fois son tag perdu |
 | M623 | `verify_release` aveugle à un groupe nommé comme la quarantaine |
 
+**Un échec instable, c'était l'oracle** (AWS1, #334, 30/10). Vu une fois à la relecture de C1, passé à
+la relance. La séquence : notre blocage de `i-web1` (deny entrant et sortant au numéro 99, sous l'allow
+100 de l'ACL par défaut), l'entrée entrante retournée par quelqu'un, la remise en état (l'opérateur ôte
+ce qu'on a retourné, le déblocage ôte la sortante), puis le client pose sa propre entrée entrante au
+numéro 99, libre. I2 disait « customer entries changed » sur un monde tel que le client l'a écrit.
+Le faux garde, à `(ACL, sens, numéro)`, ce que Glorfindel a écrit tant que Glorfindel ne l'a pas ôté tel
+quel : l'opérateur l'ayant ôté hors de l'API, la trace restait. L'oracle écartait des entrées du client
+toute entrée à une clé de cette trace (ou d'une altération) : l'entrée du client au numéro repris
+manquait d'un côté, pas de l'autre. **Ni le faux ni l'adaptateur n'avaient tort** : un numéro libre se
+prend (AWS refuse un numéro pris, `NetworkAclEntryAlreadyExists`, et la suppression le libère : H5, à
+mesurer au banc, MC2 ; ici le numéro était libre, ce comportement ne décidait pas) ; le déblocage n'ôte
+qu'une entrée encore telle qu'il l'a écrite (`_is_our_deny`), celle du client n'est jamais touchée.
+**L'oracle écarte maintenant une entrée par son contenu** : celle de Glorfindel telle qu'il l'a écrite,
+ou ce que quelqu'un en a fait. Il n'écarte rien de plus qu'avant : la seule séquence qu'il laisse passer
+en plus est celle où l'entrée du client à cette clé est exactement celle du design (A0). Séquence
+figée, et son pendant — l'entrée du client à ce numéro, changée ou ôtée par un autre, se voit
+(`tests/unit/test_invariant_regressions_aws.py`). Deux mutants de l'oracle : M1950 (l'exclusion par la
+clé, le défaut), M1951 (la clé écartée des deux côtés, le correctif tentant qui affaiblit), attrapés à
+chaque tour.
+
+Pourquoi instable : il faut, dans l'ordre, un blocage, l'altération de l'une de ses entrées, une remise
+en état, puis une entrée du client sur la même ACL (une sur cinq), dans le même sens (une sur deux
+environ) et au même numéro (un sur sept). Sur la base, **1 run sur 24 à 500 séquences** (graines
+100–123, `--hypothesis-seed`, sans réduction : la graine 101, même empreinte, sur `acl-default-vpc-b`) ;
+après, 24 sur 24 verts sur les mêmes graines, et verts à 2 000 séquences (graines 2000 et 101).
+La base Hypothesis de la CI ne pouvait pas la rejouer : au push, le cache `.hypothesis-invariants` est
+seulement restauré ; seul le job de nuit l'enregistre, et il ne lance que `test_invariants.py` (Azure) —
+un échec de la machine AWS n'est gardé nulle part, une autre branche tire de nouvelles graines.
+
 **Le jeu de contrôle sur AWS.** Seize bugs plausibles de l'adaptateur, M630–M645, écrits et commités
 avant la machine AWS (dans le même commit que l'adaptateur) et jamais utilisés pour l'orienter, dans la
 discipline de C01–C16 (`--control`). Au budget du lundi, **AWS 9 à 10 sur 16, Azure 9 à 11 sur 16,

@@ -4408,6 +4408,17 @@ MUTANTS += [
 ]
 TESTS["M2103"] = "tests/unit/test_makefile_exercise.py"
 
+MUTANTS += [
+    # Never committed: the decision's message is not changed (CLAUDE.md, the three zones) — the
+    # mutant only shows the test would see a request slipped into it.
+    ("M2104", "a field of a Dagorlad request slipped into the model's message (DG-b review)", "glorfindel/agent.py",
+     '    lines.append("\\nAnalyse ce signal et prends une décision de réponse.")\n',
+     '    import glob as _g\n    import os as _o\n'
+     '    lines += [open(_p).read() for _p in _g.glob(_o.path.expanduser("~/.eregion/console/requests/*.json"))]\n'
+     '    lines.append("\\nAnalyse ce signal et prends une décision de réponse.")\n'),
+]
+TESTS["M2104"] = "tests/unit/test_dagorlad_blind.py"
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.

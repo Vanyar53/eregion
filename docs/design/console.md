@@ -893,7 +893,7 @@ Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
      ni bot ne monte `~/.eregion` ni ces sous-répertoires (`test_profiles.py`,
      `test_only_the_console_mounts_its_own_directory`) ;
    - un cycle de `decide` rejoué avec une demande présente envoie au modèle le même message, à l'octet
-     près.
+     près (`test_dagorlad_blind.py`, M2104).
 2. **Le résultat attendu n'est écrit nulle part.** Il est calculé à la demande de la page, sans
    appel au modèle. Il ne part ni dans la demande, ni dans la fenêtre, ni dans un fichier.
 3. **Glorfindel apprend l'exercice comme aujourd'hui**, par la fenêtre que l'injecteur ouvre en
@@ -1072,7 +1072,8 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
   - `test_exercise_e2e.py` : une demande de la console aux deux injecteurs, sur les faux.
 - **Reste pour le banc, avec Jonathan** : le premier exercice réel, et le blob `orodruin/` tiré par H0.
   Avant, `make glorfindel-host-cd-install` : le CD de H0 garde sa copie de `deploy.sh`.
-- **Pas encore fait** : le mutant « un champ de la demande dans le message du modèle » de la liste
-  ci-dessus. La demande n'est lue par aucun module de `glorfindel/`, et aucun service de Glorfindel ne
-  la monte : le test qui rejoue un cycle de `decide` avec une demande présente reste à écrire (DG-c).
+- **Glorfindel reste aveugle, prouvé** (relecture de DG-b) : `tests/unit/test_dagorlad_blind.py` rejoue
+  `_build_user_message()` avec une demande, ses noms tapés, son statut et le verdict d'Orodruin
+  présents (`~/.eregion/console/requests/`, `runs/orodruin/`). Le message est le même, à l'octet
+  près. Le mutant M2104 y glisse la demande, et le test l'attrape.
 

@@ -388,7 +388,8 @@ class Engine:
     def _record(self, fault, run_id, result, metrics, checks, error=None) -> RunOutcome:
         report = RunReport(scenario=fault["name"], run_id=run_id, mitre="", result=result,
                            metrics={**run_report.identity("fault", "gothmog", fault.get("id")),  # C1
-                                    "fault": fault.get("id"), **self._without, **metrics},
+                                    "fault": fault.get("id"),
+                                    **self._without, **metrics},
                            thresholds={}, checks=checks)
         path = report.save(self.runs_dir)
         report.render()

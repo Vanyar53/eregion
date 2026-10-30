@@ -4840,9 +4840,7 @@ _C1_RR = "tests/unit/test_run_report.py"
 MUTANTS += [
     ("M1800", "an Annatar run no longer says what it is: the run format guessed again (C1)",
      "annatar/runner/engine.py",
-     '        metrics = {**run_report.identity("technique", "annatar", scenario.mitre),\n'
-     "                   **watch_gate.without_metrics(self.without_glorfindel)}\n",
-     "        metrics = {**watch_gate.without_metrics(self.without_glorfindel)}\n"),
+     '        metrics.update(run_report.identity("technique", "annatar", scenario.mitre))\n', ""),
     ("M1801", "an Atomic run no longer says what it is (C1)", "annatar/runner/engine.py",
      '            **run_report.identity("technique", "annatar", scenario.mitre),   # C1\n', ""),
     ("M1802", "a fault run no longer says what it is (C1)", "gothmog/runner/engine.py",

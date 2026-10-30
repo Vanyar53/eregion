@@ -279,9 +279,9 @@ class Engine:
             resource_id=executor.resource_id,
         )
 
+        metrics = watch_gate.without_metrics(self.without_glorfindel)
         # C1: the run format shared with Gothmog — an attack, by Annatar, of this technique.
-        metrics = {**run_report.identity("technique", "annatar", scenario.mitre),
-                   **watch_gate.without_metrics(self.without_glorfindel)}
+        metrics.update(run_report.identity("technique", "annatar", scenario.mitre))
         checks = {}
 
         # Setup runs first — cleans residuals from previous attack before we check state. The

@@ -2,23 +2,75 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/Vanyar53/eregion/schemas/run_report.schema.json",
   "title": "Report of one run, as H0 accepts it from the exercise channel (H-1)",
-  "description": "annatar/runner/report.py writes it; the campaign report reads its run id and its attack time. Other fields are allowed. Its run_id must also be the run's own (checked by analysis/campaign_schema.py, which runs on H0). A run --without-glorfindel (V1) says so in without_glorfindel, and then carries no detection verdict.",
+  "description": "The report of one run, an attack or a fault: annatar/runner/report.py and gothmog/runner/report.py write it, from the class both share (eregion_core/run_report.py, C1). The campaign report reads its run id and its attack time; the console's coverage matrix reads it whole (eregion_console/coverage.py). Other fields are allowed. Its run_id must also be the run's own (checked by analysis/campaign_schema.py, which runs on H0). A run --without-glorfindel (V1) says so in without_glorfindel, and then carries no detection verdict. Since C1 a report says what it is (run_format, kind, injector, experiment_id; resource_id for an attack): all optional, a report written before reads as before.",
   "type": "object",
-  "required": ["run_id", "metrics"],
+  "required": [
+    "run_id",
+    "metrics"
+  ],
   "properties": {
-    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"},
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
     "metrics": {
       "type": "object",
       "properties": {
-        "attack_time": {"type": ["number", "null"]},
-        "without_glorfindel": {"type": "boolean"}
+        "attack_time": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "without_glorfindel": {
+          "type": "boolean"
+        },
+        "run_format": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "C1: the run format's version"
+        },
+        "kind": {
+          "enum": [
+            "technique",
+            "fault"
+          ],
+          "description": "C1: an attack or a fault"
+        },
+        "injector": {
+          "type": "string",
+          "description": "who ran it: annatar, gothmog"
+        },
+        "experiment_id": {
+          "type": "string",
+          "description": "C1: the technique's ATT&CK id, or the fault's id, as the catalog names it"
+        },
+        "resource_id": {
+          "type": "string",
+          "description": "C1: an attack's target VM, where the watch's decision is attached"
+        }
       },
       "if": {
-        "properties": {"without_glorfindel": {"const": true}},
-        "required": ["without_glorfindel"]
+        "properties": {
+          "without_glorfindel": {
+            "const": true
+          }
+        },
+        "required": [
+          "without_glorfindel"
+        ]
       },
       "then": {
-        "properties": {"detection": {"not": {"enum": ["detected", "missed"]}}}
+        "properties": {
+          "detection": {
+            "not": {
+              "enum": [
+                "detected",
+                "missed"
+              ]
+            }
+          }
+        }
       }
     }
   }

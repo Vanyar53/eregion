@@ -2064,8 +2064,7 @@ def _iso(value) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-@app.get("/api/catalog")
-async def catalog(kind: str = "") -> dict:
+def _catalog_entries(kind: str = "") -> dict:
     """The technique catalog, techniques and faults, every resource type (planned ones too);
     ``kind=technique`` (Annatar's) or ``kind=fault`` (Gothmog's) keeps one of them."""
     import yaml
@@ -2094,6 +2093,13 @@ async def catalog(kind: str = "") -> dict:
     return {"entries": entries}
 
 
+@app.get("/api/catalog")
+async def catalog(kind: str = "") -> dict:
+    """The technique catalog, techniques and faults, every resource type (planned ones too);
+    ``kind=technique`` (Annatar's) or ``kind=fault`` (Gothmog's) keeps one of them."""
+    return _catalog_entries(kind)
+
+
 def _slim_cycle(rec: dict) -> dict | None:
     sig = rec.get("signal")
     if not isinstance(sig, dict):
@@ -2108,6 +2114,9 @@ def _slim_cycle(rec: dict) -> dict | None:
         "confidence": rec.get("confidence"), "escalate": bool(rec.get("escalate")),
         "status": outcome.get("status", ""), "executed": outcome.get("executed"),
         "verified": outcome.get("verified"), "mode": rec.get("resolved_autonomy_mode", ""),
+        # C1: when the watch writes the verification's own time (BL1), the time to contain
+        # ends there (eregion_core/run_report.timeline); else at the record's.
+        "verified_at": outcome.get("verified_at"),
         "cycle_error": bool(rec.get("cycle_error")),
     }
 
@@ -2116,7 +2125,10 @@ def _watch_cycles(since_ts: float | None) -> list[dict]:
     """Glorfindel's cycles from every debug file written since ``since_ts`` — the watch's
     ``watch-*`` files, and a run's own on a host that has both."""
     out = []
-    for path in sorted(_RUNS.glob("*_debug.jsonl")):
+    paths = sorted(_RUNS.glob("*_debug.jsonl"))
+    for gone in set(list(_cycle_cache)) - set(paths):   # a file deleted is dropped from the cache (C1)
+        _cycle_cache.pop(gone, None)   # two requests (threads) can evict at once
+    for path in paths:
         try:
             st = path.stat()
         except OSError:
@@ -2363,19 +2375,80 @@ def _published_heartbeat() -> dict:
     return value
 
 
+# The matrix is computed again only when a file it reads changed — the run reports, the
+# watch's debug files, the catalog (paths, mtimes, sizes) — or after MATRIX_TTL_S (its ages
+# and states move with the clock). The overview asks for it every 30 s.
+MATRIX_TTL_S = 30.0
+_matrix_cache: dict = {"key": None, "at": 0.0, "value": None}
+
+
+def _matrix_fingerprint(reports: dict[str, Path]) -> tuple:
+    from eregion_core.experiment import CATALOG
+
+    def stat(p) -> tuple:
+        try:
+            st = Path(p).stat()
+            return (str(Path(p).absolute()), st.st_mtime_ns, st.st_size)
+        except OSError:
+            return (str(p), None, None)
+    return (tuple(sorted(stat(p) for p in reports.values())),
+            tuple(stat(p) for p in sorted(_RUNS.glob("*_debug.jsonl"))), stat(CATALOG))
+
+
+def coverage_matrix(now: float | None = None) -> dict:
+    """The coverage matrix (C1, eregion_console/coverage.py): every run report this host keeps,
+    in the run format both injectors share, every cycle of the watch, the catalog — over the
+    whole history, read only, nothing from the cloud. A copy: the caller may drop a half."""
+    import time as _time
+    from eregion_console import coverage
+    from eregion_core import run_report
+    t = _time.time() if now is None else now
+    reports = _run_reports()
+    key = _matrix_fingerprint(reports)
+    cached = _matrix_cache
+    if cached["value"] is not None and cached["key"] == key and 0 <= t - cached["at"] < MATRIX_TTL_S:
+        return dict(cached["value"])
+    cat = _catalog_entries()
+    m = coverage.matrix(run_report.read_reports(reports), _watch_cycles(None),
+                        cat.get("entries", []), t)
+    if cat.get("error"):
+        m["error"] = cat["error"]
+    _matrix_cache.update(key=key, at=t, value=m)
+    return dict(m)
+
+
+@app.get("/api/coverage")
+async def coverage_route(kind: str = "") -> dict:
+    """The coverage matrix (C1, #80): for each technique of the catalog and each declared fault,
+    its last run and its last proof, its state (proven, aging, stale, regressed, unproven,
+    never), its last outcomes, and the evolution of the coverage week by week. ``kind``
+    (``technique`` | ``fault``) keeps one half — Annatar's page or Gothmog's."""
+    if kind not in ("", "technique", "fault"):
+        return {"error": "kind: technique or fault"}
+    m = await asyncio.to_thread(coverage_matrix)
+    if kind == "technique":
+        m.pop("faults")
+    elif kind == "fault":
+        m.pop("techniques")
+    return m
+
+
 @app.get("/api/indicators")
 async def indicators() -> dict:
     """The five indicators of the finality, for the overview (UI-2, #206): computed from the run
     reports, the watch's cycles, the cards and the catalog over 30 days — never from the
-    exercise windows, emptied after 7 (eregion_console/indicators.py)."""
+    exercise windows, emptied after 7 (eregion_console/indicators.py). The coverage and the
+    last proof are fed by the coverage matrix too (C1): the regressed techniques, and the age
+    of the last proof over the whole history."""
     import time as _time
     from datetime import timedelta
+    from eregion_console import coverage
     from eregion_console import indicators as ind
     from glorfindel import escalations as esc_module
     from glorfindel.config import confidence_threshold
     now = datetime.now(timezone.utc)
     since = ind.since_window(now)
-    cat = (await catalog()).get("entries", [])
+    cat = _catalog_entries().get("entries", [])
 
     def gather() -> dict:
         runs = ind.read_runs(_run_reports(), since.timestamp())
@@ -2383,8 +2456,12 @@ async def indicators() -> dict:
         cards = [e for e in esc_module.all_escalations() if e.get("exercise_run")]
         r30 = esc_module.observation_report(since=since)
         r7 = esc_module.observation_report(since=now - timedelta(days=7))
-        return ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
-                           r7.get("disruptive") or {}, confidence_threshold(), _time.time())
+        t = _time.time()
+        # A run dated in the future is left out here as in the matrix (C1).
+        runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]
+        out = ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
+                          r7.get("disruptive") or {}, confidence_threshold(), t)
+        return coverage.feed(out, coverage_matrix(t))
     return await asyncio.to_thread(gather)
 
 

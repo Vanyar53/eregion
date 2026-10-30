@@ -2,13 +2,13 @@
 const INJECTOR = location.pathname.replace(/\/+$/, '') === '/gothmog' ? 'gothmog' : 'annatar';
 const ABOUT = {
   annatar: {
-    label: 'Annatar', kind: 'technique', catalog: 'TECHNIQUES', icon: '⚔',
+    label: 'Annatar', kind: 'technique', catalog: 'COVERAGE · TECHNIQUES', icon: '⚔',
     title: 'attacks run from Orodruin, armed, and what Glorfindel did',
     adds: 'Proof that Glorfindel detects real techniques: each attack, when Glorfindel saw it and what it decided, and the coverage of the catalogue.',
     how: 'README.md (Annatar) and infra/orodruin/README.md — then, on Orodruin: <code>annatar run &lt;scenario&gt;</code>, or a campaign (<code>make orodruin-campaign-plan</code>).',
   },
   gothmog: {
-    label: 'Gothmog', kind: 'fault', catalog: 'FAULTS', icon: '⚡',
+    label: 'Gothmog', kind: 'fault', catalog: 'COVERAGE · FAULTS', icon: '⚡',
     title: 'faults run from Orodruin, armed, and what Glorfindel did',
     adds: 'Proof that Glorfindel holds when the infrastructure fails: the steady state checked before and after each fault, the return verified, and nothing disruptive decided on benign noise.',
     how: 'gothmog/README.md and infra/orodruin/README.md — then, on Orodruin: <code>gothmog run vm-shutdown --yes</code>.',
@@ -27,9 +27,9 @@ if (INJECTOR !== 'annatar') document.getElementById('col-camp').remove();   // c
 const params = new URLSearchParams(location.search);
 const S = {
   since: '7d', campSince: '30d',
-  ex: null, camp: null, cat: null,
+  ex: null, camp: null, cat: null,   // cat: the coverage matrix (C1)
   errors: {},
-  open: new Set(),          // expanded rows: 'w:<run_id>' / 'c:<dir>'
+  open: new Set(),          // expanded rows: 'w:<run_id>' / 'c:<dir>' / 'm:<technique or fault>'
   campDetail: {},           // dir → {facts, report_md} | {error} | 'loading'
   delivered: {},            // run_id → {detections} | {error} | 'loading'
   showReport: new Set(),    // campaign dirs whose report.md is shown
@@ -274,35 +274,116 @@ function renderCampaignDetail(c) {
   </div>`;
 }
 
-// ── Catalogue: this injector's techniques or faults ───────────────────────────────────
-function lastExercised(id) {
-  const ws = ((S.ex && S.ex.exercises) || []).filter(w => w.experiment_id === id);
-  return ws.length ? ws[0] : null;   // newest first
+// ── The coverage matrix (C1): this injector's techniques or faults, each with its proof ──
+// From GET /api/coverage: every run report this host keeps (the run format both injectors
+// share), the watch's cycles and the catalogue — the whole history, not the 7 days of the
+// windows. A row says its state, its last outcomes (oldest first) and the age of its last
+// proof; open, its last run and its last proof; a technique that regressed is red.
+const STATE = {
+  regressed: { cls: 'bad', label: 'REGRESSED', title: 'Proven before, failed since: the last measured run lost what an earlier one had proven' },
+  stale: { cls: 'bad', label: 'stale', title: 'Last proof over 30 days old' },
+  aging: { cls: 'warn', label: 'aging', title: 'Last proof between 21 and 30 days old' },
+  proven: { cls: 'ok', label: 'proven', title: 'Last proof under 21 days old' },
+  unproven: { cls: 'warn', label: 'no proof', title: 'Run, never proven: no detection with a decision attached (a fault: no PASS with the watch running)' },
+  never: { cls: 'wait', label: 'never run', title: 'No run on this host' },
+};
+const OUTCOME = {
+  detected: { mark: '✓', cls: 'ok' }, pass: { mark: '✓', cls: 'ok' },
+  missed: { mark: '✗', cls: 'bad' }, fail: { mark: '✗', cls: 'bad' },
+  unknown: { mark: '?', cls: 'warn' }, not_measured: { mark: '·', cls: 'wait' }, refused: { mark: '·', cls: 'wait' },
+  not_started: { mark: '·', cls: 'wait' },
+};
+const SPARK = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+const num = x => (Number.isFinite(Number(x)) ? Number(x) : 0);   // a count the server did not send is 0, never NaN
+const WINDOW_KEPT_S = 7 * 86400;   // an exercise window is emptied 7 days after its end (H-1)
+// A run's link opens its window row (?run=), which exists 7 days only; past that, the run is
+// named, not linked to a row that is gone.
+function runLink(runId, at, text) {
+  const d = toDate(at);
+  if (d && (Date.now() - d) / 1000 > WINDOW_KEPT_S) return `<span title="${esc(runId)} — its window is gone after 7 days (runs/${esc(runId)}.json stays)">${esc(text)}</span>`;
+  return `<a href="?run=${encodeURIComponent(runId)}" title="${esc(runId)}">${esc(text)}</a>`;
 }
+const matrixRows = () => (S.cat && (ABOUT.kind === 'fault' ? S.cat.faults : S.cat.techniques)) || [];
+
+function historyStrip(r) {
+  return (r.history || []).map(h => {
+    const o = OUTCOME[h.outcome] || OUTCOME.unknown;
+    return `<span class="r-${o.cls}" title="${esc(h.run_id)} · ${esc(hms(h.at))} · ${esc(h.outcome)}">${o.mark}</span>`;
+  }).join('');
+}
+
+function evolutionLine() {
+  const pts = S.cat.evolution || [];
+  if (!pts.length) return '';
+  const s = (S.cat.summary || {})[ABOUT.kind === 'fault' ? 'faults' : 'techniques'] || {};
+  const of = ABOUT.kind === 'fault' ? Math.max(1, ...pts.map(p => num(p.faults_pass))) : Math.max(1, num(s.implemented));
+  const bars = pts.map(p => {
+    const v = ABOUT.kind === 'fault' ? num(p.faults_pass) : num(p.implemented_detected);
+    const lost = (p.regressed || []).length;
+    const what = ABOUT.kind === 'fault' ? `${v} fault run(s) PASS` : `${v} / ${Number(s.implemented)} implemented detected · ${Number(p.catalog_detected)} of the catalogue`;
+    return `<span class="r-${lost ? 'bad' : 'ok'}" title="${esc(hms(p.at))}: ${what} in the ${Number(S.cat.window_days)} days before${lost ? ' · regressed: ' + esc(p.regressed.join(', ')) : ''}">${SPARK[Math.min(7, Math.round(v / of * 7))]}</span>`;
+  }).join('');
+  const lastPt = pts[pts.length - 1];
+  return `<div class="evo"><span class="k">${Number(pts.length)} weeks</span> <span class="bars">${bars}</span>
+    <span>${ABOUT.kind === 'fault' ? `${Number(lastPt.faults_pass)} PASS in ${Number(S.cat.window_days)} d` : `${Number(lastPt.implemented_detected)} / ${Number(s.implemented)} detected in ${Number(S.cat.window_days)} d`}</span></div>`;
+}
+
+function runText(v) {
+  if (!v) return '<span style="color:var(--dim)">—</span>';
+  const o = OUTCOME[v.outcome] || OUTCOME.unknown;
+  const bits = [`<span class="r-${o.cls}">${esc(v.outcome.replace('_', ' '))}</span>`];
+  if (v.detect_s != null) bits.push(`+${dur(Number(v.detect_s))}`);
+  const d = v.decision;
+  if (d && d.action) bits.push(`→ ${esc(d.action)} ${esc(pct(d.confidence))}${d.executed === true ? (d.verified === true ? ' · executed ✓' : ' · executed, not verified') : d.escalated ? ' · held' : ''}`);
+  else if (v.outcome === 'detected') bits.push('<span style="color:var(--dim)">no decision attached</span>');
+  if (v.contain_s != null) bits.push(`contained +${dur(Number(v.contain_s))}`);
+  return `${runLink(v.run_id, v.at, hms(v.at))}${v.campaign ? ` <span style="color:var(--dim)">campaign ${esc(v.campaign)}</span>` : ''} ${bits.join(' ')}`;
+}
+
+function matrixDetail(r) {
+  const reg = r.regression;
+  return `<div class="mdetail">
+    ${reg ? `<div class="r-bad">regressed: held by ${runLink(reg.held_by, reg.held_at, reg.held_by)} (${esc(hms(reg.held_at))}), lost by ${runLink(reg.lost_by, reg.lost_at, reg.lost_by)} (${esc(hms(reg.lost_at))})</div>` : ''}
+    <div><span class="k">last run</span> ${runText(r.last_run)}</div>
+    <div><span class="k">last proof</span> ${r.last_proof ? `${runText(r.last_proof)} · ${dur(Number(r.last_proof.age_s))} ago` : '<span style="color:var(--dim)">none</span>'}</div>
+    <div><span class="k">runs</span> ${Number(r.runs)}${r.in_catalog ? '' : ' · <span class="r-warn">outside the catalogue</span>'}</div>
+  </div>`;
+}
+
 function renderCatalog() {
   const list = $('cat-list');
   if (S.errors.cat) { list.innerHTML = `<div class="err">${esc(S.errors.cat)}</div>`; return; }
   if (!S.cat) return;
-  if (S.cat.error) { list.innerHTML = `<div class="err">${esc(S.cat.error)}</div>`; return; }
-  const entries = S.cat.entries || [];
-  const impl = entries.filter(e => e.status === 'implemented');
-  const exercised = impl.filter(e => lastExercised(e.id)).length;
-  $('cat-count').textContent = `${impl.length} implemented · ${exercised} exercised in ${S.since === '24h' ? '24 h' : '7 days'}`;
+  // The catalogue unreadable: said above the rows the runs still give, never hidden by them.
+  const banner = S.cat.error ? `<div class="err">${esc(S.cat.error)}</div>` : '';
+  // A run dated in the future is in no row (C1): said, so that it is not lost either.
+  const future = (S.cat.future || []).filter(f => f.kind === ABOUT.kind);
+  const ahead = future.length ? `<div class="evo r-warn" title="${esc(future.map(f => f.run_id + ' · ' + f.at).join('\n'))}">${Number(future.length)} run(s) dated in the future — left out of the matrix</div>` : '';
+  const rows = matrixRows();
+  const s = (S.cat.summary || {})[ABOUT.kind === 'fault' ? 'faults' : 'techniques'] || {};
+  const lost = s.regressed || [];
+  $('cat-count').innerHTML = `${Number(s.implemented)} implemented · <span class="r-ok">${Number(s.proven) + Number(s.aging)} proven</span>${Number(s.stale) ? ` · <span class="r-bad">${Number(s.stale)} stale</span>` : ''}${lost.length ? ` · <span class="r-bad">${Number(lost.length)} regressed</span>` : ''}`;
   const groups = {};
-  for (const e of entries) (groups[e.resource_type] = groups[e.resource_type] || []).push(e);
-  list.innerHTML = Object.entries(groups).map(([rt, es]) => {
-    es.sort((a, b) => (a.status === 'implemented' ? 0 : 1) - (b.status === 'implemented' ? 0 : 1) || String(a.id).localeCompare(String(b.id)));
-    return `<div class="cat-group">${esc(rt.toUpperCase())}</div>` + es.map(e => {
-      const w = lastExercised(e.id);
-      let last = '<span style="color:var(--dim)">—</span>';
-      if (w) { const r = response(w); last = `<a class="r-${r.cls}" href="?run=${encodeURIComponent(w.run_id)}" title="${esc(r.text)}">${ago(w.start)} ago</a>`; }
-      return `<div class="cat ${e.status === 'implemented' ? '' : 'planned'}" title="${esc(e.name)} — ${esc(e.engine)} · ${esc(e.log_source || '')}${e.expected_latency_s ? ' · ~' + esc(e.expected_latency_s) + 's' : ''}">
-        <span style="color:${e.kind === 'fault' ? 'var(--orange)' : 'var(--purple)'}">${e.kind === 'fault' ? '⚡' : '⚔'}</span>
-        <span class="id">${esc(e.id)}</span>
-        <span class="nm">${esc(e.name)} <small>${esc(e.tactic || e.engine)}${e.destructive ? ' · <span style="color:var(--red)">destructive</span>' : ''}${e.status !== 'implemented' ? ' · ' + esc(e.status) : ''}</small></span>
-        <span class="last">${last}</span></div>`;
+  for (const r of rows) {
+    const g = r.in_catalog ? String(r.resource_type || '').toUpperCase() : 'OUTSIDE THE CATALOGUE';
+    (groups[g] = groups[g] || []).push(r);
+  }
+  const rank = r => (r.state === 'regressed' ? 0 : r.status === 'implemented' || r.runs ? 1 : 2);
+  list.innerHTML = banner + ahead + evolutionLine() + Object.entries(groups).map(([g, rs]) => {
+    rs.sort((a, b) => rank(a) - rank(b) || String(a.id).localeCompare(String(b.id)));
+    return `<div class="cat-group">${esc(g)}</div>` + rs.map(r => {
+      const st = STATE[r.state] || STATE.never, key = 'm:' + r.id, isOpen = S.open.has(key);
+      const age = r.last_proof ? `${dur(Number(r.last_proof.age_s))}` : '—';
+      return `<div class="cat st-${esc(r.state)} ${r.status === 'implemented' || r.runs ? '' : 'planned'}" id="${rowId(key)}" data-toggle="${esc(key)}" title="${esc(r.name)} — ${esc(r.engine || '')}${r.destructive ? ' · destructive' : ''} · ${esc(st.title)}">
+        <span style="color:${r.kind === 'fault' ? 'var(--orange)' : 'var(--purple)'}">${r.kind === 'fault' ? '⚡' : '⚔'}</span>
+        <span class="id">${esc(r.id)}</span>
+        <span class="nm">${esc(r.name)} <small>${esc(r.tactic || r.engine || '')}${r.destructive ? ' · <span style="color:var(--red)">destructive</span>' : ''}${r.status && r.status !== 'implemented' ? ' · ' + esc(r.status) : ''}</small></span>
+        <span class="hist">${historyStrip(r)}</span>
+        <span class="last r-${st.cls}" title="${esc(st.title)}">${r.state === 'regressed' || r.state === 'never' || r.state === 'unproven' ? esc(st.label) : esc(age)}</span></div>
+        ${isOpen ? matrixDetail(r) : ''}`;
     }).join('');
   }).join('');
+  scrollToFocus();
 }
 
 // ── Not set up here (a greyed tab): what this injector would add ──────────────────────
@@ -345,8 +426,7 @@ async function load(name, url, render) {
   return true;
 }
 async function refreshFast() {
-  const changed = await load('ex', `/api/exercises?since=${S.since}&injector=${INJECTOR}`, renderExercises);
-  if (changed) renderCatalog();   // "last exercised" follows the windows
+  await load('ex', `/api/exercises?since=${S.since}&injector=${INJECTOR}`, renderExercises);
 }
 async function refreshSlow() {
   if (INJECTOR !== 'annatar') return;
@@ -354,7 +434,7 @@ async function refreshSlow() {
   const c = S.focus && S.focus.startsWith('c:') ? S.focus.slice(2) : null;
   if (c && !S.campDetail[c]) loadCampaignDetail(c);
 }
-async function refreshCatalog() { await load('cat', `/api/catalog?kind=${ABOUT.kind}`, renderCatalog); }
+async function refreshCatalog() { await load('cat', `/api/coverage?kind=${ABOUT.kind}`, renderCatalog); }
 
 async function loadCampaignDetail(dir) {
   S.campDetail[dir] = 'loading'; renderCampaigns();
@@ -379,7 +459,8 @@ document.addEventListener('click', ev => {
     if (key.startsWith('c:')) {
       const dir = key.slice(2);
       if (S.open.has(key) && !S.campDetail[dir]) loadCampaignDetail(dir); else renderCampaigns();
-    } else renderExercises();
+    } else if (key.startsWith('m:')) renderCatalog();   // a row of the coverage matrix
+    else renderExercises();
   } else if (t.dataset.delivered) {
     loadDelivered(t.dataset.delivered);
   } else if (t.dataset.report) {
@@ -405,7 +486,7 @@ function start() {
   refreshCatalog(); refreshFast(); refreshSlow();
   setInterval(refreshFast, 10000);
   setInterval(refreshSlow, 30000);
-  setInterval(refreshCatalog, 300000);
+  setInterval(refreshCatalog, 60000);   // the matrix follows the runs as they arrive
   // Running timers and grace countdowns move without new data.
   setInterval(() => { if (S.ex && (S.ex.exercises || []).some(w => w.state === 'open' || w.state === 'grace')) renderExercises(); }, 5000);
 }

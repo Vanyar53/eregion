@@ -190,3 +190,18 @@ def test_the_route_reads_this_host(runs):
     assert body["coverage"]["implemented"] >= 1 and body["alone"]["shadow"] == 1
     route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/indicators")
     assert route.methods == {"GET"}
+
+
+def test_the_time_to_contain_has_one_definition(runs):
+    """M1884 (C1): the overview's median goes through run_report.timeline, as the matrix does —
+    the verification's own time when the watch writes it (``outcome.verified_at``)."""
+    a = NOW - timedelta(hours=5)
+    _report(runs, "r1", "T1110.001", a, latency=80.0)
+    _cycle(runs, a + timedelta(seconds=80), "T1110.001", "isolate_vm", 0.9, decided_after=40,
+           executed=True, verified=True)
+    path = runs / "watch-1_debug.jsonl"
+    rec = json.loads(path.read_text())
+    rec["outcome"]["verified_at"] = (a + timedelta(seconds=100)).isoformat()
+    path.write_text(json.dumps(rec) + "\n")
+    out = _compute(runs)
+    assert out["alone"]["contained"] == 1 and out["contain"]["contain_s"] == 100.0

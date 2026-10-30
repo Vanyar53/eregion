@@ -343,7 +343,32 @@ Une même boucle pour une technique et pour une panne.
 | Injecter | `annatar/executors/` ; `gothmog/engines/chaos_studio.py` | Stratus `detonate`, test Atomic, capacité Caldera | expérience ou objet de panne |
 | Observer | `annatar/collectors/`, signaux (`attack_started` ; `fault_started` dans `runs/gothmog/`, hors de ce que la watch lit) | — | sondes pendant l'expérience |
 | Revenir | `annatar clean`, `glorfindel release` ; retour d'une panne vérifié par sonde, repli `start_vm` | Stratus `revert`, `cleanup` | Chaos Toolkit `rollbacks` |
-| Verdict | `annatar/runner/report.py`, `gothmog report`, la console (Annatar, Gothmog) | — | — |
+| Verdict | le run au format commun (`eregion_core/run_report.py`, C1), `annatar report`, `gothmog report`, la console (Annatar, Gothmog) et sa matrice de couverture | — | — |
+
+**Le run, unifié (C1, #80, 30/10).** Une attaque et une panne écrivent le même rapport,
+`runs/<run_id>.json` : les sept clés de toujours (`scenario`, `run_id`, `mitre`, `result`,
+`metrics`, `thresholds`, `checks`), une seule classe dans le cœur partagé
+(`eregion_core/run_report.RunReport` ; Annatar et Gothmog n'en gardent que l'affichage). Le
+rapport dit ce qu'il est, dans `metrics` : `run_format` (1), `kind` (`technique` ou `fault`),
+`injector`, `experiment_id` (l'identifiant ATT&CK ou celui de la panne, comme le catalogue et
+les fenêtres le nomment), et pour une attaque `resource_id` (la VM visée : la décision de la
+watch n'est rattachée que sur elle). Ajout compatible : un rapport d'avant se lit comme avant, le schéma
+(`schemas/run_report.schema.json`) admet les autres champs, et le contrat des signaux
+(`eregion_core/signals.py`) ne change pas. Un seul lecteur, `read_run`, donne la vue que la
+console partage (indicateurs, matrice) : la date (le T0 de l'attaque, le début de la panne), ce
+que le run a mesuré lui-même (détection, latence) ; `timeline` y joint l'enregistrement de la
+watch qui a décidé, et donne les temps d'un incident : attaque, détection, décision, action
+vérifiée (`outcome.verified_at` quand la watch l'écrit, sinon l'heure de l'enregistrement) —
+ce sur quoi BL1 mesure le temps pour contenir. Le temps pour contenir de l'accueil et celui de
+la matrice passent tous deux par `timeline`, seul endroit à étendre ; elle ne voit qu'un
+enregistrement : un incident contenu à un cycle suivant (une action approuvée ensuite, une
+isolation au cycle d'après) n'y a pas de `contain_s` (BL1).
+
+**La matrice de couverture** (`eregion_console/coverage.py`) en tire, pour chaque technique du
+catalogue et chaque panne déclarée, la dernière preuve, son âge et l'état de la ligne
+(`regressed`, `proven`, `aging`, `stale`, `unproven`, `never`), et l'évolution semaine par
+semaine ; elle nourrit la couverture et l'âge de la dernière preuve (`docs/glorfindel.md`,
+« Matrice de couverture »). Tout est lu dans les fichiers de l'hôte : aucun appel au cloud.
 
 ### L'arborescence visée
 
@@ -351,7 +376,7 @@ Une même boucle pour une technique et pour une panne.
 glorfindel/              le produit (existe)
 annatar/                 attaque (existe) ; executors/ devient l'interface d'injecteur (R1)
 gothmog/                 pannes (G0) : moteur Chaos Studio, sondes, exécuteur, signaux, rapport
-eregion_core/            inscription et périmètre (O0) ; validation des schémas d'expérience et du catalogue (E1) ; existent
+eregion_core/            inscription et périmètre (O0) ; validation des schémas d'expérience et du catalogue (E1) ; le run au format commun (C1) ; existent
 schemas/                 scenario.schema.json (existe) + experiment.schema.json + technique_catalog.schema.json (E1, existent)
 technique_catalog.yaml   techniques (existe) + pannes (E1)
 infra/terraform/         Celebrimbor (existe) ; pose eregion-target (O0), inscrit les cibles Chaos Studio (G0, chaos.tf)

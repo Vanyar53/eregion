@@ -1061,6 +1061,67 @@ markdown-it).
 | M877 | une ligne ne finit que sur `\n` | un `\r` du modèle ouvre un item de liste à côté des vraies propositions |
 | M878 | la raison d'une proposition inconnue cite le texte du modèle | le modèle écrit dans la colonne du code |
 
+### Le run unifié, la matrice de couverture, la non-régression (C1)
+
+Un run d'attaque et un run de panne écrivent le même rapport (`eregion_core/run_report.py`), qui
+dit ce qu'il est (`metrics.run_format`, `kind`, `injector`, `experiment_id`) ; la matrice
+(`eregion_console/coverage.py`) en tire, pour chaque technique du catalogue et chaque panne, la
+dernière preuve, son âge, l'évolution et la non-régression. Les tests rejouent des runs factices
+(rapports et enregistrements de la watch dans un `runs/` temporaire) : aucun appel au cloud ni au
+modèle. Vingt-six mutants, mesurés par `tests/unit/test_coverage.py`, `tests/unit/test_run_report.py`
+et les tests des injecteurs (`-k unified`), tous attrapés (30/10) ; M1803 a survécu au premier
+passage (le cas de test le donnait par son injecteur), attrapé depuis par une panne d'un autre
+injecteur.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M1800 | un run d'Annatar (script) ne dit plus ce qu'il est | le format deviné de nouveau |
+| M1801 | un run Atomic ne dit plus ce qu'il est | idem |
+| M1802 | un run de panne ne dit plus ce qu'il est | idem, côté Gothmog |
+| M1803 | le `kind` du rapport ignoré | une panne d'un autre moteur prise pour une attaque |
+| M1804 | une isolation exécutée mais non vérifiée comptée contenue | un temps pour contenir sans preuve |
+| M1805 | la ligne perd son temps pour contenir | l'incident contenu affiché sans son temps |
+| M1806 | une détection sans décision rattachée vaut preuve | « prouvé » sans la réponse |
+| M1807 | pas d'« aging » entre 21 et 30 jours | l'alerte arrive sans le jaune d'avant |
+| M1808 | l'indicateur garde sa preuve sur 30 jours | une preuve de 40 jours dite « none » |
+| M1809 | la non-régression ne se déclenche jamais | une technique perdue reste « proven » |
+| M1810 | une détection inconnue prise pour un raté | un run qui n'a rien mesuré fait régresser |
+| M1811 | tout raté de l'histoire fait régresser | une technique détectée de nouveau reste rouge |
+| M1812 | jamais détectée dite régressée | une régression sans rien de perdu |
+| M1813 | une panne PASS `--without-glorfindel` vaut preuve | une preuve de Glorfindel sans Glorfindel |
+| M1814 | une panne refusée prise pour un échec | un refus du garde-fou fait régresser |
+| M1815 | l'évolution compte tout l'avant, pas ses 30 jours | la couverture ne baisse jamais |
+| M1816 | les indicateurs ne sont plus nourris par la matrice | ni régression dite, ni preuve au-delà de 30 jours |
+| M1817 | `eregion coverage --check` n'échoue jamais | la non-régression muette |
+| M1818 | une technique prévue jamais jouée comptée en manque | un trou qui n'en est pas un |
+| M1819 | un run hors du catalogue disparaît | une technique jouée cachée |
+| M1820 | les runs d'une campagne perdent leur campagne | d'où vient la preuve, perdu |
+| M1821 | une date qu'aucun calendrier ne tient prise pour une date | un rapport forgé casse la page |
+| M1822 | les pages d'Annatar et de Gothmog lisent le catalogue, pas la matrice | la matrice absente de la console |
+| M1823 | le temps de la vérification retiré du cycle | le temps pour contenir s'arrête à l'enregistrement (BL1) |
+| M1824 | le temps pour contenir s'arrête à l'enregistrement | idem, dans le calcul |
+| M1825 | `/api/coverage` prend n'importe quel `kind` | un paramètre non vérifié |
+
+Après la relecture (30/10), quatorze de plus, tous attrapés ; M560 (UI-2) est reciblé sur la
+recherche indexée (bissection) qui remplace la lecture de tous les cycles.
+
+| Mutant | Défaut réinjecté | Effet |
+|---|---|---|
+| M1826 | la décision d'une autre VM rattachée au run | une preuve tirée d'une autre machine |
+| M1827 | entre plusieurs enregistrements, le plus ancien | la décision d'une détection voisine |
+| M1828 | un run rangé sous une technique prend la décision d'une autre | une preuve croisée |
+| M1829 | un run daté dans le futur gardé | un `missed` de 2076 fait régresser pour toujours |
+| M1880 | une panne au démarrage échoué prise pour un échec | une régression sans rien d'injecté |
+| M1881 | un rapport supprimé gardé en cache | le cache grossit sans fin |
+| M1882 | un fichier de la watch supprimé gardé en cache | idem |
+| M1883 | la matrice en cache servie après un nouveau rapport | une régression dite 30 s trop tard, ou jamais |
+| M1884 | le temps pour contenir de l'accueil mesuré à part de `timeline` | deux définitions |
+| M1885 | les indicateurs comptent un run daté dans le futur | une couverture qui n'existe pas |
+| M1886 | `eregion coverage` imprime les caractères de contrôle d'un rapport | un rapport forgé pilote le terminal |
+| M1887 | un run d'Annatar ne nomme plus sa VM | la décision de n'importe quelle VM |
+| M1888 | deux runs de la même seconde dans l'ordre de lecture | l'état dépend du système de fichiers |
+| M1889 | le démarrage échoué d'une panne non lu dans ses `checks` | idem M1880, côté lecteur |
+
 ## Ce que les invariants ont trouvé
 
 Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquence figée.

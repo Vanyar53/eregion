@@ -2011,6 +2011,19 @@ comme elles le disent — en plus des règles retournées que retiennent nos ref
 retournées qui visent une autre carte (`_turned_aimed_elsewhere`, la convention et le journal du
 test, jamais les marques du code) — jusqu'à ce qu'il n'en reste aucune : remise, une allow redevient un refus des nôtres sur l'adresse d'une autre carte, qui peut à son tour retenir une autre règle retournée (graine 101 à 500 sur le code d'I4B, le trou de l'opérateur et non du code, figée : `test_a_turned_rule_put_back_may_hold_back_another_in_its_turn`). Aucune règle de la machine retirée ni restreinte.
 
+**Limites de l'oracle, relevées par la relecture d'I4B** (pour un lot de suite, non réglées ici) :
+la machine ne vérifie pas que ce que le déblocage garde est **dit** — seules les séquences figées le
+voient (`unblock_partial`, la règle nommée) ; et l'exemption « périmètre levé » (`_perimeter_lifted_for`)
+exempte toute ouverture des flux de l'attaquant vers la VM dans l'opération, alors qu'elle pourrait
+n'exempter que les flux que les règles de périmètre retirées fermaient.
+
+**Après la relecture.** La garde de la recherche sur tous les NSG a sa séquence
+(`test_the_search_on_every_nsg_keeps_a_turned_rule_aimed_at_the_vm_that_took_the_address`, rouge sur
+`main`) et son mutant M1906 ; la séquence de la CI de la PR #342, rejouée tirage par tirage, est figée
+(`test_the_sequence_of_pr_342_reasserts_without_opening_the_vm_at_the_old_address` : rouge sur `main`,
+« I5: the reassertion opened flows of …/rg-app2/…/api » ; la seule qui attrape M1898 hors des siennes) ;
+l'aperçu du reset demande la garde (`test_the_reset_preview_says_what_it_keeps`).
+
 **Mesures d'I4B.** `pytest` complet : 4 143 réussis, 7 sautés, 1 `xfail` (L2, du lot L2Q) ; `ruff`
 propre. Invariants : 500 séquences sur les graines 1, 42, 101, 322, 8675 et 31337, puis 2 000 sur 42,
 322 et 8675, verts (101 à 500 tombait sur le trou de l'opérateur avant sa reprise). Mutants

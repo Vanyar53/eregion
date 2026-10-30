@@ -4772,3 +4772,37 @@ def test_the_reassertion_says_unblocked_where_our_perimeter_block_still_cuts(mon
     too: not I4E's family, routed to a follow-up lot (#366). Strict: once fixed, this fails, and the
     mark goes."""
     _run(monkeypatch, _I3_SEED1999_NET, *_I3_SEED1999_STEPS)
+
+
+_I3_NO_NIC_NET = {
+    "subnet_nsg": [_tpl("allow-ssh", 150), _tpl("deny-lateral-in", 1300)], "edge_nsg": None,
+    "tier_rules": [_tpl("allow-ssh", 1000), _tpl("allow-https", 1100), _tpl("deny-lateral-in", 130)],
+    "nics": {"web-nic": {"own": "dedicated", "policy": True,
+                         "rules": [_tpl("allow-lateral-out", 100), _tpl("deny-lateral-in", 1300)]},
+             "db-nic-0": {"own": "dedicated", "policy": True, "rules": []},
+             "db-nic-1": {"own": "dedicated", "policy": False, "rules": [_tpl("allow-ssh", 100)]},
+             "api-nic": {"own": None, "policy": False,
+                         "rules": [_tpl("allow-ssh", 150), _tpl("allow-lateral-out", 100)]}},
+    "windows": "api", "config": {"quarantine": False, "readable": True, "forensic": ["10.9.0.0/16"], "rg": "rg-sec"},
+    "legacy": ("web-nic", True), "data_subnet": None}
+
+
+# The harness's dry run on `main` d380df5 (60 sequences, a random seed; I4D), shrunk to four steps: the
+# same failure as seed 1999, on the branch where the card names no NIC — a second case of #366.
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#366: I3, the reassertion says an IP no longer blocked while our perimeter block cuts it off")
+def test_the_reassertion_says_unblocked_naming_no_nic_where_our_perimeter_still_cuts(monkeypatch):
+    """« I3: the reassertion said 192.31.196.7 no longer blocked on …/Db--01 ([]); our perimeter
+    block still cuts it off » — the card names no NIC (`len(cut) < len(nics)`), seed 1999's names
+    one. web blocked on its subnet, Db--01 for itself, web unblocked (a NIC read refused, 429),
+    a block rule of db-nic-0 retargeted, the subnet's `allow-ssh` removed, then web blocked,
+    its rule turned and its address reused, the reassertion in human_only. Nothing opens; what is
+    said is false. Found by I4D's harness (not its family), frozen for #366."""
+    _run(monkeypatch, _I3_NO_NIC_NET,
+         ("perimeter_lifted_beside_a_block", WEB1, WEB1.lower(), ("nic.get", "always-429"), DB, False, DB, 22),
+         ("tamper_with_our_rule", "retarget",
+          (_S101_NSG.format("rg-app1", "nsg-db-nic-0"), "glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228-out")),
+         ("customer_removes_rule", _S101_NSG.format("rg-net", "nsg-subnet"), "allow-ssh"),
+         ("turned_then_address_reused", WEB1, WEB1.lower(), ("subnet.get", "always-429"), None, "subnet",
+          (_S101_NSG.format("rg-app1", "nsg-web-nic"), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"),
+          "human_only"))

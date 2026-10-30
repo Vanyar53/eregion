@@ -12,6 +12,10 @@ import logging
 log = logging.getLogger("glorfindel.reassert")     # the pass's log, as before the split
 
 _QUARANTINE_PREFIX = "reassert-quarantine-"
+# Glorfindel's own closures carry a note (the console's « handled » list reads it); a card a
+# human acknowledged carries none. Only the operator's word silences a change (L2Q, #331).
+_CHANGED = "Le NSG de quarantaine a encore changé : une carte dit ce qu'il porte maintenant."
+_SETTLED = "NSG de quarantaine entier de nouveau, vide, ou disparu de l'abonnement."
 _SAID_ELSEWHERE: set[str] = set()     # cards' NSGs of another subscription, said (ISU, #264)
 
 
@@ -52,7 +56,14 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
     reads whole, holds nothing, or is gone from the subscription — read again by its id
     and not found, never only absent from the listing (I1S); never on an NSG read as
     unknown (configuration unreadable), unread, of another subscription, nor when the
-    listing fails. Read again, our NSG is judged by its content, its tag or not."""
+    listing fails. Read again, our NSG is judged by its content, its tag or not.
+
+    Acknowledged means the operator's word is the last on that change: the latest card of
+    the NSG is this change's, closed without Glorfindel's note (`acknowledged`). The file
+    alone is not enough (L2Q, #331): its write fails (a full disk) after another change was
+    said, it keeps the former one, and once the diff comes back to it — a forensic access
+    added then taken off, or the configuration unreadable — the NSG, still stripped, read
+    « said » with no card left."""
     find = getattr(connector, "find_altered_quarantines", None)
     if find is None:
         return                                  # a provider without a quarantine NSG
@@ -124,11 +135,25 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
         if k in altered and altered[k][0] == sid:
             said.add(sid)
         elif k in altered or settled(k):
-            escalations.resolve(e["id"])        # changed, whole again, holds nothing, gone
+            # changed; whole again, holds nothing, gone — Glorfindel's closure, with its note
+            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)
     for k in [k for k in alerts if settled(k)]:
         del alerts[k]
+    history: list[dict] | None = None
+
+    def acknowledged(k: str, signal_id: str) -> bool:
+        """The latest card of this NSG is this change's, closed by the operator — not by
+        Glorfindel, whose closures carry a note. Read only for a change the file says."""
+        nonlocal history
+        if history is None:
+            history = [e for e in escalations.all_escalations()
+                       if (e.get("signal_id") or "").startswith(_QUARANTINE_PREFIX)]
+        last = next((e for e in reversed(history) if _key(e.get("resource_id")) == k), None)
+        return (last is not None and last.get("signal_id") == signal_id
+                and last.get("status") == "resolved" and not last.get("resolution"))
+
     for k, (signal_id, q) in altered.items():
-        if signal_id in said or alerts.get(k) == signal_id:
+        if signal_id in said or (alerts.get(k) == signal_id and acknowledged(k, signal_id)):
             continue                            # said: still pending, or acknowledged
         nsg_id = q.get("nsg_id") or ""
         name = nsg_id.rstrip("/").rsplit("/", 1)[-1]

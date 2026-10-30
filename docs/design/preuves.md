@@ -1878,7 +1878,7 @@ La configuration est lisible à chaque étape. Cause (établie par la relecture 
 carte du nouveau changement est écrite mais pas `quarantine_alerts.json` (disque plein), qui garde
 l'identifiant de l'ancien ; l'accès retiré, le diff revient à l'ancien changement, lu « déjà dit ou
 acquitté » — aucune carte, le NSG toujours vidé. Figée en `xfail` strict
-(`test_an_altered_quarantine_stays_said_when_its_change_comes_back`) pour le lot L2Q (#331). La graine 101 à 500 reste rouge sur L2 jusqu'à lui.
+(`test_an_altered_quarantine_stays_said_when_its_change_comes_back`) pour le lot L2Q (#331). La graine 101 à 500 reste rouge sur L2 jusqu'à lui (levé par L2Q, ci-dessous).
 
 **Mesures d'I5Q.** Avant la reprise de RB1 : invariants à 500 séquences sur les graines 101, 202,
 322, 1, 42 et 777, puis 2 000 sur 101, 322 et 42, verts. Sur le code final (RB1 et la 0.4.6 repris) :
@@ -2039,6 +2039,60 @@ compris). Deux perdus à la première mesure, rendus : M1345 (le tag d'une carte
 (`_unplaced_blocks`) faisait le même travail par un autre chemin ; chacun a maintenant une séquence
 où rien ne le remplace (la liste des NSG refusée ; la carte a un NSG à elle). M03 et M761, attrapés
 avant et à moitié après à 60, remesurés à 500 : 2/2 des deux côtés ; M830 et M21 mieux après.
+
+**L2Q (30/10, #331) : un changement de quarantaine qui revient, lu « déjà dit ».** Le défaut figé
+par I5Q (graine 101 à 500, 14 étapes), présent avant RB1. **Cause, établie** (la relecture d'I5Q,
+confirmée pas à pas) : la configuration est lisible à chaque étape. Étape 9, le NSG de quarantaine
+est vidé, une carte dit le changement A et `quarantine_alerts.json` reçoit A ; étape 11, un accès
+forensique ajouté change le diff (B) : la carte A est fermée, la carte B écrite, mais l'écriture de
+`quarantine_alerts.json` échoue (la faute tirée, un disque plein) et le fichier garde A ; étape 12,
+l'accès retiré, le diff redevient A ; étape 13, la passe ferme la carte B et lit A dans le fichier
+comme « dit, ou acquitté » (`reassert_quarantine._report_altered_quarantines`) : aucune carte, le
+NSG toujours vidé. « Redit à la passe suivante : plus bruyant, pas muet » ne tenait pas quand le
+fichier garde un identifiant périmé et que le diff revient à l'ancien changement. Une
+configuration illisible y mène aussi : elle cache l'accès forensique, le diff ne compte plus que nos
+deny — celui de A.
+
+**Correctif.** Un changement ne se tait que sur **le dernier mot de l'opérateur** : la dernière
+carte de ce NSG (dans le magasin des escalades, dans son ordre) est celle de ce changement, fermée
+par un humain. Les fermetures de Glorfindel portent maintenant une note (« a encore changé », ou
+entier, vide, disparu), comme celles des contournements et des orphelines ; le fichier reste la
+condition rapide, plus jamais la seule. Ce qui ferme mal est donc redit, jamais tu : un fichier
+périmé, une carte B qu'on n'a pas pu écrire après la fermeture de A (le magasin refusé), un
+acquittement de B quand le fichier a gardé A. Limite : une carte fermée par Glorfindel avant ce
+correctif n'a pas de note et se lit comme acquittée — le comportement d'avant, pour celle-là
+seulement.
+
+**La machine** tire maintenant la séquence (`quarantine_change_comes_back` : la quarantaine
+modifiée et dite, l'accès forensique qui change pendant une passe où **le disque se remplit** —
+la faute `(n, "from-full")`, nouvelle : la n-ième écriture de l'état local et les suivantes
+refusées, ce qui est écrit avant tient —, puis l'accès remis comme avant ou la configuration
+illisible). Un disque plein pour toute la passe ne suffisait pas : la carte A ne se fermait pas,
+rien ne bougeait. Aucune règle retirée ni restreinte, aucun oracle touché. **Séquences figées** :
+celle de la graine 101 (plus `xfail`), et celle de la nouvelle règle, accès retiré et
+configuration illisible.
+
+**Mesures de L2Q.** `pytest` complet : 4 130 réussis, 7 sautés, 7 `xfail` ; `ruff` propre. Sur le
+code de `main` (897cd21), échouent : la séquence de 101, les deux séquences de la nouvelle règle et
+quatre tests de `tests/unit/test_reassert.py`. Invariants sur le correctif, avec la machine de
+`main` : 500 séquences sur 101, 202, 322, 42 et 777, et 2 000 sur 322, verts ; avec la nouvelle
+règle : 500 sur 101, 202, 322, 42, 777 et 1, puis 2 000 sur 101 et 322, verts. Mutants M1860–M1866
+(le fichier seul, la note retirée, le changement ou le NSG de la dernière carte ignorés, la
+première carte lue au lieu de la dernière, une fermeture de Glorfindel lue comme un acquittement) :
+7/7 par leurs tests à chaque tour. Par la machine seule, M1860 (le fichier seul) : pas vu à 60
+séquences (six graines), ni à 500 sans la nouvelle règle (graines 101, 1, 42, 777, 2718, 8675) ;
+avec elle, à 500 sur les graines 1, 101 et 42. M836 réaligné sur la ligne réécrite. Harnais
+avant/après (60 séquences, deux tours, `--jobs 4`) sur les 56 mutants de la réaffirmation, de ses
+cartes, de la quarantaine et de `reassert_quarantine` : 50/56 attrapés à chaque tour avant (897cd21),
+51/56 après, plus les sept nouveaux. Aucun perdu : M13 (2/2 avant, 0/2 après par la machine seule,
+attrapé par ses séquences figées) remesuré sur quatre tours, 1/4 des deux côtés, et 2/2 des deux côtés
+à 500 ; M09, M14 et M27, bruit à 60 (sur quatre tours : M09 4/4 puis 2/4, M14 3/4 puis 0/4, M27 3/4
+puis 4/4), M09 et M14 2/2 des deux côtés à 500 ; M864 survit des deux côtés (déjà vrai avant). Dix
+graines à 60 séquences, vertes sur `main` comme sur la branche. **Hors du lot** : à 2 000 séquences,
+la graine 101 tombe sur `main` (897cd21) sur I5 et I4 (« an operation on …/rg-edge/…/api opened
+flows of …/rg-app1/…/api », `address_reused_under_a_turned_rule` puis
+`block_turned_then_reasserted`) — un blocage, une règle retournée, une adresse reprise : le terrain
+d'I4B (#333), sans rapport avec la quarantaine.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

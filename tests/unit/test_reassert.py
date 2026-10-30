@@ -794,6 +794,144 @@ def test_a_reread_keeps_to_the_clients_subscription_and_never_in_dry_run():
         AzureConnector(dry_run=True).read_quarantine(f.nsgs[q]["id"])
 
 
+# ── L2Q (#331): a change that comes back is said again, whatever the file kept ───────────
+
+_FORENSIC = _DENY_IN + ["glorfindel-quarantine-forensic-in"]
+
+
+def _alerts_unwritable(monkeypatch):
+    """quarantine_alerts.json can't be written (a full disk) — every other write goes
+    through. Returns what gives the disk back."""
+    from glorfindel import actions
+    real = actions._atomic_write_text
+
+    def write(path, text):
+        if str(path).endswith("quarantine_alerts.json"):
+            raise OSError(28, "No space left on device")
+        real(path, text)
+    monkeypatch.setattr(actions, "_atomic_write_text", write)
+    return lambda: monkeypatch.setattr(actions, "_atomic_write_text", real)
+
+
+def test_a_change_that_comes_back_after_its_record_was_lost_is_said_again(monkeypatch):
+    """Seed 101 (L2Q, #331): change A said; a forensic access added makes change B — A's
+    card closed, B's written, but not quarantine_alerts.json (a full disk): it keeps A. The
+    access taken off, the diff is A's again: said again — the file read « A said, or
+    acknowledged » left the NSG stripped with no card. Glorfindel's closures say so (a note);
+    the change, once said, is not said again at every pass."""
+    from glorfindel.reassert import reassert_pass
+    c = _quarantines(*[("altered", d) for d in (_DENY_IN, _FORENSIC, _DENY_IN, _DENY_IN)])
+    reassert_pass(c, _ACT)
+    a = _cards("pending")[0]["signal_id"]
+    give_back = _alerts_unwritable(monkeypatch)
+    reassert_pass(c, _ACT)
+    give_back()
+    assert reassert_quarantine._load_quarantine_alerts() == {_QNSG.lower(): a}     # the file kept A
+    reassert_pass(c, _ACT)
+    (card,) = _cards("pending")
+    assert card["signal_id"] == a and "glorfindel-quarantine-deny-in" in card["reason"]
+    assert len(_cards()) == 3 and all(e.get("resolution") for e in _cards("resolved"))
+    reassert_pass(c, _ACT)
+    assert len(_cards()) == 3 and len(_cards("pending")) == 1
+
+
+def test_a_change_whose_card_could_not_be_written_leaves_the_former_unsilenced(monkeypatch):
+    """Change A said; B: A's card closed, B's card not written (the escalations store
+    refused). Back to A, with the file still saying A: Glorfindel closed A itself — that is
+    no acknowledgement. Said again."""
+    from glorfindel import cli
+    c = _quarantines(*[("altered", d) for d in (_DENY_IN, _FORENSIC, _DENY_IN)])
+    cli._watch_reassert_pass(c, None)
+    a = _cards("pending")[0]["signal_id"]
+    real = escalations.record
+    monkeypatch.setattr(escalations, "record", MagicMock(side_effect=OSError(28, "No space left on device")))
+    cli._watch_reassert_pass(c, None)
+    monkeypatch.setattr(escalations, "record", real)
+    assert not _cards("pending") and reassert_quarantine._load_quarantine_alerts() == {_QNSG.lower(): a}
+    cli._watch_reassert_pass(c, None)
+    (card,) = _cards("pending")
+    assert card["signal_id"] == a
+
+
+def test_only_the_operators_last_word_silences_a_change(monkeypatch):
+    """A acknowledged; B said, its record lost (the file keeps A), B acknowledged; back to A.
+    The operator's last word was on B, not on this A: said again. Then A acknowledged, and
+    standing: never said again."""
+    from glorfindel.reassert import reassert_pass
+    c = _quarantines(*[("altered", d) for d in (_DENY_IN, _FORENSIC, _DENY_IN, _DENY_IN, _DENY_IN)])
+    reassert_pass(c, _ACT)
+    escalations.resolve(_cards("pending")[0]["id"])                     # the operator
+    give_back = _alerts_unwritable(monkeypatch)
+    reassert_pass(c, _ACT)
+    give_back()
+    (b,) = _cards("pending")
+    escalations.resolve(b["id"])                                        # the operator
+    reassert_pass(c, _ACT)
+    (card,) = _cards("pending")
+    assert card["signal_id"] != b["signal_id"] and "forensic" not in card["reason"]
+    escalations.resolve(card["id"])
+    reassert_pass(c, _ACT)
+    reassert_pass(c, _ACT)
+    assert not _cards("pending") and len(_cards()) == 3
+
+
+def test_an_acknowledgement_is_read_on_its_own_nsg_only():
+    """Two quarantine NSGs altered: the first's change acknowledged stays silent while the
+    second's card, written after, stays pending — the latest card of each NSG is read,
+    not the latest of all."""
+    from glorfindel.reassert import reassert_pass
+    other = _QNSG.replace("westeurope", "northeurope")
+    c = MagicMock()
+    c.read_quarantine.return_value = None
+    c.verify_isolation.side_effect = AssertionError("no state")
+    c.find_altered_quarantines.return_value = [
+        {"nsg_id": n, "nics": [_QNIC], "status": "altered", "diff": list(_DENY_IN)} for n in (_QNSG, other)]
+    c.find_altered_quarantines.side_effect = None
+    reassert_pass(c, _ACT)
+    first = next(e for e in _cards("pending") if e["resource_id"] == _QNSG)
+    escalations.resolve(first["id"])                                    # the operator
+    for _ in range(2):
+        reassert_pass(c, _ACT)
+    assert len(_cards()) == 2 and [e["resource_id"] for e in _cards("pending")] == [other]
+
+
+def test_a_change_brought_back_by_an_unreadable_config_is_said_and_so_is_the_config(monkeypatch):
+    """The real connector on the fake Azure. Our inbound deny removed: change A said. A
+    forensic access configured: change B, the file not written. The configuration then
+    unreadable: the forensic access can't be checked, the diff reads A again — the NSG
+    still stripped is said (never « config unreadable, nothing to say », A0), and the
+    configuration is said itself, once (SEC4b)."""
+    import io
+    from rich.console import Console
+    from glorfindel import cli, config as cfg
+    f, c, q, _ = _quarantined_world()
+    forensic: list = []
+
+    def sources():
+        if forensic is None:
+            raise cfg.ConfigError("broken")
+        return list(forensic)
+    monkeypatch.setattr(c, "_forensic_sources", sources)
+    monkeypatch.setattr(c, "_forensic_ports", lambda: [22])
+    out = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=out, width=200))
+    seen: dict = {}
+    cli._watch_reassert_pass(c, None, seen=seen)
+    a = _cards("pending")[0]["signal_id"]
+    forensic.append("10.9.9.9")
+    give_back = _alerts_unwritable(monkeypatch)
+    cli._watch_reassert_pass(c, None, seen=seen)
+    give_back()
+    assert "forensic" in _cards("pending")[0]["reason"]
+    forensic = None
+    monkeypatch.setattr(cfg, "load_glorfindel_config", MagicMock(side_effect=cfg.ConfigError("broken")))
+    for _ in range(2):
+        cli._watch_reassert_pass(c, None, seen=seen)
+    (card,) = _cards("pending")
+    assert card["signal_id"] == a and card["resource_id"].lower() == q
+    assert out.getvalue().count("config illisible") == 1
+
+
 # ── RB1 (#321): a merged block put back whole, and said exactly ─────────────────────────
 
 def _merged(**extra):

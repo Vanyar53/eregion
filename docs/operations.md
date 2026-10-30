@@ -234,6 +234,40 @@ gothmog report <run_id>                      # runs/<run_id>.json (même forme q
 #   écrasé) : la page de son injecteur, dans la console, affiche son verdict. Un échec de publication est signalé
 #   (« run report … not published ») et ne change ni le run ni son code de sortie.
 
+# Dagorlad, phase (b) (DG-b) — demander un exercice depuis la console, le porter sur Orodruin
+#   La console écrit une demande ; elle ne lance rien, n'appelle pas Orodruin, et H0 n'a aucun droit
+#   ni canal de plus (docs/design/console.md, §7 ; docs/design/orodruin-contract.md, « La demande »).
+#   1. Dans Dagorlad (/dagorlad), tirer les fils, puis « Request run from Orodruin » : les fils jugés
+#      comme Orodruin les jugera ; un fil refusé, rien n'est écrit. La demande va dans
+#      ~/.eregion/console/requests/<id>.json (sur H0 : celui de la VM). La page donne la commande et
+#      dit quels fils demanderont le nom de leur cible ; elle ne prend aucun nom.
+#   2. Sur ton poste :
+make orodruin-exercise REQUEST=r-20261030T075200Z-a1b2c3 [DRY_RUN=1] [REQUEST_FROM=local]
+#      - REQUEST vérifié avant toute commande (r-<heure UTC>-<6 hex>), jamais lu de l'environnement ;
+#      - la demande tirée de H0 par SSH, sa clé d'hôte vérifiée (HOST_SSH_FINGERPRINT, comme
+#        glorfindel-host-*) ; REQUEST_FROM=local : la console de ce poste (make glorfindel-start) ;
+#      - relue par son seul lecteur (un champ de plus : refusée, rien n'est envoyé), affichée fil par
+#        fil : rang, technique ou panne, cible, groupe, DESTRUCTIVE ;
+#      - pour chaque fil destructif, ou dont personne n'a dit qu'il ne l'est pas (A0) : taper le nom de
+#        la VM, tel qu'Azure l'écrit. Un autre nom, ou « n » à la confirmation : rien n'est envoyé ;
+#      - DRY_RUN=1 s'arrête là et affiche le scp et le ssh qu'il ferait ;
+#      - sinon : la demande et les noms tapés (à part, <id>.typed.json) copiés dans ~/requests/
+#        d'Orodruin, puis python -m eregion_core.exercise_runner lancé dans l'image des injecteurs.
+#   3. Sur Orodruin, dans ton terminal : le verdict du contrat (passive : refusée, ses codes), chaque
+#      fil jugé avec les codes de la console (zone_forbids, not_enrolled, outside_scope, no_watch,
+#      no_engine, over_cap… ; typed_name : nom absent ou autre que celui qu'Orodruin lit). Un fil
+#      refusé : rien ne part. Puis les fils l'un après l'autre (annatar wire, gothmog run --request) :
+#      avant chacun, le plafond restant à la demande entière (EREGION_MAX_INJECTIONS appels et
+#      EREGION_MAX_RUN_S pour toute la demande), la watch, la cible relue (inscription, zone), le nom ;
+#      une VM dont la panne n'a pas vérifié son retour ne prend plus de fil (not_returned) ; une VM
+#      isolée par Glorfindel est attendue 20 min au plus, puis son fil est sauté (isolated) — jamais
+#      levée. Code de sortie 0 si chaque fil a tourné, 1 sinon.
+#   4. La console : chaque fenêtre porte l'identifiant de la demande (Runs) ; Orodruin publie son
+#      verdict et le statut de la demande dans le canal (orodruin/…), la watch de H0 les tire dans
+#      runs/orodruin/ ; la page les relit (« Orodruin: armed », ou « unknown here » sans eux).
+#   « Stop all » (le bouton de Dagorlad) : la commande make orodruin-kill, ce qu'elle arrêtera (les
+#   fenêtres ouvertes et leurs cibles) et ce qui reste en vol. La console ne révoque rien.
+
 # Campagne (kill-chain générative + rapport IA0) — depuis Orodruin, sur le modèle de gothmog
 make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAMPAIGN_MAX=5]
 #   BL1 (#280) : CAMPAIGN_DECLARED=annatar/campaign/declared/bl1-reponse.yaml — exactement les

@@ -61,7 +61,11 @@ GET  /api/channel                     → battement local, fenêtres vivantes, b
 GET  /api/channel/detections/<run_id> → détections livrées au run
 GET  /api/dagorlad/board              → cartes rouges (catalogue), Glorfindel, cibles inscrites (zone, mode)
 GET  /api/dagorlad/plan?wire=<exp>@<rid>… → chaque fil jugé comme Orodruin le jugerait, et l'attendu
-     (injecteurs : GET seulement — un run part d'Orodruin armé, jamais d'une route de la console)
+POST /api/dagorlad/requests           → DG-b : {"wires": [{"experiment", "target"}]} — jugés, puis la demande écrite dans
+     ~/.eregion/console/requests/ seulement ; la réponse donne `make orodruin-exercise REQUEST=<id>` (aucun nom tapé ici)
+GET  /api/dagorlad/requests/<id>      → la demande écrite ici ou non, et son statut publié par Orodruin (runs/orodruin/)
+GET  /api/dagorlad/stop               → « Stop all » : make orodruin-kill, les fenêtres ouvertes et leurs cibles, ce qui reste en vol
+     (injecteurs : un run part d'Orodruin armé, porté par l'opérateur, jamais d'une route de la console)
 
 POST /api/action/release/<vm>         → lever isolation NSG
 POST /api/action/revert/<vm>          → reset complet (release + unblock toutes IPs)

@@ -521,6 +521,80 @@ enverrait autre chose et la relecture de l'identifiant, faite depuis ce même po
 pas. Le contrat (`orodruin-check`) ne lit pas encore la provenance de l'image qu'il exécute —
 planifié.
 
+## La demande de Dagorlad (DG-b, #348, 30/10)
+
+La console de Dagorlad écrit une demande ; Orodruin la juge et la lance. Rien ne change au
+contrat : ni droit, ni attribution, ni sortie réseau, ni canal. Conception :
+[`docs/design/console.md`](console.md), §7, phase (b). Pas à pas : [`docs/operations.md`](../operations.md).
+
+**Le transport, porté par l'opérateur.** `make orodruin-exercise REQUEST=<id>`, depuis son poste :
+- la demande est tirée de H0 par SSH, la clé d'hôte vérifiée ;
+- elle est affichée, et les noms des cibles destructives sont tapés sur le poste ;
+- elle est copiée par SSH dans `~/requests/` d'Orodruin, avec les noms tapés à part
+  (`<id>.typed.json`) ;
+- elle est lancée dans l'image des injecteurs : `python -m eregion_core.exercise_runner`, `~/requests`
+  monté en lecture seule.
+
+Orodruin ne tire rien et n'écoute rien : la commande vient de l'opérateur.
+
+**Le jugement** (`eregion_core/exercise_runner.py`). Il se fait dans cet ordre, et rien ne part si
+un fil est refusé :
+1. La demande est relue par son seul lecteur (`exercise_request.read`) : un champ de plus la refuse.
+2. Le contrat : `check()`. S'il est `passive`, la demande est refusée (`passive`, puis les codes de ce
+   qui manque).
+3. Chaque fil est jugé avec les codes de la console (`exercise_plan.plan`) :
+   - le périmètre, l'inscription et la zone, relus par l'identité d'Orodruin (O0) ;
+   - la règle de production ;
+   - la watch (V1) ;
+   - les cibles du moteur d'une panne (`gothmog targets`, lues sans Orodruin) ;
+   - le plafond déclaré (`EREGION_MAX_INJECTIONS`, `EREGION_MAX_RUN_S`), au lieu du seul plafond
+     absolu.
+4. Le nom tapé est comparé au nom qu'Orodruin lit de la VM (`typed_name`), pour chaque fil qui le
+   demande : une technique destructive, ou que personne n'a déclarée inoffensive (A0).
+
+**Les fils, l'un après l'autre.** Chacun est un run de son injecteur, dans son propre processus (D1) :
+`annatar wire <technique> <vm> --request <id> [--typed-name <nom>]`, `gothmog run <panne> --yes
+--request <id> --target <vm>`. Avant chaque fil :
+- le plafond **restant à la demande entière** : ses appels journalisés depuis son début (chaque ligne
+  du journal nomme la demande, `Session.request`), et son temps. L'injecteur reçoit ce reste comme
+  son propre plafond ;
+- la watch, relue ;
+- la cible relue et rejugée, et son nom (O0, à chaque injection) ;
+- une VM dont une panne n'a pas vérifié son retour ne prend plus de fil (`not_returned`) : une panne
+  et une technique ne se chevauchent jamais ;
+- une VM isolée par Glorfindel (une règle `glorfindel-isolation-` ou `glorfindel-quarantine-` dans un
+  NSG de son groupe, comme la lit le preflight d'Annatar ; illisible vaut isolée) est attendue
+  `WAIT_ISOLATION_S` (20 min) au plus, puis son fil est sauté (`isolated`). Un injecteur ne défait
+  jamais ce que Glorfindel a fait.
+
+Chaque injecteur garde toutes ses gardes : Annatar compare aussi le nom tapé au nom de la VM qu'il lit
+avant toute écriture, et Gothmog refuse une VM que la panne ne déclare pas. La fenêtre de chaque run
+porte l'identifiant de la demande, ainsi que son rapport (`metrics.request`).
+
+**Ce qu'Orodruin publie pour la console.** Dans le conteneur des fenêtres, sous `orodruin/` : même
+conteneur, même attribution, rien de neuf.
+- `orodruin/contract.json` : `armed` ou `passive`, les codes, l'heure ; ni détail, ni abonnement, ni
+  identifiant. Il est écrit par `orodruin-check` et à chaque jugement d'une demande.
+- `orodruin/requests/<id>.json` : le statut de la demande (jugée, refusée avec ses codes, en cours,
+  finie) et, par fil, son rang, son état, son code, ses runs. Jamais l'expérience ni la cible : les
+  fenêtres le disent déjà, comme avant.
+
+La watch de H0 les tire dans `runs/orodruin/` avec les rapports de run. Chaque blob est relu contre sa
+forme (`read_contract`, `read_status`) : un blob refusé n'est pas écrit. La console les relit à son
+tour. Sans eux, elle dit « Orodruin: unknown here ».
+
+**« Stop all »** reste `make orodruin-kill`, depuis le poste. La console donne la commande, les
+fenêtres ouvertes qu'il fermera et leurs cibles, et ce qui reste en vol (voir plus haut, M-1).
+
+**Mutants** M2010–M2039 (`scripts/mutation_check.py`). Tests :
+- `tests/unit/test_exercise_request.py`, `test_exercise_runner.py`, `test_orodruin_word.py` ;
+- `test_makefile_exercise.py`, avec de faux `ssh` et `scp` ;
+- `test_annatar_wire.py`, `test_gothmog.py` ;
+- `test_exercise_e2e.py` : de la console aux deux injecteurs, sur les faux.
+
+**À éprouver au banc, avec Jonathan** : le premier exercice réel ; que l'identité d'Orodruin lise
+bien les NSG du groupe (le preflight d'Annatar le fait déjà) ; le blob `orodruin/` tiré par H0.
+
 ## Questions ouvertes (pour Jonathan, à l'implémentation)
 
 - **Identité d'exécution** : ~~une identité managée ou un principal de service dédié ?~~

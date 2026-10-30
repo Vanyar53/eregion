@@ -889,8 +889,9 @@ Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
    `teams/`, `cosign/`, `h0_known_hosts`, `host-backups/`. Ce qui l'établit :
    - aucun module de `glorfindel/` ne nomme ce répertoire — déjà en place :
      `test_glorfindel_never_names_the_consoles_own_directory` ;
-   - DG-b : seul le service de la console monte `~/.eregion/console/` ; aucun service watch ni bot ne
-     monte `~/.eregion` ni ces sous-répertoires (`test_profiles.py`) ;
+   - DG-b, construit : seul le service de la console monte `~/.eregion/console/` ; aucun service watch
+     ni bot ne monte `~/.eregion` ni ces sous-répertoires (`test_profiles.py`,
+     `test_only_the_console_mounts_its_own_directory`) ;
    - un cycle de `decide` rejoué avec une demande présente envoie au modèle le même message, à l'octet
      près.
 2. **Le résultat attendu n'est écrit nulle part.** Il est calculé à la demande de la page, sans
@@ -1025,3 +1026,53 @@ Posées une à une. La réponse est reportée ici avec sa date.
 - **La relecture 5.5 de #353** : une matrice illisible donne « proof unreadable » sur les cartes, avec
   son message, jamais « never run » (A0, M2005) ; la redirection ne recopie ni `view` ni `injector`, et sa
   cible commence toujours par `/dagorlad?` (test).
+
+### Construit : la demande (DG-b, #348, 30/10)
+
+Le détail d'Orodruin est dans [`orodruin-contract.md`](orodruin-contract.md), « La demande de
+Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
+
+- **La demande** (`eregion_core/exercise_request.py`, D1) porte un identifiant (`r-<heure UTC>-<6
+  hex>`) et son heure ; pour chaque fil, l'expérience, la cible et son rang. Rien d'autre. Une seule
+  fonction la lit, `read`, et refuse tout champ en plus ou manquant. Les noms tapés vivent à part
+  (`<id>.typed.json`, `read_typed`) : la demande n'en porte jamais.
+- **La console l'écrit** : `POST /api/dagorlad/requests`, derrière SEC1 (jeton, origine, corps JSON).
+  - Le navigateur n'envoie que l'expérience et la cible de chaque fil.
+  - Les fils sont jugés par `exercise_plan` ; un fil refusé, rien n'est écrit.
+  - La demande va dans `~/.eregion/console/requests/`, mode 600, et nulle part ailleurs.
+  - Seul le service de la console monte `~/.eregion/console` ; H0 crée le répertoire avant compose
+    (`glorfindel-host-start`, `deploy.sh`).
+  - La page dit « Request run from Orodruin », puis donne la commande et les fils dont le nom sera
+    tapé. Elle ne recueille aucun nom. Les fils restent figés jusqu'à « New plan ».
+- **La commande portée** : `make orodruin-exercise REQUEST=<id> [DRY_RUN=1] [REQUEST_FROM=local]`.
+  - Elle tire la demande de H0 par SSH, clé d'hôte vérifiée, et la relit.
+  - Elle l'affiche fil par fil et fait taper le nom de chaque cible destructive, ou non déclarée (A0).
+  - Elle la copie sur Orodruin et l'y lance.
+  - Testée avec de faux `ssh` et `scp`.
+- **Orodruin juge et lance** (`eregion_core/exercise_runner.py`).
+  - Le jugement porte sur le contrat, les codes de la console sur ce qu'il lit maintenant, et le nom
+    tapé comparé au nom qu'il lit (`typed_name`). Un fil refusé, rien ne part.
+  - Les fils partent l'un après l'autre. Avant chacun : le plafond restant à la demande entière, la
+    watch, la cible rejugée. Une VM dont la panne n'a pas vérifié son retour est sautée ; une VM
+    isolée est attendue, puis sautée. Jamais levée.
+- **Les injecteurs** lancent depuis une demande, dans le run unifié de C1 : `annatar wire`,
+  `gothmog run --request --target`. L'identifiant de la demande est écrit dans la fenêtre, le journal
+  d'Orodruin et le rapport. `gothmog targets` lit sans Orodruin les VM que vise chaque expérience
+  (`no_engine`).
+- **Orodruin publie** son verdict (`armed` ou `passive`, les codes, l'heure) et le statut de chaque
+  demande, sous `orodruin/` dans le canal des fenêtres. La watch de H0 les tire dans `runs/orodruin/`,
+  chaque blob relu contre sa forme. La console les montre ; sans eux, « Orodruin: unknown here ».
+- **« Stop all »** donne `make orodruin-kill`, les fenêtres ouvertes qu'il fermera et leurs cibles,
+  ce qui marque encore (la grâce) et ce qui reste en vol (M-1). La console ne révoque rien.
+- **Le modèle de menace** : la frontière de la console et celle d'Orodruin
+  ([`modele-de-menace.md`](modele-de-menace.md), pages 1 et 5).
+- **Mutants M2010–M2039**, tous attrapés. Tests :
+  - `test_exercise_request.py`, `test_console_dagorlad_request.py`, `test_makefile_exercise.py` ;
+  - `test_exercise_runner.py`, `test_annatar_wire.py`, `test_gothmog.py`, `test_orodruin_word.py` ;
+  - `test_exercise_e2e.py` : une demande de la console aux deux injecteurs, sur les faux.
+- **Reste pour le banc, avec Jonathan** : le premier exercice réel, et le blob `orodruin/` tiré par H0.
+  Avant, `make glorfindel-host-cd-install` : le CD de H0 garde sa copie de `deploy.sh`.
+- **Pas encore fait** : le mutant « un champ de la demande dans le message du modèle » de la liste
+  ci-dessus. La demande n'est lue par aucun module de `glorfindel/`, et aucun service de Glorfindel ne
+  la monte : le test qui rejoue un cycle de `decide` avec une demande présente reste à écrire (DG-c).
+

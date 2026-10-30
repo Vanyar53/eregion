@@ -36,7 +36,7 @@ annatar = [
     "azure-mgmt-resource>=23.0",
     "azure-monitor-query>=1.3",
     # The campaign planner (`annatar campaign plan --llm`) — the same pin as Glorfindel's (HY1).
-    "litellm==1.86.1",
+    "litellm==1.100.4",
     # Declared, not left to litellm and azure-core to bring (HY1): the shared core reads
     # experiments (eregion_core/experiment.py) and calls IMDS and the channels with them.
     "jsonschema>=4.0",
@@ -49,7 +49,11 @@ glorfindel = [
     "azure-mgmt-recoveryservicesbackup>=9.0",
     "langgraph>=0.1",
     "anthropic>=0.25",
-    "litellm==1.86.1",  # épinglée (19/10) : 1.106.0 voulait un module mcp absent → plus aucune décision
+    # Épinglée (19/10) : 1.106.0 voulait un module mcp absent → plus aucune décision. 1.100.4 (DEP1,
+    # #282) : la première qui corrige GHSA-3cv6-jpf6-8222, GHSA-g5ff-637f-6q2m et GHSA-7hp6-4w63-5g45
+    # (1.95.1 portait ce dernier). Une montée : make lock, puis le harnais (make llm-compare …
+    # ATTEST=1) ; l'appel est éprouvé dans chaque image (CI1).
+    "litellm==1.100.4",
     "chromadb>=0.5",
     "requests>=2.31",
     "discord.py>=2.3",

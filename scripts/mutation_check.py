@@ -2794,7 +2794,7 @@ MUTANTS += [
      'RUN pip install --no-cache-dir -e ".[annatar]"\n'),
     ("M917", "Annatar's extra without litellm: the planner fails in the image (HY1)", "pyproject.toml",
      "    # The campaign planner (`annatar campaign plan --llm`) — the same pin as Glorfindel's (HY1).\n"
-     '    "litellm==1.86.1",\n',
+     '    "litellm==1.100.4",\n',
      ""),
     ("M918", "Annatar's targets pass the client secret by value again (L23)", MAKE,
      "\t-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \\\n\t-e ANTHROPIC_API_KEY",
@@ -3943,8 +3943,9 @@ MUTANTS += [
      '        Check("ni Glorfindel, ni la console, ni leurs dépendances (D1)",\n'
      '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n', ""),
     ("M1481", "the injectors' image no longer checked for root (CI1)", IMC,
-     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n        Check("pas root", ("python", "-c", NOT_ROOT)),\n',
-     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n        Check("pas root", ("python", "-c", NOT_ROOT)),\n'
+     '    )),\n}\n',
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n    )),\n}\n'),
     ("M1482", "Annatar and Gothmog no longer imported in their image (CI1)", IMC,
      '        Check("Annatar et Gothmog importent", ("python", "-c", f"import {INJECTOR_IMPORTS}")),\n', ""),
     ("M1483", "an unreadable diff skips the build: the job green on what it never built (CI1)", IMC,
@@ -3969,6 +3970,25 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1480, 1490)})
 TESTS["M1486"] = "tests/unit/test_workflows.py"
+# DEP1 (#282): litellm's call path proven in each image — a tool call answered by litellm's
+# mock, no network (1.106.0 imported, then failed on the call). M1610–M1614.
+MUTANTS += [
+    ("M1610", "the litellm check imports only: 1.106.0's call that fails unseen (DEP1)", IMC,
+     '    "import litellm\\n"\n', '    "import litellm\\nsys.exit(0)\\n"\n'),
+    ("M1611", "the litellm check passes an answer without its tool call (DEP1)", IMC,
+     "true}') else 1)", "true}') else 0)"),
+    ("M1612", "the litellm check fetches the cost map from the network (DEP1)", IMC,
+     '    "os.environ[\'LITELLM_LOCAL_MODEL_COST_MAP\'] = \'True\'\\n"\n', ""),
+    ("M1613", "Glorfindel's image no longer makes the litellm call: its lock unproven before the harness (DEP1)", IMC,
+     "              mounts=((REPO / EXAMPLE_CONFIG, CONFIG_IN_IMAGE),)),\n"
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n',
+     "              mounts=((REPO / EXAMPLE_CONFIG, CONFIG_IN_IMAGE),)),\n"),
+    ("M1614", "the injectors' image no longer makes the litellm call: the planner's lock unproven (DEP1)", IMC,
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'
+     '        Check(LITELLM_CHECK, ("python", "-c", LITELLM_CALL)),\n',
+     '              ("python", "-c", ABSENT, *NOT_IN_INJECTORS)),\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_image_check.py" for n in range(1610, 1615)})
 # DEP1 (#282): `make llm-compare ATTEST=1` passes --attest without --json (M1617).
 _SMOKE_T = "tests/unit/test_llm_smoke.py"
 MUTANTS += [
@@ -3978,6 +3998,14 @@ MUTANTS += [
      "    if args.json:\n        import json\n        from pathlib import Path\n        Path(args.json)"),
 ]
 TESTS["M1617"] = _SMOKE_T
+# DEP1, after its review: the CI's guard of a committed attestation reads it for the default
+# model, never for the model the attestation names itself (tests/unit/test_llm_smoke.py). M1616.
+MUTANTS += [
+    ("M1616", "the CI's guard reads an attestation for its own model, not the default (DEP1)", _SMOKE_T,
+     '            _entry, cases[side] = cd._passage(p, model, side, ',
+     '            _entry, cases[side] = cd._passage(p, ((p.get("models") or [{}])[0]).get("model"), side, '),
+]
+TESTS["M1616"] = _SMOKE_T
 # H3 (#324, M1670–M1689): the harness's attestation judged against the lock in service — two
 # passes, each case's draws (scripts/llm_smoke.py, scripts/harness_attest.py), and the CD's rule
 # (`attested`): only a regression refuses, what varies is said. M1010–M1012 retargeted above.

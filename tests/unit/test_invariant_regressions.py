@@ -3284,7 +3284,7 @@ def test_a_bypass_brought_back_after_a_full_disk_is_said(monkeypatch, isolation,
            dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
                 destination_address_prefix="*", destination_port_range="*"))
     _run(monkeypatch, _net(web_nic={"own": "dedicated", "rules": [_rule(rule, 100, tpl)]}),
-         ("said_then_back_after_a_full_disk", False, WEB1, WEB1, None, isolation, *([] if isolation else [22]),
+         ("said_then_back_after_a_full_disk", "bypass", WEB1, WEB1, None, isolation, *([] if isolation else [22]),
           (101, _NSG_WEB), rule, "human_only", "human_only", (2, "from-full"), "human_only"))
 
 
@@ -3296,8 +3296,20 @@ def test_an_unreadable_state_brought_back_after_a_full_disk_is_said(monkeypatch,
     read « said » from the record, no card, before L2C. Found by the machine alone on
     `main` at 500 sequences, seeds 101, 202, 322, 42, 777 and 1."""
     _run(monkeypatch, _net(),
-         ("said_then_back_after_a_full_disk", True, "human_only", another, "human_only", (n, "from-full"),
+         ("said_then_back_after_a_full_disk", "unreadable state", "human_only", another, "human_only", (n, "from-full"),
           "human_only"))
+
+
+@pytest.mark.parametrize("isolation", [True, False], ids=["isolation", "block"])
+def test_a_disappearance_after_one_acknowledged_and_held_again_is_said_by_the_machine(monkeypatch, isolation):
+    """The same rule, its branch for the review of L2C: web isolated by rules on its own
+    NSG, or blocked there; our rules taken off — said; the operator acknowledges it; the
+    rules put back during a pass where the disk is full from its first write of the local
+    state (the drift mark not taken off); taken off again. Before the review's fix: read
+    « already said » from the mark — no card, the VM open again."""
+    _run(monkeypatch, _net(web_nic={"own": "dedicated"}),
+         ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, isolation, *([] if isolation else [22]),
+          (1, "from-full")))
 
 
 _S101_SSH = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",

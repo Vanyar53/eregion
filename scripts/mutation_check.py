@@ -5572,6 +5572,10 @@ MUTANTS += [
      "    if over:\n        _EPISODE_OVER.add((key.lower(), ip))\n"),
 ]
 TESTS.update({f"M{n}": _L2C_DRIFT for n in range(1942, 1950)})
+TESTS.update({f"M{n}": ("tests/unit/test_invariant_regressions.py::"
+                        "test_a_disappearance_after_one_acknowledged_and_held_again_is_said_by_the_machine "
+                        f"{_L2C_DRIFT} {INVARIANTS}") for n in range(1942, 1946)})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

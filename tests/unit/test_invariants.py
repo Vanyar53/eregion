@@ -1999,10 +1999,97 @@ class IsolationMachine(RuleBasedStateMachine):
         is written, the mark of what was said may stay behind), and comes back as it was.
         A change that came back read « said » from the mark, with no card left."""
         # The bypass more often: its steps reach it less (a customer's rule before our deny).
-        if data.draw(st.sampled_from([False, False, False, True]), label="unreadable state"):
+        what = data.draw(st.sampled_from(["bypass", "bypass", "gone", "unreadable state"]), label="what")
+        if what == "unreadable state":
             self._unreadable_comes_back(data)
+        elif what == "gone":
+            self._gone_comes_back(data)
         else:
             self._bypass_comes_back(data)
+
+    def _gone_comes_back(self, data):
+        """An isolation by rules or a block of the VM, its rules taken off: said; the operator
+        acknowledges it — said for its episode —; the rules put back as they were during the
+        full disk (the drift mark may stay), then taken off again: a new episode, said (L1;
+        the review of L2C: the mark alone read « already said »). In human_only: said, never
+        put back. Gone is the test's own: it took our rules off itself."""
+        vm, rid, _ = self._draw(data)
+        isolation = data.draw(st.booleans(), label="isolation")
+        if isolation:
+            if self.config["quarantine"] or not self.config["readable"]:
+                self.config = {**self.config, "quarantine": False, "readable": True}
+                self._write_config()
+            self._isolate(vm, rid, None)
+        else:
+            port = data.draw(st.sampled_from([22, None]), label="threat_port")
+            self._block(vm, rid, None, port)
+
+        def reached() -> frozenset:
+            return self._open(vm, forensic="now") if isolation else self._attacker_flows(vm, port)
+        closed = reached()
+        if {f for f in closed if f[3] not in (AZURE_DNS, AZURE_IMDS)}:
+            return                      # passed from the start (an allow before our deny): no hold to lose
+        marks = {_nic_hash(n) for n in self.fake.vms[key(vm)]["nics"]}
+        head = "glorfindel-iso-" if isolation else "glorfindel-block-"
+        ours = {(k, n): dict(r) for k, g in self.fake.nsgs.items() for n, r in g["rules"].items()
+                if n.startswith(head) and any(h in n for h in marks)}
+        if not ours:
+            return
+
+        def take_off():
+            for k, n in ours:
+                self.fake.nsgs.get(k, {}).get("rules", {}).pop(n, None)
+            self._claims_after_a_change()
+        take_off()
+        if not reached() - closed:
+            return                      # still held (a NIC in our quarantine, say): not gone
+        _note(f"{'isolation' if isolation else 'block'} gone")
+        human = "human_only"
+        self.reassert(_Drawn(data, fault=None, mode=human))
+        self._gone_said(vm, isolation)
+        for e in escalations.pending():
+            if (key(e.get("resource_id") or "") == key(vm) and (e.get("signal_id") or "").startswith("reassert-")
+                    and e.get("action") == ("isolate_vm" if isolation else "block_suspicious_ip")):
+                escalations.resolve(e["id"])                # the operator acknowledges it
+                if not isolation:
+                    self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}
+        self.reassert(_Drawn(data, fault=None, mode=human))
+        for (k, n), r in ours.items():                      # put back as they were
+            if k not in self.fake.nsgs:
+                return
+            try:
+                FakeAzure._put_rule(self.fake.nsgs[k], dict(r))
+            except Exception:
+                return
+        self._claims_after_a_change()
+        if reached() - closed:
+            # Back, but something passes it now (an allow of the customer's before our deny,
+            # since): bypassed, not held — the disappearance is not seen over by the code; it
+            # is not this branch's episode.
+            return
+        # Held again as before: the acknowledged episode is over, by the test's own journal.
+        getattr(self, "acked_drift", {}).pop(vm, None)
+        self.reassert(_Drawn(data, fault=st.tuples(st.integers(1, 6), st.just("from-full")), mode=human))
+        take_off()
+        self.reassert(_Drawn(data, fault=None, mode=human))
+        if not reached() - closed:
+            return
+        _note(f"{'isolation' if isolation else 'block'} gone again")
+        self._gone_said(vm, isolation)
+
+    def _gone_said(self, vm: str, isolation: bool):
+        """L1 for an isolation as for a block (the block's is the reassert rule's own): the
+        test took its rules off, its record stands, no operation holds it — a pending card
+        of the reassertion's on the VM says it. Called before the acknowledgement, and after a new episode."""
+        if not isolation:
+            return                                          # the reassert rule's L1 judged it
+        record = self._state(vm)
+        if (record is None or vm in self.releasing
+                or any(record.get(k) for k in ("partial", "release_failed", "releasing_at"))):
+            return
+        said = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)
+                and e.get("action") == "isolate_vm" and (e.get("signal_id") or "").startswith("reassert-")]
+        assert said, f"L1: the isolation of {vm} vanished from Azure; the reassertion neither put it back nor said so"
 
     def _unreadable_comes_back(self, data):
         """A state file of no VM's unreadable (the test writes it, beside the others), said;

@@ -1652,7 +1652,7 @@ MUTANTS += [
      "    report: list[dict] = []\n    _whatever_the_state(connector, autonomy, report)\n    return report\n",
      "    return []\n"),
     ("M836", "an acknowledged quarantine card comes back at every pass (I1F, review)", RQ,
-     "        if signal_id in said or alerts.get(k) == signal_id:\n",
+     "        if signal_id in said or (alerts.get(k) == signal_id and acknowledged(k, signal_id)):\n",
      "        if signal_id in said:\n"),
     ("M837", "a quarantine card closed on an NSG read as unknown (I1F, review)", RQ,
      '            return seen[k].get("status") != "unknown" and k not in altered\n',
@@ -5319,6 +5319,43 @@ MUTANTS += [
 TESTS.update({mid: _C1_COV for mid in ("M1826", "M1827", "M1828", "M1829", "M1880", "M1881", "M1882",
                                         "M1883", "M1885", "M1886", "M1888", "M1889")})
 TESTS.update({"M1884": "tests/unit/test_indicators.py", "M1887": "tests/unit/test_engine.py -k unified"})
+
+# L2Q (#331, M1860–M1879): a quarantine change that comes back is said again — only the
+# operator's last word on it silences it, never quarantine_alerts.json alone (seed 101).
+_L2Q = " ".join(f"tests/unit/test_reassert.py::test_{t}" for t in (
+    "a_change_that_comes_back_after_its_record_was_lost_is_said_again",
+    "a_change_whose_card_could_not_be_written_leaves_the_former_unsilenced",
+    "only_the_operators_last_word_silences_a_change", "an_acknowledgement_is_read_on_its_own_nsg_only",
+    "a_change_brought_back_by_an_unreadable_config_is_said_and_so_is_the_config",
+    "an_acknowledged_card_stays_closed_while_its_change_stands"))
+MUTANTS += [
+    ("M1860", "a change that comes back read « said » from quarantine_alerts.json alone (L2Q, seed 101)", RQ,
+     "        if signal_id in said or (alerts.get(k) == signal_id and acknowledged(k, signal_id)):\n",
+     "        if signal_id in said or alerts.get(k) == signal_id:\n"),
+    ("M1861", "Glorfindel's closure of a quarantine card carries no note: read as the operator's (L2Q)", RQ,
+     '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
+     '            escalations.resolve(e["id"])\n'),
+    ("M1862", "a card closed because its change moved carries no note: read as acknowledged (L2Q)", RQ,
+     '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
+     '            escalations.resolve(e["id"], note="" if k in altered else _SETTLED)\n'),
+    ("M1863", "the operator's word on another change silences this one (L2Q)", RQ,
+     '        return (last is not None and last.get("signal_id") == signal_id\n',
+     "        return (last is not None\n"),
+    ("M1864", "the NSG's first card read, not its latest: an old acknowledgement silences a return (L2Q)", RQ,
+     '        last = next((e for e in reversed(history) if _key(e.get("resource_id")) == k), None)\n',
+     '        last = next((e for e in history if _key(e.get("resource_id")) == k), None)\n'),
+    ("M1865", "a card Glorfindel closed itself read as acknowledged (L2Q)", RQ,
+     '                and last.get("status") == "resolved" and not last.get("resolution"))\n',
+     '                and last.get("status") == "resolved")\n'),
+    ("M1866", "the latest card of any NSG read for this one's acknowledgement (L2Q)", RQ,
+     '        last = next((e for e in reversed(history) if _key(e.get("resource_id")) == k), None)\n',
+     "        last = next(iter(reversed(history)), None)\n"),
+]
+TESTS["M1860"] = ("tests/unit/test_invariant_regressions.py::"
+                  "test_an_altered_quarantine_stays_said_when_its_change_comes_back "
+                  "tests/unit/test_invariant_regressions.py::test_a_quarantine_change_brought_back_after_a_full_disk_is_said "
+                  f"{_L2Q} {INVARIANTS}")
+TESTS.update({f"M{n}": _L2Q for n in range(1861, 1867)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

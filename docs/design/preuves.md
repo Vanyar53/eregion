@@ -1732,17 +1732,37 @@ la VM ou celle du périmètre), `test_a_deleted_vms_deny_behind_a_turned_rule_st
 M1730–M1736, attrapés à chaque tour ; par la machine seule à 500 séquences, M1730 et M1734 1/3
 (M1730 0/6 avant la règle composée).
 
-**Mesures d'I5Q.** Invariants à 500 séquences sur les graines 101, 202, 322, 1, 42 et 777, puis
-2 000 sur 101, 322 et 42, verts, avant la reprise de RB1 ; après elle, la séquence du relecteur
-rejouée et les invariants de nouveau (ci-dessous). Au même budget (60 séquences, deux tours,
-`--jobs 4`), les 80 mutants mesurables par la machine de `providers/azure/`, de `response/`, de la
-réaffirmation et des orphelines, avant (`b83cb92`) et après : 51/80 attrapés à chaque tour avant,
-50/80 après (57/87 avec M1730–M1736). Aucun perdu : M19 et M26, attrapés par la machine avant, ne
-l'étaient plus que par leurs séquences figées après ; remesurés sur quatre tours, 2/4 puis 1/4
-(M19), 2/4 puis 2/4 (M26), et 2/2 chacun à 500 après. M02, M18, M32, M34, M830 et M831 gagnent un
-tour, M04, M14 et M20 aussi ; M08, M09, M12 et M17 en perdent un (remesurés sur quatre tours : entre
-1/4 et 4/4 des deux côtés). À 500, le code d'avant tombe déjà, sur une graine du moment, sur une
-autre propriété (« I4: … cut off … », hors de ce lot) : la mesure d'avant à 500 n'a pas pu tourner.
+**La carte partagée.** Après la reprise de RB1, la graine 101 à 500 a trouvé la suite : « U1: the
+orphan rule glorfindel-iso-web-… kept behind a rule turned into an allow, cutting […/batch], not
+said ». Les refus entrant et sortant de la VM supprimée coupent la même VM : dits en `human_only`,
+ils partagent une carte (le magasin fusionne par VM). Passée en `non_disruptive`, la passe retire
+le sortant (la règle retournée est entrante) et résolvait la carte, que l'entrant, gardé, partageait :
+le refus restait, plus dit. Correctif (`orphans.py`) : une carte qu'une orpheline encore suivie
+partage reste ouverte. Test `test_a_card_two_rules_share_stays_open_while_one_stands` ; M1737
+attrapé.
+
+**Trouvé en chemin, hors d'I5Q : L2.** La même graine tombe ensuite sur L2 (« the quarantine NSG
+…/rg-sec/…/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5]; the
+reassertion neither put it back nor said so ») : réduite à 14 étapes écrites avec les règles de
+`main`, elle échoue de même avec `glorfindel/` de `171a242` (RB1) et de `b83cb92` (avant RB1).
+La carte `restore_quarantine_nsg` de ce NSG se ferme au passage où la configuration devient
+illisible (la quarantaine éteinte), le NSG toujours modifié et tenant une carte. Cause non établie ;
+figée en `xfail` strict (`test_an_altered_quarantine_said_while_the_config_is_unreadable`) pour un
+lot à part. La graine 101 à 500 reste rouge sur L2 jusqu'à lui.
+
+**Mesures d'I5Q.** Avant la reprise de RB1 : invariants à 500 séquences sur les graines 101, 202,
+322, 1, 42 et 777, puis 2 000 sur 101, 322 et 42, verts. Sur le code final (RB1 et la 0.4.6 repris) :
+la séquence du relecteur (graine 101, 14 étapes) passe, et tombe toujours sur I5 avec `glorfindel/`
+de `b83cb92` ; à 500 séquences, verts sur les graines 202, 322, 1, 42, 777 et 2718, la 101 rouge sur L2 seule (ci-dessus) ; à 2 000, verts sur 322, 42 et 777. Au même budget (60 séquences,
+deux tours, `--jobs 4`), les 80 mutants mesurables par la machine de `providers/azure/`, de
+`response/`, de la réaffirmation et des orphelines, avant (`b83cb92`) et après (avant la reprise de
+RB1) : 51/80 attrapés à chaque tour avant, 50/80 après (57/87 avec M1730–M1736). Aucun perdu : M19
+et M26, attrapés par la machine avant, ne l'étaient plus que par leurs séquences figées après ;
+remesurés sur quatre tours, 2/4 puis 1/4 (M19), 2/4 puis 2/4 (M26), et 2/2 chacun à 500 après. M02,
+M04, M14, M18, M20, M32, M34, M830 et M831 gagnent un tour ; M08, M09, M12 et M17 en perdent un
+(remesurés sur quatre tours : entre 1/4 et 4/4 des deux côtés). À 500, le code d'avant tombe déjà,
+sur une graine du moment, sur une autre propriété (« I4: … cut off … », hors de ce lot) : la mesure
+d'avant à 500 n'a pas pu tourner.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

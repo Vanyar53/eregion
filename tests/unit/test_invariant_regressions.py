@@ -3407,6 +3407,45 @@ def test_a_merged_block_whose_perimeter_terraform_removed_is_said(monkeypatch):
          ("reassert", "human_only", None))
 
 
+def _s1618(name, priority, access, port, source="*", direction="Inbound", destination="*"):
+    return _rule(name, priority, dict(access=access, direction=direction, source_address_prefix=source,
+                                      destination_address_prefix=destination, destination_port_range=port))
+
+
+_S1618_SSH = _s1618("allow-ssh", 100, "Allow", "22")
+_S1618_OUT = _s1618("allow-lateral-out", 100, "Allow", "*", direction="Outbound", destination="VirtualNetwork")
+_S1618_DENY = _s1618("deny-lateral-in", 130, "Deny", "*", source="VirtualNetwork")
+_S1618_NET = {
+    "subnet_nsg": [_s1618("allow-ssh", 101, "Allow", "22"), _S1618_DENY],
+    "edge_nsg": [_S1618_SSH], "tier_rules": [_S1618_SSH],
+    "nics": {"web-nic": {"own": None, "rules": [], "policy": True},
+             "db-nic-0": {"own": "tier", "policy": False,
+                          "rules": [_s1618("allow-https", 100, "Allow", "443", source="Internet"), _S1618_OUT]},
+             "db-nic-1": {"own": None, "rules": [_S1618_SSH], "policy": True},
+             "api-nic": {"own": None, "rules": [_S1618_SSH, _S1618_OUT, _S1618_DENY], "policy": False}},
+    "windows": None, "config": {"quarantine": True, "readable": True, "forensic": [], "rg": ""},
+    "legacy": None, "data_subnet": None}
+_RG_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+
+
+@pytest.mark.xfail(strict=True, reason="I5 outside L2C (to route): present on origin/main, without L2C's rule")
+def test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address(monkeypatch):
+    """Seed 1618 at 2 000 sequences (L2C's review), shrunk by hand to three steps of rules
+    `main` has: Db--01 isolated twice at once (the other VM's turn interleaved);
+    `address_reused_under_a_turned_rule` on Db--01 (db-nic-1's address changed, rg-new/api
+    created); our quarantine NSG stripped, the state lost, the reassertion outside
+    human_only — « I5: the reassertion opened flows of …/Db--01 »: db-nic-1, inbound, port
+    22, from 10.9.9.9, 203.0.113.7 and 192.31.196.7. Frozen for its own lot."""
+    _run(monkeypatch, _S1618_NET,
+         ("concurrently", DB, "isolate", 2, "isolate", "human_only", 8644),
+         ("address_reused_under_a_turned_rule", DB, DB.lower(), None, None,
+          (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-db--01-db-nic-1-1232a8-out"),
+          "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-1",
+          0, 20, "rg-new", "api", None, "Linux"),
+         ("quarantine_altered_then_reasserted", _RG_NEW_WEB, _RG_NEW_WEB, (7, "before-crash"), True, True,
+          _S101_NSG.format("rg-app1", "nsg-glorfindel-quarantine-westeurope"), "non_disruptive"))
+
+
 # ── I5Q, its second review: seed 322 at 2 000 after I4A's merge ─────────────────────────
 
 _S322_NET_KEPT = {'subnet_nsg': [], 'edge_nsg': None, 'tier_rules': [], 'nics': {'web-nic': {'own': None, 'rules': [], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': False}, 'db-nic-1': {'own': None, 'rules': [], 'policy': False}, 'api-nic': {'own': None, 'rules': [], 'policy': False}}, 'windows': None, 'config': {'quarantine': False, 'rg': '', 'forensic': [], 'readable': True}, 'legacy': None, 'data_subnet': None}

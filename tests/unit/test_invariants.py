@@ -26,7 +26,8 @@ What must hold whatever happens:
       "blocked" means the attacker is cut off, "released" means back to the design with
       nothing of Glorfindel's left on the NICs, a verification that says True is true;
   I4  an operation on one VM changes nothing for another — homonyms included (a
-      perimeter block closes the attacker's flows on its subnet, and only those) — and
+      perimeter block closes the attacker's flows on its subnet, and only those; an
+      unblock or a reset that lifts one opens them, never cuts one off — I4B) — and
       never deletes another VM's older isolation, even where no flow tells (I4S);
   I5  the reassertion never opens anything, never acts on a VM it has no state for,
       and writes nothing to Azure in human_only;
@@ -843,6 +844,29 @@ class IsolationMachine(RuleBasedStateMachine):
         back for one VM re-seals the others, as it should."""
         return any(n["nsg"] and actions._is_quarantine_nsg(n["nsg"]) for n in self._nics(vm))
 
+    def _attacker_never_cut(self, vm: str, before: frozenset, after: frozenset, what: str,
+                            reopenable: frozenset = frozenset()):
+        """Lifting a perimeter opens the attacker's flows of the VMs behind it; it never
+        cuts one off (I4B) — but a VM in quarantine, re-sealed as in _only_sealed. And it
+        opens them only where a perimeter was lifted: a perimeter rule of ours (the IP's
+        name alone) taken off an NSG that governs one of the VM's NICs — the test's
+        journal of API writes; elsewhere only what another NIC's leftover rule closed
+        (`reopenable`, as in _only_sealed)."""
+        lost = {f for f in before if f[3] == ATTACKER} - after
+        assert not lost or self._in_quarantine(vm), f"{what} cut off {vm} ({sorted(lost)[:3]})"
+        if self._perimeter_lifted_for(vm):
+            return
+        opened = {f for f in after if f[3] == ATTACKER} - before - reopenable
+        assert not opened, f"{what} opened flows of {vm} ({sorted(opened)[:3]})"
+
+    def _perimeter_lifted_for(self, vm: str) -> bool:
+        """Since the operation began (_before): a rule under the attacker's perimeter name
+        (`glorfindel-block-<ip>`, `-out`) deleted from an NSG that governs a NIC of `vm`."""
+        plain = "glorfindel-block-" + ATTACKER.replace(".", "-")
+        chain = {key(g) for n in self._nics(vm) for g in (n["nsg"], self.fake.subnets[key(n["subnet"])]["nsg"]) if g}
+        return any(e["op"] == "rule.delete" and e["nsg"] in chain and e["rule"] in (plain, f"{plain}-out")
+                   for e in self.fake.journal[self.journal_at:])
+
     def _only_sealed(self, vm: str, before: frozenset, after: frozenset, what: str,
                      reopenable: frozenset = frozenset()):
         """Nothing opened — but what only another NIC's leftover rule closed (an IP that
@@ -852,7 +876,12 @@ class IsolationMachine(RuleBasedStateMachine):
         assert after <= before | reopenable and (before <= after or self._in_quarantine(vm)), (
             f"{what} cut off {vm}")
 
-    def _others_unchanged(self, vm: str, flows_before: dict, states_before: dict, perimeter: bool = False):
+    def _others_unchanged(self, vm: str, flows_before: dict, states_before: dict, perimeter: bool | str = False):
+        """I4. `perimeter`: True for a perimeter block (it closes the attacker's flows on
+        its subnet, by design); "lift" for an unblock or a reset, which may lift one — the
+        attacker's flows of another VM may open then, never be cut (I4B: they were taken
+        out of the comparison, and a turned allow the unblock took off, the VM given the
+        old address lost the flows it gave it, unseen)."""
         flows = self._flows()
         for other in self.live:
             if other == vm:
@@ -862,6 +891,9 @@ class IsolationMachine(RuleBasedStateMachine):
                 # A perimeter block closes the attacker's flows on its subnet, by design.
                 before = frozenset(f for f in before if f[3] != ATTACKER)
                 after = frozenset(f for f in after if f[3] != ATTACKER)
+                if perimeter == "lift":
+                    self._attacker_never_cut(other, flows_before[other], flows[other], f"I4: an operation on {vm}",
+                                             flows_before[("own", other)] - flows_before[other])
             self._only_sealed(other, before, after, f"I4: an operation on {vm}",
                               flows_before[("own", other)] - before)
             assert self._state(other) == states_before[other], (
@@ -1155,7 +1187,7 @@ class IsolationMachine(RuleBasedStateMachine):
         if out and out.get("status") in ("unblocked", "not_found"):
             left = [r for r in self._block_rules_for(vm, own=True) if not self._perimeter_rule(r)]
             assert not left, f"I3: unblock said {out['status']}, rules left for {vm}: {left}"
-        self._others_unchanged(vm, flows, states, perimeter=True)
+        self._others_unchanged(vm, flows, states, perimeter="lift")
 
     def _block_vanished(self, vm: str) -> bool:
         """The VM's block of the attacker is recorded, no operation holds it (the test's
@@ -1439,7 +1471,7 @@ class IsolationMachine(RuleBasedStateMachine):
                     and not self._held_unknown(vm)), (
                 f"I3: reset --from-azure said swept, {vm} is not back to its design")
             assert self._state(vm) is None
-        self._others_unchanged(vm, flows, states, perimeter=True)
+        self._others_unchanged(vm, flows, states, perimeter="lift")
 
     @rule(data=st.data())
     def another_subscription(self, data):
@@ -1562,6 +1594,10 @@ class IsolationMachine(RuleBasedStateMachine):
         after = self._flows()
         for other in self.live:
             if other not in involved and "reassert" not in {first[1], second[1]}:
+                if perimeter:
+                    # Lifted, a perimeter opens the attacker's flows; none of these cuts one (I4B).
+                    self._attacker_never_cut(other, flows[other], after[other], "I4: two operations elsewhere",
+                                             flows[("own", other)] - flows[other])
                 self._only_sealed(other, strip(flows[other]), strip(after[other]), "I4: two operations elsewhere",
                                   flows[("own", other)] - flows[other])
         # The reassertion acts on every VM it has a state for, never on its drawn one, and
@@ -2514,9 +2550,53 @@ class IsolationMachine(RuleBasedStateMachine):
         VM's, or a live VM's aimed at the old address another VM took (an IP changed:
         its release keeps the deny, `release_partial`, the turned rule named) —, put back
         as they were by the operator, as the card or the release asks."""
-        self._behind_turned(self._cutting_orphans() | self._cutting_others())
-        for k, n in sorted(self.turned_behind):
-            self.fake.nsgs[k]["rules"][n] = dict(self.tampered[(k, n)][0])
+        # I4B: a turned allow put back is a deny again — one of ours on another NIC's address,
+        # which may hold back another turned rule in its turn (seed 101 at 500): until none is left.
+        for _ in range(len(self.tampered) + 1):
+            self._behind_turned(self._cutting_orphans() | self._cutting_others())
+            todo = sorted(self.turned_behind | self._turned_aimed_elsewhere())
+            if not todo:
+                break
+            for k, n in todo:
+                self.fake.nsgs[k]["rules"][n] = dict(self.tampered[(k, n)][0])
+
+    def _turned_aimed_elsewhere(self) -> set:
+        """I4B: our rules someone turned into an allow, still as they left them, that let
+        through to a live NIC other than their own VM's what they name — its address on an
+        NSG that governs it, any address (`*`) on an NSG that governs another NIC, or a
+        range or a tag (who it takes in is not read). The unblock, the reset, the release
+        keep them, said (taken off, that VM lost the flows): the operator puts them back
+        as they were, as said. The convention (the rule's NIC by its hash), the test's
+        records (`tampered`)."""
+        import ipaddress
+        out = set()
+        for (k, n), (before, after) in self.tampered.items():
+            r = self.fake.nsgs.get(k, {}).get("rules", {}).get(n)
+            if (before is None or r != after or r["access"].lower() != "allow"
+                    or not n.startswith(("glorfindel-iso-", "glorfindel-block-"))):
+                continue
+            side = "destination" if r["direction"].lower() == "inbound" else "source"
+            values = [v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or [])
+                      if v] or ["*"]
+            mine = {key(c) for vm in self.fake.vms.values() if any(_nic_hash(c) in n for c in vm["nics"])
+                    for c in vm["nics"]}
+            others = [c for ck, c in self.fake.nics.items() if ck not in mine and k in {
+                key(g) for g in (c["nsg"], self.fake.subnets[key(c["subnet"])]["nsg"]) if g}]
+            for v in values:
+                low = v.strip().lower()
+                if low in ("*", "any", "0.0.0.0/0"):
+                    hit = bool(others)
+                else:
+                    try:
+                        ipaddress.ip_address(low)
+                    except ValueError:
+                        hit = True
+                    else:
+                        hit = any(low in c["ips"] for c in others)
+                if hit:
+                    out.add((k, n))
+                    break
+        return out
 
     def _cutting_others(self) -> set:
         """(NSG, rule) of our denies named for one NIC, aimed at an address another live

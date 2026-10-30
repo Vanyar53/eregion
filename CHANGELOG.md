@@ -4,6 +4,15 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **The unblock, the reset, the release and the isolation no longer cut off nor open the VM that took an address** (I4B, #333, 30/10; `docs/azure.md`, « Le déblocage, le reset, la levée et l'isolation, sur une adresse reprise »; `docs/design/preuves.md`, I4B). After an IP change and the old address handed to another VM, these operations took off (or rewrote) one of our rules whatever it had become: a rule someone turned into an allow, aimed at the other VM — it lost the flows it gave it; and an isolation rewritten moved our deny off the old address, where one of our turned rules waited behind it — the other VM opened to the attacker.
+  - **One guard for every removal by name** (`turned._held_by_turned`, I5Q's, extended to a turned allow): such a rule stays, said — `unblock_partial`, `swept_partial`, `release_partial`, the rule named; read only when a rule aims elsewhere than the VM's addresses (`_aims_elsewhere`).
+  - **The isolation's rewrite** reads its pair first, leaves what the guard keeps (`left_rules`, `left_note`, on the reassertion's card too) and writes under the NIC's second name, as I4A's block does.
+  - **The block's guard** reads every turned rule of ours on an NSG that governs the address's holder (`_waits_for`), not only the NIC's own block rules (the lot's fourth point).
+  - **A NIC with no NSG of its own that nothing records**: the unblock looks for its block on every NSG (`_unplaced_blocks`) — it said `not_found` while the block stood (the CI's macOS run, a seventh case, on `main` before I4B).
+  - **The oracle, hardened** (A0: it refuses more, never less): an unblock or a reset lifts a perimeter, the attacker's flows of another VM were left out of I4; they may now open only behind a perimeter it lifted, never be cut. It found the unblock's case on seeds 42 and 8675 at 500 on `main`.
+  - `verify_block_ip` split out of `unblock.py` (`verify_block.py`, moved without change). Six `xfail` lifted, the seventh case frozen; the reset's preview asks the guard too (it showed « supprimer » what the reset then kept); PR #342's CI sequence frozen; mutants M1890–M1906 (16/16 by their sequences; the harness before/after on the 150 mutants of the modules touched: none lost). Invariants at 500 on six seeds and 2 000 on three, green.
+
 ## [0.4.7] — 2026-10-30 — "held to proof"
 
 ### Security

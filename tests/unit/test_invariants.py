@@ -559,6 +559,9 @@ class IsolationMachine(RuleBasedStateMachine):
             self.vms.append(f.add_vm(rg, name, specs, os_type="Windows" if name == net["windows"] else "Linux"))
         self.design = f.snapshot()
         self.legacy: dict[tuple[str, str], str] = {}   # (NSG, rule) of an old version → its VM
+        # The VMs whose older-version state the test wrote and never lost since (I4E): what
+        # names an old isolation's rules, from the test's journal — never the code's state.
+        self.legacy_owned: set = set()
         if net.get("legacy") and net["nics"][net["legacy"][0]]["own"] == "dedicated":
             self._legacy_isolation(*net["legacy"])
         self.config = dict(net["config"])
@@ -594,6 +597,7 @@ class IsolationMachine(RuleBasedStateMachine):
             self.legacy[(key(nsg["id"]), n.lower())] = vm
             f.authored.add((key(nsg["id"]), n.lower()))
         if keep_state:
+            self.legacy_owned.add(vm)
             import json
             d = actions._ISOLATION_STATE_DIR
             d.mkdir(parents=True, exist_ok=True)
@@ -1084,6 +1088,13 @@ class IsolationMachine(RuleBasedStateMachine):
             # refused by a full disk): nothing was started, nothing to undo (I9).
             self.releasing.discard(vm)
         recorded = self._recorded_rules(states_before_release)
+        if (isinstance(states_before_release, dict) and "placements" not in states_before_release
+                and states_before_release.get("rule_names") and (out or {}).get("status") == "release_partial"):
+            # I4E: a partial release of an older version's state leaves it one — written as a
+            # new one, the next release no longer read it, its deny-all kept for ever (M1970).
+            after = self._state(vm)
+            assert after is not None and "placements" not in after, (
+                f"I7: a partial release made {vm}'s older-version state a new one: {after}")
         if vm in self.deleted:
             if out and out.get("status") == "released":
                 left = [r for r in self._named_leftovers(self.deleted[vm]) if r.split("/")[-1] in recorded]
@@ -2522,6 +2533,30 @@ class IsolationMachine(RuleBasedStateMachine):
             self._release(vm, vm, None)
 
     @rule(data=st.data())
+    def an_old_isolations_vm_isolated_again(self, data):
+        """A rare state made common (I4E, #361): the VM of an older version's isolation, its
+        old state kept (the test's journal, `legacy_owned`), a new VM given that NSG or not,
+        the old VM isolated again — under a fault or not (a partial isolation) — then
+        released, released twice, or reset. Its new state wrote over the old record: on the
+        NSG shared since, the deny-all was « VM inconnue » for ever."""
+        owners = sorted({(k, v) for (k, _), v in self.legacy.items()
+                         if k in self.fake.nsgs and v in self.live and v in self.legacy_owned})
+        if not owners:
+            return
+        k, owner = data.draw(st.sampled_from(owners), label="old isolation")
+        g = self.fake.nsgs[k]
+        if data.draw(st.booleans(), label="a new VM on its NSG"):
+            self.create_vm(_Drawn(data, region=g["location"], nsg=g["id"]))
+        self._isolate(owner, owner, data.draw(_FAULTS, label="isolate fault"))
+        then = data.draw(st.sampled_from(["release", "release twice", "reset"]), label="then")
+        if then == "reset":
+            self.reset_from_azure(_Drawn(data, vm=owner, fault=None))
+        else:
+            self._release(owner, owner, None)
+            if then == "release twice":
+                self._release(owner, owner, None)
+
+    @rule(data=st.data())
     def operator_acknowledges(self, data):
         """The operator acknowledges a pending card of the reassertion's about a block (RB1,
         third review): an acknowledged card that silenced whatever followed went unseen — a
@@ -2570,6 +2605,7 @@ class IsolationMachine(RuleBasedStateMachine):
         self._check_authors()                      # what Glorfindel recorded comes first
         self.ticks += 1
         self.state_lost_at[key(vm)] = self.ticks
+        self.legacy_owned.discard(vm)
         for f in (actions._ISOLATION_STATE_DIR.glob("*.json")
                   if actions._ISOLATION_STATE_DIR.exists() else []):
             if actions._file_rid(f) == key(vm):
@@ -2699,7 +2735,9 @@ class IsolationMachine(RuleBasedStateMachine):
                     n["nsg"] = n["design_nsg"]
         # An older version's rule that nothing traces any more — its VM deleted, or its
         # NSG shared since (fixed names only count on a dedicated NSG) without the old
-        # state naming it: the operator removes it.
+        # state naming it: the operator removes it. « Naming it » read from the test's
+        # journal (I4E, A0): the old state written by the test and never lost since — the
+        # code's state, read here, hid a re-isolation that wrote over it.
         for (k, n), owner in self.legacy.items():
             g = self.fake.nsgs.get(k)
             if g is None or n not in g["rules"]:
@@ -2707,8 +2745,7 @@ class IsolationMachine(RuleBasedStateMachine):
             # By design too: a NIC away in quarantine comes back to it during the release.
             shared = sum(k in (key(c["nsg"]), key(c["design_nsg"])) for c in self.fake.nics.values()) > 1 or \
                 any(key(s["nsg"]) == k for s in self.fake.subnets.values())
-            st_ = self._state(owner) if owner not in self.deleted else None
-            named = bool(st_) and "placements" not in st_ and n in {x.lower() for x in st_.get("rule_names", [])}
+            named = owner in self.legacy_owned
             if owner in self.deleted or (shared and not named):
                 del g["rules"][n]
         # An allow someone added under one of our names isn't Glorfindel's to remove
@@ -2722,6 +2759,8 @@ class IsolationMachine(RuleBasedStateMachine):
         self._operator_puts_turned_back()
         deleted_records = {vm: self._recorded_rules(self._state(vm)) for vm in self.deleted}
         for vm in self.vms:
+            if lose_state and vm not in self.deleted:
+                self.legacy_owned.discard(vm)
             if lose_state and vm not in self.deleted and actions._ISOLATION_STATE_DIR.exists():
                 for f in actions._ISOLATION_STATE_DIR.glob("*.json"):
                     if actions._file_rid(f) == key(vm):

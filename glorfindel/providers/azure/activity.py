@@ -140,6 +140,7 @@ def recorded_targets() -> frozenset[str]:
     subscription; `rg/nsg/rule` when the state names none), and each NIC it put in
     quarantine, by id. Unreadable: nothing (its writes there then escalate)."""
     try:
+        from glorfindel.response.legacy_state import _older_record
         from glorfindel.response.state import active_blocks, active_isolations
         states, blocks = active_isolations(), active_blocks()
     except Exception:
@@ -153,10 +154,9 @@ def recorded_targets() -> frozenset[str]:
     for st in states:
         sub = _subscription_of(str(st.get("resource_id") or ""))
         places = list(st.get("placements") or [])
-        if "placements" not in st and st.get("nsg_name"):          # a legacy single-NSG state
-            places.append({"nsg_rg": st.get("nsg_rg", ""), "nsg_name": st["nsg_name"],
-                           "bumped": st.get("bumped") or [],
-                           "names": list(st.get("rule_names") or [])})
+        if older := _older_record(st):        # an older version's record, or kept by a later isolation (I4E)
+            places.append({"nsg_rg": older["nsg_rg"] or "", "nsg_name": older["nsg_name"],
+                           "bumped": older["bumped"], "names": older["rule_names"]})
         for p in places:
             rg, nsg = p.get("nsg_rg", ""), p.get("nsg_name", "")
             for name in (p.get("rule_in"), p.get("rule_out"), *(p.get("names") or [])):

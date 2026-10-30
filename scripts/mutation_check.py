@@ -4889,10 +4889,11 @@ _I5Q_RACE = "tests/unit/test_orphan_sweep.py::test_a_rule_turned_after_the_listi
 MUTANTS += [
     ("M1738", "a card said before the turn is kept: it still says to delete the deny that holds the VM shut (I5Q)",
      "glorfindel/orphans.py",
-     '        if o.get("turned") and card and o["turned"]["rule"].lower() not in said.get(card, ""):\n',
-     '        if False and o.get("turned") and card and o["turned"]["rule"].lower() not in said.get(card, ""):\n'),
+     '        if o.get("turned") and card and not all(_names(said.get(card, ""), g) for g in group[_resource(o).lower()]):\n',
+     '        if False and o.get("turned") and card:\n'),
     ("M1739", "the card of a kept deny says to delete it, its only step (I5Q)", "glorfindel/orphans.py",
-     '        if t := o.get("turned"):\n', '        if False and (t := o.get("turned")):\n'),
+     '        mates = group.get(_resource(o).lower(), []) if o.get("turned") else []\n',
+     '        mates = []\n'),
     ("M1740", "the rules of a VM said again in any order: the card they share keeps the delete of the first (I5Q)",
      "glorfindel/orphans.py", '    orphans = sorted(orphans, key=lambda o: not o.get("turned"))\n',
      "    orphans = list(orphans)\n"),
@@ -4906,7 +4907,20 @@ MUTANTS += [
      "            if nic_id and network.network_interfaces.get(*_parse_nic_resource_id(nic_id)) is not None:\n",
      "            if False:\n"),
 ]
-TESTS.update({mid: _I5Q_CARD for mid in ("M1738", "M1739", "M1740")})
+MUTANTS += [
+    ("M1744", "a card « names » the turned rule by a substring: the perimeter's name begins every VM rule (I5Q)",
+     "glorfindel/orphans.py",
+     "    return f\"notre règle {o['turned']['rule']} (\".lower() in text.lower()\n",
+     "    return o['turned']['rule'].lower() in text.lower()\n"),
+    ("M1745", "the card of a VM names only the turned rule of its first kept deny (I5Q, seed 31337)",
+     "glorfindel/orphans.py",
+     '        mates = group.get(_resource(o).lower(), []) if o.get("turned") else []\n',
+     '        mates = [o] if o.get("turned") else []\n'),
+]
+_I5Q_CARD += (" tests/unit/test_orphan_sweep.py::test_the_card_of_a_vm_names_every_rule_its_kept_denies_wait_behind"
+              " tests/unit/test_invariant_regressions.py::test_a_card_names_the_turned_rule_by_its_whole_name"
+              " tests/unit/test_orphan_sweep.py::test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter")
+TESTS.update({mid: _I5Q_CARD for mid in ("M1738", "M1739", "M1740", "M1744", "M1745")})
 TESTS.update({mid: _I5Q_RACE for mid in ("M1741", "M1742")})
 TESTS["M1743"] = "tests/unit/test_invariant_regressions.py -k live_vms_release"
 

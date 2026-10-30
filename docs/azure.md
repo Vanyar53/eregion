@@ -88,6 +88,7 @@ sans changement de texte, un module par préoccupation, aucun au-delà de 430 li
 | `perimeter.py` | le blocage de périmètre d'une entrée fusionnée : où il tient une carte, lequel une autre VM enregistre (RB1) |
 | `backup.py`, `restore.py` | points de restauration, statut d'un job de restauration, restauration |
 | `sweep.py`, `readers.py` | `reset` et règles orphelines ; droits, inventaire NSG, lectures de l'audit |
+| `turned.py` | nos règles retournées en autorisation, et les refus qu'elles attendent derrière (I5Q) : la garde du balayage des orphelines et de la levée d'une VM supprimée |
 | `sdk.py`, `capabilities.py`, `monitor.py` | préchauffage du SDK ; capacités déclarées ; Log Analytics |
 | `activity.py` | le journal d'activité (`AzureActivity`, AL1) : les écritures de Glorfindel écartées (son identité et ses opérations déclarées), ses règles marquées |
 | `entra.py` | les journaux d'Entra ID (`AuditLogs`, `AADServicePrincipalSignInLogs`, C2) : les seuils en code, l'identité de Glorfindel marquée (acteur ou cible), jamais écartée ; le texte et les étapes d'une carte d'identité |

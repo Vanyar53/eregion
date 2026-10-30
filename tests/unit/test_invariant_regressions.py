@@ -2559,6 +2559,32 @@ def test_an_orphan_deny_behind_a_turned_rule_stays_said_then_goes(monkeypatch, t
         shutil.rmtree(m.home, ignore_errors=True)
 
 
+def test_a_card_names_the_turned_rule_by_its_whole_name(monkeypatch):
+    """Seed 31337 at 500 (I5Q, after its review), as the machine drew it. Two denies of a
+    deleted VM kept behind two turned rules (the perimeter's inbound, api's outbound), and
+    an older card of another orphan rule of the IP, said in human_only: the perimeter's
+    name begins every VM rule of its IP — read as a substring, that card « named » the
+    perimeter and was kept, still telling to delete; and the VM's card named only the
+    first turned rule. U1 asks a pending card naming each, by its whole name, that
+    doesn't say first to delete."""
+    _run(monkeypatch, {**_net(api_nic={"rules": [
+        _rule("allow-https", 100, dict(access="Allow", direction="Inbound", source_address_prefix="Internet",
+                                        destination_address_prefix="*", destination_port_range="443")),
+        _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                              destination_address_prefix="VirtualNetwork",
+                                              destination_port_range="*"))]},
+        web_nic={"own": "dedicated"}), "edge_nsg": []},
+         ("turned_then_address_reused", API, API, None, 22, "both", 22, (key(_Q_EDGE_NSG), _Q_API_BLOCK),
+          "non_disruptive", False, 22, False, "rg-app2", "api", None, "Linux", False, "human_only"),
+         ("tamper_with_our_rule", "access", (key(_Q_EDGE_NSG), _Q_PERIMETER)),
+         ("time_passes",),
+         ("block_turned_then_reasserted", WEB1, WEB1, (1, "before-429"), "both", 22,
+          (key(_Q_EDGE_NSG), f"{_Q_API_BLOCK}-out"), "non_disruptive"),
+         ("address_reused", "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api",
+          "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/api", None, True,
+          False, "rg-new", "web", None, "Linux", True, None, "non_disruptive"))
+
+
 @pytest.mark.parametrize("state", ["kept", "isolation lost"])
 def test_a_deleted_vms_deny_behind_a_turned_rule_stays_with_its_release(monkeypatch, state):
     """The same hole on the other path that takes a deleted VM's denies off: its release

@@ -229,6 +229,45 @@ def test_a_card_said_before_the_turn_is_replaced_by_one_naming_it(monkeypatch, t
     assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
 
 
+def test_the_card_of_a_vm_names_every_rule_its_kept_denies_wait_behind(monkeypatch):
+    """I5Q, seed 31337 at 500 (the review's fixes): the inbound and outbound denies of the
+    deleted VM, kept behind two different turned rules — the perimeter's in, and its out.
+    The store merges the cards of a VM: the card named the first only, the other deny
+    kept unsaid. It names both, and puts both back first."""
+    f, c, g, perimeter, new = _held_world(monkeypatch)
+    g["rules"][perimeter]["access"] = "Allow"
+    g["rules"][f"{perimeter}-out"]["access"] = "Allow"
+    _watch_pass(c, "non_disruptive")
+    assert {n for n in g["rules"] if n.startswith("glorfindel-iso-")}, "a kept deny went"
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    for rule in (perimeter, f"{perimeter}-out"):
+        assert f"notre règle {rule} (" in card["reason"], card["reason"]
+    assert all(s.startswith("Remettre ") for s in card["suggested_steps"][:2]), card["suggested_steps"]
+
+
+def test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter(monkeypatch):
+    """I5Q, seed 31337: the perimeter's name begins every VM rule of its IP. web blocked for
+    itself and on its subnet, deleted; its own block deny, said in human_only, names
+    `glorfindel-block-<ip>-web-…` — read as a substring, that card « named » the turned
+    perimeter, and was kept: still telling to delete the deny. It is replaced."""
+    f, c, subnet = _world(monkeypatch)
+    for scope in ("vm", "subnet"):
+        assert c.block_suspicious_ip(ATTACKER, WEB, scope=scope, threat_port=22)["status"] == "blocked"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    perimeter = "glorfindel-block-" + ATTACKER.replace(".", "-")
+    assert perimeter in g["rules"]
+    _delete(f, WEB)
+    _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    assert perimeter in old["reason"] and f"notre règle {perimeter} (" not in old["reason"]
+    g["rules"][perimeter]["access"] = "Allow"
+    _watch_pass(c, "non_disruptive")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert f"notre règle {perimeter} (" in card["reason"], card["reason"]
+    assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus"), card["suggested_steps"]
+
+
 def test_a_rule_turned_after_the_listing_stops_the_removal(monkeypatch):
     """I5Q, the review: the pass lists the NSGs, then someone turns the perimeter block
     before the removal — the guard is played again on the NSGs that govern the VM cut,

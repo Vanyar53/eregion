@@ -1765,6 +1765,15 @@ refusée : sa propre adresse, rien d'une autre VM n'y attend. Tests
 `test_a_card_said_before_the_turn_is_replaced_by_one_naming_it` (le second passage en `human_only`
 ou en `non_disruptive`, la carte partagée par les deux refus), `test_a_rule_turned_after_the_listing_stops_the_removal`,
 `test_a_live_vms_release_is_not_held_by_its_own_turned_rule[refused]` ; mutants M1738–M1743.
+L'oracle resserré a aussitôt trouvé deux suites (graine 31337 à 500) : les deux refus d'une VM
+gardés derrière deux règles retournées différentes — la carte que le magasin fusionne par VM ne
+nommait que la première ; et le nom de la règle de périmètre commence celui de chaque règle de VM de
+son IP — lu comme une sous-chaîne, une carte ancienne qui disait de retirer une règle de VM passait
+pour nommer le périmètre, et restait. La carte d'une VM nomme maintenant chaque règle retournée que
+ses refus gardés attendent (« notre règle X (… », le nom entier) et les remet toutes en refus
+d'abord ; l'oracle lit le nom entier. Séquence figée `test_a_card_names_the_turned_rule_by_its_whole_name`,
+tests `test_the_card_of_a_vm_names_every_rule_its_kept_denies_wait_behind`,
+`test_a_card_naming_a_vm_rule_of_the_ip_is_no_card_naming_the_perimeter` ; M1744, M1745.
 
 **Trouvé en chemin, hors d'I5Q : L2.** La même graine tombe ensuite sur L2 (« the quarantine NSG
 …/rg-sec/…/nsg-glorfindel-quarantine-westeurope was altered, holds […/api-nic-5]; the

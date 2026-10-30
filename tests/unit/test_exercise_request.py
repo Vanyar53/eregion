@@ -140,3 +140,46 @@ def test_no_typed_file_is_nothing_typed(tmp_path):
     assert xr.load_typed(tmp_path / "absent.json", r) == {}
     (tmp_path / "t.json").write_text(json.dumps({"request": r.id, "typed": {"2": "vm-gondolin"}}))
     assert xr.load_typed(tmp_path / "t.json", r) == {2: "vm-gondolin"}
+
+
+# ── On the operator's machine (make orodruin-exercise): shown, then the names typed ────────
+
+def _confirm(doc, answers):
+    from eregion_core.exercise_plan import load_catalog
+    said, asked = [], []
+
+    def ask(prompt):
+        asked.append(prompt)
+        return answers.pop(0)
+    out = xr.confirm(xr.read(doc), load_catalog(), ask=ask, say=said.append)
+    return out, "\n".join(said), asked
+
+
+def test_a_destructive_wire_asks_its_targets_name_a_harmless_one_does_not():
+    doc = _doc(wires=[{"experiment": "T1110.001", "target": VM, "rank": 1},
+                      {"experiment": "T1486", "target": VM, "rank": 2}])
+    out, said, asked = _confirm(doc, ["vm-gondolin", "y"])
+    assert out == {"request": doc["id"], "typed": {"2": "vm-gondolin"}}
+    assert [a.split(":")[0] for a in asked] == ["Wire 2", "Run these 2 wire(s) from Orodruin? [y/N] "]
+    assert "DESTRUCTIVE" in said and "vm-gondolin" in said
+
+
+def test_an_experiment_this_catalogue_does_not_know_asks_a_name_too():
+    """A0: unknown is never taken for harmless."""
+    out, said, asked = _confirm(_doc(wires=[{"experiment": "T9999", "target": VM, "rank": 1}]),
+                                ["vm-gondolin", "y"])
+    assert out["typed"] == {"1": "vm-gondolin"} and "not in this catalogue" in said
+
+
+@pytest.mark.parametrize("answers", [["vm-bree", "y"], ["VM-GONDOLIN", "y"], ["vm-gondolin", "n"],
+                                     ["vm-gondolin", ""]])
+def test_another_name_or_no_sends_nothing(answers):
+    doc = _doc(wires=[{"experiment": "T1486", "target": VM, "rank": 1}])
+    out, said, _ = _confirm(doc, answers)
+    assert out is None
+
+
+def test_check_id_says_a_bad_id(capsys):
+    assert xr.main(["check-id", "r-20261030T075200Z-a1b2c3"]) == 0
+    assert xr.main(["check-id", "../etc"]) == 1
+    assert "not a request id" in capsys.readouterr().err

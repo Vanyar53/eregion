@@ -27,6 +27,7 @@ import json
 import os
 import re
 import secrets
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -200,3 +201,81 @@ def load_typed(path: str | Path | None, request: Request) -> dict[int, str]:
     if path is None or not Path(path).exists():
         return {}
     return read_typed(_load_json(Path(path), "the names typed"), request)
+
+
+# ── On the operator's machine: show the request, have the names typed ───────────────────
+
+def asks_name(destructive: bool | None, kind: str) -> bool:
+    """A technique destructive, or that nobody declared non-destructive (A0): its target's
+    name is typed. The catalogue decides — never the request."""
+    return kind == "technique" and destructive is not False
+
+
+def confirm(request: Request, catalog: dict, *, ask=input, say=print) -> dict | None:
+    """Show the request wire by wire, and have the operator type the name of each wire's
+    target that asks for one. Returns the names typed (``read_typed``'s shape), or None when
+    the operator stops or types another name: nothing is sent. The name is compared here to
+    the target the request names, to fail early; Orodruin compares it to the name it reads."""
+    say(f"Request {request.id}, written {request.at} — {len(request.wires)} wire(s), "
+        "one after the other:")
+    for w in request.wires:
+        e = catalog.get(w.experiment)
+        what = f"{e.kind} {e.id} {e.name}" if e else f"{w.experiment} (not in this catalogue)"
+        flag = ""
+        if e is None or asks_name(e.destructive, e.kind):
+            flag = "  ← DESTRUCTIVE" if e is not None and e.destructive else "  ← name to type"
+        say(f"  {w.rank:>2}. {what}  →  {w.target_name}  (group "
+            f"{w.target.split('/')[4]}){flag}")
+    typed: dict[str, str] = {}
+    for w in request.wires:
+        e = catalog.get(w.experiment)
+        if e is not None and not asks_name(e.destructive, e.kind):
+            continue
+        got = ask(f"Wire {w.rank}: type the name of its target VM to run it: ").strip()
+        if got != w.target_name:
+            say(f"✗ wire {w.rank}: « {got} » is not its target — nothing is sent.")
+            return None
+        typed[str(w.rank)] = got
+    answer = ask(f"Run these {len(request.wires)} wire(s) from Orodruin? [y/N] ").strip().lower()
+    if answer not in ("y", "yes", "o", "oui"):
+        say("Nothing sent.")
+        return None
+    return {"request": request.id, "typed": typed}
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m eregion_core.exercise_request confirm <request.json> <typed.json>`` (the
+    operator's machine, ``make orodruin-exercise``); ``check-id <id>``."""
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python -m eregion_core.exercise_request")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("confirm")
+    c.add_argument("request")
+    c.add_argument("typed")
+    c.add_argument("--catalog", default=None)
+    k = sub.add_parser("check-id")
+    k.add_argument("id")
+    args = ap.parse_args(argv)
+    if args.cmd == "check-id":
+        if valid_id(args.id):
+            return 0
+        print(f"✗ REQUEST={args.id!r}: not a request id (r-<YYYYMMDDTHHMMSSZ>-<6 hex>)", file=sys.stderr)
+        return 1
+    from eregion_core.exercise_plan import load_catalog
+    try:
+        request = load(args.request)
+    except RequestRefused as e:
+        print(f"✗ request refused: {e} — nothing is sent", file=sys.stderr)
+        return 1
+    typed = confirm(request, load_catalog(args.catalog))
+    if typed is None:
+        return 1
+    fd = os.open(args.typed, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(typed, f)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

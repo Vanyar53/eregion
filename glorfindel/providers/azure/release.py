@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _deny_applies, _deny_isolates, _ip_scoped, _nic_owns, _rule_name
 from glorfindel.providers.azure.quarantine import OriginalUnknown, _is_quarantine_nsg
-from glorfindel.providers.azure.turned import _held_by_turned, _turned_guard
+from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned, _turned_guard
 from glorfindel.providers.azure.sdk import _is_not_found
 from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_id, _same_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
@@ -31,11 +31,11 @@ class ReleaseMixin:
 
     def _isolation_pairs(self, vm_name: str, t: dict) -> list[tuple[str, str]]:
         """Every (inbound, outbound) rule-name pair an isolation of this VM can have left
-        on this NIC's NSG: the per-NIC names (current, then before the NIC hash), the
+        on this NIC's NSG: the per-NIC names (current, its second — I4B —, then before the NIC hash), the
         legacy VM-suffixed names, and the legacy FIXED names on an NSG that governs this
         VM alone — on a shared NSG they could belong to another VM's isolation. A name
         is never proof on its own: see _isolating_pair / _iso_rules_on."""
-        bases = [self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),
+        bases = [*self._placement_rule_bases("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),
                  self._legacy_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"]),
                  f"{self.ISOLATION_RULE_NAME}-{vm_name}"]
         if not _ip_scoped(t):
@@ -62,9 +62,10 @@ class ReleaseMixin:
         """The isolation rules of THIS NIC in `rules` (the NSG's listing): see _nic_owns.
         Names compare without case — Azure's do."""
         names = {n.lower() for n in self._isolation_names_for_target(vm_name, t)}
-        base = self._placement_rule_base("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
+        hashed = {n for b in self._placement_rule_bases("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
+                  for n in (b, f"{b}-out")}
         ips = t.get("private_ips") or None
-        return [r for r in rules if _nic_owns(r, {base, f"{base}-out"}, names, ips)]
+        return [r for r in rules if _nic_owns(r, hashed, names, ips)]
 
     def _original_view(self, t0: dict, original: str) -> dict:
         """The NIC as seen from its original NSG (away while in quarantine, or not yet put
@@ -390,14 +391,15 @@ class ReleaseMixin:
         return failed
 
     def _sweep_isolation(self, rg: str, vm_name: str, remaining: list[dict],
-                         known_nics: list[str] = (), resource_id: str = "") -> list[str]:
+                         known_nics: list[str] = (), resource_id: str = "", guard: dict | None = None) -> list[str]:
         """Remove every isolation of this VM still on Azure: our quarantine NSG on its
         NICs (original from the state, else from our tag), and on each NSG that governs
         a NIC, the rules of THAT NIC — named for it and applying to its addresses, so a
         homonym's rules on the same NSG stay. `remaining`: placements whose undo just
         failed (not tried twice). `known_nics`: the NICs the local records name, looked
         for everywhere once the VM is gone. Returns the failures; an unreadable NIC or
-        rule list is one — nothing found is not nothing there."""
+        rule list is one — nothing found is not nothing there. A rule aimed elsewhere than
+        the VM's addresses asks the guard first (I4B, `guard`: its cache)."""
         stuck = {(p["nsg_rg"].lower(), p["nsg_name"].lower(), n.lower())
                  for p in remaining if p.get("kind") != "quarantine"
                  for n in (p.get("rule_in"), p.get("rule_out")) if n}
@@ -457,6 +459,9 @@ class ReleaseMixin:
             except Exception as exc:
                 return failed + [f"cartes de {vm_name} illisibles, levée non vérifiée : "
                                  f"{_first_line(exc)[:_ERR_MAX]}"]
+        guard = {} if guard is None else guard
+        own_ips = [a for t0 in targets for a in t0.get("private_ips") or []]
+        mates = [t0["nic_id"] for t0 in targets]
         for t0 in targets:
             if t0.get("subnet_unreadable"):
                 failed.append(f'{t0["nic_short"]} : NSG du subnet illisible, levée non vérifiée')
@@ -468,7 +473,9 @@ class ReleaseMixin:
                 for r in self._iso_rules_on(vm_name, t, rules):
                     if (t["nsg_rg"].lower(), t["nsg_name"].lower(), _rule_name(r).lower()) in stuck:
                         continue
-                    err = self._delete_rule(t["nsg_rg"], t["nsg_name"], _rule_name(r))
+                    err = (_aims_elsewhere(r, own_ips) and _held_by_turned(
+                        self._network, guard, t["nsg_rg"], t["nsg_name"], _rule_name(r), t0["nic_id"], mates)
+                           or self._delete_rule(t["nsg_rg"], t["nsg_name"], _rule_name(r)))
                     if err:
                         failed.append(err)
                 failed += [f"{u} : laissée" for u in self._unattributable_fixed(t, rules)]

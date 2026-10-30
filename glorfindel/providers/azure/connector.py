@@ -20,6 +20,7 @@ from glorfindel.providers.azure.restore import RestoreMixin
 from glorfindel.providers.azure.sweep import SweepMixin
 from glorfindel.providers.azure.unblock import UnblockMixin
 from glorfindel.providers.azure.verify import VerifyMixin
+from glorfindel.providers.azure.verify_block import VerifyBlockMixin
 from glorfindel.providers.interface import CloudConnector
 from glorfindel.response.ids import _subscription_of
 from glorfindel.response.locks import _vm_lock
@@ -33,6 +34,7 @@ class AzureConnector(
     ReleaseMixin,
     VerifyMixin,
     BlockMixin,
+    VerifyBlockMixin,
     UnblockMixin,
     PerimeterMixin,
     BackupMixin,

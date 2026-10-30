@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -197,8 +197,58 @@ def test_the_watch_stops_at_the_first_lifting_of_the_vm():
     assert ct.lifting_of(held) is None                          # a release held lifts nothing
     assert ct.lifting_of(_line()) is None                       # an isolation is no lifting
     # A lifting before the read-back, or on another VM, does not end the watch.
-    for lift in ((VM, T0 + 50), (OTHER, T0 + 200)):
+    for lift in ((VM, T0 + 50, ("isolate_vm",)), (OTHER, T0 + 200, ("isolate_vm",))):
         assert _inc(_line(), cards=[_card(at=T0 + 300)], liftings=[lift]).outcome == ct.NOT_HOLDING
+
+
+def test_a_lifting_ends_only_the_containment_it_lifts_and_only_in_full():
+    """M1924, M1925: a release ends an isolation's watch, an unblock a block's, a reset both; an
+    unblock never ends an isolation's watch, nor a release a block's; a partial lifting (rules
+    left), or one read back false, ends nothing."""
+    def manual(action, status="done", **outcome):
+        return ct.lifting_of({"timestamp": _iso(T0 + 200), "action": action,
+                              "signal": {"resource_id": VM}, "outcome": {"status": status, **outcome}})
+
+    isolation = _line()
+    block = _line("block_suspicious_ip", status="blocked")
+    card = [_card(at=T0 + 300)]
+    for lift, iso_ends, block_ends in ((manual("release_isolation"), True, False),
+                                       (manual("unblock_ip"), False, True),
+                                       (manual("reset"), True, True)):
+        assert (_inc(isolation, cards=card, liftings=[lift]).outcome == ct.CONTAINED) is iso_ends
+        assert (_inc(block, cards=card, liftings=[lift]).outcome == ct.CONTAINED) is block_ends
+    for partial in (manual("release_isolation", "release_partial"), manual("unblock_ip", "unblock_partial"),
+                    manual("reset", "partial"), manual("release_isolation", "released", verified=False)):
+        assert partial is None
+        assert _inc(isolation, cards=card, liftings=[partial] if partial else []).outcome == ct.NOT_HOLDING
+
+
+def test_release_said_is_the_reassertions_own_words(bench):
+    """M1926: RELEASE_SAID is pinned on what glorfindel/reassert.py writes — an isolation, then a
+    block, whose lifting was cut off (an intent marker older than 30 min): the reassertion's card
+    starts with it, so a rewording of reassert.py breaks this test, not the indicator."""
+    from glorfindel import escalations
+    from glorfindel.actions import (_load_block_entries, _load_isolation_state,
+                                    _save_isolation_state, _update_block_entry)
+    from glorfindel.config import AutonomyConfig
+    from glorfindel.reassert import reassert_pass
+    b, vm, name = bench, bench["vm"], "vm-celebrimbor-gondolin"
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    b["conn"].block_suspicious_ip("203.0.113.9", vm)          # blocked (on the NIC's own NSG)…
+    assert _load_block_entries(name), "no block state to mark"
+    _detect(_watch(b["conn"]), vm)                            # …then isolated, its state written
+    state = _load_isolation_state(name)
+    assert state, "no isolation state to mark"
+    _save_isolation_state(name, {**state, "releasing_at": old})
+    _update_block_entry(name, "203.0.113.9", unblocking_at=old)
+    reassert_pass(b["conn"], autonomy=AutonomyConfig(default="non_disruptive"))
+    said = [c["reason"] for c in escalations.all_escalations()
+            if c.get("escalation_type") == "verification_failed"]
+    assert any(r.startswith(ct.RELEASE_SAID[0]) for r in said), said
+    assert any(r.startswith(ct.RELEASE_SAID[1]) for r in said), said
+    assert all(r.startswith(ct.RELEASE_SAID) for r in said), said
+    cards = escalations.all_escalations()
+    assert ct.not_holding(vm, 0.0, time.time() + 60, cards) is None
 
 
 def test_read_liftings_reads_the_operator_and_the_watch(tmp_path):
@@ -208,7 +258,7 @@ def test_read_liftings_reads_the_operator_and_the_watch(tmp_path):
     (tmp_path / "restore-1_debug.jsonl").write_text(json.dumps(
         {**_line("release_isolation", at=T0 + 400, status="released"),
          "signal": {"event": "recovery_complete", "resource_id": VM}}) + "\n")
-    assert sorted(t for _, t in ct.read_liftings(tmp_path)) == [T0 + 200, T0 + 400]
+    assert sorted(t for _, t, _ in ct.read_liftings(tmp_path)) == [T0 + 200, T0 + 400]
 
 
 # ── 4. The campaign's figures ─────────────────────────────────────────────────────────────

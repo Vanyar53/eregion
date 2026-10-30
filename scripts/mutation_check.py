@@ -5088,6 +5088,21 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (1910, 1911, 1912, 1914, 1915, 1916, 1917, 1918)})
 TESTS["M1913"] = "tests/unit/test_campaign_declared.py"
+
+# BL1, second review: a lifting paired with the containment it lifts and only in full, and the
+# reassertion's own words RELEASE_SAID reads, pinned. M1924–M1926 (M1917–M1919 taken above).
+MUTANTS += [
+    ("M1924", "an unblock ends the watch of an isolation (BL1, second review)", CTN,
+     "             and action in lifts and _same(rid, resource_id)]\n",
+     "             and _same(rid, resource_id)]\n"),
+    ("M1925", "a partial lifting ends the watch: a card after it hidden (BL1, second review)", CTN,
+     '    if d["status"] in PARTIAL or d["verified"] is False:\n        return None\n', ""),
+    ("M1926", "the reassertion rewords an interrupted release: RELEASE_SAID no longer matches (BL1)",
+     "glorfindel/reassert.py",
+     'reason = (f"La levée de l\'isolation de {vm} a été interrompue (commencée le "',
+     'reason = (f"Levée de l\'isolation de {vm} interrompue (commencée le "'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (1924, 1925, 1926)})
 TESTS["M1919"] = "tests/unit/test_indicators.py"
 
 

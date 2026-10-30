@@ -71,6 +71,14 @@ RELEASE_SAID = ("La levée de l'isolation", "Le déblocage de")
 # (runs/manual_actions.jsonl, glorfindel/cli.py _record_manual_action) and the watch's own
 # release on a recovery (recovery_complete → release_isolation).
 LIFTING = ("release_isolation", "reset", "unblock_ip")
+# What each lifting lifts — paired with the containment it ends: a release lifts an isolation,
+# an unblock a block, a reset both (glorfindel reset: release + unblock). The watch's own release
+# on a recovery_complete lifts an isolation.
+LIFTS = {"release_isolation": ("isolate_vm",), "unblock_ip": ("block_suspicious_ip",),
+         "reset": ("isolate_vm", "block_suspicious_ip")}
+# A lifting that left rules in place lifted nothing that can be said (glorfindel/cli.py: release,
+# unblock, reset; the console's approved release whose check failed says verified false).
+PARTIAL = ("release_partial", "unblock_partial", "partial")
 
 CONTAINED = "contained_alone"
 NOT_HOLDING = "not_holding"
@@ -194,17 +202,20 @@ def not_holding(resource_id: str, since: float, until: float, cards) -> dict | N
     return min(found, key=lambda c: _ts(c["timestamp"])) if found else None
 
 
-def first_lifting(resource_id: str, since: float, liftings) -> float | None:
-    """When the containment of this VM was first lifted after ``since`` — a release, a reset, an
-    unblock, by an operator or by the watch on a recovery (``liftings``: ``(resource id, epoch)``
-    pairs, ``read_liftings``) — else None. Its watch ends there: what follows is not its."""
-    found = [t for rid, t in liftings or () if t is not None and t >= since and _same(rid, resource_id)]
+def first_lifting(resource_id: str, since: float, liftings, action: str = "isolate_vm") -> float | None:
+    """When the containment ``action`` of this VM was first lifted after ``since`` — a release or a
+    reset for an isolation, an unblock or a reset for a block, by an operator or by the watch on a
+    recovery (``liftings``: ``(resource id, epoch, what it lifts)``, ``read_liftings``) — else
+    None. Its watch ends there: what follows is not its."""
+    found = [t for rid, t, lifts in liftings or () if t is not None and t >= since
+             and action in lifts and _same(rid, resource_id)]
     return min(found) if found else None
 
 
-def lifting_of(rec: dict) -> tuple[str, float | None] | None:
-    """``(resource id, when)`` when this line lifts a containment: a manual action of the
-    operator, or the watch's own release on a recovery; else None."""
+def lifting_of(rec: dict) -> tuple[str, float | None, tuple[str, ...]] | None:
+    """``(resource id, when, the containments it lifts)`` when this line lifts a containment, in
+    full: a manual action of the operator, or the watch's own release on a recovery; else None.
+    A lifting held, or that left rules in place (partial, or read back false), lifts nothing."""
     if not isinstance(rec, dict):
         return None
     d = view(rec)
@@ -212,7 +223,10 @@ def lifting_of(rec: dict) -> tuple[str, float | None] | None:
         return None
     if d["executed"] is False:          # a release held (release_hold), or that failed to start
         return None
-    return d["resource_id"], d["at"]
+    if d["status"] in PARTIAL or d["verified"] is False:
+        return None
+    lifts = LIFTS.get(d["action"]) or (("isolate_vm",) if d["event"] == "recovery_complete" else ())
+    return (d["resource_id"], d["at"], lifts) if lifts else None
 
 
 @dataclass
@@ -261,7 +275,7 @@ def incident(run_id: str, ttp: str, target: str, t0, detection: str, decision: d
     inc.contained_at = at
     if at is not None:
         end = until if until is not None else at + HOLD_WATCH_S
-        lifted = first_lifting(target or d["resource_id"], at, liftings)
+        lifted = first_lifting(target or d["resource_id"], at, liftings, d["action"])
         if lifted is not None:
             end = min(end, lifted)
         card = not_holding(target or d["resource_id"], at, end, cards)
@@ -485,10 +499,10 @@ def read_cards(path: Path | None = None) -> list[dict]:
     return out
 
 
-def read_liftings(runs_dir: Path, since: float = 0.0) -> list[tuple[str, float | None]]:
+def read_liftings(runs_dir: Path, since: float = 0.0) -> list[tuple]:
     """When containments were lifted, from the files: the operator's manual actions
     (``runs/manual_actions.jsonl``), the watch's own releases (the debug files of ``runs/``
-    written since ``since``, a minute of slack) — ``(resource id, epoch)``."""
+    written since ``since``, a minute of slack) — ``(resource id, epoch, what it lifts)``."""
     out = []
     paths = [Path(runs_dir) / "manual_actions.jsonl", *sorted(Path(runs_dir).glob("*_debug.jsonl"))]
     for path in paths:

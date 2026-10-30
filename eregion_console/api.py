@@ -2667,9 +2667,6 @@ async def exercise_plan(wire: list[str] = Query(default=[])) -> dict:
     """The plan of the wires drawn — ``wire=<experiment>@<target's resource id>``, repeated, in
     their order: each judged as Orodruin would judge it now, with what to expect. Only those two
     identifiers come from the browser; the server reads and judges everything else."""
-    from eregion_console import board
-    from eregion_core.exercise_plan import load_catalog
-    from glorfindel.config import confidence_threshold
     if len(wire) > MAX_WIRES:
         return {"error": f"at most {MAX_WIRES} wires"}
     pairs = []
@@ -2678,6 +2675,15 @@ async def exercise_plan(wire: list[str] = Query(default=[])) -> dict:
         if not (sep and red.strip() and target.strip()):
             return {"error": "a wire is <experiment>@<target's resource id>"}
         pairs.append((red.strip(), target.strip()))
+    return await _judged(pairs)
+
+
+async def _judged(pairs: list[tuple[str, str]]) -> dict:
+    """The wires judged now, as Orodruin would judge them (the shared core), with what to expect:
+    the plan of phase (a), and what a request is judged by before it is written (phase b)."""
+    from eregion_console import board
+    from eregion_core.exercise_plan import load_catalog
+    from glorfindel.config import confidence_threshold
     try:
         catalog_ = load_catalog()
     except Exception as exc:
@@ -2688,7 +2694,90 @@ async def exercise_plan(wire: list[str] = Query(default=[])) -> dict:
     gate = await asyncio.to_thread(_watch_refusal)
     return board.plan_view(pairs, catalog=catalog_, vms=vms, state=st, rules=rules, watch_refusal=gate,
                            bench=_bench(), fault_targets=_fault_targets(catalog_),
-                           threshold=min(confidence_threshold(), 1.0), targets_error=targets_error)
+                           threshold=min(confidence_threshold(), 1.0), targets_error=targets_error,
+                           orodruin=await asyncio.to_thread(_orodruin_contract))
+
+
+def _orodruin_contract() -> dict | None:
+    """Orodruin's contract as it last published it (``runs/orodruin/contract.json``, pulled by the
+    watch from the exercise channel, DG-b) and read against its shape again — or None: unknown
+    here. Never an identifier: the verdict, its codes, its time."""
+    from eregion_core.orodruin import read_contract
+    try:
+        return read_contract(json.loads((_RUNS / "orodruin" / "contract.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+
+
+@app.get("/api/dagorlad/requests/{request_id}")
+async def exercise_request_status(request_id: str) -> JSONResponse:
+    """A request as this host knows it: written here or not, and what Orodruin says of it — its
+    status, pulled by the watch (``runs/orodruin/requests/<id>.json``), read against its shape
+    again — or nothing yet. Read only."""
+    from eregion_core import exercise_request as xr
+    if not xr.valid_id(request_id):
+        return JSONResponse({"error": "not a request id"}, status_code=400)
+    status = None
+    try:
+        status = xr.read_status(json.loads(
+            (_RUNS / "orodruin" / "requests" / f"{request_id}.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError, xr.RequestRefused):
+        status = None
+    from eregion_console import board
+    return JSONResponse({"request": request_id,
+                         "written_here": (xr.requests_dir() / f"{request_id}.json").is_file(),
+                         "status": status, "orodruin": board.orodruin_check(_orodruin_contract())})
+
+
+@app.get("/api/dagorlad/stop")
+async def stop_all() -> dict:
+    """« Stop all » (DG-b): the console revokes nothing and cannot — it gives Orodruin's emergency
+    stop (``make orodruin-kill``), what it will stop (the live windows and their targets) and what
+    stays in flight (M-1). Read only."""
+    from eregion_console import board
+    now = datetime.now(timezone.utc)
+    windows = await asyncio.to_thread(_read_windows)
+    return board.stop_view(windows, {str(w["run_id"]): _window_state(w, now) for w in windows})
+
+
+@app.post("/api/dagorlad/requests")
+async def exercise_request(body: dict) -> JSONResponse:
+    """Phase (b): a request for Orodruin, written in the console's own directory
+    (``~/.eregion/console/requests/``) — never on the cloud, never where the watch reads. The
+    browser sends, per wire, the experiment and the target, nothing else; the wires are judged as
+    the plan judges them, and a request with a refused wire is not written. The answer gives the
+    command that carries it to Orodruin (``make orodruin-exercise REQUEST=<id>``) and what it will
+    ask there: the page never takes a name typed."""
+    from eregion_console import board
+    from eregion_core import exercise_request as xr
+    wires = body.get("wires") if set(body) == {"wires"} else None
+    if not isinstance(wires, list) or not 1 <= len(wires) <= xr.MAX_WIRES:
+        return JSONResponse({"error": f"a request is {{\"wires\": [...]}}, 1 to {xr.MAX_WIRES} wires"},
+                            status_code=400)
+    pairs = []
+    for w in wires:
+        if not (isinstance(w, dict) and set(w) == {"experiment", "target"}
+                and all(isinstance(w[k], str) and w[k].strip() for k in w)):
+            return JSONResponse({"error": "a wire is {\"experiment\": <id>, \"target\": <resource id>}, "
+                                          "nothing else"}, status_code=400)
+        pairs.append((w["experiment"].strip(), w["target"].strip()))
+    plan = await _judged(pairs)
+    if plan.get("error"):
+        return JSONResponse(plan, status_code=503)
+    judged = plan["wires"]
+    if len(judged) != len(pairs):
+        return JSONResponse({"error": "the same wire twice", "plan": plan}, status_code=400)
+    refused = [v for v in judged if v["code"]]
+    if refused:
+        return JSONResponse({"error": f"{len(refused)} wire(s) refused: remove them first — "
+                                      "nothing is written", "plan": plan}, status_code=409)
+    ordered = sorted(judged, key=lambda v: v["order"])
+    try:
+        req = xr.new([(v["experiment"], v["target"]) for v in ordered])
+        await asyncio.to_thread(xr.write, req)
+    except (xr.RequestRefused, OSError) as exc:
+        return JSONResponse({"error": f"the request is not written: {exc}"[:300]}, status_code=503)
+    return JSONResponse(board.request_view(req, ordered, plan))
 
 
 def serve(host: str = "127.0.0.1", port: int = 7007) -> None:

@@ -145,6 +145,55 @@ def _print_run_failure(outcome) -> None:
         console.print(f"[dim]  → {hint}[/dim]")
 
 
+@cli.command()
+@click.argument("technique")
+@click.argument("target")
+@click.option("--request", required=True, help="The Dagorlad request this wire belongs to (its id).")
+@click.option("--typed-name", default="", help="The target's name, as the operator typed it on their "
+              "machine — a destructive technique runs only on the VM of that name.")
+def wire(technique: str, target: str, request: str, typed_name: str):
+    """One wire of a Dagorlad request (DG-b), run by Orodruin: TECHNIQUE (an id of the catalogue)
+    on TARGET (a VM's resource id), as one run — its scenario made from the catalogue, the
+    request's id written in its window, its journal and its report. Every guard of `annatar run`
+    holds (the watch, the contract, the inscription and the zone, the cap); a destructive
+    technique also needs the name typed, compared to the VM's.
+
+        annatar wire T1110.001 /subscriptions/…/virtualMachines/vm-x --request r-…
+    """
+    import tempfile
+    from pathlib import Path
+
+    from annatar.campaign.catalog import load_catalog
+    from annatar.campaign.scope import Scope
+    from annatar.campaign.synthesizer import synthesize
+    from annatar.runner.engine import Engine
+    from eregion_core.exercise_request import valid_id
+    from eregion_core.inscription import rg_from_id, subscription_from_id
+
+    if not valid_id(request):
+        raise click.UsageError("--request takes a request id (r-<YYYYMMDDTHHMMSSZ>-<6 hex>)")
+    entry = load_catalog().get(technique)
+    if not entry:
+        console.print(f"[red]✗ {technique}: not a technique of the catalogue — nothing run[/red]")
+        raise SystemExit(EXIT_RUN_FAILED)
+    rg = rg_from_id(target)
+    scope = Scope(subscription_id=subscription_from_id(target),
+                  allowed_resource_groups=[rg] if rg else [], allowed_resource_ids=[target])
+    # The scenario lives only for the run: never in runs/, where a local watch reads.
+    with tempfile.TemporaryDirectory(prefix="annatar-wire-") as tmp:
+        made = synthesize(entry=entry, target_resource_id=target, scope=scope, out_dir=Path(tmp),
+                          seq=1, allow_destructive=bool(typed_name))
+        if not made.ok:
+            console.print(f"[red]✗ wire refused: {made.reason}[/red]")
+            raise SystemExit(EXIT_RUN_FAILED)
+        engine = Engine(publish_report=True, request=request, typed_name=typed_name)
+        outcome = engine.run(str(made.path), skip_confirm=True)
+    code = run_exit_code(outcome)
+    if code:
+        _print_run_failure(outcome)
+        raise SystemExit(code)
+
+
 @cli.command(name="list")
 def list_scenarios():
     """List available scenarios."""

@@ -112,10 +112,12 @@ def _publish(window: dict) -> None:
 def open_window(run_id: str, *, injector: str, kind: str, experiment: str,
                 targets: list[str], max_duration_s: float = MAX_DURATION_S,
                 now: datetime | None = None, directory: Path | None = None,
-                destructive: bool | None = None) -> dict:
+                destructive: bool | None = None, request: str = "") -> dict:
     """Declare that ``run_id`` exercises ``targets`` from now, for at most ``max_duration_s``.
     ``destructive``: what the catalog says of the experiment (SEC5, V-20) — unknown is
-    destructive, and marks nothing in production."""
+    destructive, and marks nothing in production. ``request``: the id of the Dagorlad request
+    this run is a wire of (DG-b) — what links the wire to its run; nothing of what the request
+    expects."""
     start = now or _now()
     window = {
         "run_id": run_id,
@@ -128,6 +130,8 @@ def open_window(run_id: str, *, injector: str, kind: str, experiment: str,
         "expires": (start + timedelta(seconds=max_duration_s)).isoformat(),
         "destructive": destructive is not False,
     }
+    if request:
+        window["request"] = request
     _write((directory or exercises_dir()) / f"{run_id}.json", window)
     _publish(window)
     return window

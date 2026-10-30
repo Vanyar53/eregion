@@ -356,6 +356,24 @@ def pull_runs(runs_dir: Path, *, channel: str | None = None, credential=None, ge
     return written
 
 
+def pull_orodruin(runs_dir: Path, *, channel: str | None = None, credential=None, get=None,
+                  say=_say) -> int:
+    """Orodruin's verdict and the status of each request (DG-b), pulled into ``runs/orodruin/``
+    once they have their shape — for the console, never read by the decision. Never raises."""
+    where = Path(runs_dir) / exercise_channel.ORODRUIN
+    try:
+        written, skipped = exercise_channel.pull_orodruin(where, channel=channel,
+                                                          credential=credential, get=get)
+    except Exception as e:
+        _say_once(where, "orodruin", f"Orodruin's verdict and statuses not pulled: {e}", say,
+                  key=_error_key(e))
+        return 0
+    _said.pop((_key(where), "orodruin"), None)
+    for name, why in sorted(skipped.items()):
+        _say_once(where / name, "orodruin", f"{name} not pulled: {why}", say)
+    return written
+
+
 def tick(runs_dir: Path, *, channel: str | None = None, credential=None, get=None,
          model: str | None = None, llm=None, index_path: Path | None = None,
          now: float | None = None, say=_say) -> dict[str, str]:
@@ -378,6 +396,9 @@ def tick(runs_dir: Path, *, channel: str | None = None, credential=None, get=Non
         _say_once(root, "pull", f"pull failed: {e}", say, key=_error_key(e))
         return {}
     _said.pop((_key(root), "pull"), None)
+    # DG-b: Orodruin's verdict and the requests' statuses, once the channel answered — a listing
+    # that fails is said once, above.
+    pull_orodruin(runs_dir, say=say, **kw)
     for cid in sorted(failed):
         _say_once(root / cid, "pull", f"{cid}: not all pulled — its report waits for the next pull", say)
     here = Path(_key(root))

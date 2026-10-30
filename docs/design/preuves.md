@@ -2264,7 +2264,10 @@ mutants de la relecture, code final : 8/8, M902 de même ; M13 bruité à 60 (1/
   Ni l'un ni l'autre n'ouvre rien. Le même mécanisme vaut pour une isolation (graine 42 à 500, la
   branche « disparu ») : ses règles retirées sur une carte dont le NSG porte une allow lue avant
   notre deny, la vérification rend « contournée » sans les règles manquantes ; l'oracle de la
-  branche compte la carte de contournement, en attendant le lot de suite.
+  branche compte la carte de contournement, en attendant le lot de suite. Cet assouplissement de
+  `_gone_said` sera retiré avec L1B (#355) ; d'ici là, la séquence réduite (deux étapes) est
+  figée en `xfail` strict avec la vérification d'avant, qui exige une carte `isolate_vm`
+  (`test_an_isolation_gone_under_a_bypass_is_said_gone`).
 - La graine 1618 à 2 000 (`test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address`),
   un **I5** (une ouverture) : Db--01 isolée deux fois en même temps,
   `address_reused_under_a_turned_rule` sur Db--01, puis notre NSG de quarantaine vidé, l'état perdu

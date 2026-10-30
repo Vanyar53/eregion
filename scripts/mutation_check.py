@@ -4348,6 +4348,16 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_held.py" for mid in ("M2090", "M2091", "M2092")})
 
+MUTANTS += [
+    ("M2093", "Gothmog runs a wire's fault on the VM of the same name in another group (DG-b review)",
+     "gothmog/runner/engine.py",
+     '        if target and {vm.lower() for vm in seen["targets"]} != {target.lower()}:\n',
+     "        if False:\n"),
+    ("M2094", "a fault aimed at several VMs runs on a wire that shows one (DG-b review)", EP,
+     "        elif len({n.lower() for n in aimed}) > 1:\n", "        elif False:\n"),
+]
+TESTS.update({"M2093": "tests/unit/test_gothmog.py", "M2094": "tests/unit/test_exercise_plan.py"})
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.

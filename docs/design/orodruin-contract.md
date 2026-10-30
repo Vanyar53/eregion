@@ -578,7 +578,11 @@ un fil est refusé :
   est tenue, et son fil sauté.
 
 Chaque injecteur garde toutes ses gardes : Annatar compare aussi le nom tapé au nom de la VM qu'il lit
-avant toute écriture, et Gothmog refuse une VM que la panne ne déclare pas. La fenêtre de chaque run
+avant toute écriture, et Gothmog refuse une VM que la panne ne déclare pas. **Un fil, une VM** (relecture
+de DG-b) : Gothmog compare la cible du fil aux VM de l'expérience par leur identifiant complet, jamais
+par leur seul nom (la VM homonyme du jumeau n'est pas celle du banc). Une panne dont l'expérience
+agit sur plusieurs VM est refusée (`no_engine`), dès le jugement : elle ne tourne jamais plus large
+que ce que l'opérateur a vu et tapé. La fenêtre de chaque run
 porte l'identifiant de la demande, ainsi que son rapport (`metrics.request`).
 
 **Ce qu'Orodruin publie pour la console.** Dans le conteneur des fenêtres, sous `orodruin/` : même

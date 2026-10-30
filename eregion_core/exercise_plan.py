@@ -160,6 +160,11 @@ def judge(experiment_id: str, target_id: str, target: Target | None, *,
         elif target.name.lower() not in {n.lower() for n in aimed}:
             return v.refuse("no_engine", f"{e.id}'s engine aims at {', '.join(aimed) or 'no VM'}, "
                                          f"not {target.name}")
+        elif len({n.lower() for n in aimed}) > 1:
+            # A wire takes one VM (DG-b review): a fault that would act on others than the one
+            # the operator sees and types is refused, never run wider.
+            return v.refuse("no_engine", f"{e.id}'s engine aims at {', '.join(aimed)}: a wire "
+                                         f"takes {target.name} alone")
     # Destructive, or nobody declared it is not (A0): the name is typed — an unknown is never
     # taken for harmless, here as in production (check_zone), and DG-b makes this a guard.
     if e.kind == "technique" and e.destructive is not False:

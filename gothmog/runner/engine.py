@@ -285,6 +285,15 @@ class Engine:
                                 {"targets": "PASS" if seen["targets"] else "FAIL",
                                  "steady_state_before": "FAIL" if seen["targets"] else "—"},
                                 error=refusal)
+        # DG-b review: a wire's VM, by its full id — a VM of the same name in another group (the
+        # twin) is not the one judged, shown and typed. A wire takes one VM: a fault whose
+        # experiment acts on any other is refused, never run on more than the operator saw.
+        if target and {vm.lower() for vm in seen["targets"]} != {target.lower()}:
+            why = (f"no_engine: the experiment acts on {', '.join(seen['targets'])}, the wire is "
+                   f"{target} alone")
+            console.print(f"[red]Refused:[/red] {why}")
+            return self._record(fault, run_id, "REFUSED", {"refusal": why, **seen},
+                                {"targets": "FAIL"}, error=why)
 
         # 4–6, inside an exercise window: what Glorfindel sees on the target meanwhile is
         # labelled ``exercise`` (eregion_core/exercise.py), on the hosted watch too.

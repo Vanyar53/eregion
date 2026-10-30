@@ -87,6 +87,13 @@ def test_a_fault_runs_only_where_its_engine_aims():
     assert unknown.status == "warn" and unknown.warnings[0]["code"] == "engine_unknown"
 
 
+def test_a_fault_aimed_at_several_vms_is_refused_a_wire_takes_one():
+    """DG-b review, point 2: the operator sees and types one VM per wire — a fault acting on
+    others too would run wider than what was shown."""
+    v = _judge("vm-shutdown", fault_targets={"vm-shutdown": ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]})
+    assert v.code == "no_engine" and "alone" in v.reason
+
+
 def test_a_destructive_technique_asks_for_the_name_typed():
     v = _judge("T1486")
     assert v.status == "warn" and [w["code"] for w in v.warnings] == ["typed_name"]

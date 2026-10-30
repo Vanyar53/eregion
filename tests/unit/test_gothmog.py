@@ -763,3 +763,14 @@ def test_a_request_id_is_checked_and_never_goes_without_glorfindel():
     for args in (["--request", "../x"], ["--request", REQ, "--without-glorfindel"]):
         res = CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes", *args])
         assert res.exit_code != 0 and "--request takes a request id" in res.output
+
+
+def test_a_wire_on_a_vm_of_the_same_name_in_another_group_is_refused_before_the_fault(bench):
+    """DG-b review, point 2: the twin's VM shares its name with the bench's. The wire names the
+    twin's; the experiment acts on the bench's — compared by full id, never by name."""
+    clock, world, engine = bench
+    w = world()
+    twin = VM.replace("/resourceGroups/rg-celebrimbor/", "/resourceGroups/rg-celebrimbor-twin/")
+    out = engine().run("vm-shutdown", skip_confirm=True, request=REQ, target=twin)
+    assert out.result == "REFUSED" and out.error.startswith("no_engine:")
+    assert w.writes == [] and _no_window()

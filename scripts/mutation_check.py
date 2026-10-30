@@ -5313,6 +5313,92 @@ TESTS.update({mid: f"{_I4E} {INVARIANTS}" for mid in ("M2130", "M2131", "M2133",
 TESTS["M2132"] = _I4E
 TESTS["M2137"] = "tests/unit/test_activity_logs.py"
 
+# I4D (#356): written again under the NIC's second name (I4B), the first pair's deny before an
+# allow the new one comes after was taken off — the VM opened (seed 1618 at 2 000). It stays, said.
+_I4D = " ".join(f"tests/unit/test_invariant_regressions.py::{t}" for t in (
+    "test_a_quarantine_put_back_never_opens_a_vm_given_a_turned_rules_address",
+    "test_an_isolation_written_again_never_moves_its_deny_past_an_allow",
+    "test_an_isolation_written_again_keeps_the_deny_before_an_allow_and_says_it",
+    "test_a_reassertion_says_the_deny_it_kept_before_an_allow",
+    "test_a_block_written_again_keeps_the_deny_before_an_allow_and_says_it",
+    "test_the_allows_a_rewrite_would_pass",
+    "test_the_guard_keeps_only_a_deny_that_holds_the_nics_address",
+    "test_the_guard_keeps_a_deny_whose_number_cannot_be_read",
+    "test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off",
+    "test_a_deny_on_an_address_another_nic_of_the_vm_took_stays",
+    "test_a_block_deny_on_an_address_another_nic_of_the_vm_took_stays"))
+MUTANTS += [
+    ("M2060", "the isolation written again under its second name takes the first pair's deny off past an "
+              "allow: the VM opened (I4D)", ISO,
+     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n",
+     "            if passed := [] and _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n"),
+    ("M2061", "the block written again under its second name takes the first pair's deny off past an allow: "
+              "the attacker reaches the VM (I4D)", BLK,
+     "            if passed := _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n",
+     "            if passed := [] and _allows_passed_by_its_replacement(existing, by_name[n.lower()], priority,\n"),
+    ("M2062", "the isolation keeps the deny before the allow, unsaid (I4D)", ISO,
+     '                left.append({"nsg": nsg_key, "rule": n, "why": (\n',
+     '                ({"nsg": nsg_key, "rule": n, "why": (\n'),
+    ("M2063", "the block keeps the deny before the allow, said as a turned rule (I4D)", BLK,
+     '                             "on": ", ".join(passed), "kind": "before_allow",\n',
+     '                             "on": ", ".join(passed), "kind": "turned",\n'),
+    ("M2064", "the reassertion's card says a deny kept before an allow as a turned rule (I4D)", RCA,
+     "                         if x.get(\"kind\") == \"before_allow\" else\n",
+     "                         if False else\n"),
+    ("M2065", "the guard reads the replacement's number in the inbound direction only: an outbound deny "
+              "taken off past an allow (I4D)", NSG,
+     "    low, high = getattr(rule, \"priority\", None), priority.get(direction)\n",
+     "    low, high = getattr(rule, \"priority\", None), priority.get(\"inbound\")\n"),
+    ("M2066", "the guard counts the allows of any direction (I4D)", NSG,
+     "            if _enum_text(getattr(r, \"direction\", \"\")) == direction\n"
+     "            and _enum_text(getattr(r, \"access\", \"\")) == \"allow\"\n",
+     "            if _enum_text(getattr(r, \"access\", \"\")) == \"allow\"\n"),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in range(2060, 2067)})
+# I4D's review: a deny kept only when it holds a current address of the NIC; an unread number keeps it.
+MUTANTS += [
+    ("M2067", "the guard keeps a deny aimed only at addresses no longer the NIC's: the VM given them stays "
+              "cut off, « la retirer ouvrirait » said falsely (I4D, review)", NSG,
+     "    if ips and not any(_takes_in(values, ip) for ip in ips):\n        return []\n", ""),
+    ("M2068", "the guard drops a deny whose number can't be read (I4D, review)", NSG,
+     "    if not isinstance(low, int) or not isinstance(high, int):\n        return [UNREAD_PRIORITY]\n",
+     "    if not isinstance(low, int) or not isinstance(high, int):\n        return []\n"),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2067, 2068)})
+# I4D's review: the kept deny says the other VM it cuts off (the addresses no longer the NIC's).
+MUTANTS += [
+    ("M2069", "a kept deny never says the VM it cuts off (I4D, review)", BLK,
+     '        return " ; ".join(said)\n\n    def _block_ip_vm(', '        return ""\n\n    def _block_ip_vm('),
+    ("M2070", "the reassertion's card leaves out the VM a kept deny cuts off (I4D, review)", RCA,
+     """f"la retirer ouvrirait {vm}" + (f" ; il couvre aussi {x['also']}" if x.get("also") else "")""",
+     """f"la retirer ouvrirait {vm}" + "\""""),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2069, 2070)})
+# I4D's review, seed 9001: the release's guard asked without the VM's NICs — a rule aimed at its other NIC
+# kept « for another VM », `release_partial` for ever (I7).
+MUTANTS += [
+    ("M2071", "the release's guard reads the VM's other NIC as another VM: kept for ever (I4D, review)", REL,
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n',
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))\n'),
+]
+TESTS["M2071"] = ("tests/unit/test_invariant_regressions.py::"
+                  f"test_a_release_never_keeps_a_rule_for_another_nic_of_its_own_vm {INVARIANTS}")
+# I4D's second review: the guard reads every NIC of the VM — a deny on an address another NIC of the
+# same VM took since closes the VM still; said « de la même VM ».
+MUTANTS += [
+    ("M2072", "the isolation's guard reads this NIC's addresses only: a deny on its other NIC's address goes, "
+              "that NIC opened (I4D, second review)", ISO,
+     "                                                           list(guard.get(\"vm_nics\") or {})):\n",
+     "                                                           t[\"private_ips\"]):\n"),
+    ("M2073", "the block's guard reads this NIC's addresses only (I4D, second review)", BLK,
+     "                                                           list(holders.get(\"vm_nics\") or {})):\n",
+     "                                                           t[\"private_ips\"]):\n"),
+    ("M2074", "a kept deny says another NIC of the same VM as another VM (I4D, second review)", BLK,
+     "            if addr in vm_nics:\n                said.append(",
+     "            if False:\n                said.append("),
+]
+TESTS.update({f"M{n}": f"{_I4D} {INVARIANTS}" for n in (2072, 2073, 2074)})
+
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read
 # from the query (N-10), H0's host key pinned (V-32), the containers hardened (V-34), one principal
@@ -5495,7 +5581,7 @@ _I5Q_REL = ("tests/unit/test_invariant_regressions.py::test_a_deleted_vms_deny_b
             "tests/unit/test_invariant_regressions.py::test_a_live_vms_release_is_not_held_by_its_own_turned_rule")
 MUTANTS += [
     ("M1734", "a deleted VM's release takes its placements' denies off, a turned rule behind them: the new VM opened (I5Q)",
-     REL, '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""))\n'
+     REL, '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n'
           "                        or self._delete_rule(p_rg, p_name, name)\n",
      "                        self._delete_rule(p_rg, p_name, name)\n"),
     ("M1735", "a deleted VM's release, its state lost, takes its denies off everywhere, a turned rule behind (I5Q)",

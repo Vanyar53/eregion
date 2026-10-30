@@ -2434,16 +2434,44 @@ M37 et M831 par leurs séquences figées, M1645 survit) ; graine 101, 106/109 de
 M37 par leurs séquences figées, M1645 survit), 7/7 nouveaux ; aucun perdu. La graine fixée : avec une graine
 au hasard, le harnais sur `main` s'arrêtait deux fois sur le code non muté (ci-dessous).
 
-**Hors du lot**, trouvés par le passage à vide du harnais sur `origin/main` (d380df5, 60 séquences,
-graine au hasard), sans rapport avec ce correctif — à router, non figés :
-- **I7** : un refus total d'une ancienne version (`glorfindel-isolation-deny-all` sur le NSG de
-  web-nic) retourné en allow par quelqu'un, puis une suite longue (blocages, levées interrompues,
-  nouvelle VM) : la levée finale de web rend `release_partial` (« gardée : … vise * — toutes les cartes
-  derrière ce NSG, dont api-nic-5 »), I7 exige `released`. Le terrain de la relecture d'I4C (l'état
-  ancien, son refus total gardé) et d'I4E (#361).
+**Trouvés par le passage à vide du harnais** sur `origin/main` (d380df5, 60 séquences, graine au
+hasard), sans rapport avec le correctif, réglés ou routés par la relecture :
+- **I7, une exemption de l'oracle qui manquait** (pas un défaut du code) : le refus total d'une
+  ancienne version (`glorfindel-isolation-deny-all` sur nsg-web-nic) retourné en allow, une nouvelle VM
+  sur ce NSG ; au démontage, la levée de web le garde, le dit (`release_partial`, « gardée : … vise * »)
+  et demande qu'on le remette — l'opérateur du démontage ne remettait que les noms `glorfindel-iso-` et
+  `glorfindel-block-`. Il remet maintenant aussi une règle d'une ancienne version, sa VM lue du journal
+  du test (`legacy`), jamais de l'état du code (A0). Quatre étapes figées
+  (`test_an_older_versions_turned_deny_all_put_back_by_the_operator_lets_the_release_go`, rouges avec
+  l'ancien opérateur).
 - **I3** : « the reassertion said 192.31.196.7 no longer blocked on …/Db--01 ([]); our perimeter block
-  still cuts it off » après `turned_then_address_reused` — une fausse alerte du côté prudent, rien
-  d'ouvert.
+  still cuts it off » — rien d'ouvert, ce qui est dit est faux. Le mécanisme de #366 (graine 1999 à 2 000),
+  sur la branche où la carte ne nomme aucune carte réseau (`len(cut) < len(nics)`) : un second cas de
+  #366, figé en `xfail` strict (`test_the_reassertion_says_unblocked_naming_no_nic_where_our_perimeter_still_cuts`).
+
+**La relecture d'I4D.** Fermée dans les deux sens, le blocage compris (sondes garde ôtée, garde
+posée). Quatre points, chacun son commit et son test rouge sans lui :
+- **Un refus gardé seulement s'il tient une adresse actuelle de la carte** : les deux adresses de
+  db-nic-1 changées (.7 et .8 devenues .20 et .21), api à .7, la règle entrante de la première paire, sur
+  .7 et .8, était gardée — elle ne coupait plus rien de db-nic-1, mais api toujours, et sa note « la
+  retirer ouvrirait db-nic-1 » était fausse. La garde lit maintenant le côté carte du refus (la
+  destination en entrée, la source en sortie) : gardé seulement s'il prend une adresse actuelle de la
+  carte (`_takes_in` : `*`, une étiquette ou une valeur illisible comptent, A0) ; sinon retiré comme avant
+  (`test_an_isolation_whose_addresses_both_moved_takes_the_old_deny_off`, M2067). Un numéro illisible,
+  du refus ou d'une allow, garde (M2068).
+- **Le refus gardé dit la VM qu'il coupe** : les adresses qui ne sont plus celles de la carte, et qui les
+  tient (`_also_cuts`, comme `drop_failed` d'I4A) — « il couvre aussi 10.0.0.7, à api, qu'il coupe » —
+  dans le `why` de l'isolation, le champ `also` du blocage, sa note et la carte de la réaffirmation
+  (M2069, M2070). Le nom est celui de la VM, sans son groupe, comme I4A.
+- **La levée demande la garde avec les cartes de la VM** (graine 9001 à 2 000, I7) : `release.py`
+  appelait `_held_by_turned` sans `mates` pour ses placements — ses deux autres appels les passent. Une
+  règle retournée visant l'adresse qu'a prise depuis une autre carte de la **même** VM était gardée
+  « pour une autre VM » : `release_partial` à chaque levée. Les cartes vivantes de la VM (`_own_nics`,
+  partagé avec `older.py` ; pas celles des placements, qu'une levée partielle réduit). Trois étapes
+  figées (`test_a_release_never_keeps_a_rule_for_another_nic_of_its_own_vm`), M2071 ; M1734 réancré.
+- **L'exemption de l'oracle** pour la règle d'une ancienne version (ci-dessus, I7).
+La réécriture en place de la première paire (l'alternative : la nouvelle adresse de la carte coupée à
+100, api rendue) va à un lot de suite.
 
 **I4E (30/10, #361) : une nouvelle isolation garde l'état ancien de la VM ; le démontage ne lit plus
 l'état écrit par le code.** Trouvé par la seconde relecture d'I4C. **Le défaut, sur `main` 91dae76** :

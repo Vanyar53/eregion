@@ -12,6 +12,7 @@ from glorfindel.providers.azure.nsg import (
     _rule_name,
     _scope_to_nic,
     _shadowing_rules,
+    _takes_in,
 )
 from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.response.ids import _parse_vm_resource_id
@@ -83,12 +84,14 @@ class BlockMixin:
                 + _describe_left(left))
         taken = {x["rule"].lower() for x in left}
         drop = [n for pair in pairs if pair != own for n in pair if n.lower() in by_name and n.lower() not in taken]
+        drop_to = {n: [a for d in ("destination", "source") for a in _prefixes(by_name[n.lower()], d)
+                       if a not in ("*", ip.lower())] for n in drop}
         priority = _pair_priorities(existing, *own, 200, 10, assigned.get(nsg_key, set()))
         vm_ips = t["private_ips"] or None
         shadowed = _shadowing_rules(existing, priority, inbound_src=[ip], inbound_dst=vm_ips,
                                     outbound_src=vm_ips, outbound_dst=[ip], port=threat_port)
         return {"nsg_key": nsg_key, "priority": priority, "ip_scoped": ip_scoped,
-                "shadowed": shadowed, "own": own, "left": left, "drop": drop,
+                "shadowed": shadowed, "own": own, "left": left, "drop": drop, "drop_to": drop_to,
                 "bypassed": [x for x in shadowed if x.get("threat_port_open", True)]}
 
     def _left_on_others(self, rule, t: dict, shared: bool, nsg_key: str, holders: dict,
@@ -123,27 +126,27 @@ class BlockMixin:
     def _turned_behind(self, t: dict, direction: str, addr: str, holders: dict,
                        pairs: list[tuple[str, str]]) -> bool:
         """A rule of this NIC's block (by its names), on an NSG of the NIC, turned into an
-        allow for `addr` in this direction (or any address). The NSGs unreadable: unknown,
-        read as yes — keeping our deny never opens anything (A0). Listed once per NIC."""
+        allow that takes `addr` in, in this direction: the address, any, a prefix holding
+        it, or a tag (`_takes_in`: a tag or an unreadable value counts as yes). The NSGs
+        unreadable: unknown, read as yes — keeping our deny never opens anything (A0).
+        Listed once per NIC."""
         key = ("turned", t["nic_id"])
         if key not in holders:
             names = {n.lower() for pair in pairs for n in pair}
-            found: set | None = set()
+            found: list | None = []
             try:
                 for v in self._nic_nsg_views(t):
                     for r in self._network.security_rules.list(v["nsg_rg"], v["nsg_name"]):
                         if _rule_name(r).lower() in names and _enum_text(getattr(r, "access", "")) != "deny":
                             d = _enum_text(getattr(r, "direction", ""))
-                            found |= {(d, a) for a in _prefixes(r, "destination" if d == "inbound" else "source")
-                                      or ("*",)}
+                            found.append((d, list(_prefixes(r, "destination" if d == "inbound" else "source"))))
             except Exception:
                 found = None
             holders[key] = found
         found = holders[key]
         if found is None:
             return True
-        return bool({(direction, addr), (direction, "*")} & found) or (
-            addr in ("*", "any", "0.0.0.0/0") and any(d == direction for d, _ in found))
+        return any(d == direction and _takes_in(values, addr) for d, values in found)
 
     def _address_holder(self, addr: str, nic_id: str, holders: dict) -> str | None:
         """Who holds this address now, this NIC aside: VM names; None for nobody; an
@@ -241,7 +244,10 @@ class BlockMixin:
                 # The other pair's rules: ours, aimed at no other VM — the deny now holds.
                 for nm in plan["drop"]:
                     if err := self._delete_rule(nsg_rg, nsg_name, nm):
-                        placement.setdefault("drop_failed", []).append(err)
+                        # Said, never silent: a deny left on the old address cuts its new owner off.
+                        placement.setdefault("left", []).append({
+                            "nsg": plan["nsg_key"], "rule": nm, "to": ", ".join(plan["drop_to"].get(nm, [])) or "?",
+                            "on": err, "kind": "drop_failed"})
             except Exception as exc:
                 kept = placements + ([placement] if applied else [])
                 if not kept:
@@ -298,6 +304,8 @@ class BlockMixin:
         left = [x for p in placements for x in p.get("left", [])]
         if left:
             out["left_rules"] = left
+            if failed := [x for x in left if x.get("kind") == "drop_failed"]:
+                out["drop_failed"] = failed
             out["note"] = (out.get("note", "") + " " + _describe_left(left)).strip()
         _report_block_shadowing(out, ip, [s for p in placements for s in p.get("shadowed_by", [])])
         return out
@@ -410,6 +418,8 @@ def _describe_left(left: list[dict]) -> str:
     """What a block left as it was (I4A), and how to take it off."""
     return "Laissée(s) telle(s) quelle(s) : " + " ; ".join(
         f"{x['rule']} ({x['nsg']}), " + (
+            f"à nous, sur {x['to']}, n'a pas pu être retirée ({x['on']}) — si elle vise l'ancienne adresse, elle "
+            "coupe la VM qui l'a reçue ; " if x.get("kind") == "drop_failed" else
             f"notre deny sur {x['to']}, plus une adresse de la VM bloquée : {x['on']} — une règle à notre nom "
             "passée en autorisation par un tiers l'attend derrière, le retirer ouvrirait cette VM ; "
             if x.get("kind") == "deny" else

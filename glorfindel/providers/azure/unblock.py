@@ -216,11 +216,18 @@ class UnblockMixin:
         targets = self._get_vm_nic_targets(rg, vm_name)
         uncovered = []
         found: dict[str, tuple] = {}
+        pair_cache: dict = {}
         for t0 in targets:
             bases = (*self._placement_rule_bases(prefix, vm_name, t0["nic_short"], t0["nic_id"]),
                      self._legacy_rule_base(prefix, vm_name, t0["nic_short"], t0["nic_id"]))
-            hit = next(((t, base) for t in self._nic_nsg_views(t0) for base in bases
-                        if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"])), None)
+            present = [(t, base) for t in self._nic_nsg_views(t0) for base in bases
+                       if self._rules_present(t["nsg_rg"], t["nsg_name"], [base, f"{base}-out"])]
+            # The pair that blocks the NIC as it is now first (I4A): two denies of the
+            # attacker for its current addresses — a pair left by an earlier address, or one
+            # turned into an allow, read first, hid a bypass of the one that does.
+            hit = next((h for h in present if self._block_pair_state(
+                pair_cache, h[0]["nsg_rg"], h[0]["nsg_name"], h[1], ip, t0["private_ips"] or None)[0] == "present"),
+                present[0] if present else None)
             if hit:
                 found[t0["nic_id"]] = (hit[0]["nsg_rg"], hit[0]["nsg_name"], hit[1])
             else:

@@ -137,9 +137,11 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
     if entry.get("left_said") == sid:
         return                                  # said: pending, or acknowledged
     what = " ; ".join(f"{x.get('rule')} ({x.get('nsg')}), "
-                      + ("notre deny, qu'une règle à notre nom retournée attend derrière, "
-                         if x.get("kind") == "deny" else "retournée en autorisation par un tiers, ")
-                      + f"vise {x.get('to')}, qui est à {x.get('on')}" for x in left)
+                      + (f"à nous, vise {x.get('to')} et n'a pas pu être retirée ({x.get('on')})"
+                         if x.get("kind") == "drop_failed" else
+                         ("notre deny, qu'une règle à notre nom retournée attend derrière, "
+                          if x.get("kind") == "deny" else "retournée en autorisation par un tiers, ")
+                         + f"vise {x.get('to')}, qui est à {x.get('on')}") for x in left)
     reason = (f"Le blocage de {ip} sur {vm} a laissé telles quelles des règles à son nom qui visent une adresse "
               f"qui n'est plus celle de {vm} : {what}. Les réécrire ou les retirer changerait les flux de cette "
               f"autre VM ; le blocage de {vm} est posé sous un second nom.")

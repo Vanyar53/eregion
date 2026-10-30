@@ -4693,7 +4693,9 @@ _I4A_TESTS = " ".join(f"{_I5R}{t}" for t in (
     "a_block_under_its_second_name_is_found_without_its_state",
     "a_turned_rule_widened_to_any_on_a_shared_nsg_is_left",
     "a_turned_rule_aimed_at_a_range_is_left",
-    "our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner"))
+    "our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner",
+    "a_failed_take_off_of_the_first_pairs_rule_is_said",
+    "the_verification_without_state_reads_the_pair_that_blocks_the_nic_now"))
 _I4A = f"{_I4A_TESTS} {INVARIANTS}"
 MUTANTS += [
     ("M1755", "a turned rule aimed at another VM's address written again by name: that VM cut off (I4A)", BLK,
@@ -4736,6 +4738,28 @@ MUTANTS += [
      "        if found is None:\n            return True\n", "        if found is None:\n            return False\n"),
 ]
 TESTS.update({f"M{n}": _I4A for n in range(1755, 1770)})
+# I4A, review (5.5): a turned allow aimed at a range or a tag waits behind our deny too
+# (`_takes_in`, nsg.py — the same rule as I5Q's); a failed take-off of the first pair's
+# rule is said; the verification without state reads the pair that blocks the NIC now.
+# M1880–M1883.
+MUTANTS += [
+    ("M1880", "a turned allow behind our deny matched by its exact address only: a range or a tag "
+              "read as nothing, our deny lifted, the new VM opened (I4A, review, A0)", NSG,
+     "            if addr in ipaddress.ip_network(v.strip(), strict=False):\n",
+     "            if str(addr) == v.strip():\n"),
+    ("M1881", "a tag in a turned allow behind our deny read as not taking the address in (I4A, review, A0)", NSG,
+     "            return True                       # a tag, or unreadable: the safe side\n",
+     "            continue\n"),
+    ("M1882", "the first pair's rule that couldn't be taken off written where nothing reads it: "
+              "`blocked`, nothing said (I4A, review)", BLK,
+     '                        placement.setdefault("left", []).append({\n',
+     '                        placement.setdefault("drop_failed", []).append({\n'),
+    ("M1883", "the verification without state takes the first pair present by name, whatever it "
+              "blocks: a bypass of the pair that does hidden (I4A, review)", UNB,
+     "            hit = next((h for h in present if self._block_pair_state(\n",
+     "            hit = next((h for h in present if True or self._block_pair_state(\n"),
+]
+TESTS.update({f"M{n}": _I4A for n in range(1880, 1884)})
 
 
 # SEC7 (#296): identities and hardening — the bot's stale buttons (V-08), the control plane read

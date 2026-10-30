@@ -2688,11 +2688,15 @@ _NSG_WEB2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Network
 _BATCH_APP2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/batch"
 
 
-def _turned_behind_world(monkeypatch):
+_TURNED_TO = {"exact": None, "range": ["10.0.0.0/16"], "tag": ["VirtualNetwork"]}
+
+
+def _turned_behind_world(monkeypatch, target="exact"):
     """web2 blocked on its own NSG (allow-ssh after our deny), its rule on the subnet's NSG
-    too — an earlier placement there — turned into an allow; web2's IP changed, batch
-    created on web2's NSG, given the old address: our deny there cuts it off, the turned
-    allow on the subnet's NSG waits behind it."""
+    too — an earlier placement there — turned into an allow, aimed at web2's address, a
+    range holding it or a tag (`target`); web2's IP changed, batch created on web2's NSG,
+    given the old address: our deny there cuts it off, the turned allow on the subnet's
+    NSG waits behind it."""
     invariant_env(monkeypatch)
     m = IsolationMachine()
     ssh = _rule("allow-ssh", 1000, dict(access="Allow", direction="Inbound", source_address_prefix="*",
@@ -2703,25 +2707,29 @@ def _turned_behind_world(monkeypatch):
     old = own[_WEB2_BLOCK]["destination_address_prefixes"]
     FakeAzure._put_rule(m.fake.nsgs[key(_SUBNET)], _rule_record(_rule(_WEB2_BLOCK, 300, dict(
         access="Allow", direction="Inbound", source_address_prefix=ATTACKER,
-        destination_address_prefixes=list(old), destination_port_range="*"))))
-    m.customer_changes_ip(data=Script(_nic("rg-app2", "web-nic"), 0, 20))
+        destination_address_prefixes=_TURNED_TO[target] or list(old), destination_port_range="*"))))
+    # The turned rule is the test's own, not one the machine turned: its claims not judged here.
+    m._customer_changes_ip(Script(_nic("rg-app2", "web-nic"), 0, 20))
     m.create_vm(data=Script("westeurope", "rg-app2", "batch", _NSG_WEB2, "Linux"))
     assert m.fake.nics[_nic("rg-app2", "batch-nic-4")]["ips"] == old
     return m, own, old
 
 
+@pytest.mark.parametrize("target", ["exact", "range", "tag"])
 @pytest.mark.parametrize("subnet_nsg", ["readable", "unreadable"])
-def test_our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner(monkeypatch, subnet_nsg):
+def test_our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner(monkeypatch, subnet_nsg, target):
     """I4A, seed 42 at 2 000 (the machine's new rule), present on main: the block written
     again rewrote our deny on web2's NSG for web2's new address — and the turned allow on
     the subnet's NSG let the attacker reach batch on 22: an operation on web2 opened
     another VM. Now that deny stays (its pair under the second name), said; the subnet's
-    NSG unreadable, whether an allow waits is unknown — kept too (A0)."""
+    NSG unreadable, whether an allow waits is unknown — kept too (A0). The turned allow
+    aimed at a range holding the address, or at a tag, waits behind it as well (review:
+    compared as strings, `10.0.0.0/16` and `VirtualNetwork` opened batch on 22)."""
     import shutil
 
     from .fake_azure import throttled
 
-    m, own, old = _turned_behind_world(monkeypatch)
+    m, own, old = _turned_behind_world(monkeypatch, target)
     try:
         rules = m.connector._network.security_rules
         listing = rules.list
@@ -2743,5 +2751,106 @@ def test_our_deny_a_turned_rule_waits_behind_is_kept_for_the_new_owner(monkeypat
         assert left["kind"] == "deny" and left["on"] == "batch" and left["to"] == old[0], left
         assert not {f for f in m._attacker_flows(_BATCH_APP2, None) if f[2] == "in"}
         assert not m._attacker_flows(WEB2, None)
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_failed_take_off_of_the_first_pairs_rule_is_said(monkeypatch):
+    """I4A, review: the first pair's -out deny, on the old address — the new VM's now —, to
+    take off once the block holds under the second name. Its delete fails: it stays and
+    cuts that VM off. `blocked` was said, the failure written where nothing read it; now
+    the outcome says it (`drop_failed`, the note), and the card with what the block left."""
+    import shutil
+
+    from glorfindel import escalations
+
+    from .fake_azure import throttled
+
+    m, rules, old = _address_taken(monkeypatch)
+    try:
+        api_rules = m.connector._network.security_rules
+        delete = api_rules.begin_delete
+
+        def refused(rg, nsg, name):
+            if name.lower() == f"{_API_BASE}-out":
+                raise throttled("rule.delete")
+            return delete(rg, nsg, name)
+        api_rules.begin_delete = refused
+        try:
+            out = m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        finally:
+            api_rules.begin_delete = delete
+        assert f"{_API_BASE}-out" in rules
+        (failed,) = out["drop_failed"]
+        assert failed["rule"] == f"{_API_BASE}-out" and old[0] in failed["to"], failed
+        assert "n'a pas pu être retirée" in out["note"], out["note"]
+        m.reassert(Script("human_only", None))
+        (card,) = [e for e in escalations.pending() if e["escalation_type"] == "rule_left"]
+        assert f"{_API_BASE}-out" in card["reason"] and "n'a pas pu être retirée" in card["reason"], card["reason"]
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_the_verification_without_state_reads_the_pair_that_blocks_the_nic_now(monkeypatch):
+    """I4A, review: two pairs of web2's on its NSG — the first kept on the old address
+    (batch's now, a turned rule behind it, unknown), the second for web2's address — and an
+    allow before the second for the threat. Its state lost, the verification took the
+    first pair present by name: no allow precedes it, verified — while the attacker
+    reached web2 (the subnet's NSG lets it through: the turned rule aims at a range). Now
+    it reads the pair that blocks the NIC as it is now: bypassed."""
+    import shutil
+
+    from glorfindel import actions
+
+    from .fake_azure import throttled
+
+    m, own, old = _turned_behind_world(monkeypatch, "range")
+    try:
+        rules = m.connector._network.security_rules
+        listing = rules.list
+
+        def partly(rg, name):
+            if name == "nsg-subnet":
+                raise throttled("rule.list")
+            return listing(rg, name)
+        rules.list = partly
+        try:
+            assert m.connector.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)["status"] == "blocked"
+        finally:
+            rules.list = listing
+        nic = m.fake.vms[key(WEB2)]["nics"][0]
+        second = m.connector._placement_rule_bases(m.connector._block_rule_prefix(ATTACKER), "web", "web-nic", nic)[1]
+        first, then = own[_WEB2_BLOCK]["priority"], own[second]["priority"]
+        assert first < then - 1, (first, then)
+        FakeAzure._put_rule(m.fake.nsgs[key(_NSG_WEB2)], _rule_record(_rule("allow-threat", first + 1, dict(
+            access="Allow", direction="Inbound", source_address_prefix=ATTACKER,
+            destination_address_prefix="*", destination_port_range="22"))))
+        for f in actions._BLOCK_STATE_DIR.glob("web--*.json"):
+            f.unlink()
+        assert m._attacker_flows(WEB2, 22)
+        assert m.connector.verify_block_ip(ATTACKER, WEB2)["verified"] is False
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "outside I4A, open (review): the unblock and the reset take off a rule with the NIC's hash "
+    "whatever it has become (_nic_owns) — the turned allow the block left too: the VM given the old "
+    "address loses the flows it gave it. The block no longer does it; the unblock and the reset still "
+    "do. The oracle doesn't see it (perimeter=True drops the attacker's flows at unblock and reset). "
+    "For a lot of its own, with the isolation's side"))
+@pytest.mark.parametrize("reblock", [False, True])
+@pytest.mark.parametrize("lift", ["unblock", "reset"])
+def test_the_unblock_and_the_reset_leave_the_new_owner_of_the_old_address(monkeypatch, lift, reblock):
+    import shutil
+
+    m, rules, _ = _address_taken(monkeypatch)
+    try:
+        if reblock:
+            m.connector.block_suspicious_ip(ATTACKER, API, scope="vm", threat_port=22)
+        reach = m._attacker_flows(_NEW_API_VM, None)
+        assert reach
+        m.connector.unblock_ip(ATTACKER, API) if lift == "unblock" else m.connector.sweep_vm_rules(API)
+        assert m._attacker_flows(_NEW_API_VM, None) >= reach
     finally:
         shutil.rmtree(m.home, ignore_errors=True)

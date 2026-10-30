@@ -60,8 +60,11 @@ def _make(fake, *args, stdin="", env_extra=None):
     env = {k: v for k, v in os.environ.items() if k not in ("REQUEST", "HOST_SSH_FINGERPRINT")}
     env.update({"PATH": f"{bindir}{os.pathsep}{env['PATH']}", "HOME": str(bindir.parent)},
                **(env_extra or {}))
-    return subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "orodruin-exercise",
-                           f"PYTHON={sys.executable}", "HOST_IP=10.0.0.4", "ORO_IP=10.0.0.5", *args],
+    # The host key's check is known_host.sh's (tests/unit/test_host_ssh.py): taken as done here.
+    fingerprint = [] if any(a.startswith("HOST_SSH_FINGERPRINT=") for a in args) else ["HOST_SSH_FINGERPRINT=SHA256:test"]
+    return subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "-o", "glorfindel-host-known",
+                           "orodruin-exercise", f"PYTHON={sys.executable}", "HOST_IP=10.0.0.4", "ORO_IP=10.0.0.5",
+                           *fingerprint, *args],
                           capture_output=True, text=True, input=stdin, env=env, timeout=60)
 
 
@@ -185,3 +188,13 @@ def test_another_request_served_under_this_id_sends_nothing(fake_hosts):
     res = _make(fake_hosts, f"REQUEST={RID}", stdin="vm-celebrimbor-gondolin\ny\n")
     assert res.returncode != 0 and "not r-20261030T075200Z-a1b2c3" in res.stdout
     assert [c["cmd"] for c in calls()] == ["ssh"] and not any(oro.iterdir())
+
+
+@needs_make
+def test_a_request_from_h0_needs_its_host_keys_fingerprint(fake_hosts):
+    """DG-b review, point 8: never accept-new for what makes Orodruin act."""
+    bindir, h0, oro, calls = fake_hosts
+    _serve(h0)
+    res = _make(fake_hosts, f"REQUEST={RID}", "HOST_SSH_FINGERPRINT=", stdin="vm-celebrimbor-gondolin\ny\n")
+    assert res.returncode != 0 and "HOST_SSH_FINGERPRINT requis" in res.stderr
+    assert calls() == []

@@ -4401,6 +4401,13 @@ MUTANTS += [
 ]
 TESTS["M2102"] = "tests/unit/test_exercise_runner.py"
 
+MUTANTS += [
+    ("M2103", "make orodruin-exercise pulls a request from H0 whose host key is accepted on first contact (DG-b review)",
+     "Makefile", '\t@if [ "$(REQUEST_FROM)" = h0 ] && [ -z "$(HOST_SSH_FINGERPRINT)" ]; then',
+     "\t@if false; then"),
+]
+TESTS["M2103"] = "tests/unit/test_makefile_exercise.py"
+
 # CI3 (#267, step 2): the images published, signed, pulled by their digest — the reader and
 # verifier (scripts/published_image.py, a fake registry and a fake cosign), H0's CD (a fake
 # docker, GitHub, registry and cosign), the publishing workflow. M1650–M1669.

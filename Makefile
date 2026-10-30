@@ -895,7 +895,8 @@ orodruin-kill:
 # ── Dagorlad, phase (b) (DG-b) — une demande de la console, portée par l'opérateur ───
 # La console écrit la demande dans son propre répertoire (~/.eregion/console/requests/, sur H0) ;
 # elle ne parle jamais à Orodruin, et H0 n'a aucun droit ni canal de plus. Depuis ce poste :
-#   1. la tirer de l'hôte de la console : H0 par SSH, clé d'hôte vérifiée (glorfindel-host-known) ;
+#   1. la tirer de l'hôte de la console : H0 par SSH, clé d'hôte vérifiée par son empreinte
+#      (glorfindel-host-known ; HOST_SSH_FINGERPRINT exigée ici, jamais accept-new) ;
 #      REQUEST_FROM=local : la console de ce poste (make glorfindel-start) ;
 #   2. l'afficher fil par fil et faire taper ICI le nom de la cible de chaque fil destructif, ou
 #      dont personne n'a dit qu'il ne l'est pas (A0) — un autre nom, ou « non » : rien n'est envoyé ;
@@ -914,6 +915,7 @@ orodruin-exercise: export EREGION_REQUEST_ID = $(value REQUEST)
 orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known)
 	@case "$(origin REQUEST)" in environment*) echo "REQUEST vient de l'environnement : rien n'est fait. La donner sur la ligne de commande : make orodruin-exercise REQUEST=<id>." >&2; exit 1;; esac
 	@case "$(REQUEST_FROM)" in h0|local) ;; *) echo "REQUEST_FROM=h0 ou local, pas « $(REQUEST_FROM) »" >&2; exit 1;; esac
+	@if [ "$(REQUEST_FROM)" = h0 ] && [ -z "$(HOST_SSH_FINGERPRINT)" ]; then echo "✗ HOST_SSH_FINGERPRINT requis : la demande vient de H0, sa clé d'hôte doit être vérifiée par son empreinte (infra/glorfindel-host/README.md, « SSH ») — jamais accept-new pour ce qui fait agir Orodruin. Rien n'est fait." >&2; exit 1; fi
 	@$(PYTHON) -m eregion_core.exercise_request check-id "$$EREGION_REQUEST_ID"
 	@d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT && id="$$EREGION_REQUEST_ID" && \
 	 if [ "$(REQUEST_FROM)" = local ]; then \

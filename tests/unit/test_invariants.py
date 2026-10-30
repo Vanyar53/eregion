@@ -2775,8 +2775,16 @@ class IsolationMachine(RuleBasedStateMachine):
                 out = self._release_until_done(vm)
             assert out["status"] == "released", f"I7: {vm} could not be released: {out}"
             for _ in range(3):
-                if self.connector.unblock_ip(ATTACKER, vm)["status"] in ("unblocked", "not_found"):
+                unblocked = self.connector.unblock_ip(ATTACKER, vm)
+                if unblocked["status"] in _LIFTS["unblock"][0]:
                     break
+                # U7D (seed 1006 at 60): a release just put another VM back on an NSG where one
+                # of this VM's rules, turned into an allow, aims at the address it took — kept
+                # for it, and so the deny that waits behind. Said (checked, as by the rule), then
+                # put back by the operator as said — as before the releases (I4B) —, tried again.
+                if vm not in self.deleted:
+                    self._kept_said(vm, unblocked, None, "the teardown's unblock", *_LIFTS["unblock"])
+                self._operator_puts_turned_back()
             if vm not in self.deleted:
                 left = self._named_leftovers(self.fake.vms[key(vm)]["nics"], "glorfindel-block-")
                 assert not left, f"I7: block rules of {vm} left after unblock: {left}"

@@ -4515,17 +4515,21 @@ _S1006_NET = {
     "data_subnet": [_s1618("allow-ssh", 101, "Allow", "22"), _L1BR_DENY]}
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#368: I7, a block's rules on its NIC's old address left after the unblock")
 def test_a_blocks_rules_on_a_reused_address_go_with_the_unblock(monkeypatch):
     """L1B's review, the machine at 60 (seed 1006; 29 steps, reduced to 5): Db--01 blocked and
     isolated in quarantine (the block cut by a 429 after its 6th write); web's perimeter block,
     one of Db--01's rules turned (`block_turned_then_reasserted`, cut by a 429); web's release cut
-    off; db-nic-0's address changed, a new api given web's old one. At the teardown, « I7: block
-    rules of …/rg-app1/…/Db--01 left after unblock: [nsg-tier/…-db-nic-0-0d0228,
-    nsg-subnet/…-db-nic-0-0d0228] ». Fails on `main` d380df5 too, outside L1B: routed to #368 (with
-    the placements left after an `unblock_partial`). Reached at 60 sequences: any PR's CI. Strict:
-    once fixed, this fails, and the mark goes."""
+    off; db-nic-0's address changed, web (rg-app2) given it, a new api given web's old one. At the
+    teardown, « I7: block rules of …/rg-app1/…/Db--01 left after unblock: [nsg-tier/…-db-nic-0-0d0228,
+    nsg-subnet/…-db-nic-0-0d0228] ». Red on `main` d380df5 and e75d527 (#368).
+
+    The cause (U7D), the operator's and not the code's: the teardown releases web first, which
+    puts it back on nsg-tier, at 10.0.0.6 — where Db--01's turned rule aims. Db--01's unblock then
+    keeps that allow (taken off, web loses what it opens) and our deny on nsg-subnet that it waits
+    behind (I5Q), says both « gardée » and answers `unblock_partial`, three times; the operator had
+    put the turned rules back before the releases only (I4B), when that one aimed at no NIC its
+    NSG governs (web in quarantine). Now the operator does as said after an unblock that keeps,
+    the kept rules checked as said first (`_kept_said`), and the unblock is tried again."""
     _run(monkeypatch, _S1006_NET,
          ("block_then_isolate", DB, DB, (6, "after-429"), 22, None, True,
           _S101_NSG.format("rg-sec", "nsg-glorfindel-quarantine-westeurope"), False),

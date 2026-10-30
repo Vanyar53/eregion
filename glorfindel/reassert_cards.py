@@ -95,6 +95,22 @@ def episode(key: str, ip: str, over: bool) -> None:
     (_EPISODE_OVER.add if over else _EPISODE_OVER.discard)((key.lower(), ip))
 
 
+def drift_over(key: str, ip: str = "") -> None:
+    """Its rules back, an allow of someone else's passing them (said on its own card): the
+    disappearance is over — the next one said, whether the mark goes or its write is refused.
+    Only a hold ended it: a block put back under an allow kept the episode for ever."""
+    from glorfindel.actions import _load_isolation_state, _save_isolation_state, _update_block_entry
+    episode(key, ip, over=True)
+    if ip:
+        _update_block_entry(key, ip, drift_alerted_at=None)
+    else:
+        state = _load_isolation_state(key)
+        if state is not None:
+            state.pop("drift_alerted_at", None)
+            _save_isolation_state(key, state)
+    episode(key, ip, over=False)
+
+
 def drift_said(key: str, ip: str, sid: str) -> bool:
     """A disappearance whose mark stands is already said only while its episode is not
     seen over, and the latest card of its alert (`sid`, exact) is pending or closed by the

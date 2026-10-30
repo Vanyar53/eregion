@@ -1310,6 +1310,22 @@ def test_a_disappearance_after_one_acknowledged_and_held_again_is_said(monkeypat
         reassert_active(c, _HUMAN)
     assert len(_drift_cards("pending")) == 1 and len(_drift_cards()) == 2
 
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_disappearance_is_over_once_its_rules_are_back_even_bypassed(kind):
+    """Gone, said, acknowledged; its rules put back, but an allow of the customer's passes
+    them — bypassed, said on its own card. Only a hold ended the episode: gone again, the
+    mark read « already said » for ever. The rules back end it; the next one is said."""
+    c = _gone(kind)
+    reassert_active(c, _HUMAN)
+    escalations.resolve(_drift_cards("pending")[0]["id"])     # the operator
+    verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    gone = verify.return_value
+    verify.return_value = _bypass(_ALLOW)
+    reassert_active(c, _HUMAN)
+    assert _bypass_cards("pending") and not _drift_mark(kind)
+    verify.return_value = gone
+    reassert_active(c, _HUMAN)
+    assert len(_drift_cards("pending")) == 1
 
 
 def test_a_state_refused_on_one_vm_does_not_stop_the_pass(monkeypatch):

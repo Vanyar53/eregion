@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timezone
 
 from glorfindel.reassert_cards import (
-    drift_said, episode, new_pass, say_bypass, say_left, say_unreadable_states,
+    drift_over, drift_said, episode, new_pass, say_bypass, say_left, say_unreadable_states,
 )
 from glorfindel.reassert_quarantine import _report_altered_quarantines
 
@@ -224,6 +224,8 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
             episode(ref or vm, "", over=False)
         return
     if not _missing(verification):
+        if verification.get("verified") is False and iso.get("drift_alerted_at"):
+            drift_over(ref or vm)                # its rules back, an allow passes them (L2C, review)
         return
     if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):
         # Already alerted for this disappearance: one alert per episode. Re-alerting
@@ -322,6 +324,8 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
             episode(ref or vm, ip, over=False)
         return
     if not _missing(verification):
+        if verification.get("verified") is False and b.get("drift_alerted_at"):
+            drift_over(ref or vm, ip)            # its rules back, an allow passes them (L2C, review)
         return
     said = verification
     if (b.get("drift_alerted_at") and not _worse(b.get("drift_said"), _situation(verification))

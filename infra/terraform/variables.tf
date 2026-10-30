@@ -21,3 +21,29 @@ variable "topo_filter" {
   type        = list(string)
   default     = []
 }
+
+# ── Les journaux du plan de contrôle et d'Entra ID → le workspace du banc (ID1) ──────────
+# Deux paramètres de diagnostic qui ne vivent pas dans le groupe du banc : l'un sur
+# l'ABONNEMENT (activity_log.tf), l'autre sur le TENANT Entra ID (entra_logs.tf).
+# Désactivés par défaut. Les activer est une décision de l'opérateur sur SON abonnement et
+# SON tenant : dans terraform.tfvars (ignoré par git, persistant) — jamais dans config.yaml
+# (suivi, repo public : un fork qui applique enverrait les journaux de son tenant sans
+# l'avoir décidé), ni en `-var` d'une seule commande (le prochain apply sans lui retirerait
+# le paramètre). Posés par l'instance canonique seule (workspace Terraform "default") ;
+# ailleurs, sans effet, et dit (check "diagnostic_settings_on_the_canonical_instance").
+# Commandes, droits, coût, mesures : docs/operations.md, « Les journaux d'activité et
+# d'Entra ID au banc (ID1) ».
+
+variable "activity_log_enabled" {
+  description = "Journal d'activité de l'abonnement (catégorie Administrative) → le workspace du banc : la table AzureActivity des règles d'AL1. Droit : écrire un paramètre de diagnostic sur l'abonnement (Monitoring Contributor). Défaut false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "entra_logs_enabled" {
+  description = "Journaux d'Entra ID du tenant (AuditLogs, ServicePrincipalSignInLogs) → le workspace du banc : les tables des règles de C2. Tout le tenant, pas seulement le banc. Droit : rôle d'Entra Administrateur de la sécurité (ou général), pas un rôle Azure. Défaut false."
+  type        = bool
+  default     = false
+  nullable    = false
+}

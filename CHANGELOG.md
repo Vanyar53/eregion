@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-10-30 — "held in sight"
+
 ### Added
 - **Dagorlad asks for an exercise: the request, the name typed, « Stop all »** (DG-b, #348, 30/10; `docs/design/console.md`, §7, phase b; `docs/design/orodruin-contract.md`, « La demande de Dagorlad »). The console writes a request; the operator carries it; Orodruin judges it and runs it. No new right nor channel for H0 or the console.
   - **The request** (`eregion_core/exercise_request.py`): an id and its time; per wire, the experiment, the target and its rank — no zone, no destructiveness, no expected result, no mode, no name typed. One reader (`read`) refuses any field more.

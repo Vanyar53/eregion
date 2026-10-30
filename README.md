@@ -640,7 +640,9 @@ eregion_console/       → the Eregion console (`eregion console`, docs/design/c
                          (EREGION_CONSOLE_TOKEN, else GLORFINDEL_WARROOM_TOKEN), Glorfindel's API
                          (/api/state, /api/feed WS, /api/config, /api/audit, /api/discovered, /api/pending/rules,
                          /api/autonomy/{vm}, /api/action/{release,revert,restore,ack,approve-rule,approve/<id>,…}),
-                         the injectors' (/api/exercises, /api/campaigns, /api/catalog, /api/coverage, /api/channel, GET only),
+                         the injectors' (/api/exercises, /api/campaigns, /api/catalog, /api/coverage, /api/channel, GET only;
+                         Dagorlad's one write, POST /api/dagorlad/requests: a request for Orodruin in the console's own
+                         directory, carried by `make orodruin-exercise REQUEST=<id>` — never a launch, DG-b),
                          /api/sections; /atelier and /api/atelier/* redirect
   sections.py          → which sections are active: Glorfindel always, Annatar and Gothmog when this host
                          holds their runs, or as --sections / EREGION_CONSOLE_SECTIONS chooses

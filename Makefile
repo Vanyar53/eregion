@@ -116,7 +116,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
-	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh \
+	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
@@ -215,6 +215,8 @@ help:
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
 	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, annule le chaos, désalloue, ferme les fenêtres"
+	@echo "  make orodruin-exercise REQUEST=<id> [DRY_RUN=1]  Dagorlad : tire la demande de la console, l'affiche, fait taper"
+	@echo "                                               les noms des cibles destructives, la porte sur Orodruin qui la rejuge et la lance"
 	@echo "  make orodruin-down                           Détruit la VM et l'identité"
 	@echo ""
 	@echo "Gothmog (G0) — une panne déclarée, depuis Orodruin (gothmog/README.md) :"
@@ -378,7 +380,7 @@ check-azure-env:
 	done
 
 glorfindel-start: check-azure-env build-glorfindel
-	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
 	docker compose up -d
 	@echo ""
 	@$(MAKE) --no-print-directory console-url || true
@@ -391,12 +393,12 @@ glorfindel-stop:
 	docker compose down
 
 glorfindel-restart: check-azure-env build-glorfindel
-	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
 	docker compose up -d --build --force-recreate
 	@$(MAKE) --no-print-directory console-url || true
 
 glorfindel-dev: check-azure-env build-glorfindel
-	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis runs
+	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
 	docker compose up -d
 	@$(MAKE) --no-print-directory console-url || true
 	@echo "  (watching for changes…)"
@@ -652,7 +654,7 @@ glorfindel-host-start: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est déployé. La donner sur la ligne de commande : make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
-	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis && cd eregion && bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh
+	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis .eregion/console/requests && cd eregion && bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh
 	@echo ""
 	@echo "  ⚠ Arrête le Glorfindel local (make glorfindel-stop) : deux watch sur le même banc = cartes en double ;"
 	@echo "    et aucun autre bot avec le même DISCORD_BOT_TOKEN."
@@ -890,6 +892,50 @@ orodruin-kill:
 	@.venv/bin/python infra/orodruin/kill.py "$(ORO_PRINCIPAL)" "$(ORO_VM_ID)" --subscription "$(ORO_SUB)" \
 		--bench-rg "$(ORO_BENCH_RG)" --channel "$(ORO_CHANNEL)" $(if $(DRY_RUN),--dry-run)
 
+# ── Dagorlad, phase (b) (DG-b) — une demande de la console, portée par l'opérateur ───
+# La console écrit la demande dans son propre répertoire (~/.eregion/console/requests/, sur H0) ;
+# elle ne parle jamais à Orodruin, et H0 n'a aucun droit ni canal de plus. Depuis ce poste :
+#   1. la tirer de l'hôte de la console : H0 par SSH, clé d'hôte vérifiée par son empreinte
+#      (glorfindel-host-known ; HOST_SSH_FINGERPRINT exigée ici, jamais accept-new) ;
+#      REQUEST_FROM=local : la console de ce poste (make glorfindel-start) ;
+#   2. l'afficher fil par fil et faire taper ICI le nom de la cible de chaque fil destructif, ou
+#      dont personne n'a dit qu'il ne l'est pas (A0) — un autre nom, ou « non » : rien n'est envoyé ;
+#   3. la copier sur Orodruin avec les noms tapés (comme orodruin-push), et l'y lancer : Orodruin
+#      la rejuge (contrat armé, watch vivante, inscription et zone relues, nom tapé comparé à celui
+#      qu'il lit, plafond sur la demande entière) et lance ses fils l'un après l'autre
+#      (eregion_core/exercise_runner.py). « Stop all » : make orodruin-kill.
+# DRY_RUN=1 : 1 et 2, puis ce que 3 ferait, affiché — rien n'est envoyé ni lancé.
+# REQUEST se donne sur la ligne de commande et doit être un identifiant de demande (r-…), vérifié
+# avant toute commande ; il n'est jamais lu de l'environnement.
+REQUEST ?=
+unexport REQUEST
+REQUEST_FROM  ?= h0
+ORO_RUN_REQUEST = docker run --rm --env-file orodruin.env -v $$HOME/runs:/app/runs -v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)
+orodruin-exercise: export EREGION_REQUEST_ID = $(value REQUEST)
+orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known)
+	@case "$(origin REQUEST)" in environment*) echo "REQUEST vient de l'environnement : rien n'est fait. La donner sur la ligne de commande : make orodruin-exercise REQUEST=<id>." >&2; exit 1;; esac
+	@case "$(REQUEST_FROM)" in h0|local) ;; *) echo "REQUEST_FROM=h0 ou local, pas « $(REQUEST_FROM) »" >&2; exit 1;; esac
+	@if [ "$(REQUEST_FROM)" = h0 ] && [ -z "$(HOST_SSH_FINGERPRINT)" ]; then echo "✗ HOST_SSH_FINGERPRINT requis : la demande vient de H0, sa clé d'hôte doit être vérifiée par son empreinte (infra/glorfindel-host/README.md, « SSH ») — jamais accept-new pour ce qui fait agir Orodruin. Rien n'est fait." >&2; exit 1; fi
+	@$(PYTHON) -m eregion_core.exercise_request check-id "$$EREGION_REQUEST_ID"
+	@d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT && id="$$EREGION_REQUEST_ID" && \
+	 if [ "$(REQUEST_FROM)" = local ]; then \
+	   cat "$(HOME)/.eregion/console/requests/$$id.json" > "$$d/$$id.json"; \
+	 else \
+	   test -n "$(HOST_IP)" || { echo "✗ Pas de H0 (HOST_IP) : make glorfindel-host-up, ou REQUEST_FROM=local" >&2; exit 1; }; \
+	   $(HOST_SSH) "cat .eregion/console/requests/$$id.json" > "$$d/$$id.json"; \
+	 fi || { echo "✗ la demande $$id ne se lit pas sur l'hôte de la console : rien n'est envoyé" >&2; exit 1; }; \
+	 $(PYTHON) -m eregion_core.exercise_request confirm "$$d/$$id.json" "$$d/$$id.typed.json" --expect "$$id" || exit 1; \
+	 if [ -n "$(DRY_RUN)" ]; then \
+	   echo "DRY_RUN : rien n'est envoyé. Sans lui :"; \
+	   echo "  scp $$id.json $$id.typed.json → $(ORO_USER)@<orodruin>:requests/"; \
+	   echo '  ssh $(ORO_USER)@<orodruin> → $(ORO_RUN_REQUEST) python -m eregion_core.exercise_runner /app/requests/'"$$id"'.json'; \
+	   exit 0; \
+	 fi; \
+	 test -n "$(ORO_IP)" || { echo "✗ Pas d'Orodruin (ORO_IP) : make orodruin-up" >&2; exit 1; }; \
+	 $(ORO_SSH) 'mkdir -p requests && chmod 700 requests' && \
+	 scp -q $(SSH_OPTS) "$$d/$$id.json" "$$d/$$id.typed.json" $(ORO_USER)@$(ORO_IP):requests/ && \
+	 ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN_REQUEST) python -m eregion_core.exercise_runner /app/requests/'"$$id"'.json'
+
 orodruin-down:
 	$(ORO_TF) destroy $(ORO_VARS)$(if $(YES), -auto-approve)
 
@@ -1022,7 +1068,7 @@ team-start: team-check build-glorfindel
 	  || { echo "✗ AZURE_SUBSCRIPTION_ID vide dans team.env : son Glorfindel démarrerait aveugle (ALLOW_NO_AZURE=1 : démo)"; exit 1; }
 	@grep -qE '^EREGION_CONSOLE_PORT=[0-9]+' "$(TEAM_DIR)/team.env" \
 	  || { echo "✗ EREGION_CONSOLE_PORT absent de team.env : un port par équipe (7007 : make glorfindel-start)"; exit 1; }
-	mkdir -p "$(TEAM_DIR)/runs" "$(TEAM_DIR)/.glorfindel" "$(TEAM_DIR)/.cache/chroma" "$(TEAM_DIR)/.eregion/analysis"
+	mkdir -p "$(TEAM_DIR)/runs" "$(TEAM_DIR)/.glorfindel" "$(TEAM_DIR)/.cache/chroma" "$(TEAM_DIR)/.eregion/analysis" "$(TEAM_DIR)/.eregion/console/requests"
 	$(TEAM_COMPOSE)$(if $(BOT), --profile bot) up -d watch war-room$(if $(BOT), bot)
 	@echo "  Console de $(TEAM) → http://localhost:$$(sed -n 's/^EREGION_CONSOLE_PORT=//p' "$(TEAM_DIR)/team.env" | tail -1)"
 

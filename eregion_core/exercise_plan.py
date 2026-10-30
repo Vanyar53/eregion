@@ -23,7 +23,9 @@ from eregion_core.orodruin import CEILING_INJECTIONS, CEILING_RUN_S
 
 # In the order they are checked: the first that holds is the wire's.
 REFUSALS = ("unknown_experiment", "not_implemented", "wrong_target_type", "outside_scope",
-            "not_enrolled", "zone_forbids", "no_watch", "no_engine", "over_cap")
+            "not_enrolled", "zone_forbids", "no_watch", "no_engine", "over_cap", "typed_name")
+# ``typed_name``: Orodruin's alone (DG-b, eregion_core/exercise_runner.py) — a wire that asks for
+# its target's name typed, without it or with another; the console never holds a name.
 # A destructive technique asks for the target's name, typed (phase b); a fault whose engine's
 # targets this host cannot read is judged by Gothmog's preflight, on Orodruin.
 WARNINGS = ("typed_name", "engine_unknown")
@@ -158,9 +160,15 @@ def judge(experiment_id: str, target_id: str, target: Target | None, *,
         elif target.name.lower() not in {n.lower() for n in aimed}:
             return v.refuse("no_engine", f"{e.id}'s engine aims at {', '.join(aimed) or 'no VM'}, "
                                          f"not {target.name}")
+        elif len({n.lower() for n in aimed}) > 1:
+            # A wire takes one VM (DG-b review): a fault that would act on others than the one
+            # the operator sees and types is refused, never run wider.
+            return v.refuse("no_engine", f"{e.id}'s engine aims at {', '.join(aimed)}: a wire "
+                                         f"takes {target.name} alone")
     # Destructive, or nobody declared it is not (A0): the name is typed — an unknown is never
-    # taken for harmless, here as in production (check_zone), and DG-b makes this a guard.
-    if e.kind == "technique" and e.destructive is not False:
+    # taken for harmless, here as in production (check_zone), and DG-b makes this a guard. A
+    # technique or a fault alike (§7: « chaque fil destructif »).
+    if e.destructive is not False:
         what = "destructive" if e.destructive else "destructiveness not declared"
         v.warnings.append({"code": "typed_name", "text": f"{what}: the target's name will be typed "
                            "to run it, and checked by Orodruin"})
@@ -170,12 +178,15 @@ def judge(experiment_id: str, target_id: str, target: Target | None, *,
 def plan(wires: list[tuple[str, str]], targets: dict[str, Target], *,
          catalog: dict[str, Experiment], watch_refusal: str = "",
          fault_targets: dict[str, list[str] | None] | None = None,
-         scope: Scope | None = None) -> list[Verdict]:
+         scope: Scope | None = None, max_injections: int | None = None,
+         max_run_s: int | None = None) -> list[Verdict]:
     """Every wire of a request, in the order drawn — the same pair once — and their rank: they
     run one after the other (Jonathan, 30/10). Past Orodruin's ceilings (``CEILING_INJECTIONS``
-    wires at least one injection each, ``CEILING_RUN_S`` in all), a wire is refused. With today's
-    estimates the time comes first (12 techniques fill 2 h before 20 wires do); the count holds
-    should an estimate shrink."""
+    wires at least one injection each, ``CEILING_RUN_S`` in all — or the cap Orodruin declares,
+    lower, when it judges: DG-b), a wire is refused. With today's estimates the time comes first
+    (12 techniques fill 2 h before 20 wires do); the count holds should an estimate shrink."""
+    max_injections = CEILING_INJECTIONS if max_injections is None else min(max_injections, CEILING_INJECTIONS)
+    max_run_s = CEILING_RUN_S if max_run_s is None else min(max_run_s, CEILING_RUN_S)
     seen: set[tuple[str, str]] = set()
     out: list[Verdict] = []
     rank, total = 0, 0
@@ -188,9 +199,9 @@ def plan(wires: list[tuple[str, str]], targets: dict[str, Target], *,
                   watch_refusal=watch_refusal, fault_targets=fault_targets, scope=scope)
         if not v.code:
             estimate = FAULT_S if catalog[experiment_id].kind == "fault" else TECHNIQUE_S
-            if rank + 1 > CEILING_INJECTIONS or total + estimate > CEILING_RUN_S:
-                v.refuse("over_cap", f"past Orodruin's ceilings: {CEILING_INJECTIONS} injections, "
-                                     f"{CEILING_RUN_S // 60} min in all, one wire after the other")
+            if rank + 1 > max_injections or total + estimate > max_run_s:
+                v.refuse("over_cap", f"past Orodruin's ceilings: {max_injections} injections, "
+                                     f"{max_run_s // 60} min in all, one wire after the other")
             else:
                 rank += 1
                 total += estimate

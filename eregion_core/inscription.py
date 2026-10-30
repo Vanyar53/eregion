@@ -267,6 +267,19 @@ class TagEnrollment:
             self._credential = DefaultAzureCredential()
         return {"Authorization": f"Bearer {self._credential.get_token(_ARM_SCOPE).token}"}
 
+    def arm_get(self, path: str, api: str) -> dict:
+        """One read of Azure Resource Manager with the reader's identity (Orodruin's, for the
+        request it judges: eregion_core/exercise_runner.py, DG-b). An error raises."""
+        import requests
+
+        from eregion_core.held import safe_path
+        path = safe_path(path)   # no query, no fragment, no escape: the path ARM was asked (DG-b review)
+        r = (self._get or requests.get)(f"{ARM}{path}", headers=self._headers(),
+                                        params={"api-version": api}, timeout=15)
+        if not r.ok:
+            raise RuntimeError(f"HTTP {r.status_code} reading {path.rsplit('/', 1)[-1]}")
+        return r.json()
+
     def tags(self, resource_id: str) -> tuple[dict, dict]:
         """(the resource group's tags, the VM's), read now."""
         import requests

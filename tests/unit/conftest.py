@@ -41,6 +41,8 @@ def hermetic_orodruin(tmp_path, monkeypatch):
     # No exercise channel, no return channel (#159): nothing reaches Azure Storage.
     monkeypatch.delenv("EREGION_EXERCISE_CHANNEL", raising=False)
     monkeypatch.delenv("EREGION_WATCH_CHANNEL", raising=False)
+    # DG-b: the console's requests in tmp, never ~/.eregion/console/requests.
+    monkeypatch.setenv("EREGION_REQUESTS_DIR", str(tmp_path / "console-requests"))
     # IA0's index (analysis/campaign_report.py) in tmp, never ~/.eregion/analysis (#167).
     monkeypatch.setenv("EREGION_ANALYSIS_INDEX", str(tmp_path / "analysis-index"))
     # Its model's bound at the default, whatever the operator set in .envrc.

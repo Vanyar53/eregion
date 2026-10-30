@@ -348,7 +348,9 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 Isolation : `original_unknown` — les cartes en quarantaine dont l'original est inconnu
                                 (la levée demandera le tag). `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
                                 Blocage : `left_said` — les règles laissées déjà dites (I4A, carte `rule_left`). L2C : ces marques
-                                ne font taire un changement que si sa carte attend, ou si la dernière carte est la sienne, fermée par un humain
+                                ne font taire un changement que si sa carte attend, ou si la dernière carte est la sienne, fermée par un humain.
+                                `drift_alerted_at` (relecture de L2C) : une disparition dite ne se tait que si la dernière carte de son alerte
+                                attend ou a été fermée par un humain, et que le watch n'a pas vu l'épisode fini (marque qui n'a pu s'effacer)
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
                                 oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte
                                 L2Q : ne fait taire un changement que si la dernière carte du NSG est la sienne, fermée par un humain (sans note)

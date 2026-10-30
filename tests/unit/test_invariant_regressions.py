@@ -3342,7 +3342,12 @@ def test_a_block_put_back_on_a_new_vm_stays_said_after_an_acknowledgement(monkey
     so ». An old isolation's VM gone, a new `api` given its NSG, blocked on its subnet and
     for itself, one of its block denies turned into an allow and reasserted; the operator
     acknowledges a card, `terraform apply` on the subnet's NSG, an IP changed, then web of
-    rg-app2 blocked the same way. Cause not established; frozen for its own lot."""
+    rg-app2 blocked the same way. Cause (established by L2C's review): a merged block
+    (perimeter and VM) whose VM rules stand but a customer's allow passes —
+    `verify_block.py` puts the perimeter's absence in `held_missing`, then returns
+    `_block_bypassed`, which drops it: the pass sees « bypassed », never « gone »; and the
+    perimeter's deletion after the acknowledgement is not said again (`_worse` never
+    reached). Nothing opens; frozen for its own lot."""
     _run(monkeypatch, _S101_NET,
          ("address_reused", WEB1, WEB1, None, False, 22, False, "rg-app1", "api", None, "Linux", True, None,
           "human_only"),
@@ -3395,7 +3400,10 @@ def test_a_merged_block_whose_perimeter_terraform_removed_is_said(monkeypatch):
     subnet read (always 429); `terraform apply` on the subnet's NSG takes our perimeter
     rules off, someone detaches the quarantine, time passes: « L1: the block on
     …/Db--01 vanished from Azure; the reassertion neither put it back nor said so ».
-    Cause not established; frozen for its own lot."""
+    Cause (established by L2C's review): the merged block's VM rules stand but a customer's
+    allow passes them — `verify_block.py` puts the perimeter's absence in `held_missing`,
+    then returns `_block_bypassed`, which drops it: the pass sees « bypassed », never
+    « gone ». Nothing opens; frozen for its own lot."""
     _run(monkeypatch, _S42_NET,
          ("race", WEB1, ("release", "reassert"), 0),
          ("block_perimeter", DB, DB, None, False),

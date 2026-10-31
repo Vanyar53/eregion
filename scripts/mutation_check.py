@@ -6593,6 +6593,32 @@ TESTS.update({
     "M2236": "tests/unit/test_glorfindel.py::test_a_half_bypassed_pair_keeps_another_placement_gone_on_the_nic",
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
+# D79 (#379): not the code — the teardown's operator never put back a turned rule held behind an
+# older version's deny on `*`. It does now, as U7D's unblock, once the release's outcome passes two
+# controls more (A0): what it keeps is exactly what the oracle says held, and each is said with
+# the turned rule behind it. Without them, the operator's step hid the three below (measured: the
+# frozen sequence green with the operator alone). M2320–M2322.
+_OLDER_HELD = ('            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)\n'
+               "                   or self._delete_rule(l_rg, l_name, name))\n")
+_D79 = ("tests/unit/test_invariant_regressions.py::test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic "
+        f"{INVARIANTS}")
+MUTANTS += [
+    ("M2320", "the release of an older version's isolation, once one rule is rightly kept, keeps the next too: "
+              "release_partial, a deny kept that nothing hangs on (D79)", "glorfindel/providers/azure/older.py",
+     _OLDER_HELD,
+     '            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)\n'
+     '                   or (failed and f"{l_rg}/{l_name}/{name} gardée : sonde")\n'
+     "                   or self._delete_rule(l_rg, l_name, name))\n"),
+    ("M2321", "an older version's deny kept for a turned rule, unsaid: « gardée » dropped (D79)",
+     "glorfindel/providers/azure/older.py", _OLDER_HELD,
+     '            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates).replace(" gardée", "")\n'
+     "                   or self._delete_rule(l_rg, l_name, name))\n"),
+    ("M2322", "an older version's deny said kept without the turned rule behind it: nothing to put back (D79)",
+     "glorfindel/providers/azure/older.py", _OLDER_HELD,
+     '            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates).split(" : ")[0]\n'
+     "                   or self._delete_rule(l_rg, l_name, name))\n"),
+]
+TESTS.update({mid: _D79 for mid in ("M2320", "M2321", "M2322")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

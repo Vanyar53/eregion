@@ -33,7 +33,7 @@ préversion publique et hors du provider azurerm (09/2026).
 | 3. Avant | sondes d'état normal sur chaque cible | une sonde ne tient pas, ou ne se lit pas |
 | 4. Injecter | fenêtre d'exercice ouverte (`kind: fault`, publiée vers la watch hébergée), démarrage **journalisé avant l'appel**, signal `fault_started` | — |
 | 5. Pendant | l'exécution suivie toutes les 30 s ; la panne doit être constatée : son **effet** déclaré (G1), la VM arrêtée ou le bruit vu dans Perf ; les sondes marquées `during` tiennent (G1) | une sonde `during` qui ne tient plus : l'expérience est **annulée** (le bruit n'est plus bénin) ; au-delà de sa durée + 5 min, ou du plafond : annulée ; Ctrl-C : annulée aussi |
-| 6. Après | les sondes à nouveau, Heartbeat **postérieur à la fin** de la panne, 10 min au plus ; un effet lu dans la télémétrie, pas encore vu, cherché encore entre son début et sa fin (l'ingestion a du retard) ; si le moteur n'a pas ramené la VM : le retour déclaré (`start_vm`, journalisé), puis les sondes encore | le retour n'est « vérifié » que par une sonde, jamais sur la parole du moteur ; un effet jamais vu fait échouer le run (`fault_effective`) |
+| 6. Après | les sondes à nouveau, Heartbeat **postérieur à la fin** de la panne, 10 min au plus ; un effet lu dans la télémétrie, pas encore vu, cherché encore entre son début et sa fin (l'ingestion a du retard) ; si le moteur n'a pas ramené la VM : le retour déclaré (`start_vm`, journalisé), puis les sondes encore ; enfin, la watch de Glorfindel relue (`checks.watch_after`, G1) | le retour n'est « vérifié » que par une sonde, jamais sur la parole du moteur ; un effet jamais vu fait échouer le run (`fault_effective`) ; une watch disparue aussi : la réaction de Glorfindel n'est pas connue |
 | 7. Enregistrer | `runs/<run_id>.json` comme Annatar, avec les valeurs des sondes avant et après (`metrics.before`, `metrics.after`, par VM) ; fenêtre fermée, puis, avec le canal, le rapport publié vers H0 (#193) ; signaux dans `runs/gothmog/` | — |
 
 **Les sondes d'état normal** ([`probes.py`](probes.py)) : la VM en marche (`PowerState/running`),
@@ -123,15 +123,16 @@ d'habitude.
 **Le taux.** Une panne est prise pour une attaque quand Glorfindel a recommandé ou exécuté une
 isolation ou un blocage de sa cible pendant la panne. Le taux compte par run, sur les pannes
 mesurées, et toutes les pannes de Gothmog comptent, pas seulement celles d'une campagne.
-Une panne n'est mesurée que si les décisions de la watch sont connues : un de ses fichiers,
-écrit depuis le début de la panne, lu en entier. La fenêtre d'une panne s'arrête au début de la
-suivante sur la même VM. Définitions et calcul : [`docs/analysis.md`](../docs/analysis.md),
+Une panne n'est mesurée que si la watch de Glorfindel vivait avant la panne (V1) et après
+(Gothmog la relit, `checks.watch_after`), et si ses décisions ont été lues sur l'hôte. Une
+décision faite après le début de la panne suivante sur la même VM est à la suivante. Si elle
+tombe aussi dans la fenêtre de la première, la première n'est pas mesurée. Définitions et calcul : [`docs/analysis.md`](../docs/analysis.md),
 « Le taux des pannes prises pour une attaque ». Le taux se lit **sur l'hôte de la watch** (H0) :
 `make glorfindel-host-fault-rate`. Sur Orodruin, chaque panne est « non mesurée » : les décisions
 n'y sont pas.
 
-**Mutants** : M2400–M2409 (`tests/unit/test_gothmog_noise.py`), M2410–M2421
-(`tests/unit/test_fault_rate.py`).
+**Mutants** : M2400–M2409 et M2424 (`tests/unit/test_gothmog_noise.py`), M2410–M2423 sauf
+M2419 (`tests/unit/test_fault_rate.py`).
 
 Le plan des deux cas, contre de faux providers :
 - **la config du dépôt** (`noise_vms: []`) ne change rien au banc : aucune ressource de G1, chaque VM

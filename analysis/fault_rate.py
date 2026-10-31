@@ -8,18 +8,25 @@ Definitions (docs/analysis.md, « Le taux des pannes prises pour une attaque »,
 Jonathan on 31/10):
 
 - **A measured fault** is a Gothmog run that started, whose effect was seen in the telemetry
-  Glorfindel reads (``checks.fault_effective`` PASS, gothmog/probes.py), run with a live
-  Glorfindel watch, with its start, end and targets known — and whose decisions are known: a
-  file of the watch written since the fault started was read whole on this host (``Watch``).
+  Glorfindel reads (``checks.fault_effective`` PASS, gothmog/probes.py), with its start, end and
+  targets known, and whose decisions are known:
+  - the Glorfindel watch was live before the fault (V1, the run refused otherwise) and after it
+    (``checks.watch_after``, read by Gothmog once the fault is over, review 2) — the watch
+    writes only when it decides, so no file of it says it was looking;
+  - this host holds the watch's files (``Watch``: on Orodruin they are not there), and none
+    that may hold a line of the fault's window — written since it started — is unreadable or
+    cut;
+  - no decision on its targets falls both in its own window and after the next fault on one of
+    them started: who it answered is not known.
   Every other run is **not measured**, and says why: noise Glorfindel never saw, a run where its
-  reaction was not measured by choice (``--without-glorfindel``), or the watch's files absent
-  (another host than the watch's: Orodruin), unreadable or cut, is never « Glorfindel did
-  nothing ».
+  reaction was not measured by choice (``--without-glorfindel``), a watch gone, or decisions not
+  read, is never « Glorfindel did nothing ».
 - **Taken for an attack**: at least one decision to isolate or to block one of its targets during
   it, recommended or executed — BL1's ``fault_run``, unchanged: a decision on a technique run on
   that VM in that technique's window is the technique's, never the fault's. A fault's window
-  runs from its start to its exercise window's last moment (else its end plus the grace),
-  never past the start of the next fault on one of its targets: a decision is one fault's.
+  runs from its start to its exercise window's last moment (else its end plus the grace). A
+  decision is one fault's: once the next fault on one of its targets has started, it is the
+  next one's — and if it also falls in the first one's window, the first is not measured.
 - **The rate** is the faults taken for an attack over the measured ones, per run; None when none
   is measured — never 0. Beside it: the disruptive recommendations (every such decision) and the
   executed ones (a disruptive action wrongly taken), and the same by fault.
@@ -45,8 +52,10 @@ NOT_SEEN = "son effet n'a pas été vu dans la télémétrie de Glorfindel : il 
 EFFECT_UNSAID = "son rapport ne dit pas si son effet a été vu"
 NO_WATCH = ("décisions de la watch introuvables : aucun de ses fichiers sur cet hôte "
             "(le taux se lit sur l'hôte de la watch)")
-NO_WATCH_SINCE = "décisions de la watch introuvables : aucun de ses fichiers écrit depuis le début de la panne"
+WATCH_GONE = "la watch de Glorfindel n'était plus vivante après la panne : sa réaction n'est pas connue"
+WATCH_AFTER_UNSAID = "son rapport ne dit pas si la watch de Glorfindel vivait après la panne"
 WATCH_CUT = "décisions de la watch illisibles en partie"
+SHARED = "une décision sur sa cible tombe aussi dans la panne suivante : à laquelle elle répond n'est pas connu"
 WINDOW_DAYS = 30
 
 
@@ -65,14 +74,12 @@ class Watch:
     records: list[dict] = field(default_factory=list)
 
     def unknown(self, start: float | None) -> str:
-        """Why the watch's decisions from ``start`` on are not known here — "" when a file
-        written since was read whole, and every such file was."""
+        """Why the watch's decisions from ``start`` on cannot be read here — "" when this host
+        holds its files and none that may hold a line since ``start`` is unreadable or cut. That
+        the watch was looking is the run's to say (``watch_after``), never a file's date."""
         if not self.files:
             return NO_WATCH
-        since = [f for f in self.files if start is None or f.mtime >= start]
-        if not since:
-            return NO_WATCH_SINCE
-        cut = next((f for f in since if f.why), None)
+        cut = next((f for f in self.files if f.why and (start is None or f.mtime >= start)), None)
         return f"{WATCH_CUT} ({cut.name} : {cut.why})" if cut else ""
 
 
@@ -119,6 +126,12 @@ def unmeasured(run: dict) -> str:
         return NOT_SEEN
     if run.get("effective") is None:
         return EFFECT_UNSAID
+    if run.get("without_glorfindel") is True:
+        return ""                                   # said by fault_run: not measured, by choice
+    if run.get("watch_after") is False:
+        return WATCH_GONE
+    if run.get("watch_after") is None:
+        return WATCH_AFTER_UNSAID
     return ""
 
 
@@ -133,17 +146,32 @@ def _shares_a_target(a: dict, b: dict) -> bool:
     return any(containment._same(x, y) for x in a.get("targets") or [] for y in b.get("targets") or [])
 
 
-def until_of(f: dict, faults: list[dict], windows: dict | None = None) -> float | None:
-    """The last moment a decision is the fault's: its exercise window's (``windows``: run id →
-    epoch), else its end plus the grace — never past the next fault on one of its targets."""
+def own_until(f: dict, windows: dict | None = None) -> float | None:
+    """The last moment of the fault's own window: its exercise window's (``windows``: run id →
+    epoch), else its end plus the grace."""
     until = (windows or {}).get(f["run_id"])
     if until is None and f.get("ended_at") is not None:
         until = f["ended_at"] + containment.HOLD_WATCH_S
+    return until
+
+
+def next_start(f: dict, faults: list[dict]) -> float | None:
+    """When the next fault on one of its targets starts, if it does."""
     later = [g["at"] for g in faults if g is not f and g.get("at") is not None and f.get("at") is not None
              and g["at"] > f["at"] and _shares_a_target(f, g)]
-    if later:
-        until = min(later) if until is None else min(until, min(later))
-    return until
+    return min(later) if later else None
+
+
+def _shared(f, faults, windows, records, taken, played) -> bool:
+    """A decision to isolate or to block its target after the next fault on it started, yet
+    inside the fault's own window: the next fault's by its window, maybe this one's tail — the
+    fault is then not measured, and the decision left to the next one."""
+    later, own = next_start(f, faults), own_until(f, windows)
+    if later is None or own is None or own < later:
+        return False
+    tail = containment.fault_run(f["run_id"], f.get("experiment") or "", f.get("targets") or [], later,
+                                 None, records, window_until=own, taken=taken, played=played)
+    return bool(tail.mistaken)
 
 
 def measure(runs, watch: Watch, *, taken=frozenset(), played=None, windows=None) -> list[FaultRun]:
@@ -166,8 +194,10 @@ def measure(runs, watch: Watch, *, taken=frozenset(), played=None, windows=None)
             continue
         fr = containment.fault_run(
             f["run_id"], f.get("experiment") or "", f.get("targets") or [], f.get("at"),
-            f.get("ended_at"), watch.records, window_until=until_of(f, faults, windows), taken=taken,
+            f.get("ended_at"), watch.records, window_until=own_until(f, windows), taken=taken,
             without_glorfindel=f.get("without_glorfindel") is True, played=played)
+        if not fr.why and _shared(f, faults, windows, watch.records, taken, played):
+            fr = FaultRun(fr.run_id, fr.fault, fr.targets, fr.start, fr.until, why=SHARED)
         taken |= {m["signal_id"] for m in fr.mistaken if m.get("signal_id")}
         out.append(fr)
     return out

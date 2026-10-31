@@ -128,8 +128,8 @@ def read_run(report, run_id: str = "", campaign: str = "") -> dict | None:
     ``detection`` (``detected`` | ``missed`` | ``unknown``), ``latency`` (seconds from ``at``
     to the detection the run counted, or None), ``detected_at``, ``without_glorfindel``,
     ``campaign`` (the campaign it was published with, or ''), ``run_format`` (0 before C1);
-    for a fault, ``ended_at`` and its ``targets`` (BL1), ``started`` and ``effective`` (G1:
-    whether Glorfindel's telemetry saw it)."""
+    for a fault, ``ended_at`` and its ``targets`` (BL1), ``started``, ``effective`` (G1:
+    whether Glorfindel's telemetry saw it) and ``watch_after`` (its watch live after it)."""
     if not isinstance(report, dict):
         return None
     m = report.get("metrics") if isinstance(report.get("metrics"), dict) else {}
@@ -164,6 +164,10 @@ def read_run(report, run_id: str = "", campaign: str = "") -> dict | None:
         # None when the report says nothing.
         "effective": (checks.get("fault_effective") == "PASS")
         if isinstance(checks, dict) and "fault_effective" in checks else None,
+        # G1, review 2: the watch read live again once the fault was over (Gothmog:
+        # ``watch_after``) — False when it was not; None when the report says nothing.
+        "watch_after": (checks.get("watch_after") == "PASS")
+        if isinstance(checks, dict) and "watch_after" in checks else None,
         # BL1: a fault's end and its targets — a decision to isolate or to block on them during
         # it is a fault taken for an attack (analysis/containment.py). None / [] for an attack.
         "ended_at": epoch(m.get("fault_end")) if kind == "fault" else None,

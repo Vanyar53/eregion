@@ -2,7 +2,7 @@
 Glorfindel could have seen it. The fault's effect is read in the telemetry Glorfindel reads,
 between the fault's start and end; noise never seen there fails the run, never passing for
 noise Glorfindel ignored. The VM serves throughout: noise that takes it down is cancelled.
-Mutants M2400–M2409 (scripts/mutation_check.py) are measured here.
+Mutants M2400–M2409 and M2424 (scripts/mutation_check.py) are measured here.
 
 The bench in memory is G0's (tests/unit/test_gothmog.py), with the Chaos agent's samples in
 Perf: every 10 s (the bench's DCR, ``perf_sampling_frequency``), each shown ``lag_s`` after it
@@ -235,6 +235,39 @@ def test_a_probe_unread_three_polls_in_a_row_cancels_the_noise(noise):
     assert lost["heartbeat"]["observed"].startswith("unreadable: RuntimeError: HTTP 429")
 
 
+def test_the_watch_is_read_again_once_the_fault_is_over(noise, monkeypatch):
+    """M2424 — review 2 of #387, point 1: the watch writes only when it decides, so no file of
+    it says it was looking. Gothmog reads it before the fault (V1, SEC5) and once it is over;
+    gone by then, the report says so, and the run measures nothing of Glorfindel."""
+    import eregion_core.watch_gate as gate
+    from eregion_core.run_report import read_run
+    clock, world, engine = noise
+    world()
+    reads = []
+    live = gate.READERS["local"]
+
+    def local():
+        reads.append(1)
+        return live() if len(reads) <= 2 else gate.Beat(gate.LOCAL, None, "the watch stopped")
+    monkeypatch.setitem(gate.READERS, "local", local)
+    out = engine().run("vm-disk-write", skip_confirm=True)
+    assert len(reads) == 3                                   # before, before the start, after
+    assert out.report["checks"]["watch_after"].startswith("FAIL (") and out.result == "FAIL"
+    assert out.report["checks"]["fault_effective"] == "PASS"  # the noise ran; who saw it is unknown
+    assert read_run(out.report)["watch_after"] is False
+
+
+def test_a_watch_live_after_the_fault_is_said_and_a_dev_run_says_nothing_of_it(noise, monkeypatch):
+    import eregion_core.watch_gate as gate
+    clock, world, engine = noise
+    world()
+    assert engine().run("vm-disk-write", skip_confirm=True).report["checks"]["watch_after"] == "PASS"
+    monkeypatch.setitem(gate.READERS, "local", lambda: gate.Beat(gate.LOCAL, None, "no watch"))
+    world()
+    out = engine().run("vm-disk-write", skip_confirm=True, without_glorfindel=True)
+    assert "watch_after" not in out.report["checks"] and out.result == "PASS"
+
+
 def test_a_cpu_load_runs_as_the_disk_writes_do(noise):
     clock, world, engine = noise
     world(level=97.0, experiment=_noise(name=CPU, urn="urn:csci:microsoft:agent:cpuPressure/1.0"))
@@ -297,26 +330,61 @@ def test_each_noise_fault_matches_the_schema_and_the_catalog(fid):
     assert during == ({"vm-running", "guest-agent-ready", "heartbeat"} if fid in NOISE else set())
 
 
+def _stages(kql: str) -> list[str]:
+    """A KQL query's pipeline, one stage each: comments dropped, whitespace and quotes made one."""
+    text = " ".join(" ".join(line.split("//")[0] for line in kql.splitlines()).split()).replace('"', "'")
+    return [st.strip() for st in text.replace(";", " | ").split("|") if st.strip()]
+
+
+# ransomware-disk-write's whole pipeline, as the effect of vm-disk-write reproduces it (review 2,
+# point 3). A change anywhere in the rule — a filter more, a third sample, another counter — fails
+# here until the effect follows; then this list is updated with it.
+RULE_STAGES = [
+    "let samples = Perf",
+    "where TimeGenerated > ago(10m)",
+    "where ObjectName == 'Logical Disk' or ObjectName == 'LogicalDisk'",
+    "where CounterName == 'Disk Write Bytes/sec'",
+    "project TimeGenerated, Computer, _ResourceId, InstanceName, CounterValue",
+    "extend Vm = iff(isnotempty(_ResourceId), tolower(_ResourceId), Computer)",
+    "order by Vm asc, InstanceName asc, TimeGenerated asc",
+    "extend Same = prev(Vm) == Vm and prev(InstanceName) == InstanceName",
+    "extend Gap = iff(Same, TimeGenerated - prev(TimeGenerated), timespan(null)), "
+    "PrevValue = iff(Same, prev(CounterValue), real(null))",
+    "samples",
+    "join kind=leftouter (samples",
+    "summarize Step = minif(Gap, Gap >= 1s) by Vm, InstanceName) on Vm, InstanceName",
+    "extend Fine = isnotnull(Step) and Step <= 25s",
+    "extend Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue), "
+    "Peak = iff(Fine, max_of(CounterValue, PrevValue), CounterValue)",
+    "where (Fine and Rate > 45000000) or (not(Fine) and Rate > 25000000)",
+    "summarize MaxWrite = max(Peak) by Computer, _ResourceId",
+]
+
+
 def test_the_disk_noise_is_computed_as_the_ransomware_rule_computes_it():
-    """Jonathan, 31/10: above the rule's threshold, or the RulePoller filters it and nothing
-    is measured — the threshold of its mode, read from the step (review 1, point 2). The rule's
-    text and the effect's are kept equal here: a change to one fails until the other follows."""
-    rules = (ROOT / "glorfindel" / "rules" / "azure" / "detection_rules.yaml").read_text()
-    rule = rules.split("- name: ransomware-disk-write")[1].split("- name:")[0]
-    for part in ('CounterName == "Disk Write Bytes/sec"', "Step = minif(Gap, Gap >= 1s)",
-                 "Fine = isnotnull(Step) and Step <= 25s",
-                 "Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue)",
-                 "(Fine and Rate > 45000000) or (not(Fine) and Rate > 25000000)"):
-        assert part in rule, part
+    """M2408 — Jonathan, 31/10: above the rule's threshold, or the RulePoller filters it and
+    nothing is measured — the threshold of its mode, read from the step (reviews 1 and 2). The
+    rule is frozen whole; the effect is the rule on one VM, in the fault's window."""
+    rules = yaml.safe_load((ROOT / "glorfindel" / "rules" / "azure" / "detection_rules.yaml").read_text())
+    rule = _stages(next(r for r in rules["rules"] if r["name"] == "ransomware-disk-write")["query"])
+    assert rule == RULE_STAGES, "ransomware-disk-write changed: vm-disk-write's effect must follow"
     probe = load_fault("vm-disk-write")["effect"]["probes"][0]
-    q = " ".join(probe["verify"].split())
-    for part in ("CounterName == 'Disk Write Bytes/sec'", "Step = minif(Gap, Gap >= 1s)",
-                 "Fine = isnotnull(Step) and Step <= 25s",
-                 "Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue)",
-                 "Over = iff(Fine, Rate - 45000000, Rate - 25000000)", "summarize Peak = max(Over)",
-                 "between (datetime({start}) .. datetime({end}))", "_ResourceId =~ '{target}'"):
-        assert part in q, part
-    assert probe["expect"] == "above 0"
+    effect = _stages(probe["verify"])
+    # The same samples: the same table, counter and objects; on one VM, in the fault's window.
+    assert [st for st in effect if st.startswith("where ")] == [
+        "where _ResourceId =~ '{target}'", "where TimeGenerated between (datetime({start}) .. datetime({end}))",
+        *[st for st in rule if st.startswith("where ") and ("ObjectName" in st or "CounterName" in st)]]
+    # The same pairs, the same step, the same modes and the same Rate.
+    for prefix in ("extend Gap =", "extend Fine =", "join kind=leftouter (samples"):
+        assert [st for st in effect if st.startswith(prefix)] == [st for st in rule if st.startswith(prefix)], prefix
+    assert next(st for st in effect if st.startswith("extend Rate =")) == \
+        next(st for st in rule if st.startswith("extend Rate =")).split(", Peak =")[0]
+    assert next(st for st in effect if st.startswith("summarize Step =")).split(" by ")[0] == \
+        next(st for st in rule if st.startswith("summarize Step =")).split(" by ")[0]
+    # The same thresholds, fine then coarse: Peak is how far above it the Rate went.
+    threshold = re.findall(r"Rate > (\d+)", rule[-2])
+    assert re.findall(r"Rate - (\d+)", next(st for st in effect if st.startswith("extend Over ="))) == threshold
+    assert effect[-1] == "summarize Peak = max(Over)" and probe["expect"] == "above 0"
     # The bench samples finely: the rule's fine mode is the one that applies there.
     cfg = yaml.safe_load(_tf("config.yaml"))
     assert cfg["perf_sampling_frequency"] <= 25

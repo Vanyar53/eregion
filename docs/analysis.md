@@ -659,24 +659,32 @@ Décidé avec Jonathan le 31/10 :
   - elle a démarré ;
   - son effet a été vu dans la télémétrie que lit Glorfindel (`checks.fault_effective` PASS,
     `gothmog/probes.py`) ;
-  - elle a tourné avec une watch vivante ;
   - son début, sa fin et ses cibles sont connus ;
-  - les décisions de la watch sont connues : un de ses fichiers (`watch-*_debug.jsonl`), écrit
-    depuis le début de la panne, a été lu en entier sur cet hôte, et aucun fichier écrit depuis
-    n'est illisible ou coupé (une ligne qui ne se lit pas).
+  - la watch de Glorfindel vivait **avant et après** la panne. Avant, c'est V1 : sans watch, le run
+    est refusé. Après, Gothmog la relit une fois la panne finie et l'inscrit au rapport
+    (`checks.watch_after`). La date d'un fichier ne le prouverait pas : la watch n'écrit que
+    quand elle décide, et chaque détection crée son propre fichier. Une détection sur une autre
+    VM, le lendemain, ne dit rien de la panne ;
+  - ses décisions se lisent ici : cet hôte a les fichiers de la watch (`watch-*_debug.jsonl` ;
+    sur Orodruin, ils n'y sont pas), et aucun fichier qui peut tenir une ligne de la panne
+    (écrit depuis son début) n'est illisible ou coupé (une ligne qui ne se lit pas).
+
+  Une panne bien ignorée est mesurée : la watch vivait avant et après, elle n'a rien décidé,
+  et aucun fichier neuf n'est écrit. C'est « 0 sur 1 ».
 
   Toute autre panne est **non mesurée**, et dit pourquoi. Un bruit que Glorfindel n'a jamais
-  vu, une panne lancée `--without-glorfindel`, ou des décisions qu'on n'a pas lues (sur
-  Orodruin, les fichiers de la watch ne sont pas là), ne valent jamais « Glorfindel n'a rien
-  fait ».
+  vu, une panne lancée `--without-glorfindel`, une watch disparue avant la fin, ou des décisions
+  qu'on n'a pas lues, ne valent jamais « Glorfindel n'a rien fait ».
 - **Prise pour une attaque** : au moins une décision d'isoler ou de bloquer une de ses cibles
   pendant la panne, recommandée ou exécutée. C'est la définition de BL1 (`fault_run`), inchangée.
   Une recommandation retenue par le mode (`human_only`) compte autant qu'une exécution : c'est
   Glorfindel qui prend le bruit pour une attaque. Une décision sur la technique d'un run d'attaque
   sur cette VM, dans la fenêtre de ce run, est celle de l'attaque (X1).
 - **La fenêtre d'une panne** court de son début au dernier moment de sa fenêtre d'exercice
-  (sinon sa fin plus 15 min de grâce), sans dépasser le début de la panne suivante sur une de ses
-  cibles. Une décision va à une seule panne : la plus ancienne dont elle tombe dans la fenêtre.
+  (sinon sa fin plus 15 min de grâce). Une décision va à une seule panne. Une fois la panne
+  suivante commencée sur une de ses cibles, la décision est à la suivante. Si elle tombe aussi
+  dans la fenêtre de la première, on ne sait pas à laquelle elle répond : la première est alors
+  non mesurée.
 - **Le taux** compte par run : les pannes prises pour une attaque, sur les pannes mesurées. Si
   aucune n'est mesurée, il vaut `None`, jamais 0.
 - **À côté** : le nombre de recommandations disruptives, le nombre d'actions exécutées (des

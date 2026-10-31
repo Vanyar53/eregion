@@ -21,6 +21,8 @@ normal checked before, during and after, the return to the initial state verifie
                  the engine did not bring the VM back: the declared revert (start it), then
                  the probes again. The return is verified only by a probe, never by the
                  engine's word
+    6b watch     the Glorfindel watch read again (G1): ``checks.watch_after`` — alive before
+                 the fault and after it, or its reaction is not known (analysis/fault_rate.py)
     7  record    ``runs/<run_id>.json`` as Annatar's, the probes' values before and after
                  in ``metrics.before`` / ``metrics.after``; window closed, and with an
                  exercise channel the report goes to H0 with it (#193); signals in
@@ -443,6 +445,10 @@ class Engine:
         checks["revert_verified"] = "PASS" if revert_verified else "FAIL"
         emitter.emit("steady_state_restored" if revert_verified else "revert_failed",
                      raw_signal={"fallback_used": fallback})
+        # The watch read again once the fault is over (G1, review 2): alive before it (V1, SEC5)
+        # and after it, or what Glorfindel did meanwhile is not known (analysis/fault_rate.py).
+        if not self._without:
+            checks["watch_after"] = self._watch_after()
 
         result = "PASS" if all(v == "PASS" for v in checks.values()) else "FAIL"
         metrics = {
@@ -475,6 +481,16 @@ class Engine:
                 if r.ok:
                     console.print(f"  [dim]{vm.rsplit('/', 1)[-1]} {r.name}: {r.observed} — "
                                   f"the fault is effective[/dim]")
+
+    @staticmethod
+    def _watch_after() -> str:
+        try:
+            gone = watch_gate.refusal()
+        except Exception as e:  # unreadable is not alive
+            gone = f"unreadable: {type(e).__name__}: {e}"[:200]
+        if gone:
+            console.print(f"[yellow]The Glorfindel watch is not live after the fault:[/yellow] {gone}")
+        return f"FAIL ({gone})" if gone else "PASS"
 
     def _await_steady(self, probes, vms, bench, *, since, pending=None):
         """The probes until they all hold, within the restore timeout — and, with ``pending``,

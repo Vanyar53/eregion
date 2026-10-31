@@ -6596,7 +6596,7 @@ TESTS.update({
 
 # G1 (#76): benign noise — a fault measures Glorfindel only if its effect was seen in Glorfindel's
 # telemetry, between its start and end; noise that takes the VM down is cancelled; the rate of
-# faults taken for an attack, per run, over the measured ones. M2400–M2421.
+# faults taken for an attack, per run, over the measured ones. M2400–M2424.
 GPROBE = "gothmog/probes.py"
 FRATE = "analysis/fault_rate.py"
 _G1_NOISE = "tests/unit/test_gothmog_noise.py"
@@ -6650,21 +6650,26 @@ MUTANTS += [
     ("M2416", "a fault is measured without the watch's decisions read: « 0 taken » unchecked (G1, review)", FRATE,
      '        why = unmeasured(f) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")\n',
      "        why = unmeasured(f)\n"),
-    ("M2417", "a fault is measured with no watch file written since it started (G1, review)", FRATE,
-     "        if not since:\n            return NO_WATCH_SINCE\n", ""),
+    ("M2417", "a fault whose watch was gone after it is measured: its silence read as « none taken » (G1, review 2)",
+     FRATE, '    if run.get("watch_after") is False:\n        return WATCH_GONE\n', ""),
     ("M2418", "a watch file cut or unreadable since the fault is taken as read whole (G1, review)", FRATE,
      '        return f"{WATCH_CUT} ({cut.name} : {cut.why})" if cut else ""\n', '        return ""\n'),
-    ("M2419", "a fault's window runs into the next fault on its VM: the next one's decision is its own (G1, review)",
-     FRATE, "    if later:\n        until = min(later) if until is None else min(until, min(later))\n", ""),
     ("M2420", "a decision at two faults at once is counted for both (G1, review)", FRATE,
      '        taken |= {m["signal_id"] for m in fr.mistaken if m.get("signal_id")}\n', ""),
     ("M2421", "a watch line that does not parse is skipped unsaid (G1, review)", FRATE,
      "                bad += 1\n", "                pass\n"),
+    ("M2422", "a fault whose report says nothing of the watch after it is measured (G1, review 2)", FRATE,
+     '    if run.get("watch_after") is None:\n        return WATCH_AFTER_UNSAID\n', ""),
+    ("M2423", "a late decision of a fault, inside the next one, leaves the first « measured, 0 taken » (G1, review 2)",
+     FRATE, "        if not fr.why and _shared(f, faults, windows, watch.records, taken, played):\n",
+     "        if False:\n"),
+    ("M2424", "gothmog never reads the watch once the fault is over (G1, review 2)", GOTH,
+     '            checks["watch_after"] = self._watch_after()\n', "            pass\n"),
 ]
 TESTS.update({
     "M2408": _G1_NOISE, "M2409": _G1_NOISE,
-    "M2416": _G1_RATE, "M2417": _G1_RATE, "M2418": _G1_RATE, "M2419": _G1_RATE, "M2420": _G1_RATE,
-    "M2421": _G1_RATE,
+    "M2416": _G1_RATE, "M2417": _G1_RATE, "M2418": _G1_RATE, "M2420": _G1_RATE,
+    "M2421": _G1_RATE, "M2422": _G1_RATE, "M2423": _G1_RATE, "M2424": _G1_NOISE,
 })
 TESTS.update({
     "M2400": f"{_G1_NOISE} tests/unit/test_gothmog.py::test_a_fault_never_seen_is_not_effective",

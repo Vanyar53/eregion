@@ -37,8 +37,8 @@ EXPERIMENT = "exp-celebrimbor-gondolin-shutdown"
 T0 = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
 
 
-def _experiment(targets=(TARGET,), duration="PT5M", abrupt="false", selector="List"):
-    return {"name": EXPERIMENT, "properties": {
+def _experiment(targets=(TARGET,), duration="PT5M", abrupt="false", selector="List", name=EXPERIMENT):
+    return {"name": name, "properties": {
         "selectors": [{"id": "gondolin", "type": selector,
                        "targets": [{"id": t, "type": "ChaosTarget"} for t in targets]}],
         "steps": [{"name": "shutdown", "branches": [{"name": "gondolin", "actions": [{
@@ -84,6 +84,7 @@ class World:
                  heartbeat="ok", never_ends=False, fail=None):
         self.clock = clock
         self._experiment = experiment or _experiment()
+        self.name = self._experiment["name"]
         self.vm_tags, self.rg_tags = vm_tags, rg_tags
         self.running0, self.effect, self.comes_back = running, effect, comes_back
         self.revive_works, self.heartbeat, self.never_ends = revive_works, heartbeat, never_ends
@@ -136,7 +137,12 @@ class World:
         return self.started_at
 
     # ARM
-    def _route(self, method, url, params):
+    def _query(self, kql):
+        # The shape ARM answers (measured 19/10): Tables / Columns / ColumnName / Rows.
+        return {"Tables": [{"TableName": "Table_0", "Columns": [{"ColumnName": "LastSeen"}],
+                            "Rows": [[self._heartbeat().isoformat()]]}]}
+
+    def _route(self, method, url, params, body=None):
         path = url[len("https://management.azure.com"):]
         self.calls.append((method, path))
         for suffix, status in self.fail.items():
@@ -146,13 +152,11 @@ class World:
         if method == "post":
             audited = len(orodruin.audit_path().read_text().splitlines()) if orodruin.audit_path().exists() else 0
             if low.endswith("/api/query"):
-                # The shape ARM answers (measured 19/10): Tables / Columns / ColumnName / Rows.
-                return Resp(200, {"Tables": [{"TableName": "Table_0", "Columns": [{"ColumnName": "LastSeen"}],
-                                              "Rows": [[self._heartbeat().isoformat()]]}]})
-            if low.endswith(f"/experiments/{EXPERIMENT}/start"):
+                return Resp(200, self._query((body or {}).get("query") or ""))
+            if low.endswith(f"/experiments/{self.name}/start"):
                 self.writes.append(("start", audited))
                 self.started_at = self.clock.t
-            elif low.endswith(f"/experiments/{EXPERIMENT}/cancel"):
+            elif low.endswith(f"/experiments/{self.name}/cancel"):
                 self.writes.append(("cancel", audited))
                 self.cancelled_at = self.clock.t
             elif low.endswith("/virtualmachines/vm-celebrimbor-gondolin/start"):
@@ -161,9 +165,9 @@ class World:
             else:
                 raise AssertionError(f"unexpected POST {path}")
             return Resp(202)
-        if low.endswith(f"/experiments/{EXPERIMENT}"):
+        if low.endswith(f"/experiments/{self.name}"):
             return Resp(200, self._experiment)
-        if low.endswith(f"/experiments/{EXPERIMENT}/executions"):
+        if low.endswith(f"/experiments/{self.name}/executions"):
             return Resp(200, {"value": [self._execution()] if self.started_at else []})
         if low.endswith("/virtualmachines/vm-celebrimbor-gondolin"):
             state = "PowerState/running" if self.running() else "PowerState/stopped"
@@ -178,7 +182,7 @@ class World:
         return self._route("get", url, params)
 
     def post(self, url, headers=None, params=None, json=None, timeout=None):
-        return self._route("post", url, params)
+        return self._route("post", url, params, json)
 
 
 def _armed(max_injections=10, max_run_s=3600):
@@ -752,8 +756,9 @@ def test_the_targets_of_each_fault_are_read_without_orodruin(monkeypatch):
     monkeypatch.setattr(engine_mod, "arm", no_arm)
     res = CliRunner().invoke(cli, ["targets", "--json"], catch_exceptions=False)
     assert res.exit_code == 0
-    assert json.loads(res.output) == {"vm-shutdown": ["vm-celebrimbor-gondolin"]}
-    assert engine_mod.declared_targets() == {"vm-shutdown": ["vm-celebrimbor-gondolin"]}
+    every = {f: ["vm-celebrimbor-gondolin"] for f in ("vm-cpu-pressure", "vm-disk-write", "vm-restart", "vm-shutdown")}
+    assert json.loads(res.output) == every
+    assert engine_mod.declared_targets() == every
 
 
 def test_a_request_id_is_checked_and_never_goes_without_glorfindel():

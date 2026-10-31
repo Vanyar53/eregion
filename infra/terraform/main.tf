@@ -4,6 +4,11 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    # G1 : la cible Microsoft-Agent de Chaos Studio (chaos.tf), qu'azurerm ne sait pas déclarer.
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.0"
+    }
   }
   required_version = ">= 1.5"
 }
@@ -14,6 +19,10 @@ terraform {
 # Le Makefile mappe l'AZURE_SUBSCRIPTION_ID de .envrc → ARM_SUBSCRIPTION_ID.
 provider "azurerm" {
   features {}
+  subscription_id = var.subscription_id != "" ? var.subscription_id : null
+}
+
+provider "azapi" {
   subscription_id = var.subscription_id != "" ? var.subscription_id : null
 }
 

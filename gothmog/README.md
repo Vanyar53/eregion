@@ -2,7 +2,7 @@
 
 Gothmog est le troisième agent de la boucle : Annatar attaque, Gothmog casse, Glorfindel détecte
 et répond. Ses pannes éprouvent d'abord Glorfindel : **bruit bénin** (G1, il ne doit pas
-isoler), **pannes de ses dépendances** (G2, il doit échouer fermé), **reprise** (G3, temps
+isoler : écritures disque, CPU, redémarrage), **pannes de ses dépendances** (G2, il doit échouer fermé), **reprise** (G3, temps
 mesuré).
 
 ## G0 — une panne déclarée, mesurée, réversible
@@ -32,8 +32,8 @@ préversion publique et hors du provider azurerm (09/2026).
 | 2. Cibles | relues **dans l'expérience Chaos Studio elle-même**, puis chacune passée par l'inscription (O0, `kind="fault"`) | cible non déclarée par la panne ou déclarée absente ; sélecteur dynamique ; cible hors banc, non inscrite, en `production` ; arrêt brutal pour une panne déclarée non destructive ; durée au-delà du plafond du run |
 | 3. Avant | sondes d'état normal sur chaque cible | une sonde ne tient pas, ou ne se lit pas |
 | 4. Injecter | fenêtre d'exercice ouverte (`kind: fault`, publiée vers la watch hébergée), démarrage **journalisé avant l'appel**, signal `fault_started` | — |
-| 5. Pendant | l'exécution suivie toutes les 30 s ; la panne doit être constatée (VM arrêtée) | au-delà de sa durée + 5 min, ou du plafond : l'expérience est **annulée** ; Ctrl-C : annulée aussi |
-| 6. Après | les sondes à nouveau, Heartbeat **postérieur à la fin** de la panne, 10 min au plus ; si le moteur n'a pas ramené la VM : le retour déclaré (`start_vm`, journalisé), puis les sondes encore | le retour n'est « vérifié » que par une sonde, jamais sur la parole du moteur |
+| 5. Pendant | l'exécution suivie toutes les 30 s ; la panne doit être constatée : son **effet** déclaré (G1), la VM arrêtée ou le bruit vu dans Perf ; les sondes marquées `during` tiennent (G1) | une sonde `during` qui ne tient plus : l'expérience est **annulée** (le bruit n'est plus bénin) ; au-delà de sa durée + 5 min, ou du plafond : annulée ; Ctrl-C : annulée aussi |
+| 6. Après | les sondes à nouveau, Heartbeat **postérieur à la fin** de la panne, 10 min au plus ; un effet lu dans la télémétrie, pas encore vu, cherché encore entre son début et sa fin (l'ingestion a du retard) ; si le moteur n'a pas ramené la VM : le retour déclaré (`start_vm`, journalisé), puis les sondes encore | le retour n'est « vérifié » que par une sonde, jamais sur la parole du moteur ; un effet jamais vu fait échouer le run (`fault_effective`) |
 | 7. Enregistrer | `runs/<run_id>.json` comme Annatar, avec les valeurs des sondes avant et après (`metrics.before`, `metrics.after`, par VM) ; fenêtre fermée, puis, avec le canal, le rapport publié vers H0 (#193) ; signaux dans `runs/gothmog/` | — |
 
 **Les sondes d'état normal** ([`probes.py`](probes.py)) : la VM en marche (`PowerState/running`),
@@ -88,6 +88,60 @@ pas vérifié, rien n'aurait été injecté ; la colonne s'appelle `LastSeen`.
 M71 (panne lancée sans état normal vérifié avant), M72 (cible de l'expérience non inscrite
 acceptée), M73 (retour déclaré sans être vérifié), M74 (signaux de panne là où la watch
 décide) — mesurés par `tests/unit/test_gothmog.py`.
+
+## G1 — le bruit bénin
+
+Des pannes sur lesquelles Glorfindel ne doit **ni isoler ni bloquer** : du bruit qu'une charge
+réelle fait tous les jours. Chacune est déclarée comme celle de G0, dans `experiments/` et au
+catalogue (`azure_vm.faults`), avec son expérience dans Celebrimbor
+([`infra/terraform/chaos.tf`](../infra/terraform/chaos.tf), `chaos.noise_vms`).
+
+| Panne | Moteur | Ce qu'elle fait | Son effet, lu où Glorfindel lit |
+|---|---|---|---|
+| [`vm-disk-write`](experiments/vm-disk-write.yaml) | agent Chaos, LinuxDiskIOPressure-1.1 (stress-ng), 10 min | des écritures soutenues, une sauvegarde : **au-dessus du seuil** de `ransomware-disk-write` (25 MB/s sur 60 s), décidé avec Jonathan le 31/10 — la règle se déclenche, et Glorfindel décide sur du bénin | Perf, `Disk Write Bytes/sec`, un échantillon au-dessus de 25 MB/s |
+| [`vm-cpu-pressure`](experiments/vm-cpu-pressure.yaml) | agent Chaos, CPUPressure-1.0, 95 %, 10 min | une compilation, un traitement par lots | Perf, `% Processor Time` au-dessus de 80 |
+| [`vm-restart`](experiments/vm-restart.yaml) | Shutdown-1.0, arrêt propre d'une minute | un redémarrage de maintenance ; au démarrage, l'agent de supervision groupe ses échantillons (#105) | la VM vue arrêtée |
+
+`vm-shutdown` (G0) déclare désormais son effet de la même façon (la VM vue arrêtée).
+
+**L'effet, pas la parole du moteur.** Chaque panne déclare ce qui montre qu'elle a eu lieu
+(`effect.probes`, schéma E1). Une requête en lit le pic (`Peak`) entre le début et la fin de la
+panne (`{start}`, `{end}`), jamais au-delà. Une écriture d'avant, ou d'après, n'est pas son effet.
+Si le bruit n'atteint jamais la télémétrie de Glorfindel, le run échoue (`fault_effective` FAIL) et
+ne compte pas dans le taux : un bruit que Glorfindel n'a pas vu ne prouve pas qu'il l'a ignoré.
+
+**Le bruit est bénin : la VM sert pendant.** Les sondes marquées `during: true` (en marche, agent
+prêt, Heartbeat frais) sont relues à chaque tour. Si l'une ne tient plus, l'expérience est annulée,
+le run échoue (`steady_state_during` FAIL, `metrics.steady_state_lost`), et le retour est vérifié
+comme d'habitude.
+
+**Le taux.** Une panne est prise pour une attaque quand Glorfindel a recommandé ou exécuté une
+isolation ou un blocage de sa cible pendant la panne. Le taux compte par run, sur les pannes
+mesurées, et toutes les pannes de Gothmog comptent, pas seulement celles d'une campagne.
+Définitions et calcul : [`docs/analysis.md`](../docs/analysis.md), « Le taux des pannes prises pour
+une attaque » ; `python -m analysis.fault_rate`, sur l'hôte de la watch (H0).
+
+**Mutants** : M2400–M2406 (`tests/unit/test_gothmog_noise.py`), M2410–M2415
+(`tests/unit/test_fault_rate.py`).
+
+### Reste, sur le banc, avec Jonathan
+
+Rien n'est appliqué ni mesuré : les trois pannes sont `planned` au catalogue (Dagorlad les montre
+sans poignée) jusqu'au premier run.
+1. `make celebrimbor-plan`, avec `chaos.noise_vms: [gondolin]`. Le plan ajoute l'identité de
+   l'agent (et la modification de gondolin qui la porte), la cible Microsoft-Agent (azapi, un
+   provider de plus : `celebrimbor-plan` fait déjà `init -upgrade`), l'extension, deux capacités,
+   trois expériences et leurs trois rôles. Puis `make celebrimbor-up YES=1`.
+2. Vérifier ce qui n'est pas mesuré :
+   - que stress-ng est installé par l'extension ;
+   - que l'agent joint Chaos Studio ;
+   - que le Heartbeat de gondolin tient après l'ajout de l'identité ;
+   - le nom de l'objet CPU sous l'agent Azure Monitor (`Processor`, `_Total`).
+
+   `make gothmog-preflight FAULT=vm-disk-write` lit l'état normal sans rien écrire.
+3. Depuis Orodruin armé, une panne à la fois (`gothmog run vm-disk-write`, puis `vm-cpu-pressure`,
+   puis `vm-restart`), en `human_only` sur gondolin. Puis, sur H0, `python -m analysis.fault_rate`.
+   Le taux mesuré va ici, et les pannes passent `implemented`.
 
 ## G2 — les pannes des dépendances de Glorfindel
 

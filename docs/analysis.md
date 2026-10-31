@@ -638,6 +638,49 @@ Le calcul lit aussi :
 Une campagne de C1 qui jouerait elle-même ses pannes en ferait des runs de la campagne. Le
 rattachement par l'heure ne servirait plus, ni `--fault-run`.
 
+## Le taux des pannes prises pour une attaque (G1, #76)
+
+Le bruit bénin de G1 éprouve la retenue de Glorfindel : écritures disque, charge CPU,
+redémarrage, arrêt (`gothmog/experiments/`). Sur aucune de ces pannes il ne doit isoler ni
+bloquer. Le taux se calcule sur **toutes** les pannes de Gothmog, pas seulement celles d'une
+campagne (`analysis/fault_rate.py`) :
+
+```bash
+python -m analysis.fault_rate [--runs-dir runs] [--days 30] [--json]
+```
+
+Décidé avec Jonathan le 31/10 :
+
+- **Une panne mesurée** remplit quatre conditions :
+  - elle a démarré ;
+  - son effet a été vu dans la télémétrie que lit Glorfindel (`checks.fault_effective` PASS,
+    `gothmog/probes.py`) ;
+  - elle a tourné avec une watch vivante ;
+  - son début, sa fin et ses cibles sont connus.
+
+  Toute autre panne est **non mesurée**, et dit pourquoi. Un bruit que Glorfindel n'a jamais
+  vu, ou une panne lancée `--without-glorfindel`, ne vaut jamais « Glorfindel n'a rien fait ».
+- **Prise pour une attaque** : au moins une décision d'isoler ou de bloquer une de ses cibles
+  pendant la panne, recommandée ou exécutée. C'est la définition de BL1 (`fault_run`), inchangée.
+  Une recommandation retenue par le mode (`human_only`) compte autant qu'une exécution : c'est
+  Glorfindel qui prend le bruit pour une attaque. Une décision sur la technique d'un run d'attaque
+  sur cette VM, dans la fenêtre de ce run, est celle de l'attaque (X1).
+- **Le taux** compte par run : les pannes prises pour une attaque, sur les pannes mesurées. Si
+  aucune n'est mesurée, il vaut `None`, jamais 0.
+- **À côté** : le nombre de recommandations disruptives, le nombre d'actions exécutées (des
+  actions disruptives à tort), et les mêmes chiffres par panne.
+
+Ce que le taux ne change pas :
+- **les chiffres de BL1** (rapport de campagne, encadré RESPONSE) restent calculés comme avant ;
+- **l'accueil de la console** les lit par `fault_run`.
+
+La vue unifiée d'un run (`read_run`, C1) dit maintenant `effective`. Le module expose `measure`
+et `rate` pour que l'accueil puisse afficher le taux à côté des « actions disruptives à tort ».
+Cet affichage reste à faire, par la session Console.
+
+**Mesuré sur le banc : pas encore.** Les pannes de bruit sont `planned` jusqu'au premier run
+avec Jonathan (`gothmog/README.md`, « G1 »).
+
 ## Le tri, la mémoire et le modèle séparés (IA1, #88)
 
 _27/10 : le code, ses tests (`tests/unit/test_analysis_separation.py`,

@@ -128,7 +128,8 @@ def read_run(report, run_id: str = "", campaign: str = "") -> dict | None:
     ``detection`` (``detected`` | ``missed`` | ``unknown``), ``latency`` (seconds from ``at``
     to the detection the run counted, or None), ``detected_at``, ``without_glorfindel``,
     ``campaign`` (the campaign it was published with, or ''), ``run_format`` (0 before C1);
-    for a fault, ``ended_at`` and its ``targets`` (BL1)."""
+    for a fault, ``ended_at`` and its ``targets`` (BL1), ``started`` and ``effective`` (G1:
+    whether Glorfindel's telemetry saw it)."""
     if not isinstance(report, dict):
         return None
     m = report.get("metrics") if isinstance(report.get("metrics"), dict) else {}
@@ -158,6 +159,11 @@ def read_run(report, run_id: str = "", campaign: str = "") -> dict | None:
         # nothing was injected — False; None when the report says nothing.
         "started": (checks.get("fault_started") == "PASS")
         if isinstance(checks := report.get("checks"), dict) and "fault_started" in checks else None,
+        # G1: a fault whose effect was not seen in the telemetry Glorfindel reads (Gothmog:
+        # ``fault_effective`` FAIL) measures nothing of it (analysis/fault_rate.py) — False;
+        # None when the report says nothing.
+        "effective": (checks.get("fault_effective") == "PASS")
+        if isinstance(checks, dict) and "fault_effective" in checks else None,
         # BL1: a fault's end and its targets — a decision to isolate or to block on them during
         # it is a fault taken for an attack (analysis/containment.py). None / [] for an attack.
         "ended_at": epoch(m.get("fault_end")) if kind == "fault" else None,

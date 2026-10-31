@@ -6554,6 +6554,57 @@ TESTS.update({
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
 
+# G1 (#76): benign noise — a fault measures Glorfindel only if its effect was seen in Glorfindel's
+# telemetry, between its start and end; noise that takes the VM down is cancelled; the rate of
+# faults taken for an attack, per run, over the measured ones. M2400–M2415.
+GPROBE = "gothmog/probes.py"
+FRATE = "analysis/fault_rate.py"
+_G1_NOISE = "tests/unit/test_gothmog_noise.py"
+_G1_RATE = "tests/unit/test_fault_rate.py"
+MUTANTS += [
+    ("M2400", "a fault whose effect was never seen passes: noise Glorfindel never saw, « nothing done » (G1)",
+     GOTH, '        checks["fault_effective"] = "PASS" if effective else "FAIL"\n',
+     '        checks["fault_effective"] = "PASS"\n'),
+    ("M2401", "a burst after the fault ended is read as its effect (G1)", GOTH,
+     "            self._see(queried, vms, bench, effects, start=t0, end=fault_end)\n",
+     "            self._see(queried, vms, bench, effects, start=t0, end=self._now())\n"),
+    ("M2402", "the steady state is never checked during benign noise (G1)", GOTH,
+     "                if during and not unsteady and cancelled_at is None:\n", "                if False:\n"),
+    ("M2403", "noise that takes the VM down runs on to its end (G1)", GOTH,
+     "                if unsteady and cancelled_at is None:\n", "                if False:\n"),
+    ("M2404", "any value of the effect's query is read as the effect, under the rule's threshold too (G1)",
+     GPROBE, "                ok = isinstance(peak, (int, float)) and not isinstance(peak, bool) and peak > floor\n",
+     "                ok = peak is not None\n"),
+    ("M2405", "a fault that declares no effect loads (G1)", GOTH,
+     '            + effect_errors((doc.get("effect") or {}).get("probes")))\n', "            )\n"),
+    ("M2406", "an effect the telemetry shows after the fault is never looked for (G1)", GOTH,
+     "            left = pending is not None and pending()\n", "            left = False\n"),
+    ("M2410", "a recommendation the mode held is not a fault taken for an attack: only executions are (G1)",
+     FRATE, "    taken = sum(1 for f in measured if f.mistaken)\n",
+     "    taken = sum(1 for f in measured if f.executed)\n"),
+    ("M2411", "a fault run without Glorfindel is measured: « Glorfindel did nothing » by choice (G1)", FRATE,
+     '            without_glorfindel=f.get("without_glorfindel") is True, played=played))\n',
+     "            without_glorfindel=False, played=played))\n"),
+    ("M2412", "noise Glorfindel's telemetry never saw is measured (G1)", FRATE,
+     '    if run.get("effective") is False:\n        return NOT_SEEN\n', ""),
+    ("M2413", "an attack run on the noisy VM: its decision counted against the fault (G1)", FRATE,
+     "    played = played_of(runs) if played is None else list(played)\n",
+     "    played = [] if played is None else list(played)\n"),
+    ("M2414", "the rate's denominator counts the faults not measured (G1)", FRATE,
+     '            "rate": taken / len(measured) if measured else None,\n',
+     '            "rate": taken / len(checked) if checked else None,\n'),
+    ("M2415", "the unified view reads a fault whose effect failed as seen (G1)", RRC,
+     '        "effective": (checks.get("fault_effective") == "PASS")\n',
+     '        "effective": (checks.get("fault_effective") != "")\n'),
+]
+TESTS.update({
+    "M2400": f"{_G1_NOISE} tests/unit/test_gothmog.py::test_a_fault_never_seen_is_not_effective",
+    "M2401": _G1_NOISE, "M2402": _G1_NOISE, "M2403": _G1_NOISE, "M2404": _G1_NOISE,
+    "M2405": _G1_NOISE, "M2406": _G1_NOISE,
+    "M2410": _G1_RATE, "M2411": _G1_RATE, "M2412": _G1_RATE, "M2413": _G1_RATE, "M2414": _G1_RATE,
+    "M2415": _G1_RATE,
+})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

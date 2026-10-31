@@ -5093,7 +5093,7 @@ def test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said(monkey
     the card acknowledged; its rules put back as they were (the pair still gone: the episode goes
     on), a pass under a full disk, its rules taken off again — the next pass in human_only said
     nothing: « not worse than the card » (the same rules gone as it said). What still holds of the
-    card is the baseline now — in memory first, then in the entry: the rules gone again are a
+    card is the baseline now, in memory, once the card is acknowledged: the rules gone again are a
     worse drift than « the pair alone », said again. With the role removed or not."""
     _run(monkeypatch, _net(subnet_nsg=[]),
          ("block_perimeter", WEB2, WEB2, None, False),
@@ -5104,10 +5104,11 @@ def test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said(monkey
          ("said_then_back_after_a_full_disk", "gone", WEB2, WEB2, None, False, 22, (1, "from-full")))
 
 
-# Two older failures, reached once L1Q's rule shifted the draws, present on `main` 48e42c8 (red
-# there, replayed step by step): outside the lot's family — frozen, routed.
+# Three older failures (two here, one below), reached once L1Q's rule — now a PR of its own —
+# shifted the draws, present on `main` 48e42c8 (red there, replayed step by step): outside the
+# lot's family — frozen, routed.
 @pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="L1Q: I7, an older deny-all kept for a turned block rule of a redeployed NIC")
+                   reason="#379: I7, an older deny-all kept for a turned block rule of a redeployed NIC")
 def test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic(monkeypatch):
     """L1Q's machine at 500 (seed 1), shrunk to 4 rules: a new VM api (rg-app1) on the NSG of an
     older version's isolation of api (rg-edge), its perimeter lifted beside a block, the role
@@ -5127,7 +5128,7 @@ def test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic(monkeypatc
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="L1Q: L1, a block bypassed beside its own deny altered, writes refused, unsaid")
+                   reason="#381: L1, a block bypassed beside its own deny altered, writes refused, unsaid")
 def test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused(monkeypatch):
     """L1Q's machine at 2 000 (seed 322), shrunk to 5 rules without L1Q's rule: web2 blocked, its
     inbound deny's port altered by someone, the role removed (writes refused), a customer allow
@@ -5162,7 +5163,7 @@ _S555_NET = {
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="L1Q: I3, a release said released, an isolation rule kept after a lost state")
+                   reason="#380: I3, a release said released, an isolation rule kept after a lost state")
 def test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps(monkeypatch):
     """L1Q's machine at 500 (seed 555), shrunk to 7 rules, none of L1Q's: web1 blocked and isolated,
     released; web2 and web1 each isolated with a rule of theirs kept at the lift (I4C), web2 left

@@ -2730,6 +2730,85 @@ réaffirmation (`reassert.py`, `reassert_cards.py`) : 78/85 attrapés à chaque 
 après, plus les six nouveaux (84/91) ; M13, M21, M31, M34, M37 et M38 par leurs seules séquences
 figées des deux côtés, M1645 survit des deux côtés (déjà vrai avant). Aucun perdu.
 
+**L1Q (30–31/10, #363) : un blocage écrit de nouveau est un nouvel épisode ; ce qui tient encore
+d'une carte de dérive en devient la référence.** La graine 42 à 2 000 d'I4E, figée en `xfail` strict
+(L1 : « the block on …/Db--01 vanished from Azure; the reassertion neither put it back nor said so »).
+**La cause, établie pas à pas** (l'état de Db--01 tracé après chacune des 29 règles, puis réduite à
+sept, sans quarantaine) — ni la quarantaine changée, ni le périmètre levé, comme le titre le laissait
+croire. Db--01 bloquée sur son sous-réseau et pour elle-même (`block_turned_then_reasserted`, portée
+`both` : une entrée fusionnée, la paire de périmètre et ses règles) ; web, sur le même sous-réseau,
+bloquée là puis débloquée (`perimeter_lifted_beside_a_block`) : la paire, une par IP et sous-réseau,
+part avec elle ; la réaffirmation le dit (« disparu en partie — l'IP reste bloquée »), l'opérateur
+acquitte la carte (`operator_acknowledges`) : dite pour son épisode. Puis Db--01 bloquée de nouveau, en
+entier (`block_then_isolate`) : ses règles réécrites (à des priorités plus basses, la place de la paire
+libérée). `_save_block_state` fusionnait sans retirer `drift_alerted_at` ni `drift_said` : la passe
+suivante, en `human_only` (amenée ici par `quarantine_change_comes_back`, une simple passe suffit),
+lisait la paire — toujours nommée, toujours absente — « pas pire que la carte, déjà dite », et se
+taisait. L'oracle ne tient l'acquittement que tant que les règles de l'entrée sont celles qu'il a vues
+acquitter (RB1, quatrième relecture) : réécrites, l'épisode acquitté est fini, la disparition est à
+redire. **Pourquoi pas remise** : `human_only`, rien n'est écrit. **Pourquoi pas dite** : la marque de
+l'épisode acquitté. **Correctif** (`response/state.py`) : un blocage écrit en entier efface aussi la
+marque de dérive — un nouveau blocage, un nouvel épisode, comme une nouvelle isolation réécrit son
+état ; un blocage écrit en partie la garde (l'entrée est tenue, rien n'est lu). Figés :
+`test_a_block_beside_a_lifted_perimeter_vanishes_under_a_quarantine_change` (son `xfail` levé, les
+tirages de la fin de la règle complétés), `test_a_block_written_again_after_an_acknowledged_drift_is_said_again`
+(sept étapes, et un test unitaire du même nom dans `test_reassert.py`) ; rouges sur `main` d05eade.
+
+**La machine (A0 : une règle ajoutée, aucune retirée ni restreinte, l'oracle inchangé).**
+`blocked_again_after_an_acknowledged_drift` rend l'état courant : une VM bloquée sur son sous-réseau
+et pour elle-même, une voisine bloquée là puis débloquée, la passe en `human_only`, la carte de la VM
+acquittée par `operator_acknowledges` (son index fixé, aucun tirage qui dépende de l'état), la VM
+bloquée de nouveau, une passe. Elle n'appelle que des règles et des chemins existants ; les
+assertions sont celles qu'ils portent déjà. Sans elle, M2150 (le défaut d'avant) n'était attrapé que
+par ses séquences figées (0/2 à 500) ; avec elle, par la machine seule, 2/2 à 500.
+
+**Ce que la règle a fait tomber.** (1) **Une règle revenue puis repartie, la paire toujours absente**
+(graine 322 à 2 000 ; présent sur `main` 48e42c8 sans la règle, réduit à six étapes). L'entrée
+fusionnée de web2, sa paire levée par web1, dite ; puis les règles de web2 retirées
+(`said_then_back_after_a_full_disk`, branche « disparu ») : dites — la paire et elles —, la carte
+acquittée ; remises telles quelles (la paire toujours absente : l'épisode ne finit pas, `_missing`
+reste vrai), une passe sous disque plein, retirées de nouveau : « pas pire que la carte » (les mêmes
+règles que celles qu'elle disait), rien. Même famille — une marque d'épisode acquitté qui fait taire
+une disparition nouvelle. **Correctif** (`reassert_cards.py`, `reassert.py`) : quand une dérive va
+mieux que sa carte sans finir, ce qui en tient encore devient la référence (`drift_baseline`,
+`narrow_drift`) — en mémoire d'abord (une écriture refusée par un disque plein la garde, L2C), puis
+dans l'entrée (`drift_said`) ; la mémoire part avec l'épisode (fini, ou une nouvelle carte). Les
+règles reparties sont « pires » que la référence : redites. Figé :
+`test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said` (rôle retiré ou non ; rouge sur
+48e42c8), `test_reassert.py::test_a_rule_back_then_gone_again_is_said_while_the_pair_stays_gone`
+(disque plein ou non). `reassert.py` passe à 493 lignes (la logique dans `reassert_cards.py`, 365).
+(2) **Trois échecs anciens hors de la famille**, rouges sur 48e42c8 rejoués pas à pas, figés en `xfail`
+strict et routés : à la graine 555 (500), réduit à sept règles, aucune de L1Q, « I3 (said):
+release_isolation said released, rules of …/rg-app2/…/web kept » — des isolations gardées à la levée
+(I4C), l'état de web2 perdu, une isolation coupée avant un crash
+(`test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps` ; famille I4C) ; à la graine 1 (500), réduit à quatre règles, « I7: …/rg-edge/…/api could not be
+released » au démontage — un refus total d'une ancienne version gardé (la garde d'I4C) pour une règle
+de blocage retournée sur le NSG de la carte, que l'opérateur du démontage ne remet pas
+(`test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic` ; famille I4C/I4D, #366) ; à la
+graine 322 (2 000), réduit à cinq règles sans la nouvelle, « L1: the block of …/web is bypassed by a
+customer allow; the reassertion doesn't say so » — le refus entrant de la VM altéré (son port), le rôle
+retiré, une allow du client avant lui (`test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused` ;
+famille L1C, #369).
+
+**M1646 de nouveau mesuré.** Le harnais d'après l'avait perdu : `test_the_same_perimeter_gone_twice_is_said_twice`
+remettait la paire par un reblocage, qui efface maintenant la marque lui-même — la branche « ne couvre
+pas » qui fermait l'épisode n'était plus exercée. Le test gagne le cas de la paire remise à la main
+(aucune écriture de Glorfindel) : M1646 y est attrapé.
+
+**Mesures de L1Q** (l'arbre final, `main` 48e42c8 fusionné). `pytest` complet : 4 659 réussis, 7 sautés, 7 `xfail` (dont les trois de L1Q) ; `ruff`
+propre ; `scripts/mutant_anchors.py` sans faute. Invariants à 500 séquences : graines 42, 7, 101, 322,
+777, 8675 et 31337 vertes ; 1 et 555 tombent sur deux des échecs anciens ci-dessus (figés, rouges sur
+`main`, aucune règle de L1Q dans leurs séquences réduites) — **la CI à 500, graines au hasard, peut
+les rencontrer** : la nouvelle règle déplace les tirages (sur `main`, la graine 1 à 500 passe). Puis
+2 000 sur 42, 322 et 8675, vertes. Mutants : M2150 attrapé par ses séquences figées, et par la machine
+seule (2/2 à 500) ; M2151 et M2152 par leurs séquences et tests, pas par la machine seule à 500 (0/2 :
+l'état, une paire absente et une règle remise puis repartie, ne s'est rencontré qu'à 2 000). Harnais
+avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les mutants de l'état
+(`response/state.py`) et de la réaffirmation (`reassert.py`, `reassert_cards.py`) : 74/78 attrapés à
+chaque tour sur 48e42c8, 74/78 après, plus les trois nouveaux (77/81) ; M13 et M37 par leurs seules
+séquences figées, M36 et M1645 survivent, des deux côtés (déjà vrai avant). Aucun perdu (M1646, perdu
+un temps, mesuré de nouveau ci-dessus).
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

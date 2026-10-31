@@ -2780,6 +2780,42 @@ leurs tests, deux tours (60 séquences, graine 42). Par la machine seule, M2260 
 Hypothesis 42, `--jobs 4`) sur les 16 mutants d'`orphans.py` (M701, M760, M768, M769, M776, M883, M886,
 M887, M889, M1737–M1740, M1744–M1746) : 16/16 à chaque tour avant (`d05eade`) et après ; aucun perdu.
 
+**Relecture d'U1O (31/10) : deux trous de la même famille.** (1) **Une seconde VM coupée plus tard**
+(sonde P6 du relecteur) : la carte de web porte .4 et .6 ; web supprimée, batch reçoit .4 et la carte dit
+batch ; plus tard api reçoit .6, coupée par la même règle. Seul `_resource(o)`, la première VM coupée,
+était comparé : il ne changeait pas, rien n'était redit, aucune carte en attente ne nommait api — « chaque
+VM coupée » n'était vrai qu'à la première fois. Désormais `orphan_alerts.json` garde, sous `_said`, les VM
+que chaque règle coupait quand sa carte a été dite (`_said_of` : chaque VM coupée ; aucune coupée, la VM à
+l'adresse marquée `~` — son NSG ne la gouverne pas — ou le NSG), et la carte est remplacée quand cet
+ensemble change. Le cas voisin vient avec : une VM toujours à l'adresse que le NSG cesse de gouverner
+(`cut` vide) remplace la carte qui la disait coupée par une carte moyenne. Une entrée d'avant la relecture
+(sans `_said`) est comparée comme avant, par la VM de sa carte, puis complétée. (2) **Une lecture
+partielle des cartes réseau fermait une carte juste** (sonde P1) : batch coupée et dite, puis
+`network_interfaces.list_all()` ne rend plus sa carte réseau, sans erreur (Reader sur certains groupes de
+ressources) : `now_on` vide, la carte de batch fermée « passée depuis à nsg-subnet », remplacée par une
+carte qui disait à tort qu'aucune carte ne porte l'adresse — et, si la lecture oscille, du bruit. Une VM
+qui sort de l'ensemble sans qu'une autre y entre doit maintenant être prouvée partie
+(`AzureConnector.vm_listed_or_gone`) : vue par la dernière liste des orphelines sur une carte réseau (elle
+tient d'autres adresses), ou un 404 sur la VM. Sinon la carte reste et le passage le dit (`outcome:
+unread`, la liste partielle). Quand une VM entre, la carte est remplacée sans attendre la preuve : ce qui
+coupe se dit d'abord (U1). (3) La note d'une carte remplacée quand personne ne tient l'adresse dit « vise
+une adresse qu'aucune carte ne porte plus (U1O) » (elle disait « passée depuis à nsg-subnet ») ; « coupe
+désormais … » quand une VM s'ajoute, « … que ce NSG ne gouverne plus » dans le cas voisin.
+
+Tests, rouges sans la relecture (`test_orphan_sweep.py`) : `test_a_second_vm_cut_later_by_a_rule_said_is_said`
+(en attente, acquittée), `test_a_vm_its_nsg_no_longer_governs_is_said_not_cut`,
+`test_a_vm_missing_from_a_partial_nic_listing_keeps_its_card` (la carte reste deux passages, puis batch
+supprimée : remplacée, la note juste). Mutants M2266–M2271 (la VM de la carte comparée seule ; la marque
+`~` perdue ; une VM absente de la liste prise pour partie ; une VM qu'Azure a encore comptée partie ; les
+VM vues par la liste non retenues ; la note « passée depuis à » le NSG) : 6/6 par leurs tests, deux tours
+(60 séquences), et M2260–M2265, ancres mises à jour, 6/6 encore. `pytest` complet : 4 664 réussis,
+7 sautés, 4 `xfail` ; `ruff` propre ; `mutant_anchors.py` sans faute ; invariants à 500 sur les graines
+9001, 1618 et 42, verts.
+
+**Ouvert, hors lot** : un magasin d'escalades vidé par l'opérateur laisse dans `orphan_alerts.json` des
+cartes absentes du magasin ; la règle n'est jamais redite (le balayage la tient pour dite, et la comparaison
+d'U1O passe les cartes qu'il ne connaît pas). C'était déjà le cas avant U1O ; à trancher (issue ou non).
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

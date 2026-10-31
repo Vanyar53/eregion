@@ -420,3 +420,4 @@ def fresh_reassertion_memory(monkeypatch):
         return
     monkeypatch.setattr(reassert_cards, "_HISTORY", {})
     monkeypatch.setattr(reassert_cards, "_EPISODE_OPEN", set())
+    monkeypatch.setattr(reassert_cards, "_NARROWED", {})          # L1Q: what still holds of a card

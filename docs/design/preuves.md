@@ -2794,11 +2794,10 @@ partielle des cartes réseau fermait une carte juste** (sonde P1) : batch coupé
 `network_interfaces.list_all()` ne rend plus sa carte réseau, sans erreur (Reader sur certains groupes de
 ressources) : `now_on` vide, la carte de batch fermée « passée depuis à nsg-subnet », remplacée par une
 carte qui disait à tort qu'aucune carte ne porte l'adresse — et, si la lecture oscille, du bruit. Une VM
-qui sort de l'ensemble sans qu'une autre y entre doit maintenant être prouvée partie
-(`AzureConnector.vm_listed_or_gone`) : vue par la dernière liste des orphelines sur une carte réseau (elle
-tient d'autres adresses), ou un 404 sur la VM. Sinon la carte reste et le passage le dit (`outcome:
-unread`, la liste partielle). Quand une VM entre, la carte est remplacée sans attendre la preuve : ce qui
-coupe se dit d'abord (U1). (3) La note d'une carte remplacée quand personne ne tient l'adresse dit « vise
+qui sort de l'ensemble sans qu'une autre y entre devait être prouvée partie (vue par la dernière liste
+sur une carte réseau, ou un 404 sur la VM — preuve remplacée à la seconde relecture, ci-dessous). Sinon la
+carte reste et le passage le dit (`outcome: unread`, la liste partielle). Quand une VM entre, la carte est
+remplacée sans attendre la preuve : ce qui coupe se dit d'abord (U1). (3) La note d'une carte remplacée quand personne ne tient l'adresse dit « vise
 une adresse qu'aucune carte ne porte plus (U1O) » (elle disait « passée depuis à nsg-subnet ») ; « coupe
 désormais … » quand une VM s'ajoute, « … que ce NSG ne gouverne plus » dans le cas voisin.
 
@@ -2806,11 +2805,48 @@ Tests, rouges sans la relecture (`test_orphan_sweep.py`) : `test_a_second_vm_cut
 (en attente, acquittée), `test_a_vm_its_nsg_no_longer_governs_is_said_not_cut`,
 `test_a_vm_missing_from_a_partial_nic_listing_keeps_its_card` (la carte reste deux passages, puis batch
 supprimée : remplacée, la note juste). Mutants M2266–M2271 (la VM de la carte comparée seule ; la marque
-`~` perdue ; une VM absente de la liste prise pour partie ; une VM qu'Azure a encore comptée partie ; les
-VM vues par la liste non retenues ; la note « passée depuis à » le NSG) : 6/6 par leurs tests, deux tours
-(60 séquences), et M2260–M2265, ancres mises à jour, 6/6 encore. `pytest` complet : 4 664 réussis,
-7 sautés, 4 `xfail` ; `ruff` propre ; `mutant_anchors.py` sans faute ; invariants à 500 sur les graines
-9001, 1618 et 42, verts.
+`~` perdue ; une VM absente de la liste prise pour partie ; M2269 et M2270, redéfinis à la seconde
+relecture ; la note « passée depuis à » le NSG) : 6/6 par leurs tests, deux tours (60 séquences), et
+M2260–M2265, ancres mises à jour, 6/6 encore. `pytest` complet : 4 664 réussis, 7 sautés, 4 `xfail` ;
+`ruff` propre ; `mutant_anchors.py` sans faute ; invariants à 500 sur les graines 9001, 1618 et 42, verts.
+
+**Seconde relecture d'U1O (31/10) : la preuve d'un départ, au niveau de la carte réseau.** La règle tenue :
+une VM dite coupée ne quitte la carte que sur une preuve par la carte réseau qui tenait l'adresse ; sans
+preuve, elle reste nommée ; ce qui entre se dit tout de suite, sans lâcher ce qui sort. Trois fuites
+(sondes du relecteur). **P7** : dans le même passage, la liste omet la carte réseau de batch (toujours
+coupée) et api entre — `came` non vide, aucune preuve n'était demandée : la carte de batch fermée « passée
+depuis à api », faux, et plus rien ne nommait batch. La preuve porte maintenant sur chaque VM qui sort,
+quoi qu'il entre ; une VM non prouvée reste dans `_said` (`kept`) et la nouvelle carte la nomme (« Elle
+coupait aussi batch (carte batch-nic) : non relue depuis. »), la note « coupe désormais api (carte
+api-nic), batch (carte batch-nic) ». **P9** : « vue sur une autre carte réseau » ne prouvait pas le départ
+— batch a deux cartes réseau, celle qui tient .4 dans un groupe de ressources que la liste omet. `_said`
+garde, pour chaque VM, la carte réseau qui tenait l'adresse ; le départ n'est prouvé que si cette carte
+réseau, relue par son id (`AzureConnector.nic_left_addresses`, `readers.py`), rend 404 ou se lit sans
+aucune des adresses de la règle (préfixes compris ; une étiquette de service ne prouve rien). 403, 429,
+absence de la liste : rien. Le raccourci par la liste (`_orphan_seen_vms`) est retiré, `sweep.py` n'y gagne
+rien. Une carte dite avant `_said` ne gardait que sa VM : ses cartes réseau d'aujourd'hui la prouvent
+(`vm_left_addresses`) ; la VM illisible ou supprimée ne prouve rien — sa carte réseau peut lui survivre.
+**P8** : une entrée de `_said` d'une autre forme (`[null]`, `5`, `[1, 2]`) arrêtait le balayage à chaque
+passe ; chaque entrée est validée (`_valid` : une liste de noms, ou d'entrées `vm`/`nic`/`ip` en chaînes),
+sinon tenue pour absente. **Trouvé en route** : le bloc d'I5Q plus bas réutilisait le nom `said` (les
+raisons des cartes) ; `_said` était perdu à chaque passe pour les cartes restées en place, et la
+comparaison retombait sur celle d'avant — la variable s'appelle `cut_said`.
+
+Tests (`test_orphan_sweep.py`), rouges sur `5083ca7` : `…partial_listing_stays_named_when_another_comes`
+(P7 : api dite, batch nommée, la note juste, la carte stable deux passages puis la liste revenue),
+`…seen_on_another_nic_is_no_proof_it_left` (P9), `…said_entry_of_another_shape_never_stops_the_sweep`
+(P8 : `[null]`, `5`, `[1, 2]`, `[{"vm": 3}]` ; `"x"` passait déjà). Gardes : `…nic_unread_proves_no_departure`
+(403, 429), `…said_before_the_review_proves_a_departure_by_the_vms_nics`. Mutants M2269, M2270 redéfinis
+(une carte réseau lue qui tient l'adresse comptée partie ; une lecture refusée comptée partie) et
+M2272–M2278 (la preuve demandée seulement quand rien n'entre ; la VM gardée tue dans la carte ; la VM gardée
+non retenue dans `_said` ; une entrée d'une autre forme lue ; un `_said` qui n'est pas une liste parcouru ;
+la marque « personne » gardée à côté d'une VM non prouvée ; les cartes réseau d'une VM d'avant `_said`
+jamais preuve). M2260–M2278 : 19/19 par leurs tests, deux tours (60 séquences) — M2270 survivait au
+premier passage : le test refusait toute lecture de carte réseau, la liste du faux comprise, et la carte
+restait parce que le balayage n'avait pas tourné ; il ne refuse plus que la relecture de la carte réseau
+de batch, et vérifie que le passage a tourné. `pytest` complet : 4 674 réussis, 7 sautés, 4 `xfail` ;
+`ruff` propre ; `mutant_anchors.py` sans faute ; invariants à 500 sur les graines 9001 et 42, puis à
+2 000 sur 9001, verts. `orphans.py` 401 lignes, `readers.py` 383, `sweep.py` 494 (une de moins).
 
 **Ouvert, hors lot** : un magasin d'escalades vidé par l'opérateur laisse dans `orphan_alerts.json` des
 cartes absentes du magasin ; la règle n'est jamais redite (le balayage la tient pour dite, et la comparaison

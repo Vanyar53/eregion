@@ -2788,7 +2788,8 @@ release_isolation said released, rules of …/rg-app2/…/web kept » — des is
 (`test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps` ; #380) ; à la graine 1 (500), réduit à quatre règles, « I7: …/rg-edge/…/api could not be
 released » au démontage — un refus total d'une ancienne version gardé (la garde d'I4C) pour une règle
 de blocage retournée sur le NSG de la carte, que l'opérateur du démontage ne remet pas
-(`test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic` ; #379) ; à la
+(`test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic` ; #379, **réglée par D79**, ci-dessous :
+l'opérateur du démontage, pas le code) ; à la
 graine 322 (2 000), réduit à cinq règles sans la nouvelle, « L1: the block of …/web is bypassed by a
 customer allow; the reassertion doesn't say so » — le refus entrant de la VM altéré (son port), le rôle
 retiré, une allow du client avant lui (`test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused` ;
@@ -3067,6 +3068,68 @@ de L1C ne la tire plus). Mutants M2210–M2217 : 8/8 à chaque tour (60 séquenc
 Harnais avant/après sur les 97 mutants du déblocage, du blocage, des règles retournées, de la vérification du blocage et
 de l'état : 91/97 sur 48e42c8, 91/97 après, mutant par mutant à l'identique (M19, M21, M23, M38, M1964 par leurs
 séquences figées seules ; M36 survit des deux côtés, comme avant). Aucun perdu.
+
+**D79 (31/10, #379) : un refus total d'une ancienne version gardé pour une règle retournée ; l'opérateur
+du démontage.** La graine 1 à 500 de la machine de L1Q, figée en `xfail` strict (quatre règles).
+**La cause, établie** (le monde relevé après chaque règle, puis au démontage) : **ce n'est pas le
+code.** api (rg-edge) porte une isolation d'une ancienne version — `glorfindel-isolation-deny-all` et
+`-out`, sur `*`, à 100, sur nsg-api-nic, son état gardé. Une nouvelle VM, api (rg-app1), reçoit ce NSG
+(`joins_an_old_isolation` : isolée puis levée), y est bloquée (`perimeter_lifted_beside_a_block`), le
+rôle retiré ; puis sa propre règle de blocage entrante sur ce NSG, à 200, est retournée en allow
+(`block_turned_then_reasserted`) : elle vise 10.1.0.5, l'adresse de la nouvelle api. Au démontage, la
+levée de l'ancienne api demande la garde d'I4C pour le refus total : sur `*`, il coupe toutes les cartes
+que son NSG gouverne (`turned._cuts_all`), la nouvelle api comprise, et la règle retournée attend
+derrière lui pour elle — retiré, l'attaquant joignait la nouvelle api sur tous ses ports. Elle le garde,
+le dit (`release_partial`, « …/glorfindel-isolation-deny-all gardée : notre règle
+glorfindel-block-…-api-api-nic-4-679cdb (nsg-api-nic), retournée en autorisation par quelqu'un, vise
+10.1.0.5 : … la remettre en refus, ou la retirer »), trois fois. Garder n'ouvre rien (A0) ; l'oracle
+accepterait aussi le retrait (la vue propre de la nouvelle api compte sa propre règle retournée :
+`reopenable`) — la garde est prudente, et elle dit exactement ce qu'elle garde et pourquoi.
+**L'opérateur du démontage** remettait les règles retournées visant une autre carte (I4B,
+`_turned_aimed_elsewhere` : celle-ci vise sa propre VM) ou attendant derrière un de nos refus sur une
+adresse (I5Q, `_cutting_others` : ni les noms fixes d'une ancienne version, ni `*`). Jamais une règle
+retournée derrière le refus total d'une ancienne version : le trou de l'opérateur, comme la graine 1006
+d'U7D.
+
+**Le correctif, dans le démontage, comme le déblocage d'U7D.** Après une levée qui n'aboutit pas,
+l'oracle calcule ce qu'une ancienne version a laissé pour la VM et qui retient une règle retournée
+(`_older_held` : le journal du test, `legacy` et `tampered`, jamais l'état du code — le refus encore là,
+sur `*` ou sur l'adresse d'une carte d'une autre VM que son NSG gouverne, la règle retournée sur un NSG
+de cette carte, dans le même sens, prenant son adresse). S'il retient quelque chose, le démontage vérifie
+d'abord (deux contrôles de plus, A0) que **chaque règle de l'ancienne version restée est une de celles
+que l'oracle dit retenues** — aucune gardée sans raison, sinon I7 — et que **chacune est dite « gardée »
+avec la règle retournée qu'elle retient**, nommée — sinon I3 ; puis l'opérateur remet comme elles étaient
+les règles retournées nommées, comme dit, et la levée est relancée, jusqu'à ce qu'elle aboutisse ou ne
+retienne plus rien que l'oracle voie ; l'assertion d'I7 reste entière. Rien de ce que le démontage
+refusait n'est accepté : le chemin ne s'ouvre que si l'oracle voit une règle retenue, et la levée doit
+finir `released`. Aucune règle de la machine retirée ni restreinte, aucun oracle affaibli. Le `xfail` est
+levé (`test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic`), complété : la règle sortante
+(`-out`, derrière `…-deny-all-out`) à côté de l'entrante trouvée, et la levée de l'ancienne api lancée
+une fois avant le démontage (gardée, dite ; l'état reste ancien, la relecture d'I4C) — les quatre cas
+rouges sur `main` 72bb58f (« I7: …/rg-edge/…/api could not be released »), verts après.
+
+**Mutants M2320–M2322**, dans `older.py`, ce que l'opérateur seul aurait caché : M2320 (la levée, une
+règle gardée à bon droit, garde aussi la suivante : la sur-garde), M2321 (le refus gardé tu : « gardée »
+perdu), M2322 (dit gardé sans la règle retournée qu'il retient : rien à remettre). Attrapés par la
+séquence figée avec les deux contrôles, 3/3 ; avec l'opérateur seul (les contrôles ôtés), la séquence
+figée verte pour les trois (mesuré : 0/3) — comme M2213 d'U7D. Pas de mutant de correctif : le code ne
+change pas.
+
+**Mesures de D79.** `pytest` complet : 4 709 réussis, 7 sautés, 5 `xfail` (un de moins) ; `ruff`
+propre ; `scripts/mutant_anchors.py` : 1 709 mutants, sans faute. Invariants à 500 séquences sur les
+graines 1, 7, 25, 42, 43, 71, 101, 322, 555, 777, 1006, 1618, 2718, 8675, 9001 et 31337, puis à 2 000
+sur 1, 42 et 322 : tout vert. Sans la règle de L1Q, les tirages sont ceux de `main` : le chemin nouveau
+n'y est pas pris. **Avec la règle de L1Q** (`blocked_again_after_an_acknowledged_drift`, de
+`lot/l1q-regle`, posée le temps de la mesure, puis retirée) : la graine 1 à 500, celle qui avait trouvé
+#379, passe, le démontage gardant puis remettant quatre fois (« the teardown's release: kept an older
+version's deny a turned rule waits behind ») sans qu'un contrôle refuse ; 7, 42, 43, 101, 322, 777, 8675
+et 31337 vertes ; 555 tombe sur #380 (« I3 (said): release_isolation said released, rules of
+…/rg-app2/…/web kept ») et 71 sur #366 (« I3: the reassertion said 192.31.196.7 no longer blocked …
+our perimeter block still cuts it off ») — hors de la famille, déjà figés et routés. Harnais
+avant/après (60 séquences, deux tours, `--jobs 4`, `--hypothesis-seed=4242`) sur les 55 mutants de la
+levée, d'`older.py` et des règles retournées : 51/55 sur `main` 72bb58f, 51/55 après, mutant par mutant
+à l'identique (M22, M26 et M1963 par leurs séquences figées seules, M1552 survit, des deux côtés), plus
+les trois nouveaux (54/58). Aucun perdu.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

@@ -6594,6 +6594,123 @@ TESTS.update({
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
 
+# Dagorlad, phase (c) (DG-c, #349; docs/design/console.md, §7): a request followed live — its
+# phase, each wire's chronology read from the windows, the watch's cycles, the cards and the run's
+# report, measured as on the overview; the page's life of a wire. M2450–M2473.
+FOL = "eregion_console/follow.py"
+DJS = "eregion_console/static/dagorlad.js"
+_FOL = "tests/unit/test_console_dagorlad_follow.py"
+MUTANTS += [
+    ("M2450", "Orodruin saying it finished or refused a request not taken as its end (DG-c)", FOL,
+     '    if status and status.get("state") in OVER:\n', "    if False:\n"),
+    ("M2451", "a request stopped by « Stop all » never over: its wires locked for hours (DG-c)", FOL,
+     "    if any(w.get(\"closed_by\") == KILLED_BY for w in mine):\n", "    if False:\n"),
+    ("M2452", "Orodruin silent longer than a request may last: the request never over (DG-c)", FOL,
+     "    if heard and now.timestamp() - max(heard) > SILENT_S:\n", "    if False:\n"),
+    ("M2453", "a request over while a window of it still lives (DG-c)", FOL,
+     '    if any(alive(w, states.get(w["run_id"], ""), now) for w in mine):\n', "    if False:\n"),
+    ("M2454", "a detection of another technique taken for the wire's (DG-c)", FOL,
+     '             and ttp and c.get("ttp") == ttp\n', "             and ttp\n"),
+    ("M2455", "a cycle on another VM, or outside the window, taken for the wire's (DG-c)", FOL,
+     '             and window["run_id"] in covering_runs(c.get("resource_id") or "", c.get("signal_at"),\n'
+     "                                                   [window], enrolled=enrolled)]\n",
+     "             ]\n"),
+    ("M2456", "a row anchored on an arbitrary VM (unattributed) taken for the wire's detection (DG-c)", FOL,
+     '             and (not c.get("attribution") or c.get("attribution") == "asset")\n', ""),
+    ("M2457", "the report here, the run still measured from its window, not as on the overview (DG-c)", FOL,
+     "    if rep is not None:\n        decision = indicators.decision_of(",
+     "    if False:\n        decision = indicators.decision_of("),
+    ("M2458", "an isolation that did not hold said contained, live (DG-c)", FOL,
+     '                                   cards=ctx["cards"], liftings=ctx["liftings"]) if decision else None\n',
+     '                                   cards=(), liftings=ctx["liftings"]) if decision else None\n'),
+    ("M2459", "the window of another request taken for this one's (DG-c)", FOL,
+     '    mine = sorted((w for w in windows if w.get("request") == request_id),\n',
+     "    mine = sorted((w for w in windows),\n"),
+    ("M2460", "the window of another wire of the request taken for this one's (DG-c)", FOL,
+     '                    and _experiment_id(win) == w["experiment"] and w["target"].lower() in win.get("targets", [])):\n',
+     '                    and w["target"].lower() in win.get("targets", [])):\n'),
+    ("M2461", "an attack's decision counted against the fault after it (DG-c)", FOL,
+     '                                   window.get("end"), ctx["cycles"], window_until=until,\n'
+     '                                   taken=ctx["taken"] - {""})\n',
+     '                                   window.get("end"), ctx["cycles"], window_until=until)\n'),
+    ("M2462", "a fault's return said verified whatever its report says (DG-c)", FOL,
+     '                    returned={"PASS": True, "FAIL": False}.get(checks.get("revert_verified")),\n',
+     "                    returned=True,\n"),
+    ("M2463", "a card of the run never said waiting for a verdict (DG-c)", FOL,
+     '"to_judge": c.get("id") in to_judge}', '"to_judge": False}'),
+    ("M2464", "a fault's decisions to isolate during it not said (DG-c)", FOL,
+     '    line.update(mistaken=[{"action": m["action"], "executed": m["executed"], "at": iso(m["seen_at"]),\n'
+     '                           "confidence": m["confidence"]} for m in fr.mistaken],\n',
+     "    line.update(mistaken=[],\n"),
+    ("M2465", "the overview's ending of a run reads no card: an isolation that did not hold counted contained "
+              "(DG-c, shared with Dagorlad)", IND,
+     "                                run[\"at\"], run[\"detection\"], decision, cards=cards, liftings=liftings)\n",
+     "                                run[\"at\"], run[\"detection\"], decision, cards=(), liftings=liftings)\n"),
+    ("M2466", "a request file that holds another request followed as this one (DG-c)", CON,
+     "    if req is not None and req.id != request_id:   # the file names the request it holds, or none\n",
+     "    if False:\n"),
+    ("M2467", "the follow's route takes a POST (DG-c)", CON,
+     '@app.get("/api/dagorlad/requests/{request_id}")\n',
+     '@app.api_route("/api/dagorlad/requests/{request_id}", methods=["GET", "POST"])\n'),
+    ("M2468", "a wire removed while its request runs (DG-c)", DJS,
+     "    if (S.request || k < 0 || k >= S.wires.length) return;\n",
+     "    if (k < 0 || k >= S.wires.length) return;\n"),
+    ("M2469", "« New plan » drops a request Orodruin already runs (DG-c)", DJS,
+     "    if (!S.request || phaseOf() !== 'written') return;\n", "    if (!S.request) return;\n"),
+    ("M2470", "a request over never unlocks its wires (DG-c)", DJS,
+     "    if (S.request && d.phase === 'over') {\n", "    if (false) {\n"),
+    ("M2471", "a locked wire keeps its ✕ on its pill (DG-c)", DJS,
+     "      (S.request ? '' : `<button type=\"button\" class=\"px\"",
+     "      (false ? '' : `<button type=\"button\" class=\"px\""),
+    ("M2472", "a request kept by the browser taken whatever its shape (DG-c)", DJS,
+     "    return ok ? q : null;\n", "    return q;\n"),
+    ("M2473", "a blue card says what an old request did to its VM (DG-c)", DJS,
+     "  const f = followOf(S.request);\n", "  const f = followOf(followed());\n"),
+]
+TESTS.update({f"M{n}": _FOL for n in range(2450, 2474)})
+TESTS["M2465"] = f"{_FOL} tests/unit/test_indicators.py"
+TESTS["M2467"] = f"{_FOL} tests/unit/test_console_exercises.py"
+# DG-c, its review (31/10): a window beyond its bounds, an unreadable status, the measure said
+# provisional, a fault judged as on the overview, « Stop all » between two wires. M2481–M2490.
+MUTANTS += [
+    ("M2481", "a window ahead of the clock keeps the request running (DG-c, review)", FOL,
+     "    if start is None or start > now.timestamp() + FUTURE_SKEW_S:\n        return False\n",
+     "    if start is None:\n        return False\n"),
+    ("M2482", "a window's life unbounded (an expiry in 2100) keeps the wires locked (DG-c, review)", FOL,
+     '    ends = [t for t in (epoch(window.get("expires")), epoch(window.get("end")), start + MAX_DURATION_S)\n',
+     '    ends = [t for t in (epoch(window.get("expires")), epoch(window.get("end")))\n'),
+    ("M2483", "a window that cannot have started yet says the request launched (DG-c, review)", FOL,
+     '    mine = [w for w in mine if (s := epoch(w.get("start"))) is not None and s <= now.timestamp() + FUTURE_SKEW_S]\n',
+     ""),
+    ("M2484", "an unreadable status of Orodruin taken for « not carried yet » (DG-c, review)", FOL,
+     '    if unreadable:\n        return "running", "status_unreadable"\n', ""),
+    ("M2485", "the route reads a status there but refused as absent (DG-c, review)", CON,
+     '        status, unreadable = None, f"Orodruin\'s status unreadable: {exc}"[:300]\n',
+     '        status, unreadable = None, ""\n'),
+    ("M2486", "the status of another request taken for this one's (DG-c, review)", CON,
+     '    if status is not None and status["request"] != request_id:   # as the request\'s file (M2466)\n',
+     "    if False:\n"),
+    ("M2487", "a measure before the run's report not said provisional (DG-c, review)", DJS,
+     "    const about = l.provisional ? '≈' : '';\n", "    const about = '';\n"),
+    ("M2488", "a fault judged against the request's attacks only, not the overview's (DG-c, review)", FOL,
+     '    taken = {str((indicators.decision_of(r, index) or {}).get("signal_id") or "") for r in others\n'
+     '             if r.get("kind") == "technique"}\n',
+     "    taken = set()\n"),
+    ("M2489", "a fault measured before the techniques when the catalogue says nothing (DG-c, review)", FOL,
+     '    for w, sw, runs, run_id, window, raw, rep, kind in sorted(found, key=lambda f: (f[7] == "fault", f[0]["rank"])):\n',
+     '    for w, sw, runs, run_id, window, raw, rep, kind in sorted(found, key=lambda f: f[0]["rank"]):\n'),
+    ("M2490", "« Stop all » between two wires leaves the wires locked 2 h 15 (DG-c, review)", FOL,
+     "SILENT_S = WAIT_ISOLATION_S + GRACE_AFTER_S\n", "SILENT_S = 2 * 3600 + GRACE_AFTER_S\n"),
+]
+TESTS.update({f"M{n}": _FOL for n in range(2481, 2491)})
+# DG-c, its second review: a request written, never carried, taken as over after 35 min. M2496.
+MUTANTS += [
+    ("M2496", "a request written and not carried yet is « over, silent » after 35 min (DG-c, second review)", FOL,
+     "    heard = [t for t in [begun if unreadable else None, epoch((status or {}).get(\"at\"))]\n",
+     "    heard = [t for t in [begun, epoch((status or {}).get(\"at\"))]\n"),
+]
+TESTS["M2496"] = _FOL
+
 # D80 (#380): a bare NIC's rules looked for away from it, on every NSG of the subscription —
 # kept and said, or taken off; a listing that fails said — the release, then the reset. M2340–M2346.
 AWY = "glorfindel/providers/azure/away.py"

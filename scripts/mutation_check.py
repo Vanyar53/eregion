@@ -46,6 +46,7 @@ FAC = "glorfindel/actions.py"                 # the façade (A1)
 PIF = "glorfindel/providers/interface.py"
 R = "glorfindel/reassert.py"
 RQ = "glorfindel/reassert_quarantine.py"       # split out of reassert.py (RB1)
+RSD = "glorfindel/reassert_said.py"            # a block card's words, out of reassert.py (I3P)
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
@@ -4914,7 +4915,7 @@ MUTANTS += [
     ("M1624", "a merged entry's own perimeter pair not checked: gone in silence (RB1)", VBL,
      '                if st in ("absent", "altered"):\n                    (missing if missing else held_missing)',
      '                if False:\n                    (missing if missing else held_missing)'),
-    ("M1625", "rules gone while the IP stays blocked said « n'est plus bloquée » (RB1)", R,
+    ("M1625", "rules gone while the IP stays blocked said « n'est plus bloquée » (RB1)", RSD,
      '    if v.get("verified") is True:\n        where =', '    if False:\n        where ='),
     ("M1626", "the NICs the perimeter still holds left out of the card (RB1)", VBL,
      "                    held_by.append(short)\n", ""),

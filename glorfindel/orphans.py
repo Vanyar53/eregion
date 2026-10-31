@@ -104,11 +104,16 @@ def _vms(said: list[dict], nsg: str) -> set[str]:
 
 def _proven_left(connector, e: dict, o: dict) -> bool:
     """A VM a card named left the rule's addresses — proven by its NIC only (second review):
-    gone (404), or read without them. A NIC the listing missed, a 403, a 429 prove nothing.
-    A card said before the review recorded no NIC: the VM's NICs are read."""
-    check = getattr(connector, "nic_left_addresses" if e.get("nic") else "vm_left_addresses", None)
+    gone (404), read without them, or off the VM (the VM deleted, its NIC kept). A NIC the
+    listing missed, a 403, a 429 prove nothing. A card said before the review recorded no
+    NIC: the VM gone, or its NICs, prove it."""
+    vm = e["vm"].lstrip("~")
     try:
-        return check is not None and check(e.get("nic") or e["vm"].lstrip("~"), o["ips"]) is True
+        if e.get("nic"):
+            check = getattr(connector, "nic_left_addresses", None)
+            return check is not None and check(e["nic"], o["ips"], vm) is True
+        check = getattr(connector, "vm_left_addresses", None)
+        return check is not None and check(vm, o["ips"]) is True
     except Exception:
         return False
 

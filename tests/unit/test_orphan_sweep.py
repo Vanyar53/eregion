@@ -609,6 +609,43 @@ def test_a_card_said_before_the_review_proves_a_departure_by_the_vms_nics(monkey
     assert "_said" in json.loads(path.read_text())
 
 
+def test_a_vm_deleted_with_its_nic_kept_is_let_go(monkeypatch):
+    """U1O third review (P10): batch cut and said, then deleted — its NIC kept, still at the
+    address (`az vm delete`'s default). The NIC, off any VM now, proves batch left: never
+    « non relue depuis » for ever. What the rule cuts is said by the listing: the NIC."""
+    f, c, batch = _cut_new_vm(monkeypatch)
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    f.vms.pop(key(batch))
+    for _ in range(2):
+        report = _watch_pass(c, "human_only")
+        assert not any(r.get("outcome") == "unread" for r in report or []), report
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"] and "batch-nic" in card["reason"], card
+    assert "non relue depuis" not in card["reason"], card["reason"]
+
+
+def test_a_card_said_before_the_review_lets_go_of_a_vm_deleted(monkeypatch):
+    """U1O third review (P12): a card said before `_said`; batch deleted with its NIC, api
+    given the address. The VM gone (404) proves it left: the card for api alone."""
+    import json
+    from glorfindel import orphans
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    path = orphans._alerts_path()
+    data = json.loads(path.read_text())
+    data.pop("_said")
+    path.write_text(json.dumps(data))
+    _delete(f, batch, lose_state=False)
+    api = _new_vm_at(f, subnet, "10.0.0.4", rg="rg-app1", name="api")
+    for _ in range(2):
+        report = _watch_pass(c, "human_only")
+        assert not any(r.get("outcome") == "unread" for r in report or []), report
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "batch" not in card["reason"], card
+
+
 def test_a_rule_turned_after_the_listing_stops_the_removal(monkeypatch):
     """I5Q, the review: the pass lists the NSGs, then someone turns the perimeter block
     before the removal — the guard is played again on the NSGs that govern the VM cut,

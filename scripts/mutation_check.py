@@ -6388,7 +6388,8 @@ _U1OR = _U1O + " " + " ".join(f"tests/unit/test_orphan_sweep.py::test_{t}" for t
     "a_vm_missing_from_a_partial_nic_listing_keeps_its_card", "a_nic_unread_proves_no_departure",
     "a_vm_missing_from_a_partial_listing_stays_named_when_another_comes",
     "a_vm_seen_on_another_nic_is_no_proof_it_left", "a_said_entry_of_another_shape_never_stops_the_sweep",
-    "a_card_said_before_the_review_proves_a_departure_by_the_vms_nics"))
+    "a_card_said_before_the_review_proves_a_departure_by_the_vms_nics",
+    "a_vm_deleted_with_its_nic_kept_is_let_go", "a_card_said_before_the_review_lets_go_of_a_vm_deleted"))
 MUTANTS += [
     ("M2266", "the card's VM compared alone: a second VM cut later named by none (U1O review)", ORP,
      "        was = _valid(cut_said.get(k))\n        if was is None:\n",
@@ -6431,10 +6432,14 @@ MUTANTS += [
      '    return [e for e in now if e["vm"] != "~" + o["nsg_id"].lower()] + kept if kept else now\n',
      "    return now + kept if kept else now\n"),
     ("M2278", "a card said before the review: the VM's NICs never prove it left (U1O review 2)", RDR,
-     "        return bool(nics) and all(self.nic_left_addresses(n, ips) for n in nics)\n",
+     "        return bool(nics) and all(self.nic_left_addresses(n, ips, vm_id) for n in nics)\n",
      "        return False\n"),
+    ("M2279", "a NIC kept off its deleted VM proves nothing: the VM named « non relue » for ever (U1O review 3)",
+     RDR,
+     '        if vm_id and on != vm_id.rstrip("/").lower():\n',
+     "        if False:\n"),
 ]
-_U1OR_IDS = tuple(f"M{n}" for n in range(2266, 2279))
+_U1OR_IDS = tuple(f"M{n}" for n in range(2266, 2280))
 TESTS.update({mid: _U1OR for mid in _U1OR_IDS})
 TESTS["M2266"] += f" {INVARIANTS}"
 

@@ -360,24 +360,28 @@ class ReadersMixin:
         except Exception as e:
             return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}
 
-    def nic_left_addresses(self, nic_id: str, ips: list[str]) -> bool:
-        """The NIC an orphan's card named holds none of the rule's addresses any more (U1O,
-        second review): proven only by the NIC itself — gone (404), or read without them.
-        A 403, a 429, a NIC a listing missed (Reader on some resource groups only): unproven."""
+    def nic_left_addresses(self, nic_id: str, ips: list[str], vm_id: str = "") -> bool:
+        """The VM an orphan's card named left the rule's addresses (U1O, second review):
+        proven only by the NIC that held them — gone (404), read without them, or no longer
+        attached to that VM (`vm_id`: the VM deleted, its NIC kept — `az vm delete`'s default;
+        the NIC still holding the address is said by the listing as what the rule cuts). A
+        403, a 429, a NIC a listing missed (Reader on some resource groups only): unproven."""
         try:
             nic = self._network.network_interfaces.get(*_parse_nic_resource_id(nic_id))
         except Exception as exc:
             return _is_not_found(exc)
+        on = (getattr(getattr(nic, "virtual_machine", None), "id", None) or "").rstrip("/").lower()
+        if vm_id and on != vm_id.rstrip("/").lower():
+            return True
         held = [getattr(c, "private_ip_address", None) for c in (getattr(nic, "ip_configurations", None) or [])]
         return not any(_within(a, ips) for a in held if a)
 
     def vm_left_addresses(self, vm_id: str, ips: list[str]) -> bool:
-        """The same for a card said before the review, which recorded the VM alone: every
-        NIC the VM has now proves it. The VM unread or gone proves nothing (its NIC may
-        outlive it, the address with it)."""
+        """The same for a card said before the review, which recorded the VM alone: the VM
+        gone (404), or every NIC it has now, prove it. A 403, a 429 prove nothing."""
         try:
             vm = self._compute.virtual_machines.get(*_parse_vm_resource_id(vm_id))
             nics = [n.id for n in (vm.network_profile.network_interfaces or [])]
-        except Exception:
-            return False
-        return bool(nics) and all(self.nic_left_addresses(n, ips) for n in nics)
+        except Exception as exc:
+            return _is_not_found(exc)
+        return bool(nics) and all(self.nic_left_addresses(n, ips, vm_id) for n in nics)

@@ -3832,6 +3832,9 @@ def test_a_deny_drops_first_only_on_every_source_port_and_a_named_address():
         assert not _dropped_first([deny(src="VirtualNetwork")], allow, attacker, ips), attacker
         assert _dropped_first([deny(src="*")], allow, attacker, ips), attacker
     assert not _dropped_first([deny(src="Internet")], allow, _I3P_IP, ips)
+    # Each of the NIC's addresses on its side, not one (second review: C06 on this function).
+    assert not _dropped_first([deny(dst="10.1.0.4")], allow, _I3P_IP, ["10.1.0.4", "10.2.0.4"])
+    assert _dropped_first([deny(dst="10.0.0.0/8")], allow, _I3P_IP, ["10.1.0.4", "10.2.0.4"])
     assert _dropped_first([deny(src="192.31.196.0/24")], allow, _I3P_IP, ips)
     assert not _dropped_first([deny(src="0.0.0.0/0")], allow, "2001:db8::1", ips)
     bare = deny()

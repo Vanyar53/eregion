@@ -3155,8 +3155,8 @@ d'avant), `test_a_nic_whose_rules_cant_be_read_is_named_unknown_beside_a_bypass`
 `test_a_deny_drops_first_only_on_every_source_port_and_a_named_address`,
 `test_the_perimeter_holds_not_behind_a_deny_of_some_source_ports`. Mutants **M2189–M2195** (la carte illisible
 non rendue ; l'ancien filtre du périmètre ; les ports source ignorés ; l'attaquant nommé par une étiquette ; la
-carte illisible nommée après « reste bloquée » ; `_situation` sans elle ; la carte qui tient non rendue) ; M2186
-réancré. **Mesures** (main 72bb58f, inchangé) : `pytest` complet 4 716 réussis, 7 sautés, 4 `xfail` ; `ruff`
+carte illisible nommée après « reste bloquée » ; `_situation` sans elle ; la carte qui tient non rendue ; M2196,
+seconde relecture : un refus d'une seule des adresses de la carte compté pour toutes) ; M2186 réancré. **Mesures** (main 72bb58f, inchangé) : `pytest` complet 4 716 réussis, 7 sautés, 4 `xfail` ; `ruff`
 propre ; `mutant_anchors.py` 1 722 mutants sans faute ; invariants à 500 sur 1999, 71 et 42 verts. Harnais
 (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 114 mutants des modules touchés, `blocks.py`
 compris : 109/114 — les 74 d'avant à l'identique (69/74, les mêmes cinq), les 23 de `blocks.py` tous attrapés,

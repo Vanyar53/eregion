@@ -6390,9 +6390,14 @@ MUTANTS += [
      '            "unsure": sorted(v.get("perimeter_unread") or []),\n'),
     ("M2195", "a NIC whose own block holds never recorded as proven: the perimeter block says it uncovered (I3P, "
               "review)", VBL, '                        proven += [t0["nic_short"]] if t0 else []\n', ""),
+    ("M2196", "a customer's deny of one of the NIC's addresses counted as dropping the attacker's traffic to all "
+              "of them (I3P, second review)", NSG,
+     "    return all(_side_covers(rule, own, [a]) for a in ips)          # each address, not one\n",
+     "    return any(_side_covers(rule, own, [a]) for a in ips)          # each address, not one\n"),
 ]
 TESTS.update({"M2189": f"{_I3P_UNKNOWN} {_I3P_OFF}", "M2190": _I3P_OFF, "M2191": _I3P_PORTS,
-              "M2192": _I3P_PORTS, "M2193": _I3P_UNKNOWN, "M2194": _I3P_UNKNOWN, "M2195": _I3P_OFF})
+              "M2192": _I3P_PORTS, "M2193": _I3P_UNKNOWN, "M2194": _I3P_UNKNOWN, "M2195": _I3P_OFF,
+              "M2196": _I3P_PORTS})
 # DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
 # (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
 # environment and its connections, the video kept outside the repository.

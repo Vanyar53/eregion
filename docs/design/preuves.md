@@ -3115,6 +3115,25 @@ séquence figée avec les deux contrôles, 3/3 ; avec l'opérateur seul (les con
 figée verte pour les trois (mesuré : 0/3) — comme M2213 d'U7D. Pas de mutant de correctif : le code ne
 change pas.
 
+**La relecture de D79.** (1) **Le premier contrôle était plus étroit que celui d'U7D** (A0) : il ne
+comptait que les noms fixes de l'ancienne version. Une règle de placement d'aujourd'hui de la même VM
+(`glorfindel-iso-<empreinte>`), gardée sans raison à côté d'eux, passait : l'opérateur remettait la règle
+retournée, la levée suivante retirait tout. Le démontage exige maintenant aussi que chaque règle
+`glorfindel-iso-` de la VM restée soit une de celles que l'oracle dit gardées (`_kept`, le journal du
+test), comme le déblocage d'U7D — la condition s'ajoute aux autres, rien n'est accepté de ce qui était
+refusé. La séquence figée gagne le cas de l'ancienne api isolée de nouveau par règles (la quarantaine
+coupée) avant que la règle soit retournée : sa paire, bornée à son adresse sur le NSG partagé, à côté de
+l'enregistrement ancien gardé (I4E) — six cas, rouges sur `main` 72bb58f. Mutant **M2323** (la levée
+garde ses règles de placement tant que le refus de son enregistrement ancien est retenu) : attrapé par
+le contrôle nouveau, pas sans lui (mesuré : les six cas verts). (2) **Une limite de `_kept`, écrite** :
+il filtre sur l'empreinte de la carte dans le nom ; une règle aux noms fixes d'une ancienne version (sans
+empreinte) gardée par une levée en cours de séquence n'est pas vue — gardée sans être dite, rien ne
+tombe là. Le deuxième contrôle de D79 la voit au démontage seulement ; le reste va à une issue.
+Mesures de la relecture : invariants à 500 sur 1, 7, 42, 101, 322, 555, 8675 et 31337, verts ; avec la
+règle de L1Q posée le temps de la mesure, 1, 7, 42, 322, 8675 et 31337 vertes, la graine 1 passant
+quatre fois par le chemin nouveau sans refus ; M2320–M2323 attrapés à chaque tour (60 séquences, deux
+tours).
+
 **Mesures de D79.** `pytest` complet : 4 709 réussis, 7 sautés, 5 `xfail` (un de moins) ; `ruff`
 propre ; `scripts/mutant_anchors.py` : 1 709 mutants, sans faute. Invariants à 500 séquences sur les
 graines 1, 7, 25, 42, 43, 71, 101, 322, 555, 777, 1006, 1618, 2718, 8675, 9001 et 31337, puis à 2 000

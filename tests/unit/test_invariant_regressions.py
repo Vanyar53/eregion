@@ -2207,6 +2207,38 @@ def test_a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off(monkeypatc
         shutil.rmtree(m.home, ignore_errors=True)
 
 
+@pytest.mark.parametrize("unread", [True, False])
+def test_a_perimeter_block_keeps_an_unread_nic_off_its_subnet_uncovered(monkeypatch, unread):
+    """I3P's review (probe P4): Db--01 blocked for itself, db-nic-0 behind an `allow-ssh` of
+    its subnet's NSG (bypassed), db-nic-1 on a subnet of its own whose NSG can't be read. The
+    perimeter block kept as uncovered only the NICs the verification said open — a bypass now
+    says where each NIC stands, db-nic-1 (unread) in none of them: `blocked`, db-nic-1 dropped.
+    A NIC leaves the list only on a proof that it holds: read, db-nic-1's own block holding,
+    it leaves (`blocked_nics`)."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[_rule("allow-ssh", 100, dict(
+            access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+            destination_port_range="22"))], data_subnet=[]))
+        c = m.connector
+        c.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=22)
+        if unread:
+            m.fake.unreadable.add(key(_DATA))
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert (v.get("nics_unknown") == ["db-nic-1"]) is unread, v
+        assert ("db-nic-1" in (v.get("blocked_nics") or [])) is not unread, v
+        out = c.block_suspicious_ip(ATTACKER, DB, scope="subnet", threat_port=22)
+        if unread:
+            assert out["status"] == "blocked_partial" and out["uncovered_nics"] == ["db-nic-1"], out
+        else:
+            assert "uncovered_nics" not in out and out["status"] == "blocked", out
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
 def test_a_write_that_failed_is_never_said_put_back(monkeypatch):
     """The review's second case: a merged entry on web2, its own rule turned into an
     allow, the subnet's NSG unreadable (403). Putting back the perimeter fails, the VM's

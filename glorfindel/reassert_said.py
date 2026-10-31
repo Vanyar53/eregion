@@ -13,11 +13,13 @@ def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = Fa
 
     No NIC open nor unknown (I3P, #366): the IP is not said « plus bloquée » of the whole VM —
     where the perimeter holds, it « reste bloquée » (its own rules gone or passed by an
-    allow, said beside it); NICs that couldn't be read, it is not known."""
+    allow, said beside it); NICs that couldn't be read — or whose own rules couldn't — it is
+    not known, by name."""
     gone = [str(n) for n in (v.get("missing_rules") or v.get("held_missing") or [])]
     names = f" ({', '.join(gone)})" if gone else ""
     held, open_, unsure = (v.get("held_by_perimeter") or [], v.get("open_nics") or [],
                            v.get("perimeter_unread") or [])
+    unknown = v.get("nics_unknown") or []        # their own rules unread: never left unsaid (I3P, review)
     by = f" par la règle de périmètre {v.get('perimeter_rule')}" if held else ""
     twice = " une deuxième fois" if again else ""
     if v.get("verified") is True:
@@ -33,9 +35,9 @@ def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = Fa
     head = "" if said else f"Le blocage de {ip} sur {vm} a disparu d'Azure{twice}{names} — "
     if open_:
         tail = f"l'IP n'est plus bloquée sur {', '.join(open_)}"
-    elif unsure:
-        tail = f"on ne sait pas si l'IP est encore bloquée sur {', '.join(unsure)}"
-        unsure = []
+    elif unsure or unknown:
+        tail = f"on ne sait pas si l'IP est encore bloquée sur {', '.join(unsure + unknown)}"
+        unsure, unknown = [], []
     elif held:
         tail = f"l'IP reste bloquée sur {', '.join(held)}{by}" + (
             ", ses propres règles contournées (carte à part)" if v.get("shadowed_by") else "")
@@ -47,4 +49,5 @@ def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = Fa
     tail += f" ; elle l'est encore sur {', '.join(held)}{by}" if held else ""
     tail += (f" ; sur {', '.join(unsure)}, son blocage ne tient plus et la règle de périmètre n'a pas pu être lue"
              if unsure else "")
+    tail += f" ; sur {', '.join(unknown)}, ses règles n'ont pas pu être lues" if unknown else ""
     return head + tail + (f"{names}." if said else ".")

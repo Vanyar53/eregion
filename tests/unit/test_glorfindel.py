@@ -1891,6 +1891,8 @@ def _nsg_rule(name, priority, direction="Inbound", access="Allow", src="*", dst=
     r.destination_application_security_groups = None
     r.destination_port_range = port
     r.destination_port_ranges = []
+    r.source_port_range = "*"
+    r.source_port_ranges = []
     return r
 
 
@@ -3805,6 +3807,84 @@ def test_an_allow_a_customer_deny_drops_first_lets_nothing_through():
     out = {"rule": "wide-out", "priority": 150, "direction": "outbound"}
     assert _dropped_first([deny(direction="Outbound", priority=100)], out, _I3P_IP, ips)
     assert not _dropped_first([deny(priority=100)], out, _I3P_IP, ips)              # the other direction
+
+
+def test_a_deny_drops_first_only_on_every_source_port_and_a_named_address():
+    """I3P's review (probes P1, P2, P8). The attacker picks its source port: a deny of every
+    destination port but source ports 1024-65535 lets it through, to the allow and past the
+    perimeter. And on the attacker's side, only `*`, `any` or a prefix that holds its address:
+    `VirtualNetwork` is approximated by « private » (203.0.113.7, 198.18.0.5 are private for
+    Python, outside the VNet for Azure), `Internet` by « public » — no tag counts; nor a deny
+    with no source prefix at all. The fake Azure has no source ports: unit-tested here."""
+    from glorfindel.providers.azure.nsg import _dropped_first
+    allow = {"rule": "turned", "priority": 200, "direction": "inbound"}
+    ips = ["10.1.0.4"]
+
+    def deny(**kw):
+        return _nsg_rule("deny-lateral-in", 130, access="Deny", **{"port": "*", **kw})
+    for ports, ranges, drops in (("*", [], True), ("0-65535", [], True), ("Any", [], True),
+                                 ("1024-65535", [], False), (None, ["*"], True), (None, ["*", "1024-65535"], False),
+                                 (None, [], False), ("*", ["80"], False)):
+        d = deny()
+        d.source_port_range, d.source_port_ranges = ports, ranges
+        assert _dropped_first([d], allow, _I3P_IP, ips) is drops, (ports, ranges)
+    for attacker in ("203.0.113.7", "198.18.0.5", "10.9.9.9"):
+        assert not _dropped_first([deny(src="VirtualNetwork")], allow, attacker, ips), attacker
+        assert _dropped_first([deny(src="*")], allow, attacker, ips), attacker
+    assert not _dropped_first([deny(src="Internet")], allow, _I3P_IP, ips)
+    assert _dropped_first([deny(src="192.31.196.0/24")], allow, _I3P_IP, ips)
+    assert not _dropped_first([deny(src="0.0.0.0/0")], allow, "2001:db8::1", ips)
+    bare = deny()
+    bare.source_address_prefix = None
+    assert not _dropped_first([bare], allow, _I3P_IP, ips)
+    many = deny(src=None)
+    many.source_address_prefixes = ["VirtualNetwork", "192.31.196.7/32"]
+    assert _dropped_first([many], allow, _I3P_IP, ips)
+
+
+def test_the_perimeter_holds_not_behind_a_deny_of_some_source_ports(monkeypatch):
+    """I3P's review (probe P8), at the connector: the customer's deny at 130 narrowed to source
+    ports 1024-65535 — the attacker passes it from its port, the turned allow lets it in."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    t0 = {"nic_id": "api-nic", "nic_short": "api-nic", "private_ips": ["10.1.0.4"], "nsg_rg": "rg",
+          "nsg_name": "nsg-edge", "scope": "subnet"}
+    narrow = _nsg_rule("deny-lateral-in", 130, access="Deny", port="*")
+    narrow.source_port_range = "1024-65535"
+    net = MagicMock()
+    connector._network = net
+    _listings(net, {"nsg-edge": [narrow, _nsg_rule(f"{_I3P_PERIMETER}-api-api-nic-1", 200, src=_I3P_IP, port="*"),
+                                 *_block_pair(_I3P_PERIMETER, _I3P_IP, vm_ip="*", priority=210)]})
+    assert connector._perimeter_holds({}, t0, _I3P_IP, 22) == "no"
+
+
+def test_a_nic_whose_rules_cant_be_read_is_named_unknown_beside_a_bypass(monkeypatch):
+    """I3P's review (probes P4, P5): nic-a's `-out` gone, the perimeter holding there, behind
+    an `allow-ssh` of its own NSG; nic-b's NSG unreadable (429). The bypass said where nic-a
+    stands, nic-b in none of it: the card « reste bloquée sur nic-a », nic-b unsaid — and the
+    perimeter block took it for covered. Now nic-b is `nics_unknown`, named « on ne sait pas »;
+    only NICs proven blocked are `blocked_nics`."""
+    from glorfindel.reassert import _block_drift, _situation
+    connector = _i3p_blocked_beside_a_perimeter(monkeypatch, {
+        "nic-a": lambda r: [_nsg_rule("allow-ssh", 100), *_block_pair(r, _I3P_IP)[:1]],
+        "nic-b": lambda r: RuntimeError("(TooManyRequests) nsg-nic-b")},
+        _block_pair(_I3P_PERIMETER, _I3P_IP, vm_ip="*", priority=300),
+        nics=(("nic-a", "10.0.0.5"), ("nic-b", "10.0.0.6")))
+    out = connector.verify_block_ip(_I3P_IP, _RID)
+    assert out["verified"] is False and out["nics_unknown"] == ["nic-b"], out
+    assert out["held_by_perimeter"] == ["nic-a"] and not out.get("blocked_nics"), out
+    card = _block_drift(_I3P_IP, "vm", out)
+    assert "on ne sait pas si l'IP est encore bloquée sur nic-b" in card and "nic-a" in card, card
+    assert "n'est plus bloquée" not in card and "reste bloquée" not in card, card
+    assert _situation(out)["unsure"] == ["nic-b"]
+    # A NIC open beside it: both said, the unread one by name.
+    connector = _i3p_blocked_beside_a_perimeter(monkeypatch, {
+        "nic-a": lambda r: [_nsg_rule("allow-ssh", 100), *_block_pair(r, _I3P_IP)[:1]],
+        "nic-b": lambda r: RuntimeError("(TooManyRequests) nsg-nic-b")},
+        [_nsg_rule("allow-ssh", 100), *_block_pair(_I3P_PERIMETER, _I3P_IP, vm_ip="*", priority=300)],
+        nics=(("nic-a", "10.0.0.5"), ("nic-b", "10.0.0.6")))
+    card = _block_drift(_I3P_IP, "vm", connector.verify_block_ip(_I3P_IP, _RID))
+    assert "n'est plus bloquée sur nic-a" in card and "sur nic-b, ses règles n'ont pas pu être lues" in card, card
 
 
 def test_the_perimeter_holds_behind_an_allow_a_customer_deny_drops_first(monkeypatch):

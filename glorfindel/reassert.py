@@ -403,7 +403,8 @@ def _situation(v: dict) -> dict:
     unknown, whether the IP stayed blocked — kept in the entry to tell a worse one."""
     return {"gone": sorted({str(n) for n in (v.get("missing_rules") or []) + (v.get("held_missing") or [])}),
             "held": sorted(v.get("held_by_perimeter") or []), "open": sorted(v.get("open_nics") or []),
-            "unsure": sorted(v.get("perimeter_unread") or []), "blocked": v.get("verified") is True}
+            "unsure": sorted((v.get("perimeter_unread") or []) + (v.get("nics_unknown") or [])),
+            "blocked": v.get("verified") is True}
 
 
 def _worse(said, now: dict) -> bool:

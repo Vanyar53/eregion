@@ -59,6 +59,10 @@ class VerifyBlockMixin:
             # blocks any more.
             perimeter = self._merged_perimeter(entry)
             held_by, open_nics, unsure = [], [], []
+            # NICs not judged (rules or precedence unread), and those proven blocked: a bypass or a
+            # rule gone elsewhere dropped them — the perimeter block took an unread NIC for covered,
+            # the card left it out (I3P, review).
+            undecided, proven = [], []
 
             def _stand(t0) -> bool:
                 # Where a NIC stands once its own block no longer holds: cut off by a
@@ -100,9 +104,11 @@ class VerifyBlockMixin:
                                                                    p["rule"], ip, own_ips or p.get("ips") or None)
                                 if st in ("absent", "altered"):
                                     held_missing += names
+                            proven.append(t0["nic_short"])
                             continue
                         if q == "unknown" and not ps:
                             unread.append(f'{t0["nic_short"]}: {t0["quarantine"]["nsg_name"]}')
+                            undecided.append(t0["nic_short"])
                             continue
                     if not ps:
                         _lost(t0, [f'{p["rule"]} ({p["nsg_name"]} ne gouverne plus {t0["nic_short"]})' for p in off])
@@ -134,6 +140,7 @@ class VerifyBlockMixin:
                         nic_bypass += [f for f in found if f not in nic_bypass]
                     else:
                         exposure += found
+                        proven += [t0["nic_short"]] if t0 else []
                         break                       # this NIC is blocked
                 else:
                     if nic_bypass:
@@ -147,6 +154,7 @@ class VerifyBlockMixin:
                             # « n'est plus bloquée » was said of a NIC it still cut off (I3P).
                             _stand(t0)
                     elif nic_unread or nic_unknown:
+                        undecided += [t0["nic_short"]] if t0 else []
                         unread += nic_unread
                         unknown += [u for u in nic_unknown if u not in unknown]
                     else:
@@ -160,7 +168,9 @@ class VerifyBlockMixin:
             # NICs unread: no perimeter checked for them — not known, never « plus bloquée » (I3P).
             said = {**({"held_by_perimeter": held_by, "perimeter_rule": self._block_rule_prefix(ip)} if held_by else {}),
                     **({"perimeter_unread": unsure} if unsure else {}),
-                    **({"nics_unread": nics_unread} if nics_unread else {})}
+                    **({"nics_unread": nics_unread} if nics_unread else {}),
+                    **({"nics_unknown": undecided} if undecided else {}),
+                    **({"blocked_nics": proven} if proven else {})}
             if missing:
                 # A bypass goes with what is gone (L1C, #369): dropped, no bypass card was
                 # ever written while a rule of the VM was missing (L1).

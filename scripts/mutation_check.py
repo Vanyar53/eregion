@@ -6345,7 +6345,7 @@ MUTANTS += [
     ("M2185", "a NIC whose own block is passed never asked the perimeter: neither said held nor open (I3P)", VBL,
      "                            _stand(t0)\n", "                            pass\n"),
     ("M2186", "NICs unread left unsaid: rules gone on them said « n'est plus bloquée » (I3P, A0)", VBL,
-     "                    **({\"nics_unread\": nics_unread} if nics_unread else {})}\n", "                    }\n"),
+     "                    **({\"nics_unread\": nics_unread} if nics_unread else {}),\n", ""),
     ("M2187", "no NIC open nor unknown, the perimeter holding: « l'IP n'est plus bloquée » of the whole VM (I3P)",
      RSD, "    elif held:\n        tail = f\"l'IP reste bloquée sur", "    elif False:\n        tail = f\"l'IP reste bloquée sur"),
     ("M2188", "rules gone on NICs unread said « n'est plus bloquée » (I3P, A0)", RSD,
@@ -6358,6 +6358,41 @@ TESTS.update({
     "M2185": f"{_I3P_HELD} {_I3P_UT}a_bypass_on_one_nic_is_said_beside_rules_gone_on_another {INVARIANTS}",
     "M2186": _I3P_UNREAD, "M2188": _I3P_UNREAD,
     "M2187": f"{_I3P_NO_NIC} {_I3P_HELD} {INVARIANTS}"})
+# I3P's review: a NIC not judged (its rules or their precedence unread) dropped beside a bypass —
+# the perimeter block took it for covered, the card left it out; a deny of some source ports, or
+# naming the attacker by a tag, counted as dropping all of it first. M2189–M2195.
+BLK = "glorfindel/providers/azure/blocks.py"
+_I3P_OFF = "tests/unit/test_invariant_regressions.py::test_a_perimeter_block_keeps_an_unread_nic_off_its_subnet_uncovered"
+_I3P_UNKNOWN = f"{_I3P_UT}a_nic_whose_rules_cant_be_read_is_named_unknown_beside_a_bypass"
+_I3P_PORTS = (f"{_I3P_UT}a_deny_drops_first_only_on_every_source_port_and_a_named_address "
+              f"{_I3P_UT}the_perimeter_holds_not_behind_a_deny_of_some_source_ports")
+MUTANTS += [
+    ("M2189", "a NIC whose rules can't be read dropped beside a bypass: taken for covered, unsaid (I3P, review)",
+     VBL, '                        undecided += [t0["nic_short"]] if t0 else []\n', ""),
+    ("M2190", "the perimeter block keeps as uncovered only the NICs said open: one unread said covered (I3P, "
+              "review)", BLK,
+     '                held = {*(check.get("blocked_nics") or []), *(check.get("held_by_perimeter") or [])}\n'
+     "                uncovered = [n for n in uncovered if n not in held]\n",
+     '                open_ = {*(check.get("open_nics") or []), *(check.get("uncovered_nics") or []),\n'
+     '                         *(check.get("perimeter_unread") or [])}\n'
+     "                uncovered = [n for n in uncovered if n in open_] if open_ else uncovered\n"),
+    ("M2191", "a deny of some source ports counted as dropping all of the attacker's traffic (I3P, review)", NSG,
+     "            or not _covers_all_ports(rule) or not _every_source_port(rule)):\n",
+     "            or not _covers_all_ports(rule)):\n"),
+    ("M2192", "the attacker named by a tag (VirtualNetwork read as « private ») or by no prefix at all (I3P, "
+              "review)", NSG,
+     "    if not _names_the_address(rule, attacker, ip):\n", "    if not _side_covers(rule, attacker, [ip]):\n"),
+    ("M2193", "a NIC whose rules can't be read named only after « reste bloquée » elsewhere (I3P, review, A0)", RSD,
+     "    elif unsure or unknown:\n", "    elif unsure:\n"),
+    ("M2194", "a drift card's record leaves out the NICs not judged: one turned open later, « not worse » (I3P, "
+              "review)", R,
+     '            "unsure": sorted((v.get("perimeter_unread") or []) + (v.get("nics_unknown") or [])),\n',
+     '            "unsure": sorted(v.get("perimeter_unread") or []),\n'),
+    ("M2195", "a NIC whose own block holds never recorded as proven: the perimeter block says it uncovered (I3P, "
+              "review)", VBL, '                        proven += [t0["nic_short"]] if t0 else []\n', ""),
+]
+TESTS.update({"M2189": f"{_I3P_UNKNOWN} {_I3P_OFF}", "M2190": _I3P_OFF, "M2191": _I3P_PORTS,
+              "M2192": _I3P_PORTS, "M2193": _I3P_UNKNOWN, "M2194": _I3P_UNKNOWN, "M2195": _I3P_OFF})
 # DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
 # (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
 # environment and its connections, the video kept outside the repository.

@@ -3090,8 +3090,8 @@ dérive, aucune carte ouverte ni tenue nommée, disait « l'IP n'est plus bloqu�
 
 **Correctif.** (1) `nsg._dropped_first` : une allow (une trouvaille de `_shadowing_rules`) ne laisse
 rien passer quand un refus du client, avant elle, coupe tout le trafic de l'attaquant dans son sens —
-tous ports et protocoles, l'attaquant d'un côté, chaque adresse de la carte de l'autre (`_deny_blocks`)
-; un refus à nous (`glorfindel-*`) ne compte pas (le périmètre est jugé avec les seules règles du
+tous ports et protocoles, l'attaquant d'un côté, chaque adresse de la carte de l'autre (lu plus
+strictement après la relecture, ci-dessous) ; un refus à nous (`glorfindel-*`) ne compte pas (le périmètre est jugé avec les seules règles du
 client, comme l'oracle), un ASG non plus (non résolu ici). `_perimeter_holds` les écarte avant de
 juger. (2) `verify_block_ip` : `_stand` dit où en est une carte dont le blocage propre ne tient plus —
 tenue par un périmètre, inconnue, ouverte —, appelé pour une carte dont les règles manquent (comme

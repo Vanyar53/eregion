@@ -154,8 +154,50 @@ def _dropped_first(rules, allow: dict, ip: str, ips: list[str] | None) -> bool:
         and not _rule_name(r).lower().startswith("glorfindel-")
         and not getattr(r, "source_application_security_groups", None)
         and not getattr(r, "destination_application_security_groups", None)
-        and _deny_blocks(r, direction, ip, ips)
+        and _drops_all_of(r, direction, ip, ips)
         for r in rules or [])
+
+
+def _drops_all_of(rule, direction: str, ip: str, ips: list[str] | None) -> bool:
+    """`_dropped_first`'s deny, read strictly (I3P, review): every protocol, every destination
+    AND source port — the attacker picks its source port, a deny of 1024-65535 lets it through —
+    the attacker's address named on its side by `*`, `any` or a prefix that holds it, never a
+    service tag (`VirtualNetwork` is approximated by « private »: 203.0.113.7 is private for
+    Python, outside the VNet for Azure) nor no prefix at all; each of the NIC's addresses
+    (any, `ips` None) on the other side."""
+    if (_enum_text(getattr(rule, "access", "")) != "deny"
+            or _enum_text(getattr(rule, "direction", "")) != direction
+            or _enum_text(getattr(rule, "protocol", "*")) not in ("*", "any", "")
+            or not _covers_all_ports(rule) or not _every_source_port(rule)):
+        return False
+    attacker, own = ("source", "destination") if direction == "inbound" else ("destination", "source")
+    if not _names_the_address(rule, attacker, ip):
+        return False
+    if not ips:
+        return _side_is_any(rule, own)
+    return all(_side_covers(rule, own, [a]) for a in ips)          # each address, not one
+
+
+def _every_source_port(rule) -> bool:
+    one = getattr(rule, "source_port_range", None)
+    values = ([one] if one else []) + list(getattr(rule, "source_port_ranges", None) or [])
+    return bool(values) and all(str(v or "").strip().lower() in ("*", "any", "0-65535") for v in values)
+
+
+def _names_the_address(rule, side: str, ip: str) -> bool:
+    """`*`, `any`, or an explicit prefix holding `ip` on this side — a tag never counts."""
+    import ipaddress
+    single = getattr(rule, f"{side}_address_prefix", None)
+    for value in ([single] if single else []) + list(getattr(rule, f"{side}_address_prefixes", None) or []):
+        text = str(value or "").strip()
+        if text.lower() in ("*", "any"):
+            return True
+        try:
+            if ipaddress.ip_address(ip) in ipaddress.ip_network(text, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _report_block_shadowing(out: dict, ip: str, shadowed: list[dict]) -> None:

@@ -2782,6 +2782,8 @@ class IsolationMachine(RuleBasedStateMachine):
                         f.unlink()
             out = self._release_until_done(vm)
             if out["status"] != "released" and vm not in self.deleted:
+                out = self._older_kept_put_back(vm, out)
+            if out["status"] != "released" and vm not in self.deleted:
                 self._operator_supplies_originals(vm, out)
                 out = self._release_until_done(vm)
             assert out["status"] == "released", f"I7: {vm} could not be released: {out}"
@@ -3072,6 +3074,94 @@ class IsolationMachine(RuleBasedStateMachine):
                 if hit:
                     out.add((k, n))
                     break
+        return out
+
+    def _older_held(self, vm: str) -> dict:
+        """D79 (#379): the rules an older version left for the VM (the test's journal,
+        `legacy`, never the code's state — A0), still a deny on Azure, that hold back one of
+        our rules someone turned into an allow (`tampered`, still as they left it). The deny
+        cuts a live NIC of another VM that its NSG governs (the NIC's own or its subnet's):
+        on every address of its side (`*`, I4C: an isolation's deny cuts every NIC behind its
+        NSG) or on that NIC's address. The turned rule is on an NSG that governs that NIC, in
+        the same direction, and takes its address in (as nsg._takes_in: a range or a tag
+        counts). Taken off, the deny would let through what the allow opens: the release
+        keeps it (I4C's guard), said. (NSG, rule) → the turned rules (NSG, rule) behind it."""
+        import ipaddress
+
+        def values(r, side):
+            return [v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or []) if v]
+
+        def takes_in(vals, ip):
+            addr = ipaddress.ip_address(ip)
+            for v in vals or ["*"]:
+                if v.strip().lower() in ("*", "any"):
+                    return True
+                try:
+                    if addr in ipaddress.ip_network(v.strip(), strict=False):
+                        return True
+                except ValueError:
+                    return True                     # a tag, or unreadable: the safe side
+            return False
+
+        turned = [(k, n, after) for (k, n), (before, after) in self.tampered.items()
+                  if before is not None and n.startswith(("glorfindel-iso-", "glorfindel-block-"))
+                  and after["access"].lower() == "allow" and self.fake.nsgs.get(k, {}).get("rules", {}).get(n) == after]
+        mine = {key(c) for c in self.fake.vms.get(key(vm), {}).get("nics", [])}
+        out: dict = {}
+        for (k, n), owner in self.legacy.items():
+            r = next((x for name, x in self.fake.nsgs.get(k, {}).get("rules", {}).items() if name.lower() == n), None)
+            if key(owner) != key(vm) or r is None or r["access"].lower() != "deny":
+                continue
+            side = "destination" if r["direction"].lower() == "inbound" else "source"
+            mine_side = values(r, side)
+            on_all = not mine_side or any(v.strip().lower() in ("*", "any", "0.0.0.0/0") for v in mine_side)
+            for nk, nic in self.fake.nics.items():
+                chain = {key(g) for g in (nic["nsg"], self.fake.subnets[key(nic["subnet"])]["nsg"]) if g}
+                if nk in mine or k not in chain:
+                    continue
+                cut = [ip for ip in nic["ips"] if on_all or ip in mine_side]
+                for tk, tn, t in turned:
+                    if (tk in chain and t["direction"].lower() == r["direction"].lower()
+                            and any(takes_in(values(t, side), ip) for ip in cut)):
+                        out.setdefault((k, n), set()).add((tk, tn))
+        return out
+
+    def _older_kept_put_back(self, vm: str, out: dict) -> dict:
+        """D79 (#379): the teardown's release keeps an older version's deny that holds back a
+        turned rule for another VM (_older_held) — as U7D's unblock. Checked first (A0, a
+        control more): every rule the older version left for the VM, still on Azure, is one
+        the oracle says held — none kept without a reason —, and each is said « gardée » with
+        its reason: a turned rule the oracle finds behind it, named. Then the operator puts
+        back as they were the turned rules named, as said, and the release runs again — until
+        it goes or holds nothing the oracle sees; I7 stays whole. Nothing held: as it was."""
+        import re
+
+        def word(n: str) -> str:
+            """Its name, never as the start of another (`…-deny-all` in `…-deny-all-out`)."""
+            return re.escape(n.lower()) + r"(?![\w-])"
+        for _ in range(len(self.tampered) + 1):
+            held = self._older_held(vm) if out["status"] != "released" else {}
+            left = {(k, n) for (k, n), owner in self.legacy.items() if key(owner) == key(vm)
+                    and any(name.lower() == n for name in self.fake.nsgs.get(k, {}).get("rules", {}))}
+            if not held or not left:
+                break
+            extra = sorted(n for _k, n in left - set(held))
+            assert not extra, (f"I7: the teardown's release of {vm} said {out['status']}, an older version's "
+                               f"rules kept that no other VM's flows hang on: {extra}")
+            texts = [s.lower() for v in out.values() if isinstance(v, list) for s in v if isinstance(s, str)]
+            named: set = set()
+            for k, n in sorted(left):
+                says = [s for s in texts if re.search(word(n) + ".*gardée", s)]
+                assert says, (f"I3 (said): the teardown's release of {vm} said {out['status']}, an older "
+                              f"version's rule kept without saying so: {n}")
+                why = {(tk, tn) for tk, tn in held[(k, n)] if any(re.search(word(tn), s) for s in says)}
+                assert why, (f"I3 (said): the teardown's release of {vm} kept {n} naming none of the turned rules "
+                             f"it holds back: {sorted(tn for _tk, tn in held[(k, n)])}")
+                named |= why
+            _note("the teardown's release: kept an older version's deny a turned rule waits behind")
+            for k, n in sorted(named):
+                self.fake.nsgs[k]["rules"][n] = dict(self.tampered[(k, n)][0])
+            out = self._release_until_done(vm)
         return out
 
     def _kept(self, vm: str, prefixes: tuple, nics: list | None = None) -> list[tuple[str, str]]:

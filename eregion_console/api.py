@@ -2719,12 +2719,18 @@ async def exercise_request_status(request_id: str) -> JSONResponse:
     from eregion_core import exercise_request as xr
     if not xr.valid_id(request_id):
         return JSONResponse({"error": "not a request id"}, status_code=400)
-    status = None
+    # Orodruin's status: absent (not heard yet), or there and read — never « absent » when it is
+    # there but refused (A0, DG-c review): the request may be running on Orodruin.
+    status, unreadable = None, ""
     try:
         status = xr.read_status(json.loads(
             (_RUNS / "orodruin" / "requests" / f"{request_id}.json").read_text(encoding="utf-8")))
-    except (OSError, ValueError, xr.RequestRefused):
+    except FileNotFoundError:
         status = None
+    except (OSError, ValueError, xr.RequestRefused) as exc:
+        status, unreadable = None, f"Orodruin's status unreadable: {exc}"[:300]
+    if status is not None and status["request"] != request_id:   # as the request's file (M2466)
+        status, unreadable = None, "Orodruin's status names another request"
     req = None
     path = xr.requests_dir() / f"{request_id}.json"
     try:
@@ -2734,29 +2740,32 @@ async def exercise_request_status(request_id: str) -> JSONResponse:
     if req is not None and req.id != request_id:   # the file names the request it holds, or none
         req = None
     from eregion_console import board
-    followed = await asyncio.to_thread(_follow, request_id, req, status)
+    followed = await asyncio.to_thread(_follow, request_id, req, status, unreadable)
     return JSONResponse({"request": request_id, "at": req.at if req else None,
                          "written_here": req is not None,
-                         "status": status, "orodruin": board.orodruin_check(_orodruin_contract()),
-                         **followed})
+                         "status": status, "status_error": unreadable,
+                         "orodruin": board.orodruin_check(_orodruin_contract()), **followed})
 
 
-def _follow(request_id: str, req, status: dict | None) -> dict:
+def _follow(request_id: str, req, status: dict | None, unreadable: str = "") -> dict:
     """Each wire of the request, followed (``follow.follow``), from what this host keeps."""
     from eregion_console import follow
+    from eregion_console import indicators as ind
     from eregion_core.exercise_plan import load_catalog
     from glorfindel import escalations as esc_module
     now = datetime.now(timezone.utc)
     windows = _read_windows()
     mine = [w for w in windows if w.get("request") == request_id]
-    # The request's time is in its id (r-<UTC time>-…): the cycles and lifts from then on. An id
-    # of its shape whose date no calendar holds: from its windows, else the last day.
+    # The request's time: written here, its own; else in its id (r-<UTC time>-…). The cycles and
+    # lifts from then on. An id of its shape whose date no calendar holds: the last day.
+    at = _iso(req.at) if req else None
     try:
-        begun = datetime.strptime(request_id[2:18], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
+        begun = at.timestamp() if at else datetime.strptime(request_id[2:18], "%Y%m%dT%H%M%SZ").replace(
+            tzinfo=timezone.utc).timestamp()
     except ValueError:
-        begun = now.timestamp() - 86400
+        begun = None
     starts = [t.timestamp() for w in mine if (t := _iso(w.get("start")))]
-    since = min([begun] + starts) - 60
+    since = min([begun if begun is not None else now.timestamp() - 86400] + starts) - 60
     reports_at = _run_reports()
     runs = {w["run_id"] for w in mine} | {r for w in (status or {}).get("wires") or [] for r in w.get("runs") or []}
     reports = {}
@@ -2777,7 +2786,8 @@ def _follow(request_id: str, req, status: dict | None) -> dict:
     return follow.follow(request_id, wires, status, windows,
                          {str(w["run_id"]): _window_state(w, now) for w in mine},
                          _watch_cycles(since), reports, cards, to_judge, now=now, catalog=catalog_,
-                         liftings=_manual_liftings(since))
+                         liftings=_manual_liftings(since), others=ind.read_runs(reports_at, since),
+                         begun=begun, unreadable=unreadable)
 
 
 @app.get("/api/dagorlad/stop")

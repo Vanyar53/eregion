@@ -148,7 +148,9 @@ Une fois la demande écrite, le panneau du bas devient sa **chronologie** : une 
 l'ordre où ils partent. La page la relit toutes les 10 s, de ce qui arrive déjà sur l'hôte : la demande,
 le statut qu'Orodruin publie, les fenêtres d'exercice, les cycles de la watch, les cartes et le rapport
 du run. **Rien n'est écrit, et Glorfindel n'apprend rien** : c'est une lecture
-(`GET /api/dagorlad/requests/<id>`).
+(`GET /api/dagorlad/requests/<id>`). Elle lit les fichiers de l'hôte, et, comme la vue Runs
+(`/api/exercises`), l'inscription de chaque cible que nomment les cycles de la watch : ses tags, par
+l'identité de la console (Reader sur le banc), en cache dix minutes. Rien d'autre d'Azure.
 
 | Colonne | Ce qu'elle dit | D'où |
 |---|---|---|
@@ -159,25 +161,41 @@ du run. **Rien n'est écrit, et Glorfindel n'apprend rien** : c'est une lecture
 | verdict | `RUN PASS · DETECTED`, et le lien « run ▸ » vers la vue Runs | le rapport du run |
 
 - **Pendant le run**, T0 est le début de la fenêtre, et la détection, le premier cycle de sa propre
-  technique, sur sa cible, dans la fenêtre. La ligne le dit (« the window's start, until its report »).
+  technique, sur sa cible, dans la fenêtre. Chaque temps mesuré ainsi porte `≈`, et la ligne dit
+  qu'il est provisoire, jusqu'au rapport du run.
 - **Une fois le rapport arrivé**, le run se mesure **comme sur l'accueil** : la décision que les
-  indicateurs rattachent, leur temps pour contenir, la définition de BL1 (exécutée dans son cycle, relue
-  sur Azure, et tenue jusqu'à la fin de la fenêtre).
+  indicateurs rattachent, leur temps pour contenir, la définition de BL1. L'action est exécutée dans
+  son cycle, relue sur Azure, et elle tient : aucune carte de la réaffirmation ne dit, sur la VM,
+  qu'elle a disparu ou qu'elle est contournée, dans les 15 min qui suivent la relecture, ou jusqu'à
+  sa première levée si elle vient avant.
 - **Une panne** n'attend rien de disruptif : une isolation ou un blocage sur sa cible pendant la
-  panne est « une panne prise pour une attaque », en rouge. Le retour de la VM est dit, avec son temps.
+  panne est « une panne prise pour une attaque », en rouge. Une décision que l'accueil rattache à une
+  attaque (de la demande, ou d'un autre run de l'hôte) n'est jamais celle de la panne. Le retour de la
+  VM est dit, avec son temps.
 - **Les pastilles** des fils suivent la même ligne, et les **cartes bleues** disent ce que la demande
   fait sur leur cible : le fil qui y tourne, l'isolation vérifiée, les cartes à juger.
 
 **La vie des fils** (Jonathan, 30/10) :
 - **Écrite, pas encore portée** : « New plan » l'abandonne ici. La demande reste sur l'hôte : portée
-  plus tard, Orodruin la jugerait et la lancerait quand même.
+  plus tard, Orodruin la jugerait et la lancerait quand même. Un statut d'Orodruin présent mais
+  illisible, ou d'une autre demande, n'est jamais « pas encore portée » : la page le dit, et la
+  demande court peut-être sur Orodruin.
 - **En cours** : les fils sont verrouillés, sans ✕, et l'on n'en tire pas d'autres. Seul « Stop all »
   agit.
-- **Finie** : quand Orodruin dit qu'il l'a finie ou refusée ; quand « Stop all » a fermé une de ses
-  fenêtres et qu'aucune ne vit plus ; ou quand Orodruin se tait plus longtemps qu'une demande ne peut
-  durer (2 h 15) sans fenêtre vivante. Les fils se déverrouillent et **gardent leur dernier résultat**,
-  sur la pastille et dans le plan (« last: … run ▸ »). **« Run again »** renvoie les mêmes fils, en une
-  nouvelle demande.
+- **Finie** :
+  - quand Orodruin dit qu'il l'a finie ou refusée ;
+  - quand « Stop all » a fermé une de ses fenêtres ;
+  - ou quand aucune de ses fenêtres ne vit et qu'Orodruin se tait depuis plus de 35 min. Entre deux
+    fils, il ne se tait jamais aussi longtemps : il ne se tait que pendant qu'il attend une VM isolée
+    (20 min au plus), et un fil fini garde sa fenêtre vivante pendant la grâce (15 min). C'est ce qui
+    finit une demande arrêtée par « Stop all » entre deux fils, quand il n'y a aucune fenêtre à fermer.
+
+  Une fenêtre ne compte comme vivante que dans les bornes d'une fenêtre : un début pas plus en avance
+  que le décalage des horloges, une vie pas plus longue que le plafond d'un injecteur (2 h), plus la
+  grâce. Une fenêtre forgée, ou sur une horloge décalée, ne garde jamais les fils verrouillés.
+
+  Les fils se déverrouillent et **gardent leur dernier résultat**, sur la pastille et dans le plan
+  (« last: … run ▸ »). **« Run again »** renvoie les mêmes fils, en une nouvelle demande.
 
 La demande suivie reste dans le navigateur (une commodité) : un rechargement la retrouve, et la
 reverrouille si elle tourne encore.

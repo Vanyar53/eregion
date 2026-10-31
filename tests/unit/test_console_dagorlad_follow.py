@@ -73,12 +73,12 @@ FAULT = {"rank": 2, "experiment": "vm-shutdown", "target": GONDOLIN}
 
 
 def _follow(*, wires=(WIRE,), status=None, windows=(), states=None, cycles=(), reports=None, cards=(),
-            to_judge=(), now=T + timedelta(minutes=5), liftings=()):
+            to_judge=(), now=T + timedelta(minutes=5), liftings=(), others=()):
     windows = list(windows)
     states = states if states is not None else {w["run_id"]: "open" for w in windows}
     return follow.follow(RID, list(wires), status, windows, states, list(cycles), reports or {}, list(cards),
                          set(to_judge), now=now, catalog=CATALOG, liftings=liftings,
-                         enrolled=lambda rid: True)
+                         enrolled=lambda rid: True, others=others)
 
 
 # ── The phase of a request ─────────────────────────────────────────────────────────────
@@ -103,22 +103,65 @@ def test_a_request_runs_while_a_window_of_it_lives_even_unheard_from_orodruin():
     assert out["wires"][0]["state"] == "running" and out["wires"][0]["heard"] is False
 
 
-def test_stop_all_ends_the_request_once_no_window_of_it_lives():
+def test_a_window_live_keeps_the_request_running_however_long_orodruin_is_silent():
+    """A wire may run up to its injector's ceiling: while its window lives, Orodruin's silence
+    ends nothing."""
+    win = _window("run-1", start=T - timedelta(minutes=60))
+    status = _status(("running", "", ("run-1",)), at=T - timedelta(minutes=60))
+    assert _follow(status=status, windows=[win], now=T)["phase"] == "running"
+
+
+def test_stop_all_ends_the_request_at_once():
     """« Stop all » kills Orodruin's runner unsaid: its status stays « running »; the window it
-    closed says it (closed_by orodruin-kill)."""
+    closed says it (closed_by orodruin-kill) — no other wire leaves, its grace or not."""
     win = _window("run-1", end=T + timedelta(minutes=2), closed_by="orodruin-kill")
     status = _status(("running", "", ("run-1",)), ("queued", "", ()))
-    assert _follow(status=status, windows=[win], states={"run-1": "grace"})["phase"] == "running"
-    out = _follow(status=status, windows=[win], states={"run-1": "closed"})
-    assert (out["phase"], out["why"]) == ("over", "stopped")
+    for state in ("grace", "closed"):
+        out = _follow(status=status, windows=[win], states={"run-1": state})
+        assert (out["phase"], out["why"]) == ("over", "stopped")
 
 
-def test_orodruin_silent_longer_than_a_request_may_last_ends_it():
-    status = _status(("queued", "", ()), at=T)
-    within = T + timedelta(seconds=follow.SILENT_S - 60)
-    assert _follow(status=status, now=within)["phase"] == "running"
-    out = _follow(status=status, now=T + timedelta(seconds=follow.SILENT_S + 60))
+def test_orodruin_silent_longer_than_it_ever_is_between_two_wires_ends_it():
+    """Between two wires, Orodruin's runner is silent only while it waits for a VM Glorfindel
+    holds (20 min at most): « Stop all » between two wires — no window to close — ends the
+    request within 35 min, never 2 h 15 (DG-c review)."""
+    assert follow.SILENT_S == 35 * 60
+    status = _status(("done", "", ()), ("queued", "", ()), at=T)
+    assert _follow(status=status, now=T + timedelta(minutes=30))["phase"] == "running"
+    out = _follow(status=status, now=T + timedelta(minutes=40))
     assert (out["phase"], out["why"]) == ("over", "silent")
+
+
+@pytest.mark.parametrize("start, expires", [
+    (T + timedelta(days=1), T + timedelta(days=1, hours=2)),     # a start ahead of the clock
+    (T - timedelta(hours=3), datetime(2100, 1, 1, tzinfo=timezone.utc)),   # an expiry in 2100
+])
+def test_a_window_beyond_its_bounds_never_keeps_the_request_running(start, expires):
+    """A window with the request's id, forged or on a clock off, that _window_state says « open »:
+    the wires never stay locked for it (DG-c review)."""
+    win = _window("run-x", start=start)
+    win["expires"] = _iso(expires)
+    out = _follow(windows=[win], states={"run-x": "open"}, now=T + timedelta(minutes=5))
+    assert out["phase"] != "running" or out["why"] != "launched"
+    assert out["phase"] in ("written", "over")
+    assert follow.alive(win, "open", T + timedelta(minutes=5)) is False
+
+
+def test_a_window_within_its_bounds_is_live():
+    win = _window("run-1", start=T - timedelta(minutes=10))
+    assert follow.alive(win, "open", T) and follow.alive(win, "grace", T)
+    assert not follow.alive(win, "closed", T)
+    # Its injector's ceiling, then the grace: live no longer.
+    assert not follow.alive(win, "open", T + timedelta(hours=2, minutes=16))
+
+
+def test_a_status_there_but_unreadable_is_never_not_carried_yet():
+    """A0: Orodruin may be running the request — never the command and « New plan » again."""
+    assert follow.phase(None, [], {}, T, unreadable="not JSON") == ("running", "status_unreadable")
+    assert follow.phase(None, [], {}, T) == ("written", "")
+    # Unreadable and silent long enough, it ends as any other.
+    assert follow.phase(None, [], {}, T, begun=(T - timedelta(hours=1)).timestamp(),
+                        unreadable="not JSON") == ("over", "silent")
 
 
 # ── A technique's wire ─────────────────────────────────────────────────────────────────
@@ -255,6 +298,30 @@ def test_an_attacks_decision_is_never_counted_against_the_next_fault():
     assert tech["outcome"] == "contained_alone" and fault["mistaken"] == []
 
 
+def test_a_decision_the_overview_attaches_to_another_attack_is_never_the_faults():
+    """As the overview: a run of this host since the request began, not of the request, whose
+    detection the watch decided on during the fault — that decision is the attack's (DG-c review)."""
+    from eregion_core import run_report
+    win = _window("fault-1", kind="fault", experiment="vm-shutdown Arrêt")
+    other = run_report.read_run(_report("other-run", at=T + timedelta(seconds=5), latency=25.0), "other-run")
+    c = _cycle(seen=T + timedelta(seconds=30), verified_after=20)
+    [w] = _follow(wires=[FAULT], windows=[win], cycles=[c], others=[other])["wires"]
+    assert w["mistaken"] == []
+    [w] = _follow(wires=[FAULT], windows=[win], cycles=[c])["wires"]
+    assert [m["action"] for m in w["mistaken"]] == ["isolate_vm"]
+
+
+def test_not_written_here_the_techniques_still_go_before_the_faults():
+    """No catalogue word (the request not written here): the windows say what each wire is."""
+    status = _status(("running", "", ("fault-1",)), ("running", "", ("run-2",)))
+    wins = [_window("fault-1", kind="fault", experiment="vm-shutdown Arrêt"),
+            _window("run-2", start=T + timedelta(seconds=10))]
+    c = _cycle(seen=T + timedelta(seconds=30), verified_after=20)
+    fault, tech = _follow(wires=(), status=status, windows=wins, cycles=[c])["wires"]
+    assert (fault["kind"], tech["kind"]) == ("fault", "technique")
+    assert tech["decision"]["action"] == "isolate_vm" and fault["mistaken"] == []
+
+
 # ── The route: the console's own reads, nothing written ─────────────────────────────────
 
 @pytest.fixture()
@@ -334,6 +401,35 @@ def test_following_a_request_writes_nothing_and_tells_the_watch_nothing(client, 
     assert _tree(*roots) == before
     [route] = [r for r in api.app.routes if getattr(r, "path", "") == "/api/dagorlad/requests/{request_id}"]
     assert route.methods == {"GET"}
+
+
+@pytest.mark.parametrize("doc, why", [
+    ("{not json", "Orodruin's status unreadable"),
+    ('{"request": "r-1"}', "Orodruin's status unreadable"),
+])
+def test_a_status_there_but_refused_is_said_never_not_carried_yet(client, tmp_path, doc, why):
+    rid = client.post("/api/dagorlad/requests",
+                      json={"wires": [{"experiment": "T1110.001", "target": GONDOLIN}]}).json()["request"]
+    d = tmp_path / "runs" / "orodruin" / "requests"
+    d.mkdir(parents=True)
+    (d / f"{rid}.json").write_text(doc)
+    out = client.get(f"/api/dagorlad/requests/{rid}").json()
+    assert out["status"] is None and out["status_error"].startswith(why)
+    assert (out["phase"], out["why"]) == ("running", "status_unreadable")
+
+
+def test_the_status_of_another_request_is_not_this_ones(client, tmp_path):
+    rid = client.post("/api/dagorlad/requests",
+                      json={"wires": [{"experiment": "T1110.001", "target": GONDOLIN}]}).json()["request"]
+    d = tmp_path / "runs" / "orodruin" / "requests"
+    d.mkdir(parents=True)
+    other = "r-20261031T090000Z-123456"
+    (d / f"{rid}.json").write_text(json.dumps({
+        "request": other, "state": "finished", "at": "2026-10-31T09:00:00+00:00", "codes": [],
+        "wires": [{"rank": 1, "state": "done", "code": "", "runs": [], "result": ""}]}))
+    out = client.get(f"/api/dagorlad/requests/{rid}").json()
+    assert out["status"] is None and out["status_error"] == "Orodruin's status names another request"
+    assert out["phase"] == "running"
 
 
 def test_a_request_file_holding_another_id_is_not_this_request(client):
@@ -416,3 +512,17 @@ def test_a_blue_card_says_what_the_running_request_does_never_an_old_one():
 def test_an_id_of_its_shape_whose_date_no_calendar_holds_is_read_not_a_500(client):
     d = client.get("/api/dagorlad/requests/r-20261399T996099Z-abcdef")
     assert d.status_code == 200 and d.json()["phase"] == "written" and d.json()["wires"] == []
+
+
+def test_a_measure_before_the_report_is_marked_provisional_on_the_pill_and_the_line():
+    """DG-c review: not only T0 — every time measured from the window says so."""
+    js = _js()
+    body = _body(js, "function lineResult(")
+    assert "const about = l.provisional ? '≈' : '';" in body
+    assert "`✓ detected ${about}+${dur(Number(l.detect_s))}`" in body
+    assert "' ' + about + dur(Number(l.contain_s))" in body
+    assert "≈ provisional: from the window, until the run\\'s report" in _body(js, "function chronoRow(")
+
+
+def test_an_unreadable_status_is_said_beside_orodruin():
+    assert "if (!st && f && f.status_error) return" in _body(_js(), "function orodruinLine(")

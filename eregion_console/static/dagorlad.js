@@ -383,8 +383,10 @@ function lineResult(l) {
   if (l.outcome === 'missed') return { style: 'w-bad', text: `${n}✗ missed` };
   if (l.detected_at || l.detection === 'detected') {
     const o = OUTCOME[l.outcome] || ['w-ok', ''];
-    const det = l.detect_s != null ? `✓ detected +${dur(Number(l.detect_s))}` : '✓ detected';
-    const how = l.outcome === 'contained_alone' ? `contained${l.contain_s != null ? ' ' + dur(Number(l.contain_s)) : ''}`
+    // Before the run's report, measured from its window: said, on every time (≈).
+    const about = l.provisional ? '≈' : '';
+    const det = l.detect_s != null ? `✓ detected ${about}+${dur(Number(l.detect_s))}` : '✓ detected';
+    const how = l.outcome === 'contained_alone' ? `contained${l.contain_s != null ? ' ' + about + dur(Number(l.contain_s)) : ''}`
       : o[1] + (o[1] && l.outcome_why ? ` (${l.outcome_why})` : '');
     return { style: o[0], text: `${n}${det}${how ? ' · ' + how : ''}` };
   }
@@ -421,18 +423,20 @@ function chronoRow(l) {
     <td style="white-space:nowrap"><span class="rid${fault ? ' fault' : ''}">${esc(l.experiment || '?')}</span> → ${esc(l.target_name || '?')}</td>
     <td><span class="chip ${esc(STATE_CHIP[l.state] || '')}">${esc(String(l.state).toUpperCase())}${l.code ? ' · ' + esc(l.code) : ''}</span></td>
     <td class="wrap">${l.run ? `<span class="rid">${esc(l.run)}</span>` : ''}<div class="meta">${esc(win)}</div><div class="meta">${t0}</div>${refusal}</td>
-    <td class="wrap"><span class="${esc(RESULT_CLS[r.style] || '')}">${esc(r.text.replace(/^#\d+ /, ''))}</span><div class="meta">${decisionCell(l)}</div></td>
+    <td class="wrap"><span class="${esc(RESULT_CLS[r.style] || '')}">${esc(r.text.replace(/^#\d+ /, ''))}</span>${l.provisional && l.detected_at ? '<div class="meta">≈ provisional: from the window, until the run\'s report</div>' : ''}<div class="meta">${decisionCell(l)}</div></td>
     <td>${cards.length ? `<a href="/glorfindel" title="TO JUDGE is on Glorfindel's page">${Number(cards.length)} card(s)${judge ? `, ${Number(judge)} to judge` : ''} ▸</a>` : ''}</td>
     <td class="wrap">${verdict}${runLink(l.run)}</td></tr>`;
 }
 const PHASE = { written: ['c-warn', 'WRITTEN · NOT CARRIED YET'], running: ['c-blue', 'RUNNING'], over: ['c-ok', 'OVER'] };
 const OVER_WHY = {
   finished: 'Orodruin finished it', refused: 'Orodruin refused it', stopped: '« Stop all » stopped it',
-  silent: 'Orodruin silent longer than a request may last, no window of it live',
+  silent: 'Orodruin silent longer than it ever is between two wires (35 min), no window of it live',
 };
 function orodruinLine(f) {
   const st = f && f.status;
   const contract = f && f.orodruin ? ` <span class="meta">· ${esc(f.orodruin.text)}</span>` : '';
+  // There but refused: said, and never taken for « not heard yet » (A0).
+  if (!st && f && f.status_error) return `<div class="r-warn">${esc(f.status_error)} — the request may be running on Orodruin.${contract}</div>`;
   if (!st) return `<div class="meta">Orodruin: not heard from yet${(f && f.phase === 'running') ? ' — a window of the request is here' : ' — the request runs once you carry it there'}.${contract}</div>`;
   return `<div>Orodruin: <b>${esc(st.state)}</b>${(st.codes || []).length ? ` (${esc(st.codes.join(', '))})` : ''}
     <span class="meta">at ${esc(hms(st.at))}</span>${contract}</div>`;

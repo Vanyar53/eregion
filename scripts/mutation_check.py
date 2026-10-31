@@ -6608,7 +6608,7 @@ MUTANTS += [
     ("M2452", "Orodruin silent longer than a request may last: the request never over (DG-c)", FOL,
      "    if heard and now.timestamp() - max(heard) > SILENT_S:\n", "    if False:\n"),
     ("M2453", "a request over while a window of it still lives (DG-c)", FOL,
-     "    if live:\n        return \"running\"", "    if False:\n        return \"running\""),
+     '    if any(alive(w, states.get(w["run_id"], ""), now) for w in mine):\n', "    if False:\n"),
     ("M2454", "a detection of another technique taken for the wire's (DG-c)", FOL,
      '             and ttp and c.get("ttp") == ttp\n', "             and ttp\n"),
     ("M2455", "a cycle on another VM, or outside the window, taken for the wire's (DG-c)", FOL,
@@ -6670,6 +6670,39 @@ MUTANTS += [
 TESTS.update({f"M{n}": _FOL for n in range(2450, 2474)})
 TESTS["M2465"] = f"{_FOL} tests/unit/test_indicators.py"
 TESTS["M2467"] = f"{_FOL} tests/unit/test_console_exercises.py"
+# DG-c, its review (31/10): a window beyond its bounds, an unreadable status, the measure said
+# provisional, a fault judged as on the overview, « Stop all » between two wires. M2481–M2490.
+MUTANTS += [
+    ("M2481", "a window ahead of the clock keeps the request running (DG-c, review)", FOL,
+     "    if start is None or start > now.timestamp() + FUTURE_SKEW_S:\n        return False\n",
+     "    if start is None:\n        return False\n"),
+    ("M2482", "a window's life unbounded (an expiry in 2100) keeps the wires locked (DG-c, review)", FOL,
+     '    ends = [t for t in (epoch(window.get("expires")), epoch(window.get("end")), start + MAX_DURATION_S)\n',
+     '    ends = [t for t in (epoch(window.get("expires")), epoch(window.get("end")))\n'),
+    ("M2483", "a window that cannot have started yet says the request launched (DG-c, review)", FOL,
+     '    mine = [w for w in mine if (s := epoch(w.get("start"))) is not None and s <= now.timestamp() + FUTURE_SKEW_S]\n',
+     ""),
+    ("M2484", "an unreadable status of Orodruin taken for « not carried yet » (DG-c, review)", FOL,
+     '    if unreadable:\n        return "running", "status_unreadable"\n', ""),
+    ("M2485", "the route reads a status there but refused as absent (DG-c, review)", CON,
+     '        status, unreadable = None, f"Orodruin\'s status unreadable: {exc}"[:300]\n',
+     '        status, unreadable = None, ""\n'),
+    ("M2486", "the status of another request taken for this one's (DG-c, review)", CON,
+     '    if status is not None and status["request"] != request_id:   # as the request\'s file (M2466)\n',
+     "    if False:\n"),
+    ("M2487", "a measure before the run's report not said provisional (DG-c, review)", DJS,
+     "    const about = l.provisional ? '≈' : '';\n", "    const about = '';\n"),
+    ("M2488", "a fault judged against the request's attacks only, not the overview's (DG-c, review)", FOL,
+     '    taken = {str((indicators.decision_of(r, index) or {}).get("signal_id") or "") for r in others\n'
+     '             if r.get("kind") == "technique"}\n',
+     "    taken = set()\n"),
+    ("M2489", "a fault measured before the techniques when the catalogue says nothing (DG-c, review)", FOL,
+     '    for w, sw, runs, run_id, window, raw, rep, kind in sorted(found, key=lambda f: (f[7] == "fault", f[0]["rank"])):\n',
+     '    for w, sw, runs, run_id, window, raw, rep, kind in sorted(found, key=lambda f: f[0]["rank"]):\n'),
+    ("M2490", "« Stop all » between two wires leaves the wires locked 2 h 15 (DG-c, review)", FOL,
+     "SILENT_S = WAIT_ISOLATION_S + GRACE_AFTER_S\n", "SILENT_S = 2 * 3600 + GRACE_AFTER_S\n"),
+]
+TESTS.update({f"M{n}": _FOL for n in range(2481, 2491)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

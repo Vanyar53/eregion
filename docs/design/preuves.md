@@ -2497,7 +2497,7 @@ l'I7 réglé, la machine va plus loin et tombe sur un **U1 présent sur `main` 9
 rule glorfindel-iso-web-web-nic-8b70f2 kept behind a rule turned into an allow (…), cutting
 […/api]: no pending card names it ») — la carte d'orpheline de la posture, pas le chemin de
 l'isolation ; cinq étapes figées en `xfail` strict
-(`test_an_orphan_kept_behind_a_turned_rule_is_said`), pour #372.
+(`test_an_orphan_kept_behind_a_turned_rule_is_said`), pour #372 — levé par U1O (ci-dessous).
 
 **I4E (30/10, #361) : une nouvelle isolation garde l'état ancien de la VM ; le démontage ne lit plus
 l'état écrit par le code.** Trouvé par la seconde relecture d'I4C. **Le défaut, sur `main` 91dae76** :
@@ -2655,6 +2655,56 @@ La graine 31337 à 2 000 (15 étapes, 4 restées) : un blocage de web dont les r
 fois, le rôle retiré, puis un contournement sous `nsg.get` toujours en 429 — « L1: the block of …/web is
 bypassed by a customer allow ; the reassertion doesn't say so »
 (`test_a_bypassed_block_is_said_while_its_nsg_cannot_be_read`, routé vers #369).
+
+**U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
+9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
+(`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque
+passage du balayage relevé : les orphelines listées, `orphan_alerts.json`, les cartes en attente avant et
+après) : le refus entrant de web (`glorfindel-iso-web-web-nic-8b70f2`, sur nsg-subnet), gardé derrière la
+règle de blocage de web retournée en allow (I5Q), est dit pour batch — la VM à son adresse, 10.0.0.4, à
+ce moment-là — sur une carte qui nomme bien la règle retournée. Puis l'adresse de batch change
+(`customer_changes_ip`) et une nouvelle VM, api, reçoit 10.0.0.4, derrière le même NSG. Au balayage
+suivant, en `non_disruptive`, `find_orphan_rules` dit juste : le refus coupe api, gardé derrière la règle
+retournée. Mais `orphan_alerts.json` tient une règle pour dite par son NSG et son nom seulement : sa
+carte, sur batch, passait pour la dire encore ; et la garde d'I5Q (une carte qui ne nomme pas toutes les
+règles retournées est remplacée) la trouvait juste — elle les nomme. Rien ne comparait la VM de la carte
+à celle que la règle coupe maintenant : api coupée, aucune carte en attente sur api ni sur le NSG ; la
+carte de batch disait coupée une VM qui ne l'était plus. Rien d'ouvert : ce qui coupe n'était pas dit.
+Ce n'est pas propre aux orphelines gardées : toute orpheline dite, en `human_only` aussi, gardait sa
+carte sur la VM d'avant quand l'adresse passait à une autre — ou à personne, et dans l'autre sens une
+carte sur le NSG (« aucune carte ne porte cette adresse ») restait quand une VM la recevait.
+
+**Correctif** (`glorfindel/orphans.py`). Au début du balayage, la carte de chaque orpheline dite est lue
+dans le magasin : si elle porte sur une autre ressource que celle que la règle coupe maintenant (la VM
+coupée, sinon celle qui tient l'adresse, sinon le NSG — `_resource`), elle est remplacée. En attente :
+fermée (« Remplacée : … (U1O) ») et chaque règle qu'elle disait redite — sa raison pouvait être celle de
+la règle déplacée, le magasin garde la première. Acquittée : elle reste fermée pour les règles qui coupent
+encore sa VM ; la règle déplacée seule est redite, pour la nouvelle. Une fois par changement : une règle
+dont la VM ne change pas n'est pas redite (M886 tient). Rien n'est retiré de plus : ce qui est gardé le
+reste (I4, I5Q). La carte dit aussi ce que la règle coupe en entier : la VM et sa carte réseau
+(« adresse de api (carte api-nic) aujourd'hui »), et chaque autre VM coupée (« Elle coupe aussi … ») ;
+le magasin fusionne par VM, la carte porte sur la première.
+
+**La machine.** Aucune règle retirée ni restreinte, aucun oracle affaibli. La séquence de 9001 passe le
+balayage, puis la réaffirmation qui la suit (sa dernière valeur tirée, `non_disruptive`, ajoutée : la
+séquence réduite s'arrêtait à l'échec). Tests (`test_orphan_sweep.py`), rouges sur `main` : le refus gardé
+dont l'adresse passe à api, en `human_only` et en `non_disruptive`
+(`test_a_kept_deny_whose_address_passed_to_another_vm_is_said_for_it`) ; une orpheline non gardée, carte
+en attente ou acquittée (`…said_again_when_its_address_passes_to_another`) ; l'adresse à personne puis à
+api (`…nobody_holds_any_more_is_said_of_its_nsg`) ; une carte partagée par deux règles dont une seule
+change de VM, en attente ou acquittée (`test_a_card_two_rules_share_when_one_moves_off_its_vm`) ; une
+règle qui coupe deux VM (`…cutting_two_vms_says_both_with_their_nics`).
+
+**Mesures d'U1O.** `pytest` complet : 4 641 réussis, 7 sautés, 5 `xfail` (un de moins) ; `ruff` propre ;
+`mutant_anchors.py` sans faute. Mutants M2260–M2265 (le remplacement retiré ; une carte remplacée qui
+laisse tues les autres règles qu'elle disait ; une carte acquittée qui fait redire les règles restées sur
+sa VM ; la carte réseau tue ; la seconde VM coupée tue ; la carte remplacée laissée en attente) : 6/6 par
+leurs tests, deux tours (60 séquences, graine 42). Par la machine seule, M2260 : 0/3 à 500 (graines 9001,
+42, 101) — la séquence réduite ne vient pas dans 500 —, tué à 2 000 sur la graine 9001 (le U1 de #372 :
+`glorfindel-iso-web-web-nic-8b70f2` coupe api, aucune carte en attente ne la nomme). Invariants sur le correctif : 500 séquences sur les graines 9001, 42, 101, 777,
+31337 et 1618, puis 2 000 sur les graines 9001, 322 et 1618, verts. Harnais avant/après au même budget (60 séquences, graine
+Hypothesis 42, `--jobs 4`) sur les 16 mutants d'`orphans.py` (M701, M760, M768, M769, M776, M883, M886,
+M887, M889, M1737–M1740, M1744–M1746) : 16/16 à chaque tour avant (`d05eade`) et après ; aucun perdu.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

@@ -127,8 +127,10 @@ output "chaos_experiments" {
 # (l'agent Azure Monitor garde l'identité système ; `make gothmog-preflight` le lit).
 
 locals {
+  # chaos.noise_vms du config.yaml, sauf si la variable le remplace (un plan de test).
+  chaos_noise_keys = var.chaos_noise_vms != null ? var.chaos_noise_vms : try(local.cfg.chaos.noise_vms, [])
   chaos_noise_vms = local.chaos_enabled ? {
-    for key in try(local.cfg.chaos.noise_vms, []) : key => local.vms[key]
+    for key in local.chaos_noise_keys : key => local.vms[key]
   } : {}
 }
 

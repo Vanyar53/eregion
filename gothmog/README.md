@@ -124,6 +124,14 @@ une attaque » ; `python -m analysis.fault_rate`, sur l'hôte de la watch (H0).
 **Mutants** : M2400–M2406 (`tests/unit/test_gothmog_noise.py`), M2410–M2415
 (`tests/unit/test_fault_rate.py`).
 
+Le plan des deux cas, contre de faux providers :
+- **la config du dépôt** (`noise_vms: []`) ne change rien au banc : aucune ressource de G1, chaque VM
+  en identité système seule, G0 intact ;
+- **le bruit sur gondolin** ne touche qu'elle.
+
+Les deux cas sont dans `infra/terraform/tests/chaos_noise.tftest.hcl`. On les lance à la main,
+comme le test d'ID1 (`terraform -chdir=infra/terraform test`) : la CI n'exécute pas Terraform.
+
 ### Reste, sur le banc, avec Jonathan
 
 Rien n'est appliqué ni mesuré : les trois pannes sont `planned` au catalogue (Dagorlad les montre

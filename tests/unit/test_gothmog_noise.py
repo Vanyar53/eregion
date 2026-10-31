@@ -269,6 +269,14 @@ def test_the_noise_is_declared_off_and_never_on_an_unenrolled_vm():
         assert "condition     = try(each.value.enrolled, true)" in _block(tf, head)
     assert "contains(keys(local.chaos_vms), each.key)" in _block(tf, 'resource "azurerm_user_assigned_identity" "chaos_agent"')
     assert 'source  = "Azure/azapi"' in _tf("main.tf")
+    # The variable a plan of test overrides it with defaults to null: the config decides.
+    variable = _block(_tf("variables.tf"), 'variable "chaos_noise_vms"')
+    assert "default     = null" in variable
+    assert ("var.chaos_noise_vms != null ? var.chaos_noise_vms : try(local.cfg.chaos.noise_vms, [])" in tf)
+    # Terraform's own plan of both cases (CI runs no Terraform: by hand, as ID1's).
+    tftest = _tf("tests/chaos_noise.tftest.hcl")
+    assert 'run "noise_off_the_bench_plan_is_unchanged"' in tftest and "chaos_noise_vms = null" in tftest
+    assert 'run "noise_on_gondolin_touches_gondolin_only"' in tftest
 
 
 @pytest.mark.parametrize("kind, fid, target", [

@@ -2207,6 +2207,38 @@ def test_a_perimeter_block_whose_nics_cant_be_read_takes_no_block_off(monkeypatc
         shutil.rmtree(m.home, ignore_errors=True)
 
 
+@pytest.mark.parametrize("unread", [True, False])
+def test_a_perimeter_block_keeps_an_unread_nic_off_its_subnet_uncovered(monkeypatch, unread):
+    """I3P's review (probe P4): Db--01 blocked for itself, db-nic-0 behind an `allow-ssh` of
+    its subnet's NSG (bypassed), db-nic-1 on a subnet of its own whose NSG can't be read. The
+    perimeter block kept as uncovered only the NICs the verification said open — a bypass now
+    says where each NIC stands, db-nic-1 (unread) in none of them: `blocked`, db-nic-1 dropped.
+    A NIC leaves the list only on a proof that it holds: read, db-nic-1's own block holding,
+    it leaves (`blocked_nics`)."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[_rule("allow-ssh", 100, dict(
+            access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+            destination_port_range="22"))], data_subnet=[]))
+        c = m.connector
+        c.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=22)
+        if unread:
+            m.fake.unreadable.add(key(_DATA))
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert (v.get("nics_unknown") == ["db-nic-1"]) is unread, v
+        assert ("db-nic-1" in (v.get("blocked_nics") or [])) is not unread, v
+        out = c.block_suspicious_ip(ATTACKER, DB, scope="subnet", threat_port=22)
+        if unread:
+            assert out["status"] == "blocked_partial" and out["uncovered_nics"] == ["db-nic-1"], out
+        else:
+            assert "uncovered_nics" not in out and out["status"] == "blocked", out
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
 def test_a_write_that_failed_is_never_said_put_back(monkeypatch):
     """The review's second case: a merged entry on web2, its own rule turned into an
     allow, the subnet's NSG unreadable (403). Putting back the perimeter fails, the VM's
@@ -4927,20 +4959,26 @@ _I3_SEED1999_STEPS = [
     ('recover',),
     ('recover',),
     ('tags_lost', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope'),
-    ('turned_then_address_reused', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.compute/virtualmachines/api', (8, 'before-crash'), 22, 'both', 22, ('/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-edge', 'glorfindel-block-192-31-196-7-api-api-nic-c272f2'), 'human_only'),
+    ('turned_then_address_reused', '/subscriptions/s/resourceGroups/rg-edge/providers/Microsoft.Compute/virtualMachines/api', '/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.compute/virtualmachines/api', (8, 'before-crash'), 22, 'both', 22, ('/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-edge', 'glorfindel-block-192-31-196-7-api-api-nic-c272f2'), 'human_only',
+     # I3P: past the card, address_reused and the last pass go on (drawn plainly).
+     False, 22, False, 'rg-new', 'batch', None, 'Linux', False, 'human_only'),
 ]
 
 
 # I4E's review: the machine at 2 000 (seed 1999), no step of an older version's state. The same failure
-# on `main` 91dae76: an older defect of the reassertion of a block beside our perimeter, routed to #366.
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#366: I3, the reassertion says an IP no longer blocked while our perimeter block cuts it off")
+# on `main` 91dae76: an older defect of the reassertion of a block beside our perimeter (#366, I3P).
 def test_the_reassertion_says_unblocked_where_our_perimeter_block_still_cuts(monkeypatch):
     """I4E's review, the machine at 2 000 (seed 1999): « I3: the reassertion said 192.31.196.7 no
     longer blocked on …/rg-edge/…/api (['api-nic']); our perimeter block still cuts it off ». No step
-    of an older version's state (I4E's rule, a no-op there, left out); it fails on `main` 91dae76
-    too: not I4E's family, routed to a follow-up lot (#366). Strict: once fixed, this fails, and the
-    mark goes."""
+    of an older version's state (I4E's rule, a no-op there, left out); it failed on `main` 91dae76
+    too (#366).
+
+    The cause (I3P): api's own inbound deny turned into an allow (priority 200), before the
+    perimeter's (210) on nsg-edge — read as passing the perimeter, the NIC said open. But the
+    customer's `deny-lateral-in`, widened to every source, sits at 130: it drops all of the
+    attacker's inbound traffic before that allow is reached, and the perimeter's `-out` cuts the
+    rest. `_perimeter_holds` now drops an allow a customer's deny before it already stops for the
+    attacker (`_dropped_first`): « l'IP reste bloquée sur api-nic »."""
     _run(monkeypatch, _I3_SEED1999_NET, *_I3_SEED1999_STEPS)
 
 
@@ -5277,16 +5315,21 @@ _I3_NO_NIC_NET = {
 
 
 # The harness's dry run on `main` d380df5 (60 sequences, a random seed; I4D), shrunk to four steps: the
-# same failure as seed 1999, on the branch where the card names no NIC — a second case of #366.
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#366: I3, the reassertion says an IP no longer blocked while our perimeter block cuts it off")
+# same failure as seed 1999, on the branch where the card names no NIC — a second case of #366 (I3P).
 def test_the_reassertion_says_unblocked_naming_no_nic_where_our_perimeter_still_cuts(monkeypatch):
     """« I3: the reassertion said 192.31.196.7 no longer blocked on …/Db--01 ([]); our perimeter
     block still cuts it off » — the card names no NIC (`len(cut) < len(nics)`), seed 1999's names
     one. web blocked on its subnet, Db--01 for itself, web unblocked (a NIC read refused, 429),
     a block rule of db-nic-0 retargeted, the subnet's `allow-ssh` removed, then web blocked,
     its rule turned and its address reused, the reassertion in human_only. Nothing opens; what is
-    said is false. Found by I4D's harness (not its family), frozen for #366."""
+    said is false. Found by I4D's harness (not its family), frozen for #366.
+
+    The cause (I3P): db-nic-0's `-out` retargeted (gone, the perimeter holding there), db-nic-1's
+    pair passed by its NSG's `allow-ssh` — the verification returned the bypass with what is
+    gone, but dropped where each NIC stands (`held_by_perimeter`), and never asked the perimeter
+    about the bypassed NIC. The card, no NIC open, no NIC known held, said « l'IP n'est plus
+    bloquée » of the whole VM. Now each NIC is said where it stands, and with no NIC open nor
+    unknown the card says « reste bloquée » where the perimeter holds."""
     _run(monkeypatch, _I3_NO_NIC_NET,
          ("perimeter_lifted_beside_a_block", WEB1, WEB1.lower(), ("nic.get", "always-429"), DB, False, DB, 22),
          ("tamper_with_our_rule", "retarget",
@@ -5294,7 +5337,9 @@ def test_the_reassertion_says_unblocked_naming_no_nic_where_our_perimeter_still_
          ("customer_removes_rule", _S101_NSG.format("rg-net", "nsg-subnet"), "allow-ssh"),
          ("turned_then_address_reused", WEB1, WEB1.lower(), ("subnet.get", "always-429"), None, "subnet",
           (_S101_NSG.format("rg-app1", "nsg-web-nic"), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"),
-          "human_only"))
+          "human_only",
+          # I3P: past the card, address_reused and the last pass go on (drawn plainly).
+          False, 22, False, "rg-new", "batch", None, "Linux", False, "human_only"))
 
 
 _APP1_API = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"

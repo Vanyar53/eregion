@@ -88,7 +88,16 @@ def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool,
     # With EREGION_EXERCISE_CHANNEL, the run's report goes to H0 at its end (#193).
     engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True,
                     without_glorfindel=without_glorfindel)
-    outcome = engine.run(path, skip_confirm=yes)
+    # One run at a time on Orodruin (#358): nothing launched by hand runs during a Dagorlad
+    # request — the request's lock, in the runs/ the engine writes to. A dry run touches nothing.
+    from eregion_core.exercise_runner import Busy, request_lock
+    lock = contextlib.nullcontext() if dry_run else request_lock("runs", f"run {os.path.basename(path)}")
+    try:
+        with lock:
+            outcome = engine.run(path, skip_confirm=yes)
+    except Busy as e:
+        console.print(f"[red]✗ run refused — busy: {e}[/red]")
+        raise SystemExit(EXIT_RUN_FAILED)
     code = run_exit_code(outcome)
     if code:
         _print_run_failure(outcome)

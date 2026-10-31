@@ -6,7 +6,7 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ### Changed
 - **One run at a time on Orodruin, a campaign by hand included; the paths it reads on Azure, stricter** (#358, after DG-b's second review; `docs/design/orodruin-contract.md`, « Un run à la fois »).
-  - The request's lock (`exercise_runner.request_lock`) is now taken by `annatar campaign run` too (`make orodruin-campaign-run`): a campaign during a request, or a request during a campaign, is refused (`busy`) — nothing runs, nothing is ratified. A preview (`--dry-run`) takes no lock; a wire of a request never does (it runs under its request's). The lock says what holds it (« request r-… », « campaign … »), printable characters only, and the one refused names it. `gothmog run` by hand follows once G1 is merged.
+  - The request's lock (`exercise_runner.request_lock`) is now taken by `annatar campaign run` too (`make orodruin-campaign-run`), and by `annatar run <scenario>` launched by hand: a campaign or a run during a request, or a request during either, is refused (`busy`) — nothing runs, nothing is ratified. A preview (`--dry-run`) takes no lock; a wire of a request never does (it runs under its request's). The lock says what holds it (« request r-… », « campaign … »), printable characters only, and the one refused names it. `gothmog run` by hand follows once G1 is merged.
   - `held.safe_path`, the check of every path Orodruin reads on Azure Resource Manager, also refuses a `.` or `..` segment and any character not printable (a control, a bidirectional override, a zero-width one); a path refused is not read, and the VM is held (A0).
   - Tests: `test_held.py`, `test_exercise_runner.py`, `test_campaign_runner.py`; mutants M2474–M2479.
 

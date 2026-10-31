@@ -207,3 +207,32 @@ def test_the_refusal_line_carries_a_hint(tmp_path, monkeypatch):
     res = _invoke(tmp_path, monkeypatch, executor, ATOMIC_YAML)
     assert "✗ run" in res.output
     assert "eregion-target" in res.output
+
+
+# ── #358: nothing launched by hand runs during a Dagorlad request ─────────────────────────────
+
+def test_a_run_by_hand_during_a_request_is_refused_and_touches_nothing(tmp_path, monkeypatch):
+    from eregion_core.exercise_runner import request_lock
+    monkeypatch.chdir(tmp_path)
+    ran = []
+    monkeypatch.setattr(Engine, "run", lambda self, path, skip_confirm=False: ran.append(path))
+    with request_lock(tmp_path / "runs", "request r-20261031T080000Z-abcdef"):
+        res = CliRunner().invoke(cli, ["run", EXFIL_YAML, "--yes"])
+        assert res.exit_code == 1, res.output
+        assert ran == []
+        said = " ".join(res.output.split())
+        assert "busy: request r-20261031T080000Z-abcdef runs on this Orodruin" in said
+        # A dry run touches nothing: no lock.
+        assert CliRunner().invoke(cli, ["run", EXFIL_YAML, "--dry-run"]).exit_code == 0
+    assert ran == [EXFIL_YAML]
+    # The request over, the run goes — and holds the lock while it runs.
+    from eregion_core.exercise_runner import Busy
+
+    def holding(self, path, skip_confirm=False):
+        with pytest.raises(Busy, match="^run data-exfiltration.yaml runs on this Orodruin"):
+            with request_lock(tmp_path / "runs", "request r-20261031T080000Z-abcdef"):
+                pass
+        ran.append(path)
+    monkeypatch.setattr(Engine, "run", holding)
+    assert CliRunner().invoke(cli, ["run", EXFIL_YAML, "--yes"]).exit_code == 0
+    assert ran == [EXFIL_YAML, EXFIL_YAML]

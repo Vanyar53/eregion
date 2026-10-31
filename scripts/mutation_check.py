@@ -6615,6 +6615,12 @@ MUTANTS += [
 ]
 TESTS.update({mid: _358_CORE for mid in ("M2474", "M2475", "M2477", "M2478", "M2479")})
 TESTS["M2476"] = "tests/unit/test_campaign_runner.py"
+MUTANTS += [
+    ("M2480", "a single run launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
+     '    lock = contextlib.nullcontext() if dry_run else request_lock("runs", f"run {os.path.basename(path)}")\n',
+     "    lock = contextlib.nullcontext()\n"),
+]
+TESTS["M2480"] = "tests/unit/test_annatar_run_exit.py"
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

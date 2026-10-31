@@ -595,8 +595,11 @@ porte l'identifiant de la demande, ainsi que son rapport (`metrics.request`).
 (`flock` sur `runs/orodruin/requests/.lock`, `exercise_runner.request_lock`), est pris :
 - par une demande, le temps de tous ses fils ;
 - par une campagne lancée à la main (`annatar campaign run`, `make orodruin-campaign-run`) : elle
-  mettrait une technique sur une VM qu'un fil tient, ou sous sa panne. Un aperçu (`--dry-run`) ne
-  lance rien et ne le prend pas.
+  mettrait une technique sur une VM qu'un fil tient, ou sous sa panne ;
+- par un run lancé à la main (`annatar run <scénario>`), pour la même raison : rien de lancé à la
+  main ne tourne pendant une demande.
+
+Un aperçu (`--dry-run`) ne lance rien et ne le prend pas.
 
 Jamais par un fil d'une demande : il tourne sous le verrou de sa demande. Le premier écrit ce qui le
 tient (« request r-… », « campaign … ») ; le suivant est refusé (`busy`) sans rien lancer ni

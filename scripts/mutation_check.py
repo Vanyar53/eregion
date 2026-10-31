@@ -6594,6 +6594,39 @@ TESTS.update({
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
 
+# L1R (#378, #381): a bypass said beside a pair altered — each deny of ours still there, whatever it
+# covers now, read for an allow before it; a perimeter block's own path too; a name homonyms share
+# read only as a deny that applies to the NIC (review). M2300–M2303.
+MUTANTS += [
+    ("M2300", "a block's pair altered: only a deny still blocking the attacker read, the allow before the "
+              "altered one unsaid (L1R)", VBL,
+     "            slot = _deny_slot(by_name.get(name.lower()), direction)\n",
+     "            slot = (_deny_slot(by_name.get(name.lower()), direction)\n"
+     "                    if _deny_blocks(by_name.get(name.lower()), direction, ip, ips) else None)\n"),
+    ("M2301", "an isolation's pair altered both ways: only a deny still cutting the NIC read, the bypass "
+              "unsaid (L1R)", VER,
+     "            slots = {d: _deny_slot(r, d) if n.lower() in hashed or _deny_applies(r, ips) else None\n",
+     "            slots = {d: _deny_slot(r, d) if _deny_isolates(r, d, ips) else None\n"),
+    ("M2302", "a perimeter block's pair altered or half gone: what is left never read, the bypass unsaid (L1R)", VBL,
+     '            half = self._half_bypassed(pair_cache, {"nsg_rg": nsg_rg, "nsg_name": nsg_name, "rule": entry["rule"]},\n',
+     '            half = [] and self._half_bypassed(pair_cache, {"nsg_rg": nsg_rg, "nsg_name": nsg_name,\n'
+     '                                                           "rule": entry["rule"]},\n'),
+    ("M2303", "a name homonyms share read as ours whatever it covers: another VM's deny gives a false bypass "
+              "card (L1R, review)", VER,
+     "            slots = {d: _deny_slot(r, d) if n.lower() in hashed or _deny_applies(r, ips) else None\n",
+     "            slots = {d: _deny_slot(r, d) if True else None\n"),
+]
+TESTS.update({
+    "M2300": ("tests/unit/test_invariant_regressions.py::test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused "
+              f"tests/unit/test_glorfindel.py::test_a_block_altered_inbound_and_bypassed_says_both {INVARIANTS}"),
+    "M2301": ("tests/unit/test_invariant_regressions.py::test_an_isolation_bypassed_after_the_role_is_taken_is_said "
+              "tests/unit/test_glorfindel.py::test_an_isolation_altered_both_ways_and_bypassed_says_both "
+              "tests/unit/test_glorfindel.py::test_an_isolation_altered_both_ways_says_an_allow_before_either_deny "
+              f"{INVARIANTS}"),
+    "M2302": f"tests/unit/test_glorfindel.py::test_a_perimeter_block_altered_and_bypassed_says_both {INVARIANTS}",
+    "M2303": f"tests/unit/test_glorfindel.py::test_a_homonyms_deny_under_a_shared_name_is_never_read_bypassed {INVARIANTS}",
+})
+
 # The suites of DG-b (#358): the paths Orodruin reads on Azure, stricter; the request's lock taken by
 # a campaign launched by hand, and saying what holds it. M2474–M2479 (Gothmog's part after G1).
 _358_CORE = "tests/unit/test_held.py tests/unit/test_exercise_runner.py"

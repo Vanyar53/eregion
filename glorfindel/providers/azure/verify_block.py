@@ -3,7 +3,8 @@ and the perimeter too (split out of unblock.py, I4B: moved without change).
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.nsg import _deny_blocks, _describe_shadowing, _rule_name, _shadowing_rules
+from glorfindel.providers.azure.nsg import (_deny_blocks, _deny_slot, _describe_shadowing, _rule_name,
+                                            _shadowing_rules)
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import _load_block_entries
@@ -180,7 +181,8 @@ class VerifyBlockMixin:
         # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):
             nsg_rg, nsg_name = entry["nsg"].split("/", 1)
-            st, names = self._block_pair_state({}, nsg_rg, nsg_name, entry["rule"], ip, None)
+            pair_cache: dict = {}
+            st, names = self._block_pair_state(pair_cache, nsg_rg, nsg_name, entry["rule"], ip, None)
             missing = names if st in ("absent", "altered") else []
             if st == "unknown":
                 return {"verified": None, "method": "nsg_check", "unreadable_rules": names,
@@ -207,8 +209,14 @@ class VerifyBlockMixin:
                                 "error": f"le périmètre ne couvre pas {', '.join(off)} (autre subnet)"}
                 return {"verified": True, "method": "nsg_check", "rule": entry["rule"],
                         **({"exposure": shadowed} if shadowed else {})}
+            # What is left of the pair, an allow before it (L1R): said with what is gone, as
+            # for a VM's block (L1C) — this path read the pair « missing » alone.
+            half = self._half_bypassed(pair_cache, {"nsg_rg": nsg_rg, "nsg_name": nsg_name, "rule": entry["rule"]},
+                                       ip, None, entry.get("threat_port"))
             return {"verified": False, "method": "nsg_check", "missing_rules": missing,
-                    "error": f"rules missing: {', '.join(missing)}"}
+                    **({"shadowed_by": half} if half else {}),
+                    "error": f"rules missing: {', '.join(missing)}"
+                             + (f" ; contourné : {_describe_shadowing(half)}" if half else "")}
 
         # No state — recompute per-NIC names (multi-NIC) and check coverage.
         prefix = self._block_rule_prefix(ip)
@@ -263,15 +271,17 @@ class VerifyBlockMixin:
         return ("altered", altered) if altered else ("present", [])
 
     def _half_bypassed(self, cache: dict, p: dict, ip: str, ips: list[str] | None, port) -> list[dict]:
-        """A pair gone or altered in one direction: the other, still a block of `ip`, passed
-        by an allow before it that lets the threat through — [] otherwise (L1C, #369)."""
+        """A pair gone or altered: each of its denies still there — a block of `ip`, or
+        altered — passed by an allow before it that lets the threat through; [] otherwise
+        (L1C, #369). Only a deny that still blocked was read: the inbound one narrowed to
+        another port, the allow before it was never read (L1R, #381)."""
         rules = self._list_rules(cache, p["nsg_rg"], p["nsg_name"]) or []
         by_name = {_rule_name(r).lower(): r for r in rules}
         prio = {}
         for direction, name in (("inbound", p["rule"]), ("outbound", f'{p["rule"]}-out')):
-            r = by_name.get(name.lower())
-            if r is not None and isinstance(getattr(r, "priority", None), int) and _deny_blocks(r, direction, ip, ips):
-                prio[direction] = r.priority
+            slot = _deny_slot(by_name.get(name.lower()), direction)
+            if slot is not None:
+                prio[direction] = slot
         found = [{**f, "nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}'} for f in _shadowing_rules(
             rules, prio, inbound_src=[ip], inbound_dst=ips, outbound_src=ips, outbound_dst=[ip], port=port)] if prio else []
         return found if self._threat_open(found) else []

@@ -5139,15 +5139,19 @@ _S1006_2000_NET = {
     "legacy": None, "data_subnet": None}
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#378: L1, an isolation bypassed after the role was taken away left unsaid")
-def test_an_isolation_bypassed_after_the_role_is_taken_is_said(monkeypatch):
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+@pytest.mark.parametrize("nth", [1, 3, 6])
+def test_an_isolation_bypassed_after_the_role_is_taken_is_said(monkeypatch, mode, nth):
     """U7D's runs, the machine at 2 000 (seed 1006; 14 steps as Hypothesis shrank them): api
-    isolated by rules on its own NSG, the role taken away, our rules tampered with, the
-    configuration unreadable, the state lost, then a bypass (`said_then_back_after_a_full_disk`):
-    « L1: the isolation of …/rg-edge/…/api is bypassed by a customer allow (…22); the reassertion
-    doesn't say so ». No unblock in it: red on `main` e75d527, and still on 48e42c8 after L1C
-    (#369) — outside U7D, routed to #378. Strict: once fixed, this fails, and the mark goes."""
+    isolated by rules on its own NSG (the first rule), the role taken away, our `-out` turned
+    into an allow, our inbound deny moved to 4000 and narrowed to port 22; then a bypass
+    (`said_then_back_after_a_full_disk`): the customer's deny-lateral-in at 130 widened into an
+    allow of all — « L1: the isolation of …/rg-edge/…/api is bypassed by a customer allow
+    (…22); the reassertion doesn't say so ». Neither the role nor the lost state (web1's) nor
+    the configuration: both rules of the pair altered, `_half_shadowed` read only a pair with
+    one deny still cutting the NIC — the allow before the inbound deny, still there at 4000,
+    was never read; the NIC said uncovered alone (L1R, #378). Then through the full disk and
+    back, as the machine goes on."""
     nsg = _NSG.format(rg="rg-edge", name="nsg-api-nic")
     iso = "glorfindel-iso-api-api-nic-c272f2"
     _replay(monkeypatch, _S1006_2000_NET,
@@ -5166,7 +5170,7 @@ def test_an_isolation_bypassed_after_the_role_is_taken_is_said(monkeypatch):
             ("config_changes", {"quarantine": False, "rg": "", "forensic": [], "readable": True}, False),
             ("lose_state", WEB1),
             ("said_then_back_after_a_full_disk", "bypass", API, API, None, True, (4000, nsg), "deny-lateral-in",
-             "human_only"))
+             "human_only", mode, (nth, "from-full"), mode))
 
 
 _S322_2000_NET = {
@@ -5342,21 +5346,25 @@ def test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic(monkeypatc
           "non_disruptive"))
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#381: L1, a block bypassed beside its own deny altered, writes refused, unsaid")
-def test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused(monkeypatch):
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+@pytest.mark.parametrize("nth", [1, 3, 6])
+def test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused(monkeypatch, mode, nth):
     """L1Q's machine at 2 000 (seed 322), shrunk to 5 rules without L1Q's rule: web2 blocked, its
-    inbound deny's port altered by someone, the role removed (writes refused), a customer allow
-    added before the deny and widened — « L1: the block of …/web is bypassed by a customer allow;
-    the reassertion doesn't say so ». The family of L1C (#369: a bypass beside a half pair); not a
-    drift episode's."""
+    inbound deny narrowed to port 22, the role removed (writes refused), a customer allow added
+    at 100, before the deny at 200, and widened into an allow of all — « L1: the block of …/web
+    is bypassed by a customer allow; the reassertion doesn't say so ». The pair read `altered`
+    (its inbound rule no longer denies every port); `_half_bypassed` read only a deny still
+    blocking the attacker — the `-out`, which no inbound allow passes — and never the allow
+    before the inbound deny still there at 200: the altered rule alone, no bypass card (L1R,
+    #381). The writes refused only keep the deny from being put back. Then through the full
+    disk and back, as the machine goes on."""
     _run(monkeypatch, _net(subnet_nsg=[]),
          ("block", WEB2, WEB2, None, 22),
          ("tamper_with_our_rule", "port", (_SUBNET, "glorfindel-block-192-31-196-7-web-web-nic-80ab3c")),
          ("access_changes", True),
          ("customer_adds_rule", _SUBNET, "allow-https", 100),
          ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2, None, False, 22, (200, _SUBNET),
-          "allow-https-100", "non_disruptive"))
+          "allow-https-100", "non_disruptive", mode, (nth, "from-full"), mode))
 
 
 _SSH_IN = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",

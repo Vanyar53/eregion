@@ -3,7 +3,8 @@ allow before our deny (moved from actions.py, A1).
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.nsg import _deny_isolates, _describe_shadowing, _rule_name, _shadowing_rules
+from glorfindel.providers.azure.nsg import (_deny_applies, _deny_isolates, _deny_slot, _describe_shadowing,
+                                            _rule_name, _shadowing_rules)
 from glorfindel.providers.azure.quarantine import _is_quarantine_nsg, PLATFORM_OPEN_NOTE
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.legacy_state import _older_record
@@ -171,16 +172,25 @@ class VerifyMixin:
         return gone
 
     def _half_shadowed(self, vm_name: str, t: dict, rules: list) -> list[dict]:
-        """A pair of this NIC's on this NSG gone or altered in one direction: the other, still
-        a deny that cuts the NIC, passed by an allow before it (L1C, #369)."""
+        """A pair of this NIC's on this NSG gone or altered: each of its denies still there —
+        one that cuts the NIC, or altered — passed by an allow before it (L1C, #369). Only a
+        pair with one deny intact was read: both altered (the `-out` turned into an allow,
+        the inbound narrowed to a port), the allow before the inbound was never read (L1R,
+        #378). The caller found no pair of the NIC's that cuts it here: none is whole.
+        « Whatever it covers » only for a name with the NIC's hash (only Glorfindel writes it):
+        an older name, or the VM-suffixed one, is shared by homonyms — a deny of another VM's,
+        aimed at its own addresses, read as ours gave a false bypass card (L24; L1R, review).
+        Such a name counts only as a deny that applies to the NIC (`_deny_applies`)."""
         by_name = {_rule_name(r).lower(): r for r in rules}
         ips = t.get("private_ips") or None
+        hashed = {n.lower() for b in self._placement_rule_bases("glorfindel-iso", vm_name, t["nic_short"], t["nic_id"])
+                  for n in (b, f"{b}-out")}
         found: list[dict] = []
         for pair in self._isolation_pairs(vm_name, t):
-            rs = [(d, by_name.get(n.lower())) for d, n in zip(("inbound", "outbound"), pair)]
-            prio = {d: r.priority for d, r in rs
-                    if isinstance(getattr(r, "priority", None), int) and _deny_isolates(r, d, ips)}
-            if len(prio) == 1:
+            slots = {d: _deny_slot(r, d) if n.lower() in hashed or _deny_applies(r, ips) else None
+                     for d, n in zip(("inbound", "outbound"), pair) for r in [by_name.get(n.lower())]}
+            prio = {d: s for d, s in slots.items() if s is not None}
+            if prio:
                 found += [{**f, "nsg": f'{t["nsg_rg"]}/{t["nsg_name"]}'} for f in _shadowing_rules(
                     rules, prio, inbound_src=None, inbound_dst=ips, outbound_src=ips, outbound_dst=None)]
         return [f for i, f in enumerate(found) if f not in found[:i]]     # once each (two names' halves)

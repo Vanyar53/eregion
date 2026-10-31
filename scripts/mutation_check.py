@@ -6595,7 +6595,7 @@ TESTS.update({
 })
 
 # L1R (#378, #381): a bypass said beside a pair altered — each deny of ours still there, whatever it
-# covers now, read for an allow before it. M2300–M2301.
+# covers now, read for an allow before it; a perimeter block's own path too. M2300–M2302.
 MUTANTS += [
     ("M2300", "a block's pair altered: only a deny still blocking the attacker read, the allow before the "
               "altered one unsaid (L1R)", VBL,
@@ -6607,6 +6607,10 @@ MUTANTS += [
      '            slots = {d: _deny_slot(by_name.get(n.lower()), d) for d, n in zip(("inbound", "outbound"), pair)}\n',
      '            slots = {d: _deny_slot(by_name.get(n.lower()), d) if _deny_isolates(by_name.get(n.lower()), d, ips)\n'
      '                     else None for d, n in zip(("inbound", "outbound"), pair)}\n'),
+    ("M2302", "a perimeter block's pair altered or half gone: what is left never read, the bypass unsaid (L1R)", VBL,
+     '            half = self._half_bypassed(pair_cache, {"nsg_rg": nsg_rg, "nsg_name": nsg_name, "rule": entry["rule"]},\n',
+     '            half = [] and self._half_bypassed(pair_cache, {"nsg_rg": nsg_rg, "nsg_name": nsg_name,\n'
+     '                                                           "rule": entry["rule"]},\n'),
 ]
 TESTS.update({
     "M2300": ("tests/unit/test_invariant_regressions.py::test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused "
@@ -6615,6 +6619,7 @@ TESTS.update({
               "tests/unit/test_glorfindel.py::test_an_isolation_altered_both_ways_and_bypassed_says_both "
               "tests/unit/test_glorfindel.py::test_an_isolation_altered_both_ways_says_an_allow_before_either_deny "
               f"{INVARIANTS}"),
+    "M2302": f"tests/unit/test_glorfindel.py::test_a_perimeter_block_altered_and_bypassed_says_both {INVARIANTS}",
 })
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

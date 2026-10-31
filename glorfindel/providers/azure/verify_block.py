@@ -181,7 +181,8 @@ class VerifyBlockMixin:
         # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):
             nsg_rg, nsg_name = entry["nsg"].split("/", 1)
-            st, names = self._block_pair_state({}, nsg_rg, nsg_name, entry["rule"], ip, None)
+            pair_cache: dict = {}
+            st, names = self._block_pair_state(pair_cache, nsg_rg, nsg_name, entry["rule"], ip, None)
             missing = names if st in ("absent", "altered") else []
             if st == "unknown":
                 return {"verified": None, "method": "nsg_check", "unreadable_rules": names,
@@ -208,8 +209,14 @@ class VerifyBlockMixin:
                                 "error": f"le périmètre ne couvre pas {', '.join(off)} (autre subnet)"}
                 return {"verified": True, "method": "nsg_check", "rule": entry["rule"],
                         **({"exposure": shadowed} if shadowed else {})}
+            # What is left of the pair, an allow before it (L1R): said with what is gone, as
+            # for a VM's block (L1C) — this path read the pair « missing » alone.
+            half = self._half_bypassed(pair_cache, {"nsg_rg": nsg_rg, "nsg_name": nsg_name, "rule": entry["rule"]},
+                                       ip, None, entry.get("threat_port"))
             return {"verified": False, "method": "nsg_check", "missing_rules": missing,
-                    "error": f"rules missing: {', '.join(missing)}"}
+                    **({"shadowed_by": half} if half else {}),
+                    "error": f"rules missing: {', '.join(missing)}"
+                             + (f" ; contourné : {_describe_shadowing(half)}" if half else "")}
 
         # No state — recompute per-NIC names (multi-NIC) and check coverage.
         prefix = self._block_rule_prefix(ip)

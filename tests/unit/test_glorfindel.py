@@ -3806,6 +3806,37 @@ def test_a_block_altered_inbound_and_bypassed_says_both(monkeypatch, how):
         assert out["missing_rules"] and "shadowed_by" not in out, out
 
 
+@pytest.mark.parametrize("gone", ["inbound altered", "outbound gone"])
+def test_a_perimeter_block_altered_and_bypassed_says_both(monkeypatch, gone):
+    """L1R: a perimeter block (one pair on the subnet's NSG, any VM behind it), its inbound
+    deny narrowed to port 22 or its `-out` gone, an allow of all before the inbound deny. Its
+    own path read the pair « missing » alone — what was left never read, as for a VM's
+    block before L1C. Both now; an allow after the deny, nothing."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule = "glorfindel-block-192-31-196-7-subnet"
+    _save_block_state("vm", "192.31.196.7", _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule=rule,
+                      scoped=False, threat_port=22)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    net = MagicMock()
+    connector._network = net
+
+    def pair():
+        whole = _block_pair(rule, "192.31.196.7", vm_ip="*")
+        return [_altered(whole[0], "port"), whole[1]] if gone == "inbound altered" else whole[:1]
+    for prio, bypassed in ((300, False), (100, True)):
+        _listings(net, {"nsg-subnet": [_nsg_rule("wide", prio, port="*"), *pair()]})
+        out = connector.verify_block_ip("192.31.196.7", _RID)
+        assert out["verified"] is False and out["missing_rules"] == (
+            [rule] if gone == "inbound altered" else [f"{rule}-out"]), out
+        assert [s["rule"] for s in out.get("shadowed_by") or []] == (["wide"] if bypassed else []), out
+    from glorfindel import escalations
+    from glorfindel.reassert import _reassert_block
+    _reassert_block(connector, None, "vm", "192.31.196.7", [], ref=_RID)
+    said = {e["escalation_type"] for e in escalations.pending()}
+    assert {"bypassed", "verification_failed"} <= said, said
+
+
 # ── Sixième passe (L25) : S1, une config illisible ou changée ne fait plus perdre l'original ──
 
 def test_forensic_ports_written_without_a_list_or_as_strings(monkeypatch, tmp_path):

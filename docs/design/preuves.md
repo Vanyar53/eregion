@@ -2812,7 +2812,14 @@ de la référence dans l'entrée ne changeait rien (après un redémarrage, la d
 toute façon) et ajoutait une écriture qui peut échouer : retirée, la référence vit en mémoire.
 (5) La règle de la machine sort de la PR (ci-dessus) ; les trois `xfail` citent #379, #380, #381.
 
-**Mesures de L1Q** MEASURES
+**Mesures de L1Q** (après la relecture, la règle sortie, `main` 8295975 fusionné). `pytest` complet :
+4 679 réussis, 7 sautés, 7 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 686 mutants, sans
+faute. Invariants à 500 séquences sur les graines 1, 7, 42, 43, 71, 101, 322, 555, 8675 et 31337 :
+10/10 vertes (sans la règle, les tirages sont ceux de `main`). Mutants M2150–M2155 : 6/6 par leurs
+tests à chaque tour (60 séquences, deux tours, graine 4242) ; M1646 attrapé par le cas « remise à la
+main ». Avant la relecture (la règle en place, 48e42c8) : harnais avant/après sur les mutants de
+l'état et de la réaffirmation, 74/78 des deux côtés, plus M2150–M2152 (77/81) — M13 et M37 par leurs
+seules séquences figées, M36 et M1645 survivent, des deux côtés ; aucun perdu.
 
 **U7D (30/10, #368) : la graine 1006, l'opérateur du démontage ; un déblocage partiel élague son
 état.** Le défaut figé en `xfail` strict par la relecture de L1B, atteint à 60 séquences.

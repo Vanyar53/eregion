@@ -3,7 +3,8 @@ and the perimeter too (split out of unblock.py, I4B: moved without change).
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.nsg import _deny_blocks, _describe_shadowing, _rule_name, _shadowing_rules
+from glorfindel.providers.azure.nsg import (_deny_blocks, _deny_slot, _describe_shadowing, _rule_name,
+                                            _shadowing_rules)
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import _load_block_entries
@@ -263,15 +264,17 @@ class VerifyBlockMixin:
         return ("altered", altered) if altered else ("present", [])
 
     def _half_bypassed(self, cache: dict, p: dict, ip: str, ips: list[str] | None, port) -> list[dict]:
-        """A pair gone or altered in one direction: the other, still a block of `ip`, passed
-        by an allow before it that lets the threat through — [] otherwise (L1C, #369)."""
+        """A pair gone or altered: each of its denies still there — a block of `ip`, or
+        altered — passed by an allow before it that lets the threat through; [] otherwise
+        (L1C, #369). Only a deny that still blocked was read: the inbound one narrowed to
+        another port, the allow before it was never read (L1R, #381)."""
         rules = self._list_rules(cache, p["nsg_rg"], p["nsg_name"]) or []
         by_name = {_rule_name(r).lower(): r for r in rules}
         prio = {}
         for direction, name in (("inbound", p["rule"]), ("outbound", f'{p["rule"]}-out')):
-            r = by_name.get(name.lower())
-            if r is not None and isinstance(getattr(r, "priority", None), int) and _deny_blocks(r, direction, ip, ips):
-                prio[direction] = r.priority
+            slot = _deny_slot(by_name.get(name.lower()), direction)
+            if slot is not None:
+                prio[direction] = slot
         found = [{**f, "nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}'} for f in _shadowing_rules(
             rules, prio, inbound_src=[ip], inbound_dst=ips, outbound_src=ips, outbound_dst=[ip], port=port)] if prio else []
         return found if self._threat_open(found) else []

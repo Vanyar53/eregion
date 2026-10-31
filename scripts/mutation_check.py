@@ -6594,6 +6594,29 @@ TESTS.update({
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
 
+# L1R (#378, #381): a bypass said beside a pair altered — each deny of ours still there, whatever it
+# covers now, read for an allow before it. M2300–M2301.
+MUTANTS += [
+    ("M2300", "a block's pair altered: only a deny still blocking the attacker read, the allow before the "
+              "altered one unsaid (L1R)", VBL,
+     "            slot = _deny_slot(by_name.get(name.lower()), direction)\n",
+     "            slot = (_deny_slot(by_name.get(name.lower()), direction)\n"
+     "                    if _deny_blocks(by_name.get(name.lower()), direction, ip, ips) else None)\n"),
+    ("M2301", "an isolation's pair altered both ways: only a deny still cutting the NIC read, the bypass "
+              "unsaid (L1R)", VER,
+     '            slots = {d: _deny_slot(by_name.get(n.lower()), d) for d, n in zip(("inbound", "outbound"), pair)}\n',
+     '            slots = {d: _deny_slot(by_name.get(n.lower()), d) if _deny_isolates(by_name.get(n.lower()), d, ips)\n'
+     '                     else None for d, n in zip(("inbound", "outbound"), pair)}\n'),
+]
+TESTS.update({
+    "M2300": ("tests/unit/test_invariant_regressions.py::test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused "
+              f"tests/unit/test_glorfindel.py::test_a_block_altered_inbound_and_bypassed_says_both {INVARIANTS}"),
+    "M2301": ("tests/unit/test_invariant_regressions.py::test_an_isolation_bypassed_after_the_role_is_taken_is_said "
+              "tests/unit/test_glorfindel.py::test_an_isolation_altered_both_ways_and_bypassed_says_both "
+              "tests/unit/test_glorfindel.py::test_an_isolation_altered_both_ways_says_an_allow_before_either_deny "
+              f"{INVARIANTS}"),
+})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

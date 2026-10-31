@@ -2491,6 +2491,57 @@ def test_two_half_pairs_behind_one_allow_name_it_once(monkeypatch):
     assert out["uncovered_nics"] == ["nic-a"] and [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
 
 
+def _altered(rule, how):
+    """One of our denies edited by hand, still a deny: narrowed to a port, to a protocol, or
+    to another address (`how`)."""
+    if how == "port":
+        rule.destination_port_range = "22"
+    elif how == "protocol":
+        rule.protocol = "Udp"
+    else:
+        side = "destination" if rule.direction == "Inbound" else "source"
+        setattr(rule, f"{side}_address_prefix", "10.0.0.99")
+    return rule
+
+
+@pytest.mark.parametrize("how", ["port", "protocol", "address"])
+def test_an_isolation_altered_both_ways_and_bypassed_says_both(monkeypatch, how):
+    """L1R (#378), seed 1006 at 2 000: the pair's `-out` turned into an allow, its inbound deny
+    altered too, an allow before it. Only a pair with one deny still cutting the NIC was read:
+    the NIC said uncovered alone, the bypass never carded (L1). Both now; an allow after the
+    deny bypasses nothing."""
+    out_turned = _nsg_rule(f"{_iso_name()}-out", 101, direction="Outbound", access="Allow", src="10.0.0.5", port="*")
+
+    def inbound():
+        return _altered(_deny_pair(_iso_name(), 101, ip="10.0.0.5")[0], how)
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), inbound(), out_turned]})
+    assert out["uncovered_nics"] == ["nic-a"] and [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
+    from glorfindel.reassert_cards import _bypassing
+    assert _bypassing(out, "")
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule("allow-ssh", 200), inbound(), out_turned]})
+    assert out["uncovered_nics"] == ["nic-a"] and "shadowed_by" not in out
+
+
+def test_an_isolation_altered_both_ways_says_an_allow_before_either_deny(monkeypatch):
+    """L1R: both denies still there, both narrowed (the inbound to port 22, the `-out` to
+    443), an outbound allow before the `-out`: the VM still reaches out — said. A pair whose
+    two rules are turned into allows has no deny of ours left for an allow to pass: nothing
+    (its rules said gone, as before)."""
+    pair = _deny_pair(_iso_name(), 101, ip="10.0.0.5")
+    out_wide = _nsg_rule("allow-lateral-out", 100, direction="Outbound", src="*", dst="*", port="*")
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [out_wide, _altered(pair[0], "port"), _altered(pair[1], "port")]})
+    assert out["uncovered_nics"] == ["nic-a"], out
+    assert [(s["rule"], s["direction"]) for s in out["shadowed_by"]] == [("allow-lateral-out", "outbound")], out
+    turned = [_nsg_rule(_iso_name(), 101, access="Allow", dst="10.0.0.5", port="*"),
+              _nsg_rule(f"{_iso_name()}-out", 101, direction="Outbound", access="Allow", src="10.0.0.5", port="*")]
+    out = _verifying(monkeypatch, [_nic_target(nsg_name="nsg-nic", scope="nic")],
+                     {"nsg-nic": [_nsg_rule(**_BENCH_ALLOW_SSH), out_wide, *turned]})
+    assert out["uncovered_nics"] == ["nic-a"] and "shadowed_by" not in out, out
+
+
 def test_an_unreadable_subnet_is_not_a_subnet_without_nsg(monkeypatch):
     """A 429 on the subnet read meant "no subnet NSG": a release without state swept
     nothing and said released while the isolation stayed on the subnet NSG (L24)."""
@@ -3727,6 +3778,32 @@ def test_a_half_bypassed_pair_keeps_another_placement_gone_on_the_nic(monkeypatc
     out = connector.verify_block_ip("192.31.196.7", _RID)
     assert set(out["missing_rules"]) == {f"{r1}-out", r2, f"{r2}-out"}, out
     assert [s["rule"] for s in out["shadowed_by"]] == ["wide"], out
+
+
+@pytest.mark.parametrize("how", ["port", "protocol", "address"])
+def test_a_block_altered_inbound_and_bypassed_says_both(monkeypatch, how):
+    """L1R (#381), seed 322 at 2 000: the block's inbound deny edited by hand, still a deny
+    (narrowed to port 22, to UDP, aimed at another address: `altered`), an allow of all
+    before it. Only a deny still blocking the attacker was read — the `-out`, which no inbound
+    allow passes —: the altered rule alone, no bypass card (L1). Both now, and the
+    reassertion says both; an allow that leaves the threat out, or after the deny, nothing."""
+    from glorfindel import escalations
+    from glorfindel.reassert import _missing, _reassert_block
+
+    def pair(r):
+        whole = _block_pair(r, "192.31.196.7")
+        return [_altered(whole[0], how), whole[1]]
+    connector = _blocked_on(monkeypatch, {"nic-a": lambda r: [_nsg_rule("wide", 100, port="*"), *pair(r)]})
+    out = connector.verify_block_ip("192.31.196.7", _RID)
+    assert out["missing_rules"] == ["glorfindel-block-192-31-196-7-vm-nic-a-1"] and _missing(out), out
+    assert [s["rule"] for s in out["shadowed_by"]] == ["wide"], out
+    _reassert_block(connector, None, "vm", "192.31.196.7", [], ref=_RID)
+    said = {e["escalation_type"] for e in escalations.pending()}
+    assert {"bypassed", "verification_failed"} <= said, said
+    for allow in (_nsg_rule("allow-https", 100, port="443"), _nsg_rule("wide", 300, port="*")):
+        connector = _blocked_on(monkeypatch, {"nic-a": lambda r: [allow, *pair(r)]})
+        out = connector.verify_block_ip("192.31.196.7", _RID)
+        assert out["missing_rules"] and "shadowed_by" not in out, out
 
 
 # ── Sixième passe (L25) : S1, une config illisible ou changée ne fait plus perdre l'original ──

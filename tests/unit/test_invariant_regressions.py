@@ -5141,3 +5141,47 @@ def test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused(monkey
          ("customer_adds_rule", _SUBNET, "allow-https", 100),
          ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2, None, False, 22, (200, _SUBNET),
           "allow-https-100", "non_disruptive"))
+
+
+_SSH_IN = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+               destination_port_range="22")
+_S555_NET = {
+    "subnet_nsg": None, "edge_nsg": None,
+    "tier_rules": [_rule("allow-ssh", 100, _SSH_IN),
+                   _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                                        destination_address_prefix="VirtualNetwork",
+                                                        destination_port_range="*"))],
+    "nics": {"web-nic": {"own": "dedicated", "rules": [], "policy": False},
+             "db-nic-0": {"own": None, "rules": [], "policy": False},
+             "db-nic-1": {"own": None, "rules": [_rule("allow-ssh", 100, _SSH_IN)], "policy": True},
+             "api-nic": {"own": None, "rules": [_rule("deny-lateral-in", 130, dict(
+                 access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                 destination_address_prefix="*", destination_port_range="*"))], "policy": False}},
+    "windows": None, "config": {"quarantine": False, "forensic": [], "readable": True, "rg": ""},
+    "legacy": None, "data_subnet": None}
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="L1Q: I3, a release said released, an isolation rule kept after a lost state")
+def test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps(monkeypatch):
+    """L1Q's machine at 500 (seed 555), shrunk to 7 rules, none of L1Q's: web1 blocked and isolated,
+    released; web2 and web1 each isolated with a rule of theirs kept at the lift (I4C), web2 left
+    bare with an unknown original, Db--01 blocked with a rule turned, web2's state lost, then an
+    isolation of web2 cut before a crash — « I3 (said): release_isolation said released, rules of
+    …/rg-app2/…/web kept: ['glorfindel-iso-web-web-nic-80ab3c'] ». Red on `main` 48e42c8. The
+    family of I4C (what a release keeps is said); not a drift's."""
+    nsg = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/networksecuritygroups/nsg-web-nic"
+    nic = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/networkinterfaces/web-nic"
+    _run(monkeypatch, _S555_NET,
+         ("block_then_isolate", WEB1, WEB1, None, 22, None, True, True),
+         ("kept_at_the_lift", WEB2, WEB2, None, "release", (nsg.format("rg-app2"), "glorfindel-iso-web-web-nic-80ab3c"),
+          nic.format("rg-app2"), 0, 4, "rg-new", "web",
+          "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Network/networkSecurityGroups/nsg-web-nic",
+          "Linux", True),
+         ("kept_at_the_lift", WEB1, WEB1, None, "release", (nsg.format("rg-app1"), "glorfindel-iso-web-web-nic-8b70f2"),
+          nic.format("rg-app1"), 0, 4, "rg-app1", "api", None, "Linux", True),
+         ("bare_with_an_unknown_original", WEB2, WEB2, None, nic.format("rg-app2"), "release twice"),
+         ("block_turned_then_reasserted", DB, DB, None, "both", 22,
+          (nsg.format("rg-app1"), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"), "non_disruptive"),
+         ("lose_state", WEB2),
+         ("interrupted_isolation", WEB2, WEB2, None, 1, "before-crash", None))

@@ -2790,7 +2790,7 @@ d380df5 et passe avec le démontage corrigé ; à 500, les graines 1, 42, 101, 3
 même message sur `main` e75d527 : **hors du lot**, la famille de #369 (L1C, en vol), figées en `xfail` strict
 (depuis la relecture : la 322 réglée par L1C, la 1006 routée vers #378 — ci-dessous)
 (`test_an_isolation_bypassed_after_the_role_is_taken_is_said`, `test_a_block_bypassed_after_the_role_is_taken_is_said` ;
-`_replay` rejoue une séquence telle qu'Hypothesis l'imprime, ses tirages dans un seul script). Harnais avant/après (60 séquences, deux tours, `--jobs 4`,
+`_replay` rejoue une séquence telle qu'Hypothesis l'imprime, une règle à la fois depuis la relecture, chacune avec ses propres tirages). Harnais avant/après (60 séquences, deux tours, `--jobs 4`,
 `--hypothesis-seed=7368`) sur les 70 mutants du déblocage, du blocage, des règles retournées et de la
 vérification du blocage : 65/70 attrapés à chaque tour sur e75d527, 65/70 après, à l'identique (M19,
 M21, M23, M38 et M1964 par leurs séquences figées seules, des deux côtés), plus les trois nouveaux

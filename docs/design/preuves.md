@@ -3068,6 +3068,50 @@ Harnais avant/après sur les 97 mutants du déblocage, du blocage, des règles r
 de l'état : 91/97 sur 48e42c8, 91/97 après, mutant par mutant à l'identique (M19, M21, M23, M38, M1964 par leurs
 séquences figées seules ; M36 survit des deux côtés, comme avant). Aucun perdu.
 
+**L1R (31/10, #378, #381) : un contournement dit à côté d'une paire modifiée, quoi qu'il en reste.** Les deux
+séquences de la machine à 2 000 figées en `xfail` strict : la graine 1006 (U7D, une isolation d'api) et la graine 322
+(L1Q, un blocage de web2). Les titres des deux issues mettaient en cause le rôle retiré ; **la cause, établie** (la
+vérification tracée à chaque passe des deux séquences rejouées, les règles du NSG relevées) **n'est pas le rôle** —
+les écritures refusées n'empêchaient que de reposer le deny —, et c'est bien la famille de L1C, par une porte que L1C
+avait laissée. **Graine 1006** : api isolée par règles sur son propre NSG (la première règle), puis le `-out` retourné
+en allow (`tamper_with_our_rule`, « access »), le deny entrant déplacé à 4000 (« priority ») et réduit au port 22
+(« port ») ; le deny-lateral-in du client, à 130, élargi en allow de tout. Aucune des deux règles de la paire ne coupe
+plus la carte : `_half_shadowed` ne lisait qu'une paire dont un sens coupait encore (`len(prio) == 1`), il ne lisait
+rien — la carte « non couverte » seule, l'allow avant notre deny à 4000 jamais lue. `_half_shadowed` de L1C ne
+couvrait donc pas ce cas : il le supposait intact d'un côté. **Graine 322** : web2 bloquée sur le NSG du sous-réseau,
+son deny entrant réduit au port 22 (`altered` : il ne refuse plus tous les ports), une allow du client ajoutée à 100,
+avant notre deny à 200, puis élargie en allow de tout. `_half_bypassed` ne lisait qu'un deny encore bloquant
+l'attaquant — le `-out`, qu'aucune allow entrante ne passe — et jamais le deny entrant resté à sa place : la règle
+modifiée seule, aucune carte de contournement. **Cause commune** : ce qui reste d'une paire ne se lisait que par un
+deny intact ; un deny de Glorfindel resté à sa place mais modifié (un port, un protocole, une adresse, une priorité)
+n'était pas lu, et l'allow avant lui, qui laisse passer la menace, pas dite (L1).
+
+**Correctif** (`providers/azure/nsg.py`, `_deny_slot` ; `verify.py`, `_half_shadowed` ; `verify_block.py`,
+`_half_bypassed`). Chaque deny de la paire encore là, quoi qu'il couvre maintenant, est lu pour une allow avant lui
+(sa priorité et son sens) ; pour un blocage, seule une allow qui laisse passer la menace compte, comme avant. Une règle
+retournée en allow n'est plus un deny de Glorfindel : rien ne passe « avant » elle — la carte de dérive la dit, et
+l'oracle du contournement (`_bypass_comes_back`) ne tire lui aussi que nos deny entrants. La réaffirmation n'a pas
+changé : elle écrivait déjà les deux cartes dès que la vérification rendait `shadowed_by` à côté de ce qui manque
+(L1C). **Trouvé en route, même famille** : un blocage de périmètre seul (une paire sur le NSG du sous-réseau, aucun
+placement : `block_perimeter`) a son propre chemin dans `verify_block_ip`, qui lisait la paire « manquante » seule —
+le défaut de L1C, que L1C n'avait corrigé que pour le chemin des placements. Il lit maintenant ce qui reste de la
+paire (`_half_bypassed`, la portée « toute VM derrière le NSG ») et le rend à côté de ce qui manque ; la réaffirmation
+écrit les deux cartes. La machine n'y arrive pas par `_bypass_comes_back` (son blocage de la VM écrit des placements) :
+construit à la main. **La machine** : aucune règle retirée ni restreinte, aucun oracle touché ; elle atteignait déjà l'état. Figés :
+les deux séquences, leur `xfail` levé, complétées jusqu'au bout de la règle (le disque plein à la 1re, 3e ou 6e
+écriture, `human_only` ou `non_disruptive` : douze cas) ; `test_glorfindel.py` :
+`test_an_isolation_altered_both_ways_and_bypassed_says_both` (un port, un protocole, une adresse ; une allow après le
+deny ne contourne rien), `test_an_isolation_altered_both_ways_says_an_allow_before_either_deny` (les deux deny réduits,
+une allow sortante avant le `-out` ; une paire retournée en entier : rien), `test_a_block_altered_inbound_and_bypassed_says_both`
+(un port, un protocole, une adresse ; la réaffirmation écrit les deux cartes ; une allow qui laisse la menace dehors,
+ou après le deny : rien), `test_a_perimeter_block_altered_and_bypassed_says_both` (le deny entrant réduit, ou le
+`-out` parti ; les deux cartes). Les douze cas et les neuf tests unitaires, rouges sur `origin/main` 72bb58f.
+
+**Mutants M2300–M2302** (le blocage : seul un deny encore bloquant lu ; l'isolation : seul un deny qui coupe encore la
+carte lu ; le périmètre seul : ce qui reste jamais lu) : 3/3 par leurs tests à chaque tour (60 séquences, deux tours, graine 4242). Par la machine seule (500 séquences, graines 1006 et 322) : M2300 et M2301 0/2, attrapés par leurs séquences figées seules — l'état (une paire modifiée, une règle du client avant elle élargie, aucune écriture qui la repose) ne vient qu'à 2 000, comme M2230 et M2234 ; M2302 survit à la machine (son blocage de périmètre seul n'est jamais celui que `_bypass_comes_back` contourne), attrapé par son test.
+
+**Mesures de L1R.** `pytest` complet : 4 726 réussis, 7 sautés, 4 `xfail` (deux de moins ; restent #366 deux fois, #379 et #380, hors du lot) ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 709 mutants, sans faute. Invariants, à 500 séquences sur les graines 1, 7, 42, 101, 322, 555, 777, 1006, 8675 et 31337 (le premier correctif), puis 1, 42, 322, 555, 1006 et 31337 sur l'arbre final ; à 2 000 sur 1006, 322, 42 et 8675 : tout vert. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants de la vérification d'une isolation (`verify.py`), d'un blocage (`verify_block.py`) et de la lecture des règles (`nsg.py`) : 45/49 attrapés à chaque tour sur `origin/main` 72bb58f, 45/49 après, mutant par mutant à l'identique (M21, M31, M34, M38 par leurs seules séquences figées, des deux côtés), plus les trois nouveaux (48/52). Aucun perdu. `origin/main` n'a pas bougé depuis 72bb58f : rien à fusionner. Aucune règle de la machine retirée ni restreinte, aucun oracle touché ; `reassert.py` inchangé (494 lignes), `nsg.py` 375, `verify.py` 324, `verify_block.py` 302.
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

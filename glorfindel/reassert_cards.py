@@ -99,8 +99,13 @@ def episode(key: str, ip: str, over: bool) -> None:
 # What still holds of what a block's drift card said, once better (L1Q, #363): a rule back,
 # the pair still gone. The card said a merged entry's pair and its VM rules gone, it was
 # acknowledged; the VM rules back, the episode went on — and the VM rules gone again read
-# « not worse than said », in silence. In memory only, as the episode it narrows: after a
-# restart the disappearance is said again anyway (`drift_said`), and no write is refused.
+# « not worse than said », in silence. Narrowed at every pass better than the card, pending
+# or acknowledged: narrowed only once acknowledged, a drift better while the card waited,
+# then acknowledged, then gone again before the next pass, read « not worse » for the whole
+# episode (L1Q, second review). Known limit, wanted: under a pending card, a drift that comes
+# and goes makes a card at each return — a card too many rather than a disappearance unsaid.
+# In memory only, as the episode it narrows: after a restart the disappearance is said again
+# anyway (`drift_said`), and no write is refused.
 _NARROWED: dict[tuple[str, str], dict] = {}
 
 
@@ -109,13 +114,9 @@ def drift_baseline(key: str, ip: str, said):
     return _NARROWED.get((key.lower(), ip), said)
 
 
-def narrow_drift(key: str, ip: str, sid: str, now: dict) -> None:
-    """Not worse than the card, but better: the new baseline — once the card is acknowledged
-    (its latest, `sid`, no longer pending). Pending, it still says what comes back: a drift
-    that comes and goes meanwhile is not a new card at each return."""
-    last = next((e for e in reversed(_history()) if e.get("signal_id") == sid), None)
-    if last is not None and last.get("status") != "pending":
-        _NARROWED[(key.lower(), ip)] = now
+def narrow_drift(key: str, ip: str, now: dict) -> None:
+    """Not worse than the card: what holds now is the new baseline, the card pending or not."""
+    _NARROWED[(key.lower(), ip)] = now
 
 
 def unrecorded(vm: str, exc: Exception, ip: str = "") -> dict:

@@ -1591,16 +1591,37 @@ def test_a_rule_back_then_gone_again_is_said_while_the_pair_stays_gone(monkeypat
     assert "disparu" in card["reason"]
 
 
-def test_a_drift_that_comes_and_goes_under_a_pending_card_is_not_said_again():
-    """L1Q's review: the card pending, the VM rule back then gone again — the card still says
-    what came back. Narrowed while it waited, each return made a new card."""
+def test_a_drift_that_comes_and_goes_under_a_pending_card_makes_a_card_at_each_return():
+    """L1Q's second review, a known limit, wanted: the card pending, the VM rule back then gone
+    again — the baseline narrows at every pass better than the card, so each return is a new
+    card (replacing the one before: one pending). Noise, on the careful side: a card too many
+    rather than a disappearance unsaid (test_a_drift_better_under_a_pending_card_…)."""
     _merged_block()
     c = _connector(verify_blk=_BOTH_GONE)
     assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
-    for v in (_PAIR_GONE, _BOTH_GONE, _PAIR_GONE, _BOTH_GONE):
+    for v, said in ((_PAIR_GONE, []), (_BOTH_GONE, ["escalated"]), (_PAIR_GONE, []), (_BOTH_GONE, ["escalated"])):
         c.verify_block_ip.return_value = v
-        assert reassert_active(c, _HUMAN) == []
+        assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == said
     assert len(escalations.pending()) == 1
+
+
+def test_a_drift_better_under_a_pending_card_then_acknowledged_then_worse_is_said():
+    """L1Q's second review (the reviewer's probe): the pair and the VM rules gone, the card said
+    and pending; the operator puts the rules back by hand, a pass reads the pair alone; the
+    operator acknowledges the card; before the next pass, the VM rules go again. Narrowed only
+    once the card was acknowledged, the pass compared with the card — « not worse » — and stayed
+    silent for the whole episode. Narrowed at every better pass, the disappearance is said."""
+    _merged_block()
+    c = _connector(verify_blk=_BOTH_GONE)
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]     # 1. said, pending
+    c.verify_block_ip.return_value = _PAIR_GONE                                    # 2. rules back by hand
+    assert reassert_active(c, _HUMAN) == []
+    (card,) = escalations.pending()
+    escalations.resolve(card["id"])                                                # 3. acknowledged
+    c.verify_block_ip.return_value = _BOTH_GONE                                    # 4. the rules go again
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]     # 5. said
+    (card,) = escalations.pending()
+    assert "disparu" in card["reason"]
 
 
 def test_a_new_episode_never_compares_with_what_held_of_the_one_before():

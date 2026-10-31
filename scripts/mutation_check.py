@@ -6286,8 +6286,8 @@ MUTANTS += [
 ]
 TESTS.update({"M2150": f"{_L1Q} {INVARIANTS}", "M2154": f"{_RT}a_block_written_again_whole_is_put_back_again_once"})
 # L1Q, found by its rule (seed 322 at 2 000): a drift better than its acknowledged card — a
-# rule back, the pair still gone — is the new baseline, in memory, for its episode only; a
-# rule gone again is said. M2151–M2153, M2155.
+# rule back, the pair still gone — is the new baseline, in memory, for its episode only, the card
+# pending or acknowledged; a rule gone again is said. M2151–M2153, M2155.
 _L1Q_BACK = ("tests/unit/test_invariant_regressions.py::"
              "test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said "
              f"{_RT}a_rule_back_then_gone_again_is_said_while_the_pair_stays_gone")
@@ -6297,17 +6297,20 @@ MUTANTS += [
      '    if (b.get("drift_alerted_at") and not _worse(drift_baseline(ref or vm, ip, b.get("drift_said")), now_is)\n',
      '    if (b.get("drift_alerted_at") and not _worse(b.get("drift_said"), now_is)\n'),
     ("M2152", "what still holds of a drift card never kept: a rule back, gone again, unsaid (L1Q)", RCA,
-     "        _NARROWED[(key.lower(), ip)] = now\n", "        pass\n"),
+     "    _NARROWED[(key.lower(), ip)] = now\n", "    pass\n"),
     ("M2153", "a baseline outliving its episode: the next one compared with what held of the one before, a "
               "worse drift unsaid (L1Q, review)", RCA,
      "    _NARROWED.pop((key.lower(), ip), None)          # a new card, or over: its own record\n", ""),
-    ("M2155", "a baseline narrowed under a pending card: a drift that comes and goes, a new card at each "
-              "return (L1Q, review)", RCA,
-     '    if last is not None and last.get("status") != "pending":\n', "    if True:\n"),
+    ("M2155", "a baseline narrowed only once its card is acknowledged: better while pending, acknowledged, "
+              "then gone again — « not worse », unsaid for the episode (L1Q, second review)", R,
+     "        narrow_drift(ref or vm, ip, now_is)\n",
+     '        if not [e for e in __import__("glorfindel.escalations", fromlist=["pending"]).pending()\n'
+     '                if e.get("signal_id") == _alert_id(vm, rid, ip)]:\n'
+     "            narrow_drift(ref or vm, ip, now_is)\n"),
 ]
 TESTS.update({"M2151": f"{_L1Q_BACK} {INVARIANTS}", "M2152": f"{_L1Q_BACK} {INVARIANTS}",
               "M2153": f"{_RT}a_new_episode_never_compares_with_what_held_of_the_one_before",
-              "M2155": f"{_RT}a_drift_that_comes_and_goes_under_a_pending_card_is_not_said_again"})
+              "M2155": f"{_RT}a_drift_better_under_a_pending_card_then_acknowledged_then_worse_is_said"})
 # DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
 # (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
 # environment and its connections, the video kept outside the repository.

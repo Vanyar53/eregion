@@ -6256,12 +6256,13 @@ MUTANTS += [
     ("M2044", "a NIC that holds answers for what is gone beside a bypassed one: a stale placement said gone (L1B, review)",
      VER, "            gone = self._recorded_gone(resource_id, vm_name, bypassed, cache)\n",
      "            gone = self._recorded_gone(resource_id, vm_name, targets, cache)\n"),
+    # Re-anchored by L1C (#369): only a refusal of the NIC's names supersedes a placement.
     ("M2045", "a placement superseded by the NIC's other name said gone: a false drift card (L1B, review)", VER,
-     "            if present & others:\n                continue                                   # superseded on this NSG\n",
-     "            if False:\n                continue                                   # superseded on this NSG\n"),
+     "                continue                                   # superseded on this NSG\n",
+     "                pass\n"),
     ("M2046", "a placement whose own inbound rule stands skipped: its outbound one gone unsaid (L1B, review)", VER,
-     '                      for n in (b, f"{b}-out")} - {n.lower() for n in names}\n',
-     '                      for n in (b, f"{b}-out")}\n'),
+     '                   and _deny_isolates(by_name.get(f"{b}-out".lower()), "outbound", ips)\n',
+     '                   or _deny_isolates(by_name.get(f"{b}-out".lower()), "outbound", ips)\n'),
 ]
 MUTANTS += [
     ("M2047", "a placement on an NSG that no longer governs its NIC said gone (L1B, review)", VER,
@@ -6357,6 +6358,58 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_console_shots.py"
               for mid in ("M2251", "M2250", "M2200", "M2201", "M2202", "M2203", "M2204", "M2205", "M2206", "M2207", "M2208", "M2209")})
+
+# L1C (#369): a bypass said while a rule of the pair is gone (a block, an isolation), with what
+# is gone on another NIC; a placement superseded only by a refusal of the NIC's names. M2230–M2235.
+_L1C_BLK = ("tests/unit/test_invariant_regressions.py::test_a_bypassed_block_is_said_while_a_rule_of_its_pair_is_gone "
+            "tests/unit/test_glorfindel.py::test_a_block_half_gone_and_bypassed_says_both")
+_L1C_ISO = ("tests/unit/test_invariant_regressions.py::test_a_bypassed_isolation_is_said_while_a_rule_of_its_pair_is_gone "
+            "tests/unit/test_glorfindel.py::test_an_isolation_half_gone_and_bypassed_says_both")
+MUTANTS += [
+    ("M2230", "a block's pair half gone: what is left of it, bypassed, never read — the bypass unsaid (L1C)", VBL,
+     "                        half = self._half_bypassed(cache, p, ip, ips_of[id(p)] or None, port)\n",
+     "                        half = []\n"),
+    ("M2231", "a block's rules gone drop the bypass beside them: no bypass card while they stay gone (L1C)", VBL,
+     '                        "open_nics": open_nics, **said, **({"shadowed_by": bypass} if bypass else {}),\n',
+     '                        "open_nics": open_nics, **said,\n'),
+    ("M2232", "a block's pair half gone and bypassed: the rule gone dropped, the drift unsaid (L1C)", VBL,
+     "                        if nic_half:\n",
+     "                        if False:\n"),
+    ("M2233", "a block's half pair read bypassed by an allow that leaves the threat out: a false card (L1C)", VBL,
+     "        return found if self._threat_open(found) else []\n",
+     "        return found\n"),
+    ("M2234", "an isolation's pair half gone: what is left of it, bypassed, never read — the bypass unsaid (L1C)", VER,
+     "                    half += self._half_shadowed(vm_name, t, rules)\n",
+     "                    pass\n"),
+    ("M2235", "a name of the NIC merely present supersedes a placement: a turned rule hides the pair gone (L1C)", VER,
+     ('            if any(_deny_isolates(by_name.get(b.lower()), "inbound", ips)\n'
+      '                   and _deny_isolates(by_name.get(f"{b}-out".lower()), "outbound", ips)\n'
+      '                   for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"], t0["nic_id"])):\n'),
+     ('            if any(n in present for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"],\n'
+      '                                                                     t0["nic_id"])\n'
+      '                   for n in (b.lower(), f"{b}-out".lower()) if b.lower() not in {x.lower() for x in names}):\n')),
+]
+TESTS.update({
+    "M2230": f"{_L1C_BLK} {INVARIANTS}",
+    "M2231": f"{_L1C_BLK} tests/unit/test_glorfindel.py::test_a_bypass_on_one_nic_is_said_beside_rules_gone_on_another "
+             f"{INVARIANTS}",
+    "M2232": f"{_L1C_BLK} {INVARIANTS}", "M2233": _L1C_BLK, "M2234": f"{_L1C_ISO} {INVARIANTS}",
+    "M2235": ("tests/unit/test_glorfindel.py::test_a_turned_first_name_never_supersedes_the_second_gone "
+              "tests/unit/test_glorfindel.py::test_a_superseding_pair_must_cut_the_nic_both_ways"),
+})
+# L1C, its review: everything gone on the NIC beside a half pair read bypassed; each allow once.
+MUTANTS += [
+    ("M2236", "a half pair read bypassed: only its rule said gone, another placement wholly gone dropped (L1C, review)",
+     VBL, "(review).\n                            _lost(t0, nic_missing)\n",
+     "(review).\n                            _lost(t0, nic_half)\n"),
+    ("M2237", "two half pairs behind one allow name it twice: the card's text repeats (L1C, review)", VER,
+     "        return [f for i, f in enumerate(found) if f not in found[:i]]     # once each (two names' halves)\n",
+     "        return found\n"),
+]
+TESTS.update({
+    "M2236": "tests/unit/test_glorfindel.py::test_a_half_bypassed_pair_keeps_another_placement_gone_on_the_nic",
+    "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
+})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

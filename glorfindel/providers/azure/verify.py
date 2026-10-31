@@ -3,7 +3,7 @@ allow before our deny (moved from actions.py, A1).
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.nsg import _describe_shadowing, _rule_name, _shadowing_rules
+from glorfindel.providers.azure.nsg import _deny_isolates, _describe_shadowing, _rule_name, _shadowing_rules
 from glorfindel.providers.azure.quarantine import _is_quarantine_nsg, PLATFORM_OPEN_NOTE
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.legacy_state import _older_record
@@ -29,6 +29,7 @@ class VerifyMixin:
         altered: list[str] = []          # our quarantine NSG changed (Q6)
         held: set[str] = set()           # NICs our quarantine NSG holds — nothing to compare
         found: dict[str, list[tuple]] = {}     # nic_id → [(nsg_rg, nsg_name, inbound deny name)]
+        halves: list[dict] = []          # half pairs of ours an allow passes, on uncovered NICs
         cache: dict = {}
         for t0 in targets:
             unknown = bool(t0.get("subnet_unreadable"))
@@ -51,6 +52,7 @@ class VerifyMixin:
             # first found used to decide alone, a bypassed leftover over a sound one: L24).
             # Read from the NSG's listing, by content: a homonym's rule of the same name,
             # scoped to its own addresses, isolates nothing here.
+            half: list[dict] = []
             for t in self._nic_nsg_views(t0):
                 rules = self._list_rules(cache, t["nsg_rg"], t["nsg_name"])
                 if rules is None:
@@ -59,6 +61,8 @@ class VerifyMixin:
                 hit = self._isolating_pair(vm_name, t, rules)
                 if hit:
                     hits.append((t["nsg_rg"], t["nsg_name"], hit))
+                else:
+                    half += self._half_shadowed(vm_name, t, rules)
             if hits:
                 found[t0["nic_id"]] = hits
             elif q and t0["nic_short"] in {a.split(" ", 1)[0] for a in altered}:
@@ -68,9 +72,13 @@ class VerifyMixin:
             else:
                 # Not found: missing for sure, or only unreadable (no claim either way).
                 (unreadable if unknown else uncovered).append(t0["nic_short"])
+                halves += [f for f in half if f not in halves] if not unknown else []
 
         if uncovered:
             return {"verified": False, "method": "nsg_check", "uncovered_nics": uncovered,
+                    # What is left of a pair, an allow before it (L1C, #369): said with
+                    # what is gone — the bypass was never read while the pair was half gone.
+                    **({"shadowed_by": halves} if halves else {}),
                     **({"quarantine_altered": altered,
                         "error": "NSG de quarantaine modifié : " + " ; ".join(altered)} if altered else {}),
                     **({"unreadable_nics": unreadable} if unreadable else {})}
@@ -133,8 +141,9 @@ class VerifyMixin:
         governs their NIC now — `targets`, the bypassed NICs (one our quarantine holds is
         never bypassed: nothing of ours to compare, I1F). An unreadable state or listing
         claims nothing: what can't be read is never said gone. A placement whose NSG carries
-        another name of the NIC (its first or second, I4B) was superseded there — a rewrite
-        took it off and the merge kept its record: never said gone (L1B, review)."""
+        another name of the NIC (its first or second, I4B) as a refusal — its pair, both
+        denies (L1C) — was superseded there — a rewrite took it off and the merge kept its
+        record: never said gone (L1B, review)."""
         state = _load_isolation_state(resource_id) or {}
         views = {t0["nic_id"].rstrip("/").lower(): {(v["nsg_rg"].lower(), v["nsg_name"].lower())
                                                     for v in self._nic_nsg_views(t0)}
@@ -146,15 +155,35 @@ class VerifyMixin:
             if not names or where not in views.get((p.get("nic_id") or "").rstrip("/").lower(), set()):
                 continue
             rules = self._list_rules(cache, p["nsg_rg"], p["nsg_name"])
-            present = {_rule_name(r).lower() for r in rules or []}
+            by_name = {_rule_name(r).lower(): r for r in rules or []}
+            present = set(by_name)
             t0 = next(t for t in targets if t["nic_id"].rstrip("/").lower() == p["nic_id"].rstrip("/").lower())
-            others = {n.lower() for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"],
-                                                                     t0["nic_id"])
-                      for n in (b, f"{b}-out")} - {n.lower() for n in names}
-            if present & others:
+            ips = t0.get("private_ips") or None
+            # Superseded only by a refusal (L1C, #369): a pair of the NIC's names there, both
+            # denies that cut it. A name merely present — turned into an allow — replaced
+            # nothing: the second name's pair gone beside it was left unsaid, or the card
+            # named the wrong rule. Its own pair, whole, has nothing gone; in part, no refusal.
+            if any(_deny_isolates(by_name.get(b.lower()), "inbound", ips)
+                   and _deny_isolates(by_name.get(f"{b}-out".lower()), "outbound", ips)
+                   for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"], t0["nic_id"])):
                 continue                                   # superseded on this NSG
             gone += [n for n in names if rules is not None and n.lower() not in present and n not in gone]
         return gone
+
+    def _half_shadowed(self, vm_name: str, t: dict, rules: list) -> list[dict]:
+        """A pair of this NIC's on this NSG gone or altered in one direction: the other, still
+        a deny that cuts the NIC, passed by an allow before it (L1C, #369)."""
+        by_name = {_rule_name(r).lower(): r for r in rules}
+        ips = t.get("private_ips") or None
+        found: list[dict] = []
+        for pair in self._isolation_pairs(vm_name, t):
+            rs = [(d, by_name.get(n.lower())) for d, n in zip(("inbound", "outbound"), pair)]
+            prio = {d: r.priority for d, r in rs
+                    if isinstance(getattr(r, "priority", None), int) and _deny_isolates(r, d, ips)}
+            if len(prio) == 1:
+                found += [{**f, "nsg": f'{t["nsg_rg"]}/{t["nsg_name"]}'} for f in _shadowing_rules(
+                    rules, prio, inbound_src=None, inbound_dst=ips, outbound_src=ips, outbound_dst=None)]
+        return [f for i, f in enumerate(found) if f not in found[:i]]     # once each (two names' halves)
 
     def _shadowed_deny(
         self, cache: dict, nsg_rg: str, nsg_name: str, rule_name: str, **scope,

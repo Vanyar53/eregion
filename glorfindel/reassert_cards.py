@@ -136,7 +136,8 @@ def drift_said(key: str, ip: str, sid: str) -> bool:
 
 def _bypassing(verification: dict, ip: str) -> list[dict] | None:
     """The allows that pass before our deny, [] when it holds, None when that wasn't read
-    (unknown, or rules missing: the drift card's case)."""
+    (unknown; rules missing with nothing read bypassed: the drift card's alone). Rules
+    missing beside a bypass read (L1C) give the list: both cards."""
     if verification.get("verified") is True:
         return []
     found = verification.get("shadowed_by") if verification.get("verified") is False else None

@@ -3,7 +3,7 @@ and the perimeter too (split out of unblock.py, I4B: moved without change).
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.nsg import _deny_blocks, _describe_shadowing, _rule_name
+from glorfindel.providers.azure.nsg import _deny_blocks, _describe_shadowing, _rule_name, _shadowing_rules
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import _load_block_entries
@@ -105,12 +105,17 @@ class VerifyBlockMixin:
                         continue
                 now = current.get(nic) if current is not None and isinstance(nic, str) else None
                 ips_of = {id(p): now if now is not None else (p.get("ips") or None) for p in ps}
-                nic_missing, nic_unread, nic_bypass, nic_unknown = [], [], [], []
+                nic_missing, nic_unread, nic_bypass, nic_unknown, nic_half = [], [], [], [], []
                 for p in ps:
                     st, names = self._block_pair_state(cache, p["nsg_rg"], p["nsg_name"], p["rule"],
                                                        ip, ips_of[id(p)] or None)
                     if st in ("absent", "altered"):          # altered: put back like missing
                         nic_missing += names
+                        # What is left of the pair, an allow before it (L1C, #369): gone AND
+                        # bypassed, both said — the bypass was never read, never carded.
+                        half = self._half_bypassed(cache, p, ip, ips_of[id(p)] or None, port)
+                        nic_bypass += [f for f in half if f not in nic_bypass]
+                        nic_half += names if half else []
                         continue
                     if st == "unknown":
                         nic_unread += names
@@ -122,13 +127,17 @@ class VerifyBlockMixin:
                     if found is None:
                         nic_unknown.append(f'{p["nsg_rg"]}/{p["nsg_name"]}')
                     elif self._threat_open(found):
-                        nic_bypass += found
+                        nic_bypass += [f for f in found if f not in nic_bypass]
                     else:
                         exposure += found
                         break                       # this NIC is blocked
                 else:
                     if nic_bypass:
-                        bypass += nic_bypass
+                        bypass += [f for f in nic_bypass if f not in bypass]
+                        if nic_half:
+                            # Everything gone on the NIC, not only the half pair's: another
+                            # placement wholly gone was dropped — the card said less (review).
+                            _lost(t0, nic_missing)
                     elif nic_unread or nic_unknown:
                         unread += nic_unread
                         unknown += [u for u in nic_unknown if u not in unknown]
@@ -143,8 +152,12 @@ class VerifyBlockMixin:
             said = {**({"held_by_perimeter": held_by, "perimeter_rule": self._block_rule_prefix(ip)} if held_by else {}),
                     **({"perimeter_unread": unsure} if unsure else {})}
             if missing:
+                # A bypass goes with what is gone (L1C, #369): dropped, no bypass card was
+                # ever written while a rule of the VM was missing (L1).
                 return {"verified": False, "method": "nsg_check", "missing_rules": missing,
-                        "open_nics": open_nics, **said, "error": f"rules missing: {', '.join(missing)}"}
+                        "open_nics": open_nics, **said, **({"shadowed_by": bypass} if bypass else {}),
+                        "error": f"rules missing: {', '.join(missing)}"
+                                 + (f" ; contourné : {_describe_shadowing(bypass)}" if bypass else "")}
             if bypass:
                 # What is gone goes with the bypass (I4C): the merged perimeter's pair lifted
                 # by another VM's unblock, the VM's own rules there but bypassed — the bypass
@@ -248,6 +261,20 @@ class VerifyBlockMixin:
             return "absent", missing
         altered = [n for n, r, d in zip(names, found, ("inbound", "outbound")) if not _deny_blocks(r, d, ip, ips)]
         return ("altered", altered) if altered else ("present", [])
+
+    def _half_bypassed(self, cache: dict, p: dict, ip: str, ips: list[str] | None, port) -> list[dict]:
+        """A pair gone or altered in one direction: the other, still a block of `ip`, passed
+        by an allow before it that lets the threat through — [] otherwise (L1C, #369)."""
+        rules = self._list_rules(cache, p["nsg_rg"], p["nsg_name"]) or []
+        by_name = {_rule_name(r).lower(): r for r in rules}
+        prio = {}
+        for direction, name in (("inbound", p["rule"]), ("outbound", f'{p["rule"]}-out')):
+            r = by_name.get(name.lower())
+            if r is not None and isinstance(getattr(r, "priority", None), int) and _deny_blocks(r, direction, ip, ips):
+                prio[direction] = r.priority
+        found = [{**f, "nsg": f'{p["nsg_rg"]}/{p["nsg_name"]}'} for f in _shadowing_rules(
+            rules, prio, inbound_src=[ip], inbound_dst=ips, outbound_src=ips, outbound_dst=[ip], port=port)] if prio else []
+        return found if self._threat_open(found) else []
 
     @staticmethod
     def _threat_open(shadowed: list[dict]) -> bool:

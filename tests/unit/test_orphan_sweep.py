@@ -495,6 +495,120 @@ def test_a_vm_missing_from_a_partial_nic_listing_keeps_its_card(monkeypatch):
     assert note.endswith("vise une adresse qu'aucune carte ne porte plus (U1O)."), note
 
 
+@pytest.mark.parametrize("status", [403, 429])
+def test_a_nic_unread_proves_no_departure(monkeypatch, status):
+    """U1O second review (P1): batch's NIC missing from the listing, and its own read refused
+    or throttled — nothing proves batch left the address: its card stays."""
+    from .fake_azure import _error, HttpResponseError
+    f, c, batch = _cut_new_vm(monkeypatch)
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    nics, listing = f.network.network_interfaces, []
+    real_get, real_list = nics.get, nics.list_all
+
+    def get(rg, name):                    # the fake's listing reads each NIC: refused outside it only
+        if name == "batch-nic" and not listing:
+            raise _error(HttpResponseError, status, f"HTTP {status}")
+        return real_get(rg, name)
+
+    def list_all():
+        listing.append(1)
+        try:
+            return [n for n in real_list() if not n.id.endswith("/batch-nic")]
+        finally:
+            listing.pop()
+    monkeypatch.setattr(nics, "get", get)
+    monkeypatch.setattr(nics, "list_all", list_all)
+    report = _watch_pass(c, "human_only")
+    assert any(r.get("outcome") == "unread" for r in report or []), report      # the pass ran, the read refused
+    assert [(e["id"], e["status"]) for e in _orphan_cards()] == [(old["id"], "pending")]
+
+
+def test_a_vm_missing_from_a_partial_listing_stays_named_when_another_comes(monkeypatch):
+    """U1O second review (P7): web's NIC held .4 and .6; batch gets .4, said. In one pass the
+    listing leaves batch's NIC out (batch still cut) and api gets .6. api is said at once;
+    batch, unproven gone, stays named — never « passée depuis à api »."""
+    f, c, subnet = _world(monkeypatch)
+    f.nics[key(nic_id("rg-app1", "web-nic"))]["ips"] = ["10.0.0.4", "10.0.0.6"]
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    _delete(f, WEB)
+    _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    listing = f.network.network_interfaces.list_all
+    _hide(f, monkeypatch, nic_id("rg-new", "batch-nic"))
+    api = _new_vm_at(f, subnet, "10.0.0.6", rg="rg-app1", name="api")
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "adresse de api (carte api-nic)" in card["reason"], card
+    assert "Elle coupait aussi batch (carte batch-nic) : non relue depuis." in card["reason"], card["reason"]
+    note = next(e for e in _orphan_cards() if e["id"] == old["id"])["resolution"]
+    assert note.endswith("coupe désormais api (carte api-nic), batch (carte batch-nic) (U1O)."), note
+    _watch_pass(c, "human_only")
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+    monkeypatch.setattr(f.network.network_interfaces, "list_all", listing)      # the listing whole again
+    _watch_pass(c, "human_only")
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+
+
+def test_a_vm_seen_on_another_nic_is_no_proof_it_left(monkeypatch):
+    """U1O second review (P9): batch has two NICs; the one at .4 is in a resource group the
+    listing leaves out, the other listed. Seen on a NIC is no proof it left the address:
+    only the NIC that held it proves it — its card stays."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    _delete(f, WEB)
+    f.add_vm("rg-new", "batch", [{"rg": "rg-hidden", "name": "batch-nic-0", "ips": ["10.0.0.4"], "subnet": subnet,
+                                  "nsg": None},
+                                 {"rg": "rg-new", "name": "batch-nic-1", "ips": ["10.0.0.7"], "subnet": subnet,
+                                  "nsg": None}])
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    _hide(f, monkeypatch, nic_id("rg-hidden", "batch-nic-0"))
+    _watch_pass(c, "human_only")
+    assert [(e["id"], e["status"]) for e in _orphan_cards()] == [(old["id"], "pending")]
+
+
+@pytest.mark.parametrize("bad", [[None], "x", 5, [1, 2], [{"vm": 3}]])
+def test_a_said_entry_of_another_shape_never_stops_the_sweep(monkeypatch, bad):
+    """U1O second review (P8): `_said` in orphan_alerts.json read back with an entry of
+    another shape — treated as absent (compared by the card's VM, as before the review):
+    the sweep goes on, the VM cut now said."""
+    import json
+    from glorfindel import orphans
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    path = orphans._alerts_path()
+    data = json.loads(path.read_text())
+    data["_said"] = {k: bad for k in data["_said"]}
+    path.write_text(json.dumps(data))
+    api = _address_passes(f, subnet, ("rg-new", "batch-nic"))
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "batch" not in card["reason"], card
+
+
+def test_a_card_said_before_the_review_proves_a_departure_by_the_vms_nics(monkeypatch):
+    """U1O second review: a card said before `_said` recorded no NIC. batch's address passes
+    to api: batch's NICs, read, hold none of the rule's addresses — proven, the card
+    replaced for api alone, and `_said` written from then on."""
+    import json
+    from glorfindel import orphans
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    path = orphans._alerts_path()
+    data = json.loads(path.read_text())
+    data.pop("_said")
+    path.write_text(json.dumps(data))
+    api = _address_passes(f, subnet, ("rg-new", "batch-nic"))
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "batch" not in card["reason"], card
+    assert "_said" in json.loads(path.read_text())
+
+
 def test_a_rule_turned_after_the_listing_stops_the_removal(monkeypatch):
     """I5Q, the review: the pass lists the NSGs, then someone turns the perimeter block
     before the removal — the guard is played again on the NSGs that govern the VM cut,

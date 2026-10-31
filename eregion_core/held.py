@@ -42,9 +42,16 @@ def is_hold(rule_name: str) -> bool:
 
 
 def safe_path(path: str) -> str:
-    """``path`` if it is an ARM resource path, else ValueError."""
+    """``path`` if it is an ARM resource path, else ValueError: no query, no fragment, no escape,
+    no segment that walks the path (``.``, ``..``), no character a terminal or a log would not
+    print as itself (a control, a bidirectional override, a zero-width one) — #358, after DG-b's
+    second review. What is read is exactly the resource the id names."""
     if not isinstance(path, str) or not _ARM_PATH.fullmatch(path):
         raise ValueError(f"not an ARM resource path: {path!r}")
+    if not path.isprintable():
+        raise ValueError(f"an ARM resource path with a character not printable: {path!r}")
+    if any(seg in (".", "..") for seg in path.split("/")):
+        raise ValueError(f"an ARM resource path that walks its segments (. or ..): {path!r}")
     return path
 
 

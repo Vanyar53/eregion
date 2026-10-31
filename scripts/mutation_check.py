@@ -6594,6 +6594,28 @@ TESTS.update({
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
 
+# The suites of DG-b (#358): the paths Orodruin reads on Azure, stricter; the request's lock taken by
+# a campaign launched by hand, and saying what holds it. M2474–M2479 (Gothmog's part after G1).
+_358_CORE = "tests/unit/test_held.py tests/unit/test_exercise_runner.py"
+MUTANTS += [
+    ("M2474", "a path Orodruin reads on Azure walks its segments (..) (#358)", "eregion_core/held.py",
+     '    if any(seg in (".", "..") for seg in path.split("/")):\n', "    if False:\n"),
+    ("M2475", "a path Orodruin reads on Azure hides a character not printable (#358)", "eregion_core/held.py",
+     "    if not path.isprintable():\n", "    if False:\n"),
+    ("M2476", "a campaign launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
+     '    lock = contextlib.nullcontext() if dry_run else request_lock(runs_dir, f"campaign {campaign_id}")\n',
+     "    lock = contextlib.nullcontext()\n"),
+    ("M2477", "the one refused never says what holds the lock (#358)", "eregion_core/exercise_runner.py",
+     '            what = _holder(fd) or "another request"\n', '            what = "another request"\n'),
+    ("M2478", "what holds the lock said raw, its escapes with it (#358)", "eregion_core/exercise_runner.py",
+     '    return "".join(c for c in text if c.isprintable()).strip()\n', "    return text.strip()\n"),
+    ("M2479", "a request runs without naming itself in the lock (#358)", "eregion_core/exercise_runner.py",
+     '            with request_lock(self.runs_dir, f"request {req.id}"):\n',
+     "            with request_lock(self.runs_dir):\n"),
+]
+TESTS.update({mid: _358_CORE for mid in ("M2474", "M2475", "M2477", "M2478", "M2479")})
+TESTS["M2476"] = "tests/unit/test_campaign_runner.py"
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

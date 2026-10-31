@@ -122,3 +122,41 @@ def test_annatars_preflight_sees_glorfindels_isolation_as_it_names_it():
 def test_annatars_preflight_refuses_when_the_hold_cannot_be_read():
     issues = _executor(_arm(missing=(SUBNET,))).check_preflight()
     assert any("unreadable" in i for i in issues), issues
+
+
+# ── #358: the paths Orodruin reads on Azure, stricter ────────────────────────────────────────
+
+_SUB = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor"
+
+
+@pytest.mark.parametrize("path", [
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/../../../providers/Microsoft.Authorization",
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/./nic-1",
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/..",
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic\x00-1",
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic‮1-cin",       # a bidi override
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic​-1",          # zero-width
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic\x7f-1",
+])
+def test_a_path_that_walks_its_segments_or_hides_a_character_is_never_read(path):
+    with pytest.raises(ValueError):
+        held.safe_path(path)
+
+
+def test_a_resource_path_as_arm_writes_it_is_read():
+    for path in (_SUB + "/providers/Microsoft.Network/networkInterfaces/nic-1.a_b(c)",
+                 _SUB + "/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"):
+        assert held.safe_path(path) == path
+
+
+def test_a_nic_path_from_azure_that_walks_away_holds_the_vm():
+    """A VM whose networkProfile names a NIC by a path with « .. »: read nowhere — A0, it holds."""
+    vm = _SUB + "/providers/Microsoft.Compute/virtualMachines/vm-1"
+    bad = _SUB + "/providers/Microsoft.Network/networkInterfaces/../../rg-other/x"
+    reads = []
+
+    def arm(path, api):
+        reads.append(path)
+        return {"properties": {"networkProfile": {"networkInterfaces": [{"id": bad}]}}}
+    assert held.holding(vm, arm)
+    assert reads == [vm]

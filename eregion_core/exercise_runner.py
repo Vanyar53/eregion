@@ -155,24 +155,45 @@ def argv_for(experiment, wire: xr.Wire, request_id: str, typed: str = "") -> lis
 
 
 class Busy(RuntimeError):
-    """Another request (or this one, launched again) runs on this Orodruin."""
+    """Another request (or this one, launched again), or a run launched by hand, runs on this
+    Orodruin."""
+
+
+# What holds the lock, written in it once taken: the refusal of the next one says it. Short, and
+# read back as printable text only — it is said, never trusted.
+_HOLDER_MAX = 120
+
+
+def _holder(fd: int) -> str:
+    try:
+        text = os.pread(fd, _HOLDER_MAX, 0).decode("utf-8", "replace")
+    except OSError:
+        return ""
+    return "".join(c for c in text if c.isprintable()).strip()
 
 
 @contextlib.contextmanager
-def request_lock(runs_dir: Path | str):
-    """One request at a time on this Orodruin (DG-b review, point 5): an exclusive ``flock`` on
+def request_lock(runs_dir: Path | str, holder: str = ""):
+    """One run at a time on this Orodruin (DG-b review, point 5; #358): an exclusive ``flock`` on
     ``runs/orodruin/requests/.lock``, never waited for — two requests side by side would overlap
-    on a VM and double Orodruin's cap. Held while the request runs; the kernel lets it go with the
-    process, a crash included."""
+    on a VM and double Orodruin's cap. Taken by a request (``exercise_runner``) and by a run
+    launched by hand on Orodruin (``annatar campaign run``): a campaign during a request would put
+    a technique on a VM a wire holds, or a fault under it. Never by a wire of the request — it runs
+    under the request's own lock. ``holder`` (« request r-… », « campaign C… ») is written in the
+    lock once taken, and said by the next one refused. Held while it runs; the kernel lets it go
+    with the process, a crash included."""
     path = Path(runs_dir) / "orodruin" / "requests" / ".lock"
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise Busy("another request runs on this Orodruin: one at a time — wait for its end, "
+            what = _holder(fd) or "another request"
+            raise Busy(f"{xr.shown(what)} runs on this Orodruin: one at a time — wait for its end, "
                        "or stop it (make orodruin-kill)") from None
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, holder[:_HOLDER_MAX].encode("utf-8"), 0)
         yield
     finally:
         os.close(fd)
@@ -308,7 +329,7 @@ class Runner:
 
     def run(self, req: xr.Request, typed: dict[int, str]) -> Status:
         try:
-            with request_lock(self.runs_dir):
+            with request_lock(self.runs_dir, f"request {req.id}"):
                 return self._run(req, typed)
         except Busy as e:
             # Nothing judged, nothing published: the status of the request that runs stays its own.

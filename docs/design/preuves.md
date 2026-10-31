@@ -3068,6 +3068,72 @@ Harnais avant/après sur les 97 mutants du déblocage, du blocage, des règles r
 de l'état : 91/97 sur 48e42c8, 91/97 après, mutant par mutant à l'identique (M19, M21, M23, M38, M1964 par leurs
 séquences figées seules ; M36 survit des deux côtés, comme avant). Aucun perdu.
 
+**I3P (31/10, #366) : une carte de blocage ne dit jamais « plus bloquée » où notre périmètre coupe
+encore l'IP.** Deux cas figés en `xfail` strict (I3 : ce qui est dit est vrai) : la graine 1999 à
+2 000 de la relecture d'I4E (« I3: the reassertion said 192.31.196.7 no longer blocked on
+…/rg-edge/…/api (['api-nic']); our perimeter block still cuts it off »), et la séquence du harnais
+d'I4D où la carte ne nomme aucune carte réseau (`len(cut) < len(nics)`). Rien d'ouvert ; ce qui est dit
+est faux. **Deux causes, établies sur l'état tracé à la passe fautive** — ni l'une ni l'autre n'est dans
+le titre de l'issue. (1) **Une allow qu'un refus du client coupe déjà, lue comme contournant le
+périmètre** (graine 1999) : api (une carte sur le sous-réseau `edge`, sans NSG propre) bloquée pour
+elle-même et sur son sous-réseau, sur le même NSG ; son refus entrant retourné en allow (priorité 200),
+avant la paire de périmètre (210) ; mais le `deny-lateral-in` du client, sa source élargie à `*`, à 130 :
+il coupe tout le trafic entrant de l'attaquant avant que l'allow soit atteinte, et le `-out` du
+périmètre coupe le sortant. `_perimeter_holds` comptait l'allow comme passant le périmètre (le modèle
+de préséance ne regardait que les allow avant notre refus) : la carte dite ouverte, « n'est plus
+bloquée sur api-nic ». (2) **Un contournement qui perdait où chaque carte en est** (la carte qui ne
+nomme rien) : db-nic-0 a son `-out` détourné (manquant, le périmètre de web tient là), db-nic-1 sa paire
+passée par l'`allow-ssh` de son NSG (le périmètre tient là aussi, sur le NSG du sous-réseau).
+`verify_block_ip` rendait le contournement avec ce qui manque (`held_missing`, I4C) mais sans
+`held_by_perimeter`, et ne demandait jamais au périmètre où en était la carte contournée ; la carte de
+dérive, aucune carte ouverte ni tenue nommée, disait « l'IP n'est plus bloquée » de toute la VM.
+
+**Correctif.** (1) `nsg._dropped_first` : une allow (une trouvaille de `_shadowing_rules`) ne laisse
+rien passer quand un refus du client, avant elle, coupe tout le trafic de l'attaquant dans son sens —
+tous ports et protocoles, l'attaquant d'un côté, chaque adresse de la carte de l'autre (`_deny_blocks`)
+; un refus à nous (`glorfindel-*`) ne compte pas (le périmètre est jugé avec les seules règles du
+client, comme l'oracle), un ASG non plus (non résolu ici). `_perimeter_holds` les écarte avant de
+juger. (2) `verify_block_ip` : `_stand` dit où en est une carte dont le blocage propre ne tient plus —
+tenue par un périmètre, inconnue, ouverte —, appelé pour une carte dont les règles manquent (comme
+avant) et pour une carte contournée ; le contournement rend `held_by_perimeter`, `perimeter_unread` et
+`open_nics`. Des cartes illisibles (429) : `nics_unread`. (3) `_block_drift` (sorti dans
+`glorfindel/reassert_said.py`, `reassert.py` passe de 494 à 462 lignes) : une carte ouverte, « n'est
+plus bloquée sur … » ; aucune ouverte mais une inconnue, « on ne sait pas » ; ni l'une ni l'autre mais
+une tenue, « l'IP reste bloquée sur … par la règle de périmètre …, ses propres règles contournées
+(carte à part) » ; les cartes illisibles, « on ne sait pas si l'IP est encore bloquée : cartes
+illisibles » — plus jamais « plus bloquée » sans carte nommée là où le périmètre peut couper. L'oracle
+est inchangé, aucune règle de la machine retirée ni restreinte (A0).
+
+**Figés.** Les deux séquences, leur `xfail` levé, les tirages de leur dernière règle
+(`turned_then_address_reused` : `address_reused` et la passe qui suivent la carte) complétés ; dans
+`test_glorfindel.py`, la carte contournée derrière le périmètre (et sans périmètre : dite ouverte), les
+cartes illisibles, `_dropped_first` règle par règle, `_perimeter_holds` avec et sans le refus du
+client — rouges sur `main` 72bb58f. Le test de L1C `test_a_bypass_on_one_nic_is_said_beside_rules_gone_on_another`
+attend maintenant la carte contournée dite ouverte (`open_nics` : nic-a et nic-b) : il dit plus, rien de
+ce qu'il vérifiait n'est retiré. **Mutants M2180–M2188** : l'allow coupée lue passante (M2180), un refus
+après l'allow compté (M2181), un refus à nous compté (M2182), un refus d'ASG compté (M2183), le
+contournement sans où en est chaque carte (M2184), la carte contournée jamais demandée au périmètre
+(M2185), les cartes illisibles tues (M2186), « reste bloquée » remplacé par le « plus bloquée » nu
+(M2187), les cartes illisibles dites « plus bloquées » (M2188). M1625 suit `_block_drift` dans
+`reassert_said.py`, M1965 sa ligne réécrite.
+
+**Limites, dites.** Le modèle de préséance des contournements (`_shadowing_rules`, partout ailleurs :
+cartes `bypassed`, vérifications d'isolation) ne regarde toujours que les allow avant notre refus, pas
+un refus du client avant l'allow : une carte de contournement peut dire « contourné » d'une allow
+qu'un refus coupe déjà (prudent, jamais un faux « tient ») — hors du lot, remonté. Un placement ancien
+sans `nic_id` (les cartes lues) reste dit comme avant.
+
+**Mesures d'I3P** (sur `main` 72bb58f, inchangé à la fin). `pytest` complet : 4 711 réussis, 7 sautés,
+4 `xfail` (les deux de #366 levés) ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 715 mutants, sans faute.
+Invariants à 500 séquences sur les graines 1999, 71, 1, 42 et 101, puis à 2 000 sur 1999, 71 et 42 : tout vert.
+Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 74 mutants des modules touchés
+(`nsg.py`, `perimeter.py`, `verify_block.py`, `reassert.py`, `reassert_said.py`) : 69/74 sur 72bb58f, 69/74 après,
+mutant par mutant à l'identique (M13, M21, M37, M38 par leurs seules séquences figées, M1645 survit, des deux
+côtés) ; plus M2180–M2188, 9/9 à chaque tour (78/83). Aucun perdu. La machine seule (500 séquences, deux tours,
+graine 4242, sans séquence figée ni test unitaire) n'en attrape aucun par ses tirages : M2180, M2184 et M2187
+seulement par les exemples figés de `test_invariants.py`, les six autres survivent — les deux cas sont rares
+(trouvés à 2 000 et par le harnais) ; ils tiennent par leurs séquences figées et leurs tests unitaires.
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

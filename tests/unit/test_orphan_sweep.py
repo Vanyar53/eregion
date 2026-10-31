@@ -299,6 +299,353 @@ def test_a_new_kept_deny_never_merges_into_a_stale_card_of_its_vm(monkeypatch):
     assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus"), card["suggested_steps"]
 
 
+def _address_passes(f, subnet, holder: str, to: str | None = "api"):
+    """The VM the orphan cut gets a new address (dynamic: the next free one); `to`, a new
+    VM given the old one, the lowest free (U1O, seed 9001 at 2 000)."""
+    f.nics[key(nic_id(*holder))]["ips"] = ["10.0.0.9"]
+    return _new_vm_at(f, subnet, "10.0.0.4", rg="rg-app1", name=to) if to else None
+
+
+@pytest.mark.parametrize("then", ["human_only", "non_disruptive"])
+def test_a_kept_deny_whose_address_passed_to_another_vm_is_said_for_it(monkeypatch, then):
+    """U1O (#372), seed 9001 at 2 000: web's inbound deny, kept behind the perimeter someone
+    turned, said for batch — the VM at its address. batch's address changes; a new VM, api,
+    gets the old one, behind the same subnet NSG: the deny still holds the attacker out,
+    now for api. The card said for batch stood (it named the turned rule: never replaced),
+    and no pending card named api — what the rule cuts was said of a VM it no longer cuts.
+    The card is replaced: one for api, with the turned rule and its put-back first, its NIC
+    named; batch's closed. Said once."""
+    f, c, g, perimeter, batch = _held_world(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    g["rules"][perimeter]["access"] = "Allow"
+    _watch_pass(c, "non_disruptive")
+    (old,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(old["resource_id"]) == key(batch) and f"notre règle {perimeter} (" in old["reason"]
+    api = _address_passes(f, subnet, ("rg-new", "batch-nic"))
+    _watch_pass(c, then)
+    assert any(n.startswith("glorfindel-iso-") and not n.endswith("-out") for n in g["rules"])
+    assert not {fl for fl in open_flows(_world_view(f), api) if fl[2] == "in" and fl[3] == ATTACKER}
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api), card
+    assert f"notre règle {perimeter} (" in card["reason"], card["reason"]
+    assert "adresse de api (carte api-nic)" in card["reason"], card["reason"]
+    assert card["suggested_steps"][0].startswith(f"Remettre {perimeter} en refus"), card["suggested_steps"]
+    assert next(e for e in _orphan_cards() if e["id"] == old["id"])["status"] == "resolved"
+    _watch_pass(c, then)
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+
+
+@pytest.mark.parametrize("acknowledged", [False, True], ids=["pending", "acknowledged"])
+def test_an_orphan_said_for_a_vm_is_said_again_when_its_address_passes_to_another(monkeypatch, acknowledged):
+    """U1O: in human_only, web's denies said for batch, cut at its address. batch's address
+    changes, api gets the old one: the card still said batch, cut — false —, and api cut
+    by a rule no card named. A pending card is replaced; an acknowledged one stays closed —
+    it was about batch: the rule is said again, for api. Said once."""
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    assert key(old["resource_id"]) == key(batch)
+    if acknowledged:
+        escalations.resolve(old["id"])
+    api = _address_passes(f, subnet, ("rg-new", "batch-nic"))
+    assert open_flows(_world_view(f), api) != _designed(f, api)                   # cut off
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "adresse de api (carte api-nic)" in card["reason"], card
+    assert "batch" not in card["reason"], card["reason"]
+    assert next(e for e in _orphan_cards() if e["id"] == old["id"])["status"] == "resolved"
+    _watch_pass(c, "human_only")
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+
+
+def test_an_orphan_whose_address_nobody_holds_any_more_is_said_of_its_nsg(monkeypatch):
+    """U1O: batch's address changes and no VM takes the old one: the card that said batch
+    cut was false. Replaced by a card on the NSG: no NIC holds the address today."""
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    _address_passes(f, subnet, ("rg-new", "batch-nic"), to=None)
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"] and key(card["resource_id"]) == key(f.subnets[key(subnet)]["nsg"]), card
+    assert "Aucune carte ne porte cette adresse" in card["reason"], card["reason"]
+    api = _new_vm_at(f, subnet, "10.0.0.4", rg="rg-app1", name="api")         # and back: said for api
+    _watch_pass(c, "human_only")
+    (now,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(now["resource_id"]) == key(api) and "adresse de api (carte api-nic)" in now["reason"], now
+
+
+@pytest.mark.parametrize("acknowledged", [False, True], ids=["pending", "acknowledged"])
+def test_a_card_two_rules_share_when_one_moves_off_its_vm(monkeypatch, acknowledged):
+    """U1O: web and app isolated, deleted; batch gets both their addresses, one per NIC — the
+    denies of both said on batch's one card. batch's first NIC changes address, api gets it:
+    web's denies now cut api. Pending, the card is replaced — closed, every rule it spoke for
+    said again: app's for batch, web's for api. Acknowledged, it stays closed for app's
+    denies (still about batch): only web's said again, for api."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.isolate_vm(WEB)["status"] == "isolated" and c.isolate_vm(APP)["status"] == "isolated"
+    _delete(f, WEB)
+    _delete(f, APP)
+    batch = f.add_vm("rg-new", "batch", [{"rg": "rg-new", "name": f"batch-nic-{i}", "ips": [ip], "subnet": subnet,
+                                          "nsg": None} for i, ip in enumerate(["10.0.0.4", "10.0.0.5"])])
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    assert key(old["resource_id"]) == key(batch)
+    if acknowledged:
+        escalations.resolve(old["id"])
+    api = _address_passes(f, subnet, ("rg-new", "batch-nic-0"))
+    _watch_pass(c, "human_only")
+    assert next(e for e in _orphan_cards() if e["id"] == old["id"])["status"] == "resolved"
+    pending = {key(e["resource_id"]): e for e in _orphan_cards() if e["status"] == "pending"}
+    assert set(pending) == ({key(api)} if acknowledged else {key(api), key(batch)}), pending
+    assert "-web-" in pending[key(api)]["reason"] and "(carte api-nic)" in pending[key(api)]["reason"]
+    if not acknowledged:
+        assert "-app-" in pending[key(batch)]["reason"] and "(carte batch-nic-1)" in pending[key(batch)]["reason"]
+    _watch_pass(c, "human_only")
+    assert {key(e["resource_id"]) for e in _orphan_cards() if e["status"] == "pending"} == set(pending)
+
+
+def test_an_orphan_cutting_two_vms_says_both_with_their_nics(monkeypatch):
+    """U1O: web's NIC held two addresses; deleted, each passes to a VM behind the subnet
+    NSG. The card is about the first VM (the store merges by VM); the second, cut too, is
+    said in it, with its NIC."""
+    f, c, subnet = _world(monkeypatch)
+    f.nics[key(nic_id("rg-app1", "web-nic"))]["ips"] = ["10.0.0.4", "10.0.0.6"]
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    _delete(f, WEB)
+    _new_vm_at(f, subnet, "10.0.0.4")
+    _new_vm_at(f, subnet, "10.0.0.6", rg="rg-app1", name="api")
+    _watch_pass(c, "human_only")
+    (card,) = _orphan_cards()
+    assert "adresse de batch (carte batch-nic) aujourd'hui" in card["reason"], card["reason"]
+    assert "Elle coupe aussi 10.0.0.6, adresse de api (carte api-nic)." in card["reason"], card["reason"]
+
+
+@pytest.mark.parametrize("acknowledged", [False, True], ids=["pending", "acknowledged"])
+def test_a_second_vm_cut_later_by_a_rule_said_is_said(monkeypatch, acknowledged):
+    """U1O review (P6): web's NIC held two addresses; deleted, batch gets the first and the
+    card says batch. Later api gets the second, cut by the same rule: the card's VM, batch,
+    did not change — compared alone, nothing was said again and api was named by none.
+    Every VM the card said is compared: replaced (pending) or said again (acknowledged),
+    the new card naming both. Said once."""
+    f, c, subnet = _world(monkeypatch)
+    f.nics[key(nic_id("rg-app1", "web-nic"))]["ips"] = ["10.0.0.4", "10.0.0.6"]
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    _delete(f, WEB)
+    _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    assert "api" not in old["reason"]
+    if acknowledged:
+        escalations.resolve(old["id"])
+    api = _new_vm_at(f, subnet, "10.0.0.6", rg="rg-app1", name="api")
+    assert open_flows(_world_view(f), api) != _designed(f, api)                   # cut off
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"], card
+    assert "Elle coupe aussi 10.0.0.6, adresse de api (carte api-nic)." in card["reason"], card["reason"]
+    if not acknowledged:
+        assert next(e for e in _orphan_cards() if e["id"] == old["id"])["resolution"].endswith(
+            " coupe désormais batch (carte batch-nic), api (carte api-nic) (U1O).")
+    _watch_pass(c, "human_only")
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+
+
+def test_a_vm_its_nsg_no_longer_governs_is_said_not_cut(monkeypatch):
+    """U1O review, the neighbouring case: batch, cut behind the subnet's NSG, said high. The
+    NSG leaves the subnet: batch holds the address still, nothing cuts it. The card said it
+    cut — replaced by one that says the NSG doesn't govern it (medium)."""
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    assert old["severity"] == "high" and "qui est donc coupé" in old["reason"]
+    f.subnets[key(subnet)]["nsg"] = None
+    assert open_flows(_world_view(f), batch) == _designed(f, batch)
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(batch) and card["severity"] == "medium", card
+    assert "que ce NSG ne gouverne pas" in card["reason"], card["reason"]
+    assert "que ce NSG ne gouverne plus (U1O)" in next(e for e in _orphan_cards() if e["id"] == old["id"])["resolution"]
+
+
+def test_a_vm_missing_from_a_partial_nic_listing_keeps_its_card(monkeypatch):
+    """U1O review (P1): batch cut and said. Then the NIC listing leaves batch's NIC out,
+    without an error (Reader on some resource groups only): nobody seems to hold the
+    address. batch is still cut: its card stays — never replaced by one saying no NIC holds
+    the address —, the pass says the listing is partial. batch deleted (404): replaced, the
+    note saying no NIC holds the address any more."""
+    f, c, batch = _cut_new_vm(monkeypatch)
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    _hide(f, monkeypatch, nic_id("rg-new", "batch-nic"))
+    report = _watch_pass(c, "human_only")
+    assert [(e["id"], e["status"]) for e in _orphan_cards()] == [(old["id"], "pending")]
+    assert any(r.get("kind") == "orphan" and r.get("outcome") == "unread" and "batch" in r["detail"]
+               for r in report or []), report
+    _watch_pass(c, "human_only")
+    assert [(e["id"], e["status"]) for e in _orphan_cards()] == [(old["id"], "pending")]
+    _delete(f, batch, lose_state=False)
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"] and "Aucune carte ne porte cette adresse" in card["reason"], card
+    note = next(e for e in _orphan_cards() if e["id"] == old["id"])["resolution"]
+    assert note.endswith("vise une adresse qu'aucune carte ne porte plus (U1O)."), note
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_a_nic_unread_proves_no_departure(monkeypatch, status):
+    """U1O second review (P1): batch's NIC missing from the listing, and its own read refused
+    or throttled — nothing proves batch left the address: its card stays."""
+    from .fake_azure import _error, HttpResponseError
+    f, c, batch = _cut_new_vm(monkeypatch)
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    nics, listing = f.network.network_interfaces, []
+    real_get, real_list = nics.get, nics.list_all
+
+    def get(rg, name):                    # the fake's listing reads each NIC: refused outside it only
+        if name == "batch-nic" and not listing:
+            raise _error(HttpResponseError, status, f"HTTP {status}")
+        return real_get(rg, name)
+
+    def list_all():
+        listing.append(1)
+        try:
+            return [n for n in real_list() if not n.id.endswith("/batch-nic")]
+        finally:
+            listing.pop()
+    monkeypatch.setattr(nics, "get", get)
+    monkeypatch.setattr(nics, "list_all", list_all)
+    report = _watch_pass(c, "human_only")
+    assert any(r.get("outcome") == "unread" for r in report or []), report      # the pass ran, the read refused
+    assert [(e["id"], e["status"]) for e in _orphan_cards()] == [(old["id"], "pending")]
+
+
+def test_a_vm_missing_from_a_partial_listing_stays_named_when_another_comes(monkeypatch):
+    """U1O second review (P7): web's NIC held .4 and .6; batch gets .4, said. In one pass the
+    listing leaves batch's NIC out (batch still cut) and api gets .6. api is said at once;
+    batch, unproven gone, stays named — never « passée depuis à api »."""
+    f, c, subnet = _world(monkeypatch)
+    f.nics[key(nic_id("rg-app1", "web-nic"))]["ips"] = ["10.0.0.4", "10.0.0.6"]
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    _delete(f, WEB)
+    _new_vm_at(f, subnet, "10.0.0.4")
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    listing = f.network.network_interfaces.list_all
+    _hide(f, monkeypatch, nic_id("rg-new", "batch-nic"))
+    api = _new_vm_at(f, subnet, "10.0.0.6", rg="rg-app1", name="api")
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "adresse de api (carte api-nic)" in card["reason"], card
+    assert "Elle coupait aussi batch (carte batch-nic) : non relue depuis." in card["reason"], card["reason"]
+    note = next(e for e in _orphan_cards() if e["id"] == old["id"])["resolution"]
+    assert note.endswith("coupe désormais api (carte api-nic), batch (carte batch-nic) (U1O)."), note
+    _watch_pass(c, "human_only")
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+    monkeypatch.setattr(f.network.network_interfaces, "list_all", listing)      # the listing whole again
+    _watch_pass(c, "human_only")
+    assert [e["id"] for e in _orphan_cards() if e["status"] == "pending"] == [card["id"]]
+
+
+def test_a_vm_seen_on_another_nic_is_no_proof_it_left(monkeypatch):
+    """U1O second review (P9): batch has two NICs; the one at .4 is in a resource group the
+    listing leaves out, the other listed. Seen on a NIC is no proof it left the address:
+    only the NIC that held it proves it — its card stays."""
+    f, c, subnet = _world(monkeypatch)
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    _delete(f, WEB)
+    f.add_vm("rg-new", "batch", [{"rg": "rg-hidden", "name": "batch-nic-0", "ips": ["10.0.0.4"], "subnet": subnet,
+                                  "nsg": None},
+                                 {"rg": "rg-new", "name": "batch-nic-1", "ips": ["10.0.0.7"], "subnet": subnet,
+                                  "nsg": None}])
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    _hide(f, monkeypatch, nic_id("rg-hidden", "batch-nic-0"))
+    _watch_pass(c, "human_only")
+    assert [(e["id"], e["status"]) for e in _orphan_cards()] == [(old["id"], "pending")]
+
+
+@pytest.mark.parametrize("bad", [[None], "x", 5, [1, 2], [{"vm": 3}]])
+def test_a_said_entry_of_another_shape_never_stops_the_sweep(monkeypatch, bad):
+    """U1O second review (P8): `_said` in orphan_alerts.json read back with an entry of
+    another shape — treated as absent (compared by the card's VM, as before the review):
+    the sweep goes on, the VM cut now said."""
+    import json
+    from glorfindel import orphans
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    path = orphans._alerts_path()
+    data = json.loads(path.read_text())
+    data["_said"] = {k: bad for k in data["_said"]}
+    path.write_text(json.dumps(data))
+    api = _address_passes(f, subnet, ("rg-new", "batch-nic"))
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "batch" not in card["reason"], card
+
+
+def test_a_card_said_before_the_review_proves_a_departure_by_the_vms_nics(monkeypatch):
+    """U1O second review: a card said before `_said` recorded no NIC. batch's address passes
+    to api: batch's NICs, read, hold none of the rule's addresses — proven, the card
+    replaced for api alone, and `_said` written from then on."""
+    import json
+    from glorfindel import orphans
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    path = orphans._alerts_path()
+    data = json.loads(path.read_text())
+    data.pop("_said")
+    path.write_text(json.dumps(data))
+    api = _address_passes(f, subnet, ("rg-new", "batch-nic"))
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "batch" not in card["reason"], card
+    assert "_said" in json.loads(path.read_text())
+
+
+def test_a_vm_deleted_with_its_nic_kept_is_let_go(monkeypatch):
+    """U1O third review (P10): batch cut and said, then deleted — its NIC kept, still at the
+    address (`az vm delete`'s default). The NIC, off any VM now, proves batch left: never
+    « non relue depuis » for ever. What the rule cuts is said by the listing: the NIC."""
+    f, c, batch = _cut_new_vm(monkeypatch)
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    f.vms.pop(key(batch))
+    for _ in range(2):
+        report = _watch_pass(c, "human_only")
+        assert not any(r.get("outcome") == "unread" for r in report or []), report
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"] and "batch-nic" in card["reason"], card
+    assert "non relue depuis" not in card["reason"], card["reason"]
+
+
+def test_a_card_said_before_the_review_lets_go_of_a_vm_deleted(monkeypatch):
+    """U1O third review (P12): a card said before `_said`; batch deleted with its NIC, api
+    given the address. The VM gone (404) proves it left: the card for api alone."""
+    import json
+    from glorfindel import orphans
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    path = orphans._alerts_path()
+    data = json.loads(path.read_text())
+    data.pop("_said")
+    path.write_text(json.dumps(data))
+    _delete(f, batch, lose_state=False)
+    api = _new_vm_at(f, subnet, "10.0.0.4", rg="rg-app1", name="api")
+    for _ in range(2):
+        report = _watch_pass(c, "human_only")
+        assert not any(r.get("outcome") == "unread" for r in report or []), report
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api) and "batch" not in card["reason"], card
+
+
 def test_a_rule_turned_after_the_listing_stops_the_removal(monkeypatch):
     """I5Q, the review: the pass lists the NSGs, then someone turns the perimeter block
     before the removal — the guard is played again on the NSGs that govern the VM cut,

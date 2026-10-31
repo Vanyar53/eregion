@@ -2497,7 +2497,7 @@ l'I7 réglé, la machine va plus loin et tombe sur un **U1 présent sur `main` 9
 rule glorfindel-iso-web-web-nic-8b70f2 kept behind a rule turned into an allow (…), cutting
 […/api]: no pending card names it ») — la carte d'orpheline de la posture, pas le chemin de
 l'isolation ; cinq étapes figées en `xfail` strict
-(`test_an_orphan_kept_behind_a_turned_rule_is_said`), pour #372.
+(`test_an_orphan_kept_behind_a_turned_rule_is_said`), pour #372 — levé par U1O (ci-dessous).
 
 **I4E (30/10, #361) : une nouvelle isolation garde l'état ancien de la VM ; le démontage ne lit plus
 l'état écrit par le code.** Trouvé par la seconde relecture d'I4C. **Le défaut, sur `main` 91dae76** :
@@ -2820,6 +2820,135 @@ tests à chaque tour (60 séquences, deux tours, graine 4242) ; M1646 attrapé p
 main ». Avant la relecture (la règle en place, 48e42c8) : harnais avant/après sur les mutants de
 l'état et de la réaffirmation, 74/78 des deux côtés, plus M2150–M2152 (77/81) — M13 et M37 par leurs
 seules séquences figées, M36 et M1645 survivent, des deux côtés ; aucun perdu.
+
+**U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
+9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
+(`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque
+passage du balayage relevé : les orphelines listées, `orphan_alerts.json`, les cartes en attente avant et
+après) : le refus entrant de web (`glorfindel-iso-web-web-nic-8b70f2`, sur nsg-subnet), gardé derrière la
+règle de blocage de web retournée en allow (I5Q), est dit pour batch — la VM à son adresse, 10.0.0.4, à
+ce moment-là — sur une carte qui nomme bien la règle retournée. Puis l'adresse de batch change
+(`customer_changes_ip`) et une nouvelle VM, api, reçoit 10.0.0.4, derrière le même NSG. Au balayage
+suivant, en `non_disruptive`, `find_orphan_rules` dit juste : le refus coupe api, gardé derrière la règle
+retournée. Mais `orphan_alerts.json` tient une règle pour dite par son NSG et son nom seulement : sa
+carte, sur batch, passait pour la dire encore ; et la garde d'I5Q (une carte qui ne nomme pas toutes les
+règles retournées est remplacée) la trouvait juste — elle les nomme. Rien ne comparait la VM de la carte
+à celle que la règle coupe maintenant : api coupée, aucune carte en attente sur api ni sur le NSG ; la
+carte de batch disait coupée une VM qui ne l'était plus. Rien d'ouvert : ce qui coupe n'était pas dit.
+Ce n'est pas propre aux orphelines gardées : toute orpheline dite, en `human_only` aussi, gardait sa
+carte sur la VM d'avant quand l'adresse passait à une autre — ou à personne, et dans l'autre sens une
+carte sur le NSG (« aucune carte ne porte cette adresse ») restait quand une VM la recevait.
+
+**Correctif** (`glorfindel/orphans.py`). Au début du balayage, la carte de chaque orpheline dite est lue
+dans le magasin : si elle porte sur une autre ressource que celle que la règle coupe maintenant (la VM
+coupée, sinon celle qui tient l'adresse, sinon le NSG — `_resource`), elle est remplacée. En attente :
+fermée (« Remplacée : … (U1O) ») et chaque règle qu'elle disait redite — sa raison pouvait être celle de
+la règle déplacée, le magasin garde la première. Acquittée : elle reste fermée pour les règles qui coupent
+encore sa VM ; la règle déplacée seule est redite, pour la nouvelle. Une fois par changement : une règle
+dont la VM ne change pas n'est pas redite (M886 tient). Rien n'est retiré de plus : ce qui est gardé le
+reste (I4, I5Q). La carte dit aussi ce que la règle coupe en entier : la VM et sa carte réseau
+(« adresse de api (carte api-nic) aujourd'hui »), et chaque autre VM coupée (« Elle coupe aussi … ») ;
+le magasin fusionne par VM, la carte porte sur la première.
+
+**La machine.** Aucune règle retirée ni restreinte, aucun oracle affaibli. La séquence de 9001 passe le
+balayage, puis la réaffirmation qui la suit (sa dernière valeur tirée, `non_disruptive`, ajoutée : la
+séquence réduite s'arrêtait à l'échec). Tests (`test_orphan_sweep.py`), rouges sur `main` : le refus gardé
+dont l'adresse passe à api, en `human_only` et en `non_disruptive`
+(`test_a_kept_deny_whose_address_passed_to_another_vm_is_said_for_it`) ; une orpheline non gardée, carte
+en attente ou acquittée (`…said_again_when_its_address_passes_to_another`) ; l'adresse à personne puis à
+api (`…nobody_holds_any_more_is_said_of_its_nsg`) ; une carte partagée par deux règles dont une seule
+change de VM, en attente ou acquittée (`test_a_card_two_rules_share_when_one_moves_off_its_vm`) ; une
+règle qui coupe deux VM (`…cutting_two_vms_says_both_with_their_nics`).
+
+**Mesures d'U1O.** `pytest` complet, `origin/main` fusionné (L1C) : 4 660 réussis, 7 sautés, 4 `xfail` (un de moins) ; `ruff` propre ;
+`mutant_anchors.py` sans faute. Mutants M2260–M2265 (le remplacement retiré ; une carte remplacée qui
+laisse tues les autres règles qu'elle disait ; une carte acquittée qui fait redire les règles restées sur
+sa VM ; la carte réseau tue ; la seconde VM coupée tue ; la carte remplacée laissée en attente) : 6/6 par
+leurs tests, deux tours (60 séquences, graine 42). Par la machine seule, M2260 : 0/3 à 500 (graines 9001,
+42, 101) — la séquence réduite ne vient pas dans 500 —, tué à 2 000 sur la graine 9001 (le U1 de #372 :
+`glorfindel-iso-web-web-nic-8b70f2` coupe api, aucune carte en attente ne la nomme). Invariants sur le correctif : 500 séquences sur les graines 9001, 42, 101, 777,
+31337 et 1618, puis 2 000 sur les graines 9001, 322 et 1618, verts. Harnais avant/après au même budget (60 séquences, graine
+Hypothesis 42, `--jobs 4`) sur les 16 mutants d'`orphans.py` (M701, M760, M768, M769, M776, M883, M886,
+M887, M889, M1737–M1740, M1744–M1746) : 16/16 à chaque tour avant (`d05eade`) et après ; aucun perdu.
+
+**Relecture d'U1O (31/10) : deux trous de la même famille.** (1) **Une seconde VM coupée plus tard**
+(sonde P6 du relecteur) : la carte de web porte .4 et .6 ; web supprimée, batch reçoit .4 et la carte dit
+batch ; plus tard api reçoit .6, coupée par la même règle. Seul `_resource(o)`, la première VM coupée,
+était comparé : il ne changeait pas, rien n'était redit, aucune carte en attente ne nommait api — « chaque
+VM coupée » n'était vrai qu'à la première fois. Désormais `orphan_alerts.json` garde, sous `_said`, les VM
+que chaque règle coupait quand sa carte a été dite (`_said_of` : chaque VM coupée ; aucune coupée, la VM à
+l'adresse marquée `~` — son NSG ne la gouverne pas — ou le NSG), et la carte est remplacée quand cet
+ensemble change. Le cas voisin vient avec : une VM toujours à l'adresse que le NSG cesse de gouverner
+(`cut` vide) remplace la carte qui la disait coupée par une carte moyenne. Une entrée d'avant la relecture
+(sans `_said`) est comparée comme avant, par la VM de sa carte, puis complétée. (2) **Une lecture
+partielle des cartes réseau fermait une carte juste** (sonde P1) : batch coupée et dite, puis
+`network_interfaces.list_all()` ne rend plus sa carte réseau, sans erreur (Reader sur certains groupes de
+ressources) : `now_on` vide, la carte de batch fermée « passée depuis à nsg-subnet », remplacée par une
+carte qui disait à tort qu'aucune carte ne porte l'adresse — et, si la lecture oscille, du bruit. Une VM
+qui sort de l'ensemble sans qu'une autre y entre devait être prouvée partie (vue par la dernière liste
+sur une carte réseau, ou un 404 sur la VM — preuve remplacée à la seconde relecture, ci-dessous). Sinon la
+carte reste et le passage le dit (`outcome: unread`, la liste partielle). Quand une VM entre, la carte est
+remplacée sans attendre la preuve : ce qui coupe se dit d'abord (U1). (3) La note d'une carte remplacée quand personne ne tient l'adresse dit « vise
+une adresse qu'aucune carte ne porte plus (U1O) » (elle disait « passée depuis à nsg-subnet ») ; « coupe
+désormais … » quand une VM s'ajoute, « … que ce NSG ne gouverne plus » dans le cas voisin.
+
+Tests, rouges sans la relecture (`test_orphan_sweep.py`) : `test_a_second_vm_cut_later_by_a_rule_said_is_said`
+(en attente, acquittée), `test_a_vm_its_nsg_no_longer_governs_is_said_not_cut`,
+`test_a_vm_missing_from_a_partial_nic_listing_keeps_its_card` (la carte reste deux passages, puis batch
+supprimée : remplacée, la note juste). Mutants M2266–M2271 (la VM de la carte comparée seule ; la marque
+`~` perdue ; une VM absente de la liste prise pour partie ; M2269 et M2270, redéfinis à la seconde
+relecture ; la note « passée depuis à » le NSG) : 6/6 par leurs tests, deux tours (60 séquences), et
+M2260–M2265, ancres mises à jour, 6/6 encore. `pytest` complet : 4 664 réussis, 7 sautés, 4 `xfail` ;
+`ruff` propre ; `mutant_anchors.py` sans faute ; invariants à 500 sur les graines 9001, 1618 et 42, verts.
+
+**Seconde relecture d'U1O (31/10) : la preuve d'un départ, au niveau de la carte réseau.** La règle tenue :
+une VM dite coupée ne quitte la carte que sur une preuve par la carte réseau qui tenait l'adresse ; sans
+preuve, elle reste nommée ; ce qui entre se dit tout de suite, sans lâcher ce qui sort. Trois fuites
+(sondes du relecteur). **P7** : dans le même passage, la liste omet la carte réseau de batch (toujours
+coupée) et api entre — `came` non vide, aucune preuve n'était demandée : la carte de batch fermée « passée
+depuis à api », faux, et plus rien ne nommait batch. La preuve porte maintenant sur chaque VM qui sort,
+quoi qu'il entre ; une VM non prouvée reste dans `_said` (`kept`) et la nouvelle carte la nomme (« Elle
+coupait aussi batch (carte batch-nic) : non relue depuis. »), la note « coupe désormais api (carte
+api-nic), batch (carte batch-nic) ». **P9** : « vue sur une autre carte réseau » ne prouvait pas le départ
+— batch a deux cartes réseau, celle qui tient .4 dans un groupe de ressources que la liste omet. `_said`
+garde, pour chaque VM, la carte réseau qui tenait l'adresse ; le départ n'est prouvé que si cette carte
+réseau, relue par son id (`AzureConnector.nic_left_addresses`, `readers.py`), rend 404 ou se lit sans
+aucune des adresses de la règle (préfixes compris ; une étiquette de service ne prouve rien). 403, 429,
+absence de la liste : rien. Le raccourci par la liste (`_orphan_seen_vms`) est retiré, `sweep.py` n'y gagne
+rien. Une carte dite avant `_said` ne gardait que sa VM : ses cartes réseau d'aujourd'hui la prouvent
+(`vm_left_addresses`) ; la VM illisible ne prouve rien. **Troisième relecture** (P10, P12) : une VM
+supprimée n'était jamais lâchée — sa carte réseau gardée (le défaut d'`az vm delete`) tenait encore
+l'adresse, la VM restait « non relue depuis » pour toujours ; une carte réseau qui n'est plus attachée à la
+VM notée prouve le départ, et un 404 sur la VM aussi (carte d'avant `_said`) — la carte réseau qui tient
+encore l'adresse est dite par la liste comme ce que la règle coupe, rien ne se tait. Tests
+`…vm_deleted_with_its_nic_kept_is_let_go`, `…said_before_the_review_lets_go_of_a_vm_deleted`, rouges sur
+`dad34fb` ; mutant M2279. M2260–M2279 : 20/20, deux tours ; `pytest` complet 4 676 réussis ;
+invariants à 500 puis à 2 000 sur la graine 9001, verts.
+**P8** : une entrée de `_said` d'une autre forme (`[null]`, `5`, `[1, 2]`) arrêtait le balayage à chaque
+passe ; chaque entrée est validée (`_valid` : une liste de noms, ou d'entrées `vm`/`nic`/`ip` en chaînes),
+sinon tenue pour absente. **Trouvé en route** : le bloc d'I5Q plus bas réutilisait le nom `said` (les
+raisons des cartes) ; `_said` était perdu à chaque passe pour les cartes restées en place, et la
+comparaison retombait sur celle d'avant — la variable s'appelle `cut_said`.
+
+Tests (`test_orphan_sweep.py`), rouges sur `5083ca7` : `…partial_listing_stays_named_when_another_comes`
+(P7 : api dite, batch nommée, la note juste, la carte stable deux passages puis la liste revenue),
+`…seen_on_another_nic_is_no_proof_it_left` (P9), `…said_entry_of_another_shape_never_stops_the_sweep`
+(P8 : `[null]`, `5`, `[1, 2]`, `[{"vm": 3}]` ; `"x"` passait déjà). Gardes : `…nic_unread_proves_no_departure`
+(403, 429), `…said_before_the_review_proves_a_departure_by_the_vms_nics`. Mutants M2269, M2270 redéfinis
+(une carte réseau lue qui tient l'adresse comptée partie ; une lecture refusée comptée partie) et
+M2272–M2278 (la preuve demandée seulement quand rien n'entre ; la VM gardée tue dans la carte ; la VM gardée
+non retenue dans `_said` ; une entrée d'une autre forme lue ; un `_said` qui n'est pas une liste parcouru ;
+la marque « personne » gardée à côté d'une VM non prouvée ; les cartes réseau d'une VM d'avant `_said`
+jamais preuve). M2260–M2278 : 19/19 par leurs tests, deux tours (60 séquences) — M2270 survivait au
+premier passage : le test refusait toute lecture de carte réseau, la liste du faux comprise, et la carte
+restait parce que le balayage n'avait pas tourné ; il ne refuse plus que la relecture de la carte réseau
+de batch, et vérifie que le passage a tourné. `pytest` complet : 4 674 réussis, 7 sautés, 4 `xfail` ;
+`ruff` propre ; `mutant_anchors.py` sans faute ; invariants à 500 sur les graines 9001 et 42, puis à
+2 000 sur 9001, verts. `orphans.py` 401 lignes, `readers.py` 383, `sweep.py` 494 (une de moins).
+
+**Ouvert, hors lot** : un magasin d'escalades vidé par l'opérateur laisse dans `orphan_alerts.json` des
+cartes absentes du magasin ; la règle n'est jamais redite (le balayage la tient pour dite, et la comparaison
+d'U1O passe les cartes qu'il ne connaît pas). C'était déjà le cas avant U1O ; à trancher (issue ou non).
 
 **U7D (30/10, #368) : la graine 1006, l'opérateur du démontage ; un déblocage partiel élague son
 état.** Le défaut figé en `xfail` strict par la relecture de L1B, atteint à 60 séquences.

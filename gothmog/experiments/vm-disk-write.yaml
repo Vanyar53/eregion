@@ -1,0 +1,95 @@
+# G1 — bruit bénin : des écritures disque soutenues, 10 minutes, par l'agent Chaos Studio.
+#
+# Le bruit d'une sauvegarde ou d'un chargement en masse, au-dessus du seuil de la règle
+# ransomware-disk-write (décidé avec Jonathan le 31/10) : la règle se déclenche, et Glorfindel
+# décide sur du bénin. Sous le seuil, le RulePoller filtrerait le bruit avant toute décision, et
+# rien ne serait mesuré. Le seuil dépend du pas d'échantillonnage, lu dans les données comme le
+# fait la règle : au pas du banc (10 s, perf_sampling_frequency), la moyenne de deux échantillons
+# consécutifs au-dessus de 45 MB/s ; au pas grossier (60 s), un échantillon au-dessus de 25 MB/s.
+#
+# L'expérience est déclarée dans Celebrimbor (infra/terraform/chaos.tf, chaos.noise_vms) : l'agent
+# Chaos sur la VM, sa cible Microsoft-Agent, la capacité LinuxDiskIOPressure-1.1 (stress-ng). La
+# charge se règle là (chaos.disk_workers, chaos.disk_file_size, chaos.disk_block_size) ; le débit
+# atteint dépend du disque (le Standard HDD du banc plafonne vers 60 MB/s). L'effet, plus bas, dit
+# s'il a passé le seuil : sinon, le run échoue, et il ne compte pas.
+schema_version: "1"
+id: vm-disk-write
+kind: fault
+engine: chaos-studio
+engine_ref: exp-celebrimbor-gondolin-disk
+name: "Disk writes (benign, 10 min)"
+description: >
+  Écrit sur le disque de la VM d'exercice pendant 10 minutes, au-dessus du seuil de la règle
+  ransomware-disk-write, tel qu'elle le calcule. Le bruit d'une sauvegarde : aucun fichier renommé, rien de chiffré. Ce
+  que Glorfindel doit montrer : aucune recommandation d'isoler ni de bloquer. Une recommandation
+  de ce genre est une panne prise pour une attaque, comptée dans le taux de G1
+  (analysis/fault_rate.py).
+version: "1.0"
+# Déclarée, pas encore mesurée : implemented après le premier run sur le banc.
+status: planned
+# Des fichiers temporaires de stress-ng, effacés par l'agent : aucune donnée touchée.
+destructive: false
+
+targets:
+  resource_type: azure_vm
+  zone: bench
+  names: [vm-celebrimbor-gondolin]
+
+# Le bruit est bénin : la VM sert pendant (during: true). Si elle cesse de répondre, ce n'est plus
+# du bruit, et le run annule la panne.
+steady_state:
+  probes:
+    - name: vm-running
+      verify: power_state
+      expect: PowerState/running
+      during: true
+    - name: guest-agent-ready
+      verify: vm_agent
+      expect: Ready
+      during: true
+    - name: heartbeat
+      verify: "Heartbeat | where _ResourceId =~ '{target}' | summarize LastSeen = max(TimeGenerated)"
+      expect: fresh 10m
+      during: true
+
+# Ce que la règle lit, calculé comme elle (glorfindel/rules/azure/detection_rules.yaml) : Perf,
+# Disk Write Bytes/sec, par disque, entre le début et la fin de la panne ; le pas lu dans les
+# données ; au pas fin (25 s ou moins), la moyenne de deux échantillons consécutifs, son seuil
+# 45 MB/s ; au pas grossier, un échantillon, son seuil 25 MB/s. Peak est le plus haut dépassement
+# de ce seuil, en octets/s : au-dessus de 0, la règle se serait déclenchée. Un test garde ce
+# calcul égal à celui de la règle (tests/unit/test_gothmog_noise.py).
+effect:
+  probes:
+    - name: disk-writes-above-the-rule
+      verify: >-
+        let samples = Perf
+        | where _ResourceId =~ '{target}'
+        | where TimeGenerated between (datetime({start}) .. datetime({end}))
+        | where ObjectName == 'Logical Disk' or ObjectName == 'LogicalDisk'
+        | where CounterName == 'Disk Write Bytes/sec'
+        | project TimeGenerated, InstanceName, CounterValue
+        | order by InstanceName asc, TimeGenerated asc
+        | extend Same = prev(InstanceName) == InstanceName
+        | extend Gap = iff(Same, TimeGenerated - prev(TimeGenerated), timespan(null)),
+                 PrevValue = iff(Same, prev(CounterValue), real(null));
+        samples
+        | join kind=leftouter (samples | summarize Step = minif(Gap, Gap >= 1s) by InstanceName) on InstanceName
+        | extend Fine = isnotnull(Step) and Step <= 25s
+        | extend Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue)
+        | extend Over = iff(Fine, Rate - 45000000, Rate - 25000000)
+        | summarize Peak = max(Over)
+      expect: above 0
+
+abort_conditions:
+  - name: steady-state-lost
+    when: "une sonde during ne tient plus pendant la panne : annulée, puis le retour est vérifié"
+  - name: past-duration
+    when: "l'exécution dépasse sa durée de plus de 5 minutes, ou le plafond du run : annulée"
+  - name: interrupted
+    when: "Ctrl-C ou erreur pendant la panne : annulée, puis le retour est vérifié"
+
+revert:
+  - name: engine-stop
+    action: chaos_studio
+  - name: start-vm
+    action: start_vm

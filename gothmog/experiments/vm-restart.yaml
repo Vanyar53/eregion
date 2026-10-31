@@ -1,0 +1,56 @@
+# G1 — bruit bénin : un redémarrage, l'arrêt propre d'une minute, par Chaos Studio.
+#
+# Le bruit d'un redémarrage de maintenance, comme après un correctif. La même capacité que G0
+# (Shutdown-1.0, sans agent), plus courte. Au démarrage, l'agent de supervision envoie
+# plusieurs échantillons sous un seul horodatage (#105, 19/10) : c'est ce qui pourrait tromper une
+# règle. L'expérience est déclarée dans Celebrimbor (infra/terraform/chaos.tf, chaos.noise_vms).
+schema_version: "1"
+id: vm-restart
+kind: fault
+engine: chaos-studio
+engine_ref: exp-celebrimbor-gondolin-restart
+name: "VM restart (graceful, 1 min down)"
+description: >
+  Arrête proprement la VM d'exercice (abruptShutdown = false) pendant une minute, puis Chaos
+  Studio la redémarre. Ce que Glorfindel doit montrer : rien de disruptif. Une VM qui redémarre
+  n'est pas une attaque, et une isolation pendant la fenêtre est une panne prise pour une attaque.
+version: "1.0"
+# Déclarée, pas encore mesurée : implemented après le premier run sur le banc.
+status: planned
+destructive: false
+
+targets:
+  resource_type: azure_vm
+  zone: bench
+  names: [vm-celebrimbor-gondolin]
+
+# La VM est arrêtée par construction : aucune sonde ne tient pendant la panne.
+steady_state:
+  probes:
+    - name: vm-running
+      verify: power_state
+      expect: PowerState/running
+    - name: guest-agent-ready
+      verify: vm_agent
+      expect: Ready
+    - name: heartbeat
+      verify: "Heartbeat | where _ResourceId =~ '{target}' | summarize LastSeen = max(TimeGenerated)"
+      expect: fresh 10m
+
+effect:
+  probes:
+    - name: vm-down
+      verify: power_state
+      expect: down
+
+abort_conditions:
+  - name: past-duration
+    when: "l'exécution dépasse sa durée de plus de 5 minutes, ou le plafond du run : annulée"
+  - name: interrupted
+    when: "Ctrl-C ou erreur pendant la panne : annulée, puis le retour est vérifié"
+
+revert:
+  - name: engine-restart
+    action: chaos_studio
+  - name: start-vm
+    action: start_vm

@@ -11,11 +11,18 @@ normal checked before, during and after, the return to the initial state verifie
     3  before    every steady-state probe holds on every target — otherwise no fault
     4  inject    exercise window opened (kind fault), the start journaled then sent,
                  ``fault_started``
-    5  during    the execution followed; the fault must be seen (the VM down). Past its
-                 duration and a margin, or the run's cap, the experiment is cancelled
-    6  after     the probes again, the heartbeat later than the fault's end. If the engine
-                 did not bring the VM back: the declared revert (start it), then the probes
-                 again. The return is verified only by a probe, never by the engine's word
+    5  during    the execution followed; the fault must be seen — its declared effect, as
+                 Glorfindel's telemetry sees it (G1: the VM down, or load or writes in Perf).
+                 A probe marked ``during`` must hold meanwhile (benign noise leaves the VM
+                 serving): lost, the experiment is cancelled. Past its duration and a margin,
+                 or the run's cap, it is cancelled too
+    6  after     the probes again, the heartbeat later than the fault's end, and an effect
+                 not seen yet still looked for between its start and end (ingestion lags). If
+                 the engine did not bring the VM back: the declared revert (start it), then
+                 the probes again. The return is verified only by a probe, never by the
+                 engine's word
+    6b watch     the Glorfindel watch read again (G1): ``checks.watch_after`` — alive before
+                 the fault and after it, or its reaction is not known (analysis/fault_rate.py)
     7  record    ``runs/<run_id>.json`` as Annatar's, the probes' values before and after
                  in ``metrics.before`` / ``metrics.after``; window closed, and with an
                  exercise channel the report goes to H0 with it (#193); signals in
@@ -43,7 +50,7 @@ from eregion_core.orodruin import arm
 from gothmog.engines.chaos_studio import (
     DOWN, ChaosStudio, _parse, experiment_targets, fault_duration_s, is_terminal,
     latest_execution, power_state)
-from gothmog.probes import declared_errors, evaluate, holds
+from gothmog.probes import UNREADABLE, declared_errors, effect_errors, evaluate, holds, observe
 from gothmog.runner.report import RunReport
 from gothmog.signals.emitter import SignalEmitter
 
@@ -56,6 +63,9 @@ MIN_CALLS = 3
 POLL_S = 30.0
 ABORT_MARGIN_S = 300.0      # past the declared duration, the experiment is cancelled
 RESTORE_TIMEOUT_S = 600.0   # boot + guest agent + first heartbeat ingested (1–3 min measured)
+# Polls in a row a ``during`` probe may go unread (a 429) before the noise is cancelled: a
+# throttled API is not the VM down; three in a row (1 min 30 s) is no longer a hiccup.
+DURING_UNREAD_MAX = 3
 SUCCESS = frozenset({"success", "succeeded", "completed"})
 
 
@@ -85,7 +95,12 @@ def fault_errors(doc) -> list[str]:
         errors.append("destructive must be declared, true or false")
     if not (doc.get("targets") or {}).get("names"):
         errors.append("targets.names: a fault declares its targets")
-    return errors + declared_errors((doc.get("steady_state") or {}).get("probes"))
+    return (errors + declared_errors((doc.get("steady_state") or {}).get("probes"))
+            + effect_errors((doc.get("effect") or {}).get("probes")))
+
+
+def _all_seen(effect, vms, effects: dict) -> bool:
+    return all((effects.get((vm, p["name"])) or {}).get("ok") for vm in vms for p in effect)
 
 
 def find_fault(name_or_path: str) -> Path:
@@ -321,6 +336,8 @@ class Engine:
     def _inject(self, fault, run_id, bench, vms, seen, verdict, run_start) -> RunOutcome:
         name = fault["engine_ref"]
         probes = fault["steady_state"]["probes"]
+        during = [p for p in probes if p.get("during") is True]
+        effect = fault["effect"]["probes"]
         duration = seen["experiment"]["duration_s"]
         emitter = SignalEmitter(run_id, fault.get("id") or fault["name"], vms, self.runs_dir)
         checks = {"targets": "PASS", "steady_state_before": "PASS"}
@@ -349,6 +366,9 @@ class Engine:
         deadline = min(t0 + timedelta(seconds=duration + self.abort_margin_s),
                        run_start + timedelta(seconds=verdict.cap["max_run_s"]))
         execution, status, seen_down, aborted, cancelled_at = None, "", None, None, None
+        effects: dict = {}      # (vm, effect probe) → its last reading, kept once seen
+        unsteady: dict = {}     # vm → the ``during`` probes, when one stopped holding
+        unread: dict = {}       # vm → polls in a row with a ``during`` probe unreadable
         try:
             while True:
                 try:
@@ -357,13 +377,28 @@ class Engine:
                     for vm in vms:
                         if seen_down is None and power_state(bench.vm(vm)) in DOWN:
                             seen_down = self._now()
-                            console.print(f"  [dim]{vm.rsplit('/', 1)[-1]} down — the fault is effective[/dim]")
+                            console.print(f"  [dim]{vm.rsplit('/', 1)[-1]} down[/dim]")
                 except Exception as e:  # a read that fails is retried; the deadline still holds
                     console.print(f"  [yellow]read failed during the fault: {e}[/yellow]")
+                self._see(effect, vms, bench, effects, start=t0, end=self._now())
+                if during and not unsteady and cancelled_at is None:
+                    for vm in vms:
+                        rs = evaluate(during, vm, bench, now=self._now())
+                        said = [r for r in rs if not r.ok and not r.observed.startswith(UNREADABLE)]
+                        unread[vm] = unread.get(vm, 0) + 1 if not holds(rs) and not said else 0
+                        if said or unread[vm] >= DURING_UNREAD_MAX:
+                            unsteady[vm] = rs
                 if is_terminal(status):
                     break
                 now = self._now()
-                if cancelled_at is None and now >= deadline:
+                if unsteady and cancelled_at is None:
+                    aborted = "steady state lost during the fault: " + "; ".join(
+                        f"{vm.rsplit('/', 1)[-1]} {r.name} {r.observed}"
+                        for vm, rs in unsteady.items() for r in rs if not r.ok)
+                    console.print(f"[yellow]Cancelling the experiment — {aborted}[/yellow]")
+                    bench.cancel(name)
+                    cancelled_at = now
+                elif cancelled_at is None and now >= deadline:
                     aborted = "past its duration and margin, or the run's cap"
                     console.print(f"[yellow]Cancelling the experiment — {aborted}[/yellow]")
                     bench.cancel(name)
@@ -381,11 +416,19 @@ class Engine:
         fault_end = _parse(((execution or {}).get("properties") or {}).get("stoppedAt")) or self._now()
         emitter.emit("fault_ended", raw_signal={"status": status, "aborted": aborted,
                                                 "seen_down_at": seen_down.isoformat() if seen_down else None})
-        checks["fault_effective"] = "PASS" if seen_down else "FAIL"
+        if during:
+            checks["steady_state_during"] = "FAIL" if unsteady else "PASS"
         checks["execution"] = "PASS" if status.lower() in SUCCESS and not aborted else f"FAIL ({status or 'unknown'})"
 
         # 6. After: the probes again, later than the fault's end; the declared revert if not.
-        after, restored_at = self._await_steady(probes, vms, bench, since=fault_end)
+        # An effect read in the telemetry may land minutes after the fault (ingestion): still
+        # looked for, between its start and end — never after it.
+        queried = [p for p in effect if p["verify"] != "power_state"]
+
+        def unseen() -> bool:
+            self._see(queried, vms, bench, effects, start=t0, end=fault_end)
+            return not _all_seen(queried, vms, effects)
+        after, restored_at = self._await_steady(probes, vms, bench, since=fault_end, pending=unseen)
         fallback = False
         if restored_at is None and any(r.get("action") == "start_vm" for r in fault.get("revert") or []):
             for vm in vms:
@@ -395,11 +438,17 @@ class Engine:
                         fallback = True
                 except Exception as e:
                     console.print(f"[red]revert failed on {vm.rsplit('/', 1)[-1]}: {e}[/red]")
-            after, restored_at = self._await_steady(probes, vms, bench, since=fault_end)
+            after, restored_at = self._await_steady(probes, vms, bench, since=fault_end, pending=unseen)
+        effective = _all_seen(effect, vms, effects)
+        checks["fault_effective"] = "PASS" if effective else "FAIL"
         revert_verified = all(holds(rs) for rs in after.values())
         checks["revert_verified"] = "PASS" if revert_verified else "FAIL"
         emitter.emit("steady_state_restored" if revert_verified else "revert_failed",
                      raw_signal={"fallback_used": fallback})
+        # The watch read again once the fault is over (G1, review 2): alive before it (V1, SEC5)
+        # and after it, or what Glorfindel did meanwhile is not known (analysis/fault_rate.py).
+        if not self._without:
+            checks["watch_after"] = self._watch_after()
 
         result = "PASS" if all(v == "PASS" for v in checks.values()) else "FAIL"
         metrics = {
@@ -409,19 +458,57 @@ class Engine:
             "fallback_used": fallback,
             "time_to_restore_s": (restored_at - fault_end).total_seconds() if restored_at else None,
             "after": {vm.rsplit("/", 1)[-1]: [vars(r) for r in rs] for vm, rs in after.items()},
+            # G1: what showed the fault happened, as Glorfindel's telemetry sees it; a fault
+            # whose effect was not seen measures nothing of Glorfindel (analysis/fault_rate.py).
+            "effect": {vm.rsplit("/", 1)[-1]: [effects.get((vm, p["name"])) or
+                                               {"name": p["name"], "ok": False, "observed": "not read",
+                                                "expect": str(p["expect"]), "seen_at": None}
+                                               for p in effect] for vm in vms},
+            **({"steady_state_lost": {vm.rsplit("/", 1)[-1]: [vars(r) for r in rs]
+                                      for vm, rs in unsteady.items()}} if unsteady else {}),
         }
         return self._record(fault, run_id, result, metrics, checks)
 
-    def _await_steady(self, probes, vms, bench, *, since):
-        """The probes until they all hold, within the restore timeout."""
+    def _see(self, effect, vms, bench, effects: dict, *, start, end) -> None:
+        """Each effect probe not seen yet, on each target; a reading once seen is kept."""
+        for vm in vms:
+            pending = [p for p in effect if not (effects.get((vm, p["name"])) or {}).get("ok")]
+            if not pending:
+                continue
+            at = self._now().isoformat()
+            for r in observe(pending, vm, bench, start=start, end=end):
+                effects[(vm, r.name)] = {**vars(r), "seen_at": at if r.ok else None}
+                if r.ok:
+                    console.print(f"  [dim]{vm.rsplit('/', 1)[-1]} {r.name}: {r.observed} — "
+                                  f"the fault is effective[/dim]")
+
+    @staticmethod
+    def _watch_after() -> str:
+        try:
+            gone = watch_gate.refusal()
+        except Exception as e:  # unreadable is not alive
+            gone = f"unreadable: {type(e).__name__}: {e}"[:200]
+        if gone:
+            console.print(f"[yellow]The Glorfindel watch is not live after the fault:[/yellow] {gone}")
+        return f"FAIL ({gone})" if gone else "PASS"
+
+    def _await_steady(self, probes, vms, bench, *, since, pending=None):
+        """The probes until they all hold, within the restore timeout — and, with ``pending``,
+        until it says nothing is left to see (the fault's effect, read late): the return is
+        dated when the probes first held."""
         deadline = self._now() + timedelta(seconds=self.restore_timeout_s)
+        held = None
         while True:
             now = self._now()
-            results = {vm: evaluate(probes, vm, bench, since=since, now=now) for vm in vms}
-            if all(holds(rs) for rs in results.values()):
-                return results, now
+            if held is None:
+                results = {vm: evaluate(probes, vm, bench, since=since, now=now) for vm in vms}
+                if all(holds(rs) for rs in results.values()):
+                    held = (results, now)
+            left = pending is not None and pending()
+            if held is not None and not left:
+                return held
             if now >= deadline:
-                return results, None
+                return held or (results, None)
             self._sleep(self.poll_s)
 
     @staticmethod

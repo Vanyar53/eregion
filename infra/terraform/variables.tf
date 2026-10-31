@@ -47,3 +47,13 @@ variable "entra_logs_enabled" {
   default     = false
   nullable    = false
 }
+
+# G1 : les VM qui reçoivent le bruit bénin (chaos.tf). La source de vérité reste chaos.noise_vms
+# du config.yaml ; cette variable ne sert qu'à le remplacer le temps d'un plan — ce que fait
+# tests/chaos_noise.tftest.hcl, un local ne se remplaçant pas dans un test. Un second moyen
+# d'allumer le bruit, réservé aux tests : jamais dans terraform.tfvars ni par TF_VAR_.
+variable "chaos_noise_vms" {
+  description = "Remplace chaos.noise_vms du config.yaml (G1) quand elle est donnée ; null (défaut) : le config.yaml."
+  type        = list(string)
+  default     = null
+}

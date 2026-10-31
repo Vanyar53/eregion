@@ -14,8 +14,11 @@ resource "azurerm_linux_virtual_machine" "baseline" {
 
   network_interface_ids = [azurerm_network_interface.celebrimbor_vm[each.key].id]
 
+  # G1 : une VM qui reçoit le bruit bénin (chaos.noise_vms) porte aussi l'identité de l'agent
+  # Chaos (chaos.tf), sans rôle. L'agent Azure Monitor garde l'identité système.
   identity {
-    type = "SystemAssigned"
+    type         = contains(keys(local.chaos_noise_vms), each.key) ? "SystemAssigned, UserAssigned" : "SystemAssigned"
+    identity_ids = contains(keys(local.chaos_noise_vms), each.key) ? [azurerm_user_assigned_identity.chaos_agent[each.key].id] : null
   }
 
   admin_ssh_key {

@@ -59,7 +59,8 @@
 # engine (jamais local-script), engine_ref, destructive, et où elle s'observe. Les chargeurs
 # d'Annatar (planificateur) et de Glorfindel (autoring de règles) ne lisent que `techniques:` :
 # une panne ne devient ni une attaque planifiée, ni une règle de détection à rédiger.
-# Première panne : vm-shutdown (G0), sous azure_vm.
+# Première panne : vm-shutdown (G0), sous azure_vm ; puis le bruit bénin de G1 (disque, CPU,
+# redémarrage).
 
 version: "1.0"
 
@@ -237,6 +238,39 @@ resource_types:
         destructive: false
         log_source: Heartbeat
         expected_effect: "VM arrêtée puis redémarrée par le moteur ; Heartbeat absent pendant la panne"
+        expected_latency_s: 180
+
+      # G1 — bruit bénin : Glorfindel ne doit ni isoler ni bloquer. Pannes déclarées dans
+      # gothmog/experiments/, expériences dans infra/terraform/chaos.tf (chaos.noise_vms), pas
+      # encore appliquées : planned jusqu'au premier run sur le banc.
+      - id: vm-disk-write
+        name: "Disk writes (benign, 10 min)"
+        status: planned
+        engine: chaos-studio
+        engine_ref: exp-celebrimbor-gondolin-disk
+        destructive: false
+        log_source: Perf
+        expected_effect: "écritures disque au-dessus du seuil de ransomware-disk-write : la règle se déclenche sur du bénin"
+        expected_latency_s: 180
+
+      - id: vm-cpu-pressure
+        name: "CPU load (benign, 95 %, 10 min)"
+        status: planned
+        engine: chaos-studio
+        engine_ref: exp-celebrimbor-gondolin-cpu
+        destructive: false
+        log_source: Perf
+        expected_effect: "% Processor Time au-dessus de 80 ; la VM sert pendant la panne"
+        expected_latency_s: 180
+
+      - id: vm-restart
+        name: "VM restart (graceful, 1 min down)"
+        status: planned
+        engine: chaos-studio
+        engine_ref: exp-celebrimbor-gondolin-restart
+        destructive: false
+        log_source: Heartbeat
+        expected_effect: "VM arrêtée une minute puis redémarrée ; échantillons Perf groupés au démarrage (#105)"
         expected_latency_s: 180
 
   # ───────────────────────────────────────────────────────────────────────────────

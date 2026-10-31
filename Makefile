@@ -114,11 +114,11 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
 	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
-	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-known celebrimbor-workload \
+	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
 	gothmog-preflight gothmog-run \
-	orodruin-campaign-plan orodruin-campaign-run campaign-containment \
+	orodruin-campaign-plan orodruin-campaign-run campaign-containment fault-rate \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
 	team-check team-init team-start team-stop team-logs team-config components-check images-check \
 	console-shots
@@ -220,10 +220,12 @@ help:
 	@echo "                                               les noms des cibles destructives, la porte sur Orodruin qui la rejuge et la lance"
 	@echo "  make orodruin-down                           Détruit la VM et l'identité"
 	@echo ""
-	@echo "Gothmog (G0) — une panne déclarée, depuis Orodruin (gothmog/README.md) :"
+	@echo "Gothmog (G0, G1) — une panne déclarée, depuis Orodruin (gothmog/README.md) :"
 	@echo "  make gothmog-preflight [FAULT=vm-shutdown]   Contrat, cibles, état normal — rien d'écrit"
 	@echo "  make gothmog-run [FAULT=vm-shutdown]         La panne, son retour vérifié (~15 min)"
 	@echo "    Sans watch de Glorfindel vivante, refusé (V1) ; WITHOUT_GLORFINDEL=1 : run de dév, dit au rapport"
+	@echo "    FAULT=vm-disk-write | vm-cpu-pressure | vm-restart : le bruit bénin (G1)"
+	@echo "  make glorfindel-host-fault-rate [DAYS=30]    Les pannes prises pour une attaque, sur H0 (G1)"
 	@echo ""
 	@echo "Campagne (R1 + IA0) — kill-chain + rapport, depuis Orodruin :"
 	@echo "  make orodruin-campaign-plan CAMPAIGN_TARGET=<rid> [CAMPAIGN_MAX=5]  Planifie (rend un id)"
@@ -323,6 +325,13 @@ campaign-containment:
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (ls runs/campaigns)"; exit 1; }
 	@case "$(CAMPAIGN)$(FAULT_RUNS)" in *[!A-Za-z0-9._,-]*) echo "CAMPAIGN ou FAULT_RUNS invalide"; exit 1;; esac
 	$(PYTHON) -m analysis.containment runs/campaigns/$(CAMPAIGN)$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)
+
+# G1 (#76) — le taux des pannes prises pour une attaque, sur toutes les pannes de Gothmog des DAYS
+# derniers jours (analysis/fault_rate.py) ; aucun modèle, rien d'écrit. JSON=1 : en JSON. Sur l'hôte
+# de la watch seulement : ailleurs, ses décisions ne sont pas là et chaque panne est « non mesurée ».
+fault-rate:
+	@case "$(DAYS)" in *[!0-9]*) echo "DAYS invalide : un nombre de jours"; exit 1;; esac
+	$(PYTHON) -m analysis.fault_rate --runs-dir runs --days $(or $(DAYS),30)$(if $(JSON), --json)
 
 # IA0 harness: fidelity and a planted instruction, against the real analysis model.
 report-eval:
@@ -721,6 +730,11 @@ glorfindel-host-containment: glorfindel-host-known
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
 	@case "$(CAMPAIGN)$(FAULT_RUNS)" in *[!A-Za-z0-9._,-]*) echo "CAMPAIGN ou FAULT_RUNS invalide"; exit 1;; esac
 	$(HOST_SSH) 'docker exec eregion-watch python -m analysis.containment runs/campaigns/$(CAMPAIGN)$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)'
+
+# G1 (#76) : le même taux, sur H0, où sont les décisions de la watch — lecture seule, aucun modèle.
+glorfindel-host-fault-rate: glorfindel-host-known
+	@case "$(DAYS)" in *[!0-9]*) echo "DAYS invalide : un nombre de jours"; exit 1;; esac
+	$(HOST_SSH) 'docker exec eregion-watch python -m analysis.fault_rate --runs-dir runs --days $(or $(DAYS),30)$(if $(JSON), --json)'
 
 glorfindel-host-url:
 	@test -f $(HOST_ENV) || { echo "$(HOST_ENV) manquant (make glorfindel-host-env)"; exit 1; }

@@ -47,6 +47,7 @@ PIF = "glorfindel/providers/interface.py"
 R = "glorfindel/reassert.py"
 RQ = "glorfindel/reassert_quarantine.py"       # split out of reassert.py (RB1)
 RSD = "glorfindel/reassert_said.py"            # a block card's words, out of reassert.py (I3P)
+PER = "glorfindel/providers/azure/perimeter.py"
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
@@ -5222,8 +5223,8 @@ _I4C = ("tests/unit/test_invariant_regressions.py::test_a_perimeter_lifted_by_a_
         f"{INVARIANTS}")
 MUTANTS += [
     ("M1965", "a bypassed block drops what is gone: the perimeter's pair lifted by a neighbour, unsaid (I4C)", VBL,
-     '                return {**self._block_bypassed(ip, bypass), **({"held_missing": held_missing} if held_missing else {})}\n',
-     "                return self._block_bypassed(ip, bypass)\n"),
+     '                return {**self._block_bypassed(ip, bypass), **({"held_missing": held_missing} if held_missing else {}),\n',
+     "                return {**self._block_bypassed(ip, bypass),\n"),
     ("M1966", "the reassertion reads a bypass with rules gone as nothing missing: silent (I4C)", R,
      "        verification.get(\"uncovered_nics\") or verification.get(\"missing_rules\")\n"
      "        or verification.get(\"held_missing\"))) or bool(\n",
@@ -6312,6 +6313,51 @@ MUTANTS += [
 TESTS.update({"M2151": f"{_L1Q_BACK} {INVARIANTS}", "M2152": f"{_L1Q_BACK} {INVARIANTS}",
               "M2153": f"{_RT}a_new_episode_never_compares_with_what_held_of_the_one_before",
               "M2155": f"{_RT}a_drift_better_under_a_pending_card_then_acknowledged_then_worse_is_said"})
+# I3P (#366): a block card never says « plus bloquée » where our perimeter still cuts the IP off —
+# an allow a customer's deny drops first lets nothing through; each NIC said where it stands,
+# bypassed or not; with none open nor unknown, « reste bloquée »; NICs unread, not known.
+_I3P_SEED = "tests/unit/test_invariant_regressions.py::test_the_reassertion_says_unblocked_where_our_perimeter_block_still_cuts"
+_I3P_NO_NIC = ("tests/unit/test_invariant_regressions.py::"
+               "test_the_reassertion_says_unblocked_naming_no_nic_where_our_perimeter_still_cuts")
+_I3P_UT = "tests/unit/test_glorfindel.py::test_"
+_I3P_HELD = f"{_I3P_UT}a_bypassed_nic_behind_the_perimeter_is_said_held_never_unblocked"
+_I3P_FIRST = f"{_I3P_UT}an_allow_a_customer_deny_drops_first_lets_nothing_through"
+_I3P_UNREAD = f"{_I3P_UT}rules_gone_on_unread_nics_are_never_said_unblocked"
+MUTANTS += [
+    ("M2180", "an allow a customer's deny drops first read as passing the perimeter: « n'est plus bloquée » "
+              "where it still cuts the IP off (I3P)", PER,
+     "                    found = [f for f in found if not _dropped_first(rules, f, ip, ips)]\n",
+     "                    pass\n"),
+    ("M2181", "a customer's deny after the allow counted as dropping it first: a perimeter passed said holding "
+              "(I3P)", NSG,
+     "        isinstance(getattr(r, \"priority\", None), int) and r.priority < prio\n",
+     "        isinstance(getattr(r, \"priority\", None), int) and r.priority != prio\n"),
+    ("M2182", "our own deny counted as the customer's before an allow: the perimeter said holding by an "
+              "isolation's rule (I3P)", NSG,
+     "        and not _rule_name(r).lower().startswith(\"glorfindel-\")\n", ""),
+    ("M2183", "a deny of an application security group counted as dropping the attacker's traffic first (I3P)",
+     NSG,
+     "        and not getattr(r, \"source_application_security_groups\", None)\n"
+     "        and not getattr(r, \"destination_application_security_groups\", None)\n", ""),
+    ("M2184", "a bypassed block drops where each NIC stands: a card naming no NIC says « plus bloquée » under "
+              "the perimeter (I3P)", VBL,
+     "                        \"open_nics\": open_nics, **said}\n", "                        }\n"),
+    ("M2185", "a NIC whose own block is passed never asked the perimeter: neither said held nor open (I3P)", VBL,
+     "                            _stand(t0)\n", "                            pass\n"),
+    ("M2186", "NICs unread left unsaid: rules gone on them said « n'est plus bloquée » (I3P, A0)", VBL,
+     "                    **({\"nics_unread\": nics_unread} if nics_unread else {})}\n", "                    }\n"),
+    ("M2187", "no NIC open nor unknown, the perimeter holding: « l'IP n'est plus bloquée » of the whole VM (I3P)",
+     RSD, "    elif held:\n        tail = f\"l'IP reste bloquée sur", "    elif False:\n        tail = f\"l'IP reste bloquée sur"),
+    ("M2188", "rules gone on NICs unread said « n'est plus bloquée » (I3P, A0)", RSD,
+     "    elif v.get(\"nics_unread\"):\n", "    elif False:\n"),
+]
+TESTS.update({
+    "M2180": f"{_I3P_SEED} {_I3P_UT}the_perimeter_holds_behind_an_allow_a_customer_deny_drops_first {INVARIANTS}",
+    "M2181": f"{_I3P_FIRST} {INVARIANTS}", "M2182": _I3P_FIRST, "M2183": _I3P_FIRST,
+    "M2184": f"{_I3P_NO_NIC} {_I3P_HELD} {INVARIANTS}",
+    "M2185": f"{_I3P_HELD} {_I3P_UT}a_bypass_on_one_nic_is_said_beside_rules_gone_on_another {INVARIANTS}",
+    "M2186": _I3P_UNREAD, "M2188": _I3P_UNREAD,
+    "M2187": f"{_I3P_NO_NIC} {_I3P_HELD} {INVARIANTS}"})
 # DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
 # (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
 # environment and its connections, the video kept outside the repository.

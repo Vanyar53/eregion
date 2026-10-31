@@ -9,7 +9,11 @@ def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = Fa
     """What a block's verification says is gone, and what still holds (RB1). Never « n'est
     plus bloquée » of an IP our perimeter (or the quarantine) still cuts off, nor of a NIC
     whose perimeter couldn't be read: that is said as unknown. `said`: the tail of a card
-    whose head is already written (after a re-application)."""
+    whose head is already written (after a re-application).
+
+    No NIC open nor unknown (I3P, #366): the IP is not said « plus bloquée » of the whole VM —
+    where the perimeter holds, it « reste bloquée » (its own rules gone or passed by an
+    allow, said beside it); NICs that couldn't be read, it is not known."""
     gone = [str(n) for n in (v.get("missing_rules") or v.get("held_missing") or [])]
     names = f" ({', '.join(gone)})" if gone else ""
     held, open_, unsure = (v.get("held_by_perimeter") or [], v.get("open_nics") or [],
@@ -27,12 +31,20 @@ def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = Fa
                 if v.get("shadowed_by") else f"non vérifiable ({v.get('error') or 'illisible'})")
         return (what + ".") if said else f"Le blocage de {ip} sur {vm} a disparu d'Azure{twice} — {what}."
     head = "" if said else f"Le blocage de {ip} sur {vm} a disparu d'Azure{twice}{names} — "
-    if open_ or not unsure:
-        tail = "l'IP n'est plus bloquée" + (f" sur {', '.join(open_)}" if open_ else "")
-    else:
+    if open_:
+        tail = f"l'IP n'est plus bloquée sur {', '.join(open_)}"
+    elif unsure:
         tail = f"on ne sait pas si l'IP est encore bloquée sur {', '.join(unsure)}"
         unsure = []
+    elif held:
+        tail = f"l'IP reste bloquée sur {', '.join(held)}{by}" + (
+            ", ses propres règles contournées (carte à part)" if v.get("shadowed_by") else "")
+        held = []
+    elif v.get("nics_unread"):
+        tail = f"on ne sait pas si l'IP est encore bloquée : cartes illisibles ({v['nics_unread']})"
+    else:
+        tail = "l'IP n'est plus bloquée"
     tail += f" ; elle l'est encore sur {', '.join(held)}{by}" if held else ""
-    tail += (f" ; sur {', '.join(unsure)}, ses règles ont disparu et la règle de périmètre n'a pas pu être lue"
+    tail += (f" ; sur {', '.join(unsure)}, son blocage ne tient plus et la règle de périmètre n'a pas pu être lue"
              if unsure else "")
     return head + tail + (f"{names}." if said else ".")

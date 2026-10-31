@@ -3697,14 +3697,132 @@ def test_a_block_half_gone_and_bypassed_says_both(monkeypatch):
 
 def test_a_bypass_on_one_nic_is_said_beside_rules_gone_on_another(monkeypatch):
     """L1C: nic-a's block rules gone, nic-b's bypassed by an allow before them. The rules
-    missing were returned alone, the bypass dropped: no bypass card while they stayed gone."""
+    missing were returned alone, the bypass dropped: no bypass card while they stayed gone.
+    nic-b, its own block passed and no perimeter over it, is open too (I3P): each NIC said."""
     connector = _blocked_on(monkeypatch, {
         "nic-a": lambda r: [],
         "nic-b": lambda r: [_nsg_rule("allow-ssh", 100), *_block_pair(r, "192.31.196.7", vm_ip="10.0.0.6")]},
         nics=(("nic-a", "10.0.0.5"), ("nic-b", "10.0.0.6")))
     out = connector.verify_block_ip("192.31.196.7", _RID)
-    assert out["missing_rules"] and out["open_nics"] == ["nic-a"]
+    assert out["missing_rules"] and out["open_nics"] == ["nic-a", "nic-b"]
     assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
+
+
+_I3P_IP = "192.31.196.7"
+_I3P_PERIMETER = "glorfindel-block-192-31-196-7"
+
+
+def _i3p_blocked_beside_a_perimeter(monkeypatch, own: dict, sub: list, nics=(("nic-a", "10.0.0.5"),),
+                                    unread=False):
+    """I3P (#366): a VM block, one placement per NIC on its own NSG (`own`, by NIC), every
+    NIC also on the subnet's NSG `nsg-sub` (`sub`: its rules — another VM's perimeter there)."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    names = {n: f"{_I3P_PERIMETER}-vm-{n}-1" for n, _ in nics}
+    _save_block_state("vm", _I3P_IP, _RID, nsg=f"rg/nsg-{nics[0][0]}", nsg_scope="nic",
+                      rule=names[nics[0][0]], threat_port=22,
+                      placements=[{"nic_id": n, "nsg_rg": "rg", "nsg_name": f"nsg-{n}", "rule": names[n],
+                                   "ips": [ip]} for n, ip in nics])
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    targets = [{"nic_id": n, "nic_short": n, "private_ips": [ip], "nsg_rg": "rg", "nsg_name": f"nsg-{n}",
+                "scope": "nic", "alt_nsg": {"nsg_rg": "rg", "nsg_name": "nsg-sub"}} for n, ip in nics]
+    monkeypatch.setattr(connector, "_get_vm_nic_targets", MagicMock(side_effect=RuntimeError("429 on nic.get"))
+                        if unread else (lambda rg, vm, allow_no_nsg=False: targets))
+    net = MagicMock()
+    _listings(net, {"nsg-sub": sub, **{f"nsg-{n}": own[n](names[n]) for n, _ in nics}})
+    connector._network = net
+    return connector
+
+
+def test_a_bypassed_nic_behind_the_perimeter_is_said_held_never_unblocked(monkeypatch):
+    """I3P (#366), the case naming no NIC: nic-a's `-out` gone, the perimeter holding there;
+    nic-b's pair passed by its NSG's `allow-ssh`, the perimeter holding there too. The bypass
+    was returned with what is gone, where each NIC stands dropped — and the bypassed NIC never
+    asked the perimeter: the card said « l'IP n'est plus bloquée » of the whole VM."""
+    from glorfindel.reassert import _block_drift
+    connector = _i3p_blocked_beside_a_perimeter(monkeypatch, {
+        "nic-a": lambda r: _block_pair(r, _I3P_IP)[:1],
+        "nic-b": lambda r: [_nsg_rule("allow-ssh", 100), *_block_pair(r, _I3P_IP, vm_ip="10.0.0.6")]},
+        _block_pair(_I3P_PERIMETER, _I3P_IP, vm_ip="*", priority=300),
+        nics=(("nic-a", "10.0.0.5"), ("nic-b", "10.0.0.6")))
+    out = connector.verify_block_ip(_I3P_IP, _RID)
+    assert out["verified"] is False and [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
+    assert out["held_missing"] == [f"{_I3P_PERIMETER}-vm-nic-a-1-out"], out
+    assert out["held_by_perimeter"] == ["nic-a", "nic-b"] and not out["open_nics"], out
+    card = _block_drift(_I3P_IP, "vm", out)
+    assert "n'est plus bloquée" not in card and "reste bloquée sur nic-a, nic-b" in card, card
+    # No perimeter over nic-b: its bypass opens it — said open, by name.
+    connector = _i3p_blocked_beside_a_perimeter(monkeypatch, {
+        "nic-a": lambda r: _block_pair(r, _I3P_IP)[:1],
+        "nic-b": lambda r: [_nsg_rule("allow-ssh", 100), *_block_pair(r, _I3P_IP, vm_ip="10.0.0.6")]},
+        [_nsg_rule("allow-ssh", 100), *_block_pair(_I3P_PERIMETER, _I3P_IP, vm_ip="*", priority=300)],
+        nics=(("nic-a", "10.0.0.5"), ("nic-b", "10.0.0.6")))
+    out = connector.verify_block_ip(_I3P_IP, _RID)
+    assert out["open_nics"] == ["nic-a", "nic-b"] and not out.get("held_by_perimeter"), out
+    assert "l'IP n'est plus bloquée sur nic-a, nic-b" in _block_drift(_I3P_IP, "vm", out)
+
+
+def test_rules_gone_on_unread_nics_are_never_said_unblocked(monkeypatch):
+    """I3P: the VM's NICs unread (429), its rules gone — no perimeter could be asked about
+    them: the card said « l'IP n'est plus bloquée » where the perimeter may cut it off. Said
+    as not known (A0), the rules gone named."""
+    from glorfindel.reassert import _block_drift
+    connector = _i3p_blocked_beside_a_perimeter(
+        monkeypatch, {"nic-a": lambda r: []}, _block_pair(_I3P_PERIMETER, _I3P_IP, vm_ip="*", priority=300),
+        unread=True)
+    out = connector.verify_block_ip(_I3P_IP, _RID)
+    assert out["verified"] is False and out["missing_rules"] and "429" in out["nics_unread"], out
+    card = _block_drift(_I3P_IP, "vm", out)
+    assert "n'est plus bloquée" not in card and "on ne sait pas si l'IP est encore bloquée" in card, card
+    assert f"{_I3P_PERIMETER}-vm-nic-a-1" in card, card
+
+
+def test_an_allow_a_customer_deny_drops_first_lets_nothing_through():
+    """I3P (#366), seed 1999: our turned inbound rule (an allow of the attacker, 200) before
+    the perimeter's deny (210) — read as passing it, the NIC said open; the customer's
+    `deny-lateral-in`, widened to every source, at 130, drops all of it first. Only a deny
+    of the customer's, before the allow, of every port and protocol, the attacker on its far
+    side and each of the NIC's addresses on its near one — no group it can't resolve."""
+    from glorfindel.providers.azure.nsg import _dropped_first
+    allow = {"rule": "turned", "priority": 200, "direction": "inbound"}
+    ips = ["10.1.0.4"]
+
+    def deny(name="deny-lateral-in", priority=130, **kw):
+        return _nsg_rule(name, priority, access="Deny", **{"port": "*", **kw})
+    assert _dropped_first([deny()], allow, _I3P_IP, ips)
+    assert _dropped_first([deny(dst="10.1.0.0/24")], allow, _I3P_IP, ips)
+    assert not _dropped_first([deny(priority=250)], allow, _I3P_IP, ips)            # after the allow
+    assert not _dropped_first([deny(port="22")], allow, _I3P_IP, ips)               # one port only
+    assert not _dropped_first([deny(src="VirtualNetwork")], allow, _I3P_IP, ips)    # not the attacker
+    assert not _dropped_first([deny(dst="10.9.0.0/16")], allow, _I3P_IP, ips)       # not the NIC
+    assert not _dropped_first([deny(name="glorfindel-isolation-deny-all")], allow, _I3P_IP, ips)   # ours
+    asg = deny()
+    asg.source_application_security_groups = [MagicMock()]
+    assert not _dropped_first([asg], allow, _I3P_IP, ips)
+    tcp = deny()
+    tcp.protocol = "Tcp"
+    assert not _dropped_first([tcp], allow, _I3P_IP, ips)
+    out = {"rule": "wide-out", "priority": 150, "direction": "outbound"}
+    assert _dropped_first([deny(direction="Outbound", priority=100)], out, _I3P_IP, ips)
+    assert not _dropped_first([deny(priority=100)], out, _I3P_IP, ips)              # the other direction
+
+
+def test_the_perimeter_holds_behind_an_allow_a_customer_deny_drops_first(monkeypatch):
+    """I3P, seed 1999 at the connector: api's own inbound deny turned into an allow (200),
+    before the perimeter's pair (210), the customer's deny of every source at 130 — the
+    perimeter holds on the NIC; without that deny, it doesn't."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    t0 = {"nic_id": "api-nic", "nic_short": "api-nic", "private_ips": ["10.1.0.4"], "nsg_rg": "rg",
+          "nsg_name": "nsg-edge", "scope": "subnet"}
+    turned = _nsg_rule(f"{_I3P_PERIMETER}-api-api-nic-1", 200, src=_I3P_IP, port="*")
+    rules = [turned, *_block_pair(_I3P_PERIMETER, _I3P_IP, vm_ip="*", priority=210)]
+    net = MagicMock()
+    connector._network = net
+    _listings(net, {"nsg-edge": [_nsg_rule("deny-lateral-in", 130, access="Deny", port="*"), *rules]})
+    assert connector._perimeter_holds({}, t0, _I3P_IP, 22) == "holds"
+    _listings(net, {"nsg-edge": rules})
+    assert connector._perimeter_holds({}, t0, _I3P_IP, 22) == "no"
 
 
 def test_a_half_bypassed_pair_keeps_another_placement_gone_on_the_nic(monkeypatch):

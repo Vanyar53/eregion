@@ -1104,7 +1104,9 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
   - Orodruin dit qu'il l'a finie ou refusée ;
   - ou une de ses fenêtres a été fermée par « Stop all » (`closed_by: orodruin-kill`) : l'arrêt
     d'urgence tue le lanceur sans rien publier, aucun autre fil ne part ;
-  - ou aucune de ses fenêtres ne vit et Orodruin se tait depuis plus de `SILENT_S` (35 min). Son
+  - ou aucune de ses fenêtres ne vit et Orodruin, après en avoir parlé (son statut, une fenêtre), se
+    tait depuis plus de `SILENT_S` (35 min) — une demande écrite et jamais portée reste écrite ; un
+    statut illisible compte depuis l'heure de la demande. Son
     lanceur publie le statut avant et après chaque fil ; entre deux, il ne se tait que pendant qu'il
     attend une VM isolée (`WAIT_ISOLATION_S`, 20 min), et un fil fini garde sa fenêtre vivante pendant
     la grâce (15 min). C'est ce qui finit une demande arrêtée par « Stop all » entre deux fils : aucune
@@ -1129,7 +1131,8 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
   demande en cours ; un statut illisible lu « pas encore portée », et un statut d'une autre demande
   pris pour celui-ci ; la mesure provisoire dite sur T0 seulement ; la portée de `taken` et l'ordre
   sans catalogue pour une panne ; « Stop all » entre deux fils, qui laissait les fils verrouillés
-  2 h 15. Mutants M2481–M2490.
+  2 h 15. Mutants M2481–M2490. La seconde relecture : une demande écrite et jamais portée passait
+  « finie » au bout de 35 min (M2496).
 - **Mutants M2450–M2473**, tous attrapés (`tests/unit/test_console_dagorlad_follow.py`) : chaque fin de
   demande ignorée ou prise trop tôt ; un cycle d'une autre technique, d'une autre VM, hors de la fenêtre
   ou non attribué pris pour le fil ; le rapport arrivé et le run encore mesuré sur sa fenêtre ; une

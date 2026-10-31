@@ -185,7 +185,8 @@ l'identité de la console (Reader sur le banc), en cache dix minutes. Rien d'aut
 - **Finie** :
   - quand Orodruin dit qu'il l'a finie ou refusée ;
   - quand « Stop all » a fermé une de ses fenêtres ;
-  - ou quand aucune de ses fenêtres ne vit et qu'Orodruin se tait depuis plus de 35 min. Entre deux
+  - ou quand aucune de ses fenêtres ne vit et qu'Orodruin, après en avoir parlé, se tait depuis plus
+    de 35 min (une demande écrite et jamais portée reste écrite, aussi longtemps qu'il le faut). Entre deux
     fils, il ne se tait jamais aussi longtemps : il ne se tait que pendant qu'il attend une VM isolée
     (20 min au plus), et un fil fini garde sa fenêtre vivante pendant la grâce (15 min). C'est ce qui
     finit une demande arrêtée par « Stop all » entre deux fils, quand il n'y a aucune fenêtre à fermer.

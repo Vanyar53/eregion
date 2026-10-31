@@ -6703,6 +6703,13 @@ MUTANTS += [
      "SILENT_S = WAIT_ISOLATION_S + GRACE_AFTER_S\n", "SILENT_S = 2 * 3600 + GRACE_AFTER_S\n"),
 ]
 TESTS.update({f"M{n}": _FOL for n in range(2481, 2491)})
+# DG-c, its second review: a request written, never carried, taken as over after 35 min. M2496.
+MUTANTS += [
+    ("M2496", "a request written and not carried yet is « over, silent » after 35 min (DG-c, second review)", FOL,
+     "    heard = [t for t in [begun if unreadable else None, epoch((status or {}).get(\"at\"))]\n",
+     "    heard = [t for t in [begun, epoch((status or {}).get(\"at\"))]\n"),
+]
+TESTS["M2496"] = _FOL
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

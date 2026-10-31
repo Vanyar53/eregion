@@ -159,6 +159,8 @@ def test_a_status_there_but_unreadable_is_never_not_carried_yet():
     """A0: Orodruin may be running the request — never the command and « New plan » again."""
     assert follow.phase(None, [], {}, T, unreadable="not JSON") == ("running", "status_unreadable")
     assert follow.phase(None, [], {}, T) == ("written", "")
+    # Written hours ago and never carried: still written — nothing was heard to fall silent.
+    assert follow.phase(None, [], {}, T, begun=(T - timedelta(hours=3)).timestamp()) == ("written", "")
     # Unreadable and silent long enough, it ends as any other.
     assert follow.phase(None, [], {}, T, begun=(T - timedelta(hours=1)).timestamp(),
                         unreadable="not JSON") == ("over", "silent")

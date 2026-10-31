@@ -88,8 +88,10 @@ def phase(status: dict | None, mine: list[dict], states: dict[str, str], now: da
           begun: float | None = None, unreadable: str = "") -> tuple[str, str]:
     """``(phase, why)``: ``written``, ``running`` (why: Orodruin's state, ``launched`` when only a
     window says it, ``status_unreadable``), or ``over`` (``finished``, ``refused``, ``stopped``,
-    ``silent``). ``begun``: the request's time (epoch); ``unreadable``: why Orodruin's status is
-    there but not read — never « not carried yet » (A0: Orodruin may be running it)."""
+    ``silent``). ``begun``: the request's time (epoch), counted only for a status unreadable;
+    ``unreadable``: why Orodruin's status is there but not read — never « not carried yet » (A0:
+    Orodruin may be running it). Written and not carried, a request stays ``written``: the
+    silence of an Orodruin never told says nothing."""
     if status and status.get("state") in OVER:
         return "over", status["state"]
     # A window that cannot have started yet (beyond the clocks' skew) says nothing of the request.
@@ -99,8 +101,12 @@ def phase(status: dict | None, mine: list[dict], states: dict[str, str], now: da
         return "over", "stopped"
     if any(alive(w, states.get(w["run_id"], ""), now) for w in mine):
         return "running", (status or {}).get("state") or ("status_unreadable" if unreadable else "launched")
+    # What was heard of Orodruin: its status, the windows of the request — and, for a status there
+    # but unreadable only, the request's own time (nothing heard is then since it). A request
+    # written and not carried has heard nothing: it stays written, however long (DG-c review).
     # A time ahead of the clock (beyond its skew) is no time: it never keeps a request running.
-    heard = [t for t in [begun, epoch((status or {}).get("at"))] + [epoch(w.get("end") or w.get("start")) for w in mine]
+    heard = [t for t in [begun if unreadable else None, epoch((status or {}).get("at"))]
+             + [epoch(w.get("end") or w.get("start")) for w in mine]
              if t is not None and t <= now.timestamp() + FUTURE_SKEW_S]
     if heard and now.timestamp() - max(heard) > SILENT_S:
         return "over", "silent"

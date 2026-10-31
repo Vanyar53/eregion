@@ -3844,16 +3844,17 @@ _U1_9001_NET = {
 _RG_NEW_WEB_ID = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#372: U1, an orphan rule kept behind a turned rule, its card missing")
 def test_an_orphan_kept_behind_a_turned_rule_is_said(monkeypatch):
     """Seed 9001 at 2 000 on I4D's review branch (once its I7 settled), present on `main` 9f72a91
     too, shrunk to five steps: « U1: the orphan rule glorfindel-iso-web-web-nic-8b70f2 kept behind a
     rule turned into an allow (['glorfindel-block-…-web-web-nic-8b70f2']), cutting […/rg-app1/…/api]:
     no pending card names it ». Two isolations of web at once, then three `turned_then_address_reused`
     (web of rg-app1, of rg-app2 under a throttled read, the new web of rg-new) and an address
-    changed. The posture's orphan card (`orphans.py`), not the isolation's path: not I4D's family,
-    frozen for its own lot (#372). Strict: once fixed, this fails, and the mark goes."""
+    changed. U1O (#372): web's inbound deny, kept behind the turned block, was said for batch — at
+    its address then; batch's address changed, api got the old one. The card said for batch named
+    the turned rule, so I5Q never replaced it: what the deny cuts now, api, named by no card. A card
+    about a VM the rule no longer cuts is replaced (`orphans.py`). The last draw: the closing
+    reassertion, outside human_only."""
     _run(monkeypatch, _U1_9001_NET,
          ("isolate_two", WEB1, WEB1, None, WEB1, WEB1, None, False),
          ("turned_then_address_reused", WEB1, WEB1, None, 22, "both", None,
@@ -3866,7 +3867,8 @@ def test_an_orphan_kept_behind_a_turned_rule_is_said(monkeypatch):
           "/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.network/networkinterfaces/batch-nic-4", 0, 4),
          ("turned_then_address_reused", _RG_NEW_WEB_ID, _RG_NEW_WEB_ID, None, 22, "both", 22,
           (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-5-6b7ab3-out"),
-          "human_only", False, 22, False, "rg-app1", "api", None, "Linux", True, "non_disruptive"))
+          "human_only", False, 22, False, "rg-app1", "api", None, "Linux", True, "non_disruptive",
+          "non_disruptive"))
 
 _S42_ISO_NET = {
     "subnet_nsg": [], "edge_nsg": None, "tier_rules": [],

@@ -9,7 +9,12 @@ it cuts is not one Glorfindel isolates or blocks) AND the VM it cuts runs in
 `non_disruptive` or `full_auto` — taking off a rule of ours that cuts a VM by mistake
 disrupts nothing. In `human_only` the card is all: no write, it says what to run (D-A,
 27/10). A rule said is not said again while it stands (orphan_alerts.json): its card
-stays, or, acknowledged, stays closed; it closes once the rule is no longer an orphan.
+stays, or, acknowledged, stays closed; it closes once the rule is no longer an orphan. A
+card says what the rule cuts — every VM, its NIC —: once that changes (an address passed
+to another VM or to nobody, a second VM cut later, the NSG no longer governing the VM),
+the card is replaced, the rule said again for what it cuts now (U1O). What comes is said at
+once; a VM leaving it stays named until the NIC that held the address proves it left (gone,
+or read without it) — a partial NIC listing never lets go of a VM still cut.
 """
 from __future__ import annotations
 
@@ -58,8 +63,99 @@ def _save_alerts(alerts: dict) -> None:
         log.warning("orphans: alerts not recorded (%s)", exc)
 
 
+# Beside the cards, in orphan_alerts.json: what each rule cut when its card was said (U1O).
+_SAID = "_said"
+
+
+def _entry(vm: str, h: dict | None = None) -> dict:
+    return {"vm": vm.lower(), "nic": (h or {}).get("nic_id") or "", "ip": (h or {}).get("ip") or ""}
+
+
+def _said_of(o: dict) -> list[dict]:
+    """What a card says the rule cuts (U1O review), each with the NIC at the address: every
+    VM it cuts (a NIC no VM holds: its NSG); none cut, the VM at its address — `~`, its NSG
+    doesn't govern it —, or `~` the NSG when nobody holds it."""
+    cut = o.get("cut", o["now_on"])
+    if cut:
+        return [_entry(h.get("vm_id") or o["nsg_id"], h) for h in cut]
+    hit = (o["now_on"] or [None])[0]
+    return [_entry("~" + (hit.get("vm_id") or o["nsg_id"]), hit) if hit else _entry("~" + o["nsg_id"])]
+
+
+def _valid(said) -> list[dict] | None:
+    """An entry of `_said` as read back: a list of VMs (names, or entries with their NIC);
+    anything else is no entry — compared as before the review (second review, P8)."""
+    if not isinstance(said, list) or not said:
+        return None
+    out = []
+    for e in said:
+        if isinstance(e, str):
+            e = {"vm": e}
+        if not (isinstance(e, dict) and isinstance(e.get("vm"), str)
+                and all(isinstance(e.get(x, ""), str) for x in ("nic", "ip"))):
+            return None
+        out.append({"vm": e["vm"].lower(), "nic": e.get("nic", ""), "ip": e.get("ip", "")})
+    return out
+
+
+def _vms(said: list[dict], nsg: str) -> set[str]:
+    return {e["vm"].lstrip("~") for e in said} - {nsg.lower()}
+
+
+def _proven_left(connector, e: dict, o: dict) -> bool:
+    """A VM a card named left the rule's addresses — proven by its NIC only (second review):
+    gone (404), read without them, or off the VM (the VM deleted, its NIC kept). A NIC the
+    listing missed, a 403, a 429 prove nothing. A card said before the review recorded no
+    NIC: the VM gone, or its NICs, prove it."""
+    vm = e["vm"].lstrip("~")
+    try:
+        if e.get("nic"):
+            check = getattr(connector, "nic_left_addresses", None)
+            return check is not None and check(e["nic"], o["ips"], vm) is True
+        check = getattr(connector, "vm_left_addresses", None)
+        return check is not None and check(vm, o["ips"]) is True
+    except Exception:
+        return False
+
+
+def _with_kept(o: dict, kept: list[dict]) -> list[dict]:
+    """What the card says the rule cuts: what it cuts now, and every VM it named that left
+    unproven — never let go without a proof (second review)."""
+    now = _said_of(o)
+    return [e for e in now if e["vm"] != "~" + o["nsg_id"].lower()] + kept if kept else now
+
+
+def _kept_text(kept: list[dict]) -> str:
+    return "".join(f" Elle coupait aussi {_short(e['vm'].lstrip('~'))}"
+                   + (f" (carte {_short(e['nic'])})" if e.get("nic") else "") + " : non relue depuis."
+                   for e in kept)
+
+
+def _moved(o: dict, was: str, said: list[dict]) -> str:
+    """Why a card is replaced (U1O): the rule's address passed to another VM, to nobody, or
+    the VMs it cuts changed."""
+    cut, res = o.get("cut", o["now_on"]), _resource(o)
+    vms = _vms(said, o["nsg_id"])
+    if not vms:
+        return f"Remplacée : {o['rule']} vise une adresse qu'aucune carte ne porte plus (U1O)."
+    if not cut and len(said) == 1:
+        return f"Remplacée : {o['rule']} vise l'adresse de {_short(res)}, que ce NSG ne gouverne plus (U1O)."
+    if was not in vms:
+        return f"Remplacée : {o['rule']} vise une adresse passée depuis à {_short(res)} (U1O)."
+    unread = vms - {(h.get("vm_id") or "").lower() for h in cut}
+    named = [_who(h) for h in cut] + [_short(e["vm"]) + (f" (carte {_short(e['nic'])})" if e["nic"] else "")
+                                      for e in said if e["vm"].lstrip("~") in unread]
+    return f"Remplacée : {o['rule']} coupe désormais {', '.join(named)} (U1O)."
+
+
 def _short(ref: str) -> str:
     return (ref or "").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _who(h: dict) -> str:
+    """What a rule cuts, said (U1O): the VM and its NIC — the NIC alone when no VM holds it."""
+    vm, nic = _short(h.get("vm_id") or ""), _short(h.get("nic_id") or "")
+    return f"{vm} (carte {nic})" if vm and nic else vm or nic
 
 
 def _resource(o: dict) -> str:
@@ -124,11 +220,67 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
 
     can_write = getattr(connector, "read_only", False) is False
     alerts = _load_alerts()
-    before = dict(alerts)
+    before = json.dumps(alerts, sort_keys=True)
+    cut_said = alerts.pop(_SAID, None)
+    cut_said = cut_said if isinstance(cut_said, dict) else {}
     current: set[str] = set()
 
     def _pending(card: str) -> bool:
         return any(e.get("id") == card for e in escalations.pending())
+
+    # U1O: a card is about the VM the rule cut when it was said (the store merges by VM).
+    # The address it aims at may pass to another VM since — its holder's IP changed, or
+    # the holder deleted, and Azure hands the address to the next NIC: the card then says
+    # a VM is cut that no longer is, and the one cut now is named by none. Replaced: a
+    # pending card closed and every rule it spoke for said again; an acknowledged one stays
+    # closed — it was about the other VM —, the rule said again for the one it cuts now.
+    # Compared: every VM the card said the rule cuts (`cut_said`) — a second VM given another
+    # of its addresses later is said too (the review). A VM leaving it with no other in its
+    # place needs a proof: the listing may have left its NIC out, the card is then right.
+    # Second review: a VM that left unproven stays named (`kept`), whatever came in its place
+    # — what comes is said at once, what leaves only on a proof by its NIC.
+    about = {e.get("id"): (e.get("resource_id") or "").lower() for e in escalations.all_escalations()}
+    kept: dict[str, list[dict]] = {}
+    for o in orphans:
+        k = f"orphan-{o['nsg_id']}/{o['rule']}".lower()
+        card = alerts.get(k)
+        was = _valid(cut_said.get(k))
+        if was is None and card in about and about[card] != _resource(o).lower():
+            was = [_entry(about[card])]        # said before the review: by the card's VM alone
+        if was is None:
+            continue
+        left = _vms(was, o["nsg_id"]) - _vms(_said_of(o), o["nsg_id"])
+        unread = {v for v in left if not all(_proven_left(connector, e, o) for e in was
+                                             if e["vm"].lstrip("~") == v)}
+        if unread:
+            kept[k] = [e for e in was if e["vm"].lstrip("~") in unread]
+            gone = ", ".join(sorted(_short(v) for v in unread))
+            log.warning("orphans: %s — %s missing from the NIC listing, unproven gone: still named",
+                        o["rule"], gone)
+            report.append({"kind": "orphan", "vm": gone, "outcome": "unread", "detail": (
+                f"Règle {o['rule']} : {gone} reste nommée — la liste des cartes réseau ne la montre plus à "
+                "cette adresse, et sa carte réseau ne prouve pas qu'elle l'a quittée (droits de lecture ?).")})
+    for o in orphans:
+        k = f"orphan-{o['nsg_id']}/{o['rule']}".lower()
+        card = alerts.get(k)
+        if card not in about:
+            continue
+        now = _with_kept(o, kept.get(k, []))
+        was = _valid(cut_said.get(k))
+        if was is None:
+            if about[card] == _resource(o).lower():
+                cut_said[k] = now
+                continue
+            was = [_entry(about[card])]
+        if {e["vm"] for e in was} == {e["vm"] for e in now}:
+            cut_said[k] = now
+            continue
+        spoke_for = [k]
+        if _pending(card):
+            escalations.resolve(card, note=_moved(o, about[card], now))
+            spoke_for = [x for x, c in alerts.items() if c == card]
+        for x in spoke_for:
+            del alerts[x]
 
     # I5Q: a deny kept behind one of our rules turned into an allow is said with that rule,
     # never with its delete alone. The store merges the cards of a VM (its first reason
@@ -189,14 +341,15 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         if k in alerts:
             continue                              # said: its card pending, or acknowledged
         if hit:
-            victim = _short(hit["vm_id"] or hit["nic_id"])
             reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus, elle "
-                      f"vise {hit['ip']} — adresse de {victim} aujourd'hui, "
+                      f"vise {hit['ip']} — adresse de {_who(hit)} aujourd'hui, "
                       + ("qui est donc coupé(e)." if cut else
                          "que ce NSG ne gouverne pas : coupé(e) s'il passe derrière."))
+            reason += "".join(f" Elle coupe aussi {h['ip']}, adresse de {_who(h)}." for h in cut[1:])
         else:
             reason = (f"Règle {o['rule']} ({nsg_name}) : laissée par une carte qui n'existe plus "
                       f"(vise {', '.join(o['ips']) or '*'}). Aucune carte ne porte cette adresse aujourd'hui.")
+        reason += _kept_text(kept.get(k, []))
         steps = [delete]
         mates = group.get(_resource(o).lower(), []) if o.get("turned") else []
         if mates:
@@ -238,6 +391,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         if out:
             log.warning("orphans: rule %s not removed (%s)", o["rule"], out.get("why"))
         alerts[k] = card
+        cut_said[k] = _with_kept(o, kept.get(k, []))
         report.append({"kind": "orphan", "vm": victims[0] if victims else nsg_name,
                        "outcome": "failed" if out else "escalated", "detail": reason})
     # A rule said that is no longer an orphan (gone, or its NIC is back): its card closes.
@@ -246,5 +400,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         card = alerts.pop(k)
         if card not in alerts.values() and _pending(card):
             escalations.resolve(card, note="La règle n'est plus orpheline (retirée, ou sa carte est revenue).")
-    if alerts != before:
-        _save_alerts(alerts)
+    cuts = {k: cut_said[k] for k in alerts if k in cut_said}
+    doc = {**alerts, **({_SAID: cuts} if cuts else {})}
+    if json.dumps(doc, sort_keys=True) != before:
+        _save_alerts(doc)

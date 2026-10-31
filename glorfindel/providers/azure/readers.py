@@ -4,13 +4,26 @@ access (moved from actions.py, A1).
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 
 from glorfindel.providers.azure.nsg import _shadowing_rules
 from glorfindel.providers.azure.quarantine import _is_quarantine_nsg
-from glorfindel.providers.azure.sdk import _enum_text, _is_iam_error
+from glorfindel.providers.azure.sdk import _enum_text, _is_iam_error, _is_not_found
 from glorfindel.response.ids import _parse_nic_resource_id, _parse_nsg_resource_id, _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
+
+
+def _within(addr: str, ips: list[str]) -> bool:
+    """`addr` is one of these addresses or prefixes; a value that isn't one (a service
+    tag) may hold it: True."""
+    for p in ips:
+        try:
+            if ipaddress.ip_address(addr) in ipaddress.ip_network(p, strict=False):
+                return True
+        except ValueError:
+            return True
+    return False
 
 
 class ReadersMixin:
@@ -346,3 +359,29 @@ class ReadersMixin:
             return {"ok": True, "vm": vm_name, "disks": disks}
         except Exception as e:
             return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}
+
+    def nic_left_addresses(self, nic_id: str, ips: list[str], vm_id: str = "") -> bool:
+        """The VM an orphan's card named left the rule's addresses (U1O, second review):
+        proven only by the NIC that held them — gone (404), read without them, or no longer
+        attached to that VM (`vm_id`: the VM deleted, its NIC kept — `az vm delete`'s default;
+        the NIC still holding the address is said by the listing as what the rule cuts). A
+        403, a 429, a NIC a listing missed (Reader on some resource groups only): unproven."""
+        try:
+            nic = self._network.network_interfaces.get(*_parse_nic_resource_id(nic_id))
+        except Exception as exc:
+            return _is_not_found(exc)
+        on = (getattr(getattr(nic, "virtual_machine", None), "id", None) or "").rstrip("/").lower()
+        if vm_id and on != vm_id.rstrip("/").lower():
+            return True
+        held = [getattr(c, "private_ip_address", None) for c in (getattr(nic, "ip_configurations", None) or [])]
+        return not any(_within(a, ips) for a in held if a)
+
+    def vm_left_addresses(self, vm_id: str, ips: list[str]) -> bool:
+        """The same for a card said before the review, which recorded the VM alone: the VM
+        gone (404), or every NIC it has now, prove it. A 403, a 429 prove nothing."""
+        try:
+            vm = self._compute.virtual_machines.get(*_parse_vm_resource_id(vm_id))
+            nics = [n.id for n in (vm.network_profile.network_interfaces or [])]
+        except Exception as exc:
+            return _is_not_found(exc)
+        return bool(nics) and all(self.nic_left_addresses(n, ips, vm_id) for n in nics)

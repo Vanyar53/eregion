@@ -26,6 +26,11 @@ from glorfindel.response.state import (
 )
 
 
+def _placement_key(p: dict) -> tuple[str, str, str]:
+    """A block placement's (resource group, NSG, rule), case-insensitive as ARM names are."""
+    return (str(p.get("nsg_rg", "")).lower(), str(p.get("nsg_name", "")).lower(), str(p.get("rule", "")).lower())
+
+
 class UnblockMixin:
     """Lifting IP blocks (part of AzureConnector)."""
 
@@ -54,19 +59,24 @@ class UnblockMixin:
         # address, a deny that holds back such a rule. The NSGs listed once.
         guard: dict = {}
         mates = [x.get("nic_id", "") for x in (entry or {}).get("placements", [])]
+        gone: set = set()          # the placements whose two rules are off Azure now (U7D)
 
-        def _del(p_rg: str, p_name: str, rule: str, nic_id: str = "") -> None:
+        def _del(p_rg: str, p_name: str, rule: str, nic_id: str = "") -> bool:
+            done = True
             for nm in (rule, f"{rule}-out"):
                 err = (_held_by_turned(self._network, guard, p_rg, p_name, nm, nic_id, mates)
                        or self._delete_rule(p_rg, p_name, nm))
                 if err:
                     failed.extend([err] if err not in failed else [])
+                    done = False
                 else:
                     deleted.append(nm)
+            return done
 
         # 1) Every per-NIC placement recorded at block time (multi-NIC VM block).
         for p in (entry or {}).get("placements", []):
-            _del(p["nsg_rg"], p["nsg_name"], p["rule"], p.get("nic_id", ""))
+            if _del(p["nsg_rg"], p["nsg_name"], p["rule"], p.get("nic_id", "")):
+                gone.add(_placement_key(p))
 
         # 2) The recorded single rule (perimeter / legacy entry). A VM-scoped entry also
         # mirrors its first placement in nsg/rule: skip it then (deleted in step 1 — the
@@ -87,8 +97,14 @@ class UnblockMixin:
 
         if failed:
             # Keep the entry: the rules that are still there keep blocking the IP, and a
-            # retry of unblock / reset must still find them.
-            _update_block_entry(resource_id, ip, unblock_failed=failed)
+            # retry of unblock / reset must still find them. Not the placements whose two
+            # rules this unblock took off (U7D): kept, a block written whole since merged
+            # them back in, and their absence read as a disappearance — a false card, put
+            # back outside human_only.
+            now = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None) or {}
+            kept = [p for p in now.get("placements") or [] if _placement_key(p) not in gone]
+            _update_block_entry(resource_id, ip, unblock_failed=failed,
+                                **({"placements": kept} if gone and now.get("placements") else {}))
             return {
                 "status": "unblock_partial", "ip": ip,
                 "deleted_rules": deleted, "failed": failed,

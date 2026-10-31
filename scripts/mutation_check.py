@@ -6270,6 +6270,17 @@ MUTANTS += [
 ]
 _L1B_REV += " tests/unit/test_glorfindel.py::test_a_placement_on_an_nsg_that_no_longer_governs_the_nic_is_never_said_gone"
 TESTS.update({mid: _L1B_REV for mid in ("M2044", "M2045", "M2046", "M2047")})
+# L1Q (#363): a block written again whole is a new episode — the drift mark of a card said
+# before it, acknowledged, goes with it. M2150.
+_L1Q = ("tests/unit/test_invariant_regressions.py::test_a_block_written_again_after_an_acknowledged_drift_is_said_again "
+        "tests/unit/test_invariant_regressions.py::test_a_block_beside_a_lifted_perimeter_vanishes_under_a_quarantine_change "
+        f"{_RT}a_block_written_again_after_an_acknowledged_drift_is_said_again")
+MUTANTS += [
+    ("M2150", "a block written again whole keeps an acknowledged drift mark: what it still names gone, unsaid (L1Q)",
+     STA, '        for mark in () if partial else ("drift_alerted_at", "drift_said"):\n',
+     "        for mark in ():\n"),
+]
+TESTS.update({"M2150": f"{_L1Q} {INVARIANTS}"})
 # DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
 # (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
 # environment and its connections, the video kept outside the repository.

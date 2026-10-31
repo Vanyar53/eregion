@@ -80,16 +80,36 @@ def test_a_bare_nics_leftover_on_the_nsg_it_carried_is_taken_off(monkeypatch):
 
 
 def test_a_bare_nics_rules_unlooked_for_are_said(monkeypatch):
-    """The subscription's NSGs can't be listed: nothing found is not nothing there (A0) —
-    never `released`, and the NIC is said."""
+    """The subscription's NSGs can't be listed by the search away from the NIC: nothing found
+    is not nothing there (A0) — never `released`, and the NIC is said. Only that listing is
+    refused (the first, the search for the bare NIC's original, reads): its failure is the
+    only one (D80's review — refused from the first, the original's failed too and hid it)."""
     f, c, own, _ = _world(monkeypatch)
+    listing, calls = f.network.network_security_groups.list_all, []
 
-    def refused():
-        raise RuntimeError("AuthorizationFailed")
-    monkeypatch.setattr(f.network.network_security_groups, "list_all", refused)
+    def refused_after_the_first():
+        calls.append(1)
+        if len(calls) > 1:
+            raise RuntimeError("AuthorizationFailed")
+        return listing()
+    monkeypatch.setattr(f.network.network_security_groups, "list_all", refused_after_the_first)
     out = c.release_isolation(WEB)
     assert out["status"] == "release_partial", out
-    assert any("web-nic" in s and "non cherchées" in s for s in out["failed"]), out
+    assert len(calls) == 2, calls
+    assert len(out["failed"]) == 1 and "web-nic" in out["failed"][0] and "non cherchées" in out["failed"][0], out
+
+
+def test_a_bare_nics_rule_under_its_second_name_is_kept_and_said(monkeypatch):
+    """The NIC's second name (`-b-`, I4B): its `-out` rule turned into an allow toward batch's
+    address, on the NSG the NIC carried — looked for too, kept and said (D80's review: the
+    first name alone was pinned)."""
+    f, c, own, _ = _world(monkeypatch)
+    second = AzureConnector()._placement_rule_bases("glorfindel-iso", "web", "web-nic", WEB_NIC)[1]
+    f._put_rule(f.nsgs[key(own)], _record(f"{second}-out", "Allow", "Outbound", "10.0.0.5", "*"))
+    out = c.release_isolation(WEB)
+    assert out["status"] == "release_partial", out
+    assert f"{second}-out" in f.nsgs[key(own)]["rules"]
+    assert any(second in s and "gardée" in s for s in out["failed"]), out
 
 
 def test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once(monkeypatch):

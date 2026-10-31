@@ -6595,7 +6595,7 @@ TESTS.update({
 })
 
 # D80 (#380): a bare NIC's isolation rules looked for away from it, on every NSG of the subscription —
-# kept and said, or taken off; a listing that fails said. M2340–M2343.
+# kept and said, or taken off; a listing that fails said. M2340–M2344.
 AWY = "glorfindel/providers/azure/away.py"
 _D80_SEQ = ("tests/unit/test_invariant_regressions.py::test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps "
             "tests/unit/test_invariant_regressions.py::test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said")
@@ -6613,12 +6613,16 @@ MUTANTS += [
     ("M2343", "the bare NIC's subnet NSG searched twice: its kept rule named twice (D80)", AWY,
      "                if (t0 is None or (n_rg.lower(), n_name.lower()) in seen\n",
      "                if (t0 is None\n"),
+    ("M2344", "a bare NIC's first name alone looked for away from it: a turned rule under its second unsaid (D80, review)",
+     AWY, '            for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"], t0["nic_id"]):\n',
+     '            for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"], t0["nic_id"])[:1]:\n'),
 ]
 TESTS.update({
     "M2340": f"{_D80_SEQ} tests/unit/test_release_away.py",
     "M2341": f"{_D80_SEQ} tests/unit/test_release_away.py",
     "M2342": "tests/unit/test_release_away.py::test_a_bare_nics_rules_unlooked_for_are_said",
     "M2343": "tests/unit/test_release_away.py::test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once",
+    "M2344": "tests/unit/test_release_away.py::test_a_bare_nics_rule_under_its_second_name_is_kept_and_said",
 })
 
 # The auditor's control set (seventh review): plausible bugs the generation was never

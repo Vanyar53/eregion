@@ -2864,9 +2864,9 @@ quarantaine, ses règles — à son empreinte, premier et second nom (`_placemen
 autre carte — sont cherchées sur tous les NSG de l'abonnement, comme pour une VM supprimée (I7S). Chacune
 passe par la garde (`_held_by_turned`) : gardée, elle est dite (« gardée », `release_partial`) ; sinon
 elle est retirée. Les NSG déjà balayés pour cette carte (celui de son subnet) sont sautés : une règle
-gardée n'est dite qu'une fois. Une liste refusée est dite (« non cherchées », `release_partial`) : rien
-trouvé n'est pas rien là (A0). Coût : une liste des NSG de l'abonnement par levée d'une VM qui a une
-telle carte (reprise de la garde si elle l'a déjà lue), le cas courant quand les NSG sont posés sur les
+gardée n'est dite qu'une fois. Une liste refusée (une erreur) est dite (« non cherchées », `release_partial`) :
+rien trouvé n'est pas rien là (A0) ; une liste **filtrée** par un rôle limité à des groupes (ce qu'ARM rend probablement, non mesuré) se lit encore « rien là », comme pour I7S et `_unplaced_blocks` — reste ouvert, à mesurer au banc. Coût : une liste des NSG de l'abonnement par levée d'une VM qui a une
+telle carte, que la garde reprend (la relecture : jusqu'à trois ou quatre listes par levée avec celles de la garde des placements, du balayage et de l'original, laissé ainsi), le cas courant quand les NSG sont posés sur les
 subnets seulement. Aucune règle de la machine retirée ni restreinte ; l'oracle (`_kept_said`) est
 inchangé. Figés : la séquence de la graine 555 (son `xfail` levé),
 `test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said` (Linux et macOS, rouges sur 72bb58f avec le message
@@ -2878,13 +2878,13 @@ données a changé). **Reste ouvert** : une carte dont le NSG a été **remplac�
 n'est cherchée que sur ses NSG d'aujourd'hui ; le reset n'a pas encore cette recherche (I4C : son statut
 reste partiel, la carte dite, la règle pas nommée) ; `verify_release` non plus.
 
-**Mutants M2340–M2343** : M2340 (le balayage aveugle loin d'une carte nue : `released`) par les trois
+**Mutants M2340–M2344** : M2340 (le balayage aveugle loin d'une carte nue : `released`) par les trois
 séquences figées et `test_release_away.py` ; M2341 (une règle trouvée loin de la carte retirée sans la
 garde : la VM derrière perd ce qu'elle lui ouvre) par les mêmes ; M2342 (une liste refusée lue « rien »)
 par `test_a_bare_nics_rules_unlooked_for_are_said` ; M2343 (le NSG du subnet cherché deux fois : la règle
-nommée deux fois) par `test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once`. 4/4 à chaque tour.
+nommée deux fois) par `test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once` ; M2344 (le premier nom seul cherché : une règle retournée sous le second, `-b-`, tue) par `test_a_bare_nics_rule_under_its_second_name_is_kept_and_said`, ajouté à la relecture. 5/5 à chaque tour. La relecture : le test de la liste refusée ne la refuse plus qu'après la recherche de l'original de la carte (refusée dès le premier appel, celle-ci échouait aussi et cachait le cas).
 
-**Mesures de D80.** `pytest` complet : 4 712 réussis, 7 sautés, 5 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants à 500 séquences sur les graines 1, 7, 25, 35, 40, 42, 45, 101, 322, 555, 1618, 4242, 8675, 9001 et 31337 : 15/15 vertes ; puis 2 000 sur 42, 322 et 8675 : vertes. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants des modules touchés (levée, connecteur, façade) : 44/49 attrapés à chaque tour sur `main` 72bb58f, 44/49 après — les mêmes cinq de part et d'autre (M17, le verrou par VM, et M1552 survivent ; M22, M26 et M1963 par leurs seules séquences figées) —, plus M2340–M2343 (48/53). Aucun perdu.
+**Mesures de D80.** `pytest` complet : 4 713 réussis après la relecture (4 712 avant), 7 sautés, 5 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants à 500 séquences sur les graines 1, 7, 25, 35, 40, 42, 45, 101, 322, 555, 1618, 4242, 8675, 9001 et 31337 : 15/15 vertes ; puis 2 000 sur 42, 322 et 8675 : vertes. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants des modules touchés (levée, connecteur, façade) : 44/49 attrapés à chaque tour sur `main` 72bb58f, 44/49 après — les mêmes cinq de part et d'autre (M17, le verrou par VM, et M1552 survivent ; M22, M26 et M1963 par leurs seules séquences figées) —, plus M2340–M2343 (48/53). Aucun perdu.
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

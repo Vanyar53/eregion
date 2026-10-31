@@ -4,7 +4,7 @@ looked for by the release's sweep, which sees only the NSGs that govern a NIC no
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _rule_name
-from glorfindel.providers.azure.turned import _held_by_turned
+from glorfindel.providers.azure.turned import _held_by_turned, _turned_guard
 from glorfindel.response.ids import _parse_nsg_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 
@@ -47,6 +47,15 @@ class AwayRulesMixin:
                 if (t0 is None or (n_rg.lower(), n_name.lower()) in seen
                         or (n_rg.lower(), n_name.lower(), name.lower()) in stuck):
                     continue
+                if "why" not in guard:
+                    # The guard reads the listing just made, not a second one (D80's review).
+                    # A failure here is left to it: it lists again and says what it can't read.
+                    try:
+                        why = _turned_guard(self._network, nsgs)
+                        guard["nsgs"] = {tuple(x.lower() for x in _parse_nsg_resource_id(n.id)): n for n in nsgs}
+                        guard["why"] = why
+                    except Exception:
+                        pass
                 err = (_held_by_turned(self._network, guard, n_rg, n_name, name, t0["nic_id"], mates)
                        or self._delete_rule(n_rg, n_name, name))
                 if err:

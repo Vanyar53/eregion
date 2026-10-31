@@ -93,6 +93,29 @@ def episode(key: str, ip: str, over: bool) -> None:
     """Once a drift mark is written after its card: open. Seen over (its rules read back),
     before any write of the pass: no longer — whatever the write of the mark does."""
     (_EPISODE_OPEN.discard if over else _EPISODE_OPEN.add)((key.lower(), ip))
+    _NARROWED.pop((key.lower(), ip), None)          # a new card, or over: its own record
+
+
+# What still holds of what a block's drift card said, once better (L1Q, #363): a rule back,
+# the IP blocked again. The card said a merged entry's pair and its VM rules gone, it was
+# acknowledged; the VM rules back, the pair still gone, the episode went on — and the VM
+# rules gone again read « not worse than said », in silence. Kept in memory first (a write
+# refused by a full disk keeps it, L2C), then in the entry.
+_NARROWED: dict[tuple[str, str], dict] = {}
+
+
+def drift_baseline(key: str, ip: str, said):
+    """What a block's drift is compared with to tell a worse one: what still holds of its card."""
+    return _NARROWED.get((key.lower(), ip), said)
+
+
+def narrow_drift(key: str, ip: str, said, now: dict) -> None:
+    """Not worse than the card, but not the same: better — the new baseline."""
+    if now == drift_baseline(key, ip, said):
+        return
+    from glorfindel.actions import _update_block_entry
+    _NARROWED[(key.lower(), ip)] = now
+    _update_block_entry(key, ip, drift_said=now)
 
 
 def unrecorded(vm: str, exc: Exception, ip: str = "") -> dict:

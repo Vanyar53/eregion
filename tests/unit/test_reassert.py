@@ -1546,3 +1546,38 @@ def test_a_block_written_again_after_an_acknowledged_drift_is_said_again():
     (card,) = escalations.pending()
     assert "disparu" in card["reason"] and _IP in card["reason"]
     c.block_suspicious_ip.assert_not_called()                         # human_only: said, never written
+
+
+@pytest.mark.parametrize("full_disk", [False, True])
+def test_a_rule_back_then_gone_again_is_said_while_the_pair_stays_gone(monkeypatch, full_disk):
+    """L1Q (#363): a merged block's pair and its VM rule gone, said, acknowledged. The VM rule
+    back (the pair still gone: the episode goes on), then gone again — « not worse than the
+    card », silent. What still holds of the card is the new baseline: in memory first (a write
+    refused by a full disk keeps it), then in the entry — the rule gone again is said."""
+    from glorfindel import actions
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    pair = {"nsg": "rg/nsg", "nsg_scope": "subnet", "rule": "glorfindel-block-203-0-113-9", "scoped": False}
+    _save_block_state("vm", _IP, _RID, **pair, placements=placed, threat_port=22)
+    both = {"verified": False, "missing_rules": ["r", "r-out"], "held_missing": ["glorfindel-block-203-0-113-9"],
+            "open_nics": ["nic-a"]}
+    alone = {"verified": True, "held_missing": ["glorfindel-block-203-0-113-9"]}
+    c = _connector(verify_blk=both)
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    (card,) = escalations.pending()
+    escalations.resolve(card["id"])                                   # the operator acknowledges
+    c.verify_block_ip.return_value = alone                            # the VM rule back
+    real = actions._atomic_write_text
+    if full_disk:
+        def full(*a, **k):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(actions, "_atomic_write_text", full)
+    reassert_active(c, _HUMAN)
+    assert escalations.pending() == []                                # better: nothing to say
+    monkeypatch.setattr(actions, "_atomic_write_text", real)
+    if not full_disk:
+        (entry,) = _load_block_entries("vm")
+        assert entry["drift_said"]["gone"] == ["glorfindel-block-203-0-113-9"]
+    c.verify_block_ip.return_value = both                             # gone again
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    (card,) = escalations.pending()
+    assert "disparu" in card["reason"]

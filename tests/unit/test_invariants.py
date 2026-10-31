@@ -3130,7 +3130,8 @@ class IsolationMachine(RuleBasedStateMachine):
         """D79 (#379): the teardown's release keeps an older version's deny that holds back a
         turned rule for another VM (_older_held) — as U7D's unblock. Checked first (A0, a
         control more): every rule the older version left for the VM, still on Azure, is one
-        the oracle says held — none kept without a reason —, and each is said « gardée » with
+        the oracle says held, and every rule of today's names of the VM left is one the oracle
+        says kept (_kept, as U7D's) — none kept without a reason —, and each is said « gardée » with
         its reason: a turned rule the oracle finds behind it, named. Then the operator puts
         back as they were the turned rules named, as said, and the release runs again — until
         it goes or holds nothing the oracle sees; I7 stays whole. Nothing held: as it was."""
@@ -3148,6 +3149,16 @@ class IsolationMachine(RuleBasedStateMachine):
             extra = sorted(n for _k, n in left - set(held))
             assert not extra, (f"I7: the teardown's release of {vm} said {out['status']}, an older version's "
                                f"rules kept that no other VM's flows hang on: {extra}")
+            # And the VM's own rules of today's names (D79's review, as U7D's unblock): each one
+            # left is one the oracle says kept (_kept, the test's journal) — the operator's step
+            # would hide a placement rule kept without a reason, taken off at the retry.
+            marks = {_nic_hash(c) for c in self.fake.vms[key(vm)]["nics"]}
+            kept = {(k, n.lower()) for k, n in self._kept(vm, ("glorfindel-iso-",))}
+            extra = sorted(f'{g["id"].rsplit("/", 1)[-1]}/{r["name"]}' for k, g in self.fake.nsgs.items()
+                           for r in g["rules"].values() if r["name"].lower().startswith("glorfindel-iso-")
+                           and any(m in r["name"].lower() for m in marks) and (k, r["name"].lower()) not in kept)
+            assert not extra, (f"I7: the teardown's release of {vm} said {out['status']}, rules kept that no "
+                               f"other VM's flows hang on: {extra}")
             texts = [s.lower() for v in out.values() if isinstance(v, list) for s in v if isinstance(s, str)]
             named: set = set()
             for k, n in sorted(left):

@@ -6618,7 +6618,22 @@ MUTANTS += [
      '            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates).split(" : ")[0]\n'
      "                   or self._delete_rule(l_rg, l_name, name))\n"),
 ]
-TESTS.update({mid: _D79 for mid in ("M2320", "M2321", "M2322")})
+# D79's review: the control read only the older version's fixed names — a placement rule of the
+# same VM kept without a reason beside them passed once the operator had put the turned rule back.
+# Every rule of today's names left must be one the oracle says kept (_kept), as U7D's. M2323.
+MUTANTS += [
+    ("M2323", "the release keeps its placement rules while its older record's deny is held: release_partial, "
+              "rules kept that nothing hangs on (D79, review)", REL,
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n'
+     "                        or self._delete_rule(p_rg, p_name, name)\n",
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n'
+     "                        or (_older_record(state) and any(_held_by_turned(\n"
+     '                            self._network, turned, _older_record(state)["nsg_rg"] or rg,\n'
+     '                            _older_record(state)["nsg_name"], n, "", mates)\n'
+     '                            for n in _older_record(state)["rule_names"]) and f"{p_rg}/{p_name}/{name} gardée : sonde")\n'
+     "                        or self._delete_rule(p_rg, p_name, name)\n"),
+]
+TESTS.update({mid: _D79 for mid in ("M2320", "M2321", "M2322", "M2323")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

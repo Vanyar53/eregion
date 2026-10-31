@@ -340,6 +340,83 @@ def test_a_second_request_while_one_runs_is_refused_between_two_processes(tmp_pa
     assert r.run(_req(("T1110.001", GONDOLIN)), {}).state == "finished"
 
 
+def test_the_lock_says_what_holds_it_a_request_or_a_run_by_hand(tmp_path):
+    """#358: the lock is taken by a request and by a campaign launched by hand; the one refused
+    says which holds it — never written raw (a character not printable is dropped)."""
+    import pytest
+    runs = tmp_path / "runs"
+    with er.request_lock(runs, "campaign C-20261031\x1b[2J"):
+        with pytest.raises(er.Busy, match=r"^campaign C-20261031\[2J runs on this Orodruin"):
+            with er.request_lock(runs, "request r-20261031T080000Z-abcdef"):
+                pass
+    with er.request_lock(runs, "request r-20261031T080000Z-abcdef"):
+        with pytest.raises(er.Busy, match="^request r-20261031T080000Z-abcdef runs"):
+            with er.request_lock(runs, "campaign C1"):
+                pass
+    with er.request_lock(runs, "campaign C2"):   # each let go: the next one takes it
+        pass
+
+
+def test_a_short_name_after_a_long_one_left_by_a_crash_is_read_whole(tmp_path):
+    """#388's review: the name a crash left (no normal exit to erase it) is cut before the next
+    one is written — never « campaign C1 » and the rest of the old name."""
+    import pytest
+    runs = tmp_path / "runs"
+    lock = runs / "orodruin" / "requests" / ".lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("campaign C-20261031T080000Z-a-much-longer-name-left-by-a-crash")
+    with er.request_lock(runs, "campaign C1"):
+        with pytest.raises(er.Busy, match=r"^campaign C1 runs on this Orodruin"):
+            with er.request_lock(runs, "request r-20261031T080000Z-abcdef"):
+                pass
+
+
+def test_the_name_goes_with_a_normal_exit_and_is_cut_as_it_is_read(tmp_path):
+    runs = tmp_path / "runs"
+    lock = runs / "orodruin" / "requests" / ".lock"
+    with er.request_lock(runs, "campaign C1"):
+        assert lock.read_text() == "campaign C1"
+    assert lock.read_text() == ""
+    # Cut in bytes, as it is read: a name of characters of three bytes each.
+    with er.request_lock(runs, "é" * 50 + "漢" * 100):
+        written = lock.read_bytes()
+        assert len(written) <= er._HOLDER_MAX
+        with open(lock, "rb+") as f:
+            import fcntl
+            import pytest
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert er._holder(f.fileno()) == written.decode("utf-8", "ignore")
+
+
+def test_a_request_refused_busy_names_the_campaign_that_runs(tmp_path):
+    r, inj, published, _ = _runner(tmp_path)
+    said = []
+    r.say = said.append
+    with er.request_lock(tmp_path / "runs", "campaign C1"):
+        status = r.run(_req(("T1110.001", GONDOLIN)), {})
+    assert status.codes == ["busy"] and inj.launched == [] and published == []
+    assert any("campaign C1 runs on this Orodruin" in line for line in said)
+
+
+def test_while_a_request_runs_a_campaign_by_hand_is_refused_naming_it(tmp_path):
+    import pytest
+    r, inj, _, _ = _runner(tmp_path)
+    req = _req(("T1110.001", GONDOLIN))
+    refused = []
+
+    def launch(argv, env):
+        with pytest.raises(er.Busy) as e:
+            with er.request_lock(tmp_path / "runs", "campaign C1"):
+                pass
+        refused.append(str(e.value))
+        return inj(argv, env)
+    r.launch = launch
+    assert r.run(req, {}).state == "finished"
+    assert refused == [f"request {req.id} runs on this Orodruin: one at a time — wait for its end, "
+                       "or stop it (make orodruin-kill)"]
+
+
 # ── The review of DG-b, point 6: read again after the wait, not before ─────────────────────
 
 def test_a_target_re_tagged_production_during_the_isolation_wait_never_gets_its_wire(tmp_path):

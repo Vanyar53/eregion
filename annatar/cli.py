@@ -1,3 +1,4 @@
+import contextlib
 import os
 
 import click
@@ -87,7 +88,17 @@ def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool,
     # With EREGION_EXERCISE_CHANNEL, the run's report goes to H0 at its end (#193).
     engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True,
                     without_glorfindel=without_glorfindel)
-    outcome = engine.run(path, skip_confirm=yes)
+    # One run at a time on Orodruin (#358): nothing launched by hand runs during a Dagorlad
+    # request — the request's lock, in the runs/ the engine writes to. A dry run touches nothing.
+    from eregion_core.exercise_runner import Busy, request_lock
+    lock = contextlib.nullcontext() if dry_run else request_lock("runs", f"run {os.path.basename(path)}")
+    try:
+        with lock:
+            outcome = engine.run(path, skip_confirm=yes)
+    except Busy as e:
+        from rich.markup import escape   # the holder's name, never read as markup
+        console.print(f"[red]✗ run refused — busy: {escape(str(e))}[/red]")
+        raise SystemExit(EXIT_RUN_FAILED)
     code = run_exit_code(outcome)
     if code:
         _print_run_failure(outcome)
@@ -454,19 +465,28 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report
         raise SystemExit(1)
 
     m = CampaignManifest.load(cdir)
-    if m.state == "planned":
-        if not (yes or dry_run):
-            console.print(
-                "[yellow]Campaign is 'planned' — ratify budget/scope with --yes "
-                "(or preview with --dry-run).[/yellow]"
-            )
-            raise SystemExit(1)
-        if yes and not dry_run:
-            m.set_state("ratified")
-            m.save(cdir)
+    if m.state == "planned" and not (yes or dry_run):
+        console.print(
+            "[yellow]Campaign is 'planned' — ratify budget/scope with --yes "
+            "(or preview with --dry-run).[/yellow]"
+        )
+        raise SystemExit(1)
 
+    # One run at a time on Orodruin (#358): a campaign launched by hand during a Dagorlad request
+    # would put a technique on a VM one of its wires holds, or under its fault. The request's lock,
+    # taken here too — refused, nothing ran and the manifest is as it was. A preview runs nothing.
+    from eregion_core.exercise_runner import Busy, request_lock
+    lock = contextlib.nullcontext() if dry_run else request_lock(runs_dir, f"campaign {campaign_id}")
     try:
-        result = CampaignRunner(cdir, dry_run=dry_run, without_glorfindel=without_glorfindel).run()
+        with lock:
+            if m.state == "planned" and yes and not dry_run:
+                m.set_state("ratified")
+                m.save(cdir)
+            result = CampaignRunner(cdir, dry_run=dry_run, without_glorfindel=without_glorfindel).run()
+    except Busy as e:
+        from rich.markup import escape   # the holder's name and the id, never read as markup
+        console.print(f"[red]✗ campaign {escape(campaign_id)} refused — busy: {escape(str(e))}[/red]")
+        raise SystemExit(EXIT_RUN_FAILED)
     except CampaignRefused as e:  # V1: nothing ran, the manifest is as it was
         console.print(f"[red]✗ {e}[/red]")
         console.print(f"[dim]  → {_CAMPAIGN_HINT}[/dim]")

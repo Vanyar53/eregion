@@ -6594,6 +6594,54 @@ TESTS.update({
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
 
+# The suites of DG-b (#358): the paths Orodruin reads on Azure, stricter; the request's lock taken by
+# a campaign launched by hand, and saying what holds it. M2474–M2479 (Gothmog's part after G1).
+_358_CORE = "tests/unit/test_held.py tests/unit/test_exercise_runner.py"
+MUTANTS += [
+    ("M2474", "a path Orodruin reads on Azure walks its segments (..) (#358)", "eregion_core/held.py",
+     '    if any(seg in (".", "..") for seg in path.split("/")):\n', "    if False:\n"),
+    ("M2475", "a path Orodruin reads on Azure hides a character not printable (#358)", "eregion_core/held.py",
+     "    if not path.isprintable():\n", "    if False:\n"),
+    ("M2476", "a campaign launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
+     '    lock = contextlib.nullcontext() if dry_run else request_lock(runs_dir, f"campaign {campaign_id}")\n',
+     "    lock = contextlib.nullcontext()\n"),
+    ("M2477", "the one refused never says what holds the lock (#358)", "eregion_core/exercise_runner.py",
+     '            what = _holder(fd) or "another request"\n', '            what = "another request"\n'),
+    ("M2478", "what holds the lock said raw, its escapes with it (#358)", "eregion_core/exercise_runner.py",
+     '    return "".join(c for c in text if c.isprintable()).strip()\n', "    return text.strip()\n"),
+    ("M2479", "a request runs without naming itself in the lock (#358)", "eregion_core/exercise_runner.py",
+     '            with request_lock(self.runs_dir, f"request {req.id}"):\n',
+     "            with request_lock(self.runs_dir):\n"),
+]
+TESTS.update({mid: _358_CORE for mid in ("M2474", "M2475", "M2477", "M2478", "M2479")})
+TESTS["M2476"] = "tests/unit/test_campaign_runner.py"
+MUTANTS += [
+    ("M2480", "a single run launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
+     '    lock = contextlib.nullcontext() if dry_run else request_lock("runs", f"run {os.path.basename(path)}")\n',
+     "    lock = contextlib.nullcontext()\n"),
+]
+TESTS["M2480"] = "tests/unit/test_annatar_run_exit.py"
+# #388's review: the name left by a crash, the name at a normal exit, a backslash in a path,
+# the holder's name read as markup. M2491–M2495.
+MUTANTS += [
+    ("M2491", "a short name after a long one left by a crash reads the rest of the old one (#358, review)",
+     "eregion_core/exercise_runner.py",
+     "        os.ftruncate(fd, 0)\n        os.pwrite(fd, holder", "        os.pwrite(fd, holder"),
+    ("M2492", "the lock keeps its holder's name after a normal exit (#358, review)", "eregion_core/exercise_runner.py",
+     "                os.ftruncate(fd, 0)   # the name goes with a normal exit\n", "                pass\n"),
+    ("M2493", "a path Orodruin reads on Azure carries a backslash (%5C) (#358, review)", "eregion_core/held.py",
+     '_ARM_PATH = re.compile(r"/subscriptions/[^/?#%\\\\\\s]+(?:/[^/?#%\\\\\\s]+)+")\n',
+     '_ARM_PATH = re.compile(r"/subscriptions/[^/?#%\\s]+(?:/[^/?#%\\s]+)+")\n'),
+    ("M2494", "a campaign refused busy reads the holder's name as markup (#358, review)", "annatar/cli.py",
+     "✗ campaign {escape(campaign_id)} refused — busy: {escape(str(e))}[/red]\")\n",
+     "✗ campaign {campaign_id} refused — busy: {e}[/red]\")\n"),
+    ("M2495", "a run refused busy reads the holder's name as markup (#358, review)", "annatar/cli.py",
+     '        console.print(f"[red]✗ run refused — busy: {escape(str(e))}[/red]")\n',
+     '        console.print(f"[red]✗ run refused — busy: {e}[/red]")\n'),
+]
+TESTS.update({"M2491": _358_CORE, "M2492": _358_CORE, "M2493": _358_CORE,
+              "M2494": "tests/unit/test_campaign_runner.py", "M2495": "tests/unit/test_annatar_run_exit.py"})
+
 # Dagorlad, phase (c) (DG-c, #349; docs/design/console.md, §7): a request followed live — its
 # phase, each wire's chronology read from the windows, the watch's cycles, the cards and the run's
 # report, measured as on the overview; the page's life of a wire. M2450–M2473.

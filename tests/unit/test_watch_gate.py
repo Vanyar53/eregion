@@ -198,7 +198,14 @@ def test_annatar_refuses_without_a_live_watch_before_any_cloud_call(
     assert "last heartbeat 3 h" in res.output
     assert "--without-glorfindel" in res.output          # the hint says the way out
     assert cloud.calls == []
-    assert not (tmp_path / "runs").exists()               # no report, no window, no signal
+    # No report, no window, no signal — nothing written before V1 but the lock of « one run at a
+    # time » on Orodruin (#358), taken by the CLI: every path under runs/, directories included,
+    # is that lock and its directories, or nothing; its holder's name erased at the exit.
+    runs = tmp_path / "runs"
+    left = {q.relative_to(runs).as_posix() for q in runs.rglob("*")} if runs.exists() else set()
+    assert left in (set(), {"orodruin", "orodruin/requests", "orodruin/requests/.lock"}), left
+    if left:
+        assert (runs / "orodruin" / "requests" / ".lock").read_text() == ""
 
 
 def test_annatar_refuses_and_says_never(real_gate, cloud, tmp_path, monkeypatch):

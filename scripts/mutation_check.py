@@ -6384,6 +6384,27 @@ MUTANTS += [
      "    return err\n"),
 ]
 TESTS["M2213"] = f"tests/unit/test_invariant_regressions.py::test_a_blocks_rules_on_a_reused_address_go_with_the_unblock {INVARIANTS}"
+# U7D's review, finding 4: an unblock cut off before its last write (or failed) leaves placements
+# whose rules it took off; a block written whole on that entry keeps only those still on Azure.
+# M2214–M2217.
+_U7D_CUT = ("tests/unit/test_invariant_regressions.py::test_a_whole_block_after_a_cut_off_unblock_forgets_what_it_took_off "
+            "tests/unit/test_glorfindel.py::test_a_whole_block_on_an_unblocks_entry_keeps_only_what_is_still_there "
+            "tests/unit/test_glorfindel.py::test_a_placement_whose_nsg_cannot_be_read_is_alive")
+MUTANTS += [
+    ("M2214", "a whole block on an unblock's entry merges every placement back: a false disappearance (U7D, review)",
+     STA, "            old = [p for p in old if alive(p)]\n", "            old = list(old)\n"),
+    ("M2215", "a whole block prunes the absent placements of any entry: a disappearance forgotten (U7D, review)",
+     STA, '        if alive is not None and not partial and (prev.get("unblock_failed") or prev.get("unblocking_at")):\n',
+     "        if alive is not None and not partial:\n"),
+    ("M2216", "a partial block prunes the absent placements of an unblock's entry (U7D, review)",
+     STA, '        if alive is not None and not partial and (prev.get("unblock_failed") or prev.get("unblocking_at")):\n',
+     '        if alive is not None and (prev.get("unblock_failed") or prev.get("unblocking_at")):\n'),
+    ("M2217", "an unreadable NSG reads a placement gone at a whole block (U7D, review)",
+     "glorfindel/providers/azure/blocks.py",
+     "            return rules is None or bool(mine & {_rule_name(r).lower() for r in rules})\n",
+     "            return rules is not None and bool(mine & {_rule_name(r).lower() for r in rules})\n"),
+]
+TESTS.update({mid: _U7D_CUT for mid in ("M2214", "M2215", "M2216", "M2217")})
 
 
 # L1C (#369): a bypass said while a rule of the pair is gone (a block, an isolation), with what

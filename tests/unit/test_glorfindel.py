@@ -1613,6 +1613,45 @@ def test_a_partial_unblock_keeps_only_the_placements_it_could_not_take_off(monke
     assert entry["unblock_failed"]
 
 
+@pytest.mark.parametrize("mark", ["unblocking_at", "unblock_failed", None])
+@pytest.mark.parametrize("partial", [False, True])
+def test_a_whole_block_on_an_unblocks_entry_keeps_only_what_is_still_there(mark, partial):
+    """U7D's review: an unblock cut off before its last write (or failed) leaves placements whose
+    rules it took off. A block written whole on that entry keeps only those still on Azure
+    (`alive`); without an unblock's mark, or for a partial block, the merge is as before — a
+    disappearance stays one, and both attempts of a partial block stay known."""
+    from glorfindel.actions import _load_block_entries, _save_block_state, _update_block_entry
+    old = [{"nsg_rg": "rg", "nsg_name": n, "scope": "nic", "rule": f"r-{n}"} for n in ("gone", "there")]
+    _save_block_state("vm", "1.2.3.4", _RID, nsg="rg/gone", nsg_scope="nic", rule="r-gone", placements=old)
+    if mark:
+        _update_block_entry(_RID, "1.2.3.4", **{mark: ["x"] if mark == "unblock_failed" else "2026-10-31T00:00:00"})
+    new = [{"nsg_rg": "rg", "nsg_name": "new", "scope": "nic", "rule": "r-new"}]
+    _save_block_state("vm", "1.2.3.4", _RID, nsg="rg/new", nsg_scope="nic", rule="r-new", placements=new,
+                      partial=partial, alive=lambda p: p["nsg_name"] != "gone")
+    entry = next(e for e in _load_block_entries(_RID) if e["ip"] == "1.2.3.4")
+    pruned = mark and not partial
+    assert [p["nsg_name"] for p in entry["placements"]] == (["new", "there"] if pruned else ["new", "gone", "there"])
+
+
+def test_a_placement_whose_nsg_cannot_be_read_is_alive(monkeypatch):
+    """U7D's review: `_placement_alive` never says a placement gone on an unreadable listing (A0);
+    a listing without its two rules, gone; one of them there, alive."""
+    from glorfindel.actions import AzureConnector
+    connector = AzureConnector(dry_run=False)
+    net = MagicMock()
+
+    def _list(rg, nsg):
+        if nsg == "locked":
+            raise _azure_403()
+        return [_named("r-half-out")] if nsg == "half" else [_named("other")]
+    net.security_rules.list.side_effect = _list
+    connector._network = net
+    alive = connector._placement_alive()
+    assert alive({"nsg_rg": "rg", "nsg_name": "locked", "rule": "r-locked"})
+    assert alive({"nsg_rg": "rg", "nsg_name": "half", "rule": "r-half"})
+    assert not alive({"nsg_rg": "rg", "nsg_name": "empty", "rule": "r-empty"})
+
+
 def test_block_ip_on_shared_nsg_without_private_ip_raises(monkeypatch):
     """Same guard as isolate_vm: an empty destination list would match nothing."""
     from glorfindel.actions import AzureConnector

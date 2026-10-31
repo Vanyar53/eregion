@@ -5003,6 +5003,53 @@ def test_a_partial_unblock_forgets_the_rules_it_took_off(monkeypatch, mode):
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
 
+
+@pytest.mark.parametrize("cut", ["full disk", "crash"])
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_whole_block_after_a_cut_off_unblock_forgets_what_it_took_off(monkeypatch, mode, cut):
+    """U7D's review, finding 4: the unblock takes every rule off, then its last state write fails
+    (the disk full in `_clear_block_state`) or the process dies just before it. The entry keeps
+    its placements, `unblocking_at` set. A perimeter block written whole since merged them in, the
+    verification read them gone behind the perimeter (`held_missing`): « a disparu d'Azure », and
+    outside human_only rules written again that the operator had asked off — the false card of
+    the partial unblock, by another path. A whole block on an entry an unblock marked now keeps
+    only the placements whose rules are still on Azure (unreadable: kept)."""
+    import shutil
+
+    from glorfindel.providers.azure import unblock
+
+    from .fake_azure import Crash
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], db_nic_0={"own": "dedicated"}, db_nic_1={"own": "dedicated"}))
+        c = m.connector
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="vm", threat_port=22)["status"] == "blocked"
+
+        def _cut(*a, **k):
+            raise OSError(28, "No space left on device") if cut == "full disk" else Crash()
+        real = unblock._clear_block_state
+        monkeypatch.setattr(unblock, "_clear_block_state", _cut)
+        with pytest.raises(OSError if cut == "full disk" else Crash):
+            c.unblock_ip(ATTACKER, DB)
+        monkeypatch.setattr(unblock, "_clear_block_state", real)
+        from glorfindel import actions
+        entry = next(e for e in actions._load_block_entries(DB) if e["ip"] == ATTACKER)
+        assert entry.get("unblocking_at") and len(entry["placements"]) == 2, entry
+        assert not m._named_leftovers(m.fake.vms[key(DB)]["nics"], "glorfindel-block-")
+        assert c.block_suspicious_ip(ATTACKER, DB, scope="subnet")["status"] == "blocked"
+        entry = next(e for e in actions._load_block_entries(DB) if e["ip"] == ATTACKER)
+        assert not entry.get("placements"), entry["placements"]
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is True and not v.get("held_missing") and not v.get("missing_rules"), v
+        m.reassert(Script(mode, None))
+        assert not [r for r in _cards(m) if "disparu" in r], _cards(m)
+        assert not m._named_leftovers(m.fake.vms[key(DB)]["nics"], "glorfindel-block-")
+        assert c.unblock_ip(ATTACKER, DB)["status"] == "unblocked"
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
 _S31337_NET = {
     "subnet_nsg": [_s1618("allow-https", 110, "Allow", "443", source="Internet"), _L1BR_OUT],
     "edge_nsg": None,

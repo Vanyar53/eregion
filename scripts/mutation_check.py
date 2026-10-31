@@ -6282,6 +6282,21 @@ MUTANTS += [
      "        for mark in ():\n"),
 ]
 TESTS.update({"M2150": f"{_L1Q} {INVARIANTS}"})
+# L1Q, found by its rule (seed 322 at 2 000): a drift better than its card — a rule back, the
+# pair still gone — is the new baseline, in memory first; a rule gone again is said. M2151–M2152.
+_L1Q_BACK = ("tests/unit/test_invariant_regressions.py::"
+             "test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said "
+             f"{_RT}a_rule_back_then_gone_again_is_said_while_the_pair_stays_gone")
+MUTANTS += [
+    ("M2151", "a drift compared with its card, never with what still holds of it: a rule back, gone again, "
+              "unsaid (L1Q)", R,
+     '    if (b.get("drift_alerted_at") and not _worse(drift_baseline(ref or vm, ip, b.get("drift_said")), now_is)\n',
+     '    if (b.get("drift_alerted_at") and not _worse(b.get("drift_said"), now_is)\n'),
+    ("M2152", "what still holds of a drift card kept in the entry only: a full disk loses it, the rule gone "
+              "again unsaid (L1Q)", RCA,
+     "    _NARROWED[(key.lower(), ip)] = now\n", ""),
+]
+TESTS.update({"M2151": f"{_L1Q_BACK} {INVARIANTS}", "M2152": f"{_L1Q_BACK} {INVARIANTS}"})
 # DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
 # (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
 # environment and its connections, the video kept outside the repository.

@@ -2838,8 +2838,8 @@ main ». Avant la relecture (la règle en place, 48e42c8) : harnais avant/après
 l'état et de la réaffirmation, 74/78 des deux côtés, plus M2150–M2152 (77/81) — M13 et M37 par leurs
 seules séquences figées, M36 et M1645 survivent, des deux côtés ; aucun perdu.
 
-**D80 (31/10, #380) : la levée cherche loin d'elle les règles d'une carte nue, et dit ce qu'elle y
-garde.** L'I3 de la graine 555 à 500, figé en `xfail` strict par L1Q
+**D80 (31/10, #380) : la levée et le reset cherchent loin d'elle les règles d'une carte nue, et disent ce
+qu'ils y gardent.** L'I3 de la graine 555 à 500, figé en `xfail` strict par L1Q
 (`test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps`), et, le même jour, les
 invariants profonds de la nuit sur `main` 8295975, Linux et macOS (la base Hypothesis que le job macOS de
 chaque PR rejoue : rouge sur toutes les PR) : « I3 (said): release_isolation said release_partial, rules
@@ -2875,16 +2875,29 @@ la liste refusée, une règle du NSG du subnet dite une fois). Les deux exemples
 (leurs blobs `@reproduce_failure`) reproduisent sur 72bb58f et plus après le correctif : la séquence
 dépasse l'étape fautive et réclame d'autres tirages que le blob n'a pas (« DidNotReproduce », la forme des
 données a changé). **Reste ouvert** : une carte dont le NSG a été **remplacé** par un autre (pas retiré)
-n'est cherchée que sur ses NSG d'aujourd'hui ; le reset n'a pas encore cette recherche (I4C : son statut
-reste partiel, la carte dite, la règle pas nommée) ; `verify_release` non plus.
+n'est cherchée que sur ses NSG d'aujourd'hui ; `verify_release` ne cherche pas loin de la carte (une règle
+gardée sur un NSG qui ne la gouverne plus ne la coupe pas ; la levée et le reset la disent).
 
-**Mutants M2340–M2344** : M2340 (le balayage aveugle loin d'une carte nue : `released`) par les trois
+**Le reset aussi (PR #391, le job macOS).** La levée réglée, la séquence de la nuit rejouée par le job macOS
+continuait jusqu'au reset : « I3 (said): reset --from-azure said swept_partial, rules of …/Db--01 kept
+without saying so: ['glorfindel-iso-db--01-db-nic-0-0d0228'] » — le point ouvert noté ci-dessus, même
+cause : `sweep_vm_rules` ne cherche les règles d'une carte que sur ses vues (`_nic_nsg_views`, l'original
+connu). Le même mixin sert les deux : `_away_split` rend ce que la garde garde et ce qui part ; la levée
+retire aussitôt (`_away_rules`), le reset ajoute à ce qu'il dit et à ce qu'il retire (rien en aperçu), et
+cherche aussi les **blocages** de la carte (à son empreinte, le préfixe de l'IP lu dans le nom comme
+`sweep.py` le lit), qu'il retire aussi. Ce que son balayage a déjà vu (`seen`) est sauté. `sweep.py` passe à
+498 lignes. Figés : `test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said_by_the_reset` (rouge sur 51e4615
+avec le message du job ; son blob reproduit sur 51e4615, plus après) ; `test_release_away.py` gagne la règle
+gardée dite par le reset et le blocage laissé retiré. Mutants M2345 (le reset aveugle loin de la carte nue)
+et M2346 (aveugle à ses blocages).
+
+**Mutants M2340–M2346** : M2340 (le balayage aveugle loin d'une carte nue : `released`) par les trois
 séquences figées et `test_release_away.py` ; M2341 (une règle trouvée loin de la carte retirée sans la
 garde : la VM derrière perd ce qu'elle lui ouvre) par les mêmes ; M2342 (une liste refusée lue « rien »)
 par `test_a_bare_nics_rules_unlooked_for_are_said` ; M2343 (le NSG du subnet cherché deux fois : la règle
-nommée deux fois) par `test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once` ; M2344 (le premier nom seul cherché : une règle retournée sous le second, `-b-`, tue) par `test_a_bare_nics_rule_under_its_second_name_is_kept_and_said`, ajouté à la relecture. 5/5 à chaque tour. La relecture : le test de la liste refusée ne la refuse plus qu'après la recherche de l'original de la carte (refusée dès le premier appel, celle-ci échouait aussi et cachait le cas).
+nommée deux fois) par `test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once` ; M2344 (le premier nom seul cherché : une règle retournée sous le second, `-b-`, tue) par `test_a_bare_nics_rule_under_its_second_name_is_kept_and_said`, ajouté à la relecture ; M2345 par la séquence du reset et `test_release_away.py` ; M2346 par `test_the_reset_takes_off_a_bare_nics_block_left_on_the_nsg_it_carried`. 7/7 à chaque tour. La relecture : le test de la liste refusée ne la refuse plus qu'après la recherche de l'original de la carte (refusée dès le premier appel, celle-ci échouait aussi et cachait le cas).
 
-**Mesures de D80.** `pytest` complet : 4 713 réussis après la relecture (4 712 avant), 7 sautés, 5 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants à 500 séquences sur les graines 1, 7, 25, 35, 40, 42, 45, 101, 322, 555, 1618, 4242, 8675, 9001 et 31337 : 15/15 vertes ; puis 2 000 sur 42, 322 et 8675 : vertes. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants des modules touchés (levée, connecteur, façade) : 44/49 attrapés à chaque tour sur `main` 72bb58f, 44/49 après — les mêmes cinq de part et d'autre (M17, le verrou par VM, et M1552 survivent ; M22, M26 et M1963 par leurs seules séquences figées) —, plus M2340–M2343 (48/53). Aucun perdu.
+**Mesures de D80.** `pytest` complet : 4 716 réussis avec le reset (4 712 d'abord), 7 sautés, 5 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants à 500 séquences sur les graines 1, 7, 25, 35, 40, 42, 45, 101, 322, 555, 1618, 4242, 8675, 9001 et 31337 : 15/15 vertes ; puis 2 000 sur 42, 322 et 8675 : vertes. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants des modules touchés (levée, connecteur, façade) : 44/49 attrapés à chaque tour sur `main` 72bb58f, 44/49 après — les mêmes cinq de part et d'autre (M17, le verrou par VM, et M1552 survivent ; M22, M26 et M1963 par leurs seules séquences figées) —, plus M2340–M2343 (48/53). Aucun perdu. Avec le reset : invariants à 500 sur 555, 42 et 8675 verts ; M2340–M2346 7/7.
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

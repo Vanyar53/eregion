@@ -5447,3 +5447,43 @@ def test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said(monkeypatch, interleavin
          ("block_turned_then_reasserted", WEB1, WEB1, None, *block, (_EDGE, _API_BASE), "non_disruptive"),
          ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), False),
          ("bare_with_an_unknown_original", DB, DB, None, _nic("rg-app1", "db-nic-0"), "release twice"))
+
+
+_ALLOW_LATERAL_OUT = _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                                          destination_address_prefix="VirtualNetwork",
+                                                          destination_port_range="*"))
+_D80_RESET_NET = {
+    "subnet_nsg": None, "edge_nsg": [_rule("allow-ssh", 100, _SSH_IN), _LATERAL_IN],
+    "tier_rules": [_rule("allow-ssh", 100, _SSH_IN)],
+    "nics": {"web-nic": {"own": "dedicated", "rules": [_rule("allow-ssh", 100, _SSH_IN)], "policy": False},
+             "db-nic-0": {"own": "tier", "rules": [_ALLOW_LATERAL_OUT], "policy": True},
+             "db-nic-1": {"own": "tier", "rules": [_LATERAL_IN], "policy": True},
+             "api-nic": {"own": None, "rules": [_rule("allow-ssh", 100, _SSH_IN), _LATERAL_IN], "policy": True}},
+    "windows": None, "config": {"quarantine": True, "readable": True, "forensic": [], "rg": ""},
+    "legacy": None, "data_subnet": None}
+
+
+def test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said_by_the_reset(monkeypatch):
+    """The macOS job of PR #391 (D80's release fixed): the night's sequence went on and met the
+    reset — Db--01's rule of db-nic-0 kept on the tier NSG at its release (I4C), then db-nic-0
+    in quarantine, state and tags lost, isolated again, left bare, and `reset --from-azure` —
+    « I3 (said): reset --from-azure said swept_partial, rules of …/Db--01 kept without saying so:
+    ['glorfindel-iso-db--01-db-nic-0-0d0228'] ». The same cause as the release's: the reset
+    looked for a NIC's rules only on the NSGs that govern it now; db-nic-0, bare, nowhere. Its
+    rules (isolation and blocks) are looked for on every NSG of the subscription (`away.py`)."""
+    q = _NSG.format(rg="rg-app1", name="nsg-glorfindel-quarantine-westeurope")
+    _run(monkeypatch, _D80_RESET_NET,
+         ("race", API, ("release", "reassert"), 708),
+         ("lose_everything", WEB1, WEB1, None, WEB1, q, "stop"),
+         ("another_subscription", WEB1, "isolate"),
+         ("verify", WEB1, WEB1, None),
+         ("interrupted_release", WEB1, WEB1, (1, "before-429"), 2, "before-crash", False),
+         ("kept_at_the_lift", DB, DB, None, "release", (_TIER, _DB0_ISO), _nic("rg-app1", "db-nic-0"), 0, 4,
+          "rg-new", "web", "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/"
+          "nsg-tier", "Linux", False),
+         ("lose_everything", WEB1, WEB1, None, WEB1, q, "stop"),
+         ("config_changes", {"quarantine": False, "forensic": [], "readable": True, "rg": ""}, True),
+         ("block_turned_then_reasserted", WEB1, WEB1, ("nic.get", "always-429"), "subnet", (_EDGE, _API_BASE),
+          "non_disruptive"),
+         ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), False),
+         ("bare_with_an_unknown_original", DB, DB, ("subnet.get", "always-429"), _nic("rg-app1", "db-nic-0"), "reset"))

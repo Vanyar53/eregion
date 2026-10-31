@@ -120,3 +120,26 @@ def test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once(monkeypatch):
     out = c.release_isolation(WEB)
     assert out["status"] == "release_partial", out
     assert sum(name in s and "gardée" in s for s in out["failed"]) == 1, out
+
+
+def test_the_reset_says_a_bare_nics_rule_kept_on_the_nsg_it_carried(monkeypatch):
+    """`reset --from-azure` had the same blind spot (the macOS job of PR #391, D80): the NSG
+    the bare NIC carried, out of its sight. Kept by the guard, said « gardée »; never `swept`."""
+    f, c, own, _ = _world(monkeypatch)
+    name = _turned_toward_batch(f, own)
+    out = c.sweep_vm_rules(WEB)
+    assert out["status"] == "swept_partial", out
+    assert any(name in s and "gardée" in s for s in out["failed"]), out
+    assert name in f.nsgs[key(own)]["rules"]
+
+
+def test_the_reset_takes_off_a_bare_nics_block_left_on_the_nsg_it_carried(monkeypatch):
+    """The reset takes blocks off too: a block of web's NIC left on the NSG it carried, aimed
+    at the attacker, nothing of another VM behind it — found by its name and taken off."""
+    f, c, own, _ = _world(monkeypatch)
+    block = AzureConnector()._placement_rule_bases("glorfindel-block-192-31-196-7", "web", "web-nic", WEB_NIC)[0]
+    f._put_rule(f.nsgs[key(own)], _record(block, "Deny", "Inbound", "192.31.196.7", "10.0.0.4"))
+    f._put_rule(f.nsgs[key(own)], _record(f"{block}-out", "Deny", "Outbound", "10.0.0.4", "192.31.196.7"))
+    out = c.sweep_vm_rules(WEB)
+    assert out["status"] == "swept", out
+    assert not [n for n in f.nsgs[key(own)]["rules"] if n.startswith("glorfindel-")]

@@ -2769,7 +2769,7 @@ api (`…nobody_holds_any_more_is_said_of_its_nsg`) ; une carte partagée par de
 change de VM, en attente ou acquittée (`test_a_card_two_rules_share_when_one_moves_off_its_vm`) ; une
 règle qui coupe deux VM (`…cutting_two_vms_says_both_with_their_nics`).
 
-**Mesures d'U1O.** `pytest` complet : 4 641 réussis, 7 sautés, 5 `xfail` (un de moins) ; `ruff` propre ;
+**Mesures d'U1O.** `pytest` complet, `origin/main` fusionné (L1C) : 4 660 réussis, 7 sautés, 4 `xfail` (un de moins) ; `ruff` propre ;
 `mutant_anchors.py` sans faute. Mutants M2260–M2265 (le remplacement retiré ; une carte remplacée qui
 laisse tues les autres règles qu'elle disait ; une carte acquittée qui fait redire les règles restées sur
 sa VM ; la carte réseau tue ; la seconde VM coupée tue ; la carte remplacée laissée en attente) : 6/6 par

@@ -2774,7 +2774,8 @@ reste vrai), une passe sous disque plein, retirées de nouveau : « pas pire que
 règles que celles qu'elle disait), rien. Même famille — une marque d'épisode acquitté qui fait taire
 une disparition nouvelle. **Correctif** (`reassert_cards.py`, `reassert.py`) : quand une dérive va
 mieux que sa carte sans finir, ce qui en tient encore devient la référence (`drift_baseline`,
-`narrow_drift`), une fois la carte acquittée, en mémoire, pour son épisode seulement (fini, ou une
+`narrow_drift`), à chaque passe qui va mieux que la carte, en attente ou acquittée (seconde relecture,
+ci-dessous), en mémoire, pour son épisode seulement (fini, ou une
 nouvelle carte : `episode` la purge). Les règles reparties sont « pires » que la référence :
 redites. Figé :
 `test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said` (rôle retiré ou non ; rouge sur
@@ -2805,12 +2806,28 @@ puis revenue et la paire repartie — pire que sa carte, mais la référence pé
 entier efface aussi `reasserted_at`, comme une isolation réécrite remplace son état : gardée, la
 carte disait « une deuxième fois (déjà reposée le <avant le reblocage>) », et hors `human_only` une
 disparition après un geste de l'opérateur n'était jamais reposée
-(`test_a_block_written_again_whole_is_put_back_again_once`, M2154). (3) La référence ne se resserre
-qu'une fois la carte acquittée : en attente, une dérive qui va et vient refaisait une carte à chaque
-retour (`test_a_drift_that_comes_and_goes_under_a_pending_card_is_not_said_again`, M2155). (4) La copie
+(`test_a_block_written_again_whole_is_put_back_again_once`, M2154). (3) La référence ne se resserrait
+qu'une fois la carte acquittée (en attente, une dérive qui va et vient refaisait une carte à chaque
+retour) — retiré par la seconde relecture, ci-dessous. (4) La copie
 de la référence dans l'entrée ne changeait rien (après un redémarrage, la disparition est redite de
 toute façon) et ajoutait une écriture qui peut échouer : retirée, la référence vit en mémoire.
 (5) La règle de la machine sort de la PR (ci-dessus) ; les trois `xfail` citent #379, #380, #381.
+
+**Après la seconde relecture de L1Q.** Le point (3) ouvrait une fenêtre où une dérive pire n'était
+jamais dite. En `human_only` : la paire et les règles de la VM disparaissent, la carte est dite et
+attend ; l'opérateur remet les règles à la main, une passe lit « la paire seule » sans resserrer (la
+carte attend) ; il acquitte la carte ; avant la passe suivante, les règles repartent ; la passe compare
+à la carte, « pas pire », et se tait pour tout l'épisode. Règle d'arrêt : retour au simple et sûr. La
+référence se resserre à chaque passe qui va mieux que la carte, qu'elle attende ou soit acquittée
+(`narrow_drift` perd le paramètre ajouté pour le point (3)). Figé : le scénario du relecteur
+(`test_a_drift_better_under_a_pending_card_then_acknowledged_then_worse_is_said`), M2155 réutilisé —
+le resserrement réservé à une carte acquittée — et le test du point (3) retourné pour dire le
+comportement voulu (`test_a_drift_that_comes_and_goes_under_a_pending_card_makes_a_card_at_each_return`).
+**Limite connue, voulue** : sous une carte en attente, une dérive qui va et vient refait une carte à
+chaque retour (chacune remplace la précédente : une seule attend) — une carte de trop plutôt qu'une
+disparition tue. Mesures : `pytest` complet 4 705 réussis, 7 sautés, 6 `xfail` ; `ruff` propre ;
+`mutant_anchors.py` 1 706 mutants sans faute ; invariants à 500 sur 42, 555 et 71 verts ; M2150–M2155
+attrapés à chaque tour (60 séquences, deux tours).
 
 **Mesures de L1Q** (après la relecture, la règle sortie, `main` 8295975 fusionné). `pytest` complet :
 4 679 réussis, 7 sautés, 7 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 686 mutants, sans

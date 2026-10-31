@@ -4,6 +4,13 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **A bypass is said while a rule of its pair is gone; only a refusal supersedes a placement** (L1C, #369, 30/10; `docs/azure.md`, « La réaffirmation et les contournements »; `docs/design/preuves.md`, « L1C »). The machine at 2 000 sequences (seed 31337): a block whose `-out` rule was gone (said, a drift card), then a customer's allow widened before its inbound deny — the reassertion never said the bypass (L1); nothing opened beyond what was already said open, an alert stayed quiet.
+  - **The cause**: a pair gone or altered in one direction was read « missing » alone; what was left of it — a deny still in place, passed by an allow before it — was never checked for a bypass, so no bypass card was ever written while the rule stayed gone. And rules missing on one NIC dropped a bypass read on another. (Not a refused read nor the full disk: the machine's rule draws an `nsg.get` fault it never uses, and the sequence fails at its first pass.)
+  - **The fix**: `verify_block_ip` checks what is left of a half pair (a deny that still blocks the attacker, an allow before it that lets the threat through) and returns it as `shadowed_by` beside `missing_rules` — the drift card and the bypass card both; `verify_isolation` does the same for an isolation (a NIC uncovered, its half pair passed by an allow).
+  - **L1B's review's reserve**: in `_recorded_gone`, another name of the NIC supersedes a placement on an NSG only as a refusal there — its pair, both denies cutting the NIC —, never a rule merely present: the first name turned into an allow hid the second name's pair gone (the card named the wrong rule, or, the first's `-out` rule left behind, nothing gone).
+  - Tests: `test_glorfindel.py`, the sequence of seed 31337 completed through the full disk (its `xfail` lifted) and the same for an isolation (`test_invariant_regressions.py`); mutants M2230–M2235, M2045 and M2046 re-anchored. Its review: beside a half pair read bypassed, everything gone on the NIC is said (another placement wholly gone was dropped, the drift card said less), and each allow is named once (M2236, M2237).
+
 ## [0.4.9] — 2026-10-30 — "held in check"
 
 ### Security

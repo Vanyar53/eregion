@@ -4974,15 +4974,18 @@ _S31337_NET = {
     "data_subnet": None}
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#369: L1, a block bypassed behind an unreadable NSG left unsaid")
-def test_a_bypassed_block_is_said_while_its_nsg_cannot_be_read(monkeypatch):
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+@pytest.mark.parametrize("nth", [1, 3, 6])
+def test_a_bypassed_block_is_said_while_a_rule_of_its_pair_is_gone(monkeypatch, mode, nth):
     """L1B's review, the machine at 2 000 (seed 31337; 15 steps, reduced to 4): web (rg-app2)
     blocked on its subnet, its rules turned twice (`block_turned_then_reasserted`, the first cut
-    by a crash), the role taken away (`access_changes`), then `said_then_back_after_a_full_disk`
-    (« bypass », every `nsg.get` answering 429, human_only): « L1: the block of …/rg-app2/…/web is
-    bypassed by a customer allow (…22); the reassertion doesn't say so ». Fails on `main` d380df5
-    too, outside L1B: routed to #369. Strict: once fixed, this fails, and the mark goes."""
+    by a crash) — the `-out` rule gone, said (a drift card) —, the role taken away
+    (`access_changes`), then `said_then_back_after_a_full_disk` (« bypass », human_only): the
+    customer's allow-https at 110 widened before our inbound deny at 210 — « L1: the block of
+    …/rg-app2/…/web is bypassed by a customer allow (…22); the reassertion doesn't say so », at
+    the first pass. Its pair half gone, `verify_block_ip` returned the missing rule alone; what
+    was left of it, bypassed, was never read (L1C, #369). Then through the full disk and back,
+    as the machine goes on (the rule's `nsg.get` fault is drawn and never used)."""
     _run(monkeypatch, _S31337_NET,
          ("block_turned_then_reasserted", WEB2, WEB2, (7, "after-crash"), "both", 22,
           (_S101_NSG.format("rg-net", "nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
@@ -4992,8 +4995,26 @@ def test_a_bypassed_block_is_said_while_its_nsg_cannot_be_read(monkeypatch):
           "non_disruptive"),
          ("access_changes", True),
          ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2.lower(), ("nsg.get", "always-429"), False, None,
-          (210, _S101_NSG.format("rg-net", "nsg-subnet")), "allow-https", "human_only"))
+          (210, _S101_NSG.format("rg-net", "nsg-subnet")), "allow-https", "human_only",
+          mode, (nth, "from-full"), mode))
 
+
+@pytest.mark.parametrize("how", ["access", "port", "protocol"])
+def test_a_bypassed_isolation_is_said_while_a_rule_of_its_pair_is_gone(monkeypatch, how):
+    """L1C (#369), the same for an isolation, built by hand: web isolated on its own NSG at
+    101 (allow-ssh at 100 there, the subnet's 100 taken too), its `-out` rule turned by hand
+    (an allow, a port, a protocol: no longer a deny that cuts the NIC), the role taken away,
+    then `said_then_back_after_a_full_disk` (« bypass »: allow-ssh widened before our inbound
+    deny). The pair half gone, `verify_isolation` said the NIC uncovered alone; the bypass of
+    what was left of it, never read, was never said (L1). Red on `main` e75d527."""
+    nsg = _S101_NSG.format("rg-app1", "nsg-web-nic")
+    _run(monkeypatch, _net(subnet_nsg=[_s1618("allow-https", 100, "Allow", "443", source="Internet")],
+                           web_nic={"own": "dedicated", "rules": [_S1618_SSH]}),
+         ("isolate", WEB1, WEB1, None),
+         ("tamper_with_our_rule", how, (nsg, "glorfindel-iso-web-web-nic-8b70f2-out")),
+         ("access_changes", True),
+         ("said_then_back_after_a_full_disk", "bypass", WEB1, WEB1, None, True, (101, nsg), "allow-ssh",
+          "human_only", "human_only", (1, "from-full"), "human_only"))
 
 
 _I3_NO_NIC_NET = {

@@ -6711,6 +6711,45 @@ MUTANTS += [
 ]
 TESTS["M2496"] = _FOL
 
+# D80 (#380): a bare NIC's rules looked for away from it, on every NSG of the subscription —
+# kept and said, or taken off; a listing that fails said — the release, then the reset. M2340–M2346.
+AWY = "glorfindel/providers/azure/away.py"
+_D80_SEQ = ("tests/unit/test_invariant_regressions.py::test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps "
+            "tests/unit/test_invariant_regressions.py::test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said")
+MUTANTS += [
+    ("M2340", "the release's sweep blind away from a bare NIC: a rule kept on the NSG it carried, `released` (D80)", REL,
+     "        return failed + self._away_rules(vm_name, targets, stuck, guard, mates)   # a bare NIC's (D80)\n",
+     "        return failed\n"),
+    ("M2341", "a bare NIC's rule found away from it taken off without the guard: the VM behind it cut (D80)", AWY,
+     '                why = _held_by_turned(self._network, guard, n_rg, n_name, name, t0["nic_id"], mates)\n',
+     '                why = ""\n'),
+    ("M2342", "the subscription's NSGs unreadable read as nothing there: the bare NIC's rules unlooked for, unsaid (D80)",
+     AWY, "        except Exception as exc:\n            nics = ",
+     "        except Exception as exc:\n            return []\n            nics = "),
+    ("M2343", "the bare NIC's subnet NSG searched twice: its kept rule named twice (D80)", AWY,
+     '                if t0 is None or k in views[t0["nic_id"]] or skip(k, name):\n',
+     "                if t0 is None or skip(k, name):\n"),
+    ("M2344", "a bare NIC's first name alone looked for away from it: a turned rule under its second unsaid (D80, review)",
+     AWY, '            for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"], t0["nic_id"]):\n',
+     '            for b in self._placement_rule_bases("glorfindel-iso", vm_name, t0["nic_short"], t0["nic_id"])[:1]:\n'),
+    ("M2345", "`reset --from-azure` blind away from a bare NIC: a rule kept on its mate's NSG unsaid (D80, macOS #391)",
+     SWP, ('        held, gone = self._away_split(vm_name, targets, guard, mates, lambda k, n: (k, n.lower()) in seen,\n'
+           '                                      blocks=True, unverified="reset non vérifié")   # a bare NIC\'s (D80)\n'),
+     "        held, gone = [], []\n"),
+    ("M2346", "the reset's search away from a bare NIC blind to its blocks: one left on the NSG it carried (D80)", SWP,
+     'blocks=True, unverified="reset non vérifié")', 'blocks=False, unverified="reset non vérifié")'),
+]
+TESTS.update({
+    "M2340": f"{_D80_SEQ} tests/unit/test_release_away.py",
+    "M2341": f"{_D80_SEQ} tests/unit/test_release_away.py",
+    "M2342": "tests/unit/test_release_away.py::test_a_bare_nics_rules_unlooked_for_are_said",
+    "M2343": "tests/unit/test_release_away.py::test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once",
+    "M2344": "tests/unit/test_release_away.py::test_a_bare_nics_rule_under_its_second_name_is_kept_and_said",
+    "M2345": ("tests/unit/test_invariant_regressions.py::test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said_by_the_reset "
+              "tests/unit/test_release_away.py"),
+    "M2346": "tests/unit/test_release_away.py::test_the_reset_takes_off_a_bare_nics_block_left_on_the_nsg_it_carried",
+})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

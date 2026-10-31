@@ -2438,12 +2438,16 @@ def test_a_block_written_again_after_an_ip_change_leaves_the_new_owner_of_the_ol
          ("address_reused", API, API, None, False, 22, False, "rg-new", "x", None, "Linux", False))
 
 
-def test_the_same_perimeter_gone_twice_is_said_twice(monkeypatch):
+@pytest.mark.parametrize("back", ["blocked again", "put back by hand"])
+def test_the_same_perimeter_gone_twice_is_said_twice(monkeypatch, back):
     """RB1, fifth review: a perimeter block alone on Db--01 (two subnets) — « ne couvre pas »,
     acknowledged; its pair deleted — « disparu », acknowledged; blocked again by the
     operator, the pair back: the next pass reads it whole but for db-nic-1, the episode is
     over; the same pair deleted a second time must be said again — the same rules gone, so
-    no « rule more » tells it worse: only the episode closed does."""
+    no « rule more » tells it worse: only the episode closed does. L1Q (#363): a block
+    written again now ends the episode itself; the pair put back by hand (no write of
+    Glorfindel's) leaves it to the pass, which reads the « ne couvre pas » case — M1646's."""
+    import copy
     import shutil
 
     from glorfindel import escalations
@@ -2453,10 +2457,12 @@ def test_the_same_perimeter_gone_twice_is_said_twice(monkeypatch):
     try:
         m.build(_net(subnet_nsg=[], data_subnet=[]))
         c, rules = m.connector, m.fake.nsgs[key(_SUBNET)]["rules"]
+        kept = {}
 
         def drop():
             for n in (_PERIMETER, f"{_PERIMETER}-out"):
-                rules.pop(n, None)
+                if n in rules:
+                    kept[n] = copy.deepcopy(rules.pop(n))
 
         def ack():
             for e in escalations.pending():
@@ -2468,7 +2474,10 @@ def test_the_same_perimeter_gone_twice_is_said_twice(monkeypatch):
         m.reassert(Script("human_only", None))
         assert any("disparu" in x for x in _cards(m)), _cards(m)
         ack()
-        c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        if back == "blocked again":
+            c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        else:
+            rules.update(copy.deepcopy(kept))
         m.reassert(Script("human_only", None))
         ack()
         drop()
@@ -4796,23 +4805,45 @@ _L1_SEED42_STEPS = [
     ('block_perimeter', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', ('nic.get', 'always-429'), False),
     ('perimeter_lifted_beside_a_block', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None),
     ('block_then_isolate', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, 22, None, True, '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', False),
-    ('quarantine_change_comes_back', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, False, False, 'protocol', ('/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'glorfindel-quarantine-deny-in'), 'human_only'),
+    # The rule's draws after its first pass (L1Q): the machine's sequence ended on the failure
+    # there; these are the simplest that carry on (nothing out of sight, a pass under a full disk
+    # from its first write, the configuration readable again).
+    ('quarantine_change_comes_back', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', None, False, False, 'protocol', ('/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'glorfindel-quarantine-deny-in'), 'human_only',
+     'no', 'human_only', (1, 'from-full'), True, 'human_only'),
 ]
 
 
 # I4E: the machine at 2 000 (seed 42), once I4E's rule shifted the draws — shrunk to 25 rules, no step
 # of an older version's state. The same failure on `main` 91dae76, its code and its machine: an older
-# defect of the block, the perimeter and the quarantine's reassertion, routed to a follow-up lot (#363).
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#363: L1, a block vanished under a quarantine change, neither put back nor said")
+# defect, of the block's entry written again (L1Q, #363) — not of the perimeter nor of the quarantine.
 def test_a_block_beside_a_lifted_perimeter_vanishes_under_a_quarantine_change(monkeypatch):
-    """I4E's machine at 2 000 (seed 42), shrunk: Db--01 blocked, its perimeter lifted beside the block,
-    then blocked and isolated, the quarantine NSG stripped, and its change coming back
-    (`quarantine_change_comes_back`) — « L1: the block on …/Db--01 vanished from Azure; the
-    reassertion neither put it back nor said so ». It fails on `main` 91dae76 too (its code and its
-    machine, replayed step by step): not I4E's family, routed to a follow-up lot (#363). Strict: once
-    fixed, this fails, and the mark goes."""
+    """I4E's machine at 2 000 (seed 42), shrunk: Db--01 blocked on its subnet and for itself (one
+    merged entry), its perimeter rule lifted by another VM's unblock (the same rule, one per IP and
+    subnet) — said, the card acknowledged by the operator —, then Db--01 blocked again and isolated,
+    and a change to the quarantine that triggers a pass in human_only — « L1: the block on …/Db--01
+    vanished from Azure; the reassertion neither put it back nor said so ». The block written again
+    kept the drift mark of the acknowledged card: the pair, still named and still gone, read
+    « already said » under rules rewritten since (their priorities moved). The quarantine's change
+    only brings the pass (L1Q: test_a_block_written_again_after_an_acknowledged_drift_is_said_again
+    has it without one)."""
     _run(monkeypatch, _L1_SEED42_NET, *_L1_SEED42_STEPS)
+
+
+def test_a_block_written_again_after_an_acknowledged_drift_is_said_again(monkeypatch):
+    """L1Q (#363), seed 42's sequence reduced to its cause, no quarantine: Db--01 blocked on its
+    subnet and for itself (one merged entry); web1, on the same subnet, blocked there and unblocked
+    — the perimeter rule, shared, lifted beside Db--01's block; the reassertion says Db--01's pair
+    gone, the operator acknowledges it; Db--01 blocked again, whole — its rules rewritten. The
+    next pass, in human_only, said nothing: the entry kept the drift mark of the card acknowledged,
+    and the pair it still names, gone, read « already said »."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block_perimeter", DB, DB, None, False),
+         ("block", DB, DB, None, 22),
+         ("perimeter_lifted_beside_a_block", WEB1, WEB1, None, DB, False, DB, 22),
+         ("reassert", "human_only", None),
+         ("operator_acknowledges", 0),
+         ("block", DB, DB, None, 22),
+         ("reassert", "human_only", None))
 
 
 _I3_SEED1999_NET = {
@@ -5264,3 +5295,109 @@ def test_the_reassertion_says_unblocked_naming_no_nic_where_our_perimeter_still_
          ("turned_then_address_reused", WEB1, WEB1.lower(), ("subnet.get", "always-429"), None, "subnet",
           (_S101_NSG.format("rg-app1", "nsg-web-nic"), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"),
           "human_only"))
+
+
+_APP1_API = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+
+
+@pytest.mark.parametrize("denied", [False, True])
+def test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said(monkeypatch, denied):
+    """L1Q (#363), found by L1Q's rule at 2 000 (seed 322), present on `main` 48e42c8 without it:
+    web2 blocked on its subnet and for itself (one merged entry), web1 blocked there and unblocked
+    — the pair lifted, said. Then web2's own rules taken off: said (the pair and its rules gone),
+    the card acknowledged; its rules put back as they were (the pair still gone: the episode goes
+    on), a pass under a full disk, its rules taken off again — the next pass in human_only said
+    nothing: « not worse than the card » (the same rules gone as it said). What still holds of the
+    card is the baseline now, in memory, once the card is acknowledged: the rules gone again are a
+    worse drift than « the pair alone », said again. With the role removed or not."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block_perimeter", WEB2, WEB2, None, False),
+         ("block", WEB2, WEB2, None, 22),
+         ("perimeter_lifted_beside_a_block", WEB1, WEB1, None, WEB2, False, WEB2, 22),
+         ("reassert", "human_only", None),
+         ("access_changes", denied),
+         ("said_then_back_after_a_full_disk", "gone", WEB2, WEB2, None, False, 22, (1, "from-full")))
+
+
+# Three older failures (two here, one below), reached once L1Q's rule — now a PR of its own —
+# shifted the draws, present on `main` 48e42c8 (red there, replayed step by step): outside the
+# lot's family — frozen, routed.
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#379: I7, an older deny-all kept for a turned block rule of a redeployed NIC")
+def test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic(monkeypatch):
+    """L1Q's machine at 500 (seed 1), shrunk to 4 rules: a new VM api (rg-app1) on the NSG of an
+    older version's isolation of api (rg-edge), its perimeter lifted beside a block, the role
+    removed, then the block rule of api's NIC on that NSG turned into an allow — at the teardown,
+    « I7: …/rg-edge/…/api could not be released »: the older deny-all « gardée » for that turned
+    rule (I4C's guard), which the machine's operator does not put back. The family of I4C/I4D
+    (#366); not a drift's."""
+    _run(monkeypatch, _net(api_nic={"own": "dedicated"}, db_nic_0={"own": "dedicated"},
+                           legacy=("api-nic", True)),
+         ("joins_an_old_isolation", _NSG.format(rg="rg-edge", name="nsg-api-nic"), "rg-app1", "api", "Linux",
+          False, True, _APP1_API),
+         ("perimeter_lifted_beside_a_block", API, API, None, _APP1_API, False, _APP1_API, 22),
+         ("access_changes", True),
+         ("block_turned_then_reasserted", WEB2, WEB2, None, "subnet",
+          (_NSG.format(rg="rg-edge", name="nsg-api-nic"), "glorfindel-block-192-31-196-7-api-api-nic-4-679cdb"),
+          "non_disruptive"))
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#381: L1, a block bypassed beside its own deny altered, writes refused, unsaid")
+def test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused(monkeypatch):
+    """L1Q's machine at 2 000 (seed 322), shrunk to 5 rules without L1Q's rule: web2 blocked, its
+    inbound deny's port altered by someone, the role removed (writes refused), a customer allow
+    added before the deny and widened — « L1: the block of …/web is bypassed by a customer allow;
+    the reassertion doesn't say so ». The family of L1C (#369: a bypass beside a half pair); not a
+    drift episode's."""
+    _run(monkeypatch, _net(subnet_nsg=[]),
+         ("block", WEB2, WEB2, None, 22),
+         ("tamper_with_our_rule", "port", (_SUBNET, "glorfindel-block-192-31-196-7-web-web-nic-80ab3c")),
+         ("access_changes", True),
+         ("customer_adds_rule", _SUBNET, "allow-https", 100),
+         ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2, None, False, 22, (200, _SUBNET),
+          "allow-https-100", "non_disruptive"))
+
+
+_SSH_IN = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+               destination_port_range="22")
+_S555_NET = {
+    "subnet_nsg": None, "edge_nsg": None,
+    "tier_rules": [_rule("allow-ssh", 100, _SSH_IN),
+                   _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                                        destination_address_prefix="VirtualNetwork",
+                                                        destination_port_range="*"))],
+    "nics": {"web-nic": {"own": "dedicated", "rules": [], "policy": False},
+             "db-nic-0": {"own": None, "rules": [], "policy": False},
+             "db-nic-1": {"own": None, "rules": [_rule("allow-ssh", 100, _SSH_IN)], "policy": True},
+             "api-nic": {"own": None, "rules": [_rule("deny-lateral-in", 130, dict(
+                 access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                 destination_address_prefix="*", destination_port_range="*"))], "policy": False}},
+    "windows": None, "config": {"quarantine": False, "forensic": [], "readable": True, "rg": ""},
+    "legacy": None, "data_subnet": None}
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="#380: I3, a release said released, an isolation rule kept after a lost state")
+def test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps(monkeypatch):
+    """L1Q's machine at 500 (seed 555), shrunk to 7 rules, none of L1Q's: web1 blocked and isolated,
+    released; web2 and web1 each isolated with a rule of theirs kept at the lift (I4C), web2 left
+    bare with an unknown original, Db--01 blocked with a rule turned, web2's state lost, then an
+    isolation of web2 cut before a crash — « I3 (said): release_isolation said released, rules of
+    …/rg-app2/…/web kept: ['glorfindel-iso-web-web-nic-80ab3c'] ». Red on `main` 48e42c8. The
+    family of I4C (what a release keeps is said); not a drift's."""
+    nsg = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/networksecuritygroups/nsg-web-nic"
+    nic = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/networkinterfaces/web-nic"
+    _run(monkeypatch, _S555_NET,
+         ("block_then_isolate", WEB1, WEB1, None, 22, None, True, True),
+         ("kept_at_the_lift", WEB2, WEB2, None, "release", (nsg.format("rg-app2"), "glorfindel-iso-web-web-nic-80ab3c"),
+          nic.format("rg-app2"), 0, 4, "rg-new", "web",
+          "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Network/networkSecurityGroups/nsg-web-nic",
+          "Linux", True),
+         ("kept_at_the_lift", WEB1, WEB1, None, "release", (nsg.format("rg-app1"), "glorfindel-iso-web-web-nic-8b70f2"),
+          nic.format("rg-app1"), 0, 4, "rg-app1", "api", None, "Linux", True),
+         ("bare_with_an_unknown_original", WEB2, WEB2, None, nic.format("rg-app2"), "release twice"),
+         ("block_turned_then_reasserted", DB, DB, None, "both", 22,
+          (nsg.format("rg-app1"), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"), "non_disruptive"),
+         ("lose_state", WEB2),
+         ("interrupted_isolation", WEB2, WEB2, None, 1, "before-crash", None))

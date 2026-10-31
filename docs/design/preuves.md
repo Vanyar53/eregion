@@ -2731,6 +2731,113 @@ réaffirmation (`reassert.py`, `reassert_cards.py`) : 78/85 attrapés à chaque 
 après, plus les six nouveaux (84/91) ; M13, M21, M31, M34, M37 et M38 par leurs seules séquences
 figées des deux côtés, M1645 survit des deux côtés (déjà vrai avant). Aucun perdu.
 
+**L1Q (30–31/10, #363) : un blocage écrit de nouveau est un nouvel épisode ; ce qui tient encore
+d'une carte de dérive en devient la référence.** La graine 42 à 2 000 d'I4E, figée en `xfail` strict
+(L1 : « the block on …/Db--01 vanished from Azure; the reassertion neither put it back nor said so »).
+**La cause, établie pas à pas** (l'état de Db--01 tracé après chacune des 29 règles, puis réduite à
+sept, sans quarantaine) — ni la quarantaine changée, ni le périmètre levé, comme le titre le laissait
+croire. Db--01 bloquée sur son sous-réseau et pour elle-même (`block_turned_then_reasserted`, portée
+`both` : une entrée fusionnée, la paire de périmètre et ses règles) ; web, sur le même sous-réseau,
+bloquée là puis débloquée (`perimeter_lifted_beside_a_block`) : la paire, une par IP et sous-réseau,
+part avec elle ; la réaffirmation le dit (« disparu en partie — l'IP reste bloquée »), l'opérateur
+acquitte la carte (`operator_acknowledges`) : dite pour son épisode. Puis Db--01 bloquée de nouveau, en
+entier (`block_then_isolate`) : ses règles réécrites (à des priorités plus basses, la place de la paire
+libérée). `_save_block_state` fusionnait sans retirer `drift_alerted_at` ni `drift_said` : la passe
+suivante, en `human_only` (amenée ici par `quarantine_change_comes_back`, une simple passe suffit),
+lisait la paire — toujours nommée, toujours absente — « pas pire que la carte, déjà dite », et se
+taisait. L'oracle ne tient l'acquittement que tant que les règles de l'entrée sont celles qu'il a vues
+acquitter (RB1, quatrième relecture) : réécrites, l'épisode acquitté est fini, la disparition est à
+redire. **Pourquoi pas remise** : `human_only`, rien n'est écrit. **Pourquoi pas dite** : la marque de
+l'épisode acquitté. **Correctif** (`response/state.py`) : un blocage écrit en entier efface aussi la
+marque de dérive — un nouveau blocage, un nouvel épisode, comme une nouvelle isolation réécrit son
+état ; un blocage écrit en partie la garde (l'entrée est tenue, rien n'est lu). Figés :
+`test_a_block_beside_a_lifted_perimeter_vanishes_under_a_quarantine_change` (son `xfail` levé, les
+tirages de la fin de la règle complétés), `test_a_block_written_again_after_an_acknowledged_drift_is_said_again`
+(sept étapes, et un test unitaire du même nom dans `test_reassert.py`) ; rouges sur `main` d05eade.
+
+**Une règle de la machine, dans une PR à part.** `blocked_again_after_an_acknowledged_drift` rend
+l'état courant : une VM bloquée sur son sous-réseau et pour elle-même, une voisine bloquée là puis
+débloquée, la passe en `human_only`, la carte de la VM acquittée (son index fixé, aucun tirage qui
+dépende de l'état), la VM bloquée de nouveau, une passe. Une règle ajoutée, aucune retirée ni
+restreinte, l'oracle inchangé (A0). Avec elle, M2150 est attrapé par la machine seule (2/2 à 500 ;
+0/2 sans). Mais elle décale les tirages : la relecture a mesuré, à 500 séquences, 20 graines sur 20
+vertes sur `main` 8295975, 16 sur 20 avec elle — sur des défauts anciens où elle n'apparaît pas
+(#379, #380, #366). Elle sort de la PR de L1Q (branche `lot/l1q-regle`) et revient après eux ; M2150
+reste attrapé par ses séquences figées.
+
+**Ce que la règle a fait tomber.** (1) **Une règle revenue puis repartie, la paire toujours absente**
+(graine 322 à 2 000 ; présent sur `main` 48e42c8 sans la règle, réduit à six étapes). L'entrée
+fusionnée de web2, sa paire levée par web1, dite ; puis les règles de web2 retirées
+(`said_then_back_after_a_full_disk`, branche « disparu ») : dites — la paire et elles —, la carte
+acquittée ; remises telles quelles (la paire toujours absente : l'épisode ne finit pas, `_missing`
+reste vrai), une passe sous disque plein, retirées de nouveau : « pas pire que la carte » (les mêmes
+règles que celles qu'elle disait), rien. Même famille — une marque d'épisode acquitté qui fait taire
+une disparition nouvelle. **Correctif** (`reassert_cards.py`, `reassert.py`) : quand une dérive va
+mieux que sa carte sans finir, ce qui en tient encore devient la référence (`drift_baseline`,
+`narrow_drift`), à chaque passe qui va mieux que la carte, en attente ou acquittée (seconde relecture,
+ci-dessous), en mémoire, pour son épisode seulement (fini, ou une
+nouvelle carte : `episode` la purge). Les règles reparties sont « pires » que la référence :
+redites. Figé :
+`test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said` (rôle retiré ou non ; rouge sur
+48e42c8), `test_reassert.py::test_a_rule_back_then_gone_again_is_said_while_the_pair_stays_gone`
+(disque plein ou non). `reassert.py` passe à 494 lignes (la logique dans `reassert_cards.py`, 365).
+(2) **Trois échecs anciens hors de la famille**, rouges sur 48e42c8 rejoués pas à pas, figés en `xfail`
+strict et routés : à la graine 555 (500), réduit à sept règles, aucune de L1Q, « I3 (said):
+release_isolation said released, rules of …/rg-app2/…/web kept » — des isolations gardées à la levée
+(I4C), l'état de web2 perdu, une isolation coupée avant un crash
+(`test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps` ; #380) ; à la graine 1 (500), réduit à quatre règles, « I7: …/rg-edge/…/api could not be
+released » au démontage — un refus total d'une ancienne version gardé (la garde d'I4C) pour une règle
+de blocage retournée sur le NSG de la carte, que l'opérateur du démontage ne remet pas
+(`test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic` ; #379) ; à la
+graine 322 (2 000), réduit à cinq règles sans la nouvelle, « L1: the block of …/web is bypassed by a
+customer allow; the reassertion doesn't say so » — le refus entrant de la VM altéré (son port), le rôle
+retiré, une allow du client avant lui (`test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused` ;
+#381).
+
+**M1646 de nouveau mesuré.** Le harnais d'après l'avait perdu : `test_the_same_perimeter_gone_twice_is_said_twice`
+remettait la paire par un reblocage, qui efface maintenant la marque lui-même — la branche « ne couvre
+pas » qui fermait l'épisode n'était plus exercée. Le test gagne le cas de la paire remise à la main
+(aucune écriture de Glorfindel) : M1646 y est attrapé.
+
+**Après la relecture de L1Q.** (1) La purge de la référence à la fin d'un épisode n'avait ni test ni
+mutant : un premier épisode resserré sur la paire seule, fini ; un second, la règle de la VM partie
+puis revenue et la paire repartie — pire que sa carte, mais la référence périmée lisait « pas pire »
+(`test_a_new_episode_never_compares_with_what_held_of_the_one_before`, M2153). (2) Un blocage écrit en
+entier efface aussi `reasserted_at`, comme une isolation réécrite remplace son état : gardée, la
+carte disait « une deuxième fois (déjà reposée le <avant le reblocage>) », et hors `human_only` une
+disparition après un geste de l'opérateur n'était jamais reposée
+(`test_a_block_written_again_whole_is_put_back_again_once`, M2154). (3) La référence ne se resserrait
+qu'une fois la carte acquittée (en attente, une dérive qui va et vient refaisait une carte à chaque
+retour) — retiré par la seconde relecture, ci-dessous. (4) La copie
+de la référence dans l'entrée ne changeait rien (après un redémarrage, la disparition est redite de
+toute façon) et ajoutait une écriture qui peut échouer : retirée, la référence vit en mémoire.
+(5) La règle de la machine sort de la PR (ci-dessus) ; les trois `xfail` citent #379, #380, #381.
+
+**Après la seconde relecture de L1Q.** Le point (3) ouvrait une fenêtre où une dérive pire n'était
+jamais dite. En `human_only` : la paire et les règles de la VM disparaissent, la carte est dite et
+attend ; l'opérateur remet les règles à la main, une passe lit « la paire seule » sans resserrer (la
+carte attend) ; il acquitte la carte ; avant la passe suivante, les règles repartent ; la passe compare
+à la carte, « pas pire », et se tait pour tout l'épisode. Règle d'arrêt : retour au simple et sûr. La
+référence se resserre à chaque passe qui va mieux que la carte, qu'elle attende ou soit acquittée
+(`narrow_drift` perd le paramètre ajouté pour le point (3)). Figé : le scénario du relecteur
+(`test_a_drift_better_under_a_pending_card_then_acknowledged_then_worse_is_said`), M2155 réutilisé —
+le resserrement réservé à une carte acquittée — et le test du point (3) retourné pour dire le
+comportement voulu (`test_a_drift_that_comes_and_goes_under_a_pending_card_makes_a_card_at_each_return`).
+**Limite connue, voulue** : sous une carte en attente, une dérive qui va et vient refait une carte à
+chaque retour (chacune remplace la précédente : une seule attend) — une carte de trop plutôt qu'une
+disparition tue. Mesures : `pytest` complet 4 705 réussis, 7 sautés, 6 `xfail` ; `ruff` propre ;
+`mutant_anchors.py` 1 706 mutants sans faute ; invariants à 500 sur 42, 555 et 71 verts ; M2150–M2155
+attrapés à chaque tour (60 séquences, deux tours).
+
+**Mesures de L1Q** (après la relecture, la règle sortie, `main` 8295975 fusionné). `pytest` complet :
+4 679 réussis, 7 sautés, 7 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 686 mutants, sans
+faute. Invariants à 500 séquences sur les graines 1, 7, 42, 43, 71, 101, 322, 555, 8675 et 31337 :
+10/10 vertes (sans la règle, les tirages sont ceux de `main`). Mutants M2150–M2155 : 6/6 par leurs
+tests à chaque tour (60 séquences, deux tours, graine 4242) ; M1646 attrapé par le cas « remise à la
+main ». Avant la relecture (la règle en place, 48e42c8) : harnais avant/après sur les mutants de
+l'état et de la réaffirmation, 74/78 des deux côtés, plus M2150–M2152 (77/81) — M13 et M37 par leurs
+seules séquences figées, M36 et M1645 survivent, des deux côtés ; aucun perdu.
+
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
 (`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque

@@ -93,6 +93,30 @@ def episode(key: str, ip: str, over: bool) -> None:
     """Once a drift mark is written after its card: open. Seen over (its rules read back),
     before any write of the pass: no longer — whatever the write of the mark does."""
     (_EPISODE_OPEN.discard if over else _EPISODE_OPEN.add)((key.lower(), ip))
+    _NARROWED.pop((key.lower(), ip), None)          # a new card, or over: its own record
+
+
+# What still holds of what a block's drift card said, once better (L1Q, #363): a rule back,
+# the pair still gone. The card said a merged entry's pair and its VM rules gone, it was
+# acknowledged; the VM rules back, the episode went on — and the VM rules gone again read
+# « not worse than said », in silence. Narrowed at every pass better than the card, pending
+# or acknowledged: narrowed only once acknowledged, a drift better while the card waited,
+# then acknowledged, then gone again before the next pass, read « not worse » for the whole
+# episode (L1Q, second review). Known limit, wanted: under a pending card, a drift that comes
+# and goes makes a card at each return — a card too many rather than a disappearance unsaid.
+# In memory only, as the episode it narrows: after a restart the disappearance is said again
+# anyway (`drift_said`), and no write is refused.
+_NARROWED: dict[tuple[str, str], dict] = {}
+
+
+def drift_baseline(key: str, ip: str, said):
+    """What a block's drift is compared with to tell a worse one: what still holds of its card."""
+    return _NARROWED.get((key.lower(), ip), said)
+
+
+def narrow_drift(key: str, ip: str, now: dict) -> None:
+    """Not worse than the card: what holds now is the new baseline, the card pending or not."""
+    _NARROWED[(key.lower(), ip)] = now
 
 
 def unrecorded(vm: str, exc: Exception, ip: str = "") -> dict:

@@ -1078,3 +1078,47 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
   présents (`~/.eregion/console/requests/`, `runs/orodruin/`). Le message est le même, à l'octet
   près. Le mutant M2104 y glisse la demande, et le test l'attrape.
 
+### Construit : le suivi en direct (DG-c, #349, 31/10)
+
+- **La lecture** : `eregion_console/follow.py`, des fonctions pures, servies par la route que DG-b
+  avait posée, `GET /api/dagorlad/requests/<id>`. Elle rend en plus les fils de la demande écrite ici
+  (un rechargement retrouve la demande), sa phase et la chronologie de chaque fil. Aucune route, aucun
+  canal, aucun fichier nouveau : rien n'est écrit (un test compare tout l'arbre de l'hôte avant et
+  après), et la watch n'apprend rien.
+- **Un fil et son run** : le statut d'Orodruin nomme les runs de chaque rang. Avant qu'il le fasse, la
+  fenêtre de la demande dont l'expérience et la cible sont celles du fil est la sienne : une demande ne
+  porte une paire qu'une fois.
+- **Mesuré comme sur l'accueil** : le rapport du run arrivé, sa décision est celle que
+  `indicators.decision_of` rattache, ses temps ceux de `run_report.timeline`, sa fin celle de BL1, par
+  `indicators.incident_of` — une fonction que l'accueil appelle aussi désormais. Avant le rapport, les
+  mêmes fonctions sur la fenêtre (T0 à son début, la détection au premier cycle de la technique du fil,
+  sur sa cible, dans la fenêtre, par `covering_runs`), et la ligne dit qu'elle est provisoire. Une
+  panne : les décisions d'isoler ou de bloquer sur sa cible pendant elle (`containment.fault_run`), sans
+  celles déjà rattachées à une attaque de la demande ; son retour vérifié, avec son temps.
+- **La fin d'une demande** :
+  - Orodruin dit qu'il l'a finie ou refusée ;
+  - ou une de ses fenêtres a été fermée par « Stop all » (`closed_by: orodruin-kill`) et aucune ne
+    vit plus — l'arrêt d'urgence tue le lanceur sans rien publier ;
+  - ou Orodruin se tait depuis plus longtemps qu'une demande ne peut durer (son plafond, 2 h, plus la
+    grâce) et aucune fenêtre d'elle ne vit.
+
+  Tant qu'une fenêtre vit, la demande court.
+- **La page** suit la vie d'un fil décidée le 30/10. « New plan » n'abandonne qu'une demande dont
+  Orodruin n'a encore rien dit. En cours, ni ✕ ni nouveau fil. Finie, les fils se déverrouillent et
+  gardent leur dernier résultat. « Run again » écrit une nouvelle demande des mêmes fils. Les cartes
+  bleues disent ce que la demande en cours fait sur leur cible (jamais une demande finie : `/api/state`
+  dit alors l'état de la VM).
+- **Vérifié dans Chromium** sur le jeu d'exemple (les pièces de `scripts/console_shots.py`, un dossier
+  jetable) : trois fils — une technique contenue, une panne, une technique ratée —, écrite, en cours,
+  finie, rechargée ; un run au nom piégé (`<img onerror>`), dit « not believed by Glorfindel » ; aucune
+  erreur JS, aucune violation de CSP, rien d'exécuté.
+- **Mutants M2450–M2473**, tous attrapés (`tests/unit/test_console_dagorlad_follow.py`) : chaque fin de
+  demande ignorée ou prise trop tôt ; un cycle d'une autre technique, d'une autre VM, hors de la fenêtre
+  ou non attribué pris pour le fil ; le rapport arrivé et le run encore mesuré sur sa fenêtre ; une
+  isolation qui n'a pas tenu dite contenue (ici et sur l'accueil) ; la fenêtre d'une autre demande ou
+  d'un autre fil ; la décision d'une attaque comptée contre la panne suivante ; le retour d'une panne
+  dit vérifié ; une carte jamais dite à juger ; la route qui prend un POST ; côté page, un fil retiré
+  pendant la demande, « New plan » sur une demande lancée, une demande finie jamais déverrouillée, le ✕
+  d'un fil verrouillé, une demande gardée prise quelle que soit sa forme, une carte bleue qui dit une
+  demande finie.
+

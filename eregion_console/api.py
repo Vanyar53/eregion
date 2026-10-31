@@ -2711,9 +2711,11 @@ def _orodruin_contract() -> dict | None:
 
 @app.get("/api/dagorlad/requests/{request_id}")
 async def exercise_request_status(request_id: str) -> JSONResponse:
-    """A request as this host knows it: written here or not, and what Orodruin says of it — its
-    status, pulled by the watch (``runs/orodruin/requests/<id>.json``), read against its shape
-    again — or nothing yet. Read only."""
+    """A request as this host knows it, followed live (DG-c): written here or not, its wires, what
+    Orodruin says of it — its status, pulled by the watch (``runs/orodruin/requests/<id>.json``),
+    read against its shape again — and each wire's chronology, from the windows, the watch's
+    cycles, the cards and the run's report (``eregion_console/follow.py``). Read only: nothing is
+    written, the watch is told nothing."""
     from eregion_core import exercise_request as xr
     if not xr.valid_id(request_id):
         return JSONResponse({"error": "not a request id"}, status_code=400)
@@ -2723,10 +2725,59 @@ async def exercise_request_status(request_id: str) -> JSONResponse:
             (_RUNS / "orodruin" / "requests" / f"{request_id}.json").read_text(encoding="utf-8")))
     except (OSError, ValueError, xr.RequestRefused):
         status = None
+    req = None
+    path = xr.requests_dir() / f"{request_id}.json"
+    try:
+        req = xr.load(path) if path.is_file() else None
+    except xr.RequestRefused:
+        req = None
+    if req is not None and req.id != request_id:   # the file names the request it holds, or none
+        req = None
     from eregion_console import board
-    return JSONResponse({"request": request_id,
-                         "written_here": (xr.requests_dir() / f"{request_id}.json").is_file(),
-                         "status": status, "orodruin": board.orodruin_check(_orodruin_contract())})
+    followed = await asyncio.to_thread(_follow, request_id, req, status)
+    return JSONResponse({"request": request_id, "at": req.at if req else None,
+                         "written_here": req is not None,
+                         "status": status, "orodruin": board.orodruin_check(_orodruin_contract()),
+                         **followed})
+
+
+def _follow(request_id: str, req, status: dict | None) -> dict:
+    """Each wire of the request, followed (``follow.follow``), from what this host keeps."""
+    from eregion_console import follow
+    from eregion_core.exercise_plan import load_catalog
+    from glorfindel import escalations as esc_module
+    now = datetime.now(timezone.utc)
+    windows = _read_windows()
+    mine = [w for w in windows if w.get("request") == request_id]
+    # The request's time is in its id (r-<UTC time>-…): the cycles and lifts from then on. An id
+    # of its shape whose date no calendar holds: from its windows, else the last day.
+    try:
+        begun = datetime.strptime(request_id[2:18], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        begun = now.timestamp() - 86400
+    starts = [t.timestamp() for w in mine if (t := _iso(w.get("start")))]
+    since = min([begun] + starts) - 60
+    reports_at = _run_reports()
+    runs = {w["run_id"] for w in mine} | {r for w in (status or {}).get("wires") or [] for r in w.get("runs") or []}
+    reports = {}
+    for rid in runs:   # a run id is only looked up among this host's report files
+        if rid in reports_at:
+            try:
+                reports[rid] = json.loads(reports_at[rid].read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+    cards = esc_module.all_escalations()
+    to_judge = {e.get("id") for e in cards
+                if esc_module.is_decision(e) and e.get("verdict") not in esc_module.VERDICTS}
+    try:
+        catalog_ = load_catalog()
+    except Exception:
+        catalog_ = {}
+    wires = [{"rank": w.rank, "experiment": w.experiment, "target": w.target} for w in req.wires] if req else []
+    return follow.follow(request_id, wires, status, windows,
+                         {str(w["run_id"]): _window_state(w, now) for w in mine},
+                         _watch_cycles(since), reports, cards, to_judge, now=now, catalog=catalog_,
+                         liftings=_manual_liftings(since))
 
 
 @app.get("/api/dagorlad/stop")

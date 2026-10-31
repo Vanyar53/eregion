@@ -118,7 +118,7 @@ juge et la lance.
    - La demande porte un identifiant (`r-<heure UTC>-<6 hex>`), son heure et, par fil, l'expérience,
      la cible et son rang. Rien d'autre : ni zone, ni « destructive », ni résultat attendu.
    - Elle est écrite dans `~/.eregion/console/requests/`, jamais dans `runs/` ni `~/.glorfindel/`.
-   - Les fils sont figés jusqu'à « New plan ».
+   - Les fils sont figés jusqu'à la fin de la demande (« Suivre une demande », plus bas).
 2. **La commande.** La page la donne, à lancer sur ton poste :
 
    ```bash
@@ -140,7 +140,47 @@ juge et la lance.
      jamais levée.
 4. **Le retour.** Chaque fenêtre porte l'identifiant de la demande ; la vue Runs les montre. Orodruin
    publie son verdict et le statut de la demande ; sous le plan, la page dit « Orodruin: armed », ou
-   « unknown here » tant qu'il n'a rien publié.
+   « unknown here » tant qu'il n'a rien publié. La page suit alors chaque fil, en direct.
+
+## Suivre une demande
+
+Une fois la demande écrite, le panneau du bas devient sa **chronologie** : une ligne par fil, dans
+l'ordre où ils partent. La page la relit toutes les 10 s, de ce qui arrive déjà sur l'hôte : la demande,
+le statut qu'Orodruin publie, les fenêtres d'exercice, les cycles de la watch, les cartes et le rapport
+du run. **Rien n'est écrit, et Glorfindel n'apprend rien** : c'est une lecture
+(`GET /api/dagorlad/requests/<id>`).
+
+| Colonne | Ce qu'elle dit | D'où |
+|---|---|---|
+| état | `QUEUED`, `RUNNING`, `DONE`, `SKIPPED`, `REFUSED`, `FAILED`, et le code d'Orodruin (`isolated`, `over_cap`…) | le statut d'Orodruin ; avant lui, la fenêtre |
+| run | le run du fil, sa fenêtre (ouverte, en grâce, fermée, ou fermée par `orodruin-kill`), T0 | la fenêtre qui porte l'identifiant de la demande |
+| résultat | « ✓ detected +1m15 · contained 2m10 », « held (mode_hold) », « ✗ missed » ; pour une panne, « nothing disruptive · returned in 2m30 » | les cycles de la watch, puis le rapport du run |
+| cartes | les cartes qui portent ce run, et combien attendent un verdict | les cartes de Glorfindel (`exercise_run`) |
+| verdict | `RUN PASS · DETECTED`, et le lien « run ▸ » vers la vue Runs | le rapport du run |
+
+- **Pendant le run**, T0 est le début de la fenêtre, et la détection, le premier cycle de sa propre
+  technique, sur sa cible, dans la fenêtre. La ligne le dit (« the window's start, until its report »).
+- **Une fois le rapport arrivé**, le run se mesure **comme sur l'accueil** : la décision que les
+  indicateurs rattachent, leur temps pour contenir, la définition de BL1 (exécutée dans son cycle, relue
+  sur Azure, et tenue jusqu'à la fin de la fenêtre).
+- **Une panne** n'attend rien de disruptif : une isolation ou un blocage sur sa cible pendant la
+  panne est « une panne prise pour une attaque », en rouge. Le retour de la VM est dit, avec son temps.
+- **Les pastilles** des fils suivent la même ligne, et les **cartes bleues** disent ce que la demande
+  fait sur leur cible : le fil qui y tourne, l'isolation vérifiée, les cartes à juger.
+
+**La vie des fils** (Jonathan, 30/10) :
+- **Écrite, pas encore portée** : « New plan » l'abandonne ici. La demande reste sur l'hôte : portée
+  plus tard, Orodruin la jugerait et la lancerait quand même.
+- **En cours** : les fils sont verrouillés, sans ✕, et l'on n'en tire pas d'autres. Seul « Stop all »
+  agit.
+- **Finie** : quand Orodruin dit qu'il l'a finie ou refusée ; quand « Stop all » a fermé une de ses
+  fenêtres et qu'aucune ne vit plus ; ou quand Orodruin se tait plus longtemps qu'une demande ne peut
+  durer (2 h 15) sans fenêtre vivante. Les fils se déverrouillent et **gardent leur dernier résultat**,
+  sur la pastille et dans le plan (« last: … run ▸ »). **« Run again »** renvoie les mêmes fils, en une
+  nouvelle demande.
+
+La demande suivie reste dans le navigateur (une commodité) : un rechargement la retrouve, et la
+reverrouille si elle tourne encore.
 
 ## Stop all
 

@@ -97,10 +97,10 @@ def episode(key: str, ip: str, over: bool) -> None:
 
 
 # What still holds of what a block's drift card said, once better (L1Q, #363): a rule back,
-# the IP blocked again. The card said a merged entry's pair and its VM rules gone, it was
-# acknowledged; the VM rules back, the pair still gone, the episode went on — and the VM
-# rules gone again read « not worse than said », in silence. Kept in memory first (a write
-# refused by a full disk keeps it, L2C), then in the entry.
+# the pair still gone. The card said a merged entry's pair and its VM rules gone, it was
+# acknowledged; the VM rules back, the episode went on — and the VM rules gone again read
+# « not worse than said », in silence. In memory only, as the episode it narrows: after a
+# restart the disappearance is said again anyway (`drift_said`), and no write is refused.
 _NARROWED: dict[tuple[str, str], dict] = {}
 
 
@@ -109,13 +109,13 @@ def drift_baseline(key: str, ip: str, said):
     return _NARROWED.get((key.lower(), ip), said)
 
 
-def narrow_drift(key: str, ip: str, said, now: dict) -> None:
-    """Not worse than the card, but not the same: better — the new baseline."""
-    if now == drift_baseline(key, ip, said):
-        return
-    from glorfindel.actions import _update_block_entry
-    _NARROWED[(key.lower(), ip)] = now
-    _update_block_entry(key, ip, drift_said=now)
+def narrow_drift(key: str, ip: str, sid: str, now: dict) -> None:
+    """Not worse than the card, but better: the new baseline — once the card is acknowledged
+    (its latest, `sid`, no longer pending). Pending, it still says what comes back: a drift
+    that comes and goes meanwhile is not a new card at each return."""
+    last = next((e for e in reversed(_history()) if e.get("signal_id") == sid), None)
+    if last is not None and last.get("status") != "pending":
+        _NARROWED[(key.lower(), ip)] = now
 
 
 def unrecorded(vm: str, exc: Exception, ip: str = "") -> dict:

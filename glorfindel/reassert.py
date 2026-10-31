@@ -333,8 +333,9 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         # One alert per disappearance (see isolations) — but said again when it worsens: a
         # NIC held turned open or unknown, a rule more gone. Acknowledged, a card « reste
         # bloquée » silenced the perimeter's deletion that opened the VM (RB1, 4th review).
-        # Better since, what still holds is the baseline: a rule back, gone again, is said (L1Q).
-        narrow_drift(ref or vm, ip, b.get("drift_said"), now_is)
+        # Better since, acknowledged: what still holds is the baseline — a rule back, gone again,
+        # is said (L1Q).
+        narrow_drift(ref or vm, ip, _alert_id(vm, rid, ip), now_is)
         return
     if b.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
         reason = (_block_drift(ip, vm, verification, again=bool(b.get("reasserted_at")))

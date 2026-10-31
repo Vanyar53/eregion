@@ -1548,36 +1548,98 @@ def test_a_block_written_again_after_an_acknowledged_drift_is_said_again():
     c.block_suspicious_ip.assert_not_called()                         # human_only: said, never written
 
 
+_PAIR = "glorfindel-block-203-0-113-9"
+_BOTH_GONE = {"verified": False, "missing_rules": ["r", "r-out"], "held_missing": [_PAIR], "open_nics": ["nic-a"]}
+_PAIR_GONE = {"verified": True, "held_missing": [_PAIR]}
+_R_GONE = {"verified": False, "missing_rules": ["r", "r-out"], "open_nics": ["nic-a"]}
+
+
+def _merged_block():
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg", nsg_scope="subnet", rule=_PAIR, scoped=False,
+                      placements=placed, threat_port=22)
+
+
+def _said_and_acknowledged(c):
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    (card,) = escalations.pending()
+    escalations.resolve(card["id"])                                   # the operator acknowledges
+    return card
+
+
 @pytest.mark.parametrize("full_disk", [False, True])
 def test_a_rule_back_then_gone_again_is_said_while_the_pair_stays_gone(monkeypatch, full_disk):
     """L1Q (#363): a merged block's pair and its VM rule gone, said, acknowledged. The VM rule
     back (the pair still gone: the episode goes on), then gone again — « not worse than the
-    card », silent. What still holds of the card is the new baseline: in memory first (a write
-    refused by a full disk keeps it), then in the entry — the rule gone again is said."""
+    card », silent. What still holds of the card is the new baseline, in memory (no write: a
+    full disk changes nothing) — the rule gone again is said."""
     from glorfindel import actions
-    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
-    pair = {"nsg": "rg/nsg", "nsg_scope": "subnet", "rule": "glorfindel-block-203-0-113-9", "scoped": False}
-    _save_block_state("vm", _IP, _RID, **pair, placements=placed, threat_port=22)
-    both = {"verified": False, "missing_rules": ["r", "r-out"], "held_missing": ["glorfindel-block-203-0-113-9"],
-            "open_nics": ["nic-a"]}
-    alone = {"verified": True, "held_missing": ["glorfindel-block-203-0-113-9"]}
-    c = _connector(verify_blk=both)
-    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
-    (card,) = escalations.pending()
-    escalations.resolve(card["id"])                                   # the operator acknowledges
-    c.verify_block_ip.return_value = alone                            # the VM rule back
+    _merged_block()
+    c = _connector(verify_blk=_BOTH_GONE)
+    _said_and_acknowledged(c)
+    c.verify_block_ip.return_value = _PAIR_GONE                       # the VM rule back
     real = actions._atomic_write_text
     if full_disk:
         def full(*a, **k):
             raise OSError(28, "No space left on device")
         monkeypatch.setattr(actions, "_atomic_write_text", full)
-    reassert_active(c, _HUMAN)
-    assert escalations.pending() == []                                # better: nothing to say
+    assert reassert_active(c, _HUMAN) == [] and escalations.pending() == []    # better: nothing to say
     monkeypatch.setattr(actions, "_atomic_write_text", real)
-    if not full_disk:
-        (entry,) = _load_block_entries("vm")
-        assert entry["drift_said"]["gone"] == ["glorfindel-block-203-0-113-9"]
-    c.verify_block_ip.return_value = both                             # gone again
+    c.verify_block_ip.return_value = _BOTH_GONE                       # gone again
     assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
     (card,) = escalations.pending()
     assert "disparu" in card["reason"]
+
+
+def test_a_drift_that_comes_and_goes_under_a_pending_card_is_not_said_again():
+    """L1Q's review: the card pending, the VM rule back then gone again — the card still says
+    what came back. Narrowed while it waited, each return made a new card."""
+    _merged_block()
+    c = _connector(verify_blk=_BOTH_GONE)
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    for v in (_PAIR_GONE, _BOTH_GONE, _PAIR_GONE, _BOTH_GONE):
+        c.verify_block_ip.return_value = v
+        assert reassert_active(c, _HUMAN) == []
+    assert len(escalations.pending()) == 1
+
+
+def test_a_new_episode_never_compares_with_what_held_of_the_one_before():
+    """L1Q's review: episode 1 — the pair and the VM rules gone, said, acknowledged; the rules
+    back (the baseline narrowed to the pair alone), then all back: over. Episode 2 — the VM
+    rule gone, the pair there: said, acknowledged; then the rule back and the pair gone again:
+    worse than its card. The first episode's baseline kept, it read « not worse », silent."""
+    _merged_block()
+    c = _connector(verify_blk=_BOTH_GONE)
+    _said_and_acknowledged(c)
+    c.verify_block_ip.return_value = _PAIR_GONE
+    assert reassert_active(c, _HUMAN) == []                           # narrowed: the pair alone
+    c.verify_block_ip.return_value = {"verified": True}
+    assert reassert_active(c, _HUMAN) == []                           # all back: over
+    c.verify_block_ip.return_value = _R_GONE
+    _said_and_acknowledged(c)                                         # episode 2: the rule gone
+    c.verify_block_ip.return_value = _PAIR_GONE                       # the rule back, the pair gone
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    (card,) = escalations.pending()
+    assert _PAIR in card["reason"]
+
+
+def test_a_block_written_again_whole_is_put_back_again_once():
+    """L1Q's review: a block put back once by the reassertion (`reasserted_at`), then blocked
+    again by the operator, whole — a new episode, its marks gone with it. Its next
+    disappearance is put back, never « une deuxième fois (déjà reposée le <before>) »; a
+    partial block keeps the mark."""
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r", placements=placed,
+                      threat_port=22)
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    c.block_suspicious_ip.side_effect = lambda *a, **k: setattr(
+        c.verify_block_ip, "return_value", {"verified": True})
+    assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["reapplied"]
+    _save_block_state("vm", _IP, _RID, placements=placed, partial=True, threat_port=22)
+    assert _load_block_entries("vm")[0].get("reasserted_at")          # partial: kept
+    _save_block_state("vm", _IP, _RID, placements=placed, threat_port=22)       # blocked again, whole
+    assert not _load_block_entries("vm")[0].get("reasserted_at")
+    c.verify_block_ip.return_value = {"verified": False, "missing_rules": ["r"]}  # gone again
+    assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["reapplied"]
+    assert c.block_suspicious_ip.call_count == 2
+    assert not any("deuxième fois" in e["reason"] for e in escalations.pending())

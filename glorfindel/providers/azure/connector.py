@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import threading
 
+from glorfindel.providers.azure.away import AwayRulesMixin
 from glorfindel.providers.azure.backup import BackupMixin
 from glorfindel.providers.azure.blocks import BlockMixin
 from glorfindel.providers.azure.capabilities import CAPABILITIES as AZURE_CAPABILITIES
@@ -33,6 +34,7 @@ class AzureConnector(
     QuarantineMixin,
     IsolationMixin,
     ReleaseMixin,
+    AwayRulesMixin,
     OlderIsolationMixin,
     VerifyMixin,
     BlockMixin,

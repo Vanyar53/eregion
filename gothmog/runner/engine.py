@@ -48,7 +48,7 @@ from eregion_core.orodruin import arm
 from gothmog.engines.chaos_studio import (
     DOWN, ChaosStudio, _parse, experiment_targets, fault_duration_s, is_terminal,
     latest_execution, power_state)
-from gothmog.probes import declared_errors, effect_errors, evaluate, holds, observe
+from gothmog.probes import UNREADABLE, declared_errors, effect_errors, evaluate, holds, observe
 from gothmog.runner.report import RunReport
 from gothmog.signals.emitter import SignalEmitter
 
@@ -61,6 +61,9 @@ MIN_CALLS = 3
 POLL_S = 30.0
 ABORT_MARGIN_S = 300.0      # past the declared duration, the experiment is cancelled
 RESTORE_TIMEOUT_S = 600.0   # boot + guest agent + first heartbeat ingested (1–3 min measured)
+# Polls in a row a ``during`` probe may go unread (a 429) before the noise is cancelled: a
+# throttled API is not the VM down; three in a row (1 min 30 s) is no longer a hiccup.
+DURING_UNREAD_MAX = 3
 SUCCESS = frozenset({"success", "succeeded", "completed"})
 
 
@@ -363,6 +366,7 @@ class Engine:
         execution, status, seen_down, aborted, cancelled_at = None, "", None, None, None
         effects: dict = {}      # (vm, effect probe) → its last reading, kept once seen
         unsteady: dict = {}     # vm → the ``during`` probes, when one stopped holding
+        unread: dict = {}       # vm → polls in a row with a ``during`` probe unreadable
         try:
             while True:
                 try:
@@ -378,7 +382,9 @@ class Engine:
                 if during and not unsteady and cancelled_at is None:
                     for vm in vms:
                         rs = evaluate(during, vm, bench, now=self._now())
-                        if not holds(rs):
+                        said = [r for r in rs if not r.ok and not r.observed.startswith(UNREADABLE)]
+                        unread[vm] = unread.get(vm, 0) + 1 if not holds(rs) and not said else 0
+                        if said or unread[vm] >= DURING_UNREAD_MAX:
                             unsteady[vm] = rs
                 if is_terminal(status):
                     break

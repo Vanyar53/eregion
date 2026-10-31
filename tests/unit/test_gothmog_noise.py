@@ -2,10 +2,12 @@
 Glorfindel could have seen it. The fault's effect is read in the telemetry Glorfindel reads,
 between the fault's start and end; noise never seen there fails the run, never passing for
 noise Glorfindel ignored. The VM serves throughout: noise that takes it down is cancelled.
-Mutants M2400–M2406 (scripts/mutation_check.py) are measured here.
+Mutants M2400–M2409 (scripts/mutation_check.py) are measured here.
 
 The bench in memory is G0's (tests/unit/test_gothmog.py), with the Chaos agent's samples in
-Perf: one a minute (the bench's DCR), each shown ``lag_s`` after it was taken (ingestion)."""
+Perf: every 10 s (the bench's DCR, ``perf_sampling_frequency``), each shown ``lag_s`` after it
+was taken (ingestion). It answers the disk effect's query as ransomware-disk-write computes its
+``Rate`` — the mode read from the step — which a test keeps equal to the rule's text."""
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,13 +41,16 @@ def _noise(name=DISK, duration="PT10M", targets=(AGENT,),
 
 
 class Noise(World):
-    """A noise fault: the VM keeps running while it runs; the agent's samples carry ``level``.
-    ``extra``: samples outside the fault, ``(seconds from its start, value)``.
+    """A noise fault: the VM keeps running while it runs; the agent's samples carry ``level``,
+    every ``step_s``. ``extra``: samples outside the fault, ``(seconds from its start, value)``.
     ``down_after_s``: the noise takes the VM down that long in, until the fault ends."""
 
-    def __init__(self, clock, *, level=60 * MB, lag_s=120, down_after_s=None, extra=(), **kw):
+    def __init__(self, clock, *, level=60 * MB, step_s=10, lag_s=120, down_after_s=None, extra=(),
+                 throttled=None, **kw):
         super().__init__(clock, experiment=kw.pop("experiment", None) or _noise(), effect=False, **kw)
-        self.level, self.lag_s, self.down_after_s, self.extra = level, lag_s, down_after_s, list(extra)
+        self.level, self.step_s, self.lag_s = level, step_s, lag_s
+        self.down_after_s, self.extra = down_after_s, list(extra)
+        self.throttled = throttled      # (from, to) seconds after the start: the Heartbeat query 429s
         self.windows: list[tuple[datetime, datetime]] = []   # every effect query's bounds
 
     def running(self):
@@ -59,24 +64,37 @@ class Noise(World):
     def _samples(self):
         if self.started_at is None:
             return []
-        out, t = [], self.started_at + timedelta(seconds=30)
+        out, t = [], self.started_at + timedelta(seconds=5)
         end = min(self._end() or self.clock.t, self.clock.t)
         while t <= end:
             out.append((t, self.level))
-            t += timedelta(seconds=60)
+            t += timedelta(seconds=self.step_s)
         out += [(self.started_at + timedelta(seconds=s), v) for s, v in self.extra]
         return [(t, v) for t, v in out if t + timedelta(seconds=self.lag_s) <= self.clock.t]
 
     def _query(self, kql):
+        if self.throttled and self.started_at is not None and "Heartbeat" in kql:
+            since = (self.clock.t - self.started_at).total_seconds()
+            if self.throttled[0] <= since < self.throttled[1]:
+                raise RuntimeError("HTTP 429 TooManyRequests on POST …/query")
         if "Peak" not in kql:
             return super()._query(kql)
         lo, hi = (datetime.fromisoformat(x.replace("Z", "+00:00"))
                   for x in re.findall(r"datetime\(([^)]+)\)", kql))
         self.windows.append((lo, hi))
-        seen = [v for t, v in self._samples() if lo <= t <= hi]
+        seen = sorted((t, v) for t, v in self._samples() if lo <= t <= hi)
+        if "Rate - 45000000" in kql:   # the rule's Rate: two samples averaged when fine, else one
+            gaps = [(b[0] - a[0]).total_seconds() for a, b in zip(seen, seen[1:])]
+            step = min((g for g in gaps if g >= 1), default=None)
+            if step is not None and step <= 25:
+                over = [(a[1] + b[1]) / 2 - 45 * MB for (a, b), g in zip(zip(seen, seen[1:]), gaps) if g <= 25]
+            else:
+                over = [v - 25 * MB for _, v in seen]
+        else:
+            over = [v for _, v in seen]
         # summarize without by: one row, its value null when nothing matched.
         return {"Tables": [{"TableName": "Table_0", "Columns": [{"ColumnName": "Peak"}],
-                            "Rows": [[max(seen) if seen else None]]}]}
+                            "Rows": [[max(over) if over else None]]}]}
 
 
 @pytest.fixture
@@ -111,7 +129,8 @@ def test_benign_noise_runs_seen_by_glorfindels_telemetry_the_vm_serving_througho
     assert _signals(tmp_path, out.run_id) == ["fault_started", "fault_ended", "steady_state_restored"]
     m = out.report["metrics"]
     seen = m["effect"]["vm-celebrimbor-gondolin"][0]
-    assert seen["ok"] and float(seen["observed"]) == 60 * MB and seen["seen_at"]
+    # 10-s samples at 60 MB/s: the rule's two-sample average, 15 MB/s above its 45.
+    assert seen["ok"] and float(seen["observed"]) == 15 * MB and seen["seen_at"]
     assert m["seen_down_at"] is None and "steady_state_lost" not in m
     # Every effect query is bounded by the fault: from its start, never past its end.
     start, end = datetime.fromisoformat(m["fault_start"]), datetime.fromisoformat(m["fault_end"])
@@ -126,7 +145,22 @@ def test_noise_below_what_glorfindel_reads_is_not_effective(noise):
     out = engine().run("vm-disk-write", skip_confirm=True)
     assert out.report["checks"]["fault_effective"] == "FAIL" and out.result == "FAIL"
     reading = out.report["metrics"]["effect"]["vm-celebrimbor-gondolin"][0]
-    assert not reading["ok"] and reading["seen_at"] is None and float(reading["observed"]) == 20 * MB
+    assert not reading["ok"] and reading["seen_at"] is None and float(reading["observed"]) == -25 * MB
+
+
+@pytest.mark.parametrize("step_s, level, effective", [
+    (10, 30 * MB, False),   # review 1, point 2: above 25 but the bench's rule, fine, wants 45 on two
+    (10, 50 * MB, True),
+    (60, 30 * MB, True),    # a coarse DCR: one sample above 25 is what fires the rule
+    (60, 20 * MB, False),
+])
+def test_the_effect_is_the_rules_threshold_at_the_step_the_data_shows(noise, step_s, level, effective):
+    """M2408: the effect is « the rule would have fired », as it computes its Rate — not one
+    sample above 25 MB/s, which at the bench's 10-s step the rule never sees as an attack."""
+    clock, world, engine = noise
+    world(step_s=step_s, level=level)
+    out = engine().run("vm-disk-write", skip_confirm=True)
+    assert (out.report["checks"]["fault_effective"] == "PASS") is effective
 
 
 def test_noise_the_telemetry_shows_only_after_the_fault_is_still_its_effect(noise):
@@ -146,7 +180,8 @@ def test_writes_before_or_after_the_fault_are_not_its_effect(noise):
     """M2401: a burst outside the fault — another job, before it or once it ended — is not
     what the fault did: the query stops at its end, even when read later."""
     clock, world, engine = noise
-    world(level=10 * MB, extra=[(-120, 90 * MB), (700, 90 * MB)])
+    burst = lambda at: [(at + 10 * i, 90 * MB) for i in range(4)]  # noqa: E731  (40 s, at the step)
+    world(level=10 * MB, extra=burst(-150) + burst(700))
     out = engine().run("vm-disk-write", skip_confirm=True)
     assert out.report["checks"]["fault_effective"] == "FAIL" and out.result == "FAIL"
 
@@ -176,6 +211,28 @@ def test_an_agent_target_on_a_vm_not_enrolled_is_refused(noise):
     out = engine().run("vm-disk-write", skip_confirm=True)
     assert out.result == "REFUSED" and "missing tag" in out.error
     assert w.writes == [] and w.started_at is None
+
+
+def test_a_probe_unread_for_a_poll_or_two_does_not_cancel_the_noise(noise):
+    """Review 1, point 5: a throttled query (429) is not the VM down — two polls unread in a row
+    pass, the noise runs to its end."""
+    clock, world, engine = noise
+    w = world(throttled=(60, 110))                  # the polls at 60 s and 90 s
+    out = engine().run("vm-disk-write", skip_confirm=True)
+    assert out.result == "PASS", out.report["checks"]
+    assert [x for x, _ in w.writes] == ["start"]
+
+
+def test_a_probe_unread_three_polls_in_a_row_cancels_the_noise(noise):
+    """M2409: unread long enough, the steady state is not known — fail closed, cancelled."""
+    clock, world, engine = noise
+    w = world(throttled=(60, 400))
+    out = engine().run("vm-disk-write", skip_confirm=True)
+    assert [x for x, _ in w.writes] == ["start", "cancel"]
+    assert w.cancelled_at - w.started_at == timedelta(seconds=120)    # the third poll unread
+    assert out.report["checks"]["steady_state_during"] == "FAIL" and out.result == "FAIL"
+    lost = {r["name"]: r for r in out.report["metrics"]["steady_state_lost"]["vm-celebrimbor-gondolin"]}
+    assert lost["heartbeat"]["observed"].startswith("unreadable: RuntimeError: HTTP 429")
 
 
 def test_a_cpu_load_runs_as_the_disk_writes_do(noise):
@@ -240,14 +297,29 @@ def test_each_noise_fault_matches_the_schema_and_the_catalog(fid):
     assert during == ({"vm-running", "guest-agent-ready", "heartbeat"} if fid in NOISE else set())
 
 
-def test_the_disk_noise_is_read_where_the_ransomware_rule_reads_it():
+def test_the_disk_noise_is_computed_as_the_ransomware_rule_computes_it():
     """Jonathan, 31/10: above the rule's threshold, or the RulePoller filters it and nothing
-    is measured. The rule's coarse threshold (the bench's 60-s DCR) is the effect's floor."""
+    is measured — the threshold of its mode, read from the step (review 1, point 2). The rule's
+    text and the effect's are kept equal here: a change to one fails until the other follows."""
     rules = (ROOT / "glorfindel" / "rules" / "azure" / "detection_rules.yaml").read_text()
-    assert "(not(Fine) and Rate > 25000000)" in rules
+    rule = rules.split("- name: ransomware-disk-write")[1].split("- name:")[0]
+    for part in ('CounterName == "Disk Write Bytes/sec"', "Step = minif(Gap, Gap >= 1s)",
+                 "Fine = isnotnull(Step) and Step <= 25s",
+                 "Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue)",
+                 "(Fine and Rate > 45000000) or (not(Fine) and Rate > 25000000)"):
+        assert part in rule, part
     probe = load_fault("vm-disk-write")["effect"]["probes"][0]
-    assert probe["expect"] == "above 25000000"
-    assert "'Disk Write Bytes/sec'" in probe["verify"] and "{start}" in probe["verify"] and "{end}" in probe["verify"]
+    q = " ".join(probe["verify"].split())
+    for part in ("CounterName == 'Disk Write Bytes/sec'", "Step = minif(Gap, Gap >= 1s)",
+                 "Fine = isnotnull(Step) and Step <= 25s",
+                 "Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue)",
+                 "Over = iff(Fine, Rate - 45000000, Rate - 25000000)", "summarize Peak = max(Over)",
+                 "between (datetime({start}) .. datetime({end}))", "_ResourceId =~ '{target}'"):
+        assert part in q, part
+    assert probe["expect"] == "above 0"
+    # The bench samples finely: the rule's fine mode is the one that applies there.
+    cfg = yaml.safe_load(_tf("config.yaml"))
+    assert cfg["perf_sampling_frequency"] <= 25
 
 
 # ── The bench's code: Celebrimbor declares the noise, off until Jonathan applies it ─────

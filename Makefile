@@ -327,7 +327,8 @@ campaign-containment:
 	$(PYTHON) -m analysis.containment runs/campaigns/$(CAMPAIGN)$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)
 
 # G1 (#76) — le taux des pannes prises pour une attaque, sur toutes les pannes de Gothmog des DAYS
-# derniers jours (analysis/fault_rate.py) ; aucun modèle, rien d'écrit. JSON=1 : en JSON.
+# derniers jours (analysis/fault_rate.py) ; aucun modèle, rien d'écrit. JSON=1 : en JSON. Sur l'hôte
+# de la watch seulement : ailleurs, ses décisions ne sont pas là et chaque panne est « non mesurée ».
 fault-rate:
 	@case "$(DAYS)" in *[!0-9]*) echo "DAYS invalide : un nombre de jours"; exit 1;; esac
 	$(PYTHON) -m analysis.fault_rate --runs-dir runs --days $(or $(DAYS),30)$(if $(JSON), --json)

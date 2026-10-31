@@ -17,7 +17,9 @@ Glorfindel blind on that VM.
 
 A probe marked ``during: true`` must hold while the fault runs too (G1): benign noise — load,
 disk writes — leaves the VM serving; noise that takes it down is no longer benign, and the run
-cancels it. A shutdown marks none: the VM is down by design.
+cancels it — at once on a reading that says so, after a few polls in a row on a probe that
+cannot be read (a throttled API is not the VM down). A shutdown marks none: the VM is down by
+design.
 
 The fault's effect (G1, ``effect.probes``) is what shows it happened, as Glorfindel's own
 telemetry sees it — a noise never seen there would pass for a noise Glorfindel ignored:
@@ -42,6 +44,7 @@ ARM_PROBES = ("power_state", "vm_agent")
 _FRESH = re.compile(r"^fresh\s+(\d+)\s*m$")
 _ABOVE = re.compile(r"^above\s+(\d+(?:\.\d+)?)$")
 EFFECT_DOWN = "down"
+UNREADABLE = "unreadable"   # how a probe that could not be read says so (its ``observed``)
 
 
 @dataclass
@@ -105,7 +108,7 @@ def evaluate(probes: list[dict], target: str, bench, *, since: datetime | None =
                 ok = (last is not None and last >= now - timedelta(minutes=minutes)
                       and (since is None or last > since))
         except Exception as e:  # unreadable is not normal
-            observed, ok = f"unreadable: {type(e).__name__}: {e}"[:200], False
+            observed, ok = f"{UNREADABLE}: {type(e).__name__}: {e}"[:200], False
         out.append(ProbeResult(name, ok, observed, expect))
     return out
 
@@ -140,6 +143,6 @@ def observe(probes: list[dict], target: str, bench, *, start: datetime,
                 observed = "no row" if not rows else str(peak) if peak is not None else \
                     "nothing between the fault's start and end"
         except Exception as e:  # unreadable is not seen
-            observed, ok = f"unreadable: {type(e).__name__}: {e}"[:200], False
+            observed, ok = f"{UNREADABLE}: {type(e).__name__}: {e}"[:200], False
         out.append(ProbeResult(name, ok, observed, expect))
     return out

@@ -9,12 +9,17 @@ Jonathan on 31/10):
 
 - **A measured fault** is a Gothmog run that started, whose effect was seen in the telemetry
   Glorfindel reads (``checks.fault_effective`` PASS, gothmog/probes.py), run with a live
-  Glorfindel watch, with its start, end and targets known. Every other run is **not measured**,
-  and says why: noise Glorfindel never saw, or a run where its reaction was not measured by
-  choice (``--without-glorfindel``), is never « Glorfindel did nothing ».
+  Glorfindel watch, with its start, end and targets known — and whose decisions are known: a
+  file of the watch written since the fault started was read whole on this host (``Watch``).
+  Every other run is **not measured**, and says why: noise Glorfindel never saw, a run where its
+  reaction was not measured by choice (``--without-glorfindel``), or the watch's files absent
+  (another host than the watch's: Orodruin), unreadable or cut, is never « Glorfindel did
+  nothing ».
 - **Taken for an attack**: at least one decision to isolate or to block one of its targets during
   it, recommended or executed — BL1's ``fault_run``, unchanged: a decision on a technique run on
-  that VM in that technique's window is the technique's, never the fault's.
+  that VM in that technique's window is the technique's, never the fault's. A fault's window
+  runs from its start to its exercise window's last moment (else its end plus the grace),
+  never past the start of the next fault on one of its targets: a decision is one fault's.
 - **The rate** is the faults taken for an attack over the measured ones, per run; None when none
   is measured — never 0. Beside it: the disruptive recommendations (every such decision) and the
   executed ones (a disruptive action wrongly taken), and the same by fault.
@@ -28,7 +33,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from analysis import containment
@@ -38,7 +43,70 @@ from eregion_core import run_report
 NOT_STARTED = "rien n'a été injecté"
 NOT_SEEN = "son effet n'a pas été vu dans la télémétrie de Glorfindel : il ne mesure rien de sa réaction"
 EFFECT_UNSAID = "son rapport ne dit pas si son effet a été vu"
+NO_WATCH = ("décisions de la watch introuvables : aucun de ses fichiers sur cet hôte "
+            "(le taux se lit sur l'hôte de la watch)")
+NO_WATCH_SINCE = "décisions de la watch introuvables : aucun de ses fichiers écrit depuis le début de la panne"
+WATCH_CUT = "décisions de la watch illisibles en partie"
 WINDOW_DAYS = 30
+
+
+@dataclass
+class WatchFile:
+    name: str
+    mtime: float
+    why: str = ""           # unreadable, or lines skipped: what it holds is not known whole
+
+
+@dataclass
+class Watch:
+    """The watch's debug files on this host and their records: what its decisions are known
+    from. Its records alone cannot tell « no decision » from « no file read » (A0)."""
+    files: list[WatchFile] = field(default_factory=list)
+    records: list[dict] = field(default_factory=list)
+
+    def unknown(self, start: float | None) -> str:
+        """Why the watch's decisions from ``start`` on are not known here — "" when a file
+        written since was read whole, and every such file was."""
+        if not self.files:
+            return NO_WATCH
+        since = [f for f in self.files if start is None or f.mtime >= start]
+        if not since:
+            return NO_WATCH_SINCE
+        cut = next((f for f in since if f.why), None)
+        return f"{WATCH_CUT} ({cut.name} : {cut.why})" if cut else ""
+
+
+def read_watch(runs_dir: Path, since: float = 0.0) -> Watch:
+    """The watch's debug files (``watch-*_debug.jsonl``), each said read whole or not; a file
+    last written before ``since`` holds nothing of the period and is not read."""
+    files, records = [], []
+    for path in sorted(Path(runs_dir).glob("watch-*_debug.jsonl")):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime < since:
+            files.append(WatchFile(path.name, mtime))
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            files.append(WatchFile(path.name, mtime, f"illisible ({type(e).__name__})"))
+            continue
+        bad = 0
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                rec = None
+            if isinstance(rec, dict):
+                records.append(rec)
+            else:
+                bad += 1
+        files.append(WatchFile(path.name, mtime, f"{bad} ligne(s) illisible(s)" if bad else ""))
+    return Watch(files, records)
 
 
 def unmeasured(run: dict) -> str:
@@ -61,25 +129,47 @@ def played_of(runs) -> list[tuple]:
             for r in runs if r.get("kind") == "technique" and r.get("at") is not None]
 
 
-def measure(runs, records, *, taken=frozenset(), played=None) -> list[FaultRun]:
-    """Each fault among ``runs`` (``read_run`` views), checked against the watch's ``records``.
-    ``played``: the technique runs' windows, else those of ``runs``; ``taken``: the signal ids
-    already attached to an incident (never counted twice)."""
+def _shares_a_target(a: dict, b: dict) -> bool:
+    return any(containment._same(x, y) for x in a.get("targets") or [] for y in b.get("targets") or [])
+
+
+def until_of(f: dict, faults: list[dict], windows: dict | None = None) -> float | None:
+    """The last moment a decision is the fault's: its exercise window's (``windows``: run id →
+    epoch), else its end plus the grace — never past the next fault on one of its targets."""
+    until = (windows or {}).get(f["run_id"])
+    if until is None and f.get("ended_at") is not None:
+        until = f["ended_at"] + containment.HOLD_WATCH_S
+    later = [g["at"] for g in faults if g is not f and g.get("at") is not None and f.get("at") is not None
+             and g["at"] > f["at"] and _shares_a_target(f, g)]
+    if later:
+        until = min(later) if until is None else min(until, min(later))
+    return until
+
+
+def measure(runs, watch: Watch, *, taken=frozenset(), played=None, windows=None) -> list[FaultRun]:
+    """Each fault among ``runs`` (``read_run`` views), checked against the ``watch``'s records —
+    measured only where its decisions are known (``Watch.unknown``). ``played``: the technique
+    runs' windows, else those of ``runs``; ``taken``: the signal ids already attached to an
+    incident; ``windows``: each fault's exercise window, its last moment. A decision goes to
+    the earliest fault it falls in, never to two."""
     runs = list(runs)
     played = played_of(runs) if played is None else list(played)
+    faults = sorted((f for f in runs if f.get("kind") == "fault"),
+                    key=lambda f: (f.get("at") is None, f.get("at") or 0.0, f["run_id"]))
+    taken = set(taken)
     out = []
-    for f in runs:
-        if f.get("kind") != "fault":
-            continue
-        why = unmeasured(f)
+    for f in faults:
+        why = unmeasured(f) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")
         if why:
             out.append(FaultRun(f["run_id"], f.get("experiment") or "", list(f.get("targets") or []),
                                 f.get("at"), f.get("ended_at"), why=why))
             continue
-        out.append(containment.fault_run(
+        fr = containment.fault_run(
             f["run_id"], f.get("experiment") or "", f.get("targets") or [], f.get("at"),
-            f.get("ended_at"), records, taken=taken,
-            without_glorfindel=f.get("without_glorfindel") is True, played=played))
+            f.get("ended_at"), watch.records, window_until=until_of(f, faults, windows), taken=taken,
+            without_glorfindel=f.get("without_glorfindel") is True, played=played)
+        taken |= {m["signal_id"] for m in fr.mistaken if m.get("signal_id")}
+        out.append(fr)
     return out
 
 
@@ -112,15 +202,30 @@ def _reports(runs_dir: Path) -> dict[str, Path]:
     return found
 
 
+def _windows(runs_dir: Path, run_ids) -> dict[str, float]:
+    """Each run's exercise window, its last moment, where it is still kept and believed (H-1:
+    emptied a week after it ends)."""
+    from eregion_core.exercise import exercises_dir, last_moment, window_refusal
+    out = {}
+    for rid in run_ids:
+        try:
+            window = json.loads((exercises_dir(runs_dir) / f"{rid}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        last = None if not isinstance(window, dict) or window_refusal(window) else last_moment(window)
+        if last is not None:
+            out[rid] = last.timestamp()
+    return out
+
+
 def load(runs_dir: Path, *, days: int = WINDOW_DAYS, now: float | None = None) -> dict:
-    """The rate over this host's runs of the last ``days``, from their reports and the watch's
-    debug files."""
-    from analysis import campaign_report as cr
+    """The rate over this host's runs of the last ``days``, from their reports, their exercise
+    windows and the watch's debug files — on the watch's host (elsewhere: not measured, said)."""
     now = time.time() if now is None else now
     since = now - days * 86400
     runs = [r for r in run_report.read_reports(_reports(Path(runs_dir))) if since <= r["at"] <= now]
-    records = cr._watch_files(Path(runs_dir))(since)
-    return {"days": days, **rate(measure(runs, records))}
+    windows = _windows(Path(runs_dir), [r["run_id"] for r in runs if r["kind"] == "fault"])
+    return {"days": days, **rate(measure(runs, read_watch(Path(runs_dir), since), windows=windows))}
 
 
 def render(summary: dict) -> str:

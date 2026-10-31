@@ -1,7 +1,8 @@
 """G1 (#76) — the rate of faults taken for an attack, over every Gothmog run (analysis/fault_rate.py):
 per run, a fault is taken for an attack when Glorfindel recommended or executed an isolation or a
 block on its target during it (BL1's ``fault_run``, unchanged); a run is measured only when its
-effect was seen in Glorfindel's telemetry, with a live watch. Mutants M2410–M2415.
+effect was seen in Glorfindel's telemetry, with a live watch, and its decisions are known — a file
+of the watch written since it started, read whole (review 1). Mutants M2410–M2421.
 
 The reports are Gothmog's own — one written by its real engine on G0's bench in memory
 (tests/unit/test_gothmog_noise.py) — and the watch's lines as store_cycle writes them
@@ -45,6 +46,11 @@ def _attack(run_id="r1", ttp="T1486", at=T + 120, resource=VM):
                                  "resource_id": resource}, "thresholds": {}, "checks": {}})
 
 
+def _watch(records, mtime=T + 86400):
+    """The watch's records, from one file read whole, written after the faults here."""
+    return fr.Watch([fr.WatchFile("watch-ransomware-disk-write_debug.jsonl", mtime)], list(records))
+
+
 def _isolate(seen, **kw):
     return _line("isolate_vm", seen=seen, at=seen + 30, verified_at=seen + 25, ttp="T1486",
                  signal_id=f"sig-{seen}", **kw)
@@ -63,7 +69,7 @@ def test_a_fault_is_taken_for_an_attack_on_a_recommendation_or_an_execution():
     taking benign noise for an attack. Per run: two recommendations on one run are one fault."""
     runs = [_fault("g1"), _fault("g2", start=T + 3600, end=T + 4200), _fault("g3", start=T + 7200, end=T + 7800)]
     records = [_recommended(T + 200, "h1"), _recommended(T + 260, "h2"), _isolate(T + 3900)]
-    out = fr.rate(fr.measure(runs, records))
+    out = fr.rate(fr.measure(runs, _watch(records)))
     assert (out["measured"], out["taken"], out["recommended"], out["executed"]) == (3, 2, 3, 1)
     assert out["rate"] == pytest.approx(2 / 3)
     assert [t["run_id"] for t in out["taken_runs"]] == ["g1", "g2"]
@@ -75,7 +81,7 @@ def test_what_is_not_taken_for_an_attack():
     runs = [_fault()]
     records = [_isolate(T + 300, resource=OTHER), _isolate(T - 120), _isolate(T + 600 + 16 * 60),
                _line("snapshot", seen=T + 300, ttp="T1486", signal_id="snap")]
-    out = fr.rate(fr.measure(runs, records))
+    out = fr.rate(fr.measure(runs, _watch(records)))
     assert (out["measured"], out["taken"], out["rate"]) == (1, 0, 0.0)
 
 
@@ -83,7 +89,7 @@ def test_noise_glorfindel_never_saw_measures_nothing():
     """M2412: a fault whose effect was not seen in Glorfindel's telemetry is not « Glorfindel did
     nothing »; an isolation during it is not its reaction to it either. Said, never counted."""
     runs = [_fault("seen"), _fault("unseen", effective="FAIL", start=T + 3600, end=T + 4200)]
-    out = fr.rate(fr.measure(runs, [_isolate(T + 3900)]))
+    out = fr.rate(fr.measure(runs, _watch([_isolate(T + 3900)])))
     assert (out["faults"], out["measured"], out["taken"]) == (2, 1, 0)
     assert out["unmeasured"] == [{"run_id": "unseen", "fault": "vm-disk-write", "why": fr.NOT_SEEN}]
 
@@ -95,7 +101,7 @@ def test_noise_glorfindel_never_saw_measures_nothing():
     ({"targets": ()}, "cibles inconnues"),
 ])
 def test_a_run_that_cannot_measure_glorfindel_says_why(kw, why):
-    out = fr.rate(fr.measure([_fault(**kw)], [_isolate(T + 300)]))
+    out = fr.rate(fr.measure([_fault(**kw)], _watch([_isolate(T + 300)])))
     assert out["measured"] == 0 and out["taken"] == 0
     assert why in out["unmeasured"][0]["why"]
 
@@ -104,9 +110,9 @@ def test_the_rate_is_over_measured_faults_and_unknown_when_none_is():
     """M2414: the runs not measured stay out of the denominator; none measured, the rate is
     None — never 0."""
     runs = [_fault("g1"), _fault("g2", without=True, start=T + 3600, end=T + 4200)]
-    out = fr.rate(fr.measure(runs, [_isolate(T + 300)]))
+    out = fr.rate(fr.measure(runs, _watch([_isolate(T + 300)])))
     assert (out["faults"], out["measured"], out["rate"]) == (2, 1, 1.0)
-    assert fr.rate(fr.measure([_fault(without=True)], []))["rate"] is None
+    assert fr.rate(fr.measure([_fault(without=True)], _watch([])))["rate"] is None
     assert fr.rate([])["rate"] is None
 
 
@@ -114,9 +120,73 @@ def test_a_decision_on_a_technique_played_on_the_vm_is_the_techniques():
     """M2413 (X1 ahead): an attack run on the noisy VM — its isolation is the attack's, not the
     fault's; the same technique on another VM is still the fault's."""
     runs = [_fault(), _attack(at=T + 120)]
-    assert fr.rate(fr.measure(runs, [_isolate(T + 300)]))["taken"] == 0
+    assert fr.rate(fr.measure(runs, _watch([_isolate(T + 300)])))["taken"] == 0
     runs = [_fault(), _attack(at=T + 120, resource=OTHER)]
-    assert fr.rate(fr.measure(runs, [_isolate(T + 300)]))["taken"] == 1
+    assert fr.rate(fr.measure(runs, _watch([_isolate(T + 300)])))["taken"] == 1
+
+
+# ── Review 1: no decision known is never « none taken »; a decision is one fault's ─────
+
+@pytest.mark.parametrize("watch, why", [
+    (fr.Watch(), fr.NO_WATCH),                                        # M2416: another host (Orodruin)
+    (_watch([], mtime=T - 60), fr.NO_WATCH_SINCE),                    # M2417: last written before it
+    (fr.Watch([fr.WatchFile("watch-x_debug.jsonl", T + 900, "2 ligne(s) illisible(s)")]), fr.WATCH_CUT),  # M2418
+])
+def test_a_fault_whose_decisions_are_not_known_is_not_measured(watch, why):
+    """Review 1 of #387, point 1: without the watch's decisions read, « 0 taken » would be a
+    claim nobody checked."""
+    out = fr.rate(fr.measure([_fault()], watch))
+    assert (out["measured"], out["rate"]) == (0, None)
+    assert out["unmeasured"][0]["why"].startswith(why)
+
+
+def test_a_file_cut_before_the_fault_says_nothing_of_it():
+    watch = fr.Watch([fr.WatchFile("watch-old_debug.jsonl", T - 3600, "1 ligne(s) illisible(s)"),
+                      fr.WatchFile("watch-new_debug.jsonl", T + 900)])
+    assert fr.rate(fr.measure([_fault()], watch))["measured"] == 1
+
+
+def test_the_watch_files_are_said_read_whole_or_not(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "watch-a_debug.jsonl").write_text(json.dumps(_isolate(T + 300)) + "\n\n")
+    (runs / "watch-b_debug.jsonl").write_text(json.dumps(_isolate(T + 400)) + "\n{cut\n[1]\n")
+    (runs / "watch-c_debug.jsonl").write_bytes(b"\xff\xfe")
+    (runs / "other_debug.jsonl").write_text("not the watch's\n")
+    watch = fr.read_watch(runs)
+    assert {f.name: f.why for f in watch.files} == {
+        "watch-a_debug.jsonl": "", "watch-b_debug.jsonl": "2 ligne(s) illisible(s)",
+        "watch-c_debug.jsonl": "illisible (UnicodeDecodeError)"}
+    assert len(watch.records) == 2
+    # A file last written before the period is listed, never read.
+    assert fr.read_watch(runs, since=datetime.now(timezone.utc).timestamp() + 3600).records == []
+
+
+def test_a_decision_during_the_next_fault_is_the_next_faults():
+    """M2419 — review 1, point 3: two faults one after the other on the same VM (the README's
+    step 3); an isolation during the second is the second's, once."""
+    runs = [_fault("disk", start=T, end=T + 600),
+            _fault("cpu", fault="vm-cpu-pressure", start=T + 900, end=T + 1500)]
+    out = fr.rate(fr.measure(runs, _watch([_isolate(T + 1000)])))
+    assert (out["taken"], out["recommended"]) == (1, 1)
+    assert [t["run_id"] for t in out["taken_runs"]] == ["cpu"]
+    # On another VM, the next fault does not cut the first one's window short.
+    runs[1] = _fault("cpu", fault="vm-cpu-pressure", start=T + 900, end=T + 1500, targets=(OTHER,))
+    assert [t["run_id"] for t in fr.rate(fr.measure(runs, _watch([_isolate(T + 1000)])))["taken_runs"]] == ["disk"]
+
+
+def test_a_decision_at_two_faults_at_once_is_counted_once():
+    runs = [_fault("a"), _fault("b")]                       # the same start, the same VM
+    out = fr.rate(fr.measure(runs, _watch([_isolate(T + 300)])))
+    assert (out["taken"], out["recommended"]) == (1, 1)
+
+
+def test_the_exercise_window_bounds_the_fault():
+    """Closed with its grace before the end plus 15 min: a decision after it is not the fault's."""
+    runs = [_fault()]
+    late = [_isolate(T + 600 + 10 * 60)]
+    assert fr.rate(fr.measure(runs, _watch(late)))["taken"] == 1
+    assert fr.rate(fr.measure(runs, _watch(late), windows={"gothmog-1": T + 600 + 5 * 60}))["taken"] == 0
 
 
 def test_the_unified_view_says_whether_a_fault_was_seen():

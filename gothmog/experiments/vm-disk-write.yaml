@@ -1,9 +1,11 @@
 # G1 — bruit bénin : des écritures disque soutenues, 10 minutes, par l'agent Chaos Studio.
 #
 # Le bruit d'une sauvegarde ou d'un chargement en masse, au-dessus du seuil de la règle
-# ransomware-disk-write (25 MB/s en moyenne sur 60 s avec la DCR du banc, décidé avec Jonathan le
-# 31/10) : la règle se déclenche, et Glorfindel décide sur du bénin. Sous le seuil, le RulePoller
-# filtrerait le bruit avant toute décision, et rien ne serait mesuré.
+# ransomware-disk-write (décidé avec Jonathan le 31/10) : la règle se déclenche, et Glorfindel
+# décide sur du bénin. Sous le seuil, le RulePoller filtrerait le bruit avant toute décision, et
+# rien ne serait mesuré. Le seuil dépend du pas d'échantillonnage, lu dans les données comme le
+# fait la règle : au pas du banc (10 s, perf_sampling_frequency), la moyenne de deux échantillons
+# consécutifs au-dessus de 45 MB/s ; au pas grossier (60 s), un échantillon au-dessus de 25 MB/s.
 #
 # L'expérience est déclarée dans Celebrimbor (infra/terraform/chaos.tf, chaos.noise_vms) : l'agent
 # Chaos sur la VM, sa cible Microsoft-Agent, la capacité LinuxDiskIOPressure-1.1 (stress-ng). La
@@ -18,7 +20,7 @@ engine_ref: exp-celebrimbor-gondolin-disk
 name: "Disk writes (benign, 10 min)"
 description: >
   Écrit sur le disque de la VM d'exercice pendant 10 minutes, au-dessus du seuil de la règle
-  ransomware-disk-write. Le bruit d'une sauvegarde : aucun fichier renommé, rien de chiffré. Ce
+  ransomware-disk-write, tel qu'elle le calcule. Le bruit d'une sauvegarde : aucun fichier renommé, rien de chiffré. Ce
   que Glorfindel doit montrer : aucune recommandation d'isoler ni de bloquer. Une recommandation
   de ce genre est une panne prise pour une attaque, comptée dans le taux de G1
   (analysis/fault_rate.py).
@@ -50,19 +52,33 @@ steady_state:
       expect: fresh 10m
       during: true
 
-# Ce que la règle lit : Perf, Disk Write Bytes/sec, entre le début et la fin de la panne. Un
-# échantillon au-dessus de 25 MB/s est ce qui la déclenche avec la DCR du banc (60 s).
+# Ce que la règle lit, calculé comme elle (glorfindel/rules/azure/detection_rules.yaml) : Perf,
+# Disk Write Bytes/sec, par disque, entre le début et la fin de la panne ; le pas lu dans les
+# données ; au pas fin (25 s ou moins), la moyenne de deux échantillons consécutifs, son seuil
+# 45 MB/s ; au pas grossier, un échantillon, son seuil 25 MB/s. Peak est le plus haut dépassement
+# de ce seuil, en octets/s : au-dessus de 0, la règle se serait déclenchée. Un test garde ce
+# calcul égal à celui de la règle (tests/unit/test_gothmog_noise.py).
 effect:
   probes:
     - name: disk-writes-above-the-rule
       verify: >-
-        Perf
+        let samples = Perf
         | where _ResourceId =~ '{target}'
+        | where TimeGenerated between (datetime({start}) .. datetime({end}))
         | where ObjectName == 'Logical Disk' or ObjectName == 'LogicalDisk'
         | where CounterName == 'Disk Write Bytes/sec'
-        | where TimeGenerated between (datetime({start}) .. datetime({end}))
-        | summarize Peak = max(CounterValue)
-      expect: above 25000000
+        | project TimeGenerated, InstanceName, CounterValue
+        | order by InstanceName asc, TimeGenerated asc
+        | extend Same = prev(InstanceName) == InstanceName
+        | extend Gap = iff(Same, TimeGenerated - prev(TimeGenerated), timespan(null)),
+                 PrevValue = iff(Same, prev(CounterValue), real(null));
+        samples
+        | join kind=leftouter (samples | summarize Step = minif(Gap, Gap >= 1s) by InstanceName) on InstanceName
+        | extend Fine = isnotnull(Step) and Step <= 25s
+        | extend Rate = iff(Fine, iff(Gap <= 25s, (CounterValue + PrevValue) / 2, real(null)), CounterValue)
+        | extend Over = iff(Fine, Rate - 45000000, Rate - 25000000)
+        | summarize Peak = max(Over)
+      expect: above 0
 
 abort_conditions:
   - name: steady-state-lost

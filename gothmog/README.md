@@ -98,7 +98,7 @@ catalogue (`azure_vm.faults`), avec son expérience dans Celebrimbor
 
 | Panne | Moteur | Ce qu'elle fait | Son effet, lu où Glorfindel lit |
 |---|---|---|---|
-| [`vm-disk-write`](experiments/vm-disk-write.yaml) | agent Chaos, LinuxDiskIOPressure-1.1 (stress-ng), 10 min | des écritures soutenues, une sauvegarde : **au-dessus du seuil** de `ransomware-disk-write` (25 MB/s sur 60 s), décidé avec Jonathan le 31/10 — la règle se déclenche, et Glorfindel décide sur du bénin | Perf, `Disk Write Bytes/sec`, un échantillon au-dessus de 25 MB/s |
+| [`vm-disk-write`](experiments/vm-disk-write.yaml) | agent Chaos, LinuxDiskIOPressure-1.1 (stress-ng), 10 min | des écritures soutenues, une sauvegarde : **au-dessus du seuil** de `ransomware-disk-write`, décidé avec Jonathan le 31/10 — la règle se déclenche, et Glorfindel décide sur du bénin | Perf, `Disk Write Bytes/sec`, calculé comme la règle : au pas du banc (10 s), la moyenne de deux échantillons consécutifs au-dessus de 45 MB/s (au pas grossier, un échantillon au-dessus de 25 MB/s) |
 | [`vm-cpu-pressure`](experiments/vm-cpu-pressure.yaml) | agent Chaos, CPUPressure-1.0, 95 %, 10 min | une compilation, un traitement par lots | Perf, `% Processor Time` au-dessus de 80 |
 | [`vm-restart`](experiments/vm-restart.yaml) | Shutdown-1.0, arrêt propre d'une minute | un redémarrage de maintenance ; au démarrage, l'agent de supervision groupe ses échantillons (#105) | la VM vue arrêtée |
 
@@ -107,21 +107,30 @@ catalogue (`azure_vm.faults`), avec son expérience dans Celebrimbor
 **L'effet, pas la parole du moteur.** Chaque panne déclare ce qui montre qu'elle a eu lieu
 (`effect.probes`, schéma E1). Une requête en lit le pic (`Peak`) entre le début et la fin de la
 panne (`{start}`, `{end}`), jamais au-delà. Une écriture d'avant, ou d'après, n'est pas son effet.
+Celle de `vm-disk-write` reproduit le `Rate` de la règle, son mode lu dans le pas des données,
+et exige son seuil. Un test garde les deux textes égaux : un échantillon à 30 MB/s au pas de
+10 s n'est pas un effet, car la règle ne l'aurait pas vu.
 Si le bruit n'atteint jamais la télémétrie de Glorfindel, le run échoue (`fault_effective` FAIL) et
 ne compte pas dans le taux : un bruit que Glorfindel n'a pas vu ne prouve pas qu'il l'a ignoré.
 
 **Le bruit est bénin : la VM sert pendant.** Les sondes marquées `during: true` (en marche, agent
-prêt, Heartbeat frais) sont relues à chaque tour. Si l'une ne tient plus, l'expérience est annulée,
-le run échoue (`steady_state_during` FAIL, `metrics.steady_state_lost`), et le retour est vérifié
-comme d'habitude.
+prêt, Heartbeat frais) sont relues à chaque tour. Si l'une dit le contraire, l'expérience est
+annulée tout de suite. Une sonde illisible (une API qui répond 429) passe deux tours ; au
+troisième d'affilée, l'expérience est annulée aussi. Dans les deux cas, le run échoue
+(`steady_state_during` FAIL, `metrics.steady_state_lost`), et le retour est vérifié comme
+d'habitude.
 
 **Le taux.** Une panne est prise pour une attaque quand Glorfindel a recommandé ou exécuté une
 isolation ou un blocage de sa cible pendant la panne. Le taux compte par run, sur les pannes
 mesurées, et toutes les pannes de Gothmog comptent, pas seulement celles d'une campagne.
-Définitions et calcul : [`docs/analysis.md`](../docs/analysis.md), « Le taux des pannes prises pour
-une attaque » ; `python -m analysis.fault_rate`, sur l'hôte de la watch (H0).
+Une panne n'est mesurée que si les décisions de la watch sont connues : un de ses fichiers,
+écrit depuis le début de la panne, lu en entier. La fenêtre d'une panne s'arrête au début de la
+suivante sur la même VM. Définitions et calcul : [`docs/analysis.md`](../docs/analysis.md),
+« Le taux des pannes prises pour une attaque ». Le taux se lit **sur l'hôte de la watch** (H0) :
+`make glorfindel-host-fault-rate`. Sur Orodruin, chaque panne est « non mesurée » : les décisions
+n'y sont pas.
 
-**Mutants** : M2400–M2406 (`tests/unit/test_gothmog_noise.py`), M2410–M2415
+**Mutants** : M2400–M2409 (`tests/unit/test_gothmog_noise.py`), M2410–M2421
 (`tests/unit/test_fault_rate.py`).
 
 Le plan des deux cas, contre de faux providers :
@@ -145,7 +154,10 @@ sans poignée) jusqu'au premier run.
 1. `make celebrimbor-plan`, avec `chaos.noise_vms: [gondolin]`. Le plan ajoute l'identité de
    l'agent (et la modification de gondolin qui la porte), la cible Microsoft-Agent (azapi, un
    provider de plus : `celebrimbor-plan` fait déjà `init -upgrade`), l'extension, deux capacités,
-   trois expériences et leurs trois rôles. Puis `make celebrimbor-up YES=1`.
+   trois expériences et leurs trois rôles. Puis `make celebrimbor-up YES=1`, et
+   `make orodruin-lock YES=1` : Orodruin reçoit ses droits de démarrer et d'annuler expérience par
+   expérience, à son propre apply (`infra/orodruin/main.tf`, `experiment_injector`). Sans lui, le
+   démarrage d'une nouvelle panne répond 403.
 2. Vérifier ce qui n'est pas mesuré :
    - que stress-ng est installé par l'extension ;
    - que l'agent joint Chaos Studio ;
@@ -154,7 +166,7 @@ sans poignée) jusqu'au premier run.
 
    `make gothmog-preflight FAULT=vm-disk-write` lit l'état normal sans rien écrire.
 3. Depuis Orodruin armé, une panne à la fois (`gothmog run vm-disk-write`, puis `vm-cpu-pressure`,
-   puis `vm-restart`), en `human_only` sur gondolin. Puis, sur H0, `python -m analysis.fault_rate`.
+   puis `vm-restart`), en `human_only` sur gondolin. Puis `make glorfindel-host-fault-rate` (sur H0).
    Le taux mesuré va ici, et les pannes passent `implemented`.
 
 ## G2 — les pannes des dépendances de Glorfindel

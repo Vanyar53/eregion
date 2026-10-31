@@ -228,7 +228,8 @@ make gothmog-run [FAULT=vm-shutdown]         # la panne, son retour vérifié pa
 #   G1 : FAULT=vm-disk-write | vm-cpu-pressure | vm-restart, le bruit bénin (planned : chaos.noise_vms
 #   à appliquer avec Jonathan, gothmog/README.md « G1 »)
 make glorfindel-host-fault-rate [DAYS=30] [JSON=1]   # sur H0 : les pannes prises pour une attaque, par run (G1)
-make fault-rate [DAYS=30] [JSON=1]                   # le même taux, ici (runs/) — lecture seule, aucun modèle
+make fault-rate [DAYS=30] [JSON=1]                   # le même taux, sur l'hôte de la watch seulement (ses runs/) ;
+#   ailleurs (Orodruin, un poste) chaque panne est « non mesurée » : les décisions n'y sont pas
 gothmog run vm-shutdown --dry-run            # la panne déclarée, sans appel Azure
 gothmog report <run_id>                      # runs/<run_id>.json (même forme qu'Annatar)
 #   Depuis Orodruin, avec EREGION_EXERCISE_CHANNEL (#193, pas encore mesuré sur le banc) : à la fin

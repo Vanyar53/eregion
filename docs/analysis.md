@@ -646,8 +646,12 @@ bloquer. Le taux se calcule sur **toutes** les pannes de Gothmog, pas seulement 
 campagne (`analysis/fault_rate.py`) :
 
 ```bash
+make glorfindel-host-fault-rate [DAYS=30] [JSON=1]   # sur H0, l'hôte de la watch
 python -m analysis.fault_rate [--runs-dir runs] [--days 30] [--json]
 ```
+
+Il se lit sur l'hôte de la watch, là où sont ses décisions. Ailleurs, chaque panne est « non
+mesurée », et la raison le dit.
 
 Décidé avec Jonathan le 31/10 :
 
@@ -656,15 +660,23 @@ Décidé avec Jonathan le 31/10 :
   - son effet a été vu dans la télémétrie que lit Glorfindel (`checks.fault_effective` PASS,
     `gothmog/probes.py`) ;
   - elle a tourné avec une watch vivante ;
-  - son début, sa fin et ses cibles sont connus.
+  - son début, sa fin et ses cibles sont connus ;
+  - les décisions de la watch sont connues : un de ses fichiers (`watch-*_debug.jsonl`), écrit
+    depuis le début de la panne, a été lu en entier sur cet hôte, et aucun fichier écrit depuis
+    n'est illisible ou coupé (une ligne qui ne se lit pas).
 
   Toute autre panne est **non mesurée**, et dit pourquoi. Un bruit que Glorfindel n'a jamais
-  vu, ou une panne lancée `--without-glorfindel`, ne vaut jamais « Glorfindel n'a rien fait ».
+  vu, une panne lancée `--without-glorfindel`, ou des décisions qu'on n'a pas lues (sur
+  Orodruin, les fichiers de la watch ne sont pas là), ne valent jamais « Glorfindel n'a rien
+  fait ».
 - **Prise pour une attaque** : au moins une décision d'isoler ou de bloquer une de ses cibles
   pendant la panne, recommandée ou exécutée. C'est la définition de BL1 (`fault_run`), inchangée.
   Une recommandation retenue par le mode (`human_only`) compte autant qu'une exécution : c'est
   Glorfindel qui prend le bruit pour une attaque. Une décision sur la technique d'un run d'attaque
   sur cette VM, dans la fenêtre de ce run, est celle de l'attaque (X1).
+- **La fenêtre d'une panne** court de son début au dernier moment de sa fenêtre d'exercice
+  (sinon sa fin plus 15 min de grâce), sans dépasser le début de la panne suivante sur une de ses
+  cibles. Une décision va à une seule panne : la plus ancienne dont elle tombe dans la fenêtre.
 - **Le taux** compte par run : les pannes prises pour une attaque, sur les pannes mesurées. Si
   aucune n'est mesurée, il vaut `None`, jamais 0.
 - **À côté** : le nombre de recommandations disruptives, le nombre d'actions exécutées (des

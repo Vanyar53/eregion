@@ -196,6 +196,11 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           dernière preuve, état (proven, aging, stale, regressed, unproven, never), évolution sur
                           douze semaines ; toute l'histoire des rapports et des cycles ; nourrit la couverture et
                           l'âge de la dernière preuve ; `GET /api/coverage`, `eregion coverage [--json] [--check]`
+  follow.py             → DG-c : le suivi en direct d'une demande de Dagorlad — sa phase (écrite, en cours, finie)
+                          et la chronologie de chaque fil, lue du statut d'Orodruin, des fenêtres, des cycles de la
+                          watch, des cartes et du rapport du run ; un run mesuré comme sur l'accueil
+                          (indicators.decision_of, run_report.timeline, indicators.incident_of) ;
+                          `GET /api/dagorlad/requests/<id>`, rien n'est écrit
   static/console.js     → en-tête commun : onglets (actifs ou grisés), battement de la watch, canal retour,
                           cartes à juger, horloge UTC ; console.css, la palette
   static/overview.html  → l'accueil : une ligne par section, les canaux ; les cinq indicateurs avec UI-2 (#206)

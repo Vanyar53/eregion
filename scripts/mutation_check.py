@@ -6367,6 +6367,23 @@ MUTANTS += [
      '            for nm in (rule, f"{rule}-out"):\n                done = True\n                err = (_held_by_turned('),
 ]
 TESTS.update({mid: _U7D for mid in ("M2210", "M2211", "M2212")})
+# U7D's review: the teardown's unblock read only that what the oracle keeps is said, never the
+# other way round — the over-guard below passed, its rules taken off at the retry once the
+# operator had put the turned rules back. The teardown now refuses a rule kept without a reason.
+MUTANTS += [
+    ("M2213", "the unblock, once one rule is rightly kept, keeps every later one too: unblock_partial, rules kept "
+              "that no other VM's flows hang on (U7D, review)", UNB,
+     "from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned\n",
+     "from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned as _real_held\n\n\n"
+     "def _held_by_turned(network, guard, rg, nsg, name, *a):\n"
+     "    if guard.get(\"u7d\"):\n"
+     "        return f\"{rg}/{nsg}/{name} gardée : sonde\"\n"
+     "    err = _real_held(network, guard, rg, nsg, name, *a)\n"
+     "    if err and \"gardée\" in err:\n"
+     "        guard[\"u7d\"] = True\n"
+     "    return err\n"),
+]
+TESTS["M2213"] = f"tests/unit/test_invariant_regressions.py::test_a_blocks_rules_on_a_reused_address_go_with_the_unblock {INVARIANTS}"
 
 
 # L1C (#369): a bypass said while a rule of the pair is gone (a block, an isolation), with what

@@ -2793,8 +2793,19 @@ class IsolationMachine(RuleBasedStateMachine):
                 # of this VM's rules, turned into an allow, aims at the address it took — kept
                 # for it, and so the deny that waits behind. Said (checked, as by the rule), then
                 # put back by the operator as said — as before the releases (I4B) —, tried again.
+                # And only what another VM's flows hang on (U7D's review, A0): every block rule
+                # of the VM left is one the oracle says kept (_kept, the test's journal) — the
+                # operator's step would hide one kept without a reason, taken off at the retry.
                 if vm not in self.deleted:
                     self._kept_said(vm, unblocked, None, "the teardown's unblock", *_LIFTS["unblock"])
+                    kept = {(k, n.lower()) for k, n in self._kept(vm, _LIFTS["unblock"][1])}
+                    marks = {_nic_hash(n) for n in self.fake.vms[key(vm)]["nics"]}
+                    extra = sorted(f'{g["id"].rsplit("/", 1)[-1]}/{r["name"]}' for k, g in self.fake.nsgs.items()
+                                   for r in g["rules"].values() if r["name"].lower().startswith("glorfindel-block-")
+                                   and any(m in r["name"].lower() for m in marks)
+                                   and (k, r["name"].lower()) not in kept)
+                    assert not extra, (f"I7: the teardown's unblock of {vm} said {unblocked['status']}, rules "
+                                       f"kept that no other VM's flows hang on: {extra}")
                 self._operator_puts_turned_back()
             if vm not in self.deleted:
                 left = self._named_leftovers(self.fake.vms[key(vm)]["nics"], "glorfindel-block-")

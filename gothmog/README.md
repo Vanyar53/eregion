@@ -132,6 +132,12 @@ Le plan des deux cas, contre de faux providers :
 Les deux cas sont dans `infra/terraform/tests/chaos_noise.tftest.hcl`. On les lance à la main,
 comme le test d'ID1 (`terraform -chdir=infra/terraform test`) : la CI n'exécute pas Terraform.
 
+**Un second moyen d'allumer le bruit, réservé aux tests.** Le cas « gondolin » passe par la
+variable `chaos_noise_vms` (`variables.tf`), car un test ne peut pas remplacer une valeur lue dans
+`config.yaml`. Elle est `null` par défaut, et c'est alors `chaos.noise_vms` du `config.yaml` qui
+décide. Ne la pose ni dans `terraform.tfvars` ni par `TF_VAR_chaos_noise_vms` : le bruit s'allume
+dans `config.yaml`, plan montré, par Jonathan seul.
+
 ### Reste, sur le banc, avec Jonathan
 
 Rien n'est appliqué ni mesuré : les trois pannes sont `planned` au catalogue (Dagorlad les montre

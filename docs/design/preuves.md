@@ -2651,6 +2651,7 @@ isolée en quarantaine, le périmètre de web et une règle de Db--01 retournée
 l'adresse de db-nic-0 changée et l'ancienne reprise — au démontage, « I7: block rules of …/Db--01 left
 after unblock » (`test_a_blocks_rules_on_a_reused_address_go_with_the_unblock`, routé vers #368, avec
 l'élagage des placements après un `unblock_partial`). Atteinte à 60 séquences, donc par la CI de toute PR.
+**Réglée par U7D** (ci-dessous) : l'opérateur du démontage, pas le code.
 La graine 31337 à 2 000 (15 étapes, 4 restées) : un blocage de web dont les règles sont retournées deux
 fois, le rôle retiré, puis un contournement sous `nsg.get` toujours en 429 — « L1: the block of …/web is
 bypassed by a customer allow ; the reassertion doesn't say so »
@@ -2858,6 +2859,107 @@ de batch, et vérifie que le passage a tourné. `pytest` complet : 4 674 réussi
 **Ouvert, hors lot** : un magasin d'escalades vidé par l'opérateur laisse dans `orphan_alerts.json` des
 cartes absentes du magasin ; la règle n'est jamais redite (le balayage la tient pour dite, et la comparaison
 d'U1O passe les cartes qu'il ne connaît pas). C'était déjà le cas avant U1O ; à trancher (issue ou non).
+
+**U7D (30/10, #368) : la graine 1006, l'opérateur du démontage ; un déblocage partiel élague son
+état.** Le défaut figé en `xfail` strict par la relecture de L1B, atteint à 60 séquences.
+**La cause, établie** (instrumentée pas à pas sur la séquence réduite, puis la séquence entière
+rejouée) : **ce n'est pas le code.** db-nic-0 (Db--01) a changé d'adresse, et web (rg-app2), en
+quarantaine, a reçu l'ancienne (10.0.0.6). Une règle du blocage de Db--01 sur nsg-tier, retournée en
+allow par le test, vise 10.0.0.6 ; notre refus de Db--01 sur nsg-subnet vise la même adresse. Le
+démontage lève web en premier : web revient sur nsg-tier — l'allow l'ouvre maintenant. Le déblocage de
+Db--01 lit les deux règles (l'hypothèse de la fiche, qu'il ne les retrouve pas, est fausse), garde
+l'allow (la retirer retirerait à web ce qu'elle lui ouvre, I4B) et le refus qu'elle attend derrière
+(I5Q), les dit toutes deux « gardée » et répond `unblock_partial`, trois fois. L'opérateur du démontage
+ne remettait les règles retournées qu'**avant** les levées (I4B), quand cette allow ne visait encore
+aucune carte que son NSG gouverne (web en quarantaine) ; la levée de web la rend « visant une autre
+carte » après coup. Le trou de l'opérateur, comme la graine 101 d'I4B.
+
+**Le correctif, dans le démontage.** Après un déblocage qui n'aboutit pas, il vérifie d'abord que ce
+qui est gardé est dit (`_kept_said`, sans faute : statut jamais `unblocked`/`not_found`, chaque règle
+gardée nommée « gardée » là où le déblocage regarde — un contrôle de plus, A0), puis l'opérateur remet
+les règles retournées comme dit (`_operator_puts_turned_back`, le journal du test), et le déblocage est
+relancé ; l'assertion d'I7 reste entière. Aucune règle de la machine retirée ni restreinte. Un
+déblocage qui se tairait tombe comme avant. **Un déblocage qui garderait à tort ne tombait pas** —
+la première version le disait, à tort (la relecture, ci-dessous) : l'opérateur remettait les
+retournées, le déblocage suivant retirait tout, et I7 ne voyait plus rien. Depuis la relecture, le
+démontage exige aussi que chaque règle restée soit une de celles que l'oracle dit gardées. Rejouée
+sur `main` d380df5, la séquence entière de 29
+étapes (graine 1006 à 60) passe avec ce seul changement. Le `xfail` est levé
+(`test_a_blocks_rules_on_a_reused_address_go_with_the_unblock`, rouge sur `main` e75d527 sans le
+changement du démontage).
+
+**Le voisin (constat 3 de la relecture de L1B), un défaut du code.** Un `unblock_partial` gardait dans
+son entrée tous les placements, ceux dont il avait retiré les deux règles aussi. Un blocage écrit
+ensuite en entier (un périmètre, `_save_block_state`) les refusionnait ; la vérification lisait la
+carte dont le placement n'avait plus de règles comme disparue derrière le périmètre (`held_missing`) :
+« a disparu d'Azure en partie », une fausse carte en `human_only`, et hors `human_only` « reposé une
+fois » — les règles réécrites que l'opérateur avait demandé de retirer. **Correctif**
+(`providers/azure/unblock.py`) : les placements dont les deux règles ont quitté Azure dans ce déblocage
+(supprimées ou déjà absentes, jamais gardées par la garde ni en échec) quittent l'entrée ; un placement
+dont une règle reste, dans un sens ou l'autre, est gardé pour le déblocage suivant. L'entrée relue juste
+avant l'écriture (seuls ces placements filtrés). Figés :
+`test_a_partial_unblock_forgets_the_rules_it_took_off` (une carte au rôle retiré, 403 ; puis un
+périmètre et une passe, dans les deux modes — rouge sans le correctif : la fausse carte, puis la
+réécriture) et `test_a_partial_unblock_keeps_only_the_placements_it_could_not_take_off` (l'entrée,
+l'entrant ou le sortant qui reste). `unblock.py` : 316 lignes.
+
+**Mutants M2210–M2212** (l'élagage retiré ; un placement en échec élagué aussi ; seul le sens sortant
+compté) : 3/3 par leurs tests à chaque tour. Par la machine seule (500 séquences, deux tours) : M2210 et
+M2211 0/2, attrapés par les séquences figées seules ; M2212 survit à la machine, attrapé par son test.
+L'état (un déblocage partiel, puis un blocage entier qui ne réécrit pas le placement retiré, puis une
+lecture qui le compte) reste rare. Pas de mutant pour la graine 1006 : le correctif est dans le démontage.
+
+**Mesures d'U7D.** `pytest` complet : 4 567 réussis, 7 sautés, 4 `xfail` avant les deux séquences figées ; après la fusion de `main` (d05eade, I4D compris), 4 639 réussis, 7 sautés, 7 `xfail` (les deux d’U7D ; #363, #366 deux fois, #369, #372) — et sur l'arbre fusionné, les 31 graines à 60 et 1006, 42, 322, 8675 à 500, vertes ; `ruff` propre ;
+`scripts/mutant_anchors.py` sans faute. Invariants : à 60 séquences, 31 graines (1 à 20, 25, 42, 101,
+202, 322, 555, 777, 1006, 1618, 8675, 31337), vertes avant (`main` e75d527 : 1006 n'y tombe plus — la
+machine de L1B tire autrement que celle de sa relecture) et après ; la graine 1006 à 60 tombe sur
+d380df5 et passe avec le démontage corrigé ; à 500, les graines 1, 42, 101, 322, 777, 1006, 8675 et
+31337, vertes ; à 2 000, les graines 42, 777 et 8675 vertes ; 1006 et 322 tombent sur L1 (« … is bypassed by a customer allow ; the reassertion doesn't say so » : une isolation d'api, 14 étapes ; un blocage de Db--01, 25
+étapes ; après un rôle retiré, aucune étape du déblocage dans la première). Rejouées tirage par tirage, rouges avec le
+même message sur `main` e75d527 : **hors du lot**, la famille de #369 (L1C, en vol), figées en `xfail` strict
+(depuis la relecture : la 322 réglée par L1C, la 1006 routée vers #378 — ci-dessous)
+(`test_an_isolation_bypassed_after_the_role_is_taken_is_said`, `test_a_block_bypassed_after_the_role_is_taken_is_said` ;
+`_replay` rejoue une séquence telle qu'Hypothesis l'imprime, une règle à la fois depuis la relecture, chacune avec ses propres tirages). Harnais avant/après (60 séquences, deux tours, `--jobs 4`,
+`--hypothesis-seed=7368`) sur les 70 mutants du déblocage, du blocage, des règles retournées et de la
+vérification du blocage : 65/70 attrapés à chaque tour sur e75d527, 65/70 après, à l'identique (M19,
+M21, M23, M38 et M1964 par leurs séquences figées seules, des deux côtés), plus les trois nouveaux
+(68/73). Aucun perdu.
+
+**La relecture d'U7D (31/10).** (1) **Le trou de l'oracle du démontage** (A0). `_kept_said` vérifiait
+que chaque règle que l'oracle dit gardée est nommée « gardée », jamais l'inverse. La sonde du relecteur
+— le déblocage, une règle gardée à bon droit, garde toutes les suivantes — rendait `unblock_partial` sur
+la graine 1006 avec quatre règles gardées sans raison ; l'opérateur remettait les retournées, le
+déblocage suivant retirait tout : accepté (seules cinq séquences figées l'attrapaient, la machine non).
+Le démontage exige maintenant, après `_kept_said` et avant l'opérateur, que chaque règle de blocage de
+la VM restée soit une de celles que l'oracle dit gardées (`_kept`, le journal du test, NSG et nom),
+sinon I7. **Ce n'est pas un affaiblissement** : la condition s'ajoute à celles d'avant, sur l'état que
+le démontage regardait déjà ; rien de ce qu'il refusait n'est accepté. Mutant **M2213** (la sur-garde) :
+attrapé par la séquence figée de la graine 1006 avec le démontage durci, pas avec celui d'avant (mesuré :
+verte) ; par la machine seule à 60 (graine 7368), 0/2. (2) **Le même défaut par un autre chemin**
+(`blocks.py`, `state.py`) : un déblocage retire toutes ses règles, puis sa dernière écriture d'état
+échoue (disque plein dans `_clear_block_state`) ou le processus meurt juste avant ; l'entrée garde ses
+placements, `unblocking_at` posé ; un blocage entier (un périmètre) les refusionnait — `held_missing`,
+la fausse carte. Un blocage écrit en entier sur une entrée marquée `unblocking_at` ou `unblock_failed`
+ne garde des anciens placements que ceux dont une règle est encore sur leur NSG (`_placement_alive`, une
+lecture par NSG à l'écriture ; illisible : gardé, A0). Sans marque, ou pour un blocage partiel, la
+fusion reste celle d'avant : une disparition reste dite, les deux essais d'un blocage partiel connus.
+Remplacer les placements au lieu de fusionner aurait perdu la trace d'une règle gardée encore là (I7).
+Figés : `test_a_whole_block_after_a_cut_off_unblock_forgets_what_it_took_off` (disque plein, crash ;
+deux modes ; rouge sans le correctif, `held_missing`), et deux tests de `test_glorfindel.py` (la règle
+de fusion, marque par marque ; un NSG illisible garde le placement). Mutants **M2214–M2217** (tout
+refusionné ; élagué sans marque ; élagué pour un blocage partiel ; illisible lu « parti »). (3) **Après
+L1C** (#369, 48e42c8) : la séquence de la graine 322 passe — ses tirages complétés jusqu'au retour après
+le disque plein (`_bypass_comes_back`, ceux du relecteur), son `xfail` levé ; celle de la graine 1006
+reste rouge, routée vers #378. `_replay` prend chaque règle avec ses tirages et échoue (`pytest.fail`,
+pas une `AssertionError` qu'un `xfail` strict compterait) dès qu'une règle en laisse.
+**Mesures de la relecture** (arbre fusionné avec `main` 48e42c8) : `pytest` complet 4 668 réussis, 7 sautés,
+5 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute (1 680 mutants). Invariants avec le démontage
+durci : à 60 séquences, 16 graines (1 à 8, 25, 42, 101, 322, 777, 1006, 8675, 31337) ; à 500, 1, 42, 101, 322, 777,
+1006, 8675 et 31337 ; à 2 000, 1006 et 322 — tout vert (la séquence figée de la 1006 à 2 000 reste rouge, la machine
+de L1C ne la tire plus). Mutants M2210–M2217 : 8/8 à chaque tour (60 séquences, deux tours, `--hypothesis-seed=7368`).
+Harnais avant/après sur les 97 mutants du déblocage, du blocage, des règles retournées, de la vérification du blocage et
+de l'état : 91/97 sur 48e42c8, 91/97 après, mutant par mutant à l'identique (M19, M21, M23, M38, M1964 par leurs
+séquences figées seules ; M36 survit des deux côtés, comme avant). Aucun perdu.
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

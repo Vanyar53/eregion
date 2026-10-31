@@ -396,7 +396,7 @@ def _merge_placements(old: list[dict], new: list[dict]) -> list[dict]:
 def _save_block_state(
     vm_name: str, ip: str, resource_id: str,
     nsg: str = "", nsg_scope: str = "", rule: str = "", scoped: bool = True,
-    placements: list | None = None, partial: bool = False, threat_port: int | None = None,
+    placements: list | None = None, partial: bool = False, threat_port: int | None = None, alive=None,
 ) -> None:
     from datetime import datetime, timezone
     entries = _load_block_entries(resource_id or vm_name)
@@ -421,7 +421,12 @@ def _save_block_state(
         # Written whole, it supersedes a failed or cut-off unblock: its marks go (L1B, #355).
         if not scoped:
             prev.update(nsg=nsg, nsg_scope=nsg_scope, rule=rule, scoped=False)
-        prev["placements"] = _merge_placements(prev.get("placements") or [], placements or [])
+        # An unblock's entry (failed, or cut off before its last write): only what is still on
+        # Azure (`alive`, the provider's reading) — the rest the unblock took off (U7D's review).
+        old = prev.get("placements") or []
+        if alive is not None and not partial and (prev.get("unblock_failed") or prev.get("unblocking_at")):
+            old = [p for p in old if alive(p)]
+        prev["placements"] = _merge_placements(old, placements or [])
         prev["partial"] = partial
         for mark in () if partial else ("unblock_failed", "unblocking_at", "stale_alerted_at"):
             prev.pop(mark, None)

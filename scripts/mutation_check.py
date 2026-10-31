@@ -6443,6 +6443,65 @@ _U1OR_IDS = tuple(f"M{n}" for n in range(2266, 2280))
 TESTS.update({mid: _U1OR for mid in _U1OR_IDS})
 TESTS["M2266"] += f" {INVARIANTS}"
 
+# U7D (#368): an `unblock_partial` drops from its entry the placements whose two rules it took
+# off — kept, a block written whole since merged them back in and read their absence as a
+# disappearance — and only those. M2210–M2212. (The seed 1006 itself was the teardown's
+# operator, not the code: no mutant; the sequence is no longer `xfail`.)
+_U7D = ("tests/unit/test_invariant_regressions.py::test_a_partial_unblock_forgets_the_rules_it_took_off "
+        "tests/unit/test_glorfindel.py::test_a_partial_unblock_keeps_only_the_placements_it_could_not_take_off")
+MUTANTS += [
+    ("M2210", "an unblock_partial keeps the placements it took off: a block written whole since reads them "
+              "gone — a false card, put back outside human_only (U7D)", UNB,
+     '            kept = [p for p in now.get("placements") or [] if _placement_key(p) not in gone]\n',
+     '            kept = list(now.get("placements") or [])\n'),
+    ("M2211", "an unblock_partial forgets a placement whose rule it couldn't take off (U7D)", UNB,
+     "                    done = False\n",
+     "                    pass\n"),
+    ("M2212", "an unblock_partial forgets a placement whose inbound rule stays, its outbound gone (U7D)", UNB,
+     '            for nm in (rule, f"{rule}-out"):\n                err = (_held_by_turned(',
+     '            for nm in (rule, f"{rule}-out"):\n                done = True\n                err = (_held_by_turned('),
+]
+TESTS.update({mid: _U7D for mid in ("M2210", "M2211", "M2212")})
+# U7D's review: the teardown's unblock read only that what the oracle keeps is said, never the
+# other way round — the over-guard below passed, its rules taken off at the retry once the
+# operator had put the turned rules back. The teardown now refuses a rule kept without a reason.
+MUTANTS += [
+    ("M2213", "the unblock, once one rule is rightly kept, keeps every later one too: unblock_partial, rules kept "
+              "that no other VM's flows hang on (U7D, review)", UNB,
+     "from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned\n",
+     "from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned as _real_held\n\n\n"
+     "def _held_by_turned(network, guard, rg, nsg, name, *a):\n"
+     "    if guard.get(\"u7d\"):\n"
+     "        return f\"{rg}/{nsg}/{name} gardée : sonde\"\n"
+     "    err = _real_held(network, guard, rg, nsg, name, *a)\n"
+     "    if err and \"gardée\" in err:\n"
+     "        guard[\"u7d\"] = True\n"
+     "    return err\n"),
+]
+TESTS["M2213"] = f"tests/unit/test_invariant_regressions.py::test_a_blocks_rules_on_a_reused_address_go_with_the_unblock {INVARIANTS}"
+# U7D's review, finding 4: an unblock cut off before its last write (or failed) leaves placements
+# whose rules it took off; a block written whole on that entry keeps only those still on Azure.
+# M2214–M2217.
+_U7D_CUT = ("tests/unit/test_invariant_regressions.py::test_a_whole_block_after_a_cut_off_unblock_forgets_what_it_took_off "
+            "tests/unit/test_glorfindel.py::test_a_whole_block_on_an_unblocks_entry_keeps_only_what_is_still_there "
+            "tests/unit/test_glorfindel.py::test_a_placement_whose_nsg_cannot_be_read_is_alive")
+MUTANTS += [
+    ("M2214", "a whole block on an unblock's entry merges every placement back: a false disappearance (U7D, review)",
+     STA, "            old = [p for p in old if alive(p)]\n", "            old = list(old)\n"),
+    ("M2215", "a whole block prunes the absent placements of any entry: a disappearance forgotten (U7D, review)",
+     STA, '        if alive is not None and not partial and (prev.get("unblock_failed") or prev.get("unblocking_at")):\n',
+     "        if alive is not None and not partial:\n"),
+    ("M2216", "a partial block prunes the absent placements of an unblock's entry (U7D, review)",
+     STA, '        if alive is not None and not partial and (prev.get("unblock_failed") or prev.get("unblocking_at")):\n',
+     '        if alive is not None and (prev.get("unblock_failed") or prev.get("unblocking_at")):\n'),
+    ("M2217", "an unreadable NSG reads a placement gone at a whole block (U7D, review)",
+     "glorfindel/providers/azure/blocks.py",
+     "            return rules is None or bool(mine & {_rule_name(r).lower() for r in rules})\n",
+     "            return rules is not None and bool(mine & {_rule_name(r).lower() for r in rules})\n"),
+]
+TESTS.update({mid: _U7D_CUT for mid in ("M2214", "M2215", "M2216", "M2217")})
+
+
 # L1C (#369): a bypass said while a rule of the pair is gone (a block, an isolation), with what
 # is gone on another NIC; a placement superseded only by a refusal of the NIC's names. M2230–M2235.
 _L1C_BLK = ("tests/unit/test_invariant_regressions.py::test_a_bypassed_block_is_said_while_a_rule_of_its_pair_is_gone "

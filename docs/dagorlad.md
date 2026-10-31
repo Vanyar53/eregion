@@ -134,8 +134,9 @@ juge et la lance.
    `DRY_RUN=1` s'arrête avant l'envoi. `REQUEST_FROM=local` lit la console de ton poste.
 3. **Sur Orodruin.** Il vérifie son contrat (`armed`), rejuge chaque fil sur ce qu'il lit maintenant
    et compare le nom tapé. Puis il lance **les fils l'un après l'autre**, une fenêtre à la fois.
-   - **Un run à la fois** : Orodruin tient la demande sous un verrou. Une campagne lancée à la main
-     (`make orodruin-campaign-run`) le prend aussi : l'une refuse l'autre (`busy`), et dit laquelle tourne.
+   - **Un run à la fois** : Orodruin tient la demande sous un verrou. Une campagne ou un run lancés à
+     la main (`make orodruin-campaign-run`, `annatar run`) le prennent aussi : l'un refuse l'autre
+     (`busy`), et dit lequel tourne. Gothmog suit.
    - Avant chaque fil, il relit le plafond restant à la demande entière, la watch et la cible.
    - Une VM isolée par Glorfindel est attendue 20 min au plus, puis son fil est sauté. Elle n'est
      jamais levée.

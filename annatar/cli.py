@@ -96,7 +96,8 @@ def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool,
         with lock:
             outcome = engine.run(path, skip_confirm=yes)
     except Busy as e:
-        console.print(f"[red]✗ run refused — busy: {e}[/red]")
+        from rich.markup import escape   # the holder's name, never read as markup
+        console.print(f"[red]✗ run refused — busy: {escape(str(e))}[/red]")
         raise SystemExit(EXIT_RUN_FAILED)
     code = run_exit_code(outcome)
     if code:
@@ -483,7 +484,8 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report
                 m.save(cdir)
             result = CampaignRunner(cdir, dry_run=dry_run, without_glorfindel=without_glorfindel).run()
     except Busy as e:
-        console.print(f"[red]✗ campaign {campaign_id} refused — busy: {e}[/red]")
+        from rich.markup import escape   # the holder's name and the id, never read as markup
+        console.print(f"[red]✗ campaign {escape(campaign_id)} refused — busy: {escape(str(e))}[/red]")
         raise SystemExit(EXIT_RUN_FAILED)
     except CampaignRefused as e:  # V1: nothing ran, the manifest is as it was
         console.print(f"[red]✗ {e}[/red]")

@@ -349,3 +349,12 @@ def test_a_request_during_a_campaign_by_hand_is_refused_naming_the_campaign(tmp_
                     "or stop it (make orodruin-kill)"]
     with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):   # let go once it is over
         pass
+
+
+def test_a_holder_whose_name_looks_like_markup_is_said_as_it_is(tmp_path, monkeypatch):
+    """#388's review: rich never reads the holder's name, nor the campaign's id, as markup."""
+    from eregion_core.exercise_runner import request_lock
+    with request_lock(tmp_path, "request [/red][bold]x"):
+        res, ran, _ = _cli_campaign(tmp_path, monkeypatch, "--yes")
+    assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
+    assert "busy: request [/red][bold]x runs" in " ".join(res.output.split()) and ran == []

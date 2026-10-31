@@ -29,8 +29,9 @@ from typing import Callable
 HOLD_PREFIXES = ("glorfindel-iso", "glorfindel-quarantine-")
 VM_API = "2024-07-01"
 NET_API = "2023-09-01"
-# A path of ARM as a resource id gives it: no query, no fragment, no escape (DG-b review, point 3).
-_ARM_PATH = re.compile(r"/subscriptions/[^/?#%\s]+(?:/[^/?#%\s]+)+")
+# A path of ARM as a resource id gives it: no query, no fragment, no escape, no backslash (sent
+# as %5C, a separator to some readers) — DG-b review, point 3; #358.
+_ARM_PATH = re.compile(r"/subscriptions/[^/?#%\\\s]+(?:/[^/?#%\\\s]+)+")
 
 
 class Unreadable(RuntimeError):

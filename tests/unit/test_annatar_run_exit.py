@@ -236,3 +236,13 @@ def test_a_run_by_hand_during_a_request_is_refused_and_touches_nothing(tmp_path,
     monkeypatch.setattr(Engine, "run", holding)
     assert CliRunner().invoke(cli, ["run", EXFIL_YAML, "--yes"]).exit_code == 0
     assert ran == [EXFIL_YAML, EXFIL_YAML]
+
+
+def test_a_run_refused_busy_says_the_holder_as_it_is(tmp_path, monkeypatch):
+    from eregion_core.exercise_runner import request_lock
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Engine, "run", lambda self, path, skip_confirm=False: None)
+    with request_lock(tmp_path / "runs", "campaign [/x]"):
+        res = CliRunner().invoke(cli, ["run", EXFIL_YAML, "--yes"])
+    assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
+    assert "busy: campaign [/x] runs" in " ".join(res.output.split())

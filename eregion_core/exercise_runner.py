@@ -165,8 +165,10 @@ _HOLDER_MAX = 120
 
 
 def _holder(fd: int) -> str:
+    """What the lock says holds it — in a window of microseconds, a name stale or half written:
+    said, never trusted, its printable characters only."""
     try:
-        text = os.pread(fd, _HOLDER_MAX, 0).decode("utf-8", "replace")
+        text = os.pread(fd, _HOLDER_MAX, 0).decode("utf-8", "ignore")
     except OSError:
         return ""
     return "".join(c for c in text if c.isprintable()).strip()
@@ -185,6 +187,7 @@ def request_lock(runs_dir: Path | str, holder: str = ""):
     path = Path(runs_dir) / "orodruin" / "requests" / ".lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    held = False
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -192,10 +195,15 @@ def request_lock(runs_dir: Path | str, holder: str = ""):
             what = _holder(fd) or "another request"
             raise Busy(f"{xr.shown(what)} runs on this Orodruin: one at a time — wait for its end, "
                        "or stop it (make orodruin-kill)") from None
+        held = True
+        # The name a crash left is gone first: a short one after a long one is read whole.
         os.ftruncate(fd, 0)
-        os.pwrite(fd, holder[:_HOLDER_MAX].encode("utf-8"), 0)
+        os.pwrite(fd, holder.encode("utf-8")[:_HOLDER_MAX], 0)   # cut as it is read: in bytes
         yield
     finally:
+        if held:
+            with contextlib.suppress(OSError):
+                os.ftruncate(fd, 0)   # the name goes with a normal exit
         os.close(fd)
 
 

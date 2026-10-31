@@ -573,8 +573,8 @@ un fil est refusé :
   - ce qui ne se lit pas vaut « tenue » (A0) ;
   - chaque chemin lu sur Azure est celui d'une ressource, tel qu'ARM l'écrit (`held.safe_path`) : ni
     requête, ni fragment, ni échappement, ni segment `.` ou `..`, ni caractère non imprimable (un
-    contrôle, une inversion bidirectionnelle, un caractère de largeur nulle). Un chemin refusé ne se
-    lit pas : la VM est tenue (#358).
+    contrôle, une inversion bidirectionnelle, un caractère de largeur nulle), ni barre oblique
+    inverse (`\`, envoyée `%5C`). Un chemin refusé ne se lit pas : la VM est tenue (#358).
 
   Avant la relecture de DG-b, le preflight d'Annatar ne lisait que l'ancien nom fixe
   (`glorfindel-isolation-`), et dans le seul groupe de la VM : les isolations d'aujourd'hui
@@ -601,10 +601,21 @@ porte l'identifiant de la demande, ainsi que son rapport (`metrics.request`).
 
 Un aperçu (`--dry-run`) ne lance rien et ne le prend pas.
 
-Jamais par un fil d'une demande : il tourne sous le verrou de sa demande. Le premier écrit ce qui le
-tient (« request r-… », « campaign … ») ; le suivant est refusé (`busy`) sans rien lancer ni
-ratifier, et dit lequel. Le verrou part avec le processus, un crash compris. `gothmog run` lancé à la
-main le prendra aussi, après G1.
+Jamais par un fil d'une demande : il tourne sous le verrou de sa demande (`annatar wire` et le
+lanceur de campagne appellent le moteur eux-mêmes, jamais la commande `run`). Le premier écrit ce qui
+le tient (« request r-… », « campaign … », « run <scénario> ») ; le suivant est refusé (`busy`) sans
+rien lancer ni ratifier, et dit lequel. Le verrou part avec le processus, un crash compris ; à une
+sortie normale, le nom s'efface aussi. Le nom n'est qu'une indication : un refusé peut lire, le temps
+de quelques microsecondes, un nom périmé ou à moitié écrit, et n'en montre que les caractères
+imprimables.
+
+**Où est le verrou.** Dans le `runs/` de la commande : le répertoire de travail pour une demande et
+pour `annatar run`, `--runs-dir` pour une campagne. Sur Orodruin, les conteneurs des deux commandes
+montent le même `$HOME/runs` sur `/app/runs` (`make orodruin-exercise`, `make orodruin-campaign-run`) :
+un seul verrou. Une campagne lancée avec un autre `--runs-dir` n'exclut plus une demande — ne pas le
+faire sur Orodruin.
+
+**Gothmog suit** : `gothmog run` lancé à la main prendra le même verrou, après G1.
 
 **Ce qu'Orodruin publie pour la console.** Dans le conteneur des fenêtres, sous `orodruin/` : même
 conteneur, même attribution, rien de neuf.

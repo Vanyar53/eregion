@@ -6621,6 +6621,26 @@ MUTANTS += [
      "    lock = contextlib.nullcontext()\n"),
 ]
 TESTS["M2480"] = "tests/unit/test_annatar_run_exit.py"
+# #388's review: the name left by a crash, the name at a normal exit, a backslash in a path,
+# the holder's name read as markup. M2491–M2495.
+MUTANTS += [
+    ("M2491", "a short name after a long one left by a crash reads the rest of the old one (#358, review)",
+     "eregion_core/exercise_runner.py",
+     "        os.ftruncate(fd, 0)\n        os.pwrite(fd, holder", "        os.pwrite(fd, holder"),
+    ("M2492", "the lock keeps its holder's name after a normal exit (#358, review)", "eregion_core/exercise_runner.py",
+     "                os.ftruncate(fd, 0)   # the name goes with a normal exit\n", "                pass\n"),
+    ("M2493", "a path Orodruin reads on Azure carries a backslash (%5C) (#358, review)", "eregion_core/held.py",
+     '_ARM_PATH = re.compile(r"/subscriptions/[^/?#%\\\\\\s]+(?:/[^/?#%\\\\\\s]+)+")\n',
+     '_ARM_PATH = re.compile(r"/subscriptions/[^/?#%\\s]+(?:/[^/?#%\\s]+)+")\n'),
+    ("M2494", "a campaign refused busy reads the holder's name as markup (#358, review)", "annatar/cli.py",
+     "✗ campaign {escape(campaign_id)} refused — busy: {escape(str(e))}[/red]\")\n",
+     "✗ campaign {campaign_id} refused — busy: {e}[/red]\")\n"),
+    ("M2495", "a run refused busy reads the holder's name as markup (#358, review)", "annatar/cli.py",
+     '        console.print(f"[red]✗ run refused — busy: {escape(str(e))}[/red]")\n',
+     '        console.print(f"[red]✗ run refused — busy: {e}[/red]")\n'),
+]
+TESTS.update({"M2491": _358_CORE, "M2492": _358_CORE, "M2493": _358_CORE,
+              "M2494": "tests/unit/test_campaign_runner.py", "M2495": "tests/unit/test_annatar_run_exit.py"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -357,6 +357,38 @@ def test_the_lock_says_what_holds_it_a_request_or_a_run_by_hand(tmp_path):
         pass
 
 
+def test_a_short_name_after_a_long_one_left_by_a_crash_is_read_whole(tmp_path):
+    """#388's review: the name a crash left (no normal exit to erase it) is cut before the next
+    one is written — never « campaign C1 » and the rest of the old name."""
+    import pytest
+    runs = tmp_path / "runs"
+    lock = runs / "orodruin" / "requests" / ".lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("campaign C-20261031T080000Z-a-much-longer-name-left-by-a-crash")
+    with er.request_lock(runs, "campaign C1"):
+        with pytest.raises(er.Busy, match=r"^campaign C1 runs on this Orodruin"):
+            with er.request_lock(runs, "request r-20261031T080000Z-abcdef"):
+                pass
+
+
+def test_the_name_goes_with_a_normal_exit_and_is_cut_as_it_is_read(tmp_path):
+    runs = tmp_path / "runs"
+    lock = runs / "orodruin" / "requests" / ".lock"
+    with er.request_lock(runs, "campaign C1"):
+        assert lock.read_text() == "campaign C1"
+    assert lock.read_text() == ""
+    # Cut in bytes, as it is read: a name of characters of three bytes each.
+    with er.request_lock(runs, "é" * 50 + "漢" * 100):
+        written = lock.read_bytes()
+        assert len(written) <= er._HOLDER_MAX
+        with open(lock, "rb+") as f:
+            import fcntl
+            import pytest
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert er._holder(f.fileno()) == written.decode("utf-8", "ignore")
+
+
 def test_a_request_refused_busy_names_the_campaign_that_runs(tmp_path):
     r, inj, published, _ = _runner(tmp_path)
     said = []

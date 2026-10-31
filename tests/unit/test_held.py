@@ -134,9 +134,11 @@ _SUB = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ce
     _SUB + "/providers/Microsoft.Network/networkInterfaces/./nic-1",
     _SUB + "/providers/Microsoft.Network/networkInterfaces/..",
     _SUB + "/providers/Microsoft.Network/networkInterfaces/nic\x00-1",
-    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic‮1-cin",       # a bidi override
-    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic​-1",          # zero-width
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic\u202e1-cin",       # a bidi override
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic\u200b-1",          # zero-width
     _SUB + "/providers/Microsoft.Network/networkInterfaces/nic\x7f-1",
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/..\\x",      # a backslash: %5C on the wire
+    _SUB + "/providers/Microsoft.Network/networkInterfaces/nic\\..\\..\\x",
 ])
 def test_a_path_that_walks_its_segments_or_hides_a_character_is_never_read(path):
     with pytest.raises(ValueError):

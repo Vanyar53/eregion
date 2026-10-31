@@ -2838,6 +2838,54 @@ main ». Avant la relecture (la règle en place, 48e42c8) : harnais avant/après
 l'état et de la réaffirmation, 74/78 des deux côtés, plus M2150–M2152 (77/81) — M13 et M37 par leurs
 seules séquences figées, M36 et M1645 survivent, des deux côtés ; aucun perdu.
 
+**D80 (31/10, #380) : la levée cherche loin d'elle les règles d'une carte nue, et dit ce qu'elle y
+garde.** L'I3 de la graine 555 à 500, figé en `xfail` strict par L1Q
+(`test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps`), et, le même jour, les
+invariants profonds de la nuit sur `main` 8295975, Linux et macOS (la base Hypothesis que le job macOS de
+chaque PR rejoue : rouge sur toutes les PR) : « I3 (said): release_isolation said release_partial, rules
+of …/Db--01 kept without saying so: ['glorfindel-iso-db--01-db-nic-0-0d0228'] ». **Cause, établie** (la
+séquence rejouée pas à pas, les NSG, les cartes et l'état relevés après chaque règle) : ni l'isolation
+coupée du titre (coupée au premier appel, `vm.get`, elle n'écrit rien ; la reprise isole comme une
+première fois ; remplacée par une isolation simple, la séquence échoue de même sur 72bb58f), ni la quarantaine. La carte de web2 est laissée nue par `bare_with_an_unknown_original`
+(son NSG de quarantaine retiré à la main). La règle de son isolation, retournée en allow et visant
+l'adresse reprise par une nouvelle VM, est restée sur nsg-web-nic (rg-app2), gardée et dite par une levée
+précédente (I4C), qui l'a notée dans l'état (`release_failed`). L'état perdu, la reprise isole la carte
+nue par la quarantaine et note son original « aucun » — juste : elle était nue. La levée remet la carte
+nue, puis balaie : `_sweep_isolation` ne cherche les règles d'une carte que sur les NSG qui la gouvernent
+maintenant (`_nic_nsg_views`). Une carte nue n'en a pas, donc nsg-web-nic est hors de vue, et la levée dit
+`released`. Les séquences profondes sont la même cause vue d'un NSG encore à portée : nsg-tier, que
+db-nic-0 portait, gouverne aussi db-nic-1, mais le balayage n'y cherche que les règles de db-nic-1
+(`_iso_rules_on`, à son empreinte). La règle de db-nic-0, nue, n'est cherchée nulle part : `release_partial`
+pour l'original inconnu, la règle gardée jamais nommée. C'est le point ouvert d'I4B relevé par I4C (« ni le
+reset ni la levée ne cherchent sur tous les NSG pour une carte nue »), réglé ici pour la levée.
+**Le correctif** (`glorfindel/providers/azure/away.py`, un module à lui : `release.py` reste à 487
+lignes, une ligne change) : à la fin du balayage, pour chaque carte de la VM sans NSG à elle et hors
+quarantaine, ses règles — à son empreinte, premier et second nom (`_placement_rule_bases`), aucune
+autre carte — sont cherchées sur tous les NSG de l'abonnement, comme pour une VM supprimée (I7S). Chacune
+passe par la garde (`_held_by_turned`) : gardée, elle est dite (« gardée », `release_partial`) ; sinon
+elle est retirée. Les NSG déjà balayés pour cette carte (celui de son subnet) sont sautés : une règle
+gardée n'est dite qu'une fois. Une liste refusée est dite (« non cherchées », `release_partial`) : rien
+trouvé n'est pas rien là (A0). Coût : une liste des NSG de l'abonnement par levée d'une VM qui a une
+telle carte (reprise de la garde si elle l'a déjà lue), le cas courant quand les NSG sont posés sur les
+subnets seulement. Aucune règle de la machine retirée ni restreinte ; l'oracle (`_kept_said`) est
+inchangé. Figés : la séquence de la graine 555 (son `xfail` levé),
+`test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said` (Linux et macOS, rouges sur 72bb58f avec le message
+de la nuit), et `test_release_away.py` (la règle gardée sur le NSG que la carte portait, un reste retiré,
+la liste refusée, une règle du NSG du subnet dite une fois). Les deux exemples de la base Hypothesis
+(leurs blobs `@reproduce_failure`) reproduisent sur 72bb58f et plus après le correctif : la séquence
+dépasse l'étape fautive et réclame d'autres tirages que le blob n'a pas (« DidNotReproduce », la forme des
+données a changé). **Reste ouvert** : une carte dont le NSG a été **remplacé** par un autre (pas retiré)
+n'est cherchée que sur ses NSG d'aujourd'hui ; le reset n'a pas encore cette recherche (I4C : son statut
+reste partiel, la carte dite, la règle pas nommée) ; `verify_release` non plus.
+
+**Mutants M2340–M2343** : M2340 (le balayage aveugle loin d'une carte nue : `released`) par les trois
+séquences figées et `test_release_away.py` ; M2341 (une règle trouvée loin de la carte retirée sans la
+garde : la VM derrière perd ce qu'elle lui ouvre) par les mêmes ; M2342 (une liste refusée lue « rien »)
+par `test_a_bare_nics_rules_unlooked_for_are_said` ; M2343 (le NSG du subnet cherché deux fois : la règle
+nommée deux fois) par `test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once`. 4/4 à chaque tour.
+
+**Mesures de D80.** `pytest` complet : 4 712 réussis, 7 sautés, 5 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants à 500 séquences sur les graines 1, 7, 25, 35, 40, 42, 45, 101, 322, 555, 1618, 4242, 8675, 9001 et 31337 : 15/15 vertes ; puis 2 000 sur 42, 322 et 8675 : vertes. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants des modules touchés (levée, connecteur, façade) : 44/49 attrapés à chaque tour sur `main` 72bb58f, 44/49 après — les mêmes cinq de part et d'autre (M17, le verrou par VM, et M1552 survivent ; M22, M26 et M1963 par leurs seules séquences figées) —, plus M2340–M2343 (48/53). Aucun perdu.
+
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
 (`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque

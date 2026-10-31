@@ -311,6 +311,7 @@ class BlockMixin:
             vm_name, ip, resource_id,
             nsg=f'{first["nsg_rg"]}/{first["nsg_name"]}', nsg_scope=first["scope"],
             rule=first["rule"], scoped=True, placements=placements, threat_port=threat_port,
+            alive=self._placement_alive(),
         )
         out = {
             "status": "blocked", "ip": ip, "scoped": True, "resource_id": resource_id,
@@ -404,7 +405,7 @@ class BlockMixin:
         _save_block_state(
             vm_name, ip, resource_id,
             nsg=f"{nsg_rg}/{nsg_name}", nsg_scope="subnet", rule=rule_name, scoped=False,
-            placements=kept if replace else None, threat_port=threat_port,
+            placements=kept if replace else None, threat_port=threat_port, alive=self._placement_alive(),
         )
         # A NIC off the perimeter's subnet is blocked only by its own block — as Azure reads
         # it, never as the state remembers it (a partial one, rules gone since).
@@ -445,6 +446,18 @@ class BlockMixin:
                             f" {vm_name}'s NICs unreadable ({unread}): what the perimeter covers of it is unverified.")
         _report_block_shadowing(out, ip, shadowed)
         return out
+
+    def _placement_alive(self):
+        """For a whole block on an entry an unblock marked (U7D's review): is a recorded
+        placement's rule still on its NSG? Read once per NSG, at the save; an unreadable listing
+        keeps it (A0: never « gone » on a guess)."""
+        cache: dict = {}
+
+        def alive(p: dict) -> bool:
+            rules = self._list_rules(cache, p.get("nsg_rg", ""), p.get("nsg_name", ""))
+            mine = {str(p.get("rule", "")).lower(), f'{p.get("rule", "")}-out'.lower()}
+            return rules is None or bool(mine & {_rule_name(r).lower() for r in rules})
+        return alive
 
     def _block_rule_prefix(self, ip: str) -> str:
         return f"glorfindel-block-{ip.replace('.', '-').replace('/', '-')}"

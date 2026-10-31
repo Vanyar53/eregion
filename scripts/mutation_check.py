@@ -6594,6 +6594,33 @@ TESTS.update({
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
 
+# D80 (#380): a bare NIC's isolation rules looked for away from it, on every NSG of the subscription —
+# kept and said, or taken off; a listing that fails said. M2340–M2343.
+AWY = "glorfindel/providers/azure/away.py"
+_D80_SEQ = ("tests/unit/test_invariant_regressions.py::test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps "
+            "tests/unit/test_invariant_regressions.py::test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said")
+MUTANTS += [
+    ("M2340", "the release's sweep blind away from a bare NIC: a rule kept on the NSG it carried, `released` (D80)", REL,
+     "        return failed + self._away_rules(vm_name, targets, stuck, guard, mates)   # a bare NIC's (D80)\n",
+     "        return failed\n"),
+    ("M2341", "a bare NIC's rule found away from it taken off without the guard: the VM behind it cut (D80)", AWY,
+     ('                err = (_held_by_turned(self._network, guard, n_rg, n_name, name, t0["nic_id"], mates)\n'
+      "                       or self._delete_rule(n_rg, n_name, name))\n"),
+     "                err = self._delete_rule(n_rg, n_name, name)\n"),
+    ("M2342", "the subscription's NSGs unreadable read as nothing there: the bare NIC's rules unlooked for, unsaid (D80)",
+     AWY, "        except Exception as exc:\n            nics = ",
+     "        except Exception as exc:\n            return []\n            nics = "),
+    ("M2343", "the bare NIC's subnet NSG searched twice: its kept rule named twice (D80)", AWY,
+     "                if (t0 is None or (n_rg.lower(), n_name.lower()) in seen\n",
+     "                if (t0 is None\n"),
+]
+TESTS.update({
+    "M2340": f"{_D80_SEQ} tests/unit/test_release_away.py",
+    "M2341": f"{_D80_SEQ} tests/unit/test_release_away.py",
+    "M2342": "tests/unit/test_release_away.py::test_a_bare_nics_rules_unlooked_for_are_said",
+    "M2343": "tests/unit/test_release_away.py::test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once",
+})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

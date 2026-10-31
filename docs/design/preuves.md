@@ -3112,6 +3112,19 @@ carte lu ; le périmètre seul : ce qui reste jamais lu) : 3/3 par leurs tests �
 
 **Mesures de L1R.** `pytest` complet : 4 726 réussis, 7 sautés, 4 `xfail` (deux de moins ; restent #366 deux fois, #379 et #380, hors du lot) ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 709 mutants, sans faute. Invariants, à 500 séquences sur les graines 1, 7, 42, 101, 322, 555, 777, 1006, 8675 et 31337 (le premier correctif), puis 1, 42, 322, 555, 1006 et 31337 sur l'arbre final ; à 2 000 sur 1006, 322, 42 et 8675 : tout vert. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants de la vérification d'une isolation (`verify.py`), d'un blocage (`verify_block.py`) et de la lecture des règles (`nsg.py`) : 45/49 attrapés à chaque tour sur `origin/main` 72bb58f, 45/49 après, mutant par mutant à l'identique (M21, M31, M34, M38 par leurs seules séquences figées, des deux côtés), plus les trois nouveaux (48/52). Aucun perdu. `origin/main` n'a pas bougé depuis 72bb58f : rien à fusionner. Aucune règle de la machine retirée ni restreinte, aucun oracle touché ; `reassert.py` inchangé (494 lignes), `nsg.py` 375, `verify.py` 324, `verify_block.py` 302.
 
+**La relecture de L1R (31/10) : un nom partagé n'est pas une preuve (L24).** `_half_shadowed` lisait « quoi qu'il
+couvre » chaque deny des paires de `_isolation_pairs`, y compris les noms que des homonymes partagent — d'avant
+l'empreinte de la carte (`glorfindel-iso-<vm>-<carte>`) et suffixés par la VM (`glorfindel-isolation-deny-all-<vm>`).
+Avant L1R, `_deny_isolates` écartait le deny d'un homonyme visant ses propres adresses ; `_deny_slot` ne regarde plus
+le contenu. La sonde du relecteur : la paire de la VM partie du NSG partagé du sous-réseau, la vieille paire d'un
+homonyme (une VM du même nom dans un autre groupe) à 150 vers 10.0.0.9, une `allow-ssh` du client à 120 — une carte
+`bypassed` fausse, de sévérité haute (I3) ; verte sur `main`. **Correctif** : « quoi qu'il couvre » ne vaut que pour un
+nom à l'empreinte de la carte (le sien et son second, `-b-` : seul Glorfindel les écrit) ; un autre nom n'est lu que
+s'il est un deny qui s'applique à la carte (`_deny_applies`, comme `_nic_owns`). Figé :
+`test_a_homonyms_deny_under_a_shared_name_is_never_read_bypassed` (les deux formes de nom ; l'homonyme, ou le nom
+suffixé posé pour une autre carte de la même VM ; notre paire sous ce nom, réduite à un port, toujours lue). Mutant
+**M2303** (la garde retirée) ; M2301 réancré sur la nouvelle ligne. Mesures : `pytest` complet 4 730 réussis, 7 sautés, 4 `xfail` ; `ruff` propre ; `mutant_anchors.py` 1 710 mutants, sans faute ; invariants à 500 sur les graines 1006 et 322, verts ; M2300–M2303 : 4/4 par leurs tests à chaque tour (60 séquences, deux tours, graine 4242).
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

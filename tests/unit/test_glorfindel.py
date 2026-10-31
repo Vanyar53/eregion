@@ -2542,6 +2542,24 @@ def test_an_isolation_altered_both_ways_says_an_allow_before_either_deny(monkeyp
     assert out["uncovered_nics"] == ["nic-a"] and "shadowed_by" not in out, out
 
 
+@pytest.mark.parametrize("name", ["glorfindel-iso-vm-nic-a", "glorfindel-isolation-deny-all-vm"])
+@pytest.mark.parametrize("whose", ["homonym", "another nic"])
+def test_a_homonyms_deny_under_a_shared_name_is_never_read_bypassed(monkeypatch, name, whose):
+    """L1R's review (L24): the VM's pair gone from the subnet's shared NSG; a pair under a name
+    homonyms share — before the NIC hash, or VM-suffixed — aimed at another address (another
+    group's VM of the same name, or the VM's other NIC), an allow before it. Read as ours
+    « whatever it covers », a false bypass card. Such a name counts only as a deny that applies
+    to the NIC: ours, under that name and narrowed to a port, is still read."""
+    t = {**_nic_target(nsg_name="nsg-subnet", scope="subnet"), "ip_scoped": True, "shared_nsg": True}
+    other = "10.0.0.9" if whose == "homonym" else "10.0.0.6"
+    allow = _nsg_rule("allow-ssh", 120, port="22")
+    out = _verifying(monkeypatch, [t], {"nsg-subnet": [allow, *_deny_pair(name, 150, ip=other)]})
+    assert out["uncovered_nics"] == ["nic-a"] and "shadowed_by" not in out, out
+    ours = _altered(_deny_pair(name, 150, ip="10.0.0.5")[0], "port")
+    out = _verifying(monkeypatch, [t], {"nsg-subnet": [allow, ours]})
+    assert [s["rule"] for s in out["shadowed_by"]] == ["allow-ssh"], out
+
+
 def test_an_unreadable_subnet_is_not_a_subnet_without_nsg(monkeypatch):
     """A 429 on the subnet read meant "no subnet NSG": a release without state swept
     nothing and said released while the isolation stayed on the subnet NSG (L24)."""

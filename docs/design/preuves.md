@@ -2825,7 +2825,14 @@ réseau, relue par son id (`AzureConnector.nic_left_addresses`, `readers.py`), r
 aucune des adresses de la règle (préfixes compris ; une étiquette de service ne prouve rien). 403, 429,
 absence de la liste : rien. Le raccourci par la liste (`_orphan_seen_vms`) est retiré, `sweep.py` n'y gagne
 rien. Une carte dite avant `_said` ne gardait que sa VM : ses cartes réseau d'aujourd'hui la prouvent
-(`vm_left_addresses`) ; la VM illisible ou supprimée ne prouve rien — sa carte réseau peut lui survivre.
+(`vm_left_addresses`) ; la VM illisible ne prouve rien. **Troisième relecture** (P10, P12) : une VM
+supprimée n'était jamais lâchée — sa carte réseau gardée (le défaut d'`az vm delete`) tenait encore
+l'adresse, la VM restait « non relue depuis » pour toujours ; une carte réseau qui n'est plus attachée à la
+VM notée prouve le départ, et un 404 sur la VM aussi (carte d'avant `_said`) — la carte réseau qui tient
+encore l'adresse est dite par la liste comme ce que la règle coupe, rien ne se tait. Tests
+`…vm_deleted_with_its_nic_kept_is_let_go`, `…said_before_the_review_lets_go_of_a_vm_deleted`, rouges sur
+`dad34fb` ; mutant M2279. M2260–M2279 : 20/20, deux tours ; `pytest` complet 4 676 réussis ;
+invariants à 500 puis à 2 000 sur la graine 9001, verts.
 **P8** : une entrée de `_said` d'une autre forme (`[null]`, `5`, `[1, 2]`) arrêtait le balayage à chaque
 passe ; chaque entrée est validée (`_valid` : une liste de noms, ou d'entrées `vm`/`nic`/`ip` en chaînes),
 sinon tenue pour absente. **Trouvé en route** : le bloc d'I5Q plus bas réutilisait le nom `said` (les

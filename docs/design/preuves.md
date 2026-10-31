@@ -3134,6 +3134,34 @@ graine 4242, sans séquence figée ni test unitaire) n'en attrape aucun par ses 
 seulement par les exemples figés de `test_invariants.py`, les six autres survivent — les deux cas sont rares
 (trouvés à 2 000 et par le harnais) ; ils tiennent par leurs séquences figées et leurs tests unitaires.
 
+**Après la relecture d'I3P.** Trois constats dans le sens dangereux — « tient » ou « bloquée » dits à tort —,
+corrigés. (1) **Une carte non jugée perdue à côté d'un contournement** (régression d'I3P, sonde P4) : le
+contournement rendait désormais `open_nics` et `perimeter_unread`, et le blocage de périmètre (`blocks.py`) ne
+gardait dans ses « non couvertes » que les cartes de ces listes ; une carte dont les règles ou leur préséance
+n'ont pas pu être lues (429) n'était dans aucune — `blocked` au lieu de `blocked_partial` (sur `main` :
+`blocked_partial`). `verify_block_ip` rend maintenant ces cartes (`nics_unknown`) et celles dont le blocage
+tient (`blocked_nics`) ; le blocage de périmètre ne retire une carte que sur une preuve qu'elle tient
+(`blocked_nics` ou `held_by_perimeter`). La carte de dérive la nomme (« on ne sait pas si l'IP est encore
+bloquée sur nic-b », sonde P5 : elle la taisait) et `_situation` la compte. (2) **Les ports source** (sondes
+P1, P8) : un refus du client de tout port de destination mais des ports source 1024-65535 comptait comme coupant
+tout ; l'attaquant choisit son port source. Exigés : `source_port_range` à `*`, `any` ou `0-65535`, chaque
+entrée de `source_port_ranges` de même. Le faux Azure ne modélise pas les ports source : tests unitaires
+seulement. (3) **Les étiquettes côté attaquant** (sonde P2) : `VirtualNetwork` est approché par « privée »
+(`_prefix_covers`), et 203.0.113.7 ou 198.18.0.5 sont privées pour Python, hors du VNet pour Azure. Côté
+attaquant, ne comptent que `*`, `any` ou un préfixe explicite qui contient son adresse (`_names_the_address`) ;
+jamais une étiquette, ni l'absence de préfixe. Côté carte, inchangé. Figés :
+`test_a_perimeter_block_keeps_an_unread_nic_off_its_subnet_uncovered` (illisible ou lue ; rouge avec le filtre
+d'avant), `test_a_nic_whose_rules_cant_be_read_is_named_unknown_beside_a_bypass`,
+`test_a_deny_drops_first_only_on_every_source_port_and_a_named_address`,
+`test_the_perimeter_holds_not_behind_a_deny_of_some_source_ports`. Mutants **M2189–M2195** (la carte illisible
+non rendue ; l'ancien filtre du périmètre ; les ports source ignorés ; l'attaquant nommé par une étiquette ; la
+carte illisible nommée après « reste bloquée » ; `_situation` sans elle ; la carte qui tient non rendue) ; M2186
+réancré. **Mesures** (main 72bb58f, inchangé) : `pytest` complet 4 716 réussis, 7 sautés, 4 `xfail` ; `ruff`
+propre ; `mutant_anchors.py` 1 722 mutants sans faute ; invariants à 500 sur 1999, 71 et 42 verts. Harnais
+(60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 114 mutants des modules touchés, `blocks.py`
+compris : 109/114 — les 74 d'avant à l'identique (69/74, les mêmes cinq), les 23 de `blocks.py` tous attrapés,
+M2180–M2195 16/16. Aucun perdu.
+
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine
 seul), puis deux harnais à `--jobs 4` en même temps. Rien n'a été relâché : aucune variable

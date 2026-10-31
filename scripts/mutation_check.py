@@ -6357,7 +6357,7 @@ _U1O = " ".join(f"tests/unit/test_orphan_sweep.py::test_{t}" for t in (
     "a_card_two_rules_share_when_one_moves_off_its_vm", "an_orphan_cutting_two_vms_says_both_with_their_nics"))
 MUTANTS += [
     ("M2260", "an orphan's card about a VM it no longer cuts kept: the VM cut now named by none (U1O)", ORP,
-     "        if card not in about or about[card] == _resource(o).lower():\n",
+     "        if sorted(was) == sorted(now):\n",
      "        if True:\n"),
     ("M2261", "a card replaced leaves the other rules it spoke for unsaid (U1O)", ORP,
      "            spoke_for = [x for x, c in alerts.items() if c == card]\n",
@@ -6372,12 +6372,40 @@ MUTANTS += [
      """            reason += "".join(f" Elle coupe aussi {h['ip']}, adresse de {_who(h)}." for h in cut[1:])\n""",
      "\n"),
     ("M2265", "the card replaced stays pending: it still says the former VM cut (U1O)", ORP,
-     "            escalations.resolve(card, note=f\"Remplacée : {o['rule']} vise ",
-     "            dict(card=card, note=f\"Remplacée : {o['rule']} vise "),
+     "            escalations.resolve(card, note=_moved(o, about[card]))\n",
+     "            dict(card=card, note=_moved(o, about[card]))\n"),
 ]
 TESTS.update({mid: f"{_U1O} tests/unit/test_invariant_regressions.py::test_an_orphan_kept_behind_a_turned_rule_is_said"
               for mid in ("M2260", "M2261", "M2262", "M2263", "M2264", "M2265")})
 TESTS["M2260"] += f" {INVARIANTS}"
+# U1O's review: every VM the card said compared (a second VM cut later), a VM its NSG no
+# longer governs, a VM missing from a partial NIC listing never taken for gone, the note
+# when nobody holds the address. M2266–M2271.
+_U1OR = _U1O + " " + " ".join(f"tests/unit/test_orphan_sweep.py::test_{t}" for t in (
+    "a_second_vm_cut_later_by_a_rule_said_is_said", "a_vm_its_nsg_no_longer_governs_is_said_not_cut",
+    "a_vm_missing_from_a_partial_nic_listing_keeps_its_card"))
+MUTANTS += [
+    ("M2266", "the card's VM compared alone: a second VM cut later named by none (U1O review)", ORP,
+     "            was = said[k]\n",
+     "            was, now = [about[card]], [_resource(o).lower()]\n"),
+    ("M2267", "a VM its NSG no longer governs is the VM it cut: the card still says it cut (U1O review)", ORP,
+     '    return ["~" + _resource(o).lower()]\n',
+     "    return [_resource(o).lower()]\n"),
+    ("M2268", "a VM missing from the NIC listing taken for gone: a right card closed (U1O review)", ORP,
+     "        if left and not came and not all(_proven_left(connector, v) for v in left):\n",
+     "        if False:\n"),
+    ("M2269", "a VM Azure still has counted gone: a right card closed on a partial listing (U1O review)", RDR,
+     "            self._compute.virtual_machines.get(*_parse_vm_resource_id(vm_id))\n            return False\n",
+     "            self._compute.virtual_machines.get(*_parse_vm_resource_id(vm_id))\n            return True\n"),
+    ("M2270", "the VMs the listing saw unrecorded: a VM moved off the address never proven (U1O review)", SWP,
+     '        self._orphan_seen_vms = {v.rstrip("/").lower() for _, v in holders.values() if v}   # U1O\n',
+     "        self._orphan_seen_vms = set()   # U1O\n"),
+    ("M2271", "nobody holds the address: the note says it passed to the NSG (U1O review)", ORP,
+     '    if not o["now_on"]:\n        return f"Remplacée : {o[\'rule\']} vise une adresse qu\'aucune',
+     '    if False:\n        return f"Remplacée : {o[\'rule\']} vise une adresse qu\'aucune'),
+]
+TESTS.update({mid: _U1OR for mid in ("M2266", "M2267", "M2268", "M2269", "M2270", "M2271")})
+TESTS["M2266"] += f" {INVARIANTS}"
 
 # L1C (#369): a bypass said while a rule of the pair is gone (a block, an isolation), with what
 # is gone on another NIC; a placement superseded only by a refusal of the NIC's names. M2230–M2235.

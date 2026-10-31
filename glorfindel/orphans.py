@@ -10,8 +10,10 @@ it cuts is not one Glorfindel isolates or blocks) AND the VM it cuts runs in
 disrupts nothing. In `human_only` the card is all: no write, it says what to run (D-A,
 27/10). A rule said is not said again while it stands (orphan_alerts.json): its card
 stays, or, acknowledged, stays closed; it closes once the rule is no longer an orphan. A
-card says what the rule cuts — the VM, its NIC —: once the address passes to another VM,
-the card is replaced, the rule said again for the one it cuts now (U1O).
+card says what the rule cuts — every VM, its NIC —: once that changes (an address passed
+to another VM or to nobody, a second VM cut later, the NSG no longer governing the VM),
+the card is replaced, the rule said again for what it cuts now (U1O). A VM leaving it with
+nobody in its place is proven gone first — a partial NIC listing keeps a right card.
 """
 from __future__ import annotations
 
@@ -58,6 +60,46 @@ def _save_alerts(alerts: dict) -> None:
         actions._atomic_write_text(_alerts_path(), json.dumps(alerts, sort_keys=True))
     except Exception as exc:                  # said again at the next pass: noisier, not silent
         log.warning("orphans: alerts not recorded (%s)", exc)
+
+
+# Beside the cards, in orphan_alerts.json: what each rule cut when its card was said (U1O).
+_SAID = "_said"
+
+
+def _said_of(o: dict) -> list[str]:
+    """What a card says the rule cuts (U1O review): every VM it cuts (a NIC no VM holds:
+    its NSG); none cut, the VM at its address — `~`, its NSG doesn't govern it — or the NSG."""
+    cut = o.get("cut", o["now_on"])
+    if cut:
+        return sorted({(h.get("vm_id") or o["nsg_id"]).lower() for h in cut})
+    return ["~" + _resource(o).lower()]
+
+
+def _vms(said: list[str], nsg: str) -> set[str]:
+    return {x.lstrip("~") for x in said} - {nsg.lower()}
+
+
+def _proven_left(connector, vm: str) -> bool:
+    """A VM a card names is no longer at the rule's address: the listing saw it elsewhere,
+    or Azure says it's gone (U1O review). Unproven, the listing may have left its NIC out."""
+    check = getattr(connector, "vm_listed_or_gone", None)
+    try:
+        return check is not None and check(vm) is True
+    except Exception:
+        return False
+
+
+def _moved(o: dict, was: str) -> str:
+    """Why a card is replaced (U1O): the rule's address passed to another VM, to nobody, or
+    its VMs changed."""
+    cut, res = o.get("cut", o["now_on"]), _resource(o)
+    if not o["now_on"]:
+        return f"Remplacée : {o['rule']} vise une adresse qu'aucune carte ne porte plus (U1O)."
+    if not cut:
+        return f"Remplacée : {o['rule']} vise l'adresse de {_short(res)}, que ce NSG ne gouverne plus (U1O)."
+    if res.lower() != was:
+        return f"Remplacée : {o['rule']} vise une adresse passée depuis à {_short(res)} (U1O)."
+    return f"Remplacée : {o['rule']} coupe désormais {', '.join(_who(h) for h in cut)} (U1O)."
 
 
 def _short(ref: str) -> str:
@@ -132,7 +174,9 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
 
     can_write = getattr(connector, "read_only", False) is False
     alerts = _load_alerts()
-    before = dict(alerts)
+    before = json.dumps(alerts, sort_keys=True)
+    said = alerts.pop(_SAID, None)
+    said = said if isinstance(said, dict) else {}
     current: set[str] = set()
 
     def _pending(card: str) -> bool:
@@ -144,16 +188,36 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
     # a VM is cut that no longer is, and the one cut now is named by none. Replaced: a
     # pending card closed and every rule it spoke for said again; an acknowledged one stays
     # closed — it was about the other VM —, the rule said again for the one it cuts now.
+    # Compared: every VM the card said the rule cuts (`said`) — a second VM given another
+    # of its addresses later is said too (the review). A VM leaving it with no other in its
+    # place needs a proof: the listing may have left its NIC out, the card is then right.
     about = {e.get("id"): (e.get("resource_id") or "").lower() for e in escalations.all_escalations()}
     for o in orphans:
         k = f"orphan-{o['nsg_id']}/{o['rule']}".lower()
         card = alerts.get(k)
-        if card not in about or about[card] == _resource(o).lower():
+        if card not in about:
+            continue
+        now = was = _said_of(o)
+        if k in said:
+            was = said[k]
+        else:                                 # said before the review: by the card's VM alone
+            was, now = [about[card]], [_resource(o).lower()]
+        if sorted(was) == sorted(now):
+            said[k] = _said_of(o)
+            continue
+        before_vms, now_vms = _vms(was, o["nsg_id"]), _vms(now, o["nsg_id"])
+        left, came = before_vms - now_vms, now_vms - before_vms
+        if left and not came and not all(_proven_left(connector, v) for v in left):
+            gone = ", ".join(sorted(_short(v) for v in left))
+            log.warning("orphans: %s — %s missing from the NIC listing, unproven gone: its card stays",
+                        o["rule"], gone)
+            report.append({"kind": "orphan", "vm": gone, "outcome": "unread", "detail": (
+                f"Règle {o['rule']} : sa carte reste — la liste des cartes réseau ne montre plus {gone}, "
+                "rien ne prouve qu'elle a disparu (droits de lecture ?).")})
             continue
         spoke_for = [k]
         if _pending(card):
-            escalations.resolve(card, note=f"Remplacée : {o['rule']} vise une adresse passée depuis à "
-                                           f"{_short(_resource(o))} (U1O).")
+            escalations.resolve(card, note=_moved(o, about[card]))
             spoke_for = [x for x, c in alerts.items() if c == card]
         for x in spoke_for:
             del alerts[x]
@@ -266,6 +330,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         if out:
             log.warning("orphans: rule %s not removed (%s)", o["rule"], out.get("why"))
         alerts[k] = card
+        said[k] = _said_of(o)
         report.append({"kind": "orphan", "vm": victims[0] if victims else nsg_name,
                        "outcome": "failed" if out else "escalated", "detail": reason})
     # A rule said that is no longer an orphan (gone, or its NIC is back): its card closes.
@@ -274,5 +339,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         card = alerts.pop(k)
         if card not in alerts.values() and _pending(card):
             escalations.resolve(card, note="La règle n'est plus orpheline (retirée, ou sa carte est revenue).")
-    if alerts != before:
-        _save_alerts(alerts)
+    cuts = {k: said[k] for k in alerts if k in said}
+    doc = {**alerts, **({_SAID: cuts} if cuts else {})}
+    if json.dumps(doc, sort_keys=True) != before:
+        _save_alerts(doc)

@@ -351,6 +351,7 @@ class SweepMixin:
                 subnet = getattr(getattr(cfg, "subnet", None), "id", None)
                 if subnet:
                     nic_subnets.setdefault(nid, set()).add(subnet.rstrip("/").lower())
+        self._orphan_seen_vms = {v.rstrip("/").lower() for _, v in holders.values() if v}   # U1O
         state_nics = self._state_nic_marks()
         held = self._held_vms()
         # A state file unreadable: what it holds is unknown — any rule may be the

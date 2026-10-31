@@ -8,7 +8,7 @@ import os
 
 from glorfindel.providers.azure.nsg import _shadowing_rules
 from glorfindel.providers.azure.quarantine import _is_quarantine_nsg
-from glorfindel.providers.azure.sdk import _enum_text, _is_iam_error
+from glorfindel.providers.azure.sdk import _enum_text, _is_iam_error, _is_not_found
 from glorfindel.response.ids import _parse_nic_resource_id, _parse_nsg_resource_id, _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 
@@ -346,3 +346,17 @@ class ReadersMixin:
             return {"ok": True, "vm": vm_name, "disks": disks}
         except Exception as e:
             return {"ok": False, "iam": _is_iam_error(str(e)), "error": str(e)}
+
+    def vm_listed_or_gone(self, vm_id: str) -> bool:
+        """A VM an orphan's card names, no longer holding the address the rule aims at
+        (U1O review): proven only if the last orphan listing saw it on a NIC — it holds
+        other addresses —, or Azure says it is gone (404). Otherwise the listing may have
+        left its NIC out without an error (Reader on some resource groups only): unproven."""
+        vid = (vm_id or "").rstrip("/").lower()
+        if not vid or vid in getattr(self, "_orphan_seen_vms", set()):
+            return bool(vid)
+        try:
+            self._compute.virtual_machines.get(*_parse_vm_resource_id(vm_id))
+            return False
+        except Exception as exc:
+            return _is_not_found(exc)

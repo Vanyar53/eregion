@@ -32,9 +32,9 @@ def console(host: str, port: int, chosen: str | None):
 
     Every page and API call requires the token: EREGION_CONSOLE_TOKEN (or
     GLORFINDEL_WARROOM_TOKEN, its former name), else the one drawn at the first start and kept in
-    ~/.glorfindel/console_token (mode 600), printed with the URL. Open
-    http://localhost:7007/?token=<token> once (a session cookie is then kept), or send
-    `Authorization: Bearer <token>` from scripts.
+    ~/.eregion/console/token (mode 600), the console's own directory — never printed: `make
+    console-url` reads it. Open http://localhost:7007/?token=<token> once (a session cookie,
+    valid 12 h, is then kept), or send `Authorization: Bearer <token>` from scripts.
     """
     if chosen is not None:
         os.environ[sections.ENV] = chosen
@@ -44,6 +44,20 @@ def console(host: str, port: int, chosen: str | None):
         raise click.BadParameter(str(exc), param_hint="--sections") from exc
     from eregion_console.api import serve
     serve(host=host, port=port)
+
+
+@cli.command(name="rotate-token")
+def rotate_token():
+    """Draw a new console token (SEC10): the console reads it at its next request, and refuses
+    every session of the former one. Never printed — `make console-url` reads it. When the
+    deployment sets EREGION_CONSOLE_TOKEN (H0), rotate it there."""
+    from eregion_console.api import _TOKEN_FILE, rotate_token as rotate
+    try:
+        rotate()
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"  A new console token is drawn ({_TOKEN_FILE}, mode 600): every session of the former "
+               "one is refused — `make console-url` opens the console again.")
 
 
 _MARK = {"detected": "✓", "pass": "✓", "missed": "✗", "fail": "✗", "unknown": "?",

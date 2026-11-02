@@ -1597,9 +1597,15 @@ def _print_expected_sudo(es: dict) -> None:
     per_account = ", ".join(f"{shown(k)} {v}" for k, v in sorted(es["by_account"].items()))
     console.print(f"Expected sudo (no card, ADM1): [bold]{es['count']}[/bold] — per VM: {per_vm} · "
                   f"per account: {per_account}")
+    if es.get("origin_count"):
+        # COR1: root shells set aside because every SSH session came from an expected origin.
+        per_origin = ", ".join(f"{shown(k)} {v}" for k, v in sorted(es["by_origin"].items()))
+        console.print(f"  of which root shells from an expected origin (COR1): [bold]{es['origin_count']}[/bold]"
+                      f" — {per_origin}")
     for e in es.get("latest") or []:
+        via = f"  (from {shown(e['origin'])})" if e.get("origin") else ""
         console.print(f"[dim]  {shown(e['at'][:19])}  {shown(e['asset'])}  {shown(e['account'])}  "
-                      f"{shown(e['command'])}[/dim]")
+                      f"{shown(e['command'])}{via}[/dim]")
     if es.get("journal_from"):
         console.print(f"[dim]  journal from {shown(es['journal_from'][:19])} "
                       f"(~/.glorfindel/expected_sudo.jsonl)[/dim]")

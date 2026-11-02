@@ -3152,16 +3152,17 @@ MUTANTS += [
     ("M1177", "the first start draws no token (SEC1)", CON,
      "    token = secrets.token_urlsafe(32)\n", '    token = ""\n'),
     ("M1178", "the drawn token is written readable by all (SEC1)", CON,
-     ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)\n',
-      '    os.chmod(path, 0o600)\n    _local_token["value"] = token\n'),
-     ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o644)\n',
-      '    _local_token["value"] = token\n')),
+     ('os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)\n',
+      "        if st.st_mode & 0o077:\n            os.fchmod(fd, 0o600)\n"),
+     ('os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)\n',
+      "        if False:\n            os.fchmod(fd, 0o600)\n")),
     ("M1179", "the cookie carries the token itself (SEC1)", CON,
      "                resp.set_cookie(cookie, _session(token), httponly=True,",
      "                resp.set_cookie(cookie, token, httponly=True,"),
     ("M1180", "the token as a cookie opens the console (SEC1)", CON,
-     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token))\n",
-     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token)) or _ok(conn.cookies.get(cookie), token)\n"),
+     "    return _ok(bearer, token), bool(token) and _session_holds(conn.cookies.get(cookie), token)\n",
+     "    return _ok(bearer, token), bool(token) and (_session_holds(conn.cookies.get(cookie), token)"
+     " or _ok(conn.cookies.get(cookie), token))\n"),
     ("M1181", "the cookie is never Secure, HTTPS included (SEC1)", CON,
      '                                secure=scope.get("scheme") == "https")\n',
      "                                secure=False)\n"),
@@ -3201,11 +3202,11 @@ MUTANTS += [
      "    return f\"{_TOKEN_COOKIE}_{port or (443 if scheme in ('https', 'wss') else 80)}\"\n",
      "    return _TOKEN_COOKIE\n"),
     ("M1303", "the token file is read through a symbolic link (SEC1)", CON,
-     '        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))\n',
-     "        fd = os.open(path, os.O_RDONLY)\n"),
+     '    fd = os.open(_TOKEN_FILE, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))\n',
+     "    fd = os.open(_TOKEN_FILE, os.O_RDONLY)\n"),
     ("M1304", "the URL stays in a buffer: a container's log never shows it (SEC1)", CON,
-     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}", flush=True)\n',
-     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}")\n'),
+     '(its token: `make console-url`)\\n{kept}", flush=True)\n',
+     '(its token: `make console-url`)\\n{kept}")\n'),
     ("M1305", "make console-url never reads the file the console drew (SEC1)", "Makefile",
      '\t   [ -s "$$f" ] && t=$$(head -n 1 "$$f"); fi; \\\n', "\t   true; fi; \\\n"),
 ]
@@ -6856,8 +6857,8 @@ MUTANTS += [
     ("M2409", "a during probe unread for good never cancels the noise (G1, review)", GOTH,
      "                        if said or unread[vm] >= DURING_UNREAD_MAX:\n", "                        if said:\n"),
     ("M2416", "a fault is measured without the watch's decisions read: « 0 taken » unchecked (G1, review)", FRATE,
-     '        why = unmeasured(f) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")\n',
-     "        why = unmeasured(f)\n"),
+     '        why = unmeasured(f, own_until(f, windows)) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")\n',
+     "        why = unmeasured(f, own_until(f, windows))\n"),
     ("M2417", "a fault whose watch was gone after it is measured: its silence read as « none taken » (G1, review 2)",
      FRATE, '    if run.get("watch_after") is False:\n        return WATCH_GONE\n', ""),
     ("M2418", "a watch file cut or unreadable since the fault is taken as read whole (G1, review)", FRATE,
@@ -7352,6 +7353,154 @@ MUTANTS += [
 TESTS.update({f"M{n}": _OV1 for n in range(2616, 2624)})
 TESTS["M2609"] = f"tests/unit/test_agent_nodes.py {_OV1}"
 
+# COR1 (#407): the correlation, a brick of the product — the SSH sessions behind a root shell
+# (set aside only if every one comes from an expected origin; unknown is a card), and a brute
+# force followed by a login from its address (a critical card, once). M2720–M2759, one per guard.
+COR = "glorfindel/correlation.py"
+_COR = "tests/unit/test_correlation.py"
+MUTANTS += [
+    ("M2720", "a root shell that is also sensitive otherwise cleared by its origin (COR1)", XSU,
+     "    if not root_shell(text) or any(rx.search(text) for _, rx in _SENSITIVE):\n",
+     "    if not root_shell(text):\n"),
+    ("M2721", "a root shell holding a text of sensitive_commands cleared by its origin (COR1)", XSU,
+     "    return _config_sensitive(text, extra) is None\n", "    return True\n"),
+    ("M2722", "the origins of an entry that does not name the account count for it (COR1)", "glorfindel/config.py",
+     "if e.matches(asset_name) and account in e.accounts\n", "if e.matches(asset_name)\n"),
+    ("M2723", "no session found: the root shell set aside (COR1)", COR,
+     '    if not found:\n        return False, "aucune session SSH trouvée', '    if False:\n        return False, "aucune session SSH trouvée'),
+    ("M2724", "an account taken by su from another: its root shell set aside (COR1)", COR,
+     '        if s["via"] not in ("ssh", "ssh-pam"):\n', '        if False:\n'),
+    ("M2725", "an sshd session without its Accepted line taken for an expected one (COR1)", COR,
+     '        if s["via"] == "ssh-pam":\n            return False,', '        if False:\n            return False,'),
+    ("M2726", "an origin outside the declared ranges accepted (COR1)", COR,
+     "    bad = [o for o in seen if not any(ipaddress.ip_address(o) in n for n in nets)]\n", "    bad = []\n"),
+    ("M2727", "a session opened after the line taken as carrying it (COR1)", COR,
+     "        if when is not None and when > upto:\n            continue\n", ""),
+    ("M2728", "an unreadable journal read as an empty one: said « no session », not counted unknown (COR1)", COR,
+     '            return f"journal illisible ({str(exc)[:160]})"\n', "            return []\n"),
+    ("M2729", "a reading cut at its limit read as whole: a later session missed (COR1)", COR,
+     "        if len(rows) >= ROWS_MAX:\n", "        if False:\n"),
+    ("M2730", "no cap on the correlation queries of a poll (COR1)", COR,
+     '        if self.counts["queries"] >= QUERIES_PER_POLL:\n', "        if False:\n"),
+    ("M2731", "a line already seen queried again at every poll (COR1)", COR,
+     "            if identity(row) in seen:          # dispatched or set aside already: no query\n"
+     "                del judged[id(row)]\n                continue\n", ""),
+    ("M2732", "a row whose VM cannot be named left pending: set aside unsettled (COR1)", COR,
+     '                _unknown(p, judged, row, "la ligne ne nomme pas sa VM — origine inconnue")\n',
+     "                pass\n"),
+    ("M2733", "a row whose instant cannot be read judged at the clock's (COR1)", COR,
+     "            if at is None:\n                _unknown(", "            if at is None and False:\n                _unknown("),
+    ("M2734", "an IPv4 written in IPv6 (::ffff:a.b.c.d) not read as itself (COR1)", COR,
+     '    return getattr(ip, "ipv4_mapped", None) or ip\n', "    return ip\n"),
+    ("M2735", "another account's session taken for this one's (COR1)", COR,
+     '        if m and m["account"] == account:\n', "        if m:\n"),
+    ("M2736", "systemd's user session, opened with every SSH login, taken for an origin (COR1)", COR,
+     '_NOT_AN_ORIGIN = frozenset({"sshd", "systemd-user"})\n', '_NOT_AN_ORIGIN = frozenset({"sshd"})\n'),
+    ("M2737", "an sshd pam session paired with another process's Accepted line (COR1)", COR,
+     "        if pid in (None, \"\") or apid in (None, \"\") or str(pid) == str(apid):\n",
+     "        if True:\n"),
+    ("M2738", "a private address outside the origins not said as a possible lateral movement (COR1)", COR,
+     "        if private:\n", "        if False:\n"),
+    ("M2739", "an origin of /0 accepted in the config (COR1)", COR,
+     "    if net.prefixlen == 0:\n", "    if False:\n"),
+    ("M2740", "an origin with host bits (198.51.100.7/24) accepted in the config (COR1)", COR,
+     "ipaddress.ip_network(str(text).strip(), strict=True)", "ipaddress.ip_network(str(text).strip(), strict=False)"),
+    ("M2741", "an empty list of origins accepted in the config (COR1)", "glorfindel/config.py",
+     '    if raw.get("origins") == []:\n', "    if False:\n"),
+    ("M2742", "a login from any address taken for the brute force's (COR1)", COR,
+     '                if m and address(m["ip"]) == ip:\n', "                if m:\n"),
+    ("M2743", "a login after a brute force not critical (COR1)", "glorfindel/detection_rules.py",
+     "        grave = grave or row.get(\"Correlation\") == correlation.COMPROMISED\n", ""),
+    ("M2744", "a compromise already carded loses its mark: a second, plain card (COR1)", COR,
+     '            if identity({**row, "Correlation": COMPROMISED}) in seen:\n                row["Correlation"] = COMPROMISED\n',
+     '            if identity({**row, "Correlation": COMPROMISED}) in seen:\n'),
+    ("M2745", "a login check that fails not counted (COR1)", COR,
+     "                _unchecked(p, row, lines)\n", "                pass\n"),
+    ("M2746", "the compromise not sent first among a poll's cards (COR1)", "glorfindel/detection_rules.py",
+     'send.sort(key=lambda r: (r.get("Correlation") == correlation.COMPROMISED, _gravity(r)), reverse=True)',
+     "send.sort(key=_gravity, reverse=True)"),
+    ("M2747", "the root shells set aside by origin not counted in the rule's status (COR1)", "glorfindel/detection_rules.py",
+     '"origin_count": expected_counts(st)["origin_count"] + origin_n}', '"origin_count": 0}'),
+    ("M2748", "the correlation's counts not kept in the rule's status (COR1)", "glorfindel/detection_rules.py",
+     '                st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)\n', "                pass\n"),
+    ("M2749", "glorfindel report no longer says the root shells set aside by origin (COR1)", "glorfindel/cli.py",
+     '    if es.get("origin_count"):\n', "    if False:\n"),
+    ("M2750", "the journal no longer says a root shell's origin (COR1)", XSU,
+     'origin = str(e.get("origin") or "")[:_COMMAND_KEPT] if e.get("via") == "origin" else ""',
+     'origin = ""'),
+    ("M2751", "a root shell set aside without waiting for its sessions (COR1)", XSU,
+     '        return {**entry, "origins": origins}\n', "        return entry\n"),
+    ("M2752", "a set-aside root shell keeps its pending mark: journaled without its origin (COR1)", COR,
+     '"via": "origin", "origin": ", ".join(seen_origins)[:expected_sudo._COMMAND_KEPT]}',
+     '"via": "", "origin": ""}'),
+    ("M2753", "a card by origin says nothing of why (COR1)", COR,
+     '    row["SessionOrigin"] = why\n', ""),
+    ("M2754", "a fault in the correlation sets aside the root shells it did not settle (COR1)", COR,
+     '        pending = [k for k, e in judged.items() if "origins" in e]\n', "        pending = []\n"),
+]
+TESTS.update({f"M{n}": _COR for n in range(2720, 2755)})
+# COR1, the Orchestre (02/11, « précautionneux »): a compromise is always said to a human —
+# an autonomous action may run, its card never disappears behind it. M2755–M2759.
+MUTANTS += [
+    ("M2755", "a compromise blocked alone makes no card: the check's card not in the graph (COR1)", "glorfindel/agent.py",
+     '    graph.add_node("verify_action", lambda s: compromise_card(verify_action(s, connector=connector)))\n',
+     '    graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))\n'),
+    ("M2756", "a compromise not recognised in the graph (COR1)", "glorfindel/agent.py",
+     '    return _correlation_row(signal).get("Correlation") == COMPROMISED\n', "    return False\n"),
+    ("M2757", "a card held on a compromise does not say the account may be compromised (COR1)", "glorfindel/agent.py",
+     '    if said and said[1].split(" :", 1)[0] not in (state.get("escalation_reason") or ""):\n',
+     "    if False:\n"),
+    ("M2758", "a compromise's card approvable in one click (COR1)", "glorfindel/agent.py",
+     'action="", escalation_type=etype,', 'action="", escalation_type="low_confidence",'),
+    ("M2759", "a compromise's card marked made but never written (COR1)", "glorfindel/agent.py",
+     "    if not state.get(\"dry_run\", False):\n        from glorfindel import escalations\n        source, exercise_run = _cycle_source(signal)\n        action = state.get(\"action\") or \"aucune\"\n",
+     "    if False:\n        from glorfindel import escalations\n        source, exercise_run = _cycle_source(signal)\n        action = state.get(\"action\") or \"aucune\"\n"),
+]
+TESTS.update({f"M{n}": _COR for n in range(2755, 2760)})
+# COR1, its review (02/11): a compromise never folded into a card that does not say it, one
+# address one card, sshd's own Accepted lines, an unchecked brute force said. M3020–M3028.
+MUTANTS += [
+    ("M3020", "an Accepted line written under another tag read as a session (COR1, review)", COR,
+     '| where (SyslogMessage startswith "Accepted " and ProcessName in ("sshd", "sshd-session") and ({accepted}))\n',
+     '| where (SyslogMessage startswith "Accepted " and ({accepted}))\n'),
+    ("M3021", "a compromise folded into a pending card that does not say it: only occurrences move (COR1, review)",
+     "glorfindel/escalations.py",
+     "                material = material or rises or said\n", "                material = material\n"),
+    ("M3022", "a card re-fired at a higher severity keeps the lower one (COR1, review)", "glorfindel/escalations.py",
+     '                if rises:\n                    e["severity"] = severity\n', ""),
+    ("M3023", "a second compromise on the VM, from another address, folded into the first card (COR1, review)",
+     "glorfindel/agent.py",
+     '            action_params={"ip": str(ip)} if ip else None,\n', "            action_params=None,\n"),
+    ("M3024", "a compromise whose action failed its check: two cards, one approvable story lost (COR1, review)",
+     "glorfindel/agent.py",
+     '    if said is None or out.get("verified") is False or out.get("unverified"):\n', "    if said is None:\n"),
+    ("M3025", "a brute force whose logins could not be read not marked on its row (COR1, review)", COR,
+     '    row["LoginCheck"] = {"status": "unchecked", "why": why[:200]}\n', ""),
+    ("M3026", "an unchecked brute force never said to a human by the graph (COR1, review)", "glorfindel/agent.py",
+     '    if isinstance(check, dict) and check.get("status") == "unchecked":\n', "    if False:\n"),
+    ("M3027", "an account from a log line carried unbounded on the card (COR1, review)", COR,
+     'm["account"][:64]', 'm["account"]'),
+    ("M3028", "a compromise card counted under « ? » in the observation report (COR1, review)",
+     "glorfindel/escalations.py",
+     'if e.get("escalation_type") in _NO_ACTION_LABELLED else "") or "?"', 'if False else "") or "?"'),
+    ("M3029", "the sessions read over one day, not seven: a stranger's session of three days ago missed (COR1, Jonathan 02/11)",
+     COR, "SESSION_LOOKBACK_S = 7 * 24 * 3600\n", "SESSION_LOOKBACK_S = 24 * 3600\n"),
+]
+TESTS.update({f"M{n}": _COR for n in range(3020, 3030)})
+# COR1, its second review (02/11): a compromise said on a card stays said; the reading of the
+# sessions holds only the lines `sessions()` reads (not sudo's own, not systemd's). M3070–M3072.
+MUTANTS += [
+    ("M3070", "a plain re-fire of the address wipes the compromise off its card (COR1, second review)",
+     "glorfindel/escalations.py",
+     '                    if COMPROMISE_MARK in (reason or "") or COMPROMISE_MARK not in (e.get("reason") or ""):\n',
+     "                    if True:\n"),
+    ("M3071", "sudo's own session lines read: a week of sudo fills the reading, every root shell a card (COR1, second review)",
+     COR, "f\"SyslogMessage has {kql.literal(f'for user {a}')}\"", "f\"SyslogMessage has {kql.literal(a)}\""),
+    ("M3072", "systemd's user sessions read: they fill the reading (COR1, second review)", COR,
+     ' and SyslogMessage !has "systemd-user" and ({opened}))', " and ({opened}))"),
+]
+TESTS.update({f"M{n}": _COR for n in range(3070, 3073)})
+
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.
 MUTANTS += [
@@ -7368,6 +7517,132 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
+# SEC10 (#416): the console's token in the console's own directory, its former place retired, never
+# printed; a session dated and bounded; a rotation that ends every session of the former token.
+_SEC10 = "tests/unit/test_console.py"
+MUTANTS += [
+    ("M2860", "the console's drawn token kept beside Glorfindel's state, which the watch and the bot mount (SEC10)",
+     CON, '_TOKEN_FILE = Path.home() / ".eregion" / "console" / "token"\n',
+     '_TOKEN_FILE = Path.home() / ".glorfindel" / "console_token"\n'),
+    ("M2861", "the token's former file left in place at a start (SEC10)", CON,
+     '    retired = _retire_legacy_token()\n', '    retired = ""\n'),
+    ("M2862", "the console's token printed at its start, into a container's logs (SEC10)", CON,
+     '    print(f"  Eregion console  →  http://localhost:{port}/  (its token: `make console-url`)\\n{kept}", flush=True)\n',
+     '    print(f"  Eregion console  →  http://localhost:{port}/?token={_token()}\\n{kept}", flush=True)\n'),
+    ("M2863", "a session cookie that never expires (SEC10)", CON,
+     "    if issued > now + _SESSION_SKEW_S or now - issued > SESSION_TTL_S:\n",
+     "    if issued > now + _SESSION_SKEW_S:\n"),
+    ("M2864", "a session cookie dated ahead of the clock accepted (SEC10)", CON,
+     "    if issued > now + _SESSION_SKEW_S or now - issued > SESSION_TTL_S:\n",
+     "    if now - issued > SESSION_TTL_S:\n"),
+    ("M2865", "a session's date not signed: a cookie rewritten to now opens again (SEC10)", CON,
+     '_SESSION_LABEL + b"." + str(issued).encode(), hashlib.sha256)', "_SESSION_LABEL, hashlib.sha256)"),
+    ("M2866", "a rotated token not read by the running console: the former sessions still open it (SEC10)", CON,
+     '    if _file_key(st) != _local_token["key"]:\n', "    if False:\n"),
+    ("M2867", "a rotation writes over the deployment's token (SEC10)", CON,
+     "    if console_token():\n        raise RuntimeError(", "    if False:\n        raise RuntimeError("),
+    ("M2868", "a token file turned into a link while the console runs still serves its last token (SEC10)", CON,
+     "        try:\n            _read_token_file()\n        except OSError:\n            _local_token.update(value=\"\", key=None)\n",
+     "        try:\n            _read_token_file()\n        except OSError:\n            pass\n"),
+    ("M2869", "the token's former file removed through its link: what it points to is deleted (SEC10)", CON,
+     "        os.unlink(_LEGACY_TOKEN_FILE)\n", "        os.unlink(os.path.realpath(_LEGACY_TOKEN_FILE))\n"),
+    ("M2870", "make console-url reads the token's former place (SEC10)", MAKE,
+     '; f="$(HOME)/.eregion/console/token"; \\\n', '; f="$(HOME)/.glorfindel/console_token"; \\\n'),
+]
+TESTS.update({f"M{n}": _SEC10 for n in range(2860, 2871)})
+# SEC10, its review: another script's digits in a cookie, the live feed past its session, the token
+# page, what a start says of the former file. M2871–M2875.
+MUTANTS += [
+    ("M2871", "a cookie with another script's digits (« ² ») raises before any authentication (SEC10, review)", CON,
+     " or not (parts[1].isascii() and parts[1].isdigit()) or ", " or not parts[1].isdigit() or "),
+    ("M2872", "the live feed outlives its session: a rotation or the 12 h leave it open (SEC10, review)", CON,
+     "            if not any(_credentials(ws, _token())):\n", "            if False:\n"),
+    ("M2873", "the token page sends the operator to the file the console no longer keeps (SEC10, review)", CON,
+     "     (<code>~/.eregion/console/token</code>).", "     (<code>~/.glorfindel/console_token</code>)."),
+    ("M2874", "a start says « a new token is drawn » when the console keeps its own (SEC10, review)", CON,
+     '"file": f"the console keeps its own ({_TOKEN_FILE})",', '"file": "a new token is drawn",'),
+    ("M2875", "a former file that could not be removed said removed (SEC10, review)", CON,
+     '        return "kept"\n    return "removed"\n', '        return "removed"\n    return "removed"\n'),
+]
+TESTS.update({f"M{n}": _SEC10 for n in range(2871, 2876)})
+
+
+# SEC9 (#415): the indicators' entries the injectors give — a run's T0, the list of runs, a fault's
+# effect — confronted with what the watch's host holds: the T0 inside its window and before the
+# watch's first sight of the VM, the runs the watch saw counted, the effect shown by the readings
+# of Glorfindel's telemetry. M2840–M2859.
+_SEC9 = "tests/unit/test_containment.py"
+MUTANTS += [
+    ("M2840", "a T0 after the time the telemetry gives the row the watch read is believed (SEC9)", CTN,
+     "        t = row if row is not None and start <= row < seen else seen\n", "        t = seen\n"),
+    ("M2841", "a T0 not believed still times the containment (SEC9)", CTN,
+     "    elif t0_refused:\n", "    elif False:\n"),
+    ("M2842", "a T0 after the watch's first sight of the VM in the run is believed (SEC9)", CTN,
+     "    if first is not None and t0 > first + CLOCK_SKEW_S:\n", "    if False:\n"),
+    ("M2843", "a T0 before its exercise window opened is believed (SEC9)", CTN,
+     "    if t0 < start:\n", "    if False:\n"),
+    ("M2844", "a T0 after its exercise window ended is believed (SEC9)", CTN,
+     "    if t0 > end:\n", "    if False:\n"),
+    ("M2845", "a T0 with no window to confront it with is believed (SEC9)", CTN,
+     "        return \"fenêtre d'exercice inconnue : le T0 n'a pas pu être confronté\"\n", '        return ""\n'),
+    ("M2846", "a T0 after the detection attached to its run is believed (SEC9)", CTN,
+     "    if seen is not None and t0 > seen:\n", "    if False:\n"),
+    ("M2847", "a T0 before the Dagorlad request that launched its run is believed (SEC9)", CTN,
+     "    if req is not None and t0 < req - CLOCK_SKEW_S:\n", "    if False:\n"),
+    ("M2848", "the runs the watch saw and the manifest does not give executed are left out (SEC9)", CTN,
+     "    for u in unlisted(manifest, campaign_dir, runs_dir, seen, notes):\n",
+     "    for u in []:\n"),
+    ("M2849", "a run removed from the manifest, its window on this host, is forgotten (SEC9)", CTN,
+     '        [cr._read_json(p) for p in sorted(wdir.glob("*.json"))], watch_records(span[0]) + own,\n',
+     "        [], watch_records(span[0]) + own,\n"),
+    ("M2850", "a run removed from the manifest, its detection attached by the watch, is forgotten (SEC9)", CTN,
+     "    marks = [(r, _BY_CYCLE) for r in records or ()] + [(c, _BY_CARD) for c in cards or ()]\n",
+     "    marks = [(c, _BY_CARD) for c in cards or ()]\n"),
+    ("M2851", "a run listed « error » to which the watch attached a detection is left out (SEC9)", CTN,
+     '            if s.get("status") == "executed" or u["how"] == [_BY_WINDOW]:\n', "            if True:\n"),
+    ("M2852", "a run listed « skipped » with only its window is counted an incident (SEC9)", CTN,
+     '            if s.get("status") == "executed" or u["how"] == [_BY_WINDOW]:\n',
+     '            if s.get("status") == "executed":\n'),
+    ("M2853", "a run another campaign lists is counted in this one too (SEC9)", CTN,
+     "        elif rid in elsewhere:\n", "        elif False:\n"),
+    ("M2854", "a run alone, with its own report, is counted in the campaign around it (SEC9)", CTN,
+     '        elif (runs_dir / f"{rid}.json").exists():\n', "        elif False:\n"),
+    ("M2855", "a window far before the campaign, or after its manifest came, is counted in it (SEC9)", CTN,
+     "        if start is None or not lo <= start <= hi:\n", "        if start is None:\n"),
+    ("M2856", "a fault's effect the report only declares is measured (SEC9)", FRATE,
+     "    return effect_unread(run, until)\n", '    return ""\n'),
+    ("M2857", "a fault's effect its readings say not seen is measured (SEC9)", FRATE,
+     '            if not isinstance(r, dict) or r.get("ok") is not True:\n',
+     "            if not isinstance(r, dict):\n"),
+    ("M2858", "a fault's effect read before it, or after its window, is measured (SEC9)", FRATE,
+     ("            if seen is None or start is None or seen < start - containment.CLOCK_SKEW_S or (\n"
+      "                    until is not None and seen > until + containment.CLOCK_SKEW_S):\n"),
+     "            if seen is None:\n"),
+    ("M2859", "a fault target without a reading of its effect is measured (SEC9)", FRATE,
+     '            return f"{EFFECT_UNREAD} (aucune lecture sur {name})"\n', "            continue\n"),
+]
+TESTS.update({f"M{n}": _SEC9 for n in range(2840, 2856)})
+TESTS.update({f"M{n}": _G1_RATE for n in range(2856, 2860)})
+
+# SEC9, after its review (02/11): a miss the watch noted is a trace; a run the channel's check
+# leaves out stays an incident; a T0 not believed bounds no other run; the attack time the watch
+# received bounds the T0; the campaign before bounds where runs are looked for. M2960–M2964.
+MUTANTS += [
+    ("M2960", "a run the watch gave up on (detection_timeout) is no trace: forgotten (SEC9, review)", CTN,
+     '            when = d["seen_at"] if d["seen_at"] is not None else d["at"]\n',
+     '            if d["event"] != "detection":\n                continue\n'
+     '            when = d["seen_at"] if d["seen_at"] is not None else d["at"]\n'),
+    ("M2961", "a run the channel's check leaves out leaves the share, its window held (SEC9, review)", CTN,
+     "            if held or rid in seen:\n", "            if False:\n"),
+    ("M2962", "a T0 not believed still ends another run's watch (SEC9, review)", CTN,
+     "        bound = t0 if not refused else opened\n", "        bound = t0\n"),
+    ("M2963", "a report moves its T0 past the attack time the watch received (SEC9, review)", CTN,
+     "    if got is not None and t0 > got + 1.0:\n", "    if False:\n"),
+    ("M2964", "the runs looked for from the campaign's own start only, never the campaign before (SEC9, review)",
+     CTN, "    bounds = ([min(starts) - cr.START_LEAD_S] if starts else []) + ([max(before)] if before else [])\n",
+     "    bounds = [min(starts) - cr.START_LEAD_S] if starts else []\n"),
+]
+TESTS.update({f"M{n}": _SEC9 for n in range(2960, 2965)})
 # SEC8 (#414, M2810–M2839): the runs/ channel read as an input the watch does not trust — regular
 # files only, a bounded read and rate, bounded effects, finite durations, known techniques, the
 # config's workspace, a restore's moment never the channel's on a real incident, ARM calls built

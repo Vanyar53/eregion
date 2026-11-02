@@ -777,3 +777,85 @@ def test_a_cancelled_canary_cleans_up_through_the_runners_second_signal(tmp_path
     assert calls[destroy + 1:] == [
         "az network nsg delete -g rg-eregion-canary -n nsg-glorfindel-quarantine-canary-gh1-1-0 -o none"], calls
     assert not list(tmp_path.glob("tmp.*")), "the stack's copy left behind"
+
+
+# ── CI4 (#389): the Terraform tests run on each push and pull request, the providers locked ──
+# Jonathan, 31/10: each module's lock is committed (versions and hashes, linux_amd64 and darwin),
+# `init` never upgrades on its own, and an upgrade is wanted (`make providers-lock`, then a PR).
+
+TF_MODULES = ("terraform", "glorfindel-host", "orodruin")
+
+
+def _terraform_job() -> dict:
+    return _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"]["terraform-test"]
+
+
+def test_the_terraform_tests_run_on_each_push_and_pull_request():
+    doc = _load(ROOT / ".github" / "workflows" / "ci.yml")
+    assert {"push", "pull_request"} <= _events(doc)
+    job = _terraform_job()
+    assert isinstance(job.get("timeout-minutes"), int) and job["timeout-minutes"] <= 30
+    runs = "\n".join(str(s.get("run") or "") for s in job["steps"])
+    assert "terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false" in runs
+    assert "terraform -chdir=infra/terraform test" in runs
+    assert 'for m in orodruin glorfindel-host; do' in runs
+    assert 'terraform -chdir="infra/$m" init -backend=false -lockfile=readonly -input=false' in runs
+    assert 'terraform -chdir="infra/$m" validate' in runs
+    # Every module with Terraform tests has them run here: today, Celebrimbor's alone.
+    assert {p.parent.parent.name for p in ROOT.glob("infra/*/tests/*.tftest.hcl")} == {"terraform"}
+
+
+def test_the_terraform_job_installs_a_pinned_terraform_by_hashicorps_key_only():
+    """As the canary: the key checked against HashiCorp's published fingerprint before apt
+    trusts it, only that key in apt's keyring — and here, one exact version."""
+    (install,) = [s for s in _terraform_job()["steps"] if "apt.releases.hashicorp.com/gpg" in str(s.get("run") or "")]
+    assert install["env"]["HASHICORP_APT_FPR"] == HASHICORP_APT_FPR
+    assert re.fullmatch(r"\d+\.\d+\.\d+-\d+", install["env"]["TERRAFORM_VERSION"])
+    run = install["run"]
+    assert ("""'$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'""" in run
+            and '-v f="$HASHICORP_APT_FPR"' in run)
+    assert run.index("exit 1") < run.index("/usr/share/keyrings/hashicorp-archive-keyring.gpg")
+    assert '--export "$HASHICORP_APT_FPR"' in run
+    assert 'apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"' in run
+
+
+def test_the_terraform_job_holds_no_azure_identity_nor_secret():
+    """Mock providers only: no secret, no token GitHub would mint, no ARM_ variable."""
+    job = _terraform_job()
+    text = yaml.safe_dump(job)
+    assert "secrets." not in text and "ARM_" not in text and "AZURE_" not in text
+    assert "permissions" not in job                         # the workflow's: contents: read
+    assert _load(ROOT / ".github" / "workflows" / "ci.yml")["permissions"] == {"contents": "read"}
+
+
+@pytest.mark.parametrize("module", TF_MODULES)
+def test_each_module_commits_its_lock_with_every_provider_it_requires(module):
+    import subprocess
+    lock = ROOT / "infra" / module / ".terraform.lock.hcl"
+    assert lock.exists()
+    ignored = subprocess.run(["git", "check-ignore", "-q", str(lock)], cwd=ROOT).returncode == 0
+    assert not ignored, f"{lock.name} of infra/{module} is ignored: the lock must be committed"
+    text = lock.read_text(encoding="utf-8")
+    config = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "infra" / module).glob("*.tf"))
+    required = {s.lower() for s in re.findall(r'source\s*=\s*"([\w-]+/[\w-]+)"', config)}
+    locked = {s.lower() for s in re.findall(r'provider "registry\.terraform\.io/([\w-]+/[\w-]+)"', text)}
+    assert required and required <= locked, required - locked
+    # The three platforms the team runs (Linux, both Macs): a hash of each package per provider.
+    for name, block in re.findall(r'provider "registry\.terraform\.io/([^"]+)" \{(.*?)\n\}', text, re.S):
+        assert block.count('"h1:') >= 3, name
+        assert re.search(r'version\s*=\s*"\d+\.\d+\.\d+"', block), name
+
+
+def test_init_never_upgrades_the_providers_on_its_own():
+    """`init -upgrade` only in `make providers-lock`, the wanted upgrade; the canary keeps its
+    own (infra/canary/: the latest azurerm, by design)."""
+    lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("providers-lock:"))
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] and not lines[i].startswith("\t"))
+    upgrades = [i for i, ln in enumerate(lines) if "init" in ln and "-upgrade" in ln]
+    assert upgrades and all(start < i < end for i in upgrades), [lines[i] for i in upgrades]
+    for var in ("$(TF)", "$(HOST_TF)", "$(ORO_TF)"):
+        assert any(f"{var} init" in ln for ln in lines), var
+    recipe = "\n".join(lines[start:end])
+    assert "-platform=linux_amd64" in "\n".join(lines) and "providers lock $(TF_PLATFORMS)" in recipe
+    assert 'case "$(MODULE)" in ""|terraform|glorfindel-host|orodruin)' in recipe

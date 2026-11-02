@@ -171,14 +171,14 @@ utilisateur Unix. Elle ne donne que les droits de l'App.
      pas ce qui tourne avec eux. C'est une friction pour les lots de CI : à trancher par Jonathan, et à
      revoir si elle coûte trop (le refus à la fusion par l'API reste à mesurer).
    - Administration, Secrets, Environments, Deployments, Packages : **aucun**.
-3. **Create GitHub App.** Note son **App ID** (page « General »).
+3. **Create GitHub App.** Note son **App ID** (page « General »). C'est un identifiant réel : il ne va jamais dans le dépôt (ni code, ni test, ni doc). Le script le lit à l'exécution, dans `EREGION_AGENTS_APP_ID`, sinon dans `~/.config/eregion-agents/app_id`.
 4. **Private keys → Generate a private key.** Le navigateur télécharge un `.pem`. Range-le, puis efface
    le téléchargement :
    ```
    mkdir -p ~/.config/eregion-agents && chmod 700 ~/.config/eregion-agents
    mv ~/Downloads/eregion-agents.*.private-key.pem ~/.config/eregion-agents/app.pem
    chmod 600 ~/.config/eregion-agents/app.pem
-   echo '<App ID>' > ~/.config/eregion-agents/app-id
+   echo '<App ID>' > ~/.config/eregion-agents/app_id
    ```
    `agent_token.py` refuse une clé lisible par d'autres, ou qui n'est pas une clé RSA. Une clé
    perdue ou exposée se révoque sur la même page, et une autre se génère.

@@ -131,7 +131,7 @@ class Agent:
         self.key = self.dir / "app.pem"
         self.key.write_bytes(private)
         self.key.chmod(0o600)
-        (self.dir / "app-id").write_text(APP_ID + "\n")
+        (self.dir / "app_id").write_text(APP_ID + "\n")
         self.cache = self.home / ".cache" / "eregion-agents" / "token.json"
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("EREGION_", "GH_", "GITHUB_", "GIT_"))}
@@ -239,13 +239,13 @@ def test_a_missing_or_open_key_is_said_and_nothing_is_asked(agent, gh_fake):
 
 
 def test_a_missing_app_id_or_a_key_that_is_no_rsa_key_is_said(agent, gh_fake):
-    (agent.dir / "app-id").unlink()
+    (agent.dir / "app_id").unlink()
     _said(agent, agent.credential(), "l'ID de l'App manque")
-    _said(agent, agent.credential(EREGION_AGENT_APP_ID="12; rm"), "illisible")
+    _said(agent, agent.credential(EREGION_AGENTS_APP_ID="12; rm"), "illisible")
     other = ec.generate_private_key(ec.SECP256R1()).private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     agent.key.write_bytes(other)
-    _said(agent, agent.credential(EREGION_AGENT_APP_ID=APP_ID), "RSA")
+    _said(agent, agent.credential(EREGION_AGENTS_APP_ID=APP_ID), "RSA")
     assert gh_fake.requests == []
 
 

@@ -21,7 +21,7 @@ never read. One draw at a time (a lock beside the cache): parallel sessions shar
 
 Settings (environment):
   EREGION_AGENT_DIR      ~/.config/eregion-agents  (the App's ID and key: set up by the maintainer)
-  EREGION_AGENT_APP_ID   the App's ID (else <dir>/app-id)
+  EREGION_AGENTS_APP_ID  the App's ID (else <dir>/app_id)
   EREGION_AGENT_KEY      the private key, PEM (else <dir>/app.pem) — refused when others can read it
   EREGION_AGENT_REPO     owner/name (Vanyar53/eregion)
   EREGION_AGENT_API      https://api.github.com
@@ -79,12 +79,12 @@ class TokenError(Exception):
 # ── the App's ID and key ─────────────────────────────────────────────────────────────
 
 def app_id() -> str:
-    value = os.environ.get("EREGION_AGENT_APP_ID", "").strip()
+    value = os.environ.get("EREGION_AGENTS_APP_ID", "").strip()
     if not value:
         try:
-            value = (DIR / "app-id").read_text(encoding="utf-8").strip()
+            value = (DIR / "app_id").read_text(encoding="utf-8").strip()
         except OSError:
-            raise TokenError(f"l'ID de l'App manque : EREGION_AGENT_APP_ID, ou {DIR / 'app-id'} "
+            raise TokenError(f"l'ID de l'App manque : EREGION_AGENTS_APP_ID, ou {DIR / 'app_id'} "
                              "(docs/sessions.md, « L'identité des sessions »)") from None
     if not APP_ID_RE.fullmatch(value):
         raise TokenError("l'ID de l'App est illisible : un nombre (App ID) ou un client ID (Iv…)")

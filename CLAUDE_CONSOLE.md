@@ -63,7 +63,8 @@ GET  /api/dagorlad/board              → cartes rouges (catalogue), Glorfindel,
 GET  /api/dagorlad/plan?wire=<exp>@<rid>… → chaque fil jugé comme Orodruin le jugerait, et l'attendu
 POST /api/dagorlad/requests           → DG-b : {"wires": [{"experiment", "target"}]} — jugés, puis la demande écrite dans
      ~/.eregion/console/requests/ seulement ; la réponse donne `make orodruin-exercise REQUEST=<id>` (aucun nom tapé ici)
-GET  /api/dagorlad/requests/<id>      → la demande écrite ici ou non, et son statut publié par Orodruin (runs/orodruin/)
+GET  /api/dagorlad/requests/<id>      → la demande écrite ici ou non, ses fils, son statut publié par Orodruin (runs/orodruin/),
+     sa phase (written, running, over) et la chronologie de chaque fil (DG-c, eregion_console/follow.py) — lecture seule
 GET  /api/dagorlad/stop               → « Stop all » : make orodruin-kill, les fenêtres ouvertes et leurs cibles, ce qui reste en vol
      (injecteurs : un run part d'Orodruin armé, porté par l'opérateur, jamais d'une route de la console)
 
@@ -94,7 +95,8 @@ En-tête (console.js), le même partout → EREGION + version déployée (tag, s
 /glorfindel  → TO JUDGE (seul endroit du verdict), fil live, carte de l'infra (DETECT/PROTECT/RECOVER,
                cartes VM : état, Approve & execute, Ack, Cmd, « to judge ▸ », Release/Unblock/Reset/Restore)
 /dagorlad    → Board : on tire des fils des cartes rouges (catalogue, dernière preuve) vers les cibles inscrites,
-               le serveur juge chaque fil et dit l'attendu (phase a, lecture seule)
+               le serveur juge chaque fil et dit l'attendu (phase a) ; « Request run » écrit la demande et donne la
+               commande (b) ; puis la chronologie de chaque fil, en direct, fils verrouillés jusqu'à la fin (c)
 /dagorlad?view=runs → Runs : fenêtres d'exercice (sondes d'une panne), campagnes, matrice de couverture, des
                deux injecteurs ou d'un seul (filtre) ; grisé : ce qu'ils ajouteraient
 /config      → Azure, LLM, autonomie, sections

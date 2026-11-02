@@ -359,3 +359,17 @@ def _deny_blocks(rule, direction: str, ip: str, ips: list[str] | None) -> bool:
     if not _side_covers(rule, attacker, [ip]):
         return False
     return all(_side_covers(rule, own, [a]) for a in ips) if ips else _side_is_any(rule, own)
+
+
+def _deny_slot(rule, direction: str) -> int | None:
+    """The priority of a deny of ours in `direction`, whatever it covers now — narrowed to
+    a port, a protocol, part of its addresses, moved behind a customer rule, aimed at
+    another address. An allow before it lets its traffic through, the deny put back as it
+    was or not: only a deny that still cut or blocked was read, and a bypass beside a pair
+    altered in both directions, or in the one the allow passes, was never said (L1R, #378,
+    #381). None for a rule absent, turned into an allow, or of the other direction."""
+    if (rule is None or _enum_text(getattr(rule, "access", "")) != "deny"
+            or _enum_text(getattr(rule, "direction", "")) != direction):
+        return None
+    prio = getattr(rule, "priority", None)
+    return prio if isinstance(prio, int) else None

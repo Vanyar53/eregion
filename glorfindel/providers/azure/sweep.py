@@ -194,6 +194,10 @@ class SweepMixin:
                 elif m is None and name.startswith("glorfindel-block-"):
                     seen.add((nsg_key, name.lower()))
                     kept.append(f'{t["nsg_rg"]}/{t["nsg_name"]}/{name}')   # perimeter block
+        held, gone = self._away_split(vm_name, targets, guard, mates, lambda k, n: (k, n.lower()) in seen,
+                                      blocks=True, unverified="reset non vérifié")   # a bare NIC's (D80)
+        unreadable += held
+        to_delete += gone
         deleted, failed = [], list(unreadable)
         for t0 in quarantined:
             q = t0["quarantine"]

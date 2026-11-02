@@ -5139,15 +5139,19 @@ _S1006_2000_NET = {
     "legacy": None, "data_subnet": None}
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#378: L1, an isolation bypassed after the role was taken away left unsaid")
-def test_an_isolation_bypassed_after_the_role_is_taken_is_said(monkeypatch):
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+@pytest.mark.parametrize("nth", [1, 3, 6])
+def test_an_isolation_bypassed_after_the_role_is_taken_is_said(monkeypatch, mode, nth):
     """U7D's runs, the machine at 2 000 (seed 1006; 14 steps as Hypothesis shrank them): api
-    isolated by rules on its own NSG, the role taken away, our rules tampered with, the
-    configuration unreadable, the state lost, then a bypass (`said_then_back_after_a_full_disk`):
-    « L1: the isolation of …/rg-edge/…/api is bypassed by a customer allow (…22); the reassertion
-    doesn't say so ». No unblock in it: red on `main` e75d527, and still on 48e42c8 after L1C
-    (#369) — outside U7D, routed to #378. Strict: once fixed, this fails, and the mark goes."""
+    isolated by rules on its own NSG (the first rule), the role taken away, our `-out` turned
+    into an allow, our inbound deny moved to 4000 and narrowed to port 22; then a bypass
+    (`said_then_back_after_a_full_disk`): the customer's deny-lateral-in at 130 widened into an
+    allow of all — « L1: the isolation of …/rg-edge/…/api is bypassed by a customer allow
+    (…22); the reassertion doesn't say so ». Neither the role nor the lost state (web1's) nor
+    the configuration: both rules of the pair altered, `_half_shadowed` read only a pair with
+    one deny still cutting the NIC — the allow before the inbound deny, still there at 4000,
+    was never read; the NIC said uncovered alone (L1R, #378). Then through the full disk and
+    back, as the machine goes on."""
     nsg = _NSG.format(rg="rg-edge", name="nsg-api-nic")
     iso = "glorfindel-iso-api-api-nic-c272f2"
     _replay(monkeypatch, _S1006_2000_NET,
@@ -5166,7 +5170,7 @@ def test_an_isolation_bypassed_after_the_role_is_taken_is_said(monkeypatch):
             ("config_changes", {"quarantine": False, "rg": "", "forensic": [], "readable": True}, False),
             ("lose_state", WEB1),
             ("said_then_back_after_a_full_disk", "bypass", API, API, None, True, (4000, nsg), "deny-lateral-in",
-             "human_only"))
+             "human_only", mode, (nth, "from-full"), mode))
 
 
 _S322_2000_NET = {
@@ -5342,21 +5346,25 @@ def test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic(monkeypatc
           "non_disruptive"))
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#381: L1, a block bypassed beside its own deny altered, writes refused, unsaid")
-def test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused(monkeypatch):
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+@pytest.mark.parametrize("nth", [1, 3, 6])
+def test_a_bypass_beside_an_altered_deny_is_said_while_writes_are_refused(monkeypatch, mode, nth):
     """L1Q's machine at 2 000 (seed 322), shrunk to 5 rules without L1Q's rule: web2 blocked, its
-    inbound deny's port altered by someone, the role removed (writes refused), a customer allow
-    added before the deny and widened — « L1: the block of …/web is bypassed by a customer allow;
-    the reassertion doesn't say so ». The family of L1C (#369: a bypass beside a half pair); not a
-    drift episode's."""
+    inbound deny narrowed to port 22, the role removed (writes refused), a customer allow added
+    at 100, before the deny at 200, and widened into an allow of all — « L1: the block of …/web
+    is bypassed by a customer allow; the reassertion doesn't say so ». The pair read `altered`
+    (its inbound rule no longer denies every port); `_half_bypassed` read only a deny still
+    blocking the attacker — the `-out`, which no inbound allow passes — and never the allow
+    before the inbound deny still there at 200: the altered rule alone, no bypass card (L1R,
+    #381). The writes refused only keep the deny from being put back. Then through the full
+    disk and back, as the machine goes on."""
     _run(monkeypatch, _net(subnet_nsg=[]),
          ("block", WEB2, WEB2, None, 22),
          ("tamper_with_our_rule", "port", (_SUBNET, "glorfindel-block-192-31-196-7-web-web-nic-80ab3c")),
          ("access_changes", True),
          ("customer_adds_rule", _SUBNET, "allow-https", 100),
          ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2, None, False, 22, (200, _SUBNET),
-          "allow-https-100", "non_disruptive"))
+          "allow-https-100", "non_disruptive", mode, (nth, "from-full"), mode))
 
 
 _SSH_IN = dict(access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
@@ -5377,15 +5385,17 @@ _S555_NET = {
     "legacy": None, "data_subnet": None}
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#380: I3, a release said released, an isolation rule kept after a lost state")
 def test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps(monkeypatch):
     """L1Q's machine at 500 (seed 555), shrunk to 7 rules, none of L1Q's: web1 blocked and isolated,
     released; web2 and web1 each isolated with a rule of theirs kept at the lift (I4C), web2 left
     bare with an unknown original, Db--01 blocked with a rule turned, web2's state lost, then an
     isolation of web2 cut before a crash — « I3 (said): release_isolation said released, rules of
     …/rg-app2/…/web kept: ['glorfindel-iso-web-web-nic-80ab3c'] ». Red on `main` 48e42c8. The
-    family of I4C (what a release keeps is said); not a drift's."""
+    family of I4C (what a release keeps is said); not a drift's.
+    D80 (#380): the cut isolation is no part of it. Web2's NIC left bare, its state lost, isolated
+    again (its original recorded « none ») then released: the sweep looked only at the NSGs that
+    govern a NIC now — none —, and the rule kept on the NSG the NIC carried was out of sight. The
+    rules of a bare NIC are looked for on every NSG of the subscription (`away.py`)."""
     nsg = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/networksecuritygroups/nsg-web-nic"
     nic = "/subscriptions/s/resourcegroups/{}/providers/microsoft.network/networkinterfaces/web-nic"
     _run(monkeypatch, _S555_NET,
@@ -5401,3 +5411,87 @@ def test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps(mon
           (nsg.format("rg-app1"), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"), "non_disruptive"),
          ("lose_state", WEB2),
          ("interrupted_isolation", WEB2, WEB2, None, 1, "before-crash", None))
+
+
+_LATERAL_IN = _rule("deny-lateral-in", 130, dict(access="Deny", direction="Inbound", source_address_prefix="VirtualNetwork",
+                                                 destination_address_prefix="*", destination_port_range="*"))
+_DEEP_0310_NET = {
+    "subnet_nsg": None, "edge_nsg": [], "tier_rules": [],
+    "nics": {"web-nic": {"own": "dedicated", "rules": [], "policy": False},
+             "db-nic-0": {"own": "tier", "rules": [], "policy": True},
+             "db-nic-1": {"own": "tier", "rules": [_LATERAL_IN], "policy": True},
+             "api-nic": {"own": None, "rules": [_rule("allow-ssh", 100, _SSH_IN), _LATERAL_IN], "policy": True}},
+    "windows": None, "config": {"quarantine": True, "readable": True, "forensic": [], "rg": ""},
+    "legacy": None, "data_subnet": None}
+_TIER = _NSG.format(rg="rg-net", name="nsg-tier")
+_DB0_ISO = "glorfindel-iso-db--01-db-nic-0-0d0228"
+
+
+@pytest.mark.parametrize("interleaving, block", [
+    (708, ("both", None)),          # Linux, job 124503820330
+    (0, ("subnet",)),               # macOS, job 124503820397
+])
+def test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said(monkeypatch, interleaving, block):
+    """The deep invariants of 31/10 (`main` 8295975), Linux and macOS, from the Hypothesis database
+    the macOS job of every PR replays: Db--01 isolated by rules on the tier NSG its two NICs carry,
+    the rule of db-nic-0 turned into an allow, its address given to a new VM on that NSG — kept at
+    the release (I4C), said; then db-nic-0 allowed the quarantine, isolated, state and tags lost,
+    isolated again, left bare, released twice — « I3 (said): release_isolation said
+    release_partial, rules of …/Db--01 kept without saying so: ['glorfindel-iso-db--01-db-nic-0-0d0228'] ».
+    The tier NSG governs db-nic-1, where the sweep looked for db-nic-1's rules only; db-nic-0, bare,
+    was looked for nowhere. D80's cause (#380): a bare NIC's rules are looked for on every NSG."""
+    q = _NSG.format(rg="rg-app1", name="nsg-glorfindel-quarantine-westeurope")
+    _run(monkeypatch, _DEEP_0310_NET,
+         ("race", API, ("release", "reassert"), interleaving),
+         ("lose_everything", WEB1, WEB1, None, WEB1, q, "stop"),
+         ("another_subscription", WEB1, "isolate"),
+         ("verify", WEB1, WEB1, None),
+         ("interrupted_release", WEB1, WEB1, (1, "before-429"), 2, "before-crash", False),
+         ("kept_at_the_lift", DB, DB, None, "release", (_TIER, _DB0_ISO), _nic("rg-app1", "db-nic-0"), 0, 4,
+          "rg-new", "web", "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/"
+          "nsg-tier", "Linux", False),
+         ("lose_everything", WEB1, WEB1, None, WEB1, q, "stop"),
+         ("config_changes", {"quarantine": False, "rg": "", "forensic": [], "readable": True}, False),
+         ("block_turned_then_reasserted", WEB1, WEB1, None, *block, (_EDGE, _API_BASE), "non_disruptive"),
+         ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), False),
+         ("bare_with_an_unknown_original", DB, DB, None, _nic("rg-app1", "db-nic-0"), "release twice"))
+
+
+_ALLOW_LATERAL_OUT = _rule("allow-lateral-out", 100, dict(access="Allow", direction="Outbound", source_address_prefix="*",
+                                                          destination_address_prefix="VirtualNetwork",
+                                                          destination_port_range="*"))
+_D80_RESET_NET = {
+    "subnet_nsg": None, "edge_nsg": [_rule("allow-ssh", 100, _SSH_IN), _LATERAL_IN],
+    "tier_rules": [_rule("allow-ssh", 100, _SSH_IN)],
+    "nics": {"web-nic": {"own": "dedicated", "rules": [_rule("allow-ssh", 100, _SSH_IN)], "policy": False},
+             "db-nic-0": {"own": "tier", "rules": [_ALLOW_LATERAL_OUT], "policy": True},
+             "db-nic-1": {"own": "tier", "rules": [_LATERAL_IN], "policy": True},
+             "api-nic": {"own": None, "rules": [_rule("allow-ssh", 100, _SSH_IN), _LATERAL_IN], "policy": True}},
+    "windows": None, "config": {"quarantine": True, "readable": True, "forensic": [], "rg": ""},
+    "legacy": None, "data_subnet": None}
+
+
+def test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said_by_the_reset(monkeypatch):
+    """The macOS job of PR #391 (D80's release fixed): the night's sequence went on and met the
+    reset — Db--01's rule of db-nic-0 kept on the tier NSG at its release (I4C), then db-nic-0
+    in quarantine, state and tags lost, isolated again, left bare, and `reset --from-azure` —
+    « I3 (said): reset --from-azure said swept_partial, rules of …/Db--01 kept without saying so:
+    ['glorfindel-iso-db--01-db-nic-0-0d0228'] ». The same cause as the release's: the reset
+    looked for a NIC's rules only on the NSGs that govern it now; db-nic-0, bare, nowhere. Its
+    rules (isolation and blocks) are looked for on every NSG of the subscription (`away.py`)."""
+    q = _NSG.format(rg="rg-app1", name="nsg-glorfindel-quarantine-westeurope")
+    _run(monkeypatch, _D80_RESET_NET,
+         ("race", API, ("release", "reassert"), 708),
+         ("lose_everything", WEB1, WEB1, None, WEB1, q, "stop"),
+         ("another_subscription", WEB1, "isolate"),
+         ("verify", WEB1, WEB1, None),
+         ("interrupted_release", WEB1, WEB1, (1, "before-429"), 2, "before-crash", False),
+         ("kept_at_the_lift", DB, DB, None, "release", (_TIER, _DB0_ISO), _nic("rg-app1", "db-nic-0"), 0, 4,
+          "rg-new", "web", "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/"
+          "nsg-tier", "Linux", False),
+         ("lose_everything", WEB1, WEB1, None, WEB1, q, "stop"),
+         ("config_changes", {"quarantine": False, "forensic": [], "readable": True, "rg": ""}, True),
+         ("block_turned_then_reasserted", WEB1, WEB1, ("nic.get", "always-429"), "subnet", (_EDGE, _API_BASE),
+          "non_disruptive"),
+         ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), False),
+         ("bare_with_an_unknown_original", DB, DB, ("subnet.get", "always-429"), _nic("rg-app1", "db-nic-0"), "reset"))

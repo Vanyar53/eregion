@@ -43,6 +43,21 @@ le modèle de menace ([`design/modele-de-menace.md`](design/modele-de-menace.md)
   ([`declared.py`](../annatar/campaign/declared.py)). Une technique doit être implémentée, venir
   d'une bibliothèque publique (jamais un script maison) et ne pas être destructive. La panne doit
   être déclarée sur les mêmes cibles, en zone `bench`.
+
+  **La technique grave attend R2 (BL1b, #396).** La session du 31/10 a mesuré la part contenue
+  seule à 0 sur 1 : T1136.001 (création d'un compte) est jugée ambiguë par le modèle. La mesurer
+  en exercice demande une technique que le modèle juge grave — le signal
+  `sudo-privilege-escalation` (T1548.003). Atomic Red Team n'offre pas, à la version épinglée, de
+  test sudo→root réversible, non interactif et sans prérequis, jouable par l'injecteur R1 (détail :
+  [`design/bl1-technique-grave.md`](design/bl1-technique-grave.md)).
+
+  **Décision de Jonathan (02/11) : « le réel + R2 ».** La règle « bibliothèques publiques
+  seulement » reste entière, sans exception. La part contenue seule se mesure sur le **trafic
+  réel** (bree en `non_disruptive` depuis le 01/11, 5 blocages autonomes ; le tableau ci-dessous,
+  du 31/10, la dit encore en `human_only`), compté par l'Overview avec OV1 (#399).
+  **À rejouer** : BL1, quand R2 (#79, Stratus Red Team) apportera une technique grave jouable, en
+  seconde technique après T1136.001. D'ici là, rien de nouveau au-delà de la session du 31/10 ; la
+  campagne garde sa seule technique publique, T1136.001.
 - **Le test de bout en bout** : [`tests/unit/test_containment.py`](../tests/unit/test_containment.py).
   Il rejoue la campagne avec les injecteurs simulés. Le vrai graphe de Glorfindel décide, avec le
   modèle simulé, et agit sur le faux Azure de la machine à invariants. Sa réaffirmation voit une

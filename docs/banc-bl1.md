@@ -39,7 +39,8 @@ par commande.
 
   **Décision de Jonathan (02/11) : « le réel + R2 ».** La règle « bibliothèques publiques
   seulement » reste entière, sans exception. La part contenue seule se mesure sur le **trafic
-  réel** (bree en `non_disruptive`, 5 blocages autonomes), compté par l'Overview avec OV1 (#399).
+  réel** (bree en `non_disruptive` depuis le 01/11, 5 blocages autonomes ; le tableau ci-dessous,
+  du 31/10, la dit encore en `human_only`), compté par l'Overview avec OV1 (#399).
   **À rejouer** : BL1, quand R2 (#79, Stratus Red Team) apportera une technique grave jouable, en
   seconde technique après T1136.001. D'ici là, rien de nouveau au-delà de la session du 31/10 ; la
   campagne garde sa seule technique publique, T1136.001.

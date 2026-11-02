@@ -2,8 +2,8 @@
 
 > **Décision de Jonathan (02/11) : « le réel + R2 ».** La règle « bibliothèques publiques
 > seulement » reste entière, sans aucune exception.
-> - **La part contenue seule se mesure sur le trafic réel** : bree est en `non_disruptive` et
->   compte déjà 5 blocages autonomes. L'Overview les comptera avec OV1 (#399).
+> - **La part contenue seule se mesure sur le trafic réel** : bree est en `non_disruptive` depuis
+>   le 01/11 et compte déjà 5 blocages autonomes. L'Overview les comptera avec OV1 (#399).
 > - **Pour les exercices**, BL1 sera rejoué quand **R2** (#79, Stratus Red Team, techniques cloud
 >   publiques) apportera une technique grave jouable.
 >
@@ -19,7 +19,8 @@ technique que le modèle juge **grave** au point d'isoler seul : le 30/07, une �
 root à 93 %, isolation autonome.
 
 Ce document tranche le choix de cette technique, à partir des fichiers d'Atomic Red Team épinglés
-(`annatar/atomics/PIN`, commit `9f6a1eab…`, vérifié identique à `master` le 02/11). **Conclusion :
+(`annatar/atomics/PIN`, commit `9f6a1eab…` ; comparés à `master` le 02/11 : T1548.003 identique,
+T1110.001 ne diffère que sur des tests Windows et la citation de son titre). **Conclusion :
 aucun des deux candidats de l'issue #396 n'est jouable aujourd'hui par l'injecteur R1 à la version
 épinglée.** La raison est détaillée ci-dessous, avec la preuve ; les pistes de déblocage, qui
 touchent une règle de sûreté ou une politique, ont été tranchées par Jonathan le 02/11 (encadré
@@ -55,7 +56,7 @@ Six tests ; trois visent FreeBSD (`dependencies` → refusés par R1). Les trois
 
 | Test (guid) | Nettoyage | Destructif | Jouable R1 ? |
 |---|---|---|---|
-| **Sudo usage** (`150c3a08…`) | **aucun** | non (énumération) | **non** — pas de `cleanup_command`, et la commande fait `sudo vim /etc/sudoers`, qui ouvre un éditeur interactif : sous Run Command (sans terminal) il bloque. |
+| **Sudo usage** (`150c3a08…`) | **aucun** | non (énumération) | **non** — pas de `cleanup_command`, et la commande fait `sudo vim /etc/sudoers`, interactif ; sans terminal (Run Command), il bloque ou sort en erreur en laissant un fichier d'échange — ni fidèle ni réversible. |
 | **Unlimited sudo cache timeout** (`a7b17659…`) | aucun | **oui** — `sed -i` sur `/etc/sudoers` | non |
 | **Disable tty_tickets** (`91a60b03…`) | aucun | **oui** — ajoute une ligne à `/etc/sudoers` | non |
 
@@ -83,32 +84,53 @@ Team : T1110.001 y est un brute-force **sudo**, pas SSH.
 
 ### La preuve
 
-L'adaptateur R1 (`resolve_ref`) refuse, à la version épinglée, les quatre tests pertinents :
+L'adaptateur R1 (`resolve_ref`) refuse, à la version épinglée, **les 14 tests des deux
+techniques** (6 pour T1548.003, 8 pour T1110.001). Le motif, par famille :
+
+| Famille | Tests | Motif du refus |
+|---|---|---|
+| T1548.003 linux | « Sudo usage » (`150c3a08`), « Unlimited sudo cache timeout » (`a7b17659`), « Disable tty_tickets » (`91a60b03`) | `no cleanup_command` |
+| T1548.003 FreeBSD | les trois variantes « (freebsd) » (`2bf9a018`, `a83ad6e8`, `4df6a0fe`) | `declares dependencies` |
+| T1110.001 linux | « SUDO Brute Force » Debian, Redhat, FreeBSD (`ba1bf0b6`, `4097bc00`, `abcde488`) | `declares dependencies` |
+| T1110.001 autres | SMB, LDAP, Kerbrute, ESXi (Windows), Azure AD (`09480053`, `c2969434`, `59dbeb1a`, `ed6c2c87`, `5a51ef57`) | `not linux` |
+
+Par exemple :
 
 ```
 REFUSED  Sudo usage                 T1548.003/150c3a08… :: no cleanup_command — R1 requires a declared return to the initial state
-REFUSED  Unlimited sudo cache …     T1548.003/a7b17659… :: no cleanup_command — R1 requires a declared return to the initial state
+REFUSED  Disable tty_tickets        T1548.003/91a60b03… :: no cleanup_command — R1 requires a declared return to the initial state
 REFUSED  SUDO Brute Force - Debian  T1110.001/ba1bf0b6… :: declares dependencies (prereqs) — out of scope for R1
-REFUSED  SUDO Brute Force - Redhat  T1110.001/4097bc00… :: declares dependencies (prereqs) — out of scope for R1
 ```
 
 (mesuré sur les fichiers vendorisés au commit épinglé, adaptateur inchangé).
 
 ## Ce qui est écarté, et pourquoi
 
-- **T1110.001 (SSH)** — écarté : pas de test SSH dans Atomic Red Team ; les tests linux sont du
+- **T1110.001 (SSH)** — écarté : pas de test SSH linux sous T1110.001 ; ses tests linux sont du
   brute-force sudo avec prérequis et charge distante, injouables depuis Orodruin, et non détectés
-  par `ssh-brute-force`.
+  par `ssh-brute-force`. Le seul test SSH linux d'Atomic Red Team voisin, « SSH Credential
+  Stuffing From Linux » (T1110.004, `4f08197a`), est refusé par R1 lui aussi : `sshpass` en
+  `dependencies`, `elevation_required: false`, `$PathToAtomicsFolder` dans la commande, cible
+  `localhost` par défaut. Et un essai SSH lancé depuis la VM ou depuis Orodruin part d'une adresse
+  loopback ou privée, que `ssh-brute-force` exclut (`detection_rules.yaml`, exclusion RFC 1918 et
+  loopback) : la règle ne se déclencherait pas.
 - **T1548.003 « Sudo usage »** — écarté : pas de nettoyage déclaré (refusé par R1) et `sudo vim`
-  interactif (bloque sous Run Command). On ne peut pas l'éditer (« l'atomic tel quel »).
+  interactif ; sans terminal, il bloque ou sort en erreur en laissant un fichier d'échange — ni
+  fidèle ni réversible. On ne peut pas l'éditer (« l'atomic tel quel »).
 - **T1548.003 destructifs** — écartés : modifient `/etc/sudoers` sans réversion ; destructifs.
-- **La variante « compte root » de T1136.001** (`a1040a30…`, test « Butter » : `useradd -g 0 -d
-  /root`, déjà vendorisée, réversible par `userdel`) — un analyste la jugerait grave (compte dans
-  le groupe root). Écartée pour deux raisons : (1) le catalogue est indexé par TTP et T1136.001 y
-  est déjà (test `evil_user`) — on ne peut pas ajouter une seconde entrée T1136.001 ni déclarer
-  deux tests distincts du même TTP ; (2) le signal reste une **création de compte**, que le modèle
-  a jugée ambiguë — il ne verrait pas « groupe root » dans la sortie de la règle t1136. Elle ne
-  remplit donc pas le besoin (un signal **grave**).
+- **La variante « compte root » de T1136.001** (`a1040a30…`, test « Butter » : `useradd -g 0 -M
+  -d /root -s /bin/bash butter`, déjà vendorisée) — **R1 l'accepte** : `resolve_ref` la résout,
+  avec le nettoyage `userdel butter`. Un analyste la jugerait grave (un compte dans le groupe
+  root). Sur Ubuntu, elle lance aussi `echo … | sudo chpasswd`. **Hypothèse à mesurer au banc** :
+  ce `sudo` écrirait une ligne `root : … USER=root ; COMMAND=/usr/sbin/chpasswd`, que la regex de
+  `sudo-privilege-escalation` accepte — elle ne filtre pas l'appelant root, malgré la description
+  de la règle (« by a non-root user »). La VM verrait alors deux signaux : la création de compte
+  (t1136) et un sudo vers root. Elle n'est **pas câblée dans ce lot**, pour trois raisons :
+  (1) le catalogue n'a qu'une entrée par TTP, et T1136.001 y est déjà (test `evil_user`) — on ne
+  peut ni ajouter une seconde entrée T1136.001, ni déclarer deux tests du même TTP ; (2) ce `sudo`
+  vient de root : ce n'est pas une élévation depuis un compte non privilégié, et le signal grave
+  serait un effet de bord de la regex, pas la technique ; (3) la décision du 02/11. C'est une
+  **piste publique** pour la prochaine session de banc, soumise à Jonathan.
 
 ## Les options examinées, et la décision (02/11)
 
@@ -120,15 +142,15 @@ options examinées, et ce que Jonathan en a retenu le 02/11 :
    `declared.py` pour une technique grave sans atomic fidèle.** Le script maison
    `scripts/vm/privilege_escalation_sim.sh` (T1548.003) produit déjà, par `logger` seul (aucune
    escalade ni modification réelle — **non destructif**), exactement les lignes `sudo … USER=root …
-   COMMAND=…` que la règle livrée détecte. Un opt-in explicite par déclaration (un indicateur
-   revu par un humain), documenté au modèle de menace, débloquerait la mesure immédiatement. C'est
-   un **retour en arrière de politique** sur « plus de logique offensive maison » : il revient à
-   Jonathan, pas à un lot. Jonathan garde la règle entière, sans aucune exception.
+   COMMAND=…` que la règle livrée détecte. Il aurait fallu un opt-in explicite par déclaration
+   (un indicateur revu par un humain), documenté au modèle de menace : un **retour en arrière de
+   politique** sur « plus de logique offensive maison ». Jonathan garde la règle entière, sans
+   aucune exception.
 2. **Retenue, avec le réel en plus.** **Attendre une couverture publique d'une élévation grave sur VM** (une mise à jour d'Atomic Red
    Team avec un test sudo→root réversible, ou R2/Stratus sur le plan de contrôle avec une règle
    livrée correspondante), puis câbler la technique. Ce sera R2 (#79, Stratus Red Team) ; d'ici
-   là, la part contenue seule se mesure sur le trafic réel (bree en `non_disruptive`, 5 blocages
-   autonomes), compté par l'Overview avec OV1 (#399).
+   là, la part contenue seule se mesure sur le trafic réel (bree en `non_disruptive` depuis le
+   01/11, 5 blocages autonomes), compté par l'Overview avec OV1 (#399).
 3. **Écartée.** **Autoriser dans R1 un atomic en lecture seule sans nettoyage** (nouvelle garde + mutant) :
    insuffisant seul, car le seul candidat non destructif (« Sudo usage ») reste injouable à cause
    de `sudo vim`, et on ne peut pas éditer l'atomic.

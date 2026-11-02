@@ -42,7 +42,7 @@ Glorfindel voit », plus bas).
   Un filtre (`?injector=annatar|gothmog`) en garde un. `/annatar`, `/gothmog` et `/runs/<id>` y
   mènent.
 
-![La vue Runs sur le jeu d'exemple : les fenêtres d'exercice, et la matrice de couverture avec une technique en régression](images/dagorlad/runs.png)
+![La vue Runs sur le jeu d'exemple : en tête, le temps pour contenir et la part contenue seule des exercices ; les fenêtres d'exercice, et la matrice de couverture avec une technique en régression](images/dagorlad/runs.png)
 
 ## Tirer un fil, lire son verdict
 

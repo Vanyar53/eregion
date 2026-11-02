@@ -1,5 +1,6 @@
 # G1 (#76) : le bruit bénin de Chaos Studio (chaos.tf), planifié contre de faux azurerm, azapi et
-# null — aucun appel à Azure, comme le test d'ID1 (diagnostic_settings.tftest.hcl) :
+# null — aucun appel à Azure, comme le test d'ID1 (diagnostic_settings.tftest.hcl). La CI le lance
+# à chaque PR (ci.yml, job terraform-test, CI4) ; à la main :
 #   terraform -chdir=infra/terraform init -backend=false
 #   terraform -chdir=infra/terraform test
 # Deux cas : la config du dépôt (chaos.noise_vms: []), dont le plan ne doit rien changer au banc ;

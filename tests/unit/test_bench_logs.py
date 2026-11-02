@@ -167,7 +167,8 @@ def test_logs_plan_plans_the_two_settings_and_nothing_else(tmp_path):
     code, out, calls = _make(tmp_path, "celebrimbor-logs-plan")
     assert code == 0, out
     chdir = "-chdir=infra/terraform"
-    assert calls == [[chdir, "init", "-upgrade"], [chdir, "workspace", "select", "default"],
+    # CI4 (#389): `init` installs what the module's lock says, it upgrades nothing on its own.
+    assert calls == [[chdir, "init"], [chdir, "workspace", "select", "default"],
                      [chdir, "plan", *TARGETS]]
 
 

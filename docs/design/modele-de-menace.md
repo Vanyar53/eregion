@@ -368,7 +368,7 @@ _SEC12 (#418), 02/11. Décision de Jonathan : une identité propre aux sessions 
   source : les flux agrégés confirment une adresse, pas une session (une ligne forgée à la minute d'un
   vrai flux de l'origine passe) ; une session plus ancienne que 7 jours, ou un accès sans ligne de
   session, n'est toujours pas vue ; les tables et leurs colonnes sont des hypothèses jusqu'à la mesure
-  au banc (`docs/operations.md`, B1–B4, F1–F4). Lier une commande à sa session exacte demande
+  au banc (`docs/operations.md`, B1–B5, F1–F4). Lier une commande à sa session exacte demande
   `auditd` (AUD1).
 - **Un jeton pour la console**, tous ses droits (frontière 1).
 - **Le principal du canari, `Network Contributor` sur son groupe** (P-04, P04). Il peut y créer une ressource réseau

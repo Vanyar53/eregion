@@ -23,9 +23,11 @@ honest administrator and an intruder who does not know Eregion — no more. An i
 session is older than the window, or an access that writes no session line, can have a root
 shell set aside on its own; a sensitive command is always a card.
 
-COR2 (#427) closes that limit when a source outside the VM is declared
+COR2 (#427) lifts the forged line's part of that limit when a source outside the VM is declared
 (`expected_sudo.origin_proof`): `bastion` (Azure Bastion's audit logs) or `flows` (the VNet's
-flow logs, through traffic analytics). A root shell is then set aside only if, on top of COR1,
+flow logs, through traffic analytics) — a line written with `logger` has no trace there. It
+does not close the rest: a session older than the window, an access that writes no session
+line, are still not seen (AUD1, #408). A root shell is then set aside only if, on top of COR1,
 EVERY session the Syslog shows has its trace in that source — same VM (the registry's, never
 the line's), same account (Bastion) or same address (flows), close in time; a Bastion session
 proves one SSH session, never two. A trace absent, a source unreadable or cut, a session's
@@ -80,6 +82,7 @@ COUNTS = ("queries", "origin", "card", "unknown", "compromised", "unchecked", "c
 # COR2 (#427): the sources outside the VM that may confirm a session's origin. `none` is COR1.
 PROOFS = ("none", "bastion", "flows")
 PROOF_NAMES = {"bastion": "Azure Bastion", "flows": "les journaux de flux"}
+PROOF_UNREAD = {"bastion": "Azure Bastion non lu", "flows": "les journaux de flux non lus"}
 # A session and its trace outside the VM: at most this far apart (two clocks, the VM's and
 # Azure's; a flow log's one-minute blobs). A hypothesis, measured on the bench (B3, F3).
 PROOF_SKEW_S = 120
@@ -478,7 +481,8 @@ def confirm_outside(p: Pass, judged: dict, tgt, items: list[tuple[dict, dict, li
             rows = []                   # no instant to look for: each row says so below
         for row, entry, found, seen_origins in its:
             if isinstance(rows, str):
-                _unknown(p, judged, row, f"{name} non lu : {rows} — origine non confirmée hors de la VM")
+                unread = PROOF_UNREAD.get(source, f"{name} non lu")
+                _unknown(p, judged, row, f"{unread} : {rows} — origine non confirmée hors de la VM")
                 continue
             ok, why = confirmed(source, found, traces(source, rows), entry["account"])
             if not ok:

@@ -14,7 +14,7 @@ before the decision, never in the prompt, never by the model's confidence.
 
 The queries are run as written over lines in memory (`kql_subset`) — the Bastion and flow
 rows too, written with the columns Microsoft Learn documents for `MicrosoftAzureBastionAuditLogs`
-and `NTANetAnalytics`: their real shape is a hypothesis until measured on the bench (B1–B4,
+and `NTANetAnalytics`: their real shape is a hypothesis until measured on the bench (B1–B5,
 F1–F4 in docs/operations.md). Addresses of the
 documentation ranges only (198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32), made-up accounts
 (admin1, ops, mallory) and VMs (vm-example-01). No Azure, no model.
@@ -684,7 +684,7 @@ def test_a_plain_brute_force_blocked_alone_makes_no_compromise_card(tmp_path, mo
 
 # ── COR2 (#427): the origin confirmed outside the VM ─────────────────────────────────
 # A Bastion audit row and a flow row, with the columns Microsoft Learn documents — their real
-# shape is measured on the bench (B1–B4, F1–F4). The VM's private address is made up.
+# shape is measured on the bench (B1–B5, F1–F4). The VM's private address is made up.
 
 def _bastion(account="admin1", minutes_ago=20.0, rid=VM, tunnel=None, start_delta_s=-1.0) -> dict:
     """Bastion's row of one session: opened a second before sshd's Accepted line (start_delta_s),
@@ -822,7 +822,8 @@ def test_with_flows_an_ipv6_session_is_confirmed_by_its_flow():
     pytest.param(dict(src=BASTION, proto="U"), id="udp"),
     pytest.param(dict(src=BASTION, vm="rg-example/vm-example-02"), id="another VM"),
     pytest.param(dict(src=BASTION, minutes_ago=120), id="another time, before the query's window"),
-    pytest.param(dict(src=BASTION, minutes_ago=5), id="another time, in the query's window"),
+    pytest.param(dict(src=BASTION, minutes_ago=5), id="a flow begun after the session, in the query's window"),
+    pytest.param(dict(src=BASTION, minutes_ago=30), id="a flow ended before the session, in the query's window"),
 ])
 def test_a_flow_that_is_not_this_session_s_proves_nothing(flow):
     p, rule, sent, _ = _poller(_login(BASTION) + [_flow(**flow), _row(SUDO_I)], cfg=_cfg(proof="flows"))
@@ -832,7 +833,7 @@ def test_a_flow_that_is_not_this_session_s_proves_nothing(flow):
 def test_a_flow_log_that_cannot_be_read_is_a_card_counted_unknown():
     p, rule, sent, _ = _poller(_login(BASTION) + [_flow(BASTION), _row(SUDO_I)], cfg=_cfg(proof="flows"),
                                fail=lambda q: "NTANetAnalytics" in q)
-    assert "les journaux de flux non lu" in _card(p, rule)["SessionOrigin"]
+    assert "les journaux de flux non lus :" in _card(p, rule)["SessionOrigin"]
     assert p.status_snapshot()[0]["correlation"]["unknown"] == 1
 
 

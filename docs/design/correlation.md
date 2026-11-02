@@ -157,8 +157,10 @@ commence par « Connexion après brute force non vérifiée ». Les comptes port
   honnête et contre un intrus qui ne connaît pas Eregion. Un intrus dont la vraie session est plus
   ancienne que la fenêtre, ou un accès qui n'écrit aucune ligne de session, peut faire écarter un
   shell root seul. Les commandes sensibles restent toujours une carte. Une ligne forgée n'efface
-  jamais une session réelle vue dans la fenêtre. **Avec une source déclarée, cette limite est levée**
-  (COR2, ci-dessous) : une ligne forgée n'a pas de trace hors de la VM, et fait une carte.
+  jamais une session réelle vue dans la fenêtre. **Avec une source déclarée, la limite de la ligne
+  forgée est levée** (COR2, ci-dessous) : une ligne écrite par `logger` n'a pas de trace hors de la
+  VM, et fait une carte. Le reste demeure ouvert, avec ou sans source : une session plus ancienne
+  que la fenêtre, un accès qui n'écrit aucune ligne de session ne sont toujours pas vus (AUD1, #408).
 
 ## L'origine confirmée hors de la VM (COR2)
 
@@ -209,7 +211,7 @@ only » quand aucune source ne les a confirmés.
 - **Une source par déploiement**, pas par entrée : une VM sans Bastion, la source étant `bastion`,
   voit ses shells root en carte.
 - **Les tables et leurs colonnes sont des hypothèses** (la documentation publique de Microsoft Learn,
-  pas une mesure) : B1–B4 et F1–F4 dans `docs/operations.md`, à trancher au banc avec Jonathan.
+  pas une mesure) : B1–B5 et F1–F4 dans `docs/operations.md`, à trancher au banc avec Jonathan.
 - **Bastion ne nomme pas l'adresse de l'instance** d'où vient la session sur la VM : « même
   origine » se réduit, pour Bastion, à l'origine déclarée (la plage d'`AzureBastionSubnet`) plus la
   VM, le compte et l'instant.

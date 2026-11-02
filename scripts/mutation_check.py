@@ -7542,8 +7542,8 @@ MUTANTS += [
     ("M3054", "a flow to another VM confirms this one's session (COR2)", COR,
      "| where DestVm =~ {vm}\n", ""),
     ("M3055", "a source that cannot be read taken as one that saw nothing, unsaid (COR2)", COR,
-     '            if isinstance(rows, str):\n                _unknown(p, judged, row, f"{name} non lu',
-     '            if False:\n                _unknown(p, judged, row, f"{name} non lu'),
+     '            if isinstance(rows, str):\n                unread = PROOF_UNREAD',
+     '            if False:\n                unread = PROOF_UNREAD'),
     ("M3056", "a VM the source cannot name: the root shell left pending, unsettled (COR2)", COR,
      '                _unknown(p, judged, row, f"{name} ne peut nommer la VM — origine non confirmée hors de la VM")\n',
      "                pass\n"),
@@ -7557,6 +7557,15 @@ MUTANTS += [
      'f" — {per_origin} · {_origin_proof_said(es)}")', 'f" — {per_origin}")'),
 ]
 TESTS.update({f"M{n}": _COR for n in range(3040, 3060)})
+# COR2, its review (02/11): each bound of a flow's interval checked by the code, not only by the
+# query's window. M3160–M3161.
+MUTANTS += [
+    ("M3160", "a flow ended before the session confirms it: the interval's end never checked (COR2, review)", COR,
+     't["start"] - skew <= s["at"] <= t["end"] + skew for t in read', 't["start"] - skew <= s["at"] for t in read'),
+    ("M3161", "a flow begun after the session confirms it: the interval's start never checked (COR2, review)", COR,
+     't["start"] - skew <= s["at"] <= t["end"] + skew for t in read', 's["at"] <= t["end"] + skew for t in read'),
+]
+TESTS.update({f"M{n}": _COR for n in range(3160, 3162)})
 
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.

@@ -1034,7 +1034,7 @@ Avec Jonathan, au banc : les tables et leurs colonnes sont prises de la document
      `AzureBastionSubnet` : c'est cette plage qu'on déclare dans `origins`.
    - `flows` : les journaux de flux du VNet (VNet flow logs) avec traffic analytics vers le même
      workspace, intervalle de 10 minutes (celui de 60 minutes rend presque toute preuve tardive : F4).
-2. **Mesurer** B1–B4 ou F1–F4 : une connexion SSH réelle depuis l'origine déclarée, un `sudo -i`,
+2. **Mesurer** B1–B5 ou F1–F4 : une connexion SSH réelle depuis l'origine déclarée, un `sudo -i`,
    puis la requête B ou F dans le workspace (portail, « Logs »), en remplaçant `<vm>`, `<compte>`,
    `<adresse>`. Noter ce qui ne tient pas : c'est un lot de la session Glorfindel, pas une déclaration.
 3. **Déclarer** dans le `glorfindel-config.yaml` local (hors du dépôt) :
@@ -1084,6 +1084,7 @@ chacune avec sa mesure et ce qui change selon le résultat.
 | **B2** | Bastion écrit la ligne **à l'ouverture** de la session, et elle arrive dans le workspace avant le `sudo -i` qui suit (quelques minutes au plus) | `TimeGenerated` − `SessionStartTime` de la requête B, et l'instant du `sudo -i` | rien | écrite à la fermeture, ou plus tard : tout shell root d'une session en cours fait une carte — retenir la ligne jusqu'à la preuve (un lot à part) |
 | **B3** | La ligne `Accepted` de sshd tombe à 120 s au plus de `SessionStartTime` (`PROOF_SKEW_S`) | comparer les deux instants | rien | relever `PROOF_SKEW_S` |
 | **B4** | Une session Bastion = une ligne, ou plusieurs du même `TunnelId` ; le client natif (`az network bastion ssh`/`tunnel`) écrit aussi `UserName` | deux connexions, l'une par le portail, l'autre par `az network bastion ssh` | rien | `UserName` vide : le client natif n'est pas confirmé (carte) ; d'autres lignes par session : revoir le dédoublonnage |
+| **B5** | Une connexion refusée par Bastion (mauvais mot de passe, clé refusée, compte inconnu) n'écrit pas de ligne, ou s'en distingue : `_BASTION` ne filtre ni le succès ni `OperationName`. Microsoft Learn ne nomme aucune colonne de résultat ; `OperationName` ou `Message` pourraient le dire — une hypothèse, rien n'est ajouté à la requête sans mesure | une connexion refusée par Bastion, puis une réussie, requête B (`OperationName`, `Message`, `Duration`) | rien | une connexion refusée confirmerait une ligne forgée à son instant : filtrer sur ce que la mesure montre (`OperationName`, `Message`), un lot de la session Glorfindel |
 | **F1** | `NTANetAnalytics` porte `SubType == "FlowLog"`, `SrcIp`, `DestVm` = `<groupe>/<vm>` (casse ignorée), `DestPort` (entier), `L4Protocol == "T"`, `FlowStatus == "A"` | une connexion SSH, requête F | rien | corriger le filtre (`DestIp` et l'adresse privée de la VM, d'autres valeurs) |
 | **F2** | sshd écoute sur le port 22 (`SSH_PORT`) | `ss -tlnp` sur la VM | rien | un port par VM : une clé de config, un lot |
 | **F3** | `FlowStartTime`–`FlowEndTime` d'un flux couvre la ligne `Accepted` à 120 s près | comparer les instants | rien | relever `PROOF_SKEW_S`, ou lire `FlowIntervalStartTime`–`FlowIntervalEndTime` |

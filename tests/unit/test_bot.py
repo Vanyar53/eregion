@@ -721,3 +721,75 @@ def test_a_message_not_re_armed_after_a_restart_answers_settled(monkeypatch):
     assert ran == [] and "Carte réglée" in c.ephemeral[0][0] and c.ephemeral[0][1] is True
     old = (datetime.now(timezone.utc) - timedelta(days=bot._RESTORE_DAYS + 1)).isoformat()
     assert bot._views_to_restore([{"id": "x", "first_seen": old, "status": "pending"}], {"x": 1}) == []
+
+
+# ── SEC13 (V-27): the bot's files, written as every state ─────────────────────────────
+
+def test_the_bots_files_are_written_whole_and_owner_only(monkeypatch):
+    """posted ids, threads, messages, synced cards, the week's post: rewritten in place,
+    0644. A new file put in place whole now (another inode), 0600 — an earlier 0644 one too."""
+    import os
+    import stat
+
+    class _Channel:
+        async def send(self, text):
+            pass
+
+    stores = (bot._POSTED_STORE, bot._THREADS_STORE, bot._MESSAGES_STORE, bot._SYNCED_STORE, bot._WEEKLY_STORE)
+    for f in stores:
+        f.write_text("{}")
+        os.chmod(f, 0o644)
+    before = {f: f.stat().st_ino for f in stores}
+    bot._save_posted({"a"})
+    bot._save_threads({VM: 1})
+    bot._save_messages({"a": 2})
+    bot._save_synced({"a": "pending||1"})
+    monkeypatch.setattr(bot, "_weekly_due", lambda now, last: True)
+    assert asyncio.run(bot.GlorfindelBot(channel_id=1, ping_role=None)._post_weekly(_Channel())) is True
+    for f in stores:
+        assert f.stat().st_ino != before[f] and stat.S_IMODE(f.stat().st_mode) == 0o600, f
+    assert bot._load_posted() == {"a"} and bot._load_threads() == {VM: 1}
+    assert bot._load_messages() == {"a": 2} and bot._load_synced() == {"a": "pending||1"}
+
+
+# ── SEC13 (R-16): /pending, under the same policy as the buttons ──────────────────────
+
+class _Command:
+    """What the /pending command hands to its callback: the caller, the bot, the reply."""
+
+    def __init__(self, user, policy):
+        self.user, self.client, self.data = user, _Client(policy), {"name": "pending"}
+        self.replies = []
+        outer = self
+
+        class _Response:
+            async def send_message(self, text, ephemeral=False):
+                outer.replies.append((text, ephemeral))
+        self.response = _Response()
+
+
+def test_pending_lists_the_cards_to_the_allowed_only(monkeypatch):
+    """The /pending command listed the waiting cards — VM names, actions — to anyone in the
+    channel, whatever DISCORD_ALLOWED_USERS said. The buttons' policy holds for it now:
+    refused and logged for someone not allowed, and for everyone with no list (closed by
+    default); listed for an allowed user or role."""
+    import io
+
+    from rich.console import Console
+
+    log = io.StringIO()
+    monkeypatch.setattr(bot, "_console", Console(file=log, width=200))
+    escalations.record("rule-ssh-brute-force-0123abcd", VM, "block_suspicious_ip", "mode_hold", "held")
+    for user, policy in ((_User(STRANGER), bot.ButtonPolicy(users=frozenset({ALLOWED}))),
+                         (_User(ALLOWED), bot.ButtonPolicy()), (_User(ALLOWED), None),
+                         (_User(MEMBER, roles=(ROLE + 1,)), bot.ButtonPolicy(roles=frozenset({ROLE})))):
+        cmd = _Command(user, policy)
+        asyncio.run(bot._pending_reply(cmd))
+        ((text, ephemeral),) = cmd.replies
+        assert "refusé" in text and ephemeral is True and "vm-celebrimbor-bree" not in text, text
+    assert "refused" in log.getvalue() and str(STRANGER) in log.getvalue()
+    for user in (_User(ALLOWED), _User(MEMBER, roles=(ROLE,))):
+        cmd = _Command(user, bot.ButtonPolicy(users=frozenset({ALLOWED}), roles=frozenset({ROLE})))
+        asyncio.run(bot._pending_reply(cmd))
+        ((text, ephemeral),) = cmd.replies
+        assert "vm-celebrimbor-bree" in text and ephemeral is True, text

@@ -481,3 +481,19 @@ def test_with_write_rights_the_orphan_rules_are_the_watchs_not_the_posture(tmp_p
     with patch("glorfindel.posture._STATE_FILE", tmp_path / "posture.json"):
         PostureChecker(_cfg(), c).check_and_escalate([_asset()])
     c.find_orphan_rules.assert_not_called()
+
+
+def test_the_posture_state_is_written_whole_and_owner_only(tmp_path):
+    """SEC13 (V-27): posture_state.json was rewritten in place, readable by all (0644) — a
+    reader could see half of it. Written as every state now: a new file put in place whole
+    (another inode), 0600, an earlier 0644 file included."""
+    import os
+    import stat
+    f = tmp_path / "posture.json"
+    f.write_text("{}")
+    os.chmod(f, 0o644)
+    before = f.stat().st_ino
+    with patch("glorfindel.posture._STATE_FILE", f):
+        PostureChecker(_cfg(), _connector(backup_ok=False)).check_and_escalate([_asset()])
+    assert f.stat().st_ino != before and stat.S_IMODE(f.stat().st_mode) == 0o600
+    assert "backup_linked" in f.read_text()

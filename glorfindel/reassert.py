@@ -13,7 +13,8 @@ the few isolated/blocked VMs are read. A check that holds records `verified_at`.
   or a pipeline that will keep deleting them): Glorfindel does not fight it.
 
 Only MISSING rules are put back. A bypass (an allow before the deny) is said, once per
-change, never fixed (reassert_cards, V-16); an unreadable rule list, neither.
+change, never fixed (reassert_cards, V-16); an unreadable rule list, neither. A check that
+raises is said on one card while it lasts, closed once it passes again (SEC13, V-16).
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from datetime import datetime, timezone
 
 from glorfindel.reassert_cards import (
     drift_baseline, drift_over, drift_said, episode, narrow_drift, new_pass, say_bypass, say_left,
-    say_unreadable_states, unrecorded,
+    say_unreadable_states, say_unverified, unrecorded, unverified_over, unverified_released,
 )
 from glorfindel.reassert_quarantine import _report_altered_quarantines
 from glorfindel.reassert_said import _block_drift
@@ -170,6 +171,7 @@ def _whatever_the_state(connector, autonomy, report: list[dict]) -> None:
     each lists for itself, and says it can't."""
     from glorfindel.orphans import sweep_orphan_rules
     say_unreadable_states(report)             # what it can't read, said (SEC4b)
+    unverified_released()                     # a check that raised, its VM released since (V-16)
     nsgs = None
     lister = getattr(connector, "nsg_listing", None)
     if lister is not None and getattr(connector, "dry_run", False) is not True:
@@ -222,9 +224,13 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
         return                # a release is running, or left NICs for the operator
     try:
         verification = connector.verify_isolation(rid)
-    except Exception as exc:                                   # VM gone, API down
-        log.warning("reassert: isolation of %s not checked (%s)", vm, exc)
+    except Exception as exc:                                   # VM gone, API down: said once (V-16)
+        say_unverified(vm, rid, exc, report)
         return
+    if verification.get("verified") is not None:
+        unverified_over(vm, rid)               # it answered: the check passes again
+    elif verification.get("method") != "dry_run":     # « can't tell »: said, never « passes » (A0)
+        say_unverified(vm, rid, verification.get("error") or "vérification non concluante", report)
     if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):
         episode(ref or vm, "", over=True)        # back: a new episode next time, whatever write fails
     say_bypass(vm, rid, verification, report, ref=ref)
@@ -306,9 +312,13 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         return
     try:
         verification = connector.verify_block_ip(ip, rid)
-    except Exception as exc:
-        log.warning("reassert: block of %s on %s not checked (%s)", ip, vm, exc)
+    except Exception as exc:                                   # said once (V-16)
+        say_unverified(vm, rid, exc, report, ip=ip)
         return
+    if verification.get("verified") is not None:
+        unverified_over(vm, rid, ip)
+    elif verification.get("method") != "dry_run":
+        say_unverified(vm, rid, verification.get("error") or "vérification non concluante", report, ip=ip)
     if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):
         episode(ref or vm, ip, over=True)        # back: a new episode next time, whatever write fails
     say_bypass(vm, rid, verification, report, ip=ip, ref=ref)

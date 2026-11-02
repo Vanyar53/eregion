@@ -194,7 +194,8 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
   cli.py                → `eregion console [--host] [--port] [--sections]`, `eregion coverage [--json] [--check]`
   indicators.py         → les cinq indicateurs de la finalité (UI-2) : sur 30 jours, rapports de run, cycles de la
                           watch, cartes, catalogue ; contenir et contenu seul sur le trafic réel (`real`, OV1 : les
-                          cycles hors exercice, la fin de BL1), ceux des exercices (`compute`) pour Dagorlad ;
+                          cycles hors exercice, la fin de BL1), ceux des exercices (`compute`) pour Dagorlad, le
+                          T0 de chaque run confronté comme le rapport de campagne (`t0_confronted`, SEC15) ;
                           `GET /api/indicators`, `GET /api/dagorlad/indicators`
   coverage.py           → C1 : la matrice de couverture — par technique du catalogue et par panne, dernier run,
                           dernière preuve, état (proven, aging, stale, regressed, unproven, never), évolution sur
@@ -203,8 +204,12 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
   follow.py             → DG-c : le suivi en direct d'une demande de Dagorlad — sa phase (écrite, en cours, finie)
                           et la chronologie de chaque fil, lue du statut d'Orodruin, des fenêtres, des cycles de la
                           watch, des cartes et du rapport du run ; un run mesuré comme sur l'accueil
-                          (indicators.decision_of, run_report.timeline, indicators.incident_of) ;
+                          (indicators.decision_of, run_report.timeline, indicators.incident_of) ; le T0 d'un run
+                          confronté comme sur l'accueil (indicators.t0_confronted, SEC15) ;
                           `GET /api/dagorlad/requests/<id>`, rien n'est écrit
+  runs_reader.py        → SEC15 : la seule aide par laquelle la console lit runs/, comme la watch le lit
+                          (glorfindel/channel_reader.py) — un fichier ordinaire, jamais à travers un lien,
+                          jamais bloquante, bornée, un refus dit une fois ; tout ce qui est refusé se lit absent
   static/console.js     → en-tête commun : onglets (actifs ou grisés), battement de la watch, canal retour,
                           cartes à juger, horloge UTC ; console.css, la palette
   static/overview.html  → l'accueil : une ligne par section, les canaux ; les cinq indicateurs avec UI-2 (#206)

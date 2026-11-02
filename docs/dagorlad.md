@@ -33,7 +33,10 @@ Glorfindel voit », plus bas).
 - **Runs** (`/dagorlad?view=runs`) : ce qui a tourné, des deux injecteurs. On y trouve :
   - en tête, **le temps pour contenir et la part contenue seule des exercices**, sur 30 jours :
     les runs d'attaque, mesurés comme BL1, avec l'ombre et les pannes prises pour une attaque
-    (`GET /api/dagorlad/indicators`). L'accueil, lui, compte le trafic réel (OV1) ;
+    (`GET /api/dagorlad/indicators`). Le T0 de chaque run est confronté comme dans le rapport de
+    campagne : non retenu, il ne donne aucun temps, et la tuile dit combien (« T0 not believed: no
+    time counted », `docs/analysis.md`, « D'où vient chaque entrée »). L'accueil, lui, compte le
+    trafic réel (OV1) ;
   - les fenêtres d'exercice, et pour chacune ce que Glorfindel a fait pendant ;
   - les campagnes ;
   - la matrice de couverture : chaque technique et chaque panne, son dernier run, sa dernière preuve,
@@ -172,7 +175,9 @@ l'identité de la console (Reader sur le banc), en cache dix minutes. Rien d'aut
   indicateurs rattachent, leur temps pour contenir, la définition de BL1. L'action est exécutée dans
   son cycle, relue sur Azure, et elle tient : aucune carte de la réaffirmation ne dit, sur la VM,
   qu'elle a disparu ou qu'elle est contournée, dans les 15 min qui suivent la relecture, ou jusqu'à
-  sa première levée si elle vient avant.
+  sa première levée si elle vient avant. Le T0 du rapport est confronté à la fenêtre du run, à la
+  demande, à l'heure d'attaque que la watch a reçue et à ce qu'elle a vu de la VM (SEC15) : non
+  retenu, la ligne le dit, avec la raison, et aucun temps n'est compté depuis lui.
 - **Une panne** n'attend rien de disruptif : une isolation ou un blocage sur sa cible pendant la
   panne est « une panne prise pour une attaque », en rouge. Une décision que l'accueil rattache à une
   attaque (de la demande, ou d'un autre run de l'hôte) n'est jamais celle de la panne. Le retour de la

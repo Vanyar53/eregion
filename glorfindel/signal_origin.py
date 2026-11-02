@@ -13,9 +13,13 @@ which the watch does not read), each for what it is:
                     (`resolve_attack_started`, SEC4a); and `attack_time` is bounded — at
                     most ATTACK_TIME_MAX_AGE_S old, at most ATTACK_TIME_FUTURE_S ahead —
                     or the line is refused here (`attack_time_refusal`);
-  detection_missed  a rule proposal: a card, never an action.
+  detection_missed  a rule proposal: a card, never an action. The workspace it queries is
+                    one of Glorfindel's config (`config_workspace`): a line naming another is
+                    refused (SEC8).
 
-and, of each, only the fields the injector writes (`_FIELDS`): a line cannot hand the
+and, of each, only the fields the injector writes (`_FIELDS`), its durations finite and bounded
+(`duration_refusal`), its technique one the watch knows (`known_techniques`: the catalog's, its
+rules' — another is refused, no search and no call to the model; SEC8): a line cannot hand the
 defender a query of its own, an IP to block or an attribution. Anything else —
 `recovery_complete`, `detection`, `detection_timeout`, an unknown event (`attack_adapted`
 too, no longer emitted since SEC3), a run id that is not a plain name — is refused: logged,
@@ -28,6 +32,11 @@ The release precondition (agent.py) lets it lift an isolation only when it was v
 here: built by this process, or read by `glorfindel respond` from that directory. A
 location, not a signature: a key the injectors don't have would live in ~/.glorfindel too —
 the same boundary, plus a key to keep.
+
+The moment of a restore (`attack_moment`, SEC8): a line counts only for an exercise card tied
+to its run, never for a moment after the card's first detection — never on a real incident
+(glorfindel/restore_plan.py). How the files are read — regular files only, bounded, a bounded
+rate — is glorfindel/channel_reader.py.
 """
 from __future__ import annotations
 

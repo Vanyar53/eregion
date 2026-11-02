@@ -56,6 +56,17 @@ variable "bench_resource_group" {
   default     = "rg-celebrimbor"
 }
 
+variable "session_drain_vms" {
+  description = "SEC11 (R-03) : les VM du groupe du banc que Glorfindel défend et dont il coupe les sessions à l'isolation — « Eregion Glorfindel Session Drain » (Run Command) sur chacune, jamais sur le groupe. Gardée dans session_drain.auto.tfvars (commité). Vide (défaut) : aucune coupure. Le rôle doit exister dans le tenant (docs/operations.md, « Identités Azure »)."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.session_drain_vms) == length(distinct(var.session_drain_vms)) && alltrue([for n in var.session_drain_vms : can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", n))])
+    error_message = "session_drain_vms : des noms de VM, chacun une fois."
+  }
+}
+
 variable "bench_workspace" {
   description = "Log Analytics du banc."
   type        = string

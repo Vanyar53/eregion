@@ -54,17 +54,20 @@ x-env: &env
 
 # V-17 (SEC7) : un principal par service, au moindre droit (docs/operations.md, « Identités Azure ») :
 #   la watch    GLORFINDEL_AZURE_CLIENT_*       lecture + le rôle de la réponse (isoler, lever,
-#                                               bloquer, instantané) — jamais le restore ;
+#                                               bloquer, instantané) et la coupure des sessions,
+#                                               VM par VM (SEC11) — jamais le restore ;
 #   la console  EREGION_CONSOLE_AZURE_CLIENT_*  lecture + réponse + restore (ce qu'un humain approuve) ;
 #   le bot      GLORFINDEL_BOT_AZURE_CLIENT_*   lecture + réponse + restore (Restore, Revert).
-# Vide, chacun prend AZURE_CLIENT_* (le principal unique d'avant : rien ne casse). Le repli se tire
-# variable par variable : un …_CLIENT_ID sans son …_SECRET mélangerait deux principaux — une paire
-# va ensemble, et make glorfindel-start (check-azure-env) dit une paire incomplète. Sur H0, tout est vide : l'identité
-# managée de la VM, partagée par les trois — lecture et réponse sur le groupe du banc depuis le
-# 31/10, jamais le restore (docs/design/modele-de-menace.md, §5).
+# Aucun repli (SEC11) : vide, un service n'a pas de principal de service — l'identité managée de la
+# VM s'il y en a une (H0), sinon aucune —, jamais AZURE_CLIENT_*, l'ancien principal partagé
+# (Contributor sur l'abonnement, là où il traîne encore). make glorfindel-start (check-azure-env) dit
+# chaque service sans paire, et une paire incomplète ; la watch le dit à son démarrage. Sur H0, tout
+# est vide : l'identité managée de la VM, partagée par les trois — lecture et réponse sur le groupe
+# du banc depuis le 31/10, la coupure des sessions sur les seules VM qu'il défend (SEC11), jamais le
+# restore (docs/design/modele-de-menace.md, §5).
 x-azure: &azure
-  AZURE_CLIENT_ID: ${GLORFINDEL_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
-  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}
+  AZURE_CLIENT_ID: ${GLORFINDEL_AZURE_CLIENT_ID:-}
+  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}
   AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
   # Les identités de la console et du bot (leurs ids, aucun secret), ajoutées à celles que
   # l'opérateur liste : leurs écritures approuvées dans le journal d'activité sont celles de
@@ -72,13 +75,13 @@ x-azure: &azure
   GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-},${EREGION_CONSOLE_AZURE_CLIENT_ID:-},${GLORFINDEL_BOT_AZURE_CLIENT_ID:-}
 
 x-console-azure: &console-azure
-  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
-  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}
+  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-}
+  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-}
   AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
 
 x-bot-azure: &bot-azure
-  AZURE_CLIENT_ID: ${GLORFINDEL_BOT_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
-  AZURE_CLIENT_SECRET: ${GLORFINDEL_BOT_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}
+  AZURE_CLIENT_ID: ${GLORFINDEL_BOT_AZURE_CLIENT_ID:-}
+  AZURE_CLIENT_SECRET: ${GLORFINDEL_BOT_AZURE_CLIENT_SECRET:-}
   AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
 
 x-models: &models

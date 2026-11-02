@@ -379,7 +379,7 @@ EREGION_DISCORD_WEBHOOK_DEPLOY=...          # webhook de #deploy : copié sur H0
 EREGION_DISCORD_MENTION=...                 # id de l'utilisateur que mentionnent les pings de #agents
                                     # sur le poste : ~/.config/eregion/discord.env (600) si l'environnement ne les a pas
 GLORFINDEL_AZURE_CLIENT_ID=…        # V-17 : le principal de la watch (et …_SECRET) ; EREGION_CONSOLE_AZURE_CLIENT_* la console,
-                                    # GLORFINDEL_BOT_AZURE_CLIENT_* le bot ; vides → AZURE_CLIENT_* (« Identités Azure », plus bas)
+                                    # GLORFINDEL_BOT_AZURE_CLIENT_* le bot ; vides : aucun principal de service (l'identité managée de la VM s'il y en a une), jamais AZURE_CLIENT_* (SEC11)
 HOST_SSH_FINGERPRINT=SHA256:…       # V-32 : l'empreinte de la clé d'hôte de H0, relevée sur la VM ; sans elle, accept-new et c'est dit
                                     # (infra/glorfindel-host/README.md, « SSH ») ; HOST_KNOWN_HOSTS : son fichier (~/.eregion/h0_known_hosts)
 ORO_SSH_FINGERPRINT=SHA256:…        # V-32 (SEC14) : celle d'Orodruin, lue sur la VM par Azure (make orodruin-fingerprint) ; exigée par
@@ -409,7 +409,7 @@ reçoit le nouveau, celui de H0 garde l'ancien) à la console seule ;
 `GLORFINDEL_WEBHOOK_URL` à la watch et à la console, avec `GLORFINDEL_DISCORD_BOT` (« 1 » si `DISCORD_BOT_TOKEN` est posé, vide sinon,
 jamais sa valeur : avec `DISCORD_CHANNEL_ID`, leur webhook se tait) ; à chacun des trois son
 principal de service Azure (la watch, « Approve & execute », les boutons Restore / Revert du bot :
-« Identités Azure », plus bas ; vides, le principal unique `AZURE_CLIENT_*`) ; les
+« Identités Azure », plus bas ; vide : aucun principal de service — l'identité managée de la VM s'il y en a une —, jamais `AZURE_CLIENT_*`, SEC11) ; les
 réglages sans secret aux trois. Une variable nouvelle s'ajoute
 dans le bloc de son conteneur, et dans `SECRETS` de `tests/unit/test_glorfindel_host.py` si elle
 porte un secret.
@@ -453,7 +453,7 @@ Limites connues :
 (`annatar-run`, `annatar-dry-run`, `annatar-shell`, `glorfindel-watch`, `-list`, `-shell`…)
 donnent chaque secret à `docker run` par son nom, `-e AZURE_CLIENT_SECRET`, jamais par sa valeur :
 `-e AZURE_CLIENT_SECRET=…` se lisait dans `ps`, l'historique du shell et `make -n`. Le shell de la
-recette choisit la valeur (`GLORFINDEL_AZURE_CLIENT_*` d'abord, puis `AZURE_CLIENT_*` ;
+recette choisit la valeur (`GLORFINDEL_AZURE_CLIENT_*` seul, jamais `AZURE_CLIENT_*` — SEC11 ;
 `ANNATAR_AZURE_CLIENT_*` seul, jamais le partagé — SEC7) et la pose dans l'environnement de `docker run` seulement (`*_AZURE_PICK`, devant
 la commande). Le canary, `tests/unit/test_makefile_secrets.py` : chaque cible rendue par `make -n`
 avec des secrets factices, aucune valeur sur une ligne de commande ; puis les recettes des
@@ -472,7 +472,7 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
 
 | Service | Ce qu'il appelle sur Azure | Rôles, portée : les groupes inscrits |
 |---|---|---|
-| la watch | lit (journaux, NSG, NIC, coffre) ; isole, lève, bloque, débloque, instantané — seule, dans son mode | `Reader`, `Log Analytics Reader` (le workspace), **Eregion Glorfindel Response** |
+| la watch | lit (journaux, NSG, NIC, coffre) ; isole, lève, bloque, débloque, instantané — seule, dans son mode ; coupe les sessions d'une VM qu'elle isole | `Reader`, `Log Analytics Reader` (le workspace), **Eregion Glorfindel Response** ; **Eregion Glorfindel Session Drain** sur chaque VM qu'elle défend |
 | la console | lit (audit, préparation, jobs) ; ce qu'un humain approuve : isoler, bloquer, instantané (dans son processus), lever, reset, restore (par la CLI qu'elle lance) | `Reader`, `Log Analytics Reader`, **Response**, **Eregion Glorfindel Restore** |
 | le bot | lit les points de restauration ; ses boutons lancent la CLI : Restore, Revert (levée et déblocage) | `Reader`, **Response**, **Restore** |
 
@@ -481,7 +481,21 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   (`glorfindel/providers/azure/capabilities.py`, testé contre le fichier), les contrôles liés
   d'une écriture de NIC (IP publique, ASG, équilibreur : à mesurer sur le banc, ci-dessous) et
   le déclenchement d'un instantané du coffre. Jamais un restore, une suppression, une identité,
-  un rôle.
+  un rôle — ni Run Command (SEC11).
+- **Eregion Glorfindel Session Drain** (`infra/identities/glorfindel-session-drain.json`, SEC11,
+  R-03) : Run Command seul, le droit le plus fort de la watch (une commande en root sur la VM),
+  pour couper les sessions déjà ouvertes d'une VM qu'elle isole (`ss -K`, écrit dans le code).
+  **Attribué VM par VM, aux VM que Glorfindel défend** (une liste explicite : `session_drain_vms`
+  sur H0), jamais sur un groupe. Pas le tag d'inscription : il dit où un injecteur peut agir,
+  pas ce que Glorfindel défend — bree, jamais inscrite, est la VM du banc qui reçoit de vraies
+  attaques. Une VM qui ne l'a pas est quand même isolée ; la coupure est
+  refusée, et la carte le dit (« Run Command refusé sur cette VM : le rôle … n'y est pas »), la
+  vérification de l'isolation en échec, comme pour toute session restée ouverte. La préparation
+  le dit avant (`no_drain`), l'audit aussi (« Isolation permissions », avertissement). Le droit
+  est lu sur la VM elle-même (`check_permissions`) ; tenu sur tout le groupe, il est dit comme
+  plus que la réponse (`identity_beyond_response`). Sur H0, c'est Terraform qui l'attribue
+  (`infra/glorfindel-host/session_drain.auto.tfvars`, ci-dessous) ; la console et le bot l'ont déjà par
+  leur rôle Restore (la neutralisation avant restore).
 - **Eregion Glorfindel Restore** (`infra/identities/glorfindel-restore.json`) : un restore en
   place depuis le coffre — Run Command neutralisée, VM désallouée, disques restaurés par le
   compte de transit, VM redémarrée. **Jamais à la watch** : Glorfindel ne restaure jamais seul,
@@ -494,17 +508,23 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   demander `Reader` sur l'abonnement, jamais plus.
 - **Les variables** : `GLORFINDEL_AZURE_CLIENT_ID` / `…_SECRET` (la watch),
   `EREGION_CONSOLE_AZURE_CLIENT_ID` / `…_SECRET` (la console), `GLORFINDEL_BOT_AZURE_CLIENT_ID` /
-  `…_SECRET` (le bot) ; vides, chacun prend `AZURE_CLIENT_ID` / `…_SECRET`, le principal unique
-  d'avant (rien ne casse).
-  - **Une paire va ensemble.** Le compose tire chaque repli variable par variable : un
-    `…_CLIENT_ID` posé sans son `…_SECRET` (ou l'inverse) donne au service l'id d'un principal
-    et le secret d'un autre. `make glorfindel-start` (`check-azure-env`) dit une paire
-    incomplète, sans jamais en dire la valeur.
-  - **`AZURE_CLIENT_*`, le repli de tout le reste** : la watch lancée depuis le venv
-    (`DefaultAzureCredential`), et tout service du compose dont la paire est vide. Y mettre le
-    principal de la watch (`.envrc.example`), jamais celui de la console : il restaure. Un
-    restore depuis la CLI du poste prend la paire de la console pour cette commande seulement
+  `…_SECRET` (le bot). **Aucun repli** (SEC11) : vide, un service n'a pas de principal de
+  service — l'identité managée de la VM s'il y en a une (H0), sinon aucune —, jamais
+  `AZURE_CLIENT_*`, le principal unique d'avant, `Contributor` sur l'abonnement là où il traîne
+  encore. `make glorfindel-start` (`check-azure-env`) dit chaque service sans paire, et la watch
+  le dit à son démarrage (« Identity: no service principal »). C'est ce qui rend vrai « plus
+  jamais `Contributor` » : aucun conteneur ne peut le reprendre par défaut.
+  - **Une paire va ensemble.** Un `…_CLIENT_ID` posé sans son `…_SECRET` (ou l'inverse) ne fait
+    pas un principal : `make glorfindel-start` (`check-azure-env`) dit une paire incomplète, sans
+    jamais en dire la valeur.
+  - **`AZURE_CLIENT_*`, le venv seulement** : la watch lancée depuis le venv
+    (`DefaultAzureCredential`) ; aucun conteneur, ni du compose ni des cibles `make glorfindel-*`
+    (`GLORFINDEL_AZURE_PICK`). Y mettre le principal de la watch (`.envrc.example`), jamais celui
+    de la console : il restaure. Un restore depuis la CLI du poste prend la paire de la console
+    pour cette commande seulement
     (`AZURE_CLIENT_ID=$EREGION_CONSOLE_AZURE_CLIENT_ID AZURE_CLIENT_SECRET=… glorfindel restore …`).
+  - **Une instance d'équipe** (`team.env.example`) : la paire de sa watch et celle de sa console,
+    le même principal `Reader` pouvant servir aux deux.
   - **Les injecteurs ne prennent jamais `AZURE_CLIENT_*`** : `x-injector` dans le compose, et
     `make annatar-*` / `annatar-shell` (`ANNATAR_AZURE_PICK`) ne lisent que
     `ANNATAR_AZURE_CLIENT_*` ; vides, le conteneur rouge n'a pas d'identité
@@ -528,6 +548,12 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   service y restent vides. Depuis le 31/10 (décision de Jonathan, BL1), elle tient `Reader` et
   **Eregion Glorfindel Response** sur le seul groupe du banc, `Log Analytics Reader` sur son
   workspace, jamais le restore ; `GLORFINDEL_READ_ONLY=0`, gondolin et bree en `non_disruptive`.
+  Après les gestes de SEC11 (ci-dessous), la coupure des sessions lui vient de Terraform, VM par
+  VM : `session_drain_vms` (gondolin et bree, gardée dans
+  `infra/glorfindel-host/session_drain.auto.tfvars`, commité) ; chaque VM relue sur Azure, une
+  attribution de « Eregion Glorfindel Session Drain » par VM (`infra/glorfindel-host/main.tf`,
+  `terraform output session_drain_vms`), jamais sur le groupe. Un `make glorfindel-host-up`
+  ordinaire relit la liste : il ne retire rien.
   `make glorfindel-host-push` garde ces modes (décision de Jonathan, 02/11 : il lit la config en
   place sur H0, n'en reporte que le mode de chaque VM, jamais un plus hardi, et le dit VM par VM ;
   avant, SEC7 remettait tout en `human_only` à chaque push) ; `HUMAN_ONLY=1` remet toutes les VM
@@ -541,7 +567,7 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
 ```bash
 SUB=<SUBSCRIPTION_ID>; RG=<groupe des VM inscrites>; VAULT_RG=<groupe du coffre>
 LAW=<id de ressource du workspace>
-for r in response restore; do
+for r in response restore session-drain; do
   sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-$r.json > /tmp/eregion-role-$r.json
   az role definition create --role-definition @/tmp/eregion-role-$r.json
 done
@@ -555,7 +581,7 @@ du rôle existant, puis l'attribuer comme ci-dessous :
 
 ```bash
 SUB2=<SECOND_SUBSCRIPTION_ID>
-for r in "Eregion Glorfindel Response" "Eregion Glorfindel Restore"; do
+for r in "Eregion Glorfindel Response" "Eregion Glorfindel Restore" "Eregion Glorfindel Session Drain"; do
   az role definition list --name "$r" --scope /subscriptions/$SUB --query '[0]' -o json \
     | python3 -c 'import json,sys; d=json.load(sys.stdin); d["assignableScopes"].append(sys.argv[1]); print(json.dumps(d))' \
         "/subscriptions/$SUB2" > /tmp/eregion-role.json
@@ -578,6 +604,11 @@ done
 for a in <appId-watch> <appId-console>; do
   az role assignment create --assignee $a --role "Log Analytics Reader" --scope $LAW
 done
+# La coupure des sessions (SEC11) : à la watch, sur chaque VM que Glorfindel défend, jamais
+# sur le groupe. L'id d'une VM : az vm show -g $RG -n <nom> --query id -o tsv
+for vm in <id de chaque VM défendue>; do
+  az role assignment create --assignee <appId-watch> --role "Eregion Glorfindel Session Drain" --scope $vm
+done
 # Le compte de transit du restore (restore_staging_storage), s'il est dans un autre groupe :
 #   for a in <appId-console> <appId-bot>; do
 #     az role assignment create --assignee $a --role "Eregion Glorfindel Restore" --scope <son groupe>
@@ -593,6 +624,36 @@ Audit) — un droit manquant y est nommé.
 une VM du banc qui porte une IP publique (les contrôles liés d'une écriture de NIC), un
 instantané, un restore depuis la console ; un 403 nomme l'action qui manque, à ajouter au
 fichier du rôle (`az role definition update --role-definition @…`).
+
+**Depuis un rôle de la réponse d'avant SEC11** (il tient Run Command, sur tout le groupe — c'est
+le cas de H0 aujourd'hui) : dans cet ordre, pour qu'aucune VM défendue ne perde la coupure entre
+deux gestes —
+
+1. créer le rôle de la coupure ;
+2. l'attribuer sur chaque VM défendue : sur H0, `make glorfindel-host-plan`, le plan relu (une
+   attribution par VM de `session_drain_vms`, aucune sur le groupe), puis `make
+   glorfindel-host-up`, sans `YES` ; ailleurs, la boucle `for vm in …` ci-dessus ;
+3. vérifier les attributions, juste après l'apply : `terraform -chdir=infra/glorfindel-host output
+   session_drain_vms`, ou `az role assignment list --assignee <principal> --role "Eregion Glorfindel
+   Session Drain" --all`, montre une portée de VM par VM défendue (deux sur le banc : gondolin,
+   bree), aucune de groupe. La préparation ne prouve rien encore : le rôle de la réponse porte
+   toujours Run Command sur le groupe, elle ne peut pas dire `no_drain` ;
+4. **seulement ensuite**, retirer Run Command du rôle de la réponse ;
+5. **après le geste 4**, relire la préparation de chaque VM défendue (console, page Glorfindel) :
+   aucune `no_drain`. C'est là que la coupure VM par VM se prouve.
+
+```bash
+sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-session-drain.json > /tmp/eregion-role-session-drain.json
+az role definition create --role-definition @/tmp/eregion-role-session-drain.json       # 1
+# 2 : ci-dessus ; 3 :
+terraform -chdir=infra/glorfindel-host output session_drain_vms                         # deux VM
+sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-response.json > /tmp/eregion-role-response.json
+az role definition update --role-definition @/tmp/eregion-role-response.json            # 4 : sans Run Command
+# 5 : la préparation de chaque VM défendue, sans no_drain
+```
+
+Dans l'autre ordre, une VM défendue perd la coupure jusqu'au geste suivant : isolée quand même,
+la coupure refusée et dite, mais `no_drain` la tient en réserve à la préparation.
 
 **Faire tourner un secret** (un an par défaut) : `az ad sp credential reset --id <appId>` rend
 un nouveau `password` ; le poser dans `.envrc`, `make glorfindel-restart`. L'ancien cesse à la

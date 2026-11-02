@@ -16,7 +16,7 @@ from glorfindel.providers.azure.nsg import (
     _shadowing_rules,
 )
 from glorfindel.providers.azure.quarantine import _remember_quarantine_outcome, PLATFORM_OPEN_NOTE
-from glorfindel.providers.azure.sdk import _enum_text
+from glorfindel.providers.azure.sdk import _enum_text, _is_iam_error
 from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.legacy_state import _kept_legacy
@@ -327,6 +327,14 @@ class IsolationMixin:
                         "error": f"{remaining} connexion(s) encore établie(s) après ss -K"}
             return {"status": "drained"}
         except Exception as e:
+            if _is_iam_error(str(e)):
+                # SEC11 (R-03): Run Command is given VM by VM, to the VMs Glorfindel defends — refused here,
+                # the isolation stands and the card says why the sessions were not cut.
+                return {"status": "failed", "refused": True,
+                        "error": ("Run Command refusé sur cette VM : le rôle « Eregion Glorfindel "
+                                  "Session Drain » n'y est pas (il se donne VM par VM, aux VM "
+                                  "que Glorfindel défend : session_drain_vms) — "
+                                  + _first_line(e))[:_ERR_MAX]}
             return {"status": "failed", "error": _first_line(e)[:_ERR_MAX]}
 
     def _record_partial_isolation(

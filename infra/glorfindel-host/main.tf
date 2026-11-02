@@ -6,7 +6,8 @@
 # Log Analytics du banc : la découverte (Heartbeat) ne la voit pas, Glorfindel ne peut pas
 # l'isoler. Son identité managée lit le banc ici (Reader, Log Analytics Reader) ; le rôle de la
 # réponse sur le groupe du banc lui est attribué à la main, hors de cet état (la posture de H0,
-# BL1c : README.md, « Ce que la VM est »). README.md pour le déroulé.
+# BL1c : README.md, « Ce que la VM est »). La coupure des sessions, elle, est ici : VM par VM, aux
+# VM que Glorfindel défend (session_drain_vms, SEC11). README.md pour le déroulé.
 
 terraform {
   required_providers {
@@ -192,5 +193,29 @@ resource "azurerm_role_assignment" "bench_reader" {
 resource "azurerm_role_assignment" "bench_logs_reader" {
   scope                = data.azurerm_log_analytics_workspace.bench.id
   role_definition_name = "Log Analytics Reader"
+  principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
+}
+
+# ── La coupure des sessions, VM par VM, aux VM que Glorfindel défend (SEC11, R-03) ──────────
+# Run Command est sorti du rôle de la réponse : « Eregion Glorfindel Session Drain »
+# (infra/identities/glorfindel-session-drain.json, créé une fois par tenant avec `az role definition
+# create`, comme les deux autres), attribué à la portée de chaque VM de session_drain_vms — une
+# liste explicite, gardée dans session_drain.auto.tfvars, commité : un `make glorfindel-host-up`
+# ordinaire la relit et ne retire rien —, jamais sur le groupe. Pas le tag d'inscription : il dit
+# où un injecteur peut agir, pas ce que Glorfindel défend (bree, jamais inscrite, est la VM du banc
+# qui reçoit de vraies attaques), et il se pose avec Microsoft.Resources/tags/write, sans écrire la
+# VM. Chaque nom est relu sur Azure (data "azurerm_virtual_machine") : une faute de frappe échoue
+# au plan. Liste vide : aucune coupure, H0 lit. La réponse elle-même (« Eregion Glorfindel
+# Response » sur le groupe) reste un geste de Jonathan (docs/banc-bl1.md).
+data "azurerm_virtual_machine" "session_drain" {
+  for_each            = toset(var.session_drain_vms)
+  name                = each.value
+  resource_group_name = data.azurerm_resource_group.bench.name
+}
+
+resource "azurerm_role_assignment" "session_drain" {
+  for_each             = data.azurerm_virtual_machine.session_drain
+  scope                = each.value.id
+  role_definition_name = "Eregion Glorfindel Session Drain"
   principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
 }

@@ -18,9 +18,27 @@ seul sur le banc, dans le mode de chaque VM.
   posture ouvre et ce qui la borne : le modèle de menace
   ([`docs/design/modele-de-menace.md`](../../docs/design/modele-de-menace.md), §5).
   - **Le rôle de la réponse est attribué à la main**, hors de l'état Terraform de H0
-    (`main.tf` ne pose que les deux lectures) : `az role assignment create`, l'étape 3 de
+    (`main.tf` pose les deux lectures et la coupure des sessions, rien d'autre) : `az role assignment create`, l'étape 3 de
     [`docs/banc-bl1.md`](../../docs/banc-bl1.md) ; le retirer, l'étape 7. Un `terraform apply`
     de H0 ne l'ajoute ni ne l'enlève.
+  - **La coupure des sessions, VM par VM** (SEC11). **Aujourd'hui**, le rôle de la réponse posé à
+    la main porte encore Run Command, sur toute VM du banc. **Après les gestes de SEC11**
+    (`docs/operations.md`, « Depuis un rôle de la réponse d'avant SEC11 », dans leur ordre :
+    créer le rôle ; le plan relu, puis `make glorfindel-host-up` ; juste après, deux portées de
+    VM (`terraform output session_drain_vms`, ou `az role assignment list --assignee <principal>
+    --role "Eregion Glorfindel Session Drain" --all`) ; ensuite seulement, Run Command retiré du
+    rôle de la réponse ; et après ce geste, la préparation de gondolin et de bree, sans aucune
+    `no_drain` — avant, elle ne prouve rien, le rôle de la réponse couvrant encore le groupe) :
+    Run Command n'est plus dans le rôle de la réponse ; « Eregion Glorfindel Session Drain » se
+    donne sur chaque VM de `session_drain_vms` — gondolin et bree, gardée dans
+    `session_drain.auto.tfvars`, commité —, jamais sur le groupe, par cet état Terraform (chaque
+    VM relue sur Azure : une faute de frappe échoue au plan ; `terraform output
+    session_drain_vms`). Un `make glorfindel-host-up` ordinaire relit la liste et ne retire rien.
+    Une VM hors de la liste est isolée quand même ; la coupure y est refusée et dite sur la carte.
+    Une VM de la liste que Celebrimbor reconstruit perd son attribution avec elle (l'attribution
+    porte l'id de la VM) : elle la retrouve au prochain `make glorfindel-host-up` ; d'ici là, sa
+    préparation dit `no_drain`, et elle agit en `human_only`.
+    Le test du module la tient (`tests/session_drain.tftest.hcl`).
   - **Un `make glorfindel-host-push` garde le mode de chaque VM** tel qu'il est sur H0
     (décision de Jonathan, 02/11 ; avant, SEC7 remettait toutes les VM en `human_only` à
     chaque push, et la posture se redonnait dans la console). Le push lit la config en place

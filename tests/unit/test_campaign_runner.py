@@ -53,7 +53,7 @@ def _make_campaign(tmp_path, scenarios, *, budget=None, state="ratified", kill=F
     m = CampaignManifest(
         campaign_id=cid,
         objective="t",
-        scope=Scope(allowed_resource_groups=["rg-celebrimbor"]),
+        scope=Scope(subscription_id="sub-1", allowed_resource_groups=["rg-celebrimbor"]),
         budget=budget or Budget(),
         scenarios=scenarios,
         state=state,

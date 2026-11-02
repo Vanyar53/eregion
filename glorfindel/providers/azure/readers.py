@@ -14,6 +14,11 @@ from glorfindel.response.ids import _parse_nic_resource_id, _parse_nsg_resource_
 from glorfindel.response.policy import _ERR_MAX, _first_line
 
 
+def _vm_scope(rg: str, vm_name: str) -> str:
+    """The VM's own scope, under its group, as check_permissions reads it."""
+    return f"{rg}/providers/Microsoft.Compute/virtualMachines/{vm_name}"
+
+
 def _within(addr: str, ips: list[str]) -> bool:
     """`addr` is one of these addresses or prefixes; a value that isn't one (a service
     tag) may hold it: True."""
@@ -42,11 +47,13 @@ class ReadersMixin:
         ("block_suspicious_ip", "Microsoft.Network/networkSecurityGroups/securityRules/delete"),
     )
 
-    # What the response never needs, and the restore does (SEC7, V-17): the watch's identity
-    # holding one of them on the VM's group could deallocate or restore on its own.
+    # What the response never needs on the VM's group (SEC7, V-17): the restore's rights — the
+    # watch's identity holding one could deallocate or restore on its own —, and Run Command
+    # (SEC11, R-03), given VM by VM to the VMs Glorfindel defends, never on a whole group.
     BEYOND_RESPONSE = (
         "Microsoft.Compute/virtualMachines/deallocate/action",
         "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/recoveryPoints/restore/action",
+        "Microsoft.Compute/virtualMachines/runCommand/action",
     )
 
     def _permission_scopes(self, rg: str, vm_name: str) -> dict[str, tuple[str, set]]:
@@ -62,7 +69,9 @@ class ReadersMixin:
                 scopes.setdefault(group.lower(), (group, set()))[1].add((used_by, action))
 
         _, q_rg = self._quarantine_settings()
-        need(rg, "isolate_vm", "Microsoft.Compute/virtualMachines/runCommand/action")
+        # SEC11 (R-03): the session drain's right is given on the VM itself (« Eregion Glorfindel
+        # Session Drain », VM by VM): read there — the VM's permissions include its group's.
+        need(_vm_scope(rg, vm_name), "isolate_vm", "Microsoft.Compute/virtualMachines/runCommand/action")
         for action in ("Microsoft.Network/networkSecurityGroups/write",
                        "Microsoft.Network/networkSecurityGroups/join/action"):
             need(q_rg or rg, "isolate_vm", action)
@@ -101,6 +110,7 @@ class ReadersMixin:
             self._ensure_clients()
             rg, vm_name = _parse_vm_resource_id(resource_id)
             scopes = self._permission_scopes(rg, vm_name)
+            scopes.setdefault(rg.lower(), (rg, set()))   # the group itself, for what goes beyond
             token = self._credential.get_token("https://management.azure.com/.default").token
             missing: list[dict] = []
             beyond: list[str] = []

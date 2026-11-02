@@ -528,3 +528,10 @@ def test_a_measure_before_the_report_is_marked_provisional_on_the_pill_and_the_l
 
 def test_an_unreadable_status_is_said_beside_orodruin():
     assert "if (!st && f && f.status_error) return" in _body(_js(), "function orodruinLine(")
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")

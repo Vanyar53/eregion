@@ -18,7 +18,7 @@ def _manifest():
     return CampaignManifest(
         campaign_id=new_campaign_id(),
         objective="test kill-chain",
-        scope=Scope(allowed_resource_groups=["rg-celebrimbor"]),
+        scope=Scope(subscription_id="sub-1", allowed_resource_groups=["rg-celebrimbor"]),
         budget=Budget(max_scenarios=3),
         scenarios=[
             ScenarioEntry(

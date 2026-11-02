@@ -253,3 +253,10 @@ def test_stop_all_is_a_read_the_console_revokes_nothing():
     assert route.methods == {"GET"}
     js = (Path(api.__file__).parent / "static" / "dagorlad.js").read_text(encoding="utf-8")
     assert "stopAll()" in js and "getJSON('/api/dagorlad/stop')" in js
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")

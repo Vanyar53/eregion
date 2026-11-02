@@ -620,3 +620,10 @@ def test_a_destructive_fault_without_its_name_typed_is_refused_by_orodruin(tmp_p
     status = r.run(_req(("vm-wipe", GONDOLIN)), {1: "vm-celebrimbor-gondolin"})
     assert status.wire(1).state == "done"
     assert inj.launched[0][0][-2:] == ["--typed-name", "vm-celebrimbor-gondolin"]
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")

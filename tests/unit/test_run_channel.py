@@ -294,3 +294,10 @@ def test_the_console_shows_the_verdict_of_a_run_pulled_from_the_channel(tmp_path
     assert run["result"] == "PASS" and run["mitre"] == "T1136.001"
     assert run["checks"]["initial_state_after"] == "PASS"
     assert run["metrics"]["detection"] == "unknown"     # the wait is mocked: no watch
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")

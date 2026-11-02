@@ -141,8 +141,9 @@ jobs:
   # G1), planned against mock providers: no Azure identifier, no token, nothing applied. Every
   # provider package comes from the registry and is checked against the hashes of its module's
   # committed lock file (-lockfile=readonly: a package that does not match, or a provider the
-  # lock does not list, fails init). Orodruin's and Glorfindel's host modules have no test yet:
-  # their configuration is validated against their own lock the same way.
+  # lock does not list, fails init). Glorfindel's host module has its own test since SEC11 (the
+  # session drain, VM by VM: infra/glorfindel-host/tests/); Orodruin's has none yet: its
+  # configuration is validated against its own lock the same way.
   terraform-test:
     name: terraform test (mock providers)
     runs-on: ubuntu-latest
@@ -186,9 +187,13 @@ jobs:
           terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/terraform test -no-color
 
-      - name: Terraform validate — Orodruin, Glorfindel's host
+      - name: Terraform test — Glorfindel's host (mock providers)
         run: |
-          for m in orodruin glorfindel-host; do
-            terraform -chdir="infra/$m" init -backend=false -lockfile=readonly -input=false -no-color
-            terraform -chdir="infra/$m" validate -no-color
-          done
+          terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir=infra/glorfindel-host validate -no-color
+          terraform -chdir=infra/glorfindel-host test -no-color
+
+      - name: Terraform validate — Orodruin
+        run: |
+          terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir=infra/orodruin validate -no-color

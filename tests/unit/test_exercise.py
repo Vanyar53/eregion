@@ -125,6 +125,7 @@ def test_an_annatar_run_opens_and_closes_its_window(tmp_path, monkeypatch):
     from tests.unit.test_engine import EXFIL_YAML, _make_collector, _make_executor
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")   # the target's: the scope names it (SEC11)
     executor = _make_executor()
     engine = Engine()
     with patch.object(engine, "_get_executor_collector", return_value=(executor, _make_collector())), \

@@ -1,0 +1,12 @@
+{
+  "Name": "Eregion Glorfindel Session Drain",
+  "IsCustom": true,
+  "Description": "R-03 (SEC11): the one right of the session drain - Run Command, to cut the sessions already open on a VM Glorfindel isolates (ss -K, Linux; the command is written in Glorfindel's code, never by the model). Assigned VM by VM, on the VMs Glorfindel defends only (session_drain_vms on H0), never on a resource group: a VM without it is still isolated, and the drain refused is said on the card. Taken out of Eregion Glorfindel Response.",
+  "Actions": [
+    "Microsoft.Compute/virtualMachines/runCommand/action"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": ["/subscriptions/<SUBSCRIPTION_ID>"]
+}

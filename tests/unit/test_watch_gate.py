@@ -231,6 +231,9 @@ def _without(tmp_path, monkeypatch, scenario, executor):
     """`annatar run --without-glorfindel --yes`, no watch at all, the wait recorded."""
     waited = []
     monkeypatch.chdir(tmp_path)
+    # SEC11 (R-19): the bench's scope names the subscription of the run's target, not the one
+    # real_gate gives the watch's perimeter (no watch here).
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")
     with patch.object(Engine, "_get_executor_collector", return_value=(executor, None)), \
          patch.object(Engine, "_wait_and_emit_feedback", lambda *a, **k: waited.append(a)):
         res = CliRunner().invoke(cli, ["run", scenario, "--without-glorfindel", "--yes"])
@@ -328,7 +331,7 @@ VM = ("/subscriptions/sub-1/resourceGroups/rg-celebrimbor/providers/"
 
 def _campaign(tmp_path, n=2):
     m = CampaignManifest(
-        campaign_id="C1", objective="t", scope=Scope(allowed_resource_groups=["rg-celebrimbor"]),
+        campaign_id="C1", objective="t", scope=Scope(subscription_id="sub-1", allowed_resource_groups=["rg-celebrimbor"]),
         budget=Budget(), state="ratified",
         scenarios=[ScenarioEntry(seq=i, ttp="T1110.001", tactic="impact", name="t",
                                  scenario_file=f"scenarios/{i:02d}.yaml", target_resource_id=VM)
@@ -594,3 +597,10 @@ def test_orodruin_targets_pass_the_flag_and_return_the_refusal(tmp_path, target,
         assert code == 0 and "--without-glorfindel" not in calls[-1], value
     code, _ = _make(tmp_path, target, *args, exit_code=1)
     assert code != 0
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")

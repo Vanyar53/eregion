@@ -137,7 +137,7 @@ def _docker_calls(tmp_path, target, secrets):
                                           ("glorfindel-list", "GLORFINDEL"), ("glorfindel-shell", "GLORFINDEL")])
 def test_the_container_gets_its_own_principal_by_name(tmp_path, target, side):
     """Run for real (a fake docker): the secret is in docker's environment, never its arguments;
-    the component's own principal first, the shared one as a fallback."""
+    the component's own principal, never the shared one as a fallback (SEC11)."""
     other = "GLORFINDEL" if side == "ANNATAR" else "ANNATAR"
     secrets = {"AZURE_CLIENT_ID": "shared-id", "AZURE_CLIENT_SECRET": "hy1-canary-shared",
                f"{side}_AZURE_CLIENT_ID": "own-id", f"{side}_AZURE_CLIENT_SECRET": "hy1-canary-own",
@@ -149,14 +149,12 @@ def test_the_container_gets_its_own_principal_by_name(tmp_path, target, side):
         assert env == "ENV own-id hy1-canary-own", env
     assert "hy1-canary" not in output
 
-    # Without its own principal: Glorfindel takes the shared one; the red container none (SEC7,
-    # V-17 — the shared principal, or one of Glorfindel's, isolates and restores).
+    # Without its own principal: no container takes the shared one — the red one never did (SEC7,
+    # V-17: the shared principal, or one of Glorfindel's, isolates and restores), Glorfindel's no
+    # longer does (SEC11: the former shared principal, where it lingers, is Contributor).
     del secrets[f"{side}_AZURE_CLIENT_ID"], secrets[f"{side}_AZURE_CLIENT_SECRET"]
     runs, _ = _docker_calls(tmp_path, target, secrets)
-    if side == "GLORFINDEL":
-        assert [env for _, env in runs] == ["ENV shared-id hy1-canary-shared"] * len(runs)
-    else:
-        assert [env.split() for _, env in runs] == [["ENV"]] * len(runs)
+    assert [env.split() for _, env in runs] == [["ENV"]] * len(runs)
 
 
 @pytest.mark.parametrize("target", ["annatar-dry-run", "annatar-shell"])

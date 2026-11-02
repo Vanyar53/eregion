@@ -796,11 +796,14 @@ TF_RUNS = {
     "Terraform test — Celebrimbor (mock providers)":
         "terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color\n"
         "terraform -chdir=infra/terraform test -no-color\n",
-    "Terraform validate — Orodruin, Glorfindel's host":
-        "for m in orodruin glorfindel-host; do\n"
-        '  terraform -chdir="infra/$m" init -backend=false -lockfile=readonly -input=false -no-color\n'
-        '  terraform -chdir="infra/$m" validate -no-color\n'
-        "done\n",
+    # SEC11 (R-03): the session drain, VM by VM, planned against a mock azurerm.
+    "Terraform test — Glorfindel's host (mock providers)":
+        "terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color\n"
+        "terraform -chdir=infra/glorfindel-host validate -no-color\n"
+        "terraform -chdir=infra/glorfindel-host test -no-color\n",
+    "Terraform validate — Orodruin":
+        "terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color\n"
+        "terraform -chdir=infra/orodruin validate -no-color\n",
 }
 
 
@@ -819,8 +822,12 @@ def test_the_terraform_tests_run_on_each_push_and_pull_request():
     (checkout,) = [s for s in steps if str(s.get("uses") or "").startswith("actions/checkout@")]
     assert checkout["with"]["persist-credentials"] is False
     assert job["env"]["CHECKPOINT_DISABLE"] == "1"
-    # Every module with Terraform tests has them run here: today, Celebrimbor's alone.
-    assert {p.parent.parent.name for p in ROOT.glob("infra/*/tests/*.tftest.hcl")} == {"terraform"}
+    # Every module with Terraform tests has them run here: Celebrimbor's, and Glorfindel's host
+    # since SEC11 — each named in a step that runs its `test`.
+    tested = {p.parent.parent.name for p in ROOT.glob("infra/*/tests/*.tftest.hcl")}
+    assert tested == {"terraform", "glorfindel-host"}
+    for module in tested:
+        assert any(f"terraform -chdir=infra/{module} test -no-color" in str(s.get("run") or "") for s in steps), module
 
 
 def test_every_terraform_test_only_plans():

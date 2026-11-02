@@ -83,7 +83,10 @@ function indicators() {
   // OV1 (#399): the time to contain and the share contained alone count real traffic — the
   // watch's detections outside any exercise; the exercises' are Dagorlad's (Runs).
   const t0 = i.t0 === 'detection' ? 'from the detection (no rule gives its first event yet)' : 'from the first event';
-  const guessed = Number(a.inferred) ? ` · <span class="warn" title="Lines written before the watch said real or exercise: neither a window still here nor a run report covers them">${esc(a.inferred)} inferred real</span>` : '';
+  // The doubt, both ways: lines counted real that the watch never labelled, and lines set apart as
+  // exercises by inference (a window still here, a run report, a run's attached decision).
+  const guessed = (Number(a.inferred) ? ` · <span class="warn" title="Lines the watch never labelled real or exercise: neither a window still here, nor a run report, nor a run's decision covers them">${esc(a.inferred)} inferred real</span>` : '')
+    + (Number(a.inferred_exercise) ? ` · <span title="Lines set apart as exercises by inference — a window still here, a run report on the VM, or the decision attached to a run — the watch's « exercise » aside">${esc(a.inferred_exercise)} inferred exercise</span>` : '');
   const timed = c.detected
     ? `${c.decide_s != null ? 'decide ' + dur(c.decide_s) + ' · ' : ''}<span title="medians">${esc(t0)}, ${esc(c.detected)} real detection${c.detected > 1 ? 's' : ''}, ${days} d</span>`
     : `no real detection in ${days} d`;

@@ -7050,17 +7050,18 @@ _OV1 = "tests/unit/test_indicators.py"
 IND_ = "eregion_console/indicators.py"
 MUTANTS += [
     ("M2600", "a cycle the watch said an exercise counted as real traffic (OV1)", IND_,
-     '        return said == "exercise", False\n', "        return False, False\n"),
+     '    if said == "exercise":\n        return True, False\n', '    if said == "exercise":\n        return False, False\n'),
     ("M2601", "an older line inside a window still here counted as real traffic (OV1)", IND_,
      "    if windows and rid and covering_runs(", "    if False and windows and rid and covering_runs("),
     ("M2602", "an older line inside a run report's span counted as real traffic (OV1)", IND_,
-     "and any(_spans(r, rid, t) for r in runs)), True\n", "and False), True\n"),
+     "    if t is not None and rid and any(_spans(r, rid, ttp, t) for r in runs):\n",
+     "    if False:\n"),
     ("M2603", "an older line during a fault on its VM counted as real traffic (OV1)", IND_,
      "        return on and at <= t <= end + GRACE_AFTER_S\n", "        return False\n"),
     ("M2604", "an unattributed row (an arbitrary VM) counted as a real incident (OV1)", IND_,
      '                or (c.get("attribution") or "asset") != "asset"):\n', "                ):\n"),
     ("M2605", "a real containment that did not hold counted contained alone (OV1)", IND_,
-     "                                   cards=all_cards or cards, liftings=lifts)\n",
+     "                                   cards=every_card, liftings=lifts)\n",
      "                                   cards=(), liftings=lifts)\n"),
     ("M2606", "the overview's two tiles left on the exercises' runs (OV1)", CON,
      '        out.update(contain=real["contain"], alone=real["alone"], t0=real["t0"])\n',
@@ -7071,7 +7072,7 @@ MUTANTS += [
      '                and conf >= threshold and c.get("signal_id") not in judged_wrong):\n',
      "                and conf >= threshold):\n"),
     ("M2609", "the watch's debug line never says real traffic or an exercise (OV1)", "glorfindel/agent.py",
-     '    debug_record["source"], debug_record["exercise_run"] = _cycle_source(signal)\n', ""),
+     '        debug_record["source"], debug_record["exercise_run"] = _cycle_source(signal)\n', "        pass\n"),
     ("M2610", "the console's cycle drops what the watch said of its source (OV1)", CON,
      '        "source": str(rec.get("source") or ""), "exercise_run"', '        "source": "", "exercise_run"'),
     ("M2611", "Dagorlad's Runs never read the exercises' indicators (OV1)", "eregion_console/static/injector.js",
@@ -7083,15 +7084,42 @@ TESTS["M2609"] = "tests/unit/test_agent_nodes.py"
 # OV1: one attacker on one VM is one incident — the same address coming back, the same line twice.
 MUTANTS += [
     ("M2612", "the same attacker coming back on one VM counted as another real incident (OV1)", IND_,
-     " or (key[2] and key in first and t0 - first[key] < FOLD_S):\n", ":\n"),
+     " or (key[2] and key in first and t0 - first[key] < FOLD_S\n", " or (False\n"),
     ("M2613", "a line written twice (one signal) counted as two real incidents (OV1)", IND_,
      "        if (sid and sid in signals) or (key[2]", "        if (key[2]"),
     ("M2614", "the console's cycle drops its attacker: every cycle another incident (OV1)", CON,
      '        "attacker": _attacker(sig),\n', '        "attacker": "",\n'),
     ("M2615", "an attacker folded into its first incident for ever, never a day later (OV1)", IND_,
-     "key in first and t0 - first[key] < FOLD_S)", "key in first)"),
+     "key in first and t0 - first[key] < FOLD_S\n", "key in first\n"),
 ]
 TESTS.update({f"M{n}": _OV1 for n in range(2612, 2616)})
+# OV1, its review: only « exercise » is final; a run's attached decision, an old report without
+# its VM; the fold broken by a lift or a drift; a failed cycle's debug line kept. M2616–M2623.
+MUTANTS += [
+    ("M2616", "the decision the overview attaches to a run counted as real traffic (OV1, review)", IND_,
+     "    if id(cycle) in attached:\n        return True, True\n", ""),
+    ("M2617", "an attack report without its VM (before C1) never covers its technique's lines (OV1, review)", IND_,
+     '    on = vm == rid if vm else bool(ttp) and str(run.get("ttp") or run.get("experiment") or "") == ttp\n',
+     "    on = vm == rid\n"),
+    ("M2618", "the watch's « real » taken as final: a window come late by the channel ignored (OV1, review)", IND_,
+     '    if said == "exercise":\n        return True, False\n    if id(cycle)',
+     '    if said in ("exercise", "real"):\n        return said == "exercise", False\n    if id(cycle)'),
+    ("M2619", "an attacker's incident folded across the lift of its containment (OV1, review)", IND_,
+     "    return any((lifted := containment.first_lifting(", "    return False and any((lifted := containment.first_lifting("),
+    ("M2620", "an attacker's incident folded across a card saying its containment is gone (OV1, review)", IND_,
+     "               for action in DISRUPTIVE) or containment.not_holding(rid, since, t, cards) is not None\n",
+     "               for action in DISRUPTIVE)\n"),
+    ("M2621", "a failed cycle's debug line lost when its label cannot be read (OV1, review)", "glorfindel/agent.py",
+     '    try:\n        debug_record["source"], debug_record["exercise_run"] = _cycle_source(signal)\n'
+     '    except Exception:\n        debug_record["source"], debug_record["exercise_run"] = "unknown", ""\n',
+     '    debug_record["source"], debug_record["exercise_run"] = _cycle_source(signal)\n'),
+    ("M2622", "the lines set apart as exercises by inference never said (OV1, review)", IND_,
+     "            inferred_exercise += guessed\n", ""),
+    ("M2623", "an attack report on the VM never makes a line of its span an exercise (OV1, review)", IND_,
+     "    return on and at - FUTURE_SKEW_S <= t <= at + MAX_DURATION_S + GRACE_AFTER_S\n", "    return False\n"),
+]
+TESTS.update({f"M{n}": _OV1 for n in range(2616, 2624)})
+TESTS["M2609"] = f"tests/unit/test_agent_nodes.py {_OV1}"
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -208,7 +208,8 @@ Le week-end du 01/11, bree en `non_disruptive`, Glorfindel a bloqué seul cinq a
 force SSH, et l'accueil disait « 0 of 6 » : il ne comptait que les runs d'Annatar. Depuis OV1 :
 - **TIME TO CONTAIN · REAL** et **CONTAINED ALONE · REAL** comptent le trafic réel. Un incident est
   une détection de la watch avec une décision, sur une VM qu'elle nomme, hors de tout exercice ; un
-  attaquant sur une VM est un incident, ses cycles suivants sur 24 h des répétitions. Il
+  attaquant sur une VM est un incident, ses cycles suivants sur 24 h des répétitions, jusqu'à une
+  levée de son confinement ou une carte qui le dit disparu. Il
   finit comme BL1 le dit : contenu seul si une isolation ou un blocage est exécuté dans son cycle,
   relu sur Azure, et qu'il a tenu. Son T0 est l'heure de la détection, dit comme tel : aucune règle
   ne rend encore le premier événement malveillant (`docs/analysis.md`, « Le réel »). L'ombre, les
@@ -218,11 +219,12 @@ force SSH, et l'accueil disait « 0 of 6 » : il ne comptait que les runs d'Anna
 - **Les mêmes deux indicateurs sur les exercices** — le calcul d'avant, par run, avec les pannes
   prises pour une attaque — sont en tête de la vue Runs de Dagorlad (`GET /api/dagorlad/indicators`).
 - **Réel ou exercice** : la watch l'écrit dans sa ligne de debug depuis OV1 (`source`, `exercise_run`,
-  ce que `_cycle_source` donnait déjà à la mémoire et aux cartes). Une ligne plus ancienne est un
-  exercice si une fenêtre encore sur l'hôte la couvre, ou un rapport de run sur sa VM (une panne, de
-  son début à sa fin plus la grâce ; une attaque, de son T0 à la plus longue vie d'une fenêtre plus
-  la grâce : large exprès, un exercice n'est jamais compté réel) ; sinon elle est réelle, et la tuile
-  dit combien sont ainsi déduites.
+  ce que `_cycle_source` donnait déjà à la mémoire et aux cartes). Seul « exercise » est définitif.
+  Pour le reste, c'est un exercice si l'accueil rattache la ligne à un run, si une fenêtre encore sur
+  l'hôte la couvre, ou si un rapport de run la couvre sur sa VM (une panne, de son début à sa fin plus
+  la grâce ; une attaque, de son T0 à la plus longue vie d'une fenêtre plus la grâce, ou sa technique
+  sur toute VM si le rapport, d'avant C1, ne nomme pas la VM : large exprès, un exercice n'est jamais
+  compté réel). Sinon la ligne est réelle. La tuile dit le doute dans les deux sens.
 
 **La matrice de C1 (#80, 30/10)** a trouvé sa place dans Annatar et dans Gothmog, avec son résumé
 sur l'accueil. La colonne de droite de chaque page (« COVERAGE · TECHNIQUES », « COVERAGE ·

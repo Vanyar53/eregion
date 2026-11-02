@@ -188,10 +188,12 @@ def test_the_route_reads_this_host(runs):
     _cycle(runs, a + timedelta(seconds=60), "T1110.001", "block_suspicious_ip", 0.85)
     body = console().get("/api/indicators").json()
     assert body["window_days"] == 30 and body["last_proof"]["run_id"] == "r1"
-    # OV1: the overview's shadow is real traffic's — this line, written before the watch said its
-    # source, on a VM no window nor report names, is real traffic, inferred.
-    assert body["coverage"]["implemented"] >= 1 and body["alone"]["shadow"] == 1
-    assert body["alone"]["inferred"] == 1 and body["t0"] == "detection"
+    # OV1: the overview's two tiles are real traffic's — this line is the decision the overview
+    # attaches to the run r1 (its last proof): an exercise, inferred, never real traffic, even
+    # written before the watch said its source and from a report that names no VM.
+    assert body["coverage"]["implemented"] >= 1 and body["alone"]["shadow"] == 0
+    assert body["alone"]["of"] == 0 and body["alone"]["inferred"] == 0
+    assert body["alone"]["inferred_exercise"] == 1 and body["t0"] == "detection"
     route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/indicators")
     assert route.methods == {"GET"}
 
@@ -432,3 +434,89 @@ def test_a_run_on_another_vm_never_makes_a_real_incident_an_exercise(runs):
     _real(runs, a + timedelta(seconds=30), source=None, vm=gondolin, verified_after=40, sid="rule-x-gondolin")
     out = _overview_real(runs)
     assert (out["alone"]["of"], out["alone"]["inferred"], out["alone"]["contained"]) == (1, 1, 1)
+
+
+# ── OV1, its review: the exercises that hid as real traffic, the fold that hid a failure ──────
+
+def test_an_old_attack_report_without_its_vm_never_makes_its_exercise_real(runs):
+    """Q8: a report written before C1 names no VM. Its cycle — the decision the overview attaches
+    to it — is the run's; another cycle of its technique inside its span, on any VM, too."""
+    a = NOW - timedelta(days=3)
+    _report(runs, "r-old", "T1110.001", a, latency=60.0)                          # no resource_id
+    _real(runs, a + timedelta(seconds=60), source=None, sid="rule-x-q8a")          # its decision
+    _real(runs, a + timedelta(minutes=40), source=None, sid="rule-x-q8b",          # its technique, its span
+          vm=VM.replace("vm-a", "vm-b"))
+    out = _overview_real(runs)
+    assert (out["alone"]["of"], out["alone"]["inferred_exercise"]) == (0, 2)
+
+
+def test_the_watch_saying_real_is_checked_again_a_window_late_by_the_channel_wins(runs):
+    """Q9: the window reached the hosted watch after its cycle — the watch wrote « real », the
+    Runs attach the cycle to the window. Only « exercise » is final."""
+    win = {"run_id": "w-late", "injector": "annatar", "kind": "technique", "experiment": "T1110.001 x",
+           "targets": [VM], "start": (NOW - timedelta(minutes=60)).isoformat(), "end": None,
+           "expires": (NOW + timedelta(minutes=30)).isoformat(), "destructive": False}
+    _real(runs, NOW - timedelta(minutes=30), source="real", sid="rule-x-q9")
+    out = _overview_real(runs, windows=[win])
+    assert (out["alone"]["of"], out["alone"]["inferred_exercise"], out["alone"]["inferred"]) == (0, 1, 0)
+    # Said real and nothing contradicts it: real, not inferred.
+    _real(runs, NOW - timedelta(days=2), source="real", sid="rule-x-q9b")
+    out = _overview_real(runs, windows=[win])
+    assert (out["alone"]["of"], out["alone"]["inferred"]) == (1, 0)
+
+
+def test_an_attack_report_on_the_vm_alone_makes_a_line_an_exercise(runs):
+    """The attack branch of the span, decisive alone: no window, not the run's decision (another
+    technique, half an hour later), the report naming the VM."""
+    a = NOW - timedelta(hours=6)
+    (runs / "r-vm.json").write_text(json.dumps({
+        "run_id": "r-vm", "mitre": "T1486", "result": "FAIL", "scenario": "s",
+        "metrics": {"kind": "technique", "attack_time": a.timestamp(), "detection": "missed", "resource_id": VM}}))
+    _real(runs, a + timedelta(minutes=30), source=None, sid="rule-x-span")
+    out = _overview_real(runs)
+    assert (out["alone"]["of"], out["alone"]["inferred_exercise"]) == (0, 1)
+
+
+@pytest.mark.parametrize("ends", ["lifted", "drift"])
+def test_a_containment_lifted_or_gone_ends_the_attackers_incident(runs, ends):
+    """Q3, Q4: blocked, then unblocked an hour later (or a card saying the block is gone) — the
+    address coming back and only escalated is another incident, never folded into a contained one."""
+    a = NOW - timedelta(hours=10)
+    _real(runs, a, verified_after=40, sid="rule-x-f1", attacker="203.0.113.7")
+    _real(runs, a + timedelta(hours=2), executed=False, verified=None, sid="rule-x-f2", attacker="203.0.113.7",
+          guard="")
+    lifts, cards = (), []
+    if ends == "lifted":
+        lifts = [(VM, (a + timedelta(hours=1)).timestamp(), ("block_suspicious_ip",))]
+    else:
+        cards = [{"escalation_type": "verification_failed", "action": "block_suspicious_ip", "resource_id": VM,
+                  "timestamp": (a + timedelta(minutes=30)).isoformat(), "reason": "gone"}]
+    out = _overview_real(runs, cards=cards, liftings=lifts)
+    assert (out["alone"]["of"], out["alone"]["repeats"]) == (2, 0)
+    assert out["alone"]["by_outcome"].get("escalated") == 1
+    # Neither: the second cycle is a repeat of a contained incident.
+    out = _overview_real(runs)
+    assert (out["alone"]["of"], out["alone"]["repeats"]) == (1, 1)
+
+
+def test_the_debug_line_of_a_failed_cycle_is_written_whatever_its_label(tmp_path, monkeypatch):
+    """OV1 review: the label read from a signal that is not what it should be (its raw_signal a
+    list) never costs the failed cycle its debug line — the last trace of a detection."""
+    from glorfindel.agent import record_cycle_failure
+    monkeypatch.chdir(tmp_path)
+    sig = {"signal_id": "s1", "event": "detection", "ttp": "T1110.001", "resource_id": VM,
+           "timestamp": NOW.isoformat(), "context": {"run_id": "watch-x-1"}, "raw_signal": ["not", "a dict"]}
+    record_cycle_failure(sig, RuntimeError("boom"), stage="decide", dry_run=True)
+    line = json.loads((tmp_path / "runs" / "watch-x-1_debug.jsonl").read_text().splitlines()[-1])
+    assert (line["source"], line["exercise_run"]) == ("unknown", "")
+
+
+def test_the_decision_the_overview_attaches_to_a_run_is_never_real_wherever_its_time(runs):
+    """The overview's last proof and the overview's real traffic never share a cycle: a run whose
+    detection the overview attaches three hours after its attack — past the span of any window —
+    keeps it an exercise, by the attachment alone."""
+    a = NOW - timedelta(days=2)
+    _report(runs, "r-late", "T1110.001", a, latency=3 * 3600.0)
+    _real(runs, a + timedelta(hours=3), source=None, sid="rule-x-late")
+    out = _overview_real(runs)
+    assert (out["alone"]["of"], out["alone"]["inferred_exercise"]) == (0, 1)

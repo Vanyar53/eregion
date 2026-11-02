@@ -229,10 +229,11 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
 # repeat, never another incident — and a line written twice (its signal) is one.
 FOLD_S = 24 * 3600
 
-def _spans(run: dict, rid: str, t: float) -> bool:
+def _spans(run: dict, rid: str, ttp: str, t: float) -> bool:
     """A run report holds this moment on this VM: a fault from its start to its end, plus the
     grace; an attack from its T0 (a clock's skew before) to the most a window may last, plus the
-    grace — wide on purpose: an exercise is never counted as real traffic."""
+    grace — wide on purpose: an exercise is never counted as real traffic. An attack report
+    written before C1 names no VM: its technique then, over the same span, on any VM."""
     from eregion_core.exercise import FUTURE_SKEW_S, GRACE_AFTER_S, MAX_DURATION_S
     at = run.get("at")
     if at is None:
@@ -241,24 +242,41 @@ def _spans(run: dict, rid: str, t: float) -> bool:
         on = any(str(x).lower() == rid for x in run.get("targets") or [])
         end = run.get("ended_at") if run.get("ended_at") is not None else at + MAX_DURATION_S
         return on and at <= t <= end + GRACE_AFTER_S
-    return str(run.get("resource_id") or "").lower() == rid \
-        and at - FUTURE_SKEW_S <= t <= at + MAX_DURATION_S + GRACE_AFTER_S
+    vm = str(run.get("resource_id") or "").lower()
+    on = vm == rid if vm else bool(ttp) and str(run.get("ttp") or run.get("experiment") or "") == ttp
+    return on and at - FUTURE_SKEW_S <= t <= at + MAX_DURATION_S + GRACE_AFTER_S
 
 
-def exercise_of(cycle: dict, windows=(), runs=(), enrolled=None) -> tuple[bool, bool]:
-    """``(an exercise?, inferred?)``: what the watch wrote of the cycle (``source``, OV1); else —
-    a line written before, or « unknown » — a window still on this host that covers it (the
-    watch's own rule, ``covering_runs``: an enrolled VM, its zone), or a run report on its VM
-    whose span holds it. Neither: real traffic, inferred — and said."""
+def exercise_of(cycle: dict, windows=(), runs=(), enrolled=None, attached=frozenset()) -> tuple[bool, bool]:
+    """``(an exercise?, inferred?)``. Only the watch's « exercise » is final: its « real » is
+    checked again, as a line it never labelled — a window can reach the host late, by the
+    channel, and the Runs then attach the cycle to it. An exercise, inferred: the decision the
+    overview attaches to a run of the period (``attached``: the ids of those cycles), a window
+    still on this host that covers it (the watch's own rule, ``covering_runs``: an enrolled VM,
+    its zone), or a run report whose span holds it on its VM. Neither: real traffic — inferred
+    unless the watch said it."""
     said = cycle.get("source")
-    if said in ("exercise", "real"):
-        return said == "exercise", False
+    if said == "exercise":
+        return True, False
+    if id(cycle) in attached:
+        return True, True
     from eregion_core.exercise import covering_runs
-    rid, at = str(cycle.get("resource_id") or "").lower(), cycle.get("signal_at")
+    rid, at, ttp = str(cycle.get("resource_id") or "").lower(), cycle.get("signal_at"), str(cycle.get("ttp") or "")
     if windows and rid and covering_runs(rid, at, list(windows), enrolled=enrolled):
         return True, True
     t = _ts(at)
-    return (t is not None and bool(rid) and any(_spans(r, rid, t) for r in runs)), True
+    if t is not None and rid and any(_spans(r, rid, ttp, t) for r in runs):
+        return True, True
+    return False, said != "real"
+
+
+def _broken(rid: str, since: float, t: float, lifts, cards) -> bool:
+    """The attacker's incident on this VM is over before ``t``: its containment lifted (a release,
+    an unblock, a reset), or a card says it no longer holds — the next cycle is another incident,
+    never folded into one « contained » (OV1 review)."""
+    from analysis import containment
+    return any((lifted := containment.first_lifting(rid, since, lifts, action)) is not None and lifted <= t
+               for action in DISRUPTIVE) or containment.not_holding(rid, since, t, cards) is not None
 
 
 def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(), runs=(),
@@ -275,9 +293,12 @@ def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(
     until = (now if now is not None else _time.time()) + FUTURE_SKEW_S
     index = detections(cycles)
     lifts = liftings_of(index, liftings)
+    every_card = all_cards or cards
+    # The decisions the overview's indicators attach to a run: an exercise's, whatever the line says.
+    attached = {id(d) for r in runs if r.get("kind") == "technique" and (d := decision_of(r, index)) is not None}
     judged_wrong = {c.get("signal_id") for c in cards if c.get("verdict") == "wrong" and c.get("signal_id")}
     decide, contain = [], []
-    alone = shadow = inferred = repeats = 0
+    alone = shadow = inferred = inferred_exercise = repeats = 0
     outcomes: dict[str, int] = {}
     incidents = 0
     signals: set[str] = set()
@@ -287,12 +308,14 @@ def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(
         if (c.get("event") != "detection" or not c.get("action") or t0 is None or not since <= t0 <= until
                 or (c.get("attribution") or "asset") != "asset"):
             continue
-        exercise, guessed = exercise_of(c, windows, runs, enrolled)
+        exercise, guessed = exercise_of(c, windows, runs, enrolled, attached)
         if exercise:
+            inferred_exercise += guessed
             continue
         sid = str(c.get("signal_id") or "")
         key = (str(c.get("resource_id") or "").lower(), str(c.get("ttp") or ""), str(c.get("attacker") or ""))
-        if (sid and sid in signals) or (key[2] and key in first and t0 - first[key] < FOLD_S):
+        if (sid and sid in signals) or (key[2] and key in first and t0 - first[key] < FOLD_S
+                                        and not _broken(key[0], first[key], t0, lifts, every_card)):
             repeats += 1
             continue
         signals.add(sid)
@@ -302,7 +325,7 @@ def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(
         inferred += guessed
         inc = containment.incident(str(c.get("signal_id") or ""), str(c.get("ttp") or ""),
                                    str(c.get("resource_id") or ""), t0, "detected", c,
-                                   cards=all_cards or cards, liftings=lifts)
+                                   cards=every_card, liftings=lifts)
         outcomes[inc.outcome] = outcomes.get(inc.outcome, 0) + 1
         decided = _ts(c.get("at"))
         if decided is not None and decided >= t0:
@@ -320,7 +343,8 @@ def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(
                     "detected": incidents, "decided": len(decide), "contained": len(contain)},
         "alone": {"contained": alone, "shadow": shadow, "of": incidents,
                   "threshold": threshold if threshold != float("inf") else None,
-                  "by_outcome": outcomes, "inferred": inferred, "repeats": repeats},
+                  "by_outcome": outcomes, "inferred": inferred, "inferred_exercise": inferred_exercise,
+                  "repeats": repeats},
     }
 
 

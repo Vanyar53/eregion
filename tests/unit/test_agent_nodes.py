@@ -741,6 +741,21 @@ def test_store_cycle_writes_debug_jsonl(tmp_path, monkeypatch, tmp_memory):
     assert record["signal"]["ttp"] == "T1486"
 
 
+def test_the_debug_line_says_real_traffic_or_an_exercise(tmp_path, monkeypatch, tmp_memory):
+    """OV1 (#399): the console's overview counts real traffic, Dagorlad the exercises — the
+    debug line says which, as the memory and the card do (``_cycle_source``)."""
+    import glorfindel.agent as agent_mod
+    from glorfindel.agent import store_cycle
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir()
+    debug_file = tmp_path / "runs" / "run001_debug.jsonl"
+    for said in (("real", ""), ("exercise", "20261101T080000Z")):
+        monkeypatch.setattr(agent_mod, "_cycle_source", lambda signal, said=said: said)
+        store_cycle(_ready_state_for_store(), memory=tmp_memory)
+        record = json.loads(debug_file.read_text().strip().splitlines()[-1])
+        assert (record["source"], record["exercise_run"]) == said
+
+
 def test_store_cycle_appends_on_multiple_calls(tmp_path, monkeypatch, tmp_memory):
     from glorfindel.agent import store_cycle
     monkeypatch.chdir(tmp_path)

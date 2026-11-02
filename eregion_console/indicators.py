@@ -217,5 +217,136 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     }
 
 
+# ── Real traffic (OV1, #399): what Glorfindel does outside any exercise ───────────────────
+# The overview counts it; the exercises' indicators (``compute``, above) go to Dagorlad. An
+# incident is a detection of the watch with a decision, on a VM it names (an unattributed row is
+# anchored on an arbitrary one), outside any exercise. It ends as BL1 says
+# (analysis/containment.py, the same ``incident``): contained alone when an isolation or a block
+# is executed in its cycle, read back on Azure, and held. Its T0 is the detection's time: no rule
+# gives its first malicious event yet (docs/analysis.md, « Le réel »). One attacker on one VM is one
+# incident: a later cycle of the same address, technique and VM within FOLD_S of its first detection
+# (the rule's own dedup lasts its window only: a block held, the attack goes on and comes back) is a
+# repeat, never another incident — and a line written twice (its signal) is one.
+FOLD_S = 24 * 3600
+
+def _spans(run: dict, rid: str, ttp: str, t: float) -> bool:
+    """A run report holds this moment on this VM: a fault from its start to its end, plus the
+    grace; an attack from its T0 (a clock's skew before) to the most a window may last, plus the
+    grace — wide on purpose: an exercise is never counted as real traffic. An attack report
+    written before C1 names no VM: its technique then, over the same span, on any VM."""
+    from eregion_core.exercise import FUTURE_SKEW_S, GRACE_AFTER_S, MAX_DURATION_S
+    at = run.get("at")
+    if at is None:
+        return False
+    if run.get("kind") == "fault":
+        on = any(str(x).lower() == rid for x in run.get("targets") or [])
+        end = run.get("ended_at") if run.get("ended_at") is not None else at + MAX_DURATION_S
+        return on and at <= t <= end + GRACE_AFTER_S
+    vm = str(run.get("resource_id") or "").lower()
+    on = vm == rid if vm else bool(ttp) and str(run.get("ttp") or run.get("experiment") or "") == ttp
+    return on and at - FUTURE_SKEW_S <= t <= at + MAX_DURATION_S + GRACE_AFTER_S
+
+
+def exercise_of(cycle: dict, windows=(), runs=(), enrolled=None, attached=frozenset()) -> tuple[bool, bool]:
+    """``(an exercise?, inferred?)``. Only the watch's « exercise » is final: its « real » is
+    checked again, as a line it never labelled — a window can reach the host late, by the
+    channel, and the Runs then attach the cycle to it. An exercise, inferred: the decision the
+    overview attaches to a run of the period (``attached``: the ids of those cycles), a window
+    still on this host that covers it (the watch's own rule, ``covering_runs``: an enrolled VM,
+    its zone), or a run report whose span holds it on its VM. Neither: real traffic — inferred
+    unless the watch said it."""
+    said = cycle.get("source")
+    if said == "exercise":
+        return True, False
+    if id(cycle) in attached:
+        return True, True
+    from eregion_core.exercise import covering_runs
+    rid, at, ttp = str(cycle.get("resource_id") or "").lower(), cycle.get("signal_at"), str(cycle.get("ttp") or "")
+    if windows and rid and covering_runs(rid, at, list(windows), enrolled=enrolled):
+        return True, True
+    t = _ts(at)
+    if t is not None and rid and any(_spans(r, rid, ttp, t) for r in runs):
+        return True, True
+    return False, said != "real"
+
+
+def _broken(rid: str, since: float, t: float, lifts, cards) -> bool:
+    """The attacker's incident on this VM is over before ``t``: its containment lifted (a release,
+    an unblock, a reset), or a card says it no longer holds — the next cycle is another incident,
+    never folded into one « contained » (OV1 review)."""
+    from analysis import containment
+    return any((lifted := containment.first_lifting(rid, since, lifts, action)) is not None and lifted <= t
+               for action in DISRUPTIVE) or containment.not_holding(rid, since, t, cards) is not None
+
+
+def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(), runs=(),
+         all_cards=(), liftings=(), enrolled=None, now: float | None = None) -> dict:
+    """The overview's TIME TO CONTAIN and CONTAINED ALONE on real traffic, over the cycles seen
+    since ``since``. ``cards``: every card (a verdict « wrong » takes a decision out of the
+    shadow); ``windows``, ``runs``: what tells an older line's exercise (``exercise_of``);
+    ``liftings``: the operator's lifts of a containment (runs/manual_actions.jsonl)."""
+    import time as _time
+
+    from analysis import containment
+    from eregion_core.exercise import FUTURE_SKEW_S
+    # A cycle dated ahead of the clock (beyond its skew) counts nowhere, as a run (C1).
+    until = (now if now is not None else _time.time()) + FUTURE_SKEW_S
+    index = detections(cycles)
+    lifts = liftings_of(index, liftings)
+    every_card = all_cards or cards
+    # The decisions the overview's indicators attach to a run: an exercise's, whatever the line says.
+    attached = {id(d) for r in runs if r.get("kind") == "technique" and (d := decision_of(r, index)) is not None}
+    judged_wrong = {c.get("signal_id") for c in cards if c.get("verdict") == "wrong" and c.get("signal_id")}
+    decide, contain = [], []
+    alone = shadow = inferred = inferred_exercise = repeats = 0
+    outcomes: dict[str, int] = {}
+    incidents = 0
+    signals: set[str] = set()
+    first: dict[tuple, float] = {}       # (VM, technique, attacker) → its incident's detection
+    for c in sorted(index.cycles, key=lambda c: _ts(c.get("signal_at")) or 0.0):
+        t0 = _ts(c.get("signal_at"))
+        if (c.get("event") != "detection" or not c.get("action") or t0 is None or not since <= t0 <= until
+                or (c.get("attribution") or "asset") != "asset"):
+            continue
+        exercise, guessed = exercise_of(c, windows, runs, enrolled, attached)
+        if exercise:
+            inferred_exercise += guessed
+            continue
+        sid = str(c.get("signal_id") or "")
+        key = (str(c.get("resource_id") or "").lower(), str(c.get("ttp") or ""), str(c.get("attacker") or ""))
+        if (sid and sid in signals) or (key[2] and key in first and t0 - first[key] < FOLD_S
+                                        and not _broken(key[0], first[key], t0, lifts, every_card)):
+            repeats += 1
+            continue
+        signals.add(sid)
+        if key[2]:
+            first[key] = t0
+        incidents += 1
+        inferred += guessed
+        inc = containment.incident(str(c.get("signal_id") or ""), str(c.get("ttp") or ""),
+                                   str(c.get("resource_id") or ""), t0, "detected", c,
+                                   cards=every_card, liftings=lifts)
+        outcomes[inc.outcome] = outcomes.get(inc.outcome, 0) + 1
+        decided = _ts(c.get("at"))
+        if decided is not None and decided >= t0:
+            decide.append(decided - t0)
+        if inc.outcome == containment.CONTAINED:
+            alone += 1
+            contain += [inc.time_to_contain_s] if inc.time_to_contain_s is not None else []
+        conf = c.get("confidence")
+        if (c.get("action") in DISRUPTIVE and isinstance(conf, (int, float)) and not isinstance(conf, bool)
+                and conf >= threshold and c.get("signal_id") not in judged_wrong):
+            shadow += 1
+    return {
+        "window_days": WINDOW_DAYS, "t0": "detection",
+        "contain": {"contain_s": _median(contain), "decide_s": _median(decide), "detect_s": None,
+                    "detected": incidents, "decided": len(decide), "contained": len(contain)},
+        "alone": {"contained": alone, "shadow": shadow, "of": incidents,
+                  "threshold": threshold if threshold != float("inf") else None,
+                  "by_outcome": outcomes, "inferred": inferred, "inferred_exercise": inferred_exercise,
+                  "repeats": repeats},
+    }
+
+
 def since_window(now: datetime | None = None) -> datetime:
     return (now or datetime.now(timezone.utc)) - timedelta(days=WINDOW_DAYS)

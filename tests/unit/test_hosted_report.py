@@ -145,6 +145,35 @@ def _attach(cdir, runs, scenario=None, rid="R1"):
     return cr.run_decision(scenario, rid, cdir, runs, cr._watch_files(runs))
 
 
+# ── Launched alone, by docker exec in H0's container (BL1c) ───────────────────────
+
+def test_the_report_launched_alone_drops_compose_s_empty_identity(tmp_path, monkeypatch, index):
+    """M2362: ``python -m analysis.campaign_report`` launched by hand under ``docker exec``
+    keeps compose's ``AZURE_CLIENT_ID=""`` (its secret, its tenant): azure-identity takes them
+    for a service principal, the enrollment read fails, every run is left out « sa VM n'est
+    pas inscrite ». ``check_enrollment`` drops them where it reads the enrollment (#205) — for
+    every command that calls it: the report, the measure, the triage, the index."""
+    from azure.identity import EnvironmentCredential
+
+    import eregion_core.inscription as inscription
+
+    class Tags:                                   # TagEnrollment's credential chain, first link
+        def __call__(self, resource_id):
+            EnvironmentCredential()               # raises on an empty client id
+            return True
+
+    for k in ("AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"):
+        monkeypatch.setenv(k, "")
+    monkeypatch.setattr(exercise, "_enrollment_check", None)       # a process of its own
+    monkeypatch.setattr(inscription, "TagEnrollment", Tags)
+    monkeypatch.setattr(cr, "write_claims", lambda *a, **k: ([], "fake/model"))   # no model
+    cdir, _ = _h0(tmp_path, watch=[_decision(at=T + timedelta(minutes=3))])
+    assert cr.main([str(cdir)]) == 0
+    report = (cdir / "report.md").read_text(encoding="utf-8")
+    assert "sa VM n'est pas inscrite" not in report and "`R1`" in report
+    assert not {"AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"} & set(os.environ)
+
+
 # ── The decision of a run, from the watch's files ────────────────────────────────
 
 def test_the_decision_is_the_first_on_the_runs_technique_and_vm(tmp_path):

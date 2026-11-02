@@ -235,8 +235,9 @@ preuve (date, détecté ou non, temps de détection, décision, temps pour conte
 prouvée avant et ratée depuis est rouge (`REGRESSED`) : c'est la non-régression. Sur l'accueil,
 la couverture dit les régressions (rouge, lien vers la page) et les preuves périmées ; l'âge de la
 dernière preuve se lit désormais sur toute l'histoire que l'hôte garde — au-delà de 30 jours il
-est dit, rouge, au lieu de « none in 30 d ». Les fenêtres ne servent pas : la matrice lit les
-rapports de run, gardés, et les cycles de la watch. Détail : `docs/glorfindel.md`, « Matrice de
+est dit, rouge, au lieu de « none in 30 d ». La matrice lit les rapports de run, gardés, et les
+cycles de la watch ; les fenêtres ne servent qu'à confronter le T0 (SEC15) : non retenu, un run ne
+donne aucun temps, et sa preuve est datée par la détection de la watch, ce que dit la tuile. Détail : `docs/glorfindel.md`, « Matrice de
 couverture » ; le run au format commun : `docs/architecture.md`, « Le run, unifié ».
 
 ### Les cartes (#248)

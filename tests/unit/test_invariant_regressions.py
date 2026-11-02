@@ -5368,27 +5368,40 @@ def test_a_vm_rule_back_then_gone_again_beside_a_lifted_perimeter_is_said(monkey
          ("said_then_back_after_a_full_disk", "gone", WEB2, WEB2, None, False, 22, (1, "from-full")))
 
 
-# Three older failures (two here, one below), reached once L1Q's rule — now a PR of its own —
-# shifted the draws, present on `main` 48e42c8 (red there, replayed step by step): outside the
-# lot's family — frozen, routed.
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="#379: I7, an older deny-all kept for a turned block rule of a redeployed NIC")
-def test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic(monkeypatch):
+# Older failures reached once L1Q's rule — now a PR of its own — shifted the draws, present on
+# `main` 48e42c8 (red there, replayed step by step): outside L1Q's family — frozen, routed.
+@pytest.mark.parametrize("then", ["", "released before", "isolated again"])
+@pytest.mark.parametrize("out", ["", "-out"])
+def test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic(monkeypatch, out, then):
     """L1Q's machine at 500 (seed 1), shrunk to 4 rules: a new VM api (rg-app1) on the NSG of an
     older version's isolation of api (rg-edge), its perimeter lifted beside a block, the role
     removed, then the block rule of api's NIC on that NSG turned into an allow — at the teardown,
-    « I7: …/rg-edge/…/api could not be released »: the older deny-all « gardée » for that turned
-    rule (I4C's guard), which the machine's operator does not put back. The family of I4C/I4D
-    (#366); not a drift's."""
+    « I7: …/rg-edge/…/api could not be released ». D79 (#379): not the code. The older deny-all
+    on `*` cuts the new api; the turned rule, aimed at the new api's own address, waits behind it
+    — taken off, the attacker would reach the new api on every port. The release keeps it (I4C's
+    guard, prudent: A0), says it « gardée », names the turned rule and asks for it put back; the
+    teardown's operator put back only the turned rules aimed elsewhere (I4B) or behind our denies
+    on an address (I5Q), never one behind an older version's deny on `*`. Now, as U7D's unblock:
+    what the release keeps is exactly what the oracle says held, said with the turned rule; the
+    operator puts that rule back; the release goes. The inbound rule (as found) and the outbound
+    one (`-out`, behind `…-deny-all-out`); the old api's release run once before the teardown
+    (kept, said: its state stays an older one, I4C's review); or the old api isolated again by
+    rules (the quarantine off) before the rule is turned — its pair on the shared NSG, scoped to
+    its address, beside the older record kept (I4E): its rules of
+    today's names left by the teardown's release must be ones the oracle says kept (D79's review,
+    M2323)."""
     _run(monkeypatch, _net(api_nic={"own": "dedicated"}, db_nic_0={"own": "dedicated"},
                            legacy=("api-nic", True)),
          ("joins_an_old_isolation", _NSG.format(rg="rg-edge", name="nsg-api-nic"), "rg-app1", "api", "Linux",
           False, True, _APP1_API),
          ("perimeter_lifted_beside_a_block", API, API, None, _APP1_API, False, _APP1_API, 22),
+         *([("config_changes", {"quarantine": False, "rg": "", "forensic": [], "readable": True}, True),
+            ("isolate", API, API, None)] if then == "isolated again" else []),
          ("access_changes", True),
          ("block_turned_then_reasserted", WEB2, WEB2, None, "subnet",
-          (_NSG.format(rg="rg-edge", name="nsg-api-nic"), "glorfindel-block-192-31-196-7-api-api-nic-4-679cdb"),
-          "non_disruptive"))
+          (_NSG.format(rg="rg-edge", name="nsg-api-nic"), f"glorfindel-block-192-31-196-7-api-api-nic-4-679cdb{out}"),
+          "non_disruptive"),
+         *([("release", API, API, None)] if then == "released before" else []))
 
 
 @pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])

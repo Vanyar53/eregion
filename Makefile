@@ -112,7 +112,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
-	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-uninstall \
+	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-rollback glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
@@ -207,6 +207,7 @@ help:
 	@echo "  make glorfindel-host-cd-check                À blanc : vérifie, construit, préflight de la dernière release"
 	@echo "  make glorfindel-host-cd-enable / -disable    Le timer (toutes les 5 min) : une release publiée se déploie"
 	@echo "  make glorfindel-host-cd-status / -retry      Ce qui tourne, les derniers résultats / réessayer la release"
+	@echo "  make glorfindel-host-cd-rollback TAG=vX.Y.Z  Le retour arrière demandé sur H0 (SEC12) : une release publiée, plus ancienne"
 	@echo ""
 	@echo "Orodruin (O1) — hôte des injecteurs, état séparé (infra/orodruin/README.md) :"
 	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
@@ -808,6 +809,13 @@ glorfindel-host-cd-status: glorfindel-host-known
 
 glorfindel-host-cd-retry: glorfindel-host-known
 	$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py retry'
+
+# SEC12 : le seul chemin par lequel le CD déploie une release plus ancienne que ce qui tourne —
+# demandé sur H0, pour ce tag, vérifié comme toute release ; celle qu'il quitte n'est plus reprise
+# seule (une nouvelle release, ou -cd-retry). TAG : vX.Y.Z vérifié ici, puis par l'agent (TAG_RE).
+glorfindel-host-cd-rollback: glorfindel-host-known
+	@printf '%s' "$(TAG)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "TAG=vX.Y.Z attendu"; exit 2; }
+	$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py rollback $(TAG)'
 
 glorfindel-host-cd-uninstall: glorfindel-host-known
 	$(HOST_SSH_TTY) 'sudo bash .eregion-cd/install.sh --remove'

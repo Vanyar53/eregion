@@ -540,6 +540,19 @@ def test_the_hosted_report_writes_runs_never_through_a_link(tmp_path, index):
     assert (elsewhere / "note").read_text() == "kept" and not (cdir / hr.ERROR).is_symlink()
 
 
+def test_a_link_to_a_report_is_no_report(tmp_path, index):
+    """SEC16 (review): a link where the report goes, even to a report, is no report — the campaign
+    stays to report, and its report, once written, replaces the link; what it pointed to is
+    unchanged."""
+    cdir, _ = _h0(tmp_path, watch=[_decision(at=T + timedelta(minutes=3))])
+    (tmp_path / "elsewhere.md").write_text("# another report")
+    (cdir / hr.REPORT).symlink_to(tmp_path / "elsewhere.md")
+    assert cdir in hr.ready(cdir.parent, say=lambda m: None)           # still to report
+    assert hr.write_report(cdir, model="fake/model", llm=_Model(CLAIMS), index_path=tmp_path / "idx",
+                           say=lambda m: None) == "written"
+    assert not (cdir / hr.REPORT).is_symlink() and (tmp_path / "elsewhere.md").read_text() == "# another report"
+
+
 def test_a_pass_holding_the_campaign_keeps_another_out(tmp_path, index):
     """M135: two passes never write the same report at once."""
     cdir, _ = _h0(tmp_path)

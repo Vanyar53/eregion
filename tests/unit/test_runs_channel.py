@@ -678,7 +678,7 @@ def _drain_fifo_after(path: Path, stop: threading.Event) -> None:
         time.sleep(0.05)
 
 
-@pytest.mark.parametrize("place", ["absent", "regular", "link", "dangling-link", "fifo", "fifo-read"])
+@pytest.mark.parametrize("place", ["absent", "regular", "link", "dangling-link", "fifo", "fifo-read", "dir"])
 def test_a_line_is_appended_to_a_regular_file_only_never_through_a_link_never_blocking(tmp_path, place):
     """``append_line``: created when absent, appended whole to a regular file; a link in its place
     refused, nothing written where it points (an existing file unchanged, a missing one never
@@ -694,6 +694,8 @@ def test_a_line_is_appended_to_a_regular_file_only_never_through_a_link_never_bl
         f.symlink_to(elsewhere)
     elif place == "dangling-link":
         f.symlink_to(elsewhere)
+    elif place == "dir":
+        f.mkdir()
     elif place.startswith("fifo"):
         os.mkfifo(f)
         threading.Thread(target=_drain_fifo_after, args=(f, stop), daemon=True).start()
@@ -708,7 +710,7 @@ def test_a_line_is_appended_to_a_regular_file_only_never_through_a_link_never_bl
         else:
             assert isinstance(got, channel_reader.Refused), got
             assert str(got) == {"link": "un lien, jamais suivi", "dangling-link": "un lien, jamais suivi",
-                                "fifo": "un tube nommé", "fifo-read": "un tube nommé"}[place]
+                                "fifo": "un tube nommé", "fifo-read": "un tube nommé", "dir": "un répertoire"}[place]
             assert (elsewhere.read_text() == "kept\n") if place == "link" else not elsewhere.exists()
             if reader is not None:
                 assert os.read(reader, 100) == b""                 # nothing written in it
@@ -716,6 +718,28 @@ def test_a_line_is_appended_to_a_regular_file_only_never_through_a_link_never_bl
         if reader is not None:
             os.close(reader)
         stop.set()
+
+
+@pytest.mark.parametrize("place", ["absent", "link", "fifo", "dir"])
+def test_a_lock_of_runs_is_a_regular_file_never_through_a_link(tmp_path, place):
+    """``open_lock`` (a campaign's report, its triage): created when absent; a link, a pipe or a
+    directory in its place refused — never opened, never created where a link points."""
+    f, elsewhere = tmp_path / ".report.lock", tmp_path / "elsewhere"
+    if place == "link":
+        f.symlink_to(elsewhere)
+    elif place == "fifo":
+        os.mkfifo(f)
+    elif place == "dir":
+        f.mkdir()
+    if place == "absent":
+        os.close(channel_reader.open_lock(f))
+        assert f.is_file()
+        return
+    with pytest.raises(channel_reader.Refused) as refused:
+        channel_reader.open_lock(f)
+    assert str(refused.value) == {"link": "un lien, jamais suivi", "fifo": "un tube nommé",
+                                  "dir": "un répertoire"}[place]
+    assert not elsewhere.exists()
 
 
 def test_a_whole_file_written_replaces_a_link_never_follows_it(tmp_path):
@@ -742,12 +766,13 @@ def test_a_whole_file_read_is_bounded_and_its_status_never_through_a_link(tmp_pa
     assert channel_reader.lstat_regular(f).st_size == f.stat().st_size
 
 
-@pytest.mark.parametrize("trap", ["link", "fifo"])
+@pytest.mark.parametrize("trap", ["link", "fifo", "dir", "disk-full"])
 def test_the_watch_debug_line_never_through_a_link_never_blocking_the_cycle_goes_on(tmp_path, monkeypatch,
                                                                                      capsys, trap):
-    """The watch's line of a cycle (``_write_debug_record``): a link or a pipe in its place —
-    refused, nothing written elsewhere, the cycle never cut (OV1, BL1: a failed cycle's line is its
-    last trace), said once in the watch's log, never at every cycle."""
+    """The watch's line of a cycle (``_write_debug_record``): a link, a pipe or a directory in its
+    place, or the write failing (a disk full) — refused or failed, nothing written elsewhere, the
+    cycle never cut (OV1, BL1: a cycle that acted is no failed cycle), said once in the watch's
+    log, never at every cycle."""
     from glorfindel import agent
     monkeypatch.chdir(tmp_path)
     (tmp_path / "runs").mkdir()
@@ -757,6 +782,12 @@ def test_the_watch_debug_line_never_through_a_link_never_blocking_the_cycle_goes
     if trap == "link":
         elsewhere.write_text("kept\n")
         f.symlink_to(elsewhere)
+    elif trap == "dir":
+        f.mkdir()
+    elif trap == "disk-full":
+        def full(path, line, mode=0o644):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        monkeypatch.setattr(channel_reader, "append_line", full)
     else:
         os.mkfifo(f)
         threading.Thread(target=_drain_fifo_after, args=(f, stop), daemon=True).start()
@@ -767,14 +798,16 @@ def test_the_watch_debug_line_never_through_a_link_never_blocking_the_cycle_goes
             finished, got = _guarded(agent._write_debug_record, state)
             assert finished, "the cycle's line blocked the watch"
             assert got is None, got                                  # never raised: the cycle goes on
-        assert trap == "fifo" or elsewhere.read_text() == "kept\n"
-        out = capsys.readouterr().out
+        assert trap != "link" or elsewhere.read_text() == "kept\n"
+        out = " ".join(capsys.readouterr().out.split())
         assert out.count("debug non écrit") == 1 and "r1_debug.jsonl" in out
+        assert {"link": "un lien, jamais suivi", "fifo": "un tube nommé", "dir": "un répertoire",
+                "disk-full": "No space left on device"}[trap] in out
     finally:
         stop.set()
 
 
-@pytest.mark.parametrize("trap", ["link", "fifo"])
+@pytest.mark.parametrize("trap", ["link", "fifo", "dir"])
 def test_the_clis_manual_action_never_through_a_link_never_blocking(tmp_path, monkeypatch, capsys, trap):
     """The CLI's note of an operator's action (runs/manual_actions.jsonl): a link or a pipe in its
     place — refused, nothing written elsewhere, never blocking; the action stands, the refusal
@@ -787,6 +820,8 @@ def test_the_clis_manual_action_never_through_a_link_never_blocking(tmp_path, mo
     stop = threading.Event()
     if trap == "link":
         f.symlink_to(elsewhere)
+    elif trap == "dir":
+        f.mkdir()
     else:
         os.mkfifo(f)
         threading.Thread(target=_drain_fifo_after, args=(f, stop), daemon=True).start()

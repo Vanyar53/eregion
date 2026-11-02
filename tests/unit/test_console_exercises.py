@@ -582,33 +582,6 @@ def test_a_campaigns_page_reads_runs_as_the_watch_never_blocking_never_through_a
         stop.set()
 
 
-@pytest.mark.parametrize("trap", ["link", "fifo"])
-def test_the_consoles_manual_action_never_through_a_link_never_blocking(runs, tmp_path, capsys, trap):
-    """The console's note of an operator's action (runs/manual_actions.jsonl): a link or a pipe in
-    its place — refused, nothing written elsewhere, never blocking; the action stands, the refusal
-    said once in the console's log (SEC16)."""
-    import os
-    import threading
-    from .test_console import _guarded
-    from .test_runs_channel import _drain_fifo_after
-    f, elsewhere = runs / "manual_actions.jsonl", tmp_path / "elsewhere.jsonl"
-    stop = threading.Event()
-    if trap == "link":
-        f.symlink_to(elsewhere)
-    else:
-        os.mkfifo(f)
-        threading.Thread(target=_drain_fifo_after, args=(f, stop), daemon=True).start()
-    try:
-        for _ in range(2):
-            finished, got = _guarded(api._write_manual_feed, "unblock_ip", VM, {"ok": True})
-            assert finished and got is None, got
-        assert not elsewhere.exists()
-        out = capsys.readouterr().out
-        assert out.count("manual_actions.jsonl — ") == 1 and ": jamais écrit" in out
-    finally:
-        stop.set()
-
-
 def test_a_campaigns_report_reads_runs_as_the_watch_never_blocking_never_through_a_link(runs, tmp_path):
     """SEC16 (#438): the report of a campaign (``collect_facts``, ``containment.load``, what
     ``make campaign-report`` and the watch's hosted report write) reads runs/ as the watch: a pipe

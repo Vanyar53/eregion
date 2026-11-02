@@ -232,14 +232,7 @@ def append_line(path, line: str, mode: int = 0o644) -> None:
     try:
         fd = os.open(path, _APPEND, mode)
     except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            raise Refused("un lien, jamais suivi") from None
-        if exc.errno in (errno.ENXIO, errno.EOPNOTSUPP):     # a pipe no one reads, a socket
-            try:
-                kind = _kind(os.lstat(path).st_mode)
-            except OSError:
-                kind = "pas un fichier ordinaire"
-            raise Refused(kind) from None
+        _refuse_open(path, exc)
         raise
     try:
         mode_ = os.fstat(fd).st_mode
@@ -252,10 +245,44 @@ def append_line(path, line: str, mode: int = 0o644) -> None:
         os.close(fd)
 
 
-# A campaign's lock in runs/ (analysis: its report, its triage): created, opened without following
-# a link nor blocking (SEC16).
-LOCK_FLAGS = (os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-              | getattr(os, "O_CLOEXEC", 0))
+def _refuse_open(path, exc: OSError) -> None:
+    """An open for writing that failed on what is in the file's place: Refused, in the words a
+    read would use — a link, a directory, a pipe no one reads, a socket. Any other failure:
+    nothing raised here (the caller raises it)."""
+    if exc.errno == errno.ELOOP:
+        raise Refused("un lien, jamais suivi") from None
+    if exc.errno == errno.EISDIR:
+        raise Refused("un répertoire") from None
+    if exc.errno in (errno.ENXIO, errno.EOPNOTSUPP):     # a pipe no one reads, a socket
+        try:
+            kind = _kind(os.lstat(path).st_mode)
+        except OSError:
+            kind = "pas un fichier ordinaire"
+        raise Refused(kind) from None
+
+
+_LOCK = (os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+         | getattr(os, "O_CLOEXEC", 0))
+
+
+def open_lock(path, mode: int = 0o644) -> int:
+    """A descriptor on a lock of runs/ (a campaign's report, its triage), created when absent: a
+    regular file only (``fstat``), never through a link, never blocking — anything else is Refused
+    (SEC16)."""
+    try:
+        fd = os.open(path, _LOCK, mode)
+    except OSError as exc:
+        _refuse_open(path, exc)
+        raise
+    try:
+        kind = os.fstat(fd).st_mode
+    except OSError:
+        os.close(fd)
+        raise
+    if not stat.S_ISREG(kind):
+        os.close(fd)
+        raise Refused(_kind(kind))
+    return fd
 
 _said_writes: dict[str, str] = {}
 
@@ -268,6 +295,12 @@ def say_once(path, why: str) -> bool:
         return False
     _said_writes[key] = why
     return True
+
+
+def why_not_written(exc: OSError) -> str:
+    """What a write into runs/ met, said: a refusal in its own words, else the error (a disk full,
+    a directory missing)."""
+    return str(exc) if isinstance(exc, Refused) else f"{type(exc).__name__}: {exc.strerror or exc}"
 
 
 def write_file(path, text: str, mode: int = 0o644) -> None:

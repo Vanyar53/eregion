@@ -33,14 +33,13 @@ _said: dict[str, str] = {}
 LINK = "un lien, jamais suivi"
 
 
-def say_refused(path, why: str, done: str = "jamais lu") -> None:
+def say_refused(path, why: str) -> None:
     """A file of runs/ refused: said once in the console's log (again only if why changes) —
-    once whatever the name it is read by (``runs/x.json`` or its absolute path). ``done``: what
-    it was not (« jamais écrit » for a write, SEC16)."""
+    once whatever the name it is read by (``runs/x.json`` or its absolute path)."""
     key = os.path.abspath(path)
     if _said.get(key) != why:
         _said[key] = why
-        print(f"  ⚠ console: {shown(path)} — {why} : {done} (runs/ se lit comme la watch le lit)", flush=True)
+        print(f"  ⚠ console: {shown(path)} — {why} : jamais lu (runs/ se lit comme la watch le lit)", flush=True)
 
 
 def shown(path) -> str:

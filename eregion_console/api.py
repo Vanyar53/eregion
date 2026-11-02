@@ -2082,27 +2082,6 @@ def _find_resource_id(vm_name: str) -> str | None:
     return next(iter(found.values()), None)
 
 
-def _write_manual_feed(action: str, resource_id: str, outcome: dict) -> None:
-    """Write an operator action entry to runs/manual_actions.jsonl for the live feed."""
-    runs = Path("runs")
-    runs.mkdir(exist_ok=True)
-    entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "action": action,
-        "confidence": 1.0,
-        "escalate": False,
-        "signal": {"resource_id": resource_id, "ttp": "", "severity": ""},
-        "outcome": outcome,
-    }
-    # SEC16: a regular file only, never through a link, never blocking — refused, the action
-    # stands (it was made), and the refusal is said once in the console's log.
-    from eregion_core import channel_reader
-    try:
-        channel_reader.append_line(runs / "manual_actions.jsonl", json.dumps(entry))
-    except channel_reader.Refused as exc:
-        runs_reader.say_refused(runs / "manual_actions.jsonl", str(exc), done="jamais écrit")
-
-
 def _extract_conclusion(text: str, max_chars: int = 120) -> str:
     """Extract the conclusion from a step-by-step LLM reasoning.
 

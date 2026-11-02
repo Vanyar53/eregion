@@ -26,7 +26,6 @@ def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
     import json as _json
     from datetime import datetime, timezone as _tz
     runs = Path("runs")
-    runs.mkdir(exist_ok=True)
     record = {
         "timestamp": datetime.now(_tz.utc).isoformat(),
         "action": action,
@@ -35,15 +34,17 @@ def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
         "signal": {"resource_id": resource_id, "ttp": "", "severity": ""},
         "outcome": outcome,
     }
-    # SEC16: a regular file only, never through a link, never blocking — refused, the action
-    # stands (it was made), and the refusal is said once.
+    # SEC16: a regular file only, never through a link, never blocking — refused, or any error of
+    # the write, the action stands (it was made), and it is said once.
     from eregion_core import channel_reader
     path = runs / "manual_actions.jsonl"
     try:
+        runs.mkdir(exist_ok=True)
         channel_reader.append_line(path, _json.dumps(record))
-    except channel_reader.Refused as exc:
-        if channel_reader.say_once(path, str(exc)):
-            console.print(f"[yellow]{_esc_markup(str(path))} : {_esc_markup(str(exc))} — l'action n'y est pas "
+    except OSError as exc:
+        why = channel_reader.why_not_written(exc)
+        if channel_reader.say_once(path, why):
+            console.print(f"[yellow]{_esc_markup(str(path))} : {_esc_markup(why)} — l'action n'y est pas "
                           "notée (runs/ s'écrit comme il se lit)[/yellow]")
 
 

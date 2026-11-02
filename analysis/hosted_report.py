@@ -162,7 +162,7 @@ def ready(campaigns_root: Path, *, failed=frozenset(), say=_say) -> list[Path]:
     # SEC16: a campaign's directory itself, never one a link points to.
     for cdir in sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink()):
         if (cdir.name in failed or not (cdir / exercise_channel.PULLED).exists()
-                or (cdir / REPORT).exists() or attempts(cdir) >= MAX_ATTEMPTS):
+                or _reported(cdir) or attempts(cdir) >= MAX_ATTEMPTS):
             continue
         try:
             manifest = channel_reader.read_json(cdir / "manifest.json")   # SEC16
@@ -267,6 +267,17 @@ def due(campaigns_root: Path, *, failed=frozenset(), runs_dir: Path | None = Non
             if not waits_for_decisions(cdir, runs, now=now, say=say)]
 
 
+def _reported(cdir: Path) -> bool:
+    """Its report is there: a regular file (SEC16). Anything else in its place — a link, even to a
+    report, a pipe — is no report: the campaign stays to report, and its report, once written,
+    replaces it (``channel_reader.write_file``)."""
+    try:
+        channel_reader.lstat_regular(cdir / REPORT)
+    except OSError:
+        return False
+    return True
+
+
 def _note_failure(cdir: Path, error: Exception) -> int:
     n = attempts(cdir) + 1
     with _failures_lock:
@@ -287,7 +298,7 @@ def write_report(cdir: Path, *, model: str | None = None, llm=None,
     (another pass holds the campaign) or ``failed: …``. Never raises."""
     cdir = Path(cdir)
     try:
-        fd = os.open(cdir / LOCK, channel_reader.LOCK_FLAGS, 0o644)   # SEC16: never through a link
+        fd = channel_reader.open_lock(cdir / LOCK)   # SEC16: a regular file, never through a link
     except OSError as e:  # no model called, so no attempt counted: said once while it lasts
         _say_once(cdir, "lock", f"{cdir.name}: report not written, its lock cannot be opened "
                                 f"({type(e).__name__}: {e}) — tried again at the next pull",
@@ -299,7 +310,7 @@ def write_report(cdir: Path, *, model: str | None = None, llm=None,
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return "busy"
-        if (cdir / REPORT).exists():  # written by a pass that held the lock before us
+        if _reported(cdir):  # written by a pass that held the lock before us
             return "exists"
         try:
             from analysis import campaign_report as cr

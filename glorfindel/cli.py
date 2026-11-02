@@ -64,6 +64,14 @@ def _parse_signal_line(raw: str):
 _INJECTORS_DIR = Path.home() / ".glorfindel" / "injectors"
 
 
+def _refuse_from_runs(data: dict, why: str, source: str) -> None:
+    """A line of runs/ refused: said, and counted (glorfindel/signal_origin.py)."""
+    from glorfindel import signal_origin
+    console.print(f"[bold red]Signal refusé ({_esc_markup(source)}) :[/bold red] {_esc_markup(why)} "
+                  "— rien n'est décidé (compté : ~/.glorfindel/channel_refusals.json)")
+    signal_origin.refuse(data, why, source)
+
+
 def _admit_from_runs(data: dict, source: str):
     """(data, Signal) the watch may decide on, for one line of runs/*_signals.jsonl — None
     when the line is refused (said: the log, the counter). SEC3 (#274),
@@ -72,9 +80,7 @@ def _admit_from_runs(data: dict, source: str):
     from glorfindel import signal_origin
     adm = signal_origin.admit(data)
     if adm.signal is None:
-        console.print(f"[bold red]Signal refusé ({_esc_markup(source)}) :[/bold red] {_esc_markup(adm.refused)} "
-                      "— rien n'est décidé (compté : ~/.glorfindel/channel_refusals.json)")
-        signal_origin.refuse(data, adm.refused, source)
+        _refuse_from_runs(data, adm.refused, source)
         return None
     if adm.dropped:
         console.print(f"[yellow]{source} : champs ignorés ({_esc_markup(', '.join(adm.dropped[:8]))}) — "
@@ -542,6 +548,15 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # per-resource dispatch: resource_id → Queue
     _resource_queues: dict[str, _queue.Queue] = {}
     _output_lock = _threading.Lock()
+    # SEC8: what the runs/ channel may start — the searches in flight (one per VM and technique,
+    # CHANNEL_POLLS in all), its lines waiting per VM (CHANNEL_QUEUED_PER_VM), the VMs it names
+    # (CHANNEL_VMS). Beyond, a line is refused and said, never a thread or a queue grown. The
+    # RulePoller's detections are never held by these bounds.
+    from glorfindel.channel_reader import CHANNEL_POLLS, CHANNEL_QUEUED_PER_VM, CHANNEL_VMS
+    _channel_lock = _threading.Lock()
+    _channel_polls: set[tuple[str, str]] = set()
+    _channel_waiting: dict[str, int] = {}
+    _channel_vms: set[str] = set()
 
     def _get_or_start_worker(resource_id: str) -> _queue.Queue:
         """Return the resource queue, starting its worker thread if needed.
@@ -559,7 +574,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     item = q.get()
                     if item is None:
                         break
-                    _data, _sig = item
+                    _data, _sig, _from_channel = item
                     try:
                         with _output_lock:
                             console.rule(f"[bold cyan]Signal — {_sig.signal_id}[/bold cyan]")
@@ -581,6 +596,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                                 f"[red]Error processing {_sig.signal_id}:[/red] {e}"
                             )
                     finally:
+                        if _from_channel:
+                            with _channel_lock:
+                                _channel_waiting[key] = max(0, _channel_waiting.get(key, 0) - 1)
                         q.task_done()
 
             vm_short = resource_id.split("/")[-1]
@@ -594,7 +612,29 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # attack_started line alike (SEC4c) — a line used to list them all again.
     _ip_owners = None if dry_run else _shared_private_ips()
 
-    def _dispatch(data: dict, sig: Signal) -> None:
+    def _channel_room(data: dict) -> tuple[str, tuple | None]:
+        """(why the line is refused — "" when it has room —, the search it takes) for a line
+        of runs/ (SEC8). Taken under the lock: the room is counted as it is given."""
+        key = str(data.get("resource_id", "unknown")).lower()
+        search = (key, str(data.get("ttp") or "")) if data.get("event") == "attack_started" else None
+        with _channel_lock:
+            if key not in _channel_vms and key not in _resource_queues and len(_channel_vms) >= CHANNEL_VMS:
+                return f"le canal nomme déjà {CHANNEL_VMS} VM : une de plus est refusée", None
+            if search is not None:
+                if search in _channel_polls:
+                    return "une recherche de cette technique sur cette VM est déjà en cours", None
+                if len(_channel_polls) >= CHANNEL_POLLS:
+                    return f"{CHANNEL_POLLS} recherches du canal déjà en cours : une de plus est refusée", None
+                _channel_polls.add(search)
+            else:
+                if _channel_waiting.get(key, 0) >= CHANNEL_QUEUED_PER_VM:
+                    return (f"{CHANNEL_QUEUED_PER_VM} lignes du canal attendent déjà pour cette VM : "
+                            "une de plus est refusée"), None
+                _channel_waiting[key] = _channel_waiting.get(key, 0) + 1
+            _channel_vms.add(key)
+        return "", search
+
+    def _dispatch(data: dict, sig: Signal, source: str = "") -> None:
         """Route signal to its resource worker queue.
 
         attack_started: spawns a poll thread immediately — polling runs in parallel
@@ -602,10 +642,18 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         resulting detection/timeout signal is enqueued for decide+execute.
 
         All other events go directly to the resource queue (serialized per resource).
+
+        `source`: the file of runs/ the line comes from — bounded by `_channel_room` (SEC8).
         """
         from glorfindel.agent import resolve_attack_started
 
         resource_id = data.get("resource_id", "unknown")
+        search = None
+        if source:
+            refused, search = _channel_room(data)
+            if refused:
+                _refuse_from_runs(data, refused, source)
+                return
 
         if data.get("event") == "attack_started":
             def _poll_and_enqueue():
@@ -634,17 +682,25 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     return
                 resolved_sig = Signal(**{k: resolved.get(k, getattr(sig, k, ""))
                                          for k in sig.__dataclass_fields__})
-                _get_or_start_worker(resource_id).put((resolved, resolved_sig))
+                _get_or_start_worker(resource_id).put((resolved, resolved_sig, False))
+
+            def _poll_then_free():
+                try:
+                    _poll_and_enqueue()
+                finally:
+                    if search is not None:
+                        with _channel_lock:
+                            _channel_polls.discard(search)
 
             vm_short = resource_id.split("/")[-1]
             t = _threading.Thread(
-                target=_poll_and_enqueue, daemon=True,
+                target=_poll_then_free, daemon=True,
                 name=f"poll-{vm_short}-{sig.signal_id[-6:]}",
             )
             t.start()
             return
 
-        _get_or_start_worker(resource_id).put((data, sig))
+        _get_or_start_worker(resource_id).put((data, sig, bool(source)))
 
     # SEC8 (#414): runs/ read as an input the watch does not trust — a regular file only,
     # never a link, never blocking; a bounded read per file and per poll, a bounded rate
@@ -669,7 +725,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 # each for what it is (glorfindel/signal_origin.py).
                 admitted = _admit_from_runs(data, path.name)
                 if admitted is not None:
-                    _dispatch(*admitted)   # non-blocking — worker thread takes over
+                    _dispatch(*admitted, source=path.name)   # non-blocking — a worker takes over
         over = _channel.budget.report()
         if over:
             n = sum(over.values())

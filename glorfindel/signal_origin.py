@@ -94,6 +94,73 @@ def attack_time_refusal(value, now: float | None = None) -> str:
     return ""
 
 
+# SEC8: a duration a line gives (how long the watch searches: a thread) is finite and bounded.
+# A scenario's timeout is a few minutes; its declared SLA ("time_max") defaults to 9999 s.
+DURATION_BOUNDS_S = {"detection_timeout_s": 3600, "detection_max_s": 86400}
+
+
+def duration_refusal(name: str, value) -> str:
+    """Why a duration a line gives is refused, or "" when it is a number of seconds, finite,
+    above 0 and within DURATION_BOUNDS_S. Never raises."""
+    import math
+
+    bound = DURATION_BOUNDS_S.get(name, 3600)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"{name} n'est pas une durée ({type(value).__name__})"
+    try:
+        v = float(value)
+    except (OverflowError, ValueError):
+        return f"{name} n'est pas une durée finie"
+    if not math.isfinite(v):
+        return f"{name} n'est pas une durée finie"
+    if not 0 < v <= bound:
+        return f"{name} hors bornes ({v:g} s ; au plus {bound} s)"
+    return ""
+
+
+# SEC8: the techniques the watch knows — those of the shared catalog (technique_catalog.yaml,
+# the injectors play nothing else) and those of its detection rules. A line of the channel
+# naming another is refused: no detection to run, no rule to propose — and no call to the
+# model for it. Read again at most every KNOWN_TTL_S.
+KNOWN_TTL_S = 60.0
+_KNOWN_LOCK = threading.Lock()
+_KNOWN: dict = {}
+
+
+def known_techniques() -> frozenset:
+    """The technique ids the watch knows (the catalog's, its rules'), cached KNOWN_TTL_S.
+    Unreadable: what could be read (nothing at worst: every line then refused). Never raises."""
+    import time
+
+    with _KNOWN_LOCK:
+        at, ttps = _KNOWN.get("at"), _KNOWN.get("ttps")
+        if at is not None and time.monotonic() - at < KNOWN_TTL_S:
+            return ttps
+    found: set[str] = set()
+    try:
+        from glorfindel.detection_authoring import load_catalog
+        found |= {str(t) for t in load_catalog()}
+    except Exception as exc:
+        log.warning("technique catalog unreadable (%s)", exc)
+    try:
+        from glorfindel.config import load_glorfindel_config
+        from glorfindel.detection_rules import load_rules
+        try:
+            cfg = load_glorfindel_config()
+        except Exception:
+            cfg = None
+        for candidate in (Path("glorfindel/rules/azure/detection_rules.yaml"),
+                          Path(__file__).parent / "rules" / "azure" / "detection_rules.yaml"):
+            if candidate.exists():
+                found |= {r.ttp for r in load_rules(candidate, glorfindel_cfg=cfg) if r.ttp}
+    except Exception as exc:
+        log.warning("detection rules unreadable for the known techniques (%s)", exc)
+    ttps = frozenset(found)
+    with _KNOWN_LOCK:
+        _KNOWN.update(at=time.monotonic(), ttps=ttps)
+    return ttps
+
+
 class Admission:
     """What the watch makes of one line of runs/: `signal` (cleaned) and `what` (poll,
     propose) when admitted; `refused` (why) otherwise. `dropped`: the fields taken off."""
@@ -102,9 +169,10 @@ class Admission:
         self.signal, self.what, self.refused, self.dropped = signal, what, refused, list(dropped)
 
 
-def admit(data: dict, now: float | None = None) -> Admission:
+def admit(data: dict, now: float | None = None, known=None) -> Admission:
     """The line as the watch may take it from runs/, or why it is refused. Never raises.
-    `now`: the moment an attack_time is bounded around (default: the clock)."""
+    `now`: the moment an attack_time is bounded around (default: the clock); `known`: the
+    techniques the watch knows (default: `known_techniques`)."""
     event = str((data or {}).get("event") or "")
     if event not in CHANNEL_EVENTS:
         why = ("n'est accepté que de `glorfindel restore`, jamais du canal runs/"
@@ -128,6 +196,16 @@ def admit(data: dict, now: float | None = None) -> Admission:
         why = attack_time_refusal(clean["raw_signal"]["attack_time"], now=now)
         if why:
             return Admission(None, refused=why)
+    for part in ("raw_signal", "context"):
+        for name in DURATION_BOUNDS_S:
+            if name in clean[part]:
+                why = duration_refusal(name, clean[part][name])
+                if why:
+                    return Admission(None, refused=why)
+    ttp = clean["ttp"]
+    if not isinstance(ttp, str) or ttp not in (known_techniques() if known is None else known):
+        return Admission(None, refused=(f"technique « {str(ttp)[:24]} » inconnue de la watch (ni son "
+                                        "catalogue, ni ses règles) : aucune détection ni appel au modèle"))
     return Admission(clean, CHANNEL_EVENTS[event], dropped=dropped)
 
 

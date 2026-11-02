@@ -129,10 +129,11 @@ with open(sys.argv[1], "a") as f:
 """
 
 
-def _run_watch(tmp_path, monkeypatch, lines, expect, prepare=None):
+def _run_watch(tmp_path, monkeypatch, lines, expect, prepare=None, slow_respond=0.0, slow_poll=0.0):
     """The watch (dry-run) on tmp_path/runs, HOME in tmp_path; `lines` appended by ANOTHER
     process once it runs. Returns (what reached respond, what the poll was asked, output).
-    `prepare(runs)`: what runs/ holds before the watch starts (SEC8)."""
+    `prepare(runs)`: what runs/ holds before the watch starts; `slow_respond`, `slow_poll`:
+    how long a decision, a search take (SEC8)."""
     from click.testing import CliRunner
 
     from glorfindel import cli
@@ -154,11 +155,13 @@ def _run_watch(tmp_path, monkeypatch, lines, expect, prepare=None):
             self.connector = SimpleNamespace(permission_mode=lambda: "read_write")
 
         def respond(self, data):
+            time.sleep(slow_respond)
             responded.append(data)
             return {"action": "none", "escalate": False, "confidence": 0.0, "outcome": {}}
 
     def _resolve(data, ip_owners=None):
         polled.append(data)
+        time.sleep(slow_poll)
         return {**data, "event": "detection"}
 
     monkeypatch.setattr("glorfindel.agent.GlorfindelAgent", _Agent)

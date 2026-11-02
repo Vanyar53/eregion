@@ -179,3 +179,132 @@ def test_a_fifo_and_a_link_in_runs_never_stop_the_watch(tmp_path, monkeypatch):
     assert flat.count("pipe_signals.jsonl refusé") == 1 and "tube nommé" in flat
     assert flat.count("link_signals.jsonl refusé") == 1 and "lien" in flat
     assert signal_origin.refused_counts() == {}
+
+
+# ── 2. A bounded rate, bounded effects, finite durations, known techniques ─────────────
+
+def _vm(i: int) -> str:
+    return f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-{i:03d}"
+
+
+def test_the_budget_lets_a_writer_through_its_rate_and_says_the_rest_once_a_minute():
+    now = [0.0]
+    budget = channel_reader.Budget(per_writer=3, total=5, window_s=60, clock=lambda: now[0])
+    assert [budget.take("a") for _ in range(5)] == [True, True, True, False, False]
+    assert [budget.take("b") for _ in range(3)] == [True, True, False]      # the channel's 5
+    assert budget.report() == {"a": 2, "b": 1}
+    budget.take("a")
+    assert budget.report() == {}                     # said a minute ago: kept for the next
+    now[0] = 61.0
+    assert budget.take("a") is True                  # a new minute
+    assert budget.report() == {"a": 1}
+
+
+def test_a_burst_in_runs_is_cut_at_the_writers_rate_and_said_in_one_line(tmp_path, monkeypatch):
+    """A file of 3 × PER_WRITER_PER_MIN lines: PER_WRITER_PER_MIN are decided, the rest refused
+    unread, said in one line and counted once — never one refusal per line."""
+    n = channel_reader.PER_WRITER_PER_MIN
+    lines = [_line("detection_missed", signal_id=f"m{i}", resource_id=_vm(i)) for i in range(3 * n)]
+    responded, _polled, out = _run_watch(tmp_path, monkeypatch, lines, expect=n)
+    assert len(responded) == n, out
+    flat = " ".join(out.split())
+    assert flat.count("Canal runs/ :") == 1 and f"{2 * n} ligne(s) refusée(s)" in flat
+    assert flat.count("Signal refusé") == 0
+    assert signal_origin.refused_counts() == {"(débit)": 2 * n}
+
+
+def test_the_lines_waiting_for_one_vm_are_bounded(tmp_path, monkeypatch):
+    """A decision takes time: the channel's lines for one VM wait at most CHANNEL_QUEUED_PER_VM;
+    the next ones are refused and said, never queued without end."""
+    monkeypatch.setattr(channel_reader, "CHANNEL_QUEUED_PER_VM", 3)
+    lines = [_line("detection_missed", signal_id=f"m{i}") for i in range(7)]
+    responded, _polled, out = _run_watch(tmp_path, monkeypatch, lines, expect=3, slow_respond=0.3)
+    assert len(responded) == 3, out
+    assert " ".join(out.split()).count("lignes du canal attendent déjà pour cette VM") == 4
+    assert signal_origin.refused_counts() == {"detection_missed": 4}
+
+
+def test_one_search_per_vm_and_technique_and_a_bounded_number_of_them(tmp_path, monkeypatch):
+    """A thread per line no more: the same search twice is refused while it runs, and at most
+    CHANNEL_POLLS run at once."""
+    monkeypatch.setattr(channel_reader, "CHANNEL_POLLS", 2)
+    t0 = time.time() - 60
+    raw = {"attack_time": t0}
+    lines = ([_line("attack_started", signal_id=f"a{i}", raw_signal=raw) for i in range(3)]
+             + [_line("attack_started", signal_id=f"b{i}", resource_id=_vm(i), raw_signal=raw) for i in range(3)])
+    responded, polled, out = _run_watch(tmp_path, monkeypatch, lines, expect=2, slow_poll=1.0)
+    assert len(polled) == 2, out
+    flat = " ".join(out.split())
+    assert flat.count("une recherche de cette technique sur cette VM est déjà en cours") == 2
+    assert flat.count("recherches du canal déjà en cours") == 2
+
+
+def test_the_vms_the_channel_names_are_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(channel_reader, "CHANNEL_VMS", 4)
+    lines = [_line("detection_missed", signal_id=f"m{i}", resource_id=_vm(i)) for i in range(6)]
+    responded, _polled, out = _run_watch(tmp_path, monkeypatch, lines, expect=4)
+    assert len(responded) == 4, out
+    assert " ".join(out.split()).count("le canal nomme déjà 4 VM") == 2
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan"), 10 ** 400, -5, 0, True, "300",
+                                   None, 3601])
+def test_a_timeout_is_finite_and_bounded(value):
+    line = _line("attack_started", raw_signal={"attack_time": time.time() - 60, "detection_timeout_s": value})
+    adm = signal_origin.admit(line)
+    assert adm.signal is None and "detection_timeout_s" in adm.refused
+    missed = _line("detection_missed", context={"run_id": "r1", "detection_timeout_s": value})
+    assert signal_origin.admit(missed).signal is None
+
+
+def test_infinity_written_as_json_is_refused_and_the_scenarios_bounds_pass():
+    """json reads `Infinity` and `NaN` as floats: refused. A scenario's own values — a
+    timeout of minutes, the SLA's default of 9999 s — pass."""
+    raw = '{"attack_time": %f, "detection_timeout_s": Infinity}' % (time.time() - 60)
+    assert signal_origin.admit(_line("attack_started", raw_signal=json.loads(raw))).signal is None
+    raw = '{"attack_time": %f, "detection_timeout_s": 300, "detection_max_s": NaN}' % (time.time() - 60)
+    assert signal_origin.admit(_line("attack_started", raw_signal=json.loads(raw))).signal is None
+    ok = signal_origin.admit(_line("attack_started", raw_signal={
+        "attack_time": time.time() - 60, "detection_timeout_s": 480, "detection_max_s": 9999}))
+    assert ok.signal is not None, ok.refused
+
+
+def test_the_search_refuses_an_endless_timeout_before_any_query(monkeypatch):
+    """`respond` reads a file the operator names, not runs/: its attack_started is bounded the
+    same, before a detector is even made."""
+    from glorfindel import agent
+    made = []
+    monkeypatch.setattr("glorfindel.detectors.detector_for", lambda *a, **k: made.append(a))
+    sig = _line("attack_started", raw_signal={"attack_time": time.time() - 60,
+                                              "detection_timeout_s": float("inf")})
+    with pytest.raises(ValueError, match="detection_timeout_s"):
+        agent.resolve_attack_started(sig)
+    assert made == []
+
+
+def test_the_known_techniques_are_the_catalogs_and_the_rules():
+    from glorfindel.detection_authoring import load_catalog
+    known = signal_origin.known_techniques()
+    assert set(load_catalog()) <= known
+    assert {"T1486", "T1136.001", "T1562.007"} <= known      # the catalog's, a rule's only
+    assert "T9999.999" not in known
+
+
+@pytest.mark.parametrize("event", ["attack_started", "detection_missed"])
+def test_a_line_naming_an_unknown_technique_is_refused(event):
+    line = _line(event, ttp="T9999.999", raw_signal={"attack_time": time.time() - 60})
+    adm = signal_origin.admit(line)
+    assert adm.signal is None and "inconnue" in adm.refused
+    assert signal_origin.admit(_line(event, ttp=["T1486"])).signal is None
+
+
+def test_an_unknown_technique_in_runs_reaches_neither_the_search_nor_the_model(tmp_path, monkeypatch):
+    """No decision (the model's call) and no search for a technique the watch does not know —
+    whatever the event; the refusal is said and counted."""
+    lines = [_line("attack_started", ttp="T9999.999", raw_signal={"attack_time": time.time() - 60}),
+             _line("detection_missed", ttp="T9999.998"),
+             _line("detection_missed", signal_id="known")]
+    responded, polled, out = _run_watch(tmp_path, monkeypatch, lines, expect=1)
+    assert [d["signal_id"] for d in responded] == ["known"] and polled == []
+    assert " ".join(out.split()).count("inconnue de la watch") == 2
+    assert signal_origin.refused_counts() == {"attack_started": 1, "detection_missed": 1}

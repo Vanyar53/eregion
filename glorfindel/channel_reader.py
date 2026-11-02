@@ -12,7 +12,10 @@ blocks, or that does not end, stops all of them. So:
   skipped to its end;
 - **a bounded rate.** At most PER_WRITER_PER_MIN lines admitted per file (a run writes one
   file) and CHANNEL_PER_MIN for the whole channel, per minute; the surplus is refused and said
-  in one line, at most once a minute (`Budget`), never one card per line.
+  in one line, at most once a minute (`Budget`), never one card per line;
+- **bounded effects.** What the lines admitted start in the watch is bounded too: CHANNEL_POLLS
+  searches in flight (one per VM and technique), CHANNEL_QUEUED_PER_VM lines waiting per VM,
+  CHANNEL_VMS VMs named; beyond, a line is refused and said (glorfindel/cli.py).
 
 The lines read are then admitted, or refused, by `glorfindel/signal_origin.py`.
 """
@@ -34,6 +37,11 @@ LINE_BYTES = 64 * 1024
 PER_WRITER_PER_MIN = 30
 CHANNEL_PER_MIN = 120
 WINDOW_S = 60.0
+# What the channel's lines may start in the watch (glorfindel/cli.py, `_channel_room`): the
+# searches in flight (one per VM and technique), its lines waiting per VM, the VMs it names.
+CHANNEL_POLLS = 16
+CHANNEL_QUEUED_PER_VM = 8
+CHANNEL_VMS = 64
 
 _FLAGS = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
 

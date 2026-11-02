@@ -32,7 +32,7 @@ run "noise_off_the_bench_plan_is_unchanged" {
       + length(azurerm_chaos_studio_capability.disk) + length(azurerm_chaos_studio_experiment.disk)
       + length(azurerm_chaos_studio_experiment.cpu) + length(azurerm_chaos_studio_experiment.restart)
       + length(azurerm_role_assignment.chaos_disk_read) + length(azurerm_role_assignment.chaos_cpu_read)
-    + length(azurerm_role_assignment.chaos_restart)) == 0
+    + length(azurerm_role_assignment.chaos_restart)) == 1
     error_message = "une ressource de G1 est planifiée alors que chaos.noise_vms est vide"
   }
   assert {

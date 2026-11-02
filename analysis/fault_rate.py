@@ -41,6 +41,7 @@ already read (``eregion_console/indicators.py``), and the CLI reads this host's 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -48,7 +49,7 @@ from pathlib import Path
 
 from analysis import containment
 from analysis.containment import FaultRun
-from eregion_core import run_report
+from eregion_core import channel_reader, run_report
 
 NOT_STARTED = "rien n'a été injecté"
 NOT_SEEN = "son effet n'a pas été vu dans la télémétrie de Glorfindel : il ne mesure rien de sa réaction"
@@ -96,16 +97,17 @@ def read_watch(runs_dir: Path, since: float = 0.0) -> Watch:
     files, records = [], []
     for path in sorted(Path(runs_dir).glob("watch-*_debug.jsonl")):
         try:
-            mtime = path.stat().st_mtime
+            mtime = os.lstat(path).st_mtime   # SEC16: a link has no age here
         except OSError:
             continue
         if mtime < since:
             files.append(WatchFile(path.name, mtime))
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
+        try:   # SEC16: as the watch reads runs/ — a regular file, bounded, never blocking
+            text = channel_reader.read_text(path)
         except (OSError, UnicodeDecodeError) as e:
-            files.append(WatchFile(path.name, mtime, f"illisible ({type(e).__name__})"))
+            why = str(e) if isinstance(e, channel_reader.Refused) else type(e).__name__
+            files.append(WatchFile(path.name, mtime, f"illisible ({why})"))
             continue
         bad = 0
         for line in text.splitlines():
@@ -291,8 +293,8 @@ def _windows(runs_dir: Path, run_ids) -> dict[str, float]:
     out = {}
     for rid in run_ids:
         try:
-            window = json.loads((exercises_dir(runs_dir) / f"{rid}.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError):
+            window = channel_reader.read_json(exercises_dir(runs_dir) / f"{rid}.json")   # SEC16
+        except (OSError, ValueError):
             continue
         last = None if not isinstance(window, dict) or window_refusal(window) else last_moment(window)
         if last is not None:

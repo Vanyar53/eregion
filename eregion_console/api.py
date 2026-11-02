@@ -1033,10 +1033,10 @@ def _feed_start() -> dict[Path, tuple[int, int | None, bool]]:
 
 def _feed_new(state: dict[Path, tuple[int, int | None, bool]]) -> list[dict]:
     """What runs/ gained since the last turn, read as the watch reads it (SEC15,
-    glorfindel/channel_reader.py ``read_lines``): a regular file only, never blocking, never
+    eregion_core/channel_reader.py ``read_lines``): a regular file only, never blocking, never
     through a link, a bounded read per turn — the rest waits for the next one, from the offset
     kept. A file refused is said once. A file not there at the start is read from its start."""
-    from glorfindel import channel_reader
+    from eregion_core import channel_reader
     out = []
     for pat, kind in _FEED_FILES:
         for f in _RUNS.glob(pat):
@@ -2094,8 +2094,13 @@ def _write_manual_feed(action: str, resource_id: str, outcome: dict) -> None:
         "signal": {"resource_id": resource_id, "ttp": "", "severity": ""},
         "outcome": outcome,
     }
-    with open(runs / "manual_actions.jsonl", "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    # SEC16: a regular file only, never through a link, never blocking — refused, the action
+    # stands (it was made), and the refusal is said once in the console's log.
+    from eregion_core import channel_reader
+    try:
+        channel_reader.append_line(runs / "manual_actions.jsonl", json.dumps(entry))
+    except channel_reader.Refused as exc:
+        runs_reader.say_refused(runs / "manual_actions.jsonl", str(exc), done="jamais écrit")
 
 
 def _extract_conclusion(text: str, max_chars: int = 120) -> str:

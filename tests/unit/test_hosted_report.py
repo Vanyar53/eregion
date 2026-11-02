@@ -516,6 +516,30 @@ def test_the_report_is_written_once(tmp_path, index):
     assert index.paths and set(index.paths) == {tmp_path / "idx"}
 
 
+def test_the_hosted_report_writes_runs_never_through_a_link(tmp_path, index):
+    """SEC16 (#438): what the watch writes in a campaign's directory of runs/ — its lock, its
+    report, the note of a failure — never through a link: a link where the lock goes stops the
+    report (said, no model called); a dangling link where the report goes is replaced by it; a link
+    where the note goes too — what they point to is never written."""
+    cdir, _ = _h0(tmp_path, watch=[_decision(at=T + timedelta(minutes=3))])
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    model = _Model(CLAIMS)
+    kw = {"model": "fake/model", "llm": model, "index_path": tmp_path / "idx"}
+    (cdir / hr.LOCK).symlink_to(elsewhere / "lock")
+    said = []
+    assert hr.write_report(cdir, say=said.append, **kw).startswith("failed")
+    assert model.calls == [] and not (elsewhere / "lock").exists() and said
+    (cdir / hr.LOCK).unlink()
+    (cdir / hr.REPORT).symlink_to(elsewhere / "report.md")      # dangling: the report is not there
+    assert hr.write_report(cdir, say=lambda m: None, **kw) == "written"
+    assert not (cdir / hr.REPORT).is_symlink() and not (elsewhere / "report.md").exists()
+    (elsewhere / "note").write_text("kept")
+    (cdir / hr.ERROR).symlink_to(elsewhere / "note")
+    hr._note_failure(cdir, RuntimeError("x"))
+    assert (elsewhere / "note").read_text() == "kept" and not (cdir / hr.ERROR).is_symlink()
+
+
 def test_a_pass_holding_the_campaign_keeps_another_out(tmp_path, index):
     """M135: two passes never write the same report at once."""
     cdir, _ = _h0(tmp_path)

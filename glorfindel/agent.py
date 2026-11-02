@@ -2296,8 +2296,15 @@ def _write_debug_record(state: GlorfindelState) -> None:
         debug_record["uncontained"] = state["uncontained"]
     out = Path("runs") / f"{run_id}_debug.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "a") as f:
-        f.write(json.dumps(debug_record, default=str) + "\n")
+    # SEC16: runs/ is written by other containers too — a regular file only, never through a
+    # link, never blocking. Refused, the cycle goes on (its line lost), said once in the log.
+    from eregion_core import channel_reader
+    try:
+        channel_reader.append_line(out, json.dumps(debug_record, default=str))
+    except channel_reader.Refused as exc:
+        if channel_reader.say_once(out, str(exc)):
+            _console.print(f"[red]debug non écrit : {_esc_markup(out.name)} — {_esc_markup(str(exc))} "
+                           "(runs/ s'écrit comme il se lit)[/red]")
 
 
 def _detection_blocked(

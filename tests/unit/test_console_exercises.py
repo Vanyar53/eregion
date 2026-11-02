@@ -470,7 +470,7 @@ def test_a_file_that_is_no_file_is_refused_from_its_lstat_nothing_opened(runs, c
     nothing opened (SEC15, review)."""
     import os
     from eregion_console import runs_reader
-    from glorfindel import channel_reader
+    from eregion_core import channel_reader
 
     def opened(path):
         raise AssertionError(f"opened {path}")
@@ -529,3 +529,100 @@ def test_no_route_reads_runs_on_the_event_loop(runs, client, monkeypatch):
     assert where and all(w == "thread" for w, _, _ in where), [x for x in where if x[0] == "loop"]
     read = {fn for _, fn, _ in where}
     assert {"read_json", "json_and_why", "read_text", "lines", "regular", "tail"} <= read
+
+
+def _campaign_with_traps(runs, tmp_path):
+    """A campaign whose files around it are no files: the watch's debug file, the operator's
+    actions and the run's report beside its campaign as pipes (its report in runs/ readable), the
+    run's own debug file and its window as links to files of the right shape elsewhere (SEC16,
+    #438) — and the pipes' releaser, for whoever would block. Read as the watch reads runs/, the
+    run has no window here: its decision is unknown, « fenêtre absente »."""
+    import os
+    import threading
+    from .test_console import _release_fifo
+    attack = NOW - timedelta(hours=2)
+    cdir = _manifest(runs, "c-1", created=attack - timedelta(minutes=1), scenarios=[
+        {"seq": 1, "ttp": "T1110.001", "name": "ssh", "status": "executed", "run_id": "r1",
+         "detection": "detected", "detection_latency_s": 60, "target_resource_id": VM}])
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "exercises").mkdir(parents=True)
+    _window(elsewhere, "r1", start=attack - timedelta(minutes=1), end=attack + timedelta(minutes=5))
+    _cycle(elsewhere, "r1", at=attack + timedelta(minutes=1), action="isolate_vm")
+    (runs / "r1.json").write_text(json.dumps(
+        {"scenario": "ssh", "run_id": "r1", "mitre": "T1110.001", "result": "PASS",
+         "metrics": {"attack_time": attack.timestamp(), "detection": "detected"}}))
+    (cdir / "runs").mkdir()
+    links = {runs / "r1_debug.jsonl": elsewhere / "r1_debug.jsonl",
+             runs / "exercises" / "r1.json": elsewhere / "exercises" / "r1.json"}
+    for link, target in links.items():
+        link.symlink_to(target)
+    stop = threading.Event()
+    pipes = [runs / "watch-ssh_debug.jsonl", runs / "manual_actions.jsonl", runs / "g1.json",
+             cdir / "runs" / "r1.json"]
+    for pipe in pipes:
+        os.mkfifo(pipe)
+        threading.Thread(target=_release_fifo, args=(pipe, stop), daemon=True).start()
+    return cdir, stop
+
+
+def test_a_campaigns_page_reads_runs_as_the_watch_never_blocking_never_through_a_link(runs, client, tmp_path):
+    """SEC16 (#438): the page of a campaign (the analysis: its facts, its containment) reads runs/
+    as the watch reads it — a pipe never blocks the page, a link is never followed: the decision a
+    linked file holds is never the run's."""
+    from .test_console import _guarded
+    _, stop = _campaign_with_traps(runs, tmp_path)
+    try:
+        finished, page = _guarded(lambda: client.get("/api/campaigns/c-1").json())
+        assert finished, "the campaign's page blocked"
+        assert not isinstance(page, BaseException) and "error" not in page, page
+        [fact] = page["facts"]
+        assert (fact["run_id"], fact["decision"], fact["decision_unknown"]) == ("r1", "", "fenêtre absente")
+        assert "error" not in page["containment"], page["containment"]
+    finally:
+        stop.set()
+
+
+@pytest.mark.parametrize("trap", ["link", "fifo"])
+def test_the_consoles_manual_action_never_through_a_link_never_blocking(runs, tmp_path, capsys, trap):
+    """The console's note of an operator's action (runs/manual_actions.jsonl): a link or a pipe in
+    its place — refused, nothing written elsewhere, never blocking; the action stands, the refusal
+    said once in the console's log (SEC16)."""
+    import os
+    import threading
+    from .test_console import _guarded
+    from .test_runs_channel import _drain_fifo_after
+    f, elsewhere = runs / "manual_actions.jsonl", tmp_path / "elsewhere.jsonl"
+    stop = threading.Event()
+    if trap == "link":
+        f.symlink_to(elsewhere)
+    else:
+        os.mkfifo(f)
+        threading.Thread(target=_drain_fifo_after, args=(f, stop), daemon=True).start()
+    try:
+        for _ in range(2):
+            finished, got = _guarded(api._write_manual_feed, "unblock_ip", VM, {"ok": True})
+            assert finished and got is None, got
+        assert not elsewhere.exists()
+        out = capsys.readouterr().out
+        assert out.count("manual_actions.jsonl — ") == 1 and ": jamais écrit" in out
+    finally:
+        stop.set()
+
+
+def test_a_campaigns_report_reads_runs_as_the_watch_never_blocking_never_through_a_link(runs, tmp_path):
+    """SEC16 (#438): the report of a campaign (``collect_facts``, ``containment.load``, what
+    ``make campaign-report`` and the watch's hosted report write) reads runs/ as the watch: a pipe
+    never blocks it, a link is never followed."""
+    from analysis import campaign_report as cr
+    from analysis import containment
+    from .test_console import _guarded
+    cdir, stop = _campaign_with_traps(runs, tmp_path)
+    try:
+        finished, facts = _guarded(cr.collect_facts, cdir, runs, lambda _m: None)
+        assert finished and isinstance(facts, list), facts
+        assert [(f.run_id, f.decision, f.decision_unknown) for f in facts] == [("r1", "", "fenêtre absente")]
+        finished, contained = _guarded(lambda: containment.load(cdir, runs, cards=[]))
+        assert finished and not isinstance(contained, BaseException), contained
+        assert [i.run_id for i in contained.incidents] == ["r1"]
+    finally:
+        stop.set()

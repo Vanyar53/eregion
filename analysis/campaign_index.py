@@ -29,12 +29,12 @@ or whose manifest cannot be read, is said and left.
 """
 from __future__ import annotations
 
-import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from analysis import campaign_report as cr
+from eregion_core import channel_reader
 from eregion_core.exercise_channel import safe_part
 
 ENDED = ("done", "aborted")
@@ -77,7 +77,7 @@ def verse(campaign_dir: Path, path: Path | None = None, warn=cr._say) -> Versed:
     """Put one campaign into the index (``path``, else the report's): what was done."""
     campaign_dir = Path(campaign_dir)
     try:
-        manifest = json.loads((campaign_dir / "manifest.json").read_text(encoding="utf-8"))
+        manifest = channel_reader.read_json(campaign_dir / "manifest.json")   # SEC16
     except (OSError, ValueError) as e:
         return Versed(campaign_dir.name, left=f"manifeste illisible : {type(e).__name__}")
     if not isinstance(manifest, dict):

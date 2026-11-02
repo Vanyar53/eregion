@@ -342,3 +342,27 @@ def test_unmeasured_run_records_no_latency(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _bench_subscription(monkeypatch):
     monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")
+
+
+@pytest.mark.parametrize("trap", ["fifo", "link"])
+def test_the_watchs_file_is_read_as_the_watch_reads_runs(tmp_path, trap):
+    """SEC16 (#438): Annatar reads the watch's debug file as the watch reads runs/ — a pipe never
+    blocks the run (``[]`` at once), a link is never followed, even to a file of the right shape."""
+    import os
+    import threading
+    from annatar.runner.detection import read_records
+    f = tmp_path / "r1_debug.jsonl"
+    if trap == "fifo":
+        os.mkfifo(f)
+    else:
+        (tmp_path / "elsewhere.jsonl").write_text(json.dumps({"signal": {"event": "detection"}}) + "\n")
+        f.symlink_to(tmp_path / "elsewhere.jsonl")
+    box = []
+    t = threading.Thread(target=lambda: box.append(read_records(f)), daemon=True)
+    t.start()
+    t.join(5.0)
+    if t.is_alive():                                 # a red test fails, never hangs: release it
+        os.close(os.open(f, os.O_WRONLY | os.O_NONBLOCK))
+        t.join(2.0)
+        pytest.fail("the read blocked")
+    assert box == [[]]

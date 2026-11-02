@@ -58,6 +58,7 @@ from analysis.campaign_schema import (NO_CAMPAIGN_REPORT, run_report_refusal,
 from annatar.runner.detection import _number, first_detection, read_records
 from eregion_core.exercise import (FUTURE_SKEW_S, exercises_dir, is_enrolled, last_moment,
                                    window_refusal)
+from eregion_core import channel_reader
 from eregion_core.exercise_channel import PULLED, safe_part
 
 CLAIM_KINDS = ("detected", "missed", "latency", "decision", "trend", "observation", "change")
@@ -186,14 +187,9 @@ class Report:
 # ── Facts: read from the files, never from a model ──────────────────────────────────────
 
 def _decision_of(debug_path: Path) -> dict:
-    """Glorfindel's decision on the detection of this run (first detection cycle)."""
-    if not debug_path.exists():
-        return {}
-    for line in debug_path.read_text(encoding="utf-8").splitlines():
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
+    """Glorfindel's decision on the detection of this run (first detection cycle) — its file
+    read as the watch reads runs/ (``read_records``, SEC16)."""
+    for rec in read_records(debug_path):
         if (rec.get("signal") or {}).get("event") == "detection" and rec.get("action"):
             return rec
     return {}
@@ -214,10 +210,11 @@ def windows_dir(runs_dir: Path) -> Path:
 
 
 def _read_json(*paths: Path) -> dict:
-    """The first of ``paths`` that holds a JSON object, else ``{}``."""
+    """The first of ``paths`` that holds a JSON object, else ``{}`` — each read as the watch reads
+    runs/: a regular file, bounded, never blocking nor through a link (SEC16)."""
     for path in paths:
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data = channel_reader.read_json(path)
         except (OSError, ValueError):
             continue
         if isinstance(data, dict):
@@ -234,7 +231,7 @@ def _watch_files(runs_dir: Path):
     """The watch-* debug files of the runs directory, read once, as a function of the
     earliest attack they may hold a detection of."""
     try:
-        paths = [(p, p.stat().st_mtime) for p in sorted(runs_dir.glob("watch-*_debug.jsonl"))]
+        paths = [(p, os.lstat(p).st_mtime) for p in sorted(runs_dir.glob("watch-*_debug.jsonl"))]
     except OSError:
         paths = []
     cache: dict[Path, list[dict]] = {}
@@ -344,7 +341,7 @@ def undecided_runs(campaign_dir: Path, runs_dir: Path | None = None,
     report waits for (analysis/hosted_report.py)."""
     campaign_dir = Path(campaign_dir)
     runs_dir = Path(runs_dir) if runs_dir else campaign_dir.parent.parent
-    manifest = json.loads((campaign_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest = channel_reader.read_json(campaign_dir / "manifest.json")
     watch_records = _watch_files(runs_dir)
     out = []
     for s, rid in _scenarios(manifest, warn):
@@ -476,7 +473,7 @@ def first_window(manifest: dict, runs_dir: Path) -> float | None:
         path = wdir / f"{rid}.json"
         window = _read_json(path)
         try:
-            declared = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            declared = datetime.fromtimestamp(os.lstat(path).st_mtime, timezone.utc)
         except OSError:
             continue
         if not window or window.get("purged_at") or window_refusal(window, declared_at=declared):
@@ -509,7 +506,7 @@ def campaign_info(campaign_dir: Path, runs_dir: Path | None = None) -> CampaignI
     if from_channel(campaign_dir):
         first = first_window(manifest, runs_dir)
         try:
-            pulled = (campaign_dir / PULLED).stat().st_mtime
+            pulled = os.lstat(campaign_dir / PULLED).st_mtime
         except OSError:
             pulled = None
         if why := start_refusal(started, first, pulled):
@@ -524,7 +521,7 @@ def campaign_info(campaign_dir: Path, runs_dir: Path | None = None) -> CampaignI
 def collect_facts(campaign_dir: Path, runs_dir: Path | None = None, warn=_say) -> list[RunFact]:
     campaign_dir = Path(campaign_dir)
     runs_dir = Path(runs_dir) if runs_dir else campaign_dir.parent.parent
-    manifest = json.loads((campaign_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest = channel_reader.read_json(campaign_dir / "manifest.json")   # SEC16
     cid = manifest.get("campaign_id") or campaign_dir.name
     watch_records = _watch_files(runs_dir)
     channel = from_channel(campaign_dir)
@@ -1280,7 +1277,7 @@ def main(argv: list[str]) -> int:
         print(f"{campaign_dir.name}: {e} — nothing written")
         return 0
     out = campaign_dir / "report.md"
-    out.write_text(render(report), encoding="utf-8")
+    channel_reader.write_file(out, render(report))     # SEC16: a link in its place never followed
     print(f"{out} — {len(report.kept)} affirmation(s) gardée(s), {len(report.rejected)} écartée(s)")
     return 0
 

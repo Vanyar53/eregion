@@ -108,9 +108,12 @@ def has_timeout(records) -> bool:
 
 
 def read_records(path: Path) -> list[dict]:
-    """The JSON lines of a debug file; unreadable lines are skipped, a missing file is ``[]``."""
+    """The JSON lines of a debug file; unreadable lines are skipped, a missing file is ``[]`` —
+    and a file that is no regular file, or larger than its bound, too: read as the watch reads
+    runs/, never blocking nor through a link (SEC16, ``eregion_core.channel_reader``)."""
+    from eregion_core import channel_reader
     try:
-        text = Path(path).read_text(encoding="utf-8")
+        text = channel_reader.read_text(path)
     except (OSError, UnicodeDecodeError):
         return []
     records = []

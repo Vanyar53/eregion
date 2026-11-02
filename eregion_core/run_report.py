@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -190,15 +191,16 @@ def read_reports(reports: dict[str, Path], reader=None) -> list[dict]:
     """Every run of ``reports`` (run id → path), unified, whatever its date — a report that
     cannot be read, or has no date, is left out. A report under ``campaigns/<id>/runs/`` is
     given its campaign. Each file is parsed once per version (``_report_cache``). ``reader``
-    (path → its JSON, or None) reads a report in place of the file's text: the console reads
-    runs/ as the watch reads it (SEC15, ``eregion_console/runs_reader.py``)."""
+    (path → its JSON, or None) reads a report — the console's says a refusal once in its log
+    (SEC15, ``eregion_console/runs_reader.py``); by default, as the watch reads runs/: a regular
+    file, bounded, never blocking nor through a link (SEC16, ``channel_reader.read_json``)."""
     runs = []
     seen = set()
     for run_id, path in reports.items():
         path = Path(path).absolute()
         seen.add(path)
         try:
-            st = path.stat()
+            st = os.lstat(path)    # SEC16: a link has no version here — its read refuses it
         except OSError:
             continue
         key = (st.st_mtime_ns, st.st_size, st.st_ino)
@@ -206,10 +208,11 @@ def read_reports(reports: dict[str, Path], reader=None) -> list[dict]:
         if hit is None or hit[0] != key:
             if reader is not None:
                 r = reader(path)
-            else:
+            else:   # SEC16: as the watch reads runs/ — a regular file, bounded, never blocking
+                from eregion_core import channel_reader
                 try:
-                    r = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, ValueError, UnicodeDecodeError):
+                    r = channel_reader.read_json(path)
+                except (OSError, ValueError):
                     r = None
             parent = path.parent
             campaign = parent.parent.name if parent.name == "runs" and parent.parent.parent.name == "campaigns" else ""

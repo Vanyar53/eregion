@@ -30,7 +30,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from glorfindel import channel_reader, signal_origin
+from eregion_core import channel_reader
+from glorfindel import signal_origin
 
 from .test_signal_origin import _line, _run_watch
 
@@ -655,5 +656,146 @@ def test_the_tui_feed_reads_runs_as_the_watch_never_blocking(tmp_path, monkeypat
         assert finished and isinstance(got, list), got
         assert got[0] == "[yellow]⚠ r1_debug.jsonl : un tube nommé — jamais lu[/yellow]"
         assert sum("attack_started" in line for line in got) == 3 and len(got) == 4
+    finally:
+        stop.set()
+
+
+# ── SEC16 (#438): one reader for every component, and the writes into runs/ held as its reads ──
+
+def _drain_fifo_after(path: Path, stop: threading.Event) -> None:
+    """Whoever opened the pipe for writing, blocked, is released once the test is over — a reader
+    opens it, reads nothing, closes — until none waited for 2 s: a red test fails at its guard,
+    never hangs, nor does its process at its exit."""
+    stop.wait()
+    quiet = time.monotonic()
+    while time.monotonic() - quiet < 2.0:
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            os.close(fd)
+            quiet = time.monotonic()
+        except OSError:
+            pass
+        time.sleep(0.05)
+
+
+@pytest.mark.parametrize("place", ["absent", "regular", "link", "dangling-link", "fifo", "fifo-read"])
+def test_a_line_is_appended_to_a_regular_file_only_never_through_a_link_never_blocking(tmp_path, place):
+    """``append_line``: created when absent, appended whole to a regular file; a link in its place
+    refused, nothing written where it points (an existing file unchanged, a missing one never
+    created); a pipe refused at once — whether someone reads it or not — nothing written in it."""
+    f = tmp_path / "manual_actions.jsonl"
+    elsewhere = tmp_path / "elsewhere.jsonl"
+    stop = threading.Event()
+    reader = None
+    if place == "regular":
+        f.write_text('{"a": 1}\n')
+    elif place == "link":
+        elsewhere.write_text("kept\n")
+        f.symlink_to(elsewhere)
+    elif place == "dangling-link":
+        f.symlink_to(elsewhere)
+    elif place.startswith("fifo"):
+        os.mkfifo(f)
+        threading.Thread(target=_drain_fifo_after, args=(f, stop), daemon=True).start()
+        if place == "fifo-read":
+            reader = os.open(f, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        finished, got = _guarded(channel_reader.append_line, f, '{"b": 2}')
+        assert finished, "the write blocked"
+        if place in ("absent", "regular"):
+            assert got is None
+            assert f.read_text() == ('{"a": 1}\n' if place == "regular" else "") + '{"b": 2}\n'
+        else:
+            assert isinstance(got, channel_reader.Refused), got
+            assert str(got) == {"link": "un lien, jamais suivi", "dangling-link": "un lien, jamais suivi",
+                                "fifo": "un tube nommé", "fifo-read": "un tube nommé"}[place]
+            assert (elsewhere.read_text() == "kept\n") if place == "link" else not elsewhere.exists()
+            if reader is not None:
+                assert os.read(reader, 100) == b""                 # nothing written in it
+    finally:
+        if reader is not None:
+            os.close(reader)
+        stop.set()
+
+
+def test_a_whole_file_written_replaces_a_link_never_follows_it(tmp_path):
+    """``write_file`` (a campaign's report, its notes): a link in its place is replaced by the
+    file, never followed — what it pointed to is unchanged."""
+    elsewhere = tmp_path / "elsewhere.md"
+    elsewhere.write_text("kept")
+    f = tmp_path / "report.md"
+    f.symlink_to(elsewhere)
+    channel_reader.write_file(f, "# report\n")
+    assert not f.is_symlink() and f.read_text() == "# report\n" and elsewhere.read_text() == "kept"
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".report.md.")] == []
+
+
+def test_a_whole_file_read_is_bounded_and_its_status_never_through_a_link(tmp_path):
+    f = tmp_path / "x.json"
+    f.write_text(json.dumps({"pad": "x" * 64}))
+    assert channel_reader.read_json(f) == {"pad": "x" * 64}
+    with pytest.raises(channel_reader.Refused, match="plus de 32 octets"):
+        channel_reader.read_file(f, 32)
+    (tmp_path / "l.json").symlink_to(f)
+    with pytest.raises(channel_reader.Refused, match="un lien, jamais suivi"):
+        channel_reader.lstat_regular(tmp_path / "l.json")
+    assert channel_reader.lstat_regular(f).st_size == f.stat().st_size
+
+
+@pytest.mark.parametrize("trap", ["link", "fifo"])
+def test_the_watch_debug_line_never_through_a_link_never_blocking_the_cycle_goes_on(tmp_path, monkeypatch,
+                                                                                     capsys, trap):
+    """The watch's line of a cycle (``_write_debug_record``): a link or a pipe in its place —
+    refused, nothing written elsewhere, the cycle never cut (OV1, BL1: a failed cycle's line is its
+    last trace), said once in the watch's log, never at every cycle."""
+    from glorfindel import agent
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir()
+    f = tmp_path / "runs" / "r1_debug.jsonl"
+    elsewhere = tmp_path / "elsewhere.jsonl"
+    stop = threading.Event()
+    if trap == "link":
+        elsewhere.write_text("kept\n")
+        f.symlink_to(elsewhere)
+    else:
+        os.mkfifo(f)
+        threading.Thread(target=_drain_fifo_after, args=(f, stop), daemon=True).start()
+    state = {"signal": {"event": "detection", "ttp": "T1110.001", "resource_id": "/x/vm-a",
+                        "context": {"run_id": "r1"}}, "action": "snapshot"}
+    try:
+        for _ in range(2):
+            finished, got = _guarded(agent._write_debug_record, state)
+            assert finished, "the cycle's line blocked the watch"
+            assert got is None, got                                  # never raised: the cycle goes on
+        assert trap == "fifo" or elsewhere.read_text() == "kept\n"
+        out = capsys.readouterr().out
+        assert out.count("debug non écrit") == 1 and "r1_debug.jsonl" in out
+    finally:
+        stop.set()
+
+
+@pytest.mark.parametrize("trap", ["link", "fifo"])
+def test_the_clis_manual_action_never_through_a_link_never_blocking(tmp_path, monkeypatch, capsys, trap):
+    """The CLI's note of an operator's action (runs/manual_actions.jsonl): a link or a pipe in its
+    place — refused, nothing written elsewhere, never blocking; the action stands, the refusal
+    said once."""
+    from glorfindel import cli
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir()
+    f = tmp_path / "runs" / "manual_actions.jsonl"
+    elsewhere = tmp_path / "elsewhere.jsonl"
+    stop = threading.Event()
+    if trap == "link":
+        f.symlink_to(elsewhere)
+    else:
+        os.mkfifo(f)
+        threading.Thread(target=_drain_fifo_after, args=(f, stop), daemon=True).start()
+    try:
+        for _ in range(2):
+            finished, got = _guarded(cli._record_manual_action, "release_isolation", "/x/vm-a", {"ok": True})
+            assert finished and got is None, got
+        assert not elsewhere.exists()
+        out = " ".join(capsys.readouterr().out.split())       # the terminal's width aside
+        assert out.count("l'action n'y est pas notée") == 1
     finally:
         stop.set()

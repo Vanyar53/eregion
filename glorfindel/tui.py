@@ -146,8 +146,8 @@ def _execute(pending: dict) -> None:
 
 
 # ── Restore: the moment is asked (SEC4c) ───────────────────────────────────────
-# The field is filled with the moment the runs/ channel gives for the VM (an exercise), else
-# the card's first detection; Enter shows the recovery points before it (read only); y runs
+# The field is filled with restore_plan.proposed_moment: an exercise card's run's attack_started
+# (never after its first detection), else the earliest the defender recorded (SEC8); Enter shows the recovery points before it (read only); y runs
 # `glorfindel restore --before`. What the command says — a refusal too — stays on screen.
 
 _last_restore: dict = {}

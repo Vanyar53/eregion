@@ -523,7 +523,7 @@ glorfindel release <resource_id> --yes          # lift isolation only (post-rest
 glorfindel unblock <ip> <resource_id> --yes     # remove one IP block (e.g. after T1110)
 glorfindel reset <resource_id> --yes           # reset: release isolation + unblock all IPs
 glorfindel snapshot <resource_id> --yes         # on-demand Recovery Services Vault backup (~5-20min)
-glorfindel restore <resource_id> --yes          # Azure Backup restore: newest point before the attack on THIS VM (--before, else its attack_started; unknown → asked)
+glorfindel restore <resource_id> --yes          # Azure Backup restore: newest point before the attack on THIS VM (--before, else its card's first detection — an exercise card: its run's attack_started; unknown → asked)
 glorfindel jobs <vm-name> [--refresh]           # snapshot/restore job status
 glorfindel list                                 # all VMs with active actions (isolation + blocked IPs)
 #

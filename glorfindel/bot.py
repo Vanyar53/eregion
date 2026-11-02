@@ -547,8 +547,9 @@ _MOMENT_LABELS = {"exercise": "Point d'avant… (début de l'exercice, UTC)",
 
 
 class _RestoreButton(discord.ui.Button):
-    """A restore asks for its moment (SEC4c): a form, filled with the moment the runs/ channel
-    gives for this VM (an exercise), else the card's first detection."""
+    """A restore asks for its moment (SEC4c): a form, filled with restore_plan.proposed_moment —
+    an exercise card's run's attack_started, never after its first detection; else the earliest
+    the defender recorded (SEC8)."""
 
     def __init__(self, esc: dict) -> None:
         super().__init__(label="🔄 Restore", style=discord.ButtonStyle.primary,

@@ -179,9 +179,9 @@ def request_lock(runs_dir: Path | str, holder: str = ""):
     """One run at a time on this Orodruin (DG-b review, point 5; #358): an exclusive ``flock`` on
     ``runs/orodruin/requests/.lock``, never waited for — two requests side by side would overlap
     on a VM and double Orodruin's cap. Taken by a request (``exercise_runner``) and by a run
-    launched by hand on Orodruin (``annatar campaign run``): a campaign during a request would put
-    a technique on a VM a wire holds, or a fault under it. Never by a wire of the request — it runs
-    under the request's own lock. ``holder`` (« request r-… », « campaign C… ») is written in the
+    launched by hand on Orodruin (``annatar campaign run``, ``annatar run``, ``gothmog run``): a
+    campaign, a run or a fault during a request would put a technique on a VM a wire holds, or a
+    fault under it. Never by a wire of the request — it runs under the request's own lock. ``holder`` (« request r-… », « campaign C… ») is written in the
     lock once taken, and said by the next one refused. Held while it runs; the kernel lets it go
     with the process, a crash included."""
     path = Path(runs_dir) / "orodruin" / "requests" / ".lock"

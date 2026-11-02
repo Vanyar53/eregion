@@ -552,7 +552,8 @@ un fil est refusé :
 4. Le nom tapé est comparé au nom qu'Orodruin lit de la VM (`typed_name`), pour chaque fil qui le
    demande : un fil destructif, technique ou panne, ou que personne n'a déclaré inoffensif (A0).
    `vm-shutdown` (`destructive: false`) n'en demande pas. Gothmog le recompare au nom qu'il lit,
-   avant de démarrer une panne destructive.
+   avant de démarrer une panne destructive ; une lecture d'Azure qui échoue là est un refus dit
+   (`typed_name: the target's name unreadable…`), inscrit au rapport, jamais une exception (#358).
 
 **Les fils, l'un après l'autre.** Chacun est un run de son injecteur, dans son propre processus (D1) :
 `annatar wire <technique> <vm> --request <id> [--typed-name <nom>]`, `gothmog run <panne> --yes
@@ -597,25 +598,30 @@ porte l'identifiant de la demande, ainsi que son rapport (`metrics.request`).
 - par une campagne lancée à la main (`annatar campaign run`, `make orodruin-campaign-run`) : elle
   mettrait une technique sur une VM qu'un fil tient, ou sous sa panne ;
 - par un run lancé à la main (`annatar run <scénario>`), pour la même raison : rien de lancé à la
-  main ne tourne pendant une demande.
+  main ne tourne pendant une demande ;
+- par une panne lancée à la main (`gothmog run <panne>`, après G1), pour la même raison.
 
 Un aperçu (`--dry-run`) ne lance rien et ne le prend pas.
 
 Jamais par un fil d'une demande : il tourne sous le verrou de sa demande (`annatar wire` et le
-lanceur de campagne appellent le moteur eux-mêmes, jamais la commande `run`). Le premier écrit ce qui
-le tient (« request r-… », « campaign … », « run <scénario> ») ; le suivant est refusé (`busy`) sans
+lanceur de campagne appellent le moteur eux-mêmes, jamais la commande `run` ; `gothmog run --request`
+ne le prend pas). Le premier écrit ce qui
+le tient (« request r-… », « campaign … », « run <scénario> », « fault <panne> ») ; le suivant est refusé (`busy`) sans
 rien lancer ni ratifier, et dit lequel. Le verrou part avec le processus, un crash compris ; à une
 sortie normale, le nom s'efface aussi. Le nom n'est qu'une indication : un refusé peut lire, le temps
 de quelques microsecondes, un nom périmé ou à moitié écrit, et n'en montre que les caractères
 imprimables.
 
-**Où est le verrou.** Dans le `runs/` de la commande : le répertoire de travail pour une demande et
-pour `annatar run`, `--runs-dir` pour une campagne. Sur Orodruin, les conteneurs des deux commandes
-montent le même `$HOME/runs` sur `/app/runs` (`make orodruin-exercise`, `make orodruin-campaign-run`) :
-un seul verrou. Une campagne lancée avec un autre `--runs-dir` n'exclut plus une demande — ne pas le
-faire sur Orodruin.
+**Où est le verrou.** Dans le `runs/` de la commande : le répertoire de travail pour une demande,
+pour `annatar run` et pour `gothmog run`, `--runs-dir` pour une campagne. Sur Orodruin, les conteneurs
+de ces commandes montent le même `$HOME/runs` sur `/app/runs` (`make orodruin-exercise`,
+`make orodruin-campaign-run`, `make gothmog-run`) : un seul verrou. Une campagne lancée avec un autre
+`--runs-dir` n'exclut plus une demande — ne pas le faire sur Orodruin.
 
-**Gothmog suit** : `gothmog run` lancé à la main prendra le même verrou, après G1.
+**Une limite** : un fil se reconnaît à son `--request` (`annatar wire`, `gothmog run --request`), qui ne
+prend pas le verrou. Lancé à la main avec un faux identifiant, il le contourne. C'est un geste de
+l'opérateur, avec un shell sur Orodruin, comme `annatar wire` : le verrou évite un chevauchement par
+mégarde, il ne protège pas d'un opérateur qui le veut.
 
 **Ce qu'Orodruin publie pour la console.** Dans le conteneur des fenêtres, sous `orodruin/` : même
 conteneur, même attribution, rien de neuf.

@@ -29,6 +29,15 @@ par commande.
   ([`declared.py`](../annatar/campaign/declared.py)). Une technique doit être implémentée, venir
   d'une bibliothèque publique (jamais un script maison) et ne pas être destructive. La panne doit
   être déclarée sur les mêmes cibles, en zone `bench`.
+
+  **La technique grave reste à câbler (BL1b, #396).** La session du 31/10 a mesuré la part
+  contenue seule à 0 sur 1 : T1136.001 (création d'un compte) est jugée ambiguë par le modèle. La
+  mesurer demande une technique que le modèle juge grave — le signal `sudo-privilege-escalation`
+  (T1548.003). Atomic Red Team n'offre pas, à la version épinglée, de test sudo→root réversible,
+  non interactif et sans prérequis, jouable par l'injecteur R1 (détail et pistes de déblocage :
+  [`design/bl1-technique-grave.md`](design/bl1-technique-grave.md)). Tant que ce choix n'est pas
+  tranché, la campagne garde sa seule technique publique, T1136.001 ; rien de nouveau à rejouer au
+  banc au-delà de la session du 31/10.
 - **Le test de bout en bout** : [`tests/unit/test_containment.py`](../tests/unit/test_containment.py).
   Il rejoue la campagne avec les injecteurs simulés. Le vrai graphe de Glorfindel décide, avec le
   modèle simulé, et agit sur le faux Azure de la machine à invariants. Sa réaffirmation voit une

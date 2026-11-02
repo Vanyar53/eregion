@@ -1161,7 +1161,9 @@ CHANNEL_NOTE = (
     "l'heure de chaque attaque (le rapport de chaque run) et les fenêtres d'exercice. Vu par "
     "H0 : les décisions de Glorfindel, lues dans les fichiers de la watch, et l'inscription "
     "de chaque VM, lue dans ses tags. Un run dont la fenêtre est inconnue ou refusée, ou dont "
-    "la VM n'est pas inscrite, est écarté des faits.*")
+    "la VM n'est pas inscrite, est écarté des faits. Confrontés par H0 pour la section « Réponse » : "
+    "l'heure de chaque attaque, à sa fenêtre et à ce que la watch a vu de la VM ; la liste des "
+    "runs, à ce que la watch a vu (fenêtres, cycles et cartes rattachés à un run).*")
 
 
 def render(report: Report) -> str:

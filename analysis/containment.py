@@ -5,8 +5,9 @@ contain and the share contained alone, computed by the code from a campaign's tr
 
 Definitions (docs/analysis.md, « Temps pour contenir et part contenue seule ») :
 
-- **An incident** is an executed technique run of the campaign. Its first malicious action is
-  dated by the injector: ``attack_time``, Annatar's T0, the time ``attack_started`` carries.
+- **An incident** is an executed technique run of the campaign — or a run the watch saw that
+  its manifest does not give executed (SEC9, below). Its first malicious action is dated by the
+  injector: ``attack_time``, Annatar's T0, the time ``attack_started`` carries.
 - **Contained alone**: Glorfindel's decision on the detection the run counted — attached as the
   campaign report attaches it (the rule of #157, analysis/campaign_report.py ``run_decision``)
   — is an isolation or a block, executed in its own cycle (an action a human approves runs
@@ -29,6 +30,18 @@ unknown, held by a guard (a mode, the readiness, the signal guards…), escalate
 confidence, unknown action…), action failed, verification failed, isolation that did not hold,
 a decision that contains nothing (a snapshot), a dry run.
 
+What comes from where (SEC9, docs/analysis.md « D'où vient chaque entrée »): the decision is
+the watch's, read in its own files. The T0 and the list of runs are the injectors', and are
+confronted with what this host holds before they count:
+
+- **the T0** is believed only inside its run's exercise window (and after the Dagorlad request
+  that launched it, when this host holds it), and before the watch's first sight of the VM in
+  the run — its detections there, and the time the telemetry gives the row each one read
+  (``t0_refusal``). Otherwise the incident keeps its ending, but no time to contain: said;
+- **the runs** are the manifest's and those the watch saw — a technique window this host holds
+  around the campaign, a cycle or a card the watch attached to a run (``unlisted``). One the
+  manifest does not list as executed is an incident of unknown decision, said — never left out.
+
 Pure functions over records (the watch's debug lines, or the console's slim cycles) and cards:
 no Azure, no model, no other component imported here (D1 — the console and the campaign
 report feed it).
@@ -48,6 +61,12 @@ from eregion_core.run_report import CONTAINING as DISRUPTIVE   # C1: one list of
 # The exercise window's grace (eregion_core/exercise.py GRACE_AFTER_S): how long after the
 # read-back a containment is watched when the run has no window.
 HOLD_WATCH_S = 15 * 60
+# SEC9: the clocks of two hosts — Orodruin's T0, the telemetry's TimeGenerated, H0's own times
+# (the same allowance as the watch's heartbeat, eregion_core/watch_channel.py CLOCK_SKEW_S).
+CLOCK_SKEW_S = 10.0
+# The columns in which a rule's row dates what it read (glorfindel/rules/azure: ``project
+# TimeGenerated``, ``arg_max(TimeGenerated, *)``) — an aggregate without it dates nothing.
+_ROW_TIMES = ("TimeGenerated",)
 # Cards of the reassertion saying a containment no longer holds on its VM (glorfindel/reassert.py:
 # the rules gone, re-applied once or not; reassert_cards.py: an allow evaluated before the deny).
 NOT_HOLDING_TYPES = ("verification_failed", "bypassed")
@@ -188,6 +207,91 @@ def time_to_contain(t0: float, decision: dict) -> float | None:
     return run_report.timeline({"at": t0, "detected_at": None}, decision)["contain_s"]
 
 
+# ── SEC9: the T0 confronted with what this host holds ─────────────────────────────────────
+
+def row_time(rec: dict) -> float | None:
+    """When the telemetry dates what the watch's rule read: the ``TimeGenerated`` of the row the
+    detection carries (``raw_signal.first_result_row`` / ``detected_data``) — the earliest of
+    them, else None (an aggregate, a console's slim cycle)."""
+    sig = rec.get("signal") if isinstance(rec, dict) else None
+    raw = sig.get("raw_signal") if isinstance(sig, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    times = [t for row in (raw.get("first_result_row"), raw.get("detected_data")) if isinstance(row, dict)
+             for col in _ROW_TIMES if (t := _ts(row.get(col))) is not None]
+    return min(times) if times else None
+
+
+def first_sight(records, resource_id: str, start: float, until: float) -> float | None:
+    """The watch's first sight of this VM between ``start`` and ``until``: the earliest of its
+    detections seen there — each one's own time, or the time the telemetry gives the row it read
+    when that is earlier and not before ``start`` (an event older than the run is not its) —
+    else None. What the watch saw, never a bound made up for it."""
+    best = None
+    for rec in records or ():
+        if not isinstance(rec, dict):
+            continue
+        d = view(rec)
+        if d["event"] != "detection" or not _same(d["resource_id"], resource_id):
+            continue
+        seen = d["seen_at"]
+        if seen is None or not start <= seen <= until:
+            continue
+        row = row_time(rec)
+        t = row if row is not None and start <= row < seen else seen
+        best = t if best is None else min(best, t)
+    return best
+
+
+def window_bounds(window) -> tuple[float | None, float | None, float | None]:
+    """``(start, end, last moment)`` of an exercise window, as epochs: its start, its end (never
+    closed: its expiry; the earlier of the two) and its last moment (the end plus the grace,
+    ``eregion_core.exercise.last_moment``). None where it cannot be read."""
+    from eregion_core.exercise import last_moment
+    if not isinstance(window, dict):
+        return None, None, None
+    start, expires = _ts(window.get("start")), _ts(window.get("expires"))
+    if start is None or expires is None:
+        return start, None, None
+    end = _ts(window.get("end"))
+    last = last_moment(window)
+    return start, min(end, expires) if end is not None else expires, last.timestamp() if last else None
+
+
+def t0_refusal(t0, window, records, resource_id: str, *, request_at=None,
+               decision_seen=None) -> str:
+    """Why a run's T0 is not believed for its time to contain — "" when it is. ``window``: its
+    exercise window, believed (H-1), else None; ``records``: the watch's lines; ``request_at``:
+    when the Dagorlad request that launched it was written on this host, when it holds it;
+    ``decision_seen``: when the watch saw the detection attached to the run.
+
+    The T0 is the injector's word. It is believed inside the run's window — from its start to its
+    end; the grace is the detection's, never the attack's — not before the request that launched
+    the run, before the detection attached, and not after the watch's first sight of the VM in
+    the run (``first_sight``), each to CLOCK_SKEW_S where two hosts' clocks meet."""
+    t0 = _ts(t0)
+    if t0 is None:
+        return ""                                   # said by ``incident``: attack_time absent
+    start, end, last = window_bounds(window)
+    if start is None or end is None or last is None:
+        return "fenêtre d'exercice inconnue : le T0 n'a pas pu être confronté"
+    req = _ts(request_at)
+    if req is not None and t0 < req - CLOCK_SKEW_S:
+        return f"T0 ({_iso(t0)}) antérieur à la demande Dagorlad qui a lancé le run ({_iso(req)})"
+    if t0 < start:
+        return f"T0 ({_iso(t0)}) antérieur à l'ouverture de sa fenêtre d'exercice ({_iso(start)})"
+    if t0 > end:
+        return f"T0 ({_iso(t0)}) postérieur à la fin de sa fenêtre d'exercice ({_iso(end)})"
+    seen = _ts(decision_seen)
+    if seen is not None and t0 > seen:
+        return f"T0 ({_iso(t0)}) postérieur à la détection rattachée, vue par la watch à {_iso(seen)}"
+    first = first_sight(records, resource_id, start, last)
+    if first is not None and t0 > first + CLOCK_SKEW_S:
+        return (f"T0 ({_iso(t0)}) postérieur à ce que la watch a vu de la VM dans le run "
+                f"({_iso(first)})")
+    return ""
+
+
 def not_holding(resource_id: str, since: float, until: float, cards) -> dict | None:
     """The first card of the reassertion that says, on this VM, between ``since`` and ``until``,
     that its containment no longer holds: a card about an isolation or a block (a check that
@@ -242,6 +346,7 @@ class Incident:
     mode: str = ""
     contained_at: float | None = None
     time_to_contain_s: float | None = None
+    t0_refused: str = ""                # SEC9: why its T0 is not believed ("" when it is)
 
     @property
     def label(self) -> str:
@@ -250,14 +355,16 @@ class Incident:
 
 def incident(run_id: str, ttp: str, target: str, t0, detection: str, decision: dict | None,
              unknown_why: str = "", until: float | None = None, cards=(),
-             liftings=()) -> Incident:
+             liftings=(), t0_refused: str = "") -> Incident:
     """One technique run of the campaign and how it ended. ``decision``: Glorfindel's on the
     detection the run counted (a debug line or a slim cycle), ``None``/``{}`` when not
     attached; ``unknown_why``: why not (analysis/campaign_report.py REASONS); ``until``: the
     end of the run's exercise window, grace included (epoch); ``liftings``: when containments
-    were lifted (``read_liftings``) — the watch stops at the first one on the VM."""
+    were lifted (``read_liftings``) — the watch stops at the first one on the VM;
+    ``t0_refused``: why its T0 is not believed (``t0_refusal``, SEC9) — the ending stays the
+    watch's, but no time to contain is counted from it."""
     t0 = _ts(t0)
-    base = {"run_id": run_id, "ttp": ttp, "target": target, "t0": t0}
+    base = {"run_id": run_id, "ttp": ttp, "target": target, "t0": t0, "t0_refused": t0_refused}
     if detection == "missed":
         return Incident(**base, outcome=MISSED)
     if not decision:
@@ -286,6 +393,8 @@ def incident(run_id: str, ttp: str, target: str, t0, detection: str, decision: d
         inc.why = "attack_time absent : temps inconnu"
     elif at is None:
         inc.why = "heure de la vérification absente : temps inconnu"
+    elif t0_refused:
+        inc.why = f"T0 non retenu, temps non compté : {t0_refused}"
     else:
         inc.time_to_contain_s = time_to_contain(t0, d)
         if inc.time_to_contain_s is None:
@@ -390,6 +499,8 @@ class Containment:
                 "share": self.share, "lower_bound": self.lower_bound,
                 "median_s": self.median_s, "timed": len(self.times),
                 "by_outcome": {k: v for k, v in by.items() if v},
+                "t0_refused": sum(1 for i in self.incidents if i.t0_refused),
+                "unlisted": sum(1 for i in self.incidents if i.why.startswith(SEEN_BY_WATCH)),
                 "faults": len(self.faults), "faults_mistaken": self.faults_mistaken,
                 "disruptive_on_faults": sum(f.executed for f in self.faults),
                 "unchecked_faults": sum(1 for f in self.faults if f.why)}
@@ -449,8 +560,14 @@ def render(c: Containment) -> list[str]:
                   "|---|---|---|---|---|---|---|"]
         for i in c.incidents:
             act = i.action + (f" ({i.confidence:.0%})" if i.confidence is not None else "") if i.action else "—"
+            t0 = _iso(i.t0) + (" (non retenu)" if i.t0_refused else "")
             lines.append(f"| `{i.run_id}` | {i.ttp} | {_vm(i.target)} | {i.label} | {act} | "
-                         f"{_iso(i.t0)} | {_secs(i.time_to_contain_s)} |")
+                         f"{t0} | {_secs(i.time_to_contain_s)} |")
+        if s["t0_refused"] or s["unlisted"]:
+            lines += ["", "*Le T0 et la liste des runs viennent des injecteurs : un T0 hors de sa "
+                          "fenêtre d'exercice, ou après ce que la watch a vu de la VM dans le run, "
+                          "ne compte pas au temps pour contenir ; un run que la watch a vu et que "
+                          "le manifeste ne donne pas exécuté est compté, sa décision inconnue.*"]
     if c.faults:
         lines += ["", f"**Pannes : {s['faults']}** · prise(s) pour une attaque : "
                       f"**{s['faults_mistaken']}** · action(s) disruptive(s) exécutée(s) sur une "
@@ -544,13 +661,127 @@ def campaign_span(manifest: dict) -> tuple[float | None, float | None]:
     return (min(starts) if starts else None, max(ends) if ends else None)
 
 
+def request_at(window, directory: Path | None = None) -> float | None:
+    """When the Dagorlad request that launched this window's run was written, on this host (the
+    console's own store, ``eregion_core.exercise_request``) — None when the window names none,
+    or this host does not hold it readable."""
+    from eregion_core import exercise_request as xr
+    rq = window.get("request") if isinstance(window, dict) else None
+    if not xr.valid_id(rq):
+        return None
+    try:
+        return _ts(xr.load(Path(directory or xr.requests_dir()) / f"{rq}.json").at)
+    except xr.RequestRefused:
+        return None
+
+
+# SEC9: how a run the watch saw, and the manifest does not give executed, is said.
+SEEN_BY_WATCH = "vu par la watch"
+_BY_WINDOW, _BY_CYCLE, _BY_CARD = "sa fenêtre d'exercice", "un cycle de la watch", "une carte"
+
+
+def seen_runs(windows, records, cards, lo: float, hi: float) -> dict[str, dict]:
+    """The technique runs this host saw between ``lo`` and ``hi``: each believed technique window
+    (H-1) that opens there, and each run the watch attached a detection or a card to there
+    (their ``exercise_run``) — run id → ``run_id``, ``ttp``, ``target``, ``start`` (its window's,
+    None without one) and ``how`` (what showed it). A fault's window is never an incident."""
+    from eregion_core.exercise import window_refusal
+    out: dict[str, dict] = {}
+    faults: set[str] = set()
+    for w in windows or ():
+        if not isinstance(w, dict) or window_refusal(w):
+            continue
+        rid = str(w.get("run_id") or "")
+        if w.get("kind") != "technique":
+            faults.add(rid)
+            continue
+        start = _ts(w.get("start"))
+        if start is None or not lo <= start <= hi:
+            continue
+        targets = [t for t in w.get("targets") or [] if isinstance(t, str) and t]
+        out[rid] = {"run_id": rid, "ttp": str(w.get("experiment") or "").split(" ", 1)[0],
+                    "target": targets[0] if targets else "", "start": start, "how": [_BY_WINDOW]}
+    marks = [(r, _BY_CYCLE) for r in records or ()] + [(c, _BY_CARD) for c in cards or ()]
+    for rec, what in marks:
+        rid = str(rec.get("exercise_run") or "") if isinstance(rec, dict) else ""
+        if not rid or rid in faults:
+            continue
+        if what == _BY_CYCLE:
+            d = view(rec)
+            if d["event"] != "detection":
+                continue
+            when = d["seen_at"] if d["seen_at"] is not None else d["at"]
+            ttp, vm = d["ttp"], d["resource_id"]
+        else:
+            when, ttp, vm = _ts(rec.get("timestamp")), str(rec.get("ttp") or ""), str(rec.get("resource_id") or "")
+        if when is None or not lo <= when <= hi:
+            continue
+        u = out.setdefault(rid, {"run_id": rid, "ttp": ttp, "target": vm, "start": None, "how": []})
+        if what not in u["how"]:
+            u["how"].append(what)
+    return out
+
+
+def unlisted(manifest: dict, campaign_dir: Path, runs_dir: Path, watch_records, cards,
+             notes: list[str]) -> list[dict]:
+    """The runs this host saw around the campaign that its manifest does not give executed —
+    each one an incident of unknown decision (SEC9, A0: unknown is never nothing), said in
+    ``notes``. Around the campaign: from an hour before its earliest start this host can read
+    (its id when a date, its manifest's, its first believed window: ``START_LEAD_S``, D2b) to
+    when this host wrote the manifest it reads. Absent from the manifest: a run another
+    campaign lists, or with a report of its own (``runs/<id>.json``: a run alone, a fault), is
+    theirs. Listed but not executed: counted only when the watch attached a detection or a card
+    to it — a window alone does not say an attack ran."""
+    from analysis import campaign_report as cr
+    campaign_dir, runs_dir = Path(campaign_dir), Path(runs_dir)
+    try:
+        hi = (campaign_dir / "manifest.json").stat().st_mtime + CLOCK_SKEW_S
+    except OSError:
+        return []
+    starts = [t for t in (cr._id_date(manifest.get("campaign_id")), campaign_span(manifest)[0],
+                          cr.first_window(manifest, runs_dir)) if t is not None]
+    if not starts:
+        notes.append("runs vus par la watch non cherchés : le début de la campagne est inconnu")
+        return []
+    lo = min(starts) - cr.START_LEAD_S
+    listed = {rid: s for s, rid in cr._scenarios(manifest, lambda m: None) if rid}
+    elsewhere: set[str] = set()
+    for other in sorted(campaign_dir.parent.glob("*/manifest.json")):
+        if other.parent != campaign_dir:
+            elsewhere |= {str(s.get("run_id")) for s in cr._read_json(other).get("scenarios") or []
+                          if isinstance(s, dict) and s.get("run_id")}
+    windows = [cr._read_json(p) for p in sorted(cr.windows_dir(runs_dir).glob("*.json"))]
+    seen = seen_runs(windows, watch_records(lo), cards, lo, hi)
+    out = []
+    for rid, u in sorted(seen.items(), key=lambda kv: (kv[1]["start"] is None, kv[1]["start"] or 0.0, kv[0])):
+        if not cr.safe_part(rid):
+            continue
+        how = " et ".join(u["how"])
+        if rid in listed:
+            s = listed[rid]
+            if s.get("status") == "executed" or u["how"] == [_BY_WINDOW]:
+                continue
+            why = f"{SEEN_BY_WATCH} ({how}), donné « {str(s.get('status'))[:20]} » par le manifeste"
+            u = {**u, "ttp": str(s.get("ttp") or u["ttp"]),
+                 "target": str(s.get("target_resource_id") or u["target"])}
+        elif rid in elsewhere or (runs_dir / f"{rid}.json").exists():
+            continue
+        else:
+            why = f"{SEEN_BY_WATCH} ({how}), absent du manifeste"
+        out.append({**u, "why": why})
+        notes.append(f"run {rid} : {why} — compté, sa décision inconnue")
+    return out
+
+
 def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), cards=None,
-         warn=None) -> Containment:
+         warn=None, requests_dir: Path | None = None) -> Containment:
     """The containment of a campaign, from its files: each executed technique run with
     Glorfindel's decision as the campaign report attaches it (``run_decision``), and the
     Gothmog runs of the campaign — named (``fault_runs``), or on one of its VMs within the hour
     around it (``around``). ``cards``: Glorfindel's cards, else read from its state (read
-    only)."""
+    only). SEC9: each T0 confronted with its window and the watch (``t0_refusal``); the runs
+    the watch saw and the manifest does not give executed, counted (``unlisted``);
+    ``requests_dir``: where the Dagorlad requests are (``eregion_core.exercise_request``)."""
     from analysis import campaign_report as cr
     from eregion_core.exercise import last_moment, window_refusal
 
@@ -563,9 +794,14 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
     channel = cr.from_channel(campaign_dir)
     incidents, taken, notes = [], set(), []
 
-    def until_of(rid: str) -> float | None:
+    def window_of(rid: str) -> dict | None:
+        """The run's exercise window, believed (H-1) — else None."""
         window = cr._read_json(cr.windows_dir(runs_dir) / f"{rid}.json")
-        last = None if not window or window_refusal(window) else last_moment(window)
+        return window if window and not window_refusal(window) else None
+
+    def until_of(rid: str) -> float | None:
+        window = window_of(rid)
+        last = last_moment(window) if window else None
         return last.timestamp() if last else None
 
     rows = []
@@ -606,9 +842,28 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
             until = min(later) if until is None else min(until, min(later))
         played.append((s.get("ttp") or "", target, t0, until if until is not None
                        else (t0 + HOLD_WATCH_S if t0 is not None else None)))
+        # SEC9: the T0 is the injector's word — confronted with the run's window, the request
+        # that launched it, and what the watch saw of the VM in the run.
+        refused = ""
+        if t0 is not None:
+            window = window_of(rid)
+            opened = window_bounds(window)[0]
+            refused = t0_refusal(t0, window, watch_records(opened) if opened is not None else [],
+                                 target, request_at=request_at(window, requests_dir),
+                                 decision_seen=view(dec)["seen_at"] if dec else None)
+            if refused:
+                notes.append(f"run {rid} : T0 non retenu pour le temps pour contenir — {refused}")
         incidents.append(incident(rid, s.get("ttp") or "", target, t0,
                                   s.get("detection") or "unknown", dec, why, until, cards,
-                                  liftings))
+                                  liftings, t0_refused=refused))
+
+    # SEC9: the runs the watch saw that the manifest does not give executed — counted, their
+    # decision unknown, said; never left out (A0).
+    for u in unlisted(manifest, campaign_dir, runs_dir, watch_records, cards, notes):
+        until = until_of(u["run_id"])
+        played.append((u["ttp"], u["target"], u["start"], until if until is not None
+                       else (u["start"] + HOLD_WATCH_S if u["start"] is not None else None)))
+        incidents.append(Incident(u["run_id"], u["ttp"], u["target"], None, UNKNOWN, why=u["why"]))
 
     start, end = campaign_span(manifest)
     reports = _gothmog_reports(runs_dir)

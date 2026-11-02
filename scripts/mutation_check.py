@@ -7137,6 +7137,52 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
+# SEC9 (#415): the indicators' entries the injectors give — a run's T0, the list of runs, a fault's
+# effect — confronted with what the watch's host holds: the T0 inside its window and before the
+# watch's first sight of the VM, the runs the watch saw counted, the effect shown by the readings
+# of Glorfindel's telemetry. M2840–M2855 (the effect: M2856–M2859).
+_SEC9 = "tests/unit/test_containment.py"
+MUTANTS += [
+    ("M2840", "a T0 after the time the telemetry gives the row the watch read is believed (SEC9)", CTN,
+     "        t = row if row is not None and start <= row < seen else seen\n", "        t = seen\n"),
+    ("M2841", "a T0 not believed still times the containment (SEC9)", CTN,
+     "    elif t0_refused:\n", "    elif False:\n"),
+    ("M2842", "a T0 after the watch's first sight of the VM in the run is believed (SEC9)", CTN,
+     "    if first is not None and t0 > first + CLOCK_SKEW_S:\n", "    if False:\n"),
+    ("M2843", "a T0 before its exercise window opened is believed (SEC9)", CTN,
+     "    if t0 < start:\n", "    if False:\n"),
+    ("M2844", "a T0 after its exercise window ended is believed (SEC9)", CTN,
+     "    if t0 > end:\n", "    if False:\n"),
+    ("M2845", "a T0 with no window to confront it with is believed (SEC9)", CTN,
+     "        return \"fenêtre d'exercice inconnue : le T0 n'a pas pu être confronté\"\n", '        return ""\n'),
+    ("M2846", "a T0 after the detection attached to its run is believed (SEC9)", CTN,
+     "    if seen is not None and t0 > seen:\n", "    if False:\n"),
+    ("M2847", "a T0 before the Dagorlad request that launched its run is believed (SEC9)", CTN,
+     "    if req is not None and t0 < req - CLOCK_SKEW_S:\n", "    if False:\n"),
+    ("M2848", "the runs the watch saw and the manifest does not give executed are left out (SEC9)", CTN,
+     "    for u in unlisted(manifest, campaign_dir, runs_dir, watch_records, cards, notes):\n",
+     "    for u in []:\n"),
+    ("M2849", "a run removed from the manifest, its window on this host, is forgotten (SEC9)", CTN,
+     '    windows = [cr._read_json(p) for p in sorted(cr.windows_dir(runs_dir).glob("*.json"))]\n',
+     "    windows = []\n"),
+    ("M2850", "a run removed from the manifest, its detection attached by the watch, is forgotten (SEC9)", CTN,
+     "    marks = [(r, _BY_CYCLE) for r in records or ()] + [(c, _BY_CARD) for c in cards or ()]\n",
+     "    marks = [(c, _BY_CARD) for c in cards or ()]\n"),
+    ("M2851", "a run listed « error » to which the watch attached a detection is left out (SEC9)", CTN,
+     '            if s.get("status") == "executed" or u["how"] == [_BY_WINDOW]:\n', "            if True:\n"),
+    ("M2852", "a run listed « skipped » with only its window is counted an incident (SEC9)", CTN,
+     '            if s.get("status") == "executed" or u["how"] == [_BY_WINDOW]:\n',
+     '            if s.get("status") == "executed":\n'),
+    ("M2853", "a run another campaign lists is counted in this one too (SEC9)", CTN,
+     '        elif rid in elsewhere or (runs_dir / f"{rid}.json").exists():\n',
+     '        elif (runs_dir / f"{rid}.json").exists():\n'),
+    ("M2854", "a run alone, with its own report, is counted in the campaign around it (SEC9)", CTN,
+     '        elif rid in elsewhere or (runs_dir / f"{rid}.json").exists():\n', "        elif rid in elsewhere:\n"),
+    ("M2855", "a window far before the campaign, or after its manifest came, is counted in it (SEC9)", CTN,
+     "        if start is None or not lo <= start <= hi:\n", "        if start is None:\n"),
+]
+TESTS.update({f"M{n}": _SEC9 for n in range(2840, 2856)})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

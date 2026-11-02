@@ -589,3 +589,217 @@ def test_a_campaign_replayed_gives_both_indicators_and_the_fault_apart(bench):
     s = body["containment"]["summary"]
     assert (s["contained"], s["incidents"], s["faults_mistaken"]) == (1, 3, 1)
     assert s["median_s"] == by["r1"].time_to_contain_s
+
+
+# ── 7. SEC9: the injectors' T0 and list of runs, confronted with what this host holds ──────
+#
+# The decision is the watch's, read in its files; the T0 and the list of runs come from the
+# injectors' host. A T0 is believed inside its run's window and before the watch's first sight
+# of the VM in the run; a run the watch saw is counted, listed or not. Mutants M2840–M2859.
+
+WRITTEN = T0 + 3600      # when this host wrote the manifest it reads (after the campaign)
+
+
+def _sec9_window(rid, start, end=None, *, kind="technique", target=VM, request=""):
+    """An exercise window as the injector opens and closes it, on this host since ``start``."""
+    import os
+    from eregion_core import exercise
+    exercise.open_window(rid, injector="annatar" if kind == "technique" else "gothmog", kind=kind,
+                         experiment="T1136.001 Create Account", targets=[target], destructive=False,
+                         now=datetime.fromtimestamp(start, timezone.utc), request=request)
+    if end is not None:
+        exercise.close_window(rid, now=datetime.fromtimestamp(end, timezone.utc))
+    path = exercise.exercises_dir() / f"{rid}.json"
+    os.utime(path, (start, start))
+    return path
+
+
+def _sec9_line(rid, *, seen, row_at=None, action="isolate_vm", ttp="T1136.001", sid=None,
+               resource=VM, **kw):
+    """A debug line of the RulePoller's detection, attached by the watch to ``rid``'s window —
+    with the time the telemetry gives the row it read (``row_at``), when its rule returns one."""
+    kw.setdefault("verified_at", seen + 20)
+    kw.setdefault("at", seen + 25)
+    line = _line(action, seen=seen, ttp=ttp, signal_id=sid or f"sig-{rid}-{seen}", resource=resource, **kw)
+    if row_at is not None:
+        line["signal"]["raw_signal"] = {"first_result_row": {
+            "TimeGenerated": _iso(row_at), "_ResourceId": resource.lower(), "ProcessName": "useradd"}}
+    line.update(source="exercise", exercise_run=rid)
+    return line
+
+
+def _sec9_campaign(tmp_path, runs, lines, *, cid="C1", written=WRITTEN, own_reports=()):
+    """A campaign as H0 holds it: its manifest (written at ``written``), each listed run's report
+    under the campaign (``runs``: ``(run id, T0, status, detection)``), the watch's lines."""
+    import os
+    root = tmp_path / "runs"
+    cdir = root / "campaigns" / cid
+    (cdir / "runs").mkdir(parents=True, exist_ok=True)
+    scenarios = []
+    for seq, (rid, t0, status, detection) in enumerate(runs, 1):
+        (cdir / "runs" / f"{rid}.json").write_text(json.dumps(
+            {"run_id": rid, "mitre": "T1136.001", "metrics": {"attack_time": t0, "resource_id": VM}}))
+        scenarios.append({"seq": seq, "ttp": "T1136.001", "status": status, "run_id": rid,
+                          "detection": detection, "target_resource_id": VM,
+                          "started_at": _iso(t0 - 30), "finished_at": _iso(t0 + 300)})
+    for rid in own_reports:
+        (root / f"{rid}.json").write_text(json.dumps({"run_id": rid, "metrics": {}}))
+    (cdir / "manifest.json").write_text(json.dumps({"campaign_id": cid, "state": "done",
+                                                    "scenarios": scenarios}))
+    os.utime(cdir / "manifest.json", (written, written))
+    if lines:
+        path = root / "watch-t1136-001-local-account-creation-linux-v1-1_debug.jsonl"
+        path.write_text("".join(json.dumps(x) + "\n" for x in lines))
+        os.utime(path, (written, written))
+    return cdir
+
+
+def test_an_honest_t0_inside_its_window_is_timed():
+    """The control: a T0 in its window, before the watch's first sight of the VM — believed, to
+    the clocks of two hosts."""
+    window = {"run_id": "r1", "targets": [VM.lower()], "start": _iso(T0 - 60),
+              "expires": _iso(T0 + 7200), "end": _iso(T0 + 300)}
+    line = _sec9_line("r1", seen=T0 + 120, row_at=T0 + 20)
+    assert ct.t0_refusal(T0, window, [line], VM) == ""
+    assert ct.t0_refusal(T0 + 20 + ct.CLOCK_SKEW_S, window, [line], VM) == ""
+
+
+def test_a_t0_moved_against_the_detection_is_not_timed(tmp_path):
+    """M2840, M2841: the injector's T0 moved forward, 10 s before the detection — the row the
+    watch's rule read is dated 90 s earlier by the telemetry: the T0 is not believed. The run
+    stays contained alone (the decision is the watch's), but no time is counted from that T0:
+    said in the incident, the table and the notes — never « contained in 30 s »."""
+    _sec9_window("r1", T0 - 60, T0 + 300)
+    cdir = _sec9_campaign(tmp_path, [("r1", T0 + 110, "executed", "detected")],
+                          [_sec9_line("r1", seen=T0 + 120, row_at=T0 + 20)])
+    c = ct.load(cdir, cards=[])
+    (inc,) = c.incidents
+    assert inc.outcome == ct.CONTAINED and inc.time_to_contain_s is None
+    assert "postérieur à ce que la watch a vu de la VM dans le run" in inc.t0_refused
+    assert inc.why.startswith("T0 non retenu, temps non compté")
+    assert c.median_s is None and c.share == 1.0
+    assert c.summary()["t0_refused"] == 1 and any("T0 non retenu" in n for n in c.notes)
+    md = "\n".join(ct.render(c))
+    assert "(non retenu)" in md and "ne compte pas au temps pour contenir" in md
+
+
+def test_a_t0_moved_past_an_earlier_sight_of_the_vm_is_not_timed(tmp_path):
+    """M2842: the first thing the watch saw of the VM in the run — another rule's detection,
+    whose row carries no time — came before the T0 the injector gives: not believed."""
+    _sec9_window("r1", T0 - 60, T0 + 300)
+    earlier = _sec9_line("r1", seen=T0 + 50, action="snapshot", ttp="T1548.003", sid="sig-sudo")
+    cdir = _sec9_campaign(tmp_path, [("r1", T0 + 100, "executed", "detected")],
+                          [earlier, _sec9_line("r1", seen=T0 + 120)])
+    (inc,) = ct.load(cdir, cards=[]).incidents
+    assert inc.outcome == ct.CONTAINED and inc.time_to_contain_s is None
+    assert ct._iso(T0 + 50) in inc.t0_refused
+
+
+@pytest.mark.parametrize("t0, end, said", [
+    (T0 - 120, T0 + 300, "antérieur à l'ouverture de sa fenêtre"),     # M2843
+    (T0 + 100, T0 + 60, "postérieur à la fin de sa fenêtre"),           # M2844
+])
+def test_a_t0_outside_its_window_is_not_timed(tmp_path, t0, end, said):
+    """A T0 before its window opened, or after it ended: not timed, said — the grace after the
+    end is the detection's, never the attack's."""
+    _sec9_window("r1", T0 - 60, end)
+    cdir = _sec9_campaign(tmp_path, [("r1", t0, "executed", "detected")],
+                          [_sec9_line("r1", seen=T0 + 120)])
+    (inc,) = ct.load(cdir, cards=[]).incidents
+    assert inc.outcome == ct.CONTAINED and inc.time_to_contain_s is None and said in inc.t0_refused
+
+
+def test_a_t0_without_its_window_is_not_timed(tmp_path):
+    """M2845: no window on this host — the decision comes from the run's own debug file, the T0
+    cannot be confronted: not timed, said."""
+    cdir = _sec9_campaign(tmp_path, [("r1", T0, "executed", "detected")], [])
+    (tmp_path / "runs" / "r1_debug.jsonl").write_text(json.dumps(_line(seen=T0 + 60)) + "\n")
+    (inc,) = ct.load(cdir, cards=[]).incidents
+    assert inc.outcome == ct.CONTAINED and inc.time_to_contain_s is None
+    assert "fenêtre d'exercice inconnue" in inc.t0_refused
+
+
+def test_a_t0_after_the_detection_attached_is_not_believed():
+    """M2846: the detection attached to the run (its own file) seen before the T0."""
+    window = {"run_id": "r1", "targets": [VM.lower()], "start": _iso(T0 - 60), "expires": _iso(T0 + 7200)}
+    assert "postérieur à la détection rattachée" in ct.t0_refusal(T0 + 90, window, [], VM,
+                                                                  decision_seen=T0 + 60)
+    assert ct.t0_refusal(T0, window, [], VM, decision_seen=T0 + 60) == ""
+
+
+def test_a_t0_before_the_dagorlad_request_that_launched_it_is_not_believed():
+    """M2847: a wire of a Dagorlad request cannot attack before the request was written on this
+    host — the console's own store, read by the one reader."""
+    from eregion_core import exercise_request as xr
+    vm = ("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bench/providers/"
+          "Microsoft.Compute/virtualMachines/vm-bench-1")
+    rq = xr.new([("T1136.001", vm)], now=datetime.fromtimestamp(T0 - 30, timezone.utc))
+    xr.write(rq)
+    window = {"run_id": "r1", "targets": [vm.lower()], "start": _iso(T0 - 120),
+              "expires": _iso(T0 + 7200), "request": rq.id}
+    at = ct.request_at(window)
+    assert at == pytest.approx(T0 - 30)
+    assert "antérieur à la demande Dagorlad" in ct.t0_refusal(T0 - 90, window, [], vm, request_at=at)
+    assert ct.t0_refusal(T0, window, [], vm, request_at=at) == ""
+    assert ct.request_at({**window, "request": "r-20270115T080000Z-abcdef"}) is None   # not held here
+
+
+def test_a_run_removed_from_the_manifest_is_counted_never_forgotten(tmp_path):
+    """M2848, M2849, M2850: the manifest lists one run, contained alone; two more ran — one
+    missed, whose window this host holds, one whose window is gone but the watch attached its
+    detection to it. Both are counted, their decision unknown: at least 1 of 3, said — never
+    « 1 of 1 »."""
+    _sec9_window("r1", T0 - 60, T0 + 300)
+    _sec9_window("r2", T0 + 600, T0 + 900)
+    lines = [_sec9_line("r1", seen=T0 + 120), _sec9_line("r3", seen=T0 + 1300, action="snapshot")]
+    cdir = _sec9_campaign(tmp_path, [("r1", T0, "executed", "detected")], lines)
+    c = ct.load(cdir, cards=[])
+    by = {i.run_id: i for i in c.incidents}
+    assert set(by) == {"r1", "r2", "r3"}
+    assert by["r1"].outcome == ct.CONTAINED and by["r1"].time_to_contain_s == pytest.approx(140)
+    assert by["r2"].outcome == ct.UNKNOWN and "sa fenêtre d'exercice" in by["r2"].why
+    assert by["r3"].outcome == ct.UNKNOWN and "un cycle de la watch" in by["r3"].why
+    assert all("absent du manifeste" in by[r].why for r in ("r2", "r3"))
+    assert c.share == pytest.approx(1 / 3) and c.lower_bound is True
+    assert c.summary()["unlisted"] == 2
+    assert sum("compté, sa décision inconnue" in n for n in c.notes) == 2
+    assert "**Part contenue seule : au moins 1 sur 3 " in "\n".join(ct.render(c))
+
+
+def test_a_run_listed_not_executed_that_the_watch_saw_is_counted(tmp_path):
+    """M2851, M2852: a run the manifest says « error », to which the watch attached a detection
+    or a card, is an incident of unknown decision; one it says « skipped » with only its window
+    is not — a window alone does not say an attack ran."""
+    _sec9_window("r1", T0 - 60, T0 + 300)
+    _sec9_window("r2", T0 + 600, T0 + 900)
+    _sec9_window("r3", T0 + 1200, T0 + 1300)
+    _sec9_window("r4", T0 + 1500, T0 + 1600)
+    lines = [_sec9_line("r1", seen=T0 + 120), _sec9_line("r2", seen=T0 + 700, action="snapshot")]
+    card = {"escalation_type": "mode_hold", "resource_id": VM, "timestamp": _iso(T0 + 1550),
+            "action": "isolate_vm", "ttp": "T1136.001", "source": "exercise", "exercise_run": "r4"}
+    cdir = _sec9_campaign(tmp_path, [("r1", T0, "executed", "detected"), ("r2", T0 + 620, "error", "unknown"),
+                                     ("r3", T0 + 1220, "skipped", "unknown"),
+                                     ("r4", T0 + 1520, "error", "unknown")], lines)
+    c = ct.load(cdir, cards=[card])
+    by = {i.run_id: i for i in c.incidents}
+    assert set(by) == {"r1", "r2", "r4"}
+    assert by["r2"].outcome == ct.UNKNOWN and "donné « error » par le manifeste" in by["r2"].why
+    assert "une carte" in by["r4"].why
+    assert c.share == pytest.approx(1 / 3) and c.lower_bound
+
+
+def test_what_the_watch_saw_that_is_not_the_campaigns(tmp_path):
+    """M2853, M2854, M2855: a run another campaign lists, a run with a report of its own (a run
+    alone), a fault's window, a window more than an hour before the campaign or after this host
+    wrote its manifest — none is this campaign's."""
+    _sec9_window("r1", T0 - 60, T0 + 300)
+    _sec9_window("other", T0 + 600, T0 + 900)
+    _sec9_window("alone", T0 + 1000, T0 + 1100)
+    _sec9_window("g1", T0 + 1200, T0 + 1300, kind="fault")
+    _sec9_window("before", T0 - 30 - 3600 - 120, T0 - 3600)
+    _sec9_window("after", WRITTEN + 600, WRITTEN + 700)
+    lines = [_sec9_line("r1", seen=T0 + 120), _sec9_line("g1", seen=T0 + 1250, action="snapshot")]
+    _sec9_campaign(tmp_path, [("other", T0 + 620, "executed", "missed")], [], cid="C0")
+    cdir = _sec9_campaign(tmp_path, [("r1", T0, "executed", "detected")], lines, own_reports=("alone",))
+    c = ct.load(cdir, cards=[])
+    assert [i.run_id for i in c.incidents] == ["r1"] and c.share == 1.0 and not c.lower_bound

@@ -638,6 +638,33 @@ Le calcul lit aussi :
 Une campagne de C1 qui jouerait elle-même ses pannes en ferait des runs de la campagne. Le
 rattachement par l'heure ne servirait plus, ni `--fault-run`.
 
+## Le réel : temps pour contenir et part contenue seule hors exercice (OV1, #399)
+
+Les définitions de BL1 portent sur une campagne. L'accueil de la console les applique aussi au
+**trafic réel**, sur 30 jours (`eregion_console/indicators.py`, `real`). Les exercices gardent les
+leurs, dans Dagorlad (`compute`, inchangé).
+
+- **Un incident réel** est un cycle de la watch : une détection avec une décision, sur une VM qu'elle
+  nomme (une ligne non attribuée est ancrée sur une VM quelconque), hors de tout exercice. La watch
+  déduplique les lignes d'une règle : la même adresse n'est pas redétectée pendant la fenêtre de la
+  règle, et un cycle est un incident.
+- **Contenu seul** : la même fonction que BL1, `containment.incident`. Une isolation ou un blocage
+  est exécuté dans le cycle, relu sur Azure, et il a tenu : aucune carte de la réaffirmation ne le
+  dit disparu ou contourné, dans les 15 min après la relecture ou jusqu'à sa première levée.
+- **Le T0 du réel** : l'heure de la détection, faute de mieux, et l'accueil le dit (« from the
+  detection »). Le premier événement malveillant serait plus juste, par exemple la première
+  tentative SSH échouée de la fenêtre de la règle. Aucune règle livrée ne le rend encore : une
+  colonne `FirstSeen = min(TimeGenerated)` dans les règles, gardée dans
+  `raw_signal.first_result_row`, est un lot Glorfindel à part. Le temps pour contenir du réel
+  va donc de la détection à la relecture sur Azure ; il ne compte pas le temps de détecter.
+- **Réel ou exercice** : la ligne de debug de la watch le dit depuis OV1 (`source`). Pour une ligne
+  plus ancienne, c'est un exercice si une fenêtre encore sur l'hôte la couvre (la règle de la watch,
+  `covering_runs`) ou si un rapport de run la couvre sur sa VM, avec une marge large exprès ; sinon
+  elle est réelle, et le nombre de ces lignes déduites est dit.
+- **L'ombre** : les incidents où Glorfindel a recommandé d'isoler ou de bloquer au-dessus du seuil de
+  confiance, sans verdict « wrong » sur leur carte.
+- **Une ligne datée après l'horloge** (au-delà du décalage admis) ne compte nulle part.
+
 ## Le taux des pannes prises pour une attaque (G1, #76)
 
 Le bruit bénin de G1 éprouve la retenue de Glorfindel : écritures disque, charge CPU,

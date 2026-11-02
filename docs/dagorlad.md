@@ -31,6 +31,9 @@ Glorfindel voit », plus bas).
 - **Board** (`/dagorlad`) : les cartes, les fils et le plan. Quand ses cartes dépassent l'écran,
   la colonne rouge défile ; la capture ci-dessus est rendue en 1440 × 1100 pour les montrer toutes.
 - **Runs** (`/dagorlad?view=runs`) : ce qui a tourné, des deux injecteurs. On y trouve :
+  - en tête, **le temps pour contenir et la part contenue seule des exercices**, sur 30 jours :
+    les runs d'attaque, mesurés comme BL1, avec l'ombre et les pannes prises pour une attaque
+    (`GET /api/dagorlad/indicators`). L'accueil, lui, compte le trafic réel (OV1) ;
   - les fenêtres d'exercice, et pour chacune ce que Glorfindel a fait pendant ;
   - les campagnes ;
   - la matrice de couverture : chaque technique et chaque panne, son dernier run, sa dernière preuve,

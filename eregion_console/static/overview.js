@@ -80,18 +80,24 @@ function indicators() {
   const i = D.ind;
   if (!i) return '';
   const days = Number(i.window_days), c = i.contain, a = i.alone, w = i.wrong, cov = i.coverage, lp = i.last_proof;
+  // OV1 (#399): the time to contain and the share contained alone count real traffic — the
+  // watch's detections outside any exercise; the exercises' are Dagorlad's (Runs).
+  const t0 = i.t0 === 'detection' ? 'from the detection (no rule gives its first event yet)' : 'from the first event';
+  const guessed = Number(a.inferred) ? ` · <span class="warn" title="Lines written before the watch said real or exercise: neither a window still here nor a run report covers them">${esc(a.inferred)} inferred real</span>` : '';
   const timed = c.detected
-    ? `detect ${dur(c.detect_s)}${c.decide_s != null ? ' · decide ' + dur(c.decide_s) : ''} <span title="medians">(median, ${esc(c.detected)} detected attack${c.detected > 1 ? 's' : ''}, ${days} d)</span>`
-    : `no detected attack in ${days} d`;
-  const contain = box('TIME TO CONTAIN', c.contain_s != null ? dur(c.contain_s) : '— nothing contained alone',
-    timed, '', 'From the attack to the verified action — only what Glorfindel contained alone. Detect: from the attack to the detection the run counted; decide: to the recommendation (run reports and the watch\'s cycles, ' + days + ' days).');
-  // BL1: every attack run beside the detected ones, and the faults taken for an attack.
-  const faultLine = a.faults_mistaken ? ` · <span style="color:var(--red)">faults taken for an attack: ${esc(a.faults_mistaken)}${a.disruptive_on_faults ? ' (' + esc(a.disruptive_on_faults) + ' acted on)' : ''}</span>` : '';
-  const alone = box('CONTAINED ALONE', a.of ? `${esc(a.contained)} of ${esc(a.of)}` : '—',
-    (a.of ? `shadow: ${esc(a.shadow)} of ${esc(a.of)} would have been` : `no detected attack in ${days} d`)
-      + (a.attacks != null && a.attacks !== a.of ? ` · ${esc(a.attacks)} attack run${a.attacks > 1 ? 's' : ''} in all` : '') + faultLine,
-    a.faults_mistaken ? 'warn' : '',
-    `Real: isolations and blocks executed in Glorfindel's own cycle, read back on Azure and that held (no card saying they disappeared or were bypassed). Shadow: the detected attacks on which Glorfindel recommended to isolate or to block at or above the confidence gate (${a.threshold == null ? 'unreadable: every action held' : Math.round(a.threshold * 100) + '%'}), not judged wrong — what it would have contained, had it been allowed to act (${days} days). A fault taken for an attack: a decision to isolate or to block on a fault's target during it (counted apart, never an attack).`);
+    ? `${c.decide_s != null ? 'decide ' + dur(c.decide_s) + ' · ' : ''}<span title="medians">${esc(t0)}, ${esc(c.detected)} real detection${c.detected > 1 ? 's' : ''}, ${days} d</span>`
+    : `no real detection in ${days} d`;
+  const contain = box('TIME TO CONTAIN · REAL', c.contain_s != null ? dur(c.contain_s) : '— nothing contained alone',
+    timed, '', 'Real traffic: from the detection to the read-back on Azure of the isolation or block Glorfindel executed alone (median, ' + days + ' days). Its T0 is the detection\'s time: no rule gives the first malicious event yet. The exercises\' times are in Dagorlad (Runs).');
+  const OUT = { held_by_guard: 'held', escalated: 'escalated', not_holding: 'did not hold', verification_failed: 'not verified',
+                action_failed: 'failed', not_containing: 'nothing that contains', dry_run: 'dry run', decision_unknown: 'unknown' };
+  const ends = Object.entries(a.by_outcome || {}).filter(([k]) => k !== 'contained_alone' && Object.hasOwn(OUT, k))
+    .map(([k, n]) => `${OUT[k]} ${Number(n)}`).join(' · ');
+  const alone = box('CONTAINED ALONE · REAL', a.of ? `${esc(a.contained)} of ${esc(a.of)}` : '—',
+    (a.of ? `shadow: ${esc(a.shadow)} of ${esc(a.of)} would have been${ends ? ' · ' + esc(ends) : ''}` : `no real detection in ${days} d`)
+      + guessed + ' · <a href="/dagorlad?view=runs">exercises ▸</a>',
+    Number(a.inferred) ? 'warn' : '',
+    `Real traffic: the watch's detections outside any exercise. Contained alone: an isolation or a block executed in Glorfindel's own cycle, read back on Azure, and that held (no card saying it disappeared or was bypassed). Shadow: those on which it recommended to isolate or to block at or above the confidence gate (${a.threshold == null ? 'unreadable: every action held' : Math.round(a.threshold * 100) + '%'}), not judged wrong (${days} days). The exercises' share, and the faults taken for an attack, are in Dagorlad (Runs).`);
   const w30 = w.days_30, w7 = w.days_7;
   const wrong = box('WRONG DISRUPTIVE', w30.judged ? `${pc(w30.rate)} of ${esc(w30.judged)} judged` : '— none judged',
     `real traffic, ${days} d · 7 d: ${w7.judged ? pc(w7.rate) + ' of ' + esc(w7.judged) : 'none judged'}`,
@@ -99,7 +105,7 @@ function indicators() {
   // C1: the coverage matrix feeds it — a technique (or a fault) proven before and failed since
   // is said here, red, with the way to its row.
   const lost = (cov.regressed || []).concat(cov.faults_regressed || []);
-  const coverage = box(`COVERAGE · ${days} d`, `${esc(cov.implemented_detected)} / ${esc(cov.implemented)} implemented`,
+  const coverage = box(`COVERAGE · EXERCISES · ${days} d`, `${esc(cov.implemented_detected)} / ${esc(cov.implemented)} implemented`,
     `${esc(cov.catalog_detected)} / ${esc(cov.catalog)} of the catalogue · faults: ${cov.faults ? esc(cov.faults) + ' run' + (cov.faults > 1 ? 's' : '') + ', ' + esc(cov.faults_pass) + ' PASS' : 'none'}`
       + (lost.length ? ` · <a class="bad" href="/${(cov.regressed || []).length ? 'annatar' : 'gothmog'}">✗ ${Number(lost.length)} regressed ▸</a>` : '')
       + (Number(cov.stale) ? ` · <span class="warn">${Number(cov.stale)} stale</span>` : ''),
@@ -107,7 +113,7 @@ function indicators() {
       + (lost.length ? ' Regressed — proven before, failed since: ' + lost.join(', ') + ' (the coverage matrix, Annatar and Gothmog).' : ''));
   const age = lp ? lp.age_s / 86400 : null;
   const stale = (i.stalest || []).map(s => `${s.ttp}: ${s.at ? ago(s.at) + ' ago' : 'never proven'}`).join(' · ');
-  const proof = box('LAST PROOF', lp ? `${ago(lp.at)} ago · ${esc(lp.ttp)}` : 'none',
+  const proof = box('LAST PROOF · EXERCISE', lp ? `${ago(lp.at)} ago · ${esc(lp.ttp)}` : 'none',
     lp ? (age < 21 ? '✓ under 30 days' : age <= 30 ? '⚠ nearly 30 days' : '✗ over 30 days') + ` · <a href="/runs/${encodeURIComponent(lp.run_id)}">run ▸</a>` : 'no attack detected with a decision',
     !lp || age > 30 ? 'bad' : age >= 21 ? 'warn' : 'ok',
     'The most recent attack detected with a decision of Glorfindel attached (detection and response). Each technique, the stalest first: ' + stale);

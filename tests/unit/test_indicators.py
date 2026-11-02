@@ -188,7 +188,10 @@ def test_the_route_reads_this_host(runs):
     _cycle(runs, a + timedelta(seconds=60), "T1110.001", "block_suspicious_ip", 0.85)
     body = console().get("/api/indicators").json()
     assert body["window_days"] == 30 and body["last_proof"]["run_id"] == "r1"
+    # OV1: the overview's shadow is real traffic's — this line, written before the watch said its
+    # source, on a VM no window nor report names, is real traffic, inferred.
     assert body["coverage"]["implemented"] >= 1 and body["alone"]["shadow"] == 1
+    assert body["alone"]["inferred"] == 1 and body["t0"] == "detection"
     route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/indicators")
     assert route.methods == {"GET"}
 
@@ -269,3 +272,122 @@ def test_a_fault_taken_for_an_attack_is_counted_apart_never_an_attack(runs):
     out = _compute(runs)
     assert out["alone"]["faults_mistaken"] == 1 and out["alone"]["disruptive_on_faults"] == 1
     assert out["alone"]["contained"] == 0 and out["alone"]["of"] == 0 and out["alone"]["attacks"] == 1
+
+
+# ── OV1 (#399): the overview counts real traffic, Dagorlad the exercises ───────────────────────
+
+def _real(runs, seen, *, action="block_suspicious_ip", confidence=0.92, executed=True, verified=True,
+          verified_after=None, decided_after=25, source="real", exercise_run="", attribution="asset",
+          sid="rule-ssh-brute-force-aaaa0001", guard="", vm=VM):
+    """A line of the watch's debug file as it writes it since OV1 (``source``; None: before)."""
+    out = {"status": "blocked" if executed else "escalated", "executed": executed, "verified": verified}
+    if verified_after is not None:
+        out["verified_at"] = (seen + timedelta(seconds=verified_after)).isoformat()
+    if guard:
+        out["escalation_type"] = guard
+    rec = {"timestamp": (seen + timedelta(seconds=decided_after)).isoformat(),
+           "signal": {"signal_id": sid, "event": "detection", "ttp": "T1110.001", "resource_id": vm,
+                      "timestamp": seen.isoformat(),
+                      "context": {"rule_name": "ssh-brute-force", "attribution": attribution}},
+           "action": action, "confidence": confidence, "escalate": not executed, "outcome": out,
+           "resolved_autonomy_mode": "non_disruptive"}
+    if source is not None:
+        rec["source"], rec["exercise_run"] = source, exercise_run
+    with open(runs / "watch-ssh-brute-force-1_debug.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def _overview_real(runs, cards=(), threshold=0.7, windows=(), liftings=()):
+    since = ind.since_window(NOW)
+    found = ind.read_runs(api._run_reports(), since.timestamp())
+    return ind.real(api._watch_cycles(since.timestamp()), list(cards), threshold, since.timestamp(),
+                    windows=list(windows), runs=found, liftings=liftings, enrolled=lambda rid: True)
+
+
+def test_a_block_glorfindel_executed_alone_verified_and_held_is_contained_on_real_traffic(runs):
+    """The week-end of 01/11: bree in non_disruptive, a brute force from five addresses, each
+    blocked by Glorfindel alone — the overview counts them, from the detection to the read-back."""
+    for i in range(5):
+        _real(runs, NOW - timedelta(hours=10 + i), sid=f"rule-ssh-brute-force-{i:08x}", verified_after=40 + i)
+    out = _overview_real(runs)
+    assert out["alone"]["contained"] == 5 and out["alone"]["of"] == 5 and out["alone"]["inferred"] == 0
+    assert out["contain"]["contain_s"] == 42.0 and out["contain"]["decide_s"] == 25.0
+    assert out["contain"]["detect_s"] is None and out["t0"] == "detection"
+    assert out["alone"]["by_outcome"] == {"contained_alone": 5}
+
+
+def test_an_exercise_is_never_real_traffic(runs):
+    """What the watch wrote (``source``) — and, for a line written before, a window still here
+    or a run report on the VM: never counted on the overview."""
+    a = NOW - timedelta(hours=3)
+    _real(runs, a, source="exercise", exercise_run="r-annatar-1", sid="rule-x-00000001")
+    # Written before OV1 (no source), inside a fault run on the VM: an exercise, inferred.
+    (runs / "gothmog-f1.json").write_text(json.dumps({
+        "run_id": "gothmog-f1", "mitre": "", "result": "PASS", "scenario": "VM shutdown",
+        "metrics": {"injector": "gothmog", "kind": "fault", "fault_start": (a - timedelta(minutes=5)).isoformat(),
+                    "fault_end": (a + timedelta(minutes=5)).isoformat(), "targets": [VM]}}))
+    _real(runs, a, source=None, sid="rule-x-00000002")
+    # Written before, inside a window still on this host: an exercise.
+    win = {"run_id": "w1", "injector": "annatar", "kind": "technique", "experiment": "T1110.001 x",
+           "targets": [VM.replace("vm-a", "vm-b")], "start": (NOW - timedelta(minutes=90)).isoformat(), "end": None,
+           "expires": (NOW + timedelta(minutes=30)).isoformat(), "destructive": False}
+    _real(runs, NOW - timedelta(hours=1), source=None, sid="rule-x-00000003", vm=VM.replace("vm-a", "vm-b"))
+    out = _overview_real(runs, windows=[win])
+    assert out["alone"]["of"] == 0 and out["contain"]["detected"] == 0
+    # Neither — real traffic, inferred, and said.
+    _real(runs, NOW - timedelta(days=2), source=None, sid="rule-x-00000004")
+    out = _overview_real(runs, windows=[win])
+    assert (out["alone"]["of"], out["alone"]["inferred"], out["alone"]["contained"]) == (1, 1, 1)
+
+
+def test_a_decision_held_or_a_containment_that_did_not_hold_is_not_contained_alone(runs):
+    a = NOW - timedelta(hours=6)
+    _real(runs, a, executed=False, verified=None, guard="mode_hold", sid="rule-x-0000000a")
+    _real(runs, a + timedelta(minutes=5), verified_after=30, sid="rule-x-0000000b")
+    cards = [{"escalation_type": "verification_failed", "action": "block_suspicious_ip", "resource_id": VM,
+              "timestamp": (a + timedelta(minutes=8)).isoformat(), "reason": "gone"}]
+    out = _overview_real(runs, cards=cards)
+    assert out["alone"]["contained"] == 0 and out["alone"]["of"] == 2
+    assert out["alone"]["by_outcome"] == {"held_by_guard": 1, "not_holding": 1}
+    assert out["contain"]["contain_s"] is None
+    # Both recommended a block at or above the gate: the shadow counts them, not one judged wrong.
+    assert out["alone"]["shadow"] == 2
+    cards.append({"signal_id": "rule-x-0000000a", "verdict": "wrong"})
+    assert _overview_real(runs, cards=cards)["alone"]["shadow"] == 1
+
+
+def test_an_unattributed_row_a_cycle_without_a_decision_or_too_old_is_no_incident(runs):
+    _real(runs, NOW - timedelta(hours=1), attribution="unattributed", sid="rule-x-00000011")
+    _real(runs, NOW - timedelta(hours=1), action="", sid="rule-x-00000012")
+    _real(runs, NOW - timedelta(days=31), sid="rule-x-00000013")
+    _real(runs, NOW + timedelta(days=365), sid="rule-x-00000014")     # ahead of the clock: nowhere
+    assert _overview_real(runs)["alone"]["of"] == 0
+
+
+def test_the_overview_counts_real_traffic_and_dagorlad_the_exercises(runs):
+    """The routes: the overview's two tiles on real traffic; Dagorlad's, the runs' as before."""
+    a = NOW - timedelta(days=1)
+    _report(runs, "r1", "T1110.001", a, latency=60.0)
+    _cycle(runs, a + timedelta(seconds=60), "T1110.001", "block_suspicious_ip", 0.85)
+    _real(runs, NOW - timedelta(hours=2), verified_after=33, sid="rule-x-00000021")
+    c = console()
+    over, ex = c.get("/api/indicators").json(), c.get("/api/dagorlad/indicators").json()
+    assert over["alone"]["contained"] == 1 and over["contain"]["contain_s"] == 33.0
+    assert ex["alone"]["of"] == 1 and ex["alone"]["contained"] == 0 and ex["contain"]["detect_s"] == 60.0
+    assert set(ex) == {"window_days", "contain", "alone"}
+    route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/dagorlad/indicators")
+    assert route.methods == {"GET"}
+
+
+def test_dagorlad_runs_shows_the_exercises_indicators_and_the_overview_says_real():
+    """The page reads Dagorlad's route at its start and then every minute; the overview's two
+    tiles say real traffic, the coverage and the last proof the exercises."""
+    from pathlib import Path
+    static = Path(api.__file__).parent / "static"
+    js, ov = (static / "injector.js").read_text(), (static / "overview.js").read_text()
+    assert "load('ind', '/api/dagorlad/indicators', renderIndicators)" in js
+    assert "refreshCatalog(); refreshFast(); refreshSlow(); refreshIndicators();" in js
+    assert '<section id="ind"' in (static / "injector.html").read_text()
+    for label in ("'TIME TO CONTAIN · REAL'", "'CONTAINED ALONE · REAL'", "`COVERAGE · EXERCISES · ${days} d`",
+                  "'LAST PROOF · EXERCISE'"):
+        assert label in ov, label

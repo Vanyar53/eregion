@@ -5937,7 +5937,7 @@ MUTANTS += [
      '            if (decided := _ts(d.get("at"))) is not None and decided >= r["at"]:\n'
      '                contain.append(decided - r["at"])\n'),
     ("M1885", "the indicators count a run dated in the future (C1, review)", CON,
-     '        runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]\n', ""),
+     '    runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]\n', ""),
     ("M1886", "`eregion coverage` prints a report's control characters to the terminal (C1, review)",
      "eregion_console/cli.py",
      '    return "".join(ch for ch in str(value) if ch.isprintable())\n', "    return str(value)\n"),
@@ -7002,6 +7002,43 @@ TESTS.update({
               "tests/unit/test_release_away.py"),
     "M2346": "tests/unit/test_release_away.py::test_the_reset_takes_off_a_bare_nics_block_left_on_the_nsg_it_carried",
 })
+
+# OV1 (#399): the overview counts real traffic, Dagorlad the exercises — the watch's debug line
+# says which, the console infers an older one; a real incident ends as BL1 says. M2600–M2611.
+_OV1 = "tests/unit/test_indicators.py"
+IND_ = "eregion_console/indicators.py"
+MUTANTS += [
+    ("M2600", "a cycle the watch said an exercise counted as real traffic (OV1)", IND_,
+     '        return said == "exercise", False\n', "        return False, False\n"),
+    ("M2601", "an older line inside a window still here counted as real traffic (OV1)", IND_,
+     "    if windows and rid and covering_runs(", "    if False and windows and rid and covering_runs("),
+    ("M2602", "an older line inside a run report's span counted as real traffic (OV1)", IND_,
+     "and any(_spans(r, rid, t) for r in runs)), True\n", "and False), True\n"),
+    ("M2603", "an older line during a fault on its VM counted as real traffic (OV1)", IND_,
+     "        return on and at <= t <= end + GRACE_AFTER_S\n", "        return False\n"),
+    ("M2604", "an unattributed row (an arbitrary VM) counted as a real incident (OV1)", IND_,
+     '                or (c.get("attribution") or "asset") != "asset"):\n', "                ):\n"),
+    ("M2605", "a real containment that did not hold counted contained alone (OV1)", IND_,
+     "                                   cards=all_cards or cards, liftings=lifts)\n",
+     "                                   cards=(), liftings=lifts)\n"),
+    ("M2606", "the overview's two tiles left on the exercises' runs (OV1)", CON,
+     '        out.update(contain=real["contain"], alone=real["alone"], t0=real["t0"])\n',
+     '        out.update(t0=real["t0"])\n'),
+    ("M2607", "a real cycle dated ahead of the clock counted (OV1)", IND_,
+     "or t0 is None or not since <= t0 <= until\n", "or t0 is None or t0 < since\n"),
+    ("M2608", "a real decision judged wrong kept in the shadow (OV1)", IND_,
+     '                and conf >= threshold and c.get("signal_id") not in judged_wrong):\n',
+     "                and conf >= threshold):\n"),
+    ("M2609", "the watch's debug line never says real traffic or an exercise (OV1)", "glorfindel/agent.py",
+     '    debug_record["source"], debug_record["exercise_run"] = _cycle_source(signal)\n', ""),
+    ("M2610", "the console's cycle drops what the watch said of its source (OV1)", CON,
+     '        "source": str(rec.get("source") or ""), "exercise_run"', '        "source": "", "exercise_run"'),
+    ("M2611", "Dagorlad's Runs never read the exercises' indicators (OV1)", "eregion_console/static/injector.js",
+     "  refreshCatalog(); refreshFast(); refreshSlow(); refreshIndicators();\n",
+     "  refreshCatalog(); refreshFast(); refreshSlow();\n"),
+]
+TESTS.update({f"M{n}": _OV1 for n in range(2600, 2612)})
+TESTS["M2609"] = "tests/unit/test_agent_nodes.py"
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

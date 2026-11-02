@@ -203,6 +203,26 @@ latence, Annatar l'a mesurée sur ce même enregistrement.
 
 **Sans injecteur**, la couverture et la dernière preuve disent qu'il n'y a rien sur 30 jours.
 
+**Le réel sur l'accueil, les exercices dans Dagorlad** (OV1, #399, décision de Jonathan du 02/11).
+Le week-end du 01/11, bree en `non_disruptive`, Glorfindel a bloqué seul cinq adresses d'un brute
+force SSH, et l'accueil disait « 0 of 6 » : il ne comptait que les runs d'Annatar. Depuis OV1 :
+- **TIME TO CONTAIN · REAL** et **CONTAINED ALONE · REAL** comptent le trafic réel. Un incident est
+  une détection de la watch avec une décision, sur une VM qu'elle nomme, hors de tout exercice. Il
+  finit comme BL1 le dit : contenu seul si une isolation ou un blocage est exécuté dans son cycle,
+  relu sur Azure, et qu'il a tenu. Son T0 est l'heure de la détection, dit comme tel : aucune règle
+  ne rend encore le premier événement malveillant (`docs/analysis.md`, « Le réel »). L'ombre, les
+  issues (retenu, escaladé, n'a pas tenu…) et les lignes dont le réel est déduit sont à côté.
+- **Actions disruptives à tort** était déjà sur le réel ; elle ne change pas.
+- **Couverture** et **dernière preuve** sont des preuves d'exercice, et le disent (« · EXERCISES »).
+- **Les mêmes deux indicateurs sur les exercices** — le calcul d'avant, par run, avec les pannes
+  prises pour une attaque — sont en tête de la vue Runs de Dagorlad (`GET /api/dagorlad/indicators`).
+- **Réel ou exercice** : la watch l'écrit dans sa ligne de debug depuis OV1 (`source`, `exercise_run`,
+  ce que `_cycle_source` donnait déjà à la mémoire et aux cartes). Une ligne plus ancienne est un
+  exercice si une fenêtre encore sur l'hôte la couvre, ou un rapport de run sur sa VM (une panne, de
+  son début à sa fin plus la grâce ; une attaque, de son T0 à la plus longue vie d'une fenêtre plus
+  la grâce : large exprès, un exercice n'est jamais compté réel) ; sinon elle est réelle, et la tuile
+  dit combien sont ainsi déduites.
+
 **La matrice de C1 (#80, 30/10)** a trouvé sa place dans Annatar et dans Gothmog, avec son résumé
 sur l'accueil. La colonne de droite de chaque page (« COVERAGE · TECHNIQUES », « COVERAGE ·
 FAULTS ») est la matrice (`GET /api/coverage?kind=…`, `eregion_console/coverage.py`) : une ligne

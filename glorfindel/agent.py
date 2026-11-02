@@ -2184,6 +2184,9 @@ def _write_debug_record(state: GlorfindelState) -> None:
         "llm_usage": state.get("llm_usage"),
         "resolved_autonomy_mode": state.get("autonomy_mode", ""),
     }
+    # OV1 (#399): real traffic or an exercise, as the memory and the card say it — the console
+    # counts the real one on its overview, the exercises in Dagorlad. Never shown to the model.
+    debug_record["source"], debug_record["exercise_run"] = _cycle_source(signal)
     if state.get("autonomy_gate"):
         debug_record["autonomy_gate"] = state["autonomy_gate"]
     if state.get("cycle_error"):

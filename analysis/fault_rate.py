@@ -8,8 +8,11 @@ Definitions (docs/analysis.md, « Le taux des pannes prises pour une attaque »,
 Jonathan on 31/10):
 
 - **A measured fault** is a Gothmog run that started, whose effect was seen in the telemetry
-  Glorfindel reads (``checks.fault_effective`` PASS, gothmog/probes.py), with its start, end and
-  targets known, and whose decisions are known:
+  Glorfindel reads (``checks.fault_effective`` PASS, gothmog/probes.py) — and shown by the
+  readings of that telemetry its report carries (``metrics.effect``): on each of its targets,
+  each effect probe seen, while the fault ran or in its window (SEC9, ``effect_unread``; the
+  check alone is the report's word) —, with its start, end and targets known, and whose
+  decisions are known:
   - the Glorfindel watch was live before the fault (V1, the run refused otherwise) and after it
     (``checks.watch_after``, read by Gothmog once the fault is over, review 2) — the watch
     writes only when it decides, so no file of it says it was looking;
@@ -52,6 +55,10 @@ NOT_SEEN = "son effet n'a pas été vu dans la télémétrie de Glorfindel : il 
 EFFECT_UNSAID = "son rapport ne dit pas si son effet a été vu"
 NO_WATCH = ("décisions de la watch introuvables : aucun de ses fichiers sur cet hôte "
             "(le taux se lit sur l'hôte de la watch)")
+# SEC9: an effect the report says seen, its readings of Glorfindel's telemetry not showing it.
+EFFECT_UNREAD = ("son rapport dit son effet vu, sans les lectures de la télémétrie de Glorfindel "
+                 "qui le montrent")
+EFFECT_NOT_SHOWN = "son rapport dit son effet vu, ses lectures ne le montrent pas"
 WATCH_GONE = "la watch de Glorfindel n'était plus vivante après la panne : sa réaction n'est pas connue"
 WATCH_AFTER_UNSAID = "son rapport ne dit pas si la watch de Glorfindel vivait après la panne"
 WATCH_CUT = "décisions de la watch illisibles en partie"
@@ -116,10 +123,55 @@ def read_watch(runs_dir: Path, since: float = 0.0) -> Watch:
     return Watch(files, records)
 
 
-def unmeasured(run: dict) -> str:
+def _vm_name(rid: str) -> str:
+    return str(rid or "").rstrip("/").rsplit("/", 1)[-1].lower()
+
+
+def effect_unread(run: dict, until: float | None = None) -> str:
+    """Why the effect a fault run says seen is not shown by its readings — "" when it is (SEC9).
+    The readings (``effect``: VM name → Gothmog's probe results) must name each of its targets,
+    each with at least one probe, every one seen (``ok``) at a time between the fault's start and
+    ``until`` (the last moment of its window, ``own_until``; the effect is read late, for the
+    telemetry's ingestion, never after), each to the clocks of two hosts. Its targets are
+    ``fault_run``'s to say: none, nothing is checked here. A reading is found by the target's
+    full id, else by its name (Gothmog's key) — and by name only when no other target shares it:
+    two VMs of one name in two groups have readings no name tells apart, said by their ids.
+    Checked in their coherence only: the watch does not read the telemetry again."""
+    targets = [str(t) for t in run.get("targets") or []]
+    if not targets:
+        return ""
+    effect = run.get("effect")
+    if not isinstance(effect, dict) or not effect:
+        return EFFECT_UNREAD
+    by_vm = {str(k).rstrip("/").lower(): v for k, v in effect.items()}
+    names = [_vm_name(t) for t in targets]
+    start = run.get("at")
+    for target, name in zip(targets, names):
+        readings = by_vm.get(target.rstrip("/").lower())
+        if readings is None and names.count(name) > 1:
+            twins = ", ".join(t for t, n in zip(targets, names) if n == name)
+            return f"{EFFECT_UNREAD} (deux cibles du nom {name}, leurs lectures ne se distinguent pas : {twins})"
+        if readings is None:
+            readings = by_vm.get(name)
+        if not isinstance(readings, list) or not readings:
+            return f"{EFFECT_UNREAD} (aucune lecture sur {name})"
+        for r in readings:
+            if not isinstance(r, dict) or r.get("ok") is not True:
+                probe = str(r.get("name") or "?")[:40] if isinstance(r, dict) else "?"
+                return f"{EFFECT_NOT_SHOWN} ({name} : {probe} non vu)"
+            seen = run_report.epoch(r.get("seen_at"))
+            if seen is None or start is None or seen < start - containment.CLOCK_SKEW_S or (
+                    until is not None and seen > until + containment.CLOCK_SKEW_S):
+                probe = str(r.get("name") or "?")[:40]
+                return f"{EFFECT_NOT_SHOWN} ({name} : {probe} lu hors de la panne)"
+    return ""
+
+
+def unmeasured(run: dict, until: float | None = None) -> str:
     """Why a fault run (a ``read_run`` view) measures nothing of Glorfindel, before its
-    decisions are read — "" when it may. The rest (no watch, no start, end or target) is
-    ``fault_run``'s own."""
+    decisions are read — "" when it may. ``until``: the last moment of its window
+    (``own_until``), the latest its effect may have been read. The rest (no watch, no start,
+    end or target) is ``fault_run``'s own."""
     if run.get("started") is False:
         return NOT_STARTED
     if run.get("effective") is False:
@@ -132,7 +184,7 @@ def unmeasured(run: dict) -> str:
         return WATCH_GONE
     if run.get("watch_after") is None:
         return WATCH_AFTER_UNSAID
-    return ""
+    return effect_unread(run, until)
 
 
 def played_of(runs) -> list[tuple]:
@@ -187,7 +239,7 @@ def measure(runs, watch: Watch, *, taken=frozenset(), played=None, windows=None)
     taken = set(taken)
     out = []
     for f in faults:
-        why = unmeasured(f) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")
+        why = unmeasured(f, own_until(f, windows)) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")
         if why:
             out.append(FaultRun(f["run_id"], f.get("experiment") or "", list(f.get("targets") or []),
                                 f.get("at"), f.get("ended_at"), why=why))

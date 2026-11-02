@@ -1,6 +1,7 @@
 """Persistent incident registry — groups signals by resource_id within a TTL window."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -28,7 +29,11 @@ class IncidentRegistry:
     Same resource_id within the TTL window = same incident.
     Past TTL or resolved = new incident on next signal.
 
-    Thread-safe: multiple worker threads can call record_action concurrently.
+    Several writers: the worker threads of one watch, and other processes — the watch and
+    `glorfindel respond` each hold a registry on the same file. Each read-modify-write holds
+    a thread lock and an flock on `<file>.lock`, and the file is rewritten whole (temporary
+    file + os.replace, owner-only): no incident lost between two writers, no reader ever sees
+    half a file (SEC13, V-10 — as the escalations store, SEC3).
     TTL controlled by GLORFINDEL_INCIDENT_TTL_S env var (default 300s).
     """
 
@@ -47,16 +52,24 @@ class IncidentRegistry:
         )
         self._lock = threading.Lock()
 
+    @contextlib.contextmanager
+    def _locked(self):
+        """This registry's threads, then every process writing the same file."""
+        from glorfindel.response.locks import _file_lock
+        with self._lock, _file_lock(self._path.with_name(self._path.name + ".lock")):
+            yield
+
     def get_or_create(self, resource_id: str, ttp: str = "") -> Incident:
         """Return the active incident for resource_id, or open a new one."""
-        with self._lock:
-            active = self._find_active(resource_id)
+        with self._locked():
+            rows = self._load_all()
+            active = self._find_active(resource_id, rows)
             if active is not None:
                 if ttp and ttp not in active.ttps:
                     active.ttps.append(ttp)
                 active.signals_count += 1
                 active.last_signal_at = _now_iso()
-                self._rewrite_row(active)
+                self._write_all(rows)
                 return active
 
             inc = Incident(
@@ -69,7 +82,7 @@ class IncidentRegistry:
                 signals_count=1,
                 state="active",
             )
-            self._append(inc)
+            self._write_all(rows + [inc])
             return inc
 
     def record_action(
@@ -85,7 +98,7 @@ class IncidentRegistry:
         cycle that triggered this action — stored so subsequent LLM cycles can see
         what was investigated before the action was taken.
         """
-        with self._lock:
+        with self._locked():
             rows = self._load_all()
             for inc in rows:
                 if inc.incident_id == incident_id:
@@ -102,7 +115,7 @@ class IncidentRegistry:
 
     def resolve(self, incident_id: str) -> None:
         """Mark an incident as resolved (will not be returned by get_or_create)."""
-        with self._lock:
+        with self._locked():
             rows = self._load_all()
             for inc in rows:
                 if inc.incident_id == incident_id:
@@ -111,15 +124,16 @@ class IncidentRegistry:
             self._write_all(rows)
 
     def get_active(self, resource_id: str) -> Incident | None:
-        """Return the active incident for resource_id if one exists within TTL."""
+        """Return the active incident for resource_id if one exists within TTL. A read: the
+        file is only ever replaced whole, so no lock is needed to read a whole one."""
         with self._lock:
-            return self._find_active(resource_id)
+            return self._find_active(resource_id, self._load_all())
 
     # ── Private ────────────────────────────────────────────────────────────────
 
-    def _find_active(self, resource_id: str) -> Incident | None:
+    def _find_active(self, resource_id: str, rows: list[Incident]) -> Incident | None:
         now = datetime.now(timezone.utc)
-        for inc in reversed(self._load_all()):
+        for inc in reversed(rows):
             if inc.resource_id != resource_id or inc.state != "active":
                 continue
             age_s = (now - datetime.fromisoformat(inc.last_signal_at)).total_seconds()
@@ -140,22 +154,10 @@ class IncidentRegistry:
                     pass
         return rows
 
-    def _append(self, inc: Incident) -> None:
-        with open(self._path, "a") as f:
-            f.write(json.dumps(asdict(inc), default=str) + "\n")
-
-    def _rewrite_row(self, updated: Incident) -> None:
-        rows = self._load_all()
-        for i, inc in enumerate(rows):
-            if inc.incident_id == updated.incident_id:
-                rows[i] = updated
-                break
-        self._write_all(rows)
-
     def _write_all(self, rows: list[Incident]) -> None:
-        with open(self._path, "w") as f:
-            for inc in rows:
-                f.write(json.dumps(asdict(inc), default=str) + "\n")
+        """The whole registry, through a temporary file: owner-only (0600), never half-written."""
+        from glorfindel.response.state import _atomic_write_text
+        _atomic_write_text(self._path, "".join(json.dumps(asdict(inc), default=str) + "\n" for inc in rows))
 
 
 def _now_iso() -> str:

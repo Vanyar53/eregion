@@ -299,3 +299,66 @@ def test_concurrent_proposals_lose_none_and_no_reader_sees_half_a_store(tmp_path
     assert got["reads"] > 0
     assert {k: got[k] for k in ("lost", "duplicated", "reject_lost", "approve_lost", "bad")} == {
         "lost": 0, "duplicated": 0, "reject_lost": 0, "approve_lost": 0, "bad": 0}, got
+
+
+# ── SEC13 (V-10): the incident registry, written by the watch and `glorfindel respond` ──
+
+_INCIDENTS_WRITER = textwrap.dedent("""
+    import sys
+    from pathlib import Path
+    from glorfindel.incidents import IncidentRegistry
+    path, me, n = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+    reg = IncidentRegistry(path=path, ttl_s=3600)
+    for i in range(n):
+        inc = reg.get_or_create(f"/subscriptions/s/vm/{me}-{i}", ttp="T1486")
+        reg.record_action(inc.incident_id, "snapshot", "ok")
+        if i % 2 == 0:
+            reg.resolve(inc.incident_id)
+""")
+
+
+def measure_incidents(tmp_path: Path, writers: int = 2, incidents: int = 60) -> dict:
+    """`writers` processes — the watch and `glorfindel respond` are two — each open
+    `incidents` incidents (one VM each), record an action on each and resolve one in two,
+    while a reader reads the registry in a loop: what is lost, what was read half-written.
+    PYTHONPATH from SEC13_INCIDENTS_PYTHONPATH measures another checkout (before and after)."""
+    path = tmp_path / "incidents.jsonl"
+    stop, out = tmp_path / "stop", tmp_path / "reader.json"
+    env = {**os.environ, "PYTHONPATH": os.environ.get("SEC13_INCIDENTS_PYTHONPATH")
+           or str(Path(__file__).resolve().parents[2])}
+    reader = subprocess.Popen([sys.executable, "-c", _STORE_READER, str(path), str(stop), str(out)], env=env)
+    procs = [subprocess.Popen([sys.executable, "-c", _INCIDENTS_WRITER, str(path), f"w{k}", str(incidents)],
+                              env=env) for k in range(writers)]
+    try:
+        codes = [p.wait(timeout=180) for p in procs]
+    finally:
+        stop.touch()
+        reader.wait(timeout=60)
+    rows = []
+    for line in path.read_text().splitlines():
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            pass
+    by_vm = {r["resource_id"].rsplit("/", 1)[-1]: r for r in rows}
+    want = {f"w{k}-{i}" for k in range(writers) for i in range(incidents)}
+    return {
+        "codes": codes, "lost": len(want - set(by_vm)), "duplicated": len(rows) - len(by_vm),
+        "action_lost": len({v for v in want if v in by_vm and not by_vm[v]["actions_taken"]}),
+        "resolve_lost": len({v for v in want if int(v.rsplit("-", 1)[1]) % 2 == 0 and v in by_vm
+                             and by_vm[v]["state"] != "resolved"}),
+        "mode": oct(path.stat().st_mode & 0o777),
+        **json.loads(out.read_text()),
+    }
+
+
+def test_two_processes_lose_no_incident_and_no_reader_sees_half_a_registry(tmp_path):
+    """The watch and `glorfindel respond` each hold an IncidentRegistry on the same file: its
+    thread lock kept their own threads apart, never the two processes — each rewrite read the
+    file, changed it and wrote it back over the other's, in place. Under the registry's flock,
+    rewritten whole (temporary file, 0600): nothing lost, nothing read half-written."""
+    got = measure_incidents(tmp_path)
+    assert got["codes"] == [0, 0]
+    assert got["reads"] > 0
+    assert {k: got[k] for k in ("lost", "duplicated", "action_lost", "resolve_lost", "bad", "mode")} == {
+        "lost": 0, "duplicated": 0, "action_lost": 0, "resolve_lost": 0, "bad": 0, "mode": "0o600"}, got

@@ -1,12 +1,14 @@
 """What the reassertion says without acting on it (SEC4b): an isolation or a block that an
-allow of someone else's passes before (V-16), and a local state it can't read.
+allow of someone else's passes before (V-16), a local state it can't read, and a check that
+raises (SEC13, V-16).
 
-Neither is fixed by putting rules back. A bypass is a rule someone else wrote, evaluated
+None is fixed by putting rules back. A bypass is a rule someone else wrote, evaluated
 before our deny: Glorfindel never removes it (I2) — it says it, on a card of its own type,
 once per change (not at every pass), and the card closes once the isolation or the block
 holds again. A state file that can't be read may hold anything: the readers that would
 conclude "nothing" from it stop (SEC3, SEC4b) — the card says which file, and why the
-operations that need it wait.
+operations that need it wait. A check that raises leaves the isolation or the block
+unchecked: one card while it lasts, closed once the check passes again.
 """
 from __future__ import annotations
 
@@ -22,6 +24,9 @@ STATE_TYPE = "state_unreadable"
 _STATE_ACTION = "repair_local_state"
 _STATE_PREFIX = "state-unreadable-"
 _STATE_RESOURCE = "~/.glorfindel"
+UNVERIFIED_TYPE = "unverified"
+_UNVERIFIED_ACTION = "review_unverified"
+_UNVERIFIED_PREFIX = "reassert-unverified-"
 
 
 def _digest(parts) -> str:
@@ -235,6 +240,85 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
     remember(sid)
     report.append({"kind": "block" if ip else "isolation", "vm": vm, **({"ip": ip} if ip else {}),
                    "outcome": "bypassed", "detail": reason})
+
+
+# The checks that raised and were said by this process, by signal id (SEC13, V-16): a card
+# the operator closed silences its failure only while this process saw that failure open —
+# the check passed since, or a restart, and the next failure is said, once (as a drift, L2C).
+_UNVERIFIED_OPEN: set[str] = set()
+
+
+def _unverified_id(vm: str, rid: str, ip: str = "") -> str:
+    from glorfindel.actions import _rid_hash
+    return f"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
+
+
+def say_unverified(vm: str, rid: str, exc, report: list[dict], ip: str = "") -> None:
+    """The check of `vm`'s isolation (or, with `ip`, its block) raised — a right removed, the
+    API down — or answered « can't tell » (`verified: None`, its error): logged, and said on
+    one card while it lasts, not at every pass, its text kept to the last error; closed by
+    the operator, silent until the check passes (SEC13, V-16). Nothing is written to Azure:
+    what isn't checked is neither put back nor lifted."""
+    from glorfindel import escalations
+    what = f"le blocage de {ip} sur {vm}" if ip else f"l'isolation de {vm}"
+    log.warning("reassert: %s not checked (%s)", what, exc)
+    sid = _unverified_id(vm, rid, ip)
+    error = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:300]
+    cards = [e for e in _history() if e.get("signal_id") == sid]       # this card's, exactly
+    waiting = next((e for e in cards if e.get("status") == "pending"), None)
+    if waiting is not None:                     # said: its text kept to the last error
+        if waiting.get("unverified_last", error) != error:
+            first = waiting.get("unverified_first") or waiting["unverified_last"]
+            escalations.refresh(waiting["id"], _unverified_reason(what, first, error), unverified_last=error)
+            new_pass()
+        return
+    last = cards[-1] if cards else None
+    if sid in _UNVERIFIED_OPEN and last is not None and last.get("status") == "resolved" and not last.get("resolution"):
+        return                                  # acknowledged by the operator, still failing
+    reason = _unverified_reason(what, error, error)
+    steps = ["Lire l'erreur : un droit de lecture retiré à l'identité de Glorfindel (le NSG, la carte réseau, "
+             "le sous-réseau), une API indisponible, une ressource supprimée.",
+             "La carte se ferme d'elle-même quand la vérification repasse ; acquittée, elle ne revient qu'à "
+             "l'échec suivant."]
+    card = escalations.record(signal_id=sid, resource_id=rid, action=_UNVERIFIED_ACTION,
+                              escalation_type=UNVERIFIED_TYPE, reason=reason, severity="high",
+                              suggested_steps=steps, action_params={"ip": ip} if ip else None)
+    escalations.refresh(card, reason, unverified_first=error, unverified_last=error)
+    new_pass()
+    _UNVERIFIED_OPEN.add(sid)
+    report.append({"kind": "block" if ip else "isolation", "vm": vm, **({"ip": ip} if ip else {}),
+                   "outcome": "unverified", "detail": reason})
+
+
+def _unverified_reason(what: str, first: str, last: str) -> str:
+    said = f"({last})" if first == last else f"(première erreur : {first} ; dernière : {last})"
+    return (f"La vérification de {what} échoue {said} : tant qu'elle échoue, la réaffirmation ne sait "
+            "pas s'il tient encore — rien n'est reposé ni levé.")
+
+
+def unverified_over(vm: str, rid: str, ip: str = "") -> None:
+    """The check passed: its card closes, with a note — the next failure is a new card."""
+    sid = _unverified_id(vm, rid, ip)
+    _UNVERIFIED_OPEN.discard(sid)
+    for e in _history():
+        if e.get("signal_id") == sid and e.get("status") == "pending":
+            _resolve(e["id"], note="La vérification repasse.")
+
+
+def unverified_released() -> None:
+    """A card whose isolation or block is no longer recorded (released, unblocked) closes —
+    not while a state can't be read: what it holds is unknown (SEC4b)."""
+    from glorfindel.actions import active_blocks, active_isolations, unreadable_states
+    if unreadable_states():
+        return
+    held = {_unverified_id(e["vm_name"], e["resource_id"]) for e in active_isolations() if e.get("resource_id")}
+    held |= {_unverified_id(e["vm_name"], e["resource_id"], e["ip"]) for e in active_blocks()
+             if e.get("resource_id") and e.get("ip")}
+    for e in _history():
+        sid = e.get("signal_id") or ""
+        if sid.startswith(_UNVERIFIED_PREFIX) and e.get("status") == "pending" and sid not in held:
+            _UNVERIFIED_OPEN.discard(sid)
+            _resolve(e["id"], note="Plus d'isolation ni de blocage enregistré à vérifier.")
 
 
 LEFT_TYPE = "rule_left"

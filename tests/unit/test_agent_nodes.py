@@ -1723,8 +1723,10 @@ def test_graph_human_only_per_asset_resolution(tmp_path, monkeypatch, dry_connec
 
 # ── T1548.003 — Sudo privilege escalation ─────────────────────────────────────
 
+# sudo's own line, as Syslog holds it: the tag in ProcessName, the message in sudo's form —
+# what normalize_row reads as a privilege escalation (SEC13, R-18).
 _T1548_SYSLOG = (
-    "sudo[12011]:   svc-backup : TTY=pts/1 ; PWD=/tmp ;"
+    "   svc-backup : TTY=pts/1 ; PWD=/tmp ;"
     " USER=root ; COMMAND=/opt/scripts/backup.sh /dev/null"
 )
 
@@ -1760,7 +1762,7 @@ def test_graph_t1548_detection_isolates_vm(tmp_path, monkeypatch, dry_connector,
             ttp="T1548.003",
             raw={
                 "detection_time_s": 40,
-                "detected_data": {"SyslogMessage": _T1548_SYSLOG},
+                "detected_data": {"ProcessName": "sudo", "SyslogMessage": _T1548_SYSLOG},
             },
         ))
 
@@ -2075,7 +2077,8 @@ def test_guardrail_still_lets_curated_syslog_through():
     autonomous isolate."""
     from glorfindel.agent import decide
     resp = _mock_llm_response("isolate_vm", confidence=0.95)
-    state = _state(signal=_signal({"Computer": "vm", "SyslogMessage": _T1548_SYSLOG}, ttp="T1548.003"))
+    state = _state(signal=_signal({"Computer": "vm", "ProcessName": "sudo", "SyslogMessage": _T1548_SYSLOG},
+                                  ttp="T1548.003"))
     with patch("litellm.completion", return_value=resp):
         out = decide(state, model="x", autonomy_override="non_disruptive")
     assert out["escalate"] is False

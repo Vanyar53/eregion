@@ -316,23 +316,26 @@ def unreadable_states() -> list[str]:
     or not the shape Glorfindel writes (an object per isolation, a list of entries per
     block file). What such a file holds is unknown — never "nothing": a reader that
     decides on the absence of a state (the orphan sweep) does nothing while one is listed
-    (SEC3, N-06). `<directory>/<file>`, sorted."""
-    out = []
-    for directory, shape in ((_ISOLATION_STATE_DIR, dict), (_BLOCK_STATE_DIR, list)):
-        if not directory.exists():
+    (SEC3, N-06). `<directory>/<file>`, sorted; a directory that can't be listed, as
+    `<directory>/` (SEC13, R-07: `Path.glob` read it as empty, every reader with it).
+    Set aside (SEC4b): listed while it exists, readable or not — to report by hand into
+    the current state, never a state of its own again."""
+    out, iso = [], _ISOLATION_STATE_DIR.name
+    for directory, shape, label in ((_ISOLATION_STATE_DIR, dict, iso), (_BLOCK_STATE_DIR, list, _BLOCK_STATE_DIR.name),
+                                    (_ISOLATION_STATE_DIR / ASIDE_DIR, None, f"{iso}/{ASIDE_DIR}")):
+        try:
+            names = os.listdir(directory)
+        except FileNotFoundError:
             continue
-        for f in directory.glob("*.json"):
+        except OSError:
+            names, out = [], out + [f"{label}/"]
+        for name in [n for n in names if shape is None or n.endswith(".json")]:
             try:
-                data = json.loads(f.read_text())
+                data = json.loads((directory / name).read_text()) if shape else None
             except (OSError, ValueError):
                 data = None
-            if not _readable_shape(data, shape):
-                out.append(f"{directory.name}/{f.name}")
-    # Set aside (SEC4b): listed while it exists, readable or not — to report by hand into
-    # the current state, never a state of its own again.
-    aside = _ISOLATION_STATE_DIR / ASIDE_DIR
-    if aside.is_dir():
-        out += [f"{_ISOLATION_STATE_DIR.name}/{ASIDE_DIR}/{f.name}" for f in aside.iterdir() if f.is_file()]
+            if not (shape and _readable_shape(data, shape)):
+                out.append(f"{label}/{name}")
     return sorted(out)
 
 

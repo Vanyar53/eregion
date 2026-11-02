@@ -6,7 +6,9 @@ On the invariant machine's fake Azure (tests/unit/fake_azure.py): no Azure, no L
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import shutil
 
 import pytest
@@ -340,3 +342,60 @@ def test_a_third_partys_allow_before_our_deny_is_said_and_left(world):
     reassert.reassert_pass(m.connector, None)
     assert [e["status"] for e in escalations.all_escalations() if e["escalation_type"] == "bypassed"] == [
         "resolved"]
+
+
+# ── SEC13 (R-07): a state directory that can't be listed ──────────────────────────────
+
+_POSIX_USER = pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="permissions: POSIX, not root")
+
+
+@contextlib.contextmanager
+def _unlistable(directory, mode=0o300):
+    """The directory's files kept, its listing refused (no read permission)."""
+    os.chmod(directory, mode)
+    try:
+        yield
+    finally:
+        os.chmod(directory, 0o700)
+
+
+@_POSIX_USER
+def test_the_quarantine_readers_never_answer_no_when_the_states_cant_be_listed(world):
+    """_held_in_quarantine and _recorded_original look for a NIC in every isolation state
+    (the release, the reset, verify_release of a NIC in quarantine or bare). isolation/ no
+    longer listable, they read « no state records it »: « not in quarantine », « no original
+    recorded ». Unknown now, as an unreadable file (SEC4b): StateUnreadable, naming the
+    directory. Listable again, they answer."""
+    from glorfindel.response.state import StateUnreadable, _held_in_quarantine, _recorded_original
+    m = world(_net(quarantine=True, web_nic={"own": "dedicated"}))
+    nic = _nic("rg-app1", "web-nic")
+    own, _ = _quarantined(m, nic)
+    nic_id = m.fake.nics[nic]["id"]
+    with _unlistable(actions._ISOLATION_STATE_DIR):
+        for reader in (_held_in_quarantine, _recorded_original):
+            with pytest.raises(StateUnreadable, match="isolation/"):
+                reader(nic_id)
+    assert _held_in_quarantine(nic_id) is True and key(_recorded_original(nic_id)) == key(own)
+
+
+@_POSIX_USER
+@pytest.mark.parametrize("which", ["isolation", "blocks", "aside"])
+def test_the_reassertion_says_a_state_directory_it_cant_list_once(world, which):
+    """The reassertion read « nothing recorded » from a directory it couldn't list: nothing
+    checked, nothing said (a set-aside directory made the pass raise). Said now on the card of
+    unreadable states, naming the directory — once, not at every pass — and closed once it
+    reads again."""
+    m = world(_net(quarantine=True, web_nic={"own": "dedicated"}))
+    _quarantined(m, _nic("rg-app1", "web-nic"))
+    directory = {"isolation": actions._ISOLATION_STATE_DIR, "blocks": actions._BLOCK_STATE_DIR,
+                 "aside": actions._ISOLATION_STATE_DIR / actions.ASIDE_DIR}[which]
+    directory.mkdir(parents=True, exist_ok=True)
+    named = {"isolation": "isolation/", "blocks": "blocks/", "aside": "isolation/aside/"}[which]
+    with _unlistable(directory):
+        assert named in actions.unreadable_states()
+        for _ in range(3):
+            reassert.reassert_pass(m.connector, None)
+        (card,) = _state_cards()
+        assert card["status"] == "pending" and named in card["reason"] and card["occurrences"] == 1
+    reassert.reassert_pass(m.connector, None)
+    assert [e["status"] for e in _state_cards()] == ["resolved"]

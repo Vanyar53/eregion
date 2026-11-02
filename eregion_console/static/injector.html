@@ -38,6 +38,19 @@
   #page-title.annatar { background: color-mix(in srgb, var(--purple) 6%, var(--bg1)); }
   #page-title.gothmog { background: color-mix(in srgb, var(--orange) 6%, var(--bg1)); }
   #page-title.both { background: color-mix(in srgb, var(--red) 6%, var(--bg1)); }
+
+  /* OV1 (#399): the exercises' time to contain and share contained alone — the overview counts
+     real traffic. One line, compact: the lists keep the height. */
+  #ind { flex-shrink: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 2px;
+         border-bottom: 1px solid var(--border); }
+  #ind:empty { display: none; }
+  .ind { background: var(--bg1); padding: 6px 20px; border-top: 2px solid var(--border); min-width: 0;
+         display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .ind .lbl { color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+  .ind .val { font-size: 13px; font-weight: 700; white-space: nowrap; }
+  .ind .sub { color: var(--dim); font-size: 11px; }
+  .ind.warn { border-top-color: var(--yellow); } .ind.bad { border-top-color: var(--red); }
+  .ind .bad-t { color: var(--red); }
   #views { flex-shrink: 0; display: flex; gap: 6px; align-items: baseline; padding: 5px 20px;
            border-bottom: 1px solid var(--border); font-size: 11px; }
   #views a { padding: 2px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--dim); }
@@ -161,6 +174,7 @@
   <a class="filt" data-filter="annatar" href="/dagorlad?view=runs&amp;injector=annatar">Annatar</a>
   <a class="filt" data-filter="gothmog" href="/dagorlad?view=runs&amp;injector=gothmog">Gothmog</a>
 </nav>
+<section id="ind" aria-label="The exercises' indicators"></section>
 
 <main id="main">
   <div class="col" id="col-ex">

@@ -1,12 +1,24 @@
 # BL1 — la boucle avec la réponse exécutée : la session de banc
 
-Deux des cinq indicateurs de la finalité sont vides depuis le début : **le temps pour contenir** et
-**la part contenue seule**. H0 observe en `human_only`, avec une identité lectrice : la 0.3 a mesuré
-la détection et la décision, jamais le confinement. BL1 (#280) les remplit, sur le banc.
+Deux des cinq indicateurs de la finalité étaient vides depuis le début : **le temps pour contenir**
+et **la part contenue seule**. Jusqu'au 30/10, H0 observait en `human_only`, avec une identité
+lectrice : la 0.3 a mesuré la détection et la décision, jamais le confinement. BL1 (#280) les
+remplit, sur le banc.
 
-Le lot a été préparé sans infra réelle (le 30/10) : le calcul, la campagne déclarée, les tests. Il
-reste la session de banc, avec Jonathan : lancer, regarder, juger. Cette page la déroule, commande
+Le lot a été préparé sans infra réelle (le 30/10) : le calcul, la campagne déclarée, les tests. La
+session de banc, avec Jonathan, consiste à lancer, regarder, juger. Cette page la déroule, commande
 par commande.
+
+**Le résultat du 31/10** (#280) : la panne `vm-shutdown` n'a pas été prise pour une attaque (1
+panne, 0) ; T1136.001 détectée en 144 s, mais contenue seule 0 fois sur 1 (un instantané recommandé
+à 35 %, escaladé sous le seuil de 0,7) — le critère 1 tenu, le 2 à mesurer avec une technique que le
+modèle juge grave (BL1b, #396).
+
+**Depuis le 31/10, H0 garde la posture de la session** (décision de Jonathan ; bree aussi en
+`non_disruptive` depuis le 01/11) : le rôle « Eregion Glorfindel Response » sur le seul groupe du
+banc, `GLORFINDEL_READ_ONLY=0`, gondolin et bree en `non_disruptive`, le CD actif. Les étapes 3 et 7
+ne servent plus que si H0 a été remis en lecture seule. Ce que la posture ouvre et ce qui la borne :
+le modèle de menace ([`design/modele-de-menace.md`](design/modele-de-menace.md), §5).
 
 ## Ce qui est prêt
 
@@ -17,7 +29,9 @@ par commande.
     modèle) ;
   - la page Annatar de la console (la campagne, encadré **RESPONSE**) ;
   - l'accueil de la console (tuiles **TIME TO CONTAIN** et **CONTAINED ALONE**, sur 30 jours) ;
-  - `make glorfindel-host-containment CAMPAIGN=<id>`, sur H0, en lecture seule.
+  - `make glorfindel-host-containment CAMPAIGN=<id>`, sur H0, en lecture seule, sans geste de plus
+    (depuis BL1c : la commande lit elle-même l'inscription des VM d'une campagne venue du canal, et
+    retire les variables d'identité vides que compose passe, comme la watch).
 - **La campagne déclarée** : [`annatar/campaign/declared/bl1-reponse.yaml`](../annatar/campaign/declared/bl1-reponse.yaml).
   Elle tient en trois étapes :
   1. la panne `vm-shutdown` (Chaos Studio, 5 min) ;
@@ -62,11 +76,15 @@ campagne d'Annatar ne joue pas encore elle-même une panne. Deux cas :
 
 ## Où tourne la watch qui répond
 
-H0 est lecteur : identité managée `Reader` et `Log Analytics Reader`, `GLORFINDEL_READ_ONLY=1`, et
-la config est forcée en `human_only` au push (SEC7). Pour que Glorfindel isole seul, une watch doit
-pouvoir écrire sur le groupe du banc, le temps de la campagne. **Jonathan a retenu (a) le 30/10** ;
-(c) est le repli, (b) est écartée. L'exception est écrite au modèle de menace
-([`design/modele-de-menace.md`](design/modele-de-menace.md), §5).
+**Depuis le 31/10, (a) est la posture de H0 sur le banc** : rien à poser avant une session. Le choix
+du 30/10 reste ci-dessous, pour ses raisons.
+
+Le 30/10, H0 était lecteur : identité managée `Reader` et `Log Analytics Reader`,
+`GLORFINDEL_READ_ONLY=1`, et la config forcée en `human_only` au push (SEC7). Pour que Glorfindel
+isole seul, une watch devait pouvoir écrire sur le groupe du banc, le temps de la campagne.
+**Jonathan a retenu (a) le 30/10**, puis l'a gardée le 31/10 ; (c) est le repli, (b) est écartée.
+La posture est écrite au modèle de menace ([`design/modele-de-menace.md`](design/modele-de-menace.md),
+§5).
 
 | | (a) **retenue** : H0, rôle « Response » sur le banc | (b) **écartée** : une watch sur le poste de Jonathan | (c) **repli** : H0, avec un principal propre à la watch |
 |---|---|---|---|
@@ -85,10 +103,11 @@ pouvoir écrire sur le groupe du banc, le temps de la campagne. **Jonathan a ret
   console), comme le sera une vraie exploitation.
 - Aucun secret, et le retour se fait en quatre gestes.
 
-Ce que (a) ouvre de plus que (c) : pendant la session, un clic dans la console peut écrire sur le
-banc, bree compris. C'est un humain qui agit, et la session est courte. Si Jonathan veut une
-console qui reste lectrice, (c) est le repli, au prix d'un secret sur H0. (b) casse le canal
-retour : écartée.
+Ce que (a) ouvre de plus que (c) : un clic dans la console, ou un bouton du bot, peut écrire sur le
+banc, bree comprise. C'est un humain qui agit, derrière le jeton de la console ou la liste de
+Discord. Pensé le 30/10 pour une session courte, c'est depuis le 31/10 la posture de tous les jours.
+Si Jonathan veut une console qui reste lectrice, (c) est le repli, au prix d'un secret sur H0. (b)
+casse le canal retour : écartée.
 
 ## Le déroulé (environ 1 h 30 à 2 h)
 
@@ -96,6 +115,9 @@ Toutes les commandes sont lancées depuis le poste, avec `source .envrc` dans le
 chaque `YES=1`, le plan est montré et relu.
 
 ### 0. Avant (5 min, lecture seule)
+
+Le CD de H0 reste actif : ne pas publier de release pendant la session, elle redéploierait H0 au
+milieu de la campagne (ou mettre le CD en pause, comme à l'étape 3).
 
 ```bash
 source .envrc
@@ -129,7 +151,12 @@ make orodruin-check                                        # attendu : armed
 S'il a été détruit, suivre `infra/orodruin/README.md`, « Déroulé » : `orodruin-plan`, puis
 `orodruin-up YES=1` et `orodruin-lock YES=1`, chacun après la relecture de son plan.
 
-### 3. La watch qui répond — option (a) (10 min)
+### 3. La watch qui répond — option (a) (facultative, 10 min)
+
+**Seulement si H0 a été remis en lecture seule** (étape 7). Sinon, la posture du 31/10 est déjà là :
+vérifier dans la console (page Glorfindel) que gondolin est en `non_disruptive`, et passer à
+l'étape 4. Un `make glorfindel-host-push` garde les modes en place sur H0 (depuis le 02/11) ; après
+un `make glorfindel-host-push HUMAN_ONLY=1`, les redonner dans la console.
 
 ```bash
 make glorfindel-host-cd-disable        # le CD en pause : aucune release ne redéploie H0 pendant la session
@@ -139,7 +166,7 @@ SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment create --assignee-object-id ${P} --assignee-principal-type ServicePrincipal \
   --role "Eregion Glorfindel Response" --scope ${SCOPE}
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=0
-make glorfindel-host-push              # .env et config (encore human_only partout)
+make glorfindel-host-push              # .env et config (le défaut human_only ; les modes en place sur H0 gardés, et dits)
 make glorfindel-host-start REF=<le même commit>
 make glorfindel-host-tunnel            # la console : page Glorfindel, gondolin → non_disruptive
 ```
@@ -148,9 +175,10 @@ make glorfindel-host-tunnel            # la console : page Glorfindel, gondolin 
 secours, hors de la vérification de CI3 (`infra/glorfindel-host/README.md`, « Au quotidien »).
 
 Le passage en `non_disruptive` ouvre le contrôle de préparation. Attendu : `ready`, puisque les
-droits viennent d'arriver. Une réserve se lit et se confirme, ou la session s'arrête là. bree reste
-en `human_only`, et `make glorfindel-host-ssh` puis `docker exec eregion-watch glorfindel list`
-montre le mode résolu par VM.
+droits viennent d'arriver. Une réserve se lit et se confirme, ou la session s'arrête là. Le 31/10,
+bree était restée en `human_only` ; la posture du 01/11 la met aussi en `non_disruptive`, par le
+même contrôle. `make glorfindel-host-ssh` puis `docker exec eregion-watch glorfindel list` montre le
+mode résolu par VM.
 
 ### 4. La campagne (30 à 45 min)
 
@@ -185,21 +213,29 @@ make glorfindel-host-containment CAMPAIGN=<id> FAULT_RUNS=<run Gothmog> # sinon,
 make glorfindel-host-campaign-report CAMPAIGN=<id>                      # report.md, section « Réponse »
 ```
 
+La mesure se lance seule, sans geste de plus. Le 31/10, elle écartait chaque run (« sa VM n'est pas
+inscrite »), puis butait sur les variables d'identité vides de compose ; BL1c l'a corrigée.
+
 Dans la console, à trois endroits :
 - la page **Annatar**, la campagne, encadré **RESPONSE** ;
 - l'**accueil**, les tuiles TIME TO CONTAIN et CONTAINED ALONE ;
 - la page **Gothmog**, le run de la panne et ses cycles.
 
-### 7. Le retour à l'état d'avant (10 min)
+### 7. Le retour en lecture seule (facultatif, 10 min)
+
+**Seulement pour remettre H0 en lecture seule** : depuis le 31/10, la posture de H0 garde le rôle,
+`GLORFINDEL_READ_ONLY=0` et les modes. Hors de ce cas, ne garder que les deux dernières lignes
+(`orodruin-stop`, `celebrimbor-stop`), vérifier que plus aucune isolation ni blocage ne reste
+sur gondolin (`glorfindel list`), et `make glorfindel-host-cd-enable` si le CD a été mis en pause.
 
 ```bash
-# console : gondolin → human_only ; plus aucune isolation ni blocage (glorfindel list)
+# console : gondolin et bree → human_only ; plus aucune isolation ni blocage (glorfindel list)
 # P et SCOPE viennent de l'étape 3 ; shell rouvert, les recalculer :
 P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment delete --assignee ${P} --role "Eregion Glorfindel Response" --scope ${SCOPE}
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=1
-make glorfindel-host-push              # config de nouveau forcée en human_only
+make glorfindel-host-push HUMAN_ONLY=1 # toutes les VM de nouveau en human_only
 make glorfindel-host-start REF=<le tag publié en service>   # la release d'avant, celle du CD
 make glorfindel-host-status            # bandeau lecture seule, aucune erreur
 az role assignment list --assignee ${P} --all -o table      # Reader et Log Analytics Reader seulement

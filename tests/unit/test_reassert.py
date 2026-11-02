@@ -1666,6 +1666,170 @@ def test_a_block_written_again_whole_is_put_back_again_once():
     assert not any("deuxième fois" in e["reason"] for e in escalations.pending())
 
 
+# ── SEC13 (V-16): a check that raises, said on one card ───────────────────────────────
+
+def _unverified(status=None):
+    return [e for e in escalations.all_escalations() if e["escalation_type"] == "unverified"
+            and (status is None or e["status"] == status)]
+
+
+@pytest.mark.parametrize("what", ["isolation", "block"])
+def test_a_check_that_keeps_raising_is_said_on_one_card_closed_when_it_passes(what):
+    """The reassertion's check raised (a role removed, the API down): a log line, at every
+    pass, for as long as it lasted — the isolation or the block unchecked, said nowhere an
+    operator looks. One card now, not one per pass; closed, with a note, once the check
+    passes again; a later failure, a new card."""
+    if what == "isolation":
+        _isolated()
+    else:
+        _save_block_state("vm", _IP, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
+                          placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}], threat_port=22)
+    c = _connector()
+    check = c.verify_isolation if what == "isolation" else c.verify_block_ip
+    check.side_effect = RuntimeError("(AuthorizationFailed) no read on the NSG")
+    reports = [reassert_active(c, _ACT) for _ in range(3)]
+    (card,) = _unverified()
+    assert card["status"] == "pending" and card["resource_id"] == _RID and card["occurrences"] == 1
+    assert "AuthorizationFailed" in card["reason"] and card["action"] == "review_unverified"
+    assert (card["action_params"] or {}).get("ip", "") == ("" if what == "isolation" else _IP)
+    assert [len(r) for r in reports] == [1, 0, 0] and reports[0][0]["outcome"] == "unverified"
+    c.isolate_vm.assert_not_called()
+    c.block_suspicious_ip.assert_not_called()
+    check.side_effect = None
+    assert reassert_active(c, _ACT) == []
+    (card,) = _unverified()
+    assert card["status"] == "resolved" and card.get("resolution")
+    check.side_effect = RuntimeError("(ServiceUnavailable)")
+    reassert_active(c, _ACT)
+    assert len(_unverified("pending")) == 1 and len(_unverified()) == 2
+
+
+def test_a_check_still_raising_once_acknowledged_is_not_said_again():
+    """Acknowledged by the operator while it still raises: silent until it passes — then a
+    new failure is a new card."""
+    _isolated()
+    c = _connector()
+    c.verify_isolation.side_effect = RuntimeError("(TooManyRequests)")
+    reassert_active(c, _ACT)
+    (card,) = _unverified()
+    escalations.resolve(card["id"])
+    for _ in range(2):
+        assert reassert_active(c, _ACT) == []
+    assert not _unverified("pending")
+    c.verify_isolation.side_effect = None
+    reassert_active(c, _ACT)
+    c.verify_isolation.side_effect = RuntimeError("(TooManyRequests)")
+    reassert_active(c, _ACT)
+    assert len(_unverified("pending")) == 1
+
+
+def test_a_check_raising_on_one_vm_says_it_for_that_vm_only():
+    """Two homonyms in two groups: one card each, by resource id; one passing closes its own."""
+    other = _RID.replace("/rg/", "/rg-b/")
+    _isolated()
+    _save_isolation_state(other, {"resource_id": other, "isolated_at": "2026-10-06T08:00:00+00:00",
+                                  "placements": []})
+    readiness.record_assessment(readiness._verdict("vm", []), other)
+    c = _connector()
+    c.verify_isolation.side_effect = lambda rid: (_ for _ in ()).throw(RuntimeError("(AuthorizationFailed)"))
+    reassert_active(c, _ACT)
+    assert sorted(e["resource_id"] for e in _unverified("pending")) == sorted([_RID, other])
+    c.verify_isolation.side_effect = lambda rid: (
+        {"verified": True} if rid == _RID else (_ for _ in ()).throw(RuntimeError("(AuthorizationFailed)")))
+    reassert_active(c, _ACT)
+    assert [e["resource_id"] for e in _unverified("pending")] == [other]
+
+
+def test_a_check_that_raised_closes_its_card_once_the_vm_is_released():
+    """Released (or unblocked) while its check raised: nothing left to check — the card closes
+    at the next pass, with a note. Not while a state can't be read: it may still hold it."""
+    from glorfindel.actions import _ISOLATION_STATE_DIR, _clear_isolation_state
+    from glorfindel.reassert import reassert_pass
+    _isolated()
+    c = _connector()
+    c.dry_run = True                         # no listing of the NSGs: the local passes only
+    c.verify_isolation.side_effect = RuntimeError("(AuthorizationFailed)")
+    reassert_pass(c, _ACT)
+    assert len(_unverified("pending")) == 1
+    _clear_isolation_state(_RID)
+    (_ISOLATION_STATE_DIR / "other--00000000.json").write_text("{")
+    reassert_pass(c, _ACT)
+    assert len(_unverified("pending")) == 1                     # unknown: kept
+    (_ISOLATION_STATE_DIR / "other--00000000.json").unlink()
+    reassert_pass(c, _ACT)
+    (card,) = _unverified()
+    assert card["status"] == "resolved" and card.get("resolution")
+
+
+@pytest.mark.parametrize("what", ["isolation", "block"])
+def test_a_check_that_cant_tell_never_closes_the_card_and_says_so(what):
+    """Review of SEC13: the card closed « the check passes again » on any answer that didn't
+    raise — `verified: None` included, Azure's « can't tell » (rules or NICs unreadable, their
+    precedence unknown); then nothing more was said (A0). An unknown keeps it open, said on the
+    same card with the error it gives; only a real answer closes it. On its own, too: a check
+    that can't tell from the start opens the card."""
+    if what == "isolation":
+        _isolated()
+    else:
+        _save_block_state("vm", _IP, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
+                          placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}], threat_port=22)
+    c = _connector()
+    check = c.verify_isolation if what == "isolation" else c.verify_block_ip
+    unknown = {"verified": None, "method": "nsg_check", "error": "non vérifiable : règles illisibles sur nsg"}
+    check.side_effect = RuntimeError("(AuthorizationFailed) no read on the NSG")
+    reassert_active(c, _ACT)
+    check.side_effect, check.return_value = None, unknown
+    for _ in range(2):
+        reassert_active(c, _ACT)
+    (card,) = _unverified()
+    assert card["status"] == "pending" and card["occurrences"] == 1
+    assert "première erreur : (AuthorizationFailed)" in card["reason"] and "règles illisibles" in card["reason"]
+    check.return_value = {"verified": True}
+    reassert_active(c, _ACT)
+    assert [e["status"] for e in _unverified()] == ["resolved"]
+    check.return_value = unknown
+    reassert_active(c, _ACT)
+    assert len(_unverified("pending")) == 1
+    check.return_value = {"verified": None, "method": "dry_run"}      # a dry run says nothing
+    assert reassert_active(c, _ACT) == [] and len(_unverified("pending")) == 1
+
+
+def test_the_card_keeps_the_last_error_of_a_check_that_keeps_raising():
+    """The card said the first error only: a role removed, then the API down, read as the role
+    still. First and last now, on the one card — written once per change, not at every pass."""
+    _isolated()
+    c = _connector()
+    c.verify_isolation.side_effect = RuntimeError("(AuthorizationFailed) first")
+    reassert_active(c, _ACT)
+    c.verify_isolation.side_effect = RuntimeError("(ServiceUnavailable) last")
+    reassert_active(c, _ACT)
+    (card,) = _unverified()
+    assert "première erreur : (AuthorizationFailed) first ; dernière : (ServiceUnavailable) last" in card["reason"]
+    stamp = card["updated_at"]
+    reassert_active(c, _ACT)
+    (card,) = _unverified()
+    assert card["updated_at"] == stamp and card["occurrences"] == 1
+
+
+def test_an_acknowledged_check_card_is_its_own_not_a_longer_ips():
+    """Review of SEC13: the acknowledgement was read by prefix — the card of …-10.0.0.1 took
+    the latest card of …-10.0.0.10 for its own, was read as not acknowledged, and was said
+    again. Read by its exact signal id now."""
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    for ip in ("10.0.0.1", "10.0.0.10"):
+        _save_block_state("vm", ip, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r", placements=placed,
+                          threat_port=22)
+    c = _connector()
+    c.verify_block_ip.side_effect = RuntimeError("(AuthorizationFailed)")
+    reassert_active(c, _ACT)
+    by_ip = {e["action_params"]["ip"]: e for e in _unverified()}
+    assert set(by_ip) == {"10.0.0.1", "10.0.0.10"}
+    escalations.resolve(by_ip["10.0.0.1"]["id"])
+    for _ in range(2):
+        reassert_active(c, _ACT)
+    assert [e["action_params"]["ip"] for e in _unverified("pending")] == ["10.0.0.10"]
+    assert len(_unverified()) == 2
+
 @pytest.mark.parametrize("merged", [False, True], ids=["perimeter", "merged"])
 @pytest.mark.parametrize("listed", [("db", "web"), ("web", "db")])
 def test_a_perimeter_is_put_back_before_the_vm_blocks_of_its_subnet(monkeypatch, listed, merged):

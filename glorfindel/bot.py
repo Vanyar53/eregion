@@ -33,6 +33,12 @@ _WEEKLY_STORE = Path.home() / ".glorfindel" / "bot_weekly.json"
 _WEEKLY_HOUR_UTC = 8
 
 
+def _write_store(path: Path, data) -> None:
+    """A bot's file, written whole and owner-only (0600), as every state (SEC13, V-27)."""
+    from glorfindel.response.state import _atomic_write_text
+    _atomic_write_text(path, json.dumps(data))
+
+
 def _load_posted() -> set[str]:
     if _POSTED_STORE.exists():
         return set(json.loads(_POSTED_STORE.read_text()))
@@ -40,8 +46,7 @@ def _load_posted() -> set[str]:
 
 
 def _save_posted(ids: set[str]) -> None:
-    _POSTED_STORE.parent.mkdir(parents=True, exist_ok=True)
-    _POSTED_STORE.write_text(json.dumps(list(ids)))
+    _write_store(_POSTED_STORE, list(ids))
 
 
 def _load_threads() -> dict[str, int]:
@@ -52,8 +57,7 @@ def _load_threads() -> dict[str, int]:
 
 
 def _save_threads(threads: dict[str, int]) -> None:
-    _THREADS_STORE.parent.mkdir(parents=True, exist_ok=True)
-    _THREADS_STORE.write_text(json.dumps(threads))
+    _write_store(_THREADS_STORE, threads)
 
 
 # Escalation types whose card is anchored on a VM the detection may not concern (AL1;
@@ -170,8 +174,7 @@ def _load_messages() -> dict[str, int]:
 
 
 def _save_messages(messages: dict[str, int]) -> None:
-    _MESSAGES_STORE.parent.mkdir(parents=True, exist_ok=True)
-    _MESSAGES_STORE.write_text(json.dumps(messages))
+    _write_store(_MESSAGES_STORE, messages)
 
 
 def _posted_at(esc: dict):
@@ -283,8 +286,7 @@ def _load_synced() -> dict[str, str]:
 
 
 def _save_synced(synced: dict[str, str]) -> None:
-    _SYNCED_STORE.parent.mkdir(parents=True, exist_ok=True)
-    _SYNCED_STORE.write_text(json.dumps(synced))
+    _write_store(_SYNCED_STORE, synced)
 
 
 def _card_signature(esc: dict) -> str:
@@ -383,21 +385,48 @@ class ButtonPolicy:
         return bool(held & self.roles)
 
 
-async def _refuse(interaction: discord.Interaction, esc_id: str, policy) -> None:
+async def _refuse(interaction: discord.Interaction, esc_id: str, policy, command: str = "") -> None:
+    """Refused, said to the clicker and logged. `command`: a slash command's name, refused
+    under the same policy as the buttons (SEC13, R-16)."""
     user = interaction.user
     why = ("aucun utilisateur ni rôle autorisé (fermé par défaut)"
            if not isinstance(policy, ButtonPolicy) or not policy.configured
            else "absent des utilisateurs et rôles autorisés")
-    custom_id = (getattr(interaction, "data", None) or {}).get("custom_id", "?")
+    if command:
+        where, what = f"/{command}", "Command"
+    else:
+        custom_id = (getattr(interaction, "data", None) or {}).get("custom_id", "?")
+        where, what = f"{esc_id[:8]} [{custom_id}]", "Button"
     _console.print(
-        f"[yellow]Button refused: user {getattr(user, 'id', '?')} "
-        f"({getattr(user, 'display_name', '?')}) on {esc_id[:8]} [{custom_id}] — {why}[/yellow]"
+        f"[yellow]{what} refused: user {getattr(user, 'id', '?')} "
+        f"({getattr(user, 'display_name', '?')}) on {where} — {why}[/yellow]"
     )
     await interaction.response.send_message(
-        f"✗ Bouton refusé : {why}. Un opérateur ajoute ton id Discord à "
-        f"`{_ALLOWED_USERS_ENV}` (ou un de tes rôles à `{_ALLOWED_ROLES_ENV}`).",
+        f"✗ {'Commande' if command else 'Bouton'} refusé{'e' if command else ''} : {why}. Un opérateur "
+        f"ajoute ton id Discord à `{_ALLOWED_USERS_ENV}` (ou un de tes rôles à `{_ALLOWED_ROLES_ENV}`).",
         ephemeral=True,
     )
+
+
+async def _pending_reply(interaction: discord.Interaction) -> None:
+    """/pending: the cards that wait — VM names, actions — to an allowed user only, under the
+    buttons' policy (SEC13, R-16): refused and logged otherwise, everyone with no list."""
+    policy = getattr(interaction.client, "button_policy", None)
+    if not (isinstance(policy, ButtonPolicy) and policy.allows(interaction.user)):
+        await _refuse(interaction, "", policy, command="pending")
+        return
+    escs = esc_module.pending()
+    if not escs:
+        await interaction.response.send_message("✓ Aucune escalade en attente.", ephemeral=True)
+        return
+    lines = []
+    for e in escs[:5]:
+        label = _ACTION_LABELS.get(e["action"]) or discord_text(e["action"])
+        short = e["resource_id"].split("/")[-1]
+        lines.append(f"• {discord_code(e['id'][:8])} — **{label}** sur {discord_code(short)}")
+    if len(escs) > 5:
+        lines.append(f"_... et {len(escs) - 5} autre(s)_")
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 def _glorfindel_bin() -> str:
@@ -848,24 +877,7 @@ class GlorfindelBot(discord.Client):
             name="pending", description="Lister les escalades en attente"
         )
         async def pending_cmd(interaction: discord.Interaction) -> None:
-            escs = esc_module.pending()
-            if not escs:
-                await interaction.response.send_message(
-                    "✓ Aucune escalade en attente.", ephemeral=True
-                )
-                return
-            lines = []
-            for e in escs[:5]:
-                label = _ACTION_LABELS.get(e["action"]) or discord_text(e["action"])
-                short = e["resource_id"].split("/")[-1]
-                lines.append(
-                    f"• {discord_code(e['id'][:8])} — **{label}** sur {discord_code(short)}"
-                )
-            if len(escs) > 5:
-                lines.append(f"_... et {len(escs) - 5} autre(s)_")
-            await interaction.response.send_message(
-                "\n".join(lines), ephemeral=True
-            )
+            await _pending_reply(interaction)
 
         await self.tree.sync()
         self._restore_views()
@@ -1072,8 +1084,7 @@ class GlorfindelBot(discord.Client):
         to_judge = len(esc_module.to_judge(now - timedelta(days=7)))
         await channel.send(_weekly_summary(report, to_judge, now))
         self._weekly_last = now.date().isoformat()
-        _WEEKLY_STORE.parent.mkdir(parents=True, exist_ok=True)
-        _WEEKLY_STORE.write_text(json.dumps({"last": self._weekly_last}))
+        _write_store(_WEEKLY_STORE, {"last": self._weekly_last})
         return True
 
     async def _thread_of(self, resource_id: str):

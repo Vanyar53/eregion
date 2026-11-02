@@ -152,7 +152,8 @@ rules:
       | where SyslogMessage matches regex @"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND="
       | where SyslogMessage !has "NOT in sudoers"
             and SyslogMessage !has "authentication failure"
-      | project TimeGenerated, Computer, _ResourceId, SyslogMessage
+      // ProcessName handed on in the row: Glorfindel reads the emitter as this rule does (SEC13).
+      | project TimeGenerated, Computer, _ResourceId, ProcessName, SyslogMessage
       // One row per VM and distinct line, not `limit 1`: the limit ran on the server before
       // the per-VM filter, so a benign sudo on another VM hid the attack (third review, T7).
       // Nor one row per VM (ADM1): an administrator's expected sudo, the latest, would hide

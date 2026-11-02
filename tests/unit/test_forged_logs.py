@@ -151,6 +151,20 @@ def test_a_sudo_to_root_is_an_escalation(message):
     assert row["SyslogMessage"] == message and row["_ResourceId"] == VM
 
 
+@pytest.mark.parametrize("message", [_SUDO_OK, "alice : PWD=/home/alice   USER=root   COMMAND=/usr/bin/id"])
+def test_the_shipped_rules_row_is_characterized_by_its_emitter(message):
+    """SEC13 (R-18): normalize_row reads the emitter (ProcessName) as the rule does — the
+    shipped rule hands it on in its row, so T1548 stays characterized (an autonomous isolate
+    allowed); the same line from another program, through a rule of the client's, does not."""
+    from glorfindel.detection_rules import has_recognized_indicator, normalize_row
+    [row] = _sudo([_line(message, process="sudo")])
+    assert row["ProcessName"] == "sudo"
+    assert normalize_row(row, "T1548.003")["indicator_key"] == "privilege_escalation"
+    assert has_recognized_indicator(row, "T1548.003") is True
+    client = {k: v for k, v in _line(message, process="app").items() if k in row}
+    assert has_recognized_indicator(client, "T1548.003") is False
+
+
 @pytest.mark.parametrize("message,process", [
     # another program's line holding sudo's words (a user name, a command line, an app log)
     (f"Invalid user sudo : TTY=x ; USER=root ; COMMAND=/bin/sh from {PEER} port 22", "sshd"),

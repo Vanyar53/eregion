@@ -407,8 +407,9 @@ class PostureChecker:
         return {}
 
     def _save_state(self) -> None:
-        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_FILE.write_text(json.dumps(self._state, indent=2))
+        """Written whole, owner-only (0600), as every state (SEC13, V-27)."""
+        from glorfindel.response.state import _atomic_write_text
+        _atomic_write_text(_STATE_FILE, json.dumps(self._state, indent=2))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

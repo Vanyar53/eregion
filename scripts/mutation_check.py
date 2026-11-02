@@ -1175,8 +1175,8 @@ MUTANTS = [
     ("M282", "any role allows a click, not only an allowed one (M-3)", "glorfindel/bot.py",
      "        return bool(held & self.roles)\n", "        return bool(held)\n"),
     ("M283", "a refused click is not logged (M-3)", "glorfindel/bot.py",
-     '    _console.print(\n        f"[yellow]Button refused:',
-     '    (lambda *a: None)(\n        f"[yellow]Button refused:'),
+     '    _console.print(\n        f"[yellow]{what} refused:',          # a button's or a command's (SEC13)
+     '    (lambda *a: None)(\n        f"[yellow]{what} refused:'),
     ("M284", "the bot's token reaches every container again (M-3)", "docker-compose.yml",
      "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n",
      "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}\n"),
@@ -2615,8 +2615,8 @@ MUTANTS += [
      "        unread = self._unreadable_reason()\n        if unread:\n            return {\"removed\": False, "
      "\"why\": unread}\n", ""),
     ("M1212", "a state of the wrong shape reads as readable (SEC3, N-06)", STA,
-     "            if not _readable_shape(data, shape):\n",
-     "            if data is None:\n"),
+     "            if not (shape and _readable_shape(data, shape)):\n",
+     "            if not (shape and data is not None):\n"),
     ("M1213", "remove_orphan_rule writes an NSG of another subscription (SEC3, N-07)", AZC,
      "        if target and mine and target.lower() != mine.lower():\n            raise WrongSubscriptionError(\n"
      "                f\"{nsg_id.rstrip",
@@ -3735,8 +3735,9 @@ MUTANTS += [
      STA, "    n, aside = 1, _ISOLATION_STATE_DIR / ASIDE_DIR / f.name\n",
      "    n, aside = 1, f.with_name(f\"{f.stem}.unreadable.json\")\n"),
     ("M1528", "a file set aside, repaired, leaves the unreadable list (SEC4b, review 2)", STA,
-     '        out += [f"{_ISOLATION_STATE_DIR.name}/{ASIDE_DIR}/{f.name}" for f in aside.iterdir() if f.is_file()]\n',
-     "        pass\n"),
+     # One loop over the three directories since SEC13 (R-07): the set-aside one taken out.
+     '                                    (_ISOLATION_STATE_DIR / ASIDE_DIR, None, f"{iso}/{ASIDE_DIR}")):\n',
+     "                                    ):\n"),
     ("M1529", "an isolation whose original is unknown says nothing until its release (SEC4b, review 2)", ISO,
      "        unknown = original_unknown_nics(merged)\n", "        unknown = []\n"),
     ("M1530", "the card asks to repair a file set aside — repaired, it would not be read (SEC4b, review 2)", RCA,
@@ -7622,6 +7623,100 @@ TESTS.update({
     "M2898": "tests/unit/test_glorfindel_host.py",
     "M2899": "tests/unit/test_glorfindel_host.py",
 })
+# SEC13 (#419): what was left on Glorfindel's side of the second counter-audit — the incident
+# registry under its flock and written whole (V-10), every state owner-only and whole (V-27),
+# /pending under the buttons' policy (R-16), a state directory that can't be listed (R-07), a
+# reassertion check that raises said on one card (V-16), a privilege escalation read on sudo's own
+# line (R-18). M2915–M2936; M2937–M2939 after its review.
+INC = "glorfindel/incidents.py"
+_SEC13_INC = "tests/unit/test_locks.py::test_two_processes_lose_no_incident_and_no_reader_sees_half_a_registry"
+_SEC13_DIR = ("tests/unit/test_unreadable_state.py tests/unit/test_orphan_sweep.py::"
+              "test_a_state_directory_that_cant_be_read_keeps_the_rule_of_a_recreated_nic")
+_SEC13_V16 = "tests/unit/test_reassert.py -k check_"
+_SEC13_R18 = "tests/unit/test_detection_rules.py tests/unit/test_forged_logs.py"
+MUTANTS += [
+    ("M2915", "the incident registry rewritten under a thread lock only: two processes lose incidents (SEC13, V-10)",
+     INC, '        with self._lock, _file_lock(self._path.with_name(self._path.name + ".lock")):\n',
+     "        with self._lock:\n"),
+    ("M2916", "the incident registry rewritten in place: a reader sees half of it, readable by all (SEC13, V-10)",
+     INC, '        _atomic_write_text(self._path, "".join(',
+     '        self._path.write_text("".join('),
+    ("M2917", "the posture state rewritten in place, 0644 (SEC13, V-27)", "glorfindel/posture.py",
+     "        _atomic_write_text(_STATE_FILE, json.dumps(self._state, indent=2))\n",
+     "        _STATE_FILE.write_text(json.dumps(self._state, indent=2))\n"),
+    ("M2918", "the discovery cache rewritten in place, 0644 (SEC13, V-27)", "glorfindel/discovery.py",
+     "        _atomic_write_text(self._path, json.dumps([asdict(a) for a in self._sorted()], indent=2))\n",
+     "        self._path.write_text(json.dumps([asdict(a) for a in self._sorted()], indent=2))\n"),
+    ("M2919", "the bot's files rewritten in place, 0644 (SEC13, V-27)", BOT,
+     "    _atomic_write_text(path, json.dumps(data))\n", "    path.write_text(json.dumps(data))\n"),
+    ("M2920", "the readiness state readable by all (SEC13, V-27)", "glorfindel/readiness.py",
+     "    _atomic_write_text(_STATE_FILE, json.dumps(data, indent=2, default=str))\n",
+     "    _atomic_write_text(_STATE_FILE, json.dumps(data, indent=2, default=str), mode=0o644)\n"),
+    ("M2921", "/pending lists the waiting cards to anyone in the channel (SEC13, R-16)", BOT,
+     '    if not (isinstance(policy, ButtonPolicy) and policy.allows(interaction.user)):\n'
+     '        await _refuse(interaction, "", policy, command="pending")\n',
+     '    if False:\n        await _refuse(interaction, "", policy, command="pending")\n'),
+    ("M2922", "a state directory that can't be listed reads as empty: « no state » (SEC13, R-07)", STA,
+     '        except OSError:\n            names, out = [], out + [f"{label}/"]\n',
+     "        except OSError:\n            continue\n"),
+    ("M2923", "an isolation's check that raises is a log line only (SEC13, V-16)", R,
+     "        say_unverified(vm, rid, exc, report)\n", "        pass\n"),
+    ("M2924", "a block's check that raises is a log line only (SEC13, V-16)", R,
+     "        say_unverified(vm, rid, exc, report, ip=ip)\n", "        pass\n"),
+    ("M2925", "a check that keeps raising is said at every pass (SEC13, V-16)", RCA,
+     "    if waiting is not None:                     # said: its text kept to the last error\n",
+     "    if False:\n"),
+    ("M2926", "a check still raising, its card acknowledged, is said again at every pass (SEC13, V-16)", RCA,
+     '    if sid in _UNVERIFIED_OPEN and last is not None and last.get("status") == "resolved" and not last.get("resolution"):\n', "    if False:\n"),
+    ("M2927", "the card of a check that raised stays open once the check passes (SEC13, V-16)", R,
+     "        unverified_over(vm, rid)               # it answered: the check passes again\n", "        pass\n"),
+    ("M2928", "an acknowledged card silences the check's next failure for ever (SEC13, V-16)", RCA,
+     "    _UNVERIFIED_OPEN.discard(sid)\n    for e in _history():\n", "    for e in _history():\n"),
+    ("M2929", "the card of a check that raised closes while a state can't be read (SEC13, V-16)", RCA,
+     "    if unreadable_states():\n        return\n    held =", "    held ="),
+    ("M2930", "the card of a check that raised stays open once its VM is released (SEC13, V-16)", R,
+     "    unverified_released()                     # a check that raised, its VM released since (V-16)\n", ""),
+    ("M2931", "a check that raised keyed by the VM's name: a homonym's card stands for both (SEC13, V-16)", RCA,
+     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\"",
+     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}\""),
+    ("M2932", "a privilege escalation read whatever program wrote the line (SEC13, R-18)",
+     "glorfindel/detection_rules.py",
+     '    return (row.get("ProcessName") == "sudo" and bool(_SUDO_TO_ROOT.search(message))\n',
+     "    return (bool(_SUDO_TO_ROOT.search(message))\n"),
+    ("M2933", "a privilege escalation read from « USER=root » anywhere in a Syslog line (SEC13, R-18)",
+     "glorfindel/detection_rules.py",
+     '        if col == "SyslogMessage" and _sudo_to_root(row):\n',
+     '        if col == "SyslogMessage" and "USER=root" in str(value):\n'),
+    ("M2934", "sudo's form not read: any sudo line with USER=root is an escalation (SEC13, R-18)",
+     "glorfindel/detection_rules.py",
+     '    return (row.get("ProcessName") == "sudo" and bool(_SUDO_TO_ROOT.search(message))\n',
+     '    return (row.get("ProcessName") == "sudo" and "USER=root" in message\n'),
+    ("M2935", "the shipped rule's exclusions not read: a refusal is an escalation (SEC13, R-18)",
+     "glorfindel/detection_rules.py",
+     '            and "not in sudoers" not in lowered and "authentication failure" not in lowered)\n', ")\n"),
+    ("M2936", "the shipped sudo rule no longer hands on its emitter: T1548 uncharacterized (SEC13, R-18)",
+     RULES_YAML, "      | project TimeGenerated, Computer, _ResourceId, ProcessName, SyslogMessage\n",
+     "      | project TimeGenerated, Computer, _ResourceId, SyslogMessage\n"),
+]
+TESTS.update({"M2915": _SEC13_INC, "M2916": _SEC13_INC,
+              "M2917": "tests/unit/test_posture.py", "M2918": "tests/unit/test_discovery.py",
+              "M2919": "tests/unit/test_bot.py", "M2920": "tests/unit/test_readiness.py",
+              "M2921": "tests/unit/test_bot.py", "M2922": _SEC13_DIR})
+TESTS.update({f"M{n}": _SEC13_V16 for n in range(2923, 2932)})
+TESTS.update({f"M{n}": _SEC13_R18 for n in range(2932, 2937)})
+# Its review: a check that can't tell (`verified: None`) closed the card; the acknowledgement read
+# by prefix; the card kept the first error. M2937–M2939.
+MUTANTS += [
+    ("M2937", "a check that can't tell (verified: None) closes the card: « the check passes again » (SEC13, V-16)",
+     R, '    if verification.get("verified") is not None:\n        unverified_over(vm, rid)               # it answered',
+     "    if True:\n        unverified_over(vm, rid)               # it answered"),
+    ("M2938", "an acknowledged check card read by prefix: 10.0.0.1 takes 10.0.0.10's card (SEC13, V-16)", RCA,
+     '    if sid in _UNVERIFIED_OPEN and last is not None and last.get("status") == "resolved" and not last.get("resolution"):\n',
+     "    if sid in _UNVERIFIED_OPEN and _last_word(sid, sid):\n"),
+    ("M2939", "the card of a check that keeps failing keeps its first error (SEC13, V-16)", RCA,
+     '        if waiting.get("unverified_last", error) != error:\n', "        if False:\n"),
+]
+TESTS.update({f"M{n}": _SEC13_V16 for n in (2937, 2938, 2939)})
 # SEC10 (#416): the console's token in the console's own directory, its former place retired, never
 # printed; a session dated and bounded; a rotation that ends every session of the former token.
 _SEC10 = "tests/unit/test_console.py"

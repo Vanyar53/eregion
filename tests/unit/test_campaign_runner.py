@@ -274,3 +274,87 @@ def test_default_reset_failing_exit_is_recorded_as_failed(tmp_path, monkeypatch)
     )
     status = runner_mod._default_reset("/subscriptions/s/…/vm")
     assert status == "failed: exit 2"
+
+
+# ── #358: a campaign launched by hand on Orodruin takes the request's lock ────────────────────
+
+def _cli_campaign(tmp_path, monkeypatch, *args, state="planned"):
+    """`annatar campaign run` on a campaign of tmp, its runner replaced: what it was asked."""
+    from types import SimpleNamespace
+
+    from click.testing import CliRunner
+
+    import annatar.campaign.runner as runner_mod
+    from annatar.cli import cli
+    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001")], state=state)
+    ran = []
+
+    def runner(cdir, dry_run=False, without_glorfindel=False):
+        def run():
+            ran.append(dry_run)
+            return SimpleNamespace(campaign_id=cdir.name, state="done", without_glorfindel=False,
+                                   results={"executed": 0, "detected": 0, "missed": 0, "skipped": 0,
+                                            "errors": 0})
+        return SimpleNamespace(run=run)
+    monkeypatch.setattr(runner_mod, "CampaignRunner", runner)
+    res = CliRunner().invoke(cli, ["campaign", "run", cdir.name, "--runs-dir", str(tmp_path),
+                                   "--no-report", *args])
+    return res, ran, cdir
+
+
+def test_a_campaign_by_hand_during_a_request_is_refused_and_ratifies_nothing(tmp_path, monkeypatch):
+    from eregion_core.exercise_runner import request_lock
+    with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):
+        res, ran, cdir = _cli_campaign(tmp_path, monkeypatch, "--yes")
+    assert res.exit_code == 1, res.output
+    said = " ".join(res.output.split())   # rich folds the line
+    assert "refused — busy: request r-20261031T080000Z-abcdef runs on this Orodruin" in said
+    assert ran == [] and CampaignManifest.load(cdir).state == "planned"
+
+
+def test_a_preview_of_a_campaign_takes_no_lock(tmp_path, monkeypatch):
+    from eregion_core.exercise_runner import request_lock
+    with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):
+        res, ran, _ = _cli_campaign(tmp_path, monkeypatch, "--dry-run")
+    assert res.exit_code == 0, res.output
+    assert ran == [True]
+
+
+def test_a_request_during_a_campaign_by_hand_is_refused_naming_the_campaign(tmp_path, monkeypatch):
+    """While the campaign runs, the lock is its own: a request is refused, and told why."""
+    from types import SimpleNamespace
+
+    from click.testing import CliRunner
+
+    import annatar.campaign.runner as runner_mod
+    from annatar.cli import cli
+    from eregion_core.exercise_runner import Busy, request_lock
+    cdir = _make_campaign(tmp_path, [_entry(1, "T1110.001")])
+    seen = []
+
+    def runner(cdir, dry_run=False, without_glorfindel=False):
+        def run():
+            with pytest.raises(Busy) as e:
+                with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):
+                    pass
+            seen.append(str(e.value))
+            return SimpleNamespace(campaign_id=cdir.name, state="done", without_glorfindel=False,
+                                   results={"executed": 1, "detected": 1, "missed": 0, "skipped": 0,
+                                            "errors": 0})
+        return SimpleNamespace(run=run)
+    monkeypatch.setattr(runner_mod, "CampaignRunner", runner)
+    res = CliRunner().invoke(cli, ["campaign", "run", cdir.name, "--runs-dir", str(tmp_path), "--no-report"])
+    assert res.exit_code == 0, res.output
+    assert seen == [f"campaign {cdir.name} runs on this Orodruin: one at a time — wait for its end, "
+                    "or stop it (make orodruin-kill)"]
+    with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):   # let go once it is over
+        pass
+
+
+def test_a_holder_whose_name_looks_like_markup_is_said_as_it_is(tmp_path, monkeypatch):
+    """#388's review: rich never reads the holder's name, nor the campaign's id, as markup."""
+    from eregion_core.exercise_runner import request_lock
+    with request_lock(tmp_path, "request [/red][bold]x"):
+        res, ran, _ = _cli_campaign(tmp_path, monkeypatch, "--yes")
+    assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
+    assert "busy: request [/red][bold]x runs" in " ".join(res.output.split()) and ran == []

@@ -1197,7 +1197,8 @@ lock:
 	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
 	$(UV) pip compile requirements/audit.in $(LOCK_FLAGS) -o requirements/audit.txt
-	-@$(MAKE) --no-print-directory audit
+	@echo "" && echo "Les avis connus des verrous écrits (make audit, à recopier dans la PR) :"
+	@$(MAKE) --no-print-directory audit || echo "⚠ make audit n'a pas pu lire les avis (réseau ? son venv ?) : le relancer avant la PR — make lock n'échoue pas pour autant." >&2
 
 # CI2 (#268) : les avis connus des trois verrous et de celui de pip-audit, tels qu'ils sont
 # (pip-audit --require-hashes --disable-pip : rien n'est résolu, seul le service des avis est
@@ -1207,10 +1208,12 @@ lock:
 AUDIT_VENV ?= .venv-audit
 PIP_AUDIT  ?= $(AUDIT_VENV)/bin/pip-audit
 LOCKS       = requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt requirements/audit.txt
+# R-20 (SEC14) : les avis acceptés, chacun avec sa raison — dits comme tels, jamais rouges.
+AUDIT_ACCEPTED = requirements/audit-accepted.json
 audit:
 	@[ -x "$(PIP_AUDIT)" ] || { python3 -m venv $(AUDIT_VENV) \
 	  && $(AUDIT_VENV)/bin/pip install -q --require-hashes -r requirements/audit.txt; }
-	@python3 scripts/pip_audit_issues.py report --pip-audit "$(PIP_AUDIT)" $(LOCKS)
+	@python3 scripts/pip_audit_issues.py report --pip-audit "$(PIP_AUDIT)" --accepted $(AUDIT_ACCEPTED) $(LOCKS)
 
 test:
 	$(PYTHON) -m pytest tests/ -v

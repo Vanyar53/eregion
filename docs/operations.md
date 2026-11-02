@@ -1308,8 +1308,19 @@ rafraîchissement du verrou sans contrôle).
   Une erreur de GitHub sur un avis ou une issue n'arrête pas les autres : le run se finit, dit
   chaque erreur, et sort en 2. Dans les autres cas, le run est vert.
 - **`make lock` dit les avis du verrou qu'il vient d'écrire** (`make audit`, N-16), sans jamais
-  échouer : c'est une information pour la PR de montée. `make audit` seul fait la même chose à
-  tout moment. La première fois, il crée `.venv-audit/` depuis `requirements/audit.txt`.
+  échouer : c'est une information pour la PR de montée, sous un titre (« Les avis connus des verrous
+  écrits ») ; un `make audit` qui n'a pas pu tourner (réseau, son venv) est dit, à relancer avant la
+  PR (SEC14). `make audit` seul fait la même chose à tout moment. La première fois, il crée
+  `.venv-audit/` depuis `requirements/audit.txt`.
+- **Les avis acceptés, chacun avec sa raison** (SEC14, R-20) : `requirements/audit-accepted.json`
+  (`package`, `id`, `reason` écrite, `since`). Les quatre avis de chromadb 1.5.9 (au 02/11, sans
+  version corrigée) visent son serveur HTTP — l'autorisation par locataire, du code exécuté par ses
+  points d'entrée de collections ; Eregion n'utilise chromadb qu'embarqué
+  (`chromadb.PersistentClient`, `glorfindel/memory.py`, `analysis/campaign_report.py`) : aucun
+  serveur démarré ni exposé. Un avis accepté est dit comme tel (`make audit`, la CI), jamais rouge ;
+  un avis accepté qui n'est plus trouvé est dit, à retirer de la liste. Une liste dont une entrée n'a
+  pas sa forme (une raison vide ou trop courte, une date absente) est refusée. Les issues
+  hebdomadaires n'en dépendent pas : un humain les ferme (« non prévu »).
 
 ```bash
 make audit                              # les avis connus des verrous, celui de pip-audit compris (lecture seule)

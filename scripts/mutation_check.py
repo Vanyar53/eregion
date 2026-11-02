@@ -3893,7 +3893,7 @@ MUTANTS += [
     ("M1158", "pip-audit resolves the lock with pip instead of reading it (CI2, N-16)", PAI,
      '"--require-hashes", "--disable-pip",', '"--require-hashes",'),
     ("M1159", "make lock fails when its audit cannot run (CI2, N-16)", MAKE,
-     "\t-@$(MAKE) --no-print-directory audit\n", "\t@$(MAKE) --no-print-directory audit\n"),
+     "\t@$(MAKE) --no-print-directory audit || echo ", "\t@$(MAKE) --no-print-directory audit && echo "),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_pip_audit_issues.py" for n in range(1150, 1160)})
 # CI2, after the 5.5 review: who may hold a key (the workflow's issues only, every field of its
@@ -7457,6 +7457,14 @@ MUTANTS += [
      "        if any(s not in known for s in scripts):\n"),
 ]
 TESTS["M2958"] = "tests/unit/test_injector_guards.py"
+
+# SEC14 (#420, P-03): an advisory with a fix that no human accepted makes a push or a pull request red.
+MUTANTS += [
+    ("M2959", "an advisory with a fix that no one accepted lets a pull request through (P-03)",
+     "scripts/pip_audit_issues.py",
+     "    due = [a for a in advs if a.fixes and not acceptance(a, accepted)]\n", "    due = []\n"),
+]
+TESTS["M2959"] = "tests/unit/test_pip_audit_issues.py"
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

@@ -3,6 +3,13 @@
 
   pip_audit_issues.py issues LOCK...   in GitHub Actions (pip-audit.yml): weekly and by hand
   pip_audit_issues.py report LOCK...   make lock, make audit: says what it finds, exit 0
+  pip_audit_issues.py pr LOCK...       on each push and pull request (ci.yml, SEC14 P-03): says
+                                       what it finds; red only for an advisory that has a fix and
+                                       is not accepted — informative while none has one
+
+`--accepted FILE` (requirements/audit-accepted.json): the advisories a human accepted, each with
+its reason (R-20) — said as accepted, never red; an accepted one no longer found is said, to be
+removed from the file. The weekly issues are not changed by it: a human closes them.
 
 Each lock (requirements/dev.txt, glorfindel.txt, annatar.txt) is read by pip-audit as it is:
 `--require-hashes --disable-pip`, so nothing is resolved — the versions are the lock's, and only
@@ -335,26 +342,80 @@ def reconcile(advs: list[Advisory], audited: set[str],
 
 # ── main ───────────────────────────────────────────────────────────────────────────────
 
-def summary(advs: list[Advisory]) -> str:
+def load_accepted(path: str) -> list[dict]:
+    """The advisories a human accepted (R-20): ``{"accepted": [{"package", "id", "reason",
+    "since"}]}`` — each field of its shape, a reason written; anything else refuses the file
+    (ValueError): an acceptance is never guessed."""
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    items = doc.get("accepted") if isinstance(doc, dict) else None
+    if not isinstance(items, list):
+        raise ValueError(f"{path}: no list « accepted »")
+    for i, a in enumerate(items):
+        if not (isinstance(a, dict) and set(a) == {"package", "id", "reason", "since"}
+                and isinstance(a["package"], str) and PACKAGE.match(a["package"])
+                and isinstance(a["id"], str) and ID.match(a["id"])
+                and isinstance(a["reason"], str) and len(a["reason"].strip()) >= 20
+                and isinstance(a["since"], str) and re.match(r"^\d{4}-\d{2}-\d{2}$", a["since"])):
+            raise ValueError(f"{path}: entry {i} is not {{package, id, reason (written), since (YYYY-MM-DD)}}")
+    return items
+
+
+def acceptance(adv: Advisory, accepted: list[dict]) -> dict | None:
+    """The human acceptance of this advisory: its package, and one of its identifiers."""
+    return next((a for a in accepted if a["package"] == adv.package and a["id"] in adv.ids), None)
+
+
+def summary(advs: list[Advisory], accepted: list[dict] = ()) -> str:
     if not advs:
         return "pip-audit : aucun avis connu."
     lines = [f"pip-audit : {len(advs)} avis."]
     for a in advs:
         where = "; ".join(f"{lock} {', '.join(sorted(vs))}" for lock, vs in sorted(a.locks.items()))
         others = sorted(a.ids - {a.primary})
+        ok = acceptance(a, accepted)
         lines.append(f"- {a.package} · {a.primary}" + (f" ({', '.join(others)})" if others else "")
-                     + f" — {where} — corrigée : {', '.join(a.fixes) or 'aucune encore'}")
+                     + f" — {where} — corrigée : {', '.join(a.fixes) or 'aucune encore'}"
+                     + (f" — acceptée le {ok['since']} : {ok['reason']}" if ok else ""))
     return "\n".join(lines)
+
+
+def pr_verdict(advs: list[Advisory], accepted: list[dict], audited: set[str], failed: list[str]) -> int:
+    """On a push or a pull request (P-03): red (1) only for an advisory with a fix that no human
+    accepted — the bump is due. Without a fix, or accepted, informative; an audit that failed is
+    said, never red (the weekly run is). An acceptance no longer found is said, to be removed."""
+    due = [a for a in advs if a.fixes and not acceptance(a, accepted)]
+    for a in advs:
+        if a not in due and not acceptance(a, accepted):
+            print(f"::warning::{a.package} {a.primary} : aucune version corrigée encore — à suivre")
+    for a in due:
+        print(f"::error::{a.package} {a.primary} : corrigée en {', '.join(a.fixes)} — monter le verrou "
+              "(make lock, puis le harnais), ou l'accepter avec sa raison (requirements/audit-accepted.json)")
+    for lock in failed:
+        print(f"::warning::pip-audit {lock} : échec — rien n'est dit de ce verrou ici (le passage hebdomadaire le dit)")
+    if not failed:
+        for a in accepted:
+            if not any(acceptance(adv, [a]) for adv in advs):
+                print(f"::notice::{a['package']} {a['id']} acceptée, plus trouvée : la retirer de la liste")
+    return 1 if due else 0
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("mode", choices=("issues", "report"))
+    ap.add_argument("mode", choices=("issues", "report", "pr"))
     ap.add_argument("locks", nargs="+")
     ap.add_argument("--pip-audit", default="pip-audit")
+    ap.add_argument("--accepted", default="", help="the advisories accepted, with their reason (R-20)")
     args = ap.parse_args(argv)
     if bad := [lock for lock in args.locks if not LOCK.match(lock)]:
         ap.error(f"not a lock path: {bad[0]!r}")
+    accepted: list[dict] = []
+    if args.accepted:
+        try:
+            accepted = load_accepted(args.accepted)
+        except (OSError, ValueError) as e:
+            print(f"liste des avis acceptés illisible : {e}", file=sys.stderr)
+            return 2
 
     reports, failed = {}, []
     for lock in args.locks:
@@ -365,9 +426,11 @@ def main(argv=None) -> int:
         else:
             reports[lock] = deps
     advs = advisories(reports)
-    print(summary(advs))
+    print(summary(advs, accepted))
     if args.mode == "report":
         return 0
+    if args.mode == "pr":
+        return pr_verdict(advs, accepted, set(reports), failed)
     try:
         issues = load_issues()
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as e:

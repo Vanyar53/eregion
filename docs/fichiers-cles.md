@@ -248,6 +248,10 @@ eregion_core/
                         les sept clés), `identity` (`metrics.run_format`, `kind`, `injector`, `experiment_id`),
                         `read_run` / `read_reports` (la vue unifiée, rapports d'avant C1 compris), `timeline`
                         (attaque, détection, décision, action vérifiée d'un incident).
+  identity.py         → #205, BL1c : `drop_empty_service_principal_env` retire les `AZURE_CLIENT_*` vides que
+                        compose passe sur un hôte sans principal (sinon `DefaultAzureCredential` n'atteint pas
+                        l'identité managée) ; appelée par `glorfindel`, `eregion console` et
+                        `python -m analysis.containment` — dans le cœur pour qu'aucun n'importe l'autre (D1).
 
 scripts/console_escaping.py → #254, #257 : rien du dehors n'est écrit brut dans la console — suit ce que peut
                         contenir chaque ${…} d'un gabarit HTML, chaque valeur donnée à innerHTML et chaque

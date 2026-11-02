@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from eregion_core import run_report
+from eregion_core.identity import drop_empty_service_principal_env
 from eregion_core.run_report import CONTAINING as DISRUPTIVE   # C1: one list of what contains
 
 # The exercise window's grace (eregion_core/exercise.py GRACE_AFTER_S): how long after the
@@ -671,6 +672,15 @@ def main(argv: list[str]) -> int:
     if not (cdir / "manifest.json").is_file():
         print(f"{cdir} : pas de manifest.json", file=sys.stderr)
         return 2
+    # Under docker exec in H0's container, compose's empty AZURE_CLIENT_* stay set: dropped, as
+    # the watch and the console drop them (#205), or the managed identity is never reached and
+    # every read of the enrollment fails (BL1c, the bench, 31/10).
+    drop_empty_service_principal_env()
+    # A campaign pulled from the channel: its runs' VMs read enrolled from Azure, as the report
+    # does (H-1) — without it, launched alone (make glorfindel-host-containment), every run was
+    # left out, « sa VM n'est pas inscrite » (BL1c, the bench, 31/10).
+    from analysis import campaign_report as cr
+    cr.check_enrollment(cdir)
     c = load(cdir, Path(args.runs_dir) if args.runs_dir else None, fault_runs=args.fault_run,
              warn=lambda m: print(f"[containment] {m}", file=sys.stderr))
     print(json.dumps(c.as_dict(), indent=2, ensure_ascii=False) if args.json else "\n".join(render(c)))

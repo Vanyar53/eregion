@@ -11,7 +11,8 @@ Two parts:
   (tests/unit/fake_azure.py), its reassertion seeing an isolation removed — then the two
   indicators read back from the files, by the report and by the console.
 
-No Azure, no model: runs/ under tmp, every store redirected (conftest). Mutants M1770–M1789.
+No Azure, no model: runs/ under tmp, every store redirected (conftest). Mutants M1770–M1789;
+the measure launched alone (BL1c): M2360, M2361.
 """
 from __future__ import annotations
 
@@ -391,6 +392,89 @@ def test_a_fault_that_cannot_be_checked_says_why():
     assert "début inconnu" in ct.fault_run("g1", "f", [VM], None, _iso(FE), []).why
     assert "Glorfindel" in _fault([], without_glorfindel=True).why
     assert _fault([_line(seen=FS + 60)], window_until=_iso(FS + 30)).mistaken == []   # the window bounds
+
+
+# ── 5b. The measure launched alone (BL1c, #395) ────────────────────────────────────────────
+
+def _channel_campaign(tmp_path):
+    """A campaign as H0 holds it once pulled from the channel: its ``.pulled`` marker, its
+    manifest, its run's report, the run's exercise window, and the watch's decision — one run,
+    contained alone."""
+    from eregion_core import exercise
+    from eregion_core.exercise_channel import PULLED
+    runs = tmp_path / "runs"
+    cdir = runs / "campaigns" / "C1"
+    (cdir / "runs").mkdir(parents=True)
+    (cdir / PULLED).touch()
+    now = datetime.now(timezone.utc)
+    exercise.open_window("R1", injector="annatar", kind="technique", experiment="x",
+                         targets=[VM], destructive=False, now=now)
+    t0 = now.timestamp() + 1
+    (cdir / "runs" / "R1.json").write_text(json.dumps(
+        {"run_id": "R1", "mitre": "T1136.001", "metrics": {"attack_time": t0}}))
+    (cdir / "manifest.json").write_text(json.dumps({"campaign_id": "C1", "scenarios": [
+        {"seq": 1, "ttp": "T1136.001", "status": "executed", "run_id": "R1",
+         "detection": "detected", "target_resource_id": VM,
+         "started_at": _iso(t0), "finished_at": _iso(t0 + 1)}]}))
+    seen = t0 + 30
+    (runs / "watch-t1136-1_debug.jsonl").write_text(json.dumps(
+        _line(seen=seen, verified_at=seen + 20, at=seen + 25, signal_id="sig-r1")) + "\n")
+    return cdir
+
+
+def _measure_alone(cdir, capsys) -> dict:
+    """``python -m analysis.containment <campaign> --json``, as ``make glorfindel-host-containment``
+    launches it in H0's container."""
+    assert ct.main([str(cdir), "--json"]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_the_measure_alone_reads_the_enrollment_of_a_channel_campaign(tmp_path, monkeypatch, capsys):
+    """M2360: launched alone, the measure reads its runs' VMs enrolled as the campaign report
+    does (``check_enrollment``, H-1). Before, nothing set the check: every run of a campaign
+    pulled from the channel was left out, « sa VM n'est pas inscrite » (the bench, 31/10)."""
+    from eregion_core import exercise
+    import eregion_core.inscription as inscription
+    read = []
+
+    class Tags:                                   # the VM's tags, as Azure would give them
+        def __call__(self, resource_id):
+            read.append(resource_id)
+            return True
+
+    monkeypatch.setattr(exercise, "_enrollment_check", None)       # a process of its own
+    monkeypatch.setattr(inscription, "TagEnrollment", Tags)
+    out = _measure_alone(_channel_campaign(tmp_path), capsys)
+    assert not [n for n in out["notes"] if "inscrite" in n], out["notes"]
+    assert (out["summary"]["incidents"], out["summary"]["contained"]) == (1, 1)
+    assert read and all(r == VM for r in read)
+
+
+def test_the_measure_alone_drops_compose_s_empty_identity(tmp_path, monkeypatch, capsys):
+    """M2361: under ``docker exec`` in H0's container, compose's ``AZURE_CLIENT_ID=""`` (and
+    its secret, its tenant) stay set: azure-identity takes them for a service principal and
+    never reaches the VM's managed identity (« client_id should be the id of a Microsoft Entra
+    application », the bench, 31/10). The measure drops them, as the watch and the console do
+    (#205) — with the same function."""
+    from azure.identity import EnvironmentCredential
+
+    from eregion_core import exercise
+    import eregion_core.inscription as inscription
+
+    class Tags:                                   # TagEnrollment's credential chain, first link
+        def __call__(self, resource_id):
+            EnvironmentCredential()               # raises on an empty client id
+            return True
+
+    for k in ("AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"):
+        monkeypatch.setenv(k, "")
+    monkeypatch.setattr(exercise, "_enrollment_check", None)
+    monkeypatch.setattr(inscription, "TagEnrollment", Tags)
+    out = _measure_alone(_channel_campaign(tmp_path), capsys)
+    assert not [n for n in out["notes"] if "inscrite" in n], out["notes"]
+    assert out["summary"]["contained"] == 1
+    import os
+    assert not {"AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID"} & set(os.environ)
 
 
 # ── 6. A campaign replayed end to end ──────────────────────────────────────────────────────

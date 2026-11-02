@@ -296,7 +296,9 @@ MUTANTS = [
      '    out["autonomy"] = {"default": "human_only"}\n', ""),
     ("M55", "the host gets a write role on the bench (H0)", "infra/glorfindel-host/main.tf",
      'role_definition_name = "Reader"', 'role_definition_name = "Contributor"'),
-    ("M56", "empty service-principal vars stay set (H0: managed identity unreachable)", "glorfindel/cli.py",
+    # The function moved from glorfindel/cli.py into the shared core (BL1c): the console and
+    # the analysis commands call it too.
+    ("M56", "empty service-principal vars stay set (H0: managed identity unreachable)", "eregion_core/identity.py",
      "    for k in dropped:\n        del environ[k]\n", ""),
     # B2 (storage side): an exercise window labels only what it names, for a bounded time.
     ("M57", "a window labels every VM, not its targets (B2)", "eregion_core/exercise.py",
@@ -5822,6 +5824,19 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (1924, 1925, 1926)})
 TESTS["M1919"] = "tests/unit/test_indicators.py"
+
+# BL1c (#395): the measure launched alone (make glorfindel-host-containment) — the enrollment of
+# a channel campaign read as the report reads it, compose's empty identity dropped as the watch
+# drops it (#205). M2360–M2361.
+MUTANTS += [
+    ("M2360", "the measure launched alone never reads the enrollment: every run of a channel campaign "
+              "left out, « VM non inscrite » (BL1c)", CTN,
+     "    cr.check_enrollment(cdir)\n", ""),
+    ("M2361", "the measure launched alone keeps compose's empty AZURE_CLIENT_*: the managed identity "
+              "never reached under docker exec (BL1c)", CTN,
+     "    drop_empty_service_principal_env()\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (2360, 2361)})
 
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its

@@ -857,8 +857,10 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
 
   Un autre compte, `sudo -u autre`, une ligne qu'aucune VM ne revendique, une ligne lue autrement
   que la forme de sudo : toujours une carte. Les shells root d'un administrateur (`sudo -i`,
-  `sudo su -`, `bash`, `python -c`, `vim`, `less`…) font **toujours une carte pour l'instant** ;
-  COR1 les écartera quand leur session SSH vient d'une origine attendue. Éditer avec `sudoedit`. **Clé nouvelle**, comme `never_block` : une version
+  `sudo su -`, `bash`, `python -c`, `vim`, `less`, `screen`…) font **une carte pour les formes
+  connues** ; la liste n'est pas exhaustive — un script non listé (`sudo /tmp/x.py`) passe sans
+  carte, l'angle mort assumé jusqu'à COR1 (l'origine de la session SSH) et AUD1 (`auditd`).
+  Éditer avec `sudoedit`. **Clé nouvelle**, comme `never_block` : une version
   antérieure refuse la config qui la porte — la watch ne démarrerait plus.
 
 ### Poser la liste des administrateurs sur H0 (ADM1)
@@ -867,7 +869,10 @@ Les vrais noms de comptes ne vont que dans la config de H0, jamais dans le dép�
 
 1. **D'abord la version** : H0 doit tourner une version qui lit `expected_sudo` (la release qui
    porte ADM1, déployée par le CD, ou `make glorfindel-host-start REF=<tag>`). Avant, la config
-   serait refusée et la watch ne redémarrerait pas.
+   serait refusée et la watch ne redémarrerait pas. **La déployer hors d'une détection récente** :
+   l'identité des lignes de journal change (instant et empreinte du texte), si bien qu'une ligne
+   déjà vue dans les ~15 min de la fenêtre est renvoyée une fois — au plus une carte par VM et par
+   règle, qui peut relancer un instantané en `non_disruptive`.
 2. **La liste** dans le `glorfindel-config.yaml` local (ignoré par git), section `expected_sudo`
    ci-dessus : les VMs de H0 (ou `"*"`) et les comptes d'administration en entier.
    Vérifier la lecture stricte : `glorfindel rules check` (ou

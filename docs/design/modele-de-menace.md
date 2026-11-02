@@ -239,8 +239,12 @@ le confinement.
   l'écart se fait dans le code, avant la décision, jamais par le modèle ; une ligne ambiguë (coupée,
   deux `COMMAND=`, un saut de ligne, un `USER=` autre que root) reste une carte ; les commandes sensibles
   restent des cartes ; **les shells root d'un administrateur** (`sudo -i`, `sudo su -`, `bash`,
-  `python -c`, `find -exec`, `vim`, `less`…) **font toujours une carte pour l'instant** — sous sudo, ce
-  qui s'y fait n'est jamais écrit. COR1 les écartera quand leur session SSH vient d'une origine attendue.
+  `python -c`, `find -exec`, `vim`, `less`, `screen`, `gdb`, `docker exec … bash`…) **font une carte
+  pour les formes connues** — sous sudo, ce qui s'y fait n'est jamais écrit. **La liste n'est pas
+  exhaustive** : un script ou un programme non listé, lancé par un compte attendu (`sudo /tmp/x.py`),
+  passe sans carte. C'est l'angle mort assumé jusqu'à COR1 (la corrélation avec l'origine de la
+  session SSH, qui écartera aussi les shells root d'une origine attendue) et AUD1 (`auditd`, ce qui se
+  fait réellement sous root).
 - **Un jeton pour la console**, tous ses droits (frontière 1).
 - **Le principal du canari, `Network Contributor` sur son groupe** (P-04, P04). Il peut y créer une ressource réseau
   payante (une IP publique, une passerelle). Si le premier run demande plus, le repli est `Contributor` sur ce même groupe, écrit

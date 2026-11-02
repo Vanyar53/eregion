@@ -112,10 +112,11 @@ never_block: []
 # (/etc/shadow, useradd/usermod/passwd, sudoers, chmod u+s, setcap, stopping or
 # removing a supervision agent, auditctl, logging config, deleting logs, cron,
 # systemd units, kernel modules, the firewall, authorized_keys, PAM, LD_PRELOAD,
-# and root shells: sudo -i/-s, su, bash, python -c, find -exec, vim, less…),
+# and root shells: sudo -i/-s, su, bash, python -c, find -exec, vim, less, screen…),
 # extended — never replaced — by sensitive_commands (texts found in the command
-# line, case ignored). Root shells always make a card for now; COR1 will set aside
-# those from an expected SSH origin. Edit files with sudoedit. An account is
+# line, case ignored). Root shells make a card in their known forms; the list is
+# not exhaustive (a script not listed, `sudo /tmp/x.py`, passes) until COR1 (the
+# SSH session's origin) and AUD1 (auditd). Edit files with sudoedit. An account is
 # written in full, no pattern. Another account, `sudo -u other`, a line no VM
 # claims: always a card. Real account names belong in your local config only,
 # never in a repository.

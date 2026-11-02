@@ -216,25 +216,33 @@ Code lancées dans `~/eregion` basculent. Ce sont tes fichiers : une session ne 
    S'il existe déjà, ajoute le bloc `env` à ce qu'il contient. `GH_CONFIG_DIR` ferme la porte : un
    `gh` lancé sans l'emballage ne trouve pas ton jeton. Il n'est pas authentifié et échoue sur toute
    écriture. Les worktrees des lots héritent de l'environnement de la session qui les lance.
-3. **L'emballage `gh` en tête du PATH, pour ces sessions seules**, dans `~/.zshrc`. La condition est la
-   variable que pose ce projet, pas `CLAUDECODE`, qui vaut dans toutes tes sessions de Claude Code :
+3. **Un aiguilleur `gh`, pour ces sessions seules**, dans `~/.local/bin/gh` (qui passe avant `/usr/bin`
+   dans le PATH). Il regarde la variable du projet **au moment de chaque commande** : Claude Code
+   prépare son shell avant d'appliquer le bloc `env`, si bien qu'une condition dans `~/.zshrc` ne la
+   voit jamais (mesuré le 02/11). `EREGION_AGENT_GH` dit à l'emballage où est le vrai `gh`, pour qu'il
+   ne se rappelle pas lui-même :
    ```
-   # SEC12 : les sessions Claude Code d'eregion agissent sur GitHub sous l'App, jamais sous ton compte
-   if [[ -n $EREGION_AGENT_SESSION ]]; then
-     path=(~/eregion/scripts/agent-bin $path)
+   cat > ~/.local/bin/gh <<'EOF'
+   #!/bin/sh
+   # SEC12 : dans une session Claude Code d'eregion, gh agit sous l'App ; ailleurs, c'est le gh du système.
+   if [ -n "$EREGION_AGENT_SESSION" ]; then
+     EREGION_AGENT_GH=/usr/bin/gh exec /home/<toi>/eregion/scripts/agent-bin/gh "$@"
    fi
+   exec /usr/bin/gh "$@"
+   EOF
+   chmod +x ~/.local/bin/gh
    ```
+   `git`, lui, n'en a pas besoin : la config des sessions nomme l'assistant par son chemin.
 4. **Relance les sessions d'eregion**, puis vérifie depuis l'une d'elles :
    - `echo $EREGION_AGENT_SESSION` donne `1`. Vide, la session n'a pas lu
      `~/eregion/.claude/settings.local.json` (c'est le cas d'une session lancée directement dans un
      worktree, ou depuis un autre dossier) : elle n'a ni l'emballage ni la config `git` de l'App, et
      retombe sur tes identifiants. Lance les sessions depuis `~/eregion` ;
-   - `command -v gh` donne `…/eregion/scripts/agent-bin/gh`. Dans un autre projet, `gh` reste le tien ;
+   - `command -v gh` donne `~/.local/bin/gh`, l'aiguilleur. Dans ton terminal ou un autre projet, il passe au `gh` du système ;
    - `python3 ~/eregion/scripts/agent_token.py whoami` donne `jeton de l'App <ID> : Vanyar53/eregion ;
      expire dans 59 min` (code 1 si le jeton atteint un autre dépôt) ;
    - `gh api /installation/repositories -q '.repositories[].full_name'` donne `Vanyar53/eregion`, seul ;
-   - `gh api graphql -f query='{viewer{login}}'` devrait donner le login de l'App (`eregion-agents[bot]`,
-     à confirmer). `gh api user` répond 403 (« Resource not accessible by integration ») : c'est le cas
+   - `gh api graphql -f query='{viewer{login}}'` donne `eregion-agents[bot]` (mesuré le 02/11). `gh api user` répond 403 (« Resource not accessible by integration ») : c'est le cas
      d'un jeton d'installation, la preuve que ce n'est plus ton compte ;
    - `git ls-remote --get-url origin` et `git remote get-url --push origin` donnent l'URL en `https://` ;
    - `git push` d'une branche de lot passe, et la PR ouverte porte le nom de l'App.
@@ -310,8 +318,9 @@ ci-dessous présents dans le ruleset « main »** : sans eux, une PR rouge devie
 - **ce que voit H0, sans jeton** : `curl -s 'https://api.github.com/repos/Vanyar53/eregion/rulesets?targets=tag'`,
   puis `curl -s https://api.github.com/repos/Vanyar53/eregion/rulesets/<id>`. Le CD lit la règle
   ainsi. GitHub ne dit pas si ces routes répondent sans jeton : c'est l'hypothèse à mesurer. Puis
-  `make glorfindel-host-cd-check` dit « 🔒 … réservé par la règle « tags v* » », ou, en orange, « la
-  règle des tags n'a pas pu être lue » ;
+  `make glorfindel-host-cd-status` dit, à la ligne « règle des tags », « 🔒 … réservé par la règle « tags v* » »
+  — lue sans jeton, mesuré le 02/11 —, ou « la règle des tags n'a pas pu être lue » (`cd-check` ne la lit pas
+  quand la release tourne déjà) ;
 - **depuis une session, après la bascule** :
   - `git tag v0.0.0-sec12 && git push origin v0.0.0-sec12` est refusé (« repository rule violations »),
     puis `git tag -d v0.0.0-sec12` ;

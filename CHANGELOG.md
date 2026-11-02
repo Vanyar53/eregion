@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **SEC12, after the switch of 02/11** (`docs/sessions.md`, « Basculer les sessions »; `infra/glorfindel-host/README.md`). The `gh` of the agent sessions is now a dispatcher in `~/.local/bin/gh`, read at each command: Claude Code builds its shell before applying the project's `env` block, so the `~/.zshrc` condition never saw `EREGION_AGENT_SESSION` (measured). The tag rule is read without a token by H0 (measured: « 🔒 … réservé par la règle « tags v* » »), and `make glorfindel-host-cd-status` shows it — `cd-check` does not when the release already runs; after `cd-install`, `cd-enable` (the timer is left disabled). `#releases` no longer says the CD deploys a pre-release (`scripts/notify_discord.py`). Tests: `test_notify_discord.py`.
+
 ### Security
 - **One reader of runs/ for every component, and the writes into runs/ held as its reads** (SEC16, #438; `docs/design/modele-de-menace.md` §2). runs/ is written by other containers than the one reading or writing it.
   - **One reader**: SEC8's reader moves to `eregion_core/channel_reader.py` (from `glorfindel/channel_reader.py`; the watch, the console and the TUI import it from there, its mutants with it), for the analysis and Annatar too (D1: `eregion_core` imports no component). It gains a whole-file read (`read_file`, `read_text`, `read_json`: a regular file only, never through a link, never blocking, bounded — 16 MB, 1 MB for a document — a file larger refused, never cut) and `lstat_regular`. The console's reader (`eregion_console/runs_reader.py`) rests on it.

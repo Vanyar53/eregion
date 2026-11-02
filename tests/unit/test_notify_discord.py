@@ -374,6 +374,19 @@ def test_the_publication_goes_to_releases_and_leaves_ci(fake, monkeypatch, tmp_p
     assert fake.threads == []                                       # never a lot's thread
 
 
+
+def test_a_pre_release_card_never_says_the_cd_deploys_it(fake, monkeypatch, tmp_path):
+    """A pre-release is never H0's latest release: its card says the CD leaves it (SEC12, the
+    rulesets' trial of 02/11 said « le CD de H0 la déploie » of a pre-release)."""
+    configure(monkeypatch, fake, releases=True)
+    pre = {**PUBLISHED, "release": {**PUBLISHED["release"], "prerelease": True}}
+    assert run_github(monkeypatch, tmp_path, "release", pre) == 0
+    (post,) = releases_posts(fake)
+    card = post["body"]["embeds"][0]
+    assert card["title"].endswith("publiée (pré-version)")
+    assert card["description"].endswith("\nune pré-version : le CD de H0 ne la déploie pas")
+    assert "la déploie : voir #deploy" not in card["description"]
+
 def test_a_release_s_name_is_inert(fake, monkeypatch, tmp_path):
     """SEC6: a member may write anything in a release's name; it shows, it never applies."""
     configure(monkeypatch, fake, releases=True)

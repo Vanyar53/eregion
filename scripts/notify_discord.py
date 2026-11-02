@@ -432,7 +432,10 @@ def github_notices(name: str, event: dict, previous=lambda run: "") -> list[Noti
         rel = event.get("release") or {}
         pre = " (pré-version)" if rel.get("prerelease") else ""
         url = _https(rel.get("html_url"))
-        said = "\n".join(x for x in (inert(rel.get("name") or ""), "le CD de H0 la déploie : voir #deploy") if x)
+        # A pre-release is never the latest release: H0's CD never follows it (SEC12) — never said it would.
+        cd = ("une pré-version : le CD de H0 ne la déploie pas" if rel.get("prerelease")
+              else "le CD de H0 la déploie : voir #deploy")
+        said = "\n".join(x for x in (inert(rel.get("name") or ""), cd) if x)
         return [Notice(embed(f"🏷️ {inert(rel.get('tag_name') or '?')} publiée{pre}", said, GREEN, url),
                        silent=False, releases=True, button=link_button("Voir la release", url))]
     if name == "issues" and event.get("action") == "closed":

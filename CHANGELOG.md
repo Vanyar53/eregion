@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.4.10] — 2026-11-02 — "held to its word"
+
 ### Added
 - **Benign noise, and the rate of faults taken for an attack** (G1, #76, 31/10; `gothmog/README.md`, « G1 »; `docs/analysis.md`, « Le taux des pannes prises pour une attaque »). Faults on which Glorfindel must neither isolate nor block, and the measure of whether it does — in code and on the bench in memory; nothing applied nor run on the bench yet.
   - **Three faults** (`gothmog/experiments/`, catalogue `azure_vm.faults`, `planned` until their first bench run): `vm-disk-write`, sustained writes by the Chaos agent (LinuxDiskIOPressure-1.1), **above** `ransomware-disk-write`'s threshold as the rule computes it — at the bench's 10-s step, two consecutive samples averaging above 45 MB/s (one above 25 at a coarse step) — decided with Jonathan on 31/10: below it, the RulePoller filters the noise and no decision is measured; `vm-cpu-pressure`, 95 % for 10 min (CPUPressure-1.0); `vm-restart`, a graceful shutdown of one minute (Shutdown-1.0).

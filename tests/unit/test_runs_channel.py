@@ -111,23 +111,23 @@ def test_a_start_offset_never_blocks_nor_raises(tmp_path):
     assert finished and got == [0, 0, regular.stat().st_size]
 
 
-def test_a_huge_file_is_read_a_bounded_slice_per_poll(tmp_path, monkeypatch):
-    """At most READ_LINES lines and READ_BYTES per poll; the rest at the next one, from the
-    offset kept — every line read once, in order."""
-    monkeypatch.setattr(channel_reader, "READ_LINES", 50)
-    monkeypatch.setattr(channel_reader, "READ_BYTES", 16 * 1024)
+@pytest.mark.parametrize("max_lines, max_bytes", [(50, 1 << 20), (10_000, 16 * 1024)],
+                         ids=["the-lines-bound", "the-bytes-bound"])
+def test_a_huge_file_is_read_a_bounded_slice_per_poll(tmp_path, monkeypatch, max_lines, max_bytes):
+    """At most READ_LINES lines and READ_BYTES per poll — whichever comes first —; the rest at
+    the next one, from the offset kept: every line read once, in order."""
+    monkeypatch.setattr(channel_reader, "READ_LINES", max_lines)
+    monkeypatch.setattr(channel_reader, "READ_BYTES", max_bytes)
     f = tmp_path / "x_signals.jsonl"
     f.write_bytes(_lines(400))
-    got = channel_reader.read_lines(f, 0)
-    assert len(got.lines) <= 50 and got.offset <= 16 * 1024
-    seen, offset, polls = list(got.lines), got.offset, 1
+    seen, offset, polls = [], 0, 0
     while offset < f.stat().st_size:
         got = channel_reader.read_lines(f, offset)
-        assert len(got.lines) <= 50 and got.offset - offset <= 16 * 1024
+        assert len(got.lines) <= max_lines and got.offset - offset <= max_bytes
         seen += got.lines
         offset, polls = got.offset, polls + 1
     assert [json.loads(x)["signal_id"] for x in seen] == [f"r_{i}" for i in range(400)]
-    assert polls >= 400 // 50
+    assert polls >= 2
 
 
 def test_a_line_past_the_bound_is_refused_and_the_next_one_read(tmp_path, monkeypatch):
@@ -352,6 +352,11 @@ def test_a_real_incident_s_restore_never_takes_the_channel_s_moment(tmp_path, mo
     assert got["source"] == "card" and got["before"] == _iso(first)
     assert "incident réel" in got["why"] and "le plus ancien des moments sûrs" in got["why"]
     assert restore_plan.proposed_moment(VM, {"first_seen": _iso(first)}, runs_dir=runs)["before"] == _iso(first)
+    # A line dated before the first detection gives nothing either: the channel never names
+    # the moment of a real incident, earlier or later.
+    with open(runs / "20261102T100000Z_signals.jsonl", "a") as f:
+        f.write(json.dumps(_attack_line(first - 600, "20261102T100000Z")) + "\n")
+    assert restore_plan.proposed_moment(VM, card, runs_dir=runs)["before"] == _iso(first)
 
 
 def test_an_exercise_s_moment_is_its_run_s_and_never_after_its_first_detection(tmp_path, monkeypatch):
@@ -366,6 +371,8 @@ def test_an_exercise_s_moment_is_its_run_s_and_never_after_its_first_detection(t
         json.dumps(_attack_line(first - 600, "20261102T100000Z")) + "\n")
     got = restore_plan.proposed_moment(VM, late, runs_dir=runs)
     assert got["source"] == "exercise" and got["before"] == _iso(first - 600)
+    # The same line, before the first detection, is still no moment for another run's card.
+    assert restore_plan.proposed_moment(VM, other, runs_dir=runs)["before"] == _iso(first)
 
 
 def test_the_restore_command_takes_the_card_s_moment_not_the_channel_s(tmp_path, monkeypatch):
@@ -385,11 +392,16 @@ def test_the_restore_command_takes_the_card_s_moment_not_the_channel_s(tmp_path,
         started.append(before)
         return {"job_id": "j", "restore_job_name": "rj", "recovery_point_time": "x"}
     monkeypatch.setattr("glorfindel.jobs.start_restore", start_restore)
+    other = VM.replace("/web", "/web-02")
+    escalations.record("rule-y-0123abcd", other, "restore_from_backup", "destructive_action", "r", ttp="T1486")
     out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes"], terminal_width=200)
-    assert out.exit_code != 0 and started == [] and "aucune carte" in out.output    # no card: asked
+    # No card of this VM — another VM's says nothing of it: asked.
+    assert out.exit_code != 0 and started == [] and "aucune carte" in " ".join(out.output.split())
     escalations.record("rule-x-0123abcd", VM, "restore_from_backup", "destructive_action", "r", ttp="T1486")
     store = [json.loads(x) for x in escalations._STORE.read_text().splitlines()]
-    store[0]["first_seen"] = _iso(first)
+    for e in store:
+        if e["resource_id"] == VM:
+            e["first_seen"] = _iso(first)
     escalations._STORE.write_text("\n".join(json.dumps(e) for e in store) + "\n")
     out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes"], terminal_width=200)
     assert out.exit_code == 0, out.output

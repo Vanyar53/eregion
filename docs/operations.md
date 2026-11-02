@@ -877,7 +877,7 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   de ces comptes — des plages CIDR (un bastion est une plage, une adresse seule vaut `/32` ou
   `/128`), IPv4 ou IPv6. Lues strictement : des bits d'hôte (`198.51.100.7/24`), `/0`, une liste
   vide refusent le fichier. Un shell root d'un compte de l'entrée n'est écarté que si **toutes**
-  ses sessions SSH des dernières 24 h viennent d'une de ces plages ; sinon une carte qui dit
+  ses sessions SSH des 7 derniers jours viennent d'une de ces plages ; sinon une carte qui dit
   l'origine (« session depuis 203.0.113.9, origine inconnue »). Une commande sensible reste une
   carte quelle que soit l'origine. Sans `origins` : les shells root restent des cartes. **Clé
   nouvelle** : une version sans COR1 refuse la config qui la porte.
@@ -919,8 +919,14 @@ Les vraies adresses ne vont que dans la config de H0, jamais dans le dépôt (le
 2. **Les origines** dans le `glorfindel-config.yaml` local (hors du dépôt), sous chaque entrée de
    `expected_sudo.admins` : l'adresse ou la plage d'où l'on se connecte en SSH à ces VMs — le
    bastion, la sortie du VPN, le poste d'administration (`origins: [<plage>/<n>]`). Une seule
-   origine oubliée suffit à garder les shells root en carte pendant 24 h : la lister, ou s'en
-   accommoder. Vérifier : `glorfindel rules check` (ou
+   origine oubliée suffit à garder les shells root en carte **pendant 7 jours** (la fenêtre de
+   lecture des sessions) : la lister, ou s'en accommoder. **Le cas cron** : un administrateur qui a une
+   crontab (`crontab -e` sous son compte) ouvre une session `cron` à chaque tâche — un compte « pris
+   par cron », origine non suivie. Ses shells root restent alors en carte pendant 7 jours ; mettre ces
+   tâches sous un compte de service, ou s'en accommoder. **Ce que l'écart vaut** : un réducteur de
+   bruit, pas une preuve — tout utilisateur local peut écrire une ligne de connexion sshd venant d'une
+   origine déclarée ; une commande sensible reste toujours une carte. L'origine confirmée hors de la
+   VM viendra avec COR2 (#427). Vérifier : `glorfindel rules check` (ou
    `python -c "from glorfindel.config import load_glorfindel_config as l; print(l().expected_sudo)"`).
 3. **La pousser** : `make glorfindel-host-push` (garde les modes d'autonomie de H0 ; sans ce lot sur
    le poste, ajouter `origins:` à la main dans `~/eregion/glorfindel-config.yaml` de H0 par

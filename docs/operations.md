@@ -811,7 +811,8 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   `restore_staging_storage`), `exceptions` (`asset_pattern`, `exclude_all`, `exclude_rules`),
   `autonomy` (`default`, `assets` : `match`, `mode` ; `allow_destructive`), `isolation`
   (`quarantine_nsg`, `quarantine_rg`, `forensic_sources`, `forensic_ports`), `never_block`
-  (SEC2, ci-dessous).
+  (SEC2, ci-dessous), `expected_sudo` (`admins` : `match`, `accounts` ; `sensitive_commands` —
+  ADM1, ci-dessous).
 - Types : textes entre guillemets ou non, booléens `true` / `false` sans guillemets, listes pour
   `exclude_rules`, `allow_destructive`, `forensic_sources`, `assets` et les sections de backends ;
   `interval_s` un nombre de secondes positif ; `forensic_ports` un port ou une liste (inchangé). Une
@@ -836,6 +837,51 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   par le mode d'autonomie). Absente : la liste livrée seule. **Clé nouvelle** : une config qui la
   porte est refusée par une version antérieure (lecture stricte) — la poser sur H0 après la mise à
   jour.
+- **`expected_sudo`** (ADM1, #284, 02/11) : les administrateurs dont le sudo vers root est attendu,
+  par VM ou motif de VM. Un tel sudo n'ouvre pas de carte d'élévation — il est écarté par le
+  RulePoller avant toute décision, écrit dans `~/.glorfindel/expected_sudo.jsonl` et compté
+  (`glorfindel report`, la règle dans la console) — sauf commande sensible (liste livrée :
+  `docs/glorfindel.md`, « Les sudo attendus des administrateurs » ; `sensitive_commands` y ajoute
+  des textes, casse ignorée). Un compte s'écrit en entier (`admin*` est refusé) ; `match` est un
+  motif fnmatch, casse ignorée ; plusieurs entrées qui nomment une VM s'additionnent.
+
+  ```yaml
+  expected_sudo:
+    admins:
+      - match: "vm-web-*"
+        accounts: [admin1, ops]
+      - match: "vm-db-01"
+        accounts: [dba]
+    sensitive_commands: [crontab]
+  ```
+
+  Un autre compte, `sudo -u autre`, une ligne qu'aucune VM ne revendique, une ligne lue autrement
+  que la forme de sudo : toujours une carte. **Clé nouvelle**, comme `never_block` : une version
+  antérieure refuse la config qui la porte — la watch ne démarrerait plus.
+
+### Poser la liste des administrateurs sur H0 (ADM1)
+
+Les vrais noms de comptes ne vont que dans la config de H0, jamais dans le dépôt.
+
+1. **D'abord la version** : H0 doit tourner une version qui lit `expected_sudo` (la release qui
+   porte ADM1, déployée par le CD, ou `make glorfindel-host-start REF=<tag>`). Avant, la config
+   serait refusée et la watch ne redémarrerait pas.
+2. **La liste** dans le `glorfindel-config.yaml` local (ignoré par git), section `expected_sudo`
+   ci-dessus : les VMs de H0 (ou `"*"`) et les comptes d'administration en entier.
+   Vérifier la lecture stricte : `glorfindel rules check` (ou
+   `python -c "from glorfindel.config import load_glorfindel_config as l; print(l().expected_sudo)"`).
+3. **La pousser** : `make glorfindel-host-push`. ⚠ Elle remplace `autonomy` par
+   `{default: human_only}` (`infra/glorfindel-host/host_config.py`) : un mode posé sur H0 (une VM
+   en `non_disruptive`) est à reposer ensuite (`glorfindel activate <vm>` sur H0, ou la console) —
+   ou bien ajouter le bloc directement dans `~/eregion/glorfindel-config.yaml` de H0
+   (`make glorfindel-host-ssh`), sans toucher au reste.
+4. **Redémarrer la watch** (la config se lit au démarrage) : `make glorfindel-host-ssh`, puis
+   `cd eregion && docker compose restart watch war-room`. `make glorfindel-host-logs` : pas de
+   « glorfindel-config.yaml refusé ».
+5. **Vérifier** : après le prochain sudo d'un administrateur, `make glorfindel-host-report` dit
+   « Expected sudo (no card, ADM1): N — per VM … per account … » et la console montre
+   « N expected » sur `sudo-privilege-escalation`, sans carte nouvelle ; un `sudo cat /etc/shadow`
+   du même compte fait encore une carte.
 
 ---
 

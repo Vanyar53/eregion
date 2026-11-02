@@ -902,6 +902,11 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
 - Effets du refus : la watch **ne démarre pas** (code 2, le message en rouge) ; l'isolation est refusée
   avant toute écriture et la préparation dit `config_unreadable` (comme un YAML illisible, S1) ; la
   réaffirmation passe en alertes seules.
+- Noms de VM (AUC, #447) : `autonomy.assets[].match`, `exceptions[].asset_pattern` et
+  `expected_sudo.admins[].match` se comparent au nom de la VM **sans la casse**, comme Azure
+  (`VM-PROD-DB` nomme `vm-prod-db`) ; deux entrées d'`autonomy.assets` à égalité qui ne
+  s'accordent pas donnent le mode le plus prudent. Les comptes d'`expected_sudo` gardent leur
+  casse (un compte Linux la distingue).
 - Le fichier d'exemple (`glorfindel-config.yaml.example`) et le fragment de Celebrimbor
   (`make celebrimbor-output`) passent la lecture stricte (`tests/unit/test_config.py`).
 - **`never_block`** (SEC2, 28/10) : une liste d'adresses ou de préfixes CIDR que Glorfindel ne

@@ -261,3 +261,17 @@ def test_a_quarantine_refused_at_execution_is_a_reserve_until_one_succeeds():
     assert "RequestDisallowedByPolicy" in next(r for r in a["reasons"] if r["code"] == "quarantine_refused")["message"]
     readiness.clear_quarantine_refusal(_RID)
     assert assess(_RID, _conn())["verdict"] == "ready"
+
+
+def test_the_readiness_state_is_owner_only():
+    """SEC13 (V-27): readiness.json was put in place whole, but readable by all (0644). 0600
+    now, as every state — an earlier 0644 file included."""
+    import os
+    import stat
+    from glorfindel import readiness
+    readiness._STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    readiness._STATE_FILE.write_text("{}")
+    os.chmod(readiness._STATE_FILE, 0o644)
+    readiness.record_quarantine_refusal(_RID, ["refused"])
+    assert stat.S_IMODE(readiness._STATE_FILE.stat().st_mode) == 0o600
+    assert "refused" in readiness._STATE_FILE.read_text()

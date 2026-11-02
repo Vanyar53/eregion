@@ -55,6 +55,11 @@ def _write_lines(lines: list[str]) -> None:
 # moves at least this much — keeps a standing card current without flickering its
 # reason/steps on every poll for a stable finding.
 _MATERIAL_CONFIDENCE_DELTA = 0.1
+# COR1 (#407): what a card that says a possible compromise opens with (agent._correlation_said).
+# A card that did not say it, re-fired by a signal that does, is a material change: never a
+# silent fold. So is a severity that rises (high → critical).
+COMPROMISE_MARK = "Compte peut-être compromis"
+_SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
 _ACTION_LABELS = {
@@ -75,6 +80,7 @@ _ACTION_LABELS = {
     "review_bypass": "Contournement à revoir (règle d'un tiers)",
     "repair_local_state": "État local à réparer",
     "review_left_rule": "Règle laissée à revoir (elle vise une autre VM)",
+    "review_unverified": "Isolation ou blocage non vérifié (la vérification échoue)",
 }
 
 _ESCALATION_LABELS = {
@@ -105,6 +111,9 @@ _ESCALATION_LABELS = {
     "bypassed": "contournée (une règle d'autorisation passe avant le deny)",
     "state_unreadable": "état local illisible",
     "rule_left": "règle du blocage laissée (retournée, elle vise une autre VM)",
+    "unverified": "non vérifiée (la vérification échoue)",
+    "account_compromised": "compte peut-être compromis (brute force puis connexion réussie)",
+    "compromise_unchecked": "connexion après brute force non vérifiée",
 }
 
 
@@ -184,12 +193,21 @@ def record(
                     ) >= _MATERIAL_CONFIDENCE_DELTA
                 except (TypeError, ValueError):
                     material = False
+                # COR1: a compromise said now, or a severity that rises — the card says it.
+                rises = _SEVERITY_RANK.get(severity or "", 0) > _SEVERITY_RANK.get(e.get("severity") or "", 0)
+                said = COMPROMISE_MARK in (reason or "") and COMPROMISE_MARK not in (e.get("reason") or "")
+                material = material or rises or said
+                if rises:
+                    e["severity"] = severity
                 if material:
                     # Preserve the initial triage before overwriting with the latest.
                     e.setdefault("first_reason", e.get("reason", ""))
                     e.setdefault("first_suggested_steps", e.get("suggested_steps", []))
                     e.setdefault("first_confidence", e.get("confidence", 0.0))
-                    e["reason"] = reason
+                    # COR1: a card that says a compromise keeps saying it — a plain re-fire of
+                    # the same address (a scanner that goes on) never wipes it out.
+                    if COMPROMISE_MARK in (reason or "") or COMPROMISE_MARK not in (e.get("reason") or ""):
+                        e["reason"] = reason
                     e["suggested_steps"] = steps
                     e["confidence"] = confidence
                     if explanation:
@@ -252,6 +270,29 @@ def resolve(escalation_id: str, note: str = "") -> None:
                 e["resolution"] = note
         updated.append(json.dumps(e, default=str))
     _write_lines(updated)
+
+
+@_locked
+def refresh(escalation_id: str, reason: str, **fields) -> bool:
+    """A pending card's text brought up to what it says now (SEC13: a check's last error),
+    its first text kept in `first_reason`; `fields` written beside it. False when the card
+    no longer waits."""
+    if not _STORE.exists():
+        return False
+    lines, done = _STORE.read_text().splitlines(), False
+    for i, line in enumerate(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("id") == escalation_id and e.get("status") == "pending":
+            now = datetime.now(timezone.utc).isoformat()
+            e.setdefault("first_reason", e.get("reason", ""))
+            e.update(fields, reason=reason, updated_at=now, last_seen=now)
+            lines[i], done = json.dumps(e, default=str), True
+    if done:
+        _write_lines(lines)
+    return done
 
 
 @_locked
@@ -444,7 +485,8 @@ VERDICTS = ("right", "wrong", "unsure")
 DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
 # Cards that are not a decision on a detection: posture, housekeeping, proposals.
 _NOT_DECISIONS = {"posture_gap", "orphan_rule", "quarantine_altered", "proposed_rule", "readiness_hold",
-                  "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable", "rule_left"}
+                  "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable", "rule_left",
+                  "unverified"}
 
 
 def all_escalations() -> list[dict]:
@@ -579,6 +621,9 @@ def to_judge(since: datetime | None = None, limit: int = 100) -> list[dict]:
     return out[:limit]
 
 
+_NO_ACTION_LABELLED = frozenset({"account_compromised", "compromise_unchecked"})
+
+
 def observation_report(since: datetime | None = None) -> dict:
     """Counts of the operator's verdicts on decision cards since `since` (all if None).
     A card counts once, however many times it re-fired (its `occurrences`). An exercise
@@ -607,7 +652,10 @@ def observation_report(since: datetime | None = None) -> dict:
             continue
         cards += 1
         v = e.get("verdict") if e.get("verdict") in VERDICTS else "unjudged"
-        by_action.setdefault(e.get("action") or "?", bucket())[v] += 1
+        # A card that recommends no action is named by its type when it has a label (COR1).
+        key = e.get("action") or (_ESCALATION_LABELS.get(e.get("escalation_type") or "")
+                                  if e.get("escalation_type") in _NO_ACTION_LABELLED else "") or "?"
+        by_action.setdefault(key, bucket())[v] += 1
         by_rule.setdefault(rule_of(e) or "(sans règle)", bucket())[v] += 1
         if e.get("action") in DISRUPTIVE_ACTIONS:
             disruptive[v] += 1

@@ -56,10 +56,10 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 | | Menace | Ce qui la tient |
 |---|---|---|
 | S | Une ligne de `runs/` se fait passer pour Glorfindel (un `recovery_complete` qui lève une isolation) | La watch ne prend de `runs/` que ce qu'un injecteur émet, chaque champ vérifié ; un `recovery_complete` ne lève seul que s'il vient du chemin propre de Glorfindel (`glorfindel/signal_origin.py`, SEC3) |
-| T | Un état illisible ou tronqué est lu comme « pas d'état » et libère une VM | Illisible n'est jamais absent : le balayage ne retire rien et le dit (SEC3) ; la levée, le reset et `verify_release` ne retirent rien d'une carte en quarantaine ou sans NSG et ne disent pas levé, la réaffirmation le dit (SEC4b) ; état écrit entier, en 0600 (dossiers 0700) ; escalades (SEC3) et règles proposées (SEC4b) sous `flock`, réécrites entières |
+| T | Un état illisible ou tronqué est lu comme « pas d'état » et libère une VM | Illisible n'est jamais absent : le balayage ne retire rien et le dit (SEC3) ; la levée, le reset et `verify_release` ne retirent rien d'une carte en quarantaine ou sans NSG et ne disent pas levé, la réaffirmation le dit (SEC4b) ; un dossier d'état qui ne se liste pas non plus (SEC13) ; état écrit entier, en 0600 (dossiers 0700) — isolation, blocages, escalades, règles proposées, incidents, posture, découverte, préparation, fichiers du bot (SEC3, SEC4b, SEC13), pas encore le battement de la watch ; escalades (SEC3), règles proposées (SEC4b) et incidents (SEC13) sous `flock`, réécrits entiers ; une vérification de la réaffirmation qui échoue est dite sur une carte (SEC13) |
 | R | Une ligne refusée disparaît sans bruit | Elle est journalisée et comptée (`~/.glorfindel/channel_refusals.json`, SEC3) |
 | I | Un injecteur lit l'état du bleu (ce qui est isolé, bloqué, escaladé) | Les conteneurs des injecteurs ne montent que `~/.glorfindel/injectors`, en lecture seule, où la watch copie son battement (SEC3) |
-| D | Un flot de lignes dans `runs/` | Lecture bornée par fichier et par relevé, débit borné par fichier et pour le canal ; le surplus n'est pas admis, il est dit en une ligne et compté. Ce qu'une ligne admise lance est borné : une recherche par VM et par technique, un nombre de recherches, une file par VM, un nombre de VM ; les durées sont finies. Une technique ni du catalogue ni des règles est refusée : ni recherche ni appel au modèle (SEC8, `glorfindel/channel_reader.py`) |
+| D | Un flot de lignes dans `runs/` | Lecture bornée par fichier et par relevé, débit borné par fichier et pour le canal ; le surplus n'est pas admis, il est dit en une ligne et compté. Ce qu'une ligne admise lance est borné : une recherche par VM et par technique, un nombre de recherches, une file par VM, un nombre de VM ; les durées sont finies. Une ligne admise coûte, dans la limite du débit : un `attack_started` lance la règle de détection de sa technique (des requêtes au cloud), puis une décision du modèle si la règle trouve ; un `detection_missed`, une proposition de règle par le modèle. Une technique ni du catalogue ni des règles est refusée : ni recherche ni appel au modèle (SEC8, `glorfindel/channel_reader.py`) |
 | D | Une entrée de `runs/` qui bloque la lecture ou ne finit pas | La watch, et la recherche du moment d'un restore, ne lisent que des fichiers ordinaires, ouverts sans bloquer et sans suivre un lien ; le reste est refusé, dit une fois ; une ligne démesurée est refusée, dite (SEC8). La console et la TUI lisent `runs/` de même, par une seule aide : un fichier ordinaire, jamais à travers un lien, une lecture bornée (la fin d'un fichier pour le flux et la TUI), un refus dit une fois ; aucune route de la console ne lit dans sa boucle d'événements (SEC15) |
 | T | Une ligne de `runs/` choisit le moment d'un restore | Une ligne ne compte que pour une carte d'exercice rattachée à son run, jamais après la première détection de la carte ; sinon, le plus ancien des moments que Glorfindel a notés, et le champ le dit (SEC8, `glorfindel/restore_plan.py`) |
 | I | Une ligne fait interroger un autre espace, ou envoie le jeton ailleurs | L'espace interrogé vient de la config, une ligne qui en nomme un autre est refusée ; un appel ARM qui porte le jeton est construit des parties lues de l'identifiant (abonnement, groupe, nom), jamais de l'identifiant tel qu'il est reçu ; une page suivante hors d'ARM n'est pas suivie (SEC8, `eregion_core/held.py`) |
@@ -125,7 +125,7 @@ Trois canaux, à ne pas confondre :
 
 **Où c'est dans le code** : `glorfindel/agent.py` (`decide` et ses gardes, `_build_user_message`), `glorfindel/response/` (la liste des actions autonomes), `glorfindel/rules/azure/detection_rules.yaml` ; tests `tests/unit/test_agent_nodes.py`, `tests/unit/test_forged_logs.py`, `tests/unit/test_dependency_failures.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), [`docs/architecture.md`](../architecture.md), « Les gardes qui encadrent le LLM ».
 
-**Ouvert** : la décision face à une réponse, une mémoire ou une ligne imprévues — planifié : #275.
+**Ouvert** : la décision face à une réponse, une mémoire ou une ligne imprévues — planifié : #275 ; l'origine d'une session confirmée hors de la VM — planifié : #427.
 
 ---
 
@@ -292,11 +292,26 @@ prérequis avant toute VM hors du banc (« Ouvert »).
   deux `COMMAND=`, un saut de ligne, un `USER=` autre que root) reste une carte ; les commandes sensibles
   restent des cartes ; **les shells root d'un administrateur** (`sudo -i`, `sudo su -`, `bash`,
   `python -c`, `find -exec`, `vim`, `less`, `screen`, `gdb`, `docker exec … bash`…) **font une carte
-  pour les formes connues** — sous sudo, ce qui s'y fait n'est jamais écrit. **La liste n'est pas
+  pour les formes connues** — sous sudo, ce qui s'y fait n'est jamais écrit —, sauf quand toutes les
+  sessions SSH du compte viennent d'une origine qu'il déclare (COR1, ci-dessous). **La liste n'est pas
   exhaustive** : un script ou un programme non listé, lancé par un compte attendu (`sudo /tmp/x.py`),
-  passe sans carte. C'est l'angle mort assumé jusqu'à COR1 (la corrélation avec l'origine de la
-  session SSH, qui écartera aussi les shells root d'une origine attendue) et AUD1 (`auditd`, ce qui se
-  fait réellement sous root).
+  passe sans carte. C'est l'angle mort assumé jusqu'à AUD1 (`auditd`, ce qui se fait réellement sous
+  root).
+- **Un shell root d'administrateur écarté par l'origine de ses sessions SSH** (COR1, #407 ;
+  [`correlation.md`](correlation.md)). Si toutes les sessions du compte, ouvertes dans les 7 jours avant
+  la ligne, viennent d'une plage déclarée (`origins`), le shell root n'ouvre pas de carte. C'est un
+  réducteur de bruit, pas une preuve (Jonathan, 02/11). Ce qui le
+  borne : la corrélation se fait dans le code, avant la décision ; une seule session d'ailleurs, une
+  session sans ligne `Accepted`, un compte pris par `su`/`sudo -u`/`login`/`cron`, un journal illisible
+  ou coupé, aucune session : carte (A0) ; une commande sensible reste une carte quelle que soit
+  l'origine ; une fermeture de session n'est pas lue (`logger` en écrit une) ; seules les lignes
+  `Accepted` étiquetées sshd sont lues. Ce qui reste ouvert : tout utilisateur local peut écrire une
+  ligne de connexion sshd venant d'une origine déclarée — l'écart ne tient donc que contre un
+  administrateur honnête et un intrus qui ne connaît pas Eregion. Un intrus dont la vraie session est
+  plus ancienne que la fenêtre de 7 jours, ou un accès qui n'écrit aucune ligne de session (un service
+  sous le compte), peut faire écarter un shell root seul ; les commandes sensibles restent toujours une
+  carte. La réponse est planifiée : l'origine confirmée hors de la VM, COR2 (#427). Lier une commande
+  à sa session exacte demande `auditd` (AUD1).
 - **Un jeton pour la console**, tous ses droits (frontière 1).
 - **Le principal du canari, `Network Contributor` sur son groupe** (P-04, P04). Il peut y créer une ressource réseau
   payante (une IP publique, une passerelle). Si le premier run demande plus, le repli est `Contributor` sur ce même groupe, écrit

@@ -133,7 +133,8 @@ glorfindel/
   reassert_cards.py     → SEC4b : ce que la réaffirmation dit sans agir — say_bypass (V-16 : une allow d'un tiers
                           avant nos refus, carte `bypassed` une fois par changement, jamais retirée) et
                           say_unreadable_states (carte `state_unreadable`, state_alerts.json), say_left (I4A,
-                          carte `rule_left`) ; L2C : une marque ne fait taire que la dernière carte, fermée par un humain
+                          carte `rule_left`), say_unverified (SEC13, V-16 : une vérification qui lève, carte
+                          `unverified` une fois, fermée quand elle repasse) ; L2C : une marque ne fait taire que la dernière carte, fermée par un humain
   reassert_quarantine.py → I1F, I1S, ISU : les NSG de quarantaine modifiés, lus à chaque passe quel que soit
                           l'état local — _report_altered_quarantines, quarantine_alerts.json (sorti de
                           reassert.py par RB1, sans changement de comportement ; L2Q : un changement qui revient est redit)
@@ -149,7 +150,7 @@ glorfindel/
                           Deux appelants : propose_detection_rule (réactif) + `propose-rules` (proactif).
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used) ; SEC4a : identifiant tiré par la mémoire
                           (jamais remplacé), tout signal ne reçoit que des cycles réels, un par (signal_id, action, run_id)
-  incidents.py          → IncidentRegistry (TTL, persist, thread-safe)
+  incidents.py          → IncidentRegistry (TTL, persist ; threads et processus : flock, réécrit entier — SEC13)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
                           audit (--all), approve-rule, reject-rule, propose-rules, rules, migrate-rules, check-ttl, jobs,
                           bot, dashboard
@@ -345,10 +346,13 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
 ~/.glorfindel/                → SEC3 : en 0600 (dossiers 0700), écrits entiers (fichier temporaire + `os.replace`) :
                                 isolation/, blocks/, escalations.jsonl, channel_refusals.json, recovery_signals/ (et
                                 orphan_alerts.json, quarantine_alerts.json, active_jobs/, recovery/, écrits par le même
-                                chemin) ; isolation/ et
-                                blocks/ d'une version antérieure resserrés au démarrage du watch. Les autres —
-                                proposed_rules.jsonl, incidents.jsonl, les magasins du bot, posture, discovery,
-                                readiness — restent au umask : suite notée. Qui écrit : la watch, la console, le bot et
+                                chemin) ; proposed_rules.jsonl (SEC4b) ; incidents.jsonl, posture_state.json,
+                                discovered_assets.json, readiness.json et les magasins du bot (bot_*.json) depuis
+                                SEC13 (V-27) ; isolation/ et
+                                blocks/ d'une version antérieure resserrés au démarrage du watch (les autres le sont
+                                à leur prochaine écriture). escalations.jsonl, proposed_rules.jsonl et
+                                incidents.jsonl ont plusieurs processus pour écrivains : chaque relecture-écriture
+                                sous `flock` (`<fichier>.lock`), rien de perdu entre deux. Qui écrit : la watch, la console, le bot et
                                 la CLI (le même utilisateur). Les injecteurs (Annatar, Gothmog) n'en voient que
                                 `injectors/`, en lecture seule (compose, Makefile)
   injectors/watch_heartbeat   → SEC3 (N-05) : copie du battement de la watch, le seul fichier de Glorfindel que lisent
@@ -368,7 +372,9 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 (la dernière : fichier, heure, raison)
   console_token               → ancien emplacement du jeton tiré de la console : retiré à son premier
                                 démarrage depuis SEC10 (le jeton vit dans ~/.eregion/console/token)
-  incidents.jsonl             → incidents actifs
+  incidents.jsonl             → incidents actifs ; écrit par la watch et `glorfindel respond` : sous flock
+                                (`incidents.jsonl.lock`), réécrit entier, 0600 (SEC13, V-10 ; `test_locks.py`,
+                                deux vrais processus)
   isolation/<vm>--<h>.json    → état NSG isolation + TTL. Clé = nom + hash de l'ID de ressource (troisième
                                 passe : deux VMs homonymes partageaient `<vm>.json`) ; un ancien `<vm>.json` n'est
                                 lu que s'il porte cet ID, migré à la première écriture ; par nom seul, un nom
@@ -413,9 +419,11 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;
-                                `expected_sudo` : count, last — ADM1, lu par la console)
+                                `expected_sudo` : count, last, origin_count — ADM1, COR1 ; `correlation` : queries,
+                                origin, card, unknown, compromised, unchecked, last — COR1 ; lus par la console)
   expected_sudo.jsonl         → ADM1 : chaque sudo d'administrateur attendu écarté par le RulePoller (at, rule,
-                                asset, account, command ≤ 300 car., logged_at), écrit AVANT d'écarter — un journal
+                                asset, account, command ≤ 300 car., logged_at ; un shell root écarté par l'origine de
+                                ses sessions SSH : via « origin », origin — COR1), écrit AVANT d'écarter — un journal
                                 qu'on ne peut écrire n'écarte rien ; 0600 ; au-delà de 2 Mo, la moitié la plus
                                 récente gardée. Lu par `glorfindel report`
   readiness.json              → verrou L6 par VM, clé `nom--hash(ID)` (quatrième passe Q3 : un homonyme héritait du

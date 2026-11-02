@@ -77,11 +77,16 @@ _WRITE_SCOPE = {**{a: "/providers/microsoft.compute/virtualmachines/" for a in V
 # Log Analytics Reader as Azure defines it — the built-in role infra/orodruin/main.tf gives on
 # the bench's workspace: Gothmog reads its fault's effect there, through ARM. At a workspace's
 # scope these reach that workspace only (a support ticket is the subscription's, out of reach).
+# Its actions, and its data action (read_identity marks it "data:"); its notAction (the shared
+# keys) only narrows it.
 LOGS_READER_ACTIONS = (
     "*/read",
     "Microsoft.OperationalInsights/workspaces/analytics/query/action",
     "Microsoft.OperationalInsights/workspaces/search/action",
     "Microsoft.Support/*",
+)
+LOGS_READER_DATA_ACTIONS = (
+    "Microsoft.OperationalInsights/workspaces/jobs/export/action",
 )
 # SEC11 (V-29): what the identity may HOLD inside the bench, by the kind of scope a role is
 # assigned at — an allow-list, not a list of what is refused. Every action of the role must be
@@ -90,7 +95,8 @@ LOGS_READER_ACTIONS = (
 # Contributor on the group, which grants none of the injectors' writes, refuses too.
 _HELD_AT = (("/providers/microsoft.compute/virtualmachines/", VM_ACTIONS),
             ("/providers/microsoft.chaos/experiments/", CHAOS_ACTIONS),
-            ("/providers/microsoft.operationalinsights/workspaces/", LOGS_READER_ACTIONS))
+            ("/providers/microsoft.operationalinsights/workspaces/",
+             LOGS_READER_ACTIONS + tuple(f"data:{a}" for a in LOGS_READER_DATA_ACTIONS)))
 # The one kind of assignment allowed outside the bench: reading role assignments, so
 # the identity can prove it holds nothing else (a read at the bench's scope cannot see
 # the subscription's).

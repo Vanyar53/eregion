@@ -175,6 +175,19 @@ NETWORK_CONTRIBUTOR = ["Microsoft.Authorization/*/read", "Microsoft.Insights/ale
                        "Microsoft.Resources/subscriptions/resourceGroups/read", "Microsoft.Support/*"]
 
 
+# Log Analytics Reader's definition as Azure publishes it (the built-in role's JSON, its id
+# 73c42c96-…): its data action and its notAction included — never rebuilt from the allow-list.
+LOGS_READER_DEFINITION = {"properties": {"roleName": "Log Analytics Reader", "permissions": [{
+    "actions": ["*/read", "Microsoft.OperationalInsights/workspaces/analytics/query/action",
+                "Microsoft.OperationalInsights/workspaces/search/action", "Microsoft.Support/*"],
+    "notActions": ["Microsoft.OperationalInsights/workspaces/sharedKeys/read"],
+    "dataActions": ["Microsoft.OperationalInsights/workspaces/jobs/export/action"],
+    "notDataActions": []}]}}
+# What read_identity's role_actions makes of it: the actions, then each data action marked.
+LOGS_AS_READ = ([*LOGS_READER_DEFINITION["properties"]["permissions"][0]["actions"]]
+                + [f"data:{x}" for x in LOGS_READER_DEFINITION["properties"]["permissions"][0]["dataActions"]])
+
+
 def _with_logs():
     """infra/orodruin/main.tf's assignments: the injector's three roles and Log Analytics
     Reader on the bench's workspace."""
@@ -182,7 +195,7 @@ def _with_logs():
 
 
 def _logs_roles(other=None):
-    roles = {**ROLES, LOGS_ROLE: list(orodruin.LOGS_READER_ACTIONS)}
+    roles = {**ROLES, LOGS_ROLE: LOGS_AS_READ}
     return lambda r: roles.get(r, other if other is not None else ["*"])
 
 
@@ -217,7 +230,8 @@ def test_network_contributor_on_the_bench_arms_nothing():
     (EXPERIMENT, [*orodruin.CHAOS_ACTIONS, "Microsoft.Chaos/experiments/write"]),
     (WORKSPACE, ["Microsoft.OperationalInsights/workspaces/write"]),
     (WORKSPACE, ["Microsoft.OperationalInsights/workspaces/sharedKeys/action"]),
-    (BENCH, list(orodruin.LOGS_READER_ACTIONS)),                        # the logs reader on the group
+    (BENCH, LOGS_AS_READ),                                              # the logs reader on the group
+    (VM, LOGS_AS_READ),                                                 # the logs reader on a VM
     (VM + "/extensions/RunCommandLinux", list(orodruin.VM_ACTIONS)),    # below a VM: not a VM
     (BENCH, []),                                                        # a role that cannot be read
 ])
@@ -246,8 +260,45 @@ def test_what_each_scope_may_hold():
     assert orodruin.allowed_at(BENCH + "/", BENCH.upper()) == reads
     assert orodruin.allowed_at(VM, BENCH) == reads | {a.lower() for a in orodruin.VM_ACTIONS}
     assert orodruin.allowed_at(EXPERIMENT, BENCH) == reads | {a.lower() for a in orodruin.CHAOS_ACTIONS}
-    assert orodruin.allowed_at(WORKSPACE, BENCH) == reads | {a.lower() for a in orodruin.LOGS_READER_ACTIONS}
+    assert orodruin.allowed_at(WORKSPACE, BENCH) == reads | {a.lower() for a in LOGS_AS_READ}
     assert orodruin.allowed_at(BENCH + "/providers/Microsoft.Compute/virtualMachines/", BENCH) == reads
+
+
+def test_log_analytics_reader_as_azure_defines_it_holds_through_the_real_reader(monkeypatch):
+    """The 5.5 review of SEC11: the allow-list missed the role's data action (jobs/export), which
+    role_actions marks « data: » — Orodruin, given what main.tf gives, went passive. Read here
+    through read_identity itself, from the role's published JSON: armed; one more data action
+    on the workspace, passive."""
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", SUB)
+    credential = MagicMock()
+    credential.get_token.return_value.token = _token("oid-orodruin")
+    definitions = {READ_ROLE: {"properties": {"permissions": [{"actions": list(orodruin.READ_ACTIONS)}]}},
+                   VM_ROLE: {"properties": {"permissions": [{"actions": list(orodruin.VM_ACTIONS)}]}},
+                   CHAOS_ROLE: {"properties": {"permissions": [{"actions": list(orodruin.CHAOS_ACTIONS)}]}},
+                   LOGS_ROLE: LOGS_READER_DEFINITION}
+
+    def get(url, headers, params, timeout):
+        r = MagicMock(ok=True)
+        path = url[len(orodruin.ARM):]
+        if url.endswith("/roleAssignments"):
+            r.json.return_value = {"value": _with_logs()}
+        elif url.endswith(f"/subscriptions/{SUB}/providers/Microsoft.Authorization/permissions"):
+            r.json.return_value = {"value": [{"actions": sorted(orodruin.AUTHZ_READ_ONLY)}]}
+        elif url.endswith("/permissions"):
+            r.json.return_value = {"value": ALL_RIGHTS}
+        elif url.endswith("/providers/Microsoft.Chaos/experiments"):
+            r.json.return_value = {"value": [{"id": EXPERIMENT}]}
+        else:
+            r.json.return_value = definitions[path]
+        return r
+
+    assert orodruin.read_identity(credential=credential, get=get) == []
+    perms = LOGS_READER_DEFINITION["properties"]["permissions"][0]
+    definitions[LOGS_ROLE] = {"properties": {"permissions": [{
+        **perms, "dataActions": [*perms["dataActions"], "Microsoft.OperationalInsights/workspaces/tables/data/read"]}]}}
+    missing = orodruin.read_identity(credential=credential, get=get)
+    assert [m["code"] for m in missing] == ["identity_unlisted_right"]
+    assert "data:microsoft.operationalinsights/workspaces/tables/data/read" in missing[0]["detail"]
 
 
 def test_the_logs_reader_is_the_role_terraform_gives_on_the_workspace():

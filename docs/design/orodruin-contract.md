@@ -490,7 +490,7 @@ Désormais, ce que l'identité **tient** dans le banc est une liste, par genre d
 | le groupe du banc | les lectures des injecteurs (`READ_ACTIONS`) | Annatar lit la VM, ses NSG, cartes et sous-réseaux ; Gothmog lit les expériences |
 | une VM du groupe | ces lectures, `start`, `runCommand` (`VM_ACTIONS`) | Annatar démarre une VM arrêtée et y lance son script |
 | une expérience du groupe | ces lectures, démarrer et annuler (`CHAOS_ACTIONS`) | Gothmog lance la panne et peut l'arrêter |
-| l'espace de logs du banc | ces lectures, `Log Analytics Reader` tel qu'Azure le définit (`LOGS_READER_ACTIONS` : `*/read`, les deux actions de requête, `Microsoft.Support/*`) | Gothmog relit l'effet de sa panne dans les logs, par l'API de contrôle. À cette portée, ces droits n'atteignent que l'espace de logs : un ticket de support relève de l'abonnement |
+| l'espace de logs du banc | ces lectures, `Log Analytics Reader` tel qu'Azure le définit (`LOGS_READER_ACTIONS` : `*/read`, les deux actions de requête, `Microsoft.Support/*` ; `LOGS_READER_DATA_ACTIONS` : son action de données, `workspaces/jobs/export/action`, que la lecture marque `data:` ; son `notAction`, les clés partagées, ne fait que le restreindre) | Gothmog relit l'effet de sa panne dans les logs, par l'API de contrôle. À cette portée, ces droits n'atteignent que l'espace de logs : un ticket de support relève de l'abonnement |
 
 Chaque action d'un rôle doit y figurer **telle qu'elle est écrite** : un joker n'est pas déplié
 (`Microsoft.Compute/virtualMachines/*` sur une VM refuse), une action de données refuse, un rôle
@@ -502,7 +502,7 @@ avec l'action et la portée dans le détail. Les attributions hors du banc ne ch
 lecture des attributions, les deux conteneurs des canaux.
 
 Ce que `infra/orodruin/main.tf` donne tient dans cette liste sans changement : les trois rôles
-d'injecteur et `Log Analytics Reader` sur l'espace de logs (un test lie la liste à ce rôle).
+d'injecteur et `Log Analytics Reader` sur l'espace de logs. Un test lie la liste à ce rôle, et un autre relit sa définition publiée (JSON exact, action de données comprise) par la vraie lecture du contrat (`read_identity`) : `armed`.
 **À constater après le prochain `orodruin-check`** : `armed`. Si Azure définissait `Log Analytics
 Reader` autrement que la liste, le contrat dirait `identity_unlisted_right` en nommant l'action en
 trop — l'échec est fermé, et il se corrige dans la liste, après lecture de la définition

@@ -7396,6 +7396,14 @@ MUTANTS += [
      "                   )\n"),
 ]
 TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M2883", "M2884", "M2885", "M2886", "M2887")})
+# SEC11, after its 5.5 review: Log Analytics Reader's data action (M3030); the session drain to
+# a list of the VMs Glorfindel defends (M3031–M3035); the watch's word without a principal (M3036).
+MUTANTS += [
+    ("M3030", "the allow-list misses Log Analytics Reader's data action: Orodruin passive on what main.tf gives (SEC11, V-29)",
+     ORO, '             LOGS_READER_ACTIONS + tuple(f"data:{a}" for a in LOGS_READER_DATA_ACTIONS)))',
+     "             LOGS_READER_ACTIONS))"),
+]
+TESTS["M3030"] = "tests/unit/test_orodruin.py"
 MUTANTS += [
     ("M2888", "the watch falls back on the former shared principal (SEC11, V-17)", "docker-compose.yml",
      "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",

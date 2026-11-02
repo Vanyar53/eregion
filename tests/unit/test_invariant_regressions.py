@@ -5615,3 +5615,71 @@ def test_a_nics_rules_on_the_quarantine_nsg_it_left_go_once_the_operator_gives_i
     too — the release keeps db-nic-0 in quarantine and says why, the operator sets the tag
     (I7), the release then puts its NSG back and says `released`, the rules still there."""
     _run(monkeypatch, _I3R_NET, *_I3R_STEPS, ("lose_state", DB), ("tags_lost", _SEC_Q))
+
+
+def _r1d(name, priority, access, direction, source, destination, port="*"):
+    return _rule(name, priority, dict(access=access, direction=direction, source_address_prefix=source,
+                                      destination_address_prefix=destination, destination_port_range=port))
+
+
+_LATERAL_OUT = ("allow-lateral-out", 100, "Allow", "Outbound", "*", "VirtualNetwork")
+
+
+_LATERAL_IN = ("deny-lateral-in", 130, "Deny", "Inbound", "VirtualNetwork", "*")
+
+
+_SEC13_L1_NET = {
+    "subnet_nsg": [_r1d("allow-https", 100, "Allow", "Inbound", "Internet", "*", "443"),
+                   _r1d(*_LATERAL_OUT), _r1d(*_LATERAL_IN)],
+    "edge_nsg": None,
+    "tier_rules": [_r1d(*_LATERAL_OUT), _r1d(*_LATERAL_IN)],
+    "nics": {
+        "web-nic": {"own": "tier", "rules": [_r1d("allow-https", 100, "Allow", "Inbound", "Internet", "*", "443"),
+                                             _r1d(*_LATERAL_OUT)], "policy": True},
+        "db-nic-0": {"own": "dedicated", "rules": [_r1d("allow-ssh", 1000, "Allow", "Inbound", "*", "*", "22")],
+                     "policy": False},
+        "db-nic-1": {"own": "tier", "rules": [_r1d("allow-ssh", 100, "Allow", "Inbound", "*", "*", "22"),
+                                              _r1d(*_LATERAL_OUT)], "policy": True},
+        "api-nic": {"own": "dedicated",
+                    "rules": [_r1d("deny-lateral-in", 1300, "Deny", "Inbound", "VirtualNetwork", "*")],
+                    "policy": True}},
+    "windows": None,
+    "config": {"quarantine": True, "readable": True, "forensic": [], "rg": ""},
+    "legacy": None, "data_subnet": None}
+
+
+def test_a_block_gone_is_said_whatever_a_check_card_write_does(monkeypatch):
+    """The nightly CI of `main` after SEC13 (06dfa49; 15 steps as Hypothesis shrank them): blocks
+    on web, api and Db--01, the disk full again and again, a check that can't tell on nsg-tier
+    (`nsg.get` always in 429), another host writing; then Db--01's block gone, the disk full:
+    « L1: the block on …/Db--01 vanished from Azure; the reassertion neither put it back nor
+    said so ». Red on 06dfa49 and on f1b9b24 too (glorfindel/ put back): older than SEC13, which
+    only changed what the machine drew. A drift said and acknowledged; a pass, the disk full,
+    reads the block held again while another rule is gone — worse on one side, better on the
+    other — and the card saying it is refused; then the rules go again: the situation is the
+    acknowledged card's, read « not worse », and nothing is said. What got better is the baseline
+    before the card is written now (`reassert_cards.drift_meet`). The guard on the `unverified`
+    card's writes is proved apart (`test_reassert.py::test_a_check_card_refused_never_cuts_the_blocks_pass`)."""
+    tier = _NSG.format(rg="rg-net", name="nsg-tier")
+    api_nsg = _NSG.format(rg="rg-edge", name="nsg-api-nic")
+    _replay(monkeypatch, _SEC13_L1_NET,
+            ("block", WEB1, WEB1, None, 22),
+            ("block", WEB1, WEB1, None, 22),
+            ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, (14, "before-429"), False, 22,
+             (4, "from-full")),
+            ("another_host_writes", WEB1, WEB1, (12, "before-429"), "after-foreign", False),
+            ("block", API, API.lower(), None, None),
+            ("customer_removes_rule", tier, "deny-lateral-in"),
+            ("said_then_back_after_a_full_disk", "bypass", API, API, ("rule.list", "always-429"), False, None,
+             (200, api_nsg)),
+            ("said_then_back_after_a_full_disk", "unreadable state", "human_only", True, "non_disruptive",
+             (7, "from-full"), "human_only"),
+            ("said_then_back_after_a_full_disk", "bypass", DB, DB, (6, "before-429"), False, 22, (200, tier)),
+            ("another_host_writes", API, API, (10, "after-429"), "after-foreign", False),
+            ("another_host_writes", DB, DB.lower(), ("nsg.get", "always-429"), "always-foreign", True),
+            ("said_then_back_after_a_full_disk", "gone", DB, DB.lower(), ("nsg.get", "always-429"), False, None,
+             (4, "from-full")),
+            ("said_then_back_after_a_full_disk", "bypass", API, API, None, True, (100, api_nsg)),
+            ("another_host_writes", WEB2, WEB2.lower(), ("nic.get", "always-429"), "after-foreign", True),
+            ("said_then_back_after_a_full_disk", "gone", DB, DB, ("subnet.get", "always-429"), False, 22,
+             (2, "from-full")))

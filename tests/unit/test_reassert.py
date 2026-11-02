@@ -1988,6 +1988,7 @@ def test_a_disappearance_said_under_the_canonical_name_is_said_once_by_the_lower
     _held_as(_DB, kind)
     reassert_active(c, _HUMAN)
     (first,) = _drift_cards("pending")
+    assert first["signal_id"] == first["signal_id"].lower()         # written in lowercase, whatever the state's case
     _held_as(_DB.lower(), kind)
     assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]   # a new episode
     for _ in range(2):

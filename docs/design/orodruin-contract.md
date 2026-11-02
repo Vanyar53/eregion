@@ -466,6 +466,13 @@ rapports de run, détections) partent 9 jours après leur dernière écriture (l
 7 jours après le dernier moment d'une fenêtre, plus 2 h 15 et une marge) ; le journal d'Orodruin
 (`audit/`) reste 90 jours, le temps de revenir sur un incident.
 
+**Les scripts locaux (V-19, SEC14).** Le catalogue se porte garant du contenu d'un script, pas de son
+chemin : chaque entrée qui nomme un `reference_script` ou des `setup_scripts` porte leur sha256
+(`script_sha256`). Un script dont le contenu n'est pas celui-là n'est plus « ce que le catalogue a dit »
+(`catalog_destructive` : inconnu, donc destructif, refusé en production), et `run_script` ne l'envoie
+pas à la VM : le fichier est lu une fois, son empreinte comparée, puis ce contenu-là envoyé. Un script
+changé change son empreinte dans le même commit (`tests/unit/test_injector_guards.py`).
+
 **Les atomics (V-30).** Le sha256 de chaque atomic est relu contre `PIN` à chaque run. `PIN` est
 rangé à côté des YAML, dans la même image : une modification qui touche les deux à la fois n'est
 pas vue. Cela attrape un fichier dérivé ou à moitié modifié, pas une image hostile (sa

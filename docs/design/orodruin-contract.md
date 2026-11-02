@@ -432,9 +432,20 @@ c'est dit une fois ; une copie locale qui ne se lit plus (corrompue, pas une fen
 fenêtre vue pour la première fois déjà fermée serait refusée : ses cycles restent « real », le
 sens sûr).
 
-Limites qui restent, assumées : une fenêtre écrite sur l'hôte même (sans canal) n'est bornée que
-vers le futur (le mtime de son fichier), car qui écrit là écrit aussi le reste de l'état ; en
-production, la règle repose sur le `destructive` que l'injecteur écrit d'après le catalogue — un
+**Une fenêtre écrite sur l'hôte même** (sans canal : la watch et l'injecteur partagent `runs/`) est
+bornée de la même façon (SEC14, V-20), par ce que la watch en a vu : la première fois qu'elle la lit,
+elle note quand, dans son propre état (`~/.glorfindel/exercise_seen.json`, jamais dans `runs/`
+qu'écrit l'injecteur, et qu'aucun conteneur d'injecteur ne monte, SEC3). La fenêtre ne peut pas
+commencer plus de 5 min avant ce moment, et, une fois vue, ne peut revenir que fermée, comme par le
+canal. La watch relit ses fenêtres chaque minute (le ménage de `glorfindel watch`) : une fenêtre
+d'injecteur est vue moins d'une minute après son écriture, et aucun run ne part sans watch vivante
+(V1). Un registre illisible ne fait croire aucune fenêtre locale : leurs cycles restent « real ».
+Le mtime d'un fichier ne borne rien (qui écrit le fichier écrit aussi sa date).
+
+Limites qui restent, assumées : une suite de fenêtres neuves, chacune écrite au moment où elle
+commence, couvre une VM aussi longtemps que son rédacteur le veut — par le canal comme sur l'hôte ;
+la console montre les fenêtres telles que leurs fichiers les disent (`window_refusal`), sans ce
+registre, que seule la watch tient ; en production, la règle repose sur le `destructive` que l'injecteur écrit d'après le catalogue — un
 rédacteur du canal qui mentirait là ne ferait marquer qu'une technique non destructive, sur une
 VM inscrite.
 

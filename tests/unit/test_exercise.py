@@ -170,3 +170,92 @@ def test_the_model_sees_each_past_cycle_s_source_never_the_current_one(tmp_path,
     assert "**Cycle 3** [source inconnue] : ancien cycle" in msg
     assert msg.count("[EXERCICE]") == 1        # the current signal is never labelled
     assert "never a precedent for a real" in _SYSTEM_PROMPT
+
+
+# ── SEC14 (V-20): a window written on the watch's host, bounded by what the watch saw ──────────
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture
+def seen_record(tmp_path, monkeypatch):
+    """The watch's real record of the windows it saw (off elsewhere in the tests), in tmp."""
+    monkeypatch.setattr(exercise, "seen_path", lambda: tmp_path / "glorfindel" / "exercise_seen.json")
+    return tmp_path / "glorfindel" / "exercise_seen.json"
+
+
+def _write(directory, window):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{window['run_id']}.json").write_text(json.dumps(window))
+
+
+def _local(rid="r1", start=None, **kw):
+    start = start or T0
+    return {"run_id": rid, "injector": "annatar", "kind": "technique", "experiment": "T1110.001",
+            "targets": [VM.lower()], "start": start.isoformat(), "end": None,
+            "expires": (start + timedelta(hours=2)).isoformat(), "destructive": False, **kw}
+
+
+def test_a_local_window_dated_back_when_first_seen_is_refused(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local(start=_at(-110)))                    # written now, dated 110 min back
+    assert exercise.load_windows(d, now=T0, seen=seen_record) == []
+    assert source_of(VM, _at(-100), windows=exercise.load_windows(d, now=T0, seen=seen_record)) == ("real", "")
+    # Without the record (as before SEC14), it was believed: the bound is the record's.
+    assert [w["run_id"] for w in exercise.load_windows(d, now=T0)] == ["r1"]
+
+
+def test_a_local_window_seen_open_may_come_again_closed_and_nothing_else(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local(start=_at(0)))
+    assert len(exercise.load_windows(d, now=_at(1), seen=seen_record)) == 1
+    _write(d, _local(start=_at(0), end=_at(30).isoformat(), closed_by="annatar"))
+    assert len(exercise.load_windows(d, now=_at(31), seen=seen_record)) == 1   # its closure
+    assert json.loads(seen_record.read_text())["r1"]["end"] == _at(30).isoformat()
+    for rewrite in (_local(start=_at(0), end=_at(45).isoformat()),           # its end moved
+                    _local(start=_at(0)),                                     # its end withdrawn
+                    _local(start=_at(-60), end=_at(30).isoformat()),          # its start moved
+                    _local(start=_at(0), end=_at(30).isoformat(), targets=[VM.lower(), OTHER.lower()])):
+        _write(d, rewrite)
+        assert exercise.load_windows(d, now=_at(50), seen=seen_record) == [], rewrite
+
+
+def test_the_first_sight_is_kept_a_long_run_stays_believed(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local(start=_at(0)))
+    assert len(exercise.load_windows(d, now=_at(1), seen=seen_record)) == 1
+    assert len(exercise.load_windows(d, now=_at(100), seen=seen_record)) == 1
+    assert json.loads(seen_record.read_text())["r1"]["seen"] == _at(1).isoformat()
+
+
+def test_a_window_pulled_from_the_channel_keeps_the_channels_bound_alone(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local(start=_at(0), channel_created=_at(0).isoformat()))
+    assert len(exercise.load_windows(d, now=_at(90), seen=seen_record)) == 1
+    assert not seen_record.exists()
+
+
+def test_an_unreadable_record_believes_no_local_window(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local("r1", start=_at(0)))
+    _write(d, _local("r2", start=_at(0), channel_created=_at(0).isoformat()))
+    seen_record.parent.mkdir(parents=True)
+    seen_record.write_text("[not an object]")
+    assert [w["run_id"] for w in exercise.load_windows(d, now=_at(1), seen=seen_record)] == ["r2"]
+
+
+def test_the_watch_writes_down_what_it_saw_in_its_own_state_never_in_runs(tmp_path, seen_record):
+    """observe(), the watch's minute: the default directory (the injector's runs/exercises) read,
+    the record written beside the watch's state — never where an injector writes."""
+    open_window("r1", injector="annatar", kind="technique", experiment="T1110.001", targets=[VM])
+    assert [w["run_id"] for w in exercise.observe()] == ["r1"]
+    assert "r1" in json.loads(seen_record.read_text())
+    assert not list(exercise.exercises_dir().rglob("exercise_seen*"))
+
+
+def test_the_watch_reads_its_windows_every_minute():
+    """glorfindel/cli.py's housekeeping holds the observation, beside the heartbeat."""
+    from pathlib import Path
+    cli = (Path(__file__).resolve().parents[2] / "glorfindel" / "cli.py").read_text(encoding="utf-8")
+    assert "for _task in (_check_ttl, _reconcile_jobs, _reassert, _write_heartbeat, _observe_windows):" in cli
+    assert "        _exercise.observe()\n" in cli

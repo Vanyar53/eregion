@@ -29,6 +29,16 @@ A window pulled from the channel carries when its blob was created (``channel_cr
 listing's word, eregion_core/exercise_channel.py): it may not start more than FUTURE_SKEW_S
 before that — a window written now and dated 110 minutes back is refused (its file's mtime,
 the pull, already bounds it the other way).
+SEC14 (V-20): a window written on the watch's host itself (no channel) is bounded the same way,
+by what the watch saw (``observe``): the first time the watch reads it, it writes down when, in
+its own state (``seen_path()``, ``~/.glorfindel/exercise_seen.json`` — never in ``runs/``, which an
+injector writes; the injectors' containers mount none of it, SEC3). The window may not start
+more than FUTURE_SKEW_S before that moment, and once seen it may come again only closed — every
+field as it was, ``end`` from null to a date not before its start —, as the channel does
+(``exercise_channel.rewrite_refusal``). The watch reads its windows every minute
+(glorfindel/cli.py's housekeeping), so an injector's window is seen within a minute of being
+written; a run never starts without a live watch (V1). A registry that cannot be read believes
+no local window: its cycles fall toward ``real``.
 MAX_DURATION_S still caps how long it lasts. And on a VM in zone ``production`` (its tags,
 read by the watch), a window marks nothing unless it declares a technique that is not
 destructive (``kind: technique``, ``destructive: false``): the production rule of O0 — a
@@ -41,9 +51,11 @@ each window it writes, the watch pulls them before it reads.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -66,6 +78,11 @@ _WATCH_RUN_PREFIX = "watch-"
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 # When the blob of a window pulled from the channel was created (exercise_channel.CREATED).
 CHANNEL_CREATED = "channel_created"
+# SEC14 (V-20): when the watch first saw each window written on its own host, in its own state.
+SEEN_ENV = "EREGION_EXERCISE_SEEN"
+# What a window may change once seen: its closure (as exercise_channel._KEPT_AS_PULLED).
+_CLOSURE = {"end", "closed_by", CHANNEL_CREATED}
+_seen_lock = threading.Lock()
 
 EXERCISE, REAL, UNKNOWN = "exercise", "real", "unknown"
 
@@ -200,19 +217,103 @@ def window_refusal(window, now: datetime | None = None,
 _refused: dict[str, str] = {}
 
 
-def load_windows(directory: Path | None = None, *, now: datetime | None = None) -> list[dict]:
+def seen_path() -> Path:
+    """The watch's record of when it first saw each local window (SEC14, V-20):
+    ``EREGION_EXERCISE_SEEN``, else ``~/.glorfindel/exercise_seen.json`` — the watch's own state."""
+    return Path(os.environ.get(SEEN_ENV) or Path.home() / ".glorfindel" / "exercise_seen.json")
+
+
+def _fields(window: dict) -> str:
+    """What a window says, its closure aside: once seen, it never changes."""
+    kept = {k: v for k, v in window.items() if k not in _CLOSURE}
+    return hashlib.sha256(json.dumps(kept, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def seen_refusal(window: dict, entry: dict) -> str:
+    """Why a local window is not believed against what the watch saw of it first — "" when it
+    is (SEC14, V-20): it starts no more than FUTURE_SKEW_S before the watch first saw it, and it
+    came again only closed."""
+    seen, start = _parse(entry.get("seen")), _parse(window.get("start"))
+    if seen is None or start is None:
+        return "when the watch first saw it is unreadable"
+    if start < seen - timedelta(seconds=FUTURE_SKEW_S):
+        return (f"it starts {(seen - start).total_seconds():.0f} s before the watch first saw it "
+                f"(more than FUTURE_SKEW_S, {FUTURE_SKEW_S} s): antedated")
+    if _fields(window) != entry.get("fields"):
+        return "rewritten after the watch first saw it (only its closure may come)"
+    if entry.get("end") is not None and window.get("end") != entry.get("end"):
+        return "its end withdrawn or moved after the watch saw it closed"
+    return ""
+
+
+def _observe(windows: list[tuple[Path, dict]], now: datetime, registry: Path) -> dict[str, str]:
+    """Write down the local windows seen for the first time, and the closure of those seen open;
+    return why each local window is not believed, by path (SEC14, V-20). A registry that cannot
+    be read or written believes none of them."""
+    local = [(p, w) for p, w in windows if CHANNEL_CREATED not in w]
+    if not local:
+        return {}
+    with _seen_lock:
+        try:
+            seen = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else {}
+            if not isinstance(seen, dict):
+                raise ValueError("not a JSON object")
+        except (OSError, ValueError) as e:
+            return {str(p): f"the watch's record of the windows it saw is unreadable ({e})" for p, _ in local}
+        changed, out = False, {}
+        for path, w in local:
+            rid = str(w.get("run_id"))
+            entry = seen.get(rid)
+            if not isinstance(entry, dict):
+                entry = seen[rid] = {"seen": now.isoformat(), "fields": _fields(w), "end": w.get("end")}
+                changed = True
+            why = seen_refusal(w, entry)
+            if why:
+                out[str(path)] = why
+            elif entry.get("end") is None and w.get("end") is not None:
+                entry["end"] = w["end"]          # its closure, the one change it may bring
+                changed = True
+        # Forget what was seen long ago: the window is purged by then (PURGE_AFTER_S).
+        horizon = now - timedelta(seconds=PURGE_AFTER_S + MAX_DURATION_S + GRACE_AFTER_S)
+        for rid in [k for k, v in seen.items() if not isinstance(v, dict)
+                    or (_parse(v.get("seen")) or now) < horizon]:
+            del seen[rid]
+            changed = True
+        if changed:
+            try:
+                registry.parent.mkdir(parents=True, exist_ok=True)
+                tmp = registry.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(seen, indent=1), encoding="utf-8")
+                tmp.replace(registry)
+            except OSError as e:
+                return {str(p): f"the watch's record of the windows it saw cannot be written ({e})"
+                        for p, _ in local}
+        return out
+
+
+def observe(now: datetime | None = None) -> list[dict]:
+    """The watch reads its windows (every minute, glorfindel/cli.py): the local ones are written
+    down the first time they are seen (SEC14, V-20)."""
+    return load_windows(now=now)
+
+
+def load_windows(directory: Path | None = None, *, now: datetime | None = None,
+                 seen: Path | None = None) -> list[dict]:
     """Every window believed (``window_refusal``, declared at its file's mtime); a
     malformed or refused file is skipped — said once, never fatal — and a window whose last
     moment is PURGE_AFTER_S old is purged (``_purge``). The default directory is refreshed
-    from the exercise channel first, when one is configured."""
+    from the exercise channel first, when one is configured. A local window (not pulled from
+    the channel) is also held against what the watch saw of it (``seen``: the watch's record;
+    ``seen_path()`` for the default directory — SEC14, V-20)."""
     if directory is None:
         from eregion_core import exercise_channel
         exercise_channel.pull_if_due(exercises_dir())
+        seen = seen if seen is not None else seen_path()
     d = directory or exercises_dir()
     if not d.is_dir():
         return []
     now = now or _now()
-    out = []
+    read: list[tuple[Path, dict, datetime]] = []
     for path in sorted(d.glob("*.json")):
         try:
             w = json.loads(path.read_text(encoding="utf-8"))
@@ -221,7 +322,14 @@ def load_windows(directory: Path | None = None, *, now: datetime | None = None) 
             continue
         if isinstance(w, dict) and w.get("purged_at"):
             continue                     # purged already: its tombstone (``_purge``)
-        why = window_refusal(w, now, declared)
+        read.append((path, w, declared))
+    unseen = {}
+    if seen is not None:
+        unseen = _observe([(p, w) for p, w, _ in read if isinstance(w, dict) and not window_refusal(w)],
+                          now, seen)
+    out = []
+    for path, w, declared in read:
+        why = window_refusal(w, now, declared) or unseen.get(str(path), "")
         if why:
             if _refused.get(str(path)) != why:
                 _refused[str(path)] = why

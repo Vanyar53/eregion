@@ -7441,6 +7441,14 @@ MUTANTS += [
 ]
 TESTS["M2956"] = "tests/unit/test_injector_channels.py"
 
+# SEC14 (#420, V-20): a window written on the watch's host, bounded by what the watch saw of it.
+MUTANTS += [
+    ("M2957", "a local window dated back when the watch first saw it is believed (V-20)",
+     "eregion_core/exercise.py", "    if start < seen - timedelta(seconds=FUTURE_SKEW_S):\n",
+     "    if False:\n"),
+]
+TESTS["M2957"] = "tests/unit/test_exercise.py"
+
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
 # « brouillon ». M2680–M2695; M2696–M2699 after its review.

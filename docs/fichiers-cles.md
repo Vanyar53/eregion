@@ -350,6 +350,9 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 ~/.glorfindel. La watch le crée au démarrage. 0644 (dossier 0755) : à lire par eux, rien
                                 de secret. Retiré à l'arrêt
   watch_heartbeat             → le battement de la watch (V1 sur cet hôte, la console, le CD de H0)
+  exercise_seen.json          → SEC14 (V-20) : quand la watch a vu pour la première fois chaque fenêtre d'exercice écrite
+                                sur cet hôte (sans canal), et sa fermeture : une fenêtre antidatée ou réécrite n'est pas
+                                crue (eregion_core/exercise.py, ``observe``). Hors de runs/, que l'injecteur écrit
   escalations.jsonl           → escalades persistées. SEC3 (V-10) : chaque lecture-modification-écriture sous un
                                 verrou (`flock` sur `escalations.jsonl.lock`, `response/locks.py::_file_lock`), le
                                 magasin réécrit entier : aucune carte perdue entre écrivains, aucune lecture tronquée

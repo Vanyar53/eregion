@@ -57,8 +57,8 @@ def test_a_vm_id_gives_its_parts(rid):
 
 
 @pytest.mark.parametrize("rid", [
-    "@attacker.example" + VM,                      # before the path: another host
-    ":8443" + VM, "." + VM, "//attacker.example" + VM,
+    "@other-host.example" + VM,                      # before the path: another host
+    ":8443" + VM, "." + VM, "//other-host.example" + VM,
     VM + "?x=1", VM + "#x", VM + "/extensions/x", VM.replace("vm-example-01", "vm%2F01"),
     VM.replace("vm-example-01", ".."), VM.replace("rg-example", "rg@x"),
     VM.replace("vm-example-01", "vm​01"), VM.replace("vm-example-01", "vm 01"),
@@ -78,7 +78,7 @@ def test_the_enrollment_read_builds_its_urls_from_the_parts():
                         f"https://{ARM_HOST}{VM}"]
 
 
-@pytest.mark.parametrize("prefix", ["@attacker.example", ":443@attacker.example", ".attacker.example"])
+@pytest.mark.parametrize("prefix", ["@other-host.example", ":443@other-host.example", ".other-host.example"])
 def test_an_id_that_would_change_the_host_is_refused_before_any_token(prefix):
     rec = _Recorder()
     reader = inscription.TagEnrollment(credential=rec.credential(), get=rec.get)
@@ -111,7 +111,7 @@ def test_a_path_under_arm_passes(path):
     assert held.arm_relative(path) == path
 
 
-@pytest.mark.parametrize("path", ["@attacker.example/x", "attacker.example/x", "/x?y", "/x#y", "/x%2F",
+@pytest.mark.parametrize("path", ["@other-host.example/x", "other-host.example/x", "/x?y", "/x#y", "/x%2F",
                                   "/x/../y", "/x\\y", "/x y", "", None])
 def test_a_path_not_under_arm_is_refused(path):
     with pytest.raises(ValueError):
@@ -135,12 +135,12 @@ def test_orodruin_never_reads_a_role_definition_elsewhere(monkeypatch):
     def get(url, headers, params, timeout):
         asked.append(url)
         if url.endswith("/roleAssignments"):
-            return _ok({"value": [{"properties": {"scope": bench, "roleDefinitionId": "@attacker.example/r"}}]})
+            return _ok({"value": [{"properties": {"scope": bench, "roleDefinitionId": "@other-host.example/r"}}]})
         return _ok({"value": []})
 
     orodruin.read_identity(credential=credential, get=get)
     assert asked and all(urlsplit(u).hostname == ARM_HOST for u in asked)
-    assert not [u for u in asked if "attacker" in u]
+    assert not [u for u in asked if "other-host" in u]
 
 
 def test_orodruin_never_follows_a_next_page_elsewhere(monkeypatch):
@@ -157,7 +157,7 @@ def test_orodruin_never_follows_a_next_page_elsewhere(monkeypatch):
     def get(url, headers, params, timeout):
         asked.append(url)
         # One page elsewhere, then the end: a red test never loops.
-        return _ok({"value": [], **({} if "attacker" in url else {"nextLink": "https://attacker.example/next"})})
+        return _ok({"value": [], **({} if "other-host" in url else {"nextLink": "https://other-host.example/next"})})
 
     with pytest.raises(RuntimeError, match="outside Azure Resource Manager"):
         orodruin.read_identity(credential=credential, get=get)
@@ -170,7 +170,7 @@ def test_gothmog_calls_arm_paths_only():
     http = MagicMock()
     engine = ChaosStudio(credential=MagicMock(), http=http, subscription_id=SUB)
     with pytest.raises(ValueError):
-        engine.vm("@attacker.example" + VM)
+        engine.vm("@other-host.example" + VM)
     assert not http.get.called and not http.post.called
     http.get.return_value = _ok({})
     engine.vm(VM)
@@ -190,7 +190,7 @@ def test_glorfindels_permission_check_never_follows_a_next_page_elsewhere(monkey
     def get(url, headers=None, params=None, timeout=None):
         asked.append(url)
         # One page elsewhere, then the end: a red test never loops.
-        return _ok({"value": [], **({} if "attacker" in url else {"nextLink": "https://attacker.example/next"})})
+        return _ok({"value": [], **({} if "other-host" in url else {"nextLink": "https://other-host.example/next"})})
     monkeypatch.setattr("requests.get", get)
     got = conn.check_permissions(VM)
     assert got["ok"] is False and "outside Azure Resource Manager" in got["error"]

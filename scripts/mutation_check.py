@@ -7285,7 +7285,7 @@ MUTANTS += [
      '    if event == "detection_missed" and ws not in (None, "") and not (\n',
      "    if False and not (\n"),
     ("M2836", "a rule proposal queries the workspace the signal names (SEC8)", AGT,
-     '    workspace_id = config_workspace(ctx.get("workspace_id", ""), source)\n',
+     '    workspace_id = config_workspace(ctx.get("workspace_id", ""))\n',
      '    workspace_id = ctx.get("workspace_id", "")\n'),
     ("M2837", "the enrollment read pastes the id after ARM's host: the token goes where the id says (SEC8)", INS,
      ("        sub, rg, name = vm_parts(resource_id)\n",

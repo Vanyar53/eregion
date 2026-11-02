@@ -190,7 +190,7 @@ def configured_workspaces() -> frozenset:
                      if str(getattr(b, "workspace_id", "") or "").strip())
 
 
-def config_workspace(named="", source: str = "azure_monitor") -> str:
+def config_workspace(named="") -> str:
     """The workspace a rule proposal may query, from Glorfindel's config: the one `named` when
     it is one of its backends' (as the config writes it), the first configured when none is
     named; "" otherwise — a workspace named by a line is never queried as it was given."""

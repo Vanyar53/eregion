@@ -12,6 +12,7 @@ unchecked: one card while it lasts, closed once the check passes again.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 
@@ -122,6 +123,20 @@ def drift_baseline(key: str, ip: str, said):
 def narrow_drift(key: str, ip: str, now: dict) -> None:
     """Not worse than the card: what holds now is the new baseline, the card pending or not."""
     _NARROWED[(key.lower(), ip)] = now
+
+
+def drift_meet(said, now: dict):
+    """What holds both in what was said and now — the better of each: what got better since is
+    the baseline before the card is written. Its write refused (a full disk), the improvement is
+    kept all the same: a return to what the card said reads worse, and is said (L1, the nightly
+    machine after SEC13). No record (an older entry): unchanged."""
+    if not isinstance(said, dict):
+        return said
+    return {"gone": sorted(set(said.get("gone") or []) & set(now["gone"])),
+            "held": sorted(set(said.get("held") or []) & set(now["held"])),
+            "open": sorted(set(said.get("open") or []) & set(now["open"])),
+            "unsure": sorted(set(said.get("unsure") or []) & set(now["unsure"])),
+            "blocked": bool(said.get("blocked")) or now["blocked"]}
 
 
 def unrecorded(vm: str, exc: Exception, ip: str = "") -> dict:
@@ -248,11 +263,26 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
 _UNVERIFIED_OPEN: set[str] = set()
 
 
+def _card_write_may_fail(fn):
+    """The `unverified` card's writes on a full disk (an OSError): logged, said again at the next
+    pass — never raised into the pass, where it cut a block's or an isolation's own (its drift
+    not said, nor put back: L1, the nightly machine after SEC13)."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except OSError as exc:
+            log.warning("reassert: carte « non vérifiée » non écrite (%s) — redite à la passe suivante", exc)
+            new_pass()
+    return wrapper
+
+
 def _unverified_id(vm: str, rid: str, ip: str = "") -> str:
     from glorfindel.actions import _rid_hash
     return f"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
 
 
+@_card_write_may_fail
 def say_unverified(vm: str, rid: str, exc, report: list[dict], ip: str = "") -> None:
     """The check of `vm`'s isolation (or, with `ip`, its block) raised — a right removed, the
     API down — or answered « can't tell » (`verified: None`, its error): logged, and said on
@@ -296,6 +326,7 @@ def _unverified_reason(what: str, first: str, last: str) -> str:
             "pas s'il tient encore — rien n'est reposé ni levé.")
 
 
+@_card_write_may_fail
 def unverified_over(vm: str, rid: str, ip: str = "") -> None:
     """The check passed: its card closes, with a note — the next failure is a new card."""
     sid = _unverified_id(vm, rid, ip)
@@ -305,6 +336,7 @@ def unverified_over(vm: str, rid: str, ip: str = "") -> None:
             _resolve(e["id"], note="La vérification repasse.")
 
 
+@_card_write_may_fail
 def unverified_released() -> None:
     """A card whose isolation or block is no longer recorded (released, unblocked) closes —
     not while a state can't be read: what it holds is unknown (SEC4b)."""

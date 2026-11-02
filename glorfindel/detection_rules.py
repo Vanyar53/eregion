@@ -162,6 +162,17 @@ RECOGNIZED_INDICATOR_KEYS: frozenset = frozenset(
 _SUDO_TO_ROOT = re.compile(r"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND=")
 
 
+def hands_on_emitter(query: str) -> bool:
+    """Whether a query's rows still carry ProcessName: named in its last `project`, not dropped
+    by a `project-away`; with no `project`, assumed (a reading of the text, said only)."""
+    text = re.sub(r"//[^\n]*", "", query or "")
+    stages = [s.strip() for s in text.split("|")]
+    if any(s.startswith("project-away") and "ProcessName" in s for s in stages):
+        return False
+    projects = [s for s in stages if re.match(r"project\s", s)]
+    return "ProcessName" in projects[-1] if projects else True
+
+
 def _sudo_to_root(row: dict) -> bool:
     """A privilege escalation is sudo's own line (SEC13, R-18): its tag (ProcessName, which a
     rule must hand on in its row) is sudo, its message in sudo's form, not a refusal. Any
@@ -608,6 +619,13 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
         replaces_base = layer_of.get(item["name"]) == "client" and item["name"] in base_names
         if replaces_base:
             overrides.append(item["name"])
+        if (layer_of.get(item["name"]) == "client" and str(item.get("ttp", "")).startswith("T1548")
+                and not hands_on_emitter(item.get("query", ""))):
+            # SEC13 (R-18): a privilege escalation is read on sudo's own line, its emitter included.
+            notes.append(f"règle « {item['name']} » ({item.get('ttp')}) : sa ligne ne rend pas ProcessName — "
+                         "une élévation de privilège n'y est pas caractérisée : une action disruptive autonome "
+                         "escalade, et un instantané seul ne laisse pas de carte (plancher). Ajouter "
+                         "ProcessName à son `project`, comme sudo-privilege-escalation")
         interval_s = float(item.get("interval_s", 30))
         if not (math.isfinite(interval_s) and interval_s >= MIN_INTERVAL_S):
             notes.append(f"règle « {item['name']} » : interval_s {item.get('interval_s')!r} sous le "

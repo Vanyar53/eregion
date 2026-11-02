@@ -196,7 +196,8 @@ def test_syslog_is_characterized_only_by_a_curated_pattern():
     assert has_recognized_indicator({"ProcessName": "sudo", "SyslogMessage": _SUDO_ROOT}) is True
     assert has_recognized_indicator({"SyslogMessage": "CRON[812]: session opened for user root"}) is False
     assert has_recognized_indicator({"SyslogMessage": "systemd[1]: Started Daily apt."}) is False
-    # What the LLM sees is unchanged (normalize_row untouched → no prompt change).
+    # Account creation is read by the guard only: the model still sees a syslog_event. (normalize_row
+    # labels one curated pattern, sudo's own line — SEC13, R-18 — which the model sees.)
     assert normalize_row({"SyslogMessage": t1136})["indicator_key"] == "syslog_event"
 
 

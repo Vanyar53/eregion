@@ -501,3 +501,31 @@ def test_migrate_rules_says_an_unreadable_config(tmp_path, monkeypatch):
     modified.write_text(_pre_p1_approved(BASE_V1))
     res = _cli("migrate-rules", "--from", str(modified), "--base", str(base), "--dry-run")
     assert "glorfindel-config.yaml illisible" in res.output and "aucun backend unique" not in res.output
+
+
+@pytest.mark.parametrize("query,said", [
+    ("Syslog | where ProcessName == 'sudo' | project TimeGenerated, Computer, SyslogMessage", True),
+    ("Syslog | where SyslogMessage has 'USER=root' | project-away ProcessName", True),
+    ("Syslog | where ProcessName == 'sudo'\n// ProcessName kept\n| project Computer, SyslogMessage", True),
+    ("Syslog | where ProcessName == 'sudo' | project TimeGenerated, Computer, ProcessName, SyslogMessage", False),
+    ("Syslog | where ProcessName == 'sudo'", False),
+])
+def test_a_client_privilege_escalation_rule_without_its_emitter_is_said(tmp_path, query, said):
+    """SEC13 (R-18, review): a privilege escalation is read on sudo's own line, ProcessName
+    included. A client's T1548 rule whose row drops it is never characterized — an autonomous
+    isolate escalates, a snapshot alone leaves no card: said when it loads, not found later."""
+    base = tmp_path / "base.yaml"
+    base.write_text(BASE_V1)
+    client_rules_path().parent.mkdir(parents=True, exist_ok=True)
+    client_rules_path().write_text(yaml.safe_dump({"rules": [
+        {"name": "client-sudo", "ttp": "T1548.003", "assets": ["auto"], "query": query},
+        {"name": "client-ssh", "ttp": "T1110.001", "assets": ["auto"], "query": "Syslog | project Computer"}]}))
+    notes = [n for n in load_config(base).notes if "ProcessName" in n]
+    assert bool(notes) is said and all("client-sudo" in n for n in notes), notes
+
+
+def test_the_shipped_privilege_escalation_rule_hands_on_its_emitter():
+    from glorfindel.detection_rules import hands_on_emitter
+    rules = {r["name"]: r for r in yaml.safe_load(SHIPPED_BASE.read_text())["rules"]}
+    assert hands_on_emitter(rules["sudo-privilege-escalation"]["query"])
+    assert not [n for n in load_config(SHIPPED_BASE, client_layer=False).notes if "ProcessName" in n]

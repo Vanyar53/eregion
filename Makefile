@@ -229,7 +229,7 @@ help:
 	@echo ""
 	@echo "Campagne (R1 + IA0) — kill-chain + rapport, depuis Orodruin :"
 	@echo "  make orodruin-campaign-plan CAMPAIGN_TARGET=<rid> [CAMPAIGN_MAX=5]  Planifie (rend un id)"
-	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (watch H0 en human_only)"
+	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (la watch de H0 répond selon le mode de chaque VM)"
 	@echo "  make glorfindel-host-campaign-report CAMPAIGN=<id>  Son rapport, écrit seul sur H0"
 	@echo "    (#167 : code, tests et mutants — rien de mesuré sur le banc)"
 	@echo "  CAMPAIGN_DECLARED=annatar/campaign/declared/bl1-reponse.yaml  Le plan : exactement ses techniques (BL1)"
@@ -638,7 +638,8 @@ glorfindel-host-known:
 	@HOST_SSH_FINGERPRINT="$(HOST_SSH_FINGERPRINT)" bash infra/glorfindel-host/known_host.sh "$(HOST_IP)" "$(HOST_KNOWN_HOSTS)"
 
 # host.env → ~/eregion/.env (lu par docker compose), et la config locale avec
-# autonomy forcé à human_only (pré-observation : Glorfindel ne décide jamais seul).
+# autonomy forcé à human_only : toutes les VM de H0 y reviennent ; les modes (gondolin et bree en
+# non_disruptive, BL1c) se redonnent ensuite dans la console.
 glorfindel-host-push: glorfindel-host-known
 	@test -f infra/glorfindel-host/host.env || { echo "infra/glorfindel-host/host.env manquant (voir host.env.example)"; exit 1; }
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
@@ -984,8 +985,8 @@ gothmog-run:
 # même conteneur, aucun droit de plus) ; la watch de H0 les tire et écrit
 # runs/campaigns/<id>/report.md, avec les décisions de Glorfindel — make
 # glorfindel-host-campaign-report CAMPAIGN=<id> pour le lire (docs/analysis.md).
-# Deux temps : `campaign plan` rend un id, `campaign run <id>` le joue (la watch sur H0 est en
-# human_only — rien ne s'isole). ServerAliveInterval : une campagne dure longtemps (plusieurs
+# Deux temps : `campaign plan` rend un id, `campaign run <id>` le joue (la watch sur H0 répond
+# selon le mode de chaque VM : gondolin et bree en non_disruptive, BL1c). ServerAliveInterval : une campagne dure longtemps (plusieurs
 # techniques et leurs fenêtres de détection), plus que le délai d'inactivité d'une IP publique.
 #   make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id VM inscrite> [CAMPAIGN_MAX=5]
 #   make orodruin-campaign-run  CAMPAIGN=<id rendu par le plan>

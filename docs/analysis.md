@@ -531,7 +531,10 @@ Deux indicateurs de la finalité, calculés par le code depuis les fichiers d'un
 ([`analysis/containment.py`](../analysis/containment.py)), jamais par le modèle. Le rapport les
 rend dans sa section « Réponse ». La page de la campagne dans la console les recalcule, depuis les
 mêmes fichiers. `python -m analysis.containment runs/campaigns/<id> [--fault-run <run>] [--json]`
-les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`.
+les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`. Lancée seule, la
+commande lit l'inscription des VM d'une campagne venue du canal comme le rapport
+(`check_enrollment`, H-1), et retire les `AZURE_CLIENT_*` vides que compose passe sous
+`docker exec`, comme la watch (#205) : sans geste de plus (BL1c).
 
 ### Les définitions
 

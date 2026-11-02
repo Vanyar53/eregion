@@ -5,14 +5,28 @@ d'Eregion (`eregion console`, l'ancienne War Room) et le bot Discord compris : l
 de la racine (`watch`, `war-room` — le service de la console, qui garde son nom jusqu'à UI-1d —,
 et `bot` par son profil), sur la même image et le même état. Premier usage : la **pré-observation** sur le banc
 (`ROADMAP.md`, lot H0 ; `docs/observation.md`) — bree allumée en continu avec une vraie
-charge, Glorfindel qui décide, toi qui juges chaque carte.
+charge, Glorfindel qui décide, toi qui juges chaque carte. Depuis BL1 (31/10), il répond aussi
+seul sur le banc, dans le mode de chaque VM.
 
 ## Ce que la VM est, et n'est pas
 
-- **Un observateur.** Son identité managée a `Reader` sur le groupe du banc et
-  `Log Analytics Reader` sur son workspace, rien d'autre. `GLORFINDEL_READ_ONLY=1` et une
-  config forcée en `human_only` au push (`host_config.py`) : elle ne décide jamais seule et
-  ne peut rien écrire. Les droits d'écriture viendront avec les exercices de R1 et G0.
+- **La watch qui répond, sur le banc seulement** (décision de Jonathan, 31/10 ; bree le 01/11).
+  Son identité managée a `Reader` et « Eregion Glorfindel Response » sur le groupe du banc,
+  `Log Analytics Reader` sur son workspace, rien d'autre : jamais le restore, jamais
+  l'abonnement. `GLORFINDEL_READ_ONLY=0`, gondolin et bree en `non_disruptive`, le CD actif.
+  Jusqu'au 30/10, c'était un observateur (`Reader`, `GLORFINDEL_READ_ONLY=1`) ; ce que la
+  posture ouvre et ce qui la borne : le modèle de menace
+  ([`docs/design/modele-de-menace.md`](../../docs/design/modele-de-menace.md), §5).
+  - **Le rôle de la réponse est attribué à la main**, hors de l'état Terraform de H0
+    (`main.tf` ne pose que les deux lectures) : `az role assignment create`, l'étape 3 de
+    [`docs/banc-bl1.md`](../../docs/banc-bl1.md) ; le retirer, l'étape 7. Un `terraform apply`
+    de H0 ne l'ajoute ni ne l'enlève.
+  - **Un `make glorfindel-host-push` remet toutes les VM en `human_only`** : la config est
+    forcée au push (`host_config.py`). Redonner ensuite les modes dans la console (page
+    Glorfindel : gondolin, puis bree → `non_disruptive`, chacune après son contrôle de
+    préparation). Le CD, lui, ne touche ni `host.env` ni la config.
+  - **Un nouveau `host.env`** (`make glorfindel-host-env`) part en lecture seule
+    (`GLORFINDEL_READ_ONLY=1`) : la posture se donne à la main, sur un hôte qui doit répondre.
 - **Pas une cible.** Hors du groupe du banc, sans tag `eregion-target`, sans DCR vers le
   Log Analytics du banc : la découverte (Heartbeat) ne la voit pas, Glorfindel ne peut pas
   l'isoler. Elle n'est pas non plus sur Orodruin (côté rouge).
@@ -487,7 +501,8 @@ sur la VM et ne se connecte à aucun hôte par SSH. Orodruin garde `accept-new` 
   à mettre à jour »). La première release SEC7 est donc déployée par l'agent d'avant, sans elle :
   les vérifications ci-dessus se font à la main.
 - **Les identités (V-17)** : rien. Les variables de chaque service sont vides sur H0 ; ses trois
-  conteneurs gardent l'identité managée de la VM, lectrice.
+  conteneurs gardent l'identité managée de la VM (lectrice alors ; depuis le 31/10, elle tient
+  aussi le rôle de la réponse sur le banc : « Ce que la VM est », plus haut).
 
 ## Ce que CI3 change : la transition, pas à pas (Jonathan)
 

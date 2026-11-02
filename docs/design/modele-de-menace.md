@@ -127,7 +127,7 @@ Trois canaux, à ne pas confondre :
 
 ## 5. Les hôtes : H0, Orodruin, le banc
 
-**H0** (le Glorfindel hébergé) — un observateur : identité managée `Reader` sur le groupe du banc et `Log Analytics Reader` sur son workspace, rien d'autre ; `GLORFINDEL_READ_ONLY=1` et `human_only` forcé. Entrée fermée, sauf pour l'opérateur ; la console n'écoute que sur la boucle locale de la VM. Aucun secret dans Terraform : les jetons dans `host.env`, copié à la main. Son CD ne fait que sortir ([`infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md)).
+**H0** (le Glorfindel hébergé) — la watch qui répond, sur le banc seulement : identité managée `Reader` et « Eregion Glorfindel Response » sur le groupe du banc, `Log Analytics Reader` sur son workspace, rien d'autre ; `GLORFINDEL_READ_ONLY=0` ; gondolin et bree en `non_disruptive`, toute autre VM en `human_only` (décision de Jonathan, 31/10 ; bree le 01/11 — l'encadré ci-dessous). Entrée fermée, sauf pour l'opérateur ; la console n'écoute que sur la boucle locale de la VM. Aucun secret dans Terraform : les jetons dans `host.env`, copié à la main. Son CD ne fait que sortir ([`infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md)).
 
 **Orodruin** (l'hôte des injecteurs) — un injecteur n'agit que depuis un Orodruin armé, dont le contrat est vérifié au démarrage ; ailleurs il reste passif. Chaque appel au cloud est journalisé avant d'être fait, sous un plafond ; un arrêt d'urgence en une commande ; sa sortie se referme après l'installation ; un état Terraform à part ([`docs/design/orodruin-contract.md`](orodruin-contract.md)). Et jamais sans Glorfindel : sans battement vivant de la watch, un injecteur refuse avant tout appel au cloud (V1).
 
@@ -151,33 +151,52 @@ Trois canaux, à ne pas confondre :
 | D | Une demande qui s'emballe | Les fils tournent l'un après l'autre. Le plafond d'Orodruin porte sur la demande entière : ses appels journalisés, chaque ligne nommant la demande, et son temps. « Stop all » est l'arrêt d'urgence (DG-b) |
 | T | Un exercice défait ce que Glorfindel a fait, ou frappe une VM encore en panne | Une VM tenue par Glorfindel (ses règles d'isolation ou de quarantaine sur le NSG de chaque carte et de chaque sous-réseau de la VM ; illisible vaut tenue, `eregion_core/held.py`, la même règle au preflight d'Annatar) est attendue, puis son fil est sauté : jamais levée. Pour lire cartes et sous-réseaux, le rôle de lecture d'Orodruin gagne deux lectures sur le banc, rien en écriture. Une VM dont la panne n'a pas vérifié son retour ne prend plus de fil (DG-b) |
 | I | Ce qu'Orodruin publie pour la console | Le verdict (`armed` ou `passive`, les codes, l'heure) et le statut des demandes, sans identifiant, sans expérience ni cible ; même conteneur, même attribution. H0 relit chaque blob contre sa forme avant de l'écrire (DG-b) |
-| E | Le Glorfindel hébergé est poussé à écrire | Il n'en a pas les droits (Reader) et tourne en lecture seule, `human_only` forcé au push. **Exception temporaire, décision de Jonathan pour BL1 (30/10)** : le temps de la session de banc, voir l'encadré ci-dessous |
+| E | Le Glorfindel hébergé est poussé à écrire | Il n'écrit que sur le groupe du banc, avec le rôle de la réponse : jamais un restore, une suppression, une identité, un rôle. Seule une VM que l'opérateur a passée en `non_disruptive` après son contrôle de préparation (gondolin, bree) reçoit une action seule, réversible, sous le seuil de confiance et les gardes ; toute autre reste en `human_only`, forcé au push. **La posture de H0 sur le banc** (décision de Jonathan, 31/10) : l'encadré ci-dessous |
 
-**L'exception de BL1 (décision de Jonathan, 30/10 ; temporaire).**
+**La posture de H0 sur le banc (décision de Jonathan, 31/10 ; bree le 01/11).**
 
-Le temps de la session de banc de BL1 ([`docs/banc-bl1.md`](../banc-bl1.md)), l'identité managée de H0
-reçoit le rôle « Eregion Glorfindel Response », et `GLORFINDEL_READ_ONLY=0`. Il s'agit de mesurer
-le confinement.
+Le 30/10, l'exception de BL1 ne valait que le temps de la session de banc
+([`docs/banc-bl1.md`](../banc-bl1.md)). Le 31/10, Jonathan l'a gardée : c'est la posture de H0 sur
+le banc. H0 répond, il ne fait plus seulement qu'observer.
 
-- **Portée** : `rg-celebrimbor` seul, le groupe du banc. Rien sur l'abonnement, rien sur le
-  groupe de H0, jamais le restore.
-- **Ce qui tient pendant la session** :
-  - bree reste en `human_only` : la watch n'y fait rien seule ;
-  - seule gondolin, inscrite `bench`, passe en `non_disruptive`, après son contrôle de préparation ;
+- **Ce qui est posé** :
+  - l'identité managée de H0 tient « Eregion Glorfindel Response » sur `rg-celebrimbor`, le groupe
+    du banc, attribué à la main (`az role assignment create`, [`docs/banc-bl1.md`](../banc-bl1.md),
+    étape 3), hors de l'état Terraform de H0 ;
+  - `GLORFINDEL_READ_ONLY=0` dans `host.env` ;
+  - gondolin et bree en `non_disruptive`, chacune après son contrôle de préparation ; le défaut reste
+    `human_only` ;
+  - le CD actif : une release publiée redéploie H0 sans toucher `host.env` ni la config, donc sans
+    toucher la posture.
+- **Ce que ça ouvre** — l'identité est celle de la VM, partagée par la watch, la console et le bot
+  (une identité par conteneur ne s'y sépare pas) :
+  - **la watch agit seule** sur gondolin et sur bree, dans leur mode : isoler, bloquer, instantané,
+    lever. bree n'est pas inscrite : jamais un exercice, jamais une technique ni une panne. Mais une
+    vraie détection sur elle peut l'isoler sans humain ;
+  - **un clic d'approbation dans la console, ou un bouton du bot** (Revert), écrit sur le banc,
+    bree comprise, quel que soit le mode de la VM. C'est un humain qui agit, derrière le jeton de la
+    console (et le tunnel SSH) ou la liste d'autorisation de Discord (`DISCORD_ALLOWED_*`) ;
+  - le restore n'est pas dans le rôle : un Restore lancé de la console ou du bot échoue sur Azure.
+- **Ce qui le borne** :
+  - **le rôle** : les écritures de la réponse et rien d'autre
+    (`infra/identities/glorfindel-response.json`, « Identités Azure ») ; jamais un restore, une
+    suppression, une identité, un rôle ;
+  - **le groupe** : `rg-celebrimbor` seul. Rien sur l'abonnement, rien sur le groupe de H0 : H0 ne
+    peut ni s'isoler, ni toucher une autre charge ;
+  - **les modes** : en `non_disruptive`, seules les actions réversibles partent seules, sous le
+    seuil de confiance (0,7), après des tirages qui s'accordent (D-1) et derrière les gardes
+    déterministes de `decide` ; le destructif reste à un humain. Toute autre VM est en `human_only`,
+    et un `make glorfindel-host-push` remet toutes les VM en `human_only` (la config forcée au
+    push) ;
   - les écritures autonomes hors cycle (le retrait d'une règle orpheline) restent gardées par le
     mode de la VM qu'elles touchent (`glorfindel/orphans.py`, `_ALONE`) ;
-  - la console reste derrière le tunnel SSH et son jeton : un clic qui écrit est le geste d'un
-    humain ;
-  - le CD est en pause (`make glorfindel-host-cd-disable`) : aucune release ne redéploie H0 au
-    milieu de la campagne.
-- **Ce qui est défait à la fin, et comment le vérifier** :
-  - le rôle est retiré : `az role assignment list --assignee <principal> --all` ne montre plus que
-    `Reader` et `Log Analytics Reader` ;
-  - `GLORFINDEL_READ_ONLY=1` est repoussé : le bandeau « lecture seule » de la console revient, et
-    `make glorfindel-host-status` ne montre aucune erreur ;
-  - gondolin revient en `human_only` : `glorfindel list` le montre, et le push de la config force
-    de nouveau `human_only` ;
-  - le CD est réactivé : `make glorfindel-host-cd-enable`, puis `make glorfindel-host-cd-status`.
+  - la règle de production ne change pas : elle porte sur les injecteurs, et bree, non inscrite,
+    n'est jamais une cible d'exercice ;
+  - le banc est jetable et ne porte aucune charge d'un client.
+- **Revenir en lecture seule**, si besoin : l'étape 7 de [`docs/banc-bl1.md`](../banc-bl1.md). Le
+  rôle retiré, `az role assignment list --assignee <principal> --all` ne montre plus que `Reader` et
+  `Log Analytics Reader` ; `GLORFINDEL_READ_ONLY=1` repoussé, le bandeau « lecture seule » de la
+  console revient.
 
 **Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`. La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
 

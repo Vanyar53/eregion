@@ -1875,3 +1875,66 @@ def test_a_perimeter_is_put_back_before_the_vm_blocks_of_its_subnet(monkeypatch,
     reassert_active(c, _ACT)
     assert read[0] == "web"
     assert not [e["reason"] for e in escalations.pending() if "n'est plus bloquée" in e["reason"]]
+
+
+# ── The nightly machine after SEC13: a card write refused never silences what comes next ──
+
+def _block_drift_cards(status="pending"):
+    return [e for e in escalations.all_escalations() if e["action"] == "block_suspicious_ip"
+            and (e.get("signal_id") or "").startswith("reassert-") and e["status"] == status]
+
+
+def test_a_drift_better_on_one_side_is_kept_when_its_card_cannot_be_written(monkeypatch):
+    """A block's drift said and acknowledged (a rule gone, the IP no longer blocked). Then held
+    again — by the quarantine or a perimeter — while a second rule is gone: worse on that side,
+    better on the other (blocked), and the card that says it refused (a full disk). Back to what
+    was first said: the pass compared it with the acknowledged card, « not worse », and was
+    silent — the IP open again, unsaid (L1). What got better is the baseline before the write
+    now: said."""
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}, {"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r2"}]
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r", placements=placed,
+                      threat_port=22)
+    gone_open = {"verified": False, "missing_rules": ["r"]}
+    c = _connector(verify_blk=gone_open)
+    human = AutonomyConfig(default="human_only")
+    reassert_active(c, human)
+    (card,) = _block_drift_cards()
+    escalations.resolve(card["id"])                                  # the operator acknowledges it
+    assert reassert_active(c, human) == []
+    c.verify_block_ip.return_value = {"verified": True, "held_missing": ["r", "r2"]}
+
+    def full(*a, **k):
+        raise OSError(28, "No space left on device")
+    real = escalations.record
+    monkeypatch.setattr(escalations, "record", full)
+    assert [r["outcome"] for r in reassert_active(c, human)] == ["failed"]       # said: not written
+    monkeypatch.setattr(escalations, "record", real)
+    c.verify_block_ip.return_value = gone_open
+    reassert_active(c, human)
+    assert len(_block_drift_cards()) == 1
+
+
+def test_a_check_card_refused_never_cuts_the_blocks_pass(monkeypatch):
+    """A check that raised left its `unverified` card; the next pass reads the block's rules gone
+    and closes that card first — refused (a full disk), the OSError cut the pass: the drift
+    neither put back nor said (L1). The check card's writes never raise into the pass."""
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}], threat_port=22)
+    c = _connector()
+    c.verify_block_ip.side_effect = RuntimeError("(AuthorizationFailed)")
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    (check,) = [e for e in escalations.pending() if e["escalation_type"] == "unverified"]
+    c.verify_block_ip.side_effect = None
+    c.verify_block_ip.return_value = {"verified": False, "missing_rules": ["r"]}
+    real = escalations.resolve
+
+    def resolve(escalation_id, note=""):
+        if escalation_id == check["id"]:
+            raise OSError(28, "No space left on device")
+        return real(escalation_id, note=note)
+    monkeypatch.setattr(escalations, "resolve", resolve)
+    report = reassert_active(c, AutonomyConfig(default="human_only"))
+    assert [r["outcome"] for r in report] == ["escalated"] and len(_block_drift_cards()) == 1
+    monkeypatch.setattr(escalations, "resolve", real)
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    assert not [e for e in escalations.pending() if e["escalation_type"] == "unverified"]   # closed next

@@ -4,14 +4,16 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
-## [0.4.10] — 2026-11-02 — "held to its word"
-
 ### Added
 - **The releases in #roadmap's message** (RM1, #406, 02/11; `docs/atelier-discord.md`, « Le bloc « Releases » »). Under the milestones' bars, a « **Releases** » block: the last one published, read on GitHub (`releases/latest`: its name, linked to its page, and its date), then the lines of a new table in `ROADMAP.md`, « Les prochaines releases », held by the Orchestre (version, title, content in one line, state: en préparation, brouillon, publiée; filled with 0.4.10, 0.5.0 and 0.5.x).
   - No release published (404), GitHub failing or an answer without a name: that line is left out, said in the log, and the job stays green; the workflow's permissions are unchanged (`contents: read`). The name is made inert (SEC6, `glorfindel/chat_text.py`, now in `roadmap.yml`'s sparse checkout); a link that is not `https://` is none. The line of the version GitHub says published is shown « publiée », whatever the table still says.
   - A section missing, its header changed or a line of another number of cells: « _section introuvable dans ROADMAP.md_ », like the other sections, never a table half read. Each field cut, six lines at most then « … +N dans ROADMAP.md »; the block comes before the lots, whose lists grow: a message too long is cut at its end, never there.
   - `make release` (`scripts/release.py prepare`) sets its version's line to « brouillon » in that table, in its commit; without a line for it, nothing changes there and the command says so.
   - Tests: `test_roadmap_discord.py` (the block, latest absent, failing or unreadable, the section absent or of another shape, the bounds, the repository's own table), `test_release.py` (the line set, only it, shown by the dry run); mutants M2680–M2695.
+
+## [0.4.10] — 2026-11-02 — "held to its word"
+
+### Added
 - **Benign noise, and the rate of faults taken for an attack** (G1, #76, 31/10; `gothmog/README.md`, « G1 »; `docs/analysis.md`, « Le taux des pannes prises pour une attaque »). Faults on which Glorfindel must neither isolate nor block, and the measure of whether it does — in code and on the bench in memory; nothing applied nor run on the bench yet.
   - **Three faults** (`gothmog/experiments/`, catalogue `azure_vm.faults`, `planned` until their first bench run): `vm-disk-write`, sustained writes by the Chaos agent (LinuxDiskIOPressure-1.1), **above** `ransomware-disk-write`'s threshold as the rule computes it — at the bench's 10-s step, two consecutive samples averaging above 45 MB/s (one above 25 at a coarse step) — decided with Jonathan on 31/10: below it, the RulePoller filters the noise and no decision is measured; `vm-cpu-pressure`, 95 % for 10 min (CPUPressure-1.0); `vm-restart`, a graceful shutdown of one minute (Shutdown-1.0).
   - **The fault's effect, read where Glorfindel reads**: each fault declares it (`effect.probes`) — the VM seen down, or a query on Perf whose peak, between the fault's start and end, is above a floor; the disk's reproduces the rule's `Rate`, its mode read from the data's step, and requires its threshold (a test keeps both texts equal). Never seen, the run fails (`fault_effective`) and measures nothing: noise Glorfindel never saw is not noise it ignored. A query read late (ingestion) is still looked for after the fault, never past its end.

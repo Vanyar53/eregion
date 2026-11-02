@@ -49,6 +49,8 @@ Contrat (garanties, vérifications, kill, mutants) :
 # 0. Lecture seule : quota de la famille, SKU, prix → vm_size (repli : D2als_v6)
 make orodruin-plan                 # relire le plan
 make orodruin-up YES=1             # 1er apply, sortie ouverte : la VM installe Docker
+make orodruin-fingerprint          # l'empreinte de sa clé d'hôte, lue sur la VM par Azure (Run Command) :
+                                   # export ORO_SSH_FINGERPRINT=SHA256:… dans ton environnement (V-32)
 make orodruin-ssh                  # attendre ~/.orodruin-ready, puis exit
 make orodruin-lock YES=1           # 2e apply : la sortie se referme (YES=1 : sans confirmation)
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env   # abonnement, plafond
@@ -58,6 +60,24 @@ make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, 
                                    # make orodruin-push-dev : construite ici, non vérifiée (développement)
 make orodruin-check                # le contrat lu depuis la VM : armed ou passive
 ```
+
+**SSH : la clé d'hôte épinglée (V-32, SEC14).** Chaque commande du poste vers Orodruin
+(`orodruin-push`, `-check`, `-ssh`, `-exercise`, `-campaign-*`, `gothmog-*`) passe d'abord par
+`orodruin-known` (`infra/glorfindel-host/known_host.sh`, comme H0) : un `known_hosts` dédié,
+`ORO_KNOWN_HOSTS` (défaut `~/.eregion/orodruin_known_hosts`, mode 600), écrit à partir de la clé que
+présente la VM seulement si elle a l'empreinte `ORO_SSH_FINGERPRINT` ; ssh et scp n'acceptent ensuite
+que ce fichier (`StrictHostKeyChecking=yes`, `ssh-ed25519`). **Sans l'empreinte, rien ne part** :
+jamais `accept-new` pour ce qui fait agir Orodruin, ni pour y porter `orodruin.env` ou les noms tapés.
+L'empreinte se lit par le plan de contrôle d'Azure, jamais par le SSH qu'elle vérifie :
+`make orodruin-fingerprint` (ton `az login`, Run Command : `ssh-keygen -lf
+/etc/ssh/ssh_host_ed25519_key.pub` sur la VM) affiche la ligne `export` à poser. Une VM reconstruite
+a une autre clé : la relire, la poser, retirer `~/.eregion/orodruin_known_hosts`. **À mesurer sur
+Azure réel, avec Jonathan** : la sortie de Run Command telle que la cible la lit (écrite et testée
+contre une réponse simulée seulement).
+
+**Les conteneurs durcis (V-34, SEC14).** Chaque `docker run` d'un injecteur sur Orodruin tourne comme
+le compose : racine en lecture seule, `/tmp` en tmpfs, aucune capacité, aucun gain de privilège
+(`ORO_HARDEN`). Il n'écrit que dans `~/runs`.
 
 Un run se lance ensuite depuis la VM (`make orodruin-ssh`, puis `docker run … annatar run …`) :
 le moteur relit le contrat au démarrage, journalise chaque appel dans `~/runs/orodruin/audit.jsonl`

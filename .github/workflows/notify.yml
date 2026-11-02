@@ -68,7 +68,10 @@ jobs:
           # (version_pull: the whole semver, the head's repository). glorfindel/chat_text.py
           # (sparse checkout above) makes its notes and titles inert (SEC6).
           EREGION_DISCORD_WEBHOOK_RELEASES: ${{ (github.event_name == 'release' || (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'chore/release-'))) && secrets.EREGION_DISCORD_WEBHOOK_RELEASES || '' }}
-          EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
-          EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
+          # SEC14 (R-15): the bot's token (the lots' threads) is never given to an event a fork
+          # triggers — a fork's pull request, or a run whose head is a fork's: those are announced
+          # in #ci by its webhook alone, never in a lot's thread. The others keep it.
+          EREGION_DISCORD_BOT_TOKEN: ${{ (github.event_name == 'release' || github.event_name == 'issues' || (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository)) && secrets.EREGION_DISCORD_BOT_TOKEN || '' }}
+          EREGION_DISCORD_LOTS_FORUM: ${{ (github.event_name == 'release' || github.event_name == 'issues' || (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository)) && secrets.EREGION_DISCORD_LOTS_FORUM || '' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/notify_discord.py github

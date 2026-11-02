@@ -6,7 +6,9 @@ On Orodruin, in the injectors' image, where ``make orodruin-exercise`` copied th
 beside it, the names the operator typed (``<id>.typed.json``). The console advised; Orodruin
 decides, on what it reads now, with its own identity:
 
-    1  read     the request by its one reader (``exercise_request.read``), the names typed apart
+    1  read     the request by its one reader (``exercise_request.read``), the names typed apart —
+                then, under Orodruin's one lock, played once (its id in a registry before it is
+                judged: ``replayed``) and fresh (``expired``, MAX_AGE_S) (SEC14, R-11)
     2  contract ``orodruin.check()``: armed, or the request is refused (``passive``, its codes)
     3  judge    every wire with the console's codes (``exercise_plan.plan``): the bench's
                 perimeter, the enrollment and the zone read now (O0) — the production rule —, a
@@ -53,7 +55,13 @@ from eregion_core.inscription import Scope, TagEnrollment, rg_from_id, subscript
 WAIT_ISOLATION_S = 20 * 60
 POLL_S = 30.0
 # Request-level codes, besides the wires' (exercise_plan.REFUSALS).
-REQUEST_REFUSALS = ("unreadable", "passive", "refused_wires", "busy")
+REQUEST_REFUSALS = ("unreadable", "passive", "refused_wires", "busy", "replayed", "expired")
+# SEC14 (R-11): a request is played once on this Orodruin — its id kept in a registry before it is
+# judged — and only while it is fresh: written at most MAX_AGE_S ago (the console writes it, the
+# operator carries it the same day), never dated more than FUTURE_SKEW_S ahead.
+MAX_AGE_S = 6 * 3600
+FUTURE_SKEW_S = 5 * 60
+PLAYED = "played.jsonl"
 # Why a wire did not run, once the request was judged.
 SKIPS = ("over_cap", "no_watch", "isolated", "not_returned", "refused_now", "launch_failed")
 
@@ -141,8 +149,11 @@ def publish_status(status: "Status") -> bool:
 
 
 def launch(argv: list[str], env: dict) -> int:
-    """A wire: its injector's own run, its own process, the operator's terminal for its output."""
-    return subprocess.run(argv, env={**os.environ, **env}, check=False).returncode
+    """A wire: its injector's own run, its own process, the operator's terminal for its output —
+    the request's lock handed down to it (``LOCK_FD_ENV``): it runs under that hold."""
+    fd = env.get(LOCK_FD_ENV, "")
+    return subprocess.run(argv, env={**os.environ, **env}, check=False,
+                          pass_fds=(int(fd),) if fd.isdigit() else ()).returncode
 
 
 def argv_for(experiment, wire: xr.Wire, request_id: str, typed: str = "") -> list[str]:
@@ -162,6 +173,19 @@ class Busy(RuntimeError):
 # What holds the lock, written in it once taken: the refusal of the next one says it. Short, and
 # read back as printable text only — it is said, never trusted.
 _HOLDER_MAX = 120
+# SEC14 (R-10): Orodruin's one lock, wherever a command writes its runs. EREGION_RUN_LOCK names
+# it (the tests: a file of their own); else runs/orodruin/requests/.lock from the working
+# directory — /app/runs on Orodruin, the $HOME/runs every injector's container mounts.
+LOCK_ENV = "EREGION_RUN_LOCK"
+# A wire of a request holds its request's lock: the runner hands its descriptor down to the
+# injector it launches (``launch``, ``pass_fds``), and names it here.
+LOCK_FD_ENV = "EREGION_RUN_LOCK_FD"
+
+
+def lock_path() -> Path:
+    """The one lock of « one run at a time » (R-10) — never a runs directory a command was given
+    (``campaign run --runs-dir``): every command that acts takes this file."""
+    return Path(os.environ.get(LOCK_ENV) or Path("runs") / "orodruin" / "requests" / ".lock")
 
 
 def _holder(fd: int) -> str:
@@ -174,19 +198,43 @@ def _holder(fd: int) -> str:
     return "".join(c for c in text if c.isprintable()).strip()
 
 
+def _inherited(path: Path) -> int | None:
+    """The lock's descriptor this process was handed by the request that launched it — the same
+    file (its device and inode), else None: a number set by hand names nothing."""
+    raw = os.environ.get(LOCK_FD_ENV, "")
+    if not raw.isdigit():
+        return None
+    fd = int(raw)
+    try:
+        held, here = os.fstat(fd), os.stat(path)
+    except OSError:
+        return None
+    return fd if (held.st_dev, held.st_ino) == (here.st_dev, here.st_ino) else None
+
+
 @contextlib.contextmanager
-def request_lock(runs_dir: Path | str, holder: str = ""):
-    """One run at a time on this Orodruin (DG-b review, point 5; #358): an exclusive ``flock`` on
-    ``runs/orodruin/requests/.lock``, never waited for — two requests side by side would overlap
-    on a VM and double Orodruin's cap. Taken by a request (``exercise_runner``) and by a run
-    launched by hand on Orodruin (``annatar campaign run``, ``annatar run``, ``gothmog run``): a
-    campaign, a run or a fault during a request would put a technique on a VM a wire holds, or a
-    fault under it. Never by a wire of the request — it runs under the request's own lock. ``holder`` (« request r-… », « campaign C… ») is written in the
-    lock once taken, and said by the next one refused. Held while it runs; the kernel lets it go
-    with the process, a crash included."""
-    path = Path(runs_dir) / "orodruin" / "requests" / ".lock"
+def request_lock(holder: str = ""):
+    """One run at a time on this Orodruin (DG-b review, point 5; #358; SEC14, R-10): an exclusive
+    ``flock`` on ``lock_path()``, never waited for — two requests side by side would overlap on a
+    VM and double Orodruin's cap. Taken by every command that acts on a target: a request
+    (``exercise_runner``), each of its wires (``annatar wire``, ``gothmog run --request``), and
+    whatever is launched by hand on Orodruin (``annatar campaign run`` whatever its
+    ``--runs-dir``, ``annatar run``, ``annatar clean``, ``gothmog run``): a campaign, a run, a
+    clean or a fault during a request would put a technique on a VM a wire holds, or a fault
+    under it.
+
+    A wire holds its request's lock, never a lock of its own: the runner hands its descriptor
+    down (``LOCK_FD_ENV``). The same open file, flocked again, is the request's hold; a
+    descriptor of anyone else's opening is refused (``Busy``) while the request runs. Its holder's
+    name stays the request's. Yields the descriptor held.
+
+    ``holder`` (« request r-… », « campaign C… ») is written in the lock once taken, and said by
+    the next one refused. Held while it runs; the kernel lets it go with the process, a crash
+    included."""
+    path = lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    inherited = _inherited(path)
+    fd = inherited if inherited is not None else os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     held = False
     try:
         try:
@@ -195,16 +243,20 @@ def request_lock(runs_dir: Path | str, holder: str = ""):
             what = _holder(fd) or "another request"
             raise Busy(f"{xr.shown(what)} runs on this Orodruin: one at a time — wait for its end, "
                        "or stop it (make orodruin-kill)") from None
+        if inherited is not None:
+            yield fd                 # the request's hold: its name, its release are the request's
+            return
         held = True
         # The name a crash left is gone first: a short one after a long one is read whole.
         os.ftruncate(fd, 0)
         os.pwrite(fd, holder.encode("utf-8")[:_HOLDER_MAX], 0)   # cut as it is read: in bytes
-        yield
+        yield fd
     finally:
         if held:
             with contextlib.suppress(OSError):
                 os.ftruncate(fd, 0)   # the name goes with a normal exit
-        os.close(fd)
+        if inherited is None:
+            os.close(fd)
 
 
 # ── The runner ────────────────────────────────────────────────────────────────────────
@@ -337,15 +389,64 @@ class Runner:
 
     def run(self, req: xr.Request, typed: dict[int, str]) -> Status:
         try:
-            with request_lock(self.runs_dir, f"request {req.id}"):
-                return self._run(req, typed)
+            with request_lock(f"request {req.id}") as fd:
+                spent = self._spent(req)
+                if spent:
+                    # Nothing judged, nothing published: the status of its first play (here, or on
+                    # an Orodruin before this one) stays its own.
+                    self.say(f"Request {req.id} refused — {spent[0]}: {spent[1]}. Nothing runs.")
+                    return self._refused(req, spent[0])
+                self._played(req)
+                return self._run(req, typed, fd)
         except Busy as e:
             # Nothing judged, nothing published: the status of the request that runs stays its own.
             self.say(f"Request {req.id} refused — busy: {e}")
-            return Status(req.id, state="refused", codes=["busy"],
-                          wires=[WireStatus(w.rank, "refused", "busy") for w in req.wires])
+            return self._refused(req, "busy")
 
-    def _run(self, req: xr.Request, typed: dict[int, str]) -> Status:
+    @staticmethod
+    def _refused(req: xr.Request, code: str) -> Status:
+        return Status(req.id, state="refused", codes=[code],
+                      wires=[WireStatus(w.rank, "refused", code) for w in req.wires])
+
+    def _registry(self) -> Path:
+        return self.runs_dir / "orodruin" / "requests" / PLAYED
+
+    def _spent(self, req: xr.Request) -> tuple[str, str] | None:
+        """Why this request may not be played now (R-11) — None when it may: played here already
+        (its id in the registry), or not fresh (written more than MAX_AGE_S ago, or dated ahead).
+        A registry that cannot be read plays nothing."""
+        try:
+            with open(self._registry(), encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        if json.loads(line).get("request") == req.id:
+                            return "replayed", "played on this Orodruin already: a request runs once"
+                    except (ValueError, AttributeError):
+                        continue
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            return "replayed", f"the registry of the requests played cannot be read ({e.strerror or e})"
+        written = datetime.fromisoformat(req.at)
+        age = (self.now() - written).total_seconds()
+        if age > MAX_AGE_S:
+            return "expired", (f"written {age / 3600:.1f} h ago, more than {MAX_AGE_S // 3600} h: "
+                               "a new request from the console")
+        if age < -FUTURE_SKEW_S:
+            return "expired", f"dated {-age:.0f} s ahead of this Orodruin's clock"
+        return None
+
+    def _played(self, req: xr.Request) -> None:
+        """The request's id in the registry, on disk before anything is judged: whatever follows
+        (a refusal, a crash), it never plays again here."""
+        path = self._registry()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"request": req.id, "at": req.at, "played": self.now().isoformat()}) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+    def _run(self, req: xr.Request, typed: dict[int, str], lock_fd: int) -> Status:
         start = self.now()
         status, verdicts, cap, names, faults = self.judge(req, typed)
         for w, v in zip(req.wires, verdicts):
@@ -400,7 +501,8 @@ class Runner:
             ws.state = "running"
             self._emit(status)
             before = set(self._windows(req.id))
-            env = {orodruin.MAX_INJECTIONS_ENV: str(left_calls), orodruin.MAX_RUN_S_ENV: str(max(left_s, 1))}
+            env = {orodruin.MAX_INJECTIONS_ENV: str(left_calls), orodruin.MAX_RUN_S_ENV: str(max(left_s, 1)),
+                   LOCK_FD_ENV: str(lock_fd)}
             self.say(f"→ wire {w.rank}: {e.kind} {e.id} on {w.target_name}")
             try:
                 code = self.launch(argv_for(e, w, req.id, typed.get(w.rank, "")), env)
@@ -474,12 +576,18 @@ def main(argv: list[str] | None = None) -> int:
         print("usage: python -m eregion_core.exercise_runner <requests/<id>.json>", file=sys.stderr)
         return 2
     path = Path(args[0])
+    typed_path = path.with_name(f"{path.stem}.typed.json")
     try:
         req = xr.load(path)
-        typed = xr.load_typed(path.with_name(f"{path.stem}.typed.json"), req)
+        typed = xr.load_typed(typed_path, req)
     except xr.RequestRefused as e:
         print(f"✗ request refused — unreadable: {e}. Nothing runs.", file=sys.stderr)
         return 1
+    finally:
+        # R-11: the names typed are read once, then gone — where this process may remove them
+        # (on Orodruin they are mounted read-only: `make orodruin-exercise` removes them after).
+        with contextlib.suppress(OSError):
+            typed_path.unlink()
     if req.id != path.stem:
         # DG-b review: the file names the request carried; its content is that one, or nothing runs.
         print(f"✗ request refused — {path.name} holds {xr.shown(req.id)}. Nothing runs.", file=sys.stderr)

@@ -2,7 +2,7 @@
 
 `make glorfindel-host-start` ran `git pull --ff-only` on main and rebuilt: H0 ran whatever
 had just been merged. It now sends infra/glorfindel-host/deploy.sh over ssh, which checks out
-a tag or a commit (by default the latest `v*` tag), detached, and labels the image with it;
+a tag or a commit — named, never « the latest tag » (SEC14, V-22) —, detached, and labels the image with it;
 `make glorfindel-host-status` reads the label back.
 
 Everything really runs — git, the script, the Makefile recipe — against local repositories
@@ -82,20 +82,26 @@ def repo(tmp_path):
     return Repo(tmp_path)
 
 
-def test_without_a_reference_the_latest_v_tag_is_checked_out_detached(repo):
-    c1, c2, c3 = repo.commits
-    assert repo.head() == c3                                   # the clone sits on main
-    res = repo.deploy("--checkout-only")
-    assert res.returncode == 0, res.stderr
-    assert res.stdout.strip().splitlines()[-1] == f"v0.10.0 {c2}"   # v0.10.0 > v0.9.0
-    assert repo.head() == c2 and repo.detached()
+def test_without_a_reference_nothing_moves_never_the_latest_tag(repo, tmp_path):
+    """SEC14 (V-22): the path that builds on H0 builds only what the operator names — a tag pushed
+    by anyone who can write to the repository is never picked up as « the latest »."""
+    c3 = repo.commits[2]
+    _git(repo.work, repo.env, "tag", "v9.0.0", c3)
+    _git(repo.work, repo.env, "push", "-q", "origin", "v9.0.0")
+    bin_dir, log, fake = _fake_bin(tmp_path)
+    env = {**repo.env, **fake, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    for args in (("--checkout-only",), ()):
+        res = repo.deploy(*args, env=env)
+        assert res.returncode != 0 and "REF exigée" in res.stderr
+        assert repo.head() == c3 and not repo.detached()
+    assert log.read_text() == ""                               # nothing built, nothing started
 
 
 def test_a_tag_pushed_after_the_clone_is_fetched(repo):
     c3 = repo.commits[2]
     _git(repo.work, repo.env, "tag", "v0.11.0", c3)
     _git(repo.work, repo.env, "push", "-q", "origin", "v0.11.0")
-    res = repo.deploy("--checkout-only")
+    res = repo.deploy("--checkout-only", "v0.11.0")
     assert res.returncode == 0, res.stderr
     assert repo.head() == c3 and res.stdout.split()[-2:] == ["v0.11.0", c3]
 
@@ -194,7 +200,7 @@ def test_the_image_carries_the_reference_it_was_built_from(repo, tmp_path):
     c2 = repo.commits[1]
     bin_dir, log, fake = _fake_bin(tmp_path)
     env = {**repo.env, **fake, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
-    res = repo.deploy(env=env)
+    res = repo.deploy("v0.10.0", env=env)
     assert res.returncode == 0, res.stderr
     calls = log.read_text().splitlines()
     build = next(c for c in calls if c.startswith("build "))
@@ -396,10 +402,13 @@ def test_make_glorfindel_host_start_never_deploys_a_ref_from_the_environment(rep
     res, docker_calls, ssh_calls = _make_start(repo, tmp_path, environ={"REF": "v0.2.0"})
     assert res.returncode != 0 and "environnement" in res.stderr and "v0.2.0" in res.stderr
     assert ssh_calls == "" and docker_calls == [] and not repo.detached()
-    # `make glorfindel-host-start REF=` : the latest v* tag, whatever the environment says.
-    res, docker_calls, _ = _make_start(repo, tmp_path, "REF=", environ={"REF": "v0.2.0"})
-    assert res.returncode == 0, res.stdout + res.stderr
-    assert repo.head() == c2 and any(f"revision={c2}" in c for c in docker_calls)
+    # `make glorfindel-host-start REF=` (or no REF): refused, whatever the environment says —
+    # never « the latest tag » (SEC14, V-22).
+    for args in (("REF=",), ()):
+        res, docker_calls, ssh_calls = _make_start(repo, tmp_path, *args,
+                                                   environ={"REF": "v0.2.0"} if args else None)
+        assert res.returncode != 0 and "REF exigée" in res.stderr, res.stdout + res.stderr
+        assert ssh_calls == "" and docker_calls == [] and not repo.detached()
     res, docker_calls, _ = _make_start(repo, tmp_path, "REF=v0.2.0", environ={"REF": "main"})
     assert res.returncode == 0, res.stdout + res.stderr
     assert repo.head() == c1

@@ -255,7 +255,9 @@ make orodruin-exercise REQUEST=r-20261030T075200Z-a1b2c3 [DRY_RUN=1] [REQUEST_FR
 #      - REQUEST vérifié avant toute commande (r-<heure UTC>-<6 hex>), jamais lu de l'environnement ;
 #      - la demande tirée de H0 par SSH, sa clé d'hôte vérifiée par son empreinte : HOST_SSH_FINGERPRINT
 #        est exigée (sans elle, rien n'est fait — jamais accept-new pour ce qui fait agir Orodruin) ;
-#        REQUEST_FROM=local : la console de ce poste (make glorfindel-start), sans SSH ;
+#        REQUEST_FROM=local : la console de ce poste (make glorfindel-start), sans SSH vers H0 ;
+#      - portée à Orodruin par SSH, sa clé d'hôte vérifiée par ORO_SSH_FINGERPRINT, toujours exigée
+#        (V-32, SEC14 ; make orodruin-fingerprint la lit par Azure) ;
 #      - relue par son seul lecteur (un champ de plus : refusée, rien n'est envoyé), affichée fil par
 #        fil : rang, technique ou panne, cible, groupe, DESTRUCTIVE ;
 #      - pour chaque fil destructif, ou dont personne n'a dit qu'il ne l'est pas (A0) : taper le nom de
@@ -380,6 +382,8 @@ GLORFINDEL_AZURE_CLIENT_ID=…        # V-17 : le principal de la watch (et …_
                                     # GLORFINDEL_BOT_AZURE_CLIENT_* le bot ; vides : aucun principal de service (l'identité managée de la VM s'il y en a une), jamais AZURE_CLIENT_* (SEC11)
 HOST_SSH_FINGERPRINT=SHA256:…       # V-32 : l'empreinte de la clé d'hôte de H0, relevée sur la VM ; sans elle, accept-new et c'est dit
                                     # (infra/glorfindel-host/README.md, « SSH ») ; HOST_KNOWN_HOSTS : son fichier (~/.eregion/h0_known_hosts)
+ORO_SSH_FINGERPRINT=SHA256:…        # V-32 (SEC14) : celle d'Orodruin, lue sur la VM par Azure (make orodruin-fingerprint) ; exigée par
+                                    # toute commande vers Orodruin, jamais accept-new ; ORO_KNOWN_HOSTS : ~/.eregion/orodruin_known_hosts
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
 EREGION_CONSOLE_HOSTS=nom,nom       # SEC1 : noms (sans port) sous lesquels la console répond, en plus de localhost / 127.0.0.1 / [::1] ; une
@@ -859,7 +863,10 @@ exige les quatre clés sur chaque service. Mesuré le 29/10 sur Docker (compose 
 écritures de chaque service (escalades, état, découverte, ChromaDB, l'index d'analyse, la
 config, `/tmp`) passent, l'image et `/root` refusent, `CapEff` à zéro, `NoNewPrivs` à 1. Les
 `docker run` de `make glorfindel-shell` / `annatar-shell` et du préflight du CD ne passent pas par
-le compose. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : son rapport de
+le compose. Les `docker run` des injecteurs sur Orodruin (`ORO_RUN`, `ORO_RUN_REQUEST` du Makefile :
+`orodruin-check`, `orodruin-exercise`, `gothmog-*`, `orodruin-campaign-*`) portent les mêmes quatre
+réglages depuis SEC14 (`ORO_HARDEN`, `tests/unit/test_host_ssh.py`) ; à mesurer au premier run sur
+Orodruin qu'aucune écriture hors de `~/runs` et de `/tmp` n'y manque. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : son rapport de
 campagne s'écrit dans `runs/`, et l'index de l'IA d'analyse ne s'ouvre jamais dans son conteneur
 (chromadb n'est pas dans son image, `tests/unit/test_profiles.py`). Sur H0, la santé du CD lit
 le journal de chaque conteneur depuis la bascule : un « Read-only file system » que la release
@@ -1275,7 +1282,9 @@ et `ghcr.io/vanyar53/eregion-annatar`, étiquetées `sha-<commit complet>`, par
 3. poussées (`scripts/published_image.py pushed` : le digest est celui que docker a enregistré
    pour ce dépôt, celui de l'image éprouvée) ;
 4. **attestées** : une provenance SLSA v1 (`actions/attest-build-provenance`) et un SBOM SPDX
-   (`anchore/sbom-action`, puis `actions/attest-sbom`), toutes deux poussées dans le registre à côté
+   (syft, installé par `published_image.py install-syft` depuis son archive épinglée par son sha256 —
+   jamais téléchargé à la volée par une action, SEC14 R-14 —, puis `actions/attest-sbom`), toutes
+   deux poussées dans le registre à côté
    de l'image et gardées dans le magasin d'attestations de GitHub ;
 5. **signées sans clé** : `cosign sign`, un certificat de sigstore délivré sur le jeton OIDC de
    GitHub (aucune clé de longue durée, aucun secret) ;
@@ -1357,6 +1366,13 @@ H0 et à n'importe qui de la tirer et de la vérifier sans jeton. Un paquet neuf
 défaut (à vérifier au premier run) : Jonathan le passe en public une fois, dans les réglages de
 chaque paquet (« Change visibility »).
 
+**L'image de base, épinglée par son digest** (SEC14, P-02). Les deux Dockerfile partent de
+`python:3.12-slim@sha256:…` : le tag dit la version, le digest (l'index multi-architecture lu sur
+Docker Hub) ce qui est construit — un tag déplacé ne change plus l'image. Ses mises à jour de sécurité
+viennent par une montée, dans une PR : `docker buildx imagetools inspect python:3.12-slim` (ligne
+`Digest:`), le même digest dans `annatar/Dockerfile` et `glorfindel/Dockerfile`
+(`tests/unit/test_published_image.py` exige les deux identiques).
+
 Tests : `tests/unit/test_published_image.py` (un faux registre, un faux cosign qui répond comme
 cosign v3.1.3, un faux docker), `tests/unit/test_host_cd.py` (le CD de bout en bout),
 `tests/unit/test_workflows.py`. Mutants M1650–M1669.
@@ -1374,6 +1390,16 @@ rafraîchissement du verrou sans contrôle).
   interrogé. Les marqueurs sont évalués pour le Python du runner, épinglé (`ubuntu-24.04` :
   Python 3.12, Linux, celui de l'image) pour que ce qui est lu ne dérive pas sans bruit. Une
   broche propre à 3.11 (numpy) n'est donc pas lue (#298).
+- **Sur chaque push et chaque PR aussi** (SEC14, P-03) : le job `audit` de `ci.yml`
+  (« dependency advisories ») lit les mêmes verrous, en lecture seule — aucune issue, aucun secret.
+  Sur une PR, il n'est rouge que pour un avis qui a une version corrigée et que personne n'a
+  accepté (la montée est due) ; sans correctif, ou accepté, il le dit (`::warning::`, `::notice::`)
+  et reste vert ; un audit en échec est dit, jamais rouge (le passage hebdomadaire l'est). **Jamais
+  rouge sur un push** : ses deux étapes, l'installation de pip-audit (PyPI qui ne répond pas) et
+  l'audit, continuent en erreur (`continue-on-error` sur les étapes, pas sur le job), le check-run
+  reste vert. Le CD de H0 lit tous les check-runs du commit d'une release : un avis
+  publié en amont ne doit pas retenir une release qui tourne avec la même dépendance — le passage
+  hebdomadaire le dit, par son issue.
 - **pip-audit a son propre verrou**, `requirements/audit.txt` (issu de `requirements/audit.in`,
   version épinglée), avec empreintes. Il s'installe dans un venv à part, jamais dans l'image ni
   dans `dev.txt`. Le workflow utilise le Python du runner, sans action tierce. Son seul secret est
@@ -1410,8 +1436,19 @@ rafraîchissement du verrou sans contrôle).
   Une erreur de GitHub sur un avis ou une issue n'arrête pas les autres : le run se finit, dit
   chaque erreur, et sort en 2. Dans les autres cas, le run est vert.
 - **`make lock` dit les avis du verrou qu'il vient d'écrire** (`make audit`, N-16), sans jamais
-  échouer : c'est une information pour la PR de montée. `make audit` seul fait la même chose à
-  tout moment. La première fois, il crée `.venv-audit/` depuis `requirements/audit.txt`.
+  échouer : c'est une information pour la PR de montée, sous un titre (« Les avis connus des verrous
+  écrits ») ; un `make audit` qui n'a pas pu tourner (réseau, son venv) est dit, à relancer avant la
+  PR (SEC14). `make audit` seul fait la même chose à tout moment. La première fois, il crée
+  `.venv-audit/` depuis `requirements/audit.txt`.
+- **Les avis acceptés, chacun avec sa raison** (SEC14, R-20) : `requirements/audit-accepted.json`
+  (`package`, `id`, `reason` écrite, `since`). Les quatre avis de chromadb 1.5.9 (au 02/11, sans
+  version corrigée) visent son serveur HTTP — l'autorisation par locataire, du code exécuté par ses
+  points d'entrée de collections ; Eregion n'utilise chromadb qu'embarqué
+  (`chromadb.PersistentClient`, `glorfindel/memory.py`, `analysis/campaign_report.py`) : aucun
+  serveur démarré ni exposé. Un avis accepté est dit comme tel (`make audit`, la CI), jamais rouge ;
+  un avis accepté qui n'est plus trouvé est dit, à retirer de la liste. Une liste dont une entrée n'a
+  pas sa forme (une raison vide ou trop courte, une date absente) est refusée. Les issues
+  hebdomadaires n'en dépendent pas : un humain les ferme (« non prévu »).
 
 ```bash
 make audit                              # les avis connus des verrous, celui de pip-audit compris (lecture seule)

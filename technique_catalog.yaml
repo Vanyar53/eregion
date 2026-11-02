@@ -48,6 +48,11 @@
 #                        (cf. réponse Q2 : un script LLM est une proposition à ratifier par un humain
 #                        avant d'entrer dans scripts/vm/, pas du code exécuté tel quel via RunCommand root).
 #   setup_scripts      : scripts de préparation à jouer avant l'attaque.
+#   script_sha256      : SEC14 (V-19) — le sha256 de reference_script et de chaque setup_script. Le
+#                        catalogue ne se porte garant que de ce contenu : un script modifié (scripts/ est
+#                        monté en écriture en local) n'est plus « ce que le catalogue a dit » — inconnu,
+#                        donc destructif, et run_script refuse de l'envoyer. Un script changé : son
+#                        empreinte ici, dans le même commit (tests/unit/test_injector_guards.py le vérifie).
 #   params             : knobs déclaratifs que le synthétiseur PEUT régler {name, type, default, min, max}.
 #                        Les bornes = part du garde-fou budget (ex. payload_mb plafonné). v1 : ADVISORY —
 #                        le passage d'args nécessite `steps[].args` au schéma + l'engine (fast-follow).
@@ -86,6 +91,9 @@ resource_types:
         testdata_marker: .annatar_test_marker
         reference_script: scripts/vm/ransomware_sim.sh
         setup_scripts: [scripts/vm/setup_testdata.sh]
+        script_sha256:                 # SEC14 (V-19) : le contenu vérifié, pas le chemin seul
+          scripts/vm/ransomware_sim.sh: a93def6c6985156573b6ca356e38ed955aeabc72c6578312a6581b1358193599
+          scripts/vm/setup_testdata.sh: 579c0544409ca1222285c0a8de092b75b7c7667a45f3926081ba9b6405d631e1
         params:                       # ADVISORY v1 — script hardcode encore ces valeurs
           - {name: duration_s, type: int, default: 45, min: 30, max: 120}
           - {name: seed_mb,    type: int, default: 512, min: 128, max: 1024}
@@ -106,6 +114,8 @@ resource_types:
         testdata_marker: ""
         reference_script: scripts/vm/exfil_sim.sh
         setup_scripts: []
+        script_sha256:                 # SEC14 (V-19) : le contenu vérifié, pas le chemin seul
+          scripts/vm/exfil_sim.sh: cf6ec03b6632f8a3807884032a1c4e91bbfda3b19b9fa4b9c88e982226b31a04
         params:                       # exfil_sim.sh lit déjà $1=SIZE_MB → câblable dès `steps[].args`
           - {name: payload_mb, type: int, default: 512, min: 10, max: 1024}
 
@@ -125,6 +135,8 @@ resource_types:
         testdata_marker: ""
         reference_script: scripts/vm/lateral_movement_sim.sh
         setup_scripts: []
+        script_sha256:                 # SEC14 (V-19) : le contenu vérifié, pas le chemin seul
+          scripts/vm/lateral_movement_sim.sh: d3347a72cd6264aea685cc71b9d8308cd67c36aaa58fc0d1a660d4b3841f9015
         params:                       # lateral_movement_sim.sh lit $1=ATTACKER_IP, $2=ATTEMPTS
           - {name: attacker_ip, type: str, default: "185.220.101.1"}   # doit rester ⊂ scope si jamais routable
           - {name: attempts,    type: int, default: 25, min: 10, max: 100}
@@ -145,6 +157,8 @@ resource_types:
         testdata_marker: ""
         reference_script: scripts/vm/privilege_escalation_sim.sh
         setup_scripts: []
+        script_sha256:                 # SEC14 (V-19) : le contenu vérifié, pas le chemin seul
+          scripts/vm/privilege_escalation_sim.sh: a7f24a1f2ed550b75cdd88b33a48b321053852571e038868aa5bd7a7c1d41a6c
         params:                       # privilege_escalation_sim.sh lit $1=ATTACKER_USER, $2=FAILED_ATTEMPTS
           - {name: attacker_user,   type: str, default: "svc-backup"}
           - {name: failed_attempts, type: int, default: 8, min: 1, max: 30}
@@ -183,6 +197,8 @@ resource_types:
         testdata_marker: ""
         reference_script: scripts/vm/account_creation_sim.sh
         setup_scripts: []
+        script_sha256:                 # SEC14 (V-19) : le contenu vérifié, pas le chemin seul
+          scripts/vm/account_creation_sim.sh: e05bd69c83b0397e91069f6bf1da5b32cc43bb2f5fbf99e1ad2a333f336f6bae
 
       # ── Expansion VM (design — pas encore exécutable) ──
       - ttp: T1070.002

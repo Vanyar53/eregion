@@ -62,7 +62,7 @@ def _make(fake, *args, stdin="", env_extra=None):
                **(env_extra or {}))
     # The host key's check is known_host.sh's (tests/unit/test_host_ssh.py): taken as done here.
     fingerprint = [] if any(a.startswith("HOST_SSH_FINGERPRINT=") for a in args) else ["HOST_SSH_FINGERPRINT=SHA256:test"]
-    return subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "-o", "glorfindel-host-known",
+    return subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "-o", "glorfindel-host-known", "-o", "orodruin-known",
                            "orodruin-exercise", f"PYTHON={sys.executable}", "HOST_IP=10.0.0.4", "ORO_IP=10.0.0.5",
                            *fingerprint, *args],
                           capture_output=True, text=True, input=stdin, env=env, timeout=60)
@@ -89,6 +89,8 @@ def test_the_request_goes_from_h0_to_orodruin_with_the_names_typed_here(fake_hos
     assert seen[2]["argv"][-1] == "orodruin@10.0.0.5:requests/"
     run = seen[3]["argv"][-1]
     assert run.endswith(f"python -m eregion_core.exercise_runner /app/requests/{RID}.json")
+    # R-11: the names typed do not stay on Orodruin — removed when the run ends, however it ends.
+    assert run.startswith(f"trap 'rm -f requests/{RID}.typed.json' EXIT HUP INT TERM; ")
     assert "-v $HOME/requests:/app/requests:ro" in run and "--env-file orodruin.env" in run
     # What reached Orodruin: the request as H0 holds it, and the names typed beside it.
     assert json.loads((oro / f"{RID}.json").read_text()) == REQUEST

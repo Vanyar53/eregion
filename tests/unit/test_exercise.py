@@ -172,3 +172,221 @@ def test_the_model_sees_each_past_cycle_s_source_never_the_current_one(tmp_path,
     assert msg.count("[EXERCICE]") == 1        # the current signal is never labelled
     assert "never a precedent for a real" in _SYSTEM_PROMPT
 
+
+# ── SEC14 (V-20): a window written on the watch's host, bounded by what the watch saw ──────────
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture
+def seen_record(tmp_path, monkeypatch):
+    """The watch's real record of the windows it saw (off elsewhere in the tests), in tmp."""
+    monkeypatch.setattr(exercise, "seen_path", lambda: tmp_path / "glorfindel" / "exercise_seen.json")
+    return tmp_path / "glorfindel" / "exercise_seen.json"
+
+
+def _write(directory, window):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{window['run_id']}.json").write_text(json.dumps(window))
+
+
+def _local(rid="r1", start=None, **kw):
+    start = start or T0
+    return {"run_id": rid, "injector": "annatar", "kind": "technique", "experiment": "T1110.001",
+            "targets": [VM.lower()], "start": start.isoformat(), "end": None,
+            "expires": (start + timedelta(hours=2)).isoformat(), "destructive": False, **kw}
+
+
+def test_a_local_window_dated_back_when_first_seen_is_refused(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local(start=_at(-110)))                    # written now, dated 110 min back
+    assert exercise.load_windows(d, now=T0, seen=seen_record) == []
+    assert source_of(VM, _at(-100), windows=exercise.load_windows(d, now=T0, seen=seen_record)) == ("real", "")
+    # Without the record (as before SEC14), it was believed: the bound is the record's.
+    assert [w["run_id"] for w in exercise.load_windows(d, now=T0)] == ["r1"]
+
+
+def test_a_local_window_seen_open_may_come_again_closed_and_nothing_else(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local(start=_at(0)))
+    assert len(exercise.load_windows(d, now=_at(1), seen=seen_record)) == 1
+    _write(d, _local(start=_at(0), end=_at(30).isoformat(), closed_by="annatar"))
+    assert len(exercise.load_windows(d, now=_at(31), seen=seen_record)) == 1   # its closure
+    assert json.loads(seen_record.read_text())["r1"]["end"] == _at(30).isoformat()
+    for rewrite in (_local(start=_at(0), end=_at(45).isoformat()),           # its end moved
+                    _local(start=_at(0)),                                     # its end withdrawn
+                    _local(start=_at(-60), end=_at(30).isoformat()),          # its start moved
+                    _local(start=_at(0), end=_at(30).isoformat(), targets=[VM.lower(), OTHER.lower()])):
+        _write(d, rewrite)
+        assert exercise.load_windows(d, now=_at(50), seen=seen_record) == [], rewrite
+
+
+def test_the_first_sight_is_kept_a_long_run_stays_believed(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local(start=_at(0)))
+    assert len(exercise.load_windows(d, now=_at(1), seen=seen_record)) == 1
+    assert len(exercise.load_windows(d, now=_at(100), seen=seen_record)) == 1
+    assert json.loads(seen_record.read_text())["r1"]["seen"] == _at(1).isoformat()
+
+
+def test_a_window_the_pull_wrote_down_keeps_the_channels_bound(tmp_path, seen_record):
+    """Pulled through the channel, written down by the pull: bounded by its blob's creation, so
+    believed when the watch first reads it 90 min later."""
+    from eregion_core import exercise_channel
+    from tests.unit.fake_container import CRED, URL, FakeContainer
+    c, d = FakeContainer(), tmp_path / "x"
+    exercise_channel.publish(_local("r1", start=_at(0)), channel=URL, credential=CRED, put=c.put)
+    assert exercise_channel.pull(d, channel=URL, credential=CRED, get=c.get, seen=seen_record) == 1
+    assert json.loads(seen_record.read_text())["r1"]["channel"] is True
+    assert [w["run_id"] for w in exercise.load_windows(d, now=_at(90), seen=seen_record)] == ["r1"]
+    # Its copy edited on the host, its channel_created kept: no longer what was pulled.
+    w = json.loads((d / "r1.json").read_text())
+    _write(d, {**w, "targets": [VM.lower(), OTHER.lower()]})
+    assert exercise.load_windows(d, now=_at(91), seen=seen_record) == []
+
+
+def test_a_channel_created_the_file_carries_alone_proves_nothing(tmp_path, seen_record):
+    """SEC14 review: a window written on the host with a « channel_created » of its own is local —
+    the pull never wrote it down — and dated back, refused."""
+    d = tmp_path / "x"
+    _write(d, _local("r1", start=_at(-100), channel_created=_at(-100).isoformat()))
+    assert exercise.load_windows(d, now=T0, seen=seen_record) == []
+    entry = json.loads(seen_record.read_text())["r1"]
+    assert "channel" not in entry and entry["seen"] == T0.isoformat()
+    # Without the watch's record (as before the review), it was believed.
+    assert [w["run_id"] for w in exercise.load_windows(d, now=T0)] == ["r1"]
+
+
+def test_an_unreadable_record_believes_no_window(tmp_path, seen_record):
+    d = tmp_path / "x"
+    _write(d, _local("r1", start=_at(0)))
+    _write(d, _local("r2", start=_at(0), channel_created=_at(0).isoformat()))
+    seen_record.parent.mkdir(parents=True)
+    seen_record.write_text("[not an object]")
+    assert exercise.load_windows(d, now=_at(1), seen=seen_record) == []
+
+
+def test_the_record_is_written_whole_by_one_writer_at_a_time(tmp_path, seen_record):
+    """The watch, `glorfindel respond` and the console may read windows at once: a flock, and a
+    temporary file of its own, replaced."""
+    import threading
+    d = tmp_path / "x"
+    for i in range(20):
+        _write(d, _local(f"r{i}", start=_at(0)))
+    errors = []
+
+    def read():
+        try:
+            exercise.load_windows(d, now=_at(1), seen=seen_record)
+        except Exception as e:      # noqa: BLE001
+            errors.append(e)
+    threads = [threading.Thread(target=read) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert errors == [] and len(json.loads(seen_record.read_text())) == 20
+    assert sorted(q.name for q in seen_record.parent.iterdir()) == ["exercise_seen.json",
+                                                                     "exercise_seen.json.lock"]
+
+
+def test_the_watch_writes_down_what_it_saw_in_its_own_state_never_in_runs(tmp_path, seen_record):
+    """observe(), the watch's minute: the default directory (the injector's runs/exercises) read,
+    the record written beside the watch's state — never where an injector writes."""
+    open_window("r1", injector="annatar", kind="technique", experiment="T1110.001", targets=[VM])
+    assert [w["run_id"] for w in exercise.observe()] == ["r1"]
+    assert "r1" in json.loads(seen_record.read_text())
+    assert not list(exercise.exercises_dir().rglob("exercise_seen*"))
+
+
+def test_the_watch_reads_its_windows_every_minute():
+    """glorfindel/cli.py's housekeeping holds the observation, beside the heartbeat."""
+    from pathlib import Path
+    cli = (Path(__file__).resolve().parents[2] / "glorfindel" / "cli.py").read_text(encoding="utf-8")
+    assert "for _task in (_check_ttl, _reconcile_jobs, _reassert, _write_heartbeat, _observe_windows):" in cli
+    assert "        _exercise.observe()\n" in cli
+
+
+_WRITER = """
+import json, sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from eregion_core import exercise
+d, reg, name = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+now = datetime.now(timezone.utc)
+d.mkdir(parents=True, exist_ok=True)
+for i in range(15):
+    rid = f"{name}-{i}"
+    (d / f"{rid}.json").write_text(json.dumps({"run_id": rid, "targets": [], "start": now.isoformat(),
+        "end": None, "expires": (now + timedelta(hours=1)).isoformat()}))
+    exercise.load_windows(d, now=now, seen=reg)
+"""
+
+
+def test_the_record_keeps_every_writers_windows_between_processes(tmp_path):
+    """Several processes read windows at once (the watch, `glorfindel respond`): none loses
+    another's entries — the record is read, changed and written under one flock."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    reg = tmp_path / "glorfindel" / "exercise_seen.json"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    procs = [subprocess.Popen([sys.executable, "-c", _WRITER, str(tmp_path / f"d{n}"), str(reg), f"w{n}"],
+                              env=env) for n in range(6)]
+    assert [pr.wait(timeout=120) for pr in procs] == [0] * 6
+    assert len(json.loads(reg.read_text())) == 6 * 15
+
+
+# ── SEC14, second review: the transition — a copy pulled before the record existed ─────────────
+
+def _pulled_before(tmp_path, window, *, forged_created=None):
+    """A window in the channel, and its copy already on this host as an older version pulled it
+    (its channel_created stamped, its file newer than the blob), never written down."""
+    from eregion_core import exercise_channel
+    from tests.unit.fake_container import CRED, URL, FakeContainer
+    c, d = FakeContainer(), tmp_path / "x"
+    c.clock = _at(-1)                                   # the blob written as the run opened
+    exercise_channel.publish(window, channel=URL, credential=CRED, put=c.put)
+    assert exercise_channel.pull(d, channel=URL, credential=CRED, get=c.get) == 1   # no record then
+    if forged_created:
+        copy = json.loads((d / f"{window['run_id']}.json").read_text())
+        _write(d, {**copy, "channel_created": forged_created})
+    return c, d, CRED, URL
+
+
+def test_a_window_open_across_the_upgrade_is_pulled_once_again_then_believed(tmp_path, seen_record):
+    from eregion_core import exercise_channel
+    c, d, cred, url = _pulled_before(tmp_path, _local("r1", start=_at(0)))
+    assert not seen_record.exists()
+    gets = len(c.gets)
+    assert exercise_channel.pull(d, channel=url, credential=cred, get=c.get, seen=seen_record) == 1
+    assert len(c.gets) == gets + 1 and json.loads(seen_record.read_text())["r1"]["channel"] is True
+    assert [w["run_id"] for w in exercise.load_windows(d, now=_at(90), seen=seen_record)] == ["r1"]
+    # Written down: the next pull downloads it no more.
+    assert exercise_channel.pull(d, channel=url, credential=cred, get=c.get, seen=seen_record) == 0
+    assert len(c.gets) == gets + 1
+
+
+def test_a_copy_pulled_again_takes_the_listings_creation_never_its_own(tmp_path, seen_record):
+    """The copy on disk said a channel_created of its own (written on the host): the record takes
+    the listing's, the one the channel gives."""
+    from eregion_core import exercise_channel
+    c, d, cred, url = _pulled_before(tmp_path, _local("r1", start=_at(0)), forged_created=_at(-500).isoformat())
+    exercise_channel.pull(d, channel=url, credential=cred, get=c.get, seen=seen_record)
+    entry = json.loads(seen_record.read_text())["r1"]
+    assert entry["seen"] == c.created["r1.json"].isoformat() != _at(-500).isoformat()
+    assert json.loads((d / "r1.json").read_text())["channel_created"] == entry["seen"]
+
+
+def test_a_copy_that_is_not_the_channels_stays_local(tmp_path, seen_record):
+    """Rewritten on the host (a target added): rewrite_refusal keeps it as it is, never written
+    down — local, and dated back, refused."""
+    from eregion_core import exercise_channel
+    c, d, cred, url = _pulled_before(tmp_path, _local("r1", start=_at(0)))
+    copy = json.loads((d / "r1.json").read_text())
+    _write(d, {**copy, "targets": [VM.lower(), OTHER.lower()]})
+    assert exercise_channel.pull(d, channel=url, credential=cred, get=c.get, seen=seen_record,
+                                 say=lambda *_: None) == 0
+    assert not seen_record.exists() or "channel" not in json.loads(seen_record.read_text()).get("r1", {})
+    assert exercise.load_windows(d, now=_at(90), seen=seen_record) == []

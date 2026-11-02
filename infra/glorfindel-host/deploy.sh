@@ -1,10 +1,10 @@
 #!/bin/bash
 # deploy.sh — on Glorfindel's VM (H0), in ~/eregion: deploy a named reference (M-3, #183).
 #
-#   make glorfindel-host-start [REF=v0.3.1|<commit>]    # sends this script over ssh
+#   make glorfindel-host-start REF=v0.3.1|<commit>      # sends this script over ssh
 #
-#   deploy.sh [REF]                  fetch, check out REF detached, build the image, start
-#   deploy.sh --checkout-only [REF]  fetch and check out, nothing built or started
+#   deploy.sh REF                    fetch, check out REF detached, build the image, start
+#   deploy.sh --checkout-only REF    fetch and check out, nothing built or started
 #   deploy.sh --show                 the reference the running watch was built from
 #   deploy.sh --build-only REF [TAG] build eregion-glorfindel:REF (or :TAG) from the current
 #                                    directory, which must be checked out at REF (the CD's own
@@ -22,7 +22,10 @@
 #                                    one before)
 #
 # REF is a tag or a commit, never a branch: a branch moves, and H0 ran whatever had just
-# been merged into main. Without REF, the latest `v*` tag (version order). The image carries
+# been merged into main. REF is required (SEC14, V-22): this path builds on H0 — the emergency
+# path, outside CI3's verification — so it builds only what the operator names, never « the
+# latest tag » it found (a tag pushed by anyone with write access). The CD (H1) never builds
+# here: it pulls the published image, signature and provenance verified. The image carries
 # the reference (labels org.opencontainers.image.version / .revision) — `--show`, and so
 # `make glorfindel-host-status`, read it back from the running container. Each image is also
 # tagged by its reference, and the three newest are kept, with the one running and the one
@@ -73,20 +76,14 @@ resolve() {
   die "« $ref » n'est ni un tag ni un commit connu (après git fetch)."
 }
 
-latest_tag() {
-  git tag -l 'v*' --sort=-v:refname | head -1
-}
-
 checkout() {
   local want="${1:-}" tolerant="${2:-}" expect="${3:-}" pair dirty rules
   if ! git fetch -q --tags --force origin; then
     [ -n "$tolerant" ] || die "git fetch a échoué : rien n'est déployé"
     echo "⚠ git fetch a échoué : la référence est résolue sur la VM" >&2
   fi
-  if [ -z "$want" ]; then
-    want=$(latest_tag)
-    [ -n "$want" ] || die "aucun tag v* : préciser REF=<commit>"
-  fi
+  # V-22 (SEC14): named, or nothing moves — never « the latest tag ».
+  [ -n "$want" ] || die "REF exigée : un tag ou un commit (make glorfindel-host-start REF=<tag ou commit>) ; rien n'est déployé"
   pair=$(resolve "$want")
   # The image was built from one commit (H1): a tag rewritten since names another — its compose,
   # its rules, its catalogue beside the old image. The image's own commit is checked out

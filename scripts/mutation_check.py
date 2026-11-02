@@ -1215,8 +1215,8 @@ MUTANTS = [
      '    _has_alerting = bool(os.environ.get("GLORFINDEL_WEBHOOK_URL") '
      'or os.environ.get("DISCORD_CHANNEL_ID"))\n'),
     ("M524", "REF=--checkout-only reaches deploy.sh as an option (M-3, review)", MAKE,
-     'make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac\n\t@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide',
-     'make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac\n\t@case "$$EREGION_DEPLOY_REF" in *[!A-Za-z0-9._-]*) echo "REF invalide'),
+     '\t@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac\n\t$(HOST_SSH)',
+     '\t@case "$$EREGION_DEPLOY_REF" in *[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac\n\t$(HOST_SSH)'),
     ("M525", "a REF exported in the environment is deployed in silence (M-3, review)", MAKE,
      '@case "$(origin REF)" in environment*) echo "REF vient de l\'environnement (« $$EREGION_DEPLOY_REF ») : rien n\'est déployé',
      '@case "$(origin REF)" in nowhere*) echo "REF vient de l\'environnement (« $$EREGION_DEPLOY_REF ») : rien n\'est déployé'),
@@ -3896,7 +3896,7 @@ MUTANTS += [
     ("M1158", "pip-audit resolves the lock with pip instead of reading it (CI2, N-16)", PAI,
      '"--require-hashes", "--disable-pip",', '"--require-hashes",'),
     ("M1159", "make lock fails when its audit cannot run (CI2, N-16)", MAKE,
-     "\t-@$(MAKE) --no-print-directory audit\n", "\t@$(MAKE) --no-print-directory audit\n"),
+     "\t@$(MAKE) --no-print-directory audit || echo ", "\t@$(MAKE) --no-print-directory audit && echo "),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_pip_audit_issues.py" for n in range(1150, 1160)})
 # CI2, after the 5.5 review: who may hold a key (the workflow's issues only, every field of its
@@ -6932,21 +6932,21 @@ MUTANTS += [
     ("M2475", "a path Orodruin reads on Azure hides a character not printable (#358)", "eregion_core/held.py",
      "    if not path.isprintable():\n", "    if False:\n"),
     ("M2476", "a campaign launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
-     '    lock = contextlib.nullcontext() if dry_run else request_lock(runs_dir, f"campaign {campaign_id}")\n',
+     '    lock = contextlib.nullcontext() if dry_run else request_lock(f"campaign {campaign_id}")\n',
      "    lock = contextlib.nullcontext()\n"),
     ("M2477", "the one refused never says what holds the lock (#358)", "eregion_core/exercise_runner.py",
      '            what = _holder(fd) or "another request"\n', '            what = "another request"\n'),
     ("M2478", "what holds the lock said raw, its escapes with it (#358)", "eregion_core/exercise_runner.py",
      '    return "".join(c for c in text if c.isprintable()).strip()\n', "    return text.strip()\n"),
     ("M2479", "a request runs without naming itself in the lock (#358)", "eregion_core/exercise_runner.py",
-     '            with request_lock(self.runs_dir, f"request {req.id}"):\n',
-     "            with request_lock(self.runs_dir):\n"),
+     '            with request_lock(f"request {req.id}") as fd:\n',
+     "            with request_lock() as fd:\n"),
 ]
 TESTS.update({mid: _358_CORE for mid in ("M2474", "M2475", "M2477", "M2478", "M2479")})
 TESTS["M2476"] = "tests/unit/test_campaign_runner.py"
 MUTANTS += [
     ("M2480", "a single run launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
-     '    lock = contextlib.nullcontext() if dry_run else request_lock("runs", f"run {os.path.basename(path)}")\n',
+     '    lock = contextlib.nullcontext() if dry_run else request_lock(f"run {os.path.basename(path)}")\n',
      "    lock = contextlib.nullcontext()\n"),
 ]
 TESTS["M2480"] = "tests/unit/test_annatar_run_exit.py"
@@ -7511,11 +7511,11 @@ MUTANTS += [
      "            except Exception as e:\n                why = f\"typed_name: the target's name unreadable",
      "            except ZeroDivisionError as e:\n                why = f\"typed_name: the target's name unreadable"),
     ("M2498", "a fault launched by hand on Orodruin during a request takes no lock (#358)", "gothmog/cli.py",
-     '    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")\n',
-     "    lock = contextlib.nullcontext()\n"),
-    ("M2499", "a wire of a request takes the request's lock: it refuses itself (#358)", "gothmog/cli.py",
-     '    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")\n',
-     '    lock = request_lock("runs", f"fault {os.path.basename(fault)}")\n'),
+     "        with request_lock(holder):\n", "        with open(os.devnull):\n"),
+    # SEC14 (R-10): a wire now holds its request's lock, handed down — re-anchored there.
+    ("M2499", "a wire of a request takes a lock of its own: it refuses itself (#358, R-10)",
+     "eregion_core/exercise_runner.py",
+     "    inherited = _inherited(path)\n", "    inherited = None\n"),
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
@@ -8426,3 +8426,179 @@ TESTS.update({
     "M2898": "tests/unit/test_glorfindel_host.py",
     "M2899": "tests/unit/test_glorfindel_host.py",
 })
+
+
+# SEC14 (#420, R-10): « one run at a time » has one lock, taken by every command that acts — a
+# wire under the hold its request hands down, a clean, a campaign whatever its --runs-dir.
+_R10 = "tests/unit/test_exercise_runner.py"
+
+
+MUTANTS += [
+    ("M2940", "a wire launched by hand during a request takes no lock (R-10)", "annatar/cli.py",
+     '        with request_lock(f"wire {request}"), \\\n', "        with contextlib.nullcontext(), \\\n"),
+    ("M2941", "a clean during a request takes no lock (R-10)", "annatar/cli.py",
+     '        with request_lock(f"clean {os.path.basename(scenario)}"):\n',
+     "        with contextlib.nullcontext():\n"),
+    ("M2942", "the runner hands its lock down to no wire (R-10)", "eregion_core/exercise_runner.py",
+     "pass_fds=(int(fd),) if fd.isdigit() else ()", "pass_fds=()"),
+    ("M2943", "any descriptor named in the environment is taken for the request's hold (R-10)",
+     "eregion_core/exercise_runner.py",
+     "    return fd if (held.st_dev, held.st_ino) == (here.st_dev, here.st_ino) else None\n",
+     "    return fd\n"),
+    ("M2944", "a wire's hold writes its own name over the request's, and erases it at its exit (R-10)",
+     "eregion_core/exercise_runner.py",
+     "        if inherited is not None:\n            yield fd ", "        if False:\n            yield fd "),
+    ("M2945", "the runner names no lock to its wires (R-10)", "eregion_core/exercise_runner.py",
+     ",\n                   LOCK_FD_ENV: str(lock_fd)}", "}"),
+]
+
+
+TESTS.update({"M2940": "tests/unit/test_annatar_wire.py", "M2941": "tests/unit/test_annatar_run_exit.py",
+              "M2942": _R10, "M2943": _R10, "M2944": _R10, "M2945": _R10})
+
+
+# SEC14 (#420, R-11): a Dagorlad request plays once on Orodruin, while it is fresh; the names typed
+# do not stay there.
+MUTANTS += [
+    ("M2946", "a request played already plays again (R-11)", "eregion_core/exercise_runner.py",
+     '                        if json.loads(line).get("request") == req.id:\n',
+     "                        if False:\n"),
+    ("M2947", "a request is never written to the registry of the requests played (R-11)",
+     "eregion_core/exercise_runner.py", "                self._played(req)\n", "                pass\n"),
+    ("M2948", "a registry of the requests played that cannot be read plays on (R-11)",
+     "eregion_core/exercise_runner.py",
+     '            return "replayed", f"the registry of the requests played cannot be read',
+     '            e, f"the registry of the requests played cannot be read'),
+    ("M2949", "a request carried days after it was written still runs (R-11)",
+     "eregion_core/exercise_runner.py", "        if age > MAX_AGE_S:\n", "        if False:\n"),
+    ("M2950", "a request dated ahead of Orodruin's clock runs (R-11)", "eregion_core/exercise_runner.py",
+     "        if age < -FUTURE_SKEW_S:\n", "        if False:\n"),
+    ("M2951", "the names typed stay on Orodruin after the request (R-11)", MAKE,
+     "\"trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; \"", '""'),
+    ("M2952", "the runner leaves the names typed where it could remove them (R-11)",
+     "eregion_core/exercise_runner.py", "            typed_path.unlink()\n", "            pass\n"),
+]
+
+
+TESTS.update({mid: _R10 for mid in ("M2946", "M2947", "M2948", "M2949", "M2950", "M2952")})
+
+
+TESTS["M2951"] = "tests/unit/test_makefile_exercise.py"
+
+
+# SEC14 (#420, V-32, V-34): Orodruin's host key pinned, never accept-new; its containers hardened.
+MUTANTS += [
+    ("M2953", "Orodruin without its host key's fingerprint falls back to accept-new (V-32)", MAKE,
+     ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT required\n', ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT\n'),
+    ("M2954", "an injector's container on Orodruin runs with its root writable and its capabilities (V-34)",
+     MAKE, "ORO_RUN        = docker run --rm $(ORO_HARDEN) ", "ORO_RUN        = docker run --rm "),
+]
+
+
+TESTS.update({"M2953": "tests/unit/test_host_ssh.py", "M2954": "tests/unit/test_host_ssh.py"})
+
+
+# SEC14 (#420, V-22): the path that builds on H0 builds only a REF the operator names.
+MUTANTS += [
+    ("M2955", "a deployment by hand without REF builds the latest tag it finds on H0 (V-22)",
+     "infra/glorfindel-host/deploy.sh", '  [ -n "$want" ] || die "REF exigée',
+     """  [ -n "$want" ] || want=$(git tag -l 'v*' --sort=-v:refname | head -1); true || die "REF exigée"""),
+]
+
+
+TESTS["M2955"] = "tests/unit/test_host_deploy.py"
+
+
+# SEC14 (#420, V-21): what one pull reads in all is bounded, its listing pages and its blobs.
+MUTANTS += [
+    ("M2956", "a pull of the windows reads without a cumulated bound, each read bounded alone (V-21)",
+     "eregion_core/exercise_channel.py",
+     "        _pull_windows(directory, url, headers, get, say, Budget(), written, seen)\n",
+     "        _pull_windows(directory, url, headers, get, say, None, written, seen)\n"),
+]
+
+
+TESTS["M2956"] = "tests/unit/test_injector_channels.py"
+
+
+# SEC14 (#420, V-20): a window written on the watch's host, bounded by what the watch saw of it.
+MUTANTS += [
+    ("M2957", "a local window dated back when the watch first saw it is believed (V-20)",
+     "eregion_core/exercise.py", "    if start < seen - timedelta(seconds=FUTURE_SKEW_S):\n",
+     "    if False:\n"),
+]
+
+
+TESTS["M2957"] = "tests/unit/test_exercise.py"
+
+
+# SEC14 (#420, V-19): the catalog vouches for a local script's content, not its path.
+MUTANTS += [
+    ("M2958", "a local script changed under its path is still what the catalog vouched for (V-19)",
+     "annatar/campaign/catalog.py",
+     "        if any(s not in known or not _pinned(entry, s) for s in scripts):\n",
+     "        if any(s not in known for s in scripts):\n"),
+]
+
+
+TESTS["M2958"] = "tests/unit/test_injector_guards.py"
+
+
+# SEC14 (#420, P-03): an advisory with a fix that no human accepted makes a push or a pull request red.
+MUTANTS += [
+    ("M2959", "an advisory with a fix that no one accepted lets a pull request through (P-03)",
+     "scripts/pip_audit_issues.py",
+     "    due = [a for a in advs if a.fixes and not acceptance(a, accepted)]\n", "    due = []\n"),
+]
+
+
+TESTS["M2959"] = "tests/unit/test_pip_audit_issues.py"
+
+
+# SEC14 after its review (M3075–M3084): a window is « pulled » only when the pull wrote it down; the
+# record under one flock; the CI's audit never red on a push; the script's pin by a normal path;
+# annatar init under the lock.
+MUTANTS += [
+    ("M3075", "a channel_created the window's file carries alone is believed (V-20, review)",
+     "eregion_core/exercise.py",
+     '                entry = seen[rid] = {"seen": now.isoformat(), "fields": _fields(w), "end": w.get("end")}\n',
+     '                entry = seen[rid] = {"seen": w.get(CHANNEL_CREATED) or now.isoformat(), '
+     '"fields": _fields(w), "end": w.get("end")}\n'),
+    ("M3076", "the pull writes nothing down: a window it brought is held as local (V-20, review)",
+     "eregion_core/exercise_channel.py", "            note_pulled(seen, json.loads(stamped))\n",
+     "            pass\n"),
+    ("M3077", "the watch's record is changed without its flock: two processes lose each other's (V-20, review)",
+     "eregion_core/exercise.py", "        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)\n", "        pass\n"),
+]
+
+
+TESTS.update({"M3075": "tests/unit/test_exercise.py", "M3076": "tests/unit/test_exercise.py",
+              "M3077": "tests/unit/test_exercise.py"})
+
+
+MUTANTS += [
+    ("M3078", "a pinned script named ./scripts/… or by its absolute path escapes its pin (V-19, review)",
+     "annatar/campaign/catalog.py", "            if isinstance(pin, str) and _relative(str(path)) == want:\n",
+     "            if isinstance(pin, str) and str(path) == script:\n"),
+    ("M3079", "annatar init cleans a disk during a request: no lock (R-10, review)", "annatar/cli.py",
+     """        with request_lock(f"init {os.path.basename(scenario or '')}".strip()):\n""",
+     "        with contextlib.nullcontext():\n"),
+]
+
+
+TESTS.update({"M3078": "tests/unit/test_injector_guards.py", "M3079": "tests/unit/test_annatar_run_exit.py"})
+
+
+# SEC14, second review: a copy the record never noted is pulled once again, then written down.
+MUTANTS += [
+    ("M3080", "a window open across the upgrade, never written down, is never pulled again: held as local (V-20)",
+     "eregion_core/exercise_channel.py",
+     '        unnoted = noted is not None and local.exists() and name[:-len(".json")] not in noted\n',
+     "        unnoted = False\n"),
+    ("M3081", "a copy pulled again keeps the channel_created it carried on disk (V-20)",
+     "eregion_core/exercise_channel.py", "        stamped = _stamped(body, blob, None if unnoted else local)\n",
+     "        stamped = _stamped(body, blob, local)\n"),
+]
+
+
+TESTS.update({"M3080": "tests/unit/test_exercise.py", "M3081": "tests/unit/test_exercise.py"})

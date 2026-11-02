@@ -85,7 +85,7 @@ make glorfindel-host-up              # crée la VM (confirmation demandée) ; cl
 make glorfindel-host-env             # host.env depuis ton .envrc chargé (ou : copier host.env.example et remplir)
 make glorfindel-host-push            # host.env → ~/eregion/.env ; la config locale, le défaut en human_only, les modes de H0 gardés (HUMAN_ONLY=1 : tout en human_only)
 make glorfindel-stop                 # arrête le Glorfindel local : deux watch = cartes en double
-make glorfindel-host-start [REF=…]   # un tag ou un commit (défaut : dernier tag v*), détaché ; construit l'image, lance watch + console (war-room) + bot
+make glorfindel-host-start REF=…     # un tag ou un commit (exigé), détaché ; construit l'image sur H0 (le chemin de secours), lance watch + console (war-room) + bot
 make glorfindel-host-tunnel          # affiche l'URL de la console avec son jeton, puis tient le tunnel (Ctrl+C)
 make glorfindel-host-url             # l'URL de la console avec son jeton, seule
 make glorfindel-host-logs            # vérifier « heartbeat → N VM(s) » et l'absence d'erreur d'identité
@@ -159,12 +159,13 @@ Vue d'ensemble, l'onglet Glorfindel ; un ancien favori `/atelier` mène à `/`.
 ## Ce que la VM exécute (M-3, #183)
 
 - **Une référence nommée, jamais une branche.** `make glorfindel-host-start REF=v0.3.1` (un tag)
-  ou `REF=<commit>` (7 à 40 chiffres hexadécimaux) ; sans `REF`, le dernier tag `v*` dans l'ordre
-  des versions. `main`, `origin/main`, `HEAD` sont refusés : une branche bouge, et la VM
+  ou `REF=<commit>` (7 à 40 chiffres hexadécimaux) ; **sans `REF`, rien n'est déployé** (SEC14,
+  V-22) : ce chemin construit l'image sur H0, hors de la vérification de CI3, et ne prend donc
+  jamais « le dernier tag » qu'il trouverait — un tag que quiconque peut écrire dans le dépôt
+  pousserait. `main`, `origin/main`, `HEAD` sont refusés : une branche bouge, et la VM
   exécutait jusque-là ce qui venait d'être fusionné (`git pull` sur `main`). `REF` se donne sur
   la ligne de commande : une variable `REF` de l'environnement (un nom générique, exporté pour
-  autre chose) est refusée, jamais déployée en silence (`REF=` sur la ligne de commande : le
-  dernier tag) ; une `REF` qui commence par `-` aussi (elle serait une option du script). Le script
+  autre chose) est refusée, jamais déployée en silence ; une `REF` qui commence par `-` aussi (elle serait une option du script). Le script
   (`deploy.sh`, celui du poste, envoyé par ssh) fait `git fetch --tags`, un checkout détaché,
   puis construit l'image avec deux étiquettes, `org.opencontainers.image.version` (la référence)
   et `org.opencontainers.image.revision` (le commit complet). Un fichier suivi modifié sur la VM
@@ -344,7 +345,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 
 ## Le CD de H0 (H1, #244)
 
-**Publier une release, c'est déployer H0.** Un timer sur la VM la tire toutes les 5 minutes. Il la vérifie, **tire son image publiée par son digest et en vérifie la signature et la provenance** (CI3 : H0 ne construit plus), la préflighte, bascule, et revient en arrière si la santé échoue. H0 reste fermé : il ne fait que sortir, vers l'API publique de GitHub (sans jeton), vers le registre (`ghcr.io`, ses blobs sur `pkg-containers.githubusercontent.com`, sans jeton), vers la racine de confiance de sigstore (`tuf-repo-cdn.sigstore.dev`) et vers le webhook de `#deploy`. Le Terraform de H0 n'a aucune règle sortante : la règle par défaut d'Azure (`AllowInternetOutBound`) laisse tout cela passer, rien n'est à ouvrir (lu dans `main.tf` ; à confirmer sur la VM par `make glorfindel-host-cd-check`, qui fait chacun de ces appels).
+**Publier une release, c'est déployer H0.** Un timer sur la VM la tire toutes les 5 minutes. Il la vérifie, **tire son image publiée par son digest et en vérifie la signature et la provenance** (CI3 : le CD ne construit jamais sur H0 ; seul le déploiement à la main, le chemin de secours, construit une référence nommée, `REF` exigée), la préflighte, bascule, et revient en arrière si la santé échoue. H0 reste fermé : il ne fait que sortir, vers l'API publique de GitHub (sans jeton), vers le registre (`ghcr.io`, ses blobs sur `pkg-containers.githubusercontent.com`, sans jeton), vers la racine de confiance de sigstore (`tuf-repo-cdn.sigstore.dev`) et vers le webhook de `#deploy`. Le Terraform de H0 n'a aucune règle sortante : la règle par défaut d'Azure (`AllowInternetOutBound`) laisse tout cela passer, rien n'est à ouvrir (lu dans `main.tf` ; à confirmer sur la VM par `make glorfindel-host-cd-check`, qui fait chacun de ces appels).
 
 **Les sessions ne publient jamais une release** : elles la préparent en brouillon (`gh release create --draft`), et Jonathan clique « Publish ». Depuis SEC12, une fois posée par Jonathan, une règle du dépôt le tient : les tags `v*` (création, mise à jour, suppression) sont réservés à l'administrateur, et publier une release crée son tag. Les sessions agissent sous leur propre identité, une GitHub App (`docs/sessions.md`, « L'identité des sessions » et « Les règles du dépôt »).
 
@@ -420,7 +421,7 @@ d'exercice non marqués (B2), qui n'ont rien à faire dans une observation.
 - **SEC12 change l'agent** (`eregion_cd.py`) : la release qui le porte est déployée par l'agent d'avant, qui ne lit ni le plancher, ni la règle des tags, et n'a pas `rollback`. Puis `#deploy` demande la mise à jour : `make glorfindel-host-cd-install`, puis `make glorfindel-host-cd-check`, qui mesure ce que H0 lit de la règle des tags sans jeton. Le plancher part de ce qui tourne au premier passage du nouvel agent.
 - **Revenir à une release plus ancienne** (SEC12) : `make glorfindel-host-cd-rollback TAG=vX.Y.Z`, une release publiée. Le CD la vérifie et la déploie comme toute release. Celle qu'il quitte n'est plus reprise seule. C'est le seul chemin vers une version plus ancienne : le timer la refuse.
 - **Un nouveau verrou.** `make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1` (appels payants, deux passages, Jonathan) écrit `requirements/harness.json`, à commiter dans la PR du verrou. La référence est le dernier tag `v*` ; si H0 tourne sur une autre release, `BASE=<tag en service>`.
-- **Un déploiement à la main** (`make glorfindel-host-start REF=…`) reste possible. Il partage le verrou du CD (`~/.eregion-deploy.lock`) et est refusé pendant un passage. Il **construit** encore l'image sur la VM (`deploy.sh`) : c'est le chemin de secours, hors de la vérification de CI3. Pour mettre le CD en pause : `make glorfindel-host-cd-disable`.
+- **Un déploiement à la main** (`make glorfindel-host-start REF=…`) reste possible. Il partage le verrou du CD (`~/.eregion-deploy.lock`) et est refusé pendant un passage. Il **construit** encore l'image sur la VM (`deploy.sh`) : c'est le chemin de secours, hors de la vérification de CI3 — d'où `REF` exigée, jamais « le dernier tag » (SEC14, V-22). Pour mettre le CD en pause : `make glorfindel-host-cd-disable`.
 - **L'agent ne se remplace jamais lui-même.** `make glorfindel-host-cd-install` note le commit d'où il l'installe (`~/.eregion-cd/installed-from`). Après un déploiement, si la release est plus récente que ce commit et porte un autre `eregion_cd.py`, `deploy.sh`, `notify_discord.py` ou `chat_text.py`, `#deploy` le dit ; `make glorfindel-host-cd-install`, depuis un checkout à jour, le met à jour. Une release plus ancienne (v0.4.1, d'avant H1) ne dit rien : réinstaller depuis elle casserait le CD (`deploy.sh` sans `--activate`). Une installation de cet agent sans `installed-from` valable (copiée à la main, ou dont le `git rev-parse` a échoué), ou installée hors de main (une branche de lot : le dépôt fusionne en squash, aucune release n'en descendra), le dit une fois dans `#deploy`, sans mention : elle ne saura pas dire quand se mettre à jour. L'agent installé sur H0 avant ce correctif (le code de H1) n'a pas ce filtre : au passage de la 0.4.2, c'est lui qui dira « 🔧 … eregion_cd.py », à juste titre.
 - **Les règles, à la main** (après un `make glorfindel-host-push`, une règle approuvée, un doute) : sur la VM, `docker exec eregion-watch glorfindel rules check --live` — chaque règle une fois, en lecture seule, le détail complet de chaque erreur au terminal (`docs/operations.md`).
 - **H2 change l'agent** (`eregion_cd.py`, et `chat_text.py` en plus) : la première release qui le porte est déployée par l'agent d'avant, sans la vérification des règles, puis `#deploy` demande `make glorfindel-host-cd-install`. **Avant de le lancer**, la release H2 tourne déjà sur H0 : `docker exec eregion-watch glorfindel rules check --live` (sur la VM, `make glorfindel-host-ssh`) montre les règles déjà en erreur — une table absente du workspace, une règle de la couche du client. Elles ne feront pas revenir H0 en arrière, mais `#deploy` les redira à chaque release : à corriger, ou à désactiver dans la couche du client (`disable:`). Une fois réinstallé, les releases suivantes ont leurs règles vérifiées.
@@ -532,7 +533,8 @@ export HOST_SSH_FINGERPRINT=SHA256:…                  # la deuxième colonne
 
 La VM reconstruite (`glorfindel-host-down` puis `-up`) a une autre clé : relever la nouvelle,
 la poser, retirer `~/.eregion/h0_known_hosts`. Le CD de H0 (H1) n'est pas concerné : il tourne
-sur la VM et ne se connecte à aucun hôte par SSH. Orodruin garde `accept-new` (`SSH_OPTS`).
+sur la VM et ne se connecte à aucun hôte par SSH. Orodruin est épinglé de même, sans repli sur
+`accept-new` : `ORO_SSH_FINGERPRINT` est exigée (SEC14, `infra/orodruin/README.md`, « SSH »).
 
 ## Ce que SEC7 change au prochain déploiement de H0
 

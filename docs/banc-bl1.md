@@ -184,6 +184,10 @@ mode résolu par VM.
 
 ### 4. La campagne (30 à 45 min)
 
+Depuis SEC14 (V-32), toute commande vers Orodruin exige `ORO_SSH_FINGERPRINT` : la lire une fois par
+`make orodruin-fingerprint` (par Azure, ton `az login`) et la poser dans ton environnement, sinon
+rien ne part. Une demande de Dagorlad refusée ou coupée est consommée : en écrire une nouvelle.
+
 ```bash
 make gothmog-preflight                 # watch vivante, contrat, cibles, état normal : rien d'écrit
 make gothmog-run                       # la panne et son retour vérifié (~15 min) ; noter son run_id

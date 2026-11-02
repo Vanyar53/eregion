@@ -38,6 +38,9 @@ def hermetic_orodruin(tmp_path, monkeypatch):
         "cap": lambda: ([], {"max_injections": 20, "max_run_s": 3600}),
     })
     monkeypatch.setenv(orodruin.AUDIT_ENV, str(tmp_path / "orodruin-audit.jsonl"))
+    # Orodruin's one lock (R-10) in tmp, never the repository's runs/; no descriptor handed down.
+    monkeypatch.setenv("EREGION_RUN_LOCK", str(tmp_path / "orodruin-run.lock"))
+    monkeypatch.delenv("EREGION_RUN_LOCK_FD", raising=False)
     # No exercise channel, no return channel (#159): nothing reaches Azure Storage.
     monkeypatch.delenv("EREGION_EXERCISE_CHANNEL", raising=False)
     monkeypatch.delenv("EREGION_WATCH_CHANNEL", raising=False)
@@ -399,9 +402,15 @@ def isolated_exercise_windows(tmp_path, monkeypatch):
     here every target is enrolled, and no Azure call is made — the tests of the guard pass
     their own check (tests/unit/test_exercise_guard.py)."""
     monkeypatch.setenv("EREGION_EXERCISES_DIR", str(tmp_path / "exercises"))
+    # SEC14 (V-20): the watch's record of the windows it saw, in tmp, never ~/.glorfindel.
+    monkeypatch.setenv("EREGION_EXERCISE_SEEN", str(tmp_path / "exercise_seen.json"))
     from eregion_core import exercise
     monkeypatch.setattr(exercise, "_enrollment_check", lambda resource_id: True)
     monkeypatch.setattr(exercise, "_refused", {})
+    # Most tests write windows dated in the past, as if seen then: the watch's record of when it
+    # saw each local window (SEC14, V-20) is off here, and tested on its own (test_exercise.py,
+    # ``seen_record`` puts the real one back, in tmp).
+    monkeypatch.setattr(exercise, "seen_path", lambda: None)
 
 
 @pytest.fixture(autouse=True)

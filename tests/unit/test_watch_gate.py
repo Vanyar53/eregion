@@ -572,7 +572,8 @@ def _make(tmp_path, target, *args, exit_code=0):
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
            "FAKE_SSH_LOG": str(log), "FAKE_SSH_EXIT": str(exit_code)}
     env.pop("WITHOUT_GLORFINDEL", None)
-    res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), target,
+    # Orodruin's host key check is test_host_ssh.py's (V-32, SEC14): taken as done here.
+    res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "-o", "orodruin-known", target,
                           "ORO_IP=203.0.113.9", *args],
                          env=env, capture_output=True, text=True, timeout=60)
     return res.returncode, log.read_text().splitlines()

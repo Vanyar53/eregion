@@ -153,7 +153,7 @@ class World:
         st["calls"] = []
         self.state.write_text(json.dumps(st))
 
-    def run(self, mode: str, *locks: str) -> subprocess.CompletedProcess:
+    def run(self, mode: str, *locks: str, extra: tuple = ()) -> subprocess.CompletedProcess:
         env = {**os.environ, "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
                "FAKE_GH_STATE": str(self.state), "FAKE_ADVISORIES": str(self.advisories),
                "FAKE_PIP_AUDIT_LOG": str(self.audit_log), "FAKE_PIP_AUDIT_FAIL": self.fail,
@@ -162,7 +162,7 @@ class World:
         env.pop("GITHUB_STEP_SUMMARY", None)
         env.pop("EREGION_GH", None)
         return subprocess.run([sys.executable, str(SCRIPT), mode, "--pip-audit", str(self.bin / "pip-audit"),
-                               *locks], cwd=self.tmp, env=env, capture_output=True, text=True, timeout=120)
+                               *extra, *locks], cwd=self.tmp, env=env, capture_output=True, text=True, timeout=120)
 
 
 @pytest.fixture
@@ -638,3 +638,88 @@ def test_make_lock_does_not_fail_when_the_audit_cannot_run(tmp_path, world):
                                           f"AUDIT_VENV={tmp_path / 'absent'}"), venv_fails=True)
     assert res.returncode == 0, res.stdout + res.stderr
     assert "venv: no network" in res.stderr
+
+
+# ── SEC14 (P-03, R-20): on each push and pull request; the advisories accepted, with their reason ──
+
+NO_FIX = {"id": "GHSA-ffff-gggg-hhhh", "aliases": ["CVE-2099-0002"], "fix_versions": []}
+ACCEPTED = {"accepted": [{"package": "requests", "id": "CVE-2018-18074", "since": "2026-11-02",
+                          "reason": "the code path is never reached here, and here is why in words"}]}
+
+
+def _accepted(world, doc=ACCEPTED):
+    path = world.tmp / "accepted.json"
+    path.write_text(json.dumps(doc))
+    return ("--accepted", str(path))
+
+
+def test_a_pull_request_is_red_only_for_an_advisory_with_a_fix_no_one_accepted(world):
+    dev = world.lock("dev.txt")
+    world.advise({"requests": {"2.19.1": [REQUESTS]}})
+    res = world.run("pr", dev)
+    assert res.returncode == 1 and "::error::requests GHSA-x84v-xcm2-53pg : corrigée en 2.20.0" in res.stdout
+    assert world.calls() == []                               # never GitHub: a read-only job
+    res = world.run("pr", dev, extra=_accepted(world))
+    assert res.returncode == 0, res.stdout
+    assert "acceptée le 2026-11-02 : the code path is never reached" in res.stdout
+
+
+def test_an_advisory_without_a_fix_is_informative(world):
+    dev = world.lock("dev.txt")
+    world.advise({"requests": {"2.19.1": [NO_FIX]}})
+    res = world.run("pr", dev)
+    assert res.returncode == 0 and "::warning::requests GHSA-ffff-gggg-hhhh : aucune version corrigée" in res.stdout
+
+
+def test_a_failed_audit_on_a_pull_request_is_said_never_red(world):
+    dev = world.lock("dev.txt")
+    world.fail = "dev.txt"
+    res = world.run("pr", dev)
+    assert res.returncode == 0 and "::warning::pip-audit requirements/dev.txt : échec" in res.stdout
+
+
+def test_an_acceptance_no_longer_found_is_said_to_be_removed(world):
+    dev = world.lock("dev.txt")
+    res = world.run("pr", dev, extra=_accepted(world))
+    assert res.returncode == 0 and "::notice::requests CVE-2018-18074 acceptée, plus trouvée" in res.stdout
+
+
+@pytest.mark.parametrize("entry", [
+    {"package": "requests", "id": "CVE-2018-18074", "since": "2026-11-02", "reason": ""},          # no reason
+    {"package": "requests", "id": "CVE-2018-18074", "since": "2026-11-02", "reason": "short"},
+    {"package": "requests", "id": "CVE-2018-18074", "reason": "a reason long enough to be one"},   # no date
+    {"package": "requests", "id": "CVE-2018-18074", "since": "2026-11-02",
+     "reason": "a reason long enough to be one", "until": "never"},                               # a field more
+])
+def test_an_acceptance_without_its_reason_or_of_another_shape_refuses_the_list(world, entry):
+    dev = world.lock("dev.txt")
+    world.advise({"requests": {"2.19.1": [REQUESTS]}})
+    res = world.run("pr", dev, extra=_accepted(world, {"accepted": [entry]}))
+    assert res.returncode == 2 and "liste des avis acceptés illisible" in res.stderr
+
+
+def test_the_repositorys_accepted_advisories_each_say_why():
+    """R-20: chromadb's advisories of the HTTP server, accepted — Eregion runs it embedded."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import pip_audit_issues as pai
+    finally:
+        sys.path.pop(0)
+    accepted = pai.load_accepted(str(ROOT / "requirements" / "audit-accepted.json"))
+    assert {a["package"] for a in accepted} == {"chromadb"} and len(accepted) == 4
+    assert all("embedded" in a["reason"] and "PersistentClient" in a["reason"] for a in accepted)
+    used = "".join(p.read_text(encoding="utf-8") for d in ("glorfindel", "analysis", "eregion_core",
+                                                          "eregion_console", "annatar", "gothmog")
+                   for p in (ROOT / d).rglob("*.py"))
+    assert "chromadb.PersistentClient" in used
+    assert "HttpClient(" not in used and "chromadb.Client(" not in used
+
+
+@needs_make
+def test_make_audit_reads_the_accepted_list_and_make_lock_says_what_follows(tmp_path, world):
+    world.advise({})
+    res, _ = _make_lock(tmp_path, world, (f"PIP_AUDIT={world.bin / 'pip-audit'}",))
+    assert res.returncode == 0
+    assert "Les avis connus des verrous écrits (make audit" in res.stdout
+    text = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "--accepted $(AUDIT_ACCEPTED)" in text and "AUDIT_ACCEPTED = requirements/audit-accepted.json" in text

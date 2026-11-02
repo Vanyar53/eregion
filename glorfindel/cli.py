@@ -873,6 +873,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     from eregion_core.inscription import TagEnrollment
     _exercise.set_enrollment_check(TagEnrollment())
 
+    def _observe_windows() -> None:
+        """SEC14 (V-20): the windows read every minute — a window written on this host is
+        written down in the watch's own state within a minute, and bounded by that moment
+        (eregion_core/exercise.py, ``observe``)."""
+        _exercise.observe()
+
     # The return channel (#159): a run launched from Orodruin learns from it that this
     # watch is up, and what it detected on the VMs that run exercises. Unset → None.
     _watch_channel = None
@@ -1054,6 +1060,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     console.print(msg + "\n")
     _write_heartbeat()
     try:
+        _observe_windows()
+    except Exception as exc:   # the windows fall toward real; the watch goes on
+        console.print(f"[red]watch: _observe_windows en erreur — {exc}[/red]")
+    try:
         while True:
             try:
                 _poll()
@@ -1062,7 +1072,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     # Each task on its own: one that keeps failing (an old isolation the
                     # subscription guard refuses…) no longer skips the reassertion and the
                     # heartbeat at every pass — the watch looked dead (fourth review, Q12).
-                    for _task in (_check_ttl, _reconcile_jobs, _reassert, _write_heartbeat):
+                    for _task in (_check_ttl, _reconcile_jobs, _reassert, _write_heartbeat, _observe_windows):
                         try:
                             _task()
                         except Exception as exc:

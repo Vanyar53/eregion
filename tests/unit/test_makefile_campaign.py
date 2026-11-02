@@ -12,7 +12,7 @@ MAKEFILE = (ROOT / "Makefile").read_text(encoding="utf-8")
 def _recipe(target: str) -> list[str]:
     """The recipe lines (tab-indented) of ``target``."""
     lines = MAKEFILE.splitlines()
-    start = lines.index(f"{target}:")
+    start = next(i for i, ln in enumerate(lines) if ln == f"{target}:" or ln.startswith(f"{target}: "))
     recipe = []
     for line in lines[start + 1:]:
         if not line.startswith("\t"):
@@ -23,7 +23,7 @@ def _recipe(target: str) -> list[str]:
 
 def test_campaign_targets_exist_and_are_phony():
     for target in ("orodruin-campaign-plan", "orodruin-campaign-run"):
-        assert re.search(rf"^{target}:$", MAKEFILE, re.M), f"{target} missing"
+        assert re.search(rf"^{target}:( orodruin-known)?$", MAKEFILE, re.M), f"{target} missing"
         phony = MAKEFILE.split(".PHONY:", 1)[1].split("\n\n", 1)[0]
         assert target in phony, f"{target} not in .PHONY"
 

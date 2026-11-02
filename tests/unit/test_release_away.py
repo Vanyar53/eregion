@@ -408,6 +408,10 @@ def test_a_partial_release_whose_state_turns_unreadable_never_says_released(monk
         assert [s for s in out["failed"] if f"isolation/{sf.name}" in s and "illisible" in s
                 and "levée non vérifiée" in s], out
         assert sf.read_text() == _BROKEN and _iso_on(f, q)
+    # Where to look before removing it: the quarantine NSG, named — not the NSGs the NIC carries now,
+    # where nothing is found (I3U's review).
+    assert [s for s in out["failed"] if f"{q.rsplit('/', 1)[-1]} (groupe {q.split('/')[4]})" in s
+            and "avant de le retirer" in s], out
     sf.write_text(text)                                                   # the operator repairs it
     out = c.release_isolation(WEB)
     assert out["status"] == "released", out
@@ -497,3 +501,19 @@ def test_clearing_a_state_never_deletes_an_unreadable_file(monkeypatch):
     sf.write_text(text)
     _clear_isolation_state(WEB)
     assert not sf.exists()
+
+
+def test_the_warning_stays_when_a_nics_message_names_the_unreadable_file(monkeypatch):
+    """web-nic still in quarantine, its VM's state unreadable: SEC4b's message for the NIC names
+    the file already, and I3U's line gave way to it — with the warning about where to look
+    (I3U's review). The reason is said once; the warning, naming the quarantine NSG, always."""
+    from glorfindel.response.state import _ISOLATION_STATE_DIR, _state_file
+    f, c, own, q = _in_quarantine(monkeypatch)
+    sf = _state_file(_ISOLATION_STATE_DIR, WEB)
+    sf.write_text(_BROKEN)
+    out = c.release_isolation(WEB)
+    assert out["status"] == "release_partial", out
+    named = [s for s in out["failed"] if f"isolation/{sf.name}" in s]
+    assert len([s for s in named if "état local illisible" in s]) == 1, out          # the reason, once
+    assert [s for s in named if "avant de le retirer" in s and q.rsplit("/", 1)[-1] in s], out
+    assert sf.read_text() == _BROKEN

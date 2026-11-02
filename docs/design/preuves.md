@@ -3057,9 +3057,26 @@ tests sur une copie de la base), le reste « fixed-only » ou équivalent comme 
 `release.py` passe à 498 lignes, `sweep.py` à 499.
 **Mesures.** Invariants, `--hypothesis-seed=N` : à 60 séquences, N = 1..40 et 61..80 (la graine 67
 d'I3R comprise), 60/60 vertes ; à 500, N = 1..8, 8/8 vertes.
+**Après la relecture d'I3U** (« ok », trois corrections). (1) **La porte de sortie dit où
+chercher** : « après avoir cherché les règles glorfindel-iso de ses cartes » ne disait pas où ; un
+opérateur aurait regardé les NSG que portent les cartes aujourd'hui, rien trouvé, retiré le fichier,
+et la levée suivante aurait dit `released`, la paire encore sur le NSG de quarantaine. Le message nomme
+maintenant `nsg-glorfindel-quarantine-<région>` et son groupe (`_quarantine_hint`, `away.py` : la
+région lue sur les cartes, le groupe de la configuration, sinon celui de la VM ; lu seulement quand
+l'état est illisible). Et la mise en garde ne disparaît plus avec le dédoublonnage : quand le message
+SEC4b d'une carte nomme déjà le fichier, la raison n'est pas redite, la mise en garde a sa ligne.
+Tests : la double panne vérifie le NSG nommé ;
+`test_the_warning_stays_when_a_nics_message_names_the_unreadable_file`. (2) **La garde de
+`_clear_isolation_state` mesurée** : M3190 (la garde retirée) ; M3191 (la mise en garde avalée par le
+dédoublonnage). M3131–M3135, M3190, M3191 : 7/7 à chaque tour (deux tours) ; M3132–M3134 réancrés (les
+appels passent par `self._unread`). (3) `docs/fichiers-cles.md` : vrai pour Azure ; l'adaptateur AWS
+garde le fichier mais dit encore `released`. `release.py` 497 lignes, `sweep.py` 498, `state.py` 497,
+`unread.py` 29.
 **Reste ouvert** : `verify_release` ne cherche pas sur le NSG de quarantaine quitté qu'un état
 **lisible** nomme (`quarantines_left`) — `glorfindel release` y lit « vérifié » et efface l'état, la
-paire restée (mesuré sur le faux Azure, hors du lot).
+paire restée (mesuré sur le faux Azure, hors du lot). L'adaptateur AWS
+(`glorfindel/providers/aws/isolation.py`) garde le fichier illisible (`_clear_isolation_state`) mais
+sa levée dit encore `released` sur lui.
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

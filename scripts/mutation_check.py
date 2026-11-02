@@ -8569,12 +8569,12 @@ MUTANTS += [
      "        if _isolation_unreadable(resource_id):\n            # Its state kept as it is, never `released`",
      "        if failed and _isolation_unreadable(resource_id):\n            # Its state kept as it is, never `released`"),
     ("M3132", "a release on its own unreadable state says `release_partial` without saying why (I3U)", REL,
-     '                    "failed": failed + _own_unread(resource_id, "levée non vérifiée", failed)}\n',
+     '                    "failed": failed + self._unread(resource_id, "levée non vérifiée", failed)}\n',
      '                    "failed": failed}\n'),
     ("M3133", "the verification of a release blind to its own unreadable state: `glorfindel release` clears it (I3U)",
-     VER, '        unknown += _own_unread(resource_id, "levée non vérifiée")\n', ""),
+     VER, '        unknown += self._unread(resource_id, "levée non vérifiée")\n', ""),
     ("M3134", "`reset --from-azure` on its own unreadable state says `swept` and deletes the file (I3U)", SWP,
-     '        deleted, failed = [], unreadable + _own_unread(resource_id, "reset non vérifié", unreadable + failed_early)\n',
+     '        deleted, failed = [], unreadable + self._unread(resource_id, "reset non vérifié", unreadable + failed_early)\n',
      "        deleted, failed = [], list(unreadable)\n"),
     ("M3135", "the plain reset on an unreadable state says « Nothing to reset » (I3U)", GCLI,
      '    isolations = isolations or ([{"resource_id": resource_id}] if _isolation_unreadable(resource_id) else [])\n',
@@ -8588,6 +8588,17 @@ TESTS.update({
     "M3134": f"{_I3U_UNIT}::test_reset_from_azure_on_an_unreadable_state_never_says_swept",
     "M3135": f"{_I3U_UNIT}::test_a_plain_reset_on_an_unreadable_state_is_not_nothing_to_reset",
 })
+# I3U, its 5.5 review: no one deletes an unreadable file; and the warning about where to look before
+# removing it — the quarantine NSG, named — survives a NIC's message that names the file. M3190–M3191.
+MUTANTS += [
+    ("M3190", "clearing a state deletes an unreadable file: what it named lost (I3U, review)", STA,
+     "    if f is not None and f.exists() and not _isolation_unreadable(vm_ref):",
+     "    if f is not None and f.exists():"),
+    ("M3191", "a NIC's message naming the unreadable file swallows the warning about where to look (I3U, review)",
+     "glorfindel/response/unread.py", '        return [f"{name} : {warn}"]\n', "        return []\n"),
+]
+TESTS.update({"M3190": f"{_I3U_UNIT}::test_clearing_a_state_never_deletes_an_unreadable_file",
+              "M3191": f"{_I3U_UNIT}::test_the_warning_stays_when_a_nics_message_names_the_unreadable_file"})
 
 
 if __name__ == "__main__":

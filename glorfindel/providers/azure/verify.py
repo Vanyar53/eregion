@@ -10,7 +10,6 @@ from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.legacy_state import _older_record
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import _held_in_quarantine, _load_isolation_state, _UNKNOWN, StateUnreadable
-from glorfindel.response.unread import _own_unread
 
 
 class VerifyMixin:
@@ -266,7 +265,7 @@ class VerifyMixin:
         state = _load_isolation_state(resource_id) or {}
         # Its own state unreadable: a quarantine NSG it left rules on, placements — unknown,
         # never verified; `glorfindel release` read "verified" and cleared the file (I3U).
-        unknown += _own_unread(resource_id, "levée non vérifiée")
+        unknown += self._unread(resource_id, "levée non vérifiée")
         recorded = {(p.get("nic_id") or "").rstrip("/").lower(): p
                     for p in state.get("placements") or []
                     if p.get("kind") == "quarantine"}

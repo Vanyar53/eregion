@@ -20,7 +20,6 @@ from glorfindel.response.state import (
     _UNKNOWN,
     StateUnreadable,
 )
-from glorfindel.response.unread import _own_unread
 
 
 # What the gone-VM helpers say, for the act they serve: the release, or the unblock (I5R).
@@ -274,7 +273,7 @@ class ReleaseMixin:
             # a partial release left rules on (I3R) was known from nowhere; written over, the
             # next release read our tag in its place (SEC4b).
             return {"status": "release_partial", "resource_id": resource_id,
-                    "failed": failed + _own_unread(resource_id, "levée non vérifiée", failed)}
+                    "failed": failed + self._unread(resource_id, "levée non vérifiée", failed)}
         if failed:
             from datetime import datetime, timezone
             _save_isolation_state(resource_id, {

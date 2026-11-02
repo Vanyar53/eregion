@@ -7061,6 +7061,88 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
+# SEC13 (#419): what was left on Glorfindel's side of the second counter-audit — the incident
+# registry under its flock and written whole (V-10), every state owner-only and whole (V-27),
+# /pending under the buttons' policy (R-16), a state directory that can't be listed (R-07), a
+# reassertion check that raises said on one card (V-16), a privilege escalation read on sudo's own
+# line (R-18). M2915–M2936 (M2937–M2939 unused).
+INC = "glorfindel/incidents.py"
+_SEC13_INC = "tests/unit/test_locks.py::test_two_processes_lose_no_incident_and_no_reader_sees_half_a_registry"
+_SEC13_DIR = ("tests/unit/test_unreadable_state.py tests/unit/test_orphan_sweep.py::"
+              "test_a_state_directory_that_cant_be_read_keeps_the_rule_of_a_recreated_nic")
+_SEC13_V16 = "tests/unit/test_reassert.py -k check_"
+_SEC13_R18 = "tests/unit/test_detection_rules.py tests/unit/test_forged_logs.py"
+MUTANTS += [
+    ("M2915", "the incident registry rewritten under a thread lock only: two processes lose incidents (SEC13, V-10)",
+     INC, '        with self._lock, _file_lock(self._path.with_name(self._path.name + ".lock")):\n',
+     "        with self._lock:\n"),
+    ("M2916", "the incident registry rewritten in place: a reader sees half of it, readable by all (SEC13, V-10)",
+     INC, '        _atomic_write_text(self._path, "".join(',
+     '        self._path.write_text("".join('),
+    ("M2917", "the posture state rewritten in place, 0644 (SEC13, V-27)", "glorfindel/posture.py",
+     "        _atomic_write_text(_STATE_FILE, json.dumps(self._state, indent=2))\n",
+     "        _STATE_FILE.write_text(json.dumps(self._state, indent=2))\n"),
+    ("M2918", "the discovery cache rewritten in place, 0644 (SEC13, V-27)", "glorfindel/discovery.py",
+     "        _atomic_write_text(self._path, json.dumps([asdict(a) for a in self._sorted()], indent=2))\n",
+     "        self._path.write_text(json.dumps([asdict(a) for a in self._sorted()], indent=2))\n"),
+    ("M2919", "the bot's files rewritten in place, 0644 (SEC13, V-27)", BOT,
+     "    _atomic_write_text(path, json.dumps(data))\n", "    path.write_text(json.dumps(data))\n"),
+    ("M2920", "the readiness state readable by all (SEC13, V-27)", "glorfindel/readiness.py",
+     "    _atomic_write_text(_STATE_FILE, json.dumps(data, indent=2, default=str))\n",
+     "    _atomic_write_text(_STATE_FILE, json.dumps(data, indent=2, default=str), mode=0o644)\n"),
+    ("M2921", "/pending lists the waiting cards to anyone in the channel (SEC13, R-16)", BOT,
+     '    if not (isinstance(policy, ButtonPolicy) and policy.allows(interaction.user)):\n'
+     '        await _refuse(interaction, "", policy, command="pending")\n',
+     '    if False:\n        await _refuse(interaction, "", policy, command="pending")\n'),
+    ("M2922", "a state directory that can't be listed reads as empty: « no state » (SEC13, R-07)", STA,
+     '        except OSError:\n            names, out = [], out + [f"{label}/"]\n',
+     "        except OSError:\n            continue\n"),
+    ("M2923", "an isolation's check that raises is a log line only (SEC13, V-16)", R,
+     "        say_unverified(vm, rid, exc, report)\n", "        pass\n"),
+    ("M2924", "a block's check that raises is a log line only (SEC13, V-16)", R,
+     "        say_unverified(vm, rid, exc, report, ip=ip)\n", "        pass\n"),
+    ("M2925", "a check that keeps raising is said at every pass (SEC13, V-16)", RCA,
+     '    if any(e.get("status") == "pending" for e in cards) or (sid in _UNVERIFIED_OPEN and _last_word(sid, sid)):\n',
+     "    if False:\n"),
+    ("M2926", "a check still raising, its card acknowledged, is said again at every pass (SEC13, V-16)", RCA,
+     " or (sid in _UNVERIFIED_OPEN and _last_word(sid, sid)):\n", ":\n"),
+    ("M2927", "the card of a check that raised stays open once the check passes (SEC13, V-16)", R,
+     "    unverified_over(vm, rid)\n", ""),
+    ("M2928", "an acknowledged card silences the check's next failure for ever (SEC13, V-16)", RCA,
+     "    _UNVERIFIED_OPEN.discard(sid)\n    for e in _history():\n", "    for e in _history():\n"),
+    ("M2929", "the card of a check that raised closes while a state can't be read (SEC13, V-16)", RCA,
+     "    if unreadable_states():\n        return\n    held =", "    held ="),
+    ("M2930", "the card of a check that raised stays open once its VM is released (SEC13, V-16)", R,
+     "    unverified_released()                     # a check that raised, its VM released since (V-16)\n", ""),
+    ("M2931", "a check that raised keyed by the VM's name: a homonym's card stands for both (SEC13, V-16)", RCA,
+     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\"",
+     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}\""),
+    ("M2932", "a privilege escalation read whatever program wrote the line (SEC13, R-18)",
+     "glorfindel/detection_rules.py",
+     '    return (row.get("ProcessName") == "sudo" and bool(_SUDO_TO_ROOT.search(message))\n',
+     "    return (bool(_SUDO_TO_ROOT.search(message))\n"),
+    ("M2933", "a privilege escalation read from « USER=root » anywhere in a Syslog line (SEC13, R-18)",
+     "glorfindel/detection_rules.py",
+     '        if col == "SyslogMessage" and _sudo_to_root(row):\n',
+     '        if col == "SyslogMessage" and "USER=root" in str(value):\n'),
+    ("M2934", "sudo's form not read: any sudo line with USER=root is an escalation (SEC13, R-18)",
+     "glorfindel/detection_rules.py",
+     '    return (row.get("ProcessName") == "sudo" and bool(_SUDO_TO_ROOT.search(message))\n',
+     '    return (row.get("ProcessName") == "sudo" and "USER=root" in message\n'),
+    ("M2935", "the shipped rule's exclusions not read: a refusal is an escalation (SEC13, R-18)",
+     "glorfindel/detection_rules.py",
+     '            and "not in sudoers" not in lowered and "authentication failure" not in lowered)\n', ")\n"),
+    ("M2936", "the shipped sudo rule no longer hands on its emitter: T1548 uncharacterized (SEC13, R-18)",
+     RULES_YAML, "      | project TimeGenerated, Computer, _ResourceId, ProcessName, SyslogMessage\n",
+     "      | project TimeGenerated, Computer, _ResourceId, SyslogMessage\n"),
+]
+TESTS.update({"M2915": _SEC13_INC, "M2916": _SEC13_INC,
+              "M2917": "tests/unit/test_posture.py", "M2918": "tests/unit/test_discovery.py",
+              "M2919": "tests/unit/test_bot.py", "M2920": "tests/unit/test_readiness.py",
+              "M2921": "tests/unit/test_bot.py", "M2922": _SEC13_DIR})
+TESTS.update({f"M{n}": _SEC13_V16 for n in range(2923, 2932)})
+TESTS.update({f"M{n}": _SEC13_R18 for n in range(2932, 2937)})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

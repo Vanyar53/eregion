@@ -410,6 +410,9 @@ def test_normalize_row_privilege_escalation():
     ("sudo", "pam_unix(sudo:auth): authentication failure; logname= uid=1001 USER=root COMMAND=x"),
     ("sudo", "alice : TTY=pts/0 ; PWD=/ ; USER=bob ; COMMAND=/bin/sh"),
     ("sudo", "alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh"),
+    # the shipped rule's exclusions, wherever they stand in the line
+    ("sudo", "alice : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/echo user NOT in sudoers"),
+    ("sudo", "alice : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/echo authentication failure"),
 ])
 def test_user_root_is_an_escalation_only_on_sudos_own_line(process, message):
     """SEC13 (R-18): « USER=root » anywhere in a Syslog line — a client's rule, a proposed one —

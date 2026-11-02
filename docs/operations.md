@@ -8,7 +8,8 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 # Workflow opérateur — Docker Compose (recommandé)
 make glorfindel-start                        # lance watch + la console → http://localhost:7007
 make console-url                             # l'URL de la console avec son jeton (celui de l'environnement ou de .env,
-                                             # sinon ~/.glorfindel/console_token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche
+                                             # sinon ~/.eregion/console/token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche
+make console-rotate                          # un nouveau jeton tiré : toute session de l'ancien refusée aussitôt (SEC10)
                                              # refuse si AZURE_SUBSCRIPTION_ID est vide (watch aveugle) ; ALLOW_NO_AZURE=1 pour une démo
 make glorfindel-logs                         # tail logs des deux services
 make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
@@ -157,7 +158,7 @@ eregion console [--sections annatar,gothmog] # la console web sur http://localho
                                              # Glorfindel toujours, Annatar et Gothmog s'ils ont des runs sur l'hôte
                                              # (ou --sections) ; `glorfindel war-room` reste un alias caché
                                              # toujours un jeton : EREGION_CONSOLE_TOKEN, sinon tiré au premier démarrage
-                                             # (~/.glorfindel/console_token, 600) et affiché avec l'URL à ouvrir une fois
+                                             # (~/.eregion/console/token, 600), jamais imprimé : make console-url le lit
 eregion coverage [--json] [--check]          # la matrice de couverture (C1), depuis runs/ du répertoire courant : chaque
                                              # technique du catalogue et chaque panne, son dernier run, sa dernière preuve,
                                              # son état (proven, aging > 21 j, stale > 30 j, regressed, unproven, never) et

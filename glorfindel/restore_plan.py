@@ -1,9 +1,13 @@
 """A restore asks for its moment (SEC4c, #275): the recovery point restored is the newest one
 from before the attack began, and the operator says when that was.
 
-`proposed_moment` fills the field the console, the bot and the TUI show: the moment the
-runs/ channel gives for this VM (an exercise's attack_started, `signal_origin.attack_moment`),
-else the card's first detection — the attack began before it, the operator can go back.
+`proposed_moment` fills the field the console, the bot and the TUI show: for an exercise card,
+the moment the runs/ channel gives for this VM and this run (its attack_started,
+`signal_origin.attack_moment`), never after the card's first detection; else — a real incident,
+or no such line — the earliest of the moments the defender itself recorded: the card's first
+detection, the VM's isolation. The attack began before, the operator can go back. A line of
+runs/ never gives the moment of a real incident (SEC8): whoever writes runs/ would otherwise
+choose the point restored.
 `points_before` lists, read only, the recovery points from before that moment. The command
 then runs with `--before` (`restore_args`). Nothing here writes.
 """
@@ -65,45 +69,91 @@ def isolation_time(resource_id: str) -> tuple[float | None, str]:
         return None, ""
 
 
-def exercise_moment(resource_id: str, runs_dir="runs") -> tuple[str, str]:
-    """(ISO moment, why) from the attack_started of this VM the runs/ channel admits — bounded
-    by the VM's isolation when it is isolated — or ("", "")."""
+def exercise_moment(resource_id: str, runs_dir="runs", run_id: str = "",
+                    not_after: float | None = None) -> tuple[str, str]:
+    """(ISO moment, why) from the attack_started of this VM and of run `run_id` the runs/
+    channel admits — bounded by the VM's isolation when it is isolated, and by `not_after` (the
+    card's first detection) — or ("", ""). No run: ("", "") — the channel is read for an
+    exercise card only (SEC8)."""
     from glorfindel.signal_origin import attack_moment
+    if not run_id:
+        return "", ""
     isolated_at, _ = isolation_time(resource_id)
-    found = attack_moment(resource_id, runs_dir=runs_dir, isolated_at=isolated_at)
+    found = attack_moment(resource_id, runs_dir=runs_dir, isolated_at=isolated_at,
+                          run_id=run_id, not_after=not_after)
     if not found:
         return "", ""
     at, source = found
     return (datetime.fromtimestamp(at, tz=timezone.utc).isoformat(),
-            f"début de l'attaque sur cette VM : attack_started de runs/{source}")
+            f"début de l'exercice sur cette VM : attack_started de runs/{source}, avant la "
+            "première détection de la carte")
+
+
+def card_run(esc: dict | None) -> str:
+    """The exercise run a card is tied to (B2: a window of that run covered its VM) — "" for a
+    real card, or one that says nothing."""
+    esc = esc or {}
+    return str(esc.get("exercise_run") or "") if esc.get("source") == "exercise" else ""
+
+
+def _first_seen(esc: dict) -> float:
+    """A card's first detection, as an epoch — +inf when it says none (sorted last)."""
+    try:
+        return datetime.fromisoformat(parse_moment(str(esc.get("first_seen") or esc.get("timestamp") or ""))).timestamp()
+    except ValueError:
+        return float("inf")
+
+
+def card_of(resource_id: str) -> dict | None:
+    """The card a restore of this VM answers, among its pending ones: the one first detected,
+    whatever it holds — its first detection is the earliest moment the defender recorded for
+    the VM, safer than the restore card's own (written later) — or None. For `glorfindel
+    restore` without --before."""
+    from glorfindel import escalations
+    want = str(resource_id or "").rstrip("/").lower()
+    try:
+        cards = [e for e in escalations.pending()
+                 if str(e.get("resource_id") or "").rstrip("/").lower() == want]
+    except Exception:            # an unreadable store: no card, the operator gives the moment
+        return None
+    return min(cards, key=_first_seen) if cards else None
 
 
 def proposed_moment(resource_id: str, esc: dict | None = None, runs_dir="runs",
                     read_runs: bool = True) -> dict:
     """What the restore field is filled with: {"before", "source", "why"}.
 
-    source "exercise": the runs/ channel says when the attack began (an exercise);
-    "card": the card's first detection — or the VM's isolation when it came first (the card
-    is written after the isolation and the autonomous snapshot) —, the attack began before,
-    go back if needed; "": nothing says when — the operator gives it. `read_runs=False`:
-    runs/ is not read (the bot, short of time)."""
-    before, why = exercise_moment(resource_id, runs_dir=runs_dir) if read_runs else ("", "")
-    if before:
-        return {"before": before, "source": "exercise", "why": why}
+    source "exercise": an exercise card, and the runs/ channel says when its run's attack on
+    this VM began — never after the card's first detection; "card": the earliest of what the
+    defender recorded — the card's first detection, or the VM's isolation when it came first
+    (the card is written after the isolation and the autonomous snapshot) —, the attack began
+    before, go back if needed; "": nothing says when — the operator gives it. A real card never
+    reads runs/ (SEC8), and the why says so. `read_runs=False`: runs/ is not read (the bot,
+    short of time) — and the why says « non lu », never « no line »."""
     first = str((esc or {}).get("first_seen") or (esc or {}).get("timestamp") or "")
     try:
         before = parse_moment(first)
     except ValueError:
         before = ""
+    run = card_run(esc)
+    if read_runs and run and before:
+        found, why = exercise_moment(resource_id, runs_dir=runs_dir, run_id=run,
+                                     not_after=datetime.fromisoformat(before).timestamp())
+        if found:
+            return {"before": found, "source": "exercise", "why": why}
+    note = ((f" ; aucune ligne attack_started du run {run} admise avant elle" if read_runs else
+             f" ; runs/ non lu pour le run {run} (le temps a manqué)") if run else
+            " ; incident réel : aucune ligne de runs/ n'en donne le moment") if esc else ""
     isolated_at, isolated = isolation_time(resource_id)
     if before and isolated_at is not None and isolated_at < datetime.fromisoformat(before).timestamp():
         return {"before": datetime.fromtimestamp(isolated_at, tz=timezone.utc).isoformat(), "source": "card",
-                "why": (f"isolation de la VM ({isolated}), avant la première détection de la carte : "
-                        "l'attaque a commencé avant — reculer si elle a commencé plus tôt")}
+                "why": (f"le plus ancien des moments sûrs : isolation de la VM ({isolated}), avant la "
+                        "première détection de la carte — l'attaque a commencé avant, reculer si "
+                        "elle a commencé plus tôt" + note)}
     if before:
         return {"before": before, "source": "card",
-                "why": ("première détection de la carte : l'attaque a commencé avant — "
-                        "reculer si elle a commencé plus tôt")}
+                "why": ("le plus ancien des moments sûrs : première détection de la carte — "
+                        "l'attaque a commencé avant, reculer si elle a commencé plus tôt" + note)}
     return {"before": "", "source": "",
             "why": "moment de l'attaque inconnu : le donner"
                    + (f" (VM isolée depuis {isolated}, l'attaque a commencé avant)" if isolated else "")}

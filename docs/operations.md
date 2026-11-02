@@ -97,9 +97,11 @@ glorfindel reset <resource_id> --from-azure  # source de vérité = Azure (sans 
 glorfindel snapshot <resource_id> --yes      # backup on-demand RSV (setup scénario, ~5-20min)
 glorfindel restore <resource_id> --yes       # Azure Backup fire-and-forget ; point = le plus récent AVANT
                                              # le début de l'attaque sur CETTE VM : --before <ISO8601>
-                                             # (UTC sans décalage), sinon le premier attack_started de
-                                             # cette VM admis dans runs/ (≤ 2 h avant son isolation) ;
-                                             # inconnu → refusé, --before demandé (SEC4c). Nom court :
+                                             # (UTC sans décalage), sinon le moment de la 1re carte en attente
+                                             # de la VM (sa 1re détection, ou son isolation si avant ; pour
+                                             # une carte d'exercice, l'attack_started de son run, jamais
+                                             # après sa 1re détection — jamais runs/ sur un incident réel,
+                                             # SEC8) ; inconnu → refusé, --before demandé (SEC4c). Nom court :
                                              # deux VMs de ce nom (état ou découverte) → refusé ;
                                              # un autre restore de la VM en cours → refusé ; un moment
                                              # futur ou hors calendrier → refusé ; après l'isolation → dit

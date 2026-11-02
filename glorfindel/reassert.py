@@ -47,9 +47,10 @@ def _alert_id(vm: str, rid: str, ip: str = "") -> str:
     "already alerted" with no card at all (A0, invariant machine). The name in lowercase:
     Azure's names are case-insensitive, and the state of a VM taken up again by its lowercase
     id (Log Analytics' `_ResourceId`) names it so — the card said under its canonical name was
-    neither closed nor read « said », the disappearance said again at every pass (I3C)."""
+    neither closed nor read « said », the disappearance said again at every pass (I3C). The
+    whole id, the IP too: an IPv6 written `2001:DB8::9` is the same block (I3C, review)."""
     from glorfindel.actions import _rid_hash
-    return f"reassert-{vm.lower()}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
+    return (f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()
 
 
 def _alert(signal_id: str, **kwargs) -> None:

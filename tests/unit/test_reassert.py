@@ -2127,3 +2127,38 @@ def test_rules_left_said_under_the_canonical_name_stay_said():
         say_left("db--01", _DB.lower(), _IP, _load_block_entries(_DB.lower())[0], report, _DB.lower())
         assert report == []
     assert [e["id"] for e in _left_cards()] == [old["id"]]
+
+
+_IP6 = "2001:DB8::9"
+
+
+def test_a_block_of_an_ipv6_in_capitals_has_its_own_cards():
+    """I3C's review: the ids took the VM's name in lowercase, the IP as written — and the store's
+    ids were read in lowercase whole. A block of an IPv6 written `2001:DB8::9`: its check card,
+    the block still held, closed at every pass as « no longer recorded » and made again; its
+    bypass said again at every pass; the rules it left too. Each is its own card, said once."""
+    from glorfindel.actions import _update_block_entry
+    from glorfindel.reassert_cards import say_left, unverified_released
+    _save_block_state("vm", _IP6, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    c = _connector()
+    c.verify_block_ip.side_effect = RuntimeError("(AuthorizationFailed)")
+    for _ in range(3):
+        reassert_active(c, _HUMAN)
+        unverified_released()
+    assert len(_unverified()) == 1 and len(_unverified("pending")) == 1
+    c.verify_block_ip.side_effect = None
+    c.verify_block_ip.return_value = _bypass(_ALLOW)
+    outcomes = [[r["outcome"] for r in reassert_active(c, _HUMAN)] for _ in range(3)]
+    assert outcomes == [["bypassed"], [], []]
+    (card,) = _bypass_cards()
+    assert card.get("occurrences", 1) == 1
+    left = [{"nsg": "rg/nsg", "rule": "glorfindel-block-a", "to": "10.0.0.9", "on": "other", "kind": "turned"}]
+    _update_block_entry("vm", _IP6, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r", "left": left}])
+    said = []
+    for _ in range(3):
+        report: list[dict] = []
+        entry = next(e for e in _load_block_entries("vm") if e["ip"] == _IP6)
+        say_left("vm", _RID, _IP6, entry, report, _RID)
+        said.append(len(report))
+    assert said == [1, 0, 0] and len(_left_cards()) == 1

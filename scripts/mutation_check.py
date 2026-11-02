@@ -237,8 +237,8 @@ MUTANTS = [
      "    if olds and not target.exists():",
      "    if False:"),
     ("M37", "reassertion alerts keyed by the VM's name (A0, L1)", "glorfindel/reassert.py",
-     '    return f"reassert-{vm.lower()}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")',
-     '    return f"reassert-{vm.lower()}" + (f"-{ip}" if ip else "")'),
+     '    return (f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()',
+     '    return (f"reassert-{vm}" + (f"-{ip}" if ip else "")).lower()'),
     ("M38", "a block gone behind the quarantine not reported (A0, L1)", VBL,
      "                                    held_missing += names",
      "                                    pass"),
@@ -7656,8 +7656,8 @@ MUTANTS += [
     ("M2930", "the card of a check that raised stays open once its VM is released (SEC13, V-16)", R,
      "    unverified_released()                     # a check that raised, its VM released since (V-16)\n", ""),
     ("M2931", "a check that raised keyed by the VM's name: a homonym's card stands for both (SEC13, V-16)", RCA,
-     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}-{_rid_hash(rid)}\"",
-     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}\""),
+     "    return (f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\"",
+     "    return (f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}\""),
     ("M2932", "a privilege escalation read whatever program wrote the line (SEC13, R-18)",
      "glorfindel/detection_rules.py",
      '    return (row.get("ProcessName") == "sudo" and bool(_SUDO_TO_ROOT.search(message))\n',
@@ -8019,8 +8019,8 @@ _I3C_UNIT = "tests/unit/test_reassert.py"
 _I3C_SEQ = ("tests/unit/test_invariant_regressions.py::"
             "test_a_disappearance_said_by_the_canonical_id_is_said_once_after_the_lowercase_one")
 MUTANTS += [
-    ("M3100", "the drift card's id keeps the case of the VM's name (I3C)", R,
-     '    return f"reassert-{vm.lower()}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")',
+    ("M3100", "the drift card's id keeps the case of the VM's name (I3C; a contract: `same_sid` reads it anyway)", R,
+     '    return (f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()',
      '    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")'),
     ("M3101", "a new drift alert closes the former card only under the same case: one an older version said "
               "stays, the alert folded into it (I3C)", R,
@@ -8035,8 +8035,8 @@ MUTANTS += [
      '    return (last is not None and last.get("signal_id") == sid\n'),
     ("M3104", "the bypass card's prefix keeps the case of the VM's name: a VM with capitals said again at every "
               "pass (I3C)", RCA,
-     "    prefix = f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}-{_rid_hash(rid)}\"",
-     "    prefix = f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\""),
+     "    prefix = (f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")).lower()",
+     "    prefix = (f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\"))"),
     ("M3105", "a pending bypass card of another case not the VM's: said again at every pass (I3C)", RCA,
      '    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").lower().rsplit("-", 1)[0] == prefix]\n',
      '    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").rsplit("-", 1)[0] == prefix]\n'),
@@ -8048,7 +8048,7 @@ MUTANTS += [
      '        sid = e.get("signal_id") or ""\n        if sid.startswith(_UNVERIFIED_PREFIX)'),
     ("M3108", "the left-rules card's prefix keeps the case of the VM's name: a VM with capitals said again at "
               "every pass (I3C)", RCA,
-     '    prefix = f"{_LEFT_PREFIX}{vm.lower()}-{_rid_hash(rid)}-{ip}-"\n',
+     '    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-".lower()\n',
      '    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-"\n'),
     ("M3109", "a pending left-rules card of another case not the block's: said again at every pass (I3C)", RCA,
      '    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").lower().startswith(prefix)]\n',
@@ -8066,6 +8066,28 @@ TESTS.update({
     "M3108": f"{_I3C_UNIT}::test_rules_left_by_a_vm_whose_name_has_capitals_are_said_once",
     "M3109": f"{_I3C_UNIT}::test_rules_left_said_under_the_canonical_name_stay_said",
 })
+# I3C's review: the name in lowercase, the IP as written — a block of an IPv6 in capitals
+# (`2001:DB8::9`), read against the store's ids in lowercase, was never its own card. M3165–M3168.
+_I3C_IP = f"{_I3C_UNIT}::test_a_block_of_an_ipv6_in_capitals_has_its_own_cards"
+MUTANTS += [
+    ("M3165", "the check card's id lowers the VM's name only: a held IPv6 block's card closed at every pass "
+              "(I3C, review)", RCA,
+     "    return (f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")).lower()",
+     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")"),
+    ("M3166", "the bypass card's prefix lowers the VM's name only: an IPv6 block's bypass said again at every pass "
+              "(I3C, review)", RCA,
+     "    prefix = (f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")).lower()",
+     "    prefix = f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")"),
+    ("M3167", "the left-rules card's prefix lowers the VM's name only: an IPv6 block's card said again at every "
+              "pass (I3C, review)", RCA,
+     '    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-".lower()\n',
+     '    prefix = f"{_LEFT_PREFIX}{vm.lower()}-{_rid_hash(rid)}-{ip}-"\n'),
+    ("M3168", "the reassertion's ids read exactly again: every card of another case a stranger (I3C)", RCA,
+     '    return (a or "").lower() == (b or "").lower()\n', '    return (a or "") == (b or "")\n'),
+]
+TESTS.update({"M3165": _I3C_IP, "M3166": _I3C_IP, "M3167": _I3C_IP,
+              "M3168": f"{_I3C_UNIT}::test_a_drift_card_an_older_version_said_under_the_canonical_name_is_closed_by_the_next "
+                       f"{_I3C_UNIT}::test_a_bypass_said_under_the_canonical_name_stays_said"})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

@@ -36,7 +36,9 @@ def same_sid(a, b) -> bool:
     id (Log Analytics' `_ResourceId`) names it so. Read exactly, a card said under the
     canonical name was neither found nor closed: said again at every pass, or put back after
     it was said, its text folded into a card that said something else (I3C, #436). The ids
-    are written in lowercase now; a card of an older one is still found."""
+    are written in lowercase now, whole — the IP too: an IPv6 in capitals (`2001:DB8::9`), read
+    against the store's ids in lowercase, was never its own card (I3C, review); a card of an
+    older one is still found."""
     return (a or "").lower() == (b or "").lower()
 
 
@@ -236,7 +238,7 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
                 if sid is None:
                     fresh.pop("bypass_said", None)
                 _save_isolation_state(key, {**fresh, **({"bypass_said": sid} if sid else {})})
-    prefix = f"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
+    prefix = (f"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()
     cards = [e for e in escalations.pending() if (e.get("signal_id") or "").lower().rsplit("-", 1)[0] == prefix]
     if not found:
         for e in cards:
@@ -290,7 +292,7 @@ def _card_write_may_fail(fn):
 
 def _unverified_id(vm: str, rid: str, ip: str = "") -> str:
     from glorfindel.actions import _rid_hash
-    return f"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
+    return (f"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()
 
 
 @_card_write_may_fail
@@ -380,7 +382,7 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
     left = [x for p in entry.get("placements") or [] for x in p.get("left") or [] if isinstance(x, dict)]
     if not left:
         return
-    prefix = f"{_LEFT_PREFIX}{vm.lower()}-{_rid_hash(rid)}-{ip}-"
+    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-".lower()
     sid = prefix + _digest(f"{x.get('nsg')}/{x.get('rule')}" for x in left)
     cards = [e for e in escalations.pending() if (e.get("signal_id") or "").lower().startswith(prefix)]
     stale = [e for e in cards if not same_sid(e.get("signal_id"), sid)]

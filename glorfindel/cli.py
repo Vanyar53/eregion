@@ -67,6 +67,14 @@ def _parse_signal_line(raw: str):
 _INJECTORS_DIR = Path.home() / ".glorfindel" / "injectors"
 
 
+def _refuse_from_runs(data: dict, why: str, source: str) -> None:
+    """A line of runs/ refused: said, and counted (glorfindel/signal_origin.py)."""
+    from glorfindel import signal_origin
+    console.print(f"[bold red]Signal refusé ({_esc_markup(source)}) :[/bold red] {_esc_markup(why)} "
+                  "— rien n'est décidé (compté : ~/.glorfindel/channel_refusals.json)")
+    signal_origin.refuse(data, why, source)
+
+
 def _admit_from_runs(data: dict, source: str):
     """(data, Signal) the watch may decide on, for one line of runs/*_signals.jsonl — None
     when the line is refused (said: the log, the counter). SEC3 (#274),
@@ -75,9 +83,7 @@ def _admit_from_runs(data: dict, source: str):
     from glorfindel import signal_origin
     adm = signal_origin.admit(data)
     if adm.signal is None:
-        console.print(f"[bold red]Signal refusé ({_esc_markup(source)}) :[/bold red] {_esc_markup(adm.refused)} "
-                      "— rien n'est décidé (compté : ~/.glorfindel/channel_refusals.json)")
-        signal_origin.refuse(data, adm.refused, source)
+        _refuse_from_runs(data, adm.refused, source)
         return None
     if adm.dropped:
         console.print(f"[yellow]{source} : champs ignorés ({_esc_markup(', '.join(adm.dropped[:8]))}) — "
@@ -86,31 +92,14 @@ def _admit_from_runs(data: dict, source: str):
     return adm.signal, sig
 
 
-def _read_new_signals(path: Path, offset: int, on_error) -> tuple[list, int]:
-    """Signals appended to `path` since `offset` → ([(data, Signal)], new_offset).
-
-    One bad line used to kill the whole watch (json.loads / Signal(**) unguarded, only
-    KeyboardInterrupt caught), and after a restart the lines written meanwhile were
-    skipped. Now: a malformed line is reported through on_error and skipped; a line
-    still being written (no trailing newline — Annatar writes from another container)
-    is left in place and read whole on the next poll.
-    """
-    out: list = []
-    with open(path) as f:
-        f.seek(offset)
-        while True:
-            line = f.readline()
-            if not line or not line.endswith("\n"):
-                break
-            offset = f.tell()
-            raw = line.strip()
-            if not raw:
-                continue
-            try:
-                out.append(_parse_signal_line(raw))
-            except Exception as exc:
-                on_error(exc)
-    return out, offset
+def _parsed_or_said(path: Path, line: str, say) -> list:
+    """[(data, Signal)] for one line of runs/, or [] when it does not parse — said through
+    `say`. One bad line used to kill the whole watch (json.loads / Signal(**) unguarded)."""
+    try:
+        return [_parse_signal_line(line.strip())]
+    except Exception as exc:
+        say(f"Ligne de signal ignorée ({path.name}) : {exc}")
+        return []
 
 
 def _shared_private_ips():
@@ -539,15 +528,21 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 "[dim]  Observe-only deployment: detection + recommendations, no writes.[/dim]"
             )
 
-    # path → byte offset of last read position
-    tracked: dict[Path, int] = {}
-
     _rules_file = rules_file or _find_rules_file()
     _rule_poller: "RulePoller | None" = None
 
     # per-resource dispatch: resource_id → Queue
     _resource_queues: dict[str, _queue.Queue] = {}
     _output_lock = _threading.Lock()
+    # SEC8: what the runs/ channel may start — the searches in flight (one per VM and technique,
+    # CHANNEL_POLLS in all), its lines waiting per VM (CHANNEL_QUEUED_PER_VM), the VMs it names
+    # (CHANNEL_VMS). Beyond, a line is refused and said, never a thread or a queue grown. The
+    # RulePoller's detections are never held by these bounds.
+    from glorfindel.channel_reader import CHANNEL_POLLS, CHANNEL_QUEUED_PER_VM, CHANNEL_VMS
+    _channel_lock = _threading.Lock()
+    _channel_polls: set[tuple[str, str]] = set()
+    _channel_waiting: dict[str, int] = {}
+    _channel_vms: set[str] = set()
 
     def _get_or_start_worker(resource_id: str) -> _queue.Queue:
         """Return the resource queue, starting its worker thread if needed.
@@ -565,7 +560,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     item = q.get()
                     if item is None:
                         break
-                    _data, _sig = item
+                    _data, _sig, _from_channel = item
                     try:
                         with _output_lock:
                             console.rule(f"[bold cyan]Signal — {_sig.signal_id}[/bold cyan]")
@@ -587,6 +582,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                                 f"[red]Error processing {_sig.signal_id}:[/red] {e}"
                             )
                     finally:
+                        if _from_channel:
+                            with _channel_lock:
+                                _channel_waiting[key] = max(0, _channel_waiting.get(key, 0) - 1)
                         q.task_done()
 
             vm_short = resource_id.split("/")[-1]
@@ -600,7 +598,29 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # attack_started line alike (SEC4c) — a line used to list them all again.
     _ip_owners = None if dry_run else _shared_private_ips()
 
-    def _dispatch(data: dict, sig: Signal) -> None:
+    def _channel_room(data: dict) -> tuple[str, tuple | None]:
+        """(why the line is refused — "" when it has room —, the search it takes) for a line
+        of runs/ (SEC8). Taken under the lock: the room is counted as it is given."""
+        key = str(data.get("resource_id", "unknown")).lower()
+        search = (key, str(data.get("ttp") or "")) if data.get("event") == "attack_started" else None
+        with _channel_lock:
+            if key not in _channel_vms and key not in _resource_queues and len(_channel_vms) >= CHANNEL_VMS:
+                return f"le canal nomme déjà {CHANNEL_VMS} VM : une de plus est refusée", None
+            if search is not None:
+                if search in _channel_polls:
+                    return "une recherche de cette technique sur cette VM est déjà en cours", None
+                if len(_channel_polls) >= CHANNEL_POLLS:
+                    return f"{CHANNEL_POLLS} recherches du canal déjà en cours : une de plus est refusée", None
+                _channel_polls.add(search)
+            else:
+                if _channel_waiting.get(key, 0) >= CHANNEL_QUEUED_PER_VM:
+                    return (f"{CHANNEL_QUEUED_PER_VM} lignes du canal attendent déjà pour cette VM : "
+                            "une de plus est refusée"), None
+                _channel_waiting[key] = _channel_waiting.get(key, 0) + 1
+            _channel_vms.add(key)
+        return "", search
+
+    def _dispatch(data: dict, sig: Signal, source: str = "") -> None:
         """Route signal to its resource worker queue.
 
         attack_started: spawns a poll thread immediately — polling runs in parallel
@@ -608,10 +628,18 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         resulting detection/timeout signal is enqueued for decide+execute.
 
         All other events go directly to the resource queue (serialized per resource).
+
+        `source`: the file of runs/ the line comes from — bounded by `_channel_room` (SEC8).
         """
         from glorfindel.agent import resolve_attack_started
 
         resource_id = data.get("resource_id", "unknown")
+        search = None
+        if source:
+            refused, search = _channel_room(data)
+            if refused:
+                _refuse_from_runs(data, refused, source)
+                return
 
         if data.get("event") == "attack_started":
             def _poll_and_enqueue():
@@ -640,41 +668,64 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     return
                 resolved_sig = Signal(**{k: resolved.get(k, getattr(sig, k, ""))
                                          for k in sig.__dataclass_fields__})
-                _get_or_start_worker(resource_id).put((resolved, resolved_sig))
+                _get_or_start_worker(resource_id).put((resolved, resolved_sig, False))
+
+            def _poll_then_free():
+                try:
+                    _poll_and_enqueue()
+                finally:
+                    if search is not None:
+                        with _channel_lock:
+                            _channel_polls.discard(search)
 
             vm_short = resource_id.split("/")[-1]
             t = _threading.Thread(
-                target=_poll_and_enqueue, daemon=True,
+                target=_poll_then_free, daemon=True,
                 name=f"poll-{vm_short}-{sig.signal_id[-6:]}",
             )
             t.start()
             return
 
-        _get_or_start_worker(resource_id).put((data, sig))
+        _get_or_start_worker(resource_id).put((data, sig, bool(source)))
 
-    # Files that existed at startup — skip their past content
-    existing_at_start = {p for p in Path(runs_dir).glob("*_signals.jsonl")}
-    for path in existing_at_start:
-        tracked[path] = path.stat().st_size
+    # SEC8 (#414): runs/ read as an input the watch does not trust — a regular file only,
+    # never a link, never blocking; a bounded read per file and per poll, a bounded rate
+    # (glorfindel/channel_reader.py). Files there at startup: read from their end.
+    from glorfindel import signal_origin as _origin
+    from glorfindel.channel_reader import PER_WRITER_PER_MIN, ChannelReader
+
+    def _say_channel(text: str, kind: str = "refused") -> None:
+        with _output_lock:
+            if kind == "new":
+                console.print(f"[dim]{_esc_markup(text)}[/dim]")
+            else:
+                console.print(f"[yellow]{_esc_markup(text)}[/yellow]")
+
+    _channel = ChannelReader(runs_dir, _say_channel)
+    _channel.track_existing()
 
     def _poll() -> None:
-        for path in sorted(Path(runs_dir).glob("*_signals.jsonl")):
-            if path not in tracked:
-                tracked[path] = 0  # new file — read from beginning
-                console.print(f"[dim]New run: {path.name}[/dim]")
-
-        for path in list(tracked):
-            signals, tracked[path] = _read_new_signals(
-                path, tracked[path],
-                lambda exc, name=path.name: console.print(
-                    f"[yellow]Ligne de signal ignorée ({name}) : {exc}[/yellow]"),
-            )
-            for data, _sig in signals:
+        for path, line in _channel.poll():
+            for data, _sig in _parsed_or_said(path, line, _say_channel):
                 # SEC3 (#274): runs/ is written by the injectors too — only what they emit,
                 # each for what it is (glorfindel/signal_origin.py).
                 admitted = _admit_from_runs(data, path.name)
                 if admitted is not None:
-                    _dispatch(*admitted)   # non-blocking — worker thread takes over
+                    _dispatch(*admitted, source=path.name)   # non-blocking — a worker takes over
+        over = _channel.budget.report()
+        if over:
+            n = sum(lines for lines, _ in over.values())
+            passed = sum(nbytes for _, nbytes in over.values())
+            files = ", ".join(f"{name} ({k})" for name, (k, _) in sorted(over.items())[:5])
+            why = (f"débit du canal dépassé (au plus {PER_WRITER_PER_MIN} lignes par fichier et par "
+                   "minute) : non admis")
+            what = " et ".join(x for x in (f"{n} ligne(s) refusée(s)" if n else "",
+                                           f"{passed} octet(s) non lus" if passed else "") if x)
+            with _output_lock:
+                console.print(f"[bold red]Canal runs/ :[/bold red] {what}, {_esc_markup(why)} — "
+                              f"{_esc_markup(files)}{' …' if len(over) > 5 else ''} ; rien n'est décidé "
+                              "(compté : ~/.glorfindel/channel_refusals.json)")
+            _origin.refuse({"event": "(débit)"}, why, files, count=max(n, 1))
 
     from datetime import datetime, timezone
     from glorfindel.actions import AzureConnector
@@ -1141,8 +1192,9 @@ def jobs(resource_id: str, refresh: bool):
                    "Also honoured via GLORFINDEL_KEEP_ISOLATED=1.")
 @click.option("--before", default=None, metavar="ISO8601",
               help="Restore the newest recovery point before this moment (ISO8601, UTC "
-                   "when no offset): when the attack began. Without it, read from the "
-                   "attack_started of THIS VM in runs/; unknown → the command asks for it. "
+                   "when no offset): when the attack began. Without it, the moment of this "
+                   "VM's card (its first detection; an exercise's attack_started, never on a "
+                   "real incident); unknown → the command asks for it. "
                    "Example: 2026-05-24T13:44:00+00:00")
 @click.option("--model", default=lambda: glorfindel_model(), show_default=True)
 @click.option("--memory-path", default=None)
@@ -1155,8 +1207,8 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     with 'az vm start' and then run 'glorfindel release'. Use --wait for the
     old blocking behavior that handles post-restore steps automatically.
 
-    The recovery point is the newest one before the attack began (SEC4c): --before, or
-    the attack_started of this VM in runs/; never the newest point when neither says when.
+    The recovery point is the newest one before the attack began (SEC4c): --before, or the
+    moment of this VM's card (SEC8); never the newest point when neither says when.
     """
     from glorfindel.actions import AzureConnector
 
@@ -1918,26 +1970,28 @@ def _restore_before(resource_id: str, before: str | None) -> tuple[str, str]:
     """(the moment the recovery point must precede, ISO 8601 UTC; why that one) — or
     ("", what to do) when nothing says when the attack on this VM began (SEC4c).
 
-    --before wins (UTC when it has no offset). Otherwise the attack_started of THIS VM
-    that runs/ admits (glorfindel/restore_plan.py, signal_origin.attack_moment: the
-    channel's rules, the bounds of SEC4a around the VM's isolation and never after it, the
-    earliest line) — never the last line of any VM, from any writer."""
+    --before wins (UTC when it has no offset). Otherwise the moment the console and the bot
+    propose for this VM's first-detected pending card (glorfindel/restore_plan.py, `card_of`,
+    `proposed_moment`): the
+    earliest the defender recorded — the card's first detection, the VM's isolation —, or, for
+    an exercise card, the attack_started of its run in runs/, never after its first detection.
+    A line of runs/ never gives the moment of a real incident (SEC8); no card, no moment."""
     from glorfindel import restore_plan
     if before:
         try:
             return restore_plan.parse_moment(before), "--before"
         except ValueError as exc:
             raise click.ClickException(f"--before : {exc}")
-    found, why = restore_plan.exercise_moment(resource_id)
-    if found:
-        return found, why
+    plan = restore_plan.proposed_moment(resource_id, restore_plan.card_of(resource_id))
+    if plan["before"]:
+        return plan["before"], plan["why"]
     _, isolated = restore_plan.isolation_time(resource_id)
     hint = f" La VM est isolée depuis {isolated} : l'attaque a commencé avant." if isolated else ""
     vm = resource_id.rstrip("/").split("/")[-1]
-    return "", (f"Moment de l'attaque inconnu pour {vm} : aucune ligne attack_started de "
-                "cette VM admise dans runs/ (au plus 2 h avant son isolation, ou avant "
-                "maintenant). Le point le plus récent peut être postérieur à l'attaque : "
-                "passer --before <ISO8601>, un instant avant son début." + hint)
+    return "", (f"Moment de l'attaque inconnu pour {vm} : aucune carte en attente de cette VM "
+                "n'en donne un (sa première détection, ou pour un exercice la ligne "
+                "attack_started de son run). Le point le plus récent peut être postérieur à "
+                "l'attaque : passer --before <ISO8601>, un instant avant son début." + hint)
 
 
 @contextlib.contextmanager

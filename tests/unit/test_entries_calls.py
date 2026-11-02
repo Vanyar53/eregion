@@ -148,8 +148,17 @@ def test_restore_says_the_isolation_when_it_asks(tmp_path, monkeypatch):
     assert "isolée depuis 2026-10-29T06:00:00+00:00" in out.output
 
 
+def _drill_card(rid: str, run_id: str = "20261029T100000Z") -> str:
+    """A pending restore card of an exercise of run `run_id` on `rid` (SEC8: the channel's
+    line counts for such a card only)."""
+    from glorfindel import escalations
+    return escalations.record(f"{run_id}_x", rid, "restore_from_backup", "destructive_action", "r",
+                              ttp="T1486", source="exercise", exercise_run=run_id)
+
+
 def test_restore_takes_this_vm_s_moment_and_says_why(tmp_path, monkeypatch):
     cli, started = _restore_env(tmp_path, monkeypatch)
+    _drill_card(VM)
     t0 = time.time() - 1200
     _write_runs(tmp_path / "runs", "20261029T100000Z", [_attack(VM, t0)])
     _write_runs(tmp_path / "runs", "20261029T101000Z", [_attack(OTHER, time.time() - 60, "20261029T101000Z")])
@@ -197,6 +206,7 @@ def test_restore_finds_the_moment_of_a_vm_isolated_hours_ago(tmp_path, monkeypat
     the isolation still takes the attack line of 20 min before it."""
     isolated_at = datetime.now(timezone.utc) - timedelta(hours=8)
     cli, started = _restore_env(tmp_path, monkeypatch, iso={"isolated_at": isolated_at.isoformat()})
+    _drill_card(VM, "20261029T020000Z")
     t0 = isolated_at.timestamp() - 1200
     _write_runs(tmp_path / "runs", "20261029T020000Z", [_attack(VM, t0, "20261029T020000Z")])
     out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes"])
@@ -225,7 +235,9 @@ def test_the_proposed_moment_is_the_exercise_s_else_the_card_s(tmp_path, monkeyp
     assert "l'attaque a commencé avant" in got["why"]
     t0 = time.time() - 900
     _write_runs(tmp_path / "runs", "20261029T100000Z", [_attack(VM, t0)])
-    got = restore_plan.proposed_moment(VM, card, runs_dir=tmp_path / "runs")
+    drill = {"first_seen": datetime.now(timezone.utc).isoformat(), "source": "exercise",
+             "exercise_run": "20261029T100000Z"}
+    got = restore_plan.proposed_moment(VM, drill, runs_dir=tmp_path / "runs")
     assert got["source"] == "exercise" and got["before"] == datetime.fromtimestamp(t0, tz=timezone.utc).isoformat()
     assert restore_plan.proposed_moment(OTHER, {}, runs_dir=tmp_path / "runs")["before"] == ""
 

@@ -2689,7 +2689,7 @@ MUTANTS += [
      ("    if event not in CHANNEL_EVENTS and event != \"attack_adapted\":\n",
       "    fields = _FIELDS.get(event, _FIELDS[\"attack_started\"])\n")),
     ("M1233", "a refused line not counted (SEC3, V-05)", SO,
-     "        _REFUSED[event] = _REFUSED.get(event, 0) + 1\n", ""),
+     "        _REFUSED[event] = _REFUSED.get(event, 0) + count\n", ""),
     # After the review of SEC3 (M1234–M1239).
     ("M1234", "a link in the defender's directory taken for its file: one into runs/ passes (SEC3, V-05)", SO,
      "        return Path(path).resolve().parent == RECOVERY_SIGNALS_DIR.resolve()\n",
@@ -4592,8 +4592,8 @@ MUTANTS += [
     ("M1396", "an attack line dated after the isolation taken for its moment (SEC4c)", SIG,
      "            if isolated_at is not None and float(at) > isolated_at:\n                continue\n", ""),
     ("M1397", "the moment bounded around now: a VM isolated hours ago never finds it (SEC4c)", RPL,
-     "    found = attack_moment(resource_id, runs_dir=runs_dir, isolated_at=isolated_at)\n",
-     "    found = attack_moment(resource_id, runs_dir=runs_dir)\n"),
+     "    found = attack_moment(resource_id, runs_dir=runs_dir, isolated_at=isolated_at,\n",
+     "    found = attack_moment(resource_id, runs_dir=runs_dir,\n"),
     ("M1398", "each runs/ file read whole, whatever its size (SEC4c)", SIG,
      "            lines = _tail_lines(path)\n", '            lines = path.read_text(errors="replace").splitlines()\n'),
     ("M1399", "the console restores without a moment (SEC4c)", CON,
@@ -4604,7 +4604,7 @@ MUTANTS += [
     ("M1401", "the console never reads the restore's return code: a refusal in silence (SEC4c)", CON,
      "        error = (None if proc.returncode == 0 else\n", "        error = (None if True else\n"),
     ("M1402", "the restore's field ignores the exercise's moment (SEC4c)", RPL,
-     '    if before:\n        return {"before": before, "source": "exercise", "why": why}\n', ""),
+     '        if found:\n            return {"before": found, "source": "exercise", "why": why}\n', ""),
     ("M1403", "the restore's field filled with the card's last detection, not its first (SEC4c)", RPL,
      '    first = str((esc or {}).get("first_seen") or (esc or {}).get("timestamp") or "")\n',
      '    first = str((esc or {}).get("timestamp") or "")\n'),
@@ -7367,6 +7367,113 @@ MUTANTS += [
      '    lock = request_lock("runs", f"fault {os.path.basename(fault)}")\n'),
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
+
+# SEC8 (#414, M2810–M2839): the runs/ channel read as an input the watch does not trust — regular
+# files only, a bounded read and rate, bounded effects, finite durations, known techniques, the
+# config's workspace, a restore's moment never the channel's on a real incident, ARM calls built
+# from the parts read of an id.
+CRD = "glorfindel/channel_reader.py"
+SEC8_TESTS = "tests/unit/test_runs_channel.py"
+MUTANTS += [
+    ("M2810", "a link in runs/ followed: a file elsewhere, a device without end, read (SEC8)", CRD,
+     '| getattr(os, "O_NOFOLLOW", 0) ', ""),
+    ("M2811", "a FIFO in runs/ opened blocking: the watch's loop waits on it (SEC8)", CRD,
+     '| getattr(os, "O_NONBLOCK", 0) ', ""),
+    ("M2812", "an entry of runs/ read whatever it is: a pipe, a device (SEC8)", CRD,
+     "    if not stat.S_ISREG(mode):\n", "    if False:\n"),
+    ("M2813", "every line of a file read in one poll (SEC8)", CRD,
+     "    while len(out.lines) < READ_LINES:\n", "    while True:\n"),
+    ("M2814", "a file of runs/ read whole in one poll (SEC8)", CRD,
+     "        data = f.read(READ_BYTES)\n", "        data = f.read()\n"),
+    ("M2815", "a line past the bound read as any other (SEC8)", CRD,
+     "        if nl - pos > LINE_BYTES:\n", "        if False:\n"),
+    ("M2816", "a line without end, past the bound, waited for at every poll (SEC8)", CRD,
+     "            if len(data) - pos > LINE_BYTES:", "            if False:"),
+    ("M2817", "a refused entry of runs/ said again at every poll (SEC8)", CRD,
+     ("            if not regular and path in self._refused:\n                continue",
+      "        if self._refused.get(path) != why:"),
+     ("            if False:\n                continue", "        if True:")),
+    ("M2818", "no rate per writer: one file takes the whole channel (SEC8)", CRD,
+     "            if self._all >= self.total or self._by.get(writer, 0) >= self.per_writer:\n",
+     "            if self._all >= self.total:\n"),
+    ("M2819", "Glorfindel's permission check follows a next page anywhere, with the token (SEC8)",
+     "glorfindel/providers/azure/readers.py",
+     '                    if not url.startswith("https://management.azure.com/"):\n', "                    if False:\n"),
+    ("M2820", "the rate never applied: a burst in runs/ read and decided line by line (SEC8)", CRD,
+     "                    if line.strip() and self.budget.take(path.name)]", "                    if line.strip()]"),
+    ("M2821", "a line's durations admitted unchecked: Infinity, NaN (SEC8)", SIG,
+     "                why = duration_refusal(name, clean[part][name])\n", '                why = ""\n'),
+    ("M2822", "a duration finite but unbounded admitted (SEC8)", SIG,
+     "    if not 0 < v <= bound:\n", "    if not 0 < v:\n"),
+    ("M2823", "the search takes an endless timeout from the signal (SEC8)", AGT,
+     '        refused = duration_refusal("detection_timeout_s", raw.get("detection_timeout_s"))\n',
+     '        refused = ""\n'),
+    ("M2824", "a line naming an unknown technique admitted: a search, a call to the model (SEC8)", SIG,
+     "    if not isinstance(ttp, str) or ttp not in (known_techniques() if known is None else known):\n",
+     "    if not isinstance(ttp, str):\n"),
+    ("M2825", "the techniques known are the catalog's only: a rule's technique refused (SEC8)", SIG,
+     "                found |= {r.ttp for r in load_rules(candidate, glorfindel_cfg=cfg) if r.ttp}\n",
+     "                pass\n"),
+    ("M2826", "the same search started again while it runs: a thread per line (SEC8)", GCLI,
+     "                if search in _channel_polls:\n", "                if False:\n"),
+    ("M2827", "the channel's searches in flight unbounded (SEC8)", GCLI,
+     "                if len(_channel_polls) >= CHANNEL_POLLS:\n", "                if False:\n"),
+    ("M2828", "the channel's lines waiting for one VM unbounded (SEC8)", GCLI,
+     "                if _channel_waiting.get(key, 0) >= CHANNEL_QUEUED_PER_VM:\n", "                if False:\n"),
+    ("M2829", "the VMs the channel names unbounded: a worker per name (SEC8)", GCLI,
+     "            if key not in _channel_vms and key not in _resource_queues and len(_channel_vms) >= CHANNEL_VMS:\n",
+     "            if False:\n"),
+    ("M2830", "a line of runs/ dispatched outside the channel's bounds (SEC8)", GCLI,
+     "        if source:\n            refused, search = _channel_room(data)\n",
+     "        if False:\n            refused, search = _channel_room(data)\n"),
+    ("M2831", "a restore's moment taken from another run's line (SEC8)", SIG,
+     '            if run_id and adm.signal["context"].get("run_id") != run_id:\n                continue\n', ""),
+    ("M2832", "a restore's moment taken after the card's first detection (SEC8)", SIG,
+     "            if not_after is not None and float(at) > not_after:\n                continue\n", ""),
+    ("M2833", "a real incident's restore takes its moment from runs/ (SEC8)", RPL,
+     ("    if read_runs and run and before:\n", '    if not run_id:\n        return "", ""\n'),
+     ("    if read_runs and before:\n", "")),
+    ("M2834", "`glorfindel restore` takes the moment of another VM's card (SEC8)", RPL,
+     '                 if str(e.get("resource_id") or "").rstrip("/").lower() == want]\n', "                 if e]\n"),
+    ("M2835", "a detection_missed naming a workspace outside the config admitted (SEC8)", SIG,
+     '    if event == "detection_missed" and ws not in (None, "") and not (\n',
+     "    if False and not (\n"),
+    ("M2836", "a rule proposal queries the workspace the signal names (SEC8)", AGT,
+     '    workspace_id = config_workspace(ctx.get("workspace_id", ""))\n',
+     '    workspace_id = ctx.get("workspace_id", "")\n'),
+    ("M2837", "the enrollment read pastes the id after ARM's host: the token goes where the id says (SEC8)", INS,
+     ("        sub, rg, name = vm_parts(resource_id)\n",
+      '                         (f"{group}/providers/Microsoft.Compute/virtualMachines/{name}", _VM_API)):'),
+     ("        sub, rg, name = subscription_from_id(resource_id), rg_from_id(resource_id), \"\"\n",
+      '                         (f"{ARM}{resource_id}", _VM_API)):')),
+    ("M2838", "Orodruin reads a role definition at the id it was given, wherever it points (SEC8)",
+     "eregion_core/orodruin.py", "            path = arm_relative(definition_id)\n", "            path = definition_id\n"),
+    ("M2839", "Gothmog calls the path it was given, wherever it points (SEC8)", "gothmog/engines/chaos_studio.py",
+     "        path = safe_path(path)\n", ""),
+]
+TESTS.update({f"M{n}": SEC8_TESTS for n in range(2810, 2837) if n != 2819})
+TESTS.update({mid: "tests/unit/test_arm_urls.py" for mid in ("M2819", "M2837", "M2838", "M2839")})
+
+# SEC8, after its review (M2965–M2969): the VM's first-detected card, a file truncated or
+# replaced, the files opened per poll, a writer whose minute is spent.
+MUTANTS += [
+    ("M2965", "`glorfindel restore` takes the restore card's moment, not the VM's first detection (SEC8)", RPL,
+     "    return min(cards, key=_first_seen) if cards else None\n",
+     '    return min([e for e in cards if e.get("action") == "restore_from_backup"] or cards,\n'
+     "               key=_first_seen) if cards else None\n"),
+    ("M2966", "a file of runs/ truncated: its new lines never read (SEC8)", CRD,
+     "        restarted = (ino is not None and st.st_ino != ino) or st.st_size < offset\n",
+     "        restarted = (ino is not None and st.st_ino != ino)\n"),
+    ("M2967", "a file of runs/ replaced: read from the old one's offset (SEC8)", CRD,
+     "        restarted = (ino is not None and st.st_ino != ino) or st.st_size < offset\n",
+     "        restarted = st.st_size < offset\n"),
+    ("M2968", "every file of runs/ opened at every poll (SEC8)", CRD,
+     "            if opened >= FILES_PER_POLL:\n", "            if False:\n"),
+    ("M2969", "a writer whose minute is spent read all the same (SEC8)", CRD,
+     "            if writer_left <= 0 and regular and st.st_ino == self._ino.get(path) \\\n",
+     "            if False and regular and st.st_ino == self._ino.get(path) \\\n"),
+]
+TESTS.update({f"M{n}": SEC8_TESTS for n in range(2965, 2970)})
 
 # L1Qr (#363): L1Q's rule entered; the defect it brought up (seed 6 at 500) — a VM block read before
 # its subnet's perimeter, rewritten under the pair turned into an allow, said « n'est plus bloquée »

@@ -501,7 +501,8 @@ export HOST_SSH_FINGERPRINT=SHA256:…                  # la deuxième colonne
 
 La VM reconstruite (`glorfindel-host-down` puis `-up`) a une autre clé : relever la nouvelle,
 la poser, retirer `~/.eregion/h0_known_hosts`. Le CD de H0 (H1) n'est pas concerné : il tourne
-sur la VM et ne se connecte à aucun hôte par SSH. Orodruin garde `accept-new` (`SSH_OPTS`).
+sur la VM et ne se connecte à aucun hôte par SSH. Orodruin est épinglé de même, sans repli sur
+`accept-new` : `ORO_SSH_FINGERPRINT` est exigée (SEC14, `infra/orodruin/README.md`, « SSH »).
 
 ## Ce que SEC7 change au prochain déploiement de H0
 

@@ -62,7 +62,7 @@ def _make(fake, *args, stdin="", env_extra=None):
                **(env_extra or {}))
     # The host key's check is known_host.sh's (tests/unit/test_host_ssh.py): taken as done here.
     fingerprint = [] if any(a.startswith("HOST_SSH_FINGERPRINT=") for a in args) else ["HOST_SSH_FINGERPRINT=SHA256:test"]
-    return subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "-o", "glorfindel-host-known",
+    return subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "-o", "glorfindel-host-known", "-o", "orodruin-known",
                            "orodruin-exercise", f"PYTHON={sys.executable}", "HOST_IP=10.0.0.4", "ORO_IP=10.0.0.5",
                            *fingerprint, *args],
                           capture_output=True, text=True, input=stdin, env=env, timeout=60)

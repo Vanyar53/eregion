@@ -7415,6 +7415,15 @@ MUTANTS += [
 TESTS.update({mid: _R10 for mid in ("M2946", "M2947", "M2948", "M2949", "M2950", "M2952")})
 TESTS["M2951"] = "tests/unit/test_makefile_exercise.py"
 
+# SEC14 (#420, V-32, V-34): Orodruin's host key pinned, never accept-new; its containers hardened.
+MUTANTS += [
+    ("M2953", "Orodruin without its host key's fingerprint falls back to accept-new (V-32)", MAKE,
+     ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT required\n', ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT\n'),
+    ("M2954", "an injector's container on Orodruin runs with its root writable and its capabilities (V-34)",
+     MAKE, "ORO_RUN        = docker run --rm $(ORO_HARDEN) ", "ORO_RUN        = docker run --rm "),
+]
+TESTS.update({"M2953": "tests/unit/test_host_ssh.py", "M2954": "tests/unit/test_host_ssh.py"})
+
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
 # « brouillon ». M2680–M2695; M2696–M2699 after its review.

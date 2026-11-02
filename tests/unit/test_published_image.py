@@ -592,8 +592,9 @@ def _push(tmp_path, **env):
             "FAKE_COMMIT": C2, "FAKE_DIGEST": "sha256:" + "a" * 64, "FAKE_CONFIG": config,
             "REAL_PYTHON": sys.executable, "REAL_SCRIPT": str(SCRIPT), **env}
     full.pop("REF", None)
+    # Orodruin's host key check is test_host_ssh.py's (V-32, SEC14): taken as done here.
     res = subprocess.run(["make", "--no-print-directory", "-C", str(work), "-f", str(ROOT / "Makefile"),
-                          "orodruin-push", "REF=v0.4.6", "ORO_IP=203.0.113.7",
+                          "-o", "orodruin-known", "orodruin-push", "REF=v0.4.6", "ORO_IP=203.0.113.7",
                           "ORO_SSH=ssh orodruin@203.0.113.7"], env=full, capture_output=True, text=True,
                          timeout=120)
     return res, remote, config

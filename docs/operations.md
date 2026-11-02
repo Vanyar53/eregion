@@ -251,7 +251,8 @@ make orodruin-exercise REQUEST=r-20261030T075200Z-a1b2c3 [DRY_RUN=1] [REQUEST_FR
 #      - REQUEST vérifié avant toute commande (r-<heure UTC>-<6 hex>), jamais lu de l'environnement ;
 #      - la demande tirée de H0 par SSH, sa clé d'hôte vérifiée par son empreinte : HOST_SSH_FINGERPRINT
 #        est exigée (sans elle, rien n'est fait — jamais accept-new pour ce qui fait agir Orodruin) ;
-#        REQUEST_FROM=local : la console de ce poste (make glorfindel-start), sans SSH ;
+#        REQUEST_FROM=local : la console de ce poste (make glorfindel-start), sans SSH ; Orodruin de
+#        même, sa clé épinglée par ORO_SSH_FINGERPRINT (V-32, SEC14) ;
 #      - relue par son seul lecteur (un champ de plus : refusée, rien n'est envoyé), affichée fil par
 #        fil : rang, technique ou panne, cible, groupe, DESTRUCTIVE ;
 #      - pour chaque fil destructif, ou dont personne n'a dit qu'il ne l'est pas (A0) : taper le nom de
@@ -376,6 +377,8 @@ GLORFINDEL_AZURE_CLIENT_ID=…        # V-17 : le principal de la watch (et …_
                                     # GLORFINDEL_BOT_AZURE_CLIENT_* le bot ; vides → AZURE_CLIENT_* (« Identités Azure », plus bas)
 HOST_SSH_FINGERPRINT=SHA256:…       # V-32 : l'empreinte de la clé d'hôte de H0, relevée sur la VM ; sans elle, accept-new et c'est dit
                                     # (infra/glorfindel-host/README.md, « SSH ») ; HOST_KNOWN_HOSTS : son fichier (~/.eregion/h0_known_hosts)
+ORO_SSH_FINGERPRINT=SHA256:…        # V-32 (SEC14) : celle d'Orodruin, lue sur la VM par Azure (make orodruin-fingerprint) ; exigée par
+                                    # toute commande vers Orodruin, jamais accept-new ; ORO_KNOWN_HOSTS : ~/.eregion/orodruin_known_hosts
 GLORFINDEL_KEEP_ISOLATED=1          # mode forensique
 GLORFINDEL_ISOLATION_TTL_H=4        # TTL isolation (défaut 4h) : au-delà, une carte ttl_exceeded — jamais de levée automatique
 EREGION_CONSOLE_HOSTS=nom,nom       # SEC1 : noms (sans port) sous lesquels la console répond, en plus de localhost / 127.0.0.1 / [::1] ; une
@@ -794,7 +797,10 @@ exige les quatre clés sur chaque service. Mesuré le 29/10 sur Docker (compose 
 écritures de chaque service (escalades, état, découverte, ChromaDB, l'index d'analyse, la
 config, `/tmp`) passent, l'image et `/root` refusent, `CapEff` à zéro, `NoNewPrivs` à 1. Les
 `docker run` de `make glorfindel-shell` / `annatar-shell` et du préflight du CD ne passent pas par
-le compose. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : son rapport de
+le compose. Les `docker run` des injecteurs sur Orodruin (`ORO_RUN`, `ORO_RUN_REQUEST` du Makefile :
+`orodruin-check`, `orodruin-exercise`, `gothmog-*`, `orodruin-campaign-*`) portent les mêmes quatre
+réglages depuis SEC14 (`ORO_HARDEN`, `tests/unit/test_host_ssh.py`) ; à mesurer au premier run sur
+Orodruin qu'aucune écriture hors de `~/runs` et de `/tmp` n'y manque. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : son rapport de
 campagne s'écrit dans `runs/`, et l'index de l'IA d'analyse ne s'ouvre jamais dans son conteneur
 (chromadb n'est pas dans son image, `tests/unit/test_profiles.py`). Sur H0, la santé du CD lit
 le journal de chaque conteneur depuis la bascule : un « Read-only file system » que la release

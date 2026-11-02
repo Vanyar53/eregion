@@ -127,10 +127,15 @@ pour contenir et part contenue seule ». Les cartes de cette campagne sont des c
 de la watch, dans ses propres fichiers. Le T0 de chaque attaque, la liste des runs et l'effet d'une
 panne viennent de l'hôte des injecteurs, par le canal ; l'hôte de la watch les confronte à ce qu'il
 tient avant qu'ils comptent :
-- un T0 hors de la fenêtre de son run, ou après ce que la watch a vu de la VM, ne compte pas au
-  temps pour contenir, et c'est dit ;
-- un run que la watch a vu et que le manifeste ne donne pas exécuté compte, sa décision inconnue ;
+- un T0 hors de la fenêtre de son run, ou après ce que la watch a reçu ou vu de la VM, ne compte
+  pas au temps pour contenir, et c'est dit ;
+- un run que la watch a vu et que le manifeste ne donne pas exécuté, ou que le contrôle du canal
+  écarte, compte, sa décision inconnue ;
 - une panne dont le rapport n'a pas les lectures de la télémétrie qui montrent son effet n'est pas
-  mesurée.
+  mesurée. Ces lectures sont vérifiées dans leur cohérence (des lectures par cible, `ok`, datées
+  dans la panne), pas relues par la watch.
+
+Cette confrontation vaut pour le rapport de campagne et la page d'une campagne ; l'accueil de la
+console et le suivi de Dagorlad suivront.
 
 Le détail est dans [`analysis.md`](analysis.md), « D'où vient chaque entrée ».

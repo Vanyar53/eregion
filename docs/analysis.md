@@ -605,51 +605,88 @@ Deux autres cas limites :
 
 Les indicateurs sont la preuve que donne Eregion : chaque entrée dit d'où elle vient, et ce qui
 vient de l'hôte des injecteurs est confronté à ce que tient l'hôte de la watch avant de compter.
+**Où la confrontation s'applique** : le rapport de campagne (section « Réponse ») et la page d'une
+campagne dans la console (`containment.load`). L'accueil de la console et le suivi de Dagorlad ne
+confrontent pas encore le T0 ; ils suivront (session Console), avec la même fonction
+(`containment.t0_refusal`).
 
 | Entrée | D'où | Ce qui la confronte |
 |---|---|---|
 | la décision de Glorfindel, son action, sa relecture, sa tenue | la watch : ses lignes de débogage, ses cartes | rien : c'est la mesure |
 | la fin d'un confinement (levée) | l'opérateur (`manual_actions.jsonl`), la watch | rien |
-| le T0 d'un run (`attack_time`) | l'injecteur, par le rapport du run | la fenêtre d'exercice du run, la demande Dagorlad, ce que la watch a vu de la VM |
-| la liste des runs, leur statut | l'injecteur, par le manifeste | les fenêtres que tient cet hôte, les cycles et les cartes que la watch a rattachés à un run |
+| le T0 d'un run (`attack_time`) | l'injecteur, par le rapport du run | la fenêtre d'exercice du run, la demande Dagorlad, l'heure d'attaque que la watch a reçue, ce que la watch a vu de la VM |
+| la liste des runs, leur statut | l'injecteur, par le manifeste | les fenêtres que tient cet hôte, les lignes et les cartes que la watch a rattachées à un run |
 | la fenêtre d'exercice | l'injecteur, par le canal | sa forme et ses dates (H-1, SEC5 : pas plus de 2 h, pas antidatée) |
-| l'effet d'une panne | Gothmog, qui lit la télémétrie de Glorfindel | les lectures elles-mêmes, dans le rapport (taux G1, plus bas) |
+| l'effet d'une panne | Gothmog, qui lit la télémétrie de Glorfindel, par le canal | la cohérence de ses lectures dans le rapport (taux G1, plus bas) ; la watch ne relit pas la télémétrie |
 
 **Le T0** compte au temps pour contenir s'il tient dans toutes ces bornes :
 - il tombe dans la fenêtre d'exercice du run, de son ouverture à sa fin. La grâce après la fin vaut
   pour la détection, jamais pour l'attaque ;
 - il ne précède pas la demande Dagorlad qui a lancé le run, quand cet hôte la tient ;
 - il ne suit pas la détection rattachée au run ;
+- il ne suit pas l'heure d'attaque que la watch a reçue de l'injecteur pendant le run (le
+  `raw_signal.attack_time` de son `attack_started`, borné à la réception, SEC4a, gardé dans la ligne
+  qu'elle a écrite pour ce run) : un rapport écrit après coup ne peut plus avancer son T0 ;
 - il ne suit pas la première chose que la watch a vue de la VM pendant le run : une de ses
   détections sur cette VM dans la fenêtre, ou, plus tôt, l'heure que la télémétrie donne à la ligne
-  qu'a lue sa règle (`TimeGenerated`, quand la règle la rend).
+  qu'a lue sa règle (`TimeGenerated`, quand la règle la rend). Les règles agrégées
+  (`ransomware-disk-write`, `ssh-brute-force`, `data-exfiltration-blob`) ne rendent pas d'heure :
+  pour elles, cette borne est la détection elle-même, et c'est l'heure reçue qui tient le T0.
 
-La seule tolérance est celle des horloges de deux hôtes : 10 s (`CLOCK_SKEW_S`). Aucun délai
-minimal n'est inventé entre l'attaque et la détection : la borne est ce que la watch a vu. Sinon,
-l'incident garde son issue, puisque la décision est celle de la watch, mais aucun temps n'est compté
-depuis ce T0. Le rapport le dit dans la ligne de l'incident (« T0 non retenu, temps non compté »),
-dans la colonne T0 (« non retenu ») et dans ses notes, avec la raison. Un run sans fenêtre sur cet
-hôte n'est pas chronométré non plus.
+La seule tolérance est celle des horloges de deux hôtes : 10 s (`CLOCK_SKEW_S`) ; d'une seconde
+pour l'heure reçue, le même instant écrit deux fois par l'injecteur. Aucun délai minimal n'est
+inventé entre l'attaque et la détection : la borne est ce que la watch a vu. Sinon, l'incident garde
+son issue, puisque la décision est celle de la watch, mais aucun temps n'est compté depuis ce T0. Le
+rapport le dit dans la ligne de l'incident (« T0 non retenu, temps non compté »), dans la colonne T0
+(« non retenu ») et dans ses notes, avec la raison. Un run sans fenêtre sur cet hôte n'est pas
+chronométré non plus ; une fenêtre purgée (une semaine après sa fin) ou refusée est dite comme
+telle. Une demande Dagorlad que l'hôte tient mais ne peut lire est dite dans les notes.
+
+**Un T0 non retenu ne borne rien.** La surveillance de la tenue d'un run s'arrête au début du run
+suivant sur la même VM, et une décision sur une technique dans la fenêtre d'un run est la sienne,
+jamais celle d'une panne. Ces deux bornes se prennent sur les T0 retenus seulement ; pour un T0 non
+retenu, sur le début de la fenêtre que tient l'hôte, sinon sur rien.
 
 **La liste des runs** est l'union du manifeste et de ce que la watch a vu autour de la campagne :
-- les fenêtres de technique que tient cet hôte, ouvertes entre une heure avant le plus ancien début
-  qu'il peut lire de la campagne (son identifiant daté, son manifeste, sa première fenêtre crue :
-  `START_LEAD_S`, D2b) et l'écriture, ici, du manifeste qu'il lit ;
-- les cycles et les cartes que la watch a rattachés à un run (`exercise_run`), dans le même
-  intervalle.
+- les fenêtres de technique que tient cet hôte, ouvertes dans l'intervalle de la campagne ;
+- les lignes de la watch rattachées à un run (`exercise_run`, ou le run que nomme le signal : une
+  détection, un `detection_timeout`, tout cycle), y compris celles du fichier de débogage propre à
+  un run, et les cartes (`exercise_run`), dans le même intervalle.
+
+L'intervalle va du plus tôt de deux bornes à l'écriture, ici, du manifeste que l'hôte lit :
+- une heure avant le plus ancien début qu'il lit dans les fichiers de la campagne (son identifiant
+  daté, son manifeste, sa première fenêtre crue : `START_LEAD_S`, D2b) ;
+- l'écriture, ici, du manifeste de la campagne précédente : une borne que le canal ne donne pas.
 
 Un run vu ainsi et absent du manifeste compte comme un incident de décision inconnue : « vu par la
 watch (sa fenêtre d'exercice), absent du manifeste ». La part devient une borne basse, « au moins ».
 Un run que le manifeste donne non exécuté (`error`, `skipped`…) compte de même si la watch lui a
-rattaché une détection ou une carte. Sa fenêtre seule ne suffit pas : une fenêtre s'ouvre avant le
-premier geste et ne dit pas qu'une attaque a eu lieu.
+rattaché une ligne (un `detection_timeout` compris) ou une carte. Sa fenêtre seule ne suffit pas :
+une fenêtre s'ouvre avant le premier geste et ne dit pas qu'une attaque a eu lieu. Un run qu'écarte
+le contrôle du canal (H-1 : rapport illisible, VM non inscrite…) reste écarté des faits du rapport,
+mais compte comme incident de décision inconnue dès que l'hôte tient sa fenêtre ou que la watch lui
+a rattaché une ligne ou une carte.
 
-Ne sont pas de la campagne :
+Ne sont pas de la campagne, et c'est dit (« vu par la watch, compté avec … ») :
 - un run qu'un autre manifeste liste ;
-- un run qui a son propre rapport (`runs/<id>.json` : un run seul, une panne) ;
-- la fenêtre d'une panne.
+- un run qui a son propre rapport (`runs/<id>.json` : un run seul, une panne).
 
-Un run vu par la watch n'est jamais oublié : inconnu n'est jamais rien (A0).
+La fenêtre d'une panne n'est jamais un incident. Un run vu par la watch n'est jamais oublié : inconnu
+n'est jamais rien (A0).
+
+**Ce qui reste ouvert.**
+- La borne basse de l'intervalle vient des fichiers de la campagne, à l'écriture du manifeste
+  précédent près. Sans campagne précédente sur l'hôte, un manifeste qui se dit commencé plus de
+  deux heures après son premier run laisse ce run hors d'atteinte.
+- L'effet d'une panne est vérifié dans sa cohérence, pas relu par la watch : la faire relire la
+  télémétrie est une question pour Jonathan.
+- L'accueil de la console et le suivi de Dagorlad ne confrontent pas encore le T0 (session
+  Console).
+- Le rattachement de la décision ne change pas : elle est cherchée depuis le T0 du rapport. Un T0
+  non retenu ne compte pas au temps, mais la décision qu'il a trouvée compte dans la part.
+- La première vue de la VM compte toute détection sur elle dans la fenêtre du run : une détection
+  causée par la préparation du run, ou tardive du run précédent, peut écarter un T0 honnête. C'est le
+  côté prudent : aucun temps, et c'est dit.
 
 ### Où ils sont publiés
 
@@ -660,7 +697,7 @@ Un run vu par la watch n'est jamais oublié : inconnu n'est jamais rien (A0).
 - **La console**, page Annatar, détail d'une campagne : l'encadré **RESPONSE**
   (`GET /api/campaigns/<id>`, champ `containment`).
 - **L'accueil de la console**, sur 30 jours : la même définition par attaque détectée
-  (`eregion_console/indicators.py`). On y trouve :
+  (`eregion_console/indicators.py`), sans la confrontation du T0 de SEC9, qui suivra. On y trouve :
   - la fin à la relecture ;
   - la tenue ;
   - à côté, le nombre de runs d'attaque de la période, ratés compris ;
@@ -674,8 +711,9 @@ Un run vu par la watch n'est jamais oublié : inconnu n'est jamais rien (A0).
 Le calcul s'appuie sur le format de run de C1 (`eregion_core/run_report.py`), sans en créer un
 second :
 - **le temps** est celui de `run_report.timeline` : la relecture (`verified_at`, sinon la ligne du
-  cycle), rien avant l'attaque. La matrice de couverture, l'accueil et le rapport donnent donc le
-  même temps pour un même incident ;
+  cycle), rien avant l'attaque. La matrice de couverture, l'accueil et le rapport mesurent donc le
+  temps de la même façon ; seuls le rapport et la page d'une campagne écartent, depuis SEC9, un T0
+  que l'hôte ne peut pas confronter ;
 - **le type d'un run** se lit par `run_report.kind_of` (`metrics.kind`, sinon Gothmog) ;
 - **une panne** donne, dans la vue unifiée (`read_run`), sa fin (`ended_at`) et ses cibles
   (`targets`) : BL1 les y a ajoutées.
@@ -799,9 +837,11 @@ Ce que le taux ne change pas :
 - **l'accueil de la console** les lit par `fault_run`.
 
 La vue unifiée d'un run (`read_run`, C1) dit maintenant `effective`, et `effect`, les lectures sur
-lesquelles il repose (SEC9). Ces lectures viennent de Gothmog, par le canal : l'hôte de la watch ne
-relit pas lui-même la télémétrie, il vérifie que le rapport porte la lecture de chaque cible, vue,
-et datée dans la panne. Le module expose `measure`
+lesquelles il repose (SEC9). Ces lectures viennent de Gothmog, par le canal : elles sont vérifiées
+dans leur cohérence (des lectures par cible, `ok`, datées dans la panne), pas relues par la watch.
+Une lecture se trouve par l'identifiant complet de la cible, sinon par son nom ; deux cibles du
+même nom dans deux groupes, aux lectures rangées par nom, laissent la panne non mesurée, leurs
+identifiants dits. Faire relire l'effet par la watch reste ouvert (une question pour Jonathan). Le module expose `measure`
 et `rate` pour que l'accueil puisse afficher le taux à côté des « actions disruptives à tort ».
 Cet affichage reste à faire, par la session Console.
 

@@ -7,6 +7,7 @@ Values are direct (no ${VAR} substitution needed — edit the file directly).
 from __future__ import annotations
 
 import fnmatch
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -399,6 +400,38 @@ def validate_forensic_ports(values) -> list[int]:
     return ports
 
 
+# ADM1 (#284): an account name as sudo writes it before « : » — a Linux login, or an
+# Entra ID one (`user@domain`). No glob: `admin*` would trust `admin_evil` in silence.
+_ACCOUNT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@-]{0,255}\$?")
+
+
+@dataclass
+class ExpectedAdmins:
+    """ADM1 (#284): the accounts whose sudo to root is expected on the VMs `match` names
+    (fnmatch, like `autonomy.assets`; case ignored, as Azure ignores it in a VM's name)."""
+    match: str
+    accounts: list[str] = field(default_factory=list)
+
+    def matches(self, asset_name: str) -> bool:
+        return fnmatch.fnmatchcase(asset_name.lower(), self.match.lower())
+
+
+@dataclass
+class ExpectedSudoConfig:
+    """ADM1 (#284): the sudo the administrators are expected to run. A sudo to root of an
+    account expected on its VM opens no card — unless its command is sensitive (the shipped
+    list, `glorfindel.expected_sudo.SENSITIVE_SHIPPED`, plus `sensitive_commands`: texts found
+    in the command line, case ignored). Empty: every sudo is a card, as before."""
+    admins: list[ExpectedAdmins] = field(default_factory=list)
+    sensitive_commands: list[str] = field(default_factory=list)
+
+    def accounts_for(self, asset_name: str) -> frozenset[str]:
+        """The accounts expected on this VM: every entry that names it, together."""
+        if not asset_name:
+            return frozenset()
+        return frozenset(a for e in self.admins if e.matches(asset_name) for a in e.accounts)
+
+
 @dataclass
 class GlorfindelConfig:
     monitoring_backends: list[MonitoringBackendConfig] = field(default_factory=list)
@@ -409,6 +442,8 @@ class GlorfindelConfig:
     # Addresses never blocked, on top of the shipped ones (SEC2,
     # glorfindel.response.policy.NEVER_BLOCK_SHIPPED): canonical CIDRs.
     never_block: list[str] = field(default_factory=list)
+    # ADM1 (#284): the administrators' expected sudo, per VM or pattern of VMs.
+    expected_sudo: ExpectedSudoConfig = field(default_factory=ExpectedSudoConfig)
 
     def monitoring_backend(self, name: str) -> MonitoringBackendConfig | None:
         return next((b for b in self.monitoring_backends if b.name == name), None)
@@ -491,6 +526,7 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
 _SECTIONS = {
     "monitoring_backends": "list", "action_backends": "list", "exceptions": "list",
     "autonomy": "table", "isolation": "table", "never_block": "list",
+    "expected_sudo": "table",
 }
 _MONITORING_KEYS = ("name", "type", "workspace_id", "endpoint", "discovery")
 _DISCOVERY_KEYS = ("enabled", "interval_s")
@@ -499,6 +535,8 @@ _EXCEPTION_KEYS = ("asset_pattern", "exclude_all", "exclude_rules")
 _AUTONOMY_KEYS = ("default", "assets", "allow_destructive")
 _AUTONOMY_ASSET_KEYS = ("match", "mode")
 _ISOLATION_KEYS = ("quarantine_nsg", "quarantine_rg", "forensic_sources", "forensic_ports")
+_EXPECTED_SUDO_KEYS = ("admins", "sensitive_commands")
+_EXPECTED_ADMIN_KEYS = ("match", "accounts")
 # The backend types something reads (discovery.py, detection_rules.py, backup_vault()):
 # `type: azure_monitr` was a backend nothing used, in silence. A new type is added here.
 _MONITORING_TYPES = ("azure_monitor", "prometheus")
@@ -695,6 +733,8 @@ def _parse_config(data: dict) -> GlorfindelConfig:
         for value, why in rejected:
             check.bad(f"never_block[{i}]", f"{_shown(value)} : {why}")
 
+    expected_sudo = _check_expected_sudo(sections["expected_sudo"], check)
+
     if check.problems:
         n = len(check.problems)
         raise ConfigError(f"{n} problème{'s' if n > 1 else ''} :\n  - " + "\n  - ".join(check.problems))
@@ -705,7 +745,42 @@ def _parse_config(data: dict) -> GlorfindelConfig:
         autonomy=autonomy,
         isolation=isolation,
         never_block=never_block,
+        expected_sudo=expected_sudo,
     )
+
+
+def _check_expected_sudo(raw: dict, check: _Checker) -> ExpectedSudoConfig:
+    """ADM1 (#284), read as strictly as the rest (A3): a form nobody reads refuses the file —
+    the watch does not start on it, so nothing is ever excluded on a list half read."""
+    where = "expected_sudo"
+    check.keys(raw, where, _EXPECTED_SUDO_KEYS)
+    admins: list[ExpectedAdmins] = []
+    for i, a in enumerate(check.items(raw.get("admins"), f"{where}.admins")):
+        at = f"{where}.admins[{i}]"
+        if not isinstance(a, dict):
+            check.bad(at, f"une table (match, accounts) est attendue, pas {_shown(a)}")
+            continue
+        check.keys(a, at, _EXPECTED_ADMIN_KEYS)
+        match = check.text(a, "match", at, required=True)
+        if a.get("accounts") is None:
+            check.bad(f"{at}.accounts", "obligatoire : la liste des comptes attendus sur ces VMs")
+            continue
+        accounts = check.texts(a, "accounts", at)
+        if a["accounts"] == []:
+            check.bad(f"{at}.accounts", "au moins un compte — une liste vide n'attend personne")
+        for j, name in enumerate(accounts):
+            if not _ACCOUNT_RE.fullmatch(name):
+                check.bad(f"{at}.accounts[{j}]",
+                          f"{_shown(name)} n'est pas un nom de compte (lettres, chiffres, « _ . @ - », "
+                          f"sans motif : un compte s'écrit en entier)")
+        admins.append(ExpectedAdmins(match=match, accounts=accounts))
+    sensitive: list[str] = []
+    for j, text in enumerate(check.texts(raw, "sensitive_commands", where)):
+        if text.strip():
+            sensitive.append(text.strip())
+        else:
+            check.bad(f"{where}.sensitive_commands[{j}]", "un texte vide est refusé (il serait dans toute commande)")
+    return ExpectedSudoConfig(admins=admins, sensitive_commands=sensitive)
 
 
 def _validate_mode(mode: str, where: str) -> str:

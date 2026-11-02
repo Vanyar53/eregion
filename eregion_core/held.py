@@ -34,6 +34,14 @@ NET_API = "2023-09-01"
 _ARM_PATH = re.compile(r"/subscriptions/[^/?#%\\\s]+(?:/[^/?#%\\\s]+)+")
 
 
+# A VM's id, part by part (SEC8, #414): subscription, resource group, name — each of the
+# characters ARM gives it, nothing that could end a segment, open a query, or come before the
+# path (an ``@``, a ``//``). An ARM URL that carries a token is built from these parts, never
+# from the id as it was received.
+_VM_ID = re.compile(r"/subscriptions/([0-9A-Za-z-]{1,64})/resourceGroups/([\w().-]{1,90})"
+                    r"/providers/Microsoft\.Compute/virtualMachines/([\w.-]{1,64})/?", re.IGNORECASE)
+
+
 class Unreadable(RuntimeError):
     """What would say whether the VM is held cannot be read: it is held."""
 
@@ -54,6 +62,38 @@ def safe_path(path: str) -> str:
     if any(seg in (".", "..") for seg in path.split("/")):
         raise ValueError(f"an ARM resource path that walks its segments (. or ..): {path!r}")
     return path
+
+
+# A path under ARM's root, whatever its scope (a role definition can be the tenant's): it starts
+# with "/", and nothing in it can end the path or come before it (SEC8).
+_ARM_UNDER_ROOT = re.compile(r"(?:/[^/?#%@\\\s]+)+")
+
+
+def arm_relative(path) -> str:
+    """``path`` if appended to ``https://management.azure.com`` it stays a path of that host —
+    it starts with "/", carries no ``@ ? # %``, backslash or space, no ``.``/``..`` segment, only
+    printable characters — else ValueError (SEC8). For an id read from a listing, which has no
+    parts of a VM to rebuild it from."""
+    if not isinstance(path, str) or not _ARM_UNDER_ROOT.fullmatch(path) or not path.isprintable() \
+            or any(seg in (".", "..") for seg in path.split("/")):
+        raise ValueError(f"not a path under Azure Resource Manager: {str(path)[:200]!r}")
+    return path
+
+
+def vm_parts(resource_id) -> tuple[str, str, str]:
+    """(subscription, resource group, name) of a VM's ARM id — ValueError when the id has not
+    exactly that form (SEC8): a URL is then built from the parts, never from the id itself."""
+    m = _VM_ID.fullmatch(resource_id) if isinstance(resource_id, str) else None
+    if m is None or any(part in (".", "..") for part in m.groups()):
+        raise ValueError(f"not a VM resource id: {str(resource_id)[:200]!r}")
+    sub, rg, name = m.groups()
+    return sub, rg, name
+
+
+def vm_path(resource_id) -> str:
+    """The ARM path of a VM, rebuilt from the parts of its id (``vm_parts``)."""
+    sub, rg, name = vm_parts(resource_id)
+    return f"/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/virtualMachines/{name}"
 
 
 def _id(obj) -> str:

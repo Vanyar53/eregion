@@ -120,6 +120,10 @@ class ReadersMixin:
                 params: dict | None = {"api-version": "2022-04-01"}
                 perms: list = []
                 while url:                     # nextLink: a long role list spans pages
+                    # The token goes to Azure Resource Manager only (SEC8): a next page
+                    # elsewhere is refused, never followed.
+                    if not url.startswith("https://management.azure.com/"):
+                        return {"ok": False, "error": f"{scope_rg}: next page outside Azure Resource Manager, refused"}
                     r = requests.get(url, headers={"Authorization": f"Bearer {token}"},
                                      params=params, timeout=20)
                     if not r.ok:

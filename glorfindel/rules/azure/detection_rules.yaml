@@ -296,6 +296,40 @@ rules:
       | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
                 CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId
 
+  # Notre propre identité surveillée (SID1, #409). Le rôle de réponse tient runCommand pour
+  # la coupure des sessions d'une isolation (ss -K) ; sur un hôte, une identité managée
+  # partagée par la watch, la console et le bot. La règle garde chaque Run Command de
+  # l'heure, avec l'heure de sa première ligne (Started), et projette WatchedCaller :
+  # l'adaptateur (glorfindel/providers/azure/own_run_command.py) écarte la ligne d'un autre
+  # appelant, et celle de Glorfindel quand elle est la coupure d'une isolation qu'il a
+  # enregistrée sur cette VM (drains_at de l'état, une fenêtre de quelques minutes, une
+  # coupure pour une opération). Sinon : critique, la raison dite — un état illisible
+  # compris (A0). Les échecs sont gardés : un essai refusé de notre identité en dit autant.
+  # Décidée par le code, sans modèle, sans action sur la VM (comme AL1).
+  - name: run-command-by-glorfindel-outside-isolation
+    description: >
+      Une commande lancée sur une VM par Run Command sous l'identité de Glorfindel, hors de
+      la coupure des sessions d'une isolation qu'il a décidée — T1651 (Cloud Administration
+      Command). Son identité est peut-être entre d'autres mains (l'hôte de Glorfindel).
+      Exclusion : aucune ; Run Command par un autre appelant n'est pas de cette règle.
+    enabled: true
+    source: azure_activity
+    ttp: T1651
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 1200
+    query: |
+      AzureActivity
+      | where TimeGenerated > ago(1h)
+      | where OperationNameValue =~ "MICROSOFT.COMPUTE/VIRTUALMACHINES/RUNCOMMAND/ACTION"
+      | extend CallerAppId = tostring(parse_json(Claims).appid),
+               CallerObjectId = tostring(parse_json(Claims)["http://schemas.microsoft.com/identity/claims/objectidentifier"])
+      // One row per operation, its latest line, and when its first line was written.
+      | summarize arg_max(TimeGenerated, *), Started = min(TimeGenerated) by CorrelationId, OperationNameValue, _ResourceId
+      | extend WatchedCaller = "glorfindel"
+      | project TimeGenerated, Started, OperationNameValue, ActivityStatusValue, Caller, CallerIpAddress,
+                CallerAppId, CallerObjectId, _ResourceId, ResourceGroup, CorrelationId, WatchedCaller
+
   # ── Identités : les journaux d'Entra ID (AuditLogs, AADServicePrincipalSignInLogs, C2) ──
   # Détection seule : une détection sur Entra ID n'entraîne JAMAIS d'action autonome —
   # `decide` construit la décision par le code, sans appel au modèle (aucun UPN ne part au

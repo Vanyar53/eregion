@@ -963,7 +963,14 @@ def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
                  "écrite par un autre appelant : une isolation ou un blocage a pu être levé. "
                  "Vérifier l'état réel de l'isolation ou du blocage sur Azure avant tout.")
         steps.append("Vérifier sur Azure que l'isolation ou le blocage est toujours en place.")
-    if norm.get("glorfindel_identity"):
+    if row.get("GlorfindelRunCommand") and not row.get("OmittedOperations"):
+        # SID1: its own Run Command outside a drain it recorded — the card says why (a
+        # summary card names its operations below, the VM of each).
+        from glorfindel.providers.azure.own_run_command import describe
+        said, more = describe(row)
+        what += said
+        steps += more
+    elif norm.get("glorfindel_identity"):
         what += (" L'identité de Glorfindel a fait une opération qu'il ne fait pas, ou sur une "
                  "ressource qui n'est pas à lui : ses identifiants sont peut-être entre "
                  "d'autres mains.")
@@ -980,6 +987,9 @@ def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
             what += " Au moins une écrit une règle gérée par Glorfindel."
         if any(o.get("GlorfindelIdentity") for o in omitted):
             what += " Au moins une est faite sous l'identité de Glorfindel."
+        if any(o.get("GlorfindelRunCommand") for o in omitted):
+            what += (" Au moins une est une commande lancée par Run Command hors d'une isolation "
+                     "décidée par Glorfindel.")
     steps.append("Annuler le changement s'il n'est pas légitime ; s'il l'est (un pipeline connu), "
                  "l'exclure dans la couche du client.")
     return what, steps

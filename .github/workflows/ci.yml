@@ -105,3 +105,59 @@ jobs:
         # A test still running after 8 min (the whole step takes 3-6) writes every thread's
         # stack to the log: a hang says where it waits before the job's bound cancels it.
         run: python -m pytest tests/unit/test_glorfindel.py tests/unit/test_readiness.py tests/unit/test_reassert.py tests/unit/test_invariants.py tests/unit/test_invariant_regressions.py -q -o faulthandler_timeout=480
+
+  # CI4 (#389): the Terraform tests of the repository (infra/terraform/tests/*.tftest.hcl — ID1,
+  # G1), planned against mock providers: no Azure identifier, no token, nothing applied. Every
+  # provider package comes from the registry and is checked against the hashes of its module's
+  # committed lock file (-lockfile=readonly: a package that does not match, or a provider the
+  # lock does not list, fails init). Orodruin's and Glorfindel's host modules have no test yet:
+  # their configuration is validated against their own lock the same way.
+  terraform-test:
+    name: terraform test (mock providers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # No call to HashiCorp's checkpoint service (version and advisory lookups): nothing leaves
+      # the job but the registry downloads the lock checks.
+      CHECKPOINT_DISABLE: "1"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+      # Terraform at the version pinned here, from HashiCorp's apt repository. Its key is
+      # trusted only if it is HashiCorp's, as the canary does (canary-azurerm.yml): the
+      # fingerprint of « Linux repositories and packages », https://www.hashicorp.com/en/trust/security
+      # (read on 2026-10-28). Otherwise the job fails, nothing installed.
+      - name: Install Terraform (HashiCorp's apt repository, pinned)
+        env:
+          HASHICORP_APT_FPR: D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
+          TERRAFORM_VERSION: 1.14.9-1
+        run: |
+          key="$RUNNER_TEMP/hashicorp.gpg"
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --batch --yes --dearmor -o "$key"
+          # One primary key, and that fingerprint is its own — a subkey's fpr line has the same form.
+          if ! gpg --batch --show-keys --with-colons "$key" \
+               | awk -F: -v f="$HASHICORP_APT_FPR" '$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'; then
+            echo "::error::HashiCorp's apt key is not the one primary key ${HASHICORP_APT_FPR} — Terraform not installed."
+            exit 1
+          fi
+          ring="$RUNNER_TEMP/hashicorp.kbx"
+          gpg --batch --no-default-keyring --keyring "$ring" --import "$key"
+          gpg --batch --no-default-keyring --keyring "$ring" --export "$HASHICORP_APT_FPR" \
+            | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"
+          terraform version
+
+      - name: Terraform test — Celebrimbor (mock providers)
+        run: |
+          terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir=infra/terraform test -no-color
+
+      - name: Terraform validate — Orodruin, Glorfindel's host
+        run: |
+          for m in orodruin glorfindel-host; do
+            terraform -chdir="infra/$m" init -backend=false -lockfile=readonly -input=false -no-color
+            terraform -chdir="infra/$m" validate -no-color
+          done

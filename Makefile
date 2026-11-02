@@ -107,7 +107,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui console-url \
 	annatar-shell glorfindel-shell \
 	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
-	canary-jit celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
+	canary-jit providers-lock celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
 	celebrimbor-logs-plan celebrimbor-logs-up \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
@@ -178,6 +178,7 @@ help:
 	@echo "  make glorfindel-shell   🔵 Interactive shell in eregion-glorfindel"
 	@echo ""
 	@echo "Celebrimbor (infra de test Terraform, jetable)"
+	@echo "  make providers-lock [MODULE=]              Monter les providers verrouillés (CI4) : diff relu, puis une PR"
 	@echo "  make celebrimbor-plan [TOPO=] [INSTANCE=]   Plan (lecture seule, pas d'apply)"
 	@echo "  make celebrimbor-up   [TOPO=] [INSTANCE=] [YES=1]  Apply baseline (+ topos) ; plan montré et confirmé, sauf YES=1"
 	@echo "  make celebrimbor-down TOPO=x                Détruit UNE topo (baseline préservé)"
@@ -480,8 +481,25 @@ glorfindel-shell: build-glorfindel
 canary-jit:
 	@infra/canary/jit-terraform/run.sh
 
+# CI4 (#389) : chaque module garde ses providers verrouillés dans le dépôt (.terraform.lock.hcl :
+# les versions et leurs empreintes, linux_amd64 et darwin). `init` installe ce que le verrou dit et
+# vérifie chaque paquet ; il ne monte plus rien seul. Monter un provider est un geste voulu :
+# `make providers-lock`, relire le diff, une PR, puis le plan de Jonathan avant l'apply (comme les
+# dépendances Python, M-3). Le canari (infra/canary/) reste, lui, sur le dernier azurerm : c'est son
+# rôle. MODULE=terraform|glorfindel-host|orodruin : un seul module, sinon les trois.
+TF_MODULES   := terraform glorfindel-host orodruin
+TF_PLATFORMS := -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64
+providers-lock:
+	@case "$(MODULE)" in ""|terraform|glorfindel-host|orodruin) ;; *) echo "MODULE invalide : terraform, glorfindel-host ou orodruin"; exit 1;; esac
+	@for m in $(or $(MODULE),$(TF_MODULES)); do \
+	   echo "== infra/$$m"; \
+	   terraform -chdir=infra/$$m init -backend=false -upgrade -input=false >/dev/null && \
+	   terraform -chdir=infra/$$m providers lock $(TF_PLATFORMS) || exit 1; \
+	 done
+	@echo "  Relis git diff -- 'infra/*/.terraform.lock.hcl', puis une PR ; le plan avant l'apply."
+
 celebrimbor-init:
-	$(TF) init -upgrade
+	$(TF) init
 
 celebrimbor-plan: celebrimbor-init
 	@$(TF) workspace select -or-create $(INSTANCE)
@@ -541,7 +559,7 @@ celebrimbor-logs-plan celebrimbor-logs-up:
 	   echo "!! $@ : instance '$(INSTANCE)' refusée — les paramètres de l'abonnement et du tenant ne sont posés que par l'instance canonique (default)."; \
 	   exit 1; \
 	 fi
-	@$(TF) init -upgrade
+	@$(TF) init
 	@$(TF) workspace select default
 	@$(TF) $(if $(filter celebrimbor-logs-up,$@),apply$(if $(YES), -auto-approve),plan) $(LOGS_TARGETS)
 
@@ -613,7 +631,7 @@ CONSOLE_TOKEN  = $$(t=$$($(call HOST_ENV_VALUE,EREGION_CONSOLE_TOKEN)); [ -n "$$
 NO_CONSOLE_TOKEN = $(HOST_ENV) : aucun jeton de la console (EREGION_CONSOLE_TOKEN, ou son ancien nom GLORFINDEL_WARROOM_TOKEN)
 
 glorfindel-host-init:
-	$(HOST_TF) init -upgrade
+	$(HOST_TF) init
 
 glorfindel-host-plan: glorfindel-host-init
 	$(HOST_TF) plan $(HOST_VARS)
@@ -826,7 +844,7 @@ ORO_BENCH_RG   = $(or $(shell sed -n 's/^EREGION_BENCH_RG=//p' $(ORO_ENV) 2>/dev
 ORO_CHANNEL    = $(or $(CHANNEL),$(shell $(ORO_TF) output -no-color -raw channel_url 2>/dev/null | grep -E '^https://'),$(shell sed -n 's/^EREGION_EXERCISE_CHANNEL=//p' $(ORO_ENV) 2>/dev/null))
 
 orodruin-init:
-	$(ORO_TF) init -upgrade
+	$(ORO_TF) init
 
 # SEC7 (relecture de SEC5) : sans l'état de glorfindel-host lisible sur ce poste, l'identité et le
 # sous-réseau de H0 seraient vides, et le plan retirerait la lecture du canal par la watch et

@@ -946,6 +946,40 @@ verrou, ne couvre pas le modèle par défaut, n'a pas de référence, ou est à 
 Les deux images sont construites et éprouvées en CI à chaque PR qui touche le verrou (CI1,
 ci-dessous) : un verrou cassé échoue dans la PR.
 
+### Les providers de Terraform, verrouillés (CI4, #389)
+
+Décidé par Jonathan le 31/10, sur le modèle du verrou Python. Chaque module (`infra/terraform`,
+`infra/glorfindel-host`, `infra/orodruin`) garde son verrou dans le dépôt,
+`.terraform.lock.hcl`. Celui-ci fixe la version de chaque provider et ses empreintes, pour Linux
+(amd64) et les deux Mac.
+
+- **`init` ne monte plus rien seul** : `celebrimbor-init`, `glorfindel-host-init`,
+  `orodruin-init` et `annatar init` installent ce que dit le verrou et vérifient chaque paquet. Avant, ils
+  faisaient `init -upgrade`, et les providers montaient à chaque plan.
+- **Monter un provider est un geste voulu** : `make providers-lock [MODULE=terraform|glorfindel-host|orodruin]`
+  (`init -upgrade`, puis `terraform providers lock` sur les trois plateformes). Ensuite : relire
+  `git diff -- 'infra/*/.terraform.lock.hcl'`, ouvrir une PR, et le plan de Jonathan avant l'apply.
+- **La CI** (`ci.yml`, job `terraform-test`) installe Terraform à la version épinglée, avec la clé
+  de HashiCorp vérifiée par son empreinte, comme le canari. Elle fait ensuite
+  `init -backend=false -lockfile=readonly` sur chaque module : un paquet dont l'empreinte ne
+  correspond pas, ou un provider absent du verrou, fait échouer `init` (vérifié le 02/11). Enfin,
+  `terraform test` sur Celebrimbor (ID1, G1), et `validate` sur les deux autres modules, qui
+  n'ont pas encore de test. Aucun identifiant Azure : uniquement de faux providers.
+- **Le canari** (`infra/canary/`) n'est pas concerné : il teste chaque jour le dernier azurerm.
+  C'est son rôle.
+- **Une fois, sur un poste où ces modules ont déjà servi** : les verrous y étaient locaux et
+  ignorés par Git. Le `pull` qui les apporte **les écrase sans rien dire** : Git remplace un fichier
+  non suivi et ignoré sans prévenir, en avance rapide. Avant de tirer, compare donc les versions de
+  ton verrou local à celles qui arrivent :
+  `grep -A1 '^provider' infra/terraform/.terraform.lock.hcl infra/glorfindel-host/.terraform.lock.hcl infra/orodruin/.terraform.lock.hcl`.
+  Les versions commitées sont celles du banc, lues le 02/11 dans ces mêmes verrous locaux :
+  azurerm 4.81.0, null 3.3.2, et azapi 2.13.0 (G1). Si un verrou local dit plus récent (un
+  `init -upgrade` lancé depuis), l'état du module a pu être écrit par ce provider plus récent :
+  monte d'abord le verrou commité (`make providers-lock`, une PR), puis tire.
+- **Le check est requis** : Jonathan rend « terraform test (mock providers) » requis dans la
+  protection de `main`, comme les autres jobs de la CI. Sans cela, une PR rouge sur ce job reste
+  fusionnable.
+
 ---
 
 ## La CI des images (CI1, #267, 29/10)
@@ -1320,7 +1354,8 @@ se fait avec Jonathan : rien ici n'a été planifié ni appliqué. Les noms sont
   que les catégories envoyées sont exactement celles que lisent les règles livrées ; un lot qui lira
   une autre table ajoutera sa catégorie avec sa règle.
 - Le contrat planifié contre un faux azurerm, sans Azure : `terraform -chdir=infra/terraform test`
-  (`infra/terraform/tests/diagnostic_settings.tftest.hcl`, après un `init -backend=false`).
+  (`infra/terraform/tests/diagnostic_settings.tftest.hcl`, après un `init -backend=false`). La CI
+  le lance à chaque PR (job `terraform-test`, CI4).
 
 ### Les droits
 

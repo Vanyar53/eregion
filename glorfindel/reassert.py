@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timezone
 
 from glorfindel.reassert_cards import (
-    drift_baseline, drift_over, drift_said, episode, narrow_drift, new_pass, say_bypass, say_left,
+    drift_baseline, drift_meet, drift_over, drift_said, episode, narrow_drift, new_pass, say_bypass, say_left,
     say_unreadable_states, say_unverified, unrecorded, unverified_over, unverified_released,
 )
 from glorfindel.reassert_quarantine import _report_altered_quarantines
@@ -349,7 +349,8 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
             drift_over(ref or vm, ip)            # its rules back, an allow passes them (L2C, review)
         return
     said, now_is = verification, _situation(verification)
-    if (b.get("drift_alerted_at") and not _worse(drift_baseline(ref or vm, ip, b.get("drift_said")), now_is)
+    baseline = drift_baseline(ref or vm, ip, b.get("drift_said"))
+    if (b.get("drift_alerted_at") and not _worse(baseline, now_is)
             and drift_said(ref or vm, ip, _alert_id(vm, rid, ip))):
         # One alert per disappearance (see isolations) — but said again when it worsens: a
         # NIC held turned open or unknown, a rule more gone. Acknowledged, a card « reste
@@ -358,6 +359,11 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         # gone again, is said (L1Q).
         narrow_drift(ref or vm, ip, now_is)
         return
+    if b.get("drift_alerted_at"):
+        # Worse on one side, better on another: what got better is the baseline before the card
+        # is written — its write refused (a full disk), the next return to what was said still
+        # reads worse, and is said (L1, the nightly machine after SEC13).
+        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is))
     if b.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
         reason = (_block_drift(ip, vm, verification, again=bool(b.get("reasserted_at")))
                   + f" Glorfindel ne le repose pas : `glorfindel unblock {ip} {rid} --yes` si c'est voulu, "

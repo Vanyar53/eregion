@@ -447,8 +447,12 @@ le fichier porte seul est la parole de qui l'a écrit, et la fenêtre est alors 
 lu, changé et écrit sous un `flock`, par un fichier temporaire à lui (`mkstemp`) : la watch,
 `glorfindel respond` et la console peuvent lire les fenêtres en même temps. Une watch arrêtée plus de
 5 min pendant un run local voit sa fenêtre en retard : refusée, ses cycles comptent comme réels, le
-sens sûr. Au premier passage après cette version, les fenêtres déjà tirées ne sont pas au registre :
-vues comme locales, les plus anciennes sont refusées (des exercices déjà passés).
+sens sûr. **La transition** : une copie tirée avant cette version (une fenêtre encore ouverte au
+déploiement) n'est pas au registre. Le tirage la retire une fois, par `rewrite_refusal` comme toute
+autre, la date de la création que donne la liste — jamais celle que porte la copie —, puis la note :
+la fenêtre redevient celle du canal, et un exercice à cheval sur un déploiement reste mesuré. Ce
+téléchargement unique est borné par `MAX_DOWNLOADS` et la borne cumulée du tirage. Une copie qui
+n'est plus celle du canal (réécrite sur l'hôte) reste refusée, donc locale.
 
 Limites qui restent, assumées : une suite de fenêtres neuves, chacune écrite au moment où elle
 commence, couvre une VM aussi longtemps que son rédacteur le veut — par le canal comme sur l'hôte ;

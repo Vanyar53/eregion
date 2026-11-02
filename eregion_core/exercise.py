@@ -298,6 +298,18 @@ def note_pulled(registry: Path | None, window: dict) -> None:
         print(f"[exercise] window {window.get('run_id')}: its pull not written down ({e})")
 
 
+def noted_pulled(registry: Path) -> set[str]:
+    """The run_ids the pull wrote down as pulled from the channel (``note_pulled``) — empty when
+    the record cannot be read: every copy is then pulled again, within the pull's bounds."""
+    try:
+        seen = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else {}
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(seen, dict):
+        return set()
+    return {rid for rid, v in seen.items() if isinstance(v, dict) and v.get("channel")}
+
+
 def _observe(windows: list[tuple[Path, dict]], now: datetime, registry: Path) -> dict[str, str]:
     """Write down the windows seen for the first time, and the closure of those seen open;
     return why each is not believed, by path (SEC14, V-20). A window counts as pulled from the

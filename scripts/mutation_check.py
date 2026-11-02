@@ -7493,6 +7493,17 @@ MUTANTS += [
      "        with contextlib.nullcontext():\n"),
 ]
 TESTS.update({"M3078": "tests/unit/test_injector_guards.py", "M3079": "tests/unit/test_annatar_run_exit.py"})
+# SEC14, second review: a copy the record never noted is pulled once again, then written down.
+MUTANTS += [
+    ("M3080", "a window open across the upgrade, never written down, is never pulled again: held as local (V-20)",
+     "eregion_core/exercise_channel.py",
+     '        unnoted = noted is not None and local.exists() and name[:-len(".json")] not in noted\n',
+     "        unnoted = False\n"),
+    ("M3081", "a copy pulled again keeps the channel_created it carried on disk (V-20)",
+     "eregion_core/exercise_channel.py", "        stamped = _stamped(body, blob, None if unnoted else local)\n",
+     "        stamped = _stamped(body, blob, local)\n"),
+]
+TESTS.update({"M3080": "tests/unit/test_exercise.py", "M3081": "tests/unit/test_exercise.py"})
 
 
 # SEC9 (#415): the indicators' entries the injectors give — a run's T0, the list of runs, a fault's

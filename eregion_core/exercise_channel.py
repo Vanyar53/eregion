@@ -272,10 +272,12 @@ def _created(blob) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _stamped(body: bytes, blob, local: Path) -> bytes:
+def _stamped(body: bytes, blob, local: Path | None) -> bytes:
     """The window as pulled, with ``CREATED`` set to when its blob was created — the value of
-    its first pull, kept when the window comes again (closed), else the listing's (V-20). A
-    body that is no JSON object is written as it came: the watch refuses it anyway."""
+    its first pull, kept when the window comes again (closed), else the listing's (V-20). Without
+    ``local`` (a copy the watch never wrote down as pulled), the listing's alone: what a copy on
+    disk says is nobody's word. A body that is no JSON object is written as it came: the watch
+    refuses it anyway."""
     import json
 
     try:
@@ -286,7 +288,8 @@ def _stamped(body: bytes, blob, local: Path) -> bytes:
         return body
     first = ""
     try:
-        first = str(json.loads(local.read_text(encoding="utf-8")).get(CREATED) or "")
+        if local is not None:
+            first = str(json.loads(local.read_text(encoding="utf-8")).get(CREATED) or "")
     except (OSError, ValueError, AttributeError):
         pass
     window[CREATED] = first or _created(blob)
@@ -346,15 +349,20 @@ def _pull_windows(directory: Path, url: str, headers: dict, get, say, budget: Bu
                   written: list[str], seen: Path | None = None) -> None:
     import json
 
-    from eregion_core.exercise import note_pulled  # exercise imports this module lazily
+    from eregion_core.exercise import note_pulled, noted_pulled  # exercise imports this lazily
     downloads = 0
+    # SEC14 review (V-20): a copy here the watch never wrote down as pulled — one pulled before
+    # this version, a window still open at the first pass — is pulled once again, through
+    # rewrite_refusal like any other, then written down. Only then is it the channel's.
+    noted = noted_pulled(seen) if seen is not None else None
     for blob in _blobs(get, url, headers, delimiter="/", say=say, budget=budget):
         name = blob.findtext("Name") or ""
         if not _SAFE_NAME.match(name):  # a campaign's blob (a ``/``) or a path: never a window
             continue
         modified = blob.findtext("Properties/Last-Modified")
         local = directory / name
-        if local.exists() and modified:
+        unnoted = noted is not None and local.exists() and name[:-len(".json")] not in noted
+        if local.exists() and modified and not unnoted:
             remote_ts = parsedate_to_datetime(modified).timestamp()
             if remote_ts <= local.stat().st_mtime:
                 continue
@@ -396,7 +404,7 @@ def _pull_windows(directory: Path, url: str, headers: dict, get, say, budget: Bu
                 continue
         _refused_rewrites.pop(key, None)
         tmp = local.with_suffix(".json.tmp")
-        stamped = _stamped(body, blob, local)
+        stamped = _stamped(body, blob, None if unnoted else local)
         tmp.write_bytes(stamped)
         tmp.replace(local)  # atomic: the watch never reads half a window
         written.append(name)

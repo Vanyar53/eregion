@@ -335,3 +335,58 @@ def test_the_record_keeps_every_writers_windows_between_processes(tmp_path):
                               env=env) for n in range(6)]
     assert [pr.wait(timeout=120) for pr in procs] == [0] * 6
     assert len(json.loads(reg.read_text())) == 6 * 15
+
+
+
+# ── SEC14, second review: the transition — a copy pulled before the record existed ─────────────
+
+def _pulled_before(tmp_path, window, *, forged_created=None):
+    """A window in the channel, and its copy already on this host as an older version pulled it
+    (its channel_created stamped, its file newer than the blob), never written down."""
+    from eregion_core import exercise_channel
+    from tests.unit.fake_container import CRED, URL, FakeContainer
+    c, d = FakeContainer(), tmp_path / "x"
+    c.clock = _at(-1)                                   # the blob written as the run opened
+    exercise_channel.publish(window, channel=URL, credential=CRED, put=c.put)
+    assert exercise_channel.pull(d, channel=URL, credential=CRED, get=c.get) == 1   # no record then
+    if forged_created:
+        copy = json.loads((d / f"{window['run_id']}.json").read_text())
+        _write(d, {**copy, "channel_created": forged_created})
+    return c, d, CRED, URL
+
+
+def test_a_window_open_across_the_upgrade_is_pulled_once_again_then_believed(tmp_path, seen_record):
+    from eregion_core import exercise_channel
+    c, d, cred, url = _pulled_before(tmp_path, _local("r1", start=_at(0)))
+    assert not seen_record.exists()
+    gets = len(c.gets)
+    assert exercise_channel.pull(d, channel=url, credential=cred, get=c.get, seen=seen_record) == 1
+    assert len(c.gets) == gets + 1 and json.loads(seen_record.read_text())["r1"]["channel"] is True
+    assert [w["run_id"] for w in exercise.load_windows(d, now=_at(90), seen=seen_record)] == ["r1"]
+    # Written down: the next pull downloads it no more.
+    assert exercise_channel.pull(d, channel=url, credential=cred, get=c.get, seen=seen_record) == 0
+    assert len(c.gets) == gets + 1
+
+
+def test_a_copy_pulled_again_takes_the_listings_creation_never_its_own(tmp_path, seen_record):
+    """The copy on disk said a channel_created of its own (written on the host): the record takes
+    the listing's, the one the channel gives."""
+    from eregion_core import exercise_channel
+    c, d, cred, url = _pulled_before(tmp_path, _local("r1", start=_at(0)), forged_created=_at(-500).isoformat())
+    exercise_channel.pull(d, channel=url, credential=cred, get=c.get, seen=seen_record)
+    entry = json.loads(seen_record.read_text())["r1"]
+    assert entry["seen"] == c.created["r1.json"].isoformat() != _at(-500).isoformat()
+    assert json.loads((d / "r1.json").read_text())["channel_created"] == entry["seen"]
+
+
+def test_a_copy_that_is_not_the_channels_stays_local(tmp_path, seen_record):
+    """Rewritten on the host (a target added): rewrite_refusal keeps it as it is, never written
+    down — local, and dated back, refused."""
+    from eregion_core import exercise_channel
+    c, d, cred, url = _pulled_before(tmp_path, _local("r1", start=_at(0)))
+    copy = json.loads((d / "r1.json").read_text())
+    _write(d, {**copy, "targets": [VM.lower(), OTHER.lower()]})
+    assert exercise_channel.pull(d, channel=url, credential=cred, get=c.get, seen=seen_record,
+                                 say=lambda *_: None) == 0
+    assert not seen_record.exists() or "channel" not in json.loads(seen_record.read_text()).get("r1", {})
+    assert exercise.load_windows(d, now=_at(90), seen=seen_record) == []

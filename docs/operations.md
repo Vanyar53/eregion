@@ -95,7 +95,7 @@ glorfindel reset <resource_id> --from-azure  # source de vérité = Azure (sans 
 glorfindel snapshot <resource_id> --yes      # backup on-demand RSV (setup scénario, ~5-20min)
 glorfindel restore <resource_id> --yes       # Azure Backup fire-and-forget ; point = le plus récent AVANT
                                              # le début de l'attaque sur CETTE VM : --before <ISO8601>
-                                             # (UTC sans décalage), sinon le moment de la carte en attente
+                                             # (UTC sans décalage), sinon le moment de la 1re carte en attente
                                              # de la VM (sa 1re détection, ou son isolation si avant ; pour
                                              # une carte d'exercice, l'attack_started de son run, jamais
                                              # après sa 1re détection — jamais runs/ sur un incident réel,

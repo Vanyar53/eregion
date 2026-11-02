@@ -96,9 +96,19 @@ def card_run(esc: dict | None) -> str:
     return str(esc.get("exercise_run") or "") if esc.get("source") == "exercise" else ""
 
 
+def _first_seen(esc: dict) -> float:
+    """A card's first detection, as an epoch — +inf when it says none (sorted last)."""
+    try:
+        return datetime.fromisoformat(parse_moment(str(esc.get("first_seen") or esc.get("timestamp") or ""))).timestamp()
+    except ValueError:
+        return float("inf")
+
+
 def card_of(resource_id: str) -> dict | None:
-    """The card a restore of this VM answers, among the pending ones: its restore card, else
-    its earliest card — or None. For `glorfindel restore` without --before."""
+    """The card a restore of this VM answers, among its pending ones: the one first detected,
+    whatever it holds — its first detection is the earliest moment the defender recorded for
+    the VM, safer than the restore card's own (written later) — or None. For `glorfindel
+    restore` without --before."""
     from glorfindel import escalations
     want = str(resource_id or "").rstrip("/").lower()
     try:
@@ -106,8 +116,7 @@ def card_of(resource_id: str) -> dict | None:
                  if str(e.get("resource_id") or "").rstrip("/").lower() == want]
     except Exception:            # an unreadable store: no card, the operator gives the moment
         return None
-    pool = [e for e in cards if e.get("action") == "restore_from_backup"] or cards
-    return min(pool, key=lambda e: str(e.get("first_seen") or e.get("timestamp") or "")) if pool else None
+    return min(cards, key=_first_seen) if cards else None
 
 
 def proposed_moment(resource_id: str, esc: dict | None = None, runs_dir="runs",
@@ -120,7 +129,7 @@ def proposed_moment(resource_id: str, esc: dict | None = None, runs_dir="runs",
     (the card is written after the isolation and the autonomous snapshot) —, the attack began
     before, go back if needed; "": nothing says when — the operator gives it. A real card never
     reads runs/ (SEC8), and the why says so. `read_runs=False`: runs/ is not read (the bot,
-    short of time)."""
+    short of time) — and the why says « non lu », never « no line »."""
     first = str((esc or {}).get("first_seen") or (esc or {}).get("timestamp") or "")
     try:
         before = parse_moment(first)
@@ -132,7 +141,8 @@ def proposed_moment(resource_id: str, esc: dict | None = None, runs_dir="runs",
                                      not_after=datetime.fromisoformat(before).timestamp())
         if found:
             return {"before": found, "source": "exercise", "why": why}
-    note = (f" ; aucune ligne attack_started du run {run} admise avant elle" if run else
+    note = ((f" ; aucune ligne attack_started du run {run} admise avant elle" if read_runs else
+             f" ; runs/ non lu pour le run {run} (le temps a manqué)") if run else
             " ; incident réel : aucune ligne de runs/ n'en donne le moment") if esc else ""
     isolated_at, isolated = isolation_time(resource_id)
     if before and isolated_at is not None and isolated_at < datetime.fromisoformat(before).timestamp():

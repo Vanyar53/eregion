@@ -1937,7 +1937,8 @@ def _restore_before(resource_id: str, before: str | None) -> tuple[str, str]:
     ("", what to do) when nothing says when the attack on this VM began (SEC4c).
 
     --before wins (UTC when it has no offset). Otherwise the moment the console and the bot
-    propose for this VM's card (glorfindel/restore_plan.py, `card_of`, `proposed_moment`): the
+    propose for this VM's first-detected pending card (glorfindel/restore_plan.py, `card_of`,
+    `proposed_moment`): the
     earliest the defender recorded — the card's first detection, the VM's isolation —, or, for
     an exercise card, the attack_started of its run in runs/, never after its first detection.
     A line of runs/ never gives the moment of a real incident (SEC8); no card, no moment."""

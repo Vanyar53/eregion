@@ -408,6 +408,41 @@ def test_the_restore_command_takes_the_card_s_moment_not_the_channel_s(tmp_path,
     assert started == [_iso(first)] and "incident réel" in " ".join(out.output.split())
 
 
+def _pending_card(rid: str, action: str, first: float, **kw) -> str:
+    from glorfindel import escalations
+    esc_id = escalations.record(f"rule-{action}-0123abcd", rid, action, "destructive_action", "r",
+                                ttp="T1486", **kw)
+    store = [json.loads(x) for x in escalations._STORE.read_text().splitlines()]
+    for e in store:
+        if e["id"] == esc_id:
+            e["first_seen"] = _iso(first)
+    escalations._STORE.write_text("\n".join(json.dumps(e) for e in store) + "\n")
+    return esc_id
+
+
+def test_the_restore_command_takes_the_vm_s_first_detected_card(tmp_path, monkeypatch):
+    """Several pending cards on the VM: the one first detected, whatever it holds — not the
+    restore card, written later: the earliest moment the defender recorded."""
+    from glorfindel import restore_plan
+    monkeypatch.setattr("glorfindel.actions._load_isolation_state", lambda rid: None)
+    now = time.time()
+    _pending_card(VM, "restore_from_backup", now - 1800)
+    first = _pending_card(VM, "isolate_vm", now - 5400)
+    _pending_card(VM.replace("/web", "/web-02"), "isolate_vm", now - 9000)       # another VM's
+    assert restore_plan.card_of(VM)["id"] == first
+    assert restore_plan.proposed_moment(VM, restore_plan.card_of(VM))["before"] == _iso(now - 5400)
+
+
+def test_runs_not_read_is_said_as_not_read(monkeypatch):
+    """The bot, short of time, does not read runs/: the field says « non lu », never that no
+    line was admitted."""
+    from glorfindel import restore_plan
+    monkeypatch.setattr("glorfindel.actions._load_isolation_state", lambda rid: None)
+    drill = {"first_seen": _iso(time.time() - 600), "source": "exercise", "exercise_run": "20261102T100000Z"}
+    why = restore_plan.proposed_moment(VM, drill, read_runs=False)["why"]
+    assert "non lu" in why and "aucune ligne" not in why
+
+
 # ── 4. The workspace queried is the config's ────────────────────────────────────────────
 
 def _config(monkeypatch, *workspaces: str) -> None:

@@ -3048,7 +3048,7 @@ MUTANTS += [
     ("M1007", "a release deployed while its CI still runs (H1)", CD,
      '    if not runs or any(r.get("status") != "completed" for r in runs):', "    if False:"),
     ("M1008", "a release older than what runs deployed over it (H1)", CD,
-     "    if dep_commit and is_ancestor(commit, dep_commit):", "    if False:"),
+     "            if before:\n", "            if False:\n"),
     ("M1009", "a new lock deployed without the harness: the guard never runs (H1)", CD,
      '    if dep_commit and git("diff", "--quiet", dep_commit, commit, "--", LOCK, check=False).returncode == 0:\n'
      "        return\n", "    return\n"),
@@ -7248,7 +7248,7 @@ MUTANTS += [
      '    env["GH_CONFIG_DIR"] = str(Path(os.environ.get("EREGION_AGENT_GH_CONFIG") or DIR / "gh"))\n',
      "    pass\n"),
     ("M2909", "the CD compares commits only: a lower version on a newer commit deployed (SEC12)", HCD,
-     "    if mine and running and mine < running:\n", "    if False:\n"),
+     "        if mine and theirs and mine < theirs:\n", "        if False:\n"),
     ("M2910", "the CD compares versions as text: v0.4.9 taken as newer than v0.4.10 (SEC12)", HCD,
      "    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None\n",
      "    return (m.group(1), m.group(2), m.group(3)) if m else None\n"),
@@ -7273,6 +7273,32 @@ TESTS["M2912"] = (f"{_HCD_T}::test_the_way_back_asked_on_h0_is_verified_deployed
                   f"{_HCD_T}::test_a_cut_way_back_taken_up_leaves_the_release_behind")
 TESTS["M2913"] = f"{_HCD_T}::test_the_tag_rule_covers_the_tag_and_forbids_its_creation_update_and_deletion"
 TESTS["M2914"] = "tests/unit/test_review_verdict.py"
+# SEC12, after its review: never back by a reading that fails (the floor, what runs unreadable, an
+# order git cannot read), the verdict tied to the commit reviewed, no redirection followed with the
+# token. M2975–M2979.
+MUTANTS += [
+    ("M2975", "what runs unreadable (the watch without labels): the release deployed blind (SEC12)",
+     HCD, '    if not dep_ref and not dep_commit:\n        raise Refused("ce qui tourne sur H0 ne se lit pas',
+     '    if False:\n        raise Refused("ce qui tourne sur H0 ne se lit pas'),
+    ("M2976", "two commits git cannot order (merge-base: 128) taken for « not older » (SEC12)", HCD,
+     "            if before is None:\n", "            if before is None and False:\n"),
+    ("M2977", "the floor never read: H0 put back by hand reopens the door to the releases before (SEC12)", HCD,
+     '             (str(floor.get("tag") or ""), str(floor.get("commit") or ""), "déjà déployée sur H0"))\n',
+     "             )\n"),
+    ("M2978", "the check reads the verdict for the head of the moment: a push after the review merged (SEC12)",
+     "scripts/review_verdict.py", "    if head != reviewed:\n", "    if False:\n"),
+    ("M2979", "a redirection followed with the App's JWT in its header, to the host the answer names (SEC12)", ATK,
+     "        return None\n\n\nOPENER",
+     "        return super().redirect_request(req, fp, code, msg, headers, newurl)\n\n\nOPENER"),
+]
+TESTS.update({
+    "M2975": f"{_HCD_T}::test_what_runs_unreadable_is_refused_never_taken_for_older_than_anything",
+    "M2976": f"{_HCD_T}::test_an_order_git_cannot_read_is_refused_never_taken_for_newer",
+    "M2977": (f"{_HCD_T}::test_the_floor_is_the_highest_version_deployed_whatever_runs "
+              f"{_HCD_T}::test_under_the_floor_is_refused_though_what_runs_is_older"),
+    "M2978": "tests/unit/test_review_verdict.py",
+    "M2979": f"{_ATK_T}::test_a_redirection_is_never_followed_with_the_jwt",
+})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

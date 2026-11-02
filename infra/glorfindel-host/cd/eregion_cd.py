@@ -21,9 +21,11 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
   1. the latest release (GitHub's public API, outbound, no token; drafts and pre-releases are
      not in it); nothing to do when it runs already (the three containers), or failed or was
      refused before; a tag seen before on another commit is refused (a moved tag);
-  2. its tag on origin/main, never older than what runs — by its version (vX.Y.Z) or by its
-     commit: refused and said with the mention, unless the way back was asked on H0 for this
-     very tag (`rollback TAG`, SEC12); whether a rule of the repository reserves its tag (its
+  2. its tag on origin/main, never older than what runs nor than the floor (the highest version
+     deployed on this H0, never lowered) — by its version (vX.Y.Z) or by its commit: refused and
+     said with the mention, unless the way back was asked on H0 for this very tag (`rollback TAG`,
+     a published release, never a pre-release; SEC12); what runs unreadable, or two commits git
+     cannot order (merge-base: 128), refused — never taken for newer; whether a rule of the repository reserves its tag (its
      creation, update and deletion) read without a token, and said: seen with the start, in
      orange when absent or unreadable — never a refusal (what GitHub shows without a token is
      to be measured on H0); every check run of its commit
@@ -290,22 +292,58 @@ def version_of(ref: str) -> tuple[int, int, int] | None:
     return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
 
 
-def older(tag: str, commit: str, dep_ref: str, dep_commit: str) -> str:
-    """Why the release is older than what runs — by its version, or by its commit ('' if not)."""
-    mine, running = version_of(tag), version_of(dep_ref)
-    if mine and running and mine < running:
-        return f"{tag} est plus ancienne que {dep_ref}, qui tourne"
-    if dep_commit and is_ancestor(commit, dep_commit):
-        return f"le commit de {tag} ({commit[:12]}) précède ce qui tourne ({dep_ref or dep_commit[:12]})"
-    return ""
+def ancestry(a: str, b: str) -> bool | None:
+    """Whether a is an ancestor of b; None when git cannot say (a commit it does not know: 128)."""
+    rc = git("merge-base", "--is-ancestor", a, b, check=False).returncode
+    return True if rc == 0 else False if rc == 1 else None
+
+
+def raise_floor(state: dict, tag: str, commit: str) -> None:
+    """SEC12: the floor — the highest version deployed on this H0, and its commit. Never lowered:
+    not by a way back, not by `retry`; a release under it is older, whatever runs."""
+    mine = version_of(tag)
+    if not mine or not commit:
+        return
+    floor = state.get("floor") if isinstance(state.get("floor"), dict) else {}
+    theirs = version_of(str(floor.get("tag") or ""))
+    if theirs is None or mine > theirs:
+        state["floor"] = {"tag": tag, "commit": commit}
+
+
+def older(tag: str, commit: str, dep_ref: str, dep_commit: str, floor: dict | None = None) -> tuple[str, bool]:
+    """Why the release is older than what runs, or than the floor — by its version, or by its
+    commit: (why, readable); ('', True) when it is not. readable is False when git cannot order
+    the commits: never taken for « not older »."""
+    mine = version_of(tag)
+    floor = floor if isinstance(floor, dict) else {}
+    marks = ((dep_ref, dep_commit, "qui tourne"),
+             (str(floor.get("tag") or ""), str(floor.get("commit") or ""), "déjà déployée sur H0"))
+    for ref, at, what in marks:
+        theirs = version_of(ref)
+        if mine and theirs and mine < theirs:
+            return f"{tag} est plus ancienne que {ref}, {what}", True
+        if at and at != commit:
+            before = ancestry(commit, at)
+            if before is None:
+                return (f"l'ordre de {tag} ({commit[:12]}) et de {ref or at[:12]} ({what}) ne se lit pas : "
+                        "un commit inconnu du dépôt de H0"), False
+            if before:
+                return f"le commit de {tag} ({commit[:12]}) précède {ref or at[:12]}, {what}", True
+    return "", True
 
 
 def verify(tag: str, commit: str, dep_commit: str, state: dict, dep_ref: str = "", back_to: str = "") -> None:
     if not is_ancestor(commit, "refs/remotes/origin/main"):
         raise Refused(f"son tag n'est pas sur main ({commit[:12]}) : seule une release de main se déploie")
     # SEC12: whoever can publish a release (or mark an old one « latest ») never takes H0 back on
-    # their own: the way back is asked on H0, for this very tag.
-    why = older(tag, commit, dep_ref, dep_commit)
+    # their own: the way back is asked on H0, for this very tag. What runs unreadable, or an order
+    # git cannot read, is never taken for « newer ».
+    if not dep_ref and not dep_commit:
+        raise Refused("ce qui tourne sur H0 ne se lit pas (la watch sans étiquettes) : pas de déploiement sans "
+                      f"savoir d'où l'on part — make glorfindel-host-status, puis make glorfindel-host-start REF={tag}")
+    why, readable = older(tag, commit, dep_ref, dep_commit, state.get("floor"))
+    if not readable:
+        raise Refused(why)
     if why and tag != back_to:
         raise Refused(f"{why} : jamais de retour arrière sans qu'on le demande sur H0 "
                       f"(make glorfindel-host-cd-rollback TAG={tag})")
@@ -1032,6 +1070,8 @@ def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str, 
     proof = proof or {}
     if not why:
         state["outcomes"][tag] = {"result": "deployed", "why": "", "at": int(time.time())}
+        raise_floor(state, tag, git("rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}",
+                                    check=False).stdout.strip())
         save_state(state)
         prune(tag, dep_ref)
         note = proof.get("note") or ""
@@ -1147,6 +1187,9 @@ def run_pass(check: bool = False, back_to: str = "") -> int:
         if not isinstance(release, dict) or release.get("tag_name") != back_to:
             print(f"aucune release publiée sous {back_to} : un retour arrière ne va que vers une release publiée")
             return 1
+        if release.get("prerelease") is not False or release.get("draft"):
+            print(f"{back_to} est une pré-version : un retour arrière ne va que vers une release publiée")
+            return 1
     else:
         release = github("/releases/latest")
     if not release:
@@ -1183,6 +1226,7 @@ def run_pass(check: bool = False, back_to: str = "") -> int:
         say(f"⛔ {tag} refusée : H0 reste sur {dep_ref or 'ce qui tourne'}", why, color=nd.RED, alert=True, url=url)
         return 1
     seen.setdefault(tag, commit)
+    raise_floor(state, dep_ref, dep_commit)        # what runs (deployed by hand, perhaps) raises it too
     save_state(state)
     if commit == dep_commit:
         lagging = sorted(n for n, v in versions().items() if v != tag)

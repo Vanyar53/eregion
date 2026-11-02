@@ -11,6 +11,7 @@ Azure call.
 from __future__ import annotations
 
 import hashlib
+import os
 
 import pytest
 
@@ -1061,6 +1062,37 @@ def test_an_unreadable_state_keeps_the_rule_of_a_recreated_nic(monkeypatch, what
     assert _glorfindel_rules(f) == before
     assert open_flows(_world_view(f), WEB) == held
     orphans = c.find_orphan_rules()
+    assert orphans and all(o["removable"] is False and "état local illisible" in o["kept"] for o in orphans)
+    cards = _orphan_cards()
+    assert cards and all(e["status"] == "pending" and "état local illisible" in e["reason"] for e in cards)
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="permissions: POSIX, not root")
+@pytest.mark.parametrize("mode", [0o300, 0o000], ids=["not-listable", "no-access"])
+@pytest.mark.parametrize("what", ["isolate", "block"])
+def test_a_state_directory_that_cant_be_read_keeps_the_rule_of_a_recreated_nic(monkeypatch, what, mode):
+    """SEC13 (R-07): the state directory itself unreadable — its files can't be listed. Its
+    listing came back empty and read as « no state »: the sweep took the rule that holds the
+    VM. Unknown now, as an unreadable file: every orphan kept, said, nothing written."""
+    f, c, subnet = _world(monkeypatch)
+    if what == "isolate":
+        assert c.isolate_vm(WEB)["status"] == "isolated"
+        directory = actions._ISOLATION_STATE_DIR
+    else:
+        assert c.block_suspicious_ip(ATTACKER, WEB, scope="vm", threat_port=None)["status"] == "blocked"
+        directory = actions._BLOCK_STATE_DIR
+    _recreate_nic(f, WEB, "web-nic", "web-nic-v2")
+    held = open_flows(_world_view(f), WEB)
+    before = _glorfindel_rules(f)
+    os.chmod(directory, mode)
+    try:
+        assert f"{directory.name}/" in actions.unreadable_states()
+        _watch_pass(c, "full_auto")
+        orphans = c.find_orphan_rules()
+    finally:
+        os.chmod(directory, 0o700)
+    assert _glorfindel_rules(f) == before
+    assert open_flows(_world_view(f), WEB) == held
     assert orphans and all(o["removable"] is False and "état local illisible" in o["kept"] for o in orphans)
     cards = _orphan_cards()
     assert cards and all(e["status"] == "pending" and "état local illisible" in e["reason"] for e in cards)

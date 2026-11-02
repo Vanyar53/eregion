@@ -553,3 +553,18 @@ def test_the_default_cache_path_follows_its_redirection(tmp_path, monkeypatch):
     target = tmp_path / "elsewhere.json"
     monkeypatch.setattr(discovery, "_CACHE_FILE", target)
     assert discovery.AssetRegistry()._path == target
+
+
+def test_the_discovery_cache_is_written_whole_and_owner_only(tmp_path):
+    """SEC13 (V-27): the discovery cache was rewritten in place, 0644. Written as every
+    state now: a new file put in place whole (another inode), 0600."""
+    import os
+    import stat
+    path = tmp_path / "assets.json"
+    path.write_text("[]")
+    os.chmod(path, 0o644)
+    before = path.stat().st_ino
+    reg = AssetRegistry(path=path)
+    reg.update([_asset("vm-a")])
+    assert path.stat().st_ino != before and stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert [a.name for a in AssetRegistry(path=path).all()] == ["vm-a"]

@@ -80,6 +80,7 @@ _ACTION_LABELS = {
     "review_bypass": "Contournement à revoir (règle d'un tiers)",
     "repair_local_state": "État local à réparer",
     "review_left_rule": "Règle laissée à revoir (elle vise une autre VM)",
+    "review_unverified": "Isolation ou blocage non vérifié (la vérification échoue)",
 }
 
 _ESCALATION_LABELS = {
@@ -110,6 +111,7 @@ _ESCALATION_LABELS = {
     "bypassed": "contournée (une règle d'autorisation passe avant le deny)",
     "state_unreadable": "état local illisible",
     "rule_left": "règle du blocage laissée (retournée, elle vise une autre VM)",
+    "unverified": "non vérifiée (la vérification échoue)",
     "account_compromised": "compte peut-être compromis (brute force puis connexion réussie)",
     "compromise_unchecked": "connexion après brute force non vérifiée",
 }
@@ -268,6 +270,29 @@ def resolve(escalation_id: str, note: str = "") -> None:
                 e["resolution"] = note
         updated.append(json.dumps(e, default=str))
     _write_lines(updated)
+
+
+@_locked
+def refresh(escalation_id: str, reason: str, **fields) -> bool:
+    """A pending card's text brought up to what it says now (SEC13: a check's last error),
+    its first text kept in `first_reason`; `fields` written beside it. False when the card
+    no longer waits."""
+    if not _STORE.exists():
+        return False
+    lines, done = _STORE.read_text().splitlines(), False
+    for i, line in enumerate(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("id") == escalation_id and e.get("status") == "pending":
+            now = datetime.now(timezone.utc).isoformat()
+            e.setdefault("first_reason", e.get("reason", ""))
+            e.update(fields, reason=reason, updated_at=now, last_seen=now)
+            lines[i], done = json.dumps(e, default=str), True
+    if done:
+        _write_lines(lines)
+    return done
 
 
 @_locked
@@ -460,7 +485,8 @@ VERDICTS = ("right", "wrong", "unsure")
 DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
 # Cards that are not a decision on a detection: posture, housekeeping, proposals.
 _NOT_DECISIONS = {"posture_gap", "orphan_rule", "quarantine_altered", "proposed_rule", "readiness_hold",
-                  "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable", "rule_left"}
+                  "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable", "rule_left",
+                  "unverified"}
 
 
 def all_escalations() -> list[dict]:

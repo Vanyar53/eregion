@@ -414,9 +414,11 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;
-                                `expected_sudo` : count, last — ADM1, lu par la console)
+                                `expected_sudo` : count, last, origin_count — ADM1, COR1 ; `correlation` : queries,
+                                origin, card, unknown, compromised, unchecked, last — COR1 ; lus par la console)
   expected_sudo.jsonl         → ADM1 : chaque sudo d'administrateur attendu écarté par le RulePoller (at, rule,
-                                asset, account, command ≤ 300 car., logged_at), écrit AVANT d'écarter — un journal
+                                asset, account, command ≤ 300 car., logged_at ; un shell root écarté par l'origine de
+                                ses sessions SSH : via « origin », origin — COR1), écrit AVANT d'écarter — un journal
                                 qu'on ne peut écrire n'écarte rien ; 0600 ; au-delà de 2 Mo, la moitié la plus
                                 récente gardée. Lu par `glorfindel report`
   readiness.json              → verrou L6 par VM, clé `nom--hash(ID)` (quatrième passe Q3 : un homonyme héritait du

@@ -824,7 +824,7 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   `restore_staging_storage`), `exceptions` (`asset_pattern`, `exclude_all`, `exclude_rules`),
   `autonomy` (`default`, `assets` : `match`, `mode` ; `allow_destructive`), `isolation`
   (`quarantine_nsg`, `quarantine_rg`, `forensic_sources`, `forensic_ports`), `never_block`
-  (SEC2, ci-dessous), `expected_sudo` (`admins` : `match`, `accounts` ; `sensitive_commands` —
+  (SEC2, ci-dessous), `expected_sudo` (`admins` : `match`, `accounts`, `origins` ; `sensitive_commands` —
   ADM1, ci-dessous).
 - Types : textes entre guillemets ou non, booléens `true` / `false` sans guillemets, listes pour
   `exclude_rules`, `allow_destructive`, `forensic_sources`, `assets` et les sections de backends ;
@@ -863,6 +863,7 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
     admins:
       - match: "vm-web-*"
         accounts: [admin1, ops]
+        origins: [198.51.100.0/24, "2001:db8:1::/48"]   # COR1 : le bastion, le VPN
       - match: "vm-db-01"
         accounts: [dba]
     sensitive_commands: [/usr/local/bin/backup-restore]
@@ -871,10 +872,19 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   Un autre compte, `sudo -u autre`, une ligne qu'aucune VM ne revendique, une ligne lue autrement
   que la forme de sudo : toujours une carte. Les shells root d'un administrateur (`sudo -i`,
   `sudo su -`, `bash`, `python -c`, `vim`, `less`, `screen`…) font **une carte pour les formes
-  connues** ; la liste n'est pas exhaustive — un script non listé (`sudo /tmp/x.py`) passe sans
-  carte, l'angle mort assumé jusqu'à COR1 (l'origine de la session SSH) et AUD1 (`auditd`).
+  connues**, sauf origine attendue (ci-dessous) ; la liste n'est pas exhaustive — un script non
+  listé (`sudo /tmp/x.py`) passe sans carte, l'angle mort assumé jusqu'à AUD1 (`auditd`).
   Éditer avec `sudoedit`. **Clé nouvelle**, comme `never_block` : une version
   antérieure refuse la config qui la porte — la watch ne démarrerait plus.
+
+  **`origins`** (COR1, #407, 02/11 ; `docs/design/correlation.md`) : d'où viennent les sessions SSH
+  de ces comptes — des plages CIDR (un bastion est une plage, une adresse seule vaut `/32` ou
+  `/128`), IPv4 ou IPv6. Lues strictement : des bits d'hôte (`198.51.100.7/24`), `/0`, une liste
+  vide refusent le fichier. Un shell root d'un compte de l'entrée n'est écarté que si **toutes**
+  ses sessions SSH des 7 derniers jours viennent d'une de ces plages ; sinon une carte qui dit
+  l'origine (« session depuis 203.0.113.9, origine inconnue »). Une commande sensible reste une
+  carte quelle que soit l'origine. Sans `origins` : les shells root restent des cartes. **Clé
+  nouvelle** : une version sans COR1 refuse la config qui la porte.
 
 ### Poser la liste des administrateurs sur H0 (ADM1)
 
@@ -901,6 +911,39 @@ Les vrais noms de comptes ne vont que dans la config de H0, jamais dans le dép�
    « Expected sudo (no card, ADM1): N — per VM … per account … » et la console montre
    « N expected » sur `sudo-privilege-escalation`, sans carte nouvelle ; un `sudo cat /etc/shadow`
    du même compte fait encore une carte.
+
+### Déclarer ses origines sur H0 (COR1)
+
+Les vraies adresses ne vont que dans la config de H0, jamais dans le dépôt (le dépôt n'écrit que
+198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32).
+
+1. **D'abord la version** : H0 doit tourner une version qui lit `origins` (la release qui porte
+   COR1, déployée par le CD, ou `make glorfindel-host-start REF=<tag>`). Avant, la config serait
+   refusée et la watch ne redémarrerait pas.
+2. **Les origines** dans le `glorfindel-config.yaml` local (hors du dépôt), sous chaque entrée de
+   `expected_sudo.admins` : l'adresse ou la plage d'où l'on se connecte en SSH à ces VMs — le
+   bastion, la sortie du VPN, le poste d'administration (`origins: [<plage>/<n>]`). Une seule
+   origine oubliée suffit à garder les shells root en carte **pendant 7 jours** (la fenêtre de
+   lecture des sessions) : la lister, ou s'en accommoder. **Le cas cron** : un administrateur qui a une
+   crontab (`crontab -e` sous son compte) ouvre une session `cron` à chaque tâche — un compte « pris
+   par cron », origine non suivie. Ses shells root restent alors en carte pendant 7 jours ; mettre ces
+   tâches sous un compte de service, ou s'en accommoder. **Ce que l'écart vaut** : un réducteur de
+   bruit, pas une preuve — tout utilisateur local peut écrire une ligne de connexion sshd venant d'une
+   origine déclarée ; une commande sensible reste toujours une carte. L'origine confirmée hors de la
+   VM viendra avec COR2 (#427). Vérifier : `glorfindel rules check` (ou
+   `python -c "from glorfindel.config import load_glorfindel_config as l; print(l().expected_sudo)"`).
+3. **La pousser** : `make glorfindel-host-push` (garde les modes d'autonomie de H0 ; sans ce lot sur
+   le poste, ajouter `origins:` à la main dans `~/eregion/glorfindel-config.yaml` de H0 par
+   `make glorfindel-host-ssh`).
+4. **Redémarrer la watch** : `make glorfindel-host-ssh`, puis
+   `cd eregion && docker compose restart watch war-room` ; `make glorfindel-host-logs` : pas de
+   « glorfindel-config.yaml refusé ».
+5. **Vérifier** : un `sudo -i` depuis une origine déclarée n'ouvre pas de carte, et
+   `make glorfindel-host-report` dit « of which root shells from an expected origin (COR1): N —
+   <origine> N » ; la console montre le compte des requêtes de corrélation dans le détail de
+   `sudo-privilege-escalation`. Le même `sudo -i` depuis une autre adresse fait une carte qui dit
+   « session depuis <adresse>, origine inconnue » ; un `sudo bash -c 'cat /etc/shadow'` fait
+   toujours une carte.
 
 ---
 

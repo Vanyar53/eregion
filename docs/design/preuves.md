@@ -2989,10 +2989,9 @@ gouvernent la carte, la machine ne le voit pas.
 vertes** (avant, sur `main` f1cd109, 119/120 : la graine 67 ; rejouée sur `main` 9c4e8c5, rouge) ;
 à 500, N = 1..20, 20/20 vertes, comme sur `main` 9c4e8c5 (20/20 : le défaut est rare à ce réglage,
 la graine 67 à 60 l'a trouvé). Les deux séquences complètes de la graine 67 (29 et 25 règles),
-rejouées hors d'Hypothesis : vertes. `pytest` complet : 5 322 réussis, 7 sautés, 2 échecs hors du
-lot (`test_orodruin_kill.py`, deux tests qui datent leurs fenêtres d'un `NOW` fixé au 26/10 : rouges
-de même sur `main` 9c4e8c5) ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 993 mutants, sans
-faute. M3060–M3066 7/7 à chaque tour ; M07 réancré, attrapé.
+rejouées hors d'Hypothesis : vertes. `pytest` complet, `main` f1b9b24 fusionné : 5 434 réussis,
+7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 087 mutants, sans faute. M3060–M3066 et
+M07 (réancré) : 8/8 à chaque tour (deux tours, après la fusion).
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

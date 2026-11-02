@@ -27,6 +27,11 @@ Two things only this adapter knows, so it does them before the rows leave it:
   - Glorfindel's own rules. A write by anyone else on a rule or an NSG Glorfindel manages
     (`glorfindel-*` rules, its quarantine NSGs) is the gravest case — an isolation or a
     block may have been lifted. The row is marked `GlorfindelManaged`.
+  - Glorfindel's own Run Command (SID1, own_run_command.py): its identity holds
+    `runCommand` for the session drain of an isolation. A Run Command under its identity is
+    dropped only when it is the drain of an isolation it recorded on that VM (the state's
+    `drains_at`, a window of minutes, one drain for one operation); else it is kept, marked
+    `GlorfindelRunCommand` with the reason, critical — an unreadable state included (A0).
 
 `AzureActivity` reaches the workspace only through a diagnostic setting of the
 subscription (category Administrative) — not by default. Without it the table is empty:
@@ -46,6 +51,7 @@ import time
 
 from glorfindel.providers.azure.capabilities import CAPABILITIES
 from glorfindel.providers.azure.monitor import AzureMonitorDetector
+from glorfindel.providers.azure import own_run_command
 from glorfindel.providers.azure.quarantine import QUARANTINE_NSG_PREFIX
 
 logger = logging.getLogger("glorfindel.providers.azure.activity")
@@ -207,18 +213,41 @@ def is_own_call(row: dict, own: set[str], recorded: frozenset[str] | set[str] = 
             and owned_target(row, recorded))
 
 
+def _keep(row: dict, own: set[str], recorded, book) -> dict | None:
+    """The row as kept, marked — or None when it is Glorfindel's own: a write it does on what
+    is its own, or the session drain of an isolation it recorded (own_run_command)."""
+    ids = caller_ids(row)
+    mine = bool(own) and bool(ids & own)
+    info: dict = {}
+    why = own_run_command.mark(row, operation(row), target_resource(row), bool(own), mine, book,
+                               has_caller=bool(ids), info=info)
+    if why is None or (why == "" and is_own_call(row, own, recorded)):
+        return None
+    return {**row,
+            "GlorfindelManaged": glorfindel_managed(row),
+            "GlorfindelIdentity": mine,
+            **({own_run_command.MARK: why, **info} if why else {})}
+
+
 def prepare_rows(rows: list[dict], own: set[str],
-                 recorded: frozenset[str] | set[str] = frozenset()) -> list[dict]:
+                 recorded: frozenset[str] | set[str] = frozenset(), book=None) -> list[dict]:
     """Drop Glorfindel's own writes; mark what is left. Each kept row gains
     `GlorfindelManaged` (its target is Glorfindel's) and `GlorfindelIdentity` (Glorfindel's
-    identity, outside what it does or on what is not its own)."""
+    identity, outside what it does or on what is not its own); a Run Command not attached to
+    one of its drains, `GlorfindelRunCommand` (its reason). `book`: the drains (a DrainBook,
+    or a function that returns one); read from the isolation states when needed, if not
+    given. The oldest operations first: one drain goes to the first Run Command after it."""
+    source, read = book or own_run_command.read_book, []
+
+    def once():                      # read once per call, and only for a Run Command
+        if not read:
+            read.append(source() if callable(source) else source)
+        return read[0]
+
     out = []
-    for row in rows:
-        if is_own_call(row, own, recorded):
-            continue
-        out.append({**row,
-                    "GlorfindelManaged": glorfindel_managed(row),
-                    "GlorfindelIdentity": bool(own) and bool(caller_ids(row) & own)})
+    for row in sorted(rows, key=lambda r: own_run_command.started(r) or 0.0):
+        if (kept := _keep(row, own, recorded, once)) is not None:
+            out.append(kept)
     return out
 
 
@@ -276,6 +305,9 @@ class AzureActivityDetector(AzureMonitorDetector):
         # What the isolation states recorded as Glorfindel's, kept a while after the state
         # is gone: a release puts a customer rule back, and its row lands minutes later.
         self._recorded: dict[str, float] = {}
+        # The drains Glorfindel ran (SID1), kept as long, and which operation took each one.
+        self._drains: dict[tuple[str, float], float] = {}
+        self._taken: dict[tuple[str, float], str] = {}
 
     def _identity_credential(self):
         if self._credential is None:
@@ -335,19 +367,43 @@ class AzureActivityDetector(AzureMonitorDetector):
             self._recorded = {k: at for k, at in self._recorded.items() if now - at < RECORDED_TTL_S}
             return frozenset(self._recorded)
 
+    def drains(self) -> own_run_command.DrainBook:
+        """The drains the isolation states record now, plus those seen within the last
+        RECORDED_TTL_S (SID1); the operations that took them, kept as long."""
+        now = time.time()
+        current = own_run_command.read_book()
+        with self._id_lock:
+            for rid, times in current.times.items():
+                for t in times:
+                    self._drains[(rid, t)] = now
+            self._drains = {k: at for k, at in self._drains.items() if now - at < RECORDED_TTL_S}
+            for k in [k for k in self._taken if k not in self._drains]:
+                del self._taken[k]           # in place: a book handed out keeps its claims
+            times: dict[str, list[float]] = {}
+            for rid, t in self._drains:
+                times.setdefault(rid, []).append(t)
+            return own_run_command.DrainBook(times=times, isolated=current.isolated, taken=self._taken)
+
     def run_query(self, query: str, timespan=None) -> list[dict]:
         rows = super().run_query(query, timespan=timespan)
-        return prepare_rows(rows, self.own_identities(), self.recorded())
+        # The drains read at every poll, a Run Command in the rows or not: one released
+        # before its row lands is remembered only if it was seen while recorded.
+        return prepare_rows(rows, self.own_identities(), self.recorded(), self.drains())
 
     def poll_alert(self, query, since, timeout_s, interval_s=10.0, verbose=True, match_row=None):
         own, recorded = self.own_identities(), self.recorded()
+        self.drains()
+        kept: list[dict] = []
 
         def keep(row):
-            return not is_own_call(row, own, recorded) and (match_row is None or match_row(row))
+            row_kept = _keep(row, own, recorded, self.drains)
+            if row_kept is None or not (match_row is None or match_row(row)):
+                return False
+            kept[:] = [row_kept]
+            return True
 
         result = super().poll_alert(query, since, timeout_s, interval_s=interval_s,
                                     verbose=verbose, match_row=keep)
         if result is None:
             return None
-        elapsed, row = result
-        return elapsed, prepare_rows([row], own, recorded)[0]
+        return result[0], kept[0]

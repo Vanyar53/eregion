@@ -152,12 +152,20 @@ Trois canaux, à ne pas confondre :
 | T | Un exercice défait ce que Glorfindel a fait, ou frappe une VM encore en panne | Une VM tenue par Glorfindel (ses règles d'isolation ou de quarantaine sur le NSG de chaque carte et de chaque sous-réseau de la VM ; illisible vaut tenue, `eregion_core/held.py`, la même règle au preflight d'Annatar) est attendue, puis son fil est sauté : jamais levée. Pour lire cartes et sous-réseaux, le rôle de lecture d'Orodruin gagne deux lectures sur le banc, rien en écriture. Une VM dont la panne n'a pas vérifié son retour ne prend plus de fil (DG-b) |
 | I | Ce qu'Orodruin publie pour la console | Le verdict (`armed` ou `passive`, les codes, l'heure) et le statut des demandes, sans identifiant, sans expérience ni cible ; même conteneur, même attribution. H0 relit chaque blob contre sa forme avant de l'écrire (DG-b) |
 | E | Le Glorfindel hébergé est poussé à écrire | Il n'écrit que sur le groupe du banc, avec le rôle de la réponse : jamais un restore, une suppression, une identité, un rôle. Seule une VM que l'opérateur a passée en `non_disruptive` après son contrôle de préparation (gondolin, bree) reçoit une action seule, réversible, derrière le seuil de confiance et les gardes ; toute autre reste en `human_only`. Le push garde le mode de chaque VM en place sur H0, jamais un plus hardi : le défaut et toute VM inconnue de H0 en `human_only` ; une config de H0 illisible ou que la watch refuserait (un mode inconnu suffit) : toutes les VM en `human_only` ; et c'est dit ; `HUMAN_ONLY=1` remet tout en `human_only` d'un geste (BL1c, 02/11). **La posture de H0 sur le banc** (décision de Jonathan, 31/10) : l'encadré ci-dessous |
+| E | L'identité de réponse de H0, partagée par la watch, la console et le bot, lance une commande sur une VM du banc par Run Command (le droit de la coupure des sessions d'une isolation) | **Elle est surveillée** (SID1, #409) : chaque Run Command sous l'identité de Glorfindel qui n'est pas la coupure d'une isolation qu'il a enregistrée sur cette VM (l'heure de la coupure dans l'état, une fenêtre de quelques minutes, une coupure pour une opération) est une carte critique, décidée par le code, sans action sur la VM ; un état illisible est une carte (A0). Ce qu'elle voit : le journal d'activité de l'abonnement (`AzureActivity`), une fois envoyé au workspace (ID1). Son délai : l'ingestion de ce journal, plusieurs minutes, parfois plus de dix — elle dit après coup, elle n'empêche pas. Le rattachement lit l'état local de l'hôte, et tout conteneur qui l'écrit (watch, console, bot) peut y écrire une coupure : elle prend un usage maladroit de l'identité, pas celui d'un attaquant qui connaît Eregion ([`docs/glorfindel.md`](../glorfindel.md), « Notre propre identité surveillée ») |
 
 **La posture de H0 sur le banc (décision de Jonathan, 31/10 ; bree le 01/11).**
 
 Le 30/10, l'exception de BL1 ne valait que le temps de la session de banc
 ([`docs/banc-bl1.md`](../banc-bl1.md)). Le 31/10, Jonathan l'a gardée : c'est la posture de H0 sur
 le banc. H0 répond, il ne fait plus seulement qu'observer.
+
+Depuis le 02/11 (décision de Jonathan, #409), H0 garde ce rôle sur le banc, `runCommand` compris :
+un NSG ne coupe pas une connexion établie, retirer le droit affaiblirait l'isolation. Sa mitigation est
+la surveillance de sa propre identité (SID1, ligne « E » ci-dessus). Elle dit après coup, sur un
+rattachement que l'hôte écrit lui-même : elle ne suffit pas hors du banc. La file d'actions signée — seule
+la watch tient le rôle d'écriture, la console et le bot y déposent une demande signée — est un
+prérequis avant toute VM hors du banc (« Ouvert »).
 
 - **Ce qui est posé** :
   - l'identité managée de H0 tient « Eregion Glorfindel Response » sur `rg-celebrimbor`, le groupe
@@ -221,7 +229,7 @@ le banc. H0 répond, il ne fait plus seulement qu'observer.
 
 **Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`. La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
 
-**Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule, par une file signée — planifié ; une identité managée par conteneur sur un même hôte — planifié ; l'identité unique de H0, partagée par la watch, la console et le bot — planifié.
+**Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule, par une file signée — planifié : #413 ; une identité managée par conteneur sur un même hôte — planifié ; l'identité unique de H0, partagée par la watch, la console et le bot — planifié.
 
 ---
 

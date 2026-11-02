@@ -106,7 +106,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
 	glorfindel-pending glorfindel-check-ttl \
-	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui console-url \
+	glorfindel-start glorfindel-stop glorfindel-restart glorfindel-dev glorfindel-logs glorfindel-ui console-url console-rotate \
 	annatar-shell glorfindel-shell \
 	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit providers-lock celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
@@ -163,7 +163,8 @@ help:
 	@echo "  make glorfindel-restart         Rebuild + restart all services"
 	@echo "  make glorfindel-dev             Start + watch files (auto-reload on change)"
 	@echo "  make glorfindel-ui              Rebuild + restart war-room only (watch untouched)"
-	@echo "  make console-url                The console's URL with its token (~/.glorfindel/console_token)"
+	@echo "  make console-url                The console's URL with its token (~/.eregion/console/token: never in the logs)"
+	@echo "  make console-rotate             A new drawn token: every session of the former one refused at once"
 	@echo "  make glorfindel-logs            Tail service logs"
 	@echo "  make glorfindel-watch           Watch runs/ only (no web UI)"
 	@echo "  make glorfindel-respond         SIGNALS=... Process signal file"
@@ -431,11 +432,11 @@ glorfindel-ui: build-glorfindel
 
 # The console's URL with its token (SEC1): the one compose passes (EREGION_CONSOLE_TOKEN, else its
 # former name, from the environment or .env), else the one the console drew at its first start,
-# ~/.glorfindel/console_token — written by the container after `up -d`, so waited for
+# ~/.eregion/console/token (its own directory, SEC10) — written by the container after `up -d`, so waited for
 # (CONSOLE_WAIT seconds, 20 by default). The port: EREGION_CONSOLE_PORT, as compose publishes it.
 CONSOLE_WAIT ?= 20
 console-url:
-	@t="$${EREGION_CONSOLE_TOKEN:-$${GLORFINDEL_WARROOM_TOKEN:-}}"; f="$(HOME)/.glorfindel/console_token"; \
+	@t="$${EREGION_CONSOLE_TOKEN:-$${GLORFINDEL_WARROOM_TOKEN:-}}"; f="$(HOME)/.eregion/console/token"; \
 	 for k in EREGION_CONSOLE_TOKEN GLORFINDEL_WARROOM_TOKEN; do \
 	   [ -n "$$t" ] || t=$$(sed -n -E "/^$$k=/{s/^[^=]*=[[:space:]]*//;s/[[:space:]]+#.*$$//;s/[[:space:]]+$$//;p;}" .env 2>/dev/null | tail -1); \
 	 done; \
@@ -443,6 +444,13 @@ console-url:
 	   [ -s "$$f" ] && t=$$(head -n 1 "$$f"); fi; \
 	 if [ -n "$$t" ]; then echo "  Console   →  http://localhost:$${EREGION_CONSOLE_PORT:-7007}/?token=$$t"; \
 	 else echo "  ⚠ Console: no token yet — the console writes $$f at its first start (make glorfindel-logs)" >&2; exit 1; fi
+
+# SEC10 : un nouveau jeton tiré, dans le fichier propre de la console (la console le relit à la
+# requête suivante, et refuse toute session de l'ancien). Jamais quand le déploiement pose le jeton
+# (EREGION_CONSOLE_TOKEN, H0) : on le change là où il est posé.
+console-rotate:
+	docker compose exec -T war-room eregion rotate-token
+	@$(MAKE) --no-print-directory console-url
 
 # ── Shells ────────────────────────────────────────────────────────────────
 

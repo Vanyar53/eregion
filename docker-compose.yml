@@ -18,7 +18,10 @@
 #             GLORFINDEL_DISCORD_BOT, "1" si DISCORD_BOT_TOKEN est posé, "" sinon (jamais sa
 #             valeur) : avec DISCORD_CHANNEL_ID, le bot poste les cartes et leur webhook se tait
 #             (escalations.discord_bot_configured) ; un salon sans jeton, le webhook poste ;
-# le jeton du bot et ses listes d'autorisés : le bot seul ; le jeton de la console : elle seule.
+# le jeton du bot et ses listes d'autorisés : le bot seul ; le jeton de la console : elle seule —
+# posé ici, ou tiré dans ~/.eregion/console, que seul son service monte (SEC10).
+# tests/unit/test_console.py tient le second (le fichier du jeton hors des montages de la watch
+# et du bot).
 # tests/unit/test_glorfindel_host.py tient cette répartition.
 x-env: &env
   AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID:-}
@@ -197,7 +200,8 @@ services:
     # 0.0.0.0 INSIDE the container is required for the port mapping to work; what
     # limits exposure is the HOST side of the mapping: loopback only. The console always
     # has a token (EREGION_CONSOLE_TOKEN, else the one it draws at its first start in
-    # ~/.glorfindel/console_token: `make console-url`) and answers only under a loopback
+    # ~/.eregion/console/token — its own directory, below, never Glorfindel's state that the
+    # watch and the bot mount; never printed: `make console-url`) and answers only under a loopback
     # name. To reach it from another machine: widen the mapping, and list the name it is
     # reached under in EREGION_CONSOLE_HOSTS.
     command: eregion console --host 0.0.0.0 --port 7007
@@ -232,7 +236,7 @@ services:
       # Optional: mount glorfindel-config.yaml if it exists
       - ${EREGION_CONFIG:-./glorfindel-config.yaml}:/app/glorfindel-config.yaml
       # DG-b : le répertoire propre de la console — les demandes pour Orodruin (requests/), qu'elle
-      # seule écrit. Aucun autre service ne le monte, ni ~/.eregion entier : une demande porte le
+      # seule écrit, et son jeton tiré (token, SEC10). Aucun autre service ne le monte, ni ~/.eregion entier : une demande porte le
       # plan rouge, que la décision ne lit jamais (docs/design/console.md, §7, « Glorfindel reste
       # aveugle » ; tests/unit/test_profiles.py).
       - ${HOME}/.eregion/console:/root/.eregion/console

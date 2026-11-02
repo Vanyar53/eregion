@@ -362,9 +362,11 @@ toute route, WebSocket du fil compris. Dans l'ordre :
 2. **L'origine d'une modification** (POST, PUT, PATCH, DELETE, le WebSocket) : celle de la console,
    schéma et `Host` exacts (le port compte : une autre page de `localhost` est une autre origine). Sinon 403.
 3. **Le jeton, toujours** : celui du déploiement (`EREGION_CONSOLE_TOKEN`, ou son ancien nom), sinon
-   celui que la console a tiré à son premier démarrage, gardé dans `~/.glorfindel/console_token`
-   (mode 600) et affiché une fois au démarrage avec l'URL. Aucun mode sans jeton, les tests compris
-   (le conftest en pose un). Le cookie est une session dérivée du jeton (HMAC), jamais le jeton,
+   celui que la console a tiré à son premier démarrage, gardé dans `~/.eregion/console/token`
+   (mode 600), le répertoire que seul son service monte (SEC10), jamais imprimé (`make console-url`
+   le lit). Aucun mode sans jeton, les tests compris (le conftest en pose un). Le cookie est une
+   session : sa date d'émission signée par une HMAC du jeton, valable 12 h, jamais le jeton ; une
+   rotation du jeton (`eregion rotate-token`) refuse toute session de l'ancien à la requête suivante,
    nommé par le port que le navigateur a joint (`eregion_console_<port>` : un navigateur partage ses
    cookies entre les ports d'un hôte) ; `Secure` en HTTPS. Le fichier n'est jamais lu à travers un lien.
 4. **Une modification d'un navigateur** (par le cookie) porte son `Origin`.

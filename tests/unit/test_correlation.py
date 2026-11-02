@@ -475,3 +475,78 @@ def test_two_addresses_on_one_vm_one_query():
     assert {s["raw_signal"]["first_result_row"]["SourceIP"]: s["severity"] for s in sigs} == {
         STRANGER: "high", "203.0.113.10": "critical"}
     assert sigs[0]["severity"] == "critical"         # the compromise first
+
+
+# ── A compromise is always said to a human (the Orchestre, 02/11) ────────────────────
+
+def _llm(action, confidence=0.99):
+    from unittest.mock import MagicMock
+    call = MagicMock()
+    call.function.arguments = json.dumps({
+        "reasoning": "x", "confidence": confidence, "action": action, "reversible": True,
+        "explanation": "x", "escalate": False, "escalation_reason": "", "suggested_steps": []})
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=MagicMock(tool_calls=[call]))]
+    return resp
+
+
+def _compromise_signal() -> dict:
+    lines = _attempts(STRANGER) + _login(STRANGER, account="ops", minutes_ago=1, method="password")
+    p, rule, sent, _ = _poller(lines, rule_name="ssh-brute-force")
+    [sig] = p.poll_once(rule)
+    assert sig["severity"] == "critical"
+    return sig
+
+
+def _run_graph(tmp_path, monkeypatch, sig, mode):
+    from unittest.mock import MagicMock, patch
+    import glorfindel.agent as agent
+    from glorfindel.config import AutonomyConfig
+    from glorfindel.memory import CycleMemory
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    monkeypatch.setattr(agent, "_run_investigative_query", lambda ws, q: [])
+    connector = MagicMock()
+    connector.dry_run = False
+    connector.block_suspicious_ip.return_value = {"status": "success", "ip": STRANGER}
+    connector.verify_block_ip.return_value = {"verified": True, "method": "nsg"}
+    graph = agent._build_graph(CycleMemory(path=tmp_path / "cycles"), connector, "claude-test",
+                               autonomy=AutonomyConfig(default=mode))
+    initial = {"signal": sig, "past_cycles": [], "incident": None, "dry_run": False, "reasoning": "",
+               "confidence": 0.0, "action": "", "reversible": True, "explanation": "", "escalate": False,
+               "escalation_reason": "", "suggested_steps": [], "outcome": None}
+    with patch("litellm.completion", return_value=_llm("block_suspicious_ip")):
+        return graph.invoke(initial), connector
+
+
+def test_a_compromise_blocked_alone_in_non_disruptive_still_makes_a_human_card(tmp_path, monkeypatch):
+    """The model blocks at 99 % in non_disruptive: the block runs, and the card exists."""
+    from glorfindel import escalations
+    final, connector = _run_graph(tmp_path, monkeypatch, _compromise_signal(), "non_disruptive")
+    connector.block_suspicious_ip.assert_called_once()
+    assert final["outcome"]["executed"] is True and final["outcome"]["verified"] is True
+    assert final["outcome"]["compromise_card"] is True
+    [card] = escalations.pending()
+    assert card["escalation_type"] == "account_compromised" and card["action"] == ""
+    assert "Compte peut-être compromis" in card["reason"] and STRANGER in card["reason"]
+    assert "ops" in card["reason"] and "block_suspicious_ip" in card["reason"]
+    pytest.importorskip("fastapi")
+    from eregion_console.api import _approval_refusal
+    assert _approval_refusal(card, "vm-example-01")          # never approvable in one click
+
+
+def test_a_compromise_held_in_human_only_is_one_card_that_says_so(tmp_path, monkeypatch):
+    from glorfindel import escalations
+    final, connector = _run_graph(tmp_path, monkeypatch, _compromise_signal(), "human_only")
+    connector.block_suspicious_ip.assert_not_called()
+    [card] = escalations.pending()
+    assert card["escalation_type"] == "mode_hold" and card["reason"].startswith("Compte peut-être compromis")
+
+
+def test_a_plain_brute_force_blocked_alone_makes_no_compromise_card(tmp_path, monkeypatch):
+    from glorfindel import escalations
+    p, rule, sent, _ = _poller(_attempts(STRANGER), rule_name="ssh-brute-force")
+    [sig] = p.poll_once(rule)
+    final, connector = _run_graph(tmp_path, monkeypatch, sig, "non_disruptive")
+    connector.block_suspicious_ip.assert_called_once()
+    assert escalations.pending() == [] and "compromise_card" not in final["outcome"]

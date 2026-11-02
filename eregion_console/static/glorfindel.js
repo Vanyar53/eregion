@@ -68,6 +68,7 @@ const ESC_LABELS = {
   bypassed:            'bypassed (an allow before our deny)',
   state_unreadable:    'local state unreadable',
   rule_left:           'block rule left (turned, it aims at another VM)',
+  account_compromised: 'account maybe compromised (brute force, then a login)',
 };
 
 // Cards anchored on a VM the detection does not name (an Activity Log row, an identity,
@@ -123,6 +124,7 @@ const _ESC_TITLES = {
   rule_left:            'Block rule left as it was',
   control_plane_change: 'Control-plane change',
   identity_change:      'Entra ID identity change',
+  account_compromised:  'Account maybe compromised — always to a human (COR1)',
 };
 
 // What a card is about, on one line: technique, confidence, severity (critical stands

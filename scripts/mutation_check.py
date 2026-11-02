@@ -7437,6 +7437,25 @@ MUTANTS += [
      '        pending = [k for k, e in judged.items() if "origins" in e]\n', "        pending = []\n"),
 ]
 TESTS.update({f"M{n}": _COR for n in range(2720, 2755)})
+# COR1, the Orchestre (02/11, « précautionneux »): a compromise is always said to a human —
+# an autonomous action may run, its card never disappears behind it. M2755–M2759.
+MUTANTS += [
+    ("M2755", "a compromise blocked alone makes no card: the check's card not in the graph (COR1)", "glorfindel/agent.py",
+     '    graph.add_node("verify_action", lambda s: compromise_card(verify_action(s, connector=connector)))\n',
+     '    graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))\n'),
+    ("M2756", "a compromise not recognised in the graph (COR1)", "glorfindel/agent.py",
+     '    return any(isinstance(r, dict) and r.get("Correlation") == COMPROMISED\n',
+     '    return any(False and isinstance(r, dict) and r.get("Correlation") == COMPROMISED\n'),
+    ("M2757", "a card held on a compromise does not say the account may be compromised (COR1)", "glorfindel/agent.py",
+     "    if _is_compromise(state[\"signal\"]) and \"compromis\" not in (state.get(\"escalation_reason\") or \"\"):\n",
+     "    if False:\n"),
+    ("M2758", "a compromise's card approvable in one click (COR1)", "glorfindel/agent.py",
+     'action="", escalation_type="account_compromised",', 'action="", escalation_type="low_confidence",'),
+    ("M2759", "a compromise's card marked made but never written (COR1)", "glorfindel/agent.py",
+     "    if not state.get(\"dry_run\", False):\n        from glorfindel import escalations\n        source, exercise_run = _cycle_source(signal)\n        action = state.get(\"action\") or \"aucune\"\n",
+     "    if False:\n        from glorfindel import escalations\n        source, exercise_run = _cycle_source(signal)\n        action = state.get(\"action\") or \"aucune\"\n"),
+]
+TESTS.update({f"M{n}": _COR for n in range(2755, 2760)})
 
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.

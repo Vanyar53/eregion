@@ -1828,8 +1828,60 @@ def execute_action(
     return {**state, "outcome": {**outcome, "executed": True, "action_s": action_s}}
 
 
+def _is_compromise(signal: dict) -> bool:
+    """COR1 (#407): a brute force followed by a login from its address, marked by the
+    RulePoller (`glorfindel.correlation`) — an account maybe compromised."""
+    from glorfindel.correlation import COMPROMISED
+    raw = signal.get("raw_signal") or {}
+    return any(isinstance(r, dict) and r.get("Correlation") == COMPROMISED
+               for r in (raw.get("first_result_row"), raw.get("detected_data")))
+
+
+def _compromise_text(signal: dict) -> str:
+    raw = signal.get("raw_signal") or {}
+    row = raw.get("first_result_row") or raw.get("detected_data") or {}
+    logins = [x for x in row.get("SuccessfulLogins") or [] if isinstance(x, dict)]
+    accounts = ", ".join(sorted({str(x.get("account") or "?") for x in logins})) or "?"
+    return (f"Compte peut-être compromis : brute force SSH puis connexion réussie depuis "
+            f"{row.get('SourceIP') or '?'} (compte : {accounts}) — corrélation COR1, revue humaine "
+            "toujours, quelle que soit l'action autonome.")
+
+
+def compromise_card(state: GlorfindelState) -> GlorfindelState:
+    """COR1: a compromise is always said to a human (the Orchestre, 02/11, « précautionneux »).
+    After an autonomous action that ran and held, its card — `account_compromised`, never
+    approvable in one click; the action and its outcome stay as they are. A cycle that
+    escalates anyway (verification failed or unsure) already makes its card."""
+    signal = state["signal"]
+    out = state.get("outcome") or {}
+    if not _is_compromise(signal) or out.get("verified") is False or out.get("unverified"):
+        return state
+    if not state.get("dry_run", False):
+        from glorfindel import escalations
+        source, exercise_run = _cycle_source(signal)
+        action = state.get("action") or "aucune"
+        escalations.record(
+            signal_id=signal.get("signal_id", ""), resource_id=signal.get("resource_id", ""),
+            action="", escalation_type="account_compromised",
+            reason=f"{_compromise_text(signal)} Action autonome exécutée : {action}.",
+            run_id=(signal.get("context") or {}).get("run_id", ""),
+            suggested_steps=["Changer le mot de passe et révoquer les clés SSH du compte.",
+                             "Lister ses sessions et ce qu'il a lancé depuis la connexion (`last`, `journalctl`).",
+                             "Bloquer l'adresse si ce n'est fait, puis juger la VM (isoler, restaurer)."],
+            ttp=signal.get("ttp", ""), severity=signal.get("severity", ""),
+            confidence=state.get("confidence", 0.0),
+            rule_name=(signal.get("context") or {}).get("rule_name", ""),
+            source=source, exercise_run=exercise_run, explanation=state.get("explanation", ""),
+        )
+    return {**state, "outcome": {**out, "compromise_card": True}}
+
+
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
+    if _is_compromise(state["signal"]) and "compromis" not in (state.get("escalation_reason") or ""):
+        # COR1: whatever the card, it says the account may be compromised.
+        state = {**state, "escalation_reason": f"{_compromise_text(state['signal'])} "
+                                               f"{state.get('escalation_reason') or ''}".strip()}
     action = state["action"]
     # An action attempted but not completed carries its own escalation type:
     #   write_blocked  → credentials can't write (read-only SP / IAM 403) — capability gap
@@ -2483,7 +2535,8 @@ def _build_graph(
         s, model=model, autonomy=autonomy, autonomy_override=autonomy_override,
         readiness_gate=readiness_gate))
     graph.add_node("execute_action", lambda s: execute_action(s, connector=connector, incidents=incidents))
-    graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))
+    # COR1: after the check, a compromise's card — never hidden behind an autonomous action.
+    graph.add_node("verify_action", lambda s: compromise_card(verify_action(s, connector=connector)))
     graph.add_node("escalate_to_human", escalate_to_human)
     graph.add_node("store_cycle", lambda s: store_cycle(s, memory=memory))
     graph.add_node(

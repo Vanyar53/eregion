@@ -100,7 +100,16 @@ plus la marge d'ingestion).
 Si une connexion réussie vient de la même adresse, la ligne est marquée
 `Correlation: ssh-login-after-brute-force`, avec ses connexions (`SuccessfulLogins` : compte, méthode,
 instant). Le signal est alors **critique** : un compte est peut-être compromis. Il passe en tête des
-cartes de la passe. La décision reste celle du graphe (modes d'autonomie, gardes de `decide`).
+cartes de la passe.
+
+**Une compromission est toujours dite à un humain** (décision de l'Orchestre, 02/11, dans le
+sens de Jonathan : « précautionneux »). La décision reste celle du graphe (modes d'autonomie, gardes de
+`decide`) : une action autonome non disruptive, comme le blocage de l'adresse, peut partir. Mais la
+carte ne disparaît jamais derrière elle. Après une action exécutée et vérifiée, `compromise_card`
+(`glorfindel/agent.py`, accroché à `verify_action`) écrit une carte `account_compromised` : l'adresse,
+les comptes, l'action déjà faite, les gestes à faire (mot de passe, clés, sessions). Elle n'est jamais
+approuvable en un clic. Une carte que le cycle fait de toute façon (mode `human_only`, garde, action
+en échec, vérification en défaut) commence par « Compte peut-être compromis ».
 
 La marque est un texte, donc elle fait partie de l'identité de dédoublonnage de la ligne agrégée. Un
 brute force déjà en carte, puis réussi, donne **une** carte critique de plus, puis plus rien pour

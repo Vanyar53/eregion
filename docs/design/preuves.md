@@ -2790,7 +2790,12 @@ faux. Figés : `test_a_vm_block_rewritten_before_its_subnets_perimeter_never_say
 de listage, l'entrée de périmètre fusionnée ou non ; rouge sur `main` quand le listage donne Db d'abord).
 Mutants **M2980** (l'ordre du listage), **M2981** (les VM d'abord), **M2982** (une entrée fusionnée prise
 pour un blocage de VM). **Mesure** (la règle et le correctif en place) : à 500 séquences,
-`--hypothesis-seed=1..20`, **20 graines sur 20 vertes** (19 avant le correctif).
+`--hypothesis-seed=1..20`, **20 graines sur 20 vertes** (19 avant le correctif). M2980–M2982 attrapés à
+chaque tour (60 séquences, deux tours). Les 37 autres mutants de `reassert.py` après le correctif
+(60 séquences, deux tours) : 34/37 à chaque tour ; M37 par ses seules séquences figées et M1645 qui
+survit, comme mesuré par L1Q ; M13 attrapé une fois sur deux par la machine (avant : par ses séquences
+figées seules). Aucun perdu. `pytest` complet (`main` 38d73e1 fusionné) : 4 965 réussis, 7 sautés,
+aucun `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 874 mutants, sans faute.
 
 **Ce que la règle a fait tomber.** (1) **Une règle revenue puis repartie, la paire toujours absente**
 (graine 322 à 2 000 ; présent sur `main` 48e42c8 sans la règle, réduit à six étapes). L'entrée

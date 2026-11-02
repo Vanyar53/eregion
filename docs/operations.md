@@ -1173,7 +1173,9 @@ et `ghcr.io/vanyar53/eregion-annatar`, étiquetées `sha-<commit complet>`, par
 3. poussées (`scripts/published_image.py pushed` : le digest est celui que docker a enregistré
    pour ce dépôt, celui de l'image éprouvée) ;
 4. **attestées** : une provenance SLSA v1 (`actions/attest-build-provenance`) et un SBOM SPDX
-   (`anchore/sbom-action`, puis `actions/attest-sbom`), toutes deux poussées dans le registre à côté
+   (syft, installé par `published_image.py install-syft` depuis son archive épinglée par son sha256 —
+   jamais téléchargé à la volée par une action, SEC14 R-14 —, puis `actions/attest-sbom`), toutes
+   deux poussées dans le registre à côté
    de l'image et gardées dans le magasin d'attestations de GitHub ;
 5. **signées sans clé** : `cosign sign`, un certificat de sigstore délivré sur le jeton OIDC de
    GitHub (aucune clé de longue durée, aucun secret) ;
@@ -1279,6 +1281,13 @@ rafraîchissement du verrou sans contrôle).
   interrogé. Les marqueurs sont évalués pour le Python du runner, épinglé (`ubuntu-24.04` :
   Python 3.12, Linux, celui de l'image) pour que ce qui est lu ne dérive pas sans bruit. Une
   broche propre à 3.11 (numpy) n'est donc pas lue (#298).
+- **Sur chaque push et chaque PR aussi** (SEC14, P-03) : le job `audit` de `ci.yml`
+  (« dependency advisories ») lit les mêmes verrous, en lecture seule — aucune issue, aucun secret.
+  Il n'est rouge que pour un avis qui a une version corrigée et que personne n'a accepté (la montée
+  est due) ; sans correctif, ou accepté, il le dit (`::warning::`, `::notice::`) et reste vert ; un
+  audit en échec est dit, jamais rouge (le passage hebdomadaire l'est). Conséquence : un avis corrigé
+  publié en amont rend `main` rouge jusqu'à la montée ou à son acceptation écrite — et le CD de H0
+  ne déploie pas une release dont un check-run est rouge.
 - **pip-audit a son propre verrou**, `requirements/audit.txt` (issu de `requirements/audit.in`,
   version épinglée), avec empreintes. Il s'installe dans un venv à part, jamais dans l'image ni
   dans `dev.txt`. Le workflow utilise le Python du runner, sans action tierce. Son seul secret est

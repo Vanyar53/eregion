@@ -102,14 +102,17 @@ jobs:
           REF: ${{ steps.meta.outputs.ref }}
         run: python3 scripts/published_image.py pushed "$IMAGE" --ref "$REF"
 
+      # SEC14 (R-14): syft from its release archive, pinned by its sha256 (scripts/published_image.py,
+      # SYFT_*) — never fetched at its latest by an action, in the job that signs. The same version
+      # anchore/sbom-action v0.24.2 ran: the same SBOM, of the image loaded and proven above.
+      - name: syft
+        run: python3 scripts/published_image.py install-syft "$RUNNER_TEMP/syft"
+
       - name: SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26   # v0.24.2
-        with:
-          image: ${{ steps.meta.outputs.ref }}
-          format: spdx-json
-          output-file: sbom.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+        env:
+          REF: ${{ steps.meta.outputs.ref }}
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+        run: '"$RUNNER_TEMP/syft" scan "docker:$REF" -o spdx-json=sbom.spdx.json'
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8   # v4.2.2
         with:

@@ -67,6 +67,31 @@ jobs:
         # thread's stack to the log — a hang says where it waits before the job's bound.
         run: python -m pytest tests/ -q -o faulthandler_timeout=480
 
+  # SEC14 (P-03): the advisories of the locks on each push and pull request, read only — the issues
+  # are pip-audit.yml's, weekly. Red only for an advisory with a fixed version that no human
+  # accepted (requirements/audit-accepted.json, each with its reason): the bump is due. Without a
+  # fix, or accepted, informative; an audit that failed is said, never red. pip-audit from its own
+  # lock, the runner's Python, no third-party action; ubuntu-24.04 pinned as in pip-audit.yml.
+  audit:
+    name: dependency advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install pip-audit
+        run: |
+          python3 -m venv "$RUNNER_TEMP/audit"
+          "$RUNNER_TEMP/audit/bin/pip" install --require-hashes -r requirements/audit.txt
+
+      - name: Advisories (red only for one with a fix no one accepted)
+        run: >-
+          python3 scripts/pip_audit_issues.py pr --pip-audit "$RUNNER_TEMP/audit/bin/pip-audit"
+          --accepted requirements/audit-accepted.json
+          requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt requirements/audit.txt
+
   # The state files are keyed by name; macOS (APFS, case-insensitive by default) is
   # where a VM name with an upper-case letter deleted its own state (fifth review, C1).
   # Linux CI could not see it.

@@ -905,3 +905,69 @@ def test_init_never_upgrades_the_providers_on_its_own():
     recipe = "\n".join(lines[start:end])
     assert "-platform=linux_amd64" in "\n".join(lines) and "providers lock $(TF_PLATFORMS)" in recipe
     assert 'case "$(MODULE)" in ""|terraform|glorfindel-host|orodruin)' in recipe
+
+
+# ── SEC14 (#420): the SBOM's tool pinned, the bot's token kept from forks, the advisories on each PR ──
+
+FORK_GUARD_PR = "github.event.pull_request.head.repo.full_name == github.repository"
+FORK_GUARD_RUN = "github.event.workflow_run.head_repository.full_name == github.repository"
+
+
+def test_the_sbom_tool_is_pinned_by_its_sha256_never_fetched_by_an_action():
+    """R-14: the job that signs installs syft itself, from its archive checked against its sha256."""
+    steps = _load(PUBLISH)["jobs"]["publish"]["steps"]
+    assert not [a for a in _actions(_load(PUBLISH)) if a.startswith("anchore/")]
+    names = [s.get("name") or s["uses"].split("@")[0] for s in steps]
+    runs = {s.get("name"): s.get("run", "") for s in steps}
+    assert runs["syft"] == 'python3 scripts/published_image.py install-syft "$RUNNER_TEMP/syft"'
+    assert runs["SBOM"].startswith('"$RUNNER_TEMP/syft" scan "docker:$REF" -o spdx-json=sbom.spdx.json')
+    order = [names.index(n) for n in ("Push", "syft", "SBOM", "actions/attest-sbom")]
+    assert order == sorted(order)
+    sbom = next(s for s in steps if s.get("name") == "SBOM")
+    assert sbom["env"]["REF"] == "${{ steps.meta.outputs.ref }}"     # an output, never a chosen value
+
+
+def _env(workflow: str, job: str) -> dict:
+    (step,) = [s for s in _load(ROOT / ".github" / "workflows" / workflow)["jobs"][job]["steps"]
+               if s.get("name") == "Discord"]
+    return step["env"]
+
+
+def test_the_bots_token_is_never_given_to_an_event_a_fork_triggers():
+    """R-15: a fork's pull request (pull_request_target) or a red run of a fork's head
+    (workflow_run) gets neither the bot's token nor its forum; its own events keep them."""
+    notify = _env("notify.yml", "notify")
+    for key in ("EREGION_DISCORD_BOT_TOKEN", "EREGION_DISCORD_LOTS_FORUM"):
+        value = notify[key].replace(" ", "")
+        assert value.startswith("${{(") and value.endswith(f"&&secrets.{key}||''}}}}"), value
+        assert FORK_GUARD_PR.replace(" ", "") in value and FORK_GUARD_RUN.replace(" ", "") in value
+        assert "github.event_name=='pull_request_target'&&" in value and "github.event_name=='workflow_run'&&" in value
+    roadmap = _env("roadmap.yml", "roadmap")
+    for key in ("EREGION_DISCORD_BOT_TOKEN", "EREGION_DISCORD_LOTS_FORUM", "EREGION_DISCORD_ROADMAP_CHANNEL"):
+        value = roadmap[key].replace(" ", "")
+        assert value == (f"${{{{(github.event_name!='pull_request_target'||{FORK_GUARD_PR.replace(' ', '')})"
+                         f"&&secrets.{key}||''}}}}"), value
+    # No other secret of the bot reaches these jobs unguarded.
+    for workflow, job in (("notify.yml", "notify"), ("roadmap.yml", "roadmap")):
+        text = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+        assert text.count("secrets.EREGION_DISCORD_BOT_TOKEN") == 1
+
+
+def test_the_advisories_are_read_on_each_push_and_pull_request_read_only():
+    """P-03: ci.yml's audit job — the locks read by pip-audit from its own lock, red only for an
+    advisory with a fix no one accepted; it writes no issue, holds no secret."""
+    doc = _load(ROOT / ".github" / "workflows" / "ci.yml")
+    assert {"push", "pull_request"} <= _events(doc)
+    job = doc["jobs"]["audit"]
+    assert job["runs-on"] == "ubuntu-24.04" and "permissions" not in job
+    assert doc["permissions"] == {"contents": "read"}
+    runs = "\n".join(s.get("run") or "" for s in job["steps"])
+    assert '/pip" install --require-hashes -r requirements/audit.txt' in runs
+    assert "scripts/pip_audit_issues.py pr " in runs and "--accepted requirements/audit-accepted.json" in runs
+    for lock in ("requirements/dev.txt", "requirements/glorfindel.txt", "requirements/annatar.txt",
+                 "requirements/audit.txt"):
+        assert lock in runs
+    assert "continue-on-error" not in job and not any("continue-on-error" in s for s in job["steps"])
+    assert "secrets." not in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    checkout = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+    assert checkout and checkout[0]["with"]["persist-credentials"] is False

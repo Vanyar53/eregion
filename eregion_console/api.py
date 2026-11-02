@@ -2127,7 +2127,17 @@ def _slim_cycle(rec: dict) -> dict | None:
         "unverified": bool(outcome.get("unverified")),
         # OV1: real traffic or an exercise, as the watch wrote it (none before OV1: inferred).
         "source": str(rec.get("source") or ""), "exercise_run": str(rec.get("exercise_run") or ""),
+        # OV1: who is behind the detection — the rule's address column — so that one attacker
+        # on one VM is one incident, whatever its cycles. Never shown.
+        "attacker": _attacker(sig),
     }
+
+
+def _attacker(sig: dict) -> str:
+    """The address the rule's row names (``SourceIP``, ``CallerIpAddress``) — or ""."""
+    raw = sig.get("raw_signal") if isinstance(sig.get("raw_signal"), dict) else {}
+    row = raw.get("first_result_row") if isinstance(raw.get("first_result_row"), dict) else {}
+    return next((str(row[k])[:64] for k in ("SourceIP", "CallerIpAddress") if row.get(k)), "")
 
 
 def _watch_cycles(since_ts: float | None) -> list[dict]:

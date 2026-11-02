@@ -7080,6 +7080,18 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": _OV1 for n in range(2600, 2612)})
 TESTS["M2609"] = "tests/unit/test_agent_nodes.py"
+# OV1: one attacker on one VM is one incident — the same address coming back, the same line twice.
+MUTANTS += [
+    ("M2612", "the same attacker coming back on one VM counted as another real incident (OV1)", IND_,
+     " or (key[2] and key in first and t0 - first[key] < FOLD_S):\n", ":\n"),
+    ("M2613", "a line written twice (one signal) counted as two real incidents (OV1)", IND_,
+     "        if (sid and sid in signals) or (key[2]", "        if (key[2]"),
+    ("M2614", "the console's cycle drops its attacker: every cycle another incident (OV1)", CON,
+     '        "attacker": _attacker(sig),\n', '        "attacker": "",\n'),
+    ("M2615", "an attacker folded into its first incident for ever, never a day later (OV1)", IND_,
+     "key in first and t0 - first[key] < FOLD_S)", "key in first)"),
+]
+TESTS.update({f"M{n}": _OV1 for n in range(2612, 2616)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -223,7 +223,11 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
 # anchored on an arbitrary one), outside any exercise. It ends as BL1 says
 # (analysis/containment.py, the same ``incident``): contained alone when an isolation or a block
 # is executed in its cycle, read back on Azure, and held. Its T0 is the detection's time: no rule
-# gives its first malicious event yet (docs/analysis.md, « Le réel »).
+# gives its first malicious event yet (docs/analysis.md, « Le réel »). One attacker on one VM is one
+# incident: a later cycle of the same address, technique and VM within FOLD_S of its first detection
+# (the rule's own dedup lasts its window only: a block held, the attack goes on and comes back) is a
+# repeat, never another incident — and a line written twice (its signal) is one.
+FOLD_S = 24 * 3600
 
 def _spans(run: dict, rid: str, t: float) -> bool:
     """A run report holds this moment on this VM: a fault from its start to its end, plus the
@@ -273,10 +277,12 @@ def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(
     lifts = liftings_of(index, liftings)
     judged_wrong = {c.get("signal_id") for c in cards if c.get("verdict") == "wrong" and c.get("signal_id")}
     decide, contain = [], []
-    alone = shadow = inferred = 0
+    alone = shadow = inferred = repeats = 0
     outcomes: dict[str, int] = {}
     incidents = 0
-    for c in index.cycles:
+    signals: set[str] = set()
+    first: dict[tuple, float] = {}       # (VM, technique, attacker) → its incident's detection
+    for c in sorted(index.cycles, key=lambda c: _ts(c.get("signal_at")) or 0.0):
         t0 = _ts(c.get("signal_at"))
         if (c.get("event") != "detection" or not c.get("action") or t0 is None or not since <= t0 <= until
                 or (c.get("attribution") or "asset") != "asset"):
@@ -284,6 +290,14 @@ def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(
         exercise, guessed = exercise_of(c, windows, runs, enrolled)
         if exercise:
             continue
+        sid = str(c.get("signal_id") or "")
+        key = (str(c.get("resource_id") or "").lower(), str(c.get("ttp") or ""), str(c.get("attacker") or ""))
+        if (sid and sid in signals) or (key[2] and key in first and t0 - first[key] < FOLD_S):
+            repeats += 1
+            continue
+        signals.add(sid)
+        if key[2]:
+            first[key] = t0
         incidents += 1
         inferred += guessed
         inc = containment.incident(str(c.get("signal_id") or ""), str(c.get("ttp") or ""),
@@ -306,7 +320,7 @@ def real(cycles, cards: list[dict], threshold: float, since: float, *, windows=(
                     "detected": incidents, "decided": len(decide), "contained": len(contain)},
         "alone": {"contained": alone, "shadow": shadow, "of": incidents,
                   "threshold": threshold if threshold != float("inf") else None,
-                  "by_outcome": outcomes, "inferred": inferred},
+                  "by_outcome": outcomes, "inferred": inferred, "repeats": repeats},
     }
 
 

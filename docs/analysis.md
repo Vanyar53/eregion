@@ -645,9 +645,12 @@ Les définitions de BL1 portent sur une campagne. L'accueil de la console les ap
 leurs, dans Dagorlad (`compute`, inchangé).
 
 - **Un incident réel** est un cycle de la watch : une détection avec une décision, sur une VM qu'elle
-  nomme (une ligne non attribuée est ancrée sur une VM quelconque), hors de tout exercice. La watch
-  déduplique les lignes d'une règle : la même adresse n'est pas redétectée pendant la fenêtre de la
-  règle, et un cycle est un incident.
+  nomme (une ligne non attribuée est ancrée sur une VM quelconque), hors de tout exercice. **Un
+  attaquant sur une VM est un incident** : la watch déduplique les lignes d'une règle pendant sa
+  fenêtre seulement, et un blocage retenu laisse l'attaque continuer et revenir. Un cycle de la même
+  adresse (la colonne `SourceIP` ou `CallerIpAddress` de la ligne), de la même technique, sur la
+  même VM, moins de 24 h après la première détection est une répétition, comptée à part ; une ligne
+  écrite deux fois (son signal) est une. L'incident finit comme son premier cycle.
 - **Contenu seul** : la même fonction que BL1, `containment.incident`. Une isolation ou un blocage
   est exécuté dans le cycle, relu sur Azure, et il a tenu : aucune carte de la réaffirmation ne le
   dit disparu ou contourné, dans les 15 min après la relecture ou jusqu'à sa première levée.

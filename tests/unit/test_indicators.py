@@ -278,7 +278,7 @@ def test_a_fault_taken_for_an_attack_is_counted_apart_never_an_attack(runs):
 
 def _real(runs, seen, *, action="block_suspicious_ip", confidence=0.92, executed=True, verified=True,
           verified_after=None, decided_after=25, source="real", exercise_run="", attribution="asset",
-          sid="rule-ssh-brute-force-aaaa0001", guard="", vm=VM):
+          sid="rule-ssh-brute-force-aaaa0001", guard="", vm=VM, attacker=""):
     """A line of the watch's debug file as it writes it since OV1 (``source``; None: before)."""
     out = {"status": "blocked" if executed else "escalated", "executed": executed, "verified": verified}
     if verified_after is not None:
@@ -288,7 +288,9 @@ def _real(runs, seen, *, action="block_suspicious_ip", confidence=0.92, executed
     rec = {"timestamp": (seen + timedelta(seconds=decided_after)).isoformat(),
            "signal": {"signal_id": sid, "event": "detection", "ttp": "T1110.001", "resource_id": vm,
                       "timestamp": seen.isoformat(),
-                      "context": {"rule_name": "ssh-brute-force", "attribution": attribution}},
+                      "context": {"rule_name": "ssh-brute-force", "attribution": attribution},
+                      "raw_signal": {"first_result_row": {"SourceIP": attacker, "FailedAttempts": 12}
+                                     if attacker else {}}},
            "action": action, "confidence": confidence, "escalate": not executed, "outcome": out,
            "resolved_autonomy_mode": "non_disruptive"}
     if source is not None:
@@ -391,3 +393,42 @@ def test_dagorlad_runs_shows_the_exercises_indicators_and_the_overview_says_real
     for label in ("'TIME TO CONTAIN · REAL'", "'CONTAINED ALONE · REAL'", "`COVERAGE · EXERCISES · ${days} d`",
                   "'LAST PROOF · EXERCISE'"):
         assert label in ov, label
+
+
+def test_one_attacker_on_one_vm_is_one_incident_whatever_its_cycles(runs):
+    """A block held (human_only): the brute force goes on, the rule's dedup ends with its window,
+    the same address comes back — one incident, not two. Another address is another; the same one a
+    day later, another too; a line written twice (its signal), one."""
+    a = NOW - timedelta(hours=30)
+    _real(runs, a, executed=False, verified=None, guard="mode_hold", sid="rule-x-a1", attacker="203.0.113.7")
+    _real(runs, a + timedelta(minutes=12), executed=False, verified=None, guard="mode_hold", sid="rule-x-a2",
+          attacker="203.0.113.7")
+    _real(runs, a + timedelta(minutes=13), verified_after=40, sid="rule-x-b1", attacker="198.51.100.9")
+    _real(runs, a + timedelta(minutes=13), verified_after=40, sid="rule-x-b1", attacker="198.51.100.9")
+    _real(runs, a + timedelta(hours=25), verified_after=35, sid="rule-x-a3", attacker="203.0.113.7")
+    # A rule's row without an address column, its line written twice: one incident still.
+    _real(runs, a + timedelta(hours=2), verified_after=50, sid="rule-x-c1")
+    _real(runs, a + timedelta(hours=2), verified_after=50, sid="rule-x-c1")
+    out = _overview_real(runs)
+    assert (out["alone"]["of"], out["alone"]["repeats"]) == (4, 3)
+    assert out["alone"]["by_outcome"] == {"held_by_guard": 1, "contained_alone": 3}
+    assert out["alone"]["contained"] == 3
+
+
+def test_a_run_on_another_vm_never_makes_a_real_incident_an_exercise(runs):
+    """Both ways of the fallback: a run on gondolin — an attack or a fault — at the same time
+    leaves a real incident on bree real (inferred, and said)."""
+    gondolin, bree = VM.replace("vm-a", "vm-celebrimbor-gondolin"), VM.replace("vm-a", "vm-celebrimbor-bree")
+    a = NOW - timedelta(hours=4)
+    (runs / "r-g.json").write_text(json.dumps({
+        "run_id": "r-g", "mitre": "T1110.001", "result": "PASS", "scenario": "s",
+        "metrics": {"kind": "technique", "attack_time": a.timestamp(), "detection": "detected",
+                    "detection_latency_s": 30, "resource_id": gondolin}}))
+    (runs / "gothmog-g.json").write_text(json.dumps({
+        "run_id": "gothmog-g", "mitre": "", "result": "PASS", "scenario": "VM shutdown",
+        "metrics": {"injector": "gothmog", "kind": "fault", "fault_start": (a - timedelta(minutes=5)).isoformat(),
+                    "fault_end": (a + timedelta(minutes=5)).isoformat(), "targets": [gondolin]}}))
+    _real(runs, a + timedelta(seconds=30), source=None, vm=bree, verified_after=40, sid="rule-x-bree")
+    _real(runs, a + timedelta(seconds=30), source=None, vm=gondolin, verified_after=40, sid="rule-x-gondolin")
+    out = _overview_real(runs)
+    assert (out["alone"]["of"], out["alone"]["inferred"], out["alone"]["contained"]) == (1, 1, 1)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -26,10 +27,23 @@ from glorfindel.detectors import (  # noqa: E402  (after optional deps)
     is_identity_source,
     plane_of,
 )
+from glorfindel import expected_sudo  # noqa: E402
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
 _STATUS_FILE = Path.home() / ".glorfindel" / "rule_status.json"
+
+
+def expected_counts(status: dict) -> dict:
+    """ADM1: a rule's sudo set aside as an administrator's expected one, as its status holds
+    them — the console and `status_snapshot` read them here."""
+    es = status.get("expected_sudo") if isinstance(status, dict) else None
+    es = es if isinstance(es, dict) else {}
+    try:
+        count = int(es.get("count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    return {"expected_count": count, "expected_last": str(es.get("last") or "")}
 
 # P1: the client's layer — the rules of THIS deployment (approved, overriding a base rule,
 # disabling one), outside the repository, loaded over the shipped base
@@ -903,6 +917,13 @@ def _row_identity(row: dict) -> str:
                                 for k in ("CorrelationId", "OperationNameValue", "_ResourceId"))
     ts = row.get("TimeGenerated")
     if ts:
+        # A log line is its instant and its text (ADM1): an intruder's sudo at the instant of
+        # an expected one, ingested a poll later, was taken for it — set aside, no card, no
+        # trace. A detection seen under the old identity is sent once more after the update
+        # (at least once, never lost).
+        msg = row.get("SyslogMessage")
+        if isinstance(msg, str):
+            return f"ts:{ts}|{hashlib.sha256(msg.encode('utf-8', 'replace')).hexdigest()[:16]}"
         return f"ts:{ts}"
     keys = sorted(
         f"{k}={v}" for k, v in row.items()
@@ -917,8 +938,10 @@ _CONTROL_PLANE_CARDS_PER_POLL = 5
 
 
 def _grave(row: dict) -> bool:
-    """A write on Glorfindel's own rules, or its identity outside what it does (AL1)."""
-    return row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True
+    """A write on Glorfindel's own rules, or its identity outside what it does (AL1); a Run
+    Command not attached to one of its drains (SID1, `GlorfindelRunCommand`: its reason)."""
+    return (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True
+            or bool(row.get("GlorfindelRunCommand")))
 
 
 def _control_plane_operations(rows: list[dict]) -> list[dict]:
@@ -940,6 +963,7 @@ def _control_plane_summary(rest: list[dict]) -> dict:
         **rest[0],
         "GlorfindelManaged": any(r.get("GlorfindelManaged") is True for r in rest),
         "GlorfindelIdentity": any(r.get("GlorfindelIdentity") is True for r in rest),
+        "GlorfindelRunCommand": next((r["GlorfindelRunCommand"] for r in rest if r.get("GlorfindelRunCommand")), ""),
         "OmittedOperations": [
             {"TimeGenerated": r.get("TimeGenerated") or "",
              "OperationNameValue": r.get("OperationNameValue") or "",
@@ -948,6 +972,7 @@ def _control_plane_summary(rest: list[dict]) -> dict:
              "_ResourceId": r.get("_ResourceId") or r.get("ResourceId") or "",
              "GlorfindelManaged": r.get("GlorfindelManaged") is True,
              "GlorfindelIdentity": r.get("GlorfindelIdentity") is True,
+             "GlorfindelRunCommand": r.get("GlorfindelRunCommand") or "",
              # An identity finding (C2): what its card would have said.
              **({"EntraOperation": r.get("EntraOperation") or "",
                  "ActorName": r.get("ActorName") or r.get("ActorId") or "",
@@ -1233,6 +1258,7 @@ class RulePoller:
                     "last_match": s.get("last_match", ""),
                     "last_error": s.get("last_error", ""),
                     "match_count": s.get("match_count", 0),
+                    **expected_counts(s),
                 })
             return out
 
@@ -1278,6 +1304,37 @@ class RulePoller:
             d = self._detectors[rule.name] = detector_for(rule.source, workspace_id=rule.workspace_id)
         return d
 
+    def _judge_expected(self, rule: DetectionRule, routed: dict[str, tuple]) -> dict[int, dict]:
+        """ADM1 (#284): id(row) → journal entry, for each row an administrator's expected sudo.
+        Here, in the poller, rather than in the query or in `investigate`: the query is the
+        shipped text the operator reads and P1 keeps intact, and dropping rows on the server
+        would leave nothing to count; `investigate` runs once a signal is dispatched, a graph
+        cycle already open. Here no signal exists yet, the VM the row was routed to is known,
+        and the model never sees the list. Judged BEFORE the poller's lock, which every rule
+        shares: what a local user writes in a sudo line never holds the other rules. Only a rule
+        of the sudo technique, a row a VM claims, a config that names accounts."""
+        policy = getattr(self._cfg, "expected_sudo", None)
+        judged: dict[int, dict] = {}
+        for tgt, rows in routed.values():
+            if rule.ttp != expected_sudo.SUDO_TTP or tgt is None or policy is None or not policy.admins:
+                continue
+            for r in rows:
+                entry = expected_sudo.judge(r, tgt[1], policy)
+                if entry is not None:
+                    judged[id(r)] = entry
+        return judged
+
+    @staticmethod
+    def _expected_split(rule: DetectionRule, rows: list[dict], judged: dict[int, dict],
+                        now_iso: str) -> tuple[list[dict], int]:
+        """(the rows that stay cards, how many were set aside). The ones set aside are journaled
+        first: a journal that cannot be written sets nothing aside."""
+        entries = [judged[id(r)] for r in rows if id(r) in judged]
+        kept = [r for r in rows if id(r) not in judged]
+        if entries and not expected_sudo.record(entries, rule.name, now_iso):
+            return rows, 0
+        return kept, len(entries)
+
     def poll_once(self, rule: DetectionRule) -> list[dict]:
         """One cycle of one rule: query once, route, dedup, dispatch. Returns the
         signals dispatched (or that would be, in dry-run)."""
@@ -1297,6 +1354,7 @@ class RulePoller:
 
         targets = self._targets(rule)
         routed = self._route(rule, rows, targets) if targets else {}
+        judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
         signals: list[dict] = []
         sent_ids: dict[str, list[str]] = {}
         with self._lock:
@@ -1312,6 +1370,7 @@ class RulePoller:
             control = is_control_plane_source(rule.source) or is_identity_source(rule.source)
             budget = _CONTROL_PLANE_CARDS_PER_POLL
             data_budget = _DATA_CARDS_PER_POLL
+            expected_n = 0
             for key, (tgt, krows) in routed.items():
                 seen = dispatched.get(key, {})
                 new = [r for r in krows if _row_identity(r) not in seen]
@@ -1330,10 +1389,17 @@ class RulePoller:
                     plan.append((key, tgt, send))
                     sent_ids[key] = [_row_identity(r) for r in new]
                     continue
+                sent_ids[key] = [_row_identity(r) for r in new]
+                # The administrators' expected sudo (ADM1): set aside here, before any
+                # signal — journaled and counted, never in the prompt.
+                kept, aside = self._expected_split(rule, new, judged, now_iso)
+                expected_n += aside
+                if not kept:
+                    continue
                 # Event rows (TimeGenerated) are one incident per cycle: the newest is
                 # sent. Aggregated rows (one per attacker, per account…) each count.
-                events = [r for r in new if r.get("TimeGenerated")]
-                send = [r for r in new if not r.get("TimeGenerated")]
+                events = [r for r in kept if r.get("TimeGenerated")]
+                send = [r for r in kept if not r.get("TimeGenerated")]
                 if events:
                     send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
                 # Capped per rule and poll (SEC2), as the control plane: the gravest rows
@@ -1347,7 +1413,6 @@ class RulePoller:
                 elif rest:
                     send.append(_data_summary(rest))
                 plan.append((key, tgt, send))
-                sent_ids[key] = [_row_identity(r) for r in new]
 
         for key, tgt, send in plan:
             for row in send:
@@ -1363,6 +1428,10 @@ class RulePoller:
             if signals:
                 st["last_match"], st["ttp"] = now_iso, rule.ttp
                 st["match_count"] = st.get("match_count", 0) + len(signals)
+            if expected_n:
+                # ADM1: the sudo set aside, counted where the console reads the rules.
+                st["expected_sudo"] = {"count": expected_counts(st)["expected_count"] + expected_n,
+                                       "last": now_iso}
             # Recorded AFTER the dispatch: a crash in between re-sends (at least once)
             # rather than losing a detection (third review, detail).
             dispatched = st.setdefault("dispatched", {})
@@ -1399,7 +1468,7 @@ class RulePoller:
         elif plane == "data" and _reads_activity_table(rule.query):
             plane = "control"
         control = plane in ("control", "identity")
-        grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
+        grave = control and _grave(row)
         return {
             "signal_id": f"rule-{rule.name}-{uuid.uuid4().hex[:8]}",
             "event": "detection",

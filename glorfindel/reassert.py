@@ -99,6 +99,16 @@ def _mode(autonomy, vm_name: str, ref: str = "") -> str:
         return "human_only"
 
 
+def _perimeters_first(blocks: list[dict]) -> list[dict]:
+    """The blocks that hold a perimeter (an entry `scoped: False`, merged or not) before the
+    VM blocks, each group in its own order. A perimeter put back covers every VM of its
+    subnet: a VM block read before it, its rules rewritten, said « n'est plus bloquée » of
+    NICs the perimeter cut off again a moment later in the same pass — a card false once
+    the pass ended (L1Qr, seed 6). Read after, the VM block sees the pair as it is. The
+    files' order (a directory listing) decided it before."""
+    return sorted(blocks, key=lambda b: b.get("scoped") is not False)
+
+
 def reassert_active(connector, autonomy=None) -> list[dict]:
     """Check every active isolation and block; re-apply missing rules once.
 
@@ -124,7 +134,7 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
             # Its state not written (a full disk): said, and the others still read — a pass
             # cut off at the first VM never saw the next one held again (L2C, review).
             report.append(unrecorded(snapshot["vm_name"], exc))
-    for snapshot in active_blocks():
+    for snapshot in _perimeters_first(active_blocks()):
         if not snapshot.get("resource_id"):
             continue
         try:

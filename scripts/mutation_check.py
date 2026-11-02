@@ -2058,7 +2058,8 @@ AGT = "glorfindel/agent.py"
 DRU = "glorfindel/detection_rules.py"
 MUTANTS += [
     ("M810", "Glorfindel's own writes not excluded: its own isolation escalates itself (AL1)", ACT,
-     "        if is_own_call(row, own, recorded):\n            continue\n", ""),
+     "    if why is None or (why == \"\" and is_own_call(row, own, recorded)):\n",
+     "    if why is None:\n"),        # re-anchored by SID1: the drop moved into _keep
     ("M811", "a control-plane detection decided by the model: it is called, and isolate_vm runs (AL1)", AGT,
      "    if _is_control_plane(state[\"signal\"]):\n        return _control_plane_decision(state)\n", ""),
     ("M812", "a user's token without idtyp read as an application's: the CLI's appid excludes everyone (AL1)",
@@ -7124,6 +7125,157 @@ TESTS.update({
     "M2346": "tests/unit/test_release_away.py::test_the_reset_takes_off_a_bare_nics_block_left_on_the_nsg_it_carried",
 })
 
+# ADM1 (#284): the administrators' expected sudo — set aside by the RulePoller before any
+# signal, journaled and counted; another account, sudo -u other, a sensitive command, a line
+# read another way stay cards. M2650–M2679, one per guard.
+XSU = "glorfindel/expected_sudo.py"
+_XSU = "tests/unit/test_expected_sudo.py"
+MUTANTS += [
+    ("M2650", "a sudo to another account than root taken for an expected one (ADM1)", XSU,
+     "    if line is None or not line.to_root:\n", "    if line is None:\n"),
+    ("M2651", "a PWD that writes USER=root makes a sudo -u other one to root (ADM1)", XSU,
+     'return bool(self.run_as) and all(u == "root" for u in self.run_as)',
+     'return bool(self.run_as) and any(u == "root" for u in self.run_as)'),
+    ("M2652", "any account's sudo taken for an administrator's (ADM1)", XSU,
+     "    if line.account not in policy.accounts_for(asset_name):\n        return None\n", ""),
+    ("M2653", "an administrator's sensitive command set aside with the rest (ADM1)", XSU,
+     "    if sensitive(line.command, policy.sensitive_commands) is not None:\n        return None\n", ""),
+    ("M2654", "a sudo failure (« 3 incorrect password attempts ») read as a sudo to root (ADM1)", XSU,
+     "(?P<fields>(?:TTY|PWD)=.*?[ ;])", "(?P<fields>.*?[ ;])"),
+    ("M2655", "a line with two COMMAND= read as one: a PWD hides `sudo bash` behind its own (ADM1, review)", XSU,
+     '    if message.count("COMMAND=") != 1:\n        return None\n', ""),
+    ("M2656", "reading /etc/shadow no longer sensitive (ADM1)", XSU,
+     r'("shadow", r"\bg?shadow\b")', r'("shadow", r"(?!)")'),
+    ("M2657", "useradd, usermod, passwd no longer sensitive (ADM1)", XSU,
+     r'("accounts", r"(?:^|', r'("accounts", r"(?!)(?:^|'),
+    ("M2658", "sudoers, visudo no longer sensitive (ADM1)", XSU,
+     r'("sudoers", r"\bsudoers\b|\bvisudo\b")', r'("sudoers", r"(?!)")'),
+    ("M2659", "chmod u+s, 4755 no longer sensitive (ADM1)", XSU,
+     r'("setuid", r"\b(?:chmod|install)', r'("setuid", r"(?!)\b(?:chmod|install)'),
+    ("M2660", "setcap no longer sensitive (ADM1)", XSU,
+     r'("capabilities", r"\bsetcap\b")', r'("capabilities", r"(?!)")'),
+    ("M2661", "stopping a supervision agent no longer sensitive (ADM1)", XSU,
+     r'("supervision", rf"\A(?=', r'("supervision", rf"(?!)\A(?='),
+    ("M2662", "auditctl no longer sensitive (ADM1)", XSU,
+     r'("audit", r"\bauditctl\b")', r'("audit", r"(?!)")'),
+    ("M2663", "deleting the logs no longer sensitive (ADM1)", XSU,
+     r'("logs", r"\b(?:rm|shred|truncate|unlink)\b[^;&|]*?/var/log\b|>\s*/var/log/|\bjournalctl\b[^;&|]*?--vacuum")',
+     r'("logs", r"(?!)")'),
+    ("M2664", "an SSH key planted no longer sensitive (ADM1)", XSU,
+     r'("ssh_keys", r"\bauthorized_keys2?\b")', r'("ssh_keys", r"(?!)")'),
+    ("M2665", "PAM changed no longer sensitive (ADM1)", XSU,
+     r'("pam", r"/etc/pam\.d\b|\bpam_\w+\.so\b")', r'("pam", r"(?!)")'),
+    ("M2666", "ld.so.preload no longer sensitive (ADM1)", XSU,
+     r'("preload", r"\bld\.so\.preload\b|', r'("preload", r"(?!)\bld\.so\.preload\b|'),
+    ("M2667", "the config's sensitive commands ignored (ADM1)", XSU,
+     "    for t in extra or ():\n", "    for t in ():\n"),
+    ("M2668", "the config's sensitive commands read with their case (ADM1)", XSU,
+     "        if t and t.lower() in low:\n", "        if t and t in text:\n"),
+    ("M2669", "a sudo set aside though its journal could not be written: excluded in silence (ADM1)",
+     "glorfindel/detection_rules.py",
+     "        if entries and not expected_sudo.record(entries, rule.name, now_iso):\n            return rows, 0\n",
+     "        if entries:\n            expected_sudo.record(entries, rule.name, now_iso)\n"),
+    ("M2670", "a journal that cannot be written said written (ADM1)", XSU,
+     'every sudo stays a card", _JOURNAL, exc)\n        return False\n',
+     'every sudo stays a card", _JOURNAL, exc)\n        return True\n'),
+    ("M2671", "a rule of another technique filtered as the sudo rule (ADM1)", "glorfindel/detection_rules.py",
+     "        if rule.ttp != expected_sudo.SUDO_TTP or tgt is None or policy is None or not policy.admins:\n",
+     "        if tgt is None or policy is None or not policy.admins:\n"),
+    ("M2672", "one row per VM: an administrator's later sudo hides another account's (ADM1)",
+     "glorfindel/rules/azure/detection_rules.yaml",
+     "      | summarize arg_max(TimeGenerated, *) by Computer, _ResourceId, SyslogMessage\n",
+     "      | summarize arg_max(TimeGenerated, *) by Computer, _ResourceId\n"),
+    ("M2673", "an expected sudo not marked seen: counted again at every poll (ADM1)", "glorfindel/detection_rules.py",
+     "                sent_ids[key] = [_row_identity(r) for r in new]\n                # The administrators' expected sudo (ADM1)",
+     "                # The administrators' expected sudo (ADM1)"),
+    ("M2674", "the count of expected sudo restarts at every poll (ADM1)", "glorfindel/detection_rules.py",
+     'st["expected_sudo"] = {"count": expected_counts(st)["expected_count"] + expected_n,',
+     'st["expected_sudo"] = {"count": expected_n,'),
+    ("M2675", "the rule's status no longer says the expected sudo (ADM1)", "glorfindel/detection_rules.py",
+     '                    "match_count": s.get("match_count", 0),\n                    **expected_counts(s),\n',
+     '                    "match_count": s.get("match_count", 0),\n'),
+    ("M2676", "the console no longer says the expected sudo (ADM1)", "eregion_console/api.py",
+     "                    **expected_counts(s),\n", ""),
+    ("M2677", "glorfindel report no longer says the expected sudo (ADM1)", "glorfindel/cli.py",
+     '    _print_expected_sudo(r["expected_sudo"])\n', ""),
+    ("M2678", "glorfindel report reads a command's text as markup (ADM1)", "glorfindel/cli.py",
+     '        return _esc_markup("".join(c for c in str(text) if c.isprintable()))\n',
+     '        return "".join(c for c in str(text) if c.isprintable())\n'),
+    ("M2679", "an account written as a pattern (admin*) accepted in the config (ADM1)", "glorfindel/config.py",
+     "            if not _ACCOUNT_RE.fullmatch(name):\n", "            if False:\n"),
+]
+TESTS.update({f"M{n}": _XSU for n in range(2650, 2680)})
+# ADM1, its review (02/11): a line cut by sudo, a line break, a second COMMAND=, the dedup's
+# identity, the loader's variables, the list's holes; then the root shells (Jonathan, 02/11:
+# sensitive, shipped, no exception until COR1), one mutant per family. M2700–M2719.
+_RS = "glorfindel/expected_sudo.py"
+MUTANTS += [
+    ("M2700", "a line cut by sudo judged on its start: its sensitive end unread (ADM1, review)", _RS,
+     "    if len(message) >= _SUDO_LINE_CUT:\n        return None\n", ""),
+    ("M2701", "a line with a line break set aside (ADM1, review)", _RS,
+     '    if "\\n" in message or "\\r" in message:\n        return None\n', ""),
+    ("M2702", "an intruder's line at an expected one's instant taken for it by the dedup (ADM1, review)",
+     "glorfindel/detection_rules.py",
+     '        if isinstance(msg, str):\n            return f"ts:{ts}|', '        if False:\n            return f"ts:{ts}|'),
+    ("M2703", "a USER= that is not root after the fields read as nothing (ADM1, review)", _RS,
+     "run_as=tuple(_RUN_AS.findall(message))", 'run_as=tuple(_RUN_AS.findall(m["fields"]))'),
+    ("M2704", "LD_PRELOAD kept by sudo in ENV= unread (ADM1, review)", _RS,
+     "    if _LD_ENV.search(line.fields):\n        return None\n", ""),
+    ("M2705", "LD_PRELOAD in the command line no longer sensitive (ADM1, review)", _RS,
+     '|\\bLD_(?:PRELOAD|LIBRARY_PATH|AUDIT)="),', '"),'),
+    ("M2706", "authorized_keys2 no longer sensitive (ADM1, review)", _RS,
+     r"authorized_keys2?\b", r"authorized_keys\b"),
+    ("M2707", "install -m 4755 no longer sensitive (ADM1, review)", _RS,
+     "(?:chmod|install)", "(?:chmod)"),
+    ("M2708", "the agent removed by dpkg -P, rpm -e, rm, chmod -x no longer sensitive (ADM1, review)", _RS,
+     (r'|uninstall|rm|mv|unlink)\b"',
+      '            r"|\\bdpkg\\b[^;&|]*?\\s-[a-zA-Z]*[rP]|\\brpm\\b[^;&|]*?\\s-[a-zA-Z]*e"\n'
+      '            r"|\\bchmod\\b[^;&|]*?[\\s,][ugoa]*-[rwX]*x")'),
+     (r'|uninstall)\b"', "            )")),
+    ("M2709", "the logging's configuration changed no longer sensitive (ADM1, review)", _RS,
+     '("log_config", r"', '("log_config", r"(?!)'),
+    ("M2710", "cron no longer sensitive (ADM1, review)", _RS, '("cron", r"', '("cron", r"(?!)'),
+    ("M2711", "a systemd unit written no longer sensitive (ADM1, review)", _RS, '("systemd", r"', '("systemd", r"(?!)'),
+    ("M2712", "a kernel module loaded no longer sensitive (ADM1, review)", _RS,
+     '("kernel_modules", r"', '("kernel_modules", r"(?!)'),
+    ("M2713", "the firewall emptied no longer sensitive (ADM1, review)", _RS, '("firewall", r"', '("firewall", r"(?!)'),
+    ("M2714", "an account expected on one VM expected on every VM (ADM1, review)", "glorfindel/config.py",
+     "return frozenset(a for e in self.admins if e.matches(asset_name) for a in e.accounts)",
+     "return frozenset(a for e in self.admins for a in e.accounts)"),
+    ("M2715", "a shell, su, sudo -i, a nested sudo of an admin set aside (ADM1, root shells)", _RS,
+     "    if prog in _SHELLS:\n        return True\n", ""),
+    ("M2716", "a shell behind env, nice, timeout set aside (ADM1, root shells)", _RS,
+     "    while i < len(tokens) and _name(tokens[i]) in _WRAPPERS:\n        i += 1\n", ""),
+    ("M2717", "an interpreter with code in line set aside (ADM1, root shells)", _RS,
+     "        if name.fullmatch(prog) and (not args or any(inline.fullmatch(a) for a in args)):\n"
+     "            return True\n", "        pass\n"),
+    ("M2718", "find -exec, xargs to a shell, awk's system() set aside (ADM1, root shells)", _RS,
+     ('    if prog == "find" and', '    if prog == "xargs" and', "    if prog in _AWKS and"),
+     ("    if False and", "    if False and", "    if False and")),
+    ("M2719", "an editor or a pager that opens a shell set aside (ADM1, root shells)", _RS,
+     "    if prog in _SHELL_ESCAPES:\n        return True\n", ""),
+]
+TESTS.update({f"M{n}": _XSU for n in range(2700, 2720)})
+# ADM1, second review: more wrappers, terminal multiplexers, python's pty and debuggers, the
+# programs that run a command given to them. M2786–M2789.
+MUTANTS += [
+    ("M2786", "a shell behind time, setsid, chroot, strace, nsenter, systemd-run… set aside (ADM1, second review)", _RS,
+     (',\n                       "time", "ionice", "chrt", "taskset", "setsid", "flock", "chroot", "strace",\n'
+      '                       "ltrace", "nsenter", "unshare", "watch", "systemd-run"})'),
+     "})"),
+    ("M2787", "screen, tmux set aside (ADM1, second review)", _RS,
+     "    if prog in _MULTIPLEXERS:\n        return True\n", ""),
+    ("M2788", "python -m pty, gdb set aside (ADM1, second review)", _RS,
+     ("    if _PYTHON.fullmatch(prog) and (", "    if prog in _DEBUGGERS:\n"),
+     ("    if False and (", "    if False:\n")),
+    ("M2789", "systemd-run --shell, socat exec:, tar's checkpoint, docker to a shell, env --split-string set aside "
+              "(ADM1, second review)", _RS,
+     ('    if "systemd-run" in names and', '    if "socat" in names and', '    if "tar" in names and',
+      '    if ({"docker", "podman"} & set(names)',
+      '    if token.startswith("-") and "=" in token:\n        token = token.split("=", 1)[1]\n'),
+     ("    if False and", "    if False and", "    if False and", "    if (False", "")),
+]
+TESTS.update({f"M{n}": _XSU for n in range(2786, 2790)})
 # OV1 (#399): the overview counts real traffic, Dagorlad the exercises — the watch's debug line
 # says which, the console infers an older one; a real incident ends as BL1 says. M2600–M2611.
 _OV1 = "tests/unit/test_indicators.py"
@@ -7312,6 +7464,25 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": _SEC13_V16 for n in (2937, 2938, 2939)})
 
+# L1Qr (#363): L1Q's rule entered; the defect it brought up (seed 6 at 500) — a VM block read before
+# its subnet's perimeter, rewritten under the pair turned into an allow, said « n'est plus bloquée »
+# of NICs the perimeter cut off again later in the same pass. The perimeters first. M2980–M2982.
+_L1QR = ("tests/unit/test_invariant_regressions.py::"
+         "test_a_vm_block_rewritten_before_its_subnets_perimeter_never_says_unblocked "
+         "tests/unit/test_reassert.py::test_a_perimeter_is_put_back_before_the_vm_blocks_of_its_subnet")
+_L1QR_ORDER = '    return sorted(blocks, key=lambda b: b.get("scoped") is not False)\n'
+MUTANTS += [
+    ("M2980", "the blocks reasserted in the directory's order: a VM block read before its subnet's perimeter, "
+              "said « n'est plus bloquée » where the pair put back a moment later cuts it off (L1Qr)", R,
+     _L1QR_ORDER, "    return list(blocks)\n"),
+    ("M2981", "the VM blocks reasserted before the perimeters (L1Qr)", R,
+     _L1QR_ORDER, '    return sorted(blocks, key=lambda b: b.get("scoped") is False)\n'),
+    ("M2982", "a merged entry (a perimeter and its VM's placements) taken for a VM block, read after the others "
+              "(L1Qr)", R,
+     _L1QR_ORDER, '    return sorted(blocks, key=lambda b: b.get("scoped") is not False or bool(b.get("placements")))\n'),
+]
+TESTS.update({mid: f"{_L1QR} {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
+
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
 # « brouillon ». M2680–M2695; M2696–M2699 after its review.
@@ -7437,6 +7608,73 @@ CONTROL = [
      "        if _enum_text(getattr(r, \"access\", \"\")) != \"allow\":\n            continue\n        if name.startswith(\"glorfindel-\"):\n            continue\n"
      "        if direction == \"inbound\":"),
 ]
+
+# SID1 (#409): Glorfindel's own identity watched — a Run Command under its identity is
+# dropped only as the drain of an isolation it recorded on that VM (a window of minutes, one
+# drain for one operation); else a critical card, an unreadable state included (A0); another
+# caller is not the rule's; decided by the code. M2790–M2809.
+ORC = "glorfindel/providers/azure/own_run_command.py"
+_SID1 = "tests/unit/test_own_run_command.py"
+MUTANTS += [
+    ("M2790", "its drain never attached: every isolation it decides is a critical card (SID1)", ORC,
+     "        if t - DRAIN_BEFORE_S <= at <= t + DRAIN_AFTER_S:\n",
+     "        if False:\n"),
+    ("M2791", "every Run Command under its identity dropped: a stolen identity unseen (SID1)", ORC,
+     "    return attach(row, rid.rstrip(\"/\").lower(), book() if callable(book) else book, info)",
+     "    return None"),
+    ("M2792", "its identity unknown: Run Commands dropped, not cards (SID1, A0)", ORC,
+     "        return \"identity_unknown\" if only else \"\"", "        return None if only else \"\""),
+    ("M2793", "another caller's Run Command a card of the rule: every attack on the bench a card (SID1)", ORC,
+     "        return None if only else \"\"\n    return attach(", "        return \"\"\n    return attach("),
+    ("M2794", "a VM's unreadable isolation state read as no isolation (SID1, A0)", ORC,
+     "    if book.isolated is None or _state_unreadable(rid):", "    if book.isolated is None:"),
+    ("M2795", "the states unreadable read as no isolation at all (SID1, A0)", ORC,
+     "        return DrainBook(isolated=None)", "        return DrainBook()"),
+    ("M2796", "one drain covers any number of Run Commands in its window (SID1)", ORC,
+     "            if book.taken.get((rid, t), key) == key:", "            if True:"),
+    ("M2797", "the window an hour wide before the drain (SID1)", ORC,
+     "        if t - DRAIN_BEFORE_S <= at", "        if t - 3600 <= at"),
+    ("M2798", "a Run Command whose time can't be read dropped (SID1, A0)", ORC,
+     "    if at is None:\n        return \"time_unreadable\"", "    if at is None:\n        return None"),
+    ("M2799", "an unattached Run Command not critical when its identity is unknown (SID1)", DRU,
+     "            or bool(row.get(\"GlorfindelRunCommand\")))", "            )"),
+    ("M2800", "isolate_vm notes no drain: its own drain a critical card (SID1)", ISO,
+     "            _note_drain_asked()\n", ""),
+    ("M2801", "the drain noted before it asks anything: a VM unread, Windows, still open a window (SID1)",
+     ISO, "        _DRAIN_ASKED.fn = asked\n        try:\n", "        asked()\n        try:\n"),
+    ("M2802", "a drain forgotten once its state is gone: the release's drain a card (SID1)", ACT,
+     "            return own_run_command.DrainBook(times=times, isolated=current.isolated, taken=self._taken)",
+     "            return own_run_command.DrainBook(times=current.times, isolated=current.isolated, taken=self._taken)"),
+    ("M2803", "drains read only when a Run Command is in the rows: one released before its row is lost (SID1)",
+     ACT, "        return prepare_rows(rows, self.own_identities(), self.recorded(), self.drains())",
+     "        return prepare_rows(rows, self.own_identities(), self.recorded(), self.drains)"),
+    ("M2804", "the card says AL1's generic sentence, not why the command is outside an isolation (SID1)", AGT,
+     "    if row.get(\"GlorfindelRunCommand\") and not row.get(\"OmittedOperations\"):\n", "    if False:\n"),
+    ("M2805", "the operation's time read from its last line: a slow drain is a card (SID1)", ORC,
+     "    for col in (\"Started\", \"TimeGenerated\"):", "    for col in (\"TimeGenerated\",):"),
+    ("M2806", "the summary card loses the mark: a Run Command past the cap not critical (SID1)", DRU,
+     "        \"GlorfindelRunCommand\": next((r[\"GlorfindelRunCommand\"] for r in rest if r.get(\"GlorfindelRunCommand\")), \"\"),\n",
+     ""),
+    ("M2807", "poll_alert returns the row unmarked (SID1)", ACT,
+     "        return result[0], kept[0]\n", "        return result\n"),
+    ("M2808", "the shipped rule watches every caller: an attack by Run Command is a card of it (SID1)",
+     "glorfindel/rules/azure/detection_rules.yaml", "      | extend WatchedCaller = \"glorfindel\"\n", ""),
+    ("M2809", "rows read in the order they come: a later command takes the drain (SID1)", ACT,
+     "    for row in sorted(rows, key=lambda r: own_run_command.started(r) or 0.0):", "    for row in rows:"),
+]
+TESTS.update({f"M{n}": _SID1 for n in range(2790, 2810)})
+# SID1, after its 5.5 review: the drain noted when its Run Command is asked, A0 on the caller,
+# the operation that took the drain named. M2970–M2972.
+MUTANTS += [
+    ("M2970", "a row that names no caller dropped as another's (SID1, A0)", ORC,
+     "    if only and not has_caller:\n        return \"caller_unreadable\"\n", ""),
+    ("M2971", "an outside_drain card does not name the operation that took the drain (SID1)", ORC,
+     "        info[TAKEN_BY] = sorted(set(others))\n", "        pass\n"),
+    ("M2972", "the drain noted once it returned: a row ingested while it waits is a card (SID1)", ISO,
+     "        _DRAIN_ASKED.fn = asked\n        try:\n            out[\"drain\"] = self.drain_connections(resource_id)\n",
+     "        try:\n            out[\"drain\"] = self.drain_connections(resource_id)\n            asked()\n"),
+]
+TESTS.update({f"M{n}": _SID1 for n in range(2970, 2973)})
 
 
 # MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the

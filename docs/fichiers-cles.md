@@ -88,6 +88,8 @@ glorfindel/
                           list_nsgs, check_compute_access…), sdk.py (warm-up), capabilities.py, monitor.py
                           (AzureMonitorDetector, réexporté par detectors.py), activity.py (AzureActivityDetector, AL1 :
                           le journal d'activité, détection seule ; écritures de Glorfindel écartées, ses règles marquées),
+                          own_run_command.py (SID1 : son Run Command hors de la coupure des sessions d'une
+                          isolation qu'il a enregistrée — `drains_at` de l'état — est une carte critique),
                           entra.py (AzureEntraDetector, C2 : les journaux d'Entra ID, détection seule ; seuils en code,
                           identité de Glorfindel marquée acteur ou cible, jamais écartée ; texte et étapes des cartes)
                           backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
@@ -411,7 +413,12 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 livrée. Hors du dépôt : une mise à jour ne la touche jamais (conteneurs : base `:ro`)
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
-  rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
+  rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;
+                                `expected_sudo` : count, last — ADM1, lu par la console)
+  expected_sudo.jsonl         → ADM1 : chaque sudo d'administrateur attendu écarté par le RulePoller (at, rule,
+                                asset, account, command ≤ 300 car., logged_at), écrit AVANT d'écarter — un journal
+                                qu'on ne peut écrire n'écarte rien ; 0600 ; au-delà de 2 Mo, la moitié la plus
+                                récente gardée. Lu par `glorfindel report`
   readiness.json              → verrou L6 par VM, clé `nom--hash(ID)` (quatrième passe Q3 : un homonyme héritait du
                                 verdict « prête ») ; un nom seul ambigu ne résout rien → VM retenue : dernier contrôle de préparation + réserves acceptées
                                 (active_since, alerted) — écrit par le watch (tracker) et la console

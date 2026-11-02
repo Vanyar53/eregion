@@ -1172,8 +1172,8 @@ MUTANTS = [
     ("M282", "any role allows a click, not only an allowed one (M-3)", "glorfindel/bot.py",
      "        return bool(held & self.roles)\n", "        return bool(held)\n"),
     ("M283", "a refused click is not logged (M-3)", "glorfindel/bot.py",
-     '    _console.print(\n        f"[yellow]Button refused:',
-     '    (lambda *a: None)(\n        f"[yellow]Button refused:'),
+     '    _console.print(\n        f"[yellow]{what} refused:',          # a button's or a command's (SEC13)
+     '    (lambda *a: None)(\n        f"[yellow]{what} refused:'),
     ("M284", "the bot's token reaches every container again (M-3)", "docker-compose.yml",
      "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n",
      "  DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}\n  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}\n"),

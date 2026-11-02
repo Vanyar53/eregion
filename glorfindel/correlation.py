@@ -257,9 +257,17 @@ def settle(ttp: str, routed: dict, judged: dict, run_query, seen: set, identity,
     entries (id(row) → entry); a root shell pending (`origins`) leaves it set aside or a card,
     never pending. `seen`: the identities already dispatched. Returns the pass's counts."""
     p = Pass(run_query, now)
-    settle_origins(p, routed, judged, seen, identity)
-    if ttp == BRUTE_FORCE_TTP:
-        tag_compromise(p, routed, seen, identity, window_s)
+    try:
+        settle_origins(p, routed, judged, seen, identity)
+        if ttp == BRUTE_FORCE_TTP:
+            tag_compromise(p, routed, seen, identity, window_s)
+    except Exception as exc:
+        # A fault here never stops the rule's poll, and never sets aside what it did not settle.
+        pending = [k for k, e in judged.items() if "origins" in e]
+        for k in pending:
+            del judged[k]
+        p.counts["unknown"] += len(pending)
+        logger.warning("correlation failed (%s) — %d root shell(s) left as cards", exc, len(pending))
     return p.counts
 
 

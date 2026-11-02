@@ -356,6 +356,15 @@ def test_a_pending_row_is_never_left_set_aside_unsettled():
     assert "ne nomme pas sa VM" in nameless["SessionOrigin"] and "instant" in timeless["SessionOrigin"]
 
 
+def test_a_fault_in_the_correlation_leaves_the_root_shell_a_card_and_the_poll_running(monkeypatch):
+    def broken(*_a, **_k):
+        raise ValueError("a bug")
+    monkeypatch.setattr(correlation, "sessions", broken)
+    p, rule, sent, _ = _poller(_login(BASTION) + [_row(SUDO_I)])
+    _card(p, rule)
+    assert _journal() == [] and p.status_snapshot()[0]["correlation"]["unknown"] == 1
+
+
 def test_the_report_and_the_console_say_the_root_shells_set_aside_by_origin(monkeypatch):
     from glorfindel.cli import cli
     p, rule, sent, _ = _poller(_login(BASTION) + [_row(SUDO_I)])

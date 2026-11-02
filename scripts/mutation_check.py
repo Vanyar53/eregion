@@ -7278,8 +7278,10 @@ MUTANTS += [
      '"via": "", "origin": ""}'),
     ("M2753", "a card by origin says nothing of why (COR1)", COR,
      '    row["SessionOrigin"] = why\n', ""),
+    ("M2754", "a fault in the correlation sets aside the root shells it did not settle (COR1)", COR,
+     '        pending = [k for k, e in judged.items() if "origins" in e]\n', "        pending = []\n"),
 ]
-TESTS.update({f"M{n}": _COR for n in range(2720, 2754)})
+TESTS.update({f"M{n}": _COR for n in range(2720, 2755)})
 
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.

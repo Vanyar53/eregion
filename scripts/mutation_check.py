@@ -7003,6 +7003,22 @@ TESTS.update({
     "M2346": "tests/unit/test_release_away.py::test_the_reset_takes_off_a_bare_nics_block_left_on_the_nsg_it_carried",
 })
 
+# #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
+# `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.
+MUTANTS += [
+    ("M2497", "a read of the target's name that fails, for the name typed, raises instead of a refusal said (#358)",
+     "gothmog/runner/engine.py",
+     "            except Exception as e:\n                why = f\"typed_name: the target's name unreadable",
+     "            except ZeroDivisionError as e:\n                why = f\"typed_name: the target's name unreadable"),
+    ("M2498", "a fault launched by hand on Orodruin during a request takes no lock (#358)", "gothmog/cli.py",
+     '    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")\n',
+     "    lock = contextlib.nullcontext()\n"),
+    ("M2499", "a wire of a request takes the request's lock: it refuses itself (#358)", "gothmog/cli.py",
+     '    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")\n',
+     '    lock = request_lock("runs", f"fault {os.path.basename(fault)}")\n'),
+]
+TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

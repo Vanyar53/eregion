@@ -40,6 +40,7 @@ from pathlib import Path
 
 import yaml
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Confirm
 
 from eregion_core import run_report, watch_gate
@@ -312,8 +313,15 @@ class Engine:
                                 {"targets": "FAIL"}, error=why)
         if request and fault["destructive"] is not False:
             # DG-b: a destructive fault of a request runs only on the VM whose name the operator
-            # typed, compared to the name Azure gives it.
-            names = {str(bench.vm(vm).get("name") or "") for vm in seen["targets"]}
+            # typed, compared to the name Azure gives it. A name Azure does not give (a read that
+            # fails) is a refusal said, never an exception (#358): nothing has been touched.
+            try:
+                names = {str(bench.vm(vm).get("name") or "") for vm in seen["targets"]}
+            except Exception as e:
+                why = f"typed_name: the target's name unreadable on Azure ({type(e).__name__}: {e})"[:300]
+                console.print(f"[red]Refused:[/red] {escape(why)}")
+                return self._record(fault, run_id, "REFUSED", {"refusal": why, **seen},
+                                    {"targets": "FAIL"}, error=why)
             if names != {typed_name}:
                 why = (f"typed_name: the name typed ({typed_name or 'none'}) is not the target's "
                        f"({', '.join(sorted(names))})")

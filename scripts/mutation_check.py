@@ -5860,7 +5860,7 @@ MUTANTS += [
     ("M2364", "H0's config of another shape trusted: the push stops, nothing said (BL1c)", HCF,
      "    if not isinstance(cfg, dict):\n        return None, \"forme inconnue\"\n", ""),
     ("M2365", "a mode H0's config holds that this code does not know is carried (BL1c)", HCF,
-     "        elif mode not in KNOWN_MODES:\n", "        elif mode is None:\n"),
+     '        if a.get("mode") not in KNOWN_MODES:\n', "        if False:\n"),
     ("M2366", "HUMAN_ONLY=1 not heard: H0's modes kept by the emergency gesture (BL1c)", HCF,
      '        if human_only:\n            report.append((name, HUMAN, "HUMAN_ONLY=1"))\n        elif',
      '        if False:\n            report.append((name, HUMAN, "HUMAN_ONLY=1"))\n        elif'),
@@ -5877,10 +5877,9 @@ TESTS["M2367"] = "tests/unit/test_host_console.py"
 # read again before the scp, only HUMAN_ONLY=1 heard, what H0 says shown printable. M2369, M2780–M2783.
 MUTANTS += [
     ("M2369", "an H0 entry with other keys than match and mode (refused by the watch) keeps its mode (BL1c)",
-     HCF, "    if any(isinstance(a, dict) and set(a) - set(ASSET_KEYS) for a in autonomy.get(\"assets\") or []):\n",
-     "    if False:\n"),
+     HCF, "        if set(a) - set(ASSET_KEYS):\n", "        if False:\n"),
     ("M2780", "the push sends its config although H0's changed since it was read (BL1c)", MAKE,
-     "\t { cmp -s $$h0 $$h1 || {", "\t { true || {"),
+     "&& { cmp -s $$h0 $$h1 || {", "&& { true || {"),
     ("M2781", "an H0 default outside the known modes (refused by the watch) keeps the VMs' modes (BL1c)",
      HCF, '    if "default" in autonomy and autonomy["default"] not in KNOWN_MODES:\n', "    if False:\n"),
     ("M2782", "a name read on H0 reaches the operator's terminal with its escape sequences (BL1c)", HCF,
@@ -5890,6 +5889,18 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (2369, 2781, 2782)})
 TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in (2780, 2783)})
+
+# BL1c, second review: one entry the watch would refuse refuses the whole config (a blank or
+# non-text match, a mode unknown or not text); HUMAN_ONLY=1 never blocked by a second read. M2784–M2785.
+MUTANTS += [
+    ("M2784", "an H0 entry with a blank match (refused by the watch) dropped alone, the others kept (BL1c)",
+     HCF, '        if not isinstance(a.get("match"), str) or not a["match"].strip():\n',
+     '        if not isinstance(a.get("match"), str):\n'),
+    ("M2785", "HUMAN_ONLY=1 blocked when H0's config cannot be read again before the scp (BL1c)", MAKE,
+     "$(if $(filter 1,$(HUMAN_ONLY)),,$(HOST_PUSH_RECHECK))", "$(HOST_PUSH_RECHECK)"),
+]
+TESTS["M2784"] = "tests/unit/test_glorfindel_host.py"
+TESTS["M2785"] = "tests/unit/test_host_console.py"
 
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its

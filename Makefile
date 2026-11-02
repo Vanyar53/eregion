@@ -661,7 +661,9 @@ glorfindel-host-known:
 # la config de H0 lue par la même connexion ssh — illisible, tout part en human_only, et c'est dit).
 # HUMAN_ONLY=1 (seul « 1 ») : toutes les VM remises en human_only, le geste d'urgence
 # (host_config.py). La config de H0 est relue juste avant le scp : changée entre les deux lectures
-# (un mode changé dans la console pendant le push), rien n'est envoyé.
+# (un mode changé dans la console pendant le push), rien n'est envoyé. Pas sous HUMAN_ONLY=1 : ce
+# push n'emporte rien de H0, et une relecture qui échoue ne bloque pas le geste d'urgence.
+HOST_PUSH_RECHECK = { $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h1 2>/dev/null || : > $$h1; } && { cmp -s $$h0 $$h1 || { echo "  la config de H0 a changé pendant le push (un mode changé dans la console ?) : rien d'envoyé, relancer"; false; }; } &&
 glorfindel-host-push: glorfindel-host-known
 	@test -f infra/glorfindel-host/host.env || { echo "infra/glorfindel-host/host.env manquant (voir host.env.example)"; exit 1; }
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
@@ -669,8 +671,7 @@ glorfindel-host-push: glorfindel-host-known
 	@cfg=$$(mktemp); h0=$$(mktemp); h1=$$(mktemp); \
 	 $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h0 2>/dev/null || : > $$h0; \
 	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg --h0 $$h0$(if $(filter 1,$(HUMAN_ONLY)), --human-only) && \
-	 { $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h1 2>/dev/null || : > $$h1; } && \
-	 { cmp -s $$h0 $$h1 || { echo "  la config de H0 a changé pendant le push (un mode changé dans la console ?) : rien d'envoyé, relancer"; false; }; } && \
+	 $(if $(filter 1,$(HUMAN_ONLY)),,$(HOST_PUSH_RECHECK)) \
 	 scp -q $(HOST_SSH_OPTS) infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
 	 scp -q $(HOST_SSH_OPTS) $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
 	 $(HOST_SSH) 'chmod 600 eregion/.env eregion/glorfindel-config.yaml'; \

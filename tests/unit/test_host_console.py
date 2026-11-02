@@ -304,13 +304,25 @@ def test_push_reads_h0_s_config_before_it_sends_its_own(tmp_path, value, human_o
                 *([f"HUMAN_ONLY={value}"] if value is not None else []))
     assert res.returncode == 0, res.stderr
     out = res.stdout
+    # The recipe's shell, as make renders it, is valid shell (bash -n), with or without the check.
+    lines = out.splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith("cfg=$(mktemp)"))
+    last = next(i for i in range(first, len(lines)) if not lines[i].endswith("\\"))
+    script = tmp_path / "push.sh"
+    script.write_text("\n".join(lines[first:last + 1]) + "\n", encoding="utf-8")
+    assert subprocess.run(["bash", "-n", str(script)], capture_output=True).returncode == 0
     read = out.index("'cat eregion/glorfindel-config.yaml' > $h0 2>/dev/null || : > $h0")
     config = out.index("host_config.py glorfindel-config.yaml $cfg --h0 $h0")
+    assert ("--h0 $h0 --human-only" in out) is human_only
+    if human_only:
+        # M2785: HUMAN_ONLY=1 carries nothing of H0 — a second read that fails never blocks it.
+        assert "> $h1" not in out and "cmp -s" not in out
+        assert read < config < out.index("scp ")
+        return
     again = out.index("'cat eregion/glorfindel-config.yaml' > $h1 2>/dev/null || : > $h1")
     compared = out.index("cmp -s $h0 $h1 || {")
     assert read < config < again < compared < out.index("scp ")
     assert "rien d'envoyé" in out[compared:out.index("scp ")]
-    assert ("--h0 $h0 --human-only" in out) is human_only
 
 
 # ── host.env.example: a variable left empty stays empty ───────────────────────────────────

@@ -16,8 +16,10 @@ human_only, and each VM's mode kept as it is on H0 (BL1c, Jonathan's decision of
   - H0's config unread (absent, not YAML, of another shape), or one Glorfindel's strict reading
     would refuse at the watch's start (a default outside ``KNOWN_MODES``, a key more in
     ``autonomy`` or in an entry): every VM in ``human_only``, as before, and said.
-  - A mode on H0 this code does not know (``KNOWN_MODES``): that VM goes to ``human_only``,
-    said. A pattern (``vm-*``) or an entry of another shape: not kept, said.
+  - An entry the watch would refuse — not a table, a key more, a ``match`` that is not text or
+    is blank, a mode this code does not know (``KNOWN_MODES``: ``full_auto`` is deferred) —
+    makes the whole config unknown: every VM in ``human_only``, said. A pattern (``vm-*``),
+    which the watch reads: not kept, that VM said ``human_only``.
   - The same name twice on H0: the first entry, the one H0 resolves (``AutonomyConfig.resolve``).
   - A VM of the local config H0 does not know: ``human_only``, as before.
 - **HUMAN_ONLY=1** (``--human-only``; only « 1 »): every VM back to ``human_only`` in one
@@ -55,20 +57,34 @@ def read_h0(text: str | None) -> tuple[dict | None, str]:
         return None, "illisible (YAML)"
     if not isinstance(cfg, dict):
         return None, "forme inconnue"
+    why = refusal(cfg)
+    return (None, why) if why else (cfg, "")
+
+
+def refusal(cfg: dict) -> str:
+    """Why H0's config keeps no mode — "" when its modes can be kept. What Glorfindel's strict
+    reading refuses at the watch's start (glorfindel/config.py ``_check_autonomy``) is refused
+    whole: a config the watch would not run is no config whose modes are kept — never one VM
+    dropped and the others kept (a watch that would not run made one that acts)."""
     autonomy = cfg.get("autonomy")
     if autonomy is None:
-        return cfg, ""
+        return ""
     if not isinstance(autonomy, dict) or not isinstance(autonomy.get("assets") or [], list):
-        return None, "forme inconnue (autonomy)"
-    # What Glorfindel's strict reading refuses at the watch's start (glorfindel/config.py
-    # _check_autonomy): a config the watch would not run is no config whose modes are kept.
+        return "forme inconnue (autonomy)"
     if set(autonomy) - set(AUTONOMY_KEYS):
-        return None, "forme inconnue (autonomy : une clé de plus)"
+        return "forme inconnue (autonomy : une clé de plus)"
     if "default" in autonomy and autonomy["default"] not in KNOWN_MODES:
-        return None, "forme inconnue (autonomy.default hors des modes connus)"
-    if any(isinstance(a, dict) and set(a) - set(ASSET_KEYS) for a in autonomy.get("assets") or []):
-        return None, "forme inconnue (une entrée d'autonomy.assets a d'autres clés que match et mode)"
-    return cfg, ""
+        return "forme inconnue (autonomy.default hors des modes connus)"
+    for a in autonomy.get("assets") or []:
+        if not isinstance(a, dict):
+            return "forme inconnue (une entrée d'autonomy.assets n'est pas une table match, mode)"
+        if set(a) - set(ASSET_KEYS):
+            return "forme inconnue (une entrée d'autonomy.assets a d'autres clés que match et mode)"
+        if not isinstance(a.get("match"), str) or not a["match"].strip():
+            return "forme inconnue (une entrée d'autonomy.assets sans match)"
+        if a.get("mode") not in KNOWN_MODES:
+            return "forme inconnue (une entrée d'autonomy.assets hors des modes connus)"
+    return ""
 
 
 def _assets(cfg) -> list:
@@ -80,7 +96,10 @@ def _assets(cfg) -> list:
 def host_config(cfg: dict, h0: dict | None = None, *, h0_why: str = "",
                 human_only: bool = False) -> tuple[dict, list[tuple[str, str, str]]]:
     """``(config to push, report)`` — the report: ``(VM, mode sent, where it comes from)``, and
-    ``("*", "human_only", why)`` for what concerns every VM."""
+    ``("*", "human_only", why)`` for what concerns every VM. ``h0`` is checked by ``refusal``
+    here too: a caller that did not go through ``read_h0`` gets the same rule."""
+    if h0 is not None and (why := refusal(h0)):
+        h0, h0_why = None, why
     out = dict(cfg or {})
     kept: list[dict] = []
     report: list[tuple[str, str, str]] = []
@@ -89,11 +108,8 @@ def host_config(cfg: dict, h0: dict | None = None, *, h0_why: str = "",
         report.append(("*", HUMAN, "HUMAN_ONLY=1 : toutes les VM remises en human_only"))
     elif h0 is None:
         report.append(("*", HUMAN, f"config de H0 {h0_why or 'non lue'} : toutes les VM en human_only"))
-    for rule in _assets(h0):
-        if not isinstance(rule, dict) or not isinstance(rule.get("match"), str) or not rule["match"]:
-            report.append(("?", HUMAN, f"entrée de H0 d'une autre forme, non reportée : {str(rule)[:60]}"))
-            continue
-        name, mode = rule["match"], rule.get("mode")
+    for rule in _assets(h0):            # each a table {match: text, mode: known} (refusal)
+        name, mode = rule["match"], rule["mode"]
         if name in seen:            # H0 resolves the first exact entry: the later ones never applied
             continue
         seen.add(name)
@@ -101,8 +117,6 @@ def host_config(cfg: dict, h0: dict | None = None, *, h0_why: str = "",
             report.append((name, HUMAN, "HUMAN_ONLY=1"))
         elif _PATTERN & set(name):
             report.append((name, HUMAN, "motif sur H0, non reporté : human_only"))
-        elif mode not in KNOWN_MODES:
-            report.append((name, HUMAN, f"mode inconnu sur H0 ({str(mode)[:30]!r}) : human_only"))
         else:
             kept.append({"match": name, "mode": mode})
             report.append((name, mode, KEPT))

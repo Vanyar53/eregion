@@ -29,10 +29,10 @@ seul sur le banc, dans le mode de chaque VM.
       liste destructive de la config locale n'arrivent jamais sur H0 ;
     - le mode de chaque VM gardé de H0 (un nom exact, tel que la console l'écrit) ; une VM que
       H0 ne connaît pas part en `human_only` ;
-    - jamais un mode plus hardi que celui en place (A0) : config de H0 absente, illisible ou
-      d'une autre forme, toutes les VM en `human_only` ; un mode inconnu, un motif (`vm-*`) ou
-      une entrée d'une autre forme ne sont pas reportés, la VM part en `human_only` ; et c'est
-      dit.
+    - jamais un mode plus hardi que celui en place (A0) : config de H0 absente, illisible,
+      d'une autre forme, ou que la watch refuserait au démarrage (une seule entrée suffit : un
+      mode inconnu, un `match` vide, une clé de plus), toutes les VM en `human_only` ; un motif
+      (`vm-*`) n'est pas reporté, ces VM partent en `human_only` ; et c'est dit.
 
     Le push affiche, VM par VM, le mode envoyé et sa provenance (« gardé de H0 », ou
     `human_only` et pourquoi). **`make glorfindel-host-push HUMAN_ONLY=1`** est le geste
@@ -42,7 +42,8 @@ seul sur le banc, dans le mode de chaque VM.
     le `scp` qui la remplace, un mode changé entre les deux serait écrasé. Le push la relit juste
     avant le `scp` et, si elle a changé entre les deux lectures, s'arrête sans rien envoyer
     (« la config de H0 a changé pendant le push ») : relancer. Seul `HUMAN_ONLY=1` déclenche le
-    geste d'urgence (`HUMAN_ONLY=0` ou vide : les modes gardés).
+    geste d'urgence (`HUMAN_ONLY=0` ou vide : les modes gardés) ; il ne relit pas H0 avant
+    d'envoyer : il n'en emporte rien, et une relecture qui échoue ne le bloque pas.
     Le CD, lui, ne touche ni `host.env` ni la config.
   - **Un nouveau `host.env`** (`make glorfindel-host-env`) part en lecture seule
     (`GLORFINDEL_READ_ONLY=1`) : la posture se donne à la main, sur un hôte qui doit répondre.

@@ -98,19 +98,16 @@ def test_an_unread_h0_config_sends_every_vm_human_only_and_says_so(tmp_path, cap
     assert f"config de H0 {why} : toutes les VM en human_only" in said
 
 
-def test_a_mode_h0_does_not_know_is_never_carried(tmp_path, capsys):
-    """M2365: a mode this code does not know (full_auto, deferred; a typo) is not carried — that
-    VM goes to human_only, said. A pattern or an entry of another shape on H0 is not carried
-    either; the same name twice: the first, the one H0 resolves."""
-    h0 = _h0(assets=[{"match": GONDOLIN, "mode": "full_auto"},
-                     {"match": "vm-celebrimbor-*", "mode": "non_disruptive"},
-                     "not a rule",
+def test_a_pattern_on_h0_is_never_carried_and_a_name_twice_is_the_first(tmp_path, capsys):
+    """M2368: a pattern on H0 (which the watch reads) is not carried — every VM it matches would
+    be made bolder: those VMs go to human_only, said; the same name twice: the first, the one H0
+    resolves."""
+    h0 = _h0(assets=[{"match": "vm-celebrimbor-*", "mode": "non_disruptive"},
                      {"match": BREE, "mode": "human_only"},
                      {"match": BREE, "mode": "non_disruptive"}])
     modes, autonomy, said = _push(tmp_path, capsys, h0)
     assert modes == {GONDOLIN: "human_only", BREE: "human_only", NEW: "human_only"}
-    assert "mode inconnu sur H0 ('full_auto') : human_only" in said
-    assert "motif sur H0, non reporté" in said and "entrée de H0 d'une autre forme" in said
+    assert "motif sur H0, non reporté" in said
 
 
 def test_human_only_puts_every_vm_back_in_one_gesture(tmp_path, capsys):
@@ -131,11 +128,25 @@ def test_human_only_puts_every_vm_back_in_one_gesture(tmp_path, capsys):
      "forme inconnue (une entrée d'autonomy.assets a d'autres clés que match et mode)"),
     ({"assets": [{"match": GONDOLIN, "mode": "non_disruptive"}], "ttl": 3},
      "forme inconnue (autonomy : une clé de plus)"),
-], ids=["default-unknown", "entry-extra-key", "autonomy-extra-key"])
+    # One entry the watch refuses refuses the whole config: gondolin is not kept beside it.
+    ({"assets": [{"match": GONDOLIN, "mode": "non_disruptive"}, {"match": BREE, "mode": "full_auto"}]},
+     "forme inconnue (une entrée d'autonomy.assets hors des modes connus)"),
+    ({"assets": [{"match": GONDOLIN, "mode": "non_disruptive"}, {"match": BREE, "mode": 3}]},
+     "forme inconnue (une entrée d'autonomy.assets hors des modes connus)"),
+    ({"assets": [{"match": GONDOLIN, "mode": "non_disruptive"}, {"match": "  ", "mode": "human_only"}]},
+     "forme inconnue (une entrée d'autonomy.assets sans match)"),
+    ({"assets": [{"match": GONDOLIN, "mode": "non_disruptive"}, {"match": 5, "mode": "human_only"}]},
+     "forme inconnue (une entrée d'autonomy.assets sans match)"),
+    ({"assets": [{"match": GONDOLIN, "mode": "non_disruptive"}, "not a rule"]},
+     "forme inconnue (une entrée d'autonomy.assets n'est pas une table match, mode)"),
+], ids=["default-unknown", "entry-extra-key", "autonomy-extra-key", "entry-full-auto",
+        "entry-mode-not-text", "entry-match-blank", "entry-match-not-text", "entry-not-a-table"])
 def test_a_config_the_watch_would_refuse_keeps_no_mode(tmp_path, capsys, autonomy, why):
-    """M2369 (BL1c review): what Glorfindel's strict reading refuses at the watch's start — a
-    default outside the known modes, an entry with other keys than match and mode, a key more
-    in autonomy — is no config whose modes are kept: every VM in human_only, said."""
+    """M2365, M2369, M2781, M2784 (BL1c reviews): what Glorfindel's strict reading refuses at
+    the watch's start — a default outside the known modes, a key more in autonomy or in an
+    entry, an entry whose mode is unknown or not text, whose match is blank or not text, an
+    entry that is not a table — is no config whose modes are kept: every VM in human_only, said.
+    Never one VM dropped and the others kept: from no watch to a watch that acts."""
     import yaml
     from glorfindel.config import ConfigError
     with pytest.raises(ConfigError):                    # the watch would not start on it
@@ -148,7 +159,7 @@ def test_a_config_the_watch_would_refuse_keeps_no_mode(tmp_path, capsys, autonom
 def test_what_h0_s_config_says_reaches_the_terminal_printable_only(tmp_path, capsys):
     """A name read on H0, shown by the push, never carries an escape sequence to the operator's
     terminal: every character that is not printable is shown as « ? »."""
-    h0 = _h0(assets=[{"match": "vm-\x1b[2J\x1b]0;evil\x07x", "mode": "bogus\x1b[31m"}])
+    h0 = _h0(assets=[{"match": "vm-\x1b[2J\x1b]0;evil\x07x", "mode": "non_disruptive"}])
     _, _, said = _push(tmp_path, capsys, h0)
     assert "\x1b" not in said and "\x07" not in said
     assert "vm-?[2J?]0;evil?x" in said

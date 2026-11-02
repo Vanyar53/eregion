@@ -2973,7 +2973,8 @@ async def exercise_request_status(request_id: str) -> JSONResponse:
     return JSONResponse({"request": request_id, "at": req.at if req else None,
                          "written_here": req is not None,
                          "status": status, "status_error": unreadable,
-                         "orodruin": board.orodruin_check(_orodruin_contract()), **followed})
+                         "orodruin": board.orodruin_check(await asyncio.to_thread(_orodruin_contract)),
+                         **followed})
 
 
 def _follow(request_id: str, req, status: dict | None, unreadable: str = "") -> dict:

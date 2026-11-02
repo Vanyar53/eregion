@@ -485,10 +485,13 @@ def test_an_attack_runs_t0_is_confronted_refused_never_counted_and_said(t0, why)
     # The watch's poll of the run's attack_started, in the run's own file: the attack time received.
     received = {**_cycle(seen=T, event="attack_started", action="", sid="poll-1"),
                 "own": True, "run_id": "run-1", "attack_time": T.timestamp()}
+    # A detection in the run's own file (the watch's poll of what the injector says): never the
+    # watch's own sight of the VM, which a T0 must not follow.
+    polled = {**_cycle(seen=T - timedelta(seconds=30), action="", sid="poll-2"), "own": True, "run_id": "run-1"}
     seen = T + timedelta(seconds=60)
     rep = _report("run-1", at=t0, latency=(seen - t0).total_seconds())
     out = _follow(status=_status(("done", "", ("run-1",))), windows=[win], reports={"run-1": rep},
-                  cycles=[received, _cycle(seen=seen, verified_after=80)], held={"run-1": win})
+                  cycles=[received, polled, _cycle(seen=seen, verified_after=80)], held={"run-1": win})
     [w] = out["wires"]
     assert (why in w["t0_refused"]) and bool(w["t0_refused"]) == bool(why)
     assert w["outcome"] == "contained_alone" and w["t0_unconfronted"] == ""

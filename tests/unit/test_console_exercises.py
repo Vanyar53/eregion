@@ -451,3 +451,53 @@ def test_runs_is_read_as_the_watch_reads_it_a_pipe_and_a_link_in_each_place(runs
         assert out.count("un tube nommé") == len(pipes) and out.count("un lien, jamais suivi") == len(links)
     finally:
         stop.set()
+
+
+def test_a_file_of_runs_larger_than_its_bound_is_refused_never_cut(runs, capsys):
+    """A report, a window: a few kilobytes. Larger than the bound, it is refused and said — never
+    cut and read as if it were whole (SEC15, runs_reader)."""
+    from eregion_console import runs_reader
+    path = runs / "big.json"
+    path.write_text(json.dumps({"pad": "x" * 64}))
+    assert runs_reader.read_json(path, max_bytes=1024) == {"pad": "x" * 64}
+    assert runs_reader.read_json(path, max_bytes=32) is None
+    assert runs_reader.json_and_why(path, max_bytes=32) == (None, "plus de 32 octets")
+    assert "big.json — plus de 32 octets : jamais lu" in capsys.readouterr().out
+
+
+def test_no_route_reads_runs_on_the_event_loop(runs, client, monkeypatch):
+    """SEC15 (#425): every read of runs/ by a route runs in a thread, never in the event loop —
+    a slow read never stops the console's other pages, nor its live feed."""
+    import asyncio
+    from eregion_console import runs_reader
+    start = NOW - timedelta(minutes=10)
+    _window(runs, "run-a", start=start, end=start + timedelta(minutes=2))
+    _cycle(runs, "watch-ssh-1", at=start + timedelta(minutes=1))
+    (runs / "run-a.json").write_text(json.dumps({"scenario": "ssh", "run_id": "run-a", "result": "PASS",
+                                                "metrics": {"attack_time": start.timestamp()}}))
+    cdir = _manifest(runs, "c-1", created=start, scenarios=[])
+    (cdir / "report.md").write_text("# c-1\n")
+    where = []
+
+    def watched(fn):
+        def read(*args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+                where.append(("loop", fn.__name__, str(args[0])))
+            except RuntimeError:
+                where.append(("thread", fn.__name__, str(args[0])))
+            return fn(*args, **kwargs)
+        return read
+    for name in ("read_json", "json_and_why", "read_text", "lines", "regular"):
+        monkeypatch.setattr(runs_reader, name, watched(getattr(runs_reader, name)))
+    monkeypatch.setattr(api, "_tail", watched(api._tail))
+    rid = "r-20261102T080000Z-abcdef"   # Orodruin's status of a request, there
+    (runs / "orodruin" / "requests").mkdir(parents=True)
+    (runs / "orodruin" / "requests" / f"{rid}.json").write_text("{}")
+    for route in ("/api/exercises?since=all", "/api/campaigns?since=all", "/api/campaigns/c-1",
+                  "/api/channel", "/api/actions/vm-a", "/api/indicators", "/api/dagorlad/indicators",
+                  "/api/coverage", "/api/feed/history", "/api/sections", f"/api/dagorlad/requests/{rid}"):
+        assert client.get(route).status_code == 200, route
+    assert where and all(w == "thread" for w, _, _ in where), [x for x in where if x[0] == "loop"]
+    read = {fn for _, fn, _ in where}
+    assert {"read_json", "json_and_why", "read_text", "lines", "regular", "tail"} <= read

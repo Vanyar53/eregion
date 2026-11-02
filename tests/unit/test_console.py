@@ -1193,19 +1193,23 @@ def _guarded(fn, *args, guard_s=5.0):
 
 
 def _release_fifo(path, stop):
-    """Whoever opened the pipe for reading, blocked, is released from 5 s on — a red test fails,
-    never hangs."""
+    """Once the test is over (``stop``), whoever opened the pipe for reading, blocked, is released
+    — until none has waited for 2 s. Never before: the test's guard alone says a read blocked (a
+    release on a clock would end a blocked read before its guard does). A red test fails at its
+    guard, never hangs, nor does its process at its exit (the console's threads are joined)."""
     import errno
     import os
-    if stop.wait(5.0):
-        return
-    while not stop.is_set():
+    import time
+    stop.wait()
+    quiet = time.monotonic()
+    while time.monotonic() - quiet < 2.0:
         try:
             os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+            quiet = time.monotonic()
         except OSError as exc:
-            if exc.errno not in (errno.ENXIO, errno.ENOENT):
+            if exc.errno != errno.ENXIO:
                 return
-        stop.wait(0.05)
+        time.sleep(0.05)
 
 
 def _runs_with_traps(tmp_path):

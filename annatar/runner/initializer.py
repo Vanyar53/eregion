@@ -102,8 +102,10 @@ class InitRunner:
     def _terraform_apply(self, auto_approve: bool) -> None:
         tf = str(TERRAFORM_DIR)
         console.print("[cyan]->[/cyan] terraform init")
+        # The providers the module's lock says, each package checked (CI4): an upgrade is
+        # `make providers-lock` and a PR, never a side effect of `annatar init`.
         self._run(
-            ["terraform", f"-chdir={tf}", "init", "-upgrade", "-input=false"]
+            ["terraform", f"-chdir={tf}", "init", "-input=false"]
         )
         console.print("[cyan]->[/cyan] terraform apply")
         cmd = ["terraform", f"-chdir={tf}", "apply", "-input=false"]

@@ -22,7 +22,7 @@ glorfindel-config.yaml
 
 # Terraform
 infra/terraform/.terraform/
-infra/terraform/.terraform.lock.hcl
+# Le verrou des providers est suivi (CI4, #389) : .terraform.lock.hcl de chaque module.
 infra/terraform/terraform.tfstate
 infra/terraform/terraform.tfstate.backup
 infra/terraform/*.tfplan
@@ -51,14 +51,12 @@ infra/canary/**/terraform.tfstate*
 
 # Glorfindel hébergé (H0) — état séparé, secrets jamais suivis
 infra/glorfindel-host/.terraform/
-infra/glorfindel-host/.terraform.lock.hcl
 infra/glorfindel-host/terraform.tfstate*
 infra/glorfindel-host/*.tfplan
 infra/glorfindel-host/host.env
 
 # Orodruin (O1) — état séparé, secrets jamais suivis
 infra/orodruin/.terraform/
-infra/orodruin/.terraform.lock.hcl
 infra/orodruin/terraform.tfstate*
 infra/orodruin/*.tfplan
 infra/orodruin/orodruin.env

@@ -497,6 +497,14 @@ def test_the_workflow_brings_chat_text_for_the_release_s_name():
     assert wf["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
 
 
+def test_the_roadmaps_own_indicators_are_shown_whole():
+    """The five indicators of ROADMAP.md as written (02/11): none cut off in the message."""
+    ind = rd.indicators((ROOT / "ROADMAP.md").read_text(encoding="utf-8"))
+    assert [name for name, _ in ind] == ["Temps pour contenir", "Part contenue seule", "Actions disruptives à tort",
+                                         "Couverture", "Âge de la dernière preuve"]
+    assert not [today for _, today in ind if today.endswith("…")]
+
+
 def test_the_roadmaps_own_releases_table_is_read():
     """ROADMAP.md as it is in the repository: its table read, never « introuvable »."""
     rows = rd.releases((ROOT / "ROADMAP.md").read_text(encoding="utf-8"))

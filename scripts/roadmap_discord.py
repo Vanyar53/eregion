@@ -46,6 +46,10 @@ DESCRIPTION_MAX, EMBED_MAX = 4096, 6000
 RELEASES_HEADING = "### Les prochaines releases"
 RELEASES_HEADER = ["Version", "Titre", "Contenu", "État"]
 RELEASES_ROWS = 6
+# An indicator's « Aujourd'hui », whole up to here (110 until 02/11: the facts of BL1 and of
+# bree's first autonomous blocks were cut off); ROADMAP.md keeps its cells under it
+# (tests/unit/test_roadmap_discord.py reads them).
+INDICATOR_MAX = 240
 
 
 @dataclass
@@ -242,7 +246,7 @@ def indicators(roadmap: str) -> list[tuple[str, str]] | None:
             break
         cells = [c.strip() for c in x.strip().strip("|").split("|")]
         if len(cells) >= 3:
-            out.append((_plain(cells[0]), nd._cut(_plain(cells[2]), 110)))
+            out.append((_plain(cells[0]), nd._cut(_plain(cells[2]), INDICATOR_MAX)))
     return out or None
 
 

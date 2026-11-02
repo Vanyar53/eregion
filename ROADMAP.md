@@ -22,11 +22,11 @@ Les incidents cloud courants sont contenus seuls, en quelques minutes, de façon
 
 | Indicateur | Ce qu'il mesure | Aujourd'hui |
 |---|---|---|
-| Temps pour contenir | de la première action malveillante à l'action vérifiée | **calculé, à mesurer au banc** (BL1, 30/10 : `analysis/containment.py`, rapport de campagne, console) ; détection par le RulePoller en 84 s à 3 min 30 (runs du 05 au 07/10) ; ransomware : RTO 21 à 25 min |
-| Part contenue seule | incidents contenus sans humain, sur tous les incidents | **calculée, à mesurer au banc** (BL1, 30/10) ; une panne prise pour une attaque comptée à part |
-| Actions disruptives à tort | isolations et blocages jugés faux, parmi ceux qui sont jugés | pré-observation sur le banc depuis le 16/10 (H0, bree) : cartes jugées dans la War Room (TO JUDGE) ou Discord, résumé chaque lundi, `make glorfindel-host-report` ; le critère « parc réel » reste ouvert |
-| Couverture | techniques cloud pertinentes détectées, sur le catalogue | 6 TTPs validés en réel (`technique_catalog.yaml`) ; **calculée par la matrice de couverture (C1, 30/10)** : pour chaque technique et chaque panne, la dernière preuve et son âge, l'évolution sur douze semaines, une technique prouvée puis ratée dite en rouge — dans la console (Annatar, Gothmog, l'accueil) et `eregion coverage --check` |
-| Âge de la dernière preuve | depuis le dernier run qui a prouvé détection et réponse | objectif : moins de 30 jours ; dernier run Azure de bout en bout : 07/10 |
+| Temps pour contenir | de la première action malveillante à l'action vérifiée | mesuré au banc le 31/10 (BL1 : T1136.001 détectée en 144 s, aucun incident contenu seul) ; en réel sur bree depuis le 01/11 (`non_disruptive`) : le brute force SSH bloqué seul, chiffré par l'Overview (OV1, T0 = la détection) |
+| Part contenue seule | incidents contenus sans humain, sur tous les incidents | exercices : 0 sur 1 (BL1, 31/10 : un instantané à 35 %, escaladé) ; réel : 5 blocages autonomes sur bree le week-end du 01/11, comptés par l'Overview (OV1) ; une panne prise pour une attaque comptée à part (0 sur 1 au banc) |
+| Actions disruptives à tort | isolations et blocages jugés faux, parmi ceux qui sont jugés | 0 % sur 41 jugées en 30 jours (H0, banc, bree en `non_disruptive` depuis le 01/11) ; cartes jugées dans la console ou Discord, résumé chaque lundi ; le critère « parc réel » reste ouvert |
+| Couverture | techniques cloud pertinentes détectées, sur le catalogue | 4 techniques sur 5 implémentées (matrice C1) ; les pannes : 2 runs, 2 PASS ; les techniques graves attendent R2 (décision du 02/11) |
+| Âge de la dernière preuve | depuis le dernier run qui a prouvé détection et réponse | objectif : moins de 30 jours ; dernier run de bout en bout : 31/10 (BL1, T1136.001, banc) |
 
 ### La règle de production
 
@@ -77,7 +77,7 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 
 | Version | Titre | Contenu | État |
 |---|---|---|---|
-| 0.4.10 | held to its word | la série d'isolation, DG-c, G1 (le code), #358 | brouillon (02/11) |
+| 0.4.10 | held to its word | la série d'isolation, DG-c, G1 (le code), #358 | publiée (02/11) |
 | 0.5.0 | la boucle mesurée | OV1, ADM1, BL1c, CI4 | en préparation (fin de semaine) |
 | 0.5.x | — | ID1, G1 au banc | en préparation (après la prochaine session de banc) |
 

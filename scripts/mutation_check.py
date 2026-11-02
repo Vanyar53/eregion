@@ -7367,6 +7367,25 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
+# L1Qr (#363): L1Q's rule entered; the defect it brought up (seed 6 at 500) — a VM block read before
+# its subnet's perimeter, rewritten under the pair turned into an allow, said « n'est plus bloquée »
+# of NICs the perimeter cut off again later in the same pass. The perimeters first. M2980–M2982.
+_L1QR = ("tests/unit/test_invariant_regressions.py::"
+         "test_a_vm_block_rewritten_before_its_subnets_perimeter_never_says_unblocked "
+         "tests/unit/test_reassert.py::test_a_perimeter_is_put_back_before_the_vm_blocks_of_its_subnet")
+_L1QR_ORDER = '    return sorted(blocks, key=lambda b: b.get("scoped") is not False)\n'
+MUTANTS += [
+    ("M2980", "the blocks reasserted in the directory's order: a VM block read before its subnet's perimeter, "
+              "said « n'est plus bloquée » where the pair put back a moment later cuts it off (L1Qr)", R,
+     _L1QR_ORDER, "    return list(blocks)\n"),
+    ("M2981", "the VM blocks reasserted before the perimeters (L1Qr)", R,
+     _L1QR_ORDER, '    return sorted(blocks, key=lambda b: b.get("scoped") is False)\n'),
+    ("M2982", "a merged entry (a perimeter and its VM's placements) taken for a VM block, read after the others "
+              "(L1Qr)", R,
+     _L1QR_ORDER, '    return sorted(blocks, key=lambda b: b.get("scoped") is not False or bool(b.get("placements")))\n'),
+]
+TESTS.update({mid: f"{_L1QR} {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
+
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
 # « brouillon ». M2680–M2695; M2696–M2699 after its review.

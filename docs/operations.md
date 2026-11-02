@@ -627,15 +627,23 @@ deux gestes —
 2. l'attribuer sur chaque VM défendue : sur H0, `make glorfindel-host-plan`, le plan relu (une
    attribution par VM de `session_drain_vms`, aucune sur le groupe), puis `make
    glorfindel-host-up`, sans `YES` ; ailleurs, la boucle `for vm in …` ci-dessus ;
-3. relire la préparation de chaque VM défendue (console, page Glorfindel) : aucune `no_drain` ;
-4. **seulement ensuite**, retirer Run Command du rôle de la réponse.
+3. vérifier les attributions, juste après l'apply : `terraform -chdir=infra/glorfindel-host output
+   session_drain_vms`, ou `az role assignment list --assignee <principal> --role "Eregion Glorfindel
+   Session Drain" --all`, montre une portée de VM par VM défendue (deux sur le banc : gondolin,
+   bree), aucune de groupe. La préparation ne prouve rien encore : le rôle de la réponse porte
+   toujours Run Command sur le groupe, elle ne peut pas dire `no_drain` ;
+4. **seulement ensuite**, retirer Run Command du rôle de la réponse ;
+5. **après le geste 4**, relire la préparation de chaque VM défendue (console, page Glorfindel) :
+   aucune `no_drain`. C'est là que la coupure VM par VM se prouve.
 
 ```bash
 sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-session-drain.json > /tmp/eregion-role-session-drain.json
 az role definition create --role-definition @/tmp/eregion-role-session-drain.json       # 1
-# 2 et 3 : ci-dessus
+# 2 : ci-dessus ; 3 :
+terraform -chdir=infra/glorfindel-host output session_drain_vms                         # deux VM
 sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-response.json > /tmp/eregion-role-response.json
 az role definition update --role-definition @/tmp/eregion-role-response.json            # 4 : sans Run Command
+# 5 : la préparation de chaque VM défendue, sans no_drain
 ```
 
 Dans l'autre ordre, une VM défendue perd la coupure jusqu'au geste suivant : isolée quand même,

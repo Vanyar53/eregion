@@ -182,7 +182,7 @@ prérequis avant toute VM hors du banc (« Ouvert »).
   - le CD actif : une release publiée redéploie H0 sans toucher `host.env` ni la config, donc sans
     toucher la posture.
 - **Après les gestes de SEC11** (`docs/operations.md`, « Depuis un rôle de la réponse d'avant
-  SEC11 », dans cet ordre : (1) `az role definition create` du rôle Session Drain ; (2) le plan de H0 relu, puis `make glorfindel-host-up` sans `YES` ; (3) la préparation de gondolin et de bree, sans `no_drain` ; (4) seulement ensuite, `az role definition update` du rôle de la réponse) : le rôle de la réponse ne porte plus Run
+  SEC11 », dans cet ordre : (1) `az role definition create` du rôle Session Drain ; (2) le plan de H0 relu, puis `make glorfindel-host-up` sans `YES` ; (3) juste après l'apply, deux portées de VM pour le rôle (`terraform output session_drain_vms`, ou `az role assignment list --role "Eregion Glorfindel Session Drain"`) ; (4) seulement ensuite, `az role definition update` du rôle de la réponse ; (5) après le geste 4, la préparation de gondolin et de bree, sans `no_drain`) : le rôle de la réponse ne porte plus Run
   Command ; « Eregion Glorfindel Session Drain » est attribué sur chaque VM de
   `session_drain_vms` (gondolin, bree — `infra/glorfindel-host/session_drain.auto.tfvars`), par
   l'état Terraform de H0, jamais sur le groupe : une VM du banc ajoutée plus tard n'a pas la

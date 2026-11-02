@@ -3,8 +3,9 @@
 # terraform-test) ; à la main :
 #   terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly
 #   terraform -chdir=infra/glorfindel-host test
-# Quatre cas : la liste du dépôt (session_drain.auto.tfvars, lue par le test comme par un plan) ;
-# une attribution par VM listée, jamais au groupe ; une liste vide, rien ; un nom refusé.
+# Cinq cas : la liste du dépôt (session_drain.auto.tfvars, lue par le test comme par un plan) ;
+# une attribution par VM listée, jamais au groupe ; une liste vide, rien ; un nom en double, un
+# chemin à la place d'un nom, refusés.
 # tests/unit/test_glorfindel_host.py tient le même contrat en lisant les fichiers.
 
 mock_provider "azurerm" {
@@ -96,11 +97,21 @@ run "an_empty_list_gives_nothing" {
   }
 }
 
-run "a_name_twice_or_a_path_is_refused" {
+run "a_name_twice_is_refused" {
   command = plan
 
   variables {
     session_drain_vms = ["vm-celebrimbor-gondolin", "vm-celebrimbor-gondolin"]
+  }
+
+  expect_failures = [var.session_drain_vms]
+}
+
+run "a_path_for_a_name_is_refused" {
+  command = plan
+
+  variables {
+    session_drain_vms = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-other/providers/Microsoft.Compute/virtualMachines/vm-x"]
   }
 
   expect_failures = [var.session_drain_vms]

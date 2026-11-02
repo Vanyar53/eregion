@@ -231,7 +231,7 @@ Ce qui était déjà fermé avant G2, et le reste : le RulePoller note `last_err
 ## IncidentRegistry
 
 `glorfindel/incidents.py` → groupe signaux par `resource_id` dans TTL (défaut 300s, `GLORFINDEL_INCIDENT_TTL_S`).
-Persiste dans `~/.glorfindel/incidents.jsonl`. Thread-safe.
+Persiste dans `~/.glorfindel/incidents.jsonl`. Plusieurs écrivains — les workers de la watch, et `glorfindel respond` dans un autre processus : chaque relecture-écriture sous un verrou de thread et un `flock` (`incidents.jsonl.lock`), le fichier réécrit entier, 0600 (SEC13, V-10).
 Quand `signals_count > 1` ou `actions_taken` non vide → prompt injecte contexte incident.
 
 ---

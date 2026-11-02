@@ -1255,6 +1255,13 @@ H0 et à n'importe qui de la tirer et de la vérifier sans jeton. Un paquet neuf
 défaut (à vérifier au premier run) : Jonathan le passe en public une fois, dans les réglages de
 chaque paquet (« Change visibility »).
 
+**L'image de base, épinglée par son digest** (SEC14, P-02). Les deux Dockerfile partent de
+`python:3.12-slim@sha256:…` : le tag dit la version, le digest (l'index multi-architecture lu sur
+Docker Hub) ce qui est construit — un tag déplacé ne change plus l'image. Ses mises à jour de sécurité
+viennent par une montée, dans une PR : `docker buildx imagetools inspect python:3.12-slim` (ligne
+`Digest:`), le même digest dans `annatar/Dockerfile` et `glorfindel/Dockerfile`
+(`tests/unit/test_published_image.py` exige les deux identiques).
+
 Tests : `tests/unit/test_published_image.py` (un faux registre, un faux cosign qui répond comme
 cosign v3.1.3, un faux docker), `tests/unit/test_host_cd.py` (le CD de bout en bout),
 `tests/unit/test_workflows.py`. Mutants M1650–M1669.

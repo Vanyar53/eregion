@@ -1,4 +1,8 @@
-FROM python:3.12-slim
+# SEC14 (P-02): the base image pinned by its digest (the multi-architecture index read on Docker
+# Hub on 02/11), the tag beside it for the reader: a tag moves, a digest does not. Its security
+# updates come by a bump — `docker buildx imagetools inspect python:3.12-slim`, the digest here
+# and in the other Dockerfile, in one PR (docs/operations.md, « Les images publiées »).
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
 WORKDIR /app
 

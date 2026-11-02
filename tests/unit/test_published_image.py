@@ -643,3 +643,17 @@ def test_the_module_runs_on_h0s_python_standard_library_only():
     names |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     assert names <= set(sys.stdlib_module_names) | {"__future__"}
     assert "tomllib" not in names                                     # 3.11+
+
+
+# ── SEC14 (P-02): the base image pinned by its digest ─────────────────────────────────────────
+
+def test_both_images_start_from_the_same_base_pinned_by_its_digest():
+    import re
+    froms = {}
+    for name in ("annatar", "glorfindel"):
+        lines = [ln for ln in (ROOT / name / "Dockerfile").read_text(encoding="utf-8").splitlines()
+                 if ln.startswith("FROM ")]
+        assert len(lines) == 1, (name, lines)
+        froms[name] = lines[0]
+        assert re.fullmatch(r"FROM python:3\.12-slim@sha256:[0-9a-f]{64}", lines[0]), lines[0]
+    assert froms["annatar"] == froms["glorfindel"]

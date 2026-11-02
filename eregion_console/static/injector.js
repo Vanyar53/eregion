@@ -479,6 +479,33 @@ async function refreshSlow() {
   if (c && !S.campDetail[c]) loadCampaignDetail(c);
 }
 async function refreshCatalog() { await load('cat', `/api/coverage?kind=${ABOUT.kind}`, renderCatalog); }
+async function refreshIndicators() { await load('ind', '/api/dagorlad/indicators', renderIndicators); }
+
+// ── The exercises' indicators (OV1, #399): the runs of Annatar and Gothmog over 30 days, as BL1
+// measures them — the overview counts real traffic. Both injectors whatever the filter: one
+// measure of the exercises.
+function renderIndicators() {
+  const box = $('ind');
+  if (S.errors.ind) { box.innerHTML = `<div class="ind bad"><span class="sub">${esc(S.errors.ind)}</span></div>`; return; }
+  const d = S.ind;
+  if (!d || !d.contain || !d.alone) { box.innerHTML = ''; return; }
+  const days = Number(d.window_days), c = d.contain, a = d.alone;
+  const tile = (lbl, val, sub, cls, title) =>
+    `<div class="ind ${esc(cls)}" title="${esc(title)}"><span class="lbl">${esc(lbl)}</span><span class="val">${val}</span><span class="sub">${sub}</span></div>`;
+  const times = c.detected
+    ? `detect ${esc(dur(Number(c.detect_s)))}${c.decide_s != null ? ' · decide ' + esc(dur(Number(c.decide_s))) : ''} (median, ${Number(c.detected)} detected attack run${Number(c.detected) > 1 ? 's' : ''}, ${days} d)`
+    : `no detected attack run in ${days} d`;
+  const faults = Number(a.faults_mistaken)
+    ? ` · <span class="bad-t">faults taken for an attack: ${Number(a.faults_mistaken)}${Number(a.disruptive_on_faults) ? ' (' + Number(a.disruptive_on_faults) + ' acted on)' : ''}</span>` : '';
+  box.innerHTML =
+    tile('TIME TO CONTAIN · EXERCISES', c.contain_s != null ? esc(dur(Number(c.contain_s))) : '— nothing contained alone', times, '',
+         'From the attack (its T0) to the verified action — the runs of Annatar, ' + days + ' days. Real traffic is on the overview.') +
+    tile('CONTAINED ALONE · EXERCISES', a.of ? `${Number(a.contained)} of ${Number(a.of)}` : '—',
+         (a.of ? `shadow: ${Number(a.shadow)} of ${Number(a.of)} would have been` : `no detected attack run in ${days} d`)
+           + (a.attacks != null && a.attacks !== a.of ? ` · ${Number(a.attacks)} attack run${Number(a.attacks) > 1 ? 's' : ''} in all` : '') + faults,
+         Number(a.faults_mistaken) ? 'warn' : '',
+         'The attack runs detected, and among them those Glorfindel contained alone (executed in its cycle, read back on Azure, held); the shadow: a block or an isolation recommended at or above the gate. A fault taken for an attack: a decision to isolate or to block on its target during it.');
+}
 
 async function loadCampaignDetail(dir) {
   S.campDetail[dir] = 'loading'; renderCampaigns();
@@ -527,9 +554,10 @@ let started = false;
 function start() {
   if (started) return;
   started = true;
-  refreshCatalog(); refreshFast(); refreshSlow();
+  refreshCatalog(); refreshFast(); refreshSlow(); refreshIndicators();
   setInterval(refreshFast, 10000);
   setInterval(refreshSlow, 30000);
+  setInterval(refreshIndicators, 60000);
   setInterval(refreshCatalog, 60000);   // the matrix follows the runs as they arrive
   // Running timers and grace countdowns move without new data.
   setInterval(() => { if (S.ex && (S.ex.exercises || []).some(w => w.state === 'open' || w.state === 'grace')) renderExercises(); }, 5000);

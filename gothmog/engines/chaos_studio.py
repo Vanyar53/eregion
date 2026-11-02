@@ -1,7 +1,8 @@
 """Azure Chaos Studio, the bench's native engine (G0) — and what Gothmog reads around it.
 
 Experiments (classic): an experiment, declared by Celebrimbor (``infra/terraform/chaos.tf``),
-acts on Chaos Studio targets enrolled on the bench's VMs, with its own identity. Gothmog
+acts on Chaos Studio targets enrolled on the bench's VMs, with its own identity — the VM
+itself for a shutdown, the Chaos agent on it for load and disk writes (G1). Gothmog
 never writes an experiment: it reads it (its targets, its duration), starts it, follows
 its execution, cancels it. Workspaces, the model Microsoft is moving to, are in public
 preview (09/2026): not for G0.
@@ -36,9 +37,12 @@ TERMINAL = frozenset({"success", "succeeded", "completed", "failed", "cancelled"
 DOWN = frozenset({"PowerState/stopping", "PowerState/stopped",
                   "PowerState/deallocating", "PowerState/deallocated"})
 
+# A VM's Chaos Studio target: the VM itself (service-direct faults, Shutdown-1.0), or the
+# Chaos agent installed on it (agent-based faults, CPU and disk pressure — G1).
 _VM_TARGET = re.compile(
     r"^(?P<vm>/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.compute"
-    r"/virtualmachines/[^/]+)/providers/microsoft\.chaos/targets/microsoft-virtualmachine$",
+    r"/virtualmachines/[^/]+)/providers/microsoft\.chaos/targets/"
+    r"(?:microsoft-virtualmachine|microsoft-agent)$",
     re.IGNORECASE)
 _ISO_DURATION = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$", re.IGNORECASE)
 
@@ -58,7 +62,9 @@ def experiment_targets(experiment: dict) -> list[str]:
             m = _VM_TARGET.match(tid)
             if not m:
                 raise ValueError(f"target {tid!r} is not a VM's Chaos Studio target")
-            vms.append(tid[:m.end("vm")])
+            vm = tid[:m.end("vm")]
+            if vm.lower() not in {v.lower() for v in vms}:   # its VM and its agent: one VM
+                vms.append(vm)
     if not vms:
         raise ValueError("the experiment names no target")
     return vms

@@ -638,6 +638,69 @@ Le calcul lit aussi :
 Une campagne de C1 qui jouerait elle-même ses pannes en ferait des runs de la campagne. Le
 rattachement par l'heure ne servirait plus, ni `--fault-run`.
 
+## Le taux des pannes prises pour une attaque (G1, #76)
+
+Le bruit bénin de G1 éprouve la retenue de Glorfindel : écritures disque, charge CPU,
+redémarrage, arrêt (`gothmog/experiments/`). Sur aucune de ces pannes il ne doit isoler ni
+bloquer. Le taux se calcule sur **toutes** les pannes de Gothmog, pas seulement celles d'une
+campagne (`analysis/fault_rate.py`) :
+
+```bash
+make glorfindel-host-fault-rate [DAYS=30] [JSON=1]   # sur H0, l'hôte de la watch
+python -m analysis.fault_rate [--runs-dir runs] [--days 30] [--json]
+```
+
+Il se lit sur l'hôte de la watch, là où sont ses décisions. Ailleurs, chaque panne est « non
+mesurée », et la raison le dit.
+
+Décidé avec Jonathan le 31/10 :
+
+- **Une panne mesurée** remplit quatre conditions :
+  - elle a démarré ;
+  - son effet a été vu dans la télémétrie que lit Glorfindel (`checks.fault_effective` PASS,
+    `gothmog/probes.py`) ;
+  - son début, sa fin et ses cibles sont connus ;
+  - la watch de Glorfindel vivait **avant et après** la panne. Avant, c'est V1 : sans watch, le run
+    est refusé. Après, Gothmog la relit une fois la panne finie et l'inscrit au rapport
+    (`checks.watch_after`). La date d'un fichier ne le prouverait pas : la watch n'écrit que
+    quand elle décide, et chaque détection crée son propre fichier. Une détection sur une autre
+    VM, le lendemain, ne dit rien de la panne ;
+  - ses décisions se lisent ici : cet hôte a les fichiers de la watch (`watch-*_debug.jsonl` ;
+    sur Orodruin, ils n'y sont pas), et aucun fichier qui peut tenir une ligne de la panne
+    (écrit depuis son début) n'est illisible ou coupé (une ligne qui ne se lit pas).
+
+  Une panne bien ignorée est mesurée : la watch vivait avant et après, elle n'a rien décidé,
+  et aucun fichier neuf n'est écrit. C'est « 0 sur 1 ».
+
+  Toute autre panne est **non mesurée**, et dit pourquoi. Un bruit que Glorfindel n'a jamais
+  vu, une panne lancée `--without-glorfindel`, une watch disparue avant la fin, ou des décisions
+  qu'on n'a pas lues, ne valent jamais « Glorfindel n'a rien fait ».
+- **Prise pour une attaque** : au moins une décision d'isoler ou de bloquer une de ses cibles
+  pendant la panne, recommandée ou exécutée. C'est la définition de BL1 (`fault_run`), inchangée.
+  Une recommandation retenue par le mode (`human_only`) compte autant qu'une exécution : c'est
+  Glorfindel qui prend le bruit pour une attaque. Une décision sur la technique d'un run d'attaque
+  sur cette VM, dans la fenêtre de ce run, est celle de l'attaque (X1).
+- **La fenêtre d'une panne** court de son début au dernier moment de sa fenêtre d'exercice
+  (sinon sa fin plus 15 min de grâce). Une décision va à une seule panne. Une fois la panne
+  suivante commencée sur une de ses cibles, la décision est à la suivante. Si elle tombe aussi
+  dans la fenêtre de la première, on ne sait pas à laquelle elle répond : la première est alors
+  non mesurée.
+- **Le taux** compte par run : les pannes prises pour une attaque, sur les pannes mesurées. Si
+  aucune n'est mesurée, il vaut `None`, jamais 0.
+- **À côté** : le nombre de recommandations disruptives, le nombre d'actions exécutées (des
+  actions disruptives à tort), et les mêmes chiffres par panne.
+
+Ce que le taux ne change pas :
+- **les chiffres de BL1** (rapport de campagne, encadré RESPONSE) restent calculés comme avant ;
+- **l'accueil de la console** les lit par `fault_run`.
+
+La vue unifiée d'un run (`read_run`, C1) dit maintenant `effective`. Le module expose `measure`
+et `rate` pour que l'accueil puisse afficher le taux à côté des « actions disruptives à tort ».
+Cet affichage reste à faire, par la session Console.
+
+**Mesuré sur le banc : pas encore.** Les pannes de bruit sont `planned` jusqu'au premier run
+avec Jonathan (`gothmog/README.md`, « G1 »).
+
 ## Le tri, la mémoire et le modèle séparés (IA1, #88)
 
 _27/10 : le code, ses tests (`tests/unit/test_analysis_separation.py`,

@@ -88,7 +88,30 @@
             "properties": {
               "name": { "type": "string" },
               "verify": { "type": "string", "description": "KQL or a command whose result is the probe." },
-              "expect": { "type": "string", "description": "The value or condition that means 'normal'." }
+              "expect": { "type": "string", "description": "The value or condition that means 'normal'." },
+              "during": { "type": "boolean", "description": "A fault's probe that must hold while it runs too (G1: benign noise leaves the target serving; lost, the run cancels the fault)." }
+            }
+          }
+        }
+      }
+    },
+    "effect": {
+      "description": "A fault only (G1): what shows it happened, read in the telemetry Glorfindel reads (gothmog/probes.py). A fault whose effect is not seen measures nothing of Glorfindel's reaction.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probes"],
+      "properties": {
+        "probes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "verify", "expect"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "verify": { "type": "string", "description": "power_state, or a query on the bench's Log Analytics ({target}, {start}, {end} replaced; its first row's Peak)." },
+              "expect": { "type": "string", "description": "down (power_state), or above <N> (a query's Peak)." }
             }
           }
         }
@@ -185,6 +208,11 @@
         "properties": { "engine": { "not": { "const": "local-script" } } }
       },
       "then": { "required": ["engine_ref"] }
+    },
+    {
+      "description": "Only a fault declares an effect (G1): a technique's is its detection.",
+      "if": { "required": ["effect"] },
+      "then": { "required": ["kind"], "properties": { "kind": { "const": "fault" } } }
     },
     {
       "description": "A fault names its engine (never local-script) and what 'normal' is.",

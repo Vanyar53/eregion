@@ -1,0 +1,71 @@
+# G1 — bruit bénin : une charge CPU de 95 %, 10 minutes, par l'agent Chaos Studio.
+#
+# Le bruit d'une compilation ou d'un traitement par lots. Aucune règle de Glorfindel ne lit le CPU
+# aujourd'hui : on attend qu'aucune ne se déclenche, et qu'il ne recommande rien de disruptif si
+# l'une le fait. La charge sert aussi de fond à X1 (une attaque pendant une panne).
+#
+# L'expérience est déclarée dans Celebrimbor (infra/terraform/chaos.tf, chaos.noise_vms) : l'agent
+# Chaos sur la VM, sa cible Microsoft-Agent, la capacité CPUPressure-1.0 (chaos.cpu_pressure).
+schema_version: "1"
+id: vm-cpu-pressure
+kind: fault
+engine: chaos-studio
+engine_ref: exp-celebrimbor-gondolin-cpu
+name: "CPU load (benign, 95 %, 10 min)"
+description: >
+  Charge le CPU de la VM d'exercice à 95 % pendant 10 minutes. Ce que Glorfindel doit montrer :
+  aucune recommandation d'isoler ni de bloquer. La VM sert pendant la panne, son agent répond, et
+  la télémétrie continue d'arriver.
+version: "1.0"
+# Déclarée, pas encore mesurée : implemented après le premier run sur le banc.
+status: planned
+destructive: false
+
+targets:
+  resource_type: azure_vm
+  zone: bench
+  names: [vm-celebrimbor-gondolin]
+
+steady_state:
+  probes:
+    - name: vm-running
+      verify: power_state
+      expect: PowerState/running
+      during: true
+    - name: guest-agent-ready
+      verify: vm_agent
+      expect: Ready
+      during: true
+    - name: heartbeat
+      verify: "Heartbeat | where _ResourceId =~ '{target}' | summarize LastSeen = max(TimeGenerated)"
+      expect: fresh 10m
+      during: true
+
+# Ce que la DCR du banc collecte : \Processor(_Total)\% Processor Time. Le nom de l'objet sous
+# l'agent Azure Monitor (Processor, instance _Total) reste à mesurer sur le banc. S'il diffère,
+# l'effet n'est pas vu et le run échoue fermé.
+effect:
+  probes:
+    - name: cpu-load-seen
+      verify: >-
+        Perf
+        | where _ResourceId =~ '{target}'
+        | where ObjectName == 'Processor' and CounterName == '% Processor Time'
+        | where InstanceName == '_Total'
+        | where TimeGenerated between (datetime({start}) .. datetime({end}))
+        | summarize Peak = max(CounterValue)
+      expect: above 80
+
+abort_conditions:
+  - name: steady-state-lost
+    when: "une sonde during ne tient plus pendant la panne : annulée, puis le retour est vérifié"
+  - name: past-duration
+    when: "l'exécution dépasse sa durée de plus de 5 minutes, ou le plafond du run : annulée"
+  - name: interrupted
+    when: "Ctrl-C ou erreur pendant la panne : annulée, puis le retour est vérifié"
+
+revert:
+  - name: engine-stop
+    action: chaos_studio
+  - name: start-vm
+    action: start_vm

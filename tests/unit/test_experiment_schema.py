@@ -124,6 +124,49 @@ def test_a_fault_is_not_a_local_script():
     assert validate_experiment(doc)
 
 
+def test_a_fault_declares_its_effect_and_its_probes_held_during():
+    """G1: what shows the fault happened, as Glorfindel's telemetry sees it, and the probes
+    that must hold while benign noise runs."""
+    doc = _fault()
+    doc["effect"] = {"probes": [{"name": "disk", "verify": "Perf | summarize Peak = max(CounterValue)",
+                                 "expect": "above 25000000"}]}
+    doc["steady_state"]["probes"][0]["during"] = True
+    assert validate_experiment(doc) == []
+
+
+@pytest.mark.parametrize("effect", [
+    {},                                                         # no probe
+    {"probes": []},
+    {"probes": [{"name": "e", "verify": "power_state"}]},       # no expect
+    {"probes": [{"name": "e", "verify": "power_state", "expect": "down", "when": "x"}]},
+    {"probes": [{"name": "e", "verify": "power_state", "expect": "down"}], "level": 3},
+])
+def test_a_bad_effect_is_refused(effect):
+    doc = _fault()
+    doc["effect"] = effect
+    assert validate_experiment(doc)
+
+
+def test_only_a_fault_declares_an_effect():
+    """A technique's effect is its detection: an `effect` there is a fault mislabelled."""
+    doc = _technique()
+    doc["effect"] = {"probes": [{"name": "e", "verify": "power_state", "expect": "down"}]}
+    assert validate_experiment(doc)
+
+
+def test_a_probe_held_during_is_true_or_false():
+    doc = _fault()
+    doc["steady_state"]["probes"][0]["during"] = "yes"
+    assert validate_experiment(doc)
+
+
+def test_every_declared_fault_validates():
+    paths = sorted((REPO / "gothmog" / "experiments").glob("*.yaml"))
+    assert {p.stem for p in paths} >= {"vm-shutdown", "vm-disk-write", "vm-cpu-pressure", "vm-restart"}
+    for path in paths:
+        assert validate_experiment_file(path) == [], path.name
+
+
 def test_an_unknown_kind_is_refused():
     doc = _technique()
     doc["kind"] = "chaos"

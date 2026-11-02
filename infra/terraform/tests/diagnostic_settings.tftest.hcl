@@ -20,6 +20,8 @@ mock_provider "azurerm" {
   }
 }
 mock_provider "null" {}
+# G1 : azapi (la cible Microsoft-Agent de chaos.tf), faux lui aussi — aucun appel à Azure.
+mock_provider "azapi" {}
 
 variables {
   # Une clé jetable, générée pour ce test (sa clé privée n'a jamais été gardée).

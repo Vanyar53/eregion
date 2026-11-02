@@ -117,30 +117,38 @@ def _sig_line(**over):
     return json.dumps(base) + "\n"
 
 
+def _read(f, offset=0):
+    """The watch's read of one file of runs/ (glorfindel/channel_reader.py), each line parsed
+    as the watch parses it: ([(data, Signal)], what was said, the new offset)."""
+    from glorfindel.channel_reader import read_lines
+    from glorfindel.cli import _parsed_or_said
+    got = read_lines(f, offset)
+    said: list[str] = []
+    signals = [s for line in got.lines if line.strip() for s in _parsed_or_said(f, line, said.append)]
+    return signals, said, got.offset
+
+
 def test_read_new_signals_skips_a_corrupt_line_and_continues(tmp_path):
     """One bad line used to kill the whole watch daemon."""
-    from glorfindel.cli import _read_new_signals
     f = tmp_path / "x_signals.jsonl"
     f.write_text(_sig_line(signal_id="a") + "{not json\n" + _sig_line(signal_id="b"))
-    errors = []
-    signals, offset = _read_new_signals(f, 0, errors.append)
+    signals, errors, offset = _read(f)
     assert [s.signal_id for _, s in signals] == ["a", "b"]
-    assert len(errors) == 1
+    assert len(errors) == 1 and "x_signals.jsonl" in errors[0]
     assert offset == f.stat().st_size
 
 
 def test_read_new_signals_leaves_a_half_written_line_for_next_poll(tmp_path):
     """Annatar writes from another container: a line without its newline yet must be
     read whole on the next poll, not parsed half-written."""
-    from glorfindel.cli import _read_new_signals
     f = tmp_path / "x_signals.jsonl"
     full, partial = _sig_line(signal_id="a"), _sig_line(signal_id="b")
     f.write_text(full + partial[:40])
-    signals, offset = _read_new_signals(f, 0, lambda e: None)
+    signals, _, offset = _read(f)
     assert [s.signal_id for _, s in signals] == ["a"]
     with open(f, "a") as fh:
         fh.write(partial[40:])
-    signals, _ = _read_new_signals(f, offset, lambda e: None)
+    signals, _, _ = _read(f, offset)
     assert [s.signal_id for _, s in signals] == ["b"]
 
 

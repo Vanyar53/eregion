@@ -135,9 +135,8 @@ def test_the_example_s_commented_section_loads(tmp_path):
     # no terminal (cron, a script)
     ("ops : PWD=/ ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx", "ops", "/usr/bin/systemctl restart nginx"),
     ("ops : PWD=/   USER=root   COMMAND=/usr/bin/systemctl restart nginx", "ops", "/usr/bin/systemctl restart nginx"),
-    # sudo -i, sudo su -
-    ("admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; COMMAND=/bin/bash", "admin1", "/bin/bash"),
-    ("admin1 : TTY=pts/1 ; PWD=/home/admin1 ; USER=root ; COMMAND=/usr/bin/su -", "admin1", "/usr/bin/su -"),
+    # sudoedit: the file edited as the user, no shell
+    ("admin1 : TTY=pts/1 ; PWD=/home/admin1 ; USER=root ; COMMAND=sudoedit /etc/hosts", "admin1", "sudoedit /etc/hosts"),
     # an ENV= field, a GROUP= field, leading spaces
     ("   admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; ENV=A=b ; COMMAND=/opt/backup.sh", "admin1", "/opt/backup.sh"),
     ("admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; GROUP=docker ; COMMAND=/usr/bin/id", "admin1", "/usr/bin/id"),
@@ -154,16 +153,16 @@ def test_an_expected_admin_s_sudo_to_root_is_expected(message, account, command)
     # another account
     "mallory : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/apt update",
     "admin10 : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/apt update",
-    # sudo's failures, its other lines
-    "admin1 : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh",
-    "admin1 : command not allowed ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh",
-    "admin1 : user NOT in sudoers ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh",
+    # sudo's failures, its other lines (an everyday command: only the form makes them cards)
+    "admin1 : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/apt update",
+    "admin1 : command not allowed ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/apt update",
+    "admin1 : user NOT in sudoers ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/apt update",
     "pam_unix(sudo:session): session opened for user root(uid=0) by admin1(uid=1000)",
     # another program's prefix, no field before the command
-    "sudo:   admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh",
-    "admin1 : USER=root ; COMMAND=/bin/sh",
+    "sudo:   admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/apt update",
+    "admin1 : USER=root ; COMMAND=/usr/bin/apt update",
     # a PWD that names a command before USER=: the run-as cannot be read — a card
-    "admin1 : TTY=pts/0 ; PWD=/tmp/x COMMAND=/bin/true ; USER=root ; COMMAND=/bin/sh",
+    "admin1 : TTY=pts/0 ; PWD=/tmp/x COMMAND=/bin/true ; USER=root ; COMMAND=/usr/bin/apt update",
     # a PWD that writes another USER=: the run-as is not root alone — a card
     "admin1 : TTY=pts/0 ; PWD=/x USER=postgres ; USER=root ; COMMAND=/bin/true",
     "",
@@ -215,6 +214,28 @@ def test_no_list_expects_nobody():
     ("/usr/bin/tee -a /root/.ssh/authorized_keys", "ssh_keys"),
     ("/usr/bin/vi /etc/pam.d/sshd", "pam"),
     ("/usr/bin/tee /etc/ld.so.preload", "preload"),
+    # the review's holes (ADM1, review)
+    ("/usr/bin/tee -a /root/.ssh/authorized_keys2", "ssh_keys"),
+    ("/usr/bin/install -m 4755 /tmp/x /usr/local/bin/x", "setuid"),
+    ("/usr/bin/install -m4755 /tmp/x /usr/local/bin/x", "setuid"),
+    ("/usr/bin/install --mode=u+s /tmp/x /usr/local/bin/x", "setuid"),
+    ("/usr/bin/dpkg -P azuremonitoragent", "supervision"),
+    ("/usr/bin/dpkg -r omsagent", "supervision"),
+    ("/usr/bin/rpm -e azuremonitoragent", "supervision"),
+    ("/usr/bin/rm -rf /opt/microsoft/azuremonitoragent", "supervision"),
+    ("/usr/bin/chmod -x /opt/microsoft/azuremonitoragent/bin/mdsd", "supervision"),
+    ("/usr/bin/tee /etc/rsyslog.d/00-drop.conf", "log_config"),
+    ("/usr/bin/vi /etc/audit/rules.d/audit.rules", "log_config"),
+    ("/usr/bin/crontab -e", "cron"),
+    ("/usr/bin/tee /etc/cron.d/zz", "cron"),
+    ("/usr/bin/tee /etc/systemd/system/zz.service", "systemd"),
+    ("/usr/bin/systemctl edit nginx", "systemd"),
+    ("/usr/sbin/insmod /tmp/x.ko", "kernel_modules"),
+    ("/usr/sbin/modprobe x", "kernel_modules"),
+    ("/usr/sbin/iptables -F", "firewall"),
+    ("/usr/sbin/nft flush ruleset", "firewall"),
+    ("/usr/sbin/ufw disable", "firewall"),
+    ("/usr/bin/env LD_PRELOAD=/tmp/x.so /usr/bin/id", "preload"),
 ])
 def test_a_sensitive_command_of_an_expected_admin_is_a_card(command, category):
     assert expected_sudo.sensitive(command) == category
@@ -227,35 +248,112 @@ def test_a_sensitive_command_of_an_expected_admin_is_a_card(command, category):
 @pytest.mark.parametrize("command", [
     "/usr/bin/apt update", "/usr/bin/systemctl restart rsyslog", "/usr/bin/chmod 755 /srv/app",
     "/usr/bin/chmod +x deploy.sh", "/usr/bin/ls /var/log", "/usr/bin/journalctl -u nginx",
-    "/usr/bin/cat /etc/hosts", "/bin/bash", "/usr/bin/su -", "/usr/bin/docker ps",
+    "/usr/bin/cat /etc/hosts", "/usr/bin/docker ps", "sudoedit /etc/hosts",
+    "/usr/bin/systemctl restart nginx", "/usr/bin/systemctl status rsyslog", "/usr/bin/dpkg -l",
+    "/usr/bin/rpm -qa", "/usr/sbin/iptables -L -n", "/usr/sbin/nft list ruleset",
+    "/usr/bin/install -m 0755 app /usr/local/bin/app", "/usr/bin/rm -rf /tmp/build",
 ])
 def test_an_everyday_command_is_not_sensitive(command):
     assert expected_sudo.sensitive(command) is None
 
 
-def test_a_pwd_never_hides_the_real_command():
-    """sudo writes COMMAND last: a PWD that holds « ; USER=root ; COMMAND=/bin/true » leaves the
-    real command in what follows the first COMMAND= — read whole."""
-    msg = ("admin1 : TTY=pts/0 ; PWD=/tmp/x ; USER=root ; COMMAND=/bin/true ; USER=root ; "
-           "COMMAND=/usr/bin/cat /etc/shadow")
+_ROOT_SHELLS = {
+    # a shell, su, a session, a nested sudo — sudo -i / -s are written COMMAND=<the shell>
+    "shells": ["/bin/bash", "/usr/bin/bash --login", "/bin/sh", "/usr/bin/zsh", "/usr/bin/dash",
+               "/usr/bin/fish", "/usr/bin/busybox sh", "/usr/bin/su", "/usr/bin/su -", "/usr/bin/su - ops",
+               "/usr/sbin/runuser -u ops -- id", "/usr/bin/login -f ops", "/usr/bin/script -q /dev/null",
+               "/usr/bin/sudo -u ops id"],
+    # the same past a wrapper, its options, its VAR=value, a duration
+    "wrappers": ["/usr/bin/env bash", "/usr/bin/env -i /bin/sh", "/usr/bin/env A=b /bin/sh",
+                 "/usr/bin/nice -n 10 /bin/bash", "/usr/bin/timeout 600 bash", "/usr/bin/nohup sh",
+                 "/usr/bin/stdbuf -o L bash", "command bash", "/usr/bin/env nice -n 5 /usr/bin/su -"],
+    # an interpreter with code in line, or none (its REPL)
+    "interpreters": ["/usr/bin/python3 -c import pty", "/usr/bin/python3", "/usr/bin/python3.11 -Ic x",
+                     "/usr/bin/python -", "/usr/bin/perl -e exec", "/usr/bin/perl -ne x", "/usr/bin/perl -E x",
+                     "/usr/bin/ruby -e x", "/usr/bin/node -e x", "/usr/bin/node --eval x", "/usr/bin/php -r x",
+                     "/usr/bin/php -a", "/usr/bin/lua -e x", "/usr/bin/env python3 -c x"],
+    # find -exec, xargs to a shell, awk's system()
+    "spawners": ["/usr/bin/find / -name x -exec /bin/sh ;", "/usr/bin/find . -execdir id {} +",
+                 "/usr/bin/xargs -a f sh -c x", "/usr/bin/awk BEGIN{system(\"/bin/sh\")}",
+                 "/usr/bin/gawk BEGIN{while((\"id\"|getline l)>0)print l}"],
+    # an editor or a pager that runs a shell (:!sh, !sh)
+    "escapes": ["/usr/bin/vim /etc/nginx/nginx.conf", "/usr/bin/vi x", "/usr/bin/nano x",
+                "/usr/bin/less /srv/app.log", "/usr/bin/more x", "/usr/bin/man ls"],
+}
+
+
+@pytest.mark.parametrize("family,command", [(f, c) for f, cs in _ROOT_SHELLS.items() for c in cs])
+def test_a_root_shell_of_an_expected_admin_is_a_card(family, command):
+    """Jonathan, 02/11: what gives a root shell is sensitive, shipped, no exception until COR1."""
+    assert expected_sudo.root_shell(command), family
+    assert expected_sudo.sensitive(command) == "root_shell"
+    msg = f"admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; COMMAND={command}"
     assert expected_sudo.judge({"SyslogMessage": msg}, "vm-example-01", _policy()) is None
 
 
-def test_a_command_that_writes_command_equals_is_read_whole():
-    """The command is everything after the FIRST COMMAND=: one that holds « COMMAND=/bin/ls »
-    after its sensitive part is not read as /bin/ls."""
-    msg = ("admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; "
-           "COMMAND=/bin/sh -c cat /etc/shadow; echo ;COMMAND=/bin/ls")
-    assert expected_sudo.judge({"SyslogMessage": msg}, "vm-example-01", _policy()) is None
+@pytest.mark.parametrize("command", [
+    "/usr/bin/python3 /opt/app/manage.py migrate", "/usr/bin/perl /opt/x.pl", "/usr/bin/find /var -name x",
+    "/usr/bin/xargs -a f rm", "/usr/bin/awk {print} /srv/f", "sudoedit /etc/hosts", "/usr/bin/apt install bash",
+    "/usr/bin/env", "/usr/bin/node /opt/app/server.js", "/usr/bin/ruby /opt/x.rb", "",
+])
+def test_what_gives_no_shell_is_not_a_root_shell(command):
+    assert not expected_sudo.root_shell(command)
+
+
+@pytest.mark.parametrize("message", [
+    # a PWD that writes a whole sudo line: two COMMAND=, the real one a sudo -u other
+    "admin1 : TTY=pts/0 ; PWD=/tmp/a ; USER=root ; COMMAND=x ; USER=other ; COMMAND=/usr/bin/id",
+    "admin1 : TTY=pts/0 ; PWD=/tmp/x ; USER=root ; COMMAND=/bin/true ; USER=root ; COMMAND=/usr/bin/cat /etc/shadow",
+    # a PWD that writes a benign command before the real one, a root shell
+    "admin1 : TTY=pts/0 ; PWD=/tmp/a ; USER=root ; COMMAND=/usr/bin/id ; USER=root ; COMMAND=/bin/bash",
+    # a command that writes COMMAND= after its sensitive part
+    "admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; COMMAND=/bin/sh -c cat /etc/shadow; echo ;COMMAND=/bin/ls",
+    # a USER= that is not root, wherever it is
+    "admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/env USER=other /usr/bin/id",
+    # a line break
+    "admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id\nmallory : PWD=/ ; USER=root",
+    "admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/id\r",
+    # the loader's variables kept by sudo in ENV=
+    "admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; ENV=LD_PRELOAD=/tmp/x.so ; COMMAND=/usr/bin/id",
+    "admin1 : PWD=/   USER=root   ENV=LD_LIBRARY_PATH=/tmp   COMMAND=/usr/bin/id",
+])
+def test_an_ambiguous_line_is_a_card(message):
+    assert expected_sudo.judge({"SyslogMessage": message}, "vm-example-01", _policy()) is None
+
+
+def test_a_line_cut_by_sudo_is_a_card():
+    """sudo cuts its syslog lines at 960 characters: `sudo tee <950 octets> /etc/sudoers` keeps
+    its sensitive part in « (command continued) », a line the rule does not read."""
+    head = "admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; COMMAND=/usr/bin/tee "
+    cut = (head + "a" * 960)[:960]
+    assert expected_sudo.judge({"SyslogMessage": cut}, "vm-example-01", _policy()) is None
+    edge = head + "a" * (expected_sudo._SUDO_LINE_CUT - len(head))
+    assert len(edge) == expected_sudo._SUDO_LINE_CUT
+    assert expected_sudo.judge({"SyslogMessage": edge}, "vm-example-01", _policy()) is None
+    assert expected_sudo.judge({"SyslogMessage": edge[:-1]}, "vm-example-01", _policy()) is not None
+
+
+def test_reading_a_line_stays_bounded():
+    """The reading runs in the poller: whatever a local user writes (`logger -t sudo --size
+    8192`), it takes milliseconds, not seconds."""
+    import time
+    for words in ("stop ", "chmod ", "dpkg ", "azuremonitoragent ", "python -c ", "env x python "):
+        big = words * (8192 // len(words))
+        t = time.monotonic()
+        expected_sudo.sensitive(big)
+        line = "admin1 : PWD=/   USER=root   COMMAND=" + big
+        expected_sudo.judge({"SyslogMessage": line[:899]}, "vm-example-01", _policy())
+        expected_sudo.judge({"SyslogMessage": line}, "vm-example-01", _policy())
+        assert time.monotonic() - t < 0.25, words
 
 
 def test_the_config_extends_the_sensitive_commands_never_replaces_them():
-    pol = _policy(sensitive=["CronTab"])
-    cron = "admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/crontab -e"
+    pol = _policy(sensitive=["Backup-Restore"])
+    mine = "admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/local/bin/backup-restore --all"
     shadow = "admin1 : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/cat /etc/shadow"
-    assert expected_sudo.judge({"SyslogMessage": cron}, "vm-example-01", _policy()) is not None
-    assert expected_sudo.judge({"SyslogMessage": cron}, "vm-example-01", pol) is None
-    assert expected_sudo.sensitive("/usr/bin/crontab -e", pol.sensitive_commands) == "config: CronTab"
+    assert expected_sudo.judge({"SyslogMessage": mine}, "vm-example-01", _policy()) is not None
+    assert expected_sudo.judge({"SyslogMessage": mine}, "vm-example-01", pol) is None
+    assert expected_sudo.sensitive("/usr/local/bin/backup-restore", pol.sensitive_commands) == "config: Backup-Restore"
     assert expected_sudo.judge({"SyslogMessage": shadow}, "vm-example-01", pol) is None
 
 
@@ -302,8 +400,8 @@ def _cfg(**over) -> GlorfindelConfig:
 
 
 ADMIN = "admin1 : TTY=pts/0   PWD=/home/admin1   USER=root   COMMAND=/usr/bin/apt update"
-ADMIN_I = "admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; COMMAND=/bin/bash"
-ADMIN_SU = "ops : PWD=/home/ops   USER=root   COMMAND=/usr/bin/su -"
+ADMIN_I = "admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx"
+ADMIN_SU = "ops : PWD=/home/ops   USER=root   COMMAND=/usr/bin/docker ps"
 INTRUDER = "mallory : PWD=/tmp   USER=root   COMMAND=/bin/sh"
 
 
@@ -318,9 +416,9 @@ def test_an_expected_sudo_opens_no_card_and_is_counted():
     [snap] = p.status_snapshot()
     assert snap["expected_count"] == 3 and snap["expected_last"] and snap["match_count"] == 0
     assert sorted((e["account"], e["command"], e["asset"], e["rule"]) for e in _journal()) == [
-        ("admin1", "/bin/bash", "vm-example-01", rule.name),
         ("admin1", "/usr/bin/apt update", "vm-example-01", rule.name),
-        ("ops", "/usr/bin/su -", "vm-example-01", rule.name)]
+        ("admin1", "/usr/bin/systemctl restart nginx", "vm-example-01", rule.name),
+        ("ops", "/usr/bin/docker ps", "vm-example-01", rule.name)]
     # the same lines at the next poll: neither a card nor counted again
     assert p.poll_once(rule) == [] and p.status_snapshot()[0]["expected_count"] == 3 and len(_journal()) == 3
 
@@ -366,6 +464,18 @@ def test_an_expected_admin_s_sensitive_command_is_a_card(message):
 def test_both_facilities(facility):
     p, rule, sent = _poller([_line(ADMIN, facility=facility)], _cfg())
     assert p.poll_once(rule) == [] and p.status_snapshot()[0]["expected_count"] == 1
+
+
+def test_an_intruder_s_line_at_an_expected_one_s_instant_is_a_card_a_poll_later():
+    """Two lines, one instant: the expected one seen first, the intruder's ingested a poll later
+    was taken for it by the dedup (identity `ts:` alone) — set aside, no card, no trace."""
+    admin = _line(ADMIN, 2)
+    lines = [admin]
+    p, rule, sent = _poller(lines, _cfg())
+    assert p.poll_once(rule) == []
+    lines.append({**_line(INTRUDER), "TimeGenerated": admin["TimeGenerated"]})
+    [sig] = p.poll_once(rule)
+    assert sig["raw_signal"]["first_result_row"]["SyslogMessage"] == INTRUDER
 
 
 def test_an_expected_admin_on_a_vm_where_it_is_not_expected_is_a_card():

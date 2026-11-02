@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -882,6 +883,13 @@ def _row_identity(row: dict) -> str:
                                 for k in ("CorrelationId", "OperationNameValue", "_ResourceId"))
     ts = row.get("TimeGenerated")
     if ts:
+        # A log line is its instant and its text (ADM1): an intruder's sudo at the instant of
+        # an expected one, ingested a poll later, was taken for it — set aside, no card, no
+        # trace. A detection seen under the old identity is sent once more after the update
+        # (at least once, never lost).
+        msg = row.get("SyslogMessage")
+        if isinstance(msg, str):
+            return f"ts:{ts}|{hashlib.sha256(msg.encode('utf-8', 'replace')).hexdigest()[:16]}"
         return f"ts:{ts}"
     keys = sorted(
         f"{k}={v}" for k, v in row.items()
@@ -1258,25 +1266,33 @@ class RulePoller:
             d = self._detectors[rule.name] = detector_for(rule.source, workspace_id=rule.workspace_id)
         return d
 
-    def _expected_split(self, rule: DetectionRule, tgt, rows: list[dict], now_iso: str) -> tuple[list[dict], int]:
-        """ADM1 (#284): (the rows that stay cards, how many were set aside as an administrator's
-        expected sudo). Here, in the poller, rather than in the query or in `investigate`: the
-        query is the shipped text the operator reads and P1 keeps intact, and dropping rows on
-        the server would leave nothing to count; `investigate` runs once a signal is dispatched,
-        a graph cycle already open. Here no signal exists yet, the VM the row was routed to is
-        known, and the model never sees the list. Only a rule of the sudo technique, a row a VM
-        claims, a config that names accounts; a journal that cannot be written sets nothing
-        aside."""
+    def _judge_expected(self, rule: DetectionRule, routed: dict[str, tuple]) -> dict[int, dict]:
+        """ADM1 (#284): id(row) → journal entry, for each row an administrator's expected sudo.
+        Here, in the poller, rather than in the query or in `investigate`: the query is the
+        shipped text the operator reads and P1 keeps intact, and dropping rows on the server
+        would leave nothing to count; `investigate` runs once a signal is dispatched, a graph
+        cycle already open. Here no signal exists yet, the VM the row was routed to is known,
+        and the model never sees the list. Judged BEFORE the poller's lock, which every rule
+        shares: what a local user writes in a sudo line never holds the other rules. Only a rule
+        of the sudo technique, a row a VM claims, a config that names accounts."""
         policy = getattr(self._cfg, "expected_sudo", None)
-        if rule.ttp != expected_sudo.SUDO_TTP or tgt is None or policy is None or not policy.admins:
-            return rows, 0
-        kept, entries = [], []
-        for r in rows:
-            entry = expected_sudo.judge(r, tgt[1], policy)
-            if entry is None:
-                kept.append(r)
-            else:
-                entries.append(entry)
+        judged: dict[int, dict] = {}
+        for tgt, rows in routed.values():
+            if rule.ttp != expected_sudo.SUDO_TTP or tgt is None or policy is None or not policy.admins:
+                continue
+            for r in rows:
+                entry = expected_sudo.judge(r, tgt[1], policy)
+                if entry is not None:
+                    judged[id(r)] = entry
+        return judged
+
+    @staticmethod
+    def _expected_split(rule: DetectionRule, rows: list[dict], judged: dict[int, dict],
+                        now_iso: str) -> tuple[list[dict], int]:
+        """(the rows that stay cards, how many were set aside). The ones set aside are journaled
+        first: a journal that cannot be written sets nothing aside."""
+        entries = [judged[id(r)] for r in rows if id(r) in judged]
+        kept = [r for r in rows if id(r) not in judged]
         if entries and not expected_sudo.record(entries, rule.name, now_iso):
             return rows, 0
         return kept, len(entries)
@@ -1300,6 +1316,7 @@ class RulePoller:
 
         targets = self._targets(rule)
         routed = self._route(rule, rows, targets) if targets else {}
+        judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
         signals: list[dict] = []
         sent_ids: dict[str, list[str]] = {}
         with self._lock:
@@ -1337,7 +1354,7 @@ class RulePoller:
                 sent_ids[key] = [_row_identity(r) for r in new]
                 # The administrators' expected sudo (ADM1): set aside here, before any
                 # signal — journaled and counted, never in the prompt.
-                kept, aside = self._expected_split(rule, tgt, new, now_iso)
+                kept, aside = self._expected_split(rule, new, judged, now_iso)
                 expected_n += aside
                 if not kept:
                     continue

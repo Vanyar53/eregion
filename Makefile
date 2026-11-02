@@ -200,7 +200,7 @@ help:
 	@echo "  make glorfindel-host-model MODEL=…           Changer le modèle qui décide (ou MODEL=default)"
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-status                  Tout tourne ? VMs, sauvegardes, services, erreurs, cartes à juger"
-	@echo "  make glorfindel-host-start [REF=tag|commit]  Déploie une référence (défaut : dernier tag v*), jamais une branche"
+	@echo "  make glorfindel-host-start REF=tag|commit    Déploie une référence nommée (exigée), jamais une branche"
 	@echo "  make glorfindel-host-stop / -logs            Glorfindel + la console sur la VM"
 	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la console avec son jeton"
 	@echo "  make glorfindel-host-url                     L'URL de la console avec son jeton"
@@ -685,9 +685,11 @@ glorfindel-host-push: glorfindel-host-known
 	 rc=$$?; rm -f $$cfg $$h0 $$h1; exit $$rc
 	@echo "  host.env et glorfindel-config.yaml poussés sur $(HOST_IP)"
 
-# M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, par défaut le
-# dernier tag v*. Checkout détaché, image étiquetée avec la référence (deploy.sh, envoyé par
-# ssh : celui du poste, quelle que soit la référence déployée).
+# M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, exigée (SEC14,
+# V-22 : ce chemin construit sur H0, hors de la vérification de CI3 — le chemin de secours ; il ne
+# construit que ce que l'opérateur nomme, jamais « le dernier tag »). Le CD de H0 ne construit
+# jamais : il tire l'image publiée, vérifiée. Checkout détaché, image étiquetée avec la référence
+# (deploy.sh, envoyé par ssh : celui du poste, quelle que soit la référence déployée).
 # REF se donne sur la ligne de commande : une variable REF de l'environnement (un nom
 # générique, posé pour autre chose) est refusée, jamais déployée en silence. Le shell la lit
 # dans son environnement (EREGION_DEPLOY_REF), jamais recopiée dans la commande avant d'être
@@ -698,7 +700,8 @@ unexport REF
 glorfindel-host-start: export EREGION_DEPLOY_REF = $(value REF)
 glorfindel-host-start: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
-	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est déployé. La donner sur la ligne de commande : make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
+	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est déployé. La donner sur la ligne de commande : make glorfindel-host-start REF=<tag ou commit>." >&2; exit 1;; esac
+	@test -n "$$EREGION_DEPLOY_REF" || { echo "REF exigée : make glorfindel-host-start REF=<tag ou commit> — ce chemin construit sur H0, il ne prend jamais « le dernier tag » (le CD déploie la release publiée, vérifiée). Rien n'est déployé." >&2; exit 1; }
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
 	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis .eregion/console/requests && cd eregion && bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh
 	@echo ""

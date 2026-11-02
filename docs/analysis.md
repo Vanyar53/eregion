@@ -605,10 +605,34 @@ Deux autres cas limites :
 
 Les indicateurs sont la preuve que donne Eregion : chaque entrée dit d'où elle vient, et ce qui
 vient de l'hôte des injecteurs est confronté à ce que tient l'hôte de la watch avant de compter.
-**Où la confrontation s'applique** : le rapport de campagne (section « Réponse ») et la page d'une
-campagne dans la console (`containment.load`). L'accueil de la console et le suivi de Dagorlad ne
-confrontent pas encore le T0 ; ils suivront (session Console), avec la même fonction
-(`containment.t0_refusal`).
+**Où la confrontation s'applique** : le rapport de campagne (section « Réponse »), la page d'une
+campagne dans la console (`containment.load`), les indicateurs des exercices (les tuiles de
+Dagorlad, `GET /api/dagorlad/indicators`, `indicators.compute`), la matrice de couverture
+(`coverage.matrix`, `GET /api/coverage`, `eregion coverage`) et la dernière preuve de l'accueil
+qu'elle nourrit, et le suivi d'une demande dans Dagorlad (`follow.py`) — partout la même fonction,
+`containment.t0_refusal`, appelée par `indicators.t0_confronted` dans la console (SEC15, #425). Ses
+entrées sont indexées une fois par calcul (l'heure reçue par run, les détections par VM, triées) : la
+matrice confronte tout l'historique. La console la nourrit de ce qu'elle
+tient : les fenêtres d'exercice de cet hôte, crues, refusées ou purgées ; la demande Dagorlad de son
+propre magasin (`request_at`) ; les cycles de la watch, dont elle garde le run que nomme le signal,
+l'heure d'attaque reçue et l'heure de la ligne lue (`_slim_cycle`). Comme dans le rapport, la
+première vue de la VM ne se prend jamais dans le fichier propre d'un run (le relevé de son
+`attack_started`). L'accueil compte le trafic réel (OV1) : son T0 est la détection elle-même, rien à
+confronter.
+
+Dans la console, un T0 non retenu ne donne aucun temps : ni pour détecter, ni pour décider, ni pour
+contenir (les trois partent du T0), ni sur les tuiles, ni dans la matrice. L'incident garde son
+issue, le run reste compté dans la part contenue seul. La tuile « Time to contain · exercises » dit
+combien de T0 ne sont pas retenus (« N T0 not believed: no time counted ») et combien de demandes
+Dagorlad l'hôte tient sans pouvoir les lire ; la ligne d'un fil dans Dagorlad et celle d'un run dans
+la matrice disent la raison (« T0 not believed, no time counted — … »). Une preuve dont le T0 n'est
+pas retenu est datée par la détection de la watch, jamais par le T0 de l'injecteur seul : son âge,
+l'état de sa ligne (prouvée, vieillissante, périmée) et la tuile « Last proof · exercise » de
+l'accueil, qui le dit (« dated by the watch's detection »), en partent. Un appel sans les fenêtres
+(un test) ne confronte rien, et le dit (`t0_confronted` faux).
+Conséquence sur les 30 jours de Dagorlad : une fenêtre est purgée une semaine après sa fin, et un run
+plus ancien n'est plus chronométré — ses temps sortent des médianes, sa fin reste comptée. La tuile le
+dit à part (« (N: window purged, a week after its end) »), la ligne du fil aussi, avec la raison.
 
 | Entrée | D'où | Ce qui la confronte |
 |---|---|---|

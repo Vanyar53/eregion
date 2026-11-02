@@ -186,10 +186,12 @@ def read_run(report, run_id: str = "", campaign: str = "") -> dict | None:
 _report_cache: dict[Path, tuple[tuple[int, int, int], dict | None]] = {}
 
 
-def read_reports(reports: dict[str, Path]) -> list[dict]:
+def read_reports(reports: dict[str, Path], reader=None) -> list[dict]:
     """Every run of ``reports`` (run id → path), unified, whatever its date — a report that
     cannot be read, or has no date, is left out. A report under ``campaigns/<id>/runs/`` is
-    given its campaign. Each file is parsed once per version (``_report_cache``)."""
+    given its campaign. Each file is parsed once per version (``_report_cache``). ``reader``
+    (path → its JSON, or None) reads a report in place of the file's text: the console reads
+    runs/ as the watch reads it (SEC15, ``eregion_console/runs_reader.py``)."""
     runs = []
     seen = set()
     for run_id, path in reports.items():
@@ -202,10 +204,13 @@ def read_reports(reports: dict[str, Path]) -> list[dict]:
         key = (st.st_mtime_ns, st.st_size, st.st_ino)
         hit = _report_cache.get(path)
         if hit is None or hit[0] != key:
-            try:
-                r = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, UnicodeDecodeError):
-                r = None
+            if reader is not None:
+                r = reader(path)
+            else:
+                try:
+                    r = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, UnicodeDecodeError):
+                    r = None
             parent = path.parent
             campaign = parent.parent.name if parent.name == "runs" and parent.parent.parent.name == "campaigns" else ""
             hit = _report_cache[path] = (key, read_run(r, run_id, campaign) if r is not None else None)

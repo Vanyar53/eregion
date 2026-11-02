@@ -9,7 +9,6 @@ active even without a run, the others greyed; Glorfindel cannot be removed.
 """
 from __future__ import annotations
 
-import json
 import os
 import time
 from pathlib import Path
@@ -43,10 +42,8 @@ def override() -> set[str] | None:
 
 
 def _json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    from eregion_console import runs_reader
+    return runs_reader.read_json(path)   # SEC15: runs/ read as the watch reads it
 
 
 def found_runs(runs: Path) -> dict[str, dict[str, int]]:

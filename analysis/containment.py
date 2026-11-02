@@ -215,8 +215,10 @@ def time_to_contain(t0: float, decision: dict) -> float | None:
 def row_time(rec: dict) -> float | None:
     """When the telemetry dates what the watch's rule read: the ``TimeGenerated`` of the row the
     detection carries (``raw_signal.first_result_row`` / ``detected_data``) — the earliest of
-    them, else None (an aggregate, a console's slim cycle)."""
+    them, else None (an aggregate). A console's slim cycle keeps it as ``row_at``."""
     sig = rec.get("signal") if isinstance(rec, dict) else None
+    if isinstance(rec, dict) and not isinstance(sig, dict):
+        return _ts(rec.get("row_at"))           # a console's slim cycle keeps it (SEC15)
     raw = sig.get("raw_signal") if isinstance(sig, dict) else None
     if not isinstance(raw, dict):
         return None
@@ -700,28 +702,35 @@ def request_at(window, directory: Path | None = None) -> tuple[float | None, str
 def run_of(rec) -> str:
     """The run a line of the watch is attached to: its ``exercise_run`` (the window that covered
     it), else the run its signal names (``context.run_id``: the watch's poll of an injector's
-    ``attack_started``) — never the RulePoller's own name (``watch-…``)."""
+    ``attack_started``) — never the RulePoller's own name (``watch-…``). A console's slim cycle
+    keeps the signal's as ``run_id`` (SEC15)."""
     if not isinstance(rec, dict):
         return ""
     rid = str(rec.get("exercise_run") or "")
     if rid:
         return rid
-    sig = rec.get("signal") if isinstance(rec.get("signal"), dict) else {}
-    ctx = sig.get("context") if isinstance(sig.get("context"), dict) else {}
-    rid = str(ctx.get("run_id") or "")
+    if isinstance(rec.get("signal"), dict):
+        ctx = rec["signal"].get("context") if isinstance(rec["signal"].get("context"), dict) else {}
+        rid = str(ctx.get("run_id") or "")
+    else:
+        rid = str(rec.get("run_id") or "")
     return "" if rid.lower().startswith("watch-") else rid
 
 
 def received_t0(records, rid: str) -> float | None:
     """The attack time the watch received from the injector during the run — the
     ``raw_signal.attack_time`` of its ``attack_started``, kept in the lines it wrote for that run
-    (bounded when received, SEC4a) — the earliest, else None."""
+    (bounded when received, SEC4a) — the earliest, else None. A console's slim cycle keeps it
+    as ``attack_time`` (SEC15)."""
     out = []
     for rec in records or ():
         if run_of(rec) != rid:
             continue
-        sig = rec.get("signal") if isinstance(rec.get("signal"), dict) else {}
-        raw = sig.get("raw_signal") if isinstance(sig.get("raw_signal"), dict) else {}
+        if isinstance(rec.get("signal"), dict):
+            sig = rec["signal"]
+            raw = sig.get("raw_signal") if isinstance(sig.get("raw_signal"), dict) else {}
+        else:
+            raw = rec
         if (t := _ts(raw.get("attack_time"))) is not None:
             out.append(t)
     return min(out) if out else None

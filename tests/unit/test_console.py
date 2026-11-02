@@ -1173,3 +1173,100 @@ def test_what_a_start_says_of_the_former_file_is_what_happened(runs, monkeypatch
         api._LEGACY_TOKEN_FILE.parent.chmod(0o700)
     out = capsys.readouterr().out
     assert "could not be removed" in out and "is removed" not in out
+
+
+# ── SEC15: the console reads runs/ as the watch reads it ──────────────────────────────────────
+
+def _guarded(fn, *args, guard_s=5.0):
+    import threading
+    box = []
+
+    def run():
+        try:
+            box.append(fn(*args))
+        except BaseException as exc:  # noqa: BLE001 — the test reads it
+            box.append(exc)
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(guard_s)
+    return (not t.is_alive()), (box[0] if box else None)
+
+
+def _release_fifo(path, stop):
+    """Once the test is over (``stop``), whoever opened the pipe for reading, blocked, is released
+    — until none has waited for 2 s. Never before: the test's guard alone says a read blocked (a
+    release on a clock would end a blocked read before its guard does). A red test fails at its
+    guard, never hangs, nor does its process at its exit (the console's threads are joined)."""
+    import errno
+    import os
+    import time
+    stop.wait()
+    quiet = time.monotonic()
+    while time.monotonic() - quiet < 2.0:
+        try:
+            os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+            quiet = time.monotonic()
+        except OSError as exc:
+            if exc.errno != errno.ENXIO:
+                return
+        time.sleep(0.05)
+
+
+def _runs_with_traps(tmp_path):
+    import os
+    import threading
+    runs = tmp_path / "runs"
+    runs.mkdir(exist_ok=True)
+    (runs / "r1_signals.jsonl").write_text(json.dumps({"timestamp": "2026-11-02T10:00:00+00:00",
+                                                       "event": "attack_started", "ttp": "T1110.001",
+                                                       "resource_id": "/x/vm-a"}) + "\n")
+    fifo = runs / "r2_signals.jsonl"
+    os.mkfifo(fifo)
+    # A link, to a file elsewhere: never followed (never /dev/zero here — a reader that follows it
+    # would read without end; tests/unit/test_runs_channel.py holds that case, bounded).
+    (tmp_path / "elsewhere.jsonl").write_text(json.dumps({"timestamp": "2026-11-02T09:00:00+00:00",
+                                                          "action": "isolate_vm"}) + "\n")
+    (runs / "r3_debug.jsonl").symlink_to(tmp_path / "elsewhere.jsonl")
+    stop = threading.Event()
+    threading.Thread(target=_release_fifo, args=(fifo, stop), daemon=True).start()
+    return runs, stop
+
+
+def test_the_feeds_history_reads_runs_never_blocking_a_refusal_said_once(runs, tmp_path, capsys):
+    """A named pipe and a link to a file elsewhere, in runs/: the history comes back at once with
+    the regular file's lines, the link never followed; each refusal said once, never at every
+    read."""
+    _, stop = _runs_with_traps(tmp_path)
+    try:
+        c = console()
+        finished, got = _guarded(lambda: c.get("/api/feed/history").json())
+        assert finished, "the history blocked"
+        assert [e["event"] for e in got["entries"]] == ["attack_started"]
+        _guarded(lambda: c.get("/api/feed/history").json())
+        out = capsys.readouterr().out
+        assert out.count("r2_signals.jsonl") == 1 and out.count("r3_debug.jsonl") == 1
+        assert "un tube nommé" in out and "un lien, jamais suivi" in out
+    finally:
+        stop.set()
+
+
+def test_the_live_feed_reads_runs_never_blocking(runs, tmp_path, monkeypatch):
+    """The live feed, a pipe beside a run's file: the run's new line arrives, the pipe never
+    stops the console's loop."""
+    monkeypatch.setattr(api, "_FEED_POLL_S", 0.05)
+    runs_dir, stop = _runs_with_traps(tmp_path)
+
+    def follow():
+        with console().websocket_connect(WS) as ws:
+            first = ws.receive_json()                        # the history
+            with open(runs_dir / "r1_signals.jsonl", "a") as f:
+                f.write(json.dumps({"timestamp": "2026-11-02T10:01:00+00:00", "event": "detection",
+                                    "ttp": "T1110.001", "resource_id": "/x/vm-a"}) + "\n")
+            return first, ws.receive_json()
+    try:
+        finished, got = _guarded(follow)
+        assert finished, "the live feed blocked"
+        assert not isinstance(got, BaseException), got
+        assert got[0]["event"] == "attack_started" and got[1]["event"] == "detection"
+    finally:
+        stop.set()

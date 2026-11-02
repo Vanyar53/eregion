@@ -117,9 +117,12 @@ function indicators() {
   const age = lp ? lp.age_s / 86400 : null;
   const stale = (i.stalest || []).map(s => `${s.ttp}: ${s.at ? ago(s.at) + ' ago' : 'never proven'}`).join(' · ');
   const proof = box('LAST PROOF · EXERCISE', lp ? `${ago(lp.at)} ago · ${esc(lp.ttp)}` : 'none',
-    lp ? (age < 21 ? '✓ under 30 days' : age <= 30 ? '⚠ nearly 30 days' : '✗ over 30 days') + ` · <a href="/runs/${encodeURIComponent(lp.run_id)}">run ▸</a>` : 'no attack detected with a decision',
+    lp ? (age < 21 ? '✓ under 30 days' : age <= 30 ? '⚠ nearly 30 days' : '✗ over 30 days')
+      // SEC15: its T0 not believed, the proof is dated by the watch's own detection — said.
+      + (lp.dated_by === 'detection' ? ' · dated by the watch\'s detection (T0 not believed)' : '')
+      + ` · <a href="/runs/${encodeURIComponent(lp.run_id)}">run ▸</a>` : 'no attack detected with a decision',
     !lp || age > 30 ? 'bad' : age >= 21 ? 'warn' : 'ok',
-    'The most recent attack detected with a decision of Glorfindel attached (detection and response). Each technique, the stalest first: ' + stale);
+    'The most recent attack detected with a decision of Glorfindel attached (detection and response), dated by its T0 — or, its T0 not believed (its window, its request, what the watch saw), by the watch\'s own detection. Each technique, the stalest first: ' + stale);
   return contain + alone + wrong + coverage + proof;
 }
 

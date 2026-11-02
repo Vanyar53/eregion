@@ -73,12 +73,12 @@ FAULT = {"rank": 2, "experiment": "vm-shutdown", "target": GONDOLIN}
 
 
 def _follow(*, wires=(WIRE,), status=None, windows=(), states=None, cycles=(), reports=None, cards=(),
-            to_judge=(), now=T + timedelta(minutes=5), liftings=(), others=()):
+            to_judge=(), now=T + timedelta(minutes=5), liftings=(), others=(), held=None):
     windows = list(windows)
     states = states if states is not None else {w["run_id"]: "open" for w in windows}
     return follow.follow(RID, list(wires), status, windows, states, list(cycles), reports or {}, list(cards),
                          set(to_judge), now=now, catalog=CATALOG, liftings=liftings,
-                         enrolled=lambda rid: True, others=others)
+                         enrolled=lambda rid: True, others=others, held=held)
 
 
 # ── The phase of a request ─────────────────────────────────────────────────────────────
@@ -385,6 +385,27 @@ def test_the_route_gives_the_wires_and_their_chronology(client, tmp_path):
     assert w["decision"]["action"] == "isolate_vm" and w["outcome"] == "held_by_guard"
 
 
+def test_the_route_confronts_a_runs_t0_with_the_windows_held_here(client, tmp_path):
+    """SEC15 (#425): the route gives the follow the windows this host holds — a run's T0 moved
+    later than the attack time the watch received in the run is refused there, and said."""
+    rid = client.post("/api/dagorlad/requests",
+                      json={"wires": [{"experiment": "T1110.001", "target": GONDOLIN}]}).json()["request"]
+    now = datetime.now(timezone.utc)
+    received = now - timedelta(seconds=60)
+    _write_window(_window("run-live", start=now - timedelta(seconds=90), request=rid))
+    poll = {"timestamp": _iso(received), "action": "",
+            "signal": {"event": "attack_started", "ttp": "T1110.001", "resource_id": GONDOLIN,
+                       "timestamp": _iso(received), "context": {"run_id": "run-live"},
+                       "raw_signal": {"attack_time": received.timestamp()}}}
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    (tmp_path / "runs" / "run-live_debug.jsonl").write_text(json.dumps(poll) + "\n")
+    (tmp_path / "runs" / "run-live.json").write_text(json.dumps(
+        _report("run-live", at=now - timedelta(seconds=5), request=rid)))
+    [w] = client.get(f"/api/dagorlad/requests/{rid}").json()["wires"]
+    assert w["run"] == "run-live"
+    assert "postérieur à l'heure d'attaque que la watch a reçue de l'injecteur" in w["t0_refused"]
+
+
 def test_following_a_request_writes_nothing_and_tells_the_watch_nothing(client, tmp_path):
     """« Glorfindel reste aveugle » (§7): the follow is a read — no file changes, and the route is
     a GET. Every path the console and the watch write is under tmp (the conftest: runs/, the
@@ -418,6 +439,98 @@ def test_a_status_there_but_refused_is_said_never_not_carried_yet(client, tmp_pa
     out = client.get(f"/api/dagorlad/requests/{rid}").json()
     assert out["status"] is None and out["status_error"].startswith(why)
     assert (out["phase"], out["why"]) == ("running", "status_unreadable")
+
+
+@pytest.mark.parametrize("trap, why", [("pipe", "un tube nommé"), ("link", "un lien, jamais suivi")])
+def test_a_status_that_is_no_file_is_refused_said_never_not_carried_yet(client, tmp_path, trap, why):
+    """SEC15 (#425): Orodruin's status read as the watch reads runs/ — a pipe never blocks the
+    page, a link is never followed even to a status of the right shape; refused, said, and the
+    request may be running."""
+    import os
+    import threading
+    from .test_console import _guarded, _release_fifo
+    rid = client.post("/api/dagorlad/requests",
+                      json={"wires": [{"experiment": "T1110.001", "target": GONDOLIN}]}).json()["request"]
+    d = tmp_path / "runs" / "orodruin" / "requests"
+    d.mkdir(parents=True)
+    stop = threading.Event()
+    if trap == "pipe":
+        os.mkfifo(d / f"{rid}.json")
+        threading.Thread(target=_release_fifo, args=(d / f"{rid}.json", stop), daemon=True).start()
+    else:
+        (tmp_path / "status.json").write_text(json.dumps({
+            "request": rid, "state": "finished", "at": "2026-10-31T09:00:00+00:00", "codes": [],
+            "wires": [{"rank": 1, "state": "done", "code": "", "runs": [], "result": ""}]}))
+        (d / f"{rid}.json").symlink_to(tmp_path / "status.json")
+    try:
+        finished, out = _guarded(lambda: client.get(f"/api/dagorlad/requests/{rid}").json())
+        assert finished, "the status blocked the page"
+        assert out["status"] is None and out["status_error"] == f"Orodruin's status unreadable: {why}"
+        assert (out["phase"], out["why"]) == ("running", "status_unreadable")
+    finally:
+        stop.set()
+
+
+@pytest.mark.parametrize("t0, why", [
+    (T, ""),
+    # Moved later than the attack time the watch received in the run: the time would shrink.
+    (T + timedelta(seconds=50), "postérieur à l'heure d'attaque que la watch a reçue de l'injecteur"),
+    (T - timedelta(minutes=30), "antérieur à l'ouverture de sa fenêtre d'exercice"),
+])
+def test_an_attack_runs_t0_is_confronted_refused_never_counted_and_said(t0, why):
+    """SEC15 (#425): a wire's T0 is its injector's word, confronted as the overview and the
+    campaign report confront it (SEC9) — refused, no time is counted from it, and the line says
+    why; its ending stays the watch's."""
+    win = _window("run-1", start=T - timedelta(minutes=1), end=T + timedelta(minutes=5))
+    # The watch's poll of the run's attack_started, in the run's own file: the attack time received.
+    received = {**_cycle(seen=T, event="attack_started", action="", sid="poll-1"),
+                "own": True, "run_id": "run-1", "attack_time": T.timestamp()}
+    # A detection in the run's own file (the watch's poll of what the injector says): never the
+    # watch's own sight of the VM, which a T0 must not follow.
+    polled = {**_cycle(seen=T - timedelta(seconds=30), action="", sid="poll-2"), "own": True, "run_id": "run-1"}
+    seen = T + timedelta(seconds=60)
+    rep = _report("run-1", at=t0, latency=(seen - t0).total_seconds())
+    out = _follow(status=_status(("done", "", ("run-1",))), windows=[win], reports={"run-1": rep},
+                  cycles=[received, polled, _cycle(seen=seen, verified_after=80)], held={"run-1": win})
+    [w] = out["wires"]
+    assert (why in w["t0_refused"]) and bool(w["t0_refused"]) == bool(why)
+    assert w["outcome"] == "contained_alone" and w["t0_unconfronted"] == ""
+    if why:
+        assert (w["contain_s"], w["detect_s"], w["decision"]["decide_s"]) == (None, None, None)
+        assert w["outcome_why"].startswith("T0 non retenu, temps non compté")
+    else:
+        assert (w["contain_s"], w["detect_s"]) == (140.0, 60.0)   # verified 80 s after it was seen
+
+
+def test_a_wire_whose_window_was_purged_is_not_timed_and_says_why():
+    """Its window purged a week after its end (its tombstone): the run's T0 can no longer be
+    confronted — no time counted, the line says « window purged »."""
+    out = _follow(status=_status(("done", "", ("run-1",))), windows=[],
+                  reports={"run-1": _report("run-1", at=T)}, cycles=[_cycle(seen=T + timedelta(seconds=60))],
+                  held={"run-1": {"run_id": "run-1", "purged_at": _iso(T + timedelta(days=8))}})
+    [w] = out["wires"]
+    assert w["t0_refused"].startswith("fenêtre d'exercice purgée")
+    assert (w["contain_s"], w["detect_s"]) == (None, None)
+
+
+def test_a_held_request_unreadable_is_said_beside_the_t0(tmp_path):
+    """The request a window names, held here but unreadable: its T0 is not confronted with it,
+    and the line says so — never skipped unsaid."""
+    from eregion_core import exercise_request as xr
+    xr.requests_dir().mkdir(parents=True, exist_ok=True)
+    (xr.requests_dir() / f"{RID}.json").write_text("{not json")
+    win = _window("run-1", start=T - timedelta(minutes=1), end=T + timedelta(minutes=5))
+    out = _follow(status=_status(("done", "", ("run-1",))), windows=[win],
+                  reports={"run-1": _report("run-1", at=T)}, cycles=[_cycle(seen=T + timedelta(seconds=60))],
+                  held={"run-1": win})
+    assert f"la demande Dagorlad {RID} est illisible ici" in out["wires"][0]["t0_unconfronted"]
+
+
+def test_the_line_says_a_t0_not_believed():
+    from pathlib import Path
+    js = (Path(follow.__file__).parent / "static" / "dagorlad.js").read_text()
+    assert "T0 not believed, no time counted — ${esc(l.t0_refused)}" in js
+    assert "${esc(l.t0_unconfronted)}" in js
 
 
 def test_the_status_of_another_request_is_not_this_ones(client, tmp_path):

@@ -142,10 +142,16 @@ def _technique(line: dict, run_id: str, window: dict | None, rep: dict | None, c
     them; else the window's, provisional."""
     if rep is not None:
         decision = indicators.decision_of(rep, ctx["index"])
+        # SEC15: its T0 is its injector's word, confronted as the overview and the campaign report
+        # confront it — refused, no time is counted from it, and it is said on the line.
+        refused, unread = ("", "") if ctx["held"] is None else indicators.t0_confronted(
+            rep, decision, ctx["held"].get(run_id), ctx["index"], ctx["requests"])
         t = run_report.timeline(rep, decision)
-        inc = indicators.incident_of(rep, decision, ctx["cards"], ctx["liftings"])
+        if refused:
+            t = {**t, "detect_s": None, "decide_s": None, "contain_s": None}
+        inc = indicators.incident_of(rep, decision, ctx["cards"], ctx["liftings"], t0_refused=refused)
         line.update(t0=iso(rep["at"]), t0_from="attack", provisional=False,
-                    detection=rep["detection"])
+                    detection=rep["detection"], t0_refused=refused, t0_unconfronted=unread)
     else:
         start = epoch((window or {}).get("start"))
         if start is None:
@@ -197,7 +203,8 @@ def _fault(line: dict, run_id: str, window: dict | None, rep: dict | None, raw: 
 def follow(request_id: str, wires: list[dict], status: dict | None, windows: list[dict],
            states: dict[str, str], cycles: list[dict], reports: dict[str, dict], cards: list[dict],
            to_judge: set[str], *, now: datetime, catalog: dict | None = None, liftings=(),
-           enrolled=None, others=(), begun: float | None = None, unreadable: str = "") -> dict:
+           enrolled=None, others=(), begun: float | None = None, unreadable: str = "",
+           held: dict | None = None, requests=None) -> dict:
     """The chronology of a request. ``wires``: the request's, as written here (rank, experiment,
     target) — [] when it was not, then the ranks Orodruin names; ``windows``: every window
     (``_read_windows``), ``states`` their state; ``cycles``: the watch's, slimmed; ``reports``:
@@ -205,7 +212,10 @@ def follow(request_id: str, wires: list[dict], status: dict | None, windows: lis
     waiting for a verdict; ``liftings``: the operator's lifts of a containment; ``others``: every
     run of this host since the request began (``indicators.read_runs``) — the decisions the
     overview attaches to an attack are never a fault's, as there; ``begun``: the request's time;
-    ``unreadable``: why Orodruin's status is there but not read."""
+    ``unreadable``: why Orodruin's status is there but not read; ``held``: run id → its window as
+    this host holds it, believed, refused or purged — each attack run's T0 is confronted with it
+    (``indicators.t0_confronted``, SEC15; None: not confronted); ``requests``: the console's
+    store of requests (``containment.request_at``)."""
     mine = sorted((w for w in windows if w.get("request") == request_id),
                   key=lambda w: str(w.get("start") or ""))
     by_rank = {w["rank"]: w for w in (status or {}).get("wires") or []}
@@ -216,7 +226,8 @@ def follow(request_id: str, wires: list[dict], status: dict | None, windows: lis
     taken = {str((indicators.decision_of(r, index) or {}).get("signal_id") or "") for r in others
              if r.get("kind") == "technique"}
     ctx = {"cycles": cycles, "index": index, "cards": cards, "states": states,
-           "liftings": indicators.liftings_of(cycles, liftings), "enrolled": enrolled, "taken": taken}
+           "liftings": indicators.liftings_of(cycles, liftings), "enrolled": enrolled, "taken": taken,
+           "held": held, "requests": requests}
     by_run = {w["run_id"]: w for w in mine}
     claimed = {r for sw in by_rank.values() for r in sw.get("runs") or []}
     # First each wire's run, its window, its report, what it is (the catalogue's word, else its

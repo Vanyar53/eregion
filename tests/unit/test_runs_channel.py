@@ -574,3 +574,86 @@ def test_a_rule_proposal_queries_the_config_s_workspace_only(monkeypatch, named,
         pass
     assert asked == ([queried] if queried else [])
     assert authored and authored[0]["workspace_id"] == (queried or "")
+
+
+# ── SEC15: the end of a file, for the console's feed and the TUI ─────────────────────────────
+
+def test_the_end_of_a_file_is_read_bounded_ended_lines_only(tmp_path, monkeypatch):
+    """`tail_lines`: at most READ_BYTES from the end, the line that bound cuts dropped, a line not
+    ended left out, a line past LINE_BYTES refused, at most `max_lines` kept."""
+    monkeypatch.setattr(channel_reader, "LINE_BYTES", 200)
+    f = tmp_path / "x_signals.jsonl"
+    f.write_bytes(b"".join(b'{"i": %d}\n' % i for i in range(1000)) + b"x" * 300 + b"\n" + b'{"i": "half')
+    got = channel_reader.tail_lines(f, max_bytes=2048, max_lines=50)
+    assert len(got) == 50 and got[-1] == '{"i": 999}' and all(json.loads(x) for x in got)
+    whole = channel_reader.tail_lines(f, max_bytes=1 << 20, max_lines=10_000)
+    assert len(whole) == 1000 and whole[0] == '{"i": 0}'        # the over-long line refused
+
+
+def test_the_tui_never_reads_a_name_of_runs_as_markup(tmp_path, monkeypatch):
+    """A name of runs/ is written by another container: the TUI shows it as text, never as Rich
+    markup (SEC15, review)."""
+    from glorfindel import tui
+    monkeypatch.chdir(tmp_path)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "[bold]x_signals.jsonl").write_bytes(_lines(1))
+    (runs / "[bold]x_debug.jsonl").symlink_to(tmp_path / "elsewhere")
+    got = tui._load_feed()
+    assert got[0] == "[yellow]⚠ \\[bold]x_debug.jsonl : un lien, jamais suivi — jamais lu[/yellow]"
+    assert "\\[bold]x" in str(tui._feed_renderable(got, tui._current_run_label()).title)
+
+
+def test_the_end_of_a_file_keeps_a_whole_line_its_bound_falls_on(tmp_path):
+    """The bound falls exactly at a line's start: that line is whole, kept — one byte before or
+    after it, the line it cuts is dropped (SEC15, review)."""
+    f = tmp_path / "x_signals.jsonl"
+    f.write_bytes(b"".join(b'{"i": %03d}\n' % i for i in range(100)))      # 11 bytes a line
+    assert channel_reader.tail_lines(f, max_bytes=11 * 5)[0] == '{"i": 095}'
+    assert len(channel_reader.tail_lines(f, max_bytes=11 * 5)) == 5
+    assert channel_reader.tail_lines(f, max_bytes=11 * 5 - 1)[0] == '{"i": 096}'
+    assert channel_reader.tail_lines(f, max_bytes=11 * 5 + 1)[0] == '{"i": 095}'
+    assert len(channel_reader.tail_lines(f, max_bytes=11 * 100)) == 100
+
+
+@pytest.mark.parametrize("make", ["fifo", "link-to-zero", "link-elsewhere"])
+def test_the_end_of_a_file_never_blocks_nor_follows_a_link(tmp_path, make):
+    f = tmp_path / "x_signals.jsonl"
+    stop = threading.Event()
+    if make == "fifo":
+        os.mkfifo(f)
+        threading.Thread(target=_unblock_fifo_until, args=(f, stop), daemon=True).start()
+    elif make == "link-to-zero":
+        f.symlink_to("/dev/zero")
+    else:
+        (tmp_path / "elsewhere").write_bytes(_lines(3))
+        f.symlink_to(tmp_path / "elsewhere")
+    try:
+        finished, got = _guarded(channel_reader.tail_lines, f)
+        assert finished and isinstance(got, channel_reader.Refused)
+    finally:
+        stop.set()
+
+
+def test_the_tui_feed_reads_runs_as_the_watch_never_blocking(tmp_path, monkeypatch):
+    """The TUI's feed: the newest regular run's lines; a link, newer, never a candidate; a pipe of
+    that run said, never read — within the guard."""
+    from glorfindel import tui
+    monkeypatch.chdir(tmp_path)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "r1_signals.jsonl").write_bytes(_lines(3))
+    fifo = runs / "r1_debug.jsonl"
+    os.mkfifo(fifo)
+    (tmp_path / "elsewhere").write_bytes(_lines(5))
+    (runs / "z_signals.jsonl").symlink_to(tmp_path / "elsewhere")     # newer, never a candidate
+    os.utime(runs / "r1_signals.jsonl", (time.time() - 60, time.time() - 60))
+    stop = threading.Event()
+    threading.Thread(target=_unblock_fifo_until, args=(fifo, stop), daemon=True).start()
+    try:
+        finished, got = _guarded(tui._load_feed)
+        assert finished and isinstance(got, list), got
+        assert got[0] == "[yellow]⚠ r1_debug.jsonl : un tube nommé — jamais lu[/yellow]"
+        assert sum("attack_started" in line for line in got) == 3 and len(got) == 4
+    finally:
+        stop.set()

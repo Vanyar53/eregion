@@ -1349,8 +1349,8 @@ MUTANTS = [
     ("M563", "the indicators take runs older than 30 days (UI-2)", IND,
      "        if at is None or at < since:\n", "        if at is None:\n"),
     ("M564", "a detection without a decision counts as a proof (UI-2)", IND,
-     "        d = decision_of(r, cycles)\n        if d is None:\n            continue\n        proofs.append(r)\n",
-     "        proofs.append(r)\n        d = decision_of(r, cycles)\n        if d is None:\n            continue\n"),
+     "        if d is None:\n            continue\n        proofs.append(r)\n",
+     "        proofs.append(r)\n        if d is None:\n            continue\n"),
     ("M565", "coverage counts a missed technique as covered (UI-2)", IND,
      '    covered = {r["ttp"] for r in detected}\n', '    covered = {r["ttp"] for r in attacks}\n'),
     # The version beside the logo: the reference deploy.sh builds from, the deployed tag first.
@@ -5964,8 +5964,8 @@ MUTANTS += [
      '    counted = [r for r in rows if r["status"] == "implemented" or r["runs"]]\n',
      "    counted = rows\n"),
     ("M1819", "a run outside the catalog vanishes from the matrix (C1)", COV,
-     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now) for e in entries + outside]\n',
-     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now) for e in entries]\n'),
+     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now, refusals) for e in entries + outside]\n',
+     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now, refusals) for e in entries]\n'),
     ("M1820", "a campaign's runs lose their campaign (C1)", RRC,
      '        campaign = parent.parent.name if parent.name == "runs" and parent.parent.parent.name == "campaigns" else ""\n',
      '        campaign = ""\n'),
@@ -7021,8 +7021,8 @@ MUTANTS += [
      "    line.update(mistaken=[],\n"),
     ("M2465", "the overview's ending of a run reads no card: an isolation that did not hold counted contained "
               "(DG-c, shared with Dagorlad)", IND,
-     "                                run[\"at\"], run[\"detection\"], decision, cards=cards, liftings=liftings)\n",
-     "                                run[\"at\"], run[\"detection\"], decision, cards=(), liftings=liftings)\n"),
+     "                                run[\"at\"], run[\"detection\"], decision, cards=cards, liftings=liftings,\n",
+     "                                run[\"at\"], run[\"detection\"], decision, cards=(), liftings=liftings,\n"),
     ("M2466", "a request file that holds another request followed as this one (DG-c)", CON,
      "    if req is not None and req.id != request_id:   # the file names the request it holds, or none\n",
      "    if False:\n"),
@@ -7062,8 +7062,8 @@ MUTANTS += [
     ("M2484", "an unreadable status of Orodruin taken for « not carried yet » (DG-c, review)", FOL,
      '    if unreadable:\n        return "running", "status_unreadable"\n', ""),
     ("M2485", "the route reads a status there but refused as absent (DG-c, review)", CON,
-     '        status, unreadable = None, f"Orodruin\'s status unreadable: {exc}"[:300]\n',
-     '        status, unreadable = None, ""\n'),
+     '            return None, f"Orodruin\'s status unreadable: {exc}"[:300]\n',
+     '            return None, ""\n'),
     ("M2486", "the status of another request taken for this one's (DG-c, review)", CON,
      '    if status is not None and status["request"] != request_id:   # as the request\'s file (M2466)\n',
      "    if False:\n"),
@@ -8222,6 +8222,131 @@ MUTANTS += [
      "        try:\n            out[\"drain\"] = self.drain_connections(resource_id)\n            asked()\n"),
 ]
 TESTS.update({f"M{n}": _SID1 for n in range(2970, 2973)})
+
+# SEC15 (#425): the console reads runs/ as the watch reads it — one reader (runs_reader, on
+# channel_reader.open_regular): a regular file only, never through a link, never blocking, a bounded
+# read, a refusal said once; no route reads on the event loop; the TUI reads the end of its files.
+# M3000–M3017. And an exercise run's T0 confronted on the overview and in Dagorlad as the campaign
+# report confronts it (SEC9): M3018–M3019, M3085–M3094.
+RRD = "eregion_console/runs_reader.py"
+_SEC15 = ("tests/unit/test_console_exercises.py tests/unit/test_console.py tests/unit/test_runs_channel.py "
+          "tests/unit/test_console_dagorlad_follow.py")
+_SEC15_T0 = "tests/unit/test_indicators.py tests/unit/test_console_dagorlad_follow.py"
+MUTANTS += [
+    ("M3000", "a file of runs/ larger than its bound read whole (SEC15)", RRD,
+     "    if len(data) > max_bytes:\n", "    if False:\n"),
+    ("M3001", "the console's reader opens a file of runs/ as any file: a pipe blocks, a link is followed (SEC15)",
+     RRD, "        fd = channel_reader.open_regular(path)\n    except channel_reader.Refused as exc:\n        say_refused(path, str(exc))\n        return None, str(exc)\n",
+     "        fd = os.open(path, os.O_RDONLY)\n    except channel_reader.Refused as exc:\n        say_refused(path, str(exc))\n        return None, str(exc)\n"),
+    ("M3002", "a refused file of runs/ said again at every read (SEC15)", RRD,
+     "    if _said.get(key) != why:\n", "    if True:\n"),
+    ("M3003", "the exercise windows read as any file (SEC15)", CON,
+     "        st = runs_reader.regular(path)\n        w = runs_reader.read_json(path) if st is not None else None\n",
+     "        st = os.stat(path)\n        w = json.loads(open(path).read())\n"),
+    ("M3004", "the watch's cycles read as any file (SEC15)", CON,
+     ("        st = runs_reader.regular(path)\n        if st is None:\n", "            for line in runs_reader.lines(path):\n"),
+     ("        st = os.stat(path)\n        if st is None:\n", "            for line in open(path).read().splitlines():\n")),
+    ("M3005", "a VM's history read from the debug files as any file (SEC15)", CON,
+     ("if (st := runs_reader.regular(f))]", "        for line in reversed(runs_reader.lines(f)):\n"),
+     ("if (st := f.stat())]", "        for line in reversed(f.read_text().splitlines()):\n")),
+    ("M3006", "a run's report read as any file (SEC15)", CON,
+     "    r = runs_reader.read_json(path)      # SEC15", "    r = json.loads(open(path).read())      # SEC15"),
+    ("M3007", "the overview's run reports read as any file (SEC15)", IND,
+     "    for run in run_report.read_reports(reports, runs_reader.read_json):   # SEC15",
+     "    for run in run_report.read_reports(reports):   # SEC15"),
+    ("M3008", "a campaign's manifest read as any file (SEC15)", CON,
+     "        m = runs_reader.read_json(mpath)   # SEC15", "        m = json.loads(mpath.read_text())   # SEC15"),
+    ("M3009", "the operator's lifts read as any file (SEC15)", CON,
+     '    for line in runs_reader.lines(_RUNS / "manual_actions.jsonl"):   # SEC15',
+     '    for line in (_RUNS / "manual_actions.jsonl").read_text().splitlines():   # SEC15'),
+    ("M3010", "Orodruin's contract read through a link (SEC15)", CON,
+     '    published = runs_reader.read_json(_RUNS / "orodruin" / "contract.json")   # SEC15',
+     '    published = json.loads((_RUNS / "orodruin" / "contract.json").read_text())   # SEC15'),
+    ("M3011", "Orodruin's status of a request read as any file (SEC15)", CON,
+     "        doc, why = runs_reader.json_and_why(spath)\n", "        doc, why = json.loads(spath.read_text()), \"\"\n"),
+    ("M3012", "the exercises read in the event loop (SEC15)", CON,
+     "    return await asyncio.to_thread(_exercises, start, injector)\n", "    return _exercises(start, injector)\n"),
+    ("M3013", "the live feed reads runs/ as any file: a pipe stops the console's loop (SEC15)", CON,
+     "                read = channel_reader.read_lines(f, offset, skipping, ino)\n",
+     "                read = channel_reader.Read(open(f).read().splitlines(), 0, False, False, None, False)\n"),
+    ("M3014", "the feed's history reads runs/ as any file (SEC15)", CON,
+     "            for line in _tail(f):\n", "            for line in open(f).read().splitlines():\n"),
+    ("M3015", "the end of a file read from its start: the whole file, not its end (SEC15)", CRD,
+     "        start = max(0, size - max_bytes)\n", "        start = 0\n"),
+    ("M3016", "the end of a file opened as any file: a pipe blocks, a link is followed (SEC15)", CRD,
+     "    fd = open_regular(path)\n    with os.fdopen(fd, \"rb\") as f:\n        size = os.fstat(f.fileno()).st_size\n",
+     "    fd = os.open(path, os.O_RDONLY)\n    with os.fdopen(fd, \"rb\") as f:\n        size = os.fstat(f.fileno()).st_size\n"),
+    ("M3017", "the TUI's feed taken from a link of runs/ (SEC15)", TUI,
+     "            st = os.lstat(path)\n        except OSError:\n            continue\n        if stat.S_ISREG(st.st_mode):\n            found.append",
+     "            st = os.stat(path)\n        except OSError:\n            continue\n        if stat.S_ISREG(st.st_mode):\n            found.append"),
+    ("M3018", "an exercise run's T0 believed as its injector writes it, on the overview (SEC15)", IND,
+     "        refused, unread = t0_confronted(r, d, held, cycles, requests) if windows is not None else (\"\", \"\")\n",
+     "        refused, unread = \"\", \"\"\n"),
+    ("M3019", "the overview's exercises never given the windows their T0 is confronted with (SEC15)", CON,
+     "                      all_cards=every, liftings=_manual_liftings(since.timestamp()),\n                      windows=_held_windows())\n",
+     "                      all_cards=every, liftings=_manual_liftings(since.timestamp()))\n"),
+    ("M3085", "a wire's T0 believed as its injector writes it, in Dagorlad (SEC15)", FOL,
+     '        refused, unread = ("", "") if ctx["held"] is None else indicators.t0_confronted(\n',
+     '        refused, unread = ("", "") if True else indicators.t0_confronted(\n'),
+    ("M3086", "Dagorlad's follow never given the windows a T0 is confronted with (SEC15)", CON,
+     "begun=begun, unreadable=unreadable, held=_held_windows())", "begun=begun, unreadable=unreadable)"),
+    ("M3087", "a T0 refused still times the detection on the overview (SEC15)", IND,
+     '        if r["latency"] is not None and not refused:\n', '        if r["latency"] is not None:\n'),
+    ("M3088", "a T0 refused still times the decision on the overview (SEC15)", IND,
+     '        if decided_at is not None and decided_at >= r["at"] and not refused:\n',
+     '        if decided_at is not None and decided_at >= r["at"]:\n'),
+    ("M3089", "a T0 refused still times a wire in Dagorlad (SEC15)", FOL,
+     "        if refused:\n            t = {**t,", "        if False:\n            t = {**t,"),
+    ("M3090", "the watch's first sight taken from a run's own files, the injector's word (SEC15)", IND_,
+     '                if c.get("own"):\n                    continue\n                d = containment.view(c)\n', '                d = containment.view(c)\n'),
+    ("M3091", "the attack time the watch received never kept by the console (SEC15)", CON,
+     '"attack_time": epoch(raw.get("attack_time")),', '"attack_time": None,'),
+    ("M3092", "the run a line of the watch names never kept by the console (SEC15)", CON,
+     '        "run_id": str(ctx.get("run_id") or ""), "attack_time"', '        "run_id": "", "attack_time"'),
+    ("M3093", "the attack time received never read from a console's slim cycle (SEC15)", CTN,
+     "        else:\n            raw = rec\n", "        else:\n            raw = {}\n"),
+    ("M3094", "a T0 refused on the overview not counted apart (SEC15)", IND,
+     "        refused_t0 += bool(refused)\n", ""),
+]
+TESTS.update({f"M{n}": _SEC15 for n in range(3000, 3018)})
+TESTS.update({f"M{n}": _SEC15_T0 for n in (3018, 3019, *range(3085, 3095))})
+# SEC15, the Orchestre's condition (02/11): a window purged said in the console itself. M3130.
+MUTANTS += [
+    ("M3130", "every T0 refused said « window purged » on Dagorlad's tile (SEC15)", IND,
+     '        purged_t0 += bool(refused) and isinstance(held, dict) and bool(held.get("purged_at"))\n',
+     "        purged_t0 += bool(refused)\n"),
+]
+TESTS["M3130"] = _SEC15_T0
+# SEC15, its 5.5 review: the matrix and the last proof confront the T0 too, an unreadable request on
+# the tile, the end of a file at a line's start, nothing opened to refuse, names escaped. M3136–M3145.
+MUTANTS += [
+    ("M3136", "the matrix times a run from a T0 not believed (SEC15)", COV,
+     '    if refused:\n        t = {**t, "detect_s": None, "decide_s": None, "contain_s": None}\n    return {\n',
+     '    if False:\n        t = {**t, "detect_s": None, "decide_s": None, "contain_s": None}\n    return {\n'),
+    ("M3137", "the matrix never given the windows a T0 is confronted with (SEC15)", CON,
+     'cat.get("entries", []), t, windows=_held_windows())', 'cat.get("entries", []), t)'),
+    ("M3138", "a proof dated by a T0 not believed: the last proof's age the injector's word (SEC15)", COV,
+     '    if not (refusals or {}).get(run["run_id"]):\n        return run["at"], "attack"\n',
+     '    if True:\n        return run["at"], "attack"\n'),
+    ("M3139", "the end of a file drops a whole line its bound falls on (SEC15)", CRD,
+     "        f.seek(max(0, start - 1))\n", "        f.seek(start)\n"),
+    ("M3140", "a Dagorlad request held but unreadable never said on the tile (SEC15)", IND,
+     "        unread_t0 += bool(unread)\n", ""),
+    ("M3141", "the indicators not confronted say nothing of it (SEC15)", IND,
+     '"t0_confronted": windows is not None},', '"t0_confronted": True},'),
+    ("M3142", "a pipe or a device opened to say why it is refused (SEC15)", RRD,
+     "    say_refused(path, LINK if stat.S_ISLNK(st.st_mode) else channel_reader._kind(st.st_mode))\n",
+     "    os.close(channel_reader.open_regular(path))\n"),
+    ("M3143", "a name of runs/ read as markup by the TUI (SEC15)", TUI,
+     "{_esc_markup(path.name)} : {exc} — jamais lu", "{path.name} : {exc} — jamais lu"),
+    ("M3144", "a name of runs/ written raw into the console's log (SEC15)", RRD,
+     '    print(f"  ⚠ console: {shown(path)} — ', '    print(f"  ⚠ console: {path} — '),
+    ("M3145", "the matrix kept 30 s past a window that changes a T0's verdict (SEC15)", CON,
+     '            tuple(stat(p) for p in sorted(windows.glob("*.json"))) if windows.is_dir() else ())',
+     "            ())"),
+]
+TESTS.update({f"M{n}": _SEC15 for n in (3139, 3142, 3143, 3144)})
+TESTS.update({f"M{n}": _SEC15_T0 + " tests/unit/test_coverage.py" for n in (3136, 3137, 3138, 3140, 3141, 3145)})
 
 
 # MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the

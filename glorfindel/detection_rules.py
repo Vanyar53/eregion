@@ -27,7 +27,7 @@ from glorfindel.detectors import (  # noqa: E402  (after optional deps)
     is_identity_source,
     plane_of,
 )
-from glorfindel import expected_sudo  # noqa: E402
+from glorfindel import correlation, expected_sudo  # noqa: E402
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
@@ -39,11 +39,17 @@ def expected_counts(status: dict) -> dict:
     them — the console and `status_snapshot` read them here."""
     es = status.get("expected_sudo") if isinstance(status, dict) else None
     es = es if isinstance(es, dict) else {}
-    try:
-        count = int(es.get("count") or 0)
-    except (TypeError, ValueError):
-        count = 0
-    return {"expected_count": count, "expected_last": str(es.get("last") or "")}
+    co = status.get("correlation") if isinstance(status, dict) else None
+    co = co if isinstance(co, dict) else {}
+
+    def n(d: dict, k: str) -> int:
+        try:
+            return int(d.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0
+    # COR1: the root shells set aside by their sessions' origin, and the correlation's queries.
+    return {"expected_count": n(es, "count"), "expected_last": str(es.get("last") or ""),
+            "origin_count": n(es, "origin_count"), "correlation": {k: n(co, k) for k in correlation.COUNTS}}
 
 # P1: the client's layer — the rules of THIS deployment (approved, overriding a base rule,
 # disabling one), outside the repository, loaded over the shipped base
@@ -1317,6 +1323,11 @@ class RulePoller:
         targets = self._targets(rule)
         routed = self._route(rule, rows, targets) if targets else {}
         judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
+        with self._lock:
+            seen = {i for v in self._status.get(rule.name, {}).get("dispatched", {}).values()
+                    if isinstance(v, dict) for i in v}
+        corr = correlation.settle(rule.ttp, routed, judged, self._detector(rule).run_query, seen,
+                                  _row_identity, window)                # COR1, outside the lock too
         signals: list[dict] = []
         sent_ids: dict[str, list[str]] = {}
         with self._lock:
@@ -1332,7 +1343,7 @@ class RulePoller:
             control = is_control_plane_source(rule.source) or is_identity_source(rule.source)
             budget = _CONTROL_PLANE_CARDS_PER_POLL
             data_budget = _DATA_CARDS_PER_POLL
-            expected_n = 0
+            expected_n = origin_n = 0
             for key, (tgt, krows) in routed.items():
                 seen = dispatched.get(key, {})
                 new = [r for r in krows if _row_identity(r) not in seen]
@@ -1356,6 +1367,8 @@ class RulePoller:
                 # signal — journaled and counted, never in the prompt.
                 kept, aside = self._expected_split(rule, new, judged, now_iso)
                 expected_n += aside
+                if aside:
+                    origin_n += sum(judged[id(r)].get("via") == "origin" for r in new if id(r) in judged)
                 if not kept:
                     continue
                 # Event rows (TimeGenerated) are one incident per cycle: the newest is
@@ -1366,7 +1379,7 @@ class RulePoller:
                     send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
                 # Capped per rule and poll (SEC2), as the control plane: the gravest rows
                 # first; the rest of this VM's in one card that names each of them.
-                send.sort(key=_gravity, reverse=True)
+                send.sort(key=lambda r: (r.get("Correlation") == correlation.COMPROMISED, _gravity(r)), reverse=True)
                 rest = send[data_budget:]
                 send = send[:data_budget]
                 data_budget = max(0, data_budget - len(send))
@@ -1393,7 +1406,9 @@ class RulePoller:
             if expected_n:
                 # ADM1: the sudo set aside, counted where the console reads the rules.
                 st["expected_sudo"] = {"count": expected_counts(st)["expected_count"] + expected_n,
-                                       "last": now_iso}
+                                       "last": now_iso, "origin_count": expected_counts(st)["origin_count"] + origin_n}
+            if any(corr.values()):
+                st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)
             # Recorded AFTER the dispatch: a crash in between re-sends (at least once)
             # rather than losing a detection (third review, detail).
             dispatched = st.setdefault("dispatched", {})
@@ -1431,6 +1446,8 @@ class RulePoller:
             plane = "control"
         control = plane in ("control", "identity")
         grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
+        # COR1: a brute force followed by a login from its address — an account compromised.
+        grave = grave or row.get("Correlation") == correlation.COMPROMISED
         return {
             "signal_id": f"rule-{rule.name}-{uuid.uuid4().hex[:8]}",
             "event": "detection",

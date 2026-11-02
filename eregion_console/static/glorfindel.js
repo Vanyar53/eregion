@@ -940,7 +940,9 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const dc  = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
     const mt  = r.last_match ? `<span style="color:${_matchColor(r.last_match)};font-size:9px;margin-left:auto;flex-shrink:0">${_relTime(r.last_match)}</span>` : '';
     // ADM1: the administrators' expected sudo set aside — counted here, never silent.
-    const ex  = r.expected_count > 0 ? `<span style="color:var(--dim);font-size:9px;flex-shrink:0" title="${_attr(`${r.expected_count} expected sudo set aside, no card (ADM1) — glorfindel report`)}">${_attr(r.expected_count)} expected</span>` : '';
+    // COR1: of them, the root shells whose every SSH session came from an expected origin.
+    const exOrigin = r.origin_count > 0 ? `, ${r.origin_count} root shell(s) from an expected origin (COR1)` : '';
+    const ex  = r.expected_count > 0 ? `<span style="color:var(--dim);font-size:9px;flex-shrink:0" title="${_attr(`${r.expected_count} expected sudo set aside, no card (ADM1)${exOrigin} — glorfindel report`)}">${_attr(r.expected_count)} expected</span>` : '';
     return `<div class="row rule-item" ${_on('click', 'showRuleByIdx', idx)}
       style="padding:3px 4px;font-size:10px">
       <span style="color:${dc};font-size:9px">●</span>
@@ -2631,7 +2633,12 @@ function showRuleDetail(rule) {
         : 'not polled yet';
   // ADM1: the sudo set aside as the administrators' expected ones (no card), counted.
   const expectedTxt = rule.expected_count > 0
-    ? `${rule.expected_count} expected sudo set aside, no card · last ${_relTime(rule.expected_last)} — glorfindel report lists them`
+    ? `${rule.expected_count} expected sudo set aside, no card${rule.origin_count > 0 ? ` (${rule.origin_count} root shell(s) from an expected origin, COR1)` : ''} · last ${_relTime(rule.expected_last)} — glorfindel report lists them`
+    : '';
+  // COR1: the correlation's queries, what they decided, what they could not read.
+  const co = rule.correlation || {};
+  const corrTxt = co.queries > 0
+    ? `correlation (COR1): ${co.queries} quer${co.queries > 1 ? 'ies' : 'y'} · ${co.origin || 0} root shell(s) set aside by origin · ${co.card || 0} carded by origin · ${co.unknown || 0} unknown (card)${co.compromised ? ` · ${co.compromised} login(s) after brute force (critical)` : ''}${co.unchecked ? ` · ${co.unchecked} not checked` : ''}`
     : '';
 
   document.getElementById('modal-title').textContent =
@@ -2652,6 +2659,7 @@ function showRuleDetail(rule) {
     </div>
     <div style="font-size:10px;color:var(--dim);margin-bottom:8px">${_attr(statusTxt)}</div>
     ${expectedTxt ? `<div style="font-size:10px;color:var(--dim);margin-bottom:8px">${_attr(expectedTxt)}</div>` : ''}
+    ${corrTxt ? `<div style="font-size:10px;color:var(--dim);margin-bottom:8px">${_attr(corrTxt)}</div>` : ''}
     <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px">Query</div>
     <div class="modal-query">${_attr((rule.query || '').trim())}</div>`;
 

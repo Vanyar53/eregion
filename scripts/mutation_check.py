@@ -7221,7 +7221,7 @@ TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M
 # registry under its flock and written whole (V-10), every state owner-only and whole (V-27),
 # /pending under the buttons' policy (R-16), a state directory that can't be listed (R-07), a
 # reassertion check that raises said on one card (V-16), a privilege escalation read on sudo's own
-# line (R-18). M2915–M2936 (M2937–M2939 unused).
+# line (R-18). M2915–M2936; M2937–M2939 after its review.
 INC = "glorfindel/incidents.py"
 _SEC13_INC = "tests/unit/test_locks.py::test_two_processes_lose_no_incident_and_no_reader_sees_half_a_registry"
 _SEC13_DIR = ("tests/unit/test_unreadable_state.py tests/unit/test_orphan_sweep.py::"
@@ -7258,12 +7258,12 @@ MUTANTS += [
     ("M2924", "a block's check that raises is a log line only (SEC13, V-16)", R,
      "        say_unverified(vm, rid, exc, report, ip=ip)\n", "        pass\n"),
     ("M2925", "a check that keeps raising is said at every pass (SEC13, V-16)", RCA,
-     '    if any(e.get("status") == "pending" for e in cards) or (sid in _UNVERIFIED_OPEN and _last_word(sid, sid)):\n',
+     "    if waiting is not None:                     # said: its text kept to the last error\n",
      "    if False:\n"),
     ("M2926", "a check still raising, its card acknowledged, is said again at every pass (SEC13, V-16)", RCA,
-     " or (sid in _UNVERIFIED_OPEN and _last_word(sid, sid)):\n", ":\n"),
+     '    if sid in _UNVERIFIED_OPEN and last is not None and last.get("status") == "resolved" and not last.get("resolution"):\n', "    if False:\n"),
     ("M2927", "the card of a check that raised stays open once the check passes (SEC13, V-16)", R,
-     "    unverified_over(vm, rid)\n", ""),
+     "        unverified_over(vm, rid)               # it answered: the check passes again\n", "        pass\n"),
     ("M2928", "an acknowledged card silences the check's next failure for ever (SEC13, V-16)", RCA,
      "    _UNVERIFIED_OPEN.discard(sid)\n    for e in _history():\n", "    for e in _history():\n"),
     ("M2929", "the card of a check that raised closes while a state can't be read (SEC13, V-16)", RCA,
@@ -7298,6 +7298,19 @@ TESTS.update({"M2915": _SEC13_INC, "M2916": _SEC13_INC,
               "M2921": "tests/unit/test_bot.py", "M2922": _SEC13_DIR})
 TESTS.update({f"M{n}": _SEC13_V16 for n in range(2923, 2932)})
 TESTS.update({f"M{n}": _SEC13_R18 for n in range(2932, 2937)})
+# Its review: a check that can't tell (`verified: None`) closed the card; the acknowledgement read
+# by prefix; the card kept the first error. M2937–M2939.
+MUTANTS += [
+    ("M2937", "a check that can't tell (verified: None) closes the card: « the check passes again » (SEC13, V-16)",
+     R, '    if verification.get("verified") is not None:\n        unverified_over(vm, rid)               # it answered',
+     "    if True:\n        unverified_over(vm, rid)               # it answered"),
+    ("M2938", "an acknowledged check card read by prefix: 10.0.0.1 takes 10.0.0.10's card (SEC13, V-16)", RCA,
+     '    if sid in _UNVERIFIED_OPEN and last is not None and last.get("status") == "resolved" and not last.get("resolution"):\n',
+     "    if sid in _UNVERIFIED_OPEN and _last_word(sid, sid):\n"),
+    ("M2939", "the card of a check that keeps failing keeps its first error (SEC13, V-16)", RCA,
+     '        if waiting.get("unverified_last", error) != error:\n', "        if False:\n"),
+]
+TESTS.update({f"M{n}": _SEC13_V16 for n in (2937, 2938, 2939)})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

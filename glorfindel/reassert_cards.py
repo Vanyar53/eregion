@@ -253,29 +253,47 @@ def _unverified_id(vm: str, rid: str, ip: str = "") -> str:
     return f"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
 
 
-def say_unverified(vm: str, rid: str, exc: Exception, report: list[dict], ip: str = "") -> None:
+def say_unverified(vm: str, rid: str, exc, report: list[dict], ip: str = "") -> None:
     """The check of `vm`'s isolation (or, with `ip`, its block) raised — a right removed, the
-    API down: logged, and said on one card while it keeps raising, not at every pass; closed
-    by the operator, silent until the check passes (SEC13, V-16). Nothing is written to Azure:
+    API down — or answered « can't tell » (`verified: None`, its error): logged, and said on
+    one card while it lasts, not at every pass, its text kept to the last error; closed by
+    the operator, silent until the check passes (SEC13, V-16). Nothing is written to Azure:
     what isn't checked is neither put back nor lifted."""
+    from glorfindel import escalations
     what = f"le blocage de {ip} sur {vm}" if ip else f"l'isolation de {vm}"
     log.warning("reassert: %s not checked (%s)", what, exc)
     sid = _unverified_id(vm, rid, ip)
-    cards = [e for e in _history() if e.get("signal_id") == sid]
-    if any(e.get("status") == "pending" for e in cards) or (sid in _UNVERIFIED_OPEN and _last_word(sid, sid)):
-        return                                  # said: pending, or acknowledged
     error = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:300]
-    reason = (f"La vérification de {what} échoue ({error}) : tant qu'elle échoue, la réaffirmation ne sait "
-              "pas s'il tient encore — rien n'est reposé ni levé.")
+    cards = [e for e in _history() if e.get("signal_id") == sid]       # this card's, exactly
+    waiting = next((e for e in cards if e.get("status") == "pending"), None)
+    if waiting is not None:                     # said: its text kept to the last error
+        if waiting.get("unverified_last", error) != error:
+            first = waiting.get("unverified_first") or waiting["unverified_last"]
+            escalations.refresh(waiting["id"], _unverified_reason(what, first, error), unverified_last=error)
+            new_pass()
+        return
+    last = cards[-1] if cards else None
+    if sid in _UNVERIFIED_OPEN and last is not None and last.get("status") == "resolved" and not last.get("resolution"):
+        return                                  # acknowledged by the operator, still failing
+    reason = _unverified_reason(what, error, error)
     steps = ["Lire l'erreur : un droit de lecture retiré à l'identité de Glorfindel (le NSG, la carte réseau, "
              "le sous-réseau), une API indisponible, une ressource supprimée.",
              "La carte se ferme d'elle-même quand la vérification repasse ; acquittée, elle ne revient qu'à "
              "l'échec suivant."]
-    _record(signal_id=sid, resource_id=rid, action=_UNVERIFIED_ACTION, escalation_type=UNVERIFIED_TYPE,
-            reason=reason, severity="high", suggested_steps=steps, action_params={"ip": ip} if ip else None)
+    card = escalations.record(signal_id=sid, resource_id=rid, action=_UNVERIFIED_ACTION,
+                              escalation_type=UNVERIFIED_TYPE, reason=reason, severity="high",
+                              suggested_steps=steps, action_params={"ip": ip} if ip else None)
+    escalations.refresh(card, reason, unverified_first=error, unverified_last=error)
+    new_pass()
     _UNVERIFIED_OPEN.add(sid)
     report.append({"kind": "block" if ip else "isolation", "vm": vm, **({"ip": ip} if ip else {}),
                    "outcome": "unverified", "detail": reason})
+
+
+def _unverified_reason(what: str, first: str, last: str) -> str:
+    said = f"({last})" if first == last else f"(première erreur : {first} ; dernière : {last})"
+    return (f"La vérification de {what} échoue {said} : tant qu'elle échoue, la réaffirmation ne sait "
+            "pas s'il tient encore — rien n'est reposé ni levé.")
 
 
 def unverified_over(vm: str, rid: str, ip: str = "") -> None:

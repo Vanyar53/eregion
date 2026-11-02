@@ -257,6 +257,29 @@ def resolve(escalation_id: str, note: str = "") -> None:
 
 
 @_locked
+def refresh(escalation_id: str, reason: str, **fields) -> bool:
+    """A pending card's text brought up to what it says now (SEC13: a check's last error),
+    its first text kept in `first_reason`; `fields` written beside it. False when the card
+    no longer waits."""
+    if not _STORE.exists():
+        return False
+    lines, done = _STORE.read_text().splitlines(), False
+    for i, line in enumerate(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("id") == escalation_id and e.get("status") == "pending":
+            now = datetime.now(timezone.utc).isoformat()
+            e.setdefault("first_reason", e.get("reason", ""))
+            e.update(fields, reason=reason, updated_at=now, last_seen=now)
+            lines[i], done = json.dumps(e, default=str), True
+    if done:
+        _write_lines(lines)
+    return done
+
+
+@_locked
 def resolve_by_resource(resource_id: str, action: str) -> int:
     """Resolve all pending escalations matching resource_id + action.
 

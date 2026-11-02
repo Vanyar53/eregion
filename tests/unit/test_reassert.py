@@ -1759,3 +1759,73 @@ def test_a_check_that_raised_closes_its_card_once_the_vm_is_released():
     reassert_pass(c, _ACT)
     (card,) = _unverified()
     assert card["status"] == "resolved" and card.get("resolution")
+
+
+@pytest.mark.parametrize("what", ["isolation", "block"])
+def test_a_check_that_cant_tell_never_closes_the_card_and_says_so(what):
+    """Review of SEC13: the card closed « the check passes again » on any answer that didn't
+    raise — `verified: None` included, Azure's « can't tell » (rules or NICs unreadable, their
+    precedence unknown); then nothing more was said (A0). An unknown keeps it open, said on the
+    same card with the error it gives; only a real answer closes it. On its own, too: a check
+    that can't tell from the start opens the card."""
+    if what == "isolation":
+        _isolated()
+    else:
+        _save_block_state("vm", _IP, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
+                          placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}], threat_port=22)
+    c = _connector()
+    check = c.verify_isolation if what == "isolation" else c.verify_block_ip
+    unknown = {"verified": None, "method": "nsg_check", "error": "non vérifiable : règles illisibles sur nsg"}
+    check.side_effect = RuntimeError("(AuthorizationFailed) no read on the NSG")
+    reassert_active(c, _ACT)
+    check.side_effect, check.return_value = None, unknown
+    for _ in range(2):
+        reassert_active(c, _ACT)
+    (card,) = _unverified()
+    assert card["status"] == "pending" and card["occurrences"] == 1
+    assert "première erreur : (AuthorizationFailed)" in card["reason"] and "règles illisibles" in card["reason"]
+    check.return_value = {"verified": True}
+    reassert_active(c, _ACT)
+    assert [e["status"] for e in _unverified()] == ["resolved"]
+    check.return_value = unknown
+    reassert_active(c, _ACT)
+    assert len(_unverified("pending")) == 1
+    check.return_value = {"verified": None, "method": "dry_run"}      # a dry run says nothing
+    assert reassert_active(c, _ACT) == [] and len(_unverified("pending")) == 1
+
+
+def test_the_card_keeps_the_last_error_of_a_check_that_keeps_raising():
+    """The card said the first error only: a role removed, then the API down, read as the role
+    still. First and last now, on the one card — written once per change, not at every pass."""
+    _isolated()
+    c = _connector()
+    c.verify_isolation.side_effect = RuntimeError("(AuthorizationFailed) first")
+    reassert_active(c, _ACT)
+    c.verify_isolation.side_effect = RuntimeError("(ServiceUnavailable) last")
+    reassert_active(c, _ACT)
+    (card,) = _unverified()
+    assert "première erreur : (AuthorizationFailed) first ; dernière : (ServiceUnavailable) last" in card["reason"]
+    stamp = card["updated_at"]
+    reassert_active(c, _ACT)
+    (card,) = _unverified()
+    assert card["updated_at"] == stamp and card["occurrences"] == 1
+
+
+def test_an_acknowledged_check_card_is_its_own_not_a_longer_ips():
+    """Review of SEC13: the acknowledgement was read by prefix — the card of …-10.0.0.1 took
+    the latest card of …-10.0.0.10 for its own, was read as not acknowledged, and was said
+    again. Read by its exact signal id now."""
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}]
+    for ip in ("10.0.0.1", "10.0.0.10"):
+        _save_block_state("vm", ip, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r", placements=placed,
+                          threat_port=22)
+    c = _connector()
+    c.verify_block_ip.side_effect = RuntimeError("(AuthorizationFailed)")
+    reassert_active(c, _ACT)
+    by_ip = {e["action_params"]["ip"]: e for e in _unverified()}
+    assert set(by_ip) == {"10.0.0.1", "10.0.0.10"}
+    escalations.resolve(by_ip["10.0.0.1"]["id"])
+    for _ in range(2):
+        reassert_active(c, _ACT)
+    assert [e["action_params"]["ip"] for e in _unverified("pending")] == ["10.0.0.10"]
+    assert len(_unverified()) == 2

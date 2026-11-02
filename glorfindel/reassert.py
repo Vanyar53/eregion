@@ -217,7 +217,10 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
     except Exception as exc:                                   # VM gone, API down: said once (V-16)
         say_unverified(vm, rid, exc, report)
         return
-    unverified_over(vm, rid)
+    if verification.get("verified") is not None:
+        unverified_over(vm, rid)               # it answered: the check passes again
+    elif verification.get("method") != "dry_run":     # « can't tell »: said, never « passes » (A0)
+        say_unverified(vm, rid, verification.get("error") or "vérification non concluante", report)
     if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):
         episode(ref or vm, "", over=True)        # back: a new episode next time, whatever write fails
     say_bypass(vm, rid, verification, report, ref=ref)
@@ -302,7 +305,10 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     except Exception as exc:                                   # said once (V-16)
         say_unverified(vm, rid, exc, report, ip=ip)
         return
-    unverified_over(vm, rid, ip)
+    if verification.get("verified") is not None:
+        unverified_over(vm, rid, ip)
+    elif verification.get("method") != "dry_run":
+        say_unverified(vm, rid, verification.get("error") or "vérification non concluante", report, ip=ip)
     if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):
         episode(ref or vm, ip, over=True)        # back: a new episode next time, whatever write fails
     say_bypass(vm, rid, verification, report, ip=ip, ref=ref)

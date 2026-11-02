@@ -34,7 +34,11 @@ Elle lit les lignes Syslog `auth` et `authpriv` de la VM, que celle-ci soit dés
 | `session closed`, `Disconnected` | Rien (voir les limites). |
 
 La lecture se fait en une requête par VM et par passe, sur 7 jours (`SESSION_LOOKBACK_S`, décision de Jonathan, 02/11), filtrée sur les
-comptes en cause et coupée à 1 000 lignes (`ROWS_MAX`).
+comptes en cause et coupée à 1 000 lignes (`ROWS_MAX`). Elle ne ramène que les lignes que la brique
+lit : les `Accepted` de sshd « for <compte> from », les sessions ouvertes « for user <compte> » —
+jamais celles de sudo vers root (`session opened for user root … by <compte>`, une par sudo) ni
+celles de `systemd-user`. Une semaine de sudo d'un administrateur actif remplissait sinon la lecture,
+et chacun de ses shells root devenait une carte.
 
 La requête ne tourne que pour les lignes qui en ont besoin. C'est le cas d'un shell root en attente,
 quand le compte déclare des origines, et d'une ligne de brute force. Une ligne déjà vue à une passe
@@ -121,7 +125,9 @@ adresse et cette VM tant que la fenêtre court. Côté cartes :
   l'adresse) reçoit le signal. Une compromission ne s'y fond jamais en silence : `escalations.record`
   tient pour un changement matériel une raison qui dit la compromission alors que la carte ne la disait
   pas, ou une sévérité qui monte. La carte prend alors la nouvelle raison (« Compte peut-être
-  compromis… ») et la sévérité critique, la première raison étant gardée (`first_reason`).
+  compromis… ») et la sévérité critique, la première raison étant gardée (`first_reason`). Une carte
+qui dit la compromission la garde : un signal ordinaire de la même adresse (un scanner qui continue
+après la connexion) met à jour le reste, jamais sa raison.
 
 **Une vérification impossible** (requête en échec, lecture coupée, plafond, VM introuvable) est comptée
 (`unchecked`) et dite sur la ligne : `LoginCheck: {status: unchecked, why}`. Ce champ n'est pas un

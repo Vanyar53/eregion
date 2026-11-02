@@ -7239,11 +7239,11 @@ MUTANTS += [
     ("M2847", "a T0 before the Dagorlad request that launched its run is believed (SEC9)", CTN,
      "    if req is not None and t0 < req - CLOCK_SKEW_S:\n", "    if False:\n"),
     ("M2848", "the runs the watch saw and the manifest does not give executed are left out (SEC9)", CTN,
-     "    for u in unlisted(manifest, campaign_dir, runs_dir, watch_records, cards, notes):\n",
+     "    for u in unlisted(manifest, campaign_dir, runs_dir, seen, notes):\n",
      "    for u in []:\n"),
     ("M2849", "a run removed from the manifest, its window on this host, is forgotten (SEC9)", CTN,
-     '    windows = [cr._read_json(p) for p in sorted(cr.windows_dir(runs_dir).glob("*.json"))]\n',
-     "    windows = []\n"),
+     '        [cr._read_json(p) for p in sorted(wdir.glob("*.json"))], watch_records(span[0]) + own,\n',
+     "        [], watch_records(span[0]) + own,\n"),
     ("M2850", "a run removed from the manifest, its detection attached by the watch, is forgotten (SEC9)", CTN,
      "    marks = [(r, _BY_CYCLE) for r in records or ()] + [(c, _BY_CARD) for c in cards or ()]\n",
      "    marks = [(c, _BY_CARD) for c in cards or ()]\n"),
@@ -7253,10 +7253,9 @@ MUTANTS += [
      '            if s.get("status") == "executed" or u["how"] == [_BY_WINDOW]:\n',
      '            if s.get("status") == "executed":\n'),
     ("M2853", "a run another campaign lists is counted in this one too (SEC9)", CTN,
-     '        elif rid in elsewhere or (runs_dir / f"{rid}.json").exists():\n',
-     '        elif (runs_dir / f"{rid}.json").exists():\n'),
+     "        elif rid in elsewhere:\n", "        elif False:\n"),
     ("M2854", "a run alone, with its own report, is counted in the campaign around it (SEC9)", CTN,
-     '        elif rid in elsewhere or (runs_dir / f"{rid}.json").exists():\n', "        elif rid in elsewhere:\n"),
+     '        elif (runs_dir / f"{rid}.json").exists():\n', "        elif False:\n"),
     ("M2855", "a window far before the campaign, or after its manifest came, is counted in it (SEC9)", CTN,
      "        if start is None or not lo <= start <= hi:\n", "        if start is None:\n"),
     ("M2856", "a fault's effect the report only declares is measured (SEC9)", FRATE,
@@ -7273,6 +7272,26 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": _SEC9 for n in range(2840, 2856)})
 TESTS.update({f"M{n}": _G1_RATE for n in range(2856, 2860)})
+
+# SEC9, after its review (02/11): a miss the watch noted is a trace; a run the channel's check
+# leaves out stays an incident; a T0 not believed bounds no other run; the attack time the watch
+# received bounds the T0; the campaign before bounds where runs are looked for. M2960–M2964.
+MUTANTS += [
+    ("M2960", "a run the watch gave up on (detection_timeout) is no trace: forgotten (SEC9, review)", CTN,
+     '            when = d["seen_at"] if d["seen_at"] is not None else d["at"]\n',
+     '            if d["event"] != "detection":\n                continue\n'
+     '            when = d["seen_at"] if d["seen_at"] is not None else d["at"]\n'),
+    ("M2961", "a run the channel's check leaves out leaves the share, its window held (SEC9, review)", CTN,
+     "            if held or rid in seen:\n", "            if False:\n"),
+    ("M2962", "a T0 not believed still ends another run's watch (SEC9, review)", CTN,
+     "        bound = t0 if not refused else opened\n", "        bound = t0\n"),
+    ("M2963", "a report moves its T0 past the attack time the watch received (SEC9, review)", CTN,
+     "    if got is not None and t0 > got + 1.0:\n", "    if False:\n"),
+    ("M2964", "the runs looked for from the campaign's own start only, never the campaign before (SEC9, review)",
+     CTN, "    bounds = ([min(starts) - cr.START_LEAD_S] if starts else []) + ([max(before)] if before else [])\n",
+     "    bounds = [min(starts) - cr.START_LEAD_S] if starts else []\n"),
+]
+TESTS.update({f"M{n}": _SEC9 for n in range(2960, 2965)})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

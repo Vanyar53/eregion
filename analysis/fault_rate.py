@@ -133,17 +133,26 @@ def effect_unread(run: dict, until: float | None = None) -> str:
     each with at least one probe, every one seen (``ok``) at a time between the fault's start and
     ``until`` (the last moment of its window, ``own_until``; the effect is read late, for the
     telemetry's ingestion, never after), each to the clocks of two hosts. Its targets are
-    ``fault_run``'s to say: none, nothing is checked here."""
-    if not run.get("targets"):
+    ``fault_run``'s to say: none, nothing is checked here. A reading is found by the target's
+    full id, else by its name (Gothmog's key) — and by name only when no other target shares it:
+    two VMs of one name in two groups have readings no name tells apart, said by their ids.
+    Checked in their coherence only: the watch does not read the telemetry again."""
+    targets = [str(t) for t in run.get("targets") or []]
+    if not targets:
         return ""
     effect = run.get("effect")
     if not isinstance(effect, dict) or not effect:
         return EFFECT_UNREAD
-    by_vm = {str(k).lower(): v for k, v in effect.items()}
+    by_vm = {str(k).rstrip("/").lower(): v for k, v in effect.items()}
+    names = [_vm_name(t) for t in targets]
     start = run.get("at")
-    for target in run.get("targets") or []:
-        name = _vm_name(target)
-        readings = by_vm.get(name)
+    for target, name in zip(targets, names):
+        readings = by_vm.get(target.rstrip("/").lower())
+        if readings is None and names.count(name) > 1:
+            twins = ", ".join(t for t, n in zip(targets, names) if n == name)
+            return f"{EFFECT_UNREAD} (deux cibles du nom {name}, leurs lectures ne se distinguent pas : {twins})"
+        if readings is None:
+            readings = by_vm.get(name)
         if not isinstance(readings, list) or not readings:
             return f"{EFFECT_UNREAD} (aucune lecture sur {name})"
         for r in readings:

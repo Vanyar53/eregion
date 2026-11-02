@@ -352,3 +352,15 @@ def test_an_effect_shown_on_every_target_is_measured():
     assert fr.rate(fr.measure([both], _watch([])))["measured"] == 1
     half = _fault(targets=(VM, OTHER), effect=_effect([VM], T + 30))
     assert "aucune lecture sur vm-celebrimbor-bree" in fr.measure([half], _watch([]))[0].why
+
+
+def test_two_targets_of_one_name_are_told_apart_by_their_ids():
+    """Two VMs of one name in two groups: readings kept by name do not tell them apart — not
+    measured, both ids said; readings kept by full id do (SEC9, review)."""
+    twin = VM.replace("rg-celebrimbor", "rg-other")
+    by_name = _fault(targets=(VM, twin), effect=_effect([VM], T + 30))
+    why = fr.measure([by_name], _watch([]))[0].why
+    assert "leurs lectures ne se distinguent pas" in why and VM in why and twin in why
+    reading = [{"name": "disk-write-burst", "ok": True, "seen_at": _iso(T + 30)}]
+    by_id = _fault(targets=(VM, twin), effect={VM: reading, twin: reading})
+    assert fr.rate(fr.measure([by_id], _watch([])))["measured"] == 1

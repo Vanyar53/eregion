@@ -623,7 +623,8 @@ contenue seul. La tuile « Time to contain · exercises » dit combien de T0 ne 
 (« N T0 not believed: no time counted ») ; la ligne d'un fil dans Dagorlad dit la raison
 (« T0 not believed, no time counted — … »), et une demande que l'hôte tient mais ne peut lire.
 Conséquence sur les 30 jours de Dagorlad : une fenêtre est purgée une semaine après sa fin, et un run
-plus ancien n'est plus chronométré — ses temps sortent des médianes, sa fin reste comptée.
+plus ancien n'est plus chronométré — ses temps sortent des médianes, sa fin reste comptée. La tuile le
+dit à part (« (N: window purged, a week after its end) »), la ligne du fil aussi, avec la raison.
 
 | Entrée | D'où | Ce qui la confronte |
 |---|---|---|

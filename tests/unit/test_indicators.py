@@ -109,7 +109,8 @@ def test_a_detected_attack_gives_its_times_and_its_proof(runs):
     _cycle(runs, a + timedelta(seconds=100), "T1110.001", "block_suspicious_ip", 0.82, decided_after=25)
     out = _compute(runs)
     assert out["contain"] == {"detect_s": 100.0, "decide_s": 125.0, "contain_s": None,
-                              "detected": 1, "decided": 1, "contained": 0, "t0_refused": 0}
+                              "detected": 1, "decided": 1, "contained": 0, "t0_refused": 0,
+                              "t0_purged": 0}
     assert out["last_proof"]["run_id"] == "r1" and out["last_proof"]["ttp"] == "T1110.001"
     assert out["alone"] == {"contained": 0, "shadow": 1, "of": 1, "threshold": 0.7, "attacks": 1,
                             "faults_mistaken": 0, "disruptive_on_faults": 0, "faults_unchecked": 0}
@@ -413,6 +414,8 @@ def test_the_overview_counts_real_traffic_and_dagorlad_the_exercises(runs):
     (-1800, True, "antérieur à l'ouverture de sa fenêtre d'exercice"),
     # No window on this host: nothing to confront it with.
     (0, False, "fenêtre d'exercice inconnue"),
+    # Its window purged, a week after its end: no longer timed, said apart.
+    (0, "purged", "fenêtre d'exercice purgée"),
 ])
 def test_an_exercise_runs_t0_is_confronted_refused_never_counted_and_said(runs, t0_after, window, why):
     """SEC15 (#425): the T0 of an exercise's run is its injector's word — Dagorlad's indicators
@@ -422,13 +425,18 @@ def test_an_exercise_runs_t0_is_confronted_refused_never_counted_and_said(runs, 
     a = NOW - timedelta(days=1)
     t0 = a + timedelta(seconds=t0_after)
     seen = a + timedelta(seconds=60)
-    if window:
+    if window == "purged":
+        from eregion_core.exercise import exercises_dir
+        exercises_dir().mkdir(parents=True, exist_ok=True)
+        (exercises_dir() / "r1.json").write_text(json.dumps({"run_id": "r1", "purged_at": NOW.isoformat()}))
+    elif window:
         _window("r1", a - timedelta(minutes=1), a + timedelta(minutes=5))
     _received(runs, "r1", a)
     _report(runs, "r1", "T1110.001", t0, latency=(seen - t0).total_seconds())
     _cycle(runs, seen, "T1110.001", "isolate_vm", 0.95, executed=True, verified=True)
     ex = console().get("/api/dagorlad/indicators").json()
     assert ex["alone"]["contained"] == 1 and ex["contain"]["t0_refused"] == (1 if why else 0)
+    assert ex["contain"]["t0_purged"] == (1 if window == "purged" else 0)
     times = (ex["contain"]["detect_s"], ex["contain"]["decide_s"], ex["contain"]["contain_s"])
     assert times == ((None, None, None) if why else (60.0, 80.0, 80.0))
     found = ind.read_runs(api._run_reports(), 0.0)
@@ -442,6 +450,7 @@ def test_the_exercises_tile_says_a_t0_not_believed():
     from pathlib import Path
     js = (Path(api.__file__).parent / "static" / "injector.js").read_text()
     assert "T0 not believed: no time counted" in js and "c.t0_refused" in js
+    assert "window purged, a week after its end" in js and "Number(c.t0_purged)" in js
 
 
 def test_dagorlad_runs_shows_the_exercises_indicators_and_the_overview_says_real():

@@ -502,6 +502,17 @@ def test_an_attack_runs_t0_is_confronted_refused_never_counted_and_said(t0, why)
         assert (w["contain_s"], w["detect_s"]) == (140.0, 60.0)   # verified 80 s after it was seen
 
 
+def test_a_wire_whose_window_was_purged_is_not_timed_and_says_why():
+    """Its window purged a week after its end (its tombstone): the run's T0 can no longer be
+    confronted — no time counted, the line says « window purged »."""
+    out = _follow(status=_status(("done", "", ("run-1",))), windows=[],
+                  reports={"run-1": _report("run-1", at=T)}, cycles=[_cycle(seen=T + timedelta(seconds=60))],
+                  held={"run-1": {"run_id": "run-1", "purged_at": _iso(T + timedelta(days=8))}})
+    [w] = out["wires"]
+    assert w["t0_refused"].startswith("fenêtre d'exercice purgée")
+    assert (w["contain_s"], w["detect_s"]) == (None, None)
+
+
 def test_a_held_request_unreadable_is_said_beside_the_t0(tmp_path):
     """The request a window names, held here but unreadable: its T0 is not confronted with it,
     and the line says so — never skipped unsaid."""

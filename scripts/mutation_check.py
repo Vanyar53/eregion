@@ -8114,7 +8114,7 @@ MUTANTS += [
      "            st = os.lstat(path)\n        except OSError:\n            continue\n        if stat.S_ISREG(st.st_mode):\n            found.append",
      "            st = os.stat(path)\n        except OSError:\n            continue\n        if stat.S_ISREG(st.st_mode):\n            found.append"),
     ("M3018", "an exercise run's T0 believed as its injector writes it, on the overview (SEC15)", IND,
-     "        refused = t0_confronted(r, d, windows.get(r[\"run_id\"]), cycles, requests)[0] \\\n            if windows is not None else \"\"\n",
+     "        refused = t0_confronted(r, d, held, cycles, requests)[0] if windows is not None else \"\"\n",
      "        refused = \"\"\n"),
     ("M3019", "the overview's exercises never given the windows their T0 is confronted with (SEC15)", CON,
      "                      all_cards=every, liftings=_manual_liftings(since.timestamp()),\n                      windows=_held_windows())\n",
@@ -8145,6 +8145,13 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": _SEC15 for n in range(3000, 3018)})
 TESTS.update({f"M{n}": _SEC15_T0 for n in (3018, 3019, *range(3085, 3095))})
+# SEC15, the Orchestre's condition (02/11): a window purged said in the console itself. M3130.
+MUTANTS += [
+    ("M3130", "every T0 refused said « window purged » on Dagorlad's tile (SEC15)", IND,
+     '        purged_t0 += bool(refused) and isinstance(held, dict) and bool(held.get("purged_at"))\n',
+     "        purged_t0 += bool(refused)\n"),
+]
+TESTS["M3130"] = _SEC15_T0
 
 
 # MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the

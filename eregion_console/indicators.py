@@ -161,8 +161,9 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     ``all_cards``: every card of the host — an isolation that did not hold is one (BL1).
     ``windows``: run id → its exercise window as this host holds it (believed, refused or
     purged): each run's T0 is confronted with it (``t0_confronted``, SEC15) — a T0 refused gives
-    no time (to detect, to decide, to contain), and is counted as such (``t0_refused``). None:
-    not confronted (the API always gives them)."""
+    no time (to detect, to decide, to contain), and is counted as such (``t0_refused``; of them,
+    ``t0_purged``: its window purged, a week after its end). None: not confronted (the API always
+    gives them)."""
     from analysis import containment
     attacks = [r for r in runs if r["kind"] == "technique"]
     detected = [r for r in attacks if r["detection"] == "detected"]
@@ -176,14 +177,16 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     # The lifts of a containment the watch's cycles show (a release on a recovery); the
     # operator's own are in runs/manual_actions.jsonl, passed by the API.
     liftings = liftings_of(cycles, liftings)
-    refused_t0 = 0
+    refused_t0 = purged_t0 = 0
     for r in detected:
         d = decision_of(r, cycles)
         # SEC15: the T0 is the injector's word, confronted as the campaign report confronts it —
-        # refused, no time is counted from it, and it is said.
-        refused = t0_confronted(r, d, windows.get(r["run_id"]), cycles, requests)[0] \
-            if windows is not None else ""
+        # refused, no time is counted from it, and it is said; a window purged (a week after its
+        # end) is said apart: the older runs of the 30 days are no longer timed.
+        held = windows.get(r["run_id"]) if windows is not None else None
+        refused = t0_confronted(r, d, held, cycles, requests)[0] if windows is not None else ""
         refused_t0 += bool(refused)
+        purged_t0 += bool(refused) and isinstance(held, dict) and bool(held.get("purged_at"))
         if r["latency"] is not None and not refused:
             detect.append(r["latency"])
         if d is None:
@@ -231,7 +234,8 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
         "window_days": WINDOW_DAYS,
         "contain": {"detect_s": _median(detect), "decide_s": _median(decide),
                     "contain_s": _median(contain), "detected": len(detected),
-                    "decided": len(decide), "contained": len(contain), "t0_refused": refused_t0},
+                    "decided": len(decide), "contained": len(contain), "t0_refused": refused_t0,
+                    "t0_purged": purged_t0},
         "alone": {"contained": alone, "shadow": shadow, "of": len(detected),
                   "threshold": threshold if threshold != float("inf") else None,
                   "attacks": len(attacks),

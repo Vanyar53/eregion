@@ -69,7 +69,7 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 
 **Où c'est dans le code** : `glorfindel/signal_origin.py`, `glorfindel/channel_reader.py`, `eregion_console/runs_reader.py`, `glorfindel/restore_plan.py`, `eregion_core/held.py` (`vm_parts`), `glorfindel/response/state.py`, `glorfindel/response/locks.py`, `glorfindel/reassert_cards.py`, `glorfindel/proposed_rules.py`, `eregion_core/exercise.py` ; tests `tests/unit/test_signal_origin.py`, `tests/unit/test_locks.py`, `tests/unit/test_unreadable_state.py`, `tests/unit/test_exercise_guard.py`, `tests/unit/test_runs_channel.py`, `tests/unit/test_console_exercises.py`, `tests/unit/test_arm_urls.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), « Le canal runs/ » ; [`docs/fichiers-cles.md`](../fichiers-cles.md).
 
-**Ouvert** : d'autres points de l'état local — planifié : #275 ; un répertoire par écrivain, en lecture seule chez les autres — planifié ; la page d'une campagne lit ses fichiers sans l'aide de la console — planifié ; une technique du catalogue sans règle coûte encore un appel au modèle — planifié ; le compte des VM nommées par le canal ne se vide qu'au redémarrage — planifié.
+**Ouvert** : d'autres points de l'état local — planifié : #275 ; un répertoire par écrivain, en lecture seule chez les autres — planifié ; la page d'une campagne lit ses fichiers sans l'aide de la console — planifié : #438 ; une technique du catalogue sans règle coûte encore un appel au modèle — planifié ; le compte des VM nommées par le canal ne se vide qu'au redémarrage — planifié.
 
 ---
 

@@ -495,15 +495,17 @@ function renderIndicators() {
   const times = c.detected
     ? `detect ${esc(dur(Number(c.detect_s)))}${c.decide_s != null ? ' · decide ' + esc(dur(Number(c.decide_s))) : ''} (median, ${Number(c.detected)} detected attack run${Number(c.detected) > 1 ? 's' : ''}, ${days} d)`
     : `no detected attack run in ${days} d`;
-  // SEC15: a T0 the confrontation refuses gives no time — counted apart, said.
+  // SEC15: a T0 the confrontation refuses gives no time — counted apart, said; a window purged (a
+  // week after its end) said apart: the older runs of the 30 days are no longer timed.
+  const purged = Number(c.t0_purged);
   const refusedT0 = Number(c.t0_refused)
-    ? ` · <span class="bad-t">${Number(c.t0_refused)} T0 not believed: no time counted</span>` : '';
+    ? ` · <span class="bad-t">${Number(c.t0_refused)} T0 not believed: no time counted${purged ? ` (${purged}: window purged, a week after its end)` : ''}</span>` : '';
   const faults = Number(a.faults_mistaken)
     ? ` · <span class="bad-t">faults taken for an attack: ${Number(a.faults_mistaken)}${Number(a.disruptive_on_faults) ? ' (' + Number(a.disruptive_on_faults) + ' acted on)' : ''}</span>` : '';
   box.innerHTML =
     tile('TIME TO CONTAIN · EXERCISES', c.contain_s != null ? esc(dur(Number(c.contain_s))) : '— nothing contained alone', times + refusedT0,
          Number(c.t0_refused) ? 'warn' : '',
-         'From the attack (its T0) to the verified action — the runs of Annatar, ' + days + ' days. A T0 is the injector\'s word, confronted with its window, its request and what the watch saw: not believed, no time is counted from it. Real traffic is on the overview.') +
+         'From the attack (its T0) to the verified action — the runs of Annatar, ' + days + ' days. A T0 is the injector\'s word, confronted with its window, its request and what the watch saw: not believed, no time is counted from it. A window is purged a week after its end: an older run is no longer timed. Real traffic is on the overview.') +
     tile('CONTAINED ALONE · EXERCISES', a.of ? `${Number(a.contained)} of ${Number(a.of)}` : '—',
          (a.of ? `shadow: ${Number(a.shadow)} of ${Number(a.of)} would have been` : `no detected attack run in ${days} d`)
            + (a.attacks != null && a.attacks !== a.of ? ` · ${Number(a.attacks)} attack run${Number(a.attacks) > 1 ? 's' : ''} in all` : '') + faults,

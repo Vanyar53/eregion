@@ -237,8 +237,8 @@ MUTANTS = [
      "    if olds and not target.exists():",
      "    if False:"),
     ("M37", "reassertion alerts keyed by the VM's name (A0, L1)", "glorfindel/reassert.py",
-     '    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")',
-     '    return f"reassert-{vm}" + (f"-{ip}" if ip else "")'),
+     '    return (f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()',
+     '    return (f"reassert-{vm}" + (f"-{ip}" if ip else "")).lower()'),
     ("M38", "a block gone behind the quarantine not reported (A0, L1)", VBL,
      "                                    held_missing += names",
      "                                    pass"),
@@ -3684,7 +3684,7 @@ MUTANTS += [
     ("M1258", "a bypassed isolation never said by the reassertion (SEC4b, V-16)", R,
      "    say_bypass(vm, rid, verification, report, ref=ref)\n", ""),
     ("M1259", "a bypass said again at every pass, its acknowledgement undone (SEC4b, V-16)", RCA,
-     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n        return',
+     '    if same_sid(mark, sid) and not stale and (cards or _last_word(f"{prefix}-", sid)):\n        return',
      "    if False:\n        return"),
     ("M1390", "a bypassed block never said by the reassertion (SEC4b, V-16)", R,
      "    say_bypass(vm, rid, verification, report, ip=ip, ref=ref)\n", ""),
@@ -5063,7 +5063,7 @@ MUTANTS += [
     ("M1764", "what the block left never said (I4A)", R,
      "    say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)\n", ""),
     ("M1765", "what the block left said again once acknowledged (I4A)", RCA,
-     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
+     '    if same_sid(entry.get("left_said"), sid) and not stale and (cards or _last_word(prefix, sid)):\n',
      "    if False:\n"),
     ("M1766", "a range read as an address: nobody holds it, the turned rule written over (I4A, A0)", BLK,
      '        if "/" in addr or not addr[:1].isdigit():\n', "        if False:\n"),
@@ -6184,17 +6184,17 @@ _L2C = " ".join(f"tests/unit/test_reassert.py::test_{t}" for t in (
     "a_changed_bypass_is_a_new_card_and_a_holding_isolation_closes_it"))
 MUTANTS += [
     ("M1930", "a bypass that came back read « said » from its mark alone (L2C)", RCA,
-     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
-     "    if mark == sid:\n"),
+     '    if same_sid(mark, sid) and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     "    if same_sid(mark, sid):\n"),
     ("M1931", "a bypass back to its marked change while another's card is pending: that card stays (L2C)", RCA,
-     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
-     '    if mark == sid and (cards or _last_word(f"{prefix}-", sid)):\n'),
+     '    if same_sid(mark, sid) and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     '    if same_sid(mark, sid) and (cards or _last_word(f"{prefix}-", sid)):\n'),
     ("M1932", "an unreadable state that came back read « said » from state_alerts.json alone (L2C)", RCA,
      '    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):\n',
      '    if alerts.get("unreadable_states") == sid:\n'),
     ("M1933", "left rules back to a set already said read « said » from their mark alone (L2C)", RCA,
-     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
-     '    if entry.get("left_said") == sid:\n'),
+     '    if same_sid(entry.get("left_said"), sid) and not stale and (cards or _last_word(prefix, sid)):\n',
+     '    if same_sid(entry.get("left_said"), sid):\n'),
     ("M1934", "another set of left rules folded into the former card, which keeps naming the former (L2C)", RCA,
      '    for e in stale:\n        # Another set: the store folded its card into this one, which kept naming the\n',
      '    for e in []:\n        # Another set: the store folded its card into this one, which kept naming the\n'),
@@ -6202,10 +6202,10 @@ MUTANTS += [
      '            and last.get("status") == "resolved" and not last.get("resolution"))\n',
      '            and last.get("status") == "resolved")\n'),
     ("M1936", "the resource's first card read, not its latest: an old acknowledgement silences a return (L2C)", RCA,
-     '    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").startswith(prefix)), None)\n',
-     '    last = next((e for e in _history() if (e.get("signal_id") or "").startswith(prefix)), None)\n'),
+     '    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").lower().startswith(prefix.lower())),\n',
+     '    last = next((e for e in _history() if (e.get("signal_id") or "").lower().startswith(prefix.lower())),\n'),
     ("M1937", "the operator's word on another change silences this one (L2C)", RCA,
-     '    return (last is not None and last.get("signal_id") == sid\n',
+     '    return (last is not None and same_sid(last.get("signal_id"), sid)\n',
      "    return (last is not None\n"),
     ("M1938", "a bypass card closed because it holds again carries no note: read as acknowledged (L2C)", RCA,
      '            _resolve(e["id"], note="Plus contourné : le deny de Glorfindel tient de nouveau.")\n',
@@ -6217,8 +6217,8 @@ MUTANTS += [
      '        _resolve(e["id"], note="Autres règles laissées : une nouvelle carte les dit.")\n',
      '        _resolve(e["id"], note="")\n'),
     ("M1941", "the latest bypass card of any resource read for this one's acknowledgement (L2C)", RCA,
-     '    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
-     '    if mark == sid and not stale and (cards or _last_word(_BYPASS_PREFIX, sid)):\n'),
+     '    if same_sid(mark, sid) and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
+     '    if same_sid(mark, sid) and not stale and (cards or _last_word(_BYPASS_PREFIX, sid)):\n'),
 ]
 TESTS.update({f"M{n}": _L2C for n in range(1930, 1942)})
 _L2C_SEQ = "tests/unit/test_invariant_regressions.py::test_{}_brought_back_after_a_full_disk_is_said"
@@ -6253,8 +6253,8 @@ MUTANTS += [
      '    return last is not None and (last.get("status") == "pending" or not last.get("resolution"))\n',
      "    return last is not None\n"),
     ("M1948", "the latest left-rules card of any block read for this one's acknowledgement (L2C, review)", RCA,
-     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):\n',
-     '    if entry.get("left_said") == sid and not stale and (cards or _last_word(_LEFT_PREFIX, sid)):\n'),
+     '    if same_sid(entry.get("left_said"), sid) and not stale and (cards or _last_word(prefix, sid)):\n',
+     '    if same_sid(entry.get("left_said"), sid) and not stale and (cards or _last_word(_LEFT_PREFIX, sid)):\n'),
     ("M1949", "an episode known over stays so once a new one is marked: said again at every pass (L2C, review)", RCA,
      "    (_EPISODE_OPEN.discard if over else _EPISODE_OPEN.add)((key.lower(), ip))\n",
      "    _EPISODE_OPEN.discard((key.lower(), ip))\n"),
@@ -7422,7 +7422,7 @@ MUTANTS += [
      'send.sort(key=lambda r: (r.get("Correlation") == correlation.COMPROMISED, _gravity(r)), reverse=True)',
      "send.sort(key=_gravity, reverse=True)"),
     ("M2747", "the root shells set aside by origin not counted in the rule's status (COR1)", "glorfindel/detection_rules.py",
-     '"origin_count": expected_counts(st)["origin_count"] + origin_n}', '"origin_count": 0}'),
+     '"origin_count": expected_counts(st)["origin_count"] + origin_n,', '"origin_count": 0,'),
     ("M2748", "the correlation's counts not kept in the rule's status (COR1)", "glorfindel/detection_rules.py",
      '                st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)\n', "                pass\n"),
     ("M2749", "glorfindel report no longer says the root shells set aside by origin (COR1)", "glorfindel/cli.py",
@@ -7431,7 +7431,8 @@ MUTANTS += [
      'origin = str(e.get("origin") or "")[:_COMMAND_KEPT] if e.get("via") == "origin" else ""',
      'origin = ""'),
     ("M2751", "a root shell set aside without waiting for its sessions (COR1)", XSU,
-     '        return {**entry, "origins": origins}\n', "        return entry\n"),
+     '        return {**entry, "origins": origins} | ({"proof": proof} if proof != "none" else {})\n',
+     "        return entry\n"),
     ("M2752", "a set-aside root shell keeps its pending mark: journaled without its origin (COR1)", COR,
      '"via": "origin", "origin": ", ".join(seen_origins)[:expected_sudo._COMMAND_KEPT]}',
      '"via": "", "origin": ""}'),
@@ -7502,6 +7503,69 @@ MUTANTS += [
      ' and SyslogMessage !has "systemd-user" and ({opened}))', " and ({opened}))"),
 ]
 TESTS.update({f"M{n}": _COR for n in range(3070, 3073)})
+# COR2 (#427): the origin confirmed outside the VM — with a source declared (Bastion, flows), a
+# root shell set aside only if each session has its trace there; absent or unread, a card (A0).
+# M3040–M3059.
+MUTANTS += [
+    ("M3040", "with a source declared, a root shell set aside on the Syslog alone: a forged line clears it (COR2)", COR,
+     '            if entry.get("proof", "none") != "none":\n', "            if False:\n"),
+    ("M3041", "the declared source never reaches the pending entry: COR1 alone decides (COR2)", XSU,
+     '        return {**entry, "origins": origins} | ({"proof": proof} if proof != "none" else {})\n',
+     '        return {**entry, "origins": origins}\n'),
+    ("M3042", "origin_proof read and dropped: the source declared, never used (COR2)", "glorfindel/config.py",
+     "origin_proof=_check_origin_proof(raw, admins, check))", 'origin_proof="none")'),
+    ("M3043", "an unknown source accepted in the config (COR2)", "glorfindel/config.py",
+     "    if value not in PROOFS:\n", "    if False:\n"),
+    ("M3044", "the root shells confirmed outside the VM not counted in the rule's status (COR2)",
+     "glorfindel/detection_rules.py",
+     '"origin_confirmed": expected_counts(st)["origin_confirmed"] + confirmed_n}', '"origin_confirmed": 0}'),
+    ("M3045", "one Bastion session confirms two SSH sessions: a line forged beside a real one passes (COR2)", COR,
+     "                used.add(hit)\n", "                pass\n"),
+    ("M3046", "a Bastion session of another account confirms this one's (COR2)", COR,
+     'if i not in used and t["account"] == account\n', "if i not in used\n"),
+    ("M3047", "a Bastion session at any time confirms a session (COR2)", COR,
+     '                        and abs(t["at"] - s["at"]) <= skew), None)\n', "                        ), None)\n"),
+    ("M3048", "a Bastion session written twice confirms two SSH sessions (COR2)", COR,
+     "            if key in keys:\n                continue\n", ""),
+    ("M3049", "a Bastion session to another VM confirms this one's (COR2)", COR,
+     "| where TargetResourceId =~ {vm}\n", ""),
+    ("M3050", "a flow from another address confirms a session (COR2)", COR,
+     ("| where SrcIp in ({origins})\n", 'if any(t["src"] == ip and t["start"]'),
+     ("", 'if any(True and t["start"]')),
+    ("M3051", "a flow at any time confirms a session (COR2)", COR,
+     't["start"] - skew <= s["at"] <= t["end"] + skew for t in read', "True for t in read"),
+    ("M3052", "a denied flow confirms a session (COR2)", COR,
+     '| where DestPort == {port} and L4Protocol == "T" and FlowStatus == "A"\n',
+     '| where DestPort == {port} and L4Protocol == "T"\n'),
+    ("M3053", "a flow to another port confirms an SSH session (COR2)", COR,
+     '| where DestPort == {port} and L4Protocol == "T"', '| where L4Protocol == "T"'),
+    ("M3054", "a flow to another VM confirms this one's session (COR2)", COR,
+     "| where DestVm =~ {vm}\n", ""),
+    ("M3055", "a source that cannot be read taken as one that saw nothing, unsaid (COR2)", COR,
+     '            if isinstance(rows, str):\n                unread = PROOF_UNREAD',
+     '            if False:\n                unread = PROOF_UNREAD'),
+    ("M3056", "a VM the source cannot name: the root shell left pending, unsettled (COR2)", COR,
+     '                _unknown(p, judged, row, f"{name} ne peut nommer la VM — origine non confirmée hors de la VM")\n',
+     "                pass\n"),
+    ("M3057", "the trace looked for over the last minutes only: an older session never confirmed (COR2)", COR,
+     "            lookback = min((p.now - min(ats)).total_seconds(), SESSION_LOOKBACK_S) + PROOF_SKEW_S + PROOF_MARGIN_S\n",
+     "            lookback = PROOF_SKEW_S + PROOF_MARGIN_S\n"),
+    ("M3058", "a root shell confirmed outside the VM journaled as read in the VM only (COR2)", COR,
+     "        out[\"proof\"] = proof\n", ""),
+    ("M3059", "glorfindel report no longer says whether the origins were confirmed outside the VM (COR2)",
+     "glorfindel/cli.py",
+     'f" — {per_origin} · {_origin_proof_said(es)}")', 'f" — {per_origin}")'),
+]
+TESTS.update({f"M{n}": _COR for n in range(3040, 3060)})
+# COR2, its review (02/11): each bound of a flow's interval checked by the code, not only by the
+# query's window. M3160–M3161.
+MUTANTS += [
+    ("M3160", "a flow ended before the session confirms it: the interval's end never checked (COR2, review)", COR,
+     't["start"] - skew <= s["at"] <= t["end"] + skew for t in read', 't["start"] - skew <= s["at"] for t in read'),
+    ("M3161", "a flow begun after the session confirms it: the interval's start never checked (COR2, review)", COR,
+     't["start"] - skew <= s["at"] <= t["end"] + skew for t in read', 's["at"] <= t["end"] + skew for t in read'),
+]
+TESTS.update({f"M{n}": _COR for n in range(3160, 3162)})
 
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.
@@ -7656,8 +7720,8 @@ MUTANTS += [
     ("M2930", "the card of a check that raised stays open once its VM is released (SEC13, V-16)", R,
      "    unverified_released()                     # a check that raised, its VM released since (V-16)\n", ""),
     ("M2931", "a check that raised keyed by the VM's name: a homonym's card stands for both (SEC13, V-16)", RCA,
-     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\"",
-     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}\""),
+     "    return (f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\"",
+     "    return (f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}\""),
     ("M2932", "a privilege escalation read whatever program wrote the line (SEC13, R-18)",
      "glorfindel/detection_rules.py",
      '    return (row.get("ProcessName") == "sudo" and bool(_SUDO_TO_ROOT.search(message))\n',
@@ -8010,6 +8074,84 @@ TESTS.update({
     "M3065": f"{_I3R_UNIT}::test_a_rule_turned_toward_a_vm_still_in_the_quarantine_stays_and_is_said",
     "M3066": f"{_I3R_UNIT}::test_a_quarantine_nsg_left_that_cant_be_read_is_said",
 })
+
+# I3C (#436), found by I3R's review: the reassertion's cards keyed by the VM's name with its case —
+# a VM taken up again by its lowercase id (its state names it so) had its disappearance said again
+# at every pass, or put back after it was said, its text folded into the card said before; the
+# cards an older version said under the canonical name, found too. M3100–M3109.
+_I3C_UNIT = "tests/unit/test_reassert.py"
+_I3C_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_disappearance_said_by_the_canonical_id_is_said_once_after_the_lowercase_one")
+MUTANTS += [
+    ("M3100", "the drift card's id keeps the case of the VM's name (I3C; a contract: `same_sid` reads it anyway)", R,
+     '    return (f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()',
+     '    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")'),
+    ("M3101", "a new drift alert closes the former card only under the same case: one an older version said "
+              "stays, the alert folded into it (I3C)", R,
+     "        if same_sid(e.get(\"signal_id\"), signal_id) or (same_vm and",
+     "        if e.get(\"signal_id\") == signal_id or (same_vm and"),
+    ("M3102", "the operator's word read on the cards of the same case only: an acknowledgement of an older "
+              "version's card undone (I3C)", RCA,
+     '    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").lower().startswith(prefix.lower())),\n',
+     '    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").startswith(prefix)),\n'),
+    ("M3103", "the operator's word on a card of another case read as on another change (I3C)", RCA,
+     '    return (last is not None and same_sid(last.get("signal_id"), sid)\n',
+     '    return (last is not None and last.get("signal_id") == sid\n'),
+    ("M3104", "the bypass card's prefix keeps the case of the VM's name: a VM with capitals said again at every "
+              "pass (I3C)", RCA,
+     "    prefix = (f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")).lower()",
+     "    prefix = (f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\"))"),
+    ("M3105", "a pending bypass card of another case not the VM's: said again at every pass (I3C)", RCA,
+     '    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").lower().rsplit("-", 1)[0] == prefix]\n',
+     '    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").rsplit("-", 1)[0] == prefix]\n'),
+    ("M3106", "a pending check card of another case not the VM's: one more at every pass (I3C)", RCA,
+     '    cards = [e for e in _history() if same_sid(e.get("signal_id"), sid)]',
+     '    cards = [e for e in _history() if e.get("signal_id") == sid]'),
+    ("M3107", "a check card of another case closed as « no longer recorded » while its VM is held (I3C)", RCA,
+     '        sid = (e.get("signal_id") or "").lower()\n        if sid.startswith(_UNVERIFIED_PREFIX)',
+     '        sid = e.get("signal_id") or ""\n        if sid.startswith(_UNVERIFIED_PREFIX)'),
+    ("M3108", "the left-rules card's prefix keeps the case of the VM's name: a VM with capitals said again at "
+              "every pass (I3C)", RCA,
+     '    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-".lower()\n',
+     '    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-"\n'),
+    ("M3109", "a pending left-rules card of another case not the block's: said again at every pass (I3C)", RCA,
+     '    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").lower().startswith(prefix)]\n',
+     '    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").startswith(prefix)]\n'),
+]
+TESTS.update({
+    "M3100": f"{_I3C_SEQ} {_I3C_UNIT}::test_a_disappearance_said_under_the_canonical_name_is_said_once_by_the_lowercase_id",
+    "M3101": f"{_I3C_UNIT}::test_a_drift_card_an_older_version_said_under_the_canonical_name_is_closed_by_the_next",
+    "M3102": f"{_I3C_UNIT}::test_a_bypass_said_under_the_canonical_name_stays_said",
+    "M3103": f"{_I3C_UNIT}::test_a_bypass_said_under_the_canonical_name_stays_said",
+    "M3104": f"{_I3C_UNIT}::test_a_bypass_of_a_vm_whose_name_has_capitals_is_said_once",
+    "M3105": f"{_I3C_UNIT}::test_a_bypass_said_under_the_canonical_name_stays_said",
+    "M3106": f"{_I3C_UNIT}::test_a_check_card_said_under_the_canonical_name_is_the_vms_own",
+    "M3107": f"{_I3C_UNIT}::test_a_check_card_said_under_the_canonical_name_is_the_vms_own",
+    "M3108": f"{_I3C_UNIT}::test_rules_left_by_a_vm_whose_name_has_capitals_are_said_once",
+    "M3109": f"{_I3C_UNIT}::test_rules_left_said_under_the_canonical_name_stay_said",
+})
+# I3C's review: the name in lowercase, the IP as written — a block of an IPv6 in capitals
+# (`2001:DB8::9`), read against the store's ids in lowercase, was never its own card. M3165–M3168.
+_I3C_IP = f"{_I3C_UNIT}::test_a_block_of_an_ipv6_in_capitals_has_its_own_cards"
+MUTANTS += [
+    ("M3165", "the check card's id lowers the VM's name only: a held IPv6 block's card closed at every pass "
+              "(I3C, review)", RCA,
+     "    return (f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")).lower()",
+     "    return f\"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")"),
+    ("M3166", "the bypass card's prefix lowers the VM's name only: an IPv6 block's bypass said again at every pass "
+              "(I3C, review)", RCA,
+     "    prefix = (f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")).lower()",
+     "    prefix = f\"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm.lower()}-{_rid_hash(rid)}\" + (f\"-{ip}\" if ip else \"\")"),
+    ("M3167", "the left-rules card's prefix lowers the VM's name only: an IPv6 block's card said again at every "
+              "pass (I3C, review)", RCA,
+     '    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-".lower()\n',
+     '    prefix = f"{_LEFT_PREFIX}{vm.lower()}-{_rid_hash(rid)}-{ip}-"\n'),
+    ("M3168", "the reassertion's ids read exactly again: every card of another case a stranger (I3C)", RCA,
+     '    return (a or "").lower() == (b or "").lower()\n', '    return (a or "") == (b or "")\n'),
+]
+TESTS.update({"M3165": _I3C_IP, "M3166": _I3C_IP, "M3167": _I3C_IP,
+              "M3168": f"{_I3C_UNIT}::test_a_drift_card_an_older_version_said_under_the_canonical_name_is_closed_by_the_next "
+                       f"{_I3C_UNIT}::test_a_bypass_said_under_the_canonical_name_stays_said"})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

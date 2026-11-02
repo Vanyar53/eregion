@@ -427,6 +427,10 @@ class ExpectedSudoConfig:
     in the command line, case ignored). Empty: every sudo is a card, as before."""
     admins: list[ExpectedAdmins] = field(default_factory=list)
     sensitive_commands: list[str] = field(default_factory=list)
+    # COR2 (#427): the source outside the VM that confirms each SSH session behind a root shell
+    # set aside by its origin — `bastion` (Azure Bastion's audit logs) or `flows` (the VNet's
+    # flow logs); `none`: COR1, the origin read in the VM only (`glorfindel.correlation.PROOFS`).
+    origin_proof: str = "none"
 
     def accounts_for(self, asset_name: str) -> frozenset[str]:
         """The accounts expected on this VM: every entry that names it, together."""
@@ -546,7 +550,7 @@ _EXCEPTION_KEYS = ("asset_pattern", "exclude_all", "exclude_rules")
 _AUTONOMY_KEYS = ("default", "assets", "allow_destructive")
 _AUTONOMY_ASSET_KEYS = ("match", "mode")
 _ISOLATION_KEYS = ("quarantine_nsg", "quarantine_rg", "forensic_sources", "forensic_ports")
-_EXPECTED_SUDO_KEYS = ("admins", "sensitive_commands")
+_EXPECTED_SUDO_KEYS = ("admins", "sensitive_commands", "origin_proof")
 _EXPECTED_ADMIN_KEYS = ("match", "accounts", "origins")
 # The backend types something reads (discovery.py, detection_rules.py, backup_vault()):
 # `type: azure_monitr` was a backend nothing used, in silence. A new type is added here.
@@ -791,7 +795,25 @@ def _check_expected_sudo(raw: dict, check: _Checker) -> ExpectedSudoConfig:
             sensitive.append(text.strip())
         else:
             check.bad(f"{where}.sensitive_commands[{j}]", "un texte vide est refusé (il serait dans toute commande)")
-    return ExpectedSudoConfig(admins=admins, sensitive_commands=sensitive)
+    return ExpectedSudoConfig(admins=admins, sensitive_commands=sensitive,
+                              origin_proof=_check_origin_proof(raw, admins, check))
+
+
+def _check_origin_proof(raw: dict, admins: list[ExpectedAdmins], check: _Checker) -> str:
+    """COR2 (#427): `origin_proof`, one of `glorfindel.correlation.PROOFS`; a source with no
+    `origins` to confirm is a key nobody reads — refused, like the rest (A3)."""
+    from glorfindel.correlation import PROOFS
+    where = "expected_sudo.origin_proof"
+    value = check.text(raw, "origin_proof", "expected_sudo", default="none")
+    if raw.get("origin_proof") is None or not isinstance(raw.get("origin_proof"), str):
+        return "none"
+    if value not in PROOFS:
+        check.bad(where, f"{_shown(value)} : une source parmi {', '.join(PROOFS)}")
+        return "none"
+    if value != "none" and not any(a.origins for a in admins):
+        check.bad(where, f"{value} sans aucune entrée qui déclare origins : rien à confirmer — "
+                         "déclarer origins, ou omettre la clé")
+    return value
 
 
 def _check_origins(raw: dict, where: str, check: _Checker) -> list[str]:

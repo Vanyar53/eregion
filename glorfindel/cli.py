@@ -1619,6 +1619,17 @@ def report(since_text: str, as_json: bool):
     _print_expected_sudo(r["expected_sudo"])
 
 
+def _origin_proof_said(es: dict) -> str:
+    """COR2 (#427): how far the origins of the root shells set aside are proven — confirmed
+    outside the VM (Bastion, flows), or read in the VM only (COR1, a noise reducer)."""
+    n, confirmed = int(es.get("origin_count") or 0), int(es.get("origin_confirmed") or 0)
+    if confirmed <= 0:
+        return "origin read in the VM only"
+    if confirmed >= n:
+        return "every one confirmed outside the VM (COR2)"
+    return f"{confirmed} confirmed outside the VM (COR2), {n - confirmed} read in the VM only"
+
+
 def _print_expected_sudo(es: dict) -> None:
     """ADM1: the sudo set aside as the administrators' expected ones, in `glorfindel report`.
     Every text here comes from a log line (an account, a command): printable only, no markup."""
@@ -1642,9 +1653,12 @@ def _print_expected_sudo(es: dict) -> None:
         # COR1: root shells set aside because every SSH session came from an expected origin.
         per_origin = ", ".join(f"{shown(k)} {v}" for k, v in sorted(es["by_origin"].items()))
         console.print(f"  of which root shells from an expected origin (COR1): [bold]{es['origin_count']}[/bold]"
-                      f" — {per_origin}")
+                      f" — {per_origin} · {_origin_proof_said(es)}")
     for e in es.get("latest") or []:
-        via = f"  (from {shown(e['origin'])})" if e.get("origin") else ""
+        via = ""
+        if e.get("origin"):
+            how = f"confirmed by {shown(e['proof'])}" if e.get("proof") else "origin read in the VM only"
+            via = f"  (from {shown(e['origin'])}, {how})"
         console.print(f"[dim]  {shown(e['at'][:19])}  {shown(e['asset'])}  {shown(e['account'])}  "
                       f"{shown(e['command'])}{via}[/dim]")
     if es.get("journal_from"):

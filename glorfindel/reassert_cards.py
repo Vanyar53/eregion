@@ -30,6 +30,18 @@ _UNVERIFIED_ACTION = "review_unverified"
 _UNVERIFIED_PREFIX = "reassert-unverified-"
 
 
+def same_sid(a, b) -> bool:
+    """One card of the reassertion, whatever the case of its id: the VM's name is part of it,
+    and Azure's names are case-insensitive — the state of a VM taken up again by its lowercase
+    id (Log Analytics' `_ResourceId`) names it so. Read exactly, a card said under the
+    canonical name was neither found nor closed: said again at every pass, or put back after
+    it was said, its text folded into a card that said something else (I3C, #436). The ids
+    are written in lowercase now, whole — the IP too: an IPv6 in capitals (`2001:DB8::9`), read
+    against the store's ids in lowercase, was never its own card (I3C, review); a card of an
+    older one is still found."""
+    return (a or "").lower() == (b or "").lower()
+
+
 def _digest(parts) -> str:
     return hashlib.sha1("|".join(sorted(parts)).lower().encode()).hexdigest()[:8]
 
@@ -84,8 +96,9 @@ def _last_word(prefix: str, sid: str) -> bool:
     closures carry a note. A mark alone is never enough (L2Q, L2C): its write fails (a full
     disk) after the card closed or after another change was said, it keeps the former
     change, and once the situation comes back to it, read « said » with no card left."""
-    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").startswith(prefix)), None)
-    return (last is not None and last.get("signal_id") == sid
+    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").lower().startswith(prefix.lower())),
+                None)
+    return (last is not None and same_sid(last.get("signal_id"), sid)
             and last.get("status") == "resolved" and not last.get("resolution"))
 
 
@@ -174,7 +187,7 @@ def drift_said(key: str, ip: str, sid: str) -> bool:
     next disappearance went unsaid; after a restart, the memory empty, too (L2C, review 2)."""
     if (key.lower(), ip) not in _EPISODE_OPEN:
         return False
-    last = next((e for e in reversed(_history()) if e.get("signal_id") == sid), None)
+    last = next((e for e in reversed(_history()) if same_sid(e.get("signal_id"), sid)), None)
     return last is not None and (last.get("status") == "pending" or not last.get("resolution"))
 
 
@@ -225,8 +238,8 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
                 if sid is None:
                     fresh.pop("bypass_said", None)
                 _save_isolation_state(key, {**fresh, **({"bypass_said": sid} if sid else {})})
-    prefix = f"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
-    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").rsplit("-", 1)[0] == prefix]
+    prefix = (f"{_BYPASS_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()
+    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").lower().rsplit("-", 1)[0] == prefix]
     if not found:
         for e in cards:
             _resolve(e["id"], note="Plus contourné : le deny de Glorfindel tient de nouveau.")
@@ -234,8 +247,8 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
             remember(None)
         return
     sid = f"{prefix}-{_digest(_allow_key(f) for f in found)}"
-    stale = [e for e in cards if e.get("signal_id") != sid]
-    if mark == sid and not stale and (cards or _last_word(f"{prefix}-", sid)):
+    stale = [e for e in cards if not same_sid(e.get("signal_id"), sid)]
+    if same_sid(mark, sid) and not stale and (cards or _last_word(f"{prefix}-", sid)):
         return                                  # said: pending, or acknowledged (L2C)
     for e in stale:
         _resolve(e["id"], note="Contournement changé : une nouvelle carte le dit.")
@@ -248,7 +261,7 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
              "Si elle n'a pas lieu d'être : la retirer, ou lui donner une priorité au-delà de 999 "
              "(Glorfindel prend 100–999) ; la carte se ferme au passage suivant.",
              "Sinon : lever l'isolation ou le blocage, ou isoler autrement."]
-    if not any(e.get("signal_id") == sid for e in cards):
+    if not any(same_sid(e.get("signal_id"), sid) for e in cards):
         _record(signal_id=sid, resource_id=rid, action=_BYPASS_ACTION, escalation_type=BYPASS_TYPE,
                 reason=reason, severity="high", suggested_steps=steps,
                 action_params={"ip": ip} if ip else None)
@@ -279,7 +292,7 @@ def _card_write_may_fail(fn):
 
 def _unverified_id(vm: str, rid: str, ip: str = "") -> str:
     from glorfindel.actions import _rid_hash
-    return f"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
+    return (f"{_UNVERIFIED_PREFIX}{'block' if ip else 'iso'}-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")).lower()
 
 
 @_card_write_may_fail
@@ -294,7 +307,7 @@ def say_unverified(vm: str, rid: str, exc, report: list[dict], ip: str = "") -> 
     log.warning("reassert: %s not checked (%s)", what, exc)
     sid = _unverified_id(vm, rid, ip)
     error = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:300]
-    cards = [e for e in _history() if e.get("signal_id") == sid]       # this card's, exactly
+    cards = [e for e in _history() if same_sid(e.get("signal_id"), sid)]       # this card's, any case
     waiting = next((e for e in cards if e.get("status") == "pending"), None)
     if waiting is not None:                     # said: its text kept to the last error
         if waiting.get("unverified_last", error) != error:
@@ -332,7 +345,7 @@ def unverified_over(vm: str, rid: str, ip: str = "") -> None:
     sid = _unverified_id(vm, rid, ip)
     _UNVERIFIED_OPEN.discard(sid)
     for e in _history():
-        if e.get("signal_id") == sid and e.get("status") == "pending":
+        if same_sid(e.get("signal_id"), sid) and e.get("status") == "pending":
             _resolve(e["id"], note="La vérification repasse.")
 
 
@@ -347,7 +360,7 @@ def unverified_released() -> None:
     held |= {_unverified_id(e["vm_name"], e["resource_id"], e["ip"]) for e in active_blocks()
              if e.get("resource_id") and e.get("ip")}
     for e in _history():
-        sid = e.get("signal_id") or ""
+        sid = (e.get("signal_id") or "").lower()
         if sid.startswith(_UNVERIFIED_PREFIX) and e.get("status") == "pending" and sid not in held:
             _UNVERIFIED_OPEN.discard(sid)
             _resolve(e["id"], note="Plus d'isolation ni de blocage enregistré à vérifier.")
@@ -369,11 +382,11 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
     left = [x for p in entry.get("placements") or [] for x in p.get("left") or [] if isinstance(x, dict)]
     if not left:
         return
-    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-"
+    prefix = f"{_LEFT_PREFIX}{vm}-{_rid_hash(rid)}-{ip}-".lower()
     sid = prefix + _digest(f"{x.get('nsg')}/{x.get('rule')}" for x in left)
-    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").startswith(prefix)]
-    stale = [e for e in cards if e.get("signal_id") != sid]
-    if entry.get("left_said") == sid and not stale and (cards or _last_word(prefix, sid)):
+    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").lower().startswith(prefix)]
+    stale = [e for e in cards if not same_sid(e.get("signal_id"), sid)]
+    if same_sid(entry.get("left_said"), sid) and not stale and (cards or _last_word(prefix, sid)):
         return                                  # said: pending, or acknowledged (L2C)
     for e in stale:
         # Another set: the store folded its card into this one, which kept naming the
@@ -395,7 +408,7 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
              f"{', '.join(sorted({str(x.get('rule')) for x in left}))} (journal d'activité), et pourquoi.",
              "Si elle n'est plus voulue : la retirer à la main (az network nsg rule delete) ; "
              "si elle l'est, la remplacer par une règle du client, hors du nom de Glorfindel."]
-    if not any(e.get("signal_id") == sid for e in cards):
+    if not any(same_sid(e.get("signal_id"), sid) for e in cards):
         _record(signal_id=sid, resource_id=rid, action=_LEFT_ACTION, escalation_type=LEFT_TYPE,
                 reason=reason, severity="medium", suggested_steps=steps, action_params={"ip": ip})
     _update_block_entry(ref or vm, ip, left_said=sid)

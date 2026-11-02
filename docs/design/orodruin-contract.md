@@ -613,10 +613,15 @@ de quelques microsecondes, un nom périmé ou à moitié écrit, et n'en montre 
 imprimables.
 
 **Où est le verrou.** Dans le `runs/` de la commande : le répertoire de travail pour une demande,
-pour `annatar run` et pour `gothmog run`, `--runs-dir` pour une campagne. Sur Orodruin, les conteneurs des deux commandes
-montent le même `$HOME/runs` sur `/app/runs` (`make orodruin-exercise`, `make orodruin-campaign-run`) :
-un seul verrou. Une campagne lancée avec un autre `--runs-dir` n'exclut plus une demande — ne pas le
-faire sur Orodruin.
+pour `annatar run` et pour `gothmog run`, `--runs-dir` pour une campagne. Sur Orodruin, les conteneurs
+de ces commandes montent le même `$HOME/runs` sur `/app/runs` (`make orodruin-exercise`,
+`make orodruin-campaign-run`, `make gothmog-run`) : un seul verrou. Une campagne lancée avec un autre
+`--runs-dir` n'exclut plus une demande — ne pas le faire sur Orodruin.
+
+**Une limite** : un fil se reconnaît à son `--request` (`annatar wire`, `gothmog run --request`), qui ne
+prend pas le verrou. Lancé à la main avec un faux identifiant, il le contourne. C'est un geste de
+l'opérateur, avec un shell sur Orodruin, comme `annatar wire` : le verrou évite un chevauchement par
+mégarde, il ne protège pas d'un opérateur qui le veut.
 
 **Ce qu'Orodruin publie pour la console.** Dans le conteneur des fenêtres, sous `orodruin/` : même
 conteneur, même attribution, rien de neuf.

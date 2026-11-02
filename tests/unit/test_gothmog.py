@@ -609,6 +609,14 @@ def test_gothmog_cli_refuses_without_a_watch_and_exits_nonzero(bench, no_watch):
     assert res.exit_code != 0
     assert "no live Glorfindel watch" in res.output and "last heartbeat never" in res.output
     assert no_watch == [] and w.calls == []
+    # Nothing written before V1 but the lock of « one run at a time » (#358), taken by the CLI:
+    # every path under runs/, directories included, is that lock and its directories, or nothing.
+    runs = Path("runs")
+    left = {q.relative_to(runs).as_posix() for q in runs.rglob("*")} if runs.exists() else set()
+    assert left in (set(), {"orodruin", "orodruin/requests", "orodruin/requests/.lock"}), left
+    if left:
+        assert (runs / "orodruin" / "requests" / ".lock").read_text() == ""
+    assert _no_window()
 
 
 def test_a_fault_without_glorfindel_runs_and_its_report_says_so(bench, no_watch, tmp_path):
@@ -814,15 +822,19 @@ def test_a_destructive_fault_with_its_name_typed_starts(bench, tmp_path):
 def test_a_name_azure_does_not_give_is_a_refusal_said_never_an_exception(bench, tmp_path, monkeypatch):
     """#358: the read of the target's name for the name typed fails (a 403, a 5xx, the network):
     the fault is refused, said and recorded — nothing started, no window opened."""
-    import sys
-
     from gothmog.engines import chaos_studio
-    real = chaos_studio.ChaosStudio.vm
+    real, real_gate, after = chaos_studio.ChaosStudio.vm, engine_mod.Engine._gate, []
 
-    def vm(self, vm_id):
-        if sys._getframe(1).f_code.co_name == "run":    # the read for the name typed only
+    def gate(self, *a, **kw):    # the targets and the steady state read: what follows is the name's
+        out = real_gate(self, *a, **kw)
+        after.append(1)
+        return out
+
+    def vm(self, vm_id):         # never by the caller's frame: a comprehension has its own in 3.11
+        if after:
             raise RuntimeError("HTTP 403 reading the VM")
         return real(self, vm_id)
+    monkeypatch.setattr(engine_mod.Engine, "_gate", gate)
     monkeypatch.setattr(chaos_studio.ChaosStudio, "vm", vm)
     clock, world, engine = bench
     w = world()

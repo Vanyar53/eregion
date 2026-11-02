@@ -6378,8 +6378,9 @@ _L1Q_BACK = ("tests/unit/test_invariant_regressions.py::"
 MUTANTS += [
     ("M2151", "a drift compared with its card, never with what still holds of it: a rule back, gone again, "
               "unsaid (L1Q)", R,
-     '    if (b.get("drift_alerted_at") and not _worse(drift_baseline(ref or vm, ip, b.get("drift_said")), now_is)\n',
-     '    if (b.get("drift_alerted_at") and not _worse(b.get("drift_said"), now_is)\n'),
+     # The baseline read once, before the test, since the nightly machine after SEC13 (M3120).
+     '    baseline = drift_baseline(ref or vm, ip, b.get("drift_said"))\n',
+     '    baseline = b.get("drift_said")\n'),
     ("M2152", "what still holds of a drift card never kept: a rule back, gone again, unsaid (L1Q)", RCA,
      "    _NARROWED[(key.lower(), ip)] = now\n", "    pass\n"),
     ("M2153", "a baseline outliving its episode: the next one compared with what held of the one before, a "
@@ -7931,6 +7932,26 @@ MUTANTS += [
 ]
 TESTS.update({"M2696": "tests/unit/test_roadmap_discord.py", "M2697": "tests/unit/test_roadmap_discord.py",
               "M2698": "tests/unit/test_release.py", "M2699": "tests/unit/test_roadmap_discord.py"})
+
+# The nightly machine after SEC13 (06dfa49): a block's drift card refused on a full disk lost
+# what got better since the acknowledged card — the next return to it read « not worse », the IP
+# open unsaid (L1); and a write of the `unverified` card raised into the block's pass. M3120–M3122
+# (M3123–M3129 unused).
+_L1DISK = ("tests/unit/test_reassert.py::test_a_drift_better_on_one_side_is_kept_when_its_card_cannot_be_written "
+           "tests/unit/test_invariant_regressions.py::test_a_block_gone_is_said_whatever_a_check_card_write_does")
+MUTANTS += [
+    ("M3120", "a drift better on one side, its card refused, keeps the old baseline: the return unsaid (L1)", R,
+     '    if b.get("drift_alerted_at"):\n        # Worse on one side, better on another:',
+     '    if False:\n        # Worse on one side, better on another:'),
+    ("M3121", "the baseline's meet keeps « not blocked »: a block held since, then gone, unsaid (L1)", RCA,
+     '            "blocked": bool(said.get("blocked")) or now["blocked"]}\n',
+     '            "blocked": bool(said.get("blocked"))}\n'),
+    ("M3122", "a refused write of the check card raises into the block's pass: its drift unsaid (L1)", RCA,
+     "        except OSError as exc:\n            log.warning(\"reassert: carte « non vérifiée »",
+     "        except ZeroDivisionError as exc:\n            log.warning(\"reassert: carte « non vérifiée »"),
+]
+TESTS.update({"M3120": _L1DISK, "M3121": _L1DISK,
+              "M3122": "tests/unit/test_reassert.py::test_a_check_card_refused_never_cuts_the_blocks_pass"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -7518,247 +7518,6 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
-# SEC14 (#420, R-10): « one run at a time » has one lock, taken by every command that acts — a
-# wire under the hold its request hands down, a clean, a campaign whatever its --runs-dir.
-_R10 = "tests/unit/test_exercise_runner.py"
-MUTANTS += [
-    ("M2940", "a wire launched by hand during a request takes no lock (R-10)", "annatar/cli.py",
-     '        with request_lock(f"wire {request}"), \\\n', "        with contextlib.nullcontext(), \\\n"),
-    ("M2941", "a clean during a request takes no lock (R-10)", "annatar/cli.py",
-     '        with request_lock(f"clean {os.path.basename(scenario)}"):\n',
-     "        with contextlib.nullcontext():\n"),
-    ("M2942", "the runner hands its lock down to no wire (R-10)", "eregion_core/exercise_runner.py",
-     "pass_fds=(int(fd),) if fd.isdigit() else ()", "pass_fds=()"),
-    ("M2943", "any descriptor named in the environment is taken for the request's hold (R-10)",
-     "eregion_core/exercise_runner.py",
-     "    return fd if (held.st_dev, held.st_ino) == (here.st_dev, here.st_ino) else None\n",
-     "    return fd\n"),
-    ("M2944", "a wire's hold writes its own name over the request's, and erases it at its exit (R-10)",
-     "eregion_core/exercise_runner.py",
-     "        if inherited is not None:\n            yield fd ", "        if False:\n            yield fd "),
-    ("M2945", "the runner names no lock to its wires (R-10)", "eregion_core/exercise_runner.py",
-     ",\n                   LOCK_FD_ENV: str(lock_fd)}", "}"),
-]
-TESTS.update({"M2940": "tests/unit/test_annatar_wire.py", "M2941": "tests/unit/test_annatar_run_exit.py",
-              "M2942": _R10, "M2943": _R10, "M2944": _R10, "M2945": _R10})
-
-# SEC14 (#420, R-11): a Dagorlad request plays once on Orodruin, while it is fresh; the names typed
-# do not stay there.
-MUTANTS += [
-    ("M2946", "a request played already plays again (R-11)", "eregion_core/exercise_runner.py",
-     '                        if json.loads(line).get("request") == req.id:\n',
-     "                        if False:\n"),
-    ("M2947", "a request is never written to the registry of the requests played (R-11)",
-     "eregion_core/exercise_runner.py", "                self._played(req)\n", "                pass\n"),
-    ("M2948", "a registry of the requests played that cannot be read plays on (R-11)",
-     "eregion_core/exercise_runner.py",
-     '            return "replayed", f"the registry of the requests played cannot be read',
-     '            e, f"the registry of the requests played cannot be read'),
-    ("M2949", "a request carried days after it was written still runs (R-11)",
-     "eregion_core/exercise_runner.py", "        if age > MAX_AGE_S:\n", "        if False:\n"),
-    ("M2950", "a request dated ahead of Orodruin's clock runs (R-11)", "eregion_core/exercise_runner.py",
-     "        if age < -FUTURE_SKEW_S:\n", "        if False:\n"),
-    ("M2951", "the names typed stay on Orodruin after the request (R-11)", MAKE,
-     "\"trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; \"", '""'),
-    ("M2952", "the runner leaves the names typed where it could remove them (R-11)",
-     "eregion_core/exercise_runner.py", "            typed_path.unlink()\n", "            pass\n"),
-]
-TESTS.update({mid: _R10 for mid in ("M2946", "M2947", "M2948", "M2949", "M2950", "M2952")})
-TESTS["M2951"] = "tests/unit/test_makefile_exercise.py"
-
-# SEC14 (#420, V-32, V-34): Orodruin's host key pinned, never accept-new; its containers hardened.
-MUTANTS += [
-    ("M2953", "Orodruin without its host key's fingerprint falls back to accept-new (V-32)", MAKE,
-     ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT required\n', ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT\n'),
-    ("M2954", "an injector's container on Orodruin runs with its root writable and its capabilities (V-34)",
-     MAKE, "ORO_RUN        = docker run --rm $(ORO_HARDEN) ", "ORO_RUN        = docker run --rm "),
-]
-TESTS.update({"M2953": "tests/unit/test_host_ssh.py", "M2954": "tests/unit/test_host_ssh.py"})
-
-# SEC14 (#420, V-22): the path that builds on H0 builds only a REF the operator names.
-MUTANTS += [
-    ("M2955", "a deployment by hand without REF builds the latest tag it finds on H0 (V-22)",
-     "infra/glorfindel-host/deploy.sh", '  [ -n "$want" ] || die "REF exigée',
-     """  [ -n "$want" ] || want=$(git tag -l 'v*' --sort=-v:refname | head -1); true || die "REF exigée"""),
-]
-TESTS["M2955"] = "tests/unit/test_host_deploy.py"
-
-# SEC14 (#420, V-21): what one pull reads in all is bounded, its listing pages and its blobs.
-MUTANTS += [
-    ("M2956", "a pull of the windows reads without a cumulated bound, each read bounded alone (V-21)",
-     "eregion_core/exercise_channel.py",
-     "        _pull_windows(directory, url, headers, get, say, Budget(), written, seen)\n",
-     "        _pull_windows(directory, url, headers, get, say, None, written, seen)\n"),
-]
-TESTS["M2956"] = "tests/unit/test_injector_channels.py"
-
-# SEC14 (#420, V-20): a window written on the watch's host, bounded by what the watch saw of it.
-MUTANTS += [
-    ("M2957", "a local window dated back when the watch first saw it is believed (V-20)",
-     "eregion_core/exercise.py", "    if start < seen - timedelta(seconds=FUTURE_SKEW_S):\n",
-     "    if False:\n"),
-]
-TESTS["M2957"] = "tests/unit/test_exercise.py"
-
-# SEC14 (#420, V-19): the catalog vouches for a local script's content, not its path.
-MUTANTS += [
-    ("M2958", "a local script changed under its path is still what the catalog vouched for (V-19)",
-     "annatar/campaign/catalog.py",
-     "        if any(s not in known or not _pinned(entry, s) for s in scripts):\n",
-     "        if any(s not in known for s in scripts):\n"),
-]
-TESTS["M2958"] = "tests/unit/test_injector_guards.py"
-
-# SEC14 (#420, P-03): an advisory with a fix that no human accepted makes a push or a pull request red.
-MUTANTS += [
-    ("M2959", "an advisory with a fix that no one accepted lets a pull request through (P-03)",
-     "scripts/pip_audit_issues.py",
-     "    due = [a for a in advs if a.fixes and not acceptance(a, accepted)]\n", "    due = []\n"),
-]
-TESTS["M2959"] = "tests/unit/test_pip_audit_issues.py"
-
-# SEC14 after its review (M3075–M3084): a window is « pulled » only when the pull wrote it down; the
-# record under one flock; the CI's audit never red on a push; the script's pin by a normal path;
-# annatar init under the lock.
-MUTANTS += [
-    ("M3075", "a channel_created the window's file carries alone is believed (V-20, review)",
-     "eregion_core/exercise.py",
-     '                entry = seen[rid] = {"seen": now.isoformat(), "fields": _fields(w), "end": w.get("end")}\n',
-     '                entry = seen[rid] = {"seen": w.get(CHANNEL_CREATED) or now.isoformat(), '
-     '"fields": _fields(w), "end": w.get("end")}\n'),
-    ("M3076", "the pull writes nothing down: a window it brought is held as local (V-20, review)",
-     "eregion_core/exercise_channel.py", "            note_pulled(seen, json.loads(stamped))\n",
-     "            pass\n"),
-    ("M3077", "the watch's record is changed without its flock: two processes lose each other's (V-20, review)",
-     "eregion_core/exercise.py", "        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)\n", "        pass\n"),
-]
-TESTS.update({"M3075": "tests/unit/test_exercise.py", "M3076": "tests/unit/test_exercise.py",
-              "M3077": "tests/unit/test_exercise.py"})
-MUTANTS += [
-    ("M3078", "a pinned script named ./scripts/… or by its absolute path escapes its pin (V-19, review)",
-     "annatar/campaign/catalog.py", "            if isinstance(pin, str) and _relative(str(path)) == want:\n",
-     "            if isinstance(pin, str) and str(path) == script:\n"),
-    ("M3079", "annatar init cleans a disk during a request: no lock (R-10, review)", "annatar/cli.py",
-     """        with request_lock(f"init {os.path.basename(scenario or '')}".strip()):\n""",
-     "        with contextlib.nullcontext():\n"),
-]
-TESTS.update({"M3078": "tests/unit/test_injector_guards.py", "M3079": "tests/unit/test_annatar_run_exit.py"})
-# SEC14, second review: a copy the record never noted is pulled once again, then written down.
-MUTANTS += [
-    ("M3080", "a window open across the upgrade, never written down, is never pulled again: held as local (V-20)",
-     "eregion_core/exercise_channel.py",
-     '        unnoted = noted is not None and local.exists() and name[:-len(".json")] not in noted\n',
-     "        unnoted = False\n"),
-    ("M3081", "a copy pulled again keeps the channel_created it carried on disk (V-20)",
-     "eregion_core/exercise_channel.py", "        stamped = _stamped(body, blob, None if unnoted else local)\n",
-     "        stamped = _stamped(body, blob, local)\n"),
-]
-TESTS.update({"M3080": "tests/unit/test_exercise.py", "M3081": "tests/unit/test_exercise.py"})
-
-# SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's
-# contract an allow-list (V-29), no fallback on the former shared principal (V-17), the session
-# drain VM by VM (R-03). M2880–M2899.
-MUTANTS += [
-    ("M2880", "a scope that names no subscription admits a target in any subscription (SEC11, R-19)", INS,
-     "        if not self.subscription_id.strip():\n", "        if False:\n"),
-    ("M2881", "the bench's scope leaves its subscription empty: only the RBAC bounds it (SEC11, R-19)", INS,
-     '                   subscription_id=(os.environ.get(SUBSCRIPTION_ENV) or "").strip())\n', "                   )\n"),
-    ("M2882", "the console's plan judges with a scope that names no subscription (SEC11, R-19)",
-     "eregion_console/board.py", "scope=replace(Scope.for_bench(), sandbox=bench))", "scope=Scope(sandbox=bench))"),
-]
-TESTS.update({"M2880": "tests/unit/test_inscription.py", "M2881": "tests/unit/test_inscription.py",
-              "M2882": "tests/unit/test_console_dagorlad.py"})
-ORO = "eregion_core/orodruin.py"
-MUTANTS += [
-    ("M2883", "the contract refuses a list of writes and lets the rest through: Network Contributor arms (SEC11, V-29)",
-     ORO, '            unlisted = sorted(actions - allowed_at(scope, bench)) if actions else ["(role unreadable)"]\n',
-     "            unlisted = []\n"),
-    ("M2884", "a right effective on the group, from an assignment the listing hid, arms (SEC11, V-29)", ORO,
-     "    if extra:\n", "    if False:\n"),
-    ("M2885", "a role below a VM (an extension) holds the VM's writes (SEC11, V-29)", ORO,
-     'and rest[len(kind):] and "/" not in rest[len(kind):]:', "and rest[len(kind):]:"),
-    ("M2886", "a role the contract cannot read, inside the bench, arms (SEC11, V-29: an unknown right refuses)", ORO,
-     'if actions else ["(role unreadable)"]\n', "if actions else []\n"),
-    ("M2887", "a data action effective on the group arms (SEC11, V-29)", ORO,
-     '                   | {f"data:{x}" for p in perms for x in (p.get("dataActions") or [])})\n',
-     "                   )\n"),
-]
-TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M2883", "M2884", "M2885", "M2886", "M2887")})
-# SEC11, after its 5.5 review: Log Analytics Reader's data action (M3030); the session drain to
-# a list of the VMs Glorfindel defends (M3031–M3035); the watch's word without a principal (M3036).
-MUTANTS += [
-    ("M3030", "the allow-list misses Log Analytics Reader's data action: Orodruin passive on what main.tf gives (SEC11, V-29)",
-     ORO, '             LOGS_READER_ACTIONS + tuple(f"data:{a}" for a in LOGS_READER_DATA_ACTIONS)))',
-     "             LOGS_READER_ACTIONS))"),
-]
-TESTS["M3030"] = "tests/unit/test_orodruin.py"
-MUTANTS += [
-    ("M3031", "the session drain's VMs not read on Azure: a typo planned as a VM (SEC11, R-03, review)", "infra/glorfindel-host/main.tf",
-     "  for_each             = data.azurerm_virtual_machine.session_drain\n",
-     "  for_each             = toset(var.session_drain_vms)\n"),
-    ("M3032", "bree, the VM of the bench that meets real attacks, out of the list: no drain there (SEC11, R-03, review)",
-     "infra/glorfindel-host/session_drain.auto.tfvars",
-     'session_drain_vms = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]', 'session_drain_vms = ["vm-celebrimbor-gondolin"]'),
-    ("M3033", "the list of the drain ignored by git: an ordinary apply takes it off (SEC11, R-03, review)", ".gitignore",
-     "!infra/glorfindel-host/session_drain.auto.tfvars\n", ""),
-    ("M3034", "the card says the drain goes to the enrolled VMs, not to those Glorfindel defends (SEC11, R-03, review)", ISO,
-     '"que Glorfindel défend : session_drain_vms) — "', '"inscrites) — "'),
-    ("M3035", "the readiness names no list where the drain is given (SEC11, R-03, review)", "glorfindel/readiness.py",
-     '"session_drain_vms sur H0 —, jamais sur le groupe', '"jamais sur le groupe'),
-    ("M3036", "a container on a workstation said to fall back on the machine's az login (SEC11, V-17, review)", GCLI,
-     "    if in_container:\n", "    if False:\n"),
-]
-TESTS.update({"M3031": "tests/unit/test_glorfindel_host.py", "M3032": "tests/unit/test_glorfindel_host.py",
-              "M3033": "tests/unit/test_glorfindel_host.py", "M3034": "tests/unit/test_glorfindel.py -k drain",
-              "M3035": "tests/unit/test_readiness.py", "M3036": "tests/unit/test_azure_roles.py"})
-MUTANTS += [
-    ("M2888", "the watch falls back on the former shared principal (SEC11, V-17)", "docker-compose.yml",
-     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",
-     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n"),
-    ("M2889", "the console, which restores, falls back on the former shared principal (SEC11, V-17)",
-     "docker-compose.yml", "  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-}\n",
-     "  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}\n"),
-    ("M2890", "`make glorfindel-*` hands its container the former shared principal (SEC11, V-17)", MAKE,
-     '\tAZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-}"\n',
-     '\tAZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"\n'),
-    ("M2891", "a service started without a service principal, unsaid (SEC11, V-17)", MAKE,
-     '\t  elif [ -z "$$id" ]; then echo', "\t  elif false; then echo"),
-]
-TESTS.update({"M2888": "tests/unit/test_azure_roles.py", "M2889": "tests/unit/test_azure_roles.py",
-              "M2890": "tests/unit/test_makefile_secrets.py", "M2891": "tests/unit/test_azure_roles.py"})
-HTF = "infra/glorfindel-host/main.tf"
-MUTANTS += [
-    ("M2892", "the response's role, given on whole groups, holds Run Command again (SEC11, R-03)",
-     "infra/identities/glorfindel-response.json",
-     '    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",\n',
-     '    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",\n'
-     '    "Microsoft.Compute/virtualMachines/runCommand/action",\n'),
-    ("M2893", "the session drain read on the group: a right given on the VM read as missing (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
-     '        need(_vm_scope(rg, vm_name), "isolate_vm",', '        need(rg, "isolate_vm",'),
-    ("M2894", "Run Command held on the whole group, unsaid (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
-     '        "Microsoft.Compute/virtualMachines/runCommand/action",\n    )\n', "    )\n"),
-    ("M2895", "the group no longer read when the VM needs nothing there: what goes beyond, unsaid (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
-     "            scopes.setdefault(rg.lower(), (rg, set()))   # the group itself, for what goes beyond\n", ""),
-    ("M2896", "a drain refused on a VM without the role, said as any failure (SEC11, R-03)", ISO,
-     "            if _is_iam_error(str(e)):\n", "            if False:\n"),
-    ("M2897", "the audit fails a VM without the session drain, which is still isolated (SEC11, R-03)",
-     "glorfindel/audit.py", '    if drain and {m["action"] for m in missing} <= drain:\n', "    if False:\n"),
-    ("M2898", "H0's session drain assigned on the whole bench group (SEC11, R-03)", HTF,
-     '  scope                = each.value.id\n  role_definition_name = "Eregion Glorfindel Session Drain"',
-     '  scope                = data.azurerm_resource_group.bench.id\n  role_definition_name = "Eregion Glorfindel Session Drain"'),
-    ("M2899", "the module drains by default, without the list kept in the repository (SEC11, R-03)",
-     "infra/glorfindel-host/variables.tf", "  default     = []\n",
-     '  default     = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]\n'),
-]
-TESTS.update({
-    "M2892": "tests/unit/test_azure_roles.py",
-    "M2893": "tests/unit/test_glorfindel.py -k check_permissions",
-    "M2894": "tests/unit/test_glorfindel.py -k check_permissions",
-    "M2895": "tests/unit/test_glorfindel.py -k check_permissions",
-    "M2896": "tests/unit/test_glorfindel.py -k drain",
-    "M2897": "tests/unit/test_glorfindel.py -k audit_reports",
-    "M2898": "tests/unit/test_glorfindel_host.py",
-    "M2899": "tests/unit/test_glorfindel_host.py",
 # SEC12 (#418): the root of trust — the agent sessions' token (a GitHub App, this repository only),
 # H0's CD refusing an older release but for the way back asked on H0, the tag rule read, the
 # review's verdict traced on the pull request. M2900–M2914.
@@ -8541,3 +8300,284 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+# SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's
+# contract an allow-list (V-29), no fallback on the former shared principal (V-17), the session
+# drain VM by VM (R-03). M2880–M2899.
+MUTANTS += [
+    ("M2880", "a scope that names no subscription admits a target in any subscription (SEC11, R-19)", INS,
+     "        if not self.subscription_id.strip():\n", "        if False:\n"),
+    ("M2881", "the bench's scope leaves its subscription empty: only the RBAC bounds it (SEC11, R-19)", INS,
+     '                   subscription_id=(os.environ.get(SUBSCRIPTION_ENV) or "").strip())\n', "                   )\n"),
+    ("M2882", "the console's plan judges with a scope that names no subscription (SEC11, R-19)",
+     "eregion_console/board.py", "scope=replace(Scope.for_bench(), sandbox=bench))", "scope=Scope(sandbox=bench))"),
+]
+TESTS.update({"M2880": "tests/unit/test_inscription.py", "M2881": "tests/unit/test_inscription.py",
+              "M2882": "tests/unit/test_console_dagorlad.py"})
+ORO = "eregion_core/orodruin.py"
+MUTANTS += [
+    ("M2883", "the contract refuses a list of writes and lets the rest through: Network Contributor arms (SEC11, V-29)",
+     ORO, '            unlisted = sorted(actions - allowed_at(scope, bench)) if actions else ["(role unreadable)"]\n',
+     "            unlisted = []\n"),
+    ("M2884", "a right effective on the group, from an assignment the listing hid, arms (SEC11, V-29)", ORO,
+     "    if extra:\n", "    if False:\n"),
+    ("M2885", "a role below a VM (an extension) holds the VM's writes (SEC11, V-29)", ORO,
+     'and rest[len(kind):] and "/" not in rest[len(kind):]:', "and rest[len(kind):]:"),
+    ("M2886", "a role the contract cannot read, inside the bench, arms (SEC11, V-29: an unknown right refuses)", ORO,
+     'if actions else ["(role unreadable)"]\n', "if actions else []\n"),
+    ("M2887", "a data action effective on the group arms (SEC11, V-29)", ORO,
+     '                   | {f"data:{x}" for p in perms for x in (p.get("dataActions") or [])})\n',
+     "                   )\n"),
+]
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M2883", "M2884", "M2885", "M2886", "M2887")})
+# SEC11, after its 5.5 review: Log Analytics Reader's data action (M3030); the session drain to
+# a list of the VMs Glorfindel defends (M3031–M3035); the watch's word without a principal (M3036).
+MUTANTS += [
+    ("M3030", "the allow-list misses Log Analytics Reader's data action: Orodruin passive on what main.tf gives (SEC11, V-29)",
+     ORO, '             LOGS_READER_ACTIONS + tuple(f"data:{a}" for a in LOGS_READER_DATA_ACTIONS)))',
+     "             LOGS_READER_ACTIONS))"),
+]
+TESTS["M3030"] = "tests/unit/test_orodruin.py"
+MUTANTS += [
+    ("M3031", "the session drain's VMs not read on Azure: a typo planned as a VM (SEC11, R-03, review)", "infra/glorfindel-host/main.tf",
+     "  for_each             = data.azurerm_virtual_machine.session_drain\n",
+     "  for_each             = toset(var.session_drain_vms)\n"),
+    ("M3032", "bree, the VM of the bench that meets real attacks, out of the list: no drain there (SEC11, R-03, review)",
+     "infra/glorfindel-host/session_drain.auto.tfvars",
+     'session_drain_vms = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]', 'session_drain_vms = ["vm-celebrimbor-gondolin"]'),
+    ("M3033", "the list of the drain ignored by git: an ordinary apply takes it off (SEC11, R-03, review)", ".gitignore",
+     "!infra/glorfindel-host/session_drain.auto.tfvars\n", ""),
+    ("M3034", "the card says the drain goes to the enrolled VMs, not to those Glorfindel defends (SEC11, R-03, review)", ISO,
+     '"que Glorfindel défend : session_drain_vms) — "', '"inscrites) — "'),
+    ("M3035", "the readiness names no list where the drain is given (SEC11, R-03, review)", "glorfindel/readiness.py",
+     '"session_drain_vms sur H0 —, jamais sur le groupe', '"jamais sur le groupe'),
+    ("M3036", "a container on a workstation said to fall back on the machine's az login (SEC11, V-17, review)", GCLI,
+     "    if in_container:\n", "    if False:\n"),
+]
+TESTS.update({"M3031": "tests/unit/test_glorfindel_host.py", "M3032": "tests/unit/test_glorfindel_host.py",
+              "M3033": "tests/unit/test_glorfindel_host.py", "M3034": "tests/unit/test_glorfindel.py -k drain",
+              "M3035": "tests/unit/test_readiness.py", "M3036": "tests/unit/test_azure_roles.py"})
+MUTANTS += [
+    ("M2888", "the watch falls back on the former shared principal (SEC11, V-17)", "docker-compose.yml",
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n"),
+    ("M2889", "the console, which restores, falls back on the former shared principal (SEC11, V-17)",
+     "docker-compose.yml", "  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-}\n",
+     "  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}\n"),
+    ("M2890", "`make glorfindel-*` hands its container the former shared principal (SEC11, V-17)", MAKE,
+     '\tAZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-}"\n',
+     '\tAZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"\n'),
+    ("M2891", "a service started without a service principal, unsaid (SEC11, V-17)", MAKE,
+     '\t  elif [ -z "$$id" ]; then echo', "\t  elif false; then echo"),
+]
+TESTS.update({"M2888": "tests/unit/test_azure_roles.py", "M2889": "tests/unit/test_azure_roles.py",
+              "M2890": "tests/unit/test_makefile_secrets.py", "M2891": "tests/unit/test_azure_roles.py"})
+HTF = "infra/glorfindel-host/main.tf"
+MUTANTS += [
+    ("M2892", "the response's role, given on whole groups, holds Run Command again (SEC11, R-03)",
+     "infra/identities/glorfindel-response.json",
+     '    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",\n',
+     '    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",\n'
+     '    "Microsoft.Compute/virtualMachines/runCommand/action",\n'),
+    ("M2893", "the session drain read on the group: a right given on the VM read as missing (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     '        need(_vm_scope(rg, vm_name), "isolate_vm",', '        need(rg, "isolate_vm",'),
+    ("M2894", "Run Command held on the whole group, unsaid (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     '        "Microsoft.Compute/virtualMachines/runCommand/action",\n    )\n', "    )\n"),
+    ("M2895", "the group no longer read when the VM needs nothing there: what goes beyond, unsaid (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     "            scopes.setdefault(rg.lower(), (rg, set()))   # the group itself, for what goes beyond\n", ""),
+    ("M2896", "a drain refused on a VM without the role, said as any failure (SEC11, R-03)", ISO,
+     "            if _is_iam_error(str(e)):\n", "            if False:\n"),
+    ("M2897", "the audit fails a VM without the session drain, which is still isolated (SEC11, R-03)",
+     "glorfindel/audit.py", '    if drain and {m["action"] for m in missing} <= drain:\n', "    if False:\n"),
+    ("M2898", "H0's session drain assigned on the whole bench group (SEC11, R-03)", HTF,
+     '  scope                = each.value.id\n  role_definition_name = "Eregion Glorfindel Session Drain"',
+     '  scope                = data.azurerm_resource_group.bench.id\n  role_definition_name = "Eregion Glorfindel Session Drain"'),
+    ("M2899", "the module drains by default, without the list kept in the repository (SEC11, R-03)",
+     "infra/glorfindel-host/variables.tf", "  default     = []\n",
+     '  default     = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]\n'),
+]
+TESTS.update({
+    "M2892": "tests/unit/test_azure_roles.py",
+    "M2893": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2894": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2895": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2896": "tests/unit/test_glorfindel.py -k drain",
+    "M2897": "tests/unit/test_glorfindel.py -k audit_reports",
+    "M2898": "tests/unit/test_glorfindel_host.py",
+    "M2899": "tests/unit/test_glorfindel_host.py",
+})
+
+
+# SEC14 (#420, R-10): « one run at a time » has one lock, taken by every command that acts — a
+# wire under the hold its request hands down, a clean, a campaign whatever its --runs-dir.
+_R10 = "tests/unit/test_exercise_runner.py"
+
+
+MUTANTS += [
+    ("M2940", "a wire launched by hand during a request takes no lock (R-10)", "annatar/cli.py",
+     '        with request_lock(f"wire {request}"), \\\n', "        with contextlib.nullcontext(), \\\n"),
+    ("M2941", "a clean during a request takes no lock (R-10)", "annatar/cli.py",
+     '        with request_lock(f"clean {os.path.basename(scenario)}"):\n',
+     "        with contextlib.nullcontext():\n"),
+    ("M2942", "the runner hands its lock down to no wire (R-10)", "eregion_core/exercise_runner.py",
+     "pass_fds=(int(fd),) if fd.isdigit() else ()", "pass_fds=()"),
+    ("M2943", "any descriptor named in the environment is taken for the request's hold (R-10)",
+     "eregion_core/exercise_runner.py",
+     "    return fd if (held.st_dev, held.st_ino) == (here.st_dev, here.st_ino) else None\n",
+     "    return fd\n"),
+    ("M2944", "a wire's hold writes its own name over the request's, and erases it at its exit (R-10)",
+     "eregion_core/exercise_runner.py",
+     "        if inherited is not None:\n            yield fd ", "        if False:\n            yield fd "),
+    ("M2945", "the runner names no lock to its wires (R-10)", "eregion_core/exercise_runner.py",
+     ",\n                   LOCK_FD_ENV: str(lock_fd)}", "}"),
+]
+
+
+TESTS.update({"M2940": "tests/unit/test_annatar_wire.py", "M2941": "tests/unit/test_annatar_run_exit.py",
+              "M2942": _R10, "M2943": _R10, "M2944": _R10, "M2945": _R10})
+
+
+# SEC14 (#420, R-11): a Dagorlad request plays once on Orodruin, while it is fresh; the names typed
+# do not stay there.
+MUTANTS += [
+    ("M2946", "a request played already plays again (R-11)", "eregion_core/exercise_runner.py",
+     '                        if json.loads(line).get("request") == req.id:\n',
+     "                        if False:\n"),
+    ("M2947", "a request is never written to the registry of the requests played (R-11)",
+     "eregion_core/exercise_runner.py", "                self._played(req)\n", "                pass\n"),
+    ("M2948", "a registry of the requests played that cannot be read plays on (R-11)",
+     "eregion_core/exercise_runner.py",
+     '            return "replayed", f"the registry of the requests played cannot be read',
+     '            e, f"the registry of the requests played cannot be read'),
+    ("M2949", "a request carried days after it was written still runs (R-11)",
+     "eregion_core/exercise_runner.py", "        if age > MAX_AGE_S:\n", "        if False:\n"),
+    ("M2950", "a request dated ahead of Orodruin's clock runs (R-11)", "eregion_core/exercise_runner.py",
+     "        if age < -FUTURE_SKEW_S:\n", "        if False:\n"),
+    ("M2951", "the names typed stay on Orodruin after the request (R-11)", MAKE,
+     "\"trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; \"", '""'),
+    ("M2952", "the runner leaves the names typed where it could remove them (R-11)",
+     "eregion_core/exercise_runner.py", "            typed_path.unlink()\n", "            pass\n"),
+]
+
+
+TESTS.update({mid: _R10 for mid in ("M2946", "M2947", "M2948", "M2949", "M2950", "M2952")})
+
+
+TESTS["M2951"] = "tests/unit/test_makefile_exercise.py"
+
+
+# SEC14 (#420, V-32, V-34): Orodruin's host key pinned, never accept-new; its containers hardened.
+MUTANTS += [
+    ("M2953", "Orodruin without its host key's fingerprint falls back to accept-new (V-32)", MAKE,
+     ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT required\n', ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT\n'),
+    ("M2954", "an injector's container on Orodruin runs with its root writable and its capabilities (V-34)",
+     MAKE, "ORO_RUN        = docker run --rm $(ORO_HARDEN) ", "ORO_RUN        = docker run --rm "),
+]
+
+
+TESTS.update({"M2953": "tests/unit/test_host_ssh.py", "M2954": "tests/unit/test_host_ssh.py"})
+
+
+# SEC14 (#420, V-22): the path that builds on H0 builds only a REF the operator names.
+MUTANTS += [
+    ("M2955", "a deployment by hand without REF builds the latest tag it finds on H0 (V-22)",
+     "infra/glorfindel-host/deploy.sh", '  [ -n "$want" ] || die "REF exigée',
+     """  [ -n "$want" ] || want=$(git tag -l 'v*' --sort=-v:refname | head -1); true || die "REF exigée"""),
+]
+
+
+TESTS["M2955"] = "tests/unit/test_host_deploy.py"
+
+
+# SEC14 (#420, V-21): what one pull reads in all is bounded, its listing pages and its blobs.
+MUTANTS += [
+    ("M2956", "a pull of the windows reads without a cumulated bound, each read bounded alone (V-21)",
+     "eregion_core/exercise_channel.py",
+     "        _pull_windows(directory, url, headers, get, say, Budget(), written, seen)\n",
+     "        _pull_windows(directory, url, headers, get, say, None, written, seen)\n"),
+]
+
+
+TESTS["M2956"] = "tests/unit/test_injector_channels.py"
+
+
+# SEC14 (#420, V-20): a window written on the watch's host, bounded by what the watch saw of it.
+MUTANTS += [
+    ("M2957", "a local window dated back when the watch first saw it is believed (V-20)",
+     "eregion_core/exercise.py", "    if start < seen - timedelta(seconds=FUTURE_SKEW_S):\n",
+     "    if False:\n"),
+]
+
+
+TESTS["M2957"] = "tests/unit/test_exercise.py"
+
+
+# SEC14 (#420, V-19): the catalog vouches for a local script's content, not its path.
+MUTANTS += [
+    ("M2958", "a local script changed under its path is still what the catalog vouched for (V-19)",
+     "annatar/campaign/catalog.py",
+     "        if any(s not in known or not _pinned(entry, s) for s in scripts):\n",
+     "        if any(s not in known for s in scripts):\n"),
+]
+
+
+TESTS["M2958"] = "tests/unit/test_injector_guards.py"
+
+
+# SEC14 (#420, P-03): an advisory with a fix that no human accepted makes a push or a pull request red.
+MUTANTS += [
+    ("M2959", "an advisory with a fix that no one accepted lets a pull request through (P-03)",
+     "scripts/pip_audit_issues.py",
+     "    due = [a for a in advs if a.fixes and not acceptance(a, accepted)]\n", "    due = []\n"),
+]
+
+
+TESTS["M2959"] = "tests/unit/test_pip_audit_issues.py"
+
+
+# SEC14 after its review (M3075–M3084): a window is « pulled » only when the pull wrote it down; the
+# record under one flock; the CI's audit never red on a push; the script's pin by a normal path;
+# annatar init under the lock.
+MUTANTS += [
+    ("M3075", "a channel_created the window's file carries alone is believed (V-20, review)",
+     "eregion_core/exercise.py",
+     '                entry = seen[rid] = {"seen": now.isoformat(), "fields": _fields(w), "end": w.get("end")}\n',
+     '                entry = seen[rid] = {"seen": w.get(CHANNEL_CREATED) or now.isoformat(), '
+     '"fields": _fields(w), "end": w.get("end")}\n'),
+    ("M3076", "the pull writes nothing down: a window it brought is held as local (V-20, review)",
+     "eregion_core/exercise_channel.py", "            note_pulled(seen, json.loads(stamped))\n",
+     "            pass\n"),
+    ("M3077", "the watch's record is changed without its flock: two processes lose each other's (V-20, review)",
+     "eregion_core/exercise.py", "        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)\n", "        pass\n"),
+]
+
+
+TESTS.update({"M3075": "tests/unit/test_exercise.py", "M3076": "tests/unit/test_exercise.py",
+              "M3077": "tests/unit/test_exercise.py"})
+
+
+MUTANTS += [
+    ("M3078", "a pinned script named ./scripts/… or by its absolute path escapes its pin (V-19, review)",
+     "annatar/campaign/catalog.py", "            if isinstance(pin, str) and _relative(str(path)) == want:\n",
+     "            if isinstance(pin, str) and str(path) == script:\n"),
+    ("M3079", "annatar init cleans a disk during a request: no lock (R-10, review)", "annatar/cli.py",
+     """        with request_lock(f"init {os.path.basename(scenario or '')}".strip()):\n""",
+     "        with contextlib.nullcontext():\n"),
+]
+
+
+TESTS.update({"M3078": "tests/unit/test_injector_guards.py", "M3079": "tests/unit/test_annatar_run_exit.py"})
+
+
+# SEC14, second review: a copy the record never noted is pulled once again, then written down.
+MUTANTS += [
+    ("M3080", "a window open across the upgrade, never written down, is never pulled again: held as local (V-20)",
+     "eregion_core/exercise_channel.py",
+     '        unnoted = noted is not None and local.exists() and name[:-len(".json")] not in noted\n',
+     "        unnoted = False\n"),
+    ("M3081", "a copy pulled again keeps the channel_created it carried on disk (V-20)",
+     "eregion_core/exercise_channel.py", "        stamped = _stamped(body, blob, None if unnoted else local)\n",
+     "        stamped = _stamped(body, blob, local)\n"),
+]
+
+
+TESTS.update({"M3080": "tests/unit/test_exercise.py", "M3081": "tests/unit/test_exercise.py"})

@@ -338,7 +338,6 @@ def test_the_record_keeps_every_writers_windows_between_processes(tmp_path):
     assert len(json.loads(reg.read_text())) == 6 * 15
 
 
-
 # ── SEC14, second review: the transition — a copy pulled before the record existed ─────────────
 
 def _pulled_before(tmp_path, window, *, forged_created=None):

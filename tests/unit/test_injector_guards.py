@@ -397,6 +397,13 @@ def test_an_edited_atomic_never_reaches_the_target(tmp_path, monkeypatch):
     executor.run_command.assert_not_called()
 
 
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")
+
+
 # ── SEC14 (V-19): the catalog vouches for a script's content, not its path ────────────────────
 
 def test_every_local_script_the_catalog_names_is_pinned_by_its_content():
@@ -461,8 +468,3 @@ def test_a_pinned_script_named_another_way_is_still_checked(tmp_path, monkeypatc
         assert cat.script_pin(name, catalog) == pin, name
     assert cat.script_pin("scripts/vm/y.sh", catalog) is None
     assert cat.script_pin("/elsewhere/scripts/vm/x.sh", catalog) is None
-# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
-# this file's targets; conftest removes the operator's.
-@pytest.fixture(autouse=True)
-def _bench_subscription(monkeypatch):
-    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")

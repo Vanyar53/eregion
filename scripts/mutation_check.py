@@ -2611,8 +2611,8 @@ MUTANTS += [
      "        unread = self._unreadable_reason()\n        if unread:\n            return {\"removed\": False, "
      "\"why\": unread}\n", ""),
     ("M1212", "a state of the wrong shape reads as readable (SEC3, N-06)", STA,
-     "            if not _readable_shape(data, shape):\n",
-     "            if data is None:\n"),
+     "            if not (shape and _readable_shape(data, shape)):\n",
+     "            if not (shape and data is not None):\n"),
     ("M1213", "remove_orphan_rule writes an NSG of another subscription (SEC3, N-07)", AZC,
      "        if target and mine and target.lower() != mine.lower():\n            raise WrongSubscriptionError(\n"
      "                f\"{nsg_id.rstrip",
@@ -3730,8 +3730,9 @@ MUTANTS += [
      STA, "    n, aside = 1, _ISOLATION_STATE_DIR / ASIDE_DIR / f.name\n",
      "    n, aside = 1, f.with_name(f\"{f.stem}.unreadable.json\")\n"),
     ("M1528", "a file set aside, repaired, leaves the unreadable list (SEC4b, review 2)", STA,
-     '        out += [f"{_ISOLATION_STATE_DIR.name}/{ASIDE_DIR}/{f.name}" for f in aside.iterdir() if f.is_file()]\n',
-     "        pass\n"),
+     # One loop over the three directories since SEC13 (R-07): the set-aside one taken out.
+     '                                    (_ISOLATION_STATE_DIR / ASIDE_DIR, None, f"{iso}/{ASIDE_DIR}")):\n',
+     "                                    ):\n"),
     ("M1529", "an isolation whose original is unknown says nothing until its release (SEC4b, review 2)", ISO,
      "        unknown = original_unknown_nics(merged)\n", "        unknown = []\n"),
     ("M1530", "the card asks to repair a file set aside — repaired, it would not be read (SEC4b, review 2)", RCA,

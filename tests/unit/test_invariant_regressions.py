@@ -5553,3 +5553,32 @@ def test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said_by_the_reset(monkeypatch
           "non_disruptive"),
          ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), False),
          ("bare_with_an_unknown_original", DB, DB, ("subnet.get", "always-429"), _nic("rg-app1", "db-nic-0"), "reset"))
+
+
+_S6_NET = {
+    "subnet_nsg": [_LATERAL_IN], "edge_nsg": None, "tier_rules": [],
+    "nics": {"web-nic": {"own": None, "rules": [], "policy": False},
+             "db-nic-0": {"own": None, "rules": [], "policy": False},
+             "db-nic-1": {"own": "dedicated", "rules": [_rule("allow-ssh", 100, _SSH_IN)], "policy": False},
+             "api-nic": {"own": "dedicated", "rules": [], "policy": True}},
+    "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+    "legacy": ("api-nic", False), "data_subnet": None}
+
+
+def test_a_vm_block_rewritten_before_its_subnets_perimeter_never_says_unblocked(monkeypatch):
+    """L1Q's rule entered (L1Qr), the machine at 500 (seed 6), its 7 rules shrunk by hand to 3,
+    none of L1Q's: web1 blocked on its subnet, Db--01 (two NICs on that subnet) blocked for
+    itself, web1 unblocked — the pair lifted, Db's rules on the subnet NSG, db-nic-1's moved
+    there from its own NSG (an allow-ssh at 100) —; db-nic-1 given a new address; web1 blocked
+    on its subnet and for itself, the pair turned into an allow, and the reassertion, outside
+    human_only — « I3: the reassertion said 192.31.196.7 no longer blocked on …/Db--01
+    (['db-nic-0', 'db-nic-1']); our perimeter block still cuts it off ». Red on `main` 287e4ae.
+    The blocks were read in the directory's order: Db's first, its rules rewritten and read
+    again under the turned pair — « réécrites …, n'est plus bloquée sur db-nic-0, db-nic-1 »;
+    web's entry then put the pair back, the card false once the pass ended. The perimeters are
+    put back first (`reassert._perimeters_first`). The family of I3P (#366)."""
+    _run(monkeypatch, _S6_NET,
+         ("perimeter_lifted_beside_a_block", WEB1, WEB1, None, DB, False, DB, 22),
+         ("customer_changes_ip", _nic("rg-app1", "db-nic-1"), 0, 4),
+         ("block_turned_then_reasserted", WEB1, WEB1, None, "both", 22,
+          (_SUBNET, "glorfindel-block-192-31-196-7"), "non_disruptive"))

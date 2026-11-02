@@ -4,9 +4,10 @@
 # État Terraform séparé de Celebrimbor : détruire le banc ne détruit pas le défenseur, et
 # inversement. La VM vit hors du groupe du banc, sans tag `eregion-target` et sans DCR vers le
 # Log Analytics du banc : la découverte (Heartbeat) ne la voit pas, Glorfindel ne peut pas
-# l'isoler. Son identité managée lit le banc, rien de plus (pré-observation : `human_only`,
-# `GLORFINDEL_READ_ONLY=1`) — sauf la coupure des sessions, VM par VM, avec session_drain (SEC11).
-# README.md pour le déroulé.
+# l'isoler. Son identité managée lit le banc ici (Reader, Log Analytics Reader) ; le rôle de la
+# réponse sur le groupe du banc lui est attribué à la main, hors de cet état (la posture de H0,
+# BL1c : README.md, « Ce que la VM est »). La coupure des sessions, elle, est ici : VM par VM, aux
+# seules VM inscrites, avec session_drain (SEC11). README.md pour le déroulé.
 
 terraform {
   required_providers {

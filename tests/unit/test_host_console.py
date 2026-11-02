@@ -292,6 +292,39 @@ def test_push_checks_the_token_before_anything_reaches_the_vm():
     assert check < recipe.index("scp ")
 
 
+@needs_make
+@pytest.mark.parametrize("value, human_only", [(None, False), ("1", True), ("0", False)])
+def test_push_reads_h0_s_config_before_it_sends_its_own(tmp_path, value, human_only):
+    """M2367, M2780 (BL1c, 02/11): the push reads the config in place on H0 through the ssh it
+    already opens, before the scp that replaces it, and gives it to host_config.py (each VM's
+    mode kept); unread, an empty file (every VM human_only, said). It reads it again just before
+    the scp: changed in between (a mode changed in the console), nothing is sent. Only
+    HUMAN_ONLY=1 adds --human-only — HUMAN_ONLY=0 keeps the modes."""
+    res = _make(tmp_path, "-n", "glorfindel-host-push", "HOST_IP=203.0.113.9",
+                *([f"HUMAN_ONLY={value}"] if value is not None else []))
+    assert res.returncode == 0, res.stderr
+    out = res.stdout
+    # The recipe's shell, as make renders it, is valid shell (bash -n), with or without the check.
+    lines = out.splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith("cfg=$(mktemp)"))
+    last = next(i for i in range(first, len(lines)) if not lines[i].endswith("\\"))
+    script = tmp_path / "push.sh"
+    script.write_text("\n".join(lines[first:last + 1]) + "\n", encoding="utf-8")
+    assert subprocess.run(["bash", "-n", str(script)], capture_output=True).returncode == 0
+    read = out.index("'cat eregion/glorfindel-config.yaml' > $h0 2>/dev/null || : > $h0")
+    config = out.index("host_config.py glorfindel-config.yaml $cfg --h0 $h0")
+    assert ("--h0 $h0 --human-only" in out) is human_only
+    if human_only:
+        # M2785: HUMAN_ONLY=1 carries nothing of H0 — a second read that fails never blocks it.
+        assert "> $h1" not in out and "cmp -s" not in out
+        assert read < config < out.index("scp ")
+        return
+    again = out.index("'cat eregion/glorfindel-config.yaml' > $h1 2>/dev/null || : > $h1")
+    compared = out.index("cmp -s $h0 $h1 || {")
+    assert read < config < again < compared < out.index("scp ")
+    assert "rien d'envoyé" in out[compared:out.index("scp ")]
+
+
 # ── host.env.example: a variable left empty stays empty ───────────────────────────────────
 
 def test_the_example_leaves_every_empty_variable_empty():

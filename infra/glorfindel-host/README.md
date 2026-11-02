@@ -5,17 +5,55 @@ d'Eregion (`eregion console`, l'ancienne War Room) et le bot Discord compris : l
 de la racine (`watch`, `war-room` — le service de la console, qui garde son nom jusqu'à UI-1d —,
 et `bot` par son profil), sur la même image et le même état. Premier usage : la **pré-observation** sur le banc
 (`ROADMAP.md`, lot H0 ; `docs/observation.md`) — bree allumée en continu avec une vraie
-charge, Glorfindel qui décide, toi qui juges chaque carte.
+charge, Glorfindel qui décide, toi qui juges chaque carte. Depuis BL1 (31/10), il répond aussi
+seul sur le banc, dans le mode de chaque VM.
 
 ## Ce que la VM est, et n'est pas
 
-- **Un observateur.** Son identité managée a `Reader` sur le groupe du banc et
-  `Log Analytics Reader` sur son workspace, rien d'autre. `GLORFINDEL_READ_ONLY=1` et une
-  config forcée en `human_only` au push (`host_config.py`) : elle ne décide jamais seule et
-  ne peut rien écrire. Les droits d'écriture viendront avec les exercices de R1 et G0. La
-  coupure des sessions (Run Command) ne se donne que VM par VM, aux VM inscrites du banc :
-  `make glorfindel-host-plan SESSION_DRAIN=1` (SEC11, `docs/operations.md`, « Identités Azure ») ;
-  le test du module la tient (`tests/session_drain.tftest.hcl`).
+- **La watch qui répond, sur le banc seulement** (décision de Jonathan, 31/10 ; bree le 01/11).
+  Son identité managée a `Reader` et « Eregion Glorfindel Response » sur le groupe du banc,
+  `Log Analytics Reader` sur son workspace, rien d'autre : jamais le restore, jamais
+  l'abonnement. `GLORFINDEL_READ_ONLY=0`, gondolin et bree en `non_disruptive`, le CD actif.
+  Jusqu'au 30/10, c'était un observateur (`Reader`, `GLORFINDEL_READ_ONLY=1`) ; ce que la
+  posture ouvre et ce qui la borne : le modèle de menace
+  ([`docs/design/modele-de-menace.md`](../../docs/design/modele-de-menace.md), §5).
+  - **Le rôle de la réponse est attribué à la main**, hors de l'état Terraform de H0
+    (`main.tf` ne pose que les deux lectures) : `az role assignment create`, l'étape 3 de
+    [`docs/banc-bl1.md`](../../docs/banc-bl1.md) ; le retirer, l'étape 7. Un `terraform apply`
+    de H0 ne l'ajoute ni ne l'enlève.
+  - **La coupure des sessions, VM par VM** (SEC11) : Run Command n'est plus dans le rôle de la
+    réponse. « Eregion Glorfindel Session Drain » se donne sur chaque VM inscrite du banc (gondolin),
+    jamais sur bree ni sur le groupe, par cet état Terraform : `make glorfindel-host-plan
+    SESSION_DRAIN=1`, puis `make glorfindel-host-up SESSION_DRAIN=1` (`terraform output
+    session_drain_vms`). Sans `SESSION_DRAIN`, le plan la retire. Sur bree, une isolation se fait,
+    la coupure est refusée et dite sur la carte. Le test du module la tient
+    (`tests/session_drain.tftest.hcl`) ; `docs/operations.md`, « Identités Azure ».
+  - **Un `make glorfindel-host-push` garde le mode de chaque VM** tel qu'il est sur H0
+    (décision de Jonathan, 02/11 ; avant, SEC7 remettait toutes les VM en `human_only` à
+    chaque push, et la posture se redonnait dans la console). Le push lit la config en place
+    par la connexion ssh qu'il ouvre déjà, puis `host_config.py` envoie :
+    - le défaut toujours en `human_only`, `allow_destructive` toujours vide : les modes et la
+      liste destructive de la config locale n'arrivent jamais sur H0 ;
+    - le mode de chaque VM gardé de H0 (un nom exact, tel que la console l'écrit) ; une VM que
+      H0 ne connaît pas part en `human_only` ;
+    - jamais un mode plus hardi que celui en place (A0) : config de H0 absente, illisible,
+      d'une autre forme, ou que la watch refuserait au démarrage (une seule entrée suffit : un
+      mode inconnu, un `match` vide, une clé de plus), toutes les VM en `human_only` ; un motif
+      (`vm-*`) n'est pas reporté, ces VM partent en `human_only` ; et c'est dit.
+
+    Le push affiche, VM par VM, le mode envoyé et sa provenance (« gardé de H0 », ou
+    `human_only` et pourquoi). **`make glorfindel-host-push HUMAN_ONLY=1`** est le geste
+    d'urgence : toutes les VM remises en `human_only` d'un coup, pour revenir à un H0 qui ne
+    fait rien seul (la console les redonne, une à une, après leur contrôle de préparation).
+    **Ne pas changer un mode dans la console pendant un push** : la config de H0 est lue avant
+    le `scp` qui la remplace, un mode changé entre les deux serait écrasé. Le push la relit juste
+    avant le `scp` et, si elle a changé entre les deux lectures, s'arrête sans rien envoyer
+    (« la config de H0 a changé pendant le push ») : relancer. Seul `HUMAN_ONLY=1` déclenche le
+    geste d'urgence (`HUMAN_ONLY=0` ou vide : les modes gardés) ; il ne relit pas H0 avant
+    d'envoyer : il n'en emporte rien, et une relecture qui échoue ne le bloque pas.
+    Le CD, lui, ne touche ni `host.env` ni la config.
+  - **Un nouveau `host.env`** (`make glorfindel-host-env`) part en lecture seule
+    (`GLORFINDEL_READ_ONLY=1`) : la posture se donne à la main, sur un hôte qui doit répondre.
 - **Pas une cible.** Hors du groupe du banc, sans tag `eregion-target`, sans DCR vers le
   Log Analytics du banc : la découverte (Heartbeat) ne la voit pas, Glorfindel ne peut pas
   l'isoler. Elle n'est pas non plus sur Orodruin (côté rouge).
@@ -34,7 +72,7 @@ le disque et l'IP publique.
 make glorfindel-host-plan            # lecture seule ; OPERATOR_CIDR=<ip>/32, sinon ton IP du moment
 make glorfindel-host-up              # crée la VM (confirmation demandée) ; cloud-init installe Docker et clone le dépôt
 make glorfindel-host-env             # host.env depuis ton .envrc chargé (ou : copier host.env.example et remplir)
-make glorfindel-host-push            # host.env → ~/eregion/.env, config locale en human_only
+make glorfindel-host-push            # host.env → ~/eregion/.env ; la config locale, le défaut en human_only, les modes de H0 gardés (HUMAN_ONLY=1 : tout en human_only)
 make glorfindel-stop                 # arrête le Glorfindel local : deux watch = cartes en double
 make glorfindel-host-start [REF=…]   # un tag ou un commit (défaut : dernier tag v*), détaché ; construit l'image, lance watch + console (war-room) + bot
 make glorfindel-host-tunnel          # affiche l'URL de la console avec son jeton, puis tient le tunnel (Ctrl+C)
@@ -490,7 +528,8 @@ sur la VM et ne se connecte à aucun hôte par SSH. Orodruin garde `accept-new` 
   à mettre à jour »). La première release SEC7 est donc déployée par l'agent d'avant, sans elle :
   les vérifications ci-dessus se font à la main.
 - **Les identités (V-17)** : rien. Les variables de chaque service sont vides sur H0 ; ses trois
-  conteneurs gardent l'identité managée de la VM, lectrice.
+  conteneurs gardent l'identité managée de la VM (lectrice alors ; depuis le 31/10, elle tient
+  aussi le rôle de la réponse sur le banc : « Ce que la VM est », plus haut).
 
 ## Ce que CI3 change : la transition, pas à pas (Jonathan)
 

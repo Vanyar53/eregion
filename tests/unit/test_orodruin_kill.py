@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import eregion_core.orodruin as orodruin
+from eregion_core import exercise
 
 KILL = Path(__file__).resolve().parents[2] / "infra" / "orodruin" / "kill.py"
 CONTRACT, ELSEWHERE = "sub-contract-0001", "sub-elsewhere-0002"
@@ -27,7 +28,10 @@ ASSIGNMENTS = [
 ]
 CHANNEL = "https://storodruin.blob.core.windows.net/exercises"
 CRED = SimpleNamespace(get_token=lambda scope: SimpleNamespace(token="tok"))
-NOW = datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc)
+# The real clock, not a fixed date: the exercise windows are purged PURGE_AFTER_S after their last
+# moment, by the real clock (eregion_core/exercise.py) — a fixed date turned these tests red seven
+# days after it.
+NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
 
 @pytest.fixture(scope="module")
@@ -267,7 +271,7 @@ def test_the_open_windows_are_closed_and_what_ran_is_said(kill_script):
     text = "\n".join(inflight)
     assert "r-open: a Run Command already sent runs to its end on vm-celebrimbor-gondolin" in text
     assert "r-fault: the fault may leave vm-celebrimbor-gondolin down" in text
-    assert "until 10:15 UTC" in text  # the grace after the close
+    assert f"until {NOW + timedelta(seconds=exercise.GRACE_AFTER_S):%H:%M} UTC" in text  # the grace after the close
 
 
 def test_a_vm_a_fault_may_leave_down_is_said_once(kill_script):

@@ -671,6 +671,13 @@ def main(argv: list[str]) -> int:
     if not (cdir / "manifest.json").is_file():
         print(f"{cdir} : pas de manifest.json", file=sys.stderr)
         return 2
+    # A campaign pulled from the channel: its runs' VMs read enrolled from Azure, as the report
+    # does (H-1) — without it, launched alone (make glorfindel-host-containment), every run was
+    # left out, « sa VM n'est pas inscrite ». check_enrollment also drops compose's empty
+    # AZURE_CLIENT_* first, as the watch does (#205): under docker exec the managed identity was
+    # never reached (BL1c, the bench, 31/10).
+    from analysis import campaign_report as cr
+    cr.check_enrollment(cdir)
     c = load(cdir, Path(args.runs_dir) if args.runs_dir else None, fault_runs=args.fault_run,
              warn=lambda m: print(f"[containment] {m}", file=sys.stderr))
     print(json.dumps(c.as_dict(), indent=2, ensure_ascii=False) if args.json else "\n".join(render(c)))

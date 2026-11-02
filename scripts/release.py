@@ -7,7 +7,8 @@
 `prepare`, on an up-to-date origin/main with a clean tree: [Unreleased] becomes
 [X.Y.Z] — <date> — "<title>" (an empty [Unreleased] above it), the version of pyproject.toml
 — the package's only one: annatar.__version__ reads it — and the README's « **Status — vX.Y.Z.** »
-follow; then the branch chore/release-X.Y.Z, its commit, pushed, and its pull request. Refused:
+follow, and ROADMAP.md's line of X.Y.Z in « Les prochaines releases », if there is one, becomes
+« brouillon » (RM1: #roadmap shows that table); then the branch chore/release-X.Y.Z, its commit, pushed, and its pull request. Refused:
 a tree not clean, a HEAD that is not origin/main, a version not greater than the current one,
 an empty [Unreleased], a branch or a tag vX.Y.Z that exists.
 
@@ -130,6 +131,38 @@ def sections_named(text: str) -> list[str]:
     return re.findall(r"(?m)^### (.+)$", text)
 
 
+# ── ROADMAP.md: « Les prochaines releases » (RM1) ───────────────────────────────────
+
+def _scripts_dir() -> None:
+    """This file's directory on sys.path: its siblings (roadmap_discord, agents_discord,
+    notify_discord) import one another by name."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+
+
+def roadmap_drafted(roadmap: str, version: str) -> str:
+    """ROADMAP.md with its version's line set to « brouillon », in the table of « Les prochaines
+    releases » only: the line whose first cell is X.Y.Z or vX.Y.Z, its last cell replaced. The
+    table is the one #roadmap reads, by its own reader (roadmap_discord: its heading, its header,
+    a section ended by a real heading): a table #roadmap would say « introuvable » is never
+    changed. Unchanged without it or without the line: the Orchestre holds the table by hand."""
+    _scripts_dir()
+    import roadmap_discord as rd
+    if rd.releases(roadmap) is None:
+        return roadmap
+    lines = roadmap.split("\n")
+    start = next(i for i, x in enumerate(lines) if x.strip() == rd.RELEASES_HEADING)
+    for i in range(start + 1, len(lines)):
+        if re.match(r"#{1,6} ", lines[i]):
+            break
+        cells = lines[i].strip().strip("|").split("|")
+        if lines[i].startswith("|") and len(cells) == 4 and cells[0].strip().strip("`").lstrip("v") == version:
+            lines[i] = "|" + "|".join(cells[:3] + [" brouillon "]) + "|"
+            return "\n".join(lines)
+    return roadmap
+
+
 # ── prepare: the version's pull request ─────────────────────────────────────────────
 
 def _remote_has(root: Path, kind: str, name: str) -> bool:
@@ -165,6 +198,10 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
     pyproject = pyproject_path.read_text(encoding="utf-8")
     changelog = changelog_path.read_text(encoding="utf-8")
     readme = readme_path.read_text(encoding="utf-8")
+    try:   # RM1: its line in « Les prochaines releases », if there is one
+        roadmap = (root / "ROADMAP.md").read_text(encoding="utf-8")
+    except OSError:
+        roadmap = ""
     current = version_of(pyproject)
     if new is not None and (semver(current) is None or new <= semver(current)):
         refused.append(f"{version} n'est pas plus grande que la version courante ({current or '—'})")
@@ -194,15 +231,27 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
         edits = {"pyproject.toml": PROJECT_VERSION.sub(f'version = "{version}"', pyproject, count=1),
                  "CHANGELOG.md": cut(changelog, version, day, title),
                  "README.md": STATUS.sub(f"**Status — v{version}.**", readme, count=1)}
+    # Said from ROADMAP.md itself, not from the edits: a dry run refused has none, and its line
+    # is there all the same.
+    drafted = roadmap_drafted(roadmap, version) if new is not None else roadmap
+    if edits and drafted != roadmap:
+        edits["ROADMAP.md"] = drafted
+    staged = ["pyproject.toml", "CHANGELOG.md", "README.md"] + (["ROADMAP.md"] if "ROADMAP.md" in edits else [])
+    roadmap_said = (f"ROADMAP.md : la ligne {version} des prochaines releases passe à « brouillon »"
+                    if drafted != roadmap else
+                    f"ROADMAP.md : pas de ligne {version} sous « Les prochaines releases » (ou un tableau "
+                    "que #roadmap ne lit pas) — l'Orchestre la tient à la main")
     cut_text = unreleased(changelog).strip("\n")
     lines = len([x for x in cut_text.splitlines() if x.strip()])
     subject = f"chore(release): {version} — CHANGELOG [{version}] « {title} », version du paquet"
     body = (f"La section [Unreleased] devient [{version}] ({', '.join(sections_named(cut_text)) or '—'} ; "
             f"{lines} lignes, aucune perdue) ; la version du paquet "
-            f"(pyproject.toml, lue par annatar.__version__) et la ligne « Status » du README suivent.\n\n"
+            f"(pyproject.toml, lue par annatar.__version__) et la ligne « Status » du README suivent"
+            + (" ; dans ROADMAP.md, la ligne de la version passe à « brouillon » (« Les prochaines releases »)"
+               if "ROADMAP.md" in edits else "") + ".\n\n"
             f"Après la fusion : make release-draft VERSION={version} — un brouillon, que Jonathan publie.")
     shown = [["git", "switch", "-c", branch],          # what runs below, call by call
-             ["git", "add", "pyproject.toml", "CHANGELOG.md", "README.md"],
+             ["git", "add", *staged],
              ["git", "commit", "-m", subject, "-m", body],
              ["git", "push", "-u", "origin", branch],
              ["gh", "pr", "create", "--base", "main", "--head", branch, "--title", subject, "--body", body]]
@@ -210,10 +259,12 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
     if dry_run:
         say("")
         for name, text in edits.items():
-            old = {"pyproject.toml": pyproject, "CHANGELOG.md": changelog, "README.md": readme}[name]
+            old = {"pyproject.toml": pyproject, "CHANGELOG.md": changelog, "README.md": readme,
+                   "ROADMAP.md": roadmap}[name]
             say("".join(difflib.unified_diff(old.splitlines(True), text.splitlines(True),
                                              f"a/{name}", f"b/{name}", n=2)).rstrip("\n"))
         say(f"\n[{version}] reçoit {lines} lignes : {', '.join(sections_named(cut_text)) or '—'}")
+        say(roadmap_said)
         say("\nÀ blanc (DRY_RUN=1) — rien n'est écrit ni poussé. Lancerait :")
         for c in shown:
             say(f"  {show(c)}")
@@ -227,7 +278,7 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
         for name, text in edits.items():
             (root / name).write_text(text, encoding="utf-8")
         step = "add"
-        run(["git", "add", "pyproject.toml", "CHANGELOG.md", "README.md"], root)
+        run(["git", "add", *staged], root)
         step = "commit"
         run(["git", "commit", "-m", subject, "-m", body], root)
         step = "push"
@@ -237,6 +288,7 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
         say(out.stdout.strip())
     except (Refused, OSError) as e:
         raise Halfway(_halfway(step, branch, str(e))) from None
+    say(roadmap_said)
     say(f"\nPR ouverte. Après sa fusion : make release-draft VERSION={version}")
     return 0
 
@@ -285,9 +337,7 @@ def releases_page(url: str) -> str:
 def _discord(tag: str, url: str, heading: str = "", text: str = "") -> dict:
     """The draft on #agents' board, pinged; {} without configuration or when Discord fails. Then
     its card on #releases (REL2), apart: one failing never keeps the other from being sent."""
-    here = str(Path(__file__).resolve().parent)
-    if here not in sys.path:
-        sys.path.insert(0, here)
+    _scripts_dir()
     ids: dict = {}
     try:
         import agents_discord

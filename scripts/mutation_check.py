@@ -292,11 +292,14 @@ MUTANTS = [
      "    refusal = quarantine_refusal(resource_id) if quarantine_nsg else None",
      "    refusal = None"),
     # H0: the hosted Glorfindel stays an observer.
+    # BL1c: the line also carries each VM's mode kept from H0 (never the local config's).
     ("M54", "the pushed host config keeps the local autonomy (H0)", "infra/glorfindel-host/host_config.py",
-     '    out["autonomy"] = {"default": "human_only"}\n', ""),
+     '    out["autonomy"] = {"default": HUMAN, "assets": kept}\n', ""),
     ("M55", "the host gets a write role on the bench (H0)", "infra/glorfindel-host/main.tf",
      'role_definition_name = "Reader"', 'role_definition_name = "Contributor"'),
-    ("M56", "empty service-principal vars stay set (H0: managed identity unreachable)", "glorfindel/cli.py",
+    # The function moved from glorfindel/cli.py into the shared core (BL1c): the console and
+    # the analysis commands call it too.
+    ("M56", "empty service-principal vars stay set (H0: managed identity unreachable)", "eregion_core/identity.py",
      "    for k in dropped:\n        del environ[k]\n", ""),
     # B2 (storage side): an exercise window labels only what it names, for a bounded time.
     ("M57", "a window labels every VM, not its targets (B2)", "eregion_core/exercise.py",
@@ -5824,6 +5827,82 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (1924, 1925, 1926)})
 TESTS["M1919"] = "tests/unit/test_indicators.py"
 
+# BL1c (#395): the measure launched alone (make glorfindel-host-containment) — the enrollment of
+# a channel campaign read as the report reads it, compose's empty identity dropped as the watch
+# drops it (#205), in check_enrollment for every command that reads the enrollment. M2360–M2362.
+MUTANTS += [
+    ("M2360", "the measure launched alone never reads the enrollment: every run of a channel campaign "
+              "left out, « VM non inscrite » (BL1c)", CTN,
+     "    cr.check_enrollment(cdir)\n", ""),
+    # The drop lives in check_enrollment (every command that reads the enrollment): dropped by the
+    # report's main alone, the measure launched alone keeps compose's empty identity.
+    ("M2361", "the measure launched alone keeps compose's empty AZURE_CLIENT_*: the managed identity "
+              "never reached under docker exec (BL1c)", CREP,
+     ("        drop_empty_service_principal_env()\n",
+      "    campaign_dir = Path(argv[0])\n    check_enrollment(campaign_dir)\n"),
+     ("", "    campaign_dir = Path(argv[0])\n"
+          "    from eregion_core.identity import drop_empty_service_principal_env\n"
+          "    drop_empty_service_principal_env()\n    check_enrollment(campaign_dir)\n")),
+    ("M2362", "check_enrollment keeps compose's empty AZURE_CLIENT_*: the report launched by docker exec "
+              "leaves every channel run out (BL1c)", CREP,
+     "        drop_empty_service_principal_env()\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (2360, 2361)})
+TESTS["M2362"] = "tests/unit/test_hosted_report.py"
+
+# BL1c, the push (Jonathan's decision of 02/11): each VM's mode in place on H0 kept, never a bolder
+# one — the local config's modes never carried, H0's config of another shape not trusted, a mode
+# unknown or a pattern not carried, HUMAN_ONLY=1 heard, H0's config read before the scp. M2363–M2368.
+HCF = "infra/glorfindel-host/host_config.py"
+MUTANTS += [
+    ("M2363", "the push carries the local config's mode of a VM H0 does not know: bolder than in place (BL1c)",
+     HCF, '            report.append((name, HUMAN, "inconnue de H0 : human_only"))\n',
+     '            kept.append({"match": name, "mode": rule.get("mode")})\n'),
+    ("M2364", "H0's config of another shape trusted: the push stops, nothing said (BL1c)", HCF,
+     "    if not isinstance(cfg, dict):\n        return None, \"forme inconnue\"\n", ""),
+    ("M2365", "a mode H0's config holds that this code does not know is carried (BL1c)", HCF,
+     '        if a.get("mode") not in KNOWN_MODES:\n', "        if False:\n"),
+    ("M2366", "HUMAN_ONLY=1 not heard: H0's modes kept by the emergency gesture (BL1c)", HCF,
+     '        if human_only:\n            report.append((name, HUMAN, "HUMAN_ONLY=1"))\n        elif',
+     '        if False:\n            report.append((name, HUMAN, "HUMAN_ONLY=1"))\n        elif'),
+    ("M2367", "the push never reads H0's config: every VM back to human_only, as before (BL1c)", MAKE,
+     "\t $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h0 2>/dev/null || : > $$h0; \\\n",
+     "\t : > $$h0; \\\n"),
+    ("M2368", "a pattern on H0 carried: every VM it matches made bolder (BL1c)", HCF,
+     "        elif _PATTERN & set(name):\n", "        elif False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (2363, 2364, 2365, 2366, 2368)})
+TESTS["M2367"] = "tests/unit/test_host_console.py"
+
+# BL1c, after its 5.5 review: what the watch's strict reading refuses keeps no mode, H0's config
+# read again before the scp, only HUMAN_ONLY=1 heard, what H0 says shown printable. M2369, M2780–M2783.
+MUTANTS += [
+    ("M2369", "an H0 entry with other keys than match and mode (refused by the watch) keeps its mode (BL1c)",
+     HCF, "        if set(a) - set(ASSET_KEYS):\n", "        if False:\n"),
+    ("M2780", "the push sends its config although H0's changed since it was read (BL1c)", MAKE,
+     "&& { cmp -s $$h0 $$h1 || {", "&& { true || {"),
+    ("M2781", "an H0 default outside the known modes (refused by the watch) keeps the VMs' modes (BL1c)",
+     HCF, '    if "default" in autonomy and autonomy["default"] not in KNOWN_MODES:\n', "    if False:\n"),
+    ("M2782", "a name read on H0 reaches the operator's terminal with its escape sequences (BL1c)", HCF,
+     "    report = [(printable(vm), printable(mode), printable(why)) for vm, mode, why in report]\n", ""),
+    ("M2783", "HUMAN_ONLY=0 puts every VM back in human_only (BL1c)", MAKE,
+     "$(if $(filter 1,$(HUMAN_ONLY)), --human-only)", "$(if $(HUMAN_ONLY), --human-only)"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (2369, 2781, 2782)})
+TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in (2780, 2783)})
+
+# BL1c, second review: one entry the watch would refuse refuses the whole config (a blank or
+# non-text match, a mode unknown or not text); HUMAN_ONLY=1 never blocked by a second read. M2784–M2785.
+MUTANTS += [
+    ("M2784", "an H0 entry with a blank match (refused by the watch) dropped alone, the others kept (BL1c)",
+     HCF, '        if not isinstance(a.get("match"), str) or not a["match"].strip():\n',
+     '        if not isinstance(a.get("match"), str):\n'),
+    ("M2785", "HUMAN_ONLY=1 blocked when H0's config cannot be read again before the scp (BL1c)", MAKE,
+     "$(if $(filter 1,$(HUMAN_ONLY)),,$(HOST_PUSH_RECHECK))", "$(HOST_PUSH_RECHECK)"),
+]
+TESTS["M2784"] = "tests/unit/test_glorfindel_host.py"
+TESTS["M2785"] = "tests/unit/test_host_console.py"
+
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its
 # non-regression (eregion_console/coverage.py), fed to the indicators and shown. M1800–M1825.
@@ -7137,6 +7216,74 @@ MUTANTS += [
      '    lock = request_lock("runs", f"fault {os.path.basename(fault)}")\n'),
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
+
+# RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
+# then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
+# « brouillon ». M2680–M2695; M2696–M2699 after its review.
+MUTANTS += [
+    ("M2680", "releases/latest failing (404: none published yet) fails the whole run (RM1)", ROADMAP_D,
+     '    except nd.Failure as e:\n        print(f"atelier: dernière release omise',
+     '    except ZeroDivisionError as e:\n        print(f"atelier: dernière release omise'),
+    ("M2681", "an answer of releases/latest without a name shown as a release (RM1)", ROADMAP_D,
+     '    if not isinstance(found, dict) or not (found.get("name") or found.get("tag_name")):\n',
+     '    if not isinstance(found, dict):\n'),
+    ("M2682", "the last published release never read: the line never shown (RM1)", ROADMAP_D,
+     "    latest = load_latest(environ)\n", "    latest = None\n"),
+    ("M2683", "no « Releases » block in the message (RM1)", ROADMAP_D,
+     '    out += [""] + releases_block(roadmap, latest)\n', ""),
+    ("M2684", "the releases at the message's end: cut first when the lots grow (RM1)", ROADMAP_D,
+     ('    out += [""] + releases_block(roadmap, latest)\n', '    text = "\\n".join(out)\n'),
+     ("", '    out += [""] + releases_block(roadmap, latest)\n    text = "\\n".join(out)\n')),
+    ("M2685", "a ROADMAP.md without the releases' section breaks the whole message (RM1)", ROADMAP_D,
+     '    if rows is None:\n        return out + ["_section introuvable dans ROADMAP.md_"]\n', ""),
+    ("M2686", "a line of another shape skipped: the table half read, never said changed (RM1)", ROADMAP_D,
+     "        if len(cells) != len(RELEASES_HEADER) or not cells[0]:\n            return None\n",
+     "        if len(cells) != len(RELEASES_HEADER) or not cells[0]:\n            continue\n"),
+    ("M2687", "the releases' header not checked: a table renamed read as before (RM1)", ROADMAP_D,
+     "    if head is None or _cells(rest[head]) != RELEASES_HEADER or head + 1 >= len(rest) \\\n",
+     "    if head is None or head + 1 >= len(rest) \\\n"),
+    ("M2688", "the releases' table looked for past the next heading: another section's read (RM1)", ROADMAP_D,
+     '    rest = rest[: next((i for i, x in enumerate(rest) if re.match(r"#{1,6} ", x)), len(rest))]   # a heading\n',
+     ""),
+    ("M2689", "every line of the releases shown: the block never cut (RM1)", ROADMAP_D,
+     "    for version, title, what, state in rows[:RELEASES_ROWS]:\n",
+     "    for version, title, what, state in rows:\n"),
+    ("M2690", "the release's name shown raw: Markdown, a masked link, a mention (RM1, SEC6)", ROADMAP_D,
+     '        name = nd.inert(nd._cut(latest.get("name") or latest.get("tag_name"), 80))',
+     '        name = (nd._cut(latest.get("name") or latest.get("tag_name"), 80))'),
+    ("M2691", "the release's link taken whatever its scheme (RM1)", ROADMAP_D,
+     '        url = nd._https(latest.get("html_url")).replace(',
+     '        url = str(latest.get("html_url")).replace('),
+    ("M2692", "the version GitHub says published still shown « brouillon » (RM1)", ROADMAP_D,
+     '            state = "publiée"\n', "            pass\n"),
+    ("M2693", "make release leaves ROADMAP.md's line of its version as it was (RM1)", RELS,
+     '        edits["ROADMAP.md"] = drafted\n', "        pass\n"),
+    ("M2694", "ROADMAP.md changed by make release but left out of its commit (RM1)", RELS,
+     '    staged = ["pyproject.toml", "CHANGELOG.md", "README.md"] + (["ROADMAP.md"] if "ROADMAP.md" in edits else [])\n',
+     '    staged = ["pyproject.toml", "CHANGELOG.md", "README.md"]\n'),
+    ("M2695", "make release changes a line of its version under another heading of ROADMAP.md (RM1)", RELS,
+     '        if re.match(r"#{1,6} ", lines[i]):\n            break\n        cells = lines[i]',
+     "        cells = lines[i]"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(2680, 2693)})
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(2693, 2696)})
+
+# RM1 after its review (02/11): the cells inert, the link's parentheses, the table release.py
+# changes is the one #roadmap reads, a section ended by a real heading. M2696–M2699.
+MUTANTS += [
+    ("M2696", "a cell's title shown raw: a « ** » in it breaks the message's bold (RM1, review)", ROADMAP_D,
+     'f"**{nd.inert(nd._cut(title, 40))}** "', 'f"**{nd._cut(title, 40)}** "'),
+    ("M2697", "a « ) » in the release's URL closes its masked link early (RM1, review)", ROADMAP_D,
+     '        url = nd._https(latest.get("html_url")).replace("(", "%28").replace(")", "%29")\n',
+     '        url = nd._https(latest.get("html_url"))\n'),
+    ("M2698", "make release changes a table #roadmap would say « introuvable » (RM1, review)", RELS,
+     "    if rd.releases(roadmap) is None:\n        return roadmap\n", ""),
+    ("M2699", "a prose line starting with « # » ends the releases' section on #roadmap (RM1, review)", ROADMAP_D,
+     '    rest = rest[: next((i for i, x in enumerate(rest) if re.match(r"#{1,6} ", x)), len(rest))]',
+     '    rest = rest[: next((i for i, x in enumerate(rest) if x.startswith("#")), len(rest))]'),
+]
+TESTS.update({"M2696": "tests/unit/test_roadmap_discord.py", "M2697": "tests/unit/test_roadmap_discord.py",
+              "M2698": "tests/unit/test_release.py", "M2699": "tests/unit/test_roadmap_discord.py"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

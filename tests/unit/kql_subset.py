@@ -2,7 +2,7 @@
 as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 
 Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`count()`,
-`arg_max(col, *)`), `project`, `order by`, `limit`; predicates `==`, `!=`, `<`, `<=`, `>`, `>=`,
+`arg_max(col, *)`), `project`, `order by`, `limit`; predicates `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`,
 `has`, `!has`, `in (…)`, `matches regex`, `startswith`, `and`, `or`, `not(…)`; functions
 `ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`, `tostring()`. Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
@@ -125,10 +125,12 @@ class _Parser:
         left = self.primary()
         tok = self.peek()
         op = tok[1]
-        if op in ("==", "!=", ">=", "<=", ">", "<") and tok[0] == "op":
+        if op in ("==", "!=", "=~", ">=", "<=", ">", "<") and tok[0] == "op":
             self.take()
             right = self.primary()
             ops = {"==": lambda a, b: a == b, "!=": lambda a, b: a != b,
+                   # KQL's case-insensitive equality, on strings (COR2: a resource id).
+                   "=~": lambda a, b: isinstance(a, str) and isinstance(b, str) and a.lower() == b.lower(),
                    ">=": lambda a, b: a is not None and a >= b, "<=": lambda a, b: a is not None and a <= b,
                    ">": lambda a, b: a is not None and a > b, "<": lambda a, b: a is not None and a < b}
             f = ops[op]

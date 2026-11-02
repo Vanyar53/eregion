@@ -115,15 +115,27 @@ never_block: []
 # and root shells: sudo -i/-s, su, bash, python -c, find -exec, vim, less, screen…),
 # extended — never replaced — by sensitive_commands (texts found in the command
 # line, case ignored). Root shells make a card in their known forms; the list is
-# not exhaustive (a script not listed, `sudo /tmp/x.py`, passes) until COR1 (the
-# SSH session's origin) and AUD1 (auditd). Edit files with sudoedit. An account is
+# not exhaustive (a script not listed, `sudo /tmp/x.py`, passes) until AUD1
+# (auditd); COR1 sets aside a root shell by its SSH session's origin (below). Edit files with sudoedit. An account is
 # written in full, no pattern. Another account, `sudo -u other`, a line no VM
 # claims: always a card. Real account names belong in your local config only,
 # never in a repository.
 
+#
+# origins (COR1): where an entry's SSH sessions come from (CIDR ranges; a bastion is
+# a range). A root shell is set aside only if every session of the account, over 7
+# days, comes from one of them — read in the VM's Syslog only, a noise reducer.
+# origin_proof (COR2): a source outside the VM that must also show each of those
+# sessions — `bastion` (Azure Bastion's audit logs in the workspace) or `flows` (the
+# VNet's flow logs, traffic analytics); `none` (the default) keeps COR1. A trace
+# absent or unreadable: a card. Read docs/operations.md (« Déclarer la source qui
+# confirme l'origine sur H0 (COR2) ») before setting it.
+
 expected_sudo:
+  # origin_proof: bastion
   admins: []
     # - match: "vm-web-*"
     #   accounts: [admin1, ops]
+    #   origins: [198.51.100.0/26]   # the AzureBastionSubnet, the VPN's exit
   sensitive_commands: []
     # - "/usr/local/bin/backup-restore"

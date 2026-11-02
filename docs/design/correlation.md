@@ -1,10 +1,11 @@
-# La corrélation, brique du produit (COR1)
+# La corrélation, brique du produit (COR1, COR2)
 
 Décision de Jonathan (02/11), après la relecture d'ADM1 : « faire le meilleur ». Une détection qui
 relie deux événements vaut plus que deux détections isolées. La corrélation fait donc partie du produit :
 c'est une brique réutilisable de Glorfindel, pas l'astuce d'une règle.
 
-Code : `glorfindel/correlation.py`. Tests : `tests/unit/test_correlation.py`. Issue : #407.
+Code : `glorfindel/correlation.py`. Tests : `tests/unit/test_correlation.py`. Issues : #407 (COR1),
+#427 (COR2, l'origine confirmée hors de la VM).
 
 ## Où elle tourne
 
@@ -150,14 +151,70 @@ commence par « Connexion après brute force non vérifiée ». Les comptes port
 - **Un accès qui n'écrit aucune ligne de session n'est pas vu.** C'est le cas d'un service qui tourne
   sous le compte, ou d'une ligne perdue à l'ingestion. Lier une commande à sa session exacte (son
   terminal, son processus) demande `auditd` : c'est AUD1.
-- **Un réducteur de bruit, pas une preuve** (décision de Jonathan, 02/11). Tout utilisateur local
-  peut écrire une ligne de connexion sshd venant d'une origine déclarée (`logger -p auth.info -t
-  sshd`). L'écart par origine ne tient donc que contre un administrateur honnête et contre un intrus
-  qui ne connaît pas Eregion. Un intrus dont la vraie session est plus ancienne que la fenêtre, ou un
-  accès qui n'écrit aucune ligne de session, peut faire écarter un shell root seul. Les commandes
-  sensibles restent toujours une carte. Une ligne forgée n'efface jamais une session réelle vue dans
-  la fenêtre. La réponse est planifiée : l'origine confirmée hors de la VM (Bastion, flux réseau),
-  **COR2, #427**.
+- **Sans source déclarée, un réducteur de bruit, pas une preuve** (décision de Jonathan, 02/11).
+  Tout utilisateur local peut écrire une ligne de connexion sshd venant d'une origine déclarée
+  (`logger -p auth.info -t sshd`). L'écart par origine ne tient donc que contre un administrateur
+  honnête et contre un intrus qui ne connaît pas Eregion. Un intrus dont la vraie session est plus
+  ancienne que la fenêtre, ou un accès qui n'écrit aucune ligne de session, peut faire écarter un
+  shell root seul. Les commandes sensibles restent toujours une carte. Une ligne forgée n'efface
+  jamais une session réelle vue dans la fenêtre. **Avec une source déclarée, la limite de la ligne
+  forgée est levée** (COR2, ci-dessous) : une ligne écrite par `logger` n'a pas de trace hors de la
+  VM, et fait une carte. Le reste demeure ouvert, avec ou sans source : une session plus ancienne
+  que la fenêtre, un accès qui n'écrit aucune ligne de session ne sont toujours pas vus (AUD1, #408).
+
+## L'origine confirmée hors de la VM (COR2)
+
+Décision de Jonathan (02/11) : COR1 est livré comme réducteur de bruit, sa limite écrite ; COR2 la
+ferme par une preuve prise hors de la VM. Issue : #427.
+
+**La clé** : `expected_sudo.origin_proof`, une source parmi `none` (le défaut : COR1 tel quel),
+`bastion`, `flows`. Elle vaut pour toutes les entrées qui déclarent `origins`. Lue strictement : une
+autre valeur, un texte attendu et autre chose écrit, ou une source sans aucune entrée qui déclare
+`origins` (rien à confirmer) refusent le fichier.
+
+**La règle de l'écart.** Avec une source, un shell root ne s'écarte que si, en plus de COR1 (toutes
+les sessions des 7 jours viennent d'une origine déclarée, aucun compte pris par un autre), **chaque**
+session vue dans le Syslog a sa trace dans la source :
+
+| Source | Table lue | Une session est confirmée par |
+|---|---|---|
+| `bastion` | `MicrosoftAzureBastionAuditLogs` (les journaux d'audit d'Azure Bastion, dans le workspace) | une session Bastion vers cette VM (`TargetResourceId`, casse ignorée), par ce compte (`UserName`), ouverte (`SessionStartTime`) à 120 s au plus de la ligne `Accepted`. **Une session Bastion ne confirme qu'une session SSH** : une ligne forgée à l'instant d'une vraie session n'en trouve plus. Une session écrite deux fois (son `TunnelId`) compte une fois. |
+| `flows` | `NTANetAnalytics` (les journaux de flux du VNet, enrichis par traffic analytics) | un flux autorisé (`FlowStatus == "A"`, TCP) de l'adresse de la session (`SrcIp`) vers le port 22 de cette VM (`DestVm`, `<groupe>/<vm>`, casse ignorée), dont l'intervalle (`FlowStartTime`–`FlowEndTime`) couvre la ligne à 120 s près. |
+
+La VM est celle du registre (la ressource où la ligne a été routée), jamais celle qu'écrit la ligne.
+Les valeurs passent par `kql.literal`. La requête ne remonte que jusqu'à la plus ancienne session à
+confirmer (plus 120 s et 10 min de marge, 7 jours au plus), sur les comptes (Bastion) ou les
+adresses (flux) en cause, coupée à 1 000 lignes. Elle ne tourne que pour les shells root que COR1
+aurait écartés : une ligne déjà en carte par son origine n'en fait pas. C'est une requête de plus par
+VM, dans le même plafond de 4 par règle et par passe.
+
+**Inconnu, donc carte (A0).** Une trace absente fait une carte qui le dit (« session depuis
+198.51.100.7 (2026-11-02 10:00:00 UTC) sans trace dans Azure Bastion — origine non confirmée hors de
+la VM »), comptée `unconfirmed`. Une source illisible, coupée à sa limite, le plafond atteint, une
+VM que la source ne sait pas nommer, l'instant d'une session illisible : inconnu, une carte, compté
+`unknown`.
+
+**Dit.** Un shell root écarté avec sa preuve est journalisé avec la source (`proof`) et compté
+(`confirmed`, `origin_confirmed`). `glorfindel report` et la console disent, pour les shells root
+écartés par l'origine, « every one confirmed outside the VM (COR2) », ou « origin read in the VM
+only » quand aucune source ne les a confirmés.
+
+**Ce qu'elle ne fait pas encore.**
+
+- **Attendre la preuve.** Une trace écrite après le shell root (Bastion à la fin de la session,
+  traffic analytics par lots de 10 ou 60 minutes) est absente au moment de la décision : la ligne est
+  une carte. Selon la latence mesurée (B2, F4 dans `docs/operations.md`), un shell root ouvert juste
+  après la connexion fera une carte. Retenir la ligne jusqu'à l'arrivée de la preuve demande un état
+  « en attente » borné dans le RulePoller : un lot à part, si la mesure le justifie.
+- **Les flux prouvent une adresse, pas une session.** Les flux d'un même quadruplet sont agrégés : un
+  flux réel de l'origine couvre une ligne forgée à la même minute. C'est moins fort que Bastion.
+- **Une source par déploiement**, pas par entrée : une VM sans Bastion, la source étant `bastion`,
+  voit ses shells root en carte.
+- **Les tables et leurs colonnes sont des hypothèses** (la documentation publique de Microsoft Learn,
+  pas une mesure) : B1–B5 et F1–F4 dans `docs/operations.md`, à trancher au banc avec Jonathan.
+- **Bastion ne nomme pas l'adresse de l'instance** d'où vient la session sur la VM : « même
+  origine » se réduit, pour Bastion, à l'origine déclarée (la plage d'`AzureBastionSubnet`) plus la
+  VM, le compte et l'instant.
 - **Pour le brute force, l'ordre n'est pas vérifié.** La ligne agrégée ne dit pas l'instant du premier
   échec : une connexion réussie depuis l'adresse, n'importe où dans la fenêtre, suffit. Une
   connexion réussie juste avant les échecs est aussi suspecte. La dédup tient pour une ligne

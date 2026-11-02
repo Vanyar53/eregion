@@ -1,4 +1,4 @@
-"""How the console reads runs/ (SEC15, #425): as the watch reads it (glorfindel/channel_reader.py).
+"""How the console reads runs/ (SEC15, #425): as the watch reads it (eregion_core/channel_reader.py).
 
 runs/ is written by other containers than the console — the injectors, the CLI, the watch, the
 pulls of the exercise channel. Every read of it here:
@@ -21,10 +21,12 @@ import json
 import os
 import stat
 
-# A watch's debug file, the manual actions: a few hundred kilobytes over weeks.
-MAX_BYTES = 16 * 1024 * 1024
-# A run report, an exercise window, a status, a manifest: a few kilobytes.
-JSON_MAX_BYTES = 1024 * 1024
+from eregion_core import channel_reader
+
+# A watch's debug file, the manual actions; a run report, an exercise window, a status, a
+# manifest — the bounds of the one reader (SEC16, eregion_core/channel_reader.py).
+MAX_BYTES = channel_reader.FILE_BYTES
+JSON_MAX_BYTES = channel_reader.DOC_BYTES
 
 _said: dict[str, str] = {}
 # A link, as ``channel_reader.open_regular`` refuses it.
@@ -49,9 +51,8 @@ def shown(path) -> str:
 
 def _read(path, max_bytes: int) -> tuple[bytes | None, str]:
     """The file's bytes and '' — or None and why it is not read ('' when it is not there)."""
-    from glorfindel import channel_reader
     try:
-        fd = channel_reader.open_regular(path)
+        return channel_reader.read_file(path, max_bytes), ""
     except channel_reader.Refused as exc:
         say_refused(path, str(exc))
         return None, str(exc)
@@ -59,13 +60,6 @@ def _read(path, max_bytes: int) -> tuple[bytes | None, str]:
         return None, ""
     except OSError as exc:
         return None, exc.strerror or type(exc).__name__
-    with os.fdopen(fd, "rb") as f:
-        data = f.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        why = f"plus de {max_bytes} octets"
-        say_refused(path, why)
-        return None, why
-    return data, ""
 
 
 def read_bytes(path, max_bytes: int = MAX_BYTES) -> bytes | None:
@@ -104,7 +98,6 @@ def lines(path, max_bytes: int = MAX_BYTES) -> list[str]:
 def tail(path) -> list[str]:
     """The last lines of a file of runs/ (``channel_reader.tail_lines``) — [] when it is refused
     (said once) or gone: the feed and the TUI show what was written lately, never the whole."""
-    from glorfindel import channel_reader
     try:
         return channel_reader.tail_lines(path)
     except channel_reader.Refused as exc:
@@ -124,6 +117,5 @@ def regular(path) -> os.stat_result | None:
         return None
     if stat.S_ISREG(st.st_mode):
         return st
-    from glorfindel import channel_reader
     say_refused(path, LINK if stat.S_ISLNK(st.st_mode) else channel_reader._kind(st.st_mode))
     return None

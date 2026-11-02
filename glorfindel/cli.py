@@ -26,7 +26,6 @@ def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
     import json as _json
     from datetime import datetime, timezone as _tz
     runs = Path("runs")
-    runs.mkdir(exist_ok=True)
     record = {
         "timestamp": datetime.now(_tz.utc).isoformat(),
         "action": action,
@@ -35,8 +34,18 @@ def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
         "signal": {"resource_id": resource_id, "ttp": "", "severity": ""},
         "outcome": outcome,
     }
-    with open(runs / "manual_actions.jsonl", "a") as f:
-        f.write(_json.dumps(record) + "\n")
+    # SEC16: a regular file only, never through a link, never blocking — refused, or any error of
+    # the write, the action stands (it was made), and it is said once.
+    from eregion_core import channel_reader
+    path = runs / "manual_actions.jsonl"
+    try:
+        runs.mkdir(exist_ok=True)
+        channel_reader.append_line(path, _json.dumps(record))
+    except OSError as exc:
+        why = channel_reader.why_not_written(exc)
+        if channel_reader.say_once(path, why):
+            console.print(f"[yellow]{_esc_markup(str(path))} : {_esc_markup(why)} — l'action n'y est pas "
+                          "notée (runs/ s'écrit comme il se lit)[/yellow]")
 
 
 def _backup_vault_from_config(vault: str | None) -> tuple[str, str, str]:
@@ -560,7 +569,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # CHANNEL_POLLS in all), its lines waiting per VM (CHANNEL_QUEUED_PER_VM), the VMs it names
     # (CHANNEL_VMS). Beyond, a line is refused and said, never a thread or a queue grown. The
     # RulePoller's detections are never held by these bounds.
-    from glorfindel.channel_reader import CHANNEL_POLLS, CHANNEL_QUEUED_PER_VM, CHANNEL_VMS
+    from eregion_core.channel_reader import CHANNEL_POLLS, CHANNEL_QUEUED_PER_VM, CHANNEL_VMS
     _channel_lock = _threading.Lock()
     _channel_polls: set[tuple[str, str]] = set()
     _channel_waiting: dict[str, int] = {}
@@ -712,9 +721,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
     # SEC8 (#414): runs/ read as an input the watch does not trust — a regular file only,
     # never a link, never blocking; a bounded read per file and per poll, a bounded rate
-    # (glorfindel/channel_reader.py). Files there at startup: read from their end.
+    # (eregion_core/channel_reader.py). Files there at startup: read from their end.
     from glorfindel import signal_origin as _origin
-    from glorfindel.channel_reader import PER_WRITER_PER_MIN, ChannelReader
+    from eregion_core.channel_reader import PER_WRITER_PER_MIN, ChannelReader
 
     def _say_channel(text: str, kind: str = "refused") -> None:
         with _output_lock:

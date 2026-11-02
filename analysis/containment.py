@@ -49,13 +49,14 @@ report feed it).
 from __future__ import annotations
 
 import json
+import os
 import statistics
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from eregion_core import run_report
+from eregion_core import channel_reader, run_report
 from eregion_core.run_report import CONTAINING as DISRUPTIVE   # C1: one list of what contains
 
 # The exercise window's grace (eregion_core/exercise.py GRACE_AFTER_S): how long after the
@@ -641,10 +642,10 @@ def read_liftings(runs_dir: Path, since: float = 0.0) -> list[tuple]:
     out = []
     paths = [Path(runs_dir) / "manual_actions.jsonl", *sorted(Path(runs_dir).glob("*_debug.jsonl"))]
     for path in paths:
-        try:
-            if path.stat().st_mtime < since - 60:
+        try:   # SEC16: as the watch reads runs/ — a regular file, bounded, never blocking
+            if channel_reader.lstat_regular(path).st_mtime < since - 60:
                 continue
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = channel_reader.read_text(path).splitlines()
         except (OSError, UnicodeDecodeError):
             continue
         for line in lines:
@@ -661,8 +662,8 @@ def _gothmog_reports(runs_dir: Path) -> dict[str, dict]:
     out = {}
     for path in sorted(Path(runs_dir).glob("*.json")):
         try:
-            r = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError):
+            r = channel_reader.read_json(path)   # SEC16
+        except (OSError, ValueError):
             continue
         if isinstance(r, dict) and isinstance(r.get("metrics"), dict) \
                 and run_report.kind_of(r) == "fault":       # C1's word, else Gothmog's
@@ -806,7 +807,7 @@ def campaign_interval(manifest: dict, campaign_dir: Path, runs_dir: Path,
     from analysis import campaign_report as cr
     campaign_dir = Path(campaign_dir)
     try:
-        hi = (campaign_dir / "manifest.json").stat().st_mtime + CLOCK_SKEW_S
+        hi = channel_reader.lstat_regular(campaign_dir / "manifest.json").st_mtime + CLOCK_SKEW_S
     except OSError as e:
         notes.append(f"runs vus par la watch non cherchés : l'heure d'écriture du manifeste ici est "
                      f"illisible ({type(e).__name__})")
@@ -816,7 +817,7 @@ def campaign_interval(manifest: dict, campaign_dir: Path, runs_dir: Path,
     before = []
     for other in campaign_dir.parent.glob("*/manifest.json"):
         try:
-            if other.parent != campaign_dir and (m := other.stat().st_mtime) < hi - CLOCK_SKEW_S:
+            if other.parent != campaign_dir and (m := os.lstat(other).st_mtime) < hi - CLOCK_SKEW_S:
                 before.append(m)
         except OSError:
             continue

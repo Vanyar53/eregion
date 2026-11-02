@@ -54,7 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from analysis import campaign_schema
-from eregion_core import exercise_channel
+from eregion_core import channel_reader, exercise_channel
 from eregion_core.exercise import GRACE_AFTER_S, MAX_DURATION_S
 
 MAX_ATTEMPTS = 3
@@ -94,7 +94,7 @@ def attempts(cdir: Path) -> int:
     """How many times the report of this campaign has failed already: the larger of what
     ``report.error`` says and what this process counted."""
     try:
-        noted = int(json.loads((cdir / ERROR).read_text(encoding="utf-8")).get("attempts") or 0)
+        noted = int(channel_reader.read_json(cdir / ERROR).get("attempts") or 0)
     except (OSError, ValueError, TypeError, AttributeError):
         noted = 0
     with _failures_lock:
@@ -159,12 +159,13 @@ def ready(campaigns_root: Path, *, failed=frozenset(), say=_say) -> list[Path]:
     if not root.is_dir():
         return []
     out = []
-    for cdir in sorted(p for p in root.iterdir() if p.is_dir()):
+    # SEC16: a campaign's directory itself, never one a link points to.
+    for cdir in sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink()):
         if (cdir.name in failed or not (cdir / exercise_channel.PULLED).exists()
-                or (cdir / REPORT).exists() or attempts(cdir) >= MAX_ATTEMPTS):
+                or _reported(cdir) or attempts(cdir) >= MAX_ATTEMPTS):
             continue
         try:
-            manifest = json.loads((cdir / "manifest.json").read_text(encoding="utf-8"))
+            manifest = channel_reader.read_json(cdir / "manifest.json")   # SEC16
         except (OSError, ValueError):
             continue
         # H-1: the manifest was written on another host — read against its shape first.
@@ -195,7 +196,7 @@ def _parse(value) -> float | None:
 def _arrival(cdir: Path) -> float:
     """When the manifest came here (its local copy's mtime)."""
     try:
-        return (cdir / "manifest.json").stat().st_mtime
+        return channel_reader.lstat_regular(cdir / "manifest.json").st_mtime
     except OSError:
         return time.time()
 
@@ -205,7 +206,7 @@ def campaign_end(cdir: Path) -> float:
     manifest's ``updated_at`` (written at ``done``), never later than when its manifest came
     here (which follows the end) — and that, without a readable date."""
     try:
-        manifest = json.loads((cdir / "manifest.json").read_text(encoding="utf-8"))
+        manifest = channel_reader.read_json(cdir / "manifest.json")   # SEC16
     except (OSError, ValueError):
         manifest = {}
     manifest = manifest if isinstance(manifest, dict) else {}
@@ -266,14 +267,25 @@ def due(campaigns_root: Path, *, failed=frozenset(), runs_dir: Path | None = Non
             if not waits_for_decisions(cdir, runs, now=now, say=say)]
 
 
+def _reported(cdir: Path) -> bool:
+    """Its report is there: a regular file (SEC16). Anything else in its place — a link, even to a
+    report, a pipe — is no report: the campaign stays to report, and its report, once written,
+    replaces it (``channel_reader.write_file``)."""
+    try:
+        channel_reader.lstat_regular(cdir / REPORT)
+    except OSError:
+        return False
+    return True
+
+
 def _note_failure(cdir: Path, error: Exception) -> int:
     n = attempts(cdir) + 1
     with _failures_lock:
         _failures[_key(cdir)] = n
     try:
-        (cdir / ERROR).write_text(json.dumps({
+        channel_reader.write_file(cdir / ERROR, json.dumps({     # SEC16: never through a link
             "attempts": n, "error": f"{type(error).__name__}: {str(error)[:300]}",
-            "at": datetime.now(timezone.utc).isoformat()}, indent=2), encoding="utf-8")
+            "at": datetime.now(timezone.utc).isoformat()}, indent=2))
     except OSError:
         pass  # not noted on disk: the thread's own count still ends the attempts
     return n
@@ -286,7 +298,7 @@ def write_report(cdir: Path, *, model: str | None = None, llm=None,
     (another pass holds the campaign) or ``failed: …``. Never raises."""
     cdir = Path(cdir)
     try:
-        fd = os.open(cdir / LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+        fd = channel_reader.open_lock(cdir / LOCK)   # SEC16: a regular file, never through a link
     except OSError as e:  # no model called, so no attempt counted: said once while it lasts
         _say_once(cdir, "lock", f"{cdir.name}: report not written, its lock cannot be opened "
                                 f"({type(e).__name__}: {e}) — tried again at the next pull",
@@ -298,7 +310,7 @@ def write_report(cdir: Path, *, model: str | None = None, llm=None,
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return "busy"
-        if (cdir / REPORT).exists():  # written by a pass that held the lock before us
+        if _reported(cdir):  # written by a pass that held the lock before us
             return "exists"
         try:
             from analysis import campaign_report as cr
@@ -308,9 +320,8 @@ def write_report(cdir: Path, *, model: str | None = None, llm=None,
             # strict: an answer without the tool's call is a failed attempt, never an
             # empty report written for good.
             report = cr.build(cdir, model=model, llm=llm, index_path=index_path, strict=True)
-            tmp = cdir / (REPORT + ".tmp")
-            tmp.write_text(cr.render(report), encoding="utf-8")
-            tmp.replace(cdir / REPORT)
+            # SEC16: written beside it in a new file, renamed over it — a link never followed.
+            channel_reader.write_file(cdir / REPORT, cr.render(report))
         except Exception as e:  # the model, the index, the files: noted, tried again later
             n = _note_failure(cdir, e)
             if n >= MAX_ATTEMPTS:

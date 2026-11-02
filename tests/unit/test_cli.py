@@ -118,9 +118,9 @@ def _sig_line(**over):
 
 
 def _read(f, offset=0):
-    """The watch's read of one file of runs/ (glorfindel/channel_reader.py), each line parsed
+    """The watch's read of one file of runs/ (eregion_core/channel_reader.py), each line parsed
     as the watch parses it: ([(data, Signal)], what was said, the new offset)."""
-    from glorfindel.channel_reader import read_lines
+    from eregion_core.channel_reader import read_lines
     from glorfindel.cli import _parsed_or_said
     got = read_lines(f, offset)
     said: list[str] = []

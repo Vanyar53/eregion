@@ -559,7 +559,7 @@ MUTANTS = [
      "        except Exception as e:  # the model, the index, the files: noted, tried again later\n",
      "        except OSError as e:  # the model, the index, the files: noted, tried again later\n"),
     ("M134", "a report already written is written again (#167)", HREP,
-     "        if (cdir / REPORT).exists():  # written by a pass that held the lock before us\n",
+     "        if _reported(cdir):  # written by a pass that held the lock before us\n",
      "        if False:  # written by a pass that held the lock before us\n"),
     ("M135", "two passes write the same report at once, no lock (#167)", HREP,
      "            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
@@ -581,8 +581,8 @@ MUTANTS = [
      '        if manifest.get("state") != "done":\n',
      '        if manifest.get("state") not in ("done", "aborted"):\n'),
     ("M142", "a failing report is tried again without end (#167)", HREP,
-     "                or (cdir / REPORT).exists() or attempts(cdir) >= MAX_ATTEMPTS):\n",
-     "                or (cdir / REPORT).exists()):\n"),
+     "                or _reported(cdir) or attempts(cdir) >= MAX_ATTEMPTS):\n",
+     "                or _reported(cdir)):\n"),
     ("M143", "the attempts are counted in report.error only: unwritable, the model is called without end (#167)",
      HREP, "        return max(noted, _failures.get(_key(cdir), 0))\n", "        return noted\n"),
     ("M144", "a detected run's decision not yet in the watch's files does not hold the report back (#167)",
@@ -7826,11 +7826,12 @@ TESTS.update({f"M{n}": _SEC9 for n in range(2960, 2965)})
 # files only, a bounded read and rate, bounded effects, finite durations, known techniques, the
 # config's workspace, a restore's moment never the channel's on a real incident, ARM calls built
 # from the parts read of an id.
-CRD = "glorfindel/channel_reader.py"
+CRD = "eregion_core/channel_reader.py"   # SEC16 (#438): moved from glorfindel/, its mutants with it
 SEC8_TESTS = "tests/unit/test_runs_channel.py"
 MUTANTS += [
     ("M2810", "a link in runs/ followed: a file elsewhere, a device without end, read (SEC8)", CRD,
-     '| getattr(os, "O_NOFOLLOW", 0) ', ""),
+     '_FLAGS = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | ',
+     '_FLAGS = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | '),
     ("M2811", "a FIFO in runs/ opened blocking: the watch's loop waits on it (SEC8)", CRD,
      '| getattr(os, "O_NONBLOCK", 0) ', ""),
     ("M2812", "an entry of runs/ read whatever it is: a pipe, a device (SEC8)", CRD,
@@ -8233,11 +8234,11 @@ _SEC15 = ("tests/unit/test_console_exercises.py tests/unit/test_console.py tests
           "tests/unit/test_console_dagorlad_follow.py")
 _SEC15_T0 = "tests/unit/test_indicators.py tests/unit/test_console_dagorlad_follow.py"
 MUTANTS += [
-    ("M3000", "a file of runs/ larger than its bound read whole (SEC15)", RRD,
-     "    if len(data) > max_bytes:\n", "    if False:\n"),
+    ("M3000", "a file of runs/ larger than its bound read whole (SEC15; SEC16: the one reader)", CRD,
+     "    if len(data) > max_bytes:\n        raise Refused(", "    if False:\n        raise Refused("),
     ("M3001", "the console's reader opens a file of runs/ as any file: a pipe blocks, a link is followed (SEC15)",
-     RRD, "        fd = channel_reader.open_regular(path)\n    except channel_reader.Refused as exc:\n        say_refused(path, str(exc))\n        return None, str(exc)\n",
-     "        fd = os.open(path, os.O_RDONLY)\n    except channel_reader.Refused as exc:\n        say_refused(path, str(exc))\n        return None, str(exc)\n"),
+     RRD, '        return channel_reader.read_file(path, max_bytes), ""\n',
+     '        return open(path, "rb").read(), ""\n'),
     ("M3002", "a refused file of runs/ said again at every read (SEC15)", RRD,
      "    if _said.get(key) != why:\n", "    if True:\n"),
     ("M3003", "the exercise windows read as any file (SEC15)", CON,
@@ -8347,6 +8348,56 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": _SEC15 for n in (3139, 3142, 3143, 3144)})
 TESTS.update({f"M{n}": _SEC15_T0 + " tests/unit/test_coverage.py" for n in (3136, 3137, 3138, 3140, 3141, 3145)})
+# SEC16 (#438): one reader of runs/ for every component (eregion_core/channel_reader.py: the watch,
+# the console, the analysis, Annatar), and the writes into runs/ held as its reads — a regular file
+# only, never through a link, never blocking; refused, said once, the cycle or the action going on.
+# M3110–M3119.
+_SEC16 = ("tests/unit/test_runs_channel.py tests/unit/test_console_exercises.py "
+          "tests/unit/test_hosted_report.py tests/unit/test_annatar_detection.py")
+MUTANTS += [
+    ("M3110", "a line appended to runs/ through a link: written where it points (SEC16)", CRD,
+     '_APPEND = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NONBLOCK", 0)\n           | getattr(os, "O_NOFOLLOW", 0) | ',
+     '_APPEND = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NONBLOCK", 0)\n           | '),
+    ("M3111", "a line appended to a pipe of runs/ waits for its reader: the writer blocks (SEC16)", CRD,
+     '_APPEND = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NONBLOCK", 0)\n',
+     '_APPEND = (os.O_WRONLY | os.O_APPEND | os.O_CREAT\n'),
+    ("M3112", "a line written into a pipe of runs/ someone reads (SEC16)", CRD,
+     "        if not stat.S_ISREG(mode_):\n", "        if False:\n"),
+    ("M3114", "the CLI notes an operator's action through a link of runs/ (SEC16)", GCLI,
+     "        channel_reader.append_line(path, _json.dumps(record))\n",
+     '        open(path, "a").write(_json.dumps(record) + "\\n")\n'),
+    ("M3115", "the watch writes a cycle's line through a link of runs/, or blocks on a pipe (SEC16)",
+     "glorfindel/agent.py",
+     "        channel_reader.append_line(out, json.dumps(debug_record, default=str))\n",
+     '        open(out, "a").write(json.dumps(debug_record, default=str) + "\\n")\n'),
+    ("M3116", "a cycle's line refused cuts the watch's cycle (SEC16; OV1, BL1)", "glorfindel/agent.py",
+     "    except OSError as exc:\n        why = channel_reader.why_not_written(exc)\n        if channel_reader.say_once(out, why):\n            _console.print(f\"[red]debug",
+     "    except OSError as exc:\n        raise\n        why = channel_reader.why_not_written(exc)\n        if channel_reader.say_once(out, why):\n            _console.print(f\"[red]debug"),
+    ("M3117", "a campaign's report written through a link of runs/ (SEC16)", CRD,
+     "        os.replace(tmp, path)\n", "        Path(path).write_text(Path(tmp).read_text(encoding=\"utf-8\"), encoding=\"utf-8\")\n"),
+    ("M3118", "a campaign's report or page reads runs/ as any file: a pipe blocks it, a link is followed (SEC16)",
+     CREP, "            data = channel_reader.read_json(path)\n",
+     '            data = json.loads(Path(path).read_text(encoding="utf-8"))\n'),
+    ("M3119", "Annatar reads the watch's file as any file: a pipe blocks the run (SEC16)", DET,
+     "        text = channel_reader.read_text(path)\n", '        text = Path(path).read_text(encoding="utf-8")\n'),
+]
+TESTS.update({f"M{n}": _SEC16 for n in range(3110, 3120) if n != 3113})   # M3113: its writer gone (review)
+# SEC16, its 5.5 review: a directory in the place of a line, any error of the watch's write, the
+# lock a regular file, a link to a report no report. M3146–M3149.
+MUTANTS += [
+    ("M3146", "a directory in the place of a line of runs/ raises, never refused (SEC16)", CRD,
+     '    if exc.errno == errno.EISDIR:\n        raise Refused("un répertoire") from None\n', ""),
+    ("M3147", "a cycle's line that fails to be written (a disk full) cuts the watch's cycle (SEC16)",
+     "glorfindel/agent.py",
+     "    except OSError as exc:\n        why = channel_reader.why_not_written(exc)\n        if channel_reader.say_once(out, why):\n",
+     "    except channel_reader.Refused as exc:\n        why = channel_reader.why_not_written(exc)\n        if channel_reader.say_once(out, why):\n"),
+    ("M3148", "a pipe or a directory taken for a campaign's lock (SEC16)", CRD,
+     "    if not stat.S_ISREG(kind):\n        os.close(fd)\n        raise Refused(_kind(kind))\n    return fd\n",
+     "    return fd\n"),
+    ("M3149", "a link to a report taken for the campaign's report: never written (SEC16)", HREP,
+     "        channel_reader.lstat_regular(cdir / REPORT)\n", "        (cdir / REPORT).stat()\n"),
+]
+TESTS.update({f"M{n}": _SEC16 for n in range(3146, 3150)})
 
 
 # MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the

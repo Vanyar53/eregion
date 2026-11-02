@@ -436,10 +436,10 @@ def _regular_by_age(runs: Path, pattern: str) -> list[Path]:
 
 
 def _load_feed(max_entries: int = 60) -> list[str]:
-    """The last run's lines, read as the watch reads runs/ (SEC15, glorfindel/channel_reader.py):
+    """The last run's lines, read as the watch reads runs/ (SEC15, eregion_core/channel_reader.py):
     the end of each file, never the whole of it, never through a link, never blocking — a file
     that is not a regular one is said, never read."""
-    from glorfindel import channel_reader
+    from eregion_core import channel_reader
     runs = Path("runs")
     if not runs.exists():
         return ["[dim]No runs/ directory — start an annatar run[/dim]"]

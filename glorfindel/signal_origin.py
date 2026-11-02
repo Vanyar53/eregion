@@ -36,7 +36,7 @@ the same boundary, plus a key to keep.
 The moment of a restore (`attack_moment`, SEC8): a line counts only for an exercise card tied
 to its run, never for a moment after the card's first detection — never on a real incident
 (glorfindel/restore_plan.py). How the files are read — regular files only, bounded, a bounded
-rate — is glorfindel/channel_reader.py.
+rate — is eregion_core/channel_reader.py.
 """
 from __future__ import annotations
 
@@ -332,10 +332,10 @@ MOMENT_TAIL_BYTES = 1 << 20
 def _tail_lines(path: Path, limit: int | None = None) -> list[str]:
     """The lines of the last `limit` bytes of `path` (default MOMENT_TAIL_BYTES; a line cut
     at the start dropped). A regular file only, opened without blocking or following a link
-    (SEC8, glorfindel/channel_reader.py): anything else raises an OSError."""
+    (SEC8, eregion_core/channel_reader.py): anything else raises an OSError."""
     import os
 
-    from glorfindel.channel_reader import open_regular
+    from eregion_core.channel_reader import open_regular
     limit = MOMENT_TAIL_BYTES if limit is None else limit
     with os.fdopen(open_regular(path), "rb") as f:
         f.seek(0, 2)

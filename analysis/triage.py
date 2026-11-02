@@ -715,7 +715,8 @@ LOCK = ".triage.lock"
 
 @contextmanager
 def _locked(campaign_dir: Path):
-    fd = os.open(Path(campaign_dir) / LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+    from eregion_core import channel_reader
+    fd = channel_reader.open_lock(Path(campaign_dir) / LOCK)   # SEC16: a regular file, never through a link
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)    # a decision is quick: wait for the other
         yield

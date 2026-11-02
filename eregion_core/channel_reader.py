@@ -1,4 +1,8 @@
-"""How the watch reads the runs/ channel (SEC8, #414): as an input it does not trust.
+"""How Eregion reads the runs/ channel (SEC8, #414): as an input it does not trust — one reader
+for every component (SEC16, #438): the watch, the console (eregion_console/runs_reader.py), the
+analysis (a campaign's report and page), Annatar's reading of the watch's files. And how they
+write there: a regular file only, never through a link, never blocking (``append_line``,
+``write_file``).
 
 runs/ is written by other containers than the watch (the injectors, the console's CLI). The
 watch's loop reads it between the reassertion, the TTL checks and the heartbeat: a read that
@@ -24,7 +28,9 @@ The lines read are then admitted, or refused, by `glorfindel/signal_origin.py`.
 """
 from __future__ import annotations
 
+import contextlib
 import errno
+import json
 import os
 import stat
 import threading
@@ -176,6 +182,143 @@ def tail_lines(path, max_bytes: int = READ_BYTES, max_lines: int = READ_LINES) -
         data = data[nl + 1:] if nl >= 0 else b""
     ended = data.split(b"\n")[:-1]        # what follows the last newline is not ended yet
     return [line.decode("utf-8", errors="replace") for line in ended if len(line) <= LINE_BYTES][-max_lines:]
+
+
+# A whole file read at once (``read_file``): a watch's debug file, the operator's manual actions —
+# a few hundred kilobytes over weeks; a report, a window, a manifest, a status — a few kilobytes.
+FILE_BYTES = 16 * 1024 * 1024
+DOC_BYTES = 1024 * 1024
+
+
+def read_file(path, max_bytes: int = FILE_BYTES) -> bytes:
+    """The whole of a regular file of runs/ (``open_regular``: never blocks, never follows a link),
+    at most ``max_bytes`` — a file larger is refused, never cut and read as if it were whole.
+    Raises Refused, or OSError (gone)."""
+    fd = open_regular(path)
+    with os.fdopen(fd, "rb") as f:
+        data = f.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise Refused(f"plus de {max_bytes} octets")
+    return data
+
+
+def read_text(path, max_bytes: int = FILE_BYTES) -> str:
+    """``read_file``, as UTF-8 (UnicodeDecodeError when it is not)."""
+    return read_file(path, max_bytes).decode("utf-8")
+
+
+def read_json(path, max_bytes: int = DOC_BYTES):
+    """A JSON document of runs/, read by ``read_file`` — ValueError when it is not JSON."""
+    return json.loads(read_text(path, max_bytes))
+
+
+def lstat_regular(path) -> os.stat_result:
+    """The lstat of a regular file of runs/ — its age, its size — never through a link: anything
+    else is Refused, in the words ``open_regular`` uses; OSError when it is gone."""
+    st = os.lstat(path)
+    if not stat.S_ISREG(st.st_mode):
+        raise Refused("un lien, jamais suivi" if stat.S_ISLNK(st.st_mode) else _kind(st.st_mode))
+    return st
+
+
+_APPEND = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NONBLOCK", 0)
+           | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+
+
+def append_line(path, line: str, mode: int = 0o644) -> None:
+    """Append one whole line to a regular file of runs/, created when absent (SEC16): never
+    through a link, never blocking — a pipe without a reader refuses at once —, anything but a
+    regular file refused (Refused), its line written whole in one write (``O_APPEND``)."""
+    try:
+        fd = os.open(path, _APPEND, mode)
+    except OSError as exc:
+        _refuse_open(path, exc)
+        raise
+    try:
+        mode_ = os.fstat(fd).st_mode
+        if not stat.S_ISREG(mode_):
+            raise Refused(_kind(mode_))
+        data = (line.rstrip("\n") + "\n").encode("utf-8")
+        while data:
+            data = data[os.write(fd, data):]
+    finally:
+        os.close(fd)
+
+
+def _refuse_open(path, exc: OSError) -> None:
+    """An open for writing that failed on what is in the file's place: Refused, in the words a
+    read would use — a link, a directory, a pipe no one reads, a socket. Any other failure:
+    nothing raised here (the caller raises it)."""
+    if exc.errno == errno.ELOOP:
+        raise Refused("un lien, jamais suivi") from None
+    if exc.errno == errno.EISDIR:
+        raise Refused("un répertoire") from None
+    if exc.errno in (errno.ENXIO, errno.EOPNOTSUPP):     # a pipe no one reads, a socket
+        try:
+            kind = _kind(os.lstat(path).st_mode)
+        except OSError:
+            kind = "pas un fichier ordinaire"
+        raise Refused(kind) from None
+
+
+_LOCK = (os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+         | getattr(os, "O_CLOEXEC", 0))
+
+
+def open_lock(path, mode: int = 0o644) -> int:
+    """A descriptor on a lock of runs/ (a campaign's report, its triage), created when absent: a
+    regular file only (``fstat``), never through a link, never blocking — anything else is Refused
+    (SEC16)."""
+    try:
+        fd = os.open(path, _LOCK, mode)
+    except OSError as exc:
+        _refuse_open(path, exc)
+        raise
+    try:
+        kind = os.fstat(fd).st_mode
+    except OSError:
+        os.close(fd)
+        raise
+    if not stat.S_ISREG(kind):
+        os.close(fd)
+        raise Refused(_kind(kind))
+    return fd
+
+_said_writes: dict[str, str] = {}
+
+
+def say_once(path, why: str) -> bool:
+    """True the first time this process meets ``path`` refused for ``why`` (again when ``why``
+    changes), whatever name it is written by: a refused write said once, never at every one."""
+    key = os.path.abspath(path)
+    if _said_writes.get(key) == why:
+        return False
+    _said_writes[key] = why
+    return True
+
+
+def why_not_written(exc: OSError) -> str:
+    """What a write into runs/ met, said: a refusal in its own words, else the error (a disk full,
+    a directory missing)."""
+    return str(exc) if isinstance(exc, Refused) else f"{type(exc).__name__}: {exc.strerror or exc}"
+
+
+def write_file(path, text: str, mode: int = 0o644) -> None:
+    """Write a whole file of runs/ (a campaign's report, its notes) at once: in a new file beside
+    it (``mkstemp``: created, never opened through a link), then renamed over it — a link in its
+    place is replaced, never followed (SEC16). Raises OSError."""
+    import tempfile
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 class Budget:

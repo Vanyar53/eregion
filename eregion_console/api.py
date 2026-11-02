@@ -1033,10 +1033,10 @@ def _feed_start() -> dict[Path, tuple[int, int | None, bool]]:
 
 def _feed_new(state: dict[Path, tuple[int, int | None, bool]]) -> list[dict]:
     """What runs/ gained since the last turn, read as the watch reads it (SEC15,
-    glorfindel/channel_reader.py ``read_lines``): a regular file only, never blocking, never
+    eregion_core/channel_reader.py ``read_lines``): a regular file only, never blocking, never
     through a link, a bounded read per turn — the rest waits for the next one, from the offset
     kept. A file refused is said once. A file not there at the start is read from its start."""
-    from glorfindel import channel_reader
+    from eregion_core import channel_reader
     out = []
     for pat, kind in _FEED_FILES:
         for f in _RUNS.glob(pat):
@@ -2080,22 +2080,6 @@ def _find_resource_id(vm_name: str) -> str | None:
             f"{vm_name} désigne {len(found)} VMs ({', '.join(sorted(found))}) : action refusée "
             "depuis la console — utiliser la CLI avec l'ID de ressource complet.")
     return next(iter(found.values()), None)
-
-
-def _write_manual_feed(action: str, resource_id: str, outcome: dict) -> None:
-    """Write an operator action entry to runs/manual_actions.jsonl for the live feed."""
-    runs = Path("runs")
-    runs.mkdir(exist_ok=True)
-    entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "action": action,
-        "confidence": 1.0,
-        "escalate": False,
-        "signal": {"resource_id": resource_id, "ttp": "", "severity": ""},
-        "outcome": outcome,
-    }
-    with open(runs / "manual_actions.jsonl", "a") as f:
-        f.write(json.dumps(entry) + "\n")
 
 
 def _extract_conclusion(text: str, max_chars: int = 120) -> str:

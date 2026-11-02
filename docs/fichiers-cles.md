@@ -365,8 +365,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 (`glorfindel/signal_origin.py`) ; plus `runs/recovery/`, que les injecteurs écrivent
   channel_refusals.json       → SEC3 (V-05) : les lignes de `runs/` que la watch a refusées, comptées par événement
                                 (la dernière : fichier, heure, raison)
-  console_token               → SEC1 : le jeton que la console a tiré à son premier démarrage sans
-                                EREGION_CONSOLE_TOKEN (mode 600, relu ensuite) ; jamais écrit quand la variable est posée (H0)
+  console_token               → ancien emplacement du jeton tiré de la console : retiré à son premier
+                                démarrage depuis SEC10 (le jeton vit dans ~/.eregion/console/token)
   incidents.jsonl             → incidents actifs ; écrit par la watch et `glorfindel respond` : sous flock
                                 (`incidents.jsonl.lock`), réécrit entier, 0600 (SEC13, V-10 ; `test_locks.py`,
                                 deux vrais processus)

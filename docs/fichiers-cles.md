@@ -20,6 +20,11 @@ technique_catalog.yaml          → CONTRAT PARTAGÉ Annatar↔Glorfindel (boucl
                                    Annatar. status: implemented | planned. Versionné (≠ config locale) ;
                                    monté en Docker (compose) + COPY Dockerfile (image autonome).
 
+eregion_core/channel_reader.py  → SEC8, SEC16 : le seul lecteur de runs/, pour tous les composants (la watch,
+                                   la console, l'analyse, Annatar) — un fichier ordinaire seulement, jamais à
+                                   travers un lien, jamais bloquant, une lecture bornée ; et l'écriture tenue de
+                                   même (append_line : une ligne entière ; write_file : un fichier remplacé, un lien
+                                   jamais suivi). Jusqu'à SEC16 : glorfindel/channel_reader.py.
 eregion_core/exercise.py        → B2 : fenêtres d'exercice des injecteurs. Annatar en ouvre une avant de toucher sa
                                    cible (setup compris) et la ferme en fin de run : runs/exercises/<run_id>.json
                                    (run_id, injector, kind, experiment, targets, start, end, expires ; ou
@@ -209,7 +214,7 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           confronté comme sur l'accueil (indicators.t0_confronted, SEC15) ;
                           `GET /api/dagorlad/requests/<id>`, rien n'est écrit
   runs_reader.py        → SEC15 : la seule aide par laquelle la console lit runs/, comme la watch le lit
-                          (glorfindel/channel_reader.py) — un fichier ordinaire, jamais à travers un lien,
+                          (eregion_core/channel_reader.py) — un fichier ordinaire, jamais à travers un lien,
                           jamais bloquante, bornée, un refus dit une fois ; tout ce qui est refusé se lit absent
   static/console.js     → en-tête commun : onglets (actifs ou grisés), battement de la watch, canal retour,
                           cartes à juger, horloge UTC ; console.css, la palette

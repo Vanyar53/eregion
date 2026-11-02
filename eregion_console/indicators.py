@@ -72,6 +72,46 @@ class Detections:
         self.memo: dict[str, dict | None] = {}
         # BL1: every cycle as given — a release on a recovery, a decision on a fault's VM.
         self.cycles = list(cycles)
+        # SEC15: what a run's T0 is confronted with, indexed once, on demand (``received``, ``sights``).
+        self._received: dict[str, float] | None = None
+        self._sights: dict[str, tuple[list[float], list[dict]]] | None = None
+
+    def received(self, run_id: str) -> float | None:
+        """The attack time the watch received from the injector in the run — the earliest
+        (``containment.received_t0``), every cycle read once for every run."""
+        if self._received is None:
+            from analysis import containment
+            got: dict[str, float] = {}
+            for c in self.cycles:
+                rid = containment.run_of(c)
+                if rid and (t := containment.received_t0([c], rid)) is not None:
+                    got[rid] = min(t, got.get(rid, t))
+            self._received = got
+        return self._received.get(run_id)
+
+    def sights(self, resource_id: str, start: float, until: float) -> list[dict]:
+        """The watch's detections on this VM seen between ``start`` and ``until`` — what
+        ``containment.first_sight`` reads, by bisection — never a line of a run's own file (the
+        watch's poll of its ``attack_started``: the injector's word)."""
+        if self._sights is None:
+            from analysis import containment
+            by_vm: dict[str, list[tuple[float, dict]]] = {}
+            for c in self.cycles:
+                if c.get("own"):
+                    continue
+                d = containment.view(c)
+                if d["event"] == "detection" and d["seen_at"] is not None:
+                    by_vm.setdefault(_vm_key(d["resource_id"]), []).append((d["seen_at"], c))
+            self._sights = {vm: ([t for t, _ in rows], [c for _, c in rows])
+                            for vm, rows in ((k, sorted(v, key=lambda x: x[0])) for k, v in by_vm.items())}
+        key = _vm_key(resource_id)
+        times, rows = self._sights.get(key, ([], [])) if key else ([], [])
+        return rows[bisect_left(times, start):bisect_right(times, until)]
+
+
+def _vm_key(resource_id) -> str:
+    """A resource id as ARM compares it (``containment._same``): without case nor a final slash."""
+    return str(resource_id or "").strip().rstrip("/").lower()
 
 
 def detections(cycles) -> Detections:
@@ -138,13 +178,17 @@ def t0_confronted(run: dict, decision: dict | None, window: dict | None, cycles,
     VM there (``cycles``: the watch's, slimmed; a run's own files, the poll of its
     ``attack_started``, are no sight of the watch's)."""
     from analysis import containment
-    every = detections(cycles).cycles
+    index = detections(cycles)
     asked, unread = containment.request_at(window, requests)
     vm = run.get("resource_id") or (decision or {}).get("resource_id", "")
+    # The watch's sights of the VM inside the window only, by bisection: the overview and the
+    # matrix confront every run of their history (``Detections``).
+    start, _, last = containment.window_bounds(window)
+    seen = index.sights(vm, start, last) if start is not None and last is not None else []
     refused = containment.t0_refusal(
-        run["at"], window, [c for c in every if not c.get("own")], vm, request_at=asked,
+        run["at"], window, seen, vm, request_at=asked,
         decision_seen=containment.view(decision)["seen_at"] if decision else None,
-        received=containment.received_t0(every, run["run_id"]))
+        received=index.received(run["run_id"]))
     return refused, unread
 
 
@@ -162,8 +206,9 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     ``windows``: run id → its exercise window as this host holds it (believed, refused or
     purged): each run's T0 is confronted with it (``t0_confronted``, SEC15) — a T0 refused gives
     no time (to detect, to decide, to contain), and is counted as such (``t0_refused``; of them,
-    ``t0_purged``: its window purged, a week after its end). None: not confronted (the API always
-    gives them)."""
+    ``t0_purged``: its window purged, a week after its end; ``t0_request_unread``: the runs whose
+    Dagorlad request this host holds but cannot read). None: not confronted — and said
+    (``t0_confronted`` false); the API always gives them."""
     from analysis import containment
     attacks = [r for r in runs if r["kind"] == "technique"]
     detected = [r for r in attacks if r["detection"] == "detected"]
@@ -177,16 +222,18 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     # The lifts of a containment the watch's cycles show (a release on a recovery); the
     # operator's own are in runs/manual_actions.jsonl, passed by the API.
     liftings = liftings_of(cycles, liftings)
-    refused_t0 = purged_t0 = 0
+    refused_t0 = purged_t0 = unread_t0 = 0
     for r in detected:
         d = decision_of(r, cycles)
         # SEC15: the T0 is the injector's word, confronted as the campaign report confronts it —
         # refused, no time is counted from it, and it is said; a window purged (a week after its
-        # end) is said apart: the older runs of the 30 days are no longer timed.
+        # end) is said apart: the older runs of the 30 days are no longer timed. A Dagorlad request
+        # held here but unreadable: the T0 is not confronted with it, said too.
         held = windows.get(r["run_id"]) if windows is not None else None
-        refused = t0_confronted(r, d, held, cycles, requests)[0] if windows is not None else ""
+        refused, unread = t0_confronted(r, d, held, cycles, requests) if windows is not None else ("", "")
         refused_t0 += bool(refused)
         purged_t0 += bool(refused) and isinstance(held, dict) and bool(held.get("purged_at"))
+        unread_t0 += bool(unread)
         if r["latency"] is not None and not refused:
             detect.append(r["latency"])
         if d is None:
@@ -235,7 +282,8 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
         "contain": {"detect_s": _median(detect), "decide_s": _median(decide),
                     "contain_s": _median(contain), "detected": len(detected),
                     "decided": len(decide), "contained": len(contain), "t0_refused": refused_t0,
-                    "t0_purged": purged_t0},
+                    "t0_purged": purged_t0, "t0_request_unread": unread_t0,
+                    "t0_confronted": windows is not None},
         "alone": {"contained": alone, "shadow": shadow, "of": len(detected),
                   "threshold": threshold if threshold != float("inf") else None,
                   "attacks": len(attacks),

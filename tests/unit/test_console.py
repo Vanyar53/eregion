@@ -1233,8 +1233,9 @@ def _runs_with_traps(tmp_path):
 
 
 def test_the_feeds_history_reads_runs_never_blocking_a_refusal_said_once(runs, tmp_path, capsys):
-    """A named pipe and a link to a device that never ends, in runs/: the history comes back at
-    once with the regular file's lines; each refusal said once, never at every read."""
+    """A named pipe and a link to a file elsewhere, in runs/: the history comes back at once with
+    the regular file's lines, the link never followed; each refusal said once, never at every
+    read."""
     _, stop = _runs_with_traps(tmp_path)
     try:
         c = console()

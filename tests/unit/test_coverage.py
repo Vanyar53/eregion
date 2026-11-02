@@ -334,7 +334,70 @@ def test_the_indicators_are_fed_by_the_matrix(runs):
     body = console().get("/api/indicators").json()
     assert body["coverage"]["regressed"] == ["T1110.001"]
     assert body["last_proof"]["run_id"] == "r-old"
-    assert body["last_proof"]["age_s"] == pytest.approx(40 * 86400, abs=60)
+    # No window held here for it (purged a week after its end): its T0 is not believed, the proof is
+    # dated by the watch's own detection, 90 s after it (SEC15).
+    assert body["last_proof"]["age_s"] == pytest.approx(40 * 86400 - 90, abs=60)
+    assert body["last_proof"]["dated_by"] == "detection" and "fenêtre d'exercice inconnue" in body["last_proof"]["t0_refused"]
+
+
+def _window(run_id, at, *, purged=False):
+    """The run's exercise window as this host holds it (eregion_core/exercise.py) — or its tombstone."""
+    from eregion_core.exercise import exercises_dir
+    exercises_dir().mkdir(parents=True, exist_ok=True)
+    doc = {"run_id": run_id, "purged_at": NOW.isoformat()} if purged else {
+        "run_id": run_id, "injector": "annatar", "kind": "technique", "experiment": "T1110.001 ssh",
+        "targets": [VM], "start": (at - timedelta(minutes=1)).isoformat(),
+        "end": (at + timedelta(minutes=5)).isoformat(), "expires": (at + timedelta(hours=1)).isoformat()}
+    (exercises_dir() / f"{run_id}.json").write_text(json.dumps(doc))
+
+
+@pytest.mark.parametrize("held", ["believed", "purged", "none"])
+def test_the_matrix_gives_no_time_from_a_t0_not_believed_and_dates_its_proof_otherwise(runs, held):
+    """SEC15 (#425, review): the matrix confronts each attack run's T0 as the indicators do — not
+    believed, the run shows no time (to detect, to decide, to contain) and says why, and its proof
+    is dated by the watch's detection, never by the injector's word alone."""
+    at = _proven(runs, "r1", "T1110.001", 2, action="isolate_vm", confidence=0.95, executed=True, verified=True)
+    if held != "none":
+        _window("r1", at, purged=held == "purged")
+    m = console().get("/api/coverage?kind=technique").json()
+    assert m["t0_confronted"] is True
+    row = next(r for r in m["techniques"] if r["id"] == "T1110.001")
+    last, proof = row["last_run"], row["last_proof"]
+    if held == "believed":
+        assert last["t0_refused"] == "" and proof["dated_by"] == "attack"
+        assert (last["detect_s"], last["decide_s"], last["contain_s"]) == (90.0, 110.0, 110.0)
+        assert proof["age_s"] == pytest.approx(2 * 86400, abs=60)
+    else:
+        assert (last["detect_s"], last["decide_s"], last["contain_s"]) == (None, None, None)
+        assert last["t0_refused"].startswith("fenêtre d'exercice purgée" if held == "purged"
+                                             else "fenêtre d'exercice inconnue")
+        assert proof["dated_by"] == "detection" and proof["age_s"] == pytest.approx(2 * 86400 - 90, abs=60)
+    assert row["state"] == "proven"
+
+
+def test_the_matrix_is_computed_again_when_a_window_changes(runs):
+    """The matrix's cache is keyed on the windows too: a window arriving changes a T0's verdict,
+    within the cache's 30 s (SEC15)."""
+    at = _proven(runs, "r1", "T1110.001", 2)
+    row = next(r for r in api.coverage_matrix()["techniques"] if r["id"] == "T1110.001")
+    assert row["last_run"]["t0_refused"]
+    _window("r1", at)
+    row = next(r for r in api.coverage_matrix()["techniques"] if r["id"] == "T1110.001")
+    assert row["last_run"]["t0_refused"] == "" and row["last_run"]["detect_s"] == 90.0
+
+
+def test_the_pages_say_a_t0_not_believed_in_the_matrix_and_the_last_proof():
+    from pathlib import Path
+    static = Path(api.__file__).parent / "static"
+    js, ov = (static / "injector.js").read_text(), (static / "overview.js").read_text()
+    assert "if (v.t0_refused) bits.push(`<span class=\"r-warn\">T0 not believed, no time counted — ${esc(v.t0_refused)}" in js
+    assert "if (v.dated_by === 'detection')" in js
+    assert "lp.dated_by === 'detection' ? ' · dated by the watch\\'s detection (T0 not believed)'" in ov
+
+
+def test_the_matrix_not_confronted_says_so():
+    """Without the windows (a caller that gives none), the matrix says its T0s were not confronted."""
+    assert cov.matrix([], [], CATALOG, NOW.timestamp())["t0_confronted"] is False
 
 
 def test_the_command_fails_on_a_regression_only(runs):

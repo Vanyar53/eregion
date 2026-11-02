@@ -50,9 +50,9 @@ coverage, as it did before C1.
 """
 from __future__ import annotations
 
-from eregion_console.indicators import WINDOW_DAYS, decision_of, detections
+from eregion_console.indicators import WINDOW_DAYS, decision_of, detections, t0_confronted
 from eregion_core.exercise import FUTURE_SKEW_S
-from eregion_core.run_report import iso, timeline
+from eregion_core.run_report import epoch, iso, timeline
 
 DAY = 86400.0
 AGING_DAYS = 21
@@ -102,18 +102,36 @@ def regression(runs: list[dict]) -> dict | None:
             "last": measured[-1]["run_id"]}
 
 
-def _view(run: dict, cycles: list[dict]) -> dict:
-    """One run as a row shows it: when, what it measured, and Glorfindel's times on it."""
+def _view(run: dict, cycles: list[dict], refusals: dict | None = None) -> dict:
+    """One run as a row shows it: when, what it measured, and Glorfindel's times on it — none
+    from a T0 not believed (``refusals``, SEC15: run id → why), and why."""
     decision = decision_of(run, cycles)
     t = timeline(run, decision)
+    refused = (refusals or {}).get(run["run_id"], "")
+    if refused:
+        t = {**t, "detect_s": None, "decide_s": None, "contain_s": None}
     return {
         "run_id": run["run_id"], "at": iso(run["at"]), "campaign": run["campaign"],
         "name": run["name"], "result": run["result"], "outcome": outcome(run),
         "detection": run["detection"], "without_glorfindel": run["without_glorfindel"],
         "detect_s": t["detect_s"], "decide_s": t["decide_s"], "contain_s": t["contain_s"],
+        "t0_refused": refused,
         "decision": ({k: t[k] for k in ("action", "confidence", "escalated", "executed",
                                         "verified", "mode")} if decision else None),
     }
+
+
+def proof_time(run: dict, cycles, refusals: dict | None = None) -> tuple[float, str]:
+    """When a proof is dated, and by what: its T0 (``attack``; a fault's start) — or, its T0 not
+    believed (SEC15), the watch's own sight of the detection attached (``detection``; a
+    technique's proof always has one): the age of the last proof never rests on the injector's
+    word alone."""
+    if run["kind"] != "technique":
+        return run["at"], "fault start"
+    if not (refusals or {}).get(run["run_id"]):
+        return run["at"], "attack"
+    seen = epoch((decision_of(run, cycles) or {}).get("signal_at"))
+    return (seen, "detection") if seen is not None else (run["at"], "attack")
 
 
 def state(runs: list[dict], proof: dict | None, regressed: dict | None, now: float) -> str:
@@ -125,15 +143,19 @@ def state(runs: list[dict], proof: dict | None, regressed: dict | None, now: flo
     return "unproven" if runs else "never"
 
 
-def row(entry: dict, runs: list[dict], cycles: list[dict], now: float) -> dict:
-    """One row of the matrix: an entry of the catalog and its runs (any order)."""
+def row(entry: dict, runs: list[dict], cycles: list[dict], now: float,
+        refusals: dict | None = None) -> dict:
+    """One row of the matrix: an entry of the catalog and its runs (any order). ``refusals``:
+    run id → why its T0 is not believed (SEC15) — no time from it, its proof dated otherwise."""
     runs = sorted(runs, key=lambda r: (r["at"], r["run_id"]))
     proofs = [r for r in runs if is_proof(r, cycles)]
     proof = proofs[-1] if proofs else None
     lost = regression(runs)
     last_proof = None
     if proof:
-        last_proof = {**_view(proof, cycles), "age_s": round(now - proof["at"])}
+        at, dated_by = proof_time(proof, cycles, refusals)
+        proof = {**proof, "at": at}
+        last_proof = {**_view(proof, cycles, refusals), "dated_by": dated_by, "age_s": round(now - at)}
     return {
         **{k: entry.get(k) for k in ("id", "kind", "name", "tactic", "status", "resource_type",
                                      "engine", "destructive")},
@@ -141,7 +163,7 @@ def row(entry: dict, runs: list[dict], cycles: list[dict], now: float) -> dict:
         "runs": len(runs),
         "history": [{"run_id": r["run_id"], "at": iso(r["at"]), "outcome": outcome(r)}
                     for r in runs[-HISTORY:]],
-        "last_run": _view(runs[-1], cycles) if runs else None,
+        "last_run": _view(runs[-1], cycles, refusals) if runs else None,
         "last_proof": last_proof,
         "regression": lost,
         "state": state(runs, proof, lost, now),
@@ -188,14 +210,22 @@ def evolution(runs: list[dict], catalog: list[dict], now: float,
     return points
 
 
-def matrix(runs: list[dict], cycles: list[dict], catalog: list[dict], now: float) -> dict:
+def matrix(runs: list[dict], cycles: list[dict], catalog: list[dict], now: float,
+           windows: dict | None = None, requests=None) -> dict:
     """The matrix: a row per entry of the catalog (``/api/catalog``'s entries), techniques and
     faults apart, a row more per experiment run outside it; their summaries; the last proof
     of an attack over the whole history; the evolution of the coverage; the runs dated in the
-    future, left out. ``cycles``: the watch's cycles, or their ``Detections`` index."""
+    future, left out. ``cycles``: the watch's cycles, or their ``Detections`` index.
+    ``windows``: run id → its exercise window as this host holds it — each attack run's T0 is
+    confronted with it as the indicators confront it (``indicators.t0_confronted``, SEC15): not
+    believed, the run gives no time and its proof is dated by the watch's detection. None: not
+    confronted — and said (``t0_confronted`` false); the API always gives them."""
     future = [r for r in runs if r["at"] > now + FUTURE_SKEW_S]
     runs = [r for r in runs if r["at"] <= now + FUTURE_SKEW_S]
     cycles = detections(cycles)   # indexed once; each run's decision found once
+    refusals = None if windows is None else {
+        r["run_id"]: t0_confronted(r, decision_of(r, cycles), windows.get(r["run_id"]), cycles, requests)[0]
+        for r in runs if r["kind"] == "technique"}
     by_key: dict[tuple, list[dict]] = {}
     for r in runs:
         by_key.setdefault((r["kind"], r["experiment"]), []).append(r)
@@ -203,20 +233,21 @@ def matrix(runs: list[dict], cycles: list[dict], catalog: list[dict], now: float
     known = {(e["kind"], e["id"]) for e in entries}
     outside = [{"id": exp, "kind": kind, "name": rs[-1]["name"], "status": "", "in_catalog": False}
                for (kind, exp), rs in sorted(by_key.items()) if (kind, exp) not in known and exp]
-    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now) for e in entries + outside]
+    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now, refusals) for e in entries + outside]
     techniques = [r for r in rows if r["kind"] == "technique"]
     faults = [r for r in rows if r["kind"] == "fault"]
     proven = [r for r in techniques if r["last_proof"]]
     newest = max(proven, key=lambda r: r["last_proof"]["at"]) if proven else None
     last = ({"run_id": newest["last_proof"]["run_id"], "ttp": newest["id"],
-             "at": newest["last_proof"]["at"], "age_s": newest["last_proof"]["age_s"]}
+             "at": newest["last_proof"]["at"], "age_s": newest["last_proof"]["age_s"],
+             "dated_by": newest["last_proof"]["dated_by"], "t0_refused": newest["last_proof"]["t0_refused"]}
             if newest else None)
     # The implemented techniques, the least recently proven first (never proven before all).
     stalest = sorted((r for r in techniques if r["status"] == "implemented"),
                      key=lambda r: (r["last_proof"]["at"] if r["last_proof"] else "", r["id"]))
     return {
         "generated_at": iso(now), "aging_days": AGING_DAYS, "stale_days": STALE_DAYS,
-        "window_days": WINDOW_DAYS,
+        "window_days": WINDOW_DAYS, "t0_confronted": windows is not None,
         "techniques": techniques, "faults": faults,
         "summary": {"techniques": _summary(techniques), "faults": _summary(faults)},
         "last_proof": last,

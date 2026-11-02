@@ -2580,7 +2580,7 @@ def _published_heartbeat() -> dict:
 
 
 # The matrix is computed again only when a file it reads changed — the run reports, the
-# watch's debug files, the catalog (paths, mtimes, sizes) — or after MATRIX_TTL_S (its ages
+# watch's debug files, the catalog, the exercise windows (paths, mtimes, sizes) — or after MATRIX_TTL_S (its ages
 # and states move with the clock). The overview asks for it every 30 s.
 MATRIX_TTL_S = 30.0
 _matrix_cache: dict = {"key": None, "at": 0.0, "value": None}
@@ -2595,8 +2595,12 @@ def _matrix_fingerprint(reports: dict[str, Path]) -> tuple:
             return (str(Path(p).absolute()), st.st_mtime_ns, st.st_size)
         except OSError:
             return (str(p), None, None)
+    from eregion_core.exercise import exercises_dir
+    windows = exercises_dir(_RUNS)
     return (tuple(sorted(stat(p) for p in reports.values())),
-            tuple(stat(p) for p in sorted(_RUNS.glob("*_debug.jsonl"))), stat(CATALOG))
+            tuple(stat(p) for p in sorted(_RUNS.glob("*_debug.jsonl"))), stat(CATALOG),
+            # SEC15: the windows each run's T0 is confronted with
+            tuple(stat(p) for p in sorted(windows.glob("*.json"))) if windows.is_dir() else ())
 
 
 def coverage_matrix(now: float | None = None) -> dict:
@@ -2614,7 +2618,7 @@ def coverage_matrix(now: float | None = None) -> dict:
         return dict(cached["value"])
     cat = _catalog_entries()
     m = coverage.matrix(run_report.read_reports(reports, runs_reader.read_json), _watch_cycles(None),
-                        cat.get("entries", []), t)
+                        cat.get("entries", []), t, windows=_held_windows())
     if cat.get("error"):
         m["error"] = cat["error"]
     _matrix_cache.update(key=key, at=t, value=m)

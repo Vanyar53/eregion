@@ -378,6 +378,9 @@ function runText(v) {
   if (d && d.action) bits.push(`→ ${esc(d.action)} ${esc(pct(d.confidence))}${d.executed === true ? (d.verified === true ? ' · executed ✓' : ' · executed, not verified') : d.escalated ? ' · held' : ''}`);
   else if (v.outcome === 'detected') bits.push('<span style="color:var(--dim)">no decision attached</span>');
   if (v.contain_s != null) bits.push(`contained +${dur(Number(v.contain_s))}`);
+  // SEC15: a T0 not believed gives no time — said, with why; a proof then dated by the watch's detection.
+  if (v.t0_refused) bits.push(`<span class="r-warn">T0 not believed, no time counted — ${esc(v.t0_refused)}</span>`);
+  if (v.dated_by === 'detection') bits.push('<span style="color:var(--dim)">(dated by the watch\'s detection)</span>');
   return `${runLink(v.run_id, v.at, hms(v.at))}${v.campaign ? ` <span style="color:var(--dim)">campaign ${esc(v.campaign)}</span>` : ''} ${bits.join(' ')}`;
 }
 
@@ -497,14 +500,16 @@ function renderIndicators() {
     : `no detected attack run in ${days} d`;
   // SEC15: a T0 the confrontation refuses gives no time — counted apart, said; a window purged (a
   // week after its end) said apart: the older runs of the 30 days are no longer timed.
-  const purged = Number(c.t0_purged);
-  const refusedT0 = Number(c.t0_refused)
-    ? ` · <span class="bad-t">${Number(c.t0_refused)} T0 not believed: no time counted${purged ? ` (${purged}: window purged, a week after its end)` : ''}</span>` : '';
+  const purged = Number(c.t0_purged), unread = Number(c.t0_request_unread);
+  const refusedT0 = (Number(c.t0_refused)
+    ? ` · <span class="bad-t">${Number(c.t0_refused)} T0 not believed: no time counted${purged ? ` (${purged}: window purged, a week after its end)` : ''}</span>` : '')
+    + (unread ? ` · <span class="bad-t">${unread} Dagorlad request${unread > 1 ? 's' : ''} unreadable here: T0 not confronted with ${unread > 1 ? 'them' : 'it'}</span>` : '')
+    + (c.t0_confronted === false ? ' · <span class="bad-t">T0 not confronted: the injector\'s word</span>' : '');
   const faults = Number(a.faults_mistaken)
     ? ` · <span class="bad-t">faults taken for an attack: ${Number(a.faults_mistaken)}${Number(a.disruptive_on_faults) ? ' (' + Number(a.disruptive_on_faults) + ' acted on)' : ''}</span>` : '';
   box.innerHTML =
     tile('TIME TO CONTAIN · EXERCISES', c.contain_s != null ? esc(dur(Number(c.contain_s))) : '— nothing contained alone', times + refusedT0,
-         Number(c.t0_refused) ? 'warn' : '',
+         Number(c.t0_refused) || unread || c.t0_confronted === false ? 'warn' : '',
          'From the attack (its T0) to the verified action — the runs of Annatar, ' + days + ' days. A T0 is the injector\'s word, confronted with its window, its request and what the watch saw: not believed, no time is counted from it. A window is purged a week after its end: an older run is no longer timed. Real traffic is on the overview.') +
     tile('CONTAINED ALONE · EXERCISES', a.of ? `${Number(a.contained)} of ${Number(a.of)}` : '—',
          (a.of ? `shadow: ${Number(a.shadow)} of ${Number(a.of)} would have been` : `no detected attack run in ${days} d`)

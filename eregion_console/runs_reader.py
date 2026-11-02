@@ -27,6 +27,8 @@ MAX_BYTES = 16 * 1024 * 1024
 JSON_MAX_BYTES = 1024 * 1024
 
 _said: dict[str, str] = {}
+# A link, as ``channel_reader.open_regular`` refuses it.
+LINK = "un lien, jamais suivi"
 
 
 def say_refused(path, why: str) -> None:
@@ -35,7 +37,14 @@ def say_refused(path, why: str) -> None:
     key = os.path.abspath(path)
     if _said.get(key) != why:
         _said[key] = why
-        print(f"  ⚠ console: {path} — {why} : jamais lu (runs/ se lit comme la watch le lit)", flush=True)
+        print(f"  ⚠ console: {shown(path)} — {why} : jamais lu (runs/ se lit comme la watch le lit)", flush=True)
+
+
+def shown(path) -> str:
+    """A name of runs/ as the log shows it: its control characters escaped (``\\x1b``) — another
+    container writes it, and it never writes into the console's log."""
+    return "".join(c if c.isprintable() else f"\\x{ord(c):02x}" if ord(c) < 0x100 else f"\\u{ord(c):04x}"
+                   for c in str(path))
 
 
 def _read(path, max_bytes: int) -> tuple[bytes | None, str]:
@@ -107,8 +116,8 @@ def tail(path) -> list[str]:
 
 def regular(path) -> os.stat_result | None:
     """The file's lstat when it is a regular file — None otherwise: a link is never followed, a
-    pipe or a device has no age nor size to give, and it is said once (as ``read_bytes``
-    says it)."""
+    pipe or a device has no age nor size to give, and it is said once, in the words
+    ``read_bytes`` would say it — from the lstat alone, nothing opened."""
     try:
         st = os.lstat(path)
     except OSError:
@@ -116,10 +125,5 @@ def regular(path) -> os.stat_result | None:
     if stat.S_ISREG(st.st_mode):
         return st
     from glorfindel import channel_reader
-    try:
-        os.close(channel_reader.open_regular(path))
-    except channel_reader.Refused as exc:
-        say_refused(path, str(exc))
-    except OSError:
-        pass
+    say_refused(path, LINK if stat.S_ISLNK(st.st_mode) else channel_reader._kind(st.st_mode))
     return None

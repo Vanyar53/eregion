@@ -5964,8 +5964,8 @@ MUTANTS += [
      '    counted = [r for r in rows if r["status"] == "implemented" or r["runs"]]\n',
      "    counted = rows\n"),
     ("M1819", "a run outside the catalog vanishes from the matrix (C1)", COV,
-     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now) for e in entries + outside]\n',
-     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now) for e in entries]\n'),
+     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now, refusals) for e in entries + outside]\n',
+     '    rows = [row(e, by_key.get((e["kind"], e["id"]), []), cycles, now, refusals) for e in entries]\n'),
     ("M1820", "a campaign's runs lose their campaign (C1)", RRC,
      '        campaign = parent.parent.name if parent.name == "runs" and parent.parent.parent.name == "campaigns" else ""\n',
      '        campaign = ""\n'),
@@ -8114,8 +8114,8 @@ MUTANTS += [
      "            st = os.lstat(path)\n        except OSError:\n            continue\n        if stat.S_ISREG(st.st_mode):\n            found.append",
      "            st = os.stat(path)\n        except OSError:\n            continue\n        if stat.S_ISREG(st.st_mode):\n            found.append"),
     ("M3018", "an exercise run's T0 believed as its injector writes it, on the overview (SEC15)", IND,
-     "        refused = t0_confronted(r, d, held, cycles, requests)[0] if windows is not None else \"\"\n",
-     "        refused = \"\"\n"),
+     "        refused, unread = t0_confronted(r, d, held, cycles, requests) if windows is not None else (\"\", \"\")\n",
+     "        refused, unread = \"\", \"\"\n"),
     ("M3019", "the overview's exercises never given the windows their T0 is confronted with (SEC15)", CON,
      "                      all_cards=every, liftings=_manual_liftings(since.timestamp()),\n                      windows=_held_windows())\n",
      "                      all_cards=every, liftings=_manual_liftings(since.timestamp()))\n"),
@@ -8132,8 +8132,7 @@ MUTANTS += [
     ("M3089", "a T0 refused still times a wire in Dagorlad (SEC15)", FOL,
      "        if refused:\n            t = {**t,", "        if False:\n            t = {**t,"),
     ("M3090", "the watch's first sight taken from a run's own files, the injector's word (SEC15)", IND_,
-     '        run["at"], window, [c for c in every if not c.get("own")], vm, request_at=asked,',
-     '        run["at"], window, every, vm, request_at=asked,'),
+     '                if c.get("own"):\n                    continue\n                d = containment.view(c)\n', '                d = containment.view(c)\n'),
     ("M3091", "the attack time the watch received never kept by the console (SEC15)", CON,
      '"attack_time": epoch(raw.get("attack_time")),', '"attack_time": None,'),
     ("M3092", "the run a line of the watch names never kept by the console (SEC15)", CON,
@@ -8152,6 +8151,36 @@ MUTANTS += [
      "        purged_t0 += bool(refused)\n"),
 ]
 TESTS["M3130"] = _SEC15_T0
+# SEC15, its 5.5 review: the matrix and the last proof confront the T0 too, an unreadable request on
+# the tile, the end of a file at a line's start, nothing opened to refuse, names escaped. M3136–M3145.
+MUTANTS += [
+    ("M3136", "the matrix times a run from a T0 not believed (SEC15)", COV,
+     '    if refused:\n        t = {**t, "detect_s": None, "decide_s": None, "contain_s": None}\n    return {\n',
+     '    if False:\n        t = {**t, "detect_s": None, "decide_s": None, "contain_s": None}\n    return {\n'),
+    ("M3137", "the matrix never given the windows a T0 is confronted with (SEC15)", CON,
+     'cat.get("entries", []), t, windows=_held_windows())', 'cat.get("entries", []), t)'),
+    ("M3138", "a proof dated by a T0 not believed: the last proof's age the injector's word (SEC15)", COV,
+     '    if not (refusals or {}).get(run["run_id"]):\n        return run["at"], "attack"\n',
+     '    if True:\n        return run["at"], "attack"\n'),
+    ("M3139", "the end of a file drops a whole line its bound falls on (SEC15)", CRD,
+     "        f.seek(max(0, start - 1))\n", "        f.seek(start)\n"),
+    ("M3140", "a Dagorlad request held but unreadable never said on the tile (SEC15)", IND,
+     "        unread_t0 += bool(unread)\n", ""),
+    ("M3141", "the indicators not confronted say nothing of it (SEC15)", IND,
+     '"t0_confronted": windows is not None},', '"t0_confronted": True},'),
+    ("M3142", "a pipe or a device opened to say why it is refused (SEC15)", RRD,
+     "    say_refused(path, LINK if stat.S_ISLNK(st.st_mode) else channel_reader._kind(st.st_mode))\n",
+     "    os.close(channel_reader.open_regular(path))\n"),
+    ("M3143", "a name of runs/ read as markup by the TUI (SEC15)", TUI,
+     "{_esc_markup(path.name)} : {exc} — jamais lu", "{path.name} : {exc} — jamais lu"),
+    ("M3144", "a name of runs/ written raw into the console's log (SEC15)", RRD,
+     '    print(f"  ⚠ console: {shown(path)} — ', '    print(f"  ⚠ console: {path} — '),
+    ("M3145", "the matrix kept 30 s past a window that changes a T0's verdict (SEC15)", CON,
+     '            tuple(stat(p) for p in sorted(windows.glob("*.json"))) if windows.is_dir() else ())',
+     "            ())"),
+]
+TESTS.update({f"M{n}": _SEC15 for n in (3139, 3142, 3143, 3144)})
+TESTS.update({f"M{n}": _SEC15_T0 + " tests/unit/test_coverage.py" for n in (3136, 3137, 3138, 3140, 3141, 3145)})
 
 
 # MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the

@@ -167,8 +167,10 @@ def tail_lines(path, max_bytes: int = READ_BYTES, max_lines: int = READ_LINES) -
     with os.fdopen(fd, "rb") as f:
         size = os.fstat(f.fileno()).st_size
         start = max(0, size - max_bytes)
-        f.seek(start)
-        data = f.read(max_bytes)
+        # From the byte before the bound: a newline there, the bound falls at a line's start, and
+        # that line is whole — the first newline is that one.
+        f.seek(max(0, start - 1))
+        data = f.read(max_bytes + (1 if start > 0 else 0))
     if start > 0:
         nl = data.find(b"\n")
         data = data[nl + 1:] if nl >= 0 else b""

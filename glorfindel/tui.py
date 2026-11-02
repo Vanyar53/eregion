@@ -15,6 +15,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
+from rich.markup import escape as _esc_markup
 from rich.panel import Panel
 from rich.text import Text
 
@@ -463,7 +464,8 @@ def _load_feed(max_entries: int = 60) -> list[str]:
         try:
             lines = channel_reader.tail_lines(path)
         except channel_reader.Refused as exc:
-            refused.append(f"[yellow]⚠ {path.name} : {exc} — jamais lu[/yellow]")
+            # A name in runs/ is written by another container: never read as markup (SEC15).
+            refused.append(f"[yellow]⚠ {_esc_markup(path.name)} : {exc} — jamais lu[/yellow]")
             continue
         except OSError:
             continue
@@ -486,7 +488,7 @@ def _feed_renderable(feed_lines: list[str], run_label: str) -> Panel:
         text.append_text(Text.from_markup(line))
         text.append("\n")
     title = (
-        f"[bold]FEED[/bold]  [dim]{run_label}[/dim]"
+        f"[bold]FEED[/bold]  [dim]{_esc_markup(run_label)}[/dim]"
         if run_label
         else "[bold]FEED[/bold]"
     )

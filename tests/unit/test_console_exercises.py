@@ -465,6 +465,34 @@ def test_a_file_of_runs_larger_than_its_bound_is_refused_never_cut(runs, capsys)
     assert "big.json — plus de 32 octets : jamais lu" in capsys.readouterr().out
 
 
+def test_a_file_that_is_no_file_is_refused_from_its_lstat_nothing_opened(runs, capsys, monkeypatch):
+    """``regular``: a pipe, a link — refused from the lstat alone, in the words a read would say,
+    nothing opened (SEC15, review)."""
+    import os
+    from eregion_console import runs_reader
+    from glorfindel import channel_reader
+
+    def opened(path):
+        raise AssertionError(f"opened {path}")
+    monkeypatch.setattr(channel_reader, "open_regular", opened)
+    os.mkfifo(runs / "pipe.json")
+    (runs / "link.json").symlink_to(runs / "nowhere.json")
+    assert runs_reader.regular(runs / "pipe.json") is None and runs_reader.regular(runs / "link.json") is None
+    out = capsys.readouterr().out
+    assert "pipe.json — un tube nommé : jamais lu" in out and "link.json — un lien, jamais suivi : jamais lu" in out
+
+
+def test_the_console_log_never_takes_a_name_of_runs_raw(runs, capsys):
+    """A name of runs/ written by another container: its control characters escaped in the
+    console's log, never written raw into it (SEC15, review)."""
+    import os
+    from eregion_console import runs_reader
+    os.mkfifo(runs / "x\x1b[2Jy\nz.json")
+    assert runs_reader.read_json(runs / "x\x1b[2Jy\nz.json") is None
+    out = capsys.readouterr().out
+    assert "x\\x1b[2Jy\\x0az.json — un tube nommé" in out and "\x1b" not in out
+
+
 def test_no_route_reads_runs_on_the_event_loop(runs, client, monkeypatch):
     """SEC15 (#425): every read of runs/ by a route runs in a thread, never in the event loop —
     a slow read never stops the console's other pages, nor its live feed."""

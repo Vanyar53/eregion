@@ -110,7 +110,7 @@ def test_a_detected_attack_gives_its_times_and_its_proof(runs):
     out = _compute(runs)
     assert out["contain"] == {"detect_s": 100.0, "decide_s": 125.0, "contain_s": None,
                               "detected": 1, "decided": 1, "contained": 0, "t0_refused": 0,
-                              "t0_purged": 0}
+                              "t0_purged": 0, "t0_request_unread": 0, "t0_confronted": False}
     assert out["last_proof"]["run_id"] == "r1" and out["last_proof"]["ttp"] == "T1110.001"
     assert out["alone"] == {"contained": 0, "shadow": 1, "of": 1, "threshold": 0.7, "attacks": 1,
                             "faults_mistaken": 0, "disruptive_on_faults": 0, "faults_unchecked": 0}
@@ -446,11 +446,33 @@ def test_an_exercise_runs_t0_is_confronted_refused_never_counted_and_said(runs, 
     assert why in refused and bool(refused) == bool(why) and unread == ""
 
 
+def test_a_request_held_here_but_unreadable_is_said_on_the_tile(runs):
+    """The Dagorlad request a run's window names, held here but unreadable: its T0 is not
+    confronted with it — counted on the tile, not only on the wire's line (SEC15, review)."""
+    from eregion_core import exercise_request as xr
+    from eregion_core.exercise import exercises_dir
+    a = NOW - timedelta(days=1)
+    rid = "r-20261101T080000Z-abcdef"
+    _window("r1", a - timedelta(minutes=1), a + timedelta(minutes=5))
+    w = json.loads((exercises_dir() / "r1.json").read_text())
+    (exercises_dir() / "r1.json").write_text(json.dumps({**w, "request": rid}))
+    xr.requests_dir().mkdir(parents=True, exist_ok=True)
+    (xr.requests_dir() / f"{rid}.json").write_text("{not json")
+    _received(runs, "r1", a)
+    _report(runs, "r1", "T1110.001", a, latency=60.0)
+    _cycle(runs, a + timedelta(seconds=60), "T1110.001", "isolate_vm", 0.95, executed=True, verified=True)
+    c = console().get("/api/dagorlad/indicators").json()["contain"]
+    assert (c["t0_request_unread"], c["t0_refused"], c["t0_confronted"]) == (1, 0, True)
+    assert c["contain_s"] == 80.0       # still believed: the request is said unread, not the T0 refused
+
+
 def test_the_exercises_tile_says_a_t0_not_believed():
     from pathlib import Path
     js = (Path(api.__file__).parent / "static" / "injector.js").read_text()
     assert "T0 not believed: no time counted" in js and "c.t0_refused" in js
     assert "window purged, a week after its end" in js and "Number(c.t0_purged)" in js
+    assert "unreadable here: T0 not confronted with" in js and "Number(c.t0_request_unread)" in js
+    assert "c.t0_confronted === false ? ' · <span class=\"bad-t\">T0 not confronted" in js
 
 
 def test_dagorlad_runs_shows_the_exercises_indicators_and_the_overview_says_real():

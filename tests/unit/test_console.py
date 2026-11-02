@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -656,8 +657,8 @@ def test_a_change_carries_a_json_object(runs, monkeypatch):
 
 def test_the_first_start_without_a_token_draws_one(runs, monkeypatch, capsys):
     """M1177, M1178: no EREGION_CONSOLE_TOKEN (the local default): the console draws a token,
-    keeps it in the operator's file, mode 600, says it once with the URL, and takes it at the
-    next start; nothing opens without it."""
+    keeps it in its own file, mode 600, says where — never the token (SEC10: a container's
+    output is kept in its logs) — and takes it at the next start; nothing opens without it."""
     import stat
     monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
     monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
@@ -665,10 +666,11 @@ def test_the_first_start_without_a_token_draws_one(runs, monkeypatch, capsys):
     token = api._TOKEN_FILE.read_text().strip()
     assert len(token) >= 32 and stat.S_IMODE(api._TOKEN_FILE.stat().st_mode) == 0o600
     out = capsys.readouterr().out
-    assert f"http://localhost:7007/?token={token}" in out and str(api._TOKEN_FILE) in out
+    assert token not in out and "http://localhost:7007/" in out and "make console-url" in out
+    assert str(api._TOKEN_FILE) in out
     assert console(token=None).get("/api/sections").status_code == 401
     assert console(token=token).get("/api/sections").status_code == 200
-    api._local_token["value"] = ""
+    api._local_token.update(value="", key=None)
     api._TOKEN_FILE.chmod(0o644)
     assert api.ensure_token() == (token, "file")          # the next start: the same token
     assert stat.S_IMODE(api._TOKEN_FILE.stat().st_mode) == 0o600
@@ -679,7 +681,7 @@ def test_a_deployments_token_is_never_printed_nor_written(runs, monkeypatch, cap
     monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
     api.serve(port=7007)
     out = capsys.readouterr().out
-    assert "?token=$EREGION_CONSOLE_TOKEN" in out and TOKEN not in out
+    assert "make console-url" in out and "EREGION_CONSOLE_TOKEN" in out and TOKEN not in out
     assert not api._TOKEN_FILE.exists()
 
 
@@ -879,7 +881,8 @@ def test_the_url_reaches_a_containers_log(runs, tmp_path):
     try:
         ready, _, _ = select.select([proc.stdout], [], [], 20)
         assert ready, "nothing written on the pipe"
-        assert "?token=$EREGION_CONSOLE_TOKEN" in proc.stdout.readline().decode()
+        line = proc.stdout.readline().decode()
+        assert "http://localhost:7007/" in line and "make console-url" in line and TOKEN not in line
     finally:
         proc.kill()
         proc.wait()
@@ -901,15 +904,17 @@ def test_make_console_url_says_where_the_token_is(tmp_path):
         r = subprocess.run(["make", "-s", "-C", str(root), "console-url", f"HOME={home}", "CONSOLE_WAIT=0"],
                            env={**env, **extra}, capture_output=True, text=True, cwd=tmp_path)
         return r.returncode, r.stdout.strip(), r.stderr
+    (tmp_path / ".eregion" / "console").mkdir(parents=True)
+    (tmp_path / ".eregion" / "console" / "token").write_text("drawn-token\n")
     (tmp_path / ".glorfindel").mkdir()
-    (tmp_path / ".glorfindel" / "console_token").write_text("drawn-token\n")
+    (tmp_path / ".glorfindel" / "console_token").write_text("a-former-token\n")   # never read again
     if (root / ".env").exists():
         pytest.skip("a .env in the checkout gives compose its token")
     assert url(tmp_path)[1] == "Console   →  http://localhost:7007/?token=drawn-token"
     assert url(tmp_path, EREGION_CONSOLE_PORT="7008")[1].endswith("localhost:7008/?token=drawn-token")
     assert url(tmp_path, EREGION_CONSOLE_TOKEN="set-token")[1].endswith("?token=set-token")
     code, out, err = url(tmp_path / "nothing")
-    assert code != 0 and "console_token" in err
+    assert code != 0 and ".eregion/console/token" in err
 
 
 def test_read_only_greys_the_buttons_that_write(runs):
@@ -927,3 +932,244 @@ def test_read_only_greys_the_buttons_that_write(runs):
                      "snapshotAndClose"}
     table = js[js.index("const ACTIONS = {"):js.index("\n};", js.index("const ACTIONS = {"))]
     assert all(re.search(rf"\b{n}\b", table) for n in names)
+
+
+# ── The console's token, the console's alone (SEC10) ───────────────────────────────────────
+
+def _default_token_file(home):
+    """Where the console keeps its drawn token for this HOME, as the module says it (not the
+    conftest's tmp)."""
+    import os
+    import subprocess
+    import sys
+    env = {**os.environ, "HOME": str(home), "PYTHONPATH": str(api._STATIC.parents[1])}
+    out = subprocess.run([sys.executable, "-c", "from eregion_console import api; print(api._TOKEN_FILE)"],
+                         env=env, capture_output=True, text=True, cwd=home, check=True)
+    return Path(out.stdout.strip())
+
+
+def test_the_drawn_token_lives_where_only_the_console_mounts(tmp_path):
+    """The watch and the bot mount Glorfindel's state; the console's token is in the console's own
+    directory, which no other service mounts (docker-compose.yml) — so a process that takes the
+    watch or the bot never reads it."""
+    import yaml
+    home = tmp_path / "home"
+    home.mkdir()
+    token = _default_token_file(home)
+    assert token == home / ".eregion" / "console" / "token"
+    compose = yaml.safe_load((api._STATIC.parents[1] / "docker-compose.yml").read_text())
+    reach = []
+    for name, svc in compose["services"].items():
+        for vol in svc.get("volumes") or []:
+            src = str(vol).split(":")[0].replace("${HOME}", str(home))
+            if src.startswith(str(home)) and (token == Path(src) or Path(src) in token.parents):
+                reach.append(name)
+    assert reach == ["war-room"], reach
+
+
+def test_the_former_token_file_is_retired_and_a_new_token_drawn(runs, monkeypatch, capsys):
+    """Its former place, beside Glorfindel's state: removed at the first start, never read nor
+    carried over — a new token is drawn, and the start says it."""
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    api._LEGACY_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    api._LEGACY_TOKEN_FILE.write_text("the-former-token-0123456789abcdef\n")
+    api.serve(port=7007)
+    assert not api._LEGACY_TOKEN_FILE.exists()
+    token = api._TOKEN_FILE.read_text().strip()
+    assert token and token != "the-former-token-0123456789abcdef"
+    out = capsys.readouterr().out
+    assert str(api._LEGACY_TOKEN_FILE) in out and "removed" in out and "a new token is drawn" in out
+    assert token not in out
+    assert console(token="the-former-token-0123456789abcdef").get("/api/sections").status_code == 401
+
+
+def test_the_former_token_file_is_retired_under_a_deployments_token_too(runs):
+    api._LEGACY_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    api._LEGACY_TOKEN_FILE.write_text("old\n")
+    assert api.ensure_token() == (TOKEN, "env")
+    assert not api._LEGACY_TOKEN_FILE.exists() and not api._TOKEN_FILE.exists()
+
+
+def test_a_former_token_file_that_is_a_link_is_removed_never_what_it_points_to(runs, tmp_path):
+    kept = tmp_path / "someone-elses-file"
+    kept.write_text("not ours\n")
+    api._LEGACY_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    api._LEGACY_TOKEN_FILE.symlink_to(kept)
+    api.ensure_token()
+    assert not api._LEGACY_TOKEN_FILE.is_symlink() and kept.read_text() == "not ours\n"
+
+
+def _cookie_client(value):
+    c = console(token=None)
+    c.cookies.set(COOKIE, value)
+    return c
+
+
+def test_a_session_lasts_its_time_and_says_when_it_began(runs):
+    """The cookie: its date of issue, signed with it; refused once older than SESSION_TTL_S, or
+    dated ahead of the clock; a date rewritten is refused."""
+    import time
+    now = int(time.time())
+    assert _cookie_client(api._session(TOKEN)).get("/api/sections").status_code == 200
+    almost = api._session(TOKEN, now - api.SESSION_TTL_S + 60)
+    assert _cookie_client(almost).get("/api/sections").status_code == 200
+    expired = api._session(TOKEN, now - api.SESSION_TTL_S - 60)
+    assert _cookie_client(expired).get("/api/sections").status_code == 401
+    ahead = api._session(TOKEN, now + 3600)
+    assert _cookie_client(ahead).get("/api/sections").status_code == 401
+    _, _, mac = expired.split(".")
+    assert _cookie_client(f"v2.{now}.{mac}").get("/api/sections").status_code == 401
+    assert api.SESSION_TTL_S == 12 * 3600
+
+
+def test_a_rotation_refuses_every_session_of_the_former_token_at_once(runs, monkeypatch):
+    """`eregion rotate-token`: a new token in the console's file, read at the next request —
+    no restart — and every cookie of the former one refused; the deployment's token is rotated
+    where it is set."""
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    first, _ = api.ensure_token()
+    c = console(token=None)
+    assert c.get(f"/?token={first}", follow_redirects=False).status_code == 303
+    assert c.get("/api/sections").status_code == 200
+    api.rotate_token()
+    second = api._TOKEN_FILE.read_text().strip()
+    assert second != first
+    assert c.get("/api/sections").status_code == 401
+    assert console(token=first).get("/api/sections").status_code == 401
+    assert console(token=second).get("/api/sections").status_code == 200
+    monkeypatch.setenv("EREGION_CONSOLE_TOKEN", TOKEN)
+    with pytest.raises(RuntimeError):
+        api.rotate_token()
+    assert api._TOKEN_FILE.read_text().strip() == second
+
+
+def test_a_token_file_turned_into_a_link_while_it_runs_refuses_everything(runs, monkeypatch, tmp_path):
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    token, _ = api.ensure_token()
+    elsewhere = tmp_path / "elsewhere-token"
+    elsewhere.write_text(token + "\n")
+    api._TOKEN_FILE.unlink()
+    api._TOKEN_FILE.symlink_to(elsewhere)
+    assert console(token=token).get("/api/sections").status_code == 503
+
+
+def test_eregion_rotate_token_says_where_never_what(runs, monkeypatch):
+    from click.testing import CliRunner
+
+    from eregion_console.cli import cli
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    api.ensure_token()
+    res = CliRunner().invoke(cli, ["rotate-token"])
+    assert res.exit_code == 0, res.output
+    assert api._TOKEN_FILE.read_text().strip() not in res.output and "make console-url" in res.output
+    monkeypatch.setenv("EREGION_CONSOLE_TOKEN", TOKEN)
+    res = CliRunner().invoke(cli, ["rotate-token"])
+    assert res.exit_code != 0 and "EREGION_CONSOLE_TOKEN is set" in res.output
+
+
+# ── SEC10, its review: the token page, the cookie's digits, the live feed, what a start says ────
+
+def test_the_token_page_says_where_the_token_is_now():
+    """An operator without a session (after a rotation, after 12 h) is sent to `make console-url`,
+    never to the file the console no longer keeps."""
+    assert "make console-url" in api._TOKEN_PAGE and "~/.eregion/console/token" in api._TOKEN_PAGE
+    assert "console_token" not in api._TOKEN_PAGE
+
+
+def _asgi(cookie: bytes, kind: str = "http") -> list:
+    """The boundary called as the server calls it: the Cookie header's raw bytes (a client sends
+    what it wants; the server decodes them as latin-1), nothing else in front."""
+    import asyncio
+    sent = []
+
+    async def app(scope, receive, send):
+        sent.append("reached")
+    scope = {"type": kind, "path": "/api/sections", "raw_path": b"/api/sections", "query_string": b"",
+             "headers": [(b"host", b"localhost:7007"), (b"origin", ORIGIN.encode()), (b"cookie", cookie)],
+             "scheme": "http" if kind == "http" else "ws", "server": ("localhost", 7007),
+             "client": ("127.0.0.1", 50000), "root_path": "", "http_version": "1.1"}
+    if kind == "http":
+        scope["method"] = "GET"
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False} if kind == "http" else {"type": "websocket.connect"}
+
+    async def send(message):
+        sent.append(message)
+    asyncio.run(api._TokenAuthMiddleware(app)(scope, receive, send))
+    return sent
+
+
+@pytest.mark.parametrize("value", [b"v2.\xb2.x", b"v2.\xb9\xb2.x", b"v2.1e3.x", b"v2..x", b"v2.\xc2\xb2.x"])
+def test_a_cookie_of_any_digits_is_refused_never_an_error(runs, value):
+    """A session cookie read before any authentication: digits of another script (« ² », the raw
+    byte a server decodes as latin-1), a number written otherwise — 401, never an exception, on
+    HTTP and on the live feed (1008)."""
+    cookie = COOKIE.encode() + b"=" + value
+    http = _asgi(cookie)
+    assert "reached" not in http and http[0]["type"] == "http.response.start" and http[0]["status"] == 401
+    ws = _asgi(cookie, "websocket")
+    assert "reached" not in ws and ws[0] == {"type": "websocket.close", "code": 1008}
+
+
+def test_a_session_cookie_of_the_former_format_opens_nothing(runs):
+    """SEC1's cookie (an HMAC of the token, no date) is refused by construction since SEC10."""
+    import hashlib
+    import hmac
+    v1 = hmac.new(TOKEN.encode(), b"eregion-console-session/v1", hashlib.sha256).hexdigest()
+    assert _cookie_client(v1).get("/api/sections").status_code == 401
+
+
+@pytest.mark.parametrize("ends", ["rotation", "expiry"])
+def test_the_live_feed_ends_with_its_session(runs, monkeypatch, ends):
+    """A WebSocket opened with a session holds it again at each turn: the token rotated, or its
+    time over, the feed is closed (1008), as a refusal at its opening."""
+    from starlette.websockets import WebSocketDisconnect
+    monkeypatch.setattr(api, "_FEED_POLL_S", 0.05)
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    token, _ = api.ensure_token()
+    if ends == "expiry":
+        monkeypatch.setattr(api, "SESSION_TTL_S", 1)
+    import time
+    c = console(token=None)
+    c.cookies.set(COOKIE, api._session(token))
+    feed = Path("runs") / "watch-x_signals.jsonl"
+    feed.write_text("")
+    with c.websocket_connect(WS, headers={"Origin": ORIGIN}) as ws:
+        if ends == "rotation":
+            api.rotate_token()
+        # Something to send at every turn: a feed that stays open says so here, never hangs.
+        deadline = time.monotonic() + 5
+        with pytest.raises(WebSocketDisconnect) as closed:
+            while time.monotonic() < deadline:
+                with feed.open("a") as f:
+                    f.write(json.dumps({"event": "detection", "ttp": "T1110.001"}) + "\n")
+                ws.receive_json()
+            pytest.fail("the live feed still open past its session")
+    assert closed.value.code == 1008
+
+
+def test_what_a_start_says_of_the_former_file_is_what_happened(runs, monkeypatch, capsys):
+    """Its own token there already: the former file removed, and the console keeps its own — never
+    « a new token is drawn ». The former file not removable: said, never read."""
+    import os
+    monkeypatch.delenv("EREGION_CONSOLE_TOKEN")
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    token, _ = api.ensure_token()
+    api._LEGACY_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    api._LEGACY_TOKEN_FILE.write_text("old\n")
+    api.serve(port=7007)
+    out = capsys.readouterr().out
+    assert "is removed" in out and "the console keeps its own" in out and "a new token is drawn" not in out
+    assert api._TOKEN_FILE.read_text().strip() == token
+    if os.geteuid() == 0:
+        pytest.skip("root removes a file from a read-only directory")
+    api._LEGACY_TOKEN_FILE.write_text("old\n")
+    api._LEGACY_TOKEN_FILE.parent.chmod(0o500)
+    try:
+        api.serve(port=7007)
+    finally:
+        api._LEGACY_TOKEN_FILE.parent.chmod(0o700)
+    out = capsys.readouterr().out
+    assert "could not be removed" in out and "is removed" not in out

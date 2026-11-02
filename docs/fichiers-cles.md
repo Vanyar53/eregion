@@ -366,8 +366,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 (`glorfindel/signal_origin.py`) ; plus `runs/recovery/`, que les injecteurs écrivent
   channel_refusals.json       → SEC3 (V-05) : les lignes de `runs/` que la watch a refusées, comptées par événement
                                 (la dernière : fichier, heure, raison)
-  console_token               → SEC1 : le jeton que la console a tiré à son premier démarrage sans
-                                EREGION_CONSOLE_TOKEN (mode 600, relu ensuite) ; jamais écrit quand la variable est posée (H0)
+  console_token               → ancien emplacement du jeton tiré de la console : retiré à son premier
+                                démarrage depuis SEC10 (le jeton vit dans ~/.eregion/console/token)
   incidents.jsonl             → incidents actifs
   isolation/<vm>--<h>.json    → état NSG isolation + TTL. Clé = nom + hash de l'ID de ressource (troisième
                                 passe : deux VMs homonymes partageaient `<vm>.json`) ; un ancien `<vm>.json` n'est
@@ -413,9 +413,11 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;
-                                `expected_sudo` : count, last — ADM1, lu par la console)
+                                `expected_sudo` : count, last, origin_count — ADM1, COR1 ; `correlation` : queries,
+                                origin, card, unknown, compromised, unchecked, last — COR1 ; lus par la console)
   expected_sudo.jsonl         → ADM1 : chaque sudo d'administrateur attendu écarté par le RulePoller (at, rule,
-                                asset, account, command ≤ 300 car., logged_at), écrit AVANT d'écarter — un journal
+                                asset, account, command ≤ 300 car., logged_at ; un shell root écarté par l'origine de
+                                ses sessions SSH : via « origin », origin — COR1), écrit AVANT d'écarter — un journal
                                 qu'on ne peut écrire n'écarte rien ; 0600 ; au-delà de 2 Mo, la moitié la plus
                                 récente gardée. Lu par `glorfindel report`
   readiness.json              → verrou L6 par VM, clé `nom--hash(ID)` (quatrième passe Q3 : un homonyme héritait du

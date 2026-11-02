@@ -386,8 +386,13 @@ def no_console_settings(tmp_path, monkeypatch):
         import eregion_console.api as api
     except ImportError:  # the console's extra not installed
         return
-    monkeypatch.setattr(api, "_TOKEN_FILE", tmp_path / "glorfindel-home" / "console_token")
+    # Both of the token's places under tmp — its own, and the former one it retires at a start
+    # (SEC10): never the operator's.
+    monkeypatch.setattr(api, "_TOKEN_FILE", tmp_path / "console-home" / ".eregion" / "console" / "token")
+    monkeypatch.setattr(api, "_LEGACY_TOKEN_FILE", tmp_path / "glorfindel-home" / "console_token")
     monkeypatch.setitem(api._local_token, "value", "")
+    monkeypatch.setitem(api._local_token, "key", None)
+    monkeypatch.setitem(api._local_token, "retired", False)
 
 
 @pytest.fixture(autouse=True)

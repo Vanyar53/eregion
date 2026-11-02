@@ -230,9 +230,18 @@ def fresh(entry: dict | None) -> bool:
     return bool(entry) and entry["expires_at"] - time.time() > MARGIN_S
 
 
-def write_cache(entry: dict) -> None:
+def cache_dir() -> Path:
+    """The cache's directory: ours, 0700 — never a shared one."""
     CACHE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if CACHE.parent.stat().st_uid != os.getuid():
+        raise TokenError(f"le dossier du cache n'appartient pas à cet utilisateur : {CACHE.parent} "
+                         "(EREGION_AGENT_CACHE : un dossier à toi)")
     os.chmod(CACHE.parent, 0o700)
+    return CACHE.parent
+
+
+def write_cache(entry: dict) -> None:
+    cache_dir()
     tmp = CACHE.with_name(f".{CACHE.name}.{os.getpid()}")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -244,7 +253,7 @@ def write_cache(entry: dict) -> None:
 @contextlib.contextmanager
 def drawing():
     """One draw at a time between the sessions of this user."""
-    CACHE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    cache_dir()
     fd = os.open(CACHE.with_name(CACHE.name + ".lock"), os.O_WRONLY | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)

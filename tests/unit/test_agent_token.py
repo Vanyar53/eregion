@@ -276,6 +276,13 @@ def test_an_answer_that_is_not_a_token_is_refused(agent, gh_fake, answer, words)
     assert not agent.cache.exists()
 
 
+def test_a_cache_in_a_directory_not_ours_is_refused_before_any_draw(agent, gh_fake):
+    if os.getuid() == 0:
+        pytest.skip("root owns every directory")
+    _said(agent, agent.credential(EREGION_AGENT_CACHE="/token.json"), "n'appartient pas à cet utilisateur")
+    assert gh_fake.draws() == []
+
+
 def test_github_out_of_reach_is_said(agent):
     _said(agent, agent.credential(EREGION_AGENT_API="http://127.0.0.1:9"), "injoignable")
 

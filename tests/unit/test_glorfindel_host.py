@@ -124,11 +124,44 @@ def test_human_only_puts_every_vm_back_in_one_gesture(tmp_path, capsys):
     assert GONDOLIN in said and said.count("HUMAN_ONLY=1") == 3
 
 
+@pytest.mark.parametrize("autonomy, why", [
+    ({"default": "full_auto", "assets": [{"match": GONDOLIN, "mode": "non_disruptive"}]},
+     "forme inconnue (autonomy.default hors des modes connus)"),
+    ({"assets": [{"match": GONDOLIN, "mode": "non_disruptive", "until": "x"}]},
+     "forme inconnue (une entrée d'autonomy.assets a d'autres clés que match et mode)"),
+    ({"assets": [{"match": GONDOLIN, "mode": "non_disruptive"}], "ttl": 3},
+     "forme inconnue (autonomy : une clé de plus)"),
+], ids=["default-unknown", "entry-extra-key", "autonomy-extra-key"])
+def test_a_config_the_watch_would_refuse_keeps_no_mode(tmp_path, capsys, autonomy, why):
+    """M2369 (BL1c review): what Glorfindel's strict reading refuses at the watch's start — a
+    default outside the known modes, an entry with other keys than match and mode, a key more
+    in autonomy — is no config whose modes are kept: every VM in human_only, said."""
+    import yaml
+    from glorfindel.config import ConfigError
+    with pytest.raises(ConfigError):                    # the watch would not start on it
+        _parse_autonomy(autonomy)
+    modes, _, said = _push(tmp_path, capsys, yaml.safe_dump({"autonomy": autonomy}))
+    assert set(modes.values()) == {"human_only"}
+    assert f"config de H0 {why} : toutes les VM en human_only" in said
+
+
+def test_what_h0_s_config_says_reaches_the_terminal_printable_only(tmp_path, capsys):
+    """A name read on H0, shown by the push, never carries an escape sequence to the operator's
+    terminal: every character that is not printable is shown as « ? »."""
+    h0 = _h0(assets=[{"match": "vm-\x1b[2J\x1b]0;evil\x07x", "mode": "bogus\x1b[31m"}])
+    _, _, said = _push(tmp_path, capsys, h0)
+    assert "\x1b" not in said and "\x07" not in said
+    assert "vm-?[2J?]0;evil?x" in said
+
+
 def test_the_modes_host_config_knows_are_glorfindel_s():
     """host_config.py imports nothing of Glorfindel (it runs beside the Makefile): the modes it
-    carries are Glorfindel's own, full_auto (deferred) left out."""
-    from glorfindel.config import VALID_AUTONOMY_MODES
+    carries are Glorfindel's own, full_auto (deferred) left out, and so are the keys its strict
+    reading accepts."""
+    from glorfindel.config import _AUTONOMY_ASSET_KEYS, _AUTONOMY_KEYS, VALID_AUTONOMY_MODES
     assert set(host_config.KNOWN_MODES) == VALID_AUTONOMY_MODES
+    assert host_config.AUTONOMY_KEYS == _AUTONOMY_KEYS
+    assert host_config.ASSET_KEYS == _AUTONOMY_ASSET_KEYS
 
 
 def test_host_terraform_reads_the_bench_and_is_no_target():

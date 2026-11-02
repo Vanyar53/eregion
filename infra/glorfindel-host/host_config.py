@@ -13,14 +13,16 @@ human_only, and each VM's mode kept as it is on H0 (BL1c, Jonathan's decision of
   on the bench (gondolin and bree in ``non_disruptive``, docs/design/modele-de-menace.md §5) had
   to be given again in the console after each push.
 - **The safe side (A0)**: never a mode bolder than the one in place.
-  - H0's config unread (absent, not YAML, of another shape): every VM in ``human_only``, as
-    before, and said.
+  - H0's config unread (absent, not YAML, of another shape), or one Glorfindel's strict reading
+    would refuse at the watch's start (a default outside ``KNOWN_MODES``, a key more in
+    ``autonomy`` or in an entry): every VM in ``human_only``, as before, and said.
   - A mode on H0 this code does not know (``KNOWN_MODES``): that VM goes to ``human_only``,
     said. A pattern (``vm-*``) or an entry of another shape: not kept, said.
   - The same name twice on H0: the first entry, the one H0 resolves (``AutonomyConfig.resolve``).
   - A VM of the local config H0 does not know: ``human_only``, as before.
-- **HUMAN_ONLY=1** (``--human-only``): every VM back to ``human_only`` in one gesture — the
-  emergency way back to an H0 that does nothing on its own.
+- **HUMAN_ONLY=1** (``--human-only``; only « 1 »): every VM back to ``human_only`` in one
+  gesture — the emergency way back to an H0 that does nothing on its own.
+- What H0's config says reaches the operator's terminal printable only (``printable``).
 
 Backends and exceptions stay as they are. No Glorfindel import: this runs on the operator's
 machine, beside the Makefile.
@@ -34,6 +36,9 @@ import yaml
 # glorfindel/config.py VALID_AUTONOMY_MODES (full_auto is deferred: refused there, not kept
 # here) — tests/unit/test_glorfindel_host.py holds the two equal.
 KNOWN_MODES = ("human_only", "non_disruptive")
+# glorfindel/config.py _AUTONOMY_KEYS, _AUTONOMY_ASSET_KEYS — held equal by the same test.
+AUTONOMY_KEYS = ("default", "assets", "allow_destructive")
+ASSET_KEYS = ("match", "mode")
 KEPT = "gardé de H0"
 HUMAN = "human_only"
 _PATTERN = set("*?[]")
@@ -55,6 +60,14 @@ def read_h0(text: str | None) -> tuple[dict | None, str]:
         return cfg, ""
     if not isinstance(autonomy, dict) or not isinstance(autonomy.get("assets") or [], list):
         return None, "forme inconnue (autonomy)"
+    # What Glorfindel's strict reading refuses at the watch's start (glorfindel/config.py
+    # _check_autonomy): a config the watch would not run is no config whose modes are kept.
+    if set(autonomy) - set(AUTONOMY_KEYS):
+        return None, "forme inconnue (autonomy : une clé de plus)"
+    if "default" in autonomy and autonomy["default"] not in KNOWN_MODES:
+        return None, "forme inconnue (autonomy.default hors des modes connus)"
+    if any(isinstance(a, dict) and set(a) - set(ASSET_KEYS) for a in autonomy.get("assets") or []):
+        return None, "forme inconnue (une entrée d'autonomy.assets a d'autres clés que match et mode)"
     return cfg, ""
 
 
@@ -102,7 +115,14 @@ def host_config(cfg: dict, h0: dict | None = None, *, h0_why: str = "",
     return out, report
 
 
+def printable(text) -> str:
+    """What H0's config says, shown in the operator's terminal: printable characters only — a
+    name read on H0 never carries an escape sequence to it."""
+    return "".join(c if c.isprintable() else "?" for c in str(text))
+
+
 def render(report) -> list[str]:
+    report = [(printable(vm), printable(mode), printable(why)) for vm, mode, why in report]
     width = max([len(vm) for vm, *_ in report] + [10])
     return [f"  {vm:<{width}}  {mode:<15} {why}" for vm, mode, why in report] or [
         "  aucune VM avec un mode à elle : toutes en human_only (le défaut)"]

@@ -142,16 +142,16 @@ Trois canaux, à ne pas confondre :
 | S | Un battement de watch qui ne parle pas des cibles, une fenêtre d'exercice antidatée | Le battement porte le périmètre de la watch, comparé à celui de l'injecteur et relu avant chaque action ; une fenêtre est bornée par la création de son blob, et ne marque une VM de production que pour une technique non destructive (SEC5) |
 | T | Une URL de canal mal réglée, un blob démesuré | Le jeton ne part que vers un point de terminaison Azure Storage ; un tirage lit en flux borné (taille, nombre), et dit ce qui dépasse (SEC5) |
 | I | Un secret de l'hôte fuit | Identités managées plutôt que des secrets ; `host.env` hors du dépôt ; le jeton du bot de l'atelier jamais sur H0 |
-| E | Une identité de Glorfindel qui peut tout sur l'abonnement | Un principal par service (watch, console, bot), chacun avec ce que son code appelle, sur les groupes inscrits : la réponse à la watch, le restore à la console et au bot seulement (deux rôles personnalisés, `infra/identities/`) ; jamais `Contributor` sur un abonnement, ni dans la doc, ni dans un script, ni dans ce que l'audit conseille ; le conteneur rouge ne prend jamais le principal partagé ; un principal de la watch qui tient le restore est dit (SEC7, testé) |
+| E | Une identité de Glorfindel qui peut tout sur l'abonnement | Un principal par service (watch, console, bot), chacun avec ce que son code appelle, sur les groupes inscrits : la réponse à la watch, le restore à la console et au bot seulement (deux rôles personnalisés, `infra/identities/`) ; jamais `Contributor` sur un abonnement, ni dans la doc, ni dans un script, ni dans ce que l'audit conseille ; le conteneur rouge ne prend jamais le principal partagé ; un principal de la watch qui tient le restore est dit (SEC7, testé). **Pas sur H0** : ses trois conteneurs partagent l'identité managée de la VM, qui tient la réponse sur le groupe du banc (l'encadré ci-dessous) |
 | S | Un autre hôte répond à l'adresse de H0 | Sa clé d'hôte épinglée par son empreinte, relevée sur la VM, dans l'environnement de l'opérateur : une autre clé refuse avant toute commande ; sans l'empreinte, la première clé acceptée, et c'est dit (SEC7) |
-| E | Un processus qui prend un conteneur (une dépendance, une ligne forgée) | Aucune capacité, aucun gain de privilège, la racine en lecture seule : il n'écrit que dans ses montages (SEC7, testé) |
+| E | Un processus qui prend un conteneur (une dépendance, une ligne forgée) | Aucune capacité, aucun gain de privilège, la racine en lecture seule : il n'écrit sur l'hôte que dans ses montages (SEC7, testé). **Sur H0**, il tient aussi le jeton de l'identité managée, donc le rôle de la réponse sur le groupe du banc : l'encadré ci-dessous dit ce que ça ouvre |
 | T | Un plan d'Orodruin, sur un poste sans l'état de H0, retire à la watch hébergée l'accès au canal | Refusé, sauf `NO_WATCH=1` dit (SEC7) |
 | D | Un injecteur qui s'emballe | Plafond, arrêt d'urgence, fenêtres bornées (O1, B2) |
 | S | Une demande de Dagorlad forgée sur l'hôte de la console fait agir Orodruin | Orodruin ne tire rien : l'opérateur porte la demande par SSH, après l'avoir vue et confirmée. Elle est relue par son seul lecteur (un champ de plus la refuse). Le contrat doit être armé. Chaque fil est jugé avec les codes de la console, sur ce qu'Orodruin lit maintenant ; un fil refusé, rien ne part. Le nom tapé d'un fil destructif est comparé au nom qu'Orodruin lit, puis à celui qu'Annatar lit (DG-b) |
 | D | Une demande qui s'emballe | Les fils tournent l'un après l'autre. Le plafond d'Orodruin porte sur la demande entière : ses appels journalisés, chaque ligne nommant la demande, et son temps. « Stop all » est l'arrêt d'urgence (DG-b) |
 | T | Un exercice défait ce que Glorfindel a fait, ou frappe une VM encore en panne | Une VM tenue par Glorfindel (ses règles d'isolation ou de quarantaine sur le NSG de chaque carte et de chaque sous-réseau de la VM ; illisible vaut tenue, `eregion_core/held.py`, la même règle au preflight d'Annatar) est attendue, puis son fil est sauté : jamais levée. Pour lire cartes et sous-réseaux, le rôle de lecture d'Orodruin gagne deux lectures sur le banc, rien en écriture. Une VM dont la panne n'a pas vérifié son retour ne prend plus de fil (DG-b) |
 | I | Ce qu'Orodruin publie pour la console | Le verdict (`armed` ou `passive`, les codes, l'heure) et le statut des demandes, sans identifiant, sans expérience ni cible ; même conteneur, même attribution. H0 relit chaque blob contre sa forme avant de l'écrire (DG-b) |
-| E | Le Glorfindel hébergé est poussé à écrire | Il n'écrit que sur le groupe du banc, avec le rôle de la réponse : jamais un restore, une suppression, une identité, un rôle. Seule une VM que l'opérateur a passée en `non_disruptive` après son contrôle de préparation (gondolin, bree) reçoit une action seule, réversible, sous le seuil de confiance et les gardes ; toute autre reste en `human_only`. Le push garde le mode de chaque VM en place sur H0, jamais un plus hardi : le défaut et toute VM inconnue de H0 en `human_only`, une config de H0 illisible ou un mode inconnu en `human_only`, et c'est dit ; `HUMAN_ONLY=1` remet tout en `human_only` d'un geste (BL1c, 02/11). **La posture de H0 sur le banc** (décision de Jonathan, 31/10) : l'encadré ci-dessous |
+| E | Le Glorfindel hébergé est poussé à écrire | Il n'écrit que sur le groupe du banc, avec le rôle de la réponse : jamais un restore, une suppression, une identité, un rôle. Seule une VM que l'opérateur a passée en `non_disruptive` après son contrôle de préparation (gondolin, bree) reçoit une action seule, réversible, derrière le seuil de confiance et les gardes ; toute autre reste en `human_only`. Le push garde le mode de chaque VM en place sur H0, jamais un plus hardi : le défaut et toute VM inconnue de H0 en `human_only`, une config de H0 illisible ou un mode inconnu en `human_only`, et c'est dit ; `HUMAN_ONLY=1` remet tout en `human_only` d'un geste (BL1c, 02/11). **La posture de H0 sur le banc** (décision de Jonathan, 31/10) : l'encadré ci-dessous |
 
 **La posture de H0 sur le banc (décision de Jonathan, 31/10 ; bree le 01/11).**
 
@@ -176,6 +176,12 @@ le banc. H0 répond, il ne fait plus seulement qu'observer.
   - **un clic d'approbation dans la console, ou un bouton du bot** (Revert), écrit sur le banc,
     bree comprise, quel que soit le mode de la VM. C'est un humain qui agit, derrière le jeton de la
     console (et le tunnel SSH) ou la liste d'autorisation de Discord (`DISCORD_ALLOWED_*`) ;
+  - **un conteneur de H0 compromis, ou une clé SSH de H0, tient ce rôle** hors du code de
+    Glorfindel : le jeton de l'identité managée se lit de chacun des trois conteneurs. Le rôle
+    de la réponse donne `runCommand` (la coupure des sessions, `ss -K`) : une commande en root
+    sur toute VM du banc, bree et gondolin comprises ; et l'écriture de leurs NSG et de leurs
+    cartes réseau. Dans le code, la commande est écrite d'avance ; avec le jeton, elle est
+    libre ;
   - le restore n'est pas dans le rôle : un Restore lancé de la console ou du bot échoue sur Azure.
 - **Ce qui le borne** :
   - **le rôle** : les écritures de la réponse et rien d'autre
@@ -183,14 +189,16 @@ le banc. H0 répond, il ne fait plus seulement qu'observer.
     suppression, une identité, un rôle ;
   - **le groupe** : `rg-celebrimbor` seul. Rien sur l'abonnement, rien sur le groupe de H0 : H0 ne
     peut ni s'isoler, ni toucher une autre charge ;
-  - **les modes** : en `non_disruptive`, seules les actions réversibles partent seules, sous le
-    seuil de confiance (0,7), après des tirages qui s'accordent (D-1) et derrière les gardes
+  - **les modes** : en `non_disruptive`, seules les actions réversibles partent seules, au-dessus
+    du seuil de confiance (0,7), après des tirages qui s'accordent (D-1) et derrière les gardes
     déterministes de `decide` ; le destructif reste à un humain. Toute autre VM est en `human_only` ;
   - **le push** (décision de Jonathan, 02/11 ; SEC7 forçait `human_only` partout à chaque push) :
     `make glorfindel-host-push` garde le mode de chaque VM tel qu'il est sur H0, jamais un plus
     hardi. Le défaut reste `human_only` et la liste destructive vide, quoi que dise la config
-    locale ; une VM inconnue de H0, une config de H0 illisible, un mode inconnu ou un motif
-    partent en `human_only`, et c'est dit, VM par VM (`infra/glorfindel-host/host_config.py`).
+    locale ; une VM inconnue de H0, une config de H0 illisible ou que la watch refuserait, un
+    mode inconnu ou un motif partent en `human_only`, et c'est dit, VM par VM
+    (`infra/glorfindel-host/host_config.py`) ; la config de H0, relue juste avant l'envoi, a
+    changé entre-temps : rien n'est envoyé.
     Pourquoi : la posture se perdait à chaque push, et se redonnait à la main dans la console.
     **`make glorfindel-host-push HUMAN_ONLY=1`** est le geste d'urgence, qui remet tout en
     `human_only` ;
@@ -198,7 +206,12 @@ le banc. H0 répond, il ne fait plus seulement qu'observer.
     mode de la VM qu'elles touchent (`glorfindel/orphans.py`, `_ALONE`) ;
   - la règle de production ne change pas : elle porte sur les injecteurs, et bree, non inscrite,
     n'est jamais une cible d'exercice ;
-  - le banc est jetable et ne porte aucune charge d'un client.
+  - le banc est jetable et ne porte aucune charge d'un client : ses VM n'ont pas de vraie
+    charge, rien à voler ni à casser qu'on ne recrée ;
+  - **ce qui borne un conteneur ou une clé compromis** : le groupe du banc seul (jamais
+    l'abonnement, jamais le groupe de H0) ; l'entrée de H0 fermée (SSH depuis l'IP de
+    l'opérateur seulement, sa clé d'hôte épinglée ; la console derrière le tunnel et son jeton) ;
+    des conteneurs sans capacité, sans gain de privilège, la racine en lecture seule.
 - **Revenir à un H0 qui ne fait rien seul**, d'un geste : `make glorfindel-host-push HUMAN_ONLY=1`.
 - **Revenir en lecture seule**, si besoin : l'étape 7 de [`docs/banc-bl1.md`](../banc-bl1.md). Le
   rôle retiré, `az role assignment list --assignee <principal> --all` ne montre plus que `Reader` et
@@ -207,7 +220,7 @@ le banc. H0 répond, il ne fait plus seulement qu'observer.
 
 **Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`. La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
 
-**Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule — planifié ; une identité managée par conteneur sur un même hôte — planifié.
+**Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule, par une file signée — planifié ; une identité managée par conteneur sur un même hôte — planifié ; l'identité unique de H0, partagée par la watch, la console et le bot — planifié.
 
 ---
 
@@ -253,7 +266,7 @@ le banc. H0 répond, il ne fait plus seulement qu'observer.
 ## Décisions assumées
 
 - **La revue de conception sans responsable désigné** (T-05). Ce qui la tient : `CODEOWNERS` sur tout le dépôt (SEC6), la relecture de chaque lot par elrond, et le mainteneur, seul à publier une release.
-- **`runCommand` dans le rôle de la réponse** (V-17, SEC7). C'est son droit le plus fort : une commande en root sur la VM, que l'identité de la watch peut lancer. Il y est pour une seule chose, couper les sessions déjà ouvertes quand la VM est isolée (`ss -K`, Linux) — sans lui, un attaquant connecté garde la main sur une VM « isolée » ; le restore s'en sert aussi, pour neutraliser la dernière commande avant l'échange de disques. Ce qui le borne : la commande est écrite dans le code, jamais par le modèle ; elle ne vise qu'une VM que la décision isole, sur les groupes inscrits ; et la préparation dit « sessions non coupées » quand il manque (`no_drain`), plutôt que d'élargir le rôle.
+- **`runCommand` dans le rôle de la réponse** (V-17, SEC7). C'est son droit le plus fort : une commande en root sur la VM, que l'identité de la watch peut lancer. Il y est pour une seule chose, couper les sessions déjà ouvertes quand la VM est isolée (`ss -K`, Linux) — sans lui, un attaquant connecté garde la main sur une VM « isolée » ; le restore s'en sert aussi, pour neutraliser la dernière commande avant l'échange de disques. Ce qui le borne : la commande est écrite dans le code, jamais par le modèle ; elle ne vise qu'une VM que la décision isole, sur les groupes inscrits ; et la préparation dit « sessions non coupées » quand il manque (`no_drain`), plutôt que d'élargir le rôle. **Sur H0** (sa posture sur le banc, BL1c), ce droit est tenu par l'identité de la VM, que la console, le bot et tout conteneur compromis partagent : la commande n'y est plus bornée par le code, seulement par le groupe du banc, l'entrée fermée de H0 et des VM sans vraie charge (§5).
 - **Le banc ouvert à Internet, par conception** (V-37) : c'est une cible d'exercice. Ce qui le borne : il est jetable, inscrit `bench`, et ne porte aucune charge réelle.
 - **Qui fusionne sur `main` publie une image que H0 accepte** (CI3, P-02). La signature prouve le workflow, la branche et le commit, pas la relecture du code. Ce qui le borne : la protection de `main` et `CODEOWNERS`, le mainteneur seul à publier la release qui déploie, et sigstore et l'OIDC de GitHub, tenus pour de confiance. Le chemin de secours, un déploiement de H0 à la main (`make glorfindel-host-start`), construit encore l'image sur la VM, hors de la vérification ; `make orodruin-push-dev` aussi, sur le poste, dit comme tel.
 

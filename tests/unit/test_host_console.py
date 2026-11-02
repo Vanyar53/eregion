@@ -293,17 +293,23 @@ def test_push_checks_the_token_before_anything_reaches_the_vm():
 
 
 @needs_make
-@pytest.mark.parametrize("human_only", [False, True])
-def test_push_reads_h0_s_config_before_it_sends_its_own(tmp_path, human_only):
-    """M2367 (BL1c, 02/11): the push reads the config in place on H0 through the ssh it already
-    opens, before the scp that replaces it, and gives it to host_config.py (each VM's mode
-    kept); unread, an empty file (every VM human_only, said). HUMAN_ONLY=1 adds --human-only."""
+@pytest.mark.parametrize("value, human_only", [(None, False), ("1", True), ("0", False)])
+def test_push_reads_h0_s_config_before_it_sends_its_own(tmp_path, value, human_only):
+    """M2367, M2780 (BL1c, 02/11): the push reads the config in place on H0 through the ssh it
+    already opens, before the scp that replaces it, and gives it to host_config.py (each VM's
+    mode kept); unread, an empty file (every VM human_only, said). It reads it again just before
+    the scp: changed in between (a mode changed in the console), nothing is sent. Only
+    HUMAN_ONLY=1 adds --human-only — HUMAN_ONLY=0 keeps the modes."""
     res = _make(tmp_path, "-n", "glorfindel-host-push", "HOST_IP=203.0.113.9",
-                *(["HUMAN_ONLY=1"] if human_only else []))
+                *([f"HUMAN_ONLY={value}"] if value is not None else []))
     assert res.returncode == 0, res.stderr
     out = res.stdout
     read = out.index("'cat eregion/glorfindel-config.yaml' > $h0 2>/dev/null || : > $h0")
-    assert read < out.index("host_config.py glorfindel-config.yaml $cfg --h0 $h0") < out.index("scp ")
+    config = out.index("host_config.py glorfindel-config.yaml $cfg --h0 $h0")
+    again = out.index("'cat eregion/glorfindel-config.yaml' > $h1 2>/dev/null || : > $h1")
+    compared = out.index("cmp -s $h0 $h1 || {")
+    assert read < config < again < compared < out.index("scp ")
+    assert "rien d'envoyé" in out[compared:out.index("scp ")]
     assert ("--h0 $h0 --human-only" in out) is human_only
 
 

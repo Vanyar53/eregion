@@ -5873,6 +5873,24 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (2363, 2364, 2365, 2366, 2368)})
 TESTS["M2367"] = "tests/unit/test_host_console.py"
 
+# BL1c, after its 5.5 review: what the watch's strict reading refuses keeps no mode, H0's config
+# read again before the scp, only HUMAN_ONLY=1 heard, what H0 says shown printable. M2369, M2780–M2783.
+MUTANTS += [
+    ("M2369", "an H0 entry with other keys than match and mode (refused by the watch) keeps its mode (BL1c)",
+     HCF, "    if any(isinstance(a, dict) and set(a) - set(ASSET_KEYS) for a in autonomy.get(\"assets\") or []):\n",
+     "    if False:\n"),
+    ("M2780", "the push sends its config although H0's changed since it was read (BL1c)", MAKE,
+     "\t { cmp -s $$h0 $$h1 || {", "\t { true || {"),
+    ("M2781", "an H0 default outside the known modes (refused by the watch) keeps the VMs' modes (BL1c)",
+     HCF, '    if "default" in autonomy and autonomy["default"] not in KNOWN_MODES:\n', "    if False:\n"),
+    ("M2782", "a name read on H0 reaches the operator's terminal with its escape sequences (BL1c)", HCF,
+     "    report = [(printable(vm), printable(mode), printable(why)) for vm, mode, why in report]\n", ""),
+    ("M2783", "HUMAN_ONLY=0 puts every VM back in human_only (BL1c)", MAKE,
+     "$(if $(filter 1,$(HUMAN_ONLY)), --human-only)", "$(if $(HUMAN_ONLY), --human-only)"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (2369, 2781, 2782)})
+TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in (2780, 2783)})
+
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its
 # non-regression (eregion_console/coverage.py), fed to the indicators and shown. M1800–M1825.

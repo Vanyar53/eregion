@@ -38,6 +38,11 @@ seul sur le banc, dans le mode de chaque VM.
     `human_only` et pourquoi). **`make glorfindel-host-push HUMAN_ONLY=1`** est le geste
     d'urgence : toutes les VM remises en `human_only` d'un coup, pour revenir à un H0 qui ne
     fait rien seul (la console les redonne, une à une, après leur contrôle de préparation).
+    **Ne pas changer un mode dans la console pendant un push** : la config de H0 est lue avant
+    le `scp` qui la remplace, un mode changé entre les deux serait écrasé. Le push la relit juste
+    avant le `scp` et, si elle a changé entre les deux lectures, s'arrête sans rien envoyer
+    (« la config de H0 a changé pendant le push ») : relancer. Seul `HUMAN_ONLY=1` déclenche le
+    geste d'urgence (`HUMAN_ONLY=0` ou vide : les modes gardés).
     Le CD, lui, ne touche ni `host.env` ni la config.
   - **Un nouveau `host.env`** (`make glorfindel-host-env`) part en lecture seule
     (`GLORFINDEL_READ_ONLY=1`) : la posture se donne à la main, sur un hôte qui doit répondre.

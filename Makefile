@@ -641,18 +641,22 @@ glorfindel-host-known:
 # host.env → ~/eregion/.env (lu par docker compose), et la config locale : le défaut forcé à
 # human_only, le mode de chaque VM gardé tel qu'il est sur H0 (BL1c, décision de Jonathan du 02/11 ;
 # la config de H0 lue par la même connexion ssh — illisible, tout part en human_only, et c'est dit).
-# HUMAN_ONLY=1 : toutes les VM remises en human_only, le geste d'urgence (host_config.py).
+# HUMAN_ONLY=1 (seul « 1 ») : toutes les VM remises en human_only, le geste d'urgence
+# (host_config.py). La config de H0 est relue juste avant le scp : changée entre les deux lectures
+# (un mode changé dans la console pendant le push), rien n'est envoyé.
 glorfindel-host-push: glorfindel-host-known
 	@test -f infra/glorfindel-host/host.env || { echo "infra/glorfindel-host/host.env manquant (voir host.env.example)"; exit 1; }
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@.venv/bin/python infra/glorfindel-host/host_env.py --check infra/glorfindel-host/host.env
-	@cfg=$$(mktemp); h0=$$(mktemp); \
+	@cfg=$$(mktemp); h0=$$(mktemp); h1=$$(mktemp); \
 	 $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h0 2>/dev/null || : > $$h0; \
-	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg --h0 $$h0$(if $(HUMAN_ONLY), --human-only) && \
+	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg --h0 $$h0$(if $(filter 1,$(HUMAN_ONLY)), --human-only) && \
+	 { $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h1 2>/dev/null || : > $$h1; } && \
+	 { cmp -s $$h0 $$h1 || { echo "  la config de H0 a changé pendant le push (un mode changé dans la console ?) : rien d'envoyé, relancer"; false; }; } && \
 	 scp -q $(HOST_SSH_OPTS) infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
 	 scp -q $(HOST_SSH_OPTS) $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
 	 $(HOST_SSH) 'chmod 600 eregion/.env eregion/glorfindel-config.yaml'; \
-	 rc=$$?; rm -f $$cfg $$h0; exit $$rc
+	 rc=$$?; rm -f $$cfg $$h0 $$h1; exit $$rc
 	@echo "  host.env et glorfindel-config.yaml poussés sur $(HOST_IP)"
 
 # M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, par défaut le

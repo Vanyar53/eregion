@@ -210,8 +210,8 @@ Dans la console, à trois endroits :
 
 **Seulement pour remettre H0 en lecture seule** : depuis le 31/10, la posture de H0 garde le rôle,
 `GLORFINDEL_READ_ONLY=0` et les modes. Hors de ce cas, ne garder que les deux dernières lignes
-(`orodruin-stop`, `celebrimbor-stop`), et vérifier que plus aucune isolation ni blocage ne reste
-sur gondolin (`glorfindel list`).
+(`orodruin-stop`, `celebrimbor-stop`), vérifier que plus aucune isolation ni blocage ne reste
+sur gondolin (`glorfindel list`), et `make glorfindel-host-cd-enable` si le CD a été mis en pause.
 
 ```bash
 # console : gondolin et bree → human_only ; plus aucune isolation ni blocage (glorfindel list)

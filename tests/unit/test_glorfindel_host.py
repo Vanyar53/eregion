@@ -27,13 +27,108 @@ def test_pushed_config_is_human_only_for_every_asset():
             "allow_destructive": ["vm-celebrimbor-*"],
         },
     }
-    out = host_config.host_config(local)
+    out, report = host_config.host_config(local)
     autonomy = _parse_autonomy(out["autonomy"])
     assert autonomy.default == "human_only"
     assert autonomy.assets == [] and autonomy.allow_destructive == []
     assert out["monitoring_backends"] == local["monitoring_backends"]
     assert out["exceptions"] == local["exceptions"]
     assert local["autonomy"]["default"] == "non_disruptive"  # the local file is untouched
+    assert report[0] == ("*", "human_only", "config de H0 non lue : toutes les VM en human_only")
+
+
+# ── BL1c (02/11): each VM's mode on H0 kept by the push, never a bolder one ─────────────────
+
+GONDOLIN, BREE, NEW = "vm-celebrimbor-gondolin", "vm-celebrimbor-bree", "vm-celebrimbor-new"
+LOCAL = {"monitoring_backends": [{"type": "azure_monitor"}],
+         "autonomy": {"default": "non_disruptive", "allow_destructive": ["vm-*"],
+                      "assets": [{"match": NEW, "mode": "non_disruptive"},
+                                 {"match": GONDOLIN, "mode": "human_only"}]}}
+
+
+def _h0(**autonomy):
+    import yaml
+    return yaml.safe_dump({"monitoring_backends": [{"type": "azure_monitor"}],
+                           "autonomy": {"default": "human_only", **autonomy}})
+
+
+def _push(tmp_path, capsys, h0_text, *flags):
+    """host_config.py as `make glorfindel-host-push` runs it: H0's config read through ssh
+    into a file (empty when unread), the config sent, and what it says."""
+    import yaml
+    src, dst, h0 = tmp_path / "local.yaml", tmp_path / "out.yaml", tmp_path / "h0.yaml"
+    src.write_text(yaml.safe_dump(LOCAL), encoding="utf-8")
+    if h0_text is not None:
+        h0.write_text(h0_text, encoding="utf-8")
+    assert host_config.main([str(src), str(dst), "--h0", str(h0), *flags]) == 0
+    out = yaml.safe_load(dst.read_text(encoding="utf-8"))
+    autonomy = _parse_autonomy(out["autonomy"])          # what the watch on H0 will read
+    said = capsys.readouterr().out
+    return {vm: autonomy.resolve(vm) for vm in (GONDOLIN, BREE, NEW)}, autonomy, said
+
+
+def test_the_push_keeps_each_vm_s_mode_in_place_on_h0(tmp_path, capsys):
+    """M2363: gondolin and bree in non_disruptive on H0 (its posture on the bench) stay so; the
+    local config never makes one bolder (gondolin human_only there: H0's kept), a VM H0 does not
+    know stays human_only (the local non_disruptive never reaches H0), and so does the default.
+    Each VM is said, with the mode sent and where it comes from."""
+    h0 = _h0(assets=[{"match": GONDOLIN, "mode": "non_disruptive"},
+                     {"match": BREE, "mode": "non_disruptive"}])
+    modes, autonomy, said = _push(tmp_path, capsys, h0)
+    assert modes == {GONDOLIN: "non_disruptive", BREE: "non_disruptive", NEW: "human_only"}
+    assert autonomy.default == "human_only" and autonomy.allow_destructive == []
+    lines = {line.split()[0]: line for line in said.splitlines()[1:]}
+    assert "non_disruptive" in lines[GONDOLIN] and "gardé de H0" in lines[GONDOLIN]
+    assert "non_disruptive" in lines[BREE] and "gardé de H0" in lines[BREE]
+    assert "human_only" in lines[NEW] and "inconnue de H0" in lines[NEW]
+
+
+@pytest.mark.parametrize("h0_text, why", [
+    (None, "absente, vide ou non lue"),                     # the file is not there / ssh read nothing
+    ("", "absente, vide ou non lue"),
+    ("autonomy: [unclosed\n", "illisible (YAML)"),
+    ("- a list\n- not a config\n", "forme inconnue"),
+    ("autonomy:\n  assets: {vm-celebrimbor-gondolin: non_disruptive}\n", "forme inconnue (autonomy)"),
+], ids=["absent", "empty", "not-yaml", "a-list", "assets-not-a-list"])
+def test_an_unread_h0_config_sends_every_vm_human_only_and_says_so(tmp_path, capsys, h0_text, why):
+    """M2364: H0's config absent, unreadable or of another shape — nothing of it is trusted:
+    every VM in human_only, as before BL1c, and the push says why."""
+    modes, _, said = _push(tmp_path, capsys, h0_text)
+    assert set(modes.values()) == {"human_only"}
+    assert f"config de H0 {why} : toutes les VM en human_only" in said
+
+
+def test_a_mode_h0_does_not_know_is_never_carried(tmp_path, capsys):
+    """M2365: a mode this code does not know (full_auto, deferred; a typo) is not carried — that
+    VM goes to human_only, said. A pattern or an entry of another shape on H0 is not carried
+    either; the same name twice: the first, the one H0 resolves."""
+    h0 = _h0(assets=[{"match": GONDOLIN, "mode": "full_auto"},
+                     {"match": "vm-celebrimbor-*", "mode": "non_disruptive"},
+                     "not a rule",
+                     {"match": BREE, "mode": "human_only"},
+                     {"match": BREE, "mode": "non_disruptive"}])
+    modes, autonomy, said = _push(tmp_path, capsys, h0)
+    assert modes == {GONDOLIN: "human_only", BREE: "human_only", NEW: "human_only"}
+    assert "mode inconnu sur H0 ('full_auto') : human_only" in said
+    assert "motif sur H0, non reporté" in said and "entrée de H0 d'une autre forme" in said
+
+
+def test_human_only_puts_every_vm_back_in_one_gesture(tmp_path, capsys):
+    """M2366: HUMAN_ONLY=1 (--human-only), the emergency gesture: every VM back to human_only
+    whatever H0 holds, each said."""
+    h0 = _h0(assets=[{"match": GONDOLIN, "mode": "non_disruptive"},
+                     {"match": BREE, "mode": "non_disruptive"}])
+    modes, autonomy, said = _push(tmp_path, capsys, h0, "--human-only")
+    assert set(modes.values()) == {"human_only"} and autonomy.assets == []
+    assert "HUMAN_ONLY=1 : toutes les VM remises en human_only" in said
+    assert GONDOLIN in said and said.count("HUMAN_ONLY=1") == 3
+
+
+def test_the_modes_host_config_knows_are_glorfindel_s():
+    """host_config.py imports nothing of Glorfindel (it runs beside the Makefile): the modes it
+    carries are Glorfindel's own, full_auto (deferred) left out."""
+    from glorfindel.config import VALID_AUTONOMY_MODES
+    assert set(host_config.KNOWN_MODES) == VALID_AUTONOMY_MODES
 
 
 def test_host_terraform_reads_the_bench_and_is_no_target():

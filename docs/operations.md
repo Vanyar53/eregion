@@ -520,6 +520,10 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   service y restent vides. Depuis le 31/10 (décision de Jonathan, BL1), elle tient `Reader` et
   **Eregion Glorfindel Response** sur le seul groupe du banc, `Log Analytics Reader` sur son
   workspace, jamais le restore ; `GLORFINDEL_READ_ONLY=0`, gondolin et bree en `non_disruptive`.
+  `make glorfindel-host-push` garde ces modes (décision de Jonathan, 02/11 : il lit la config en
+  place sur H0, n'en reporte que le mode de chaque VM, jamais un plus hardi, et le dit VM par VM ;
+  avant, SEC7 remettait tout en `human_only` à chaque push) ; `HUMAN_ONLY=1` remet toutes les VM
+  en `human_only`, le geste d'urgence (`infra/glorfindel-host/README.md`).
   La watch, la console et le bot écrivent donc avec la même identité, sur le banc seulement : ce
   que ça ouvre et ce qui le borne, au modèle de menace
   ([`design/modele-de-menace.md`](design/modele-de-menace.md), §5).

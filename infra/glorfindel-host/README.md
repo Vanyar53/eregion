@@ -21,10 +21,24 @@ seul sur le banc, dans le mode de chaque VM.
     (`main.tf` ne pose que les deux lectures) : `az role assignment create`, l'étape 3 de
     [`docs/banc-bl1.md`](../../docs/banc-bl1.md) ; le retirer, l'étape 7. Un `terraform apply`
     de H0 ne l'ajoute ni ne l'enlève.
-  - **Un `make glorfindel-host-push` remet toutes les VM en `human_only`** : la config est
-    forcée au push (`host_config.py`). Redonner ensuite les modes dans la console (page
-    Glorfindel : gondolin, puis bree → `non_disruptive`, chacune après son contrôle de
-    préparation). Le CD, lui, ne touche ni `host.env` ni la config.
+  - **Un `make glorfindel-host-push` garde le mode de chaque VM** tel qu'il est sur H0
+    (décision de Jonathan, 02/11 ; avant, SEC7 remettait toutes les VM en `human_only` à
+    chaque push, et la posture se redonnait dans la console). Le push lit la config en place
+    par la connexion ssh qu'il ouvre déjà, puis `host_config.py` envoie :
+    - le défaut toujours en `human_only`, `allow_destructive` toujours vide : les modes et la
+      liste destructive de la config locale n'arrivent jamais sur H0 ;
+    - le mode de chaque VM gardé de H0 (un nom exact, tel que la console l'écrit) ; une VM que
+      H0 ne connaît pas part en `human_only` ;
+    - jamais un mode plus hardi que celui en place (A0) : config de H0 absente, illisible ou
+      d'une autre forme, toutes les VM en `human_only` ; un mode inconnu, un motif (`vm-*`) ou
+      une entrée d'une autre forme ne sont pas reportés, la VM part en `human_only` ; et c'est
+      dit.
+
+    Le push affiche, VM par VM, le mode envoyé et sa provenance (« gardé de H0 », ou
+    `human_only` et pourquoi). **`make glorfindel-host-push HUMAN_ONLY=1`** est le geste
+    d'urgence : toutes les VM remises en `human_only` d'un coup, pour revenir à un H0 qui ne
+    fait rien seul (la console les redonne, une à une, après leur contrôle de préparation).
+    Le CD, lui, ne touche ni `host.env` ni la config.
   - **Un nouveau `host.env`** (`make glorfindel-host-env`) part en lecture seule
     (`GLORFINDEL_READ_ONLY=1`) : la posture se donne à la main, sur un hôte qui doit répondre.
 - **Pas une cible.** Hors du groupe du banc, sans tag `eregion-target`, sans DCR vers le
@@ -45,7 +59,7 @@ le disque et l'IP publique.
 make glorfindel-host-plan            # lecture seule ; OPERATOR_CIDR=<ip>/32, sinon ton IP du moment
 make glorfindel-host-up              # crée la VM (confirmation demandée) ; cloud-init installe Docker et clone le dépôt
 make glorfindel-host-env             # host.env depuis ton .envrc chargé (ou : copier host.env.example et remplir)
-make glorfindel-host-push            # host.env → ~/eregion/.env, config locale en human_only
+make glorfindel-host-push            # host.env → ~/eregion/.env ; la config locale, le défaut en human_only, les modes de H0 gardés (HUMAN_ONLY=1 : tout en human_only)
 make glorfindel-stop                 # arrête le Glorfindel local : deux watch = cartes en double
 make glorfindel-host-start [REF=…]   # un tag ou un commit (défaut : dernier tag v*), détaché ; construit l'image, lance watch + console (war-room) + bot
 make glorfindel-host-tunnel          # affiche l'URL de la console avec son jeton, puis tient le tunnel (Ctrl+C)

@@ -192,7 +192,7 @@ help:
 	@echo "  make glorfindel-host-plan [OPERATOR_CIDR=]   Plan (lecture seule)"
 	@echo "  make glorfindel-host-up   [OPERATOR_CIDR=] [YES=1]  Crée la VM (confirmation, sauf YES=1)"
 	@echo "  make glorfindel-host-env                     host.env depuis ton .envrc (sans secret Azure)"
-	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
+	@echo "  make glorfindel-host-push [HUMAN_ONLY=1]     host.env + config sur la VM (modes de H0 gardés ; HUMAN_ONLY=1 : tout en human_only)"
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
 	@echo "  make glorfindel-host-pull                    Copie locale des verdicts et de la mémoire (chaque semaine)"
 	@echo "  make glorfindel-host-model MODEL=…           Changer le modèle qui décide (ou MODEL=default)"
@@ -577,8 +577,9 @@ celebrimbor-start:
 	 az vm start --ids $$(echo "$$vms" | cut -f1)
 
 # ── Glorfindel hébergé (H0) ───────────────────────────────────────────────
-# La VM du défenseur, hors du banc : infra/glorfindel-host/README.md. Lecture seule sur le
-# banc, human_only forcé au push. L'apply demande confirmation (pas d'--auto-approve).
+# La VM du défenseur, hors du banc : infra/glorfindel-host/README.md. Elle répond sur le banc
+# (BL1c) ; le push garde les modes de H0, le défaut en human_only (HUMAN_ONLY=1 : tout en
+# human_only). L'apply demande confirmation (pas d'--auto-approve).
 HOST_TF       := terraform -chdir=infra/glorfindel-host
 HOST_USER     ?= glorfindel
 # Sans OPERATOR_CIDR, ton IP publique du moment, en /32 (seule source SSH autorisée).
@@ -637,20 +638,22 @@ glorfindel-host-env:
 glorfindel-host-known:
 	@HOST_SSH_FINGERPRINT="$(HOST_SSH_FINGERPRINT)" bash infra/glorfindel-host/known_host.sh "$(HOST_IP)" "$(HOST_KNOWN_HOSTS)"
 
-# host.env → ~/eregion/.env (lu par docker compose), et la config locale avec
-# autonomy forcé à human_only : toutes les VM de H0 y reviennent ; les modes (gondolin et bree en
-# non_disruptive, BL1c) se redonnent ensuite dans la console.
+# host.env → ~/eregion/.env (lu par docker compose), et la config locale : le défaut forcé à
+# human_only, le mode de chaque VM gardé tel qu'il est sur H0 (BL1c, décision de Jonathan du 02/11 ;
+# la config de H0 lue par la même connexion ssh — illisible, tout part en human_only, et c'est dit).
+# HUMAN_ONLY=1 : toutes les VM remises en human_only, le geste d'urgence (host_config.py).
 glorfindel-host-push: glorfindel-host-known
 	@test -f infra/glorfindel-host/host.env || { echo "infra/glorfindel-host/host.env manquant (voir host.env.example)"; exit 1; }
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@.venv/bin/python infra/glorfindel-host/host_env.py --check infra/glorfindel-host/host.env
-	@cfg=$$(mktemp); \
-	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg && \
+	@cfg=$$(mktemp); h0=$$(mktemp); \
+	 $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h0 2>/dev/null || : > $$h0; \
+	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg --h0 $$h0$(if $(HUMAN_ONLY), --human-only) && \
 	 scp -q $(HOST_SSH_OPTS) infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
 	 scp -q $(HOST_SSH_OPTS) $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
 	 $(HOST_SSH) 'chmod 600 eregion/.env eregion/glorfindel-config.yaml'; \
-	 rc=$$?; rm -f $$cfg; exit $$rc
-	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
+	 rc=$$?; rm -f $$cfg $$h0; exit $$rc
+	@echo "  host.env et glorfindel-config.yaml poussés sur $(HOST_IP)"
 
 # M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, par défaut le
 # dernier tag v*. Checkout détaché, image étiquetée avec la référence (deploy.sh, envoyé par

@@ -292,8 +292,9 @@ MUTANTS = [
      "    refusal = quarantine_refusal(resource_id) if quarantine_nsg else None",
      "    refusal = None"),
     # H0: the hosted Glorfindel stays an observer.
+    # BL1c: the line also carries each VM's mode kept from H0 (never the local config's).
     ("M54", "the pushed host config keeps the local autonomy (H0)", "infra/glorfindel-host/host_config.py",
-     '    out["autonomy"] = {"default": "human_only"}\n', ""),
+     '    out["autonomy"] = {"default": HUMAN, "assets": kept}\n', ""),
     ("M55", "the host gets a write role on the bench (H0)", "infra/glorfindel-host/main.tf",
      'role_definition_name = "Reader"', 'role_definition_name = "Contributor"'),
     # The function moved from glorfindel/cli.py into the shared core (BL1c): the console and
@@ -5847,6 +5848,30 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (2360, 2361)})
 TESTS["M2362"] = "tests/unit/test_hosted_report.py"
+
+# BL1c, the push (Jonathan's decision of 02/11): each VM's mode in place on H0 kept, never a bolder
+# one — the local config's modes never carried, H0's config of another shape not trusted, a mode
+# unknown or a pattern not carried, HUMAN_ONLY=1 heard, H0's config read before the scp. M2363–M2368.
+HCF = "infra/glorfindel-host/host_config.py"
+MUTANTS += [
+    ("M2363", "the push carries the local config's mode of a VM H0 does not know: bolder than in place (BL1c)",
+     HCF, '            report.append((name, HUMAN, "inconnue de H0 : human_only"))\n',
+     '            kept.append({"match": name, "mode": rule.get("mode")})\n'),
+    ("M2364", "H0's config of another shape trusted: the push stops, nothing said (BL1c)", HCF,
+     "    if not isinstance(cfg, dict):\n        return None, \"forme inconnue\"\n", ""),
+    ("M2365", "a mode H0's config holds that this code does not know is carried (BL1c)", HCF,
+     "        elif mode not in KNOWN_MODES:\n", "        elif mode is None:\n"),
+    ("M2366", "HUMAN_ONLY=1 not heard: H0's modes kept by the emergency gesture (BL1c)", HCF,
+     '        if human_only:\n            report.append((name, HUMAN, "HUMAN_ONLY=1"))\n        elif',
+     '        if False:\n            report.append((name, HUMAN, "HUMAN_ONLY=1"))\n        elif'),
+    ("M2367", "the push never reads H0's config: every VM back to human_only, as before (BL1c)", MAKE,
+     "\t $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h0 2>/dev/null || : > $$h0; \\\n",
+     "\t : > $$h0; \\\n"),
+    ("M2368", "a pattern on H0 carried: every VM it matches made bolder (BL1c)", HCF,
+     "        elif _PATTERN & set(name):\n", "        elif False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (2363, 2364, 2365, 2366, 2368)})
+TESTS["M2367"] = "tests/unit/test_host_console.py"
 
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its

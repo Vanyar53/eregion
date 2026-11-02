@@ -140,8 +140,8 @@ S'il a été détruit, suivre `infra/orodruin/README.md`, « Déroulé » : `oro
 
 **Seulement si H0 a été remis en lecture seule** (étape 7). Sinon, la posture du 31/10 est déjà là :
 vérifier dans la console (page Glorfindel) que gondolin est en `non_disruptive`, et passer à
-l'étape 4. Après un `make glorfindel-host-push`, toutes les VM sont revenues en `human_only` : les
-redonner dans la console.
+l'étape 4. Un `make glorfindel-host-push` garde les modes en place sur H0 (depuis le 02/11) ; après
+un `make glorfindel-host-push HUMAN_ONLY=1`, les redonner dans la console.
 
 ```bash
 make glorfindel-host-cd-disable        # le CD en pause : aucune release ne redéploie H0 pendant la session
@@ -151,7 +151,7 @@ SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment create --assignee-object-id ${P} --assignee-principal-type ServicePrincipal \
   --role "Eregion Glorfindel Response" --scope ${SCOPE}
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=0
-make glorfindel-host-push              # .env et config (encore human_only partout)
+make glorfindel-host-push              # .env et config (le défaut human_only ; les modes en place sur H0 gardés, et dits)
 make glorfindel-host-start REF=<le même commit>
 make glorfindel-host-tunnel            # la console : page Glorfindel, gondolin → non_disruptive
 ```
@@ -220,7 +220,7 @@ P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment delete --assignee ${P} --role "Eregion Glorfindel Response" --scope ${SCOPE}
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=1
-make glorfindel-host-push              # config de nouveau forcée en human_only
+make glorfindel-host-push HUMAN_ONLY=1 # toutes les VM de nouveau en human_only
 make glorfindel-host-start REF=<le tag publié en service>   # la release d'avant, celle du CD
 make glorfindel-host-status            # bandeau lecture seule, aucune erreur
 az role assignment list --assignee ${P} --all -o table      # Reader et Log Analytics Reader seulement

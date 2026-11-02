@@ -151,7 +151,7 @@ Trois canaux, à ne pas confondre :
 | D | Une demande qui s'emballe | Les fils tournent l'un après l'autre. Le plafond d'Orodruin porte sur la demande entière : ses appels journalisés, chaque ligne nommant la demande, et son temps. « Stop all » est l'arrêt d'urgence (DG-b) |
 | T | Un exercice défait ce que Glorfindel a fait, ou frappe une VM encore en panne | Une VM tenue par Glorfindel (ses règles d'isolation ou de quarantaine sur le NSG de chaque carte et de chaque sous-réseau de la VM ; illisible vaut tenue, `eregion_core/held.py`, la même règle au preflight d'Annatar) est attendue, puis son fil est sauté : jamais levée. Pour lire cartes et sous-réseaux, le rôle de lecture d'Orodruin gagne deux lectures sur le banc, rien en écriture. Une VM dont la panne n'a pas vérifié son retour ne prend plus de fil (DG-b) |
 | I | Ce qu'Orodruin publie pour la console | Le verdict (`armed` ou `passive`, les codes, l'heure) et le statut des demandes, sans identifiant, sans expérience ni cible ; même conteneur, même attribution. H0 relit chaque blob contre sa forme avant de l'écrire (DG-b) |
-| E | Le Glorfindel hébergé est poussé à écrire | Il n'écrit que sur le groupe du banc, avec le rôle de la réponse : jamais un restore, une suppression, une identité, un rôle. Seule une VM que l'opérateur a passée en `non_disruptive` après son contrôle de préparation (gondolin, bree) reçoit une action seule, réversible, sous le seuil de confiance et les gardes ; toute autre reste en `human_only`, forcé au push. **La posture de H0 sur le banc** (décision de Jonathan, 31/10) : l'encadré ci-dessous |
+| E | Le Glorfindel hébergé est poussé à écrire | Il n'écrit que sur le groupe du banc, avec le rôle de la réponse : jamais un restore, une suppression, une identité, un rôle. Seule une VM que l'opérateur a passée en `non_disruptive` après son contrôle de préparation (gondolin, bree) reçoit une action seule, réversible, sous le seuil de confiance et les gardes ; toute autre reste en `human_only`. Le push garde le mode de chaque VM en place sur H0, jamais un plus hardi : le défaut et toute VM inconnue de H0 en `human_only`, une config de H0 illisible ou un mode inconnu en `human_only`, et c'est dit ; `HUMAN_ONLY=1` remet tout en `human_only` d'un geste (BL1c, 02/11). **La posture de H0 sur le banc** (décision de Jonathan, 31/10) : l'encadré ci-dessous |
 
 **La posture de H0 sur le banc (décision de Jonathan, 31/10 ; bree le 01/11).**
 
@@ -185,14 +185,21 @@ le banc. H0 répond, il ne fait plus seulement qu'observer.
     peut ni s'isoler, ni toucher une autre charge ;
   - **les modes** : en `non_disruptive`, seules les actions réversibles partent seules, sous le
     seuil de confiance (0,7), après des tirages qui s'accordent (D-1) et derrière les gardes
-    déterministes de `decide` ; le destructif reste à un humain. Toute autre VM est en `human_only`,
-    et un `make glorfindel-host-push` remet toutes les VM en `human_only` (la config forcée au
-    push) ;
+    déterministes de `decide` ; le destructif reste à un humain. Toute autre VM est en `human_only` ;
+  - **le push** (décision de Jonathan, 02/11 ; SEC7 forçait `human_only` partout à chaque push) :
+    `make glorfindel-host-push` garde le mode de chaque VM tel qu'il est sur H0, jamais un plus
+    hardi. Le défaut reste `human_only` et la liste destructive vide, quoi que dise la config
+    locale ; une VM inconnue de H0, une config de H0 illisible, un mode inconnu ou un motif
+    partent en `human_only`, et c'est dit, VM par VM (`infra/glorfindel-host/host_config.py`).
+    Pourquoi : la posture se perdait à chaque push, et se redonnait à la main dans la console.
+    **`make glorfindel-host-push HUMAN_ONLY=1`** est le geste d'urgence, qui remet tout en
+    `human_only` ;
   - les écritures autonomes hors cycle (le retrait d'une règle orpheline) restent gardées par le
     mode de la VM qu'elles touchent (`glorfindel/orphans.py`, `_ALONE`) ;
   - la règle de production ne change pas : elle porte sur les injecteurs, et bree, non inscrite,
     n'est jamais une cible d'exercice ;
   - le banc est jetable et ne porte aucune charge d'un client.
+- **Revenir à un H0 qui ne fait rien seul**, d'un geste : `make glorfindel-host-push HUMAN_ONLY=1`.
 - **Revenir en lecture seule**, si besoin : l'étape 7 de [`docs/banc-bl1.md`](../banc-bl1.md). Le
   rôle retiré, `az role assignment list --assignee <principal> --all` ne montre plus que `Reader` et
   `Log Analytics Reader` ; `GLORFINDEL_READ_ONLY=1` repoussé, le bandeau « lecture seule » de la

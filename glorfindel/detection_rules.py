@@ -26,10 +26,23 @@ from glorfindel.detectors import (  # noqa: E402  (after optional deps)
     is_identity_source,
     plane_of,
 )
+from glorfindel import expected_sudo  # noqa: E402
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
 _STATUS_FILE = Path.home() / ".glorfindel" / "rule_status.json"
+
+
+def expected_counts(status: dict) -> dict:
+    """ADM1: a rule's sudo set aside as an administrator's expected one, as its status holds
+    them — the console and `status_snapshot` read them here."""
+    es = status.get("expected_sudo") if isinstance(status, dict) else None
+    es = es if isinstance(es, dict) else {}
+    try:
+        count = int(es.get("count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    return {"expected_count": count, "expected_last": str(es.get("last") or "")}
 
 # P1: the client's layer — the rules of THIS deployment (approved, overriding a base rule,
 # disabling one), outside the repository, loaded over the shipped base
@@ -1199,6 +1212,7 @@ class RulePoller:
                     "last_match": s.get("last_match", ""),
                     "last_error": s.get("last_error", ""),
                     "match_count": s.get("match_count", 0),
+                    **expected_counts(s),
                 })
             return out
 
@@ -1244,6 +1258,29 @@ class RulePoller:
             d = self._detectors[rule.name] = detector_for(rule.source, workspace_id=rule.workspace_id)
         return d
 
+    def _expected_split(self, rule: DetectionRule, tgt, rows: list[dict], now_iso: str) -> tuple[list[dict], int]:
+        """ADM1 (#284): (the rows that stay cards, how many were set aside as an administrator's
+        expected sudo). Here, in the poller, rather than in the query or in `investigate`: the
+        query is the shipped text the operator reads and P1 keeps intact, and dropping rows on
+        the server would leave nothing to count; `investigate` runs once a signal is dispatched,
+        a graph cycle already open. Here no signal exists yet, the VM the row was routed to is
+        known, and the model never sees the list. Only a rule of the sudo technique, a row a VM
+        claims, a config that names accounts; a journal that cannot be written sets nothing
+        aside."""
+        policy = getattr(self._cfg, "expected_sudo", None)
+        if rule.ttp != expected_sudo.SUDO_TTP or tgt is None or policy is None or not policy.admins:
+            return rows, 0
+        kept, entries = [], []
+        for r in rows:
+            entry = expected_sudo.judge(r, tgt[1], policy)
+            if entry is None:
+                kept.append(r)
+            else:
+                entries.append(entry)
+        if entries and not expected_sudo.record(entries, rule.name, now_iso):
+            return rows, 0
+        return kept, len(entries)
+
     def poll_once(self, rule: DetectionRule) -> list[dict]:
         """One cycle of one rule: query once, route, dedup, dispatch. Returns the
         signals dispatched (or that would be, in dry-run)."""
@@ -1278,6 +1315,7 @@ class RulePoller:
             control = is_control_plane_source(rule.source) or is_identity_source(rule.source)
             budget = _CONTROL_PLANE_CARDS_PER_POLL
             data_budget = _DATA_CARDS_PER_POLL
+            expected_n = 0
             for key, (tgt, krows) in routed.items():
                 seen = dispatched.get(key, {})
                 new = [r for r in krows if _row_identity(r) not in seen]
@@ -1296,10 +1334,17 @@ class RulePoller:
                     plan.append((key, tgt, send))
                     sent_ids[key] = [_row_identity(r) for r in new]
                     continue
+                sent_ids[key] = [_row_identity(r) for r in new]
+                # The administrators' expected sudo (ADM1): set aside here, before any
+                # signal — journaled and counted, never in the prompt.
+                kept, aside = self._expected_split(rule, tgt, new, now_iso)
+                expected_n += aside
+                if not kept:
+                    continue
                 # Event rows (TimeGenerated) are one incident per cycle: the newest is
                 # sent. Aggregated rows (one per attacker, per account…) each count.
-                events = [r for r in new if r.get("TimeGenerated")]
-                send = [r for r in new if not r.get("TimeGenerated")]
+                events = [r for r in kept if r.get("TimeGenerated")]
+                send = [r for r in kept if not r.get("TimeGenerated")]
                 if events:
                     send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
                 # Capped per rule and poll (SEC2), as the control plane: the gravest rows
@@ -1313,7 +1358,6 @@ class RulePoller:
                 elif rest:
                     send.append(_data_summary(rest))
                 plan.append((key, tgt, send))
-                sent_ids[key] = [_row_identity(r) for r in new]
 
         for key, tgt, send in plan:
             for row in send:
@@ -1329,6 +1373,10 @@ class RulePoller:
             if signals:
                 st["last_match"], st["ttp"] = now_iso, rule.ttp
                 st["match_count"] = st.get("match_count", 0) + len(signals)
+            if expected_n:
+                # ADM1: the sudo set aside, counted where the console reads the rules.
+                st["expected_sudo"] = {"count": expected_counts(st)["expected_count"] + expected_n,
+                                       "last": now_iso}
             # Recorded AFTER the dispatch: a crash in between re-sends (at least once)
             # rather than losing a detection (third review, detail).
             dispatched = st.setdefault("dispatched", {})

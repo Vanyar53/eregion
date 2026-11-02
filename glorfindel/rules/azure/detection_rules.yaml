@@ -153,9 +153,12 @@ rules:
       | where SyslogMessage !has "NOT in sudoers"
             and SyslogMessage !has "authentication failure"
       | project TimeGenerated, Computer, _ResourceId, SyslogMessage
-      // One row per VM, not `limit 1`: the limit ran on the server before the per-VM
-      // filter, so a benign sudo on another VM hid the attack (third review, T7).
-      | summarize arg_max(TimeGenerated, *) by Computer, _ResourceId
+      // One row per VM and distinct line, not `limit 1`: the limit ran on the server before
+      // the per-VM filter, so a benign sudo on another VM hid the attack (third review, T7).
+      // Nor one row per VM (ADM1): an administrator's expected sudo, the latest, would hide
+      // another account's in the same window — and any local user can write a line tagged
+      // sudo. The poller sets the expected ones aside, then sends the newest of the rest.
+      | summarize arg_max(TimeGenerated, *) by Computer, _ResourceId, SyslogMessage
 
   - name: t1136-001-local-account-creation-linux-v1
     description: >

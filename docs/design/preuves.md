@@ -3013,6 +3013,59 @@ rejouées hors d'Hypothesis : vertes. `pytest` complet, `main` f1b9b24 fusionné
 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 087 mutants, sans faute. M3060–M3066 et
 M07 (réancré) : 8/8 à chaque tour (deux tours, après la fusion).
 
+**I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
+Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids
+des cartes de la réaffirmation portaient le nom de la VM tel que l'état le donne
+(`reassert-{vm}-{_rid_hash(rid)}`, et de même le contournement, la vérification qui échoue, les
+règles laissées) ; le hash est en minuscules, le nom non. `active_isolations()` tire le nom du
+`resource_id` de l'état, avec sa casse : une VM isolée de nouveau — ou débloquée et bloquée de
+nouveau — par son id en minuscules (le `_ResourceId` de Log Analytics) a un état qui la nomme
+`db--01`. L'alerte suivante, `reassert-db--01-…`, ne fermait pas la carte `reassert-Db--01-…` (la
+comparaison exacte de `_alert`) ; le magasin la fusionnait dans celle-ci (même action, ressource sans
+casse, même type) en gardant son id et son texte ; `drift_said` cherchait l'id exact et ne trouvait
+rien. En `human_only`, la disparition redite à chaque passe ; hors de lui, reposée après avoir été
+dite, « reposée une fois » replié dans une carte qui disait « ne les repose pas ». Avec `web` (aucune
+majuscule), la séquence passe. **Correctif** (`glorfindel/reassert.py`, `glorfindel/reassert_cards.py`) :
+les ids s'écrivent en minuscules (`_alert_id`, le préfixe du contournement, `_unverified_id`, le préfixe
+des règles laissées) ; chaque recherche les lit sans casse (`same_sid`) : la fermeture par `_alert`,
+`drift_said`, le dernier mot de l'opérateur (`_last_word`, donc `state_unreadable` aussi — son id, un
+condensé déjà en minuscules, ne porte aucun nom), les cartes et la marque du contournement, de la
+vérification qui échoue (et sa fermeture quand la VM n'est plus tenue, `unverified_released`), des
+règles laissées. **Les cartes en attente sous l'ancien identifiant** (la casse d'origine, écrites
+avant le correctif) sont retrouvées : la dérive, fermée avec sa note par l'alerte suivante (après la
+mise à jour, un redémarrage : redite une fois, la reprise bruyante de L2C) ; le contournement, la
+vérification qui échoue, les règles laissées, lus comme les leurs — en attente, ou acquittés par
+l'opérateur, jamais redits ; aucune carte orpheline qui ne se ferme plus. **La règle de la machine**
+(A0 : une règle ajoutée, l'oracle inchangé) : `taken_up_by_its_lowercase_id` — une VM (un nom à
+majuscules une fois sur deux) isolée ou bloquée par son id canonique, nos règles retirées
+(`terraform apply` sur chaque NSG du client qui gouverne ses cartes, la quarantaine vidée si une carte
+la porte), une passe ; puis isolée de nouveau, ou débloquée et bloquée de nouveau, par son id en
+minuscules, nos règles retirées encore, deux passes, le mode de chacune tiré. **Les oracles de la
+machine ne comptent pas une carte redite** : la règle seule, sur `main`, 20/20 graines à 60 vertes
+(`main` 4f0c3a5, graines 1 à 20). **La séquence figée**
+(`test_a_disappearance_said_by_the_canonical_id_is_said_once_after_the_lowercase_one`, isolation et
+blocage, trois passes en `human_only` ou la dernière en `non_disruptive`) rejoue la règle sur Db--01
+et juge sur le magasin : la seconde disparition a sa carte, dite une fois, et rien n'est écrit sur
+Azure pour elle ensuite — 4/4 rouges sur `main` (« the disappearance said by the lowercase id has no
+card of its own »), vertes après. Tests unitaires (`test_reassert.py`) : la disparition dite une fois
+par l'id en minuscules, reposée sur sa propre carte, une carte de dérive d'une version antérieure
+fermée par la suivante, un contournement, une vérification qui échoue et des règles laissées dites
+sous le nom canonique — en attente ou acquittés — retrouvés, une VM à majuscules dite une fois ;
+11 rouges sur `main`. **Mutants M3100–M3109** : l'id de dérive garde la casse (M3100), `_alert` compare
+exactement (M3101), le dernier mot lu dans la casse seule (M3102, M3103), le préfixe et les cartes du
+contournement (M3104, M3105), les cartes de la vérification qui échoue (M3106) et leur fermeture
+(M3107), le préfixe et les cartes des règles laissées (M3108, M3109) : 10/10 par leurs tests à chaque tour (deux tours, 60 séquences) — M3100 d'abord 0/2 : la seconde carte, écrite par un état en minuscules, ne le distinguait pas ; le test regarde aussi l'id de la première, 4/4 ensuite (M3100 lit aussi la séquence figée). **M3100 est un test de contrat** : `same_sid` lit les ids sans casse partout, et l'id écrit avec la casse du nom ne change aucun comportement — le mutant est équivalent pour la conduite ; seule l'assertion sur la forme de l'id (écrit en minuscules, en entier) l'attrape. Gardé : la forme écrite est le contrat. Réancrés : M37,
+M1259, M1765, M1930, M1931, M1933, M1936, M1937, M1941, M1948, M2931 (leurs lignes lisent l'id en
+minuscules) : 10/11 à chaque tour ; M37 (la machine seule) 1/2 puis 2/4, instable à 60 séquences — comme sur `main`, mesuré avant le correctif : 1/4. Un `same_sid` dans `drift_said` est gardé pour l'uniformité, sans
+mutant : la dernière carte d'un épisode que ce processus a vu ouvert est toujours écrite par lui,
+en minuscules.
+
+**Mesures d'I3C.** Invariants avec la règle, `--hypothesis-seed=N`, 60 séquences, quatre à la fois : N = 1..20, **20/20 vertes** après le correctif — et 20/20 sur `main` 4f0c3a5, la règle ajoutée : le défaut ne casse aucun oracle de la machine, la séquence figée et les tests unitaires le tiennent. `pytest` complet (`main` 4f0c3a5, à jour) : 5 752 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 256 mutants, sans faute.
+
+**Après la relecture d'I3C** (sur f587da7, « à corriger »). **Une régression du lot** : les ids prenaient le nom de la VM en minuscules, l'IP telle qu'écrite — et l'id lu dans le magasin passait entier en minuscules avant la comparaison. Un blocage d'une IPv6 écrite en majuscules (`2001:DB8::9` ; `blocks.py` vérifie l'adresse par `blockable_ip` sans garder sa forme normalisée) n'était plus retrouvé : sa carte de vérification qui échoue, le blocage toujours tenu, fermée à chaque passe par `unverified_released` (« Plus d'isolation ni de blocage enregistré », faux) et refaite aussitôt — trois cartes résolues en trois passes, une seule en attente sur `main` ; son contournement redit à chaque passe ; les règles laissées de même. **Correctif** : l'id entier en minuscules (`_alert_id`, `_unverified_id`, les préfixes du contournement et des règles laissées), l'IP comprise. L'IP n'est pas normalisée par `ipaddress` : une carte écrite avec l'IP sous une autre forme (`2001:db8:0::9`) ne serait plus la sienne ; en minuscules, une ancienne carte écrite avec l'IP d'origine reste retrouvée (`same_sid`). Figé : `test_a_block_of_an_ipv6_in_capitals_has_its_own_cards` (la vérification, le contournement, les règles laissées, trois passes chacun), vert sur `main`, rouge sur f587da7. **Mutants M3165–M3168** : l'id de la vérification (M3165), le préfixe du contournement (M3166) et celui des règles laissées (M3167) qui ne passent que le nom en minuscules — la forme de f587da7 —, `same_sid` qui compare exactement (M3168) : 4/4 par leur test à chaque tour (deux tours). M37, M2931, M3100, M3104 et M3108 réancrés.
+
+**Mesures après la relecture.** M3100–M3109 et M3165–M3168 : 14/14 à chaque tour (deux tours, 60 séquences) ; M2931, réancré, 2/2 ; M37 instable (1/2 à 2/2 selon le run, la relecture l'a vu 1/2), comme sur `main`. Invariants avec la règle, 60 séquences, quatre à la fois : N = 1..20, **20/20 vertes**. `pytest` complet : 5 753 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 260 mutants, sans faute.
+
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
 (`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque

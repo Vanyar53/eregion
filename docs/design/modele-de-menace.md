@@ -240,11 +240,22 @@ le confinement.
   deux `COMMAND=`, un saut de ligne, un `USER=` autre que root) reste une carte ; les commandes sensibles
   restent des cartes ; **les shells root d'un administrateur** (`sudo -i`, `sudo su -`, `bash`,
   `python -c`, `find -exec`, `vim`, `less`, `screen`, `gdb`, `docker exec … bash`…) **font une carte
-  pour les formes connues** — sous sudo, ce qui s'y fait n'est jamais écrit. **La liste n'est pas
+  pour les formes connues** — sous sudo, ce qui s'y fait n'est jamais écrit —, sauf quand toutes les
+  sessions SSH du compte viennent d'une origine qu'il déclare (COR1, ci-dessous). **La liste n'est pas
   exhaustive** : un script ou un programme non listé, lancé par un compte attendu (`sudo /tmp/x.py`),
-  passe sans carte. C'est l'angle mort assumé jusqu'à COR1 (la corrélation avec l'origine de la
-  session SSH, qui écartera aussi les shells root d'une origine attendue) et AUD1 (`auditd`, ce qui se
-  fait réellement sous root).
+  passe sans carte. C'est l'angle mort assumé jusqu'à AUD1 (`auditd`, ce qui se fait réellement sous
+  root).
+- **Un shell root d'administrateur écarté par l'origine de ses sessions SSH** (COR1, #407 ;
+  [`correlation.md`](correlation.md)). Si toutes les sessions du compte, ouvertes dans les 24 h avant la
+  ligne, viennent d'une plage déclarée (`origins`), le shell root n'ouvre pas de carte. Ce qui le
+  borne : la corrélation se fait dans le code, avant la décision ; une seule session d'ailleurs, une
+  session sans ligne `Accepted`, un compte pris par `su`/`sudo -u`/`login`/`cron`, un journal illisible
+  ou coupé, aucune session : carte (A0) ; une commande sensible reste une carte quelle que soit
+  l'origine ; une fermeture de session n'est pas lue (`logger` en écrit une), une ligne forgée ne peut
+  qu'ajouter une session. Ce qui reste ouvert : une session ouverte **avant** la fenêtre de 24 h n'est
+  pas vue — un intrus qui garde la sienne plus longtemps, pendant qu'un administrateur se connecte
+  depuis le bastion, voit son shell root écarté ; un accès qui n'écrit aucune ligne de session (un
+  service sous le compte) non plus. Lier une commande à sa session exacte demande `auditd` (AUD1).
 - **Un jeton pour la console**, tous ses droits (frontière 1).
 - **Le principal du canari, `Network Contributor` sur son groupe** (P-04, P04). Il peut y créer une ressource réseau
   payante (une IP publique, une passerelle). Si le premier run demande plus, le repli est `Contributor` sur ce même groupe, écrit

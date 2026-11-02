@@ -3667,7 +3667,7 @@ MUTANTS += [
     ("M1252", "the fixed names of an NSG nobody's while a state can't be read (SEC4b)", NET,
      "        if _unreadable_isolations():\n            return None", "        if False:\n            return None"),
     ("M1253", "a failed release writes over the unreadable state it could not read (SEC4b)", REL,
-     "        if failed and _isolation_unreadable(resource_id):\n", "        if False:\n"),
+     "        if _isolation_unreadable(resource_id):\n", "        if False:\n"),
     ("M1254", "the release's sweep reads a bare NIC as bare by design beside an unreadable state (SEC4b)", REL,
      "                    if q_bare is None:\n                        # Bare by design, or in our quarantine for a state that can't be\n"
      "                        # read: unknown, never released on a guess (SEC4b).\n"
@@ -8555,6 +8555,39 @@ def main() -> int:
     caught = sum(1 for r in counted if r[2] == "CAUGHT")
     print(f"\n{caught}/{len(counted)} caught in every round (equivalent and multi-host mutants aside)")
     return 1 if caught < args.min_caught else 0
+
+
+# I3U (#440): a VM's own isolation state turned unreadable — a disk, a write cut short — after a
+# partial release that kept where to look (I3R): the retry read nothing, said `released` and deleted
+# the file, the pair left on the quarantine NSG. Never `released` nor `swept` now, the reason said,
+# the file kept; `glorfindel release`'s verification and the plain reset neither. M3131–M3135.
+_I3U_UNIT = "tests/unit/test_release_away.py"
+_I3U_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_partial_release_whose_state_turns_unreadable_never_says_released")
+MUTANTS += [
+    ("M3131", "a release on its own unreadable state says `released` when nothing else failed (I3U)", REL,
+     "        if _isolation_unreadable(resource_id):\n            # Its state kept as it is, never `released`",
+     "        if failed and _isolation_unreadable(resource_id):\n            # Its state kept as it is, never `released`"),
+    ("M3132", "a release on its own unreadable state says `release_partial` without saying why (I3U)", REL,
+     '                    "failed": failed + _own_unread(resource_id, "levée non vérifiée", failed)}\n',
+     '                    "failed": failed}\n'),
+    ("M3133", "the verification of a release blind to its own unreadable state: `glorfindel release` clears it (I3U)",
+     VER, '        unknown += _own_unread(resource_id, "levée non vérifiée")\n', ""),
+    ("M3134", "`reset --from-azure` on its own unreadable state says `swept` and deletes the file (I3U)", SWP,
+     '        deleted, failed = [], unreadable + _own_unread(resource_id, "reset non vérifié", unreadable + failed_early)\n',
+     "        deleted, failed = [], list(unreadable)\n"),
+    ("M3135", "the plain reset on an unreadable state says « Nothing to reset » (I3U)", GCLI,
+     '    isolations = isolations or ([{"resource_id": resource_id}] if _isolation_unreadable(resource_id) else [])\n',
+     ""),
+]
+TESTS.update({
+    "M3131": f"{_I3U_SEQ} {_I3U_UNIT}",
+    "M3132": f"{_I3U_UNIT}::test_a_release_by_rules_on_an_unreadable_state_takes_them_off_and_keeps_the_file",
+    "M3133": (f"{_I3U_UNIT}::test_the_verification_of_a_release_on_an_unreadable_state_is_never_verified "
+              f"{_I3U_UNIT}::test_the_cli_release_keeps_an_unreadable_state_and_exits_2"),
+    "M3134": f"{_I3U_UNIT}::test_reset_from_azure_on_an_unreadable_state_never_says_swept",
+    "M3135": f"{_I3U_UNIT}::test_a_plain_reset_on_an_unreadable_state_is_not_nothing_to_reset",
+})
 
 
 if __name__ == "__main__":

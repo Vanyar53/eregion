@@ -20,6 +20,7 @@ from glorfindel.response.state import (
     _UNKNOWN,
     StateUnreadable,
 )
+from glorfindel.response.unread import _own_unread
 
 
 # What the gone-VM helpers say, for the act they serve: the release, or the unblock (I5R).
@@ -268,10 +269,12 @@ class ReleaseMixin:
         failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id, left=self._quarantines_left(state),
                                         keep=keep)
 
-        if failed and _isolation_unreadable(resource_id):
-            # Its state kept as it is: written over, what it held was gone, and the next
-            # release read our tag in its place (SEC4b).
-            return {"status": "release_partial", "resource_id": resource_id, "failed": failed}
+        if _isolation_unreadable(resource_id):
+            # Its state kept as it is, never `released` (I3U, #440): cleared, the quarantine NSG
+            # a partial release left rules on (I3R) was known from nowhere; written over, the
+            # next release read our tag in its place (SEC4b).
+            return {"status": "release_partial", "resource_id": resource_id,
+                    "failed": failed + _own_unread(resource_id, "levée non vérifiée", failed)}
         if failed:
             from datetime import datetime, timezone
             _save_isolation_state(resource_id, {

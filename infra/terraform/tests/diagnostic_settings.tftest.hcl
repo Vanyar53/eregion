@@ -2,9 +2,9 @@
 # à Azure (mock_provider : ni identifiant, ni jeton, ni lecture de l'abonnement ou du tenant).
 #   terraform -chdir=infra/terraform init -backend=false
 #   terraform -chdir=infra/terraform test
-# (le provider vient du registre, ou d'un cache : `init -plugin-dir=…`). La CI ne l'exécute
-# pas (pas de Terraform) ; tests/unit/test_bench_logs.py tient le même contrat en lisant les
-# fichiers.
+# (le provider vient du registre, ou d'un cache : `init -plugin-dir=…`). La CI l'exécute à chaque
+# PR (ci.yml, job terraform-test, CI4), chaque provider vérifié par le verrou du module ;
+# tests/unit/test_bench_logs.py tient aussi le contrat en lisant les fichiers.
 
 # Des identifiants de forme Azure (le provider les analyse au plan), aucun réel.
 mock_provider "azurerm" {

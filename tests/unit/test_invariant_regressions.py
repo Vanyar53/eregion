@@ -5683,3 +5683,60 @@ def test_a_block_gone_is_said_whatever_a_check_card_write_does(monkeypatch):
             ("another_host_writes", WEB2, WEB2.lower(), ("nic.get", "always-429"), "after-foreign", True),
             ("said_then_back_after_a_full_disk", "gone", DB, DB, ("subnet.get", "always-429"), False, 22,
              (2, "from-full")))
+
+
+# I3C (#436): the reassertion's cards, whatever the case of the VM's name. Db--01 isolated
+# (blocked) on the subnet's NSG by its canonical id, its rules taken off by a `terraform apply`,
+# a pass in human_only says it; isolated again (unblocked, blocked again) by its lowercase id —
+# its state names it `db--01` —, its rules taken off again, then passes. The rule's draws, the
+# three modes of its passes put in: the block's threat port, and the unblock's id between them.
+_I3C_DRAWS = {"isolation": lambda a, b, c: (DB, "isolation", a, b, c),
+              "block": lambda a, b, c: (DB, "block", 22, a, DB, 22, b, c)}
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+@pytest.mark.parametrize("modes", [("human_only",) * 3, ("human_only", "human_only", "non_disruptive")])
+def test_a_disappearance_said_by_the_canonical_id_is_said_once_after_the_lowercase_one(monkeypatch, kind, modes):
+    """Found by I3R's review (seed 67 at 60, its second pass): the cards' ids carried the VM's
+    name with its case, the store merges a card into the pending one of the same resource
+    whatever its case and keeps that one's id. The second disappearance, said by the lowercase
+    id, was folded into the first card, under the canonical id; `drift_said` looked for the
+    exact id, found nothing: said again at every pass in human_only — and outside it, put back
+    after it was said. With `web` (no capital) it held. The machine's oracles don't count cards
+    said twice: the sequence checks it on the store — the disappearance said by the lowercase
+    id has its own card, said once, and nothing written to Azure for it after."""
+    from glorfindel import escalations
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        action = "isolate_vm" if kind == "isolation" else "block_suspicious_ip"
+
+        def drift_cards():
+            return [e for e in escalations.all_escalations() if e.get("action") == action
+                    and key(e.get("resource_id") or "") == key(DB)
+                    and (e.get("signal_id") or "").startswith("reassert-")]
+        real = m.reassert
+        seen = []
+
+        def reassert(data):
+            journal_at = len(m.fake.journal)
+            real(data)
+            seen.append((len(m.fake.journal) - journal_at, [dict(e) for e in drift_cards()]))
+        m.reassert = reassert
+        s = Script(*_I3C_DRAWS[kind](*modes))
+        m.taken_up_by_its_lowercase_id(data=s)
+        assert not s.values, f"draws unused: {s.values}"
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
+        m.one_vm_one_state_file()
+        _, (_, after_second), (writes, after_last) = seen
+        said = [e for e in after_second if e["status"] == "pending"]
+        assert len(said) == 1 and len(after_second) == 2, (
+            f"the disappearance said by the lowercase id has no card of its own: {after_second}")
+        (now,) = [e for e in after_last if e["status"] == "pending"]
+        assert now["id"] == said[0]["id"] and now.get("occurrences", 1) == 1, (
+            f"the disappearance said again by the next pass: {now}")
+        assert not writes, "the disappearance put back after it was said"
+    finally:
+        m.teardown()

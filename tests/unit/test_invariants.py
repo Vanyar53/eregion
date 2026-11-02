@@ -2623,6 +2623,43 @@ class IsolationMachine(RuleBasedStateMachine):
         self._block(vm, rid, None, port)
         self.reassert(_Drawn(data, fault=None))
 
+    @rule(data=st.data())
+    def taken_up_by_its_lowercase_id(self, data):
+        """A rare state made common (I3C, #436): a VM isolated or blocked by its canonical id,
+        its rules taken off Azure, the reassertion runs (says it, or puts it back); then the VM
+        isolated again — or unblocked and blocked again — by the lowercase id Log Analytics
+        reports (`_ResourceId`): its state now names it in lowercase. Its rules taken off again,
+        and two passes. Drawn one by one, the steps met once (I3R's seed 67 at 60): the cards'
+        ids carried the name's case — a disappearance said again at every pass, or put back after
+        it was said, its text folded into the card said before. A name with capitals, often."""
+        names = {v: v.rsplit("/", 1)[-1] for v in self.live}
+        capitals = [v for v, n in names.items() if n != n.lower()] or self.live
+        vm = data.draw(st.one_of(st.sampled_from(capitals), st.sampled_from(self.live)), label="vm")
+        what = data.draw(st.sampled_from(["isolation", "block"]), label="what")
+        for rid in (vm, vm.lower()):
+            if what == "isolation":
+                self._isolate(vm, rid, None)
+            else:
+                if rid != vm:
+                    self.unblock(_Drawn(data, vm=vm, rid=st.sampled_from([vm, rid]), fault=None))
+                self.block(_Drawn(data, vm=vm, rid=rid, fault=None))
+            self._ours_taken_off(vm)
+            self.reassert(_Drawn(data, fault=None))
+        self.reassert(_Drawn(data, fault=None))
+
+    def _ours_taken_off(self, vm: str):
+        """Every rule of Glorfindel's that governs the VM taken off Azure: a `terraform apply` on
+        each customer NSG of its NICs and of their subnets, our quarantine NSG stripped when a
+        NIC carries it."""
+        chain = sorted({key(g) for n in self._nics(vm)
+                        for g in (n["nsg"], self.fake.subnets[key(n["subnet"])]["nsg"]) if g})
+        for k in chain:
+            if k in self._customer_nsgs():
+                self._terraform_apply(_Given(k))
+            elif self.fake.nsgs.get(k, {}).get("tags", {}).get("managed-by") == "glorfindel":
+                self._strip_quarantine_nsg(_Given(k))
+        self._claims_after_a_change()
+
     @rule()
     def time_passes(self):
         """Forty minutes go by: an operation's marker left behind is stale now."""

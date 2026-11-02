@@ -228,6 +228,16 @@ def _drop_empty_service_principal_env(environ=os.environ) -> list[str]:
     return dropped
 
 
+def identity_note(environ=os.environ) -> str:
+    """What the watch says of its identity at start when it has no service principal of its own
+    (SEC11, V-17): compose no longer falls back on AZURE_CLIENT_*, the former shared principal.
+    "" when it has one."""
+    if (environ.get("AZURE_CLIENT_ID") or "").strip():
+        return ""
+    return ("no service principal (AZURE_CLIENT_* empty) — the VM's managed identity if there is "
+            "one, else this machine's `az login`")
+
+
 @click.group(cls=_GlorfindelCli)
 @click.version_option(package_name="eregion", prog_name="glorfindel")   # the package's, never by hand
 def cli():
@@ -536,6 +546,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # Permission regime — read-only means no action can execute, by design.
     _perm = getattr(agent.connector, "permission_mode", lambda: "read_write")()
     console.print(f"[bold]Credentials:[/bold] [cyan]{_perm}[/cyan]")
+    # SEC11 (V-17): no fallback on a former shared principal — a watch without its own says so.
+    _identity = identity_note()
+    if not dry_run and _identity:
+        console.print(f"[bold]Identity:[/bold] {_identity}")
     if _perm == "read_only":
         # On read-only creds, any mode that would execute will fail at action time.
         _executing_modes = (

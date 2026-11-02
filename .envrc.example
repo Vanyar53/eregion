@@ -66,17 +66,18 @@ export GLORFINDEL_AZURE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 export AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 #
 # AZURE_CLIENT_* : ce que lit Glorfindel lancé depuis ce poste (le venv : glorfindel watch,
-# glorfindel …) et le repli de tout service du compose dont la paire est vide. Le principal le
-# moins large qui écrit : celui de la watch, jamais celui de la console (il restaure). Les
-# injecteurs ne le prennent jamais (ANNATAR_AZURE_CLIENT_* seulement).
+# glorfindel …), rien d'autre — aucun conteneur ne le prend en repli (SEC11) : un service du
+# compose sans sa paire démarre sans principal de service, et make glorfindel-start le dit. Le
+# principal le moins large qui écrit : celui de la watch, jamais celui de la console (il
+# restaure). Les injecteurs ne le prennent jamais (ANNATAR_AZURE_CLIENT_* seulement).
 export AZURE_CLIENT_ID=$GLORFINDEL_AZURE_CLIENT_ID
 export AZURE_CLIENT_SECRET=$GLORFINDEL_AZURE_CLIENT_SECRET
 # Un restore depuis la CLI de ce poste, le chemin d'un humain comme la console : sa paire, pour
 # cette commande seulement —
 #   AZURE_CLIENT_ID=$EREGION_CONSOLE_AZURE_CLIENT_ID AZURE_CLIENT_SECRET=$EREGION_CONSOLE_AZURE_CLIENT_SECRET \
 #     glorfindel restore <resource_id> --before <ISO8601> --yes
-# Une paire va ensemble : un …_CLIENT_ID posé sans son …_SECRET mélange deux principaux (les
-# replis se tirent variable par variable) — make glorfindel-start le dit (check-azure-env).
+# Une paire va ensemble : un …_CLIENT_ID posé sans son …_SECRET ne fait pas un principal —
+# make glorfindel-start le dit (check-azure-env).
 
 # az account show --query id -o tsv
 export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx

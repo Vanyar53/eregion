@@ -40,12 +40,14 @@ ANNATAR_AZURE_ENV := \
 	-e ANTHROPIC_API_KEY -e ANNATAR_LLM_MODEL -e EREGION_ANALYSIS_MODEL \
 	-e EREGION_ANALYSIS_TIMEOUT_S -e GLORFINDEL_LLM_MODEL
 
-# Glorfindel — GLORFINDEL_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
-# Glorfindel peut tourner en Reader (GLORFINDEL_READ_ONLY=1 + SP Reader).
-# AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+# Glorfindel — GLORFINDEL_AZURE_CLIENT_* seulement, comme la watch du compose : jamais
+# AZURE_CLIENT_* en repli (SEC11, V-17 — l'ancien principal partagé, là où il traîne encore) ;
+# vides, le conteneur n'a pas de principal de service. Glorfindel peut tourner en Reader
+# (GLORFINDEL_READ_ONLY=1 + SP Reader). AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours
+# partagés (même tenant).
 GLORFINDEL_AZURE_PICK = \
-	AZURE_CLIENT_ID="$${GLORFINDEL_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
-	AZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
+	AZURE_CLIENT_ID="$${GLORFINDEL_AZURE_CLIENT_ID:-}" \
+	AZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-}"
 GLORFINDEL_AZURE_ENV := \
 	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID
 
@@ -383,12 +385,15 @@ check-azure-env:
 	  echo "  or run with ALLOW_NO_AZURE=1 for a demo without Azure."; \
 	  exit 1; \
 	fi
-	@# SEC7 (V-17) : le compose tire chaque repli variable par variable — un …_CLIENT_ID sans son
-	@# …_SECRET (ou l'inverse) donnerait à ce service l'id d'un principal et le secret d'un autre.
-	@for p in GLORFINDEL EREGION_CONSOLE GLORFINDEL_BOT; do \
-	  id=$$([ -n "$$(printenv $${p}_AZURE_CLIENT_ID)" ] && echo 1); \
-	  se=$$([ -n "$$(printenv $${p}_AZURE_CLIENT_SECRET)" ] && echo 1); \
-	  [ "$$id" = "$$se" ] || echo "⚠ $${p}_AZURE_CLIENT_ID / $${p}_AZURE_CLIENT_SECRET : paire incomplète — ce service mélangerait deux principaux (docs/operations.md, « Identités Azure »)."; \
+	@# SEC7 (V-17) : un …_CLIENT_ID sans son …_SECRET (ou l'inverse) ne fait pas un principal.
+	@# SEC11 : plus aucun repli sur AZURE_CLIENT_* — un service sans sa paire démarre sans principal
+	@# de service (l'identité managée de la VM s'il y en a une, sinon aucune), et c'est dit ici.
+	@for p in GLORFINDEL:watch EREGION_CONSOLE:console GLORFINDEL_BOT:bot; do \
+	  v=$${p%%:*}; s=$${p#*:}; \
+	  id=$$([ -n "$$(printenv $${v}_AZURE_CLIENT_ID)" ] && echo 1); \
+	  se=$$([ -n "$$(printenv $${v}_AZURE_CLIENT_SECRET)" ] && echo 1); \
+	  if [ "$$id" != "$$se" ]; then echo "⚠ $${v}_AZURE_CLIENT_ID / $${v}_AZURE_CLIENT_SECRET : paire incomplète — ce service n'aurait pas de principal valide (docs/operations.md, « Identités Azure »)."; \
+	  elif [ -z "$$id" ]; then echo "ℹ $$s : aucune paire $${v}_AZURE_CLIENT_* — ce service démarre sans principal de service (l'identité managée de la VM s'il y en a une, sinon aucune) ; AZURE_CLIENT_* n'est jamais un repli (SEC11)."; fi; \
 	done
 
 glorfindel-start: check-azure-env build-glorfindel

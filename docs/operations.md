@@ -445,7 +445,7 @@ Limites connues :
 (`annatar-run`, `annatar-dry-run`, `annatar-shell`, `glorfindel-watch`, `-list`, `-shell`…)
 donnent chaque secret à `docker run` par son nom, `-e AZURE_CLIENT_SECRET`, jamais par sa valeur :
 `-e AZURE_CLIENT_SECRET=…` se lisait dans `ps`, l'historique du shell et `make -n`. Le shell de la
-recette choisit la valeur (`GLORFINDEL_AZURE_CLIENT_*` d'abord, puis `AZURE_CLIENT_*` ;
+recette choisit la valeur (`GLORFINDEL_AZURE_CLIENT_*` seul, jamais `AZURE_CLIENT_*` — SEC11 ;
 `ANNATAR_AZURE_CLIENT_*` seul, jamais le partagé — SEC7) et la pose dans l'environnement de `docker run` seulement (`*_AZURE_PICK`, devant
 la commande). Le canary, `tests/unit/test_makefile_secrets.py` : chaque cible rendue par `make -n`
 avec des secrets factices, aucune valeur sur une ligne de commande ; puis les recettes des
@@ -486,17 +486,23 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   demander `Reader` sur l'abonnement, jamais plus.
 - **Les variables** : `GLORFINDEL_AZURE_CLIENT_ID` / `…_SECRET` (la watch),
   `EREGION_CONSOLE_AZURE_CLIENT_ID` / `…_SECRET` (la console), `GLORFINDEL_BOT_AZURE_CLIENT_ID` /
-  `…_SECRET` (le bot) ; vides, chacun prend `AZURE_CLIENT_ID` / `…_SECRET`, le principal unique
-  d'avant (rien ne casse).
-  - **Une paire va ensemble.** Le compose tire chaque repli variable par variable : un
-    `…_CLIENT_ID` posé sans son `…_SECRET` (ou l'inverse) donne au service l'id d'un principal
-    et le secret d'un autre. `make glorfindel-start` (`check-azure-env`) dit une paire
-    incomplète, sans jamais en dire la valeur.
-  - **`AZURE_CLIENT_*`, le repli de tout le reste** : la watch lancée depuis le venv
-    (`DefaultAzureCredential`), et tout service du compose dont la paire est vide. Y mettre le
-    principal de la watch (`.envrc.example`), jamais celui de la console : il restaure. Un
-    restore depuis la CLI du poste prend la paire de la console pour cette commande seulement
+  `…_SECRET` (le bot). **Aucun repli** (SEC11) : vide, un service n'a pas de principal de
+  service — l'identité managée de la VM s'il y en a une (H0), sinon aucune —, jamais
+  `AZURE_CLIENT_*`, le principal unique d'avant, `Contributor` sur l'abonnement là où il traîne
+  encore. `make glorfindel-start` (`check-azure-env`) dit chaque service sans paire, et la watch
+  le dit à son démarrage (« Identity: no service principal »). C'est ce qui rend vrai « plus
+  jamais `Contributor` » : aucun conteneur ne peut le reprendre par défaut.
+  - **Une paire va ensemble.** Un `…_CLIENT_ID` posé sans son `…_SECRET` (ou l'inverse) ne fait
+    pas un principal : `make glorfindel-start` (`check-azure-env`) dit une paire incomplète, sans
+    jamais en dire la valeur.
+  - **`AZURE_CLIENT_*`, le venv seulement** : la watch lancée depuis le venv
+    (`DefaultAzureCredential`) ; aucun conteneur, ni du compose ni des cibles `make glorfindel-*`
+    (`GLORFINDEL_AZURE_PICK`). Y mettre le principal de la watch (`.envrc.example`), jamais celui
+    de la console : il restaure. Un restore depuis la CLI du poste prend la paire de la console
+    pour cette commande seulement
     (`AZURE_CLIENT_ID=$EREGION_CONSOLE_AZURE_CLIENT_ID AZURE_CLIENT_SECRET=… glorfindel restore …`).
+  - **Une instance d'équipe** (`team.env.example`) : la paire de sa watch et celle de sa console,
+    le même principal `Reader` pouvant servir aux deux.
   - **Les injecteurs ne prennent jamais `AZURE_CLIENT_*`** : `x-injector` dans le compose, et
     `make annatar-*` / `annatar-shell` (`ANNATAR_AZURE_PICK`) ne lisent que
     `ANNATAR_AZURE_CLIENT_*` ; vides, le conteneur rouge n'a pas d'identité

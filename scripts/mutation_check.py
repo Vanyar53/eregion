@@ -5443,8 +5443,8 @@ MUTANTS += [
      "    # n'écrit que dans runs/ et /tmp.\n    read_only: true\n",
      "    # n'écrit que dans runs/ et /tmp.\n    read_only: false\n"),
     ("M1423", "the watch takes the console's secret (SEC7, V-17)", "docker-compose.yml",
-     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n",
-     "  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n"),
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",          # re-anchored (SEC11)
+     "  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-}\n"),
     ("M1424", "the README grants Contributor on the subscription again (SEC7, V-17)", "README.md",
      'az ad sp create-for-rbac --name "eregion-glorfindel-watch"     #',
      'az ad sp create-for-rbac --name "eregion-glorfindel-watch" --role Contributor --scopes /subscriptions/$SUB #'),
@@ -5531,7 +5531,7 @@ MUTANTS += [
      "                    beyond = [a for a in self.BEYOND_RESPONSE if allowed(a)]\n",
      "                    beyond = []\n"),
     ("M1576", "a principal's id without its secret said nothing: two principals mixed (SEC7, V-17)", MAKE,
-     '\t  [ "$$id" = "$$se" ] || echo', "\t  true || echo"),
+     '\t  if [ "$$id" != "$$se" ]; then echo', "\t  if false; then echo"),   # re-anchored (SEC11)
     ("M1577", "the console's and the bot's ids out of OWN_CALLERS: each approved write a card (SEC7, V-17)",
      "docker-compose.yml",
      "  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-},${EREGION_CONSOLE_AZURE_CLIENT_ID:-},"
@@ -7089,6 +7089,21 @@ MUTANTS += [
      "                   )\n"),
 ]
 TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M2883", "M2884", "M2885", "M2886", "M2887")})
+MUTANTS += [
+    ("M2888", "the watch falls back on the former shared principal (SEC11, V-17)", "docker-compose.yml",
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n"),
+    ("M2889", "the console, which restores, falls back on the former shared principal (SEC11, V-17)",
+     "docker-compose.yml", "  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-}\n",
+     "  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}\n"),
+    ("M2890", "`make glorfindel-*` hands its container the former shared principal (SEC11, V-17)", MAKE,
+     '\tAZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-}"\n',
+     '\tAZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"\n'),
+    ("M2891", "a service started without a service principal, unsaid (SEC11, V-17)", MAKE,
+     '\t  elif [ -z "$$id" ]; then echo', "\t  elif false; then echo"),
+]
+TESTS.update({"M2888": "tests/unit/test_azure_roles.py", "M2889": "tests/unit/test_azure_roles.py",
+              "M2890": "tests/unit/test_makefile_secrets.py", "M2891": "tests/unit/test_azure_roles.py"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

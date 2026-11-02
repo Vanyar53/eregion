@@ -642,6 +642,48 @@ Le calcul lit aussi :
 Une campagne de C1 qui jouerait elle-même ses pannes en ferait des runs de la campagne. Le
 rattachement par l'heure ne servirait plus, ni `--fault-run`.
 
+## Le réel : temps pour contenir et part contenue seule hors exercice (OV1, #399)
+
+Les définitions de BL1 portent sur une campagne. L'accueil de la console les applique aussi au
+**trafic réel**, sur 30 jours (`eregion_console/indicators.py`, `real`). Les exercices gardent les
+leurs, dans Dagorlad (`compute`, inchangé).
+
+- **Un incident réel** est un cycle de la watch : une détection avec une décision, sur une VM qu'elle
+  nomme (une ligne non attribuée est ancrée sur une VM quelconque), hors de tout exercice. **Un
+  attaquant sur une VM est un incident** : la watch déduplique les lignes d'une règle pendant sa
+  fenêtre seulement, et un blocage retenu laisse l'attaque continuer et revenir. Un cycle de la même
+  adresse (la colonne `SourceIP` ou `CallerIpAddress` de la ligne), de la même technique, sur la
+  même VM, moins de 24 h après la première détection est une répétition, comptée à part ; une ligne
+  écrite deux fois (son signal) est une. L'incident finit comme son premier cycle. **Le
+  regroupement se rompt** à la première levée de son confinement sur la VM (libération, déblocage,
+  reset) et à une carte qui le dit disparu ou contourné : l'adresse qui revient ensuite est un autre
+  incident, jamais repliée dans un incident « contenu ». Deux limites : un NAT ou un CGNAT fait de
+  plusieurs attaquants une seule adresse, donc un seul incident (l'erreur est du côté prudent : on
+  compte moins) ; une règle sans colonne d'adresse ne regroupe rien.
+- **Contenu seul** : la même fonction que BL1, `containment.incident`. Une isolation ou un blocage
+  est exécuté dans le cycle, relu sur Azure, et il a tenu : aucune carte de la réaffirmation ne le
+  dit disparu ou contourné, dans les 15 min après la relecture ou jusqu'à sa première levée.
+- **Le T0 du réel** : l'heure de la détection, faute de mieux, et l'accueil le dit (« from the
+  detection »). Le premier événement malveillant serait plus juste, par exemple la première
+  tentative SSH échouée de la fenêtre de la règle. Aucune règle livrée ne le rend encore : une
+  colonne `FirstSeen = min(TimeGenerated)` dans les règles, gardée dans
+  `raw_signal.first_result_row`, est un lot Glorfindel à part. Le temps pour contenir du réel
+  va donc de la détection à la relecture sur Azure ; il ne compte pas le temps de détecter.
+- **Réel ou exercice** : la ligne de debug de la watch le dit depuis OV1 (`source`), mais seul son
+  « exercise » est définitif. Son « real » est revérifié, comme une ligne qu'elle n'a pas étiquetée :
+  une fenêtre peut arriver en retard par le canal, et la vue Runs rattache alors le cycle à elle. Une
+  ligne est un exercice, déduit, si :
+  - c'est la décision que l'accueil rattache à un run de la période (`decision_of`) ;
+  - une fenêtre encore sur l'hôte la couvre (la règle de la watch, `covering_runs`) ;
+  - ou un rapport de run la couvre sur sa VM, avec une marge large exprès. Un rapport d'attaque
+    d'avant C1 ne nomme pas sa VM : sa technique la couvre alors, sur toute VM.
+
+  Sinon elle est réelle, déduite si la watch ne l'a pas dit. Le doute est dit dans les deux sens :
+  les lignes déduites réelles, et celles écartées comme exercices par déduction.
+- **L'ombre** : les incidents où Glorfindel a recommandé d'isoler ou de bloquer au-dessus du seuil de
+  confiance, sans verdict « wrong » sur leur carte.
+- **Une ligne datée après l'horloge** (au-delà du décalage admis) ne compte nulle part.
+
 ## Le taux des pannes prises pour une attaque (G1, #76)
 
 Le bruit bénin de G1 éprouve la retenue de Glorfindel : écritures disque, charge CPU,

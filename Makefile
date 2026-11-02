@@ -193,7 +193,7 @@ help:
 	@echo "  make glorfindel-host-plan [OPERATOR_CIDR=]   Plan (lecture seule)"
 	@echo "  make glorfindel-host-up   [OPERATOR_CIDR=] [YES=1]  Crée la VM (confirmation, sauf YES=1)"
 	@echo "  make glorfindel-host-env                     host.env depuis ton .envrc (sans secret Azure)"
-	@echo "  make glorfindel-host-push                    host.env + config (human_only forcé) sur la VM"
+	@echo "  make glorfindel-host-push [HUMAN_ONLY=1]     host.env + config sur la VM (modes de H0 gardés ; HUMAN_ONLY=1 : tout en human_only)"
 	@echo "  make glorfindel-host-report [SINCE=7d]       Rapport d'observation"
 	@echo "  make glorfindel-host-pull                    Copie locale des verdicts et de la mémoire (chaque semaine)"
 	@echo "  make glorfindel-host-model MODEL=…           Changer le modèle qui décide (ou MODEL=default)"
@@ -230,7 +230,7 @@ help:
 	@echo ""
 	@echo "Campagne (R1 + IA0) — kill-chain + rapport, depuis Orodruin :"
 	@echo "  make orodruin-campaign-plan CAMPAIGN_TARGET=<rid> [CAMPAIGN_MAX=5]  Planifie (rend un id)"
-	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (watch H0 en human_only)"
+	@echo "  make orodruin-campaign-run  CAMPAIGN=<id>    Joue la campagne (la watch de H0 répond selon le mode de chaque VM)"
 	@echo "  make glorfindel-host-campaign-report CAMPAIGN=<id>  Son rapport, écrit seul sur H0"
 	@echo "    (#167 : code, tests et mutants — rien de mesuré sur le banc)"
 	@echo "  CAMPAIGN_DECLARED=annatar/campaign/declared/bl1-reponse.yaml  Le plan : exactement ses techniques (BL1)"
@@ -595,8 +595,9 @@ celebrimbor-start:
 	 az vm start --ids $$(echo "$$vms" | cut -f1)
 
 # ── Glorfindel hébergé (H0) ───────────────────────────────────────────────
-# La VM du défenseur, hors du banc : infra/glorfindel-host/README.md. Lecture seule sur le
-# banc, human_only forcé au push. L'apply demande confirmation (pas d'--auto-approve).
+# La VM du défenseur, hors du banc : infra/glorfindel-host/README.md. Elle répond sur le banc
+# (BL1c) ; le push garde les modes de H0, le défaut en human_only (HUMAN_ONLY=1 : tout en
+# human_only). L'apply demande confirmation (pas d'--auto-approve).
 HOST_TF       := terraform -chdir=infra/glorfindel-host
 HOST_USER     ?= glorfindel
 # Sans OPERATOR_CIDR, ton IP publique du moment, en /32 (seule source SSH autorisée).
@@ -655,19 +656,27 @@ glorfindel-host-env:
 glorfindel-host-known:
 	@HOST_SSH_FINGERPRINT="$(HOST_SSH_FINGERPRINT)" bash infra/glorfindel-host/known_host.sh "$(HOST_IP)" "$(HOST_KNOWN_HOSTS)"
 
-# host.env → ~/eregion/.env (lu par docker compose), et la config locale avec
-# autonomy forcé à human_only (pré-observation : Glorfindel ne décide jamais seul).
+# host.env → ~/eregion/.env (lu par docker compose), et la config locale : le défaut forcé à
+# human_only, le mode de chaque VM gardé tel qu'il est sur H0 (BL1c, décision de Jonathan du 02/11 ;
+# la config de H0 lue par la même connexion ssh — illisible, tout part en human_only, et c'est dit).
+# HUMAN_ONLY=1 (seul « 1 ») : toutes les VM remises en human_only, le geste d'urgence
+# (host_config.py). La config de H0 est relue juste avant le scp : changée entre les deux lectures
+# (un mode changé dans la console pendant le push), rien n'est envoyé. Pas sous HUMAN_ONLY=1 : ce
+# push n'emporte rien de H0, et une relecture qui échoue ne bloque pas le geste d'urgence.
+HOST_PUSH_RECHECK = { $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h1 2>/dev/null || : > $$h1; } && { cmp -s $$h0 $$h1 || { echo "  la config de H0 a changé pendant le push (un mode changé dans la console ?) : rien d'envoyé, relancer"; false; }; } &&
 glorfindel-host-push: glorfindel-host-known
 	@test -f infra/glorfindel-host/host.env || { echo "infra/glorfindel-host/host.env manquant (voir host.env.example)"; exit 1; }
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
 	@.venv/bin/python infra/glorfindel-host/host_env.py --check infra/glorfindel-host/host.env
-	@cfg=$$(mktemp); \
-	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg && \
+	@cfg=$$(mktemp); h0=$$(mktemp); h1=$$(mktemp); \
+	 $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h0 2>/dev/null || : > $$h0; \
+	 .venv/bin/python infra/glorfindel-host/host_config.py glorfindel-config.yaml $$cfg --h0 $$h0$(if $(filter 1,$(HUMAN_ONLY)), --human-only) && \
+	 $(if $(filter 1,$(HUMAN_ONLY)),,$(HOST_PUSH_RECHECK)) \
 	 scp -q $(HOST_SSH_OPTS) infra/glorfindel-host/host.env $(HOST_USER)@$(HOST_IP):eregion/.env && \
 	 scp -q $(HOST_SSH_OPTS) $$cfg $(HOST_USER)@$(HOST_IP):eregion/glorfindel-config.yaml && \
 	 $(HOST_SSH) 'chmod 600 eregion/.env eregion/glorfindel-config.yaml'; \
-	 rc=$$?; rm -f $$cfg; exit $$rc
-	@echo "  host.env et glorfindel-config.yaml (human_only) poussés sur $(HOST_IP)"
+	 rc=$$?; rm -f $$cfg $$h0 $$h1; exit $$rc
+	@echo "  host.env et glorfindel-config.yaml poussés sur $(HOST_IP)"
 
 # M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, par défaut le
 # dernier tag v*. Checkout détaché, image étiquetée avec la référence (deploy.sh, envoyé par
@@ -1002,8 +1011,8 @@ gothmog-run:
 # même conteneur, aucun droit de plus) ; la watch de H0 les tire et écrit
 # runs/campaigns/<id>/report.md, avec les décisions de Glorfindel — make
 # glorfindel-host-campaign-report CAMPAIGN=<id> pour le lire (docs/analysis.md).
-# Deux temps : `campaign plan` rend un id, `campaign run <id>` le joue (la watch sur H0 est en
-# human_only — rien ne s'isole). ServerAliveInterval : une campagne dure longtemps (plusieurs
+# Deux temps : `campaign plan` rend un id, `campaign run <id>` le joue (la watch sur H0 répond
+# selon le mode de chaque VM : gondolin et bree en non_disruptive, BL1c). ServerAliveInterval : une campagne dure longtemps (plusieurs
 # techniques et leurs fenêtres de détection), plus que le délai d'inactivité d'une IP publique.
 #   make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id VM inscrite> [CAMPAIGN_MAX=5]
 #   make orodruin-campaign-run  CAMPAIGN=<id rendu par le plan>

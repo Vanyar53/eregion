@@ -57,7 +57,8 @@ x-env: &env
 # Vide, chacun prend AZURE_CLIENT_* (le principal unique d'avant : rien ne casse). Le repli se tire
 # variable par variable : un …_CLIENT_ID sans son …_SECRET mélangerait deux principaux — une paire
 # va ensemble, et make glorfindel-start (check-azure-env) dit une paire incomplète. Sur H0, tout est vide : l'identité
-# managée de la VM, lectrice.
+# managée de la VM, partagée par les trois — lecture et réponse sur le groupe du banc depuis le
+# 31/10, jamais le restore (docs/design/modele-de-menace.md, §5).
 x-azure: &azure
   AZURE_CLIENT_ID: ${GLORFINDEL_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}
   AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}

@@ -293,7 +293,7 @@ make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAM
 #   par les tests. Une entrée destructive (atomic ou script) demande --allow-destructive et un
 #   safe_target. Manifeste et scénarios dans ~/runs/campaigns/<id>/ (bind-monté). La commande n'est
 #   pas répétée à l'écran (CAMPAIGN_TARGET porte l'abonnement).
-make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (watch H0 en human_only — rien ne s'isole) ; refusée sans watch vivante (V1)
+make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (la watch de H0 répond selon le mode de chaque VM : gondolin non_disruptive) ; refusée sans watch vivante (V1)
 #   Chaque run passe par le moteur de son expérience (atomic ou script) ; sa détection (detected/
 #   missed/unknown) et sa latence (#157) arrivent dans le manifeste, comme pour un run seul. Le reset
 #   entre scénarios (glorfindel reset) n'est pas dans l'image d'Orodruin : le lanceur glorfindel y
@@ -515,9 +515,18 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   identité (la CLI qu'ils lancent tourne dans leur conteneur). Les rendre lecteurs seuls, c'est
   confier l'action approuvée à la watch (une file sous `~/.glorfindel`, signée par la console),
   qui l'exécute — planifié.
-- **H0** : rien ne change. Ses conteneurs partagent l'identité managée de la VM, lectrice
-  (`Reader` sur le banc, `Log Analytics Reader` sur son workspace) : une identité par conteneur
-  ne s'y sépare pas (le point de jeton de la VM répond à chacun d'eux), et il n'écrit rien.
+- **H0** : ses conteneurs partagent l'identité managée de la VM : une identité par conteneur ne
+  s'y sépare pas (le point de jeton de la VM répond à chacun d'eux), et les variables de chaque
+  service y restent vides. Depuis le 31/10 (décision de Jonathan, BL1), elle tient `Reader` et
+  **Eregion Glorfindel Response** sur le seul groupe du banc, `Log Analytics Reader` sur son
+  workspace, jamais le restore ; `GLORFINDEL_READ_ONLY=0`, gondolin et bree en `non_disruptive`.
+  `make glorfindel-host-push` garde ces modes (décision de Jonathan, 02/11 : il lit la config en
+  place sur H0, n'en reporte que le mode de chaque VM, jamais un plus hardi, et le dit VM par VM ;
+  avant, SEC7 remettait tout en `human_only` à chaque push) ; `HUMAN_ONLY=1` remet toutes les VM
+  en `human_only`, le geste d'urgence (`infra/glorfindel-host/README.md`).
+  La watch, la console et le bot écrivent donc avec la même identité, sur le banc seulement : ce
+  que ça ouvre et ce qui le borne, au modèle de menace
+  ([`design/modele-de-menace.md`](design/modele-de-menace.md), §5).
 
 **Créer** (une fois par tenant pour les rôles ; `<…>` à remplacer, rien de réel ici) :
 
@@ -1331,7 +1340,10 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 - **`make release`**, depuis `origin/main` à jour (`git switch --detach origin/main`), l'arbre propre.
   `[Unreleased]` devient `[X.Y.Z] — <date> — "<titre>"`, un `[Unreleased]` vide au-dessus. La version de
   `pyproject.toml` et la ligne « **Status — vX.Y.Z.** » du README suivent : `tests/unit/test_readme.py`
-  échoue sinon (SEC6). Puis la branche `chore/release-X.Y.Z`, le commit
+  échoue sinon (SEC6). Dans `ROADMAP.md`, la ligne de la version sous « Les prochaines releases »
+  passe à `brouillon` (RM1 : `#roadmap` montre ce tableau) ; sans ligne pour elle, ou dans un tableau
+  que `#roadmap` ne lirait pas (en-tête changé), rien n'y change,
+  la commande le dit, et l'Orchestre tient le tableau à la main (`publiée` aussi, après la publication). Puis la branche `chore/release-X.Y.Z`, le commit
   `chore(release): X.Y.Z — CHANGELOG [X.Y.Z] « <titre> », version du paquet`, le push et la PR
   (`gh pr create`). Refusé, sans rien écrire :
   - un arbre modifié, ou un HEAD qui n'est pas `origin/main` ;

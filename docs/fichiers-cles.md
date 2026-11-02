@@ -191,7 +191,9 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           (fenêtre, rapport, campagne), ou ce que --sections / EREGION_CONSOLE_SECTIONS choisit
   cli.py                → `eregion console [--host] [--port] [--sections]`, `eregion coverage [--json] [--check]`
   indicators.py         → les cinq indicateurs de la finalité (UI-2) : sur 30 jours, rapports de run, cycles de la
-                          watch, cartes, catalogue — jamais les fenêtres ; `GET /api/indicators`
+                          watch, cartes, catalogue ; contenir et contenu seul sur le trafic réel (`real`, OV1 : les
+                          cycles hors exercice, la fin de BL1), ceux des exercices (`compute`) pour Dagorlad ;
+                          `GET /api/indicators`, `GET /api/dagorlad/indicators`
   coverage.py           → C1 : la matrice de couverture — par technique du catalogue et par panne, dernier run,
                           dernière preuve, état (proven, aging, stale, regressed, unproven, never), évolution sur
                           douze semaines ; toute l'histoire des rapports et des cycles ; nourrit la couverture et
@@ -248,6 +250,11 @@ eregion_core/
                         les sept clés), `identity` (`metrics.run_format`, `kind`, `injector`, `experiment_id`),
                         `read_run` / `read_reports` (la vue unifiée, rapports d'avant C1 compris), `timeline`
                         (attaque, détection, décision, action vérifiée d'un incident).
+  identity.py         → #205, BL1c : `drop_empty_service_principal_env` retire les `AZURE_CLIENT_*` vides que
+                        compose passe sur un hôte sans principal (sinon `DefaultAzureCredential` n'atteint pas
+                        l'identité managée) ; appelée par `glorfindel`, `eregion console` et `check_enrollment`
+                        (analysis/campaign_report.py : le rapport, la mesure, le triage, l'index lancés seuls)
+                        — dans le cœur pour qu'aucun n'importe l'autre (D1).
 
 scripts/console_escaping.py → #254, #257 : rien du dehors n'est écrit brut dans la console — suit ce que peut
                         contenir chaque ${…} d'un gabarit HTML, chaque valeur donnée à innerHTML et chaque

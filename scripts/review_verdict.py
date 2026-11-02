@@ -2,16 +2,18 @@
 """review_verdict — the Opus 5.5 review, traced on the pull request before the merge (SEC12, #418;
 docs/sessions.md, « Relecture et fusion »).
 
-  review_verdict.py body --lot ID --verdict ok|changes|blocking --head SHA [--report FILE]
-      the comment to post (gh pr comment N --body-file -): the verdict, the commit it read, the
-      report, and a key the check reads back
-  gh pr view N --json headRefOid,comments | review_verdict.py check --author LOGIN [--author …]
-      exit 0 when the last verdict that one of these authors posted for the pull request's head
-      commit is « ok »; else exit 1, and why
+  review_verdict.py body --lot ID --verdict ok|changes|blocking --head REVIEWED [--report FILE]
+      the comment to post (gh pr comment N --body-file -): the verdict, the commit the review read,
+      the report, and a key the check reads back
+  gh pr view N --json headRefOid,comments | review_verdict.py check --reviewed REVIEWED --author LOGIN [--author …]
+      exit 0 when the pull request's head is REVIEWED and the last verdict one of these authors
+      posted for it is « ok »; else exit 1, and why
 
-A verdict holds for the commit it read: a push after it is not reviewed (the check fails, the
-merge waits for another review) — and the merge itself is tied to that commit
-(`gh pr merge N --squash --match-head-commit SHA`). Anyone can comment on a public pull request:
+REVIEWED is the commit the reviewer was given and read — `git rev-parse <branch>` when it is
+launched, said back in its report — never the head read at the time of posting: a push between
+the review and the post would be taken for reviewed. A verdict holds for that commit only: a
+push after it fails the check (another review), and the merge is tied to it
+(`gh pr merge N --squash --match-head-commit REVIEWED`). Anyone can comment on a public pull request:
 only the authors named (the sessions' GitHub App, the maintainer) are read, and a report's own
 text can never carry a key (it is neutralised in `body`). Standard library only.
 """
@@ -51,11 +53,16 @@ def _login(author) -> str:
     return str(login or "").lower().removesuffix("[bot]")
 
 
-def check(pr: dict, authors: list[str]) -> tuple[bool, str]:
-    """(merge allowed, why) for `gh pr view --json headRefOid,comments`."""
+def check(pr: dict, authors: list[str], reviewed: str) -> tuple[bool, str]:
+    """(merge allowed, why) for `gh pr view --json headRefOid,comments` and the commit reviewed."""
+    if not isinstance(reviewed, str) or not SHA.fullmatch(reviewed):
+        return False, "--reviewed : le commit complet que la relecture a lu (40 caractères hexadécimaux)"
     head = pr.get("headRefOid") if isinstance(pr, dict) else None
     if not isinstance(head, str) or not SHA.fullmatch(head):
         return False, "la PR ne dit pas son commit de tête (headRefOid)"
+    if head != reviewed:
+        return False, (f"la tête de la PR ({head[:12]}) n'est pas le commit relu ({reviewed[:12]}) : un push après "
+                       "la relecture — une autre relecture")
     allowed = {_login(a) for a in authors if _login(a)}
     if not allowed:
         return False, "aucun auteur de relecture nommé (--author)"
@@ -94,6 +101,7 @@ def main(argv: list[str]) -> int:
     b.add_argument("--report", default="")
     c = sub.add_parser("check")
     c.add_argument("--author", action="append", default=[])
+    c.add_argument("--reviewed", required=True)
     args = ap.parse_args(argv)
     if args.cmd == "body":
         try:
@@ -108,7 +116,7 @@ def main(argv: list[str]) -> int:
     except ValueError:
         print("review_verdict : la sortie de gh pr view --json headRefOid,comments est attendue", file=sys.stderr)
         return 2
-    ok, why = check(pr, args.author)
+    ok, why = check(pr, args.author, args.reviewed)
     print(why, file=sys.stdout if ok else sys.stderr)
     return 0 if ok else 1
 

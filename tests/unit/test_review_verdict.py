@@ -35,8 +35,9 @@ def _pr(*comments, head=HEAD):
     return json.dumps({"headRefOid": head, "comments": [{"author": {"login": a}, "body": b} for a, b in comments]})
 
 
-def _check(pr, *authors):
-    return _run("check", *[x for a in (authors or (APP,)) for x in ("--author", a)], stdin=pr)
+def _check(pr, *authors, reviewed=HEAD):
+    return _run("check", "--reviewed", reviewed, *[x for a in (authors or (APP,)) for x in ("--author", a)],
+                stdin=pr)
 
 
 def test_the_comment_says_the_verdict_and_the_commit_it_read(tmp_path):
@@ -64,6 +65,18 @@ def test_an_ok_for_the_head_from_the_app_allows_the_merge():
 
 
 def test_a_push_after_the_review_needs_another_review():
+    res = _check(_pr((APP, _body(head=OLD))), reviewed=OLD)
+    assert res.returncode == 1 and "n'est pas le commit relu" in res.stderr
+
+
+def test_a_verdict_posted_after_a_push_for_the_new_head_is_not_a_review_of_it():
+    """Reviewed on OLD, pushed HEAD, then « ok » posted with the head read at that time: refused —
+    the commit reviewed is the one the reviewer was given, never the head of the moment."""
+    res = _check(_pr((APP, _body(head=HEAD))), reviewed=OLD)
+    assert res.returncode == 1 and "n'est pas le commit relu" in res.stderr
+
+
+def test_an_ok_for_another_commit_is_not_one_for_the_head():
     res = _check(_pr((APP, _body(head=OLD))))
     assert res.returncode == 1 and "un push après elle" in res.stderr
 
@@ -87,6 +100,8 @@ def test_a_report_cannot_carry_a_key_of_its_own():
 
 
 def test_without_a_trusted_author_or_a_head_nothing_passes():
-    assert _run("check", stdin=_pr((APP, _body()))).returncode == 1
+    assert _run("check", "--reviewed", HEAD, stdin=_pr((APP, _body()))).returncode == 1
+    assert _run("check", "--author", APP, stdin=_pr((APP, _body()))).returncode == 2      # --reviewed required
+    assert _check(_pr((APP, _body())), reviewed=HEAD[:12]).returncode == 1
     assert _check(json.dumps({"comments": []})).returncode == 1
     assert _check("not json").returncode == 2

@@ -13,12 +13,13 @@ Tu relis un lot. Tu ne modifies rien : ni édition, ni commit, ni push.
 - l'ID du lot ;
 - le chemin de la fiche ;
 - la branche ;
+- le commit à relire (`reviewed`, noté au lancement) ;
 - la base ;
 - éventuellement, les épisodes de repli : le modèle, la période, les actions, et les fichiers écrits pendant qu'un autre modèle répondait.
 
 **Étapes :**
 1. **Lire.** Lis la fiche, puis les fichiers de rôle `CLAUDE_<RÔLE>.md` des sessions qu'elle indique. Lance `git log <base>..<branche>` et `git diff <base>...<branche>`.
-2. **Tester.** Lance `git checkout --detach <branche>` dans ton worktree : cette commande marche même si un autre worktree tient la branche. Lance ensuite `pytest` et `ruff check .`.
+2. **Tester.** Lance `git checkout --detach <commit à relire>` dans ton worktree : cette commande marche même si un autre worktree tient la branche. Relis ce commit-là, pas la branche telle qu'elle est devenue : `git log <base>..<commit>`, `git diff <base>...<commit>`. Lance ensuite `pytest` et `ruff check .`.
 3. **Commencer par le repli.** S'il y a eu des épisodes de repli, lis d'abord, ligne à ligne, les fichiers écrits pendant ces épisodes. Si un épisode a lancé des commandes shell (`files_complete: false`), sa liste est incomplète : ce que ces commandes ont écrit n'y est pas. Lis alors ses commandes, puis tout le diff de la branche, en traitant comme écrit pendant le repli tout fichier qu'elles ont pu toucher.
 4. **Relire,** en t'appuyant sur la fiche et sur `CLAUDE.md` :
    - **Critères :** chaque critère « Fini quand » est-il vraiment tenu, et avec quelle preuve ?
@@ -32,5 +33,6 @@ Tu relis un lot. Tu ne modifies rien : ni édition, ni commit, ni push.
 
 **Rapport final** (ton dernier message, rien après) :
 - **Verdict :** `ok`, `changes` ou `blocking`.
+- **Commit relu :** son hash complet (`git rev-parse HEAD` dans ton worktree). Le verdict ne vaut que pour lui : l'Orchestre le publie sur la PR et ne fusionne que ce commit.
 - **Constats,** du plus grave au moins grave. Pour chacun : `fichier:ligne`, le problème, pourquoi c'en est un, la correction proposée. Marque `[repli]` ceux qui portent sur du travail fait pendant un repli.
 - **Critères :** un tableau qui donne, pour chaque critère, tenu ou non tenu, et la preuve.

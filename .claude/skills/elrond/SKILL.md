@@ -70,7 +70,7 @@ Index :
    - Mets à jour sa ligne dans l'index : état et branche.
    - Lance `palantir.py agent "elrond <ID> · <titre>" --json`.
      - Verdict `expected-model-only` : le modèle est `5.5`. Relecture seulement si la politique est `always`.
-     - Verdict `review-needed` : le modèle est `5.5+repli` et la relecture passe à `pending`. Lance un `elrond-reviewer` avec la description `elrond <ID> · relecture`. Donne-lui l'ID, la fiche, la branche et la base, ainsi que chaque épisode de repli relevé par palantir : modèle, période, actions, fichiers écrits et, si `files_complete` vaut `false`, les commandes shell de l'épisode (leurs écritures ne sont pas listées).
+     - Verdict `review-needed` : le modèle est `5.5+repli` et la relecture passe à `pending`. Lance un `elrond-reviewer` avec la description `elrond <ID> · relecture`. Note d'abord le commit à relire, `reviewed=$(git rev-parse <branche>)`. Donne-lui l'ID, la fiche, la branche, ce commit et la base, ainsi que chaque épisode de repli relevé par palantir : modèle, période, actions, fichiers écrits et, si `files_complete` vaut `false`, les commandes shell de l'épisode (leurs écritures ne sont pas listées).
    - Range les impacts transverses de son rapport dans `collab/inbox_<rôle>.md`, pour chaque session concernée.
 
 4. **Au retour d'un relecteur, lance aussi palantir.**
@@ -81,19 +81,20 @@ Index :
 
 5. **Pousser, si on te l'a demandé.** Si l'utilisateur a demandé les PR, pousse la branche et ouvre la PR avec le modèle du dépôt. Dans la section « Model and review », indique `Opus 5.5`, ou `Opus 5.5 + fallback, reviewed (<verdict>)`.
 
-6. **Fusionner, si on te l'a demandé : le verdict publié d'abord** (`docs/sessions.md`, « Relecture et fusion »). Une PR fusionne avec la CI verte et une relecture Opus 5.5 « ok », et ce verdict se lit sur la PR, avant la fusion, pour le commit qu'il a relu. Garde le rapport du relecteur dans un fichier de ton scratchpad, puis :
+6. **Fusionner, si on te l'a demandé : le verdict publié d'abord** (`docs/sessions.md`, « Relecture et fusion »). Une PR fusionne avec la CI verte et une relecture Opus 5.5 « ok ». Ce verdict se lit sur la PR, avant la fusion, et il vaut pour le commit relu : `$reviewed`, noté au lancement du relecteur et repris de son rapport (« Commit relu »). Ce n'est jamais la tête lue au moment de publier : un push entre la relecture et la publication passerait pour relu. Garde le rapport du relecteur dans un fichier de ton scratchpad, puis :
 
    ```
-   head=$(gh pr view <n> --json headRefOid -q .headRefOid)
-   python3 scripts/review_verdict.py body --lot <ID> --verdict <ok|changes|blocking> --head "$head" --report <rapport> \
+   python3 scripts/review_verdict.py body --lot <ID> --verdict <ok|changes|blocking> --head "$reviewed" --report <rapport> \
      | gh pr comment <n> --body-file -
-   gh pr view <n> --json headRefOid,comments | python3 scripts/review_verdict.py check --author <login de l'App des sessions>
-   gh pr merge <n> --squash --match-head-commit "$head"
+   gh pr view <n> --json headRefOid,comments \
+     | python3 scripts/review_verdict.py check --reviewed "$reviewed" --author eregion-agents
+   gh pr merge <n> --squash --match-head-commit "$reviewed"
    ```
 
+   - Si le commit du rapport n'est pas `$reviewed`, la relecture ne vaut pas : relance-la.
    - Un verdict `changes` ou `blocking` se publie aussi : la PR garde la trace de chaque relecture.
-   - `check` échoue si la tête a bougé après la relecture (une autre relecture) ou si le dernier verdict n'est pas `ok` : ne fusionne pas, ne contourne pas.
-   - `--match-head-commit` lie la fusion au commit relu. Si la fusion est refusée (un check requis, la règle de `main`), donne la commande à l'utilisateur.
+   - `check` échoue si la tête de la PR n'est pas `$reviewed` (un push après la relecture : une autre relecture), ou si le dernier verdict publié pour ce commit n'est pas `ok`. Ne fusionne pas, ne contourne pas.
+   - `--match-head-commit "$reviewed"` refuse la fusion si la tête a bougé entre-temps. Si la fusion est refusée (un check requis, la règle de `main`), donne la commande à l'utilisateur.
 
 7. **Fin du run.** Lance `palantir.py session ${CLAUDE_SESSION_ID}`, puis rends compte :
    - les lots faits, et leurs branches ;

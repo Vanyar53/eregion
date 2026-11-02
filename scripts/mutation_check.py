@@ -3152,16 +3152,17 @@ MUTANTS += [
     ("M1177", "the first start draws no token (SEC1)", CON,
      "    token = secrets.token_urlsafe(32)\n", '    token = ""\n'),
     ("M1178", "the drawn token is written readable by all (SEC1)", CON,
-     ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)\n',
-      '    os.chmod(path, 0o600)\n    _local_token["value"] = token\n'),
-     ('os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o644)\n',
-      '    _local_token["value"] = token\n')),
+     ('os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)\n',
+      "        if st.st_mode & 0o077:\n            os.fchmod(fd, 0o600)\n"),
+     ('os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)\n',
+      "        if False:\n            os.fchmod(fd, 0o600)\n")),
     ("M1179", "the cookie carries the token itself (SEC1)", CON,
      "                resp.set_cookie(cookie, _session(token), httponly=True,",
      "                resp.set_cookie(cookie, token, httponly=True,"),
     ("M1180", "the token as a cookie opens the console (SEC1)", CON,
-     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token))\n",
-     "        by_cookie = _ok(conn.cookies.get(cookie), _session(token)) or _ok(conn.cookies.get(cookie), token)\n"),
+     "    return _ok(bearer, token), bool(token) and _session_holds(conn.cookies.get(cookie), token)\n",
+     "    return _ok(bearer, token), bool(token) and (_session_holds(conn.cookies.get(cookie), token)"
+     " or _ok(conn.cookies.get(cookie), token))\n"),
     ("M1181", "the cookie is never Secure, HTTPS included (SEC1)", CON,
      '                                secure=scope.get("scheme") == "https")\n',
      "                                secure=False)\n"),
@@ -3201,11 +3202,11 @@ MUTANTS += [
      "    return f\"{_TOKEN_COOKIE}_{port or (443 if scheme in ('https', 'wss') else 80)}\"\n",
      "    return _TOKEN_COOKIE\n"),
     ("M1303", "the token file is read through a symbolic link (SEC1)", CON,
-     '        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))\n',
-     "        fd = os.open(path, os.O_RDONLY)\n"),
+     '    fd = os.open(_TOKEN_FILE, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))\n',
+     "    fd = os.open(_TOKEN_FILE, os.O_RDONLY)\n"),
     ("M1304", "the URL stays in a buffer: a container's log never shows it (SEC1)", CON,
-     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}", flush=True)\n',
-     '        print(f"  Eregion console  →  http://localhost:{port}/?token=${TOKEN_ENV}")\n'),
+     '(its token: `make console-url`)\\n{kept}", flush=True)\n',
+     '(its token: `make console-url`)\\n{kept}")\n'),
     ("M1305", "make console-url never reads the file the console drew (SEC1)", "Makefile",
      '\t   [ -s "$$f" ] && t=$$(head -n 1 "$$f"); fi; \\\n', "\t   true; fi; \\\n"),
 ]
@@ -7367,6 +7368,56 @@ MUTANTS += [
      '    lock = request_lock("runs", f"fault {os.path.basename(fault)}")\n'),
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
+
+# SEC10 (#416): the console's token in the console's own directory, its former place retired, never
+# printed; a session dated and bounded; a rotation that ends every session of the former token.
+_SEC10 = "tests/unit/test_console.py"
+MUTANTS += [
+    ("M2860", "the console's drawn token kept beside Glorfindel's state, which the watch and the bot mount (SEC10)",
+     CON, '_TOKEN_FILE = Path.home() / ".eregion" / "console" / "token"\n',
+     '_TOKEN_FILE = Path.home() / ".glorfindel" / "console_token"\n'),
+    ("M2861", "the token's former file left in place at a start (SEC10)", CON,
+     '    retired = _retire_legacy_token()\n', '    retired = ""\n'),
+    ("M2862", "the console's token printed at its start, into a container's logs (SEC10)", CON,
+     '    print(f"  Eregion console  →  http://localhost:{port}/  (its token: `make console-url`)\\n{kept}", flush=True)\n',
+     '    print(f"  Eregion console  →  http://localhost:{port}/?token={_token()}\\n{kept}", flush=True)\n'),
+    ("M2863", "a session cookie that never expires (SEC10)", CON,
+     "    if issued > now + _SESSION_SKEW_S or now - issued > SESSION_TTL_S:\n",
+     "    if issued > now + _SESSION_SKEW_S:\n"),
+    ("M2864", "a session cookie dated ahead of the clock accepted (SEC10)", CON,
+     "    if issued > now + _SESSION_SKEW_S or now - issued > SESSION_TTL_S:\n",
+     "    if now - issued > SESSION_TTL_S:\n"),
+    ("M2865", "a session's date not signed: a cookie rewritten to now opens again (SEC10)", CON,
+     '_SESSION_LABEL + b"." + str(issued).encode(), hashlib.sha256)', "_SESSION_LABEL, hashlib.sha256)"),
+    ("M2866", "a rotated token not read by the running console: the former sessions still open it (SEC10)", CON,
+     '    if _file_key(st) != _local_token["key"]:\n', "    if False:\n"),
+    ("M2867", "a rotation writes over the deployment's token (SEC10)", CON,
+     "    if console_token():\n        raise RuntimeError(", "    if False:\n        raise RuntimeError("),
+    ("M2868", "a token file turned into a link while the console runs still serves its last token (SEC10)", CON,
+     "        try:\n            _read_token_file()\n        except OSError:\n            _local_token.update(value=\"\", key=None)\n",
+     "        try:\n            _read_token_file()\n        except OSError:\n            pass\n"),
+    ("M2869", "the token's former file removed through its link: what it points to is deleted (SEC10)", CON,
+     "        os.unlink(_LEGACY_TOKEN_FILE)\n", "        os.unlink(os.path.realpath(_LEGACY_TOKEN_FILE))\n"),
+    ("M2870", "make console-url reads the token's former place (SEC10)", MAKE,
+     '; f="$(HOME)/.eregion/console/token"; \\\n', '; f="$(HOME)/.glorfindel/console_token"; \\\n'),
+]
+TESTS.update({f"M{n}": _SEC10 for n in range(2860, 2871)})
+# SEC10, its review: another script's digits in a cookie, the live feed past its session, the token
+# page, what a start says of the former file. M2871–M2875.
+MUTANTS += [
+    ("M2871", "a cookie with another script's digits (« ² ») raises before any authentication (SEC10, review)", CON,
+     " or not (parts[1].isascii() and parts[1].isdigit()) or ", " or not parts[1].isdigit() or "),
+    ("M2872", "the live feed outlives its session: a rotation or the 12 h leave it open (SEC10, review)", CON,
+     "            if not any(_credentials(ws, _token())):\n", "            if False:\n"),
+    ("M2873", "the token page sends the operator to the file the console no longer keeps (SEC10, review)", CON,
+     "     (<code>~/.eregion/console/token</code>).", "     (<code>~/.glorfindel/console_token</code>)."),
+    ("M2874", "a start says « a new token is drawn » when the console keeps its own (SEC10, review)", CON,
+     '"file": f"the console keeps its own ({_TOKEN_FILE})",', '"file": "a new token is drawn",'),
+    ("M2875", "a former file that could not be removed said removed (SEC10, review)", CON,
+     '        return "kept"\n    return "removed"\n', '        return "removed"\n    return "removed"\n'),
+]
+TESTS.update({f"M{n}": _SEC10 for n in range(2871, 2876)})
+
 
 # SEC9 (#415): the indicators' entries the injectors give — a run's T0, the list of runs, a fault's
 # effect — confronted with what the watch's host holds: the T0 inside its window and before the

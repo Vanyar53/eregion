@@ -27,7 +27,8 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 
 | | Menace | Ce qui la tient |
 |---|---|---|
-| S | Un autre site, ou un autre utilisateur local, agit comme l'opérateur | Toujours un jeton, tiré au premier démarrage s'il manque ; un cookie de session dérivé (HMAC), HttpOnly, SameSite=Strict (SEC1) |
+| S | Un autre site, ou un autre utilisateur local, agit comme l'opérateur | Toujours un jeton, tiré au premier démarrage s'il manque ; un cookie de session daté et signé (HMAC du jeton), HttpOnly, SameSite=Strict (SEC1), valable 12 h, refusé dès que le jeton tourne (SEC10) |
+| S | Un service voisin (la watch, le bot) se sert du jeton de la console | Le jeton tiré vit dans le répertoire de la console, qu'aucun autre service ne monte ; son ancien emplacement, à côté de l'état de Glorfindel, est retiré au premier démarrage et un nouveau jeton tiré ; le jeton n'est jamais imprimé, donc jamais dans les journaux des conteneurs (SEC10, testé) |
 | T | Une page tierce (DNS rebinding, CSRF) change l'état | `Host` d'une liste fermée, `Origin` exacte pour toute modification, corps JSON obligatoire (SEC1) |
 | R | Une action sans trace | Le fil des actions de l'opérateur, `runs/manual_actions.jsonl` ; chaque carte garde son verdict et sa date |
 | I | Le jeton ou des identifiants fuient | Le jeton retiré de l'URL après la première ouverture, jamais sur une ligne de commande ; ni schéma OpenAPI ni `/docs` ; Config masque abonnement, tenant et client (SEC1) |

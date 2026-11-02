@@ -1,5 +1,16 @@
 # BL1b — une technique publique jugée grave, pour mesurer le contenu seul
 
+> **Décision de Jonathan (02/11) : « le réel + R2 ».** La règle « bibliothèques publiques
+> seulement » reste entière, sans aucune exception.
+> - **La part contenue seule se mesure sur le trafic réel** : bree est en `non_disruptive` et
+>   compte déjà 5 blocages autonomes. L'Overview les comptera avec OV1 (#399).
+> - **Pour les exercices**, BL1 sera rejoué quand **R2** (#79, Stratus Red Team, techniques cloud
+>   publiques) apportera une technique grave jouable.
+>
+> L'option 2 ci-dessous (attendre une couverture publique) est retenue, avec le réel en plus ;
+> les options 1 (assouplir `declared.py` pour un script maison) et 3 (atomic sans nettoyage dans
+> R1) sont écartées.
+
 BL1 (#280, session du 31/10) a mesuré la part contenue seule pour la première fois : **0 sur 1**.
 La seule technique d'une bibliothèque publique au catalogue, **T1136.001** (création d'un compte
 local, atomic épinglé), le modèle la juge **ambiguë** : un instantané recommandé à 35 %, sous le
@@ -11,7 +22,8 @@ Ce document tranche le choix de cette technique, à partir des fichiers d'Atomic
 (`annatar/atomics/PIN`, commit `9f6a1eab…`, vérifié identique à `master` le 02/11). **Conclusion :
 aucun des deux candidats de l'issue #396 n'est jouable aujourd'hui par l'injecteur R1 à la version
 épinglée.** La raison est détaillée ci-dessous, avec la preuve ; les pistes de déblocage, qui
-touchent une règle de sûreté ou une politique, reviennent à Jonathan.
+touchent une règle de sûreté ou une politique, ont été tranchées par Jonathan le 02/11 (encadré
+ci-dessus).
 
 ## Le critère
 
@@ -98,35 +110,38 @@ REFUSED  SUDO Brute Force - Redhat  T1110.001/4097bc00… :: declares dependenci
   a jugée ambiguë — il ne verrait pas « groupe root » dans la sortie de la règle t1136. Elle ne
   remplit donc pas le besoin (un signal **grave**).
 
-## Ce qu'il reste à décider (Jonathan)
+## Les options examinées, et la décision (02/11)
 
 La mesure du contenu seul exige le signal `sudo-privilege-escalation`, et Atomic Red Team n'offre
-pas, à ce jour, de test sudo→root **réversible, non interactif, sans prérequis**. Options, par
-ordre de préférence :
+pas, à ce jour, de test sudo→root **réversible, non interactif, sans prérequis**. Les trois
+options examinées, et ce que Jonathan en a retenu le 02/11 :
 
-1. **Assouplir, de façon étroite et tracée, la règle « bibliothèque publique seule » de
+1. **Écartée.** **Assouplir, de façon étroite et tracée, la règle « bibliothèque publique seule » de
    `declared.py` pour une technique grave sans atomic fidèle.** Le script maison
    `scripts/vm/privilege_escalation_sim.sh` (T1548.003) produit déjà, par `logger` seul (aucune
    escalade ni modification réelle — **non destructif**), exactement les lignes `sudo … USER=root …
    COMMAND=…` que la règle livrée détecte. Un opt-in explicite par déclaration (un indicateur
    revu par un humain), documenté au modèle de menace, débloquerait la mesure immédiatement. C'est
    un **retour en arrière de politique** sur « plus de logique offensive maison » : il revient à
-   Jonathan, pas à un lot.
-2. **Attendre une couverture publique d'une élévation grave sur VM** (une mise à jour d'Atomic Red
+   Jonathan, pas à un lot. Jonathan garde la règle entière, sans aucune exception.
+2. **Retenue, avec le réel en plus.** **Attendre une couverture publique d'une élévation grave sur VM** (une mise à jour d'Atomic Red
    Team avec un test sudo→root réversible, ou R2/Stratus sur le plan de contrôle avec une règle
-   livrée correspondante), puis câbler la technique. BL1b est alors différé.
-3. **Autoriser dans R1 un atomic en lecture seule sans nettoyage** (nouvelle garde + mutant) :
+   livrée correspondante), puis câbler la technique. Ce sera R2 (#79, Stratus Red Team) ; d'ici
+   là, la part contenue seule se mesure sur le trafic réel (bree en `non_disruptive`, 5 blocages
+   autonomes), compté par l'Overview avec OV1 (#399).
+3. **Écartée.** **Autoriser dans R1 un atomic en lecture seule sans nettoyage** (nouvelle garde + mutant) :
    insuffisant seul, car le seul candidat non destructif (« Sudo usage ») reste injouable à cause
    de `sudo vim`, et on ne peut pas éditer l'atomic.
 
-Tant que la décision n'est pas prise, la campagne déclarée de BL1
-(`annatar/campaign/declared/bl1-reponse.yaml`) garde sa seule technique publique, T1136.001 ; la
-part contenue seule reste mesurée à 0 sur 1, par décision correcte du modèle sur une technique
-ambiguë — une mesure, pas un échec du banc.
+D'ici R2, la campagne déclarée de BL1 (`annatar/campaign/declared/bl1-reponse.yaml`) garde sa
+seule technique publique, T1136.001. En exercice, la part contenue seule reste à 0 sur 1, par
+décision correcte du modèle sur une technique ambiguë — une mesure, pas un échec du banc. Sur le
+trafic réel, elle se lit dans l'Overview (OV1, #399).
 
 ## À rejouer au banc
 
-Rien de nouveau à rejouer tant que la décision ci-dessus n'est pas prise : la session BL1 du 31/10
-reste la référence (`docs/banc-bl1.md`). Une fois une technique grave câblée (option 1 ou 2),
-rejouer BL1 avec elle en seconde technique, après T1136.001, et lire la part contenue seule
-(`analysis/containment.py`).
+Rien de nouveau à rejouer avant R2 : la session BL1 du 31/10 reste la référence
+(`docs/banc-bl1.md`). Quand R2 (#79) apportera une technique grave jouable (Stratus Red Team, avec
+une règle livrée qui la détecte), rejouer BL1 avec elle en seconde technique, après T1136.001, et
+lire la part contenue seule (`analysis/containment.py`). D'ici là, la part contenue seule se lit
+sur le trafic réel, dans l'Overview (OV1, #399).

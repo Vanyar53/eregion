@@ -68,7 +68,7 @@ def test_an_attack_started_keeps_only_the_fields_an_injector_writes():
 def test_a_detection_missed_is_a_proposal_and_an_attack_adapted_no_more():
     missed = signal_origin.admit(_line("detection_missed", raw_signal={"failed_query": "q",
                                                                        "detection_hints": {"a": 1}},
-                                       context={"run_id": "r1", "workspace_id": "w", "detection_timeout_s": 300}))
+                                       context={"run_id": "r1", "workspace_id": "", "detection_timeout_s": 300}))
     assert missed.what == "propose" and missed.signal["raw_signal"]["detection_hints"] == {"a": 1}
     # The blocks watcher that emitted it is gone (SEC3): an attack_adapted is no injector's.
     assert signal_origin.admit(_line("attack_adapted", raw_signal={"blocked_ip": "1.2.3.4"})).signal is None
@@ -129,9 +129,11 @@ with open(sys.argv[1], "a") as f:
 """
 
 
-def _run_watch(tmp_path, monkeypatch, lines, expect):
+def _run_watch(tmp_path, monkeypatch, lines, expect, prepare=None, slow_respond=0.0, slow_poll=0.0):
     """The watch (dry-run) on tmp_path/runs, HOME in tmp_path; `lines` appended by ANOTHER
-    process once it runs. Returns (what reached respond, what the poll was asked, output)."""
+    process once it runs. Returns (what reached respond, what the poll was asked, output).
+    `prepare(runs)`: what runs/ holds before the watch starts; `slow_respond`, `slow_poll`:
+    how long a decision, a search take (SEC8)."""
     from click.testing import CliRunner
 
     from glorfindel import cli
@@ -141,6 +143,8 @@ def _run_watch(tmp_path, monkeypatch, lines, expect):
     monkeypatch.setattr(cli, "_INJECTORS_DIR", home / ".glorfindel" / "injectors")
     runs = tmp_path / "runs"
     runs.mkdir()
+    if prepare is not None:
+        prepare(runs)
     responded: list[dict] = []
     polled: list[dict] = []
 
@@ -151,11 +155,13 @@ def _run_watch(tmp_path, monkeypatch, lines, expect):
             self.connector = SimpleNamespace(permission_mode=lambda: "read_write")
 
         def respond(self, data):
+            time.sleep(slow_respond)
             responded.append(data)
             return {"action": "none", "escalate": False, "confidence": 0.0, "outcome": {}}
 
     def _resolve(data, ip_owners=None):
         polled.append(data)
+        time.sleep(slow_poll)
         return {**data, "event": "detection"}
 
     monkeypatch.setattr("glorfindel.agent.GlorfindelAgent", _Agent)

@@ -209,6 +209,39 @@ def test_an_execution_still_cancelling_is_said_in_flight(kill_script):
     assert any("still Cancelling" in line for line in inflight)
 
 
+def test_an_experiment_id_not_under_arm_is_never_called(kill_script):
+    """SEC8: an id read from the listing is a path under ARM, or not called — said in flight."""
+    class Odd(FakeAz):
+        def __call__(self, args):
+            url = args[args.index("--url") + 1] if "--url" in args else ""
+            if args[:3] == ["rest", "--method", "get"] and url.split("?")[0].endswith("/experiments") \
+                    and "rg-celebrimbor" in url:
+                self.calls.append(args)
+                return json.dumps({"value": [{**_experiment("exp-odd"), "id": "@other-host.example/x"}]})
+            return super().__call__(args)
+    az = Odd(experiments={"exp-odd": ["Running"]})
+    failures, inflight, _ = _kill(kill_script, az)
+    assert not [c for c in az.calls if "--url" in c and "other-host" in c[c.index("--url") + 1]]
+    assert any("exp-odd" in line and "not a path under Azure Resource Manager" in line for line in inflight)
+
+
+def test_a_next_page_outside_arm_is_never_followed(kill_script):
+    class Elsewhere(FakeAz):
+        def __call__(self, args):
+            url = args[args.index("--url") + 1] if "--url" in args else ""
+            if url.startswith("https://other-host.example"):
+                self.calls.append(args)
+                return json.dumps({"value": []})
+            if args[:3] == ["rest", "--method", "get"] and url.split("?")[0].endswith("/experiments"):
+                self.calls.append(args)
+                return json.dumps({"value": [], "nextLink": "https://other-host.example/next"})
+            return super().__call__(args)
+    az = Elsewhere()
+    failures, _, _ = _kill(kill_script, az)
+    assert any(f.startswith("cancel") and "outside Azure Resource Manager" in f for f in failures)
+    assert not [c for c in az.calls if "--url" in c and "other-host" in c[c.index("--url") + 1]]
+
+
 def test_the_cancel_comes_after_the_revocation(kill_script):
     az = FakeAz(experiments={"exp-vm-shutdown": ["Running"]})
     _kill(kill_script, az)

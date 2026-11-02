@@ -281,16 +281,19 @@ class TagEnrollment:
         return r.json()
 
     def tags(self, resource_id: str) -> tuple[dict, dict]:
-        """(the resource group's tags, the VM's), read now."""
+        """(the resource group's tags, the VM's), read now. The two URLs are built from the
+        parts of the id — subscription, group, name — never from the id itself, which a window
+        names (SEC8): an id not exactly a VM's is refused before any token is asked for."""
         import requests
+
+        from eregion_core.held import vm_parts
         get = self._get or requests.get
-        sub, rg = subscription_from_id(resource_id), rg_from_id(resource_id)
-        if not sub or not rg or "/virtualmachines/" not in resource_id.lower():
-            raise ValueError(f"not a VM resource id: {resource_id!r}")
+        sub, rg, name = vm_parts(resource_id)
         headers = self._headers()
         out = []
-        for url, api in ((f"{ARM}/subscriptions/{sub}/resourceGroups/{rg}", _RG_API),
-                         (f"{ARM}{resource_id}", _VM_API)):
+        group = f"{ARM}/subscriptions/{sub}/resourceGroups/{rg}"
+        for url, api in ((group, _RG_API),
+                         (f"{group}/providers/Microsoft.Compute/virtualMachines/{name}", _VM_API)):
             r = get(url, headers=headers, params={"api-version": api}, timeout=15)
             if not r.ok:
                 raise RuntimeError(f"HTTP {r.status_code} reading {url.rsplit('/', 1)[-1]}")

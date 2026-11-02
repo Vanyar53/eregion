@@ -2594,6 +2594,35 @@ class IsolationMachine(RuleBasedStateMachine):
         if vm and ("disparu" in reason or "a échoué" in reason):
             self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}
 
+    @rule(data=st.data())
+    def blocked_again_after_an_acknowledged_drift(self, data):
+        """A rare state made common (L1Q, #363): a VM blocked on its subnet and for itself (one
+        merged entry), a mate of that subnet blocked there and unblocked — the perimeter pair,
+        one per IP and subnet, lifted beside the VM's block —; the reassertion, in human_only,
+        says it, the operator acknowledges that card; then the VM blocked again, whole (its
+        rules rewritten), and a pass. Drawn one by one, the steps met once (seed 42 at 2 000):
+        the block written again kept the acknowledged card's drift mark, and the pair, still
+        named and still gone, went unsaid."""
+        vm, rid, _ = self._draw(data)
+        mates = [v for v in self._subnet_mates(vm) if v != vm]
+        if not mates:
+            return
+        port = data.draw(st.sampled_from([22, None]), label="threat_port")
+        self.block_perimeter(_Drawn(data, vm=vm, rid=rid, fault=None, replace=False))
+        self._block(vm, rid, None, port)
+        mate = data.draw(st.sampled_from(mates), label="mate")
+        self.perimeter_lifted_beside_a_block(_Drawn(data, vm=mate, rid=mate, fault=None, mate=vm))
+        self.reassert(_Drawn(data, fault=None, mode="human_only"))
+        cards = sorted((e["id"], key(e.get("resource_id") or "")) for e in escalations.pending()
+                       if e.get("action") == "block_suspicious_ip"
+                       and (e.get("signal_id") or "").startswith("reassert-"))
+        mine = [i for i, (_, r) in enumerate(cards) if r == key(vm)]
+        if mine:
+            _note("a drift acknowledged, the block written again")
+            self.operator_acknowledges(_Drawn(data, **{"card acknowledged": mine[0]}))
+        self._block(vm, rid, None, port)
+        self.reassert(_Drawn(data, fault=None))
+
     @rule()
     def time_passes(self):
         """Forty minutes go by: an operation's marker left behind is stale now."""

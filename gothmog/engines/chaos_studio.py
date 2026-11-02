@@ -158,6 +158,10 @@ class ChaosStudio:
         return self._http
 
     def _call(self, method: str, path: str, api: str, *, params=None, body=None):
+        from eregion_core.held import safe_path
+        # An ARM path, or no call (SEC8): a VM id read from an experiment's targets never
+        # points the token elsewhere.
+        path = safe_path(path)
         r = getattr(self._client(), method)(
             f"{ARM}{path}", headers=self._headers(),
             params={"api-version": api, **(params or {})}, json=body, timeout=30)

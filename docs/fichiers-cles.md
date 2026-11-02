@@ -88,6 +88,8 @@ glorfindel/
                           list_nsgs, check_compute_access…), sdk.py (warm-up), capabilities.py, monitor.py
                           (AzureMonitorDetector, réexporté par detectors.py), activity.py (AzureActivityDetector, AL1 :
                           le journal d'activité, détection seule ; écritures de Glorfindel écartées, ses règles marquées),
+                          own_run_command.py (SID1 : son Run Command hors de la coupure des sessions d'une
+                          isolation qu'il a enregistrée — `drains_at` de l'état — est une carte critique),
                           entra.py (AzureEntraDetector, C2 : les journaux d'Entra ID, détection seule ; seuils en code,
                           identité de Glorfindel marquée acteur ou cible, jamais écartée ; texte et étapes des cartes)
                           backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),

@@ -2755,15 +2755,47 @@ marque de dérive — un nouveau blocage, un nouvel épisode, comme une nouvelle
 tirages de la fin de la règle complétés), `test_a_block_written_again_after_an_acknowledged_drift_is_said_again`
 (sept étapes, et un test unitaire du même nom dans `test_reassert.py`) ; rouges sur `main` d05eade.
 
-**Une règle de la machine, dans une PR à part.** `blocked_again_after_an_acknowledged_drift` rend
+**La règle de L1Q, entrée (L1Qr, 02/11, #363).** `blocked_again_after_an_acknowledged_drift` rend
 l'état courant : une VM bloquée sur son sous-réseau et pour elle-même, une voisine bloquée là puis
 débloquée, la passe en `human_only`, la carte de la VM acquittée (son index fixé, aucun tirage qui
 dépende de l'état), la VM bloquée de nouveau, une passe. Une règle ajoutée, aucune retirée ni
 restreinte, l'oracle inchangé (A0). Avec elle, M2150 est attrapé par la machine seule (2/2 à 500 ;
-0/2 sans). Mais elle décale les tirages : la relecture a mesuré, à 500 séquences, 20 graines sur 20
-vertes sur `main` 8295975, 16 sur 20 avec elle — sur des défauts anciens où elle n'apparaît pas
-(#379, #380, #366). Elle sort de la PR de L1Q (branche `lot/l1q-regle`) et revient après eux ; M2150
-reste attrapé par ses séquences figées.
+0/2 sans). Elle décale les tirages : la relecture de L1Q avait mesuré, à 500 séquences, 16 graines sur
+20 vertes avec elle sur `main` 8295975, sur des défauts anciens où elle n'apparaît pas (#379, #380,
+#366) ; sortie de la PR de L1Q, elle revient une fois eux réglés (D79, D80, I3P). Remesurée par
+l'Orchestre sur `main` dcf4e77 (02/11, `--hypothesis-seed=1..20`) : 19 sur 20, **la graine 6 tombe** —
+« I3: the reassertion said 192.31.196.7 no longer blocked on …/Db--01 (['db-nic-0', 'db-nic-1']); our
+perimeter block still cuts it off » —, sur une séquence où la règle n'apparaît pas ; sans elle, la
+graine 6 passe sur `main` : un défaut ancien, de la famille d'I3P, que la règle ne fait qu'atteindre.
+**La cause, établie** (la séquence de sept règles réduite à la main à trois, les NSG, les entrées et
+les cartes relevés avant et après la passe). web1 bloquée sur son sous-réseau, Db--01 (deux cartes sur
+ce sous-réseau) bloquée pour elle-même, web1 débloquée (`perimeter_lifted_beside_a_block`) : la paire
+levée, les règles de Db--01 sur le NSG du sous-réseau — celle de db-nic-1 déplacée là depuis son
+propre NSG, où une allow-ssh à 100 passe avant. Le client change l'adresse de db-nic-1
+(`customer_changes_ip`) : sa règle ne la couvre plus. Puis web1 bloquée sur son sous-réseau et pour
+elle-même, la paire retournée en allow, la passe hors `human_only` (`block_turned_then_reasserted`).
+La passe relisait les blocages **dans l'ordre d'un listage de répertoire** (`active_blocks`,
+`Path.glob` : le système de fichiers le décide). Db--01 d'abord : sa règle manque, elle est réécrite —
+cette fois sur le NSG de db-nic-1, derrière l'allow-ssh — et relue sous l'allow de la paire : « ses règles réécrites une fois, il ne tient pas en entier — l'IP n'est plus bloquée sur
+db-nic-0, db-nic-1 », vrai à cet instant. L'entrée fusionnée de web1 ensuite remet la paire : la carte
+de Db--01 est fausse à la fin de la passe. L'oracle n'excuse une carte dite avant que la passe écrive le
+périmètre que si ce n'est pas celle d'une réécriture (dite après sa propre relecture) : il a raison, rien
+n'oblige la passe à lire un blocage de VM avant le périmètre de son sous-réseau. **Correctif**
+(`reassert.py`, `_perimeters_first`) : les entrées qui tiennent un périmètre (`scoped: False`, fusionnées
+ou non) d'abord, chaque groupe dans son ordre, puis les blocages de VM — qui lisent la paire telle
+qu'elle est. Db--01 est alors « reposé une fois ». Rien ne s'ouvrait ; ce que lisait l'opérateur était
+faux. Figés : `test_a_vm_block_rewritten_before_its_subnets_perimeter_never_says_unblocked` (trois
+étapes, le réseau tiré par la machine ; rouge sur `main` 287e4ae) et
+`test_reassert.py::test_a_perimeter_is_put_back_before_the_vm_blocks_of_its_subnet` (les deux ordres
+de listage, l'entrée de périmètre fusionnée ou non ; rouge sur `main` quand le listage donne Db d'abord).
+Mutants **M2980** (l'ordre du listage), **M2981** (les VM d'abord), **M2982** (une entrée fusionnée prise
+pour un blocage de VM). **Mesure** (la règle et le correctif en place) : à 500 séquences,
+`--hypothesis-seed=1..20`, **20 graines sur 20 vertes** (19 avant le correctif). M2980–M2982 attrapés à
+chaque tour (60 séquences, deux tours). Les 37 autres mutants de `reassert.py` après le correctif
+(60 séquences, deux tours) : 34/37 à chaque tour ; M37 par ses seules séquences figées et M1645 qui
+survit, comme mesuré par L1Q ; M13 attrapé une fois sur deux par la machine (avant : par ses séquences
+figées seules). Aucun perdu. `pytest` complet (`main` 38d73e1 fusionné) : 4 965 réussis, 7 sautés,
+aucun `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 874 mutants, sans faute.
 
 **Ce que la règle a fait tomber.** (1) **Une règle revenue puis repartie, la paire toujours absente**
 (graine 322 à 2 000 ; présent sur `main` 48e42c8 sans la règle, réduit à six étapes). L'entrée

@@ -953,8 +953,8 @@ Décidé par Jonathan le 31/10, sur le modèle du verrou Python. Chaque module (
 `.terraform.lock.hcl`. Celui-ci fixe la version de chaque provider et ses empreintes, pour Linux
 (amd64) et les deux Mac.
 
-- **`init` ne monte plus rien seul** : `celebrimbor-init`, `glorfindel-host-init` et
-  `orodruin-init` installent ce que dit le verrou et vérifient chaque paquet. Avant, ils
+- **`init` ne monte plus rien seul** : `celebrimbor-init`, `glorfindel-host-init`,
+  `orodruin-init` et `annatar init` installent ce que dit le verrou et vérifient chaque paquet. Avant, ils
   faisaient `init -upgrade`, et les providers montaient à chaque plan.
 - **Monter un provider est un geste voulu** : `make providers-lock [MODULE=terraform|glorfindel-host|orodruin]`
   (`init -upgrade`, puis `terraform providers lock` sur les trois plateformes). Ensuite : relire
@@ -968,10 +968,17 @@ Décidé par Jonathan le 31/10, sur le modèle du verrou Python. Chaque module (
 - **Le canari** (`infra/canary/`) n'est pas concerné : il teste chaque jour le dernier azurerm.
   C'est son rôle.
 - **Une fois, sur un poste où ces modules ont déjà servi** : les verrous y étaient locaux et
-  ignorés par Git, et `git pull` refuserait de les écraser. Avant le premier `pull` qui les
-  apporte, il faut les retirer :
-  `rm infra/terraform/.terraform.lock.hcl infra/glorfindel-host/.terraform.lock.hcl infra/orodruin/.terraform.lock.hcl`.
-  Les versions commitées sont celles du banc : azurerm 4.81.0, null 3.3.2, azapi 2.13.0 (G1).
+  ignorés par Git. Le `pull` qui les apporte **les écrase sans rien dire** : Git remplace un fichier
+  non suivi et ignoré sans prévenir, en avance rapide. Avant de tirer, compare donc les versions de
+  ton verrou local à celles qui arrivent :
+  `grep -A1 '^provider' infra/terraform/.terraform.lock.hcl infra/glorfindel-host/.terraform.lock.hcl infra/orodruin/.terraform.lock.hcl`.
+  Les versions commitées sont celles du banc, lues le 02/11 dans ces mêmes verrous locaux :
+  azurerm 4.81.0, null 3.3.2, et azapi 2.13.0 (G1). Si un verrou local dit plus récent (un
+  `init -upgrade` lancé depuis), l'état du module a pu être écrit par ce provider plus récent :
+  monte d'abord le verrou commité (`make providers-lock`, une PR), puis tire.
+- **Le check est requis** : Jonathan rend « terraform test (mock providers) » requis dans la
+  protection de `main`, comme les autres jobs de la CI. Sans cela, une PR rouge sur ce job reste
+  fusionnable.
 
 ---
 

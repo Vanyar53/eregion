@@ -790,19 +790,49 @@ def _terraform_job() -> dict:
     return _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"]["terraform-test"]
 
 
+# What the job runs, word for word (review of #402, point 2): a `|| true`, a step skipped by an
+# `if:`, or a job that may fail and stay green would let a broken test through, unseen.
+TF_RUNS = {
+    "Terraform test — Celebrimbor (mock providers)":
+        "terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color\n"
+        "terraform -chdir=infra/terraform test -no-color\n",
+    "Terraform validate — Orodruin, Glorfindel's host":
+        "for m in orodruin glorfindel-host; do\n"
+        '  terraform -chdir="infra/$m" init -backend=false -lockfile=readonly -input=false -no-color\n'
+        '  terraform -chdir="infra/$m" validate -no-color\n'
+        "done\n",
+}
+
+
 def test_the_terraform_tests_run_on_each_push_and_pull_request():
     doc = _load(ROOT / ".github" / "workflows" / "ci.yml")
     assert {"push", "pull_request"} <= _events(doc)
     job = _terraform_job()
     assert isinstance(job.get("timeout-minutes"), int) and job["timeout-minutes"] <= 30
-    runs = "\n".join(str(s.get("run") or "") for s in job["steps"])
-    assert "terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false" in runs
-    assert "terraform -chdir=infra/terraform test" in runs
-    assert 'for m in orodruin glorfindel-host; do' in runs
-    assert 'terraform -chdir="infra/$m" init -backend=false -lockfile=readonly -input=false' in runs
-    assert 'terraform -chdir="infra/$m" validate' in runs
+    steps = job["steps"]
+    assert {s.get("name"): s.get("run") for s in steps if s.get("name") in TF_RUNS} == TF_RUNS
+    # Nothing that would keep it green on a failure, nor skip a step.
+    assert "continue-on-error" not in job and "if" not in job
+    for step in steps:
+        assert "continue-on-error" not in step and "if" not in step, step.get("name") or step.get("uses")
+        assert "||" not in str(step.get("run") or ""), step.get("name")
+    (checkout,) = [s for s in steps if str(s.get("uses") or "").startswith("actions/checkout@")]
+    assert checkout["with"]["persist-credentials"] is False
+    assert job["env"]["CHECKPOINT_DISABLE"] == "1"
     # Every module with Terraform tests has them run here: today, Celebrimbor's alone.
     assert {p.parent.parent.name for p in ROOT.glob("infra/*/tests/*.tftest.hcl")} == {"terraform"}
+
+
+def test_every_terraform_test_only_plans():
+    """Review of #402, point 5: a `run` block applies by default — against mock providers, but
+    vm.tf holds a local-exec. Each `run` of the repository's tests says `command = plan`."""
+    for path in sorted(ROOT.glob("infra/*/tests/*.tftest.hcl")):
+        text = path.read_text(encoding="utf-8")
+        blocks = re.split(r'^run "', text, flags=re.M)[1:]
+        assert blocks, path.name
+        for block in blocks:
+            name = block.split('"', 1)[0]
+            assert re.search(r"^\s*command\s*=\s*plan\s*$", block, re.M), f"{path.name}: run {name} applies"
 
 
 def test_the_terraform_job_installs_a_pinned_terraform_by_hashicorps_key_only():
@@ -847,13 +877,29 @@ def test_each_module_commits_its_lock_with_every_provider_it_requires(module):
 
 
 def test_init_never_upgrades_the_providers_on_its_own():
-    """`init -upgrade` only in `make providers-lock`, the wanted upgrade; the canary keeps its
-    own (infra/canary/: the latest azurerm, by design)."""
+    """Review of #402, point 1: nowhere in the repository does `init` upgrade the providers — the
+    lock would be rewritten without a PR — but in `make providers-lock`, the wanted upgrade, and
+    the canary (infra/canary/: the latest azurerm, by design). Every tracked file is read, docs
+    and this file aside."""
+    import subprocess
+    files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    upgrade = re.compile(r"""\binit\b.*-upgrade|["']init["']\s*,\s*["']-upgrade["']""")
     lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
     start = next(i for i, ln in enumerate(lines) if ln.startswith("providers-lock:"))
     end = next(i for i in range(start + 1, len(lines)) if lines[i] and not lines[i].startswith("\t"))
-    upgrades = [i for i, ln in enumerate(lines) if "init" in ln and "-upgrade" in ln]
-    assert upgrades and all(start < i < end for i in upgrades), [lines[i] for i in upgrades]
+    found = []
+    for name in files:
+        if name.endswith(".md") or name.startswith("infra/canary/") or name == "tests/unit/test_workflows.py":
+            continue
+        try:
+            text = (ROOT / name).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for n, line in enumerate(text.splitlines()):
+            if upgrade.search(line) and not (name == "Makefile" and start < n < end):
+                found.append(f"{name}:{n + 1}: {line.strip()}")
+    assert found == []
+    assert any(upgrade.search(ln) for ln in lines[start:end]), "providers-lock no longer upgrades"
     for var in ("$(TF)", "$(HOST_TF)", "$(ORO_TF)"):
         assert any(f"{var} init" in ln for ln in lines), var
     recipe = "\n".join(lines[start:end])

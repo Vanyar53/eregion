@@ -312,12 +312,13 @@ class IsolationMixin:
             return {"status": "drained"}
         except Exception as e:
             if _is_iam_error(str(e)):
-                # SEC11 (R-03): Run Command is given VM by VM, to the enrolled VMs — refused here,
+                # SEC11 (R-03): Run Command is given VM by VM, to the VMs Glorfindel defends — refused here,
                 # the isolation stands and the card says why the sessions were not cut.
                 return {"status": "failed", "refused": True,
                         "error": ("Run Command refusé sur cette VM : le rôle « Eregion Glorfindel "
                                   "Session Drain » n'y est pas (il se donne VM par VM, aux VM "
-                                  "inscrites) — " + _first_line(e))[:_ERR_MAX]}
+                                  "que Glorfindel défend : session_drain_vms) — "
+                                  + _first_line(e))[:_ERR_MAX]}
             return {"status": "failed", "error": _first_line(e)[:_ERR_MAX]}
 
     def _record_partial_isolation(

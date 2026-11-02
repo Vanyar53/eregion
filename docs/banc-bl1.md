@@ -165,8 +165,8 @@ P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment create --assignee-object-id ${P} --assignee-principal-type ServicePrincipal \
   --role "Eregion Glorfindel Response" --scope ${SCOPE}
-make glorfindel-host-plan SESSION_DRAIN=1   # SEC11 : la coupure des sessions, sur gondolin seule (inscrite) ; bree jamais
-make glorfindel-host-up SESSION_DRAIN=1     # après relecture du plan : une attribution par VM inscrite, aucune sur le groupe
+make glorfindel-host-plan                   # SEC11 : la coupure des sessions, une attribution par VM de session_drain_vms (gondolin, bree), aucune sur le groupe
+make glorfindel-host-up                     # après relecture du plan, sans YES
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=0
 make glorfindel-host-push              # .env et config (le défaut human_only ; les modes en place sur H0 gardés, et dits)
 make glorfindel-host-start REF=<le même commit>
@@ -236,8 +236,8 @@ sur gondolin (`glorfindel list`), et `make glorfindel-host-cd-enable` si le CD a
 P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment delete --assignee ${P} --role "Eregion Glorfindel Response" --scope ${SCOPE}
-make glorfindel-host-plan                  # sans SESSION_DRAIN : le plan retire la coupure, VM par VM
-make glorfindel-host-up                    # après relecture
+# la coupure aussi, si H0 ne doit plus rien écrire : session_drain_vms = [] dans
+# infra/glorfindel-host/session_drain.auto.tfvars, puis make glorfindel-host-plan, relu, et -up
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=1
 make glorfindel-host-push HUMAN_ONLY=1 # toutes les VM de nouveau en human_only
 make glorfindel-host-start REF=<le tag publié en service>   # la release d'avant, celle du CD

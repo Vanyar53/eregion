@@ -179,18 +179,24 @@ def test_host_terraform_reads_the_bench_and_is_no_target():
     tf = (HOST / "main.tf").read_text(encoding="utf-8")
     roles = re.findall(r'role_definition_name\s*=\s*"([^"]+)"', tf)
     assert sorted(roles) == ["Eregion Glorfindel Session Drain", "Log Analytics Reader", "Reader"]
-    # SEC11 (R-03): the session drain, off by default, on each enrolled VM, never on the group.
+    # SEC11 (R-03, after its review): the session drain on each VM of an explicit list, each read
+    # on Azure (a typo fails the plan), never on the group; the list kept in the repository.
     drain = tf.split('resource "azurerm_role_assignment" "session_drain"', 1)[1].split("\n}", 1)[0]
-    assert "for_each" in drain and "var.session_drain ?" in drain and "enrolled_vms[0].resources" in drain
-    assert "scope                = each.value" in drain and "bench.id" not in drain
-    enrolled = tf.split('data "azurerm_resources" "enrolled_vms"', 1)[1].split("\n}", 1)[0]
-    assert 'required_tags       = { "eregion-target" = local.bench_id }' in enrolled
-    assert "count               = var.session_drain ? 1 : 0" in enrolled
+    assert "for_each             = data.azurerm_virtual_machine.session_drain" in drain
+    assert "scope                = each.value.id" in drain and "bench.id" not in drain
+    vms = tf.split('data "azurerm_virtual_machine" "session_drain"', 1)[1].split("\n}", 1)[0]
+    assert "for_each            = toset(var.session_drain_vms)" in vms
+    assert "resource_group_name = data.azurerm_resource_group.bench.name" in vms
+    assert "azurerm_resources" not in tf and "eregion-target\" =" not in tf
     variables = (HOST / "variables.tf").read_text(encoding="utf-8")
-    assert re.search(r'variable "session_drain" \{[^}]*default\s*=\s*false', variables)
-    # H0 carries no inscription tag; the one tag it names is the filter of the enrolled VMs (SEC11).
-    own = tf.replace('required_tags       = { "eregion-target" = local.bench_id }', "")
-    assert not re.search(r'"eregion-(target|zone)"\s*=', own)
+    assert re.search(r'variable "session_drain_vms" \{[^}]*default\s*=\s*\[\]', variables)
+    kept = (HOST / "session_drain.auto.tfvars").read_text(encoding="utf-8")
+    assert re.search(r'^session_drain_vms = \["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"\]$', kept, re.M)
+    assert "SESSION_DRAIN" not in (HOST.parents[1] / "Makefile").read_text(encoding="utf-8")
+    # Kept in the repository although *.tfvars is ignored: its own exception in .gitignore.
+    ignore = (HOST.parents[1] / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "!infra/glorfindel-host/session_drain.auto.tfvars" in ignore
+    assert not re.search(r'"eregion-(target|zone)"\s*=', tf)
     assert 'source_address_prefix      = var.operator_cidr' in tf
 
 

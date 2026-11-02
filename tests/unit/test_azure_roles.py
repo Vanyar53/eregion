@@ -288,8 +288,11 @@ def test_a_watch_without_its_own_principal_says_so():
     """SEC11 (V-17): no fallback — the watch started without a service principal says it, and
     which identity it then has; with one, it says nothing."""
     from glorfindel.cli import identity_note
-    assert "no service principal" in identity_note({})
-    assert "managed identity" in identity_note({"AZURE_CLIENT_ID": " "})
+    assert "no service principal" in identity_note({}, in_container=False)
+    assert "az login" in identity_note({"AZURE_CLIENT_ID": " "}, in_container=False)
+    # In a container on a workstation, the machine's `az login` is not there: no identity, said.
+    inside = identity_note({}, in_container=True)
+    assert "no identity at all" in inside and "az login" not in inside and "managed identity" in inside
     assert identity_note({"AZURE_CLIENT_ID": "app-id"}) == ""
     src = (ROOT / "glorfindel" / "cli.py").read_text(encoding="utf-8")
     assert 'console.print(f"[bold]Identity:[/bold] {_identity}")' in src

@@ -7,7 +7,7 @@
 # l'isoler. Son identité managée lit le banc ici (Reader, Log Analytics Reader) ; le rôle de la
 # réponse sur le groupe du banc lui est attribué à la main, hors de cet état (la posture de H0,
 # BL1c : README.md, « Ce que la VM est »). La coupure des sessions, elle, est ici : VM par VM, aux
-# seules VM inscrites, avec session_drain (SEC11). README.md pour le déroulé.
+# VM que Glorfindel défend (session_drain_vms, SEC11). README.md pour le déroulé.
 
 terraform {
   required_providers {
@@ -196,31 +196,26 @@ resource "azurerm_role_assignment" "bench_logs_reader" {
   principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
 }
 
-# ── La coupure des sessions, VM par VM, aux seules VM inscrites (SEC11, R-03) ────────────
+# ── La coupure des sessions, VM par VM, aux VM que Glorfindel défend (SEC11, R-03) ──────────
 # Run Command est sorti du rôle de la réponse : « Eregion Glorfindel Session Drain »
 # (infra/identities/glorfindel-session-drain.json, créé une fois par tenant avec `az role definition
-# create`, comme les deux autres), attribué à la portée de chaque VM qui porte le tag
-# d'inscription du banc, jamais sur le groupe. Dérivé de l'inscription plutôt que d'une liste à
-# tenir : la même source que les droits d'Orodruin et que les injecteurs (O0) — bree, jamais
-# inscrite, n'en reçoit pas ; un tag ne se pose qu'avec un droit d'écriture sur la VM, qui vaut
-# déjà Run Command ; et le plan nomme chaque VM avant tout apply. Une VM inscrite après l'apply n'a
-# le droit qu'au prochain `make glorfindel-host-up SESSION_DRAIN=1`. Faux par défaut : H0 lit
-# (pré-observation) ; la réponse elle-même (« Eregion Glorfindel Response » sur le groupe) reste
-# un geste de Jonathan (docs/banc-bl1.md).
-locals {
-  bench_id = var.bench_id != "" ? var.bench_id : trimprefix(var.bench_resource_group, "rg-")
-}
-
-data "azurerm_resources" "enrolled_vms" {
-  count               = var.session_drain ? 1 : 0
+# create`, comme les deux autres), attribué à la portée de chaque VM de session_drain_vms — une
+# liste explicite, gardée dans session_drain.auto.tfvars, commité : un `make glorfindel-host-up`
+# ordinaire la relit et ne retire rien —, jamais sur le groupe. Pas le tag d'inscription : il dit
+# où un injecteur peut agir, pas ce que Glorfindel défend (bree, jamais inscrite, est la VM du banc
+# qui reçoit de vraies attaques), et il se pose avec Microsoft.Resources/tags/write, sans écrire la
+# VM. Chaque nom est relu sur Azure (data "azurerm_virtual_machine") : une faute de frappe échoue
+# au plan. Liste vide : aucune coupure, H0 lit. La réponse elle-même (« Eregion Glorfindel
+# Response » sur le groupe) reste un geste de Jonathan (docs/banc-bl1.md).
+data "azurerm_virtual_machine" "session_drain" {
+  for_each            = toset(var.session_drain_vms)
+  name                = each.value
   resource_group_name = data.azurerm_resource_group.bench.name
-  type                = "Microsoft.Compute/virtualMachines"
-  required_tags       = { "eregion-target" = local.bench_id }
 }
 
 resource "azurerm_role_assignment" "session_drain" {
-  for_each             = var.session_drain ? { for r in data.azurerm_resources.enrolled_vms[0].resources : lower(r.name) => r.id } : {}
-  scope                = each.value
+  for_each             = data.azurerm_virtual_machine.session_drain
+  scope                = each.value.id
   role_definition_name = "Eregion Glorfindel Session Drain"
   principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
 }

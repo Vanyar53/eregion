@@ -214,14 +214,22 @@ class _GlorfindelCli(click.Group):
             ctx.exit(1)
 
 
-def identity_note(environ=os.environ) -> str:
+def identity_note(environ=os.environ, in_container: bool | None = None) -> str:
     """What the watch says of its identity at start when it has no service principal of its own
     (SEC11, V-17): compose no longer falls back on AZURE_CLIENT_*, the former shared principal.
-    "" when it has one."""
+    "" when it has one. In a container, only a VM's managed identity can stand in (H0); on a
+    workstation, none — the `az login` of the machine is not in the container. From the venv,
+    the machine's `az login`."""
     if (environ.get("AZURE_CLIENT_ID") or "").strip():
         return ""
-    return ("no service principal (AZURE_CLIENT_* empty) — the VM's managed identity if there is "
-            "one, else this machine's `az login`")
+    if in_container is None:
+        in_container = Path("/.dockerenv").exists()
+    if in_container:
+        return ("no service principal (its …_AZURE_CLIENT_* pair empty) — the VM's managed identity "
+                "if this container runs on one (H0); on a workstation, no identity at all: every "
+                "Azure call will fail")
+    return ("no service principal (AZURE_CLIENT_* empty) — this machine's `az login`, or the VM's "
+            "managed identity")
 
 
 @click.group(cls=_GlorfindelCli)

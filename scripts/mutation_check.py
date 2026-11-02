@@ -7405,6 +7405,25 @@ MUTANTS += [
 ]
 TESTS["M3030"] = "tests/unit/test_orodruin.py"
 MUTANTS += [
+    ("M3031", "the session drain's VMs not read on Azure: a typo planned as a VM (SEC11, R-03, review)", "infra/glorfindel-host/main.tf",
+     "  for_each             = data.azurerm_virtual_machine.session_drain\n",
+     "  for_each             = toset(var.session_drain_vms)\n"),
+    ("M3032", "bree, the VM of the bench that meets real attacks, out of the list: no drain there (SEC11, R-03, review)",
+     "infra/glorfindel-host/session_drain.auto.tfvars",
+     'session_drain_vms = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]', 'session_drain_vms = ["vm-celebrimbor-gondolin"]'),
+    ("M3033", "the list of the drain ignored by git: an ordinary apply takes it off (SEC11, R-03, review)", ".gitignore",
+     "!infra/glorfindel-host/session_drain.auto.tfvars\n", ""),
+    ("M3034", "the card says the drain goes to the enrolled VMs, not to those Glorfindel defends (SEC11, R-03, review)", ISO,
+     '"que Glorfindel défend : session_drain_vms) — "', '"inscrites) — "'),
+    ("M3035", "the readiness names no list where the drain is given (SEC11, R-03, review)", "glorfindel/readiness.py",
+     '"session_drain_vms sur H0 —, jamais sur le groupe', '"jamais sur le groupe'),
+    ("M3036", "a container on a workstation said to fall back on the machine's az login (SEC11, V-17, review)", GCLI,
+     "    if in_container:\n", "    if False:\n"),
+]
+TESTS.update({"M3031": "tests/unit/test_glorfindel_host.py", "M3032": "tests/unit/test_glorfindel_host.py",
+              "M3033": "tests/unit/test_glorfindel_host.py", "M3034": "tests/unit/test_glorfindel.py -k drain",
+              "M3035": "tests/unit/test_readiness.py", "M3036": "tests/unit/test_azure_roles.py"})
+MUTANTS += [
     ("M2888", "the watch falls back on the former shared principal (SEC11, V-17)", "docker-compose.yml",
      "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",
      "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n"),
@@ -7437,10 +7456,11 @@ MUTANTS += [
     ("M2897", "the audit fails a VM without the session drain, which is still isolated (SEC11, R-03)",
      "glorfindel/audit.py", '    if drain and {m["action"] for m in missing} <= drain:\n', "    if False:\n"),
     ("M2898", "H0's session drain assigned on the whole bench group (SEC11, R-03)", HTF,
-     '  scope                = each.value\n  role_definition_name = "Eregion Glorfindel Session Drain"',
+     '  scope                = each.value.id\n  role_definition_name = "Eregion Glorfindel Session Drain"',
      '  scope                = data.azurerm_resource_group.bench.id\n  role_definition_name = "Eregion Glorfindel Session Drain"'),
-    ("M2899", "H0 holds the session drain by default, read-only as it is (SEC11, R-03)",
-     "infra/glorfindel-host/variables.tf", "  default     = false\n", "  default     = true\n"),
+    ("M2899", "the module drains by default, without the list kept in the repository (SEC11, R-03)",
+     "infra/glorfindel-host/variables.tf", "  default     = []\n",
+     '  default     = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]\n'),
 ]
 TESTS.update({
     "M2892": "tests/unit/test_azure_roles.py",

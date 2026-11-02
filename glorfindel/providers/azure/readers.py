@@ -49,7 +49,7 @@ class ReadersMixin:
 
     # What the response never needs on the VM's group (SEC7, V-17): the restore's rights — the
     # watch's identity holding one could deallocate or restore on its own —, and Run Command
-    # (SEC11, R-03), given VM by VM to the enrolled VMs only, never on a whole group.
+    # (SEC11, R-03), given VM by VM to the VMs Glorfindel defends, never on a whole group.
     BEYOND_RESPONSE = (
         "Microsoft.Compute/virtualMachines/deallocate/action",
         "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/recoveryPoints/restore/action",

@@ -3215,7 +3215,7 @@ def test_check_permissions_lists_what_is_missing(monkeypatch):
 
 
 def test_check_permissions_reads_run_command_on_the_vm_itself(monkeypatch):
-    """SEC11 (R-03): « Eregion Glorfindel Session Drain » is assigned on each enrolled VM, never
+    """SEC11 (R-03): « Eregion Glorfindel Session Drain » is assigned on each VM Glorfindel defends, never
     on its group — the right is read at the VM's scope, which counts the group's too: held there,
     it is not missing; held nowhere, it is missing on the VM, and the group still read for what
     goes beyond the response."""
@@ -3257,7 +3257,7 @@ def test_check_permissions_reads_run_command_on_the_vm_itself(monkeypatch):
 
 
 def test_a_drain_refused_says_the_vm_has_no_session_drain_role():
-    """SEC11 (R-03): on a VM without « Eregion Glorfindel Session Drain » (not enrolled), the
+    """SEC11 (R-03): on a VM without « Eregion Glorfindel Session Drain » (not in session_drain_vms), the
     isolation stands and the drain refused says why — the card carries it (isolation_verdict)."""
     from glorfindel.response.policy import isolation_verdict
     out = _drain_connector(error=RuntimeError("(AuthorizationFailed) The client does not have "
@@ -3265,6 +3265,7 @@ def test_a_drain_refused_says_the_vm_has_no_session_drain_role():
         .drain_connections(_RID)
     assert out["status"] == "failed" and out["refused"] is True
     assert "Eregion Glorfindel Session Drain" in out["error"] and "AuthorizationFailed" in out["error"]
+    assert "session_drain_vms" in out["error"] and "inscrite" not in out["error"]
     verdict = isolation_verdict({"verified": True}, {"status": "isolated", "drain": out})
     assert verdict["verified"] is False and "Session Drain" in verdict["error"]
     other = _drain_connector(error=RuntimeError("VM agent not responding")).drain_connections(_RID)
@@ -3326,7 +3327,7 @@ def test_audit_reports_missing_isolation_permissions():
     result = audit.run(_RID, connector, vault="rsv", staging_storage="st")
     check = next(c for c in result.checks if c.name == "Isolation permissions")
     assert check.status == "fail" and "runCommand" in check.message and "networkInterfaces" in check.message
-    # SEC11 (R-03): Run Command alone — a VM not enrolled has no session drain by design: the
+    # SEC11 (R-03): Run Command alone — a VM Glorfindel does not cover has no session drain: the
     # isolation holds, the audit warns and names the role to give on the VM.
     connector.check_permissions.return_value = {"ok": True, "missing": [
         {"scope": "rg/providers/Microsoft.Compute/virtualMachines/vm",

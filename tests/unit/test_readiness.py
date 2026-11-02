@@ -44,7 +44,7 @@ def test_missing_run_command_is_a_reserve_open_sessions_survive():
     # SEC11 (R-03): the fix names the drain's own role, on the VM — never the response's.
     (reason,) = [r for r in a["reasons"] if r["code"] == "no_drain"]
     assert "Eregion Glorfindel Session Drain" in reason["fix"] and "sur cette VM" in reason["fix"]
-    assert "Response" not in reason["fix"]
+    assert "Response" not in reason["fix"] and "session_drain_vms" in reason["fix"] and "inscrite" not in reason["fix"]
 
 
 def test_rules_fallback_exposes_the_isolation_to_customer_allows():

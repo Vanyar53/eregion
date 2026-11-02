@@ -56,16 +56,15 @@ variable "bench_resource_group" {
   default     = "rg-celebrimbor"
 }
 
-variable "session_drain" {
-  description = "SEC11 (R-03) : donne à l'identité de H0 « Eregion Glorfindel Session Drain » (Run Command, la coupure des sessions à l'isolation) sur chaque VM inscrite du banc (tag eregion-target), jamais sur le groupe. Faux (défaut) : H0 lit. `make glorfindel-host-plan SESSION_DRAIN=1`. Le rôle doit exister dans le tenant (docs/operations.md, « Identités Azure »)."
-  type        = bool
-  default     = false
-}
+variable "session_drain_vms" {
+  description = "SEC11 (R-03) : les VM du groupe du banc que Glorfindel défend et dont il coupe les sessions à l'isolation — « Eregion Glorfindel Session Drain » (Run Command) sur chacune, jamais sur le groupe. Gardée dans session_drain.auto.tfvars (commité). Vide (défaut) : aucune coupure. Le rôle doit exister dans le tenant (docs/operations.md, « Identités Azure »)."
+  type        = list(string)
+  default     = []
 
-variable "bench_id" {
-  description = "La valeur du tag eregion-target des VM inscrites (O0), qui reçoivent la coupure des sessions (session_drain). Vide (défaut) → tirée du groupe du banc : rg-celebrimbor → celebrimbor, rg-celebrimbor-<instance> → celebrimbor-<instance>, comme Celebrimbor la pose."
-  type        = string
-  default     = ""
+  validation {
+    condition     = length(var.session_drain_vms) == length(distinct(var.session_drain_vms)) && alltrue([for n in var.session_drain_vms : can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", n))])
+    error_message = "session_drain_vms : des noms de VM, chacun une fois."
+  }
 }
 
 variable "bench_workspace" {

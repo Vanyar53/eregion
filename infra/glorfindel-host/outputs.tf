@@ -13,12 +13,12 @@ output "war_room_tunnel" {
 }
 
 output "session_drain_vms" {
-  description = "SEC11 : les VM inscrites où H0 peut couper les sessions (« Eregion Glorfindel Session Drain ») ; vide sans session_drain."
+  description = "SEC11 : les VM où H0 peut couper les sessions (« Eregion Glorfindel Session Drain »), celles de session_drain_vms."
   value       = sort(keys(azurerm_role_assignment.session_drain))
 }
 
 output "principal_id" {
-  description = "Identité managée de la VM (Reader sur le banc, Log Analytics Reader sur son workspace ; la coupure des sessions sur chaque VM inscrite avec session_drain)."
+  description = "Identité managée de la VM (Reader sur le banc, Log Analytics Reader sur son workspace ; la coupure des sessions sur chaque VM de session_drain_vms)."
   value       = azurerm_linux_virtual_machine.host.identity[0].principal_id
 }
 

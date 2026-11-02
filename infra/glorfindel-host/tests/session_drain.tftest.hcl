@@ -1,26 +1,13 @@
-# SEC11 (R-03) : la coupure des sessions, VM par VM, aux seules VM inscrites — planifiée contre un
-# faux azurerm, aucun appel à Azure. La CI le lance à chaque PR (ci.yml, job terraform-test) ; à la
-# main :
-#   terraform -chdir=infra/glorfindel-host init -backend=false
+# SEC11 (R-03) : la coupure des sessions, VM par VM, aux VM que Glorfindel défend (session_drain_vms)
+# — planifiée contre un faux azurerm, aucun appel à Azure. La CI le lance à chaque PR (ci.yml, job
+# terraform-test) ; à la main :
+#   terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly
 #   terraform -chdir=infra/glorfindel-host test
-# Trois cas : le défaut (H0 lecteur : aucun droit de plus) ; la coupure demandée, une attribution
-# par VM inscrite et aucune sur le groupe ; une instance nommée du banc, dont le tag cherché suit
-# le nom du groupe. tests/unit/test_glorfindel_host.py tient le même contrat en lisant les fichiers.
+# Quatre cas : la liste du dépôt (session_drain.auto.tfvars, lue par le test comme par un plan) ;
+# une attribution par VM listée, jamais au groupe ; une liste vide, rien ; un nom refusé.
+# tests/unit/test_glorfindel_host.py tient le même contrat en lisant les fichiers.
 
 mock_provider "azurerm" {
-  # Une VM inscrite du banc (gondolin) ; bree, jamais inscrite, n'est pas dans la liste : le
-  # filtre par tag est celui d'Azure (required_tags), que le faux ne rejoue pas.
-  mock_data "azurerm_resources" {
-    defaults = {
-      resources = [{
-        id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
-        name     = "vm-celebrimbor-gondolin"
-        type     = "Microsoft.Compute/virtualMachines"
-        location = "westeurope"
-        tags     = { "eregion-target" = "celebrimbor", "eregion-zone" = "bench" }
-      }]
-    }
-  }
   mock_data "azurerm_resource_group" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor"
@@ -33,38 +20,49 @@ mock_provider "azurerm" {
   }
 }
 
+# Chaque VM lue sur Azure : son id, celui que le faux rend pour son nom.
+override_data {
+  target = data.azurerm_virtual_machine.session_drain["vm-celebrimbor-gondolin"]
+  values = {
+    id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
+  }
+}
+
+override_data {
+  target = data.azurerm_virtual_machine.session_drain["vm-celebrimbor-bree"]
+  values = {
+    id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-bree"
+  }
+}
+
 variables {
   # Une clé jetable (celle du test d'ID1 : sa clé privée n'a jamais été gardée).
   admin_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHJsmbq1cw7yKD96VpcLp0pc+ghC6Shc4ZG5t9jktOyi id1-test"
   operator_cidr        = "203.0.113.7/32"
 }
 
-run "by_default_h0_holds_no_session_drain" {
+run "the_repositorys_list_gives_the_drain_to_gondolin_and_bree" {
   command = plan
 
   assert {
-    condition     = length(azurerm_role_assignment.session_drain) == 0 && length(data.azurerm_resources.enrolled_vms) == 0
-    error_message = "H0 reçoit la coupure des sessions sans session_drain = true"
-  }
-  assert {
-    condition     = azurerm_role_assignment.bench_reader.role_definition_name == "Reader" && azurerm_role_assignment.bench_logs_reader.role_definition_name == "Log Analytics Reader"
-    error_message = "les lectures de H0 ont changé"
+    condition     = length(azurerm_role_assignment.session_drain) == 2 && contains(keys(azurerm_role_assignment.session_drain), "vm-celebrimbor-gondolin") && contains(keys(azurerm_role_assignment.session_drain), "vm-celebrimbor-bree")
+    error_message = "la liste du dépôt (session_drain.auto.tfvars) ne donne pas la coupure à gondolin et bree"
   }
 }
 
-run "session_drain_goes_on_each_enrolled_vm_never_on_the_group" {
+run "one_assignment_per_listed_vm_never_on_the_group" {
   command = plan
 
   variables {
-    session_drain = true
+    session_drain_vms = ["vm-celebrimbor-gondolin"]
   }
 
   assert {
     condition     = keys(azurerm_role_assignment.session_drain) == ["vm-celebrimbor-gondolin"]
-    error_message = "la coupure ne va pas à la seule VM inscrite"
+    error_message = "la coupure ne va pas à la seule VM listée"
   }
   assert {
-    condition     = endswith(azurerm_role_assignment.session_drain["vm-celebrimbor-gondolin"].scope, "/virtualMachines/vm-celebrimbor-gondolin")
+    condition     = azurerm_role_assignment.session_drain["vm-celebrimbor-gondolin"].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
     error_message = "la coupure n'est pas attribuée à la portée de la VM"
   }
   assert {
@@ -76,21 +74,34 @@ run "session_drain_goes_on_each_enrolled_vm_never_on_the_group" {
     error_message = "la coupure n'est pas le rôle « Eregion Glorfindel Session Drain »"
   }
   assert {
-    condition     = data.azurerm_resources.enrolled_vms[0].required_tags["eregion-target"] == "celebrimbor" && data.azurerm_resources.enrolled_vms[0].type == "Microsoft.Compute/virtualMachines"
-    error_message = "les VM ne sont pas choisies par leur inscription (eregion-target=celebrimbor)"
+    condition     = data.azurerm_virtual_machine.session_drain["vm-celebrimbor-gondolin"].resource_group_name == "rg-celebrimbor"
+    error_message = "la VM n'est pas cherchée dans le groupe du banc"
   }
 }
 
-run "a_named_bench_looks_for_its_own_tag" {
+run "an_empty_list_gives_nothing" {
   command = plan
 
   variables {
-    session_drain        = true
-    bench_resource_group = "rg-celebrimbor-ci"
+    session_drain_vms = []
   }
 
   assert {
-    condition     = data.azurerm_resources.enrolled_vms[0].required_tags["eregion-target"] == "celebrimbor-ci"
-    error_message = "une instance nommée du banc ne cherche pas son propre tag"
+    condition     = length(azurerm_role_assignment.session_drain) == 0 && length(data.azurerm_virtual_machine.session_drain) == 0
+    error_message = "une liste vide donne quand même la coupure"
   }
+  assert {
+    condition     = azurerm_role_assignment.bench_reader.role_definition_name == "Reader" && azurerm_role_assignment.bench_logs_reader.role_definition_name == "Log Analytics Reader"
+    error_message = "les lectures de H0 ont changé"
+  }
+}
+
+run "a_name_twice_or_a_path_is_refused" {
+  command = plan
+
+  variables {
+    session_drain_vms = ["vm-celebrimbor-gondolin", "vm-celebrimbor-gondolin"]
+  }
+
+  expect_failures = [var.session_drain_vms]
 }

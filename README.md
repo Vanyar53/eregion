@@ -308,7 +308,7 @@ That sounds alarming but its blast radius is bounded **by design, not by trustin
 
 **Option A — local (dev)**
 
-Base install is the same `make install` as the eval section above. The difference for the sandbox: Glorfindel acts (isolates, blocks, snapshots, restores once you approve), so it needs write rights — only those, on the bench's resource groups. Three custom roles (`infra/identities/`) and one principal per service: the watch gets Reader + Log Analytics Reader + **Eregion Glorfindel Response**, and **Eregion Glorfindel Session Drain** (Run Command, to cut the sessions of a VM it isolates) on each enrolled VM, never on a group; the console and the bot also get **Eregion Glorfindel Restore** (a restore is always a human's) — the full commands, the rotation of the secrets and how to retire a former shared principal: [`docs/operations.md`](docs/operations.md), « Identités Azure ».
+Base install is the same `make install` as the eval section above. The difference for the sandbox: Glorfindel acts (isolates, blocks, snapshots, restores once you approve), so it needs write rights — only those, on the bench's resource groups. Three custom roles (`infra/identities/`) and one principal per service: the watch gets Reader + Log Analytics Reader + **Eregion Glorfindel Response**, and **Eregion Glorfindel Session Drain** (Run Command, to cut the sessions of a VM it isolates) on each VM it defends (an explicit list: `session_drain_vms` on H0), never on a group; the console and the bot also get **Eregion Glorfindel Restore** (a restore is always a human's) — the full commands, the rotation of the secrets and how to retire a former shared principal: [`docs/operations.md`](docs/operations.md), « Identités Azure ».
 
 ```bash
 git clone https://github.com/Vanyar53/eregion && cd eregion && make install
@@ -324,7 +324,7 @@ az role assignment create --assignee <appId> --role Reader --scope /subscription
 az role assignment create --assignee <appId> --role "Eregion Glorfindel Response" \
   --scope /subscriptions/$SUB/resourceGroups/$RG
 az role assignment create --assignee <appId> --role "Eregion Glorfindel Session Drain" \
-  --scope <id of each enrolled VM>    # VM by VM, never the group
+  --scope <id of each VM it defends>    # VM by VM, never the group
 # … the console and the bot the same way, plus "Eregion Glorfindel Restore" (docs/operations.md)
 ```
 
@@ -566,7 +566,7 @@ ANTHROPIC_API_KEY=...               # required for default Anthropic provider
 # GLORFINDEL_LLM_BASE_URL=http://localhost:11434    # self-hosted / Ollama endpoint
 
 # Azure — one principal per service (V-17, docs/operations.md « Identités Azure »);
-# empty, each one takes AZURE_CLIENT_ID / AZURE_CLIENT_SECRET
+# empty: no service principal (the VM's managed identity if there is one), never AZURE_CLIENT_* (SEC11)
 GLORFINDEL_AZURE_CLIENT_ID=...          # the watch (+ _SECRET)
 EREGION_CONSOLE_AZURE_CLIENT_ID=...     # the console (+ _SECRET)
 GLORFINDEL_BOT_AZURE_CLIENT_ID=...      # the Discord bot (+ _SECRET)

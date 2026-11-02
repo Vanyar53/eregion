@@ -60,7 +60,7 @@ x-env: &env
 # (Contributor sur l'abonnement, là où il traîne encore). make glorfindel-start (check-azure-env) dit
 # chaque service sans paire, et une paire incomplète ; la watch le dit à son démarrage. Sur H0, tout
 # est vide : l'identité managée de la VM, partagée par les trois — lecture et réponse sur le groupe
-# du banc depuis le 31/10, la coupure des sessions sur les seules VM inscrites (SEC11), jamais le
+# du banc depuis le 31/10, la coupure des sessions sur les seules VM qu'il défend (SEC11), jamais le
 # restore (docs/design/modele-de-menace.md, §5).
 x-azure: &azure
   AZURE_CLIENT_ID: ${GLORFINDEL_AZURE_CLIENT_ID:-}

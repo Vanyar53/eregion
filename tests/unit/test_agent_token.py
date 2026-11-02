@@ -42,6 +42,7 @@ class FakeGitHub:
         self.status: dict[str, int] = {}         # path → status
         self.answer: dict = {}                   # fields forced in the token's answer
         self.issued: list[str] = []
+        self.redirect: dict[str, str] = {}       # path → Location (a 302)
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -54,6 +55,8 @@ class FakeGitHub:
                 status, out = fake.handle(self.command, self.path, body, dict(self.headers))
                 raw = json.dumps(out).encode()
                 self.send_response(status)
+                if self.path in fake.redirect:
+                    self.send_header("Location", fake.redirect[self.path])
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
@@ -84,6 +87,8 @@ class FakeGitHub:
         self.headers.append(headers)
         if path in self.status:
             return self.status[path], {"message": "forced"}
+        if path in self.redirect:
+            return 302, {"message": "Found"}
         if path == "/repos/o/r/installation" and method == "GET":
             return (200, {"id": self.installation}) if self._app(headers) else (401, {"message": "Bad credentials"})
         if path.startswith("/app/installations/") and path.endswith("/access_tokens") and method == "POST":
@@ -283,6 +288,17 @@ def test_a_cache_in_a_directory_not_ours_is_refused_before_any_draw(agent, gh_fa
     assert gh_fake.draws() == []
 
 
+def test_a_redirection_is_never_followed_with_the_jwt(agent, gh_fake, keypair):
+    """The answer names another host: neither the JWT nor a token goes there."""
+    elsewhere = FakeGitHub(keypair[1])
+    try:
+        gh_fake.redirect["/repos/o/r/installation"] = f"{elsewhere.base}/repos/o/r/installation"
+        _said(agent, agent.credential(), "jamais suivi")
+        assert elsewhere.requests == []
+    finally:
+        elsewhere.close()
+
+
 def test_github_out_of_reach_is_said(agent):
     _said(agent, agent.credential(EREGION_AGENT_API="http://127.0.0.1:9"), "injoignable")
 
@@ -358,3 +374,21 @@ def test_whoami_says_which_repositories_the_token_reaches(agent, gh_fake, repos,
     res = agent.run("whoami")
     assert res.returncode == code and APP_ID in res.stdout and "o/r" in res.stdout
     assert gh_fake.issued[0] not in res.stdout + res.stderr
+
+
+def test_the_token_is_never_printed(agent, gh_fake):
+    """No command writes the token on stdout: a session's output is read by the model and kept."""
+    res = agent.run("token")
+    assert res.returncode == 2 and "ghs_" not in res.stdout + res.stderr and gh_fake.requests == []
+
+
+def test_the_wrappers_are_executable_in_the_repository():
+    """core.fileMode=false: a chmod never reaches the commit — the mode Git keeps is the one checked
+    out on Jonathan's machine and in the CI (git update-index --chmod=+x)."""
+    res = subprocess.run(["git", "ls-files", "-s", "--", "scripts/agent-bin"], cwd=ROOT, capture_output=True,
+                         text=True)
+    if res.returncode != 0 or not res.stdout:
+        pytest.skip("not a git checkout")
+    modes = {line.split("\t")[1]: line.split()[0] for line in res.stdout.splitlines()}
+    assert modes == {"scripts/agent-bin/gh": "100755",
+                     "scripts/agent-bin/git-credential-eregion-agent": "100755"}

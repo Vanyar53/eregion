@@ -5,7 +5,8 @@ only (SEC12, #418; docs/sessions.md, « L'identité des sessions »).
   agent_token.py git-credential get   git's credential helper: a token for https://github.com only
   agent_token.py gh ARGS...           gh with GH_TOKEN set to the App's token, never another identity
   agent_token.py whoami               which repositories the token reaches, and until when
-  agent_token.py token                the token on stdout (for a script that needs it)
+
+No command writes the token on stdout: what a session prints is read by the model, and kept.
 
 A token is drawn as GitHub asks an App to (« Authenticating as a GitHub App installation »):
 - a JWT signed RS256 with the App's private key: iat 60 s in the past (clock drift), exp 9 min
@@ -27,6 +28,9 @@ Settings (environment):
   EREGION_AGENT_API      https://api.github.com
   EREGION_AGENT_CACHE    ~/.cache/eregion-agents/token.json
   EREGION_AGENT_GH       the real gh (else the first `gh` on PATH that is not this wrapper)
+
+A redirection is never followed: the JWT or the token would go, in its header, to whatever host
+the answer names (urllib keeps the headers of a request across a redirection).
 
 Errors are said, on stderr, in a sentence (exit 1): never the token, never the key. `gh` and the
 credential helper never fall back on another identity: no token, no call. Needs PyJWT and
@@ -140,6 +144,16 @@ SAID = {401: "GitHub refuse le JWT (401) : l'ID de l'App, la clé, ou l'horloge 
         422: "GitHub refuse la demande (422) : le dépôt n'est pas dans l'installation de l'App"}
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx is an error, never followed with the Authorization header."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def call(method: str, path: str, bearer: str, body: dict | None = None) -> dict:
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(f"{API}{path}", data=data, method=method, headers={
@@ -147,9 +161,12 @@ def call(method: str, path: str, bearer: str, body: dict | None = None) -> dict:
         "Authorization": f"Bearer {bearer}", "User-Agent": "eregion-agents",
         **({"Content-Type": "application/json"} if data else {})})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with OPENER.open(req, timeout=20) as r:
             out = json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            raise TokenError(f"GitHub redirige ({e.code}) sur {path.split('?')[0]} : jamais suivi avec le "
+                             "jeton — EREGION_AGENT_API ?", e.code) from None
         raise TokenError(SAID.get(e.code, f"GitHub répond {e.code} sur {path.split('?')[0]}"), e.code) from None
     except (OSError, ValueError) as e:
         raise TokenError(f"GitHub injoignable ou illisible ({type(e).__name__})") from None
@@ -347,9 +364,6 @@ def main(argv: list[str]) -> int:
             return gh(argv[1:])
         if argv[0] == "whoami":
             return whoami()
-        if argv[0] == "token":
-            print(token())
-            return 0
     except TokenError as e:
         print(f"agent_token : {e}", file=sys.stderr)
         return 1

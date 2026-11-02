@@ -3049,7 +3049,7 @@ MUTANTS += [
     ("M1007", "a release deployed while its CI still runs (H1)", CD,
      '    if not runs or any(r.get("status") != "completed" for r in runs):', "    if False:"),
     ("M1008", "a release older than what runs deployed over it (H1)", CD,
-     "    if dep_commit and is_ancestor(commit, dep_commit):", "    if False:"),
+     "            if before:\n", "            if False:\n"),
     ("M1009", "a new lock deployed without the harness: the guard never runs (H1)", CD,
      '    if dep_commit and git("diff", "--quiet", dep_commit, commit, "--", LOCK, check=False).returncode == 0:\n'
      "        return\n", "    return\n"),
@@ -3070,7 +3070,7 @@ MUTANTS += [
     ("M1015", "an unhealthy release left running: no rollback (H1)", CD,
      "    back = rollback(dep_ref)\n", '    back = ""\n'),
     ("M1016", "a refused or rolled-back release tried again at every pass (H1)", CD,
-     '    if not check and done in ("refused", "rolled back", "rollback failed"):', "    if False:"),
+     '    if not check and not back_to and done in ("refused", "rolled back", "rollback failed"):', "    if False:"),
     ("M1017", "two passes at once, or one during a deployment by hand: no lock (H1)", CD,
      "            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
     ("M1018", "a release with another agent never said: H0 keeps an old CD in silence (H1)", CD,
@@ -7519,6 +7519,89 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
+# SEC12 (#418): the root of trust — the agent sessions' token (a GitHub App, this repository only),
+# H0's CD refusing an older release but for the way back asked on H0, the tag rule read, the
+# review's verdict traced on the pull request. M2900–M2914.
+ATK = "scripts/agent_token.py"
+HCD = "infra/glorfindel-host/cd/eregion_cd.py"
+_ATK_T = "tests/unit/test_agent_token.py"
+_HCD_T = "tests/unit/test_host_cd.py"
+MUTANTS += [
+    ("M2900", "the App's JWT lives 15 minutes: GitHub refuses it (SEC12)", ATK,
+     "JWT_LIFE_S = 540 ", "JWT_LIFE_S = 900 "),
+    ("M2901", "the App's JWT issued now, not 60 s in the past: a clock behind GitHub's refused (SEC12)", ATK,
+     '{"iat": now - JWT_PAST_S, ', '{"iat": now, '),
+    ("M2902", "a cached token reused until it dies: a push that starts holds a token that expires on the way (SEC12)",
+     ATK, 'return bool(entry) and entry["expires_at"] - time.time() > MARGIN_S\n',
+     'return bool(entry) and entry["expires_at"] - time.time() > 0\n'),
+    ("M2903", "a cache readable by others read as ours (SEC12)", ATK,
+     "        if st.st_uid != os.getuid() or st.st_mode & 0o077 or not stat.S_ISREG(st.st_mode):\n",
+     "        if st.st_uid != os.getuid() or not stat.S_ISREG(st.st_mode):\n"),
+    ("M2904", "the installation token not restricted to this repository: every repository the App reaches (SEC12)",
+     ATK, '    scope = {"repositories": [REPO.split("/", 1)[1]]}\n', "    scope = {}\n"),
+    ("M2905", "the credential helper gives the App's token to any host over https (SEC12)", ATK,
+     '    if asked.get("protocol") != "https" or asked.get("host") != HOST:\n',
+     '    if asked.get("protocol") != "https":\n'),
+    ("M2906", "a token with a newline taken: a line of git's credential protocol written by the answer (SEC12)",
+     ATK, 'TOKEN_RE = re.compile(r"[A-Za-z0-9_.\\-]{20,4096}")\n', 'TOKEN_RE = re.compile(r"[\\s\\S]{1,4096}")\n'),
+    ("M2907", "the App's key read though others can read it (SEC12)", ATK,
+     "    if st.st_mode & 0o077:\n        raise TokenError(f\"la clé de l'App est lisible",
+     "    if False:\n        raise TokenError(f\"la clé de l'App est lisible"),
+    ("M2908", "the gh wrapper leaves gh its usual config: the maintainer's hosts.yml in reach (SEC12)", ATK,
+     '    env["GH_CONFIG_DIR"] = str(Path(os.environ.get("EREGION_AGENT_GH_CONFIG") or DIR / "gh"))\n',
+     "    pass\n"),
+    ("M2909", "the CD compares commits only: a lower version on a newer commit deployed (SEC12)", HCD,
+     "        if mine and theirs and mine < theirs:\n", "        if False:\n"),
+    ("M2910", "the CD compares versions as text: v0.4.9 taken as newer than v0.4.10 (SEC12)", HCD,
+     "    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None\n",
+     "    return (m.group(1), m.group(2), m.group(3)) if m else None\n"),
+    ("M2911", "an older release made « latest » passed over in silence, never said (SEC12)", HCD,
+     '        raise Refused(f"{why} : jamais de retour arrière sans qu\'on le demande sur H0 "\n',
+     '        raise Quiet(f"{why} : jamais de retour arrière sans qu\'on le demande sur H0 "\n'),
+    ("M2912", "the way back asked on H0 undone by the next pass: the release it left deployed again (SEC12)", HCD,
+     "    if back_to and code == 0:\n        left_behind(state, dep_ref, tag)\n",
+     "    if False:\n        left_behind(state, dep_ref, tag)\n"),
+    ("M2913", "a tag rule that leaves the deletion (or the creation) open seen as holding (SEC12)", HCD,
+     "        if covered and set(TAG_RULES) <= kinds:\n", "        if covered and kinds & set(TAG_RULES):\n"),
+    ("M2914", "a review's « ok » holds for any commit: a push after the review merged unreviewed (SEC12)",
+     "scripts/review_verdict.py", '            if key.get("head") == head:\n                last = key\n',
+     "            if True:\n                last = key\n"),
+]
+TESTS.update({f"M{n}": _ATK_T for n in range(2900, 2909)})
+TESTS.update({f"M{n}": _HCD_T for n in range(2909, 2914)})
+TESTS["M2909"] = f"{_HCD_T}::test_a_lower_version_on_a_newer_commit_is_refused"
+TESTS["M2910"] = f"{_HCD_T}::test_versions_are_compared_as_numbers"
+TESTS["M2911"] = f"{_HCD_T}::test_an_older_release_is_refused_said_once_and_never_deployed"
+TESTS["M2912"] = (f"{_HCD_T}::test_the_way_back_asked_on_h0_is_verified_deployed_and_the_release_left_stays_behind "
+                  f"{_HCD_T}::test_a_cut_way_back_taken_up_leaves_the_release_behind")
+TESTS["M2913"] = f"{_HCD_T}::test_the_tag_rule_covers_the_tag_and_forbids_its_creation_update_and_deletion"
+TESTS["M2914"] = "tests/unit/test_review_verdict.py"
+# SEC12, after its review: never back by a reading that fails (the floor, what runs unreadable, an
+# order git cannot read), the verdict tied to the commit reviewed, no redirection followed with the
+# token. M2975–M2979.
+MUTANTS += [
+    ("M2975", "what runs unreadable (the watch without labels): the release deployed blind (SEC12)",
+     HCD, '    if not dep_ref and not dep_commit:\n        raise Refused("ce qui tourne sur H0 ne se lit pas',
+     '    if False:\n        raise Refused("ce qui tourne sur H0 ne se lit pas'),
+    ("M2976", "two commits git cannot order (merge-base: 128) taken for « not older » (SEC12)", HCD,
+     "            if before is None:\n", "            if before is None and False:\n"),
+    ("M2977", "the floor never read: H0 put back by hand reopens the door to the releases before (SEC12)", HCD,
+     '             (str(floor.get("tag") or ""), str(floor.get("commit") or ""), "déjà déployée sur H0"))\n',
+     "             )\n"),
+    ("M2978", "the check reads the verdict for the head of the moment: a push after the review merged (SEC12)",
+     "scripts/review_verdict.py", "    if head != reviewed:\n", "    if False:\n"),
+    ("M2979", "a redirection followed with the App's JWT in its header, to the host the answer names (SEC12)", ATK,
+     "        return None\n\n\nOPENER",
+     "        return super().redirect_request(req, fp, code, msg, headers, newurl)\n\n\nOPENER"),
+]
+TESTS.update({
+    "M2975": f"{_HCD_T}::test_what_runs_unreadable_is_refused_never_taken_for_older_than_anything",
+    "M2976": f"{_HCD_T}::test_an_order_git_cannot_read_is_refused_never_taken_for_newer",
+    "M2977": (f"{_HCD_T}::test_the_floor_is_the_highest_version_deployed_whatever_runs "
+              f"{_HCD_T}::test_under_the_floor_is_refused_though_what_runs_is_older"),
+    "M2978": "tests/unit/test_review_verdict.py",
+    "M2979": f"{_ATK_T}::test_a_redirection_is_never_followed_with_the_jwt",
+})
 # SEC13 (#419): what was left on Glorfindel's side of the second counter-audit — the incident
 # registry under its flock and written whole (V-10), every state owner-only and whole (V-27),
 # /pending under the buttons' policy (R-16), a state directory that can't be listed (R-07), a

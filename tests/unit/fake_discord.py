@@ -45,7 +45,12 @@ class FakeDiscord:
         self.requests, self.messages, self.threads, self.runs = [], {}, [], []
         self.roadmap: list[dict] = []        # #roadmap's messages, newest first
         self.gh = {"milestones": [], "issues": [], "pulls": [], "release": None, "checks": {},
-                   "releases": {}}   # by tag: published ones only, as GitHub answers (a draft: 404)
+                   "releases": {},   # by tag: published ones only, as GitHub answers (a draft: 404)
+                   # SEC12: the repository's rulesets, as read without a token (None: a 404) — by
+                   # default the tag rule docs/sessions.md asks for.
+                   "rulesets": [{"id": 11, "name": "tags v*", "target": "tag", "enforcement": "active",
+                                 "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+                                 "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}]}]}
         self.console_token, self.console_status = "", 200
         # CI3: repository → {"tags": {tag: digest}, "blobs": {digest: bytes}}; `lie`: a digest header
         # that is not the body's; `private`: repositories answered 401 without a token.
@@ -207,6 +212,15 @@ class FakeDiscord:
         if p.startswith("/gh/repos/o/r/releases/tags/"):
             rel = self.gh["releases"].get(p.rsplit("/", 1)[1])
             return (200, rel, {}) if rel else (404, {"message": "Not Found"}, {})
+        if p == "/gh/repos/o/r/rulesets":       # the list: no conditions, no rules (as GitHub's)
+            if self.gh["rulesets"] is None:
+                return 404, {"message": "Not Found"}, {}
+            targets = (query.get("targets") or [""])[0].split(",")
+            return 200, [{k: v for k, v in r.items() if k not in ("conditions", "rules")}
+                         for r in self.gh["rulesets"] if not targets[0] or r.get("target") in targets], {}
+        if p.startswith("/gh/repos/o/r/rulesets/"):
+            r = next((r for r in self.gh["rulesets"] or [] if str(r.get("id")) == p.rsplit("/", 1)[1]), None)
+            return (200, r, {}) if r else (404, {"message": "Not Found"}, {})
         if p == "/gh/repos/o/r/releases/latest":
             return (200, self.gh["release"], {}) if self.gh["release"] else (404, {"message": "Not Found"}, {})
         if p.startswith("/gh/repos/o/r/commits/") and p.endswith("/check-runs"):

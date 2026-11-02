@@ -139,11 +139,21 @@ def parse(message) -> SudoLine | None:
 # in ADM1: COR1 will set aside the ones whose SSH session comes from an expected origin.
 # The program is read past these wrappers: after one, every word is a candidate (their
 # options, their VAR=value, a duration — `env -i bash`, `nice -n 10 bash`, `timeout 5 sh`).
-_WRAPPERS = frozenset({"env", "nice", "nohup", "timeout", "stdbuf", "command"})
+# Not exhaustive: a script or a program not listed (`sudo /tmp/x.py`) passes — the blind spot
+# assumed until COR1 (the session's origin) and AUD1 (auditd).
+_WRAPPERS = frozenset({"env", "nice", "nohup", "timeout", "stdbuf", "command",
+                       "time", "ionice", "chrt", "taskset", "setsid", "flock", "chroot", "strace",
+                       "ltrace", "nsenter", "unshare", "watch", "systemd-run"})
 # Shells, the programs that open a session, sudo itself: `sudo -i`, `sudo -s` are written
 # COMMAND=/bin/bash (the user's shell), `sudo su -` COMMAND=/usr/bin/su -.
 _SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "mksh", "csh", "tcsh", "fish", "busybox",
                      "su", "runuser", "login", "script", "sudo"})
+# Terminal multiplexers: they open a shell.
+_MULTIPLEXERS = frozenset({"screen", "tmux"})
+# A debugger runs a shell (`gdb -ex '!sh'`, its `shell` command).
+_DEBUGGERS = frozenset({"gdb", "lldb"})
+_PYTHON = re.compile(r"python[\d.]*")
+_SOCAT_EXEC = re.compile(r"\b(?:exec|system):", re.IGNORECASE)
 # Interpreters: code given in line (or none: the interpreter reads it, a REPL is a shell).
 _INLINE = (
     (re.compile(r"python[\d.]*"), re.compile(r"-[A-Za-z]*c|-")),
@@ -160,7 +170,10 @@ _AWKS = frozenset({"awk", "gawk", "mawk", "nawk"})
 
 
 def _name(token: str) -> str:
-    """A token as a program's name: no quotes, no path, no login shell's dash."""
+    """A token as a program's name: no quotes, no path, no login shell's dash; past an option's
+    `=` (`env --split-string='bash -c …'`)."""
+    if token.startswith("-") and "=" in token:
+        token = token.split("=", 1)[1]
     return token.strip("'\"`(){};").rsplit("/", 1)[-1].lstrip("-")
 
 
@@ -178,11 +191,35 @@ def root_shell(command: str) -> bool:
     """Does this command give a root shell? (a shell, su, a nested sudo; an interpreter with code
     in line or none; find -exec, xargs to a shell, awk's system(); an editor or a pager)"""
     tokens = command[:_COMMAND_READ].split()
+    if _runs_a_shell(tokens, command):
+        return True
     return any(_gives_a_shell(_name(tokens[i]), tokens[i + 1:], command) for i in _programs(tokens))
+
+
+def _runs_a_shell(tokens: list[str], command: str) -> bool:
+    """The programs that run a command given to them: `systemd-run --shell`, socat's `exec:`,
+    tar's `--checkpoint-action=exec`, `docker exec`/`run` to a shell."""
+    names = [_name(t) for t in tokens[:32]]
+    if "systemd-run" in names and any(t in ("--shell", "-S") for t in tokens):
+        return True
+    if "socat" in names and _SOCAT_EXEC.search(command):
+        return True
+    if "tar" in names and ("--checkpoint-action=exec" in command or "--to-command" in command):
+        return True
+    if ({"docker", "podman"} & set(names) and {"exec", "run"} & set(names)
+            and any(n in _SHELLS for n in names[1:])):
+        return True
+    return False
 
 
 def _gives_a_shell(prog: str, args: list[str], command: str) -> bool:
     if prog in _SHELLS:
+        return True
+    if prog in _MULTIPLEXERS:
+        return True
+    if _PYTHON.fullmatch(prog) and ("-mpty" in args or any(a == "-m" and b == "pty" for a, b in zip(args, args[1:]))):
+        return True
+    if prog in _DEBUGGERS:
         return True
     for name, inline in _INLINE:
         if name.fullmatch(prog) and (not args or any(inline.fullmatch(a) for a in args)):

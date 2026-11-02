@@ -7175,6 +7175,26 @@ MUTANTS += [
      "    if prog in _SHELL_ESCAPES:\n        return True\n", ""),
 ]
 TESTS.update({f"M{n}": _XSU for n in range(2700, 2720)})
+# ADM1, second review: more wrappers, terminal multiplexers, python's pty and debuggers, the
+# programs that run a command given to them. M2786–M2789.
+MUTANTS += [
+    ("M2786", "a shell behind time, setsid, chroot, strace, nsenter, systemd-run… set aside (ADM1, second review)", _RS,
+     (',\n                       "time", "ionice", "chrt", "taskset", "setsid", "flock", "chroot", "strace",\n'
+      '                       "ltrace", "nsenter", "unshare", "watch", "systemd-run"})'),
+     "})"),
+    ("M2787", "screen, tmux set aside (ADM1, second review)", _RS,
+     "    if prog in _MULTIPLEXERS:\n        return True\n", ""),
+    ("M2788", "python -m pty, gdb set aside (ADM1, second review)", _RS,
+     ("    if _PYTHON.fullmatch(prog) and (", "    if prog in _DEBUGGERS:\n"),
+     ("    if False and (", "    if False:\n")),
+    ("M2789", "systemd-run --shell, socat exec:, tar's checkpoint, docker to a shell, env --split-string set aside "
+              "(ADM1, second review)", _RS,
+     ('    if "systemd-run" in names and', '    if "socat" in names and', '    if "tar" in names and',
+      '    if ({"docker", "podman"} & set(names)',
+      '    if token.startswith("-") and "=" in token:\n        token = token.split("=", 1)[1]\n'),
+     ("    if False and", "    if False and", "    if False and", "    if (False", "")),
+]
+TESTS.update({f"M{n}": _XSU for n in range(2786, 2790)})
 
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.

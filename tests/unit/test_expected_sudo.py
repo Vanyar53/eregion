@@ -276,6 +276,23 @@ _ROOT_SHELLS = {
     "spawners": ["/usr/bin/find / -name x -exec /bin/sh ;", "/usr/bin/find . -execdir id {} +",
                  "/usr/bin/xargs -a f sh -c x", "/usr/bin/awk BEGIN{system(\"/bin/sh\")}",
                  "/usr/bin/gawk BEGIN{while((\"id\"|getline l)>0)print l}"],
+    # more wrappers (second review)
+    "more_wrappers": ["/usr/bin/time bash", "/usr/bin/ionice -c3 bash", "/usr/bin/chrt -f 10 sh",
+                      "/usr/bin/taskset -c 0 bash", "/usr/bin/setsid bash", "/usr/bin/flock /tmp/l bash",
+                      "/usr/sbin/chroot / bash", "/usr/bin/strace -f bash", "/usr/bin/ltrace bash",
+                      "/usr/bin/nsenter -t 1 -m bash", "/usr/bin/unshare -r bash", "/usr/bin/watch -n1 sh -c id",
+                      "/usr/bin/systemd-run -t bash"],
+    # terminal multiplexers
+    "multiplexers": ["/usr/bin/screen", "/usr/bin/screen -S x", "/usr/bin/tmux", "/usr/bin/tmux new -s x"],
+    # python's pty, a debugger
+    "pty_debuggers": ["/usr/bin/python3 -m pty", "/usr/bin/python3 -mpty", "/usr/bin/gdb -nx -ex !sh -ex quit",
+                      "/usr/bin/gdb"],
+    # the programs that run a command given to them
+    "runners": ["/usr/bin/systemd-run --shell", "/usr/bin/systemd-run -S", "/usr/bin/socat stdin exec:/bin/sh",
+                "/usr/bin/socat - EXEC:sh,pty",
+                "/usr/bin/tar -cf /dev/null /dev/null --checkpoint=1 --checkpoint-action=exec=/bin/sh",
+                "/usr/bin/docker exec -it app bash", "/usr/bin/docker run --rm -it alpine sh",
+                "/usr/bin/env --split-string='bash -c x'"],
     # an editor or a pager that runs a shell (:!sh, !sh)
     "escapes": ["/usr/bin/vim /etc/nginx/nginx.conf", "/usr/bin/vi x", "/usr/bin/nano x",
                 "/usr/bin/less /srv/app.log", "/usr/bin/more x", "/usr/bin/man ls"],
@@ -295,6 +312,9 @@ def test_a_root_shell_of_an_expected_admin_is_a_card(family, command):
     "/usr/bin/python3 /opt/app/manage.py migrate", "/usr/bin/perl /opt/x.pl", "/usr/bin/find /var -name x",
     "/usr/bin/xargs -a f rm", "/usr/bin/awk {print} /srv/f", "sudoedit /etc/hosts", "/usr/bin/apt install bash",
     "/usr/bin/env", "/usr/bin/node /opt/app/server.js", "/usr/bin/ruby /opt/x.rb", "",
+    "/usr/bin/docker ps", "/usr/bin/docker exec app cat /srv/x", "/usr/bin/tar -czf /tmp/b.tgz /srv",
+    "/usr/bin/python3 -m http.server", "/usr/bin/socat TCP-LISTEN:8080 TCP:192.0.2.1:80",
+    "/usr/bin/time /usr/bin/apt update",
 ])
 def test_what_gives_no_shell_is_not_a_root_shell(command):
     assert not expected_sudo.root_shell(command)

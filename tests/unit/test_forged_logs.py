@@ -195,8 +195,11 @@ def test_the_ssh_simulation_is_still_detected():
 
 
 def test_the_sudo_simulation_is_still_detected():
-    rows = _sudo(_logged("privilege_escalation_sim.sh", ATTACKER_USER="svc-backup"))
-    assert len(rows) == 1 and "USER=root ; COMMAND=" in rows[0]["SyslogMessage"]
+    lines = _logged("privilege_escalation_sim.sh", ATTACKER_USER="svc-backup")
+    rows = _sudo(lines)
+    # One row per distinct line since ADM1 (the poller sets the expected ones aside), one card.
+    assert rows and all("USER=root ; COMMAND=" in r["SyslogMessage"] for r in rows)
+    assert len(_poll(lines, "sudo-privilege-escalation")) == 1
 
 
 def test_the_investigation_finds_the_simulation_s_root_commands():

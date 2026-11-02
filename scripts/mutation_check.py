@@ -8016,6 +8016,8 @@ TESTS.update({
 # at every pass, or put back after it was said, its text folded into the card said before; the
 # cards an older version said under the canonical name, found too. M3100–M3109.
 _I3C_UNIT = "tests/unit/test_reassert.py"
+_I3C_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_disappearance_said_by_the_canonical_id_is_said_once_after_the_lowercase_one")
 MUTANTS += [
     ("M3100", "the drift card's id keeps the case of the VM's name (I3C)", R,
      '    return f"reassert-{vm.lower()}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")',
@@ -8053,7 +8055,7 @@ MUTANTS += [
      '    cards = [e for e in escalations.pending() if (e.get("signal_id") or "").startswith(prefix)]\n'),
 ]
 TESTS.update({
-    "M3100": f"{_I3C_UNIT}::test_a_disappearance_said_under_the_canonical_name_is_said_once_by_the_lowercase_id",
+    "M3100": f"{_I3C_SEQ} {_I3C_UNIT}::test_a_disappearance_said_under_the_canonical_name_is_said_once_by_the_lowercase_id",
     "M3101": f"{_I3C_UNIT}::test_a_drift_card_an_older_version_said_under_the_canonical_name_is_closed_by_the_next",
     "M3102": f"{_I3C_UNIT}::test_a_bypass_said_under_the_canonical_name_stays_said",
     "M3103": f"{_I3C_UNIT}::test_a_bypass_said_under_the_canonical_name_stays_said",

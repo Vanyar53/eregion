@@ -127,7 +127,9 @@ Trois canaux, à ne pas confondre :
 
 **Où c'est dans le code** : `glorfindel/agent.py` (`decide` et ses gardes, `_build_user_message`), `glorfindel/response/` (la liste des actions autonomes), `glorfindel/rules/azure/detection_rules.yaml` ; tests `tests/unit/test_agent_nodes.py`, `tests/unit/test_forged_logs.py`, `tests/unit/test_dependency_failures.py`. Détail : [`docs/glorfindel.md`](../glorfindel.md), [`docs/architecture.md`](../architecture.md), « Les gardes qui encadrent le LLM ».
 
-**Ouvert** : la décision face à une réponse, une mémoire ou une ligne imprévues — planifié : #275 ; l'origine d'une session confirmée hors de la VM — planifié : #427.
+L'origine d'une session confirmée hors de la VM (#427) n'est plus ouverte : **tenue quand une source est déclarée** (`expected_sudo.origin_proof`, COR2 — Bastion ou flux réseau, ses tables à mesurer au banc) ; sans source, l'origine reste lue dans la VM seulement, et dite ainsi (§5).
+
+**Ouvert** : la décision face à une réponse, une mémoire ou une ligne imprévues — planifié : #275.
 
 ---
 
@@ -352,13 +354,22 @@ _SEC12 (#418), 02/11. Décision de Jonathan : une identité propre aux sessions 
   session sans ligne `Accepted`, un compte pris par `su`/`sudo -u`/`login`/`cron`, un journal illisible
   ou coupé, aucune session : carte (A0) ; une commande sensible reste une carte quelle que soit
   l'origine ; une fermeture de session n'est pas lue (`logger` en écrit une) ; seules les lignes
-  `Accepted` étiquetées sshd sont lues. Ce qui reste ouvert : tout utilisateur local peut écrire une
-  ligne de connexion sshd venant d'une origine déclarée — l'écart ne tient donc que contre un
-  administrateur honnête et un intrus qui ne connaît pas Eregion. Un intrus dont la vraie session est
-  plus ancienne que la fenêtre de 7 jours, ou un accès qui n'écrit aucune ligne de session (un service
-  sous le compte), peut faire écarter un shell root seul ; les commandes sensibles restent toujours une
-  carte. La réponse est planifiée : l'origine confirmée hors de la VM, COR2 (#427). Lier une commande
-  à sa session exacte demande `auditd` (AUD1).
+  `Accepted` étiquetées sshd sont lues. **Sans source déclarée**, ce qui reste ouvert : tout
+  utilisateur local peut écrire une ligne de connexion sshd venant d'une origine déclarée — l'écart ne
+  tient donc que contre un administrateur honnête et un intrus qui ne connaît pas Eregion. Un intrus
+  dont la vraie session est plus ancienne que la fenêtre de 7 jours, ou un accès qui n'écrit aucune
+  ligne de session (un service sous le compte), peut faire écarter un shell root seul ; les commandes
+  sensibles restent toujours une carte ; le rapport et la console disent « origin read in the VM
+  only ». **Avec une source déclarée** (`expected_sudo.origin_proof` : `bastion` ou `flows`, COR2,
+  #427), chaque session vue dans le Syslog doit avoir sa trace hors de la VM — une session Azure
+  Bastion vers cette VM, par ce compte, à 120 s près (une session Bastion n'en confirme qu'une), ou un
+  flux autorisé de son adresse vers le port 22 de la VM ; trace absente, source illisible ou coupée :
+  carte (A0). Une ligne forgée par `logger` fait alors une carte. Ce qui reste ouvert avec une
+  source : les flux agrégés confirment une adresse, pas une session (une ligne forgée à la minute d'un
+  vrai flux de l'origine passe) ; une session plus ancienne que 7 jours, ou un accès sans ligne de
+  session, n'est toujours pas vue ; les tables et leurs colonnes sont des hypothèses jusqu'à la mesure
+  au banc (`docs/operations.md`, B1–B4, F1–F4). Lier une commande à sa session exacte demande
+  `auditd` (AUD1).
 - **Un jeton pour la console**, tous ses droits (frontière 1).
 - **Le principal du canari, `Network Contributor` sur son groupe** (P-04, P04). Il peut y créer une ressource réseau
   payante (une IP publique, une passerelle). Si le premier run demande plus, le repli est `Contributor` sur ce même groupe, écrit

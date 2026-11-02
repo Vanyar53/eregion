@@ -928,6 +928,7 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
 
   ```yaml
   expected_sudo:
+    # origin_proof: bastion   # COR2 : chaque session aussi vue par Bastion (le VPN ne le serait pas)
     admins:
       - match: "vm-web-*"
         accounts: [admin1, ops]
@@ -953,6 +954,15 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   l'origine (« session depuis 203.0.113.9, origine inconnue »). Une commande sensible reste une
   carte quelle que soit l'origine. Sans `origins` : les shells root restent des cartes. **Clé
   nouvelle** : une version sans COR1 refuse la config qui la porte.
+
+  **`origin_proof`** (COR2, #427 ; `docs/design/correlation.md`, « L'origine confirmée hors de la
+  VM ») : la source, hors de la VM, qui doit montrer chaque session SSH derrière un shell root écarté
+  par son origine — `bastion` (les journaux d'audit d'Azure Bastion), `flows` (les journaux de flux du
+  VNet, traffic analytics) ou `none` (le défaut : COR1 tel quel, l'origine lue dans la VM seulement).
+  Une seule source, pour toutes les entrées qui déclarent `origins`. Lue strictement : une autre
+  valeur, ou une source sans aucune entrée qui déclare `origins`, refuse le fichier. Trace absente,
+  source illisible ou coupée : une carte. **Clé nouvelle** : une version sans COR2 refuse la config qui
+  la porte. Mesurer avant de déclarer : « Déclarer la source qui confirme l'origine sur H0 (COR2) ».
 
 ### Poser la liste des administrateurs sur H0 (ADM1)
 
@@ -997,8 +1007,8 @@ Les vraies adresses ne vont que dans la config de H0, jamais dans le dépôt (le
    par cron », origine non suivie. Ses shells root restent alors en carte pendant 7 jours ; mettre ces
    tâches sous un compte de service, ou s'en accommoder. **Ce que l'écart vaut** : un réducteur de
    bruit, pas une preuve — tout utilisateur local peut écrire une ligne de connexion sshd venant d'une
-   origine déclarée ; une commande sensible reste toujours une carte. L'origine confirmée hors de la
-   VM viendra avec COR2 (#427). Vérifier : `glorfindel rules check` (ou
+   origine déclarée ; une commande sensible reste toujours une carte. Pour une preuve, déclarer une
+   source hors de la VM (COR2, ci-dessous). Vérifier : `glorfindel rules check` (ou
    `python -c "from glorfindel.config import load_glorfindel_config as l; print(l().expected_sudo)"`).
 3. **La pousser** : `make glorfindel-host-push` (garde les modes d'autonomie de H0 ; sans ce lot sur
    le poste, ajouter `origins:` à la main dans `~/eregion/glorfindel-config.yaml` de H0 par
@@ -1012,6 +1022,72 @@ Les vraies adresses ne vont que dans la config de H0, jamais dans le dépôt (le
    `sudo-privilege-escalation`. Le même `sudo -i` depuis une autre adresse fait une carte qui dit
    « session depuis <adresse>, origine inconnue » ; un `sudo bash -c 'cat /etc/shadow'` fait
    toujours une carte.
+
+### Déclarer la source qui confirme l'origine sur H0 (COR2)
+
+Avec Jonathan, au banc : les tables et leurs colonnes sont prises de la documentation publique
+(Microsoft Learn), pas mesurées. **Mesurer d'abord** (les hypothèses ci-dessous), déclarer ensuite.
+
+1. **La source existe dans le workspace de H0.**
+   - `bastion` : un paramètre de diagnostic sur l'hôte Bastion, catégorie `BastionAuditLogs`, vers
+     le workspace des règles. Les sessions SSH arrivent alors sur la VM depuis
+     `AzureBastionSubnet` : c'est cette plage qu'on déclare dans `origins`.
+   - `flows` : les journaux de flux du VNet (VNet flow logs) avec traffic analytics vers le même
+     workspace, intervalle de 10 minutes (celui de 60 minutes rend presque toute preuve tardive : F4).
+2. **Mesurer** B1–B4 ou F1–F4 : une connexion SSH réelle depuis l'origine déclarée, un `sudo -i`,
+   puis la requête B ou F dans le workspace (portail, « Logs »), en remplaçant `<vm>`, `<compte>`,
+   `<adresse>`. Noter ce qui ne tient pas : c'est un lot de la session Glorfindel, pas une déclaration.
+3. **Déclarer** dans le `glorfindel-config.yaml` local (hors du dépôt) :
+   `expected_sudo.origin_proof: bastion` (ou `flows`), à côté des `origins` de COR1. Vérifier la
+   lecture stricte : `glorfindel rules check`.
+4. **Pousser et redémarrer** comme pour COR1 (`make glorfindel-host-push`, puis
+   `docker compose restart watch war-room` sur H0) ; `make glorfindel-host-logs` : pas de
+   « glorfindel-config.yaml refusé ». H0 doit tourner une version qui lit `origin_proof`.
+5. **Vérifier** : un `sudo -i` après une connexion par Bastion n'ouvre pas de carte (si B2 tient), et
+   `make glorfindel-host-report` dit « every one confirmed outside the VM (COR2) » ; la console, dans
+   le détail de `sudo-privilege-escalation`, « N confirmed outside the VM (COR2) ». Une ligne écrite à
+   la main sur la VM, `logger -p auth.info -t sshd "Accepted publickey for <compte> from <adresse du
+   bastion> port 1 ssh2"`, puis un `sudo -i` : une carte « … sans trace dans Azure Bastion — origine
+   non confirmée hors de la VM ». Sans source : « origin read in the VM only ».
+
+**Requête B** (Bastion) :
+
+```kusto
+MicrosoftAzureBastionAuditLogs
+| where TimeGenerated > ago(1d)
+| where TargetResourceId =~ "<id de ressource de la VM>"
+| project TimeGenerated, SessionStartTime, SessionEndTime, UserName, TargetResourceId, TargetVMIPAddress,
+          Protocol, TunnelId, OperationName
+| order by TimeGenerated asc
+```
+
+**Requête F** (flux) :
+
+```kusto
+NTANetAnalytics
+| where TimeGenerated > ago(1d)
+| where SubType == "FlowLog" and DestPort == 22
+| where DestVm =~ "<groupe de ressources>/<vm>"
+| project TimeGenerated, TimeProcessed, SrcIp, DestIp, DestVm, DestPort, L4Protocol, FlowStatus,
+          FlowDirection, FlowStartTime, FlowEndTime, FlowIntervalStartTime, FlowIntervalEndTime
+| order by TimeGenerated asc
+```
+
+#### Les hypothèses de COR2
+
+Ce que le code suppose (`glorfindel/correlation.py`, `_BASTION`, `_FLOWS`), d'après Microsoft Learn ;
+chacune avec sa mesure et ce qui change selon le résultat.
+
+| | Hypothèse | Mesure | Si elle tient | Sinon |
+|---|---|---|---|---|
+| **B1** | `MicrosoftAzureBastionAuditLogs` porte `TargetResourceId` = l'identifiant ARM de la VM (casse ignorée), `UserName` = le compte Linux tapé, `SessionStartTime` = l'ouverture de la session (UTC) | une connexion par Bastion, requête B | rien | corriger le filtre (`TargetVMIPAddress`, une autre forme d'identifiant) ou le compte lu |
+| **B2** | Bastion écrit la ligne **à l'ouverture** de la session, et elle arrive dans le workspace avant le `sudo -i` qui suit (quelques minutes au plus) | `TimeGenerated` − `SessionStartTime` de la requête B, et l'instant du `sudo -i` | rien | écrite à la fermeture, ou plus tard : tout shell root d'une session en cours fait une carte — retenir la ligne jusqu'à la preuve (un lot à part) |
+| **B3** | La ligne `Accepted` de sshd tombe à 120 s au plus de `SessionStartTime` (`PROOF_SKEW_S`) | comparer les deux instants | rien | relever `PROOF_SKEW_S` |
+| **B4** | Une session Bastion = une ligne, ou plusieurs du même `TunnelId` ; le client natif (`az network bastion ssh`/`tunnel`) écrit aussi `UserName` | deux connexions, l'une par le portail, l'autre par `az network bastion ssh` | rien | `UserName` vide : le client natif n'est pas confirmé (carte) ; d'autres lignes par session : revoir le dédoublonnage |
+| **F1** | `NTANetAnalytics` porte `SubType == "FlowLog"`, `SrcIp`, `DestVm` = `<groupe>/<vm>` (casse ignorée), `DestPort` (entier), `L4Protocol == "T"`, `FlowStatus == "A"` | une connexion SSH, requête F | rien | corriger le filtre (`DestIp` et l'adresse privée de la VM, d'autres valeurs) |
+| **F2** | sshd écoute sur le port 22 (`SSH_PORT`) | `ss -tlnp` sur la VM | rien | un port par VM : une clé de config, un lot |
+| **F3** | `FlowStartTime`–`FlowEndTime` d'un flux couvre la ligne `Accepted` à 120 s près | comparer les instants | rien | relever `PROOF_SKEW_S`, ou lire `FlowIntervalStartTime`–`FlowIntervalEndTime` |
+| **F4** | Traffic analytics à 10 minutes : la ligne arrive en moins de ~20 minutes (Microsoft Learn : jusqu'à une heure pour l'ingestion) | `TimeGenerated` − `FlowStartTime`, sur 24 h | un shell root ouvert dans ces minutes après la connexion fait une carte (la preuve n'est pas encore là) ; plus tard dans la session, il est écarté — à dire aux administrateurs | à 60 minutes : `flows` ne confirme presque jamais à temps — préférer `bastion` |
 
 ---
 

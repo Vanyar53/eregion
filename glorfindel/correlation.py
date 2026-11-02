@@ -17,6 +17,13 @@ What it reads — Syslog's `auth`/`authpriv` lines of the VM, in one bounded que
 A « session closed » line is not read: any local user writes one with `logger`, and a session
 said closed would clear its origin. Every session opened in the window counts as open.
 
+Its limit (Jonathan, 02/11: a noise reducer, its limit written): any local user can write an
+sshd login line from a declared origin (`logger -t sshd`). The set-aside thus holds against an
+honest administrator and an intruder who does not know Eregion — no more. An intruder whose real
+session is older than the window, or an access that writes no session line, can have a root
+shell set aside on its own; a sensitive command is always a card. The answer is planned: an
+origin confirmed outside the VM (Bastion, network flows) — COR2, #427.
+
 What it never does: conclude without lines. A query that fails, a reading cut at its limit, a
 line no VM names, no session found, the cap of queries reached — the result is unknown (A0),
 and unknown is a card.
@@ -45,9 +52,9 @@ from glorfindel import kql
 
 logger = logging.getLogger(__name__)
 
-# The sessions read behind a root shell: those opened in the last day. A session opened before
-# is not seen — if none is left in the window, the result is unknown (a card).
-SESSION_LOOKBACK_S = 24 * 3600
+# The sessions read behind a root shell: those opened in the last 7 days (Jonathan, 02/11). A
+# session opened before is not seen — if none is left in the window, the result is unknown (a card).
+SESSION_LOOKBACK_S = 7 * 24 * 3600
 # At most this many lines per query; a reading that reaches it may miss a session: unknown.
 ROWS_MAX = 1000
 # At most this many correlation queries per rule and poll; beyond, unknown (a card).
@@ -84,7 +91,9 @@ Syslog
 | where TimeGenerated > ago({lookback}s)
 | where {scope}
 | where Facility in ("auth", "authpriv")
-| where SyslogMessage startswith "Accepted " or SyslogMessage has "session opened"
+// sshd's own Accepted lines only (its tag), the session lines of any service.
+| where (SyslogMessage startswith "Accepted " and ProcessName in ("sshd", "sshd-session"))
+    or SyslogMessage has "session opened"
 | where {accounts}
 | project TimeGenerated, ProcessName, ProcessID, SyslogMessage
 | order by TimeGenerated asc
@@ -201,7 +210,7 @@ def verdict(found: list[dict], origins) -> tuple[bool, str, list[str]]:
     an origin unknown, an address outside the ranges, the account taken by another: False."""
     nets = [ipaddress.ip_network(o) for o in origins]
     if not found:
-        return False, "aucune session SSH trouvée pour ce compte sur 24 h — origine inconnue", []
+        return False, "aucune session SSH trouvée pour ce compte sur 7 jours — origine inconnue", []
     seen = sorted({s["origin"] for s in found if s["origin"]})
     for s in found:
         if s["via"] not in ("ssh", "ssh-pam"):
@@ -319,7 +328,8 @@ def tag_compromise(p: Pass, routed: dict, seen: set, identity, window_s: float) 
     """A brute-force row whose address logged in on the same VM, in the window: marked
     `Correlation` (a text, so part of the row's identity — one card per address and VM, deduped
     like the brute force) with the logins it saw. A row already carded so keeps the mark, with
-    no query. A login that could not be checked leaves the row as it was, counted."""
+    no query. A login that could not be checked is counted and said on the row (`LoginCheck`,
+    not a text: the row's identity does not move) — the cycle says it to a human."""
     groups: dict[str, list[tuple[dict, object]]] = {}
     for _tgt, rows in routed.values():
         for row in rows:
@@ -331,14 +341,15 @@ def tag_compromise(p: Pass, routed: dict, seen: set, identity, window_s: float) 
                 continue
             where = scope(row)
             if where is None:
-                p.counts["unchecked"] += 1
+                _unchecked(p, row, "la ligne ne nomme pas sa VM")
                 continue
             groups.setdefault(where, []).append((row, ip))
     for where, items in groups.items():
         lines = p.query(_LOGINS, window_s, scope=where)
         if isinstance(lines, str):
-            p.counts["unchecked"] += len(items)
             logger.warning("correlation: logins after brute force not checked (%s)", lines)
+            for row, _ip in items:
+                _unchecked(p, row, lines)
             continue
         for row, ip in items:
             logins = []
@@ -346,12 +357,17 @@ def tag_compromise(p: Pass, routed: dict, seen: set, identity, window_s: float) 
                 m = _ACCEPTED.match(str(line.get("SyslogMessage") or ""))
                 if m and address(m["ip"]) == ip:
                     when = instant(line.get("TimeGenerated"))
-                    logins.append({"account": m["account"], "method": m["method"],
+                    logins.append({"account": m["account"][:64], "method": m["method"][:64],
                                    "at": when.isoformat() if when else str(line.get("TimeGenerated") or "")})
             if logins:
                 row["Correlation"] = COMPROMISED
                 row["SuccessfulLogins"] = logins[-LOGINS_KEPT:]
                 p.counts["compromised"] += 1
+
+
+def _unchecked(p: Pass, row: dict, why: str) -> None:
+    row["LoginCheck"] = {"status": "unchecked", "why": why[:200]}
+    p.counts["unchecked"] += 1
 
 
 def add_counts(previous, counts: dict, now_iso: str) -> dict:

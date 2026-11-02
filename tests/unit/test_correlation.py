@@ -543,6 +543,98 @@ def test_a_compromise_held_in_human_only_is_one_card_that_says_so(tmp_path, monk
     assert card["escalation_type"] == "mode_hold" and card["reason"].startswith("Compte peut-être compromis")
 
 
+def test_a_compromise_after_a_held_brute_force_rewrites_its_card(tmp_path, monkeypatch):
+    """human_only: the brute force's card (block X) is pending; the compromise that follows is
+    folded into it — it used to change only `occurrences`, severity high, nothing said."""
+    from glorfindel import escalations
+    lines = _attempts(STRANGER)
+    p, rule, sent, _ = _poller(lines, rule_name="ssh-brute-force")
+    [first] = p.poll_once(rule)
+    _run_graph(tmp_path, monkeypatch, first, "human_only")
+    lines += _login(STRANGER, account="ops", minutes_ago=0.5)
+    [second] = p.poll_once(rule)
+    _run_graph(tmp_path, monkeypatch, second, "human_only")
+    [card] = escalations.pending()
+    assert card["occurrences"] == 2 and card["severity"] == "critical"
+    assert card["reason"].startswith("Compte peut-être compromis") and STRANGER in card["reason"]
+
+
+def test_two_compromises_from_two_addresses_are_two_cards(tmp_path, monkeypatch):
+    from glorfindel import escalations
+    _run_graph(tmp_path, monkeypatch, _compromise_signal(), "non_disruptive")
+    other = "203.0.113.50"
+    lines = _attempts(other) + _login(other, account="admin1", minutes_ago=1, method="password", pid=4800)
+    p, rule, sent, _ = _poller(lines, rule_name="ssh-brute-force")
+    [sig] = p.poll_once(rule)
+    _run_graph(tmp_path, monkeypatch, sig, "non_disruptive")
+    cards = escalations.pending()
+    assert sorted(c["action_params"]["ip"] for c in cards) == sorted([STRANGER, other])
+    assert all(c["escalation_type"] == "account_compromised" for c in cards)
+
+
+def test_a_compromise_whose_block_fails_its_check_is_one_card(tmp_path, monkeypatch):
+    from unittest.mock import patch
+    import glorfindel.agent as agent
+    from glorfindel import escalations
+    build = agent._build_graph
+
+    def failing(memory, connector, *a, **k):
+        connector.verify_block_ip.return_value = {"verified": False, "method": "nsg"}
+        return build(memory, connector, *a, **k)
+    with patch.object(agent, "_build_graph", failing):
+        final, _ = _run_graph(tmp_path, monkeypatch, _compromise_signal(), "non_disruptive")
+    [card] = escalations.pending()
+    assert card["escalation_type"] == "verification_failed"
+    assert card["reason"].startswith("Compte peut-être compromis")
+
+
+def test_a_brute_force_whose_logins_cannot_be_read_is_said_to_a_human(tmp_path, monkeypatch):
+    """non_disruptive: the block runs, and a card says the login check could not be made."""
+    from glorfindel import escalations
+    lines = _attempts(STRANGER) + _login(STRANGER, minutes_ago=1)
+    p, rule, sent, _ = _poller(lines, rule_name="ssh-brute-force", fail=lambda q: "ProcessID" in q)
+    [sig] = p.poll_once(rule)
+    assert sig["raw_signal"]["first_result_row"]["LoginCheck"]["status"] == "unchecked"
+    final, connector = _run_graph(tmp_path, monkeypatch, sig, "non_disruptive")
+    connector.block_suspicious_ip.assert_called_once()
+    [card] = escalations.pending()
+    assert card["escalation_type"] == "compromise_unchecked" and STRANGER in card["reason"]
+    assert "journal illisible" in card["reason"]
+
+
+def test_an_account_carried_on_the_card_is_bounded():
+    lines = _attempts(STRANGER) + _login(STRANGER, account="a" * 200, minutes_ago=1)
+    p, rule, sent, _ = _poller(lines, rule_name="ssh-brute-force")
+    [sig] = p.poll_once(rule)
+    [login] = sig["raw_signal"]["first_result_row"]["SuccessfulLogins"]
+    assert login["account"] == "a" * 64
+
+
+def test_the_observation_report_names_a_compromise_card(tmp_path, monkeypatch):
+    from glorfindel import escalations
+    _run_graph(tmp_path, monkeypatch, _compromise_signal(), "non_disruptive")
+    by_action = escalations.observation_report()["by_action"]
+    assert list(by_action) == ["compte peut-être compromis (brute force puis connexion réussie)"]
+
+
+def test_the_sessions_of_the_last_seven_days_count_and_not_older():
+    """Jonathan, 02/11: the window is 7 days — a stranger's session 3 days old still makes a card;
+    8 days old, it is no longer read."""
+    p, rule, sent, _ = _poller(_login(BASTION) + _login(STRANGER, pid=4200, minutes_ago=3 * 24 * 60)
+                               + [_row(SUDO_I)])
+    assert STRANGER in _card(p, rule)["SessionOrigin"]
+    p, rule, sent, _ = _poller(_login(BASTION) + _login(STRANGER, pid=4200, minutes_ago=8 * 24 * 60)
+                               + [_row(SUDO_I, 0.5)])
+    assert p.poll_once(rule) == []
+
+
+def test_an_accepted_line_of_another_process_is_not_a_session():
+    """Only sshd writes « Accepted » for a session: the same words under another tag are not read."""
+    other = _row(f"Accepted publickey for admin1 from {STRANGER} port 1 ssh2", 5, process="cron", facility="auth")
+    p, rule, sent, _ = _poller(_login(BASTION) + [other, _row(SUDO_I)])
+    assert p.poll_once(rule) == [] and _journal()[0]["origin"] == BASTION
+
+
 def test_a_plain_brute_force_blocked_alone_makes_no_compromise_card(tmp_path, monkeypatch):
     from glorfindel import escalations
     p, rule, sent, _ = _poller(_attempts(STRANGER), rule_name="ssh-brute-force")

@@ -7413,7 +7413,7 @@ MUTANTS += [
      '            if identity({**row, "Correlation": COMPROMISED}) in seen:\n                row["Correlation"] = COMPROMISED\n',
      '            if identity({**row, "Correlation": COMPROMISED}) in seen:\n'),
     ("M2745", "a login check that fails not counted (COR1)", COR,
-     '            p.counts["unchecked"] += len(items)\n', ""),
+     "                _unchecked(p, row, lines)\n", "                pass\n"),
     ("M2746", "the compromise not sent first among a poll's cards (COR1)", "glorfindel/detection_rules.py",
      'send.sort(key=lambda r: (r.get("Correlation") == correlation.COMPROMISED, _gravity(r)), reverse=True)',
      "send.sort(key=_gravity, reverse=True)"),
@@ -7444,18 +7444,48 @@ MUTANTS += [
      '    graph.add_node("verify_action", lambda s: compromise_card(verify_action(s, connector=connector)))\n',
      '    graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))\n'),
     ("M2756", "a compromise not recognised in the graph (COR1)", "glorfindel/agent.py",
-     '    return any(isinstance(r, dict) and r.get("Correlation") == COMPROMISED\n',
-     '    return any(False and isinstance(r, dict) and r.get("Correlation") == COMPROMISED\n'),
+     '    return _correlation_row(signal).get("Correlation") == COMPROMISED\n', "    return False\n"),
     ("M2757", "a card held on a compromise does not say the account may be compromised (COR1)", "glorfindel/agent.py",
-     "    if _is_compromise(state[\"signal\"]) and \"compromis\" not in (state.get(\"escalation_reason\") or \"\"):\n",
+     '    if said and said[1].split(" :", 1)[0] not in (state.get("escalation_reason") or ""):\n',
      "    if False:\n"),
     ("M2758", "a compromise's card approvable in one click (COR1)", "glorfindel/agent.py",
-     'action="", escalation_type="account_compromised",', 'action="", escalation_type="low_confidence",'),
+     'action="", escalation_type=etype,', 'action="", escalation_type="low_confidence",'),
     ("M2759", "a compromise's card marked made but never written (COR1)", "glorfindel/agent.py",
      "    if not state.get(\"dry_run\", False):\n        from glorfindel import escalations\n        source, exercise_run = _cycle_source(signal)\n        action = state.get(\"action\") or \"aucune\"\n",
      "    if False:\n        from glorfindel import escalations\n        source, exercise_run = _cycle_source(signal)\n        action = state.get(\"action\") or \"aucune\"\n"),
 ]
 TESTS.update({f"M{n}": _COR for n in range(2755, 2760)})
+# COR1, its review (02/11): a compromise never folded into a card that does not say it, one
+# address one card, sshd's own Accepted lines, an unchecked brute force said. M3020–M3028.
+MUTANTS += [
+    ("M3020", "an Accepted line written under another tag read as a session (COR1, review)", COR,
+     '| where (SyslogMessage startswith "Accepted " and ProcessName in ("sshd", "sshd-session"))\n'
+     '    or SyslogMessage has "session opened"\n',
+     '| where SyslogMessage startswith "Accepted " or SyslogMessage has "session opened"\n'),
+    ("M3021", "a compromise folded into a pending card that does not say it: only occurrences move (COR1, review)",
+     "glorfindel/escalations.py",
+     "                material = material or rises or said\n", "                material = material\n"),
+    ("M3022", "a card re-fired at a higher severity keeps the lower one (COR1, review)", "glorfindel/escalations.py",
+     '                if rises:\n                    e["severity"] = severity\n', ""),
+    ("M3023", "a second compromise on the VM, from another address, folded into the first card (COR1, review)",
+     "glorfindel/agent.py",
+     '            action_params={"ip": str(ip)} if ip else None,\n', "            action_params=None,\n"),
+    ("M3024", "a compromise whose action failed its check: two cards, one approvable story lost (COR1, review)",
+     "glorfindel/agent.py",
+     '    if said is None or out.get("verified") is False or out.get("unverified"):\n', "    if said is None:\n"),
+    ("M3025", "a brute force whose logins could not be read not marked on its row (COR1, review)", COR,
+     '    row["LoginCheck"] = {"status": "unchecked", "why": why[:200]}\n', ""),
+    ("M3026", "an unchecked brute force never said to a human by the graph (COR1, review)", "glorfindel/agent.py",
+     '    if isinstance(check, dict) and check.get("status") == "unchecked":\n', "    if False:\n"),
+    ("M3027", "an account from a log line carried unbounded on the card (COR1, review)", COR,
+     'm["account"][:64]', 'm["account"]'),
+    ("M3028", "a compromise card counted under « ? » in the observation report (COR1, review)",
+     "glorfindel/escalations.py",
+     'if e.get("escalation_type") in _NO_ACTION_LABELLED else "") or "?"', 'if False else "") or "?"'),
+    ("M3029", "the sessions read over one day, not seven: a stranger's session of three days ago missed (COR1, Jonathan 02/11)",
+     COR, "SESSION_LOOKBACK_S = 7 * 24 * 3600\n", "SESSION_LOOKBACK_S = 24 * 3600\n"),
+]
+TESTS.update({f"M{n}": _COR for n in range(3020, 3030)})
 
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.

@@ -1828,48 +1828,70 @@ def execute_action(
     return {**state, "outcome": {**outcome, "executed": True, "action_s": action_s}}
 
 
+def _correlation_row(signal: dict) -> dict:
+    raw = signal.get("raw_signal") or {}
+    for r in (raw.get("first_result_row"), raw.get("detected_data")):
+        if isinstance(r, dict):
+            return r
+    return {}
+
+
 def _is_compromise(signal: dict) -> bool:
     """COR1 (#407): a brute force followed by a login from its address, marked by the
     RulePoller (`glorfindel.correlation`) — an account maybe compromised."""
     from glorfindel.correlation import COMPROMISED
-    raw = signal.get("raw_signal") or {}
-    return any(isinstance(r, dict) and r.get("Correlation") == COMPROMISED
-               for r in (raw.get("first_result_row"), raw.get("detected_data")))
+    return _correlation_row(signal).get("Correlation") == COMPROMISED
 
 
-def _compromise_text(signal: dict) -> str:
-    raw = signal.get("raw_signal") or {}
-    row = raw.get("first_result_row") or raw.get("detected_data") or {}
-    logins = [x for x in row.get("SuccessfulLogins") or [] if isinstance(x, dict)]
-    accounts = ", ".join(sorted({str(x.get("account") or "?") for x in logins})) or "?"
-    return (f"Compte peut-être compromis : brute force SSH puis connexion réussie depuis "
-            f"{row.get('SourceIP') or '?'} (compte : {accounts}) — corrélation COR1, revue humaine "
-            "toujours, quelle que soit l'action autonome.")
+def _correlation_said(signal: dict) -> tuple[str, str] | None:
+    """COR1: (card type, text) when the RulePoller's correlation must reach a human — an
+    account maybe compromised, or a brute force whose logins could not be checked."""
+    from glorfindel.escalations import COMPROMISE_MARK
+    row = _correlation_row(signal)
+    ip = row.get("SourceIP") or "?"
+    if _is_compromise(signal):
+        logins = [x for x in row.get("SuccessfulLogins") or [] if isinstance(x, dict)]
+        accounts = ", ".join(sorted({str(x.get("account") or "?")[:64] for x in logins})) or "?"
+        return "account_compromised", (
+            f"{COMPROMISE_MARK} : brute force SSH puis connexion réussie depuis {ip} (compte : "
+            f"{accounts}) — corrélation COR1, revue humaine toujours, quelle que soit l'action autonome.")
+    check = row.get("LoginCheck")
+    if isinstance(check, dict) and check.get("status") == "unchecked":
+        return "compromise_unchecked", (
+            f"Connexion après brute force non vérifiée : les connexions réussies depuis {ip} n'ont pas "
+            f"pu être lues ({str(check.get('why') or '?')[:160]}) — corrélation COR1, revue humaine.")
+    return None
 
 
 def compromise_card(state: GlorfindelState) -> GlorfindelState:
-    """COR1: a compromise is always said to a human (the Orchestre, 02/11, « précautionneux »).
-    After an autonomous action that ran and held, its card — `account_compromised`, never
-    approvable in one click; the action and its outcome stay as they are. A cycle that
-    escalates anyway (verification failed or unsure) already makes its card."""
+    """COR1: a compromise is always said to a human (the Orchestre, 02/11, « précautionneux »),
+    and so is a brute force whose logins could not be checked. After an autonomous action that
+    ran and held, its card — `account_compromised` (or `compromise_unchecked`), one per address,
+    never approvable in one click; the action and its outcome stay as they are. A cycle that
+    escalates anyway (verification failed or unsure) makes its card in `escalate_to_human`."""
     signal = state["signal"]
     out = state.get("outcome") or {}
-    if not _is_compromise(signal) or out.get("verified") is False or out.get("unverified"):
+    said = _correlation_said(signal)
+    if said is None or out.get("verified") is False or out.get("unverified"):
         return state
+    etype, text = said
     if not state.get("dry_run", False):
         from glorfindel import escalations
         source, exercise_run = _cycle_source(signal)
         action = state.get("action") or "aucune"
+        ip = _correlation_row(signal).get("SourceIP")
         escalations.record(
             signal_id=signal.get("signal_id", ""), resource_id=signal.get("resource_id", ""),
-            action="", escalation_type="account_compromised",
-            reason=f"{_compromise_text(signal)} Action autonome exécutée : {action}.",
+            action="", escalation_type=etype,
+            reason=f"{text} Action autonome exécutée : {action}.",
             run_id=(signal.get("context") or {}).get("run_id", ""),
             suggested_steps=["Changer le mot de passe et révoquer les clés SSH du compte.",
                              "Lister ses sessions et ce qu'il a lancé depuis la connexion (`last`, `journalctl`).",
                              "Bloquer l'adresse si ce n'est fait, puis juger la VM (isoler, restaurer)."],
             ttp=signal.get("ttp", ""), severity=signal.get("severity", ""),
             confidence=state.get("confidence", 0.0),
+            # One address, one card: a second compromise on the VM is never folded into the first.
+            action_params={"ip": str(ip)} if ip else None,
             rule_name=(signal.get("context") or {}).get("rule_name", ""),
             source=source, exercise_run=exercise_run, explanation=state.get("explanation", ""),
         )
@@ -1878,10 +1900,10 @@ def compromise_card(state: GlorfindelState) -> GlorfindelState:
 
 def escalate_to_human(state: GlorfindelState) -> GlorfindelState:
     """Mark the decision as escalated — human must approve before any action."""
-    if _is_compromise(state["signal"]) and "compromis" not in (state.get("escalation_reason") or ""):
-        # COR1: whatever the card, it says the account may be compromised.
-        state = {**state, "escalation_reason": f"{_compromise_text(state['signal'])} "
-                                               f"{state.get('escalation_reason') or ''}".strip()}
+    said = _correlation_said(state["signal"])
+    if said and said[1].split(" :", 1)[0] not in (state.get("escalation_reason") or ""):
+        # COR1: whatever the card, it says the account may be compromised (or unchecked).
+        state = {**state, "escalation_reason": f"{said[1]} {state.get('escalation_reason') or ''}".strip()}
     action = state["action"]
     # An action attempted but not completed carries its own escalation type:
     #   write_blocked  → credentials can't write (read-only SP / IAM 403) — capability gap

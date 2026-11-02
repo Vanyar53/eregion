@@ -7,7 +7,7 @@ it **Contributor on the whole subscription**. Now:
 - the response's role (infra/identities/glorfindel-response.json) holds every right the Azure
   adapter declares (glorfindel/providers/azure/capabilities.py) and nothing broad; the
   restore's role is never the watch's;
-- compose gives each service its own principal, the former single one as its fallback.
+- compose gives each service its own principal, and no fallback on the former single one (SEC11).
 Read from the files; no Azure.
 """
 from __future__ import annotations
@@ -115,20 +115,39 @@ def _role(name: str) -> dict:
 
 
 def test_the_response_role_holds_what_the_adapter_declares_and_nothing_broad():
+    """The response's role and the session drain's hold together what the adapter declares —
+    Run Command in the drain's alone (SEC11, R-03)."""
     from glorfindel.providers.azure.capabilities import CAPABILITIES
+    from glorfindel.providers.interface import SESSION_DRAIN
     response = _role("response")
     actions = set(response["Actions"])
     declared = set().union(*(c.rights for c in CAPABILITIES.capabilities))
-    assert declared and declared <= actions
+    drain = CAPABILITIES.rights(SESSION_DRAIN)
+    assert declared and declared - drain <= actions
+    assert not actions & drain and not any("runcommand" in a.lower() for a in actions)
+    assert set(_role("session-drain")["Actions"]) == drain
     # The snapshot: an on-demand backup of the vault, never its restore.
     assert "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/backup/action" in actions
-    for role in (response, _role("restore")):
+    for role in (response, _role("restore"), _role("session-drain")):
         assert role["IsCustom"] is True and not role["DataActions"] and not role["NotActions"]
         for a in role["Actions"]:
             assert "*" not in a and not a.lower().startswith("microsoft.authorization/"), a
             assert not a.lower().endswith("/delete") or "securityrules" in a.lower(), a
         assert role["AssignableScopes"] == ["/subscriptions/<SUBSCRIPTION_ID>"]   # a placeholder, never an id
     assert not any("restore" in a.lower() or "deallocate" in a.lower() for a in actions)
+
+
+def test_the_session_drain_is_run_command_alone_given_vm_by_vm():
+    """SEC11 (R-03): the watch's strongest right — a root command on a VM — out of the response's
+    role, which goes on whole groups, into a role of its own that goes on each enrolled VM."""
+    drain = _role("session-drain")
+    assert drain["Name"] == "Eregion Glorfindel Session Drain"
+    assert drain["Actions"] == ["Microsoft.Compute/virtualMachines/runCommand/action"]
+    assert "VM by VM" in drain["Description"] and "never on a resource group" in drain["Description"]
+    ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    grants = [ln for ln in _logical_lines(ops) if "Eregion Glorfindel Session Drain" in ln
+              and "az role assignment create" in ln]
+    assert grants and all("--scope $vm" in ln for ln in grants), grants
 
 
 def test_the_restore_role_restores_and_nothing_of_the_network():
@@ -147,7 +166,10 @@ def _render(spec: str, env: dict) -> str:
     return env.get(m.group(1)) or _render(m.group(2), env)
 
 
-def test_each_service_of_glorfindel_has_its_own_principal_and_the_single_one_as_fallback(monkeypatch):
+def test_each_service_of_glorfindel_has_its_own_principal_and_no_fallback(monkeypatch):
+    """SEC11 (V-17): an empty pair fell back on AZURE_CLIENT_*, the former shared principal
+    (Contributor on the subscription where it still lingers). Now a service without its own pair
+    has no service principal at all — the VM's managed identity, or none."""
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     env = {name: s.get("environment") or {} for name, s in compose["services"].items()}
     own = {"watch": "GLORFINDEL_AZURE_CLIENT", "war-room": "EREGION_CONSOLE_AZURE_CLIENT",
@@ -157,7 +179,9 @@ def test_each_service_of_glorfindel_has_its_own_principal_and_the_single_one_as_
     for service, prefix in own.items():
         assert _render(str(env[service]["AZURE_CLIENT_SECRET"]), dotenv) == each[service], service
         assert _render(str(env[service]["AZURE_CLIENT_SECRET"]), {"AZURE_CLIENT_SECRET": "shared-value"}) \
-            == "shared-value", service
+            == "", service
+        assert _render(str(env[service]["AZURE_CLIENT_ID"]), {"AZURE_CLIENT_ID": "shared-id"}) == "", service
+        assert "AZURE_CLIENT_ID:-" not in str(env[service]["AZURE_CLIENT_ID"]).replace(f"{prefix}_ID:-", ""), service
         assert _render(str(env[service]["AZURE_CLIENT_ID"]), {f"{prefix}_ID": "x"}) == "x", service
     rendered = {s: {_render(str(v), dotenv) for v in e.values()} for s, e in env.items()}
     for service, value in each.items():
@@ -196,6 +220,12 @@ def test_a_principal_without_its_pair_is_said_at_start(env, said):
         assert "paire incomplète" in res.stdout and said in res.stdout
     else:
         assert "paire incomplète" not in res.stdout
+    # SEC11 (V-17): a service without any pair starts without a service principal — said, by name.
+    alone = {"watch": "GLORFINDEL_AZURE_CLIENT_ID", "console": "EREGION_CONSOLE_AZURE_CLIENT_ID",
+             "bot": "GLORFINDEL_BOT_AZURE_CLIENT_ID"}
+    for service, var in alone.items():
+        none_set = var not in env and var.replace("_ID", "_SECRET") not in env
+        assert (f"ℹ {service} : aucune paire" in res.stdout) is none_set, service
     secret = {"GLORFINDEL_BOT_AZURE_CLIENT_SECRET": "hy1-canary-bot"}
     res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), "check-azure-env",
                           "AZURE_SUBSCRIPTION_ID=s"], env={**base, **secret}, capture_output=True, text=True,
@@ -216,7 +246,8 @@ def test_the_audit_and_the_readiness_advise_no_broad_role_and_never_the_restore_
 
     from glorfindel import audit, readiness
     names = {json.loads(p.read_text(encoding="utf-8"))["Name"] for p in ROLES.glob("*.json")}
-    assert names == {"Eregion Glorfindel Response", "Eregion Glorfindel Restore"}
+    assert names == {"Eregion Glorfindel Response", "Eregion Glorfindel Restore",
+                     "Eregion Glorfindel Session Drain"}
     for module in (audit, readiness):
         text = re.sub(r"""["']\s*\n\s*f?["']""", "", inspect.getsource(module))
         roles = re.findall(r"--role\s+(?:'([^']+)'|(\S+))", text)
@@ -251,3 +282,17 @@ def _audit_checks_failing_on_iam():
         got = fn(*args)
         out += got if isinstance(got, list) else [got]
     return [x for x in out if x.status == "fail"]
+
+
+def test_a_watch_without_its_own_principal_says_so():
+    """SEC11 (V-17): no fallback — the watch started without a service principal says it, and
+    which identity it then has; with one, it says nothing."""
+    from glorfindel.cli import identity_note
+    assert "no service principal" in identity_note({}, in_container=False)
+    assert "az login" in identity_note({"AZURE_CLIENT_ID": " "}, in_container=False)
+    # In a container on a workstation, the machine's `az login` is not there: no identity, said.
+    inside = identity_note({}, in_container=True)
+    assert "no identity at all" in inside and "az login" not in inside and "managed identity" in inside
+    assert identity_note({"AZURE_CLIENT_ID": "app-id"}) == ""
+    src = (ROOT / "glorfindel" / "cli.py").read_text(encoding="utf-8")
+    assert 'console.print(f"[bold]Identity:[/bold] {_identity}")' in src

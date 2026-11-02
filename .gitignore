@@ -17,6 +17,8 @@ build/
 .envrc
 *.tfvars
 !*.tfvars.example
+# SEC11 : la liste des VM dont H0 coupe les sessions, sans secret, gardée au dépôt.
+!infra/glorfindel-host/session_drain.auto.tfvars
 secrets.yaml
 glorfindel-config.yaml
 

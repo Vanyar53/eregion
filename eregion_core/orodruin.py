@@ -7,7 +7,8 @@ guardrails hold — otherwise the injector stays passive and touches nothing.
                           there cover what the injectors read; what they write, granted at
                           the scope of a VM or an experiment of it, never on the whole
                           group (which VMs: Terraform's choice, by their tags — the
-                          contract does not read their inscription; O0 does, at each run)
+                          contract does not read their inscription; O0 does, at each run);
+                          and nothing else: what it holds is an allow-list (SEC11)
         network           a connection outside the perimeter fails
         cap               the declared cap is read and compared to the ceiling
         kill              revoke the identity, cancel the chaos experiments, stop the
@@ -73,6 +74,29 @@ REQUIRED_ACTIONS = READ_ACTIONS + WRITE_ACTIONS
 # The resource type each write is granted on — its scope, inside the bench.
 _WRITE_SCOPE = {**{a: "/providers/microsoft.compute/virtualmachines/" for a in VM_ACTIONS},
                 **{a: "/providers/microsoft.chaos/experiments/" for a in CHAOS_ACTIONS}}
+# Log Analytics Reader as Azure defines it — the built-in role infra/orodruin/main.tf gives on
+# the bench's workspace: Gothmog reads its fault's effect there, through ARM. At a workspace's
+# scope these reach that workspace only (a support ticket is the subscription's, out of reach).
+# Its actions, and its data action (read_identity marks it "data:"); its notAction (the shared
+# keys) only narrows it.
+LOGS_READER_ACTIONS = (
+    "*/read",
+    "Microsoft.OperationalInsights/workspaces/analytics/query/action",
+    "Microsoft.OperationalInsights/workspaces/search/action",
+    "Microsoft.Support/*",
+)
+LOGS_READER_DATA_ACTIONS = (
+    "Microsoft.OperationalInsights/workspaces/jobs/export/action",
+)
+# SEC11 (V-29): what the identity may HOLD inside the bench, by the kind of scope a role is
+# assigned at — an allow-list, not a list of what is refused. Every action of the role must be
+# one of these, as written (a wildcard is not expanded): any other right, a data action, a role
+# that cannot be read, is a missing guarantee (A0: an unknown right refuses). Network
+# Contributor on the group, which grants none of the injectors' writes, refuses too.
+_HELD_AT = (("/providers/microsoft.compute/virtualmachines/", VM_ACTIONS),
+            ("/providers/microsoft.chaos/experiments/", CHAOS_ACTIONS),
+            ("/providers/microsoft.operationalinsights/workspaces/",
+             LOGS_READER_ACTIONS + tuple(f"data:{a}" for a in LOGS_READER_DATA_ACTIONS)))
 # The one kind of assignment allowed outside the bench: reading role assignments, so
 # the identity can prove it holds nothing else (a read at the bench's scope cannot see
 # the subscription's).
@@ -189,6 +213,18 @@ def _allowed(action: str, perms: list[dict]) -> bool:
     )
 
 
+def allowed_at(scope: str, bench: str) -> frozenset[str]:
+    """What a role assigned at ``scope``, inside ``bench``, may hold (lower case): on the group
+    itself, the injectors' reads; on one of its VMs, experiments or workspaces, that kind's
+    rights besides — the reads there are narrower than the group's (SEC11, V-29)."""
+    reads = frozenset(a.lower() for a in READ_ACTIONS)
+    rest = scope.lower().rstrip("/")[len(bench.rstrip("/")):]
+    for kind, actions in _HELD_AT:
+        if rest.startswith(kind) and rest[len(kind):] and "/" not in rest[len(kind):]:
+            return reads | {a.lower() for a in actions}
+    return reads
+
+
 def _grants(action: str, actions: set[str]) -> bool:
     """A role's actions (lower case, as ``role_actions`` lists them) grant ``action``."""
     a = action.lower()
@@ -224,6 +260,13 @@ def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[
                                      f"{', '.join(wide)} on the whole of {bench}: a write right "
                                      "goes on each enrolled VM or experiment, never on the group"))
                 continue
+            # SEC11 (V-29): an allow-list — nothing it holds there but what the injectors need.
+            unlisted = sorted(actions - allowed_at(scope, bench)) if actions else ["(role unreadable)"]
+            if unlisted:
+                missing.append(_miss("identity_unlisted_right",
+                                     f"{', '.join(unlisted)} at {scope}: not a right the injectors "
+                                     "need there"))
+                continue
             for w in wide:
                 if _WRITE_SCOPE[w] in scope.lower():
                     granted_on[w].append(scope)
@@ -251,6 +294,17 @@ def assess_identity(assignments: list[dict], role_actions: Callable[[str], list[
     if wide and not any(m["code"] == "identity_group_wide" for m in missing):
         missing.append(_miss("identity_group_wide",
                              f"{', '.join(wide)} effective on the whole of {bench}"))
+    # SEC11 (V-29): what is effective on the group — from an assignment on it, above it, or one
+    # the listing did not show — is the reads, and the role-assignment read of the contract.
+    held = frozenset(a.lower() for a in READ_ACTIONS) | AUTHZ_READ_ONLY
+    writes = {w.lower() for w in WRITE_ACTIONS}
+    extra = sorted({x for p in perms for x in (p.get("actions") or [])
+                    if x.lower() not in held and x.lower() not in writes}
+                   | {f"data:{x}" for p in perms for x in (p.get("dataActions") or [])})
+    if extra:
+        missing.append(_miss("identity_unlisted_right",
+                             f"{', '.join(extra)} effective on the whole of {bench}: not a right "
+                             "the injectors need"))
     for action, scopes in granted_on.items():
         # No experiment in the group (Celebrimbor's chaos is off by default): nothing to start
         # or cancel, and Gothmog finds no experiment to run — the chaos rights are not asked.

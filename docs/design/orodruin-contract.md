@@ -31,7 +31,7 @@ Six garanties. Chacune a un mécanisme, et une vérification qui ne demande **au
 | Garantie | Mécanisme | Vérifiée par |
 |---|---|---|
 | Périmètre réseau | sortie limitée au banc, aux API de contrôle du cloud et à l'API du modèle | une connexion hors périmètre échoue |
-| Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque ; sans expérience dans le groupe (Chaos Studio non enregistré sur l'abonnement : `MissingSubscriptionRegistration` ou `NoRegisteredProviderFound`, quel que soit le statut — SEC7, à mesurer), les droits du chaos ne sont pas demandés |
+| Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) ; ce qu'elle tient est une liste d'autorisations (SEC11) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque ; un droit hors de la liste de sa portée = manque ; sans expérience dans le groupe (Chaos Studio non enregistré sur l'abonnement : `MissingSubscriptionRegistration` ou `NoRegisteredProviderFound`, quel que soit le statut — SEC7, à mesurer), les droits du chaos ne sont pas demandés |
 | Cibles inscrites | l'inscription est revérifiée à chaque injection | refus sans inscription (O0, déjà en place) |
 | Plafond | limite de l'orchestrateur, ou quota | configuration effective lue |
 | Arrêt d'urgence | révoquer l'identité, tout arrêter | essai à blanc en CI |
@@ -476,6 +476,37 @@ tous les injecteurs neufs refusent (« names no perimeter »), le sens fermé �
 version SEC5 ; `--without-glorfindel` reste possible hors production. En profil local, un vieil
 injecteur (une image d'avant SEC5) lit la copie de la watch neuve, devenue du JSON, comme une date
 illisible, et refuse aussi : `make build`.
+
+## SEC11 — une liste d'autorisations, pas une liste de refus (#417, 02/11)
+
+Le contrat refusait quatre écritures (démarrer une VM, Run Command, démarrer ou annuler une
+expérience) sur le groupe entier, et laissait passer le reste : un rôle large qui n'en contient
+aucune — `Network Contributor` sur le groupe du banc, par exemple — armait encore Orodruin.
+Désormais, ce que l'identité **tient** dans le banc est une liste, par genre de portée
+(`eregion_core/orodruin.py`, `allowed_at`) :
+
+| Portée de l'attribution | Ce qu'un rôle peut y tenir | Pourquoi |
+|---|---|---|
+| le groupe du banc | les lectures des injecteurs (`READ_ACTIONS`) | Annatar lit la VM, ses NSG, cartes et sous-réseaux ; Gothmog lit les expériences |
+| une VM du groupe | ces lectures, `start`, `runCommand` (`VM_ACTIONS`) | Annatar démarre une VM arrêtée et y lance son script |
+| une expérience du groupe | ces lectures, démarrer et annuler (`CHAOS_ACTIONS`) | Gothmog lance la panne et peut l'arrêter |
+| l'espace de logs du banc | ces lectures, `Log Analytics Reader` tel qu'Azure le définit (`LOGS_READER_ACTIONS` : `*/read`, les deux actions de requête, `Microsoft.Support/*` ; `LOGS_READER_DATA_ACTIONS` : son action de données, `workspaces/jobs/export/action`, que la lecture marque `data:` ; son `notAction`, les clés partagées, ne fait que le restreindre) | Gothmog relit l'effet de sa panne dans les logs, par l'API de contrôle. À cette portée, ces droits n'atteignent que l'espace de logs : un ticket de support relève de l'abonnement |
+
+Chaque action d'un rôle doit y figurer **telle qu'elle est écrite** : un joker n'est pas déplié
+(`Microsoft.Compute/virtualMachines/*` sur une VM refuse), une action de données refuse, un rôle
+illisible refuse, une portée plus bas qu'une VM (une extension) n'a que les lectures. Sur le
+groupe, les droits effectifs relus (qui comptent aussi une attribution au-dessus du banc, ou une
+que la liste n'a pas montrée) ne peuvent être que ces lectures et la lecture des attributions du
+contrat (`contract_reader`, sur l'abonnement). Le reste → `identity_unlisted_right` → `passive`,
+avec l'action et la portée dans le détail. Les attributions hors du banc ne changent pas : la
+lecture des attributions, les deux conteneurs des canaux.
+
+Ce que `infra/orodruin/main.tf` donne tient dans cette liste sans changement : les trois rôles
+d'injecteur et `Log Analytics Reader` sur l'espace de logs. Un test lie la liste à ce rôle, et un autre relit sa définition publiée (JSON exact, action de données comprise) par la vraie lecture du contrat (`read_identity`) : `armed`.
+**À constater après le prochain `orodruin-check`** : `armed`. Si Azure définissait `Log Analytics
+Reader` autrement que la liste, le contrat dirait `identity_unlisted_right` en nommant l'action en
+trop — l'échec est fermé, et il se corrige dans la liste, après lecture de la définition
+(`az role definition list --name "Log Analytics Reader"`). Mutants M2883–M2887.
 
 ## L'image des injecteurs (CI3, #267, 29/10)
 

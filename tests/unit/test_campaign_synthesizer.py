@@ -35,7 +35,7 @@ def catalog():
 def test_synthesize_implemented_nondestructive(tmp_path, catalog):
     entry = catalog["T1110.001"]
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, seq=1,
     )
     assert res.ok, res.reason
@@ -60,7 +60,7 @@ def test_syslog_window_floor_covers_p99(tmp_path, catalog):
     assert entry["log_source"] == "Syslog"
     assert int(entry["expected_latency_s"]) + 120 < 480  # would underrun without floor
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, seq=1,
     )
     assert res.ok, res.reason
@@ -74,7 +74,7 @@ def test_syslog_catalog_latency_drives_window_above_floor(tmp_path, catalog):
     entry = catalog["T1110.001"]
     assert int(entry["expected_latency_s"]) == 480
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, seq=1,
     )
     assert res.ok, res.reason
@@ -87,7 +87,7 @@ def test_non_syslog_window_uses_latency_plus_margin(tmp_path, catalog):
     entry = catalog["T1041"]
     assert entry["log_source"] == "StorageBlobLogs"
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, seq=1,
     )
     assert res.ok, res.reason
@@ -99,7 +99,7 @@ def test_non_syslog_window_uses_latency_plus_margin(tmp_path, catalog):
 def test_planned_technique_refused(tmp_path, catalog):
     entry = catalog["T1070.002"]  # status: planned
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert not res.ok
     assert "implemented" in res.reason
@@ -108,7 +108,7 @@ def test_planned_technique_refused(tmp_path, catalog):
 def test_out_of_scope_refused(tmp_path, catalog):
     entry = catalog["T1110.001"]
     res = synthesize(
-        entry=entry, target_resource_id=PROD_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=PROD_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert not res.ok
     assert "out of scope" in res.reason
@@ -118,7 +118,7 @@ def test_out_of_scope_refused(tmp_path, catalog):
 def test_destructive_refused_without_budget(tmp_path, catalog):
     entry = catalog["T1486"]  # destructive + requires_testdata
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, allow_destructive=False,
     )
     assert not res.ok
@@ -128,7 +128,7 @@ def test_destructive_refused_without_budget(tmp_path, catalog):
 def test_destructive_allowed_with_budget_has_setup(tmp_path, catalog):
     entry = catalog["T1486"]
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, allow_destructive=True,
     )
     assert res.ok, res.reason
@@ -143,7 +143,7 @@ def test_destructive_without_safe_target_refused(tmp_path, catalog):
     entry["destructive"] = True
     entry["safe_target"] = ""
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, allow_destructive=True,
     )
     assert not res.ok
@@ -154,7 +154,7 @@ def test_missing_reference_script_refused(tmp_path, catalog):
     entry = dict(catalog["T1110.001"])
     entry["reference_script"] = "scripts/vm/does_not_exist.sh"
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert not res.ok
     assert "not found" in res.reason
@@ -177,7 +177,7 @@ def test_synthesize_atomic_is_an_e1_experiment_no_steps(tmp_path, catalog):
     # The atomic entry synthesizes an E1 experiment: no steps, the engine_ref, the probes —
     # and it passes the E1 schema (the campaign runner then plays it through the atomic engine).
     res = synthesize(
-        entry=catalog[ATOMIC_TTP], target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=catalog[ATOMIC_TTP], target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, seq=1,
     )
     assert res.ok, res.reason
@@ -199,7 +199,7 @@ def test_atomic_never_falls_back_to_a_script(tmp_path, catalog):
     entry = dict(catalog[ATOMIC_TTP])
     entry["reference_script"] = "scripts/vm/account_creation_sim.sh"  # exists on disk
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert res.ok, res.reason
     data = yaml.safe_load(res.path.read_text())
@@ -212,7 +212,7 @@ def test_atomic_without_engine_ref_refused(tmp_path, catalog):
     entry = dict(catalog[ATOMIC_TTP])
     entry.pop("engine_ref", None)
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert not res.ok
     assert "engine_ref" in res.reason
@@ -225,7 +225,7 @@ def test_atomic_with_unknown_engine_ref_refused(tmp_path, catalog):
     entry = dict(catalog[ATOMIC_TTP])
     entry["engine_ref"] = "T1136.001/00000000-0000-0000-0000-000000000000"
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert not res.ok
     assert "unresolved" in res.reason
@@ -236,7 +236,7 @@ def test_atomic_without_probes_refused(tmp_path, catalog):
     entry = dict(catalog[ATOMIC_TTP])
     entry["steady_state"] = {"probes": []}
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert not res.ok
     assert "steady_state probe" in res.reason
@@ -245,7 +245,7 @@ def test_atomic_without_probes_refused(tmp_path, catalog):
 
 def test_atomic_out_of_scope_refused(tmp_path, catalog):
     res = synthesize(
-        entry=catalog[ATOMIC_TTP], target_resource_id=PROD_VM, scope=Scope(),
+        entry=catalog[ATOMIC_TTP], target_resource_id=PROD_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path,
     )
     assert not res.ok
@@ -262,7 +262,7 @@ def test_atomic_synthesizes_without_jsonschema(tmp_path, catalog, monkeypatch):
     monkeypatch.setitem(sys.modules, "jsonschema", None)  # `import jsonschema` → ImportError
     monkeypatch.setattr(experiment_mod, "EXPERIMENT_SCHEMA", tmp_path / "absent.schema.json")
     res = synthesize(
-        entry=catalog[ATOMIC_TTP], target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=catalog[ATOMIC_TTP], target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path / "scenarios", seq=1,
     )
     assert res.ok, res.reason
@@ -281,7 +281,7 @@ def test_atomic_raising_validation_leaves_no_file(tmp_path, catalog, monkeypatch
 
     monkeypatch.setattr(syn, "_runtime_atomic_errors", _boom)
     res = synthesize(
-        entry=catalog[ATOMIC_TTP], target_resource_id=SANDBOX_VM, scope=Scope(),
+        entry=catalog[ATOMIC_TTP], target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"),
         out_dir=tmp_path, seq=1,
     )
     assert not res.ok
@@ -295,7 +295,7 @@ def test_atomic_probe_without_expect_refused(tmp_path, catalog):
     entry = dict(catalog[ATOMIC_TTP])
     entry["steady_state"] = {"probes": [{"name": "p", "verify": "true", "expect": "   "}]}
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert not res.ok
     assert "verify and expect" in res.reason
@@ -307,7 +307,7 @@ def test_destructive_atomic_refused_without_allow_destructive(tmp_path, catalog)
     # marked destructive is refused without budget.allow_destructive, even with a safe_target.
     entry = {**catalog[ATOMIC_TTP], "destructive": True, "safe_target": "sandbox_disposable"}
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
     )
     assert not res.ok
     assert "allow_destructive" in res.reason
@@ -317,7 +317,7 @@ def test_destructive_atomic_refused_without_allow_destructive(tmp_path, catalog)
 def test_destructive_atomic_refused_without_safe_target(tmp_path, catalog):
     entry = {**catalog[ATOMIC_TTP], "destructive": True, "safe_target": ""}
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
         allow_destructive=True,
     )
     assert not res.ok
@@ -329,7 +329,7 @@ def test_destructive_atomic_allowed_with_budget_and_safe_target(tmp_path, catalo
     # Both conditions met → synthesized, and the experiment says it is destructive.
     entry = {**catalog[ATOMIC_TTP], "destructive": True, "safe_target": "sandbox_disposable"}
     res = synthesize(
-        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(), out_dir=tmp_path,
+        entry=entry, target_resource_id=SANDBOX_VM, scope=Scope(subscription_id="sub-1"), out_dir=tmp_path,
         allow_destructive=True,
     )
     assert res.ok, res.reason

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from eregion_core.models import glorfindel_model
+# #205: empty AZURE_CLIENT_* dropped before any Azure call — in the shared core since BL1c,
+# where the console and the analysis commands take it too.
+from eregion_core.identity import drop_empty_service_principal_env as _drop_empty_service_principal_env
 
 import contextlib
 import json
@@ -209,23 +212,6 @@ class _GlorfindelCli(click.Group):
                 )
             console.print("[dim]  (GLORFINDEL_DEBUG=1 pour la stack complète)[/dim]")
             ctx.exit(1)
-
-
-_SERVICE_PRINCIPAL_VARS = ("AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID")
-
-
-def _drop_empty_service_principal_env(environ=os.environ) -> list[str]:
-    """Unset AZURE_CLIENT_ID/SECRET/TENANT_ID when they are empty; returns the names dropped.
-
-    azure-identity's EnvironmentCredential takes an empty variable for a set one (`is not
-    None`): docker compose passes `${AZURE_CLIENT_ID:-}` as "" when the host has no service
-    principal, and DefaultAzureCredential then fails on ClientSecretCredential("") instead
-    of reaching the VM's managed identity. Measured on the hosted Glorfindel (H0), 16/10.
-    """
-    dropped = [k for k in _SERVICE_PRINCIPAL_VARS if k in environ and not environ[k].strip()]
-    for k in dropped:
-        del environ[k]
-    return dropped
 
 
 @click.group(cls=_GlorfindelCli)
@@ -1510,8 +1496,11 @@ def report(since_text: str, as_json: bool):
     """What the observation measured: the operator's verdicts on Glorfindel's
     recommendations, and the false rate of the disruptive ones (isolate, block)."""
     import json as _json
-    from glorfindel import escalations
-    r = escalations.observation_report(_since(since_text))
+    from glorfindel import escalations, expected_sudo
+    since = _since(since_text)
+    r = escalations.observation_report(since)
+    # ADM1: the administrators' sudo that opened no card — counted, never silent.
+    r["expected_sudo"] = expected_sudo.summary(since)
     if as_json:
         click.echo(_json.dumps(r, indent=2))
         return
@@ -1534,6 +1523,34 @@ def report(since_text: str, as_json: bool):
         console.print(f"Block recommendations: {b['cards']} card(s) for {b['distinct_ips']} distinct IP(s)")
     if r.get("exercises"):
         console.print(f"[dim]{r['exercises']} exercise card(s) left out (an injector's window covered the VM)[/dim]")
+    _print_expected_sudo(r["expected_sudo"])
+
+
+def _print_expected_sudo(es: dict) -> None:
+    """ADM1: the sudo set aside as the administrators' expected ones, in `glorfindel report`.
+    Every text here comes from a log line (an account, a command): printable only, no markup."""
+    def shown(text) -> str:
+        return _esc_markup("".join(c for c in str(text) if c.isprintable()))
+
+    if es.get("error"):
+        console.print(f"[yellow]Expected sudo: journal unreadable — {shown(es['error'])}[/yellow]")
+        return
+    if es.get("unreadable"):
+        console.print(f"[yellow]Expected sudo: {es['unreadable']} journal line(s) unreadable[/yellow]")
+    if not es.get("count"):
+        if es.get("journal_from"):
+            console.print("Expected sudo (no card, ADM1): 0 in this period")
+        return
+    per_vm = ", ".join(f"{shown(k)} {v}" for k, v in sorted(es["by_asset"].items()))
+    per_account = ", ".join(f"{shown(k)} {v}" for k, v in sorted(es["by_account"].items()))
+    console.print(f"Expected sudo (no card, ADM1): [bold]{es['count']}[/bold] — per VM: {per_vm} · "
+                  f"per account: {per_account}")
+    for e in es.get("latest") or []:
+        console.print(f"[dim]  {shown(e['at'][:19])}  {shown(e['asset'])}  {shown(e['account'])}  "
+                      f"{shown(e['command'])}[/dim]")
+    if es.get("journal_from"):
+        console.print(f"[dim]  journal from {shown(es['journal_from'][:19])} "
+                      f"(~/.glorfindel/expected_sudo.jsonl)[/dim]")
 
 
 @cli.command()

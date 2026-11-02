@@ -250,6 +250,11 @@ eregion_core/
                         les sept clés), `identity` (`metrics.run_format`, `kind`, `injector`, `experiment_id`),
                         `read_run` / `read_reports` (la vue unifiée, rapports d'avant C1 compris), `timeline`
                         (attaque, détection, décision, action vérifiée d'un incident).
+  identity.py         → #205, BL1c : `drop_empty_service_principal_env` retire les `AZURE_CLIENT_*` vides que
+                        compose passe sur un hôte sans principal (sinon `DefaultAzureCredential` n'atteint pas
+                        l'identité managée) ; appelée par `glorfindel`, `eregion console` et `check_enrollment`
+                        (analysis/campaign_report.py : le rapport, la mesure, le triage, l'index lancés seuls)
+                        — dans le cœur pour qu'aucun n'importe l'autre (D1).
 
 scripts/console_escaping.py → #254, #257 : rien du dehors n'est écrit brut dans la console — suit ce que peut
                         contenir chaque ${…} d'un gabarit HTML, chaque valeur donnée à innerHTML et chaque
@@ -400,7 +405,12 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 livrée. Hors du dépôt : une mise à jour ne la touche jamais (conteneurs : base `:ro`)
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
-  rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error)
+  rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;
+                                `expected_sudo` : count, last — ADM1, lu par la console)
+  expected_sudo.jsonl         → ADM1 : chaque sudo d'administrateur attendu écarté par le RulePoller (at, rule,
+                                asset, account, command ≤ 300 car., logged_at), écrit AVANT d'écarter — un journal
+                                qu'on ne peut écrire n'écarte rien ; 0600 ; au-delà de 2 Mo, la moitié la plus
+                                récente gardée. Lu par `glorfindel report`
   readiness.json              → verrou L6 par VM, clé `nom--hash(ID)` (quatrième passe Q3 : un homonyme héritait du
                                 verdict « prête ») ; un nom seul ambigu ne résout rien → VM retenue : dernier contrôle de préparation + réserves acceptées
                                 (active_since, alerted) — écrit par le watch (tracker) et la console

@@ -900,6 +900,7 @@ async def config() -> dict:
             from glorfindel.detection_rules import (
                 _load_status,
                 detection_inert,
+                expected_counts,
                 load_config,
             )
             cfg = load_config(rules_path, glorfindel_cfg=glorfindel_cfg)
@@ -966,6 +967,8 @@ async def config() -> dict:
                     "last_match": s.get("last_match", ""),
                     "last_error": s.get("last_error", ""),
                     "match_count": s.get("match_count", 0),
+                    # ADM1: the administrators' sudo that opened no card, counted.
+                    **expected_counts(s),
                 })
         except Exception:
             pass

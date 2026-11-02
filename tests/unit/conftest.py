@@ -322,6 +322,9 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     # P1: the client's layer of detection rules (approved rules land there).
     import glorfindel.detection_rules as detection_rules
     monkeypatch.setattr(detection_rules, "_CLIENT_RULES_FILE", home / "client_rules.yaml")
+    # ADM1: the journal of the administrators' expected sudo.
+    import glorfindel.expected_sudo as expected_sudo
+    monkeypatch.setattr(expected_sudo, "_JOURNAL", home / "expected_sudo.jsonl")
     monkeypatch.setattr(discovery, "_CACHE_FILE", home / "discovered_assets.json")
     monkeypatch.setattr(IncidentRegistry, "_DEFAULT_PATH", home / "incidents.jsonl")
     monkeypatch.setattr(readiness, "_STATE_FILE", home / "readiness.json")

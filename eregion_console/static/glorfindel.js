@@ -939,11 +939,14 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     }
     const dc  = r.last_error ? 'var(--red)' : r.last_poll ? 'var(--green)' : 'var(--dim)';
     const mt  = r.last_match ? `<span style="color:${_matchColor(r.last_match)};font-size:9px;margin-left:auto;flex-shrink:0">${_relTime(r.last_match)}</span>` : '';
+    // ADM1: the administrators' expected sudo set aside — counted here, never silent.
+    const ex  = r.expected_count > 0 ? `<span style="color:var(--dim);font-size:9px;flex-shrink:0" title="${_attr(`${r.expected_count} expected sudo set aside, no card (ADM1) — glorfindel report`)}">${_attr(r.expected_count)} expected</span>` : '';
     return `<div class="row rule-item" ${_on('click', 'showRuleByIdx', idx)}
       style="padding:3px 4px;font-size:10px">
       <span style="color:${dc};font-size:9px">●</span>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_attr(r.name)}">${_attr(r.name)}</span>
       ${r.ttp ? `<span style="color:var(--dim);font-size:9px">${_attr(r.ttp)}</span>` : ''}
+      ${ex}
       ${mt}
       <span style="color:var(--dim);font-size:9px">▸</span>
     </div>`;
@@ -2626,6 +2629,10 @@ function showRuleDetail(rule) {
       : rule.last_poll
         ? `polled ${_relTime(rule.last_poll)} · no match yet`
         : 'not polled yet';
+  // ADM1: the sudo set aside as the administrators' expected ones (no card), counted.
+  const expectedTxt = rule.expected_count > 0
+    ? `${rule.expected_count} expected sudo set aside, no card · last ${_relTime(rule.expected_last)} — glorfindel report lists them`
+    : '';
 
   document.getElementById('modal-title').textContent =
     `${rule.name}${rule.ttp ? '  ·  ' + rule.ttp : ''}`;
@@ -2644,6 +2651,7 @@ function showRuleDetail(rule) {
           : '<span class="cfg-badge dim">no match</span>'}
     </div>
     <div style="font-size:10px;color:var(--dim);margin-bottom:8px">${_attr(statusTxt)}</div>
+    ${expectedTxt ? `<div style="font-size:10px;color:var(--dim);margin-bottom:8px">${_attr(expectedTxt)}</div>` : ''}
     <div style="font-size:10px;color:var(--dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px">Query</div>
     <div class="modal-query">${_attr((rule.query || '').trim())}</div>`;
 

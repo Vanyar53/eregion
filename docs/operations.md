@@ -295,7 +295,7 @@ make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAM
 #   par les tests. Une entrée destructive (atomic ou script) demande --allow-destructive et un
 #   safe_target. Manifeste et scénarios dans ~/runs/campaigns/<id>/ (bind-monté). La commande n'est
 #   pas répétée à l'écran (CAMPAIGN_TARGET porte l'abonnement).
-make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (watch H0 en human_only — rien ne s'isole) ; refusée sans watch vivante (V1)
+make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (la watch de H0 répond selon le mode de chaque VM : gondolin non_disruptive) ; refusée sans watch vivante (V1)
 #   Chaque run passe par le moteur de son expérience (atomic ou script) ; sa détection (detected/
 #   missed/unknown) et sa latence (#157) arrivent dans le manifeste, comme pour un run seul. Le reset
 #   entre scénarios (glorfindel reset) n'est pas dans l'image d'Orodruin : le lanceur glorfindel y
@@ -517,9 +517,18 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   identité (la CLI qu'ils lancent tourne dans leur conteneur). Les rendre lecteurs seuls, c'est
   confier l'action approuvée à la watch (une file sous `~/.glorfindel`, signée par la console),
   qui l'exécute — planifié.
-- **H0** : rien ne change. Ses conteneurs partagent l'identité managée de la VM, lectrice
-  (`Reader` sur le banc, `Log Analytics Reader` sur son workspace) : une identité par conteneur
-  ne s'y sépare pas (le point de jeton de la VM répond à chacun d'eux), et il n'écrit rien.
+- **H0** : ses conteneurs partagent l'identité managée de la VM : une identité par conteneur ne
+  s'y sépare pas (le point de jeton de la VM répond à chacun d'eux), et les variables de chaque
+  service y restent vides. Depuis le 31/10 (décision de Jonathan, BL1), elle tient `Reader` et
+  **Eregion Glorfindel Response** sur le seul groupe du banc, `Log Analytics Reader` sur son
+  workspace, jamais le restore ; `GLORFINDEL_READ_ONLY=0`, gondolin et bree en `non_disruptive`.
+  `make glorfindel-host-push` garde ces modes (décision de Jonathan, 02/11 : il lit la config en
+  place sur H0, n'en reporte que le mode de chaque VM, jamais un plus hardi, et le dit VM par VM ;
+  avant, SEC7 remettait tout en `human_only` à chaque push) ; `HUMAN_ONLY=1` remet toutes les VM
+  en `human_only`, le geste d'urgence (`infra/glorfindel-host/README.md`).
+  La watch, la console et le bot écrivent donc avec la même identité, sur le banc seulement : ce
+  que ça ouvre et ce qui le borne, au modèle de menace
+  ([`design/modele-de-menace.md`](design/modele-de-menace.md), §5).
 
 **Créer** (une fois par tenant pour les rôles ; `<…>` à remplacer, rien de réel ici) :
 
@@ -813,7 +822,8 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   `restore_staging_storage`), `exceptions` (`asset_pattern`, `exclude_all`, `exclude_rules`),
   `autonomy` (`default`, `assets` : `match`, `mode` ; `allow_destructive`), `isolation`
   (`quarantine_nsg`, `quarantine_rg`, `forensic_sources`, `forensic_ports`), `never_block`
-  (SEC2, ci-dessous).
+  (SEC2, ci-dessous), `expected_sudo` (`admins` : `match`, `accounts` ; `sensitive_commands` —
+  ADM1, ci-dessous).
 - Types : textes entre guillemets ou non, booléens `true` / `false` sans guillemets, listes pour
   `exclude_rules`, `allow_destructive`, `forensic_sources`, `assets` et les sections de backends ;
   `interval_s` un nombre de secondes positif ; `forensic_ports` un port ou une liste (inchangé). Une
@@ -838,6 +848,57 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   par le mode d'autonomie). Absente : la liste livrée seule. **Clé nouvelle** : une config qui la
   porte est refusée par une version antérieure (lecture stricte) — la poser sur H0 après la mise à
   jour.
+- **`expected_sudo`** (ADM1, #284, 02/11) : les administrateurs dont le sudo vers root est attendu,
+  par VM ou motif de VM. Un tel sudo n'ouvre pas de carte d'élévation — il est écarté par le
+  RulePoller avant toute décision, écrit dans `~/.glorfindel/expected_sudo.jsonl` et compté
+  (`glorfindel report`, la règle dans la console) — sauf commande sensible (liste livrée :
+  `docs/glorfindel.md`, « Les sudo attendus des administrateurs » ; `sensitive_commands` y ajoute
+  des textes, casse ignorée). Un compte s'écrit en entier (`admin*` est refusé) ; `match` est un
+  motif fnmatch, casse ignorée ; plusieurs entrées qui nomment une VM s'additionnent.
+
+  ```yaml
+  expected_sudo:
+    admins:
+      - match: "vm-web-*"
+        accounts: [admin1, ops]
+      - match: "vm-db-01"
+        accounts: [dba]
+    sensitive_commands: [/usr/local/bin/backup-restore]
+  ```
+
+  Un autre compte, `sudo -u autre`, une ligne qu'aucune VM ne revendique, une ligne lue autrement
+  que la forme de sudo : toujours une carte. Les shells root d'un administrateur (`sudo -i`,
+  `sudo su -`, `bash`, `python -c`, `vim`, `less`, `screen`…) font **une carte pour les formes
+  connues** ; la liste n'est pas exhaustive — un script non listé (`sudo /tmp/x.py`) passe sans
+  carte, l'angle mort assumé jusqu'à COR1 (l'origine de la session SSH) et AUD1 (`auditd`).
+  Éditer avec `sudoedit`. **Clé nouvelle**, comme `never_block` : une version
+  antérieure refuse la config qui la porte — la watch ne démarrerait plus.
+
+### Poser la liste des administrateurs sur H0 (ADM1)
+
+Les vrais noms de comptes ne vont que dans la config de H0, jamais dans le dépôt.
+
+1. **D'abord la version** : H0 doit tourner une version qui lit `expected_sudo` (la release qui
+   porte ADM1, déployée par le CD, ou `make glorfindel-host-start REF=<tag>`). Avant, la config
+   serait refusée et la watch ne redémarrerait pas. **La déployer hors d'une détection récente** :
+   l'identité des lignes de journal change (instant et empreinte du texte), si bien qu'une ligne
+   déjà vue dans les ~15 min de la fenêtre est renvoyée une fois — au plus une carte par VM et par
+   règle, qui peut relancer un instantané en `non_disruptive`.
+2. **La liste** dans le `glorfindel-config.yaml` local (ignoré par git), section `expected_sudo`
+   ci-dessus : les VMs de H0 (ou `"*"`) et les comptes d'administration en entier.
+   Vérifier la lecture stricte : `glorfindel rules check` (ou
+   `python -c "from glorfindel.config import load_glorfindel_config as l; print(l().expected_sudo)"`).
+3. **La pousser** : `make glorfindel-host-push`. Le push garde les modes d'autonomie de H0 ;
+   `HUMAN_ONLY=1` pour tout remettre en `human_only` (BL1c). Sans ce lot sur le poste, ajouter le
+   bloc directement dans `~/eregion/glorfindel-config.yaml` de H0 (`make glorfindel-host-ssh`),
+   sans toucher au reste.
+4. **Redémarrer la watch** (la config se lit au démarrage) : `make glorfindel-host-ssh`, puis
+   `cd eregion && docker compose restart watch war-room`. `make glorfindel-host-logs` : pas de
+   « glorfindel-config.yaml refusé ».
+5. **Vérifier** : après le prochain sudo d'un administrateur, `make glorfindel-host-report` dit
+   « Expected sudo (no card, ADM1): N — per VM … per account … » et la console montre
+   « N expected » sur `sudo-privilege-escalation`, sans carte nouvelle ; un `sudo cat /etc/shadow`
+   du même compte fait encore une carte.
 
 ---
 
@@ -1281,7 +1342,10 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 - **`make release`**, depuis `origin/main` à jour (`git switch --detach origin/main`), l'arbre propre.
   `[Unreleased]` devient `[X.Y.Z] — <date> — "<titre>"`, un `[Unreleased]` vide au-dessus. La version de
   `pyproject.toml` et la ligne « **Status — vX.Y.Z.** » du README suivent : `tests/unit/test_readme.py`
-  échoue sinon (SEC6). Puis la branche `chore/release-X.Y.Z`, le commit
+  échoue sinon (SEC6). Dans `ROADMAP.md`, la ligne de la version sous « Les prochaines releases »
+  passe à `brouillon` (RM1 : `#roadmap` montre ce tableau) ; sans ligne pour elle, ou dans un tableau
+  que `#roadmap` ne lirait pas (en-tête changé), rien n'y change,
+  la commande le dit, et l'Orchestre tient le tableau à la main (`publiée` aussi, après la publication). Puis la branche `chore/release-X.Y.Z`, le commit
   `chore(release): X.Y.Z — CHANGELOG [X.Y.Z] « <titre> », version du paquet`, le push et la PR
   (`gh pr create`). Refusé, sans rien écrire :
   - un arbre modifié, ou un HEAD qui n'est pas `origin/main` ;

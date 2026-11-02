@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.4.10] — 2026-11-02 — "held to its word"
+
 ### Added
 - **The releases in #roadmap's message** (RM1, #406, 02/11; `docs/atelier-discord.md`, « Le bloc « Releases » »). Under the milestones' bars, a « **Releases** » block: the last one published, read on GitHub (`releases/latest`: its name, linked to its page, and its date), then the lines of a new table in `ROADMAP.md`, « Les prochaines releases », held by the Orchestre (version, title, content in one line, state: en préparation, brouillon, publiée; filled with 0.4.10, 0.5.0 and 0.5.x).
   - No release published (404), GitHub failing or an answer without a name: that line is left out, said in the log, and the job stays green; the workflow's permissions are unchanged (`contents: read`). The name is made inert (SEC6, `glorfindel/chat_text.py`, now in `roadmap.yml`'s sparse checkout); a link that is not `https://` is none. The line of the version GitHub says published is shown « publiée », whatever the table still says.

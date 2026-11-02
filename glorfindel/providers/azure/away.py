@@ -19,15 +19,23 @@ class AwayRulesMixin:
     """_away_rules, _away_split, _left_quarantine_rules (part of AzureConnector)."""
 
     @staticmethod
-    def _quarantines_left(placements) -> dict:
-        """NIC id (lowercase) → (rg, name) of the quarantine NSG a placement of the state
-        isolated it by: the NIC leaves it with this release (or left it before, a redeploy)."""
-        return {p["nic_id"].rstrip("/").lower(): (p["nsg_rg"], p["nsg_name"])
-                for p in placements or [] if isinstance(p, dict) and p.get("kind") == "quarantine"
-                and p.get("nic_id") and p.get("nsg_rg") and p.get("nsg_name")}
+    def _quarantines_left(state: dict) -> dict:
+        """NIC id (lowercase) → (rg, name) of the quarantine NSG it leaves with this release (or
+        left before, a redeploy): the one a quarantine placement of the state isolated it by,
+        and those a partial release left unswept (`quarantines_left`: its placement undone
+        meanwhile, or no state at all — the retry looks there again, I3R's review)."""
+        kept = state.get("quarantines_left") if isinstance(state, dict) else None
+        left = {k.rstrip("/").lower(): (v[0], v[1]) for k, v in (kept.items() if isinstance(kept, dict) else ())
+                if isinstance(k, str) and isinstance(v, (list, tuple)) and len(v) == 2
+                and all(isinstance(x, str) and x for x in v)}
+        placements = state.get("placements") if isinstance(state, dict) else None
+        left.update({p["nic_id"].rstrip("/").lower(): (p["nsg_rg"], p["nsg_name"])
+                     for p in (placements if isinstance(placements, list) else ()) if isinstance(p, dict)
+                     and p.get("kind") == "quarantine" and p.get("nic_id") and p.get("nsg_rg") and p.get("nsg_name")})
+        return left
 
     def _left_quarantine_rules(self, vm_name: str, targets: list[dict], left: dict, guard: dict,
-                               mates: list, own_ips: list, cache: dict) -> list[str]:
+                               mates: list, own_ips: list, cache: dict, stuck: set, keep: dict) -> list[str]:
         """The release's (_sweep_isolation): a NIC that left our quarantine NSG (`left`, NIC →
         the NSG) may have rules of its own there — an isolation written while that NSG had lost
         our tag, placed on it as on any NSG the NIC carried. Off it, the NIC no longer sees it:
@@ -35,7 +43,10 @@ class AwayRulesMixin:
         for there as on an NSG that governs the NIC — its hash, or an older name aimed at its
         addresses, the guard asked for one aimed elsewhere. A NIC still in it is skipped (its
         undo failed: they may be all that cuts it off), and a bare one (_away_rules looks
-        for its rules on every NSG, this one included: said once)."""
+        for its rules on every NSG, this one included: said once). A NIC whose search there
+        fails or keeps a rule goes into `keep` (NIC → the NSG), for the partial state: off the
+        quarantine NSG now, its retry would no longer know to look there. `stuck`: the
+        placements whose undo just failed — not tried, nor said, twice."""
         failed: list[str] = []
         for t0 in targets:
             q = left.get(t0["nic_id"].rstrip("/").lower())
@@ -45,17 +56,22 @@ class AwayRulesMixin:
                 [(t0["quarantine"]["nsg_rg"], t0["quarantine"]["nsg_name"])] if t0.get("quarantine") else [])
             if (q[0].lower(), q[1].lower()) in {(a.lower(), b.lower()) for a, b in now}:
                 continue
+            before = len(failed)
             rules = self._list_rules(cache, *q)
             if rules is None:
                 failed.append(f"{q[0]}/{q[1]} : règles illisibles, levée non vérifiée")
-                continue
+                rules = []
             view = {**t0, "nsg_rg": q[0], "nsg_name": q[1], "scope": "nic", "shared_nsg": True, "ip_scoped": True}
             for r in self._iso_rules_on(vm_name, view, rules):
                 name = _rule_name(r)
+                if (q[0].lower(), q[1].lower(), name.lower()) in stuck:
+                    continue
                 err = (_aims_elsewhere(r, own_ips) and _held_by_turned(
                     self._network, guard, q[0], q[1], name, t0["nic_id"], mates) or self._delete_rule(q[0], q[1], name))
                 if err:
                     failed.append(err)
+            if len(failed) > before:
+                keep[t0["nic_id"].rstrip("/")] = list(q)
         return failed
 
     def _away_rules(self, vm_name: str, targets: list[dict], stuck: set, guard: dict, mates: list) -> list[str]:

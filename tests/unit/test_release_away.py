@@ -10,6 +10,8 @@ call.
 """
 from __future__ import annotations
 
+import pytest
+
 from glorfindel.actions import AzureConnector
 
 from .fake_azure import FakeAzure, key, nic_id, vm_id
@@ -287,3 +289,81 @@ def test_a_nic_held_in_the_quarantine_by_its_state_keeps_its_rules_there(monkeyp
     assert out["status"] == "release_partial", out
     assert key(f.nics[key(WEB_NIC)]["nsg"]) == key(q)
     assert _iso_on(f, q) == sorted([_iso_name(), f"{_iso_name()}-out"])
+
+
+def _refuse_listing(monkeypatch, f, q):
+    """The quarantine NSG's rules can't be listed (its role removed meanwhile); returns the
+    real listing, to give it back."""
+    real = f.network.security_rules.list
+
+    def refused(rg, name):
+        if key(f"/subscriptions/s/resourceGroups/{rg}/providers/Microsoft.Network/networkSecurityGroups/{name}") \
+                == key(q):
+            raise RuntimeError("AuthorizationFailed")
+        return real(rg, name)
+    monkeypatch.setattr(f.network.security_rules, "list", refused)
+    return real
+
+
+@pytest.mark.parametrize("with_state", [False, True])
+def test_the_retry_of_a_release_that_couldnt_read_the_quarantine_nsg_looks_there_again(monkeypatch, with_state):
+    """I3R's review: the quarantine NSG unreadable, the release puts web-nic's NSG back and says
+    `release_partial`; the retry finds the NIC on its own NSG — its quarantine placement undone,
+    or no state at all: it no longer knew to look there and said `released`, the pair still
+    there. The partial state keeps the NSG left unswept (`quarantines_left`)."""
+    from glorfindel.actions import _clear_isolation_state, _load_isolation_state
+    f, c, own, q = _in_quarantine(monkeypatch)
+    if not with_state:
+        _clear_isolation_state(WEB)
+    real = _refuse_listing(monkeypatch, f, q)
+    out = c.release_isolation(WEB)
+    assert out["status"] == "release_partial", out
+    assert key(f.nics[key(WEB_NIC)]["nsg"]) == key(own) and _iso_on(f, q)
+    assert [x.lower() for x in _load_isolation_state(WEB)["quarantines_left"][WEB_NIC]] == \
+        [q.split("/")[4].lower(), q.rsplit("/", 1)[-1].lower()]
+    monkeypatch.setattr(f.network.security_rules, "list", real)
+    out = c.release_isolation(WEB)
+    assert out["status"] == "released", out
+    assert _iso_on(f, q) == [] and _load_isolation_state(WEB) is None
+
+
+def test_the_retry_of_a_release_whose_delete_failed_on_the_quarantine_nsg_takes_it_off(monkeypatch):
+    """A 429 on the delete of web-nic's rule on the quarantine NSG: `release_partial`; the retry,
+    the NIC on its own NSG and no state but the partial one, takes it off — never `released`
+    with the rule there."""
+    from glorfindel.actions import _clear_isolation_state
+    f, c, own, q = _in_quarantine(monkeypatch)
+    _clear_isolation_state(WEB)
+    real, calls = f.network.security_rules.begin_delete, []
+
+    def throttled_once(rg, nsg, name):
+        if name.startswith("glorfindel-iso") and not calls:
+            calls.append(name)
+            raise RuntimeError("(TooManyRequests) 429")
+        return real(rg, nsg, name)
+    monkeypatch.setattr(f.network.security_rules, "begin_delete", throttled_once)
+    out = c.release_isolation(WEB)
+    assert out["status"] == "release_partial" and calls, out
+    assert calls[0] in _iso_on(f, q)
+    out = c.release_isolation(WEB)
+    assert out["status"] == "released", out
+    assert _iso_on(f, q) == []
+
+
+def test_a_rule_its_placement_kept_on_the_quarantine_nsg_is_said_once(monkeypatch):
+    """The state as the reassertion wrote it in seed 67: web-nic's isolation placed by rules on
+    the quarantine NSG (it had lost our tag), the inbound one turned toward batch, still in it.
+    The placement's undo keeps it and says so; the search on the quarantine NSG the NIC then
+    leaves skips what the placements just failed (`stuck`): said once."""
+    from glorfindel.actions import _load_isolation_state, _save_isolation_state
+    f, c, _, q = _in_quarantine(monkeypatch, turned=True)
+    st = _load_isolation_state(WEB)
+    q_rg, q_name = q.split("/")[4], q.rsplit("/", 1)[-1]
+    _save_isolation_state(WEB, {**st, "placements": [{
+        "nic_id": WEB_NIC, "nsg_rg": q_rg, "nsg_name": q_name, "scope": "nic", "shared_nsg": True,
+        "ips": ["10.0.0.4"], "priority": 100, "rule_in": _iso_name(), "rule_out": f"{_iso_name()}-out",
+        "bumped": [], "applied": [_iso_name(), f"{_iso_name()}-out"]}]})
+    out = c.release_isolation(WEB)
+    assert out["status"] == "release_partial", out
+    assert sum(_iso_name() in s and "gardée" in s for s in out["failed"]) == 1, out
+    assert _iso_name() in f.nsgs[key(q)]["rules"]

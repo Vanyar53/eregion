@@ -2975,8 +2975,9 @@ perte d'état) et `…_go_once_the_operator_gives_its_original` (les tags perdus
 la carte et le dit, l'opérateur pose le tag, I7), rouges sur 9c4e8c5 ; huit tests dans
 `test_release_away.py` (sans état, par l'état, une carte gardée en quarantaine — original inconnu,
 original disparu —, la carte voisine qui reste, une règle retournée vers elle gardée et dite, une
-carte nue dite une fois, un NSG illisible), trois rouges sur 9c4e8c5, les autres gardent le
-correctif de trop en faire. **Mutants M3060–M3066** : le balayage aveugle au NSG quitté (M3060), le
+carte nue dite une fois, un NSG illisible), cinq rouges sur `main` (sans état, par l'état, la
+carte voisine, la règle retournée, le NSG illisible), les trois autres gardent le correctif de trop
+en faire. **Mutants M3060–M3066** : le balayage aveugle au NSG quitté (M3060), le
 NSG dont le balayage sort la carte jamais noté (M3061), les placements de l'état jamais lus (M3062),
 une carte encore en quarantaine balayée là (M3063), une carte nue cherchée là aussi : dite deux fois
 (M3064), la garde jamais demandée (M3065), un NSG illisible lu « rien » (M3066) : 7/7 à chaque tour
@@ -2984,6 +2985,25 @@ une carte encore en quarantaine balayée là (M3063), une carte nue cherchée l�
 **Reste ouvert** : le reset (`reset --from-azure`) ne cherche pas non plus sur le NSG de quarantaine
 qu'il fait quitter à une carte ; son oracle ne juge pas les règles laissées hors des NSG qui
 gouvernent la carte, la machine ne le voit pas.
+
+**Après la relecture d'I3R.** (1) **Une levée partielle oubliait le NSG de quarantaine quitté** (point
+bloquant, les sondes du relecteur) : `left` ne venait que des placements de quarantaine de l'état et
+du balayage en cours. Le NSG de quarantaine illisible, ou un 429 sur la suppression de la règle de la
+carte : la levée rend son NSG à la carte et dit `release_partial` ; la reprise la trouve sur son NSG,
+sans placement de quarantaine (défait, il sort de `remaining`) ou sans état du tout (l'état partiel
+n'écrivait que `release_failed` et `known_nics`) — `left` vide, `released`, la paire restée. L'état
+partiel garde maintenant les NSG de quarantaine quittés dont la recherche a échoué ou gardé une règle
+(`quarantines_left`, carte → groupe et nom), sur les deux chemins, avec ou sans état ;
+`_quarantines_left` les relit à la levée suivante. Figés :
+`test_the_retry_of_a_release_that_couldnt_read_the_quarantine_nsg_looks_there_again` (sans état et
+par l'état) et `test_the_retry_of_a_release_whose_delete_failed_on_the_quarantine_nsg_takes_it_off`,
+rouges avant. (2) **`stuck`** : la recherche sur le NSG quitté ne retente plus ce qu'un placement
+vient d'échouer à défaire — une règle gardée par son placement (l'état écrit par la réaffirmation de
+la graine 67 : la paire placée sur la quarantaine) était dite deux fois
+(`test_a_rule_its_placement_kept_on_the_quarantine_nsg_is_said_once`). Mutants **M3067** (la clé
+jamais écrite), **M3068** (jamais relue), **M3069** (`stuck` ignoré) ; M3060 et M3062 réancrés (l'appel
+gagne `stuck` et `keep` ; les placements lus dans `_quarantines_left`). M07, M3060–M3069 : 11/11 à
+chaque tour (deux tours). `release.py` passe à 495 lignes.
 
 **Mesures d'I3R.** Invariants, `--hypothesis-seed=N` : à 60 séquences, N = 1..120, **120/120
 vertes** (avant, sur `main` f1cd109, 119/120 : la graine 67 ; rejouée sur `main` 9c4e8c5, rouge) ;

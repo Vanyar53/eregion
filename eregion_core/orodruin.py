@@ -311,6 +311,10 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
     def pages(url: str, params: dict | None) -> list[dict]:
         out: list[dict] = []
         while url:
+            # The token goes to Azure Resource Manager only (SEC8): a next page elsewhere is
+            # refused, never followed — the contract then unreadable, passive.
+            if not url.startswith(ARM + "/"):
+                raise RuntimeError("a listing's next page outside Azure Resource Manager: refused")
             r = get(url, headers=headers, params=params, timeout=20)
             if not r.ok:
                 raise RuntimeError(f"HTTP {r.status_code} on {url.split('?')[0]}")
@@ -330,7 +334,14 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
     def role_actions(definition_id: str) -> list[str]:
         if definition_id in read_roles:  # one read per role: the same on every enrolled VM
             return read_roles[definition_id]
-        r = get(f"{ARM}{definition_id}", headers=headers,
+        from eregion_core.held import arm_relative
+        try:
+            # An id read from a listing: a path under ARM, or not read at all (SEC8) — the
+            # token never goes where the id would point it.
+            path = arm_relative(definition_id)
+        except ValueError:
+            return []  # unreadable: not proven read-only, so it counts as outside
+        r = get(f"{ARM}{path}", headers=headers,
                 params={"api-version": API_VERSION}, timeout=20)
         if not r.ok:
             return []  # unreadable: not proven read-only, so it counts as outside

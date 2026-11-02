@@ -1441,7 +1441,8 @@ def _restore_refusal(esc_id: str, vm_name: str) -> tuple[str | None, str]:
 @app.get("/api/restore/plan/{vm_name}")
 async def restore_plan_view(vm_name: str, escalation: str = "", before: str = "") -> dict:
     """What a card's restore asks (SEC4c), read only: the moment the field is filled with —
-    the exercise's attack_started for this VM, else the card's first detection — and the
+    for an exercise card, its run's attack_started for this VM, never after the card's first
+    detection; else the earliest the defender recorded (SEC8, restore_plan) — and the
     recovery points from before the moment given (`before`, else that one)."""
     from glorfindel import escalations as _esc
     from glorfindel import restore_plan

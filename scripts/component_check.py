@@ -82,7 +82,7 @@ COMPONENTS: dict[str, Component] = {
             "test_invariant_regressions.py", "test_invariant_regressions_aws.py", "test_invariants.py",
             "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",
-            "test_reassert.py", "test_release_away.py", "test_rule_layers.py", "test_rules_check.py", "test_tui_actions.py", "test_unexpected_decision.py", "test_unreadable_state.py",
+            "test_reassert.py", "test_release_away.py", "test_rule_layers.py", "test_rules_check.py", "test_runs_channel.py", "test_tui_actions.py", "test_unexpected_decision.py", "test_unreadable_state.py",
         ),
     ),
     # Annatar — its executors, engines (Atomic Red Team), campaigns, signals.
@@ -110,12 +110,12 @@ COMPONENTS: dict[str, Component] = {
 # runs, the analysis AI over a campaign and Glorfindel's decisions, the gate seen from both
 # sides, the host and the Makefile — and the repository-wide checks. The full suite runs them.
 TOGETHER = (
-    "test_activity_logs.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
+    "test_activity_logs.py", "test_own_run_command.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
     "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_shots.py", "test_docs_home.py", "test_console_dagorlad_request.py", "test_console_dagorlad_follow.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
     "test_coverage.py",
     "test_restore_moment.py",
-    "test_signal_origin.py",
+    "test_signal_origin.py", "test_arm_urls.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
     "test_docs_budget.py", "test_exercise.py", "test_exercise_e2e.py", "test_held.py", "test_dagorlad_blind.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_fault_rate.py", "test_glorfindel_host.py", "test_host_console.py",

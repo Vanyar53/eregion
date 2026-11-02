@@ -358,12 +358,17 @@ def resolve_attack_started(signal: dict, ip_owners=None) -> dict:
     """
     from glorfindel.detectors import detector_for, is_control_plane_source, is_identity_source
     from glorfindel.detection_rules import _reads_activity_table, _reads_entra_table
-    from glorfindel.signal_origin import attack_time_refusal
+    from glorfindel.signal_origin import attack_time_refusal, duration_refusal
 
     raw = signal.get("raw_signal", {})
     source = raw.get("detection_source", "")
     query = raw.get("detection_query", "")
     workspace_id = raw.get("log_analytics_workspace_id", "")
+    if "detection_timeout_s" in raw:
+        # Finite and bounded (SEC8): the poll is a thread, never one without end.
+        refused = duration_refusal("detection_timeout_s", raw.get("detection_timeout_s"))
+        if refused:
+            raise ValueError(f"attack_started refusé : {refused}")
     timeout_s = float(raw.get("detection_timeout_s", 300))
     if "attack_time" in raw:
         refused = attack_time_refusal(raw.get("attack_time"))
@@ -963,7 +968,14 @@ def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
                  "écrite par un autre appelant : une isolation ou un blocage a pu être levé. "
                  "Vérifier l'état réel de l'isolation ou du blocage sur Azure avant tout.")
         steps.append("Vérifier sur Azure que l'isolation ou le blocage est toujours en place.")
-    if norm.get("glorfindel_identity"):
+    if row.get("GlorfindelRunCommand") and not row.get("OmittedOperations"):
+        # SID1: its own Run Command outside a drain it recorded — the card says why (a
+        # summary card names its operations below, the VM of each).
+        from glorfindel.providers.azure.own_run_command import describe
+        said, more = describe(row)
+        what += said
+        steps += more
+    elif norm.get("glorfindel_identity"):
         what += (" L'identité de Glorfindel a fait une opération qu'il ne fait pas, ou sur une "
                  "ressource qui n'est pas à lui : ses identifiants sont peut-être entre "
                  "d'autres mains.")
@@ -980,6 +992,9 @@ def _control_plane_text(signal: dict) -> tuple[str, list[str]]:
             what += " Au moins une écrit une règle gérée par Glorfindel."
         if any(o.get("GlorfindelIdentity") for o in omitted):
             what += " Au moins une est faite sous l'identité de Glorfindel."
+        if any(o.get("GlorfindelRunCommand") for o in omitted):
+            what += (" Au moins une est une commande lancée par Run Command hors d'une isolation "
+                     "décidée par Glorfindel.")
     steps.append("Annuler le changement s'il n'est pas légitime ; s'il l'est (un pipeline connu), "
                  "l'exclure dans la couche du client.")
     return what, steps
@@ -2291,7 +2306,11 @@ def propose_detection_rule(
     # Annatar waits detection_timeout_s + 120s before emitting detection_missed, so
     # the RulePoller match could be up to (timeout + 180s) old when we get here.
     ttp = signal.get("ttp", "")
-    detection_timeout_s = float(ctx.get("detection_timeout_s", 300))
+    from glorfindel.signal_origin import duration_refusal
+    # Finite and bounded (SEC8): a duration out of bounds reads as the default.
+    detection_timeout_s = (float(ctx["detection_timeout_s"]) if "detection_timeout_s" in ctx
+                           and not duration_refusal("detection_timeout_s", ctx["detection_timeout_s"])
+                           else 300.0)
     from glorfindel.detection_rules import rulepoller_recently_matched
     if rulepoller_recently_matched(ttp, detection_timeout_s + 180):
         _console.print(
@@ -2310,8 +2329,11 @@ def propose_detection_rule(
         }
 
     failed_query = ctx.get("failed_query") or raw.get("failed_query", "(unknown)")
-    workspace_id = ctx.get("workspace_id", "")
     source = raw.get("detection_source", "azure_monitor")
+    # The workspace queried comes from Glorfindel's config (SEC8), never from the line: the
+    # one it names if it is configured, the configured one if it names none, else none.
+    from glorfindel.signal_origin import config_workspace
+    workspace_id = config_workspace(ctx.get("workspace_id", ""))
 
     # Check if an action was already taken on this VM — timeout may be caused by
     # the action (e.g. isolate_vm cuts off AMA) rather than a bad detection rule.

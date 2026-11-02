@@ -7353,6 +7353,154 @@ MUTANTS += [
 TESTS.update({f"M{n}": _OV1 for n in range(2616, 2624)})
 TESTS["M2609"] = f"tests/unit/test_agent_nodes.py {_OV1}"
 
+# COR1 (#407): the correlation, a brick of the product — the SSH sessions behind a root shell
+# (set aside only if every one comes from an expected origin; unknown is a card), and a brute
+# force followed by a login from its address (a critical card, once). M2720–M2759, one per guard.
+COR = "glorfindel/correlation.py"
+_COR = "tests/unit/test_correlation.py"
+MUTANTS += [
+    ("M2720", "a root shell that is also sensitive otherwise cleared by its origin (COR1)", XSU,
+     "    if not root_shell(text) or any(rx.search(text) for _, rx in _SENSITIVE):\n",
+     "    if not root_shell(text):\n"),
+    ("M2721", "a root shell holding a text of sensitive_commands cleared by its origin (COR1)", XSU,
+     "    return _config_sensitive(text, extra) is None\n", "    return True\n"),
+    ("M2722", "the origins of an entry that does not name the account count for it (COR1)", "glorfindel/config.py",
+     "if e.matches(asset_name) and account in e.accounts\n", "if e.matches(asset_name)\n"),
+    ("M2723", "no session found: the root shell set aside (COR1)", COR,
+     '    if not found:\n        return False, "aucune session SSH trouvée', '    if False:\n        return False, "aucune session SSH trouvée'),
+    ("M2724", "an account taken by su from another: its root shell set aside (COR1)", COR,
+     '        if s["via"] not in ("ssh", "ssh-pam"):\n', '        if False:\n'),
+    ("M2725", "an sshd session without its Accepted line taken for an expected one (COR1)", COR,
+     '        if s["via"] == "ssh-pam":\n            return False,', '        if False:\n            return False,'),
+    ("M2726", "an origin outside the declared ranges accepted (COR1)", COR,
+     "    bad = [o for o in seen if not any(ipaddress.ip_address(o) in n for n in nets)]\n", "    bad = []\n"),
+    ("M2727", "a session opened after the line taken as carrying it (COR1)", COR,
+     "        if when is not None and when > upto:\n            continue\n", ""),
+    ("M2728", "an unreadable journal read as an empty one: said « no session », not counted unknown (COR1)", COR,
+     '            return f"journal illisible ({str(exc)[:160]})"\n', "            return []\n"),
+    ("M2729", "a reading cut at its limit read as whole: a later session missed (COR1)", COR,
+     "        if len(rows) >= ROWS_MAX:\n", "        if False:\n"),
+    ("M2730", "no cap on the correlation queries of a poll (COR1)", COR,
+     '        if self.counts["queries"] >= QUERIES_PER_POLL:\n', "        if False:\n"),
+    ("M2731", "a line already seen queried again at every poll (COR1)", COR,
+     "            if identity(row) in seen:          # dispatched or set aside already: no query\n"
+     "                del judged[id(row)]\n                continue\n", ""),
+    ("M2732", "a row whose VM cannot be named left pending: set aside unsettled (COR1)", COR,
+     '                _unknown(p, judged, row, "la ligne ne nomme pas sa VM — origine inconnue")\n',
+     "                pass\n"),
+    ("M2733", "a row whose instant cannot be read judged at the clock's (COR1)", COR,
+     "            if at is None:\n                _unknown(", "            if at is None and False:\n                _unknown("),
+    ("M2734", "an IPv4 written in IPv6 (::ffff:a.b.c.d) not read as itself (COR1)", COR,
+     '    return getattr(ip, "ipv4_mapped", None) or ip\n', "    return ip\n"),
+    ("M2735", "another account's session taken for this one's (COR1)", COR,
+     '        if m and m["account"] == account:\n', "        if m:\n"),
+    ("M2736", "systemd's user session, opened with every SSH login, taken for an origin (COR1)", COR,
+     '_NOT_AN_ORIGIN = frozenset({"sshd", "systemd-user"})\n', '_NOT_AN_ORIGIN = frozenset({"sshd"})\n'),
+    ("M2737", "an sshd pam session paired with another process's Accepted line (COR1)", COR,
+     "        if pid in (None, \"\") or apid in (None, \"\") or str(pid) == str(apid):\n",
+     "        if True:\n"),
+    ("M2738", "a private address outside the origins not said as a possible lateral movement (COR1)", COR,
+     "        if private:\n", "        if False:\n"),
+    ("M2739", "an origin of /0 accepted in the config (COR1)", COR,
+     "    if net.prefixlen == 0:\n", "    if False:\n"),
+    ("M2740", "an origin with host bits (198.51.100.7/24) accepted in the config (COR1)", COR,
+     "ipaddress.ip_network(str(text).strip(), strict=True)", "ipaddress.ip_network(str(text).strip(), strict=False)"),
+    ("M2741", "an empty list of origins accepted in the config (COR1)", "glorfindel/config.py",
+     '    if raw.get("origins") == []:\n', "    if False:\n"),
+    ("M2742", "a login from any address taken for the brute force's (COR1)", COR,
+     '                if m and address(m["ip"]) == ip:\n', "                if m:\n"),
+    ("M2743", "a login after a brute force not critical (COR1)", "glorfindel/detection_rules.py",
+     "        grave = grave or row.get(\"Correlation\") == correlation.COMPROMISED\n", ""),
+    ("M2744", "a compromise already carded loses its mark: a second, plain card (COR1)", COR,
+     '            if identity({**row, "Correlation": COMPROMISED}) in seen:\n                row["Correlation"] = COMPROMISED\n',
+     '            if identity({**row, "Correlation": COMPROMISED}) in seen:\n'),
+    ("M2745", "a login check that fails not counted (COR1)", COR,
+     "                _unchecked(p, row, lines)\n", "                pass\n"),
+    ("M2746", "the compromise not sent first among a poll's cards (COR1)", "glorfindel/detection_rules.py",
+     'send.sort(key=lambda r: (r.get("Correlation") == correlation.COMPROMISED, _gravity(r)), reverse=True)',
+     "send.sort(key=_gravity, reverse=True)"),
+    ("M2747", "the root shells set aside by origin not counted in the rule's status (COR1)", "glorfindel/detection_rules.py",
+     '"origin_count": expected_counts(st)["origin_count"] + origin_n}', '"origin_count": 0}'),
+    ("M2748", "the correlation's counts not kept in the rule's status (COR1)", "glorfindel/detection_rules.py",
+     '                st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)\n', "                pass\n"),
+    ("M2749", "glorfindel report no longer says the root shells set aside by origin (COR1)", "glorfindel/cli.py",
+     '    if es.get("origin_count"):\n', "    if False:\n"),
+    ("M2750", "the journal no longer says a root shell's origin (COR1)", XSU,
+     'origin = str(e.get("origin") or "")[:_COMMAND_KEPT] if e.get("via") == "origin" else ""',
+     'origin = ""'),
+    ("M2751", "a root shell set aside without waiting for its sessions (COR1)", XSU,
+     '        return {**entry, "origins": origins}\n', "        return entry\n"),
+    ("M2752", "a set-aside root shell keeps its pending mark: journaled without its origin (COR1)", COR,
+     '"via": "origin", "origin": ", ".join(seen_origins)[:expected_sudo._COMMAND_KEPT]}',
+     '"via": "", "origin": ""}'),
+    ("M2753", "a card by origin says nothing of why (COR1)", COR,
+     '    row["SessionOrigin"] = why\n', ""),
+    ("M2754", "a fault in the correlation sets aside the root shells it did not settle (COR1)", COR,
+     '        pending = [k for k, e in judged.items() if "origins" in e]\n', "        pending = []\n"),
+]
+TESTS.update({f"M{n}": _COR for n in range(2720, 2755)})
+# COR1, the Orchestre (02/11, « précautionneux »): a compromise is always said to a human —
+# an autonomous action may run, its card never disappears behind it. M2755–M2759.
+MUTANTS += [
+    ("M2755", "a compromise blocked alone makes no card: the check's card not in the graph (COR1)", "glorfindel/agent.py",
+     '    graph.add_node("verify_action", lambda s: compromise_card(verify_action(s, connector=connector)))\n',
+     '    graph.add_node("verify_action", lambda s: verify_action(s, connector=connector))\n'),
+    ("M2756", "a compromise not recognised in the graph (COR1)", "glorfindel/agent.py",
+     '    return _correlation_row(signal).get("Correlation") == COMPROMISED\n', "    return False\n"),
+    ("M2757", "a card held on a compromise does not say the account may be compromised (COR1)", "glorfindel/agent.py",
+     '    if said and said[1].split(" :", 1)[0] not in (state.get("escalation_reason") or ""):\n',
+     "    if False:\n"),
+    ("M2758", "a compromise's card approvable in one click (COR1)", "glorfindel/agent.py",
+     'action="", escalation_type=etype,', 'action="", escalation_type="low_confidence",'),
+    ("M2759", "a compromise's card marked made but never written (COR1)", "glorfindel/agent.py",
+     "    if not state.get(\"dry_run\", False):\n        from glorfindel import escalations\n        source, exercise_run = _cycle_source(signal)\n        action = state.get(\"action\") or \"aucune\"\n",
+     "    if False:\n        from glorfindel import escalations\n        source, exercise_run = _cycle_source(signal)\n        action = state.get(\"action\") or \"aucune\"\n"),
+]
+TESTS.update({f"M{n}": _COR for n in range(2755, 2760)})
+# COR1, its review (02/11): a compromise never folded into a card that does not say it, one
+# address one card, sshd's own Accepted lines, an unchecked brute force said. M3020–M3028.
+MUTANTS += [
+    ("M3020", "an Accepted line written under another tag read as a session (COR1, review)", COR,
+     '| where (SyslogMessage startswith "Accepted " and ProcessName in ("sshd", "sshd-session") and ({accepted}))\n',
+     '| where (SyslogMessage startswith "Accepted " and ({accepted}))\n'),
+    ("M3021", "a compromise folded into a pending card that does not say it: only occurrences move (COR1, review)",
+     "glorfindel/escalations.py",
+     "                material = material or rises or said\n", "                material = material\n"),
+    ("M3022", "a card re-fired at a higher severity keeps the lower one (COR1, review)", "glorfindel/escalations.py",
+     '                if rises:\n                    e["severity"] = severity\n', ""),
+    ("M3023", "a second compromise on the VM, from another address, folded into the first card (COR1, review)",
+     "glorfindel/agent.py",
+     '            action_params={"ip": str(ip)} if ip else None,\n', "            action_params=None,\n"),
+    ("M3024", "a compromise whose action failed its check: two cards, one approvable story lost (COR1, review)",
+     "glorfindel/agent.py",
+     '    if said is None or out.get("verified") is False or out.get("unverified"):\n', "    if said is None:\n"),
+    ("M3025", "a brute force whose logins could not be read not marked on its row (COR1, review)", COR,
+     '    row["LoginCheck"] = {"status": "unchecked", "why": why[:200]}\n', ""),
+    ("M3026", "an unchecked brute force never said to a human by the graph (COR1, review)", "glorfindel/agent.py",
+     '    if isinstance(check, dict) and check.get("status") == "unchecked":\n', "    if False:\n"),
+    ("M3027", "an account from a log line carried unbounded on the card (COR1, review)", COR,
+     'm["account"][:64]', 'm["account"]'),
+    ("M3028", "a compromise card counted under « ? » in the observation report (COR1, review)",
+     "glorfindel/escalations.py",
+     'if e.get("escalation_type") in _NO_ACTION_LABELLED else "") or "?"', 'if False else "") or "?"'),
+    ("M3029", "the sessions read over one day, not seven: a stranger's session of three days ago missed (COR1, Jonathan 02/11)",
+     COR, "SESSION_LOOKBACK_S = 7 * 24 * 3600\n", "SESSION_LOOKBACK_S = 24 * 3600\n"),
+]
+TESTS.update({f"M{n}": _COR for n in range(3020, 3030)})
+# COR1, its second review (02/11): a compromise said on a card stays said; the reading of the
+# sessions holds only the lines `sessions()` reads (not sudo's own, not systemd's). M3070–M3072.
+MUTANTS += [
+    ("M3070", "a plain re-fire of the address wipes the compromise off its card (COR1, second review)",
+     "glorfindel/escalations.py",
+     '                    if COMPROMISE_MARK in (reason or "") or COMPROMISE_MARK not in (e.get("reason") or ""):\n',
+     "                    if True:\n"),
+    ("M3071", "sudo's own session lines read: a week of sudo fills the reading, every root shell a card (COR1, second review)",
+     COR, "f\"SyslogMessage has {kql.literal(f'for user {a}')}\"", "f\"SyslogMessage has {kql.literal(a)}\""),
+    ("M3072", "systemd's user sessions read: they fill the reading (COR1, second review)", COR,
+     ' and SyslogMessage !has "systemd-user" and ({opened}))', " and ({opened}))"),
+]
+TESTS.update({f"M{n}": _COR for n in range(3070, 3073)})
+
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.
 MUTANTS += [

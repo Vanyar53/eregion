@@ -411,6 +411,9 @@ class ExpectedAdmins:
     (fnmatch, like `autonomy.assets`; case ignored, as Azure ignores it in a VM's name)."""
     match: str
     accounts: list[str] = field(default_factory=list)
+    # COR1 (#407): where their SSH sessions are expected to come from (CIDR ranges, a bastion
+    # is a range). A root shell is set aside only if every session comes from one of them.
+    origins: list[str] = field(default_factory=list)
 
     def matches(self, asset_name: str) -> bool:
         return fnmatch.fnmatchcase(asset_name.lower(), self.match.lower())
@@ -430,6 +433,14 @@ class ExpectedSudoConfig:
         if not asset_name:
             return frozenset()
         return frozenset(a for e in self.admins if e.matches(asset_name) for a in e.accounts)
+
+    def origins_for(self, asset_name: str, account: str) -> tuple[str, ...]:
+        """COR1: the origins declared for this account on this VM — every entry that names both,
+        together; empty when none declares any (a root shell then stays a card, ADM1)."""
+        if not asset_name:
+            return ()
+        return tuple(dict.fromkeys(o for e in self.admins if e.matches(asset_name) and account in e.accounts
+                                   for o in e.origins))
 
 
 @dataclass
@@ -536,7 +547,7 @@ _AUTONOMY_KEYS = ("default", "assets", "allow_destructive")
 _AUTONOMY_ASSET_KEYS = ("match", "mode")
 _ISOLATION_KEYS = ("quarantine_nsg", "quarantine_rg", "forensic_sources", "forensic_ports")
 _EXPECTED_SUDO_KEYS = ("admins", "sensitive_commands")
-_EXPECTED_ADMIN_KEYS = ("match", "accounts")
+_EXPECTED_ADMIN_KEYS = ("match", "accounts", "origins")
 # The backend types something reads (discovery.py, detection_rules.py, backup_vault()):
 # `type: azure_monitr` was a backend nothing used, in silence. A new type is added here.
 _MONITORING_TYPES = ("azure_monitor", "prometheus")
@@ -773,7 +784,7 @@ def _check_expected_sudo(raw: dict, check: _Checker) -> ExpectedSudoConfig:
                 check.bad(f"{at}.accounts[{j}]",
                           f"{_shown(name)} n'est pas un nom de compte (lettres, chiffres, « _ . @ - », "
                           f"sans motif : un compte s'écrit en entier)")
-        admins.append(ExpectedAdmins(match=match, accounts=accounts))
+        admins.append(ExpectedAdmins(match=match, accounts=accounts, origins=_check_origins(a, at, check)))
     sensitive: list[str] = []
     for j, text in enumerate(check.texts(raw, "sensitive_commands", where)):
         if text.strip():
@@ -781,6 +792,21 @@ def _check_expected_sudo(raw: dict, check: _Checker) -> ExpectedSudoConfig:
         else:
             check.bad(f"{where}.sensitive_commands[{j}]", "un texte vide est refusé (il serait dans toute commande)")
     return ExpectedSudoConfig(admins=admins, sensitive_commands=sensitive)
+
+
+def _check_origins(raw: dict, where: str, check: _Checker) -> list[str]:
+    """COR1 (#407): `origins`, each a CIDR range or an address (`glorfindel.correlation.origin`)."""
+    from glorfindel.correlation import origin
+    if raw.get("origins") == []:
+        check.bad(f"{where}.origins", "une liste vide n'attend aucune origine — omettre la clé")
+    out: list[str] = []
+    for j, text in enumerate(check.texts(raw, "origins", where)):
+        net, why = origin(text)
+        if why:
+            check.bad(f"{where}.origins[{j}]", f"{_shown(text)} : {why}")
+        elif net not in out:
+            out.append(net)
+    return out
 
 
 def _validate_mode(mode: str, where: str) -> str:

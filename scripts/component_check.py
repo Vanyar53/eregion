@@ -115,7 +115,7 @@ TOGETHER = (
     "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_shots.py", "test_docs_home.py", "test_console_dagorlad_request.py", "test_console_dagorlad_follow.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
     "test_coverage.py",
     "test_restore_moment.py",
-    "test_signal_origin.py",
+    "test_signal_origin.py", "test_arm_urls.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
     "test_docs_budget.py", "test_exercise.py", "test_exercise_e2e.py", "test_held.py", "test_dagorlad_blind.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_fault_rate.py", "test_glorfindel_host.py", "test_host_console.py",

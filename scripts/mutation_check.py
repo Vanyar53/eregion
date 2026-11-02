@@ -2685,7 +2685,7 @@ MUTANTS += [
      ("    if event not in CHANNEL_EVENTS and event != \"attack_adapted\":\n",
       "    fields = _FIELDS.get(event, _FIELDS[\"attack_started\"])\n")),
     ("M1233", "a refused line not counted (SEC3, V-05)", SO,
-     "        _REFUSED[event] = _REFUSED.get(event, 0) + 1\n", ""),
+     "        _REFUSED[event] = _REFUSED.get(event, 0) + count\n", ""),
     # After the review of SEC3 (M1234–M1239).
     ("M1234", "a link in the defender's directory taken for its file: one into runs/ passes (SEC3, V-05)", SO,
      "        return Path(path).resolve().parent == RECOVERY_SIGNALS_DIR.resolve()\n",

@@ -3368,7 +3368,7 @@ MUTANTS += [
     ("M1347", "the CI's Linux tests unbounded again (U3F)", ".github/workflows/ci.yml",
      "    timeout-minutes: 30\n", ""),
     ("M1348", "the nightly invariants unbounded again (U3F)", ".github/workflows/invariants.yml",
-     "    timeout-minutes: 150\n", ""),
+     "    timeout-minutes: 180\n", ""),
 ]
 TESTS.update({"M1346": "tests/unit/test_invariant_regressions.py -k stuck_race",
               "M1347": "tests/unit/test_workflows.py -k bounded", "M1348": "tests/unit/test_workflows.py -k bounded"})
@@ -6680,6 +6680,47 @@ TESTS.update({
     "M2236": "tests/unit/test_glorfindel.py::test_a_half_bypassed_pair_keeps_another_placement_gone_on_the_nic",
     "M2237": "tests/unit/test_glorfindel.py::test_two_half_pairs_behind_one_allow_name_it_once",
 })
+# D79 (#379): not the code — the teardown's operator never put back a turned rule held behind an
+# older version's deny on `*`. It does now, as U7D's unblock, once the release's outcome passes two
+# controls more (A0): what it keeps is exactly what the oracle says held, and each is said with
+# the turned rule behind it. Without them, the operator's step hid the three below (measured: the
+# frozen sequence green with the operator alone). M2320–M2322.
+_OLDER_HELD = ('            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)\n'
+               "                   or self._delete_rule(l_rg, l_name, name))\n")
+_D79 = ("tests/unit/test_invariant_regressions.py::test_an_older_deny_all_kept_for_a_turned_rule_on_a_redeployed_nic "
+        f"{INVARIANTS}")
+MUTANTS += [
+    ("M2320", "the release of an older version's isolation, once one rule is rightly kept, keeps the next too: "
+              "release_partial, a deny kept that nothing hangs on (D79)", "glorfindel/providers/azure/older.py",
+     _OLDER_HELD,
+     '            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates)\n'
+     '                   or (failed and f"{l_rg}/{l_name}/{name} gardée : sonde")\n'
+     "                   or self._delete_rule(l_rg, l_name, name))\n"),
+    ("M2321", "an older version's deny kept for a turned rule, unsaid: « gardée » dropped (D79)",
+     "glorfindel/providers/azure/older.py", _OLDER_HELD,
+     '            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates).replace(" gardée", "")\n'
+     "                   or self._delete_rule(l_rg, l_name, name))\n"),
+    ("M2322", "an older version's deny said kept without the turned rule behind it: nothing to put back (D79)",
+     "glorfindel/providers/azure/older.py", _OLDER_HELD,
+     '            err = (_held_by_turned(self._network, turned, l_rg, l_name, name, "", mates).split(" : ")[0]\n'
+     "                   or self._delete_rule(l_rg, l_name, name))\n"),
+]
+# D79's review: the control read only the older version's fixed names — a placement rule of the
+# same VM kept without a reason beside them passed once the operator had put the turned rule back.
+# Every rule of today's names left must be one the oracle says kept (_kept), as U7D's. M2323.
+MUTANTS += [
+    ("M2323", "the release keeps its placement rules while its older record's deny is held: release_partial, "
+              "rules kept that nothing hangs on (D79, review)", REL,
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n'
+     "                        or self._delete_rule(p_rg, p_name, name)\n",
+     '                        _held_by_turned(self._network, turned, p_rg, p_name, name, p.get("nic_id", ""), mates)\n'
+     "                        or (_older_record(state) and any(_held_by_turned(\n"
+     '                            self._network, turned, _older_record(state)["nsg_rg"] or rg,\n'
+     '                            _older_record(state)["nsg_name"], n, "", mates)\n'
+     '                            for n in _older_record(state)["rule_names"]) and f"{p_rg}/{p_name}/{name} gardée : sonde")\n'
+     "                        or self._delete_rule(p_rg, p_name, name)\n"),
+]
+TESTS.update({mid: _D79 for mid in ("M2320", "M2321", "M2322", "M2323")})
 
 # G1 (#76): benign noise — a fault measures Glorfindel only if its effect was seen in Glorfindel's
 # telemetry, between its start and end; noise that takes the VM down is cancelled; the rate of

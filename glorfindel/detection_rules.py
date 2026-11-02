@@ -47,9 +47,12 @@ def expected_counts(status: dict) -> dict:
             return int(d.get(k) or 0)
         except (TypeError, ValueError):
             return 0
-    # COR1: the root shells set aside by their sessions' origin, and the correlation's queries.
+    # COR1: the root shells set aside by their sessions' origin, and the correlation's queries;
+    # COR2: of them, those whose origin a source outside the VM confirmed (the rest: read in
+    # the VM only).
     return {"expected_count": n(es, "count"), "expected_last": str(es.get("last") or ""),
-            "origin_count": n(es, "origin_count"), "correlation": {k: n(co, k) for k in correlation.COUNTS}}
+            "origin_count": n(es, "origin_count"), "origin_confirmed": n(es, "origin_confirmed"),
+            "correlation": {k: n(co, k) for k in correlation.COUNTS}}
 
 # P1: the client's layer — the rules of THIS deployment (approved, overriding a base rule,
 # disabling one), outside the repository, loaded over the shipped base
@@ -1381,7 +1384,7 @@ class RulePoller:
             control = is_control_plane_source(rule.source) or is_identity_source(rule.source)
             budget = _CONTROL_PLANE_CARDS_PER_POLL
             data_budget = _DATA_CARDS_PER_POLL
-            expected_n = origin_n = 0
+            expected_n = origin_n = confirmed_n = 0
             for key, (tgt, krows) in routed.items():
                 seen = dispatched.get(key, {})
                 new = [r for r in krows if _row_identity(r) not in seen]
@@ -1407,6 +1410,7 @@ class RulePoller:
                 expected_n += aside
                 if aside:
                     origin_n += sum(judged[id(r)].get("via") == "origin" for r in new if id(r) in judged)
+                    confirmed_n += sum(bool(judged[id(r)].get("proof")) for r in new if id(r) in judged)
                 if not kept:
                     continue
                 # Event rows (TimeGenerated) are one incident per cycle: the newest is
@@ -1444,7 +1448,8 @@ class RulePoller:
             if expected_n:
                 # ADM1: the sudo set aside, counted where the console reads the rules.
                 st["expected_sudo"] = {"count": expected_counts(st)["expected_count"] + expected_n,
-                                       "last": now_iso, "origin_count": expected_counts(st)["origin_count"] + origin_n}
+                                       "last": now_iso, "origin_count": expected_counts(st)["origin_count"] + origin_n,
+                                       "origin_confirmed": expected_counts(st)["origin_confirmed"] + confirmed_n}
             if any(corr.values()):
                 st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)
             # Recorded AFTER the dispatch: a crash in between re-sends (at least once)

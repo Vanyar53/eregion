@@ -858,15 +858,22 @@ def test_a_fault_by_hand_during_a_request_is_refused_and_touches_nothing(tmp_pat
     ran = []
     monkeypatch.setattr(engine_mod.Engine, "run", lambda self, *a, **kw: ran.append(kw) or
                         engine_mod.RunOutcome("gothmog-x", "PASS"))
-    with request_lock(tmp_path / "runs", "request r-20261031T080000Z-[/x]"):
+    from eregion_core.exercise_runner import LOCK_FD_ENV
+    with request_lock("request r-20261031T080000Z-[/x]") as fd:
         res = CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes"])
         assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
         assert "busy: request r-20261031T080000Z-[/x] runs on this Orodruin" in " ".join(res.output.split())
         assert ran == []
         # A dry run reads nothing on Azure: no lock.
         assert CliRunner().invoke(cli, ["run", "vm-shutdown", "--dry-run"]).exit_code == 0
-        # A wire of the request runs under the request's own lock: it never takes it.
-        res = CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes", "--request", REQ, "--target", VM])
+        # SEC14 (R-10): a wire launched by hand, its request's lock not handed down, is refused too.
+        wire = ["run", "vm-shutdown", "--yes", "--request", REQ, "--target", VM]
+        res = CliRunner().invoke(cli, wire)
+        assert res.exit_code == 1 and "busy: request r-20261031T080000Z-[/x]" in " ".join(res.output.split())
+        assert ran == []
+        # The request's own wire runs under the hold its runner hands down (LOCK_FD_ENV).
+        monkeypatch.setenv(LOCK_FD_ENV, str(fd))
+        res = CliRunner().invoke(cli, wire)
         assert res.exit_code == 0, res.output
         assert ran == [{"skip_confirm": True, "without_glorfindel": False, "request": REQ, "target": VM,
                         "typed_name": ""}]
@@ -883,7 +890,7 @@ def test_a_request_during_a_fault_by_hand_is_refused_naming_it(tmp_path, monkeyp
 
     def run(self, *a, **kw):
         with _pytest.raises(Busy) as e:
-            with request_lock(tmp_path / "runs", "request r-20261031T080000Z-abcdef"):
+            with request_lock("request r-20261031T080000Z-abcdef"):
                 pass
         seen.append(str(e.value))
         return engine_mod.RunOutcome("gothmog-x", "PASS")
@@ -891,5 +898,5 @@ def test_a_request_during_a_fault_by_hand_is_refused_naming_it(tmp_path, monkeyp
     assert CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes"]).exit_code == 0
     assert seen == ["fault vm-shutdown runs on this Orodruin: one at a time — wait for its end, "
                     "or stop it (make orodruin-kill)"]
-    lock = tmp_path / "runs" / "orodruin" / "requests" / ".lock"
-    assert lock.read_text() == ""        # its name gone with it
+    from eregion_core.exercise_runner import lock_path
+    assert lock_path().read_text() == ""        # its name gone with it

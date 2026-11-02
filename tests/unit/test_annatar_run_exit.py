@@ -216,7 +216,7 @@ def test_a_run_by_hand_during_a_request_is_refused_and_touches_nothing(tmp_path,
     monkeypatch.chdir(tmp_path)
     ran = []
     monkeypatch.setattr(Engine, "run", lambda self, path, skip_confirm=False: ran.append(path))
-    with request_lock(tmp_path / "runs", "request r-20261031T080000Z-abcdef"):
+    with request_lock("request r-20261031T080000Z-abcdef"):
         res = CliRunner().invoke(cli, ["run", EXFIL_YAML, "--yes"])
         assert res.exit_code == 1, res.output
         assert ran == []
@@ -230,7 +230,7 @@ def test_a_run_by_hand_during_a_request_is_refused_and_touches_nothing(tmp_path,
 
     def holding(self, path, skip_confirm=False):
         with pytest.raises(Busy, match="^run data-exfiltration.yaml runs on this Orodruin"):
-            with request_lock(tmp_path / "runs", "request r-20261031T080000Z-abcdef"):
+            with request_lock("request r-20261031T080000Z-abcdef"):
                 pass
         ran.append(path)
     monkeypatch.setattr(Engine, "run", holding)
@@ -242,7 +242,31 @@ def test_a_run_refused_busy_says_the_holder_as_it_is(tmp_path, monkeypatch):
     from eregion_core.exercise_runner import request_lock
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Engine, "run", lambda self, path, skip_confirm=False: None)
-    with request_lock(tmp_path / "runs", "campaign [/x]"):
+    with request_lock("campaign [/x]"):
         res = CliRunner().invoke(cli, ["run", EXFIL_YAML, "--yes"])
     assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
     assert "busy: campaign [/x] runs" in " ".join(res.output.split())
+
+
+# ── SEC14 (R-10): `annatar clean` rewrites a disk — Orodruin's one lock too ───────────────────
+
+def test_a_clean_during_a_request_is_refused_and_touches_nothing(tmp_path, monkeypatch):
+    from annatar.runner.initializer import InitRunner
+    from eregion_core.exercise_runner import Busy, request_lock
+    monkeypatch.chdir(tmp_path)
+    cleaned = []
+    monkeypatch.setattr(InitRunner, "clean", lambda self, s, without_glorfindel=False: cleaned.append(s))
+    with request_lock("request r-20261031T080000Z-abcdef"):
+        res = CliRunner().invoke(cli, ["clean", EXFIL_YAML])
+    assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
+    assert "busy: request r-20261031T080000Z-abcdef runs" in " ".join(res.output.split())
+    assert cleaned == []
+
+    def holding(self, s, without_glorfindel=False):   # the request over: the clean holds the lock
+        with pytest.raises(Busy, match="^clean data-exfiltration.yaml runs on this Orodruin"):
+            with request_lock("request r-20261031T080000Z-abcdef"):
+                pass
+        cleaned.append(s)
+    monkeypatch.setattr(InitRunner, "clean", holding)
+    assert CliRunner().invoke(cli, ["clean", EXFIL_YAML]).exit_code == 0
+    assert cleaned == [EXFIL_YAML]

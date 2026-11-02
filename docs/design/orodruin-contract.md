@@ -592,31 +592,40 @@ agit sur plusieurs VM est refusée (`no_engine`), dès le jugement : elle ne tou
 que ce que l'opérateur a vu et tapé. La fenêtre de chaque run
 porte l'identifiant de la demande, ainsi que son rapport (`metrics.request`).
 
-**Un run à la fois** (relecture de DG-b, point 5 ; #358). Un verrou exclusif, jamais attendu
-(`flock` sur `runs/orodruin/requests/.lock`, `exercise_runner.request_lock`), est pris :
-- par une demande, le temps de tous ses fils ;
-- par une campagne lancée à la main (`annatar campaign run`, `make orodruin-campaign-run`) : elle
-  mettrait une technique sur une VM qu'un fil tient, ou sous sa panne ;
-- par un run lancé à la main (`annatar run <scénario>`), pour la même raison : rien de lancé à la
+**Un run à la fois** (relecture de DG-b, point 5 ; #358 ; SEC14, R-10). Un seul verrou exclusif,
+jamais attendu (`flock` sur un seul fichier, `exercise_runner.lock_path()`, pris par
+`exercise_runner.request_lock`). Toute commande qui agit sur une cible le prend :
+- une demande, le temps de tous ses fils ;
+- chaque fil d'une demande (`annatar wire`, `gothmog run --request`), sous la prise de sa demande ;
+- une campagne lancée à la main (`annatar campaign run`, `make orodruin-campaign-run`), quel que
+  soit son `--runs-dir` : elle mettrait une technique sur une VM qu'un fil tient, ou sous sa panne ;
+- un run lancé à la main (`annatar run <scénario>`), pour la même raison : rien de lancé à la
   main ne tourne pendant une demande ;
-- par une panne lancée à la main (`gothmog run <panne>`, après G1), pour la même raison.
+- un nettoyage (`annatar clean`) : il réécrit un disque ;
+- une panne lancée à la main (`gothmog run <panne>`, après G1).
 
-Un aperçu (`--dry-run`) ne lance rien et ne le prend pas.
+Un aperçu (`--dry-run`) ne lance rien et ne le prend pas ; `gothmog preflight` n'écrit rien et ne le
+prend pas non plus.
 
-Jamais par un fil d'une demande : il tourne sous le verrou de sa demande (`annatar wire` et le
-lanceur de campagne appellent le moteur eux-mêmes, jamais la commande `run` ; `gothmog run --request`
-ne le prend pas). Le premier écrit ce qui
-le tient (« request r-… », « campaign … », « run <scénario> », « fault <panne> ») ; le suivant est refusé (`busy`) sans
+**Un fil tient la prise de sa demande.** Le lanceur de la demande transmet son descripteur au
+processus de l'injecteur qu'il lance (`pass_fds`, nommé par `EREGION_RUN_LOCK_FD`). Le fil reprend
+ce même fichier ouvert : c'est la prise de la demande, son nom reste celui de la demande, et le fil
+ne la relâche jamais. Un descripteur que la demande n'a pas transmis (un autre fichier, ou une autre
+ouverture du verrou) n'est pas cette prise : un fil lancé à la main est refusé (`busy`) tant que
+quelque chose tourne, et prend le verrou lui-même sinon.
+
+Le premier écrit ce qui le tient (« request r-… », « campaign … », « run <scénario> »,
+« clean <scénario> », « fault <panne> », « wire r-… ») ; le suivant est refusé (`busy`) sans
 rien lancer ni ratifier, et dit lequel. Le verrou part avec le processus, un crash compris ; à une
 sortie normale, le nom s'efface aussi. Le nom n'est qu'une indication : un refusé peut lire, le temps
 de quelques microsecondes, un nom périmé ou à moitié écrit, et n'en montre que les caractères
 imprimables.
 
-**Où est le verrou.** Dans le `runs/` de la commande : le répertoire de travail pour une demande,
-pour `annatar run` et pour `gothmog run`, `--runs-dir` pour une campagne. Sur Orodruin, les conteneurs
-de ces commandes montent le même `$HOME/runs` sur `/app/runs` (`make orodruin-exercise`,
-`make orodruin-campaign-run`, `make gothmog-run`) : un seul verrou. Une campagne lancée avec un autre
-`--runs-dir` n'exclut plus une demande — ne pas le faire sur Orodruin.
+**Où est le verrou.** Un seul fichier, quel que soit le répertoire où une commande écrit ses runs :
+`EREGION_RUN_LOCK` s'il est posé, sinon `runs/orodruin/requests/.lock` depuis le répertoire de
+travail. Sur Orodruin, c'est `/app/runs/…`, le même `$HOME/runs` que montent tous les conteneurs des
+injecteurs (`make orodruin-exercise`, `make orodruin-campaign-run`, `make gothmog-run`). Une campagne
+lancée avec un autre `--runs-dir` prend ce même verrou.
 
 **Une limite** : un fil se reconnaît à son `--request` (`annatar wire`, `gothmog run --request`), qui ne
 prend pas le verrou. Lancé à la main avec un faux identifiant, il le contourne. C'est un geste de

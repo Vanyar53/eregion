@@ -137,9 +137,11 @@ juge et la lance.
    `DRY_RUN=1` s'arrête avant l'envoi. `REQUEST_FROM=local` lit la console de ton poste.
 3. **Sur Orodruin.** Il vérifie son contrat (`armed`), rejuge chaque fil sur ce qu'il lit maintenant
    et compare le nom tapé. Puis il lance **les fils l'un après l'autre**, une fenêtre à la fois.
-   - **Un run à la fois** : Orodruin tient la demande sous un verrou. Une campagne ou un run lancés à
-     la main (`make orodruin-campaign-run`, `annatar run`) le prennent aussi : l'un refuse l'autre
-     (`busy`), et dit lequel tourne. Une panne lancée à la main (`gothmog run`) aussi.
+   - **Un run à la fois** : Orodruin tient la demande sous un verrou, un seul fichier. Chaque fil
+     tourne sous la prise de sa demande, que son lanceur lui transmet. Une campagne (quel que soit
+     son `--runs-dir`), un run, un nettoyage ou une panne lancés à la main (`make
+     orodruin-campaign-run`, `annatar run`, `annatar clean`, `gothmog run`), et un fil lancé à la
+     main, le prennent aussi : l'un refuse l'autre (`busy`), et dit lequel tourne.
    - Avant chaque fil, il relit le plafond restant à la demande entière, la watch et la cible.
    - Une VM isolée par Glorfindel est attendue 20 min au plus, puis son fil est sauté. Elle n'est
      jamais levée.

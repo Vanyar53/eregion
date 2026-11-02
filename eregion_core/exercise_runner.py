@@ -141,8 +141,11 @@ def publish_status(status: "Status") -> bool:
 
 
 def launch(argv: list[str], env: dict) -> int:
-    """A wire: its injector's own run, its own process, the operator's terminal for its output."""
-    return subprocess.run(argv, env={**os.environ, **env}, check=False).returncode
+    """A wire: its injector's own run, its own process, the operator's terminal for its output —
+    the request's lock handed down to it (``LOCK_FD_ENV``): it runs under that hold."""
+    fd = env.get(LOCK_FD_ENV, "")
+    return subprocess.run(argv, env={**os.environ, **env}, check=False,
+                          pass_fds=(int(fd),) if fd.isdigit() else ()).returncode
 
 
 def argv_for(experiment, wire: xr.Wire, request_id: str, typed: str = "") -> list[str]:
@@ -162,6 +165,19 @@ class Busy(RuntimeError):
 # What holds the lock, written in it once taken: the refusal of the next one says it. Short, and
 # read back as printable text only — it is said, never trusted.
 _HOLDER_MAX = 120
+# SEC14 (R-10): Orodruin's one lock, wherever a command writes its runs. EREGION_RUN_LOCK names
+# it (the tests: a file of their own); else runs/orodruin/requests/.lock from the working
+# directory — /app/runs on Orodruin, the $HOME/runs every injector's container mounts.
+LOCK_ENV = "EREGION_RUN_LOCK"
+# A wire of a request holds its request's lock: the runner hands its descriptor down to the
+# injector it launches (``launch``, ``pass_fds``), and names it here.
+LOCK_FD_ENV = "EREGION_RUN_LOCK_FD"
+
+
+def lock_path() -> Path:
+    """The one lock of « one run at a time » (R-10) — never a runs directory a command was given
+    (``campaign run --runs-dir``): every command that acts takes this file."""
+    return Path(os.environ.get(LOCK_ENV) or Path("runs") / "orodruin" / "requests" / ".lock")
 
 
 def _holder(fd: int) -> str:
@@ -174,19 +190,43 @@ def _holder(fd: int) -> str:
     return "".join(c for c in text if c.isprintable()).strip()
 
 
+def _inherited(path: Path) -> int | None:
+    """The lock's descriptor this process was handed by the request that launched it — the same
+    file (its device and inode), else None: a number set by hand names nothing."""
+    raw = os.environ.get(LOCK_FD_ENV, "")
+    if not raw.isdigit():
+        return None
+    fd = int(raw)
+    try:
+        held, here = os.fstat(fd), os.stat(path)
+    except OSError:
+        return None
+    return fd if (held.st_dev, held.st_ino) == (here.st_dev, here.st_ino) else None
+
+
 @contextlib.contextmanager
-def request_lock(runs_dir: Path | str, holder: str = ""):
-    """One run at a time on this Orodruin (DG-b review, point 5; #358): an exclusive ``flock`` on
-    ``runs/orodruin/requests/.lock``, never waited for — two requests side by side would overlap
-    on a VM and double Orodruin's cap. Taken by a request (``exercise_runner``) and by a run
-    launched by hand on Orodruin (``annatar campaign run``, ``annatar run``, ``gothmog run``): a
-    campaign, a run or a fault during a request would put a technique on a VM a wire holds, or a
-    fault under it. Never by a wire of the request — it runs under the request's own lock. ``holder`` (« request r-… », « campaign C… ») is written in the
-    lock once taken, and said by the next one refused. Held while it runs; the kernel lets it go
-    with the process, a crash included."""
-    path = Path(runs_dir) / "orodruin" / "requests" / ".lock"
+def request_lock(holder: str = ""):
+    """One run at a time on this Orodruin (DG-b review, point 5; #358; SEC14, R-10): an exclusive
+    ``flock`` on ``lock_path()``, never waited for — two requests side by side would overlap on a
+    VM and double Orodruin's cap. Taken by every command that acts on a target: a request
+    (``exercise_runner``), each of its wires (``annatar wire``, ``gothmog run --request``), and
+    whatever is launched by hand on Orodruin (``annatar campaign run`` whatever its
+    ``--runs-dir``, ``annatar run``, ``annatar clean``, ``gothmog run``): a campaign, a run, a
+    clean or a fault during a request would put a technique on a VM a wire holds, or a fault
+    under it.
+
+    A wire holds its request's lock, never a lock of its own: the runner hands its descriptor
+    down (``LOCK_FD_ENV``). The same open file, flocked again, is the request's hold; a
+    descriptor of anyone else's opening is refused (``Busy``) while the request runs. Its holder's
+    name stays the request's. Yields the descriptor held.
+
+    ``holder`` (« request r-… », « campaign C… ») is written in the lock once taken, and said by
+    the next one refused. Held while it runs; the kernel lets it go with the process, a crash
+    included."""
+    path = lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    inherited = _inherited(path)
+    fd = inherited if inherited is not None else os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     held = False
     try:
         try:
@@ -195,16 +235,20 @@ def request_lock(runs_dir: Path | str, holder: str = ""):
             what = _holder(fd) or "another request"
             raise Busy(f"{xr.shown(what)} runs on this Orodruin: one at a time — wait for its end, "
                        "or stop it (make orodruin-kill)") from None
+        if inherited is not None:
+            yield fd                 # the request's hold: its name, its release are the request's
+            return
         held = True
         # The name a crash left is gone first: a short one after a long one is read whole.
         os.ftruncate(fd, 0)
         os.pwrite(fd, holder.encode("utf-8")[:_HOLDER_MAX], 0)   # cut as it is read: in bytes
-        yield
+        yield fd
     finally:
         if held:
             with contextlib.suppress(OSError):
                 os.ftruncate(fd, 0)   # the name goes with a normal exit
-        os.close(fd)
+        if inherited is None:
+            os.close(fd)
 
 
 # ── The runner ────────────────────────────────────────────────────────────────────────
@@ -337,15 +381,15 @@ class Runner:
 
     def run(self, req: xr.Request, typed: dict[int, str]) -> Status:
         try:
-            with request_lock(self.runs_dir, f"request {req.id}"):
-                return self._run(req, typed)
+            with request_lock(f"request {req.id}") as fd:
+                return self._run(req, typed, fd)
         except Busy as e:
             # Nothing judged, nothing published: the status of the request that runs stays its own.
             self.say(f"Request {req.id} refused — busy: {e}")
             return Status(req.id, state="refused", codes=["busy"],
                           wires=[WireStatus(w.rank, "refused", "busy") for w in req.wires])
 
-    def _run(self, req: xr.Request, typed: dict[int, str]) -> Status:
+    def _run(self, req: xr.Request, typed: dict[int, str], lock_fd: int) -> Status:
         start = self.now()
         status, verdicts, cap, names, faults = self.judge(req, typed)
         for w, v in zip(req.wires, verdicts):
@@ -400,7 +444,8 @@ class Runner:
             ws.state = "running"
             self._emit(status)
             before = set(self._windows(req.id))
-            env = {orodruin.MAX_INJECTIONS_ENV: str(left_calls), orodruin.MAX_RUN_S_ENV: str(max(left_s, 1))}
+            env = {orodruin.MAX_INJECTIONS_ENV: str(left_calls), orodruin.MAX_RUN_S_ENV: str(max(left_s, 1)),
+                   LOCK_FD_ENV: str(lock_fd)}
             self.say(f"→ wire {w.rank}: {e.kind} {e.id} on {w.target_name}")
             try:
                 code = self.launch(argv_for(e, w, req.id, typed.get(w.rank, "")), env)

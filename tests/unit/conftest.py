@@ -38,6 +38,9 @@ def hermetic_orodruin(tmp_path, monkeypatch):
         "cap": lambda: ([], {"max_injections": 20, "max_run_s": 3600}),
     })
     monkeypatch.setenv(orodruin.AUDIT_ENV, str(tmp_path / "orodruin-audit.jsonl"))
+    # Orodruin's one lock (R-10) in tmp, never the repository's runs/; no descriptor handed down.
+    monkeypatch.setenv("EREGION_RUN_LOCK", str(tmp_path / "orodruin-run.lock"))
+    monkeypatch.delenv("EREGION_RUN_LOCK_FD", raising=False)
     # No exercise channel, no return channel (#159): nothing reaches Azure Storage.
     monkeypatch.delenv("EREGION_EXERCISE_CHANNEL", raising=False)
     monkeypatch.delenv("EREGION_WATCH_CHANNEL", raising=False)

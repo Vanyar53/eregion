@@ -6928,21 +6928,21 @@ MUTANTS += [
     ("M2475", "a path Orodruin reads on Azure hides a character not printable (#358)", "eregion_core/held.py",
      "    if not path.isprintable():\n", "    if False:\n"),
     ("M2476", "a campaign launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
-     '    lock = contextlib.nullcontext() if dry_run else request_lock(runs_dir, f"campaign {campaign_id}")\n',
+     '    lock = contextlib.nullcontext() if dry_run else request_lock(f"campaign {campaign_id}")\n',
      "    lock = contextlib.nullcontext()\n"),
     ("M2477", "the one refused never says what holds the lock (#358)", "eregion_core/exercise_runner.py",
      '            what = _holder(fd) or "another request"\n', '            what = "another request"\n'),
     ("M2478", "what holds the lock said raw, its escapes with it (#358)", "eregion_core/exercise_runner.py",
      '    return "".join(c for c in text if c.isprintable()).strip()\n', "    return text.strip()\n"),
     ("M2479", "a request runs without naming itself in the lock (#358)", "eregion_core/exercise_runner.py",
-     '            with request_lock(self.runs_dir, f"request {req.id}"):\n',
-     "            with request_lock(self.runs_dir):\n"),
+     '            with request_lock(f"request {req.id}") as fd:\n',
+     "            with request_lock() as fd:\n"),
 ]
 TESTS.update({mid: _358_CORE for mid in ("M2474", "M2475", "M2477", "M2478", "M2479")})
 TESTS["M2476"] = "tests/unit/test_campaign_runner.py"
 MUTANTS += [
     ("M2480", "a single run launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
-     '    lock = contextlib.nullcontext() if dry_run else request_lock("runs", f"run {os.path.basename(path)}")\n',
+     '    lock = contextlib.nullcontext() if dry_run else request_lock(f"run {os.path.basename(path)}")\n',
      "    lock = contextlib.nullcontext()\n"),
 ]
 TESTS["M2480"] = "tests/unit/test_annatar_run_exit.py"
@@ -7359,13 +7359,37 @@ MUTANTS += [
      "            except Exception as e:\n                why = f\"typed_name: the target's name unreadable",
      "            except ZeroDivisionError as e:\n                why = f\"typed_name: the target's name unreadable"),
     ("M2498", "a fault launched by hand on Orodruin during a request takes no lock (#358)", "gothmog/cli.py",
-     '    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")\n',
-     "    lock = contextlib.nullcontext()\n"),
-    ("M2499", "a wire of a request takes the request's lock: it refuses itself (#358)", "gothmog/cli.py",
-     '    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")\n',
-     '    lock = request_lock("runs", f"fault {os.path.basename(fault)}")\n'),
+     "        with request_lock(holder):\n", "        with open(os.devnull):\n"),
+    # SEC14 (R-10): a wire now holds its request's lock, handed down — re-anchored there.
+    ("M2499", "a wire of a request takes a lock of its own: it refuses itself (#358, R-10)",
+     "eregion_core/exercise_runner.py",
+     "    inherited = _inherited(path)\n", "    inherited = None\n"),
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
+
+# SEC14 (#420, R-10): « one run at a time » has one lock, taken by every command that acts — a
+# wire under the hold its request hands down, a clean, a campaign whatever its --runs-dir.
+_R10 = "tests/unit/test_exercise_runner.py"
+MUTANTS += [
+    ("M2940", "a wire launched by hand during a request takes no lock (R-10)", "annatar/cli.py",
+     '        with request_lock(f"wire {request}"), \\\n', "        with contextlib.nullcontext(), \\\n"),
+    ("M2941", "a clean during a request takes no lock (R-10)", "annatar/cli.py",
+     '        with request_lock(f"clean {os.path.basename(scenario)}"):\n',
+     "        with contextlib.nullcontext():\n"),
+    ("M2942", "the runner hands its lock down to no wire (R-10)", "eregion_core/exercise_runner.py",
+     "pass_fds=(int(fd),) if fd.isdigit() else ()", "pass_fds=()"),
+    ("M2943", "any descriptor named in the environment is taken for the request's hold (R-10)",
+     "eregion_core/exercise_runner.py",
+     "    return fd if (held.st_dev, held.st_ino) == (here.st_dev, here.st_ino) else None\n",
+     "    return fd\n"),
+    ("M2944", "a wire's hold writes its own name over the request's, and erases it at its exit (R-10)",
+     "eregion_core/exercise_runner.py",
+     "        if inherited is not None:\n            yield fd ", "        if False:\n            yield fd "),
+    ("M2945", "the runner names no lock to its wires (R-10)", "eregion_core/exercise_runner.py",
+     ",\n                   LOCK_FD_ENV: str(lock_fd)}", "}"),
+]
+TESTS.update({"M2940": "tests/unit/test_annatar_wire.py", "M2941": "tests/unit/test_annatar_run_exit.py",
+              "M2942": _R10, "M2943": _R10, "M2944": _R10, "M2945": _R10})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

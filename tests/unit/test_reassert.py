@@ -1664,3 +1664,50 @@ def test_a_block_written_again_whole_is_put_back_again_once():
     assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["reapplied"]
     assert c.block_suspicious_ip.call_count == 2
     assert not any("deuxième fois" in e["reason"] for e in escalations.pending())
+
+
+@pytest.mark.parametrize("merged", [False, True], ids=["perimeter", "merged"])
+@pytest.mark.parametrize("listed", [("db", "web"), ("web", "db")])
+def test_a_perimeter_is_put_back_before_the_vm_blocks_of_its_subnet(monkeypatch, listed, merged):
+    """L1Qr (seed 6): web's perimeter pair turned into an allow, Db's own rule for a NIC whose
+    address changed gone. Read first — the directory listing's order —, Db's block was rewritten,
+    read again under the turned pair, and said « n'est plus bloquée » of its NICs; web's entry
+    then put the pair back, a moment later in the same pass: the card false once the pass ended.
+    The perimeters first, whatever the listing, web's entry merged with its own block or not:
+    Db's block is read with the pair whole."""
+    from glorfindel import actions as facade
+    rid = {v: f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/{v}"
+           for v in ("db", "web")}
+    for v in rid:
+        readiness.record_assessment(readiness._verdict(v, []), rid[v])
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-db"}]
+    _save_block_state("db", _IP, rid["db"], placements=placed, threat_port=22)
+    _save_block_state("web", _IP, rid["web"], nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair",
+                      scoped=False, threat_port=22,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-web"}] if merged else None)
+    real = facade.active_blocks
+    monkeypatch.setattr(facade, "active_blocks", lambda: sorted(
+        real(), key=lambda b: listed.index(b["vm_name"])))
+    world = {"pair": False, "db": False}
+    read = []
+
+    def verify(ip, r):
+        vm = r.rsplit("/", 1)[-1]
+        read.append(vm)
+        if vm == "web":
+            return {"verified": True} if world["pair"] else {"verified": False, "missing_rules": ["pair"]}
+        if world["pair"]:                 # behind the pair: held, whatever its own rule
+            return {"verified": True} if world["db"] else {
+                "verified": True, "held_missing": ["r-db"], "held_by_perimeter": ["nic-a", "nic-b"]}
+        return {"verified": False, "missing_rules": [] if world["db"] else ["r-db"],
+                "open_nics": ["nic-a", "nic-b"]}
+
+    def block(ip, r, scope, threat_port=None):
+        world["pair" if scope == "subnet" else r.rsplit("/", 1)[-1]] = True
+        return {"status": "blocked"}
+    c = MagicMock()
+    c.verify_block_ip.side_effect = verify
+    c.block_suspicious_ip.side_effect = block
+    reassert_active(c, _ACT)
+    assert read[0] == "web"
+    assert not [e["reason"] for e in escalations.pending() if "n'est plus bloquée" in e["reason"]]

@@ -162,6 +162,91 @@ def test_the_reader_says_a_refused_file_once(tmp_path):
     assert len(refused) == 1 and "a_signals.jsonl" in refused[0] and "tube" in refused[0]
 
 
+def _reader(runs: Path, **budget):
+    said: list[tuple[str, str]] = []
+    reader = channel_reader.ChannelReader(
+        runs, lambda text, kind="refused": said.append((kind, text)),
+        budget=channel_reader.Budget(**budget) if budget else None)
+    return reader, said
+
+
+def _ids(got) -> list[str]:
+    return [json.loads(line)["signal_id"] for _path, line in got]
+
+
+def test_a_file_truncated_or_replaced_is_read_from_its_start(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    f = runs / "a_signals.jsonl"
+    f.write_bytes(_lines(3))
+    reader, said = _reader(runs)
+    assert _ids(reader.poll()) == ["r_0", "r_1", "r_2"]
+    f.write_bytes(_lines(1, raw_signal={"x": 1}))                   # truncated, shorter: one new line
+    assert _ids(reader.poll()) == ["r_0"]
+    new = runs / "a_signals.jsonl.tmp"
+    new.write_bytes(_lines(5))                                      # replaced: another inode, longer
+    os.replace(new, f)
+    assert _ids(reader.poll()) == [f"r_{i}" for i in range(5)]
+    assert sum("relu depuis son début" in t for _k, t in said) == 2
+
+
+def test_a_file_gone_is_forgotten(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    f = runs / "a_signals.jsonl"
+    f.write_bytes(_lines(2))
+    reader, _said = _reader(runs)
+    reader.poll()
+    f.unlink()
+    reader.poll()
+    assert f not in reader.offsets
+
+
+def test_a_poll_opens_a_bounded_number_of_files_each_in_turn(tmp_path, monkeypatch):
+    """FILES_PER_POLL files with something new opened per poll; the others at the next ones —
+    every file read, none twice."""
+    monkeypatch.setattr(channel_reader, "FILES_PER_POLL", 3)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    for i in range(10):
+        (runs / f"f{i:02d}_signals.jsonl").write_text(json.dumps(_line("attack_started", signal_id=f"s{i}")) + "\n")
+    reader, _said = _reader(runs)
+    opened: list[str] = []
+    real = channel_reader.open_regular
+    monkeypatch.setattr(channel_reader, "open_regular", lambda p: opened.append(Path(p).name) or real(p))
+    seen: list[str] = []
+    for _ in range(4):
+        before = len(opened)
+        seen += _ids(reader.poll())
+        assert len(opened) - before <= 3
+    assert sorted(seen) == [f"s{i}" for i in range(10)]
+    assert reader.poll() == [] and len(opened) == 10                # nothing new: nothing opened
+
+
+def test_a_writer_whose_minute_is_spent_is_not_read(tmp_path, monkeypatch):
+    """Its file is passed over without being read, counted in bytes; another file waiting only
+    for the channel's minute is read later, nothing lost."""
+    now = [0.0]
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    a, b = runs / "a_signals.jsonl", runs / "b_signals.jsonl"
+    a.write_bytes(_lines(2))
+    reader, _said = _reader(runs, per_writer=2, total=3, window_s=60, clock=lambda: now[0])
+    assert len(reader.poll()) == 2
+    with open(a, "ab") as fh:
+        fh.write(_lines(500))
+    reads: list[str] = []
+    real = channel_reader.read_lines
+    monkeypatch.setattr(channel_reader, "read_lines", lambda p, *x, **k: reads.append(Path(p).name) or real(p, *x, **k))
+    assert reader.poll() == [] and reads == [] and reader.offsets[a] == a.stat().st_size
+    assert reader.budget.report()["a_signals.jsonl"][1] == len(_lines(500))
+    b.write_bytes(_lines(3))
+    assert _ids(reader.poll()) == ["r_0"]                           # the channel's third line
+    assert _ids(reader.poll()) == []                                # its minute spent: waits
+    now[0] = 61.0
+    assert _ids(reader.poll()) == ["r_1", "r_2"]                    # read later, nothing lost
+
+
 def test_a_fifo_and_a_link_in_runs_never_stop_the_watch(tmp_path, monkeypatch):
     """A FIFO and a link in runs/ when the watch starts: the line an injector writes next is
     still decided, the two are refused, each said once — the watch never blocks on them."""
@@ -203,25 +288,25 @@ def test_the_budget_lets_a_writer_through_its_rate_and_says_the_rest_once_a_minu
     budget = channel_reader.Budget(per_writer=3, total=5, window_s=60, clock=lambda: now[0])
     assert [budget.take("a") for _ in range(5)] == [True, True, True, False, False]
     assert [budget.take("b") for _ in range(3)] == [True, True, False]      # the channel's 5
-    assert budget.report() == {"a": 2, "b": 1}
+    assert budget.report() == {"a": (2, 0), "b": (1, 0)}
     budget.take("a")
     assert budget.report() == {}                     # said a minute ago: kept for the next
     now[0] = 61.0
     assert budget.take("a") is True                  # a new minute
-    assert budget.report() == {"a": 1}
+    assert budget.report() == {"a": (1, 0)}
 
 
 def test_a_burst_in_runs_is_cut_at_the_writers_rate_and_said_in_one_line(tmp_path, monkeypatch):
-    """A file of 3 × PER_WRITER_PER_MIN lines: PER_WRITER_PER_MIN are decided, the rest refused
-    unread, said in one line and counted once — never one refusal per line."""
+    """A file of 3 × PER_WRITER_PER_MIN lines: PER_WRITER_PER_MIN are decided, the rest not
+    admitted — passed over unread —, said in one line and counted once, never one per line."""
     n = channel_reader.PER_WRITER_PER_MIN
     lines = [_line("detection_missed", signal_id=f"m{i}", resource_id=_vm(i)) for i in range(3 * n)]
     responded, _polled, out = _run_watch(tmp_path, monkeypatch, lines, expect=n)
     assert len(responded) == n, out
     flat = " ".join(out.split())
-    assert flat.count("Canal runs/ :") == 1 and f"{2 * n} ligne(s) refusée(s)" in flat
+    assert flat.count("Canal runs/ :") == 1 and "octet(s) non lus" in flat
     assert flat.count("Signal refusé") == 0
-    assert signal_origin.refused_counts() == {"(débit)": 2 * n}
+    assert signal_origin.refused_counts() == {"(débit)": 1}
 
 
 def test_the_lines_waiting_for_one_vm_are_bounded(tmp_path, monkeypatch):

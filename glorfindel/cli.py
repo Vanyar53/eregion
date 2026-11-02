@@ -714,15 +714,18 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     _dispatch(*admitted, source=path.name)   # non-blocking — a worker takes over
         over = _channel.budget.report()
         if over:
-            n = sum(over.values())
-            files = ", ".join(f"{name} ({k})" for name, k in sorted(over.items())[:5])
+            n = sum(lines for lines, _ in over.values())
+            passed = sum(nbytes for _, nbytes in over.values())
+            files = ", ".join(f"{name} ({k})" for name, (k, _) in sorted(over.items())[:5])
             why = (f"débit du canal dépassé (au plus {PER_WRITER_PER_MIN} lignes par fichier et par "
-                   "minute) : refusées sans être lues")
+                   "minute) : non admis")
+            what = " et ".join(x for x in (f"{n} ligne(s) refusée(s)" if n else "",
+                                           f"{passed} octet(s) non lus" if passed else "") if x)
             with _output_lock:
-                console.print(f"[bold red]Canal runs/ :[/bold red] {n} ligne(s) refusée(s), {_esc_markup(why)} — "
+                console.print(f"[bold red]Canal runs/ :[/bold red] {what}, {_esc_markup(why)} — "
                               f"{_esc_markup(files)}{' …' if len(over) > 5 else ''} ; rien n'est décidé "
                               "(compté : ~/.glorfindel/channel_refusals.json)")
-            _origin.refuse({"event": "(débit)"}, why, files, count=n)
+            _origin.refuse({"event": "(débit)"}, why, files, count=max(n, 1))
 
     from datetime import datetime, timezone
     from glorfindel.actions import AzureConnector

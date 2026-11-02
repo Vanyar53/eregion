@@ -39,8 +39,19 @@ def test_pushed_config_is_human_only_for_every_asset():
 def test_host_terraform_reads_the_bench_and_is_no_target():
     tf = (HOST / "main.tf").read_text(encoding="utf-8")
     roles = re.findall(r'role_definition_name\s*=\s*"([^"]+)"', tf)
-    assert sorted(roles) == ["Log Analytics Reader", "Reader"]
-    assert not re.search(r'"eregion-(target|zone)"\s*=', tf)
+    assert sorted(roles) == ["Eregion Glorfindel Session Drain", "Log Analytics Reader", "Reader"]
+    # SEC11 (R-03): the session drain, off by default, on each enrolled VM, never on the group.
+    drain = tf.split('resource "azurerm_role_assignment" "session_drain"', 1)[1].split("\n}", 1)[0]
+    assert "for_each" in drain and "var.session_drain ?" in drain and "enrolled_vms[0].resources" in drain
+    assert "scope                = each.value" in drain and "bench.id" not in drain
+    enrolled = tf.split('data "azurerm_resources" "enrolled_vms"', 1)[1].split("\n}", 1)[0]
+    assert 'required_tags       = { "eregion-target" = local.bench_id }' in enrolled
+    assert "count               = var.session_drain ? 1 : 0" in enrolled
+    variables = (HOST / "variables.tf").read_text(encoding="utf-8")
+    assert re.search(r'variable "session_drain" \{[^}]*default\s*=\s*false', variables)
+    # H0 carries no inscription tag; the one tag it names is the filter of the enrolled VMs (SEC11).
+    own = tf.replace('required_tags       = { "eregion-target" = local.bench_id }', "")
+    assert not re.search(r'"eregion-(target|zone)"\s*=', own)
     assert 'source_address_prefix      = var.operator_cidr' in tf
 
 

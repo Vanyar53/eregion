@@ -384,6 +384,19 @@ def _check_permissions(resource_id: str, connector) -> AuditCheck | list:
     for m in missing:
         by_scope.setdefault(m["scope"], []).append(m["action"])
     detail = " ; ".join(f"{scope} : {', '.join(acts)}" for scope, acts in by_scope.items())
+    from glorfindel.providers.interface import SESSION_DRAIN, capabilities_of
+    drain = capabilities_of(connector).rights(SESSION_DRAIN)
+    if drain and {m["action"] for m in missing} <= drain:
+        # SEC11 (R-03): Run Command alone — given VM by VM, to the enrolled VMs. The isolation
+        # holds without it; the sessions already open are not cut, and the card says so.
+        return AuditCheck(
+            action, name, "warn",
+            f"Coupure des sessions impossible sur cette VM — {detail} : l'isolation se fait, les "
+            "sessions déjà ouvertes restent.",
+            fix=("Le rôle « Eregion Glorfindel Session Drain » (infra/identities/glorfindel-session-drain.json) "
+                 "sur cette VM, si elle est inscrite — docs/operations.md, « Identités Azure »."),
+            data={"missing_permissions": missing},
+        )
     return AuditCheck(
         action, name, "fail",
         f"Droits manquants — {detail}",

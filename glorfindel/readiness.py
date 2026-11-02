@@ -186,7 +186,9 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
             "no_drain", "reserve",
             "Les sessions déjà ouvertes ne seront pas coupées à l'isolation (droit Run Command "
             "manquant) : un attaquant connecté garde la main.",
-            f"Ajouter {', '.join(sorted(caps.rights(SESSION_DRAIN)))} (le rôle « Eregion Glorfindel Response »)."))
+            f"Ajouter {', '.join(sorted(caps.rights(SESSION_DRAIN)))} : le rôle « Eregion Glorfindel "
+            "Session Drain », attribué sur cette VM si elle est inscrite (VM par VM, jamais sur le "
+            "groupe — docs/operations.md, « Identités Azure »)."))
 
     # Windows: no session drain (Linux `ss -K` only).
     try:
@@ -252,10 +254,12 @@ def assess(resource_id: str, connector, quarantine_nsg: bool = True) -> dict:
         reasons.append(_reason(
             "identity_beyond_response", "info",
             "L'identité qui lit ces droits tient aussi " + ", ".join(sorted(beyond)) + " sur le groupe "
-            "de la VM : plus que la réponse n'en demande. La watch ne restaure jamais seule — son "
-            "principal n'a besoin que du rôle « Eregion Glorfindel Response ».",
-            "Ne laisser à la watch que « Eregion Glorfindel Response » et ses lectures : "
-            "docs/operations.md, « Identités Azure »."))
+            "de la VM : plus que la réponse n'en demande. La watch ne restaure jamais seule, et ne "
+            "lance Run Command que sur une VM inscrite — son principal n'a besoin que du rôle "
+            "« Eregion Glorfindel Response » sur le groupe, et de « Eregion Glorfindel Session "
+            "Drain » sur chaque VM inscrite.",
+            "Ne laisser à la watch que « Eregion Glorfindel Response », « Eregion Glorfindel Session "
+            "Drain » VM par VM, et ses lectures : docs/operations.md, « Identités Azure »."))
     reasons.append(_reason(
         "unverified_layers", "info",
         "Non vérifié : règles d'admin AVNM (« Always Allow ») ; Azure Policy qui refuserait "

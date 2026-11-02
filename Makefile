@@ -606,7 +606,10 @@ HOST_TF       := terraform -chdir=infra/glorfindel-host
 HOST_USER     ?= glorfindel
 # Sans OPERATOR_CIDR, ton IP publique du moment, en /32 (seule source SSH autorisée).
 OPERATOR_CIDR ?= $(shell curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null)/32
-HOST_VARS      = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
+# SESSION_DRAIN=1 (SEC11, R-03) : la coupure des sessions, VM par VM, sur chaque VM inscrite du banc
+# (« Eregion Glorfindel Session Drain ») ; sans elle, H0 lit seulement.
+SESSION_DRAIN ?=
+HOST_VARS      = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"$(if $(SESSION_DRAIN), -var="session_drain=true")
 HOST_IP        = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
 # HOST_SSH_KEY : la clé privée qui va avec admin_ssh_public_key (terraform.tfvars), si ton agent
 # SSH ne la propose pas. SSH_OPTS (Orodruin) : accept-new, la clé d'hôte d'une VM neuve acceptée au

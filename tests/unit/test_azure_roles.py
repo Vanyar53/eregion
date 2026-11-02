@@ -115,20 +115,39 @@ def _role(name: str) -> dict:
 
 
 def test_the_response_role_holds_what_the_adapter_declares_and_nothing_broad():
+    """The response's role and the session drain's hold together what the adapter declares —
+    Run Command in the drain's alone (SEC11, R-03)."""
     from glorfindel.providers.azure.capabilities import CAPABILITIES
+    from glorfindel.providers.interface import SESSION_DRAIN
     response = _role("response")
     actions = set(response["Actions"])
     declared = set().union(*(c.rights for c in CAPABILITIES.capabilities))
-    assert declared and declared <= actions
+    drain = CAPABILITIES.rights(SESSION_DRAIN)
+    assert declared and declared - drain <= actions
+    assert not actions & drain and not any("runcommand" in a.lower() for a in actions)
+    assert set(_role("session-drain")["Actions"]) == drain
     # The snapshot: an on-demand backup of the vault, never its restore.
     assert "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/backup/action" in actions
-    for role in (response, _role("restore")):
+    for role in (response, _role("restore"), _role("session-drain")):
         assert role["IsCustom"] is True and not role["DataActions"] and not role["NotActions"]
         for a in role["Actions"]:
             assert "*" not in a and not a.lower().startswith("microsoft.authorization/"), a
             assert not a.lower().endswith("/delete") or "securityrules" in a.lower(), a
         assert role["AssignableScopes"] == ["/subscriptions/<SUBSCRIPTION_ID>"]   # a placeholder, never an id
     assert not any("restore" in a.lower() or "deallocate" in a.lower() for a in actions)
+
+
+def test_the_session_drain_is_run_command_alone_given_vm_by_vm():
+    """SEC11 (R-03): the watch's strongest right — a root command on a VM — out of the response's
+    role, which goes on whole groups, into a role of its own that goes on each enrolled VM."""
+    drain = _role("session-drain")
+    assert drain["Name"] == "Eregion Glorfindel Session Drain"
+    assert drain["Actions"] == ["Microsoft.Compute/virtualMachines/runCommand/action"]
+    assert "VM by VM" in drain["Description"] and "never on a resource group" in drain["Description"]
+    ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    grants = [ln for ln in _logical_lines(ops) if "Eregion Glorfindel Session Drain" in ln
+              and "az role assignment create" in ln]
+    assert grants and all("--scope $vm" in ln for ln in grants), grants
 
 
 def test_the_restore_role_restores_and_nothing_of_the_network():
@@ -227,7 +246,8 @@ def test_the_audit_and_the_readiness_advise_no_broad_role_and_never_the_restore_
 
     from glorfindel import audit, readiness
     names = {json.loads(p.read_text(encoding="utf-8"))["Name"] for p in ROLES.glob("*.json")}
-    assert names == {"Eregion Glorfindel Response", "Eregion Glorfindel Restore"}
+    assert names == {"Eregion Glorfindel Response", "Eregion Glorfindel Restore",
+                     "Eregion Glorfindel Session Drain"}
     for module in (audit, readiness):
         text = re.sub(r"""["']\s*\n\s*f?["']""", "", inspect.getsource(module))
         roles = re.findall(r"--role\s+(?:'([^']+)'|(\S+))", text)

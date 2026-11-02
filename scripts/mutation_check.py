@@ -7104,6 +7104,39 @@ MUTANTS += [
 ]
 TESTS.update({"M2888": "tests/unit/test_azure_roles.py", "M2889": "tests/unit/test_azure_roles.py",
               "M2890": "tests/unit/test_makefile_secrets.py", "M2891": "tests/unit/test_azure_roles.py"})
+HTF = "infra/glorfindel-host/main.tf"
+MUTANTS += [
+    ("M2892", "the response's role, given on whole groups, holds Run Command again (SEC11, R-03)",
+     "infra/identities/glorfindel-response.json",
+     '    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",\n',
+     '    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",\n'
+     '    "Microsoft.Compute/virtualMachines/runCommand/action",\n'),
+    ("M2893", "the session drain read on the group: a right given on the VM read as missing (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     '        need(_vm_scope(rg, vm_name), "isolate_vm",', '        need(rg, "isolate_vm",'),
+    ("M2894", "Run Command held on the whole group, unsaid (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     '        "Microsoft.Compute/virtualMachines/runCommand/action",\n    )\n', "    )\n"),
+    ("M2895", "the group no longer read when the VM needs nothing there: what goes beyond, unsaid (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     "            scopes.setdefault(rg.lower(), (rg, set()))   # the group itself, for what goes beyond\n", ""),
+    ("M2896", "a drain refused on a VM without the role, said as any failure (SEC11, R-03)", ISO,
+     "            if _is_iam_error(str(e)):\n", "            if False:\n"),
+    ("M2897", "the audit fails a VM without the session drain, which is still isolated (SEC11, R-03)",
+     "glorfindel/audit.py", '    if drain and {m["action"] for m in missing} <= drain:\n', "    if False:\n"),
+    ("M2898", "H0's session drain assigned on the whole bench group (SEC11, R-03)", HTF,
+     '  scope                = each.value\n  role_definition_name = "Eregion Glorfindel Session Drain"',
+     '  scope                = data.azurerm_resource_group.bench.id\n  role_definition_name = "Eregion Glorfindel Session Drain"'),
+    ("M2899", "H0 holds the session drain by default, read-only as it is (SEC11, R-03)",
+     "infra/glorfindel-host/variables.tf", "  default     = false\n", "  default     = true\n"),
+]
+TESTS.update({
+    "M2892": "tests/unit/test_azure_roles.py",
+    "M2893": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2894": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2895": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2896": "tests/unit/test_glorfindel.py -k drain",
+    "M2897": "tests/unit/test_glorfindel.py -k audit_reports",
+    "M2898": "tests/unit/test_glorfindel_host.py",
+    "M2899": "tests/unit/test_glorfindel_host.py",
+})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

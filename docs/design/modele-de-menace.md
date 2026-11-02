@@ -127,7 +127,7 @@ Trois canaux, à ne pas confondre :
 
 ## 5. Les hôtes : H0, Orodruin, le banc
 
-**H0** (le Glorfindel hébergé) — un observateur : identité managée `Reader` sur le groupe du banc et `Log Analytics Reader` sur son workspace, rien d'autre ; `GLORFINDEL_READ_ONLY=1` et `human_only` forcé. Entrée fermée, sauf pour l'opérateur ; la console n'écoute que sur la boucle locale de la VM. Aucun secret dans Terraform : les jetons dans `host.env`, copié à la main. Son CD ne fait que sortir ([`infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md)).
+**H0** (le Glorfindel hébergé) — un observateur : identité managée `Reader` sur le groupe du banc et `Log Analytics Reader` sur son workspace, rien d'autre ; `GLORFINDEL_READ_ONLY=1` et `human_only` forcé. Quand il répond (BL1, ci-dessous), la coupure des sessions lui vient de Terraform, VM par VM, sur les VM inscrites seulement (`session_drain`, SEC11). Entrée fermée, sauf pour l'opérateur ; la console n'écoute que sur la boucle locale de la VM. Aucun secret dans Terraform : les jetons dans `host.env`, copié à la main. Son CD ne fait que sortir ([`infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md)).
 
 **Orodruin** (l'hôte des injecteurs) — un injecteur n'agit que depuis un Orodruin armé, dont le contrat est vérifié au démarrage ; ailleurs il reste passif. Chaque appel au cloud est journalisé avant d'être fait, sous un plafond ; un arrêt d'urgence en une commande ; sa sortie se referme après l'installation ; un état Terraform à part ([`docs/design/orodruin-contract.md`](orodruin-contract.md)). Et jamais sans Glorfindel : sans battement vivant de la watch, un injecteur refuse avant tout appel au cloud (V1).
 
@@ -142,7 +142,7 @@ Trois canaux, à ne pas confondre :
 | S | Un battement de watch qui ne parle pas des cibles, une fenêtre d'exercice antidatée | Le battement porte le périmètre de la watch, comparé à celui de l'injecteur et relu avant chaque action ; une fenêtre est bornée par la création de son blob, et ne marque une VM de production que pour une technique non destructive (SEC5) |
 | T | Une URL de canal mal réglée, un blob démesuré | Le jeton ne part que vers un point de terminaison Azure Storage ; un tirage lit en flux borné (taille, nombre), et dit ce qui dépasse (SEC5) |
 | I | Un secret de l'hôte fuit | Identités managées plutôt que des secrets ; `host.env` hors du dépôt ; le jeton du bot de l'atelier jamais sur H0 |
-| E | Une identité de Glorfindel qui peut tout sur l'abonnement | Un principal par service (watch, console, bot), chacun avec ce que son code appelle, sur les groupes inscrits : la réponse à la watch, le restore à la console et au bot seulement (deux rôles personnalisés, `infra/identities/`) ; jamais `Contributor` sur un abonnement, ni dans la doc, ni dans un script, ni dans ce que l'audit conseille ; le conteneur rouge ne prend jamais le principal partagé ; un principal de la watch qui tient le restore est dit (SEC7, testé) ; aucun conteneur ne se replie sur l'ancien principal partagé : un service sans sa paire démarre sans principal de service, et le dit (SEC11, testé) |
+| E | Une identité de Glorfindel qui peut tout sur l'abonnement | Un principal par service (watch, console, bot), chacun avec ce que son code appelle, sur les groupes inscrits : la réponse à la watch, le restore à la console et au bot seulement, la coupure des sessions VM par VM aux seules VM inscrites (trois rôles personnalisés, `infra/identities/`, SEC11) ; jamais `Contributor` sur un abonnement, ni dans la doc, ni dans un script, ni dans ce que l'audit conseille ; le conteneur rouge ne prend jamais le principal partagé ; un principal de la watch qui tient le restore est dit (SEC7, testé) ; aucun conteneur ne se replie sur l'ancien principal partagé : un service sans sa paire démarre sans principal de service, et le dit (SEC11, testé) |
 | S | Un autre hôte répond à l'adresse de H0 | Sa clé d'hôte épinglée par son empreinte, relevée sur la VM, dans l'environnement de l'opérateur : une autre clé refuse avant toute commande ; sans l'empreinte, la première clé acceptée, et c'est dit (SEC7) |
 | E | Un processus qui prend un conteneur (une dépendance, une ligne forgée) | Aucune capacité, aucun gain de privilège, la racine en lecture seule : il n'écrit que dans ses montages (SEC7, testé) |
 | T | Un plan d'Orodruin, sur un poste sans l'état de H0, retire à la watch hébergée l'accès au canal | Refusé, sauf `NO_WATCH=1` dit (SEC7) |
@@ -160,7 +160,9 @@ reçoit le rôle « Eregion Glorfindel Response », et `GLORFINDEL_READ_ONLY=0`.
 le confinement.
 
 - **Portée** : `rg-celebrimbor` seul, le groupe du banc. Rien sur l'abonnement, rien sur le
-  groupe de H0, jamais le restore.
+  groupe de H0, jamais le restore. Run Command n'est plus dans ce rôle (SEC11) : la coupure des
+  sessions vient d'« Eregion Glorfindel Session Drain », que Terraform attribue sur chaque VM
+  inscrite (gondolin), jamais sur bree (`make glorfindel-host-up SESSION_DRAIN=1`).
 - **Ce qui tient pendant la session** :
   - bree reste en `human_only` : la watch n'y fait rien seule ;
   - seule gondolin, inscrite `bench`, passe en `non_disruptive`, après son contrôle de préparation ;
@@ -171,15 +173,16 @@ le confinement.
   - le CD est en pause (`make glorfindel-host-cd-disable`) : aucune release ne redéploie H0 au
     milieu de la campagne.
 - **Ce qui est défait à la fin, et comment le vérifier** :
-  - le rôle est retiré : `az role assignment list --assignee <principal> --all` ne montre plus que
-    `Reader` et `Log Analytics Reader` ;
+  - le rôle est retiré, et la coupure aussi (`make glorfindel-host-up` sans `SESSION_DRAIN`) :
+    `az role assignment list --assignee <principal> --all` ne montre plus que `Reader` et
+    `Log Analytics Reader` ;
   - `GLORFINDEL_READ_ONLY=1` est repoussé : le bandeau « lecture seule » de la console revient, et
     `make glorfindel-host-status` ne montre aucune erreur ;
   - gondolin revient en `human_only` : `glorfindel list` le montre, et le push de la config force
     de nouveau `human_only` ;
   - le CD est réactivé : `make glorfindel-host-cd-enable`, puis `make glorfindel-host-cd-status`.
 
-**Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`. La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
+**Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`, `infra/glorfindel-host/tests/session_drain.tftest.hcl` (SEC11). La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
 
 **Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule — planifié ; une identité managée par conteneur sur un même hôte — planifié.
 
@@ -227,7 +230,7 @@ le confinement.
 ## Décisions assumées
 
 - **La revue de conception sans responsable désigné** (T-05). Ce qui la tient : `CODEOWNERS` sur tout le dépôt (SEC6), la relecture de chaque lot par elrond, et le mainteneur, seul à publier une release.
-- **`runCommand` dans le rôle de la réponse** (V-17, SEC7). C'est son droit le plus fort : une commande en root sur la VM, que l'identité de la watch peut lancer. Il y est pour une seule chose, couper les sessions déjà ouvertes quand la VM est isolée (`ss -K`, Linux) — sans lui, un attaquant connecté garde la main sur une VM « isolée » ; le restore s'en sert aussi, pour neutraliser la dernière commande avant l'échange de disques. Ce qui le borne : la commande est écrite dans le code, jamais par le modèle ; elle ne vise qu'une VM que la décision isole, sur les groupes inscrits ; et la préparation dit « sessions non coupées » quand il manque (`no_drain`), plutôt que d'élargir le rôle.
+- **`runCommand` à la watch, pour couper les sessions** (V-17, SEC7 ; R-03, SEC11 — décision de Jonathan du 02/11 : la coupure reste). C'est son droit le plus fort : une commande en root sur la VM. Il sert à une seule chose, couper les sessions déjà ouvertes quand la VM est isolée (`ss -K`, Linux) — sans lui, un attaquant connecté garde la main sur une VM « isolée » ; le restore s'en sert aussi (rôle Restore, jamais à la watch), pour neutraliser la dernière commande avant l'échange de disques. Ce qui le borne : il est sorti du rôle de la réponse, dans un rôle à lui (« Eregion Glorfindel Session Drain »), **attribué VM par VM aux seules VM inscrites**, jamais sur un groupe — une VM non inscrite (bree) est hors de sa portée ; la commande est écrite dans le code, jamais par le modèle ; elle ne vise qu'une VM que la décision isole ; une VM sans ce rôle est isolée quand même, la coupure refusée est dite sur la carte, et la préparation le dit avant (`no_drain`) ; tenu sur tout un groupe, il est dit comme plus que la réponse (`identity_beyond_response`).
 - **Le banc ouvert à Internet, par conception** (V-37) : c'est une cible d'exercice. Ce qui le borne : il est jetable, inscrit `bench`, et ne porte aucune charge réelle.
 - **Qui fusionne sur `main` publie une image que H0 accepte** (CI3, P-02). La signature prouve le workflow, la branche et le commit, pas la relecture du code. Ce qui le borne : la protection de `main` et `CODEOWNERS`, le mainteneur seul à publier la release qui déploie, et sigstore et l'OIDC de GitHub, tenus pour de confiance. Le chemin de secours, un déploiement de H0 à la main (`make glorfindel-host-start`), construit encore l'image sur la VM, hors de la vérification ; `make orodruin-push-dev` aussi, sur le poste, dit comme tel.
 

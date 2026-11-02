@@ -12,7 +12,10 @@ charge, Glorfindel qui décide, toi qui juges chaque carte.
 - **Un observateur.** Son identité managée a `Reader` sur le groupe du banc et
   `Log Analytics Reader` sur son workspace, rien d'autre. `GLORFINDEL_READ_ONLY=1` et une
   config forcée en `human_only` au push (`host_config.py`) : elle ne décide jamais seule et
-  ne peut rien écrire. Les droits d'écriture viendront avec les exercices de R1 et G0.
+  ne peut rien écrire. Les droits d'écriture viendront avec les exercices de R1 et G0. La
+  coupure des sessions (Run Command) ne se donne que VM par VM, aux VM inscrites du banc :
+  `make glorfindel-host-plan SESSION_DRAIN=1` (SEC11, `docs/operations.md`, « Identités Azure ») ;
+  le test du module la tient (`tests/session_drain.tftest.hcl`).
 - **Pas une cible.** Hors du groupe du banc, sans tag `eregion-target`, sans DCR vers le
   Log Analytics du banc : la découverte (Heartbeat) ne la voit pas, Glorfindel ne peut pas
   l'isoler. Elle n'est pas non plus sur Orodruin (côté rouge).

@@ -56,6 +56,18 @@ variable "bench_resource_group" {
   default     = "rg-celebrimbor"
 }
 
+variable "session_drain" {
+  description = "SEC11 (R-03) : donne à l'identité de H0 « Eregion Glorfindel Session Drain » (Run Command, la coupure des sessions à l'isolation) sur chaque VM inscrite du banc (tag eregion-target), jamais sur le groupe. Faux (défaut) : H0 lit. `make glorfindel-host-plan SESSION_DRAIN=1`. Le rôle doit exister dans le tenant (docs/operations.md, « Identités Azure »)."
+  type        = bool
+  default     = false
+}
+
+variable "bench_id" {
+  description = "La valeur du tag eregion-target des VM inscrites (O0), qui reçoivent la coupure des sessions (session_drain). Vide (défaut) → tirée du groupe du banc : rg-celebrimbor → celebrimbor, rg-celebrimbor-<instance> → celebrimbor-<instance>, comme Celebrimbor la pose."
+  type        = string
+  default     = ""
+}
+
 variable "bench_workspace" {
   description = "Log Analytics du banc."
   type        = string

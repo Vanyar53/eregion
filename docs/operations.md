@@ -464,7 +464,7 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
 
 | Service | Ce qu'il appelle sur Azure | Rôles, portée : les groupes inscrits |
 |---|---|---|
-| la watch | lit (journaux, NSG, NIC, coffre) ; isole, lève, bloque, débloque, instantané — seule, dans son mode | `Reader`, `Log Analytics Reader` (le workspace), **Eregion Glorfindel Response** |
+| la watch | lit (journaux, NSG, NIC, coffre) ; isole, lève, bloque, débloque, instantané — seule, dans son mode ; coupe les sessions d'une VM qu'elle isole | `Reader`, `Log Analytics Reader` (le workspace), **Eregion Glorfindel Response** ; **Eregion Glorfindel Session Drain** sur chaque VM inscrite |
 | la console | lit (audit, préparation, jobs) ; ce qu'un humain approuve : isoler, bloquer, instantané (dans son processus), lever, reset, restore (par la CLI qu'elle lance) | `Reader`, `Log Analytics Reader`, **Response**, **Eregion Glorfindel Restore** |
 | le bot | lit les points de restauration ; ses boutons lancent la CLI : Restore, Revert (levée et déblocage) | `Reader`, **Response**, **Restore** |
 
@@ -473,7 +473,19 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   (`glorfindel/providers/azure/capabilities.py`, testé contre le fichier), les contrôles liés
   d'une écriture de NIC (IP publique, ASG, équilibreur : à mesurer sur le banc, ci-dessous) et
   le déclenchement d'un instantané du coffre. Jamais un restore, une suppression, une identité,
-  un rôle.
+  un rôle — ni Run Command (SEC11).
+- **Eregion Glorfindel Session Drain** (`infra/identities/glorfindel-session-drain.json`, SEC11,
+  R-03) : Run Command seul, le droit le plus fort de la watch (une commande en root sur la VM),
+  pour couper les sessions déjà ouvertes d'une VM qu'elle isole (`ss -K`, écrit dans le code).
+  **Attribué VM par VM, aux seules VM inscrites** (`eregion-target`), jamais sur un groupe : une
+  VM qui ne l'a pas (bree, ou une VM non inscrite) est quand même isolée ; la coupure est
+  refusée, et la carte le dit (« Run Command refusé sur cette VM : le rôle … n'y est pas »), la
+  vérification de l'isolation en échec, comme pour toute session restée ouverte. La préparation
+  le dit avant (`no_drain`), l'audit aussi (« Isolation permissions », avertissement). Le droit
+  est lu sur la VM elle-même (`check_permissions`) ; tenu sur tout le groupe, il est dit comme
+  plus que la réponse (`identity_beyond_response`). Sur H0, c'est Terraform qui l'attribue
+  (`make glorfindel-host-plan SESSION_DRAIN=1`, ci-dessous) ; la console et le bot l'ont déjà par
+  leur rôle Restore (la neutralisation avant restore).
 - **Eregion Glorfindel Restore** (`infra/identities/glorfindel-restore.json`) : un restore en
   place depuis le coffre — Run Command neutralisée, VM désallouée, disques restaurés par le
   compte de transit, VM redémarrée. **Jamais à la watch** : Glorfindel ne restaure jamais seul,
@@ -521,16 +533,21 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   identité (la CLI qu'ils lancent tourne dans leur conteneur). Les rendre lecteurs seuls, c'est
   confier l'action approuvée à la watch (une file sous `~/.glorfindel`, signée par la console),
   qui l'exécute — planifié.
-- **H0** : rien ne change. Ses conteneurs partagent l'identité managée de la VM, lectrice
-  (`Reader` sur le banc, `Log Analytics Reader` sur son workspace) : une identité par conteneur
-  ne s'y sépare pas (le point de jeton de la VM répond à chacun d'eux), et il n'écrit rien.
+- **H0** : ses conteneurs partagent l'identité managée de la VM, lectrice (`Reader` sur le
+  banc, `Log Analytics Reader` sur son workspace) : une identité par conteneur ne s'y sépare pas
+  (le point de jeton de la VM répond à chacun d'eux). Quand il répond (BL1, `docs/banc-bl1.md`),
+  la réponse vient d'un geste de Jonathan sur le groupe, et la coupure de Terraform, VM par VM :
+  `make glorfindel-host-plan SESSION_DRAIN=1` relit les VM inscrites du banc (tag
+  `eregion-target`) et attribue « Eregion Glorfindel Session Drain » à chacune
+  (`infra/glorfindel-host/main.tf`, `terraform output session_drain_vms`) ; sans `SESSION_DRAIN`,
+  le plan les retire.
 
 **Créer** (une fois par tenant pour les rôles ; `<…>` à remplacer, rien de réel ici) :
 
 ```bash
 SUB=<SUBSCRIPTION_ID>; RG=<groupe des VM inscrites>; VAULT_RG=<groupe du coffre>
 LAW=<id de ressource du workspace>
-for r in response restore; do
+for r in response restore session-drain; do
   sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-$r.json > /tmp/eregion-role-$r.json
   az role definition create --role-definition @/tmp/eregion-role-$r.json
 done
@@ -544,7 +561,7 @@ du rôle existant, puis l'attribuer comme ci-dessous :
 
 ```bash
 SUB2=<SECOND_SUBSCRIPTION_ID>
-for r in "Eregion Glorfindel Response" "Eregion Glorfindel Restore"; do
+for r in "Eregion Glorfindel Response" "Eregion Glorfindel Restore" "Eregion Glorfindel Session Drain"; do
   az role definition list --name "$r" --scope /subscriptions/$SUB --query '[0]' -o json \
     | python3 -c 'import json,sys; d=json.load(sys.stdin); d["assignableScopes"].append(sys.argv[1]); print(json.dumps(d))' \
         "/subscriptions/$SUB2" > /tmp/eregion-role.json
@@ -567,6 +584,12 @@ done
 for a in <appId-watch> <appId-console>; do
   az role assignment create --assignee $a --role "Log Analytics Reader" --scope $LAW
 done
+# La coupure des sessions (SEC11) : à la watch, sur chaque VM inscrite, jamais sur le groupe.
+# Les VM inscrites : az resource list -g $RG --resource-type Microsoft.Compute/virtualMachines \
+#   --tag eregion-target=<banc> --query '[].id' -o tsv
+for vm in <id de chaque VM inscrite>; do
+  az role assignment create --assignee <appId-watch> --role "Eregion Glorfindel Session Drain" --scope $vm
+done
 # Le compte de transit du restore (restore_staging_storage), s'il est dans un autre groupe :
 #   for a in <appId-console> <appId-bot>; do
 #     az role assignment create --assignee $a --role "Eregion Glorfindel Restore" --scope <son groupe>
@@ -582,6 +605,17 @@ Audit) — un droit manquant y est nommé.
 une VM du banc qui porte une IP publique (les contrôles liés d'une écriture de NIC), un
 instantané, un restore depuis la console ; un 403 nomme l'action qui manque, à ajouter au
 fichier du rôle (`az role definition update --role-definition @…`).
+
+**Depuis un rôle de la réponse d'avant SEC11** (il tenait Run Command, sur tout le groupe) : la
+définition se met à jour une fois, puis la coupure s'attribue VM par VM (ci-dessus) — dans cet
+ordre ou l'inverse, la watch isole toujours ; entre les deux, la coupure est refusée et dite :
+
+```bash
+sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-session-drain.json > /tmp/eregion-role-session-drain.json
+az role definition create --role-definition @/tmp/eregion-role-session-drain.json
+sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-response.json > /tmp/eregion-role-response.json
+az role definition update --role-definition @/tmp/eregion-role-response.json   # sans Run Command
+```
 
 **Faire tourner un secret** (un an par défaut) : `az ad sp credential reset --id <appId>` rend
 un nouveau `password` ; le poser dans `.envrc`, `make glorfindel-restart`. L'ancien cesse à la

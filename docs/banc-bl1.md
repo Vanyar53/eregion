@@ -138,6 +138,8 @@ P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment create --assignee-object-id ${P} --assignee-principal-type ServicePrincipal \
   --role "Eregion Glorfindel Response" --scope ${SCOPE}
+make glorfindel-host-plan SESSION_DRAIN=1   # SEC11 : la coupure des sessions, sur gondolin seule (inscrite) ; bree jamais
+make glorfindel-host-up SESSION_DRAIN=1     # après relecture du plan : une attribution par VM inscrite, aucune sur le groupe
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=0
 make glorfindel-host-push              # .env et config (encore human_only partout)
 make glorfindel-host-start REF=<le même commit>
@@ -198,6 +200,8 @@ Dans la console, à trois endroits :
 P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment delete --assignee ${P} --role "Eregion Glorfindel Response" --scope ${SCOPE}
+make glorfindel-host-plan                  # sans SESSION_DRAIN : le plan retire la coupure, VM par VM
+make glorfindel-host-up                    # après relecture
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=1
 make glorfindel-host-push              # config de nouveau forcée en human_only
 make glorfindel-host-start REF=<le tag publié en service>   # la release d'avant, celle du CD

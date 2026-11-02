@@ -609,6 +609,14 @@ def test_gothmog_cli_refuses_without_a_watch_and_exits_nonzero(bench, no_watch):
     assert res.exit_code != 0
     assert "no live Glorfindel watch" in res.output and "last heartbeat never" in res.output
     assert no_watch == [] and w.calls == []
+    # Nothing written before V1 but the lock of « one run at a time » (#358), taken by the CLI:
+    # every path under runs/, directories included, is that lock and its directories, or nothing.
+    runs = Path("runs")
+    left = {q.relative_to(runs).as_posix() for q in runs.rglob("*")} if runs.exists() else set()
+    assert left in (set(), {"orodruin", "orodruin/requests", "orodruin/requests/.lock"}), left
+    if left:
+        assert (runs / "orodruin" / "requests" / ".lock").read_text() == ""
+    assert _no_window()
 
 
 def test_a_fault_without_glorfindel_runs_and_its_report_says_so(bench, no_watch, tmp_path):
@@ -650,10 +658,11 @@ def test_preflight_without_a_live_watch_is_refused_before_the_contract(bench, no
     assert engine().preflight("vm-shutdown", without_glorfindel=True).result == "OK"
 
 
-def test_gothmog_cli_passes_without_glorfindel(monkeypatch):
+def test_gothmog_cli_passes_without_glorfindel(monkeypatch, tmp_path):
     from click.testing import CliRunner
 
     from gothmog.cli import cli
+    monkeypatch.chdir(tmp_path)   # `gothmog run` takes Orodruin's lock in runs/ (#358)
     seen = {}
 
     class Fake:
@@ -808,3 +817,79 @@ def test_a_destructive_fault_with_its_name_typed_starts(bench, tmp_path):
                        typed_name="vm-celebrimbor-gondolin")
     assert out.result == "PASS", out.error
     assert [x for x, _ in w.writes] == ["start"]
+
+
+def test_a_name_azure_does_not_give_is_a_refusal_said_never_an_exception(bench, tmp_path, monkeypatch):
+    """#358: the read of the target's name for the name typed fails (a 403, a 5xx, the network):
+    the fault is refused, said and recorded — nothing started, no window opened."""
+    from gothmog.engines import chaos_studio
+    real, real_gate, after = chaos_studio.ChaosStudio.vm, engine_mod.Engine._gate, []
+
+    def gate(self, *a, **kw):    # the targets and the steady state read: what follows is the name's
+        out = real_gate(self, *a, **kw)
+        after.append(1)
+        return out
+
+    def vm(self, vm_id):         # never by the caller's frame: a comprehension has its own in 3.11
+        if after:
+            raise RuntimeError("HTTP 403 reading the VM")
+        return real(self, vm_id)
+    monkeypatch.setattr(engine_mod.Engine, "_gate", gate)
+    monkeypatch.setattr(chaos_studio.ChaosStudio, "vm", vm)
+    clock, world, engine = bench
+    w = world()
+    out = engine().run(_destructive_fault(tmp_path), skip_confirm=True, request=REQ, target=VM,
+                       typed_name="vm-celebrimbor-gondolin")
+    assert out.result == "REFUSED"
+    assert out.error.startswith("typed_name: the target's name unreadable on Azure (RuntimeError: HTTP 403")
+    assert w.writes == [] and _no_window()
+    report = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    assert report["result"] == "REFUSED"
+
+
+# ── #358: a fault by hand on Orodruin takes the request's lock ─────────────────────────────────
+
+def test_a_fault_by_hand_during_a_request_is_refused_and_touches_nothing(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+
+    from eregion_core.exercise_runner import request_lock
+    from gothmog.cli import cli
+    monkeypatch.chdir(tmp_path)
+    ran = []
+    monkeypatch.setattr(engine_mod.Engine, "run", lambda self, *a, **kw: ran.append(kw) or
+                        engine_mod.RunOutcome("gothmog-x", "PASS"))
+    with request_lock(tmp_path / "runs", "request r-20261031T080000Z-[/x]"):
+        res = CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes"])
+        assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
+        assert "busy: request r-20261031T080000Z-[/x] runs on this Orodruin" in " ".join(res.output.split())
+        assert ran == []
+        # A dry run reads nothing on Azure: no lock.
+        assert CliRunner().invoke(cli, ["run", "vm-shutdown", "--dry-run"]).exit_code == 0
+        # A wire of the request runs under the request's own lock: it never takes it.
+        res = CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes", "--request", REQ, "--target", VM])
+        assert res.exit_code == 0, res.output
+        assert ran == [{"skip_confirm": True, "without_glorfindel": False, "request": REQ, "target": VM,
+                        "typed_name": ""}]
+
+
+def test_a_request_during_a_fault_by_hand_is_refused_naming_it(tmp_path, monkeypatch):
+    import pytest as _pytest
+    from click.testing import CliRunner
+
+    from eregion_core.exercise_runner import Busy, request_lock
+    from gothmog.cli import cli
+    monkeypatch.chdir(tmp_path)
+    seen = []
+
+    def run(self, *a, **kw):
+        with _pytest.raises(Busy) as e:
+            with request_lock(tmp_path / "runs", "request r-20261031T080000Z-abcdef"):
+                pass
+        seen.append(str(e.value))
+        return engine_mod.RunOutcome("gothmog-x", "PASS")
+    monkeypatch.setattr(engine_mod.Engine, "run", run)
+    assert CliRunner().invoke(cli, ["run", "vm-shutdown", "--yes"]).exit_code == 0
+    assert seen == ["fault vm-shutdown runs on this Orodruin: one at a time — wait for its end, "
+                    "or stop it (make orodruin-kill)"]
+    lock = tmp_path / "runs" / "orodruin" / "requests" / ".lock"
+    assert lock.read_text() == ""        # its name gone with it

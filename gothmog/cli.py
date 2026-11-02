@@ -1,3 +1,4 @@
+import contextlib
 import os
 
 import click
@@ -66,7 +67,18 @@ def run(fault: str, yes: bool, dry_run: bool, without_glorfindel: bool, request:
             console.print(f"  Revert  : {r['name']}")
         return
     wire = {"request": request, "target": target, "typed_name": typed_name} if request else {}
-    outcome = Engine().run(fault, skip_confirm=yes, without_glorfindel=without_glorfindel, **wire)
+    # One run at a time on Orodruin (#358): a fault launched by hand never runs during a Dagorlad
+    # request — the request's lock, in the runs/ the engine writes to. A wire of a request runs
+    # under its request's own lock (Orodruin's runner): it never takes it.
+    from eregion_core.exercise_runner import Busy, request_lock
+    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")
+    try:
+        with lock:
+            outcome = Engine().run(fault, skip_confirm=yes, without_glorfindel=without_glorfindel, **wire)
+    except Busy as e:
+        from rich.markup import escape   # the holder's name, never read as markup
+        console.print(f"[red]✗ fault refused — busy: {escape(str(e))}[/red]")
+        raise SystemExit(1)
     raise SystemExit(0 if outcome.result == "PASS" else 1)
 
 

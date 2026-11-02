@@ -3368,7 +3368,7 @@ MUTANTS += [
     ("M1347", "the CI's Linux tests unbounded again (U3F)", ".github/workflows/ci.yml",
      "    timeout-minutes: 30\n", ""),
     ("M1348", "the nightly invariants unbounded again (U3F)", ".github/workflows/invariants.yml",
-     "    timeout-minutes: 150\n", ""),
+     "    timeout-minutes: 180\n", ""),
 ]
 TESTS.update({"M1346": "tests/unit/test_invariant_regressions.py -k stuck_race",
               "M1347": "tests/unit/test_workflows.py -k bounded", "M1348": "tests/unit/test_workflows.py -k bounded"})

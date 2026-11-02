@@ -2932,6 +2932,68 @@ nommée deux fois) par `test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once` ; 
 
 **Mesures de D80.** `pytest` complet : 4 716 réussis avec le reset (4 712 d'abord), 7 sautés, 5 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants à 500 séquences sur les graines 1, 7, 25, 35, 40, 42, 45, 101, 322, 555, 1618, 4242, 8675, 9001 et 31337 : 15/15 vertes ; puis 2 000 sur 42, 322 et 8675 : vertes. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants des modules touchés (levée, connecteur, façade) : 44/49 attrapés à chaque tour sur `main` 72bb58f, 44/49 après — les mêmes cinq de part et d'autre (M17, le verrou par VM, et M1552 survivent ; M22, M26 et M1963 par leurs seules séquences figées) —, plus M2340–M2343 (48/53). Aucun perdu. Avec le reset : invariants à 500 sur 555, 42 et 8675 verts ; M2340–M2346 7/7.
 
+**I3R (02/11, #431) : la levée retire les règles d'une carte sur le NSG de quarantaine qu'elle quitte.**
+Mesuré par l'Orchestre sur `main` f1cd109 (120 graines à 60 séquences, le réglage de la suite) : la
+graine 67 tombe, « Hypothesis found 2 distinct failures », toutes deux « I3: release said released,
+…/Db--01 is not back to its design » — une au démontage, l'autre dans `recover` ; deux lieux, une
+cause. Le job macOS rejoue la base de la nuit sur chaque PR : une priorité. **Réduite à la main**
+(29 règles, rejouées tirage par tirage hors d'Hypothesis, puis retirées une à une, enfin le réseau
+tiré remplacé par le plus simple qui échoue encore : la quarantaine dans rg-sec, db-nic-0 sur un NSG
+à elle) à trois règles. Db--01 isolée (ses deux cartes en quarantaine), notre refus entrant tourné
+vers un autre protocole, la réaffirmation le repose (une carte « reposée une fois ») ; Db--01 isolée
+de nouveau, atteinte par son id en minuscules, notre quarantaine vidée et dite, son tag retiré, une
+passe hors `human_only` (`quarantine_altered_then_reasserted`, deux fois) ; l'état de Db--01 perdu.
+**Pourquoi la réaffirmation réécrit** : le NSG sans notre tag n'est plus le nôtre (« non adopté ») ;
+l'isolation de db-nic-0 est reposée par des règles sur le NSG que la carte porte — la quarantaine
+elle-même. **Pourquoi `released` est faux** : le tag revenu, la levée lit db-nic-0 dans notre
+quarantaine, lui rend son NSG (de notre tag, ou de l'opérateur quand les tags sont perdus aussi :
+le second échec), puis balaie les NSG qui la gouvernent maintenant (`_nic_nsg_views`) — la
+quarantaine n'en est plus un, la paire y reste. Rien ne s'ouvrait (elle refuse l'adresse d'une carte
+partie) ; le mot de la levée était faux, et la paire attendait la prochaine carte mise là. Avec
+l'état, le placement « nic » sur la quarantaine nomme la paire : la levée la retire (la séquence
+sans la perte d'état passe). **Depuis quand** : rouge sur `main` 9c4e8c5 et avant L1Qr (4fa6f70~1),
+et sur v0.4.9 ; vert sur 91dae76, rouge sur d380df5 (L2C, #343) — la machine l'atteint depuis L2C,
+le trou de la levée est plus ancien (le balayage n'a jamais regardé le NSG de quarantaine quitté).
+Ce que L2C a changé : la réécriture pendant la passe hors `human_only` n'a lieu que parce que la
+disparition, dite à la passe d'avant, n'est pas lue « déjà dite » — la carte du premier épisode
+porte l'id de signal `reassert-Db--01-…` (l'id canonique), la nouvelle `reassert-db--01-…`
+(l'état écrit par l'id en minuscules) ; le magasin fusionne la seconde dans la première (même
+action, même ressource sans casse), et `drift_said` cherche l'id exact — rien. Avec `web` (aucune
+majuscule), la séquence passe. Ce point est hors du lot, dit dans le rapport (une carte redite à
+chaque passe, une isolation reposée après avoir été dite, selon la casse de l'id).
+**Correctif** (`glorfindel/providers/azure/away.py`, `_left_quarantine_rules` ; `release.py` passe à
+491 lignes) : le balayage note le NSG de quarantaine que chaque carte quitte — nommé par un
+placement de quarantaine de l'état (la levée par l'état l'a déjà défait), ou celui dont le balayage
+la sort lui-même — et y cherche les règles de cette carte, comme sur un NSG qui la gouverne : son
+empreinte, ou un ancien nom visant ses adresses (`_iso_rules_on`, la vue partagée : jamais les noms
+fixes), la garde (`_held_by_turned`) demandée pour une règle qui vise ailleurs. Une carte encore dans
+ce NSG (sa levée a échoué) est sautée : nos refus retirés, ses règles peuvent être tout ce qui la
+coupe. Une carte rendue nue est laissée à D80 (tous les NSG de l'abonnement) : dite une fois. Un NSG
+illisible est dit. L'oracle inchangé, aucune règle de la machine retirée ni restreinte (A0).
+**Figés** : `test_a_nics_rules_on_the_quarantine_nsg_it_left_go_with_the_release` (trois règles et la
+perte d'état) et `…_go_once_the_operator_gives_its_original` (les tags perdus aussi : la levée garde
+la carte et le dit, l'opérateur pose le tag, I7), rouges sur 9c4e8c5 ; huit tests dans
+`test_release_away.py` (sans état, par l'état, une carte gardée en quarantaine — original inconnu,
+original disparu —, la carte voisine qui reste, une règle retournée vers elle gardée et dite, une
+carte nue dite une fois, un NSG illisible), trois rouges sur 9c4e8c5, les autres gardent le
+correctif de trop en faire. **Mutants M3060–M3066** : le balayage aveugle au NSG quitté (M3060), le
+NSG dont le balayage sort la carte jamais noté (M3061), les placements de l'état jamais lus (M3062),
+une carte encore en quarantaine balayée là (M3063), une carte nue cherchée là aussi : dite deux fois
+(M3064), la garde jamais demandée (M3065), un NSG illisible lu « rien » (M3066) : 7/7 à chaque tour
+(deux tours). M07 réancré (l'appel du balayage gagne un argument).
+**Reste ouvert** : le reset (`reset --from-azure`) ne cherche pas non plus sur le NSG de quarantaine
+qu'il fait quitter à une carte ; son oracle ne juge pas les règles laissées hors des NSG qui
+gouvernent la carte, la machine ne le voit pas.
+
+**Mesures d'I3R.** Invariants, `--hypothesis-seed=N` : à 60 séquences, N = 1..120, **120/120
+vertes** (avant, sur `main` f1cd109, 119/120 : la graine 67 ; rejouée sur `main` 9c4e8c5, rouge) ;
+à 500, N = 1..20, 20/20 vertes, comme sur `main` 9c4e8c5 (20/20 : le défaut est rare à ce réglage,
+la graine 67 à 60 l'a trouvé). Les deux séquences complètes de la graine 67 (29 et 25 règles),
+rejouées hors d'Hypothesis : vertes. `pytest` complet : 5 322 réussis, 7 sautés, 2 échecs hors du
+lot (`test_orodruin_kill.py`, deux tests qui datent leurs fenêtres d'un `NOW` fixé au 26/10 : rouges
+de même sur `main` 9c4e8c5) ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 993 mutants, sans
+faute. M3060–M3066 7/7 à chaque tour ; M07 réancré, attrapé.
+
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
 (`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque

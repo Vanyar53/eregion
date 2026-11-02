@@ -455,7 +455,7 @@ def test_the_measure_alone_drops_compose_s_empty_identity(tmp_path, monkeypatch,
     its secret, its tenant) stay set: azure-identity takes them for a service principal and
     never reaches the VM's managed identity (« client_id should be the id of a Microsoft Entra
     application », the bench, 31/10). The measure drops them, as the watch and the console do
-    (#205) — with the same function."""
+    (#205) — with the same function, in ``check_enrollment``."""
     from azure.identity import EnvironmentCredential
 
     from eregion_core import exercise

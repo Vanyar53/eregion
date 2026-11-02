@@ -5827,16 +5827,26 @@ TESTS["M1919"] = "tests/unit/test_indicators.py"
 
 # BL1c (#395): the measure launched alone (make glorfindel-host-containment) — the enrollment of
 # a channel campaign read as the report reads it, compose's empty identity dropped as the watch
-# drops it (#205). M2360–M2361.
+# drops it (#205), in check_enrollment for every command that reads the enrollment. M2360–M2362.
 MUTANTS += [
     ("M2360", "the measure launched alone never reads the enrollment: every run of a channel campaign "
               "left out, « VM non inscrite » (BL1c)", CTN,
      "    cr.check_enrollment(cdir)\n", ""),
+    # The drop lives in check_enrollment (every command that reads the enrollment): dropped by the
+    # report's main alone, the measure launched alone keeps compose's empty identity.
     ("M2361", "the measure launched alone keeps compose's empty AZURE_CLIENT_*: the managed identity "
-              "never reached under docker exec (BL1c)", CTN,
-     "    drop_empty_service_principal_env()\n", ""),
+              "never reached under docker exec (BL1c)", CREP,
+     ("        drop_empty_service_principal_env()\n",
+      "    campaign_dir = Path(argv[0])\n    check_enrollment(campaign_dir)\n"),
+     ("", "    campaign_dir = Path(argv[0])\n"
+          "    from eregion_core.identity import drop_empty_service_principal_env\n"
+          "    drop_empty_service_principal_env()\n    check_enrollment(campaign_dir)\n")),
+    ("M2362", "check_enrollment keeps compose's empty AZURE_CLIENT_*: the report launched by docker exec "
+              "leaves every channel run out (BL1c)", CREP,
+     "        drop_empty_service_principal_env()\n", ""),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (2360, 2361)})
+TESTS["M2362"] = "tests/unit/test_hosted_report.py"
 
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its

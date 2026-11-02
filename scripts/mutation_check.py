@@ -134,9 +134,9 @@ MUTANTS = [
      "    _atomic_write_text(target, json.dumps(payload))\n",
      "    _atomic_write_text(target, json.dumps(payload))\n    if name != name.lower():\n        target.unlink()\n"),
     ("M07", "release sweeps the NICs only when there is no state", REL,
-     "        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id)",
+     "        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id,",
      "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining, known,"
-     " resource_id)"),
+     " resource_id,"),
     ("M08", "fallback deny any/any on an NSG that only looks dedicated", NSG,
      '    return bool(target.get("private_ips")) or _ip_scoped(target)',
      "    return _ip_scoped(target)"),
@@ -7493,6 +7493,49 @@ MUTANTS += [
      _L1QR_ORDER, '    return sorted(blocks, key=lambda b: b.get("scoped") is not False or bool(b.get("placements")))\n'),
 ]
 TESTS.update({mid: f"{_L1QR} {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
+
+# I3R (#431): the night's seed 67 at 60 — a NIC's isolation rules on our quarantine NSG (written
+# while it had lost our tag), the NIC back on its own NSG with the release: the sweep looked only at
+# the NSGs that govern it now, `released`, the rules left. Looked for on the NSG it left. M3060–M3066.
+_I3R_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_nics_rules_on_the_quarantine_nsg_it_left_go_with_the_release "
+            "tests/unit/test_invariant_regressions.py::"
+            "test_a_nics_rules_on_the_quarantine_nsg_it_left_go_once_the_operator_gives_its_original")
+_I3R_UNIT = "tests/unit/test_release_away.py"
+MUTANTS += [
+    ("M3060", "the release's sweep blind to the quarantine NSG a NIC leaves: its rules there left, `released` (I3R)",
+     REL, "        failed += self._left_quarantine_rules(vm_name, targets, left, guard, mates, own_ips, cache)\n", ""),
+    ("M3061", "the quarantine NSG the sweep itself takes a NIC out of never noted: a stateless release blind to "
+              "it (I3R)", REL,
+     '                    left[t0["nic_id"].rstrip("/").lower()] = (q["nsg_rg"], q["nsg_name"])\n', ""),
+    ("M3062", "the state's quarantine placements never read: a release by its state blind to the NSG it leaves "
+              "(I3R)", REL,
+     'resource_id, placements=state.get("placements"))\n', "resource_id, placements=None)\n"),
+    ("M3063", "a NIC still in the quarantine (its undo failed) has its rules there taken off: nothing else "
+              "may cut it off (I3R)", AWY,
+     "            if (q[0].lower(), q[1].lower()) in {(a.lower(), b.lower()) for a, b in now}:\n                continue\n",
+     ""),
+    ("M3064", "a bare NIC's rules on the quarantine NSG it left looked for here too: a kept one said twice (I3R)",
+     AWY, '            if q is None or not (t0.get("own_nsg_id") or t0.get("quarantine")):\n',
+     "            if q is None:\n"),
+    ("M3065", "a rule of the NIC's on the quarantine NSG it left taken off without the guard: the VM still in it, "
+              "its allow gone (I3R)", AWY,
+     "                err = (_aims_elsewhere(r, own_ips) and _held_by_turned(\n",
+     "                err = (False and _held_by_turned(\n"),
+    ("M3066", "the quarantine NSG a NIC left unreadable, read as nothing there: `released` (I3R)", AWY,
+     "            if rules is None:\n                failed.append(f\"{q[0]}/{q[1]} : règles illisibles",
+     "            if rules is None:\n                continue\n                failed.append(f\"{q[0]}/{q[1]} : règles illisibles"),
+]
+TESTS.update({
+    "M3060": f"{_I3R_SEQ} {_I3R_UNIT}",
+    "M3061": f"{_I3R_SEQ} {_I3R_UNIT}::test_a_nics_rules_on_the_quarantine_nsg_it_leaves_go_with_a_stateless_release",
+    "M3062": f"{_I3R_UNIT}::test_a_nics_rules_on_the_quarantine_nsg_it_leaves_go_with_a_release_by_its_state",
+    "M3063": (f"{_I3R_UNIT}::test_a_nic_held_in_the_quarantine_keeps_its_rules_there "
+              f"{_I3R_UNIT}::test_a_nic_held_in_the_quarantine_by_its_state_keeps_its_rules_there"),
+    "M3064": f"{_I3R_UNIT}::test_a_bare_nics_rule_kept_on_the_quarantine_nsg_it_left_is_said_once",
+    "M3065": f"{_I3R_UNIT}::test_a_rule_turned_toward_a_vm_still_in_the_quarantine_stays_and_is_said",
+    "M3066": f"{_I3R_UNIT}::test_a_quarantine_nsg_left_that_cant_be_read_is_said",
+})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

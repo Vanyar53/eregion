@@ -414,6 +414,9 @@ function chronoRow(l) {
     : l.run ? 'window gone from this host' : '';
   const refusal = l.window && l.window.refusal ? `<div class="r-bad">not believed by Glorfindel — ${esc(l.window.refusal)}</div>` : '';
   const t0 = l.t0 ? `T0 ${esc(hms(l.t0))}${l.provisional ? ' (the window\'s start, until its report)' : ''}` : '';
+  // SEC15: the injector's T0, confronted as the campaign report confronts it — refused, no time counted.
+  const t0Said = (l.t0_refused ? `<div class="r-bad">T0 not believed, no time counted — ${esc(l.t0_refused)}</div>` : '') +
+    (l.t0_unconfronted ? `<div class="meta">${esc(l.t0_unconfronted)}</div>` : '');
   const cards = l.cards || [], judge = cards.filter(c => c.to_judge).length;
   const v = l.verdict;
   const verdict = v ? `<span class="chip ${esc({ PASS: 'c-ok', FAIL: 'c-bad' }[v.result] || '')}">RUN ${esc(v.result || '?')}</span>` +
@@ -422,7 +425,7 @@ function chronoRow(l) {
   return `<tr><td class="ord">#${Number(l.rank)}</td>
     <td style="white-space:nowrap"><span class="rid${fault ? ' fault' : ''}">${esc(l.experiment || '?')}</span> → ${esc(l.target_name || '?')}</td>
     <td><span class="chip ${esc(STATE_CHIP[l.state] || '')}">${esc(String(l.state).toUpperCase())}${l.code ? ' · ' + esc(l.code) : ''}</span></td>
-    <td class="wrap">${l.run ? `<span class="rid">${esc(l.run)}</span>` : ''}<div class="meta">${esc(win)}</div><div class="meta">${t0}</div>${refusal}</td>
+    <td class="wrap">${l.run ? `<span class="rid">${esc(l.run)}</span>` : ''}<div class="meta">${esc(win)}</div><div class="meta">${t0}</div>${t0Said}${refusal}</td>
     <td class="wrap"><span class="${esc(RESULT_CLS[r.style] || '')}">${esc(r.text.replace(/^#\d+ /, ''))}</span>${l.provisional && l.detected_at ? '<div class="meta">≈ provisional: from the window, until the run\'s report</div>' : ''}<div class="meta">${decisionCell(l)}</div></td>
     <td>${cards.length ? `<a href="/glorfindel" title="TO JUDGE is on Glorfindel's page">${Number(cards.length)} card(s)${judge ? `, ${Number(judge)} to judge` : ''} ▸</a>` : ''}</td>
     <td class="wrap">${verdict}${runLink(l.run)}</td></tr>`;

@@ -157,6 +157,25 @@ def read_lines(path, offset: int, skipping: bool = False, ino: int | None = None
     return out
 
 
+def tail_lines(path, max_bytes: int = READ_BYTES, max_lines: int = READ_LINES) -> list[str]:
+    """The last complete lines of `path`, a regular file of runs/ (`open_regular`: never blocks,
+    never follows a link) — for a reader that shows what was written lately (the console's live
+    feed, the TUI), never the whole file: at most `max_bytes` read from its end, the first line
+    cut by that bound dropped, a line past LINE_BYTES refused, at most `max_lines` kept, the last
+    one only when it is ended. Raises Refused (not a regular file) or OSError (SEC15)."""
+    fd = open_regular(path)
+    with os.fdopen(fd, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        start = max(0, size - max_bytes)
+        f.seek(start)
+        data = f.read(max_bytes)
+    if start > 0:
+        nl = data.find(b"\n")
+        data = data[nl + 1:] if nl >= 0 else b""
+    ended = data.split(b"\n")[:-1]        # what follows the last newline is not ended yet
+    return [line.decode("utf-8", errors="replace") for line in ended if len(line) <= LINE_BYTES][-max_lines:]
+
+
 class Budget:
     """The lines of the channel admitted per minute: `per_writer` per file, `total` for all.
     `take` says whether one more line passes; `report` gives the refused ones, at most once

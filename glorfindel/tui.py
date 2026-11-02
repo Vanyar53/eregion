@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import select
+import stat
 import subprocess
 import sys
 import threading
@@ -418,21 +420,31 @@ def _format_debug(d: dict) -> str:
     )
 
 
+def _regular_by_age(runs: Path, pattern: str) -> list[Path]:
+    """The regular files of runs/ matching `pattern`, the newest first — by lstat: a link is
+    never followed, and a pipe, a device or a link is no candidate (SEC15)."""
+    found = []
+    for path in runs.glob(pattern):
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode):
+            found.append((st.st_mtime, path))
+    return [path for _, path in sorted(found, reverse=True)]
+
+
 def _load_feed(max_entries: int = 60) -> list[str]:
+    """The last run's lines, read as the watch reads runs/ (SEC15, glorfindel/channel_reader.py):
+    the end of each file, never the whole of it, never through a link, never blocking — a file
+    that is not a regular one is said, never read."""
+    from glorfindel import channel_reader
     runs = Path("runs")
     if not runs.exists():
         return ["[dim]No runs/ directory — start an annatar run[/dim]"]
 
-    sig_files = sorted(
-        runs.glob("*_signals.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    dbg_files = sorted(
-        runs.glob("*_debug.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    sig_files = _regular_by_age(runs, "*_signals.jsonl")
+    dbg_files = _regular_by_age(runs, "*_debug.jsonl")
 
     if not sig_files and not dbg_files:
         return ["[dim]No run data yet — start an annatar run[/dim]"]
@@ -440,23 +452,32 @@ def _load_feed(max_entries: int = 60) -> list[str]:
     name = sig_files[0].name if sig_files else dbg_files[0].name
     prefix = name.replace("_signals.jsonl", "").replace("_debug.jsonl", "")
     entries: list[tuple[str, str]] = []
+    refused: list[str] = []
 
     for path, fmt in [
         (runs / f"{prefix}_signals.jsonl", _format_signal),
         (runs / f"{prefix}_debug.jsonl", _format_debug),
     ]:
-        if path.exists():
-            for line in path.read_text().splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    d = json.loads(line)
-                    entries.append((d.get("timestamp", ""), fmt(d)))
-                except Exception:
-                    pass
+        if not os.path.lexists(path):
+            continue
+        try:
+            lines = channel_reader.tail_lines(path)
+        except channel_reader.Refused as exc:
+            refused.append(f"[yellow]⚠ {path.name} : {exc} — jamais lu[/yellow]")
+            continue
+        except OSError:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+                entries.append((d.get("timestamp", ""), fmt(d)))
+            except Exception:
+                pass
 
     entries.sort(key=lambda x: x[0])
-    return [text for _, text in entries[-max_entries:]]
+    return refused + [text for _, text in entries[-max_entries:]]
 
 
 def _feed_renderable(feed_lines: list[str], run_label: str) -> Panel:
@@ -476,11 +497,7 @@ def _current_run_label() -> str:
     runs = Path("runs")
     if not runs.exists():
         return ""
-    candidates = sorted(
-        runs.glob("*_signals.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    candidates = _regular_by_age(runs, "*_signals.jsonl")   # SEC15: a link has no age here
     if not candidates:
         return ""
     return candidates[0].name.replace("_signals.jsonl", "")
@@ -511,13 +528,13 @@ def run() -> None:
         runs = Path("runs")
         if not runs.exists():
             return
-        files = (
-            list(runs.glob("*_debug.jsonl"))
-            + list(runs.glob("*_signals.jsonl"))
-        )
+        files = _regular_by_age(runs, "*_debug.jsonl") + _regular_by_age(runs, "*_signals.jsonl")
         if not files:
             return
-        newest = max(f.stat().st_mtime for f in files)
+        try:
+            newest = max(f.lstat().st_mtime for f in files)
+        except OSError:   # gone since it was listed: the next turn sees it
+            return
         if newest != last_mtime:
             last_mtime = newest
             run_label = _current_run_label()

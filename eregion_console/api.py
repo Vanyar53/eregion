@@ -5,6 +5,7 @@ import contextlib
 import hmac
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -1008,30 +1009,62 @@ async def config() -> dict:
 
 @app.get("/api/feed/history")
 async def feed_history() -> dict:
-    return {"entries": _load_recent(40)}
+    return {"entries": await asyncio.to_thread(_load_recent, 40)}
 
 
 # How often the live feed reads runs/ again, and holds its session again (SEC10).
 _FEED_POLL_S = 2.0
+_FEED_FILES = (("*_signals.jsonl", "signal"), ("*_debug.jsonl", "action"), ("manual_actions.jsonl", "action"))
+
+
+def _feed_start() -> dict[Path, tuple[int, int | None, bool]]:
+    """Where the live feed starts in each file already there: its end (a regular file, lstat —
+    a link is not followed); a file that is not one starts at 0, and is refused at its read."""
+    state: dict[Path, tuple[int, int | None, bool]] = {}
+    for pat, _ in _FEED_FILES:
+        for f in _RUNS.glob(pat):
+            try:
+                st = os.lstat(f)
+            except OSError:
+                continue
+            state[f] = (st.st_size, st.st_ino, False) if stat.S_ISREG(st.st_mode) else (0, None, False)
+    return state
+
+
+def _feed_new(state: dict[Path, tuple[int, int | None, bool]]) -> list[dict]:
+    """What runs/ gained since the last turn, read as the watch reads it (SEC15,
+    glorfindel/channel_reader.py ``read_lines``): a regular file only, never blocking, never
+    through a link, a bounded read per turn — the rest waits for the next one, from the offset
+    kept. A file refused is said once. A file not there at the start is read from its start."""
+    from glorfindel import channel_reader
+    out = []
+    for pat, kind in _FEED_FILES:
+        for f in _RUNS.glob(pat):
+            offset, ino, skipping = state.get(f, (0, None, False))
+            try:
+                read = channel_reader.read_lines(f, offset, skipping, ino)
+            except channel_reader.Refused as exc:
+                _say_refused(f, str(exc))
+                continue
+            except OSError:
+                continue
+            state[f] = (read.offset, read.ino, read.skipping)
+            for raw in read.lines:
+                if raw.strip():
+                    try:
+                        out.append(_parse(json.loads(raw), kind))
+                    except Exception:
+                        pass
+    return out
 
 
 @app.websocket("/api/feed")
 async def feed_ws(ws: WebSocket) -> None:
     await ws.accept()
-
-    positions: dict[str, int] = {}
-    runs = Path("runs")
-
-    def _init() -> None:
-        if not runs.exists():
-            return
-        for pat in ("*_signals.jsonl", "*_debug.jsonl", "manual_actions.jsonl"):
-            for f in runs.glob(pat):
-                positions[str(f)] = f.stat().st_size
-
-    _init()
-
-    for entry in _load_recent(40):
+    # SEC15: every read of runs/ off the event loop, bounded — a file that would not end, or
+    # that blocks, never stops the console.
+    state = await asyncio.to_thread(_feed_start)
+    for entry in await asyncio.to_thread(_load_recent, 40):
         await ws.send_json(entry)
 
     try:
@@ -1042,33 +1075,8 @@ async def feed_ws(ws: WebSocket) -> None:
             if not any(_credentials(ws, _token())):
                 await ws.close(code=1008)
                 return
-            if not runs.exists():
-                continue
-            for pat, kind in (
-                ("*_signals.jsonl", "signal"),
-                ("*_debug.jsonl", "action"),
-                ("manual_actions.jsonl", "action"),
-            ):
-                for f in runs.glob(pat):
-                    key = str(f)
-                    # Files not seen at _init() are new — read from start
-                    prev = positions.get(key, 0)
-                    cur = f.stat().st_size
-                    if cur <= prev:
-                        positions[key] = cur
-                        continue
-                    with open(f) as fh:
-                        fh.seek(prev)
-                        for raw in fh:
-                            raw = raw.strip()
-                            if not raw:
-                                continue
-                            try:
-                                entry = _parse(json.loads(raw), kind)
-                                await ws.send_json(entry)
-                            except Exception:
-                                pass
-                        positions[key] = fh.tell()
+            for entry in await asyncio.to_thread(_feed_new, state):
+                await ws.send_json(entry)
     except WebSocketDisconnect:
         pass
 
@@ -1803,22 +1811,26 @@ async def nsgs() -> dict:
 @app.get("/api/actions/{vm_name}")
 async def vm_actions(vm_name: str, limit: int = 5) -> dict:
     """Return recent Glorfindel decisions for a VM (reasoning + confidence)."""
+    return await asyncio.to_thread(_vm_actions, vm_name, limit)
+
+
+def _vm_actions(vm_name: str, limit: int) -> dict:
+    """The VM's recent decisions, from the watch's debug files of the last day — read as the
+    watch reads runs/ (SEC15, ``runs_reader``): regular files only, by lstat, never through a
+    link nor blocking; off the event loop."""
     import time as _time
-    runs = Path("runs")
+    runs = _RUNS
     if not runs.exists():
         return {"actions": []}
 
     cutoff = _time.time() - 24 * 3600
     actions: list[dict] = []
+    debug = [(st.st_mtime, f) for f in runs.glob("*_debug.jsonl") if (st := runs_reader.regular(f))]
 
-    for f in sorted(
-        runs.glob("*_debug.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    ):
-        if f.stat().st_mtime < cutoff:
+    for mtime, f in sorted(debug, key=lambda x: x[0], reverse=True):
+        if mtime < cutoff:
             break
-        for line in reversed(f.read_text().splitlines()):
+        for line in reversed(runs_reader.lines(f)):
             if not line.strip():
                 continue
             try:
@@ -2117,9 +2129,19 @@ def _bin() -> str:
     return str(c) if c.exists() else "glorfindel"
 
 
+# SEC15: runs/ is read as the watch reads it — eregion_console/runs_reader.py, the one reader of
+# the console: a regular file only, never through a link, never blocking, a bounded read, a
+# refusal said once.
+from eregion_console import runs_reader  # noqa: E402
+_say_refused = runs_reader.say_refused
+_tail = runs_reader.tail
+
+
 def _load_recent(n: int, window_h: float = 4.0) -> list[dict]:
-    """Load recent feed entries across all runs in the last window_h hours."""
-    runs = Path("runs")
+    """The last feed entries across the runs of the last window_h hours: the end of each file,
+    read as the watch reads runs/ (SEC15, ``_tail``) — never the whole file, never through a
+    link, never blocking."""
+    runs = _RUNS
     if not runs.exists():
         return []
 
@@ -2130,31 +2152,24 @@ def _load_recent(n: int, window_h: float = 4.0) -> list[dict]:
     for pat, kind in [
         ("*_signals.jsonl", "signal"),
         ("*_debug.jsonl", "action"),
+        ("manual_actions.jsonl", "action"),
     ]:
         for f in runs.glob(pat):
-            if f.stat().st_mtime < cutoff:
+            try:
+                st = os.lstat(f)
+            except OSError:
                 continue
-            for line in f.read_text().splitlines():
+            # The operator's own actions are always shown; a run's files, while they are recent.
+            if f.name != "manual_actions.jsonl" and stat.S_ISREG(st.st_mode) and st.st_mtime < cutoff:
+                continue
+            for line in _tail(f):
                 if not line.strip():
                     continue
                 try:
                     d = json.loads(line)
-                    entries.append(
-                        (d.get("timestamp", ""), _parse(d, kind))
-                    )
+                    entries.append((d.get("timestamp", ""), _parse(d, kind)))
                 except Exception:
                     pass
-
-    manual = runs / "manual_actions.jsonl"
-    if manual.exists():
-        for line in manual.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                d = json.loads(line)
-                entries.append((d.get("timestamp", ""), _parse(d, "action")))
-            except Exception:
-                pass
 
     entries.sort(key=lambda x: x[0])
     return [e for _, e in entries[-n:]]
@@ -2245,11 +2260,16 @@ async def catalog(kind: str = "") -> dict:
     return _catalog_entries(kind)
 
 
-def _slim_cycle(rec: dict) -> dict | None:
+def _slim_cycle(rec: dict, own: bool = False) -> dict | None:
+    """What the console keeps of a line of the watch. ``own``: written in a run's own debug file
+    (the watch's poll of its ``attack_started``), not in the watch's ``watch-*`` files."""
+    from analysis import containment
+    from eregion_core.run_report import epoch
     sig = rec.get("signal")
     if not isinstance(sig, dict):
         return None
     ctx = sig.get("context") if isinstance(sig.get("context"), dict) else {}
+    raw = sig.get("raw_signal") if isinstance(sig.get("raw_signal"), dict) else {}
     outcome = rec.get("outcome") if isinstance(rec.get("outcome"), dict) else {}
     return {
         "at": rec.get("timestamp", ""), "signal_at": sig.get("timestamp", ""),
@@ -2271,6 +2291,11 @@ def _slim_cycle(rec: dict) -> dict | None:
         # OV1: who is behind the detection — the rule's address column — so that one attacker
         # on one VM is one incident, whatever its cycles. Never shown.
         "attacker": _attacker(sig),
+        # SEC15: what a run's T0 is confronted with (analysis/containment.py t0_refusal), as the
+        # campaign report confronts it: the run the signal names, the attack time the watch
+        # received from the injector, the row's own time, and whose file it is.
+        "run_id": str(ctx.get("run_id") or ""), "attack_time": epoch(raw.get("attack_time")),
+        "row_at": containment.row_time(rec), "own": own,
     }
 
 
@@ -2289,9 +2314,10 @@ def _watch_cycles(since_ts: float | None) -> list[dict]:
     for gone in set(list(_cycle_cache)) - set(paths):   # a file deleted is dropped from the cache (C1)
         _cycle_cache.pop(gone, None)   # two requests (threads) can evict at once
     for path in paths:
-        try:
-            st = path.stat()
-        except OSError:
+        # SEC15: a regular file only, by lstat (a link never followed), read bounded and without
+        # blocking (runs_reader) — a pipe or a link in runs/ is said once, never read.
+        st = runs_reader.regular(path)
+        if st is None:
             continue
         if since_ts is not None and st.st_mtime < since_ts - 60:  # a cycle ends after its signal
             continue
@@ -2299,16 +2325,12 @@ def _watch_cycles(since_ts: float | None) -> list[dict]:
         hit = _cycle_cache.get(path)
         if not hit or hit[0] != key:
             cycles = []
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
-                lines = []
-            for line in lines:
+            for line in runs_reader.lines(path):
                 try:
                     rec = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(rec, dict) and (c := _slim_cycle(rec)):
+                if isinstance(rec, dict) and (c := _slim_cycle(rec, own=not path.name.startswith("watch-"))):
                     cycles.append(c)
             hit = _cycle_cache[path] = (key, cycles)
         out += hit[1]
@@ -2336,10 +2358,7 @@ def _slim_probes(by_vm) -> dict:
 
 
 def _slim_run(path: Path) -> dict | None:
-    try:
-        r = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    r = runs_reader.read_json(path)      # SEC15: a regular file, bounded, never blocking
     if not isinstance(r, dict):
         return None
     m = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
@@ -2367,6 +2386,17 @@ def _window_state(w: dict, now: datetime) -> str:
     return "closed" if w.get("end") else "lapsed"
 
 
+def _held_windows() -> dict[str, dict]:
+    """Every exercise window this host holds, by its file's run id, as the file holds it —
+    believed, refused or purged (its tombstone): what an attack run's T0 is confronted with, as
+    the campaign report does (SEC9, SEC15: ``indicators.t0_confronted``). Read only, as the watch
+    reads runs/."""
+    from eregion_core.exercise import exercises_dir
+    directory = exercises_dir(_RUNS)
+    return {path.stem: w for path in (sorted(directory.glob("*.json")) if directory.is_dir() else [])
+            if isinstance(w := runs_reader.read_json(path), dict)}
+
+
 def _read_windows() -> list[dict]:
     """The exercise windows as their files hold them. Read only: the watch pulls them, and its
     ``load_windows`` may purge an old one (H-1) — the console never writes there. A file
@@ -2378,11 +2408,12 @@ def _read_windows() -> list[dict]:
     now = datetime.now(timezone.utc)
     out = []
     for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
-        try:
-            w = json.loads(path.read_text(encoding="utf-8"))
-            declared = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
-        except (OSError, ValueError):
+        # SEC15: a regular file, by lstat, read bounded and without blocking (runs_reader).
+        st = runs_reader.regular(path)
+        w = runs_reader.read_json(path) if st is not None else None
+        if st is None or w is None:
             continue
+        declared = datetime.fromtimestamp(st.st_mtime, timezone.utc)
         if isinstance(w, dict) and w.get("run_id") and w.get("start"):
             targets = w.get("targets") if isinstance(w.get("targets"), list) else []
             out.append({**w, "run_id": str(w["run_id"]),
@@ -2398,11 +2429,17 @@ async def exercises(since: str = "7d", injector: str = "") -> dict:
     carrying its run, and the run's report when it reached this host. ``injector`` keeps one
     injector's windows (its section); the cycles are attributed over every window either way,
     so a window keeps only its own."""
-    from eregion_core.exercise import covering_runs, is_enrolled, last_moment
     try:
         start = _since_start(since)
     except ValueError as exc:
         return {"error": str(exc)}
+    # SEC15: the windows, the cycles, the reports, the cards are read in a thread, never on the
+    # event loop.
+    return await asyncio.to_thread(_exercises, start, injector)
+
+
+def _exercises(start: datetime | None, injector: str) -> dict:
+    from eregion_core.exercise import covering_runs, is_enrolled, last_moment
     now = datetime.now(timezone.utc)
     windows = [w for w in _read_windows()
                if start is None or (_iso(w.get("start")) or now) >= start
@@ -2410,7 +2447,7 @@ async def exercises(since: str = "7d", injector: str = "") -> dict:
     if not windows:
         return {"exercises": []}
     starts = [s for w in windows if (s := _iso(w.get("start")))]
-    cycles = await asyncio.to_thread(_watch_cycles, min(starts).timestamp() if starts else None)
+    cycles = _watch_cycles(min(starts).timestamp() if starts else None)
     by_run: dict[str, list[dict]] = {}
     for c in cycles:
         for rid in covering_runs(c["resource_id"], c["signal_at"], windows):
@@ -2427,7 +2464,7 @@ async def exercises(since: str = "7d", injector: str = "") -> dict:
     # exercise for Glorfindel (H-1).
     shown = [w for w in windows if not injector or w.get("injector") == injector]
     vms = sorted({t for w in shown for t in w["targets"]})
-    enrolled = await asyncio.to_thread(lambda: {t: is_enrolled(t) for t in vms})
+    enrolled = {t: is_enrolled(t) for t in vms}
     out = []
     for w in sorted(shown, key=lambda w: str(w.get("start")), reverse=True)[:200]:
         rid = str(w["run_id"])
@@ -2454,13 +2491,14 @@ async def campaigns(since: str = "30d") -> dict:
         start = _since_start(since)
     except ValueError as exc:
         return {"error": str(exc)}
+    return await asyncio.to_thread(_campaigns, start)   # SEC15: never read on the event loop
+
+
+def _campaigns(start: datetime | None) -> dict:
     out = []
     for mpath in _RUNS.glob("campaigns/*/manifest.json"):
         cdir = mpath.parent
-        try:
-            m = json.loads(mpath.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            m = None
+        m = runs_reader.read_json(mpath)   # SEC15: a regular file, bounded, never blocking
         if not isinstance(m, dict):
             out.append({"dir": cdir.name, "error": "manifest unreadable"})
             continue
@@ -2517,12 +2555,9 @@ async def campaign(cid: str) -> dict:
             containment.load, cdir, _RUNS, cards=esc_module.all_escalations())).as_dict()
     except Exception as exc:
         contained = {"error": f"response not computed: {type(exc).__name__}: {str(exc)[:160]}"}
-    try:
-        report = (cdir / "report.md").read_text(encoding="utf-8")
-    except OSError:
-        report = ""
+    report = await asyncio.to_thread(runs_reader.read_text, cdir / "report.md", runs_reader.JSON_MAX_BYTES)
     return {"campaign_id": cid, "facts": [asdict(f) for f in facts], "skipped": skipped,
-            "report_md": report, "containment": contained}
+            "report_md": report or "", "containment": contained}
 
 
 def _published_heartbeat() -> dict:
@@ -2556,7 +2591,7 @@ def _matrix_fingerprint(reports: dict[str, Path]) -> tuple:
 
     def stat(p) -> tuple:
         try:
-            st = Path(p).stat()
+            st = os.lstat(p)   # SEC15: a link is never followed, not even for its age
             return (str(Path(p).absolute()), st.st_mtime_ns, st.st_size)
         except OSError:
             return (str(p), None, None)
@@ -2578,7 +2613,7 @@ def coverage_matrix(now: float | None = None) -> dict:
     if cached["value"] is not None and cached["key"] == key and 0 <= t - cached["at"] < MATRIX_TTL_S:
         return dict(cached["value"])
     cat = _catalog_entries()
-    m = coverage.matrix(run_report.read_reports(reports), _watch_cycles(None),
+    m = coverage.matrix(run_report.read_reports(reports, runs_reader.read_json), _watch_cycles(None),
                         cat.get("entries", []), t)
     if cat.get("error"):
         m["error"] = cat["error"]
@@ -2606,12 +2641,8 @@ def _manual_liftings(since: float) -> list:
     """The operator's lifts of a containment (runs/manual_actions.jsonl: release, reset,
     unblock) since ``since`` — where the overview stops watching an isolation (BL1)."""
     from analysis import containment
-    try:
-        lines = (_RUNS / "manual_actions.jsonl").read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
-        return []
     out = []
-    for line in lines:
+    for line in runs_reader.lines(_RUNS / "manual_actions.jsonl"):   # SEC15
         try:
             rec = json.loads(line)
         except ValueError:
@@ -2671,7 +2702,8 @@ def _exercise_indicators(since: datetime, now: datetime, cat: list[dict]):
     runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]
     out = ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
                       r7.get("disruptive") or {}, confidence_threshold(), t,
-                      all_cards=every, liftings=_manual_liftings(since.timestamp()))
+                      all_cards=every, liftings=_manual_liftings(since.timestamp()),
+                      windows=_held_windows())
     return runs, cycles, every, out, t
 
 
@@ -2699,9 +2731,12 @@ async def channel() -> dict:
     from eregion_core import exercise_channel, watch_channel
     from eregion_core.exercise import exercises_dir, live
     now = datetime.now(timezone.utc)
-    directory = exercises_dir(_RUNS)
-    windows = _read_windows()
-    mtimes = [p.stat().st_mtime for p in directory.glob("*.json")] if directory.is_dir() else []
+
+    def read() -> tuple[list[dict], list[float]]:   # SEC15: in a thread; a link has no age here
+        directory = exercises_dir(_RUNS)
+        return _read_windows(), [st.st_mtime for p in directory.glob("*.json")
+                                 if (st := runs_reader.regular(p))] if directory.is_dir() else []
+    windows, mtimes = await asyncio.to_thread(read)
     live_ids = sorted(str(w["run_id"]) for w in windows if live(w, now))
     out = {
         "watch": await watch_status(),
@@ -2891,9 +2926,10 @@ def _orodruin_contract() -> dict | None:
     watch from the exercise channel, DG-b) and read against its shape again — or None: unknown
     here. Never an identifier: the verdict, its codes, its time."""
     from eregion_core.orodruin import read_contract
+    published = runs_reader.read_json(_RUNS / "orodruin" / "contract.json")   # SEC15
     try:
-        return read_contract(json.loads((_RUNS / "orodruin" / "contract.json").read_text(encoding="utf-8")))
-    except (OSError, ValueError):
+        return read_contract(published) if published is not None else None
+    except ValueError:
         return None
 
 
@@ -2909,14 +2945,19 @@ async def exercise_request_status(request_id: str) -> JSONResponse:
         return JSONResponse({"error": "not a request id"}, status_code=400)
     # Orodruin's status: absent (not heard yet), or there and read — never « absent » when it is
     # there but refused (A0, DG-c review): the request may be running on Orodruin.
-    status, unreadable = None, ""
-    try:
-        status = xr.read_status(json.loads(
-            (_RUNS / "orodruin" / "requests" / f"{request_id}.json").read_text(encoding="utf-8")))
-    except FileNotFoundError:
-        status = None
-    except (OSError, ValueError, xr.RequestRefused) as exc:
-        status, unreadable = None, f"Orodruin's status unreadable: {exc}"[:300]
+    # SEC15: read as the watch reads runs/, in a thread — a link or a pipe there is unreadable.
+    def read_status() -> tuple[dict | None, str]:
+        spath = _RUNS / "orodruin" / "requests" / f"{request_id}.json"
+        if not os.path.lexists(spath):
+            return None, ""
+        doc, why = runs_reader.json_and_why(spath)
+        try:
+            if why:
+                raise ValueError(why)
+            return xr.read_status(doc), ""
+        except (ValueError, xr.RequestRefused) as exc:
+            return None, f"Orodruin's status unreadable: {exc}"[:300]
+    status, unreadable = await asyncio.to_thread(read_status)
     if status is not None and status["request"] != request_id:   # as the request's file (M2466)
         status, unreadable = None, "Orodruin's status names another request"
     req = None
@@ -2958,11 +2999,8 @@ def _follow(request_id: str, req, status: dict | None, unreadable: str = "") -> 
     runs = {w["run_id"] for w in mine} | {r for w in (status or {}).get("wires") or [] for r in w.get("runs") or []}
     reports = {}
     for rid in runs:   # a run id is only looked up among this host's report files
-        if rid in reports_at:
-            try:
-                reports[rid] = json.loads(reports_at[rid].read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
+        if rid in reports_at and (r := runs_reader.read_json(reports_at[rid])) is not None:   # SEC15
+            reports[rid] = r
     cards = esc_module.all_escalations()
     to_judge = {e.get("id") for e in cards
                 if esc_module.is_decision(e) and e.get("verdict") not in esc_module.VERDICTS}
@@ -2975,7 +3013,7 @@ def _follow(request_id: str, req, status: dict | None, unreadable: str = "") -> 
                          {str(w["run_id"]): _window_state(w, now) for w in mine},
                          _watch_cycles(since), reports, cards, to_judge, now=now, catalog=catalog_,
                          liftings=_manual_liftings(since), others=ind.read_runs(reports_at, since),
-                         begun=begun, unreadable=unreadable)
+                         begun=begun, unreadable=unreadable, held=_held_windows())
 
 
 @app.get("/api/dagorlad/stop")

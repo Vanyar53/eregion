@@ -46,7 +46,8 @@ def read_runs(reports: dict[str, Path], since: float) -> list[dict]:
     (``eregion_core.run_report.read_run``): an attack (``technique``) is dated by its attack
     time, a fault by its start. A report without a date in the period is left out."""
     runs = []
-    for run in run_report.read_reports(reports):
+    from eregion_console import runs_reader
+    for run in run_report.read_reports(reports, runs_reader.read_json):   # SEC15
         at = run["at"]
         if at is None or at < since:
             continue
@@ -113,15 +114,38 @@ def liftings_of(cycles, manual=()) -> list[tuple]:
     return [x for c in every if (x := containment.lifting_of(c)) is not None] + list(manual or ())
 
 
-def incident_of(run: dict, decision: dict | None, cards=(), liftings=()):
+def incident_of(run: dict, decision: dict | None, cards=(), liftings=(), t0_refused: str = ""):
     """How an attack run ended, by BL1's definition (``analysis/containment.py``: executed in its
     cycle, read back on Azure, held) — the one call the overview and Dagorlad's follow make
     (DG-c: a run is not measured otherwise there). The VM: the run's own (C1), else the
-    decision's."""
+    decision's. ``t0_refused``: why its T0 is not believed (``t0_confronted``) — no time is
+    counted from it."""
     from analysis import containment
     d = decision or {}
     return containment.incident(run["run_id"], run["ttp"], run.get("resource_id") or d.get("resource_id", ""),
-                                run["at"], run["detection"], decision, cards=cards, liftings=liftings)
+                                run["at"], run["detection"], decision, cards=cards, liftings=liftings,
+                                t0_refused=t0_refused)
+
+
+def t0_confronted(run: dict, decision: dict | None, window: dict | None, cycles,
+                  requests=None) -> tuple[str, str]:
+    """``(why its T0 is not believed, why the request is unread)`` — "" for each when it is
+    (SEC9, SEC15): an attack run's T0 is its injector's word, confronted as the campaign report
+    confronts it (``containment.t0_refusal``) with its exercise window as this host holds it
+    (``window``: believed, refused or purged — None when it holds none), the Dagorlad request
+    that launched it (``requests``: the console's own store, ``containment.request_at``), the
+    decision attached, the attack time the watch received in the run and its first sight of the
+    VM there (``cycles``: the watch's, slimmed; a run's own files, the poll of its
+    ``attack_started``, are no sight of the watch's)."""
+    from analysis import containment
+    every = detections(cycles).cycles
+    asked, unread = containment.request_at(window, requests)
+    vm = run.get("resource_id") or (decision or {}).get("resource_id", "")
+    refused = containment.t0_refusal(
+        run["at"], window, [c for c in every if not c.get("own")], vm, request_at=asked,
+        decision_seen=containment.view(decision)["seen_at"] if decision else None,
+        received=containment.received_t0(every, run["run_id"]))
+    return refused, unread
 
 
 def _median(values: list[float]) -> float | None:
@@ -130,10 +154,15 @@ def _median(values: list[float]) -> float | None:
 
 def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: list[dict],
             wrong_30: dict, wrong_7: dict, threshold: float, now: float,
-            all_cards: list[dict] | None = None, liftings=()) -> dict:
+            all_cards: list[dict] | None = None, liftings=(), windows: dict | None = None,
+            requests=None) -> dict:
     """The five indicators, from what ``read_runs`` and the watch's files give (the API reads
     them). ``wrong_*``: ``glorfindel.escalations.observation_report``'s ``disruptive``.
-    ``all_cards``: every card of the host — an isolation that did not hold is one (BL1)."""
+    ``all_cards``: every card of the host — an isolation that did not hold is one (BL1).
+    ``windows``: run id → its exercise window as this host holds it (believed, refused or
+    purged): each run's T0 is confronted with it (``t0_confronted``, SEC15) — a T0 refused gives
+    no time (to detect, to decide, to contain), and is counted as such (``t0_refused``). None:
+    not confronted (the API always gives them)."""
     from analysis import containment
     attacks = [r for r in runs if r["kind"] == "technique"]
     detected = [r for r in attacks if r["detection"] == "detected"]
@@ -147,22 +176,28 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     # The lifts of a containment the watch's cycles show (a release on a recovery); the
     # operator's own are in runs/manual_actions.jsonl, passed by the API.
     liftings = liftings_of(cycles, liftings)
+    refused_t0 = 0
     for r in detected:
-        if r["latency"] is not None:
-            detect.append(r["latency"])
         d = decision_of(r, cycles)
+        # SEC15: the T0 is the injector's word, confronted as the campaign report confronts it —
+        # refused, no time is counted from it, and it is said.
+        refused = t0_confronted(r, d, windows.get(r["run_id"]), cycles, requests)[0] \
+            if windows is not None else ""
+        refused_t0 += bool(refused)
+        if r["latency"] is not None and not refused:
+            detect.append(r["latency"])
         if d is None:
             continue
         proofs.append(r)
         decided_at = _ts(d.get("at"))
-        if decided_at is not None and decided_at >= r["at"]:
+        if decided_at is not None and decided_at >= r["at"] and not refused:
             decide.append(decided_at - r["at"])
         disruptive = d.get("action") in DISRUPTIVE
         # The one definition of the time to contain on the overview (C1 and BL1 merged): BL1's
         # (analysis/containment.py) — executed in the cycle, read back on Azure, held — whose
         # time is run_report.timeline's, the matrix's. The VM: the run's own (C1), else the
         # decision's.
-        inc = incident_of(r, d, all_cards or (), liftings)
+        inc = incident_of(r, d, all_cards or (), liftings, t0_refused=refused)
         if inc.outcome == containment.CONTAINED:
             alone += 1
             if inc.time_to_contain_s is not None:
@@ -196,7 +231,7 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
         "window_days": WINDOW_DAYS,
         "contain": {"detect_s": _median(detect), "decide_s": _median(decide),
                     "contain_s": _median(contain), "detected": len(detected),
-                    "decided": len(decide), "contained": len(contain)},
+                    "decided": len(decide), "contained": len(contain), "t0_refused": refused_t0},
         "alone": {"contained": alone, "shadow": shadow, "of": len(detected),
                   "threshold": threshold if threshold != float("inf") else None,
                   "attacks": len(attacks),

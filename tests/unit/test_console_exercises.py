@@ -384,3 +384,70 @@ def test_a_window_not_believed_is_shown_with_why(runs, client):
     _window(runs, "too-long", start=NOW - timedelta(hours=1), expires=NOW + timedelta(hours=5))
     w = client.get("/api/exercises").json()["exercises"][0]
     assert w["run_id"] == "too-long" and "MAX_DURATION_S" in w["refusal"]
+
+
+def test_runs_is_read_as_the_watch_reads_it_a_pipe_and_a_link_in_each_place(runs, client, tmp_path, capsys):
+    """SEC15 (#425): a named pipe and a link wherever the console reads runs/ — the windows, the
+    watch's cycles, the run reports, the campaigns' manifests, the operator's lifts, Orodruin's
+    contract. Every page comes back at once with the regular files only; a link is never
+    followed, even to a file of the right shape; each refusal is said once."""
+    import os
+    import threading
+    from .test_console import _guarded, _release_fifo
+    start = NOW - timedelta(minutes=10)
+    for rid in ("run-a", "run-b", "run-c"):
+        _window(runs, rid, start=start, end=start + timedelta(minutes=2))
+    _cycle(runs, "watch-ssh-1", at=start + timedelta(minutes=1))
+    report = {"scenario": "ssh", "run_id": "run-a", "mitre": "T1110.001", "result": "PASS",
+              "metrics": {"attack_time": start.timestamp(), "detection": "detected"},
+              "thresholds": {}, "checks": {}}
+    (runs / "run-a.json").write_text(json.dumps(report))
+    # Elsewhere, files of the right shape: read through a link, they would show.
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "exercises").mkdir(parents=True)
+    _window(elsewhere, "run-linked", start=start, end=start + timedelta(minutes=2))
+    _cycle(elsewhere, "watch-linked", at=start + timedelta(minutes=1, seconds=30))
+    (elsewhere / "r.json").write_text(json.dumps({**report, "run_id": "run-b"}))
+    _manifest(elsewhere, "c-link", created=start, scenarios=[])
+    (elsewhere / "contract.json").write_text(json.dumps({"verdict": "armed", "codes": [], "at": _iso(NOW)}))
+    links = {runs / "exercises" / "run-linked.json": elsewhere / "exercises" / "run-linked.json",
+             runs / "watch-linked_debug.jsonl": elsewhere / "watch-linked_debug.jsonl",
+             runs / "run-b.json": elsewhere / "r.json",
+             runs / "campaigns" / "c-link" / "manifest.json": elsewhere / "campaigns" / "c-link" / "manifest.json",
+             runs / "orodruin" / "contract.json": elsewhere / "contract.json"}
+    pipes = [runs / "exercises" / "run-pipe.json", runs / "watch-pipe_debug.jsonl", runs / "run-c.json",
+             runs / "campaigns" / "c-pipe" / "manifest.json", runs / "manual_actions.jsonl"]
+    for link, target in links.items():
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+    stop = threading.Event()
+    for pipe in pipes:
+        pipe.parent.mkdir(parents=True, exist_ok=True)
+        os.mkfifo(pipe)
+        threading.Thread(target=_release_fifo, args=(pipe, stop), daemon=True).start()
+    try:
+        for _ in range(2):
+            pages = {}
+            for route in ("/api/exercises?since=all", "/api/campaigns?since=all", "/api/channel",
+                          "/api/actions/vm-a", "/api/indicators"):
+                finished, pages[route] = _guarded(lambda: client.get(route).json())
+                assert finished, f"{route} blocked"
+                assert not isinstance(pages[route], BaseException), pages[route]
+            finished, contract = _guarded(api._orodruin_contract)
+            assert finished and contract is None
+        ws = {w["run_id"]: w for w in pages["/api/exercises?since=all"]["exercises"]}
+        assert set(ws) == {"run-a", "run-b", "run-c"}
+        assert ws["run-a"]["run"]["metrics"]["detection"] == "detected"
+        assert ws["run-b"]["run"] is None and ws["run-c"]["run"] is None
+        assert all([c["signal_id"] for c in w["cycles"]] == ["rule-x-watch-ssh-1"] for w in ws.values())
+        camps = pages["/api/campaigns?since=all"]["campaigns"]
+        assert sorted(c["dir"] for c in camps) == ["c-link", "c-pipe"]
+        assert all(c.get("error") == "manifest unreadable" for c in camps)
+        assert "run-linked" not in pages["/api/channel"]["live_windows"]
+        assert [a["action"] for a in pages["/api/actions/vm-a"]["actions"]] == ["block_suspicious_ip"]
+        out = capsys.readouterr().out
+        for trap in [*links, *pipes]:
+            assert out.count(f"{trap.relative_to(tmp_path)} —") == 1, trap   # by any of its names
+        assert out.count("un tube nommé") == len(pipes) and out.count("un lien, jamais suivi") == len(links)
+    finally:
+        stop.set()

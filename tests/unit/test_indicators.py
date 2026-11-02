@@ -72,6 +72,27 @@ def _cycle(runs, seen, ttp, action, confidence, decided_after=20, executed=False
         f.write(json.dumps(rec) + "\n")
 
 
+def _window(run_id, start, end):
+    """The run's exercise window, as the watch keeps it (eregion_core/exercise.py)."""
+    from eregion_core.exercise import exercises_dir
+    d = exercises_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{run_id}.json").write_text(json.dumps({
+        "run_id": run_id, "injector": "annatar", "kind": "technique", "experiment": "T1110.001 ssh",
+        "targets": [VM], "start": start.isoformat(), "end": end.isoformat(),
+        "expires": (start + timedelta(hours=2)).isoformat()}))
+
+
+def _received(runs, run_id, attack):
+    """The watch's poll of the run's ``attack_started``, in the run's own debug file: the attack
+    time it received from the injector."""
+    with open(runs / f"{run_id}_debug.jsonl", "a") as f:
+        f.write(json.dumps({"timestamp": attack.isoformat(), "action": "",
+                            "signal": {"event": "attack_started", "ttp": "T1110.001", "resource_id": VM,
+                                       "timestamp": attack.isoformat(), "context": {"run_id": run_id},
+                                       "raw_signal": {"attack_time": attack.timestamp()}}}) + "\n")
+
+
 def _compute(runs, cards=(), wrong_30=None, wrong_7=None, threshold=0.7):
     since = ind.since_window(NOW)
     found = ind.read_runs(api._run_reports(), since.timestamp())
@@ -88,7 +109,7 @@ def test_a_detected_attack_gives_its_times_and_its_proof(runs):
     _cycle(runs, a + timedelta(seconds=100), "T1110.001", "block_suspicious_ip", 0.82, decided_after=25)
     out = _compute(runs)
     assert out["contain"] == {"detect_s": 100.0, "decide_s": 125.0, "contain_s": None,
-                              "detected": 1, "decided": 1, "contained": 0}
+                              "detected": 1, "decided": 1, "contained": 0, "t0_refused": 0}
     assert out["last_proof"]["run_id"] == "r1" and out["last_proof"]["ttp"] == "T1110.001"
     assert out["alone"] == {"contained": 0, "shadow": 1, "of": 1, "threshold": 0.7, "attacks": 1,
                             "faults_mistaken": 0, "disruptive_on_faults": 0, "faults_unchecked": 0}
@@ -372,6 +393,7 @@ def test_the_overview_counts_real_traffic_and_dagorlad_the_exercises(runs):
     """The routes: the overview's two tiles on real traffic; Dagorlad's, the runs' as before."""
     a = NOW - timedelta(days=1)
     _report(runs, "r1", "T1110.001", a, latency=60.0)
+    _window("r1", a - timedelta(minutes=1), a + timedelta(minutes=5))   # its T0 believed (SEC15)
     _cycle(runs, a + timedelta(seconds=60), "T1110.001", "block_suspicious_ip", 0.85)
     _real(runs, NOW - timedelta(hours=2), verified_after=33, sid="rule-x-00000021")
     c = console()
@@ -381,6 +403,45 @@ def test_the_overview_counts_real_traffic_and_dagorlad_the_exercises(runs):
     assert set(ex) == {"window_days", "contain", "alone"}
     route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/dagorlad/indicators")
     assert route.methods == {"GET"}
+
+
+@pytest.mark.parametrize("t0_after, window, why", [
+    (0, True, ""),
+    # Moved later than the attack time the watch received in the run: the time would shrink.
+    (50, True, "postérieur à l'heure d'attaque que la watch a reçue de l'injecteur"),
+    # Before its window opened.
+    (-1800, True, "antérieur à l'ouverture de sa fenêtre d'exercice"),
+    # No window on this host: nothing to confront it with.
+    (0, False, "fenêtre d'exercice inconnue"),
+])
+def test_an_exercise_runs_t0_is_confronted_refused_never_counted_and_said(runs, t0_after, window, why):
+    """SEC15 (#425): the T0 of an exercise's run is its injector's word — Dagorlad's indicators
+    confront it as the campaign report does (SEC9). Refused: no time (to detect, to decide, to
+    contain) is counted from it, the run is still counted contained alone, and the refusal is
+    counted apart."""
+    a = NOW - timedelta(days=1)
+    t0 = a + timedelta(seconds=t0_after)
+    seen = a + timedelta(seconds=60)
+    if window:
+        _window("r1", a - timedelta(minutes=1), a + timedelta(minutes=5))
+    _received(runs, "r1", a)
+    _report(runs, "r1", "T1110.001", t0, latency=(seen - t0).total_seconds())
+    _cycle(runs, seen, "T1110.001", "isolate_vm", 0.95, executed=True, verified=True)
+    ex = console().get("/api/dagorlad/indicators").json()
+    assert ex["alone"]["contained"] == 1 and ex["contain"]["t0_refused"] == (1 if why else 0)
+    times = (ex["contain"]["detect_s"], ex["contain"]["decide_s"], ex["contain"]["contain_s"])
+    assert times == ((None, None, None) if why else (60.0, 80.0, 80.0))
+    found = ind.read_runs(api._run_reports(), 0.0)
+    cycles = api._watch_cycles(None)
+    refused, unread = ind.t0_confronted(found[0], ind.decision_of(found[0], ind.detections(cycles)),
+                                        api._held_windows().get("r1"), cycles)
+    assert why in refused and bool(refused) == bool(why) and unread == ""
+
+
+def test_the_exercises_tile_says_a_t0_not_believed():
+    from pathlib import Path
+    js = (Path(api.__file__).parent / "static" / "injector.js").read_text()
+    assert "T0 not believed: no time counted" in js and "c.t0_refused" in js
 
 
 def test_dagorlad_runs_shows_the_exercises_indicators_and_the_overview_says_real():

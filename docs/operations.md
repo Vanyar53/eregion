@@ -1289,8 +1289,9 @@ rafraîchissement du verrou sans contrôle).
   Sur une PR, il n'est rouge que pour un avis qui a une version corrigée et que personne n'a
   accepté (la montée est due) ; sans correctif, ou accepté, il le dit (`::warning::`, `::notice::`)
   et reste vert ; un audit en échec est dit, jamais rouge (le passage hebdomadaire l'est). **Jamais
-  rouge sur un push** : son étape continue en erreur (`continue-on-error` sur l'étape, pas sur le
-  job), le check-run reste vert. Le CD de H0 lit tous les check-runs du commit d'une release : un avis
+  rouge sur un push** : ses deux étapes, l'installation de pip-audit (PyPI qui ne répond pas) et
+  l'audit, continuent en erreur (`continue-on-error` sur les étapes, pas sur le job), le check-run
+  reste vert. Le CD de H0 lit tous les check-runs du commit d'une release : un avis
   publié en amont ne doit pas retenir une release qui tourne avec la même dépendance — le passage
   hebdomadaire le dit, par son issue.
 - **pip-audit a son propre verrou**, `requirements/audit.txt` (issu de `requirements/audit.in`,

@@ -970,9 +970,12 @@ def test_the_advisories_are_read_on_each_push_and_pull_request_read_only():
     # Red on a pull request; never on a push — H0's CD reads every check-run of a release's commit
     # (infra/glorfindel-host/cd/eregion_cd.py): only the step may continue, never the job.
     assert "continue-on-error" not in job
+    # The install too: PyPI down during a push must not hold a release back either.
     (advisories,) = [s for s in job["steps"] if "pip_audit_issues.py pr" in (s.get("run") or "")]
-    assert advisories["continue-on-error"].replace(" ", "") == "${{github.event_name=='push'}}"
-    assert [s for s in job["steps"] if "continue-on-error" in s] == [advisories]
+    (install,) = [s for s in job["steps"] if s.get("name") == "Install pip-audit"]
+    for step in (install, advisories):
+        assert step["continue-on-error"].replace(" ", "") == "${{github.event_name=='push'}}"
+    assert [s for s in job["steps"] if "continue-on-error" in s] == [install, advisories]
     assert "secrets." not in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     checkout = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
     assert checkout and checkout[0]["with"]["persist-credentials"] is False

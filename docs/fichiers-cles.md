@@ -131,7 +131,8 @@ glorfindel/
   reassert_cards.py     → SEC4b : ce que la réaffirmation dit sans agir — say_bypass (V-16 : une allow d'un tiers
                           avant nos refus, carte `bypassed` une fois par changement, jamais retirée) et
                           say_unreadable_states (carte `state_unreadable`, state_alerts.json), say_left (I4A,
-                          carte `rule_left`) ; L2C : une marque ne fait taire que la dernière carte, fermée par un humain
+                          carte `rule_left`), say_unverified (SEC13, V-16 : une vérification qui lève, carte
+                          `unverified` une fois, fermée quand elle repasse) ; L2C : une marque ne fait taire que la dernière carte, fermée par un humain
   reassert_quarantine.py → I1F, I1S, ISU : les NSG de quarantaine modifiés, lus à chaque passe quel que soit
                           l'état local — _report_altered_quarantines, quarantine_alerts.json (sorti de
                           reassert.py par RB1, sans changement de comportement ; L2Q : un changement qui revient est redit)

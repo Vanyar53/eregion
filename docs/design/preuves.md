@@ -3042,7 +3042,18 @@ par l'état et l'état perdu avant, Db--01 aux deux cartes sur un NSG à elles �
 déjà l'état illisible, SEC4b —, la levée d'I3R freinée une fois par un 429 sur la suppression d'une
 de ses règles sur le NSG de quarantaine, l'état rendu illisible, la levée rejouée, puis l'état
 réparé) : rouge sur `main` 4f0c3a5 par l'oracle inchangé, « I3: release said released, …/Db--01 is
-not back to its design », les deux. **Tests unitaires** (`test_release_away.py`, neuf, tous rouges
+not back to its design », les deux. **Après la fusion d'I3C** (#436, #452) : les deux variantes
+tombaient (I8 sur l'état que le test venait de casser ; une première levée qui n'était plus
+partielle). Non pas un défaut : les étapes d'I3R (`_I3R_STEPS`) n'atteignent plus le monde d'I3R —
+la réaffirmation n'y réécrivait l'isolation sur le NSG de quarantaine que parce qu'une disparition
+dite sous l'id en minuscules n'était pas lue « déjà dite », ce qu'I3C corrige (tracé : plus aucune
+règle `glorfindel-iso` sur le NSG de quarantaine après les étapes) ; les 429 tirés tombaient alors
+ailleurs, une carte restait en quarantaine, et I8 lisait « sans état » le fichier que le test avait
+rendu illisible. Le monde est maintenant posé comme la graine 67 l'avait laissé, sans dépendre de ce
+défaut : Db--01 isolée, notre tag retiré du NSG de quarantaine, Db--01 isolée de nouveau (ses paires
+sur le NSG que portent ses cartes, la quarantaine elle-même : ce que faisait cette passe), le tag
+remis. Rouge sur `main` f20d3c8 sans le correctif d'I3U, pour la même raison (« I3: release said
+released »), les deux variantes ; vert avec. **Tests unitaires** (`test_release_away.py`, neuf, tous rouges
 sur `main`) : la double panne de la sonde (sans état et par l'état, redite deux fois, puis réparée),
 une isolation par règles (retirées, le fichier gardé, puis retiré par l'opérateur), la vérification,
 `glorfindel release` et `glorfindel reset` (code 2, le fichier gardé), `reset --from-azure` et son

@@ -131,23 +131,26 @@ def admit(data: dict, now: float | None = None) -> Admission:
     return Admission(clean, CHANNEL_EVENTS[event], dropped=dropped)
 
 
-def refuse(data: dict, why: str, source: str = "") -> None:
+def refuse(data: dict, why: str, source: str = "", count: int = 1) -> None:
     """Say a refused line: the log, and the counter (in memory, and in REFUSALS_FILE for
-    whoever reads this host: by event, the last one's file, time and reason). Never raises."""
+    whoever reads this host: by event, the last one's file, time and reason). `count`: the
+    lines refused at once, said in one line (a flood: SEC8). Never raises."""
     import json
     from datetime import datetime, timezone
 
     event = str((data or {}).get("event") or "?")[:60]
-    log.warning("signal refused on the runs/ channel (%s): %s — %s", source or "?", event, why)
+    count = max(1, int(count))
+    log.warning("signal refused on the runs/ channel (%s): %s%s — %s", source or "?", event,
+                f" ×{count}" if count > 1 else "", why)
     with _LOCK:
-        _REFUSED[event] = _REFUSED.get(event, 0) + 1
+        _REFUSED[event] = _REFUSED.get(event, 0) + count
         try:
             try:
                 kept = json.loads(REFUSALS_FILE.read_text())
             except (OSError, ValueError):
                 kept = {}
             counts = kept.get("counts") if isinstance(kept, dict) and isinstance(kept.get("counts"), dict) else {}
-            counts[event] = int(counts.get(event) or 0) + 1
+            counts[event] = int(counts.get(event) or 0) + count
             from glorfindel.response.state import _atomic_write_text
             _atomic_write_text(REFUSALS_FILE, json.dumps({"counts": counts, "last": {
                 "at": datetime.now(timezone.utc).isoformat(), "event": event,
@@ -202,9 +205,13 @@ MOMENT_TAIL_BYTES = 1 << 20
 
 def _tail_lines(path: Path, limit: int | None = None) -> list[str]:
     """The lines of the last `limit` bytes of `path` (default MOMENT_TAIL_BYTES; a line cut
-    at the start dropped)."""
+    at the start dropped). A regular file only, opened without blocking or following a link
+    (SEC8, glorfindel/channel_reader.py): anything else raises an OSError."""
+    import os
+
+    from glorfindel.channel_reader import open_regular
     limit = MOMENT_TAIL_BYTES if limit is None else limit
-    with open(path, "rb") as f:
+    with os.fdopen(open_regular(path), "rb") as f:
         f.seek(0, 2)
         size = f.tell()
         f.seek(max(0, size - limit))

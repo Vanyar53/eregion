@@ -129,9 +129,10 @@ with open(sys.argv[1], "a") as f:
 """
 
 
-def _run_watch(tmp_path, monkeypatch, lines, expect):
+def _run_watch(tmp_path, monkeypatch, lines, expect, prepare=None):
     """The watch (dry-run) on tmp_path/runs, HOME in tmp_path; `lines` appended by ANOTHER
-    process once it runs. Returns (what reached respond, what the poll was asked, output)."""
+    process once it runs. Returns (what reached respond, what the poll was asked, output).
+    `prepare(runs)`: what runs/ holds before the watch starts (SEC8)."""
     from click.testing import CliRunner
 
     from glorfindel import cli
@@ -141,6 +142,8 @@ def _run_watch(tmp_path, monkeypatch, lines, expect):
     monkeypatch.setattr(cli, "_INJECTORS_DIR", home / ".glorfindel" / "injectors")
     runs = tmp_path / "runs"
     runs.mkdir()
+    if prepare is not None:
+        prepare(runs)
     responded: list[dict] = []
     polled: list[dict] = []
 

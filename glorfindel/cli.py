@@ -83,31 +83,14 @@ def _admit_from_runs(data: dict, source: str):
     return adm.signal, sig
 
 
-def _read_new_signals(path: Path, offset: int, on_error) -> tuple[list, int]:
-    """Signals appended to `path` since `offset` → ([(data, Signal)], new_offset).
-
-    One bad line used to kill the whole watch (json.loads / Signal(**) unguarded, only
-    KeyboardInterrupt caught), and after a restart the lines written meanwhile were
-    skipped. Now: a malformed line is reported through on_error and skipped; a line
-    still being written (no trailing newline — Annatar writes from another container)
-    is left in place and read whole on the next poll.
-    """
-    out: list = []
-    with open(path) as f:
-        f.seek(offset)
-        while True:
-            line = f.readline()
-            if not line or not line.endswith("\n"):
-                break
-            offset = f.tell()
-            raw = line.strip()
-            if not raw:
-                continue
-            try:
-                out.append(_parse_signal_line(raw))
-            except Exception as exc:
-                on_error(exc)
-    return out, offset
+def _parsed_or_said(path: Path, line: str, say) -> list:
+    """[(data, Signal)] for one line of runs/, or [] when it does not parse — said through
+    `say`. One bad line used to kill the whole watch (json.loads / Signal(**) unguarded)."""
+    try:
+        return [_parse_signal_line(line.strip())]
+    except Exception as exc:
+        say(f"Ligne de signal ignorée ({path.name}) : {exc}")
+        return []
 
 
 def _shared_private_ips():
@@ -553,9 +536,6 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                 "[dim]  Observe-only deployment: detection + recommendations, no writes.[/dim]"
             )
 
-    # path → byte offset of last read position
-    tracked: dict[Path, int] = {}
-
     _rules_file = rules_file or _find_rules_file()
     _rule_poller: "RulePoller | None" = None
 
@@ -666,29 +646,41 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
 
         _get_or_start_worker(resource_id).put((data, sig))
 
-    # Files that existed at startup — skip their past content
-    existing_at_start = {p for p in Path(runs_dir).glob("*_signals.jsonl")}
-    for path in existing_at_start:
-        tracked[path] = path.stat().st_size
+    # SEC8 (#414): runs/ read as an input the watch does not trust — a regular file only,
+    # never a link, never blocking; a bounded read per file and per poll, a bounded rate
+    # (glorfindel/channel_reader.py). Files there at startup: read from their end.
+    from glorfindel import signal_origin as _origin
+    from glorfindel.channel_reader import PER_WRITER_PER_MIN, ChannelReader
+
+    def _say_channel(text: str, kind: str = "refused") -> None:
+        with _output_lock:
+            if kind == "new":
+                console.print(f"[dim]{_esc_markup(text)}[/dim]")
+            else:
+                console.print(f"[yellow]{_esc_markup(text)}[/yellow]")
+
+    _channel = ChannelReader(runs_dir, _say_channel)
+    _channel.track_existing()
 
     def _poll() -> None:
-        for path in sorted(Path(runs_dir).glob("*_signals.jsonl")):
-            if path not in tracked:
-                tracked[path] = 0  # new file — read from beginning
-                console.print(f"[dim]New run: {path.name}[/dim]")
-
-        for path in list(tracked):
-            signals, tracked[path] = _read_new_signals(
-                path, tracked[path],
-                lambda exc, name=path.name: console.print(
-                    f"[yellow]Ligne de signal ignorée ({name}) : {exc}[/yellow]"),
-            )
-            for data, _sig in signals:
+        for path, line in _channel.poll():
+            for data, _sig in _parsed_or_said(path, line, _say_channel):
                 # SEC3 (#274): runs/ is written by the injectors too — only what they emit,
                 # each for what it is (glorfindel/signal_origin.py).
                 admitted = _admit_from_runs(data, path.name)
                 if admitted is not None:
                     _dispatch(*admitted)   # non-blocking — worker thread takes over
+        over = _channel.budget.report()
+        if over:
+            n = sum(over.values())
+            files = ", ".join(f"{name} ({k})" for name, k in sorted(over.items())[:5])
+            why = (f"débit du canal dépassé (au plus {PER_WRITER_PER_MIN} lignes par fichier et par "
+                   "minute) : refusées sans être lues")
+            with _output_lock:
+                console.print(f"[bold red]Canal runs/ :[/bold red] {n} ligne(s) refusée(s), {_esc_markup(why)} — "
+                              f"{_esc_markup(files)}{' …' if len(over) > 5 else ''} ; rien n'est décidé "
+                              "(compté : ~/.glorfindel/channel_refusals.json)")
+            _origin.refuse({"event": "(débit)"}, why, files, count=n)
 
     from datetime import datetime, timezone
     from glorfindel.actions import AzureConnector

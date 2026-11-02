@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-02 — "the measured loop"
+
 ### Security
 - **The rest of the chain and of Orodruin, held** (SEC14, #420, the weak findings of the second counter-audit; `docs/design/orodruin-contract.md`).
   - **« One run at a time » has one lock, taken by every command that acts** (R-10; « Un run à la fois »): one file (`exercise_runner.lock_path()`: `EREGION_RUN_LOCK`, else `runs/orodruin/requests/.lock` of the working directory), whatever `--runs-dir` a campaign is given. A request hands its hold down to each wire it launches (`pass_fds`, `EREGION_RUN_LOCK_FD`): `annatar wire` and `gothmog run --request` run under it, and the request's name stays in the lock; launched by hand, a wire is refused while anything runs. `annatar clean` takes it too, and `annatar init` (which cleans a scenario's disk). A descriptor the request did not hand down (another file, another opening of the lock) is never its hold. Tests: `test_exercise_runner.py` (between real processes), `test_annatar_wire.py`, `test_annatar_run_exit.py`, `test_campaign_runner.py`, `test_gothmog.py`; mutants M2940–M2945, M3079, M2476/M2479/M2480/M2498/M2499 re-anchored.

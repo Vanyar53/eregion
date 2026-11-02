@@ -79,7 +79,7 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 | Version | Titre | Contenu | État |
 |---|---|---|---|
 | 0.4.10 | held to its word | la série d'isolation, DG-c, G1 (le code), #358 | publiée (02/11) |
-| 0.5.0 | la boucle mesurée | OV1, ADM1, BL1c, CI4 | en préparation (fin de semaine) |
+| 0.5.0 | la boucle mesurée | OV1, ADM1, BL1c, CI4 | brouillon |
 | 0.5.x | — | ID1, G1 au banc | en préparation (après la prochaine session de banc) |
 
 ### Les lots

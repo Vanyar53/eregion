@@ -1286,11 +1286,13 @@ rafraîchissement du verrou sans contrôle).
   broche propre à 3.11 (numpy) n'est donc pas lue (#298).
 - **Sur chaque push et chaque PR aussi** (SEC14, P-03) : le job `audit` de `ci.yml`
   (« dependency advisories ») lit les mêmes verrous, en lecture seule — aucune issue, aucun secret.
-  Il n'est rouge que pour un avis qui a une version corrigée et que personne n'a accepté (la montée
-  est due) ; sans correctif, ou accepté, il le dit (`::warning::`, `::notice::`) et reste vert ; un
-  audit en échec est dit, jamais rouge (le passage hebdomadaire l'est). Conséquence : un avis corrigé
-  publié en amont rend `main` rouge jusqu'à la montée ou à son acceptation écrite — et le CD de H0
-  ne déploie pas une release dont un check-run est rouge.
+  Sur une PR, il n'est rouge que pour un avis qui a une version corrigée et que personne n'a
+  accepté (la montée est due) ; sans correctif, ou accepté, il le dit (`::warning::`, `::notice::`)
+  et reste vert ; un audit en échec est dit, jamais rouge (le passage hebdomadaire l'est). **Jamais
+  rouge sur un push** : son étape continue en erreur (`continue-on-error` sur l'étape, pas sur le
+  job), le check-run reste vert. Le CD de H0 lit tous les check-runs du commit d'une release : un avis
+  publié en amont ne doit pas retenir une release qui tourne avec la même dépendance — le passage
+  hebdomadaire le dit, par son issue.
 - **pip-audit a son propre verrou**, `requirements/audit.txt` (issu de `requirements/audit.in`,
   version épinglée), avec empreintes. Il s'installe dans un venv à part, jamais dans l'image ni
   dans `dev.txt`. Le workflow utilise le Python du runner, sans action tierce. Son seul secret est

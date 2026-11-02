@@ -226,6 +226,31 @@ Les mutants M18 à M29 réinjectent les défauts trouvés par la machine elle-m�
 (M21 à M24, trouvés à des milliers de séquences) ne sont pas attrapés à chaque tour au budget
 du push ; leur séquence figée, elle, les attrape à chaque push.
 
+### Tous les mutants mesurés : la garde en dernier (MCG)
+
+`python scripts/mutation_check.py` (la mesure du lundi, `--only`) s'arrête à sa garde
+`if __name__ == "__main__"`. Ce qui la suit est chargé par un import — `scripts/mutant_anchors.py`,
+les tests —, jamais par le harnais lancé en script. Chaque lot ajoutait son bloc en fin de fichier,
+et des fusions en avaient laissé derrière la garde : le 02/11, **54 mutants** n'étaient jamais
+mesurés (M2880–M2899, M3030–M3036 de SEC11 ; M2940–M2959, M3075–M3081 de SEC14), et
+`mutant_anchors.py`, qui importe le module, ne disait rien.
+
+- **La garde en dernier.** Les blocs remontent au-dessus des fonctions du harnais, sans rien perdre :
+  les instructions de premier niveau sont les mêmes, à l'ordre près (comparées par `ast`), et le
+  module importé définit les mêmes `MUTANTS`, `CONTROL` et `TESTS`. Un bloc neuf s'ajoute **avant la
+  garde** (`docs/sessions.md`, « Avant de pousser »).
+- **Une garde qui tient.** `tests/unit/test_mutant_anchors.py`, lancé par la CI : les ids que le
+  harnais définit lancé en script (ses instructions jusqu'à la garde, exécutées) sont ceux qu'un import
+  définit ; la garde est la dernière instruction du fichier. `scripts/mutant_anchors.py` compte une
+  instruction après la garde comme une faute, et nomme les mutants qu'elle définit, avec leur ligne.
+  Mutants M3185 (un bloc laissé après la garde) et M3186 (`mutant_anchors.py` ne lit plus ce qui la
+  suit) : attrapés à chaque tour.
+- **La mesure des 54** (02/11, `--only` sur les 54, `--rounds 2 --jobs 8`) : **54 sur 54 attrapés à
+  chaque tour**, aucun survivant, aucun équivalent, aucun réancrage. Tous visent un test unitaire
+  (`TESTS`), en 3 à 12 s chacun. Les mutants Python laissent un code qui se lit (`ast`) : aucun n'est
+  attrapé par une erreur de syntaxe plutôt que par un comportement ; le rôle JSON muté (M2892) reste
+  un JSON valide.
+
 ### Les pannes des dépendances (G2)
 
 Les invariants modélisent les pannes d'Azure sous l'isolation (429, crash, 403, disque plein).

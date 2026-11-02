@@ -852,11 +852,13 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
         accounts: [admin1, ops]
       - match: "vm-db-01"
         accounts: [dba]
-    sensitive_commands: [crontab]
+    sensitive_commands: [/usr/local/bin/backup-restore]
   ```
 
   Un autre compte, `sudo -u autre`, une ligne qu'aucune VM ne revendique, une ligne lue autrement
-  que la forme de sudo : toujours une carte. **Clé nouvelle**, comme `never_block` : une version
+  que la forme de sudo : toujours une carte. Les shells root d'un administrateur (`sudo -i`,
+  `sudo su -`, `bash`, `python -c`, `vim`, `less`…) font **toujours une carte pour l'instant** ;
+  COR1 les écartera quand leur session SSH vient d'une origine attendue. Éditer avec `sudoedit`. **Clé nouvelle**, comme `never_block` : une version
   antérieure refuse la config qui la porte — la watch ne démarrerait plus.
 
 ### Poser la liste des administrateurs sur H0 (ADM1)
@@ -870,11 +872,10 @@ Les vrais noms de comptes ne vont que dans la config de H0, jamais dans le dép�
    ci-dessus : les VMs de H0 (ou `"*"`) et les comptes d'administration en entier.
    Vérifier la lecture stricte : `glorfindel rules check` (ou
    `python -c "from glorfindel.config import load_glorfindel_config as l; print(l().expected_sudo)"`).
-3. **La pousser** : `make glorfindel-host-push`. ⚠ Elle remplace `autonomy` par
-   `{default: human_only}` (`infra/glorfindel-host/host_config.py`) : un mode posé sur H0 (une VM
-   en `non_disruptive`) est à reposer ensuite (`glorfindel activate <vm>` sur H0, ou la console) —
-   ou bien ajouter le bloc directement dans `~/eregion/glorfindel-config.yaml` de H0
-   (`make glorfindel-host-ssh`), sans toucher au reste.
+3. **La pousser** : `make glorfindel-host-push`. Le push garde les modes d'autonomie de H0 ;
+   `HUMAN_ONLY=1` pour tout remettre en `human_only` (BL1c). Sans ce lot sur le poste, ajouter le
+   bloc directement dans `~/eregion/glorfindel-config.yaml` de H0 (`make glorfindel-host-ssh`),
+   sans toucher au reste.
 4. **Redémarrer la watch** (la config se lit au démarrage) : `make glorfindel-host-ssh`, puis
    `cd eregion && docker compose restart watch war-room`. `make glorfindel-host-logs` : pas de
    « glorfindel-config.yaml refusé ».

@@ -442,7 +442,10 @@ VM inscrite.
 entier puis contrôlé) : un blob au plus `MAX_BLOB_BYTES` (1 Mio), une page de liste au plus
 `MAX_LISTING_BYTES` (8 Mio), au plus `MAX_BLOBS` noms listés (2 000) et `MAX_DOWNLOADS` blobs
 téléchargés (200) par tirage ; ce qui dépasse est dit, laissé au tirage suivant ou écarté, jamais
-écrit. Le jeton de stockage ne part que vers `https://<compte>.blob.core.windows.net` (ou
+écrit. Et en cumul (SEC14) : un tirage lit au plus `MAX_PULL_BYTES` (32 Mio), ses pages de liste et
+ses blobs ensemble — chaque tirage (fenêtres, campagnes, rapports de run, mots d'Orodruin) a le sien ;
+au-delà, il s'arrête là, le dit, et le reste attend le tirage suivant (une campagne dont la liste est
+coupée n'est pas écrite). Le jeton de stockage ne part que vers `https://<compte>.blob.core.windows.net` (ou
 `.blob.core.chinacloudapi.cn`, `.blob.core.usgovcloudapi.net`), port 443, sans utilisateur dans
 l'URL : toute autre URL est refusée avant qu'un jeton soit demandé. Une rétention sur le compte
 (`azurerm_storage_management_policy`, gratuite) tient la liste sous ces bornes : la liste est

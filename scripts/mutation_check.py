@@ -7432,6 +7432,15 @@ MUTANTS += [
 ]
 TESTS["M2955"] = "tests/unit/test_host_deploy.py"
 
+# SEC14 (#420, V-21): what one pull reads in all is bounded, its listing pages and its blobs.
+MUTANTS += [
+    ("M2956", "a pull of the windows reads without a cumulated bound, each read bounded alone (V-21)",
+     "eregion_core/exercise_channel.py",
+     "        _pull_windows(directory, url, headers, get, say, Budget(), written)\n",
+     "        _pull_windows(directory, url, headers, get, say, None, written)\n"),
+]
+TESTS["M2956"] = "tests/unit/test_injector_channels.py"
+
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
 # « brouillon ». M2680–M2695; M2696–M2699 after its review.

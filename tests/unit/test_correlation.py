@@ -8,8 +8,14 @@ before the decision, never in the prompt, never by the model's confidence.
    it declares (`expected_sudo.admins[].origins`); a sensitive command never.
 3. A brute force followed by a login from the same address on the same VM: a critical card,
    once per address and VM.
+4. COR2 (#427): with a source outside the VM declared (`expected_sudo.origin_proof`), each of
+   those sessions also needs its trace there — Azure Bastion's audit logs, or the VNet's flow
+   logs. Absent, unreadable, cut: a card (A0). Without a source, COR1 as it was.
 
-The queries are run as written over lines in memory (`kql_subset`). Addresses of the
+The queries are run as written over lines in memory (`kql_subset`) — the Bastion and flow
+rows too, written with the columns Microsoft Learn documents for `MicrosoftAzureBastionAuditLogs`
+and `NTANetAnalytics`: their real shape is a hypothesis until measured on the bench (B1–B4,
+F1–F4 in docs/operations.md). Addresses of the
 documentation ranges only (198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32), made-up accounts
 (admin1, ops, mallory) and VMs (vm-example-01). No Azure, no model.
 """
@@ -92,6 +98,9 @@ class _Kql:
     def correlation_queries(self):
         return [q for q in self.queries if "ProcessID" in q]
 
+    def proof_queries(self):
+        return [q for q in self.queries if "MicrosoftAzureBastionAuditLogs" in q or "NTANetAnalytics" in q]
+
 
 class _Registry:
     def __init__(self, names=("vm-example-01",)):
@@ -105,9 +114,9 @@ def _admins(origins=ORIGINS, accounts=("admin1", "ops"), match="vm-example-*"):
     return [ExpectedAdmins(match, list(accounts), list(origins))]
 
 
-def _cfg(admins=None, sensitive=()) -> GlorfindelConfig:
+def _cfg(admins=None, sensitive=(), proof="none") -> GlorfindelConfig:
     return GlorfindelConfig(expected_sudo=ExpectedSudoConfig(
-        admins=_admins() if admins is None else admins, sensitive_commands=list(sensitive)))
+        admins=_admins() if admins is None else admins, sensitive_commands=list(sensitive), origin_proof=proof))
 
 
 def _poller(lines, cfg=None, rule_name="sudo-privilege-escalation", names=("vm-example-01",), fail=None):
@@ -671,3 +680,277 @@ def test_a_plain_brute_force_blocked_alone_makes_no_compromise_card(tmp_path, mo
     final, connector = _run_graph(tmp_path, monkeypatch, sig, "non_disruptive")
     connector.block_suspicious_ip.assert_called_once()
     assert escalations.pending() == [] and "compromise_card" not in final["outcome"]
+
+
+# ── COR2 (#427): the origin confirmed outside the VM ─────────────────────────────────
+# A Bastion audit row and a flow row, with the columns Microsoft Learn documents — their real
+# shape is measured on the bench (B1–B4, F1–F4). The VM's private address is made up.
+
+def _bastion(account="admin1", minutes_ago=20.0, rid=VM, tunnel=None, start_delta_s=-1.0) -> dict:
+    """Bastion's row of one session: opened a second before sshd's Accepted line (start_delta_s),
+    written a little later."""
+    start = NOW - timedelta(minutes=minutes_ago) + timedelta(seconds=start_delta_s)
+    return {"Type": "MicrosoftAzureBastionAuditLogs", "TimeGenerated": start + timedelta(seconds=30),
+            "SessionStartTime": start, "UserName": account, "TargetResourceId": rid, "Protocol": "ssh",
+            "TunnelId": tunnel or f"tunnel-{account}-{minutes_ago}", "TargetVMIPAddress": "10.0.0.4",
+            "ClientIpAddress": "203.0.113.200"}
+
+
+def _flow(src, minutes_ago=20.0, vm="rg-example/vm-example-01", port=22, status="A", proto="T") -> dict:
+    """Traffic analytics' row: the flows from `src` to the VM's port, aggregated over an interval
+    that holds the session's start."""
+    start = NOW - timedelta(minutes=minutes_ago) - timedelta(seconds=30)
+    return {"Type": "NTANetAnalytics", "SubType": "FlowLog", "TimeGenerated": start + timedelta(minutes=12),
+            "SrcIp": src, "DestIp": "10.0.0.4", "DestVm": vm, "DestPort": port, "L4Protocol": proto,
+            "FlowStatus": status, "FlowDirection": "I", "FlowStartTime": start,
+            "FlowEndTime": start + timedelta(minutes=1)}
+
+
+def test_with_bastion_declared_a_root_shell_whose_session_bastion_saw_is_set_aside():
+    p, rule, sent, kql = _poller(_login(BASTION) + [_bastion(), _row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    assert p.poll_once(rule) == [] and sent == []
+    [e] = _journal()
+    assert (e["via"], e["origin"], e["proof"]) == ("origin", BASTION, "bastion")
+    [snap] = p.status_snapshot()
+    assert snap["origin_count"] == 1 and snap["origin_confirmed"] == 1
+    assert snap["correlation"]["confirmed"] == 1 and snap["correlation"]["queries"] == 2
+    [q] = kql.proof_queries()
+    assert f'TargetResourceId =~ "{VM}"' in q and 'UserName in ("admin1")' in q
+
+
+def test_a_forged_login_line_bastion_never_saw_is_a_card():
+    """The limit of COR1: `logger -t sshd "Accepted publickey for admin1 from <bastion> …"` — the
+    Syslog shows a session from the bastion, Bastion shows none."""
+    p, rule, sent, kql = _poller(_login(BASTION) + [_row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    why = _card(p, rule)["SessionOrigin"]
+    assert why.startswith(f"session depuis {BASTION} (") and "sans trace dans Azure Bastion" in why
+    assert why.endswith("origine non confirmée hors de la VM")
+    assert _journal() == [] and p.status_snapshot()[0]["correlation"]["unconfirmed"] == 1
+
+
+@pytest.mark.parametrize("trace", [
+    pytest.param(dict(account="ops"), id="another account"),
+    pytest.param(dict(rid=VM.replace("vm-example-01", "vm-example-02")), id="another VM"),
+    pytest.param(dict(start_delta_s=-(correlation.PROOF_SKEW_S + 30)), id="too early"),
+    pytest.param(dict(start_delta_s=correlation.PROOF_SKEW_S + 30), id="too late"),
+])
+def test_a_bastion_session_that_is_not_this_one_proves_nothing(trace):
+    p, rule, sent, _ = _poller(_login(BASTION) + [_bastion(**trace), _row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    assert "sans trace dans Azure Bastion" in _card(p, rule)["SessionOrigin"]
+
+
+def test_a_bastion_session_of_another_pending_account_proves_nothing_for_this_one():
+    """Two root shells pending on one VM, one query for both accounts: ops's Bastion session, at
+    the time of admin1's login line, confirms ops — never admin1."""
+    ops_i = "ops : TTY=pts/3 ; PWD=/home/ops ; USER=root ; COMMAND=/bin/bash"
+    lines = _login(BASTION) + _login(BASTION_2, account="ops", pid=4200) + [_bastion(account="ops")]
+    p, rule, sent, kql = _poller(lines + [_row(SUDO_I, 1.0), _row(ops_i, 1.5)], cfg=_cfg(proof="bastion"))
+    row = _card(p, rule)
+    assert row["SyslogMessage"] == SUDO_I and "sans trace dans Azure Bastion" in row["SessionOrigin"]
+    assert [(e["account"], e["proof"]) for e in _journal()] == [("ops", "bastion")]
+    [q] = kql.proof_queries()
+    assert 'UserName in ("admin1", "ops")' in q
+
+
+def test_bastion_s_resource_id_is_matched_whatever_its_case():
+    p, rule, sent, _ = _poller(_login(BASTION) + [_bastion(rid=VM.lower()), _row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    assert p.poll_once(rule) == [] and _journal()[0]["proof"] == "bastion"
+
+
+@pytest.mark.parametrize("tunnels,card", [
+    pytest.param(["t-1"], True, id="one Bastion session"),
+    pytest.param(["t-1", "t-1"], True, id="one session written twice"),
+    pytest.param(["t-1", "t-2"], False, id="two Bastion sessions"),
+])
+def test_one_bastion_session_proves_one_ssh_session_never_two(tunnels, card):
+    """A line forged at the time of a real session: two Accepted lines, one Bastion session — a
+    card. The same session written twice by Bastion (its TunnelId) is still one."""
+    lines = _login(BASTION) + _login(BASTION_2, pid=4200) + [_bastion(tunnel=t) for t in tunnels]
+    p, rule, sent, _ = _poller(lines + [_row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    if card:
+        assert "sans trace dans Azure Bastion" in _card(p, rule)["SessionOrigin"]
+    else:
+        assert p.poll_once(rule) == []
+
+
+def test_every_session_of_the_week_needs_its_trace():
+    """Two sessions from the bastion, three days apart: one Bastion saw, one it did not — a card."""
+    lines = _login(BASTION) + _login(BASTION, pid=4200, minutes_ago=3 * 24 * 60)
+    p, rule, sent, kql = _poller(lines + [_bastion(), _row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    assert "sans trace dans Azure Bastion" in _card(p, rule)["SessionOrigin"]
+    [q] = kql.proof_queries()
+    lookback = int(q.split("ago(", 1)[1].split("s)", 1)[0])
+    assert 3 * 24 * 3600 < lookback <= 3 * 24 * 3600 + 60 * 21 + correlation.PROOF_SKEW_S + correlation.PROOF_MARGIN_S
+    # Both seen by Bastion: set aside (another sudo line — the first one was carded already).
+    p, rule, sent, _ = _poller(lines + [_bastion(), _bastion(minutes_ago=3 * 24 * 60), _row(SUDO_I, 0.5)],
+                               cfg=_cfg(proof="bastion"))
+    assert p.poll_once(rule) == [] and [e["proof"] for e in _journal()] == ["bastion"]
+
+
+def test_a_bastion_log_that_cannot_be_read_is_a_card_counted_unknown():
+    p, rule, sent, _ = _poller(_login(BASTION) + [_bastion(), _row(SUDO_I)], cfg=_cfg(proof="bastion"),
+                               fail=lambda q: "MicrosoftAzureBastionAuditLogs" in q)
+    why = _card(p, rule)["SessionOrigin"]
+    assert "Azure Bastion non lu" in why and "journal illisible" in why
+    assert p.status_snapshot()[0]["correlation"]["unknown"] == 1 and _journal() == []
+
+
+def test_a_bastion_reading_cut_at_its_limit_is_a_card(monkeypatch):
+    monkeypatch.setattr(correlation, "ROWS_MAX", 4)
+    traces = [_bastion(minutes_ago=20 + i, tunnel=f"t-{i}") for i in range(5)]
+    p, rule, sent, _ = _poller(_login(BASTION) + traces + [_row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    assert "lecture incomplète" in _card(p, rule)["SessionOrigin"]
+
+
+def test_with_flows_declared_a_session_whose_flow_was_seen_is_set_aside():
+    p, rule, sent, kql = _poller(_login(BASTION) + [_flow(BASTION), _row(SUDO_I)], cfg=_cfg(proof="flows"))
+    assert p.poll_once(rule) == [] and _journal()[0]["proof"] == "flows"
+    [q] = kql.proof_queries()
+    assert 'DestVm =~ "rg-example/vm-example-01"' in q and f'SrcIp in ("{BASTION}")' in q
+    assert "DestPort == 22" in q and 'FlowStatus == "A"' in q
+
+
+def test_with_flows_an_ipv6_session_is_confirmed_by_its_flow():
+    p, rule, sent, _ = _poller(_login(V6_OK) + [_flow(V6_OK), _row(SUDO_I)], cfg=_cfg(proof="flows"))
+    assert p.poll_once(rule) == [] and _journal()[0]["origin"] == V6_OK
+
+
+@pytest.mark.parametrize("flow", [
+    pytest.param(dict(src=BASTION_2), id="another address"),
+    pytest.param(dict(src=BASTION, port=2222), id="another port"),
+    pytest.param(dict(src=BASTION, status="D"), id="denied"),
+    pytest.param(dict(src=BASTION, proto="U"), id="udp"),
+    pytest.param(dict(src=BASTION, vm="rg-example/vm-example-02"), id="another VM"),
+    pytest.param(dict(src=BASTION, minutes_ago=120), id="another time, before the query's window"),
+    pytest.param(dict(src=BASTION, minutes_ago=5), id="another time, in the query's window"),
+])
+def test_a_flow_that_is_not_this_session_s_proves_nothing(flow):
+    p, rule, sent, _ = _poller(_login(BASTION) + [_flow(**flow), _row(SUDO_I)], cfg=_cfg(proof="flows"))
+    assert "sans trace dans les journaux de flux" in _card(p, rule)["SessionOrigin"]
+
+
+def test_a_flow_log_that_cannot_be_read_is_a_card_counted_unknown():
+    p, rule, sent, _ = _poller(_login(BASTION) + [_flow(BASTION), _row(SUDO_I)], cfg=_cfg(proof="flows"),
+                               fail=lambda q: "NTANetAnalytics" in q)
+    assert "les journaux de flux non lu" in _card(p, rule)["SessionOrigin"]
+    assert p.status_snapshot()[0]["correlation"]["unknown"] == 1
+
+
+def test_a_root_shell_carded_by_its_origin_runs_no_proof_query():
+    p, rule, sent, kql = _poller(_login(STRANGER) + [_row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    assert "origine inconnue" in _card(p, rule)["SessionOrigin"] and kql.proof_queries() == []
+
+
+def test_the_proof_queries_count_against_the_cap():
+    """Three VMs, two queries each: the third one's sessions are past the cap — a card."""
+    names = ("vm-example-01", "vm-example-02", "vm-example-03")
+    lines = []
+    for i, n in enumerate(names):
+        rid = VM.replace("vm-example-01", n)
+        lines += _login(BASTION, pid=4100 + 10 * i, computer=n, rid=rid) + [_bastion(rid=rid)]
+        lines += [_row(SUDO_I, computer=n, rid=rid)]
+    p, rule, sent, kql = _poller(lines, names=names, cfg=_cfg(proof="bastion"))
+    [sig] = p.poll_once(rule)
+    assert "plafond" in sig["raw_signal"]["first_result_row"]["SessionOrigin"]
+    assert len(kql.queries) - 1 == correlation.QUERIES_PER_POLL and len(_journal()) == 2
+
+
+def test_without_a_source_cor1_is_unchanged_and_said_read_in_the_vm_only(monkeypatch):
+    from glorfindel.cli import cli
+    p, rule, sent, kql = _poller(_login(BASTION) + [_row(SUDO_I)])
+    assert p.poll_once(rule) == [] and kql.proof_queries() == []
+    [e] = _journal()
+    assert "proof" not in e
+    assert p.status_snapshot()[0]["origin_confirmed"] == 0
+    said = " ".join(CliRunner().invoke(cli, ["report"]).output.split())
+    assert "root shells from an expected origin (COR1): 1" in said and "origin read in the VM only" in said
+    assert f"(from {BASTION}, origin read in the VM only)" in said
+
+
+def test_the_report_says_the_origins_confirmed_outside_the_vm():
+    from glorfindel.cli import cli
+    p, rule, sent, _ = _poller(_login(BASTION) + [_bastion(), _row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    p.poll_once(rule)
+    es = json.loads(CliRunner().invoke(cli, ["report", "--json"]).output)["expected_sudo"]
+    assert es["origin_confirmed"] == 1 and es["latest"][0]["proof"] == "bastion"
+    said = " ".join(CliRunner().invoke(cli, ["report"]).output.split())
+    assert "every one confirmed outside the VM (COR2)" in said
+    assert f"(from {BASTION}, confirmed by bastion)" in said
+
+
+def test_the_console_shows_the_origins_confirmed(monkeypatch):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    from .console_client import console
+    monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
+    p, rule, sent, _ = _poller(_login(BASTION) + [_bastion(), _row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    p.poll_once(rule)
+    rules = console().get("/api/config").json()["detection"]["rules"]
+    [sudo] = [r for r in rules if r["name"] == "sudo-privilege-escalation"]
+    assert sudo["origin_confirmed"] == 1 and sudo["correlation"]["confirmed"] == 1
+
+
+def test_a_session_whose_instant_cannot_be_read_is_never_confirmed():
+    found = [{"via": "ssh", "origin": BASTION, "at": None, "by": ""}]
+    read = [{"account": "admin1", "at": NOW}]
+    ok, why = correlation.confirmed("bastion", found, read, "admin1")
+    assert not ok and "instant illisible" in why
+
+
+def test_a_source_that_cannot_name_the_vm_leaves_a_card():
+    row = _row(SUDO_I)
+    entry = {"account": "admin1", "origins": tuple(ORIGINS), "proof": "bastion"}
+    judged = {id(row): entry}
+    counts = correlation.settle("T1548.003", {"k": (None, [row])}, judged,
+                                _Kql(_login(BASTION) + [_bastion()]).run_query, set(), _row_identity, 900)
+    assert judged == {} and counts["unknown"] == 1 and "ne peut nommer la VM" in row["SessionOrigin"]
+
+
+def test_a_fault_while_confirming_leaves_the_root_shell_a_card(monkeypatch):
+    def broken(*_a, **_k):
+        raise ValueError("a bug")
+    monkeypatch.setattr(correlation, "traces", broken)
+    p, rule, sent, _ = _poller(_login(BASTION) + [_bastion(), _row(SUDO_I)], cfg=_cfg(proof="bastion"))
+    _card(p, rule)
+    assert _journal() == [] and p.status_snapshot()[0]["correlation"]["unknown"] == 1
+
+
+def test_an_unreadable_trace_is_no_trace():
+    rows = [{"SessionStartTime": "?", "UserName": "admin1"}, {"SessionStartTime": NOW, "UserName": None},
+            {"SrcIp": "x", "FlowStartTime": NOW, "FlowEndTime": NOW}]
+    assert correlation.traces("bastion", rows[:2]) == [] and correlation.traces("flows", rows[2:]) == []
+
+
+def test_without_a_source_the_pending_entry_is_cor1_s():
+    policy = _cfg().expected_sudo
+    entry = expected_sudo.judge(_row(SUDO_I), "vm-example-01", policy)
+    assert "proof" not in entry and entry["origins"] == tuple(ORIGINS)
+    entry = expected_sudo.judge(_row(SUDO_I), "vm-example-01", _cfg(proof="flows").expected_sudo)
+    assert entry["proof"] == "flows"
+
+
+def test_the_source_is_read_from_the_config(tmp_path):
+    es = _load(tmp_path, """
+expected_sudo:
+  origin_proof: bastion
+  admins:
+    - match: "vm-example-*"
+      accounts: [admin1]
+      origins: [198.51.100.0/24]
+""").expected_sudo
+    assert es.origin_proof == "bastion"
+    assert _load(tmp_path, "expected_sudo:\n  admins: []\n").expected_sudo.origin_proof == "none"
+
+
+@pytest.mark.parametrize("value,origins,said", [
+    ("bastian", True, "une source parmi none, bastion, flows"),
+    ("true", True, "un texte est attendu"),
+    ("[bastion]", True, "un texte est attendu"),
+    ("flows", False, "rien à confirmer"),
+])
+def test_a_bad_source_refuses_the_file(tmp_path, value, origins, said):
+    text = (f"expected_sudo:\n  origin_proof: {value}\n  admins:\n    - match: vm-1\n      accounts: [admin1]\n"
+            + ("      origins: [198.51.100.0/24]\n" if origins else ""))
+    with pytest.raises(ConfigError, match="origin_proof") as exc:
+        _load(tmp_path, text)
+    assert said in str(exc.value)

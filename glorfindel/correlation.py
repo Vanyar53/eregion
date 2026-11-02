@@ -21,8 +21,17 @@ Its limit (Jonathan, 02/11: a noise reducer, its limit written): any local user 
 sshd login line from a declared origin (`logger -t sshd`). The set-aside thus holds against an
 honest administrator and an intruder who does not know Eregion — no more. An intruder whose real
 session is older than the window, or an access that writes no session line, can have a root
-shell set aside on its own; a sensitive command is always a card. The answer is planned: an
-origin confirmed outside the VM (Bastion, network flows) — COR2, #427.
+shell set aside on its own; a sensitive command is always a card.
+
+COR2 (#427) closes that limit when a source outside the VM is declared
+(`expected_sudo.origin_proof`): `bastion` (Azure Bastion's audit logs) or `flows` (the VNet's
+flow logs, through traffic analytics). A root shell is then set aside only if, on top of COR1,
+EVERY session the Syslog shows has its trace in that source — same VM (the registry's, never
+the line's), same account (Bastion) or same address (flows), close in time; a Bastion session
+proves one SSH session, never two. A trace absent, a source unreadable or cut, a session's
+instant unreadable: a card (A0). Without a source (`none`), COR1 stands as it was — its origin
+read in the VM only, and said so. The tables' columns are hypotheses until measured on the
+bench (`docs/operations.md`, « Les hypothèses de COR2 »).
 
 What it never does: conclude without lines. A query that fails, a reading cut at its limit, a
 line no VM names, no session found, the cap of queries reached — the result is unknown (A0),
@@ -66,7 +75,41 @@ SKEW_S = 2
 PAIR_S = 60
 
 # What a pass counts, `rule_status.json` adds up (`correlation`) and the console shows.
-COUNTS = ("queries", "origin", "card", "unknown", "compromised", "unchecked")
+COUNTS = ("queries", "origin", "card", "unknown", "compromised", "unchecked", "confirmed", "unconfirmed")
+
+# COR2 (#427): the sources outside the VM that may confirm a session's origin. `none` is COR1.
+PROOFS = ("none", "bastion", "flows")
+PROOF_NAMES = {"bastion": "Azure Bastion", "flows": "les journaux de flux"}
+# A session and its trace outside the VM: at most this far apart (two clocks, the VM's and
+# Azure's; a flow log's one-minute blobs). A hypothesis, measured on the bench (B3, F3).
+PROOF_SKEW_S = 120
+# The trace may be written after the session (Bastion at its end, traffic analytics by batch):
+# its query reads back to the oldest session, plus this.
+PROOF_MARGIN_S = 600
+# The port the flows are read on: sshd's own (a hypothesis: F2).
+SSH_PORT = 22
+
+_BASTION = """
+MicrosoftAzureBastionAuditLogs
+| where TimeGenerated > ago({lookback}s)
+| where TargetResourceId =~ {vm}
+| where UserName in ({accounts})
+| project TimeGenerated, SessionStartTime, UserName, TargetResourceId, TunnelId
+| order by TimeGenerated asc
+| limit {limit}
+"""
+
+_FLOWS = """
+NTANetAnalytics
+| where TimeGenerated > ago({lookback}s)
+| where SubType == "FlowLog"
+| where DestVm =~ {vm}
+| where DestPort == {port} and L4Protocol == "T" and FlowStatus == "A"
+| where SrcIp in ({origins})
+| project TimeGenerated, SrcIp, DestVm, DestPort, FlowStartTime, FlowEndTime
+| order by TimeGenerated asc
+| limit {limit}
+"""
 
 BRUTE_FORCE_TTP = "T1110.001"
 COMPROMISED = "ssh-login-after-brute-force"
@@ -283,9 +326,8 @@ def settle(ttp: str, routed: dict, judged: dict, run_query, seen: set, identity,
 
 
 def settle_origins(p: Pass, routed: dict, judged: dict, seen: set, identity) -> None:
-    from glorfindel import expected_sudo
-    groups: dict[str, list[tuple[dict, dict]]] = {}
-    for _tgt, rows in routed.values():
+    groups: dict[tuple, list[tuple[dict, dict]]] = {}
+    for tgt, rows in routed.values():
         for row in rows:
             entry = judged.get(id(row))
             if not entry or "origins" not in entry:
@@ -297,12 +339,13 @@ def settle_origins(p: Pass, routed: dict, judged: dict, seen: set, identity) -> 
             if where is None:
                 _unknown(p, judged, row, "la ligne ne nomme pas sa VM — origine inconnue")
                 continue
-            groups.setdefault(where, []).append((row, entry))
-    for where, items in groups.items():
+            groups.setdefault((where, tgt), []).append((row, entry))
+    for (where, tgt), items in groups.items():
         accounts = sorted({e["account"] for _, e in items})
         accepted = " or ".join(f"SyslogMessage has {kql.literal(f'for {a} from')}" for a in accounts)
         opened = " or ".join(f"SyslogMessage has {kql.literal(f'for user {a}')}" for a in accounts)
         lines = p.query(_SESSIONS, SESSION_LOOKBACK_S, scope=where, accepted=accepted, opened=opened)
+        to_confirm: list[tuple[dict, dict, list[dict], list[str]]] = []
         for row, entry in items:
             if isinstance(lines, str):
                 _unknown(p, judged, row, f"sessions non lues : {lines} — origine inconnue")
@@ -311,13 +354,137 @@ def settle_origins(p: Pass, routed: dict, judged: dict, seen: set, identity) -> 
             if at is None:
                 _unknown(p, judged, row, "instant de la ligne illisible — origine inconnue")
                 continue
-            ok, why, seen_origins = verdict(sessions(lines, entry["account"], at), entry["origins"])
+            found = sessions(lines, entry["account"], at)
+            ok, why, seen_origins = verdict(found, entry["origins"])
             if not ok:
                 _unknown(p, judged, row, why, kind="card")
                 continue
-            judged[id(row)] = {k: v for k, v in entry.items() if k != "origins"} | {
-                "via": "origin", "origin": ", ".join(seen_origins)[:expected_sudo._COMMAND_KEPT]}
-            p.counts["origin"] += 1
+            if entry.get("proof", "none") != "none":
+                # COR2: the origin read in the VM waits for its trace outside the VM.
+                to_confirm.append((row, entry, found, seen_origins))
+                continue
+            _aside(p, judged, row, entry, seen_origins)
+        if to_confirm:
+            confirm_outside(p, judged, tgt, to_confirm)
+
+
+def _aside(p: Pass, judged: dict, row: dict, entry: dict, seen_origins: list[str], proof: str = "") -> None:
+    """The root shell set aside by its origin: its entry journaled with the origins seen, and,
+    with COR2, the source outside the VM that confirmed them (none: read in the VM only)."""
+    from glorfindel import expected_sudo
+    out = {k: v for k, v in entry.items() if k not in ("origins", "proof")} | {
+        "via": "origin", "origin": ", ".join(seen_origins)[:expected_sudo._COMMAND_KEPT]}
+    if proof:
+        out["proof"] = proof
+        p.counts["confirmed"] += 1
+    judged[id(row)] = out
+    p.counts["origin"] += 1
+
+
+# ── COR2: the origin confirmed outside the VM ─────────────────────────────────────
+
+def proof_scope(source: str, tgt) -> str | None:
+    """The VM, as the source names it, from the registry's resource id (never from the line),
+    checked and written as a literal: Bastion's `TargetResourceId`, the flows' `DestVm`
+    (`<group>/<vm>`); None when it cannot be read."""
+    rid = tgt[0] if isinstance(tgt, (tuple, list)) and tgt else None
+    try:
+        rid = kql.resource_id(rid)
+    except kql.UnsafeValue:
+        return None
+    if source == "bastion":
+        return kql.literal(rid)
+    if source == "flows":
+        parts = rid.rstrip("/").split("/")
+        return kql.literal(f"{parts[4]}/{parts[8]}")
+    return None
+
+
+def traces(source: str, rows: list[dict]) -> list[dict]:
+    """The traces read outside the VM. Bastion: one per session ({"account", "at"}), a row
+    repeated for one session (its TunnelId, or its start) read once. Flows: {"src", "start",
+    "end"}. A row whose instant or address cannot be read is no trace."""
+    out: list[dict] = []
+    if source == "bastion":
+        keys = set()
+        for r in rows:
+            at = instant(r.get("SessionStartTime"))
+            account = r.get("UserName")
+            if at is None or not isinstance(account, str):
+                continue
+            key = str(r.get("TunnelId") or "") or (account, at)
+            if key in keys:
+                continue
+            keys.add(key)
+            out.append({"account": account, "at": at})
+        return sorted(out, key=lambda t: t["at"])
+    for r in rows:
+        src, start, end = address(r.get("SrcIp")), instant(r.get("FlowStartTime")), instant(r.get("FlowEndTime"))
+        if src is None or start is None or end is None:
+            continue
+        out.append({"src": src, "start": start, "end": end})
+    return out
+
+
+def confirmed(source: str, found: list[dict], read: list[dict], account: str) -> tuple[bool, str]:
+    """(every session `found` has its trace outside the VM, why not in words). Bastion: a
+    session of this account opened within PROOF_SKEW_S of the line, each Bastion session
+    proving one SSH session only — a forged line at the time of a real session finds none
+    left. Flows: an allowed flow from the session's address to the VM's SSH port around it."""
+    name = PROOF_NAMES.get(source, source)
+    skew = timedelta(seconds=PROOF_SKEW_S)
+    used: set[int] = set()
+    for s in sorted(found, key=lambda s: (s["at"] is None, s["at"] or datetime.min.replace(tzinfo=timezone.utc))):
+        what = f"session depuis {s['origin'] or '?'}"
+        if s["at"] is None:
+            return False, f"{what} d'instant illisible — origine non confirmée hors de la VM"
+        if source == "bastion":
+            hit = next((i for i, t in enumerate(read) if i not in used and t["account"] == account
+                        and abs(t["at"] - s["at"]) <= skew), None)
+            if hit is not None:
+                used.add(hit)
+                continue
+        elif source == "flows":
+            ip = address(s["origin"])
+            if any(t["src"] == ip and t["start"] - skew <= s["at"] <= t["end"] + skew for t in read):
+                continue
+        return False, (f"{what} ({s['at'].strftime('%Y-%m-%d %H:%M:%S')} UTC) sans trace dans {name} — "
+                       "origine non confirmée hors de la VM")
+    return True, ""
+
+
+def confirm_outside(p: Pass, judged: dict, tgt, items: list[tuple[dict, dict, list[dict], list[str]]]) -> None:
+    """COR2: the rows of one VM whose sessions all come from a declared origin, set aside only if
+    each session has its trace in the declared source — one bounded query per source and VM.
+    A source unread, cut or capped, a VM it cannot name: unknown, a card (A0)."""
+    by_source: dict[str, list] = {}
+    for item in items:
+        by_source.setdefault(item[1]["proof"], []).append(item)
+    for source, its in by_source.items():
+        name = PROOF_NAMES.get(source, source)
+        vm = proof_scope(source, tgt)
+        if vm is None:
+            for row, *_ in its:
+                _unknown(p, judged, row, f"{name} ne peut nommer la VM — origine non confirmée hors de la VM")
+            continue
+        ats = [s["at"] for _r, _e, found, _o in its for s in found if s["at"] is not None]
+        if ats:
+            lookback = min((p.now - min(ats)).total_seconds(), SESSION_LOOKBACK_S) + PROOF_SKEW_S + PROOF_MARGIN_S
+            accounts = ", ".join(kql.literal(a) for a in sorted({e["account"] for _r, e, _f, _o in its}))
+            origins = ", ".join(kql.literal(o) for o in sorted({o for *_x, seen_o in its for o in seen_o}))
+            rows = p.query(_BASTION if source == "bastion" else _FLOWS, max(lookback, 0), vm=vm,
+                           accounts=accounts, origins=origins, port=SSH_PORT)
+        else:
+            rows = []                   # no instant to look for: each row says so below
+        for row, entry, found, seen_origins in its:
+            if isinstance(rows, str):
+                _unknown(p, judged, row, f"{name} non lu : {rows} — origine non confirmée hors de la VM")
+                continue
+            ok, why = confirmed(source, found, traces(source, rows), entry["account"])
+            if not ok:
+                _unknown(p, judged, row, why, kind="unconfirmed")
+                continue
+            _aside(p, judged, row, entry, seen_origins, proof=source)
 
 
 def _unknown(p: Pass, judged: dict, row: dict, why: str, kind: str = "unknown") -> None:

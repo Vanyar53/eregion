@@ -3066,6 +3066,81 @@ en minuscules.
 
 **Mesures après la relecture.** M3100–M3109 et M3165–M3168 : 14/14 à chaque tour (deux tours, 60 séquences) ; M2931, réancré, 2/2 ; M37 instable (1/2 à 2/2 selon le run, la relecture l'a vu 1/2), comme sur `main`. Invariants avec la règle, 60 séquences, quatre à la fois : N = 1..20, **20/20 vertes**. `pytest` complet : 5 753 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 260 mutants, sans faute.
 
+**I3G (02/11, #446) : une alerte de la réaffirmation ne se fond jamais dans une carte du graphe.**
+Mesuré par la relecture d'I3C (une sonde : la carte du graphe posée, quatre passes), présent sur
+`main` avant I3C comme après. **Cause** : le magasin fusionne une carte nouvelle dans une carte en
+attente de même action, même ressource (sans casse), même type et même IP, quel que soit son
+identifiant (`escalations.record`). Une carte `verification_failed` du graphe — la vérification
+après son action a échoué (`agent.escalate_to_human`) —, en attente pour la VM, absorbait l'alerte
+de la réaffirmation ; `_alert` ne ferme que les cartes de la réaffirmation, et `drift_said` ne lit
+qu'elles. **En `human_only`** : la disparition redite à chaque passe dans le rapport (`occurrences`
+à 5), jamais notifiée ; la carte du graphe prenait le texte de l'alerte à la première fusion (la
+confiance passait de 0,9 à 0). **Hors de lui** : la carte restait sur « reposée une fois », et la
+seconde disparition (« ne la repose pas ») y était fondue, texte inchangé, sans notification, la VM
+plus isolée : **une alerte se taisait**. Dans l'autre sens, une carte du graphe arrivée après
+l'alerte (une nouvelle détection, une vérification qui échoue) s'y fondait et réécrivait son texte ;
+l'id de l'alerte restait, lu « déjà dite ». **La voie choisie : le refus de fusion**
+(`escalations._reassertion`) — une carte de la réaffirmation (`reassert-…`, `state-unreadable-…`,
+toute casse) ne se fond jamais dans une carte d'une autre origine, ni l'inverse ; entre cartes d'une
+même origine, rien ne change (les relances du graphe, sous l'id d'un autre run, se fondent toujours).
+Plutôt que de fermer d'abord la carte du graphe (la seconde voie) : une seule règle, au magasin,
+tient toutes les cartes de la réaffirmation — dérive, contournement, vérification qui échoue, règles
+laissées, état illisible — et les deux sens ; fermer la carte du graphe aurait retiré à l'opérateur
+une carte qu'il n'avait pas lue (ce que la vérification du graphe a vu, son explication), et aurait
+laissé ouvert le second sens, la carte du graphe arrivée après l'alerte. Les autres cartes de la
+réaffirmation n'ont pas d'homonyme du graphe aujourd'hui (leurs actions, `review_bypass`,
+`review_unverified`, `review_left_rule`, `repair_local_state`, et leurs types ne sont jamais ceux
+d'une décision) : la règle les tient quand même, sans cas à part. **Au passage** : la clé d'avant
+A0 (`reassert-{vm}-{ip}`) est comparée en minuscules — une ancienne carte de cette clé, en attente
+pour une IPv6 en majuscules, n'était pas fermée, et l'alerte s'y fondait.
+**La règle de la machine** (A0 : une règle ajoutée, l'oracle inchangé) :
+`graph_card_before_a_disappearance` — une VM isolée ou bloquée, la carte du graphe posée comme
+`escalate_to_human` l'écrit (son id du RulePoller, sa confiance, l'IP et le port d'un blocage), puis
+nos règles retirées et une passe, deux fois, puis une passe, le mode tiré une fois. **L'oracle ne
+voyait pas le silence** : L1 compte, pour un blocage, toute carte de son action sur la VM — celle du
+graphe comprise ; aucune propriété ne lisait la notification. **Une propriété ajoutée, L3**, sur le
+journal du test : une carte que le test a écrite comme celle du graphe garde ses mots (un invariant,
+`graph_cards_keep_their_words`) ; une disparition que la passe laisse ouverte, l'isolation ou le
+blocage enregistré et aucune opération en cours, est dite par une carte en attente qui n'est pas
+celle du graphe, notifiée (`_said_on_its_own`, et à côté de L1 dans la règle `reassert`) ; les
+notifications sont relevées par le test (`invariant_env` remplace `escalations._notify`). Aucune
+propriété restreinte.
+**La séquence figée** (`test_a_disappearance_beside_the_graphs_card_is_said_on_its_own`, isolation
+et blocage, `human_only` et `non_disruptive`) rejoue la règle sur Db--01 : 4/4 rouges sur `main`
+(« L3: … no card of the reassertion's says it — the graph's alone », « said only on the graph's
+card »), vertes après. Tests unitaires (`test_reassert.py`) : au magasin, une carte de la
+réaffirmation et une carte d'une autre origine sont deux cartes, chacune son texte et sa notification,
+dans les deux ordres et pour chaque famille d'ids (dérive, en majuscules, contournement, état
+illisible) ; les fusions d'une même origine tiennent ; la disparition à côté de la carte du graphe
+(isolation et blocage, deux modes), dite par sa carte, notifiée, une fois ; la carte du graphe après
+l'alerte qui ne la réécrit pas ; la clé d'avant A0 pour une IPv6 en majuscules — 16 rouges sur
+`main`. **Mutants M3170–M3176** : le refus de fusion retiré (M3170), les ids de la réaffirmation lus
+avec leur casse (M3171), l'état illisible oublié (M3172), un seul sens tenu (M3173 : la carte du
+graphe se fond dans l'alerte ; M3174 : l'alerte dans la carte du graphe), la fusion par id de signal
+— de trop (M3175), la clé d'avant A0 sans minuscules (M3176). **Reste ouvert** : la console groupe les
+cartes d'une VM par action (`_groupEscs`) : la carte du graphe et l'alerte, deux cartes au magasin,
+s'y montrent dans un même groupe, sous le titre de la première, et « Ack » les acquitte ensemble
+(signalé à la session Console). Le magasin ne connaît l'origine que de la réaffirmation : les cartes
+du TTL, des orphelines, de la posture n'ont pas d'homonyme du graphe aujourd'hui (leurs actions et
+leurs types), la règle ne les couvre pas.
+
+**Mesures d'I3G.** Invariants avec la règle, `--hypothesis-seed=N`, 60 séquences, quatre à la fois :
+N = 1..20, **20/20 vertes** après le correctif (la règle atteinte 476 fois, la disparition laissée
+ouverte à côté de la carte du graphe 615 fois en `human_only`, 545 hors de lui) ; sur le code de
+`main` f20d3c8, la règle et L3 ajoutées, **2/20 vertes** (les graines 6 et 10) : 18 rouges, toutes
+par L3 (la carte du graphe réécrite, une isolation ou un blocage dit seulement par elle), aucune par
+L1 ni une autre propriété de la disparition — l'oracle d'avant ne voyait pas le silence. **Mutants
+M3170–M3176** : 7/7 par leurs tests à chaque tour (deux tours, 60 séquences). `pytest` complet :
+5 813 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 289 mutants, sans faute.
+**Hors du lot, trouvé en chemin** : la graine 9 sur le code de `main`, en réduisant ses échecs L3, a
+trouvé un troisième échec sans rapport, rejoué tel quel avec le correctif — « I3: perimeter block
+named ['db-nic-0'] of …/Db--01 uncovered, behind it » (`block_perimeter`), après un blocage de
+périmètre de `web` (rg-app2) par son id en minuscules, `kept_at_the_lift` (une levée, le 12ᵉ appel
+en 429 après écriture, l'état perdu, une isolation d'une ancienne version laissée sur web-nic), un
+blocage de `web`, puis le périmètre de Db--01 (le 6ᵉ appel en 429 avant écriture) : la réponse nomme
+db-nic-0 non couverte alors que le périmètre la coupe. Présent sur `main` (aucune ligne d'I3G ne
+touche le blocage de périmètre) ; dit dans le rapport, pour un lot à lui.
+
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
 (`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque

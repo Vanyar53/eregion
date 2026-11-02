@@ -173,11 +173,12 @@ def draw(app: str, key: bytes, installation: int | None = None) -> dict:
     if not REPO_RE.fullmatch(REPO):
         raise TokenError(f"EREGION_AGENT_REPO illisible : owner/name attendu, pas {REPO!r}")
     bearer = app_jwt(app, key)
+    # The token reaches this one repository, whatever else the App is installed on.
+    scope = {"repositories": [REPO.split("/", 1)[1]]}
     out = None
     if installation is not None:
         try:
-            out = call("POST", f"/app/installations/{installation}/access_tokens", bearer,
-                       {"repositories": [REPO.split("/", 1)[1]]})
+            out = call("POST", f"/app/installations/{installation}/access_tokens", bearer, scope)
         except TokenError as e:
             if e.code != 404:           # the App reinstalled: its installation looked up again
                 raise
@@ -186,8 +187,7 @@ def draw(app: str, key: bytes, installation: int | None = None) -> dict:
         installation = found.get("id")
         if not isinstance(installation, int) or isinstance(installation, bool) or installation <= 0:
             raise TokenError(f"l'installation de l'App sur {REPO} est illisible")
-        out = call("POST", f"/app/installations/{installation}/access_tokens", bearer,
-                   {"repositories": [REPO.split("/", 1)[1]]})
+        out = call("POST", f"/app/installations/{installation}/access_tokens", bearer, scope)
     token = out.get("token")
     if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
         raise TokenError("GitHub n'a pas rendu de jeton lisible")

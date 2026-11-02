@@ -91,10 +91,12 @@ Syslog
 | where TimeGenerated > ago({lookback}s)
 | where {scope}
 | where Facility in ("auth", "authpriv")
-// sshd's own Accepted lines only (its tag), the session lines of any service.
-| where (SyslogMessage startswith "Accepted " and ProcessName in ("sshd", "sshd-session"))
-    or SyslogMessage has "session opened"
-| where {accounts}
+// The lines `sessions()` reads, and no more: sshd's own Accepted lines (its tag) for these
+// accounts; the session lines of any service opened FOR these accounts — not sudo's own
+// (`session opened for user root … by <account>`, one per sudo), not systemd's user manager:
+// an active administrator's week of them filled the 1,000 lines, and every root shell a card.
+| where (SyslogMessage startswith "Accepted " and ProcessName in ("sshd", "sshd-session") and ({accepted}))
+    or (SyslogMessage has "session opened" and SyslogMessage !has "systemd-user" and ({opened}))
 | project TimeGenerated, ProcessName, ProcessID, SyslogMessage
 | order by TimeGenerated asc
 | limit {limit}
@@ -298,8 +300,9 @@ def settle_origins(p: Pass, routed: dict, judged: dict, seen: set, identity) -> 
             groups.setdefault(where, []).append((row, entry))
     for where, items in groups.items():
         accounts = sorted({e["account"] for _, e in items})
-        clause = " or ".join(f"SyslogMessage has {kql.literal(a)}" for a in accounts)
-        lines = p.query(_SESSIONS, SESSION_LOOKBACK_S, scope=where, accounts=f"({clause})")
+        accepted = " or ".join(f"SyslogMessage has {kql.literal(f'for {a} from')}" for a in accounts)
+        opened = " or ".join(f"SyslogMessage has {kql.literal(f'for user {a}')}" for a in accounts)
+        lines = p.query(_SESSIONS, SESSION_LOOKBACK_S, scope=where, accepted=accepted, opened=opened)
         for row, entry in items:
             if isinstance(lines, str):
                 _unknown(p, judged, row, f"sessions non lues : {lines} — origine inconnue")

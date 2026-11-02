@@ -202,7 +202,10 @@ def record(
                     e.setdefault("first_reason", e.get("reason", ""))
                     e.setdefault("first_suggested_steps", e.get("suggested_steps", []))
                     e.setdefault("first_confidence", e.get("confidence", 0.0))
-                    e["reason"] = reason
+                    # COR1: a card that says a compromise keeps saying it — a plain re-fire of
+                    # the same address (a scanner that goes on) never wipes it out.
+                    if COMPROMISE_MARK in (reason or "") or COMPROMISE_MARK not in (e.get("reason") or ""):
+                        e["reason"] = reason
                     e["suggested_steps"] = steps
                     e["confidence"] = confidence
                     if explanation:

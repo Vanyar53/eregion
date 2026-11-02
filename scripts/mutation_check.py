@@ -7460,9 +7460,8 @@ TESTS.update({f"M{n}": _COR for n in range(2755, 2760)})
 # address one card, sshd's own Accepted lines, an unchecked brute force said. M3020–M3028.
 MUTANTS += [
     ("M3020", "an Accepted line written under another tag read as a session (COR1, review)", COR,
-     '| where (SyslogMessage startswith "Accepted " and ProcessName in ("sshd", "sshd-session"))\n'
-     '    or SyslogMessage has "session opened"\n',
-     '| where SyslogMessage startswith "Accepted " or SyslogMessage has "session opened"\n'),
+     '| where (SyslogMessage startswith "Accepted " and ProcessName in ("sshd", "sshd-session") and ({accepted}))\n',
+     '| where (SyslogMessage startswith "Accepted " and ({accepted}))\n'),
     ("M3021", "a compromise folded into a pending card that does not say it: only occurrences move (COR1, review)",
      "glorfindel/escalations.py",
      "                material = material or rises or said\n", "                material = material\n"),
@@ -7487,6 +7486,19 @@ MUTANTS += [
      COR, "SESSION_LOOKBACK_S = 7 * 24 * 3600\n", "SESSION_LOOKBACK_S = 24 * 3600\n"),
 ]
 TESTS.update({f"M{n}": _COR for n in range(3020, 3030)})
+# COR1, its second review (02/11): a compromise said on a card stays said; the reading of the
+# sessions holds only the lines `sessions()` reads (not sudo's own, not systemd's). M3070–M3072.
+MUTANTS += [
+    ("M3070", "a plain re-fire of the address wipes the compromise off its card (COR1, second review)",
+     "glorfindel/escalations.py",
+     '                    if COMPROMISE_MARK in (reason or "") or COMPROMISE_MARK not in (e.get("reason") or ""):\n',
+     "                    if True:\n"),
+    ("M3071", "sudo's own session lines read: a week of sudo fills the reading, every root shell a card (COR1, second review)",
+     COR, "f\"SyslogMessage has {kql.literal(f'for user {a}')}\"", "f\"SyslogMessage has {kql.literal(a)}\""),
+    ("M3072", "systemd's user sessions read: they fill the reading (COR1, second review)", COR,
+     ' and SyslogMessage !has "systemd-user" and ({opened}))', " and ({opened}))"),
+]
+TESTS.update({f"M{n}": _COR for n in range(3070, 3073)})
 
 # #358, Gothmog's part (after G1): a name Azure does not give for the name typed, refused and said;
 # `gothmog run` by hand takes the request's lock, a wire never. M2497–M2499.

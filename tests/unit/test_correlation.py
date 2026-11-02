@@ -628,6 +628,35 @@ def test_the_sessions_of_the_last_seven_days_count_and_not_older():
     assert p.poll_once(rule) == []
 
 
+def test_a_plain_refire_never_wipes_the_compromise_off_a_card():
+    """A scanner that goes on after the login: its plain signal, with a confidence that moved,
+    re-fires the card — the compromise it says stays said."""
+    from glorfindel import escalations
+    kw = dict(signal_id="s", resource_id=VM, action="block_suspicious_ip", escalation_type="mode_hold",
+              action_params={"ip": STRANGER})
+    escalations.record(reason="Mode human_only.", severity="high", confidence=0.9, **kw)
+    escalations.record(reason="Compte peut-être compromis : brute force puis connexion. Mode human_only.",
+                       severity="critical", confidence=0.9, **kw)
+    escalations.record(reason="Mode human_only, encore.", severity="high", confidence=0.7, **kw)
+    [card] = escalations.pending()
+    assert card["reason"].startswith("Compte peut-être compromis") and card["severity"] == "critical"
+    assert card["occurrences"] == 3 and card["confidence"] == 0.7
+
+
+def test_a_week_of_sudo_does_not_fill_the_reading():
+    """~150 sudo a day write `session opened for user root … by admin1`, and systemd its own:
+    neither is read, so a week of them never reaches the cap — the root shell from the bastion is
+    set aside (the query run as written)."""
+    sudo = [_row("pam_unix(sudo:session): session opened for user root(uid=0) by admin1(uid=1001)",
+                 i * 9.6, pid=7000 + i) for i in range(1050)]
+    user = [_row("pam_unix(systemd-user:session): session opened for user admin1(uid=1001) by (uid=0)",
+                 i * 60.0, process="systemd", pid=9000 + i) for i in range(150)]
+    p, rule, sent, kql = _poller(_login(BASTION) + sudo + user + [_row(SUDO_I, 0.05)])
+    assert p.poll_once(rule) == [] and _journal()[0]["origin"] == BASTION
+    [query] = kql.correlation_queries()
+    assert len(kql_subset.run(query, kql.lines, now=NOW)) < 10
+
+
 def test_an_accepted_line_of_another_process_is_not_a_session():
     """Only sshd writes « Accepted » for a session: the same words under another tag are not read."""
     other = _row(f"Accepted publickey for admin1 from {STRANGER} port 1 ssh2", 5, process="cron", facility="auth")

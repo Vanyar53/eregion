@@ -7062,7 +7062,7 @@ TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
-# « brouillon ». M2680–M2695 (M2696–M2699 unused).
+# « brouillon ». M2680–M2695; M2696–M2699 after its review.
 MUTANTS += [
     ("M2680", "releases/latest failing (404: none published yet) fails the whole run (RM1)", ROADMAP_D,
      '    except nd.Failure as e:\n        print(f"atelier: dernière release omise',
@@ -7086,7 +7086,8 @@ MUTANTS += [
      "    if head is None or _cells(rest[head]) != RELEASES_HEADER or head + 1 >= len(rest) \\\n",
      "    if head is None or head + 1 >= len(rest) \\\n"),
     ("M2688", "the releases' table looked for past the next heading: another section's read (RM1)", ROADMAP_D,
-     '    rest = rest[: next((i for i, x in enumerate(rest) if x.startswith("#")), len(rest))]\n', ""),
+     '    rest = rest[: next((i for i, x in enumerate(rest) if re.match(r"#{1,6} ", x)), len(rest))]   # a heading\n',
+     ""),
     ("M2689", "every line of the releases shown: the block never cut (RM1)", ROADMAP_D,
      "    for version, title, what, state in rows[:RELEASES_ROWS]:\n",
      "    for version, title, what, state in rows:\n"),
@@ -7094,21 +7095,38 @@ MUTANTS += [
      '        name = nd.inert(nd._cut(latest.get("name") or latest.get("tag_name"), 80))',
      '        name = (nd._cut(latest.get("name") or latest.get("tag_name"), 80))'),
     ("M2691", "the release's link taken whatever its scheme (RM1)", ROADMAP_D,
-     '        url, day = nd._https(latest.get("html_url")), _day(latest.get("published_at"))\n',
-     '        url, day = latest.get("html_url"), _day(latest.get("published_at"))\n'),
+     '        url = nd._https(latest.get("html_url")).replace(',
+     '        url = str(latest.get("html_url")).replace('),
     ("M2692", "the version GitHub says published still shown « brouillon » (RM1)", ROADMAP_D,
      '            state = "publiée"\n', "            pass\n"),
     ("M2693", "make release leaves ROADMAP.md's line of its version as it was (RM1)", RELS,
-     '            edits["ROADMAP.md"] = roadmap_drafted(roadmap, version)\n', "            pass\n"),
+     '        edits["ROADMAP.md"] = drafted\n', "        pass\n"),
     ("M2694", "ROADMAP.md changed by make release but left out of its commit (RM1)", RELS,
      '    staged = ["pyproject.toml", "CHANGELOG.md", "README.md"] + (["ROADMAP.md"] if "ROADMAP.md" in edits else [])\n',
      '    staged = ["pyproject.toml", "CHANGELOG.md", "README.md"]\n'),
     ("M2695", "make release changes a line of its version under another heading of ROADMAP.md (RM1)", RELS,
-     '        if lines[i].startswith("#"):\n            break\n        cells = lines[i]',
+     '        if re.match(r"#{1,6} ", lines[i]):\n            break\n        cells = lines[i]',
      "        cells = lines[i]"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(2680, 2693)})
 TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(2693, 2696)})
+
+# RM1 after its review (02/11): the cells inert, the link's parentheses, the table release.py
+# changes is the one #roadmap reads, a section ended by a real heading. M2696–M2699.
+MUTANTS += [
+    ("M2696", "a cell's title shown raw: a « ** » in it breaks the message's bold (RM1, review)", ROADMAP_D,
+     'f"**{nd.inert(nd._cut(title, 40))}** "', 'f"**{nd._cut(title, 40)}** "'),
+    ("M2697", "a « ) » in the release's URL closes its masked link early (RM1, review)", ROADMAP_D,
+     '        url = nd._https(latest.get("html_url")).replace("(", "%28").replace(")", "%29")\n',
+     '        url = nd._https(latest.get("html_url"))\n'),
+    ("M2698", "make release changes a table #roadmap would say « introuvable » (RM1, review)", RELS,
+     "    if rd.releases(roadmap) is None:\n        return roadmap\n", ""),
+    ("M2699", "a prose line starting with « # » ends the releases' section on #roadmap (RM1, review)", ROADMAP_D,
+     '    rest = rest[: next((i for i, x in enumerate(rest) if re.match(r"#{1,6} ", x)), len(rest))]',
+     '    rest = rest[: next((i for i, x in enumerate(rest) if x.startswith("#")), len(rest))]'),
+]
+TESTS.update({"M2696": "tests/unit/test_roadmap_discord.py", "M2697": "tests/unit/test_roadmap_discord.py",
+              "M2698": "tests/unit/test_release.py", "M2699": "tests/unit/test_roadmap_discord.py"})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

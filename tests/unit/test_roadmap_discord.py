@@ -388,11 +388,12 @@ def test_the_releases_block_shows_the_last_published_then_the_roadmaps_lines(fak
     fake.gh["release"] = LATEST
     assert rd.main(["--dry-run"]) == 0
     out = capsys.readouterr()
+    # The cells made inert: a parenthesis escaped, shown as itself by Discord.
     assert releases_of(out.out).splitlines() == [
         LATEST_LINE,
-        "`0.4.10` **held to its word** · _brouillon (02/11)_ — la série d'isolation, DG-c, G1 (le code), #358",
-        "`0.5.0` **la boucle mesurée** · _en préparation (fin de semaine)_ — OV1, ADM1, BL1c, CI4",
-        "`0.5.x` · _en préparation (après la prochaine session de banc)_ — ID1, G1 au banc",
+        "`0.4.10` **held to its word** · _brouillon \\(02/11\\)_ — la série d'isolation, DG-c, G1 \\(le code\\), #358",
+        "`0.5.0` **la boucle mesurée** · _en préparation \\(fin de semaine\\)_ — OV1, ADM1, BL1c, CI4",
+        "`0.5.x` · _en préparation \\(après la prochaine session de banc\\)_ — ID1, G1 au banc",
     ]
     # Beside the bars, before the lots and the criteria: a message too long is cut at its end.
     text = out.out
@@ -444,7 +445,7 @@ def test_the_line_github_says_published_is_shown_published(fake):
     latest = {**LATEST, "tag_name": "v0.4.10", "name": "v0.4.10 — held to its word"}
     block = releases_of(rd.render([], [], {}, ROADMAP + RELEASES, latest=latest)["description"])
     assert "`0.4.10` **held to its word** · _publiée_ —" in block
-    assert "`0.5.0` **la boucle mesurée** · _en préparation (fin de semaine)_" in block
+    assert "`0.5.0` **la boucle mesurée** · _en préparation \\(fin de semaine\\)_" in block
 
 
 def test_a_release_name_is_inert_and_only_an_https_link_is_one(fake):
@@ -469,6 +470,31 @@ def test_the_releases_block_is_cut_cleanly_and_the_message_stays_under_its_bound
     assert len(e["title"]) + len(e["description"]) + len(e["footer"]["text"]) <= rd.EMBED_MAX
     assert e["description"].endswith("(tronqué : voir ROADMAP.md)")
     assert releases_of(e["description"]).splitlines() == block
+
+
+def test_a_cell_is_inert_a_link_s_parenthesis_encoded_a_section_ended_by_a_heading_only(fake):
+    """The review of RM1: « ** » or a role mention in a cell never break the message; a « ) » in the
+    release's URL never closes its masked link early; a prose line starting with « #roadmap » is
+    not a heading."""
+    roadmap = ROADMAP + RELEASES.replace("Tenue par l'Orchestre.", "Le tableau,\n#roadmap le montre.").replace(
+        "| 0.5.0 | la boucle mesurée | OV1, ADM1, BL1c, CI4 |", "| 0.5.0 | la **boucle | <@&123> **gras |")
+    latest = {**LATEST, "html_url": "https://github.com/o/r/releases/tag/v1)x(y"}
+    block = releases_of(rd.render([], [], {}, roadmap, latest=latest)["description"]).splitlines()
+    assert block[0].startswith("🏷️ Dernière publiée : [v0.4.9 — held in check]"
+                               "(https://github.com/o/r/releases/tag/v1%29x%28y)")
+    (line,) = [x for x in block if x.startswith("`0.5.0`")]
+    assert line.count("**") == 2 and line.startswith("`0.5.0` **la ")   # only the title's own bold
+    assert "\\<@&123\\>" in line and "<@&" not in line.replace("\\<@&", "")   # the mention escaped
+    assert len(block) == 4                                     # the three lines read past the prose
+
+
+def test_the_workflow_brings_chat_text_for_the_release_s_name():
+    """Without it, the strict filter: the name readable still, but not as written (« — » becomes « · »)."""
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load((ROOT / ".github/workflows/roadmap.yml").read_text(encoding="utf-8"))
+    (checkout,) = [s for s in wf["jobs"]["roadmap"]["steps"] if s.get("uses", "").startswith("actions/checkout@")]
+    assert "glorfindel/chat_text.py" in checkout["with"]["sparse-checkout"].split()
+    assert wf["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
 
 
 def test_the_roadmaps_own_releases_table_is_read():

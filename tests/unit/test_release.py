@@ -267,8 +267,35 @@ def test_without_its_line_the_roadmap_is_left_to_the_orchestre(repo, capsys):
     assert (repo / "ROADMAP.md").read_text(encoding="utf-8") == ROADMAP_MD
     assert set(git(repo, "show", "--name-only", "--format=", "HEAD").split()) == {
         "CHANGELOG.md", "README.md", "pyproject.toml"}
-    assert "pas de ligne 0.4.5 sous « Les prochaines releases » — l'Orchestre la tient à la main" in \
-        capsys.readouterr().out
+    assert "pas de ligne 0.4.5 sous « Les prochaines releases » (ou un tableau que #roadmap ne lit pas) — " \
+           "l'Orchestre la tient à la main" in capsys.readouterr().out
+
+
+def test_a_table_roadmap_would_not_read_is_never_changed(repo, capsys):
+    """The review of RM1: a header renamed is « introuvable » on #roadmap; make release leaves it."""
+    renamed = ROADMAP_MD.replace("| Version | Titre | Contenu | État |\n|---|---|---|---|\n| 0.4.40",
+                                 "| Version | Titre | Contenu | Statut |\n|---|---|---|---|\n| 0.4.40")
+    assert renamed != ROADMAP_MD
+    _with_roadmap(repo, renamed)
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    assert (repo / "ROADMAP.md").read_text(encoding="utf-8") == renamed
+    assert "ou un tableau que #roadmap ne lit pas" in capsys.readouterr().out
+
+
+def test_a_prose_line_starting_with_a_hash_does_not_end_the_section(repo, capsys):
+    _with_roadmap(repo, ROADMAP_MD.replace("Tenue par l'Orchestre.", "Le tableau,\n#roadmap le montre."))
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    assert DRAFTED in (repo / "ROADMAP.md").read_text(encoding="utf-8")
+
+
+def test_a_refused_dry_run_still_says_the_roadmaps_line(repo, capsys):
+    """Refused (a tree not clean): no edits, but the line is there, and said so."""
+    _with_roadmap(repo)
+    (repo / "stray.txt").write_text("x")
+    assert rel.main(["prepare", "0.4.4", "--title", "x", "--dry-run"]) == 1
+    out = capsys.readouterr().out
+    assert "ROADMAP.md : la ligne 0.4.4 des prochaines releases passe à « brouillon »" in out
+    assert "pas de ligne" not in out
 
 
 def test_release_dry_run_shows_the_cut_and_writes_nothing(repo, tmp_path, capsys):

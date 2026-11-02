@@ -259,7 +259,7 @@ def releases(roadmap: str) -> list[list[str]] | None:
     if start is None:
         return None
     rest = lines[start + 1:]
-    rest = rest[: next((i for i, x in enumerate(rest) if x.startswith("#")), len(rest))]
+    rest = rest[: next((i for i, x in enumerate(rest) if re.match(r"#{1,6} ", x)), len(rest))]   # a heading
     head = next((i for i, x in enumerate(rest) if x.startswith("|")), None)
     if head is None or _cells(rest[head]) != RELEASES_HEADER or head + 1 >= len(rest) \
             or not re.fullmatch(r"\|[\s:|-]+\|", rest[head + 1].strip()):
@@ -284,13 +284,16 @@ def _day(stamp) -> str:
 
 def releases_block(roadmap: str, latest: dict | None) -> list[str]:
     """« **Releases** »: the last one published (its name inert: a member of the repository writes
-    it, SEC6), then ROADMAP.md's lines, each field cut, at most RELEASES_ROWS of them. The line of
+    it, SEC6), then ROADMAP.md's lines, each field cut then made inert (a « ** » or a mention in a
+    cell never breaks the message), at most RELEASES_ROWS of them. The line of
     the version GitHub says published is shown « publiée », whatever the table still says."""
     out = ["**Releases**"]
     published = ""
     if latest:
         name = nd.inert(nd._cut(latest.get("name") or latest.get("tag_name"), 80))   # cut, then escaped
-        url, day = nd._https(latest.get("html_url")), _day(latest.get("published_at"))
+        # A parenthesis would close the masked link early: encoded, as a browser does.
+        url = nd._https(latest.get("html_url")).replace("(", "%28").replace(")", "%29")
+        day = _day(latest.get("published_at"))
         published = str(latest.get("tag_name") or "").lstrip("v")
         out.append("🏷️ Dernière publiée : " + (f"[{name}]({url})" if url else f"**{name}**")
                    + (f" · le {day}" if day else ""))
@@ -300,8 +303,9 @@ def releases_block(roadmap: str, latest: dict | None) -> list[str]:
     for version, title, what, state in rows[:RELEASES_ROWS]:
         if published and version.lstrip("v") == published:
             state = "publiée"
-        out.append(f"`{nd._cut(version, 12)}` " + (f"**{nd._cut(title, 40)}** " if title.strip("—- ") else "")
-                   + f"· _{nd._cut(state, 60)}_ — {nd._cut(what, 100)}")
+        out.append(f"`{nd._cut(version, 12)}` " + (f"**{nd.inert(nd._cut(title, 40))}** "
+                                                    if title.strip("—- ") else "")
+                   + f"· _{nd.inert(nd._cut(state, 60))}_ — {nd.inert(nd._cut(what, 100))}")
     if len(rows) > RELEASES_ROWS:
         out.append(f"… +{len(rows) - RELEASES_ROWS} dans ROADMAP.md")
     return out

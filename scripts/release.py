@@ -46,7 +46,6 @@ UNRELEASED = "## [Unreleased]\n"
 STATUS = re.compile(r"\*\*Status — v(\d+\.\d+\.\d+)\.\*\*")
 PROJECT_VERSION = re.compile(r'(?m)^version = "([^"]+)"$')
 SECTION = re.compile(r"(?m)^## \[")
-ROADMAP_RELEASES = "### Les prochaines releases"
 MARKER = "<!-- #agents (REL1) : ping={ping} board={board} — effacés à la publication (notify.yml) -->"
 
 
@@ -134,17 +133,28 @@ def sections_named(text: str) -> list[str]:
 
 # ── ROADMAP.md: « Les prochaines releases » (RM1) ───────────────────────────────────
 
+def _scripts_dir() -> None:
+    """This file's directory on sys.path: its siblings (roadmap_discord, agents_discord,
+    notify_discord) import one another by name."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+
+
 def roadmap_drafted(roadmap: str, version: str) -> str:
     """ROADMAP.md with its version's line set to « brouillon », in the table of « Les prochaines
-    releases » only (#roadmap reads it: scripts/roadmap_discord.py, RELEASES_HEADING): the line
-    whose first cell is X.Y.Z or vX.Y.Z, its last cell replaced. Unchanged without the section or
-    the line: the Orchestre holds the table by hand."""
-    lines = roadmap.split("\n")
-    start = next((i for i, x in enumerate(lines) if x.strip() == ROADMAP_RELEASES), None)
-    if start is None:
+    releases » only: the line whose first cell is X.Y.Z or vX.Y.Z, its last cell replaced. The
+    table is the one #roadmap reads, by its own reader (roadmap_discord: its heading, its header,
+    a section ended by a real heading): a table #roadmap would say « introuvable » is never
+    changed. Unchanged without it or without the line: the Orchestre holds the table by hand."""
+    _scripts_dir()
+    import roadmap_discord as rd
+    if rd.releases(roadmap) is None:
         return roadmap
+    lines = roadmap.split("\n")
+    start = next(i for i, x in enumerate(lines) if x.strip() == rd.RELEASES_HEADING)
     for i in range(start + 1, len(lines)):
-        if lines[i].startswith("#"):
+        if re.match(r"#{1,6} ", lines[i]):
             break
         cells = lines[i].strip().strip("|").split("|")
         if lines[i].startswith("|") and len(cells) == 4 and cells[0].strip().strip("`").lstrip("v") == version:
@@ -221,13 +231,16 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
         edits = {"pyproject.toml": PROJECT_VERSION.sub(f'version = "{version}"', pyproject, count=1),
                  "CHANGELOG.md": cut(changelog, version, day, title),
                  "README.md": STATUS.sub(f"**Status — v{version}.**", readme, count=1)}
-        if roadmap_drafted(roadmap, version) != roadmap:
-            edits["ROADMAP.md"] = roadmap_drafted(roadmap, version)
+    # Said from ROADMAP.md itself, not from the edits: a dry run refused has none, and its line
+    # is there all the same.
+    drafted = roadmap_drafted(roadmap, version) if new is not None else roadmap
+    if edits and drafted != roadmap:
+        edits["ROADMAP.md"] = drafted
     staged = ["pyproject.toml", "CHANGELOG.md", "README.md"] + (["ROADMAP.md"] if "ROADMAP.md" in edits else [])
     roadmap_said = (f"ROADMAP.md : la ligne {version} des prochaines releases passe à « brouillon »"
-                    if "ROADMAP.md" in edits else
-                    f"ROADMAP.md : pas de ligne {version} sous « Les prochaines releases » — "
-                    "l'Orchestre la tient à la main")
+                    if drafted != roadmap else
+                    f"ROADMAP.md : pas de ligne {version} sous « Les prochaines releases » (ou un tableau "
+                    "que #roadmap ne lit pas) — l'Orchestre la tient à la main")
     cut_text = unreleased(changelog).strip("\n")
     lines = len([x for x in cut_text.splitlines() if x.strip()])
     subject = f"chore(release): {version} — CHANGELOG [{version}] « {title} », version du paquet"
@@ -324,9 +337,7 @@ def releases_page(url: str) -> str:
 def _discord(tag: str, url: str, heading: str = "", text: str = "") -> dict:
     """The draft on #agents' board, pinged; {} without configuration or when Discord fails. Then
     its card on #releases (REL2), apart: one failing never keeps the other from being sent."""
-    here = str(Path(__file__).resolve().parent)
-    if here not in sys.path:
-        sys.path.insert(0, here)
+    _scripts_dir()
     ids: dict = {}
     try:
         import agents_discord

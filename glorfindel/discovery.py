@@ -150,10 +150,9 @@ class AssetRegistry:
             return [asdict(a) for a in self._sorted()]
 
     def _persist(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps([asdict(a) for a in self._sorted()], indent=2)
-        )
+        """Written whole, owner-only (0600), as every state (SEC13, V-27)."""
+        from glorfindel.response.state import _atomic_write_text
+        _atomic_write_text(self._path, json.dumps([asdict(a) for a in self._sorted()], indent=2))
 
     def _load(self) -> None:
         if not self._path.exists():

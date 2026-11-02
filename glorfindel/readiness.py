@@ -30,7 +30,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -349,9 +348,9 @@ def _read() -> dict:
 
 
 def _write(data: dict) -> None:
-    tmp = _STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str))
-    os.replace(tmp, _STATE_FILE)
+    """Written whole, owner-only (0600), as every state (SEC13, V-27)."""
+    from glorfindel.response.state import _atomic_write_text
+    _atomic_write_text(_STATE_FILE, json.dumps(data, indent=2, default=str))
 
 
 def _update(ref: str, /, **fields) -> dict:

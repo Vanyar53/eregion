@@ -170,11 +170,38 @@ _SKIP_GENERIC = frozenset({"TimeGenerated", "_ResourceId", "TenantId", "Type"})
 # threat: every Syslog-based rule produces it — including the rules the LLM authors in
 # the purple loop. Counting its mere presence as "characterized" switched the guardrail
 # off for the whole Syslog family. A Syslog row is characterized only by a curated
-# pattern: USER=root (privilege_escalation, in normalize_row) or one below.
+# pattern: sudo's own line of a sudo to root (privilege_escalation, `_sudo_to_root`) or one
+# below.
 RECOGNIZED_INDICATOR_KEYS: frozenset = frozenset(
     {label for _, label in _INDICATOR_COLUMNS if label != "syslog_event"}
     | {"privilege_escalation"}
 )
+
+# sudo's line of a sudo to root, as the shipped `sudo-privilege-escalation` reads it (SEC2):
+# `<user> : TTY=… ; PWD=… ; USER=root ; … COMMAND=…`, fields separated by « ; » or spaces.
+_SUDO_TO_ROOT = re.compile(r"^\s*\S+ : (TTY|PWD)=(.*[ ;])?USER=root[ ;]+(.*[ ;])?COMMAND=")
+
+
+def hands_on_emitter(query: str) -> bool:
+    """Whether a query's rows still carry ProcessName: named in its last `project`, not dropped
+    by a `project-away`; with no `project`, assumed (a reading of the text, said only)."""
+    text = re.sub(r"//[^\n]*", "", query or "")
+    stages = [s.strip() for s in text.split("|")]
+    if any(s.startswith("project-away") and "ProcessName" in s for s in stages):
+        return False
+    projects = [s for s in stages if re.match(r"project\s", s)]
+    return "ProcessName" in projects[-1] if projects else True
+
+
+def _sudo_to_root(row: dict) -> bool:
+    """A privilege escalation is sudo's own line (SEC13, R-18): its tag (ProcessName, which a
+    rule must hand on in its row) is sudo, its message in sudo's form, not a refusal. Any
+    program can write « USER=root » in a line; only the emitter tells sudo's from theirs —
+    a row without it is a Syslog line like another."""
+    message = str(row.get("SyslogMessage") or "")
+    lowered = message.lower()
+    return (row.get("ProcessName") == "sudo" and bool(_SUDO_TO_ROOT.search(message))
+            and "not in sudoers" not in lowered and "authentication failure" not in lowered)
 
 # Curated Syslog patterns (lowercase substrings) → the threat they characterize. Bless a
 # new one only after a human has checked what the line means. Account creation keeps the
@@ -242,8 +269,8 @@ def normalize_row(row: dict, ttp: str = "") -> dict:
         if col not in row:
             continue
         value = row[col]
-        # SyslogMessage containing USER=root → more specific label
-        if col == "SyslogMessage" and "USER=root" in str(value):
+        # sudo's own line of a sudo to root → more specific label (its emitter read, R-18)
+        if col == "SyslogMessage" and _sudo_to_root(row):
             label = "privilege_escalation"
         return {"resource": resource, "indicator_key": label, "indicator_value": value}
 
@@ -612,6 +639,13 @@ def load_config(path: str | Path, glorfindel_cfg=None, client_layer: str | Path 
         replaces_base = layer_of.get(item["name"]) == "client" and item["name"] in base_names
         if replaces_base:
             overrides.append(item["name"])
+        if (layer_of.get(item["name"]) == "client" and str(item.get("ttp", "")).startswith("T1548")
+                and not hands_on_emitter(item.get("query", ""))):
+            # SEC13 (R-18): a privilege escalation is read on sudo's own line, its emitter included.
+            notes.append(f"règle « {item['name']} » ({item.get('ttp')}) : sa ligne ne rend pas ProcessName — "
+                         "une élévation de privilège n'y est pas caractérisée : une action disruptive autonome "
+                         "escalade, et un instantané seul ne laisse pas de carte (plancher). Ajouter "
+                         "ProcessName à son `project`, comme sudo-privilege-escalation")
         interval_s = float(item.get("interval_s", 30))
         if not (math.isfinite(interval_s) and interval_s >= MIN_INTERVAL_S):
             notes.append(f"règle « {item['name']} » : interval_s {item.get('interval_s')!r} sous le "

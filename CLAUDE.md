@@ -37,6 +37,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 | Preuves : invariants, mutation | [docs/design/preuves.md](docs/design/preuves.md) |
 | Modèle de menace : une page par frontière, ce qui la tient, ce qui reste ouvert ; signaler une faille (`SECURITY.md`) | [docs/design/modele-de-menace.md](docs/design/modele-de-menace.md) |
 | Isolation compatible IaC | [docs/design/module-isolation-iac.md](docs/design/module-isolation-iac.md) |
+| La corrélation, brique du produit : sessions SSH derrière un shell root, brute force qui réussit ; ce qu'elle lit, ses limites | [docs/design/correlation.md](docs/design/correlation.md) |
 | Contrat d'Orodruin | [docs/design/orodruin-contract.md](docs/design/orodruin-contract.md) |
 | Console Eregion : sections, Glorfindel toujours présent, plan UI | [docs/design/console.md](docs/design/console.md) |
 | Dagorlad, guide d'utilisation : Board, Runs, verdicts, demande, Stop all ; images rejouables sur le jeu d'exemple | [docs/dagorlad.md](docs/dagorlad.md) |

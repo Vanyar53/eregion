@@ -3,6 +3,7 @@ from __future__ import annotations
 import textwrap
 import time
 
+import pytest
 
 from glorfindel.detection_rules import (
     DetectionRule,
@@ -168,6 +169,10 @@ def _rule(name="r", ws="ws", enabled=True):
     )
 
 
+# sudo's own line of a sudo to root, as Syslog holds it (the tag in ProcessName).
+_SUDO_ROOT = "svc-backup : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/opt/scripts/backup.sh /dev/null"
+
+
 def test_has_recognized_indicator():
     """Curated threat indicators are recognized; a generic-fallback column or empty row
     is NOT (drives the decide deterministic guardrail)."""
@@ -175,7 +180,7 @@ def test_has_recognized_indicator():
     assert has_recognized_indicator({"Computer": "vm", "MaxWrite": 1e8}) is True
     assert has_recognized_indicator(
         {"Computer": "vm", "FailedAttempts": 40, "SourceIP": "1.2.3.4"}) is True
-    assert has_recognized_indicator({"SyslogMessage": "sudo: USER=root"}) is True
+    assert has_recognized_indicator({"ProcessName": "sudo", "SyslogMessage": _SUDO_ROOT}) is True
     # generic fallback (unknown column) → NOT a recognized threat indicator
     assert has_recognized_indicator({"Activity": "anomalous login", "Computer": "vm"}) is False
     assert has_recognized_indicator({}) is False
@@ -188,7 +193,7 @@ def test_syslog_is_characterized_only_by_a_curated_pattern():
     t1136 = ("new user: name=testuser-annatar, UID=2001, GID=2001, "
              "home=/home/testuser-annatar, shell=/sbin/nologin")
     assert has_recognized_indicator({"SyslogMessage": t1136}) is True
-    assert has_recognized_indicator({"SyslogMessage": "sudo: USER=root ; COMMAND=/bin/sh"}) is True
+    assert has_recognized_indicator({"ProcessName": "sudo", "SyslogMessage": _SUDO_ROOT}) is True
     assert has_recognized_indicator({"SyslogMessage": "CRON[812]: session opened for user root"}) is False
     assert has_recognized_indicator({"SyslogMessage": "systemd[1]: Started Daily apt."}) is False
     # What the LLM sees is unchanged (normalize_row untouched → no prompt change).
@@ -387,10 +392,38 @@ def test_normalize_row_failed_auth():
 
 
 def test_normalize_row_privilege_escalation():
-    row = {"Computer": "vm1", "SyslogMessage": "sudo[12009]: USER=root COMMAND=/bin/bash"}
+    row = {"Computer": "vm1", "ProcessName": "sudo", "SyslogMessage": _SUDO_ROOT}
     n = normalize_row(row, ttp="T1548.003")
     assert n["indicator_key"] == "privilege_escalation"
     assert "USER=root" in str(n["indicator_value"])
+
+
+@pytest.mark.parametrize("process,message", [
+    (None, _SUDO_ROOT),                                    # a rule that does not project the emitter
+    ("", _SUDO_ROOT),
+    ("bash", _SUDO_ROOT),                                  # another program's line, in sudo's words
+    ("root", _SUDO_ROOT),
+    ("sudo ", _SUDO_ROOT),
+    ("sshd", "Invalid user x : TTY=pts/0 ; USER=root ; COMMAND=/bin/sh"),
+    ("sudo", "sudo[1]: USER=root COMMAND=/bin/bash"),      # sudo's tag, not its form
+    ("sudo", "alice : user NOT in sudoers ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh"),
+    ("sudo", "pam_unix(sudo:auth): authentication failure; logname= uid=1001 USER=root COMMAND=x"),
+    ("sudo", "alice : TTY=pts/0 ; PWD=/ ; USER=bob ; COMMAND=/bin/sh"),
+    ("sudo", "alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/sh"),
+])
+def test_user_root_is_an_escalation_only_on_sudos_own_line(process, message):
+    """SEC13 (R-18): « USER=root » anywhere in a Syslog line — a client's rule, a proposed one —
+    read as a privilege escalation: characterized, an autonomous action allowed on it, and
+    named so to the model. Read as the shipped rule reads it now: sudo's own line (its tag,
+    ProcessName), in sudo's form, a success — anything else is a Syslog line like another."""
+    from glorfindel.detection_rules import has_recognized_indicator
+    row = {"Computer": "vm1", "SyslogMessage": message, **({} if process is None else {"ProcessName": process})}
+    assert normalize_row(row, ttp="T1548.003")["indicator_key"] == "syslog_event"
+    assert has_recognized_indicator(row, ttp="T1548.003") is False
+    for form in (_SUDO_ROOT, "alice : PWD=/home/alice   USER=root   COMMAND=/usr/bin/id",
+                 "deploy : PWD=/ ; USER=root ; COMMAND=/usr/bin/systemctl restart app"):
+        sudo = {**row, "ProcessName": "sudo", "SyslogMessage": form}
+        assert normalize_row(sudo)["indicator_key"] == "privilege_escalation"
 
 
 def test_normalize_row_syslog_generic():

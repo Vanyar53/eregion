@@ -46,6 +46,8 @@ FAC = "glorfindel/actions.py"                 # the façade (A1)
 PIF = "glorfindel/providers/interface.py"
 R = "glorfindel/reassert.py"
 RQ = "glorfindel/reassert_quarantine.py"       # split out of reassert.py (RB1)
+RSD = "glorfindel/reassert_said.py"            # a block card's words, out of reassert.py (I3P)
+PER = "glorfindel/providers/azure/perimeter.py"
 C = "glorfindel/config.py"
 INS = "eregion_core/inscription.py"
 ENG = "annatar/runner/engine.py"
@@ -4914,7 +4916,7 @@ MUTANTS += [
     ("M1624", "a merged entry's own perimeter pair not checked: gone in silence (RB1)", VBL,
      '                if st in ("absent", "altered"):\n                    (missing if missing else held_missing)',
      '                if False:\n                    (missing if missing else held_missing)'),
-    ("M1625", "rules gone while the IP stays blocked said « n'est plus bloquée » (RB1)", R,
+    ("M1625", "rules gone while the IP stays blocked said « n'est plus bloquée » (RB1)", RSD,
      '    if v.get("verified") is True:\n        where =', '    if False:\n        where ='),
     ("M1626", "the NICs the perimeter still holds left out of the card (RB1)", VBL,
      "                    held_by.append(short)\n", ""),
@@ -5221,8 +5223,8 @@ _I4C = ("tests/unit/test_invariant_regressions.py::test_a_perimeter_lifted_by_a_
         f"{INVARIANTS}")
 MUTANTS += [
     ("M1965", "a bypassed block drops what is gone: the perimeter's pair lifted by a neighbour, unsaid (I4C)", VBL,
-     '                return {**self._block_bypassed(ip, bypass), **({"held_missing": held_missing} if held_missing else {})}\n',
-     "                return self._block_bypassed(ip, bypass)\n"),
+     '                return {**self._block_bypassed(ip, bypass), **({"held_missing": held_missing} if held_missing else {}),\n',
+     "                return {**self._block_bypassed(ip, bypass),\n"),
     ("M1966", "the reassertion reads a bypass with rules gone as nothing missing: silent (I4C)", R,
      "        verification.get(\"uncovered_nics\") or verification.get(\"missing_rules\")\n"
      "        or verification.get(\"held_missing\"))) or bool(\n",
@@ -6311,6 +6313,91 @@ MUTANTS += [
 TESTS.update({"M2151": f"{_L1Q_BACK} {INVARIANTS}", "M2152": f"{_L1Q_BACK} {INVARIANTS}",
               "M2153": f"{_RT}a_new_episode_never_compares_with_what_held_of_the_one_before",
               "M2155": f"{_RT}a_drift_better_under_a_pending_card_then_acknowledged_then_worse_is_said"})
+# I3P (#366): a block card never says « plus bloquée » where our perimeter still cuts the IP off —
+# an allow a customer's deny drops first lets nothing through; each NIC said where it stands,
+# bypassed or not; with none open nor unknown, « reste bloquée »; NICs unread, not known.
+_I3P_SEED = "tests/unit/test_invariant_regressions.py::test_the_reassertion_says_unblocked_where_our_perimeter_block_still_cuts"
+_I3P_NO_NIC = ("tests/unit/test_invariant_regressions.py::"
+               "test_the_reassertion_says_unblocked_naming_no_nic_where_our_perimeter_still_cuts")
+_I3P_UT = "tests/unit/test_glorfindel.py::test_"
+_I3P_HELD = f"{_I3P_UT}a_bypassed_nic_behind_the_perimeter_is_said_held_never_unblocked"
+_I3P_FIRST = f"{_I3P_UT}an_allow_a_customer_deny_drops_first_lets_nothing_through"
+_I3P_UNREAD = f"{_I3P_UT}rules_gone_on_unread_nics_are_never_said_unblocked"
+MUTANTS += [
+    ("M2180", "an allow a customer's deny drops first read as passing the perimeter: « n'est plus bloquée » "
+              "where it still cuts the IP off (I3P)", PER,
+     "                    found = [f for f in found if not _dropped_first(rules, f, ip, ips)]\n",
+     "                    pass\n"),
+    ("M2181", "a customer's deny after the allow counted as dropping it first: a perimeter passed said holding "
+              "(I3P)", NSG,
+     "        isinstance(getattr(r, \"priority\", None), int) and r.priority < prio\n",
+     "        isinstance(getattr(r, \"priority\", None), int) and r.priority != prio\n"),
+    ("M2182", "our own deny counted as the customer's before an allow: the perimeter said holding by an "
+              "isolation's rule (I3P)", NSG,
+     "        and not _rule_name(r).lower().startswith(\"glorfindel-\")\n", ""),
+    ("M2183", "a deny of an application security group counted as dropping the attacker's traffic first (I3P)",
+     NSG,
+     "        and not getattr(r, \"source_application_security_groups\", None)\n"
+     "        and not getattr(r, \"destination_application_security_groups\", None)\n", ""),
+    ("M2184", "a bypassed block drops where each NIC stands: a card naming no NIC says « plus bloquée » under "
+              "the perimeter (I3P)", VBL,
+     "                        \"open_nics\": open_nics, **said}\n", "                        }\n"),
+    ("M2185", "a NIC whose own block is passed never asked the perimeter: neither said held nor open (I3P)", VBL,
+     "                            _stand(t0)\n", "                            pass\n"),
+    ("M2186", "NICs unread left unsaid: rules gone on them said « n'est plus bloquée » (I3P, A0)", VBL,
+     "                    **({\"nics_unread\": nics_unread} if nics_unread else {}),\n", ""),
+    ("M2187", "no NIC open nor unknown, the perimeter holding: « l'IP n'est plus bloquée » of the whole VM (I3P)",
+     RSD, "    elif held:\n        tail = f\"l'IP reste bloquée sur", "    elif False:\n        tail = f\"l'IP reste bloquée sur"),
+    ("M2188", "rules gone on NICs unread said « n'est plus bloquée » (I3P, A0)", RSD,
+     "    elif v.get(\"nics_unread\"):\n", "    elif False:\n"),
+]
+TESTS.update({
+    "M2180": f"{_I3P_SEED} {_I3P_UT}the_perimeter_holds_behind_an_allow_a_customer_deny_drops_first {INVARIANTS}",
+    "M2181": f"{_I3P_FIRST} {INVARIANTS}", "M2182": _I3P_FIRST, "M2183": _I3P_FIRST,
+    "M2184": f"{_I3P_NO_NIC} {_I3P_HELD} {INVARIANTS}",
+    "M2185": f"{_I3P_HELD} {_I3P_UT}a_bypass_on_one_nic_is_said_beside_rules_gone_on_another {INVARIANTS}",
+    "M2186": _I3P_UNREAD, "M2188": _I3P_UNREAD,
+    "M2187": f"{_I3P_NO_NIC} {_I3P_HELD} {INVARIANTS}"})
+# I3P's review: a NIC not judged (its rules or their precedence unread) dropped beside a bypass —
+# the perimeter block took it for covered, the card left it out; a deny of some source ports, or
+# naming the attacker by a tag, counted as dropping all of it first. M2189–M2195.
+BLK = "glorfindel/providers/azure/blocks.py"
+_I3P_OFF = "tests/unit/test_invariant_regressions.py::test_a_perimeter_block_keeps_an_unread_nic_off_its_subnet_uncovered"
+_I3P_UNKNOWN = f"{_I3P_UT}a_nic_whose_rules_cant_be_read_is_named_unknown_beside_a_bypass"
+_I3P_PORTS = (f"{_I3P_UT}a_deny_drops_first_only_on_every_source_port_and_a_named_address "
+              f"{_I3P_UT}the_perimeter_holds_not_behind_a_deny_of_some_source_ports")
+MUTANTS += [
+    ("M2189", "a NIC whose rules can't be read dropped beside a bypass: taken for covered, unsaid (I3P, review)",
+     VBL, '                        undecided += [t0["nic_short"]] if t0 else []\n', ""),
+    ("M2190", "the perimeter block keeps as uncovered only the NICs said open: one unread said covered (I3P, "
+              "review)", BLK,
+     '                held = {*(check.get("blocked_nics") or []), *(check.get("held_by_perimeter") or [])}\n'
+     "                uncovered = [n for n in uncovered if n not in held]\n",
+     '                open_ = {*(check.get("open_nics") or []), *(check.get("uncovered_nics") or []),\n'
+     '                         *(check.get("perimeter_unread") or [])}\n'
+     "                uncovered = [n for n in uncovered if n in open_] if open_ else uncovered\n"),
+    ("M2191", "a deny of some source ports counted as dropping all of the attacker's traffic (I3P, review)", NSG,
+     "            or not _covers_all_ports(rule) or not _every_source_port(rule)):\n",
+     "            or not _covers_all_ports(rule)):\n"),
+    ("M2192", "the attacker named by a tag (VirtualNetwork read as « private ») or by no prefix at all (I3P, "
+              "review)", NSG,
+     "    if not _names_the_address(rule, attacker, ip):\n", "    if not _side_covers(rule, attacker, [ip]):\n"),
+    ("M2193", "a NIC whose rules can't be read named only after « reste bloquée » elsewhere (I3P, review, A0)", RSD,
+     "    elif unsure or unknown:\n", "    elif unsure:\n"),
+    ("M2194", "a drift card's record leaves out the NICs not judged: one turned open later, « not worse » (I3P, "
+              "review)", R,
+     '            "unsure": sorted((v.get("perimeter_unread") or []) + (v.get("nics_unknown") or [])),\n',
+     '            "unsure": sorted(v.get("perimeter_unread") or []),\n'),
+    ("M2195", "a NIC whose own block holds never recorded as proven: the perimeter block says it uncovered (I3P, "
+              "review)", VBL, '                        proven += [t0["nic_short"]] if t0 else []\n', ""),
+    ("M2196", "a customer's deny of one of the NIC's addresses counted as dropping the attacker's traffic to all "
+              "of them (I3P, second review)", NSG,
+     "    return all(_side_covers(rule, own, [a]) for a in ips)          # each address, not one\n",
+     "    return any(_side_covers(rule, own, [a]) for a in ips)          # each address, not one\n"),
+]
+TESTS.update({"M2189": f"{_I3P_UNKNOWN} {_I3P_OFF}", "M2190": _I3P_OFF, "M2191": _I3P_PORTS,
+              "M2192": _I3P_PORTS, "M2193": _I3P_UNKNOWN, "M2194": _I3P_UNKNOWN, "M2195": _I3P_OFF,
+              "M2196": _I3P_PORTS})
 # DOC1 (#365): Dagorlad's captures, from the sample data only — the renderer's guards
 # (scripts/console_shots.py): another sample, an identifier in it, the server's directory, its
 # environment and its connections, the video kept outside the repository.

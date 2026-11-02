@@ -5,6 +5,8 @@ VM's entry records may have been the gone VM's.
 """
 from __future__ import annotations
 
+from glorfindel.providers.azure.nsg import _dropped_first
+
 
 class PerimeterMixin:
     """The merged perimeter block (part of AzureConnector)."""
@@ -26,7 +28,10 @@ class PerimeterMixin:
         """'holds' | 'no' | 'unknown': a perimeter block of `ip` cuts it off this NIC — the
         entry's own or another VM's of the same subnet (one rule for the whole subnet, its
         name the IP alone): on an NSG that governs the NIC now, both rules present and
-        whole, no allow before them letting the threat through. One holds: it holds."""
+        whole, no allow before them letting the threat through. One holds: it holds.
+        An allow a customer's deny before it already drops for the attacker lets nothing
+        through: read as passing, the card said « n'est plus bloquée » of a NIC the
+        perimeter still cut off (I3P, #366)."""
         if t0 is None:
             return "no"
         rule, out = self._block_rule_prefix(ip), "no"
@@ -36,6 +41,9 @@ class PerimeterMixin:
             if st == "present":
                 found = self._shadowed_deny(cache, v["nsg_rg"], v["nsg_name"], rule, inbound_src=[ip],
                                             inbound_dst=ips, outbound_src=ips, outbound_dst=[ip], port=port)
+                if found is not None:
+                    rules = self._list_rules(cache, v["nsg_rg"], v["nsg_name"])
+                    found = [f for f in found if not _dropped_first(rules, f, ip, ips)]
                 if found is not None and not self._threat_open(found):
                     return "holds"
                 st = "unknown" if found is None else st

@@ -418,9 +418,10 @@ class BlockMixin:
             if check.get("verified") is True:
                 uncovered = []
             elif check.get("verified") is False:
-                open_ = {*(check.get("open_nics") or []), *(check.get("uncovered_nics") or []),
-                         *(check.get("perimeter_unread") or [])}
-                uncovered = [n for n in uncovered if n in open_] if open_ else uncovered
+                # Off the list only on a proof that it holds (I3P, review): read as « not open »,
+                # a NIC whose rules couldn't be read was said covered.
+                held = {*(check.get("blocked_nics") or []), *(check.get("held_by_perimeter") or [])}
+                uncovered = [n for n in uncovered if n not in held]
             else:
                 unread = unread or check.get("error") or "illisible"
         # Same precedence report as the VM-scoped block (verify fails on it as well).

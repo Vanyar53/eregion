@@ -7238,7 +7238,9 @@ MUTANTS += [
     ("M2816", "a line without end, past the bound, waited for at every poll (SEC8)", CRD,
      "            if len(data) - pos > LINE_BYTES:", "            if False:"),
     ("M2817", "a refused entry of runs/ said again at every poll (SEC8)", CRD,
-     "        if self._refused.get(path) != why:", "        if True:"),
+     ("            if not regular and path in self._refused:\n                continue",
+      "        if self._refused.get(path) != why:"),
+     ("            if False:\n                continue", "        if True:")),
     ("M2818", "no rate per writer: one file takes the whole channel (SEC8)", CRD,
      "            if self._all >= self.total or self._by.get(writer, 0) >= self.per_writer:\n",
      "            if self._all >= self.total:\n"),
@@ -7299,6 +7301,27 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": SEC8_TESTS for n in range(2810, 2837) if n != 2819})
 TESTS.update({mid: "tests/unit/test_arm_urls.py" for mid in ("M2819", "M2837", "M2838", "M2839")})
+
+# SEC8, after its review (M2965–M2969): the VM's first-detected card, a file truncated or
+# replaced, the files opened per poll, a writer whose minute is spent.
+MUTANTS += [
+    ("M2965", "`glorfindel restore` takes the restore card's moment, not the VM's first detection (SEC8)", RPL,
+     "    return min(cards, key=_first_seen) if cards else None\n",
+     '    return min([e for e in cards if e.get("action") == "restore_from_backup"] or cards,\n'
+     "               key=_first_seen) if cards else None\n"),
+    ("M2966", "a file of runs/ truncated: its new lines never read (SEC8)", CRD,
+     "        restarted = (ino is not None and st.st_ino != ino) or st.st_size < offset\n",
+     "        restarted = (ino is not None and st.st_ino != ino)\n"),
+    ("M2967", "a file of runs/ replaced: read from the old one's offset (SEC8)", CRD,
+     "        restarted = (ino is not None and st.st_ino != ino) or st.st_size < offset\n",
+     "        restarted = st.st_size < offset\n"),
+    ("M2968", "every file of runs/ opened at every poll (SEC8)", CRD,
+     "            if opened >= FILES_PER_POLL:\n", "            if False:\n"),
+    ("M2969", "a writer whose minute is spent read all the same (SEC8)", CRD,
+     "            if writer_left <= 0 and regular and st.st_ino == self._ino.get(path) \\\n",
+     "            if False and regular and st.st_ino == self._ino.get(path) \\\n"),
+]
+TESTS.update({f"M{n}": SEC8_TESTS for n in range(2965, 2970)})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to

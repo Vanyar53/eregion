@@ -52,7 +52,9 @@ GET  /annatar, /gothmog               → 308 vers /dagorlad?view=runs&injector=
 GET  /runs/<run_id>                   → 302 vers /dagorlad?view=runs&run=…
 GET  /atelier, /api/atelier/*         → 308 vers / et /api/* (jusqu'à la 1.0)
 GET  /api/sections                    → Glorfindel, chaque injecteur actif ou grisé et pourquoi, read_only
-GET  /api/indicators                  → les cinq indicateurs (30 jours) : contenir, contenu seul (+ shadow), à tort, couverture, dernière preuve
+GET  /api/indicators                  → les cinq indicateurs (30 jours) : contenir et contenu seul (+ shadow) sur le trafic réel (OV1), à tort,
+     couverture et dernière preuve des exercices
+GET  /api/dagorlad/indicators         → contenir et contenu seul des exercices (les runs, BL1 ; pannes prises pour une attaque) — la bande des Runs
 GET  /api/catalog[?kind=technique|fault]   → techniques + pannes du catalogue
 GET  /api/coverage[?kind=technique|fault]  → la matrice de couverture (C1) : par entrée, dernier run, dernière preuve, état, évolution
 GET  /api/exercises?since=7d[&injector=…]  → fenêtres d'exercice + cycles, cartes et rapport de run de chacune

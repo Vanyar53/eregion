@@ -191,7 +191,9 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           (fenêtre, rapport, campagne), ou ce que --sections / EREGION_CONSOLE_SECTIONS choisit
   cli.py                → `eregion console [--host] [--port] [--sections]`, `eregion coverage [--json] [--check]`
   indicators.py         → les cinq indicateurs de la finalité (UI-2) : sur 30 jours, rapports de run, cycles de la
-                          watch, cartes, catalogue — jamais les fenêtres ; `GET /api/indicators`
+                          watch, cartes, catalogue ; contenir et contenu seul sur le trafic réel (`real`, OV1 : les
+                          cycles hors exercice, la fin de BL1), ceux des exercices (`compute`) pour Dagorlad ;
+                          `GET /api/indicators`, `GET /api/dagorlad/indicators`
   coverage.py           → C1 : la matrice de couverture — par technique du catalogue et par panne, dernier run,
                           dernière preuve, état (proven, aging, stale, regressed, unproven, never), évolution sur
                           douze semaines ; toute l'histoire des rapports et des cycles ; nourrit la couverture et

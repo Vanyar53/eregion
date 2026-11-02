@@ -22,8 +22,8 @@ import logging
 from datetime import datetime, timezone
 
 from glorfindel.reassert_cards import (
-    drift_baseline, drift_meet, drift_over, drift_said, episode, narrow_drift, new_pass, say_bypass, say_left,
-    say_unreadable_states, say_unverified, unrecorded, unverified_over, unverified_released,
+    drift_baseline, drift_meet, drift_over, drift_said, episode, narrow_drift, new_pass, same_sid, say_bypass,
+    say_left, say_unreadable_states, say_unverified, unrecorded, unverified_over, unverified_released,
 )
 from glorfindel.reassert_quarantine import _report_altered_quarantines
 from glorfindel.reassert_said import _block_drift
@@ -44,9 +44,12 @@ def _missing(verification: dict) -> bool:
 def _alert_id(vm: str, rid: str, ip: str = "") -> str:
     """One card per VM (and IP), keyed by the resource id too: keyed by name, an alert
     about `web` in one group closed the card of its homonym in another, which then stayed
-    "already alerted" with no card at all (A0, invariant machine)."""
+    "already alerted" with no card at all (A0, invariant machine). The name in lowercase:
+    Azure's names are case-insensitive, and the state of a VM taken up again by its lowercase
+    id (Log Analytics' `_ResourceId`) names it so — the card said under its canonical name was
+    neither closed nor read « said », the disappearance said again at every pass (I3C)."""
     from glorfindel.actions import _rid_hash
-    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
+    return f"reassert-{vm.lower()}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")
 
 
 def _alert(signal_id: str, **kwargs) -> None:
@@ -54,7 +57,8 @@ def _alert(signal_id: str, **kwargs) -> None:
     the pending card of the same action/resource/type and keeps its text: the second
     removal ("no longer isolated, not re-applied") was folded into the first card, which
     still said "re-applied once", and no notification went out (validation, 06/10).
-    A card of the former name-only key is replaced too, when it is this VM's."""
+    A card of the former name-only key is replaced too, when it is this VM's — and one said
+    under another case of its name (`same_sid`, I3C)."""
     from glorfindel import escalations
     rid = (kwargs.get("resource_id") or "").rstrip("/").lower()
     ip = (kwargs.get("action_params") or {}).get("ip", "")
@@ -62,7 +66,7 @@ def _alert(signal_id: str, **kwargs) -> None:
     legacy = f"reassert-{vm}" + (f"-{ip}" if ip else "")
     for e in escalations.pending():
         same_vm = (e.get("resource_id") or "").rstrip("/").lower() == rid
-        if e.get("signal_id") == signal_id or (same_vm and (e.get("signal_id") or "").lower() == legacy):
+        if same_sid(e.get("signal_id"), signal_id) or (same_vm and (e.get("signal_id") or "").lower() == legacy):
             # Glorfindel's closure, with its note: never read as acknowledged (L2C, review).
             escalations.resolve(e["id"], note="Remplacée : une nouvelle alerte de réaffirmation la suit.")
     escalations.record(signal_id=signal_id, escalation_type="verification_failed", **kwargs)

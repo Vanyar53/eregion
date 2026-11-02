@@ -60,6 +60,15 @@ _MATERIAL_CONFIDENCE_DELTA = 0.1
 # silent fold. So is a severity that rises (high → critical).
 COMPROMISE_MARK = "Compte peut-être compromis"
 _SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+# I3G (#446): the signal ids of what the reassertion says (glorfindel/reassert.py,
+# reassert_cards.py, reassert_quarantine.py). Its cards never fold into a card of another
+# origin — the graph's, say —, nor one of those into its own: see `record`.
+_REASSERTION = ("reassert-", "state-unreadable-")
+
+
+def _reassertion(signal_id) -> bool:
+    """A card the reassertion wrote: its signal id, whatever its case (I3C)."""
+    return str(signal_id or "").lower().startswith(_REASSERTION)
 
 
 _ACTION_LABELS = {
@@ -157,6 +166,11 @@ def record(
     A `control_plane_change` card (AL1) never merges: each is one operation. Nor an
     `identity_change` card (C2): each is one finding on one identity. Nor two cards whose
     action names two addresses (`action_params.ip`, SEC2): one card per address.
+    Nor a card of the reassertion's (`reassert-…`, `state-unreadable-…`) and a card of
+    another origin, either way (I3G): the graph's `verification_failed` card on a VM, still
+    pending, took in the alert that its isolation vanished — its text, kept or overwritten,
+    no notification, and the reassertion, which reads its own ids, never found it; folded
+    the other way, the graph's re-fire overwrote the alert's text, its id still read « said ».
     """
     rid_lower = resource_id.lower()
     now = datetime.now(timezone.utc).isoformat()
@@ -184,6 +198,9 @@ def record(
                 # Two addresses are two cards (SEC2): folded into one, its approval
                 # blocked the first address only, the other never said.
                 and (e.get("action_params") or {}).get("ip") == (action_params or {}).get("ip")
+                # One origin, one card (I3G): what the reassertion says is said by its own card,
+                # with its text and its notification — never folded into the graph's.
+                and _reassertion(e.get("signal_id")) == _reassertion(signal_id)
             ):
                 e["occurrences"] = int(e.get("occurrences", 1)) + 1
                 e["last_seen"] = now

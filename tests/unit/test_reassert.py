@@ -2162,3 +2162,137 @@ def test_a_block_of_an_ipv6_in_capitals_has_its_own_cards():
         say_left("vm", _RID, _IP6, entry, report, _RID)
         said.append(len(report))
     assert said == [1, 0, 0] and len(_left_cards()) == 1
+
+
+# ── I3G (#446): an alert of the reassertion never folds into a card of the graph ──────────
+
+_GRAPH_TEXT = "Vérification après action en échec : une carte reste ouverte."
+_GRAPH_SID = "rule-ssh-brute-force-abcdef12"
+
+
+def _graph_card(kind: str, ip: str = _IP) -> str:
+    """The graph's own card on the VM, as `escalate_to_human` writes it after an action whose
+    check failed: its signal id (the RulePoller's), its confidence, the IP and port for a block."""
+    return escalations.record(
+        signal_id=_GRAPH_SID, resource_id=_RID,
+        action="isolate_vm" if kind == "isolation" else "block_suspicious_ip",
+        escalation_type="verification_failed", reason=_GRAPH_TEXT, confidence=0.9, severity="high",
+        action_params=None if kind == "isolation" else {"ip": ip, "port": 22}, rule_name="ssh-brute-force")
+
+
+def _notified(monkeypatch) -> list[dict]:
+    """The cards the operator was notified of (the webhook or the bot's thread)."""
+    sent: list[dict] = []
+    monkeypatch.setattr(escalations, "_notify", lambda esc: sent.append(dict(esc)))
+    return sent
+
+
+@pytest.mark.parametrize("theirs", ["reassert-vm-5a64476b", "REASSERT-Vm-5a64476b", "reassert-bypass-iso-vm-x-1",
+                                    "state-unreadable-0a1b2c3d"])
+@pytest.mark.parametrize("graph_first", [True, False])
+def test_a_card_of_the_reassertion_never_folds_into_one_of_another_origin(monkeypatch, theirs, graph_first):
+    """I3G, at the store: a card of the reassertion's (its ids, whatever their case) and a card
+    of another origin — same action, resource (any case), type, IP — are two cards, each with
+    its text, each notified. Folded, the graph's card took in the alert (its text overwritten at
+    the first fold, the confidence moving from 0.9 to 0; kept at the next, no notification), and
+    the other way, the graph's re-fire overwrote the alert, whose id still read « said »."""
+    sent = _notified(monkeypatch)
+    cards = [dict(signal_id=_GRAPH_SID, reason=_GRAPH_TEXT, confidence=0.9),
+             dict(signal_id=theirs, reason="L'isolation de vm a disparu d'Azure.", confidence=0.0)]
+    for card in (cards if graph_first else cards[::-1]):
+        escalations.record(resource_id=_RID if card is cards[0] else _RID.lower(), action="isolate_vm",
+                           escalation_type="verification_failed", **card)
+    said = {e["signal_id"]: e for e in escalations.pending()}
+    assert set(said) == {_GRAPH_SID, theirs}
+    assert all(said[c["signal_id"]]["reason"] == c["reason"] and said[c["signal_id"]]["occurrences"] == 1
+               for c in cards)
+    assert sorted(e["signal_id"] for e in sent) == sorted(said)
+
+
+def test_a_card_still_folds_into_one_of_its_own_origin():
+    """What the store folded before still folds: the graph's re-fires, whatever their signal ids
+    (the RulePoller's, a run's), and a re-fire of the reassertion's own card."""
+    for sid in (_GRAPH_SID, "watch-ssh-brute-force-1700000000"):
+        escalations.record(signal_id=sid, resource_id=_RID, action="isolate_vm",
+                           escalation_type="verification_failed", reason=_GRAPH_TEXT)
+    for _ in range(2):
+        escalations.record(signal_id="reassert-vm-5a64476b", resource_id=_RID, action="isolate_vm",
+                           escalation_type="verification_failed", reason="L'isolation de vm a disparu d'Azure.")
+    assert sorted(e["occurrences"] for e in escalations.pending()) == [2, 2]
+
+
+def _gone_beside(kind: str):
+    """Gone; put back (outside human_only), taken off again before the next pass — `again()`."""
+    c = _gone(kind)
+    c.isolate_vm.side_effect = lambda rid: {"status": "isolated"}
+    verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    gone = dict(verify.return_value)
+
+    def again():
+        verify.return_value = dict(gone)
+    c.again = again
+    return c
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_disappearance_beside_the_graphs_card_is_said_by_its_own(monkeypatch, kind, mode):
+    """I3G (#446), measured by I3C's review: the graph's `verification_failed` card on the VM,
+    pending, took in every alert of the reassertion. In human_only, the disappearance said again
+    at every pass in the report (`occurrences` up to 5), never notified; outside it, the card
+    stayed « reposée une fois », and the second disappearance (« ne la repose pas ») was folded
+    in, its text unchanged, no notification — the VM no longer isolated (or blocked): an alert
+    gone silent. Each alert now has its own card, its text and its notification; the graph's
+    card keeps its own."""
+    graph = _graph_card(kind)
+    sent = _notified(monkeypatch)
+    c = _gone_beside(kind)
+    autonomy = AutonomyConfig(default=mode)
+    passes = []
+    for _ in range(4):
+        passes.append(reassert_active(c, autonomy))
+        c.again()
+    said = [r for report in passes for r in report]
+    assert said and [len(p) for p in passes[2:]] == [0, 0], f"said again at every pass: {passes}"
+    for r in said:
+        card = next((e for e in escalations.all_escalations() if e["reason"] == r["detail"]
+                     and e["signal_id"].startswith("reassert-")), None)
+        assert card is not None, f"« {r['detail'][:60]}… » has no card of its own"
+        assert any(e["id"] == card["id"] for e in sent), f"« {r['detail'][:60]}… » never notified"
+    if mode == "non_disruptive":
+        assert [r["outcome"] for r in said][0] == "reapplied" and len(said) == 2
+        (last,) = [e for e in escalations.pending() if e["signal_id"].startswith("reassert-")]
+        assert "repose pas" in last["reason"] or "réécrit pas" in last["reason"]
+    (mine,) = [e for e in escalations.all_escalations() if e["id"] == graph]
+    assert (mine["status"], mine["reason"], mine["occurrences"]) == ("pending", _GRAPH_TEXT, 1)
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_the_graphs_card_after_an_alert_never_overwrites_it(kind):
+    """The other way: the alert said, pending; the graph acts again on a new detection, its check
+    fails — its card was folded into the alert, overwriting its text (the confidence moved), the
+    alert's id kept: the reassertion read its disappearance « said », with the graph's words on
+    its card. Two cards, each with its text."""
+    c = _gone_beside(kind)
+    reassert_active(c, _HUMAN)
+    (alert,) = escalations.pending()
+    _graph_card(kind)
+    assert reassert_active(c, _HUMAN) == []
+    said = {e["signal_id"]: e["reason"] for e in escalations.pending()}
+    assert said == {alert["signal_id"]: alert["reason"], _GRAPH_SID: _GRAPH_TEXT}
+
+
+def test_a_drift_card_of_the_name_only_key_for_an_ipv6_in_capitals_is_closed_by_the_next():
+    """Seen in passing (I3C's review, second round): the former key, `reassert-{vm}-{ip}` (before
+    A0), kept the IP as written, the id read in lowercase. A card of it still pending for an IPv6
+    in capitals was never closed: the new alert folded into it, under its old id."""
+    escalations.record(signal_id=f"reassert-vm-{_IP6}", resource_id=_RID, action="block_suspicious_ip",
+                       escalation_type="verification_failed", reason="Dite par une version antérieure.",
+                       action_params={"ip": _IP6})
+    _save_block_state("vm", _IP6, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    (old,) = [e for e in escalations.all_escalations() if e["signal_id"] == f"reassert-vm-{_IP6}"]
+    (new,) = escalations.pending()
+    assert old["status"] == "resolved" and old["resolution"] and "antérieure" not in new["reason"]

@@ -1640,6 +1640,7 @@ sur une semaine, `P15D` pour les règles (la base de connexions remonte à 14 jo
 ```bash
 rule() { python -c "import sys,yaml; print(next(r['query'] for r in yaml.safe_load(open('glorfindel/rules/azure/detection_rules.yaml'))['rules'] if r['name']==sys.argv[1]))" "$1"; }
 for r in nsg-change-outside-glorfindel role-assignment-write snapshot-by-unexpected-caller \
+         run-command-by-glorfindel-outside-isolation \
          entra-credential-added entra-app-consent entra-privileged-role-assigned entra-sp-unusual-signin; do
   # P15D : la base d'entra-sp-unusual-signin lit ago(14d) .. ago(1h) ; chaque règle borne elle-même sa fenêtre
   echo "== $r"; az monitor log-analytics query -w <customerId> --analytics-query "$(rule $r)" --timespan P15D -o table
@@ -1648,7 +1649,9 @@ done
 
 Attendu : au moins une ligne par opération de test (`entra-sp-unusual-signin` après les 3 jours de
 base), et sur H0 la carte correspondante (`control_plane_change`, `identity_change`) ;
-`glorfindel rules check --live` sur H0 dit `ok` pour les sept.
+`glorfindel rules check --live` sur H0 dit `ok` pour les huit. `run-command-by-glorfindel-outside-isolation`
+(SID1) ne fait **aucune** carte pour une isolation de gondolin par H0 (sa coupure des sessions), ni pour
+un Run Command de l'opérateur ou d'Annatar (une autre identité) ; sa requête montre pourtant leurs lignes.
 
 **La latence, de l'événement à l'ingestion** (le T0 noté donne le bout en bout ; la carte de H0
 ajoute l'intervalle de la règle, 60 s pour AL1, 120 à 300 s pour C2 ; `--timespan P1D`) :
@@ -1656,7 +1659,7 @@ ajoute l'intervalle de la règle, 60 s pour AL1, 120 à 300 s pour C2 ; `--times
 ```kusto
 AzureActivity
 | where TimeGenerated > ago(6h)
-| where OperationNameValue has_any ("SECURITYRULES", "ROLEASSIGNMENTS", "SNAPSHOTS", "BEGINGETACCESS")
+| where OperationNameValue has_any ("SECURITYRULES", "ROLEASSIGNMENTS", "SNAPSHOTS", "BEGINGETACCESS", "RUNCOMMAND")
 | extend Ingested = ingestion_time(), Delay_s = datetime_diff('second', ingestion_time(), TimeGenerated)
 | project TimeGenerated, Ingested, Delay_s, OperationNameValue, ActivityStatusValue, CorrelationId
 | order by TimeGenerated asc
@@ -1735,6 +1738,8 @@ est un lot de la session Glorfindel ; ID1 ne le fait pas.
 | **A4** | Les écritures de Glorfindel (isolation, levée) portent son `appid`/`oid` dans `Claims` et sont écartées | une isolation par une watch locale, requête A5 | rien | comparer `Caller`, `CallerAppId`, `CallerObjectId` à `GLORFINDEL_OWN_CALLERS` ; corriger la lecture de l'identité |
 | **A5** | Une opération = plusieurs lignes (`Start`, `Accept`, `Success`) d'un même `CorrelationId` : une carte | requête A5 | rien | deux cartes pour une opération : revoir la clé de déduplication |
 | **A6** | `Claims` porte `appid` et `objectidentifier`, pour un utilisateur comme pour un principal | requête A5 (`AppIds`, `ObjectIds` non vides) | rien | l'identité de Glorfindel n'est lue que par `Caller` : le dire dans l'adaptateur |
+| **A7** | La requête de `run-command-by-glorfindel-outside-isolation` est acceptée telle quelle (`summarize arg_max(TimeGenerated, *), Started = min(TimeGenerated) by …`), et `Started` d'une coupure tombe dans `[coupure − 120 s, coupure + 420 s]` de l'heure notée dans l'état (`drains_at`) (SID1) | `glorfindel rules check --live` ; une isolation de gondolin par H0, puis la requête de la règle et l'état de la VM | rien | une requête refusée : la corriger ; hors de la fenêtre : relever `DRAIN_BEFORE_S`/`DRAIN_AFTER_S` (`own_run_command.py`) |
+| **A8** | Une coupure des sessions est **une** opération Run Command (un `CorrelationId`), même quand le SDK réessaie (SID1 : une coupure pour une opération) | la même isolation, requête A5 sur `RUNCOMMAND` | rien | deux opérations pour une coupure : une carte critique à tort ; rattacher par l'heure seule, ou noter chaque essai |
 | **E1** | L'apply du tenant passe sous `az login` avec Administrateur de la sécurité actif, sans rôle Azure à `/providers/Microsoft.aadiam` | l'apply | rien | poser le paramètre au portail (mêmes nom et catégories), puis `terraform import 'azurerm_monitor_aad_diagnostic_setting.entra[0]' /providers/Microsoft.AADIAM/diagnosticSettings/diag-celebrimbor-entra` |
 | **E2** | `ServicePrincipalSignInLogs` s'envoie sans P1/P2 (la page des licences : Free « Yes ») — la doc de C2 supposait P1/P2 | l'apply, puis `AADServicePrincipalSignInLogs \| take 1` après la connexion du principal de test | corriger la doc de C2 (aucune licence) | retirer la catégorie, `entra-sp-unusual-signin` dite aveugle sans P1/P2 ; les trois autres règles gardent `AuditLogs` |
 | **E3** | Entra arrive en quelques minutes (lots d'environ 5 min), sous `expected_latency_s: 1800` et `ago(1h)` | latence, p95 sur 24 h | rien | relever `expected_latency_s` ; élargir la fenêtre au-delà de 45 min |

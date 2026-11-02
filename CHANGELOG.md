@@ -4,6 +4,14 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added
+- **Glorfindel's own identity watched: a Run Command outside an isolation it decided is a critical card** (SID1, #409, 02/11; `docs/glorfindel.md`, « Notre propre identité surveillée »; `docs/design/modele-de-menace.md` §5). H0 keeps the response role on the bench, `runCommand` included (the session drain of an isolation, `ss -K`: an NSG does not cut an established connection); its managed identity is shared by the watch, the console and the bot. Rather than take the right away, Glorfindel reads its own use of it in the Activity Log.
+  - **A shipped rule**, `run-command-by-glorfindel-outside-isolation` (`azure_activity`, T1651): every Run Command of the hour, one row per operation, the time of its first line (`Started`), failures kept, and `WatchedCaller = "glorfindel"` — another caller's row is not this rule's (a client's own rule on Run Command, without the column, keeps every caller).
+  - **Attached, or a card** (`glorfindel/providers/azure/own_run_command.py`): `isolate_vm` now records in the isolation state when it asked for the drain (`drains_at`, the last 20; none on Windows, where no command runs). Glorfindel's Run Command is dropped only when it started within [drain − 120 s, drain + 420 s] of a drain recorded on that VM, one drain for one operation (by `CorrelationId`, kept across polls; drains remembered 2 h after the state is gone, forgotten by a restart). Otherwise it is kept, marked `GlorfindelRunCommand` with its reason — `no_isolation`, `outside_drain`, `state_unreadable`, `time_unreadable`, `identity_unknown` (A0: an unreadable state, a time or an identity that can't be read is a card) — and critical, the summary card past the cap included.
+  - **Decided by the code**, like every AL1 row: `control_plane_change`, no model, no investigation, no action — none against the VM the command ran on, the card anchored there included; never one click. The card names the VM and the reason, recalls that a `glorfindel restore` also runs a Run Command, and gives the steps (what the command ran, the host, the right withdrawn during the inquiry, the credentials renewed).
+  - **Threat model and roadmap**: the mitigation of the shared identity written in §5 (what it sees, its delay: the Activity Log's ingestion — it says, after the fact; it does not prevent), and the **signed action queue** (only the watch holds the write role) a prerequisite before any VM off the bench, in « Ouvert » and in the 1.0 criteria of `ROADMAP.md`. Bench hypotheses A7, A8 in `docs/operations.md`. The rule sees nothing until the Activity Log reaches the bench's workspace (ID1, #281).
+  - Tests: `tests/unit/test_own_run_command.py` (a fake Activity Log and real isolation states); mutants M2790–M2809; M810 re-anchored.
+
 ## [0.4.10] — 2026-11-02 — "held to its word"
 
 ### Added

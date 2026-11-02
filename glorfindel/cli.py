@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from eregion_core.models import glorfindel_model
+# #205: empty AZURE_CLIENT_* dropped before any Azure call — in the shared core since BL1c,
+# where the console and the analysis commands take it too.
+from eregion_core.identity import drop_empty_service_principal_env as _drop_empty_service_principal_env
 
 import contextlib
 import json
@@ -209,23 +212,6 @@ class _GlorfindelCli(click.Group):
                 )
             console.print("[dim]  (GLORFINDEL_DEBUG=1 pour la stack complète)[/dim]")
             ctx.exit(1)
-
-
-_SERVICE_PRINCIPAL_VARS = ("AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID")
-
-
-def _drop_empty_service_principal_env(environ=os.environ) -> list[str]:
-    """Unset AZURE_CLIENT_ID/SECRET/TENANT_ID when they are empty; returns the names dropped.
-
-    azure-identity's EnvironmentCredential takes an empty variable for a set one (`is not
-    None`): docker compose passes `${AZURE_CLIENT_ID:-}` as "" when the host has no service
-    principal, and DefaultAzureCredential then fails on ClientSecretCredential("") instead
-    of reaching the VM's managed identity. Measured on the hosted Glorfindel (H0), 16/10.
-    """
-    dropped = [k for k in _SERVICE_PRINCIPAL_VARS if k in environ and not environ[k].strip()]
-    for k in dropped:
-        del environ[k]
-    return dropped
 
 
 @click.group(cls=_GlorfindelCli)

@@ -2128,7 +2128,19 @@ def _slim_cycle(rec: dict) -> dict | None:
         # BL1: what the share contained alone reads besides (analysis/containment.py).
         "signal_id": sig.get("signal_id", ""), "escalation_type": outcome.get("escalation_type", ""),
         "unverified": bool(outcome.get("unverified")),
+        # OV1: real traffic or an exercise, as the watch wrote it (none before OV1: inferred).
+        "source": str(rec.get("source") or ""), "exercise_run": str(rec.get("exercise_run") or ""),
+        # OV1: who is behind the detection — the rule's address column — so that one attacker
+        # on one VM is one incident, whatever its cycles. Never shown.
+        "attacker": _attacker(sig),
     }
+
+
+def _attacker(sig: dict) -> str:
+    """The address the rule's row names (``SourceIP``, ``CallerIpAddress``) — or ""."""
+    raw = sig.get("raw_signal") if isinstance(sig.get("raw_signal"), dict) else {}
+    row = raw.get("first_result_row") if isinstance(raw.get("first_result_row"), dict) else {}
+    return next((str(row[k])[:64] for k in ("SourceIP", "CallerIpAddress") if row.get(k)), "")
 
 
 def _watch_cycles(since_ts: float | None) -> list[dict]:
@@ -2474,35 +2486,70 @@ def _manual_liftings(since: float) -> list:
 
 @app.get("/api/indicators")
 async def indicators() -> dict:
-    """The five indicators of the finality, for the overview (UI-2, #206): computed from the run
-    reports, the watch's cycles, the cards and the catalog over 30 days — never from the
-    exercise windows, emptied after 7 (eregion_console/indicators.py). The coverage and the
-    last proof are fed by the coverage matrix too (C1): the regressed techniques, and the age
-    of the last proof over the whole history."""
-    import time as _time
-    from datetime import timedelta
+    """The five indicators of the finality, for the overview (UI-2, #206) over 30 days: the time
+    to contain and the share contained alone on real traffic (OV1, #399: the watch's cycles
+    outside any exercise); the wrong rate on real traffic (the cards' verdicts); the coverage and
+    the last proof from the exercises' runs, fed by the coverage matrix too (C1: the regressed
+    techniques, and the age of the last proof over the whole history)
+    (eregion_console/indicators.py)."""
     from eregion_console import coverage
     from eregion_console import indicators as ind
-    from glorfindel import escalations as esc_module
     from glorfindel.config import confidence_threshold
     now = datetime.now(timezone.utc)
     since = ind.since_window(now)
     cat = _catalog_entries().get("entries", [])
 
     def gather() -> dict:
-        runs = ind.read_runs(_run_reports(), since.timestamp())
-        cycles = _watch_cycles(since.timestamp())
-        every = esc_module.all_escalations()
-        cards = [e for e in every if e.get("exercise_run")]
-        r30 = esc_module.observation_report(since=since)
-        r7 = esc_module.observation_report(since=now - timedelta(days=7))
-        t = _time.time()
-        # A run dated in the future is left out here as in the matrix (C1).
-        runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]
-        out = ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
-                          r7.get("disruptive") or {}, confidence_threshold(), t,
-                          all_cards=every, liftings=_manual_liftings(since.timestamp()))
+        runs, cycles, every, out, t = _exercise_indicators(since, now, cat)
+        # OV1 (#399): the time to contain and the share contained alone on real traffic — the
+        # exercises' are Dagorlad's (/api/dagorlad/indicators). The wrong rate was real already;
+        # the coverage and the last proof are proofs of exercise, said so on the page.
+        real = ind.real(cycles, every, confidence_threshold(), since.timestamp(), now=t,
+                        windows=_read_windows(), runs=runs, liftings=_manual_liftings(since.timestamp()))
+        out.update(contain=real["contain"], alone=real["alone"], t0=real["t0"])
         return coverage.feed(out, coverage_matrix(t))
+    return await asyncio.to_thread(gather)
+
+
+def _exercise_indicators(since: datetime, now: datetime, cat: list[dict]):
+    """The indicators of the exercises' runs over 30 days (``indicators.compute``): what the
+    overview keeps of them (the wrong rate, the coverage, the last proof) and what Dagorlad shows
+    (the time to contain and the share contained alone of the runs). Returns the runs, the
+    watch's cycles, every card, the indicators and the time."""
+    import time as _time
+    from datetime import timedelta
+    from eregion_console import coverage
+    from eregion_console import indicators as ind
+    from glorfindel import escalations as esc_module
+    from glorfindel.config import confidence_threshold
+    runs = ind.read_runs(_run_reports(), since.timestamp())
+    cycles = _watch_cycles(since.timestamp())
+    every = esc_module.all_escalations()
+    cards = [e for e in every if e.get("exercise_run")]
+    r30 = esc_module.observation_report(since=since)
+    r7 = esc_module.observation_report(since=now - timedelta(days=7))
+    t = _time.time()
+    # A run dated in the future is left out here as in the matrix (C1).
+    runs = [r for r in runs if r["at"] <= t + coverage.FUTURE_SKEW_S]
+    out = ind.compute(runs, cycles, cards, cat, r30.get("disruptive") or {},
+                      r7.get("disruptive") or {}, confidence_threshold(), t,
+                      all_cards=every, liftings=_manual_liftings(since.timestamp()))
+    return runs, cycles, every, out, t
+
+
+@app.get("/api/dagorlad/indicators")
+async def exercise_indicators() -> dict:
+    """OV1 (#399): the exercises' time to contain and share contained alone over 30 days — the
+    runs of Annatar and Gothmog, measured as BL1 measures them (``indicators.compute``), with the
+    faults taken for an attack. The overview counts real traffic. Read only."""
+    from eregion_console import indicators as ind
+    now = datetime.now(timezone.utc)
+    since = ind.since_window(now)
+    cat = _catalog_entries().get("entries", [])
+
+    def gather() -> dict:
+        _, _, _, out, _ = _exercise_indicators(since, now, cat)
+        return {k: out[k] for k in ("window_days", "contain", "alone")}
     return await asyncio.to_thread(gather)
 
 

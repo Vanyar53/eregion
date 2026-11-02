@@ -68,7 +68,7 @@ def test_an_attack_started_keeps_only_the_fields_an_injector_writes():
 def test_a_detection_missed_is_a_proposal_and_an_attack_adapted_no_more():
     missed = signal_origin.admit(_line("detection_missed", raw_signal={"failed_query": "q",
                                                                        "detection_hints": {"a": 1}},
-                                       context={"run_id": "r1", "workspace_id": "w", "detection_timeout_s": 300}))
+                                       context={"run_id": "r1", "workspace_id": "", "detection_timeout_s": 300}))
     assert missed.what == "propose" and missed.signal["raw_signal"]["detection_hints"] == {"a": 1}
     # The blocks watcher that emitted it is gone (SEC3): an attack_adapted is no injector's.
     assert signal_origin.admit(_line("attack_adapted", raw_signal={"blocked_ip": "1.2.3.4"})).signal is None

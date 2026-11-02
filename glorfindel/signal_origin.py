@@ -161,6 +161,38 @@ def known_techniques() -> frozenset:
     return ttps
 
 
+# SEC8 (R-17): the workspace a rule proposal queries (getschema) is one of Glorfindel's config —
+# never one a line names. A detection_missed naming another is refused.
+_SCHEMA_SOURCES = ("azure_monitor", "sentinel")
+
+
+def _monitoring_backends() -> list:
+    try:
+        from glorfindel.config import load_glorfindel_config
+        return list(load_glorfindel_config().monitoring_backends)
+    except Exception as exc:          # unreadable config: no workspace — nothing named passes
+        log.warning("glorfindel-config.yaml unreadable for the workspaces (%s)", exc)
+        return []
+
+
+def configured_workspaces() -> frozenset:
+    """The workspace ids of Glorfindel's monitoring backends, lowercased. Never raises."""
+    return frozenset(str(b.workspace_id).strip().lower() for b in _monitoring_backends()
+                     if str(getattr(b, "workspace_id", "") or "").strip())
+
+
+def config_workspace(named="", source: str = "azure_monitor") -> str:
+    """The workspace a rule proposal may query, from Glorfindel's config: the one `named` when
+    it is one of its backends' (as the config writes it), the first configured when none is
+    named; "" otherwise — a workspace named by a line is never queried as it was given."""
+    ids = [str(b.workspace_id).strip() for b in _monitoring_backends()
+           if getattr(b, "type", "") in _SCHEMA_SOURCES and str(b.workspace_id or "").strip()]
+    if named not in (None, ""):
+        want = str(named).strip().lower()
+        return next((w for w in ids if w.lower() == want), "")
+    return ids[0] if ids else ""
+
+
 class Admission:
     """What the watch makes of one line of runs/: `signal` (cleaned) and `what` (poll,
     propose) when admitted; `refused` (why) otherwise. `dropped`: the fields taken off."""
@@ -169,10 +201,11 @@ class Admission:
         self.signal, self.what, self.refused, self.dropped = signal, what, refused, list(dropped)
 
 
-def admit(data: dict, now: float | None = None, known=None) -> Admission:
+def admit(data: dict, now: float | None = None, known=None, workspaces=None) -> Admission:
     """The line as the watch may take it from runs/, or why it is refused. Never raises.
     `now`: the moment an attack_time is bounded around (default: the clock); `known`: the
-    techniques the watch knows (default: `known_techniques`)."""
+    techniques the watch knows (default: `known_techniques`); `workspaces`: the configured
+    workspace ids, lowercased (default: `configured_workspaces`)."""
     event = str((data or {}).get("event") or "")
     if event not in CHANNEL_EVENTS:
         why = ("n'est accepté que de `glorfindel restore`, jamais du canal runs/"
@@ -202,6 +235,12 @@ def admit(data: dict, now: float | None = None, known=None) -> Admission:
                 why = duration_refusal(name, clean[part][name])
                 if why:
                     return Admission(None, refused=why)
+    ws = clean["context"].get("workspace_id")
+    if event == "detection_missed" and ws not in (None, "") and not (
+            isinstance(ws, str)
+            and ws.strip().lower() in (configured_workspaces() if workspaces is None else workspaces)):
+        return Admission(None, refused=(f"workspace_id « {str(ws)[:40]} » n'est pas un espace de la "
+                                        "config de Glorfindel : jamais interrogé"))
     ttp = clean["ttp"]
     if not isinstance(ttp, str) or ttp not in (known_techniques() if known is None else known):
         return Admission(None, refused=(f"technique « {str(ttp)[:24]} » inconnue de la watch (ni son "

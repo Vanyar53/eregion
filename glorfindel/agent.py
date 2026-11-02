@@ -2312,8 +2312,11 @@ def propose_detection_rule(
         }
 
     failed_query = ctx.get("failed_query") or raw.get("failed_query", "(unknown)")
-    workspace_id = ctx.get("workspace_id", "")
     source = raw.get("detection_source", "azure_monitor")
+    # The workspace queried comes from Glorfindel's config (SEC8), never from the line: the
+    # one it names if it is configured, the configured one if it names none, else none.
+    from glorfindel.signal_origin import config_workspace
+    workspace_id = config_workspace(ctx.get("workspace_id", ""), source)
 
     # Check if an action was already taken on this VM — timeout may be caused by
     # the action (e.g. isolate_vm cuts off AMA) rather than a bad detection rule.

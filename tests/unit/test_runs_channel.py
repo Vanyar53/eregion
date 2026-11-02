@@ -394,3 +394,51 @@ def test_the_restore_command_takes_the_card_s_moment_not_the_channel_s(tmp_path,
     out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes"], terminal_width=200)
     assert out.exit_code == 0, out.output
     assert started == [_iso(first)] and "incident réel" in " ".join(out.output.split())
+
+
+# ── 4. The workspace queried is the config's ────────────────────────────────────────────
+
+def _config(monkeypatch, *workspaces: str) -> None:
+    cfg = SimpleNamespace(monitoring_backends=[SimpleNamespace(name=f"law-{i}", type="azure_monitor", workspace_id=w)
+                                               for i, w in enumerate(workspaces)])
+    monkeypatch.setattr("glorfindel.config.load_glorfindel_config", lambda *a, **k: cfg)
+
+
+def test_a_detection_missed_naming_another_workspace_is_refused(monkeypatch):
+    _config(monkeypatch, "11111111-aaaa-4bbb-8ccc-000000000001")
+    missed = lambda ws: _line("detection_missed", context={"run_id": "r1", "workspace_id": ws})  # noqa: E731
+    refused = signal_origin.admit(missed("22222222-aaaa-4bbb-8ccc-000000000002"))
+    assert refused.signal is None and "config de Glorfindel" in refused.refused
+    assert signal_origin.admit(missed("11111111-AAAA-4bbb-8ccc-000000000001")).signal is not None
+    assert signal_origin.admit(missed("")).signal is not None
+    assert signal_origin.admit(missed(["x"])).signal is None
+
+
+@pytest.mark.parametrize("named, queried", [
+    ("22222222-aaaa-4bbb-8ccc-000000000002", None),                                   # another: none
+    ("", "11111111-aaaa-4bbb-8ccc-000000000001"),                                     # none named: the config's
+    ("11111111-AAAA-4bbb-8ccc-000000000001", "11111111-aaaa-4bbb-8ccc-000000000001"),  # the config's, as it writes it
+])
+def test_a_rule_proposal_queries_the_config_s_workspace_only(monkeypatch, named, queried):
+    """`respond` too (a file the operator names): the workspace getschema reads is the
+    config's, never the one the signal names."""
+    from glorfindel import agent
+    _config(monkeypatch, "11111111-aaaa-4bbb-8ccc-000000000001")
+    asked: list[str] = []
+    authored: list[dict] = []
+    monkeypatch.setattr(agent, "_find_rule_for_ttp", lambda *a, **k: None)
+    monkeypatch.setattr("glorfindel.detection_rules.rulepoller_recently_matched", lambda *a, **k: False)
+    monkeypatch.setattr("glorfindel.detectors.detector_for",
+                        lambda source, workspace_id="": asked.append(workspace_id) or object())
+    monkeypatch.setattr(agent, "author_rule", lambda **kw: authored.append(kw) or {
+        "name": "r", "query": "q", "confidence": 0.1, "rationale": "", "source": "azure_monitor"})
+    state = {"signal": {"event": "detection_missed", "ttp": "T1136.001", "resource_id": VM, "raw_signal": {},
+                        "context": {"run_id": "r1", "workspace_id": named, "detection_timeout_s": 300}},
+             "past_cycles": [], "incident": None, "dry_run": False, "proposal_id": ""}
+    monkeypatch.setattr("glorfindel.proposed_rules.record", lambda *a, **k: "p1", raising=False)
+    try:
+        agent.propose_detection_rule(state, model="m")
+    except Exception:          # what follows the authoring is not this test's
+        pass
+    assert asked == ([queried] if queried else [])
+    assert authored and authored[0]["workspace_id"] == (queried or "")

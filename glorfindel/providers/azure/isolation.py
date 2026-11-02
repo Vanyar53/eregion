@@ -5,6 +5,7 @@ actions.py, A1).
 from __future__ import annotations
 
 import re
+import threading
 
 from glorfindel.providers.azure.nsg import (
     _allows_passed_by_its_replacement,
@@ -238,18 +239,28 @@ class IsolationMixin:
         # The rules only stop NEW connections: measured 2026-10-05, an attacker's SSH
         # session (17 min), an idle one (11 min) and an outbound download all survived
         # the isolation. Cut them from inside, now that nothing can reconnect.
-        drain_at = datetime.now(timezone.utc).isoformat()
-        out["drain"] = self.drain_connections(resource_id)
+        # When its Run Command is about to be asked — not before, and only if it is
+        # (SID1): written to the state at once, before the drain waits for it (up to
+        # 300 s), so that the Activity Log reads Glorfindel's own Run Command as this
+        # drain, not as a card (own_run_command.py).
+        def asked():
+            st = _load_isolation_state(resource_id)
+            if st is not None:
+                _save_isolation_state(resource_id, {
+                    **st, **_drains_at(previous, datetime.now(timezone.utc).isoformat())})
+
+        _DRAIN_ASKED.fn = asked
+        try:
+            out["drain"] = self.drain_connections(resource_id)
+        finally:
+            _DRAIN_ASKED.fn = None
         # Kept with the isolation: `list` and the War Room must show that sessions were
-        # left open, not only the response of the call (validation run, 2026-10-05). And
-        # when its Run Command was asked (SID1): the Activity Log reads Glorfindel's own
-        # Run Command as this drain, or as a card (own_run_command.py).
+        # left open, not only the response of the call (validation run, 2026-10-05).
         try:
             _, _vm = _parse_vm_resource_id(resource_id)
             state = _load_isolation_state(resource_id)
             if state is not None:
-                _save_isolation_state(resource_id, {**state, "drain": out["drain"],
-                                                    **_drains_at(previous, out["drain"], drain_at)})
+                _save_isolation_state(resource_id, {**state, "drain": out["drain"]})
         except Exception:
             pass
         return out
@@ -299,6 +310,7 @@ class IsolationMixin:
                 f"then echo \"glorfindel-drain-remaining=$(printf '%s\\n' \"$out\" | grep -c .)\"; "
                 f"else echo glorfindel-drain-remaining=error; fi",
             ]
+            _note_drain_asked()
             res = self._compute.virtual_machines.begin_run_command(
                 rg, vm_name, RunCommandInput(command_id="RunShellScript", script=script),
             ).result(timeout=300)   # an unresponsive VM agent must not hold the watch worker
@@ -416,15 +428,28 @@ class IsolationMixin:
                 "shadowed": shadowed, "own": own, "left": left, "drop": drop}
 
 
-def _drains_at(previous: dict | None, drain: dict, at: str) -> dict:
-    """The drains the state keeps (SID1): the earlier isolation's, and this one when its Run
-    Command was asked (not on Windows: no command) — the last DRAINS_KEPT."""
+# What isolate_vm notes when its drain asks for its Run Command (SID1): set by isolate_vm
+# for the time of its drain, in its own thread — a drain called alone notes nothing.
+_DRAIN_ASKED = threading.local()
+
+
+def _note_drain_asked() -> None:
+    """Called just before the drain's Run Command is asked; never raises (the drain goes on)."""
+    fn = getattr(_DRAIN_ASKED, "fn", None)
+    if fn is not None:
+        try:
+            fn()
+        except Exception:
+            pass
+
+
+def _drains_at(previous: dict | None, at: str) -> dict:
+    """The drains the state keeps (SID1): the earlier isolation's, and this one — the last
+    DRAINS_KEPT."""
     from glorfindel.providers.azure.own_run_command import DRAINS_KEPT
     kept = (previous or {}).get("drains_at")
     times = [t for t in kept if isinstance(t, str)] if isinstance(kept, list) else []
-    if (drain or {}).get("status") not in ("unsupported", "dry_run"):
-        times.append(at)
-    return {"drains_at": times[-DRAINS_KEPT:]} if times else {}
+    return {"drains_at": [*times, at][-DRAINS_KEPT:]}
 
 
 def _describe_iso_left(left: list[dict]) -> str:

@@ -216,14 +216,17 @@ def is_own_call(row: dict, own: set[str], recorded: frozenset[str] | set[str] = 
 def _keep(row: dict, own: set[str], recorded, book) -> dict | None:
     """The row as kept, marked — or None when it is Glorfindel's own: a write it does on what
     is its own, or the session drain of an isolation it recorded (own_run_command)."""
-    mine = bool(own) and bool(caller_ids(row) & own)
-    why = own_run_command.mark(row, operation(row), target_resource(row), bool(own), mine, book)
+    ids = caller_ids(row)
+    mine = bool(own) and bool(ids & own)
+    info: dict = {}
+    why = own_run_command.mark(row, operation(row), target_resource(row), bool(own), mine, book,
+                               has_caller=bool(ids), info=info)
     if why is None or (why == "" and is_own_call(row, own, recorded)):
         return None
     return {**row,
             "GlorfindelManaged": glorfindel_managed(row),
             "GlorfindelIdentity": mine,
-            **({own_run_command.MARK: why} if why else {})}
+            **({own_run_command.MARK: why, **info} if why else {})}
 
 
 def prepare_rows(rows: list[dict], own: set[str],

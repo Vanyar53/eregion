@@ -7127,10 +7127,10 @@ ORC = "glorfindel/providers/azure/own_run_command.py"
 _SID1 = "tests/unit/test_own_run_command.py"
 MUTANTS += [
     ("M2790", "its drain never attached: every isolation it decides is a critical card (SID1)", ORC,
-     "        if t - DRAIN_BEFORE_S <= at <= t + DRAIN_AFTER_S and book.taken.get((rid, t), key) == key:",
-     "        if False:"),
+     "        if t - DRAIN_BEFORE_S <= at <= t + DRAIN_AFTER_S:\n",
+     "        if False:\n"),
     ("M2791", "every Run Command under its identity dropped: a stolen identity unseen (SID1)", ORC,
-     "    return attach(row, rid.rstrip(\"/\").lower(), book() if callable(book) else book)",
+     "    return attach(row, rid.rstrip(\"/\").lower(), book() if callable(book) else book, info)",
      "    return None"),
     ("M2792", "its identity unknown: Run Commands dropped, not cards (SID1, A0)", ORC,
      "        return \"identity_unknown\" if only else \"\"", "        return None if only else \"\""),
@@ -7141,18 +7141,17 @@ MUTANTS += [
     ("M2795", "the states unreadable read as no isolation at all (SID1, A0)", ORC,
      "        return DrainBook(isolated=None)", "        return DrainBook()"),
     ("M2796", "one drain covers any number of Run Commands in its window (SID1)", ORC,
-     " and book.taken.get((rid, t), key) == key:", ":"),
+     "            if book.taken.get((rid, t), key) == key:", "            if True:"),
     ("M2797", "the window an hour wide before the drain (SID1)", ORC,
      "        if t - DRAIN_BEFORE_S <= at", "        if t - 3600 <= at"),
     ("M2798", "a Run Command whose time can't be read dropped (SID1, A0)", ORC,
      "    if at is None:\n        return \"time_unreadable\"", "    if at is None:\n        return None"),
     ("M2799", "an unattached Run Command not critical when its identity is unknown (SID1)", DRU,
      "            or bool(row.get(\"GlorfindelRunCommand\")))", "            )"),
-    ("M2800", "isolate_vm records no drain: its own drain a critical card (SID1)", ISO,
-     "                                                    **_drains_at(previous, out[\"drain\"], drain_at)})",
-     "                                                    })"),
-    ("M2801", "a drain that asked no command (Windows) opens a window (SID1)", ISO,
-     "    if (drain or {}).get(\"status\") not in (\"unsupported\", \"dry_run\"):", "    if True:"),
+    ("M2800", "isolate_vm notes no drain: its own drain a critical card (SID1)", ISO,
+     "            _note_drain_asked()\n", ""),
+    ("M2801", "the drain noted before it asks anything: a VM unread, Windows, still open a window (SID1)",
+     ISO, "        _DRAIN_ASKED.fn = asked\n        try:\n", "        asked()\n        try:\n"),
     ("M2802", "a drain forgotten once its state is gone: the release's drain a card (SID1)", ACT,
      "            return own_run_command.DrainBook(times=times, isolated=current.isolated, taken=self._taken)",
      "            return own_run_command.DrainBook(times=current.times, isolated=current.isolated, taken=self._taken)"),
@@ -7174,6 +7173,18 @@ MUTANTS += [
      "    for row in sorted(rows, key=lambda r: own_run_command.started(r) or 0.0):", "    for row in rows:"),
 ]
 TESTS.update({f"M{n}": _SID1 for n in range(2790, 2810)})
+# SID1, after its 5.5 review: the drain noted when its Run Command is asked, A0 on the caller,
+# the operation that took the drain named. M2970–M2972.
+MUTANTS += [
+    ("M2970", "a row that names no caller dropped as another's (SID1, A0)", ORC,
+     "    if only and not has_caller:\n        return \"caller_unreadable\"\n", ""),
+    ("M2971", "an outside_drain card does not name the operation that took the drain (SID1)", ORC,
+     "        info[TAKEN_BY] = sorted(set(others))\n", "        pass\n"),
+    ("M2972", "the drain noted once it returned: a row ingested while it waits is a card (SID1)", ISO,
+     "        _DRAIN_ASKED.fn = asked\n        try:\n            out[\"drain\"] = self.drain_connections(resource_id)\n",
+     "        try:\n            out[\"drain\"] = self.drain_connections(resource_id)\n            asked()\n"),
+]
+TESTS.update({f"M{n}": _SID1 for n in range(2970, 2973)})
 
 
 # MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the

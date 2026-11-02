@@ -15,13 +15,17 @@ keeps every Run Command of the hour, one row per operation, with the time of its
 — another caller's row is dropped here (a client's own rule on Run Command, without that
 column, keeps every caller). Glorfindel's row is dropped only when it is the drain of an
 isolation Glorfindel recorded on that VM: the isolation state names the VM, and records the
-time each drain was started (`drains_at`, isolation.py); the operation started within
+time each drain was asked (`drains_at`, isolation.py: written just before its Run Command is
+asked, and only if it is); the operation started within
 [drain − DRAIN_BEFORE_S, drain + DRAIN_AFTER_S]; and that drain was not already taken by
 another operation — one drain, one Run Command. Else the row is kept and marked
 `GlorfindelRunCommand` with the reason, critical:
   - `no_isolation`: no isolation of Glorfindel is recorded on that VM;
   - `outside_drain`: an isolation is recorded, but no drain at that time (or its drain already
-    matched another operation);
+    matched another operation: its CorrelationId goes in `GlorfindelDrainTakenBy`, the card
+    names it);
+  - `caller_unreadable`: under the rule that watches Glorfindel, the row names no caller at all
+    (`Caller`, its ids, `Claims` empty) — never dropped as another's (A0);
   - `state_unreadable`: the isolation states, or that VM's, can't be read (A0: never dropped on
     an unknown);
   - `time_unreadable`: the operation's time can't be read;
@@ -33,6 +37,12 @@ model, no action, never one click — the VM named is not what is compromised fi
 of Glorfindel may be. The drains seen are kept RECORDED_TTL_S after the state is gone (a
 release within minutes, the row later); a restart forgets them, and a drain that ran before
 it, seen after, is a card.
+
+What it does not hold. The attachment reads the local isolation state, and every container
+that writes it — the watch, the console, the bot (each mounts ~/.glorfindel) — can write a
+drain, or a whole state, then run its command inside the window; a drain seen is kept 2 h.
+The rule catches a clumsy use of the identity, not an attacker who knows Eregion: the answer
+is the signed action queue (FS1, #413).
 """
 from __future__ import annotations
 
@@ -62,7 +72,11 @@ REASONS = {
     "time_unreadable": "l'heure de l'opération est illisible : elle ne peut être rattachée à une isolation",
     "identity_unknown": ("l'identité de Glorfindel n'a pas pu être lue : rien ne peut être écarté "
                          "comme sa propre coupure des sessions"),
+    "caller_unreadable": ("la ligne ne nomme aucun appelant (ni Caller, ni ses identifiants, ni "
+                          "Claims) : elle ne peut être écartée comme celle d'un autre"),
 }
+# The column a card `outside_drain` gains: the operations that took the drains of its window.
+TAKEN_BY = "GlorfindelDrainTakenBy"
 
 _FRACTION = re.compile(r"(\.\d{6})\d+")
 
@@ -145,47 +159,61 @@ def _state_unreadable(rid: str) -> bool:
         return True
 
 
-def attach(row: dict, rid: str, book: DrainBook) -> str | None:
+def attach(row: dict, rid: str, book: DrainBook, info: dict | None = None) -> str | None:
     """None: the row is the drain of an isolation Glorfindel recorded on this VM (that drain is
-    then taken by it); else why it is not."""
+    then taken by it); else why it is not. A drain of its window already taken by another
+    operation: that operation's CorrelationId goes in `info[TAKEN_BY]`, for the card."""
     at = started(row)
     if at is None:
         return "time_unreadable"
     key = operation_key(row)
+    others = []
     for t in sorted(book.times.get(rid, [])):
-        if t - DRAIN_BEFORE_S <= at <= t + DRAIN_AFTER_S and book.taken.get((rid, t), key) == key:
-            book.taken[(rid, t)] = key
-            return None
+        if t - DRAIN_BEFORE_S <= at <= t + DRAIN_AFTER_S:
+            if book.taken.get((rid, t), key) == key:
+                book.taken[(rid, t)] = key
+                return None
+            others.append(book.taken[(rid, t)])
     if book.isolated is None or _state_unreadable(rid):
         return "state_unreadable"
     if rid not in book.isolated:
         return "no_isolation"
+    if others and info is not None:
+        info[TAKEN_BY] = sorted(set(others))
     return "outside_drain"
 
 
-def mark(row: dict, op: str, rid: str, known: bool, mine: bool, book) -> str | None:
+def mark(row: dict, op: str, rid: str, known: bool, mine: bool, book,
+         has_caller: bool = True, info: dict | None = None) -> str | None:
     """For one row: "" — not a Run Command of this module (another operation; another caller
     under a client's rule); None — dropped (Glorfindel's drain, or another caller under a rule
     that watches Glorfindel only); else the reason it is a card. `book` is called once, when
-    needed (a DrainBook, or a function that returns one)."""
+    needed (a DrainBook, or a function that returns one). Under the rule that watches
+    Glorfindel, a row that names no caller at all can't be told another's (A0): a card."""
     if not is_run_command(op):
         return ""
     only = watches_glorfindel_only(row)
+    if only and not has_caller:
+        return "caller_unreadable"
     if not known:
         return "identity_unknown" if only else ""
     if not mine:
         return None if only else ""
-    return attach(row, rid.rstrip("/").lower(), book() if callable(book) else book)
+    return attach(row, rid.rstrip("/").lower(), book() if callable(book) else book, info)
 
 
 def describe(row: dict) -> tuple[str, list[str]]:
     """What the card says, and the steps for a human."""
     reason = str(row.get(MARK) or "")
     vm = str(row.get("_ResourceId") or row.get("ResourceId") or "?").rstrip("/").rsplit("/", 1)[-1]
-    who = ("l'identité de Glorfindel" if reason != "identity_unknown"
-           else "une identité (celle de Glorfindel n'a pu être lue)")
+    who = {"identity_unknown": "une identité (celle de Glorfindel n'a pu être lue)",
+           "caller_unreadable": "un appelant illisible (peut-être l'identité de Glorfindel)",
+           }.get(reason, "l'identité de Glorfindel")
+    taken = [str(t) for t in (row.get(TAKEN_BY) or [])]
+    also = (f" La coupure des sessions de cette heure correspond déjà à l'opération "
+            f"{', '.join(taken)} : lire les deux commandes." if taken else "")
     what = (f" {who[0].upper()}{who[1:]} a lancé une commande sur {vm} par Run Command hors d'une "
-            f"isolation qu'il a décidée : {REASONS.get(reason, reason)}. Ce n'est pas d'abord la VM "
+            f"isolation qu'il a décidée : {REASONS.get(reason, reason)}.{also} Ce n'est pas d'abord la VM "
             "qui est en cause : l'hôte de Glorfindel l'est peut-être (son identité est partagée par la "
             "watch, la console et le bot). Aucune action sur la VM. Glorfindel lance aussi Run Command "
             "avant un `glorfindel restore` (la dernière commande neutralisée) : si un restore de cette "

@@ -247,6 +247,22 @@ def test_its_identity_unknown_every_run_command_of_the_rule_is_a_card(law):
     assert "n'a pas pu être lue" in _control_plane_decision(_initial(sent[0]))["escalation_reason"]
 
 
+def test_a_row_that_names_no_caller_is_a_card(law):
+    """A0 on the caller: under the rule that watches Glorfindel, a row with no Caller, no ids
+    and no Claims can't be told another's — a card, never dropped."""
+    _isolated()
+    blank = _run(vm=VM2, caller="", corr="c-blank", CallerObjectId="", CallerAppId="", Claims="")
+    [row] = _kept([blank])
+    assert row[orc.MARK] == "caller_unreadable" and dr._grave(row)
+    sent = _poll(_detector(), _shipped(), law, [blank])
+    assert [s["severity"] for s in sent] == ["critical"]
+    from glorfindel.agent import _control_plane_decision
+    assert "aucun appelant" in _control_plane_decision(_initial(sent[0]))["escalation_reason"]
+    # Under a client's rule (no WatchedCaller): not this module's — the generic path keeps it.
+    [kept] = _kept([{**blank, "WatchedCaller": ""}])
+    assert orc.MARK not in kept
+
+
 # ── another identity: not this rule's; AL1 unchanged ─────────────────────────
 
 def test_another_identity_running_a_command_is_not_this_rules(law):
@@ -289,6 +305,14 @@ def test_one_drain_takes_one_run_command_the_second_is_a_card(law):
     rows = [_run(after=60, corr="c-more"), _run(after=20, corr="c-drain")]
     [row] = _kept(rows)
     assert row["CorrelationId"] == "c-more" and row[orc.MARK] == "outside_drain"
+    # The card names the operation that took the drain: the human reads both commands.
+    assert row[orc.TAKEN_BY] == ["c-drain"]
+    from glorfindel.agent import _control_plane_text
+    what, _ = _control_plane_text({"raw_signal": {"first_result_row": row}, "ttp": "T1651"})
+    assert "correspond déjà à l'opération c-drain" in what
+    # Outside any drain's window: no operation named.
+    [far] = _kept([_run(after=3600, corr="c-far")])
+    assert orc.TAKEN_BY not in far
     # Across polls, the drain stays taken by its operation.
     det = _detector()
     law["rows"] = rows
@@ -405,9 +429,11 @@ def test_the_card_acts_on_nothing_the_vm_included(tmp_path, monkeypatch, law, ac
     assert _approval_refusal(card, "vm1")
 
 
-# ── isolate_vm records its drain ──────────────────────────────────────────────
+# ── isolate_vm records its drain, when its Run Command is asked ───────────────
 
-def _isolating(monkeypatch, drain=None):
+def _isolating(monkeypatch, os_type="Linux", get_error=None, during=None):
+    """isolate_vm with its real drain: the compute client faked. `during`: called while the
+    drain waits for its Run Command (an Activity Log poll at that moment)."""
     from glorfindel.actions import AzureConnector
     from tests.unit.test_glorfindel import _nic_target
     connector = AzureConnector(dry_run=False)
@@ -416,7 +442,20 @@ def _isolating(monkeypatch, drain=None):
     net = MagicMock()
     net.security_rules.list.return_value = []
     connector._network = net
-    monkeypatch.setattr(connector, "drain_connections", lambda rid: drain or {"status": "drained"})
+    compute = MagicMock()
+    compute.virtual_machines.get.return_value.storage_profile.os_disk.os_type = os_type
+    if get_error:
+        compute.virtual_machines.get.side_effect = get_error
+    res = MagicMock()
+    res.value = [MagicMock(message="Enable succeeded:\n[stdout]\nglorfindel-drain-remaining=0\n")]
+
+    def result(timeout=None):
+        if during:
+            during()
+        return res
+
+    compute.virtual_machines.begin_run_command.return_value.result.side_effect = result
+    connector._compute = compute
     return connector
 
 
@@ -425,7 +464,7 @@ def test_isolate_vm_records_when_its_drain_was_asked(monkeypatch):
     from tests.unit.test_glorfindel import _RID
     connector = _isolating(monkeypatch)
     before = datetime.now(timezone.utc).timestamp()
-    connector.isolate_vm(_RID)
+    assert connector.isolate_vm(_RID)["drain"] == {"status": "drained"}
     [at] = _load_isolation_state(_RID)["drains_at"]
     assert before - 1 <= orc.epoch(at) <= datetime.now(timezone.utc).timestamp() + 1
     # Isolated again: both drains kept.
@@ -436,17 +475,45 @@ def test_isolate_vm_records_when_its_drain_was_asked(monkeypatch):
     assert len(book.times[_RID.rstrip("/").lower()]) == 2
 
 
-def test_no_drain_recorded_where_no_command_ran(monkeypatch):
-    """Windows: the drain asks no Run Command — no window opened."""
+def test_a_row_ingested_while_the_drain_waits_is_not_a_card(monkeypatch):
+    """The drain waits for its Run Command up to 300 s; its row may be ingested, and polled,
+    before it returns: the drain is already noted."""
+    from tests.unit.test_glorfindel import _RID
+    seen: list = []
+
+    def poll():
+        now = datetime.now(timezone.utc).isoformat()
+        seen.append(_kept([_run(vm=_RID, Started=now, TimeGenerated=now, corr="c-wait")]))
+
+    _isolating(monkeypatch, during=poll).isolate_vm(_RID)
+    assert seen == [[]]
+
+
+def test_no_drain_noted_where_no_command_was_asked(monkeypatch):
+    """Windows (no command), or the VM unread before the call: no window opened."""
     from glorfindel.actions import _load_isolation_state
     from tests.unit.test_glorfindel import _RID
-    _isolating(monkeypatch, {"status": "unsupported", "note": "Windows"}).isolate_vm(_RID)
+    out = _isolating(monkeypatch, os_type="Windows").isolate_vm(_RID)
+    assert out["drain"]["status"] == "unsupported"
     assert "drains_at" not in _load_isolation_state(_RID)
+    connector = _isolating(monkeypatch, get_error=RuntimeError("(ResourceNotFound) vm"))
+    assert connector.isolate_vm(_RID)["drain"]["status"] == "failed"
+    assert "drains_at" not in _load_isolation_state(_RID)
+    connector._compute.virtual_machines.begin_run_command.assert_not_called()
+
+
+def test_a_drain_called_alone_notes_nothing(monkeypatch):
+    from glorfindel.actions import _load_isolation_state
+    from tests.unit.test_glorfindel import _RID
+    connector = _isolating(monkeypatch)
+    _isolated(vm=_RID, drains=())
+    assert connector.drain_connections(_RID) == {"status": "drained"}
+    assert _load_isolation_state(_RID)["drains_at"] == []
 
 
 def test_the_drains_kept_are_bounded():
     from glorfindel.providers.azure.isolation import _drains_at
     prev = {"drains_at": [f"t{i}" for i in range(orc.DRAINS_KEPT)] + [3]}
-    out = _drains_at(prev, {"status": "drained"}, "now")["drains_at"]
+    out = _drains_at(prev, "now")["drains_at"]
     assert len(out) == orc.DRAINS_KEPT and out[-1] == "now" and 3 not in out
-    assert _drains_at({"drains_at": "x"}, {"status": "dry_run"}, "now") == {}
+    assert _drains_at({"drains_at": "x"}, "now") == {"drains_at": ["now"]}

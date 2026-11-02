@@ -78,7 +78,7 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 
 | Version | Titre | Contenu | État |
 |---|---|---|---|
-| 0.5.0 | la boucle mesurée | OV1, ADM1, COR1, SID1, BL1c, RM1, CI4, L1Qr, I3R ; le second contre-audit (SEC8 à SEC15) | brouillon |
+| 0.5.0 | la boucle mesurée | OV1, ADM1, COR1, SID1, BL1c, RM1, CI4, L1Qr, I3R ; le second contre-audit (SEC8 à SEC15) | publiée (02/11) |
 | 0.5.x | — | ID1, G1 au banc, AUD1 ; I3C, I3U, L1Qs, COR2, SEC16 | en préparation |
 
 ### Les lots

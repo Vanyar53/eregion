@@ -9,8 +9,9 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 make glorfindel-start                        # lance watch + la console → http://localhost:7007
 make console-url                             # l'URL de la console avec son jeton (celui de l'environnement ou de .env,
                                              # sinon ~/.eregion/console/token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche
-make console-rotate                          # un nouveau jeton tiré : toute session de l'ancien refusée aussitôt (SEC10)
                                              # refuse si AZURE_SUBSCRIPTION_ID est vide (watch aveugle) ; ALLOW_NO_AZURE=1 pour une démo
+make console-rotate                          # un nouveau jeton tiré : toute session de l'ancien refusée aussitôt, le flux
+                                             # en direct compris (SEC10) ; refusé quand EREGION_CONSOLE_TOKEN est posé (H0)
 make glorfindel-logs                         # tail logs des deux services
 make glorfindel-dev                          # auto-reload sur modification de code (docker compose watch)
 make glorfindel-stop                         # arrêt

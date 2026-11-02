@@ -3156,8 +3156,9 @@ MUTANTS += [
      "                resp.set_cookie(cookie, _session(token), httponly=True,",
      "                resp.set_cookie(cookie, token, httponly=True,"),
     ("M1180", "the token as a cookie opens the console (SEC1)", CON,
-     "        by_cookie = _session_holds(conn.cookies.get(cookie), token)\n",
-     "        by_cookie = _session_holds(conn.cookies.get(cookie), token) or _ok(conn.cookies.get(cookie), token)\n"),
+     "    return _ok(bearer, token), bool(token) and _session_holds(conn.cookies.get(cookie), token)\n",
+     "    return _ok(bearer, token), bool(token) and (_session_holds(conn.cookies.get(cookie), token)"
+     " or _ok(conn.cookies.get(cookie), token))\n"),
     ("M1181", "the cookie is never Secure, HTTPS included (SEC1)", CON,
      '                                secure=scope.get("scheme") == "https")\n',
      "                                secure=False)\n"),
@@ -7145,7 +7146,7 @@ MUTANTS += [
      CON, '_TOKEN_FILE = Path.home() / ".eregion" / "console" / "token"\n',
      '_TOKEN_FILE = Path.home() / ".glorfindel" / "console_token"\n'),
     ("M2861", "the token's former file left in place at a start (SEC10)", CON,
-     '    _local_token["retired"] = _retire_legacy_token()\n', '    _local_token["retired"] = False\n'),
+     '    retired = _retire_legacy_token()\n', '    retired = ""\n'),
     ("M2862", "the console's token printed at its start, into a container's logs (SEC10)", CON,
      '    print(f"  Eregion console  →  http://localhost:{port}/  (its token: `make console-url`)\\n{kept}", flush=True)\n',
      '    print(f"  Eregion console  →  http://localhost:{port}/?token={_token()}\\n{kept}", flush=True)\n'),
@@ -7170,6 +7171,21 @@ MUTANTS += [
      '; f="$(HOME)/.eregion/console/token"; \\\n', '; f="$(HOME)/.glorfindel/console_token"; \\\n'),
 ]
 TESTS.update({f"M{n}": _SEC10 for n in range(2860, 2871)})
+# SEC10, its review: another script's digits in a cookie, the live feed past its session, the token
+# page, what a start says of the former file. M2871–M2875.
+MUTANTS += [
+    ("M2871", "a cookie with another script's digits (« ² ») raises before any authentication (SEC10, review)", CON,
+     " or not (parts[1].isascii() and parts[1].isdigit()) or ", " or not parts[1].isdigit() or "),
+    ("M2872", "the live feed outlives its session: a rotation or the 12 h leave it open (SEC10, review)", CON,
+     "            if not any(_credentials(ws, _token())):\n", "            if False:\n"),
+    ("M2873", "the token page sends the operator to the file the console no longer keeps (SEC10, review)", CON,
+     "     (<code>~/.eregion/console/token</code>).", "     (<code>~/.glorfindel/console_token</code>)."),
+    ("M2874", "a start says « a new token is drawn » when the console keeps its own (SEC10, review)", CON,
+     '"file": f"the console keeps its own ({_TOKEN_FILE})",', '"file": "a new token is drawn",'),
+    ("M2875", "a former file that could not be removed said removed (SEC10, review)", CON,
+     '        return "kept"\n    return "removed"\n', '        return "removed"\n    return "removed"\n'),
+]
+TESTS.update({f"M{n}": _SEC10 for n in range(2871, 2876)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

@@ -118,17 +118,18 @@ def _token() -> str:
     return _local_token["value"]
 
 
-def _retire_legacy_token() -> bool:
+def _retire_legacy_token() -> str:
     """SEC10: the token drawn before lived beside Glorfindel's state, which the watch and the bot
     mount. Removed — the link itself when it is one, never what it points to; never read, never
-    carried over: True when it was there."""
+    carried over. ``removed``, ``kept`` (there, and it could not be removed: said, never read)
+    or "" (not there)."""
     try:
         os.unlink(_LEGACY_TOKEN_FILE)
     except FileNotFoundError:
-        return False
+        return ""
     except OSError:
-        return True    # there and not removable: still said, never read
-    return True
+        return "kept"
+    return "removed"
 
 
 def _write_token(token: str) -> None:
@@ -152,20 +153,24 @@ def ensure_token() -> tuple[str, str]:
     retired first (SEC10), whatever the token: ``_local_token["retired"]`` says it was there.
     The file is read without following a symbolic link. OSError when it can be neither read nor
     written (a link included)."""
-    _local_token["retired"] = _retire_legacy_token()
+    retired = _retire_legacy_token()
+    _local_token["retired"] = (retired, "")
     token = console_token()
     if token:
+        _local_token["retired"] = (retired, "env")
         return token, "env"
     try:
         kept = _read_token_file()
     except FileNotFoundError:
         kept = ""
     if kept:
+        _local_token["retired"] = (retired, "file")
         return kept, "file"
     import secrets
     token = secrets.token_urlsafe(32)
     _write_token(token)
     _read_token_file()
+    _local_token["retired"] = (retired, "new")
     return token, "new"
 
 
@@ -195,7 +200,9 @@ def _session_holds(value: str | None, token: str, now: float | None = None) -> b
     if not value:
         return False
     parts = value.split(".")
-    if len(parts) != 3 or parts[0] != "v2" or not parts[1].isdigit() or len(parts[1]) > 12:
+    # ASCII digits only: str.isdigit takes « ² » and other scripts' digits, which int() refuses —
+    # an unauthenticated cookie never raises here.
+    if len(parts) != 3 or parts[0] != "v2" or not (parts[1].isascii() and parts[1].isdigit()) or len(parts[1]) > 12:
         return False
     issued = int(parts[1])
     now = time.time() if now is None else now
@@ -246,6 +253,19 @@ def _same_origin(origin: str, host: str) -> bool:
     return origin in (f"http://{host}", f"https://{host}")
 
 
+def _ok(candidate: str | None, expected: str) -> bool:
+    return bool(candidate) and hmac.compare_digest(candidate.encode(), expected.encode())
+
+
+def _credentials(conn, token: str) -> tuple[bool, bool]:
+    """``(by its Bearer, by its session cookie)``: what a request or the live feed holds now, for
+    this token — the feed asks again while it runs (SEC10: a rotation, the 12 h, end it)."""
+    bearer = conn.headers.get("authorization", "")
+    bearer = bearer[7:] if bearer.lower().startswith("bearer ") else ""
+    cookie = _cookie_name(conn.headers.get("host", ""), conn.scope.get("scheme", "http"))
+    return _ok(bearer, token), bool(token) and _session_holds(conn.cookies.get(cookie), token)
+
+
 class _TokenAuthMiddleware:
     """The console's boundary, for every route (pages, API, live feed).
 
@@ -293,14 +313,8 @@ class _TokenAuthMiddleware:
                           f"Eregion console: no token ({TOKEN_ENV}, or {_TOKEN_FILE} unreadable).")
             return
 
-        def _ok(candidate: str | None, expected: str) -> bool:
-            return bool(candidate) and hmac.compare_digest(candidate.encode(), expected.encode())
-
-        bearer = conn.headers.get("authorization", "")
-        bearer = bearer[7:] if bearer.lower().startswith("bearer ") else ""
-        by_bearer = _ok(bearer, token)
+        by_bearer, by_cookie = _credentials(conn, token)
         cookie = _cookie_name(host, scope.get("scheme", "http"))
-        by_cookie = _session_holds(conn.cookies.get(cookie), token)
 
         if not (by_bearer or by_cookie):
             if not ws and scope.get("method") in ("GET", "HEAD") and _ok(conn.query_params.get("token"), token):
@@ -412,7 +426,9 @@ _TOKEN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   <h1>EREGION</h1>
   <p>This console can trigger Azure actions. Enter its token: the one set in
      <code>EREGION_CONSOLE_TOKEN</code> on the machine that hosts it, else the one the console
-     drew at its first start, in <code>~/.glorfindel/console_token</code> there.</p>
+     drew there — <code>make console-url</code> gives the URL that opens it
+     (<code>~/.eregion/console/token</code>). A session lasts 12 h, and ends when the token is
+     rotated.</p>
   <label for="token">Token</label>
   <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
   <button type="submit">Open</button>
@@ -497,11 +513,20 @@ async def _have_a_token() -> None:
 
 
 def _say_retired() -> None:
-    if _local_token.get("retired"):
-        print(f"  ⚠ console token: its former file {_LEGACY_TOKEN_FILE} is removed (the watch and the "
-              f"bot could read it); every session of it is refused{'' if console_token() else ', a new token is drawn'}"
-              " — open the console with `make console-url`.", flush=True)
-        _local_token["retired"] = False
+    """What the start did of the token's former file — said as it happened: removed or not, and
+    which token the console takes."""
+    retired, where = _local_token.get("retired") or ("", "")
+    if not retired:
+        return
+    takes = {"new": "a new token is drawn", "file": f"the console keeps its own ({_TOKEN_FILE})",
+             "env": f"the console takes {TOKEN_ENV}"}.get(where, "")
+    if retired == "removed":
+        said = f"its former file {_LEGACY_TOKEN_FILE} is removed (the watch and the bot could read it)"
+    else:
+        said = (f"its former file {_LEGACY_TOKEN_FILE} could not be removed — never read: remove it by "
+                "hand (the watch and the bot can read it)")
+    print(f"  ⚠ console token: {said}; {takes} — open the console with `make console-url`.", flush=True)
+    _local_token["retired"] = ("", "")
 
 
 @app.on_event("startup")
@@ -983,6 +1008,10 @@ async def feed_history() -> dict:
     return {"entries": _load_recent(40)}
 
 
+# How often the live feed reads runs/ again, and holds its session again (SEC10).
+_FEED_POLL_S = 2.0
+
+
 @app.websocket("/api/feed")
 async def feed_ws(ws: WebSocket) -> None:
     await ws.accept()
@@ -1004,7 +1033,12 @@ async def feed_ws(ws: WebSocket) -> None:
 
     try:
         while True:
-            await asyncio.sleep(2)
+            await asyncio.sleep(_FEED_POLL_S)
+            # SEC10: the session it opened with, held again — a rotation of the token, or its
+            # 12 h, close the live feed too (1008, as a refusal at its opening).
+            if not any(_credentials(ws, _token())):
+                await ws.close(code=1008)
+                return
             if not runs.exists():
                 continue
             for pat, kind in (

@@ -427,7 +427,7 @@ glorfindel-ui: build-glorfindel
 
 # The console's URL with its token (SEC1): the one compose passes (EREGION_CONSOLE_TOKEN, else its
 # former name, from the environment or .env), else the one the console drew at its first start,
-# ~/.glorfindel/console_token — written by the container after `up -d`, so waited for
+# ~/.eregion/console/token (its own directory, SEC10) — written by the container after `up -d`, so waited for
 # (CONSOLE_WAIT seconds, 20 by default). The port: EREGION_CONSOLE_PORT, as compose publishes it.
 CONSOLE_WAIT ?= 20
 console-url:

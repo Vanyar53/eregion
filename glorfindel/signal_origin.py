@@ -298,9 +298,15 @@ def _tail_lines(path: Path, limit: int | None = None) -> list[str]:
     return lines[1:] if size > limit else lines
 
 
-def attack_moment(resource_id: str, runs_dir="runs", isolated_at: float | None = None):
+def attack_moment(resource_id: str, runs_dir="runs", isolated_at: float | None = None,
+                  run_id: str = "", not_after: float | None = None):
     """When the attack on `resource_id` began, as the runs/ channel admits it (SEC4c):
     `(epoch, file name)`, or None when nothing says so.
+
+    `run_id`: only the lines of that run (an exercise card's, SEC8); `not_after`: never a
+    moment after it (the card's first detection, SEC8). The restore asks for both
+    (glorfindel/restore_plan.py): a line of the channel counts only for an exercise card tied
+    to its run, never on a real incident, and never after what the defender itself saw.
 
     Only an attack_started line `admit` takes, naming THIS VM (ids compared without case),
     whose `attack_time` lies within the bounds of SEC4a around the moment the VM was
@@ -337,10 +343,14 @@ def attack_moment(resource_id: str, runs_dir="runs", isolated_at: float | None =
             adm = admit(data, now=ref)
             if adm.signal is None or adm.signal["resource_id"].rstrip("/").lower() != want:
                 continue
+            if run_id and adm.signal["context"].get("run_id") != run_id:
+                continue
             at = adm.signal["raw_signal"].get("attack_time")
             if at is None:
                 continue
             if isolated_at is not None and float(at) > isolated_at:
+                continue
+            if not_after is not None and float(at) > not_after:
                 continue
             if best is None or float(at) < best[0]:
                 best = (float(at), path.name)

@@ -4,6 +4,15 @@
    a link; anything else is refused, said once, never read. What one poll reads of a file is
    bounded in bytes and in lines, the rest left for the next poll; a line past the bound is
    refused and said. A refusal is said, never a stop of the watch.
+2. The rate of a writer is bounded, and what an admitted line starts in the watch too: one
+   search per VM and technique, a bounded number in all, a bounded queue per VM, a bounded
+   number of VMs. Durations are finite and bounded. A technique the watch does not know (its
+   catalog, its rules) is refused: no search, no call to the model.
+3. The moment of a restore is never taken from the channel on a real incident: a line counts
+   only for an exercise card tied to its run, never after the card's first detection;
+   otherwise the earliest moment the defender recorded, and the prompt says so.
+4. The workspace queried for a rule proposal is the one of Glorfindel's config; a line naming
+   another is refused and said.
 
 No Azure call, no model call. Every identifier is made up (repository public). Mutants
 M2810–M2839 (scripts/mutation_check.py) are measured here.
@@ -15,7 +24,9 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -308,3 +319,78 @@ def test_an_unknown_technique_in_runs_reaches_neither_the_search_nor_the_model(t
     assert [d["signal_id"] for d in responded] == ["known"] and polled == []
     assert " ".join(out.split()).count("inconnue de la watch") == 2
     assert signal_origin.refused_counts() == {"attack_started": 1, "detection_missed": 1}
+
+
+# ── 3. The moment of a restore is never the channel's on a real incident ───────────────
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def _attack_line(at: float, run_id: str) -> dict:
+    return _line("attack_started", signal_id=f"{run_id}_attack_started",
+                 raw_signal={"attack_time": at}, context={"run_id": run_id, "scenario": "s"})
+
+
+def _incident(tmp_path, monkeypatch):
+    """A real incident: first detected 90 min ago, the VM isolated an hour later (human_only, the
+    operator came late) — and a line in runs/ dated just before the isolation."""
+    now = time.time()
+    first, isolated = now - 5400, now - 1800
+    monkeypatch.setattr("glorfindel.actions._load_isolation_state", lambda rid: {"isolated_at": _iso(isolated)})
+    runs = tmp_path / "runs"
+    runs.mkdir(exist_ok=True)
+    (runs / "20261102T100000Z_signals.jsonl").write_text(json.dumps(_attack_line(isolated - 60, "20261102T100000Z")) + "\n")
+    return first, isolated, runs
+
+
+def test_a_real_incident_s_restore_never_takes_the_channel_s_moment(tmp_path, monkeypatch):
+    from glorfindel import restore_plan
+    first, _isolated, runs = _incident(tmp_path, monkeypatch)
+    card = {"first_seen": _iso(first), "source": "real"}
+    got = restore_plan.proposed_moment(VM, card, runs_dir=runs)
+    assert got["source"] == "card" and got["before"] == _iso(first)
+    assert "incident réel" in got["why"] and "le plus ancien des moments sûrs" in got["why"]
+    assert restore_plan.proposed_moment(VM, {"first_seen": _iso(first)}, runs_dir=runs)["before"] == _iso(first)
+
+
+def test_an_exercise_s_moment_is_its_run_s_and_never_after_its_first_detection(tmp_path, monkeypatch):
+    from glorfindel import restore_plan
+    first, isolated, runs = _incident(tmp_path, monkeypatch)
+    other = {"first_seen": _iso(first), "source": "exercise", "exercise_run": "20261102T090000Z"}
+    got = restore_plan.proposed_moment(VM, other, runs_dir=runs)               # another run's line
+    assert got["before"] == _iso(first) and "aucune ligne attack_started du run 20261102T090000Z" in got["why"]
+    late = {**other, "exercise_run": "20261102T100000Z"}                      # its run, after the card
+    assert restore_plan.proposed_moment(VM, late, runs_dir=runs)["before"] == _iso(first)
+    (runs / "20261102T100000Z_signals.jsonl").write_text(
+        json.dumps(_attack_line(first - 600, "20261102T100000Z")) + "\n")
+    got = restore_plan.proposed_moment(VM, late, runs_dir=runs)
+    assert got["source"] == "exercise" and got["before"] == _iso(first - 600)
+
+
+def test_the_restore_command_takes_the_card_s_moment_not_the_channel_s(tmp_path, monkeypatch):
+    """`glorfindel restore` without --before, on the real incident: the card's first detection
+    — the line of runs/ dated after it is never the point's bound."""
+    from click.testing import CliRunner
+
+    from glorfindel import cli, escalations
+    first, isolated, _runs = _incident(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_backup_vault_from_config", lambda v: ("rsv-example", "rg-backup", "stexample"))
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda dry_run=False: SimpleNamespace(dry_run=dry_run))
+    monkeypatch.setattr(cli, "_record_manual_action", lambda *a, **k: None)
+    started: list = []
+
+    def start_restore(resource_id, connector, vault, before, **kw):
+        started.append(before)
+        return {"job_id": "j", "restore_job_name": "rj", "recovery_point_time": "x"}
+    monkeypatch.setattr("glorfindel.jobs.start_restore", start_restore)
+    out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes"], terminal_width=200)
+    assert out.exit_code != 0 and started == [] and "aucune carte" in out.output    # no card: asked
+    escalations.record("rule-x-0123abcd", VM, "restore_from_backup", "destructive_action", "r", ttp="T1486")
+    store = [json.loads(x) for x in escalations._STORE.read_text().splitlines()]
+    store[0]["first_seen"] = _iso(first)
+    escalations._STORE.write_text("\n".join(json.dumps(e) for e in store) + "\n")
+    out = CliRunner().invoke(cli.cli, ["restore", VM, "--yes"], terminal_width=200)
+    assert out.exit_code == 0, out.output
+    assert started == [_iso(first)] and "incident réel" in " ".join(out.output.split())

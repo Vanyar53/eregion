@@ -1203,8 +1203,9 @@ def jobs(resource_id: str, refresh: bool):
                    "Also honoured via GLORFINDEL_KEEP_ISOLATED=1.")
 @click.option("--before", default=None, metavar="ISO8601",
               help="Restore the newest recovery point before this moment (ISO8601, UTC "
-                   "when no offset): when the attack began. Without it, read from the "
-                   "attack_started of THIS VM in runs/; unknown → the command asks for it. "
+                   "when no offset): when the attack began. Without it, the moment of this "
+                   "VM's card (its first detection; an exercise's attack_started, never on a "
+                   "real incident); unknown → the command asks for it. "
                    "Example: 2026-05-24T13:44:00+00:00")
 @click.option("--model", default=lambda: glorfindel_model(), show_default=True)
 @click.option("--memory-path", default=None)
@@ -1217,8 +1218,8 @@ def restore(resource_id: str, vault: str, dry_run: bool, yes: bool, keep_isolate
     with 'az vm start' and then run 'glorfindel release'. Use --wait for the
     old blocking behavior that handles post-restore steps automatically.
 
-    The recovery point is the newest one before the attack began (SEC4c): --before, or
-    the attack_started of this VM in runs/; never the newest point when neither says when.
+    The recovery point is the newest one before the attack began (SEC4c): --before, or the
+    moment of this VM's card (SEC8); never the newest point when neither says when.
     """
     from glorfindel.actions import AzureConnector
 
@@ -1949,26 +1950,27 @@ def _restore_before(resource_id: str, before: str | None) -> tuple[str, str]:
     """(the moment the recovery point must precede, ISO 8601 UTC; why that one) — or
     ("", what to do) when nothing says when the attack on this VM began (SEC4c).
 
-    --before wins (UTC when it has no offset). Otherwise the attack_started of THIS VM
-    that runs/ admits (glorfindel/restore_plan.py, signal_origin.attack_moment: the
-    channel's rules, the bounds of SEC4a around the VM's isolation and never after it, the
-    earliest line) — never the last line of any VM, from any writer."""
+    --before wins (UTC when it has no offset). Otherwise the moment the console and the bot
+    propose for this VM's card (glorfindel/restore_plan.py, `card_of`, `proposed_moment`): the
+    earliest the defender recorded — the card's first detection, the VM's isolation —, or, for
+    an exercise card, the attack_started of its run in runs/, never after its first detection.
+    A line of runs/ never gives the moment of a real incident (SEC8); no card, no moment."""
     from glorfindel import restore_plan
     if before:
         try:
             return restore_plan.parse_moment(before), "--before"
         except ValueError as exc:
             raise click.ClickException(f"--before : {exc}")
-    found, why = restore_plan.exercise_moment(resource_id)
-    if found:
-        return found, why
+    plan = restore_plan.proposed_moment(resource_id, restore_plan.card_of(resource_id))
+    if plan["before"]:
+        return plan["before"], plan["why"]
     _, isolated = restore_plan.isolation_time(resource_id)
     hint = f" La VM est isolée depuis {isolated} : l'attaque a commencé avant." if isolated else ""
     vm = resource_id.rstrip("/").split("/")[-1]
-    return "", (f"Moment de l'attaque inconnu pour {vm} : aucune ligne attack_started de "
-                "cette VM admise dans runs/ (au plus 2 h avant son isolation, ou avant "
-                "maintenant). Le point le plus récent peut être postérieur à l'attaque : "
-                "passer --before <ISO8601>, un instant avant son début." + hint)
+    return "", (f"Moment de l'attaque inconnu pour {vm} : aucune carte en attente de cette VM "
+                "n'en donne un (sa première détection, ou pour un exercice la ligne "
+                "attack_started de son run). Le point le plus récent peut être postérieur à "
+                "l'attaque : passer --before <ISO8601>, un instant avant son début." + hint)
 
 
 @contextlib.contextmanager

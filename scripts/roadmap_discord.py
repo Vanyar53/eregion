@@ -7,9 +7,11 @@
 
 #roadmap — one message of the Eregion bot, rewritten in place (found among the channel's pins,
 then its last 50 messages; posted when there is none): a bar per milestone (its issues closed
-over all of them), the lots in progress, blocked and still to do, the 1.0 criteria and the five
-indicators (ROADMAP.md). A ROADMAP.md that changed shape loses that section, and the message
-says so; the run goes on.
+over all of them), the releases (RM1: the last one published, read on GitHub, then the lines of
+ROADMAP.md's « Les prochaines releases »), the lots in progress, blocked and still to do, the 1.0
+criteria and the five indicators (ROADMAP.md). A ROADMAP.md that changed shape loses that
+section, and the message says so; the run goes on. No release published, or GitHub failing on
+it: its line is left out, said in the log.
 
 #lots — a thread per OPEN lot of the four milestones (an issue whose title starts with its lot
 id; #70, #95 and the findings have none), « <ID> · <title> · #<n> », created when missing, its
@@ -39,6 +41,15 @@ TITLE = "🗺️ Eregion — vers la 1.0"
 WORKING = ("en cours", "en relecture", "en correction")
 KEPT = WORKING + ("bloqué",)
 DESCRIPTION_MAX, EMBED_MAX = 4096, 6000
+# RM1: the table the Orchestre holds in ROADMAP.md (scripts/release.py sets its version's line to
+# « brouillon »), read as written: its heading, then this header; anything else is « introuvable ».
+RELEASES_HEADING = "### Les prochaines releases"
+RELEASES_HEADER = ["Version", "Titre", "Contenu", "État"]
+RELEASES_ROWS = 6
+# An indicator's « Aujourd'hui », whole up to here (110 until 02/11: the facts of BL1 and of
+# bree's first autonomous blocks were cut off); ROADMAP.md keeps its cells under it
+# (tests/unit/test_roadmap_discord.py reads them).
+INDICATOR_MAX = 240
 
 
 @dataclass
@@ -64,11 +75,26 @@ class Lot:
 
 # ── GitHub ───────────────────────────────────────────────────────────────────────────
 
-def github_get(path: str, environ) -> list | dict:
+def github_get(path: str, environ, label: str = "GitHub API") -> list | dict:
     api = environ.get("GITHUB_API_URL", "https://api.github.com")
     auth = {"Authorization": f"Bearer {environ['GITHUB_TOKEN']}"} if environ.get("GITHUB_TOKEN") else {}
     return nd.fetch("GET", f"{api}/repos/{environ.get('GITHUB_REPOSITORY', 'Vanyar53/eregion')}{path}",
-                    "GitHub API", headers={"Accept": "application/vnd.github+json", **auth})
+                    label, headers={"Accept": "application/vnd.github+json", **auth})
+
+
+def load_latest(environ) -> dict | None:
+    """The last release published (RM1): GitHub's releases/latest, never a draft nor a
+    prerelease. None, said on stderr, when there is none (404), when GitHub fails or answers
+    something else: the message goes without that line, the job stays green."""
+    try:
+        found = github_get("/releases/latest", environ, "GitHub releases/latest")
+    except nd.Failure as e:
+        print(f"atelier: dernière release omise — {e}", file=sys.stderr)
+        return None
+    if not isinstance(found, dict) or not (found.get("name") or found.get("tag_name")):
+        print("atelier: dernière release omise — réponse illisible", file=sys.stderr)
+        return None
+    return found
 
 
 def load_github(environ) -> tuple[list, list, list]:
@@ -220,8 +246,73 @@ def indicators(roadmap: str) -> list[tuple[str, str]] | None:
             break
         cells = [c.strip() for c in x.strip().strip("|").split("|")]
         if len(cells) >= 3:
-            out.append((_plain(cells[0]), nd._cut(_plain(cells[2]), 110)))
+            out.append((_plain(cells[0]), nd._cut(_plain(cells[2]), INDICATOR_MAX)))
     return out or None
+
+
+def _cells(line: str) -> list[str]:
+    return [_plain(c) for c in line.strip().strip("|").split("|")]
+
+
+def releases(roadmap: str) -> list[list[str]] | None:
+    """« ### Les prochaines releases » and its table (version, titre, contenu, état), up to the
+    next heading. None when the heading, the table or its header is not there as written, or
+    when a line has another number of cells: a table that changed shape is never half read."""
+    lines = roadmap.splitlines()
+    start = next((i for i, x in enumerate(lines) if x.strip() == RELEASES_HEADING), None)
+    if start is None:
+        return None
+    rest = lines[start + 1:]
+    rest = rest[: next((i for i, x in enumerate(rest) if re.match(r"#{1,6} ", x)), len(rest))]   # a heading
+    head = next((i for i, x in enumerate(rest) if x.startswith("|")), None)
+    if head is None or _cells(rest[head]) != RELEASES_HEADER or head + 1 >= len(rest) \
+            or not re.fullmatch(r"\|[\s:|-]+\|", rest[head + 1].strip()):
+        return None
+    out = []
+    for x in rest[head + 2:]:
+        if not x.startswith("|"):
+            break
+        cells = _cells(x)
+        if len(cells) != len(RELEASES_HEADER) or not cells[0]:
+            return None
+        out.append(cells)
+    return out or None
+
+
+def _day(stamp) -> str:
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).strftime("%d/%m/%Y")
+    except ValueError:
+        return ""
+
+
+def releases_block(roadmap: str, latest: dict | None) -> list[str]:
+    """« **Releases** »: the last one published (its name inert: a member of the repository writes
+    it, SEC6), then ROADMAP.md's lines, each field cut then made inert (a « ** » or a mention in a
+    cell never breaks the message), at most RELEASES_ROWS of them. The line of
+    the version GitHub says published is shown « publiée », whatever the table still says."""
+    out = ["**Releases**"]
+    published = ""
+    if latest:
+        name = nd.inert(nd._cut(latest.get("name") or latest.get("tag_name"), 80))   # cut, then escaped
+        # A parenthesis would close the masked link early: encoded, as a browser does.
+        url = nd._https(latest.get("html_url")).replace("(", "%28").replace(")", "%29")
+        day = _day(latest.get("published_at"))
+        published = str(latest.get("tag_name") or "").lstrip("v")
+        out.append("🏷️ Dernière publiée : " + (f"[{name}]({url})" if url else f"**{name}**")
+                   + (f" · le {day}" if day else ""))
+    rows = releases(roadmap)
+    if rows is None:
+        return out + ["_section introuvable dans ROADMAP.md_"]
+    for version, title, what, state in rows[:RELEASES_ROWS]:
+        if published and version.lstrip("v") == published:
+            state = "publiée"
+        out.append(f"`{nd._cut(version, 12)}` " + (f"**{nd.inert(nd._cut(title, 40))}** "
+                                                    if title.strip("—- ") else "")
+                   + f"· _{nd.inert(nd._cut(state, 60))}_ — {nd.inert(nd._cut(what, 100))}")
+    if len(rows) > RELEASES_ROWS:
+        out.append(f"… +{len(rows) - RELEASES_ROWS} dans ROADMAP.md")
+    return out
 
 
 def bar(done: int, total: int, width: int = 20) -> str:
@@ -235,7 +326,7 @@ def _keys(lots: list[Lot], limit: int) -> str:
 
 
 def render(milestones: list, lots: list[Lot], states: dict[str, str], roadmap: str, *,
-           repo: str = "Vanyar53/eregion", sha: str = "", now: str = "") -> dict:
+           repo: str = "Vanyar53/eregion", sha: str = "", now: str = "", latest: dict | None = None) -> dict:
     by_title = {m.get("title"): m for m in milestones}
     out = ["**Jalons**"]
     for m in nd.MILESTONE_TAGS:
@@ -243,6 +334,9 @@ def render(milestones: list, lots: list[Lot], states: dict[str, str], roadmap: s
         closed = sum(not x.open for x in mine)
         what = re.split(r"\s*[:;]\s*", (by_title.get(m) or {}).get("description") or "", maxsplit=1)[0]
         out.append(f"`{m:<4}` `{bar(closed, len(mine))}` **{closed}/{len(mine)}** · {nd._cut(what, 48)}")
+    # Beside the bars (how far each milestone is, then what ships next), before the lots, whose
+    # lists are what grows: a message too long is cut at its end, never here.
+    out += [""] + releases_block(roadmap, latest)
     working = [x for x in lots if x.open and states.get(x.number) in WORKING]
     blocked = [x for x in lots if x.open and states.get(x.number) == "bloqué"]
     done_open = [x for x in lots if x.open and states.get(x.number) == "fait"]
@@ -316,6 +410,7 @@ def main(argv=None, environ=os.environ) -> int:
         nd.say(e)
         return 0
     lots = lots_of(issues, pulls)
+    latest = load_latest(environ)
     try:
         roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
     except OSError:
@@ -329,7 +424,7 @@ def main(argv=None, environ=os.environ) -> int:
             nd.say(e)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     message = render(milestones, lots, states, roadmap, repo=environ.get("GITHUB_REPOSITORY", "Vanyar53/eregion"),
-                     sha=environ.get("GITHUB_SHA", ""), now=now)
+                     sha=environ.get("GITHUB_SHA", ""), now=now, latest=latest)
     if dry:
         print(message["description"])
         print("\n#lots :\n" + ("\n".join(f"  {x}" for x in done) or ("  rien à changer" if cfg.lots

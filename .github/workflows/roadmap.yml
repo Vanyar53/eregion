@@ -1,8 +1,10 @@
 name: Roadmap
 
 # N2 (#243): the road to 1.0 in Discord (docs/atelier-discord.md). #roadmap: one message of the
-# Eregion bot, rewritten in place — a bar per milestone, the lots in progress, blocked, to do,
-# the 1.0 criteria and the five indicators (ROADMAP.md). #lots: a thread per open issue of the
+# Eregion bot, rewritten in place — a bar per milestone, the releases (RM1: the last published,
+# GitHub's releases/latest, its name made inert by glorfindel/chat_text.py, brought by the
+# checkout; and ROADMAP.md's « Les prochaines releases »), the lots in progress,
+# blocked, to do, the 1.0 criteria and the five indicators (ROADMAP.md). #lots: a thread per open issue of the
 # milestones, its tags true; a closed one tagged « fait » and archived. scripts/roadmap_discord.py.
 #
 # Reads the default branch's ROADMAP.md and GitHub's issues; never checks out a pull request's
@@ -46,6 +48,7 @@ jobs:
             ROADMAP.md
             scripts/notify_discord.py
             scripts/roadmap_discord.py
+            glorfindel/chat_text.py
           sparse-checkout-cone-mode: false
 
       - name: Discord

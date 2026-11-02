@@ -1256,10 +1256,15 @@ def build(campaign_dir: Path, model: str | None = None, llm=None, index_path: Pa
 
 def check_enrollment(campaign_dir: Path) -> None:
     """A campaign that came through the channel: its runs' VMs are checked enrolled, as by
-    the watch (H-1) — their tags read from Azure, by the host's identity."""
+    the watch (H-1) — their tags read from Azure, by the host's identity. Compose's empty
+    AZURE_CLIENT_* are dropped first, as the watch and the console drop them (#205): launched
+    by docker exec in H0's container, the report, the measure, the triage or the index would
+    otherwise never reach the managed identity, and leave every run out (BL1c)."""
     if from_channel(campaign_dir):
         from eregion_core import exercise
+        from eregion_core.identity import drop_empty_service_principal_env
         from eregion_core.inscription import TagEnrollment
+        drop_empty_service_principal_env()
         exercise.set_enrollment_check(TagEnrollment())
 
 

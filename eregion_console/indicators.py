@@ -105,6 +105,25 @@ def decision_of(run: dict, cycles) -> dict | None:
     return best
 
 
+def liftings_of(cycles, manual=()) -> list[tuple]:
+    """The lifts of a containment: those the watch's cycles show (a release on a recovery), and
+    the operator's own (``manual``: runs/manual_actions.jsonl, read by the API)."""
+    from analysis import containment
+    every = detections(cycles).cycles
+    return [x for c in every if (x := containment.lifting_of(c)) is not None] + list(manual or ())
+
+
+def incident_of(run: dict, decision: dict | None, cards=(), liftings=()):
+    """How an attack run ended, by BL1's definition (``analysis/containment.py``: executed in its
+    cycle, read back on Azure, held) — the one call the overview and Dagorlad's follow make
+    (DG-c: a run is not measured otherwise there). The VM: the run's own (C1), else the
+    decision's."""
+    from analysis import containment
+    d = decision or {}
+    return containment.incident(run["run_id"], run["ttp"], run.get("resource_id") or d.get("resource_id", ""),
+                                run["at"], run["detection"], decision, cards=cards, liftings=liftings)
+
+
 def _median(values: list[float]) -> float | None:
     return round(statistics.median(values), 1) if values else None
 
@@ -127,7 +146,7 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
     taken: set[str] = set()
     # The lifts of a containment the watch's cycles show (a release on a recovery); the
     # operator's own are in runs/manual_actions.jsonl, passed by the API.
-    liftings = [x for c in every_cycle if (x := containment.lifting_of(c)) is not None] + list(liftings or ())
+    liftings = liftings_of(cycles, liftings)
     for r in detected:
         if r["latency"] is not None:
             detect.append(r["latency"])
@@ -143,8 +162,7 @@ def compute(runs: list[dict], cycles: list[dict], cards: list[dict], catalog: li
         # (analysis/containment.py) — executed in the cycle, read back on Azure, held — whose
         # time is run_report.timeline's, the matrix's. The VM: the run's own (C1), else the
         # decision's.
-        inc = containment.incident(r["run_id"], r["ttp"], r.get("resource_id") or d.get("resource_id", ""),
-                                   r["at"], "detected", d, cards=all_cards or (), liftings=liftings)
+        inc = incident_of(r, d, all_cards or (), liftings)
         if inc.outcome == containment.CONTAINED:
             alone += 1
             if inc.time_to_contain_s is not None:

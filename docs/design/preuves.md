@@ -2839,6 +2839,67 @@ main ». Avant la relecture (la règle en place, 48e42c8) : harnais avant/après
 l'état et de la réaffirmation, 74/78 des deux côtés, plus M2150–M2152 (77/81) — M13 et M37 par leurs
 seules séquences figées, M36 et M1645 survivent, des deux côtés ; aucun perdu.
 
+**D80 (31/10, #380) : la levée et le reset cherchent loin d'elle les règles d'une carte nue, et disent ce
+qu'ils y gardent.** L'I3 de la graine 555 à 500, figé en `xfail` strict par L1Q
+(`test_a_release_after_a_lost_state_and_a_cut_isolation_says_what_it_keeps`), et, le même jour, les
+invariants profonds de la nuit sur `main` 8295975, Linux et macOS (la base Hypothesis que le job macOS de
+chaque PR rejoue : rouge sur toutes les PR) : « I3 (said): release_isolation said release_partial, rules
+of …/Db--01 kept without saying so: ['glorfindel-iso-db--01-db-nic-0-0d0228'] ». **Cause, établie** (la
+séquence rejouée pas à pas, les NSG, les cartes et l'état relevés après chaque règle) : ni l'isolation
+coupée du titre (coupée au premier appel, `vm.get`, elle n'écrit rien ; la reprise isole comme une
+première fois ; remplacée par une isolation simple, la séquence échoue de même sur 72bb58f), ni la quarantaine. La carte de web2 est laissée nue par `bare_with_an_unknown_original`
+(son NSG de quarantaine retiré à la main). La règle de son isolation, retournée en allow et visant
+l'adresse reprise par une nouvelle VM, est restée sur nsg-web-nic (rg-app2), gardée et dite par une levée
+précédente (I4C), qui l'a notée dans l'état (`release_failed`). L'état perdu, la reprise isole la carte
+nue par la quarantaine et note son original « aucun » — juste : elle était nue. La levée remet la carte
+nue, puis balaie : `_sweep_isolation` ne cherche les règles d'une carte que sur les NSG qui la gouvernent
+maintenant (`_nic_nsg_views`). Une carte nue n'en a pas, donc nsg-web-nic est hors de vue, et la levée dit
+`released`. Les séquences profondes sont la même cause vue d'un NSG encore à portée : nsg-tier, que
+db-nic-0 portait, gouverne aussi db-nic-1, mais le balayage n'y cherche que les règles de db-nic-1
+(`_iso_rules_on`, à son empreinte). La règle de db-nic-0, nue, n'est cherchée nulle part : `release_partial`
+pour l'original inconnu, la règle gardée jamais nommée. C'est le point ouvert d'I4B relevé par I4C (« ni le
+reset ni la levée ne cherchent sur tous les NSG pour une carte nue »), réglé ici pour la levée.
+**Le correctif** (`glorfindel/providers/azure/away.py`, un module à lui : `release.py` reste à 487
+lignes, une ligne change) : à la fin du balayage, pour chaque carte de la VM sans NSG à elle et hors
+quarantaine, ses règles — à son empreinte, premier et second nom (`_placement_rule_bases`), aucune
+autre carte — sont cherchées sur tous les NSG de l'abonnement, comme pour une VM supprimée (I7S). Chacune
+passe par la garde (`_held_by_turned`) : gardée, elle est dite (« gardée », `release_partial`) ; sinon
+elle est retirée. Les NSG déjà balayés pour cette carte (celui de son subnet) sont sautés : une règle
+gardée n'est dite qu'une fois. Une liste refusée (une erreur) est dite (« non cherchées », `release_partial`) :
+rien trouvé n'est pas rien là (A0) ; une liste **filtrée** par un rôle limité à des groupes (ce qu'ARM rend probablement, non mesuré) se lit encore « rien là », comme pour I7S et `_unplaced_blocks` — reste ouvert, à mesurer au banc. Coût : une liste des NSG de l'abonnement par levée d'une VM qui a une
+telle carte, que la garde reprend (la relecture : jusqu'à trois ou quatre listes par levée avec celles de la garde des placements, du balayage et de l'original, laissé ainsi), le cas courant quand les NSG sont posés sur les
+subnets seulement. Aucune règle de la machine retirée ni restreinte ; l'oracle (`_kept_said`) est
+inchangé. Figés : la séquence de la graine 555 (son `xfail` levé),
+`test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said` (Linux et macOS, rouges sur 72bb58f avec le message
+de la nuit), et `test_release_away.py` (la règle gardée sur le NSG que la carte portait, un reste retiré,
+la liste refusée, une règle du NSG du subnet dite une fois). Les deux exemples de la base Hypothesis
+(leurs blobs `@reproduce_failure`) reproduisent sur 72bb58f et plus après le correctif : la séquence
+dépasse l'étape fautive et réclame d'autres tirages que le blob n'a pas (« DidNotReproduce », la forme des
+données a changé). **Reste ouvert** : une carte dont le NSG a été **remplacé** par un autre (pas retiré)
+n'est cherchée que sur ses NSG d'aujourd'hui ; `verify_release` ne cherche pas loin de la carte (une règle
+gardée sur un NSG qui ne la gouverne plus ne la coupe pas ; la levée et le reset la disent).
+
+**Le reset aussi (PR #391, le job macOS).** La levée réglée, la séquence de la nuit rejouée par le job macOS
+continuait jusqu'au reset : « I3 (said): reset --from-azure said swept_partial, rules of …/Db--01 kept
+without saying so: ['glorfindel-iso-db--01-db-nic-0-0d0228'] » — le point ouvert noté ci-dessus, même
+cause : `sweep_vm_rules` ne cherche les règles d'une carte que sur ses vues (`_nic_nsg_views`, l'original
+connu). Le même mixin sert les deux : `_away_split` rend ce que la garde garde et ce qui part ; la levée
+retire aussitôt (`_away_rules`), le reset ajoute à ce qu'il dit et à ce qu'il retire (rien en aperçu), et
+cherche aussi les **blocages** de la carte (à son empreinte, le préfixe de l'IP lu dans le nom comme
+`sweep.py` le lit), qu'il retire aussi. Ce que son balayage a déjà vu (`seen`) est sauté. `sweep.py` passe à
+498 lignes. Figés : `test_a_bare_nics_rule_kept_on_its_mates_nsg_is_said_by_the_reset` (rouge sur 51e4615
+avec le message du job ; son blob reproduit sur 51e4615, plus après) ; `test_release_away.py` gagne la règle
+gardée dite par le reset et le blocage laissé retiré. Mutants M2345 (le reset aveugle loin de la carte nue)
+et M2346 (aveugle à ses blocages).
+
+**Mutants M2340–M2346** : M2340 (le balayage aveugle loin d'une carte nue : `released`) par les trois
+séquences figées et `test_release_away.py` ; M2341 (une règle trouvée loin de la carte retirée sans la
+garde : la VM derrière perd ce qu'elle lui ouvre) par les mêmes ; M2342 (une liste refusée lue « rien »)
+par `test_a_bare_nics_rules_unlooked_for_are_said` ; M2343 (le NSG du subnet cherché deux fois : la règle
+nommée deux fois) par `test_a_rule_on_the_bare_nics_subnet_nsg_is_said_once` ; M2344 (le premier nom seul cherché : une règle retournée sous le second, `-b-`, tue) par `test_a_bare_nics_rule_under_its_second_name_is_kept_and_said`, ajouté à la relecture ; M2345 par la séquence du reset et `test_release_away.py` ; M2346 par `test_the_reset_takes_off_a_bare_nics_block_left_on_the_nsg_it_carried`. 7/7 à chaque tour. La relecture : le test de la liste refusée ne la refuse plus qu'après la recherche de l'original de la carte (refusée dès le premier appel, celle-ci échouait aussi et cachait le cas).
+
+**Mesures de D80.** `pytest` complet : 4 716 réussis avec le reset (4 712 d'abord), 7 sautés, 5 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` sans faute. Invariants à 500 séquences sur les graines 1, 7, 25, 35, 40, 42, 45, 101, 322, 555, 1618, 4242, 8675, 9001 et 31337 : 15/15 vertes ; puis 2 000 sur 42, 322 et 8675 : vertes. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants des modules touchés (levée, connecteur, façade) : 44/49 attrapés à chaque tour sur `main` 72bb58f, 44/49 après — les mêmes cinq de part et d'autre (M17, le verrou par VM, et M1552 survivent ; M22, M26 et M1963 par leurs seules séquences figées) —, plus M2340–M2343 (48/53). Aucun perdu. Avec le reset : invariants à 500 sur 555, 42 et 8675 verts ; M2340–M2346 7/7.
+
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
 (`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque
@@ -3149,6 +3210,63 @@ avant/après (60 séquences, deux tours, `--jobs 4`, `--hypothesis-seed=4242`) s
 levée, d'`older.py` et des règles retournées : 51/55 sur `main` 72bb58f, 51/55 après, mutant par mutant
 à l'identique (M22, M26 et M1963 par leurs séquences figées seules, M1552 survit, des deux côtés), plus
 les trois nouveaux (54/58). Aucun perdu.
+
+**L1R (31/10, #378, #381) : un contournement dit à côté d'une paire modifiée, quoi qu'il en reste.** Les deux
+séquences de la machine à 2 000 figées en `xfail` strict : la graine 1006 (U7D, une isolation d'api) et la graine 322
+(L1Q, un blocage de web2). Les titres des deux issues mettaient en cause le rôle retiré ; **la cause, établie** (la
+vérification tracée à chaque passe des deux séquences rejouées, les règles du NSG relevées) **n'est pas le rôle** —
+les écritures refusées n'empêchaient que de reposer le deny —, et c'est bien la famille de L1C, par une porte que L1C
+avait laissée. **Graine 1006** : api isolée par règles sur son propre NSG (la première règle), puis le `-out` retourné
+en allow (`tamper_with_our_rule`, « access »), le deny entrant déplacé à 4000 (« priority ») et réduit au port 22
+(« port ») ; le deny-lateral-in du client, à 130, élargi en allow de tout. Aucune des deux règles de la paire ne coupe
+plus la carte : `_half_shadowed` ne lisait qu'une paire dont un sens coupait encore (`len(prio) == 1`), il ne lisait
+rien — la carte « non couverte » seule, l'allow avant notre deny à 4000 jamais lue. `_half_shadowed` de L1C ne
+couvrait donc pas ce cas : il le supposait intact d'un côté. **Graine 322** : web2 bloquée sur le NSG du sous-réseau,
+son deny entrant réduit au port 22 (`altered` : il ne refuse plus tous les ports), une allow du client ajoutée à 100,
+avant notre deny à 200, puis élargie en allow de tout. `_half_bypassed` ne lisait qu'un deny encore bloquant
+l'attaquant — le `-out`, qu'aucune allow entrante ne passe — et jamais le deny entrant resté à sa place : la règle
+modifiée seule, aucune carte de contournement. **Cause commune** : ce qui reste d'une paire ne se lisait que par un
+deny intact ; un deny de Glorfindel resté à sa place mais modifié (un port, un protocole, une adresse, une priorité)
+n'était pas lu, et l'allow avant lui, qui laisse passer la menace, pas dite (L1).
+
+**Correctif** (`providers/azure/nsg.py`, `_deny_slot` ; `verify.py`, `_half_shadowed` ; `verify_block.py`,
+`_half_bypassed`). Chaque deny de la paire encore là, quoi qu'il couvre maintenant, est lu pour une allow avant lui
+(sa priorité et son sens) ; pour un blocage, seule une allow qui laisse passer la menace compte, comme avant. Une règle
+retournée en allow n'est plus un deny de Glorfindel : rien ne passe « avant » elle — la carte de dérive la dit, et
+l'oracle du contournement (`_bypass_comes_back`) ne tire lui aussi que nos deny entrants. La réaffirmation n'a pas
+changé : elle écrivait déjà les deux cartes dès que la vérification rendait `shadowed_by` à côté de ce qui manque
+(L1C). **Trouvé en route, même famille** : un blocage de périmètre seul (une paire sur le NSG du sous-réseau, aucun
+placement : `block_perimeter`) a son propre chemin dans `verify_block_ip`, qui lisait la paire « manquante » seule —
+le défaut de L1C, que L1C n'avait corrigé que pour le chemin des placements. Il lit maintenant ce qui reste de la
+paire (`_half_bypassed`, la portée « toute VM derrière le NSG ») et le rend à côté de ce qui manque ; la réaffirmation
+écrit les deux cartes. La machine n'y arrive pas par `_bypass_comes_back` (son blocage de la VM écrit des placements) :
+construit à la main. **La machine** : aucune règle retirée ni restreinte, aucun oracle touché ; elle atteignait déjà l'état. Figés :
+les deux séquences, leur `xfail` levé, complétées jusqu'au bout de la règle (le disque plein à la 1re, 3e ou 6e
+écriture, `human_only` ou `non_disruptive` : douze cas) ; `test_glorfindel.py` :
+`test_an_isolation_altered_both_ways_and_bypassed_says_both` (un port, un protocole, une adresse ; une allow après le
+deny ne contourne rien), `test_an_isolation_altered_both_ways_says_an_allow_before_either_deny` (les deux deny réduits,
+une allow sortante avant le `-out` ; une paire retournée en entier : rien), `test_a_block_altered_inbound_and_bypassed_says_both`
+(un port, un protocole, une adresse ; la réaffirmation écrit les deux cartes ; une allow qui laisse la menace dehors,
+ou après le deny : rien), `test_a_perimeter_block_altered_and_bypassed_says_both` (le deny entrant réduit, ou le
+`-out` parti ; les deux cartes). Les douze cas et les neuf tests unitaires, rouges sur `origin/main` 72bb58f.
+
+**Mutants M2300–M2302** (le blocage : seul un deny encore bloquant lu ; l'isolation : seul un deny qui coupe encore la
+carte lu ; le périmètre seul : ce qui reste jamais lu) : 3/3 par leurs tests à chaque tour (60 séquences, deux tours, graine 4242). Par la machine seule (500 séquences, graines 1006 et 322) : M2300 et M2301 0/2, attrapés par leurs séquences figées seules — l'état (une paire modifiée, une règle du client avant elle élargie, aucune écriture qui la repose) ne vient qu'à 2 000, comme M2230 et M2234 ; M2302 survit à la machine (son blocage de périmètre seul n'est jamais celui que `_bypass_comes_back` contourne), attrapé par son test.
+
+**Mesures de L1R.** `pytest` complet : 4 726 réussis, 7 sautés, 4 `xfail` (deux de moins ; restent #366 deux fois, #379 et #380, hors du lot) ; `ruff` propre ; `scripts/mutant_anchors.py` : 1 709 mutants, sans faute. Invariants, à 500 séquences sur les graines 1, 7, 42, 101, 322, 555, 777, 1006, 8675 et 31337 (le premier correctif), puis 1, 42, 322, 555, 1006 et 31337 sur l'arbre final ; à 2 000 sur 1006, 322, 42 et 8675 : tout vert. Harnais avant/après (60 séquences, deux tours, `--jobs 4`, graine 4242) sur les 49 mutants de la vérification d'une isolation (`verify.py`), d'un blocage (`verify_block.py`) et de la lecture des règles (`nsg.py`) : 45/49 attrapés à chaque tour sur `origin/main` 72bb58f, 45/49 après, mutant par mutant à l'identique (M21, M31, M34, M38 par leurs seules séquences figées, des deux côtés), plus les trois nouveaux (48/52). Aucun perdu. `origin/main` n'a pas bougé depuis 72bb58f : rien à fusionner. Aucune règle de la machine retirée ni restreinte, aucun oracle touché ; `reassert.py` inchangé (494 lignes), `nsg.py` 375, `verify.py` 324, `verify_block.py` 302.
+
+**La relecture de L1R (31/10) : un nom partagé n'est pas une preuve (L24).** `_half_shadowed` lisait « quoi qu'il
+couvre » chaque deny des paires de `_isolation_pairs`, y compris les noms que des homonymes partagent — d'avant
+l'empreinte de la carte (`glorfindel-iso-<vm>-<carte>`) et suffixés par la VM (`glorfindel-isolation-deny-all-<vm>`).
+Avant L1R, `_deny_isolates` écartait le deny d'un homonyme visant ses propres adresses ; `_deny_slot` ne regarde plus
+le contenu. La sonde du relecteur : la paire de la VM partie du NSG partagé du sous-réseau, la vieille paire d'un
+homonyme (une VM du même nom dans un autre groupe) à 150 vers 10.0.0.9, une `allow-ssh` du client à 120 — une carte
+`bypassed` fausse, de sévérité haute (I3) ; verte sur `main`. **Correctif** : « quoi qu'il couvre » ne vaut que pour un
+nom à l'empreinte de la carte (le sien et son second, `-b-` : seul Glorfindel les écrit) ; un autre nom n'est lu que
+s'il est un deny qui s'applique à la carte (`_deny_applies`, comme `_nic_owns`). Figé :
+`test_a_homonyms_deny_under_a_shared_name_is_never_read_bypassed` (les deux formes de nom ; l'homonyme, ou le nom
+suffixé posé pour une autre carte de la même VM ; notre paire sous ce nom, réduite à un port, toujours lue). Mutant
+**M2303** (la garde retirée) ; M2301 réancré sur la nouvelle ligne. Mesures : `pytest` complet 4 730 réussis, 7 sautés, 4 `xfail` ; `ruff` propre ; `mutant_anchors.py` 1 710 mutants, sans faute ; invariants à 500 sur les graines 1006 et 322, verts ; M2300–M2303 : 4/4 par leurs tests à chaque tour (60 séquences, deux tours, graine 4242).
 
 **I11 sous charge (29/10).** Le délai d'un tour (20 s) n'a pas été dépassé : 26 runs de la
 machine à 500 séquences en même temps sur 16 cœurs (312 à 647 s chacun, contre une centaine

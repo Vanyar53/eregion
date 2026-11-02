@@ -484,4 +484,4 @@ class ReleaseMixin:
                     if err:
                         failed.append(err)
                 failed += [f"{u} : laissée" for u in self._unattributable_fixed(t, rules)]
-        return failed
+        return failed + self._away_rules(vm_name, targets, stuck, guard, mates)   # a bare NIC's (D80)

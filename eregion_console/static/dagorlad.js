@@ -1,10 +1,12 @@
-// Dagorlad (docs/design/console.md, §7, phases a and b): the red cards (the catalogue's techniques
+// Dagorlad (docs/design/console.md, §7, phases a to c): the red cards (the catalogue's techniques
 // and faults), the blue ones (Glorfindel, the enrolled targets), and the plan of the wires drawn
 // between them. The page sends two identifiers per wire, the server judges each one as Orodruin
 // would (GET /api/dagorlad/plan) and says what to expect. « Request run » writes a request for
 // Orodruin (POST /api/dagorlad/requests, the same two identifiers per wire), and the page shows the
 // command that carries it there: nothing is launched from here, no name is typed here, Glorfindel
-// is never told. Needs console.js and exercises.js.
+// is never told. Then each wire is followed live (GET /api/dagorlad/requests/<id>, read only): its
+// chronology from the windows, the watch's cycles, the cards and the run's report. The wires stay
+// locked until the request is over, then each keeps its last result. Needs console.js and exercises.js.
 Console.init('dagorlad');
 document.title = 'Eregion — Dagorlad';
 const $ = id => document.getElementById(id);
@@ -18,24 +20,36 @@ const S = {
   wires: [],        // [experiment id, target resource id], in the order drawn — this browser only
   picked: null,     // the red card picked (its index), waiting for a target
   drag: null,       // {i, x, y}: a red card's handle being dragged
-  request: null,    // the request written (phase b): the wires stay as they are until « New plan »
+  request: null,    // the request written (phase b), until it is over: its wires are locked
   requestErr: '',
-  status: null,     // what Orodruin says of it, pulled by the watch (GET /api/dagorlad/requests/<id>)
+  follow: null,     // the request followed (phase c): Orodruin's status, each wire's chronology
+  last: null,       // the request over: its view — each of its wires keeps its last result
+  lastAt: 0,        // when it was seen over (ms): its reports may still arrive, followed a while
   stop: null,       // « Stop all »: the command, what it stops, what stays in flight
   stopErr: '',
 };
 const KEY = 'console.dagorlad.wires';
+const REQ_KEY = 'console.dagorlad.request';
+const REQ_ID = /^r-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/;
 const MAX_WIRES = 100;
+const FOLLOW_AFTER_MS = 30 * 60 * 1000;   // a request over is followed this long for its reports
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S.wires)); } catch (_) { /* private mode */ }
 }
+// The request followed, running or over, kept in this browser (a convenience): a reload finds it.
+function saveRequest() {
+  try {
+    const q = S.request || S.last;
+    if (q) localStorage.setItem(REQ_KEY, JSON.stringify(q)); else localStorage.removeItem(REQ_KEY);
+  } catch (_) { /* private mode */ }
+}
 // A wire is drawn once: drawing the same pair again removes nothing (several wires go to one
 // target) — the page says so. A wire is removed by its own ✕, on its pill or its plan line.
 function addWire(experiment, target, name) {
   S.note = '';
-  if (S.request) S.note = `locked: request ${S.request.request} — « New plan » to draw again`;
+  if (S.request) S.note = `locked: request ${S.request.request} runs — only « Stop all » acts until it is over`;
   else if (S.wires.some(w => w[0] === experiment && same(w[1], target))) S.note = `already drawn: ${experiment} → ${name}`;
   else if (S.wires.length >= MAX_WIRES) S.note = `at most ${MAX_WIRES} wires`;
   else { S.wires.push([experiment, target]); save(); }
@@ -80,11 +94,19 @@ const ACTIONS = {
   },
   clear() {
     if (S.request) return;
-    S.wires = []; S.picked = null; S.note = ''; save(); refreshPlan();
+    S.wires = []; S.picked = null; S.note = ''; S.last = null; S.follow = null;
+    save(); saveRequest(); refreshPlan();
   },
-  // Phase (b): the request, written by the console in its own directory — never a launch.
+  // Phase (b): the request, written by the console in its own directory — never a launch. Over,
+  // the same gesture runs the same wires again: a new request.
   request() { if (!S.request) sendRequest(); },
-  newPlan() { S.request = null; S.requestErr = ''; S.status = null; renderPlan(); },
+  // A request Orodruin has not heard of (the command not carried): dropped here, nothing else.
+  // Once Orodruin runs it, only « Stop all » acts — the console has no way to tell it to stop.
+  newPlan() {
+    if (!S.request || phaseOf() !== 'written') return;
+    S.request = null; S.requestErr = ''; S.follow = null;
+    saveRequest(); renderPlan(); drawWires();
+  },
   // « Stop all »: the console revokes nothing — it shows Orodruin's emergency stop, to run.
   stopAll() { if (S.stop) { S.stop = null; renderPlan(); } else loadStop(); },
 };
@@ -151,11 +173,13 @@ function blueCard(t, j) {
   const holds = (Array.isArray(t.holds_now) ? t.holds_now : [])
     .map(h => `<span class="chip c-bad">${esc(String(h).toUpperCase())}</span>`).join(' ');
   const seen = t.seen ? `seen ${ago(t.seen)} ago · ${t.backend}` : 'not seen by the watch now';
+  const live = followedOn(t.resource_id);
   return `<button type="button" class="bcard${wired ? ' wired' : ''}${S.picked !== null ? ' armed' : ''}" id="blue-${j}" ${_on('click', 'aim', j)} ${_on('pointerup', 'drop', j)} title="${esc(t.resource_id)}">
     <span class="bname">${esc(t.name)}</span>
     <span class="bchips"><span class="chip ${esc(ZONE_CLS[t.zone] || '')}">${esc(String(t.zone).toUpperCase())}</span>
       <span class="chip${t.mode === 'non_disruptive' ? ' c-warn' : ''}">${esc(MODE_LABEL[t.mode] || t.mode)}</span>${t.read_only ? ' <span class="chip">READ-ONLY</span>' : ''} ${holds}</span>
     <span class="bmeta">${esc(seen)} · ${Number(t.rules)} rules${t.hold ? ` · held: ${esc(t.hold)}` : ''}</span>
+    ${live ? `<span class="blive">${esc(live)}</span>` : ''}
   </button>`;
 }
 
@@ -228,14 +252,16 @@ function drawWires() {
     const i = reds.findIndex(r => r.id === w[0]), j = targets.findIndex(t => same(t.resource_id, w[1]));
     if (i < 0 || j < 0 || !$(`red-${i}`) || !$(`blue-${j}`)) return;
     const a = point($(`red-${i}`), 'right', box), b = point($(`blue-${j}`), 'left', box);
-    const v = verdictOf(w), style = wireStyle(reds[i], v), c = curve(a, b), text = pillText(v);
+    // A wire of the request followed says where it is, then its last result; else its verdict.
+    const l = lineOf(w), r = l ? lineResult(l) : null, v = verdictOf(w), c = curve(a, b);
+    const style = r ? r.style : wireStyle(reds[i], v), text = r ? r.text : pillText(v);
     const p = bez([0.5, 0.36, 0.64][k % 3], a, c.c1, c.c2, b);
     const half = Math.min(280, text.length * 6 + 18) / 2;
     for (let n = 0; n < 8 && placed.some(q => Math.abs(q.x - p.x) < q.half + half && Math.abs(q.y - p.y) < 19); n++) p.y += 20;
     placed.push({ x: p.x, y: p.y, half });
-    paths += `<path class="${style}" d="M${a.x} ${a.y} C${c.c1.x} ${c.c1.y} ${c.c2.x} ${c.c2.y} ${b.x} ${b.y}"/>`;
-    labels += `<div class="pill ${style}" style="left:${p.x}px;top:${p.y}px" title="${esc(text)}"><span class="pt">${esc(text)}</span>` +
-      `<button type="button" class="px" ${_on('click', 'unwire', k)} title="Remove this wire">✕</button></div>`;
+    paths += `<path class="${esc(style)}" d="M${a.x} ${a.y} C${c.c1.x} ${c.c1.y} ${c.c2.x} ${c.c2.y} ${b.x} ${b.y}"/>`;
+    labels += `<div class="pill ${esc(style)}" style="left:${p.x}px;top:${p.y}px" title="${esc(text)}"><span class="pt">${esc(text)}</span>` +
+      (S.request ? '' : `<button type="button" class="px" ${_on('click', 'unwire', k)} title="Remove this wire">✕</button>`) + '</div>';
   });
   if (S.drag && $(`red-${S.drag.i}`)) {
     const a = point($(`red-${S.drag.i}`), 'right', box);
@@ -260,14 +286,18 @@ function planRow(v) {
     ? `<span class="r-bad">${esc(v.code)}</span> — ${esc(v.reason)}`
     : `${esc(x.summary || '')}${rules ? ` <span class="meta">· ${esc(rules)}</span>` : ''}<div class="meta">${esc(x.glorfindel || '')}</div>`;
   const warns = (v.warnings || []).map(w => `<div class="warns">⚠ ${esc(w.code)} — ${esc(w.text)}</div>`).join('');
+  // A wire of the last request, over: its last result, and its run.
+  const l = lineOf([v.experiment, v.target]), r = l ? lineResult(l) : null;
+  const last = r ? `<div><span class="${esc(RESULT_CLS[r.style] || '')}">last: ${esc(r.text)}</span>${runLink(l.run)}</div>` : '';
   return `<tr><td class="ord">${v.order ? '#' + Number(v.order) : '—'}</td>
     <td style="white-space:nowrap"><span class="rid">${esc(v.experiment)}</span> → ${esc(v.target_name)}${v.zone ? ` <span class="meta">${esc(v.zone)}</span>` : ''}</td>
     <td><span class="chip ${esc(st[0])}">${esc(st[1])}</span></td>
-    <td class="wrap">${what}${warns}</td>
+    <td class="wrap">${what}${warns}${last}</td>
     <td>${k >= 0 && !S.request ? `<button type="button" class="mini" ${_on('click', 'unwire', k)} title="Remove this wire">✕</button>` : ''}</td></tr>`;
 }
 function renderPlan() {
   const box = $('plan');
+  if (S.request) { box.innerHTML = followView(); return; }
   if (!S.wires.length) {
     box.innerHTML = `<div class="plan-head"><b>PLAN</b> <span class="meta">no wire yet</span>${S.note ? ` <span class="r-warn">${esc(S.note)}</span>` : ''}
       <button type="button" class="mini stopbtn" ${_on('click', 'stopAll')} title="Orodruin's emergency stop: the command, what it stops, what stays in flight">Stop all</button></div>
@@ -286,46 +316,174 @@ function renderPlan() {
     return `<span class="${cls}">${mark} ${esc(c.text)}</span>`;
   }).join('');
   const may = Number(t.allowed) > 0 && Number(t.refused) === 0;
-  const ask = S.request ? '' : `<button type="button" class="mini" ${_on('click', 'request')}${may ? '' : ' disabled'}
-      title="${may ? 'Write a request for Orodruin — the page gives the command that carries it' : 'Remove the refused wires first'}">Request run from Orodruin</button>`;
+  // Over, the same wires run again in one gesture: a new request.
+  const again = sameAsLast();
+  const ask = `<button type="button" class="mini" ${_on('click', 'request')}${may ? '' : ' disabled'}
+      title="${may ? 'Write a request for Orodruin — the page gives the command that carries it' : 'Remove the refused wires first'}">${again ? 'Run again' : 'Request run from Orodruin'}</button>`;
   box.innerHTML = `<div class="plan-head"><b>PLAN</b>
       <span>${Number(t.wires)} wire(s) · ${Number(t.refused)} refused · ~${Math.round(Number(t.estimate_s) / 60)} min · one after the other</span>
       <span class="meta">what Orodruin will check before anything runs — the page launches nothing</span>
       ${ask}
-      ${S.request ? '' : `<button type="button" class="mini" ${_on('click', 'clear')}>Clear wires</button>`}
+      <button type="button" class="mini" ${_on('click', 'clear')}>Clear wires</button>
       <button type="button" class="mini stopbtn" ${_on('click', 'stopAll')} title="Orodruin's emergency stop: the command, what it stops, what stays in flight">Stop all</button>
       ${S.note ? `<span class="r-warn">${esc(S.note)}</span>` : ''}</div>
     ${stopBox()}
-    ${requestBox()}
+    ${S.requestErr ? `<div class="err">${esc(S.requestErr)}</div>` : ''}
+    ${lastLine()}
     <div class="checks">${checks}</div>
     <table class="t">${(p.wires || []).map(planRow).join('')}</table>`;
 }
 
-// ── The request (phase b): the command that carries it, what it will ask there ─────────
-function requestBox() {
-  if (S.requestErr) return `<div class="err">${esc(S.requestErr)}</div>`;
-  const q = S.request;
-  if (!q) return '';
-  const typed = (q.wires || []).filter(w => w.typed_name);
-  const rows = (q.wires || []).map(w => `<tr><td class="ord">#${Number(w.rank)}</td>
-      <td style="white-space:nowrap"><span class="rid">${esc(w.experiment)}</span> → ${esc(w.target_name)}</td>
-      <td class="wrap">${w.typed_name ? '<span class="r-warn">its target\'s name is typed in the command</span>' : ''}</td></tr>`).join('');
-  return `<div class="request">
-      <div><b>REQUEST</b> <span class="rid">${esc(q.request)}</span> <span class="meta">written ${esc(q.at)} · the wires are locked</span>
-        <button type="button" class="mini" ${_on('click', 'newPlan')}>New plan</button></div>
-      <div>On your machine, run: <code>${esc(q.command)}</code></div>
-      <div class="meta">It pulls the request from this host, shows it wire by wire${typed.length ? `, asks you to type the name of ${Number(typed.length)} target(s)` : ''},
-        then carries it to Orodruin, which judges it again and runs the wires one after the other. This page never asks for a name.</div>
-      <table class="t">${rows}</table>${statusLine()}</div>`;
+// ── The request followed (phases b, c): the command that carries it, then each wire live ──
+// Read from what reaches this host (GET /api/dagorlad/requests/<id>, eregion_console/follow.py):
+// the windows, the watch's cycles, the cards, the run's report — a run measured as on the
+// overview (BL1, C1). Nothing is written; the watch is told nothing.
+const followed = () => S.request || S.last;
+const followOf = q => (q && S.follow && S.follow.request === q.request ? S.follow : null);
+function phaseOf() {
+  const f = followOf(followed());
+  return f ? f.phase : S.request ? 'written' : '';
 }
-// What Orodruin said of the request — its state and each wire's, by rank (never what the wire is).
-const WSTATE = { queued: '', refused: 'r-bad', skipped: 'r-warn', running: 'r-warn', done: 'r-ok', failed: 'r-bad' };
-function statusLine() {
-  const st = S.status;
-  if (!st) return '<div class="meta">Orodruin: not heard from yet — the request runs once you carry it there.</div>';
-  const wires = (st.wires || []).map(w => `<span class="${esc(WSTATE[w.state] || '')}">#${Number(w.rank)} ${esc(w.state)}${w.code ? ' · ' + esc(w.code) : ''}</span>`).join(' ');
+// The line of a wire of the request followed — before the first answer, its rank, queued.
+function lineOf(w) {
+  const q = followed();
+  const own = q && (q.wires || []).find(x => x.experiment === w[0] && same(x.target, w[1]));
+  if (!own) return null;
+  const f = followOf(q);
+  const l = f && (f.wires || []).find(x => x.experiment === w[0] && same(x.target, w[1]));
+  return l || (S.request ? { rank: own.rank, experiment: own.experiment, target: own.target, target_name: own.target_name,
+                             kind: '', state: 'queued', heard: false, code: '', run: '', cards: [], mistaken: [] } : null);
+}
+// BL1's endings (analysis/containment.py OUTCOMES), as the pill says them.
+const OUTCOME = {
+  contained_alone: ['w-good', 'contained'], not_holding: ['w-bad', 'contained, then it did not hold'],
+  verification_failed: ['w-bad', 'executed, not verified'], action_failed: ['w-bad', 'action failed'],
+  held_by_guard: ['w-warn', 'held'], escalated: ['w-warn', 'escalated to a human'],
+  not_containing: ['w-warn', 'nothing that contains'], dry_run: ['w-warn', 'dry run'],
+  missed: ['w-bad', 'missed'], decision_unknown: ['w-warn', 'decision not found'],
+};
+const RESULT_CLS = { 'w-good': 'r-ok', 'w-bad': 'r-bad', 'w-refused': 'r-bad', 'w-warn': 'r-warn' };
+const LIVE = ['open', 'grace'];
+// Where a wire is, then its last result: « #1 ✓ detected +1m47 · contained 2m31 », « #2 ✗ missed ».
+function lineResult(l) {
+  const n = `#${Number(l.rank)} `;
+  const win = l.window ? l.window.state : '';
+  if (['refused', 'skipped', 'failed'].includes(l.state))
+    return { style: l.state === 'skipped' ? 'w-warn' : 'w-refused', text: `${n}${l.state === 'skipped' ? '' : '✕ '}${l.state}${l.code ? ' · ' + l.code : ''}` };
+  if (!l.run) return { style: 'w-wait', text: n + (phaseOf() === 'written' && !l.heard ? 'requested' : 'queued') };
+  if (l.kind === 'fault') {
+    const done = (l.mistaken || []).find(m => m.executed), seen = (l.mistaken || [])[0];
+    if (done) return { style: 'w-bad', text: `${n}✕ ${done.action} executed during a fault` };
+    if (seen) return { style: 'w-warn', text: `${n}⚠ ${seen.action} recommended during a fault` };
+    if (win === 'open') return { style: 'w-fault', text: `${n}fault running · nothing disruptive so far` };
+    const back = l.returned === true ? ` · returned${l.restore_s != null ? ' in ' + dur(Number(l.restore_s)) : ''}`
+      : l.returned === false ? ' · its return NOT verified' : '';
+    return { style: l.returned === false ? 'w-bad' : 'w-good', text: `${n}nothing disruptive${back}` };
+  }
+  if (l.outcome === 'missed') return { style: 'w-bad', text: `${n}✗ missed` };
+  if (l.detected_at || l.detection === 'detected') {
+    const o = OUTCOME[l.outcome] || ['w-ok', ''];
+    // Before the run's report, measured from its window: said, on every time (≈).
+    const about = l.provisional ? '≈' : '';
+    const det = l.detect_s != null ? `✓ detected ${about}+${dur(Number(l.detect_s))}` : '✓ detected';
+    const how = l.outcome === 'contained_alone' ? `contained${l.contain_s != null ? ' ' + about + dur(Number(l.contain_s)) : ''}`
+      : o[1] + (o[1] && l.outcome_why ? ` (${l.outcome_why})` : '');
+    return { style: o[0], text: `${n}${det}${how ? ' · ' + how : ''}` };
+  }
+  if (win === 'open') return { style: 'w-ok', text: `${n}running · waiting for a detection` };
+  if (win === 'grace') return { style: 'w-ok', text: `${n}ended · a detection still counts (grace)` };
+  return { style: 'w-warn', text: `${n}no detection seen${l.verdict ? '' : ' · report not here yet'}` };
+}
+const runLink = run => (run ? ` <a class="runlink" href="/dagorlad?view=runs&run=${encodeURIComponent(run)}" title="Its window, cycles, cards and report in Runs">run ▸</a>` : '');
+const STATE_CHIP = { queued: '', running: 'c-blue', launched: 'c-blue', done: 'c-ok', skipped: 'c-warn', refused: 'c-bad', failed: 'c-bad' };
+function decisionCell(l) {
+  if (l.kind === 'fault') {
+    const m = (l.mistaken || []).map(x => `${esc(x.action)} ${esc(pct(x.confidence))} ${x.executed ? 'executed' : 'recommended'} at ${esc(hms(x.at))}`);
+    return m.length ? `<span class="r-bad">taken for an attack: ${m.join(', ')}</span>`
+      : l.run ? `expects nothing disruptive${l.unchecked ? ` <span class="r-warn">· ${esc(l.unchecked)}</span>` : ''}` : '';
+  }
+  const d = l.decision;
+  if (!d) return '';
+  const how = d.executed === true ? (d.verified === true ? 'executed, verified on Azure' : 'executed, not verified')
+    : d.guard ? `held: ${d.guard}` : d.status;
+  return `${esc(d.action || 'no action')} ${esc(pct(d.confidence))}${how ? ' · ' + esc(how) : ''}${d.mode ? ` <span class="meta">(${esc(d.mode)})</span>` : ''}`;
+}
+function chronoRow(l) {
+  const r = lineResult(l), fault = l.kind === 'fault';
+  const win = l.window ? `window ${l.window.state}${l.window.closed_by ? ' · ' + l.window.closed_by : ''}`
+    : l.run ? 'window gone from this host' : '';
+  const refusal = l.window && l.window.refusal ? `<div class="r-bad">not believed by Glorfindel — ${esc(l.window.refusal)}</div>` : '';
+  const t0 = l.t0 ? `T0 ${esc(hms(l.t0))}${l.provisional ? ' (the window\'s start, until its report)' : ''}` : '';
+  const cards = l.cards || [], judge = cards.filter(c => c.to_judge).length;
+  const v = l.verdict;
+  const verdict = v ? `<span class="chip ${esc({ PASS: 'c-ok', FAIL: 'c-bad' }[v.result] || '')}">RUN ${esc(v.result || '?')}</span>` +
+      (v.without_glorfindel ? ' <span class="chip">NOT MEASURED</span>' : v.detection ? ` <span class="chip">${esc(String(v.detection).toUpperCase())}</span>` : '')
+    : l.run ? '<span class="meta">report not here yet</span>' : '';
+  return `<tr><td class="ord">#${Number(l.rank)}</td>
+    <td style="white-space:nowrap"><span class="rid${fault ? ' fault' : ''}">${esc(l.experiment || '?')}</span> → ${esc(l.target_name || '?')}</td>
+    <td><span class="chip ${esc(STATE_CHIP[l.state] || '')}">${esc(String(l.state).toUpperCase())}${l.code ? ' · ' + esc(l.code) : ''}</span></td>
+    <td class="wrap">${l.run ? `<span class="rid">${esc(l.run)}</span>` : ''}<div class="meta">${esc(win)}</div><div class="meta">${t0}</div>${refusal}</td>
+    <td class="wrap"><span class="${esc(RESULT_CLS[r.style] || '')}">${esc(r.text.replace(/^#\d+ /, ''))}</span>${l.provisional && l.detected_at ? '<div class="meta">≈ provisional: from the window, until the run\'s report</div>' : ''}<div class="meta">${decisionCell(l)}</div></td>
+    <td>${cards.length ? `<a href="/glorfindel" title="TO JUDGE is on Glorfindel's page">${Number(cards.length)} card(s)${judge ? `, ${Number(judge)} to judge` : ''} ▸</a>` : ''}</td>
+    <td class="wrap">${verdict}${runLink(l.run)}</td></tr>`;
+}
+const PHASE = { written: ['c-warn', 'WRITTEN · NOT CARRIED YET'], running: ['c-blue', 'RUNNING'], over: ['c-ok', 'OVER'] };
+const OVER_WHY = {
+  finished: 'Orodruin finished it', refused: 'Orodruin refused it', stopped: '« Stop all » stopped it',
+  silent: 'Orodruin silent longer than it ever is between two wires (35 min), no window of it live',
+};
+function orodruinLine(f) {
+  const st = f && f.status;
+  const contract = f && f.orodruin ? ` <span class="meta">· ${esc(f.orodruin.text)}</span>` : '';
+  // There but refused: said, and never taken for « not heard yet » (A0).
+  if (!st && f && f.status_error) return `<div class="r-warn">${esc(f.status_error)} — the request may be running on Orodruin.${contract}</div>`;
+  if (!st) return `<div class="meta">Orodruin: not heard from yet${(f && f.phase === 'running') ? ' — a window of the request is here' : ' — the request runs once you carry it there'}.${contract}</div>`;
   return `<div>Orodruin: <b>${esc(st.state)}</b>${(st.codes || []).length ? ` (${esc(st.codes.join(', '))})` : ''}
-    <span class="meta">at ${esc(st.at)}</span> ${wires}</div>`;
+    <span class="meta">at ${esc(hms(st.at))}</span>${contract}</div>`;
+}
+function followView() {
+  const q = S.request, f = followOf(q), ph = phaseOf();
+  const [pcls, plabel] = PHASE[ph] || ['', ph.toUpperCase()];
+  const typed = (q.wires || []).filter(w => w.typed_name);
+  const lines = (q.wires || []).map(w => lineOf([w.experiment, w.target])).filter(Boolean);
+  const carry = ph !== 'written' ? '' : `<div>On your machine, run: <code>${esc(q.command)}</code>
+        <button type="button" class="mini" ${_on('click', 'newPlan')} title="Drop it here — the request stays on this host: carried later, Orodruin would still judge and run it">New plan</button></div>
+      <div class="meta">It pulls the request from this host, shows it wire by wire${typed.length ? `, asks you to type the name of ${Number(typed.length)} target(s)` : ''},
+        then carries it to Orodruin, which judges it again and runs the wires one after the other. This page never asks for a name.</div>`;
+  return `<div class="plan-head"><b>REQUEST</b> <span class="rid">${esc(q.request)}</span>
+      <span class="chip ${esc(pcls)}">${esc(plabel)}</span>
+      <span class="meta">written ${esc(hms(q.at))} · ${Number(lines.length)} wire(s), one after the other · locked until it is over: only « Stop all » acts</span>
+      <button type="button" class="mini stopbtn" ${_on('click', 'stopAll')} title="Orodruin's emergency stop: the command, what it stops, what stays in flight">Stop all</button>
+      ${S.note ? `<span class="r-warn">${esc(S.note)}</span>` : ''}</div>
+    ${stopBox()}
+    ${S.requestErr ? `<div class="err">${esc(S.requestErr)}</div>` : ''}
+    <div class="request">${carry}${orodruinLine(f)}
+      <div class="meta">Glorfindel is never told: each wire is read from its window, the watch's cycles, the cards and the run's report.</div></div>
+    <table class="t chrono">${lines.map(chronoRow).join('')}</table>`;
+}
+// The last request, over: why, and that its wires keep their result.
+function lastLine() {
+  if (!S.last) return '';
+  const f = followOf(S.last);
+  const why = f ? (OVER_WHY[f.why] || f.why) : 'reading it again…';
+  return `<div class="meta lastreq">Last request <span class="rid">${esc(S.last.request)}</span>, over: ${esc(why)}.
+    Each of its wires keeps its last result${sameAsLast() ? '; « Run again » sends the same wires as a new request' : ''}.</div>`;
+}
+function sameAsLast() {
+  const w = (S.last && S.last.wires) || [];
+  return w.length > 0 && w.length === S.wires.length && w.every((x, i) => x.experiment === S.wires[i][0] && same(x.target, S.wires[i][1]));
+}
+// What the request running does on a target: its wire running, contained, its cards to judge.
+// Over, the card says what /api/state says of the VM — never what an old request did to it.
+function followedOn(rid) {
+  const f = followOf(S.request);
+  const lines = ((f && f.wires) || []).filter(l => same(l.target, rid));
+  if (!lines.length) return '';
+  const now = lines.find(l => l.window && l.window.state === 'open');
+  const held = lines.find(l => l.outcome === 'contained_alone');
+  const judge = lines.reduce((k, l) => k + (l.cards || []).filter(c => c.to_judge).length, 0);
+  return [now ? `wire #${now.rank} runs on it` : '', held ? `contained by Glorfindel, verified (wire #${held.rank})` : '',
+          judge ? `${judge} card(s) to judge` : ''].filter(Boolean).join(' · ');
 }
 function stopBox() {
   if (S.stopErr) return `<div class="err">${esc(S.stopErr)}</div>`;
@@ -351,14 +509,25 @@ async function loadStop() {
   }
   renderPlan();
 }
-async function refreshStatus() {
-  if (!S.request) return;
+// The request followed, read again: running, until it is over — then its wires unlock, each
+// keeping its last result, and it is read a while longer (its reports come after its runs).
+// A request kept in this browser that is not over locks its wires again.
+async function refreshFollow() {
+  const q = followed();
+  if (!q || (!S.request && Date.now() - S.lastAt > FOLLOW_AFTER_MS)) return;
   try {
-    const d = await getJSON('/api/dagorlad/requests/' + encodeURIComponent(S.request.request));
-    if (!S.request || d.request !== S.request.request) return;
-    S.status = d.status || null;
+    const d = await getJSON('/api/dagorlad/requests/' + encodeURIComponent(q.request));
+    if (followed() !== q || d.request !== q.request || d.error) return;
+    S.follow = d;
+    if (S.request && d.phase === 'over') {
+      S.last = S.request; S.request = null; S.lastAt = Date.now();
+    } else if (!S.request && d.phase !== 'over') {
+      S.request = S.last; S.last = null;
+      S.wires = (S.request.wires || []).map(w => [w.experiment, w.target]); save();
+    }
   } catch (_) { return; }
-  renderPlan();
+  saveRequest();
+  renderBoard(); renderPlan();   // the blue cards say what the request does on their target
 }
 async function sendRequest() {
   S.requestErr = '';
@@ -368,12 +537,23 @@ async function sendRequest() {
                                                      body: JSON.stringify(body) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
-    S.request = d;
-    S.status = null;
+    S.request = d; S.last = null; S.follow = null; S.note = '';
+    saveRequest();
   } catch (e) {
     S.requestErr = `/api/dagorlad/requests — ${e.message}`;
   }
-  renderPlan();
+  renderPlan(); drawWires();
+  refreshFollow();
+}
+// A request kept by this browser: its id, its command, its wires — of their shape, or nothing.
+function storedRequest() {
+  try {
+    const q = JSON.parse(localStorage.getItem(REQ_KEY) || 'null');
+    const ok = q && typeof q === 'object' && REQ_ID.test(String(q.request)) && typeof q.command === 'string'
+      && Array.isArray(q.wires) && q.wires.length > 0 && q.wires.length <= MAX_WIRES
+      && q.wires.every(w => w && typeof w.experiment === 'string' && typeof w.target === 'string');
+    return ok ? q : null;
+  } catch (_) { return null; }
 }
 
 // ── Fetching ──────────────────────────────────────────────────────────────────────────
@@ -414,9 +594,12 @@ async function refreshPlan() {
         .slice(0, MAX_WIRES);
     }
   } catch (_) { /* private mode, or something else there */ }
-  loadBoard().then(refreshPlan);
+  // The request followed before the reload: read again — still running, its wires lock again.
+  S.last = storedRequest();
+  S.lastAt = S.last ? Date.now() : 0;
+  loadBoard().then(refreshPlan).then(refreshFollow);
   setInterval(() => loadBoard().then(refreshPlan), 30000);
-  setInterval(refreshStatus, 10000);
+  setInterval(refreshFollow, 10000);
   window.addEventListener('resize', drawWires);
   $('red-list').addEventListener('scroll', drawWires, { passive: true });
   $('blue-list').addEventListener('scroll', drawWires, { passive: true });

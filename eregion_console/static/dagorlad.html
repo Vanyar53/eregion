@@ -106,6 +106,9 @@
   #wires .w-fault { stroke: var(--orange); stroke-dasharray: 2 5; stroke-linecap: round; }
   #wires .w-refused { stroke: var(--red); stroke-dasharray: 7 5; }
   #wires .w-wait, #wires .w-drag { stroke: var(--dim); stroke-dasharray: 4 4; }
+  /* A wire of the request followed (phase c): its last result. */
+  #wires .w-good { stroke: var(--green); }
+  #wires .w-bad { stroke: var(--red); }
   .pill {
     position: absolute; transform: translate(-50%, -50%); max-width: 300px; display: flex; gap: 6px;
     align-items: baseline; font-size: 10px; padding: 1px 4px 1px 8px; border-radius: 10px;
@@ -121,6 +124,10 @@
   .pill.w-warn { border-color: var(--yellow); }
   .pill.w-fault { border-color: var(--orange); }
   .pill.w-refused { border-color: var(--red); color: var(--red); }
+  .pill.w-good { border-color: var(--green); color: var(--green); }
+  .pill.w-bad { border-color: var(--red); color: var(--red); }
+  .pill.w-wait { color: var(--dim); }
+  .blive { color: var(--yellow); font-size: 10px; }
 
   /* ── The plan ── */
   #plan {
@@ -141,6 +148,11 @@
   table.t td.wrap { white-space: normal; }
   table.t td.ord { color: var(--dim); white-space: nowrap; }
   .warns { color: var(--yellow); font-size: 10px; margin-top: 2px; }
+  #plan a { color: var(--blue); text-decoration: none; }
+  #plan a:hover { text-decoration: underline; }
+  .lastreq { margin-bottom: 6px; }
+  table.chrono td { padding-right: 14px; }
+  #plan a.runlink, table.chrono td a { white-space: nowrap; }
 </style>
 </head>
 <body>

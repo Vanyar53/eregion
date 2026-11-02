@@ -2,9 +2,9 @@
 
 An injector (Annatar today, Gothmog next) may only touch a target that is ENROLLED:
 
-  1. the target sits inside the bench's perimeter — its subscription (when the scope
-     names one), its resource groups (an explicit list, or the Celebrimbor patterns),
-     its resource ids (when the scope lists them): ``Scope.check``;
+  1. the target sits inside the bench's perimeter — its subscription (a scope names one,
+     or refuses everything: SEC11, R-19), its resource groups (an explicit list, or the
+     Celebrimbor patterns), its resource ids (when the scope lists them): ``Scope.check``;
   2. the target AND its resource group carry ``eregion-target=<bench id>``, posed by
      Celebrimbor at construction: ``enrollment``;
   3. the target's zone allows the experiment: ``check_zone``.
@@ -43,6 +43,8 @@ KINDS = ("technique", "fault")
 # The only bench that exists so far; a named Celebrimbor instance is "celebrimbor-<name>".
 DEFAULT_BENCH = "celebrimbor"
 BENCH_ENV = "EREGION_BENCH"
+# The subscription the bench lives in (SEC11, R-19): the one every Eregion process reads.
+SUBSCRIPTION_ENV = "AZURE_SUBSCRIPTION_ID"
 
 # A target id must look like a Celebrimbor resource. Belt-and-suspenders next to an
 # explicit allowlist: even an empty allowlist won't admit production.
@@ -72,8 +74,11 @@ class Scope:
 
     @classmethod
     def for_bench(cls) -> "Scope":
-        """The scope of the bench this process works on (``EREGION_BENCH``)."""
-        return cls(sandbox=os.environ.get(BENCH_ENV, DEFAULT_BENCH))
+        """The scope of the bench this process works on (``EREGION_BENCH``), in the
+        subscription ``AZURE_SUBSCRIPTION_ID`` names. Unset, the scope names none and refuses
+        every target (SEC11, R-19): the identity's rights alone would bound it."""
+        return cls(sandbox=os.environ.get(BENCH_ENV, DEFAULT_BENCH),
+                   subscription_id=(os.environ.get(SUBSCRIPTION_ENV) or "").strip())
 
     def check(self, resource_id: str, resource_group: str = "") -> GuardResult:
         """Refuse any target not provably inside the bench's perimeter."""
@@ -92,14 +97,20 @@ class Scope:
                     f"resource_id not in allowed_resource_ids: {resource_id}",
                 )
 
-        # 2. The subscription the scope names, when it names one.
-        if self.subscription_id:
-            sub = subscription_from_id(resource_id)
-            if sub.lower() != self.subscription_id.lower():
-                return GuardResult(
-                    False,
-                    f"subscription '{sub or '?'}' outside the scope's subscription",
-                )
+        # 2. The subscription the scope names — a perimeter names its own, or it refuses
+        # (SEC11, R-19): without it, only the identity's rights bounded the target.
+        if not self.subscription_id.strip():
+            return GuardResult(
+                False,
+                "the scope names no subscription: a perimeter names its own "
+                f"({SUBSCRIPTION_ENV}, or the campaign's scope)",
+            )
+        sub = subscription_from_id(resource_id)
+        if sub.lower() != self.subscription_id.strip().lower():
+            return GuardResult(
+                False,
+                f"subscription '{sub or '?'}' outside the scope's subscription",
+            )
 
         # 3. Resource-group allowlist (and/or derived from the id).
         rg = (resource_group or rg_from_id(resource_id)).lower()

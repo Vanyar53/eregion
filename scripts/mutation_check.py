@@ -7060,6 +7060,20 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
+# SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's
+# contract an allow-list (V-29), no fallback on the former shared principal (V-17), the session
+# drain VM by VM (R-03). M2880–M2899.
+MUTANTS += [
+    ("M2880", "a scope that names no subscription admits a target in any subscription (SEC11, R-19)", INS,
+     "        if not self.subscription_id.strip():\n", "        if False:\n"),
+    ("M2881", "the bench's scope leaves its subscription empty: only the RBAC bounds it (SEC11, R-19)", INS,
+     '                   subscription_id=(os.environ.get(SUBSCRIPTION_ENV) or "").strip())\n', "                   )\n"),
+    ("M2882", "the console's plan judges with a scope that names no subscription (SEC11, R-19)",
+     "eregion_console/board.py", "scope=replace(Scope.for_bench(), sandbox=bench))", "scope=Scope(sandbox=bench))"),
+]
+TESTS.update({"M2880": "tests/unit/test_inscription.py", "M2881": "tests/unit/test_inscription.py",
+              "M2882": "tests/unit/test_console_dagorlad.py"})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

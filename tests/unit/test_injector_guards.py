@@ -94,7 +94,8 @@ class _Engine:
 
 def _campaign(tmp_path, entries, budget=None):
     m = CampaignManifest(campaign_id="C1", objective="t",
-                         scope=Scope(allowed_resource_groups=["rg-celebrimbor"]),
+                         scope=Scope(subscription_id="00000000-0000-0000-0000-000000000000",
+                                     allowed_resource_groups=["rg-celebrimbor"]),
                          budget=budget or Budget(max_scenarios=5), scenarios=entries,
                          state="ratified")
     cdir = campaign_dir("C1", runs_dir=tmp_path)
@@ -394,3 +395,10 @@ def test_an_edited_atomic_never_reaches_the_target(tmp_path, monkeypatch):
     out = _run(tmp_path, monkeypatch, ATOMIC, executor)
     assert out.refused and out.error.startswith("atomic:") and "sha256" in out.error
     executor.run_command.assert_not_called()
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")

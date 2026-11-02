@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -359,3 +361,10 @@ def test_a_local_script_run_writes_the_unified_run_format(tmp_path, monkeypatch)
     assert m["resource_id"] == RESOURCE_ID      # M1887: the VM the watch's decision is attached on
     run = read_run(report)
     assert run["kind"] == "technique" and run["experiment"] == "T1041" and run["at"] == m["attack_time"]
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")

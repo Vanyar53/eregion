@@ -246,3 +246,10 @@ def test_a_run_refused_busy_says_the_holder_as_it_is(tmp_path, monkeypatch):
         res = CliRunner().invoke(cli, ["run", EXFIL_YAML, "--yes"])
     assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
     assert "busy: campaign [/x] runs" in " ".join(res.output.split())
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")

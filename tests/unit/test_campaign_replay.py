@@ -176,7 +176,7 @@ def test_runner_to_replay_end_to_end(tmp_path):
     )
     m = CampaignManifest(
         campaign_id="20260630T210000Z", objective="e2e",
-        scope=Scope(allowed_resource_groups=["rg-celebrimbor"],
+        scope=Scope(subscription_id="s", allowed_resource_groups=["rg-celebrimbor"],
                     allowed_resource_ids=[target]),
         budget=Budget(reset_nsg_between=False), scenarios=[scen], state="ratified",
     )

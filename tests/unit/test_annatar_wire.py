@@ -129,3 +129,10 @@ def test_a_technique_not_in_the_catalogue_runs_nothing(tmp_path, monkeypatch):
     res, ex = _wire(tmp_path, monkeypatch, "T9999", RID, "--request", REQ)
     assert res.exit_code != 0 and "not a technique of the catalogue" in res.flat
     assert _windows() == []
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")

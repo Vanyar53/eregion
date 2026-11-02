@@ -55,6 +55,7 @@ Chaque lot produit une branche locale `lot/<id>-…`. elrond ne pousse rien et n
 - **Politique `after-fallback`, la valeur par défaut.** Un lot dont au moins un tour a été servi par un autre modèle est relu par Opus 5.5. Le relecteur reçoit la liste des fichiers écrits pendant la bascule et les lit en premier.
 - **Politique `always`.** Tout lot est relu. C'est réaliste sur Claude Max.
 - **Si la relecture bascule elle aussi**, le lot est marqué `not-obtained` et signalé. Il n'y a pas de relance automatique.
+- **Le verdict se publie sur la PR avant la fusion** (SEC12) : `scripts/review_verdict.py` écrit le commentaire (le verdict, le commit relu, le rapport), le relit avant la fusion, et la fusion est liée à ce commit (`gh pr merge --match-head-commit`). Un push après la relecture en demande une autre. Le détail : [sessions.md](sessions.md), « Relecture et fusion ».
 
 ### Ce qu'elrond ne fait pas
 

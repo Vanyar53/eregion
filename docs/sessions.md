@@ -92,6 +92,19 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
    - Sans l'Orchestre : lance toi-même un sous-agent `elrond-reviewer`, avec l'issue pour fiche (ses
      critères « Fini quand »), puis fusionne. Si la fusion t'est refusée, ne la contourne pas : donne la
      commande à Jonathan.
+   - **Le verdict se publie sur la PR, avant la fusion** (SEC12, #418). Quiconque fusionne, l'Orchestre
+     ou toi, publie chaque verdict de relecture (`ok`, `changes`, `blocking`) en commentaire, pour le
+     commit relu, et ne fusionne que ce commit-là :
+     ```
+     head=$(gh pr view <n> --json headRefOid -q .headRefOid)
+     python3 scripts/review_verdict.py body --lot <ID> --verdict ok --head "$head" --report <rapport> \
+       | gh pr comment <n> --body-file -
+     gh pr view <n> --json headRefOid,comments | python3 scripts/review_verdict.py check --author <login de l'App>
+     gh pr merge <n> --squash --match-head-commit "$head"
+     ```
+     `check` ne lit que les commentaires de l'App des sessions (et du mainteneur, s'il le nomme) : sur
+     une PR publique, n'importe qui peut commenter. Il échoue si la tête a bougé après la relecture,
+     ou si le dernier verdict n'est pas `ok`.
    - Une CI rouge sans lien avec ta PR se dit à l'Orchestre. Pas de saut ni de `xfail` sans lot.
 7. **Après.**
    - Mets à jour ton status (`collab/<rôle>_status.md`).

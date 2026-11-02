@@ -81,7 +81,21 @@ Index :
 
 5. **Pousser, si on te l'a demandé.** Si l'utilisateur a demandé les PR, pousse la branche et ouvre la PR avec le modèle du dépôt. Dans la section « Model and review », indique `Opus 5.5`, ou `Opus 5.5 + fallback, reviewed (<verdict>)`.
 
-6. **Fin du run.** Lance `palantir.py session ${CLAUDE_SESSION_ID}`, puis rends compte :
+6. **Fusionner, si on te l'a demandé : le verdict publié d'abord** (`docs/sessions.md`, « Relecture et fusion »). Une PR fusionne avec la CI verte et une relecture Opus 5.5 « ok », et ce verdict se lit sur la PR, avant la fusion, pour le commit qu'il a relu. Garde le rapport du relecteur dans un fichier de ton scratchpad, puis :
+
+   ```
+   head=$(gh pr view <n> --json headRefOid -q .headRefOid)
+   python3 scripts/review_verdict.py body --lot <ID> --verdict <ok|changes|blocking> --head "$head" --report <rapport> \
+     | gh pr comment <n> --body-file -
+   gh pr view <n> --json headRefOid,comments | python3 scripts/review_verdict.py check --author <login de l'App des sessions>
+   gh pr merge <n> --squash --match-head-commit "$head"
+   ```
+
+   - Un verdict `changes` ou `blocking` se publie aussi : la PR garde la trace de chaque relecture.
+   - `check` échoue si la tête a bougé après la relecture (une autre relecture) ou si le dernier verdict n'est pas `ok` : ne fusionne pas, ne contourne pas.
+   - `--match-head-commit` lie la fusion au commit relu. Si la fusion est refusée (un check requis, la règle de `main`), donne la commande à l'utilisateur.
+
+7. **Fin du run.** Lance `palantir.py session ${CLAUDE_SESSION_ID}`, puis rends compte :
    - les lots faits, et leurs branches ;
    - les lots passés par un repli : quand, et sur quelle étape ;
    - les verdicts de relecture ;
@@ -94,7 +108,7 @@ Index :
 Si les hooks de `scripts/elrond-hooks.sh` sont installés, chaque lancement, relance (`SendMessage` à un agent déjà rendu), retour, verdict et repli part seul dans le fil du lot, avec le rapport, et `#agents` tient le tableau de ce qui attend l'utilisateur (`docs/atelier-discord.md`). Les descriptions `elrond <ID> · …` servent à reconnaître le lot : garde-les telles quelles. Toi, tu n'envoies que ce que toi seul sais :
 - **un lot qui passe à `blocked`** : `python3 scripts/agents_discord.py lot <ID> blocked --note "<pourquoi>"` ;
 - **une PR prête que l'utilisateur fusionne lui-même** (la fusion t'est refusée, ou il se l'est gardée) : `python3 scripts/agents_discord.py lot <ID> merge --pr <n> --note "<où on en est>"` ;
-- **la fin du run** : `run-end`, à l'étape 6.
+- **la fin du run** : `run-end`, à l'étape 7.
 
 Sans configuration, ces commandes ne font rien et sortent en 0.
 

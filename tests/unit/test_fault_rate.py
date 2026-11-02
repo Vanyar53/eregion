@@ -24,9 +24,18 @@ from tests.unit.test_gothmog_noise import bench, noise  # noqa: F401  (fixtures,
 T = 1_800_000_000.0     # a fault's start (epoch)
 
 
+def _effect(targets, seen_at, ok=True):
+    """The readings of the effect, by VM name, as runner/engine.py writes them (G1)."""
+    return {t.rstrip("/").rsplit("/", 1)[-1]: [
+        {"name": "disk-write-burst", "ok": ok, "observed": "52000000" if ok else "no row",
+         "expect": "above 45000000", "seen_at": _iso(seen_at) if ok else None}] for t in targets}
+
+
 def _fault(run_id="gothmog-1", fault="vm-disk-write", start=T, end=T + 600, targets=(VM,),
-           effective="PASS", started=True, without=False, watch_after="PASS"):
-    """A Gothmog report, as runner/engine.py writes it, read as every reader reads it (C1)."""
+           effective="PASS", started=True, without=False, watch_after="PASS", effect="seen"):
+    """A Gothmog report, as runner/engine.py writes it, read as every reader reads it (C1).
+    ``effect``: its readings — ``"seen"`` (each target's, seen while the fault runs, as a
+    report whose check passed carries them), or the dict itself; None: none."""
     checks = {"targets": "PASS", "steady_state_before": "PASS", "execution": "PASS",
               "revert_verified": "PASS"}
     if effective is not None:
@@ -40,6 +49,10 @@ def _fault(run_id="gothmog-1", fault="vm-disk-write", start=T, end=T + 600, targ
                "fault_end": _iso(end)}
     if without:
         metrics["without_glorfindel"] = True
+    if effect == "seen":
+        effect = _effect(targets, start + 120, ok=effective == "PASS") if effective is not None else None
+    if effect is not None:
+        metrics["effect"] = effect
     return read_run({"scenario": fault, "run_id": run_id, "mitre": "", "result": "PASS",
                      "metrics": metrics, "thresholds": {}, "checks": checks})
 
@@ -302,3 +315,40 @@ def test_the_make_targets_check_their_days_before_any_shell():
         assert target in phony
         assert recipe[0].startswith('\t@case "$(DAYS)" in *[!0-9]*) echo "DAYS invalide')
         assert "-m analysis.fault_rate --runs-dir runs --days $(or $(DAYS),30)" in recipe[1]
+
+
+# ── SEC9: the effect is read in Glorfindel's telemetry, never taken on the report's word ──
+
+def test_an_effect_declared_without_its_telemetry_measures_nothing():
+    """M2856: the report says the effect seen (``fault_effective`` PASS) and carries no reading
+    of the telemetry that shows it — the channel's word alone: not measured, said; never « 0
+    taken of 1 »."""
+    out = fr.rate(fr.measure([_fault(effect=None)], _watch([])))
+    assert (out["faults"], out["measured"], out["rate"]) == (1, 0, None)
+    assert out["unmeasured"][0]["why"] == fr.EFFECT_UNREAD
+
+
+@pytest.mark.parametrize("effect, said", [
+    (_effect([VM], T + 120, ok=False), f"{fr.EFFECT_NOT_SHOWN} (vm-celebrimbor-gondolin : disk-write-burst non vu)"),
+    ({"vm-celebrimbor-gondolin": [{"name": "disk-write-burst", "ok": False, "seen_at": _iso(T + 120)}]},
+     "disk-write-burst non vu"),                                                   # M2857: dated, not seen
+    (_effect([VM], T - 600), "lu hors de la panne"),                               # M2858: before it
+    (_effect([VM], T + 600 + 16 * 60), "lu hors de la panne"),                     # M2858: after its window
+    (_effect([OTHER], T + 120), "aucune lecture sur vm-celebrimbor-gondolin"),     # M2859
+    ({"vm-celebrimbor-gondolin": []}, "aucune lecture sur vm-celebrimbor-gondolin"),
+])
+def test_an_effect_its_readings_do_not_show_measures_nothing(effect, said):
+    """The readings must show the effect on each target: every probe seen, between the fault's
+    start and the end of its window (the telemetry's ingestion lags, never past it)."""
+    out = fr.rate(fr.measure([_fault(effect=effect)], _watch([])))
+    assert out["measured"] == 0 and said in out["unmeasured"][0]["why"]
+
+
+def test_an_effect_shown_on_every_target_is_measured():
+    """The control: each target's readings seen in the window, the VM name as Azure cases it —
+    measured. Two targets, one without its reading: not measured."""
+    both = _fault(targets=(VM, OTHER), effect={**_effect([VM], T + 30), "VM-CELEBRIMBOR-BREE": [
+        {"name": "disk-write-burst", "ok": True, "seen_at": _iso(T + 600 + 14 * 60)}]})
+    assert fr.rate(fr.measure([both], _watch([])))["measured"] == 1
+    half = _fault(targets=(VM, OTHER), effect=_effect([VM], T + 30))
+    assert "aucune lecture sur vm-celebrimbor-bree" in fr.measure([half], _watch([]))[0].why

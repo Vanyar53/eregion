@@ -6776,8 +6776,8 @@ MUTANTS += [
     ("M2409", "a during probe unread for good never cancels the noise (G1, review)", GOTH,
      "                        if said or unread[vm] >= DURING_UNREAD_MAX:\n", "                        if said:\n"),
     ("M2416", "a fault is measured without the watch's decisions read: « 0 taken » unchecked (G1, review)", FRATE,
-     '        why = unmeasured(f) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")\n',
-     "        why = unmeasured(f)\n"),
+     '        why = unmeasured(f, own_until(f, windows)) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")\n',
+     "        why = unmeasured(f, own_until(f, windows))\n"),
     ("M2417", "a fault whose watch was gone after it is measured: its silence read as « none taken » (G1, review 2)",
      FRATE, '    if run.get("watch_after") is False:\n        return WATCH_GONE\n', ""),
     ("M2418", "a watch file cut or unreadable since the fault is taken as read whole (G1, review)", FRATE,
@@ -7140,7 +7140,7 @@ TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M
 # SEC9 (#415): the indicators' entries the injectors give — a run's T0, the list of runs, a fault's
 # effect — confronted with what the watch's host holds: the T0 inside its window and before the
 # watch's first sight of the VM, the runs the watch saw counted, the effect shown by the readings
-# of Glorfindel's telemetry. M2840–M2855 (the effect: M2856–M2859).
+# of Glorfindel's telemetry. M2840–M2859.
 _SEC9 = "tests/unit/test_containment.py"
 MUTANTS += [
     ("M2840", "a T0 after the time the telemetry gives the row the watch read is believed (SEC9)", CTN,
@@ -7180,8 +7180,20 @@ MUTANTS += [
      '        elif rid in elsewhere or (runs_dir / f"{rid}.json").exists():\n', "        elif rid in elsewhere:\n"),
     ("M2855", "a window far before the campaign, or after its manifest came, is counted in it (SEC9)", CTN,
      "        if start is None or not lo <= start <= hi:\n", "        if start is None:\n"),
+    ("M2856", "a fault's effect the report only declares is measured (SEC9)", FRATE,
+     "    return effect_unread(run, until)\n", '    return ""\n'),
+    ("M2857", "a fault's effect its readings say not seen is measured (SEC9)", FRATE,
+     '            if not isinstance(r, dict) or r.get("ok") is not True:\n',
+     "            if not isinstance(r, dict):\n"),
+    ("M2858", "a fault's effect read before it, or after its window, is measured (SEC9)", FRATE,
+     ("            if seen is None or start is None or seen < start - containment.CLOCK_SKEW_S or (\n"
+      "                    until is not None and seen > until + containment.CLOCK_SKEW_S):\n"),
+     "            if seen is None:\n"),
+    ("M2859", "a fault target without a reading of its effect is measured (SEC9)", FRATE,
+     '            return f"{EFFECT_UNREAD} (aucune lecture sur {name})"\n', "            continue\n"),
 ]
 TESTS.update({f"M{n}": _SEC9 for n in range(2840, 2856)})
+TESTS.update({f"M{n}": _G1_RATE for n in range(2856, 2860)})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

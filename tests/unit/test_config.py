@@ -283,11 +283,20 @@ def test_exception_matches_case_ignored():
 
 
 def test_expected_admins_match_case_ignored_accounts_not():
-    """ADM1 already ignored the case of a VM's name; a Linux account keeps its own."""
+    """ADM1 already ignored the case of a VM's name; a Linux account keeps its own: `OPS`'s
+    sudo on a VM that expects `ops` is not set aside — it stays a card."""
+    from glorfindel import expected_sudo
     from glorfindel.config import ExpectedAdmins, ExpectedSudoConfig
     policy = ExpectedSudoConfig(admins=[ExpectedAdmins(match="VM-WEB-*", accounts=["ops"])])
     assert policy.accounts_for("vm-web-01") == frozenset({"ops"})
-    assert "OPS" not in policy.accounts_for("vm-web-01")
+
+    def judged(account: str):
+        line = f"{account} : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/apt update"
+        return expected_sudo.judge({"SyslogMessage": line, "TimeGenerated": "t"}, "vm-web-01", policy)
+
+    assert judged("ops") == {"asset": "vm-web-01", "account": "ops",
+                             "command": "/usr/bin/apt update", "logged_at": "t"}   # set aside
+    assert judged("OPS") is None                                                     # a card
 
 
 def test_set_asset_mode_updates_an_entry_written_with_another_case(tmp_path):
@@ -330,8 +339,8 @@ def test_set_asset_mode_on_a_name_the_config_wrote_in_capitals(tmp_path):
     assert autonomy.resolve("vm-a") == "non_disruptive"
 
 
-def test_autonomy_config_without_capitals_read_as_before(tmp_path):
-    """A config in lowercase, as every config so far: resolved as before AUC."""
+def test_autonomy_config_and_vm_names_in_lowercase_read_as_before(tmp_path):
+    """A config and VM names in lowercase: resolved as before AUC."""
     cfg_file = tmp_path / "glorfindel-config.yaml"
     cfg_file.write_text(textwrap.dedent("""
         autonomy:

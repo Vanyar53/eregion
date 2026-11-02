@@ -5616,9 +5616,13 @@ def test_a_block_gone_is_said_whatever_a_check_card_write_does(monkeypatch):
     on web, api and Db--01, the disk full again and again, a check that can't tell on nsg-tier
     (`nsg.get` always in 429), another host writing; then Db--01's block gone, the disk full:
     « L1: the block on …/Db--01 vanished from Azure; the reassertion neither put it back nor
-    said so ». Green on f1b9b24, red on 06dfa49: a write of the reassertion's own cards on a
-    full disk (SEC13's `unverified` card) cut the block's pass before its disappearance was
-    said. What the pass says never waits on that card's write."""
+    said so ». Red on 06dfa49 and on f1b9b24 too (glorfindel/ put back): older than SEC13, which
+    only changed what the machine drew. A drift said and acknowledged; a pass, the disk full,
+    reads the block held again while another rule is gone — worse on one side, better on the
+    other — and the card saying it is refused; then the rules go again: the situation is the
+    acknowledged card's, read « not worse », and nothing is said. What got better is the baseline
+    before the card is written now (`reassert_cards.drift_meet`). The guard on the `unverified`
+    card's writes is proved apart (`test_reassert.py::test_a_check_card_refused_never_cuts_the_blocks_pass`)."""
     tier = _NSG.format(rg="rg-net", name="nsg-tier")
     api_nsg = _NSG.format(rg="rg-edge", name="nsg-api-nic")
     _replay(monkeypatch, _SEC13_L1_NET,

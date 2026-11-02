@@ -200,6 +200,77 @@ def test_the_readme_test_holds_on_what_release_wrote(repo, capsys):
     assert status == rel.version_of(text["pyproject.toml"]) == "0.5.0"
 
 
+# ── RM1 (#406): the version's line in ROADMAP.md's « Les prochaines releases » ───────
+
+ROADMAP_MD = """# Roadmap
+
+### Les jalons
+
+| Version | Titre | Contenu | État |
+|---|---|---|---|
+| 0.4.4 | ailleurs | une autre table, sous un autre titre | en préparation |
+
+### Les prochaines releases
+
+Tenue par l'Orchestre.
+
+| Version | Titre | Contenu | État |
+|---|---|---|---|
+| 0.4.40 | plus tard | pas celle-ci | en préparation |
+| `0.4.4` | nothing lost | REL1, RM1 | en préparation (fin de semaine) |
+| 0.5.0 | la suite | OV1 | en préparation |
+
+### Les lots
+
+| Version | Titre | Contenu | État |
+|---|---|---|---|
+| 0.4.5 | encore ailleurs | sous le titre suivant | en préparation |
+"""
+DRAFTED = "| `0.4.4` | nothing lost | REL1, RM1 | brouillon |"
+
+
+def _with_roadmap(work, text=ROADMAP_MD):
+    (work / "ROADMAP.md").write_text(text, encoding="utf-8")
+    git(work, "add", "ROADMAP.md")
+    git(work, "commit", "-qm", "roadmap")
+    git(work, "push", "-q", "origin", "main")
+
+
+def test_release_sets_its_versions_line_to_draft_in_the_roadmap(repo, capsys):
+    """#roadmap reads that table (scripts/roadmap_discord.py): the version's PR changes its line, only it."""
+    _with_roadmap(repo)
+    assert rel.main(["prepare", "0.4.4", "--title", "nothing lost"]) == 0
+    out = capsys.readouterr().out
+    after = (repo / "ROADMAP.md").read_text(encoding="utf-8")
+    assert after == ROADMAP_MD.replace("| `0.4.4` | nothing lost | REL1, RM1 | en préparation (fin de semaine) |",
+                                       DRAFTED)
+    assert set(git(repo, "show", "--name-only", "--format=", "HEAD").split()) == {
+        "CHANGELOG.md", "README.md", "pyproject.toml", "ROADMAP.md"}
+    assert git(repo, "status", "--porcelain") == ""
+    assert "« brouillon » (« Les prochaines releases »)" in git(repo, "log", "-1", "--format=%b")
+    assert "ROADMAP.md : la ligne 0.4.4 des prochaines releases passe à « brouillon »" in out
+    rd = _load("roadmap_discord")
+    assert [r[3] for r in rd.releases(after)] == ["en préparation", "brouillon", "en préparation"]
+
+
+def test_release_dry_run_shows_the_roadmaps_line_and_writes_nothing(repo, tmp_path, capsys):
+    _with_roadmap(repo)
+    assert rel.main(["prepare", "0.4.4", "--title", "x", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert f"+{DRAFTED}" in out and "git add pyproject.toml CHANGELOG.md README.md ROADMAP.md" in out
+    assert (repo / "ROADMAP.md").read_text(encoding="utf-8") == ROADMAP_MD and gh_calls(tmp_path) == []
+
+
+def test_without_its_line_the_roadmap_is_left_to_the_orchestre(repo, capsys):
+    _with_roadmap(repo)
+    assert rel.main(["prepare", "0.4.5", "--title", "x"]) == 0
+    assert (repo / "ROADMAP.md").read_text(encoding="utf-8") == ROADMAP_MD
+    assert set(git(repo, "show", "--name-only", "--format=", "HEAD").split()) == {
+        "CHANGELOG.md", "README.md", "pyproject.toml"}
+    assert "pas de ligne 0.4.5 sous « Les prochaines releases » — l'Orchestre la tient à la main" in \
+        capsys.readouterr().out
+
+
 def test_release_dry_run_shows_the_cut_and_writes_nothing(repo, tmp_path, capsys):
     before, head = files(repo), git(repo, "rev-parse", "HEAD")
     assert rel.main(["prepare", "0.4.4", "--title", "x", "--dry-run", "--date", "2026-10-29"]) == 0

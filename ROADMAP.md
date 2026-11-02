@@ -71,6 +71,16 @@ En 0.x, schémas, signaux et interface peuvent encore changer ; la 1.0 les fige.
 - Les profils s'installent et tournent, prouvé en CI. Glorfindel est toujours présent (décision du 26/10, [`docs/design/console.md`](docs/design/console.md), §2) : Glorfindel seul (découvrir, être défendu en observation) ; Glorfindel + Annatar (« ma détection marche-t-elle ? ») ; Glorfindel + Gothmog (« mon infra tient-elle ? ») ; tout (« défense éprouvée », comme H0) ; plusieurs équipes.
 - La preuve en production existe : mode ombre, détection non destructive, sentinelle.
 
+### Les prochaines releases
+
+Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa version, son titre, son contenu en une ligne, son état — `en préparation`, `brouillon`, `publiée`. `make release` passe la ligne de sa version à `brouillon` ; une fois publiée, l'Orchestre la passe à `publiée`, puis la retire à la release suivante. `#roadmap` montre ce tableau sous la dernière release publiée, lue sur GitHub (`docs/atelier-discord.md`) ; garder l'en-tête tel quel, le script le lit ainsi.
+
+| Version | Titre | Contenu | État |
+|---|---|---|---|
+| 0.4.10 | held to its word | la série d'isolation, DG-c, G1 (le code), #358 | brouillon (02/11) |
+| 0.5.0 | la boucle mesurée | OV1, ADM1, BL1c, CI4 | en préparation (fin de semaine) |
+| 0.5.x | — | ID1, G1 au banc | en préparation (après la prochaine session de banc) |
+
 ### Les lots
 
 Préfixes : **A** isolation et **B** IA (septième passe), **O** Orodruin, **H** hébergement de Glorfindel, **E** schéma d'expérience, **R** adaptateurs d'Annatar vers une bibliothèque d'attaque publique, **G** Gothmog, **X** attaque et panne combinées, **C** couverture, **D** profils d'usage, **IA** IA d'analyse, **J** preuve en production et jumeau, **P** personnalisation (la couche du client — à ne pas confondre avec les points produit P1 à P4 de la septième passe), **MC** multi-cloud. Chaque lot ajoute ses mutants au harnais avant d'être fusionné ; aucune action sur le cloud hors du banc. Estimations en jours de travail effectif, à ±50 %.

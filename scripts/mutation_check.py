@@ -7060,6 +7060,56 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
+# RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
+# then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
+# « brouillon ». M2680–M2695 (M2696–M2699 unused).
+MUTANTS += [
+    ("M2680", "releases/latest failing (404: none published yet) fails the whole run (RM1)", ROADMAP_D,
+     '    except nd.Failure as e:\n        print(f"atelier: dernière release omise',
+     '    except ZeroDivisionError as e:\n        print(f"atelier: dernière release omise'),
+    ("M2681", "an answer of releases/latest without a name shown as a release (RM1)", ROADMAP_D,
+     '    if not isinstance(found, dict) or not (found.get("name") or found.get("tag_name")):\n',
+     '    if not isinstance(found, dict):\n'),
+    ("M2682", "the last published release never read: the line never shown (RM1)", ROADMAP_D,
+     "    latest = load_latest(environ)\n", "    latest = None\n"),
+    ("M2683", "no « Releases » block in the message (RM1)", ROADMAP_D,
+     '    out += [""] + releases_block(roadmap, latest)\n', ""),
+    ("M2684", "the releases at the message's end: cut first when the lots grow (RM1)", ROADMAP_D,
+     ('    out += [""] + releases_block(roadmap, latest)\n', '    text = "\\n".join(out)\n'),
+     ("", '    out += [""] + releases_block(roadmap, latest)\n    text = "\\n".join(out)\n')),
+    ("M2685", "a ROADMAP.md without the releases' section breaks the whole message (RM1)", ROADMAP_D,
+     '    if rows is None:\n        return out + ["_section introuvable dans ROADMAP.md_"]\n', ""),
+    ("M2686", "a line of another shape skipped: the table half read, never said changed (RM1)", ROADMAP_D,
+     "        if len(cells) != len(RELEASES_HEADER) or not cells[0]:\n            return None\n",
+     "        if len(cells) != len(RELEASES_HEADER) or not cells[0]:\n            continue\n"),
+    ("M2687", "the releases' header not checked: a table renamed read as before (RM1)", ROADMAP_D,
+     "    if head is None or _cells(rest[head]) != RELEASES_HEADER or head + 1 >= len(rest) \\\n",
+     "    if head is None or head + 1 >= len(rest) \\\n"),
+    ("M2688", "the releases' table looked for past the next heading: another section's read (RM1)", ROADMAP_D,
+     '    rest = rest[: next((i for i, x in enumerate(rest) if x.startswith("#")), len(rest))]\n', ""),
+    ("M2689", "every line of the releases shown: the block never cut (RM1)", ROADMAP_D,
+     "    for version, title, what, state in rows[:RELEASES_ROWS]:\n",
+     "    for version, title, what, state in rows:\n"),
+    ("M2690", "the release's name shown raw: Markdown, a masked link, a mention (RM1, SEC6)", ROADMAP_D,
+     '        name = nd.inert(nd._cut(latest.get("name") or latest.get("tag_name"), 80))',
+     '        name = (nd._cut(latest.get("name") or latest.get("tag_name"), 80))'),
+    ("M2691", "the release's link taken whatever its scheme (RM1)", ROADMAP_D,
+     '        url, day = nd._https(latest.get("html_url")), _day(latest.get("published_at"))\n',
+     '        url, day = latest.get("html_url"), _day(latest.get("published_at"))\n'),
+    ("M2692", "the version GitHub says published still shown « brouillon » (RM1)", ROADMAP_D,
+     '            state = "publiée"\n', "            pass\n"),
+    ("M2693", "make release leaves ROADMAP.md's line of its version as it was (RM1)", RELS,
+     '            edits["ROADMAP.md"] = roadmap_drafted(roadmap, version)\n', "            pass\n"),
+    ("M2694", "ROADMAP.md changed by make release but left out of its commit (RM1)", RELS,
+     '    staged = ["pyproject.toml", "CHANGELOG.md", "README.md"] + (["ROADMAP.md"] if "ROADMAP.md" in edits else [])\n',
+     '    staged = ["pyproject.toml", "CHANGELOG.md", "README.md"]\n'),
+    ("M2695", "make release changes a line of its version under another heading of ROADMAP.md (RM1)", RELS,
+     '        if lines[i].startswith("#"):\n            break\n        cells = lines[i]',
+     "        cells = lines[i]"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_roadmap_discord.py" for n in range(2680, 2693)})
+TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(2693, 2696)})
+
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a
 # composite rule or a world event to one of them. Run with --control.

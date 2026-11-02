@@ -354,3 +354,124 @@ def test_on_an_issue_or_pull_request_event_threads_are_edited_never_created(fake
 ])
 def test_an_issue_number_is_matched_where_a_name_puts_it(name, found):
     assert (nd.match_thread([{"name": name}], "", "70") is not None) is found
+
+
+# ── RM1 (#406): the releases, the last published and those being prepared ─────────
+
+RELEASES = """
+### Les prochaines releases
+
+Tenue par l'Orchestre.
+
+| Version | Titre | Contenu | État |
+|---|---|---|---|
+| 0.4.10 | held to its word | la série d'isolation, DG-c, G1 (le code), #358 | brouillon (02/11) |
+| 0.5.0 | la boucle mesurée | OV1, ADM1, BL1c, CI4 | en préparation (fin de semaine) |
+| 0.5.x | — | ID1, G1 au banc | en préparation (après la prochaine session de banc) |
+
+### Les lots
+"""
+LATEST = {"tag_name": "v0.4.9", "name": "v0.4.9 — held in check", "draft": False,
+          "html_url": "https://github.com/o/r/releases/tag/v0.4.9", "published_at": "2026-10-30T21:14:05Z"}
+LATEST_LINE = ("🏷️ Dernière publiée : [v0.4.9 — held in check](https://github.com/o/r/releases/tag/v0.4.9)"
+               " · le 30/10/2026")
+
+
+def releases_of(text: str) -> str:
+    """The « Releases » block of a message: from its heading to the next blank line."""
+    return text.split("**Releases**\n", 1)[1].split("\n\n", 1)[0]
+
+
+def test_the_releases_block_shows_the_last_published_then_the_roadmaps_lines(fake, monkeypatch, capsys):
+    configure(monkeypatch, fake, forum=False)
+    (rd.ROOT / "ROADMAP.md").write_text(ROADMAP + RELEASES, encoding="utf-8")
+    fake.gh["release"] = LATEST
+    assert rd.main(["--dry-run"]) == 0
+    out = capsys.readouterr()
+    assert releases_of(out.out).splitlines() == [
+        LATEST_LINE,
+        "`0.4.10` **held to its word** · _brouillon (02/11)_ — la série d'isolation, DG-c, G1 (le code), #358",
+        "`0.5.0` **la boucle mesurée** · _en préparation (fin de semaine)_ — OV1, ADM1, BL1c, CI4",
+        "`0.5.x` · _en préparation (après la prochaine session de banc)_ — ID1, G1 au banc",
+    ]
+    # Beside the bars, before the lots and the criteria: a message too long is cut at its end.
+    text = out.out
+    assert text.index("**Jalons**") < text.index("**Releases**") < text.index("**En cours**") \
+        < text.index("**Pour la 1.0**")
+    assert out.err == "" and fake.writes() == []
+    assert [r for r in fake.requests if r["path"] == "/gh/repos/o/r/releases/latest"]
+
+
+def test_no_release_published_leaves_its_line_out_and_says_so(fake, monkeypatch, capsys):
+    """releases/latest is 404 until a release is published: the rows stay, the job stays green."""
+    configure(monkeypatch, fake, forum=False)
+    (rd.ROOT / "ROADMAP.md").write_text(ROADMAP + RELEASES, encoding="utf-8")
+    assert rd.main([]) == 0
+    block = releases_of(fake.roadmap[0]["embeds"][0]["description"])
+    assert "Dernière publiée" not in block and block.startswith("`0.4.10` **held to its word**")
+    assert "atelier: dernière release omise — GitHub releases/latest: HTTP 404" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("answer, fail", [(None, 502), ({"id": 1, "html_url": "https://x"}, None), ([LATEST], None)])
+def test_releases_latest_failing_or_unreadable_is_a_line_left_out(fake, monkeypatch, capsys, answer, fail):
+    configure(monkeypatch, fake, forum=False)
+    (rd.ROOT / "ROADMAP.md").write_text(ROADMAP + RELEASES, encoding="utf-8")
+    fake.gh["release"] = answer
+    if fail:
+        fake.fail["/gh/repos/o/r/releases/latest"] = fail
+    assert rd.main([]) == 0
+    text = fake.roadmap[0]["embeds"][0]["description"]           # the message posted all the same
+    assert "Dernière publiée" not in text and "`0.5.0` **la boucle mesurée**" in text
+    assert "atelier: dernière release omise" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("roadmap", [
+    ROADMAP,                                                                      # no section
+    ROADMAP + RELEASES.replace("| État |", "| Statut |"),                         # a header renamed
+    ROADMAP + RELEASES.replace("| ID1, G1 au banc |", "|"),                       # a line of three cells
+    ROADMAP + RELEASES.replace("|---|---|---|---|\n", ""),                        # no separator line
+    ROADMAP + "\n### Les prochaines releases\n\nÀ venir.\n\n### Autre\n"         # its table after the next heading
+    + RELEASES.split("Tenue par l'Orchestre.\n", 1)[1],
+    ROADMAP + RELEASES.split("|---|---|---|---|\n", 1)[0] + "|---|---|---|---|\n",  # a header, no line
+])
+def test_a_releases_section_absent_or_of_another_shape_is_said(fake, roadmap):
+    text = rd.render([], [], {}, roadmap, latest=LATEST)["description"]
+    assert releases_of(text).splitlines() == [LATEST_LINE, "_section introuvable dans ROADMAP.md_"]
+    assert "**Pour la 1.0**\n☐ Critères de maturité" in text       # the other sections still read
+
+
+def test_the_line_github_says_published_is_shown_published(fake):
+    latest = {**LATEST, "tag_name": "v0.4.10", "name": "v0.4.10 — held to its word"}
+    block = releases_of(rd.render([], [], {}, ROADMAP + RELEASES, latest=latest)["description"])
+    assert "`0.4.10` **held to its word** · _publiée_ —" in block
+    assert "`0.5.0` **la boucle mesurée** · _en préparation (fin de semaine)_" in block
+
+
+def test_a_release_name_is_inert_and_only_an_https_link_is_one(fake):
+    latest = {**LATEST, "name": "@everyone [clic](https://evil.example) **gras**", "html_url": "javascript:alert(1)"}
+    line = releases_of(rd.render([], [], {}, ROADMAP + RELEASES, latest=latest)["description"]).splitlines()[0]
+    assert "[clic](" not in line and "**gras**" not in line and "@everyone" not in line
+    assert "javascript:" not in line and line.startswith("🏷️ Dernière publiée : **")
+
+
+def test_the_releases_block_is_cut_cleanly_and_the_message_stays_under_its_bounds(fake):
+    rows = "".join(f"| 0.{n}.0 | {'un titre très long ' * 6} | {'un contenu qui déborde ' * 12} | "
+                   f"{'en préparation ' * 6} |\n" for n in range(20))
+    roadmap = ROADMAP + RELEASES.split("| 0.4.10")[0] + rows + "\n### Les lots\n"
+    block = releases_of(rd.render([], [], {}, roadmap, latest=LATEST)["description"]).splitlines()
+    assert len(block) == 1 + rd.RELEASES_ROWS + 1 and block[-1] == f"… +{20 - rd.RELEASES_ROWS} dans ROADMAP.md"
+    assert all(len(x) <= 240 and x.count("**") % 2 == 0 and x.count("_") % 2 == 0 for x in block)
+    # 400 lots in progress: the message is cut at its end, and the releases are all there still.
+    lots = [rd.Lot(str(n), f"Z{n} — " + "un titre long " * 8, True, "v0.x", f"Z{n}", f"https://x/{n}")
+            for n in range(1, 400)]
+    e = rd.render(fake.gh["milestones"], lots, {x.number: "en cours" for x in lots}, roadmap * 3, latest=LATEST)
+    assert len(e["description"]) <= rd.DESCRIPTION_MAX
+    assert len(e["title"]) + len(e["description"]) + len(e["footer"]["text"]) <= rd.EMBED_MAX
+    assert e["description"].endswith("(tronqué : voir ROADMAP.md)")
+    assert releases_of(e["description"]).splitlines() == block
+
+
+def test_the_roadmaps_own_releases_table_is_read():
+    """ROADMAP.md as it is in the repository: its table read, never « introuvable »."""
+    rows = rd.releases((ROOT / "ROADMAP.md").read_text(encoding="utf-8"))
+    assert rows and all(len(r) == len(rd.RELEASES_HEADER) for r in rows)

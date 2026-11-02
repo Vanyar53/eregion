@@ -29,9 +29,9 @@ POINTS = [{"name": "rp-1", "time": "2026-10-29T07:00:00+00:00", "vault_tier": Tr
           {"name": "rp-0", "time": "2026-10-28T07:00:00+00:00", "vault_tier": True}]
 
 
-def _card() -> str:
+def _card(**kw) -> str:
     return escalations.record("rule-ransomware-0123abcd", VM, "restore_from_backup",
-                              "destructive_action", "restore needs a human", ttp="T1486")
+                              "destructive_action", "restore needs a human", ttp="T1486", **kw)
 
 
 def _pending(esc_id: str) -> dict:
@@ -102,8 +102,14 @@ def test_the_console_proposes_the_exercise_s_moment_when_runs_gives_it(console, 
             "event": "attack_started", "raw_signal": {"attack_time": t0},
             "context": {"run_id": "20261029T100000Z", "scenario": "s"}}
     (tmp_path / "runs" / "20261029T100000Z_signals.jsonl").write_text(json.dumps(line) + "\n")
-    d = console.get(f"/api/restore/plan/vm-example-01?escalation={_card()}").json()
+    # An exercise card of that run (SEC8): the channel gives its moment.
+    drill = _card(source="exercise", exercise_run="20261029T100000Z")
+    d = console.get(f"/api/restore/plan/vm-example-01?escalation={drill}").json()
     assert d["source"] == "exercise" and "attack_started de runs/20261029T100000Z_signals.jsonl" in d["why"]
+    escalations.resolve(drill)
+    # A real card: the same line gives nothing — the card's first detection, and it is said.
+    d = console.get(f"/api/restore/plan/vm-example-01?escalation={_card()}").json()
+    assert d["source"] == "card" and "incident réel" in d["why"] and "le plus ancien des moments sûrs" in d["why"]
 
 
 def test_unreadable_points_are_said_and_the_restore_stays_possible(console, monkeypatch):

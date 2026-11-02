@@ -910,8 +910,10 @@ _CONTROL_PLANE_CARDS_PER_POLL = 5
 
 
 def _grave(row: dict) -> bool:
-    """A write on Glorfindel's own rules, or its identity outside what it does (AL1)."""
-    return row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True
+    """A write on Glorfindel's own rules, or its identity outside what it does (AL1); a Run
+    Command not attached to one of its drains (SID1, `GlorfindelRunCommand`: its reason)."""
+    return (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True
+            or bool(row.get("GlorfindelRunCommand")))
 
 
 def _control_plane_operations(rows: list[dict]) -> list[dict]:
@@ -933,6 +935,7 @@ def _control_plane_summary(rest: list[dict]) -> dict:
         **rest[0],
         "GlorfindelManaged": any(r.get("GlorfindelManaged") is True for r in rest),
         "GlorfindelIdentity": any(r.get("GlorfindelIdentity") is True for r in rest),
+        "GlorfindelRunCommand": next((r["GlorfindelRunCommand"] for r in rest if r.get("GlorfindelRunCommand")), ""),
         "OmittedOperations": [
             {"TimeGenerated": r.get("TimeGenerated") or "",
              "OperationNameValue": r.get("OperationNameValue") or "",
@@ -941,6 +944,7 @@ def _control_plane_summary(rest: list[dict]) -> dict:
              "_ResourceId": r.get("_ResourceId") or r.get("ResourceId") or "",
              "GlorfindelManaged": r.get("GlorfindelManaged") is True,
              "GlorfindelIdentity": r.get("GlorfindelIdentity") is True,
+             "GlorfindelRunCommand": r.get("GlorfindelRunCommand") or "",
              # An identity finding (C2): what its card would have said.
              **({"EntraOperation": r.get("EntraOperation") or "",
                  "ActorName": r.get("ActorName") or r.get("ActorId") or "",
@@ -1445,7 +1449,7 @@ class RulePoller:
         elif plane == "data" and _reads_activity_table(rule.query):
             plane = "control"
         control = plane in ("control", "identity")
-        grave = control and (row.get("GlorfindelManaged") is True or row.get("GlorfindelIdentity") is True)
+        grave = control and _grave(row)
         # COR1: a brute force followed by a login from its address — an account compromised.
         grave = grave or row.get("Correlation") == correlation.COMPROMISED
         return {

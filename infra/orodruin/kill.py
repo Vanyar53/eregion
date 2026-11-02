@@ -39,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from eregion_core import exercise, exercise_channel  # noqa: E402
+from eregion_core.held import arm_relative  # noqa: E402
 from eregion_core.orodruin import DEFAULT_BENCH_RG, kill  # noqa: E402
 from gothmog.engines.chaos_studio import ARM, CHAOS_API, experiment_targets, is_terminal  # noqa: E402
 
@@ -152,6 +153,9 @@ def steps(principal_id: str, vm_id: str, *, subscription: str = "",
     def pages(url: str) -> list[dict]:
         out: list[dict] = []
         while url:
+            # Azure Resource Manager only (SEC8): a next page elsewhere is refused, never followed.
+            if not url.startswith(ARM + "/"):
+                raise RuntimeError("a listing's next page outside Azure Resource Manager: refused")
             body = json.loads(call(["rest", "--method", "get", "--url", url, "-o", "json"]) or "{}")
             out += body.get("value") or []
             url = body.get("nextLink") or ""
@@ -172,6 +176,13 @@ def steps(principal_id: str, vm_id: str, *, subscription: str = "",
         cancelled = 0
         for experiment in pages(url):
             eid, name = experiment["id"], experiment.get("name") or "?"
+            try:
+                # An id read from a listing: a path under ARM, or not called (SEC8).
+                eid = arm_relative(eid)
+            except ValueError:
+                inflight.append(f"chaos {name}: its id is not a path under Azure Resource Manager — "
+                                "not touched; check it in the portal")
+                continue
             if not running(eid):
                 continue
             call(["rest", "--method", "post", "--url", f"{ARM}{eid}/cancel?api-version={CHAOS_API}"])

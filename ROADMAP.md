@@ -70,7 +70,7 @@ En 0.x, schémas, signaux et interface peuvent encore changer ; la 1.0 les fige.
 - Contrats publics figés et versionnés : signaux, schéma d'expérience, catalogue, interface de fournisseur.
 - Les profils s'installent et tournent, prouvé en CI. Glorfindel est toujours présent (décision du 26/10, [`docs/design/console.md`](docs/design/console.md), §2) : Glorfindel seul (découvrir, être défendu en observation) ; Glorfindel + Annatar (« ma détection marche-t-elle ? ») ; Glorfindel + Gothmog (« mon infra tient-elle ? ») ; tout (« défense éprouvée », comme H0) ; plusieurs équipes.
 - La preuve en production existe : mode ombre, détection non destructive, sentinelle.
-- **La file d'actions signée — prérequis avant toute VM hors du banc** (SID1, #409, décision du 02/11) : seule la watch tient le rôle d'écriture ; la console et le bot y déposent une demande signée. D'ici là, l'identité de réponse partagée de H0 n'agit que sur le banc, et son propre usage de Run Command est surveillé (une carte critique hors d'une isolation qu'elle a décidée, [`docs/design/modele-de-menace.md`](docs/design/modele-de-menace.md), §5).
+- **La file d'actions signée — prérequis avant toute VM hors du banc** (FS1, #413 ; posé par SID1, #409, décision du 02/11) : seule la watch tient le rôle d'écriture ; la console et le bot y déposent une demande signée. D'ici là, l'identité de réponse partagée de H0 n'agit que sur le banc, et son propre usage de Run Command est surveillé (une carte critique hors d'une isolation qu'elle a décidée, [`docs/design/modele-de-menace.md`](docs/design/modele-de-menace.md), §5).
 
 ### Les lots
 

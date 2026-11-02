@@ -140,7 +140,8 @@ Le plan des deux cas, contre de faux providers :
 - **le bruit sur gondolin** ne touche qu'elle.
 
 Les deux cas sont dans `infra/terraform/tests/chaos_noise.tftest.hcl`. On les lance à la main,
-comme le test d'ID1 (`terraform -chdir=infra/terraform test`) : la CI n'exécute pas Terraform.
+comme le test d'ID1 (`terraform -chdir=infra/terraform test`), et la CI les lance à chaque PR
+(job `terraform-test`, CI4).
 
 **Un second moyen d'allumer le bruit, réservé aux tests.** Le cas « gondolin » passe par la
 variable `chaos_noise_vms` (`variables.tf`), car un test ne peut pas remplacer une valeur lue dans
@@ -154,7 +155,7 @@ Rien n'est appliqué ni mesuré : les trois pannes sont `planned` au catalogue (
 sans poignée) jusqu'au premier run.
 1. `make celebrimbor-plan`, avec `chaos.noise_vms: [gondolin]`. Le plan ajoute l'identité de
    l'agent (et la modification de gondolin qui la porte), la cible Microsoft-Agent (azapi, un
-   provider de plus : `celebrimbor-plan` fait déjà `init -upgrade`), l'extension, deux capacités,
+   provider de plus, au verrou du module depuis CI4 : `celebrimbor-plan` l'installe), l'extension, deux capacités,
    trois expériences et leurs trois rôles. Puis `make celebrimbor-up YES=1`, et
    `make orodruin-lock YES=1` : Orodruin reçoit ses droits de démarrer et d'annuler expérience par
    expérience, à son propre apply (`infra/orodruin/main.tf`, `experiment_injector`). Sans lui, le

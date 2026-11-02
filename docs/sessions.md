@@ -96,18 +96,21 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
    - **Le verdict se publie sur la PR, avant la fusion** (SEC12, #418). Quiconque fusionne, l'Orchestre
      ou toi, publie chaque verdict de relecture (`ok`, `changes`, `blocking`) en commentaire, et ne
      fusionne que le commit relu. Ce commit se note **au lancement du relecteur**,
-     `reviewed=$(git rev-parse <branche>)`. Il lui est donné, et son rapport le redit (« Commit relu »).
+     `git fetch origin`, puis `reviewed=$(git rev-parse origin/<branche>)` pour une branche poussée
+     (`git rev-parse <branche>` pour une branche locale). Cela vaut pour toute relecture, la première comme
+     chaque relance après des corrections. Il lui est donné, et son rapport le redit (« Commit relu »).
      Ce n'est jamais la tête lue au moment de publier : un push entre la relecture et la publication
      passerait pour relu.
      ```
      python3 scripts/review_verdict.py body --lot <ID> --verdict ok --head "$reviewed" --report <rapport> \
        | gh pr comment <n> --body-file -
      gh pr view <n> --json headRefOid,comments \
-       | python3 scripts/review_verdict.py check --reviewed "$reviewed" --author eregion-agents
+       | python3 scripts/review_verdict.py check --reviewed "$reviewed" --author eregion-agents --author Vanyar53
      gh pr merge <n> --squash --match-head-commit "$reviewed"
      ```
-     `check` ne lit que les commentaires de l'App des sessions (et du mainteneur, s'il le nomme) : sur
-     une PR publique, n'importe qui peut commenter. Il échoue si la tête de la PR n'est pas
+     `check` ne lit que les commentaires des auteurs nommés, l'App des sessions et le mainteneur : sur
+     une PR publique, n'importe qui peut commenter. Les deux noms le font marcher avant comme après la
+     bascule des sessions sur l'App. Il échoue si la tête de la PR n'est pas
      `$reviewed` (un push après la relecture : une autre relecture), ou si le dernier verdict publié
      pour ce commit n'est pas `ok`. Le verdict est **tracé**, pas authentifié : il dit qui l'a publié
      (l'App), pas qu'un relecteur l'a rendu.
@@ -177,6 +180,9 @@ Une clé perdue ou exposée se révoque dans les réglages de l'App (Private key
 Rien ne change pour ton propre terminal, ni pour tes autres projets : seules les sessions de Claude
 Code lancées dans `~/eregion` basculent. Ce sont tes fichiers : une session ne les écrit pas.
 
+0. **Avant tout : SEC12 fusionné, et `~/eregion` à jour sur `main`** (`git -C ~/eregion switch main &&
+   git -C ~/eregion pull --ff-only`). Les emballages de `scripts/agent-bin/` et `agent_token.py` sont
+   lus depuis ce checkout.
 1. **La config `git` des sessions**, `~/.config/eregion-agents/gitconfig`. Elle reprend la tienne,
    puis passe GitHub en https avec l'assistant de l'App :
    ```
@@ -219,6 +225,10 @@ Code lancées dans `~/eregion` basculent. Ce sont tes fichiers : une session ne 
    fi
    ```
 4. **Relance les sessions d'eregion**, puis vérifie depuis l'une d'elles :
+   - `echo $EREGION_AGENT_SESSION` donne `1`. Vide, la session n'a pas lu
+     `~/eregion/.claude/settings.local.json` (c'est le cas d'une session lancée directement dans un
+     worktree, ou depuis un autre dossier) : elle n'a ni l'emballage ni la config `git` de l'App, et
+     retombe sur tes identifiants. Lance les sessions depuis `~/eregion` ;
    - `command -v gh` donne `…/eregion/scripts/agent-bin/gh`. Dans un autre projet, `gh` reste le tien ;
    - `python3 ~/eregion/scripts/agent_token.py whoami` donne `jeton de l'App <ID> : Vanyar53/eregion ;
      expire dans 59 min` (code 1 si le jeton atteint un autre dépôt) ;
@@ -232,13 +242,20 @@ Code lancées dans `~/eregion` basculent. Ce sont tes fichiers : une session ne 
    `.github/workflows/`, les réglages du dépôt) passent par l'interface web, ou par un `gh` qui tient
    ton jeton dans ton terminal, hors des sessions.
 
+**Ce que la bascule ne ferme pas seule** : une session qui n'a pas lu `settings.local.json` (lancée
+dans un worktree, ou ailleurs) agit encore sous ton compte, tant que tes identifiants sont sur ce
+poste. Seul leur retrait, ci-dessous, ferme ce cas : sans eux, une telle session n'a plus aucune
+identité sur GitHub, et ses écritures échouent.
+
 ### Retirer tes identifiants du poste des sessions (Jonathan)
 
 Les sessions tournent sous ton utilisateur Unix : tout ce que tu peux lire, elles le peuvent aussi.
 Une fois la bascule vérifiée :
 - **`gh auth logout --hostname github.com`** dans ton terminal. Ton jeton quitte `~/.config/gh/hosts.yml`.
-  Pour un geste de mainteneur en ligne de commande, passe un jeton le temps d'une commande
-  (`GH_TOKEN=… gh release …`), tiré de ton gestionnaire de mots de passe ;
+  Pour un geste de mainteneur en ligne de commande (une PR qui touche `.github/workflows/`, une
+  release), passe un jeton le temps d'une commande, tiré de ton gestionnaire de mots de passe :
+  `GH_TOKEN=$(<gestionnaire> …) gh pr merge …`. Jamais le jeton en clair sur la ligne : il resterait
+  dans l'historique du shell. Pour pousser la branche d'une telle PR, l'interface web, ou ta clé SSH ;
 - **ta clé SSH pour GitHub** : une clé qui demande un toucher (`ssh-keygen -t ed25519-sk`), ou une
   phrase de passe sans agent chargé pendant les sessions. Sinon, retire-la de GitHub (Settings → SSH
   and GPG keys) et pousse par l'interface web. La clé de H0 et d'Orodruin n'est pas concernée ;
@@ -260,6 +277,11 @@ ci-dessous présents dans le ruleset « main »** : sans eux, une PR rouge devie
 
    Publier une release crée son tag : tu passes par ta dérogation, l'App est refusée. Une release
    en brouillon ne crée pas de tag : les sessions en préparent toujours.
+
+   **Si le rôle « Repository admin » n'est pas proposé dans la Bypass list** (le cas possible d'un dépôt
+   personnel), n'active pas la règle telle quelle : elle te bloquerait toi-même, et plus aucune release
+   ne se publierait. Laisse-la en **Evaluate** le temps de trouver la dérogation qui te nomme, puis
+   passe-la en Active.
 2. **« main » (New branch ruleset).**
    - Enforcement status : **Active** ;
    - Bypass list : **Repository admin**, mode **For pull requests only** (une urgence passe par une PR,
@@ -278,9 +300,13 @@ ci-dessous présents dans le ruleset « main »** : sans eux, une PR rouge devie
        - `image (annatar)`.
 
 **Vérifier :**
-- avec ton identité : `gh api repos/Vanyar53/eregion/rulesets` liste les deux règles, avec leurs
-  dérogations. `gh api repos/Vanyar53/eregion/rules/branches/main` donne les règles actives sur `main`,
-  dont les six checks ;
+- avec ton identité : `gh api repos/Vanyar53/eregion/rulesets` liste les deux règles, et
+  `gh api repos/Vanyar53/eregion/rulesets/<id>`, pour chacune, montre `bypass_actors` avec le rôle
+  admin (`"actor_type": "RepositoryRole"`, et `"actor_id": 5`, l'id habituel du rôle admin : à confirmer à la lecture). `gh api repos/Vanyar53/eregion/rules/branches/main`
+  donne les règles actives sur `main`, dont les six checks ;
+- **un essai de la dérogation, depuis le web** : publie une release d'essai (`v0.0.0-sec12-essai`, une
+  pré-version, sur `main`), vérifie qu'elle passe, puis supprime-la, avec son tag (la page de la
+  release, puis Tags). Le CD de H0 ne la suit pas : une pré-version n'est pas la dernière release ;
 - **ce que voit H0, sans jeton** : `curl -s 'https://api.github.com/repos/Vanyar53/eregion/rulesets?targets=tag'`,
   puis `curl -s https://api.github.com/repos/Vanyar53/eregion/rulesets/<id>`. Le CD lit la règle
   ainsi. GitHub ne dit pas si ces routes répondent sans jeton : c'est l'hypothèse à mesurer. Puis

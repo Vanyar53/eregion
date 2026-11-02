@@ -253,8 +253,9 @@ make orodruin-exercise REQUEST=r-20261030T075200Z-a1b2c3 [DRY_RUN=1] [REQUEST_FR
 #      - REQUEST vérifié avant toute commande (r-<heure UTC>-<6 hex>), jamais lu de l'environnement ;
 #      - la demande tirée de H0 par SSH, sa clé d'hôte vérifiée par son empreinte : HOST_SSH_FINGERPRINT
 #        est exigée (sans elle, rien n'est fait — jamais accept-new pour ce qui fait agir Orodruin) ;
-#        REQUEST_FROM=local : la console de ce poste (make glorfindel-start), sans SSH ; Orodruin de
-#        même, sa clé épinglée par ORO_SSH_FINGERPRINT (V-32, SEC14) ;
+#        REQUEST_FROM=local : la console de ce poste (make glorfindel-start), sans SSH vers H0 ;
+#      - portée à Orodruin par SSH, sa clé d'hôte vérifiée par ORO_SSH_FINGERPRINT, toujours exigée
+#        (V-32, SEC14 ; make orodruin-fingerprint la lit par Azure) ;
 #      - relue par son seul lecteur (un champ de plus : refusée, rien n'est envoyé), affichée fil par
 #        fil : rang, technique ou panne, cible, groupe, DESTRUCTIVE ;
 #      - pour chaque fil destructif, ou dont personne n'a dit qu'il ne l'est pas (A0) : taper le nom de

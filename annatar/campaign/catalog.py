@@ -13,6 +13,7 @@ but lives here so Annatar does not import from the glorfindel package.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -91,13 +92,26 @@ def script_digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _relative(script: str) -> str:
+    """A script's path as the catalog writes it: normal (``./``, ``a/../``), relative to the
+    repository — an absolute path under it made relative (SEC14 review, V-19)."""
+    path = os.path.normpath(script)
+    if os.path.isabs(path):
+        root = os.path.normpath(str(REPO_ROOT))
+        if os.path.commonpath([path, root]) == root:
+            path = os.path.relpath(path, root)
+    return path
+
+
 def script_pin(script: str, catalog: dict[str, dict[str, Any]] | None = None) -> str | None:
     """The sha256 the catalog gives a local script (``script_sha256`` of the entry that names it,
-    SEC14 V-19) — None when no entry pins it."""
+    SEC14 V-19) — None when no entry pins it. The path is compared normal: ``./scripts/vm/x.sh``,
+    ``scripts/../scripts/vm/x.sh`` or its absolute path are the catalog's ``scripts/vm/x.sh``."""
+    want = _relative(script)
     for entry in (load_catalog() if catalog is None else catalog).values():
-        pin = (entry.get("script_sha256") or {}).get(script)
-        if isinstance(pin, str):
-            return pin
+        for path, pin in (entry.get("script_sha256") or {}).items():
+            if isinstance(pin, str) and _relative(str(path)) == want:
+                return pin
     return None
 
 

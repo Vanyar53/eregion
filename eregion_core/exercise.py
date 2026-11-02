@@ -38,7 +38,11 @@ field as it was, ``end`` from null to a date not before its start —, as the ch
 (``exercise_channel.rewrite_refusal``). The watch reads its windows every minute
 (glorfindel/cli.py's housekeeping), so an injector's window is seen within a minute of being
 written; a run never starts without a live watch (V1). A registry that cannot be read believes
-no local window: its cycles fall toward ``real``.
+no window: its cycles fall toward ``real``. A window is « pulled from the channel » only when
+that record says so — the pull writes it down there with its blob's creation
+(``note_pulled``); a ``channel_created`` the file carries alone is the word of whoever wrote the
+file, and the window is then local. A watch stopped more than FUTURE_SKEW_S during a local run
+sees its window late: refused, its cycles count as real — the safe side.
 MAX_DURATION_S still caps how long it lasts. And on a VM in zone ``production`` (its tags,
 read by the watch), a window marks nothing unless it declares a technique that is not
 destructive (``kind: technique``, ``destructive: false``): the production rule of O0 — a
@@ -51,6 +55,7 @@ each window it writes, the watch pulls them before it reads.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -246,27 +251,76 @@ def seen_refusal(window: dict, entry: dict) -> str:
     return ""
 
 
-def _observe(windows: list[tuple[Path, dict]], now: datetime, registry: Path) -> dict[str, str]:
-    """Write down the local windows seen for the first time, and the closure of those seen open;
-    return why each local window is not believed, by path (SEC14, V-20). A registry that cannot
-    be read or written believes none of them."""
-    local = [(p, w) for p, w in windows if CHANNEL_CREATED not in w]
-    if not local:
-        return {}
-    with _seen_lock:
+def _update_seen(registry: Path, change) -> None:
+    """Read the watch's record, let ``change(seen) -> bool`` edit it, write it back if changed —
+    under an exclusive ``flock`` (the watch, ``glorfindel respond``, the console's process may
+    each read windows) and through a temporary file of its own (``mkstemp``), then replaced:
+    never half written, never two writers at once. Raises OSError or ValueError when it cannot
+    be read or written."""
+    import fcntl
+    import tempfile
+
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    with _seen_lock, open(registry.with_name(registry.name + ".lock"), "a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        seen = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else {}
+        if not isinstance(seen, dict):
+            raise ValueError("not a JSON object")
+        if not change(seen):
+            return
+        fd, tmp = tempfile.mkstemp(prefix=f".{registry.name}.", dir=registry.parent)
         try:
-            seen = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else {}
-            if not isinstance(seen, dict):
-                raise ValueError("not a JSON object")
-        except (OSError, ValueError) as e:
-            return {str(p): f"the watch's record of the windows it saw is unreadable ({e})" for p, _ in local}
-        changed, out = False, {}
-        for path, w in local:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(seen, f, indent=1)
+            os.replace(tmp, registry)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+
+
+def note_pulled(registry: Path | None, window: dict) -> None:
+    """The exercise channel's pull wrote this window (eregion_core/exercise_channel.py): the watch
+    writes down, in its own state, that it came from the channel, when its blob was created and
+    what it said — the window's own ``channel_created`` is believed only if this says the same
+    (SEC14, V-20). A window the channel brings again replaces the entry (its closure, checked by
+    ``rewrite_refusal`` before). Never raises: a failure leaves the window to the local bound."""
+    if registry is None or not isinstance(window, dict) or not window.get("run_id"):
+        return
+
+    def change(seen: dict) -> bool:
+        seen[str(window["run_id"])] = {"seen": str(window.get(CHANNEL_CREATED) or ""), "channel": True,
+                                       "fields": _fields(window), "end": window.get("end")}
+        return True
+    try:
+        _update_seen(registry, change)
+    except (OSError, ValueError) as e:
+        print(f"[exercise] window {window.get('run_id')}: its pull not written down ({e})")
+
+
+def _observe(windows: list[tuple[Path, dict]], now: datetime, registry: Path) -> dict[str, str]:
+    """Write down the windows seen for the first time, and the closure of those seen open;
+    return why each is not believed, by path (SEC14, V-20). A window counts as pulled from the
+    channel only when the watch's own record says so (``note_pulled``) — its ``channel_created``
+    field is the file's word, written by whoever writes the file —, and is then bounded by the
+    blob's creation; any other is local, bounded by when the watch first saw it. Either way, once
+    written down, it may come again only closed. A registry that cannot be read or written
+    believes none of them."""
+    if not windows:
+        return {}
+    out: dict[str, str] = {}
+
+    def change(seen: dict) -> bool:
+        changed = False
+        for path, w in windows:
             rid = str(w.get("run_id"))
             entry = seen.get(rid)
             if not isinstance(entry, dict):
                 entry = seen[rid] = {"seen": now.isoformat(), "fields": _fields(w), "end": w.get("end")}
                 changed = True
+            if entry.get("channel") and w.get(CHANNEL_CREATED) != entry.get("seen"):
+                out[str(path)] = "its channel_created is not what the pull wrote down"
+                continue
             why = seen_refusal(w, entry)
             if why:
                 out[str(path)] = why
@@ -279,16 +333,13 @@ def _observe(windows: list[tuple[Path, dict]], now: datetime, registry: Path) ->
                     or (_parse(v.get("seen")) or now) < horizon]:
             del seen[rid]
             changed = True
-        if changed:
-            try:
-                registry.parent.mkdir(parents=True, exist_ok=True)
-                tmp = registry.with_suffix(".json.tmp")
-                tmp.write_text(json.dumps(seen, indent=1), encoding="utf-8")
-                tmp.replace(registry)
-            except OSError as e:
-                return {str(p): f"the watch's record of the windows it saw cannot be written ({e})"
-                        for p, _ in local}
-        return out
+        return changed
+    try:
+        _update_seen(registry, change)
+    except (OSError, ValueError) as e:
+        return {str(p): f"the watch's record of the windows it saw cannot be read or written ({e})"
+                for p, _ in windows}
+    return out
 
 
 def observe(now: datetime | None = None) -> list[dict]:

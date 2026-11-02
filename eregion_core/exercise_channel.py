@@ -321,12 +321,14 @@ def rewrite_refusal(old, new) -> str:
 
 
 def pull(directory: Path, *, channel: str | None = None, credential=None, get=None,
-         say=print) -> int:
+         say=print, seen: Path | None = None) -> int:
     """Copy into ``directory`` every window of the channel that is new or changed since the
     local copy, page after page of the listing — the container's root only (the windows; the
     prefixes are other pulls'), within the bounds of V-21. Each window carries when its blob
     was created (``CREATED``, V-20); one pulled already is replaced only by its closure
-    (``rewrite_refusal``). Returns how many were written."""
+    (``rewrite_refusal``). With ``seen`` (the watch's own record, eregion_core/exercise.py), each
+    window written is written down there as pulled — the only proof the watch takes that it came
+    from the channel (SEC14, V-20). Returns how many were written."""
     url = channel if channel is not None else channel_url()
     if not url:
         return 0
@@ -334,14 +336,17 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
     directory.mkdir(parents=True, exist_ok=True)
     written: list[str] = []
     try:
-        _pull_windows(directory, url, headers, get, say, Budget(), written)
+        _pull_windows(directory, url, headers, get, say, Budget(), written, seen)
     except Spent as e:   # the pull's cumulated bound (V-21): what was written stays
         say(f"[exercise-channel] {e}: the rest waits for the next pull")
     return len(written)
 
 
 def _pull_windows(directory: Path, url: str, headers: dict, get, say, budget: Budget,
-                  written: list[str]) -> None:
+                  written: list[str], seen: Path | None = None) -> None:
+    import json
+
+    from eregion_core.exercise import note_pulled  # exercise imports this module lazily
     downloads = 0
     for blob in _blobs(get, url, headers, delimiter="/", say=say, budget=budget):
         name = blob.findtext("Name") or ""
@@ -391,9 +396,14 @@ def _pull_windows(directory: Path, url: str, headers: dict, get, say, budget: Bu
                 continue
         _refused_rewrites.pop(key, None)
         tmp = local.with_suffix(".json.tmp")
-        tmp.write_bytes(_stamped(body, blob, local))
+        stamped = _stamped(body, blob, local)
+        tmp.write_bytes(stamped)
         tmp.replace(local)  # atomic: the watch never reads half a window
         written.append(name)
+        try:
+            note_pulled(seen, json.loads(stamped))
+        except ValueError:
+            pass                     # not JSON: the watch refuses it anyway
 
 
 def pull_if_due(directory: Path, *, now: float | None = None) -> None:
@@ -407,7 +417,8 @@ def pull_if_due(directory: Path, *, now: float | None = None) -> None:
         return
     try:
         _last_pull = now
-        pull(directory)
+        from eregion_core.exercise import seen_path
+        pull(directory, seen=seen_path())
     except Exception as e:  # the local windows still count; the rest falls toward real
         print(f"[exercise-channel] pull failed at {datetime.now():%H:%M:%S}: {e}")
     finally:
@@ -418,6 +429,9 @@ def pull_now(directory: Path, **kw) -> int:
     """``pull`` now, whatever PULL_EVERY_S, under the lock ``pull_if_due`` takes: two pulls
     never write the same window at once. For the campaign report, which needs the last
     window, closed just before its campaign ended (analysis/hosted_report.py)."""
+    from eregion_core.exercise import exercises_dir, seen_path
+    if Path(directory) == exercises_dir():
+        kw.setdefault("seen", seen_path())     # the watch's own windows: written down as pulled (V-20)
     if not _pull_lock.acquire(timeout=60):
         raise RuntimeError("another pull of the windows is still running")
     try:

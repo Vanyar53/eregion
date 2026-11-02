@@ -7437,8 +7437,8 @@ TESTS["M2955"] = "tests/unit/test_host_deploy.py"
 MUTANTS += [
     ("M2956", "a pull of the windows reads without a cumulated bound, each read bounded alone (V-21)",
      "eregion_core/exercise_channel.py",
-     "        _pull_windows(directory, url, headers, get, say, Budget(), written)\n",
-     "        _pull_windows(directory, url, headers, get, say, None, written)\n"),
+     "        _pull_windows(directory, url, headers, get, say, Budget(), written, seen)\n",
+     "        _pull_windows(directory, url, headers, get, say, None, written, seen)\n"),
 ]
 TESTS["M2956"] = "tests/unit/test_injector_channels.py"
 
@@ -7466,6 +7466,33 @@ MUTANTS += [
      "    due = [a for a in advs if a.fixes and not acceptance(a, accepted)]\n", "    due = []\n"),
 ]
 TESTS["M2959"] = "tests/unit/test_pip_audit_issues.py"
+
+# SEC14 after its review (M3075–M3084): a window is « pulled » only when the pull wrote it down; the
+# record under one flock; the CI's audit never red on a push; the script's pin by a normal path;
+# annatar init under the lock.
+MUTANTS += [
+    ("M3075", "a channel_created the window's file carries alone is believed (V-20, review)",
+     "eregion_core/exercise.py",
+     '                entry = seen[rid] = {"seen": now.isoformat(), "fields": _fields(w), "end": w.get("end")}\n',
+     '                entry = seen[rid] = {"seen": w.get(CHANNEL_CREATED) or now.isoformat(), '
+     '"fields": _fields(w), "end": w.get("end")}\n'),
+    ("M3076", "the pull writes nothing down: a window it brought is held as local (V-20, review)",
+     "eregion_core/exercise_channel.py", "            note_pulled(seen, json.loads(stamped))\n",
+     "            pass\n"),
+    ("M3077", "the watch's record is changed without its flock: two processes lose each other's (V-20, review)",
+     "eregion_core/exercise.py", "        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)\n", "        pass\n"),
+]
+TESTS.update({"M3075": "tests/unit/test_exercise.py", "M3076": "tests/unit/test_exercise.py",
+              "M3077": "tests/unit/test_exercise.py"})
+MUTANTS += [
+    ("M3078", "a pinned script named ./scripts/… or by its absolute path escapes its pin (V-19, review)",
+     "annatar/campaign/catalog.py", "            if isinstance(pin, str) and _relative(str(path)) == want:\n",
+     "            if isinstance(pin, str) and str(path) == script:\n"),
+    ("M3079", "annatar init cleans a disk during a request: no lock (R-10, review)", "annatar/cli.py",
+     """        with request_lock(f"init {os.path.basename(scenario or '')}".strip()):\n""",
+     "        with contextlib.nullcontext():\n"),
+]
+TESTS.update({"M3078": "tests/unit/test_injector_guards.py", "M3079": "tests/unit/test_annatar_run_exit.py"})
 
 # SEC8 (#414, M2810–M2839): the runs/ channel read as an input the watch does not trust — regular
 # files only, a bounded read and rate, bounded effects, finite durations, known techniques, the

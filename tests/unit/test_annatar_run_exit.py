@@ -270,3 +270,19 @@ def test_a_clean_during_a_request_is_refused_and_touches_nothing(tmp_path, monke
     monkeypatch.setattr(InitRunner, "clean", holding)
     assert CliRunner().invoke(cli, ["clean", EXFIL_YAML]).exit_code == 0
     assert cleaned == [EXFIL_YAML]
+
+
+
+def test_init_cleans_under_orodruins_lock_too(tmp_path, monkeypatch):
+    """SEC14 review: `annatar init <scenario>` cleans the VM's disk (InitRunner.clean) — refused
+    during a request, as `annatar clean`."""
+    from annatar.runner.initializer import InitRunner
+    from eregion_core.exercise_runner import request_lock
+    monkeypatch.chdir(tmp_path)
+    ran = []
+    monkeypatch.setattr(InitRunner, "run", lambda self, auto_approve=False, scenario_path=None: ran.append(scenario_path))
+    with request_lock("request r-20261031T080000Z-abcdef"):
+        res = CliRunner().invoke(cli, ["init", "--yes", EXFIL_YAML])
+    assert res.exit_code == 1 and "busy: request r-20261031T080000Z-abcdef" in " ".join(res.output.split())
+    assert ran == []
+    assert CliRunner().invoke(cli, ["init", "--yes", EXFIL_YAML]).exit_code == 0 and ran == [EXFIL_YAML]

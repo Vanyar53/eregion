@@ -308,7 +308,16 @@ def init(yes: bool, scenario: str | None):
         annatar init --yes scenarios/azure/ransomware-vm.yaml
     """
     from annatar.runner.initializer import InitRunner
-    InitRunner().run(auto_approve=yes, scenario_path=scenario)
+    from eregion_core.exercise_runner import Busy, request_lock
+    # With a scenario, init cleans its VM's disk (InitRunner.clean): Orodruin's one lock, as
+    # `annatar clean` (SEC14 review, R-10).
+    try:
+        with request_lock(f"init {os.path.basename(scenario or '')}".strip()):
+            InitRunner().run(auto_approve=yes, scenario_path=scenario)
+    except Busy as e:
+        from rich.markup import escape   # the holder's name, never read as markup
+        console.print(f"[red]✗ init refused — busy: {escape(str(e))}[/red]")
+        raise SystemExit(EXIT_RUN_FAILED)
 
 
 @cli.command()

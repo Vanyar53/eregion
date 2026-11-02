@@ -439,8 +439,16 @@ qu'écrit l'injecteur, et qu'aucun conteneur d'injecteur ne monte, SEC3). La fen
 commencer plus de 5 min avant ce moment, et, une fois vue, ne peut revenir que fermée, comme par le
 canal. La watch relit ses fenêtres chaque minute (le ménage de `glorfindel watch`) : une fenêtre
 d'injecteur est vue moins d'une minute après son écriture, et aucun run ne part sans watch vivante
-(V1). Un registre illisible ne fait croire aucune fenêtre locale : leurs cycles restent « real ».
-Le mtime d'un fichier ne borne rien (qui écrit le fichier écrit aussi sa date).
+(V1). Un registre illisible ne fait croire aucune fenêtre : leurs cycles restent « real ».
+Le mtime d'un fichier ne borne rien (qui écrit le fichier écrit aussi sa date). **Une fenêtre n'est
+« tirée du canal » que si le registre le dit** (relecture de SEC14) : le tirage y note chaque fenêtre
+qu'il écrit, avec la création de son blob et ce qu'elle dit (`note_pulled`) ; un `channel_created` que
+le fichier porte seul est la parole de qui l'a écrit, et la fenêtre est alors locale. Le registre est
+lu, changé et écrit sous un `flock`, par un fichier temporaire à lui (`mkstemp`) : la watch,
+`glorfindel respond` et la console peuvent lire les fenêtres en même temps. Une watch arrêtée plus de
+5 min pendant un run local voit sa fenêtre en retard : refusée, ses cycles comptent comme réels, le
+sens sûr. Au premier passage après cette version, les fenêtres déjà tirées ne sont pas au registre :
+vues comme locales, les plus anciennes sont refusées (des exercices déjà passés).
 
 Limites qui restent, assumées : une suite de fenêtres neuves, chacune écrite au moment où elle
 commence, couvre une VM aussi longtemps que son rédacteur le veut — par le canal comme sur l'hôte ;
@@ -664,10 +672,11 @@ travail. Sur Orodruin, c'est `/app/runs/…`, le même `$HOME/runs` que montent 
 injecteurs (`make orodruin-exercise`, `make orodruin-campaign-run`, `make gothmog-run`). Une campagne
 lancée avec un autre `--runs-dir` prend ce même verrou.
 
-**Une limite** : un fil se reconnaît à son `--request` (`annatar wire`, `gothmog run --request`), qui ne
-prend pas le verrou. Lancé à la main avec un faux identifiant, il le contourne. C'est un geste de
-l'opérateur, avec un shell sur Orodruin, comme `annatar wire` : le verrou évite un chevauchement par
-mégarde, il ne protège pas d'un opérateur qui le veut.
+**La limite qui reste** : un fil prend le verrou (SEC14, R-10) ; son `--request` ne le dispense de
+rien. Restent deux gestes d'un shell sur Orodruin : faire passer à la main le descripteur d'un verrou
+qu'il tient lui-même (il ne tient alors que ce qu'il aurait pris), ou lancer un injecteur hors de
+`/app` avec un autre `EREGION_RUN_LOCK` — un autre fichier, que rien ne voit. Le verrou évite un
+chevauchement par mégarde ; il ne protège pas d'un opérateur qui le veut.
 
 **Ce qu'Orodruin publie pour la console.** Dans le conteneur des fenêtres, sous `orodruin/` : même
 conteneur, même attribution, rien de neuf.

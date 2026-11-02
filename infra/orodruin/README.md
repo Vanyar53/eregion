@@ -70,7 +70,9 @@ jamais `accept-new` pour ce qui fait agir Orodruin, ni pour y porter `orodruin.e
 L'empreinte se lit par le plan de contrôle d'Azure, jamais par le SSH qu'elle vérifie :
 `make orodruin-fingerprint` (ton `az login`, Run Command : `ssh-keygen -lf
 /etc/ssh/ssh_host_ed25519_key.pub` sur la VM) affiche la ligne `export` à poser. Une VM reconstruite
-a une autre clé : la relire, la poser, retirer `~/.eregion/orodruin_known_hosts`.
+a une autre clé : la relire, la poser, retirer `~/.eregion/orodruin_known_hosts`. **À mesurer sur
+Azure réel, avec Jonathan** : la sortie de Run Command telle que la cible la lit (écrite et testée
+contre une réponse simulée seulement).
 
 **Les conteneurs durcis (V-34, SEC14).** Chaque `docker run` d'un injecteur sur Orodruin tourne comme
 le compose : racine en lecture seule, `/tmp` en tmpfs, aucune capacité, aucun gain de privilège

@@ -128,7 +128,9 @@ juge et la lance.
    make orodruin-exercise REQUEST=r-20261030T075200Z-a1b2c3 [DRY_RUN=1] [REQUEST_FROM=local]
    ```
 
-   - Elle tire la demande de H0 par SSH, la clé d'hôte vérifiée (`HOST_SSH_FINGERPRINT`).
+   - Elle tire la demande de H0 par SSH, la clé d'hôte vérifiée (`HOST_SSH_FINGERPRINT`), et la porte
+     à Orodruin par SSH, sa clé vérifiée aussi : `ORO_SSH_FINGERPRINT` est exigée (SEC14, V-32 ; la
+     lire une fois par `make orodruin-fingerprint`, par Azure, et la poser dans ton environnement).
    - Elle l'affiche fil par fil.
    - Elle fait **taper le nom de la cible** de chaque fil destructif, ou non déclaré, tel qu'Azure
      l'écrit. Un autre nom, ou « n » : rien n'est envoyé.
@@ -137,7 +139,9 @@ juge et la lance.
    `DRY_RUN=1` s'arrête avant l'envoi. `REQUEST_FROM=local` lit la console de ton poste.
 3. **Sur Orodruin.** Une demande ne s'y joue qu'une fois (`replayed` sinon) et dans les 6 h qui
    suivent son écriture (`expired` sinon : en écrire une nouvelle dans la console) ; les noms tapés
-   n'y restent pas. Il vérifie son contrat (`armed`), rejuge chaque fil sur ce qu'il lit maintenant
+   n'y restent pas. **Une demande refusée** (contrat passif, un fil refusé) **ou coupée en route est
+   consommée** : inscrite au registre avant d'être jugée, elle ne se rejoue pas — en écrire une
+   nouvelle dans la console. Seul un refus `busy` (un autre run tenait le verrou) ne la consomme pas. Il vérifie son contrat (`armed`), rejuge chaque fil sur ce qu'il lit maintenant
    et compare le nom tapé. Puis il lance **les fils l'un après l'autre**, une fenêtre à la fois.
    - **Un run à la fois** : Orodruin tient la demande sous un verrou, un seul fichier. Chaque fil
      tourne sous la prise de sa demande, que son lanceur lui transmet. Une campagne (quel que soit

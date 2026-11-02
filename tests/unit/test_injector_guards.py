@@ -447,3 +447,16 @@ def test_a_pinned_script_whose_content_changed_never_reaches_the_vm(tmp_path, mo
     with pytest.raises(RuntimeError, match="not the one the catalog pins"):
         AzureVMExecutor.run_script(fake, str(script))
     assert len(sent) == 1 and len(journaled) == 1                 # nothing sent, nothing journaled
+
+
+def test_a_pinned_script_named_another_way_is_still_checked(tmp_path, monkeypatch):
+    """SEC14 review: ./scripts/vm/x.sh, scripts/../scripts/vm/x.sh or its absolute path are the
+    catalog's scripts/vm/x.sh — never a way around its pin."""
+    import annatar.campaign.catalog as cat
+    pin = "a" * 64
+    catalog = {"T1": {"script_sha256": {"scripts/vm/x.sh": pin}}}
+    for name in ("scripts/vm/x.sh", "./scripts/vm/x.sh", "scripts/../scripts/vm/x.sh",
+                 "scripts/vm//x.sh", str(cat.REPO_ROOT / "scripts" / "vm" / "x.sh")):
+        assert cat.script_pin(name, catalog) == pin, name
+    assert cat.script_pin("scripts/vm/y.sh", catalog) is None
+    assert cat.script_pin("/elsewhere/scripts/vm/x.sh", catalog) is None

@@ -484,6 +484,90 @@ def test_a_wire_keeps_its_requests_name_in_the_lock(tmp_path, monkeypatch):
                 pass
 
 
+# ── SEC14 (R-11): a request plays once, while it is fresh; the names typed do not stay ──────
+
+def test_a_request_plays_once_and_its_replay_runs_nothing_and_publishes_nothing(tmp_path):
+    r, inj, published, _ = _runner(tmp_path)
+    req = _req(("T1110.001", GONDOLIN))
+    assert r.run(req, {}).state == "finished"
+    first = list(published)
+    said = []
+    r.say = said.append
+    again = r.run(req, {})
+    assert again.state == "refused" and again.codes == ["replayed"]
+    assert [w.code for w in again.wires] == ["replayed"]
+    assert len(inj.launched) == 1 and published == first      # its first play's status stays
+    assert any("played on this Orodruin already" in line for line in said)
+
+
+def test_a_request_is_registered_before_it_is_judged_a_refusal_or_a_crash_included(tmp_path):
+    """Refused (Orodruin passive), or a wire that could not start: played, never again."""
+    passive = orodruin.Verdict(orodruin.PASSIVE, [{"code": "identity_missing_right", "detail": "x"}], {})
+    r, inj, _, _ = _runner(tmp_path, check=lambda: passive)
+    req = _req(("T1110.001", GONDOLIN))
+    assert r.run(req, {}).codes[0] == "passive"
+    r.check = lambda: ARMED
+    assert r.run(req, {}).codes == ["replayed"] and inj.launched == []
+    registry = tmp_path / "runs" / "orodruin" / "requests" / er.PLAYED
+    [line] = registry.read_text().splitlines()
+    assert json.loads(line)["request"] == req.id
+
+    def crash(argv, env):
+        raise OSError("docker: no such image")
+    r2, _, _, _ = _runner(tmp_path)
+    r2.launch = crash
+    req2 = _req(("T1110.001", GONDOLIN), ("vm-shutdown", GONDOLIN))
+    assert r2.run(req2, {}).wires[0].code == "launch_failed"
+    assert r2.run(req2, {}).codes == ["replayed"]
+
+
+def test_a_registry_that_cannot_be_read_plays_nothing(tmp_path):
+    r, inj, published, _ = _runner(tmp_path)
+    registry = tmp_path / "runs" / "orodruin" / "requests" / er.PLAYED
+    registry.mkdir(parents=True)                       # unreadable as a file: IsADirectoryError
+    status = r.run(_req(("T1110.001", GONDOLIN)), {})
+    assert status.codes == ["replayed"] and inj.launched == [] and published == []
+
+
+@pytest.mark.parametrize("written, code", [
+    (timedelta(hours=6, seconds=1), "expired"),           # carried too late
+    (timedelta(hours=-6), "expired"),                      # dated far ahead
+    (timedelta(minutes=-6), "expired"),                    # ahead by more than the skew
+    (timedelta(hours=5, minutes=59), None),                # still fresh
+    (timedelta(minutes=-4), None),                         # within the skew between two clocks
+])
+def test_a_request_runs_only_while_it_is_fresh(tmp_path, written, code):
+    clock = Clock()
+    r, inj, published, _ = _runner(tmp_path, clock=clock)
+    req = xr.new([("T1110.001", GONDOLIN)], now=clock() - written)
+    status = r.run(req, {})
+    if code:
+        assert status.codes == [code] and inj.launched == [] and published == []
+        assert not (tmp_path / "runs" / "orodruin" / "requests" / er.PLAYED).exists()
+    else:
+        assert status.state == "finished"
+
+
+def test_main_removes_the_names_typed_once_read(tmp_path, monkeypatch):
+    p = tmp_path / "r-20261030T075200Z-a1b2c3.json"
+    p.write_text(json.dumps({"id": "r-20261030T075200Z-a1b2c3", "at": T0.isoformat(),
+                             "wires": [{"experiment": "T1486", "target": GONDOLIN, "rank": 1}]}))
+    typed = p.with_name("r-20261030T075200Z-a1b2c3.typed.json")
+    typed.write_text(json.dumps({"request": "r-20261030T075200Z-a1b2c3", "typed": {"1": "vm-celebrimbor-gondolin"}}))
+    got = []
+
+    class Fake:
+        def run(self, req, names):
+            got.append(names)
+            return er.Status(req.id, state="finished")
+    monkeypatch.setattr(er, "Runner", Fake)
+    er.main([str(p)])
+    assert got == [{1: "vm-celebrimbor-gondolin"}] and not typed.exists()
+    # Refused unreadable, they go too.
+    typed.write_text("{not json")
+    assert er.main([str(p)]) == 1 and not typed.exists()
+
+
 # ── The review of DG-b, point 6: read again after the wait, not before ─────────────────────
 
 def test_a_target_re_tagged_production_during_the_isolation_wait_never_gets_its_wire(tmp_path):

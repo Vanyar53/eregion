@@ -533,9 +533,25 @@ contrat : ni droit, ni attribution, ni sortie réseau, ni canal. Conception :
 - elle est copiée par SSH dans `~/requests/` d'Orodruin, avec les noms tapés à part
   (`<id>.typed.json`) ;
 - elle est lancée dans l'image des injecteurs : `python -m eregion_core.exercise_runner`, `~/requests`
-  monté en lecture seule.
+  monté en lecture seule. Les noms tapés sont retirés d'Orodruin quand le lancement se termine,
+  quelle que soit sa fin (un `trap` du shell distant, sur `EXIT`, `HUP`, `INT` et `TERM`) ; là où il
+  le peut (un répertoire qui n'est pas en lecture seule), le lanceur les retire lui-même dès qu'il
+  les a lus (SEC14, R-11).
 
 Orodruin ne tire rien et n'écoute rien : la commande vient de l'opérateur.
+
+**Une demande se joue une fois, et fraîche** (SEC14, R-11). Sous le verrou, avant tout jugement :
+- son identifiant est cherché dans le registre des demandes jouées
+  (`runs/orodruin/requests/played.jsonl`) : déjà là, elle est refusée (`replayed`) ; un registre qui
+  ne se lit pas ne laisse rien jouer ;
+- elle doit avoir été écrite il y a moins de 6 h (`MAX_AGE_S`), et pas plus de 5 min dans le futur
+  de l'horloge d'Orodruin : sinon, `expired` — une nouvelle demande se fait dans la console ;
+- puis son identifiant est inscrit au registre, sur le disque avant le jugement : refusée ensuite
+  (contrat passif, un fil refusé) ou coupée par un crash, elle ne rejoue jamais ici.
+
+Ni `replayed` ni `expired` ne publient de statut : celui de la première fois reste le sien (ici, ou sur
+un Orodruin d'avant celui-ci). Le registre vit sur le disque d'Orodruin : un Orodruin reconstruit le
+perd, et c'est la limite de 6 h qui borne alors le rejeu.
 
 **Le jugement** (`eregion_core/exercise_runner.py`). Il se fait dans cet ordre, et rien ne part si
 un fil est refusé :

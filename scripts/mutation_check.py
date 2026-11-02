@@ -7391,6 +7391,30 @@ MUTANTS += [
 TESTS.update({"M2940": "tests/unit/test_annatar_wire.py", "M2941": "tests/unit/test_annatar_run_exit.py",
               "M2942": _R10, "M2943": _R10, "M2944": _R10, "M2945": _R10})
 
+# SEC14 (#420, R-11): a Dagorlad request plays once on Orodruin, while it is fresh; the names typed
+# do not stay there.
+MUTANTS += [
+    ("M2946", "a request played already plays again (R-11)", "eregion_core/exercise_runner.py",
+     '                        if json.loads(line).get("request") == req.id:\n',
+     "                        if False:\n"),
+    ("M2947", "a request is never written to the registry of the requests played (R-11)",
+     "eregion_core/exercise_runner.py", "                self._played(req)\n", "                pass\n"),
+    ("M2948", "a registry of the requests played that cannot be read plays on (R-11)",
+     "eregion_core/exercise_runner.py",
+     '            return "replayed", f"the registry of the requests played cannot be read',
+     '            e, f"the registry of the requests played cannot be read'),
+    ("M2949", "a request carried days after it was written still runs (R-11)",
+     "eregion_core/exercise_runner.py", "        if age > MAX_AGE_S:\n", "        if False:\n"),
+    ("M2950", "a request dated ahead of Orodruin's clock runs (R-11)", "eregion_core/exercise_runner.py",
+     "        if age < -FUTURE_SKEW_S:\n", "        if False:\n"),
+    ("M2951", "the names typed stay on Orodruin after the request (R-11)", MAKE,
+     "\"trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; \"", '""'),
+    ("M2952", "the runner leaves the names typed where it could remove them (R-11)",
+     "eregion_core/exercise_runner.py", "            typed_path.unlink()\n", "            pass\n"),
+]
+TESTS.update({mid: _R10 for mid in ("M2946", "M2947", "M2948", "M2949", "M2950", "M2952")})
+TESTS["M2951"] = "tests/unit/test_makefile_exercise.py"
+
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
 # « brouillon ». M2680–M2695; M2696–M2699 after its review.

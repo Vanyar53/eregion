@@ -947,7 +947,9 @@ orodruin-kill:
 #   3. la copier sur Orodruin avec les noms tapés (comme orodruin-push), et l'y lancer : Orodruin
 #      la rejuge (contrat armé, watch vivante, inscription et zone relues, nom tapé comparé à celui
 #      qu'il lit, plafond sur la demande entière) et lance ses fils l'un après l'autre
-#      (eregion_core/exercise_runner.py). « Stop all » : make orodruin-kill.
+#      (eregion_core/exercise_runner.py). « Stop all » : make orodruin-kill. Une demande ne se joue
+#      qu'une fois (son identifiant inscrit avant d'être jugée) et tant qu'elle est fraîche (6 h) ;
+#      les noms tapés sont retirés d'Orodruin à la fin du lancement, quelle qu'elle soit (R-11).
 # DRY_RUN=1 : 1 et 2, puis ce que 3 ferait, affiché — rien n'est envoyé ni lancé.
 # REQUEST se donne sur la ligne de commande et doit être un identifiant de demande (r-…), vérifié
 # avant toute commande ; il n'est jamais lu de l'environnement.
@@ -978,7 +980,7 @@ orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known)
 	 test -n "$(ORO_IP)" || { echo "✗ Pas d'Orodruin (ORO_IP) : make orodruin-up" >&2; exit 1; }; \
 	 $(ORO_SSH) 'mkdir -p requests && chmod 700 requests' && \
 	 scp -q $(SSH_OPTS) "$$d/$$id.json" "$$d/$$id.typed.json" $(ORO_USER)@$(ORO_IP):requests/ && \
-	 ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN_REQUEST) python -m eregion_core.exercise_runner /app/requests/'"$$id"'.json'
+	 ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) "trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; "'$(ORO_RUN_REQUEST) python -m eregion_core.exercise_runner /app/requests/'"$$id"'.json'
 
 orodruin-down:
 	$(ORO_TF) destroy $(ORO_VARS)$(if $(YES), -auto-approve)

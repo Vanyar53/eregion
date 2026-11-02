@@ -89,6 +89,8 @@ def test_the_request_goes_from_h0_to_orodruin_with_the_names_typed_here(fake_hos
     assert seen[2]["argv"][-1] == "orodruin@10.0.0.5:requests/"
     run = seen[3]["argv"][-1]
     assert run.endswith(f"python -m eregion_core.exercise_runner /app/requests/{RID}.json")
+    # R-11: the names typed do not stay on Orodruin — removed when the run ends, however it ends.
+    assert run.startswith(f"trap 'rm -f requests/{RID}.typed.json' EXIT HUP INT TERM; ")
     assert "-v $HOME/requests:/app/requests:ro" in run and "--env-file orodruin.env" in run
     # What reached Orodruin: the request as H0 holds it, and the names typed beside it.
     assert json.loads((oro / f"{RID}.json").read_text()) == REQUEST

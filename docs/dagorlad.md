@@ -135,7 +135,9 @@ juge et la lance.
 
    **La console ne prend jamais un nom tapé** : un nom qu'elle aurait gardé ne prouverait rien.
    `DRY_RUN=1` s'arrête avant l'envoi. `REQUEST_FROM=local` lit la console de ton poste.
-3. **Sur Orodruin.** Il vérifie son contrat (`armed`), rejuge chaque fil sur ce qu'il lit maintenant
+3. **Sur Orodruin.** Une demande ne s'y joue qu'une fois (`replayed` sinon) et dans les 6 h qui
+   suivent son écriture (`expired` sinon : en écrire une nouvelle dans la console) ; les noms tapés
+   n'y restent pas. Il vérifie son contrat (`armed`), rejuge chaque fil sur ce qu'il lit maintenant
    et compare le nom tapé. Puis il lance **les fils l'un après l'autre**, une fenêtre à la fois.
    - **Un run à la fois** : Orodruin tient la demande sous un verrou, un seul fichier. Chaque fil
      tourne sous la prise de sa demande, que son lanceur lui transmet. Une campagne (quel que soit

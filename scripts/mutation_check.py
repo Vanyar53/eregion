@@ -6857,8 +6857,8 @@ MUTANTS += [
     ("M2409", "a during probe unread for good never cancels the noise (G1, review)", GOTH,
      "                        if said or unread[vm] >= DURING_UNREAD_MAX:\n", "                        if said:\n"),
     ("M2416", "a fault is measured without the watch's decisions read: « 0 taken » unchecked (G1, review)", FRATE,
-     '        why = unmeasured(f) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")\n',
-     "        why = unmeasured(f)\n"),
+     '        why = unmeasured(f, own_until(f, windows)) or (watch.unknown(f.get("at")) if f.get("without_glorfindel") is not True else "")\n',
+     "        why = unmeasured(f, own_until(f, windows))\n"),
     ("M2417", "a fault whose watch was gone after it is measured: its silence read as « none taken » (G1, review 2)",
      FRATE, '    if run.get("watch_after") is False:\n        return WATCH_GONE\n', ""),
     ("M2418", "a watch file cut or unreadable since the fault is taken as read whole (G1, review)", FRATE,
@@ -7463,6 +7463,82 @@ MUTANTS += [
      '        if waiting.get("unverified_last", error) != error:\n', "        if False:\n"),
 ]
 TESTS.update({f"M{n}": _SEC13_V16 for n in (2937, 2938, 2939)})
+# SEC9 (#415): the indicators' entries the injectors give — a run's T0, the list of runs, a fault's
+# effect — confronted with what the watch's host holds: the T0 inside its window and before the
+# watch's first sight of the VM, the runs the watch saw counted, the effect shown by the readings
+# of Glorfindel's telemetry. M2840–M2859.
+_SEC9 = "tests/unit/test_containment.py"
+MUTANTS += [
+    ("M2840", "a T0 after the time the telemetry gives the row the watch read is believed (SEC9)", CTN,
+     "        t = row if row is not None and start <= row < seen else seen\n", "        t = seen\n"),
+    ("M2841", "a T0 not believed still times the containment (SEC9)", CTN,
+     "    elif t0_refused:\n", "    elif False:\n"),
+    ("M2842", "a T0 after the watch's first sight of the VM in the run is believed (SEC9)", CTN,
+     "    if first is not None and t0 > first + CLOCK_SKEW_S:\n", "    if False:\n"),
+    ("M2843", "a T0 before its exercise window opened is believed (SEC9)", CTN,
+     "    if t0 < start:\n", "    if False:\n"),
+    ("M2844", "a T0 after its exercise window ended is believed (SEC9)", CTN,
+     "    if t0 > end:\n", "    if False:\n"),
+    ("M2845", "a T0 with no window to confront it with is believed (SEC9)", CTN,
+     "        return \"fenêtre d'exercice inconnue : le T0 n'a pas pu être confronté\"\n", '        return ""\n'),
+    ("M2846", "a T0 after the detection attached to its run is believed (SEC9)", CTN,
+     "    if seen is not None and t0 > seen:\n", "    if False:\n"),
+    ("M2847", "a T0 before the Dagorlad request that launched its run is believed (SEC9)", CTN,
+     "    if req is not None and t0 < req - CLOCK_SKEW_S:\n", "    if False:\n"),
+    ("M2848", "the runs the watch saw and the manifest does not give executed are left out (SEC9)", CTN,
+     "    for u in unlisted(manifest, campaign_dir, runs_dir, seen, notes):\n",
+     "    for u in []:\n"),
+    ("M2849", "a run removed from the manifest, its window on this host, is forgotten (SEC9)", CTN,
+     '        [cr._read_json(p) for p in sorted(wdir.glob("*.json"))], watch_records(span[0]) + own,\n',
+     "        [], watch_records(span[0]) + own,\n"),
+    ("M2850", "a run removed from the manifest, its detection attached by the watch, is forgotten (SEC9)", CTN,
+     "    marks = [(r, _BY_CYCLE) for r in records or ()] + [(c, _BY_CARD) for c in cards or ()]\n",
+     "    marks = [(c, _BY_CARD) for c in cards or ()]\n"),
+    ("M2851", "a run listed « error » to which the watch attached a detection is left out (SEC9)", CTN,
+     '            if s.get("status") == "executed" or u["how"] == [_BY_WINDOW]:\n', "            if True:\n"),
+    ("M2852", "a run listed « skipped » with only its window is counted an incident (SEC9)", CTN,
+     '            if s.get("status") == "executed" or u["how"] == [_BY_WINDOW]:\n',
+     '            if s.get("status") == "executed":\n'),
+    ("M2853", "a run another campaign lists is counted in this one too (SEC9)", CTN,
+     "        elif rid in elsewhere:\n", "        elif False:\n"),
+    ("M2854", "a run alone, with its own report, is counted in the campaign around it (SEC9)", CTN,
+     '        elif (runs_dir / f"{rid}.json").exists():\n', "        elif False:\n"),
+    ("M2855", "a window far before the campaign, or after its manifest came, is counted in it (SEC9)", CTN,
+     "        if start is None or not lo <= start <= hi:\n", "        if start is None:\n"),
+    ("M2856", "a fault's effect the report only declares is measured (SEC9)", FRATE,
+     "    return effect_unread(run, until)\n", '    return ""\n'),
+    ("M2857", "a fault's effect its readings say not seen is measured (SEC9)", FRATE,
+     '            if not isinstance(r, dict) or r.get("ok") is not True:\n',
+     "            if not isinstance(r, dict):\n"),
+    ("M2858", "a fault's effect read before it, or after its window, is measured (SEC9)", FRATE,
+     ("            if seen is None or start is None or seen < start - containment.CLOCK_SKEW_S or (\n"
+      "                    until is not None and seen > until + containment.CLOCK_SKEW_S):\n"),
+     "            if seen is None:\n"),
+    ("M2859", "a fault target without a reading of its effect is measured (SEC9)", FRATE,
+     '            return f"{EFFECT_UNREAD} (aucune lecture sur {name})"\n', "            continue\n"),
+]
+TESTS.update({f"M{n}": _SEC9 for n in range(2840, 2856)})
+TESTS.update({f"M{n}": _G1_RATE for n in range(2856, 2860)})
+
+# SEC9, after its review (02/11): a miss the watch noted is a trace; a run the channel's check
+# leaves out stays an incident; a T0 not believed bounds no other run; the attack time the watch
+# received bounds the T0; the campaign before bounds where runs are looked for. M2960–M2964.
+MUTANTS += [
+    ("M2960", "a run the watch gave up on (detection_timeout) is no trace: forgotten (SEC9, review)", CTN,
+     '            when = d["seen_at"] if d["seen_at"] is not None else d["at"]\n',
+     '            if d["event"] != "detection":\n                continue\n'
+     '            when = d["seen_at"] if d["seen_at"] is not None else d["at"]\n'),
+    ("M2961", "a run the channel's check leaves out leaves the share, its window held (SEC9, review)", CTN,
+     "            if held or rid in seen:\n", "            if False:\n"),
+    ("M2962", "a T0 not believed still ends another run's watch (SEC9, review)", CTN,
+     "        bound = t0 if not refused else opened\n", "        bound = t0\n"),
+    ("M2963", "a report moves its T0 past the attack time the watch received (SEC9, review)", CTN,
+     "    if got is not None and t0 > got + 1.0:\n", "    if False:\n"),
+    ("M2964", "the runs looked for from the campaign's own start only, never the campaign before (SEC9, review)",
+     CTN, "    bounds = ([min(starts) - cr.START_LEAD_S] if starts else []) + ([max(before)] if before else [])\n",
+     "    bounds = [min(starts) - cr.START_LEAD_S] if starts else []\n"),
+]
+TESTS.update({f"M{n}": _SEC9 for n in range(2960, 2965)})
 # SEC8 (#414, M2810–M2839): the runs/ channel read as an input the watch does not trust — regular
 # files only, a bounded read and rate, bounded effects, finite durations, known techniques, the
 # config's workspace, a restore's moment never the channel's on a real incident, ARM calls built

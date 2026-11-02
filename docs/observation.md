@@ -122,3 +122,15 @@ banc, sur une VM `bench` en `non_disruptive`, le temps d'une campagne déclarée
 [`banc-bl1.md`](banc-bl1.md). Les définitions sont dans [`analysis.md`](analysis.md), « Temps
 pour contenir et part contenue seule ». Les cartes de cette campagne sont des cartes d'exercice
 (B2) : elles n'entrent pas dans le taux de recommandations disruptives fausses de l'observation.
+
+**D'où viennent les chiffres (SEC9).** La décision, son exécution, sa relecture et sa tenue viennent
+de la watch, dans ses propres fichiers. Le T0 de chaque attaque, la liste des runs et l'effet d'une
+panne viennent de l'hôte des injecteurs, par le canal ; l'hôte de la watch les confronte à ce qu'il
+tient avant qu'ils comptent :
+- un T0 hors de la fenêtre de son run, ou après ce que la watch a vu de la VM, ne compte pas au
+  temps pour contenir, et c'est dit ;
+- un run que la watch a vu et que le manifeste ne donne pas exécuté compte, sa décision inconnue ;
+- une panne dont le rapport n'a pas les lectures de la télémétrie qui montrent son effet n'est pas
+  mesurée.
+
+Le détail est dans [`analysis.md`](analysis.md), « D'où vient chaque entrée ».

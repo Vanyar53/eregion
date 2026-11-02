@@ -178,7 +178,9 @@ et `schemas/run_report.schema.json`, tenus d'accord par les tests ; l'image de l
   (« run R2 refusé : fenêtre d'exercice inconnue »).
 - Le rapport dit quels faits viennent du canal : la liste des runs, leur statut, leur détection
   et leur latence, l'heure de chaque attaque et les fenêtres ; et ce que H0 a vu lui-même : les
-  décisions de Glorfindel et l'inscription de chaque VM (`CHANNEL_NOTE`).
+  décisions de Glorfindel et l'inscription de chaque VM (`CHANNEL_NOTE`). Pour les indicateurs de
+  la section « Réponse », l'heure de chaque attaque et la liste des runs sont en plus confrontées
+  à ce que H0 tient (SEC9, « D'où vient chaque entrée », plus bas).
 - L'attente des décisions (étape 4) ne change pas : une fenêtre absente peut encore arriver. Le
   refus se décide à l'écriture.
 - Une fenêtre refusée (plus longue que 2 h…) ne borne plus la recherche d'une décision : la
@@ -535,8 +537,10 @@ les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`.
 
 ### Les définitions
 
-- **Un incident** est un run de technique exécuté de la campagne. Son T0 est la première action
-  malveillante datée par l'injecteur : `attack_time`, celui que porte `attack_started`.
+- **Un incident** est un run de technique exécuté de la campagne, ou un run que la watch a vu et
+  que le manifeste ne donne pas exécuté (SEC9, plus bas). Son T0 est la première action
+  malveillante datée par l'injecteur : `attack_time`, celui que porte `attack_started`. Il ne
+  compte au temps pour contenir que confronté à la fenêtre du run et à ce que la watch a vu.
 - **La décision** de Glorfindel sur un incident est celle que le rapport rattache déjà au run : la
   règle de #157, sur la même technique, la même VM et dans la fenêtre du run.
 - **Contenu seul** veut dire trois choses à la fois :
@@ -584,7 +588,7 @@ les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`.
 | aucune action qui contient | un instantané, une enquête, aucune action | non | — |
 | à blanc (dry run) | rien n'a été exécuté | non | — |
 | non détecté | le run dit `missed` | non, et compté dans la part | — |
-| décision inconnue | détecté, ou détection inconnue, mais la décision n'est pas retrouvée dans les fichiers (« fenêtre absente », etc.) | non compté contenu, mais pas « non contenu » non plus : la part devient une borne basse, « au moins » | — |
+| décision inconnue | détecté, ou détection inconnue, mais la décision n'est pas retrouvée dans les fichiers (« fenêtre absente », etc.) ; ou un run vu par la watch que le manifeste ne donne pas exécuté | non compté contenu, mais pas « non contenu » non plus : la part devient une borne basse, « au moins » | — |
 
 Deux autres cas limites :
 - **Une relecture datée avant le T0** : les horloges de deux hôtes, ou des faits faux. Elle donne
@@ -592,6 +596,56 @@ Deux autres cas limites :
 - **Une panne sans début, sans fin ou sans cible** : elle n'est pas vérifiée, et c'est dit. Une
   panne lancée `--without-glorfindel` non plus : la réaction de Glorfindel n'y est pas mesurée,
   par choix.
+
+### D'où vient chaque entrée (SEC9, #415)
+
+Les indicateurs sont la preuve que donne Eregion : chaque entrée dit d'où elle vient, et ce qui
+vient de l'hôte des injecteurs est confronté à ce que tient l'hôte de la watch avant de compter.
+
+| Entrée | D'où | Ce qui la confronte |
+|---|---|---|
+| la décision de Glorfindel, son action, sa relecture, sa tenue | la watch : ses lignes de débogage, ses cartes | rien : c'est la mesure |
+| la fin d'un confinement (levée) | l'opérateur (`manual_actions.jsonl`), la watch | rien |
+| le T0 d'un run (`attack_time`) | l'injecteur, par le rapport du run | la fenêtre d'exercice du run, la demande Dagorlad, ce que la watch a vu de la VM |
+| la liste des runs, leur statut | l'injecteur, par le manifeste | les fenêtres que tient cet hôte, les cycles et les cartes que la watch a rattachés à un run |
+| la fenêtre d'exercice | l'injecteur, par le canal | sa forme et ses dates (H-1, SEC5 : pas plus de 2 h, pas antidatée) |
+| l'effet d'une panne | Gothmog, qui lit la télémétrie de Glorfindel | les lectures elles-mêmes, dans le rapport (taux G1, plus bas) |
+
+**Le T0** compte au temps pour contenir s'il tient dans toutes ces bornes :
+- il tombe dans la fenêtre d'exercice du run, de son ouverture à sa fin. La grâce après la fin vaut
+  pour la détection, jamais pour l'attaque ;
+- il ne précède pas la demande Dagorlad qui a lancé le run, quand cet hôte la tient ;
+- il ne suit pas la détection rattachée au run ;
+- il ne suit pas la première chose que la watch a vue de la VM pendant le run : une de ses
+  détections sur cette VM dans la fenêtre, ou, plus tôt, l'heure que la télémétrie donne à la ligne
+  qu'a lue sa règle (`TimeGenerated`, quand la règle la rend).
+
+La seule tolérance est celle des horloges de deux hôtes : 10 s (`CLOCK_SKEW_S`). Aucun délai
+minimal n'est inventé entre l'attaque et la détection : la borne est ce que la watch a vu. Sinon,
+l'incident garde son issue, puisque la décision est celle de la watch, mais aucun temps n'est compté
+depuis ce T0. Le rapport le dit dans la ligne de l'incident (« T0 non retenu, temps non compté »),
+dans la colonne T0 (« non retenu ») et dans ses notes, avec la raison. Un run sans fenêtre sur cet
+hôte n'est pas chronométré non plus.
+
+**La liste des runs** est l'union du manifeste et de ce que la watch a vu autour de la campagne :
+- les fenêtres de technique que tient cet hôte, ouvertes entre une heure avant le plus ancien début
+  qu'il peut lire de la campagne (son identifiant daté, son manifeste, sa première fenêtre crue :
+  `START_LEAD_S`, D2b) et l'écriture, ici, du manifeste qu'il lit ;
+- les cycles et les cartes que la watch a rattachés à un run (`exercise_run`), dans le même
+  intervalle.
+
+Un run vu ainsi et absent du manifeste compte comme un incident de décision inconnue : « vu par la
+watch (sa fenêtre d'exercice), absent du manifeste ». La part devient une borne basse, « au moins ».
+Un run que le manifeste donne non exécuté (`error`, `skipped`…) compte de même si la watch lui a
+rattaché une détection ou une carte. Sa fenêtre seule ne suffit pas : une fenêtre s'ouvre avant le
+premier geste et ne dit pas qu'une attaque a eu lieu.
+
+Ne sont pas de la campagne :
+- un run qu'un autre manifeste liste ;
+- un run qui a son propre rapport (`runs/<id>.json` : un run seul, une panne) ;
+- la fenêtre d'une panne.
+
+Un run vu par la watch n'est jamais oublié : inconnu n'est jamais rien (A0).
 
 ### Où ils sont publiés
 
@@ -700,7 +754,11 @@ Décidé avec Jonathan le 31/10 :
 - **Une panne mesurée** remplit quatre conditions :
   - elle a démarré ;
   - son effet a été vu dans la télémétrie que lit Glorfindel (`checks.fault_effective` PASS,
-    `gothmog/probes.py`) ;
+    `gothmog/probes.py`), et les lectures de cette télémétrie que porte son rapport le montrent
+    (`metrics.effect`, SEC9) : sur chacune de ses cibles, chaque sonde d'effet est vue, lue entre
+    le début de la panne et la fin de sa fenêtre (l'ingestion retarde la lecture, jamais au-delà).
+    Le mot du contrôle seul ne suffit pas : un effet affirmé sans ses lectures, ou que ses lectures
+    ne montrent pas, laisse la panne non mesurée, et la raison le dit ;
   - son début, sa fin et ses cibles sont connus ;
   - la watch de Glorfindel vivait **avant et après** la panne. Avant, c'est V1 : sans watch, le run
     est refusé. Après, Gothmog la relit une fois la panne finie et l'inscrit au rapport
@@ -736,7 +794,10 @@ Ce que le taux ne change pas :
 - **les chiffres de BL1** (rapport de campagne, encadré RESPONSE) restent calculés comme avant ;
 - **l'accueil de la console** les lit par `fault_run`.
 
-La vue unifiée d'un run (`read_run`, C1) dit maintenant `effective`. Le module expose `measure`
+La vue unifiée d'un run (`read_run`, C1) dit maintenant `effective`, et `effect`, les lectures sur
+lesquelles il repose (SEC9). Ces lectures viennent de Gothmog, par le canal : l'hôte de la watch ne
+relit pas lui-même la télémétrie, il vérifie que le rapport porte la lecture de chaque cible, vue,
+et datée dans la panne. Le module expose `measure`
 et `rate` pour que l'accueil puisse afficher le taux à côté des « actions disruptives à tort ».
 Cet affichage reste à faire, par la session Console.
 

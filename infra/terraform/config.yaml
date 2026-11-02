@@ -79,6 +79,17 @@ chaos:
   enabled:           true
   shutdown_vms:      [gondolin]
   shutdown_duration: PT5M
+  # G1 — le bruit bénin (chaos.tf) : [] → rien de créé. [gondolin] → l'agent Chaos sur la VM (une
+  # identité sans rôle, l'extension, la cible Microsoft-Agent) et trois expériences, disk, cpu et
+  # restart (exp-celebrimbor-<clé>-disk|cpu|restart). Une VM de noise_vms est aussi dans
+  # shutdown_vms. Pas encore appliqué : avec Jonathan, plan montré.
+  noise_vms:         []
+  noise_duration:    PT10M   # disk et cpu
+  restart_duration:  PT1M    # la VM arrêtée, puis redémarrée par le moteur
+  cpu_pressure:      95      # % de CPU
+  disk_workers:      2       # stress-ng : la charge ; le débit atteint dépend du disque
+  disk_file_size:    1g
+  disk_block_size:   1m
 
 # ── Ressources nommées (baseline) ────────────────────────────────────────────
 law_name: amonsul # tour de guet (Weathertop) — observation/logs

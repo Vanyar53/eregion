@@ -43,6 +43,14 @@ steady_state:
       verify: "Heartbeat | where _ResourceId =~ '{target}' | summarize LastSeen = max(TimeGenerated)"
       expect: fresh 10m
 
+# Ce qui montre que la panne a eu lieu (G1) : la VM vue en train de s'arrêter, ou arrêtée,
+# pendant la panne. Sans cela, le run échoue : il ne mesure rien de Glorfindel.
+effect:
+  probes:
+    - name: vm-down
+      verify: power_state
+      expect: down
+
 abort_conditions:
   - name: past-duration
     when: "l'exécution dépasse sa durée de plus de 5 minutes, ou le plafond du run : annulée"

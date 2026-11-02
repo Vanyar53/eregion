@@ -225,6 +225,11 @@ annatar run annatar/scenarios/azure/account-creation-atomic.yaml  # R1 : un test
 # Gothmog (G0) — depuis Orodruin seulement (ailleurs le contrat est passif)
 make gothmog-preflight [FAULT=vm-shutdown]   # watch de Glorfindel, contrat, cibles relues dans l'expérience, état normal — rien d'écrit
 make gothmog-run [FAULT=vm-shutdown]         # la panne, son retour vérifié par sonde (~15 min) ; WITHOUT_GLORFINDEL=1 : sans watch (V1)
+#   G1 : FAULT=vm-disk-write | vm-cpu-pressure | vm-restart, le bruit bénin (planned : chaos.noise_vms
+#   à appliquer avec Jonathan, gothmog/README.md « G1 »)
+make glorfindel-host-fault-rate [DAYS=30] [JSON=1]   # sur H0 : les pannes prises pour une attaque, par run (G1)
+make fault-rate [DAYS=30] [JSON=1]                   # le même taux, sur l'hôte de la watch seulement (ses runs/) ;
+#   ailleurs (Orodruin, un poste) chaque panne est « non mesurée » : les décisions n'y sont pas
 gothmog run vm-shutdown --dry-run            # la panne déclarée, sans appel Azure
 gothmog report <run_id>                      # runs/<run_id>.json (même forme qu'Annatar)
 #   Depuis Orodruin, avec EREGION_EXERCISE_CHANNEL (#193, pas encore mesuré sur le banc) : à la fin

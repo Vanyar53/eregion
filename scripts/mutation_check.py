@@ -292,11 +292,14 @@ MUTANTS = [
      "    refusal = quarantine_refusal(resource_id) if quarantine_nsg else None",
      "    refusal = None"),
     # H0: the hosted Glorfindel stays an observer.
+    # BL1c: the line also carries each VM's mode kept from H0 (never the local config's).
     ("M54", "the pushed host config keeps the local autonomy (H0)", "infra/glorfindel-host/host_config.py",
-     '    out["autonomy"] = {"default": "human_only"}\n', ""),
+     '    out["autonomy"] = {"default": HUMAN, "assets": kept}\n', ""),
     ("M55", "the host gets a write role on the bench (H0)", "infra/glorfindel-host/main.tf",
      'role_definition_name = "Reader"', 'role_definition_name = "Contributor"'),
-    ("M56", "empty service-principal vars stay set (H0: managed identity unreachable)", "glorfindel/cli.py",
+    # The function moved from glorfindel/cli.py into the shared core (BL1c): the console and
+    # the analysis commands call it too.
+    ("M56", "empty service-principal vars stay set (H0: managed identity unreachable)", "eregion_core/identity.py",
      "    for k in dropped:\n        del environ[k]\n", ""),
     # B2 (storage side): an exercise window labels only what it names, for a bounded time.
     ("M57", "a window labels every VM, not its targets (B2)", "eregion_core/exercise.py",
@@ -5822,6 +5825,82 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (1924, 1925, 1926)})
 TESTS["M1919"] = "tests/unit/test_indicators.py"
+
+# BL1c (#395): the measure launched alone (make glorfindel-host-containment) — the enrollment of
+# a channel campaign read as the report reads it, compose's empty identity dropped as the watch
+# drops it (#205), in check_enrollment for every command that reads the enrollment. M2360–M2362.
+MUTANTS += [
+    ("M2360", "the measure launched alone never reads the enrollment: every run of a channel campaign "
+              "left out, « VM non inscrite » (BL1c)", CTN,
+     "    cr.check_enrollment(cdir)\n", ""),
+    # The drop lives in check_enrollment (every command that reads the enrollment): dropped by the
+    # report's main alone, the measure launched alone keeps compose's empty identity.
+    ("M2361", "the measure launched alone keeps compose's empty AZURE_CLIENT_*: the managed identity "
+              "never reached under docker exec (BL1c)", CREP,
+     ("        drop_empty_service_principal_env()\n",
+      "    campaign_dir = Path(argv[0])\n    check_enrollment(campaign_dir)\n"),
+     ("", "    campaign_dir = Path(argv[0])\n"
+          "    from eregion_core.identity import drop_empty_service_principal_env\n"
+          "    drop_empty_service_principal_env()\n    check_enrollment(campaign_dir)\n")),
+    ("M2362", "check_enrollment keeps compose's empty AZURE_CLIENT_*: the report launched by docker exec "
+              "leaves every channel run out (BL1c)", CREP,
+     "        drop_empty_service_principal_env()\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_containment.py" for n in (2360, 2361)})
+TESTS["M2362"] = "tests/unit/test_hosted_report.py"
+
+# BL1c, the push (Jonathan's decision of 02/11): each VM's mode in place on H0 kept, never a bolder
+# one — the local config's modes never carried, H0's config of another shape not trusted, a mode
+# unknown or a pattern not carried, HUMAN_ONLY=1 heard, H0's config read before the scp. M2363–M2368.
+HCF = "infra/glorfindel-host/host_config.py"
+MUTANTS += [
+    ("M2363", "the push carries the local config's mode of a VM H0 does not know: bolder than in place (BL1c)",
+     HCF, '            report.append((name, HUMAN, "inconnue de H0 : human_only"))\n',
+     '            kept.append({"match": name, "mode": rule.get("mode")})\n'),
+    ("M2364", "H0's config of another shape trusted: the push stops, nothing said (BL1c)", HCF,
+     "    if not isinstance(cfg, dict):\n        return None, \"forme inconnue\"\n", ""),
+    ("M2365", "a mode H0's config holds that this code does not know is carried (BL1c)", HCF,
+     '        if a.get("mode") not in KNOWN_MODES:\n', "        if False:\n"),
+    ("M2366", "HUMAN_ONLY=1 not heard: H0's modes kept by the emergency gesture (BL1c)", HCF,
+     '        if human_only:\n            report.append((name, HUMAN, "HUMAN_ONLY=1"))\n        elif',
+     '        if False:\n            report.append((name, HUMAN, "HUMAN_ONLY=1"))\n        elif'),
+    ("M2367", "the push never reads H0's config: every VM back to human_only, as before (BL1c)", MAKE,
+     "\t $(HOST_SSH) 'cat eregion/glorfindel-config.yaml' > $$h0 2>/dev/null || : > $$h0; \\\n",
+     "\t : > $$h0; \\\n"),
+    ("M2368", "a pattern on H0 carried: every VM it matches made bolder (BL1c)", HCF,
+     "        elif _PATTERN & set(name):\n", "        elif False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (2363, 2364, 2365, 2366, 2368)})
+TESTS["M2367"] = "tests/unit/test_host_console.py"
+
+# BL1c, after its 5.5 review: what the watch's strict reading refuses keeps no mode, H0's config
+# read again before the scp, only HUMAN_ONLY=1 heard, what H0 says shown printable. M2369, M2780–M2783.
+MUTANTS += [
+    ("M2369", "an H0 entry with other keys than match and mode (refused by the watch) keeps its mode (BL1c)",
+     HCF, "        if set(a) - set(ASSET_KEYS):\n", "        if False:\n"),
+    ("M2780", "the push sends its config although H0's changed since it was read (BL1c)", MAKE,
+     "&& { cmp -s $$h0 $$h1 || {", "&& { true || {"),
+    ("M2781", "an H0 default outside the known modes (refused by the watch) keeps the VMs' modes (BL1c)",
+     HCF, '    if "default" in autonomy and autonomy["default"] not in KNOWN_MODES:\n', "    if False:\n"),
+    ("M2782", "a name read on H0 reaches the operator's terminal with its escape sequences (BL1c)", HCF,
+     "    report = [(printable(vm), printable(mode), printable(why)) for vm, mode, why in report]\n", ""),
+    ("M2783", "HUMAN_ONLY=0 puts every VM back in human_only (BL1c)", MAKE,
+     "$(if $(filter 1,$(HUMAN_ONLY)), --human-only)", "$(if $(HUMAN_ONLY), --human-only)"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_glorfindel_host.py" for n in (2369, 2781, 2782)})
+TESTS.update({f"M{n}": "tests/unit/test_host_console.py" for n in (2780, 2783)})
+
+# BL1c, second review: one entry the watch would refuse refuses the whole config (a blank or
+# non-text match, a mode unknown or not text); HUMAN_ONLY=1 never blocked by a second read. M2784–M2785.
+MUTANTS += [
+    ("M2784", "an H0 entry with a blank match (refused by the watch) dropped alone, the others kept (BL1c)",
+     HCF, '        if not isinstance(a.get("match"), str) or not a["match"].strip():\n',
+     '        if not isinstance(a.get("match"), str):\n'),
+    ("M2785", "HUMAN_ONLY=1 blocked when H0's config cannot be read again before the scp (BL1c)", MAKE,
+     "$(if $(filter 1,$(HUMAN_ONLY)),,$(HOST_PUSH_RECHECK))", "$(HOST_PUSH_RECHECK)"),
+]
+TESTS["M2784"] = "tests/unit/test_glorfindel_host.py"
+TESTS["M2785"] = "tests/unit/test_host_console.py"
 
 
 # C1 (#80): the run, unified (eregion_core/run_report.py), the coverage matrix and its

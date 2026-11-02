@@ -273,6 +273,18 @@ le banc. H0 répond, il ne fait plus seulement qu'observer.
 
 - **`human_only` par défaut.** Rien ne s'exécute sans humain tant que l'opérateur n'a pas donné l'autonomie, actif par actif ; l'autonomie se décide sur une mesure (`docs/observation.md`), jamais sur la confiance du modèle.
 - **Deux hôtes Glorfindel, deux états : le tag de quarantaine l'emporte sur l'« aucun » de l'état** (I8S, #245, N-08). Quand l'état local dit qu'une carte réseau n'avait pas de NSG et que notre tag en nomme un, le tag fait foi, à la levée comme au `reset --from-azure`. Conséquence acceptée : dans un cas marginal (deux groupes de quarantaine, un tag périmé dans l'un), une carte peut recevoir à la levée un NSG de plus qu'elle n'en avait — jamais un de moins. L'autre option, un tag manquant ou illisible toujours tenu pour inconnu, garderait en quarantaine toute carte nue par conception dont les tags sont perdus. Détail : [`docs/azure.md`](../azure.md).
+- **Les sudo attendus des administrateurs n'ouvrent pas de carte** (ADM1, #284). Un compte nommé dans
+  `expected_sudo` pour une VM n'est plus une alerte quand il passe root par sudo : si ce compte est volé,
+  ses sudo ordinaires passent sans carte (comptés, journalisés, `glorfindel report`). Ce qui le borne :
+  l'écart se fait dans le code, avant la décision, jamais par le modèle ; une ligne ambiguë (coupée,
+  deux `COMMAND=`, un saut de ligne, un `USER=` autre que root) reste une carte ; les commandes sensibles
+  restent des cartes ; **les shells root d'un administrateur** (`sudo -i`, `sudo su -`, `bash`,
+  `python -c`, `find -exec`, `vim`, `less`, `screen`, `gdb`, `docker exec … bash`…) **font une carte
+  pour les formes connues** — sous sudo, ce qui s'y fait n'est jamais écrit. **La liste n'est pas
+  exhaustive** : un script ou un programme non listé, lancé par un compte attendu (`sudo /tmp/x.py`),
+  passe sans carte. C'est l'angle mort assumé jusqu'à COR1 (la corrélation avec l'origine de la
+  session SSH, qui écartera aussi les shells root d'une origine attendue) et AUD1 (`auditd`, ce qui se
+  fait réellement sous root).
 - **Un jeton pour la console**, tous ses droits (frontière 1).
 - **Le principal du canari, `Network Contributor` sur son groupe** (P-04, P04). Il peut y créer une ressource réseau
   payante (une IP publique, une passerelle). Si le premier run demande plus, le repli est `Contributor` sur ce même groupe, écrit

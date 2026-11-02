@@ -1496,8 +1496,11 @@ def report(since_text: str, as_json: bool):
     """What the observation measured: the operator's verdicts on Glorfindel's
     recommendations, and the false rate of the disruptive ones (isolate, block)."""
     import json as _json
-    from glorfindel import escalations
-    r = escalations.observation_report(_since(since_text))
+    from glorfindel import escalations, expected_sudo
+    since = _since(since_text)
+    r = escalations.observation_report(since)
+    # ADM1: the administrators' sudo that opened no card — counted, never silent.
+    r["expected_sudo"] = expected_sudo.summary(since)
     if as_json:
         click.echo(_json.dumps(r, indent=2))
         return
@@ -1520,6 +1523,34 @@ def report(since_text: str, as_json: bool):
         console.print(f"Block recommendations: {b['cards']} card(s) for {b['distinct_ips']} distinct IP(s)")
     if r.get("exercises"):
         console.print(f"[dim]{r['exercises']} exercise card(s) left out (an injector's window covered the VM)[/dim]")
+    _print_expected_sudo(r["expected_sudo"])
+
+
+def _print_expected_sudo(es: dict) -> None:
+    """ADM1: the sudo set aside as the administrators' expected ones, in `glorfindel report`.
+    Every text here comes from a log line (an account, a command): printable only, no markup."""
+    def shown(text) -> str:
+        return _esc_markup("".join(c for c in str(text) if c.isprintable()))
+
+    if es.get("error"):
+        console.print(f"[yellow]Expected sudo: journal unreadable — {shown(es['error'])}[/yellow]")
+        return
+    if es.get("unreadable"):
+        console.print(f"[yellow]Expected sudo: {es['unreadable']} journal line(s) unreadable[/yellow]")
+    if not es.get("count"):
+        if es.get("journal_from"):
+            console.print("Expected sudo (no card, ADM1): 0 in this period")
+        return
+    per_vm = ", ".join(f"{shown(k)} {v}" for k, v in sorted(es["by_asset"].items()))
+    per_account = ", ".join(f"{shown(k)} {v}" for k, v in sorted(es["by_account"].items()))
+    console.print(f"Expected sudo (no card, ADM1): [bold]{es['count']}[/bold] — per VM: {per_vm} · "
+                  f"per account: {per_account}")
+    for e in es.get("latest") or []:
+        console.print(f"[dim]  {shown(e['at'][:19])}  {shown(e['asset'])}  {shown(e['account'])}  "
+                      f"{shown(e['command'])}[/dim]")
+    if es.get("journal_from"):
+        console.print(f"[dim]  journal from {shown(es['journal_from'][:19])} "
+                      f"(~/.glorfindel/expected_sudo.jsonl)[/dim]")
 
 
 @cli.command()

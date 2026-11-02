@@ -7073,6 +7073,22 @@ MUTANTS += [
 ]
 TESTS.update({"M2880": "tests/unit/test_inscription.py", "M2881": "tests/unit/test_inscription.py",
               "M2882": "tests/unit/test_console_dagorlad.py"})
+ORO = "eregion_core/orodruin.py"
+MUTANTS += [
+    ("M2883", "the contract refuses a list of writes and lets the rest through: Network Contributor arms (SEC11, V-29)",
+     ORO, '            unlisted = sorted(actions - allowed_at(scope, bench)) if actions else ["(role unreadable)"]\n',
+     "            unlisted = []\n"),
+    ("M2884", "a right effective on the group, from an assignment the listing hid, arms (SEC11, V-29)", ORO,
+     "    if extra:\n", "    if False:\n"),
+    ("M2885", "a role below a VM (an extension) holds the VM's writes (SEC11, V-29)", ORO,
+     'and rest[len(kind):] and "/" not in rest[len(kind):]:', "and rest[len(kind):]:"),
+    ("M2886", "a role the contract cannot read, inside the bench, arms (SEC11, V-29: an unknown right refuses)", ORO,
+     'if actions else ["(role unreadable)"]\n', "if actions else []\n"),
+    ("M2887", "a data action effective on the group arms (SEC11, V-29)", ORO,
+     '                   | {f"data:{x}" for p in perms for x in (p.get("dataActions") or [])})\n',
+     "                   )\n"),
+]
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M2883", "M2884", "M2885", "M2886", "M2887")})
 
 # The auditor's control set (seventh review): plausible bugs the generation was never
 # shaped on. They only MEASURE whether the invariants generalise — never tailor a

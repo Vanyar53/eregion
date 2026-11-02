@@ -113,12 +113,13 @@ def test_a_write_granted_on_no_enrolled_resource_is_missing():
                                        sees_subscription=True, experiments=False)
     assert [m["code"] for m in missing] == ["identity_missing_right"] * 2
     assert all("virtualMachines" in m["detail"] for m in missing)
-    # A VM's write right on a NIC (not a VM) grants nothing on a VM.
+    # A VM's write right on a NIC (not a VM) grants nothing on a VM — and is not a right the
+    # injectors hold there (SEC11, V-29).
     nic = BENCH + "/providers/Microsoft.Network/networkInterfaces/nic-1"
     missing = orodruin.assess_identity(
         [_assignment(BENCH, READ_ROLE), _assignment(nic, VM_ROLE), _assignment(EXPERIMENT, CHAOS_ROLE)],
         _roles(), ALL_RIGHTS, BENCH, sees_subscription=True)
-    assert [m["code"] for m in missing] == ["identity_missing_right"] * 2
+    assert [m["code"] for m in missing] == ["identity_unlisted_right"] + ["identity_missing_right"] * 2
 
 
 @pytest.mark.parametrize("scope", [
@@ -161,6 +162,102 @@ def test_a_listing_the_identity_cannot_fully_read_proves_nothing():
     missing = orodruin.assess_identity(_enrolled(), _roles(), ALL_RIGHTS, BENCH,
                                        sees_subscription=False)
     assert [m["code"] for m in missing] == ["identity_unprovable"]
+
+
+# ── SEC11 (V-29): what the identity holds in the bench is an allow-list ─────────
+
+WORKSPACE = BENCH + "/providers/Microsoft.OperationalInsights/workspaces/law-celebrimbor"
+LOGS_ROLE = "/defs/log-analytics-reader"
+# Network Contributor as Azure defines it: none of the injectors' writes, the whole network.
+NETWORK_CONTRIBUTOR = ["Microsoft.Authorization/*/read", "Microsoft.Insights/alertRules/*",
+                       "Microsoft.Network/*", "Microsoft.ResourceHealth/availabilityStatuses/read",
+                       "Microsoft.Resources/deployments/*",
+                       "Microsoft.Resources/subscriptions/resourceGroups/read", "Microsoft.Support/*"]
+
+
+def _with_logs():
+    """infra/orodruin/main.tf's assignments: the injector's three roles and Log Analytics
+    Reader on the bench's workspace."""
+    return [*_enrolled(), _assignment(WORKSPACE, LOGS_ROLE)]
+
+
+def _logs_roles(other=None):
+    roles = {**ROLES, LOGS_ROLE: list(orodruin.LOGS_READER_ACTIONS)}
+    return lambda r: roles.get(r, other if other is not None else ["*"])
+
+
+def test_the_assignments_terraform_gives_hold_with_the_logs_reader():
+    assert orodruin.assess_identity(_with_logs(), _logs_roles(), ALL_RIGHTS, BENCH,
+                                    sees_subscription=True) == []
+
+
+def test_network_contributor_on_the_bench_arms_nothing():
+    """SEC11 (V-29): the contract refused four writes and let the rest through — Network
+    Contributor on the group (no start, no Run Command, no experiment) armed Orodruin. What it
+    holds is now a list of what the injectors need; anything else is passive."""
+    missing = orodruin.assess_identity(
+        [*_with_logs(), _assignment(BENCH, "/defs/network-contributor")],
+        _logs_roles(NETWORK_CONTRIBUTOR), ALL_RIGHTS, BENCH, sees_subscription=True)
+    assert [m["code"] for m in missing] == ["identity_unlisted_right"]
+    assert "Microsoft.Network/*".lower() in missing[0]["detail"]
+    verdict = orodruin.check(_readers(identity=lambda: missing))
+    assert verdict.verdict == orodruin.PASSIVE
+    # Effective on the group, from an assignment the listing did not show: the same.
+    effective = [*ALL_RIGHTS, {"actions": NETWORK_CONTRIBUTOR, "notActions": []}]
+    missing = orodruin.assess_identity(_with_logs(), _logs_roles(), effective, BENCH, sees_subscription=True)
+    assert [m["code"] for m in missing] == ["identity_unlisted_right"]
+    assert "Microsoft.Network/*" in missing[0]["detail"]
+
+
+@pytest.mark.parametrize("scope, actions", [
+    (VM, ["Microsoft.Compute/virtualMachines/*"]),                      # a wildcard is not expanded
+    (VM, [*orodruin.VM_ACTIONS, "Microsoft.Compute/virtualMachines/delete"]),
+    (VM, [*orodruin.VM_ACTIONS, "data:Microsoft.Compute/virtualMachines/login/action"]),
+    (VM, list(orodruin.CHAOS_ACTIONS)),                                  # an experiment's, on a VM
+    (EXPERIMENT, [*orodruin.CHAOS_ACTIONS, "Microsoft.Chaos/experiments/write"]),
+    (WORKSPACE, ["Microsoft.OperationalInsights/workspaces/write"]),
+    (WORKSPACE, ["Microsoft.OperationalInsights/workspaces/sharedKeys/action"]),
+    (BENCH, list(orodruin.LOGS_READER_ACTIONS)),                        # the logs reader on the group
+    (VM + "/extensions/RunCommandLinux", list(orodruin.VM_ACTIONS)),    # below a VM: not a VM
+    (BENCH, []),                                                        # a role that cannot be read
+])
+def test_a_right_the_injectors_do_not_need_there_is_passive(scope, actions):
+    missing = orodruin.assess_identity([*_with_logs(), _assignment(scope, "/defs/extra")],
+                                       _logs_roles(actions), ALL_RIGHTS, BENCH, sees_subscription=True)
+    assert "identity_unlisted_right" in [m["code"] for m in missing], missing
+
+
+def test_a_data_action_effective_on_the_group_is_passive():
+    effective = [*ALL_RIGHTS, {"actions": [], "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]}]
+    missing = orodruin.assess_identity(_with_logs(), _logs_roles(), effective, BENCH, sees_subscription=True)
+    assert [m["code"] for m in missing] == ["identity_unlisted_right"]
+
+
+def test_the_contracts_own_read_of_assignments_is_held_on_the_group():
+    """contract_reader, on the subscription, is effective on the group too: held."""
+    effective = [*ALL_RIGHTS, {"actions": ["Microsoft.Authorization/roleAssignments/read",
+                                           "Microsoft.Authorization/roleDefinitions/read"]}]
+    assert orodruin.assess_identity(_with_logs(), _logs_roles(), effective, BENCH, sees_subscription=True) == []
+
+
+def test_what_each_scope_may_hold():
+    reads = {a.lower() for a in orodruin.READ_ACTIONS}
+    assert orodruin.allowed_at(BENCH, BENCH) == reads
+    assert orodruin.allowed_at(BENCH + "/", BENCH.upper()) == reads
+    assert orodruin.allowed_at(VM, BENCH) == reads | {a.lower() for a in orodruin.VM_ACTIONS}
+    assert orodruin.allowed_at(EXPERIMENT, BENCH) == reads | {a.lower() for a in orodruin.CHAOS_ACTIONS}
+    assert orodruin.allowed_at(WORKSPACE, BENCH) == reads | {a.lower() for a in orodruin.LOGS_READER_ACTIONS}
+    assert orodruin.allowed_at(BENCH + "/providers/Microsoft.Compute/virtualMachines/", BENCH) == reads
+
+
+def test_the_logs_reader_is_the_role_terraform_gives_on_the_workspace():
+    """The allow-list names Log Analytics Reader's actions because infra/orodruin/main.tf gives
+    that built-in role, on the bench's workspace and nowhere else."""
+    tf = (Path(__file__).resolve().parents[2] / "infra" / "orodruin" / "main.tf").read_text(encoding="utf-8")
+    block = tf.split('resource "azurerm_role_assignment" "bench_logs_reader"', 1)[1].split("}", 1)[0]
+    assert 'role_definition_name = "Log Analytics Reader"' in block
+    assert "data.azurerm_log_analytics_workspace.bench.id" in block
+    assert tf.count('"Log Analytics Reader"') == 1
 
 
 def _token(oid):

@@ -138,10 +138,12 @@ def test_the_publication_asks_nothing_more_of_orodruins_contract(tmp_path):
     # SEC5 (V-29): the writes on an enrolled VM and an experiment, the reads on the group.
     enrolled = (f"{bench}/providers/Microsoft.Compute/virtualMachines/vm-1",
                 f"{bench}/providers/Microsoft.Chaos/experiments/exp-1")
-    assignments = [{"properties": {"scope": s, "roleDefinitionId": "/r/blob-data-contributor"}}
-                   for s in (*enrolled, container_scope)]
+    assignments = [{"properties": {"scope": s, "roleDefinitionId": r}}
+                   for s, r in zip((*enrolled, container_scope), ("/r/vm", "/r/chaos", "/r/blob-data-contributor"))]
     declared = orodruin.channel_scope({orodruin.CHANNEL_SCOPE_ENV: container_scope})
-    assert orodruin.assess_identity(assignments, lambda _: ["*"],
+    # SEC11 (V-29): inside the bench, each role holds what its scope may hold.
+    roles = {"/r/vm": list(orodruin.VM_ACTIONS), "/r/chaos": list(orodruin.CHAOS_ACTIONS)}
+    assert orodruin.assess_identity(assignments, lambda r: roles.get(r, ["*"]),
                                     [{"actions": list(orodruin.READ_ACTIONS)}], bench,
                                     sees_subscription=True, channel=declared) == []
 

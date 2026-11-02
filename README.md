@@ -431,7 +431,7 @@ Three modes, resolved per asset. The default is intentionally conservative.
 | `non_disruptive` | Historical behavior: reversible actions (`isolate_vm`, `block`, `snapshot`) run autonomously; destructive always gated. |
 | `full_auto` | Deferred — value rejected by config validation. |
 
-Modes resolve per asset via `glorfindel-config.yaml` (fnmatch pattern matching). Run `non_disruptive` on test VMs, `human_only` on production assets, in the same `watch` session.
+Modes resolve per asset via `glorfindel-config.yaml` (fnmatch pattern matching, case ignored as Azure ignores it in a VM's name; tied entries that disagree give the most prudent mode). Run `non_disruptive` on test VMs, `human_only` on production assets, in the same `watch` session.
 
 **A configured mode is an intention; readiness decides.** However a VM becomes autonomous (its own switch in the console, a pattern, the global default, `watch --mode`), it acts alone only once Glorfindel has checked it can actually defend it: rights to isolate (permissions API), session cut available, no customer ALLOW evaluated before a block, a VM type it supports. The watch checks each VM in an autonomous mode as soon as discovery finds it, then at the posture cadence:
 

@@ -308,14 +308,14 @@ That sounds alarming but its blast radius is bounded **by design, not by trustin
 
 **Option A — local (dev)**
 
-Base install is the same `make install` as the eval section above. The difference for the sandbox: Glorfindel acts (isolates, blocks, snapshots, restores once you approve), so it needs write rights — only those, on the bench's resource groups. Two custom roles (`infra/identities/`) and one principal per service: the watch gets Reader + Log Analytics Reader + **Eregion Glorfindel Response**; the console and the bot also get **Eregion Glorfindel Restore** (a restore is always a human's) — the full commands, the rotation of the secrets and how to retire a former shared principal: [`docs/operations.md`](docs/operations.md), « Identités Azure ».
+Base install is the same `make install` as the eval section above. The difference for the sandbox: Glorfindel acts (isolates, blocks, snapshots, restores once you approve), so it needs write rights — only those, on the bench's resource groups. Three custom roles (`infra/identities/`) and one principal per service: the watch gets Reader + Log Analytics Reader + **Eregion Glorfindel Response**, and **Eregion Glorfindel Session Drain** (Run Command, to cut the sessions of a VM it isolates) on each VM it defends (an explicit list: `session_drain_vms` on H0), never on a group; the console and the bot also get **Eregion Glorfindel Restore** (a restore is always a human's) — the full commands, the rotation of the secrets and how to retire a former shared principal: [`docs/operations.md`](docs/operations.md), « Identités Azure ».
 
 ```bash
 git clone https://github.com/Vanyar53/eregion && cd eregion && make install
 cp .envrc.example .envrc   # fill in ANTHROPIC_API_KEY + Azure creds
 
 SUB=<SUBSCRIPTION_ID>; RG=rg-celebrimbor
-for r in response restore; do
+for r in response restore session-drain; do
   sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-$r.json > /tmp/eregion-role-$r.json
   az role definition create --role-definition @/tmp/eregion-role-$r.json
 done
@@ -323,6 +323,8 @@ az ad sp create-for-rbac --name "eregion-glorfindel-watch"     # → GLORFINDEL_
 az role assignment create --assignee <appId> --role Reader --scope /subscriptions/$SUB/resourceGroups/$RG
 az role assignment create --assignee <appId> --role "Eregion Glorfindel Response" \
   --scope /subscriptions/$SUB/resourceGroups/$RG
+az role assignment create --assignee <appId> --role "Eregion Glorfindel Session Drain" \
+  --scope <id of each VM it defends>    # VM by VM, never the group
 # … the console and the bot the same way, plus "Eregion Glorfindel Restore" (docs/operations.md)
 ```
 
@@ -564,7 +566,7 @@ ANTHROPIC_API_KEY=...               # required for default Anthropic provider
 # GLORFINDEL_LLM_BASE_URL=http://localhost:11434    # self-hosted / Ollama endpoint
 
 # Azure — one principal per service (V-17, docs/operations.md « Identités Azure »);
-# empty, each one takes AZURE_CLIENT_ID / AZURE_CLIENT_SECRET
+# empty: no service principal (the VM's managed identity if there is one), never AZURE_CLIENT_* (SEC11)
 GLORFINDEL_AZURE_CLIENT_ID=...          # the watch (+ _SECRET)
 EREGION_CONSOLE_AZURE_CLIENT_ID=...     # the console (+ _SECRET)
 GLORFINDEL_BOT_AZURE_CLIENT_ID=...      # the Discord bot (+ _SECRET)
@@ -867,7 +869,7 @@ Nothing of Eregion stays behind once these are gone. **First, nothing isolated o
 
 - **Containers and images**: `make glorfindel-stop`, then `docker rmi eregion-glorfindel eregion-annatar`.
 - **Local state**, on each host that ran it: `~/.glorfindel/` (isolation and block state, escalations, the console's token, the approved rules, the discovered assets, and the memory of past decisions, `~/.glorfindel/cycles/`), `~/.annatar/`, `~/.eregion/` (the campaign reports' index), `~/.cache/chroma/` (the embedding model) and `runs/` in the clone.
-- **On Azure**: the quarantine NSGs Glorfindel created (`nsg-glorfindel-quarantine-<region>`, tagged `managed-by=glorfindel`), once no NIC carries one; the service principals — one per service, and a former shared one if you had it — with their role assignments (`az role assignment list --assignee <appId> --all`, then `az ad sp delete --id <appId>` and `az ad app delete --id <appId>`), then the two custom roles once nothing holds them (`az role definition delete --name "Eregion Glorfindel Response"`, the same for `"Eregion Glorfindel Restore"`); a diagnostic setting you added for Glorfindel (Activity Log, Entra ID). The bench and Orodruin, if you built them: `make celebrimbor-down CONFIRM=<instance>`, `make orodruin-down`.
+- **On Azure**: the quarantine NSGs Glorfindel created (`nsg-glorfindel-quarantine-<region>`, tagged `managed-by=glorfindel`), once no NIC carries one; the service principals — one per service, and a former shared one if you had it — with their role assignments (`az role assignment list --assignee <appId> --all`, then `az ad sp delete --id <appId>` and `az ad app delete --id <appId>`), then the two custom roles once nothing holds them (`az role definition delete --name "Eregion Glorfindel Response"`, the same for `"Eregion Glorfindel Restore"` and `"Eregion Glorfindel Session Drain"`); a diagnostic setting you added for Glorfindel (Activity Log, Entra ID). The bench and Orodruin, if you built them: `make celebrimbor-down CONFIRM=<instance>`, `make orodruin-down`.
 - **Elsewhere**: the Discord bot and webhooks you created for it; your provider's API key.
 
 ## Security

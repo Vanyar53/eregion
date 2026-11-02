@@ -129,3 +129,53 @@ def test_a_technique_not_in_the_catalogue_runs_nothing(tmp_path, monkeypatch):
     res, ex = _wire(tmp_path, monkeypatch, "T9999", RID, "--request", REQ)
     assert res.exit_code != 0 and "not a technique of the catalogue" in res.flat
     assert _windows() == []
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")
+
+
+# ── SEC14 (R-10): a wire holds its request's lock, never runs beside anything ─────────────────
+
+def test_a_wire_launched_by_hand_during_a_request_is_refused_and_touches_nothing(tmp_path, monkeypatch):
+    """A wire whose request's lock was not handed down is a run by hand: refused while a request
+    (or anything) runs, nothing journaled, no window."""
+    from eregion_core.exercise_runner import request_lock
+    with request_lock(f"request {REQ}"):
+        res, ex = _wire(tmp_path, monkeypatch, "T1110.001", RID, "--request", REQ)
+    assert res.exit_code == 1 and f"busy: request {REQ} runs on this Orodruin" in res.flat
+    assert ex.run_script.call_count == 0 and _windows() == [] and _audit() == []
+
+
+def test_a_wire_runs_under_the_hold_its_request_hands_down(tmp_path, monkeypatch):
+    from eregion_core.exercise_runner import LOCK_FD_ENV, Busy, request_lock
+    with request_lock(f"request {REQ}") as fd:
+        monkeypatch.setenv(LOCK_FD_ENV, str(fd))
+        res, _ = _wire(tmp_path, monkeypatch, "T1110.001", RID, "--request", REQ)
+        assert res.exit_code == 0, res.output
+        monkeypatch.delenv(LOCK_FD_ENV)
+        # Still the request's: a campaign by hand is refused, and told which request runs.
+        with pytest.raises(Busy, match=f"^request {REQ} runs"):
+            with request_lock("campaign C1"):
+                pass
+    assert len(_windows()) == 1
+
+
+def test_a_wire_launched_alone_takes_orodruins_lock_while_it_runs(tmp_path, monkeypatch):
+    from eregion_core.exercise_runner import Busy, request_lock
+    seen = []
+    real = Engine.run
+
+    def run(self, *a, **kw):
+        with pytest.raises(Busy) as e:
+            with request_lock("campaign C1"):
+                pass
+        seen.append(str(e.value))
+        return real(self, *a, **kw)
+    monkeypatch.setattr(Engine, "run", run)
+    res, _ = _wire(tmp_path, monkeypatch, "T1110.001", RID, "--request", REQ)
+    assert res.exit_code == 0, res.output
+    assert seen and seen[0].startswith(f"wire {REQ} runs on this Orodruin")

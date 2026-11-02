@@ -112,3 +112,94 @@ def test_every_command_toward_h0_checks_the_key_first_and_orodruin_keeps_its_own
     assert {n for n, deps in reaching.items() if "glorfindel-host-known" not in deps} == set()
     assert "$(SSH_OPTS)" not in "".join(r for n, _, r in rules if n != "glorfindel-host-known")
     assert re.search(r"(?m)^ORO_SSH\s*=\s*ssh \$\(SSH_OPTS\)", text)
+
+
+# ── SEC14 (V-32, V-34): Orodruin's host key pinned too, never accept-new; its containers hardened ──
+
+def _make_oro(tmp_path, target, *args, presented="", az_out=""):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "ssh.log"
+    log.write_text("")
+    (bin_dir / "ssh").write_text('#!/bin/sh\necho "$*" >> "$FAKE_SSH_LOG"\n')
+    (bin_dir / "ssh-keyscan").write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_PRESENTED"\n')
+    (bin_dir / "az").write_text('#!/bin/sh\necho "az $*" >> "$FAKE_SSH_LOG"\nprintf "%s\\n" "$FAKE_AZ"\n')
+    for f in ("ssh", "ssh-keyscan", "az"):
+        (bin_dir / f).chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "HOME": str(tmp_path),
+           "FAKE_SSH_LOG": str(log), "FAKE_PRESENTED": presented, "FAKE_AZ": az_out}
+    for k in ("ORO_SSH_FINGERPRINT", "ORO_KNOWN_HOSTS", "ORO_IP", "HOST_SSH_KEY", "VM_ID"):
+        env.pop(k, None)
+    res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), target, f"ORO_IP={IP}", *args],
+                         env=env, capture_output=True, text=True, timeout=60)
+    return res, log.read_text().splitlines()
+
+
+def test_orodruin_presenting_its_pinned_key_is_written_then_trusted_alone(tmp_path):
+    line, fp = _key(tmp_path, "oro")
+    known = tmp_path / "okh"
+    res, calls = _make_oro(tmp_path, "orodruin-check", f"ORO_SSH_FINGERPRINT={fp}",
+                           f"ORO_KNOWN_HOSTS={known}", presented=line)
+    assert res.returncode == 0, res.stderr
+    assert known.read_text().strip() == line
+    assert len(calls) == 1 and f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known}" in calls[0]
+    assert "accept-new" not in calls[0] and "python -m eregion_core.orodruin" in calls[0]
+
+
+def test_orodruin_without_its_fingerprint_is_refused_never_accept_new(tmp_path):
+    res, calls = _make_oro(tmp_path, "orodruin-check", presented="")
+    assert res.returncode != 0 and calls == []
+    assert "ORO_SSH_FINGERPRINT requis" in res.stderr and "jamais accept-new" in res.stderr
+
+
+def test_orodruin_presenting_another_key_is_refused_before_anything_runs(tmp_path):
+    _, fp = _key(tmp_path, "oro")
+    other, _ = _key(tmp_path, "intruder")
+    res, calls = _make_oro(tmp_path, "gothmog-run", f"ORO_SSH_FINGERPRINT={fp}",
+                           f"ORO_KNOWN_HOSTS={tmp_path / 'okh'}", presented=other)
+    assert res.returncode != 0 and calls == []
+    assert "n'a pas l'empreinte ORO_SSH_FINGERPRINT" in res.stderr
+
+
+def test_every_command_toward_orodruin_checks_its_key_first():
+    """Each target whose recipe reaches Orodruin (ORO_SSH, SSH_OPTS: ssh, scp, docker save | ssh)
+    waits on orodruin-known — orodruin-exercise too, unless DRY_RUN, which sends nothing; and
+    Orodruin's ssh options never accept a key on first contact."""
+    import re
+    text = (ROOT / "Makefile").read_text(encoding="utf-8")
+    rules = re.findall(r"(?m)^([\w-]+):(?!=)([^\n]*)\n((?:\t.*\n)*)", text)
+    reaching = {name: deps for name, deps, recipe in rules
+                if re.search(r"\$\((ORO_SSH|SSH_OPTS)\)", recipe) and name != "orodruin-known"}
+    assert {"orodruin-push", "orodruin-push-dev", "orodruin-check", "orodruin-ssh", "orodruin-exercise",
+            "gothmog-preflight", "gothmog-run", "orodruin-campaign-plan", "orodruin-campaign-run"} <= set(reaching)
+    assert {n for n, deps in reaching.items() if "orodruin-known" not in deps} == set()
+    assert "$(if $(DRY_RUN),,orodruin-known)" in reaching["orodruin-exercise"]
+    ssh_opts = re.search(r"(?m)^SSH_OPTS\s*=(.*)$", text).group(1)
+    assert "StrictHostKeyChecking=yes" in ssh_opts and "UserKnownHostsFile=$(ORO_KNOWN_HOSTS)" in ssh_opts
+    assert "accept-new" not in ssh_opts
+
+
+def test_the_fingerprint_is_read_on_the_vm_through_azure(tmp_path):
+    _, fp = _key(tmp_path, "oro")
+    vm = ("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x/providers"
+          "/Microsoft.Compute/virtualMachines/vm-x")
+    answer = f"Enable succeeded:\n[stdout]\n256 {fp} root@vm-x (ED25519)\n\n[stderr]\n"
+    res, calls = _make_oro(tmp_path, "orodruin-fingerprint", f"VM_ID={vm}", az_out=answer)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == f"export ORO_SSH_FINGERPRINT={fp}"
+    assert calls[0].startswith(f"az vm run-command invoke --ids {vm} --command-id RunShellScript")
+    res, _ = _make_oro(tmp_path, "orodruin-fingerprint", f"VM_ID={vm}", az_out="Enable succeeded: nothing")
+    assert res.returncode != 0 and "pas d'empreinte" in res.stderr and "export" not in res.stdout
+
+
+def test_every_injector_container_on_orodruin_runs_hardened_as_compose_does():
+    """V-34: read-only root, /tmp in tmpfs, no capability, no privilege gained — every `docker run`
+    of Orodruin's section goes through ORO_HARDEN."""
+    import re
+    text = (ROOT / "Makefile").read_text(encoding="utf-8")
+    harden = re.search(r"(?m)^ORO_HARDEN\s*=(.*)$", text).group(1).split()
+    assert harden == ["--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--security-opt",
+                      "no-new-privileges:true"]
+    section = text.split("# ── Orodruin (O1)", 1)[1].split("# ── Profils d'usage", 1)[0]
+    runs = [ln for ln in section.splitlines() if "docker run" in ln and not ln.startswith("#")]
+    assert len(runs) >= 2 and all("docker run --rm $(ORO_HARDEN) " in ln for ln in runs), runs

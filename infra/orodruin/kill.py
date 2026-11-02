@@ -216,17 +216,18 @@ def steps(principal_id: str, vm_id: str, *, subscription: str = "",
             say(f"[dry-run] close the open windows of {channel}")
             return
         cred = credential or _cli_credential()
+        at = now or datetime.now(timezone.utc)
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 exercise_channel.pull(Path(tmp), channel=channel, credential=cred, get=get)
-                windows = exercise.load_windows(Path(tmp))
+                # Read at the kill's own moment: the purge and the bounds of a window by one clock.
+                windows = exercise.load_windows(Path(tmp), now=at)
         except Exception as e:
             raise RuntimeError(
                 f"{e} — the operator writes the windows (channel_operator: make orodruin-lock "
                 f"YES=1); a window still open lapses at its expiry, at most "
                 f"{exercise.MAX_DURATION_S // 3600} h after it opened, plus "
                 f"{exercise.GRACE_AFTER_S // 60} min") from e
-        at = now or datetime.now(timezone.utc)
         open_ = [w for w in windows if not w.get("end") and not _lapsed(w, at)]
         if not open_:
             say("no exercise window open in the channel")

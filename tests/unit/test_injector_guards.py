@@ -94,7 +94,8 @@ class _Engine:
 
 def _campaign(tmp_path, entries, budget=None):
     m = CampaignManifest(campaign_id="C1", objective="t",
-                         scope=Scope(allowed_resource_groups=["rg-celebrimbor"]),
+                         scope=Scope(subscription_id="00000000-0000-0000-0000-000000000000",
+                                     allowed_resource_groups=["rg-celebrimbor"]),
                          budget=budget or Budget(max_scenarios=5), scenarios=entries,
                          state="ratified")
     cdir = campaign_dir("C1", runs_dir=tmp_path)
@@ -394,3 +395,76 @@ def test_an_edited_atomic_never_reaches_the_target(tmp_path, monkeypatch):
     out = _run(tmp_path, monkeypatch, ATOMIC, executor)
     assert out.refused and out.error.startswith("atomic:") and "sha256" in out.error
     executor.run_command.assert_not_called()
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")
+
+
+# ── SEC14 (V-19): the catalog vouches for a script's content, not its path ────────────────────
+
+def test_every_local_script_the_catalog_names_is_pinned_by_its_content():
+    """A script changed in scripts/vm/ changes its pin in technique_catalog.yaml, in the same commit."""
+    import hashlib
+
+    from annatar.campaign.catalog import REPO_ROOT, load_catalog
+    pinned = 0
+    for ttp, entry in load_catalog().items():
+        scripts = [s for s in [entry.get("reference_script"), *(entry.get("setup_scripts") or [])] if s]
+        pins = entry.get("script_sha256") or {}
+        assert set(pins) == set(scripts), ttp
+        for s in scripts:
+            assert pins[s] == hashlib.sha256((REPO_ROOT / s).read_bytes()).hexdigest(), s
+            pinned += 1
+    assert pinned >= 6
+
+
+def test_a_script_changed_under_its_path_is_no_longer_what_the_catalog_vouched_for(tmp_path, monkeypatch):
+    import annatar.campaign.catalog as cat
+    (tmp_path / "scripts" / "vm").mkdir(parents=True)
+    script = tmp_path / "scripts" / "vm" / "exfil_sim.sh"
+    script.write_bytes(b"#!/bin/sh\necho harmless\n")
+    entry = {"ttp": "T1041", "destructive": False, "reference_script": "scripts/vm/exfil_sim.sh",
+             "setup_scripts": [], "script_sha256": {"scripts/vm/exfil_sim.sh": cat.script_digest(script.read_bytes())}}
+    monkeypatch.setattr(cat, "REPO_ROOT", tmp_path)
+    assert catalog_destructive("T1041", scripts=["scripts/vm/exfil_sim.sh"], catalog={"T1041": entry}) is False
+    script.write_bytes(b"#!/bin/sh\nrm -rf /data\n")              # same path, another content
+    assert catalog_destructive("T1041", scripts=["scripts/vm/exfil_sim.sh"], catalog={"T1041": entry}) is None
+    unpinned = {**entry, "script_sha256": {}}
+    assert catalog_destructive("T1041", scripts=["scripts/vm/exfil_sim.sh"], catalog={"T1041": unpinned}) is None
+
+
+def test_a_pinned_script_whose_content_changed_never_reaches_the_vm(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import annatar.campaign.catalog as cat
+    from annatar.executors.azure_vm import AzureVMExecutor
+    script = tmp_path / "s.sh"
+    script.write_bytes(b"#!/bin/sh\necho pinned\n")
+    pin = cat.script_digest(script.read_bytes())
+    monkeypatch.setattr(cat, "script_pin", lambda path, catalog=None: pin if path == str(script) else None)
+    sent, journaled = [], []
+    fake = SimpleNamespace(_before_call=lambda *a: journaled.append(a), _ensure_vm_running=lambda: None,
+                           _run_shell=lambda content, label, params=None: sent.append(content) or "ok")
+    assert AzureVMExecutor.run_script(fake, str(script)) == "ok"
+    assert sent == ["#!/bin/sh\necho pinned\n"]
+    script.write_bytes(b"#!/bin/sh\necho changed\n")
+    with pytest.raises(RuntimeError, match="not the one the catalog pins"):
+        AzureVMExecutor.run_script(fake, str(script))
+    assert len(sent) == 1 and len(journaled) == 1                 # nothing sent, nothing journaled
+
+
+def test_a_pinned_script_named_another_way_is_still_checked(tmp_path, monkeypatch):
+    """SEC14 review: ./scripts/vm/x.sh, scripts/../scripts/vm/x.sh or its absolute path are the
+    catalog's scripts/vm/x.sh — never a way around its pin."""
+    import annatar.campaign.catalog as cat
+    pin = "a" * 64
+    catalog = {"T1": {"script_sha256": {"scripts/vm/x.sh": pin}}}
+    for name in ("scripts/vm/x.sh", "./scripts/vm/x.sh", "scripts/../scripts/vm/x.sh",
+                 "scripts/vm//x.sh", str(cat.REPO_ROOT / "scripts" / "vm" / "x.sh")):
+        assert cat.script_pin(name, catalog) == pin, name
+    assert cat.script_pin("scripts/vm/y.sh", catalog) is None
+    assert cat.script_pin("/elsewhere/scripts/vm/x.sh", catalog) is None

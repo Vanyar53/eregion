@@ -1,0 +1,28 @@
+{
+  "accepted": [
+    {
+      "package": "chromadb",
+      "id": "GHSA-2wm9-hf6c-p5cr",
+      "reason": "The HTTP server's tenant authorization (any authenticated user, any tenant). Eregion runs chromadb embedded (chromadb.PersistentClient in glorfindel/memory.py and analysis/campaign_report.py): no chromadb server is started nor exposed, no tenant, no authentication. No fixed version yet (1.5.9 locked).",
+      "since": "2026-11-02"
+    },
+    {
+      "package": "chromadb",
+      "id": "GHSA-36p7-vc44-83pf",
+      "reason": "Code run on the HTTP server through a collection update (/api/v2/..., UPDATE_COLLECTION). Eregion runs chromadb embedded (PersistentClient): no chromadb server, no HTTP API reachable, and no collection configured with trust_remote_code. No fixed version yet (1.5.9 locked).",
+      "since": "2026-11-02"
+    },
+    {
+      "package": "chromadb",
+      "id": "GHSA-f4j7-r4q5-qw2c",
+      "reason": "Code run on the HTTP server before authentication, through its collections endpoint. Eregion runs chromadb embedded (PersistentClient): no chromadb server is started nor exposed, no endpoint to reach. No fixed version yet (1.5.9 locked).",
+      "since": "2026-11-02"
+    },
+    {
+      "package": "chromadb",
+      "id": "GHSA-xph7-9rjv-w5fr",
+      "reason": "The HTTP server's SimpleRBACAuthorizationProvider ignores the tenant, database or collection of a permission. Eregion runs chromadb embedded (PersistentClient): no server, no authorization provider configured. No fixed version yet (1.5.9 locked).",
+      "since": "2026-11-02"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ by its CD (infra/glorfindel-host/cd/eregion_cd.py), on the operator's machine fo
     published_image.py fetch IMAGE --ref REF --tag NAME    resolved, verified, pulled by digest, tagged NAME
     published_image.py loaded IMAGE --digest D --id ID     ID (docker's, on another host) is this image
     published_image.py install-cosign DEST                 cosign, pinned by its sha256
+    published_image.py install-syft DEST                   syft (the SBOM), its archive pinned by its sha256
     published_image.py meta IMAGE --commit C               the workflow's names and labels ($GITHUB_OUTPUT)
     published_image.py pushed IMAGE --ref R                the workflow's push: R pushed, its digest said
 
@@ -61,6 +62,14 @@ COSIGN_VERSION = "v3.1.3"
 COSIGN_SHA256 = "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"   # cosign-linux-amd64
 COSIGN_URL = f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/cosign-linux-amd64"
 COSIGN_MAX = 300 * 1024 * 1024
+# SEC14 (R-14): syft, which writes the SBOM in the job that signs — pinned by the sha256 of its
+# release archive (syft_<v>_checksums.txt of anchore's release, read on 02/11), never fetched at
+# its latest by an action. The version anchore/sbom-action v0.24.2 ran: the same SBOM.
+SYFT_VERSION = "v1.51.1"
+SYFT_SHA256 = "8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3"   # syft_1.51.1_linux_amd64.tar.gz
+SYFT_URL = (f"https://github.com/anchore/syft/releases/download/{SYFT_VERSION}/"
+            f"syft_{SYFT_VERSION[1:]}_linux_amd64.tar.gz")
+SYFT_MAX = 200 * 1024 * 1024
 # The user the published images run as: the first user of an Azure Ubuntu VM, H0's and Orodruin's.
 UID = GID = 1000
 MANIFEST_MAX = 4 * 1024 * 1024
@@ -363,6 +372,37 @@ def install_cosign(dest: Path) -> int:
     return 0
 
 
+def install_syft(dest: Path) -> int:
+    """syft, from its release archive kept only if its sha256 is the pinned one (R-14): the binary
+    ``syft`` alone taken out of it, nothing else written."""
+    import io
+    import tarfile
+
+    try:
+        body, _ = _open(SYFT_URL, {}, SYFT_MAX)
+    except urllib.error.HTTPError as e:
+        print(f"✗ syft : HTTP {e.code}", file=sys.stderr)
+        return 3
+    got = hashlib.sha256(body).hexdigest()
+    if got != SYFT_SHA256:
+        print(f"✗ syft téléchargé : sha256 {got[:12]}…, pas {SYFT_SHA256[:12]}… — rien n'est installé",
+              file=sys.stderr)
+        return 1
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as tar:
+        member = next((m for m in tar.getmembers() if m.name == "syft" and m.isfile()), None)
+        if member is None:
+            print("✗ syft : pas de binaire « syft » dans l'archive — rien n'est installé", file=sys.stderr)
+            return 1
+        binary = tar.extractfile(member).read()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    tmp.write_bytes(binary)
+    tmp.chmod(0o755)
+    os.replace(tmp, dest)
+    print(f"✓ {dest} : syft {SYFT_VERSION}, archive au sha256 vérifié")
+    return 0
+
+
 # ── pulled by its digest ────────────────────────────────────────────────────────────
 
 def labels(name: str, runner: Runner = run) -> tuple[str, str]:
@@ -464,8 +504,8 @@ def default_cosign() -> Path:
 
 def main(argv: list | None = None, runner: Runner = run) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("cmd", choices=["resolve", "verify", "fetch", "ids", "loaded", "install-cosign", "meta",
-                                   "pushed"])
+    p.add_argument("cmd", choices=["resolve", "verify", "fetch", "ids", "loaded", "install-cosign",
+                                   "install-syft", "meta", "pushed"])
     p.add_argument("image", nargs="?", default="")
     p.add_argument("--commit", default="")
     p.add_argument("--digest", default="")
@@ -479,6 +519,10 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
     try:
         if a.cmd == "install-cosign":
             return install_cosign(Path(a.image) if a.image else cosign)
+        if a.cmd == "install-syft":
+            if not a.image:
+                p.error("install-syft DEST")
+            return install_syft(Path(a.image))
         if a.image not in NAMES:
             p.error(f"image : {', '.join(NAMES)}")
         if a.cmd == "resolve":

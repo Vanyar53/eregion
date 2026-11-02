@@ -134,9 +134,9 @@ MUTANTS = [
      "    _atomic_write_text(target, json.dumps(payload))\n",
      "    _atomic_write_text(target, json.dumps(payload))\n    if name != name.lower():\n        target.unlink()\n"),
     ("M07", "release sweeps the NICs only when there is no state", REL,
-     "        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id)",
+     "        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id,",
      "        failed += [] if state.get(\"placements\") else self._sweep_isolation(rg, vm_name, remaining, known,"
-     " resource_id)"),
+     " resource_id,"),
     ("M08", "fallback deny any/any on an NSG that only looks dedicated", NSG,
      '    return bool(target.get("private_ips")) or _ip_scoped(target)',
      "    return _ip_scoped(target)"),
@@ -1215,8 +1215,8 @@ MUTANTS = [
      '    _has_alerting = bool(os.environ.get("GLORFINDEL_WEBHOOK_URL") '
      'or os.environ.get("DISCORD_CHANNEL_ID"))\n'),
     ("M524", "REF=--checkout-only reaches deploy.sh as an option (M-3, review)", MAKE,
-     'make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac\n\t@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide',
-     'make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac\n\t@case "$$EREGION_DEPLOY_REF" in *[!A-Za-z0-9._-]*) echo "REF invalide'),
+     '\t@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac\n\t$(HOST_SSH)',
+     '\t@case "$$EREGION_DEPLOY_REF" in *[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac\n\t$(HOST_SSH)'),
     ("M525", "a REF exported in the environment is deployed in silence (M-3, review)", MAKE,
      '@case "$(origin REF)" in environment*) echo "REF vient de l\'environnement (« $$EREGION_DEPLOY_REF ») : rien n\'est déployé',
      '@case "$(origin REF)" in nowhere*) echo "REF vient de l\'environnement (« $$EREGION_DEPLOY_REF ») : rien n\'est déployé'),
@@ -3049,7 +3049,7 @@ MUTANTS += [
     ("M1007", "a release deployed while its CI still runs (H1)", CD,
      '    if not runs or any(r.get("status") != "completed" for r in runs):', "    if False:"),
     ("M1008", "a release older than what runs deployed over it (H1)", CD,
-     "    if dep_commit and is_ancestor(commit, dep_commit):", "    if False:"),
+     "            if before:\n", "            if False:\n"),
     ("M1009", "a new lock deployed without the harness: the guard never runs (H1)", CD,
      '    if dep_commit and git("diff", "--quiet", dep_commit, commit, "--", LOCK, check=False).returncode == 0:\n'
      "        return\n", "    return\n"),
@@ -3070,7 +3070,7 @@ MUTANTS += [
     ("M1015", "an unhealthy release left running: no rollback (H1)", CD,
      "    back = rollback(dep_ref)\n", '    back = ""\n'),
     ("M1016", "a refused or rolled-back release tried again at every pass (H1)", CD,
-     '    if not check and done in ("refused", "rolled back", "rollback failed"):', "    if False:"),
+     '    if not check and not back_to and done in ("refused", "rolled back", "rollback failed"):', "    if False:"),
     ("M1017", "two passes at once, or one during a deployment by hand: no lock (H1)", CD,
      "            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "            pass\n"),
     ("M1018", "a release with another agent never said: H0 keeps an old CD in silence (H1)", CD,
@@ -3896,7 +3896,7 @@ MUTANTS += [
     ("M1158", "pip-audit resolves the lock with pip instead of reading it (CI2, N-16)", PAI,
      '"--require-hashes", "--disable-pip",', '"--require-hashes",'),
     ("M1159", "make lock fails when its audit cannot run (CI2, N-16)", MAKE,
-     "\t-@$(MAKE) --no-print-directory audit\n", "\t@$(MAKE) --no-print-directory audit\n"),
+     "\t@$(MAKE) --no-print-directory audit || echo ", "\t@$(MAKE) --no-print-directory audit && echo "),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_pip_audit_issues.py" for n in range(1150, 1160)})
 # CI2, after the 5.5 review: who may hold a key (the workflow's issues only, every field of its
@@ -5449,8 +5449,8 @@ MUTANTS += [
      "    # n'écrit que dans runs/ et /tmp.\n    read_only: true\n",
      "    # n'écrit que dans runs/ et /tmp.\n    read_only: false\n"),
     ("M1423", "the watch takes the console's secret (SEC7, V-17)", "docker-compose.yml",
-     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n",
-     "  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n"),
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",          # re-anchored (SEC11)
+     "  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-}\n"),
     ("M1424", "the README grants Contributor on the subscription again (SEC7, V-17)", "README.md",
      'az ad sp create-for-rbac --name "eregion-glorfindel-watch"     #',
      'az ad sp create-for-rbac --name "eregion-glorfindel-watch" --role Contributor --scopes /subscriptions/$SUB #'),
@@ -5537,7 +5537,7 @@ MUTANTS += [
      "                    beyond = [a for a in self.BEYOND_RESPONSE if allowed(a)]\n",
      "                    beyond = []\n"),
     ("M1576", "a principal's id without its secret said nothing: two principals mixed (SEC7, V-17)", MAKE,
-     '\t  [ "$$id" = "$$se" ] || echo', "\t  true || echo"),
+     '\t  if [ "$$id" != "$$se" ]; then echo', "\t  if false; then echo"),   # re-anchored (SEC11)
     ("M1577", "the console's and the bot's ids out of OWN_CALLERS: each approved write a card (SEC7, V-17)",
      "docker-compose.yml",
      "  GLORFINDEL_OWN_CALLERS: ${GLORFINDEL_OWN_CALLERS:-},${EREGION_CONSOLE_AZURE_CLIENT_ID:-},"
@@ -6932,21 +6932,21 @@ MUTANTS += [
     ("M2475", "a path Orodruin reads on Azure hides a character not printable (#358)", "eregion_core/held.py",
      "    if not path.isprintable():\n", "    if False:\n"),
     ("M2476", "a campaign launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
-     '    lock = contextlib.nullcontext() if dry_run else request_lock(runs_dir, f"campaign {campaign_id}")\n',
+     '    lock = contextlib.nullcontext() if dry_run else request_lock(f"campaign {campaign_id}")\n',
      "    lock = contextlib.nullcontext()\n"),
     ("M2477", "the one refused never says what holds the lock (#358)", "eregion_core/exercise_runner.py",
      '            what = _holder(fd) or "another request"\n', '            what = "another request"\n'),
     ("M2478", "what holds the lock said raw, its escapes with it (#358)", "eregion_core/exercise_runner.py",
      '    return "".join(c for c in text if c.isprintable()).strip()\n', "    return text.strip()\n"),
     ("M2479", "a request runs without naming itself in the lock (#358)", "eregion_core/exercise_runner.py",
-     '            with request_lock(self.runs_dir, f"request {req.id}"):\n',
-     "            with request_lock(self.runs_dir):\n"),
+     '            with request_lock(f"request {req.id}") as fd:\n',
+     "            with request_lock() as fd:\n"),
 ]
 TESTS.update({mid: _358_CORE for mid in ("M2474", "M2475", "M2477", "M2478", "M2479")})
 TESTS["M2476"] = "tests/unit/test_campaign_runner.py"
 MUTANTS += [
     ("M2480", "a single run launched by hand on Orodruin during a request takes no lock (#358)", "annatar/cli.py",
-     '    lock = contextlib.nullcontext() if dry_run else request_lock("runs", f"run {os.path.basename(path)}")\n',
+     '    lock = contextlib.nullcontext() if dry_run else request_lock(f"run {os.path.basename(path)}")\n',
      "    lock = contextlib.nullcontext()\n"),
 ]
 TESTS["M2480"] = "tests/unit/test_annatar_run_exit.py"
@@ -7511,14 +7511,97 @@ MUTANTS += [
      "            except Exception as e:\n                why = f\"typed_name: the target's name unreadable",
      "            except ZeroDivisionError as e:\n                why = f\"typed_name: the target's name unreadable"),
     ("M2498", "a fault launched by hand on Orodruin during a request takes no lock (#358)", "gothmog/cli.py",
-     '    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")\n',
-     "    lock = contextlib.nullcontext()\n"),
-    ("M2499", "a wire of a request takes the request's lock: it refuses itself (#358)", "gothmog/cli.py",
-     '    lock = contextlib.nullcontext() if request else request_lock("runs", f"fault {os.path.basename(fault)}")\n',
-     '    lock = request_lock("runs", f"fault {os.path.basename(fault)}")\n'),
+     "        with request_lock(holder):\n", "        with open(os.devnull):\n"),
+    # SEC14 (R-10): a wire now holds its request's lock, handed down — re-anchored there.
+    ("M2499", "a wire of a request takes a lock of its own: it refuses itself (#358, R-10)",
+     "eregion_core/exercise_runner.py",
+     "    inherited = _inherited(path)\n", "    inherited = None\n"),
 ]
 TESTS.update({mid: "tests/unit/test_gothmog.py" for mid in ("M2497", "M2498", "M2499")})
 
+# SEC12 (#418): the root of trust — the agent sessions' token (a GitHub App, this repository only),
+# H0's CD refusing an older release but for the way back asked on H0, the tag rule read, the
+# review's verdict traced on the pull request. M2900–M2914.
+ATK = "scripts/agent_token.py"
+HCD = "infra/glorfindel-host/cd/eregion_cd.py"
+_ATK_T = "tests/unit/test_agent_token.py"
+_HCD_T = "tests/unit/test_host_cd.py"
+MUTANTS += [
+    ("M2900", "the App's JWT lives 15 minutes: GitHub refuses it (SEC12)", ATK,
+     "JWT_LIFE_S = 540 ", "JWT_LIFE_S = 900 "),
+    ("M2901", "the App's JWT issued now, not 60 s in the past: a clock behind GitHub's refused (SEC12)", ATK,
+     '{"iat": now - JWT_PAST_S, ', '{"iat": now, '),
+    ("M2902", "a cached token reused until it dies: a push that starts holds a token that expires on the way (SEC12)",
+     ATK, 'return bool(entry) and entry["expires_at"] - time.time() > MARGIN_S\n',
+     'return bool(entry) and entry["expires_at"] - time.time() > 0\n'),
+    ("M2903", "a cache readable by others read as ours (SEC12)", ATK,
+     "        if st.st_uid != os.getuid() or st.st_mode & 0o077 or not stat.S_ISREG(st.st_mode):\n",
+     "        if st.st_uid != os.getuid() or not stat.S_ISREG(st.st_mode):\n"),
+    ("M2904", "the installation token not restricted to this repository: every repository the App reaches (SEC12)",
+     ATK, '    scope = {"repositories": [REPO.split("/", 1)[1]]}\n', "    scope = {}\n"),
+    ("M2905", "the credential helper gives the App's token to any host over https (SEC12)", ATK,
+     '    if asked.get("protocol") != "https" or asked.get("host") != HOST:\n',
+     '    if asked.get("protocol") != "https":\n'),
+    ("M2906", "a token with a newline taken: a line of git's credential protocol written by the answer (SEC12)",
+     ATK, 'TOKEN_RE = re.compile(r"[A-Za-z0-9_.\\-]{20,4096}")\n', 'TOKEN_RE = re.compile(r"[\\s\\S]{1,4096}")\n'),
+    ("M2907", "the App's key read though others can read it (SEC12)", ATK,
+     "    if st.st_mode & 0o077:\n        raise TokenError(f\"la clé de l'App est lisible",
+     "    if False:\n        raise TokenError(f\"la clé de l'App est lisible"),
+    ("M2908", "the gh wrapper leaves gh its usual config: the maintainer's hosts.yml in reach (SEC12)", ATK,
+     '    env["GH_CONFIG_DIR"] = str(Path(os.environ.get("EREGION_AGENT_GH_CONFIG") or DIR / "gh"))\n',
+     "    pass\n"),
+    ("M2909", "the CD compares commits only: a lower version on a newer commit deployed (SEC12)", HCD,
+     "        if mine and theirs and mine < theirs:\n", "        if False:\n"),
+    ("M2910", "the CD compares versions as text: v0.4.9 taken as newer than v0.4.10 (SEC12)", HCD,
+     "    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None\n",
+     "    return (m.group(1), m.group(2), m.group(3)) if m else None\n"),
+    ("M2911", "an older release made « latest » passed over in silence, never said (SEC12)", HCD,
+     '        raise Refused(f"{why} : jamais de retour arrière sans qu\'on le demande sur H0 "\n',
+     '        raise Quiet(f"{why} : jamais de retour arrière sans qu\'on le demande sur H0 "\n'),
+    ("M2912", "the way back asked on H0 undone by the next pass: the release it left deployed again (SEC12)", HCD,
+     "    if back_to and code == 0:\n        left_behind(state, dep_ref, tag)\n",
+     "    if False:\n        left_behind(state, dep_ref, tag)\n"),
+    ("M2913", "a tag rule that leaves the deletion (or the creation) open seen as holding (SEC12)", HCD,
+     "        if covered and set(TAG_RULES) <= kinds:\n", "        if covered and kinds & set(TAG_RULES):\n"),
+    ("M2914", "a review's « ok » holds for any commit: a push after the review merged unreviewed (SEC12)",
+     "scripts/review_verdict.py", '            if key.get("head") == head:\n                last = key\n',
+     "            if True:\n                last = key\n"),
+]
+TESTS.update({f"M{n}": _ATK_T for n in range(2900, 2909)})
+TESTS.update({f"M{n}": _HCD_T for n in range(2909, 2914)})
+TESTS["M2909"] = f"{_HCD_T}::test_a_lower_version_on_a_newer_commit_is_refused"
+TESTS["M2910"] = f"{_HCD_T}::test_versions_are_compared_as_numbers"
+TESTS["M2911"] = f"{_HCD_T}::test_an_older_release_is_refused_said_once_and_never_deployed"
+TESTS["M2912"] = (f"{_HCD_T}::test_the_way_back_asked_on_h0_is_verified_deployed_and_the_release_left_stays_behind "
+                  f"{_HCD_T}::test_a_cut_way_back_taken_up_leaves_the_release_behind")
+TESTS["M2913"] = f"{_HCD_T}::test_the_tag_rule_covers_the_tag_and_forbids_its_creation_update_and_deletion"
+TESTS["M2914"] = "tests/unit/test_review_verdict.py"
+# SEC12, after its review: never back by a reading that fails (the floor, what runs unreadable, an
+# order git cannot read), the verdict tied to the commit reviewed, no redirection followed with the
+# token. M2975–M2979.
+MUTANTS += [
+    ("M2975", "what runs unreadable (the watch without labels): the release deployed blind (SEC12)",
+     HCD, '    if not dep_ref and not dep_commit:\n        raise Refused("ce qui tourne sur H0 ne se lit pas',
+     '    if False:\n        raise Refused("ce qui tourne sur H0 ne se lit pas'),
+    ("M2976", "two commits git cannot order (merge-base: 128) taken for « not older » (SEC12)", HCD,
+     "            if before is None:\n", "            if before is None and False:\n"),
+    ("M2977", "the floor never read: H0 put back by hand reopens the door to the releases before (SEC12)", HCD,
+     '             (str(floor.get("tag") or ""), str(floor.get("commit") or ""), "déjà déployée sur H0"))\n',
+     "             )\n"),
+    ("M2978", "the check reads the verdict for the head of the moment: a push after the review merged (SEC12)",
+     "scripts/review_verdict.py", "    if head != reviewed:\n", "    if False:\n"),
+    ("M2979", "a redirection followed with the App's JWT in its header, to the host the answer names (SEC12)", ATK,
+     "        return None\n\n\nOPENER",
+     "        return super().redirect_request(req, fp, code, msg, headers, newurl)\n\n\nOPENER"),
+]
+TESTS.update({
+    "M2975": f"{_HCD_T}::test_what_runs_unreadable_is_refused_never_taken_for_older_than_anything",
+    "M2976": f"{_HCD_T}::test_an_order_git_cannot_read_is_refused_never_taken_for_newer",
+    "M2977": (f"{_HCD_T}::test_the_floor_is_the_highest_version_deployed_whatever_runs "
+              f"{_HCD_T}::test_under_the_floor_is_refused_though_what_runs_is_older"),
+    "M2978": "tests/unit/test_review_verdict.py",
+    "M2979": f"{_ATK_T}::test_a_redirection_is_never_followed_with_the_jwt",
+})
 # SEC13 (#419): what was left on Glorfindel's side of the second counter-audit — the incident
 # registry under its flock and written whole (V-10), every state owner-only and whole (V-27),
 # /pending under the buttons' policy (R-16), a state directory that can't be listed (R-07), a
@@ -7864,6 +7947,68 @@ MUTANTS += [
      _L1QR_ORDER, '    return sorted(blocks, key=lambda b: b.get("scoped") is not False or bool(b.get("placements")))\n'),
 ]
 TESTS.update({mid: f"{_L1QR} {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
+
+# I3R (#431): the night's seed 67 at 60 — a NIC's isolation rules on our quarantine NSG (written
+# while it had lost our tag), the NIC back on its own NSG with the release: the sweep looked only at
+# the NSGs that govern it now, `released`, the rules left. Looked for on the NSG it left. M3060–M3066.
+_I3R_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_nics_rules_on_the_quarantine_nsg_it_left_go_with_the_release "
+            "tests/unit/test_invariant_regressions.py::"
+            "test_a_nics_rules_on_the_quarantine_nsg_it_left_go_once_the_operator_gives_its_original")
+_I3R_UNIT = "tests/unit/test_release_away.py"
+MUTANTS += [
+    ("M3060", "the release's sweep blind to the quarantine NSG a NIC leaves: its rules there left, `released` (I3R)",
+     REL, "        failed += self._left_quarantine_rules(vm_name, targets, left, guard, mates, own_ips, cache, stuck,\n",
+     "        failed += [] and self._left_quarantine_rules(vm_name, targets, left, guard, mates, own_ips, cache, stuck,\n"),
+    ("M3061", "the quarantine NSG the sweep itself takes a NIC out of never noted: a stateless release blind to "
+              "it (I3R)", REL,
+     '                    left[t0["nic_id"].rstrip("/").lower()] = (q["nsg_rg"], q["nsg_name"])\n', ""),
+    ("M3062", "the state's quarantine placements never read: a release by its state blind to the NSG it leaves "
+              "(I3R)", AWY,
+     '        placements = state.get("placements") if isinstance(state, dict) else None\n',
+     "        placements = None\n"),
+    ("M3063", "a NIC still in the quarantine (its undo failed) has its rules there taken off: nothing else "
+              "may cut it off (I3R)", AWY,
+     "            if (q[0].lower(), q[1].lower()) in {(a.lower(), b.lower()) for a, b in now}:\n                continue\n",
+     ""),
+    ("M3064", "a bare NIC's rules on the quarantine NSG it left looked for here too: a kept one said twice (I3R)",
+     AWY, '            if q is None or not (t0.get("own_nsg_id") or t0.get("quarantine")):\n',
+     "            if q is None:\n"),
+    ("M3065", "a rule of the NIC's on the quarantine NSG it left taken off without the guard: the VM still in it, "
+              "its allow gone (I3R)", AWY,
+     "                err = (_aims_elsewhere(r, own_ips) and _held_by_turned(\n",
+     "                err = (False and _held_by_turned(\n"),
+    ("M3066", "the quarantine NSG a NIC left unreadable, read as nothing there: `released` (I3R)", AWY,
+     "            if rules is None:\n                failed.append(f\"{q[0]}/{q[1]} : règles illisibles",
+     "            if rules is None:\n                continue\n                failed.append(f\"{q[0]}/{q[1]} : règles illisibles"),
+]
+# I3R's review: a partial release kept nothing of the quarantine NSG it left unswept — its retry,
+# the NIC on its own NSG, said `released` with the pair there; and a rule its placement had just
+# kept was said twice. M3067–M3069.
+_I3R_RETRY = (f"{_I3R_UNIT}::test_the_retry_of_a_release_that_couldnt_read_the_quarantine_nsg_looks_there_again "
+              f"{_I3R_UNIT}::test_the_retry_of_a_release_whose_delete_failed_on_the_quarantine_nsg_takes_it_off")
+MUTANTS += [
+    ("M3067", "a partial release never writes the quarantine NSGs it left unswept: its retry says `released`, the "
+              "pair there (I3R, review)", REL,
+     '                **({"quarantines_left": keep} if keep else {}),\n', ""),
+    ("M3068", "the quarantine NSGs a partial release left unswept never read by the retry (I3R, review)", AWY,
+     '        kept = state.get("quarantines_left") if isinstance(state, dict) else None\n', "        kept = None\n"),
+    ("M3069", "the search on the quarantine NSG left tries again what the placements just failed: a kept rule "
+              "said twice (I3R, review)", AWY,
+     "                if (q[0].lower(), q[1].lower(), name.lower()) in stuck:\n                    continue\n", ""),
+]
+TESTS.update({
+    "M3067": _I3R_RETRY, "M3068": _I3R_RETRY,
+    "M3069": f"{_I3R_UNIT}::test_a_rule_its_placement_kept_on_the_quarantine_nsg_is_said_once",
+    "M3060": f"{_I3R_SEQ} {_I3R_UNIT}",
+    "M3061": f"{_I3R_SEQ} {_I3R_UNIT}::test_a_nics_rules_on_the_quarantine_nsg_it_leaves_go_with_a_stateless_release",
+    "M3062": f"{_I3R_UNIT}::test_a_nics_rules_on_the_quarantine_nsg_it_leaves_go_with_a_release_by_its_state",
+    "M3063": (f"{_I3R_UNIT}::test_a_nic_held_in_the_quarantine_keeps_its_rules_there "
+              f"{_I3R_UNIT}::test_a_nic_held_in_the_quarantine_by_its_state_keeps_its_rules_there"),
+    "M3064": f"{_I3R_UNIT}::test_a_bare_nics_rule_kept_on_the_quarantine_nsg_it_left_is_said_once",
+    "M3065": f"{_I3R_UNIT}::test_a_rule_turned_toward_a_vm_still_in_the_quarantine_stays_and_is_said",
+    "M3066": f"{_I3R_UNIT}::test_a_quarantine_nsg_left_that_cant_be_read_is_said",
+})
 
 # RM1 (#406): the releases in #roadmap's message — the last published (GitHub's releases/latest),
 # then ROADMAP.md's « Les prochaines releases »; `make release` sets its version's line to
@@ -8363,3 +8508,284 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+# SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's
+# contract an allow-list (V-29), no fallback on the former shared principal (V-17), the session
+# drain VM by VM (R-03). M2880–M2899.
+MUTANTS += [
+    ("M2880", "a scope that names no subscription admits a target in any subscription (SEC11, R-19)", INS,
+     "        if not self.subscription_id.strip():\n", "        if False:\n"),
+    ("M2881", "the bench's scope leaves its subscription empty: only the RBAC bounds it (SEC11, R-19)", INS,
+     '                   subscription_id=(os.environ.get(SUBSCRIPTION_ENV) or "").strip())\n', "                   )\n"),
+    ("M2882", "the console's plan judges with a scope that names no subscription (SEC11, R-19)",
+     "eregion_console/board.py", "scope=replace(Scope.for_bench(), sandbox=bench))", "scope=Scope(sandbox=bench))"),
+]
+TESTS.update({"M2880": "tests/unit/test_inscription.py", "M2881": "tests/unit/test_inscription.py",
+              "M2882": "tests/unit/test_console_dagorlad.py"})
+ORO = "eregion_core/orodruin.py"
+MUTANTS += [
+    ("M2883", "the contract refuses a list of writes and lets the rest through: Network Contributor arms (SEC11, V-29)",
+     ORO, '            unlisted = sorted(actions - allowed_at(scope, bench)) if actions else ["(role unreadable)"]\n',
+     "            unlisted = []\n"),
+    ("M2884", "a right effective on the group, from an assignment the listing hid, arms (SEC11, V-29)", ORO,
+     "    if extra:\n", "    if False:\n"),
+    ("M2885", "a role below a VM (an extension) holds the VM's writes (SEC11, V-29)", ORO,
+     'and rest[len(kind):] and "/" not in rest[len(kind):]:', "and rest[len(kind):]:"),
+    ("M2886", "a role the contract cannot read, inside the bench, arms (SEC11, V-29: an unknown right refuses)", ORO,
+     'if actions else ["(role unreadable)"]\n', "if actions else []\n"),
+    ("M2887", "a data action effective on the group arms (SEC11, V-29)", ORO,
+     '                   | {f"data:{x}" for p in perms for x in (p.get("dataActions") or [])})\n',
+     "                   )\n"),
+]
+TESTS.update({mid: "tests/unit/test_orodruin.py" for mid in ("M2883", "M2884", "M2885", "M2886", "M2887")})
+# SEC11, after its 5.5 review: Log Analytics Reader's data action (M3030); the session drain to
+# a list of the VMs Glorfindel defends (M3031–M3035); the watch's word without a principal (M3036).
+MUTANTS += [
+    ("M3030", "the allow-list misses Log Analytics Reader's data action: Orodruin passive on what main.tf gives (SEC11, V-29)",
+     ORO, '             LOGS_READER_ACTIONS + tuple(f"data:{a}" for a in LOGS_READER_DATA_ACTIONS)))',
+     "             LOGS_READER_ACTIONS))"),
+]
+TESTS["M3030"] = "tests/unit/test_orodruin.py"
+MUTANTS += [
+    ("M3031", "the session drain's VMs not read on Azure: a typo planned as a VM (SEC11, R-03, review)", "infra/glorfindel-host/main.tf",
+     "  for_each             = data.azurerm_virtual_machine.session_drain\n",
+     "  for_each             = toset(var.session_drain_vms)\n"),
+    ("M3032", "bree, the VM of the bench that meets real attacks, out of the list: no drain there (SEC11, R-03, review)",
+     "infra/glorfindel-host/session_drain.auto.tfvars",
+     'session_drain_vms = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]', 'session_drain_vms = ["vm-celebrimbor-gondolin"]'),
+    ("M3033", "the list of the drain ignored by git: an ordinary apply takes it off (SEC11, R-03, review)", ".gitignore",
+     "!infra/glorfindel-host/session_drain.auto.tfvars\n", ""),
+    ("M3034", "the card says the drain goes to the enrolled VMs, not to those Glorfindel defends (SEC11, R-03, review)", ISO,
+     '"que Glorfindel défend : session_drain_vms) — "', '"inscrites) — "'),
+    ("M3035", "the readiness names no list where the drain is given (SEC11, R-03, review)", "glorfindel/readiness.py",
+     '"session_drain_vms sur H0 —, jamais sur le groupe', '"jamais sur le groupe'),
+    ("M3036", "a container on a workstation said to fall back on the machine's az login (SEC11, V-17, review)", GCLI,
+     "    if in_container:\n", "    if False:\n"),
+]
+TESTS.update({"M3031": "tests/unit/test_glorfindel_host.py", "M3032": "tests/unit/test_glorfindel_host.py",
+              "M3033": "tests/unit/test_glorfindel_host.py", "M3034": "tests/unit/test_glorfindel.py -k drain",
+              "M3035": "tests/unit/test_readiness.py", "M3036": "tests/unit/test_azure_roles.py"})
+MUTANTS += [
+    ("M2888", "the watch falls back on the former shared principal (SEC11, V-17)", "docker-compose.yml",
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",
+     "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-${AZURE_CLIENT_SECRET:-}}\n"),
+    ("M2889", "the console, which restores, falls back on the former shared principal (SEC11, V-17)",
+     "docker-compose.yml", "  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-}\n",
+     "  AZURE_CLIENT_ID: ${EREGION_CONSOLE_AZURE_CLIENT_ID:-${AZURE_CLIENT_ID:-}}\n"),
+    ("M2890", "`make glorfindel-*` hands its container the former shared principal (SEC11, V-17)", MAKE,
+     '\tAZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-}"\n',
+     '\tAZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"\n'),
+    ("M2891", "a service started without a service principal, unsaid (SEC11, V-17)", MAKE,
+     '\t  elif [ -z "$$id" ]; then echo', "\t  elif false; then echo"),
+]
+TESTS.update({"M2888": "tests/unit/test_azure_roles.py", "M2889": "tests/unit/test_azure_roles.py",
+              "M2890": "tests/unit/test_makefile_secrets.py", "M2891": "tests/unit/test_azure_roles.py"})
+HTF = "infra/glorfindel-host/main.tf"
+MUTANTS += [
+    ("M2892", "the response's role, given on whole groups, holds Run Command again (SEC11, R-03)",
+     "infra/identities/glorfindel-response.json",
+     '    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",\n',
+     '    "Microsoft.Network/loadBalancers/inboundNatRules/join/action",\n'
+     '    "Microsoft.Compute/virtualMachines/runCommand/action",\n'),
+    ("M2893", "the session drain read on the group: a right given on the VM read as missing (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     '        need(_vm_scope(rg, vm_name), "isolate_vm",', '        need(rg, "isolate_vm",'),
+    ("M2894", "Run Command held on the whole group, unsaid (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     '        "Microsoft.Compute/virtualMachines/runCommand/action",\n    )\n', "    )\n"),
+    ("M2895", "the group no longer read when the VM needs nothing there: what goes beyond, unsaid (SEC11, R-03)", "glorfindel/providers/azure/readers.py",
+     "            scopes.setdefault(rg.lower(), (rg, set()))   # the group itself, for what goes beyond\n", ""),
+    ("M2896", "a drain refused on a VM without the role, said as any failure (SEC11, R-03)", ISO,
+     "            if _is_iam_error(str(e)):\n", "            if False:\n"),
+    ("M2897", "the audit fails a VM without the session drain, which is still isolated (SEC11, R-03)",
+     "glorfindel/audit.py", '    if drain and {m["action"] for m in missing} <= drain:\n', "    if False:\n"),
+    ("M2898", "H0's session drain assigned on the whole bench group (SEC11, R-03)", HTF,
+     '  scope                = each.value.id\n  role_definition_name = "Eregion Glorfindel Session Drain"',
+     '  scope                = data.azurerm_resource_group.bench.id\n  role_definition_name = "Eregion Glorfindel Session Drain"'),
+    ("M2899", "the module drains by default, without the list kept in the repository (SEC11, R-03)",
+     "infra/glorfindel-host/variables.tf", "  default     = []\n",
+     '  default     = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]\n'),
+]
+TESTS.update({
+    "M2892": "tests/unit/test_azure_roles.py",
+    "M2893": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2894": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2895": "tests/unit/test_glorfindel.py -k check_permissions",
+    "M2896": "tests/unit/test_glorfindel.py -k drain",
+    "M2897": "tests/unit/test_glorfindel.py -k audit_reports",
+    "M2898": "tests/unit/test_glorfindel_host.py",
+    "M2899": "tests/unit/test_glorfindel_host.py",
+})
+
+
+# SEC14 (#420, R-10): « one run at a time » has one lock, taken by every command that acts — a
+# wire under the hold its request hands down, a clean, a campaign whatever its --runs-dir.
+_R10 = "tests/unit/test_exercise_runner.py"
+
+
+MUTANTS += [
+    ("M2940", "a wire launched by hand during a request takes no lock (R-10)", "annatar/cli.py",
+     '        with request_lock(f"wire {request}"), \\\n', "        with contextlib.nullcontext(), \\\n"),
+    ("M2941", "a clean during a request takes no lock (R-10)", "annatar/cli.py",
+     '        with request_lock(f"clean {os.path.basename(scenario)}"):\n',
+     "        with contextlib.nullcontext():\n"),
+    ("M2942", "the runner hands its lock down to no wire (R-10)", "eregion_core/exercise_runner.py",
+     "pass_fds=(int(fd),) if fd.isdigit() else ()", "pass_fds=()"),
+    ("M2943", "any descriptor named in the environment is taken for the request's hold (R-10)",
+     "eregion_core/exercise_runner.py",
+     "    return fd if (held.st_dev, held.st_ino) == (here.st_dev, here.st_ino) else None\n",
+     "    return fd\n"),
+    ("M2944", "a wire's hold writes its own name over the request's, and erases it at its exit (R-10)",
+     "eregion_core/exercise_runner.py",
+     "        if inherited is not None:\n            yield fd ", "        if False:\n            yield fd "),
+    ("M2945", "the runner names no lock to its wires (R-10)", "eregion_core/exercise_runner.py",
+     ",\n                   LOCK_FD_ENV: str(lock_fd)}", "}"),
+]
+
+
+TESTS.update({"M2940": "tests/unit/test_annatar_wire.py", "M2941": "tests/unit/test_annatar_run_exit.py",
+              "M2942": _R10, "M2943": _R10, "M2944": _R10, "M2945": _R10})
+
+
+# SEC14 (#420, R-11): a Dagorlad request plays once on Orodruin, while it is fresh; the names typed
+# do not stay there.
+MUTANTS += [
+    ("M2946", "a request played already plays again (R-11)", "eregion_core/exercise_runner.py",
+     '                        if json.loads(line).get("request") == req.id:\n',
+     "                        if False:\n"),
+    ("M2947", "a request is never written to the registry of the requests played (R-11)",
+     "eregion_core/exercise_runner.py", "                self._played(req)\n", "                pass\n"),
+    ("M2948", "a registry of the requests played that cannot be read plays on (R-11)",
+     "eregion_core/exercise_runner.py",
+     '            return "replayed", f"the registry of the requests played cannot be read',
+     '            e, f"the registry of the requests played cannot be read'),
+    ("M2949", "a request carried days after it was written still runs (R-11)",
+     "eregion_core/exercise_runner.py", "        if age > MAX_AGE_S:\n", "        if False:\n"),
+    ("M2950", "a request dated ahead of Orodruin's clock runs (R-11)", "eregion_core/exercise_runner.py",
+     "        if age < -FUTURE_SKEW_S:\n", "        if False:\n"),
+    ("M2951", "the names typed stay on Orodruin after the request (R-11)", MAKE,
+     "\"trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; \"", '""'),
+    ("M2952", "the runner leaves the names typed where it could remove them (R-11)",
+     "eregion_core/exercise_runner.py", "            typed_path.unlink()\n", "            pass\n"),
+]
+
+
+TESTS.update({mid: _R10 for mid in ("M2946", "M2947", "M2948", "M2949", "M2950", "M2952")})
+
+
+TESTS["M2951"] = "tests/unit/test_makefile_exercise.py"
+
+
+# SEC14 (#420, V-32, V-34): Orodruin's host key pinned, never accept-new; its containers hardened.
+MUTANTS += [
+    ("M2953", "Orodruin without its host key's fingerprint falls back to accept-new (V-32)", MAKE,
+     ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT required\n', ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT\n'),
+    ("M2954", "an injector's container on Orodruin runs with its root writable and its capabilities (V-34)",
+     MAKE, "ORO_RUN        = docker run --rm $(ORO_HARDEN) ", "ORO_RUN        = docker run --rm "),
+]
+
+
+TESTS.update({"M2953": "tests/unit/test_host_ssh.py", "M2954": "tests/unit/test_host_ssh.py"})
+
+
+# SEC14 (#420, V-22): the path that builds on H0 builds only a REF the operator names.
+MUTANTS += [
+    ("M2955", "a deployment by hand without REF builds the latest tag it finds on H0 (V-22)",
+     "infra/glorfindel-host/deploy.sh", '  [ -n "$want" ] || die "REF exigée',
+     """  [ -n "$want" ] || want=$(git tag -l 'v*' --sort=-v:refname | head -1); true || die "REF exigée"""),
+]
+
+
+TESTS["M2955"] = "tests/unit/test_host_deploy.py"
+
+
+# SEC14 (#420, V-21): what one pull reads in all is bounded, its listing pages and its blobs.
+MUTANTS += [
+    ("M2956", "a pull of the windows reads without a cumulated bound, each read bounded alone (V-21)",
+     "eregion_core/exercise_channel.py",
+     "        _pull_windows(directory, url, headers, get, say, Budget(), written, seen)\n",
+     "        _pull_windows(directory, url, headers, get, say, None, written, seen)\n"),
+]
+
+
+TESTS["M2956"] = "tests/unit/test_injector_channels.py"
+
+
+# SEC14 (#420, V-20): a window written on the watch's host, bounded by what the watch saw of it.
+MUTANTS += [
+    ("M2957", "a local window dated back when the watch first saw it is believed (V-20)",
+     "eregion_core/exercise.py", "    if start < seen - timedelta(seconds=FUTURE_SKEW_S):\n",
+     "    if False:\n"),
+]
+
+
+TESTS["M2957"] = "tests/unit/test_exercise.py"
+
+
+# SEC14 (#420, V-19): the catalog vouches for a local script's content, not its path.
+MUTANTS += [
+    ("M2958", "a local script changed under its path is still what the catalog vouched for (V-19)",
+     "annatar/campaign/catalog.py",
+     "        if any(s not in known or not _pinned(entry, s) for s in scripts):\n",
+     "        if any(s not in known for s in scripts):\n"),
+]
+
+
+TESTS["M2958"] = "tests/unit/test_injector_guards.py"
+
+
+# SEC14 (#420, P-03): an advisory with a fix that no human accepted makes a push or a pull request red.
+MUTANTS += [
+    ("M2959", "an advisory with a fix that no one accepted lets a pull request through (P-03)",
+     "scripts/pip_audit_issues.py",
+     "    due = [a for a in advs if a.fixes and not acceptance(a, accepted)]\n", "    due = []\n"),
+]
+
+
+TESTS["M2959"] = "tests/unit/test_pip_audit_issues.py"
+
+
+# SEC14 after its review (M3075–M3084): a window is « pulled » only when the pull wrote it down; the
+# record under one flock; the CI's audit never red on a push; the script's pin by a normal path;
+# annatar init under the lock.
+MUTANTS += [
+    ("M3075", "a channel_created the window's file carries alone is believed (V-20, review)",
+     "eregion_core/exercise.py",
+     '                entry = seen[rid] = {"seen": now.isoformat(), "fields": _fields(w), "end": w.get("end")}\n',
+     '                entry = seen[rid] = {"seen": w.get(CHANNEL_CREATED) or now.isoformat(), '
+     '"fields": _fields(w), "end": w.get("end")}\n'),
+    ("M3076", "the pull writes nothing down: a window it brought is held as local (V-20, review)",
+     "eregion_core/exercise_channel.py", "            note_pulled(seen, json.loads(stamped))\n",
+     "            pass\n"),
+    ("M3077", "the watch's record is changed without its flock: two processes lose each other's (V-20, review)",
+     "eregion_core/exercise.py", "        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)\n", "        pass\n"),
+]
+
+
+TESTS.update({"M3075": "tests/unit/test_exercise.py", "M3076": "tests/unit/test_exercise.py",
+              "M3077": "tests/unit/test_exercise.py"})
+
+
+MUTANTS += [
+    ("M3078", "a pinned script named ./scripts/… or by its absolute path escapes its pin (V-19, review)",
+     "annatar/campaign/catalog.py", "            if isinstance(pin, str) and _relative(str(path)) == want:\n",
+     "            if isinstance(pin, str) and str(path) == script:\n"),
+    ("M3079", "annatar init cleans a disk during a request: no lock (R-10, review)", "annatar/cli.py",
+     """        with request_lock(f"init {os.path.basename(scenario or '')}".strip()):\n""",
+     "        with contextlib.nullcontext():\n"),
+]
+
+
+TESTS.update({"M3078": "tests/unit/test_injector_guards.py", "M3079": "tests/unit/test_annatar_run_exit.py"})
+
+
+# SEC14, second review: a copy the record never noted is pulled once again, then written down.
+MUTANTS += [
+    ("M3080", "a window open across the upgrade, never written down, is never pulled again: held as local (V-20)",
+     "eregion_core/exercise_channel.py",
+     '        unnoted = noted is not None and local.exists() and name[:-len(".json")] not in noted\n',
+     "        unnoted = False\n"),
+    ("M3081", "a copy pulled again keeps the channel_created it carried on disk (V-20)",
+     "eregion_core/exercise_channel.py", "        stamped = _stamped(body, blob, None if unnoted else local)\n",
+     "        stamped = _stamped(body, blob, local)\n"),
+]
+
+
+TESTS.update({"M3080": "tests/unit/test_exercise.py", "M3081": "tests/unit/test_exercise.py"})

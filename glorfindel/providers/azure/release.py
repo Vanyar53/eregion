@@ -264,7 +264,9 @@ class ReleaseMixin:
         # by a re-isolation. `released` used to mean "what the state listed is undone"
         # while a NIC stayed cut off (L24).
         known = self._known_nics(resource_id, state)
-        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id)
+        keep: dict = {}                      # the quarantine NSGs left unswept, for the retry (I3R)
+        failed += self._sweep_isolation(rg, vm_name, remaining, known, resource_id, left=self._quarantines_left(state),
+                                        keep=keep)
 
         if failed and _isolation_unreadable(resource_id):
             # Its state kept as it is: written over, what it held was gone, and the next
@@ -285,6 +287,7 @@ class ReleaseMixin:
                 # The NICs it named, kept for the retry: a deleted VM's are known from
                 # nowhere else once its placements are undone (I7S).
                 **({"known_nics": known} if known else {}),
+                **({"quarantines_left": keep} if keep else {}),
             })
             return {"status": "release_partial", "resource_id": resource_id, "failed": failed}
 
@@ -396,7 +399,8 @@ class ReleaseMixin:
         return failed
 
     def _sweep_isolation(self, rg: str, vm_name: str, remaining: list[dict],
-                         known_nics: list[str] = (), resource_id: str = "", guard: dict | None = None) -> list[str]:
+                         known_nics: list[str] = (), resource_id: str = "", guard: dict | None = None,
+                         left: dict | None = None, keep: dict | None = None) -> list[str]:
         """Remove every isolation of this VM still on Azure: our quarantine NSG on its
         NICs (original from the state, else from our tag), and on each NSG that governs
         a NIC, the rules of THAT NIC — named for it and applying to its addresses, so a
@@ -417,6 +421,7 @@ class ReleaseMixin:
                         + self._gone_vm_rules(resource_id, vm_name, list(known_nics), stuck))
             return [f"cartes de {vm_name} illisibles, levée non vérifiée : {_first_line(exc)[:_ERR_MAX]}"]
         held = {p["nic_id"].rstrip("/").lower() for p in remaining if p.get("kind") == "quarantine"}
+        left = dict(left or {})      # the quarantine NSGs the NICs leave (I3R)
         failed: list[str] = []
         cache: dict = {}
         restored = False
@@ -430,6 +435,7 @@ class ReleaseMixin:
                     elif original is None:
                         original = self._tag_over_none(q, t0["nic_id"])
                     self._unquarantine(t0["nic_id"], q, original)
+                    left[t0["nic_id"].rstrip("/").lower()] = (q["nsg_rg"], q["nsg_name"])
                     restored = True
                 except Exception as exc:
                     failed.append(f'{t0["nic_short"]}: NSG de quarantaine non retiré : '
@@ -484,4 +490,6 @@ class ReleaseMixin:
                     if err:
                         failed.append(err)
                 failed += [f"{u} : laissée" for u in self._unattributable_fixed(t, rules)]
+        failed += self._left_quarantine_rules(vm_name, targets, left, guard, mates, own_ips, cache, stuck,
+                                              {} if keep is None else keep)
         return failed + self._away_rules(vm_name, targets, stuck, guard, mates)   # a bare NIC's (D80)

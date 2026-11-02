@@ -336,6 +336,8 @@ def test_read_identity_reads_the_data_actions_of_the_role(monkeypatch, data_acti
             r.json.return_value = {"value": RIGHTS}
         elif url.endswith(("/defs/vm-act", "/defs/chaos-act")):
             r.json.return_value = {"properties": {"permissions": [{"actions": ACT[url.rsplit("/", 1)[1]]}]}}
+        elif url.endswith("/defs/injector"):   # the reads on the group (SEC11: nothing else there)
+            r.json.return_value = {"properties": {"permissions": [{"actions": BENCH_READ}]}}
         else:
             r.json.return_value = {"properties": {"permissions": [{
                 "actions": READER[:2], "dataActions": data_actions}]}}

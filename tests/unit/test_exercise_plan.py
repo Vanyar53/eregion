@@ -13,7 +13,7 @@ from eregion_core.orodruin import CEILING_INJECTIONS, CEILING_RUN_S
 RG = "/subscriptions/s/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/"
 GONDOLIN, SENTINEL, BREE = RG + "vm-celebrimbor-gondolin", RG + "vm-sentinel", RG + "vm-celebrimbor-bree"
 ENROLLED = {"eregion-target": "celebrimbor"}
-SCOPE = Scope(sandbox="celebrimbor")
+SCOPE = Scope(sandbox="celebrimbor", subscription_id="s")
 
 
 def _target(rid, zone="bench", **tags):

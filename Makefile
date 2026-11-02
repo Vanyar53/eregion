@@ -40,12 +40,14 @@ ANNATAR_AZURE_ENV := \
 	-e ANTHROPIC_API_KEY -e ANNATAR_LLM_MODEL -e EREGION_ANALYSIS_MODEL \
 	-e EREGION_ANALYSIS_TIMEOUT_S -e GLORFINDEL_LLM_MODEL
 
-# Glorfindel — GLORFINDEL_AZURE_CLIENT_* si définis, sinon fallback AZURE_CLIENT_*
-# Glorfindel peut tourner en Reader (GLORFINDEL_READ_ONLY=1 + SP Reader).
-# AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours partagés (même tenant).
+# Glorfindel — GLORFINDEL_AZURE_CLIENT_* seulement, comme la watch du compose : jamais
+# AZURE_CLIENT_* en repli (SEC11, V-17 — l'ancien principal partagé, là où il traîne encore) ;
+# vides, le conteneur n'a pas de principal de service. Glorfindel peut tourner en Reader
+# (GLORFINDEL_READ_ONLY=1 + SP Reader). AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours
+# partagés (même tenant).
 GLORFINDEL_AZURE_PICK = \
-	AZURE_CLIENT_ID="$${GLORFINDEL_AZURE_CLIENT_ID:-$${AZURE_CLIENT_ID:-}}" \
-	AZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-$${AZURE_CLIENT_SECRET:-}}"
+	AZURE_CLIENT_ID="$${GLORFINDEL_AZURE_CLIENT_ID:-}" \
+	AZURE_CLIENT_SECRET="$${GLORFINDEL_AZURE_CLIENT_SECRET:-}"
 GLORFINDEL_AZURE_ENV := \
 	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID
 
@@ -112,11 +114,12 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
-	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-uninstall \
+	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-rollback glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
+	orodruin-known orodruin-fingerprint \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment fault-rate \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
@@ -200,7 +203,7 @@ help:
 	@echo "  make glorfindel-host-model MODEL=…           Changer le modèle qui décide (ou MODEL=default)"
 	@echo "  make celebrimbor-workload                    Charge de bree (site + routine d'admin)"
 	@echo "  make glorfindel-host-status                  Tout tourne ? VMs, sauvegardes, services, erreurs, cartes à juger"
-	@echo "  make glorfindel-host-start [REF=tag|commit]  Déploie une référence (défaut : dernier tag v*), jamais une branche"
+	@echo "  make glorfindel-host-start REF=tag|commit    Déploie une référence nommée (exigée), jamais une branche"
 	@echo "  make glorfindel-host-stop / -logs            Glorfindel + la console sur la VM"
 	@echo "  make glorfindel-host-tunnel                  Tunnel + URL de la console avec son jeton"
 	@echo "  make glorfindel-host-url                     L'URL de la console avec son jeton"
@@ -208,6 +211,7 @@ help:
 	@echo "  make glorfindel-host-cd-check                À blanc : vérifie, construit, préflight de la dernière release"
 	@echo "  make glorfindel-host-cd-enable / -disable    Le timer (toutes les 5 min) : une release publiée se déploie"
 	@echo "  make glorfindel-host-cd-status / -retry      Ce qui tourne, les derniers résultats / réessayer la release"
+	@echo "  make glorfindel-host-cd-rollback TAG=vX.Y.Z  Le retour arrière demandé sur H0 (SEC12) : une release publiée, plus ancienne"
 	@echo ""
 	@echo "Orodruin (O1) — hôte des injecteurs, état séparé (infra/orodruin/README.md) :"
 	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
@@ -216,6 +220,7 @@ help:
 	@echo "  make orodruin-push [REF=<tag|commit>]        Image d'Annatar publiée (digest vérifié ici) + orodruin.env"
 	@echo "  make orodruin-push-dev                       Développement : l'image construite ici, non vérifiée"
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
+	@echo "  make orodruin-fingerprint                    L'empreinte de sa clé d'hôte, lue par Azure (ORO_SSH_FINGERPRINT)"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
 	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, annule le chaos, désalloue, ferme les fenêtres"
 	@echo "  make orodruin-exercise REQUEST=<id> [DRY_RUN=1]  Dagorlad : tire la demande de la console, l'affiche, fait taper"
@@ -384,12 +389,15 @@ check-azure-env:
 	  echo "  or run with ALLOW_NO_AZURE=1 for a demo without Azure."; \
 	  exit 1; \
 	fi
-	@# SEC7 (V-17) : le compose tire chaque repli variable par variable — un …_CLIENT_ID sans son
-	@# …_SECRET (ou l'inverse) donnerait à ce service l'id d'un principal et le secret d'un autre.
-	@for p in GLORFINDEL EREGION_CONSOLE GLORFINDEL_BOT; do \
-	  id=$$([ -n "$$(printenv $${p}_AZURE_CLIENT_ID)" ] && echo 1); \
-	  se=$$([ -n "$$(printenv $${p}_AZURE_CLIENT_SECRET)" ] && echo 1); \
-	  [ "$$id" = "$$se" ] || echo "⚠ $${p}_AZURE_CLIENT_ID / $${p}_AZURE_CLIENT_SECRET : paire incomplète — ce service mélangerait deux principaux (docs/operations.md, « Identités Azure »)."; \
+	@# SEC7 (V-17) : un …_CLIENT_ID sans son …_SECRET (ou l'inverse) ne fait pas un principal.
+	@# SEC11 : plus aucun repli sur AZURE_CLIENT_* — un service sans sa paire démarre sans principal
+	@# de service (l'identité managée de la VM s'il y en a une, sinon aucune), et c'est dit ici.
+	@for p in GLORFINDEL:watch EREGION_CONSOLE:console GLORFINDEL_BOT:bot; do \
+	  v=$${p%%:*}; s=$${p#*:}; \
+	  id=$$([ -n "$$(printenv $${v}_AZURE_CLIENT_ID)" ] && echo 1); \
+	  se=$$([ -n "$$(printenv $${v}_AZURE_CLIENT_SECRET)" ] && echo 1); \
+	  if [ "$$id" != "$$se" ]; then echo "⚠ $${v}_AZURE_CLIENT_ID / $${v}_AZURE_CLIENT_SECRET : paire incomplète — ce service n'aurait pas de principal valide (docs/operations.md, « Identités Azure »)."; \
+	  elif [ -z "$$id" ]; then echo "ℹ $$s : aucune paire $${v}_AZURE_CLIENT_* — ce service démarre sans principal de service (l'identité managée de la VM s'il y en a une, sinon aucune) ; AZURE_CLIENT_* n'est jamais un repli (SEC11)."; fi; \
 	done
 
 glorfindel-start: check-azure-env build-glorfindel
@@ -610,14 +618,21 @@ HOST_TF       := terraform -chdir=infra/glorfindel-host
 HOST_USER     ?= glorfindel
 # Sans OPERATOR_CIDR, ton IP publique du moment, en /32 (seule source SSH autorisée).
 OPERATOR_CIDR ?= $(shell curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null)/32
+# La coupure des sessions de H0 (SEC11, R-03) : infra/glorfindel-host/session_drain.auto.tfvars,
+# que Terraform lit de lui-même à chaque plan — rien à passer ici.
 HOST_VARS      = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
 HOST_IP        = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
 # HOST_SSH_KEY : la clé privée qui va avec admin_ssh_public_key (terraform.tfvars), si ton agent
-# SSH ne la propose pas. SSH_OPTS (Orodruin) : accept-new, la clé d'hôte d'une VM neuve acceptée au
-# premier contact, un changement refusé.
+# SSH ne la propose pas.
 HOST_SSH_KEY  ?=
 SSH_KEY_OPTS   = $(if $(HOST_SSH_KEY),-i $(HOST_SSH_KEY) -o IdentitiesOnly=yes)
-SSH_OPTS       = -o StrictHostKeyChecking=accept-new $(SSH_KEY_OPTS)
+# V-32 (SEC14) : SSH_OPTS, ceux d'Orodruin — sa clé d'hôte épinglée comme celle de H0, jamais
+# accept-new. ORO_SSH_FINGERPRINT (SHA256:…, dans ton environnement, jamais dans le dépôt : lue
+# sur la VM par Azure, make orodruin-fingerprint) ; orodruin-known écrit ORO_KNOWN_HOSTS à partir
+# d'elle, et chaque commande vers Orodruin n'accepte que ce fichier. Sans elle, rien ne part.
+ORO_SSH_FINGERPRINT ?=
+ORO_KNOWN_HOSTS ?= $(HOME)/.eregion/orodruin_known_hosts
+SSH_OPTS       = -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$(ORO_KNOWN_HOSTS) -o HostKeyAlgorithms=ssh-ed25519 $(SSH_KEY_OPTS)
 # V-32 (SEC7) : la clé d'hôte de H0, épinglée par son empreinte. HOST_SSH_FINGERPRINT (SHA256:…,
 # dans ton environnement, jamais dans le dépôt : relevée sur la VM, infra/glorfindel-host/README.md,
 # « SSH ») ; glorfindel-host-known écrit HOST_KNOWN_HOSTS à partir d'elle, et chaque commande vers H0
@@ -686,9 +701,11 @@ glorfindel-host-push: glorfindel-host-known
 	 rc=$$?; rm -f $$cfg $$h0 $$h1; exit $$rc
 	@echo "  host.env et glorfindel-config.yaml poussés sur $(HOST_IP)"
 
-# M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, par défaut le
-# dernier tag v*. Checkout détaché, image étiquetée avec la référence (deploy.sh, envoyé par
-# ssh : celui du poste, quelle que soit la référence déployée).
+# M-3 (#183) : une référence nommée, jamais une branche — REF=<tag ou commit>, exigée (SEC14,
+# V-22 : ce chemin construit sur H0, hors de la vérification de CI3 — le chemin de secours ; il ne
+# construit que ce que l'opérateur nomme, jamais « le dernier tag »). Le CD de H0 ne construit
+# jamais : il tire l'image publiée, vérifiée. Checkout détaché, image étiquetée avec la référence
+# (deploy.sh, envoyé par ssh : celui du poste, quelle que soit la référence déployée).
 # REF se donne sur la ligne de commande : une variable REF de l'environnement (un nom
 # générique, posé pour autre chose) est refusée, jamais déployée en silence. Le shell la lit
 # dans son environnement (EREGION_DEPLOY_REF), jamais recopiée dans la commande avant d'être
@@ -699,7 +716,8 @@ unexport REF
 glorfindel-host-start: export EREGION_DEPLOY_REF = $(value REF)
 glorfindel-host-start: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
-	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est déployé. La donner sur la ligne de commande : make glorfindel-host-start REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
+	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est déployé. La donner sur la ligne de commande : make glorfindel-host-start REF=<tag ou commit>." >&2; exit 1;; esac
+	@test -n "$$EREGION_DEPLOY_REF" || { echo "REF exigée : make glorfindel-host-start REF=<tag ou commit> — ce chemin construit sur H0, il ne prend jamais « le dernier tag » (le CD déploie la release publiée, vérifiée). Rien n'est déployé." >&2; exit 1; }
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
 	$(HOST_SSH) 'test -f .eregion-host-ready && mkdir -p .eregion/analysis .eregion/console/requests && cd eregion && bash -s -- '"$$EREGION_DEPLOY_REF" < infra/glorfindel-host/deploy.sh
 	@echo ""
@@ -826,6 +844,13 @@ glorfindel-host-cd-status: glorfindel-host-known
 glorfindel-host-cd-retry: glorfindel-host-known
 	$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py retry'
 
+# SEC12 : le seul chemin par lequel le CD déploie une release plus ancienne que ce qui tourne —
+# demandé sur H0, pour ce tag, vérifié comme toute release ; celle qu'il quitte n'est plus reprise
+# seule (une nouvelle release, ou -cd-retry). TAG : vX.Y.Z vérifié ici, puis par l'agent (TAG_RE).
+glorfindel-host-cd-rollback: glorfindel-host-known
+	@printf '%s' "$(TAG)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "TAG=vX.Y.Z attendu"; exit 2; }
+	$(HOST_SSH) 'python3 .eregion-cd/eregion_cd.py rollback $(TAG)'
+
 glorfindel-host-cd-uninstall: glorfindel-host-known
 	$(HOST_SSH_TTY) 'sudo bash .eregion-cd/install.sh --remove'
 
@@ -848,8 +873,11 @@ ORO_IP         = $(shell $(ORO_TF) output -no-color -raw public_ip 2>/dev/null |
 ORO_SSH        = ssh $(SSH_OPTS) $(ORO_USER)@$(ORO_IP)
 ORO_IMAGE     := eregion-annatar:orodruin
 # Le conteneur prend l'identité de la VM (aucun secret Azure) ; orodruin.env porte
-# l'abonnement, le plafond et la clé du modèle.
-ORO_RUN        = docker run --rm --env-file orodruin.env -v $$HOME/runs:/app/runs $(ORO_IMAGE)
+# l'abonnement, le plafond et la clé du modèle. V-34 (SEC14) : durci comme le compose — la racine
+# en lecture seule, /tmp en tmpfs, aucune capacité, aucun gain de privilège ; il n'écrit que dans
+# ~/runs. Tout docker run d'un injecteur sur Orodruin passe par ORO_HARDEN.
+ORO_HARDEN     = --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true
+ORO_RUN        = docker run --rm $(ORO_HARDEN) --env-file orodruin.env -v $$HOME/runs:/app/runs $(ORO_IMAGE)
 # PRINCIPAL / VM_ID : pour un kill même si l'état Terraform est illisible.
 ORO_PRINCIPAL  = $(or $(PRINCIPAL),$(shell $(ORO_TF) output -no-color -raw principal_id 2>/dev/null))
 ORO_VM_ID      = $(or $(VM_ID),$(shell $(ORO_TF) output -no-color -raw vm_id 2>/dev/null))
@@ -862,6 +890,22 @@ ORO_CHANNEL    = $(or $(CHANNEL),$(shell $(ORO_TF) output -no-color -raw channel
 
 orodruin-init:
 	$(ORO_TF) init
+
+# V-32 (SEC14) : avant chaque commande vers Orodruin — sa clé d'hôte vérifiée par
+# ORO_SSH_FINGERPRINT, ou rien ne part (infra/glorfindel-host/known_host.sh, « required »).
+orodruin-known:
+	@ORO_SSH_FINGERPRINT="$(ORO_SSH_FINGERPRINT)" bash infra/glorfindel-host/known_host.sh "$(ORO_IP)" "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT required
+
+# L'empreinte de la clé d'hôte d'Orodruin, lue sur la VM par le plan de contrôle d'Azure (ton az
+# login, Run Command) — jamais par SSH, qu'elle sert à vérifier. Une fois par VM (reconstruite :
+# une autre clé, relire, poser, retirer ORO_KNOWN_HOSTS) ; à poser dans ton environnement.
+orodruin-fingerprint:
+	@test -n "$(ORO_VM_ID)" || { echo "✗ Pas d'Orodruin (vm_id) : make orodruin-up, ou VM_ID=" >&2; exit 1; }
+	@out=$$(az vm run-command invoke --ids "$(ORO_VM_ID)" --command-id RunShellScript \
+	   --scripts 'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub' --query 'value[0].message' -o tsv) || exit 1; \
+	 fp=$$(printf '%s\n' "$$out" | sed -n -E 's/^256 (SHA256:[A-Za-z0-9+\/]{43}) .*\(ED25519\)$$/\1/p' | head -1); \
+	 test -n "$$fp" || { echo "✗ pas d'empreinte ED25519 dans la réponse de la VM : rien à poser" >&2; exit 1; }; \
+	 echo "export ORO_SSH_FINGERPRINT=$$fp"
 
 # SEC7 (relecture de SEC5) : sans l'état de glorfindel-host lisible sur ce poste, l'identité et le
 # sous-réseau de H0 seraient vides, et le plan retirerait la lecture du canal par la watch et
@@ -896,7 +940,7 @@ orodruin-lock: orodruin-init orodruin-watch-guard
 # sur la ligne de commande, comme pour glorfindel-host-start. UID 1000 = l'utilisateur de la VM.
 ORO_INCOMING  := eregion-annatar:incoming
 orodruin-push: export EREGION_DEPLOY_REF = $(value REF)
-orodruin-push:
+orodruin-push: orodruin-known
 	@test -f infra/orodruin/orodruin.env || { echo "!! infra/orodruin/orodruin.env manquant (copier orodruin.env.example)"; exit 1; }
 	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est envoyé. La donner sur la ligne de commande : make orodruin-push REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
@@ -920,7 +964,7 @@ orodruin-push:
 
 # Le chemin de développement, dit comme tel : l'image construite sur ce poste, jamais vérifiée —
 # pour essayer une branche sur Orodruin avant sa fusion. ~/.eregion-image le dit (« dev »).
-orodruin-push-dev:
+orodruin-push-dev: orodruin-known
 	@test -f infra/orodruin/orodruin.env || { echo "!! infra/orodruin/orodruin.env manquant (copier orodruin.env.example)"; exit 1; }
 	@echo "  ⚠ image construite ici, NON vérifiée (développement) — make orodruin-push pour l'image publiée"
 	docker build -f annatar/Dockerfile --build-arg UID=1000 --build-arg GID=1000 -t $(ORO_IMAGE) .
@@ -928,7 +972,7 @@ orodruin-push-dev:
 	echo "dev $$(git rev-parse HEAD)" | $(ORO_SSH) 'cat > .eregion-image'
 	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
 
-orodruin-check:
+orodruin-check: orodruin-known
 	$(ORO_SSH) '$(ORO_RUN) python -m eregion_core.orodruin'
 
 # @ : la commande porte l'identifiant d'abonnement, on ne la répète pas à l'écran.
@@ -948,23 +992,26 @@ orodruin-kill:
 # La console écrit la demande dans son propre répertoire (~/.eregion/console/requests/, sur H0) ;
 # elle ne parle jamais à Orodruin, et H0 n'a aucun droit ni canal de plus. Depuis ce poste :
 #   1. la tirer de l'hôte de la console : H0 par SSH, clé d'hôte vérifiée par son empreinte
-#      (glorfindel-host-known ; HOST_SSH_FINGERPRINT exigée ici, jamais accept-new) ;
+#      (glorfindel-host-known ; HOST_SSH_FINGERPRINT exigée ici, jamais accept-new) ; Orodruin
+#      de même (orodruin-known, ORO_SSH_FINGERPRINT exigée : V-32, SEC14) ;
 #      REQUEST_FROM=local : la console de ce poste (make glorfindel-start) ;
 #   2. l'afficher fil par fil et faire taper ICI le nom de la cible de chaque fil destructif, ou
 #      dont personne n'a dit qu'il ne l'est pas (A0) — un autre nom, ou « non » : rien n'est envoyé ;
 #   3. la copier sur Orodruin avec les noms tapés (comme orodruin-push), et l'y lancer : Orodruin
 #      la rejuge (contrat armé, watch vivante, inscription et zone relues, nom tapé comparé à celui
 #      qu'il lit, plafond sur la demande entière) et lance ses fils l'un après l'autre
-#      (eregion_core/exercise_runner.py). « Stop all » : make orodruin-kill.
+#      (eregion_core/exercise_runner.py). « Stop all » : make orodruin-kill. Une demande ne se joue
+#      qu'une fois (son identifiant inscrit avant d'être jugée) et tant qu'elle est fraîche (6 h) ;
+#      les noms tapés sont retirés d'Orodruin à la fin du lancement, quelle qu'elle soit (R-11).
 # DRY_RUN=1 : 1 et 2, puis ce que 3 ferait, affiché — rien n'est envoyé ni lancé.
 # REQUEST se donne sur la ligne de commande et doit être un identifiant de demande (r-…), vérifié
 # avant toute commande ; il n'est jamais lu de l'environnement.
 REQUEST ?=
 unexport REQUEST
 REQUEST_FROM  ?= h0
-ORO_RUN_REQUEST = docker run --rm --env-file orodruin.env -v $$HOME/runs:/app/runs -v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)
+ORO_RUN_REQUEST = docker run --rm $(ORO_HARDEN) --env-file orodruin.env -v $$HOME/runs:/app/runs -v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)
 orodruin-exercise: export EREGION_REQUEST_ID = $(value REQUEST)
-orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known)
+orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known) $(if $(DRY_RUN),,orodruin-known)
 	@case "$(origin REQUEST)" in environment*) echo "REQUEST vient de l'environnement : rien n'est fait. La donner sur la ligne de commande : make orodruin-exercise REQUEST=<id>." >&2; exit 1;; esac
 	@case "$(REQUEST_FROM)" in h0|local) ;; *) echo "REQUEST_FROM=h0 ou local, pas « $(REQUEST_FROM) »" >&2; exit 1;; esac
 	@if [ "$(REQUEST_FROM)" = h0 ] && [ -z "$(HOST_SSH_FINGERPRINT)" ]; then echo "✗ HOST_SSH_FINGERPRINT requis : la demande vient de H0, sa clé d'hôte doit être vérifiée par son empreinte (infra/glorfindel-host/README.md, « SSH ») — jamais accept-new pour ce qui fait agir Orodruin. Rien n'est fait." >&2; exit 1; fi
@@ -986,12 +1033,12 @@ orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known)
 	 test -n "$(ORO_IP)" || { echo "✗ Pas d'Orodruin (ORO_IP) : make orodruin-up" >&2; exit 1; }; \
 	 $(ORO_SSH) 'mkdir -p requests && chmod 700 requests' && \
 	 scp -q $(SSH_OPTS) "$$d/$$id.json" "$$d/$$id.typed.json" $(ORO_USER)@$(ORO_IP):requests/ && \
-	 ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN_REQUEST) python -m eregion_core.exercise_runner /app/requests/'"$$id"'.json'
+	 ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) "trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; "'$(ORO_RUN_REQUEST) python -m eregion_core.exercise_runner /app/requests/'"$$id"'.json'
 
 orodruin-down:
 	$(ORO_TF) destroy $(ORO_VARS)$(if $(YES), -auto-approve)
 
-orodruin-ssh:
+orodruin-ssh: orodruin-known
 	$(ORO_SSH)
 
 # ── Gothmog (G0) — une panne déclarée, lancée depuis Orodruin ─────────────────
@@ -1004,10 +1051,10 @@ FAULT ?= vm-shutdown
 # seulement — WITHOUT_GLORFINDEL=0 (ou toute autre valeur) n'y touche pas.
 ORO_WITHOUT    = $(if $(filter 1 yes true,$(WITHOUT_GLORFINDEL)), --without-glorfindel)
 
-gothmog-preflight:
+gothmog-preflight: orodruin-known
 	$(ORO_SSH) '$(ORO_RUN) gothmog preflight $(FAULT)$(ORO_WITHOUT)'
 
-gothmog-run:
+gothmog-run: orodruin-known
 	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'
 
 # ── Campagne (R1 + IA0) — planifier puis lancer depuis Orodruin ───────────────
@@ -1030,12 +1077,12 @@ CAMPAIGN_MAX ?= 5
 # pas à l'écran (même convention qu'orodruin-stop).
 # BL1 : CAMPAIGN_DECLARED=<fichier sous annatar/campaign/declared/> — exactement ses techniques,
 # vérifiées contre le catalogue (docs/banc-bl1.md) ; sans lui, le planificateur.
-orodruin-campaign-plan:
+orodruin-campaign-plan: orodruin-known
 	@test -n "$(CAMPAIGN_TARGET)" || { echo "CAMPAIGN_TARGET=<resource_id de la VM inscrite> requis"; exit 1; }
 	@case "$(CAMPAIGN_DECLARED)" in *[!A-Za-z0-9._/-]*|*..*) echo "CAMPAIGN_DECLARED invalide : $(CAMPAIGN_DECLARED)"; exit 1;; esac
 	@echo "annatar campaign plan (Orodruin, max $(CAMPAIGN_MAX)$(if $(CAMPAIGN_DECLARED),$(BL1_COMMA) déclarée $(CAMPAIGN_DECLARED)))" && $(ORO_SSH) '$(ORO_RUN) annatar campaign plan --target "$(CAMPAIGN_TARGET)" --max-scenarios $(CAMPAIGN_MAX)$(if $(CAMPAIGN_DECLARED), --declared /app/$(CAMPAIGN_DECLARED))'
 
-orodruin-campaign-run:
+orodruin-campaign-run: orodruin-known
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
 	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) annatar campaign run $(CAMPAIGN) --yes$(ORO_WITHOUT)'
 
@@ -1173,7 +1220,8 @@ lock:
 	$(UV) pip compile pyproject.toml requirements/build.in --extra annatar \
 	  -c requirements/dev.txt $(LOCK_FLAGS) -o requirements/annatar.txt
 	$(UV) pip compile requirements/audit.in $(LOCK_FLAGS) -o requirements/audit.txt
-	-@$(MAKE) --no-print-directory audit
+	@echo "" && echo "Les avis connus des verrous écrits (make audit, à recopier dans la PR) :"
+	@$(MAKE) --no-print-directory audit || echo "⚠ make audit n'a pas pu lire les avis (réseau ? son venv ?) : le relancer avant la PR — make lock n'échoue pas pour autant." >&2
 
 # CI2 (#268) : les avis connus des trois verrous et de celui de pip-audit, tels qu'ils sont
 # (pip-audit --require-hashes --disable-pip : rien n'est résolu, seul le service des avis est
@@ -1183,10 +1231,12 @@ lock:
 AUDIT_VENV ?= .venv-audit
 PIP_AUDIT  ?= $(AUDIT_VENV)/bin/pip-audit
 LOCKS       = requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt requirements/audit.txt
+# R-20 (SEC14) : les avis acceptés, chacun avec sa raison — dits comme tels, jamais rouges.
+AUDIT_ACCEPTED = requirements/audit-accepted.json
 audit:
 	@[ -x "$(PIP_AUDIT)" ] || { python3 -m venv $(AUDIT_VENV) \
 	  && $(AUDIT_VENV)/bin/pip install -q --require-hashes -r requirements/audit.txt; }
-	@python3 scripts/pip_audit_issues.py report --pip-audit "$(PIP_AUDIT)" $(LOCKS)
+	@python3 scripts/pip_audit_issues.py report --pip-audit "$(PIP_AUDIT)" --accepted $(AUDIT_ACCEPTED) $(LOCKS)
 
 test:
 	$(PYTHON) -m pytest tests/ -v

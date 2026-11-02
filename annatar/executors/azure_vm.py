@@ -63,12 +63,18 @@ class AzureVMExecutor:
 
         Retries on Conflict (Run Command extension busy) with exponential backoff.
         """
+        with open(script_path, "rb") as f:
+            raw = f.read()
+        # SEC14 (V-19): a script the catalog pins is sent only as pinned — read once, its sha256
+        # checked, then that content sent (no second read): changed, nothing reaches the VM.
+        from annatar.campaign.catalog import script_digest, script_pin
+        pin = script_pin(script_path)
+        if pin is not None and script_digest(raw) != pin:
+            raise RuntimeError(f"{script_path}: its content is not the one the catalog pins "
+                               "(script_sha256) — nothing sent to the VM")
         self._before_call("run_script", script_path)
         self._ensure_vm_running()
-
-        with open(script_path) as f:
-            script_content = f.read()
-        return self._run_shell(script_content, script_path, params)
+        return self._run_shell(raw.decode("utf-8"), script_path, params)
 
     def run_command(self, command: str, label: str = "command",
                     params: list[str] | None = None) -> str:

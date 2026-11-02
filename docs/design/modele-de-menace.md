@@ -16,6 +16,7 @@ _SEC6 (#277), 28/10, sur la 0.4.3. Une page par frontière : qui y est de confia
 | [4. Le fournisseur du modèle](#4-le-fournisseur-du-modèle) | pour la confidentialité, le fournisseur choisi ; pour la décision, personne | extraits de journaux à l'aller, une proposition au retour |
 | [5. Les hôtes](#5-les-hôtes--h0-orodruin-le-banc) | l'opérateur, l'hôte (root) | identités Azure, actions sur le cloud, injecteurs |
 | [6. La CI et le CD](#6-la-ci-et-le-cd-github-release-tags) | le mainteneur, `main` protégée | code des PR, événements GitHub, secrets, releases vers H0 |
+| [7. Les sessions d'agents → `main` → le CD](#7-les-sessions-dagents--main--le-cd) | le mainteneur (tags `v*`, release, réglages) ; les sessions, pour le code qu'elles fusionnent | branches, PR, fusions, verdicts de relecture, releases en brouillon |
 
 ---
 
@@ -131,7 +132,7 @@ Trois canaux, à ne pas confondre :
 
 ## 5. Les hôtes : H0, Orodruin, le banc
 
-**H0** (le Glorfindel hébergé) — la watch qui répond, sur le banc seulement : identité managée `Reader` et « Eregion Glorfindel Response » sur le groupe du banc, `Log Analytics Reader` sur son workspace, rien d'autre ; `GLORFINDEL_READ_ONLY=0` ; gondolin et bree en `non_disruptive`, toute autre VM en `human_only` (décision de Jonathan, 31/10 ; bree le 01/11 — l'encadré ci-dessous). Entrée fermée, sauf pour l'opérateur ; la console n'écoute que sur la boucle locale de la VM. Aucun secret dans Terraform : les jetons dans `host.env`, copié à la main. Son CD ne fait que sortir ([`infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md)).
+**H0** (le Glorfindel hébergé) — la watch qui répond, sur le banc seulement : identité managée `Reader` et « Eregion Glorfindel Response » sur le groupe du banc, `Log Analytics Reader` sur son workspace, rien d'autre ; `GLORFINDEL_READ_ONLY=0` ; gondolin et bree en `non_disruptive`, toute autre VM en `human_only` (décision de Jonathan, 31/10 ; bree le 01/11 — l'encadré ci-dessous). Ce rôle, posé à la main, porte encore Run Command (la coupure des sessions) sur toute VM du banc ; après les gestes de SEC11, il ne le porte plus, et Terraform donne la coupure VM par VM aux seules VM que Glorfindel défend (`session_drain_vms` : gondolin, bree), jamais au groupe. Entrée fermée, sauf pour l'opérateur ; la console n'écoute que sur la boucle locale de la VM. Aucun secret dans Terraform : les jetons dans `host.env`, copié à la main. Son CD ne fait que sortir ([`infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md)).
 
 **Orodruin** (l'hôte des injecteurs) — un injecteur n'agit que depuis un Orodruin armé, dont le contrat est vérifié au démarrage ; ailleurs il reste passif. Chaque appel au cloud est journalisé avant d'être fait, sous un plafond ; un arrêt d'urgence en une commande ; sa sortie se referme après l'installation ; un état Terraform à part ([`docs/design/orodruin-contract.md`](orodruin-contract.md)). Et jamais sans Glorfindel : sans battement vivant de la watch, un injecteur refuse avant tout appel au cloud (V1).
 
@@ -139,14 +140,14 @@ Trois canaux, à ne pas confondre :
 
 | | Menace | Ce qui la tient |
 |---|---|---|
-| S | Un injecteur joué depuis un poste quelconque, sur une cible non inscrite | Contrat d'Orodruin armé/passif ; inscription et zone de chaque cible ; tout inconnu refusé (O0, O1) |
+| S | Un injecteur joué depuis un poste quelconque, sur une cible non inscrite | Contrat d'Orodruin armé/passif ; inscription et zone de chaque cible ; tout inconnu refusé (O0, O1) ; un périmètre nomme son abonnement, sinon il refuse toute cible — pas seulement borné par le RBAC (SEC11) |
 | T | Une attaque ou une panne sur une charge réelle | Règle de production codée (O0) ; un apply du banc montre son plan et demande confirmation, sauf `YES=1` (SEC6) |
 | R | Un appel au cloud sans trace | Orodruin l'écrit avant de le faire (O1), sur son disque puis dans le canal, hors de l'hôte (SEC5) |
-| E | L'identité d'Orodruin agit sur une VM du banc qui n'est pas inscrite | Elle ne lit que le groupe ; elle n'écrit que sur chaque VM inscrite et chaque expérience, et le contrat refuse une écriture sur le groupe entier (SEC5, #182) |
+| E | L'identité d'Orodruin agit sur une VM du banc qui n'est pas inscrite, ou tient plus que ce que les injecteurs demandent | Elle ne lit que le groupe ; elle n'écrit que sur chaque VM inscrite et chaque expérience, et le contrat refuse une écriture sur le groupe entier (SEC5, #182) ; ce qu'elle tient est une liste d'autorisations par portée, tout autre droit (un rôle réseau large, un joker, une action de données, un rôle illisible) la rend passive (SEC11) |
 | S | Un battement de watch qui ne parle pas des cibles, une fenêtre d'exercice antidatée | Le battement porte le périmètre de la watch, comparé à celui de l'injecteur et relu avant chaque action ; une fenêtre est bornée par la création de son blob, et ne marque une VM de production que pour une technique non destructive (SEC5) |
 | T | Une URL de canal mal réglée, un blob démesuré | Le jeton ne part que vers un point de terminaison Azure Storage ; un tirage lit en flux borné (taille, nombre), et dit ce qui dépasse (SEC5) |
 | I | Un secret de l'hôte fuit | Identités managées plutôt que des secrets ; `host.env` hors du dépôt ; le jeton du bot de l'atelier jamais sur H0 |
-| E | Une identité de Glorfindel qui peut tout sur l'abonnement | Un principal par service (watch, console, bot), chacun avec ce que son code appelle, sur les groupes inscrits : la réponse à la watch, le restore à la console et au bot seulement (deux rôles personnalisés, `infra/identities/`) ; jamais `Contributor` sur un abonnement, ni dans la doc, ni dans un script, ni dans ce que l'audit conseille ; le conteneur rouge ne prend jamais le principal partagé ; un principal de la watch qui tient le restore est dit (SEC7, testé). **Pas sur H0** : ses trois conteneurs partagent l'identité managée de la VM, qui tient la réponse sur le groupe du banc (l'encadré ci-dessous) |
+| E | Une identité de Glorfindel qui peut tout sur l'abonnement | Un principal par service (watch, console, bot), chacun avec ce que son code appelle, sur les groupes inscrits : la réponse à la watch, le restore à la console et au bot seulement, la coupure des sessions VM par VM aux seules VM que Glorfindel défend (trois rôles personnalisés, `infra/identities/`, SEC11) ; jamais `Contributor` sur un abonnement, ni dans la doc, ni dans un script, ni dans ce que l'audit conseille ; le conteneur rouge ne prend jamais le principal partagé ; un principal de la watch qui tient le restore est dit (SEC7, testé) ; aucun conteneur ne se replie sur l'ancien principal partagé : un service sans sa paire démarre sans principal de service, et le dit (SEC11, testé). **Pas sur H0** : ses trois conteneurs partagent l'identité managée de la VM, qui tient la réponse sur le groupe du banc — et, après les gestes de SEC11, la coupure sur les seules VM de `session_drain_vms` (l'encadré ci-dessous) |
 | S | Un autre hôte répond à l'adresse de H0 | Sa clé d'hôte épinglée par son empreinte, relevée sur la VM, dans l'environnement de l'opérateur : une autre clé refuse avant toute commande ; sans l'empreinte, la première clé acceptée, et c'est dit (SEC7) |
 | E | Un processus qui prend un conteneur (une dépendance, une ligne forgée) | Aucune capacité, aucun gain de privilège, la racine en lecture seule : il n'écrit sur l'hôte que dans ses montages (SEC7, testé). **Sur H0**, il tient aussi le jeton de l'identité managée, donc le rôle de la réponse sur le groupe du banc : l'encadré ci-dessous dit ce que ça ouvre |
 | T | Un plan d'Orodruin, sur un poste sans l'état de H0, retire à la watch hébergée l'accès au canal | Refusé, sauf `NO_WATCH=1` dit (SEC7) |
@@ -164,22 +165,30 @@ Le 30/10, l'exception de BL1 ne valait que le temps de la session de banc
 ([`docs/banc-bl1.md`](../banc-bl1.md)). Le 31/10, Jonathan l'a gardée : c'est la posture de H0 sur
 le banc. H0 répond, il ne fait plus seulement qu'observer.
 
-Depuis le 02/11 (décision de Jonathan, #409), H0 garde ce rôle sur le banc, `runCommand` compris :
+Depuis le 02/11 (décision de Jonathan, #409), H0 garde `runCommand` sur le banc — aujourd'hui dans ce rôle ; après les gestes de SEC11, par
+« Eregion Glorfindel Session Drain », sur les seules VM de `session_drain_vms` (gondolin, bree) :
 un NSG ne coupe pas une connexion établie, retirer le droit affaiblirait l'isolation. Sa mitigation est
 la surveillance de sa propre identité (SID1, ligne « E » ci-dessus). Elle dit après coup, sur un
 rattachement que l'hôte écrit lui-même : elle ne suffit pas hors du banc. La file d'actions signée — seule
 la watch tient le rôle d'écriture, la console et le bot y déposent une demande signée — est un
 prérequis avant toute VM hors du banc (« Ouvert »).
 
-- **Ce qui est posé** :
+- **Ce qui est posé aujourd'hui** :
   - l'identité managée de H0 tient « Eregion Glorfindel Response » sur `rg-celebrimbor`, le groupe
     du banc, attribué à la main (`az role assignment create`, [`docs/banc-bl1.md`](../banc-bl1.md),
-    étape 3), hors de l'état Terraform de H0 ;
+    étape 3), hors de l'état Terraform de H0 — dans sa définition d'avant SEC11, **avec Run
+    Command, sur toute VM du banc** ;
   - `GLORFINDEL_READ_ONLY=0` dans `host.env` ;
   - gondolin et bree en `non_disruptive`, chacune après son contrôle de préparation ; le défaut reste
     `human_only` ;
   - le CD actif : une release publiée redéploie H0 sans toucher `host.env` ni la config, donc sans
     toucher la posture.
+- **Après les gestes de SEC11** (`docs/operations.md`, « Depuis un rôle de la réponse d'avant
+  SEC11 », dans cet ordre : (1) `az role definition create` du rôle Session Drain ; (2) le plan de H0 relu, puis `make glorfindel-host-up` sans `YES` ; (3) juste après l'apply, deux portées de VM pour le rôle (`terraform output session_drain_vms`, ou `az role assignment list --role "Eregion Glorfindel Session Drain"`) ; (4) seulement ensuite, `az role definition update` du rôle de la réponse ; (5) après le geste 4, la préparation de gondolin et de bree, sans `no_drain`) : le rôle de la réponse ne porte plus Run
+  Command ; « Eregion Glorfindel Session Drain » est attribué sur chaque VM de
+  `session_drain_vms` (gondolin, bree — `infra/glorfindel-host/session_drain.auto.tfvars`), par
+  l'état Terraform de H0, jamais sur le groupe : une VM du banc ajoutée plus tard n'a pas la
+  coupure tant qu'on ne l'ajoute pas à la liste.
 - **Ce que ça ouvre** — l'identité est celle de la VM, partagée par la watch, la console et le bot
   (une identité par conteneur ne s'y sépare pas) :
   - **la watch agit seule** sur gondolin et sur bree, dans leur mode : isoler, bloquer, instantané,
@@ -189,11 +198,12 @@ prérequis avant toute VM hors du banc (« Ouvert »).
     bree comprise, quel que soit le mode de la VM. C'est un humain qui agit, derrière le jeton de la
     console (et le tunnel SSH) ou la liste d'autorisation de Discord (`DISCORD_ALLOWED_*`) ;
   - **un conteneur de H0 compromis, ou une clé SSH de H0, tient ce rôle** hors du code de
-    Glorfindel : le jeton de l'identité managée se lit de chacun des trois conteneurs. Le rôle
-    de la réponse donne `runCommand` (la coupure des sessions, `ss -K`) : une commande en root
-    sur toute VM du banc, bree et gondolin comprises ; et l'écriture de leurs NSG et de leurs
-    cartes réseau. Dans le code, la commande est écrite d'avance ; avec le jeton, elle est
-    libre ;
+    Glorfindel : le jeton de l'identité managée se lit de chacun des trois conteneurs.
+    Aujourd'hui, le rôle de la réponse donne `runCommand` (la coupure des sessions, `ss -K`) : une
+    commande en root sur toute VM du banc ; après les gestes de SEC11, sur les seules VM de
+    `session_drain_vms` (gondolin et bree, les deux VM du banc aujourd'hui), plus sur une VM
+    ajoutée au groupe. Et l'écriture des NSG et des cartes réseau des VM du banc. Dans le code,
+    la commande est écrite d'avance ; avec le jeton, elle est libre ;
   - le restore n'est pas dans le rôle : un Restore lancé de la console ou du bot échoue sur Azure.
 - **Ce qui le borne** :
   - **le rôle** : les écritures de la réponse et rien d'autre
@@ -227,11 +237,12 @@ prérequis avant toute VM hors du banc (« Ouvert »).
     des conteneurs sans capacité, sans gain de privilège, la racine en lecture seule.
 - **Revenir à un H0 qui ne fait rien seul**, d'un geste : `make glorfindel-host-push HUMAN_ONLY=1`.
 - **Revenir en lecture seule**, si besoin : l'étape 7 de [`docs/banc-bl1.md`](../banc-bl1.md). Le
-  rôle retiré, `az role assignment list --assignee <principal> --all` ne montre plus que `Reader` et
+  rôle retiré, et la coupure (`session_drain_vms = []`, puis le plan de H0 relu et appliqué),
+  `az role assignment list --assignee <principal> --all` ne montre plus que `Reader` et
   `Log Analytics Reader` ; `GLORFINDEL_READ_ONLY=1` repoussé, le bandeau « lecture seule » de la
   console revient.
 
-**Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`. La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
+**Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`, `infra/glorfindel-host/tests/session_drain.tftest.hcl` (SEC11). La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
 
 **Ouvert** : un battement de la watch authentifié, pas seulement lié — planifié ; un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule, par une file signée — planifié : #413 ; une identité managée par conteneur sur un même hôte — planifié ; l'identité unique de H0, partagée par la watch, la console et le bot — planifié.
 
@@ -239,7 +250,7 @@ prérequis avant toute VM hors du banc (« Ouvert »).
 
 ## 6. La CI et le CD (GitHub, release, tags)
 
-**De confiance** : le mainteneur (seul à publier une release), la branche `main` protégée (vérifications requises), `CODEOWNERS` sur tout le dépôt. **Pas de confiance** : les forks, leurs PR, les auteurs d'issues extérieurs, une action tierce sous un tag qui peut bouger.
+**De confiance** : le mainteneur (seul à publier une release, et seul à créer un tag `v*` une fois la règle des tags posée, SEC12), la branche `main` protégée (une PR et les vérifications requises). `CODEOWNERS` n'est qu'indicatif (P-07) : aucune revue d'un propriétaire n'est exigée, avec un seul mainteneur et des fusions autonomes ; ce qui tient la revue est à la frontière 7. **Pas de confiance** : les forks, leurs PR, les auteurs d'issues extérieurs, une action tierce sous un tag qui peut bouger.
 
 **Ce qui la traverse** : le code des PR ; les événements `pull_request_target` et `workflow_run`, qui tournent avec les droits de la branche par défaut ; les secrets (Discord de l'atelier ; les identifiants, non secrets en eux-mêmes, du principal du canari) ; les jetons OIDC de courte durée (la publication, le canari) ; les releases, que H0 tire et déploie.
 
@@ -253,12 +264,13 @@ prérequis avant toute VM hors du banc (« Ouvert »).
 | R | Une release sans histoire | `CHANGELOG.md`, une issue par lot ; les sessions préparent une release en brouillon, le mainteneur la publie |
 | S | Un secret Azure de longue durée volé ou fuité, rejoué ailleurs (le canari, P-04) | Plus de secret : le job du canari demande un jeton OIDC de quelques minutes (`id-token: write` à ce job seul), qu'Entra ID n'échange que pour un sujet, `repo:Vanyar53/eregion:environment:canary` (l'identifiant fédéré de `eregion-canary`), un environnement que seul `main` déploie — une PR, un fork, une autre branche n'obtiennent rien, ni un autre job de `main` : le jeton de `publish.yml` porte le sujet `ref:refs/heads/main`, que l'identifiant n'accepte pas ; seul le job du canari est dans cet environnement (testé). Ses identifiants sont des secrets de cet environnement, jamais des variables imprimées en clair ; sans eux le canari échoue. Aucune action tierce à côté du jeton : Terraform le lit lui-même, `az` le reçoit de `curl` (P04, `tests/unit/test_workflows.py`) |
 | E | Le principal du canari, volé, agit sur l'abonnement | `Network Contributor` sur `rg-eregion-canary` seul : ni le groupe supprimé, ni une VM, ni un rôle ; le canari n'y crée ni n'y supprime de groupe, et n'enregistre aucun fournisseur de ressources (P04, `infra/canary/jit-terraform/`, testé) |
-| I | Un secret exposé au code d'une PR | `pull_request_target` et `workflow_run` ne récupèrent ni n'exécutent jamais le code d'une PR (récupération partielle du seul script, sans identifiants persistés) ; des permissions en lecture seulement, partout |
+| I | Un secret exposé au code d'une PR | `pull_request_target` et `workflow_run` ne récupèrent ni n'exécutent jamais le code d'une PR (récupération partielle du seul script, sans identifiants persistés) ; chaque workflow déclare ses permissions, `contents: read` à son niveau ; l'écriture au seul job qui en a besoin — la publication (paquets, attestations, OIDC), le canari (OIDC), l'audit des verrous (issues) — et `notify` lit les runs (SEC7, P04, CI3, testé) |
 | D | Une CI rouge passée inaperçue | Annoncée dans `#ci`, avec mention : chaque workflow lancé par un push, une PR ou la nuit est dans la liste de `notify.yml`, ses exceptions écrites (CI1, testé) ; le CD de H0 attend une CI verte |
 | D | Un Dockerfile ou un verrou cassé vu seulement au préflight de H0 : la release brûlée | Les deux images construites et éprouvées dans la PR et sur `main` (CI1, `images.yml`) : `--version`, les imports du préflight du CD, la config d'exemple sous A3, un appel d'outil par litellm répondu par son mock (DEP1), pas root, rien de Glorfindel dans l'image des injecteurs. Construites sans push, sans registre, sans secret, actions épinglées par commit, le cache écrit par `main` seulement ; chaque vérification est un `docker run --network none` (`scripts/image_check.py`, testé). Sans filtre `paths` : ses checks peuvent être requis ; une décision absente, un HEAD qui n'est pas le commit de fusion ou une file de fusion construisent (SEC7) |
+| E | Une release plus ancienne remise en « latest » (par quiconque peut publier), pour ramener H0 sur un code connu pour une faille | Le CD refuse une release plus ancienne que ce qui tourne, par sa version ou par son commit, et le dit avec la mention ; le seul chemin est un retour arrière demandé sur H0, pour ce tag (`rollback`), vérifié comme toute release (SEC12, `tests/unit/test_host_cd.py`) |
 | E | Une release piégée déployée sur H0 | Le CD exige un tag sur `origin/main`, jamais réécrit, tous les checks verts, un préflight dans la candidate, et revient en arrière si la santé échoue (H1) — dont une écriture que la racine en lecture seule refuse, absente de la release d'avant (SEC7) |
 | T | Un verrou qui change les décisions de Glorfindel sans que personne le voie | Le CD ne déploie un nouveau verrou qu'avec l'attestation du harnais, deux passages pour le modèle de H0 : le candidat sur ce verrou, la référence sur le verrou en service (H3, `requirements/harness.json`). Il refuse une intégration cassée, une régression (juste à chaque tirage avant, faux à chaque tirage après), une surconfiance que la référence n'a pas (un cas à chaque tirage, ou deux cas), une injection ou une mémoire qui détourne une décision sur le candidat seulement, et une attestation de l'ancien format, incomplète ou sur un autre verrou. Ce qui varie est dit en orange dans `#deploy`, jamais un refus. Elle refuse aussi un cas, de tout genre, qui perd 2 tirages sur 3 face à la référence (p ≈ 1/6 mesuré : environ 4 % de refus à tort par cas bruité, jusqu'à 9 % si p ≈ 1/3 ; de 4 à 20 % par attestation selon le bruit, accepté), un cas qui gagne 2 tirages surconfiants, et 3 tirages perdus ou plus en tout face à la référence, sur tous les cas. **Ce qu'elle laisse** : par cas, un tirage perdu et un tirage surconfiant gagné au plus ; en tout, 2 tirages perdus face à la référence (sur tous les cas) et un cas nouvellement surconfiant au plus — dit en orange (le modèle refuse une température, trois tirages ne le distinguent pas du bruit) ; un recul dû au code d'une release qui change aussi le verrou : les deux passages font tourner le même code, le nouveau, le recul paraît « faux des deux côtés », dit, jamais refusé (l'orange compte ces cas quand `glorfindel/` ou `eregion_core/` change) ; l'attestation est écrite par le mainteneur, pas recalculée par le CD |
-| T | Une image déployée qui n'est pas celle que la CI a éprouvée, ou d'un autre commit (P-02) | H0 et Orodruin ne construisent plus : l'image de chaque commit de `main` est éprouvée **avant** d'être poussée sur GHCR, avec une provenance SLSA et un SBOM attestés et une signature sans clé (sigstore, l'OIDC de GitHub) ; H0 la tire **par son digest** après avoir vérifié, par cosign épinglé, la signature et la provenance du workflow de publication de ce dépôt, sur `main`, déclenché par un push, **au commit du tag**, puis relu la provenance et les étiquettes ; Orodruin reçoit l'image ainsi vérifiée sur le poste, et son identifiant y est relu contre le digest (CI3, `scripts/published_image.py`, testé) |
+| T | Une image déployée qui n'est pas celle que la CI a éprouvée, ou d'un autre commit (P-02) | Le CD de H0 et Orodruin ne construisent plus (le déploiement de H0 à la main, chemin de secours, construit encore, mais seulement la référence que l'opérateur nomme : `REF` exigée, SEC14, V-22) : l'image de chaque commit de `main` est éprouvée **avant** d'être poussée sur GHCR, avec une provenance SLSA et un SBOM attestés et une signature sans clé (sigstore, l'OIDC de GitHub) ; H0 la tire **par son digest** après avoir vérifié, par cosign épinglé, la signature et la provenance du workflow de publication de ce dépôt, sur `main`, déclenché par un push, **au commit du tag**, puis relu la provenance et les étiquettes ; Orodruin reçoit l'image ainsi vérifiée sur le poste, et son identifiant y est relu contre le digest (CI3, `scripts/published_image.py`, testé) |
 | T | Un tag d'image déplacé, un registre qui ment (V-22) | Le tag `sha-<commit>` n'est qu'une indication : le digest est le sha256 des octets lus, l'en-tête du registre doit dire le même, la signature lie ce digest au commit ; un digest différent de celui vu la première fois pour une release est refusé, comme un tag de git réécrit (CI3, testé) |
 | E | Un autre workflow, une PR ou un fork publient une image que H0 accepterait | Seul `publish.yml` peut écrire un paquet ou une attestation, au niveau de son job, sur un push sur `main` de ce dépôt seulement ; un jeton OIDC, lui et le job du canari seuls (P04), dont l'identité de workflow n'est pas celle que le CD exige ; le CD exige ce workflow, cette branche, cet événement dans le certificat (CI3, `tests/unit/test_workflows.py`) |
 
@@ -276,12 +288,46 @@ prérequis avant toute VM hors du banc (« Ouvert »).
 
 ---
 
+## 7. Les sessions d'agents → `main` → le CD
+
+_SEC12 (#418), 02/11. Décision de Jonathan : une identité propre aux sessions (une GitHub App sur ce seul dépôt), des fusions autonomes, les tags `v*` réservés au mainteneur._
+
+**De confiance** : le mainteneur, pour ce qui déploie (publier une release, créer un tag `v*`, les réglages du dépôt, un retour arrière de H0) ; les sessions d'agents, pour le code qu'elles fusionnent, après une CI verte et une relecture Opus 5.5 « ok ». **Pas de confiance** : un commentaire sur une PR publique, une session hors de son lot, la sortie d'un modèle dans un rapport de relecture.
+
+**Ce qui la traverse** : les branches et les PR des sessions, leurs fusions sur `main` (la racine de confiance du CD : ce qui est fusionné est publié comme image signée, CI3), les verdicts de relecture, les releases en brouillon ; puis la release que le mainteneur publie, que H0 tire.
+
+| | Menace | Ce qui la tient |
+|---|---|---|
+| S | Une session agit sous le compte du mainteneur (ses droits d'administrateur, ses dérogations) | Les sessions ont leur identité : une GitHub App installée sur ce seul dépôt, son jeton d'une heure limité à ce dépôt (`scripts/agent_token.py`) ; l'emballage `gh` ne lit jamais la config du mainteneur et n'appelle rien sans jeton ; l'assistant de `git` ne répond que pour ce dépôt, en https (SEC12, `tests/unit/test_agent_token.py`) |
+| E | Une session publie une release, ou crée, déplace ou supprime un tag `v*` | La règle du dépôt sur `v*` (création, mise à jour, suppression) n'a que l'administrateur pour dérogation ; publier une release crée son tag : l'App ne le peut pas, une release en brouillon ne crée pas de tag (SEC12, `docs/sessions.md`, « Les règles du dépôt ») ; le CD lit cette règle sans jeton et la dit au début de chaque déploiement, en orange si elle manque |
+| T | Une session pousse sur `main`, réécrit son histoire ou la supprime | La règle de `main` : une PR obligatoire, ni force-push ni suppression, les checks requis ; la dérogation de l'administrateur en mode « pull requests only » |
+| R | Une fusion sans relecture, ou sur un commit que la relecture n'a pas lu | Le commit relu noté au lancement du relecteur, redit par son rapport, jamais la tête lue au moment de publier ; le verdict publié en commentaire de la PR avant la fusion, pour ce commit ; `check` refuse quand la tête de la PR n'est pas lui ; la fusion liée à lui (`--match-head-commit`) ; seuls les auteurs nommés sont lus, un rapport ne porte jamais de clé (SEC12, `scripts/review_verdict.py`, `tests/unit/test_review_verdict.py`). Le verdict est **tracé, pas authentifié** : il prouve qui l'a publié (l'App), pas qu'une relecture l'a rendu |
+| E | Une session change ce qui tourne avec les secrets et les jetons OIDC (les workflows) | L'App n'a pas le droit *Workflows* (décision de Jonathan, 02/11, `docs/sessions.md`) : un changement de `.github/workflows/` est poussé et fusionné par le mainteneur |
+| E | Une release plus ancienne remise en « latest », pour ramener H0 en arrière | Le CD la refuse et le dit ; seul un retour arrière demandé sur H0, pour ce tag, la déploie (SEC12, frontière 6) |
+| I | La clé de l'App ou son jeton fuient | Le jeton vit une heure, limité à ce dépôt et aux droits de l'App, en cache 0600 ; la clé est refusée lisible par d'autres ; aucune erreur ne dit la clé ni le jeton ; un jeton qui pourrait écrire une ligne de plus dans le protocole de `git` est refusé (SEC12, testé) |
+| D | Les sessions privées de GitHub : l'App suspendue, sa clé révoquée, GitHub injoignable | Rien ne bascule sur le compte du mainteneur : pas de jeton, pas d'appel, l'erreur dite ; le CD de H0 ne dépend pas de l'App (il lit l'API publique sans jeton) |
+
+**Où c'est** : `scripts/agent_token.py`, `scripts/agent-bin/`, `scripts/review_verdict.py`, `.claude/skills/elrond/SKILL.md`, `docs/sessions.md` (« L'identité des sessions », « Les règles du dépôt »), `infra/glorfindel-host/cd/eregion_cd.py` ; tests `tests/unit/test_agent_token.py`, `tests/unit/test_review_verdict.py`, `tests/unit/test_host_cd.py`.
+
+**Ce qui reste, assumé** : la clé de l'App est lisible par toute session (un même utilisateur Unix) ; elle ne donne que les droits de l'App, révocables d'un clic. La règle des tags est lue par H0 sans jeton : tant que cette lecture n'est pas mesurée, son absence est dite, jamais refusée. L'attestation du harnais est un fichier qu'une fusion peut porter : le CD la lie au sha256 du verrou, pas à son auteur (R-13) ; la proposition est de la signer, sans clé, de l'identité du mainteneur, et de la vérifier au CD.
+
+**Ouvert** :
+- les gestes de Jonathan qui ferment cette frontière — planifié : #418
+- les identifiants du mainteneur sur le poste des sessions — planifié : #418
+- un utilisateur Unix propre aux sessions — planifié
+- la règle des tags lue par H0 sans jeton, à mesurer — planifié : #418
+- l'attestation du harnais, liée au verrou et non à son auteur — planifié
+- la fusion d'une PR de workflow par l'App, à mesurer — planifié
+
+---
+
 ## Décisions assumées
 
-- **La revue de conception sans responsable désigné** (T-05). Ce qui la tient : `CODEOWNERS` sur tout le dépôt (SEC6), la relecture de chaque lot par elrond, et le mainteneur, seul à publier une release.
+- **`runCommand` à la watch, pour couper les sessions** (V-17, SEC7 ; R-03, SEC11 — décision de Jonathan du 02/11 : la coupure reste). C'est son droit le plus fort : une commande en root sur la VM. Il sert à une seule chose, couper les sessions déjà ouvertes quand la VM est isolée (`ss -K`, Linux) — sans lui, un attaquant connecté garde la main sur une VM « isolée » ; le restore s'en sert aussi (rôle Restore, jamais à la watch), pour neutraliser la dernière commande avant l'échange de disques. Ce qui le borne : il sort du rôle de la réponse, dans un rôle à lui (« Eregion Glorfindel Session Drain »), **attribué VM par VM aux seules VM que Glorfindel défend** (une liste explicite, `session_drain_vms` sur H0), jamais sur un groupe — une VM hors de la liste est hors de sa portée ; la commande est écrite dans le code, jamais par le modèle ; elle ne vise qu'une VM que la décision isole ; une VM sans ce rôle est isolée quand même, la coupure refusée est dite sur la carte, et la préparation le dit avant (`no_drain`) ; tenu sur tout un groupe, il est dit comme plus que la réponse (`identity_beyond_response`). **Sur H0** (sa posture sur le banc, BL1c), ce droit est tenu par l'identité de la VM, que la console, le bot et tout conteneur compromis partagent : la commande n'y est plus bornée par le code, seulement — après les gestes de SEC11 — par les VM de `session_drain_vms` (aujourd'hui, toute VM du banc), le groupe du banc, l'entrée fermée de H0 et un banc sans charge ni donnée d'un client — bree porte une charge d'essai (§5).
+- **La revue de conception sans responsable désigné** (T-05). Ce qui la tient : la relecture Opus 5.5 de chaque lot, son verdict publié sur la PR pour le commit relu avant la fusion (SEC12), et le mainteneur, seul à publier une release et à créer un tag `v*`. `CODEOWNERS` (SEC6) ne fait que nommer les chemins sensibles : il n'exige rien (P-07).
 - **`runCommand` dans le rôle de la réponse** (V-17, SEC7). C'est son droit le plus fort : une commande en root sur la VM, que l'identité de la watch peut lancer. Il y est pour une seule chose, couper les sessions déjà ouvertes quand la VM est isolée (`ss -K`, Linux) — sans lui, un attaquant connecté garde la main sur une VM « isolée » ; le restore s'en sert aussi, pour neutraliser la dernière commande avant l'échange de disques. Ce qui le borne : la commande est écrite dans le code, jamais par le modèle ; elle ne vise qu'une VM que la décision isole, sur les groupes inscrits ; et la préparation dit « sessions non coupées » quand il manque (`no_drain`), plutôt que d'élargir le rôle. **Sur H0** (sa posture sur le banc, BL1c), ce droit est tenu par l'identité de la VM, que la console, le bot et tout conteneur compromis partagent : la commande n'y est plus bornée par le code, seulement par le groupe du banc, l'entrée fermée de H0 et un banc sans charge ni donnée d'un client — bree porte une charge d'essai (§5).
 - **Le banc ouvert à Internet, par conception** (V-37) : c'est une cible d'exercice. Ce qui le borne : il est jetable, inscrit `bench`, et ne porte aucune charge réelle.
-- **Qui fusionne sur `main` publie une image que H0 accepte** (CI3, P-02). La signature prouve le workflow, la branche et le commit, pas la relecture du code. Ce qui le borne : la protection de `main` et `CODEOWNERS`, le mainteneur seul à publier la release qui déploie, et sigstore et l'OIDC de GitHub, tenus pour de confiance. Le chemin de secours, un déploiement de H0 à la main (`make glorfindel-host-start`), construit encore l'image sur la VM, hors de la vérification ; `make orodruin-push-dev` aussi, sur le poste, dit comme tel.
+- **Qui fusionne sur `main` publie une image que H0 accepte** (CI3, P-02). La signature prouve le workflow, la branche et le commit, pas la relecture du code. Ce qui le borne : la protection de `main` (une PR, les checks requis, ni force-push ni suppression), le verdict de relecture publié sur la PR (SEC12), le mainteneur seul à publier la release qui déploie et seul à créer son tag (SEC12), et sigstore et l'OIDC de GitHub, tenus pour de confiance. Le chemin de secours, un déploiement de H0 à la main (`make glorfindel-host-start`), construit encore l'image sur la VM, hors de la vérification ; `make orodruin-push-dev` aussi, sur le poste, dit comme tel.
 
 - **`human_only` par défaut.** Rien ne s'exécute sans humain tant que l'opérateur n'a pas donné l'autonomie, actif par actif ; l'autonomie se décide sur une mesure (`docs/observation.md`), jamais sur la confiance du modèle.
 - **Deux hôtes Glorfindel, deux états : le tag de quarantaine l'emporte sur l'« aucun » de l'état** (I8S, #245, N-08). Quand l'état local dit qu'une carte réseau n'avait pas de NSG et que notre tag en nomme un, le tag fait foi, à la levée comme au `reset --from-azure`. Conséquence acceptée : dans un cas marginal (deux groupes de quarantaine, un tag périmé dans l'un), une carte peut recevoir à la levée un NSG de plus qu'elle n'en avait — jamais un de moins. L'autre option, un tag manquant ou illisible toujours tenu pour inconnu, garderait en quarantaine toute carte nue par conception dont les tags sont perdus. Détail : [`docs/azure.md`](../azure.md).

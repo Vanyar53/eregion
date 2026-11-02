@@ -88,10 +88,10 @@ def run(scenario: str, dry_run: bool, yes: bool, skip_preflight: bool,
     # With EREGION_EXERCISE_CHANNEL, the run's report goes to H0 at its end (#193).
     engine = Engine(dry_run=dry_run, skip_preflight=skip_preflight, publish_report=True,
                     without_glorfindel=without_glorfindel)
-    # One run at a time on Orodruin (#358): nothing launched by hand runs during a Dagorlad
-    # request — the request's lock, in the runs/ the engine writes to. A dry run touches nothing.
+    # One run at a time on Orodruin (#358, R-10): nothing launched by hand runs during a Dagorlad
+    # request — Orodruin's one lock (exercise_runner.lock_path). A dry run touches nothing.
     from eregion_core.exercise_runner import Busy, request_lock
-    lock = contextlib.nullcontext() if dry_run else request_lock("runs", f"run {os.path.basename(path)}")
+    lock = contextlib.nullcontext() if dry_run else request_lock(f"run {os.path.basename(path)}")
     try:
         with lock:
             outcome = engine.run(path, skip_confirm=yes)
@@ -190,15 +190,24 @@ def wire(technique: str, target: str, request: str, typed_name: str):
     rg = rg_from_id(target)
     scope = Scope(subscription_id=subscription_from_id(target),
                   allowed_resource_groups=[rg] if rg else [], allowed_resource_ids=[target])
+    # One run at a time (R-10): a wire holds its request's lock, handed down by Orodruin's runner;
+    # launched any other way, it takes Orodruin's one lock itself — refused while anything runs.
+    from eregion_core.exercise_runner import Busy, request_lock
     # The scenario lives only for the run: never in runs/, where a local watch reads.
-    with tempfile.TemporaryDirectory(prefix="annatar-wire-") as tmp:
-        made = synthesize(entry=entry, target_resource_id=target, scope=scope, out_dir=Path(tmp),
-                          seq=1, allow_destructive=bool(typed_name))
-        if not made.ok:
-            console.print(f"[red]✗ wire refused: {made.reason}[/red]")
-            raise SystemExit(EXIT_RUN_FAILED)
-        engine = Engine(publish_report=True, request=request, typed_name=typed_name)
-        outcome = engine.run(str(made.path), skip_confirm=True)
+    try:
+        with request_lock(f"wire {request}"), \
+                tempfile.TemporaryDirectory(prefix="annatar-wire-") as tmp:
+            made = synthesize(entry=entry, target_resource_id=target, scope=scope, out_dir=Path(tmp),
+                              seq=1, allow_destructive=bool(typed_name))
+            if not made.ok:
+                console.print(f"[red]✗ wire refused: {made.reason}[/red]")
+                raise SystemExit(EXIT_RUN_FAILED)
+            engine = Engine(publish_report=True, request=request, typed_name=typed_name)
+            outcome = engine.run(str(made.path), skip_confirm=True)
+    except Busy as e:
+        from rich.markup import escape   # the holder's name, never read as markup
+        console.print(f"[red]✗ wire refused — busy: {escape(str(e))}[/red]")
+        raise SystemExit(EXIT_RUN_FAILED)
     code = run_exit_code(outcome)
     if code:
         _print_run_failure(outcome)
@@ -299,7 +308,16 @@ def init(yes: bool, scenario: str | None):
         annatar init --yes scenarios/azure/ransomware-vm.yaml
     """
     from annatar.runner.initializer import InitRunner
-    InitRunner().run(auto_approve=yes, scenario_path=scenario)
+    from eregion_core.exercise_runner import Busy, request_lock
+    # With a scenario, init cleans its VM's disk (InitRunner.clean): Orodruin's one lock, as
+    # `annatar clean` (SEC14 review, R-10).
+    try:
+        with request_lock(f"init {os.path.basename(scenario or '')}".strip()):
+            InitRunner().run(auto_approve=yes, scenario_path=scenario)
+    except Busy as e:
+        from rich.markup import escape   # the holder's name, never read as markup
+        console.print(f"[red]✗ init refused — busy: {escape(str(e))}[/red]")
+        raise SystemExit(EXIT_RUN_FAILED)
 
 
 @cli.command()
@@ -315,7 +333,15 @@ def clean(scenario: str, without_glorfindel: bool):
     a clean recovery point.
     """
     from annatar.runner.initializer import InitRunner
-    InitRunner().clean(scenario, without_glorfindel=without_glorfindel)
+    from eregion_core.exercise_runner import Busy, request_lock
+    # A clean rewrites a disk: never during a request nor a run (R-10) — Orodruin's one lock.
+    try:
+        with request_lock(f"clean {os.path.basename(scenario)}"):
+            InitRunner().clean(scenario, without_glorfindel=without_glorfindel)
+    except Busy as e:
+        from rich.markup import escape   # the holder's name, never read as markup
+        console.print(f"[red]✗ clean refused — busy: {escape(str(e))}[/red]")
+        raise SystemExit(EXIT_RUN_FAILED)
 
 
 # ── Generative campaigns ─────────────────────────────────────────────────────
@@ -473,10 +499,11 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report
         raise SystemExit(1)
 
     # One run at a time on Orodruin (#358): a campaign launched by hand during a Dagorlad request
-    # would put a technique on a VM one of its wires holds, or under its fault. The request's lock,
-    # taken here too — refused, nothing ran and the manifest is as it was. A preview runs nothing.
+    # would put a technique on a VM one of its wires holds, or under its fault. Orodruin's one
+    # lock, whatever --runs-dir says (R-10) — refused, nothing ran and the manifest is as it was.
+    # A preview runs nothing.
     from eregion_core.exercise_runner import Busy, request_lock
-    lock = contextlib.nullcontext() if dry_run else request_lock(runs_dir, f"campaign {campaign_id}")
+    lock = contextlib.nullcontext() if dry_run else request_lock(f"campaign {campaign_id}")
     try:
         with lock:
             if m.state == "planned" and yes and not dry_run:

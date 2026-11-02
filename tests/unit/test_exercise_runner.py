@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -310,7 +311,7 @@ _HOLDER = """
 import sys, time
 from pathlib import Path
 from eregion_core.exercise_runner import request_lock
-with request_lock(Path(sys.argv[1])):
+with request_lock():
     print("held", flush=True)
     time.sleep(30)
 """
@@ -324,7 +325,7 @@ def test_a_second_request_while_one_runs_is_refused_between_two_processes(tmp_pa
     import sys
     from pathlib import Path
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
-    holder = subprocess.Popen([sys.executable, "-c", _HOLDER, str(tmp_path / "runs")],
+    holder = subprocess.Popen([sys.executable, "-c", _HOLDER],
                               stdout=subprocess.PIPE, text=True, env=env)
     try:
         assert holder.stdout.readline().strip() == "held"
@@ -344,16 +345,15 @@ def test_the_lock_says_what_holds_it_a_request_or_a_run_by_hand(tmp_path):
     """#358: the lock is taken by a request and by a campaign launched by hand; the one refused
     says which holds it — never written raw (a character not printable is dropped)."""
     import pytest
-    runs = tmp_path / "runs"
-    with er.request_lock(runs, "campaign C-20261031\x1b[2J"):
+    with er.request_lock("campaign C-20261031\x1b[2J"):
         with pytest.raises(er.Busy, match=r"^campaign C-20261031\[2J runs on this Orodruin"):
-            with er.request_lock(runs, "request r-20261031T080000Z-abcdef"):
+            with er.request_lock("request r-20261031T080000Z-abcdef"):
                 pass
-    with er.request_lock(runs, "request r-20261031T080000Z-abcdef"):
+    with er.request_lock("request r-20261031T080000Z-abcdef"):
         with pytest.raises(er.Busy, match="^request r-20261031T080000Z-abcdef runs"):
-            with er.request_lock(runs, "campaign C1"):
+            with er.request_lock("campaign C1"):
                 pass
-    with er.request_lock(runs, "campaign C2"):   # each let go: the next one takes it
+    with er.request_lock("campaign C2"):   # each let go: the next one takes it
         pass
 
 
@@ -361,24 +361,22 @@ def test_a_short_name_after_a_long_one_left_by_a_crash_is_read_whole(tmp_path):
     """#388's review: the name a crash left (no normal exit to erase it) is cut before the next
     one is written — never « campaign C1 » and the rest of the old name."""
     import pytest
-    runs = tmp_path / "runs"
-    lock = runs / "orodruin" / "requests" / ".lock"
-    lock.parent.mkdir(parents=True)
+    lock = er.lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text("campaign C-20261031T080000Z-a-much-longer-name-left-by-a-crash")
-    with er.request_lock(runs, "campaign C1"):
+    with er.request_lock("campaign C1"):
         with pytest.raises(er.Busy, match=r"^campaign C1 runs on this Orodruin"):
-            with er.request_lock(runs, "request r-20261031T080000Z-abcdef"):
+            with er.request_lock("request r-20261031T080000Z-abcdef"):
                 pass
 
 
 def test_the_name_goes_with_a_normal_exit_and_is_cut_as_it_is_read(tmp_path):
-    runs = tmp_path / "runs"
-    lock = runs / "orodruin" / "requests" / ".lock"
-    with er.request_lock(runs, "campaign C1"):
+    lock = er.lock_path()
+    with er.request_lock("campaign C1"):
         assert lock.read_text() == "campaign C1"
     assert lock.read_text() == ""
     # Cut in bytes, as it is read: a name of characters of three bytes each.
-    with er.request_lock(runs, "é" * 50 + "漢" * 100):
+    with er.request_lock("é" * 50 + "漢" * 100):
         written = lock.read_bytes()
         assert len(written) <= er._HOLDER_MAX
         with open(lock, "rb+") as f:
@@ -393,7 +391,7 @@ def test_a_request_refused_busy_names_the_campaign_that_runs(tmp_path):
     r, inj, published, _ = _runner(tmp_path)
     said = []
     r.say = said.append
-    with er.request_lock(tmp_path / "runs", "campaign C1"):
+    with er.request_lock("campaign C1"):
         status = r.run(_req(("T1110.001", GONDOLIN)), {})
     assert status.codes == ["busy"] and inj.launched == [] and published == []
     assert any("campaign C1 runs on this Orodruin" in line for line in said)
@@ -407,7 +405,7 @@ def test_while_a_request_runs_a_campaign_by_hand_is_refused_naming_it(tmp_path):
 
     def launch(argv, env):
         with pytest.raises(er.Busy) as e:
-            with er.request_lock(tmp_path / "runs", "campaign C1"):
+            with er.request_lock("campaign C1"):
                 pass
         refused.append(str(e.value))
         return inj(argv, env)
@@ -415,6 +413,159 @@ def test_while_a_request_runs_a_campaign_by_hand_is_refused_naming_it(tmp_path):
     assert r.run(req, {}).state == "finished"
     assert refused == [f"request {req.id} runs on this Orodruin: one at a time — wait for its end, "
                        "or stop it (make orodruin-kill)"]
+
+
+# ── SEC14 (R-10): one lock file, taken by every command that acts — a wire under its request's ──
+
+_WIRE = """
+import sys
+from eregion_core.exercise_runner import Busy, request_lock
+try:
+    with request_lock("wire"):
+        print("ran", flush=True)
+except Busy as e:
+    print("busy:", e, flush=True)
+    sys.exit(3)
+"""
+
+
+def test_the_lock_is_one_file_whatever_the_runs_directory(tmp_path, monkeypatch):
+    """Without EREGION_RUN_LOCK, the lock is runs/orodruin/requests/.lock of the working directory
+    (/app on Orodruin) — a runner given another runs directory takes that same one."""
+    import os
+    monkeypatch.delenv(er.LOCK_ENV)
+    monkeypatch.chdir(tmp_path)
+    assert er.lock_path() == Path("runs") / "orodruin" / "requests" / ".lock"
+    r, inj, _, _ = _runner(tmp_path / "elsewhere")
+    seen = []
+
+    def launch(argv, env):
+        st = os.fstat(int(env[er.LOCK_FD_ENV]))
+        seen.append((st.st_dev, st.st_ino))
+        return inj(argv, env)
+    r.launch = launch
+    assert r.run(_req(("T1110.001", GONDOLIN)), {}).state == "finished"
+    lock = os.stat(tmp_path / "runs" / "orodruin" / "requests" / ".lock")
+    assert seen == [(lock.st_dev, lock.st_ino)]
+    assert not list((tmp_path / "elsewhere").rglob(".lock"))
+
+
+def test_each_wire_runs_under_its_requests_hold_and_a_run_beside_it_is_refused(tmp_path):
+    """The runner hands its lock down to the injector it launches (pass_fds): the wire's own
+    process holds it; a process it was not handed to is refused (busy), naming the request."""
+    import os
+    import sys
+    env = {"PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    with er.request_lock("request r-20261031T080000Z-abcdef") as fd:
+        handed = er.launch([sys.executable, "-c", _WIRE], {**env, er.LOCK_FD_ENV: str(fd)})
+        alone = er.launch([sys.executable, "-c", _WIRE], env)
+        # A descriptor named by hand, its own opening of the lock file: not the request's hold.
+        other = os.open(er.lock_path(), os.O_RDWR)
+        try:
+            forged = er.launch([sys.executable, "-c", _WIRE], {**env, er.LOCK_FD_ENV: str(other)})
+        finally:
+            os.close(other)
+        # A number that names another file, or nothing: no hold either.
+        stray = er.launch([sys.executable, "-c", _WIRE], {**env, er.LOCK_FD_ENV: "1"})
+    assert (handed, alone, forged, stray) == (0, 3, 3, 3)
+    with er.request_lock("campaign C1"):   # the request over, its hold went with it
+        assert er.lock_path().read_text() == "campaign C1"
+
+
+def test_a_wire_keeps_its_requests_name_in_the_lock(tmp_path, monkeypatch):
+    with er.request_lock("request r-20261031T080000Z-abcdef") as fd:
+        monkeypatch.setenv(er.LOCK_FD_ENV, str(fd))
+        with er.request_lock("wire r-20261031T080000Z-abcdef"):
+            assert er.lock_path().read_text() == "request r-20261031T080000Z-abcdef"
+        assert er.lock_path().read_text() == "request r-20261031T080000Z-abcdef"   # never let go
+        monkeypatch.delenv(er.LOCK_FD_ENV)
+        with pytest.raises(er.Busy, match="^request r-20261031T080000Z-abcdef runs"):
+            with er.request_lock("campaign C1"):
+                pass
+
+
+# ── SEC14 (R-11): a request plays once, while it is fresh; the names typed do not stay ──────
+
+def test_a_request_plays_once_and_its_replay_runs_nothing_and_publishes_nothing(tmp_path):
+    r, inj, published, _ = _runner(tmp_path)
+    req = _req(("T1110.001", GONDOLIN))
+    assert r.run(req, {}).state == "finished"
+    first = list(published)
+    said = []
+    r.say = said.append
+    again = r.run(req, {})
+    assert again.state == "refused" and again.codes == ["replayed"]
+    assert [w.code for w in again.wires] == ["replayed"]
+    assert len(inj.launched) == 1 and published == first      # its first play's status stays
+    assert any("played on this Orodruin already" in line for line in said)
+
+
+def test_a_request_is_registered_before_it_is_judged_a_refusal_or_a_crash_included(tmp_path):
+    """Refused (Orodruin passive), or a wire that could not start: played, never again."""
+    passive = orodruin.Verdict(orodruin.PASSIVE, [{"code": "identity_missing_right", "detail": "x"}], {})
+    r, inj, _, _ = _runner(tmp_path, check=lambda: passive)
+    req = _req(("T1110.001", GONDOLIN))
+    assert r.run(req, {}).codes[0] == "passive"
+    r.check = lambda: ARMED
+    assert r.run(req, {}).codes == ["replayed"] and inj.launched == []
+    registry = tmp_path / "runs" / "orodruin" / "requests" / er.PLAYED
+    [line] = registry.read_text().splitlines()
+    assert json.loads(line)["request"] == req.id
+
+    def crash(argv, env):
+        raise OSError("docker: no such image")
+    r2, _, _, _ = _runner(tmp_path)
+    r2.launch = crash
+    req2 = _req(("T1110.001", GONDOLIN), ("vm-shutdown", GONDOLIN))
+    assert r2.run(req2, {}).wires[0].code == "launch_failed"
+    assert r2.run(req2, {}).codes == ["replayed"]
+
+
+def test_a_registry_that_cannot_be_read_plays_nothing(tmp_path):
+    r, inj, published, _ = _runner(tmp_path)
+    registry = tmp_path / "runs" / "orodruin" / "requests" / er.PLAYED
+    registry.mkdir(parents=True)                       # unreadable as a file: IsADirectoryError
+    status = r.run(_req(("T1110.001", GONDOLIN)), {})
+    assert status.codes == ["replayed"] and inj.launched == [] and published == []
+
+
+@pytest.mark.parametrize("written, code", [
+    (timedelta(hours=6, seconds=1), "expired"),           # carried too late
+    (timedelta(hours=-6), "expired"),                      # dated far ahead
+    (timedelta(minutes=-6), "expired"),                    # ahead by more than the skew
+    (timedelta(hours=5, minutes=59), None),                # still fresh
+    (timedelta(minutes=-4), None),                         # within the skew between two clocks
+])
+def test_a_request_runs_only_while_it_is_fresh(tmp_path, written, code):
+    clock = Clock()
+    r, inj, published, _ = _runner(tmp_path, clock=clock)
+    req = xr.new([("T1110.001", GONDOLIN)], now=clock() - written)
+    status = r.run(req, {})
+    if code:
+        assert status.codes == [code] and inj.launched == [] and published == []
+        assert not (tmp_path / "runs" / "orodruin" / "requests" / er.PLAYED).exists()
+    else:
+        assert status.state == "finished"
+
+
+def test_main_removes_the_names_typed_once_read(tmp_path, monkeypatch):
+    p = tmp_path / "r-20261030T075200Z-a1b2c3.json"
+    p.write_text(json.dumps({"id": "r-20261030T075200Z-a1b2c3", "at": T0.isoformat(),
+                             "wires": [{"experiment": "T1486", "target": GONDOLIN, "rank": 1}]}))
+    typed = p.with_name("r-20261030T075200Z-a1b2c3.typed.json")
+    typed.write_text(json.dumps({"request": "r-20261030T075200Z-a1b2c3", "typed": {"1": "vm-celebrimbor-gondolin"}}))
+    got = []
+
+    class Fake:
+        def run(self, req, names):
+            got.append(names)
+            return er.Status(req.id, state="finished")
+    monkeypatch.setattr(er, "Runner", Fake)
+    er.main([str(p)])
+    assert got == [{1: "vm-celebrimbor-gondolin"}] and not typed.exists()
+    # Refused unreadable, they go too.
+    typed.write_text("{not json")
+    assert er.main([str(p)]) == 1 and not typed.exists()
 
 
 # ── The review of DG-b, point 6: read again after the wait, not before ─────────────────────
@@ -469,3 +620,10 @@ def test_a_destructive_fault_without_its_name_typed_is_refused_by_orodruin(tmp_p
     status = r.run(_req(("vm-wipe", GONDOLIN)), {1: "vm-celebrimbor-gondolin"})
     assert status.wire(1).state == "done"
     assert inj.launched[0][0][-2:] == ["--typed-name", "vm-celebrimbor-gondolin"]
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000")

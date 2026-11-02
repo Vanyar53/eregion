@@ -1,0 +1,7 @@
+#!/bin/sh
+# SEC12 (#418): gh as the agent sessions' GitHub App (scripts/agent_token.py), on this repository
+# only — never the maintainer's gh: no token, no call. docs/sessions.md, « L'identité des sessions ».
+here=$(cd "$(dirname "$0")/.." && pwd)
+py=${EREGION_AGENT_PYTHON:-$here/../.venv/bin/python}
+[ -x "$py" ] || py=python3
+exec "$py" "$here/agent_token.py" gh "$@"

@@ -551,3 +551,64 @@ def test_the_listing_s_creation_time_is_what_the_fake_says():
     channel.publish(_window(), channel=URL, credential=CRED, put=c.put)
     listing = c.get(URL, params={"restype": "container", "comp": "list"}).content.decode()
     assert f"<Creation-Time>{format_datetime(c.created['R1.json'], usegmt=True)}</Creation-Time>" in listing
+
+
+# ── SEC14 (V-21): what one pull reads in all is bounded, not only each read ───────────────────
+
+def _sizes(c):
+    """The bytes of each window the container holds."""
+    return [len(c.blobs[k][0]) for k in sorted(c.blobs)]
+
+
+def test_a_pull_reads_at_most_its_cumulated_bound_the_rest_next_time(tmp_path, monkeypatch):
+    c, said, d = FakeContainer(), [], tmp_path / "x"
+    for i in range(6):
+        channel.publish(_window(f"R{i}"), channel=URL, credential=CRED, put=c.put)
+    one = max(_sizes(c))
+    # The listing (one page) and about three windows: the bound holds their sum, each read within.
+    listing = len(c.get(URL, {}, params={"restype": "container", "comp": "list", "delimiter": "/"}).content)
+    monkeypatch.setattr(channel, "MAX_PULL_BYTES", listing + 3 * one)
+    first = channel.pull(d, channel=URL, credential=CRED, get=c.get, say=said.append)
+    assert 1 <= first < 6
+    assert any("this pull has read its" in s and "the rest waits for the next pull" in s for s in said)
+    total = first
+    for _ in range(6):
+        total += channel.pull(d, channel=URL, credential=CRED, get=c.get, say=said.append)
+    assert total == 6 and len(os.listdir(d)) == 6         # nothing lost, nothing half written
+
+
+def test_listing_pages_count_against_the_pulls_bound(tmp_path, monkeypatch):
+    """A container flooded with pages of names: the pull stops once their sum reaches its bound,
+    never reading page after page up to MAX_BLOBS."""
+    c, said = FakeContainer(page_size=2), []
+    for i in range(12):
+        channel.publish(_window(f"R{i:02d}"), channel=URL, credential=CRED, put=c.put)
+    monkeypatch.setattr(channel, "MAX_PULL_BYTES", 1)
+    assert channel.pull(tmp_path / "x", channel=URL, credential=CRED, get=c.get, say=said.append) == 0
+    assert len(c.listings) == 1 and any("this pull has read its" in s for s in said)
+
+
+def test_the_other_pulls_hold_the_same_bound(tmp_path, monkeypatch):
+    c = FakeContainer()
+    c.put(f"{URL}/runs/R1.json", data=b"[]")
+    c.put(f"{URL}/campaigns/C1/manifest.json", data=b"{}")
+    monkeypatch.setattr(channel, "MAX_PULL_BYTES", 0)
+    written, skipped = channel.pull_runs(tmp_path, refusal=lambda r, rid: "", channel=URL,
+                                         credential=CRED, get=c.get)
+    assert written == 0 and skipped["listing"].startswith("not listed whole")
+    written, skipped = channel.pull_orodruin(tmp_path, channel=URL, credential=CRED, get=c.get)
+    assert written == 0 and "listing" in skipped
+    written, failed = channel.pull_campaigns(tmp_path, channel=URL, credential=CRED, get=c.get)
+    assert written == 0 and not (tmp_path / "C1").exists()
+
+
+def test_a_blob_read_counts_against_the_pulls_bound_and_stops_it(tmp_path, monkeypatch):
+    c = FakeContainer()
+    c.put(f"{URL}/runs/R1.json", data=b"[" + b" " * 2000 + b"]")
+    c.put(f"{URL}/runs/R2.json", data=b"[]")
+    listing = len(c.get(URL, {}, params={"restype": "container", "comp": "list", "prefix": "runs/"}).content)
+    monkeypatch.setattr(channel, "MAX_PULL_BYTES", listing + 1000)
+    written, skipped = channel.pull_runs(tmp_path, refusal=lambda r, rid: "", channel=URL,
+                                         credential=CRED, get=c.get)
+    assert skipped["R1"].startswith("not pulled yet: ") and "this pull has read its" in skipped["R1"]
+    assert not (tmp_path / "R1.json").exists()

@@ -335,3 +335,10 @@ def test_unmeasured_run_records_no_latency(tmp_path, monkeypatch):
     assert outcome.detection_latency_s is None
     metrics = _report(tmp_path)["metrics"]
     assert metrics["detection"] == "unknown" and metrics["detection_latency_s"] is None
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-123")

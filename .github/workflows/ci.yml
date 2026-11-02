@@ -67,6 +67,37 @@ jobs:
         # thread's stack to the log — a hang says where it waits before the job's bound.
         run: python -m pytest tests/ -q -o faulthandler_timeout=480
 
+  # SEC14 (P-03): the advisories of the locks on each push and pull request, read only — the issues
+  # are pip-audit.yml's, weekly. On a pull request, red only for an advisory with a fixed version
+  # that no human accepted (requirements/audit-accepted.json, each with its reason): the bump is
+  # due. Without a fix, or accepted, informative; an audit that failed is said, never red. Never
+  # red on a push (its step continues on error, the job and its check-run stay green): H0's CD
+  # refuses a release whose commit has a red check-run, and an advisory published upstream must
+  # not hold back a release that runs the same dependency — the weekly run says it. pip-audit from
+  # its own lock, the runner's Python, no third-party action; ubuntu-24.04 pinned as in pip-audit.yml.
+  audit:
+    name: dependency advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+
+      # PyPI down during a push must not make H0's CD refuse a release either.
+      - name: Install pip-audit
+        continue-on-error: ${{ github.event_name == 'push' }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/audit"
+          "$RUNNER_TEMP/audit/bin/pip" install --require-hashes -r requirements/audit.txt
+
+      - name: Advisories (red only for one with a fix no one accepted)
+        continue-on-error: ${{ github.event_name == 'push' }}
+        run: >-
+          python3 scripts/pip_audit_issues.py pr --pip-audit "$RUNNER_TEMP/audit/bin/pip-audit"
+          --accepted requirements/audit-accepted.json
+          requirements/dev.txt requirements/glorfindel.txt requirements/annatar.txt requirements/audit.txt
+
   # The state files are keyed by name; macOS (APFS, case-insensitive by default) is
   # where a VM name with an upper-case letter deleted its own state (fifth review, C1).
   # Linux CI could not see it.
@@ -110,8 +141,9 @@ jobs:
   # G1), planned against mock providers: no Azure identifier, no token, nothing applied. Every
   # provider package comes from the registry and is checked against the hashes of its module's
   # committed lock file (-lockfile=readonly: a package that does not match, or a provider the
-  # lock does not list, fails init). Orodruin's and Glorfindel's host modules have no test yet:
-  # their configuration is validated against their own lock the same way.
+  # lock does not list, fails init). Glorfindel's host module has its own test since SEC11 (the
+  # session drain, VM by VM: infra/glorfindel-host/tests/); Orodruin's has none yet: its
+  # configuration is validated against its own lock the same way.
   terraform-test:
     name: terraform test (mock providers)
     runs-on: ubuntu-latest
@@ -155,9 +187,13 @@ jobs:
           terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/terraform test -no-color
 
-      - name: Terraform validate — Orodruin, Glorfindel's host
+      - name: Terraform test — Glorfindel's host (mock providers)
         run: |
-          for m in orodruin glorfindel-host; do
-            terraform -chdir="infra/$m" init -backend=false -lockfile=readonly -input=false -no-color
-            terraform -chdir="infra/$m" validate -no-color
-          done
+          terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir=infra/glorfindel-host validate -no-color
+          terraform -chdir=infra/glorfindel-host test -no-color
+
+      - name: Terraform validate — Orodruin
+        run: |
+          terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir=infra/orodruin validate -no-color

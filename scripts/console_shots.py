@@ -45,6 +45,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -366,8 +367,9 @@ def loopback_only() -> None:
 def install(api, doc: dict, put=setattr) -> None:
     """The console's readers of the bench replaced by the sample: the VMs and their tags (as
     ``TagEnrollment`` reads them through Azure: its judgement, ``enrollment``, stays the code's
-    own), the rules as the watch loads them, the watch's gate. ``put``: how each is replaced
-    (a test passes ``monkeypatch.setattr``)."""
+    own), the rules as the watch loads them, the watch's gate, and the subscription the bench's
+    scope names (SEC11, R-19: the sample's, never an Azure variable of the environment).
+    ``put``: how each is replaced (a test passes ``monkeypatch.setattr``)."""
     from eregion_core import inscription, watch_gate
     vms = []
     for t in doc["targets"]:
@@ -389,6 +391,11 @@ def install(api, doc: dict, put=setattr) -> None:
     put(api, "READ_TARGETS", lambda subscription: [dict(v) for v in vms])
     put(api, "_board_rules", lambda: rules)
     put(watch_gate, "refusal", lambda now=None: "")
+    bench_scope = inscription.Scope.for_bench
+
+    def for_bench(cls):
+        return replace(bench_scope(), subscription_id=doc["subscription"])
+    put(inscription.Scope, "for_bench", classmethod(for_bench))
 
 
 def confine_config(work: Path) -> None:

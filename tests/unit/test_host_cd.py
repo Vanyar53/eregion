@@ -252,8 +252,8 @@ class H0:
     def publish(self, tag):
         self.fake.gh["release"] = {"tag_name": tag, "html_url": f"https://example.invalid/releases/{tag}"}
 
-    def run(self, mode="run", **env):
-        return subprocess.run([sys.executable, str(self.cd / "eregion_cd.py"), mode], cwd=self.home,
+    def run(self, mode="run", *args, **env):
+        return subprocess.run([sys.executable, str(self.cd / "eregion_cd.py"), mode, *args], cwd=self.home,
                               env={**self.env, **env}, capture_output=True, text=True, timeout=120)
 
     def docker(self):
@@ -329,14 +329,275 @@ def test_what_runs_already_does_nothing(h0):
     assert h0.posts() == []
 
 
-def test_an_older_release_is_never_deployed(h0):
-    """What runs is ahead of the latest release (deployed by hand from a later commit)."""
+def test_an_older_release_is_refused_said_once_and_never_deployed(h0):
+    """SEC12: an older release made « latest » (by whoever can publish one) never takes H0 back:
+    refused, said with the mention, the way back named; not tried again."""
     assert h0.run().returncode == 0
     h0.fake.requests.clear()
     h0.publish("v0.3.1")
     res = h0.run()
-    assert res.returncode == 0 and "plus ancienne" in res.stdout
-    assert h0.running() == {"v0.4.0"} and h0.posts() == []
+    assert res.returncode == 1 and "plus ancienne" in res.stdout
+    assert h0.running() == {"v0.4.0"} and h0.head() == h0.commits["c2"]
+    said = _alerts(h0)[0]["embeds"][0]["description"]
+    assert "v0.3.1 est plus ancienne que v0.4.0" in said and "make glorfindel-host-cd-rollback TAG=v0.3.1" in said
+    assert h0.outcome("v0.3.1") == "refused"
+    assert h0.run().returncode == 0 and len(h0.posts()) == 1              # said once
+    assert h0.running() == {"v0.4.0"}
+
+
+def _on_main(h0, name, tag):
+    """A commit on main, tagged and published with its image."""
+    work = h0.tmp / "work"
+    _git(work, h0.env, "checkout", "-q", "main")
+    (work / "app.py").write_text(f"V = {name!r}\n")
+    _git(work, h0.env, "commit", "-qam", name)
+    h0.commits[name] = _git(work, h0.env, "rev-parse", "HEAD")
+    _git(work, h0.env, "tag", tag)
+    _git(work, h0.env, "push", "-q", "origin", "main", "--tags")
+    h0.image(name, tag)
+    h0.publish(tag)
+
+
+def test_a_lower_version_on_a_newer_commit_is_refused(h0):
+    """SEC12: the version too, not the commit alone — v0.2.0 tagged after v0.4.0 ran."""
+    assert h0.run().returncode == 0
+    _on_main(h0, "c3", "v0.2.0")
+    assert h0.run().returncode == 1 and h0.running() == {"v0.4.0"}
+    assert "v0.2.0 est plus ancienne que v0.4.0" in _alerts(h0)[-1]["embeds"][0]["description"]
+
+
+def test_a_higher_version_on_an_older_commit_is_refused(h0):
+    """SEC12: a « newer » release whose commit precedes what runs is older code: refused."""
+    assert h0.run().returncode == 0
+    work = h0.tmp / "work"
+    _git(work, h0.env, "tag", "v0.5.0", h0.commits["c1"])
+    _git(work, h0.env, "push", "-q", "origin", "--tags")
+    h0.publish("v0.5.0")
+    assert h0.run().returncode == 1 and h0.running() == {"v0.4.0"}
+    assert "précède v0.4.0, qui tourne" in _alerts(h0)[-1]["embeds"][0]["description"]
+
+
+def _published_back(h0):
+    """v0.4.0 runs; v0.3.1 published, its image too."""
+    assert h0.run().returncode == 0
+    h0.image("c1", "v0.3.1")
+    h0.fake.gh["releases"]["v0.3.1"] = {"tag_name": "v0.3.1", "html_url": "https://example.invalid/releases/v0.3.1",
+                                        "prerelease": False, "draft": False}
+    h0.fake.requests.clear()
+
+
+def test_the_way_back_asked_on_h0_is_verified_deployed_and_the_release_left_stays_behind(h0):
+    _published_back(h0)
+    res = h0.run("rollback", "v0.3.1")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.3.1"} and h0.head() == h0.commits["c1"]
+    assert h0.outcome("v0.3.1") == "deployed" and h0.outcome("v0.4.0") == "rolled back"
+    start = next(p for p in h0.posts() if p["embeds"][0]["title"].startswith("🚀"))
+    assert "retour arrière demandé sur H0 : v0.4.0 → v0.3.1" in start["embeds"][0]["description"]
+    assert [c[0] for c in h0.sig.calls()].count("verify") >= 2       # verified as any release
+    # The timer's next pass: the latest release is still v0.4.0 — left behind, never taken up.
+    assert h0.run().returncode == 0 and h0.running() == {"v0.3.1"}
+    # retry (or a new release) takes it up again.
+    assert h0.run("retry").returncode == 0 and h0.running() == {"v0.4.0"}
+
+
+def test_a_way_back_to_a_release_not_published_moves_nothing(h0):
+    assert h0.run().returncode == 0
+    h0.image("c1", "v0.3.1")                    # the image is there, the release is not (a draft: 404)
+    res = h0.run("rollback", "v0.3.1")
+    assert res.returncode == 1 and "aucune release publiée sous v0.3.1" in res.stdout
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+
+
+@pytest.mark.parametrize("flags", [{"prerelease": True}, {}, {"prerelease": False, "draft": True}])
+def test_a_way_back_to_a_pre_release_moves_nothing(h0, flags):
+    """The way back goes to a published release only: a pre-release (or an answer that does not say)
+    is refused."""
+    assert h0.run().returncode == 0
+    h0.image("c1", "v0.3.1")
+    h0.fake.gh["releases"]["v0.3.1"] = {"tag_name": "v0.3.1", "html_url": "", **flags}
+    res = h0.run("rollback", "v0.3.1")
+    assert res.returncode == 1 and "pré-version" in res.stdout
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed"
+
+
+def test_a_way_back_is_asked_for_one_tag_written_out(h0):
+    assert h0.run("rollback").returncode == 2 and h0.run("rollback", "v0.3.1", "x").returncode == 2
+    assert h0.run("rollback", "../v0.3.1").returncode == 2
+    assert h0.running() == {"v0.3.1"} and h0.posts() == []
+
+
+def test_the_way_back_is_still_judged_by_its_health(h0):
+    """Older, asked, and sick: back on what ran, which is not marked left behind."""
+    _published_back(h0)
+    h0.fake.console_status = 500
+    assert h0.run("rollback", "v0.3.1").returncode == 1
+    assert h0.outcome("v0.4.0") == "deployed"
+    assert h0.outcome("v0.3.1") in ("rolled back", "rollback failed")
+
+
+def test_a_cut_way_back_taken_up_leaves_the_release_behind(h0):
+    """The way back, cut after its switch: the next pass takes it up — and still leaves v0.4.0."""
+    _published_back(h0)
+    assert h0.run("rollback", "v0.3.1").returncode == 0
+    state = json.loads((h0.cd / "state.json").read_text())
+    state["outcomes"]["v0.3.1"].update(result="switching", **{"from": "v0.4.0", "asked": True, "at": 0, "url": ""})
+    state["outcomes"]["v0.4.0"] = {"result": "deployed", "why": "", "at": 0}
+    (h0.cd / "state.json").write_text(json.dumps(state))
+    h0.heartbeat.write_text("x")
+    assert h0.run().returncode == 0
+    assert h0.outcome("v0.3.1") == "deployed" and h0.outcome("v0.4.0") == "rolled back"
+
+
+# ── SEC12: the tag rule, read without a token ────────────────────────────────────────
+
+def test_the_tag_rule_seen_is_said_with_the_start(h0):
+    assert h0.run().returncode == 0
+    start = next(p for p in h0.posts() if p["embeds"][0]["title"].startswith("🚀"))
+    assert "🔒 v0.4.0 réservé par la règle « tags v\\* »" in start["embeds"][0]["description"]   # escaped
+    assert not _alerts(h0)
+
+
+def test_a_missing_tag_rule_is_said_with_the_mention_once_never_a_refusal(h0):
+    h0.fake.gh["rulesets"] = []
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+    warned = [p for p in _alerts(h0) if "ne réserve son tag" in p["embeds"][0]["title"]]
+    assert len(warned) == 1 and "Settings → Rules" in warned[0]["embeds"][0]["description"]
+
+
+def test_a_tag_rule_that_cannot_be_read_is_said_without_the_mention(h0):
+    h0.fake.gh["rulesets"] = None                 # 404: what GitHub may show without a token
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+    assert any("n'a pas pu être lue" in t for t in _titles(h0)) and not _alerts(h0)
+
+
+def test_check_says_a_missing_tag_rule(h0):
+    h0.fake.gh["rulesets"] = []
+    assert h0.run("check").returncode == 0
+    assert any(t.startswith("À blanc : ⚠️") and "ne réserve son tag" in t for t in _titles(h0))
+
+
+def _ruleset(**over):
+    r = {"id": 11, "name": "tags", "target": "tag", "enforcement": "active",
+         "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+         "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}]}
+    r.update(over)
+    return r
+
+
+@pytest.mark.parametrize("rulesets, seen", [
+    ([_ruleset()], "held"),
+    ([_ruleset(conditions={"ref_name": {"include": ["~ALL"], "exclude": []}})], "held"),
+    ([_ruleset(enforcement="evaluate")], "absent"),                       # watched, not enforced
+    ([_ruleset(target="branch")], "absent"),
+    ([_ruleset(conditions={"ref_name": {"include": ["refs/tags/release-*"], "exclude": []}})], "absent"),
+    ([_ruleset(conditions={"ref_name": {"include": ["refs/tags/v*"], "exclude": ["refs/tags/v0.4.*"]}})], "absent"),
+    ([_ruleset(rules=[{"type": "creation"}, {"type": "update"}])], "absent"),   # deletion left open
+    ([_ruleset(rules=[{"type": "deletion"}, {"type": "update"}])], "absent"),   # creation left open
+    ([_ruleset(id="11")], "absent"),
+    ([_ruleset(enforcement="disabled"), _ruleset(id=12)], "held"),
+    (None, "unknown"),
+    ({"message": "Not Found"}, "unknown"),
+])
+def test_the_tag_rule_covers_the_tag_and_forbids_its_creation_update_and_deletion(agent, monkeypatch, rulesets, seen):
+    def github(path):
+        if path.startswith("/rulesets?"):
+            if rulesets is None or isinstance(rulesets, dict):
+                return rulesets
+            return [{k: v for k, v in r.items() if k not in ("conditions", "rules")} for r in rulesets]
+        return next((r for r in rulesets if str(r["id"]) == path.rsplit("/", 1)[1]), None)
+    monkeypatch.setattr(agent, "github", github)
+    assert agent.tag_rule("v0.4.10")[0] == seen
+
+
+def test_a_tag_rule_unreadable_on_the_way_is_unknown_never_an_error(agent, monkeypatch):
+    def github(path):
+        raise agent.Quiet("GitHub API: HTTP 403")
+    monkeypatch.setattr(agent, "github", github)
+    assert agent.tag_rule("v0.4.10") == ("unknown", "les règles du dépôt ne se lisent pas (GitHub API: HTTP 403)")
+
+
+@pytest.mark.parametrize("tag, running, older", [
+    ("v0.4.9", "v0.4.10", True), ("v0.4.10", "v0.4.9", False), ("v0.10.0", "v0.9.9", False),
+    ("v1.0.0", "v0.99.99", False), ("v0.4.10", "v0.4.10", False), ("v0.3.9", "main", False),
+    ("v0.4.10", "v1.0.0", True),
+])
+def test_versions_are_compared_as_numbers(agent, monkeypatch, tag, running, older):
+    monkeypatch.setattr(agent, "ancestry", lambda a, b: False)
+    assert bool(agent.older(tag, "c", running, "d")[0]) is older
+
+
+# ── SEC12, after its review: never back by a reading that fails ─────────────────────
+
+@pytest.mark.parametrize("tag, floor, older", [
+    ("v0.3.9", {"tag": "v0.4.0", "commit": "e"}, True),       # under the floor, whatever runs
+    ("v0.4.1", {"tag": "v0.4.0", "commit": "e"}, False),
+    ("v0.3.9", None, False), ("v0.3.9", {"tag": 7}, False),
+])
+def test_the_floor_is_the_highest_version_deployed_whatever_runs(agent, monkeypatch, tag, floor, older):
+    monkeypatch.setattr(agent, "ancestry", lambda a, b: False)
+    assert bool(agent.older(tag, "c", "v0.3.1", "d", floor)[0]) is older
+
+
+def test_a_commit_before_the_floors_is_older(agent, monkeypatch):
+    monkeypatch.setattr(agent, "ancestry", lambda a, b: b == "e")
+    why, readable = agent.older("v0.5.0", "c", "v0.3.1", "d", {"tag": "v0.4.0", "commit": "e"})
+    assert readable and "précède v0.4.0, déjà déployée sur H0" in why
+
+
+def test_an_order_git_cannot_read_is_refused_never_taken_for_newer(agent, monkeypatch):
+    """merge-base answers 128 (a commit the VM's repository does not know): refused, even when asked."""
+    monkeypatch.setattr(agent, "git", lambda *a, **k: subprocess.CompletedProcess(a, 128, "", "fatal"))
+    assert agent.ancestry("c", "d") is None
+    why, readable = agent.older("v0.5.0", "c", "v0.4.0", "d")
+    assert not readable and "ne se lit pas" in why
+    monkeypatch.setattr(agent, "is_ancestor", lambda a, b: True)
+    with pytest.raises(agent.Refused, match="ne se lit pas"):
+        agent.verify("v0.5.0", "c", "d", {"outcomes": {}, "said": {}}, "v0.4.0", back_to="v0.5.0")
+
+
+def test_the_floor_is_raised_by_a_deployment_and_never_lowered(agent):
+    state = {}
+    agent.raise_floor(state, "v0.4.0", "c2")
+    agent.raise_floor(state, "v0.3.1", "c1")
+    agent.raise_floor(state, "main", "c9")
+    assert state["floor"] == {"tag": "v0.4.0", "commit": "c2"}
+    agent.raise_floor(state, "v0.4.1", "c3")
+    assert state["floor"] == {"tag": "v0.4.1", "commit": "c3"}
+
+
+def test_a_deployment_raises_the_floor_and_a_way_back_keeps_it(h0):
+    assert h0.run().returncode == 0
+    floor = lambda: json.loads((h0.cd / "state.json").read_text())["floor"]   # noqa: E731
+    assert floor() == {"tag": "v0.4.0", "commit": h0.commits["c2"]}
+    h0.image("c1", "v0.3.1")
+    h0.fake.gh["releases"]["v0.3.1"] = {"tag_name": "v0.3.1", "html_url": "", "prerelease": False}
+    assert h0.run("rollback", "v0.3.1").returncode == 0 and h0.running() == {"v0.3.1"}
+    assert floor() == {"tag": "v0.4.0", "commit": h0.commits["c2"]}
+
+
+def test_under_the_floor_is_refused_though_what_runs_is_older(h0):
+    """H0 put back on v0.3.1 by hand after v0.4.0 ran: a v0.3.x release is still older."""
+    assert h0.run().returncode == 0
+    state = h0.docker()
+    for c in state["containers"].values():
+        c.update(version="v0.3.1", revision=h0.commits["c1"])
+    h0.state.write_text(json.dumps(state))
+    work = h0.tmp / "work"
+    _git(work, h0.env, "tag", "v0.3.2", h0.commits["c2"])     # a lower tag on the floor's commit
+    _git(work, h0.env, "push", "-q", "origin", "--tags")
+    h0.publish("v0.3.2")
+    assert h0.run().returncode == 1 and h0.running() == {"v0.3.1"}
+    assert "plus ancienne que v0.4.0, déjà déployée sur H0" in _alerts(h0)[-1]["embeds"][0]["description"]
+
+
+def test_what_runs_unreadable_is_refused_never_taken_for_older_than_anything(h0):
+    state = h0.docker()
+    state["containers"].pop("eregion-watch")
+    h0.state.write_text(json.dumps(state))
+    assert h0.run().returncode == 1 and h0.outcome("v0.4.0") == "refused"
+    assert "ne se lit pas" in _alerts(h0)[-1]["embeds"][0]["description"]
+    assert not any(c.startswith("pull") for c in h0.calls())
 
 
 # ── verified first ─────────────────────────────────────────────────────────────────

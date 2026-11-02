@@ -48,38 +48,38 @@ def test_ids_are_parsed():
 
 def test_sandbox_vm_allowed_by_default_pattern():
     # No explicit allowlist → the celebrimbor RG pattern admits it.
-    assert Scope().check(SANDBOX_VM).allowed
+    assert Scope(subscription_id="sub-1").check(SANDBOX_VM).allowed
 
 
 def test_prod_vm_refused_even_without_allowlist():
-    res = Scope().check(PROD_VM)
+    res = Scope(subscription_id="sub-1").check(PROD_VM)
     assert not res.allowed
     assert "outside Celebrimbor" in res.reason
 
 
 def test_instance_suffixed_rg_allowed():
     rid = SANDBOX_VM.replace("rg-celebrimbor", "rg-celebrimbor-ci-1234")
-    assert Scope().check(rid).allowed
+    assert Scope(subscription_id="sub-1").check(rid).allowed
 
 
 def test_explicit_resource_id_allowlist_is_restrictive():
-    s = Scope(allowed_resource_ids=[SANDBOX_VM])
+    s = Scope(allowed_resource_ids=[SANDBOX_VM], subscription_id="sub-1")
     assert s.check(SANDBOX_VM).allowed
     other = SANDBOX_VM.replace("gondolin", "nargothrond")
     assert not s.check(other).allowed  # not in explicit list
 
 
 def test_empty_resource_id_refused():
-    assert not Scope().check("").allowed
+    assert not Scope(subscription_id="sub-1").check("").allowed
 
 
 def test_unknown_sandbox_refused():
-    assert not Scope(sandbox="not-celebrimbor").check(SANDBOX_VM).allowed
-    assert not Scope(sandbox="").check(SANDBOX_VM).allowed
+    assert not Scope(sandbox="not-celebrimbor", subscription_id="sub-1").check(SANDBOX_VM).allowed
+    assert not Scope(sandbox="", subscription_id="sub-1").check(SANDBOX_VM).allowed
 
 
 def test_named_celebrimbor_instance_is_a_bench():
-    assert Scope(sandbox="celebrimbor-ci").check(SANDBOX_VM).allowed
+    assert Scope(sandbox="celebrimbor-ci", subscription_id="sub-1").check(SANDBOX_VM).allowed
 
 
 def test_the_scope_subscription_is_enforced():
@@ -88,6 +88,31 @@ def test_the_scope_subscription_is_enforced():
     assert Scope(subscription_id="SUB-1").check(SANDBOX_VM).allowed
     res = Scope(subscription_id="sub-2").check(SANDBOX_VM)
     assert not res.allowed and "subscription" in res.reason
+
+
+@pytest.mark.parametrize("sub", ["", "  "])
+def test_a_scope_that_names_no_subscription_refuses_every_target(sub):
+    """SEC11 (R-19): a perimeter without its subscription was bounded by the identity's rights
+    alone — a target in any subscription the identity reached passed the scope."""
+    res = Scope(subscription_id=sub).check(SANDBOX_VM)
+    assert not res.allowed and "names no subscription" in res.reason
+    assert not Scope(subscription_id=sub, allowed_resource_ids=[SANDBOX_VM]).check(SANDBOX_VM).allowed
+
+
+def test_the_bench_scope_names_the_subscription_of_its_process(monkeypatch):
+    """SEC11 (R-19): Scope.for_bench() — Dagorlad's plan, Orodruin's runner, the injectors'
+    check at execution — reads AZURE_SUBSCRIPTION_ID; unset, it refuses, never admits."""
+    monkeypatch.delenv("AZURE_SUBSCRIPTION_ID", raising=False)
+    unset = Scope.for_bench()
+    assert unset.subscription_id == "" and not unset.check(SANDBOX_VM).allowed
+    res = check_target(SANDBOX_VM, BENCH, BENCH, kind="technique", destructive=False)
+    assert not res.allowed and "names no subscription" in res.reason
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", " sub-1 ")
+    assert Scope.for_bench().subscription_id == "sub-1"
+    assert check_target(SANDBOX_VM, BENCH, BENCH, kind="technique", destructive=False).allowed
+    other = SANDBOX_VM.replace("sub-1", "sub-2")
+    res = check_target(other, BENCH, BENCH, kind="technique", destructive=False)
+    assert not res.allowed and "outside the scope's subscription" in res.reason
 
 
 def test_budget_defaults_no_destructive():
@@ -262,3 +287,10 @@ def test_the_bench_comes_from_the_environment(monkeypatch):
 def test_legacy_flag_reaches_the_caller():
     res = check_target(SANDBOX_VM, LEGACY, LEGACY, kind="technique", destructive=True)
     assert res.allowed and res.legacy
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub-1")

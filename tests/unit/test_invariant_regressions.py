@@ -5584,13 +5584,50 @@ def test_a_vm_block_rewritten_before_its_subnets_perimeter_never_says_unblocked(
           (_SUBNET, "glorfindel-block-192-31-196-7"), "non_disruptive"))
 
 
+# I3R (#431): the night's seed 67 at 60, two failures, one cause.
+_I3R_NET = _net(quarantine=True, quarantine_rg="rg-sec", db_nic_0={"own": "dedicated"})
+_I3R_STEPS = (
+    # Db--01 isolated (both NICs into the quarantine), our inbound deny turned to another
+    # protocol, the reassertion puts it back: a card « reposée une fois ».
+    ("quarantine_altered_then_reasserted", DB, DB, None, False, False, "protocol",
+     (_SEC_Q, "glorfindel-quarantine-deny-in"), "non_disruptive", "no"),
+    # Isolated again, reached by its lowercase id; our quarantine stripped and said; its tag
+    # taken off, a pass outside human_only: the NSG is not ours any more — the isolation is
+    # put back by rules on the NSG the NIC carries, the quarantine NSG itself.
+    ("quarantine_altered_then_reasserted", DB, DB.lower(), None, False, True, _SEC_Q, "human_only", "untagged",
+     _SEC_Q, 1, "non_disruptive"),
+)
+
+
+def test_a_nics_rules_on_the_quarantine_nsg_it_left_go_with_the_release(monkeypatch):
+    """The night's seed 67 at 60 (I3R, #431), 29 rules shrunk by hand to three: Db--01's
+    isolation put back by the reassertion while our quarantine NSG had lost its tag — not
+    ours, so db-nic-0's rules went on the NSG it carries, the quarantine NSG; the tag back,
+    the state lost. The release reads db-nic-0 in our quarantine, puts its NSG back from our
+    tag, then sweeps the NSGs that govern it now — the quarantine NSG no longer one of them:
+    « I3: release said released, …/Db--01 is not back to its design », its two rules left
+    there. Red on `main` 9c4e8c5, and before L1Qr (4fa6f70~1); reached since L2C (d380df5)."""
+    _run(monkeypatch, _I3R_NET, *_I3R_STEPS, ("lose_state", DB))
+
+
+def test_a_nics_rules_on_the_quarantine_nsg_it_left_go_once_the_operator_gives_its_original(monkeypatch):
+    """The second failure of seed 67 (I3R): the same, the tags of the quarantine NSG lost
+    too — the release keeps db-nic-0 in quarantine and says why, the operator sets the tag
+    (I7), the release then puts its NSG back and says `released`, the rules still there."""
+    _run(monkeypatch, _I3R_NET, *_I3R_STEPS, ("lose_state", DB), ("tags_lost", _SEC_Q))
+
+
 def _r1d(name, priority, access, direction, source, destination, port="*"):
     return _rule(name, priority, dict(access=access, direction=direction, source_address_prefix=source,
                                       destination_address_prefix=destination, destination_port_range=port))
 
 
 _LATERAL_OUT = ("allow-lateral-out", 100, "Allow", "Outbound", "*", "VirtualNetwork")
+
+
 _LATERAL_IN = ("deny-lateral-in", 130, "Deny", "Inbound", "VirtualNetwork", "*")
+
+
 _SEC13_L1_NET = {
     "subnet_nsg": [_r1d("allow-https", 100, "Allow", "Inbound", "Internet", "*", "443"),
                    _r1d(*_LATERAL_OUT), _r1d(*_LATERAL_IN)],

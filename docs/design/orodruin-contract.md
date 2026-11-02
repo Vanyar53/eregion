@@ -31,7 +31,7 @@ Six garanties. Chacune a un mécanisme, et une vérification qui ne demande **au
 | Garantie | Mécanisme | Vérifiée par |
 |---|---|---|
 | Périmètre réseau | sortie limitée au banc, aux API de contrôle du cloud et à l'API du modèle | une connexion hors périmètre échoue |
-| Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque ; sans expérience dans le groupe (Chaos Studio non enregistré sur l'abonnement : `MissingSubscriptionRegistration` ou `NoRegisteredProviderFound`, quel que soit le statut — SEC7, à mesurer), les droits du chaos ne sont pas demandés |
+| Identité limitée | identité d'exécution qui lit le groupe du banc et n'écrit que sur chaque VM inscrite et chaque expérience (SEC5) ; ce qu'elle tient est une liste d'autorisations (SEC11) | lecture de ses attributions de rôle, à toutes les portées, et de ses droits effectifs sur le banc ; une écriture sur le groupe entier = manque ; un droit hors de la liste de sa portée = manque ; sans expérience dans le groupe (Chaos Studio non enregistré sur l'abonnement : `MissingSubscriptionRegistration` ou `NoRegisteredProviderFound`, quel que soit le statut — SEC7, à mesurer), les droits du chaos ne sont pas demandés |
 | Cibles inscrites | l'inscription est revérifiée à chaque injection | refus sans inscription (O0, déjà en place) |
 | Plafond | limite de l'orchestrateur, ou quota | configuration effective lue |
 | Arrêt d'urgence | révoquer l'identité, tout arrêter | essai à blanc en CI |
@@ -432,9 +432,32 @@ c'est dit une fois ; une copie locale qui ne se lit plus (corrompue, pas une fen
 fenêtre vue pour la première fois déjà fermée serait refusée : ses cycles restent « real », le
 sens sûr).
 
-Limites qui restent, assumées : une fenêtre écrite sur l'hôte même (sans canal) n'est bornée que
-vers le futur (le mtime de son fichier), car qui écrit là écrit aussi le reste de l'état ; en
-production, la règle repose sur le `destructive` que l'injecteur écrit d'après le catalogue — un
+**Une fenêtre écrite sur l'hôte même** (sans canal : la watch et l'injecteur partagent `runs/`) est
+bornée de la même façon (SEC14, V-20), par ce que la watch en a vu : la première fois qu'elle la lit,
+elle note quand, dans son propre état (`~/.glorfindel/exercise_seen.json`, jamais dans `runs/`
+qu'écrit l'injecteur, et qu'aucun conteneur d'injecteur ne monte, SEC3). La fenêtre ne peut pas
+commencer plus de 5 min avant ce moment, et, une fois vue, ne peut revenir que fermée, comme par le
+canal. La watch relit ses fenêtres chaque minute (le ménage de `glorfindel watch`) : une fenêtre
+d'injecteur est vue moins d'une minute après son écriture, et aucun run ne part sans watch vivante
+(V1). Un registre illisible ne fait croire aucune fenêtre : leurs cycles restent « real ».
+Le mtime d'un fichier ne borne rien (qui écrit le fichier écrit aussi sa date). **Une fenêtre n'est
+« tirée du canal » que si le registre le dit** (relecture de SEC14) : le tirage y note chaque fenêtre
+qu'il écrit, avec la création de son blob et ce qu'elle dit (`note_pulled`) ; un `channel_created` que
+le fichier porte seul est la parole de qui l'a écrit, et la fenêtre est alors locale. Le registre est
+lu, changé et écrit sous un `flock`, par un fichier temporaire à lui (`mkstemp`) : la watch,
+`glorfindel respond` et la console peuvent lire les fenêtres en même temps. Une watch arrêtée plus de
+5 min pendant un run local voit sa fenêtre en retard : refusée, ses cycles comptent comme réels, le
+sens sûr. **La transition** : une copie tirée avant cette version (une fenêtre encore ouverte au
+déploiement) n'est pas au registre. Le tirage la retire une fois, par `rewrite_refusal` comme toute
+autre, la date de la création que donne la liste — jamais celle que porte la copie —, puis la note :
+la fenêtre redevient celle du canal, et un exercice à cheval sur un déploiement reste mesuré. Ce
+téléchargement unique est borné par `MAX_DOWNLOADS` et la borne cumulée du tirage. Une copie qui
+n'est plus celle du canal (réécrite sur l'hôte) reste refusée, donc locale.
+
+Limites qui restent, assumées : une suite de fenêtres neuves, chacune écrite au moment où elle
+commence, couvre une VM aussi longtemps que son rédacteur le veut — par le canal comme sur l'hôte ;
+la console montre les fenêtres telles que leurs fichiers les disent (`window_refusal`), sans ce
+registre, que seule la watch tient ; en production, la règle repose sur le `destructive` que l'injecteur écrit d'après le catalogue — un
 rédacteur du canal qui mentirait là ne ferait marquer qu'une technique non destructive, sur une
 VM inscrite.
 
@@ -442,7 +465,10 @@ VM inscrite.
 entier puis contrôlé) : un blob au plus `MAX_BLOB_BYTES` (1 Mio), une page de liste au plus
 `MAX_LISTING_BYTES` (8 Mio), au plus `MAX_BLOBS` noms listés (2 000) et `MAX_DOWNLOADS` blobs
 téléchargés (200) par tirage ; ce qui dépasse est dit, laissé au tirage suivant ou écarté, jamais
-écrit. Le jeton de stockage ne part que vers `https://<compte>.blob.core.windows.net` (ou
+écrit. Et en cumul (SEC14) : un tirage lit au plus `MAX_PULL_BYTES` (32 Mio), ses pages de liste et
+ses blobs ensemble — chaque tirage (fenêtres, campagnes, rapports de run, mots d'Orodruin) a le sien ;
+au-delà, il s'arrête là, le dit, et le reste attend le tirage suivant (une campagne dont la liste est
+coupée n'est pas écrite). Le jeton de stockage ne part que vers `https://<compte>.blob.core.windows.net` (ou
 `.blob.core.chinacloudapi.cn`, `.blob.core.usgovcloudapi.net`), port 443, sans utilisateur dans
 l'URL : toute autre URL est refusée avant qu'un jeton soit demandé. Une rétention sur le compte
 (`azurerm_storage_management_policy`, gratuite) tient la liste sous ces bornes : la liste est
@@ -451,6 +477,13 @@ fenêtres les plus récentes qui ne seraient plus tirées. Les blobs de bloc (fe
 rapports de run, détections) partent 9 jours après leur dernière écriture (la purge de la watch,
 7 jours après le dernier moment d'une fenêtre, plus 2 h 15 et une marge) ; le journal d'Orodruin
 (`audit/`) reste 90 jours, le temps de revenir sur un incident.
+
+**Les scripts locaux (V-19, SEC14).** Le catalogue se porte garant du contenu d'un script, pas de son
+chemin : chaque entrée qui nomme un `reference_script` ou des `setup_scripts` porte leur sha256
+(`script_sha256`). Un script dont le contenu n'est pas celui-là n'est plus « ce que le catalogue a dit »
+(`catalog_destructive` : inconnu, donc destructif, refusé en production), et `run_script` ne l'envoie
+pas à la VM : le fichier est lu une fois, son empreinte comparée, puis ce contenu-là envoyé. Un script
+changé change son empreinte dans le même commit (`tests/unit/test_injector_guards.py`).
 
 **Les atomics (V-30).** Le sha256 de chaque atomic est relu contre `PIN` à chaque run. `PIN` est
 rangé à côté des YAML, dans la même image : une modification qui touche les deux à la fois n'est
@@ -476,6 +509,37 @@ tous les injecteurs neufs refusent (« names no perimeter »), le sens fermé �
 version SEC5 ; `--without-glorfindel` reste possible hors production. En profil local, un vieil
 injecteur (une image d'avant SEC5) lit la copie de la watch neuve, devenue du JSON, comme une date
 illisible, et refuse aussi : `make build`.
+
+## SEC11 — une liste d'autorisations, pas une liste de refus (#417, 02/11)
+
+Le contrat refusait quatre écritures (démarrer une VM, Run Command, démarrer ou annuler une
+expérience) sur le groupe entier, et laissait passer le reste : un rôle large qui n'en contient
+aucune — `Network Contributor` sur le groupe du banc, par exemple — armait encore Orodruin.
+Désormais, ce que l'identité **tient** dans le banc est une liste, par genre de portée
+(`eregion_core/orodruin.py`, `allowed_at`) :
+
+| Portée de l'attribution | Ce qu'un rôle peut y tenir | Pourquoi |
+|---|---|---|
+| le groupe du banc | les lectures des injecteurs (`READ_ACTIONS`) | Annatar lit la VM, ses NSG, cartes et sous-réseaux ; Gothmog lit les expériences |
+| une VM du groupe | ces lectures, `start`, `runCommand` (`VM_ACTIONS`) | Annatar démarre une VM arrêtée et y lance son script |
+| une expérience du groupe | ces lectures, démarrer et annuler (`CHAOS_ACTIONS`) | Gothmog lance la panne et peut l'arrêter |
+| l'espace de logs du banc | ces lectures, `Log Analytics Reader` tel qu'Azure le définit (`LOGS_READER_ACTIONS` : `*/read`, les deux actions de requête, `Microsoft.Support/*` ; `LOGS_READER_DATA_ACTIONS` : son action de données, `workspaces/jobs/export/action`, que la lecture marque `data:` ; son `notAction`, les clés partagées, ne fait que le restreindre) | Gothmog relit l'effet de sa panne dans les logs, par l'API de contrôle. À cette portée, ces droits n'atteignent que l'espace de logs : un ticket de support relève de l'abonnement |
+
+Chaque action d'un rôle doit y figurer **telle qu'elle est écrite** : un joker n'est pas déplié
+(`Microsoft.Compute/virtualMachines/*` sur une VM refuse), une action de données refuse, un rôle
+illisible refuse, une portée plus bas qu'une VM (une extension) n'a que les lectures. Sur le
+groupe, les droits effectifs relus (qui comptent aussi une attribution au-dessus du banc, ou une
+que la liste n'a pas montrée) ne peuvent être que ces lectures et la lecture des attributions du
+contrat (`contract_reader`, sur l'abonnement). Le reste → `identity_unlisted_right` → `passive`,
+avec l'action et la portée dans le détail. Les attributions hors du banc ne changent pas : la
+lecture des attributions, les deux conteneurs des canaux.
+
+Ce que `infra/orodruin/main.tf` donne tient dans cette liste sans changement : les trois rôles
+d'injecteur et `Log Analytics Reader` sur l'espace de logs. Un test lie la liste à ce rôle, et un autre relit sa définition publiée (JSON exact, action de données comprise) par la vraie lecture du contrat (`read_identity`) : `armed`.
+**À constater après le prochain `orodruin-check`** : `armed`. Si Azure définissait `Log Analytics
+Reader` autrement que la liste, le contrat dirait `identity_unlisted_right` en nommant l'action en
+trop — l'échec est fermé, et il se corrige dans la liste, après lecture de la définition
+(`az role definition list --name "Log Analytics Reader"`). Mutants M2883–M2887.
 
 ## L'image des injecteurs (CI3, #267, 29/10)
 
@@ -533,9 +597,25 @@ contrat : ni droit, ni attribution, ni sortie réseau, ni canal. Conception :
 - elle est copiée par SSH dans `~/requests/` d'Orodruin, avec les noms tapés à part
   (`<id>.typed.json`) ;
 - elle est lancée dans l'image des injecteurs : `python -m eregion_core.exercise_runner`, `~/requests`
-  monté en lecture seule.
+  monté en lecture seule. Les noms tapés sont retirés d'Orodruin quand le lancement se termine,
+  quelle que soit sa fin (un `trap` du shell distant, sur `EXIT`, `HUP`, `INT` et `TERM`) ; là où il
+  le peut (un répertoire qui n'est pas en lecture seule), le lanceur les retire lui-même dès qu'il
+  les a lus (SEC14, R-11).
 
 Orodruin ne tire rien et n'écoute rien : la commande vient de l'opérateur.
+
+**Une demande se joue une fois, et fraîche** (SEC14, R-11). Sous le verrou, avant tout jugement :
+- son identifiant est cherché dans le registre des demandes jouées
+  (`runs/orodruin/requests/played.jsonl`) : déjà là, elle est refusée (`replayed`) ; un registre qui
+  ne se lit pas ne laisse rien jouer ;
+- elle doit avoir été écrite il y a moins de 6 h (`MAX_AGE_S`), et pas plus de 5 min dans le futur
+  de l'horloge d'Orodruin : sinon, `expired` — une nouvelle demande se fait dans la console ;
+- puis son identifiant est inscrit au registre, sur le disque avant le jugement : refusée ensuite
+  (contrat passif, un fil refusé) ou coupée par un crash, elle ne rejoue jamais ici.
+
+Ni `replayed` ni `expired` ne publient de statut : celui de la première fois reste le sien (ici, ou sur
+un Orodruin d'avant celui-ci). Le registre vit sur le disque d'Orodruin : un Orodruin reconstruit le
+perd, et c'est la limite de 6 h qui borne alors le rejeu.
 
 **Le jugement** (`eregion_core/exercise_runner.py`). Il se fait dans cet ordre, et rien ne part si
 un fil est refusé :
@@ -592,36 +672,46 @@ agit sur plusieurs VM est refusée (`no_engine`), dès le jugement : elle ne tou
 que ce que l'opérateur a vu et tapé. La fenêtre de chaque run
 porte l'identifiant de la demande, ainsi que son rapport (`metrics.request`).
 
-**Un run à la fois** (relecture de DG-b, point 5 ; #358). Un verrou exclusif, jamais attendu
-(`flock` sur `runs/orodruin/requests/.lock`, `exercise_runner.request_lock`), est pris :
-- par une demande, le temps de tous ses fils ;
-- par une campagne lancée à la main (`annatar campaign run`, `make orodruin-campaign-run`) : elle
-  mettrait une technique sur une VM qu'un fil tient, ou sous sa panne ;
-- par un run lancé à la main (`annatar run <scénario>`), pour la même raison : rien de lancé à la
+**Un run à la fois** (relecture de DG-b, point 5 ; #358 ; SEC14, R-10). Un seul verrou exclusif,
+jamais attendu (`flock` sur un seul fichier, `exercise_runner.lock_path()`, pris par
+`exercise_runner.request_lock`). Toute commande qui agit sur une cible le prend :
+- une demande, le temps de tous ses fils ;
+- chaque fil d'une demande (`annatar wire`, `gothmog run --request`), sous la prise de sa demande ;
+- une campagne lancée à la main (`annatar campaign run`, `make orodruin-campaign-run`), quel que
+  soit son `--runs-dir` : elle mettrait une technique sur une VM qu'un fil tient, ou sous sa panne ;
+- un run lancé à la main (`annatar run <scénario>`), pour la même raison : rien de lancé à la
   main ne tourne pendant une demande ;
-- par une panne lancée à la main (`gothmog run <panne>`, après G1), pour la même raison.
+- un nettoyage (`annatar clean`) : il réécrit un disque ;
+- une panne lancée à la main (`gothmog run <panne>`, après G1).
 
-Un aperçu (`--dry-run`) ne lance rien et ne le prend pas.
+Un aperçu (`--dry-run`) ne lance rien et ne le prend pas ; `gothmog preflight` n'écrit rien et ne le
+prend pas non plus.
 
-Jamais par un fil d'une demande : il tourne sous le verrou de sa demande (`annatar wire` et le
-lanceur de campagne appellent le moteur eux-mêmes, jamais la commande `run` ; `gothmog run --request`
-ne le prend pas). Le premier écrit ce qui
-le tient (« request r-… », « campaign … », « run <scénario> », « fault <panne> ») ; le suivant est refusé (`busy`) sans
+**Un fil tient la prise de sa demande.** Le lanceur de la demande transmet son descripteur au
+processus de l'injecteur qu'il lance (`pass_fds`, nommé par `EREGION_RUN_LOCK_FD`). Le fil reprend
+ce même fichier ouvert : c'est la prise de la demande, son nom reste celui de la demande, et le fil
+ne la relâche jamais. Un descripteur que la demande n'a pas transmis (un autre fichier, ou une autre
+ouverture du verrou) n'est pas cette prise : un fil lancé à la main est refusé (`busy`) tant que
+quelque chose tourne, et prend le verrou lui-même sinon.
+
+Le premier écrit ce qui le tient (« request r-… », « campaign … », « run <scénario> »,
+« clean <scénario> », « fault <panne> », « wire r-… ») ; le suivant est refusé (`busy`) sans
 rien lancer ni ratifier, et dit lequel. Le verrou part avec le processus, un crash compris ; à une
 sortie normale, le nom s'efface aussi. Le nom n'est qu'une indication : un refusé peut lire, le temps
 de quelques microsecondes, un nom périmé ou à moitié écrit, et n'en montre que les caractères
 imprimables.
 
-**Où est le verrou.** Dans le `runs/` de la commande : le répertoire de travail pour une demande,
-pour `annatar run` et pour `gothmog run`, `--runs-dir` pour une campagne. Sur Orodruin, les conteneurs
-de ces commandes montent le même `$HOME/runs` sur `/app/runs` (`make orodruin-exercise`,
-`make orodruin-campaign-run`, `make gothmog-run`) : un seul verrou. Une campagne lancée avec un autre
-`--runs-dir` n'exclut plus une demande — ne pas le faire sur Orodruin.
+**Où est le verrou.** Un seul fichier, quel que soit le répertoire où une commande écrit ses runs :
+`EREGION_RUN_LOCK` s'il est posé, sinon `runs/orodruin/requests/.lock` depuis le répertoire de
+travail. Sur Orodruin, c'est `/app/runs/…`, le même `$HOME/runs` que montent tous les conteneurs des
+injecteurs (`make orodruin-exercise`, `make orodruin-campaign-run`, `make gothmog-run`). Une campagne
+lancée avec un autre `--runs-dir` prend ce même verrou.
 
-**Une limite** : un fil se reconnaît à son `--request` (`annatar wire`, `gothmog run --request`), qui ne
-prend pas le verrou. Lancé à la main avec un faux identifiant, il le contourne. C'est un geste de
-l'opérateur, avec un shell sur Orodruin, comme `annatar wire` : le verrou évite un chevauchement par
-mégarde, il ne protège pas d'un opérateur qui le veut.
+**La limite qui reste** : un fil prend le verrou (SEC14, R-10) ; son `--request` ne le dispense de
+rien. Restent deux gestes d'un shell sur Orodruin : faire passer à la main le descripteur d'un verrou
+qu'il tient lui-même (il ne tient alors que ce qu'il aurait pris), ou lancer un injecteur hors de
+`/app` avec un autre `EREGION_RUN_LOCK` — un autre fichier, que rien ne voit. Le verrou évite un
+chevauchement par mégarde ; il ne protège pas d'un opérateur qui le veut.
 
 **Ce qu'Orodruin publie pour la console.** Dans le conteneur des fenêtres, sous `orodruin/` : même
 conteneur, même attribution, rien de neuf.

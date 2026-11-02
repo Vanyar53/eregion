@@ -53,7 +53,7 @@ def _make_campaign(tmp_path, scenarios, *, budget=None, state="ratified", kill=F
     m = CampaignManifest(
         campaign_id=cid,
         objective="t",
-        scope=Scope(allowed_resource_groups=["rg-celebrimbor"]),
+        scope=Scope(subscription_id="sub-1", allowed_resource_groups=["rg-celebrimbor"]),
         budget=budget or Budget(),
         scenarios=scenarios,
         state=state,
@@ -304,7 +304,7 @@ def _cli_campaign(tmp_path, monkeypatch, *args, state="planned"):
 
 def test_a_campaign_by_hand_during_a_request_is_refused_and_ratifies_nothing(tmp_path, monkeypatch):
     from eregion_core.exercise_runner import request_lock
-    with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):
+    with request_lock("request r-20261031T080000Z-abcdef"):
         res, ran, cdir = _cli_campaign(tmp_path, monkeypatch, "--yes")
     assert res.exit_code == 1, res.output
     said = " ".join(res.output.split())   # rich folds the line
@@ -314,7 +314,7 @@ def test_a_campaign_by_hand_during_a_request_is_refused_and_ratifies_nothing(tmp
 
 def test_a_preview_of_a_campaign_takes_no_lock(tmp_path, monkeypatch):
     from eregion_core.exercise_runner import request_lock
-    with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):
+    with request_lock("request r-20261031T080000Z-abcdef"):
         res, ran, _ = _cli_campaign(tmp_path, monkeypatch, "--dry-run")
     assert res.exit_code == 0, res.output
     assert ran == [True]
@@ -335,7 +335,7 @@ def test_a_request_during_a_campaign_by_hand_is_refused_naming_the_campaign(tmp_
     def runner(cdir, dry_run=False, without_glorfindel=False):
         def run():
             with pytest.raises(Busy) as e:
-                with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):
+                with request_lock("request r-20261031T080000Z-abcdef"):
                     pass
             seen.append(str(e.value))
             return SimpleNamespace(campaign_id=cdir.name, state="done", without_glorfindel=False,
@@ -347,14 +347,26 @@ def test_a_request_during_a_campaign_by_hand_is_refused_naming_the_campaign(tmp_
     assert res.exit_code == 0, res.output
     assert seen == [f"campaign {cdir.name} runs on this Orodruin: one at a time — wait for its end, "
                     "or stop it (make orodruin-kill)"]
-    with request_lock(tmp_path, "request r-20261031T080000Z-abcdef"):   # let go once it is over
+    with request_lock("request r-20261031T080000Z-abcdef"):   # let go once it is over
         pass
 
 
 def test_a_holder_whose_name_looks_like_markup_is_said_as_it_is(tmp_path, monkeypatch):
     """#388's review: rich never reads the holder's name, nor the campaign's id, as markup."""
     from eregion_core.exercise_runner import request_lock
-    with request_lock(tmp_path, "request [/red][bold]x"):
+    with request_lock("request [/red][bold]x"):
         res, ran, _ = _cli_campaign(tmp_path, monkeypatch, "--yes")
     assert res.exit_code == 1 and isinstance(res.exception, SystemExit), res.exception
     assert "busy: request [/red][bold]x runs" in " ".join(res.output.split()) and ran == []
+
+
+def test_a_campaign_with_its_own_runs_dir_still_takes_orodruins_one_lock(tmp_path, monkeypatch):
+    """SEC14 (R-10): --runs-dir names where the campaign writes, never another lock."""
+    from eregion_core.exercise_runner import request_lock
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    with request_lock("request r-20261031T080000Z-abcdef"):
+        res, ran, cdir = _cli_campaign(elsewhere, monkeypatch, "--yes")
+    assert res.exit_code == 1 and "busy: request r-20261031T080000Z-abcdef" in " ".join(res.output.split())
+    assert ran == [] and CampaignManifest.load(cdir).state == "planned"
+    assert not list(elsewhere.rglob(".lock"))

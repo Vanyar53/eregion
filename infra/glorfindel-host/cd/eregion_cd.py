@@ -8,6 +8,9 @@ infra/glorfindel-host/README.md, « Le CD de H0 »).
   eregion_cd.py check    the same pass up to the preflight, never switching (the first
                          installation, by hand): verified, pulled, proven, preflighted, said
   eregion_cd.py retry    forget that the latest release failed or was refused, then run
+  eregion_cd.py rollback TAG   the way back, asked on H0 (SEC12): the published release TAG,
+                         older than what runs, verified and deployed as any other; the release
+                         it leaves is marked « rolled back », never taken up again on its own
   eregion_cd.py status   what runs, the latest release, the outcomes
   eregion_cd.py export-discord-env   on the operator's machine: #deploy's webhook and the
                          mention, for make glorfindel-host-cd-install (never the bot's token)
@@ -18,7 +21,14 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
   1. the latest release (GitHub's public API, outbound, no token; drafts and pre-releases are
      not in it); nothing to do when it runs already (the three containers), or failed or was
      refused before; a tag seen before on another commit is refused (a moved tag);
-  2. its tag on origin/main, never older than what runs; every check run of its commit
+  2. its tag on origin/main, never older than what runs nor than the floor (the highest version
+     deployed on this H0, never lowered) — by its version (vX.Y.Z) or by its commit: refused and
+     said with the mention, unless the way back was asked on H0 for this very tag (`rollback TAG`,
+     a published release, never a pre-release; SEC12); what runs unreadable, or two commits git
+     cannot order (merge-base: 128), refused — never taken for newer; whether a rule of the repository reserves its tag (its
+     creation, update and deletion) read without a token, and said: seen with the start, in
+     orange when absent or unreadable — never a refusal (what GitHub shows without a token is
+     to be measured on H0); every check run of its commit
      completed, none red, the main one (lint + tests) and the image's (publish (glorfindel))
      among them (still running: wait for the next pass, said once; absent an hour: refused);
   3. requirements/glorfindel.txt changed since what runs: requirements/harness.json holds two
@@ -64,6 +74,7 @@ glorfindel-host-cd-install); an older release, never — installing from it woul
 from __future__ import annotations
 
 import fcntl
+import fnmatch
 import hashlib
 import json
 import os
@@ -137,6 +148,11 @@ PUBLISH_CHECK = "publish (glorfindel)"
 MAIN_CHECK_PASSES = 12        # an hour of passes before a missing check is a refusal
 COSIGN = CD_HOME / "cosign"   # pinned (published_image.COSIGN_SHA256), checked before each use
 TAG_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+# SEC12: a release's version, compared with what runs. A tag of another shape is compared by its
+# commit only.
+VERSION_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
+# SEC12: what a rule of the repository must forbid, but to the maintainer, on the release's tag.
+TAG_RULES = ("creation", "update", "deletion")
 LOCK = "requirements/glorfindel.txt"
 ATTESTATION = "requirements/harness.json"
 AGENT_FILES = {"eregion_cd.py": "infra/glorfindel-host/cd/eregion_cd.py",
@@ -271,11 +287,66 @@ def is_ancestor(a: str, b: str) -> bool:
     return git("merge-base", "--is-ancestor", a, b, check=False).returncode == 0
 
 
-def verify(tag: str, commit: str, dep_commit: str, state: dict) -> None:
+def version_of(ref: str) -> tuple[int, int, int] | None:
+    m = VERSION_RE.fullmatch(ref or "")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def ancestry(a: str, b: str) -> bool | None:
+    """Whether a is an ancestor of b; None when git cannot say (a commit it does not know: 128)."""
+    rc = git("merge-base", "--is-ancestor", a, b, check=False).returncode
+    return True if rc == 0 else False if rc == 1 else None
+
+
+def raise_floor(state: dict, tag: str, commit: str) -> None:
+    """SEC12: the floor — the highest version deployed on this H0, and its commit. Never lowered:
+    not by a way back, not by `retry`; a release under it is older, whatever runs."""
+    mine = version_of(tag)
+    if not mine or not commit:
+        return
+    floor = state.get("floor") if isinstance(state.get("floor"), dict) else {}
+    theirs = version_of(str(floor.get("tag") or ""))
+    if theirs is None or mine > theirs:
+        state["floor"] = {"tag": tag, "commit": commit}
+
+
+def older(tag: str, commit: str, dep_ref: str, dep_commit: str, floor: dict | None = None) -> tuple[str, bool]:
+    """Why the release is older than what runs, or than the floor — by its version, or by its
+    commit: (why, readable); ('', True) when it is not. readable is False when git cannot order
+    the commits: never taken for « not older »."""
+    mine = version_of(tag)
+    floor = floor if isinstance(floor, dict) else {}
+    marks = ((dep_ref, dep_commit, "qui tourne"),
+             (str(floor.get("tag") or ""), str(floor.get("commit") or ""), "déjà déployée sur H0"))
+    for ref, at, what in marks:
+        theirs = version_of(ref)
+        if mine and theirs and mine < theirs:
+            return f"{tag} est plus ancienne que {ref}, {what}", True
+        if at and at != commit:
+            before = ancestry(commit, at)
+            if before is None:
+                return (f"l'ordre de {tag} ({commit[:12]}) et de {ref or at[:12]} ({what}) ne se lit pas : "
+                        "un commit inconnu du dépôt de H0"), False
+            if before:
+                return f"le commit de {tag} ({commit[:12]}) précède {ref or at[:12]}, {what}", True
+    return "", True
+
+
+def verify(tag: str, commit: str, dep_commit: str, state: dict, dep_ref: str = "", back_to: str = "") -> None:
     if not is_ancestor(commit, "refs/remotes/origin/main"):
         raise Refused(f"son tag n'est pas sur main ({commit[:12]}) : seule une release de main se déploie")
-    if dep_commit and is_ancestor(commit, dep_commit):
-        raise Quiet(f"{tag} est plus ancienne que ce qui tourne ({dep_commit[:12]})")
+    # SEC12: whoever can publish a release (or mark an old one « latest ») never takes H0 back on
+    # their own: the way back is asked on H0, for this very tag. What runs unreadable, or an order
+    # git cannot read, is never taken for « newer ».
+    if not dep_ref and not dep_commit:
+        raise Refused("ce qui tourne sur H0 ne se lit pas (la watch sans étiquettes) : pas de déploiement sans "
+                      f"savoir d'où l'on part — make glorfindel-host-status, puis make glorfindel-host-start REF={tag}")
+    why, readable = older(tag, commit, dep_ref, dep_commit, state.get("floor"))
+    if not readable:
+        raise Refused(why)
+    if why and tag != back_to:
+        raise Refused(f"{why} : jamais de retour arrière sans qu'on le demande sur H0 "
+                      f"(make glorfindel-host-cd-rollback TAG={tag})")
     runs = check_runs(commit)
     red = sorted({str(r.get("name", "?")) for r in runs if r.get("conclusion") in RED})
     if red:
@@ -319,6 +390,46 @@ def check_runs(commit: str) -> list[dict]:
         if not batch or len(runs) >= total:
             break
     return runs
+
+
+def _ref_match(ref: str, pattern) -> bool:
+    if not isinstance(pattern, str):
+        return False
+    return pattern == "~ALL" or (not pattern.startswith("~") and fnmatch.fnmatchcase(ref, pattern))
+
+
+def tag_rule(tag: str) -> tuple[str, str]:
+    """SEC12: whether an active rule of the repository reserves the release's tag — its creation,
+    its update and its deletion (to the maintainer: the bypass list is not shown without a
+    token). Read without a token: ('held' | 'absent' | 'unknown', what to say). Never raises."""
+    try:
+        listed = github("/rulesets?targets=tag&includes_parents=true&per_page=100")
+    except Quiet as e:
+        return "unknown", f"les règles du dépôt ne se lisent pas ({e})"
+    if not isinstance(listed, list):
+        return "unknown", "les règles du dépôt ne se lisent pas sans jeton"
+    ref = f"refs/tags/{tag}"
+    for item in listed:
+        if not isinstance(item, dict) or item.get("target") != "tag" or item.get("enforcement") != "active":
+            continue
+        rid = item.get("id")
+        if not isinstance(rid, int) or isinstance(rid, bool):
+            continue
+        try:
+            full = github(f"/rulesets/{rid}")
+        except Quiet as e:
+            return "unknown", f"la règle {rid} ne se lit pas ({e})"
+        if not isinstance(full, dict) or full.get("enforcement") != "active":
+            continue
+        names = (full.get("conditions") or {}).get("ref_name") or {}
+        include, exclude = names.get("include") or [], names.get("exclude") or []
+        if not isinstance(include, list) or not isinstance(exclude, list):
+            continue
+        covered = any(_ref_match(ref, p) for p in include) and not any(_ref_match(ref, p) for p in exclude)
+        kinds = {r.get("type") for r in full.get("rules") or [] if isinstance(r, dict)}
+        if covered and set(TAG_RULES) <= kinds:
+            return "held", f"🔒 {tag} réservé par la règle « {discord_text(full.get('name'))} »"
+    return "absent", f"aucune règle active ne réserve {ref} (création, mise à jour, suppression)"
 
 
 def h0_model(commit: str) -> str:
@@ -959,6 +1070,8 @@ def conclude(state: dict, tag: str, dep_ref: str, why: str, url: str, how: str, 
     proof = proof or {}
     if not why:
         state["outcomes"][tag] = {"result": "deployed", "why": "", "at": int(time.time())}
+        raise_floor(state, tag, git("rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}",
+                                    check=False).stdout.strip())
         save_state(state)
         prune(tag, dep_ref)
         note = proof.get("note") or ""
@@ -1030,7 +1143,10 @@ def resume(state: dict, tag: str, cut: dict) -> int:
         return 0
     # What ran was checked before the switch, and written down with it: a cut pass reads it back.
     why, proof = health(tag, float(cut.get("at") or 0), rules=True, base=cut.get("base"))
-    return conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte", proof)
+    code = conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte", proof)
+    if cut.get("asked") and code == 0:
+        left_behind(state, dep_ref, tag)
+    return code
 
 
 def check_running(tag: str, commit: str, url: str, state: dict) -> int:
@@ -1055,13 +1171,27 @@ def check_running(tag: str, commit: str, url: str, state: dict) -> int:
     return 0
 
 
-def run_pass(check: bool = False) -> int:
+def run_pass(check: bool = False, back_to: str = "") -> int:
+    """A pass on the latest release; `back_to`: the way back asked on H0 (SEC12), on this
+    published release — older than what runs, and still verified as any other."""
     state = load_state()
     if not check:
         cut = [(t, o) for t, o in state["outcomes"].items() if o.get("result") == "switching"]
         if cut:
             return resume(state, *cut[-1])
-    release = github("/releases/latest")
+    if back_to:
+        if not re.fullmatch(TAG_RE, back_to):
+            print(f"tag illisible : {back_to!r}")
+            return 2
+        release = github(f"/releases/tags/{back_to}")
+        if not isinstance(release, dict) or release.get("tag_name") != back_to:
+            print(f"aucune release publiée sous {back_to} : un retour arrière ne va que vers une release publiée")
+            return 1
+        if release.get("prerelease") is not False or release.get("draft"):
+            print(f"{back_to} est une pré-version : un retour arrière ne va que vers une release publiée")
+            return 1
+    else:
+        release = github("/releases/latest")
     if not release:
         raise Quiet("aucune release publiée")
     if not isinstance(release, dict):
@@ -1070,7 +1200,7 @@ def run_pass(check: bool = False) -> int:
     if not re.fullmatch(TAG_RE, tag):
         raise Quiet(f"tag de release illisible : {tag!r}")
     done = state["outcomes"].get(tag, {}).get("result")
-    if not check and done in ("refused", "rolled back", "rollback failed"):
+    if not check and not back_to and done in ("refused", "rolled back", "rollback failed"):
         raise Quiet(f"{tag} : {done} (make glorfindel-host-cd-retry pour réessayer)")
     try:
         git("fetch", "-q", "--tags", "--force", "origin")
@@ -1096,6 +1226,7 @@ def run_pass(check: bool = False) -> int:
         say(f"⛔ {tag} refusée : H0 reste sur {dep_ref or 'ce qui tourne'}", why, color=nd.RED, alert=True, url=url)
         return 1
     seen.setdefault(tag, commit)
+    raise_floor(state, dep_ref, dep_commit)        # what runs (deployed by hand, perhaps) raises it too
     save_state(state)
     if commit == dep_commit:
         lagging = sorted(n for n, v in versions().items() if v != tag)
@@ -1109,13 +1240,24 @@ def run_pass(check: bool = False) -> int:
             return check_running(tag, commit, url, state)
         raise Quiet(f"{tag} tourne déjà")
     try:
-        verify(tag, commit, dep_commit, state)
+        verify(tag, commit, dep_commit, state, dep_ref, back_to)
         harness = lock_guard(tag, commit, dep_commit, dep_ref) or {}
+        rule, rule_said = tag_rule(tag)
+        if rule != "held":     # SEC12: said, never a refusal (to measure: what GitHub shows without a token)
+            title = (f"⚠️ {tag} : aucune règle du dépôt ne réserve son tag" if rule == "absent"
+                     else f"⚠️ {tag} : la règle des tags n'a pas pu être lue")
+            text = f"{rule_said} — Settings → Rules → Rulesets (docs/sessions.md, « Les règles du dépôt »)"
+            if check:
+                say(f"À blanc : {title}", text, color=nd.ORANGE)
+            else:
+                say_once(state, tag, "tag-rule", title, text, color=nd.ORANGE, alert=rule == "absent", url=url)
         aside(commit)
         digest = fetch(tag, commit, state)
         if not check:
+            asked = f"\n↩️ retour arrière demandé sur H0 : {dep_ref or '?'} → {tag}" if back_to else ""
             say(f"🚀 H0 : déploiement de {tag}", f"{dep_ref or 'inconnu'} → {tag} ({commit[:12]}, image "
-                f"{digest[:19]}…)" + (f"\n{harness['note']}" if harness.get("note") else ""), color=nd.BLUE, url=url)
+                f"{digest[:19]}…)" + (f"\n{harness['note']}" if harness.get("note") else "")
+                + (f"\n{rule_said}" if rule == "held" else "") + asked, color=nd.BLUE, url=url)
         if harness.get("orange") and check:     # H3: what varies, never a refusal — no mention
             say(f"⚠️ À blanc : {tag} : le harnais n'a pas tout prouvé", harness["orange"], color=nd.ORANGE, url=url)
         elif harness.get("orange"):             # once: a pass that waits (fetch, CI3) says it no more
@@ -1143,7 +1285,7 @@ def run_pass(check: bool = False) -> int:
     since = time.time()
     # Written before it happens: a pass cut from here on is taken up by the next one.
     state["outcomes"][tag] = {"result": "switching", "from": dep_ref, "url": url, "why": "", "at": since,
-                              "base": base}
+                              "base": base, "asked": bool(back_to)}
     save_state(state)
     proof: dict = {}
     try:
@@ -1151,9 +1293,21 @@ def run_pass(check: bool = False) -> int:
         why, proof = health(tag, since, rules=True, base=base)
     except Unhealthy as e:
         why = str(e)
-    return conclude(state, tag, dep_ref, why, url,
+    code = conclude(state, tag, dep_ref, why, url,
                     f"{commit[:12]} · {int(time.monotonic() - started)} s, santé verte pendant {int(HEALTH_S)} s",
                     proof)
+    if back_to and code == 0:
+        left_behind(state, dep_ref, tag)
+    return code
+
+
+def left_behind(state: dict, left: str, tag: str) -> None:
+    """The way back asked on H0 (SEC12): the release it leaves is never taken up again on its own
+    (a new release, or `retry`)."""
+    if left and left != tag:
+        state["outcomes"][left] = {"result": "rolled back", "at": int(time.time()),
+                                   "why": f"retour arrière demandé sur H0, vers {tag}"}
+        save_state(state)
 
 
 def rollback(ref: str) -> str:
@@ -1189,7 +1343,10 @@ def status() -> int:
         release = github("/releases/latest") or {}
         print(f"  dernière release : {release.get('tag_name', 'aucune')}")
     except Quiet as e:
+        release = {}
         print(f"  dernière release : illisible ({e})")
+    if re.fullmatch(TAG_RE, str(release.get("tag_name") or "")):
+        print(f"  règle des tags : {tag_rule(release['tag_name'])[1]}")
     for tag, o in sorted(state["outcomes"].items(), key=lambda kv: kv[1].get("at", 0))[-5:]:
         print(f"  {tag} : {o['result']}" + (f" — {o['why'].splitlines()[0]}" if o.get("why") else ""))
     return 0
@@ -1214,7 +1371,7 @@ def main(argv: list[str]) -> int:
         return export_discord_env()
     if mode == "status":
         return status()
-    if mode not in ("run", "check", "retry"):
+    if mode not in ("run", "check", "retry", "rollback") or (mode == "rollback") != (len(argv) == 2):
         print(__doc__)
         return 2
     CD_HOME.mkdir(parents=True, exist_ok=True)
@@ -1230,10 +1387,10 @@ def main(argv: list[str]) -> int:
             state.pop("unavailable", None)
             save_state(state)
         try:
-            return run_pass(check=mode == "check")
+            return run_pass(check=mode == "check", back_to=argv[1] if mode == "rollback" else "")
         except Quiet as e:
             print(f"· {e}")
-            return 0
+            return 1 if mode == "rollback" else 0    # asked by hand: « nothing moved » said by the code
         except Exception as e:   # an API or a tool that changed: said once, not a unit failing in silence
             import traceback
             traceback.print_exc()

@@ -12,6 +12,7 @@ on purpose: TOGETHER (scripts/component_check.py).
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -66,7 +67,9 @@ def stage(tmp_path, monkeypatch):
     def launch(argv, env):
         """The injector of a wire, in this process (Orodruin starts it as its own)."""
         if argv[0] == "annatar":
-            with patch.object(AnnatarEngine, "_get_executor_collector", return_value=(executor, MagicMock())), \
+            # Its environment, as Orodruin's launch gives it: the request's lock handed down (R-10).
+            with patch.dict(os.environ, env), \
+                 patch.object(AnnatarEngine, "_get_executor_collector", return_value=(executor, MagicMock())), \
                  patch.object(AnnatarEngine, "_wait_and_emit_feedback"):
                 return CliRunner().invoke(annatar_cli, argv[1:], catch_exceptions=False).exit_code
         assert argv[:2] == ["gothmog", "run"]
@@ -132,3 +135,10 @@ def test_a_request_forged_on_the_console_host_without_a_name_is_refused_by_orodr
     assert status.state == "refused" and status.wire(2).code == "typed_name"
     assert not exercises_dir().exists() or not list(exercises_dir().glob("*.json"))
     executor.run_script.assert_not_called()
+
+
+# SEC11 (R-19): the bench's scope names its subscription (Scope.for_bench reads it) — the one of
+# this file's targets; conftest removes the operator's.
+@pytest.fixture(autouse=True)
+def _bench_subscription(monkeypatch):
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", SUB)

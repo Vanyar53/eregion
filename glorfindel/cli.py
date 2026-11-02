@@ -203,6 +203,24 @@ class _GlorfindelCli(click.Group):
             ctx.exit(1)
 
 
+def identity_note(environ=os.environ, in_container: bool | None = None) -> str:
+    """What the watch says of its identity at start when it has no service principal of its own
+    (SEC11, V-17): compose no longer falls back on AZURE_CLIENT_*, the former shared principal.
+    "" when it has one. In a container, only a VM's managed identity can stand in (H0); on a
+    workstation, none — the `az login` of the machine is not in the container. From the venv,
+    the machine's `az login`."""
+    if (environ.get("AZURE_CLIENT_ID") or "").strip():
+        return ""
+    if in_container is None:
+        in_container = Path("/.dockerenv").exists()
+    if in_container:
+        return ("no service principal (its …_AZURE_CLIENT_* pair empty) — the VM's managed identity "
+                "if this container runs on one (H0); on a workstation, no identity at all: every "
+                "Azure call will fail")
+    return ("no service principal (AZURE_CLIENT_* empty) — this machine's `az login`, or the VM's "
+            "managed identity")
+
+
 @click.group(cls=_GlorfindelCli)
 @click.version_option(package_name="eregion", prog_name="glorfindel")   # the package's, never by hand
 def cli():
@@ -511,6 +529,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # Permission regime — read-only means no action can execute, by design.
     _perm = getattr(agent.connector, "permission_mode", lambda: "read_write")()
     console.print(f"[bold]Credentials:[/bold] [cyan]{_perm}[/cyan]")
+    # SEC11 (V-17): no fallback on a former shared principal — a watch without its own says so.
+    _identity = identity_note()
+    if not dry_run and _identity:
+        console.print(f"[bold]Identity:[/bold] {_identity}")
     if _perm == "read_only":
         # On read-only creds, any mode that would execute will fail at action time.
         _executing_modes = (
@@ -851,6 +873,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     from eregion_core.inscription import TagEnrollment
     _exercise.set_enrollment_check(TagEnrollment())
 
+    def _observe_windows() -> None:
+        """SEC14 (V-20): the windows read every minute — a window written on this host is
+        written down in the watch's own state within a minute, and bounded by that moment
+        (eregion_core/exercise.py, ``observe``)."""
+        _exercise.observe()
+
     # The return channel (#159): a run launched from Orodruin learns from it that this
     # watch is up, and what it detected on the VMs that run exercises. Unset → None.
     _watch_channel = None
@@ -1032,6 +1060,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     console.print(msg + "\n")
     _write_heartbeat()
     try:
+        _observe_windows()
+    except Exception as exc:   # the windows fall toward real; the watch goes on
+        console.print(f"[red]watch: _observe_windows en erreur — {exc}[/red]")
+    try:
         while True:
             try:
                 _poll()
@@ -1040,7 +1072,7 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                     # Each task on its own: one that keeps failing (an old isolation the
                     # subscription guard refuses…) no longer skips the reassertion and the
                     # heartbeat at every pass — the watch looked dead (fourth review, Q12).
-                    for _task in (_check_ttl, _reconcile_jobs, _reassert, _write_heartbeat):
+                    for _task in (_check_ttl, _reconcile_jobs, _reassert, _write_heartbeat, _observe_windows):
                         try:
                             _task()
                         except Exception as exc:

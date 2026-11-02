@@ -592,8 +592,9 @@ def _push(tmp_path, **env):
             "FAKE_COMMIT": C2, "FAKE_DIGEST": "sha256:" + "a" * 64, "FAKE_CONFIG": config,
             "REAL_PYTHON": sys.executable, "REAL_SCRIPT": str(SCRIPT), **env}
     full.pop("REF", None)
+    # Orodruin's host key check is test_host_ssh.py's (V-32, SEC14): taken as done here.
     res = subprocess.run(["make", "--no-print-directory", "-C", str(work), "-f", str(ROOT / "Makefile"),
-                          "orodruin-push", "REF=v0.4.6", "ORO_IP=203.0.113.7",
+                          "-o", "orodruin-known", "orodruin-push", "REF=v0.4.6", "ORO_IP=203.0.113.7",
                           "ORO_SSH=ssh orodruin@203.0.113.7"], env=full, capture_output=True, text=True,
                          timeout=120)
     return res, remote, config
@@ -642,3 +643,55 @@ def test_the_module_runs_on_h0s_python_standard_library_only():
     names |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     assert names <= set(sys.stdlib_module_names) | {"__future__"}
     assert "tomllib" not in names                                     # 3.11+
+
+
+# ── SEC14 (P-02): the base image pinned by its digest ─────────────────────────────────────────
+
+def test_both_images_start_from_the_same_base_pinned_by_its_digest():
+    import re
+    froms = {}
+    for name in ("annatar", "glorfindel"):
+        lines = [ln for ln in (ROOT / name / "Dockerfile").read_text(encoding="utf-8").splitlines()
+                 if ln.startswith("FROM ")]
+        assert len(lines) == 1, (name, lines)
+        froms[name] = lines[0]
+        assert re.fullmatch(r"FROM python:3\.12-slim@sha256:[0-9a-f]{64}", lines[0]), lines[0]
+    assert froms["annatar"] == froms["glorfindel"]
+
+
+# ── SEC14 (R-14): syft, the SBOM's tool, pinned by its archive's sha256 ───────────────────────
+
+def _syft_archive(binary: bytes) -> bytes:
+    import io
+    import tarfile
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as tar:
+        for name, data in (("README.md", b"readme"), ("syft", binary)):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return out.getvalue()
+
+
+def test_syft_is_installed_only_from_its_pinned_archive(pim, served, tmp_path, monkeypatch):
+    body, url = served
+    body["data"] = _syft_archive(b"syft binary")
+    monkeypatch.setattr(pim, "SYFT_URL", url)
+    dest = tmp_path / "bin" / "syft"
+    monkeypatch.setattr(pim, "SYFT_SHA256", hashlib.sha256(b"another archive").hexdigest())
+    assert pim.install_syft(dest) == 1 and not dest.exists() and not dest.with_name("syft.part").exists()
+    monkeypatch.setattr(pim, "SYFT_SHA256", hashlib.sha256(body["data"]).hexdigest())
+    assert pim.install_syft(dest) == 0 and dest.read_bytes() == b"syft binary"
+    assert dest.stat().st_mode & 0o111 and sorted(p.name for p in dest.parent.iterdir()) == ["syft"]
+
+
+def test_the_pinned_syft_is_the_one_read_on_its_release():
+    """syft v1.51.1, linux-amd64: the sha256 of anchore's release archive (syft_1.51.1_checksums.txt,
+    02/11) — the version anchore/sbom-action v0.24.2 fetched at run time."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pim_pin", ROOT / "scripts" / "published_image.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.SYFT_VERSION == "v1.51.1"
+    assert mod.SYFT_SHA256 == "8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3"
+    assert mod.SYFT_URL.endswith("/v1.51.1/syft_1.51.1_linux_amd64.tar.gz")

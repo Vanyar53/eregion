@@ -187,13 +187,19 @@ ENROLLED = (f"{BENCH}/providers/Microsoft.Compute/virtualMachines/vm-1",
             f"{BENCH}/providers/Microsoft.Chaos/experiments/exp-1")
 
 
-def _assignment(scope):
-    return {"properties": {"scope": scope, "roleDefinitionId": "/r/blob-data-contributor"}}
+# SEC11 (V-29): inside the bench, each role holds what its scope may hold — the injector's
+# rights on the VM and the experiment; any other role is a wildcard.
+ROLES = {"/r/vm": list(orodruin.VM_ACTIONS), "/r/chaos": list(orodruin.CHAOS_ACTIONS)}
+
+
+def _assignment(scope, role="/r/blob-data-contributor"):
+    return {"properties": {"scope": scope, "roleDefinitionId": role}}
 
 
 def _assess(scope, channel_scope):
-    return orodruin.assess_identity([*map(_assignment, ENROLLED), _assignment(scope)],
-                                    lambda _: ["*"], RIGHTS, BENCH, sees_subscription=True,
+    return orodruin.assess_identity([_assignment(ENROLLED[0], "/r/vm"), _assignment(ENROLLED[1], "/r/chaos"),
+                                     _assignment(scope)],
+                                    lambda r: ROLES.get(r, ["*"]), RIGHTS, BENCH, sees_subscription=True,
                                     channel=channel_scope)
 
 

@@ -189,12 +189,16 @@ def plan_view(wires: list[tuple[str, str]], *, catalog: dict[str, Experiment], v
     """The plan of the wires drawn: each one judged as Orodruin would judge it now (the shared
     core), with what only Glorfindel's side knows and what to expect; then what the phase (b)
     will check before anything runs. Nothing is launched, nothing is written."""
+    from dataclasses import replace
+
     from eregion_core.inscription import Scope
     cards = {c["resource_id"].lower(): c for c in blue_cards(vms, state, rules, bench=bench)}
     targets = {str(vm["resource_id"]).lower(): Target(str(vm["resource_id"]), vm.get("rg_tags") or {},
                                                        vm.get("tags") or {}) for vm in vms}
     verdicts = judge_plan(wires, targets, catalog=catalog, watch_refusal=watch_refusal,
-                          fault_targets=fault_targets, scope=Scope(sandbox=bench))
+                          fault_targets=fault_targets,
+                          # SEC11 (R-19): the bench named, in the subscription of this process.
+                          scope=replace(Scope.for_bench(), sandbox=bench))
     out = []
     for v in verdicts:
         card = cards.get(v.target.lower())

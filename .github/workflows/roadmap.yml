@@ -53,8 +53,10 @@ jobs:
 
       - name: Discord
         env:
-          EREGION_DISCORD_BOT_TOKEN: ${{ secrets.EREGION_DISCORD_BOT_TOKEN }}
-          EREGION_DISCORD_LOTS_FORUM: ${{ secrets.EREGION_DISCORD_LOTS_FORUM }}
-          EREGION_DISCORD_ROADMAP_CHANNEL: ${{ secrets.EREGION_DISCORD_ROADMAP_CHANNEL }}
+          # SEC14 (R-15): never given to a fork's pull request — the job then sends nothing and stays
+          # green; the next push or the daily run rewrites everything.
+          EREGION_DISCORD_BOT_TOKEN: ${{ (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.EREGION_DISCORD_BOT_TOKEN || '' }}
+          EREGION_DISCORD_LOTS_FORUM: ${{ (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.EREGION_DISCORD_LOTS_FORUM || '' }}
+          EREGION_DISCORD_ROADMAP_CHANNEL: ${{ (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.EREGION_DISCORD_ROADMAP_CHANNEL || '' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/roadmap_discord.py

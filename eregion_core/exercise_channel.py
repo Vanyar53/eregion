@@ -31,7 +31,9 @@ SEC5 holds the channel at its edges:
   listing page at most ``MAX_LISTING_BYTES``, at most ``MAX_BLOBS`` names listed and
   ``MAX_DOWNLOADS`` blobs downloaded per pull — read as a stream cut past the bound, never
   read whole and then checked; what goes past one is said, and left for the next pull or
-  skipped, never written;
+  skipped, never written. And in all (SEC14): one pull reads at most ``MAX_PULL_BYTES``, its
+  listing pages and its blobs together (``Budget``) — past it, the pull stops there and says so,
+  the rest waits for the next one;
 - a window pulled from the channel carries when its blob was created, as the listing says
   (``CREATED``, written over anything the window said of it, and kept from its first pull):
   the watch bounds the window by it, not by what the window declares (V-20,
@@ -88,6 +90,10 @@ MAX_BLOB_BYTES = 1024 * 1024
 MAX_LISTING_BYTES = 8 * 1024 * 1024
 MAX_BLOBS = 2000
 MAX_DOWNLOADS = 200
+# SEC14 (V-21): what one pull reads in all — its listing pages and its blobs, cumulated. The bounds
+# above hold each read; this one holds their sum (200 blobs of 1 MiB, or pages of names, would
+# otherwise make hundreds of MiB per pull).
+MAX_PULL_BYTES = 32 * 1024 * 1024
 _CHUNK = 64 * 1024
 # SEC5 (V-20): in a window pulled from the channel, when its blob was created — the
 # listing's word, never the window's (eregion_core/exercise.py reads it).
@@ -112,6 +118,20 @@ class ChannelRefused(ValueError):
 
 class TooLarge(RuntimeError):
     """A blob or a listing past its bound (V-21): the rest of it is never read."""
+
+
+class Spent(TooLarge):
+    """The pull's cumulated bound reached (V-21, SEC14): it stops, the rest waits for the next."""
+
+
+class Budget:
+    """What one pull may still read, its listing pages and its blobs together (MAX_PULL_BYTES)."""
+
+    def __init__(self, total: int | None = None):
+        self.left = MAX_PULL_BYTES if total is None else total
+
+    def spend(self, n: int) -> None:
+        self.left -= n
 
 
 def channel_url() -> str:
@@ -176,18 +196,33 @@ def _read(r, limit: int, what: str) -> bytes:
 
 
 def fetch(get, url: str, headers: dict, *, limit: int = MAX_BLOB_BYTES, params=None,
-          what: str = "") -> tuple[object, bytes]:
+          what: str = "", budget: Budget | None = None) -> tuple[object, bytes]:
     """GET ``url``: (the response, its body read within ``limit``) — b"" when it is not ok.
-    Without a client passed in, requests streams it (``stream=True``)."""
+    Without a client passed in, requests streams it (``stream=True``). With a ``budget``, the
+    read is bounded by what the pull has left too: past it, ``Spent`` — the bytes read count."""
     import requests
 
+    what = what or url.rsplit("/", 1)[-1]
+    if budget is not None and budget.left <= 0:
+        raise Spent(f"{what}: this pull has read its {MAX_PULL_BYTES} bytes")
     if get is None:
         r = requests.get(url, headers=headers, params=params, timeout=15, stream=True)
     else:
         r = get(url, headers=headers, params=params, timeout=15)
     if not r.ok:
         return r, b""
-    return r, _read(r, limit, what or url.rsplit("/", 1)[-1])
+    if budget is None:
+        return r, _read(r, limit, what)
+    bound = min(limit, budget.left)
+    try:
+        body = _read(r, bound, what)
+    except TooLarge as e:
+        budget.spend(bound)            # what was read at most: the bound is only ever stricter
+        if bound < limit:
+            raise Spent(f"{what}: this pull has read its {MAX_PULL_BYTES} bytes") from e
+        raise
+    budget.spend(len(body))
+    return r, body
 
 
 def auth_headers(credential, url: str) -> dict:
@@ -237,10 +272,12 @@ def _created(blob) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _stamped(body: bytes, blob, local: Path) -> bytes:
+def _stamped(body: bytes, blob, local: Path | None) -> bytes:
     """The window as pulled, with ``CREATED`` set to when its blob was created — the value of
-    its first pull, kept when the window comes again (closed), else the listing's (V-20). A
-    body that is no JSON object is written as it came: the watch refuses it anyway."""
+    its first pull, kept when the window comes again (closed), else the listing's (V-20). Without
+    ``local`` (a copy the watch never wrote down as pulled), the listing's alone: what a copy on
+    disk says is nobody's word. A body that is no JSON object is written as it came: the watch
+    refuses it anyway."""
     import json
 
     try:
@@ -251,7 +288,8 @@ def _stamped(body: bytes, blob, local: Path) -> bytes:
         return body
     first = ""
     try:
-        first = str(json.loads(local.read_text(encoding="utf-8")).get(CREATED) or "")
+        if local is not None:
+            first = str(json.loads(local.read_text(encoding="utf-8")).get(CREATED) or "")
     except (OSError, ValueError, AttributeError):
         pass
     window[CREATED] = first or _created(blob)
@@ -286,25 +324,45 @@ def rewrite_refusal(old, new) -> str:
 
 
 def pull(directory: Path, *, channel: str | None = None, credential=None, get=None,
-         say=print) -> int:
+         say=print, seen: Path | None = None) -> int:
     """Copy into ``directory`` every window of the channel that is new or changed since the
     local copy, page after page of the listing — the container's root only (the windows; the
     prefixes are other pulls'), within the bounds of V-21. Each window carries when its blob
     was created (``CREATED``, V-20); one pulled already is replaced only by its closure
-    (``rewrite_refusal``). Returns how many were written."""
+    (``rewrite_refusal``). With ``seen`` (the watch's own record, eregion_core/exercise.py), each
+    window written is written down there as pulled — the only proof the watch takes that it came
+    from the channel (SEC14, V-20). Returns how many were written."""
     url = channel if channel is not None else channel_url()
     if not url:
         return 0
     headers = auth_headers(credential, url)
     directory.mkdir(parents=True, exist_ok=True)
-    written = downloads = 0
-    for blob in _blobs(get, url, headers, delimiter="/", say=say):
+    written: list[str] = []
+    try:
+        _pull_windows(directory, url, headers, get, say, Budget(), written, seen)
+    except Spent as e:   # the pull's cumulated bound (V-21): what was written stays
+        say(f"[exercise-channel] {e}: the rest waits for the next pull")
+    return len(written)
+
+
+def _pull_windows(directory: Path, url: str, headers: dict, get, say, budget: Budget,
+                  written: list[str], seen: Path | None = None) -> None:
+    import json
+
+    from eregion_core.exercise import note_pulled, noted_pulled  # exercise imports this lazily
+    downloads = 0
+    # SEC14 review (V-20): a copy here the watch never wrote down as pulled — one pulled before
+    # this version, a window still open at the first pass — is pulled once again, through
+    # rewrite_refusal like any other, then written down. Only then is it the channel's.
+    noted = noted_pulled(seen) if seen is not None else None
+    for blob in _blobs(get, url, headers, delimiter="/", say=say, budget=budget):
         name = blob.findtext("Name") or ""
         if not _SAFE_NAME.match(name):  # a campaign's blob (a ``/``) or a path: never a window
             continue
         modified = blob.findtext("Properties/Last-Modified")
         local = directory / name
-        if local.exists() and modified:
+        unnoted = noted is not None and local.exists() and name[:-len(".json")] not in noted
+        if local.exists() and modified and not unnoted:
             remote_ts = parsedate_to_datetime(modified).timestamp()
             if remote_ts <= local.stat().st_mtime:
                 continue
@@ -317,7 +375,9 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
             break
         downloads += 1
         try:
-            r, body = fetch(get, f"{url}/{name}", headers, what=f"window {name}")
+            r, body = fetch(get, f"{url}/{name}", headers, what=f"window {name}", budget=budget)
+        except Spent:
+            raise
         except TooLarge as e:
             say(f"[exercise-channel] {e} — not pulled")
             continue
@@ -344,10 +404,14 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
                 continue
         _refused_rewrites.pop(key, None)
         tmp = local.with_suffix(".json.tmp")
-        tmp.write_bytes(_stamped(body, blob, local))
+        stamped = _stamped(body, blob, None if unnoted else local)
+        tmp.write_bytes(stamped)
         tmp.replace(local)  # atomic: the watch never reads half a window
-        written += 1
-    return written
+        written.append(name)
+        try:
+            note_pulled(seen, json.loads(stamped))
+        except ValueError:
+            pass                     # not JSON: the watch refuses it anyway
 
 
 def pull_if_due(directory: Path, *, now: float | None = None) -> None:
@@ -361,7 +425,8 @@ def pull_if_due(directory: Path, *, now: float | None = None) -> None:
         return
     try:
         _last_pull = now
-        pull(directory)
+        from eregion_core.exercise import seen_path
+        pull(directory, seen=seen_path())
     except Exception as e:  # the local windows still count; the rest falls toward real
         print(f"[exercise-channel] pull failed at {datetime.now():%H:%M:%S}: {e}")
     finally:
@@ -372,6 +437,9 @@ def pull_now(directory: Path, **kw) -> int:
     """``pull`` now, whatever PULL_EVERY_S, under the lock ``pull_if_due`` takes: two pulls
     never write the same window at once. For the campaign report, which needs the last
     window, closed just before its campaign ended (analysis/hosted_report.py)."""
+    from eregion_core.exercise import exercises_dir, seen_path
+    if Path(directory) == exercises_dir():
+        kw.setdefault("seen", seen_path())     # the watch's own windows: written down as pulled (V-20)
     if not _pull_lock.acquire(timeout=60):
         raise RuntimeError("another pull of the windows is still running")
     try:
@@ -506,10 +574,11 @@ def carry_run(run_id: str, runs_dir: Path | str = "runs") -> bool:
 
 
 def _blobs(get, url: str, headers: dict, prefix: str = "", *, delimiter: str = "",
-           say=print):
+           say=print, budget: Budget | None = None):
     """Every blob of the channel (under ``prefix``, when one is given; not below a
     ``delimiter``), page after page — each page read within MAX_LISTING_BYTES, at most
-    MAX_BLOBS names in all: past them, the listing stops and says so (V-21)."""
+    MAX_BLOBS names in all: past them, the listing stops and says so (V-21). The pages count
+    against the pull's ``budget``: past it, ``Spent``."""
     marker, seen = "", 0
     while True:
         params = {"restype": "container", "comp": "list"}
@@ -520,7 +589,7 @@ def _blobs(get, url: str, headers: dict, prefix: str = "", *, delimiter: str = "
         if marker:
             params["marker"] = marker
         r, body = fetch(get, url, headers, limit=MAX_LISTING_BYTES, params=params,
-                        what="a listing page of the channel")
+                        what="a listing page of the channel", budget=budget)
         if not r.ok:
             raise RuntimeError(f"HTTP {r.status_code} listing the channel")
         root = ET.fromstring(body)
@@ -534,6 +603,15 @@ def _blobs(get, url: str, headers: dict, prefix: str = "", *, delimiter: str = "
         marker = (root.findtext("NextMarker") or "").strip()
         if not marker:
             return
+
+
+def _bounded(blobs, skipped: dict):
+    """The listing's blobs until the pull's budget is spent on a page: said in ``skipped``
+    (``"listing"``), the rest waits for the next pull."""
+    try:
+        yield from blobs
+    except Spent as e:
+        skipped["listing"] = f"not listed whole: {e}"
 
 
 def pull_campaigns(directory: Path, *, channel: str | None = None, credential=None,
@@ -556,12 +634,17 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
     headers = auth_headers(credential, url)
     directory = Path(directory)
     runs, manifests = [], []
-    for blob in _blobs(get, url, headers, f"{CAMPAIGNS}/"):
-        name = blob.findtext("Name") or ""
-        m = _CAMPAIGN_BLOB.match(name)
-        if not m or not _safe_part(m["cid"]) or (m["rid"] is not None and not _safe_part(m["rid"])):
-            continue
-        (manifests if m["rid"] is None else runs).append((blob, name, m))
+    budget = Budget()
+    try:
+        for blob in _blobs(get, url, headers, f"{CAMPAIGNS}/", budget=budget):
+            name = blob.findtext("Name") or ""
+            m = _CAMPAIGN_BLOB.match(name)
+            if not m or not _safe_part(m["cid"]) or (m["rid"] is not None and not _safe_part(m["rid"])):
+                continue
+            (manifests if m["rid"] is None else runs).append((blob, name, m))
+    except Spent as e:   # a listing cut: no campaign is known whole, none is written
+        print(f"[exercise-channel] {e}: the campaigns wait for the next pull")
+        return 0, {m["cid"] for _, _, m in runs + manifests}
     written, failed, downloads = 0, set(), 0
     for blob, name, m in runs + manifests:
         if m["rid"] is None and m["cid"] in failed:
@@ -574,12 +657,12 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
                 if m["rid"] is None:
                     (local.parent / PULLED).touch()
                 continue
-        if downloads >= MAX_DOWNLOADS:  # V-21: the rest waits; its manifest with it
+        if downloads >= MAX_DOWNLOADS or budget.left <= 0:  # V-21: the rest waits; its manifest with it
             failed.add(m["cid"])
             continue
         downloads += 1
         try:
-            r, body = fetch(get, f"{url}/{name}", headers, what=name)
+            r, body = fetch(get, f"{url}/{name}", headers, what=name, budget=budget)
         except TooLarge as e:
             print(f"[exercise-channel] {e} — not pulled")
             failed.add(m["cid"])
@@ -616,7 +699,8 @@ def pull_runs(directory: Path, *, refusal, channel: str | None = None, credentia
     directory = Path(directory)
     marks = directory / PULLED_RUNS
     written, skipped, downloads = 0, {}, 0
-    for blob in _blobs(get, url, headers, f"{RUNS}/"):
+    budget = Budget()
+    for blob in _bounded(_blobs(get, url, headers, f"{RUNS}/", budget=budget), skipped):
         name = blob.findtext("Name") or ""
         m = _RUN_BLOB.match(name)
         if not m or not safe_part(m["rid"]):
@@ -635,7 +719,10 @@ def pull_runs(directory: Path, *, refusal, channel: str | None = None, credentia
             continue
         downloads += 1
         try:
-            r, content = fetch(get, f"{url}/{name}", headers, what=name)
+            r, content = fetch(get, f"{url}/{name}", headers, what=name, budget=budget)
+        except Spent as e:
+            skipped[rid] = f"not pulled yet: {e}"
+            continue
         except TooLarge as e:
             skipped[rid] = f"refused: {e}"
             continue
@@ -717,7 +804,8 @@ def pull_orodruin(directory: Path, *, channel: str | None = None, credential=Non
     headers = auth_headers(credential, url)
     directory = Path(directory)
     written, skipped, downloads = 0, {}, 0
-    for blob in _blobs(get, url, headers, f"{ORODRUIN}/"):
+    budget = Budget()
+    for blob in _bounded(_blobs(get, url, headers, f"{ORODRUIN}/", budget=budget), skipped):
         name = blob.findtext("Name") or ""
         if not _ORODRUIN_BLOB.fullmatch(name):
             continue
@@ -730,7 +818,10 @@ def pull_orodruin(directory: Path, *, channel: str | None = None, credential=Non
             continue
         downloads += 1
         try:
-            r, body = fetch(get, f"{url}/{name}", headers, what=name)
+            r, body = fetch(get, f"{url}/{name}", headers, what=name, budget=budget)
+        except Spent as e:
+            skipped[name] = f"not pulled yet: {e}"
+            continue
         except TooLarge as e:
             skipped[name] = f"refused: {e}"
             continue

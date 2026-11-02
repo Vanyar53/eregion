@@ -165,6 +165,8 @@ P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment create --assignee-object-id ${P} --assignee-principal-type ServicePrincipal \
   --role "Eregion Glorfindel Response" --scope ${SCOPE}
+make glorfindel-host-plan                   # SEC11 : la coupure des sessions, une attribution par VM de session_drain_vms (gondolin, bree), aucune sur le groupe
+make glorfindel-host-up                     # après relecture du plan, sans YES
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=0
 make glorfindel-host-push              # .env et config (le défaut human_only ; les modes en place sur H0 gardés, et dits)
 make glorfindel-host-start REF=<le même commit>
@@ -181,6 +183,10 @@ même contrôle. `make glorfindel-host-ssh` puis `docker exec eregion-watch glor
 mode résolu par VM.
 
 ### 4. La campagne (30 à 45 min)
+
+Depuis SEC14 (V-32), toute commande vers Orodruin exige `ORO_SSH_FINGERPRINT` : la lire une fois par
+`make orodruin-fingerprint` (par Azure, ton `az login`) et la poser dans ton environnement, sinon
+rien ne part. Une demande de Dagorlad refusée ou coupée est consommée : en écrire une nouvelle.
 
 ```bash
 make gothmog-preflight                 # watch vivante, contrat, cibles, état normal : rien d'écrit
@@ -234,6 +240,8 @@ sur gondolin (`glorfindel list`), et `make glorfindel-host-cd-enable` si le CD a
 P=$(terraform -chdir=infra/glorfindel-host output -raw principal_id)
 SCOPE=/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-celebrimbor
 az role assignment delete --assignee ${P} --role "Eregion Glorfindel Response" --scope ${SCOPE}
+# la coupure aussi, si H0 ne doit plus rien écrire : session_drain_vms = [] dans
+# infra/glorfindel-host/session_drain.auto.tfvars, puis make glorfindel-host-plan, relu, et -up
 # infra/glorfindel-host/host.env : GLORFINDEL_READ_ONLY=1
 make glorfindel-host-push HUMAN_ONLY=1 # toutes les VM de nouveau en human_only
 make glorfindel-host-start REF=<le tag publié en service>   # la release d'avant, celle du CD

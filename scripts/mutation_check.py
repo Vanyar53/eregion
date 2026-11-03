@@ -9346,6 +9346,14 @@ TESTS.update({
     "M3298": f"{_U1G_UNIT}test_the_rule_of_a_recreated_nic_keeps_the_isolation_and_frees_the_other {_U1G_NARROWED}",
     "M3299": _U1G_NARROWED,
 })
+# U1G's 5.5 review: the sweep locks the held VM too — the narrowing reads the rule, then writes it
+# whole; a release of the held VM in between would see its deny written back. M3289.
+MUTANTS += [
+    ("M3289", "the sweep locks only the VMs a narrowing frees: a release of the held VM may run beside the "
+              "rewrite (U1G, 5.5 review)", ORP,
+     "            out = _remove(connector, o, locked)\n", "            out = _remove(connector, o, victims)\n"),
+]
+TESTS["M3289"] = f"{_U1G_UNIT}test_the_sweep_locks_the_held_vm_too_while_it_narrows"
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

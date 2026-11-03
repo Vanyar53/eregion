@@ -3585,7 +3585,17 @@ la cause), une plage lue comme une adresse (M3291), l'écriture demande la garde
 (M3292) ou rejoue I5Q sur toutes (M3293), une règle changée depuis la liste réduite quand même (M3294), le
 mode de la VM tenue compté (M3295), la suppression conseillée en `human_only` (M3296), une règle retournée
 pour la VM tenue qui retient l'autre (M3297), la règle supprimée au lieu de réduite (M3298), une réduction
-dite comme un échec (M3299). M760, M778, M779, M1741 réancrés (le même sens).
+dite comme un échec (M3299). M760, M778, M779, M1741 réancrés (le même sens). **La relecture 5.5** (« ok » sur
+88adffda, trois points) : le verrou de la VM tenue n'était gardé par aucun test — la réduction relit la règle puis
+la réécrit entière ; une levée de la VM tenue entre les deux verrait son refus réécrit : le balayage prend le
+verrou de chaque VM coupée, la tenue comprise (`test_the_sweep_locks_the_held_vm_too_while_it_narrows`, mutant
+M3289 : seulement les VM libérées) ; la carte résolue au premier passage disait « retirée (A3) » d'une règle
+réduite — elle dit « réduite par Glorfindel à … » (`resolution`) ; l'étape de `human_only` dit « la watch la
+réduit seule ». **À mesurer au banc** : la réécriture d'une règle relue (`security_rules.get`, puis
+`begin_create_or_update` de l'objet relu) — ses champs en lecture seule (`provisioning_state`, `etag`, `type`)
+renvoyés tels quels, et l'`etag` : accepté, ignoré, ou refusé s'il a changé entre la lecture et l'écriture ;
+le faux ne le dit pas (`_restore_bumped` écrit déjà ainsi). La réduction à une seule adresse, en liste, comme le
+blocage l'écrit.
 **Mesures d'U1G.** Invariants, `--hypothesis-seed=N`, six à la fois : à 60 séquences, N = 10, 73, 29, 1..9,
 11..18, **20/20 vertes** ; à 500, N = 10, 73, 29, 7, **4/4 vertes** (la graine 10 comprise). Mutants M3290–M3299 et
 les quatre réancrés (M760, M778, M779, M1741) : 14/14 par leurs tests à chaque tour (deux tours). `pytest` complet :

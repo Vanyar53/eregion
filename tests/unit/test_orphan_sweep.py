@@ -1179,8 +1179,10 @@ def test_a_rule_cutting_a_held_vm_and_another_is_narrowed_to_the_held_ones(monke
     assert open_flows(_world_view(f), api) == _designed(f, api)
     assert open_flows(_world_view(f), batch) == held_flows
     assert all(_side(g["rules"][n]) == ["10.0.0.4"] for n in web), {n: _side(g["rules"][n]) for n in web}
-    said = [e for e in _orphan_cards() if "réduite" in str(e)]
-    assert said, _orphan_cards()
+    cards = _orphan_cards()
+    assert cards and all(e["status"] == "resolved" for e in cards), cards
+    assert all("réduite par Glorfindel à 10.0.0.4" in (e.get("resolution") or "")
+               and "retirée" not in (e.get("resolution") or "") for e in cards), [e.get("resolution") for e in cards]
 
 
 def test_in_human_only_the_card_says_to_narrow_never_to_delete(monkeypatch):
@@ -1195,7 +1197,31 @@ def test_in_human_only_the_card_says_to_narrow_never_to_delete(monkeypatch):
     assert any(s.startswith("az network nsg rule update") and s.endswith("-address-prefixes 10.0.0.4")
                for s in steps), steps
     assert not any(s.startswith("az network nsg rule delete") for s in steps), steps
+    assert any(s.startswith("Ou donner à api") and s.endswith("la watch la réduit seule.") for s in steps), steps
+    assert not any("retire la règle seule" in s for s in steps), steps
     assert all("jamais la retirer entière" in e["reason"] for e in cards), [e["reason"] for e in cards]
+
+
+def test_the_sweep_locks_the_held_vm_too_while_it_narrows(monkeypatch):
+    """U1G, the 5.5 review: the narrowing reads the rule, then writes it whole — a release of
+    the held VM taking it off in between would see its deny written back. The sweep takes the
+    lock of every VM the rule cuts (its wait, `_LOCK_WAIT_S`), the held one as well as the
+    freed one."""
+    from glorfindel import orphans
+    f, c, g, web, batch, api = _two_cut(monkeypatch)
+    taken: list[tuple] = []
+    real = actions._vm_lock
+
+    def spy(vm, timeout=None):
+        taken.append((vm, timeout))
+        return real(vm, timeout=timeout)
+    monkeypatch.setattr(actions, "_vm_lock", spy)
+    # The sweep alone: the watch's pass also locks the held VM for its reassertion.
+    from types import SimpleNamespace
+    orphans.sweep_orphan_rules(c, SimpleNamespace(resolve=lambda name: "non_disruptive"))
+    assert all(_side(g["rules"][n]) == ["10.0.0.4"] for n in web)
+    swept = {vm for vm, t in taken if t == orphans._LOCK_WAIT_S}
+    assert {"batch", "api"} <= swept, taken
 
 
 def test_the_mode_that_counts_is_the_freed_vms(monkeypatch):

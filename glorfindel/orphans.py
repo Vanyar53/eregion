@@ -335,6 +335,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             delete = (f"az network nsg rule update -g {nsg_rg} --nsg-name {nsg_name} -n {o['rule']} "
                       f"--{o.get('side') or 'destination'}-address-prefixes {' '.join(narrow)}")
         out: dict = {}
+        note = ""
         if alone:
             out = _remove(connector, o, locked)
             if out.get("busy"):
@@ -390,7 +391,8 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
                            f"(`{delete}`), ou donner à la VM le mode non_disruptive : la watch la "
                            "retire alors à son passage suivant.")
             steps.append(f"Ou donner à {victims[0]} le mode non_disruptive (autonomy.assets de "
-                         "glorfindel-config.yaml, ou la console) : la watch retire la règle seule.")
+                         "glorfindel-config.yaml, ou la console) : la watch "
+                         + ("la réduit seule." if narrow else "retire la règle seule."))
         card = escalations.record(
             signal_id=sid,
             resource_id=_resource(o),
@@ -404,7 +406,7 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             # A card of another rule of that VM, still pending, took this one in (the
             # store merges by VM): it stays open for that rule.
             if card not in alerts.values():
-                escalations.resolve(card, note=f"Règle {o['rule']} retirée par Glorfindel (A3).")
+                escalations.resolve(card, note=note)       # « réduite » when narrowed (U1G)
             report.append({"kind": "orphan", "vm": victims[0], "outcome": "removed", "detail": reason})
             continue
         if out:

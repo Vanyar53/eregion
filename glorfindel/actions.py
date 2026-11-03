@@ -18,10 +18,12 @@ The code that lived here (4 394 lines) is split by concern, nothing changed in i
     quarantine.py               the quarantine NSG
     isolation.py, release.py, verify.py      isolation by quarantine or by rules
     older.py                    an older version's isolation undone by its record (I4E)
+    gone.py                     a VM gone: its NICs' rules looked for everywhere (I7S, I5R)
     blocks.py, unblock.py       IP blocks
     perimeter.py                a perimeter block merged with a VM block (RB1)
     backup.py, restore.py       restore points
     sweep.py, readers.py        reset and orphans; rights, inventory, audit reads
+    reset_bare.py               the reset's bare NICs, their original put back
     sdk.py                      SDK warm-up, error and enum helpers
     capabilities.py             what the adapter declares (read by the readiness check)
     monitor.py                  Log Analytics as a detection source (glorfindel.detectors)
@@ -58,6 +60,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.providers.azure.network",
     "glorfindel.providers.azure.isolation",
     "glorfindel.providers.azure.release",
+    "glorfindel.providers.azure.gone",
     "glorfindel.providers.azure.away",
     "glorfindel.providers.azure.older",
     "glorfindel.providers.azure.verify",
@@ -68,6 +71,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.providers.azure.backup",
     "glorfindel.providers.azure.restore",
     "glorfindel.providers.azure.sweep",
+    "glorfindel.providers.azure.reset_bare",
     "glorfindel.providers.azure.readers",
     "glorfindel.providers.azure.connector",
 ))

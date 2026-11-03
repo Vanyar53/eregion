@@ -92,6 +92,7 @@ glorfindel pending --watch                   # alerting temps réel
 glorfindel release <resource_id> --yes       # lever isolation NSG (post-restore, VM de retour)
 glorfindel unblock <ip> <resource_id> --yes  # supprimer une règle block IP
 glorfindel reset <resource_id> --yes        # reset complet : release + unblock toutes IPs
+glorfindel reset <resource_id> --dry-run    # ce que le reset ferait, rien lu ni écrit sur Azure (jamais « clean », I3V)
 glorfindel reset <resource_id> --from-azure  # source de vérité = Azure (sans état local) : retire les
                                              # glorfindel-* de CETTE VM sur ses NSG (noms déterministes,
                                              # segment IP qui ancre la correspondance) ; garde les blocages

@@ -311,6 +311,12 @@ class VerifyMixin:
                 continue
             still += [f'{t["nic_short"]}:{_rule_name(r)}' for r in self._iso_rules_on(vm_name, t, rules)]
             unknown += self._unattributable_fixed(t, rules)
+        # Where the release looks besides, that the NICs no longer carry — the quarantine NSG a
+        # partial release left (I3R), a placement's NSG: out of the views above — « verified »,
+        # and `glorfindel release` cleared the state, the pair left there (I3V, #450).
+        away_still, away_unknown = self._out_of_sight_seen(vm_name, targets, state, cache)
+        still += away_still
+        unknown += away_unknown
         # An older version's single-NSG record names its rules — its state, or kept by a
         # later isolation (I4E): there, whatever the NSG's sharing now (its fixed names only
         # count on a dedicated NSG) — the release deletes them by that record, the

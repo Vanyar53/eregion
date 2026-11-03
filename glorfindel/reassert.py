@@ -60,19 +60,26 @@ def _alert(signal_id: str, **kwargs) -> None:
     removal ("no longer isolated, not re-applied") was folded into the first card, which
     still said "re-applied once", and no notification went out (validation, 06/10).
     A card of the former name-only key is replaced too, when it is this VM's — and one said
-    under another case of its name (`same_sid`, I3C)."""
+    under another case of its name (`same_sid`, I3C).
+
+    Replaced in the write of the new card, never before it (L1A, #480): closed first, the new
+    card refused (a full disk) left none — the mark kept from before read « said », and a
+    pass that could not check the block again said nothing. Refused, the old card still
+    waits, and the OSError reaches the pass: the mark is not written (L1F)."""
     from glorfindel import escalations
     rid = (kwargs.get("resource_id") or "").rstrip("/").lower()
     ip = (kwargs.get("action_params") or {}).get("ip", "")
     vm = rid.rsplit("/", 1)[-1]
     legacy = (f"reassert-{vm}" + (f"-{ip}" if ip else "")).lower()      # an IPv6 in capitals too (I3G)
-    for e in escalations.pending():
-        same_vm = (e.get("resource_id") or "").rstrip("/").lower() == rid
-        if same_sid(e.get("signal_id"), signal_id) or (same_vm and (e.get("signal_id") or "").lower() == legacy):
-            # Glorfindel's closure, with its note: never read as acknowledged (L2C, review).
-            escalations.resolve(e["id"], note="Remplacée : une nouvelle alerte de réaffirmation la suit.")
-    escalations.record(signal_id=signal_id, escalation_type="verification_failed", **kwargs)
-    new_pass()
+    # Glorfindel's closure, with its note: never read as acknowledged (L2C, review).
+    replaced = {e["id"]: "Remplacée : une nouvelle alerte de réaffirmation la suit." for e in escalations.pending()
+                if same_sid(e.get("signal_id"), signal_id) or (
+                    (e.get("resource_id") or "").rstrip("/").lower() == rid
+                    and (e.get("signal_id") or "").lower() == legacy)}
+    try:
+        escalations.record(signal_id=signal_id, escalation_type="verification_failed", replaces=replaced, **kwargs)
+    finally:
+        new_pass()
 
 
 def _who_changed(connector, iso: dict) -> str:   # who wrote its NICs lately, best effort

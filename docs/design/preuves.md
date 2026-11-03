@@ -3561,8 +3561,8 @@ le retrait. La branche « blocage » finit l'épisode qu'elle a tenu : elle a bl
 règles, les a remises telles qu'avant, et l'épisode acquitté est fini, par le journal du test, comme
 avant. La branche « isolation » ne touche plus au journal du blocage. **Pourquoi ce n'est pas un
 relâchement** (A0) : l'oracle n'a pas bougé. L1 compte toujours un blocage acquitté pour dit **seulement**
-tant que ses règles sont exactement celles de l'acquittement (`_block_rules_now(v) == seen`, RB1) : il ne
-compte que tant que ses règles sont exactement celles de l'acquittement. **La limite, ancienne** (l'instantané
+tant que ses règles sont exactement celles de l'acquittement (`_block_rules_now(v) == seen`, RB1).
+**La limite, ancienne** (l'instantané
 de RB1 et de L1G, hors de `_gone_comes_back`) : l'oracle compare des valeurs, jamais un épisode, et
 `acked_drift[vm]` n'est retiré que par la branche « blocage » de `_gone_comes_back`. Un blocage écrit de
 nouveau (`_block`), puis reparti à l'identique (`_ours_taken_off`), retrouve l'égalité : l'acquittement

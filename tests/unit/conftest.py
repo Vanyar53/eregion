@@ -49,6 +49,9 @@ def hermetic_orodruin(tmp_path, monkeypatch):
     monkeypatch.delenv("EREGION_WATCH_CHANNEL_SCOPE", raising=False)
     # DG-b: the console's requests in tmp, never ~/.eregion/console/requests.
     monkeypatch.setenv("EREGION_REQUESTS_DIR", str(tmp_path / "console-requests"))
+    # DG-d: the instance's drills in tmp, never ~/.eregion/console/drills; no VMs listing handed down.
+    monkeypatch.setenv("EREGION_DRILLS_DIR", str(tmp_path / "console-drills"))
+    monkeypatch.delenv("EREGION_DRILL_VMS_FILE", raising=False)
     # IA0's index (analysis/campaign_report.py) in tmp, never ~/.eregion/analysis (#167).
     monkeypatch.setenv("EREGION_ANALYSIS_INDEX", str(tmp_path / "analysis-index"))
     # Its model's bound at the default, whatever the operator set in .envrc.

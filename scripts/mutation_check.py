@@ -4278,7 +4278,8 @@ MUTANTS += [
     ("M2015", "the operator's command takes any name typed for a destructive wire (DG-b)", XRQ,
      "        if got != w.target_name:\n", "        if False:\n"),
     ("M2016", "make orodruin-exercise reaches H0 before the request id is checked (DG-b)", "Makefile",
-     '\t@$(PYTHON) -m eregion_core.exercise_request check-id "$$EREGION_REQUEST_ID"\n', ""),
+     '\t else $(PYTHON) -m eregion_core.exercise_request check-id "$$EREGION_REQUEST_ID"; fi\n',
+     "\t else true; fi\n"),
     ("M2017", "Orodruin judges a request with a passive contract (DG-b)", XRN,
      "        if not verdict.armed:\n            status.state = \"refused\"",
      "        if False:\n            status.state = \"refused\""),
@@ -9170,6 +9171,67 @@ MUTANTS += [
 ]
 TESTS.update({mid: "tests/unit/test_mutant_anchors.py" for mid in ("M3185", "M3186")})
 
+
+# DG-d (#350): Dagorlad's drills — the format and its one reader (a shipped drill aims by zone, an
+# instance's by name, never a resource id), the layers, the save, the placing (no VM chosen in the
+# operator's place, Jonathan 03/11), the command from the operator's machine. M3300–M3319.
+DRL = "eregion_core/drill.py"
+_DGD = "tests/unit/test_drill.py"
+_DGD_CON = "tests/unit/test_console_dagorlad_drills.py"
+MUTANTS += [
+    ("M3300", "a shipped drill names a VM (DG-d)", DRL,
+     '            if layer == SHIPPED:\n                raise DrillRefused(f"wire {i}: a shipped drill never names a VM',
+     '            if False:\n                raise DrillRefused(f"wire {i}: a shipped drill never names a VM'),
+    ("M3301", "an instance's drill aims by selector (DG-d)", DRL,
+     '            if layer == INSTANCE:\n                raise DrillRefused(f"wire {i}: an instance\'s drill names its VMs',
+     '            if False:\n                raise DrillRefused(f"wire {i}: an instance\'s drill names its VMs'),
+    ("M3302", "a drill keeps a resource id for a VM's name (DG-d)", DRL,
+     '_VM_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")',
+     '_VM_NAME = re.compile(r"[A-Za-z0-9/][A-Za-z0-9._/()-]{0,300}")'),
+    ("M3303", "a drill carries a field it never holds (DG-d)", DRL,
+     "    if extra:\n        raise DrillRefused(f\"{what} carries", "    if False:\n        raise DrillRefused(f\"{what} carries"),
+    ("M3304", "an instance's drill signed by Eregion, a shipped one by an operator (DG-d)", DRL,
+     '    if (layer == SHIPPED) != (author == "eregion"):\n', "    if False:\n"),
+    ("M3305", "a selector's wire placed on the first VM of its zone, chosen for the operator (DG-d)", DRL,
+     '            if targets is None:\n                p.why = f"to place: zone {w.zone}, {len(zone)} candidate(s)"\n',
+     "            if targets is None:\n                p.targets = zone[:1]\n"),
+    ("M3306", "a wire takes a VM given for another zone (DG-d)", DRL,
+     "                p.targets = list(zone) if targets == \"all\" else [c for c in zone if c.name.lower() in wanted]\n",
+     "                p.targets = list(zone) if targets == \"all\" else [c for c in cands if c.name.lower() in wanted]\n"),
+    ("M3307", "a VM given that no wire can take passes unsaid (DG-d)", DRL,
+     "    if unknown:\n        raise DrillRefused(f\"TARGETS:", "    if False:\n        raise DrillRefused(f\"TARGETS:"),
+    ("M3308", "a drill's wire the plan refuses is sent all the same (DG-d)", DRL,
+     "    if refused:\n        raise DrillRefused(\"a wire refused", "    if False:\n        raise DrillRefused(\"a wire refused"),
+    ("M3309", "a drill saved over another of its name, unasked (DG-d)", DRL,
+     "        if replace:\n            os.replace(tmp, path)\n", "        if True:\n            os.replace(tmp, path)\n"),
+    ("M3310", "the instance's drill unreadable: the shipped one taken in its place (DG-d)", DRL,
+     "    if os.path.lexists(own):\n        return load_file(own, INSTANCE)\n",
+     "    if os.path.lexists(own):\n        try:\n            return load_file(own, INSTANCE)\n        except DrillRefused:\n            pass\n"),
+    ("M3311", "a drill's file read through a link (DG-d)", DRL,
+     'os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)',
+     'os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)'),
+    ("M3312", "a drill's file holds another drill, read as its own (DG-d)", DRL,
+     '    if f"{drill.name}.yaml" != path.name:\n', "    if False:\n"),
+    ("M3313", "the command makes the request of another drill than the one asked for (DG-d)", DRL,
+     "        if drill.name != args.name:\n", "        if False:\n"),
+    ("M3314", "« Save as drill » keeps the resource ids, not the VMs' names (DG-d)", CON,
+     '[(w["experiment"], by_id[w["target"].lower()].name) for w in wires]',
+     '[(w["experiment"], w["target"]) for w in wires]'),
+    ("M3315", "« Save as drill » takes a target that is no enrolled VM read now (DG-d)", CON,
+     "        if stray:\n            why = error or", "        if False:\n            why = error or"),
+    ("M3316", "a drill loaded on the board lays a selector's wires on every VM of its zone (DG-d)", CON,
+     "        placed = [p.to_dict() for p in drill.place(d, cands)]\n",
+     "        placed = [p.to_dict() for p in drill.place(d, cands, \"all\")]\n"),
+    ("M3317", "the page writes a request while a drill's wire waits for its VMs (DG-d)", DJS,
+     "Number(t.refused) === 0 && !S.pending.length;", "Number(t.refused) === 0;"),
+    ("M3318", "make orodruin-exercise takes DRILL and TARGETS from the environment (DG-d)", MAKE,
+     '\t@case "$(origin DRILL) $(origin TARGETS)" in *environment*)', '\t@case "" in *environment*)'),
+    ("M3319", "make orodruin-exercise DRILL= takes every VM of the zone when TARGETS is not given (DG-d)", MAKE,
+     '--targets "$$EREGION_DRILL_TARGETS"', "--targets \"$${EREGION_DRILL_TARGETS:-all}\""),
+]
+TESTS.update({f"M{n}": _DGD for n in range(3300, 3314)})
+TESTS.update({f"M{n}": _DGD_CON for n in range(3314, 3318)})
+TESTS.update({f"M{n}": "tests/unit/test_makefile_exercise.py" for n in (3318, 3319)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

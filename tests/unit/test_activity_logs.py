@@ -683,7 +683,7 @@ def test_an_unattributed_control_plane_signal_opens_no_incident_and_stays_out_of
     assert final["incident"] is None and final["past_cycles"] == []
     assert incidents.get_active(VM1) is None
     assert memory.count() == 0
-    assert list((tmp_path / "runs").glob("*_debug.jsonl"))
+    assert list((tmp_path / "runs" / "glorfindel").glob("*_debug.jsonl"))   # SEC18
     # A data-plane cycle on the same VM: a fresh incident, one signal.
     from dataclasses import asdict
     assert asdict(incidents.get_or_create(resource_id=VM1, ttp="T1486"))["signals_count"] == 1

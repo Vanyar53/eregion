@@ -21,16 +21,31 @@ Two kinds of blob:
 Every failure falls toward ``unknown``, never ``detected`` nor ``missed``: a run concludes
 to a miss only on a heartbeat written after its wait, by a watch up since before the
 attack, that knows the run's window (``miss_unprovable``).
+
+**The local channel of verdicts (SEC18, #455).** A watch with no storage channel — on a
+workstation, beside its injectors — writes the same two kinds of document in a directory of its
+own, ``runs/verdicts/`` (``LocalVerdicts``), the one directory of the blue the red mounts, read-only.
+A verdict, never the reasoning: ``verdicts/detections/<run_id>/<n>.json`` holds exactly
+``VERDICT_FIELDS`` (the run, its technique, ``detected``, when, the rule's id, the delay from the
+run's window, the window's own target) and ``verdicts/heartbeat.json`` exactly ``BEAT_FIELDS``;
+anything else is refused at the write (``verdict_refusal``, ``beat_refusal``) and at the read. A
+run reads it as an input it does not trust, through the common reader (SEC16), only when no
+storage channel is set (``source``): the storage channel keeps the priority; with neither, the
+detection is ``unknown``. A verdict of another run than the one read, or of another shape, is
+ignored, and said.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import re
 import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from pathlib import Path
 
 from eregion_core.exercise import (GRACE_AFTER_S, MAX_DURATION_S, covering_runs, live,
                                    load_windows)
@@ -217,8 +232,11 @@ def _get(url: str, get, credential, *, params=None, limit: int = MAX_BLOB_BYTES)
 
 
 def read_heartbeat(*, channel: str | None = None, credential=None, get=None) -> dict:
-    """The watch's last heartbeat. Raises when the channel is unset or unreadable."""
+    """The watch's last heartbeat. Raises when the channel is unset or unreadable. Without a
+    storage channel, the local one's (SEC18, ``local_heartbeat``) when there is one."""
     url = channel if channel is not None else channel_url()
+    if not url and channel is None and source() == LOCAL:
+        return local_heartbeat()
     if not url:
         raise RuntimeError(f"{CHANNEL_ENV} is not set")
     body = json.loads(_get(f"{url}/{HEARTBEAT}", get, credential))
@@ -230,8 +248,11 @@ def read_heartbeat(*, channel: str | None = None, credential=None, get=None) -> 
 def read_detections(run_id: str, *, channel: str | None = None, credential=None,
                     get=None) -> list[dict]:
     """Every detection the watch delivered for this run's window. Raises when the channel
-    is unset or a listed detection cannot be read — a detection unread is never a miss."""
+    is unset or a listed detection cannot be read — a detection unread is never a miss. Without
+    a storage channel, the local one's (SEC18, ``local_detections``) when there is one."""
     url = channel if channel is not None else channel_url()
+    if not url and channel is None and source() == LOCAL:
+        return local_detections(run_id)
     if not url:
         raise RuntimeError(f"{CHANNEL_ENV} is not set")
     if not _SAFE.match(run_id):
@@ -299,3 +320,230 @@ def miss_unprovable(heartbeat: dict, *, run_id: str, attack_time, until) -> str:
     if run_id not in (heartbeat.get("windows") or []):
         return "the watch does not know the run's window"
     return ""
+
+
+# ── The local channel of verdicts (SEC18) ─────────────────────────────────────────────
+
+STORAGE, LOCAL = "storage", "local"
+# Exactly what a verdict holds — the run, its technique, the verdict, when, the rule's id, the delay
+# from the run's window, the window's own target —, never the watch's reasoning, a log line, a
+# decision, a card, a name or an address the run did not give.
+VERDICT_FIELDS = ("run_id", "technique", "verdict", "detected_at", "rule", "latency_s", "target")
+VERDICTS = ("detected", "missed")
+BEAT_FIELDS = ("at", "since", "windows", "perimeter")
+_TECHNIQUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_RULE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_HEX = re.compile(r"^[0-9a-f]{0,64}$")
+_said_local: dict[str, str] = {}
+
+
+def local_dir() -> Path:
+    """``runs/verdicts`` — the watch's local channel, the red's one read-only view of the blue."""
+    from eregion_core import runs_layout
+    return runs_layout.dir_of(runs_layout.VERDICTS)
+
+
+def source() -> str:
+    """Where a run learns of its detection: ``storage`` (a channel set: it keeps the priority),
+    ``local`` (none, and the local channel's heartbeat is there), else ""."""
+    if channel_url():
+        return STORAGE
+    return LOCAL if os.path.lexists(local_dir() / HEARTBEAT) else ""
+
+
+def _iso_ok(value) -> bool:
+    return isinstance(value, str) and len(value) <= 40 and _when(value) is not None
+
+
+def verdict_refusal(doc) -> str:
+    """Why this is no verdict of the local channel — "" when it is: exactly ``VERDICT_FIELDS``,
+    each of its shape."""
+    if not isinstance(doc, dict):
+        return "not an object"
+    if set(doc) != set(VERDICT_FIELDS):
+        extra, missing = sorted(set(doc) - set(VERDICT_FIELDS)), sorted(set(VERDICT_FIELDS) - set(doc))
+        return f"fields: {', '.join(extra)} not admitted" if extra else f"fields missing: {', '.join(missing)}"
+    if not isinstance(doc["run_id"], str) or not _SAFE.match(doc["run_id"]):
+        return "run_id: a plain name"
+    if not isinstance(doc["technique"], str) or not _TECHNIQUE.match(doc["technique"]):
+        return "technique: a plain id"
+    if doc["verdict"] not in VERDICTS:
+        return "verdict: detected or missed"
+    if doc["verdict"] == "detected" and not _iso_ok(doc["detected_at"]):
+        return "detected_at: a time"
+    if doc["verdict"] == "missed" and doc["detected_at"] is not None:
+        return "detected_at: none for a miss"
+    if not isinstance(doc["rule"], str) or not _RULE.match(doc["rule"]):
+        return "rule: a plain id"
+    lat = doc["latency_s"]
+    if lat is not None and (isinstance(lat, bool) or not isinstance(lat, (int, float))
+                            or not math.isfinite(lat) or not 0 <= lat < 86400):
+        return "latency_s: seconds, or none"
+    if not isinstance(doc["target"], str) or not doc["target"].startswith("/subscriptions/") \
+            or len(doc["target"]) > 512:
+        return "target: a resource id"
+    return ""
+
+
+def beat_refusal(doc) -> str:
+    """Why this is no heartbeat of the local channel — "" when it is: exactly ``BEAT_FIELDS``."""
+    if not isinstance(doc, dict):
+        return "not an object"
+    if set(doc) != set(BEAT_FIELDS):
+        return f"fields: {', '.join(sorted(set(doc) ^ set(BEAT_FIELDS)))} not admitted"
+    if not _iso_ok(doc["at"]) or not _iso_ok(doc["since"]):
+        return "at, since: times"
+    w = doc["windows"]
+    if not isinstance(w, list) or len(w) > MAX_BLOBS or not all(isinstance(x, str) and _SAFE.match(x) for x in w):
+        return "windows: plain run ids"
+    if not isinstance(doc["perimeter"], str) or not _HEX.match(doc["perimeter"]):
+        return "perimeter: a digest"
+    return ""
+
+
+def write_local(directory: Path, name: str, doc: dict) -> None:
+    """Write one document of the local channel, held as SEC16 writes (``write_file``: at once,
+    never through a link) — refused (ValueError) when it is not exactly a verdict or a
+    heartbeat."""
+    from eregion_core import runs_layout
+    from eregion_core.channel_reader import write_file
+    why = beat_refusal(doc) if name == HEARTBEAT else verdict_refusal(doc)
+    if why:
+        raise ValueError(f"local channel: {name} refused — {why}")
+    path = Path(directory) / name
+    # Its parents made without ever following a link (SEC18): a link in the way refuses.
+    why = runs_layout.parents_hold(Path(directory), path)
+    if why:
+        raise ValueError(f"local channel: {name} refused — {why}")
+    write_file(path, json.dumps(doc, sort_keys=True))
+
+
+def _say_local(path, why: str) -> None:
+    key = str(path)
+    if _said_local.get(key) != why:
+        _said_local[key] = why
+        print(f"[watch-channel] {path}: {why} — ignored (SEC18)")
+
+
+def local_heartbeat(directory: Path | None = None) -> dict:
+    """The local channel's heartbeat, read as an input not trusted (SEC16: a regular file,
+    bounded, never through a link). Raises when it is absent, unreadable or refused."""
+    from eregion_core.channel_reader import read_json
+    path = Path(directory or local_dir()) / HEARTBEAT
+    doc = read_json(path)
+    why = beat_refusal(doc)
+    if why:
+        _say_local(path, why)
+        raise RuntimeError(f"local heartbeat refused: {why}")
+    return doc
+
+
+def local_detections(run_id: str, directory: Path | None = None) -> list[dict]:
+    """The local channel's verdicts of this run, in the return channel's shape (``as_records``
+    reads it): ``detected`` only — a miss is concluded from the heartbeat, as on the storage
+    channel. A file of another shape, or naming another run, is ignored and said; more than
+    MAX_BLOBS raises (never a miss on a listing cut short)."""
+    from eregion_core.channel_reader import read_json
+    if not _SAFE.match(run_id):
+        raise ValueError(f"unsafe run_id: {run_id!r}")
+    d = Path(directory or local_dir()) / DETECTIONS / run_id
+    try:
+        with os.scandir(d) as it:
+            names = sorted(e.name for e in it if e.name.endswith(".json") and not e.name.startswith("."))
+    except FileNotFoundError:
+        return []
+    if len(names) > MAX_BLOBS:
+        raise RuntimeError(f"more than {MAX_BLOBS} verdicts for {run_id}")
+    out = []
+    for name in names:
+        path = d / name
+        try:
+            doc = read_json(path)
+        except (OSError, ValueError) as e:
+            _say_local(path, f"unreadable ({e})")
+            continue
+        why = verdict_refusal(doc) or ("a verdict of another run" if doc["run_id"] != run_id else "")
+        if why:
+            _say_local(path, why)
+            continue
+        if doc["verdict"] == "detected":
+            out.append({"event": "detection", "ttp": doc["technique"], "resource_id": doc["target"],
+                        "detected_at": doc["detected_at"], "rule": doc["rule"]})
+    return out
+
+
+class LocalVerdicts(Publisher):
+    """The watch's local channel (SEC18): the Publisher's rule — a detection delivered for each
+    window that covers its VM, a heartbeat only once nothing waits — written as verdicts in
+    ``directory``, its fields exactly ``VERDICT_FIELDS``. Also the poll of a run's own
+    ``attack_started`` (``note_poll``): on a workstation, the first way the watch detects a run."""
+
+    def __init__(self, directory: Path, **kw):
+        # Its windows read without the pull: the local channel exists only without a storage one.
+        kw.setdefault("windows", lambda: load_windows(pull=False))
+        super().__init__(str(directory), **kw)
+        self.directory = Path(directory)
+        source_windows = self._windows
+        self._starts: dict[str, str] = {}
+
+        def windows():
+            found = source_windows()
+            self._starts = {str(w.get("run_id")): w.get("start") for w in found if isinstance(w, dict)}
+            return found
+        self._windows = windows
+
+    def note_poll(self, signal: dict) -> None:
+        """A run's ``attack_started`` resolved into a detection by its rule (the poll path):
+        noted as the RulePoller's are, its time the attack's plus its detection's delay —
+        never one the watch could not tie to the VM (``unattributed``). Never raises."""
+        try:
+            ctx = signal.get("context") or {}
+            raw = signal.get("raw_signal") or {}
+            if signal.get("event") != "detection" or ctx.get("attribution") == "unattributed":
+                return
+            at, after = raw.get("attack_time"), raw.get("detection_time_s")
+            if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (at, after)):
+                return
+            seen = datetime.fromtimestamp(at + after, timezone.utc).isoformat()
+            self.note({**signal, "timestamp": seen,
+                       "context": {**ctx, "attribution": "asset", "rule_name": ctx.get("rule_name") or "poll"}})
+        except Exception as e:  # never into the watch's cycle
+            self._report(f"detection not noted: {e}")
+
+    def _write(self, name: str, body: dict) -> None:
+        if name == HEARTBEAT:
+            write_local(self.directory, name, {k: body.get(k) for k in BEAT_FIELDS})
+            return
+        run = str(body.get("exercise_run") or "")
+        start, seen = _when(self._starts.get(run)), _when(body.get("detected_at"))
+        latency = round((seen - start).total_seconds(), 1) if start and seen and seen >= start else None
+        doc = {"run_id": run, "technique": str(body.get("ttp") or ""), "verdict": "detected",
+               "detected_at": str(body.get("detected_at") or ""), "rule": str(body.get("rule") or "poll"),
+               "latency_s": latency, "target": str(body.get("resource_id") or "").lower()}
+        # The file's name says nothing of the watch's own signal: a digest of it.
+        leaf = hashlib.sha256(str(body.get("signal_id") or "").encode()).hexdigest()[:16]
+        write_local(self.directory, f"{DETECTIONS}/{run}/{leaf}.json", doc)
+
+
+def start_local(directory: Path | None = None, *, interval: float = TICK_S) -> LocalVerdicts | None:
+    """The local channel on its own thread — only without a storage channel, which keeps the
+    priority; None with one. A failure never reaches the watch."""
+    if channel_url():
+        return None
+    directory = Path(directory or local_dir())
+    if not os.path.lexists(directory) and os.path.isdir(directory.parent) \
+            and not os.path.islink(directory.parent):
+        directory.mkdir()   # its own directory, under a runs/ that is there — never a runs/ made
+    publisher = LocalVerdicts(directory)
+    publisher.stopped = threading.Event()   # set: the thread ends (the tests)
+
+    def loop() -> None:
+        while not publisher.stopped.is_set():
+            try:
+                publisher.tick()
+            except Exception as e:
+                publisher._report(f"local verdicts not written: {e}")
+            publisher.stopped.wait(interval)
+
+    threading.Thread(target=loop, daemon=True, name="watch-verdicts").start()
+    return publisher

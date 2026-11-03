@@ -27,7 +27,7 @@ from glorfindel.detectors import (  # noqa: E402  (after optional deps)
     is_identity_source,
     plane_of,
 )
-from glorfindel import correlation, expected_sudo  # noqa: E402
+from glorfindel import auditd, correlation, expected_sudo  # noqa: E402
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
@@ -156,6 +156,9 @@ _INDICATOR_COLUMNS: list[tuple[str, str]] = [
     ("CallerIpAddress", "caller_ip"),
     ("PutBlobCount",    "blob_upload_count"),
     ("EgressBytes",     "egress_bytes"),
+    # AUD1: a command run as root by a human login, read by the poller in auditd's records
+    # (glorfindel/auditd.py) — before SyslogMessage, which the reader sets to those records.
+    ("AuditCommand",    "root_command"),
     ("SyslogMessage",   "syslog_event"),   # may be overridden below
 ]
 
@@ -1245,8 +1248,23 @@ class RulePoller:
 
     def _loop(self, rule: DetectionRule) -> None:
         while not self._stop.is_set():
-            self.poll_once(rule)
+            try:
+                self.poll_once(rule)
+            except Exception as exc:  # the rule's thread never dies of one poll (review, AUD1)
+                logger.exception("detection rule '%s': poll failed — retried in %ss", rule.name, rule.interval_s)
+                self._say_error(rule, f"poll failed: {type(exc).__name__}: {exc}")
             self._stop.wait(rule.interval_s)
+
+    def _say_error(self, rule: DetectionRule, error: str) -> None:
+        """A poll's fault, written where the console and `glorfindel rules` read it."""
+        try:
+            with self._lock:
+                st = self._status.setdefault(rule.name, {})
+                st["last_poll"] = datetime.now(timezone.utc).isoformat()
+                st["last_error"] = error[:500]
+                _save_status(self._status)
+        except Exception:
+            logger.exception("detection rule '%s': its error not written", rule.name)
 
     def status_snapshot(self) -> list[dict]:
         with self._lock:
@@ -1268,6 +1286,7 @@ class RulePoller:
                     "last_error": s.get("last_error", ""),
                     "match_count": s.get("match_count", 0),
                     **expected_counts(s),
+                    **({"auditd": s["auditd"]} if isinstance(s.get("auditd"), dict) else {}),
                 })
             return out
 
@@ -1362,13 +1381,37 @@ class RulePoller:
             return []
 
         targets = self._targets(rule)
+        # The reading steps (AUD1, ADM1, COR1) never stop the pass: a fault in one is said
+        # (`last_error`), and the pass goes on with the rows as read — nothing set aside that
+        # was not read (review, AUD1: a forged line made the poll raise, and its thread die).
+        faults: list[str] = []
+        # AUD1 (#408): auditd's execs of a human login as root, read before any signal and
+        # outside the lock — a command of ADM1's sensitive list stays, the rest is no card.
+        policy = getattr(self._cfg, "expected_sudo", None)
+        audit_n = dict.fromkeys(auditd.COUNTS, 0)
+        try:
+            rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())
+        except Exception as exc:  # the audit reading: every row stays a card
+            faults.append(f"auditd: {type(exc).__name__}: {exc}")
         routed = self._route(rule, rows, targets) if targets else {}
-        judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
+        try:
+            judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
+        except Exception as exc:  # the expected sudo: none set aside
+            judged = {}
+            faults.append(f"expected_sudo: {type(exc).__name__}: {exc}")
         with self._lock:
             seen = {i for v in self._status.get(rule.name, {}).get("dispatched", {}).values()
                     if isinstance(v, dict) for i in v}
-        corr = correlation.settle(rule.ttp, routed, judged, self._detector(rule).run_query, seen,
-                                  _row_identity, window)                # COR1, outside the lock too
+        try:
+            corr = correlation.settle(rule.ttp, routed, judged, self._detector(rule).run_query, seen,
+                                      _row_identity, window)                # COR1, outside the lock too
+        except Exception as exc:  # the correlation: a root shell pending stays a card
+            for k in [k for k, e in judged.items() if "origins" in e]:
+                del judged[k]
+            corr = {}
+            faults.append(f"correlation: {type(exc).__name__}: {exc}")
+        for fault in faults:
+            logger.warning("detection rule '%s': %s — the pass goes on, the rows as read", rule.name, fault)
         signals: list[dict] = []
         sent_ids: dict[str, list[str]] = {}
         with self._lock:
@@ -1417,7 +1460,10 @@ class RulePoller:
                 # sent. Aggregated rows (one per attacker, per account…) each count.
                 events = [r for r in kept if r.get("TimeGenerated")]
                 send = [r for r in kept if not r.get("TimeGenerated")]
-                if events:
+                if events and rule.ttp == auditd.TTP:
+                    # AUD1: the newest exec, naming the others of this VM in its card.
+                    send.append(auditd.fold(events))
+                elif events:
                     send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
                 # Capped per rule and poll (SEC2), as the control plane: the gravest rows
                 # first; the rest of this VM's in one card that names each of them.
@@ -1441,7 +1487,10 @@ class RulePoller:
         with self._lock:
             st = self._status.setdefault(rule.name, {})
             st["last_poll"] = now_iso
-            st.pop("last_error", None)
+            if faults:
+                st["last_error"] = "; ".join(faults)[:500]
+            else:
+                st.pop("last_error", None)
             if signals:
                 st["last_match"], st["ttp"] = now_iso, rule.ttp
                 st["match_count"] = st.get("match_count", 0) + len(signals)
@@ -1452,6 +1501,9 @@ class RulePoller:
                                        "origin_confirmed": expected_counts(st)["origin_confirmed"] + confirmed_n}
             if any(corr.values()):
                 st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)
+            if rule.ttp == auditd.TTP:
+                # AUD1: what the rule's window holds at this poll — zero events says no line arrives.
+                st["auditd"] = auditd.window(audit_n, now_iso)
             # Recorded AFTER the dispatch: a crash in between re-sends (at least once)
             # rather than losing a detection (third review, detail).
             dispatched = st.setdefault("dispatched", {})

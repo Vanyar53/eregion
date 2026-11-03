@@ -163,8 +163,8 @@ def test_a_watch_dead_during_the_fault_is_not_measured_by_a_file_written_the_nex
     """Review 2, point 1 (the reviewer's test_A): the watch writes only when it decides — a
     detection on another VM the next day says nothing of the fault. What does is the watch
     read after it, by Gothmog: gone, the fault is not measured, whatever files come later."""
-    runs = tmp_path / "runs"
-    runs.mkdir()
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: the watch's own directory (H0: pulled there too)
+    runs.mkdir(parents=True)
     report = {"scenario": "vm-cpu-pressure", "run_id": "g-1", "mitre": "", "result": "FAIL",
               "metrics": {"run_format": 1, "kind": "fault", "injector": "gothmog",
                           "experiment_id": "vm-cpu-pressure", "fault": "vm-cpu-pressure", "targets": [VM],
@@ -175,7 +175,7 @@ def test_a_watch_dead_during_the_fault_is_not_measured_by_a_file_written_the_nex
     other = runs / "watch-ssh-brute-force-1_debug.jsonl"
     other.write_text(json.dumps(_isolate(T + 86400, resource=OTHER)) + "\n")
     os.utime(other, (T + 86400, T + 86400))
-    s = fr.load(runs, now=T + 86400 + 60)
+    s = fr.load(runs.parent, now=T + 86400 + 60)
     assert (s["faults"], s["measured"], s["rate"]) == (1, 0, None)
     assert s["unmeasured"][0]["why"] == fr.WATCH_GONE
 
@@ -194,19 +194,19 @@ def test_a_file_cut_before_the_fault_says_nothing_of_it():
 
 
 def test_the_watch_files_are_said_read_whole_or_not(tmp_path):
-    runs = tmp_path / "runs"
-    runs.mkdir()
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: the watch's own directory (H0: pulled there too)
+    runs.mkdir(parents=True)
     (runs / "watch-a_debug.jsonl").write_text(json.dumps(_isolate(T + 300)) + "\n\n")
     (runs / "watch-b_debug.jsonl").write_text(json.dumps(_isolate(T + 400)) + "\n{cut\n[1]\n")
     (runs / "watch-c_debug.jsonl").write_bytes(b"\xff\xfe")
     (runs / "other_debug.jsonl").write_text("not the watch's\n")
-    watch = fr.read_watch(runs)
+    watch = fr.read_watch(runs.parent)
     assert {f.name: f.why for f in watch.files} == {
         "watch-a_debug.jsonl": "", "watch-b_debug.jsonl": "2 ligne(s) illisible(s)",
         "watch-c_debug.jsonl": "illisible (UnicodeDecodeError)"}
     assert len(watch.records) == 2
     # A file last written before the period is listed, never read.
-    assert fr.read_watch(runs, since=datetime.now(timezone.utc).timestamp() + 3600).records == []
+    assert fr.read_watch(runs.parent, since=datetime.now(timezone.utc).timestamp() + 3600).records == []
 
 
 def test_a_decision_during_the_next_fault_is_the_next_faults():
@@ -274,7 +274,8 @@ def test_the_rate_reads_the_report_gothmog_writes(noise, tmp_path):  # noqa: F81
     held = _line("isolate_vm", seen=start + 240, at=start + 270, verified_at=None, executed=False,
                  verified=None, status="escalated", escalation_type="mode_hold", escalate=True,
                  resource=m["targets"][0].lower(), ttp="T1486", signal_id="sig-noise")
-    (tmp_path / "runs" / "watch-ransomware-disk-write_debug.jsonl").write_text(json.dumps(held) + "\n")
+    (tmp_path / "runs" / "glorfindel").mkdir(parents=True, exist_ok=True)     # SEC18: the watch's own
+    (tmp_path / "runs" / "glorfindel" / "watch-ransomware-disk-write_debug.jsonl").write_text(json.dumps(held) + "\n")
     now = start + 3600
     summary = fr.load(tmp_path / "runs", now=now)
     assert (summary["measured"], summary["taken"], summary["recommended"], summary["executed"]) == (1, 1, 1, 0)
@@ -286,8 +287,8 @@ def test_the_rate_reads_the_report_gothmog_writes(noise, tmp_path):  # noqa: F81
 
 
 def test_the_cli_prints_the_rate_and_json(tmp_path, capsys):
-    runs = tmp_path / "runs"
-    runs.mkdir()
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: the watch's own directory (H0: pulled there too)
+    runs.mkdir(parents=True)
     now = datetime.now(timezone.utc)
     report = {"scenario": "vm-restart", "run_id": "gothmog-x", "mitre": "", "result": "FAIL",
               "metrics": {"kind": "fault", "injector": "gothmog", "experiment_id": "vm-restart",
@@ -295,10 +296,10 @@ def test_the_cli_prints_the_rate_and_json(tmp_path, capsys):
                           "fault_end": (now - timedelta(minutes=58)).isoformat()},
               "thresholds": {}, "checks": {"fault_effective": "FAIL"}}
     (runs / "gothmog-x.json").write_text(json.dumps(report))
-    assert fr.main(["--runs-dir", str(runs)]) == 0
+    assert fr.main(["--runs-dir", str(runs.parent)]) == 0
     text = capsys.readouterr().out
     assert "0 sur 0" in text and "taux inconnu" in text and "gothmog-x" in text
-    assert fr.main(["--runs-dir", str(runs), "--json"]) == 0
+    assert fr.main(["--runs-dir", str(runs.parent), "--json"]) == 0
     body = json.loads(capsys.readouterr().out)
     assert body["rate"] is None and body["unmeasured"][0]["why"] == fr.NOT_SEEN
 

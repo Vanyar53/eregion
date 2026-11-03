@@ -178,7 +178,7 @@ def _plan_check(client) -> dict:
 
 
 def _contract(tmp_path, doc):
-    d = tmp_path / "runs" / "orodruin"
+    d = tmp_path / "runs" / "glorfindel" / "orodruin"
     d.mkdir(parents=True, exist_ok=True)
     (d / "contract.json").write_text(json.dumps(doc))
 
@@ -210,7 +210,7 @@ def test_the_requests_status_is_what_orodruin_published(client, tmp_path):
     rid = _post(client, ("T1110.001", GONDOLIN)).json()["request"]
     first = client.get(f"/api/dagorlad/requests/{rid}").json()
     assert first["written_here"] is True and first["status"] is None
-    d = tmp_path / "runs" / "orodruin" / "requests"
+    d = tmp_path / "runs" / "glorfindel" / "orodruin" / "requests"
     d.mkdir(parents=True)
     status = {"request": rid, "state": "running", "at": "2026-10-30T08:00:00+00:00", "codes": [],
               "wires": [{"rank": 1, "state": "running", "code": "", "runs": [], "result": ""}]}

@@ -346,7 +346,7 @@ Une même boucle pour une technique et pour une panne.
 | Verdict | le run au format commun (`eregion_core/run_report.py`, C1), `annatar report`, `gothmog report`, la console (Annatar, Gothmog) et sa matrice de couverture | — | — |
 
 **Le run, unifié (C1, #80, 30/10).** Une attaque et une panne écrivent le même rapport,
-`runs/<run_id>.json` : les sept clés de toujours (`scenario`, `run_id`, `mitre`, `result`,
+`runs/<injecteur>/<run_id>.json` : les sept clés de toujours (`scenario`, `run_id`, `mitre`, `result`,
 `metrics`, `thresholds`, `checks`), une seule classe dans le cœur partagé
 (`eregion_core/run_report.RunReport` ; Annatar et Gothmog n'en gardent que l'affichage). Le
 rapport dit ce qu'il est, dans `metrics` : `run_format` (1), `kind` (`technique` ou `fault`),

@@ -25,13 +25,23 @@ eregion_core/channel_reader.py  → SEC8, SEC16 : le seul lecteur de runs/, pour
                                    travers un lien, jamais bloquant, une lecture bornée ; et l'écriture tenue de
                                    même (append_line : une ligne entière ; write_file : un fichier remplacé, un lien
                                    jamais suivi). Jusqu'à SEC16 : glorfindel/channel_reader.py.
+eregion_core/runs_layout.py     → SEC18 (N-05) : runs/ un répertoire par écrivain — glorfindel/, console/, annatar/,
+                                   gothmog/, orodruin/ ; ce que chacun tient (belongs), où un lecteur trouve les
+                                   campagnes et les rapports (campaign_dirs, find_campaign, run_reports), où l'analyse
+                                   écrit (campaign_output), ce qui n'est pas lu, dit une fois (survey, say_strays), le
+                                   rapport d'un run tenu contre son répertoire (report_refusal), la migration de
+                                   l'ancienne disposition (migrate ; python -m eregion_core.runs_layout migrate|survey,
+                                   make runs-migrate, runs-survey). Bibliothèque standard seule (H0 la lance hors image).
 eregion_core/exercise.py        → B2 : fenêtres d'exercice des injecteurs. Annatar en ouvre une avant de toucher sa
-                                   cible (setup compris) et la ferme en fin de run : runs/exercises/<run_id>.json
+                                   cible (setup compris) et la ferme en fin de run : runs/<injecteur>/exercises/<run_id>.json
                                    (run_id, injector, kind, experiment, targets, start, end, expires ; ou
-                                   EREGION_EXERCISES_DIR). Glorfindel en tire la source d'un cycle (exercise/real).
+                                   EREGION_EXERCISES_DIR). Glorfindel en tire la source d'un cycle (exercise/real) ; elle
+                                   lit celles d'Annatar, de Gothmog et les siennes (tirées du canal, runs/glorfindel/
+                                   exercises), windows_dirs, et ne purge que les siennes (SEC18).
 eregion_core/exercise_channel.py → O1 : les fenêtres d'Orodruin vers la watch hébergée (conteneur exercises).
                                    Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un
-                                   run seul (runs/<run_id>.json, #193) ; sur H0, runs/.pulled-runs/<run_id>
+                                   run seul (blob runs/<run_id>.json, #193) ; sur H0, tout ce que la watch tire va
+                                   dans son répertoire, runs/glorfindel/ (SEC18) — runs/glorfindel/.pulled-runs/<run_id>
                                    marque un rapport tiré du canal (jamais écrit par-dessus un run de H0).
 eregion_core/watch_channel.py   → #159 : le sens retour (conteneur watch) — heartbeat.json {at, since, windows} et
                                    detections/<run_id>/<signal_id>.json, écrits par la watch hébergée (Publisher,
@@ -45,8 +55,8 @@ gothmog/                        → G0 : pannes déclarées. experiments/<id>.ya
                                    engines/chaos_studio.py (ARM REST : lire l'expérience et ses cibles,
                                    démarrer/suivre/annuler, chaque écriture journalisée par Orodruin avant
                                    l'appel) ; probes.py (état normal) ; runner/engine.py (le déroulé) ;
-                                   runs/<run_id>.json (forme d'Annatar) + runs/gothmog/<run_id>_signals.jsonl
-                                   (hors du motif runs/*_signals.jsonl que la watch de Glorfindel lit).
+                                   runs/gothmog/<run_id>.json (forme d'Annatar) + runs/gothmog/<run_id>_signals.jsonl
+                                   (son répertoire, SEC18 ; la watch ne lit de signaux que dans runs/annatar/).
 
 glorfindel/
   config.py             → GlorfindelConfig + load_glorfindel_config() — charge glorfindel-config.yaml
@@ -370,7 +380,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 incidents.jsonl ont plusieurs processus pour écrivains : chaque relecture-écriture
                                 sous `flock` (`<fichier>.lock`), rien de perdu entre deux. Qui écrit : la watch, la console, le bot et
                                 la CLI (le même utilisateur). Les injecteurs (Annatar, Gothmog) n'en voient que
-                                `injectors/`, en lecture seule (compose, Makefile)
+                                `injectors/`, en lecture seule (compose, Makefile) ; de runs/, que leur propre
+                                répertoire et runs/orodruin/ (SEC18)
   injectors/watch_heartbeat   → SEC3 (N-05) : copie du battement de la watch, le seul fichier de Glorfindel que lisent
                                 les injecteurs (garde V1 ; le guetteur des blocages d'Annatar, qui lisait blocks/ et
                                 émettait attack_adapted, est retiré) — leur conteneur monte ce dossier comme son
@@ -446,7 +457,9 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;
                                 `expected_sudo` : count, last, origin_count, origin_confirmed — ADM1, COR1, COR2 ;
                                 `correlation` : queries, origin, card, unknown, compromised, unchecked, confirmed,
-                                unconfirmed, last — COR1, COR2 ; lus par la console)
+                                unconfirmed, last — COR1, COR2 ; lus par la console ;
+                                `auditd` : events, sensitive, unreadable, at — AUD1, ce que la fenêtre de
+                                `auditd-sensitive-root-command` contient à sa dernière passe, lu par `glorfindel report`)
   expected_sudo.jsonl         → ADM1 : chaque sudo d'administrateur attendu écarté par le RulePoller (at, rule,
                                 asset, account, command ≤ 300 car., logged_at ; un shell root écarté par l'origine de
                                 ses sessions SSH : via « origin », origin — COR1 ; proof « bastion » ou « flows »
@@ -471,3 +484,81 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
 
 ~/.cache/chroma/              → modèle ONNX ChromaDB (79MB, téléchargé une seule fois)
 ```
+
+## `runs/` — qui écrit, qui lit, qui monte (SEC18, N-05)
+
+_SEC18 (#455), 03/11. La carte de `runs/` telle qu'elle était avant SEC18 : un seul répertoire, que
+chaque service montait en écriture. Puis la disposition retenue : un répertoire par écrivain,
+en écriture chez lui seul, en lecture seule chez ceux qui le lisent._
+
+### Avant SEC18 : un répertoire, tous les écrivains
+
+| Écrivain | Ce qu'il écrit dans `runs/` | Qui le lit |
+|---|---|---|
+| Annatar (`annatar run`, `campaign`, `wire`) | `<run_id>_signals.jsonl` (`attack_started`, `detection_missed`), `<run_id>.json` (le rapport du run), `exercises/<run_id>.json` (sa fenêtre, B2), `campaigns/<id>/` (manifeste, scénarios) | la watch (les signaux, par le lecteur commun ; les fenêtres), la recherche du moment d'un restore (les signaux), la console (fil, Runs, couverture, indicateurs), l'analyse (rapports, fenêtres), le lanceur d'Orodruin (fenêtres, rapports) |
+| Gothmog (`gothmog run`) | `gothmog/<run_id>_signals.jsonl` (que la watch ne lit pas), `<run_id>.json`, `exercises/<run_id>.json` | la watch (les fenêtres), la console, l'analyse (`fault_rate`, `containment`), le lanceur d'Orodruin |
+| La watch (`glorfindel watch`) | `<run_id>_debug.jsonl` et `watch-*_debug.jsonl` (chaque cycle : signal, raisonnement, action, vérification) | la console (fil, cartes de Runs, couverture, indicateurs, suivi d'une demande), l'analyse (décisions), la TUI, **Annatar** (l'attente de sa détection, `annatar/runner/engine.py`) |
+| La watch sur H0 (le tirage du canal d'exercice, `analysis/hosted_report.py`) | `campaigns/<id>/` (manifeste et rapports tirés, `.pulled`), `<run_id>.json` et `.pulled-runs/` (rapports d'un run seul), `exercises/` (fenêtres tirées), `orodruin/` (verdict et statuts d'Orodruin) | la console, l'analyse, la watch (les fenêtres) |
+| L'analyse (dans le conteneur de la watch, ou à la main) | `campaigns/<id>/report.md`, `report.error`, son verrou, `triage.md`, `triage.json` ; `glorfindel replay-campaign` : `campaigns/<id>/replay.json` | la console (page d'une campagne), `make glorfindel-host-campaign-report` |
+| La console, la CLI de Glorfindel, le bot (qui lance la CLI) | `manual_actions.jsonl` (les gestes de l'opérateur : levée, reset, déblocage, instantané, restore) | la console (fil, indicateurs), l'analyse (`containment` : les levées) |
+| Orodruin (`eregion_core/exercise_runner.py`, le contrat) | `orodruin/audit.jsonl` (chaque appel d'un injecteur, avant l'appel), `orodruin/requests/` (statut d'une demande, registre des demandes jouées, le verrou « un run à la fois ») | Orodruin lui-même (le plafond, le registre, le verrou) |
+| Dagorlad (la console) | rien dans `runs/` : ses demandes vont dans `~/.eregion/console/requests/` | Orodruin, par l'opérateur |
+| Le canal d'Orodruin vers H0 (`exercise_channel.py`) et le canal retour (`watch_channel.py`) | rien dans `runs/` sur Orodruin ; sur H0, ce que tire la watch (ci-dessus) | — |
+
+Montages avant SEC18 :
+
+| Où | Service | `runs/` |
+|---|---|---|
+| `docker-compose.yml` (poste, H0, une équipe) | `watch`, `war-room` (la console), `bot` | `runs/` entier, en écriture |
+| `docker-compose.yml` | `annatar`, `gothmog` | `runs/` entier, en écriture (plus `~/.glorfindel/injectors` en lecture seule, SEC3) |
+| `Makefile` (`annatar-shell`, `DOCKER_ANNATAR`) | Annatar | `runs/` entier, en écriture |
+| `Makefile` (`glorfindel-shell`, `DOCKER_GLORFINDEL`) | Glorfindel à la main | `runs/` entier, en écriture |
+| Orodruin (`ORO_RUN`, `ORO_RUN_REQUEST`) | Annatar, Gothmog, le lanceur d'une demande | `~/runs` entier, en écriture |
+| H0 (`infra/glorfindel-host/deploy.sh` → compose) | `watch`, `war-room`, `bot` | `runs/` entier, en écriture |
+
+Le rouge écrivait donc où le bleu écrit ses décisions, et lisait le raisonnement de la watch.
+
+### La disposition retenue : `runs/<écrivain>/`
+
+| Répertoire | Écrivain | Ce qu'il y écrit | Monté en lecture seule par |
+|---|---|---|---|
+| `runs/glorfindel/` | la watch, et ce qui tourne dans son conteneur : le tirage du canal, le rapport de campagne, l'analyse ; la CLI de Glorfindel quand elle rejoue des signaux (`respond`) | `*_debug.jsonl`, `campaigns/<id>/` (tirées sur H0 ; `report.md`, `report.error`, `triage.*`, `replay.json` partout), `<run_id>.json` et `.pulled-runs/` tirés, `exercises/` tirées, `orodruin/` tiré | la console |
+| `runs/console/` | la console, la CLI de Glorfindel, le bot | `manual_actions.jsonl` | la watch (l'analyse des levées) |
+| `runs/annatar/` | Annatar | `*_signals.jsonl`, `<run_id>.json`, `exercises/`, `campaigns/<id>/` | la watch, le bot (le moment d'un restore), la console |
+| `runs/gothmog/` | Gothmog | `*_signals.jsonl`, `<run_id>.json`, `exercises/` | la watch, la console |
+| `runs/orodruin/` | les injecteurs sur l'hôte d'Orodruin et son lanceur | `audit.jsonl`, `requests/` (statuts, registre, verrou) | — |
+| `runs/verdicts/` | la watch, sans canal retour du stockage (le canal local des verdicts) | `heartbeat.json` (`at`, `since`, `windows`, `perimeter`), `detections/<run_id>/<n>.json` (`run_id`, `technique`, `verdict`, `detected_at`, `rule`, `latency_s`, `target` — rien d'autre) | Annatar, Gothmog |
+
+Le rouge ne monte ni `runs/glorfindel/` ni `runs/console/` : il ne lit plus le raisonnement de la
+watch. Sa détection se mesure par le canal retour du stockage (`eregion_core/watch_channel.py`) ;
+sans lui, par le canal local des verdicts, `runs/verdicts/`, en lecture seule — le verdict de ses
+runs, rien d'autre (`LocalVerdicts`, `local_detections`) ; sans aucun des deux, elle est inconnue.
+Il n'existe pas sur Orodruin, où le canal du stockage suffit (`make orodruin-push` migre avec
+`--orodruin`).
+
+Un lecteur ne cherche un fichier que dans le répertoire de son écrivain : un signal dans
+`runs/annatar/`, un cycle dans `runs/glorfindel/`, un geste dans `runs/console/`, une fenêtre dans
+`exercises/` d'Annatar, de Gothmog ou de la watch, un rapport dans le répertoire d'un injecteur (qui
+doit le nommer) ou de la watch. Ce qui est ailleurs — l'ancienne disposition, un fichier d'un autre
+écrivain dans un répertoire — n'est jamais lu, et dit une fois (`runs_layout.survey`).
+
+Montages après SEC18 (`tests/unit/test_runs_mounts.py` les tient) :
+
+| Où | Service | En écriture | En lecture seule |
+|---|---|---|---|
+| compose (poste, H0, une équipe) | `watch` | `glorfindel`, `verdicts` | `annatar`, `gothmog`, `console` |
+| compose | `war-room` (la console) | `console` | `glorfindel`, `annatar`, `gothmog` |
+| compose | `bot` | `console` | `annatar` |
+| compose | `annatar` | `annatar`, `orodruin` | `verdicts` |
+| compose | `gothmog` | `gothmog`, `orodruin` | `verdicts` |
+| Makefile `ANNATAR_VOLS` | Annatar à la main | `annatar`, `orodruin` | `verdicts` |
+| Makefile `GLORFINDEL_VOLS` | Glorfindel à la main (la watch, la CLI) | `glorfindel`, `console`, `verdicts` | `annatar`, `gothmog` |
+| Orodruin `ORO_RUN` | Annatar | `annatar`, `orodruin` | — |
+| Orodruin `ORO_RUN_GOTHMOG` | Gothmog | `gothmog`, `orodruin` | — |
+| Orodruin `ORO_RUN_CONTRACT` | le contrat (`orodruin-check`) | `orodruin` | — |
+| Orodruin `ORO_RUN_REQUEST` | le lanceur d'une demande (il lance les deux) | `annatar`, `gothmog`, `orodruin` | — |
+| Orodruin `ORO_MIGRATE` | la migration, une fois, à `orodruin-push` | `~/runs` entier | — |
+| H0 (`deploy.sh` → compose) | `watch`, `war-room`, `bot` | comme le compose | comme le compose |
+
+La migration de l'ancienne disposition, son choix et sa raison, et le redéploiement dans l'ordre
+(poste, H0, Orodruin) : [`operations.md`](operations.md), « `runs/` : un répertoire par écrivain ».

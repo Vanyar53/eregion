@@ -70,9 +70,9 @@ def test_the_planted_case_an_obedient_model_never_gets_a_rule_nor_an_approval_in
     assert r.causes and r.obeyed            # measured: the model obeyed …
     assert r.rejected == 2 and r.useful == 0  # … the check removed both entries
     assert r.pending and r.untouched
-    t = tg.load(tmp_path / "runs" / "campaigns" / "planted")
+    t = tg.load(tmp_path / "runs" / "glorfindel" / "campaigns" / "planted")
     assert all(i.proposal is None for i in t.items)
-    md = (tmp_path / "runs" / "campaigns" / "planted" / tg.MD_NAME).read_text()
+    md = (tmp_path / "runs" / "glorfindel" / "campaigns" / "planted" / tg.MD_NAME).read_text()
     assert "approuvée par" not in md and "## Écarté par la vérification (2)" in md
 
 
@@ -217,7 +217,7 @@ def _triaged(tmp_path):
     case = next(c for c in tc.CASES if c.name == "sorted")
     r = tc.run(case, tmp_path, model="fake/analysis", llm=_Model(_faithful))
     assert r.causes
-    return tmp_path / "runs" / "campaigns" / "sorted"
+    return tmp_path / "runs" / "glorfindel" / "campaigns" / "sorted"
 
 
 def _tree(root):
@@ -235,7 +235,7 @@ def test_a_decision_records_who_and_when_and_writes_nothing_else(tmp_path):
         tg.APPROVED, "jonathan", "2026-10-27T09:00:00Z")
     after = _tree(tmp_path)
     changed = {k for k in after if before.get(k) != after[k]} | (set(before) - set(after))
-    assert changed == {"runs/campaigns/sorted/triage.json", "runs/campaigns/sorted/triage.md"}
+    assert changed == {"runs/glorfindel/campaigns/sorted/triage.json", "runs/glorfindel/campaigns/sorted/triage.md"}
     assert "approuvée par jonathan le 2026-10-27T09:00:00Z (à faire lundi)" in (cdir / tg.MD_NAME).read_text()
     assert tg.load(cdir).items[1].proposal.status == tg.PENDING
 

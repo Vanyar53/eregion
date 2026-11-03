@@ -161,6 +161,59 @@ rules:
       // sudo. The poller sets the expected ones aside, then sends the newest of the rest.
       | summarize arg_max(TimeGenerated, *) by Computer, _ResourceId, SyslogMessage
 
+  # ── Ce qui se fait en root, sous l'identité de connexion (AUD1, #408) ────────────
+  # Sous sudo, ce qui se fait dans un shell root n'est jamais écrit. auditd le voit : deux
+  # règles d'audit (infra/terraform/auditd.tf, désactivé par défaut) — celle du CIS
+  # (`-C euid!=uid -F auid!=unset -S execve -k user_emulation`) et, ce qu'elle ne voit pas (un
+  # shell root a uid = euid = 0), `-F euid=0 -F auid>=1000 -F auid!=unset -S execve -k
+  # root_command`. Leurs lignes arrivent dans Syslog par le greffon syslog d'auditd
+  # (audisp-syslog, local6). Cette requête rend une ligne par exécution d'un humain (auid ≥ 1000,
+  # jamais unset) en root (euid 0), ses enregistrements SYSCALL et EXECVE réunis par événement.
+  # Le RulePoller lit chaque ligne avant tout signal (glorfindel/auditd.py) : une commande de la
+  # liste sensible d'ADM1 (la même, jamais recopiée) fait une carte qui nomme le compte de
+  # connexion ; une commande hors de la liste, aucune ; une ligne illisible ou ambiguë (deux
+  # SYSCALL pour un événement, un argument coupé…), une carte (A0). Les colonnes sont des
+  # HYPOTHÈSES, prises de la documentation d'auditd et d'AMA, à mesurer au banc :
+  # docs/operations.md, « Les hypothèses d'AUD1 » (A1–A13). Sans les lignes, la règle ne voit rien.
+
+  - name: auditd-sensitive-root-command
+    description: >
+      Commande sensible exécutée en root par un compte de connexion humain, lue dans les lignes
+      d'auditd (auid gardé à travers sudo et su) — T1059.004. La liste des commandes sensibles
+      est celle d'ADM1 ; un compte attendu y reste soumis.
+    enabled: true
+    ttp: T1059.004
+    assets: [auto]
+    interval_s: 60
+    expected_latency_s: 480
+    query: |
+      Syslog
+      | where TimeGenerated > ago(10m)
+      // The bench's audisp-syslog writes to local6 (hypothesis A2), tagged audisp-syslog — or
+      // audispd, auditd 2's own dispatcher (A3).
+      | where Facility == "local6"
+      | where ProcessName in ("audisp-syslog", "audispd")
+      | where SyslogMessage has "msg=audit("
+      | extend AuditEvent = extract(@"msg=audit\((\d+\.\d+:\d+)\)", 1, SyslogMessage),
+               RecordType = extract(@"(?:^|\s)type=(SYSCALL|EXECVE)\s", 1, SyslogMessage)
+      | where isnotempty(AuditEvent) and isnotempty(RecordType)
+      // A human login's exec as root: its SYSCALL record (A4) carries one of the two keys, an
+      // auid of a human (A9), never unset, and euid 0.
+      | extend Auid = tolong(extract(@"(?:^|\s)auid=(\d+)", 1, SyslogMessage)),
+               Euid = tolong(extract(@"(?:^|\s)euid=(\d+)", 1, SyslogMessage)),
+               Key = extract(@'(?:^|\s)key="([^"]*)"', 1, SyslogMessage)
+      | extend Human = RecordType == "SYSCALL" and Key in ("user_emulation", "root_command")
+                       and Auid >= 1000 and Auid != 4294967295 and Euid == 0
+      // One row per event (Computer, its serial): every distinct SYSCALL and EXECVE record of it,
+      // never one chosen — an intruder root on the VM can write a line at its own event's
+      // serial; two of either make a card, read by the poller (A5).
+      | summarize TimeGenerated = min(TimeGenerated), Humans = countif(Human),
+                  Syscall = make_set_if(SyslogMessage, RecordType == "SYSCALL", 4),
+                  Execve = make_set_if(SyslogMessage, RecordType == "EXECVE", 4)
+                  by Computer, _ResourceId, AuditEvent
+      | where Humans > 0
+      | project TimeGenerated, Computer, _ResourceId, AuditEvent, Syscall, Execve
+
   - name: t1136-001-local-account-creation-linux-v1
     description: >
       Local account creation on Linux — T1136.001. Fires on a successful creation

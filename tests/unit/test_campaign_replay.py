@@ -37,7 +37,7 @@ def _campaign(tmp_path, scenarios):
         campaign_id="20260630T200000Z", objective="test",
         scope=Scope(), budget=Budget(), scenarios=scenarios,
     )
-    m.save(campaign_dir(m.campaign_id, tmp_path))
+    m.save(campaign_dir(m.campaign_id, tmp_path / "annatar"))   # SEC18: Annatar's own directory
     return m.campaign_id
 
 
@@ -154,8 +154,9 @@ def test_replay_writes_replay_json(tmp_path):
     cid = _campaign(tmp_path, [_scenario(1, "T1041", detection="missed", run_id="r2")])
     cr.replay_campaign(cid, runs_dir=tmp_path, detector=_Detector([{"x": 1}]),
                        proposals=[_proposal("r2", "T1041")], write=True)
-    path = campaign_dir(cid, tmp_path) / "replay.json"
-    assert path.exists()
+    # SEC18: the verdict in the watch's own directory, never in Annatar's.
+    path = campaign_dir(cid, tmp_path / "glorfindel") / "replay.json"
+    assert path.exists() and not (campaign_dir(cid, tmp_path / "annatar") / "replay.json").exists()
     saved = json.loads(path.read_text())
     assert saved["campaign_id"] == cid
     assert saved["replays"][0]["would_have_caught"] is True
@@ -180,7 +181,7 @@ def test_runner_to_replay_end_to_end(tmp_path):
                     allowed_resource_ids=[target]),
         budget=Budget(reset_nsg_between=False), scenarios=[scen], state="ratified",
     )
-    cdir = campaign_dir(m.campaign_id, tmp_path)
+    cdir = campaign_dir(m.campaign_id, tmp_path / "annatar")
     m.save(cdir)
 
     class _FakeEngine:  # returns a MISSED outcome — no Azure, no real attack
@@ -221,4 +222,4 @@ def test_replay_campaign_cli_dry_run(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "T1041" in result.output
-    assert not (campaign_dir(cid, tmp_path) / "replay.json").exists()  # dry-run wrote nothing
+    assert not (campaign_dir(cid, tmp_path / "glorfindel") / "replay.json").exists()  # dry-run wrote nothing

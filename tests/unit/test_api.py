@@ -149,7 +149,7 @@ def test_approved_isolation_is_verified_and_traced(client, monkeypatch, tmp_path
     r = client.post(f"/api/action/approve/{esc_id}", json={})
     assert r.json()["verification"]["verified"] is False
     assert [e["escalation_type"] for e in escalations.pending()] == ["verification_failed"]
-    assert "isolate_vm" in (tmp_path / "runs" / "manual_actions.jsonl").read_text()
+    assert "isolate_vm" in (tmp_path / "runs" / "console" / "manual_actions.jsonl").read_text()   # SEC18
 
 
 def test_an_approved_isolation_that_cannot_be_verified_leaves_a_card(client, monkeypatch, tmp_path):

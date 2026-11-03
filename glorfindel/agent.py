@@ -1501,7 +1501,7 @@ _CYCLE_FAILED_STEPS = [
     "Trier le signal à la main : la menace a été détectée mais pas analysée jusqu'au bout.",
     "Vérifier le fournisseur LLM (GLORFINDEL_LLM_MODEL, clé API, quota, réseau) "
     "si l'erreur vient de la décision.",
-    "Consulter runs/<run_id>_debug.jsonl et la console du watch pour l'erreur complète.",
+    "Consulter runs/glorfindel/<run_id>_debug.jsonl et la console du watch pour l'erreur complète.",
 ]
 
 
@@ -2263,10 +2263,9 @@ def _record_uncontained(state: GlorfindelState, source: str, exercise_run: str) 
 
 
 def _write_debug_record(state: GlorfindelState) -> None:
-    """Append the cycle to runs/<run_id>_debug.jsonl (no-op without a run_id)."""
+    """Append the cycle to runs/glorfindel/<run_id>_debug.jsonl (no-op without a run_id)."""
     import json
     from datetime import datetime, timezone
-    from pathlib import Path
 
     signal = state["signal"]
     run_id = signal.get("context", {}).get("run_id", "")
@@ -2306,11 +2305,12 @@ def _write_debug_record(state: GlorfindelState) -> None:
         debug_record["decision_draws"] = state["decision_draws"]
     if state.get("uncontained"):
         debug_record["uncontained"] = state["uncontained"]
-    out = Path("runs") / f"{run_id}_debug.jsonl"
-    # SEC16: runs/ is written by other containers too — a regular file only, never through a
-    # link, never blocking. Refused, or any error of the write, the cycle goes on (its line
-    # lost: it has acted, it is no failed cycle), said once in the log.
-    from eregion_core import channel_reader
+    # SEC18: in the watch's own directory, runs/glorfindel/ — no injector writes there.
+    from eregion_core import channel_reader, runs_layout
+    out = runs_layout.dir_of(runs_layout.GLORFINDEL) / f"{run_id}_debug.jsonl"
+    # SEC16: a regular file only, never through a link, never blocking. Refused, or any error of
+    # the write, the cycle goes on (its line lost: it has acted, it is no failed cycle), said once
+    # in the log.
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
         channel_reader.append_line(out, json.dumps(debug_record, default=str))

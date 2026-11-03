@@ -71,7 +71,7 @@ _LD_ENV = re.compile(r"\bLD_(?:PRELOAD|LIBRARY_PATH|AUDIT)=", re.IGNORECASE)
 # under sudo and an intruder with that account would (case ignored, read in the whole command
 # line, `bash -c '…'` included). Extended — never replaced — by `sensitive_commands`. Each one
 # linear in the command's length: a lookahead is anchored at the start (`\A`).
-_AGENTS = (r"azuremonitoragent|azuremonitor-\S+|omsagent|mdsd|rsyslog|syslog-ng|auditd|mdatp|"
+_AGENTS = (r"azuremonitoragent|azuremonitor-\S+|omsagent|mdsd|rsyslog|syslog-ng|auditd|audisp-syslog|audispd|mdatp|"
            r"walinuxagent|waagent|amazon-cloudwatch-agent|falcon-sensor|osqueryd|wazuh-agent")
 _DISABLE = (r"\b(?:stop|disable|mask|kill|pkill|killall|remove|purge|erase|uninstall|rm|mv|unlink)\b"
             r"|\bdpkg\b[^;&|]*?\s-[a-zA-Z]*[rP]|\brpm\b[^;&|]*?\s-[a-zA-Z]*e"
@@ -250,6 +250,15 @@ def sensitive(command: str, extra=()) -> str | None:
     if root_shell(text):
         return "root_shell"
     return _config_sensitive(text, extra)
+
+
+def listed(command: str, extra=()) -> str | None:
+    """AUD1 (#408): the category of the list this command falls in — the shipped ones, then the
+    config's texts —, a root shell aside. auditd reads every command run inside a root shell on
+    its own: the shell was judged on sudo's line (`sudo-privilege-escalation`), and a shell
+    opened inside one is no finding of itself. The same list as for sudo, never a copy."""
+    text = command[:_COMMAND_READ]
+    return next((name for name, rx in _SENSITIVE if rx.search(text)), None) or _config_sensitive(text, extra)
 
 
 def _config_sensitive(text: str, extra) -> str | None:

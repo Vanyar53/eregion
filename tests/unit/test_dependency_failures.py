@@ -196,7 +196,7 @@ def _cards() -> list[dict]:
 
 
 def _debug() -> list[dict]:
-    path = Path("runs") / "watch-ransomware-disk-write-20261021T100000Z_debug.jsonl"
+    path = Path("runs") / "glorfindel" / "watch-ransomware-disk-write-20261021T100000Z_debug.jsonl"
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 

@@ -217,8 +217,8 @@ def test_an_injector_is_active_once_this_host_holds_its_runs(client, runs, tmp_p
     s = _status(client)
     assert s["gothmog"]["active"] is True and s["gothmog"]["found"]["windows"] == 1
     assert s["annatar"]["active"] is False
-    (runs / "campaigns" / "c1").mkdir(parents=True)
-    (runs / "campaigns" / "c1" / "manifest.json").write_text("{}")
+    (runs / "annatar" / "campaigns" / "c1").mkdir(parents=True)      # SEC18: Annatar's own directory
+    (runs / "annatar" / "campaigns" / "c1" / "manifest.json").write_text("{}")
     sections._cache["key"] = None
     assert _status(client)["annatar"]["active"] is True
 
@@ -1163,7 +1163,8 @@ def test_the_live_feed_ends_with_its_session(runs, monkeypatch, ends):
     import time
     c = console(token=None)
     c.cookies.set(COOKIE, api._session(token))
-    feed = Path("runs") / "watch-x_signals.jsonl"
+    feed = Path("runs") / "annatar" / "watch-x_signals.jsonl"     # SEC18: Annatar's own directory
+    feed.parent.mkdir(parents=True, exist_ok=True)
     feed.write_text("")
     with c.websocket_connect(WS, headers={"Origin": ORIGIN}) as ws:
         if ends == "rotation":
@@ -1244,8 +1245,9 @@ def _release_fifo(path, stop):
 def _runs_with_traps(tmp_path):
     import os
     import threading
-    runs = tmp_path / "runs"
-    runs.mkdir(exist_ok=True)
+    runs = tmp_path / "runs" / "annatar"         # SEC18: the signals in Annatar's directory,
+    runs.mkdir(parents=True, exist_ok=True)       # the cycles in the watch's
+    (runs.parent / "glorfindel").mkdir(exist_ok=True)
     (runs / "r1_signals.jsonl").write_text(json.dumps({"timestamp": "2026-11-02T10:00:00+00:00",
                                                        "event": "attack_started", "ttp": "T1110.001",
                                                        "resource_id": "/x/vm-a"}) + "\n")
@@ -1255,7 +1257,7 @@ def _runs_with_traps(tmp_path):
     # would read without end; tests/unit/test_runs_channel.py holds that case, bounded).
     (tmp_path / "elsewhere.jsonl").write_text(json.dumps({"timestamp": "2026-11-02T09:00:00+00:00",
                                                           "action": "isolate_vm"}) + "\n")
-    (runs / "r3_debug.jsonl").symlink_to(tmp_path / "elsewhere.jsonl")
+    (runs.parent / "glorfindel" / "r3_debug.jsonl").symlink_to(tmp_path / "elsewhere.jsonl")
     stop = threading.Event()
     threading.Thread(target=_release_fifo, args=(fifo, stop), daemon=True).start()
     return runs, stop

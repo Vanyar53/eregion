@@ -166,6 +166,9 @@ def _networks(draw):
         # block covers the primary NIC's subnet only. Drawn last: the earlier draws keep
         # their bytes.
         "data_subnet": draw(st.one_of(st.none(), _customer_rules())),
+        # Db--01's primary NIC on the data subnet (L1Qs): its perimeter block lies there, a
+        # second perimeter next to one of the app subnet's VMs. Drawn last, as above.
+        "data_primary": draw(st.booleans()),
     }
 
 
@@ -264,7 +267,10 @@ class _Chaos:
         raise throttled(op)
 
 
-_CURRENT = SimpleNamespace(chaos=None, fake=None, mode="human_only", scheduler=None, clock=0)
+# `modes`: the mode of each VM (its resource id, `key`) for one pass, over `mode` (L1Qs);
+# `busy`: the names whose lock another writer holds for that pass (the reassertion skips them).
+_CURRENT = SimpleNamespace(chaos=None, fake=None, mode="human_only", scheduler=None, clock=0,
+                           modes={}, busy=set())
 
 
 class _Abandoned(BaseException):
@@ -500,6 +506,7 @@ class IsolationMachine(RuleBasedStateMachine):
         config._DEFAULT_PATHS = [self.home / "glorfindel-config.yaml"]
         self.chaos = _CURRENT.chaos = _Chaos()
         _CURRENT.clock = 0                              # minutes the test clock is ahead
+        _CURRENT.modes, _CURRENT.busy = {}, set()       # one mode for every VM, no lock taken
         self.releasing: set[str] = set()                # the test's own journal (I9)
         self.unblocking: set[str] = set()
         # VMs whose block the test saw written whole since the last unblock or reset began
@@ -555,6 +562,8 @@ class IsolationMachine(RuleBasedStateMachine):
             if split else None
         self.vms = []
         for rg, name, loc, nics in _VMS:
+            if split and net.get("data_primary") and name == "Db--01":
+                nics = list(reversed(nics))       # db-nic-1, on the data subnet, first: the primary
             specs = []
             for nic_rg, nic, ips in nics:
                 n = net["nics"][nic]
@@ -1273,6 +1282,10 @@ class IsolationMachine(RuleBasedStateMachine):
             off = {n["id"].rsplit("/", 1)[-1] for n in self._nics(vm) if key(n["subnet"]) != home}
             said = set(out.get("uncovered_nics") or []) | (off if out.get("nics_unread") else set())
             assert said <= off, f"I3: perimeter block named {sorted(said - off)} of {vm} uncovered, behind it"
+            # Nor one another perimeter block of ours cuts off, on its own subnet (L1Qs): « the IP
+            # still reaches them » was false there.
+            cut = sorted(n for n in out.get("uncovered_nics") or [] if self._perimeter_cuts(vm, n))
+            assert not cut, f"I3: perimeter block named {cut} of {vm} uncovered; our perimeter on their subnet cuts them off"
             assert out["status"] == "blocked_partial" or not said, f"I3: perimeter block said blocked, {sorted(said)} open"
             entry = next((e for e in actions._load_block_entries(vm) if e.get("ip") == ATTACKER), {})
             reached = ({f[0] for f in self._attacker_flows(vm, None) if f[0] not in off}
@@ -1359,7 +1372,12 @@ class IsolationMachine(RuleBasedStateMachine):
         # A perimeter block put back closes the attacker's flows of every VM on its
         # subnet, those without state included — by design.
         perimeter = any(e.get("scoped") is False for vm in self.vms for e in actions._load_block_entries(vm))
-        vanished = [vm for vm in self.live if self._block_vanished(vm)]
+        # A VM whose lock another writer holds is skipped by the pass (L1Qs): its write runs,
+        # the next pass reads it — L1 and L3 wait for that pass, as for an operation running.
+        vanished = [vm for vm in self.live if self._block_vanished(vm) and not _is_busy(vm)]
+        mixed = bool(_CURRENT.modes)
+        human = {vm for vm in self.live if _mode_of(vm) == "human_only"}
+        shared = self._shared_with_writers(human) if mixed else {}
         cards_before = {e["id"] for e in escalations.pending()}
         journal_at = len(self.fake.journal)
         quiet = self._chain_start()[0] if getattr(self, "chain", None) else None
@@ -1416,17 +1434,55 @@ class IsolationMachine(RuleBasedStateMachine):
         for vm in self.live:
             reopenable = flows[("own", vm)] - flows[vm]
             assert after[vm] - flows[vm] <= reopenable, f"I5: the reassertion opened flows of {vm}"
-            if _CURRENT.mode == "human_only":
+            if not mixed and _CURRENT.mode == "human_only":
                 assert after[vm] == flows[vm], f"I5: the reassertion acted on {vm} in human_only"
+            elif vm in human:
+                # One mode per VM (L1Qs): a VM in human_only is not acted on — only what it
+                # shares with a VM the pass may write for closes for it: a perimeter put back
+                # on its subnet (the attacker's flows), a quarantine NSG put back on its NIC.
+                shut = flows[vm] - after[vm]
+                assert after[vm] <= flows[vm] and all(
+                    f[0] in shared[vm]["quarantine"] or (f[3] == ATTACKER and f[0] in shared[vm]["perimeter"])
+                    for f in shut), f"I5: the reassertion acted on {vm} in human_only ({sorted(shut)[:2]})"
             elif not had_state[vm]:
                 strip = (lambda fl: frozenset(f for f in fl if f[3] != ATTACKER)) if perimeter else (lambda fl: fl)
                 self._only_sealed(vm, strip(flows[vm]), strip(after[vm]), "I5: the reassertion (no state)",
                                   reopenable)
         for vm in releasing:
             assert self._footprint(vm) <= footprints[vm], f"I9: the reassertion isolated {vm} again mid-release"
-        if _CURRENT.mode == "human_only":
+        if not mixed and _CURRENT.mode == "human_only":
             assert {k: n["nsg"] for k, n in self.fake.nics.items()} == nics_before
+        if mixed:
+            # Nothing written for a VM in human_only (L1Qs): its NICs carry what they carried,
+            # and no rule named for one of them was written or taken off by the pass.
+            marks = {_nic_hash(n): vm for vm in human for n in self.fake.vms[key(vm)]["nics"]}
+            for vm in human:
+                for n in self.fake.vms[key(vm)]["nics"]:
+                    assert self.fake.nics[key(n)]["nsg"] == nics_before[key(n)], (
+                        f"I5: the reassertion moved {n.rsplit('/', 1)[-1]} of {vm}, in human_only")
+            for e in self.fake.journal[journal_at:]:
+                mark = str(e.get("rule") or "").removesuffix("-out").rsplit("-", 1)[-1]
+                assert not (e.get("op") in ("rule.write", "rule.delete") and mark in marks), (
+                    f"I5: the reassertion wrote {e.get('rule')} for {marks.get(mark)}, in human_only")
         self._config_honoured({k: v for k, v in nics_before.items() if v}, "the reassertion")
+
+    def _shared_with_writers(self, human: set) -> dict:
+        """For each VM in human_only, its NICs a VM the pass may write for shares (L1Qs): behind
+        the subnet NSG a writer's perimeter block lies on, or carrying a quarantine NSG (one per
+        region and group, shared by every isolation in it)."""
+        from .fake_azure import nsg_id
+        writers = [vm for vm in self.live if vm not in human and not _is_busy(vm)]
+        perimeters = {key(nsg_id(*e["nsg"].split("/", 1))) for vm in writers
+                      for e in actions._load_block_entries(vm)
+                      if e.get("scoped") is False and "/" in (e.get("nsg") or "")}
+        out = {}
+        for vm in human:
+            nics = {n["id"].rsplit("/", 1)[-1]: n for n in self._nics(vm)}
+            out[vm] = {
+                "perimeter": {s for s, n in nics.items()
+                              if key(self.fake.subnets[key(n["subnet"])]["nsg"] or "") in perimeters},
+                "quarantine": {s for s, n in nics.items() if n["nsg"] and actions._is_quarantine_nsg(n["nsg"])}}
+        return out
 
     def _chain_start(self) -> tuple[set, int]:
         """The rules Glorfindel wrote with nothing else touching the world since (`chain`:
@@ -1524,6 +1580,17 @@ class IsolationMachine(RuleBasedStateMachine):
                 assert not cut if said else len(cut) < len(nics), (
                     f"I3: the reassertion said {ATTACKER} no longer blocked on {vm} ({said}); "
                     "our perimeter block still cuts it off")
+            if "ne couvre pas" in reason:
+                # « Not covered … the IP reaches them » (a perimeter block alone, L1Qs): never of a
+                # NIC our perimeter on its own subnet — another VM's entry's — cuts off, but one
+                # this pass wrote that perimeter for (the card said before the write, as above).
+                m = re.search(r"ne couvre pas (.+?) de ", reason)
+                said = [n for n in nics if m and n in [x.strip() for x in m.group(1).split(",")]]
+                cut = [n for n in said if self._perimeter_cuts(vm, n)
+                       and key(self._subnet_nsg_of(vm, n) or "") not in written]
+                assert not cut, (
+                    f"I3: the reassertion said {ATTACKER} reaches {cut} of {vm}, off its perimeter; "
+                    "our perimeter block on their subnet cuts them off")
 
     def _subnet_nsg_of(self, vm: str, nic: str) -> str | None:
         n = next(x for x in self._nics(vm) if x["id"].rsplit("/", 1)[-1] == nic)
@@ -2731,6 +2798,156 @@ class IsolationMachine(RuleBasedStateMachine):
         assert any(e["id"] in self.notified for e in own), (
             f"L3: the {'isolation' if isolation else 'block'} of {vm} is gone from Azure; its card was never notified")
 
+    @rule(data=st.data())
+    def reassert_by_vm(self, data):
+        """A pass, the mode drawn for each VM (L1Qs, #424) — human_only for one, not for its
+        neighbour —, or its lock held by another writer (the pass skips it): one mode for every
+        VM at each pass left unreached a perimeter that doesn't come back in the pass while a
+        VM block beside it is written."""
+        self._pass_by_vm(data)
+
+    def _pass_by_vm(self, data, fixed: dict | None = None, **drawn):
+        """One pass, each live VM in human_only, non_disruptive, or busy (its lock taken, by
+        name: two VMs of one name share it) — `fixed` sets some —, the pass's own draws after.
+        Returns the names it held busy."""
+        modes, busy = {}, set()
+        for vm in self.live:
+            how = (fixed or {}).get(vm) or data.draw(
+                st.sampled_from(["human_only", "non_disruptive", "busy"]), label=f"mode of {vm}")
+            modes[key(vm)] = "non_disruptive" if how == "busy" else how
+            if how == "busy":
+                busy.add(vm.rsplit("/", 1)[-1].lower())
+        if len(set(modes.values())) > 1 or busy:
+            _note("a pass, one mode per VM")
+        _CURRENT.modes, _CURRENT.busy = modes, busy
+        try:
+            self.reassert(_Drawn(data, **drawn))
+        finally:
+            _CURRENT.modes, _CURRENT.busy = {}, set()
+        return busy
+
+    def _pair_taken_off(self, nsg_key: str):
+        """The attacker's perimeter pair deleted from an NSG by someone (the portal, a pipeline)."""
+        bare = "glorfindel-block-" + ATTACKER.replace(".", "-")
+        rules = self.fake.nsgs.get(nsg_key, {}).get("rules", {})
+        for name in (bare, f"{bare}-out"):
+            rules.pop(name, None)
+
+    @rule(data=st.data())
+    def perimeters_on_two_subnets(self, data):
+        """A rare state made common (L1Qs, #424): two perimeter blocks of one IP on two subnets — a
+        VM whose primary NIC is on the data subnet blocked there, a VM of the app subnet blocked on
+        its own —, the multi-NIC VM with a NIC behind each; each entry merged with its VM's own
+        block or not; then our rules taken off (all, both pairs, or one), and one or two passes, the
+        mode drawn per VM. Never drawn before: no VM's primary NIC was on the data subnet, and one
+        mode held for every VM."""
+        split = [v for v in self.live if len({key(n["subnet"]) for n in self._nics(v)}) > 1]
+        if not split:
+            return
+        vm = data.draw(st.sampled_from(split), label="vm")
+        home = key(self._nics(vm)[0]["subnet"])
+        other = {key(n["subnet"]) for n in self._nics(vm)} - {home}
+        mates = [v for v in self.live if v != vm and key(self._nics(v)[0]["subnet"]) in other]
+        if not mates or not all(self.fake.subnets[s]["nsg"] for s in {home, *other}):
+            return
+        mate = data.draw(st.sampled_from(mates), label="mate")
+        _note("two perimeters on two subnets")
+        port = data.draw(st.sampled_from([22, None]), label="threat_port")
+        for v in data.draw(st.permutations([vm, mate]), label="order"):
+            r = data.draw(st.sampled_from([v, v.lower()]), label="rid")
+            self.block_perimeter(_Drawn(data, vm=v, rid=r, fault=None, replace=False))
+            if data.draw(st.booleans(), label="merged"):
+                self._block(v, r, None, port)
+        how = data.draw(st.sampled_from(["all", "pairs", "one pair"]), label="taken off")
+        if how == "all":
+            self._ours_taken_off(vm)
+        else:
+            nsgs = sorted(key(self.fake.subnets[s]["nsg"]) for s in {home, *other})
+            for k in (nsgs if how == "pairs" else [data.draw(st.sampled_from(nsgs), label="pair's nsg")]):
+                self._pair_taken_off(k)
+            self._claims_after_a_change()
+        for _ in range(data.draw(st.integers(1, 2), label="passes")):
+            self._pass_by_vm(data, fault=None)
+
+    @rule(data=st.data())
+    def turned_perimeter_left_out(self, data):
+        """A rare state made common (L1Qs, #424): a VM blocked on its subnet, a mate of that subnet
+        blocked for itself; the perimeter pair turned into an allow by someone (perhaps after it
+        was put back once), the mate's own rules deleted; a pass where the perimeter doesn't come
+        back — its VM in human_only, or its lock held — while the mate, outside human_only, has
+        its block written again beside the turned rule. Whatever opens for the mate is said; the
+        operator acknowledges what was said, the perimeter is lifted (the first VM unblocked), a
+        pass: what opens since is said again — no alert falls silent."""
+        vm, rid, _ = self._draw(data)
+        home = key(self._nics(vm)[0]["subnet"])
+        g = self.fake.subnets[home]["nsg"]
+        mates = [v for v in self.live if v != vm and any(key(n["subnet"]) == home for n in self._nics(v))]
+        if g is None or not mates:
+            return
+        mate = data.draw(st.sampled_from(mates), label="mate")
+        mrid = data.draw(st.sampled_from([mate, mate.lower()]), label="mate rid")
+        port = data.draw(st.sampled_from([22, None]), label="threat_port")
+        self.block_perimeter(_Drawn(data, vm=vm, rid=rid, fault=None, replace=False))
+        if data.draw(st.booleans(), label="merged"):
+            self._block(vm, rid, None, port)
+        self._block(mate, mrid, None, port)
+        bare = "glorfindel-block-" + ATTACKER.replace(".", "-")
+
+        def pair() -> list:
+            rules = self.fake.nsgs.get(key(g), {}).get("rules", {})
+            return sorted((key(g), n) for n in (bare, f"{bare}-out")
+                          if n in rules and rules[n]["access"].lower() == "deny")
+        if pair() and data.draw(st.booleans(), label="put back once"):
+            self._pair_taken_off(key(g))
+            self._claims_after_a_change()
+            self._pass_by_vm(data, fixed={vm: "non_disruptive"}, fault=None)
+        if not pair():
+            return
+        closed = self._attacker_flows(mate, port)
+        self._tamper_with_our_rule(_Drawn(data, how="access", rule=st.sampled_from(pair())))
+        marks = {_nic_hash(n) for n in self.fake.vms[key(mate)]["nics"]}
+        for k in self._customer_nsgs():
+            rules = self.fake.nsgs[k]["rules"]
+            for name in [n for n in rules if n.startswith("glorfindel-block-")
+                         and n.removesuffix("-out").rsplit("-", 1)[-1] in marks]:
+                del rules[name]
+        self._claims_after_a_change()
+        out = data.draw(st.sampled_from(["human_only", "busy"]), label="held out")
+        _note(f"a turned perimeter left out of the pass ({out})")
+        busy = self._pass_by_vm(data, fixed={vm: out, mate: "non_disruptive"}, fault=None)
+        opened = self._attacker_flows(mate, port) - closed
+        if mate.rsplit("/", 1)[-1].lower() not in busy:      # a VM of its name held: skipped too
+            self._open_said(mate, opened, "beside a turned perimeter left out of the pass")
+        for e in self._cards_on(mate):
+            escalations.resolve(e["id"])
+            if "disparu" in (e.get("reason") or "") or "a échoué" in (e.get("reason") or ""):
+                self.acked_drift = {**getattr(self, "acked_drift", {}), mate: self._block_rules_now(mate)}
+        _note("a turned perimeter left out, said, acknowledged, lifted")
+        self.unblock(_Drawn(data, vm=vm, rid=rid, fault=None))
+        if mate.rsplit("/", 1)[-1].lower() not in self._pass_by_vm(data, fault=None):
+            self._open_said(mate, self._attacker_flows(mate, port) - closed - opened,
+                            "once its card acknowledged and the perimeter lifted")
+
+    def _cards_on(self, vm: str) -> list:
+        """The pending cards of the reassertion's about the VM's block of the attacker: a drift,
+        a bypass — never the graph's (L3)."""
+        return [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)
+                and e.get("action") in ("block_suspicious_ip", "review_bypass") and e["id"] not in self.graph_cards
+                and (e.get("action_params") or {}).get("ip") == ATTACKER]
+
+    def _open_said(self, vm: str, opened: frozenset, when: str):
+        """L1 for a block (L1Qs): the attacker's flows of the VM that its block closed and that are
+        open now (`opened`, the test's measure) are said by a pending card of the reassertion's
+        on it — a drift or a bypass —, while no operation holds the block."""
+        entry = next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), None)
+        if not opened or entry is None or self._block_held(vm, entry):
+            return
+        seen = getattr(self, "acked_drift", {}).get(vm)
+        if seen is not None and self._block_rules_now(vm) == seen:
+            return
+        assert self._cards_on(vm), (
+            f"L1: the block of {vm} lets {ATTACKER} through ({sorted(opened)[:2]}) {when}; nothing says so")
+
     def _ours_taken_off(self, vm: str):
         """Every rule of Glorfindel's that governs the VM taken off Azure: a `terraform apply` on
         each customer NSG of its NICs and of their subnets, our quarantine NSG stripped when a
@@ -3543,6 +3760,35 @@ class IsolationMachine(RuleBasedStateMachine):
             assert f.name == f.name.lower(), f"I6: {f.name} is not lowercase"
 
 
+def _mode_of(vm: str) -> str:
+    """The VM's mode for this pass: its own when the pass drew one per VM (L1Qs), else the pass's."""
+    return _CURRENT.modes.get(key(vm or ""), _CURRENT.mode)
+
+
+def _mode_of_name(name: str) -> str:
+    """By name (the orphan sweep's lookup): human_only when one VM of that name is."""
+    got = {m for v, m in _CURRENT.modes.items() if v.rsplit("/", 1)[-1] == (name or "").lower()}
+    return "human_only" if "human_only" in got else (got.pop() if got else _CURRENT.mode)
+
+
+def _is_busy(vm: str) -> bool:
+    """Another writer holds the VM's lock for this pass (L1Qs) — the lock is the name's."""
+    return (vm or "").rsplit("/", 1)[-1].lower() in _CURRENT.busy
+
+
+def _busy(lock):
+    """The VM lock, taken by another writer for the names in `_CURRENT.busy`: a caller that
+    would wait (a timeout given: the reassertion, the background tasks) is refused at once;
+    a writer, which waits, finds it free (the other writer done)."""
+    @contextlib.contextmanager
+    def busy(vm_name, *args, **kwargs):
+        if kwargs.get("timeout") is not None and _is_busy(vm_name):
+            raise TimeoutError(f"VM {vm_name} busy (another write in progress)")
+        with lock(vm_name, *args, **kwargs):
+            yield
+    return busy
+
+
 def invariant_env(monkeypatch) -> None:
     """What the machine needs around it: faults on the state writes, the reassertion's
     mode from the sequence, the configuration file of the machine's own home."""
@@ -3554,8 +3800,11 @@ def invariant_env(monkeypatch) -> None:
         _CURRENT.chaos("state.write", "after", True)
 
     monkeypatch.setattr(actions, "_atomic_write_text", chaotic_write)
-    monkeypatch.setattr(reassert, "_mode", lambda autonomy, vm, ref="": _CURRENT.mode)
-    monkeypatch.setattr(orphans, "_configured_mode", lambda autonomy, name: _CURRENT.mode)
+    # The mode of each VM when the pass drew one (L1Qs), by its resource id — the readiness
+    # holds a VM by its id (`effective_mode`); the orphan sweep reads a name's: two VMs of
+    # one name, the more careful of their modes.
+    monkeypatch.setattr(reassert, "_mode", lambda autonomy, vm, ref="": _mode_of(ref or vm))
+    monkeypatch.setattr(orphans, "_configured_mode", lambda autonomy, name: _mode_of_name(name))
     # What reaches the operator (the webhook, the bot): the test's own journal of it (L3).
     monkeypatch.setattr(escalations, "_notify", lambda esc: getattr(_CURRENT, "notified", []).append(esc["id"]))
     monkeypatch.setattr(config, "_DEFAULT_PATHS", list(config._DEFAULT_PATHS))
@@ -3568,7 +3817,7 @@ def invariant_env(monkeypatch) -> None:
         def now(cls, tz=None):
             return _dt.now(tz) + _td(minutes=_CURRENT.clock)
     monkeypatch.setattr(reassert, "datetime", _Clock)
-    monkeypatch.setattr(actions, "_vm_lock", _scheduled(actions._vm_lock))
+    monkeypatch.setattr(actions, "_vm_lock", _busy(_scheduled(actions._vm_lock)))
     monkeypatch.setattr(actions, "_quarantine_lock", _scheduled(actions._quarantine_lock))
     # The escalations store's lock (SEC3) too: a thread stopped at its write inside it
     # left the other blocked there, out of the scheduler's sight (I3F, #292).

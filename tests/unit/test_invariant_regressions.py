@@ -5902,3 +5902,88 @@ def test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered(monkey
         assert v["verified"] is False and v["uncovered_nics"] == ["db-nic-1"], v
     finally:
         shutil.rmtree(m.home, ignore_errors=True)
+
+
+def _data_primary_net(**kw):
+    """Db--01's primary NIC on the data subnet (L1Qs): its perimeter block lies there."""
+    return {**_net(subnet_nsg=[], data_subnet=[], **kw), "data_primary": True}
+
+
+def test_a_nic_off_the_perimeter_another_perimeter_cuts_off_is_not_said_reached(monkeypatch):
+    """L1Qs, the third case of #424: Db--01's primary NIC on the data subnet, web blocked on the app
+    subnet, then Db--01 on its own. db-nic-0, on the app subnet, is off Db--01's perimeter — and
+    behind web's, which cuts the attacker off it. The perimeter alone said it uncovered, « l'IP les
+    atteint » (`blocked_partial`; the reassertion's card), without reading the other perimeter.
+    Now: `blocked`, verified, no card; web's perimeter lifted, db-nic-0 is uncovered, and said."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_data_primary_net())
+        c = m.connector
+        assert c.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")["status"] == "blocked"
+        out = c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        assert out["status"] == "blocked" and "uncovered_nics" not in out, out
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is True and v.get("held_by_perimeter") == ["db-nic-0"], v
+        m.reassert(Script("non_disruptive", None))
+        assert not _cards(m), _cards(m)
+        assert c.unblock_ip(ATTACKER, WEB1)["status"] == "unblocked"
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is False and v["uncovered_nics"] == ["db-nic-0"], v
+        m.reassert(Script("non_disruptive", None))
+        (card,) = _cards(m)
+        assert "ne couvre pas db-nic-0" in card, card
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_nic_off_the_perimeter_whose_other_perimeter_cant_be_read_is_unknown(monkeypatch):
+    """The same, the app subnet's NSG unreadable: whether web's perimeter cuts db-nic-0 off is not
+    known — never « uncovered, the IP reaches it », never verified either."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_data_primary_net())
+        c = m.connector
+        c.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")
+        c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        m.fake.unreadable.add(key(_SUBNET))
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is None and v.get("perimeter_unread") == ["db-nic-0"], v
+        assert "uncovered_nics" not in v, v
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_perimeter_beside_another_on_the_app_subnet_never_says_db_nic_0_reached(monkeypatch, mode):
+    """Found by the machine (L1Qs, seeds 5 and 8 at 60, `data_primary`, one rule): web blocked on
+    the app subnet and for itself, then Db--01 — its primary NIC on the data subnet — blocked on
+    its own subnet, beside it (`perimeter_lifted_beside_a_block`). db-nic-0, on the app subnet, is
+    off Db--01's perimeter and behind web's: the block named it uncovered, « l'IP les atteint »."""
+    _run(monkeypatch, _data_primary_net(),
+         ("blocked_again_after_an_acknowledged_drift", WEB1, WEB1, None, 22, DB, False, DB, 22, mode))
+
+
+@pytest.mark.parametrize("listed", ["Db--01 first", "web first"])
+@pytest.mark.parametrize("taken", ["all", "pairs"])
+@pytest.mark.parametrize("mate", [WEB1, WEB2], ids=["web1", "web2"])
+def test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_off(monkeypatch, listed, taken, mate):
+    """L1Qs, the first case of #424, on the fake (`perimeters_on_two_subnets`): Db--01's primary NIC on
+    the data subnet, Db--01 blocked there, web on the app subnet — db-nic-0 sits behind web's
+    perimeter, off Db--01's. Our rules taken off (all, or both pairs), a pass outside human_only.
+    Db--01's entry read first (the listing's order, both entries holding a perimeter: L1Qr's sort
+    can't tell them apart): its pair rewritten, read again with web's still gone — « ses règles
+    réécrites une fois, il ne tient pas en entier — n'est plus bloquée sur db-nic-0 »; web's entry
+    put its pair back a moment later. False once the pass ended. Two times: every pair first."""
+    from glorfindel import actions as facade
+    real = facade.active_blocks
+    first = "Db--01" if listed == "Db--01 first" else "web"
+    monkeypatch.setattr(facade, "active_blocks", lambda: sorted(real(), key=lambda b: b["vm_name"] != first))
+    _run(monkeypatch, _data_primary_net(),
+         ("perimeters_on_two_subnets", DB, mate, 22, [DB, mate], DB, False, mate, False, taken, 1,
+          *["non_disruptive"] * 4, "non_disruptive"))

@@ -1680,7 +1680,14 @@ gh attestation verify oci://ghcr.io/grootcyber/eregion-glorfindel@sha256:<digest
 ne construit plus (`infra/glorfindel-host/README.md`, « Le CD de H0 »). **Orodruin** reçoit l'image
 d'Annatar publiée, vérifiée sur le poste : `make orodruin-push [REF=<tag|commit>]` (sans `REF`, le
 dernier tag `v*` : tant qu'il est d'avant CI3, il n'a pas d'image, et d'avant REN1, il est signé par l'ancien nom du dépôt ; donner `REF=`), sa sortie restant fermée (`docs/design/orodruin-contract.md`, « L'image des
-injecteurs »). `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
+injecteurs »). **Depuis OI1 (#488)**, le docker du poste n'y prend plus part : l'archive est construite
+à partir des blobs du registre, sous le digest prouvé (`published_image.py archive`, chaque blob
+vérifié par son sha256 et sa taille avant d'y entrer ; ~630 Mo dans un répertoire temporaire, `TMPDIR`),
+chargée par SSH, puis relue sur Orodruin (`docker image inspect`) : son identifiant, ses couches, son
+utilisateur, son commit. Sous Docker Desktop, `docker save` d'une image tirée la rendait sans
+configuration ni couches (mesuré le 03/11). Un `eregion-annatar:incoming` laissé par un envoi qui a
+échoué est retiré au suivant. Mesurer, avec Jonathan : `make orodruin-push REF=<le commit de main>`, puis
+`make orodruin-check`. `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
 **non vérifiée**, pour essayer une branche : `~/.eregion-image` sur Orodruin le dit (`dev <commit>`).
 
 **Après le renommage du compte (REN1, 03/11).** Les images ont suivi le compte : le nouvel espace répond, l'ancien rend 403, sans redirection (mesuré). Celles d'avant (la v0.5.2 et avant) sont signées par l'ancien nom du dépôt, que `published_image.py` ne reconnaît plus : un retour arrière vers elles est refusé, sur H0 comme sur Orodruin. **H0** : l'ordre dans `infra/glorfindel-host/README.md`, « REN1 change l'agent » (`cd-install`, la 0.5.3 publiée, `cd-check`, `cd-enable`). **Orodruin** : `make orodruin-push REF=<sha de la fusion de REN1>`, puis `make orodruin-check` ; sans `REF` (le dernier tag), seulement à partir de la 0.5.3.

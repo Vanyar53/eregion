@@ -3279,13 +3279,23 @@ maintenant un `subnet`, que seule cette règle donne : les tirages des autres r�
 4ed889d, à 60 séquences, graines 1..8 : la graine 3 tombe par cette règle (« I4: a perimeter block on …/web cut off
 …/batch », la sortie vers l'attaquant d'une VM qui a reçu le NSG du subnet comme NSG de carte : la règle `-out`
 retournée y précède le `-out` du périmètre) ; sans la règle, la propriété seule, les huit graines passent — le cas
-était trop rare. **Deux séquences figées**, rouges sur `main` (`test_invariant_regressions.py`) :
+était trop rare. **La règle restreinte aux NSG de carte**, après la fusion de L1Qs (#469) : à 500, graine 7, elle
+posait le NSG d'un subnet sur la carte d'une VM d'un autre subnet, et la réaffirmation à un mode par VM de L1Qs
+(I5) tombait — « the reassertion acted on …/api in human_only », un périmètre reposé pour une VM `non_disruptive`
+sur ce NSG coupant la sortie d'api, `human_only`. Le code fait ce qu'Azure fait (le NSG gouverne aussi cette
+carte) ; c'est l'exemption de l'oracle qui lit « partagé avec une VM qui écrit » comme « derrière ce subnet »
+seulement (`_shared_with_writers`). L'étendre aurait relâché I5 (A0) : la règle ne pose plus ce monde, que nulle
+autre ne tire, et le point est rendu à l'Orchestre. Restreinte, sur `main` 19d802d, elle fait tomber la graine 7 à
+500 (« I4: a perimeter block on …/web cut off …/api », SSH depuis l'attaquant, le NSG de web donné à api sur le
+subnet data) ; à 60, graines 1..10, aucune. **Trois séquences figées**, rouges sur `main` (`test_invariant_regressions.py`) :
 `test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in` (les règles d'avant I4P
 seules : web et la seconde carte de Db--01 sur le NSG tier, celle-ci sur le subnet data ; web bloquée, sa règle
 entrante retournée, l'adresse de web changée, 10.0.0.4 donnée à la carte de Db--01, la promotion — « I4: a perimeter
 block on …/web cut off …/Db--01 », SSH depuis l'attaquant) et
 `test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_before_the_perimeter` (la graine 3,
-réduite par Hypothesis). **Le correctif** (`providers/azure/perimeter.py`, `_promote`, appelé par
+réduite par Hypothesis, rejouée pas à pas : la règle ne pose plus ce monde) et
+`test_the_promotion_never_cuts_off_a_vm_given_the_nics_nsg_on_another_subnet` (la graine 7 à 500, la règle
+restreinte). **Le correctif** (`providers/azure/perimeter.py`, `_promote`, appelé par
 `blocks._block_ip_subnet`) : chacune des deux règles d'une paire est demandée à la garde ; l'une gardée, **la paire
 reste entière**, sur Azure et dans l'état (son placement gardé, pour le déblocage, qui redemande la garde : gardée de
 nouveau, `unblock_partial`) — à moitié retirée, la passe suivante aurait lu notre propre retrait comme une
@@ -3312,6 +3322,11 @@ retirée (M3352), rien dit (M3353), un retrait en échec avalé (M3354), l'entr�
 `-out` jamais demandée (M3356, la séquence de la graine 3), la consigne de remettre en refus une règle d'isolation
 (M3357), toute paire gardée (M3358). M1635, M3274 et M3275 suivent leurs lignes déplacées (`perimeter.py`, la
 nouvelle consigne), leur sens inchangé.
+**Mesures d'I4P** (après la fusion de `main` 19d802d, L1Qs). Invariants, `--hypothesis-seed=N` : à 60 séquences,
+N = 1..18, 73, 101, **20/20 vertes** ; à 500, N = 1, 3, 7, 8675, 42, **5/5 vertes** (la règle restreinte). Avant la restriction, à 500, la graine 7 tombait sur l'exemption d'I5 dite plus haut, et la graine 42 sur L1 (« the block on …/rg-app1/…/web vanished from Azure; the reassertion neither put it back nor said so ») dans une séquence de quatorze étapes sans aucune promotion ni la règle d'I4P — un défaut hors du lot, comme celui de la graine 29 laissé à L1G (#461) ; non rejoué depuis, la base d'exemples restée vide. Mutants M3350–M3358 : 9/9 par leurs tests à chaque tour
+(deux tours) ; M1635, M3270–M3275 : 7/7 (deux tours) ; les quarante voisins sur `blocks.py`, `perimeter.py` et
+`turned.py` (RB1, I3P, I4A–I4D, I5Q, I5R, U7D, SEC2) : 40/40, un tour. `pytest` complet : 5 983 réussis, 7 sautés, 2 `xfail` (de L1Qs) ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 367 mutants, sans faute.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

@@ -3140,18 +3140,26 @@ elle reste, `reset --from-azure` et son aperçu, le NSG d'un placement par règl
 vérification aveugle aux NSG hors de vue (M3192), le NSG de quarantaine quitté jamais relu (M3193), le NSG d'un
 placement par règles jamais relu (M3194), un NSG hors de vue illisible lu « rien » (M3195), le reset aveugle
 (M3196), `reset --dry-run` qui dit « clean » (M3197), la règle d'une autre carte comptée (M3198) : 7/7 à chaque
-tour (deux tours). **Mesures.** `pytest` complet : 5 827 réussis, 7 sautés (5 814 au découpage) ; `ruff` propre ;
-`scripts/mutant_anchors.py` : 2 301 mutants, sans faute. Les mutants déplacés et voisins (les dix-sept réancrés,
-M3060–M3069, M3131–M3135, M3190, M3191), deux tours : 32/34 pris à chaque tour, M39 et M41 « fixed-only » (pris par
-leurs séquences figées, la machine à 60 les manque ; M01–M41 varient selon le tirage, comme noté plus haut).
-Invariants, `--hypothesis-seed=N`, la règle ajoutée : à 60 séquences, N = 1..80, 78/80 vertes ; à 500, N = 1..3, 3/3 vertes.
-Les graines 29 (L1 : « the block on …/rg-app2/…/web vanished from Azure; the reassertion neither put it back nor
-said so », après `block_perimeter`, `race` isoler/lever, `block_then_isolate`, `taken_up_by_its_lowercase_id`,
-`block_turned_then_reasserted`) et 73 (I4 : une opération sur web coupe api, après
-`an_old_isolations_vm_isolated_again`, `delete_vm`, `tamper_with_our_rule`) tombent hors du lot : aucune ne tire
-`release_by_the_cli` ni le reset (la vérification de la levée, qui ne fait que lire, n'y juge que ses « oui »), et toutes deux tombent aussi sur le code de `main` (la
-vérification et le reset d'avant I3V remis, la même graine) — la règle ajoutée déplace les tirages, qui les
-atteignent. Dites à l'Orchestre, non corrigées ici.
+tour (deux tours). **Mesures, sur `cf1861b`** (la branche avant la fusion de `main`, I3G et SEC17 absents) :
+`pytest` complet, 5 827 réussis, 7 sautés (5 814 au découpage) ; `scripts/mutant_anchors.py`, 2 301 mutants sans
+faute ; les mutants déplacés et voisins (les dix-sept réancrés, M3060–M3069, M3131–M3135, M3190, M3191), deux
+tours : 32/34 pris à chaque tour, M39 et M41 « fixed-only » (pris par leurs séquences figées, la machine à 60 les
+manque ; M01–M41 varient selon le tirage, comme noté plus haut) ; invariants, `--hypothesis-seed=N`, la règle
+ajoutée : à 60 séquences, N = 1..80, 78/80 vertes, à 500, N = 1..3, 3/3 vertes. Les graines 29 et 73 tombaient à
+60 sur `cf1861b`, et sont vertes sur `1be01d3` (la fusion) comme sur `main` `d4a973e` : les tirages ont changé avec
+les règles d'I3G, ce qui ne dit rien des défauts. Leurs séquences réduites, tirages compris, figées hors du dépôt et
+rejouées : **la graine 73** (I4 : « an operation on …/rg-app1/…/web cut off …/rg-app1/…/api » — une ancienne
+isolation de web, sa règle à nom fixe retournée en autorisation (`tamper_with_our_rule`, `access`), l'homonyme
+de rg-app2 supprimé, puis `an_old_isolations_vm_isolated_again` : api créée sur le NSG de web, web isolée de
+nouveau, levée) tombe à chaque essai sur `1a3f6a3`, `31a2e38`, `d4a973e`, `cf1861b` et `1be01d3` : le défaut
+existe sur `main`, hors du lot, laissé à I4G (#460) ; **la graine 29** (L1 : « the block on …/rg-app2/…/web
+vanished from Azure; the reassertion neither put it back nor said so », après `block_perimeter`, `race`
+isoler/lever, `block_then_isolate` deux fois, `taken_up_by_its_lowercase_id`, `operator_acknowledges`,
+`block_turned_then_reasserted`) tombe une fois sur deux environ, sur `1a3f6a3` (2/6), `d4a973e` (3/6) comme sur
+`1be01d3` (3/6) : elle n'est pas déterministe (le premier essai d'Hypothesis l'avait dit,
+« FlakyStrategyDefinition ») ; le défaut existe sur `main`, laissé à L1G (#461). Aucune des deux ne tire
+`release_by_the_cli` ni le reset. **Après la fusion, sur `1be01d3`** : `pytest` complet, 5 910 réussis, 7 sautés ;
+`ruff` propre ; `scripts/mutant_anchors.py`, 2 335 mutants, sans faute.
 **Reste ouvert** : le reset ne cherche pas sur le NSG de quarantaine qu'il fait quitter lui-même, dans le même
 passage, à une carte encore en quarantaine (I3R) ; l'adaptateur AWS dit encore `released` sur un état illisible
 (I3U).

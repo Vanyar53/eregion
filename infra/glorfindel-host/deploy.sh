@@ -123,6 +123,9 @@ start() {
   # Created as the operator before compose mounts them: left to docker, they would be root's,
   # and the console could not write its requests (DG-b), nor the watch its index (IA0).
   mkdir -p "$HOME/.eregion/analysis" "$HOME/.eregion/console/requests"
+  # SEC19 (N-03): the watch's key, drawn at its first start in a directory only the watch mounts —
+  # made here, 0700, as the operator (left to docker, it would be root's: no key, beats unsigned).
+  mkdir -p -m 700 "$HOME/.eregion/watch-key"
   # SEC18 (N-05): runs/ has one directory per writer, each service mounts its own (compose). The
   # former layout (files flat in runs/) is moved to its writers' directories here, on the host —
   # no service mounts the whole of runs/ — and those directories made as the operator. Nothing is

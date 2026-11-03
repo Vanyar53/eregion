@@ -100,11 +100,15 @@ class Publisher:
     ``tick`` delivers what a window covers, then beats once nothing is left to deliver.
     A detection seen before its window is delivered when the window arrives."""
 
+    SIGNS = True     # SEC19: its heartbeat signed for the injectors' gate
+
     def __init__(self, channel: str, *, credential=None, put=None, windows=None,
-                 now: datetime | None = None):
+                 now: datetime | None = None, signer=None):
         self.channel = channel
         self._credential = credential
         self._put = put
+        self._signer = signer
+        self._unsigned = ""
         self._windows = windows or load_windows
         self.since = (now or _now()).isoformat()
         self._lock = threading.Lock()
@@ -170,16 +174,31 @@ class Publisher:
             return
         from eregion_core.watch_gate import perimeter  # watch_gate reads this module
 
-        self._write(HEARTBEAT, {
+        self._write(HEARTBEAT, self._signed({
             "at": now.isoformat(),
             "since": self.since,
             "windows": sorted(w["run_id"] for w in windows if live(w, now)),
             # SEC5 (N-03): the subscription this watch reads, as a digest — what binds this
             # heartbeat to the targets of a run (eregion_core/watch_gate.py).
             "perimeter": perimeter(),
-        })
+        }, now))
         self._last_beat = now
         self._report("")
+
+    def _signed(self, body: dict, now: datetime) -> dict:
+        """SEC19 (N-03): the heartbeat signed by the watch's key — every field, ``since`` and
+        ``windows`` too. Without a key it goes unsigned (the injectors refuse it), said once."""
+        if not self.SIGNS:
+            return body
+        from eregion_core import watch_key
+        signer, why = (self._signer, "") if self._signer is not None else watch_key.shared()
+        if signer is None:
+            if why != self._unsigned:
+                print(f"[watch-channel] heartbeat not signed ({why}): the injectors refuse it (SEC19)")
+            self._unsigned = why
+            return body
+        self._unsigned = ""
+        return watch_key.sign_beat(body, signer, now)
 
     def _write(self, name: str, body: dict) -> None:
         import requests
@@ -477,6 +496,10 @@ class LocalVerdicts(Publisher):
     window that covers its VM, a heartbeat only once nothing waits — written as verdicts in
     ``directory``, its fields exactly ``VERDICT_FIELDS``. Also the poll of a run's own
     ``attack_started`` (``note_poll``): on a workstation, the first way the watch detects a run."""
+
+    # Its heartbeat holds exactly BEAT_FIELDS: no signature — the gate never reads it (it reads the
+    # storage channel's, or the injectors' copy, both signed: SEC19).
+    SIGNS = False
 
     def __init__(self, directory: Path, **kw):
         # Its windows read without the pull: the local channel exists only without a storage one.

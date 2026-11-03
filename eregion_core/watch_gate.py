@@ -28,6 +28,14 @@ watch configured for this subscription wrote this file or blob less than 90 s ag
 someone who can write there did. The digest binds, it does not authenticate (it is no
 secret), and it does not prove that the watch's workspaces see the target.
 
+SEC19 (N-03, #456): and the heartbeat is signed — by the watch's own Ed25519 key, verified here
+with the public key pinned on the injector's side (``EREGION_WATCH_KEY``: orodruin.env, the
+operator's environment), never read in the channel nor in the heartbeat (eregion_core/
+watch_key.py). Unsigned, signed by another key, its signature broken, or its counter below one
+already seen: refused, with the reason; no key pinned: refused, the gesture said. What it proves
+now: the watch that holds this key wrote this heartbeat, for this subscription, less than 90 s
+ago — not that its workspaces see the target.
+
 The gate is read again before each action of a run (each step, the atomic's command, the
 fault's start), not only at its start: a watch that dies mid-run stops the run there, and the
 campaign with it. ``annatar clean`` goes through it too.
@@ -52,7 +60,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from eregion_core import watch_channel
+from eregion_core import watch_channel, watch_key
 
 FLAG = "--without-glorfindel"
 NOT_MEASURED = "detection not measured, by choice"
@@ -64,12 +72,14 @@ SUBSCRIPTION_ENV = "AZURE_SUBSCRIPTION_ID"
 @dataclass(frozen=True)
 class Beat:
     """The last heartbeat in one place: ``at`` None when there is none, ``why`` says why;
-    ``perimeter`` the digest of the subscription the watch reads, "" when it names none."""
+    ``perimeter`` the digest of the subscription the watch reads, "" when it names none;
+    ``body`` the heartbeat as read (its signature in it, SEC19), None for a bare date."""
 
     where: str
     at: datetime | None
     why: str = ""
     perimeter: str = ""
+    body: dict | None = None
 
 
 def perimeter(subscription: str | None = None) -> str:
@@ -80,9 +90,12 @@ def perimeter(subscription: str | None = None) -> str:
     return hashlib.sha256(sub.encode()).hexdigest()[:16] if sub else ""
 
 
-def beat_body(at: datetime, subscription: str | None = None) -> dict:
-    """What a watch writes as its heartbeat for the injectors: when, and its perimeter."""
-    return {"at": at.isoformat(), "perimeter": perimeter(subscription)}
+def beat_body(at: datetime, subscription: str | None = None,
+              signer: watch_key.Signer | None = None) -> dict:
+    """What a watch writes as its heartbeat for the injectors: when, and its perimeter — signed
+    by its key (SEC19) when it has one."""
+    body = {"at": at.isoformat(), "perimeter": perimeter(subscription)}
+    return watch_key.sign_beat(body, signer, at) if signer is not None else body
 
 
 def heartbeat_path() -> Path:
@@ -93,20 +106,21 @@ def heartbeat_path() -> Path:
     return copy if copy.is_file() else home / "watch_heartbeat"
 
 
-def _parse_beat(text: str) -> tuple[datetime | None, str, str]:
-    """(when, perimeter, why) from a heartbeat file: the JSON the watch writes for the
-    injectors, or a bare date (the watch's own file, or an older watch: no perimeter)."""
+def _parse_beat(text: str) -> tuple[datetime | None, str, str, dict | None]:
+    """(when, perimeter, why, body) from a heartbeat file: the JSON the watch writes for the
+    injectors, or a bare date (the watch's own file, or an older watch: no perimeter, no
+    signature)."""
     if text.startswith("{"):
         try:
             body = json.loads(text)
         except ValueError:
-            return None, "", f"not JSON: {text[:40]!r}"
+            return None, "", f"not JSON: {text[:40]!r}", None
         if not isinstance(body, dict):
-            return None, "", "not a JSON object"
+            return None, "", "not a JSON object", None
         at = watch_channel._when(body.get("at"))
-        return at, str(body.get("perimeter") or ""), "" if at else "its 'at' is not a date"
+        return at, str(body.get("perimeter") or ""), "" if at else "its 'at' is not a date", body
     at = watch_channel._when(text)
-    return at, "", "" if at else f"not a date: {text[:40]!r}"
+    return at, "", "" if at else f"not a date: {text[:40]!r}", None
 
 
 def local_beat() -> Beat:
@@ -118,8 +132,8 @@ def local_beat() -> Beat:
         return Beat(LOCAL, None, "no file: no watch ran here, or it stopped and removed it")
     except OSError as e:
         return Beat(LOCAL, None, f"unreadable: {e}")
-    at, scope, why = _parse_beat(text)
-    return Beat(LOCAL, at, why, scope)
+    at, scope, why, body = _parse_beat(text)
+    return Beat(LOCAL, at, why, scope, body)
 
 
 def channel_beat() -> Beat | None:
@@ -134,11 +148,12 @@ def channel_beat() -> Beat | None:
         return Beat(CHANNEL, None, f"unreadable: {e}")
     at = watch_channel._when(body.get("at"))
     return Beat(CHANNEL, at, "" if at else "its 'at' is not a date",
-                str(body.get("perimeter") or ""))
+                str(body.get("perimeter") or ""), body)
 
 
-# "own": the perimeter of this injector's targets — the digest of its subscription.
-READERS = {"channel": channel_beat, "local": local_beat, "own": perimeter}
+# "own": the perimeter of this injector's targets — the digest of its subscription. "proof": why
+# a heartbeat is not signed by the key this injector pins (SEC19) — "" when it is.
+READERS = {"channel": channel_beat, "local": local_beat, "own": perimeter, "proof": watch_key.proof}
 
 
 def fresh(beat: Beat | None, now: datetime) -> bool:
@@ -189,17 +204,31 @@ def unbound(beat: Beat, own: str) -> str:
     return ""
 
 
-def refusal(now: datetime | None = None) -> str:
+def unsigned(beat: Beat, record: bool = True) -> str:
+    """Why this heartbeat is not the watch's, signed by the key this injector pins — "" when it
+    is (SEC19, N-03)."""
+    why = READERS.get("proof", watch_key.proof)(beat.body, record=record)
+    return f"{beat.where}: {why}" if why else ""
+
+
+def refusal(now: datetime | None = None, *, record: bool = True) -> str:
     """Why no live Glorfindel watch of this injector's targets stands behind this run — ""
     when one does. The return channel decides when it is set (the watch is hosted elsewhere: a
-    file on this host says nothing of it); the local file otherwise. Fresh first, then bound
-    to the same subscription (SEC5, N-03)."""
+    file on this host says nothing of it); the local file otherwise. Fresh first (a stale or
+    absent heartbeat is said by its age, whoever wrote it: a refusal either way), then signed by
+    the pinned key (SEC19) — what a fresh heartbeat claims is believed only once its signature
+    holds —, then bound to the same subscription (SEC5, N-03). ``record``: the heartbeat's
+    counter kept against a replay (an injector; the console, which only shows the gate, does
+    not)."""
     now = now or datetime.now(timezone.utc)
     beat = READERS["channel"]()
     if beat is None:
         beat = READERS["local"]()
     if not fresh(beat, now):
         return describe(beat, now)
+    why = unsigned(beat, record=record)
+    if why:
+        return why
     return unbound(beat, READERS.get("own", perimeter)())
 
 

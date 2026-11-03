@@ -51,7 +51,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "READ_TARGETS", lambda subscription: VMS)
     api._targets_cache.update(at=0.0, value=None)
     monkeypatch.setattr(api, "_board_rules", lambda: [])
-    monkeypatch.setattr(watch_gate, "refusal", lambda now=None: "")
+    monkeypatch.setattr(watch_gate, "refusal", lambda now=None, **kw: "")
     return console()
 
 

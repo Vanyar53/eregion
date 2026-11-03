@@ -2679,7 +2679,7 @@ MUTANTS += [
      "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
     ("M1230", "the watch writes no heartbeat where the injectors read it: every run refused (SEC3, N-05)",
-     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
+     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at, signer=_signer())), mode=0o644)",  # re-anchored (SEC19)
      "            pass  #"),
     ("M1231", "make glorfindel-start no longer creates ~/.glorfindel/injectors: docker makes it as root "
               "(SEC3)", MAKE,
@@ -2701,8 +2701,8 @@ MUTANTS += [
      "        os.chmod(_INJECTORS_DIR, 0o755)      # theirs to read, whatever the umask\n",
      "        pass\n"),
     ("M1236", "the injectors' heartbeat owner-only: an image of another user can't read it (SEC3, N-05)", GCLI,
-     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
-     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)))"),
+     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at, signer=_signer())), mode=0o644)",  # re-anchored (SEC19)
+     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at, signer=_signer())))"),
     ("M1237", "Annatar reads Glorfindel's state again: the blocks watcher back (SEC3, N-05)", ENG,
      "        # Glorfindel no longer writes, and the injectors no longer mount that state.\n"
      "        stop_event = threading.Event()\n",
@@ -9911,6 +9911,54 @@ MUTANTS += [
 ]
 TESTS.update({mid: _MAK_SEQ for mid in ("M3420", "M3421", "M3423")})
 TESTS["M3422"] = "tests/unit/test_reassert.py"
+
+
+# SEC19 (#456): the watch's heartbeat signed by its own key, verified with the key the injector pins
+# (N-03); the harness's attestation signed by its author, verified by H0's CD against the identity
+# its own config expects (R-13). M3240–M3259.
+WKEY = "eregion_core/watch_key.py"
+_SEC19_KEY = "tests/unit/test_watch_key.py"
+MUTANTS += [
+    ("M3240", "a watch key readable by others signs anyway (SEC19)", WKEY,
+     '        if st.st_mode & 0o077:\n            raise KeyUnavailable(f"{path} is readable by others',
+     '        if False:\n            raise KeyUnavailable(f"{path} is readable by others'),
+    ("M3241", "the watch's key kept where the console, the bot or the injectors mount it (SEC19)", WKEY,
+     "    why = _misplaced(directory)\n", '    why = ""\n'),
+    ("M3242", "no key pinned on the injector's side: any heartbeat believed (SEC19)", WKEY,
+     "    if key is None:\n        return why\n", '    if key is None:\n        return ""\n'),
+    ("M3243", "an unsigned heartbeat believed (SEC19)", WKEY,
+     '    if sig is None:\n        return ("unsigned:', '    if sig is None:\n        return "" if sig is None else ("unsigned:'),
+    ("M3244", "the gate never asks for the signature: a heartbeat anyone writes is a watch (SEC19)",
+     "eregion_core/watch_gate.py",
+     "    why = unsigned(beat, record=record)\n    if why:\n        return why\n", ""),
+    ("M3245", "the signature never checked: the fingerprint a heartbeat claims believed (SEC19)", WKEY,
+     "        Ed25519PublicKey.from_public_bytes(key).verify(base64.b64decode(sig), message(DOMAIN_BEAT, body))\n",
+     "        pass\n"),
+    ("M3246", "the signature covers the date only: the perimeter changed after it passes (SEC19)", WKEY,
+     '    rest = {k: v for k, v in body.items() if k != "sig"}\n',
+     '    rest = {k: v for k, v in body.items() if k in ("at", "seq", "key")}\n'),
+    ("M3247", "no domain in what is signed: a signature for another use reads as a heartbeat (SEC19, FS1)", WKEY,
+     '    return domain.encode() + b"\\n" + json.dumps(rest,', "    return json.dumps(rest,"),
+    ("M3248", "an older heartbeat replayed after a newer one believed (SEC19)", WKEY,
+     '        if seq < top or (seq == top and sig != last.get("sig")):\n', "        if False:\n"),
+    ("M3249", "the highest counter seen never kept: every replay new (SEC19)", WKEY,
+     '    seen[fp] = {"seq": seq, "sig": sig}\n', '    return ""\n'),
+    ("M3250", "the hosted watch's channel heartbeat unsigned: Orodruin refuses every run (SEC19)",
+     "eregion_core/watch_channel.py",
+     "        if not self.SIGNS:\n            return body\n", "        if True:\n            return body\n"),
+    ("M3251", "the watch's copy for the injectors unsigned (SEC19)", GCLI,
+     "json.dumps(beat_body(at, signer=_signer()))", "json.dumps(beat_body(at))"),
+    ("M3252", "the console mounts the watch's key (SEC19)", "docker-compose.yml",
+     "      - ${HOME}/.eregion/console:/root/.eregion/console\n",
+     "      - ${HOME}/.eregion/console:/root/.eregion/console\n"
+     "      - ${HOME}/.eregion/watch-key:/root/.eregion/watch-key\n"),
+    ("M3253", "the injectors' containers never receive the pinned key (SEC19)", "docker-compose.yml",
+     "  # n'est cru que signé par elle. Vide : refusé, et le refus dit le geste.\n"
+     "  EREGION_WATCH_KEY: ${EREGION_WATCH_KEY:-}\n",
+     "  # n'est cru que signé par elle. Vide : refusé, et le refus dit le geste.\n"),
+]
+TESTS.update({**{f"M{n}": _SEC19_KEY for n in range(3240, 3254) if n != 3244},
+              "M3244": f"{_SEC19_KEY} tests/unit/test_watch_gate.py"})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

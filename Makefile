@@ -38,9 +38,16 @@ ANNATAR_AZURE_PICK = \
 ANNATAR_AZURE_ENV := \
 	-e AZURE_CLIENT_ID -e AZURE_CLIENT_SECRET -e AZURE_TENANT_ID -e AZURE_SUBSCRIPTION_ID \
 	-e ANTHROPIC_API_KEY -e ANNATAR_LLM_MODEL -e EREGION_ANALYSIS_MODEL \
-	-e EREGION_ANALYSIS_TIMEOUT_S -e GLORFINDEL_LLM_MODEL
+	-e EREGION_ANALYSIS_TIMEOUT_S -e GLORFINDEL_LLM_MODEL -e EREGION_WATCH_KEY
 
-# Glorfindel — GLORFINDEL_AZURE_CLIENT_* seulement, comme la watch du compose : jamais
+# SEC19 (N-03) : la clé de la watch, tirée à son premier démarrage dans un répertoire que la watch
+# seule monte (jamais ~/.glorfindel, que la console, le bot et les injecteurs montent) ; fait ici en
+# 0700, au nom de l'opérateur, avant que docker ne le crée au nom de root. EREGION_WATCH_KEY, sa clé
+# publique (make watch-key), est épinglée chez les injecteurs.
+WATCH_KEY_DIR := mkdir -p $(HOME)/.eregion && mkdir -p -m 700 $(HOME)/.eregion/watch-key
+WATCH_KEY_VOL := -v $(HOME)/.eregion/watch-key:/root/.eregion/watch-key
+
+# Glorfindel —GLORFINDEL_AZURE_CLIENT_* seulement, comme la watch du compose : jamais
 # AZURE_CLIENT_* en repli (SEC11, V-17 — l'ancien principal partagé, là où il traîne encore) ;
 # vides, le conteneur n'a pas de principal de service. Glorfindel peut tourner en Reader
 # (GLORFINDEL_READ_ONLY=1 + SP Reader). AZURE_TENANT_ID et AZURE_SUBSCRIPTION_ID sont toujours
@@ -111,6 +118,10 @@ GLORFINDEL_ENV := \
 DOCKER_GLORFINDEL = $(RUNS_DIRS) && $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL) glorfindel
+# The watch by hand: its key mounted (SEC19) — no other `glorfindel` command mounts it.
+DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_ENV) \
+	$(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) $(WATCH_KEY_VOL) $(GLORFINDEL_ENV) \
+	$(IMAGE_GLORFINDEL) glorfindel
 
 .PHONY: help build build-annatar build-glorfindel fix-state-ownership check-azure-env runs-migrate runs-survey \
 	annatar-run annatar-dry-run annatar-validate annatar-list \
@@ -130,7 +141,7 @@ DOCKER_GLORFINDEL = $(RUNS_DIRS) && $(GLORFINDEL_AZURE_PICK) docker run --rm $(G
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
-	orodruin-known orodruin-fingerprint \
+	orodruin-known orodruin-fingerprint watch-key glorfindel-host-watch-key \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment fault-rate \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
@@ -234,6 +245,7 @@ help:
 	@echo "  make orodruin-push-dev                       Développement : l'image construite ici, non vérifiée"
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
 	@echo "  make orodruin-fingerprint                    L'empreinte de sa clé d'hôte, lue par Azure (ORO_SSH_FINGERPRINT)"
+	@echo "  make watch-key / glorfindel-host-watch-key   La clé publique de la watch (ici / H0), à épingler : EREGION_WATCH_KEY (SEC19)"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
 	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, annule le chaos, désalloue, ferme les fenêtres"
 	@echo "  make orodruin-exercise REQUEST=<id> [DRY_RUN=1]  Dagorlad : tire la demande de la console, l'affiche, fait taper"
@@ -388,10 +400,11 @@ report-eval:
 llm-compare:
 	$(if $(ATTEST),$(PYTHON) scripts/harness_attest.py --models $(MODELS) --runs $(or $(RUNS),3)$(if $(BASE), --base $(BASE)) --out requirements/harness.json,$(PYTHON) scripts/llm_smoke.py --models $(MODELS) --runs $(or $(RUNS),3))
 
+
 # ── Glorfindel ────────────────────────────────────────────────────────────
 
 glorfindel-watch: build
-	@$(DOCKER_GLORFINDEL) watch runs/
+	@$(DOCKER_GLORFINDEL_WATCH) watch runs/
 
 glorfindel-respond: build
 	@$(DOCKER_GLORFINDEL) respond $(SIGNALS)
@@ -439,6 +452,7 @@ check-azure-env:
 
 glorfindel-start: check-azure-env build-glorfindel runs-migrate
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
+	mkdir -p -m 700 $(HOME)/.eregion/watch-key
 	$(RUNS_DIRS)
 	docker compose up -d
 	@echo ""
@@ -453,12 +467,14 @@ glorfindel-stop:
 
 glorfindel-restart: check-azure-env build-glorfindel runs-migrate
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
+	mkdir -p -m 700 $(HOME)/.eregion/watch-key
 	$(RUNS_DIRS)
 	docker compose up -d --build --force-recreate
 	@$(MAKE) --no-print-directory console-url || true
 
 glorfindel-dev: check-azure-env build-glorfindel
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
+	mkdir -p -m 700 $(HOME)/.eregion/watch-key
 	docker compose up -d
 	@$(MAKE) --no-print-directory console-url || true
 	@echo "  (watching for changes…)"
@@ -969,6 +985,18 @@ orodruin-init:
 orodruin-known:
 	@ORO_SSH_FINGERPRINT="$(ORO_SSH_FINGERPRINT)" bash infra/glorfindel-host/known_host.sh "$(ORO_IP)" "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT required
 
+# SEC19 (N-03) : la clé publique de la watch et son empreinte, à épingler chez les injecteurs —
+# EREGION_WATCH_KEY dans infra/orodruin/orodruin.env (puis make orodruin-push), ou dans ton
+# environnement pour les injecteurs de ce poste. Jamais la clé privée. watch-key : la watch de ce
+# poste (~/.eregion/watch-key, tirée à son premier démarrage) ; glorfindel-host-watch-key : celle de
+# H0, lue dans son conteneur par SSH, clé d'hôte épinglée (V-32).
+watch-key:
+	@$(PYTHON) -m eregion_core.watch_key public
+
+glorfindel-host-watch-key: glorfindel-host-known
+	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@$(HOST_SSH) 'docker exec eregion-watch glorfindel watch-key'
+
 # L'empreinte de la clé d'hôte d'Orodruin, lue sur la VM par le plan de contrôle d'Azure (ton az
 # login, Run Command) — jamais par SSH, qu'elle sert à vérifier. Une fois par VM (reconstruite :
 # une autre clé, relire, poser, retirer ORO_KNOWN_HOSTS) ; à poser dans ton environnement.
@@ -1268,6 +1296,7 @@ team-start: team-check build-glorfindel
 	@grep -qE '^EREGION_CONSOLE_PORT=[0-9]+' "$(TEAM_DIR)/team.env" \
 	  || { echo "✗ EREGION_CONSOLE_PORT absent de team.env : un port par équipe (7007 : make glorfindel-start)"; exit 1; }
 	mkdir -p "$(TEAM_DIR)/runs" "$(TEAM_DIR)/.glorfindel" "$(TEAM_DIR)/.cache/chroma" "$(TEAM_DIR)/.eregion/analysis" "$(TEAM_DIR)/.eregion/console/requests"
+	mkdir -p -m 700 "$(TEAM_DIR)/.eregion/watch-key"
 	@if python3 -m eregion_core.runs_layout pending "$(TEAM_DIR)/runs"; then $(TEAM_COMPOSE) --profile bot stop watch war-room bot 2>/dev/null || true; fi
 	python3 -m eregion_core.runs_layout migrate "$(TEAM_DIR)/runs"
 	$(TEAM_COMPOSE)$(if $(BOT), --profile bot) up -d watch war-room$(if $(BOT), bot)

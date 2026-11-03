@@ -72,7 +72,19 @@ def live_glorfindel_watch(monkeypatch):
         "channel": lambda: None,
         "local": lambda: gate.Beat(gate.LOCAL, datetime.now(timezone.utc), perimeter=scope),
         "own": lambda: scope,
+        # SEC19: signed by the key pinned (tests/unit/test_watch_key.py checks the real proof).
+        "proof": lambda body, record=True: "",
     })
+
+
+@pytest.fixture(autouse=True)
+def isolated_watch_key(tmp_path, monkeypatch):
+    """SEC19 (N-03): the watch's key drawn in tmp, never ~/.eregion/watch-key; the counters an
+    injector keeps in tmp, never runs/orodruin; no key pinned from the operator's environment."""
+    import eregion_core.watch_key as watch_key
+    monkeypatch.setattr(watch_key, "KEY_DIR", tmp_path / "watch-key")
+    monkeypatch.setattr(watch_key, "SEEN_FILE", tmp_path / "watch_seen.json")
+    monkeypatch.delenv(watch_key.KEY_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)

@@ -6357,7 +6357,6 @@ _SEED42_L1A = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="L1A, before its fix")
 @pytest.mark.parametrize("found", [True, False], ids=["as found", "shrunk"])
 def test_a_block_said_again_as_the_disk_fills_keeps_a_card_through_an_unchecked_pass(monkeypatch, found):
     """Seed 42 at 500 (L1A, #480), found by I5S's measure, red on `main` 41bef33 before I5S: « L1: the

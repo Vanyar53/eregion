@@ -5829,3 +5829,76 @@ def test_a_disappearance_beside_the_graphs_card_is_said_on_its_own(monkeypatch, 
         assert all(e.get("occurrences", 1) == 1 for e in said), f"an alert said again at every pass: {said}"
     finally:
         m.teardown()
+
+
+# ── L1Qs (#424): the reassertion in two passes; a mode per VM, a perimeter on the data subnet ──
+
+def _seed9_net():
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    return {
+        "subnet_nsg": [r("allow-lateral-out", 100)], "edge_nsg": None, "tier_rules": [r("allow-ssh", 100)],
+        "nics": {"web-nic": {"own": None, "rules": [r("allow-ssh", 100), r("allow-lateral-out", 100),
+                                                    r("deny-lateral-in", 130)], "policy": False},
+                 "db-nic-0": {"own": "dedicated", "rules": [r("allow-ssh", 100)], "policy": False},
+                 "db-nic-1": {"own": None, "rules": [], "policy": False},
+                 "api-nic": {"own": "dedicated", "rules": [], "policy": False}},
+        "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+        "legacy": ("web-nic", True),
+        "data_subnet": [r("allow-ssh", 150), r("allow-lateral-out", 120), r("deny-lateral-in", 130)]}
+
+
+_SEED9_FOUND = (
+    ("block_perimeter", WEB2, WEB2.lower(), None, True),
+    ("kept_at_the_lift", WEB2, WEB2, (12, "after-429"), "release",
+     (key(_SUBNET), "glorfindel-iso-web-web-nic-80ab3c"), _nic("rg-app2", "web-nic"),
+     0, 4, "rg-app1", "web", True),
+    ("block", WEB2, WEB2, ("rule.list", "always-429"), 22),
+    ("block_perimeter", DB, DB, (6, "before-429"), False))
+
+
+@pytest.mark.parametrize("steps", [_SEED9_FOUND, _SEED9_FOUND[-1:]], ids=["as found", "reduced"])
+def test_a_perimeter_block_never_names_uncovered_a_nic_whose_subnet_it_could_not_read(monkeypatch, steps):
+    """I3G's seed 9 at 60 (on `main`, unrelated to I3G): Db--01 blocked on its subnet, the 6th
+    call answered 429 — the read of db-nic-0's subnet, while the block looked for the NICs off the
+    perimeter. The NIC's subnet NSG unknown, its views held its own NSG alone: db-nic-0, behind
+    the perimeter, was named « not behind it, the IP still reaches it » (`uncovered_nics`,
+    `blocked_partial`). Reduced to that one step; as found, after three others."""
+    _run(monkeypatch, _seed9_net(), *steps)
+
+
+def test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered(monkeypatch):
+    """The cause, at the connector (L1Qs): db-nic-0's subnet unreadable once. The NICs off the
+    perimeter are not known — neither all covered nor db-nic-0 off it: the perimeter block says
+    its NICs unread (`nics_unread`, `blocked_partial`), never db-nic-0 uncovered; its verification
+    says it can't tell, never `uncovered_nics`."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[], db_nic_0={"own": "dedicated"}))
+        c = m.connector
+        real = c._subnet_nsg_of
+        failing = {"n": 0}
+
+        def once(nic):
+            if failing["n"] and nic.id.rstrip("/").lower().endswith("db-nic-0"):
+                failing["n"] -= 1
+                raise RuntimeError("(TooManyRequests) subnets")
+            return real(nic)
+        monkeypatch.setattr(c, "_subnet_nsg_of", once)
+        failing["n"] = 1
+        out = c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        assert "db-nic-0" not in (out.get("uncovered_nics") or []), out
+        assert out["status"] == "blocked_partial" and out.get("nics_unread"), out
+        failing["n"] = 1
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is None and "uncovered_nics" not in v, v
+        failing["n"] = 0
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is False and v["uncovered_nics"] == ["db-nic-1"], v
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)

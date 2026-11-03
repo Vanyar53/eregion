@@ -41,6 +41,8 @@ VER = "glorfindel/providers/azure/verify.py"
 UNB = "glorfindel/providers/azure/unblock.py"
 VBL = "glorfindel/providers/azure/verify_block.py"   # out of unblock.py (I4B)
 SWP = "glorfindel/providers/azure/sweep.py"
+GONE = "glorfindel/providers/azure/gone.py"           # a gone VM's, out of release.py (I3V)
+RBARE = "glorfindel/providers/azure/reset_bare.py"    # the reset's bare NICs, out of sweep.py (I3V)
 SDK = "glorfindel/providers/azure/sdk.py"
 FAC = "glorfindel/actions.py"                 # the façade (A1)
 PIF = "glorfindel/providers/interface.py"
@@ -242,13 +244,13 @@ MUTANTS = [
     ("M38", "a block gone behind the quarantine not reported (A0, L1)", VBL,
      "                                    held_missing += names",
      "                                    pass"),
-    ("M39", "reset reads a bare NIC's original from the tag only (A0)", SWP,
+    ("M39", "reset reads a bare NIC's original from the tag only (A0)", RBARE,
      "            if recorded is not _UNKNOWN:\n                original = recorded\n            elif q_bare is None:",
      "            if False:\n                original = recorded\n            elif q_bare is None:"),
     ("M40", "a deleted NSG's listing read as unreadable (A0, L1)", NET,
      "                cache[key] = [] if _is_not_found(exc) else None",
      "                cache[key] = None"),
-    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", SWP,
+    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", RBARE,
      '            bare[t0["nic_id"]] = (original, q_bare)\n            if original:\n                views.append(self._original_view(t0, original))',
      '            bare[t0["nic_id"]] = (original, q_bare)'),
     # O0 (eighth pass): the six bugs the inscription's specification names.
@@ -1704,7 +1706,7 @@ MUTANTS += [
      '                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_or_unreadable(t["nic_id"]):',
      "                elif False:"),
     ("M861", "reset skips a bare NIC whose original is unknown: swept, an old isolation left without "
-             "state (I8F, I8)", SWP,
+             "state (I8F, I8)", RBARE,
      '                if recorded is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):\n'
      "                    # In quarantine for our state",
      "                if False:\n                    # In quarantine for our state"),
@@ -1749,9 +1751,9 @@ MUTANTS += [
     ("M1044", "reset follows the state's 'none' over the tag of a NIC in quarantine (I8S)", SWP,
      "                elif original is None:\n                    # The state's \"none\" yields to our tag",
      "                elif False:\n                    # The state's \"none\" yields to our tag"),
-    ("M1045", "reset follows the state's 'none' over the tag of a bare NIC (I8S)", SWP,
+    ("M1045", "reset follows the state's 'none' over the tag of a bare NIC (I8S)", RBARE,
      "            if recorded is None and q_bare is not None:\n", "            if False:\n"),
-    ("M1046", "reset reads an unreadable tag of a bare NIC as the state's 'none': swept bare (I8S)", SWP,
+    ("M1046", "reset reads an unreadable tag of a bare NIC as the state's 'none': swept bare (I8S)", RBARE,
      "                if recorded is _UNKNOWN or recorded is None:\n", "                if recorded is _UNKNOWN:\n"),
     ("M1047", "verify_release follows the state's 'none' over a tag naming the NSG: says released (I8S)", VER,
      "            if original is _UNKNOWN or original is None:\n", "            if original is _UNKNOWN:\n"),
@@ -2568,7 +2570,7 @@ MUTANTS += [
               "'not found' (ISU)", REL,
      '                                raise self._original_gone(q_bare, t0["nic_id"], original, exc)\n',
      "                                raise\n"),
-    ("M1107", "a bare NIC whose original is gone: the reset says only 'not found' (ISU)", SWP,
+    ("M1107", "a bare NIC whose original is gone: the reset says only 'not found' (ISU)", RBARE,
      '                        raise self._original_gone(q_bare, t0["nic_id"], original, exc)\n',
      "                        raise\n"),
     ("M1108", "a NIC in quarantine whose original is gone: release and reset say only 'not found' (ISU)",
@@ -3673,7 +3675,7 @@ MUTANTS += [
      "                    if q_bare is None:\n                        # Bare by design, or in our quarantine for a state that can't be\n"
      "                        # read: unknown, never released on a guess (SEC4b).\n"
      "                        _held_in_quarantine(t0[\"nic_id\"])\n", ""),
-    ("M1255", "reset puts a bare NIC's original back from our tag beside an unreadable state (SEC4b)", SWP,
+    ("M1255", "reset puts a bare NIC's original back from our tag beside an unreadable state (SEC4b)", RBARE,
      "                failed_early.append(f'{t0[\"nic_short\"]}: carte sans NSG, {_first_line(exc)[:_ERR_MAX]}')\n"
      "                continue\n",
      "                recorded = _UNKNOWN\n"),
@@ -4739,20 +4741,20 @@ MUTANTS += [
     ("M1550", "a deleted VM's release looks nowhere: its rules left on a shared NSG, `released` (I7S)", REL,
      "                        + self._gone_vm_rules(resource_id, vm_name, list(known_nics), stuck))\n",
      "                        + [])\n"),
-    ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", REL,
+    ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", GONE,
      '            return failed + [f"{vm_name} supprimée : les règles de ses cartes n\'ont pas été cherchées sur les "\n'
      '                             f"NSG de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), "\n'
      '                             f"{_GONE_WORDS[act][0]} non vérifiée"]\n',
      "            return failed\n"),
     ("M1552", "a failed release of a deleted VM forgets its NICs: the retry looks for nothing (I7S)", REL,
      '                **({"known_nics": known} if known else {}),\n', ""),
-    ("M1553", "the NICs a failed release kept are not read again (I7S)", REL,
+    ("M1553", "the NICs a failed release kept are not read again (I7S)", GONE,
      '        kept = state.get("known_nics") if isinstance(state, dict) else None\n',
      "        kept = None\n"),
-    ("M1554", "the NICs of a deleted VM's blocks are not looked for (I7S)", REL,
+    ("M1554", "the NICs of a deleted VM's blocks are not looked for (I7S)", GONE,
      "        entries = [state, *(blocks if isinstance(blocks, list) else [])]\n",
      "        entries = [state]\n"),
-    ("M1555", "a deleted VM's outbound rule left: only the inbound name looked for (I7S)", REL,
+    ("M1555", "a deleted VM's outbound rule left: only the inbound name looked for (I7S)", GONE,
      '                      for n in (b, f"{b}-out")}\n', "                      for n in (b,)}\n"),       # I4A: both names
 ]
 TESTS.update({"M1550": f"{_I7S} {INVARIANTS}", **{f"M{n}": _I7S for n in range(1551, 1556)}})
@@ -4764,18 +4766,18 @@ MUTANTS += [
     ("M1556", "a gone VM's unreadable state: `released`, the only file that named its NICs cleared (I7S)", REL,
      "                return (self._gone_vm_unknown(resource_id or vm_name, vm_name)\n",
      "                return ([]\n"),
-    ("M1557", "a gone VM's unreadable isolation state not counted (I7S)", REL,
+    ("M1557", "a gone VM's unreadable isolation state not counted (I7S)", GONE,
      "        if _isolation_unreadable(vm_ref) or (\n", "        if False or (\n"),
-    ("M1558", "a gone VM's unreadable block state not counted (I7S)", REL,
+    ("M1558", "a gone VM's unreadable block state not counted (I7S)", GONE,
      '                block is not None and f"{_BLOCK_STATE_DIR.name}/{block.name}" in unreadable_states()):\n',
      "                False):\n"),
-    ("M1559", "a NIC kept and attached to a namesake VM: its isolation's rules taken (I7S)", REL,
+    ("M1559", "a NIC kept and attached to a namesake VM: its isolation's rules taken (I7S)", GONE,
      '        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()\n',
      "        if (True or not holder\n"),
-    ("M1600", "a kept NIC that can't be read taken as gone: its names looked for (I7S)", REL,
+    ("M1600", "a kept NIC that can't be read taken as gone: its names looked for (I7S)", GONE,
      "            if _is_not_found(exc):\n                return None\n            return f\"{vm_name} supprimée : carte",
      "            if True:\n                return None\n            return f\"{vm_name} supprimée : carte"),
-    ("M1601", "a kept NIC on a VM of another name taken for a namesake's: its rules left (I7S)", REL,
+    ("M1601", "a kept NIC on a VM of another name taken for a namesake's: its rules left (I7S)", GONE,
      '        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()\n',
      "        if (not holder\n"),
 ]
@@ -5594,7 +5596,7 @@ MUTANTS += [
           "                        or self._delete_rule(p_rg, p_name, name)\n",
      "                        self._delete_rule(p_rg, p_name, name)\n"),
     ("M1735", "a deleted VM's release, its state lost, takes its denies off everywhere, a turned rule behind (I5Q)",
-     REL, "                    if why := held_back(nsg, r):\n", "                    if False and (why := held_back(nsg, r)):\n"),
+     GONE, "                    if why := held_back(nsg, r):\n", "                    if False and (why := held_back(nsg, r)):\n"),
     ("M1736", "a live VM's release held by its own turned rule: `release_partial` forever (I5Q)", "glorfindel/providers/azure/turned.py",
      '               if ip in holders and holders[ip] != own.rstrip("/").lower()\n',
      "               if ip in holders\n"),
@@ -8781,112 +8783,6 @@ TESTS.update({"M3214": "tests/unit/test_glorfindel.py -k restore_s_list",
               "M3218": "tests/unit/test_glorfindel_host.py", "M3219": "tests/unit/test_glorfindel_host.py"})
 
 
-def _copy_repo(dest: Path) -> None:
-    files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
-    for rel in files:
-        src = REPO / rel
-        if src.is_file():
-            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest / rel)
-
-
-# What the component check (scripts/component_check.py, D1) adds to the module it makes absent.
-COMPONENT_ABSENT = "absent: component check"
-
-
-def unmeasurable(stdout: str) -> str | None:
-    """The first line of a test run saying a module could not be found, other than one the
-    component check made absent on purpose (D1) — a copy that cannot import its code is no
-    measure. Line by line: one module made absent must not cover another that is missing."""
-    for line in stdout.splitlines():
-        if "ModuleNotFoundError: No module named" in line and COMPONENT_ABSENT not in line:
-            return line.strip()
-    return None
-
-
-def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
-    """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
-    env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
-           "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
-        cwd=copy, env=env, capture_output=True, text=True)
-    missing = unmeasurable(proc.stdout)
-    if missing:
-        raise RuntimeError(f"{missing}\n{proc.stdout[-2000:]}")
-    if show and proc.returncode != 0:
-        print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])
-    return proc.returncode != 0
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--examples", type=int, default=60)
-    ap.add_argument("--rounds", type=int, default=3)
-    ap.add_argument("--only", default="")
-    ap.add_argument("--control", action="store_true",
-                    help="measure the control set (never used to shape the generation) instead")
-    ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2),
-                    help="mutants measured at once")
-    ap.add_argument("--min-caught", type=int, default=0,
-                    help="exit 1 if fewer mutants (equivalent and multi-host aside) are caught in every round")
-    args = ap.parse_args()
-    only = {m.strip() for m in args.only.split(",") if m.strip()}
-
-    with tempfile.TemporaryDirectory(prefix="glorfindel-mutants-") as tmp:
-        base = Path(tmp) / "base"
-        _copy_repo(base)
-        todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
-        # The unmutated copy must pass, or nothing below means anything.
-        for target in sorted({TESTS.get(m[0], INVARIANTS) for m in todo}):
-            if _run(base, args.examples, show=True, target=target):
-                print(f"{target} fails on the UNMUTATED code — fix that first")
-                return 2
-        def measure(mutant):
-            mid, title, rel, old, new, *why = mutant
-            copy = Path(tmp) / mid
-            shutil.copytree(base, copy)
-            target = copy / rel
-            if old is RENAME:
-                if not target.exists():
-                    return mid, title, "STALE", "file to rename is gone"
-                target.rename(copy / new)
-            else:
-                text = target.read_text()
-                if isinstance(old, tuple) != isinstance(new, tuple) or (
-                        isinstance(old, tuple) and len(old) != len(new)):
-                    return mid, title, "STALE", "old and new replacements do not pair up"
-                pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
-                for o, n in pairs:
-                    if text.count(o) != 1:
-                        return mid, title, "STALE", f"{text.count(o)} matches"
-                    text = text.replace(o, n)
-                target.write_text(text)
-            started = time.monotonic()
-            target = TESTS.get(mid, INVARIANTS)
-            caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))
-            # Caught by a fixed sequence only (tests/unit/test_invariant_regressions.py)?
-            fixed = (caught == 0 and target == INVARIANTS
-                     and _run(copy, 0, target="tests/unit/test_invariant_regressions.py"))
-            shutil.rmtree(copy, ignore_errors=True)
-            verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
-            if why and verdict != "CAUGHT":
-                verdict = why[0].split(":")[0]
-            row = (mid, title, verdict, f"{caught}/{args.rounds} ({time.monotonic() - started:.0f}s)")
-            print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
-            return row
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            rows = sorted(pool.map(measure, todo))
-    print(f"\nbudget {args.examples} sequences, {args.rounds} rounds:")
-    for mid, title, verdict, detail in rows:
-        print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
-    counted = [r for r in rows if r[2] not in ("EQUIVALENT", "MULTI-HOST", "STALE")]
-    caught = sum(1 for r in counted if r[2] == "CAUGHT")
-    print(f"\n{caught}/{len(counted)} caught in every round (equivalent and multi-host mutants aside)")
-    return 1 if caught < args.min_caught else 0
-
-
 # I3U (#440): a VM's own isolation state turned unreadable — a disk, a write cut short — after a
 # partial release that kept where to look (I3R): the retry read nothing, said `released` and deleted
 # the file, the pair left on the quarantine NSG. Never `released` nor `swept` now, the reason said,
@@ -8929,91 +8825,54 @@ MUTANTS += [
 ]
 TESTS.update({"M3190": f"{_I3U_UNIT}::test_clearing_a_state_never_deletes_an_unreadable_file",
               "M3191": f"{_I3U_UNIT}::test_the_warning_stays_when_a_nics_message_names_the_unreadable_file"})
-
-
-# SEC18 (N-05, #455): runs/ — one directory per writer, read-only for the others (eregion_core/
-# runs_layout.py). The mounts (compose, the Makefile's docker runs, H0's deployment), the writers'
-# own directories, the readers that read a file only where its writer writes it and say the rest,
-# the migration of the former layout. M3220–M3239.
-_SEC18_MOUNTS, _SEC18_LAYOUT = "tests/unit/test_runs_mounts.py", "tests/unit/test_runs_layout.py"
-LAYOUT = "eregion_core/runs_layout.py"
+# I3V (#450): a partial release run again — by the CLI, by the console's approval — asked verify_release
+# first, which looked only at the NSGs the NICs carry now: « verified », « state cleared », the pair left
+# on the quarantine NSG the state named. It reads where the release looks (`quarantines_left`, the NSG
+# of a placement by rules), as `reset --from-azure` does; `reset --dry-run` never says « clean ».
+_I3V_UNIT = "tests/unit/test_release_away.py"
+_I3V_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_partial_release_run_again_by_the_cli_never_says_released_with_its_pair_left")
 MUTANTS += [
-    ("M3220", "the red mounts the watch's directory, read-only: it reads the blue's reasoning (SEC18)", "docker-compose.yml",
-     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ./annatar/scenarios",
-     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro\n"
-     "      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ./annatar/scenarios"),
-    ("M3221", "the watch mounts Annatar's directory read-write: a writer in another's directory (SEC18)",
-     "docker-compose.yml",
-     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro\n      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro\n"
-     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro",
-     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro\n"
-     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro"),
-    ("M3222", "the console mounts runs/ whole again (SEC18)", "docker-compose.yml",
-     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console\n      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro\n",
-     "      - ${EREGION_RUNS:-./runs}:/app/runs\n"),
-    ("M3223", "an Annatar run on Orodruin mounts ~/runs whole (SEC18)", MAKE,
-     "$(call ORO_MOUNT,annatar) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)\nORO_RUN_GOTHMOG",
-     "-v $$HOME/runs:/app/runs $(ORO_IMAGE)\nORO_RUN_GOTHMOG"),
-    ("M3224", "Annatar's docker run on the workstation mounts the watch's directory (SEC18)", MAKE,
-     "\t-v $(PWD)/runs/orodruin:/app/runs/orodruin \\\n\t$(if $(wildcard",
-     "\t-v $(PWD)/runs/orodruin:/app/runs/orodruin \\\n\t-v $(PWD)/runs/glorfindel:/app/runs/glorfindel:ro \\\n"
-     "\t$(if $(wildcard"),
-    ("M3225", "the watch reads signals anywhere in runs/, not only from Annatar's directory (SEC18)", GCLI,
-     "    _channel = ChannelReader(_layout.dir_of(_layout.ANNATAR, runs_dir), _say_channel)\n",
-     "    _channel = ChannelReader(runs_dir, _say_channel)\n"),
-    ("M3226", "the watch never says what runs/ holds out of its writers' places (SEC18)", GCLI,
-     '        _layout.say_strays(runs_dir, lambda text: _say_channel(f"Canal runs/ : {text}"))\n', ""),
-    ("M3227", "the watch writes its cycles flat in runs/, where an injector writes too (SEC18)", "glorfindel/agent.py",
-     '    out = runs_layout.dir_of(runs_layout.GLORFINDEL) / f"{run_id}_debug.jsonl"\n',
-     '    out = runs_layout.ROOT / f"{run_id}_debug.jsonl"\n'),
-    ("M3228", "the operator's gestures written flat in runs/ (SEC18)", GCLI,
-     "    runs = runs_layout.dir_of(runs_layout.CONSOLE)\n", "    runs = runs_layout.ROOT\n"),
-    ("M3229", "Annatar's signals written flat in runs/ (SEC18)", "annatar/signals/emitter.py",
-     "        runs_dir = runs_layout.dir_of(runs_layout.ANNATAR) if runs_dir is None else runs_dir\n",
-     "        runs_dir = runs_layout.ROOT if runs_dir is None else runs_dir\n"),
-    ("M3230", "an injector's window written in the watch's directory, not its own (SEC18)", "eregion_core/exercise.py",
-     '    _write((directory or exercises_dir(runs_layout.dir_of(injector))) / f"{run_id}.json", window)\n'
-     "    _publish(window)\n    return window\n",
-     '    _write((directory or exercises_dir()) / f"{run_id}.json", window)\n'
-     "    _publish(window)\n    return window\n"),
-    ("M3231", "the watch purges a window in an injector's directory, read-only to it (SEC18)", "eregion_core/exercise.py",
-     "            if path.parent == own:   # SEC18: an injector's directory is read-only here\n",
-     "            if True:\n"),
-    ("M3232", "a run without a return channel waits on what it cannot read: never said why (SEC18)", ENG,
-     "        if not channel:\n            console.print(\n                \"[yellow]Detection not measured — no return channel",
-     "        if False:\n            console.print(\n                \"[yellow]Detection not measured — no return channel"),
-    ("M3233", "a report in Annatar's directory may say Gothmog: a forged fault counted (SEC18)", LAYOUT,
-     "    if said != writer:\n        return f\"un rapport de", "    if False:\n        return f\"un rapport de"),
-    ("M3234", "the migration writes over a file its writer already has: one lost (SEC18)", LAYOUT,
-     "    if not os.path.lexists(dst):\n        dst.parent.mkdir(parents=True, exist_ok=True)\n",
-     "    if True:\n        dst.parent.mkdir(parents=True, exist_ok=True)\n"),
-    ("M3235", "the migration gives a report the watch pulled to Annatar (SEC18)", LAYOUT,
-     "    if (root / _PULLED_RUNS / path.stem).exists():\n        return GLORFINDEL\n",
-     "    if False:\n        return GLORFINDEL\n"),
-    ("M3236", "the migration leaves H0's copy of Orodruin's statuses where no one reads it (SEC18)", LAYOUT,
-     "            if name == ORODRUIN and is_dir and (path / _CONTRACT).exists():\n",
-     "            if False:\n"),
-    ("M3237", "another writer's file in a writer's directory is never said (SEC18)", LAYOUT,
-     "                if not belongs(e.name, sub.name, is_dir):\n", "                if False:\n"),
-    ("M3238", "the console's feed reads a line from any writer's directory (SEC18)", CON,
-     "    for writer, pat, kind in _FEED_FILES:     # SEC18: each from its writer's directory\n"
-     "        for f in _own(writer).glob(pat):\n",
-     "    for writer, pat, kind in _FEED_FILES:     # SEC18: each from its writer's directory\n"
-     "        for f in _RUNS.glob(f\"*/{pat}\"):\n"),
-    ("M3239", "H0 starts its services without moving the former layout: what runs/ held unread (SEC18)",
-     "infra/glorfindel-host/deploy.sh",
-     "    python3 -m eregion_core.runs_layout migrate runs || die", "    true || die"),
+    ("M3192", "verify_release blind to the NSGs its NICs no longer carry: `glorfindel release` clears a partial "
+              "release's state, the pair left (I3V)", VER,
+     "        away_still, away_unknown = self._out_of_sight_seen(vm_name, targets, state, cache)\n",
+     "        away_still, away_unknown = [], []\n"),
+    ("M3193", "the quarantine NSG a partial release left never looked at again by the verification or the reset "
+              "(I3V)", AWY,
+     '            wanted = ([(*left[nid], "NSG de quarantaine quitté")] if nid in left else []) + [\n',
+     "            wanted = [] + [\n"),
+    ("M3194", "the NSG of a placement by rules the NIC left never looked at by the verification or the reset (I3V)",
+     AWY, '                for p in placed if p["nic_id"].rstrip("/").lower() == nid]\n',
+     "                for p in () if p]\n"),
+    ("M3195", "an NSG out of the NICs' sight that can't be read, read as nothing there: verified (I3V)", AWY,
+     "            if rules is None:\n                unknown.append(f'{view[\"nic_short\"]}:{where}')\n",
+     "            if rules is None:\n"),
+    ("M3196", "`reset --from-azure` blind to the NSGs the release looks at that the NICs left: swept, the pair "
+              "there, the state cleared (I3V)", SWP,
+     "        views += self._out_of_sight_views(targets, own_state)\n", ""),
+    ("M3197", "`reset --dry-run` says « Reset complete — <vm> is clean » on a preview (I3V)", GCLI,
+     "    if dry_run:\n        # An outline, never « clean »", "    if False:\n        # An outline, never « clean »"),
+    ("M3198", "another NIC's rule on the quarantine NSG left holds the verification: never verified (I3V)", AWY,
+     "                      for r in self._iso_rules_on(vm_name, view, rules)]\n        return still, unknown\n",
+     "                      for r in rules if _rule_name(r).startswith(\"glorfindel-iso\")]\n"
+     "        return still, unknown\n"),
 ]
-TESTS.update({**{f"M{n}": _SEC18_MOUNTS for n in (3220, 3221, 3222, 3223, 3224, 3225, 3226, 3238, 3239)},
-              **{f"M{n}": _SEC18_LAYOUT for n in (3230, 3231, 3233, 3234, 3235, 3236, 3237)},
-              "M3227": "tests/unit/test_agent_nodes.py::test_store_cycle_writes_debug_jsonl",
-              "M3228": "tests/unit/test_runs_channel.py::test_the_clis_manual_action_never_through_a_link_never_blocking",
-              "M3229": "tests/unit/test_signals.py",
-              "M3232": "tests/unit/test_annatar_detection.py::test_without_a_return_channel_the_detection_is_not_measured"})
+TESTS.update({
+    "M3192": (f"{_I3V_SEQ} {_I3V_UNIT}::test_the_verification_of_a_partial_release_looks_on_the_quarantine_nsg_it_left "
+              f"{_I3V_UNIT}::test_the_cli_release_after_a_partial_one_takes_the_pair_off"),
+    "M3193": (f"{_I3V_UNIT}::test_the_verification_of_a_partial_release_looks_on_the_quarantine_nsg_it_left "
+              f"{_I3V_UNIT}::test_reset_from_azure_looks_on_the_quarantine_nsg_a_partial_release_left"),
+    "M3194": (f"{_I3V_UNIT}::test_the_verification_reads_the_nsg_a_placement_names_that_the_nic_left "
+              f"{_I3V_UNIT}::test_reset_from_azure_reads_the_nsg_a_placement_names_that_the_nic_left"),
+    "M3195": f"{_I3V_UNIT}::test_the_verification_says_a_quarantine_nsg_left_that_cant_be_read",
+    "M3196": (f"{_I3V_UNIT}::test_reset_from_azure_looks_on_the_quarantine_nsg_a_partial_release_left "
+              f"{_I3V_UNIT}::test_reset_from_azure_reads_the_nsg_a_placement_names_that_the_nic_left"),
+    "M3197": f"{_I3V_UNIT}::test_a_plain_reset_dry_run_never_says_clean",
+    "M3198": f"{_I3V_UNIT}::test_the_verification_counts_only_the_nics_rules_on_the_quarantine_nsg_it_left",
+})
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+
 # SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's
 # contract an allow-list (V-29), no fallback on the former shared principal (V-17), the session
 # drain VM by VM (R-03). M2880–M2899.
@@ -9297,3 +9156,216 @@ MUTANTS += [
 
 
 TESTS.update({"M3080": "tests/unit/test_exercise.py", "M3081": "tests/unit/test_exercise.py"})
+
+
+
+# MCG (#448): the harness's `__main__` guard stays its last statement, or the blocks a merge
+# leaves after it are never measured (54 of them on 02/11). M3185–M3186.
+MUTANTS += [
+    ("M3185", "a block left after the harness's __main__ guard: never run, never measured (MCG)",
+     "scripts/mutation_check.py", 'if __name__ == "__main__":\n    sys.exit(main())\n',
+     'if __name__ == "__main__":\n    sys.exit(main())\nTESTS.update({})\n'),
+    ("M3186", "mutant_anchors no longer reads what follows the harness's __main__ guard (MCG)",
+     "scripts/mutant_anchors.py",
+     '    faults += after_guard((root / "scripts/mutation_check.py").read_text())\n', ""),
+]
+TESTS.update({mid: "tests/unit/test_mutant_anchors.py" for mid in ("M3185", "M3186")})
+
+
+
+# SEC18 (N-05, #455): runs/ — one directory per writer, read-only for the others (eregion_core/
+# runs_layout.py). The mounts (compose, the Makefile's docker runs, H0's deployment), the writers'
+# own directories, the readers that read a file only where its writer writes it and say the rest,
+# the migration of the former layout. M3220–M3239.
+_SEC18_MOUNTS, _SEC18_LAYOUT = "tests/unit/test_runs_mounts.py", "tests/unit/test_runs_layout.py"
+LAYOUT = "eregion_core/runs_layout.py"
+MUTANTS += [
+    ("M3220", "the red mounts the watch's directory, read-only: it reads the blue's reasoning (SEC18)", "docker-compose.yml",
+     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ./annatar/scenarios",
+     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro\n"
+     "      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ./annatar/scenarios"),
+    ("M3221", "the watch mounts Annatar's directory read-write: a writer in another's directory (SEC18)",
+     "docker-compose.yml",
+     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro\n      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro\n"
+     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro",
+     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro\n"
+     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro"),
+    ("M3222", "the console mounts runs/ whole again (SEC18)", "docker-compose.yml",
+     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console\n      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro\n",
+     "      - ${EREGION_RUNS:-./runs}:/app/runs\n"),
+    ("M3223", "an Annatar run on Orodruin mounts ~/runs whole (SEC18)", MAKE,
+     "$(call ORO_MOUNT,annatar) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)\nORO_RUN_GOTHMOG",
+     "-v $$HOME/runs:/app/runs $(ORO_IMAGE)\nORO_RUN_GOTHMOG"),
+    ("M3224", "Annatar's docker run on the workstation mounts the watch's directory (SEC18)", MAKE,
+     "\t-v $(PWD)/runs/orodruin:/app/runs/orodruin \\\n\t$(if $(wildcard",
+     "\t-v $(PWD)/runs/orodruin:/app/runs/orodruin \\\n\t-v $(PWD)/runs/glorfindel:/app/runs/glorfindel:ro \\\n"
+     "\t$(if $(wildcard"),
+    ("M3225", "the watch reads signals anywhere in runs/, not only from Annatar's directory (SEC18)", GCLI,
+     "    _channel = ChannelReader(_layout.dir_of(_layout.ANNATAR, runs_dir), _say_channel)\n",
+     "    _channel = ChannelReader(runs_dir, _say_channel)\n"),
+    ("M3226", "the watch never says what runs/ holds out of its writers' places (SEC18)", GCLI,
+     '        _layout.say_strays(runs_dir, lambda text: _say_channel(f"Canal runs/ : {text}"))\n', ""),
+    ("M3227", "the watch writes its cycles flat in runs/, where an injector writes too (SEC18)", "glorfindel/agent.py",
+     '    out = runs_layout.dir_of(runs_layout.GLORFINDEL) / f"{run_id}_debug.jsonl"\n',
+     '    out = runs_layout.ROOT / f"{run_id}_debug.jsonl"\n'),
+    ("M3228", "the operator's gestures written flat in runs/ (SEC18)", GCLI,
+     "    runs = runs_layout.dir_of(runs_layout.CONSOLE)\n", "    runs = runs_layout.ROOT\n"),
+    ("M3229", "Annatar's signals written flat in runs/ (SEC18)", "annatar/signals/emitter.py",
+     "        runs_dir = runs_layout.dir_of(runs_layout.ANNATAR) if runs_dir is None else runs_dir\n",
+     "        runs_dir = runs_layout.ROOT if runs_dir is None else runs_dir\n"),
+    ("M3230", "an injector's window written in the watch's directory, not its own (SEC18)", "eregion_core/exercise.py",
+     '    _write((directory or exercises_dir(runs_layout.dir_of(injector))) / f"{run_id}.json", window)\n'
+     "    _publish(window)\n    return window\n",
+     '    _write((directory or exercises_dir()) / f"{run_id}.json", window)\n'
+     "    _publish(window)\n    return window\n"),
+    ("M3231", "the watch purges a window in an injector's directory, read-only to it (SEC18)", "eregion_core/exercise.py",
+     "            if path.parent == own:   # SEC18: an injector's directory is read-only here\n",
+     "            if True:\n"),
+    ("M3232", "a run without a return channel waits on what it cannot read: never said why (SEC18)", ENG,
+     "        if not channel:\n            console.print(\n                \"[yellow]Detection not measured — no return channel",
+     "        if False:\n            console.print(\n                \"[yellow]Detection not measured — no return channel"),
+    ("M3233", "a report in Annatar's directory may say Gothmog: a forged fault counted (SEC18)", LAYOUT,
+     "    if said != writer:\n        return f\"un rapport de", "    if False:\n        return f\"un rapport de"),
+    ("M3234", "the migration writes over a file its writer already has: one lost (SEC18)", LAYOUT,
+     "    if not os.path.lexists(dst):\n        dst.parent.mkdir(parents=True, exist_ok=True)\n",
+     "    if True:\n        dst.parent.mkdir(parents=True, exist_ok=True)\n"),
+    ("M3235", "the migration gives a report the watch pulled to Annatar (SEC18)", LAYOUT,
+     "    if (root / _PULLED_RUNS / path.stem).exists():\n        return GLORFINDEL\n",
+     "    if False:\n        return GLORFINDEL\n"),
+    ("M3236", "the migration leaves H0's copy of Orodruin's statuses where no one reads it (SEC18)", LAYOUT,
+     "            if name == ORODRUIN and is_dir and (path / _CONTRACT).exists():\n",
+     "            if False:\n"),
+    ("M3237", "another writer's file in a writer's directory is never said (SEC18)", LAYOUT,
+     "                if not belongs(e.name, sub.name, is_dir):\n", "                if False:\n"),
+    ("M3238", "the console's feed reads a line from any writer's directory (SEC18)", CON,
+     "    for writer, pat, kind in _FEED_FILES:     # SEC18: each from its writer's directory\n"
+     "        for f in _own(writer).glob(pat):\n",
+     "    for writer, pat, kind in _FEED_FILES:     # SEC18: each from its writer's directory\n"
+     "        for f in _RUNS.glob(f\"*/{pat}\"):\n"),
+    ("M3239", "H0 starts its services without moving the former layout: what runs/ held unread (SEC18)",
+     "infra/glorfindel-host/deploy.sh",
+     "    python3 -m eregion_core.runs_layout migrate runs || die", "    true || die"),
+]
+TESTS.update({**{f"M{n}": _SEC18_MOUNTS for n in (3220, 3221, 3222, 3223, 3224, 3225, 3226, 3238, 3239)},
+              **{f"M{n}": _SEC18_LAYOUT for n in (3230, 3231, 3233, 3234, 3235, 3236, 3237)},
+              "M3227": "tests/unit/test_agent_nodes.py::test_store_cycle_writes_debug_jsonl",
+              "M3228": "tests/unit/test_runs_channel.py::test_the_clis_manual_action_never_through_a_link_never_blocking",
+              "M3229": "tests/unit/test_signals.py",
+              "M3232": "tests/unit/test_annatar_detection.py::test_without_a_return_channel_the_detection_is_not_measured"})
+
+
+# The mutants end here. A new block goes above this line: the `__main__` guard stays the last
+# statement of this file, or what follows it is never measured (MCG, #448;
+# tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).
+
+
+
+def _copy_repo(dest: Path) -> None:
+    files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
+    for rel in files:
+        src = REPO / rel
+        if src.is_file():
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest / rel)
+
+
+# What the component check (scripts/component_check.py, D1) adds to the module it makes absent.
+COMPONENT_ABSENT = "absent: component check"
+
+
+def unmeasurable(stdout: str) -> str | None:
+    """The first line of a test run saying a module could not be found, other than one the
+    component check made absent on purpose (D1) — a copy that cannot import its code is no
+    measure. Line by line: one module made absent must not cover another that is missing."""
+    for line in stdout.splitlines():
+        if "ModuleNotFoundError: No module named" in line and COMPONENT_ABSENT not in line:
+            return line.strip()
+    return None
+
+
+def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
+    """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
+    env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
+           "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
+        cwd=copy, env=env, capture_output=True, text=True)
+    missing = unmeasurable(proc.stdout)
+    if missing:
+        raise RuntimeError(f"{missing}\n{proc.stdout[-2000:]}")
+    if show and proc.returncode != 0:
+        print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])
+    return proc.returncode != 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--examples", type=int, default=60)
+    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--only", default="")
+    ap.add_argument("--control", action="store_true",
+                    help="measure the control set (never used to shape the generation) instead")
+    ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2),
+                    help="mutants measured at once")
+    ap.add_argument("--min-caught", type=int, default=0,
+                    help="exit 1 if fewer mutants (equivalent and multi-host aside) are caught in every round")
+    args = ap.parse_args()
+    only = {m.strip() for m in args.only.split(",") if m.strip()}
+
+    with tempfile.TemporaryDirectory(prefix="glorfindel-mutants-") as tmp:
+        base = Path(tmp) / "base"
+        _copy_repo(base)
+        todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
+        # The unmutated copy must pass, or nothing below means anything.
+        for target in sorted({TESTS.get(m[0], INVARIANTS) for m in todo}):
+            if _run(base, args.examples, show=True, target=target):
+                print(f"{target} fails on the UNMUTATED code — fix that first")
+                return 2
+        def measure(mutant):
+            mid, title, rel, old, new, *why = mutant
+            copy = Path(tmp) / mid
+            shutil.copytree(base, copy)
+            target = copy / rel
+            if old is RENAME:
+                if not target.exists():
+                    return mid, title, "STALE", "file to rename is gone"
+                target.rename(copy / new)
+            else:
+                text = target.read_text()
+                if isinstance(old, tuple) != isinstance(new, tuple) or (
+                        isinstance(old, tuple) and len(old) != len(new)):
+                    return mid, title, "STALE", "old and new replacements do not pair up"
+                pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
+                for o, n in pairs:
+                    if text.count(o) != 1:
+                        return mid, title, "STALE", f"{text.count(o)} matches"
+                    text = text.replace(o, n)
+                target.write_text(text)
+            started = time.monotonic()
+            target = TESTS.get(mid, INVARIANTS)
+            caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))
+            # Caught by a fixed sequence only (tests/unit/test_invariant_regressions.py)?
+            fixed = (caught == 0 and target == INVARIANTS
+                     and _run(copy, 0, target="tests/unit/test_invariant_regressions.py"))
+            shutil.rmtree(copy, ignore_errors=True)
+            verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
+            if why and verdict != "CAUGHT":
+                verdict = why[0].split(":")[0]
+            row = (mid, title, verdict, f"{caught}/{args.rounds} ({time.monotonic() - started:.0f}s)")
+            print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
+            return row
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            rows = sorted(pool.map(measure, todo))
+    print(f"\nbudget {args.examples} sequences, {args.rounds} rounds:")
+    for mid, title, verdict, detail in rows:
+        print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
+    counted = [r for r in rows if r[2] not in ("EQUIVALENT", "MULTI-HOST", "STALE")]
+    caught = sum(1 for r in counted if r[2] == "CAUGHT")
+    print(f"\n{caught}/{len(counted)} caught in every round (equivalent and multi-host mutants aside)")
+    return 1 if caught < args.min_caught else 0
+
+
+
+if __name__ == "__main__":
+    sys.exit(main())

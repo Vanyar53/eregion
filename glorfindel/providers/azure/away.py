@@ -99,6 +99,54 @@ class AwayRulesMixin:
                 keep[t0["nic_id"].rstrip("/")] = list(q)
         return failed
 
+    def _out_of_sight_seen(self, vm_name: str, targets: list[dict], state: dict,
+                           cache: dict) -> tuple[list[str], list[str]]:
+        """verify_release's: the rules of a NIC on an NSG the release still looks at but the NIC
+        no longer carries (_out_of_sight_views), found as the release finds them — a bare NIC's
+        too, nothing is taken off here. After a partial release, `glorfindel release` read
+        « verified », cleared the state and said « state cleared », the pair left on the
+        quarantine NSG and the only file that said where to look gone (I3V, #450). Returns
+        (still there, unreadable)."""
+        still: list[str] = []
+        unknown: list[str] = []
+        for view in self._out_of_sight_views(targets, state):
+            where = f'{view["nsg_name"]}, groupe {view["nsg_rg"]} : {view["out_of_sight"]}'
+            rules = self._list_rules(cache, view["nsg_rg"], view["nsg_name"])
+            if rules is None:
+                unknown.append(f'{view["nic_short"]}:{where}')
+                continue
+            still += [f'{view["nic_short"]}:{_rule_name(r)} (sur {where})'
+                      for r in self._iso_rules_on(vm_name, view, rules)]
+        return still, unknown
+
+    def _out_of_sight_views(self, targets: list[dict], state: dict) -> list[dict]:
+        """Each NIC seen from an NSG the release looks at that the NIC no longer carries — the
+        quarantine NSG it left (_quarantines_left: a partial release's `quarantines_left`, a
+        quarantine placement of the state), or the NSG a placement by rules of the state names
+        (the isolation written on the quarantine NSG while it had lost our tag, seed 67's) —,
+        as an NSG shared with other VMs (its older names count only aimed at its addresses),
+        for verify_release and `reset --from-azure` (I3V). Not one that still governs it: in it
+        still (said as such), or among the NSGs it carries (looked at with them)."""
+        left = self._quarantines_left(state)
+        rows = state.get("placements") if isinstance(state, dict) else None
+        placed = [p for p in (rows if isinstance(rows, list) else ()) if isinstance(p, dict)
+                  and p.get("kind") != "quarantine" and p.get("nic_id") and p.get("nsg_rg") and p.get("nsg_name")]
+        views: list[dict] = []
+        for t0 in targets:
+            nid = t0["nic_id"].rstrip("/").lower()
+            seen = {(t["nsg_rg"].lower(), t["nsg_name"].lower()) for t in self._nic_nsg_views(t0)} | (
+                {(t0["quarantine"]["nsg_rg"].lower(), t0["quarantine"]["nsg_name"].lower())}
+                if t0.get("quarantine") else set())
+            wanted = ([(*left[nid], "NSG de quarantaine quitté")] if nid in left else []) + [
+                (p["nsg_rg"], p["nsg_name"], "NSG d'un placement de l'état, que la carte ne porte plus")
+                for p in placed if p["nic_id"].rstrip("/").lower() == nid]
+            for q_rg, q_name, why in wanted:
+                if (q_rg.lower(), q_name.lower()) not in seen:
+                    seen.add((q_rg.lower(), q_name.lower()))
+                    views.append({**t0, "nsg_rg": q_rg, "nsg_name": q_name, "scope": "nic", "shared_nsg": True,
+                                  "ip_scoped": True, "out_of_sight": why})
+        return views
+
     def _away_rules(self, vm_name: str, targets: list[dict], stuck: set, guard: dict, mates: list) -> list[str]:
         """The release's (_sweep_isolation): what _away_split keeps, said; the rest taken
         off — `stuck`, the placements whose undo just failed, not tried twice."""

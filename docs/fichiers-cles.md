@@ -98,8 +98,8 @@ glorfindel/
                           (tests/unit/test_provider_boundary.py, étape CI « Provider boundary ») :
                           connector.py (AzureConnector = un mixin par préoccupation + garde d'abonnement + verrou
                           de VM sur les écritures), nsg.py (règles lues par contenu), network.py, quarantine.py,
-                          isolation.py, release.py, verify.py, blocks.py, verify_block.py, unblock.py, backup.py (+ restore_job_status,
-                          lu par jobs.py), restore.py, sweep.py, readers.py (check_permissions, check_nsg_access,
+                          isolation.py, release.py (+ gone.py : la VM supprimée, I7S), verify.py, blocks.py, verify_block.py, unblock.py, backup.py (+ restore_job_status,
+                          lu par jobs.py), restore.py, sweep.py (+ reset_bare.py : ses cartes nues), readers.py (check_permissions, check_nsg_access,
                           list_nsgs, check_compute_access…), sdk.py (warm-up), capabilities.py, monitor.py
                           (AzureMonitorDetector, réexporté par detectors.py), activity.py (AzureActivityDetector, AL1 :
                           le journal d'activité, détection seule ; écritures de Glorfindel écartées, ses règles marquées),

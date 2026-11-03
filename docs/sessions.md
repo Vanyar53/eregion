@@ -72,7 +72,10 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
      - la suite complète ;
      - `python scripts/mutant_anchors.py`, qui vérifie, jeu de contrôle compris, que chaque mutant a un
        id unique et que le harnais pourra l'appliquer (son texte présent une seule fois, dans un fichier
-       suivi).
+       suivi), et que la garde `if __name__ == "__main__"` reste la dernière instruction de
+       `scripts/mutation_check.py`. Un bloc de mutants s'ajoute **avant la garde**, jamais en fin de
+       fichier : ce qui la suit n'est jamais mesuré (54 mutants l'étaient le 02/11, MCG). Une fusion
+       qui en laisse un derrière elle fait échouer `tests/unit/test_mutant_anchors.py`.
 5. **Pousser et ouvrir la PR.**
    - Les sessions poussent leur branche et ouvrent la PR sans attendre Jonathan (sa décision du 30/10),
      sous l'identité de l'App des sessions, jamais sous la sienne (plus bas, « L'identité des sessions »).

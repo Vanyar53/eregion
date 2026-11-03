@@ -144,19 +144,29 @@ def test_a_turned_rule_on_the_vms_own_address_goes_with_the_promotion(monkeypatc
     assert _ours(g) == {} and "kept_rules" not in out and not _flows(f, WEB), out
 
 
-def test_a_delete_that_fails_keeps_the_placement_said(monkeypatch):
+@pytest.mark.parametrize("refused", ["inbound", "outbound"])
+def test_a_delete_that_fails_keeps_the_placement_said(monkeypatch, refused):
     """A delete refused (a lock, a 429 that outlasts the retries): before, swallowed — the rule
-    left on Azure, its placement dropped from the state, the unblock blind to it. Kept now, said
-    with its error, in the state for the unblock."""
+    left on Azure, its placement dropped from the state, the unblock blind to it. Now it stops the
+    pair's deletes, said with its error: the first refused, the second is never tried — the pair
+    stays whole (I4P's review); the second refused, the first is gone. Either way the placement
+    stays in the state, and the unblock reads it again and takes off what is left."""
     f, c, g, _ = _world(monkeypatch, True)
     c.block_suspicious_ip(ATTACKER, WEB)
     rule = _inbound(g)
-    real = c._delete_rule
-    monkeypatch.setattr(c, "_delete_rule", lambda rg, nsg, name: (
-        f"{rg}/{nsg}/{name}: (ScopeLocked) refused" if name == rule else real(rg, nsg, name)))
+    no = rule if refused == "inbound" else f"{rule}-out"
+    real, tried = c._delete_rule, []
+    monkeypatch.setattr(c, "_delete_rule", lambda rg, nsg, name: tried.append(name) or (
+        f"{rg}/{nsg}/{name}: (ScopeLocked) refused" if name == no else real(rg, nsg, name)))
     out = c.block_suspicious_ip(ATTACKER, WEB, scope="subnet", replace=True)
-    assert rule in g["rules"] and "ScopeLocked" in " ".join(out["kept_rules"]), out
+    assert no in g["rules"] and "ScopeLocked" in " ".join(out["kept_rules"]), out
     assert [p["rule"] for p in _entry()["placements"]] == [rule]
+    if refused == "inbound":
+        assert tried == [rule] and _ours(g) == {rule: "Deny", f"{rule}-out": "Deny"}, (tried, g["rules"])
+    else:
+        assert tried == [rule, f"{rule}-out"] and _ours(g) == {f"{rule}-out": "Deny"}, (tried, g["rules"])
+    monkeypatch.setattr(c, "_delete_rule", real)
+    assert c.unblock_ip(ATTACKER, WEB)["status"] == "unblocked" and _ours(g) == {}, g["rules"]
 
 
 def test_a_legacy_entry_turned_rule_stays_with_its_placement(monkeypatch):

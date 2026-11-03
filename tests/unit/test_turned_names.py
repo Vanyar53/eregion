@@ -171,3 +171,56 @@ def test_a_turned_allow_kept_says_what_to_do_without_cutting_the_vm_it_opens(nam
     said = _opens_text(name, to, "toutes les cartes derrière ce NSG, dont api-nic")
     assert ("la remettre en refus" in said) is back, said
     assert "la retirer à la main si elle n'est plus voulue" in said and "recréer sous un nom à elle" in said, said
+
+
+@pytest.mark.parametrize("name, values, back", [
+    (f"{_BLOCK}", ["10.0.0.5"], True),                          # a block's on its address: the attacker alone
+    (f"{_BLOCK}-out", ["10.0.0.5"], True),
+    (_BLOCK, ["*"], False),                                     # every NIC behind its NSG
+    ("glorfindel-iso-web-web-nic-8b70f2", ["10.0.0.5"], False),  # every flow of the VM that holds 10.0.0.5
+    ("glorfindel-iso-web-web-nic-8b70f2-out", ["10.0.0.5"], False),
+    ("glorfindel-iso-web-web-nic-8b70f2", ["*"], False)])
+def test_a_deny_kept_for_a_turned_rule_behind_it_says_what_to_do_without_cutting_that_vm(name, values, back):
+    """I4P's review (`_turned_text`, I5Q): an orphan deny — a deleted VM's block, the attacker alone —
+    on the address of a live NIC, kept for one of our rules turned into an allow behind it, aimed
+    there. Its advice said « la remettre en refus » whatever that rule was: an isolation's, put
+    back, cut every flow of that VM on its side. Said for a block's rule on its addresses only;
+    otherwise: take it off by hand, or recreate the flow under a name of its own."""
+    from glorfindel.providers.azure.turned import _turned_text
+    said = _turned_text(("/x/nsg-subnet", name, "10.0.0.5", values))
+    assert ("la remettre en refus" in said) is back, said
+    assert back or ("la retirer à la main si elle n'est plus voulue" in said and "recréer sous un nom à elle" in said), said
+    assert name in said and "10.0.0.5" in said, said
+
+
+def test_the_orphan_sweep_never_advises_putting_back_an_isolations_rule(monkeypatch):
+    """The case end to end: web blocked for itself on its subnet's NSG (aimed at 10.0.0.4), web
+    deleted, its state lost; batch given 10.0.0.4 on that subnet, isolated, its isolation's inbound
+    deny there turned into an allow by someone, batch's state lost. The orphan block of web is kept for
+    that rule (I5Q) — its advice no longer says to put the isolation's rule back as a deny."""
+    from .fake_azure import ATTACKER
+    from .test_orphan_sweep import _delete, _new_vm_at, _watch_pass
+    from .test_orphan_sweep import _world as _sweep_world
+    f, c, subnet = _sweep_world(monkeypatch)
+    web = vm_id("rg-app1", "web")
+    assert c.block_suspicious_ip(ATTACKER, web)["status"] == "blocked"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    _delete(f, web)
+    for d in (actions._BLOCK_STATE_DIR,):
+        for p in (d.glob("*.json") if d.exists() else []):
+            p.unlink()
+    batch = _new_vm_at(f, subnet, "10.0.0.4")
+    c.isolate_vm(batch)
+    iso = next((n for n, r in g["rules"].items() if n.startswith("glorfindel-iso-")
+                and r["direction"].lower() == "inbound"), None)
+    if iso is None:
+        pytest.skip("batch isolated by quarantine: no rule of its own on the subnet's NSG")
+    _turn(g, iso)
+    actions._clear_isolation_state(batch)     # its state lost: not a VM Glorfindel holds
+    said = " ".join(str(x) for x in (c.find_orphan_rules() or []))
+    _watch_pass(c)
+    blocks = [n for n in g["rules"] if n.startswith("glorfindel-block-")]
+    assert blocks, "the orphan block is kept: the turned isolation rule waits behind it"
+    from glorfindel import escalations
+    cards = " ".join(e.get("reason") or "" for e in escalations.pending()) + said
+    assert iso in cards and "la remettre en refus" not in cards, cards

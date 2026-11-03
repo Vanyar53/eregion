@@ -3299,7 +3299,7 @@ restreinte). **Le correctif** (`providers/azure/perimeter.py`, `_promote`, appel
 `blocks._block_ip_subnet`) : chacune des deux règles d'une paire est demandée à la garde ; l'une gardée, **la paire
 reste entière**, sur Azure et dans l'état (son placement gardé, pour le déblocage, qui redemande la garde : gardée de
 nouveau, `unblock_partial`) — à moitié retirée, la passe suivante aurait lu notre propre retrait comme une
-disparition. Un retrait qui échoue garde aussi la paire (`_delete_rule`, l'erreur dite ; avant : avalé, la règle
+disparition. Un retrait qui échoue arrête ceux de la paire (`_delete_rule`, l'erreur dite) : la première refusée, la seconde n'est pas tentée, la paire reste entière ; la seconde refusée, la première est partie — dans les deux cas le placement reste dans l'état et le déblocage le relit (avant : avalé, la règle
 restée sur Azure, son placement sorti de l'état). Une entrée ancienne à règle unique passe par la même garde ; gardée,
 elle devient un placement de la carte primaire. **Le contrat de compte rendu** : le statut reste celui de la VM —
 `blocked` (ou `blocked_partial` pour une carte hors du périmètre, RB1) : le périmètre coupe l'attaquant de cette VM,
@@ -3316,17 +3316,37 @@ adresse, `False` sur `*`) sont ajoutés. **Tests unitaires** (`test_promotion_gu
 tier et sur le NSG de web donné à batch depuis (batch garde ses flux, la paire entière, `blocked`, la règle dite, le
 placement dans l'état, le déblocage `unblock_partial` sans couper batch) ; rien de retourné, la paire part
 (`promoted_from`, verte sur `main` : garde le correctif de trop en faire) ; retournée mais visant l'adresse de web
-encore, elle part (verte sur `main`) ; un retrait refusé, gardé et dit ; une entrée ancienne, gardée. **Mutants
+encore, elle part (verte sur `main`) ; un retrait refusé, dit, la seconde suppression jamais tentée après un premier refus, le placement relu par le déblocage (deux cas) ; une entrée ancienne, gardée. **Mutants
 M3350–M3358** : la garde jamais demandée (M3350, la cause), la paire gardée sortie de l'état (M3351), la paire à moitié
 retirée (M3352), rien dit (M3353), un retrait en échec avalé (M3354), l'entrée ancienne sans garde (M3355), la règle
 `-out` jamais demandée (M3356, la séquence de la graine 3), la consigne de remettre en refus une règle d'isolation
 (M3357), toute paire gardée (M3358). M1635, M3274 et M3275 suivent leurs lignes déplacées (`perimeter.py`, la
 nouvelle consigne), leur sens inchangé.
-**Mesures d'I4P** (après la fusion de `main` 19d802d, L1Qs). Invariants, `--hypothesis-seed=N` : à 60 séquences,
-N = 1..18, 73, 101, **20/20 vertes** ; à 500, N = 1, 3, 7, 8675, 42, **5/5 vertes** (la règle restreinte). Avant la restriction, à 500, la graine 7 tombait sur l'exemption d'I5 dite plus haut, et la graine 42 sur L1 (« the block on …/rg-app1/…/web vanished from Azure; the reassertion neither put it back nor said so ») dans une séquence de quatorze étapes sans aucune promotion ni la règle d'I4P — un défaut hors du lot, comme celui de la graine 29 laissé à L1G (#461) ; non rejoué depuis, la base d'exemples restée vide. Mutants M3350–M3358 : 9/9 par leurs tests à chaque tour
-(deux tours) ; M1635, M3270–M3275 : 7/7 (deux tours) ; les quarante voisins sur `blocks.py`, `perimeter.py` et
-`turned.py` (RB1, I3P, I4A–I4D, I5Q, I5R, U7D, SEC2) : 40/40, un tour. `pytest` complet : 5 983 réussis, 7 sautés, 2 `xfail` (de L1Qs) ; `ruff` propre ;
-`scripts/mutant_anchors.py` : 2 367 mutants, sans faute.
+**La relecture 5.5** (« ok » sur 814d15a) a relevé deux points, corrigés. (1) **La consigne d'I5Q**
+(`turned._turned_text`, le défaut déjà sur `main`) : un refus orphelin d'un blocage — l'attaquant seul — sur l'adresse
+d'une carte vivante, gardé pour une règle `glorfindel-iso-` retournée qui vise cette adresse (`_turned_behind` ne
+regarde pas le genre du nom), disait « la remettre en refus » : remise en refus, la règle d'isolation couperait tous
+les flux de cette VM de son côté. La condition est celle de `_opens_text` : « remettre en refus » pour une règle de
+blocage sur ses adresses seulement, sinon la retirer à la main ou recréer le flux sous un nom à elle
+(`_turned_behind` rend aussi les valeurs de la règle). Tests (`test_turned_names.py`) : la consigne, six cas, et le
+cas de bout en bout — le blocage de web sur le NSG du subnet, web supprimée, son état perdu, batch à 10.0.0.4 isolée
+puis son état perdu, sa règle d'isolation entrante retournée, une passe de la watch : le refus orphelin gardé, sa
+carte nomme la règle d'isolation sans jamais dire de la remettre en refus (rouge avant). Mutant **M3359** (la
+consigne pour toute règle sauf sur `*`). (2) **Un retrait qui échoue** : la doc disait « garde la paire » ; la
+seconde suppression était tentée après un premier refus. Elle ne l'est plus (`next` sur les retraits) : la première
+refusée, la paire reste entière ; la seconde refusée, la première est partie et le placement reste, relu par le
+déblocage — deux cas figés (`test_promotion_guard.py`), le déblocage les retire une fois le refus levé ; M3354 suit
+sa ligne.
+**Mesures d'I4P**, sur la tête rendue (après la fusion de `main` fe492e0, DG-d). Invariants,
+`--hypothesis-seed=N` : à 60 séquences, N = 1..18, 73, 101, **20/20 vertes** ; à 500, N = 1, 3, 7, 8675, **4/4
+vertes**. Avant la restriction de la règle, à 500, la graine 7 tombait sur l'exemption d'I5 dite plus haut, et la
+graine 42 sur L1 (« the block on …/rg-app1/…/web vanished from Azure; the reassertion neither put it back nor said
+so ») dans une séquence de quatorze étapes sans aucune promotion ni la règle d'I4P — un défaut hors du lot, comme
+celui de la graine 29 laissé à L1G (#461) ; non rejoué depuis, la base d'exemples restée vide. Mutants
+M3350–M3359 : 10/10 par leurs tests à chaque tour (deux tours, M3350, M3352, M3354 et M3359 mesurés de nouveau
+après la relecture) ; M1635, M3270–M3275 : 7/7 (deux tours) ; les quarante voisins sur `blocks.py`, `perimeter.py`
+et `turned.py` (RB1, I3P, I4A–I4D, I5Q, I5R, U7D, SEC2) : 40/40, un tour. `pytest` complet : 6 073 réussis, 7 sautés, 2 `xfail` (de L1Qs) ; `ruff`
+propre ; `scripts/mutant_anchors.py` : 2 396 mutants, sans faute.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

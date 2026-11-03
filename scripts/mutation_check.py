@@ -9320,7 +9320,9 @@ _I4P_SEQ_NIC = ("tests/unit/test_invariant_regressions.py::"
                 "test_the_promotion_never_cuts_off_a_vm_given_the_nics_nsg_on_another_subnet")
 _I4P_ASK = ("            held = [w for n in names if (w := _held_by_turned(self._network, guard, nsg_rg, nsg_name, n, "
             "nic, mates))]\n")
-_I4P_DEL = "            held = held or [e for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n))]\n"
+_I4P_DEL = ("            held = held or next(([e] for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n))), "
+            "[])\n")
+_I4P_BACK = '    back = (name.lower().startswith("glorfindel-block-") and not total)\n'
 MUTANTS += [
     ("M3350", "the promotion never asks the guard: a turned rule that lets the attacker reach a VM off the perimeter "
               "taken off, that VM cut off (I4P)", PER, _I4P_ASK, "            held = []\n"),
@@ -9333,7 +9335,8 @@ MUTANTS += [
     ("M3353", "what the promotion keeps never said (I4P)", BLK, "        if guarded:\n", "        if guarded and False:\n"),
     ("M3354", "a delete the promotion couldn't make swallowed: the rule left on Azure, its placement off the state "
               "(I4P)", PER, _I4P_DEL,
-     "            held = held or [e for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n)) and False]\n"),
+     "            held = held or next(([e] for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n)) and False), "
+     "[])\n"),
     ("M3355", "a legacy single-rule entry promoted without the guard (I4P)", PER,
      "            if drops(old_rg, old_name, prev[\"rule\"], nic_id, [nic_id]):\n",
      "            if [self._delete_rule(old_rg, old_name, n) for n in (prev[\"rule\"], f'{prev[\"rule\"]}-out')]:\n"),
@@ -9344,6 +9347,9 @@ MUTANTS += [
                                        'startswith(("glorfindel-block-", "glorfindel-iso-"))')),
     ("M3358", "the promotion keeps every pair, nothing turned: the VM rules the perimeter supersedes left (I4P)", PER,
      "            return not held\n", "            return False\n"),
+    ("M3359", "an orphan deny kept for an isolation's turned rule behind it says to put that rule back as a deny: "
+              "every flow of the VM at that address cut (I4P's review, I5Q)", TRN, _I4P_BACK,
+     "    back = not total\n"),
 ]
 TESTS.update({
     "M3350": f"{_I4P_SEQ_IN} {_I4P_SEQ_OUT} {_I4P_SEQ_NIC} {_I4P_UNIT}",
@@ -9355,6 +9361,7 @@ TESTS.update({
     "M3356": _I4P_SEQ_OUT,
     "M3357": _I4G_UNIT,
     "M3358": _I4P_UNIT,
+    "M3359": _I4G_UNIT,
 })
 
 # L1Qs (#424): a mode per VM and a perimeter on the data subnet in the machine; I3G's seed 9 — a NIC

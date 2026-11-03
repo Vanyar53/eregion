@@ -88,8 +88,10 @@ class PerimeterMixin:
         VM of another subnet, off the perimeter), taken off, cut that VM off where no
         perimeter reaches. One kept, the pair stays whole, on Azure and in the state
         (`kept`), for the unblock, which asks again — half taken off, the next pass read our
-        own delete as a disappearance; a delete that fails keeps it too (before, swallowed:
-        the rule left on Azure, unknown to the state). `guarded`: what stays, said
+        own delete as a disappearance. A delete that fails stops the pair's: the first refused,
+        the second is not tried, the pair stays whole; the second refused, the first is gone —
+        either way the placement stays in the state and the unblock reads it again (before,
+        swallowed: the rule left on Azure, unknown to the state). `guarded`: what stays, said
         (« …/rule gardée : … », or the delete's error). A NIC off the perimeter (`off_ids`),
         or unknown (None): kept as before. A legacy single-rule entry: the primary NIC's."""
         dropped: list[str] = []
@@ -101,7 +103,7 @@ class PerimeterMixin:
         def drops(nsg_rg: str, nsg_name: str, rule: str, nic: str, mates) -> bool:
             names = (rule, f"{rule}-out")
             held = [w for n in names if (w := _held_by_turned(self._network, guard, nsg_rg, nsg_name, n, nic, mates))]
-            held = held or [e for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n))]
+            held = held or next(([e] for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n))), [])
             guarded.extend(held)
             return not held
         for pl in (prev or {}).get("placements", []):

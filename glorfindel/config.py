@@ -235,15 +235,22 @@ class ActionBackendConfig:
     restore_staging_storage: str = ""
 
 
+def vm_name_matches(asset_name: str, pattern: str) -> bool:
+    """AUC (#447): a VM's name against a pattern of the config (fnmatch), case ignored —
+    Azure ignores it in a VM's name, and `fnmatch.fnmatch` keeps it on Linux: a VM the
+    config wrote `VM-PROD-DB`, its state `vm-prod-db`, was not the config's VM."""
+    return fnmatch.fnmatchcase(asset_name.lower(), pattern.lower())
+
+
 @dataclass
 class ExceptionConfig:
     """Opt-out rule: prevent a rule (or all rules) from being applied to an asset."""
-    asset_pattern: str           # fnmatch pattern matched against VM name
+    asset_pattern: str           # fnmatch pattern matched against VM name, case ignored (AUC)
     exclude_all: bool = False    # exclude from all rules
     exclude_rules: list[str] = field(default_factory=list)  # specific rule names
 
     def matches(self, asset_name: str) -> bool:
-        return fnmatch.fnmatch(asset_name, self.asset_pattern)
+        return vm_name_matches(asset_name, self.asset_pattern)
 
     def excludes_rule(self, rule_name: str) -> bool:
         return self.exclude_all or rule_name in self.exclude_rules
@@ -254,16 +261,23 @@ class ExceptionConfig:
 # the value for now. Order of precedence: asset match > global default.
 VALID_AUTONOMY_MODES = {"human_only", "non_disruptive"}
 DEFERRED_AUTONOMY_MODES = {"full_auto"}
+# AUC (#447): from the most prudent mode to the most permissive — two entries that name a VM
+# alike (`VM-A` and `vm-a`, or two patterns as long) and disagree give the most prudent.
+_MODE_PRUDENCE = {"human_only": 0, "non_disruptive": 1, "full_auto": 2}
+
+
+def _most_prudent(rules: list[AutonomyRule]) -> str:
+    return min(rules, key=lambda r: _MODE_PRUDENCE.get(r.mode, len(_MODE_PRUDENCE))).mode
 
 
 @dataclass
 class AutonomyRule:
-    """An asset-scoped autonomy mode override (fnmatch, like ExceptionConfig)."""
-    match: str                   # fnmatch pattern matched against VM name
+    """An asset-scoped autonomy mode override (fnmatch, like ExceptionConfig; case ignored)."""
+    match: str                   # fnmatch pattern matched against VM name, case ignored (AUC)
     mode: str
 
     def matches(self, asset_name: str) -> bool:
-        return fnmatch.fnmatch(asset_name, self.match)
+        return vm_name_matches(asset_name, self.match)
 
 
 @dataclass
@@ -290,13 +304,20 @@ class AutonomyConfig:
         longest pattern wins (proxy for specificity) — so a broad "vm-*" never
         shadows a targeted "vm-prod-db". Unknown assets fall back to the global
         default — never an accidental inheritance toward a more permissive mode.
+
+        AUC (#447): names and patterns compared case ignored, as Azure compares a VM's
+        name — a `human_only` entry written `VM-PROD-DB` holds `vm-prod-db` under a
+        `non_disruptive` default. Entries tied (exact alike, or wildcards as long) that
+        disagree give the most prudent mode, never the first listed.
         """
-        exact = next((r for r in self.assets if r.match == asset_name), None)
-        if exact is not None:
-            return exact.mode
+        name = asset_name.lower()
+        exact = [r for r in self.assets if r.match.lower() == name]
+        if exact:
+            return _most_prudent(exact)
         matches = [r for r in self.assets if r.matches(asset_name)]
         if matches:
-            return max(matches, key=lambda r: len(r.match)).mode
+            longest = max(len(r.match) for r in matches)
+            return _most_prudent([r for r in matches if len(r.match) == longest])
         return self.default
 
 
@@ -416,7 +437,7 @@ class ExpectedAdmins:
     origins: list[str] = field(default_factory=list)
 
     def matches(self, asset_name: str) -> bool:
-        return fnmatch.fnmatchcase(asset_name.lower(), self.match.lower())
+        return vm_name_matches(asset_name, self.match)
 
 
 @dataclass
@@ -916,6 +937,8 @@ def set_asset_mode(asset_name: str, mode: str, path: str | Path | None = None) -
     Backend for the War Room mode selector / change-mode endpoint. Validates the
     mode (refuses full_auto / unknown), upserts an exact-match `autonomy.assets`
     entry for asset_name, and writes the file back. Returns the resolved path.
+    Every entry that names it exactly, case ignored (AUC: `VM-A` for `vm-a`), takes
+    the mode, its spelling kept — one left behind would hold the VM in its own.
 
     NOTE: this rewrites the YAML via safe_dump — inline comments are not preserved.
     Intended for UI-driven edits; hand-edited configs keep their comments as long
@@ -934,11 +957,10 @@ def set_asset_mode(asset_name: str, mode: str, path: str | Path | None = None) -
         autonomy = data.setdefault("autonomy", {})
         autonomy.setdefault("default", "human_only")
         assets = autonomy.setdefault("assets", [])
-        for entry in assets:
-            if entry.get("match") == asset_name:
-                entry["mode"] = mode
-                break
-        else:
+        named = [e for e in assets if str(e.get("match") or "").lower() == asset_name.lower()]
+        for entry in named:
+            entry["mode"] = mode
+        if not named:
             assets.append({"match": asset_name, "mode": mode})
 
     _update_config(cfg_path, mutate)

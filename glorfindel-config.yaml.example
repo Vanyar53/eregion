@@ -45,7 +45,7 @@ action_backends:
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
 # Opt-out specific assets from auto-discovered monitoring.
-# Uses fnmatch patterns (*, ?, [...] supported).
+# Uses fnmatch patterns (*, ?, [...] supported), case ignored as Azure ignores it.
 
 exceptions: []
 
@@ -70,6 +70,9 @@ exceptions: []
 #
 # Resolution order: matching asset rule > global default. Unknown assets fall
 # back to the global default (never accidental escalation to a more permissive mode).
+# A VM's name is matched case ignored (VM-PROD-DB names vm-prod-db): the exact
+# entry first, then the longest pattern; tied entries that disagree give the most
+# prudent mode.
 # Start in human_only, observe what Glorfindel WOULD do on your real infra, then
 # promote assets to non_disruptive once you trust it.
 #

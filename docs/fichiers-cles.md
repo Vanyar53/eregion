@@ -154,7 +154,9 @@ glorfindel/
                           cold-start). Source UNIQUE du tool+prompt d'autoring (agent.py importe).
                           Deux appelants : propose_detection_rule (réactif) + `propose-rules` (proactif).
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used) ; SEC4a : identifiant tiré par la mémoire
-                          (jamais remplacé), tout signal ne reçoit que des cycles réels, un par (signal_id, action, run_id)
+                          (jamais remplacé), tout signal ne reçoit que des cycles réels, un par (signal_id, action, run_id) ;
+                          SEC17 : un cycle daté par l'hôte (stored_at), la recherche bornée à memory.max_age_days (90 j),
+                          ce qu'elle écarte compté (age_census, `glorfindel report`), rien d'effacé
   incidents.py          → IncidentRegistry (TTL, persist ; threads et processus : flock, réécrit entier — SEC13)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
                           audit (--all), approve-rule, reject-rule, propose-rules, rules, migrate-rules, check-ttl, jobs,
@@ -365,7 +367,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 émettait attack_adapted, est retiré) — leur conteneur monte ce dossier comme son
                                 ~/.glorfindel. La watch le crée au démarrage. 0644 (dossier 0755) : à lire par eux, rien
                                 de secret. Retiré à l'arrêt
-  watch_heartbeat             → le battement de la watch (V1 sur cet hôte, la console, le CD de H0)
+  watch_heartbeat             → le battement de la watch (V1 sur cet hôte, la console, le CD de H0) ; écrit d'un coup
+                                (un fichier à côté, renommé par-dessus), 0644 : jamais vide ni coupé (SEC17)
   exercise_seen.json          → SEC14 (V-20) : quand la watch a vu pour la première fois chaque fenêtre d'exercice écrite
                                 sur cet hôte (sans canal), et sa fermeture : une fenêtre antidatée ou réécrite n'est pas
                                 crue (eregion_core/exercise.py, ``observe``). Le tirage du canal y note chaque fenêtre

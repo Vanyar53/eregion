@@ -46,7 +46,9 @@ make components-check [COMPONENT=annatar]    # chaque composant tourne seul : se
 #   État local (docs/fichiers-cles.md) : isolation/, blocks/, escalations.jsonl, channel_refusals.json et
 #     recovery_signals/ en 0600 (dossiers 0700), écrits entiers ; isolation/ et blocks/ d'avant resserrés au
 #     démarrage de la watch (un fichier à root d'une ancienne image reste tel quel : make fix-state-ownership).
-#     Les autres fichiers de ~/.glorfindel restent au umask (suite notée).
+#     Les autres fichiers de ~/.glorfindel restent au umask (suite notée). Le battement de la watch
+#     (watch_heartbeat, et sa copie pour les injecteurs) s'écrit d'un coup, en 0644 (SEC17) : un lecteur
+#     ne le trouve jamais vide ni coupé.
 
 # Glorfindel hébergé (H0) — infra/glorfindel-host/README.md
 make glorfindel-host-tunnel                  # tunnel + « Console → http://localhost:7007/?token=… » ; le jeton de host.env :
@@ -1044,6 +1046,13 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   valeur, ou une source sans aucune entrée qui déclare `origins`, refuse le fichier. Trace absente,
   source illisible ou coupée : une carte. **Clé nouvelle** : une version sans COR2 refuse la config qui
   la porte. Mesurer avant de déclarer : « Déclarer la source qui confirme l'origine sur H0 (COR2) ».
+- **`memory.max_age_days`** (SEC17, V-12 ; `docs/glorfindel.md`, « Source d'un cycle ») : l'âge au-delà
+  duquel un cycle passé n'est plus un précédent — écarté de la recherche, jamais effacé. 90 jours par
+  défaut. Lue strictement : un nombre de jours sans guillemets ni unité, fini, positif, au plus
+  3650 ; un texte (`"30"`, `30d`), un booléen, `0`, `.inf`, `.nan` ou plus de dix ans refusent le
+  fichier, comme une clé inconnue sous `memory`. `glorfindel report` dit combien de cycles réels
+  la borne écarte (plus vieux, ou rangés avant SEC17 : sans date). **Clé nouvelle** : une version
+  sans SEC17 refuse la config qui la porte.
 
 ### Poser la liste des administrateurs sur H0 (ADM1)
 

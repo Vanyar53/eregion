@@ -470,7 +470,13 @@ ses blobs ensemble — chaque tirage (fenêtres, campagnes, rapports de run, mot
 au-delà, il s'arrête là, le dit, et le reste attend le tirage suivant (une campagne dont la liste est
 coupée n'est pas écrite). Le jeton de stockage ne part que vers `https://<compte>.blob.core.windows.net` (ou
 `.blob.core.chinacloudapi.cn`, `.blob.core.usgovcloudapi.net`), port 443, sans utilisateur dans
-l'URL : toute autre URL est refusée avant qu'un jeton soit demandé. Une rétention sur le compte
+l'URL : toute autre URL est refusée avant qu'un jeton soit demandé. Et vers le seul compte déclaré
+(SEC17) : les URL des deux canaux (`EREGION_EXERCISE_CHANNEL`, `EREGION_WATCH_CHANNEL`) et, sur
+Orodruin, les portées de leurs conteneurs que lit le contrat (`EREGION_CHANNEL_SCOPE`,
+`EREGION_WATCH_CHANNEL_SCOPE`) — toutes des sorties Terraform de ce module — nomment un même
+compte ; une URL d'un autre compte, ou des déclarations qui ne s'accordent pas, sont refusées et
+dites, aucun jeton envoyé. Sans aucune déclaration dans l'environnement, l'URL reste la parole de
+l'opérateur (le modèle de menace, §5). Une rétention sur le compte
 (`azurerm_storage_management_policy`, gratuite) tient la liste sous ces bornes : la liste est
 alphabétique et les run_id sont des horodatages, si bien qu'au-delà de 2 000 noms ce sont les
 fenêtres les plus récentes qui ne seraient plus tirées. Les blobs de bloc (fenêtres, campagnes,

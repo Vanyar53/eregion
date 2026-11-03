@@ -142,3 +142,11 @@ expected_sudo:
     #   origins: [198.51.100.0/26]   # the AzureBastionSubnet, the VPN's exit
   sensitive_commands: []
     # - "/usr/local/bin/backup-restore"
+
+# ── The memory of past cycles (SEC17, V-12) ─────────────────────────────────
+# A past cycle stored more than max_age_days ago is no precedent: left out of the
+# search, never erased (`glorfindel report` says how many). A finite number of days,
+# positive, at most 3650 — 90 by default.
+
+memory:
+  max_age_days: 90

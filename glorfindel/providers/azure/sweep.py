@@ -4,6 +4,7 @@ The NSG listing the watch's pass shares, and one quarantine NSG read by its id (
 """
 from __future__ import annotations
 
+from glorfindel.providers.azure.narrow import _freed, _narrow_rule, _narrowed
 from glorfindel.providers.azure.nsg import _nic_hash, _nic_owns, _rule_name
 from glorfindel.providers.azure.turned import (
     _aims_elsewhere, _chain, _governed_by, _held_by_turned, _turned_allows, _turned_behind, _turned_still,
@@ -331,14 +332,21 @@ class SweepMixin:
                 cut = [h for h in now_on if nic_nsg.get(h["nic_id"].rstrip("/").lower()) == nsg_key
                        or nic_subnets.get(h["nic_id"].rstrip("/").lower(), set()) & subnets]
                 _governed_by(cut, nic_nsg, nic_subnets, listing)
-                kept, t = "", None
+                kept, t, narrow = "", None, None
+                # U1G: a VM Glorfindel holds keeps the rule for its own addresses only; the
+                # live VMs it cuts at another address, held for nothing, are freed — the rule
+                # narrowed to the others (narrow.py), or kept whole when it can't be.
+                why_held = self._held_reason(cut, held)
+                free = [h for h in cut if not self._held_reason([h], held)] if why_held else cut
+                if why_held and free:
+                    narrow = _narrowed(r, side, free)
                 if not cut:
                     kept = "ne coupe aucune carte vivante derrière ce NSG"
                 elif unread:
                     kept = unread
-                elif why := self._held_reason(cut, held):
-                    kept = why
-                elif t := _turned_behind(cut, side, turned, _chain(nic_nsg, nic_subnets)):
+                elif why_held and narrow is None:
+                    kept = why_held
+                elif t := _turned_behind(free, side, turned, _chain(nic_nsg, nic_subnets)):
                     kept = _turned_text(t)
                 elif attached - listed:
                     kept = "une carte attachée à ce NSG manque à la liste des cartes (droits de lecture ?)"
@@ -348,7 +356,8 @@ class SweepMixin:
                     kept = "NSG d'un autre abonnement"
                 orphans.append({"nsg_id": nsg.id, "rule": _rule_name(r), "ips": ips, "now_on": now_on,
                                 "cut": cut, "removable": not kept, "kept": kept, "side": side,
-                                "turned": {"nsg_id": t[0], "rule": t[1]} if t else None})
+                                "turned": {"nsg_id": t[0], "rule": t[1]} if t else None,
+                                **({"narrow": narrow, "held": why_held} if narrow and not kept else {})})
         return orphans
 
     @staticmethod
@@ -428,10 +437,17 @@ class SweepMixin:
             if why is not None:
                 return {"removed": False, "why": ("une isolation ou un blocage enregistré depuis nomme sa carte"
                                                   if why == "alive" else why)}
-        why = self._held_reason(orphan.get("cut") or [], self._held_vms()) or _turned_still(self._network, orphan)
+        # Narrowed (U1G): only the NICs it frees are asked about — the held VM keeps its part.
+        narrow = orphan.get("narrow")
+        free = _freed(orphan.get("cut") or [], narrow)
+        why = self._held_reason(free, self._held_vms()) or _turned_still(self._network, {**orphan, "cut": free})
         if why:
             return {"removed": False, "why": why}       # I5Q: a rule turned since the listing too
         from glorfindel.response.ids import _parse_nsg_resource_id
         nsg_rg, nsg_name = _parse_nsg_resource_id(orphan["nsg_id"])
+        if narrow:
+            err = _narrow_rule(self._network, nsg_rg, nsg_name, orphan["rule"], orphan.get("side") or "destination",
+                               orphan.get("ips"), narrow)
+            return {"removed": False, "narrowed": err is None, "why": err or ""}
         err = self._delete_rule(nsg_rg, nsg_name, orphan["rule"])
         return {"removed": err is None, "why": err or ""}

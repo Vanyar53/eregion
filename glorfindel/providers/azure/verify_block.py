@@ -3,8 +3,10 @@ and the perimeter too (split out of unblock.py, I4B: moved without change).
 """
 from __future__ import annotations
 
+import hashlib
+
 from glorfindel.providers.azure.nsg import (_deny_blocks, _deny_slot, _describe_shadowing, _rule_name,
-                                            _shadowing_rules)
+                                            _rule_signature, _shadowing_rules)
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 from glorfindel.response.state import _load_block_entries
@@ -177,6 +179,7 @@ class VerifyBlockMixin:
                 # ever written while a rule of the VM was missing (L1).
                 return {"verified": False, "method": "nsg_check", "missing_rules": missing,
                         "open_nics": open_nics, **said, **({"shadowed_by": bypass} if bypass else {}),
+                        **self._rules_seen(cache, entry),
                         "error": f"rules missing: {', '.join(missing)}"
                                  + (f" ; contourné : {_describe_shadowing(bypass)}" if bypass else "")}
             if bypass:
@@ -187,7 +190,7 @@ class VerifyBlockMixin:
                 # Where each NIC stands goes with it too (I3P, #366): dropped, a card naming no
                 # NIC said the IP no longer blocked where a perimeter still cut it off.
                 return {**self._block_bypassed(ip, bypass), **({"held_missing": held_missing} if held_missing else {}),
-                        "open_nics": open_nics, **said}
+                        "open_nics": open_nics, **said, **self._rules_seen(cache, entry)}
             if unread:
                 return {"verified": None, "method": "nsg_check", "unreadable_rules": unread,
                         "error": "blocage non vérifiable : règles illisibles (" + ", ".join(unread) + ")"}
@@ -199,7 +202,8 @@ class VerifyBlockMixin:
             # Threat port blocked; other ports the attacker still reaches are reported.
             return {"verified": True, "method": "nsg_check", "nics_covered": len(groups),
                     **({"exposure": exposure} if exposure else {}),
-                    **({"held_missing": held_missing} if held_missing else {}), **said}
+                    **({"held_missing": held_missing} if held_missing else {}), **said,
+                    **self._rules_seen(cache, entry)}
 
         # Perimeter (subnet) block, or legacy single-rule entry: check the recorded pair.
         if entry and entry.get("nsg") and entry.get("rule"):
@@ -251,7 +255,7 @@ class VerifyBlockMixin:
             half = self._half_bypassed(pair_cache, {"nsg_rg": nsg_rg, "nsg_name": nsg_name, "rule": entry["rule"]},
                                        ip, None, entry.get("threat_port"))
             return {"verified": False, "method": "nsg_check", "missing_rules": missing,
-                    **({"shadowed_by": half} if half else {}),
+                    **({"shadowed_by": half} if half else {}), **self._rules_seen(pair_cache, entry),
                     "error": f"rules missing: {', '.join(missing)}"
                              + (f" ; contourné : {_describe_shadowing(half)}" if half else "")}
 
@@ -328,6 +332,29 @@ class VerifyBlockMixin:
         """An allow before the deny lets the threat itself through (not just another
         port). Entries without the flag (no known threat port) count as open."""
         return any(x.get("threat_port_open", True) for x in shadowed)
+
+    @staticmethod
+    def _rules_seen(cache: dict, entry: dict) -> dict:
+        """`rules_seen`: each rule the entry names, as this check read it — what it does (its
+        signature), None when absent — from the listings already made, no read more; an NSG not
+        listed, or unreadable, leaves its rules out. A drift card the operator acknowledged holds
+        only while they stay so (L1G, #461): a rule said gone that came back (another VM's
+        perimeter wrote the pair), or one aimed at the old address since deleted, read « no
+        worse » by the names alone — the change went unsaid."""
+        named = [(p.get("nsg_rg"), p.get("nsg_name"), p.get("rule")) for p in entry.get("placements") or []]
+        if entry.get("nsg") and entry.get("rule") and "/" in entry["nsg"]:
+            named.append((*entry["nsg"].split("/", 1), entry["rule"]))
+        seen: dict = {}
+        for rg, nsg, rule in named:
+            rules = cache.get((rg, nsg)) if rg and nsg and rule else None
+            if rules is None:
+                continue
+            by_name = {_rule_name(r).lower(): r for r in rules}
+            for n in (rule, f"{rule}-out"):
+                r = by_name.get(n.lower())
+                seen[f"{rg}/{nsg}/{n}".lower()] = None if r is None else hashlib.sha1(
+                    repr(_rule_signature(r)).encode()).hexdigest()[:12]
+        return {"rules_seen": seen} if seen else {}
 
     @staticmethod
     def _block_bypassed(ip: str, shadowed: list[dict]) -> dict:

@@ -27,7 +27,7 @@ from glorfindel.reassert_cards import (
 )
 from glorfindel.reassert_perimeters import put_back_perimeters
 from glorfindel.reassert_quarantine import _report_altered_quarantines
-from glorfindel.reassert_said import _block_drift, _situation, _worse
+from glorfindel.reassert_said import _block_drift, _situation, _worse, still_said
 
 log = logging.getLogger(__name__)
 
@@ -372,7 +372,7 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         if verification.get("verified") is False and b.get("drift_alerted_at"):
             drift_over(ref or vm, ip)            # its rules back, an allow passes them (L2C, review)
         return
-    if b.get("drift_alerted_at") and not worse and drift_said(ref or vm, ip, _alert_id(vm, rid, ip)):
+    if still_said(b, ref or vm, ip, _alert_id(vm, rid, ip), baseline, now_is):
         # One alert per disappearance (see isolations) — but said again when it worsens: a
         # NIC held turned open or unknown, a rule more gone. Acknowledged, a card « reste
         # bloquée » silenced the perimeter's deletion that opened the VM (RB1, 4th review).

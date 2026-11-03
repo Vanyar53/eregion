@@ -2600,3 +2600,115 @@ def test_a_check_that_raised_is_over_once_the_first_time_reads_and_writes():
     c.block_suspicious_ip.return_value = {"status": "blocked"}
     reassert_active(c, _ACT)
     assert not [e for e in escalations.pending() if e.get("action") == "review_unverified"]
+
+
+# ── L1G (#461): an acknowledged drift holds while none of its rules is written again or more gone ──
+
+_PAIR_SEEN = {"rg/nsg-subnet/pair": None, "rg/nsg-subnet/pair-out": None}
+_VM_SEEN = {"rg/nsg/r": None, "rg/nsg/r-out": None}
+_GONE_BOTH = {"verified": False, "missing_rules": ["pair", "pair-out", "r", "r-out"], "open_nics": ["nic"],
+              "rules_seen": {**_PAIR_SEEN, **_VM_SEEN}}
+_PAIR_BACK = {"verified": True, "held_missing": ["r", "r-out"], "held_by_perimeter": ["nic"], "perimeter_rule": "pair",
+              "rules_seen": {"rg/nsg-subnet/pair": "a1", "rg/nsg-subnet/pair-out": "a2", **_VM_SEEN}}
+
+
+def _block_cards():
+    return [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+
+
+def _said_then(first: dict, then: dict, acknowledged: bool, mode: str = "human_only", merged: bool = True):
+    """A block (merged with its perimeter, or the VM's alone) read `first` — said, in human_only —,
+    the card acknowledged or left pending, then read `then` in `mode`: the cards pending after."""
+    if merged:
+        _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                          threat_port=22)
+    _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    c = _connector(verify_blk=first)
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    (card,) = _block_cards()
+    if acknowledged:
+        escalations.resolve(card["id"])
+    c.verify_block_ip.return_value = then
+    reassert_active(c, AutonomyConfig(default=mode))
+    return c, card, _block_cards()
+
+
+@pytest.mark.parametrize("acknowledged", [True, False], ids=["acknowledged", "pending"])
+def test_a_pair_written_again_after_an_acknowledged_card_ends_its_episode(acknowledged):
+    """Seed 29's cause (L1G): a merged entry's pair and its VM's rules gone — said, acknowledged; then
+    the pair written again under our name (another VM's perimeter block: one pair per IP and subnet),
+    the VM's rules still gone. « Better than the card, not worse »: nothing was said, and the operator
+    never heard that what they had acknowledged was over. Said anew now; under a pending card, what
+    came back narrows its baseline, nothing more (L1Q)."""
+    c, card, after = _said_then(_GONE_BOTH, _PAIR_BACK, acknowledged)
+    if acknowledged:
+        (new,) = after
+        assert new["id"] != card["id"] and "reste bloquée" in new["reason"], new["reason"]
+    else:
+        assert [e["id"] for e in after] == [card["id"]]
+    c.block_suspicious_ip.assert_not_called()                  # human_only: said, never written
+
+
+def test_a_pair_written_again_after_an_acknowledged_card_is_put_back_outside_human_only():
+    """The same, outside human_only and never put back before: a new episode — the VM's rules put back
+    once, as for any disappearance not said yet."""
+    c, _, after = _said_then(_GONE_BOTH, _PAIR_BACK, True, mode="non_disruptive")
+    assert c.block_suspicious_ip.called
+    assert [e for e in after if "reposé une fois" in e["reason"]], [e["reason"] for e in after]
+
+
+@pytest.mark.parametrize("acknowledged", [True, False], ids=["acknowledged", "pending"])
+def test_a_rule_read_there_then_deleted_is_a_rule_more_gone(acknowledged):
+    """The L1 of L1Qs' `xfail` (L1G): the VM's rules still on Azure, aimed at its old address — named
+    « gone » by the check —, said; then deleted. Gone by name both times: « no worse », in silence. A
+    rule the card's check read there, now absent, is worse: said again, the card pending or not."""
+    first = {"verified": False, "missing_rules": ["r", "r-out"], "open_nics": ["nic"],
+             "rules_seen": {"rg/nsg/r": "old-address", "rg/nsg/r-out": "old-address-out"}}
+    then = {"verified": False, "missing_rules": ["r", "r-out"], "open_nics": ["nic"], "rules_seen": dict(_VM_SEEN)}
+    _, card, after = _said_then(first, then, acknowledged, merged=False)
+    (new,) = after
+    assert new["id"] != card["id"], "the rules deleted after their card went unsaid"
+
+
+@pytest.mark.parametrize("then_seen", [{"rg/nsg/r": "set-right", "rg/nsg/r-out": None}, None],
+                         ids=["set right by hand", "a provider that doesn't say"])
+def test_an_acknowledged_drift_set_right_by_hand_says_nothing(then_seen):
+    """A rule turned by someone, said, acknowledged; set right by hand — on Azure all along, never
+    deleted nor written again: better, nothing said (RB1). A check without `rules_seen` (another
+    provider, an older one): as before, by the names."""
+    first = {"verified": False, "missing_rules": ["r", "r-out"], "open_nics": ["nic"],
+             **({"rules_seen": {"rg/nsg/r": "turned", "rg/nsg/r-out": None}} if then_seen else {})}
+    then = {"verified": False, "missing_rules": ["r-out"], "open_nics": ["nic"],
+            **({"rules_seen": then_seen} if then_seen else {})}
+    _, _, after = _said_then(first, then, True, merged=False)
+    assert not after, [e["reason"] for e in after]
+
+
+def test_a_rule_the_cards_check_never_read_is_never_read_back():
+    """Only the rules both checks read count (L1G): an NSG the card's check never listed, listed
+    since, holds rules that were never said gone — nothing written again, nothing said."""
+    first = {"verified": False, "missing_rules": ["r", "r-out"], "open_nics": ["nic"], "rules_seen": dict(_VM_SEEN)}
+    then = {**first, "rules_seen": {**_VM_SEEN, "rg/nsg-other/r": "there", "rg/nsg-other/r-out": "there"}}
+    _, _, after = _said_then(first, then, True, merged=False)
+    assert not after, [e["reason"] for e in after]
+
+
+def test_the_first_time_decides_on_an_acknowledged_episode_as_the_second():
+    """The first time decides as the second (L1Qs, `_to_write`): a merged entry's acknowledged drift
+    whose pair was written again is over — what is gone is written, never left to a card that no
+    longer stands; read the same as its card, said, nothing written."""
+    from glorfindel.reassert_cards import new_pass
+    from glorfindel.reassert_perimeters import _to_write
+    from glorfindel.reassert_said import _situation
+
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                      threat_port=22)
+    reassert_active(_connector(verify_blk=_GONE_BOTH), AutonomyConfig(default="human_only"))
+    (card,) = _block_cards()
+    escalations.resolve(card["id"])
+    new_pass()                                                  # the next pass reads the cards again
+    b = _load_block_entries(_RID)[0]
+    assert b["drift_said"] == _situation(_GONE_BOTH)
+    assert _to_write(b, _PAIR_BACK, _ACT, "vm", _RID, _IP, _RID)
+    assert not _to_write(b, _GONE_BOTH, _ACT, "vm", _RID, _IP, _RID)

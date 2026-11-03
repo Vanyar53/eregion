@@ -190,4 +190,15 @@ class WrongSubscriptionError(RuntimeError):
     """The target lives in another subscription than the one Glorfindel acts in."""
 
 
+# What a block's check says for the reassertion alone (L1G, #461): each rule of the entry as it read
+# it. Never in a cycle's outcome — the cycles stored feed what the model sees (`past_cycles`) — nor
+# in a manual action's record.
+_REASSERTION_ONLY = ("rules_seen",)
+
+
+def as_recorded(verification: dict) -> dict:
+    """A check as the cycle and the journal keep it: without what only the reassertion reads."""
+    return {k: v for k, v in verification.items() if k not in _REASSERTION_ONLY}
+
+
 _console = Console()

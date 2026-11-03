@@ -6055,3 +6055,29 @@ def test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off(mo
          ("turned_then_address_reused", WEB1, WEB1, None, None, "both", 22,
           (_TIER, "glorfindel-block-192-31-196-7-api-api-nic-4-b-4b1857"), "human_only", False, 22, False,
           "rg-app1", "web", True, "non_disruptive"))
+
+
+@pytest.mark.xfail(strict=True, reason="L1, an older defect: the unmutated run of L1Qs' mutation harness, red on `main`, "
+                                       "out of this lot (#424)")
+def test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone(monkeypatch):
+    """Found by the mutation harness's unmutated run while measuring L1Qs (a random seed at 60, 24
+    rules, shrunk by hand to eight of `main`, none of L1Qs'): a new VM given Db--01's old address under
+    a turned rule; it blocked, one of its rules turned, the pass outside human_only; a card acknowledged; the role removed
+    (writes refused); its address changed; a quarantine change that comes back; the operator
+    acknowledges a card; web's block taken up by its lowercase id. « L1: the block on …/rg-new/…/web
+    vanished from Azure; the reassertion neither put it back nor said so ». Red on `main` 7ac1f37 as on
+    this branch: frozen, routed."""
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    net = {'subnet_nsg': [r('allow-https', 110), r('allow-lateral-out', 100), r('deny-lateral-in', 130)], 'edge_nsg': [r('allow-ssh', 150), r('allow-lateral-out', 1200)], 'tier_rules': [r('allow-https', 100)], 'nics': {'web-nic': {'own': 'tier', 'rules': [r('allow-ssh', 150), r('allow-https', 110), r('deny-lateral-in', 130)], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': True}, 'db-nic-1': {'own': 'tier', 'rules': [r('allow-ssh', 101), r('allow-https', 1100), r('allow-lateral-out', 120)], 'policy': False}, 'api-nic': {'own': 'dedicated', 'rules': [r('allow-ssh', 1000), r('allow-lateral-out', 100)], 'policy': True}}, 'windows': None, 'config': {'quarantine': True, 'rg': 'rg-sec', 'readable': True, 'forensic': []}, 'legacy': None, 'data_subnet': None, 'data_primary': False}
+    _run(monkeypatch, net,
+         ("address_reused_under_a_turned_rule", '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.compute/virtualmachines/db--01', None, None, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228'), '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-1', 0, 20, 'rg-new', 'web', None, 'Linux'),
+         ("block_turned_then_reasserted", '/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-new/providers/microsoft.compute/virtualmachines/web', ('vm.get', 'always-429'), 'vm', None, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228'), 'non_disruptive'),
+         ("operator_acknowledges", 3),
+         ("access_changes", True),
+         ("customer_changes_ip", '/subscriptions/s/resourcegroups/rg-new/providers/microsoft.network/networkinterfaces/web-nic-4', 0, 4),
+         ("quarantine_change_comes_back", '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.compute/virtualmachines/web', None, True, True, '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'non_disruptive', 'role removed', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 2, 'non_disruptive', 'non_disruptive', 'human_only', (1, 'from-full'), True, 'human_only'),
+         ("operator_acknowledges", 4),
+         ("taken_up_by_its_lowercase_id", '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', 'block', 22, 'human_only'))

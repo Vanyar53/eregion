@@ -293,6 +293,10 @@ services:
   # verrou « un run à la fois ») ; il ne monte ni runs/glorfindel ni runs/console : il ne lit pas le
   # raisonnement de la watch. Sa détection passe par le canal retour, ou, sans lui, par runs/verdicts
   # en lecture seule : le verdict de son run, rien d'autre.
+  # SEC20 (#467) : le rouge n'écrit jamais ce que l'opérateur lance. Les scripts qu'il envoie à sa
+  # cible (scripts/vm, par Run Command) et ses scénarios, il les lit : en lecture seule — l'image
+  # les porte aussi, le montage sert une modification sans reconstruire. Ni ~/.annatar : rien de la
+  # CLI n'y écrit, et son .bashrc est ce que lance `make annatar-shell` (tests/unit/test_red_mounts.py).
   # Lancé à la demande, il ne reste pas : `docker compose --profile annatar run --rm annatar <commande>`.
   annatar:
     image: eregion-annatar
@@ -301,7 +305,7 @@ services:
     restart: "no"
     profiles: ["annatar"]
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
-    # n'écrit que dans ses montages (runs/annatar, runs/orodruin, ~/.annatar) et /tmp. Ni ~/.eregion/analysis ni
+    # n'écrit que dans ses montages (runs/annatar, runs/orodruin) et /tmp. Ni ~/.eregion/analysis ni
     # ~/.cache/chroma : le rapport de fin de campagne s'écrit sur H0, et l'index de l'IA
     # d'analyse ne s'ouvre jamais ici — chromadb n'est pas dans l'image des injecteurs
     # (requirements/annatar.txt) ; la watch tient cet index (son montage ~/.eregion/analysis).
@@ -319,10 +323,9 @@ services:
       - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar
       - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin
       - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro
-      - ./annatar/scenarios:/app/annatar/scenarios
-      - ./scripts:/app/scripts
+      - ./annatar/scenarios:/app/annatar/scenarios:ro
+      - ./scripts:/app/scripts:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
-      - ${HOME}/.annatar:/root/.annatar
       - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro
     depends_on:
       - watch

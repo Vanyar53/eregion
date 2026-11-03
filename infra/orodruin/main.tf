@@ -234,6 +234,9 @@ resource "azurerm_linux_virtual_machine" "host" {
   # l'image que la CI a publiée, vérifiée sur le poste (CI3), son archive bâtie des blobs du
   # registre (OI1) — GHCR n'est pas dans la sortie d'Orodruin : ses blobs viennent de pkg-containers.githubusercontent.com, un nom du domaine
   # du contenu des utilisateurs de GitHub, qu'un NSG ne sait pas filtrer par nom.
+  # Le mkdir de ~/.annatar ci-dessous est un reste : aucun docker run ne monte ~/.annatar sur
+  # Orodruin (SEC20, tests/unit/test_red_mounts.py) ; il reste, car changer custom_data
+  # remplacerait la VM.
   custom_data = base64encode(<<-EOF
     #!/bin/bash
     set -eu

@@ -290,7 +290,7 @@ WRITES = {   # SEC18: of runs/, each writer's own directory only (tests/unit/tes
     "war-room": {"/app/runs/console", "/root/.glorfindel", "/root/.cache/chroma", "/app/glorfindel-config.yaml",
                  "/root/.eregion/console"},
     "bot": {"/app/runs/console", "/root/.glorfindel", "/root/.cache/chroma"},
-    "annatar": {"/app/runs/annatar", "/app/runs/orodruin", "/root/.annatar"},
+    "annatar": {"/app/runs/annatar", "/app/runs/orodruin"},   # SEC20: not ~/.annatar, its .bashrc the shell runs
     "gothmog": {"/app/runs/gothmog", "/app/runs/orodruin"},
 }
 

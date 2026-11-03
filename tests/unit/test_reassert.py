@@ -2402,11 +2402,12 @@ def test_a_pair_put_back_by_the_first_time_whose_reread_fails_is_said_partial(mo
     assert "réécrites une fois" in card and "relecture impossible" in card and "reposé une" not in card, card
 
 
+@pytest.mark.parametrize("merged", [False, True], ids=["perimeter", "merged"])
 @pytest.mark.parametrize("listed", [("db", "web"), ("web", "db")])
-def test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_blocks(monkeypatch, listed):
+def test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_blocks(monkeypatch, listed, merged):
     """The first time leaves an entry it couldn't check (its read raised, a 429): the second puts
-    its pair back — before the VM blocks of its subnet, whatever the listing (L1Qr's order, kept
-    for that case)."""
+    its pair back — before the VM blocks of its subnet, whatever the listing, web's entry merged
+    with its own block or not (L1Qr's order, kept for that case)."""
     from glorfindel import actions as facade
     rid = {v: f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/{v}"
            for v in ("db", "web")}
@@ -2415,10 +2416,11 @@ def test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_blo
     _save_block_state("db", _IP, rid["db"], placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-db"}],
                       threat_port=22)
     _save_block_state("web", _IP, rid["web"], nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair",
-                      scoped=False, threat_port=22)
+                      scoped=False, threat_port=22,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-web"}] if merged else None)
     real = facade.active_blocks
     monkeypatch.setattr(facade, "active_blocks", lambda: sorted(real(), key=lambda b: listed.index(b["vm_name"])))
-    world = {"pair": False, "db": False, "web reads": 0}
+    world = {"pair": False, "db": False, "web": False, "web reads": 0}
 
     def verify(ip, r):
         if r.endswith("/web"):
@@ -2495,3 +2497,36 @@ def test_a_pair_the_first_time_failed_to_write_is_never_said_put_back():
     (card,) = [e["reason"] for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
     assert "le reposer a échoué" in card and "AuthorizationFailed" in card, card
     assert c.block_suspicious_ip.call_count == 1
+
+
+def test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said(monkeypatch):
+    """Found by the machine (L1Qs, seed 1 at 500 on the code before the two times; red on `main`):
+    a merged block's rules and pair gone, said in human_only, the card acknowledged; the VM's
+    rules put back — better than the card, the pair still gone —, in a pass whose first write is
+    refused (a full disk: the bypass mark taken off as the block holds); then the rules gone again.
+    The baseline was narrowed after that write, never reached: « not worse than the card », in
+    silence. Narrowed first, in memory, before any write of the pass: said."""
+    from glorfindel import actions as facade
+    from glorfindel.actions import _update_block_entry
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-vm"}], threat_port=22)
+    gone = {"verified": False, "missing_rules": ["r-vm", "r-vm-out", "pair", "pair-out"], "open_nics": ["nic-a"]}
+    held = {"verified": True, "held_missing": ["pair", "pair-out"], "blocked_nics": ["nic-a"]}
+    c = _connector(verify_blk=gone)
+    reassert_active(c, _HUMAN)
+    (card,) = [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+    escalations.resolve(card["id"])                              # the operator acknowledges it
+    _update_block_entry(_RID, _IP, bypass_said=f"reassert-bypass-block-vm-x-{_IP}-0")
+    c.verify_block_ip.side_effect = None
+    c.verify_block_ip.return_value = held
+    real = facade._atomic_write_text
+
+    def full(path, text):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(facade, "_atomic_write_text", full)
+    reassert_active(c, _HUMAN)                                    # better, its first write refused
+    monkeypatch.setattr(facade, "_atomic_write_text", real)
+    c.verify_block_ip.return_value = gone
+    reassert_active(c, _HUMAN)                                    # gone again
+    assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"], (
+        "the rules gone again after a better pass were never said")

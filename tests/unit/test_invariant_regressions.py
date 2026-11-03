@@ -5987,3 +5987,37 @@ def test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_
     _run(monkeypatch, _data_primary_net(),
          ("perimeters_on_two_subnets", DB, mate, 22, [DB, mate], DB, False, mate, False, taken, 1,
           *["non_disruptive"] * 4, "non_disruptive"))
+
+
+_API1 = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+
+
+def test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said(monkeypatch):
+    """Found by the machine (L1Qs, seed 1 at 500, before the two times; four rules of 30, shrunk by
+    hand): web blocked on its subnet and for itself, deleted, its address to a new VM `api`
+    (`turned_then_address_reused`); api blocked on its subnet and for itself, beside Db--01
+    (`blocked_again_after_an_acknowledged_drift`); the graph's card on it; its block's rules taken
+    off, said in human_only, the card acknowledged; its rules put back, the pair still gone, in a
+    pass whose first write is refused (a full disk) — the baseline was narrowed after that write,
+    never reached —; then gone again: « not worse than the card », unsaid (L1). Red on `main`."""
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    net = {"subnet_nsg": [r("allow-ssh", 100), r("allow-lateral-out", 100)], "edge_nsg": None,
+           "tier_rules": [r("allow-https", 100), r("deny-lateral-in", 130)],
+           "nics": {"web-nic": {"own": None, "rules": [r("allow-https", 100)], "policy": True},
+                    "db-nic-0": {"own": "dedicated", "rules": [r("allow-ssh", 100)], "policy": True},
+                    "db-nic-1": {"own": None, "rules": [r("allow-ssh", 100)], "policy": False},
+                    "api-nic": {"own": None, "rules": [r("allow-https", 100)], "policy": False}},
+           "windows": None, "config": {"quarantine": True, "rg": "", "forensic": [], "readable": True},
+           "legacy": None,
+           "data_subnet": [r("allow-ssh", 100), r("allow-lateral-out", 100), r("deny-lateral-in", 130)],
+           "data_primary": False}
+    _run(monkeypatch, net,
+         ("turned_then_address_reused", WEB1, WEB1, None, 22, "both", 22,
+          (key(_SUBNET), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"),
+          "non_disruptive", False, 22, True, "rg-app1", "api", None, "Linux", True, "human_only", "non_disruptive"),
+         ("blocked_again_after_an_acknowledged_drift", _API1, _API1, None, None, DB, False, _API1, 22, "human_only"),
+         ("graph_card_before_a_disappearance", _API1, _API1, ("nic.get", "always-429"), True, "non_disruptive"),
+         ("said_then_back_after_a_full_disk", "gone", _API1, _API1, None, False, 22, (1, "from-full")))

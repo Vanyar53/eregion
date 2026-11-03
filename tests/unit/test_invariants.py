@@ -1440,8 +1440,10 @@ class IsolationMachine(RuleBasedStateMachine):
                 # One mode per VM (L1Qs): a VM in human_only is not acted on — only what it
                 # shares with a VM the pass may write for closes for it: a perimeter put back
                 # on its subnet (the attacker's flows), a quarantine NSG put back on its NIC.
+                # What opens stays within its design (above): a writer's own rule taken off, that
+                # an address reused had put in its way, frees it (I4B).
                 shut = flows[vm] - after[vm]
-                assert after[vm] <= flows[vm] and all(
+                assert all(
                     f[0] in shared[vm]["quarantine"] or (f[3] == ATTACKER and f[0] in shared[vm]["perimeter"])
                     for f in shut), f"I5: the reassertion acted on {vm} in human_only ({sorted(shut)[:2]})"
             elif not had_state[vm]:

@@ -330,6 +330,14 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     except Exception as exc:                                   # said once (V-16)
         say_unverified(vm, rid, exc, report, ip=ip)
         return
+    said, now_is = verification, _situation(verification)
+    baseline = drift_baseline(ref or vm, ip, b.get("drift_said"))
+    worse = _worse(baseline, now_is)
+    if b.get("drift_alerted_at") and _missing(verification):
+        # Better than its card, here, before any write of the pass: what holds is the baseline — a
+        # write refused below (a full disk) left it as the card said, and the rules gone again read
+        # « not worse », in silence (L1Qs, the machine). Worse on one side: what got better (L1).
+        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)
     if verification.get("verified") is not None:
         unverified_over(vm, rid, ip)
     elif verification.get("method") != "dry_run":
@@ -363,22 +371,15 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         if verification.get("verified") is False and b.get("drift_alerted_at"):
             drift_over(ref or vm, ip)            # its rules back, an allow passes them (L2C, review)
         return
-    said, now_is = verification, _situation(verification)
-    baseline = drift_baseline(ref or vm, ip, b.get("drift_said"))
-    if (b.get("drift_alerted_at") and not _worse(baseline, now_is)
-            and drift_said(ref or vm, ip, _alert_id(vm, rid, ip))):
+    if b.get("drift_alerted_at") and not worse and drift_said(ref or vm, ip, _alert_id(vm, rid, ip)):
         # One alert per disappearance (see isolations) — but said again when it worsens: a
         # NIC held turned open or unknown, a rule more gone. Acknowledged, a card « reste
         # bloquée » silenced the perimeter's deletion that opened the VM (RB1, 4th review).
-        # Better since, pending or acknowledged: what still holds is the baseline — a rule back,
-        # gone again, is said (L1Q).
-        narrow_drift(ref or vm, ip, now_is)
+        # Better since, pending or acknowledged: what still holds is the baseline (above) — a
+        # rule back, gone again, is said (L1Q). Worse on one side, better on another: what got
+        # better is the baseline before the card is written — its write refused (a full disk),
+        # the next return to what was said still reads worse, and is said (L1, after SEC13).
         return
-    if b.get("drift_alerted_at"):
-        # Worse on one side, better on another: what got better is the baseline before the card
-        # is written — its write refused (a full disk), the next return to what was said still
-        # reads worse, and is said (L1, the nightly machine after SEC13).
-        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is))
     if b.get("reasserted_at") or _mode(autonomy, vm, ref) == "human_only":
         reason = (_block_drift(ip, vm, verification, again=bool(b.get("reasserted_at")))
                   + f" Glorfindel ne le repose pas : `glorfindel unblock {ip} {rid} --yes` si c'est voulu, "

@@ -6239,7 +6239,8 @@ MUTANTS += [
      '    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):\n',
      '    if iso.get("drift_alerted_at"):\n'),
     ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", R,
-     "            and drift_said(ref or vm, ip, _alert_id(vm, rid, ip))):\n", "            ):\n"),
+     '    if b.get("drift_alerted_at") and not worse and drift_said(ref or vm, ip, _alert_id(vm, rid, ip)):\n',
+     '    if b.get("drift_alerted_at") and not worse:\n'),
     ("M1944", "an isolation held again, its mark kept: the episode not known over (L2C, review)", R,
      '    if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
      '    if False:\n'),
@@ -6388,10 +6389,10 @@ MUTANTS += [
      "    _NARROWED.pop((key.lower(), ip), None)          # a new card, or over: its own record\n", ""),
     ("M2155", "a baseline narrowed only once its card is acknowledged: better while pending, acknowledged, "
               "then gone again — « not worse », unsaid for the episode (L1Q, second review)", R,
-     "        narrow_drift(ref or vm, ip, now_is)\n",
-     '        if not [e for e in __import__("glorfindel.escalations", fromlist=["pending"]).pending()\n'
-     '                if e.get("signal_id") == _alert_id(vm, rid, ip)]:\n'
-     "            narrow_drift(ref or vm, ip, now_is)\n"),
+     "        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)\n",
+     '        if worse or not [e for e in __import__("glorfindel.escalations", fromlist=["pending"]).pending()\n'
+     '                         if e.get("signal_id") == _alert_id(vm, rid, ip)]:\n'
+     "            narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)\n"),
 ]
 TESTS.update({"M2151": f"{_L1Q_BACK} {INVARIANTS}", "M2152": f"{_L1Q_BACK} {INVARIANTS}",
               "M2153": f"{_RT}a_new_episode_never_compares_with_what_held_of_the_one_before",
@@ -8229,8 +8230,8 @@ _L1DISK = ("tests/unit/test_reassert.py::test_a_drift_better_on_one_side_is_kept
            "tests/unit/test_invariant_regressions.py::test_a_block_gone_is_said_whatever_a_check_card_write_does")
 MUTANTS += [
     ("M3120", "a drift better on one side, its card refused, keeps the old baseline: the return unsaid (L1)", R,
-     '    if b.get("drift_alerted_at"):\n        # Worse on one side, better on another:',
-     '    if False:\n        # Worse on one side, better on another:'),
+     "        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)\n",
+     "        narrow_drift(ref or vm, ip, baseline if worse else now_is)\n"),
     ("M3121", "the baseline's meet keeps « not blocked »: a block held since, then gone, unsaid (L1)", RCA,
      '            "blocked": bool(said.get("blocked")) or now["blocked"]}\n',
      '            "blocked": bool(said.get("blocked"))}\n'),

@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/Vanyar53/eregion/schemas/campaign_manifest.schema.json",
+  "$id": "https://github.com/grootcyber/eregion/schemas/campaign_manifest.schema.json",
   "title": "Campaign manifest, as H0 accepts it from the exercise channel (H-1)",
   "description": "The fields the campaign report reads (analysis/campaign_report.py). Other fields are allowed. Checked at run time by analysis/campaign_schema.py (the watch's image has no jsonschema); tests/unit/test_campaign_schema.py keeps the two in step. without_glorfindel (V1): a campaign run --without-glorfindel, which gets no report.",
   "type": "object",

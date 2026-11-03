@@ -4,6 +4,8 @@ order it makes them — `_draw` takes the VM, the id it is reached with, the fau
 """
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from .fake_azure import ATTACKER, FakeAzure, _rule_record, key
@@ -5270,12 +5272,19 @@ def test_a_block_bypassed_after_the_role_is_taken_is_said(monkeypatch):
 def _replay(monkeypatch, net, *steps):
     """A sequence as Hypothesis printed it once shrunk: each rule with its draws, in order. A rule
     that leaves draws unused fails at once (`pytest.fail`, never an AssertionError a strict
-    `xfail` would count): the split between rules is checked rule by rule."""
+    `xfail` would count): the split between rules is checked rule by rule. A rule that takes no
+    draws (`recover`, `time_passes`) is called as Hypothesis calls it, without them."""
     invariant_env(monkeypatch)
     m = IsolationMachine()
     try:
         m.build(net)
         for rule, *draws in steps:
+            if not draws and "data" not in inspect.signature(getattr(m, rule)).parameters:
+                getattr(m, rule)()
+                m.never_more_open_than_designed()
+                m.customer_configuration_untouched()
+                m.one_vm_one_state_file()
+                continue
             s = Script(*draws)
             getattr(m, rule)(data=s)
             if s.values:
@@ -6538,3 +6547,129 @@ def test_the_per_vm_i5_refuses_what_a_pair_written_wrong_closes_beside_the_attac
         m._shut_shared(DB, before, before - {f for f in shut if f[3] == ATTACKER}, shares, "I5: probe")
     finally:
         _i5s_done(m)
+
+
+def _l1p_net():
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    return {"subnet_nsg": [r("allow-lateral-out", 100)], "edge_nsg": None,
+            "tier_rules": [r("allow-ssh", 150), r("deny-lateral-in", 130)],
+            "nics": {"web-nic": {"own": None, "rules": [r("allow-ssh", 100), r("allow-lateral-out", 100)],
+                                 "policy": True},
+                     "db-nic-0": {"own": None, "rules": [r("allow-ssh", 100), r("deny-lateral-in", 130)],
+                                  "policy": False},
+                     "db-nic-1": {"own": "tier", "rules": [r("allow-https", 100), r("allow-lateral-out", 100),
+                                                           r("deny-lateral-in", 130)], "policy": True},
+                     "api-nic": {"own": None, "rules": [r("allow-https", 100), r("deny-lateral-in", 130)],
+                                 "policy": True}},
+            "windows": None, "config": {"quarantine": True, "forensic": [], "readable": True, "rg": ""},
+            "legacy": None,
+            "data_subnet": [r("allow-https", 100), r("allow-lateral-out", 100), r("deny-lateral-in", 130)],
+            "data_primary": True}
+
+
+# The CI of PR #476 (I4P), glorfindel alone: 22 rules as Hypothesis shrank them, their draws as
+# printed. Red on `main` 593f8326, on I4P's head and on L1G: older than the three.
+_L1P_FIRST = ("said_then_back_after_a_full_disk", "bypass", DB, DB.lower(), None, False, 22, (200, _SUBNET))
+_L1P_LAST = ("said_then_back_after_a_full_disk", "bypass", DB, DB.lower(), ("subnet.get", "always-429"), False,
+             None, (200, _TIER), "allow-ssh", "non_disruptive", "non_disruptive", (1, "from-full"), "non_disruptive")
+_L1P_FOUND = (
+    ("reset_from_azure", WEB1, WEB1, None),
+    ("release", WEB1, WEB1, None),
+    ("bare_with_an_unknown_original", DB, DB.lower(), (7, "before-429"), _nic("rg-app1", "db-nic-0"), "release twice"),
+    _L1P_FIRST,
+    ("lose_everything", WEB1, WEB1.lower(), ("nic.get", "always-429"), API, _Q1, "reisolate"),
+    ("create_vm", "westeurope", "rg-app1", "api",
+     "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-tier", "Linux"),
+    ("interrupted_isolation", WEB1, WEB1.lower(), None, 1, "after-crash", ("vm.get", "always-429")),
+    ("said_then_back_after_a_full_disk", "unreadable state", "human_only", False, "human_only", (1, "from-full"),
+     "non_disruptive"),
+    ("customer_adds_rule", _SUBNET, "allow-ssh", 2000),
+    ("blocked_again_after_an_acknowledged_drift", WEB1, WEB1.lower(), ("subnet.get", "always-429"), 22, DB, False,
+     WEB1.lower(), None, "human_only"),
+    ("customer_sets_policy", _nic("rg-edge", "api-nic"), False),
+    ("reassert", "non_disruptive", (2, "after-crash")),
+    ("perimeters_on_two_subnets", DB, WEB2, 22, [WEB2, DB], WEB2.lower(), False, DB.lower(), False, "pairs", 2,
+     "busy", "busy", "busy", "non_disruptive", "non_disruptive", "non_disruptive", "human_only", "busy",
+     "human_only", "busy", "busy", "non_disruptive"),
+    ("quarantine_change_comes_back", API, API.lower(), ("nsg.get", "always-429"), False, True, _QUARANTINE_EDGE,
+     "non_disruptive", "no"),
+    ("reset_from_azure", _NEW_API_VM, _NEW_API_VM.lower(), (4, "after-crash")),
+    ("perimeters_on_two_subnets", DB, _NEW_API_VM, None, [DB, _NEW_API_VM], DB, False, _NEW_API_VM.lower(), False,
+     "pairs", 1, "human_only", "non_disruptive", "busy", "non_disruptive", "busy", "human_only"),
+    ("redeploy_nic", _nic("rg-edge", "api-nic")),
+    ("terraform_apply", _DATA),
+    ("taken_up_by_its_lowercase_id", DB, "block", 22, "non_disruptive", DB.lower(), None, "human_only",
+     "non_disruptive"),
+    ("interrupted_isolation", _NEW_API_VM, _NEW_API_VM, None, 10, "before-crash", (13, "after-429")),
+    ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2.lower(), None, True, (101, _SUBNET)),
+    ("interrupted_isolation", WEB1, WEB1, ("subnet.get", "always-429"), 7, "before-crash", ("nic.get", "always-429")),
+    _L1P_LAST)
+
+
+@pytest.mark.parametrize("steps", [_L1P_FOUND, (_L1P_FIRST, _L1P_LAST)], ids=["as found", "reduced"])
+def test_a_block_of_any_port_after_one_of_port_22_is_judged_on_every_port(monkeypatch, steps):
+    """L1P (#478): « L1: the block of …/Db--01 is bypassed by a customer allow (db-nic-1 on 443);
+    the reassertion doesn't say so ». Reduced by hand to two rules: Db--01 blocked for SSH (port
+    22; nothing of the customer's before our deny on nsg-subnet, the rule ends there) — db-nic-1's
+    pair moved to its subnet's NSG, nsg-data, allow-ssh passing before it on nsg-tier; then blocked
+    again, the port unknown (a pair on nsg-tier, behind allow-ssh), and allow-ssh widened into an
+    allow of all. The entry merged the second block and kept the first's 22 (`_save_block_state`
+    took a port only when known): the reassertion judged on 22 alone, which the pair on nsg-data
+    still holds, and read what reaches db-nic-1 on 443 — allow-https on nsg-data, the widened
+    allow-ssh on nsg-tier — an « exposure », unsaid. The oracle judges the port of the last block
+    (any port), as the code now does: a block written whole sets its port, None (any port) too.
+    Red on `main` 593f8326, both."""
+    _replay(monkeypatch, _l1p_net(), *steps)
+
+
+def _mak_net(tier: bool) -> dict:
+    """The networks of the two CI runs of PR #476 (py3.11) that fell on MAK's L1: allow-ssh at 150 and
+    allow-https at 110 on the subnet's NSG, web-nic under a legacy isolation's own NSG; the second run
+    without the tier's rules nor the edge's NSG — same rules, same draws."""
+    r = _tpl
+    return {"subnet_nsg": [r("allow-ssh", 150), r("allow-https", 110), r("deny-lateral-in", 130)],
+            "edge_nsg": [] if tier else None,
+            "tier_rules": [r("allow-ssh", 100), r("allow-lateral-out", 100), r("deny-lateral-in", 130)] if tier else [],
+            "nics": {"web-nic": {"own": None, "rules": [r("allow-https", 100), r("deny-lateral-in", 130)],
+                                 "policy": True},
+                     "db-nic-0": {"own": None, "rules": [r("allow-https", 100)], "policy": False},
+                     "db-nic-1": {"own": None, "rules": [], "policy": False},
+                     "api-nic": {"own": None, "rules": [r("allow-lateral-out", 100), r("deny-lateral-in", 130)],
+                                 "policy": False}},
+            "windows": None, "config": {"quarantine": False, "forensic": [], "rg": "", "readable": True},
+            "legacy": ("web-nic", True), "data_subnet": None, "data_primary": False}
+
+
+_MAK_429 = ("nic.get", "always-429")
+_MAK_FOUND = (
+    ("recover",), ("recover",), ("recover",), ("recover",), ("recover",),
+    ("graph_card_before_a_disappearance", WEB1, WEB1, _MAK_429, False, "human_only", 22),
+    ("reassert", "human_only", None),
+    ("operator_acknowledges", 0),
+    ("graph_card_before_a_disappearance", WEB1, WEB1, _MAK_429, True, "human_only"),
+    ("another_subscription", WEB1, "isolate"),
+    ("operator_acknowledges", 0),
+    ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, _MAK_429, True, (1, "from-full")))
+_MAK_REDUCED = tuple(s for i, s in enumerate(_MAK_FOUND) if i not in (0, 1, 2, 3, 4, 9))
+
+
+@pytest.mark.parametrize(("tier", "steps"), [(True, _MAK_FOUND), (False, _MAK_FOUND), (True, _MAK_REDUCED)],
+                         ids=["as found", "as found, no tier", "reduced"])
+def test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block(monkeypatch, tier, steps):
+    """MAK (#481), the machine's, never the code's: two CI runs of PR #476 (py3.11, random seeds), shrunk
+    by Hypothesis to these twelve rules, their draws as printed: « L1: the block on …/rg-app1/…/web
+    vanished from Azure; the reassertion neither put it back nor said so ». web blocked (22) under the
+    graph's card, its rules taken off and said; then isolated under the graph's card, its rules taken
+    off: the pass says the isolation gone and the block gone (« a disparu »), the operator acknowledges
+    the block's card — the machine records it (`acked_drift`), the block's rules as they are then, both
+    absent. Then `said_then_back_after_a_full_disk` draws « gone » for web's isolation: its rules taken
+    off, said, acknowledged, put back, taken off again, said anew. Once the isolation was put back,
+    `_gone_comes_back` dropped `acked_drift[web]` whichever branch it ran — the block's acknowledgement,
+    that the isolation branch neither took off nor put back: the block's rules still as acknowledged,
+    its card closed by the operator for its episode (one card per disappearance, RB1), L1 counted it
+    unsaid. The code was right to say nothing more. Reduced by hand to six rules; red on `main`
+    de040e8c, all three."""
+    _replay(monkeypatch, _mak_net(tier), *steps)

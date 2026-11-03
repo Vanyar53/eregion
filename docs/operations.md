@@ -791,10 +791,10 @@ un secret client de longue durée, et son principal pouvait créer un groupe dan
 - **Aucun secret de longue durée.** Le job demande à GitHub un jeton OIDC (`id-token: write`, à ce
   seul job), valable quelques minutes, qu'Entra ID échange contre le principal `eregion-canary`.
   Son identifiant fédéré ne fait confiance qu'à l'environnement `canary` de ce dépôt
-  (`repo:Vanyar53/eregion:environment:canary`), que seul `main` peut déployer (sa règle de
+  (`repo:grootcyber/eregion:environment:canary`), que seul `main` peut déployer (sa règle de
   branches) : un run lancé sur une autre branche, une PR ou un fork n'obtient rien, et le jeton
   d'un autre job de `main` — celui de `publish.yml`, dont le sujet est
-  `repo:Vanyar53/eregion:ref:refs/heads/main` — non plus. Terraform lit le jeton lui-même
+  `repo:grootcyber/eregion:ref:refs/heads/main` — non plus. Terraform lit le jeton lui-même
   (`ARM_USE_OIDC`, et `ACTIONS_ID_TOKEN_REQUEST_URL` / `…_TOKEN`, que le runner pose) ; `az`, dont le canari se sert
   pour le NSG de quarantaine, se connecte avec le même genre de jeton (`az login
   --federated-token`), tiré par `curl` : aucune action tierce. `ARM_USE_CLI=false` : Terraform
@@ -835,7 +835,7 @@ ne se lance depuis une session : ces commandes écrivent dans Entra ID, dans l'a
 le dépôt (son environnement `canary` et ses secrets).
 
 ```bash
-REPO=Vanyar53/eregion
+REPO=grootcyber/eregion
 az account set --subscription <nom ou id de l'abonnement du banc>
 SUB=$(az account show --query id -o tsv)          # lu, jamais tapé : rien dans l'historique
 
@@ -856,7 +856,7 @@ gh api "repos/$REPO/environments/canary/deployment-branch-policies" --jq '.branc
 cat > /tmp/eregion-canary-fic.json <<'EOF'
 {"name": "eregion-canary-environment",
  "issuer": "https://token.actions.githubusercontent.com",
- "subject": "repo:Vanyar53/eregion:environment:canary",
+ "subject": "repo:grootcyber/eregion:environment:canary",
  "audiences": ["api://AzureADTokenExchange"],
  "description": "canary-azurerm.yml, environment canary (main only)"}
 EOF
@@ -959,6 +959,13 @@ table`) ; et le principal, `Network Contributor` sur son groupe, pourrait y cré
 réseau payante (une IP publique, une passerelle) — seul un job de l'environnement `canary`, que seul `main` déploie, obtient son
 jeton (`tests/unit/test_workflows.py`).
 
+**Si le compte du dépôt change de nom** (REN1, novembre 2026 : `Vanyar53` → `grootcyber`) : le sujet
+du jeton porte le login du propriétaire, et Entra ID ne reconnaît plus l'ancien. Avant le
+renommage, un deuxième identifiant fédéré au nouveau sujet (le fichier du 3., un autre `name`),
+l'ancien gardé ; après le premier canari vert, l'ancien retiré (`az ad app federated-credential
+delete --id "$APP" --federated-credential-id <son id>`). « Un seul, ce sujet-là » (le 3.) ne vaut
+plus pendant cette transition.
+
 ## Les conteneurs durcis (V-34, SEC7)
 
 Chaque service du compose tourne sans capacité (`cap_drop: [ALL]`), sans gain de privilège
@@ -1054,10 +1061,17 @@ console.
 1. **Le poste.** La branche fusionnée tirée : `make glorfindel-start` (il migre `runs/`, puis démarre
    la watch et la console), puis `make runs-survey` — rien, ou chaque chose laissée et son geste.
    Une équipe : `make team-start TEAM=<nom>`.
-2. **H0.** La release qui porte SEC18 publiée, son CD la déploie (`deploy.sh` migre
-   `~/eregion/runs` avant `docker compose up`) ; ou à la main, `make glorfindel-host-start REF=<tag>`.
-   Vérifier : `make glorfindel-host-logs` ne dit aucun « Canal runs/ : … jamais lu », et la console
-   montre les campagnes et les runs d'avant.
+2. **H0.** **Avant de publier** la release qui porte SEC18 : `make glorfindel-host-cd-install`
+   depuis un checkout de `main` à jour, puis `make glorfindel-host-cd-check`, puis
+   `make glorfindel-host-cd-enable`. Le CD bascule par **son** `deploy.sh`, la copie installée dans
+   `~/.eregion-cd/`, jamais celui de la release (l'agent ne se remplace jamais lui-même,
+   [`infra/glorfindel-host/README.md`](../infra/glorfindel-host/README.md), « Le CD de H0 ») : celui
+   d'avant SEC18 ne migre pas, et `docker compose up` créerait `runs/glorfindel/`, `runs/console/` et
+   les autres au nom de root — la watch n'y écrirait plus ses cycles, la console ses gestes, la
+   migration suivante échouerait sur eux. Puis publier : le CD la déploie (`deploy.sh` migre
+   `~/eregion/runs` avant `docker compose up`) ; ou à la main, `make glorfindel-host-start REF=<tag>`,
+   qui lance le `deploy.sh` de la release. Vérifier : `make glorfindel-host-logs` ne dit aucun
+   « Canal runs/ : … jamais lu », et la console montre les campagnes et les runs d'avant.
 3. **Orodruin.** `make orodruin-push REF=<le même tag>` : l'image vérifiée, chargée, puis `~/runs`
    migré (`ORO_MIGRATE`) ; puis `make orodruin-check`.
 
@@ -1580,8 +1594,8 @@ Avant CI3, H0 construisait l'image de Glorfindel de chaque release (son CD, `dep
 orodruin-push`). Rien ne liait l'image qui tourne à ce que la CI avait éprouvé, ni à un commit
 signé (contre-audit : P-02, ni SBOM ni signature ; V-22, des tags non signés).
 
-**Ce qui est publié.** La tête de chaque push sur `main` (le commit de fusion d'une PR, en squash) a ses deux images, `ghcr.io/vanyar53/eregion-glorfindel`
-et `ghcr.io/vanyar53/eregion-annatar`, étiquetées `sha-<commit complet>`, par
+**Ce qui est publié.** La tête de chaque push sur `main` (le commit de fusion d'une PR, en squash) a ses deux images, `ghcr.io/grootcyber/eregion-glorfindel`
+et `ghcr.io/grootcyber/eregion-annatar`, étiquetées `sha-<commit complet>`, par
 `.github/workflows/publish.yml` (jobs `publish (glorfindel)`, `publish (annatar)`) :
 1. construites comme dans `images.yml` (CI1), plus ce que les hôtes demandent : l'utilisateur de
    H0 et d'Orodruin (UID/GID 1000, le premier utilisateur d'une VM Ubuntu d'Azure), et les
@@ -1655,19 +1669,21 @@ hors ligne, dans le paquet de la signature.
 ```bash
 python3 scripts/published_image.py install-cosign              # ~/.eregion/cosign/cosign-v3.1.3, sha256 vérifié
 python3 scripts/published_image.py verify glorfindel --commit "$(git rev-parse v0.4.6^{commit})"
-# → ✓ ghcr.io/vanyar53/eregion-glorfindel@sha256:… : signée et attestée par .github/workflows/publish.yml sur main, au commit …
-gh attestation verify oci://ghcr.io/vanyar53/eregion-glorfindel@sha256:<digest> --repo Vanyar53/eregion \
-  --signer-workflow Vanyar53/eregion/.github/workflows/publish.yml   # gh ≥ 2.49, connecté (non mesuré ici : le gh du poste, 2.45, n'a pas `attestation`)
-gh attestation verify oci://ghcr.io/vanyar53/eregion-glorfindel@sha256:<digest> --repo Vanyar53/eregion \
+# → ✓ ghcr.io/grootcyber/eregion-glorfindel@sha256:… : signée et attestée par .github/workflows/publish.yml sur main, au commit …
+gh attestation verify oci://ghcr.io/grootcyber/eregion-glorfindel@sha256:<digest> --repo grootcyber/eregion \
+  --signer-workflow grootcyber/eregion/.github/workflows/publish.yml   # gh ≥ 2.49, connecté (non mesuré ici : le gh du poste, 2.45, n'a pas `attestation`)
+gh attestation verify oci://ghcr.io/grootcyber/eregion-glorfindel@sha256:<digest> --repo grootcyber/eregion \
   --predicate-type https://spdx.dev/Document/v2.3                    # le SBOM
 ```
 
 **H0** tire l'image de chaque release par son digest et la vérifie avant de la préflighter : son CD
 ne construit plus (`infra/glorfindel-host/README.md`, « Le CD de H0 »). **Orodruin** reçoit l'image
 d'Annatar publiée, vérifiée sur le poste : `make orodruin-push [REF=<tag|commit>]` (sans `REF`, le
-dernier tag `v*` : tant qu'il est d'avant CI3, il n'a pas d'image, donner `REF=`), sa sortie restant fermée (`docs/design/orodruin-contract.md`, « L'image des
+dernier tag `v*` : tant qu'il est d'avant CI3, il n'a pas d'image, et d'avant REN1, il est signé par l'ancien nom du dépôt ; donner `REF=`), sa sortie restant fermée (`docs/design/orodruin-contract.md`, « L'image des
 injecteurs »). `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
 **non vérifiée**, pour essayer une branche : `~/.eregion-image` sur Orodruin le dit (`dev <commit>`).
+
+**Après le renommage du compte (REN1, 03/11).** Les images ont suivi le compte : le nouvel espace répond, l'ancien rend 403, sans redirection (mesuré). Celles d'avant (la v0.5.2 et avant) sont signées par l'ancien nom du dépôt, que `published_image.py` ne reconnaît plus : un retour arrière vers elles est refusé, sur H0 comme sur Orodruin. **H0** : l'ordre dans `infra/glorfindel-host/README.md`, « REN1 change l'agent » (`cd-install`, la 0.5.3 publiée, `cd-check`, `cd-enable`). **Orodruin** : `make orodruin-push REF=<sha de la fusion de REN1>`, puis `make orodruin-check` ; sans `REF` (le dernier tag), seulement à partir de la 0.5.3.
 
 **L'image publique** : le dépôt l'est, l'image n'a aucun secret (elle n'a que le code et ses
 dépendances verrouillées ; les secrets sont dans `host.env` et `orodruin.env`, montés ou passés au
@@ -1766,7 +1782,7 @@ make audit                              # les avis connus des verrous, celui de 
 
 **Les alertes Dependabot** de GitHub, sans les PR automatiques, sont une décision de Jonathan. Au
 29/10, elles ne sont pas activées. Pour les activer :
-`gh api -X PUT repos/Vanyar53/eregion/vulnerability-alerts`. Les PR automatiques (« Dependabot
+`gh api -X PUT repos/grootcyber/eregion/vulnerability-alerts`. Les PR automatiques (« Dependabot
 security updates », `automated-security-fixes`) restent désactivées : on ne les active pas.
 
 ---

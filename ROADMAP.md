@@ -80,8 +80,9 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 |---|---|---|---|
 | 0.5.0 | la boucle mesurée | OV1, ADM1, COR1, SID1, BL1c, RM1, CI4, L1Qr, I3R ; le second contre-audit (SEC8 à SEC15) | publiée (02/11) |
 | 0.5.1 | chaque alerte dite | COR2, I3C, I3G, I3U, AUC, MCG ; SEC16, SEC17, la suite de SEC12 | publiée (03/11) |
-| 0.5.2 | — | I3V, L1Qs, SEC18, SEC19 (la fin du second contre-audit) | en préparation |
-| 0.5.x | — | ID1, G1 au banc, AUD1 | plus tard |
+| 0.5.2 | tenus à part | I3V, L1Qs, I4G, U1G, L1G, L1P ; SEC18 (un répertoire par écrivain dans `runs/`), AUD1, DG-d | brouillon |
+| 0.5.3 | — | après le renommage du compte (REN1) : SEC19 (la fin du second contre-audit), I4P, I5S, L1A, MAK, SEC20 | en préparation |
+| 0.5.x | — | ID1, G1 au banc | plus tard |
 
 ### Les lots
 
@@ -228,7 +229,7 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 - **Bot Discord interactif** : un fil par VM, boutons ✓ Acknowledge / 📋 Command / 🔄 Restore / ↩️ Revert — exécutent les commandes Glorfindel directement depuis Discord
 - **War Room web** (`glorfindel war-room`, `make glorfindel-start`) — incident cards, live feed WebSocket, action buttons, infra map avec posture gaps
 - ~~**Annatar block watcher** — émet `attack_adapted` si Glorfindel bloque une IP en cours de run~~ — retiré le 28/10 (SEC3, #274) : il lisait l'état du défenseur, et ne voyait déjà plus rien (ancien nom de fichier)
-- Repo public : https://github.com/Vanyar53/eregion
+- Repo public : https://github.com/grootcyber/eregion
 - Coût exploitation : <$2/mois LLM API sur infra existante
 
 ---

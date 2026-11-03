@@ -9884,6 +9884,81 @@ MUTANTS += [
 TESTS.update({f"M{n}": _I5S_TESTS for n in (3383, 3384, 3386, 3390, 3391, 3392)})
 
 
+# L1P (#478): a block written whole sets its entry's threat port, None (unknown: every port) too — the
+# entry kept an earlier block's 22, and the reassertion judged a block of any port on 22 alone: what
+# passed on 443 an « exposure », its bypass never said (L1; the CI of PR #476). A partial block adds
+# only a port it knows. And None reads as every port wherever the port is read. M3393–M3399.
+_L1P_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_block_of_any_port_after_one_of_port_22_is_judged_on_every_port")
+_L1P_UNIT = "tests/unit/test_glorfindel.py::"
+_L1P_AGAIN = f"{_L1P_UNIT}test_a_block_written_again_is_judged_on_its_own_port"
+_L1P_PARTIAL = f"{_L1P_UNIT}test_a_partial_block_adds_only_the_port_it_knows"
+_L1P_PERIMETER = f"{_L1P_UNIT}test_a_perimeter_block_of_unknown_port_is_judged_on_every_port"
+_L1P_KEEP = "        if threat_port is not None or not partial:\n"
+MUTANTS += [
+    ("M3393", "a block of unknown port written whole keeps an earlier block's 22: a bypass on 443 read as an "
+              "exposure, never said (L1P)", STA, _L1P_KEEP, "        if threat_port is not None:\n"),
+    ("M3394", "a partial block never adds the port it knows (L1P, the probe)", STA, _L1P_KEEP,
+     "        if not partial:\n"),
+    ("M3395", "a partial block of unknown port takes away the port of the block written whole (L1P)", STA,
+     _L1P_KEEP, "        if True:\n"),
+    ("M3396", "a VM's block of unknown port verified on port 22 alone (L1P)", VBL,
+     '            port = entry.get("threat_port")\n', '            port = entry.get("threat_port") or 22\n'),
+    ("M3397", "a perimeter block of unknown port verified on port 22 alone (L1P)", VBL,
+     '"outbound_dst": [ip], "port": entry.get("threat_port")})',
+     '"outbound_dst": [ip], "port": entry.get("threat_port") or 22})'),
+    ("M3398", "an unknown port read as no port: every inbound allow before a block an exposure (L1P)", NSG,
+     'port is None or direction == "outbound" or _rule_covers_port(r, port)),',
+     'direction == "outbound" or (port is not None and _rule_covers_port(r, port))),'),
+    ("M3399", "a block of unknown port put back by the reassertion as a block of port 22 (L1P)", R,
+     'connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port"))',
+     'connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port") or 22)'),
+]
+TESTS.update({
+    "M3393": f"{_L1P_SEQ} {_L1P_AGAIN}",
+    "M3394": _L1P_PARTIAL,
+    "M3395": _L1P_PARTIAL,
+    "M3396": _L1P_AGAIN,
+    "M3397": _L1P_PERIMETER,
+    "M3398": f"{_L1P_AGAIN} {_L1P_PERIMETER}",
+    "M3399": "tests/unit/test_reassert.py::test_vanished_block_is_put_back_once_with_its_threat_port",
+})
+
+
+# MAK (#481): the machine's journal, never an oracle — `_gone_comes_back` dropped the acknowledgement of a VM's
+# block once an isolation of that VM was put back, and L1 read the block's acknowledged card unsaid (the CI of PR
+# #476). M3420–M3421 put the machine's defect back, or its kin (the frozen sequence, red: a false L1); M3422–M3423
+# are bugs of the code on that boundary, between a VM's isolation and its block — M3423 the frozen sequence still
+# sees with the fix. M3424 unused: a probe (a block's card taken for its isolation's by a prefix of its id) that
+# survived the frozen sequences, test_reassert.py and the invariants at 60 — not a bug a review found; likely as
+# good as equivalent (the block's card, closed with Glorfindel's note, reads « not said » at its next check).
+_MAK_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block")
+MUTANTS += [
+    ("M3420", "the machine forgets the acknowledgement of a VM's block when an isolation of that VM comes back: a "
+              "false L1 (MAK)", INVARIANTS,
+     '        if not isolation:\n            getattr(self, "acked_drift", {}).pop(vm, None)\n',
+     '        if True:\n            getattr(self, "acked_drift", {}).pop(vm, None)\n'),
+    ("M3421", "the machine never journals the operator's acknowledgement of a block's drift card: a false L1 "
+              "(MAK)", INVARIANTS,
+     '        if vm and ("disparu" in reason or "a échoué" in reason):\n'
+     '            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}\n',
+     '        if False:\n'
+     '            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}\n'),
+    ("M3422", "a block's disappearance read « said » on its VM's isolation card (MAK)", R,
+     "    if still_said(b, ref or vm, ip, _alert_id(vm, rid, ip), baseline, now_is):\n",
+     "    if still_said(b, ref or vm, ip, _alert_id(vm, rid), baseline, now_is):\n"),
+    ("M3423", "an isolation back keeps its drift mark and its episode: gone again behind its acknowledged card, "
+              "unsaid (MAK, L2C's review)", R,
+     ('        episode(ref or vm, "", over=True)        # back: a new episode next time, whatever write fails\n',
+      '            state.pop("drift_alerted_at", None)\n            _save_isolation_state(ref or vm, {**state, '
+      '"verified_at": now})\n'),
+     ('', '            _save_isolation_state(ref or vm, {**state, "verified_at": now})\n')),
+]
+TESTS.update({mid: _MAK_SEQ for mid in ("M3420", "M3421", "M3423")})
+TESTS["M3422"] = "tests/unit/test_reassert.py"
+
+
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;
 # tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).

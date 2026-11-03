@@ -86,8 +86,8 @@ def test_every_link_of_the_home_page_resolves():
         u = urlparse(href)
         if u.scheme:
             assert u.scheme == "https" and u.netloc in LINK_HOSTS, href
-            if u.path.startswith("/Vanyar53/eregion/blob/main/"):
-                assert (ROOT / u.path.removeprefix("/Vanyar53/eregion/blob/main/")).is_file(), href
+            if u.path.startswith("/grootcyber/eregion/blob/main/"):
+                assert (ROOT / u.path.removeprefix("/grootcyber/eregion/blob/main/")).is_file(), href
         elif not href.startswith("#"):
             assert (DOCS / href.split("#")[0]).exists(), href
     ids = {a["id"] for _, a in p.tags if a.get("id")}

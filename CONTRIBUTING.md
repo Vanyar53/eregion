@@ -45,7 +45,7 @@ A new test file goes into its component's list in `scripts/component_check.py`, 
 ## Development setup
 
 ```bash
-git clone https://github.com/Vanyar53/eregion
+git clone https://github.com/grootcyber/eregion
 cd eregion
 pip install --require-hashes -r requirements/dev.txt   # the lock: what CI and the image run
 pip install --no-deps --no-build-isolation -e .

@@ -78,7 +78,7 @@ class Lot:
 def github_get(path: str, environ, label: str = "GitHub API") -> list | dict:
     api = environ.get("GITHUB_API_URL", "https://api.github.com")
     auth = {"Authorization": f"Bearer {environ['GITHUB_TOKEN']}"} if environ.get("GITHUB_TOKEN") else {}
-    return nd.fetch("GET", f"{api}/repos/{environ.get('GITHUB_REPOSITORY', 'Vanyar53/eregion')}{path}",
+    return nd.fetch("GET", f"{api}/repos/{environ.get('GITHUB_REPOSITORY', 'grootcyber/eregion')}{path}",
                     label, headers={"Accept": "application/vnd.github+json", **auth})
 
 
@@ -326,7 +326,7 @@ def _keys(lots: list[Lot], limit: int) -> str:
 
 
 def render(milestones: list, lots: list[Lot], states: dict[str, str], roadmap: str, *,
-           repo: str = "Vanyar53/eregion", sha: str = "", now: str = "", latest: dict | None = None) -> dict:
+           repo: str = "grootcyber/eregion", sha: str = "", now: str = "", latest: dict | None = None) -> dict:
     by_title = {m.get("title"): m for m in milestones}
     out = ["**Jalons**"]
     for m in nd.MILESTONE_TAGS:
@@ -423,7 +423,7 @@ def main(argv=None, environ=os.environ) -> int:
         except nd.Failure as e:
             nd.say(e)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    message = render(milestones, lots, states, roadmap, repo=environ.get("GITHUB_REPOSITORY", "Vanyar53/eregion"),
+    message = render(milestones, lots, states, roadmap, repo=environ.get("GITHUB_REPOSITORY", "grootcyber/eregion"),
                      sha=environ.get("GITHUB_SHA", ""), now=now, latest=latest)
     if dry:
         print(message["description"])

@@ -254,10 +254,15 @@ ADM1 (`auditd.settle`) :
 |---|---|
 | lue en entier, sa commande dans la liste sensible d'ADM1 — `SENSITIVE_SHIPPED` et `sensitive_commands`, la même liste, jamais recopiée (`expected_sudo.listed`) | une carte : le compte de connexion (`LoginAccount`, « admin1 (auid 1001) » ; « auid 1001 (nom absent de la ligne) » sans le format ENRICHED), la commande (`AuditCommand`), la catégorie (`Sensitive`), le programme (`Exe`), le terminal et la session (`Tty`, `Session`) |
 | lue en entier, hors de la liste | rien : c'est la règle, pas un écart. Un `ls` du shell root n'est pas une détection ; le shell lui-même a été jugé sur la ligne de sudo (`sudo-privilege-escalation`) |
-| illisible ou ambiguë : pas d'EXECVE, deux SYSCALL ou deux EXECVE pour un événement, un argument coupé ou réparti sur plusieurs enregistrements, `argc` qui ne tombe pas juste, un champ illisible, une commande plus longue que ce qui est lu (1 024 caractères) | une carte qui dit pourquoi (`AuditRead`, A0) |
+| illisible ou ambiguë : pas d'EXECVE, deux SYSCALL ou deux EXECVE pour un événement, un argument coupé ou réparti sur plusieurs enregistrements, `argc` qui ne tombe pas juste, un champ illisible, un nombre hors borne (des chiffres autres qu'ASCII comme `²`, plus de 10 chiffres, `argc` au-delà de 256), une commande plus longue que ce qui est lu (1 024 caractères), une lecture qui lève | une carte qui dit pourquoi (`AuditRead`, A0) |
 
 - **Un compte attendu (ADM1) reste soumis à la liste**, comme pour sudo : `expected_sudo.admins`
   n'écarte rien ici.
+- **Une ligne écrite pour faire échouer la lecture ne fait taire rien** (relecture d'AUD1) : chaque
+  ligne est lue bornée et à part, une lecture qui lève est une carte ; une étape de lecture du poller
+  en défaut (AUD1, ADM1, COR1) est dite (`last_error`) et la passe continue avec les lignes telles que
+  lues, rien d'écarté qui n'ait été lu ; une passe qui lève ne tue jamais le fil de la règle. Les
+  enregistrements ne sont sur la carte qu'une fois (`SyslogMessage`, 2 000 caractères chacun).
 - **Un shell n'est pas une catégorie** ici (`root_shell` d'ADM1 n'est pas lu) : à l'intérieur du shell
   root, chaque commande est lue pour elle-même.
 - **Le programme est lu par son chemin** (`exe`, celui du noyau), puis ses arguments : `argv[0]` est à

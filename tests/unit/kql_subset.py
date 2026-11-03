@@ -9,7 +9,8 @@ alone, or `name = count()`, `countif(p)`, `min(col)`, `max(col)`, `take_any(col)
 `tolong()`, `tostring()`. Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
 passes it by accident. `has` is KQL's term match (case-insensitive, at term boundaries);
-regexes are read by Python's `re` (the patterns of the rules mean the same in RE2).
+regexes are read by Python's `re` in ASCII mode (`\\d` is 0–9 only, as in RE2: AUD1's review —
+`²` is a digit to Python's default `re`, not to Log Analytics).
 """
 from __future__ import annotations
 
@@ -158,7 +159,7 @@ class _Parser:
         if op == "matches" and tok[0] == "ident":
             self.take()
             self.take("ident", "regex")
-            pattern = re.compile(self.take("str")[1])
+            pattern = re.compile(self.take("str")[1], re.ASCII)
             return lambda r: pattern.search(str(left(r) or "")) is not None
         return left
 
@@ -216,7 +217,7 @@ class _Parser:
             (_, pat), (_, grp), (_, src) = args
 
             def extract(r):
-                m = re.search(pat(r), str(src(r) or ""))
+                m = re.search(pat(r), str(src(r) or ""), re.ASCII)
                 return (m.group(grp(r)) or "") if m else ""
             return extract
         if name in ("toint", "tolong"):

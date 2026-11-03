@@ -1641,7 +1641,7 @@ def _print_auditd() -> None:
         a = st.get("auditd") if isinstance(st, dict) else None
         if not isinstance(a, dict):
             continue
-        n = {k: int(a.get(k) or 0) if str(a.get(k) or 0).isdigit() else 0 for k in auditd.COUNTS}
+        n = {k: a[k] if type(a.get(k)) is int and a[k] >= 0 else 0 for k in auditd.COUNTS}
         at = _esc_markup("".join(c for c in str(a.get("at") or "")[:19] if c.isprintable()))
         console.print(f"auditd (AUD1), {_esc_markup(name)}: {n['events']} root exec(s) of a human login in its window, "
                       f"{n['sensitive']} sensitive, {n['unreadable']} unreadable (each a card) — last poll {at}")

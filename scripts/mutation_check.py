@@ -9188,9 +9188,9 @@ MUTANTS += [
     ("M2764", "an argument in hex not decoded (AUD1)", _AUD,
      '    if re.fullmatch(r"(?:[0-9A-F]{2})+", value):\n', "    if False:\n"),
     ("M2765", "an argument split over records read as whole (AUD1)", _AUD,
-     '    if re.search(r"(?:^|\\s)a\\d+(?:_len=|\\[)", execve):\n', "    if False:\n"),
+     '    if re.search(r"(?:^|\\s)a[0-9]+(?:_len=|\\[)", execve):\n', "    if False:\n"),
     ("M2766", "fewer arguments than argc read as the command (AUD1)", _AUD,
-     "    if sorted(found) != list(range(argc)):\n", "    if not found:\n"),
+     "    if len(found) != argc or any(i not in found for i in range(argc)):\n", "    if not found:\n"),
     ("M2767", "a command longer than what is read judged on its start (AUD1)", _AUD,
      '    if len(text) > _COMMAND_READ or "\\n" in text or "\\r" in text:\n',
      '    if "\\n" in text or "\\r" in text:\n'),
@@ -9226,6 +9226,37 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_auditd.py" for n in range(2760, 2780)})
 TESTS.update({mid: "tests/unit/test_bench_auditd.py" for mid in ("M2777", "M2779")})
+# AUD1, its review: a forged line made the poll raise, no card left, the rule's thread dead.
+# The numbers read bounded, the row's reading caught, the reading steps and the loop guarded,
+# the records once on the card. M3360–M3368.
+MUTANTS += [
+    ("M3360", "a row whose reading raises stops the poll: no card, the real one lost (AUD1, review)", _AUD,
+     "        except Exception as exc:  # a line written to make the reading fail is a card, never a silence\n",
+     "        except ZeroDivisionError as exc:\n"),
+    ("M3361", "a number read by str.isdigit(): `²` makes int() raise (AUD1, review)", _AUD,
+     '    return int(v) if v is not None and re.fullmatch(r"[0-9]{1,10}", v) else None\n',
+     "    return int(v) if v is not None and v.isdigit() else None\n"),
+    ("M3362", "an argument's index read unbounded: 5 000 digits make int() raise (AUD1, review)", _AUD,
+     'a([0-9]{{1,4}})={_VALUE}', 'a(\\d+)={_VALUE}'),
+    ("M3363", "argc unbounded (AUD1, review)", _AUD,
+     '    if argc > ARGC_MAX:\n        return f"argc={argc} hors borne ({ARGC_MAX} au plus)"\n', ""),
+    ("M3364", "the records twice in the signal: Syscall and Execve kept on the card (AUD1, review)", _AUD,
+     '    rest = {k: v for k, v in row.items() if k not in ("Syscall", "Execve")}\n', "    rest = dict(row)\n"),
+    ("M3365", "a fault of the audit reading stops the pass (AUD1, review)", "glorfindel/detection_rules.py",
+     "        except Exception as exc:  # the audit reading: every row stays a card\n",
+     "        except ZeroDivisionError as exc:\n"),
+    ("M3366", "a fault of the correlation sets aside the root shells it did not settle (AUD1, review)",
+     "glorfindel/detection_rules.py",
+     '            for k in [k for k, e in judged.items() if "origins" in e]:\n                del judged[k]\n            corr = {}\n',
+     "            corr = {}\n"),
+    ("M3367", "one poll that raises kills the rule's thread (AUD1, review)", "glorfindel/detection_rules.py",
+     "            except Exception as exc:  # the rule's thread never dies of one poll (review, AUD1)\n",
+     "            except ZeroDivisionError as exc:\n"),
+    ("M3368", "a fault of a reading step not said: last_error cleared (AUD1, review)", "glorfindel/detection_rules.py",
+     '            if faults:\n                st["last_error"] = "; ".join(faults)[:500]\n            else:\n                st.pop("last_error", None)\n',
+     '            st.pop("last_error", None)\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_auditd.py" for n in range(3360, 3369)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

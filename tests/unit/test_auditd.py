@@ -431,3 +431,115 @@ def test_glorfindel_report_says_the_window_of_the_audit_rule():
     p.poll_once(rule)
     out = CliRunner().invoke(cli, ["report"]).output
     assert "auditd (AUD1)" in out and "2 root exec(s) of a human login" in out and "1 sensitive" in out
+
+
+# ── The review: a forged line never stops the poll, never hides the real card ─────
+
+def _forged_execve(serial: int, tail: str) -> str:
+    return f"type=EXECVE {_stamp(serial)} {tail}"
+
+
+FORGED = [
+    ("argc_superscript", lambda s: [syscall(s), _forged_execve(s, 'argc=² a0="true"')], "argc illisible"),
+    ("argc_5000_digits", lambda s: [syscall(s), _forged_execve(s, "argc=" + "9" * 5000 + ' a0="true"')],
+     "argc illisible"),
+    ("argc_1e9", lambda s: [syscall(s), _forged_execve(s, f'argc={10 ** 9} a0="true"')], "hors borne"),
+    ("index_superscript", lambda s: [syscall(s), _forged_execve(s, 'argc=1 a²="true"')],
+     "argc=1, 0 argument(s) lu(s)"),
+    ("index_5000_digits", lambda s: [syscall(s), _forged_execve(s, 'argc=2 a0="true" a' + "1" * 5000 + '="x"')],
+     "argc=2, 1 argument(s) lu(s)"),
+    ("auid_superscript", lambda s: [syscall(s).replace(" auid=1001 ", " auid=² auid=1000 "),
+                                    execve(s, "true")], "auid, euid ou key illisible"),
+    ("euid_superscript", lambda s: [syscall(s).replace(" euid=0 ", " euid=² euid=0 "),
+                                    execve(s, "true")], "auid, euid ou key illisible"),
+]
+
+
+@pytest.mark.parametrize("name,records,why", FORGED, ids=[f[0] for f in FORGED])
+def test_a_forged_record_is_read_bounded_never_raises(name, records, why):
+    rows = _rows([_line(m) for m in records(80)])
+    assert len(rows) == 1, "the query reads \\d as RE2 does: ASCII digits only"
+    assert why in auditd.read(rows[0])["why"]
+
+
+@pytest.mark.parametrize("name,records,why", FORGED, ids=[f[0] for f in FORGED])
+def test_a_forged_line_beside_a_real_one_leaves_both_cards(name, records, why):
+    """Two lines written in local6 (a human SYSCALL, a broken EXECVE) used to make the poll raise:
+    no card, no last_error, the rule's thread dead. Now the real card goes, folded with the forged
+    line's, unreadable."""
+    lines = event(81, "cat", "/etc/shadow") + [_line(m, minutes_ago=2) for m in records(82)]
+    p, rule, sent = _poller(lines)
+    [sig] = p.poll_once(rule)
+    card = _card(sig)
+    assert card["Sensitive"] == "shadow" and card["AuditCommand"] == "cat /etc/shadow"
+    [other] = card["AuditCommands"]
+    assert other["AuditRead"]["status"] == "unreadable" and why in other["AuditRead"]["why"]
+    snap = p.status_snapshot()[0]
+    assert snap["last_error"] == "" and snap["auditd"]["sensitive"] == 1 and snap["auditd"]["unreadable"] == 1
+
+
+def test_auid_superscript_then_a_human_one_is_read_by_the_query_as_by_azure():
+    """RE2's \\d is ASCII: `auid=²` is no number, the query reads the next `auid=1000`."""
+    rows = _rows([_line(syscall(83).replace(" auid=1001 ", " auid=² auid=1000 ")), _line(execve(83, "id"))])
+    assert [r["AuditEvent"] for r in rows] == ["1762160000.083:83"]
+
+
+def test_a_reading_that_raises_is_an_unreadable_card(monkeypatch):
+    def boom(_row):
+        raise RuntimeError("forged")
+    monkeypatch.setattr(auditd, "read", boom)
+    [kept], counts = auditd.settle(auditd.TTP, _rows(event(84, "ls")))
+    assert kept["AuditRead"] == {"status": "unreadable", "why": "lecture en erreur (RuntimeError)"}
+    assert counts == {"events": 1, "sensitive": 0, "unreadable": 1}
+
+
+def test_the_records_are_on_the_card_once_and_bounded():
+    p, rule, sent = _poller(event(85, "cat", "/etc/shadow", exe="/usr/bin/" + "c" * 3000))
+    [sig] = p.poll_once(rule)
+    card = _card(sig)
+    assert "Syscall" not in card and "Execve" not in card
+    assert all(len(r) <= auditd.RECORD_KEPT for r in card["SyslogMessage"].split("\n"))
+
+
+def test_a_fault_of_the_audit_reading_is_said_and_the_pass_goes_on(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("audit reader down")
+    monkeypatch.setattr(auditd, "settle", boom)
+    p, rule, sent = _poller(event(86, "cat", "/etc/shadow"))
+    [sig] = p.poll_once(rule)           # the row as read: a card
+    assert "AuditCommand" not in _card(sig)
+    assert "auditd: RuntimeError: audit reader down" in p.status_snapshot()[0]["last_error"]
+
+
+def test_a_fault_of_the_correlation_leaves_a_pending_root_shell_a_card(monkeypatch):
+    from glorfindel import correlation
+
+    def boom(*_a, **_k):
+        raise RuntimeError("correlation down")
+    monkeypatch.setattr(correlation, "settle", boom)
+    line = _line("admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; COMMAND=/bin/bash",
+                 facility="authpriv", process="sudo")
+    cfg = GlorfindelConfig(expected_sudo=ExpectedSudoConfig(
+        admins=[ExpectedAdmins("vm-example-*", ["admin1"], origins=["198.51.100.0/24"])]))
+    p, rule, sent = _poller([line], cfg, rule=SHIPPED["sudo-privilege-escalation"])
+    [sig] = p.poll_once(rule)
+    assert "COMMAND=/bin/bash" in _card(sig)["SyslogMessage"]
+    snap = p.status_snapshot()[0]
+    assert snap["expected_count"] == 0 and "correlation: RuntimeError" in snap["last_error"]
+
+
+def test_a_poll_that_raises_never_kills_the_rule_s_thread(monkeypatch):
+    p, rule, sent = _poller([])
+    rule.interval_s = 0.01
+    calls = []
+
+    def poll(_rule):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("one bad poll")
+        p._stop.set()
+        return []
+    monkeypatch.setattr(p, "poll_once", poll)
+    p._loop(rule)
+    assert len(calls) == 2
+    assert "poll failed: RuntimeError: one bad poll" in p.status_snapshot()[0]["last_error"]

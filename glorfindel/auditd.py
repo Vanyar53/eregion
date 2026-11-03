@@ -59,13 +59,18 @@ _COMMAND_KEPT = 300
 _COMMAND_READ = 1024
 # The commands a folded card names besides its own (one card per VM and poll).
 FOLD_MAX = 20
+# What a record may say, read bounded whatever a local user writes with `logger` (review, AUD1):
+# a number of 10 ASCII digits at most (an auid is 32 bits), an argument index of 4, at most
+# ARGC_MAX arguments, each record kept to RECORD_KEPT characters on the card.
+ARGC_MAX = 256
+RECORD_KEPT = 2000
 
 # What the rule's window holds at its last poll (`rule_status.json`, `auditd`): a gauge, not a
 # total — a row read and not sensitive is read again at the next poll, and never marked sent.
 COUNTS = ("events", "sensitive", "unreadable")
 
 _TYPE = re.compile(r"(?:^|\s)type=([A-Z_]+)\s")
-_EVENT = re.compile(r"msg=audit\((\d+\.\d+:\d+)\)")
+_EVENT = re.compile(r"msg=audit\(([0-9]+\.[0-9]+:[0-9]+)\)")
 # A record's fields: `name=value`, at a word's start. The kernel writes an untrusted string
 # (comm, exe, an argument) in quotes, or in hex when it holds a space, a quote, a control
 # character or a byte above 0x7e (audit_log_untrustedstring): a value never carries a space.
@@ -92,8 +97,10 @@ def _untrusted(value: str | None) -> str | None:
 
 
 def _number(record: str, name: str) -> int | None:
+    """A field's number: ASCII digits only, 10 at most — `²` is a digit to str.isdigit() and
+    not to int(), and int() refuses more than 4 300 digits (review, AUD1)."""
     v = _field(record, name)
-    return int(v) if v is not None and v.isdigit() else None
+    return int(v) if v is not None and re.fullmatch(r"[0-9]{1,10}", v) else None
 
 
 def _records(value) -> list[str]:
@@ -102,7 +109,7 @@ def _records(value) -> list[str]:
     if isinstance(value, str):
         try:
             value = json.loads(value)
-        except ValueError:
+        except (ValueError, RecursionError):
             return []
     if not isinstance(value, list):
         return []
@@ -111,13 +118,15 @@ def _records(value) -> list[str]:
 
 def _argv(execve: str) -> list[str] | str:
     """EXECVE's argv, or why it cannot be read whole."""
-    if re.search(r"(?:^|\s)a\d+(?:_len=|\[)", execve):
+    if re.search(r"(?:^|\s)a[0-9]+(?:_len=|\[)", execve):
         return "argument découpé (aN_len, aN[i]) — trop long pour un seul enregistrement"
     argc = _number(execve, "argc")
     if argc is None or argc < 1:
         return "argc illisible"
-    found = {int(i): v for i, v in re.findall(rf"(?:^|\s)a(\d+)={_VALUE}", execve)}
-    if sorted(found) != list(range(argc)):
+    if argc > ARGC_MAX:
+        return f"argc={argc} hors borne ({ARGC_MAX} au plus)"
+    found = {int(i): v for i, v in re.findall(rf"(?:^|\s)a([0-9]{{1,4}})={_VALUE}", execve)}
+    if len(found) != argc or any(i not in found for i in range(argc)):
         return f"argc={argc}, {len(found)} argument(s) lu(s)"
     args = []
     for i in range(argc):
@@ -187,9 +196,11 @@ def _card(row: dict, said: dict, records: list[str]) -> dict:
     if not records:
         return dict(row)
     command = said.get("command") or said.get("exe") or ""
-    return {**row,
+    # The records once read: in SyslogMessage only, each bounded — never twice in the signal.
+    rest = {k: v for k, v in row.items() if k not in ("Syscall", "Execve")}
+    return {**rest,
             # The rows' identity (`_row_identity`: instant and text): the event's records, sorted.
-            "SyslogMessage": "\n".join(records),
+            "SyslogMessage": "\n".join(r[:RECORD_KEPT] for r in records),
             "LoginAccount": login_account(said),
             "Auid": said.get("auid"),
             "AuditCommand": command[:_COMMAND_KEPT],
@@ -208,18 +219,37 @@ def settle(ttp: str, rows: list[dict], extra=()) -> tuple[list[dict], dict]:
     kept = []
     for row in rows:
         counts["events"] += 1
-        records = sorted(set(_records(row.get("Syscall")) + _records(row.get("Execve"))))
-        said = read(row)
-        if "why" in said:
-            counts["unreadable"] += 1
-            kept.append({**_card(row, said, records), "AuditRead": {"status": "unreadable", "why": said["why"][:200]}})
+        try:
+            card = _settle_row(row, extra)
+        except Exception as exc:  # a line written to make the reading fail is a card, never a silence
+            card = _unread(row, {}, f"lecture en erreur ({type(exc).__name__})")
+        if card is None:
             continue
-        category = expected_sudo.listed(said["text"], extra)
-        if category is None:
-            continue
-        counts["sensitive"] += 1
-        kept.append({**_card(row, said, records), "Sensitive": category})
+        counts["unreadable" if "AuditRead" in card else "sensitive"] += 1
+        kept.append(card)
     return kept, counts
+
+
+def _unread(row: dict, said: dict, why: str) -> dict:
+    """The card of a row that cannot be read whole (A0)."""
+    try:
+        records = sorted(set(_records(row.get("Syscall")) + _records(row.get("Execve"))))
+        card = _card(row, said, records)
+    except Exception:
+        card = {k: v for k, v in row.items() if k not in ("Syscall", "Execve")}
+    return {**card, "AuditRead": {"status": "unreadable", "why": why[:200]}}
+
+
+def _settle_row(row: dict, extra) -> dict | None:
+    """One row: its card (sensitive, or unreadable), or None — read whole, not sensitive."""
+    said = read(row)
+    if "why" in said:
+        return _unread(row, said, said["why"])
+    category = expected_sudo.listed(said["text"], extra)
+    if category is None:
+        return None
+    records = sorted(set(_records(row.get("Syscall")) + _records(row.get("Execve"))))
+    return {**_card(row, said, records), "Sensitive": category}
 
 
 def fold(rows: list[dict]) -> dict:

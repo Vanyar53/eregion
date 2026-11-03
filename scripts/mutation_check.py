@@ -9368,6 +9368,7 @@ TESTS.update({
     "M3358": _I4P_UNIT,
     "M3359": _I4G_UNIT,
 })
+
 # AUD1 (#408): auditd's execs of a human login as root, read before any signal — the records read
 # whole or a card, ADM1's list (never a copy), the rule's filters, the bench's Terraform. M2760–M2779.
 _AUD = "glorfindel/auditd.py"
@@ -9839,6 +9840,51 @@ MUTANTS += [
 TESTS.update({"M3340": "tests/unit/test_entries_calls.py::test_the_watch_without_a_storage_channel_writes_the_verdict_of_a_polled_detection",
               "M3341": "tests/unit/test_entries_calls.py::test_the_watch_without_a_storage_channel_writes_the_verdict_of_a_polled_detection",
               "M3342": _SEC18_LAYOUT, "M3343": _SEC18_MOUNTS})
+
+
+# I5S (#477): the per-VM I5 oracle, widened by Jonathan's decision (03/11, A0) to a writer's perimeter carried as the
+# NIC's NSG of a VM in human_only, bounded by three conditions — the attacker's flows, a NIC in `perimeter_nic`,
+# closed by the perimeter rules the pass wrote alone, on a writer's perimeter NSG (the NSG shared, I5S's review) —
+# and the subnet's branch hardened by the third. The oracle's own mutants, each loosening one bound: measured by its
+# controls (tests/unit/test_invariant_regressions.py), which drive a world where the bound is the only thing that
+# refuses. The first condition is not implied by the third — a pair of the IP written wrong (aimed at `*`) closes
+# flows that go elsewhere —: its control is `…_what_a_pair_written_wrong_closes_beside_the_attacker`.
+# M3383 (the first condition), M3384, M3386, M3390–M3392.
+_I5S_CTRL = "tests/unit/test_invariant_regressions.py::"
+_I5S_TESTS = " ".join(_I5S_CTRL + t for t in (
+    "test_the_per_vm_i5_admits_a_writers_perimeter_carried_as_the_nics_nsg",
+    "test_the_per_vm_i5_refuses_what_no_perimeter_rule_closes",
+    "test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds",
+    "test_the_per_vm_i5_refuses_what_a_pair_written_wrong_closes_beside_the_attacker",
+    "test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared"))
+MUTANTS += [
+    ("M3383", "I5 per VM admits a flow that goes elsewhere than the attacker, closed by a pair of the IP written wrong "
+              "(aimed at `*`) — the first condition, not implied by the third (I5S's review)", INVARIANTS,
+     "            if f[3] != ATTACKER:\n                return False\n            if f[0] in shares[\"perimeter\"]:\n",
+     "            if f[0] in shares[\"perimeter\"]:\n"),
+    ("M3384", "I5 per VM counts the IP's pair written on any NSG: on one no writer holds, it passes for a NIC that "
+              "carries a writer's NSG — the class of M2995 hidden (I5S's review: the rule on the NSG shared)",
+     INVARIANTS,
+     '        closed = (self._closed_by_the_perimeter_alone(vm, before, on=shares["perimeters"])\n',
+     '        closed = (self._closed_by_the_perimeter_alone(vm, before)\n'),
+    ("M3386", "I5 per VM reads every NIC of a VM in human_only as carrying a writer's perimeter: the IP's pair "
+              "written on an NSG no writer holds passes (I5S, the second condition)", INVARIANTS,
+     '                "perimeter_nic": {s for s, n in nics.items() if key(n["nsg"] or "") in perimeters},\n',
+     '                "perimeter_nic": set(nics),\n'),
+    ("M3390", "I5 per VM admits any attacker flow of a NIC carrying a writer's perimeter, whatever closed it "
+              "(I5S, the widening's third condition)", INVARIANTS,
+     '            return f[0] in shares["perimeter_nic"] and f in closed     # the widening (I5S)\n',
+     '            return f[0] in shares["perimeter_nic"]\n'),
+    ("M3391", "I5 per VM admits any attacker flow of a NIC behind a writer's subnet, whatever closed it — the "
+              "oracle before I5S (the hardening undone)", INVARIANTS,
+     "                return f in closed                      # the hardening (I5S)\n",
+     "                return True\n"),
+    ("M3392", "what the perimeter alone closes counts a writer's VM rules as the perimeter's (I5S, I4P: the IP's "
+              "name alone)", INVARIANTS,
+     '            if e["op"] == "rule.write" and e["rule"] in (plain, f"{plain}-out") and e["nsg"] in nsgs:\n',
+     '            if e["op"] == "rule.write" and e["rule"].startswith(plain) and e["nsg"] in nsgs:\n'),
+]
+TESTS.update({f"M{n}": _I5S_TESTS for n in (3383, 3384, 3386, 3390, 3391, 3392)})
 
 
 # L1P (#478): a block written whole sets its entry's threat port, None (unknown: every port) too — the

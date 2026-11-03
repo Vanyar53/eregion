@@ -1087,13 +1087,44 @@ class IsolationMachine(RuleBasedStateMachine):
         return {n.lower() for p in (state or {}).get("placements") or []
                 for n in (p.get("rule_in"), p.get("rule_out")) if n}
 
-    def _release(self, vm, rid, fault):
+    @rule(data=st.data())
+    def release_by_the_cli(self, data):
+        """`glorfindel release <vm> --yes`, as the operator runs it — the console's approval too —,
+        often after a `release_partial`, which tells them to run it again. It asks verify_release
+        first: « verified », it cleared the state, « No active isolation found on NSG — state
+        cleared » (I3V, #450). Judged as the release: exit 0 says released, exit 2 partial."""
+        vm, rid, fault = self._draw(data)
+        self._release(vm, rid, fault, lambda: self._cli_release(rid))
+
+    def _cli_release(self, rid: str) -> dict:
+        """The CLI's release, on the machine's connector: its exit code read as the release's
+        status, the lines it lists as what failed."""
+        from click.testing import CliRunner
+        from rich.console import Console
+
+        from glorfindel import cli
+        real = (actions.AzureConnector, cli._record_manual_action, cli.console)
+        actions.AzureConnector = lambda **_k: self.connector
+        cli._record_manual_action = lambda *a, **k: None          # runs/: not the machine's
+        cli.console = Console(width=1000)                          # one item, one line
+        try:
+            res = CliRunner().invoke(cli.cli, ["release", rid, "--yes"])
+        finally:
+            actions.AzureConnector, cli._record_manual_action, cli.console = real
+        if res.exit_code == 0:
+            return {"status": "released"}
+        if res.exit_code == 2:
+            return {"status": "release_partial",
+                    "failed": [line.strip()[2:] for line in res.output.splitlines() if line.strip().startswith("• ")]}
+        raise res.exception if res.exception and not isinstance(res.exception, SystemExit) else RuntimeError(res.output)
+
+    def _release(self, vm, rid, fault, call=None):
         self._check_authors()                      # which states held which NICs (I8F)
         flows, states = self._before()
         states_before_release = self._state(vm)
         self.releasing.add(vm)
         writes = len(self.fake.journal)
-        out, err = self._run(fault, lambda: self.connector.release_isolation(rid), "release")
+        out, err = self._run(fault, call or (lambda: self.connector.release_isolation(rid)), "release")
         if (out or {}).get("status") == "released" or (err is not None and len(self.fake.journal) == writes):
             # Released — or failed before writing anything to Azure (its intent marker
             # refused by a full disk): nothing was started, nothing to undo (I9).

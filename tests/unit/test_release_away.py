@@ -517,3 +517,159 @@ def test_the_warning_stays_when_a_nics_message_names_the_unreadable_file(monkeyp
     assert len([s for s in named if "état local illisible" in s]) == 1, out          # the reason, once
     assert [s for s in named if "avant de le retirer" in s and q.rsplit("/", 1)[-1] in s], out
     assert sf.read_text() == _BROKEN
+
+
+# ── I3V (#450) : une levée partielle relancée ne dit jamais « vérifiée » ───────────────────
+
+def _partial_left(monkeypatch, with_state: bool):
+    """I3R's retry, its state readable: the quarantine NSG unreadable, the release gives web-nic
+    its NSG back and keeps that NSG in its partial state (`quarantines_left`); the NSG reads
+    again. Returns the world."""
+    from glorfindel.actions import _clear_isolation_state, _load_isolation_state
+    f, c, own, q = _in_quarantine(monkeypatch)
+    if not with_state:
+        _clear_isolation_state(WEB)
+    real = _refuse_listing(monkeypatch, f, q)
+    assert c.release_isolation(WEB)["status"] == "release_partial"
+    monkeypatch.setattr(f.network.security_rules, "list", real)
+    assert _load_isolation_state(WEB)["quarantines_left"] and _iso_on(f, q)
+    assert key(f.nics[key(WEB_NIC)]["nsg"]) == key(own)
+    return f, c, own, q
+
+
+def _cli(monkeypatch, c, *args):
+    from click.testing import CliRunner
+    from rich.console import Console
+
+    from glorfindel import cli
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **_k: c)
+    monkeypatch.setattr(cli, "_record_manual_action", lambda *a, **k: None)     # runs/: not the test's
+    monkeypatch.setattr(cli, "console", Console(width=400))                     # one item, one line
+    return CliRunner().invoke(cli.cli, list(args))
+
+
+@pytest.mark.parametrize("with_state", [False, True])
+def test_the_verification_of_a_partial_release_looks_on_the_quarantine_nsg_it_left(monkeypatch, with_state):
+    """web-nic back on its own NSG, its pair on the quarantine NSG it left: verify_release looked
+    only at the NSGs that govern it now — « verified ». The NSG the partial state names is read:
+    the pair is there, named with that NSG."""
+    f, c, own, q = _partial_left(monkeypatch, with_state)
+    v = c.verify_release(WEB)
+    assert v["verified"] is False, v
+    assert sorted(s.split(":", 1)[1].split(" ", 1)[0] for s in v["still_isolated"]) == _iso_on(f, q), v
+    assert all(q.rsplit("/", 1)[-1] in s and "NSG de quarantaine quitté" in s for s in v["still_isolated"]), v
+
+
+def test_the_verification_says_a_quarantine_nsg_left_that_cant_be_read(monkeypatch):
+    """The quarantine NSG the partial state names unreadable at the verification: unknown, never
+    verified (A0)."""
+    f, c, own, q = _partial_left(monkeypatch, with_state=True)
+    _refuse_listing(monkeypatch, f, q)
+    v = c.verify_release(WEB)
+    assert v["verified"] is False and any(q.rsplit("/", 1)[-1] in u for u in v["unreadable"]), v
+
+
+def _placed_on_the_quarantine(monkeypatch):
+    """The state as a partial release leaves it in I3R's world: web-nic's isolation placed by rules
+    on the quarantine NSG (written there while it had lost our tag), its delete failed; web-nic
+    given its NSG back meanwhile — out of its sight."""
+    from glorfindel.actions import _load_isolation_state, _save_isolation_state
+    f, c, own, q = _in_quarantine(monkeypatch)
+    st = _load_isolation_state(WEB)
+    q_rg, q_name = q.split("/")[4], q.rsplit("/", 1)[-1]
+    _save_isolation_state(WEB, {"resource_id": st["resource_id"], "isolated_at": st["isolated_at"],
+                                "release_failed": ["x"], "placements": [{
+                                    "nic_id": WEB_NIC, "nsg_rg": q_rg, "nsg_name": q_name, "scope": "nic",
+                                    "shared_nsg": True, "ips": ["10.0.0.4"], "priority": 100,
+                                    "rule_in": _iso_name(), "rule_out": f"{_iso_name()}-out", "bumped": [],
+                                    "applied": [_iso_name(), f"{_iso_name()}-out"]}]})
+    f.nics[key(WEB_NIC)]["nsg"] = own
+    return f, c, own, q
+
+
+def test_the_verification_reads_the_nsg_a_placement_names_that_the_nic_left(monkeypatch):
+    """No `quarantines_left` there: the placement names the NSG. verify_release read only the NSGs
+    that govern web-nic now — « verified »; the release undoes the placement by its names."""
+    f, c, own, q = _placed_on_the_quarantine(monkeypatch)
+    v = c.verify_release(WEB)
+    assert v["verified"] is False, v
+    assert len(v["still_isolated"]) == 2 and all("placement de l'état" in s for s in v["still_isolated"]), v
+
+
+def test_reset_from_azure_reads_the_nsg_a_placement_names_that_the_nic_left(monkeypatch):
+    """The same for `reset --from-azure`: `swept`, the pair left. Taken off."""
+    f, c, own, q = _placed_on_the_quarantine(monkeypatch)
+    out = c.sweep_vm_rules(WEB)
+    assert out["status"] == "swept" and _iso_on(f, q) == [], out
+
+
+def test_the_verification_counts_only_the_nics_rules_on_the_quarantine_nsg_it_left(monkeypatch):
+    """batch stays in the same quarantine, a rule of its own there; web-nic back on its NSG, its
+    pair gone, the partial state still naming that NSG: batch's rule never holds web's
+    verification (its hash, I4) — verified."""
+    from glorfindel.actions import _load_isolation_state, _save_isolation_state
+    f, c, own, q = _in_quarantine(monkeypatch, other=True)
+    st = _load_isolation_state(WEB)
+    for name in [n for n in _iso_on(f, q) if "-web-" in n]:
+        del f.nsgs[key(q)]["rules"][name]
+    f.nics[key(WEB_NIC)]["nsg"] = own
+    _save_isolation_state(WEB, {"resource_id": st["resource_id"], "isolated_at": st["isolated_at"],
+                                "placements": [], "release_failed": ["x"],
+                                "quarantines_left": {WEB_NIC: [q.split("/")[4], q.rsplit("/", 1)[-1]]}})
+    assert [n for n in _iso_on(f, q) if "batch" in n]
+    v = c.verify_release(WEB)
+    assert v["verified"] is True, v
+
+
+def test_the_cli_release_after_a_partial_one_takes_the_pair_off(monkeypatch):
+    """`glorfindel release` asks verify_release first: « No active isolation found on NSG — state
+    cleared », exit 0, the pair left on the quarantine NSG and the file that named it gone. Now
+    the release runs: it looks there and takes the pair off."""
+    from glorfindel.actions import _load_isolation_state
+    f, c, own, q = _partial_left(monkeypatch, with_state=False)
+    res = _cli(monkeypatch, c, "release", WEB, "--yes")
+    assert res.exit_code == 0 and "state cleared" not in res.output, res.output
+    assert "Isolation released" in res.output, res.output
+    assert _iso_on(f, q) == [] and _load_isolation_state(WEB) is None
+
+
+def test_the_cli_release_after_a_partial_one_whose_pair_stays_exits_2(monkeypatch):
+    """The same, the pair's delete refused this time: never « state cleared » — exit 2, the
+    state kept (the console's approval runs this command, and reads its exit code)."""
+    from glorfindel.actions import _load_isolation_state
+    f, c, own, q = _partial_left(monkeypatch, with_state=True)
+    real = f.network.security_rules.begin_delete
+
+    def refused(rg, nsg, name):
+        if name.startswith("glorfindel-iso"):
+            raise RuntimeError("(TooManyRequests) 429")
+        return real(rg, nsg, name)
+    monkeypatch.setattr(f.network.security_rules, "begin_delete", refused)
+    res = _cli(monkeypatch, c, "release", WEB, "--yes")
+    assert res.exit_code == 2 and "state cleared" not in res.output, res.output
+    assert _iso_on(f, q) and _load_isolation_state(WEB)["quarantines_left"]
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_reset_from_azure_looks_on_the_quarantine_nsg_a_partial_release_left(monkeypatch, dry_run):
+    """`reset --from-azure` read the NSGs that govern the NICs now: `swept`, the pair left on the
+    quarantine NSG and the state that named it cleared. It reads the partial state's
+    `quarantines_left` too: the pair taken off (named in the preview)."""
+    from glorfindel.actions import _load_isolation_state
+    f, c, own, q = _partial_left(monkeypatch, with_state=True)
+    pair = _iso_on(f, q)
+    out = c.sweep_vm_rules(WEB, dry_run=dry_run)
+    assert out["status"] == ("dry_run" if dry_run else "swept"), out
+    assert all(any(n in d and q.rsplit("/", 1)[-1] in d for d in out["deleted"]) for n in pair), out
+    assert _iso_on(f, q) == (pair if dry_run else [])
+    assert (_load_isolation_state(WEB) is None) is not dry_run
+
+
+def test_a_plain_reset_dry_run_never_says_clean(monkeypatch):
+    """`glorfindel reset --dry-run` ran the release in dry run and said « ✓ Reset complete — web
+    is clean » on a preview. It says what it would do, nothing changed."""
+    f, c, own, q = _partial_left(monkeypatch, with_state=True)
+    res = _cli(monkeypatch, c, "reset", WEB, "--dry-run")
+    assert res.exit_code == 0, res.output
+    assert "clean" not in res.output and "DRY RUN — aucune modification" in res.output, res.output
+    assert "lever l'isolation" in res.output and _iso_on(f, q)

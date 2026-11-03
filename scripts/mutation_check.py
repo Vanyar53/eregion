@@ -8768,6 +8768,51 @@ MUTANTS += [
 ]
 TESTS.update({"M3190": f"{_I3U_UNIT}::test_clearing_a_state_never_deletes_an_unreadable_file",
               "M3191": f"{_I3U_UNIT}::test_the_warning_stays_when_a_nics_message_names_the_unreadable_file"})
+# I3V (#450): a partial release run again — by the CLI, by the console's approval — asked verify_release
+# first, which looked only at the NSGs the NICs carry now: « verified », « state cleared », the pair left
+# on the quarantine NSG the state named. It reads where the release looks (`quarantines_left`, the NSG
+# of a placement by rules), as `reset --from-azure` does; `reset --dry-run` never says « clean ».
+_I3V_UNIT = "tests/unit/test_release_away.py"
+_I3V_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_partial_release_run_again_by_the_cli_never_says_released_with_its_pair_left")
+MUTANTS += [
+    ("M3192", "verify_release blind to the NSGs its NICs no longer carry: `glorfindel release` clears a partial "
+              "release's state, the pair left (I3V)", VER,
+     "        away_still, away_unknown = self._out_of_sight_seen(vm_name, targets, state, cache)\n",
+     "        away_still, away_unknown = [], []\n"),
+    ("M3193", "the quarantine NSG a partial release left never looked at again by the verification or the reset "
+              "(I3V)", AWY,
+     '            wanted = ([(*left[nid], "NSG de quarantaine quitté")] if nid in left else []) + [\n',
+     "            wanted = [] + [\n"),
+    ("M3194", "the NSG of a placement by rules the NIC left never looked at by the verification or the reset (I3V)",
+     AWY, '                for p in placed if p["nic_id"].rstrip("/").lower() == nid]\n',
+     "                for p in () if p]\n"),
+    ("M3195", "an NSG out of the NICs' sight that can't be read, read as nothing there: verified (I3V)", AWY,
+     "            if rules is None:\n                unknown.append(f'{view[\"nic_short\"]}:{where}')\n",
+     "            if rules is None:\n"),
+    ("M3196", "`reset --from-azure` blind to the NSGs the release looks at that the NICs left: swept, the pair "
+              "there, the state cleared (I3V)", SWP,
+     "        views += self._out_of_sight_views(targets, own_state)\n", ""),
+    ("M3197", "`reset --dry-run` says « Reset complete — <vm> is clean » on a preview (I3V)", GCLI,
+     "    if dry_run:\n        # An outline, never « clean »", "    if False:\n        # An outline, never « clean »"),
+    ("M3198", "another NIC's rule on the quarantine NSG left holds the verification: never verified (I3V)", AWY,
+     "                      for r in self._iso_rules_on(vm_name, view, rules)]\n        return still, unknown\n",
+     "                      for r in rules if _rule_name(r).startswith(\"glorfindel-iso\")]\n"
+     "        return still, unknown\n"),
+]
+TESTS.update({
+    "M3192": (f"{_I3V_SEQ} {_I3V_UNIT}::test_the_verification_of_a_partial_release_looks_on_the_quarantine_nsg_it_left "
+              f"{_I3V_UNIT}::test_the_cli_release_after_a_partial_one_takes_the_pair_off"),
+    "M3193": (f"{_I3V_UNIT}::test_the_verification_of_a_partial_release_looks_on_the_quarantine_nsg_it_left "
+              f"{_I3V_UNIT}::test_reset_from_azure_looks_on_the_quarantine_nsg_a_partial_release_left"),
+    "M3194": (f"{_I3V_UNIT}::test_the_verification_reads_the_nsg_a_placement_names_that_the_nic_left "
+              f"{_I3V_UNIT}::test_reset_from_azure_reads_the_nsg_a_placement_names_that_the_nic_left"),
+    "M3195": f"{_I3V_UNIT}::test_the_verification_says_a_quarantine_nsg_left_that_cant_be_read",
+    "M3196": (f"{_I3V_UNIT}::test_reset_from_azure_looks_on_the_quarantine_nsg_a_partial_release_left "
+              f"{_I3V_UNIT}::test_reset_from_azure_reads_the_nsg_a_placement_names_that_the_nic_left"),
+    "M3197": f"{_I3V_UNIT}::test_a_plain_reset_dry_run_never_says_clean",
+    "M3198": f"{_I3V_UNIT}::test_the_verification_counts_only_the_nics_rules_on_the_quarantine_nsg_it_left",
+})
 
 
 if __name__ == "__main__":

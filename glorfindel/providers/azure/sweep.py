@@ -75,6 +75,9 @@ class SweepMixin:
         unreadable += [f'{t0["nic_short"]}: NSG du subnet illisible' for t0 in targets if t0.get("subnet_unreadable")]
         originals: dict[str, str | None] = {}
         views = [v for t0 in targets for v in self._nic_nsg_views(t0)]
+        # Where the release looks that a NIC no longer carries — the quarantine NSG a partial release
+        # left (I3R), a placement's NSG: `swept`, the pair left there, the state that named it cleared (I3V).
+        views += self._out_of_sight_views(targets, own_state)
         failed_early: list[str] = []
         for t0 in quarantined:
             try:

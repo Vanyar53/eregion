@@ -5880,6 +5880,314 @@ def test_a_disappearance_beside_the_graphs_card_is_said_on_its_own(monkeypatch, 
         m.teardown()
 
 
+# ── L1Qs (#424): the reassertion in two passes; a mode per VM, a perimeter on the data subnet ──
+
+def _seed9_net():
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    return {
+        "subnet_nsg": [r("allow-lateral-out", 100)], "edge_nsg": None, "tier_rules": [r("allow-ssh", 100)],
+        "nics": {"web-nic": {"own": None, "rules": [r("allow-ssh", 100), r("allow-lateral-out", 100),
+                                                    r("deny-lateral-in", 130)], "policy": False},
+                 "db-nic-0": {"own": "dedicated", "rules": [r("allow-ssh", 100)], "policy": False},
+                 "db-nic-1": {"own": None, "rules": [], "policy": False},
+                 "api-nic": {"own": "dedicated", "rules": [], "policy": False}},
+        "windows": None, "config": {"quarantine": False, "rg": "", "forensic": [], "readable": True},
+        "legacy": ("web-nic", True),
+        "data_subnet": [r("allow-ssh", 150), r("allow-lateral-out", 120), r("deny-lateral-in", 130)]}
+
+
+_SEED9_FOUND = (
+    ("block_perimeter", WEB2, WEB2.lower(), None, True),
+    ("kept_at_the_lift", WEB2, WEB2, (12, "after-429"), "release",
+     (key(_SUBNET), "glorfindel-iso-web-web-nic-80ab3c"), _nic("rg-app2", "web-nic"),
+     0, 4, "rg-app1", "web", True),
+    ("block", WEB2, WEB2, ("rule.list", "always-429"), 22),
+    ("block_perimeter", DB, DB, (6, "before-429"), False))
+
+
+@pytest.mark.parametrize("steps", [_SEED9_FOUND, _SEED9_FOUND[-1:]], ids=["as found", "reduced"])
+def test_a_perimeter_block_never_names_uncovered_a_nic_whose_subnet_it_could_not_read(monkeypatch, steps):
+    """I3G's seed 9 at 60 (on `main`, unrelated to I3G): Db--01 blocked on its subnet, the 6th
+    call answered 429 — the read of db-nic-0's subnet, while the block looked for the NICs off the
+    perimeter. The NIC's subnet NSG unknown, its views held its own NSG alone: db-nic-0, behind
+    the perimeter, was named « not behind it, the IP still reaches it » (`uncovered_nics`,
+    `blocked_partial`). Reduced to that one step; as found, after three others."""
+    _run(monkeypatch, _seed9_net(), *steps)
+
+
+def test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered(monkeypatch):
+    """The cause, at the connector (L1Qs): db-nic-0's subnet unreadable once. The NICs off the
+    perimeter are not known — neither all covered nor db-nic-0 off it: the perimeter block says
+    its NICs unread (`nics_unread`, `blocked_partial`), never db-nic-0 uncovered; its verification
+    says it can't tell, never `uncovered_nics`."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[], db_nic_0={"own": "dedicated"}))
+        c = m.connector
+        real = c._subnet_nsg_of
+        failing = {"n": 0}
+
+        def once(nic):
+            if failing["n"] and nic.id.rstrip("/").lower().endswith("db-nic-0"):
+                failing["n"] -= 1
+                raise RuntimeError("(TooManyRequests) subnets")
+            return real(nic)
+        monkeypatch.setattr(c, "_subnet_nsg_of", once)
+        failing["n"] = 1
+        out = c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        assert "db-nic-0" not in (out.get("uncovered_nics") or []), out
+        assert out["status"] == "blocked_partial" and out.get("nics_unread"), out
+        failing["n"] = 1
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is None and "uncovered_nics" not in v, v
+        failing["n"] = 0
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is False and v["uncovered_nics"] == ["db-nic-1"], v
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def _data_primary_net(**kw):
+    """Db--01's primary NIC on the data subnet (L1Qs): its perimeter block lies there."""
+    return {**_net(subnet_nsg=[], data_subnet=[], **kw), "data_primary": True}
+
+
+def test_a_nic_off_the_perimeter_another_perimeter_cuts_off_is_not_said_reached(monkeypatch):
+    """L1Qs, the third case of #424: Db--01's primary NIC on the data subnet, web blocked on the app
+    subnet, then Db--01 on its own. db-nic-0, on the app subnet, is off Db--01's perimeter — and
+    behind web's, which cuts the attacker off it. The perimeter alone said it uncovered, « l'IP les
+    atteint » (`blocked_partial`; the reassertion's card), without reading the other perimeter.
+    Now: `blocked`, verified, no card; web's perimeter lifted, db-nic-0 is uncovered, and said."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_data_primary_net())
+        c = m.connector
+        assert c.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")["status"] == "blocked"
+        out = c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        assert out["status"] == "blocked" and "uncovered_nics" not in out, out
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is True and v.get("held_by_perimeter") == ["db-nic-0"], v
+        m.reassert(Script("non_disruptive", None))
+        assert not _cards(m), _cards(m)
+        assert c.unblock_ip(ATTACKER, WEB1)["status"] == "unblocked"
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is False and v["uncovered_nics"] == ["db-nic-0"], v
+        m.reassert(Script("non_disruptive", None))
+        (card,) = _cards(m)
+        assert "ne couvre pas db-nic-0" in card, card
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_a_nic_off_the_perimeter_whose_other_perimeter_cant_be_read_is_unknown(monkeypatch):
+    """The same, the app subnet's NSG unreadable: whether web's perimeter cuts db-nic-0 off is not
+    known — never « uncovered, the IP reaches it », never verified either."""
+    import shutil
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_data_primary_net())
+        c = m.connector
+        c.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")
+        c.block_suspicious_ip(ATTACKER, DB, scope="subnet")
+        m.fake.unreadable.add(key(_SUBNET))
+        v = c.verify_block_ip(ATTACKER, DB)
+        assert v["verified"] is None and v.get("perimeter_unread") == ["db-nic-0"], v
+        assert "uncovered_nics" not in v, v
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_perimeter_beside_another_on_the_app_subnet_never_says_db_nic_0_reached(monkeypatch, mode):
+    """Found by the machine (L1Qs, seeds 5 and 8 at 60, `data_primary`, one rule): web blocked on
+    the app subnet and for itself, then Db--01 — its primary NIC on the data subnet — blocked on
+    its own subnet, beside it (`perimeter_lifted_beside_a_block`). db-nic-0, on the app subnet, is
+    off Db--01's perimeter and behind web's: the block named it uncovered, « l'IP les atteint »."""
+    _run(monkeypatch, _data_primary_net(),
+         ("blocked_again_after_an_acknowledged_drift", WEB1, WEB1, None, 22, DB, False, DB, 22, mode))
+
+
+@pytest.mark.parametrize("listed", ["Db--01 first", "web first"])
+@pytest.mark.parametrize("taken", ["all", "pairs"])
+@pytest.mark.parametrize("mate", [WEB1, WEB2], ids=["web1", "web2"])
+def test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_off(monkeypatch, listed, taken, mate):
+    """L1Qs, the first case of #424, on the fake (`perimeters_on_two_subnets`): Db--01's primary NIC on
+    the data subnet, Db--01 blocked there, web on the app subnet — db-nic-0 sits behind web's
+    perimeter, off Db--01's. Our rules taken off (all, or both pairs), a pass outside human_only.
+    Db--01's entry read first (the listing's order, both entries holding a perimeter: L1Qr's sort
+    can't tell them apart): its pair rewritten, read again with web's still gone — « ses règles
+    réécrites une fois, il ne tient pas en entier — n'est plus bloquée sur db-nic-0 »; web's entry
+    put its pair back a moment later. False once the pass ended. Two times: every pair first."""
+    from glorfindel import actions as facade
+    real = facade.active_blocks
+    first = "Db--01" if listed == "Db--01 first" else "web"
+    monkeypatch.setattr(facade, "active_blocks", lambda: sorted(real(), key=lambda b: b["vm_name"] != first))
+    _run(monkeypatch, _data_primary_net(),
+         ("perimeters_on_two_subnets", DB, mate, 22, [DB, mate], DB, False, mate, False, taken, 1,
+          *["non_disruptive"] * 4, "non_disruptive"))
+
+
+_API1 = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+
+
+def test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said(monkeypatch):
+    """Found by the machine (L1Qs, seed 1 at 500, before the two times; four rules of 30, shrunk by
+    hand): web blocked on its subnet and for itself, deleted, its address to a new VM `api`
+    (`turned_then_address_reused`); api blocked on its subnet and for itself, beside Db--01
+    (`blocked_again_after_an_acknowledged_drift`); the graph's card on it; its block's rules taken
+    off, said in human_only, the card acknowledged; its rules put back, the pair still gone, in a
+    pass whose first write is refused (a full disk) — the baseline was narrowed after that write,
+    never reached —; then gone again: « not worse than the card », unsaid (L1). Red on `main`."""
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    net = {"subnet_nsg": [r("allow-ssh", 100), r("allow-lateral-out", 100)], "edge_nsg": None,
+           "tier_rules": [r("allow-https", 100), r("deny-lateral-in", 130)],
+           "nics": {"web-nic": {"own": None, "rules": [r("allow-https", 100)], "policy": True},
+                    "db-nic-0": {"own": "dedicated", "rules": [r("allow-ssh", 100)], "policy": True},
+                    "db-nic-1": {"own": None, "rules": [r("allow-ssh", 100)], "policy": False},
+                    "api-nic": {"own": None, "rules": [r("allow-https", 100)], "policy": False}},
+           "windows": None, "config": {"quarantine": True, "rg": "", "forensic": [], "readable": True},
+           "legacy": None,
+           "data_subnet": [r("allow-ssh", 100), r("allow-lateral-out", 100), r("deny-lateral-in", 130)],
+           "data_primary": False}
+    _run(monkeypatch, net,
+         ("turned_then_address_reused", WEB1, WEB1, None, 22, "both", 22,
+          (key(_SUBNET), "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"),
+          "non_disruptive", False, 22, True, "rg-app1", "api", None, "Linux", True, "human_only", "non_disruptive"),
+         ("blocked_again_after_an_acknowledged_drift", _API1, _API1, None, None, DB, False, _API1, 22, "human_only"),
+         ("graph_card_before_a_disappearance", _API1, _API1, ("nic.get", "always-429"), True, "non_disruptive"),
+         ("said_then_back_after_a_full_disk", "gone", _API1, _API1, None, False, 22, (1, "from-full")))
+
+
+_TIER = "/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-tier"
+_API_NEW = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/api"
+
+
+@pytest.mark.xfail(strict=True, reason="U1, an older defect of the orphan sweep: L1Qs' seed 10 at 500, red on `main`, "
+                                       "out of this lot (#424)")
+def test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off(monkeypatch):
+    """Found by the machine while measuring L1Qs (seed 10 at 500; 92 draws, shrunk by hand to four
+    rules of `main`, none of L1Qs'): Db--01 blocked on its subnet's NSG (nsg-tier, shared by its
+    NICs), one of its rules turned into an allow, its address given to a new VM `api`; api blocked,
+    one of its rules turned, its address changed, given to another; a customer changes web2's
+    address; web blocked on its subnet and for itself, turned, its address reused. The orphan sweep
+    leaves « glorfindel-block-…-db--01-db-nic-1-…-out » on nsg-tier, a live VM cut off by it (U1).
+    Red on `main` as on this branch: frozen, routed (not this lot's)."""
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    _run(monkeypatch, _net(tier_rules=[r("allow-ssh", 100), r("deny-lateral-in", 130)], legacy=("web-nic", False),
+                           web_nic={"own": "tier"}, db_nic_0={"own": "tier"}, db_nic_1={"own": "tier"}),
+         ("turned_then_address_reused", DB, DB, None, 22, "subnet",
+          (_TIER, "glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228"), "non_disruptive", False, 22, False,
+          "rg-new", "api", "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/"
+          "nsg-tier", "Linux", False, "non_disruptive"),
+         ("address_reused_under_a_turned_rule", _API_NEW, _API_NEW, None, 22,
+          (_TIER, "glorfindel-block-192-31-196-7-api-api-nic-4-4b1857"),
+          "/subscriptions/s/resourcegroups/rg-new/providers/microsoft.network/networkinterfaces/api-nic-4", 0, 4,
+          "rg-new", "web", None, "Linux"),
+         ("customer_changes_ip", _nic("rg-app2", "web-nic"), 0, 4),
+         ("turned_then_address_reused", WEB1, WEB1, None, None, "both", 22,
+          (_TIER, "glorfindel-block-192-31-196-7-api-api-nic-4-b-4b1857"), "human_only", False, 22, False,
+          "rg-app1", "web", True, "non_disruptive"))
+
+
+@pytest.mark.xfail(strict=True, reason="L1, an older defect: the unmutated run of L1Qs' mutation harness, red on `main`, "
+                                       "out of this lot (#424)")
+def test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone(monkeypatch):
+    """Found by the mutation harness's unmutated run while measuring L1Qs (a random seed at 60, 24
+    rules, shrunk by hand to eight of `main`, none of L1Qs'): a new VM given Db--01's old address under
+    a turned rule; it blocked, one of its rules turned, the pass outside human_only; a card acknowledged; the role removed
+    (writes refused); its address changed; a quarantine change that comes back; the operator
+    acknowledges a card; web's block taken up by its lowercase id. « L1: the block on …/rg-new/…/web
+    vanished from Azure; the reassertion neither put it back nor said so ». Red on `main` 7ac1f37 as on
+    this branch: frozen, routed."""
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    net = {'subnet_nsg': [r('allow-https', 110), r('allow-lateral-out', 100), r('deny-lateral-in', 130)], 'edge_nsg': [r('allow-ssh', 150), r('allow-lateral-out', 1200)], 'tier_rules': [r('allow-https', 100)], 'nics': {'web-nic': {'own': 'tier', 'rules': [r('allow-ssh', 150), r('allow-https', 110), r('deny-lateral-in', 130)], 'policy': False}, 'db-nic-0': {'own': None, 'rules': [], 'policy': True}, 'db-nic-1': {'own': 'tier', 'rules': [r('allow-ssh', 101), r('allow-https', 1100), r('allow-lateral-out', 120)], 'policy': False}, 'api-nic': {'own': 'dedicated', 'rules': [r('allow-ssh', 1000), r('allow-lateral-out', 100)], 'policy': True}}, 'windows': None, 'config': {'quarantine': True, 'rg': 'rg-sec', 'readable': True, 'forensic': []}, 'legacy': None, 'data_subnet': None, 'data_primary': False}
+    _run(monkeypatch, net,
+         ("address_reused_under_a_turned_rule", '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/Db--01', '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.compute/virtualmachines/db--01', None, None, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228'), '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networkinterfaces/db-nic-1', 0, 20, 'rg-new', 'web', None, 'Linux'),
+         ("block_turned_then_reasserted", '/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-new/providers/microsoft.compute/virtualmachines/web', ('vm.get', 'always-429'), 'vm', None, ('/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-subnet', 'glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228'), 'non_disruptive'),
+         ("operator_acknowledges", 3),
+         ("access_changes", True),
+         ("customer_changes_ip", '/subscriptions/s/resourcegroups/rg-new/providers/microsoft.network/networkinterfaces/web-nic-4', 0, 4),
+         ("quarantine_change_comes_back", '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.compute/virtualmachines/web', None, True, True, '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'non_disruptive', 'role removed', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 2, 'non_disruptive', 'non_disruptive', 'human_only', (1, 'from-full'), True, 'human_only'),
+         ("operator_acknowledges", 4),
+         ("taken_up_by_its_lowercase_id", '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', 'block', 22, 'human_only'))
+
+
+@pytest.mark.parametrize("merged", [True, False], ids=["merged", "perimeter alone"])
+def test_a_pair_put_back_by_the_first_time_narrows_its_drift_like_any_read(monkeypatch, merged):
+    """L1Qs' 5.5 review (blocking), on the fake: a block on its subnet (and for itself, merged), its
+    pair's inbound rule and its VM's rules gone while writes are refused — « le reposer a échoué »,
+    acknowledged; writes allowed again, the VM's rules back, the pair's outbound rule gone too: better
+    on one side, worse on the other — the first time puts the pair back, « reposé une fois »; then
+    the same rules gone again: said. The review's probe (a connector that leaves the entry's marks as
+    they are) found this last disappearance unsaid: the second time skipped its first read's
+    prologue — the baseline never narrowed (`test_reassert.py`, red before the fix). Here the Azure
+    adapter's write of the block clears the drift marks itself (L1Q: a block written whole is a new
+    episode), so the sequence is said either way — green before and after; kept, the adapter's side."""
+    import copy
+    import shutil
+
+    from glorfindel import escalations
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        c, rules = m.connector, m.fake.nsgs[key(_SUBNET)]["rules"]
+        assert c.block_suspicious_ip(ATTACKER, WEB2, scope="subnet")["status"] == "blocked"
+        if merged:
+            assert c.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)["status"] == "blocked"
+        mine = [n for n in rules if n.startswith(_WEB2_BLOCK)]
+        first = [_PERIMETER] + mine                         # the inbound rule of the pair, the VM's rules
+        kept = {n: copy.deepcopy(rules[n]) for n in [*first, f"{_PERIMETER}-out"]}
+
+        def take_off(names):
+            for n in names:
+                rules.pop(n, None)
+            m._claims_after_a_change()
+
+        def cards():
+            return [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"
+                    and (e.get("signal_id") or "").startswith("reassert-")]
+        take_off(first)
+        m.fake.write_denied = True
+        m.reassert(Script("non_disruptive", None))
+        (card,) = cards()
+        assert "a échoué" in card["reason"], card["reason"]
+        escalations.resolve(card["id"])                                 # the operator acknowledges it
+        m.fake.write_denied = False
+        rules.update({n: copy.deepcopy(kept[n]) for n in mine})           # better: the VM's rules back
+        take_off([f"{_PERIMETER}-out"])                                   # worse: the pair's other half gone
+        m.reassert(Script("non_disruptive", None))
+        assert any("reposé une fois" in e["reason"] for e in cards()), [e["reason"] for e in cards()]
+        for e in cards():
+            escalations.resolve(e["id"])
+        take_off(first)                                                   # the same rules gone again
+        m.reassert(Script("non_disruptive", None))
+        assert cards(), "the same rules gone again after the pair put back were never said"
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
 _NSG_WEB_NIC = "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-web-nic"
 
 

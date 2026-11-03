@@ -5011,11 +5011,11 @@ TESTS.update({f"M{n}": _RB1 for n in range(1645, 1648)})
 # RB1, fourth review: a drift card said again when it worsens, never when it doesn't. M1648–M1649.
 MUTANTS += [
     ("M1648", "a drift worse than its card never said again: acknowledged, a perimeter deleted after it "
-              "opened the VM in silence (RB1, 4th review)", R,
+              "opened the VM in silence (RB1, 4th review)", RSD,
      "    if not isinstance(said, dict):\n        return False\n    return bool(",
      "    return False\n    return bool("),
     ("M1649", "a drift card said again at every pass, the same or better: one card per disappearance no more "
-              "(RB1, 4th review)", R,
+              "(RB1, 4th review)", RSD,
      '    return bool((said.get("blocked") and not now["blocked"])\n',
      '    return bool(True or (said.get("blocked") and not now["blocked"])\n'),
 ]
@@ -6243,7 +6243,8 @@ MUTANTS += [
      '    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):\n',
      '    if iso.get("drift_alerted_at"):\n'),
     ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", R,
-     "            and drift_said(ref or vm, ip, _alert_id(vm, rid, ip))):\n", "            ):\n"),
+     '    if b.get("drift_alerted_at") and not worse and drift_said(ref or vm, ip, _alert_id(vm, rid, ip)):\n',
+     '    if b.get("drift_alerted_at") and not worse:\n'),
     ("M1944", "an isolation held again, its mark kept: the episode not known over (L2C, review)", R,
      '    if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
      '    if False:\n'),
@@ -6392,10 +6393,10 @@ MUTANTS += [
      "    _NARROWED.pop((key.lower(), ip), None)          # a new card, or over: its own record\n", ""),
     ("M2155", "a baseline narrowed only once its card is acknowledged: better while pending, acknowledged, "
               "then gone again — « not worse », unsaid for the episode (L1Q, second review)", R,
-     "        narrow_drift(ref or vm, ip, now_is)\n",
-     '        if not [e for e in __import__("glorfindel.escalations", fromlist=["pending"]).pending()\n'
-     '                if e.get("signal_id") == _alert_id(vm, rid, ip)]:\n'
-     "            narrow_drift(ref or vm, ip, now_is)\n"),
+     "        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)\n",
+     '        if worse or not [e for e in __import__("glorfindel.escalations", fromlist=["pending"]).pending()\n'
+     '                         if e.get("signal_id") == _alert_id(vm, rid, ip)]:\n'
+     "            narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)\n"),
 ]
 TESTS.update({"M2151": f"{_L1Q_BACK} {INVARIANTS}", "M2152": f"{_L1Q_BACK} {INVARIANTS}",
               "M2153": f"{_RT}a_new_episode_never_compares_with_what_held_of_the_one_before",
@@ -6472,7 +6473,7 @@ MUTANTS += [
     ("M2193", "a NIC whose rules can't be read named only after « reste bloquée » elsewhere (I3P, review, A0)", RSD,
      "    elif unsure or unknown:\n", "    elif unsure:\n"),
     ("M2194", "a drift card's record leaves out the NICs not judged: one turned open later, « not worse » (I3P, "
-              "review)", R,
+              "review)", RSD,
      '            "unsure": sorted((v.get("perimeter_unread") or []) + (v.get("nics_unknown") or [])),\n',
      '            "unsure": sorted(v.get("perimeter_unread") or []),\n'),
     ("M2195", "a NIC whose own block holds never recorded as proven: the perimeter block says it uncovered (I3P, "
@@ -8233,8 +8234,8 @@ _L1DISK = ("tests/unit/test_reassert.py::test_a_drift_better_on_one_side_is_kept
            "tests/unit/test_invariant_regressions.py::test_a_block_gone_is_said_whatever_a_check_card_write_does")
 MUTANTS += [
     ("M3120", "a drift better on one side, its card refused, keeps the old baseline: the return unsaid (L1)", R,
-     '    if b.get("drift_alerted_at"):\n        # Worse on one side, better on another:',
-     '    if False:\n        # Worse on one side, better on another:'),
+     "        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)\n",
+     "        narrow_drift(ref or vm, ip, baseline if worse else now_is)\n"),
     ("M3121", "the baseline's meet keeps « not blocked »: a block held since, then gone, unsaid (L1)", RCA,
      '            "blocked": bool(said.get("blocked")) or now["blocked"]}\n',
      '            "blocked": bool(said.get("blocked"))}\n'),
@@ -8872,7 +8873,6 @@ TESTS.update({
 })
 
 
-
 # SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's
 # contract an allow-list (V-29), no fallback on the former shared principal (V-17), the session
 # drain VM by VM (R-03). M2880–M2899.
@@ -9302,6 +9302,89 @@ TESTS.update({f"M{n}": _DGD for n in (3372, 3379)})
 TESTS.update({f"M{n}": _DGD_CON for n in (3373, 3378)})
 TESTS.update({f"M{n}": "tests/unit/test_makefile_exercise.py" for n in (3374, 3375, 3376, 3377)})
 
+
+
+# L1Qs (#424): a mode per VM and a perimeter on the data subnet in the machine; I3G's seed 9 — a NIC
+# whose subnet couldn't be read named off the perimeter it sits behind —; the perimeter alone, which
+# said « the IP reaches » a NIC another VM's perimeter cuts off; the reassertion of the blocks in two
+# times — every perimeter pair first; a drift's baseline narrowed before any write of the pass. M2990–M2999,
+# M3150–M3154 (the reserve, entered).
+RPB = "glorfindel/reassert_perimeters.py"
+_L1QS_REG = "tests/unit/test_invariant_regressions.py::"
+_L1QS_UNIT = "tests/unit/test_reassert.py::"
+_L1QS_SEED9 = (f"{_L1QS_REG}test_a_perimeter_block_never_names_uncovered_a_nic_whose_subnet_it_could_not_read "
+               f"{_L1QS_REG}test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered")
+_L1QS_OTHER = (f"{_L1QS_REG}test_a_nic_off_the_perimeter_another_perimeter_cuts_off_is_not_said_reached "
+               f"{_L1QS_REG}test_a_perimeter_beside_another_on_the_app_subnet_never_says_db_nic_0_reached")
+_L1QS_UNREAD = f"{_L1QS_REG}test_a_nic_off_the_perimeter_whose_other_perimeter_cant_be_read_is_unknown"
+_L1QS_TWO = (f"{_L1QS_UNIT}test_two_perimeters_on_two_subnets_are_both_put_back_before_a_block_is_read_again "
+             f"{_L1QS_REG}test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_off")
+_L1QS_FIRST = f"{_L1QS_UNIT}test_the_first_time_writes_only_what_the_second_would"
+_L1QS_DECIDE = '    return not (b.get("reasserted_at") or r._mode(autonomy, vm, ref) == "human_only")\n'
+_L1QS_OFF = '                    off = [n for n, s in stand.items() if s == "no"]\n'
+MUTANTS += [
+    ("M2990", "a NIC whose subnet couldn't be read (a 429) named off the perimeter it sits behind: « the IP still "
+              "reaches it » (L1Qs, I3G's seed 9)", PER,
+     '        if unread := [t["nic_short"] for t in targets if t.get("subnet_unreadable")]:\n',
+     "        if unread := []:\n"),
+    ("M2991", "the perimeter alone reads no other perimeter: a NIC off it another VM's cuts off said reached (L1Qs)",
+     VBL, _L1QS_OFF, '                    off = [n for n, s in stand.items() if s != "unknown"]\n'),
+    ("M2992", "another perimeter that can't be read taken for none: the NIC said reached (L1Qs)", VBL,
+     _L1QS_OFF, '                    off = [n for n, s in stand.items() if s != "holds"]\n'),
+    ("M2993", "another perimeter that can't be read taken for holding: the block verified (L1Qs, A0)", VBL,
+     "                    if unsure:\n", "                    if False:\n"),
+    ("M2994", "no first time: an entry read again before another's pair is back (L1Qs)", R,
+     "    put_back = put_back_perimeters(connector, autonomy, blocks, report)\n", "    put_back = {}\n"),
+    ("M2995", "the first time writes the pair of an entry in human_only (L1Qs, I5)", RPB,
+     _L1QS_DECIDE, '    return not b.get("reasserted_at")\n'),
+    ("M2996", "the first time writes again a pair put back once: two removals no longer deliberate (L1Qs)", RPB,
+     _L1QS_DECIDE, '    return not r._mode(autonomy, vm, ref) == "human_only"\n'),
+    ("M2997", "the first time retries at every pass a disappearance said and no worse (L1Qs)", RPB,
+     '    if (b.get("drift_alerted_at") and not r._worse(', "    if (False and not r._worse("),
+    ("M2998", "the second time ignores what the first put back: its pair read whole, « reposé » never said, or "
+              "said « ne le repose pas » (L1Qs)", R,
+     '                                ref=snapshot["resource_id"], put_back=put_back)\n',
+     '                                ref=snapshot["resource_id"])\n'),
+    ("M2999", "the first time's write refused, swallowed: the card says its rules rewritten (L1Qs)", R,
+     '    if pair is not None and pair["error"] is not None:\n        failed("subnet", pair["error"])\n',
+     '    if False:\n        failed("subnet", pair["error"])\n'),
+    ("M3150", "the second time writes the pair again over the first's (L1Qs)", R,
+     "    for scope in scopes[1:] if pair is not None else scopes:\n", "    for scope in scopes:\n"),
+    ("M3151", "the first time writes the pair of an entry an unblock holds (L1Qs, I9)", RPB,
+     '                        or r._held_by_an_operation(b, "unblock_failed", "unblocking_at")):\n',
+     "                        or False):\n"),
+    ("M3152", "the baseline narrowed after the pass's first write: refused (a full disk), the rules gone again "
+              "read « not worse than the card », unsaid (L1Qs, the machine)", R,
+     '    if b.get("drift_alerted_at") and _missing(verification) and not never_covered:\n        # Better than its card, here,',
+     '    if False:\n        # Better than its card, here,'),
+]
+MUTANTS += [
+    ("M3153", "an entry the first time wrote skips its first read's narrowing: better and worse, written, the same "
+              "rules gone again read « not worse », unsaid (L1Qs, 5.5 review)", R,
+     '    if b.get("drift_alerted_at") and _missing(verification) and not never_covered:\n',
+     '    if b.get("drift_alerted_at") and _missing(verification) and not never_covered and pair is None:\n'),
+    ("M3154", "an entry the first time wrote skips its first read's prologue: a check that raised stays carded "
+              "(L1Qs, 5.5 review)", R,
+     '    if verification.get("verified") is not None:\n        unverified_over(vm, rid, ip)\n',
+     '    if verification.get("verified") is not None and pair is None:\n        unverified_over(vm, rid, ip)\n'),
+]
+TESTS.update({
+    "M3153": f"{_L1QS_UNIT}test_a_drift_better_and_worse_in_a_pass_that_writes_narrows_its_baseline",
+    "M3154": f"{_L1QS_UNIT}test_a_check_that_raised_is_over_once_the_first_time_reads_and_writes",
+    "M3152": (f"{_L1QS_UNIT}test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said "
+              f"{_L1QS_REG}test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said"),
+    "M2990": f"{_L1QS_SEED9} {INVARIANTS}", "M2991": f"{_L1QS_OTHER} {INVARIANTS}",
+    "M2992": _L1QS_UNREAD, "M2993": _L1QS_UNREAD,
+    "M2994": f"{_L1QS_TWO} {INVARIANTS}",
+    "M2995": f"{_L1QS_UNIT}test_a_block_in_human_only_is_said_once_its_neighbours_perimeter_is_back {INVARIANTS}",
+    "M2996": f"{_L1QS_FIRST} {INVARIANTS}", "M2997": f"{_L1QS_FIRST} {INVARIANTS}",
+    "M2998": _L1QS_TWO,
+    "M2999": f"{_L1QS_UNIT}test_a_pair_the_first_time_failed_to_write_is_never_said_put_back",
+    "M3150": _L1QS_TWO, "M3151": f"{_L1QS_FIRST} {INVARIANTS}",
+})
+# L1Qr's order, kept for an entry the first time left to the second (its check raised): measured there.
+TESTS.update({mid: f"{_L1QR} {_L1QS_UNIT}test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_"
+                   f"blocks {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

@@ -221,16 +221,30 @@ class VerifyBlockMixin:
                     return self._block_bypassed(ip, shadowed)
                 if unknown:
                     return self._precedence_unknown(unknown, rule=entry["rule"])
+                held: list[str] = []
                 if entry.get("scoped") is False:     # the VM's NICs it doesn't cover (RB1, review)
                     try:
-                        off = [t["nic_short"] for t in self._off_perimeter(rg, vm_name, nsg_rg, nsg_name)]
+                        targets = self._off_perimeter(rg, vm_name, nsg_rg, nsg_name)
                     except Exception as exc:
                         return {"verified": None, "method": "nsg_check",
                                 "error": f"blocage non vérifiable : cartes illisibles ({_first_line(exc)[:_ERR_MAX]})"}
+                    # Off it, a NIC another perimeter block cuts off on its own subnet (another VM's
+                    # entry) is blocked: « l'IP les atteint » was said of it (L1Qs, #424).
+                    stand = {t["nic_short"]: self._perimeter_holds(pair_cache, t, ip, entry.get("threat_port"))
+                             for t in targets}
+                    held = [n for n, s in stand.items() if s == "holds"]
+                    off = [n for n, s in stand.items() if s == "no"]
+                    unsure = [n for n, s in stand.items() if s == "unknown"]
+                    said = {**({"held_by_perimeter": held, "perimeter_rule": entry["rule"]} if held else {}),
+                            **({"perimeter_unread": unsure} if unsure else {})}
                     if off:
                         return {"verified": False, "method": "nsg_check", "uncovered_nics": off, "open_nics": off,
-                                "error": f"le périmètre ne couvre pas {', '.join(off)} (autre subnet)"}
+                                **said, "error": f"le périmètre ne couvre pas {', '.join(off)} (autre subnet)"}
+                    if unsure:
+                        return {"verified": None, "method": "nsg_check", **said,
+                                "error": f"blocage non vérifiable : périmètre de {', '.join(unsure)} illisible"}
                 return {"verified": True, "method": "nsg_check", "rule": entry["rule"],
+                        **({"held_by_perimeter": held} if held else {}),
                         **({"exposure": shadowed} if shadowed else {})}
             # What is left of the pair, an allow before it (L1R): said with what is gone, as
             # for a VM's block (L1C) — this path read the pair « missing » alone.

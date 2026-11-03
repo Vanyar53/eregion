@@ -16,6 +16,15 @@ _DUPLICATE_SLACK = 4
 DEFAULT_MAX_AGE_DAYS = 90.0
 MAX_AGE_CEILING_DAYS = 3650.0
 _DAY_S = 86400
+# SEC17 (V-12, decision of Jonathan, 03/11): the date given to a real cycle stored before cycles
+# were dated (no `stored_at`). A cycle is `real` only since B2 — commit d4e51fa, 2026-10-16
+# 14:30 +0200, « chaque cycle sait s'il vient d'un exercice » — and the only writer of this
+# collection is `store`: before B2 no cycle carried `source`, and the search takes `source=real`
+# only (a cycle without the field is left out by the filter). So no real cycle is older than B2.
+# Midnight UTC that day, earlier than the commit: such a cycle is given an age at least its true
+# one (A0), never today's, never a date it carries. With the default bound, kept until about
+# 2027-01-14, then aged out.
+B2_FLOOR = 1792108800          # 2026-10-16T00:00:00Z
 
 
 def checked_max_age(days) -> float:
@@ -86,14 +95,19 @@ class CycleMemory:
         """The oldest ``stored_at`` a precedent may carry (SEC17, V-12)."""
         return int(self._clock() - self.max_age_days * _DAY_S)
 
+    def _b2_within(self) -> bool:
+        """Whether a cycle dated by the B2 floor (stored before SEC17) is still within the bound."""
+        return B2_FLOOR >= self._cutoff()
+
     def retrieve_similar(self, signal: dict, n: int = 3) -> list[dict]:
         """Return the N past cycles most similar to this signal — real cycles only, for
         every signal (SEC4a, V-12), and of a bounded age (SEC17, V-12).
 
         A cycle stored more than ``max_age_days`` ago is no precedent: a year-old decision
-        weighed as much as yesterday's. One stored before SEC17 carries no date: its age is
-        unknown, never young — it is left out too. Nothing is erased: ``age_census`` counts
-        what the age leaves out, and `glorfindel report` says it.
+        weighed as much as yesterday's. One stored before SEC17 carries no date: it is dated by
+        the B2 floor (``B2_FLOOR``, an age at least its true one), given while that floor is
+        within the bound, left out after. Nothing is erased: ``age_census`` counts what the age
+        leaves out, and `glorfindel report` says it.
 
         An exercise's cycle, or one of unknown source (recorded before B2, labelling
         unreadable), is never a precedent. Not for an exercise either: what the model is
@@ -106,13 +120,24 @@ class CycleMemory:
         if self._collection.count() == 0:
             return []
         query_text = _signal_to_text(signal)
+        size = min(n * _DUPLICATE_SLACK, self._collection.count())
+        cutoff = self._cutoff()
         results = self._collection.query(
-            query_texts=[query_text],
-            n_results=min(n * _DUPLICATE_SLACK, self._collection.count()),
-            where={"$and": [{"source": "real"}, {"stored_at": {"$gte": self._cutoff()}}]},
+            query_texts=[query_text], n_results=size, include=["documents", "metadatas", "distances"],
+            where={"$and": [{"source": "real"}, {"stored_at": {"$gte": cutoff}}]},
         )
+        found = list(zip(results["distances"][0], results["documents"][0], results["metadatas"][0]))
+        if self._b2_within():
+            # The undated ones (stored before SEC17), dated by the B2 floor — which is within the
+            # bound: the filter cannot name a missing field, so they are read among the real ones.
+            real = self._collection.query(query_texts=[query_text], n_results=size, where={"source": "real"},
+                                          include=["documents", "metadatas", "distances"])
+            found += [(d, doc, meta) for d, doc, meta in
+                      zip(real["distances"][0], real["documents"][0], real["metadatas"][0])
+                      if not _dated(meta)]
+            found.sort(key=lambda row: row[0])
         cycles, seen = [], set()
-        for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+        for _distance, doc, meta in found:
             key = (meta.get("signal_id", ""), meta.get("action", ""), meta.get("run_id", ""))
             if key in seen:
                 continue
@@ -127,21 +152,32 @@ class CycleMemory:
 
     def age_census(self) -> dict:
         """The real cycles — the only ones a search can give — by age (SEC17, V-12): ``within``
-        the bound, ``too_old`` (stored before it), ``undated`` (stored before SEC17). The two
-        last are left out of the search, never erased."""
+        the bound, ``too_old`` (stored before it: left out of the search, never erased). Among
+        them, ``b2_dated``: stored before SEC17, no date of their own, dated by the B2 floor."""
         cutoff = self._cutoff()
         got = self._collection.get(where={"source": "real"}, include=["metadatas"])
-        within = too_old = undated = 0
+        within = too_old = b2_dated = 0
         for meta in got.get("metadatas") or []:
-            at = (meta or {}).get("stored_at")
-            if isinstance(at, bool) or not isinstance(at, (int, float)):
-                undated += 1
-            elif at >= cutoff:
+            at = _stored_at(meta or {})
+            b2_dated += not _dated(meta or {})
+            if at >= cutoff:
                 within += 1
             else:
                 too_old += 1
-        return {"max_age_days": self.max_age_days, "real": within + too_old + undated,
-                "within": within, "too_old": too_old, "undated": undated}
+        return {"max_age_days": self.max_age_days, "real": within + too_old,
+                "within": within, "too_old": too_old, "b2_dated": b2_dated,
+                "b2_floor": "2026-10-16"}
+
+
+def _dated(meta: dict) -> bool:
+    """The cycle carries the date `store` gave it (SEC17)."""
+    at = meta.get("stored_at")
+    return isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at)
+
+
+def _stored_at(meta: dict) -> float:
+    """When the cycle was stored — its own date, else the B2 floor: never later than the truth."""
+    return float(meta["stored_at"]) if _dated(meta) else float(B2_FLOOR)
 
 
 def age_census(path: str | Path | None = None, max_age_days: float | None = None) -> dict:

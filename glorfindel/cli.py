@@ -1632,8 +1632,9 @@ def report(since_text: str, as_json: bool):
 
 
 def _memory_said(m: dict) -> str:
-    """SEC17 (V-12): the memory's real cycles by age — those the bound leaves out of the search
-    (too old, or stored before cycles were dated), kept and counted, never erased."""
+    """SEC17 (V-12): the memory's real cycles by age — those the bound leaves out of the search,
+    kept and counted, never erased; and apart, those stored before cycles were dated, dated by the
+    B2 floor (2026-10-16: an age at least their true one)."""
     days = f"{m.get('max_age_days', 0):g}"
     if m.get("error"):
         return f"[yellow]Memory: unreadable — {_esc_markup(''.join(c for c in str(m['error']) if c.isprintable()))}[/yellow]"
@@ -1641,9 +1642,11 @@ def _memory_said(m: dict) -> str:
         return f"Memory: none yet (age bound {days} days)"
     said = (f"Memory: {m.get('real', 0)} real cycle(s), {m.get('within', 0)} within {days} days "
             f"— {m.get('too_old', 0)} older left out of the search")
-    if m.get("undated"):
-        said += f", {m['undated']} undated (stored before cycles were dated) left out"
-    return said + " (kept, never erased)"
+    said += " (kept, never erased)"
+    if m.get("b2_dated"):
+        said += (f"; of them {m['b2_dated']} dated by the B2 floor ({m.get('b2_floor', '2026-10-16')}: "
+                 "stored before SEC17, no date of their own)")
+    return said
 
 
 def _print_memory(m: dict) -> None:

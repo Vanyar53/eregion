@@ -156,7 +156,8 @@ glorfindel/
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used) ; SEC4a : identifiant tiré par la mémoire
                           (jamais remplacé), tout signal ne reçoit que des cycles réels, un par (signal_id, action, run_id) ;
                           SEC17 : un cycle daté par l'hôte (stored_at), la recherche bornée à memory.max_age_days (90 j),
-                          ce qu'elle écarte compté (age_census, `glorfindel report`), rien d'effacé
+                          ce qu'elle écarte compté (age_census, `glorfindel report`), rien d'effacé ; un cycle sans date
+                          daté par la borne de B2 (B2_FLOOR, 16/10/2026)
   incidents.py          → IncidentRegistry (TTL, persist ; threads et processus : flock, réécrit entier — SEC13)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
                           audit (--all), approve-rule, reject-rule, propose-rules, rules, migrate-rules, check-ttl, jobs,

@@ -1051,7 +1051,9 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   défaut. Lue strictement : un nombre de jours sans guillemets ni unité, fini, positif, au plus
   3650 ; un texte (`"30"`, `30d`), un booléen, `0`, `.inf`, `.nan` ou plus de dix ans refusent le
   fichier, comme une clé inconnue sous `memory`. `glorfindel report` dit combien de cycles réels
-  la borne écarte (plus vieux, ou rangés avant SEC17 : sans date). **Clé nouvelle** : une version
+  la borne écarte, et à part ceux rangés avant SEC17, sans date à eux, datés par la borne de B2 (le
+  16/10/2026 : un cycle n'est réel que depuis B2, leur âge est au moins le vrai ; sur H0, avec 90 jours,
+  gardés jusque vers le 14/01/2027, puis écartés). **Clé nouvelle** : une version
   sans SEC17 refuse la config qui la porte.
 
 ### Poser la liste des administrateurs sur H0 (ADM1)

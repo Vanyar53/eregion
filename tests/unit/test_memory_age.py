@@ -2,14 +2,16 @@
 
 - A cycle is dated when it is stored, by the host's clock — never by what the cycle carries;
 - the search gives only cycles stored within the bound (90 days by default), real ones only
-  (SEC4a); a cycle stored before cycles were dated has an unknown age, never a young one: left
-  out too;
+  (SEC4a); a real cycle stored before cycles were dated is dated by the B2 floor (2026-10-16,
+  when a cycle first could be `real`): an age at least its true one, never today's — given while
+  that floor is within the bound, left out after (decision of Jonathan, 03/11);
 - nothing is erased, and `glorfindel report` (and `memory-stats`) say how many real cycles the
   bound leaves out;
 - the bound is a config key read strictly (`memory.max_age_days`: a finite number of days,
   positive, at most ten years), the watch's agent takes it.
 
-No Azure call, no model call. Mutants M3200–M3206 (scripts/mutation_check.py) are measured here.
+No Azure call, no model call. Mutants M3200–M3206, M3260–M3261 (scripts/mutation_check.py) are
+measured here.
 """
 from __future__ import annotations
 
@@ -28,7 +30,8 @@ from glorfindel.config import ConfigError, load_glorfindel_config
 from glorfindel.memory import CycleMemory
 
 DAY = 86400
-NOW = 1_800_000_000.0
+NOW = 1_800_000_000.0          # 2027-01-15: the B2 floor is past the default 90 days
+B2 = memory.B2_FLOOR
 SIG = {"ttp": "T1486", "severity": "high", "resource_type": "vm", "event": "detection"}
 
 
@@ -110,13 +113,37 @@ def test_a_cycle_is_dated_by_the_host_never_by_what_it_carries(tmp_path):
     assert meta["stored_at"] == int(NOW - 200 * DAY)
 
 
-def test_a_cycle_stored_before_cycles_were_dated_is_left_out_and_kept(tmp_path):
-    clock = _Clock()
+def test_the_b2_floor_is_the_day_a_cycle_first_could_be_real():
+    """B2 (d4e51fa, 2026-10-16 14:30 +0200) first wrote `source`; midnight UTC that day."""
+    from datetime import datetime, timezone
+    assert datetime.fromtimestamp(B2, timezone.utc) == datetime(2026, 10, 16, tzinfo=timezone.utc)
+
+
+def test_a_cycle_stored_before_cycles_were_dated_takes_the_b2_floor(tmp_path):
+    """M3260, M3261: a real cycle with no date of its own is dated by the B2 floor — given while
+    the floor is within the bound, left out after; never dated today, never left out at once."""
+    clock = _Clock(B2 + 10 * DAY)
     mem = _memory(tmp_path, clock)
     _legacy(mem)
     mem.store(_cycle("dated"))
+    assert sorted(c["signal_id"] for c in mem.retrieve_similar(SIG, n=3)) == ["dated", "legacy"]
+    clock.at = B2 + 91 * DAY                     # the floor past 90 days: the cycle aged out
     assert [c["signal_id"] for c in mem.retrieve_similar(SIG, n=3)] == ["dated"]
-    assert mem.count() == 2
+    assert mem.count() == 2                      # nothing erased
+    assert sorted(c["signal_id"] for c in _memory(tmp_path, clock, days=120).retrieve_similar(SIG, n=3)) \
+        == ["dated", "legacy"]
+
+
+def test_the_b2_floor_never_makes_a_dated_cycle_younger_or_older(tmp_path):
+    """An old dated cycle stays out while undated ones are read; a recent one stays in."""
+    clock = _Clock(B2 + 30 * DAY)
+    mem = _memory(tmp_path, clock, days=40)
+    _legacy(mem)
+    _stored_days_ago(mem, clock, "two-months-ago", 60)
+    _stored_days_ago(mem, clock, "yesterday", 1)
+    assert sorted(c["signal_id"] for c in mem.retrieve_similar(SIG, n=3)) == ["legacy", "yesterday"]
+    short = _memory(tmp_path, clock, days=20)    # the floor (30 days ago) past 20 days
+    assert [c["signal_id"] for c in short.retrieve_similar(SIG, n=3)] == ["yesterday"]
 
 
 def test_exercise_cycles_stay_out_whatever_their_age(tmp_path):
@@ -145,7 +172,7 @@ def test_load_context_gives_the_model_cycles_of_a_bounded_age_only(tmp_path):
 # ── What is left out, counted and said ──────────────────────────────────────────────────
 
 def test_the_census_counts_what_the_bound_leaves_out(tmp_path):
-    """M3204: an undated cycle counted as a precedent."""
+    """M3204: an undated cycle not counted apart, as dated by the B2 floor."""
     clock = _Clock()
     mem = _memory(tmp_path, clock)
     _stored_days_ago(mem, clock, "old-1", 100)
@@ -153,7 +180,12 @@ def test_the_census_counts_what_the_bound_leaves_out(tmp_path):
     _stored_days_ago(mem, clock, "recent", 2)
     _stored_days_ago(mem, clock, "drill", 2, source="exercise")
     _legacy(mem)
-    assert mem.age_census() == {"max_age_days": 90.0, "real": 4, "within": 1, "too_old": 2, "undated": 1}
+    assert mem.age_census() == {"max_age_days": 90.0, "real": 4, "within": 1, "too_old": 3,
+                                "b2_dated": 1, "b2_floor": "2026-10-16"}
+    early = _memory(tmp_path / "early", _Clock(B2 + 5 * DAY))
+    _legacy(early)
+    assert early.age_census() == {"max_age_days": 90.0, "real": 1, "within": 1, "too_old": 0,
+                                  "b2_dated": 1, "b2_floor": "2026-10-16"}
 
 
 def test_the_census_makes_no_memory_where_there_is_none(tmp_path):
@@ -187,13 +219,16 @@ def test_the_report_says_the_cycles_left_out_for_their_age(tmp_path, monkeypatch
     _legacy(mem)
     res = _report(monkeypatch, tmp_path, "--json")
     assert res.exit_code == 0, res.output
-    assert json.loads(res.output)["memory"] == {"max_age_days": 90.0, "real": 3, "within": 1,
-                                                "too_old": 1, "undated": 1}
+    b2_within = B2 >= time.time() - 90 * DAY     # until 2027-01-14
+    assert json.loads(res.output)["memory"] == {"max_age_days": 90.0, "real": 3, "within": 1 + b2_within,
+                                                "too_old": 2 - b2_within, "b2_dated": 1,
+                                                "b2_floor": "2026-10-16"}
     res = _report(monkeypatch, tmp_path)
     assert res.exit_code == 0, res.output
     said = " ".join(res.output.split())
-    assert "Memory: 3 real cycle(s), 1 within 90 days — 1 older left out of the search" in said
-    assert "1 undated" in said and "never erased" in said
+    assert (f"Memory: 3 real cycle(s), {1 + b2_within} within 90 days — {2 - b2_within} older left out "
+            "of the search (kept, never erased)") in said
+    assert "of them 1 dated by the B2 floor (2026-10-16: stored before SEC17" in said
 
 
 def test_the_report_on_a_host_without_memory_says_so(tmp_path, monkeypatch):

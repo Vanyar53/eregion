@@ -1328,7 +1328,8 @@ def _verify_approved(connector, esc: dict, action: str, resource_id: str, result
         elif action == "release_isolation":
             verification = connector.verify_release(resource_id)
         else:
-            verification = connector.verify_block_ip(ip, resource_id)
+            from glorfindel.response.policy import as_recorded
+            verification = as_recorded(connector.verify_block_ip(ip, resource_id))   # L1G: the reassertion's
     except Exception as e:
         verification = {"verified": None, "error": f"vérification impossible : {e}"}
     try:

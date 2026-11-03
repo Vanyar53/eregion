@@ -9343,6 +9343,16 @@ MUTANTS += [
      '"blocked": v.get("verified") is True, "rules": dict(v.get("rules_seen") or {})}\n',
      '"blocked": v.get("verified") is True}\n'),
 ]
+# L1G's review: `rules_seen` is the reassertion's alone — never in a cycle's outcome (what the model sees among
+# its past cycles) nor in the console's record of a manual action. M3385 (M3289 is U1G's).
+MUTANTS += [
+    ("M3385", "a block's rules as read reach the cycle's outcome and the manual action's record: what the model "
+              "sees among its past cycles changes (L1G's review)", "glorfindel/response/policy.py",
+     "    return {k: v for k, v in verification.items() if k not in _REASSERTION_ONLY}\n",
+     "    return dict(verification)\n"),
+]
+TESTS["M3385"] = ("tests/unit/test_agent_nodes.py::test_a_blocks_rules_as_read_never_reach_the_cycle_the_model_sees "
+                  "tests/unit/test_api.py::test_an_approved_blocks_check_records_no_rule_as_read")
 TESTS.update({
     "M3280": f"{_L1G_BACK} {_L1G_SEED} {_L1G_FAKE}",
     "M3281": _L1G_BACK,

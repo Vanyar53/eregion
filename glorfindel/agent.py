@@ -2079,7 +2079,8 @@ def verify_action(state: GlorfindelState, *, connector: CloudConnector) -> Glorf
                 or detected_v.get("DestinationIPAddress")
                 or outcome.get("ip", "")
             )
-            verification = connector.verify_block_ip(ip, resource_id)
+            from glorfindel.response.policy import as_recorded
+            verification = as_recorded(connector.verify_block_ip(ip, resource_id))   # L1G: never to the model
         else:
             verification = {"verified": None, "method": "not_implemented"}
     except Exception as exc:

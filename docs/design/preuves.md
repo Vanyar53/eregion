@@ -3581,7 +3581,20 @@ telle qu'elle l'a lue (`rules_seen` : sa signature, `_rule_signature`, ou None a
 listages qu'elle a faits — aucune lecture de plus ; un NSG non listé, ou illisible, laisse ses règles
 dehors. La carte le garde (`_situation`, `drift_said`), la référence resserrée aussi (`drift_meet` :
 présente dans l'une ou l'autre). Seules les règles lues les deux fois comptent ; une entrée plus
-ancienne, ou un fournisseur qui ne le dit pas : comme avant, par les noms.
+ancienne, ou un fournisseur qui ne le dit pas : comme avant, par les noms. **La signature ne sert
+encore à aucune décision** : `_back` et `_worse` ne regardent que la présence (None ou non). Elle est
+gardée pour une décision future (une règle retournée de nouveau, autrement) ; son mutant, M3286 (par
+le nom seul), n'est attrapé que par un test structurel
+(`test_the_check_reads_each_rule_of_the_entry_by_what_it_does`), aucun comportement ne le voit.
+**`rules_seen` est à la réaffirmation seule** (la relecture 5.5) : `verify_block_ip` le renvoie, et
+le nœud de vérification du graphe le versait dans l'`outcome` du cycle — que `memory._cycle_to_text`
+reprend, et que le modèle revoit parmi ses cycles passés —, la console dans le journal d'une action
+approuvée. Ce lot ne change rien à ce que voit le modèle : `response.policy.as_recorded` l'ôte aux
+deux (`agent.verify_action`, `eregion_console/api._verify_approved`) ; `_build_user_message`,
+`_SYSTEM_PROMPT` et `few_shot_examples.yaml` intouchés. Figés :
+`test_agent_nodes.py::test_a_blocks_rules_as_read_never_reach_the_cycle_the_model_sees`,
+`test_api.py::test_an_approved_blocks_check_records_no_rule_as_read` ; mutant **M3385** (M3289 est
+à U1G).
 
 **Figés.** `test_a_merged_block_whose_pair_another_vm_wrote_again_after_its_card_is_said` (la graine
 29 telle que trouvée, treize règles, l'index de la carte celui qui tombe sur web2 ; et réduite à la
@@ -3608,6 +3621,13 @@ mutants des fichiers touchés** (`reassert.py`, `reassert_said.py`, `reassert_pe
 sur `main` (L1Qs) ; M19 et M38 ne sont attrapés que par leurs séquences figées, comme mesuré par L1Q.
 `pytest` complet : 5 984 réussis, 7 sautés, 1 `xfail` (le U1 de L1Qs, hors du lot) ; `ruff` propre ;
 `scripts/mutant_anchors.py` : 2 367 mutants, sans faute.
+
+**Reste ouvert (L1G).** `_back` compare la lecture à la référence resserrée (la dernière passe sous
+l'épisode), non à ce que la carte a lu : une règle revenue pendant que la carte attendait resserre la
+référence, et l'acquittement qui suit ne voit plus ce retour. Ce n'est pas une régression — `main` ne
+le voyait pas davantage —, et il faut une double faute pour s'y taire : la règle revenue sous la carte
+en attente, puis acquittée, puis les autres règles de l'entrée encore parties sans rien de pire.
+Relevé par la relecture 5.5, laissé tel quel.
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

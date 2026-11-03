@@ -5586,35 +5586,60 @@ def test_a_vm_block_rewritten_before_its_subnets_perimeter_never_says_unblocked(
 
 # I3R (#431): the night's seed 67 at 60, two failures, one cause.
 _I3R_NET = _net(quarantine=True, quarantine_rg="rg-sec", db_nic_0={"own": "dedicated"})
-_I3R_STEPS = (
-    # Db--01 isolated (both NICs into the quarantine), our inbound deny turned to another
-    # protocol, the reassertion puts it back: a card « reposée une fois ».
-    ("quarantine_altered_then_reasserted", DB, DB, None, False, False, "protocol",
-     (_SEC_Q, "glorfindel-quarantine-deny-in"), "non_disruptive", "no"),
-    # Isolated again, reached by its lowercase id; our quarantine stripped and said; its tag
-    # taken off, a pass outside human_only: the NSG is not ours any more — the isolation is
-    # put back by rules on the NSG the NIC carries, the quarantine NSG itself.
-    ("quarantine_altered_then_reasserted", DB, DB.lower(), None, False, True, _SEC_Q, "human_only", "untagged",
-     _SEC_Q, 1, "non_disruptive"),
-)
+
+
+def _i3r_world(m) -> None:
+    """I3R's world, built as seed 67 left it: Db--01 isolated by our quarantine NSG, which then
+    loses its `managed-by` tag — Db--01 isolated again, its NICs' deny pairs go on the NSG they
+    carry, the quarantine NSG itself (not ours: « non adopté ») —, the tag back. Seed 67 got
+    there through the reassertion (Db--01 isolated, our inbound deny turned and put back, isolated
+    again by its lowercase id, our quarantine stripped and untagged, a pass outside human_only),
+    only because a disappearance said under the lowercase id was not read « already said »: I3C
+    (#436) fixed that, and those steps no longer leave any rule on the quarantine NSG (I3V
+    measured it: I3R's sequences passed with the release's sweep blind to it, M3060). This
+    isolation again is what that pass did."""
+    m.isolate(Script(DB, DB, None))
+    tags = m.fake.nsgs[key(_SEC_Q)]["tags"]
+    del tags["managed-by"]                       # someone takes our tag off
+    m.isolate(Script(DB, DB, None))              # by rules, on the NSG the NICs carry
+    tags["managed-by"] = "glorfindel"            # and puts it back
+    assert any(n.startswith("glorfindel-iso-") for n in m.fake.nsgs[key(_SEC_Q)]["rules"])
+
+
+def _run_in_i3r_world(monkeypatch, net, *steps):
+    """_run, from I3R's world (_i3r_world)."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(net)
+        _i3r_world(m)
+        for rule, *draws in steps:
+            getattr(m, rule)(**({"data": Script(*draws)} if draws else {}))
+            m.never_more_open_than_designed()
+            m.customer_configuration_untouched()
+            m.one_vm_one_state_file()
+    finally:
+        m.teardown()
 
 
 def test_a_nics_rules_on_the_quarantine_nsg_it_left_go_with_the_release(monkeypatch):
     """The night's seed 67 at 60 (I3R, #431), 29 rules shrunk by hand to three: Db--01's
-    isolation put back by the reassertion while our quarantine NSG had lost its tag — not
-    ours, so db-nic-0's rules went on the NSG it carries, the quarantine NSG; the tag back,
-    the state lost. The release reads db-nic-0 in our quarantine, puts its NSG back from our
-    tag, then sweeps the NSGs that govern it now — the quarantine NSG no longer one of them:
-    « I3: release said released, …/Db--01 is not back to its design », its two rules left
-    there. Red on `main` 9c4e8c5, and before L1Qr (4fa6f70~1); reached since L2C (d380df5)."""
-    _run(monkeypatch, _I3R_NET, *_I3R_STEPS, ("lose_state", DB))
+    isolation put back while our quarantine NSG had lost its tag — not ours, so db-nic-0's rules
+    went on the NSG it carries, the quarantine NSG; the tag back, the state lost. The release
+    reads db-nic-0 in our quarantine, puts its NSG back from our tag, then sweeps the NSGs that
+    govern it now — the quarantine NSG no longer one of them: « I3: release said released,
+    …/Db--01 is not back to its design », its two rules left there. Red on `main` 9c4e8c5, and
+    before L1Qr (4fa6f70~1); reached since L2C (d380df5). Its world rebuilt by I3V (_i3r_world):
+    red again with the release's sweep blind to the quarantine NSG (M3060), for that reason."""
+    _run_in_i3r_world(monkeypatch, _I3R_NET, ("lose_state", DB), ("release", DB, DB, None))
 
 
 def test_a_nics_rules_on_the_quarantine_nsg_it_left_go_once_the_operator_gives_its_original(monkeypatch):
     """The second failure of seed 67 (I3R): the same, the tags of the quarantine NSG lost
     too — the release keeps db-nic-0 in quarantine and says why, the operator sets the tag
-    (I7), the release then puts its NSG back and says `released`, the rules still there."""
-    _run(monkeypatch, _I3R_NET, *_I3R_STEPS, ("lose_state", DB), ("tags_lost", _SEC_Q))
+    (I7), the release then puts its NSG back and says `released`, the rules still there. Its
+    world rebuilt by I3V, as the first's."""
+    _run_in_i3r_world(monkeypatch, _I3R_NET, ("lose_state", DB), ("tags_lost", _SEC_Q))
 
 
 def _unreadable_then_repaired(m, vm: str, release) -> None:
@@ -5643,7 +5668,7 @@ def test_a_partial_release_whose_state_turns_unreadable_never_says_released(monk
     its NICs' deny pairs go on the NSG they carry, the quarantine NSG itself (not ours: « non
     adopté ») —, the tag back. (Seed 67 got there through the reassertion, only because a
     disappearance said under the lowercase id was not read « already said »; I3C, #436, fixed
-    that: `_I3R_STEPS` no longer lead there, this isolation again is what that pass did.) The
+    that: its steps no longer lead there, this isolation again is what that pass did.) The
     release, throttled once on the delete of one of the pairs there, says `release_partial`, the
     NICs given their NSG back, the state keeping where to look (the placement; `quarantines_left`
     when the state was lost before). That state turns unreadable: the retry read nothing, found
@@ -5654,12 +5679,7 @@ def test_a_partial_release_whose_state_turns_unreadable_never_says_released(monk
     m = IsolationMachine()
     try:
         m.build(_I3U_NET)
-        m.isolate(Script(DB, DB, None))
-        tags = m.fake.nsgs[key(_SEC_Q)]["tags"]
-        del tags["managed-by"]                       # someone takes our tag off
-        m.isolate(Script(DB, DB, None))              # by rules, on the NSG the NICs carry
-        tags["managed-by"] = "glorfindel"            # and puts it back
-        assert any(n.startswith("glorfindel-iso-") for n in m.fake.nsgs[key(_SEC_Q)]["rules"])
+        _i3r_world(m)
         steps = [*((("lose_state", DB),) if lost else ()), ("release", DB, DB, (fault, "before-429"))]
         for rule, *draws in steps:
             getattr(m, rule)(data=Script(*draws))
@@ -5667,6 +5687,35 @@ def test_a_partial_release_whose_state_turns_unreadable_never_says_released(monk
         from glorfindel.actions import _load_isolation_state
         assert (_load_isolation_state(DB) or {}).get("release_failed"), "the first release was not partial"
         _unreadable_then_repaired(m, DB, lambda: m.release(Script(DB, DB, None)))
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
+        m.one_vm_one_state_file()
+    finally:
+        m.teardown()
+
+
+@pytest.mark.parametrize("lost,fault", [(False, 10), (True, 30)], ids=["state", "state-lost"])
+def test_a_partial_release_run_again_by_the_cli_never_says_released_with_its_pair_left(monkeypatch, lost, fault):
+    """I3V (#450), found by I3U's review. I3R's world; the release, throttled once on the delete of
+    one of the pairs on the quarantine NSG, says `release_partial`, the NICs given their NSG back,
+    the state readable and keeping where to look. The CLI says to run `glorfindel release` again
+    (the console's approval runs it too): it asks verify_release first, which looked only at the
+    NSGs that govern the NICs now — « verified », the state cleared, « No active isolation found
+    on NSG — state cleared », exit 0 — « I3: release said released, …/Db--01 is not back to its
+    design », the pair still on the quarantine NSG. Unchanged oracle; a rule added
+    (`release_by_the_cli`)."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_I3U_NET)
+        _i3r_world(m)
+        steps = [*((("lose_state", DB),) if lost else ()), ("release", DB, DB, (fault, "before-429"))]
+        for rule, *draws in steps:
+            getattr(m, rule)(data=Script(*draws))
+            m.never_more_open_than_designed()
+        from glorfindel.actions import _load_isolation_state
+        assert (_load_isolation_state(DB) or {}).get("release_failed"), "the first release was not partial"
+        m.release_by_the_cli(data=Script(DB, DB, None))
         m.never_more_open_than_designed()
         m.customer_configuration_untouched()
         m.one_vm_one_state_file()

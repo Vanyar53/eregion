@@ -3008,7 +3008,7 @@ NSG dont le balayage sort la carte jamais noté (M3061), les placements de l'ét
 une carte encore en quarantaine balayée là (M3063), une carte nue cherchée là aussi : dite deux fois
 (M3064), la garde jamais demandée (M3065), un NSG illisible lu « rien » (M3066) : 7/7 à chaque tour
 (deux tours). M07 réancré (l'appel du balayage gagne un argument).
-**Reste ouvert** : le reset (`reset --from-azure`) ne cherche pas non plus sur le NSG de quarantaine
+**Reste ouvert** (en partie fermé par I3V : le reset lit le NSG qu'une levée partielle a laissé) : le reset (`reset --from-azure`) ne cherche pas non plus sur le NSG de quarantaine
 qu'il fait quitter à une carte ; son oracle ne juge pas les règles laissées hors des NSG qui
 gouvernent la carte, la machine ne le voit pas.
 
@@ -3109,11 +3109,86 @@ dédoublonnage). M3131–M3135, M3190, M3191 : 7/7 à chaque tour (deux tours) ;
 appels passent par `self._unread`). (3) `docs/fichiers-cles.md` : vrai pour Azure ; l'adaptateur AWS
 garde le fichier mais dit encore `released`. `release.py` 497 lignes, `sweep.py` 498, `state.py` 497,
 `unread.py` 29.
-**Reste ouvert** : `verify_release` ne cherche pas sur le NSG de quarantaine quitté qu'un état
+**Reste ouvert** (fermé depuis par I3V, plus bas) : `verify_release` ne cherche pas sur le NSG de quarantaine quitté qu'un état
 **lisible** nomme (`quarantines_left`) — `glorfindel release` y lit « vérifié » et efface l'état, la
 paire restée (mesuré sur le faux Azure, hors du lot). L'adaptateur AWS
 (`glorfindel/providers/aws/isolation.py`) garde le fichier illisible (`_clear_isolation_state`) mais
 sa levée dit encore `released` sur lui.
+
+**I3V (03/11, #450) : une levée partielle relancée ne dit jamais « vérifiée » tant que sa quarantaine
+quittée garde ses règles.** Relevé par la relecture d'I3U (sa sonde sur le faux Azure, reprise ici en tests). Une
+levée partielle (I3R) laisse un état **lisible** qui dit où chercher encore : `quarantines_left`, ou le placement
+par règles posé sur le NSG de quarantaine (l'isolation écrite là pendant qu'il avait perdu notre tag) dont la
+suppression a échoué. La CLI conseille de relancer `glorfindel release`, et l'approbation de la console lance la
+même commande ; celle-ci demande d'abord `verify_release`, qui ne regardait que les NSG que portent les cartes
+maintenant : « vérifié », l'état effacé, « No active isolation found on NSG — state cleared », code 0, la levée —
+qui, elle, savait y chercher — jamais lancée. Une panne suffit. **Pourquoi la machine ne le voyait pas** : elle ne
+lançait pas la CLI, et son oracle juge `verify_release` par les flux (`_check_claims`) — une paire sur un NSG qui ne
+gouverne plus la carte n'ouvre ni ne ferme rien ; c'est l'effacement de l'état qui fait d'une vérification fausse
+une levée dite faite. **Correctif** (`glorfindel/providers/azure/away.py`, `_out_of_sight_views`,
+`_out_of_sight_seen`) : `verify_release` lit là où la levée cherche, sur les NSG qu'une carte ne porte plus — le
+NSG de quarantaine quitté (`_quarantines_left` : la clé de l'état partiel, un placement de quarantaine) et le NSG
+d'un placement par règles de l'état —, la carte vue comme sur un NSG partagé (son empreinte, ou un ancien nom visant
+ses adresses : jamais la règle d'une autre carte). Trouvée : « non vérifié », la règle nommée avec son NSG ; un NSG
+illisible : « lecture impossible » (A0). Pas un NSG qui gouverne encore la carte (lu avec les autres), ni la
+quarantaine où elle est encore (« NSG de quarantaine attaché »). La commande lance donc la levée : la paire retirée,
+`released` ; ou `release_partial`, code 2, l'état gardé ; l'approbation de la console suit son code de sortie,
+puis sa propre vérification. `reset --from-azure` lit les mêmes NSG (`_out_of_sight_views`, aperçu compris) et y
+retire la paire. La réaffirmation n'a rien à y lire : un état qui porte `release_failed` est laissé à l'opérateur
+(`_held_by_an_operation`). `glorfindel reset --dry-run` (sans `--from-azure`) lançait la levée en aperçu et
+disait « ✓ Reset complete — <vm> is clean » : il dit « DRY RUN — aucune modification » et ce que le reset ferait,
+sans rien lire sur Azure. **Découpage d'abord** (un commit à part, sans changement de comportement) : `release.py`
+(497 lignes) et `sweep.py` (498) touchaient la limite de 500 ; la VM supprimée (`_known_nics`, `_gone_vm_unknown`,
+`_gone_nic_check`, `_gone_vm_rules`) passe dans `gone.py`, les cartes nues du reset (`_reset_bare_nics`,
+`_reset_put_back_bare`) dans `reset_bare.py`, par la façade et `AzureConnector` ; chaque ligne déplacée telle
+quelle (vérifié ligne à ligne), dix-sept mutants réancrés (`GONE`, `RBARE`) ; la suite verte (5 814). `release.py`
+389 lignes, `sweep.py` 437 (434 au découpage), `away.py` 210, `verify.py` 340. **La règle de la machine** (A0 : une règle ajoutée, l'oracle inchangé) :
+`release_by_the_cli` — `glorfindel release <vm> --yes` sur le connecteur de la machine, son code de sortie lu comme
+le statut de la levée (0 : `released` ; 2 : `release_partial`, les lignes listées comme ce qui reste), jugé comme
+`release` (`_release` : I3 par `_released`, I8, I4, ce qui est gardé dit). **Figée** :
+`test_a_partial_release_run_again_by_the_cli_never_says_released_with_its_pair_left` (`test_invariant_regressions.py`,
+par l'état et l'état perdu avant : le monde d'I3R, la levée freinée une fois par un 429 sur la suppression d'une
+paire sur le NSG de quarantaine, puis `release_by_the_cli`) : rouge sur le code de `main` 1a3f6a3, les deux, par
+l'oracle inchangé (« I3: release said released, …/Db--01 is not back to its design »). Par l'état, la paire n'est
+nommée que par le placement par règles, pas par `quarantines_left` : lire `quarantines_left` seul la laissait rouge.
+**Les séquences d'I3R, refaites** : `test_a_nics_rules_on_the_quarantine_nsg_it_left_go_with_the_release` et
+`…_go_once_the_operator_gives_its_original`, mesurées avec la levée aveugle au NSG de quarantaine quitté (M3060, le
+correctif d'I3R retiré) : **vertes toutes deux** — depuis I3C, `_I3R_STEPS` ne laissaient plus aucune règle sur le
+NSG de quarantaine, elles ne prouvaient plus rien. Leur monde est reconstruit comme I3U l'avait fait (`_i3r_world`,
+partagé avec la séquence d'I3U et celle-ci : isoler, retirer le tag `managed-by`, isoler encore, remettre le tag),
+puis l'état perdu et la levée (les tags du NSG de quarantaine perdus aussi pour la seconde, l'opérateur les rendant,
+I7) : rouges toutes deux sous M3060, « I3: release said released », vertes avec le correctif. `_I3R_STEPS` retirées.
+**Tests unitaires** (`test_release_away.py`, onze, dix rouges sur `main`) : la vérification après une levée
+partielle (sans état et par l'état), un NSG quitté illisible, la règle d'une autre carte au même endroit (verte sur
+`main` : garde le correctif de trop en faire), `glorfindel release` qui retire la paire, puis qui sort en 2 quand
+elle reste, `reset --from-azure` et son aperçu, le NSG d'un placement par règles (la vérification, le reset),
+`reset --dry-run`. **Mutants M3192–M3198** : la
+vérification aveugle aux NSG hors de vue (M3192), le NSG de quarantaine quitté jamais relu (M3193), le NSG d'un
+placement par règles jamais relu (M3194), un NSG hors de vue illisible lu « rien » (M3195), le reset aveugle
+(M3196), `reset --dry-run` qui dit « clean » (M3197), la règle d'une autre carte comptée (M3198) : 7/7 à chaque
+tour (deux tours). **Mesures, sur `cf1861b`** (la branche avant la fusion de `main`, I3G et SEC17 absents) :
+`pytest` complet, 5 827 réussis, 7 sautés (5 814 au découpage) ; `scripts/mutant_anchors.py`, 2 301 mutants sans
+faute ; les mutants déplacés et voisins (les dix-sept réancrés, M3060–M3069, M3131–M3135, M3190, M3191), deux
+tours : 32/34 pris à chaque tour, M39 et M41 « fixed-only » (pris par leurs séquences figées, la machine à 60 les
+manque ; M01–M41 varient selon le tirage, comme noté plus haut) ; invariants, `--hypothesis-seed=N`, la règle
+ajoutée : à 60 séquences, N = 1..80, 78/80 vertes, à 500, N = 1..3, 3/3 vertes. Les graines 29 et 73 tombaient à
+60 sur `cf1861b`, et sont vertes sur `1be01d3` (la fusion) comme sur `main` `d4a973e` : les tirages ont changé avec
+les règles d'I3G, ce qui ne dit rien des défauts. Leurs séquences réduites, tirages compris, figées hors du dépôt et
+rejouées : **la graine 73** (I4 : « an operation on …/rg-app1/…/web cut off …/rg-app1/…/api » — une ancienne
+isolation de web, sa règle à nom fixe retournée en autorisation (`tamper_with_our_rule`, `access`), l'homonyme
+de rg-app2 supprimé, puis `an_old_isolations_vm_isolated_again` : api créée sur le NSG de web, web isolée de
+nouveau, levée) tombe à chaque essai sur `1a3f6a3`, `31a2e38`, `d4a973e`, `cf1861b` et `1be01d3` : le défaut
+existe sur `main`, hors du lot, laissé à I4G (#460) ; **la graine 29** (L1 : « the block on …/rg-app2/…/web
+vanished from Azure; the reassertion neither put it back nor said so », après `block_perimeter`, `race`
+isoler/lever, `block_then_isolate` deux fois, `taken_up_by_its_lowercase_id`, `operator_acknowledges`,
+`block_turned_then_reasserted`) tombe une fois sur deux environ, sur `1a3f6a3` (2/6), `d4a973e` (3/6) comme sur
+`1be01d3` (3/6) : elle n'est pas déterministe (le premier essai d'Hypothesis l'avait dit,
+« FlakyStrategyDefinition ») ; le défaut existe sur `main`, laissé à L1G (#461). Aucune des deux ne tire
+`release_by_the_cli` ni le reset. **Après la fusion, sur `1be01d3`** : `pytest` complet, 5 910 réussis, 7 sautés ;
+`ruff` propre ; `scripts/mutant_anchors.py`, 2 335 mutants, sans faute.
+**Reste ouvert** : le reset ne cherche pas sur le NSG de quarantaine qu'il fait quitter lui-même, dans le même
+passage, à une carte encore en quarantaine (I3R) ; l'adaptateur AWS dit encore `released` sur un état illisible
+(I3U).
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

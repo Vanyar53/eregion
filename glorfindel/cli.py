@@ -1942,7 +1942,16 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = Fal
     for b in blocks:
         console.print(f"  • Unblock {b['ip']}")
 
-    if not yes and not dry_run:
+    if dry_run:
+        # An outline, never « clean »: nothing is read on Azure, nothing written — it said
+        # « Reset complete — <vm> is clean » (I3V, #450).
+        would = (["lever l'isolation"] if isolations else []) + [f"débloquer {b['ip']}" for b in blocks]
+        console.print(f"\n[yellow]DRY RUN — aucune modification. Le reset ferait : {', '.join(would)} "
+                      f"sur {vm_short} (rien n'est lu sur Azure : `--from-azure --dry-run` montre les "
+                      "règles).[/yellow]")
+        return
+
+    if not yes:
         click.confirm("\nProceed?", abort=True)
 
     connector = AzureConnector(dry_run=dry_run)

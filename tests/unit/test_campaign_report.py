@@ -11,7 +11,7 @@ from analysis import campaign_report as cr  # noqa: E402
 
 
 def _campaign(tmp_path):
-    runs = tmp_path / "runs"
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: a campaign pulled on H0, beside the cycles
     cdir = runs / "campaigns" / "C1"
     cdir.mkdir(parents=True)
     scen = [

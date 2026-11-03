@@ -146,11 +146,12 @@ def _iso(dt: datetime) -> str:
 
 def materialize(doc: dict, work: Path, now: datetime | None = None) -> dict:
     """The sample as the console reads it, its times counted back from ``now``: under
-    ``work/home`` the watch's heartbeat and discovered assets; under ``work/cwd/runs`` the run
-    reports, the watch's cycles, the exercise windows, Orodruin's contract. Returns where."""
+    ``work/home`` the watch's heartbeat and discovered assets; under ``work/cwd/runs/glorfindel``
+    — the watch's own directory, as on H0 (SEC18) — the run reports, the watch's cycles, the
+    exercise windows, Orodruin's contract, all pulled there. Returns where."""
     now = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     home, cwd = work / "home", work / "cwd"
-    runs = cwd / "runs"
+    runs = cwd / "runs" / "glorfindel"
     for d in (home / ".glorfindel", runs / "exercises", runs / "orodruin"):
         d.mkdir(parents=True, exist_ok=True)
     mark = sha256(SAMPLE) if SAMPLE.exists() else ""

@@ -1,9 +1,10 @@
 """Which of Glorfindel's detection records count for an Annatar run, and how late (#157).
 
-Pure functions on records — the lines of the ``runs/*_debug.jsonl`` files the watch writes
-(the run's own file, from the poll of its ``attack_started``, and the RulePoller's
-``watch-*`` files). The return channel (#159) will bring the same records from storage and
-reuse :func:`detection_latency` as is.
+Pure functions on records — the lines of the ``runs/glorfindel/*_debug.jsonl`` files the watch
+writes (the run's own file, from the poll of its ``attack_started``, and the RulePoller's
+``watch-*`` files), as the campaign report reads them (analysis/campaign_report.py, a bridge), and
+the same records as the return channel (#159) brings them to a run. A run never reads the watch's
+files itself (SEC18): no injector mounts the watch's directory.
 
 A record counts for a run when it is a ``detection`` of the run's technique, on the run's
 resource, seen **at or after** the attack. The resource is compared without case: Annatar

@@ -22,10 +22,12 @@ console = Console()
 
 
 def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
-    """Append a manual operator action to runs/manual_actions.jsonl for the live feed."""
+    """Append a manual operator action to runs/console/manual_actions.jsonl for the live feed —
+    the directory of the operator's hand (the console, this CLI, the bot), SEC18."""
     import json as _json
     from datetime import datetime, timezone as _tz
-    runs = Path("runs")
+    from eregion_core import runs_layout
+    runs = runs_layout.dir_of(runs_layout.CONSOLE)
     record = {
         "timestamp": datetime.now(_tz.utc).isoformat(),
         "action": action,
@@ -39,7 +41,7 @@ def _record_manual_action(action: str, resource_id: str, outcome: dict) -> None:
     from eregion_core import channel_reader
     path = runs / "manual_actions.jsonl"
     try:
-        runs.mkdir(exist_ok=True)
+        runs.mkdir(parents=True, exist_ok=True)
         channel_reader.append_line(path, _json.dumps(record))
     except OSError as exc:
         why = channel_reader.why_not_written(exc)
@@ -740,7 +742,11 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             else:
                 console.print(f"[yellow]{_esc_markup(text)}[/yellow]")
 
-    _channel = ChannelReader(runs_dir, _say_channel)
+    # SEC18 (N-05): an injector's signals are read from Annatar's own directory only; what is
+    # anywhere else in runs/ (the former layout, another writer's file in a writer's directory)
+    # is never read, and said (eregion_core/runs_layout.py).
+    from eregion_core import runs_layout as _layout
+    _channel = ChannelReader(_layout.dir_of(_layout.ANNATAR, runs_dir), _say_channel)
     _channel.track_existing()
 
     def _poll() -> None:
@@ -892,8 +898,10 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     def _observe_windows() -> None:
         """SEC14 (V-20): the windows read every minute — a window written on this host is
         written down in the watch's own state within a minute, and bounded by that moment
-        (eregion_core/exercise.py, ``observe``)."""
+        (eregion_core/exercise.py, ``observe``). SEC18: and what runs/ holds out of its writers'
+        places, said once (``runs_layout.say_strays``)."""
         _exercise.observe()
+        _layout.say_strays(runs_dir, lambda text: _say_channel(f"Canal runs/ : {text}"))
 
     # The return channel (#159): a run launched from Orodruin learns from it that this
     # watch is up, and what it detected on the VMs that run exercises. Unset → None.
@@ -904,8 +912,9 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         if _watch_channel is not None:
             console.print(f"[dim]Canal retour : {_watch_channel.channel}[/dim]")
         # IA0 (#167): the campaigns published by Orodruin get their report written here.
-        if _start_campaign_reports(runs_dir):
-            console.print("[dim]Rapports de campagne : runs/campaigns/<id>/report.md[/dim]")
+        # SEC18: everything it pulls and writes goes to the watch's own directory.
+        if _start_campaign_reports(_layout.dir_of(_layout.GLORFINDEL, runs_dir)):
+            console.print("[dim]Rapports de campagne : runs/glorfindel/campaigns/<id>/report.md[/dim]")
 
     if _rules_file:
         try:
@@ -2508,7 +2517,7 @@ def propose_rules(ttps, source, include_planned, model, rules_file, dry_run):
 @cli.command("replay-campaign")
 @click.argument("campaign_id")
 @click.option("--runs-dir", default="runs", show_default=True,
-              help="Directory holding runs/campaigns/<id>/.")
+              help="The runs root: the campaign under annatar/ or glorfindel/campaigns/<id>/ (SEC18).")
 @click.option("--source", default="azure_monitor", show_default=True)
 @click.option("--dry-run", is_flag=True,
               help="Replay and print, but do not write replay.json.")
@@ -2517,7 +2526,7 @@ def replay_campaign_cmd(campaign_id, runs_dir, source, dry_run):
 
     Closes the generative purple loop: for each scenario the deterministic poller MISSED,
     re-run the LLM-proposed rule against the attack's traces (read-only) and record the
-    verdict in runs/campaigns/<id>/replay.json. Reads Annatar's manifest.json post-hoc only.
+    verdict in runs/glorfindel/campaigns/<id>/replay.json. Reads Annatar's manifest.json post-hoc only.
     Activates nothing — a rule that would have caught it stays a proposal until approve-rule.
     """
     from glorfindel import campaign_replay as _cr
@@ -2550,7 +2559,7 @@ def replay_campaign_cmd(campaign_id, runs_dir, source, dry_run):
         )
     except FileNotFoundError:
         console.print(f"[red]No manifest for campaign '{campaign_id}'[/red] "
-                      f"under {runs_dir}/campaigns/.")
+                      f"under {runs_dir}/annatar/ nor {runs_dir}/glorfindel/campaigns/.")
         return
 
     replays = doc["replays"]
@@ -2570,7 +2579,7 @@ def replay_campaign_cmd(campaign_id, runs_dir, source, dry_run):
 
     caught = sum(1 for r in replays if r["would_have_caught"] is True)
     where = "(dry-run, not written)" if dry_run else \
-        f"→ {runs_dir}/campaigns/{campaign_id}/replay.json"
+        f"→ {runs_dir}/glorfindel/campaigns/{campaign_id}/replay.json"
     console.print(f"\n[bold]{caught}/{len(replays)}[/bold] missed scenarios would now be "
                   f"caught by the proposed rules. {where}")
 

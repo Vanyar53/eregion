@@ -1,10 +1,11 @@
 """The coverage matrix (C1, #80): for each technique of the catalog and each declared fault,
 its last proof — and what changed since.
 
-Computed from what this host keeps, never from the cloud: the run reports (``runs/<id>.json``,
-and those of the campaigns published, ``runs/campaigns/<id>/runs/``), read in the run format
-both injectors share (``eregion_core/run_report.py``); the watch's cycles
-(``runs/*_debug.jsonl``); the catalog (``technique_catalog.yaml``). Over the whole history the
+Computed from what this host keeps, never from the cloud: the run reports (``runs/<writer>/<id>.json``,
+and those of the campaigns published, ``runs/<writer>/campaigns/<id>/runs/`` — SEC18,
+``runs_layout.run_reports``), read in the run format both injectors share
+(``eregion_core/run_report.py``); the watch's cycles (``runs/glorfindel/*_debug.jsonl``); the
+catalog (``technique_catalog.yaml``). Over the whole history the
 host keeps, not 30 days: the age of a proof older than 30 days must be said, not hidden.
 
 **A row** is an entry of the catalog, technique or fault (planned ones too) — and a run of an

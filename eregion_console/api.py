@@ -1014,15 +1014,18 @@ async def feed_history() -> dict:
 
 # How often the live feed reads runs/ again, and holds its session again (SEC10).
 _FEED_POLL_S = 2.0
-_FEED_FILES = (("*_signals.jsonl", "signal"), ("*_debug.jsonl", "action"), ("manual_actions.jsonl", "action"))
+# SEC18: each kind of line from the one directory of the writer that writes it — an injector's
+# signal from Annatar's, a cycle from the watch's, an operator's gesture from the console's.
+_FEED_FILES = (("annatar", "*_signals.jsonl", "signal"), ("glorfindel", "*_debug.jsonl", "action"),
+               ("console", "manual_actions.jsonl", "action"))
 
 
 def _feed_start() -> dict[Path, tuple[int, int | None, bool]]:
     """Where the live feed starts in each file already there: its end (a regular file, lstat —
     a link is not followed); a file that is not one starts at 0, and is refused at its read."""
     state: dict[Path, tuple[int, int | None, bool]] = {}
-    for pat, _ in _FEED_FILES:
-        for f in _RUNS.glob(pat):
+    for writer, pat, _ in _FEED_FILES:
+        for f in _own(writer).glob(pat):
             try:
                 st = os.lstat(f)
             except OSError:
@@ -1038,8 +1041,8 @@ def _feed_new(state: dict[Path, tuple[int, int | None, bool]]) -> list[dict]:
     kept. A file refused is said once. A file not there at the start is read from its start."""
     from eregion_core import channel_reader
     out = []
-    for pat, kind in _FEED_FILES:
-        for f in _RUNS.glob(pat):
+    for writer, pat, kind in _FEED_FILES:
+        for f in _own(writer).glob(pat):
             offset, ino, skipping = state.get(f, (0, None, False))
             try:
                 read = channel_reader.read_lines(f, offset, skipping, ino)
@@ -1825,7 +1828,8 @@ def _vm_actions(vm_name: str, limit: int) -> dict:
 
     cutoff = _time.time() - 24 * 3600
     actions: list[dict] = []
-    debug = [(st.st_mtime, f) for f in runs.glob("*_debug.jsonl") if (st := runs_reader.regular(f))]
+    debug = [(st.st_mtime, f) for f in _own("glorfindel").glob("*_debug.jsonl")   # SEC18
+             if (st := runs_reader.regular(f))]
 
     for mtime, f in sorted(debug, key=lambda x: x[0], reverse=True):
         if mtime < cutoff:
@@ -2144,12 +2148,8 @@ def _load_recent(n: int, window_h: float = 4.0) -> list[dict]:
     cutoff = _time.time() - window_h * 3600
     entries: list[tuple[str, dict]] = []
 
-    for pat, kind in [
-        ("*_signals.jsonl", "signal"),
-        ("*_debug.jsonl", "action"),
-        ("manual_actions.jsonl", "action"),
-    ]:
-        for f in runs.glob(pat):
+    for writer, pat, kind in _FEED_FILES:     # SEC18: each from its writer's directory
+        for f in _own(writer).glob(pat):
             try:
                 st = os.lstat(f)
             except OSError:
@@ -2205,6 +2205,23 @@ def _parse(data: dict, kind: str) -> dict:
 # (/api/atelier/*), which now redirect here.
 
 _RUNS = Path("runs")
+
+
+def _own(writer: str) -> Path:
+    """The directory of ``writer`` under this host's runs/ (SEC18, eregion_core/runs_layout.py) —
+    the only place the console reads that writer's files from; what is elsewhere is never read,
+    and said once (``_say_strays``)."""
+    from eregion_core import runs_layout
+    return runs_layout.dir_of(writer, _RUNS)
+
+
+def _say_strays() -> None:
+    """What runs/ holds out of its writers' places — the former layout, another writer's file in
+    a writer's directory: never read, said once in the console's log (SEC18)."""
+    from eregion_core import runs_layout
+    runs_layout.say_strays(_RUNS, lambda text: print(f"  ⚠ console: {text}", flush=True))
+
+
 # A cycle is slimmed once per debug file version: the files carry the model's past cycles.
 _cycle_cache: dict[Path, tuple[tuple[int, int], list[dict]]] = {}
 _HEARTBEAT_TTL_S = 20.0
@@ -2305,7 +2322,7 @@ def _watch_cycles(since_ts: float | None) -> list[dict]:
     """Glorfindel's cycles from every debug file written since ``since_ts`` — the watch's
     ``watch-*`` files, and a run's own on a host that has both."""
     out = []
-    paths = sorted(_RUNS.glob("*_debug.jsonl"))
+    paths = sorted(_own("glorfindel").glob("*_debug.jsonl"))   # SEC18: the watch's own directory
     for gone in set(list(_cycle_cache)) - set(paths):   # a file deleted is dropped from the cache (C1)
         _cycle_cache.pop(gone, None)   # two requests (threads) can evict at once
     for path in paths:
@@ -2333,11 +2350,12 @@ def _watch_cycles(since_ts: float | None) -> list[dict]:
 
 
 def _run_reports() -> dict[str, Path]:
-    """Where each run's report is on this host: ``runs/<run_id>.json`` (a run launched here),
-    else under the campaign Orodruin published it with (``runs/campaigns/<id>/runs/``)."""
-    found = {p.stem: p for p in _RUNS.glob("campaigns/*/runs/*.json")}
-    found.update({p.stem: p for p in _RUNS.glob("*.json")})
-    return found
+    """Where each run's report is on this host: its injector's own directory (a run launched
+    here), the watch's (a run Orodruin published, pulled on H0), else under the campaign it was
+    published with — each in its writer's directory (SEC18, ``runs_layout.run_reports``)."""
+    from eregion_core import runs_layout
+    _say_strays()
+    return runs_layout.run_reports(_RUNS)
 
 
 def _slim_probes(by_vm) -> dict:
@@ -2386,9 +2404,9 @@ def _held_windows() -> dict[str, dict]:
     believed, refused or purged (its tombstone): what an attack run's T0 is confronted with, as
     the campaign report does (SEC9, SEC15: ``indicators.t0_confronted``). Read only, as the watch
     reads runs/."""
-    from eregion_core.exercise import exercises_dir
-    directory = exercises_dir(_RUNS)
-    return {path.stem: w for path in (sorted(directory.glob("*.json")) if directory.is_dir() else [])
+    from eregion_core.exercise import windows_dirs
+    return {path.stem: w for directory in windows_dirs(_RUNS) if directory.is_dir()   # SEC18
+            for path in sorted(directory.glob("*.json"))
             if isinstance(w := runs_reader.read_json(path), dict)}
 
 
@@ -2398,11 +2416,11 @@ def _read_windows() -> list[dict]:
     without a run_id and a start (unreadable, or a purged window's tombstone) is skipped; the
     targets are kept only as a list of strings. ``refusal``: why Glorfindel does not believe
     the window, as written (``window_refusal``, H-1) — it is shown, never hidden."""
-    from eregion_core.exercise import exercises_dir, window_refusal
-    directory = exercises_dir(_RUNS)
+    from eregion_core.exercise import window_refusal, windows_dirs
     now = datetime.now(timezone.utc)
     out = []
-    for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+    # SEC18: each injector's own directory, and the watch's (pulled from the channel).
+    for path in [p for d in windows_dirs(_RUNS) if d.is_dir() for p in sorted(d.glob("*.json"))]:
         # SEC15: a regular file, by lstat, read bounded and without blocking (runs_reader).
         st = runs_reader.regular(path)
         w = runs_reader.read_json(path) if st is not None else None
@@ -2490,9 +2508,12 @@ async def campaigns(since: str = "30d") -> dict:
 
 
 def _campaigns(start: datetime | None) -> dict:
+    from eregion_core import runs_layout
     out = []
-    for mpath in _RUNS.glob("campaigns/*/manifest.json"):
-        cdir = mpath.parent
+    for cdir in runs_layout.campaign_dirs(_RUNS):     # SEC18: Annatar's, and the watch's copies
+        mpath = cdir / "manifest.json"
+        if not os.path.lexists(mpath):
+            continue
         m = runs_reader.read_json(mpath)   # SEC15: a regular file, bounded, never blocking
         if not isinstance(m, dict):
             out.append({"dir": cdir.name, "error": "manifest unreadable"})
@@ -2510,7 +2531,7 @@ def _campaigns(start: datetime | None) -> dict:
             "budget": {k: budget.get(k) for k in ("max_scenarios", "allow_destructive",
                                                   "detection_window_s", "reset_nsg_between")},
             "pulled": (cdir / ".pulled").exists(),
-            "report": (cdir / "report.md").exists(),
+            "report": (runs_layout.campaign_output(cdir) / "report.md").exists(),
             "without_glorfindel": m.get("without_glorfindel") is True,   # V1: counted apart
             "scenarios": [
                 {k: s.get(k) for k in ("seq", "ttp", "tactic", "name", "status", "detection",
@@ -2531,8 +2552,9 @@ async def campaign(cid: str) -> dict:
     from eregion_core.exercise_channel import safe_part
     if not safe_part(cid):
         return {"error": "campaign id: a plain name"}
-    cdir = _RUNS / "campaigns" / cid
-    if not (cdir / "manifest.json").is_file():
+    from eregion_core import runs_layout
+    cdir = runs_layout.find_campaign(cid, _RUNS)     # SEC18: Annatar's, or the watch's copy
+    if cdir is None:
         return {"error": f"unknown campaign: {cid}"}
     from dataclasses import asdict
     from analysis import containment
@@ -2540,17 +2562,18 @@ async def campaign(cid: str) -> dict:
     from glorfindel import escalations as esc_module
     skipped: list[str] = []
     try:
-        facts = await asyncio.to_thread(collect_facts, cdir, _RUNS, skipped.append)
+        facts = await asyncio.to_thread(collect_facts, cdir, None, skipped.append)
     except Exception as exc:
         return {"error": f"campaign unreadable: {exc}"}
     # BL1: the time to contain and the share contained alone of this campaign, from the same
     # files, and the cards of this host (an isolation that did not hold) — said, never raised.
     try:
         contained = (await asyncio.to_thread(
-            containment.load, cdir, _RUNS, cards=esc_module.all_escalations())).as_dict()
+            containment.load, cdir, None, cards=esc_module.all_escalations())).as_dict()
     except Exception as exc:
         contained = {"error": f"response not computed: {type(exc).__name__}: {str(exc)[:160]}"}
-    report = await asyncio.to_thread(runs_reader.read_text, cdir / "report.md", runs_reader.JSON_MAX_BYTES)
+    report = await asyncio.to_thread(runs_reader.read_text, runs_layout.campaign_output(cdir) / "report.md",
+                                     runs_reader.JSON_MAX_BYTES)
     return {"campaign_id": cid, "facts": [asdict(f) for f in facts], "skipped": skipped,
             "report_md": report or "", "containment": contained}
 
@@ -2590,12 +2613,12 @@ def _matrix_fingerprint(reports: dict[str, Path]) -> tuple:
             return (str(Path(p).absolute()), st.st_mtime_ns, st.st_size)
         except OSError:
             return (str(p), None, None)
-    from eregion_core.exercise import exercises_dir
-    windows = exercises_dir(_RUNS)
+    from eregion_core.exercise import windows_dirs
+    windows = [p for d in windows_dirs(_RUNS) if d.is_dir() for p in sorted(d.glob("*.json"))]
     return (tuple(sorted(stat(p) for p in reports.values())),
-            tuple(stat(p) for p in sorted(_RUNS.glob("*_debug.jsonl"))), stat(CATALOG),
-            # SEC15: the windows each run's T0 is confronted with
-            tuple(stat(p) for p in sorted(windows.glob("*.json"))) if windows.is_dir() else ())
+            tuple(stat(p) for p in sorted(_own("glorfindel").glob("*_debug.jsonl"))), stat(CATALOG),
+            # SEC15: the windows each run's T0 is confronted with (SEC18: in every writer's directory)
+            tuple(stat(p) for p in windows))
 
 
 def coverage_matrix(now: float | None = None) -> dict:
@@ -2641,7 +2664,7 @@ def _manual_liftings(since: float) -> list:
     unblock) since ``since`` — where the overview stops watching an isolation (BL1)."""
     from analysis import containment
     out = []
-    for line in runs_reader.lines(_RUNS / "manual_actions.jsonl"):   # SEC15
+    for line in runs_reader.lines(_own("console") / "manual_actions.jsonl"):   # SEC15, SEC18
         try:
             rec = json.loads(line)
         except ValueError:
@@ -2728,13 +2751,12 @@ async def channel() -> dict:
     now), and the heartbeat it publishes — with the live windows it does not list yet (a run
     of such a window cannot conclude to a miss: ``watch_channel.miss_unprovable``)."""
     from eregion_core import exercise_channel, watch_channel
-    from eregion_core.exercise import exercises_dir, live
+    from eregion_core.exercise import live, windows_dirs
     now = datetime.now(timezone.utc)
 
     def read() -> tuple[list[dict], list[float]]:   # SEC15: in a thread; a link has no age here
-        directory = exercises_dir(_RUNS)
-        return _read_windows(), [st.st_mtime for p in directory.glob("*.json")
-                                 if (st := runs_reader.regular(p))] if directory.is_dir() else []
+        return _read_windows(), [st.st_mtime for d in windows_dirs(_RUNS) if d.is_dir()   # SEC18
+                                 for p in d.glob("*.json") if (st := runs_reader.regular(p))]
     windows, mtimes = await asyncio.to_thread(read)
     live_ids = sorted(str(w["run_id"]) for w in windows if live(w, now))
     out = {
@@ -2925,7 +2947,7 @@ def _orodruin_contract() -> dict | None:
     watch from the exercise channel, DG-b) and read against its shape again — or None: unknown
     here. Never an identifier: the verdict, its codes, its time."""
     from eregion_core.orodruin import read_contract
-    published = runs_reader.read_json(_RUNS / "orodruin" / "contract.json")   # SEC15
+    published = runs_reader.read_json(_own("glorfindel") / "orodruin" / "contract.json")   # SEC15, SEC18
     try:
         return read_contract(published) if published is not None else None
     except ValueError:
@@ -2946,7 +2968,7 @@ async def exercise_request_status(request_id: str) -> JSONResponse:
     # there but refused (A0, DG-c review): the request may be running on Orodruin.
     # SEC15: read as the watch reads runs/, in a thread — a link or a pipe there is unreadable.
     def read_status() -> tuple[dict | None, str]:
-        spath = _RUNS / "orodruin" / "requests" / f"{request_id}.json"
+        spath = _own("glorfindel") / "orodruin" / "requests" / f"{request_id}.json"   # SEC18: pulled
         if not os.path.lexists(spath):
             return None, ""
         doc, why = runs_reader.json_and_why(spath)

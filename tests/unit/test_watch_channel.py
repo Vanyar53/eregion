@@ -391,8 +391,8 @@ class FakeChannel:
 
 @pytest.fixture
 def remote(waiting, monkeypatch):  # noqa: F811  (the imported fixture)
-    """The run on Orodruin: no local watch, the hosted one reached through the channel."""
-    (waiting.runs.parent / "home" / ".glorfindel" / "watch_heartbeat").unlink()
+    """The run on Orodruin: the hosted watch reached through the channel — the only way a run
+    learns of its detection (SEC18)."""
     monkeypatch.setenv(wc.CHANNEL_ENV, URL)
 
     def install(**kw):

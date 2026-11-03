@@ -58,7 +58,7 @@ from analysis.campaign_schema import (NO_CAMPAIGN_REPORT, run_report_refusal,
 from annatar.runner.detection import _number, first_detection, read_records
 from eregion_core.exercise import (FUTURE_SKEW_S, exercises_dir, is_enrolled, last_moment,
                                    window_refusal)
-from eregion_core import channel_reader
+from eregion_core import channel_reader, runs_layout
 from eregion_core.exercise_channel import PULLED, safe_part
 
 CLAIM_KINDS = ("detected", "missed", "latency", "decision", "trend", "observation", "change")
@@ -195,6 +195,13 @@ def _decision_of(debug_path: Path) -> dict:
     return {}
 
 
+def watch_dir(runs_dir: Path) -> Path:
+    """Where the watch's cycles are for a campaign's runs directory: the watch's own directory
+    beside it (SEC18: ``runs/annatar`` → ``runs/glorfindel``), or that directory itself when it is
+    the watch's (a campaign pulled on H0)."""
+    return runs_layout.beside(runs_dir, runs_layout.GLORFINDEL)
+
+
 def windows_dir(runs_dir: Path) -> Path:
     """Where the report reads the exercise windows — ``EREGION_EXERCISES_DIR``, else
     ``<runs_dir>/exercises``: one computation with the injector's and the watch's,
@@ -207,6 +214,25 @@ def windows_dir(runs_dir: Path) -> Path:
     (analysis/hosted_report.py ``tick``) — two copies of the same windows, never two
     answers."""
     return exercises_dir(runs_dir)
+
+
+def window_paths(runs_dir: Path, rid: str) -> list[Path]:
+    """Where a run's exercise window may be on this host, in order (SEC18): the campaign's runs
+    directory's own windows (``windows_dir``), then each other writer's beside it — its
+    injector's, the watch's copy pulled from the channel —, as the watch reads them all
+    (``eregion_core.exercise.windows_dirs``). ``EREGION_EXERCISES_DIR`` alone when it is set."""
+    first = windows_dir(runs_dir)
+    if os.environ.get("EREGION_EXERCISES_DIR"):
+        return [first / f"{rid}.json"]
+    dirs = [first, *(exercises_dir(runs_layout.beside(runs_dir, w))
+                     for w in (*runs_layout.INJECTORS, runs_layout.GLORFINDEL))]
+    return [d / f"{rid}.json" for d in dict.fromkeys(dirs)]
+
+
+def window_path(runs_dir: Path, rid: str) -> Path:
+    """The first of ``window_paths`` that exists (by lstat), else the first: where a run's window is."""
+    paths = window_paths(runs_dir, rid)
+    return next((p for p in paths if os.path.lexists(p)), paths[0])
 
 
 def _read_json(*paths: Path) -> dict:
@@ -231,7 +257,7 @@ def _watch_files(runs_dir: Path):
     """The watch-* debug files of the runs directory, read once, as a function of the
     earliest attack they may hold a detection of."""
     try:
-        paths = [(p, os.lstat(p).st_mtime) for p in sorted(runs_dir.glob("watch-*_debug.jsonl"))]
+        paths = [(p, os.lstat(p).st_mtime) for p in sorted(watch_dir(runs_dir).glob("watch-*_debug.jsonl"))]
     except OSError:
         paths = []
     cache: dict[Path, list[dict]] = {}
@@ -288,7 +314,7 @@ def run_decision(scenario: dict, rid: str, campaign_dir: Path, runs_dir: Path,
     takes nothing from the watch's files: a decision found in its window is a late one, or
     another run's of the same technique and VM — not attached, and ``why`` says LATE_OR_OTHER
     (what Glorfindel did is then unknown, not « nothing »)."""
-    dec = _decision_of(runs_dir / f"{rid}_debug.jsonl")
+    dec = _decision_of(watch_dir(runs_dir) / f"{rid}_debug.jsonl")   # SEC18: the watch's own directory
     if dec:
         return dec, "", None
     missed = scenario.get("status") == "executed" and scenario.get("detection") == "missed"
@@ -297,7 +323,7 @@ def run_decision(scenario: dict, rid: str, campaign_dir: Path, runs_dir: Path,
     report = _read_json(campaign_dir / "runs" / f"{rid}.json", runs_dir / f"{rid}.json")
     attack_time = (report.get("metrics") or {}).get("attack_time")
     resource_id = scenario.get("target_resource_id") or ""
-    window = _read_json(windows_dir(runs_dir) / f"{rid}.json")
+    window = _read_json(window_path(runs_dir, rid))   # SEC18: wherever this host holds it
     # A window not believed (H-1: longer than MAX_DURATION_S…) bounds nothing.
     until = None if window_refusal(window) else last_moment(window)
     # A finite number only: a NaN would attach every detection up to ``until`` (#157's test).
@@ -372,7 +398,7 @@ def channel_refusal(scenario: dict, rid: str, campaign_dir: Path, runs_dir: Path
         _read_json(campaign_dir / "runs" / f"{rid}.json", runs_dir / f"{rid}.json"), rid)
     if report_why:
         return f"run {rid} refusé : rapport du run ({report_why})"
-    window = _read_json(windows_dir(runs_dir) / f"{rid}.json")
+    window = _read_json(window_path(runs_dir, rid))   # SEC18: wherever this host holds it
     if not window:
         return f"run {rid} refusé : fenêtre d'exercice inconnue"
     if window.get("purged_at"):
@@ -464,13 +490,12 @@ def first_window(manifest: dict, runs_dir: Path) -> float | None:
     """The start of the first window of the campaign's runs that H-1 believes
     (``window_refusal``, declared when its file was written on this host), else ``None``. A
     purged window holds no start."""
-    wdir = windows_dir(runs_dir)
     starts = []
     for s in manifest.get("scenarios") or []:
         rid = str(s.get("run_id") or "") if isinstance(s, dict) else ""
         if not rid or not safe_part(rid):
             continue
-        path = wdir / f"{rid}.json"
+        path = window_path(runs_dir, rid)   # SEC18: wherever this host holds it
         window = _read_json(path)
         try:
             declared = datetime.fromtimestamp(os.lstat(path).st_mtime, timezone.utc)
@@ -1276,7 +1301,8 @@ def main(argv: list[str]) -> int:
     except NoReport as e:
         print(f"{campaign_dir.name}: {e} — nothing written")
         return 0
-    out = campaign_dir / "report.md"
+    out = runs_layout.campaign_output(campaign_dir) / "report.md"   # SEC18: the watch's directory
+    out.parent.mkdir(parents=True, exist_ok=True)
     channel_reader.write_file(out, render(report))     # SEC16: a link in its place never followed
     print(f"{out} — {len(report.kept)} affirmation(s) gardée(s), {len(report.rejected)} écartée(s)")
     return 0

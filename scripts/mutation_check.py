@@ -319,7 +319,7 @@ MUTANTS = [
     ("M60", "an exercise card absorbs a real detection (B2)", "glorfindel/escalations.py",
      "                and (e.get(\"source\") or \"real\") == (source or \"real\")\n", ""),
     ("M61", "an Annatar run never closes its window (B2)", "annatar/runner/engine.py",
-     "        try:\n            if scenario.engine == \"atomic\":\n                return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)\n            if scenario.engine == \"local-script\":\n                return self._run_enrolled(scenario, executor, run_id)\n            # Unreachable once validate did its job — the explicit table refuses the rest.\n            console.print(f\"[red]Engine not runnable:[/red] {scenario.engine!r}\")\n            return RunOutcome(run_id, \"unknown\", error=f\"engine: {scenario.engine!r} not runnable\")\n        finally:\n            close_window(run_id)\n",
+     "        try:\n            if scenario.engine == \"atomic\":\n                return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)\n            if scenario.engine == \"local-script\":\n                return self._run_enrolled(scenario, executor, run_id)\n            # Unreachable once validate did its job — the explicit table refuses the rest.\n            console.print(f\"[red]Engine not runnable:[/red] {scenario.engine!r}\")\n            return RunOutcome(run_id, \"unknown\", error=f\"engine: {scenario.engine!r} not runnable\")\n        finally:\n            close_window(run_id, injector=\"annatar\")\n",   # re-anchored (SEC18)
      "        if scenario.engine == \"atomic\":\n            return self._run_atomic_enrolled(scenario, executor, run_id, session, resolved)\n        if scenario.engine == \"local-script\":\n            return self._run_enrolled(scenario, executor, run_id)\n        console.print(f\"[red]Engine not runnable:[/red] {scenario.engine!r}\")\n        return RunOutcome(run_id, \"unknown\", error=f\"engine: {scenario.engine!r} not runnable\")\n"),
     # #105: the boot batch's sub-second gaps set the step again (blind 10 min after a boot).
     ("M62", "the ransomware step reads the boot batch (#105)", "glorfindel/rules/azure/detection_rules.yaml",
@@ -345,8 +345,8 @@ MUTANTS = [
     ("M68", "a declared channel wider than a container is allowed (O1)", "eregion_core/orodruin.py",
      '    return scope if _CONTAINER_SCOPE.match(scope.lower()) else ""\n', "    return scope\n"),
     ("M69", "an injector's window never reaches the channel (O1)", "eregion_core/exercise.py",
-     '    _write((directory or exercises_dir()) / f"{run_id}.json", window)\n    _publish(window)\n',
-     '    _write((directory or exercises_dir()) / f"{run_id}.json", window)\n'),
+     '    _write((directory or exercises_dir(runs_layout.dir_of(injector))) / f"{run_id}.json", window)\n    _publish(window)\n',
+     '    _write((directory or exercises_dir(runs_layout.dir_of(injector))) / f"{run_id}.json", window)\n'),   # re-anchored (SEC18)
     ("M70", "the watch labels without pulling the channel (O1)", "eregion_core/exercise.py",
      "        exercise_channel.pull_if_due(exercises_dir())\n", "        pass\n"),
     # G0: the three bugs its plan names (validated 19/10), and where its signals land.
@@ -358,8 +358,8 @@ MUTANTS = [
     ("M73", "the return to the initial state is declared without being verified (G0)", GOTH,
      "        revert_verified = all(holds(rs) for rs in after.values())\n", "        revert_verified = True\n"),
     ("M74", "fault signals land where Glorfindel's watch decides on them (G0)", "gothmog/signals/emitter.py",
-     '        self.path = Path(runs_dir) / SIGNALS_SUBDIR / f"{run_id}_signals.jsonl"\n',
-     '        self.path = Path(runs_dir) / f"{run_id}_signals.jsonl"\n'),
+     '        self.path = Path(runs_dir) / f"{run_id}_signals.jsonl"\n',                 # re-anchored (SEC18):
+     '        self.path = Path(runs_dir).parent / "annatar" / f"{run_id}_signals.jsonl"\n'),   # Annatar's
     # R1: the Atomic Red Team adapter — a test is run faithfully or refused, the initial
     # state is verified before and after the atomic's own cleanup.
     ("M75", "a non-linux atomic is run on the Linux target anyway (R1)", "annatar/engines/atomic.py",
@@ -485,7 +485,7 @@ MUTANTS = [
     ("M113", "the contract lets Orodruin write the watch's channel (#159)", "eregion_core/orodruin.py",
      "            if actions and actions <= BLOB_READ_ONLY:\n", "            if True:\n"),
     ("M114", "the run reads the hosted watch's silence as a miss without its vouching (#159)", ENG,
-     "        if result_event is None and channel and not _local_watch():\n", "        if False:\n"),
+     "        if result_event is None:\n            # Only the watch could have seen it", "        if False:\n            # Only the watch could have seen it"),   # re-anchored (SEC18)
     ("M115", "an unreadable return channel is read as a miss (#159)", ENG,
      "                return None, None, why\n", '                return "detection_timeout", None, why\n'),
     # #165 — a campaign plays an atomic from the catalog. The synthesizer writes an E1
@@ -1573,7 +1573,7 @@ MUTANTS = [
      "        if attack_started and detection_timeout_s > 0 and " + _V1_WAIT,
      "        if attack_started and detection_timeout_s > 0 and not self.dry_run:\n"),
     ("M738", "make gothmog-run drops WITHOUT_GLORFINDEL (V1)", MAKE,
-     "'$(ORO_RUN) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'", "'$(ORO_RUN) gothmog run $(FAULT) --yes'"),
+     "'$(ORO_RUN_GOTHMOG) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'", "'$(ORO_RUN_GOTHMOG) gothmog run $(FAULT) --yes'"),
     ("M739", "make orodruin-campaign-run drops WITHOUT_GLORFINDEL (V1)", MAKE,
      "annatar campaign run $(CAMPAIGN) --yes$(ORO_WITHOUT)'", "annatar campaign run $(CAMPAIGN) --yes'"),
     # V1, review: a campaign without Glorfindel says so, resumes only the same way, has no
@@ -2681,9 +2681,9 @@ MUTANTS += [
      "            pass  #"),
     ("M1231", "make glorfindel-start no longer creates ~/.glorfindel/injectors: docker makes it as root "
               "(SEC3)", MAKE,
-     "glorfindel-start: check-azure-env build-glorfindel\n"
+     "glorfindel-start: check-azure-env build-glorfindel runs-migrate\n"
      "\tmkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors ",
-     "glorfindel-start: check-azure-env build-glorfindel\n\tmkdir -p $(HOME)/.glorfindel "),
+     "glorfindel-start: check-azure-env build-glorfindel runs-migrate\n\tmkdir -p $(HOME)/.glorfindel "),
     ("M1232", "an attack_adapted admitted again, no injector emitting it: decided on (SEC3, V-05)", SO,
      ("    if event not in CHANNEL_EVENTS:\n", "    fields = _FIELDS[event]\n"),
      ("    if event not in CHANNEL_EVENTS and event != \"attack_adapted\":\n",
@@ -5447,8 +5447,8 @@ MUTANTS += [
     ("M1421", "the tunnel to H0 opened without the host key checked (SEC7, V-32)", MAKE,
      "glorfindel-host-tunnel: glorfindel-host-known\n", "glorfindel-host-tunnel:\n"),
     ("M1422", "Gothmog's container writes its image (SEC7, V-34)", "docker-compose.yml",
-     "    # n'écrit que dans runs/ et /tmp.\n    read_only: true\n",
-     "    # n'écrit que dans runs/ et /tmp.\n    read_only: false\n"),
+     "    # n'écrit que dans runs/gothmog, runs/orodruin et /tmp (SEC18).\n    read_only: true\n",
+     "    # n'écrit que dans runs/gothmog, runs/orodruin et /tmp (SEC18).\n    read_only: false\n"),
     ("M1423", "the watch takes the console's secret (SEC7, V-17)", "docker-compose.yml",
      "  AZURE_CLIENT_SECRET: ${GLORFINDEL_AZURE_CLIENT_SECRET:-}\n",          # re-anchored (SEC11)
      "  AZURE_CLIENT_SECRET: ${EREGION_CONSOLE_AZURE_CLIENT_SECRET:-}\n"),
@@ -5805,7 +5805,7 @@ MUTANTS += [
      '    if d["executed"] is False:          # a release held',
      '    if False:          # a release held'),
     ("M1918", "the operator's manual actions never end a watch (BL1)", CTN,
-     '    paths = [Path(runs_dir) / "manual_actions.jsonl", *sorted(',
+     '    paths = [runs_layout.beside(runs_dir, runs_layout.CONSOLE) / "manual_actions.jsonl", *sorted(',
      "    paths = [*sorted("),
     ("M1919", "the overview never reads the operator's releases (BL1)", CON,
      "        if lift is not None and lift[1] is not None and lift[1] >= since:\n",
@@ -7837,7 +7837,8 @@ MUTANTS += [
      "    for u in unlisted(manifest, campaign_dir, runs_dir, seen, notes):\n",
      "    for u in []:\n"),
     ("M2849", "a run removed from the manifest, its window on this host, is forgotten (SEC9)", CTN,
-     '        [cr._read_json(p) for p in sorted(wdir.glob("*.json"))], watch_records(span[0]) + own,\n',
+     '        [cr._read_json(p) for d in dict.fromkeys(p.parent for p in cr.window_paths(runs_dir, "x"))\n'
+     '         for p in sorted(d.glob("*.json"))], watch_records(span[0]) + own,\n',
      "        [], watch_records(span[0]) + own,\n"),
     ("M2850", "a run removed from the manifest, its detection attached by the watch, is forgotten (SEC9)", CTN,
      "    marks = [(r, _BY_CYCLE) for r in records or ()] + [(c, _BY_CARD) for c in cards or ()]\n",
@@ -8401,11 +8402,11 @@ MUTANTS += [
     ("M3008", "a campaign's manifest read as any file (SEC15)", CON,
      "        m = runs_reader.read_json(mpath)   # SEC15", "        m = json.loads(mpath.read_text())   # SEC15"),
     ("M3009", "the operator's lifts read as any file (SEC15)", CON,
-     '    for line in runs_reader.lines(_RUNS / "manual_actions.jsonl"):   # SEC15',
-     '    for line in (_RUNS / "manual_actions.jsonl").read_text().splitlines():   # SEC15'),
+     '    for line in runs_reader.lines(_own("console") / "manual_actions.jsonl"):   # SEC15',
+     '    for line in (_own("console") / "manual_actions.jsonl").read_text().splitlines():   # SEC15'),
     ("M3010", "Orodruin's contract read through a link (SEC15)", CON,
-     '    published = runs_reader.read_json(_RUNS / "orodruin" / "contract.json")   # SEC15',
-     '    published = json.loads((_RUNS / "orodruin" / "contract.json").read_text())   # SEC15'),
+     '    published = runs_reader.read_json(_own("glorfindel") / "orodruin" / "contract.json")   # SEC15',
+     '    published = json.loads((_own("glorfindel") / "orodruin" / "contract.json").read_text())   # SEC15'),
     ("M3011", "Orodruin's status of a request read as any file (SEC15)", CON,
      "        doc, why = runs_reader.json_and_why(spath)\n", "        doc, why = json.loads(spath.read_text()), \"\"\n"),
     ("M3012", "the exercises read in the event loop (SEC15)", CON,
@@ -8486,7 +8487,7 @@ MUTANTS += [
     ("M3144", "a name of runs/ written raw into the console's log (SEC15)", RRD,
      '    print(f"  ⚠ console: {shown(path)} — ', '    print(f"  ⚠ console: {path} — '),
     ("M3145", "the matrix kept 30 s past a window that changes a T0's verdict (SEC15)", CON,
-     '            tuple(stat(p) for p in sorted(windows.glob("*.json"))) if windows.is_dir() else ())',
+     '            tuple(stat(p) for p in windows))',
      "            ())"),
 ]
 TESTS.update({f"M{n}": _SEC15 for n in (3139, 3142, 3143, 3144)})
@@ -8930,6 +8931,87 @@ TESTS.update({"M3190": f"{_I3U_UNIT}::test_clearing_a_state_never_deletes_an_unr
               "M3191": f"{_I3U_UNIT}::test_the_warning_stays_when_a_nics_message_names_the_unreadable_file"})
 
 
+# SEC18 (N-05, #455): runs/ — one directory per writer, read-only for the others (eregion_core/
+# runs_layout.py). The mounts (compose, the Makefile's docker runs, H0's deployment), the writers'
+# own directories, the readers that read a file only where its writer writes it and say the rest,
+# the migration of the former layout. M3220–M3239.
+_SEC18_MOUNTS, _SEC18_LAYOUT = "tests/unit/test_runs_mounts.py", "tests/unit/test_runs_layout.py"
+LAYOUT = "eregion_core/runs_layout.py"
+MUTANTS += [
+    ("M3220", "the red mounts the watch's directory, read-only: it reads the blue's reasoning (SEC18)", "docker-compose.yml",
+     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ./annatar/scenarios",
+     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro\n"
+     "      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ./annatar/scenarios"),
+    ("M3221", "the watch mounts Annatar's directory read-write: a writer in another's directory (SEC18)",
+     "docker-compose.yml",
+     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro\n      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro\n"
+     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro",
+     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro\n"
+     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro"),
+    ("M3222", "the console mounts runs/ whole again (SEC18)", "docker-compose.yml",
+     "      - ${EREGION_RUNS:-./runs}/console:/app/runs/console\n      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro\n",
+     "      - ${EREGION_RUNS:-./runs}:/app/runs\n"),
+    ("M3223", "an Annatar run on Orodruin mounts ~/runs whole (SEC18)", MAKE,
+     "$(call ORO_MOUNT,annatar) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)\nORO_RUN_GOTHMOG",
+     "-v $$HOME/runs:/app/runs $(ORO_IMAGE)\nORO_RUN_GOTHMOG"),
+    ("M3224", "Annatar's docker run on the workstation mounts the watch's directory (SEC18)", MAKE,
+     "\t-v $(PWD)/runs/orodruin:/app/runs/orodruin \\\n\t$(if $(wildcard",
+     "\t-v $(PWD)/runs/orodruin:/app/runs/orodruin \\\n\t-v $(PWD)/runs/glorfindel:/app/runs/glorfindel:ro \\\n"
+     "\t$(if $(wildcard"),
+    ("M3225", "the watch reads signals anywhere in runs/, not only from Annatar's directory (SEC18)", GCLI,
+     "    _channel = ChannelReader(_layout.dir_of(_layout.ANNATAR, runs_dir), _say_channel)\n",
+     "    _channel = ChannelReader(runs_dir, _say_channel)\n"),
+    ("M3226", "the watch never says what runs/ holds out of its writers' places (SEC18)", GCLI,
+     '        _layout.say_strays(runs_dir, lambda text: _say_channel(f"Canal runs/ : {text}"))\n', ""),
+    ("M3227", "the watch writes its cycles flat in runs/, where an injector writes too (SEC18)", "glorfindel/agent.py",
+     '    out = runs_layout.dir_of(runs_layout.GLORFINDEL) / f"{run_id}_debug.jsonl"\n',
+     '    out = runs_layout.ROOT / f"{run_id}_debug.jsonl"\n'),
+    ("M3228", "the operator's gestures written flat in runs/ (SEC18)", GCLI,
+     "    runs = runs_layout.dir_of(runs_layout.CONSOLE)\n", "    runs = runs_layout.ROOT\n"),
+    ("M3229", "Annatar's signals written flat in runs/ (SEC18)", "annatar/signals/emitter.py",
+     "        runs_dir = runs_layout.dir_of(runs_layout.ANNATAR) if runs_dir is None else runs_dir\n",
+     "        runs_dir = runs_layout.ROOT if runs_dir is None else runs_dir\n"),
+    ("M3230", "an injector's window written in the watch's directory, not its own (SEC18)", "eregion_core/exercise.py",
+     '    _write((directory or exercises_dir(runs_layout.dir_of(injector))) / f"{run_id}.json", window)\n'
+     "    _publish(window)\n    return window\n",
+     '    _write((directory or exercises_dir()) / f"{run_id}.json", window)\n'
+     "    _publish(window)\n    return window\n"),
+    ("M3231", "the watch purges a window in an injector's directory, read-only to it (SEC18)", "eregion_core/exercise.py",
+     "            if path.parent == own:   # SEC18: an injector's directory is read-only here\n",
+     "            if True:\n"),
+    ("M3232", "a run without a return channel waits on what it cannot read: never said why (SEC18)", ENG,
+     "        if not channel:\n            console.print(\n                \"[yellow]Detection not measured — no return channel",
+     "        if False:\n            console.print(\n                \"[yellow]Detection not measured — no return channel"),
+    ("M3233", "a report in Annatar's directory may say Gothmog: a forged fault counted (SEC18)", LAYOUT,
+     "    if said != writer:\n        return f\"un rapport de", "    if False:\n        return f\"un rapport de"),
+    ("M3234", "the migration writes over a file its writer already has: one lost (SEC18)", LAYOUT,
+     "    if not os.path.lexists(dst):\n        dst.parent.mkdir(parents=True, exist_ok=True)\n",
+     "    if True:\n        dst.parent.mkdir(parents=True, exist_ok=True)\n"),
+    ("M3235", "the migration gives a report the watch pulled to Annatar (SEC18)", LAYOUT,
+     "    if (root / _PULLED_RUNS / path.stem).exists():\n        return GLORFINDEL\n",
+     "    if False:\n        return GLORFINDEL\n"),
+    ("M3236", "the migration leaves H0's copy of Orodruin's statuses where no one reads it (SEC18)", LAYOUT,
+     "            if name == ORODRUIN and is_dir and (path / _CONTRACT).exists():\n",
+     "            if False:\n"),
+    ("M3237", "another writer's file in a writer's directory is never said (SEC18)", LAYOUT,
+     "                if not belongs(e.name, sub.name, is_dir):\n", "                if False:\n"),
+    ("M3238", "the console's feed reads a line from any writer's directory (SEC18)", CON,
+     "    for writer, pat, kind in _FEED_FILES:     # SEC18: each from its writer's directory\n"
+     "        for f in _own(writer).glob(pat):\n",
+     "    for writer, pat, kind in _FEED_FILES:     # SEC18: each from its writer's directory\n"
+     "        for f in _RUNS.glob(f\"*/{pat}\"):\n"),
+    ("M3239", "H0 starts its services without moving the former layout: what runs/ held unread (SEC18)",
+     "infra/glorfindel-host/deploy.sh",
+     "    python3 -m eregion_core.runs_layout migrate runs || die", "    true || die"),
+]
+TESTS.update({**{f"M{n}": _SEC18_MOUNTS for n in (3220, 3221, 3222, 3223, 3224, 3225, 3226, 3238, 3239)},
+              **{f"M{n}": _SEC18_LAYOUT for n in (3230, 3231, 3233, 3234, 3235, 3236, 3237)},
+              "M3227": "tests/unit/test_agent_nodes.py::test_store_cycle_writes_debug_jsonl",
+              "M3228": "tests/unit/test_runs_channel.py::test_the_clis_manual_action_never_through_a_link_never_blocking",
+              "M3229": "tests/unit/test_signals.py",
+              "M3232": "tests/unit/test_annatar_detection.py::test_without_a_return_channel_the_detection_is_not_measured"})
+
+
 if __name__ == "__main__":
     sys.exit(main())
 # SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's
@@ -9104,7 +9186,7 @@ MUTANTS += [
     ("M2953", "Orodruin without its host key's fingerprint falls back to accept-new (V-32)", MAKE,
      ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT required\n', ' "$(ORO_KNOWN_HOSTS)" ORO_SSH_FINGERPRINT\n'),
     ("M2954", "an injector's container on Orodruin runs with its root writable and its capabilities (V-34)",
-     MAKE, "ORO_RUN        = docker run --rm $(ORO_HARDEN) ", "ORO_RUN        = docker run --rm "),
+     MAKE, "ORO_RUN        = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) ", "ORO_RUN        = $(ORO_DIRS) docker run --rm "),
 ]
 
 

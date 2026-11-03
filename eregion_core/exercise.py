@@ -48,10 +48,12 @@ read by the watch), a window marks nothing unless it declares a technique that i
 destructive (``kind: technique``, ``destructive: false``): the production rule of O0 — a
 destructive technique or a fault never runs there, so a window that says one did is a lie.
 
-Files: one JSON per run under ``runs/exercises/`` (or ``EREGION_EXERCISES_DIR``), where
-the injector and the watch share ``runs/``. A watch on another host (H0) gets them through
-the exercise channel (``eregion_core/exercise_channel.py``, O1): the injector publishes
-each window it writes, the watch pulls them before it reads.
+Files: one JSON per run under its injector's own directory, ``runs/annatar/exercises/`` or
+``runs/gothmog/exercises/`` (SEC18, eregion_core/runs_layout.py; or ``EREGION_EXERCISES_DIR``),
+which the watch mounts read-only. A watch on another host (H0) gets them through the exercise
+channel (``eregion_core/exercise_channel.py``, O1): the injector publishes each window it writes,
+the watch pulls them into its own directory (``runs/glorfindel/exercises/``) before it reads. The
+watch reads the three (``windows_dirs``), and purges only in its own.
 """
 from __future__ import annotations
 
@@ -63,6 +65,8 @@ import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from eregion_core import runs_layout
 
 # A run that outlives this was not closed (the injector died): its window lapses. A window
 # declared longer is refused (H-1).
@@ -93,11 +97,21 @@ EXERCISE, REAL, UNKNOWN = "exercise", "real", "unknown"
 
 
 def exercises_dir(runs_dir: Path | None = None) -> Path:
-    """``EREGION_EXERCISES_DIR``, else ``<runs_dir>/exercises`` (``runs`` from the current
-    directory by default — the injector's and the watch's; the campaign report passes its
-    own, analysis/campaign_report.py)."""
+    """``EREGION_EXERCISES_DIR``, else ``<runs_dir>/exercises`` — ``runs_dir`` a writer's own
+    directory (SEC18: ``runs/annatar``, ``runs/gothmog``; ``runs/glorfindel`` for the windows the
+    watch pulls, its default). The campaign report passes its own (analysis/campaign_report.py)."""
     return Path(os.environ.get("EREGION_EXERCISES_DIR")
-                or Path(runs_dir if runs_dir is not None else "runs") / "exercises")
+                or Path(runs_dir if runs_dir is not None else runs_layout.dir_of(runs_layout.GLORFINDEL))
+                / "exercises")
+
+
+def windows_dirs(root=None) -> list[Path]:
+    """Where the windows of this host are (SEC18): each injector's own, then the watch's (pulled
+    from the channel) — or ``EREGION_EXERCISES_DIR`` alone. ``root``: ``runs`` by default."""
+    if os.environ.get("EREGION_EXERCISES_DIR"):
+        return [exercises_dir()]
+    return [exercises_dir(runs_layout.dir_of(w, root))
+            for w in (*runs_layout.INJECTORS, runs_layout.GLORFINDEL)]
 
 
 def _now() -> datetime:
@@ -115,10 +129,11 @@ def _parse(value) -> datetime | None:
 
 
 def _write(path: Path, window: dict) -> None:
+    """Written at once, never through a link (SEC16, SEC18: ``channel_reader.write_file``) — the
+    watch never reads half a window."""
+    from eregion_core.channel_reader import write_file
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(window, indent=2), encoding="utf-8")
-    tmp.replace(path)  # atomic: the watch never reads half a window
+    write_file(path, json.dumps(window, indent=2))
 
 
 def _publish(window: dict) -> None:
@@ -154,15 +169,16 @@ def open_window(run_id: str, *, injector: str, kind: str, experiment: str,
     }
     if request:
         window["request"] = request
-    _write((directory or exercises_dir()) / f"{run_id}.json", window)
+    _write((directory or exercises_dir(runs_layout.dir_of(injector))) / f"{run_id}.json", window)
     _publish(window)
     return window
 
 
-def close_window(run_id: str, *, now: datetime | None = None,
+def close_window(run_id: str, *, injector: str = "", now: datetime | None = None,
                  directory: Path | None = None) -> dict | None:
-    """The run is over: its window ends now (detections still count during the grace)."""
-    path = (directory or exercises_dir()) / f"{run_id}.json"
+    """The run is over: its window ends now (detections still count during the grace). In its
+    injector's own directory (SEC18), as ``open_window`` wrote it."""
+    path = (directory or exercises_dir(runs_layout.dir_of(injector))) / f"{run_id}.json"
     try:
         window = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -367,17 +383,20 @@ def load_windows(directory: Path | None = None, *, now: datetime | None = None,
     moment is PURGE_AFTER_S old is purged (``_purge``). The default directory is refreshed
     from the exercise channel first, when one is configured. A local window (not pulled from
     the channel) is also held against what the watch saw of it (``seen``: the watch's record;
-    ``seen_path()`` for the default directory — SEC14, V-20)."""
+    ``seen_path()`` for the default directory — SEC14, V-20). By default, every directory of
+    windows of this host (``windows_dirs``, SEC18): the injectors', read-only, and the watch's
+    own, where the pull writes — the only one where a window is purged."""
     if directory is None:
         from eregion_core import exercise_channel
         exercise_channel.pull_if_due(exercises_dir())
         seen = seen if seen is not None else seen_path()
-    d = directory or exercises_dir()
-    if not d.is_dir():
+    own = directory or exercises_dir()
+    dirs = [d for d in ([directory] if directory is not None else windows_dirs()) if d.is_dir()]
+    if not dirs:
         return []
     now = now or _now()
     read: list[tuple[Path, dict, datetime]] = []
-    for path in sorted(d.glob("*.json")):
+    for path in sorted(p for d in dirs for p in d.glob("*.json")):
         try:
             w = json.loads(path.read_text(encoding="utf-8"))
             declared = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
@@ -400,7 +419,8 @@ def load_windows(directory: Path | None = None, *, now: datetime | None = None,
             continue
         last = last_moment(w)
         if last is not None and last < now - timedelta(seconds=PURGE_AFTER_S):
-            _purge(path, w)
+            if path.parent == own:   # SEC18: an injector's directory is read-only here
+                _purge(path, w)
             continue
         out.append(w)
     return out

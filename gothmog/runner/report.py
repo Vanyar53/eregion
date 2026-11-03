@@ -1,4 +1,4 @@
-"""A Gothmog run, recorded like Annatar's: ``runs/<run_id>.json``, the run format both share
+"""A Gothmog run, recorded like Annatar's: ``runs/gothmog/<run_id>.json`` (SEC18), the run format both share
 (``eregion_core/run_report.py``, C1) — ``annatar report`` reads it too. What a fault adds (its
 execution, its probes, its return) goes in ``metrics`` and ``checks``; a fault has no ATT&CK
 id. Here, only how Gothmog prints it."""
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from eregion_core import run_report
+from eregion_core import run_report, runs_layout
 
 console = Console()
 
@@ -28,8 +28,8 @@ class RunReport(run_report.RunReport):
         console.print(f"[bold]Result:[/bold] [{color}]{self.result}[/{color}]")
 
     @staticmethod
-    def display(run_id: str, runs_dir: str | Path = "runs") -> bool:
-        path = Path(runs_dir) / f"{run_id}.json"
+    def display(run_id: str, runs_dir: str | Path | None = None) -> bool:
+        path = Path(runs_layout.dir_of(runs_layout.GOTHMOG) if runs_dir is None else runs_dir) / f"{run_id}.json"
         if not path.exists():
             console.print(f"[red]Run not found:[/red] {run_id}")
             return False

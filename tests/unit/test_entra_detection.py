@@ -332,7 +332,7 @@ def test_no_upn_reaches_the_models_provider_nor_the_memory_it_reads(tmp_path, mo
     sent_text = json.dumps([str(a) for a in llm.call_args.args] + [str(v) for v in llm.call_args.kwargs.values()])
     for upn in (ADMIN_UPN, "new-admin@example.org"):
         assert upn not in sent_text
-    debug = list((tmp_path / "runs").glob("*_debug.jsonl"))
+    debug = list((tmp_path / "runs" / "glorfindel").glob("*_debug.jsonl"))   # SEC18
     assert debug and _decision_of(debug[0]) == {}
 
 

@@ -20,8 +20,9 @@ matches ``_SAFE_NAME``, so ``pull`` leaves the campaigns to ``pull_campaigns``.
 And the report of a run launched alone (``annatar run``, ``gothmog run``, #193), so that its
 verdict is seen on H0 too: ``runs/<run_id>.json``, under the same container and the same
 assignment — a prefix again, which neither ``pull`` nor ``pull_campaigns`` takes. H0 pulls
-it into its own ``runs/<run_id>.json`` (``pull_runs``), where the console of the atelier
-reads it, once it has the shape H0 accepts (H-1), and never over a file it did not pull.
+it into the watch's own directory, ``runs/glorfindel/<run_id>.json`` (``pull_runs``; SEC18), where
+the console of the atelier reads it, once it has the shape H0 accepts (H-1), and never over a file
+it did not pull. Everything the watch pulls goes to its own directory, the only one it writes.
 
 SEC5 holds the channel at its edges:
 - a storage bearer token goes only to an Azure Storage blob endpoint — ``https://<account>``
@@ -116,7 +117,7 @@ CREATED = "channel_created"
 # SEC5 (V-29): Orodruin's journal, one append blob per run.
 AUDIT = "audit"
 # DG-b: what Orodruin says to the console — its contract's verdict, each request's status —
-# under its own prefix of the same container; the watch of H0 pulls it into runs/orodruin/,
+# under its own prefix of the same container; the watch of H0 pulls it into runs/glorfindel/orodruin/,
 # each blob read against its shape (eregion_core/orodruin.py read_contract,
 # eregion_core/exercise_request.py read_status).
 ORODRUIN = "orodruin"
@@ -514,7 +515,7 @@ _safe_part = safe_part
 def unpublished_runs(campaign_dir: Path, runs_dir: Path | None = None) -> list[str]:
     """The executed runs of the campaign whose report is not in ``runs_dir`` — H0 waits for
     each one before it writes the campaign's report, so it will not write it on its own
-    (``campaign run --runs-dir X``: the runs' reports stay in ``runs/``, annatar/runner/report.py)."""
+    (``campaign run --runs-dir X``: the runs' reports stay in ``runs/annatar/``, annatar/runner/report.py)."""
     import json
 
     cdir = Path(campaign_dir)
@@ -532,7 +533,7 @@ def unpublished_runs(campaign_dir: Path, runs_dir: Path | None = None) -> list[s
 
 def campaign_blobs(campaign_dir: Path, runs_dir: Path | None = None) -> list[tuple[str, Path]]:
     """What a campaign carries to H0, as (blob name, local file): the report of each of its
-    runs (``runs/<run_id>.json``, which holds ``attack_time``), then its manifest — last, so
+    runs (``runs/annatar/<run_id>.json``, which holds ``attack_time``), then its manifest — last, so
     a watch that sees the manifest sees the runs too. Nothing else: not the runs' debug or
     signal files, not another run, not a file of the campaign directory (scenarios, report).
     A run_id that is not a plain name is left out; a campaign_id that is not raises."""
@@ -586,9 +587,10 @@ def publish_campaign(campaign_dir: Path, runs_dir: Path | None = None, *,
 
 # ── The report of a run launched alone, carried to H0 (#193) ──────────────────────────
 
-def publish_run(run_id: str, runs_dir: Path | str = "runs", *, channel: str | None = None,
+def publish_run(run_id: str, runs_dir: Path | str, *, channel: str | None = None,
                 credential=None, put=None) -> str:
-    """Write the report of a run launched alone to the channel, as ``runs/<run_id>.json``:
+    """Write the report of a run launched alone to the channel, as ``runs/<run_id>.json`` —
+    from ``runs_dir``, its injector's own directory (SEC18: ``runs/annatar``, ``runs/gothmog``):
     its report only, never its debug or signal files. The blob's name, or "" when no channel
     is configured or the run wrote no report. A refused write raises to its caller."""
     import requests
@@ -611,7 +613,7 @@ def publish_run(run_id: str, runs_dir: Path | str = "runs", *, channel: str | No
     return name
 
 
-def carry_run(run_id: str, runs_dir: Path | str = "runs") -> bool:
+def carry_run(run_id: str, runs_dir: Path | str) -> bool:
     """``publish_run`` at the end of a run (``annatar run``, ``gothmog run``), beside its
     closed window. A failure is said, never raised: the run is over, and its report stays
     on this host. True once published."""
@@ -668,7 +670,7 @@ def _bounded(blobs, skipped: dict):
 
 def pull_campaigns(directory: Path, *, channel: str | None = None, credential=None,
                    get=None) -> tuple[int, set[str]]:
-    """Copy the published campaigns into ``directory`` (``runs/campaigns`` on H0):
+    """Copy the published campaigns into ``directory`` (``runs/glorfindel/campaigns`` on H0, SEC18):
     ``<campaign_id>/runs/<run_id>.json``, then ``<campaign_id>/manifest.json``, each new or
     changed since the local copy, written whole (tmp, then replace). A blob of any other
     shape is skipped; the windows are never touched.
@@ -734,7 +736,7 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
 
 def pull_runs(directory: Path, *, refusal, channel: str | None = None, credential=None,
               get=None) -> tuple[int, dict[str, str]]:
-    """Copy into ``directory`` (``runs`` on H0) the published report of each run launched
+    """Copy into ``directory`` (``runs/glorfindel`` on H0, SEC18) the published report of each run launched
     alone, as ``<run_id>.json``, new or changed since the local copy, written whole (tmp,
     then replace). Each one is read against the shape H0 accepts first — ``refusal(report,
     run_id)`` says why not, "" when it does (analysis/campaign_schema.py
@@ -843,7 +845,7 @@ def orodruin_refusal(name: str, doc) -> str:
 
 def pull_orodruin(directory: Path, *, channel: str | None = None, credential=None,
                   get=None) -> tuple[int, dict[str, str]]:
-    """Copy into ``directory`` (``runs/orodruin`` on H0) Orodruin's verdict (``contract.json``)
+    """Copy into ``directory`` (``runs/glorfindel/orodruin`` on H0, SEC18) Orodruin's verdict (``contract.json``)
     and the status of each request (``requests/<id>.json``), new or changed since the local
     copy, each read against its shape first (``orodruin_refusal``) — a refused one is never
     written. Within the bounds of V-21. Returns how many were written, and why each one that was

@@ -123,6 +123,14 @@ start() {
   # Created as the operator before compose mounts them: left to docker, they would be root's,
   # and the console could not write its requests (DG-b), nor the watch its index (IA0).
   mkdir -p "$HOME/.eregion/analysis" "$HOME/.eregion/console/requests"
+  # SEC18 (N-05): runs/ has one directory per writer, each service mounts its own (compose). The
+  # former layout (files flat in runs/) is moved to its writers' directories here, on the host —
+  # no service mounts the whole of runs/ — and those directories made as the operator. Nothing is
+  # deleted; what is not told without ambiguity is left and said. A reference from before SEC18
+  # has no runs_layout: its compose mounts runs/ whole, nothing to move.
+  if [ -f eregion_core/runs_layout.py ]; then
+    python3 -m eregion_core.runs_layout migrate runs || die "runs/ : la migration de SEC18 a échoué — rien n'est démarré (docs/operations.md, « Le redéploiement de SEC18 »)"
+  fi
   docker compose --profile bot up -d watch war-room bot
 }
 

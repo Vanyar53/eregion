@@ -64,7 +64,7 @@ def test_emit_writes_jsonl(tmp_path, monkeypatch):
         metrics={"detection_s": 42},
     )
 
-    signals_path = tmp_path / "runs" / "20260101T000000Z_signals.jsonl"
+    signals_path = tmp_path / "runs" / "annatar" / "20260101T000000Z_signals.jsonl"   # SEC18
     assert signals_path.exists()
     lines = signals_path.read_text().strip().splitlines()
     assert len(lines) == 1
@@ -94,7 +94,7 @@ def test_emit_multiple_events_append(tmp_path, monkeypatch):
     emitter.emit(event="detection")
     emitter.emit(event="recovery_complete")
 
-    signals_path = tmp_path / "runs" / "20260101T000000Z_signals.jsonl"
+    signals_path = tmp_path / "runs" / "annatar" / "20260101T000000Z_signals.jsonl"   # SEC18
     lines = signals_path.read_text().strip().splitlines()
     assert len(lines) == 2
     assert json.loads(lines[0])["event"] == "detection"

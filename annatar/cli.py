@@ -193,7 +193,7 @@ def wire(technique: str, target: str, request: str, typed_name: str):
     # One run at a time (R-10): a wire holds its request's lock, handed down by Orodruin's runner;
     # launched any other way, it takes Orodruin's one lock itself — refused while anything runs.
     from eregion_core.exercise_runner import Busy, request_lock
-    # The scenario lives only for the run: never in runs/, where a local watch reads.
+    # The scenario lives only for the run: never in runs/annatar/, where a local watch reads.
     try:
         with request_lock(f"wire {request}"), \
                 tempfile.TemporaryDirectory(prefix="annatar-wire-") as tmp:
@@ -356,7 +356,8 @@ def campaign():
 @click.option("--max-scenarios", default=5, show_default=True, help="Budget ceiling.")
 @click.option("--allow-destructive", is_flag=True, help="Permit destructive (testdata-only) techniques.")
 @click.option("--llm/--no-llm", "use_llm", default=False, help="Use the LLM planner (default: deterministic).")
-@click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+@click.option("--runs-dir", default="runs/annatar", show_default=True,
+              help="Annatar's own directory, where its campaigns are stored (SEC18).")
 @click.option("--declared", "declared_path", default=None, type=click.Path(dir_okay=False),
               help="A declared campaign (BL1): exactly its techniques, in its order — no planner. "
                    "Checked against the catalog first (annatar/campaign/declared.py).")
@@ -471,7 +472,8 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
 @click.argument("campaign_id")
 @click.option("--yes", is_flag=True, help="Ratify the budget/scope and execute.")
 @click.option("--dry-run", is_flag=True, help="Preview the sequence without executing.")
-@click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+@click.option("--runs-dir", default="runs/annatar", show_default=True,
+              help="Annatar's own directory, where its campaigns are stored (SEC18).")
 @click.option("--without-glorfindel", is_flag=True,
               help="Development campaign: no live Glorfindel watch required. Each run's "
                    "report says the detection was not measured, by choice.")
@@ -573,7 +575,7 @@ def _publish_campaign(cdir, runs_dir, state, without_glorfindel=False) -> bool:
                       "no report will be written for it there")
     elif missing:
         # H0 waits for the report of every executed run: without them, it never writes the
-        # campaign's (`--runs-dir` other than runs/: the runs' reports stay in runs/).
+        # campaign's (`--runs-dir` other than runs/annatar: the runs' reports stay there, SEC18).
         console.print(f"[yellow]Campaign published to H0[/yellow] ({len(names)} file(s)) — "
                       f"{len(missing)} executed run(s) without a report under {runs_dir}/ "
                       f"(not published): H0 will not write its report on its own. By hand, "
@@ -581,7 +583,7 @@ def _publish_campaign(cdir, runs_dir, state, without_glorfindel=False) -> bool:
                       f"make campaign-report CAMPAIGN={cid}")
     elif state == "done":
         console.print(f"[green]Campaign published to H0[/green] ({len(names)} file(s)) — the "
-                      f"hosted watch writes its report: runs/campaigns/{cid}/report.md on H0 "
+                      f"hosted watch writes its report: runs/glorfindel/campaigns/{cid}/report.md on H0 "
                       f"(make glorfindel-host-campaign-report CAMPAIGN={cid})")
     else:
         console.print(f"[yellow]Campaign published to H0[/yellow] ({len(names)} file(s)) — "
@@ -595,9 +597,12 @@ def _write_campaign_report(cdir) -> None:
     without the analysis package or a model key, it says so and how to write it later."""
     try:
         from analysis import campaign_report as cr
+        from eregion_core import channel_reader, runs_layout
         rep = cr.build(cdir)
-        out = cdir / "report.md"
-        out.write_text(cr.render(rep), encoding="utf-8")
+        # SEC18: the analysis' files of a campaign go to the watch's directory, never Annatar's.
+        out = runs_layout.campaign_output(cdir) / "report.md"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        channel_reader.write_file(out, cr.render(rep))
         console.print(f"[green]Campaign report → {out}[/green]  "
                       f"{len(rep.kept)} claim(s) kept, {len(rep.rejected)} rejected by the check")
     except Exception as exc:  # the campaign ran; its report can be written later
@@ -606,7 +611,8 @@ def _write_campaign_report(cdir) -> None:
 
 
 @campaign.command(name="list")
-@click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+@click.option("--runs-dir", default="runs/annatar", show_default=True,
+              help="Annatar's own directory, where its campaigns are stored (SEC18).")
 def campaign_list(runs_dir):
     """List campaigns and their state."""
     from annatar.campaign.manifest import CampaignManifest, campaigns_root
@@ -628,7 +634,8 @@ def campaign_list(runs_dir):
 
 @campaign.command(name="show")
 @click.argument("campaign_id")
-@click.option("--runs-dir", default="runs", help="Where campaigns are stored.")
+@click.option("--runs-dir", default="runs/annatar", show_default=True,
+              help="Annatar's own directory, where its campaigns are stored (SEC18).")
 def campaign_show(campaign_id, runs_dir):
     """Show a campaign manifest summary."""
     from annatar.campaign.manifest import CampaignManifest, campaign_dir

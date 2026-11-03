@@ -8817,6 +8817,77 @@ TESTS.update({"M3190": f"{_I3U_UNIT}::test_clearing_a_state_never_deletes_an_unr
               "M3191": f"{_I3U_UNIT}::test_the_warning_stays_when_a_nics_message_names_the_unreadable_file"})
 
 
+# L1Qs (#424): a mode per VM and a perimeter on the data subnet in the machine; I3G's seed 9 — a NIC
+# whose subnet couldn't be read named off the perimeter it sits behind —; the perimeter alone, which
+# said « the IP reaches » a NIC another VM's perimeter cuts off; the reassertion of the blocks in two
+# times — every perimeter pair first; a drift's baseline narrowed before any write of the pass. M2990–M2999,
+# M3150–M3152 (the reserve, entered).
+RPB = "glorfindel/reassert_perimeters.py"
+_L1QS_REG = "tests/unit/test_invariant_regressions.py::"
+_L1QS_UNIT = "tests/unit/test_reassert.py::"
+_L1QS_SEED9 = (f"{_L1QS_REG}test_a_perimeter_block_never_names_uncovered_a_nic_whose_subnet_it_could_not_read "
+               f"{_L1QS_REG}test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered")
+_L1QS_OTHER = (f"{_L1QS_REG}test_a_nic_off_the_perimeter_another_perimeter_cuts_off_is_not_said_reached "
+               f"{_L1QS_REG}test_a_perimeter_beside_another_on_the_app_subnet_never_says_db_nic_0_reached")
+_L1QS_UNREAD = f"{_L1QS_REG}test_a_nic_off_the_perimeter_whose_other_perimeter_cant_be_read_is_unknown"
+_L1QS_TWO = (f"{_L1QS_UNIT}test_two_perimeters_on_two_subnets_are_both_put_back_before_a_block_is_read_again "
+             f"{_L1QS_REG}test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_off")
+_L1QS_FIRST = f"{_L1QS_UNIT}test_the_first_time_writes_only_what_the_second_would"
+_L1QS_DECIDE = '    return not (b.get("reasserted_at") or r._mode(autonomy, vm, ref) == "human_only")\n'
+_L1QS_OFF = '                    off = [n for n, s in stand.items() if s == "no"]\n'
+MUTANTS += [
+    ("M2990", "a NIC whose subnet couldn't be read (a 429) named off the perimeter it sits behind: « the IP still "
+              "reaches it » (L1Qs, I3G's seed 9)", PER,
+     '        if unread := [t["nic_short"] for t in targets if t.get("subnet_unreadable")]:\n',
+     "        if unread := []:\n"),
+    ("M2991", "the perimeter alone reads no other perimeter: a NIC off it another VM's cuts off said reached (L1Qs)",
+     VBL, _L1QS_OFF, '                    off = [n for n, s in stand.items() if s != "unknown"]\n'),
+    ("M2992", "another perimeter that can't be read taken for none: the NIC said reached (L1Qs)", VBL,
+     _L1QS_OFF, '                    off = [n for n, s in stand.items() if s != "holds"]\n'),
+    ("M2993", "another perimeter that can't be read taken for holding: the block verified (L1Qs, A0)", VBL,
+     "                    if unsure:\n", "                    if False:\n"),
+    ("M2994", "no first time: an entry read again before another's pair is back (L1Qs)", R,
+     "    put_back = put_back_perimeters(connector, autonomy, blocks, report)\n", "    put_back = {}\n"),
+    ("M2995", "the first time writes the pair of an entry in human_only (L1Qs, I5)", RPB,
+     _L1QS_DECIDE, '    return not b.get("reasserted_at")\n'),
+    ("M2996", "the first time writes again a pair put back once: two removals no longer deliberate (L1Qs)", RPB,
+     _L1QS_DECIDE, '    return not r._mode(autonomy, vm, ref) == "human_only"\n'),
+    ("M2997", "the first time retries at every pass a disappearance said and no worse (L1Qs)", RPB,
+     '    if (b.get("drift_alerted_at") and not r._worse(', "    if (False and not r._worse("),
+    ("M2998", "the second time ignores what the first put back: its pair read whole, « reposé » never said, or "
+              "said « ne le repose pas » (L1Qs)", R,
+     '                                ref=snapshot["resource_id"], put_back=put_back)\n',
+     '                                ref=snapshot["resource_id"])\n'),
+    ("M2999", "the first time's write refused, swallowed: the card says its rules rewritten (L1Qs)", R,
+     '    if pair is not None and pair["error"] is not None:\n        failed("subnet", pair["error"])\n',
+     '    if False:\n        failed("subnet", pair["error"])\n'),
+    ("M3150", "the second time writes the pair again over the first's (L1Qs)", R,
+     "    for scope in scopes[1:] if pair is not None else scopes:\n", "    for scope in scopes:\n"),
+    ("M3151", "the first time writes the pair of an entry an unblock holds (L1Qs, I9)", RPB,
+     '                        or r._held_by_an_operation(b, "unblock_failed", "unblocking_at")):\n',
+     "                        or False):\n"),
+    ("M3152", "the baseline narrowed after the pass's first write: refused (a full disk), the rules gone again "
+              "read « not worse than the card », unsaid (L1Qs, the machine)", R,
+     '    if b.get("drift_alerted_at") and _missing(verification):\n        # Better than its card, here,',
+     '    if False:\n        # Better than its card, here,'),
+]
+TESTS.update({
+    "M3152": (f"{_L1QS_UNIT}test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said "
+              f"{_L1QS_REG}test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said"),
+    "M2990": f"{_L1QS_SEED9} {INVARIANTS}", "M2991": f"{_L1QS_OTHER} {INVARIANTS}",
+    "M2992": _L1QS_UNREAD, "M2993": _L1QS_UNREAD,
+    "M2994": f"{_L1QS_TWO} {INVARIANTS}",
+    "M2995": f"{_L1QS_UNIT}test_a_block_in_human_only_is_said_once_its_neighbours_perimeter_is_back {INVARIANTS}",
+    "M2996": f"{_L1QS_FIRST} {INVARIANTS}", "M2997": f"{_L1QS_FIRST} {INVARIANTS}",
+    "M2998": _L1QS_TWO,
+    "M2999": f"{_L1QS_UNIT}test_a_pair_the_first_time_failed_to_write_is_never_said_put_back",
+    "M3150": _L1QS_TWO, "M3151": f"{_L1QS_FIRST} {INVARIANTS}",
+})
+# L1Qr's order, kept for an entry the first time left to the second (its check raised): measured there.
+TESTS.update({mid: f"{_L1QR} {_L1QS_UNIT}test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_"
+                   f"blocks {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
+
+
 if __name__ == "__main__":
     sys.exit(main())
 # SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's

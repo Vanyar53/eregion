@@ -154,7 +154,10 @@ glorfindel/
                           cold-start). Source UNIQUE du tool+prompt d'autoring (agent.py importe).
                           Deux appelants : propose_detection_rule (réactif) + `propose-rules` (proactif).
   memory.py             → CycleMemory ChromaDB (confidence + past_cycles_used) ; SEC4a : identifiant tiré par la mémoire
-                          (jamais remplacé), tout signal ne reçoit que des cycles réels, un par (signal_id, action, run_id)
+                          (jamais remplacé), tout signal ne reçoit que des cycles réels, un par (signal_id, action, run_id) ;
+                          SEC17 : un cycle daté par l'hôte (stored_at), la recherche bornée à memory.max_age_days (90 j),
+                          ce qu'elle écarte compté (age_census, `glorfindel report`), rien d'effacé ; un cycle sans date
+                          daté par la borne de B2 (B2_FLOOR, 16/10/2026)
   incidents.py          → IncidentRegistry (TTL, persist ; threads et processus : flock, réécrit entier — SEC13)
   cli.py                → watch, respond, restore (--wait), release, unblock, reset (revert=alias), list, pending, ack, activate,
                           audit (--all), approve-rule, reject-rule, propose-rules, rules, migrate-rules, check-ttl, jobs,
@@ -365,7 +368,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 émettait attack_adapted, est retiré) — leur conteneur monte ce dossier comme son
                                 ~/.glorfindel. La watch le crée au démarrage. 0644 (dossier 0755) : à lire par eux, rien
                                 de secret. Retiré à l'arrêt
-  watch_heartbeat             → le battement de la watch (V1 sur cet hôte, la console, le CD de H0)
+  watch_heartbeat             → le battement de la watch (V1 sur cet hôte, la console, le CD de H0) ; écrit d'un coup
+                                (un fichier à côté, renommé par-dessus), 0644 : jamais vide ni coupé (SEC17)
   exercise_seen.json          → SEC14 (V-20) : quand la watch a vu pour la première fois chaque fenêtre d'exercice écrite
                                 sur cet hôte (sans canal), et sa fermeture : une fenêtre antidatée ou réécrite n'est pas
                                 crue (eregion_core/exercise.py, ``observe``). Le tirage du canal y note chaque fenêtre
@@ -402,9 +406,12 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 carte en quarantaine ou sans NSG, qui le disent — jamais l'isolation (son original inconnu
                                 n'est pas écrit). Une levée en échec ne l'écrit pas ; un nouvel état de sa VM (isolation,
                                 ré-isolation) le met de côté dans `isolation/aside/` (jamais plus un état, réparé ou non ; listé tant qu'il existe : le lire,
-                                reporter à la main dans l'état courant, le retirer) ; une
-                                levée ou un reset réussis d'une isolation sans carte en quarantaine ni nue l'effacent avec
-                                l'état. La réaffirmation le dit (`state_unreadable`). Le réparer ou le retirer à la main.
+                                reporter à la main dans l'état courant, le retirer) ; le fichier illisible de sa
+                                VM, une levée ou un reset Azure ne disent jamais fait (`release_partial`, `swept_partial`)
+                                et ne l'effacent jamais, ni rien d'autre (I3U) — l'adaptateur AWS garde le fichier mais
+                                sa levée dit encore `released`. La réaffirmation le dit (`state_unreadable`). Le réparer,
+                                ou le retirer à la main après avoir cherché les règles glorfindel-iso de ses cartes sur
+                                `nsg-glorfindel-quarantine-<région>` (que le message nomme).
                                 Isolation : `original_unknown` — les cartes en quarantaine dont l'original est inconnu
                                 (la levée demandera le tag). `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
                                 Blocage : `left_said` — les règles laissées déjà dites (I4A, carte `rule_left`). L2C : ces marques
@@ -429,11 +436,13 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   bot_posted.json             → IDs escalades déjà postées (évite doublons au redémarrage du bot)
   bot_threads.json            → resource_id → thread_id Discord (persistance entre redémarrages)
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;
-                                `expected_sudo` : count, last, origin_count — ADM1, COR1 ; `correlation` : queries,
-                                origin, card, unknown, compromised, unchecked, last — COR1 ; lus par la console)
+                                `expected_sudo` : count, last, origin_count, origin_confirmed — ADM1, COR1, COR2 ;
+                                `correlation` : queries, origin, card, unknown, compromised, unchecked, confirmed,
+                                unconfirmed, last — COR1, COR2 ; lus par la console)
   expected_sudo.jsonl         → ADM1 : chaque sudo d'administrateur attendu écarté par le RulePoller (at, rule,
                                 asset, account, command ≤ 300 car., logged_at ; un shell root écarté par l'origine de
-                                ses sessions SSH : via « origin », origin — COR1), écrit AVANT d'écarter — un journal
+                                ses sessions SSH : via « origin », origin — COR1 ; proof « bastion » ou « flows »
+                                quand une source hors de la VM l'a confirmée — COR2), écrit AVANT d'écarter — un journal
                                 qu'on ne peut écrire n'écarte rien ; 0600 ; au-delà de 2 Mo, la moitié la plus
                                 récente gardée. Lu par `glorfindel report`
   readiness.json              → verrou L6 par VM, clé `nom--hash(ID)` (quatrième passe Q3 : un homonyme héritait du

@@ -397,6 +397,14 @@ def _watch_reassert_pass(connector, mode_override=None, lock=None, seen: dict | 
     return report
 
 
+def _write_watch_heartbeat(path: Path, at) -> None:
+    """The watch's heartbeat, written at once (SEC17): a temp file beside it, renamed over it —
+    never opened in place, so a reader (the injectors' gate, the console, the CD of H0, a second
+    watch) never finds it empty or cut. In the mode it always had, 0644: read by other processes."""
+    from glorfindel.response.state import _atomic_write_text
+    _atomic_write_text(path, at.isoformat(), mode=0o644)
+
+
 def _start_campaign_reports(runs_dir) -> bool:
     """The thread that writes the report of each campaign Orodruin publishes (IA0, #167;
     analysis/hosted_report.py) — only with an exercise channel. Never raises: a report,
@@ -841,9 +849,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     _INJECTOR_BEAT = _INJECTORS_DIR / "watch_heartbeat"
 
     def _write_heartbeat() -> None:
-        _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
         at = datetime.now(timezone.utc)
-        _HEARTBEAT.write_text(at.isoformat())
+        _write_watch_heartbeat(_HEARTBEAT, at)
         try:
             from eregion_core.watch_gate import beat_body
             from glorfindel.response.state import _atomic_write_text
@@ -1594,6 +1601,10 @@ def report(since_text: str, as_json: bool):
     r = escalations.observation_report(since)
     # ADM1: the administrators' sudo that opened no card — counted, never silent.
     r["expected_sudo"] = expected_sudo.summary(since)
+    # SEC17 (V-12): the past cycles the memory's age bound leaves out of the search — kept, counted.
+    from glorfindel.config import memory_max_age_days
+    from glorfindel.memory import age_census
+    r["memory"] = age_census(max_age_days=memory_max_age_days())
     if as_json:
         click.echo(_json.dumps(r, indent=2))
         return
@@ -1617,6 +1628,40 @@ def report(since_text: str, as_json: bool):
     if r.get("exercises"):
         console.print(f"[dim]{r['exercises']} exercise card(s) left out (an injector's window covered the VM)[/dim]")
     _print_expected_sudo(r["expected_sudo"])
+    _print_memory(r["memory"])
+
+
+def _memory_said(m: dict) -> str:
+    """SEC17 (V-12): the memory's real cycles by age — those the bound leaves out of the search,
+    kept and counted, never erased; and apart, those stored before cycles were dated, dated by the
+    B2 floor (2026-10-16: an age at least their true one)."""
+    days = f"{m.get('max_age_days', 0):g}"
+    if m.get("error"):
+        return f"[yellow]Memory: unreadable — {_esc_markup(''.join(c for c in str(m['error']) if c.isprintable()))}[/yellow]"
+    if m.get("absent"):
+        return f"Memory: none yet (age bound {days} days)"
+    said = (f"Memory: {m.get('real', 0)} real cycle(s), {m.get('within', 0)} within {days} days "
+            f"— {m.get('too_old', 0)} older left out of the search")
+    said += " (kept, never erased)"
+    if m.get("b2_dated"):
+        said += (f"; of them {m['b2_dated']} dated by the B2 floor ({m.get('b2_floor', '2026-10-16')}: "
+                 "stored before SEC17, no date of their own)")
+    return said
+
+
+def _print_memory(m: dict) -> None:
+    console.print(_memory_said(m))
+
+
+def _origin_proof_said(es: dict) -> str:
+    """COR2 (#427): how far the origins of the root shells set aside are proven — confirmed
+    outside the VM (Bastion, flows), or read in the VM only (COR1, a noise reducer)."""
+    n, confirmed = int(es.get("origin_count") or 0), int(es.get("origin_confirmed") or 0)
+    if confirmed <= 0:
+        return "origin read in the VM only"
+    if confirmed >= n:
+        return "every one confirmed outside the VM (COR2)"
+    return f"{confirmed} confirmed outside the VM (COR2), {n - confirmed} read in the VM only"
 
 
 def _print_expected_sudo(es: dict) -> None:
@@ -1642,9 +1687,12 @@ def _print_expected_sudo(es: dict) -> None:
         # COR1: root shells set aside because every SSH session came from an expected origin.
         per_origin = ", ".join(f"{shown(k)} {v}" for k, v in sorted(es["by_origin"].items()))
         console.print(f"  of which root shells from an expected origin (COR1): [bold]{es['origin_count']}[/bold]"
-                      f" — {per_origin}")
+                      f" — {per_origin} · {_origin_proof_said(es)}")
     for e in es.get("latest") or []:
-        via = f"  (from {shown(e['origin'])})" if e.get("origin") else ""
+        via = ""
+        if e.get("origin"):
+            how = f"confirmed by {shown(e['proof'])}" if e.get("proof") else "origin read in the VM only"
+            via = f"  (from {shown(e['origin'])}, {how})"
         console.print(f"[dim]  {shown(e['at'][:19])}  {shown(e['asset'])}  {shown(e['account'])}  "
                       f"{shown(e['command'])}{via}[/dim]")
     if es.get("journal_from"):
@@ -1866,7 +1914,7 @@ def _do_reset_from_azure(resource_id: str, yes: bool, dry_run: bool) -> None:
 
 def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = False) -> None:
     """Shared implementation for reset/revert."""
-    from glorfindel.actions import active_blocks, active_isolations, AzureConnector
+    from glorfindel.actions import _isolation_unreadable, active_blocks, active_isolations, AzureConnector
 
     resource_id = _resolve_resource_id(resource_id)
     if from_azure:
@@ -1879,6 +1927,9 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = Fal
     rid_lower = resource_id.lower()
     isolations = [i for i in active_isolations() if i.get("resource_id", "").lower() == rid_lower]
     blocks = [b for b in active_blocks() if b.get("resource_id", "").lower() == rid_lower]
+    # Its isolation state unreadable is not "nothing to reset": the release says what it can't
+    # verify, the file kept (I3U, #440).
+    isolations = isolations or ([{"resource_id": resource_id}] if _isolation_unreadable(resource_id) else [])
 
     if not isolations and not blocks:
         console.print(f"[green]Nothing to reset on {resource_id.split('/')[-1]}.[/green]")
@@ -1951,10 +2002,12 @@ def revert(resource_id: str, yes: bool, dry_run: bool):
 @cli.command()
 @click.option("--memory-path", default=None)
 def memory_stats(memory_path: str | None):
-    """Show how many cycles are stored in memory."""
+    """Show how many cycles are stored in memory, and those its age bound leaves out (SEC17)."""
+    from glorfindel.config import memory_max_age_days
     from glorfindel.memory import CycleMemory
-    m = CycleMemory(path=memory_path)
+    m = CycleMemory(path=memory_path, max_age_days=memory_max_age_days())
     console.print(f"Cycles in memory: [cyan]{m.count()}[/cyan]")
+    console.print(_memory_said(m.age_census()))
 
 
 @cli.command("check-ttl")
@@ -2008,6 +2061,9 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
             # outside the allowlist, a managed Run Command (A3) — the card names it.
             **({"replay_vectors": list(restore_result["replay_vectors"])}
                if restore_result.get("replay_vectors") else {}),
+            # SEC17: the VM is outside the list the restore defends (restore_vms): Run Command
+            # was refused there — the card says it, a flag set by the code, never Azure's words.
+            **({"run_command_refused": True} if restore_result.get("run_command_refused") is True else {}),
         },
         "context": {"run_id": run_id},
     })

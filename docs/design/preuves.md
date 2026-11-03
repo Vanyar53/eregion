@@ -249,7 +249,8 @@ mesurés (M2880–M2899, M3030–M3036 de SEC11 ; M2940–M2959, M3075–M3081 d
   chaque tour**, aucun survivant, aucun équivalent, aucun réancrage. Tous visent un test unitaire
   (`TESTS`), en 3 à 12 s chacun. Les mutants Python laissent un code qui se lit (`ast`) : aucun n'est
   attrapé par une erreur de syntaxe plutôt que par un comportement ; le rôle JSON muté (M2892) reste
-  un JSON valide.
+  un JSON valide. Remesurés après la fusion de COR2, I3C, AUC, I3U, I3G et SEC17 (03/11, `--rounds 1`),
+  M2899 réancré par SEC17 compris : 54 sur 54 attrapés.
 
 ### Les pannes des dépendances (G2)
 
@@ -3037,6 +3038,215 @@ la graine 67 à 60 l'a trouvé). Les deux séquences complètes de la graine 67 
 rejouées hors d'Hypothesis : vertes. `pytest` complet, `main` f1b9b24 fusionné : 5 434 réussis,
 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 087 mutants, sans faute. M3060–M3066 et
 M07 (réancré) : 8/8 à chaque tour (deux tours, après la fusion).
+
+**I3U (02/11, #440) : une levée avec un état devenu illisible ne dit jamais « levée faite ».**
+Relevé par la relecture d'I3R (sa sonde : une levée partielle, puis l'état rendu illisible). Une
+levée partielle écrit dans l'état ce que la reprise doit encore chercher : le NSG de quarantaine
+quitté (`quarantines_left`), les placements gardés. L'état devenu illisible ensuite (un disque, une
+écriture coupée), la reprise lisait un état vide, trouvait les cartes sur leur NSG, disait
+`released` et **effaçait le fichier illisible** — la paire restée sur le NSG de quarantaine, le seul
+fichier qui disait où la chercher perdu. `release.py` ne gardait l'état illisible que `if failed`
+(SEC4b : ne pas l'écrire par-dessus) ; rien ne disait qu'un état illisible est un inconnu pour la
+levée elle-même. **Cause** : l'absence lue comme « rien », A0 à l'envers. **Correctif**
+(`glorfindel/response/unread.py`, `_own_unread`) : l'état de la VM illisible, la levée fait ce
+qu'elle peut (les règles retrouvées par leur nom sont retirées, comme avant) puis dit
+`release_partial` et pourquoi — dit une fois : une raison qui nomme déjà le fichier (VM supprimée,
+I7S ; carte en quarantaine, SEC4b) en tient lieu —, le fichier gardé tel quel. Ceux qui lisent
+l'état suivent la même règle : `reset --from-azure` (`swept_partial`, l'aperçu compris),
+`verify_release` (`unreadable` : `glorfindel release`, qui la demande d'abord, lisait « vérifié » et
+effaçait le fichier, « No active isolation found on NSG — state cleared »), `glorfindel reset` sans
+`--from-azure` (« Nothing to reset » : il ne lisait que les états lisibles ; il lance la levée).
+`_clear_isolation_state` n'efface jamais un fichier illisible, qui que ce soit qui le demande
+(l'adaptateur AWS compris). Réparé, la reprise reprend le chemin normal ; retiré par l'opérateur, ce
+qu'il nommait est perdu — le message le dit (« après avoir cherché les règles glorfindel-iso de ses
+cartes »). L'oracle inchangé ; aucune règle de la machine ajoutée : une règle « l'état de la VM
+devient illisible » ferait juger I8 (« une isolation sur Azure sans état ») sur un état que le test
+a lui-même rendu illisible — l'oracle lit l'état par `_load_isolation_state`, illisible = absent —,
+et la double panne demande la séquence d'I3R. **Figée** :
+`test_a_partial_release_whose_state_turns_unreadable_never_says_released` (`test_invariant_regressions.py`,
+par l'état et l'état perdu avant, Db--01 aux deux cartes sur un NSG à elles — une carte nue attend
+déjà l'état illisible, SEC4b —, la levée d'I3R freinée une fois par un 429 sur la suppression d'une
+de ses règles sur le NSG de quarantaine, l'état rendu illisible, la levée rejouée, puis l'état
+réparé) : rouge sur `main` 4f0c3a5 par l'oracle inchangé, « I3: release said released, …/Db--01 is
+not back to its design », les deux. **Après la fusion d'I3C** (#436, #452) : les deux variantes
+tombaient (I8 sur l'état que le test venait de casser ; une première levée qui n'était plus
+partielle). Non pas un défaut : les étapes d'I3R (`_I3R_STEPS`) n'atteignent plus le monde d'I3R —
+la réaffirmation n'y réécrivait l'isolation sur le NSG de quarantaine que parce qu'une disparition
+dite sous l'id en minuscules n'était pas lue « déjà dite », ce qu'I3C corrige (tracé : plus aucune
+règle `glorfindel-iso` sur le NSG de quarantaine après les étapes) ; les 429 tirés tombaient alors
+ailleurs, une carte restait en quarantaine, et I8 lisait « sans état » le fichier que le test avait
+rendu illisible. Le monde est maintenant posé comme la graine 67 l'avait laissé, sans dépendre de ce
+défaut : Db--01 isolée, notre tag retiré du NSG de quarantaine, Db--01 isolée de nouveau (ses paires
+sur le NSG que portent ses cartes, la quarantaine elle-même : ce que faisait cette passe), le tag
+remis. Rouge sur `main` f20d3c8 sans le correctif d'I3U, pour la même raison (« I3: release said
+released »), les deux variantes ; vert avec. **Tests unitaires** (`test_release_away.py`, neuf, tous rouges
+sur `main`) : la double panne de la sonde (sans état et par l'état, redite deux fois, puis réparée),
+une isolation par règles (retirées, le fichier gardé, puis retiré par l'opérateur), la vérification,
+`glorfindel release` et `glorfindel reset` (code 2, le fichier gardé), `reset --from-azure` et son
+aperçu, l'effacement. **Mutants M3131–M3135** : la levée dit `released` quand rien d'autre n'a échoué
+(M3131), sans la raison (M3132), la vérification aveugle (M3133), le reset aveugle (M3134), le reset
+simple « Nothing to reset » (M3135) : 5/5 à chaque tour (deux tours). M1253 réancré (la condition
+perd `failed`). **M1254 masqué, puis de nouveau mesuré** : son test cassait l'état de la VM levée, que
+la levée dit maintenant ; il casse aussi celui d'une autre VM (le sien perdu), M1254 pris 2/2. Les
+130 mutants des quatre fichiers touchés, un tour : 117 pris ; parmi les autres, M36 et M1552
+survivent aussi sur `main` 4f0c3a5 (M36, mêmes graines 1..6, sur la base et la branche ; M1552, ses
+tests sur une copie de la base), le reste « fixed-only » ou équivalent comme avant.
+`release.py` passe à 498 lignes, `sweep.py` à 499.
+**Mesures.** Invariants, `--hypothesis-seed=N` : à 60 séquences, N = 1..40 et 61..80 (la graine 67
+d'I3R comprise), 60/60 vertes ; à 500, N = 1..8, 8/8 vertes.
+**Après la relecture d'I3U** (« ok », trois corrections). (1) **La porte de sortie dit où
+chercher** : « après avoir cherché les règles glorfindel-iso de ses cartes » ne disait pas où ; un
+opérateur aurait regardé les NSG que portent les cartes aujourd'hui, rien trouvé, retiré le fichier,
+et la levée suivante aurait dit `released`, la paire encore sur le NSG de quarantaine. Le message nomme
+maintenant `nsg-glorfindel-quarantine-<région>` et son groupe (`_quarantine_hint`, `away.py` : la
+région lue sur les cartes, le groupe de la configuration, sinon celui de la VM ; lu seulement quand
+l'état est illisible). Et la mise en garde ne disparaît plus avec le dédoublonnage : quand le message
+SEC4b d'une carte nomme déjà le fichier, la raison n'est pas redite, la mise en garde a sa ligne.
+Tests : la double panne vérifie le NSG nommé ;
+`test_the_warning_stays_when_a_nics_message_names_the_unreadable_file`. (2) **La garde de
+`_clear_isolation_state` mesurée** : M3190 (la garde retirée) ; M3191 (la mise en garde avalée par le
+dédoublonnage). M3131–M3135, M3190, M3191 : 7/7 à chaque tour (deux tours) ; M3132–M3134 réancrés (les
+appels passent par `self._unread`). (3) `docs/fichiers-cles.md` : vrai pour Azure ; l'adaptateur AWS
+garde le fichier mais dit encore `released`. `release.py` 497 lignes, `sweep.py` 498, `state.py` 497,
+`unread.py` 29.
+**Reste ouvert** : `verify_release` ne cherche pas sur le NSG de quarantaine quitté qu'un état
+**lisible** nomme (`quarantines_left`) — `glorfindel release` y lit « vérifié » et efface l'état, la
+paire restée (mesuré sur le faux Azure, hors du lot). L'adaptateur AWS
+(`glorfindel/providers/aws/isolation.py`) garde le fichier illisible (`_clear_isolation_state`) mais
+sa levée dit encore `released` sur lui.
+
+**I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
+Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids
+des cartes de la réaffirmation portaient le nom de la VM tel que l'état le donne
+(`reassert-{vm}-{_rid_hash(rid)}`, et de même le contournement, la vérification qui échoue, les
+règles laissées) ; le hash est en minuscules, le nom non. `active_isolations()` tire le nom du
+`resource_id` de l'état, avec sa casse : une VM isolée de nouveau — ou débloquée et bloquée de
+nouveau — par son id en minuscules (le `_ResourceId` de Log Analytics) a un état qui la nomme
+`db--01`. L'alerte suivante, `reassert-db--01-…`, ne fermait pas la carte `reassert-Db--01-…` (la
+comparaison exacte de `_alert`) ; le magasin la fusionnait dans celle-ci (même action, ressource sans
+casse, même type) en gardant son id et son texte ; `drift_said` cherchait l'id exact et ne trouvait
+rien. En `human_only`, la disparition redite à chaque passe ; hors de lui, reposée après avoir été
+dite, « reposée une fois » replié dans une carte qui disait « ne les repose pas ». Avec `web` (aucune
+majuscule), la séquence passe. **Correctif** (`glorfindel/reassert.py`, `glorfindel/reassert_cards.py`) :
+les ids s'écrivent en minuscules (`_alert_id`, le préfixe du contournement, `_unverified_id`, le préfixe
+des règles laissées) ; chaque recherche les lit sans casse (`same_sid`) : la fermeture par `_alert`,
+`drift_said`, le dernier mot de l'opérateur (`_last_word`, donc `state_unreadable` aussi — son id, un
+condensé déjà en minuscules, ne porte aucun nom), les cartes et la marque du contournement, de la
+vérification qui échoue (et sa fermeture quand la VM n'est plus tenue, `unverified_released`), des
+règles laissées. **Les cartes en attente sous l'ancien identifiant** (la casse d'origine, écrites
+avant le correctif) sont retrouvées : la dérive, fermée avec sa note par l'alerte suivante (après la
+mise à jour, un redémarrage : redite une fois, la reprise bruyante de L2C) ; le contournement, la
+vérification qui échoue, les règles laissées, lus comme les leurs — en attente, ou acquittés par
+l'opérateur, jamais redits ; aucune carte orpheline qui ne se ferme plus. **La règle de la machine**
+(A0 : une règle ajoutée, l'oracle inchangé) : `taken_up_by_its_lowercase_id` — une VM (un nom à
+majuscules une fois sur deux) isolée ou bloquée par son id canonique, nos règles retirées
+(`terraform apply` sur chaque NSG du client qui gouverne ses cartes, la quarantaine vidée si une carte
+la porte), une passe ; puis isolée de nouveau, ou débloquée et bloquée de nouveau, par son id en
+minuscules, nos règles retirées encore, deux passes, le mode de chacune tiré. **Les oracles de la
+machine ne comptent pas une carte redite** : la règle seule, sur `main`, 20/20 graines à 60 vertes
+(`main` 4f0c3a5, graines 1 à 20). **La séquence figée**
+(`test_a_disappearance_said_by_the_canonical_id_is_said_once_after_the_lowercase_one`, isolation et
+blocage, trois passes en `human_only` ou la dernière en `non_disruptive`) rejoue la règle sur Db--01
+et juge sur le magasin : la seconde disparition a sa carte, dite une fois, et rien n'est écrit sur
+Azure pour elle ensuite — 4/4 rouges sur `main` (« the disappearance said by the lowercase id has no
+card of its own »), vertes après. Tests unitaires (`test_reassert.py`) : la disparition dite une fois
+par l'id en minuscules, reposée sur sa propre carte, une carte de dérive d'une version antérieure
+fermée par la suivante, un contournement, une vérification qui échoue et des règles laissées dites
+sous le nom canonique — en attente ou acquittés — retrouvés, une VM à majuscules dite une fois ;
+11 rouges sur `main`. **Mutants M3100–M3109** : l'id de dérive garde la casse (M3100), `_alert` compare
+exactement (M3101), le dernier mot lu dans la casse seule (M3102, M3103), le préfixe et les cartes du
+contournement (M3104, M3105), les cartes de la vérification qui échoue (M3106) et leur fermeture
+(M3107), le préfixe et les cartes des règles laissées (M3108, M3109) : 10/10 par leurs tests à chaque tour (deux tours, 60 séquences) — M3100 d'abord 0/2 : la seconde carte, écrite par un état en minuscules, ne le distinguait pas ; le test regarde aussi l'id de la première, 4/4 ensuite (M3100 lit aussi la séquence figée). **M3100 est un test de contrat** : `same_sid` lit les ids sans casse partout, et l'id écrit avec la casse du nom ne change aucun comportement — le mutant est équivalent pour la conduite ; seule l'assertion sur la forme de l'id (écrit en minuscules, en entier) l'attrape. Gardé : la forme écrite est le contrat. Réancrés : M37,
+M1259, M1765, M1930, M1931, M1933, M1936, M1937, M1941, M1948, M2931 (leurs lignes lisent l'id en
+minuscules) : 10/11 à chaque tour ; M37 (la machine seule) 1/2 puis 2/4, instable à 60 séquences — comme sur `main`, mesuré avant le correctif : 1/4. Un `same_sid` dans `drift_said` est gardé pour l'uniformité, sans
+mutant : la dernière carte d'un épisode que ce processus a vu ouvert est toujours écrite par lui,
+en minuscules.
+
+**Mesures d'I3C.** Invariants avec la règle, `--hypothesis-seed=N`, 60 séquences, quatre à la fois : N = 1..20, **20/20 vertes** après le correctif — et 20/20 sur `main` 4f0c3a5, la règle ajoutée : le défaut ne casse aucun oracle de la machine, la séquence figée et les tests unitaires le tiennent. `pytest` complet (`main` 4f0c3a5, à jour) : 5 752 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 256 mutants, sans faute.
+
+**Après la relecture d'I3C** (sur f587da7, « à corriger »). **Une régression du lot** : les ids prenaient le nom de la VM en minuscules, l'IP telle qu'écrite — et l'id lu dans le magasin passait entier en minuscules avant la comparaison. Un blocage d'une IPv6 écrite en majuscules (`2001:DB8::9` ; `blocks.py` vérifie l'adresse par `blockable_ip` sans garder sa forme normalisée) n'était plus retrouvé : sa carte de vérification qui échoue, le blocage toujours tenu, fermée à chaque passe par `unverified_released` (« Plus d'isolation ni de blocage enregistré », faux) et refaite aussitôt — trois cartes résolues en trois passes, une seule en attente sur `main` ; son contournement redit à chaque passe ; les règles laissées de même. **Correctif** : l'id entier en minuscules (`_alert_id`, `_unverified_id`, les préfixes du contournement et des règles laissées), l'IP comprise. L'IP n'est pas normalisée par `ipaddress` : une carte écrite avec l'IP sous une autre forme (`2001:db8:0::9`) ne serait plus la sienne ; en minuscules, une ancienne carte écrite avec l'IP d'origine reste retrouvée (`same_sid`). Figé : `test_a_block_of_an_ipv6_in_capitals_has_its_own_cards` (la vérification, le contournement, les règles laissées, trois passes chacun), vert sur `main`, rouge sur f587da7. **Mutants M3165–M3168** : l'id de la vérification (M3165), le préfixe du contournement (M3166) et celui des règles laissées (M3167) qui ne passent que le nom en minuscules — la forme de f587da7 —, `same_sid` qui compare exactement (M3168) : 4/4 par leur test à chaque tour (deux tours). M37, M2931, M3100, M3104 et M3108 réancrés.
+
+**Mesures après la relecture.** M3100–M3109 et M3165–M3168 : 14/14 à chaque tour (deux tours, 60 séquences) ; M2931, réancré, 2/2 ; M37 instable (1/2 à 2/2 selon le run, la relecture l'a vu 1/2), comme sur `main`. Invariants avec la règle, 60 séquences, quatre à la fois : N = 1..20, **20/20 vertes**. `pytest` complet : 5 753 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 260 mutants, sans faute.
+
+**I3G (02/11, #446) : une alerte de la réaffirmation ne se fond jamais dans une carte du graphe.**
+Mesuré par la relecture d'I3C (une sonde : la carte du graphe posée, quatre passes), présent sur
+`main` avant I3C comme après. **Cause** : le magasin fusionne une carte nouvelle dans une carte en
+attente de même action, même ressource (sans casse), même type et même IP, quel que soit son
+identifiant (`escalations.record`). Une carte `verification_failed` du graphe — la vérification
+après son action a échoué (`agent.escalate_to_human`) —, en attente pour la VM, absorbait l'alerte
+de la réaffirmation ; `_alert` ne ferme que les cartes de la réaffirmation, et `drift_said` ne lit
+qu'elles. **En `human_only`** : la disparition redite à chaque passe dans le rapport (`occurrences`
+à 5), jamais notifiée ; la carte du graphe prenait le texte de l'alerte à la première fusion (la
+confiance passait de 0,9 à 0). **Hors de lui** : la carte restait sur « reposée une fois », et la
+seconde disparition (« ne la repose pas ») y était fondue, texte inchangé, sans notification, la VM
+plus isolée : **une alerte se taisait**. Dans l'autre sens, une carte du graphe arrivée après
+l'alerte (une nouvelle détection, une vérification qui échoue) s'y fondait et réécrivait son texte ;
+l'id de l'alerte restait, lu « déjà dite ». **La voie choisie : le refus de fusion**
+(`escalations._reassertion`) — une carte de la réaffirmation (`reassert-…`, `state-unreadable-…`,
+toute casse) ne se fond jamais dans une carte d'une autre origine, ni l'inverse ; entre cartes d'une
+même origine, rien ne change (les relances du graphe, sous l'id d'un autre run, se fondent toujours).
+Plutôt que de fermer d'abord la carte du graphe (la seconde voie) : une seule règle, au magasin,
+tient toutes les cartes de la réaffirmation — dérive, contournement, vérification qui échoue, règles
+laissées, état illisible — et les deux sens ; fermer la carte du graphe aurait retiré à l'opérateur
+une carte qu'il n'avait pas lue (ce que la vérification du graphe a vu, son explication), et aurait
+laissé ouvert le second sens, la carte du graphe arrivée après l'alerte. Les autres cartes de la
+réaffirmation n'ont pas d'homonyme du graphe aujourd'hui (leurs actions, `review_bypass`,
+`review_unverified`, `review_left_rule`, `repair_local_state`, et leurs types ne sont jamais ceux
+d'une décision) : la règle les tient quand même, sans cas à part. **Au passage** : la clé d'avant
+A0 (`reassert-{vm}-{ip}`) est comparée en minuscules — une ancienne carte de cette clé, en attente
+pour une IPv6 en majuscules, n'était pas fermée, et l'alerte s'y fondait.
+**La règle de la machine** (A0 : une règle ajoutée, l'oracle inchangé) :
+`graph_card_before_a_disappearance` — une VM isolée ou bloquée, la carte du graphe posée comme
+`escalate_to_human` l'écrit (son id du RulePoller, sa confiance, l'IP et le port d'un blocage), puis
+nos règles retirées et une passe, deux fois, puis une passe, le mode tiré une fois. **L'oracle ne
+voyait pas le silence** : L1 compte, pour un blocage, toute carte de son action sur la VM — celle du
+graphe comprise ; aucune propriété ne lisait la notification. **Une propriété ajoutée, L3**, sur le
+journal du test : une carte que le test a écrite comme celle du graphe garde ses mots (un invariant,
+`graph_cards_keep_their_words`) ; une disparition que la passe laisse ouverte, l'isolation ou le
+blocage enregistré et aucune opération en cours, est dite par une carte en attente qui n'est pas
+celle du graphe, notifiée (`_said_on_its_own`, et à côté de L1 dans la règle `reassert`) ; les
+notifications sont relevées par le test (`invariant_env` remplace `escalations._notify`). Aucune
+propriété restreinte.
+**La séquence figée** (`test_a_disappearance_beside_the_graphs_card_is_said_on_its_own`, isolation
+et blocage, `human_only` et `non_disruptive`) rejoue la règle sur Db--01 : 4/4 rouges sur `main`
+(« L3: … no card of the reassertion's says it — the graph's alone », « said only on the graph's
+card »), vertes après. Tests unitaires (`test_reassert.py`) : au magasin, une carte de la
+réaffirmation et une carte d'une autre origine sont deux cartes, chacune son texte et sa notification,
+dans les deux ordres et pour chaque famille d'ids (dérive, en majuscules, contournement, état
+illisible) ; les fusions d'une même origine tiennent ; la disparition à côté de la carte du graphe
+(isolation et blocage, deux modes), dite par sa carte, notifiée, une fois ; la carte du graphe après
+l'alerte qui ne la réécrit pas ; la clé d'avant A0 pour une IPv6 en majuscules — 16 rouges sur
+`main`. **Mutants M3170–M3176** : le refus de fusion retiré (M3170), les ids de la réaffirmation lus
+avec leur casse (M3171), l'état illisible oublié (M3172), un seul sens tenu (M3173 : la carte du
+graphe se fond dans l'alerte ; M3174 : l'alerte dans la carte du graphe), la fusion par id de signal
+— de trop (M3175), la clé d'avant A0 sans minuscules (M3176). **La console** groupait les cartes
+d'une VM par action seule (`_groupEscs`, la carte de la VM et sa fenêtre) : la carte du graphe et
+l'alerte, deux cartes au magasin, s'y montraient dans un même groupe, sous le titre de la première,
+et un « Ack » les acquittait ensemble — l'alerte tue sans avoir été lue. La clé du groupe porte
+maintenant l'origine (`_fromReassertion` : les mêmes préfixes que le magasin, toute casse) ; chaque
+« Ack » acquitte les ids d'un seul groupe. Le bot et le TUI acquittent carte par carte : rien à y
+changer. Pas de moteur JavaScript dans la suite : le test (`test_console.py`) lit le script — les
+préfixes égaux à ceux du magasin, la clé, chaque « Ack » sur les ids d'un groupe et chaque groupe fait
+par `_groupEscs` ; mutant **M3177** (la clé par action seule). **Reste ouvert** : le magasin ne connaît l'origine que de la réaffirmation : les cartes
+du TTL, des orphelines, de la posture n'ont pas d'homonyme du graphe aujourd'hui (leurs actions et
+leurs types), la règle ne les couvre pas.
+
+**Mesures d'I3G.** Invariants avec la règle, `--hypothesis-seed=N`, 60 séquences, quatre à la fois :
+N = 1..20, **20/20 vertes** après le correctif (la règle atteinte 476 fois, la disparition laissée
+ouverte à côté de la carte du graphe 615 fois en `human_only`, 545 hors de lui) ; sur le code de
+`main` f20d3c8, la règle et L3 ajoutées, **2/20 vertes** (les graines 6 et 10) : 18 rouges, toutes
+par L3 (la carte du graphe réécrite, une isolation ou un blocage dit seulement par elle), aucune par
+L1 ni une autre propriété de la disparition — l'oracle d'avant ne voyait pas le silence. **Mutants
+M3170–M3176** : 7/7 par leurs tests à chaque tour (deux tours, 60 séquences). `pytest` complet :
+5 813 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 289 mutants, sans faute.
+**Hors du lot, trouvé en chemin** : la graine 9 sur le code de `main`, en réduisant ses échecs L3, a
+trouvé un troisième échec sans rapport, rejoué tel quel avec le correctif — « I3: perimeter block
+named ['db-nic-0'] of …/Db--01 uncovered, behind it » (`block_perimeter`), après un blocage de
+périmètre de `web` (rg-app2) par son id en minuscules, `kept_at_the_lift` (une levée, le 12ᵉ appel
+en 429 après écriture, l'état perdu, une isolation d'une ancienne version laissée sur web-nic), un
+blocage de `web`, puis le périmètre de Db--01 (le 6ᵉ appel en 429 avant écriture) : la réponse nomme
+db-nic-0 non couverte alors que le périmètre la coupe. Présent sur `main` (aucune ligne d'I3G ne
+touche le blocage de périmètre) ; dit dans le rapport, pour un lot à lui.
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

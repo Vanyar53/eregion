@@ -467,11 +467,22 @@ function _matchColor(ts) {
   return (t && Date.now() - t < 30 * 60 * 1000) ? 'var(--orange)' : 'var(--dim)';
 }
 
-// Group escalations by action, render each group as one item (N dupes = single Ack All)
+// I3G (#446): the cards the reassertion writes — their signal ids, whatever their case, as the
+// store tells them (escalations._reassertion). Never grouped with a card of another origin: the
+// graph's card and the reassertion's alert on one VM made one group, under the first one's
+// title, and one Ack acknowledged both — the alert silenced unread.
+const _REASSERTION = ['reassert-', 'state-unreadable-'];
+function _fromReassertion(e) {
+  const sid = String(e.signal_id || '').toLowerCase();
+  return _REASSERTION.some(p => sid.startsWith(p));
+}
+
+// Group escalations by action and origin, render each group as one item (N dupes = single Ack All)
 function _groupEscs(escs) {
   const map = new Map();
   escs.forEach(e => {
-    const key = e.action === 'improve_detection' ? e.id : e.action; // rules stay separate
+    const key = e.action === 'improve_detection' ? e.id   // rules stay separate
+      : `${_fromReassertion(e) ? 'reassertion' : 'other'}|${e.action}`;
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(e);
   });
@@ -949,7 +960,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     const mt  = r.last_match ? `<span style="color:${_matchColor(r.last_match)};font-size:9px;margin-left:auto;flex-shrink:0">${_relTime(r.last_match)}</span>` : '';
     // ADM1: the administrators' expected sudo set aside — counted here, never silent.
     // COR1: of them, the root shells whose every SSH session came from an expected origin.
-    const exOrigin = r.origin_count > 0 ? `, ${r.origin_count} root shell(s) from an expected origin (COR1)` : '';
+    const exOrigin = r.origin_count > 0 ? `, ${r.origin_count} root shell(s) from an expected origin (COR1, ${_originProofTxt(r)})` : '';
     const ex  = r.expected_count > 0 ? `<span style="color:var(--dim);font-size:9px;flex-shrink:0" title="${_attr(`${r.expected_count} expected sudo set aside, no card (ADM1)${exOrigin} — glorfindel report`)}">${_attr(r.expected_count)} expected</span>` : '';
     return `<div class="row rule-item" ${_on('click', 'showRuleByIdx', idx)}
       style="padding:3px 4px;font-size:10px">
@@ -2631,6 +2642,16 @@ function _relTime(iso) {
   return `${Math.floor(age / 3600)}h ago`;
 }
 
+// COR2 (#427): how far the origins of the root shells set aside are proven — confirmed outside
+// the VM (Bastion, flows), or read in the VM only (COR1, a noise reducer).
+function _originProofTxt(r) {
+  const n = Number(r.origin_count) || 0;
+  const ok = Number(r.origin_confirmed) || 0;
+  if (ok <= 0) return 'origin read in the VM only';
+  if (ok >= n) return 'every one confirmed outside the VM, COR2';
+  return `${ok} confirmed outside the VM (COR2), ${n - ok} read in the VM only`;
+}
+
 function showRuleDetail(rule) {
   const statusTxt = rule.last_error
     ? `⚠ error: ${rule.last_error}`
@@ -2641,12 +2662,13 @@ function showRuleDetail(rule) {
         : 'not polled yet';
   // ADM1: the sudo set aside as the administrators' expected ones (no card), counted.
   const expectedTxt = rule.expected_count > 0
-    ? `${rule.expected_count} expected sudo set aside, no card${rule.origin_count > 0 ? ` (${rule.origin_count} root shell(s) from an expected origin, COR1)` : ''} · last ${_relTime(rule.expected_last)} — glorfindel report lists them`
+    ? `${rule.expected_count} expected sudo set aside, no card${rule.origin_count > 0 ? ` (${rule.origin_count} root shell(s) from an expected origin, COR1 — ${_originProofTxt(rule)})` : ''} · last ${_relTime(rule.expected_last)} — glorfindel report lists them`
     : '';
-  // COR1: the correlation's queries, what they decided, what they could not read.
+  // COR1: the correlation's queries, what they decided, what they could not read; COR2: the
+  // origins confirmed outside the VM, and those left a card for want of a trace there.
   const co = rule.correlation || {};
   const corrTxt = co.queries > 0
-    ? `correlation (COR1): ${co.queries} quer${co.queries > 1 ? 'ies' : 'y'} · ${co.origin || 0} root shell(s) set aside by origin · ${co.card || 0} carded by origin · ${co.unknown || 0} unknown (card)${co.compromised ? ` · ${co.compromised} login(s) after brute force (critical)` : ''}${co.unchecked ? ` · ${co.unchecked} not checked` : ''}`
+    ? `correlation (COR1): ${co.queries} quer${co.queries > 1 ? 'ies' : 'y'} · ${co.origin || 0} root shell(s) set aside by origin · ${co.card || 0} carded by origin · ${co.unknown || 0} unknown (card)${co.confirmed ? ` · ${co.confirmed} confirmed outside the VM (COR2)` : ''}${co.unconfirmed ? ` · ${co.unconfirmed} without a trace outside the VM (card)` : ''}${co.compromised ? ` · ${co.compromised} login(s) after brute force (critical)` : ''}${co.unchecked ? ` · ${co.unchecked} not checked` : ''}`
     : '';
 
   document.getElementById('modal-title').textContent =

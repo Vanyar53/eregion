@@ -235,15 +235,22 @@ class ActionBackendConfig:
     restore_staging_storage: str = ""
 
 
+def vm_name_matches(asset_name: str, pattern: str) -> bool:
+    """AUC (#447): a VM's name against a pattern of the config (fnmatch), case ignored —
+    Azure ignores it in a VM's name, and `fnmatch.fnmatch` keeps it on Linux: a VM the
+    config wrote `VM-PROD-DB`, its state `vm-prod-db`, was not the config's VM."""
+    return fnmatch.fnmatchcase(asset_name.lower(), pattern.lower())
+
+
 @dataclass
 class ExceptionConfig:
     """Opt-out rule: prevent a rule (or all rules) from being applied to an asset."""
-    asset_pattern: str           # fnmatch pattern matched against VM name
+    asset_pattern: str           # fnmatch pattern matched against VM name, case ignored (AUC)
     exclude_all: bool = False    # exclude from all rules
     exclude_rules: list[str] = field(default_factory=list)  # specific rule names
 
     def matches(self, asset_name: str) -> bool:
-        return fnmatch.fnmatch(asset_name, self.asset_pattern)
+        return vm_name_matches(asset_name, self.asset_pattern)
 
     def excludes_rule(self, rule_name: str) -> bool:
         return self.exclude_all or rule_name in self.exclude_rules
@@ -254,16 +261,23 @@ class ExceptionConfig:
 # the value for now. Order of precedence: asset match > global default.
 VALID_AUTONOMY_MODES = {"human_only", "non_disruptive"}
 DEFERRED_AUTONOMY_MODES = {"full_auto"}
+# AUC (#447): from the most prudent mode to the most permissive — two entries that name a VM
+# alike (`VM-A` and `vm-a`, or two patterns as long) and disagree give the most prudent.
+_MODE_PRUDENCE = {"human_only": 0, "non_disruptive": 1, "full_auto": 2}
+
+
+def _most_prudent(rules: list[AutonomyRule]) -> str:
+    return min(rules, key=lambda r: _MODE_PRUDENCE.get(r.mode, len(_MODE_PRUDENCE))).mode
 
 
 @dataclass
 class AutonomyRule:
-    """An asset-scoped autonomy mode override (fnmatch, like ExceptionConfig)."""
-    match: str                   # fnmatch pattern matched against VM name
+    """An asset-scoped autonomy mode override (fnmatch, like ExceptionConfig; case ignored)."""
+    match: str                   # fnmatch pattern matched against VM name, case ignored (AUC)
     mode: str
 
     def matches(self, asset_name: str) -> bool:
-        return fnmatch.fnmatch(asset_name, self.match)
+        return vm_name_matches(asset_name, self.match)
 
 
 @dataclass
@@ -290,13 +304,20 @@ class AutonomyConfig:
         longest pattern wins (proxy for specificity) — so a broad "vm-*" never
         shadows a targeted "vm-prod-db". Unknown assets fall back to the global
         default — never an accidental inheritance toward a more permissive mode.
+
+        AUC (#447): names and patterns compared case ignored, as Azure compares a VM's
+        name — a `human_only` entry written `VM-PROD-DB` holds `vm-prod-db` under a
+        `non_disruptive` default. Entries tied (exact alike, or wildcards as long) that
+        disagree give the most prudent mode, never the first listed.
         """
-        exact = next((r for r in self.assets if r.match == asset_name), None)
-        if exact is not None:
-            return exact.mode
+        name = asset_name.lower()
+        exact = [r for r in self.assets if r.match.lower() == name]
+        if exact:
+            return _most_prudent(exact)
         matches = [r for r in self.assets if r.matches(asset_name)]
         if matches:
-            return max(matches, key=lambda r: len(r.match)).mode
+            longest = max(len(r.match) for r in matches)
+            return _most_prudent([r for r in matches if len(r.match) == longest])
         return self.default
 
 
@@ -416,7 +437,7 @@ class ExpectedAdmins:
     origins: list[str] = field(default_factory=list)
 
     def matches(self, asset_name: str) -> bool:
-        return fnmatch.fnmatchcase(asset_name.lower(), self.match.lower())
+        return vm_name_matches(asset_name, self.match)
 
 
 @dataclass
@@ -427,6 +448,10 @@ class ExpectedSudoConfig:
     in the command line, case ignored). Empty: every sudo is a card, as before."""
     admins: list[ExpectedAdmins] = field(default_factory=list)
     sensitive_commands: list[str] = field(default_factory=list)
+    # COR2 (#427): the source outside the VM that confirms each SSH session behind a root shell
+    # set aside by its origin — `bastion` (Azure Bastion's audit logs) or `flows` (the VNet's
+    # flow logs); `none`: COR1, the origin read in the VM only (`glorfindel.correlation.PROOFS`).
+    origin_proof: str = "none"
 
     def accounts_for(self, asset_name: str) -> frozenset[str]:
         """The accounts expected on this VM: every entry that names it, together."""
@@ -444,6 +469,14 @@ class ExpectedSudoConfig:
 
 
 @dataclass
+class MemoryConfig:
+    """SEC17 (V-12): the memory of past cycles. ``max_age_days``: a cycle stored longer ago is no
+    precedent — left out of the search (glorfindel/memory.py), never erased. 90 days by default,
+    at most ten years."""
+    max_age_days: float = 90.0
+
+
+@dataclass
 class GlorfindelConfig:
     monitoring_backends: list[MonitoringBackendConfig] = field(default_factory=list)
     action_backends: list[ActionBackendConfig] = field(default_factory=list)
@@ -455,6 +488,8 @@ class GlorfindelConfig:
     never_block: list[str] = field(default_factory=list)
     # ADM1 (#284): the administrators' expected sudo, per VM or pattern of VMs.
     expected_sudo: ExpectedSudoConfig = field(default_factory=ExpectedSudoConfig)
+    # SEC17 (V-12): how old a past cycle may be to be given as a precedent.
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     def monitoring_backend(self, name: str) -> MonitoringBackendConfig | None:
         return next((b for b in self.monitoring_backends if b.name == name), None)
@@ -474,6 +509,15 @@ class GlorfindelConfig:
             exc.matches(asset_name) and exc.excludes_rule(rule_name)
             for exc in self.exceptions
         )
+
+
+def memory_max_age_days(path: str | Path | None = None) -> float:
+    """SEC17 (V-12): the memory's age bound, from the config — its default (90 days) when there
+    is no config, or one the watch refuses (it does not start on it, A3)."""
+    try:
+        return load_glorfindel_config(path).memory.max_age_days
+    except Exception:
+        return MemoryConfig().max_age_days
 
 
 NO_VAULT_MSG = ("Aucun coffre de sauvegarde configuré : action_backends (type "
@@ -537,7 +581,7 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
 _SECTIONS = {
     "monitoring_backends": "list", "action_backends": "list", "exceptions": "list",
     "autonomy": "table", "isolation": "table", "never_block": "list",
-    "expected_sudo": "table",
+    "expected_sudo": "table", "memory": "table",
 }
 _MONITORING_KEYS = ("name", "type", "workspace_id", "endpoint", "discovery")
 _DISCOVERY_KEYS = ("enabled", "interval_s")
@@ -546,8 +590,9 @@ _EXCEPTION_KEYS = ("asset_pattern", "exclude_all", "exclude_rules")
 _AUTONOMY_KEYS = ("default", "assets", "allow_destructive")
 _AUTONOMY_ASSET_KEYS = ("match", "mode")
 _ISOLATION_KEYS = ("quarantine_nsg", "quarantine_rg", "forensic_sources", "forensic_ports")
-_EXPECTED_SUDO_KEYS = ("admins", "sensitive_commands")
+_EXPECTED_SUDO_KEYS = ("admins", "sensitive_commands", "origin_proof")
 _EXPECTED_ADMIN_KEYS = ("match", "accounts", "origins")
+_MEMORY_KEYS = ("max_age_days",)
 # The backend types something reads (discovery.py, detection_rules.py, backup_vault()):
 # `type: azure_monitr` was a backend nothing used, in silence. A new type is added here.
 _MONITORING_TYPES = ("azure_monitor", "prometheus")
@@ -642,6 +687,22 @@ class _Checker:
             return default
         if not math.isfinite(value) or value <= 0:
             self.bad(f"{where}.{k}", f"un nombre de secondes positif est attendu, pas {value}")
+            return default
+        return float(value)
+
+    def days(self, raw: dict, k: str, where: str, default: float, ceiling: float) -> float:
+        """A number of days: finite, positive, at most ``ceiling`` (SEC17)."""
+        import math
+        value = raw.get(k)
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            self.bad(f"{where}.{k}", f"un nombre de jours est attendu (sans guillemets ni unité), "
+                                     f"pas {_shown(value)}")
+            return default
+        if not math.isfinite(value) or not 0 < value <= ceiling:
+            self.bad(f"{where}.{k}", f"un nombre de jours entre 0 (exclu) et {ceiling:g} est attendu, "
+                                     f"pas {value}")
             return default
         return float(value)
 
@@ -746,6 +807,13 @@ def _parse_config(data: dict) -> GlorfindelConfig:
 
     expected_sudo = _check_expected_sudo(sections["expected_sudo"], check)
 
+    # SEC17 (V-12): the age bound of the memory, read as strictly as the rest.
+    from glorfindel.memory import DEFAULT_MAX_AGE_DAYS, MAX_AGE_CEILING_DAYS
+    mem = sections["memory"]
+    check.keys(mem, "memory", _MEMORY_KEYS)
+    memory = MemoryConfig(max_age_days=check.days(mem, "max_age_days", "memory", DEFAULT_MAX_AGE_DAYS,
+                                                  MAX_AGE_CEILING_DAYS))
+
     if check.problems:
         n = len(check.problems)
         raise ConfigError(f"{n} problème{'s' if n > 1 else ''} :\n  - " + "\n  - ".join(check.problems))
@@ -757,6 +825,7 @@ def _parse_config(data: dict) -> GlorfindelConfig:
         isolation=isolation,
         never_block=never_block,
         expected_sudo=expected_sudo,
+        memory=memory,
     )
 
 
@@ -791,7 +860,25 @@ def _check_expected_sudo(raw: dict, check: _Checker) -> ExpectedSudoConfig:
             sensitive.append(text.strip())
         else:
             check.bad(f"{where}.sensitive_commands[{j}]", "un texte vide est refusé (il serait dans toute commande)")
-    return ExpectedSudoConfig(admins=admins, sensitive_commands=sensitive)
+    return ExpectedSudoConfig(admins=admins, sensitive_commands=sensitive,
+                              origin_proof=_check_origin_proof(raw, admins, check))
+
+
+def _check_origin_proof(raw: dict, admins: list[ExpectedAdmins], check: _Checker) -> str:
+    """COR2 (#427): `origin_proof`, one of `glorfindel.correlation.PROOFS`; a source with no
+    `origins` to confirm is a key nobody reads — refused, like the rest (A3)."""
+    from glorfindel.correlation import PROOFS
+    where = "expected_sudo.origin_proof"
+    value = check.text(raw, "origin_proof", "expected_sudo", default="none")
+    if raw.get("origin_proof") is None or not isinstance(raw.get("origin_proof"), str):
+        return "none"
+    if value not in PROOFS:
+        check.bad(where, f"{_shown(value)} : une source parmi {', '.join(PROOFS)}")
+        return "none"
+    if value != "none" and not any(a.origins for a in admins):
+        check.bad(where, f"{value} sans aucune entrée qui déclare origins : rien à confirmer — "
+                         "déclarer origins, ou omettre la clé")
+    return value
 
 
 def _check_origins(raw: dict, where: str, check: _Checker) -> list[str]:
@@ -894,6 +981,8 @@ def set_asset_mode(asset_name: str, mode: str, path: str | Path | None = None) -
     Backend for the War Room mode selector / change-mode endpoint. Validates the
     mode (refuses full_auto / unknown), upserts an exact-match `autonomy.assets`
     entry for asset_name, and writes the file back. Returns the resolved path.
+    Every entry that names it exactly, case ignored (AUC: `VM-A` for `vm-a`), takes
+    the mode, its spelling kept — one left behind would hold the VM in its own.
 
     NOTE: this rewrites the YAML via safe_dump — inline comments are not preserved.
     Intended for UI-driven edits; hand-edited configs keep their comments as long
@@ -912,11 +1001,10 @@ def set_asset_mode(asset_name: str, mode: str, path: str | Path | None = None) -
         autonomy = data.setdefault("autonomy", {})
         autonomy.setdefault("default", "human_only")
         assets = autonomy.setdefault("assets", [])
-        for entry in assets:
-            if entry.get("match") == asset_name:
-                entry["mode"] = mode
-                break
-        else:
+        named = [e for e in assets if str(e.get("match") or "").lower() == asset_name.lower()]
+        for entry in named:
+            entry["mode"] = mode
+        if not named:
             assets.append({"match": asset_name, "mode": mode})
 
     _update_config(cfg_path, mutate)

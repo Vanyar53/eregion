@@ -97,13 +97,20 @@ def test_release_takes_nothing_off_on_an_unreadable_state(world):
     assert m.connector.release_isolation(WEB1)["status"] == "released"
 
 
-def test_a_bare_nic_is_not_released_on_an_unreadable_state(world):
+@pytest.mark.parametrize("whose", ["its own", "another VM's"])
+def test_a_bare_nic_is_not_released_on_an_unreadable_state(world, whose):
     """The release's sweep: a bare NIC, no tag — bare by design, or held for a state that
-    can't be read. Unknown: not released on a guess."""
+    can't be read. Unknown: not released on a guess. Another VM's state too (its own lost):
+    it may hold the NIC — I3U says only the VM's own file."""
     m = world(_net(quarantine=True, web_nic={"own": "dedicated"}))
     nic = _nic("rg-app1", "web-nic")
     _, q = _quarantined(m, nic)
-    _break_state()
+    if whose == "its own":
+        _break_state()
+    else:
+        for f in actions._ISOLATION_STATE_DIR.glob("*.json"):
+            f.unlink()
+        _other_broken()
     m.fake.nsgs[key(q)]["tags"].pop(actions.AzureConnector._orig_tag(m.fake.nics[nic]["id"]))
     m.fake.nics[nic]["nsg"] = None
     out = m.connector.release_isolation(WEB1)

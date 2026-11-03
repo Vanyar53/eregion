@@ -21,7 +21,8 @@ any signal exists — by the RulePoller, in code — and never in the prompt.
 - A root shell (`root_shell`) of an expected account is sensitive — a card — unless the account
   declares its `origins` (COR1, #407): the entry then waits for the account's SSH sessions,
   read by `glorfindel.correlation`, and is set aside only if every one of them comes from an
-  expected origin. A command sensitive otherwise is never cleared by its origin.
+  expected origin — and, when `origin_proof` names a source outside the VM (COR2, #427), has
+  its trace there. A command sensitive otherwise is never cleared by its origin.
 - Never silent: each sudo set aside is written to `~/.glorfindel/expected_sudo.jsonl`
   (when, VM, account, command) before it is set aside — a journal that cannot be written
   excludes nothing — and counted in `rule_status.json`; `glorfindel report` and the
@@ -288,7 +289,10 @@ def judge(row: dict, asset_name: str, policy) -> dict | None:
     # from an expected origin. Without origins, it stays a card (ADM1).
     origins = policy.origins_for(asset_name, line.account)
     if origins and shell_only(line.command, policy.sensitive_commands):
-        return {**entry, "origins": origins}
+        # COR2 (#427): with a source outside the VM declared, each session also waits for its
+        # trace there (`glorfindel.correlation.confirm_outside`).
+        proof = getattr(policy, "origin_proof", "none") or "none"
+        return {**entry, "origins": origins} | ({"proof": proof} if proof != "none" else {})
     if sensitive(line.command, policy.sensitive_commands) is not None:
         return None
     return entry
@@ -338,7 +342,7 @@ def summary(since: datetime | None = None, latest: int = 10) -> dict:
     latest ones, and from when the journal runs. A journal that cannot be read is said
     (`error`), a line that cannot be read counted (`unreadable`) — never a silent zero."""
     out: dict = {"count": 0, "by_asset": {}, "by_account": {}, "latest": [], "journal_from": None,
-                 "unreadable": 0, "error": "", "origin_count": 0, "by_origin": {}}
+                 "unreadable": 0, "error": "", "origin_count": 0, "by_origin": {}, "origin_confirmed": 0}
     try:
         text = _JOURNAL.read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
@@ -369,10 +373,14 @@ def summary(since: datetime | None = None, latest: int = 10) -> dict:
         out["by_account"][account] = out["by_account"].get(account, 0) + 1
         # COR1: a root shell set aside because every session came from an expected origin.
         origin = str(e.get("origin") or "")[:_COMMAND_KEPT] if e.get("via") == "origin" else ""
+        # COR2: the source outside the VM that confirmed it; none — read in the VM only.
+        proof = str(e.get("proof") or "")[:32] if origin else ""
         if origin:
             out["origin_count"] += 1
             out["by_origin"][origin] = out["by_origin"].get(origin, 0) + 1
+        if proof:
+            out["origin_confirmed"] += 1
         kept.append({"at": at.isoformat(), "asset": asset, "account": account,
-                     "command": str(e.get("command") or "")[:_COMMAND_KEPT], "origin": origin})
+                     "command": str(e.get("command") or "")[:_COMMAND_KEPT], "origin": origin, "proof": proof})
     out["latest"] = kept[-latest:] if latest else []
     return out

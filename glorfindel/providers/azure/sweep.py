@@ -198,7 +198,7 @@ class SweepMixin:
                                       blocks=True, unverified="reset non vérifié")   # a bare NIC's (D80)
         unreadable += held
         to_delete += gone
-        deleted, failed = [], list(unreadable)
+        deleted, failed = [], unreadable + self._unread(resource_id, "reset non vérifié", unreadable + failed_early)
         for t0 in quarantined:
             q = t0["quarantine"]
             if t0["nic_id"] not in originals:

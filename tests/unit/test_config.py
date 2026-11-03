@@ -213,6 +213,153 @@ def test_autonomy_longest_wildcard_wins():
     assert autonomy.resolve("vm-dev-web") == "non_disruptive"  # only vm-* matches
 
 
+# ── AUC (#447): a VM's name compared case ignored, as Azure compares it ────────
+
+def test_autonomy_permissive_default_prudent_exception_in_capitals(tmp_path):
+    """The defect: a `human_only` exception written in capitals, a `non_disruptive` default,
+    the VM named in lowercase by its state — the default made it act alone."""
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(textwrap.dedent("""
+        autonomy:
+          default: non_disruptive
+          assets:
+            - match: "VM-PROD-DB"
+              mode: human_only
+            - match: "VM-PAY-*"
+              mode: human_only
+    """))
+    autonomy = load_glorfindel_config(cfg_file).autonomy
+    assert autonomy.resolve("vm-prod-db") == "human_only"
+    assert autonomy.resolve("Vm-Prod-Db") == "human_only"
+    assert autonomy.resolve("vm-pay-01") == "human_only"     # the pattern too
+    assert autonomy.resolve("vm-dev-01") == "non_disruptive"  # the others keep the default
+
+
+def test_autonomy_exact_match_case_ignored_still_beats_a_longer_wildcard():
+    """An exact entry written in capitals stays exact: a wildcard longer than it never wins."""
+    autonomy = AutonomyConfig(
+        default="human_only",
+        assets=[
+            AutonomyRule(match="VM-A", mode="human_only"),
+            AutonomyRule(match="vm-[ab]", mode="non_disruptive"),   # longer, matches vm-a
+        ],
+    )
+    assert autonomy.resolve("vm-a") == "human_only"
+    assert autonomy.resolve("vm-b") == "non_disruptive"
+
+
+def test_autonomy_entries_alike_but_for_case_give_the_most_prudent():
+    """`VM-A` and `vm-a` (or `VM-*` and `vm-*`) now both name vm-a: when they disagree, the
+    most prudent mode, whatever the order — never the first listed."""
+    for order in (1, -1):
+        exact = AutonomyConfig(default="human_only", assets=[
+            AutonomyRule(match="VM-A", mode="non_disruptive"),
+            AutonomyRule(match="vm-a", mode="human_only"),
+        ][::order])
+        assert exact.resolve("vm-a") == "human_only"
+        wild = AutonomyConfig(default="non_disruptive", assets=[
+            AutonomyRule(match="VM-*", mode="non_disruptive"),
+            AutonomyRule(match="vm-*", mode="human_only"),
+        ][::order])
+        assert wild.resolve("vm-a") == "human_only"
+    # Agreeing entries change nothing.
+    same = AutonomyConfig(default="human_only", assets=[
+        AutonomyRule(match="VM-A", mode="non_disruptive"),
+        AutonomyRule(match="vm-a", mode="non_disruptive"),
+    ])
+    assert same.resolve("vm-a") == "non_disruptive"
+
+
+def test_exception_matches_case_ignored():
+    """An exception names its VM as Azure does: case ignored (AUC)."""
+    cfg = GlorfindelConfig(exceptions=[
+        ExceptionConfig(asset_pattern="VM-STAGING", exclude_rules=["ssh-brute-force"]),
+        ExceptionConfig(asset_pattern="VM-DEV-*", exclude_all=True),
+    ])
+    assert cfg.is_excluded("vm-staging", "ssh-brute-force")
+    assert not cfg.is_excluded("vm-staging", "disk-write-anomaly")
+    assert cfg.is_excluded("vm-dev-foo", "any-rule")
+    assert not cfg.is_excluded("vm-prod", "any-rule")
+
+
+def test_expected_admins_match_case_ignored_accounts_not():
+    """ADM1 already ignored the case of a VM's name; a Linux account keeps its own: `OPS`'s
+    sudo on a VM that expects `ops` is not set aside — it stays a card."""
+    from glorfindel import expected_sudo
+    from glorfindel.config import ExpectedAdmins, ExpectedSudoConfig
+    policy = ExpectedSudoConfig(admins=[ExpectedAdmins(match="VM-WEB-*", accounts=["ops"])])
+    assert policy.accounts_for("vm-web-01") == frozenset({"ops"})
+
+    def judged(account: str):
+        line = f"{account} : TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/usr/bin/apt update"
+        return expected_sudo.judge({"SyslogMessage": line, "TimeGenerated": "t"}, "vm-web-01", policy)
+
+    assert judged("ops") == {"asset": "vm-web-01", "account": "ops",
+                             "command": "/usr/bin/apt update", "logged_at": "t"}   # set aside
+    assert judged("OPS") is None                                                     # a card
+
+
+def test_set_asset_mode_updates_an_entry_written_with_another_case(tmp_path):
+    """The console sets vm-a; the config wrote VM-A: that entry takes the mode, its spelling
+    kept — a second entry beside it would leave the VM in the most prudent of the two."""
+    from glorfindel.config import set_asset_mode
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(textwrap.dedent("""
+        autonomy:
+          default: human_only
+          assets:
+            - match: "VM-A"
+              mode: human_only
+            - match: "vm-a"
+              mode: human_only
+            - match: "vm-b"
+              mode: human_only
+    """))
+    set_asset_mode("vm-a", "non_disruptive", path=cfg_file)
+    autonomy = load_glorfindel_config(cfg_file).autonomy
+    assert autonomy.resolve("vm-a") == "non_disruptive"
+    assert [(a.match, a.mode) for a in autonomy.assets] == [
+        ("VM-A", "non_disruptive"), ("vm-a", "non_disruptive"), ("vm-b", "human_only")]
+
+
+def test_set_asset_mode_on_a_name_the_config_wrote_in_capitals(tmp_path):
+    """One entry `VM-A`: the console's vm-a updates it, never adds a second one."""
+    from glorfindel.config import set_asset_mode
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(textwrap.dedent("""
+        autonomy:
+          default: human_only
+          assets:
+            - match: "VM-A"
+              mode: human_only
+    """))
+    set_asset_mode("vm-a", "non_disruptive", path=cfg_file)
+    autonomy = load_glorfindel_config(cfg_file).autonomy
+    assert [(a.match, a.mode) for a in autonomy.assets] == [("VM-A", "non_disruptive")]
+    assert autonomy.resolve("vm-a") == "non_disruptive"
+
+
+def test_autonomy_config_and_vm_names_in_lowercase_read_as_before(tmp_path):
+    """A config and VM names in lowercase: resolved as before AUC."""
+    cfg_file = tmp_path / "glorfindel-config.yaml"
+    cfg_file.write_text(textwrap.dedent("""
+        autonomy:
+          default: human_only
+          assets:
+            - match: "vm-*"
+              mode: non_disruptive
+            - match: "vm-prod-*"
+              mode: human_only
+            - match: "vm-prod-web"
+              mode: non_disruptive
+    """))
+    autonomy = load_glorfindel_config(cfg_file).autonomy
+    assert autonomy.resolve("vm-dev-01") == "non_disruptive"
+    assert autonomy.resolve("vm-prod-db") == "human_only"
+    assert autonomy.resolve("vm-prod-web") == "non_disruptive"
+    assert autonomy.resolve("other") == "human_only"
+
+
 def test_load_autonomy_section(tmp_path):
     cfg_file = tmp_path / "glorfindel-config.yaml"
     cfg_file.write_text(textwrap.dedent("""

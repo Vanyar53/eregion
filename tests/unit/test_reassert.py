@@ -1938,3 +1938,361 @@ def test_a_check_card_refused_never_cuts_the_blocks_pass(monkeypatch):
     monkeypatch.setattr(escalations, "resolve", real)
     reassert_active(c, AutonomyConfig(default="human_only"))
     assert not [e for e in escalations.pending() if e["escalation_type"] == "unverified"]   # closed next
+
+
+# ── I3C (#436): the reassertion's cards, whatever the case of the VM's name ───────────────
+
+_DB = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/Db--01"
+
+
+def _held_as(rid: str, kind: str) -> None:
+    """Db--01's isolation, or its block of _IP, recorded under `rid`: its canonical id, or the
+    lowercase one Log Analytics reports (`_ResourceId`) — the state of a VM isolated or blocked
+    again by it names the VM `db--01`. Written anew, as an isolation or a block is: no mark."""
+    from glorfindel.actions import _clear_block_state
+    readiness.record_assessment(readiness._verdict("Db--01", []), _DB)
+    if kind == "isolation":
+        _save_isolation_state(rid, {"resource_id": rid, "isolated_at": "2026-10-06T08:00:00+00:00",
+                                    "placements": []})
+    else:
+        _clear_block_state(_DB, _IP)
+        _save_block_state(rid, _IP, rid, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                          threat_port=22)
+
+
+def _gone_from_db(kind: str):
+    c = (_connector({"verified": False, "uncovered_nics": ["nic-a"]}) if kind == "isolation"
+         else _connector(verify_blk={"verified": False, "missing_rules": ["r"]}))
+    c.isolate_vm.side_effect = lambda rid: {"status": "isolated"}
+    return c
+
+
+def _older(kind: str, prefix: str = "reassert-", tail: str = "", **card) -> dict:
+    """A card an older version said under Db--01's canonical name (before I3C), pending."""
+    from glorfindel.actions import _rid_hash
+    ip = _IP if kind == "block" else ""
+    sid = f"{prefix}Db--01-{_rid_hash(_DB)}" + (f"-{ip}" if ip else "") + tail
+    escalations.record(signal_id=sid, resource_id=_DB, reason="Dite par une version antérieure.",
+                       action_params={"ip": ip} if ip else None, **card)
+    return next(e for e in escalations.pending() if e["signal_id"] == sid)
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_disappearance_said_under_the_canonical_name_is_said_once_by_the_lowercase_id(kind):
+    """I3C (#436), found by I3R's review: Db--01's rules gone, said under its canonical name;
+    then isolated (blocked) again by its lowercase id — its state names it `db--01` — and gone
+    again. The card's id carried the name's case: the new alert neither closed the former card
+    nor was read « said » — the store folded it into the former one, which kept its id —, said
+    again at every pass. With `web`, no capital, it held."""
+    c = _gone_from_db(kind)
+    _held_as(_DB, kind)
+    reassert_active(c, _HUMAN)
+    (first,) = _drift_cards("pending")
+    assert first["signal_id"] == first["signal_id"].lower()         # written in lowercase, whatever the state's case
+    _held_as(_DB.lower(), kind)
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]   # a new episode
+    for _ in range(2):
+        assert reassert_active(c, _HUMAN) == []                                  # said once
+    (card,) = _drift_cards("pending")
+    assert card["id"] != first["id"] and card["signal_id"] == card["signal_id"].lower()
+    assert next(e for e in _drift_cards() if e["id"] == first["id"])["resolution"]   # closed, with a note
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_disappearance_put_back_after_one_said_under_the_canonical_name_has_its_own_card(kind):
+    """The same outside human_only: said « ne les repose pas » under the canonical name; taken
+    up again by the lowercase id, gone again, put back once — the « reposée » was folded into
+    the card that said it would not be, which went on saying so."""
+    c = _gone_from_db(kind)
+    _held_as(_DB, kind)
+    reassert_active(c, _HUMAN)
+    _held_as(_DB.lower(), kind)
+    assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["reapplied"]
+    (card,) = _drift_cards("pending")
+    assert "une fois" in card["reason"] and "repose pas" not in card["reason"]
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_drift_card_an_older_version_said_under_the_canonical_name_is_closed_by_the_next(kind):
+    """A drift card pending from before I3C carries the name's case. After the upgrade (a
+    restart: said once again, by design — L2C), the new alert closes it, with a note, and the
+    next passes read their own: never a card left pending that nothing closes, nor the
+    disappearance said at every pass."""
+    old = _older(kind, action="isolate_vm" if kind == "isolation" else "block_suspicious_ip",
+                 escalation_type="verification_failed")
+    c = _gone_from_db(kind)
+    _held_as(_DB, kind)
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    for _ in range(2):
+        assert reassert_active(c, _HUMAN) == []
+    (card,) = _drift_cards("pending")
+    assert card["id"] != old["id"] and "antérieure" not in card["reason"]
+    assert next(e for e in _drift_cards() if e["id"] == old["id"])["resolution"]
+
+
+def _db_mark(kind: str, rid: str, field: str, sid: str) -> None:
+    from glorfindel.actions import _update_block_entry
+    if kind == "isolation":
+        _save_isolation_state(rid, {**_load_isolation_state(rid), field: sid})
+    else:
+        _update_block_entry(rid, _IP, **{field: sid})
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+@pytest.mark.parametrize("rid", [_DB, _DB.lower()])
+def test_a_bypass_of_a_vm_whose_name_has_capitals_is_said_once(kind, rid):
+    """Db--01 bypassed, its state under either case: one card, said once (I3C)."""
+    c = _connector()
+    _held_as(rid, kind)
+    _read(c, kind, _ALLOW)
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["bypassed"]
+    for _ in range(2):
+        assert reassert_active(c, _HUMAN) == []
+    assert len(_bypass_cards()) == 1
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_a_bypass_said_under_the_canonical_name_stays_said(kind, acknowledged):
+    """A bypass said by an older version under Db--01's canonical name, its mark too, pending
+    or acknowledged by the operator; the state now names the VM in lowercase. The same allow
+    read again stays said: neither said at every pass nor its acknowledgement undone (I3C)."""
+    from glorfindel.reassert_cards import _allow_key, _digest
+    _held_as(_DB.lower(), kind)
+    old = _older(kind, f"reassert-bypass-{'iso' if kind == 'isolation' else 'block'}-",
+                 f"-{_digest([_allow_key(_ALLOW)])}", action="review_bypass", escalation_type="bypassed")
+    _db_mark(kind, _DB.lower(), "bypass_said", old["signal_id"])
+    if acknowledged:
+        escalations.resolve(old["id"])                            # the operator
+    c = _connector()
+    _read(c, kind, _ALLOW)
+    for _ in range(2):
+        assert reassert_active(c, _HUMAN) == []
+    assert [e["id"] for e in _bypass_cards()] == [old["id"]]
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_a_check_card_said_under_the_canonical_name_is_the_vms_own(kind):
+    """A check that raised, said by an older version under Db--01's canonical name: still
+    raising, it is that card — not one more at every pass; the VM still held, it stays open;
+    the check passing again, it closes, with a note (I3C)."""
+    from glorfindel.reassert_cards import unverified_released
+    _held_as(_DB.lower(), kind)
+    old = _older(kind, f"reassert-unverified-{'iso' if kind == 'isolation' else 'block'}-",
+                 action="review_unverified", escalation_type="unverified")
+    c = _connector()
+    check = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    check.side_effect = RuntimeError("(AuthorizationFailed)")
+    for _ in range(2):
+        assert reassert_active(c, _HUMAN) == []
+    unverified_released()
+    assert [e["id"] for e in _unverified("pending")] == [old["id"]]
+    check.side_effect = None
+    reassert_active(c, _HUMAN)
+    (card,) = _unverified()
+    assert card["status"] == "resolved" and card.get("resolution")
+
+
+def _db_left(rid: str) -> dict:
+    from glorfindel.actions import _update_block_entry
+    left = [{"nsg": "rg/nsg", "rule": "glorfindel-block-a", "to": "10.0.0.9", "on": "other", "kind": "turned"}]
+    _update_block_entry(rid, _IP, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r", "left": left}])
+    return _load_block_entries(rid)[0]
+
+
+@pytest.mark.parametrize("rid", [_DB, _DB.lower()])
+def test_rules_left_by_a_vm_whose_name_has_capitals_are_said_once(rid):
+    """What Db--01's block left, its state under either case: one card, said once (I3C)."""
+    from glorfindel.reassert_cards import say_left
+    _held_as(rid, "block")
+    vm = rid.rsplit("/", 1)[-1]
+    for n in range(3):
+        report: list[dict] = []
+        say_left(vm, rid, _IP, _db_left(rid), report, rid)
+        assert len(report) == (1 if n == 0 else 0)
+    assert len(_left_cards()) == 1
+
+
+def test_rules_left_said_under_the_canonical_name_stay_said():
+    """The rules a block left, said by an older version under Db--01's canonical name: read
+    again by the lowercase id, that card — never one more (I3C)."""
+    from glorfindel.reassert_cards import _digest, say_left
+    _held_as(_DB.lower(), "block")
+    _db_left(_DB.lower())
+    old = _older("block", "reassert-left-", f"-{_digest(['rg/nsg/glorfindel-block-a'])}",
+                 action="review_left_rule", escalation_type="rule_left")
+    _db_mark("block", _DB.lower(), "left_said", old["signal_id"])
+    for _ in range(2):
+        report: list[dict] = []
+        say_left("db--01", _DB.lower(), _IP, _load_block_entries(_DB.lower())[0], report, _DB.lower())
+        assert report == []
+    assert [e["id"] for e in _left_cards()] == [old["id"]]
+
+
+_IP6 = "2001:DB8::9"
+
+
+def test_a_block_of_an_ipv6_in_capitals_has_its_own_cards():
+    """I3C's review: the ids took the VM's name in lowercase, the IP as written — and the store's
+    ids were read in lowercase whole. A block of an IPv6 written `2001:DB8::9`: its check card,
+    the block still held, closed at every pass as « no longer recorded » and made again; its
+    bypass said again at every pass; the rules it left too. Each is its own card, said once."""
+    from glorfindel.actions import _update_block_entry
+    from glorfindel.reassert_cards import say_left, unverified_released
+    _save_block_state("vm", _IP6, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    c = _connector()
+    c.verify_block_ip.side_effect = RuntimeError("(AuthorizationFailed)")
+    for _ in range(3):
+        reassert_active(c, _HUMAN)
+        unverified_released()
+    assert len(_unverified()) == 1 and len(_unverified("pending")) == 1
+    c.verify_block_ip.side_effect = None
+    c.verify_block_ip.return_value = _bypass(_ALLOW)
+    outcomes = [[r["outcome"] for r in reassert_active(c, _HUMAN)] for _ in range(3)]
+    assert outcomes == [["bypassed"], [], []]
+    (card,) = _bypass_cards()
+    assert card.get("occurrences", 1) == 1
+    left = [{"nsg": "rg/nsg", "rule": "glorfindel-block-a", "to": "10.0.0.9", "on": "other", "kind": "turned"}]
+    _update_block_entry("vm", _IP6, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r", "left": left}])
+    said = []
+    for _ in range(3):
+        report: list[dict] = []
+        entry = next(e for e in _load_block_entries("vm") if e["ip"] == _IP6)
+        say_left("vm", _RID, _IP6, entry, report, _RID)
+        said.append(len(report))
+    assert said == [1, 0, 0] and len(_left_cards()) == 1
+
+
+# ── I3G (#446): an alert of the reassertion never folds into a card of the graph ──────────
+
+_GRAPH_TEXT = "Vérification après action en échec : une carte reste ouverte."
+_GRAPH_SID = "rule-ssh-brute-force-abcdef12"
+
+
+def _graph_card(kind: str, ip: str = _IP) -> str:
+    """The graph's own card on the VM, as `escalate_to_human` writes it after an action whose
+    check failed: its signal id (the RulePoller's), its confidence, the IP and port for a block."""
+    return escalations.record(
+        signal_id=_GRAPH_SID, resource_id=_RID,
+        action="isolate_vm" if kind == "isolation" else "block_suspicious_ip",
+        escalation_type="verification_failed", reason=_GRAPH_TEXT, confidence=0.9, severity="high",
+        action_params=None if kind == "isolation" else {"ip": ip, "port": 22}, rule_name="ssh-brute-force")
+
+
+def _notified(monkeypatch) -> list[dict]:
+    """The cards the operator was notified of (the webhook or the bot's thread)."""
+    sent: list[dict] = []
+    monkeypatch.setattr(escalations, "_notify", lambda esc: sent.append(dict(esc)))
+    return sent
+
+
+@pytest.mark.parametrize("theirs", ["reassert-vm-5a64476b", "REASSERT-Vm-5a64476b", "reassert-bypass-iso-vm-x-1",
+                                    "state-unreadable-0a1b2c3d"])
+@pytest.mark.parametrize("graph_first", [True, False])
+def test_a_card_of_the_reassertion_never_folds_into_one_of_another_origin(monkeypatch, theirs, graph_first):
+    """I3G, at the store: a card of the reassertion's (its ids, whatever their case) and a card
+    of another origin — same action, resource (any case), type, IP — are two cards, each with
+    its text, each notified. Folded, the graph's card took in the alert (its text overwritten at
+    the first fold, the confidence moving from 0.9 to 0; kept at the next, no notification), and
+    the other way, the graph's re-fire overwrote the alert, whose id still read « said »."""
+    sent = _notified(monkeypatch)
+    cards = [dict(signal_id=_GRAPH_SID, reason=_GRAPH_TEXT, confidence=0.9),
+             dict(signal_id=theirs, reason="L'isolation de vm a disparu d'Azure.", confidence=0.0)]
+    for card in (cards if graph_first else cards[::-1]):
+        escalations.record(resource_id=_RID if card is cards[0] else _RID.lower(), action="isolate_vm",
+                           escalation_type="verification_failed", **card)
+    said = {e["signal_id"]: e for e in escalations.pending()}
+    assert set(said) == {_GRAPH_SID, theirs}
+    assert all(said[c["signal_id"]]["reason"] == c["reason"] and said[c["signal_id"]]["occurrences"] == 1
+               for c in cards)
+    assert sorted(e["signal_id"] for e in sent) == sorted(said)
+
+
+def test_a_card_still_folds_into_one_of_its_own_origin():
+    """What the store folded before still folds: the graph's re-fires, whatever their signal ids
+    (the RulePoller's, a run's), and a re-fire of the reassertion's own card."""
+    for sid in (_GRAPH_SID, "watch-ssh-brute-force-1700000000"):
+        escalations.record(signal_id=sid, resource_id=_RID, action="isolate_vm",
+                           escalation_type="verification_failed", reason=_GRAPH_TEXT)
+    for _ in range(2):
+        escalations.record(signal_id="reassert-vm-5a64476b", resource_id=_RID, action="isolate_vm",
+                           escalation_type="verification_failed", reason="L'isolation de vm a disparu d'Azure.")
+    assert sorted(e["occurrences"] for e in escalations.pending()) == [2, 2]
+
+
+def _gone_beside(kind: str):
+    """Gone; put back (outside human_only), taken off again before the next pass — `again()`."""
+    c = _gone(kind)
+    c.isolate_vm.side_effect = lambda rid: {"status": "isolated"}
+    verify = c.verify_isolation if kind == "isolation" else c.verify_block_ip
+    gone = dict(verify.return_value)
+
+    def again():
+        verify.return_value = dict(gone)
+    c.again = again
+    return c
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_disappearance_beside_the_graphs_card_is_said_by_its_own(monkeypatch, kind, mode):
+    """I3G (#446), measured by I3C's review: the graph's `verification_failed` card on the VM,
+    pending, took in every alert of the reassertion. In human_only, the disappearance said again
+    at every pass in the report (`occurrences` up to 5), never notified; outside it, the card
+    stayed « reposée une fois », and the second disappearance (« ne la repose pas ») was folded
+    in, its text unchanged, no notification — the VM no longer isolated (or blocked): an alert
+    gone silent. Each alert now has its own card, its text and its notification; the graph's
+    card keeps its own."""
+    graph = _graph_card(kind)
+    sent = _notified(monkeypatch)
+    c = _gone_beside(kind)
+    autonomy = AutonomyConfig(default=mode)
+    passes = []
+    for _ in range(4):
+        passes.append(reassert_active(c, autonomy))
+        c.again()
+    said = [r for report in passes for r in report]
+    assert said and [len(p) for p in passes[2:]] == [0, 0], f"said again at every pass: {passes}"
+    for r in said:
+        card = next((e for e in escalations.all_escalations() if e["reason"] == r["detail"]
+                     and e["signal_id"].startswith("reassert-")), None)
+        assert card is not None, f"« {r['detail'][:60]}… » has no card of its own"
+        assert any(e["id"] == card["id"] for e in sent), f"« {r['detail'][:60]}… » never notified"
+    if mode == "non_disruptive":
+        assert [r["outcome"] for r in said][0] == "reapplied" and len(said) == 2
+        (last,) = [e for e in escalations.pending() if e["signal_id"].startswith("reassert-")]
+        assert "repose pas" in last["reason"] or "réécrit pas" in last["reason"]
+    (mine,) = [e for e in escalations.all_escalations() if e["id"] == graph]
+    assert (mine["status"], mine["reason"], mine["occurrences"]) == ("pending", _GRAPH_TEXT, 1)
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+def test_the_graphs_card_after_an_alert_never_overwrites_it(kind):
+    """The other way: the alert said, pending; the graph acts again on a new detection, its check
+    fails — its card was folded into the alert, overwriting its text (the confidence moved), the
+    alert's id kept: the reassertion read its disappearance « said », with the graph's words on
+    its card. Two cards, each with its text."""
+    c = _gone_beside(kind)
+    reassert_active(c, _HUMAN)
+    (alert,) = escalations.pending()
+    _graph_card(kind)
+    assert reassert_active(c, _HUMAN) == []
+    said = {e["signal_id"]: e["reason"] for e in escalations.pending()}
+    assert said == {alert["signal_id"]: alert["reason"], _GRAPH_SID: _GRAPH_TEXT}
+
+
+def test_a_drift_card_of_the_name_only_key_for_an_ipv6_in_capitals_is_closed_by_the_next():
+    """Seen in passing (I3C's review, second round): the former key, `reassert-{vm}-{ip}` (before
+    A0), kept the IP as written, the id read in lowercase. A card of it still pending for an IPv6
+    in capitals was never closed: the new alert folded into it, under its old id."""
+    escalations.record(signal_id=f"reassert-vm-{_IP6}", resource_id=_RID, action="block_suspicious_ip",
+                       escalation_type="verification_failed", reason="Dite par une version antérieure.",
+                       action_params={"ip": _IP6})
+    _save_block_state("vm", _IP6, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    assert [r["outcome"] for r in reassert_active(c, _HUMAN)] == ["escalated"]
+    (old,) = [e for e in escalations.all_escalations() if e["signal_id"] == f"reassert-vm-{_IP6}"]
+    (new,) = escalations.pending()
+    assert old["status"] == "resolved" and old["resolution"] and "antérieure" not in new["reason"]

@@ -263,6 +263,9 @@ class VerifyMixin:
         # A NIC taken off our NSG and left with none is not released: its own NSG — in
         # the state, or still in our tag — is not back (seventh review, U2).
         state = _load_isolation_state(resource_id) or {}
+        # Its own state unreadable: a quarantine NSG it left rules on, placements — unknown,
+        # never verified; `glorfindel release` read "verified" and cleared the file (I3U).
+        unknown += self._unread(resource_id, "levée non vérifiée")
         recorded = {(p.get("nic_id") or "").rstrip("/").lower(): p
                     for p in state.get("placements") or []
                     if p.get("kind") == "quarantine"}

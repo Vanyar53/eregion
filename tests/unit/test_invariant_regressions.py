@@ -5617,6 +5617,63 @@ def test_a_nics_rules_on_the_quarantine_nsg_it_left_go_once_the_operator_gives_i
     _run(monkeypatch, _I3R_NET, *_I3R_STEPS, ("lose_state", DB), ("tags_lost", _SEC_Q))
 
 
+def _unreadable_then_repaired(m, vm: str, release) -> None:
+    """I3U: the VM's own state file turns unreadable (a disk, a write cut short); `release` runs
+    on it, then the operator repairs the file as it was."""
+    from glorfindel.response.state import _ISOLATION_STATE_DIR, _state_file
+    f = _state_file(_ISOLATION_STATE_DIR, vm)
+    text = f.read_text()
+    f.write_text('{"resource_id": ')
+    try:
+        release()
+        assert f.read_text() == '{"resource_id": ', "the unreadable state file was not kept as it is"
+    finally:
+        f.write_text(text)
+
+
+# Both NICs of Db--01 on an NSG of their own: a bare one waits for the unreadable state already (SEC4b).
+_I3U_NET = _net(quarantine=True, quarantine_rg="rg-sec", db_nic_0={"own": "dedicated"},
+                db_nic_1={"own": "dedicated"})
+
+
+@pytest.mark.parametrize("lost,fault", [(False, 10), (True, 30)], ids=["state", "state-lost"])
+def test_a_partial_release_whose_state_turns_unreadable_never_says_released(monkeypatch, lost, fault):
+    """I3U (#440), the double fault of I3R's review. I3R's world, built as seed 67 left it: Db--01
+    isolated by our quarantine NSG, which then loses its `managed-by` tag — Db--01 isolated again,
+    its NICs' deny pairs go on the NSG they carry, the quarantine NSG itself (not ours: « non
+    adopté ») —, the tag back. (Seed 67 got there through the reassertion, only because a
+    disappearance said under the lowercase id was not read « already said »; I3C, #436, fixed
+    that: `_I3R_STEPS` no longer lead there, this isolation again is what that pass did.) The
+    release, throttled once on the delete of one of the pairs there, says `release_partial`, the
+    NICs given their NSG back, the state keeping where to look (the placement; `quarantines_left`
+    when the state was lost before). That state turns unreadable: the retry read nothing, found
+    the NICs on their own NSG and said `released`, the rule left on the quarantine NSG —
+    « I3: release said released » — and deleted the file. Unchanged oracle; repaired by the
+    operator, the teardown's release takes the normal path."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_I3U_NET)
+        m.isolate(Script(DB, DB, None))
+        tags = m.fake.nsgs[key(_SEC_Q)]["tags"]
+        del tags["managed-by"]                       # someone takes our tag off
+        m.isolate(Script(DB, DB, None))              # by rules, on the NSG the NICs carry
+        tags["managed-by"] = "glorfindel"            # and puts it back
+        assert any(n.startswith("glorfindel-iso-") for n in m.fake.nsgs[key(_SEC_Q)]["rules"])
+        steps = [*((("lose_state", DB),) if lost else ()), ("release", DB, DB, (fault, "before-429"))]
+        for rule, *draws in steps:
+            getattr(m, rule)(data=Script(*draws))
+            m.never_more_open_than_designed()
+        from glorfindel.actions import _load_isolation_state
+        assert (_load_isolation_state(DB) or {}).get("release_failed"), "the first release was not partial"
+        _unreadable_then_repaired(m, DB, lambda: m.release(Script(DB, DB, None)))
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
+        m.one_vm_one_state_file()
+    finally:
+        m.teardown()
+
+
 def _r1d(name, priority, access, direction, source, destination, port="*"):
     return _rule(name, priority, dict(access=access, direction=direction, source_address_prefix=source,
                                       destination_address_prefix=destination, destination_port_range=port))
@@ -5683,3 +5740,92 @@ def test_a_block_gone_is_said_whatever_a_check_card_write_does(monkeypatch):
             ("another_host_writes", WEB2, WEB2.lower(), ("nic.get", "always-429"), "after-foreign", True),
             ("said_then_back_after_a_full_disk", "gone", DB, DB, ("subnet.get", "always-429"), False, 22,
              (2, "from-full")))
+
+
+# I3C (#436): the reassertion's cards, whatever the case of the VM's name. Db--01 isolated
+# (blocked) on the subnet's NSG by its canonical id, its rules taken off by a `terraform apply`,
+# a pass in human_only says it; isolated again (unblocked, blocked again) by its lowercase id —
+# its state names it `db--01` —, its rules taken off again, then passes. The rule's draws, the
+# three modes of its passes put in: the block's threat port, and the unblock's id between them.
+_I3C_DRAWS = {"isolation": lambda a, b, c: (DB, "isolation", a, b, c),
+              "block": lambda a, b, c: (DB, "block", 22, a, DB, 22, b, c)}
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+@pytest.mark.parametrize("modes", [("human_only",) * 3, ("human_only", "human_only", "non_disruptive")])
+def test_a_disappearance_said_by_the_canonical_id_is_said_once_after_the_lowercase_one(monkeypatch, kind, modes):
+    """Found by I3R's review (seed 67 at 60, its second pass): the cards' ids carried the VM's
+    name with its case, the store merges a card into the pending one of the same resource
+    whatever its case and keeps that one's id. The second disappearance, said by the lowercase
+    id, was folded into the first card, under the canonical id; `drift_said` looked for the
+    exact id, found nothing: said again at every pass in human_only — and outside it, put back
+    after it was said. With `web` (no capital) it held. The machine's oracles don't count cards
+    said twice: the sequence checks it on the store — the disappearance said by the lowercase
+    id has its own card, said once, and nothing written to Azure for it after."""
+    from glorfindel import escalations
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        action = "isolate_vm" if kind == "isolation" else "block_suspicious_ip"
+
+        def drift_cards():
+            return [e for e in escalations.all_escalations() if e.get("action") == action
+                    and key(e.get("resource_id") or "") == key(DB)
+                    and (e.get("signal_id") or "").startswith("reassert-")]
+        real = m.reassert
+        seen = []
+
+        def reassert(data):
+            journal_at = len(m.fake.journal)
+            real(data)
+            seen.append((len(m.fake.journal) - journal_at, [dict(e) for e in drift_cards()]))
+        m.reassert = reassert
+        s = Script(*_I3C_DRAWS[kind](*modes))
+        m.taken_up_by_its_lowercase_id(data=s)
+        assert not s.values, f"draws unused: {s.values}"
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
+        m.one_vm_one_state_file()
+        _, (_, after_second), (writes, after_last) = seen
+        said = [e for e in after_second if e["status"] == "pending"]
+        assert len(said) == 1 and len(after_second) == 2, (
+            f"the disappearance said by the lowercase id has no card of its own: {after_second}")
+        (now,) = [e for e in after_last if e["status"] == "pending"]
+        assert now["id"] == said[0]["id"] and now.get("occurrences", 1) == 1, (
+            f"the disappearance said again by the next pass: {now}")
+        assert not writes, "the disappearance put back after it was said"
+    finally:
+        m.teardown()
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_disappearance_beside_the_graphs_card_is_said_on_its_own(monkeypatch, kind, mode):
+    """I3G (#446), measured by I3C's review (a probe): Db--01 isolated (blocked) on the subnet's
+    NSG, the graph's card on it — its check after the action failed, pending —; its rules taken off
+    by a `terraform apply`, a pass, twice, then a pass. The store folded each alert of the
+    reassertion into the graph's card (same action, resource, type, IP): in human_only the
+    disappearance said again at every pass, never notified; outside it, the second one (« ne la
+    repose pas ») folded into « reposée une fois », in silence — the VM no longer isolated
+    (blocked). L3, on the test's own journal: the graph's card keeps its words, the disappearance
+    has a card of its own, notified."""
+    from glorfindel import escalations
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        s = Script(DB, DB, None, kind == "isolation", mode, *([] if kind == "isolation" else [22]))
+        m.graph_card_before_a_disappearance(data=s)
+        assert not s.values, f"draws unused: {s.values}"
+        m.graph_cards_keep_their_words()
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
+        m.one_vm_one_state_file()
+        action = "isolate_vm" if kind == "isolation" else "block_suspicious_ip"
+        said = [e for e in escalations.all_escalations() if e.get("action") == action
+                and e["id"] not in m.graph_cards]
+        assert said and all(e["id"] in m.notified for e in said), f"an alert never notified: {said}"
+        assert all(e.get("occurrences", 1) == 1 for e in said), f"an alert said again at every pass: {said}"
+    finally:
+        m.teardown()

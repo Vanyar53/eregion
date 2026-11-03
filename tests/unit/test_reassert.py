@@ -184,12 +184,15 @@ def test_a_bypassed_block_is_said_on_its_own_card():
     assert [(e["action_params"] or {}).get("ip") for e in _bypass_cards("pending")] == [None]
 
 
-def test_vanished_block_is_put_back_once_with_its_threat_port():
+@pytest.mark.parametrize("port", [22, None], ids=["ssh", "any port"])
+def test_vanished_block_is_put_back_once_with_its_threat_port(port):
+    """Its own port, None (any) too: put back whole, the block writes the port it is given into
+    its entry (L1P) — a 22 there judged a block of any port on 22 alone."""
     _save_block_state("vm", "203.0.113.9", _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r",
-                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}], threat_port=22)
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}], threat_port=port)
     c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
     report = reassert_active(c, _ACT)
-    c.block_suspicious_ip.assert_called_once_with("203.0.113.9", _RID, scope="vm", threat_port=22)
+    c.block_suspicious_ip.assert_called_once_with("203.0.113.9", _RID, scope="vm", threat_port=port)
     assert report[0]["outcome"] == "reapplied"
     assert _load_block_entries("vm")[0]["reasserted_at"]
 

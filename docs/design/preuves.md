@@ -3629,6 +3629,74 @@ le voyait pas davantage —, et il faut une double faute pour s'y taire : la rè
 en attente, puis acquittée, puis les autres règles de l'entrée encore parties sans rien de pire.
 Relevé par la relecture 5.5, laissé tel quel.
 
+**U1G (03/11, #463) : une règle orpheline ne coupe jamais une VM vivante parce qu'elle en coupe aussi une
+que Glorfindel tient.** La graine 10 à 500 de L1Qs, figée par lui en `xfail` strict
+(`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`), rouge sur `main` 19d802d
+le `xfail` retiré. **La séquence** (quatre règles de `main`) : Db--01, ses cartes derrière nsg-tier, bloquée
+sur son sous-réseau, une de ses règles retournée, supprimée, son adresse donnée à `api` ; api bloquée, une
+de ses règles retournée, son adresse changée (10.0.0.7, l'ancienne seconde adresse de db-nic-1), une
+nouvelle VM à son ancienne ; un client change l'adresse de rg-app2/web (10.0.0.8, l'autre de db-nic-1) ;
+web de rg-app1 bloquée, retournée, supprimée, son adresse reprise. Le balayage suivant, en
+`non_disruptive`. **La cause, établie** (chaque passage de `find_orphan_rules` relevé : les cartes, les
+règles, l'état) : les deux refus de db-nic-1 (`…-db--01-db-nic-1-1232a8` et `-out`) visent 10.0.0.7 et
+10.0.0.8 — api, que Glorfindel bloque, et rg-app2/web, qu'il ne tient pas. `_held_reason` gardait la règle
+entière dès qu'**une** des VM coupées était tenue (« la VM visée (api) est isolée ou bloquée par
+Glorfindel ») : web restait coupée par une règle que personne ne tient. La garde est juste pour la VM
+tenue (sa carte recréée par un `terraform apply`, la règle de l'ancienne carte peut être son isolation :
+A3, première relecture), jamais pour une autre adresse — celle-là, la VM tenue ne la porte pas. Le refus
+entrant était gardé aussi derrière la règle retournée d'api (I5Q, l'oracle l'exempte) ; le `-out`, sans
+règle retournée de son côté, n'avait que la VM tenue pour rester. **Pourquoi l'oracle a raison** (A0) :
+`_cutting_orphans(spare=held)` n'épargne que les cartes des VM tenues ; une VM vivante non tenue, coupée
+par une orpheline après le balayage, est U1, quelle que soit l'autre VM que la règle coupe. **Correctif**
+(`glorfindel/providers/azure/narrow.py`, nouveau ; `sweep.py`, `orphans.py`) : la règle est **réduite**
+aux adresses des VM tenues — jamais retirée entière (supprimée, elle ouvrirait la VM tenue : son
+isolation peut-être). `find_orphan_rules` sépare ce qu'elle coupe : les VM tenues, et les autres
+(`free`) ; avec les deux, `_narrowed` rend les adresses gardées — `None` si une valeur n'est pas une adresse
+exacte (`*`, une plage, une étiquette : qui elle prend n'est pas lu, la règle reste entière, comme avant).
+Les autres gardes (un état illisible, une règle retournée derrière, une carte manquant à la liste, une carte
+de l'état illisible, un autre abonnement) jouent sur `free` : une règle retournée qui attend derrière pour
+la VM tenue ne la retient pas, l'adresse de la VM tenue reste refusée. L'orpheline porte `narrow` (les
+adresses gardées) et `held` (pourquoi). `remove_orphan_rule` relit l'état sur `free` (une VM tenue depuis la
+liste : laissée), rejoue la garde d'I5Q sur `free`, puis `_narrow_rule` relit la règle par son nom —
+toujours un refus, ses adresses celles de la liste, sinon laissée (« a changé depuis la liste : jugée de
+nouveau au prochain passage ») — et l'écrit avec les adresses gardées (la même forme que le blocage les
+écrit, une liste). Le balayage (`orphans.py`) : le mode qui compte est celui des VM libérées (rien ne
+change pour la VM tenue), les verrous ceux de toutes les VM coupées ; la carte dit « réduite par
+Glorfindel à 10.0.0.7 : … libérée(s) ; la VM visée (api) est isolée ou bloquée par Glorfindel (U1G) » ; en
+`human_only`, la commande `az network nsg rule update … --source-address-prefixes 10.0.0.7` (ou
+`--destination-…`), « jamais la retirer entière ». La règle réduite reste une orpheline qui ne coupe plus
+que la VM tenue : gardée et dite, comme avant. Aucune règle de la machine ajoutée, retirée ni restreinte :
+`turned_then_address_reused` et `address_reused_under_a_turned_rule` la tiraient déjà. **La séquence
+figée** passe, `xfail` retiré ; elle s'arrêtait à l'échec : le mode de sa dernière réaffirmation,
+`non_disruptive`, ajouté (comme U1O). **Tests unitaires** (`test_orphan_sweep.py`, onze, la plupart rouges
+sur `main`) : la règle qui coupe une VM bloquée (ou isolée) et une autre réduite à l'adresse de la
+première, l'autre rendue à sa conception, la première inchangée, dit ; en `human_only`, rien d'écrit, la
+commande de réduction, jamais la suppression ; le mode de la VM tenue ne retient rien, celui de la VM
+libérée oui ; la carte recréée d'une VM isolée (deux adresses, une seule gardée), l'isolation tient, la VM
+à l'autre adresse libérée — pourquoi réduite et non retirée ; une plage gardée entière ; une règle
+retournée derrière pour la VM tenue ne retient pas l'autre ; une VM tenue depuis la liste, une règle
+changée depuis la liste : rien d'écrit. **Mutants M3290–M3299** : la VM tenue garde la règle entière (M3290,
+la cause), une plage lue comme une adresse (M3291), l'écriture demande la garde pour toutes les VM coupées
+(M3292) ou rejoue I5Q sur toutes (M3293), une règle changée depuis la liste réduite quand même (M3294), le
+mode de la VM tenue compté (M3295), la suppression conseillée en `human_only` (M3296), une règle retournée
+pour la VM tenue qui retient l'autre (M3297), la règle supprimée au lieu de réduite (M3298), une réduction
+dite comme un échec (M3299). M760, M778, M779, M1741 réancrés (le même sens). **La relecture 5.5** (« ok » sur
+88adffda, trois points) : le verrou de la VM tenue n'était gardé par aucun test — la réduction relit la règle puis
+la réécrit entière ; une levée de la VM tenue entre les deux verrait son refus réécrit : le balayage prend le
+verrou de chaque VM coupée, la tenue comprise (`test_the_sweep_locks_the_held_vm_too_while_it_narrows`, mutant
+M3289 : seulement les VM libérées) ; la carte résolue au premier passage disait « retirée (A3) » d'une règle
+réduite — elle dit « réduite par Glorfindel à … » (`resolution`) ; l'étape de `human_only` dit « la watch la
+réduit seule ». **À mesurer au banc** : la réécriture d'une règle relue (`security_rules.get`, puis
+`begin_create_or_update` de l'objet relu) — ses champs en lecture seule (`provisioning_state`, `etag`, `type`)
+renvoyés tels quels, et l'`etag` : accepté, ignoré, ou refusé s'il a changé entre la lecture et l'écriture ;
+le faux ne le dit pas (`_restore_bumped` écrit déjà ainsi). La réduction à une seule adresse, en liste, comme le
+blocage l'écrit.
+**Mesures d'U1G.** Invariants, `--hypothesis-seed=N`, six à la fois : à 60 séquences, N = 10, 73, 29, 1..9,
+11..18, **20/20 vertes** ; à 500, N = 10, 73, 29, 7, **4/4 vertes** (la graine 10 comprise). Mutants M3290–M3299 et
+les quatre réancrés (M760, M778, M779, M1741) : 14/14 par leurs tests à chaque tour (deux tours). `pytest` complet :
+5 981 réussis, 7 sautés, 1 `xfail` (le L1 de L1Qs, hors du lot) ; `ruff` propre ; `scripts/mutant_anchors.py` :
+2 368 mutants, sans faute.
+
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
 (`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque

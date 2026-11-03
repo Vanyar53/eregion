@@ -6076,8 +6076,6 @@ _TIER = "/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/netw
 _API_NEW = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/api"
 
 
-@pytest.mark.xfail(strict=True, reason="U1, an older defect of the orphan sweep: L1Qs' seed 10 at 500, red on `main`, "
-                                       "out of this lot (#424)")
 def test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off(monkeypatch):
     """Found by the machine while measuring L1Qs (seed 10 at 500; 92 draws, shrunk by hand to four
     rules of `main`, none of L1Qs'): Db--01 blocked on its subnet's NSG (nsg-tier, shared by its
@@ -6085,7 +6083,10 @@ def test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off(mo
     one of its rules turned, its address changed, given to another; a customer changes web2's
     address; web blocked on its subnet and for itself, turned, its address reused. The orphan sweep
     leaves « glorfindel-block-…-db--01-db-nic-1-…-out » on nsg-tier, a live VM cut off by it (U1).
-    Red on `main` as on this branch: frozen, routed (not this lot's)."""
+    Red on `main` 19d802d. U1G (#463), the cause: Db--01's rules deny .7 and .8 — api (blocked by
+    Glorfindel) at one, rg-app2/web (held for nothing) at the other; the held VM shielded the whole
+    rule (`_held_reason`), web stayed cut. Now the rule is narrowed to api's address (narrow.py).
+    The sequence stopped at the failure: the last reassertion's mode drawn added, `non_disruptive`."""
     from .test_invariants import _TEMPLATES
 
     def r(name, prio):
@@ -6103,7 +6104,7 @@ def test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off(mo
          ("customer_changes_ip", _nic("rg-app2", "web-nic"), 0, 4),
          ("turned_then_address_reused", WEB1, WEB1, None, None, "both", 22,
           (_TIER, "glorfindel-block-192-31-196-7-api-api-nic-4-b-4b1857"), "human_only", False, 22, False,
-          "rg-app1", "web", True, "non_disruptive"))
+          "rg-app1", "web", True, "non_disruptive", "non_disruptive"))
 
 
 def test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone(monkeypatch):

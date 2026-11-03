@@ -856,9 +856,10 @@ def test_a_change_that_comes_back_after_its_record_was_lost_is_said_again(monkey
 
 
 def test_a_change_whose_card_could_not_be_written_leaves_the_former_unsilenced(monkeypatch):
-    """Change A said; B: A's card closed, B's card not written (the escalations store
-    refused). Back to A, with the file still saying A: Glorfindel closed A itself — that is
-    no acknowledgement. Said again."""
+    """Change A said; B: B's card not written (the escalations store refused). A's card was
+    closed first, and nothing said the NSG until the pass came back; it is closed only in
+    B's write now, refused with it: A's card still waits (L1A). Back to A, with the file
+    still saying A: said — A's own card, never silenced by the file."""
     from glorfindel import cli
     c = _quarantines(*[("altered", d) for d in (_DENY_IN, _FORENSIC, _DENY_IN)])
     cli._watch_reassert_pass(c, None)
@@ -867,7 +868,8 @@ def test_a_change_whose_card_could_not_be_written_leaves_the_former_unsilenced(m
     monkeypatch.setattr(escalations, "record", MagicMock(side_effect=OSError(28, "No space left on device")))
     cli._watch_reassert_pass(c, None)
     monkeypatch.setattr(escalations, "record", real)
-    assert not _cards("pending") and reassert_quarantine._load_quarantine_alerts() == {_QNSG.lower(): a}
+    assert [e["signal_id"] for e in _cards("pending")] == [a]
+    assert reassert_quarantine._load_quarantine_alerts() == {_QNSG.lower(): a}
     cli._watch_reassert_pass(c, None)
     (card,) = _cards("pending")
     assert card["signal_id"] == a
@@ -2712,3 +2714,186 @@ def test_the_first_time_decides_on_an_acknowledged_episode_as_the_second():
     assert b["drift_said"] == _situation(_GONE_BOTH)
     assert _to_write(b, _PAIR_BACK, _ACT, "vm", _RID, _IP, _RID)
     assert not _to_write(b, _GONE_BOTH, _ACT, "vm", _RID, _IP, _RID)
+
+
+# ── L1A (#480): a card is closed in the write of the card that replaces it, never before ──
+
+def _store_full(monkeypatch):
+    """The escalations store refuses the write that adds a card (the disk full by then: the
+    machine's fault from its n-th write lands on it, as at the seed 42) — a rewrite of the cards
+    it holds, a closure, goes through, as does every other write. Returns what gives the disk back."""
+    real = escalations._write_lines
+
+    def full(lines):
+        held = escalations._STORE.read_text().splitlines() if escalations._STORE.exists() else []
+        if len([ln for ln in lines if ln.strip()]) > len([ln for ln in held if ln.strip()]):
+            raise OSError(28, "No space left on device")
+        real(lines)
+    monkeypatch.setattr(escalations, "_write_lines", full)
+    return lambda: monkeypatch.setattr(escalations, "_write_lines", real)
+
+
+def test_a_card_replaced_is_closed_in_the_write_of_its_successor(monkeypatch):
+    """`record(replaces=…)`: the former card closed, with its note, in the very write of the new
+    one — refused, neither happens; a card the operator closed meanwhile keeps his word."""
+    a = escalations.record(signal_id="reassert-a", resource_id=_RID, action="isolate_vm",
+                           escalation_type="verification_failed", reason="A")
+    give_back = _store_full(monkeypatch)
+    with pytest.raises(OSError):
+        escalations.record(signal_id="reassert-a", resource_id=_RID, action="isolate_vm",
+                           escalation_type="verification_failed", reason="B", replaces={a: "Remplacée."})
+    give_back()
+    assert [(e["id"], e["status"]) for e in escalations.all_escalations()] == [(a, "pending")]
+    b = escalations.record(signal_id="reassert-a", resource_id=_RID, action="isolate_vm",
+                           escalation_type="verification_failed", reason="B", replaces={a: "Remplacée."})
+    old, new = escalations.all_escalations()
+    assert (old["id"], old["status"], old["resolution"]) == (a, "resolved", "Remplacée.")
+    assert (new["id"], new["status"], new["reason"]) == (b, "pending", "B")       # never folded into A
+    escalations.resolve(b)                                                         # the operator
+    escalations.record(signal_id="reassert-a", resource_id=_RID, action="isolate_vm",
+                       escalation_type="verification_failed", reason="C", replaces={b: "Remplacée."})
+    assert "resolution" not in escalations.all_escalations()[1]
+
+
+def test_a_block_said_again_on_a_full_store_keeps_its_card_while_unchecked(monkeypatch):
+    """The seed 42 at 500 (L1A, #480), by hand: a block's drift said, its card pending; worse (a
+    second rule gone), said again — `_alert` closed the pending card, then the new one was refused
+    (a full disk): no card, the mark kept from before. The next pass can't check the block (the
+    check raises): it said nothing — gone, unsaid (L1). The former card waits now; read again,
+    the drift is said, the former card closed in that write."""
+    placed = [{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}, {"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r2"}]
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg", nsg_scope="subnet", rule="r", placements=placed,
+                      threat_port=22)
+    human = AutonomyConfig(default="human_only")
+    c = _connector(verify_blk={"verified": False, "missing_rules": ["r"]})
+    reassert_active(c, human)
+    (card,) = _block_drift_cards()
+    mark = _load_block_entries("vm")[0]["drift_alerted_at"]
+    c.verify_block_ip.return_value = {"verified": False, "missing_rules": ["r", "r2"]}
+    give_back = _store_full(monkeypatch)
+    assert [r["outcome"] for r in reassert_active(c, human)] == ["failed"]         # said: not written
+    give_back()
+    assert [e["id"] for e in _block_drift_cards()] == [card["id"]]
+    assert _load_block_entries("vm")[0]["drift_alerted_at"] == mark                # the mark as it was
+    c.verify_block_ip.side_effect = RuntimeError("(AuthorizationFailed)")
+    reassert_active(c, human)
+    assert [e["id"] for e in _block_drift_cards()] == [card["id"]]                # still said
+    c.verify_block_ip.side_effect = None
+    reassert_active(c, human)
+    (now,) = _block_drift_cards()
+    assert now["id"] != card["id"]
+    (old,) = [e for e in escalations.all_escalations() if e["id"] == card["id"]]
+    assert old["status"] == "resolved" and old["resolution"].startswith("Remplacée")
+
+
+def test_an_isolation_gone_again_on_a_full_store_keeps_its_card_and_no_mark(monkeypatch):
+    """Put back once, said (« reposée une fois »); gone again, the second card refused: the first
+    still waits, no mark written (L1F) — the next pass says it, the first card closed in that write."""
+    _isolated()
+    c = _connector({"verified": False, "uncovered_nics": ["nic-a"]})
+    reassert_active(c, _ACT)
+    (first,) = escalations.pending()
+    give_back = _store_full(monkeypatch)
+    assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["failed"]
+    give_back()
+    assert [e["id"] for e in escalations.pending()] == [first["id"]]
+    assert "drift_alerted_at" not in _load_isolation_state("vm")
+    reassert_active(c, _ACT)
+    (now,) = escalations.pending()
+    assert "deuxième fois" in now["reason"] and now["id"] != first["id"]
+
+
+def test_a_bypass_changed_on_a_full_store_keeps_its_former_card(monkeypatch):
+    """A bypass A said; it changes to B, B's card refused: A was closed first, and a pass that
+    can't tell (`verified: None`) said nothing of the bypass. A waits now, its mark too; B read
+    again, B's card closes A in its write."""
+    _isolated()
+    c = _connector(_bypass(_ALLOW))
+    reassert_active(c, _ACT)
+    (a,) = _bypass_cards("pending")
+    c.verify_isolation.return_value = _bypass(_ALLOW, _RDP)
+    give_back = _store_full(monkeypatch)
+    reassert_active(c, _ACT)
+    give_back()
+    assert _bypass_cards("pending") == [a] and _load_isolation_state("vm")["bypass_said"] == a["signal_id"]
+    c.verify_isolation.return_value = {"verified": None, "error": "règles illisibles"}
+    reassert_active(c, _ACT)
+    assert [e["id"] for e in _bypass_cards("pending")] == [a["id"]]
+    c.verify_isolation.return_value = _bypass(_ALLOW, _RDP)
+    reassert_active(c, _ACT)
+    (b,) = _bypass_cards("pending")
+    assert "allow-rdp" in b["reason"]
+    assert [e["resolution"] for e in _bypass_cards("resolved")] == ["Contournement changé : une nouvelle carte le dit."]
+
+
+def test_left_rules_changed_on_a_full_store_keep_their_former_card(monkeypatch):
+    """Another set of rules left, its card refused: the former card still waits (L1A)."""
+    from glorfindel.reassert_cards import say_left
+    say_left("vm", _RID, _IP, _left("glorfindel-block-a"), [], _RID)
+    (a,) = _left_cards("pending")
+    give_back = _store_full(monkeypatch)
+    with pytest.raises(OSError):
+        say_left("vm", _RID, _IP, _left("glorfindel-block-b"), [], _RID)
+    give_back()
+    assert _left_cards("pending") == [a]
+    say_left("vm", _RID, _IP, _left("glorfindel-block-b"), [], _RID)
+    (b,) = _left_cards("pending")
+    assert "glorfindel-block-b" in b["reason"] and _left_cards("resolved")[0]["id"] == a["id"]
+
+
+def test_an_unreadable_set_changed_on_a_full_store_keeps_its_former_card(monkeypatch):
+    """Another set of state files unreadable, its card refused: the former card still waits; the
+    files all read again, it closes — no new card to write (L1A)."""
+    from glorfindel import actions
+    from glorfindel.reassert_cards import say_unreadable_states
+    _broken("a--00000000.json")
+    say_unreadable_states([])
+    (a,) = _state_cards("pending")
+    _broken("b--00000000.json")
+    give_back = _store_full(monkeypatch)
+    with pytest.raises(OSError):
+        say_unreadable_states([])
+    give_back()
+    assert _state_cards("pending") == [a]
+    say_unreadable_states([])
+    (b,) = _state_cards("pending")
+    assert b["id"] != a["id"] and _state_cards("resolved")[0]["id"] == a["id"]
+    for name in ("a--00000000.json", "b--00000000.json"):
+        (actions._ISOLATION_STATE_DIR / name).unlink()
+    say_unreadable_states([])
+    assert not _state_cards("pending")
+
+
+def test_a_quarantine_changed_on_a_full_store_keeps_its_former_card(monkeypatch):
+    """A quarantine NSG's change A said; B's card refused — by the store's write, not a mock of
+    `record`: A still waits; B said next, A closed in its write, with its note (L1A)."""
+    from glorfindel.reassert import reassert_pass
+    c = _quarantines(*[("altered", d) for d in (_DENY_IN, _FORENSIC, _FORENSIC)])
+    reassert_pass(c, _ACT)
+    (a,) = _cards("pending")
+    give_back = _store_full(monkeypatch)
+    with pytest.raises(OSError):
+        reassert_pass(c, _ACT)
+    give_back()
+    assert _cards("pending") == [a]
+    reassert_pass(c, _ACT)
+    (b,) = _cards("pending")
+    assert b["id"] != a["id"] and "forensic" in b["reason"]
+    assert [e["resolution"] for e in _cards("resolved")] == [reassert_quarantine._CHANGED]
+
+
+def test_a_quarantine_whole_again_then_back_is_said_while_its_record_is_kept(monkeypatch):
+    """A change said; the NSG whole again — its card closed by Glorfindel, with its note — while
+    quarantine_alerts.json can't be written (it keeps the change). The same change back: said,
+    never read as the operator's acknowledgement (L2Q; M1861, realigned by L1A)."""
+    from glorfindel.reassert import reassert_pass
+    c = _quarantines(("altered", _DENY_IN), ("whole", []), ("altered", _DENY_IN))
+    reassert_pass(c, _ACT)
+    (a,) = _cards("pending")
+    give_back = _alerts_unwritable(monkeypatch)
+    reassert_pass(c, _ACT)
+    give_back()
+    assert not _cards("pending") and _cards("resolved")[0]["resolution"] == reassert_quarantine._SETTLED
+    reassert_pass(c, _ACT)
+    (card,) = _cards("pending")
+    assert card["signal_id"] == a["signal_id"] and card["id"] != a["id"]

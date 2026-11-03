@@ -791,6 +791,7 @@ def test_signing_is_offline_and_keeps_a_bundle_without_certificate(pim, sig, tmp
         return _done(argv)
     assert pim.sign_blob(f, key, sig.path, runner=runner) == 0
     assert seen[0][:4] == [str(sig.path), "sign-blob", "--key", str(key)] and seen[0][-1] == str(f)
+    assert "--yes" not in seen[0]          # a cosign that would send anything still asks first
     assert pim.bundle_refusal(pim.bundle_of(f)) == "" and "à commiter" in capsys.readouterr().out
 
     def with_cert(argv):
@@ -826,16 +827,16 @@ def test_the_key_pair_is_drawn_once_off_the_repository_never_over_one(pim, sig, 
         (Path(cwd) / "cosign.pub").write_text(pim.pem_of(me))
         return _done(argv)
     d = tmp_path / "harness"
-    assert pim.generate_key(d, sig.path, run_in=run_in) == 0
+    assert pim.generate_key(d, sig.path, run_in=run_in, tty=True) == 0
     assert seen[0][0] == [str(sig.path), "generate-key-pair", "--output-key-prefix", "cosign"] and seen[0][1] == d
     import stat
     assert stat.S_IMODE(d.stat().st_mode) == 0o700 and stat.S_IMODE((d / "cosign.key").stat().st_mode) == 0o600
     out = capsys.readouterr().out
     assert f"EREGION_HARNESS_KEY={_keys()[2]}" in out and pim.key_hint(me)[:12] in out
-    assert pim.generate_key(d, sig.path, run_in=run_in) == 1 and len(seen) == 1      # never over a key
+    assert pim.generate_key(d, sig.path, run_in=run_in, tty=True) == 1 and len(seen) == 1      # never over a key
     link = tmp_path / "link"
     link.symlink_to(tmp_path / "elsewhere")
-    assert pim.generate_key(link, sig.path, run_in=run_in) == 1 and len(seen) == 1
+    assert pim.generate_key(link, sig.path, run_in=run_in, tty=True) == 1 and len(seen) == 1
 
 
 def test_the_command_line_verifies_a_file(pim, sig, tmp_path):
@@ -847,3 +848,50 @@ def test_the_command_line_verifies_a_file(pim, sig, tmp_path):
     pub = tmp_path / "cosign.pub"
     pub.write_text(pim.pem_of(me))
     assert pim.main(["verify-blob", str(f), "--pub", str(pub), "--cosign", str(sig.path)]) == 0
+
+
+def test_the_passphrase_is_never_passed_by_the_environment(pim, sig, tmp_path, monkeypatch):
+    """COSIGN_PASSWORD exported would sign, or draw a key, without anything typed: filtered out of
+    what cosign runs in, for the signature as for the key."""
+    assert "COSIGN_PASSWORD" not in pim.typed_env({"COSIGN_PASSWORD": "x", "PATH": "/bin"})
+    assert pim.typed_env({"PATH": "/bin"}) == {"PATH": "/bin"}
+    monkeypatch.setenv("COSIGN_PASSWORD", "exported-by-mistake")
+    seen = []
+
+    def run(argv, **kw):
+        seen.append(kw.get("env"))
+        return _done(argv, code=1)
+    monkeypatch.setattr(pim.subprocess, "run", run)
+    f = tmp_path / "harness.json"
+    f.write_text("{}\n")
+    key = tmp_path / "cosign.key"
+    key.write_text("encrypted")
+    assert pim.sign_blob(f, key, sig.path) == 1
+    assert pim.generate_key(tmp_path / "harness", sig.path, tty=True) == 1
+    assert len(seen) == 2 and all(env is not None and "COSIGN_PASSWORD" not in env for env in seen)
+
+
+def test_the_key_is_drawn_only_at_a_terminal_and_never_under_the_repository(pim, sig, tmp_path, capsys):
+    calls = []
+
+    def run_in(argv, cwd):
+        calls.append(argv)
+        return _done(argv)
+    assert pim.generate_key(tmp_path / "harness", sig.path, run_in=run_in, tty=False) == 1
+    assert "pas de terminal" in capsys.readouterr().err
+    assert pim.generate_key(ROOT / "requirements" / "harness-key", sig.path, run_in=run_in, tty=True) == 1
+    assert "dans le dépôt" in capsys.readouterr().err
+    assert calls == [] and not (ROOT / "requirements" / "harness-key").exists()
+
+
+def test_a_private_key_is_never_committed():
+    ignored = (ROOT / ".gitignore").read_text().splitlines()
+    assert "cosign.key" in ignored and "*.key" in ignored
+
+
+def test_verifying_without_a_key_says_the_gesture(pim, sig, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("EREGION_HARNESS_KEY_DIR", str(tmp_path / "no-key-here"))
+    f = _blob(tmp_path)
+    assert pim.main(["verify-blob", str(f), "--cosign", str(sig.path)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("✗ aucune clé à vérifier") and "PINNED=" in err and "Traceback" not in err

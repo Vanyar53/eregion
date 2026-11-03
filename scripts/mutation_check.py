@@ -10100,6 +10100,25 @@ TESTS.update({**{f"M{n}": _SEC19_KEY for n in range(3240, 3254) if n != 3244},
               **{f"M{n}": f"tests/unit/test_published_image.py {_SEC19_CD}" for n in (3255, 3258, 3259)}})
 
 
+# SEC19, the second review's hardening: the passphrase typed, never inherited; the key drawn at a
+# terminal, never under the repository; the watch's orphaned temporary swept; no --yes. M3425–M3429.
+_SEC19_HARD = "tests/unit/test_published_image.py"
+MUTANTS += [
+    ("M3425", "COSIGN_PASSWORD exported signs without anything typed (SEC19, R-13)", "scripts/published_image.py",
+     ".items() if k not in TYPED_ONLY}", ".items()}"),
+    ("M3426", "a copy of the watch's private key a crash left is never swept (SEC19)", "eregion_core/watch_key.py",
+     "        _sweep(directory)\n", ""),
+    ("M3427", "the attestation's key drawn without a terminal: its passphrase read from stdin (SEC19, R-13)",
+     "scripts/published_image.py", "    if not (sys.stdin.isatty() if tty is None else tty):\n", "    if False:\n"),
+    ("M3428", "the attestation's private key drawn under the repository (SEC19, R-13)", "scripts/published_image.py",
+     "    if real == REPO.resolve() or REPO.resolve() in real.parents:\n", "    if False:\n"),
+    ("M3429", "the signature confirmed without asking: a cosign that would send it never asks (SEC19, R-13)",
+     "scripts/published_image.py", '                "--bundle", str(bundle), str(path)]\n',
+     '                "--bundle", str(bundle), "--yes", str(path)]\n'),
+]
+TESTS.update({**{f"M{n}": _SEC19_HARD for n in (3425, 3427, 3428, 3429)}, "M3426": "tests/unit/test_watch_key.py"})
+
+
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;
 # tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).

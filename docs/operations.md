@@ -1115,8 +1115,11 @@ refuse tout nouveau verrou et le dit. Rien ne se déploie en silence.
 
 **La clé de l'attestation, une fois** (Jonathan) : `make harness-key`. cosign tire la paire dans
 `~/.config/eregion/harness/` (0700), la clé privée chiffrée par la phrase de passe que tu tapes —
-jamais dans `.envrc`, jamais dans un fichier du dépôt —, `cosign.key` en 0600 ; la commande refuse
-un lien ou une clé déjà là, et imprime la ligne à épingler, `EREGION_HARNESS_KEY=…` : le DER de la
+jamais dans `.envrc`, jamais dans un fichier du dépôt ; **une phrase vide laisse la clé sans
+protection** —, `cosign.key` en 0600 ; la commande refuse hors d'un terminal (cosign lirait la phrase
+sur l'entrée standard), une destination sous le dépôt (`*.key` est aussi dans `.gitignore`), un lien
+ou une clé déjà là ; `COSIGN_PASSWORD` n'est jamais passé à cosign, ni ici ni par `make harness-sign` :
+la phrase se tape à chaque fois, et imprime la ligne à épingler, `EREGION_HARNESS_KEY=…` : le DER de la
 clé publique (`cosign.pub` sans ses deux lignes PEM) en base64, **sur une ligne, sans guillemets**
 (le CD lit `host.env` comme compose, une ligne par clé, et garderait les guillemets). Les sessions
 tournent sous ton utilisateur Unix (SEC12) et s'interdisent de lire `~/.config/eregion/` : la
@@ -1180,7 +1183,10 @@ secours reste `make glorfindel-host-start REF=<tag>`.
 (`python3 scripts/published_image.py harness-key <dir>`, ou l'ancienne retirée d'abord), la nouvelle
 ligne dans `host.env`, `make glorfindel-host-push`, puis re-signer l'attestation du verrou en attente
 (`make harness-sign KEY=<dir>/cosign.key`). Révoquer : vider `EREGION_HARNESS_KEY` dans `host.env` et
-pousser — plus aucun nouveau verrou n'est cru. Une clé volée signe comme toi jusque-là.
+pousser — plus aucun nouveau verrou n'est cru. Une clé volée signe comme toi jusque-là. Après une
+rotation, un retour arrière vers une release dont le verrou diffère de celui en service, et dont
+l'attestation est signée par l'ancienne clé, est refusé (« signée d'une autre clé ») : le secours
+reste `make glorfindel-host-start REF=<tag>`.
 
 **Si l'ordre n'est pas tenu** :
 - la release publiée avant l'étape 2 : `~/.eregion/watch-key` est créé par docker, au nom de root ;
@@ -1500,7 +1506,7 @@ git add requirements/harness.json       # dans la PR du verrou
 
 ```bash
 make harness-sign                       # la clé de make harness-key ; cosign demande sa phrase de passe
-make harness-verify                     # ce que H0 en dira (PINNED=<valeur de EREGION_HARNESS_KEY> : celle de host.env)
+make harness-verify                     # ta cosign.pub locale ; PINNED=<valeur de EREGION_HARNESS_KEY> : la clé de host.env
 git add requirements/harness.json requirements/harness.json.sigstore.json
 ```
 
@@ -1514,7 +1520,9 @@ entrée du journal. Mesuré le 03/11 avec cosign v3.1.3 et une paire jetable, le
 v3.1.3 n'a plus `--tlog-upload` ; `--use-signing-config=false` seul envoie encore à
 rekor.sigstore.dev ; seule une config de signature sans service garde la signature hors du
 journal. Toute modification de l'attestation après la signature la rend invalide : la signer en
-dernier. Le CD la vérifie avec la clé publique épinglée dans `host.env` (`EREGION_HARNESS_KEY`),
+dernier. **`make harness-verify` lit par défaut ta `cosign.pub` locale, pas la clé de `host.env`** :
+pour vérifier exactement ce que H0 croira, `make harness-verify PINNED=<la valeur de
+EREGION_HARNESS_KEY>`. Le CD la vérifie avec la clé publique épinglée dans `host.env` (`EREGION_HARNESS_KEY`),
 jamais avec ce que dit le dépôt (`infra/glorfindel-host/README.md`, « L'attestation du harnais »).
 
 **Deux passages** (H3, #324, `scripts/harness_attest.py`). Le harnais tourne d'abord sur la

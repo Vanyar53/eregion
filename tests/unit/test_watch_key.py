@@ -466,3 +466,20 @@ def test_only_the_watch_s_docker_run_mounts_the_key():
 def test_the_shell_s_message_says_the_key_is_not_mounted_there(tmp_path):
     with pytest.raises(watch_key.KeyUnavailable, match="glorfindel-shell it is not mounted"):
         watch_key.read_public(tmp_path / "absent")
+
+
+def test_a_temporary_a_crash_left_is_swept_never_followed(tmp_path):
+    """A crash between the link and the unlink leaves a copy of the private key: swept at the next
+    start; a link of that name removed itself, never what it points to."""
+    d = tmp_path / "watch-key"
+    d.mkdir(mode=0o700)
+    orphan = d / f".{watch_key.KEY_FILE}.123.abcdef"
+    fd = os.open(orphan, os.O_WRONLY | os.O_CREAT, 0o600)
+    os.write(fd, bytes(32))
+    os.close(fd)
+    outside = tmp_path / "outside"
+    outside.write_text("kept")
+    (d / f".{watch_key.KEY_FILE}.456.link").symlink_to(outside)
+    watch_key.load_or_create(d)
+    assert sorted(p.name for p in d.iterdir()) == [watch_key.KEY_FILE]
+    assert outside.read_text() == "kept"

@@ -163,15 +163,37 @@ def _read_key(path: Path) -> bytes:
     return data
 
 
+def _sweep(directory: Path) -> None:
+    """The temporaries of a draw a crash cut (between the link and the unlink): each a copy of the
+    private key — removed, a link removed itself, never what it points to."""
+    prefix = f".{KEY_FILE}."
+    with os.scandir(directory) as it:
+        for e in it:
+            if e.name.startswith(prefix) and not e.is_dir(follow_symlinks=False):
+                os.unlink(os.path.join(directory, e.name))
+
+
+def _fsync_dir(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def load_or_create(directory: Path | None = None) -> Signer:
-    """The watch's key: read from its directory, drawn there when absent (``O_EXCL``: two watches
-    starting together never write two). Raises KeyUnavailable."""
+    """The watch's key: read from its directory, drawn there when absent — whole, in a file of its
+    own (``O_EXCL``, a unique name), fsync'd, then published by a link and the directory fsync'd:
+    a full disk or a crash never leaves a partial key under its name, and two watches starting
+    together never write two. A temporary a crash left (``.watch_ed25519.*``, a copy of the private
+    key) is swept first — removed, never followed. Raises KeyUnavailable."""
     directory = Path(directory) if directory is not None else key_dir()
     why = _misplaced(directory)
     if why:
         raise KeyUnavailable(why)
     try:
         _held_dir(directory)
+        _sweep(directory)
         path = directory / KEY_FILE
         try:
             return Signer(_read_key(path))
@@ -197,6 +219,7 @@ def load_or_create(directory: Path | None = None) -> Signer:
                 pass
         finally:
             tmp.unlink(missing_ok=True)
+        _fsync_dir(directory)
         return Signer(_read_key(path))
     except KeyUnavailable:
         raise

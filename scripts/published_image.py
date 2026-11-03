@@ -468,9 +468,20 @@ def verify_blob(path: Path, bundle: Path, pinned: str, cosign: Path, runner: Run
                      "elle est illisible", _last(res))
 
 
+# cosign reads the private key's passphrase from COSIGN_PASSWORD when it is set (and from stdin when
+# stdin is no terminal): exported in a shell, it would sign — or draw a key — without anything typed.
+TYPED_ONLY = ("COSIGN_PASSWORD",)
+
+
+def typed_env(environ=None) -> dict:
+    """The environment cosign runs in for a gesture with the key: the passphrase never passed."""
+    return {k: v for k, v in (os.environ if environ is None else environ).items() if k not in TYPED_ONLY}
+
+
 def sign_blob(path: Path, key: Path, cosign: Path, runner: Runner | None = None) -> int:
-    """Jonathan's gesture: `path` signed by his key (cosign asks its passphrase), offline, the bundle
-    written beside it — kept only if it holds no certificate and no log entry."""
+    """Jonathan's gesture: `path` signed by his key (cosign asks its passphrase, typed: never from
+    COSIGN_PASSWORD), offline, the bundle written beside it — kept only if it holds no certificate
+    and no log entry. Without --yes: a cosign that would send anything still asks first."""
     if not Path(path).is_file():
         print(f"✗ {path} absent : make llm-compare … ATTEST=1 d'abord", file=sys.stderr)
         return 1
@@ -487,8 +498,8 @@ def sign_blob(path: Path, key: Path, cosign: Path, runner: Runner | None = None)
         config = Path(tmp) / "no-services.json"
         config.write_text(NO_SERVICES)
         argv = [str(cosign), "sign-blob", "--key", str(key), "--signing-config", str(config),
-                "--bundle", str(bundle), "--yes", str(path)]
-        res = (runner or (lambda a: subprocess.run(a, check=False)))(argv)
+                "--bundle", str(bundle), str(path)]
+        res = (runner or (lambda a: subprocess.run(a, env=typed_env(), check=False)))(argv)
     if res.returncode != 0:
         print(f"✗ cosign sign-blob a échoué (code {res.returncode}) : rien n'est signé", file=sys.stderr)
         return 1
@@ -501,11 +512,22 @@ def sign_blob(path: Path, key: Path, cosign: Path, runner: Runner | None = None)
     return 0
 
 
-def generate_key(dest: Path, cosign: Path, run_in=None) -> int:
+def generate_key(dest: Path, cosign: Path, run_in=None, tty: bool | None = None) -> int:
     """`make harness-key`, once: the pair drawn by cosign in `dest` (its private half encrypted by
-    the passphrase Jonathan types; 0600), never over a key already there, never through a link.
-    Prints the line to pin in host.env and the key's hint."""
+    the passphrase Jonathan types at a terminal; 0600), never over a key already there, never
+    through a link, never under the repository. Prints the line to pin in host.env and the key's
+    hint."""
     dest = Path(dest)
+    if not (sys.stdin.isatty() if tty is None else tty):
+        print("✗ pas de terminal : cosign lirait la phrase de passe sur l'entrée standard — lancer "
+              "make harness-key dans un terminal, et taper la phrase (vide, la clé n'est pas protégée)",
+              file=sys.stderr)
+        return 1
+    real = dest.resolve()
+    if real == REPO.resolve() or REPO.resolve() in real.parents:
+        print(f"✗ {dest} est dans le dépôt : la clé privée n'y va jamais (le défaut : ~/.config/eregion/harness)",
+              file=sys.stderr)
+        return 1
     if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
         print(f"✗ {dest} n'est pas un répertoire (un lien ?) : rien n'est écrit", file=sys.stderr)
         return 1
@@ -520,8 +542,7 @@ def generate_key(dest: Path, cosign: Path, run_in=None) -> int:
         return 1
     dest.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(dest, 0o700)
-    env = {k: v for k, v in os.environ.items() if k != "COSIGN_PASSWORD"}   # typed, never passed
-    res = (run_in or (lambda a, cwd: subprocess.run(a, cwd=cwd, env=env, check=False)))(
+    res = (run_in or (lambda a, cwd: subprocess.run(a, cwd=cwd, env=typed_env(), check=False)))(
         [str(cosign), "generate-key-pair", "--output-key-prefix", KEY_PREFIX], dest)
     if res.returncode != 0 or not key.is_file() or not pub.is_file():
         print(f"✗ cosign generate-key-pair a échoué (code {res.returncode}) : aucune clé", file=sys.stderr)
@@ -712,7 +733,12 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
             key = Path(a.key) if a.key else harness_key_dir() / f"{KEY_PREFIX}.key"
             return sign_blob(Path(a.image), key, cosign, None if runner is run else runner)
         if a.cmd == "verify-blob":
-            pinned = a.pinned or pinned_of_pem(Path(a.pub or harness_key_dir() / f"{KEY_PREFIX}.pub").read_text())
+            pub = Path(a.pub or harness_key_dir() / f"{KEY_PREFIX}.pub")
+            if not a.pinned and not pub.is_file():
+                print(f"✗ aucune clé à vérifier : {pub} absent — make harness-key, ou PINNED=<la valeur de "
+                      f"{HARNESS_KEY_ENV} dans host.env> (make harness-verify PINNED=…)", file=sys.stderr)
+                return 1
+            pinned = a.pinned or pinned_of_pem(pub.read_text())
             verify_blob(Path(a.image), bundle_of(Path(a.image)), pinned, cosign, runner)
             print(f"✓ {a.image} : signée par la clé {key_hint(key_der(pinned))[:12]}…, la signature couvre ce fichier")
             return 0

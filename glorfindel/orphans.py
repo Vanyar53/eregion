@@ -321,19 +321,31 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         # every holder as cut.
         cut = o.get("cut", o["now_on"])
         hit = (cut or o["now_on"] or [None])[0]
-        victims = [_short(h.get("vm_id") or h.get("nic_id") or "") for h in cut]
+        # Narrowed (U1G): the mode is that of the VMs it frees — a VM Glorfindel holds
+        # keeps its addresses, nothing of it changes; every VM it cuts is locked still.
+        narrow = o.get("narrow") or []
+        freed = [h for h in cut if (h.get("ip") or "") not in narrow] if narrow else cut
+        locked = [_short(h.get("vm_id") or h.get("nic_id") or "") for h in cut]
+        victims = [_short(h.get("vm_id") or h.get("nic_id") or "") for h in freed]
         modes = {v: _configured_mode(autonomy, v) for v in victims}
         alone = (can_write and o.get("removable") is True and bool(modes)
                  and all(m in _ALONE for m in modes.values()))
         delete = f"az network nsg rule delete -g {nsg_rg} --nsg-name {nsg_name} -n {o['rule']}"
+        if narrow:
+            delete = (f"az network nsg rule update -g {nsg_rg} --nsg-name {nsg_name} -n {o['rule']} "
+                      f"--{o.get('side') or 'destination'}-address-prefixes {' '.join(narrow)}")
         out: dict = {}
         if alone:
-            out = _remove(connector, o, victims)
+            out = _remove(connector, o, locked)
             if out.get("busy"):
                 continue                          # a write on that VM: the next pass
+            if out.get("narrowed") is True:
+                out = {**out, "removed": True}    # for the VMs it freed: as taken off
             if out.get("removed") is True:
                 card = alerts.pop(k, None)
-                note = f"Règle {o['rule']} retirée par Glorfindel (A3)."
+                note = (f"Règle {o['rule']} réduite par Glorfindel à {', '.join(narrow)} : "
+                        f"{', '.join(_who(h) for h in freed)} libérée(s) ; {o.get('held') or ''} (U1G)."
+                        if narrow else f"Règle {o['rule']} retirée par Glorfindel (A3).")
                 if card and _pending(card) and card not in alerts.values():   # shared: still said (I5Q)
                     escalations.resolve(card, note=note)
                     report.append({"kind": "orphan", "vm": victims[0], "outcome": "removed", "detail": note})
@@ -357,7 +369,8 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
                 f"Ensuite seulement, la watch retire {', '.join(g['rule'] for g in mates)} à son passage "
                 "suivant (mode non_disruptive) — jamais avant : la VM serait ouverte."]
         if out.get("removed") is True:
-            reason += " Glorfindel l'a retirée."
+            reason += (f" Glorfindel l'a réduite à {', '.join(narrow)} : {o.get('held') or ''}."
+                       if narrow else " Glorfindel l'a retirée.")
         elif out:
             reason += f" Glorfindel n'a pas pu la retirer : {out.get('why') or 'échec'}."
         elif o.get("removable") is not True:
@@ -367,9 +380,15 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             reason += " Droits en lecture seule : Glorfindel ne la retire pas."
         else:
             held = ", ".join(f"{v} ({m})" for v, m in modes.items() if m not in _ALONE)
-            reason += (f" Mode {held} : Glorfindel ne la retire pas seul — la retirer "
-                       f"(`{delete}`), ou donner à la VM le mode non_disruptive : la watch la "
-                       "retire alors à son passage suivant.")
+            if narrow:
+                reason += (f" Mode {held} : Glorfindel ne la réduit pas seul — la réduire à "
+                           f"{', '.join(narrow)} (`{delete}`), jamais la retirer entière : "
+                           f"{o.get('held') or ''} ; ou donner à la VM le mode non_disruptive : la watch "
+                           "la réduit alors à son passage suivant (U1G).")
+            else:
+                reason += (f" Mode {held} : Glorfindel ne la retire pas seul — la retirer "
+                           f"(`{delete}`), ou donner à la VM le mode non_disruptive : la watch la "
+                           "retire alors à son passage suivant.")
             steps.append(f"Ou donner à {victims[0]} le mode non_disruptive (autonomy.assets de "
                          "glorfindel-config.yaml, ou la console) : la watch retire la règle seule.")
         card = escalations.record(

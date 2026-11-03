@@ -1134,3 +1134,152 @@ def test_remove_orphan_rule_is_a_guarded_write(monkeypatch):
     monkeypatch.setattr(connector_module, "_vm_lock", spy)
     assert c.remove_orphan_rule(orphan)["removed"] is True
     assert taken == ["batch"]
+
+
+# ── U1G (#463): a VM Glorfindel holds never shields what the rule cuts of another ──────
+
+def _two_cut(monkeypatch, held: str = "block"):
+    """web's NIC held 10.0.0.4 and 10.0.0.6; isolated by rules, deleted with its state lost.
+    batch gets .4, api .6: both cut by web's denies (in and out). batch then blocked (or
+    isolated) by Glorfindel — held: api is held for nothing."""
+    f, c, subnet = _world(monkeypatch)
+    f.nics[key(nic_id("rg-app1", "web-nic"))]["ips"] = ["10.0.0.4", "10.0.0.6"]
+    f.vms.pop(key(APP))
+    f.nics.pop(key(nic_id("rg-app2", "app-nic")))
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    web = {n for n in g["rules"] if n.startswith("glorfindel-iso-web-")}
+    assert web and all(set(_side(g["rules"][n])) == {"10.0.0.4", "10.0.0.6"} for n in web), web
+    _delete(f, WEB)
+    batch = _new_vm_at(f, subnet, "10.0.0.4")
+    api = _new_vm_at(f, subnet, "10.0.0.6", name="api")
+    if held == "block":
+        assert c.block_suspicious_ip(ATTACKER, batch, scope="vm", threat_port=22)["status"] == "blocked"
+    else:
+        assert c.isolate_vm(batch)["status"] == "isolated"
+    return f, c, g, web, batch, api
+
+
+def _side(r):
+    side = "destination" if r["direction"].lower() == "inbound" else "source"
+    return [v for v in [r.get(f"{side}_address_prefix")] + list(r.get(f"{side}_address_prefixes") or []) if v]
+
+
+@pytest.mark.parametrize("held", ["block", "isolate"])
+def test_a_rule_cutting_a_held_vm_and_another_is_narrowed_to_the_held_ones(monkeypatch, held):
+    """U1G, the cause (L1Qs' seed 10 at 500): the held VM shielded the whole rule — api,
+    cut at the other address, stayed cut by a rule nobody owns (U1). The rule loses api's
+    address, keeps batch's: api back to its design, batch's flows unchanged, said."""
+    f, c, g, web, batch, api = _two_cut(monkeypatch, held)
+    held_flows = open_flows(_world_view(f), batch)
+    assert open_flows(_world_view(f), api) != _designed(f, api)
+    orphans = [o for o in c.find_orphan_rules() if o["rule"] in web]
+    assert len(orphans) == 2 and all(o["removable"] and o["narrow"] == ["10.0.0.4"] for o in orphans), orphans
+    _watch_pass(c, "non_disruptive")
+    assert open_flows(_world_view(f), api) == _designed(f, api)
+    assert open_flows(_world_view(f), batch) == held_flows
+    assert all(_side(g["rules"][n]) == ["10.0.0.4"] for n in web), {n: _side(g["rules"][n]) for n in web}
+    said = [e for e in _orphan_cards() if "réduite" in str(e)]
+    assert said, _orphan_cards()
+
+
+def test_in_human_only_the_card_says_to_narrow_never_to_delete(monkeypatch):
+    """U1G: in human_only, nothing written; the card's step narrows the rule — a delete
+    would free batch's address too (its NIC recreated, the rule may be its isolation)."""
+    f, c, g, web, batch, api = _two_cut(monkeypatch)
+    before = {n: dict(g["rules"][n]) for n in web}
+    _watch_pass(c, "human_only")
+    assert {n: g["rules"][n] for n in web} == before
+    cards = [e for e in _orphan_cards() if e["status"] == "pending"]
+    steps = [s for e in cards for s in e["suggested_steps"]]
+    assert any(s.startswith("az network nsg rule update") and s.endswith("-address-prefixes 10.0.0.4")
+               for s in steps), steps
+    assert not any(s.startswith("az network nsg rule delete") for s in steps), steps
+    assert all("jamais la retirer entière" in e["reason"] for e in cards), [e["reason"] for e in cards]
+
+
+def test_the_mode_that_counts_is_the_freed_vms(monkeypatch):
+    """U1G: the narrowing changes nothing of the held VM — its mode doesn't hold it back;
+    the freed VM's does."""
+    f, c, g, web, batch, api = _two_cut(monkeypatch)
+    _config_file(monkeypatch, "autonomy:\n  default: non_disruptive\n"
+                              "  assets:\n    - match: batch\n      mode: human_only\n")
+    _watch_pass(c, None)
+    assert open_flows(_world_view(f), api) == _designed(f, api)
+
+
+def test_the_freed_vm_in_human_only_is_not_freed_alone(monkeypatch):
+    f, c, g, web, batch, api = _two_cut(monkeypatch)
+    _config_file(monkeypatch, "autonomy:\n  default: non_disruptive\n"
+                              "  assets:\n    - match: api\n      mode: human_only\n")
+    _watch_pass(c, None)
+    assert open_flows(_world_view(f), api) != _designed(f, api)
+
+
+def test_the_rule_of_a_recreated_nic_keeps_the_isolation_and_frees_the_other(monkeypatch):
+    """U1G, why narrowed and not deleted: web isolated, its NIC (two addresses) recreated
+    under it with one of them; batch gets the other. The old NIC's rule is web's isolation
+    (A3's first review) and cuts batch: web stays isolated, batch is freed."""
+    f, c, subnet = _world(monkeypatch)
+    f.nics[key(nic_id("rg-app1", "web-nic"))]["ips"] = ["10.0.0.4", "10.0.0.6"]
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    new = _recreate_nic(f, WEB, "web-nic", "web-nic-v2")
+    f.nics[key(new)]["ips"] = ["10.0.0.4"]
+    batch = _new_vm_at(f, subnet, "10.0.0.6")
+    held = open_flows(_world_view(f), WEB)
+    assert held != _designed(f, WEB) and open_flows(_world_view(f), batch) != _designed(f, batch)
+    _watch_pass(c, "non_disruptive")
+    assert open_flows(_world_view(f), WEB) == held
+    assert open_flows(_world_view(f), batch) == _designed(f, batch)
+
+
+def test_a_rule_with_a_range_is_kept_whole(monkeypatch):
+    """U1G: only our exact addresses are narrowed — a range (`*`, a tag) is not read for
+    who it takes in: the rule is kept whole, for the held VM, as before."""
+    f, c, g, web, batch, api = _two_cut(monkeypatch)
+    for n in web:
+        r = g["rules"][n]
+        side = "destination" if r["direction"].lower() == "inbound" else "source"
+        r[f"{side}_address_prefix"], r[f"{side}_address_prefixes"] = None, ["10.0.0.4", "10.0.0.6", "10.0.0.0/30"]
+    orphans = [o for o in c.find_orphan_rules() if o["rule"] in web]
+    assert orphans and all(not o["removable"] and "isolée ou bloquée" in o["kept"] and not o.get("narrow")
+                           for o in orphans), orphans
+
+
+def test_a_turned_rule_of_the_held_vm_does_not_keep_the_other_cut(monkeypatch):
+    """U1G: one of our rules turned into an allow behind the deny, for batch's address —
+    batch keeps that address in the rule; api's part holds nothing back: freed."""
+    f, c, g, web, batch, api = _two_cut(monkeypatch)
+    own = next(n for n in g["rules"] if n.startswith("glorfindel-block-") and "-batch-" in n
+               and not n.endswith("-out"))
+    g["rules"][own]["access"] = "Allow"
+    inbound = [o for o in c.find_orphan_rules() if o["rule"] in web and o["side"] == "destination"]
+    assert inbound and all(o["removable"] and o["narrow"] == ["10.0.0.4"] for o in inbound), inbound
+    for o in inbound:                       # read again before the write: for api alone
+        assert c.remove_orphan_rule(o)["narrowed"] is True
+        assert _side(g["rules"][o["rule"].lower()]) == ["10.0.0.4"]
+
+
+def test_a_vm_held_since_the_listing_stops_the_narrowing(monkeypatch):
+    """U1G: read again before the write — api blocked between the listing and the write:
+    the rule stays as it is."""
+    f, c, g, web, batch, api = _two_cut(monkeypatch)
+    (orphan, *_) = [o for o in c.find_orphan_rules() if o["rule"] in web and o.get("narrow")]
+    assert c.block_suspicious_ip(ATTACKER, api, scope="vm", threat_port=22)["status"] == "blocked"
+    before = _side(g["rules"][orphan["rule"].lower()])
+    out = c.remove_orphan_rule(orphan)
+    assert not out.get("narrowed") and not out["removed"] and "isolée ou bloquée" in out["why"], out
+    assert _side(g["rules"][orphan["rule"].lower()]) == before
+
+
+def test_a_rule_changed_since_the_listing_is_not_narrowed(monkeypatch):
+    """U1G: the rule read again by its name before the write: its addresses changed since
+    the listing — not narrowed, said; the next pass judges it again."""
+    f, c, g, web, batch, api = _two_cut(monkeypatch)
+    (orphan, *_) = [o for o in c.find_orphan_rules() if o["rule"] in web and o.get("narrow")]
+    r = g["rules"][orphan["rule"].lower()]
+    side = "destination" if r["direction"].lower() == "inbound" else "source"
+    r[f"{side}_address_prefixes"] = ["10.0.0.4", "10.0.0.6", "10.0.0.9"]
+    out = c.remove_orphan_rule(orphan)
+    assert not out.get("narrowed") and "a changé depuis la liste" in out["why"], out
+    assert _side(r) == ["10.0.0.4", "10.0.0.6", "10.0.0.9"]

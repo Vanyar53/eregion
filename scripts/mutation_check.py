@@ -1923,8 +1923,8 @@ POS = "glorfindel/posture.py"
 RST = "glorfindel/providers/azure/restore.py"
 MUTANTS += [
     ("M760", "the orphan sweep alerts and never removes (A3, U1)", ORP,
-     "        if alone:\n            out = _remove(connector, o, victims)",
-     "        if False:\n            out = _remove(connector, o, victims)"),
+     "        if alone:\n            out = _remove(connector, o, locked)",
+     "        if False:\n            out = _remove(connector, o, locked)"),
     ("M761", "a live NIC's own rule taken for an orphan, and removed (A3, U1)", SWP,
      "                        or mark in marks or mark in live_names):",
      "                        or mark in live_names):"),
@@ -1987,9 +1987,9 @@ MUTANTS += [
     ("M777", "the orphan sweep left out of the watch's pass: it waits for a discovery that may be off (A3, D-B)",
      R, "    sweep_orphan_rules(connector, autonomy, report, nsgs)\n", ""),
     ("M778", "the rule of a recreated NIC under a VM Glorfindel isolates found removable (A3, first review)", SWP,
-     "                elif why := self._held_reason(cut, held):\n                    kept = why\n", ""),
+     "                elif why_held and narrow is None:\n                    kept = why_held\n", ""),
     ("M779", "the removal doesn't read the state again: an isolation recorded since is lifted (A3, first review)",
-     SWP, "        why = self._held_reason(orphan.get(\"cut\") or [], self._held_vms()) or _turned_still(",
+     SWP, "        why = self._held_reason(free, self._held_vms()) or _turned_still(",
      "        why = \"\" or _turned_still("),
     ("M880", "any error reading a NIC of our state taken for a 404: gone (A3, first review, X1)", SWP,
      "            if _is_not_found(exc):\n                return None\n            return f\"carte",
@@ -5630,8 +5630,8 @@ MUTANTS += [
      "glorfindel/orphans.py", '    orphans = sorted(orphans, key=lambda o: not o.get("turned"))\n',
      "    orphans = list(orphans)\n"),
     ("M1741", "the removal trusts the listing: a rule turned since, the deny taken off (I5Q)", SWP,
-     '        why = self._held_reason(orphan.get("cut") or [], self._held_vms()) or _turned_still(self._network, orphan)\n',
-     '        why = self._held_reason(orphan.get("cut") or [], self._held_vms())\n'),
+     '        why = self._held_reason(free, self._held_vms()) or _turned_still(self._network, {**orphan, "cut": free})\n',
+     '        why = self._held_reason(free, self._held_vms())\n'),
     ("M1742", "an NSG not read again before the removal read as holding no turned rule (I5Q)", TRN,
      "            return f\"NSG {k.rsplit('/', 1)[-1]} non relu avant le retrait ({_first_line(exc)[:_ERR_MAX]})\"\n",
      "            continue\n"),
@@ -9295,6 +9295,57 @@ TESTS.update({
 # L1Qr's order, kept for an entry the first time left to the second (its check raised): measured there.
 TESTS.update({mid: f"{_L1QR} {_L1QS_UNIT}test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_"
                    f"blocks {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
+
+
+# U1G (#463): a VM Glorfindel holds shielded the whole orphan rule — another live VM, held for nothing,
+# cut at another of the deleted NIC's addresses, stayed cut (U1; L1Qs' seed 10 at 500). The rule is
+# narrowed to the held VMs' addresses: never deleted (the held VM's NIC recreated, it may be its
+# isolation), never narrowed past what was listed, a range or `*` kept whole. M3290–M3299.
+NRW = "glorfindel/providers/azure/narrow.py"
+_U1G_UNIT = "tests/unit/test_orphan_sweep.py::"
+_U1G_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off")
+_U1G_NARROWED = f"{_U1G_UNIT}test_a_rule_cutting_a_held_vm_and_another_is_narrowed_to_the_held_ones"
+_U1G_DONE = '            if out.get("narrowed") is True:\n                out = {**out, "removed": True}'
+MUTANTS += [
+    ("M3290", "a VM Glorfindel holds shields the whole orphan rule: the other VM it cuts stays cut (U1G, the "
+              "cause)", SWP, "                elif why_held and narrow is None:\n", "                elif why_held:\n"),
+    ("M3291", "a range read as an exact address: an orphan rule narrowed past what is read of it (U1G)", NRW,
+     "            ipaddress.ip_address(v.strip())\n", "            ipaddress.ip_network(v.strip(), strict=False)\n"),
+    ("M3292", "the write asks about every VM the rule cuts, the held one too: never narrowed (U1G)", SWP,
+     '        free = _freed(orphan.get("cut") or [], narrow)\n', '        free = orphan.get("cut") or []\n'),
+    ("M3293", "the write reads the turned rules again for every VM the rule cuts, the held one too: never "
+              "narrowed (U1G)", SWP, '_turned_still(self._network, {**orphan, "cut": free})\n',
+     "_turned_still(self._network, orphan)\n"),
+    ("M3294", "a rule changed since the listing narrowed all the same (U1G)", NRW,
+     '    if _enum_text(getattr(rule, "access", "")) != "deny" or now != sorted(v.strip() for v in listed or []):\n',
+     '    if _enum_text(getattr(rule, "access", "")) != "deny":\n'),
+    ("M3295", "the held VM's mode holds back the narrowing that changes nothing of it (U1G)", ORP,
+     '        victims = [_short(h.get("vm_id") or h.get("nic_id") or "") for h in freed]\n',
+     '        victims = [_short(h.get("vm_id") or h.get("nic_id") or "") for h in cut]\n'),
+    ("M3296", "in human_only, the card says to delete a rule that holds a held VM (U1G)", ORP,
+     '        if narrow:\n            delete = (f"az network nsg rule update',
+     '        if False:\n            delete = (f"az network nsg rule update'),
+    ("M3297", "a turned rule behind the deny for the held VM keeps the other VM cut (U1G)", SWP,
+     "                elif t := _turned_behind(free, side, turned, _chain(nic_nsg, nic_subnets)):\n",
+     "                elif t := _turned_behind(cut, side, turned, _chain(nic_nsg, nic_subnets)):\n"),
+    ("M3298", "the rule deleted instead of narrowed: the held VM's isolation goes with it (U1G)", SWP,
+     "        if narrow:\n            err = _narrow_rule(", "        if False:\n            err = _narrow_rule("),
+    ("M3299", "a rule narrowed said as not taken off: its card left pending (U1G)", ORP, _U1G_DONE,
+     '            if False:\n                out = {**out, "removed": True}'),
+]
+TESTS.update({
+    "M3290": f"{_U1G_SEQ} {_U1G_NARROWED}",
+    "M3291": f"{_U1G_UNIT}test_a_rule_with_a_range_is_kept_whole",
+    "M3292": _U1G_NARROWED,
+    "M3293": f"{_U1G_UNIT}test_a_turned_rule_of_the_held_vm_does_not_keep_the_other_cut",
+    "M3294": f"{_U1G_UNIT}test_a_rule_changed_since_the_listing_is_not_narrowed",
+    "M3295": f"{_U1G_UNIT}test_the_mode_that_counts_is_the_freed_vms",
+    "M3296": f"{_U1G_UNIT}test_in_human_only_the_card_says_to_narrow_never_to_delete",
+    "M3297": f"{_U1G_UNIT}test_a_turned_rule_of_the_held_vm_does_not_keep_the_other_cut",
+    "M3298": f"{_U1G_UNIT}test_the_rule_of_a_recreated_nic_keeps_the_isolation_and_frees_the_other {_U1G_NARROWED}",
+    "M3299": _U1G_NARROWED,
+})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

@@ -3561,9 +3561,14 @@ le retrait. La branche « blocage » finit l'épisode qu'elle a tenu : elle a bl
 règles, les a remises telles qu'avant, et l'épisode acquitté est fini, par le journal du test, comme
 avant. La branche « isolation » ne touche plus au journal du blocage. **Pourquoi ce n'est pas un
 relâchement** (A0) : l'oracle n'a pas bougé. L1 compte toujours un blocage acquitté pour dit **seulement**
-tant que ses règles sont exactement celles de l'acquittement (`_block_rules_now(v) == seen`, RB1) ; une
-règle écrite de nouveau, retournée ou partie de plus depuis, et l'acquittement ne compte plus. Ce qui
-change, c'est le journal : il ne note que ce que le test a fait. Il oubliait un acquittement que
+tant que ses règles sont exactement celles de l'acquittement (`_block_rules_now(v) == seen`, RB1) : il ne
+compte que tant que ses règles sont exactement celles de l'acquittement. **La limite, ancienne** (l'instantané
+de RB1 et de L1G, hors de `_gone_comes_back`) : l'oracle compare des valeurs, jamais un épisode, et
+`acked_drift[vm]` n'est retiré que par la branche « blocage » de `_gone_comes_back`. Un blocage écrit de
+nouveau (`_block`), puis reparti à l'identique (`_ours_taken_off`), retrouve l'égalité : l'acquittement
+recompte pour un épisode neuf. La relecture l'a montré avec le mutant de L1Q (`response/state.py`,
+`for mark in ():`) : le code muet sur ce nouvel épisode, L1 passe. Ce n'est pas un défaut de MAK ; suivi dans
+l'issue #485, qui ajoutera une règle à la machine sans rien retirer (A0). Ce qui change ici, c'est le journal : il ne note que ce que le test a fait. Il oubliait un acquittement que
 l'opérateur avait donné et qu'aucune étape n'avait clos, et l'oracle jugeait alors un monde que le test
 n'avait pas fait. C'est la même famille que le tri des cartes de L1G (03e3b422) : la machine corrigée
 pour refléter ce que le test a fait, jamais pour qu'un code passe. La docstring de la machine le dit

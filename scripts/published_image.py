@@ -13,7 +13,7 @@ by its CD (infra/glorfindel-host/cd/eregion_cd.py), on the operator's machine fo
     published_image.py pushed IMAGE --ref R                the workflow's push: R pushed, its digest said
 
 What is trusted, and what is not (docs/operations.md, « Les images publiées ») :
-- **A registry tag is a hint, never a proof.** The workflow pushes ghcr.io/vanyar53/eregion-<image>
+- **A registry tag is a hint, never a proof.** The workflow pushes ghcr.io/grootcyber/eregion-<image>
   :sha-<commit> for the head of each push to main. Its digest is read anonymously (GHCR's public API, no
   token: the packages are public) and the manifest's own sha256 must be that digest.
 - **The proof is the signature**, keyless (sigstore: a certificate from GitHub's OIDC, no
@@ -49,8 +49,8 @@ from typing import Callable
 REPO = Path(__file__).resolve().parent.parent
 REGISTRY = os.environ.get("EREGION_REGISTRY") or "ghcr.io"            # the name in a reference
 REGISTRY_API = (os.environ.get("EREGION_REGISTRY_API") or f"https://{REGISTRY}").rstrip("/")
-OWNER = "vanyar53"                                                     # GHCR's names are lower case
-SOURCE = "Vanyar53/eregion"                                            # the repository that signs
+OWNER = "grootcyber"                                                     # GHCR's names are lower case
+SOURCE = "grootcyber/eregion"                                            # the repository that signs
 NAMES = {"glorfindel": "eregion-glorfindel", "annatar": "eregion-annatar"}
 WORKFLOW = ".github/workflows/publish.yml"
 BRANCH_REF = "refs/heads/main"

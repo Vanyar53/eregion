@@ -4,6 +4,13 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Changed
+- **The repository follows its owner's account, `Vanyar53` → `grootcyber`** (REN1, #470): `grootcyber/eregion`, the Pages at `grootcyber.github.io/eregion`, the images at `ghcr.io/grootcyber/eregion-*`, `CODEOWNERS`, the publishing workflow's guard, the defaults of the scripts and of H0's CD, the schemas' `$id`, the docs. GitHub redirects the repository's web, git and API addresses; never the Pages, the profile, the OIDC subject — nor, as far as its documentation says, the images.
+  - **The images' identity** (Jonathan's decision, 03/11): `scripts/published_image.py` and H0's CD verify `grootcyber/eregion`'s publishing workflow only. An image published before the rename (v0.5.2 and older) is signed by `Vanyar53/eregion`, a name anyone may now claim: a way back asked on H0 towards it is refused, said. The automatic way back after a failed deployment is untouched — it runs the image already on H0. The first release after the rename is the next way back.
+  - **The canary's OIDC**: its subject becomes `repo:grootcyber/eregion:environment:canary` — a second federated credential before the rename, the old one removed after a green canary (`docs/operations.md`, « Le canari azurerm, sans secret »).
+  - **Reviews**: `review_verdict.py --author grootcyber`, never the old login — a comment's author is the account, renamed everywhere, so a verdict published before the rename reads `grootcyber` (to be measured at the rename); `Vanyar53`, free to anyone, would let a stranger's comment pass for the maintainer's.
+  - **Kept on purpose**: H0's `eregion_repo` default (`infra/glorfindel-host/variables.tf`) — cloned once at first boot through `custom_data`, changing it replaces the VM; GitHub's redirect serves it until H0 is rebuilt. And the released entries below, true when written.
+
 ## [0.5.2] — 2026-11-03 — "kept apart"
 
 ### Security

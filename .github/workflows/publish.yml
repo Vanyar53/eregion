@@ -2,7 +2,7 @@ name: Publish
 
 # CI3 (#267, step 2; P-02, V-22): the head of every push to main (the repository merges by squash:
 # each commit of main is one) gets its two images, built and proven as
-# in images.yml (CI1), then published to GHCR — ghcr.io/vanyar53/eregion-glorfindel and
+# in images.yml (CI1), then published to GHCR — ghcr.io/grootcyber/eregion-glorfindel and
 # -annatar, tagged sha-<commit> — with a SLSA provenance and an SBOM attested
 # (actions/attest-build-provenance, actions/attest-sbom) and a keyless signature (cosign, GitHub's
 # OIDC: no long-lived key), then verified here as H0 verifies them (scripts/published_image.py).
@@ -33,7 +33,7 @@ concurrency:
 jobs:
   publish:
     name: publish (${{ matrix.image }})
-    if: github.repository == 'Vanyar53/eregion' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.repository == 'grootcyber/eregion' && github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -80,7 +80,7 @@ jobs:
           labels: |
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=https://github.com/Vanyar53/eregion
+            org.opencontainers.image.source=https://github.com/grootcyber/eregion
           cache-from: type=gha,scope=${{ matrix.image }}
 
       - name: In the image (nothing started, no network, no secret)

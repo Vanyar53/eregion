@@ -554,7 +554,7 @@ l'envoyait par SSH : rien ne liait ce qu'Orodruin exécute à ce que la CI avait
 
 **Maintenant, `make orodruin-push [REF=<tag|commit>]`** (sans `REF`, le dernier tag `v*`) :
 1. **Sur le poste**, `scripts/published_image.py fetch annatar` : le commit de `REF`, qui doit être
-   sur `origin/main` ; le digest de `ghcr.io/vanyar53/eregion-annatar:sha-<commit>`, lu sans jeton ;
+   sur `origin/main` ; le digest de `ghcr.io/grootcyber/eregion-annatar:sha-<commit>`, lu sans jeton ;
    sa **signature** et sa **provenance** vérifiées par cosign (épinglé par son sha256) — le workflow
    `.github/workflows/publish.yml` de ce dépôt, sur `main`, déclenché par un push, **à ce commit** —,
    la provenance relue ; l'image tirée **par ce digest**, ses étiquettes relues (le commit), étiquetée

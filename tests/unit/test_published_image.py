@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "published_image.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "publish.yml"
 C1, C2 = "1" * 40, "2" * 40
-GLOR = "vanyar53/eregion-glorfindel"
+GLOR = "grootcyber/eregion-glorfindel"
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ def test_the_digest_is_the_sha256_of_the_manifest_read(pim, reg):
     digest = reg.image(GLOR, f"sha-{C2}", _manifest(C2))
     assert pim.resolve("glorfindel", C2) == digest
     tokened = [r for r in reg.requests if "/registry/token" in r["path"]]
-    assert tokened and "scope=repository:vanyar53/eregion-glorfindel:pull" in tokened[0]["path"]
+    assert tokened and "scope=repository:grootcyber/eregion-glorfindel:pull" in tokened[0]["path"]
 
 
 @pytest.mark.parametrize("setup, said", [
@@ -147,12 +147,12 @@ def test_the_ids_of_an_image_are_its_digest_its_amd64_manifest_and_its_config(pi
 
 def test_cosign_is_asked_for_every_claim_of_the_publishing_workflow(pim):
     for kind in ("signature", "provenance"):
-        args = pim.cosign_args(kind, "ghcr.io/x@sha256:" + "a" * 64, C2, "Vanyar53/eregion")
+        args = pim.cosign_args(kind, "ghcr.io/x@sha256:" + "a" * 64, C2, "grootcyber/eregion")
         got = {args[i]: args[i + 1] for i, a in enumerate(args) if a.startswith("--certificate")}
         assert got == {
-            "--certificate-identity": "https://github.com/Vanyar53/eregion/.github/workflows/publish.yml@refs/heads/main",
+            "--certificate-identity": "https://github.com/grootcyber/eregion/.github/workflows/publish.yml@refs/heads/main",
             "--certificate-oidc-issuer": "https://token.actions.githubusercontent.com",
-            "--certificate-github-workflow-repository": "Vanyar53/eregion",
+            "--certificate-github-workflow-repository": "grootcyber/eregion",
             "--certificate-github-workflow-ref": "refs/heads/main",
             "--certificate-github-workflow-trigger": "push", "--certificate-github-workflow-sha": C2}
         assert args[-1].startswith("ghcr.io/x@sha256:")
@@ -160,7 +160,7 @@ def test_cosign_is_asked_for_every_claim_of_the_publishing_workflow(pim):
     assert pim.cosign_args("signature", "r", C2)[0] == "verify"
 
 
-def _signed(pim, sig, digest, commit=C2, slug="Vanyar53/eregion", **over):
+def _signed(pim, sig, digest, commit=C2, slug="grootcyber/eregion", **over):
     name = f"ghcr.io/{GLOR}"
     sig.publish(name, digest, slug, commit, **over)
 
@@ -177,11 +177,11 @@ def test_an_image_signed_and_attested_by_the_publishing_workflow_at_its_commit_i
     ({"ref": "refs/heads/side"}, "signature absente, ou d'un autre"),
     ({"trigger": "workflow_dispatch"}, "signature absente, ou d'un autre"),
     ({"sha": C1}, "signature absente, ou d'un autre"),
-    ({"slug": "Vanyar53/fork"}, "signature absente, ou d'un autre"),
+    ({"slug": "grootcyber/fork"}, "signature absente, ou d'un autre"),
 ])
 def test_an_image_signed_by_another_signer_is_unverified(pim, sig, over, said):
     digest = "sha256:" + "a" * 64
-    slug = over.pop("slug", "Vanyar53/eregion")
+    slug = over.pop("slug", "grootcyber/eregion")
     _signed(pim, sig, digest, slug=slug, **over)
     with pytest.raises(pim.Unverified, match=said) as e:
         pim.verify("glorfindel", digest, C2, sig.path)
@@ -248,7 +248,7 @@ def test_a_tool_cut_at_its_bound_is_code_124(pim):
 
 def test_a_signed_image_without_provenance_is_unverified(pim, sig):
     digest = "sha256:" + "a" * 64
-    sig.sign(digest, claims("Vanyar53/eregion", C2))
+    sig.sign(digest, claims("grootcyber/eregion", C2))
     with pytest.raises(pim.Unverified, match="provenance absente"):
         pim.verify("glorfindel", digest, C2, sig.path)
 
@@ -269,15 +269,15 @@ def test_a_cosign_that_is_not_the_pinned_one_is_never_run(pim, sig, cosign):
 def _st(**over):
     name = over.pop("name", f"ghcr.io/{GLOR}")
     digest = over.pop("digest", "sha256:" + "a" * 64)
-    return statement(name, digest, over.pop("slug", "Vanyar53/eregion"), over.pop("commit", C2), **over)
+    return statement(name, digest, over.pop("slug", "grootcyber/eregion"), over.pop("commit", C2), **over)
 
 
 @pytest.mark.parametrize("st, said", [
     (_st(predicate_type="https://spdx.dev/Document/v2.3"), "autre type"),
-    (_st(name="ghcr.io/vanyar53/eregion-annatar"), "ne porte pas sur"),
+    (_st(name="ghcr.io/grootcyber/eregion-annatar"), "ne porte pas sur"),
     (_st(digest="sha256:" + "b" * 64), "ne porte pas sur"),
     (_st(workflow=".github/workflows/images.yml"), "workflow"),
-    (_st(slug="Vanyar53/fork"), "dépôt"),
+    (_st(slug="grootcyber/fork"), "dépôt"),
     (_st(ref="refs/heads/side"), "référence"),
     (_st(event="workflow_dispatch"), "événement"),
     (_st(runner="self-hosted"), "runner"),
@@ -298,7 +298,7 @@ def test_a_provenance_of_two_commits_is_unverified(pim):
 def test_every_provenance_cosign_returns_is_read(pim, sig):
     """Two attestations verified, one of them of another commit: refused (none is skipped)."""
     digest = "sha256:" + "a" * 64
-    good = claims("Vanyar53/eregion", C2)
+    good = claims("grootcyber/eregion", C2)
 
     def runner(argv):
         if argv[1] == "verify":
@@ -433,7 +433,7 @@ def test_the_workflows_names_and_labels(pim, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     assert pim.main(["meta", "annatar", "--commit", C2]) == 0
     got = dict(line.split("=", 1) for line in out.read_text().splitlines())
-    assert got == {"name": "ghcr.io/vanyar53/eregion-annatar", "ref": f"ghcr.io/vanyar53/eregion-annatar:sha-{C2}",
+    assert got == {"name": "ghcr.io/grootcyber/eregion-annatar", "ref": f"ghcr.io/grootcyber/eregion-annatar:sha-{C2}",
                    "version": f"v{pim.project_version()}", "uid": "1000", "gid": "1000"}
 
 

@@ -7,7 +7,7 @@ name: canary-azurerm
 # No long-lived secret (P-04): the job asks GitHub for a short-lived OIDC token (`id-token:
 # write`, this job's alone) and exchanges it with Entra ID for the principal `eregion-canary`,
 # whose federated credential trusts this repository's environment `canary` only
-# (repo:Vanyar53/eregion:environment:canary), which deploys from main only: no other job — not
+# (repo:grootcyber/eregion:environment:canary), which deploys from main only: no other job — not
 # publish.yml's, whose token names refs/heads/main — gets that principal. Needs the environment's
 # SECRETS — never variables, which print in clear in public logs — CANARY_AZURE_CLIENT_ID,
 # CANARY_AZURE_TENANT_ID and CANARY_AZURE_SUBSCRIPTION_ID; WITHOUT them, or off main, the run
@@ -35,7 +35,7 @@ jobs:
   canary:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # The OIDC token's subject: repo:Vanyar53/eregion:environment:canary, the one Entra ID trusts.
+    # The OIDC token's subject: repo:grootcyber/eregion:environment:canary, the one Entra ID trusts.
     environment: canary
     permissions:
       contents: read

@@ -6,6 +6,7 @@ VM's entry records may have been the gone VM's.
 from __future__ import annotations
 
 from glorfindel.providers.azure.nsg import _dropped_first
+from glorfindel.providers.azure.turned import _held_by_turned
 
 
 class PerimeterMixin:
@@ -76,6 +77,51 @@ class PerimeterMixin:
         return [t for t in targets
                 if home not in {(v["nsg_rg"].lower(), v["nsg_name"].lower())
                                 for v in self._nic_nsg_views(t) if v.get("nsg_rg")}]
+
+    def _promote(self, prev: dict | None, off_ids: set | None, nic_id: str, nsg: str,
+                 rule_name: str) -> tuple[list[str], list[dict], list[str]]:
+        """A promotion's drop of the VM block `prev` once the perimeter `rule_name` stands on
+        `nsg` (rg/name): (dropped, kept, guarded). Each placement of a NIC behind it goes —
+        but each of its two rules asks first the guard every removal by name asks
+        (_held_by_turned, I4B; I4P, #466): one someone turned into an allow that lets the
+        attacker reach another live NIC (an old address taken up, a NIC's NSG shared with a
+        VM of another subnet, off the perimeter), taken off, cut that VM off where no
+        perimeter reaches. One kept, the pair stays whole, on Azure and in the state
+        (`kept`), for the unblock, which asks again — half taken off, the next pass read our
+        own delete as a disappearance. A delete that fails stops the pair's: the first refused,
+        the second is not tried, the pair stays whole; the second refused, the first is gone —
+        either way the placement stays in the state and the unblock reads it again (before,
+        swallowed: the rule left on Azure, unknown to the state). `guarded`: what stays, said
+        (« …/rule gardée : … », or the delete's error). A NIC off the perimeter (`off_ids`),
+        or unknown (None): kept as before. A legacy single-rule entry: the primary NIC's."""
+        dropped: list[str] = []
+        kept: list[dict] = []
+        guarded: list[str] = []
+        guard: dict = {}
+        mates = [x.get("nic_id", "") for x in (prev or {}).get("placements", [])]
+
+        def drops(nsg_rg: str, nsg_name: str, rule: str, nic: str, mates) -> bool:
+            names = (rule, f"{rule}-out")
+            held = [w for n in names if (w := _held_by_turned(self._network, guard, nsg_rg, nsg_name, n, nic, mates))]
+            held = held or next(([e] for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n))), [])
+            guarded.extend(held)
+            return not held
+        for pl in (prev or {}).get("placements", []):
+            if off_ids is None or (pl.get("nic_id") or "").rstrip("/").lower() in off_ids:
+                kept.append(pl)               # not behind the perimeter (or unknown): kept
+            elif drops(pl["nsg_rg"], pl["nsg_name"], pl["rule"], pl.get("nic_id", ""), mates):
+                dropped.append(pl["rule"])
+            else:
+                kept.append(pl)
+        if prev and prev.get("rule") and not prev.get("placements") and prev["rule"] != rule_name:
+            old_rg, old_name = (prev.get("nsg") or nsg).split("/", 1)
+            if drops(old_rg, old_name, prev["rule"], nic_id, [nic_id]):
+                dropped.append(prev["rule"])
+            else:
+                kept.append({"nic_id": nic_id, "nsg_rg": old_rg, "nsg_name": old_name,
+                             "scope": prev.get("nsg_scope") or "nic", "shared_nsg": False, "ips": [],
+                             "rule": prev["rule"]})
+        return dropped, kept, guarded
 
     @staticmethod
     def _perimeters_recorded(ip: str, but: str) -> set[tuple[str, str]]:

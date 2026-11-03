@@ -1199,7 +1199,7 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
   valeur d'une autre sorte, et il refuse. Un drill livré est d'Eregion et vise par zone seulement ;
   celui de l'instance, par nom seulement. Jamais un identifiant de ressource, nulle part.
 - **Les couches** : `drills/` (livrés : `bl1-reponse`, la panne puis T1136.001 sur le banc, comme la
-  campagne déclarée de BL1 ; `sentinelle`, T1136.001 sur la zone production), copiés dans l'image de la
+  campagne déclarée de BL1 ; `sentinelle`, T1136.001 sur une VM inscrite de la zone production, la sentinelle vide par exemple), copiés dans l'image de la
   console ; `~/.eregion/console/drills/` (`EREGION_DRILLS_DIR`), le répertoire de la console, monté par
   elle seule. Un drill de l'instance du nom d'un drill livré le remplace ici, et la liste le dit ; un
   fichier illisible est listé avec la raison ; illisible dans l'instance, il n'est jamais remplacé en
@@ -1232,3 +1232,17 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
   identifiants, ou une cible non inscrite ; un drill chargé posé sur toutes les VM de sa zone ; la page
   qui écrit la demande pendant qu'un fil attend ; `DRILL` lu de l'environnement ; `TARGETS` absent pris
   pour `all`.
+- **La relecture 5.5 (03/11)** a fait corriger :
+  - **deux VM du même nom** (un jumeau copié d'un banc garde ses noms) : un fil nommé prenait la
+    première, en silence. Un nom que porte plus d'une VM inscrite ne prend plus aucune VM : il n'est
+    jamais gardé par « Save as drill » (409), il se pose « à poser » avec ses VM dites par leur groupe,
+    et la commande le refuse. L'indice de la dernière exécution se rattache à la VM par son
+    identifiant, jamais à son homonyme ;
+  - la commande lisait un drill de l'instance à travers un lien, ou prenait le livré à la place d'un
+    lien cassé : un lien est refusé ;
+  - la liste des VM des tests passait par une variable d'environnement : c'est `DRILL_VMS=`, sur la
+    ligne de commande seulement, et la commande dit qu'elle ne lit pas Azure ;
+  - le nom d'un drill livré n'est plus proposé à « Save as drill » ; une couche de plus de 200 drills dit
+    combien ne sont pas listés ; `sentinelle` vise une VM inscrite de la zone production, la sentinelle
+    par exemple.
+  Mutants M3372–M3379.

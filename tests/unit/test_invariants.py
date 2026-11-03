@@ -72,7 +72,10 @@ Oracles are the test's own: what was released, what was lost and when, who wrote
 must not earn an exemption). The test's journal says only what the test did: the operator's
 acknowledgement of a block's drift card (`acked_drift`) holds while the block's rules are as
 they were then, and only a step that ends the block's episode drops it — an isolation of the
-same VM taken off and put back by the test does not (MAK, #481).
+same VM taken off and put back by the test does not (MAK, #481). Values are not an episode
+(L1E, #485): the acknowledgement no longer counts once the test wrote the block whole again,
+or once Glorfindel wrote, after it, a rule it saw absent (the fake's journal) — gone again
+the same way, it is a new disappearance, to be said (`_ack_holds`).
 
 GLORFINDEL_INVARIANT_EXAMPLES raises the number of sequences (default 60);
 GLORFINDEL_INVARIANT_STEPS their length (default 30);
@@ -1324,6 +1327,7 @@ class IsolationMachine(RuleBasedStateMachine):
             # isolation ends the release it supersedes (I9).
             self.unblocking.discard(vm)
             self.reblocked.add(vm)
+            self._episode_over(vm)                  # and the acknowledged episode (L1E)
         if out and out.get("status") == "blocked" and not out.get("bypass"):
             assert not self._attacker_flows(vm, port), f"I3: block said blocked, {ATTACKER} reaches {vm}"
             check, _ = self._run(None, lambda: self.connector.verify_block_ip(ATTACKER, rid))
@@ -1349,6 +1353,7 @@ class IsolationMachine(RuleBasedStateMachine):
         if out and out.get("status") == "blocked" and err is None:
             self.unblocking.discard(vm)                     # written whole (L1B, see _block)
             self.reblocked.add(vm)
+            self._episode_over(vm)                          # a new episode (L1E, see _block)
         if out and out.get("status") in ("blocked", "blocked_partial") and not out.get("bypass"):
             # The VM blocked: every one of its NICs is cut off — behind the perimeter, or, on
             # another subnet (RB1's second subnet), by its own block — but those it names as
@@ -1479,7 +1484,7 @@ class IsolationMachine(RuleBasedStateMachine):
             # at the acknowledgement: anything worse since must be said again (RB1, 4th
             # review — "no rewrite by Glorfindel" let a perimeter deleted after it pass).
             acked = getattr(self, "acked_drift", {})
-            told |= {key(v) for v, seen in acked.items() if self._block_rules_now(v) == seen}
+            told |= {key(v) for v in acked if self._ack_holds(v)}
             for vm in vanished:
                 assert not self._block_vanished(vm) or key(vm) in told, (
                     f"L1: the block on {vm} vanished from Azure; the reassertion neither put it back nor said so")
@@ -1487,7 +1492,7 @@ class IsolationMachine(RuleBasedStateMachine):
             # never tells it alone; L1 above counts any card of the action.
             own = {key(e.get("resource_id", "")) for e in escalations.pending()
                    if e.get("action") == "block_suspicious_ip" and e["id"] not in self.graph_cards}
-            own |= {key(v) for v, seen in acked.items() if self._block_rules_now(v) == seen}
+            own |= {key(v) for v in acked if self._ack_holds(v)}
             for vm in vanished:
                 assert not self._block_vanished(vm) or key(vm) in own, (
                     f"L3: the block on {vm} vanished from Azure; said only on the graph's card")
@@ -1602,6 +1607,32 @@ class IsolationMachine(RuleBasedStateMachine):
         """Each rule the VM's block entry names, as Azure has it now (None: absent)."""
         return {(k, n): copy.deepcopy(self.fake.nsgs.get(k, {}).get("rules", {}).get(n))
                 for k, n in sorted(self._named_block_rules(vm))}
+
+    def _acked_at(self, vm: str):
+        """Where the operator's acknowledgement of the VM's block drift card falls in the fake's
+        journal of API writes (L1E): what Glorfindel writes after it is a new episode's."""
+        self.acked_at = {**getattr(self, "acked_at", {}), vm: len(self.fake.journal)}
+
+    def _episode_over(self, vm: str):
+        """The test wrote the VM's block whole (`_block`, `block_perimeter`): a new block, a new
+        episode — the acknowledgement of the one before no longer counts it said (L1E)."""
+        getattr(self, "acked_drift", {}).pop(vm, None)
+
+    def _ack_holds(self, vm: str) -> bool:
+        """The operator's acknowledgement of the VM's block drift card counts its disappearance said
+        (L1) for its episode only: the entry's rules exactly as at the acknowledgement (RB1, L1G) —
+        values, never the episode alone — and, the episode the same (L1E, #485), no rule the
+        acknowledgement saw absent written since by Glorfindel (the fake's journal: a block put
+        back, the pair another VM's perimeter wrote; removed again, its values are those of the
+        acknowledgement, the episode is not), nor the block written whole by the test since
+        (`_episode_over`). The test's own journal, never the code's marks (A0)."""
+        seen = getattr(self, "acked_drift", {}).get(vm)
+        if seen is None or self._block_rules_now(vm) != seen:
+            return False
+        absent = {k for k, r in seen.items() if r is None}
+        at = getattr(self, "acked_at", {}).get(vm, len(self.fake.journal))
+        return not any(e.get("op") == "rule.write" and (e["nsg"], e["rule"]) in absent
+                       for e in self.fake.journal[at:])
 
     def _no_drift_on_untouched(self, cards_before: set, quiet: set | None, named: dict):
         """I3, a drift that wasn't (RB1, second review): a block whose every rule — as its
@@ -2324,6 +2355,7 @@ class IsolationMachine(RuleBasedStateMachine):
                 escalations.resolve(e["id"])                # the operator acknowledges it
                 if not isolation:
                     self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}
+                    self._acked_at(vm)
         self.reassert(_Drawn(data, fault=None, mode=human))
         for (k, n), r in ours.items():                      # put back as they were
             if k not in self.fake.nsgs:
@@ -2802,6 +2834,7 @@ class IsolationMachine(RuleBasedStateMachine):
         vm = next((v for v in self.live if key(v) == key(rid)), None)
         if vm and ("disparu" in reason or "a échoué" in reason):
             self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}
+            self._acked_at(vm)
 
     @rule(data=st.data())
     def blocked_again_after_an_acknowledged_drift(self, data):
@@ -2911,8 +2944,7 @@ class IsolationMachine(RuleBasedStateMachine):
             entry = next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), None)
             if entry is None or self._block_held(vm, entry):
                 return
-            seen = getattr(self, "acked_drift", {}).get(vm)
-            if seen is not None and self._block_rules_now(vm) == seen:
+            if self._ack_holds(vm):
                 return
         action = "isolate_vm" if isolation else "block_suspicious_ip"
         own = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)
@@ -3047,6 +3079,7 @@ class IsolationMachine(RuleBasedStateMachine):
             escalations.resolve(e["id"])
             if "disparu" in (e.get("reason") or "") or "a échoué" in (e.get("reason") or ""):
                 self.acked_drift = {**getattr(self, "acked_drift", {}), mate: self._block_rules_now(mate)}
+                self._acked_at(mate)
         _note("a turned perimeter left out, said, acknowledged, lifted")
         self.unblock(_Drawn(data, vm=vm, rid=rid, fault=None))
         if mate.rsplit("/", 1)[-1].lower() not in self._pass_by_vm(data, fault=None):
@@ -3067,8 +3100,7 @@ class IsolationMachine(RuleBasedStateMachine):
         entry = next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), None)
         if not opened or entry is None or self._block_held(vm, entry):
             return
-        seen = getattr(self, "acked_drift", {}).get(vm)
-        if seen is not None and self._block_rules_now(vm) == seen:
+        if self._ack_holds(vm):
             return
         _note(f"the block of a VM opened {when}")
         assert self._cards_on(vm), (

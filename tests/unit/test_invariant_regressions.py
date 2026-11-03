@@ -6525,3 +6525,28 @@ def test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block(monkeypatc
     unsaid. The code was right to say nothing more. Reduced by hand to six rules; red on `main`
     de040e8c, all three."""
     _replay(monkeypatch, _mak_net(tier), *steps)
+
+
+_L1E_STEPS = (
+    ("block", WEB1, WEB1, None, 22),
+    ("terraform_apply", _SUBNET),
+    ("reassert", "human_only", None),
+    ("operator_acknowledges", 0),
+    ("block", WEB1, WEB1, None, 22),
+    ("terraform_apply", _SUBNET),
+    ("reassert", "human_only", None))
+
+
+@pytest.mark.parametrize("net", [_mak_net(True), _net(subnet_nsg=[])], ids=["the review's network", "plain"])
+def test_a_block_written_again_then_gone_as_acknowledged_is_a_new_episode(monkeypatch, net):
+    """L1E (#485), the machine's oracle, found by MAK's review (a probe): web blocked (22), its rules
+    taken off by a `terraform apply` of the subnet's NSG, a pass in human_only says it gone, the
+    operator acknowledges the card — the machine records the block's rules as they are then, both
+    absent. Then web blocked again, whole, and its rules taken off again, the same way: absent both,
+    the values of the acknowledgement. L1 compared values, never an episode: the acknowledgement
+    counted again for this new disappearance. With the drift marks kept by a block written again
+    (L1Q's mutant, `response/state.py`, `for mark in ():`), the code said nothing of it, and L1
+    passed. The machine now ends the acknowledgement when the episode changes — the block written
+    whole by the test, or a rule the acknowledgement saw absent written since by Glorfindel (the
+    fake's journal) —, never by the code's marks (A0). Green on `main` d597a00e: the code says it."""
+    _replay(monkeypatch, net, *_L1E_STEPS)

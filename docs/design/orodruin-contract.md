@@ -582,8 +582,12 @@ l'envoyait par SSH : rien ne liait ce qu'Orodruin exécute à ce que la CI avait
    sur le poste (`published_image.py loaded`) à ce qu'annoncent le manifeste prouvé et sa
    configuration : son **identifiant** (celui du manifeste au magasin containerd de docker, le digest
    de sa configuration au magasin classique — l'un des digests sous le digest vérifié), les **couches**
-   et l'**utilisateur** de sa configuration, sa plateforme, son commit. Une image sans sa
-   configuration ne se relit pas (`docker image inspect` échoue) : refusée. Alors seulement elle
+   et l'**utilisateur** de sa configuration, sa plateforme, son commit. **Une image sans sa
+   configuration se relit sans couches ni utilisateur, ou pas du tout : refusée.** (La CLI de docker
+   applique `-f` de son côté : `docker image inspect -f {{.Id}}` et `docker image inspect` passent par
+   le même `GET /images/{name}/json`. L'issue a mesuré que `-f {{.Id}}` répondait pour l'image
+   incomplète : l'API rend alors un JSON partiel, l'identifiant sans configuration ni couches.)
+   Alors seulement elle
    devient `eregion-annatar:orodruin`, le tag d'attente est retiré, et `~/.eregion-image` est écrit
    (« commit digest »). Sinon elle est retirée, `eregion-annatar:orodruin` n'a pas changé, et
    `~/.eregion-image` reste absent : il ne nomme jamais l'ancienne image comme si elle était la
@@ -599,9 +603,18 @@ Orodruin. Les blobs du registre ne dépendent ni du docker du poste, ni de son m
 confirmer** : le magasin containerd jette le contenu des couches compressées une fois décompressées,
 et l'exporteur de moby saute alors un manifeste dont les blobs manquent. OI1 n'en dépend pas.
 **Le digest de la configuration, au magasin containerd** : `docker image inspect` n'y donne pas le
-digest de la configuration, seulement celui du manifeste (l'identifiant) ; la configuration que ce
-manifeste prouvé nomme est relue par ce qu'elle seule porte (les `diff_ids` des couches, l'utilisateur,
-les étiquettes, la plateforme).
+digest de la configuration, seulement celui du manifeste (l'identifiant). Les `diff_ids` et
+l'utilisateur ne suffiraient pas à eux seuls : une autre configuration peut porter les mêmes, avec
+une autre commande ou un autre environnement. Le lien est ailleurs : l'identifiant est le digest du
+**manifeste prouvé**, et containerd adresse le contenu — il lit la configuration par le digest que ce
+manifeste nomme, et refuse un blob dont le digest ne correspond pas. Les `diff_ids` et l'utilisateur
+relus prouvent alors que cette configuration-là est présente et lisible.
+
+**La limite** : `docker image inspect` ne dit pas si les couches sont dépaquetées. Au magasin
+containerd, une couche perdue après un chargement réussi ne se voit pas à la relecture. Un run de
+contrôle sans réseau avant le tag (`docker run --rm --network none --entrypoint true
+eregion-annatar:incoming`) le prouverait ; il change la surface d'Orodruin et se mesure au réel :
+lot de suite OI2 (#490).
 
 **Pourquoi Orodruin ne tire pas lui-même.** Le contrat garantit une sortie limitée au banc, aux API
 de contrôle du cloud et à l'API du modèle, vérifiée par une connexion hors périmètre qui échoue.

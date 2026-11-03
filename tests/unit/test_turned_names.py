@@ -17,9 +17,9 @@ import pytest
 
 from glorfindel import actions
 from glorfindel.actions import AzureConnector
-from glorfindel.providers.azure.turned import _turned_allows
+from glorfindel.providers.azure.turned import _OLDER_NAMES, _turned_allows
 
-from .fake_azure import FakeAzure, key, open_flows, vm_id
+from .fake_azure import FakeAzure, _rule_record, key, open_flows, vm_id
 from .test_invariants import _rule
 
 WEB = vm_id("rg-app1", "web")
@@ -70,17 +70,21 @@ _NAMES = [FIXED, f"{FIXED}-out", f"{FIXED}-web"]
 
 
 @pytest.mark.parametrize("name", _NAMES + [f"{FIXED}-web-out"])
-def test_an_older_versions_deny_all_turned_into_an_allow_is_a_turned_rule_of_ours(name):
-    """The guard's list: an older version's name turned into an allow is on it — fixed, `-out`,
-    VM-suffixed — as today's names are; a deny under that name, or a customer's allow, is not."""
+def test_an_older_versions_deny_all_turned_into_an_allow_is_ours_for_its_own_removal_only(name):
+    """Two lists (I4G's review): an older version's name turned into an allow — fixed, `-out`,
+    VM-suffixed — is found among those a removal by that name asks about (`_OLDER_NAMES`),
+    never among the turned rules a deny holds back (I5Q, `_TURNED_NAMES`, the default) — a name
+    homonyms and customers share there kept a true orphan. A deny under that name, or a
+    customer's allow, is on neither."""
     def nsg(*rules):
         return SimpleNamespace(id="/x/nsg-a", subnets=[], security_rules=list(rules))
 
     def rule(n, access):
         return SimpleNamespace(name=n, access=access, direction="Outbound" if n.endswith("-out") else "Inbound",
                                source_address_prefix="*", destination_address_prefix="*")
-    assert [t[3] for t in _turned_allows([nsg(rule(name, "Allow"))])] == [name]
-    assert _turned_allows([nsg(rule(name, "Deny"), rule("allow-ssh", "Allow"))]) == []
+    assert [t[3] for t in _turned_allows([nsg(rule(name, "Allow"))], _OLDER_NAMES)] == [name]
+    assert _turned_allows([nsg(rule(name, "Allow"))]) == []
+    assert _turned_allows([nsg(rule(name, "Deny"), rule("allow-ssh", "Allow"))], _OLDER_NAMES) == []
 
 
 @pytest.mark.parametrize("op", ["release", "reset"])
@@ -105,6 +109,8 @@ def test_an_older_deny_all_turned_into_an_allow_stays_for_the_vm_given_its_nsg(m
     assert out["status"] == ("release_partial" if op == "release" else "swept_partial"), out
     said = " ".join(out.get("failed") or [])
     assert turned in said and "retournée en autorisation" in said, out
+    # Put back as a deny-all, it would cut api too (I4G's review): never advised.
+    assert "remettre en refus" not in said and "recréer sous un nom à elle" in said, said
 
 
 def test_an_older_deny_all_still_a_deny_goes_with_its_release(monkeypatch):
@@ -113,3 +119,43 @@ def test_an_older_deny_all_still_a_deny_goes_with_its_release(monkeypatch):
     f, c, g = _world(monkeypatch, FIXED)
     assert c.release_isolation(WEB)["status"] == "released"
     assert not {n for n in g["rules"] if n.startswith("glorfindel-")}, g["rules"]
+
+
+@pytest.mark.parametrize("name", [FIXED, f"{FIXED}-web", f"{FIXED}-customer-thing"])
+def test_a_true_orphan_goes_whatever_allow_an_older_name_carries_behind_it(monkeypatch, name):
+    """U1 kept (I4G's review): web isolated by rules on its subnet's NSG, an allow on `*` there
+    under an older version's name (its own, or a customer's that begins alike), web deleted with
+    its state lost, batch given 10.0.0.4, a pass in non_disruptive. The orphan `glorfindel-iso-web-…`
+    cuts batch: it goes, as on `main` before I4G — the older name is no turned rule a deny holds
+    back (I5Q). With it counted there (the first form of I4G), the orphan was kept, batch cut."""
+    from .test_orphan_sweep import _delete, _new_vm_at, _watch_pass
+    from .test_orphan_sweep import _world as _sweep_world
+    f, c, subnet = _sweep_world(monkeypatch)
+    sweep_web = vm_id("rg-app1", "web")
+    assert c.isolate_vm(sweep_web)["status"] == "isolated"
+    g = f.nsgs[key(f.subnets[key(subnet)]["nsg"])]
+    g["rules"][name] = _rule_record(_rule(name, 4000, dict(
+        access="Allow", direction="Inbound", source_address_prefix="*", destination_address_prefix="*",
+        destination_port_range="*")))
+    _delete(f, sweep_web)
+    batch = _new_vm_at(f, subnet, "10.0.0.4")
+    cut = _flows(f, batch)
+    _watch_pass(c)
+    assert not sorted(n for n in g["rules"] if n.startswith("glorfindel-iso-")), "U1: the orphan kept"
+    assert cut < _flows(f, batch), "batch still cut off"
+
+
+@pytest.mark.parametrize("name, to, back", [
+    ("glorfindel-iso-web-web-nic-8b70f2", "10.0.0.5", True),     # one address: a deny there cuts only it
+    ("glorfindel-iso-web-web-nic-8b70f2", "*", False),           # every NIC behind the NSG would be cut
+    (FIXED, "10.0.0.5", False),                                  # an older version's deny-all, never put back
+    (f"{FIXED}-out", "*", False)])
+def test_a_turned_allow_kept_says_what_to_do_without_cutting_the_vm_it_opens(name, to, back):
+    """I4G's review: « la remettre en refus », said of a rule on `*` or of an older version's
+    deny-all on an NSG shared since, would cut every NIC behind it — the VM it opens too. Said
+    then: take it off by hand if no longer wanted; if another VM needs that flow, recreate it
+    under a name of its own, then run again."""
+    from glorfindel.providers.azure.turned import _opens_text
+    said = _opens_text(name, to, "toutes les cartes derrière ce NSG, dont api-nic")
+    assert ("la remettre en refus" in said) is back, said
+    assert "la retirer à la main si elle n'est plus voulue" in said and "recréer sous un nom à elle" in said, said

@@ -3210,28 +3210,48 @@ nom. Le reset (`sweep_vm_rules`, `legacy_named`) faisait de même. **Pourquoi l'
 lit pas cette allow comme le refus qu'elle était (`_world`, `untampered` : un nom d'ancienne version retourné ne
 se distingue pas de celui d'un homonyme) ; elle est à quelqu'un, elle ouvre api, et une levée de web ne change rien
 pour api — sauf rouvrir ce que seul un reste de web fermait (`reopenable`). **Correctif**
-(`glorfindel/providers/azure/turned.py`) : les noms d'une ancienne version sont des nôtres pour la garde
-(`_OUR_NAMES` : `glorfindel-iso-`, `glorfindel-block-`, `glorfindel-isolation-deny-all` — le nom fixe, `-out`, le
-suffixe d'une VM). L'allow reste, dite (« gardée : notre règle glorfindel-isolation-deny-all, retournée en
-autorisation par quelqu'un, vise * — toutes les cartes derrière ce NSG, dont api-nic-4 »), `release_partial` ou
-`swept_partial`, l'état gardé ; le refus de la paire part. Le même nom compte pour les refus qu'une règle retournée
-attend derrière (I5Q : le balayage des orphelines, la levée d'une VM supprimée) : on garde plus, jamais moins.
+(`glorfindel/providers/azure/turned.py`) : deux listes de noms. `_OLDER_NAMES` (`glorfindel-isolation-deny-all` —
+le nom fixe, `-out`, le suffixe d'une VM) : une telle règle passée en allow fait lire la garde quand on demande à
+la retirer par ce nom — `_turned_guard` ne sort plus d'emblée, `_opens_another` la juge. L'allow reste, dite
+(« gardée : notre règle glorfindel-isolation-deny-all, retournée en autorisation par quelqu'un, vise * — toutes
+les cartes derrière ce NSG, dont api-nic-4 »), `release_partial` ou `swept_partial`, l'état gardé ; le refus de la
+paire part. `_TURNED_NAMES` (`glorfindel-iso-`, `glorfindel-block-`) reste seul pour I5Q, ce qu'un refus retient
+derrière lui (le balayage des orphelines, `_turned_still`, la levée d'une VM supprimée, `_cuts_all`, `_waits_for`).
+**La relecture 5.5** (« à corriger » sur 3beea571) : la première forme du correctif mettait le nom ancien dans une
+seule liste, qui servait aussi à I5Q. Une vraie orpheline (`glorfindel-iso-web-…`, web supprimée, son état perdu)
+devant une allow sur `*` sous un nom ancien — le sien, ou celui d'un client qui commence pareil — était gardée, et
+la VM qui avait repris l'adresse restait coupée (U1 ; l'oracle, `_behind_turned`, n'exempte que `iso-` et
+`block-` : la machine serait tombée en tirant ce monde). Les deux listes séparées, elle part comme sur `main` ;
+l'exemption de l'oracle n'est pas étendue (ce serait restreindre U1, A0). La relecture a relevé aussi la consigne :
+« la remettre en refus », dite d'un refus total ou d'une règle sur `*`, couperait toutes les cartes derrière son
+NSG, celle qu'elle ouvre comprise ; elle dit alors « la retirer à la main si elle n'est plus voulue ; si une autre
+VM a besoin de ce flux, le recréer sous un nom à elle, puis relancer » (`_opens_text`). **Reste ouvert** (relevé
+par la relecture, déjà sur `main`) : la promotion d'un blocage en périmètre (`blocks.py`, `replace=True`) retire
+les règles de blocage par VM sans demander la garde — une d'elles retournée en allow, qui ouvre une autre VM hors
+du périmètre (un NSG de carte partagé entre deux subnets), partirait ; la machine ne le juge pas (un blocage est
+jugé sans les flux de l'attaquant, `perimeter=True`). Laissé à un lot.
 Aucune règle de la machine ajoutée, retirée ni restreinte : `an_old_isolations_vm_isolated_again` (I4E) la tirait
 déjà. **Figée** : `test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in`
 (`test_invariant_regressions.py`, rejouée sans Hypothesis par `_run`) : rouge sur le code de `main` 5482fc1, par
-l'oracle inchangé, verte après. **Tests unitaires** (`test_turned_names.py`, onze, dix rouges sur `main`) : chaque
-forme du nom retournée en allow est une règle retournée des nôtres (le nom fixe, `-out`, suffixé, suffixé `-out`),
-un refus sous ce nom ou une allow du client n'en sont pas ; la levée et le reset de web gardent l'allow pour api et
+l'oracle inchangé, verte après. **Tests unitaires** (`test_turned_names.py`, dix-huit) : chaque
+forme du nom retournée en allow est lue pour son propre retrait (le nom fixe, `-out`, suffixé, suffixé `-out`),
+jamais parmi ce qu'un refus retient (I5Q) ; un refus sous ce nom ou une allow du client n'y sont pas ; la levée et le reset de web gardent l'allow pour api et
 le disent, le refus de la paire part (le nom fixe entrant, le nom fixe `-out`, le nom suffixé) ; rien de retourné,
-la paire part et la levée dit `released` (verte sur `main` : garde le correctif de trop en faire). **Mutants
-M3270–M3272** : les noms d'une ancienne version retirés de la garde (M3270, la cause), le nom suffixé seul oublié
-(M3271), le nom `-out` oublié (M3272).
+la paire part et la levée dit `released` (verte sur `main` : garde le correctif de trop en faire) ; la sonde de la
+relecture, une vraie orpheline devant une allow sous un nom ancien, retirée (U1 : trois noms, verte sur `main`,
+rouge sur 3beea571) ; la consigne, jamais « la remettre en refus » pour `*` ou un refus total. **Mutants
+M3270–M3275** : le nom ancien jamais lu pour son retrait (M3270, la cause), le nom suffixé oublié (M3271), le nom
+`-out` oublié (M3272), le nom ancien compté pour I5Q (M3273, la régression de la première forme), la consigne de
+remettre en refus une règle sur `*` (M3274) ou un refus total (M3275).
 **Mesures d'I4G.** Invariants, `--hypothesis-seed=N`, six à la fois : à 60 séquences, N = 73, 29, 1..18,
 **20/20 vertes** ; à 500, N = 73, 29, 7, 25, **4/4 vertes** (la graine 73 ne retombait plus à 60 sur `main` depuis
 I3G : seule la séquence figée prouve le correctif). Mutants M3270–M3272 : 3/3 par leurs tests à chaque tour (deux
 tours) ; les voisins sur `turned.py` et `older.py` (M1731, M1733, M1736, M1742, M1743, M1747, M1890, M1895–M1897,
 M1903, M1967, M1968, M2320–M2322) : 16/16, un tour. `pytest` complet : 5 928 réussis, 7 sautés ; `ruff` propre ;
-`scripts/mutant_anchors.py` : 2 340 mutants, sans faute.
+`scripts/mutant_anchors.py` : 2 340 mutants, sans faute. **Après la relecture** (les deux listes, la consigne) :
+M3270–M3275 et les seize voisins, 22/22 à chaque tour (deux tours) ; invariants à 60, N = 73, 29, 101, 202, 303,
+404, 505, 606, **8/8 vertes** ; `pytest` complet : 5 935 réussis, 7 sautés ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 343 mutants, sans faute.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

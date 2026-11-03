@@ -13,25 +13,29 @@ from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.response.ids import _parse_nic_resource_id, _parse_nsg_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 
-# Our names: the per-NIC isolation and block rules, and an older version's isolation —
-# its fixed name (AzureConnector.ISOLATION_RULE_NAME), `-out`, or VM-suffixed (I4G, #460).
-# Without the last, an older deny-all someone turned into an allow was no turned rule of
-# ours: the guard was skipped, its release took it off by name, and the VM given that NSG
-# since lost what it let in (the machine, seed 73).
-_OUR_NAMES = ("glorfindel-iso-", "glorfindel-block-", "glorfindel-isolation-deny-all")
+# Our names, for what a deny holds back (I5Q): the per-NIC isolation and block rules. A
+# turned allow under one of them waits behind our deny for the VM given its address.
+_TURNED_NAMES = ("glorfindel-iso-", "glorfindel-block-")
+# An older version's isolation — its fixed name (AzureConnector.ISOLATION_RULE_NAME), `-out`,
+# or VM-suffixed (I4G, #460): ours for the guard of a removal BY THAT NAME only (I4B). Turned
+# into an allow, it was no rule of ours there: the guard returned at once, the release of the
+# older isolation took it off, the VM given that NSG since lost what it let in (the machine,
+# seed 73). Never for I5Q: a name homonyms and customers can share (`…-deny-all-<anything>`)
+# would keep a true orphan that cuts a live VM (U1, I4G's review).
+_OLDER_NAMES = ("glorfindel-isolation-deny-all",)
 
 
-def _turned_allows(nsgs) -> list[tuple[str, set, str, str, list]]:
-    """Our rules, by their names (`_OUR_NAMES`), that someone turned into an allow (I5Q,
-    #327): for each, its NSG, the subnets that NSG governs, the side of the NIC it
-    protects ("destination" inbound, "source" outbound), its name, its addresses on that
-    side."""
+def _turned_allows(nsgs, names: tuple = _TURNED_NAMES) -> list[tuple[str, set, str, str, list]]:
+    """Our rules, by their names (`names`: `_TURNED_NAMES` by default), that someone turned
+    into an allow (I5Q, #327): for each, its NSG, the subnets that NSG governs, the side of
+    the NIC it protects ("destination" inbound, "source" outbound), its name, its addresses
+    on that side."""
     out = []
     for nsg in nsgs:
         subnets = {s.id.rstrip("/").lower() for s in (getattr(nsg, "subnets", None) or []) if getattr(s, "id", None)}
         for r in (getattr(nsg, "security_rules", None) or []):
             name = getattr(r, "name", "") or ""
-            if (not name.lower().startswith(_OUR_NAMES)
+            if (not name.lower().startswith(names)
                     or _enum_text(getattr(r, "access", "")) != "allow"):
                 continue
             side = "destination" if _enum_text(getattr(r, "direction", "")) == "inbound" else "source"
@@ -116,7 +120,9 @@ def _turned_guard(network, nsgs: list):
     NICs). The NICs are listed only when a rule is turned; a listing that fails raises
     — nothing found is not nothing there."""
     turned = _turned_allows(nsgs)
-    if not turned:
+    # An older version's name turned into an allow is asked about by that name too (I4G):
+    # the NICs are listed for it, and only `_opens_another` reads it — never `turned` (I5Q).
+    if not turned and not _turned_allows(nsgs, _OLDER_NAMES):
         return lambda nsg, rule, own="", mates=(): ""
     holders, nic_nsg, nic_subnets = _nic_maps(network)
 
@@ -255,9 +261,14 @@ def _opens_another(nsg, rule, own: set, holders: dict, nic_nsg: dict, nic_subnet
 
 
 def _opens_text(name: str, to: str, on: str) -> str:
+    """Why it stays, and what to do. Aimed at every address (`*`), or an older version's deny-all
+    (`_OLDER_NAMES`), put back as a deny it would cut every NIC behind its NSG — the VM it opens
+    too (I4G's review): never advised then."""
+    total = to.strip().lower() in ("*", "any", "0.0.0.0/0")
+    back = "" if total or name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "
     return (f"notre règle {name}, retournée en autorisation par quelqu'un, vise {to} — {on} : la retirer "
-            "retirerait à cette VM ce qu'elle lui ouvre — la remettre en refus, ou la retirer à la main "
-            "si elle n'est plus voulue")
+            f"retirerait à cette VM ce qu'elle lui ouvre — {back}la retirer à la main si elle n'est plus "
+            "voulue ; si une autre VM a besoin de ce flux, le recréer sous un nom à elle, puis relancer")
 
 
 def _nic_maps(network) -> tuple[dict, dict, dict]:

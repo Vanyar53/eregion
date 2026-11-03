@@ -6,7 +6,10 @@
 // command that carries it there: nothing is launched from here, no name is typed here, Glorfindel
 // is never told. Then each wire is followed live (GET /api/dagorlad/requests/<id>, read only): its
 // chronology from the windows, the watch's cycles, the cards and the run's report. The wires stay
-// locked until the request is over, then each keeps its last result. Needs console.js and exercises.js.
+// locked until the request is over, then each keeps its last result. A drill (DG-d) keeps the wires
+// drawn under a name (POST /api/dagorlad/drills) and lays them again (GET /api/dagorlad/drills/<name>):
+// loading one starts nothing, and a shipped drill's wire waits for the VMs the operator gives it —
+// never one chosen in their place (Jonathan, 03/11). Needs console.js and exercises.js.
 Console.init('dagorlad');
 document.title = 'Eregion — Dagorlad';
 const $ = id => document.getElementById(id);
@@ -27,9 +30,18 @@ const S = {
   lastAt: 0,        // when it was seen over (ms): its reports may still arrive, followed a while
   stop: null,       // « Stop all »: the command, what it stops, what stays in flight
   stopErr: '',
+  drills: null,     // the drills of this instance and Eregion's (DG-d)
+  drillsErr: '',
+  pending: [],      // a loaded drill's wires waiting for their VMs: {experiment, zone, name, why, candidates}
+  loaded: '',       // the drill last loaded or saved, by name
+  loadedLayer: '',  // its layer: a shipped drill's name is never offered to « Save as drill »
+  loadAsk: '',      // a drill to load over the wires drawn: asked first
+  saving: null,     // « Save as drill » open: {err, exists, name, desc}
+  drillsOpen: false, // the list of drills shown (folded by default: the board holds 1440 × 900)
 };
 const KEY = 'console.dagorlad.wires';
 const REQ_KEY = 'console.dagorlad.request';
+const PENDING_KEY = 'console.dagorlad.pending';
 const REQ_ID = /^r-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/;
 const MAX_WIRES = 100;
 const FOLLOW_AFTER_MS = 30 * 60 * 1000;   // a request over is followed this long for its reports
@@ -37,6 +49,11 @@ const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S.wires)); } catch (_) { /* private mode */ }
+}
+function savePending() {
+  try {
+    localStorage.setItem(PENDING_KEY, JSON.stringify({ wires: S.pending, loaded: S.loaded, layer: S.loadedLayer }));
+  } catch (_) { /* private mode */ }
 }
 // The request followed, running or over, kept in this browser (a convenience): a reload finds it.
 function saveRequest() {
@@ -94,8 +111,8 @@ const ACTIONS = {
   },
   clear() {
     if (S.request) return;
-    S.wires = []; S.picked = null; S.note = ''; S.last = null; S.follow = null;
-    save(); saveRequest(); refreshPlan();
+    S.wires = []; S.picked = null; S.note = ''; S.last = null; S.follow = null; S.pending = [];
+    save(); saveRequest(); savePending(); refreshPlan();
   },
   // Phase (b): the request, written by the console in its own directory — never a launch. Over,
   // the same gesture runs the same wires again: a new request.
@@ -109,7 +126,55 @@ const ACTIONS = {
   },
   // « Stop all »: the console revokes nothing — it shows Orodruin's emergency stop, to run.
   stopAll() { if (S.stop) { S.stop = null; renderPlan(); } else loadStop(); },
+  // ── Drills (DG-d) ──
+  toggleDrills() { S.drillsOpen = !S.drillsOpen; renderDrills(); },
+  saveOpen() {
+    if (S.request || !S.wires.length) return;
+    // A shipped drill's name is not offered: saved under it, this instance's would replace the
+    // shipped one, and its wires would never be « to place » again.
+    S.saving = S.saving ? null : { err: '', exists: false, name: S.loadedLayer === 'instance' ? S.loaded : '', desc: '' };
+    S.drillsOpen = true;
+    renderDrills();
+  },
+  saveDrill(replace) { saveDrill(replace === true); },
+  // Loading lays the drill's wires on the board — over the wires drawn only once asked; nothing starts.
+  loadDrill(name) {
+    if (S.request || typeof name !== 'string') return;
+    if ((S.wires.length || S.pending.length) && S.loadAsk !== name) { S.loadAsk = name; renderDrills(); return; }
+    S.loadAsk = '';
+    loadDrill(name);
+  },
+  loadCancel() { S.loadAsk = ''; renderDrills(); },
+  // A wire waiting for its VMs: the operator gives one, or all of its zone's candidates.
+  place(p, j) {
+    const w = S.pending[p];
+    const c = w && w.candidates[j];
+    if (!c || S.request) return;
+    lay([[w.experiment, c.resource_id]]);
+    S.pending.splice(p, 1); savePending(); refreshPlan();
+  },
+  placeAll(p) {
+    const w = S.pending[p];
+    if (!w || S.request || !w.candidates.length) return;
+    lay(w.candidates.map(c => [w.experiment, c.resource_id]));
+    S.pending.splice(p, 1); savePending(); refreshPlan();
+  },
+  unplace(p) {
+    if (S.request || p < 0 || p >= S.pending.length) return;
+    S.pending.splice(p, 1); savePending(); refreshPlan();
+  },
 };
+// Wires laid by a drill: the same pair once, at most MAX_WIRES — the rest said.
+function lay(pairs) {
+  let left = 0;
+  for (const [e, t] of pairs) {
+    if (S.wires.some(w => w[0] === e && same(w[1], t))) continue;
+    if (S.wires.length >= MAX_WIRES) { left += 1; continue; }
+    S.wires.push([e, t]);
+  }
+  S.note = left ? `at most ${MAX_WIRES} wires: ${left} not laid` : '';
+  save();
+}
 const _EVENTS = { click: 'click', pointerdown: 'pointerdown', pointerup: 'pointerup' };
 function _dispatch(ev, name) {
   const el = ev.target instanceof Element ? ev.target.closest(`[data-on-${name}]`) : null;
@@ -302,6 +367,7 @@ function renderPlan() {
     box.innerHTML = `<div class="plan-head"><b>PLAN</b> <span class="meta">no wire yet</span>${S.note ? ` <span class="r-warn">${esc(S.note)}</span>` : ''}
       <button type="button" class="mini stopbtn" ${_on('click', 'stopAll')} title="Orodruin's emergency stop: the command, what it stops, what stays in flight">Stop all</button></div>
       ${stopBox()}
+      ${pendingBox()}
       <div class="empty">Pick a red card, then one or more targets — or drag a red card's handle onto a target;
       several wires may go to one target, and a wire's ✕ removes it. The server judges each wire as Orodruin would,
       and says what to expect; nothing is launched, nothing is written.</div>`;
@@ -315,11 +381,12 @@ function renderPlan() {
     const [cls, mark] = c.ok === true ? ['r-ok', '✓'] : c.ok === false ? ['r-bad', '✕'] : ['r-warn', '?'];
     return `<span class="${cls}">${mark} ${esc(c.text)}</span>`;
   }).join('');
-  const may = Number(t.allowed) > 0 && Number(t.refused) === 0;
+  const may = Number(t.allowed) > 0 && Number(t.refused) === 0 && !S.pending.length;
   // Over, the same wires run again in one gesture: a new request.
   const again = sameAsLast();
   const ask = `<button type="button" class="mini" ${_on('click', 'request')}${may ? '' : ' disabled'}
-      title="${may ? 'Write a request for Orodruin — the page gives the command that carries it' : 'Remove the refused wires first'}">${again ? 'Run again' : 'Request run from Orodruin'}</button>`;
+      title="${may ? 'Write a request for Orodruin — the page gives the command that carries it'
+               : S.pending.length ? 'Give the waiting wires their VMs first (or remove them)' : 'Remove the refused wires first'}">${again ? 'Run again' : 'Request run from Orodruin'}</button>`;
   box.innerHTML = `<div class="plan-head"><b>PLAN</b>
       <span>${Number(t.wires)} wire(s) · ${Number(t.refused)} refused · ~${Math.round(Number(t.estimate_s) / 60)} min · one after the other</span>
       <span class="meta">what Orodruin will check before anything runs — the page launches nothing</span>
@@ -330,6 +397,7 @@ function renderPlan() {
     ${stopBox()}
     ${S.requestErr ? `<div class="err">${esc(S.requestErr)}</div>` : ''}
     ${lastLine()}
+    ${pendingBox()}
     <div class="checks">${checks}</div>
     <table class="t">${(p.wires || []).map(planRow).join('')}</table>`;
 }
@@ -559,6 +627,146 @@ function storedRequest() {
   } catch (_) { return null; }
 }
 
+// ── Drills (DG-d): kept under a name, laid again on the board ──────────────────────────
+// A loaded drill's wires waiting for their VMs (Jonathan, 03/11): each says its zone and its
+// candidates — a button per VM, and « all » — and when each last ran it here: a hint, never a choice.
+function pendingBox() {
+  if (!S.pending.length) return '';
+  const now = Date.now() / 1000;
+  const rows = S.pending.map((w, p) => {
+    const least = w.candidates.length > 1 ? leastRecent(w.candidates) : -1;
+    const buttons = w.candidates.map((c, j) => {
+      const ran = c.last_run_at != null ? `last ran here ${dur(Math.max(0, now - Number(c.last_run_at)))} ago` : 'never ran here';
+      // Two VMs of one name (a twin copied from a bench): each said by its group.
+      const group = String(c.resource_id).split('/')[4] || '';
+      const twice = w.candidates.filter(o => same(o.name, c.name)).length > 1;
+      return `<button type="button" class="mini" ${_on('click', 'place', p, j)} title="${esc(`${ran} · group ${group} · zone ${c.zone || '?'}`)}">${esc(c.name)}${twice ? ` <span class="meta">· ${esc(group)}</span>` : ''}${j === least ? ' <span class="meta">· least recently</span>' : ''}</button>`;
+    }).join(' ');
+    const all = w.zone && w.candidates.length > 1
+      ? `<button type="button" class="mini" ${_on('click', 'placeAll', p)} title="One wire per VM of the zone">all ${Number(w.candidates.length)}</button>` : '';
+    return `<tr><td style="white-space:nowrap"><span class="rid">${esc(w.experiment)}</span> → ${w.zone ? `zone ${esc(w.zone)}` : esc(w.name)}</td>
+      <td class="wrap">${buttons} ${all}${w.zone && w.candidates.length ? '' : ` <span class="${w.candidates.length ? 'r-warn' : 'r-bad'}">${esc(w.why)}</span>`}</td>
+      <td><button type="button" class="mini" ${_on('click', 'unplace', p)} title="Remove this wire">✕</button></td></tr>`;
+  }).join('');
+  return `<div class="pending"><b>TO PLACE</b> <span class="meta">${esc(S.loaded)}: these wires name no VM here —
+    give each its VMs; the request waits for them, and nothing is chosen for you</span>
+    <table class="t">${rows}</table></div>`;
+}
+function leastRecent(cands) {
+  let k = -1, best = Infinity;
+  cands.forEach((c, j) => {
+    const t = c.last_run_at == null ? -1 : Number(c.last_run_at);
+    if (t < best) { best = t; k = j; }
+  });
+  return k;
+}
+const LAYER = { shipped: ['', 'shipped'], instance: ['c-ok', 'this instance'] };
+function drillRow(d) {
+  const [cls, label] = Object.hasOwn(LAYER, d.layer) ? LAYER[d.layer] : ['', 'unknown'];
+  const wires = (d.wires || []).map(w => `${w.experiment} → ${w.target && w.target.name ? w.target.name : 'zone ' + (w.target && w.target.zone)}`).join(' · ');
+  const drawn = S.wires.length + S.pending.length;
+  const load = d.error ? '' : S.loadAsk === d.name
+    ? `<span class="r-warn">replace the ${Number(drawn)} wire(s) drawn?</span>
+       <button type="button" class="mini" ${_on('click', 'loadDrill', d.name)}>Load</button>
+       <button type="button" class="mini" ${_on('click', 'loadCancel')}>Cancel</button>`
+    : `<button type="button" class="mini" ${_on('click', 'loadDrill', d.name)}${S.request ? ' disabled' : ''}
+         title="Lay its wires on the board — nothing starts">Load</button>`;
+  return `<tr><td style="white-space:nowrap"><b>${esc(d.name)}</b>${d.name === S.loaded ? ' <span class="meta">· on the board</span>' : ''}</td>
+    <td style="white-space:nowrap"><span class="chip ${esc(cls)}">${esc(label)}</span>${d.replaces ? ' <span class="meta">replaces the shipped one</span>' : ''}</td>
+    <td class="meta" style="white-space:nowrap">${esc(d.author)}${d.updated ? ' · ' + esc(String(d.updated).slice(0, 16).replace('T', ' ')) : ''}</td>
+    <td class="wrap">${d.error ? `<span class="r-bad">unreadable: ${esc(d.error)}</span>` : esc(wires)}${d.description ? `<div class="meta">${esc(d.description)}</div>` : ''}</td>
+    <td style="white-space:nowrap">${load}${d.error ? '' : ` <a href="/api/dagorlad/drills/${encodeURIComponent(d.name)}/yaml" title="Export its YAML: for Git, the twin, or a drill proposed to Eregion">YAML</a>`}</td></tr>`;
+}
+function saveForm() {
+  const f = S.saving;
+  const left = S.pending.length ? ` · the ${Number(S.pending.length)} wire(s) waiting for their VMs are not kept` : '';
+  return `<div class="saveform">
+    <label>name <input id="drill-name" maxlength="48" spellcheck="false" placeholder="ssh-and-fault" value="${esc(f.name || '')}"></label>
+    <label>description <input id="drill-desc" maxlength="300" placeholder="what it proves" value="${esc(f.desc || '')}"></label>
+    <button type="button" class="mini" ${_on('click', 'saveDrill', false)}>Save</button>
+    <button type="button" class="mini" ${_on('click', 'saveOpen')}>Cancel</button>
+    ${f.exists ? `<button type="button" class="mini" ${_on('click', 'saveDrill', true)} title="Write over the drill of this name in this instance">Replace it</button>` : ''}
+    <span class="meta">${Number(S.wires.length)} wire(s), kept by the names of their VMs — never their ids${left}</span>
+    ${f.err ? `<div class="err">${esc(f.err)}</div>` : ''}</div>`;
+}
+function renderDrills() {
+  const box = $('drills');
+  if (!box) return;
+  const can = S.wires.length > 0 && !S.request;
+  const ds = S.drills || [];
+  const head = `<div class="plan-head"><b>DRILLS</b> <span class="meta">${S.drills ? Number(ds.length) : '…'} kept — loading one lays its wires, nothing starts</span>
+      <button type="button" class="mini" ${_on('click', 'toggleDrills')}>${S.drillsOpen ? 'Hide' : 'Show'}</button>
+      <button type="button" class="mini" ${_on('click', 'saveOpen')}${can ? '' : ' disabled'}
+        title="${can ? 'Keep the wires drawn under a name, in this instance' : 'Draw wires first — and no request running'}">Save as drill</button>
+      ${S.drillsErr ? `<span class="r-bad">${esc(S.drillsErr)}</span>` : ''}</div>`;
+  if (!S.drillsOpen) { box.innerHTML = head; return; }
+  box.innerHTML = head + (S.saving ? saveForm() : '') + (ds.length ? `<table class="t">${ds.map(drillRow).join('')}</table>`
+    : `<div class="empty">${S.drills ? 'No drill yet: draw wires, then « Save as drill ».' : 'reading the drills…'}</div>`);
+}
+async function loadDrills() {
+  try {
+    const d = await getJSON('/api/dagorlad/drills');
+    if (d.error) throw new Error(d.error);
+    S.drills = Array.isArray(d.drills) ? d.drills : [];
+    S.drillsErr = '';
+  } catch (e) {
+    S.drillsErr = `/api/dagorlad/drills — ${e.message}`;
+  }
+  renderDrills();
+}
+// Lays a drill on the board: its wires placed on their VMs, those of a selector waiting for theirs.
+async function loadDrill(name) {
+  try {
+    const d = await getJSON(`/api/dagorlad/drills/${encodeURIComponent(name)}`);
+    if (d.error) throw new Error(d.error);
+    const placed = Array.isArray(d.placed) ? d.placed : [];
+    S.wires = []; S.last = null; S.follow = null;
+    lay(placed.flatMap(p => (p.targets || []).map(c => [String(p.experiment), String(c.resource_id)])));
+    S.pending = placed.filter(p => !(p.targets || []).length).map(p => ({
+      experiment: String(p.experiment), zone: String(p.zone || ''), name: String(p.name || ''), why: String(p.why || ''),
+      candidates: (p.candidates || []).map(c => ({ name: String(c.name), resource_id: String(c.resource_id),
+        zone: String(c.zone || ''), last_run_at: c.last_run_at == null ? null : Number(c.last_run_at) })),
+    }));
+    S.loaded = String(d.name || name);
+    S.loadedLayer = String(d.layer || '');
+    S.drillsErr = d.targets_error ? `the enrolled VMs unreadable: ${d.targets_error}` : '';
+    savePending(); saveRequest();
+  } catch (e) {
+    S.drillsErr = `the drill ${name} — ${e.message}`;
+  }
+  renderDrills(); refreshPlan();
+}
+async function saveDrill(replace) {
+  const f = S.saving;
+  if (!f || S.request) return;
+  f.name = ($('drill-name') && $('drill-name').value) || '';
+  f.desc = ($('drill-desc') && $('drill-desc').value) || '';
+  const body = { name: f.name.trim(), wires: S.wires.map(w => ({ experiment: w[0], target: w[1] })) };
+  if (f.desc.trim()) body.description = f.desc.trim();
+  if (replace) body.replace = true;
+  try {
+    const r = await fetch('/api/dagorlad/drills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                   body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) {
+      f.err = d.error || `HTTP ${r.status}`; f.exists = d.exists === true;
+      renderDrills(); return;
+    }
+    S.saving = null; S.loaded = String(d.saved || body.name); S.loadedLayer = 'instance';
+    savePending();
+  } catch (e) {
+    f.err = e.message; renderDrills(); return;
+  }
+  loadDrills();
+}
+function validPending(w) {
+  return w && typeof w === 'object' && ['experiment', 'zone', 'name', 'why'].every(k => typeof w[k] === 'string')
+    && Array.isArray(w.candidates) && w.candidates.length <= MAX_WIRES
+    && w.candidates.every(c => c && typeof c.name === 'string' && typeof c.resource_id === 'string'
+      && (c.zone === undefined || typeof c.zone === 'string')
+      && (c.last_run_at === null || typeof c.last_run_at === 'number'));
+}
+
 // ── Fetching ──────────────────────────────────────────────────────────────────────────
 async function loadBoard() {
   try {
@@ -575,6 +783,7 @@ async function refreshPlan() {
   const seq = ++planSeq;
   S.planErr = '';                          // the last plan stays shown until the new one comes
   renderBoard(); renderPlan();
+  if (!S.saving) renderDrills();           // never while « Save as drill » is being typed in
   if (!S.wires.length) return;
   const query = S.wires.map(w => 'wire=' + encodeURIComponent(`${w[0]}@${w[1]}`)).join('&');
   try {
@@ -597,10 +806,17 @@ async function refreshPlan() {
         .slice(0, MAX_WIRES);
     }
   } catch (_) { /* private mode, or something else there */ }
+  try {
+    const kept = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
+    if (kept && Array.isArray(kept.wires)) S.pending = kept.wires.filter(validPending).slice(0, MAX_WIRES);
+    if (kept && typeof kept.loaded === 'string') S.loaded = kept.loaded;
+    if (kept && typeof kept.layer === 'string') S.loadedLayer = kept.layer;
+  } catch (_) { /* private mode, or something else there */ }
   // The request followed before the reload: read again — still running, its wires lock again.
   S.last = storedRequest();
   S.lastAt = S.last ? Date.now() : 0;
   loadBoard().then(refreshPlan).then(refreshFollow);
+  loadDrills();
   setInterval(() => loadBoard().then(refreshPlan), 30000);
   setInterval(refreshFollow, 10000);
   window.addEventListener('resize', drawWires);

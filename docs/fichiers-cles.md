@@ -478,10 +478,12 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   .bashrc                     → PS1 + HISTFILE + alias gf (chargé par make glorfindel-shell)
   .bash_history               → historique bash persistant
 
-~/.annatar/                   → monté par make annatar-shell seul (SEC20 : plus par le service compose)
-  .bashrc                     → PS1 + HISTFILE + alias ar (chargé par make annatar-shell, en lecture seule
+~/.annatar/                   → jamais monté entier (SEC20) : make annatar-shell en monte deux fichiers,
+                                qu'il crée avant et refuse si l'un est un lien ; le service compose, rien
+  .bashrc                     → alias ar (chargé par make annatar-shell, --init-file, en lecture seule
                                 dans le conteneur : le rouge ne l'écrit jamais)
-  .bash_history               → historique bash persistant
+  .bash_history               → historique bash persistant, le seul fichier en écriture (HISTFILE posé par
+                                make annatar-shell) ; bash y ajoute, il ne le tronque pas
 
 ~/.cache/chroma/              → modèle ONNX ChromaDB (79MB, téléchargé une seule fois)
 ```
@@ -570,14 +572,17 @@ _SEC20 (#467), 03/11. **Le rouge n'écrit jamais ce que l'opérateur exécute** 
 d'injecteur (Annatar, Gothmog) ne monte en écriture aucun répertoire de code, de scripts ou de
 configuration que l'opérateur, la watch ou un `make` lance ensuite, ni ce qui en contient un (le
 dépôt entier, le `HOME` entier). `tests/unit/test_red_mounts.py` tient cette carte : il lit le
-compose et chaque `docker run` de l'image des injecteurs dans le Makefile, du poste et d'Orodruin._
+compose et chaque `docker run` de l'image des injecteurs dans le Makefile, du poste et d'Orodruin,
+et refuse ce qu'il ne saurait lire — une variable d'un tel `docker run` définie deux fois ou
+complétée par `+=`, un `docker run` dont l'image ne s'écrit pas en clair, un `docker compose … run`
+qui ajoute un montage._
 
 | Où | Conteneur | En écriture | Ce qu'il y écrit |
 |---|---|---|---|
 | compose | `annatar` | `runs/annatar`, `runs/orodruin` | ses signaux, ses rapports, ses fenêtres, ses campagnes ; le journal avant chaque appel, le verrou « un run à la fois » |
 | compose | `gothmog` | `runs/gothmog`, `runs/orodruin` | de même, pour une panne |
 | Makefile `DOCKER_ANNATAR` (`annatar-run`, `annatar-dry-run`) | Annatar | `runs/annatar`, `runs/orodruin` | comme le compose |
-| Makefile `annatar-shell` | Annatar, un shell | `runs/annatar`, `runs/orodruin`, `~/.annatar` | et l'historique du shell ; son `.bashrc`, qu'il lance, en lecture seule |
+| Makefile `annatar-shell` | Annatar, un shell | `runs/annatar`, `runs/orodruin`, `~/.annatar/.bash_history` | et l'historique du shell, ce seul fichier, jamais `~/.annatar` ; son `.bashrc`, qu'il lance, en lecture seule |
 | Makefile `annatar-validate`, `annatar-list` | Annatar | rien | — |
 | Orodruin `ORO_RUN`, `ORO_RUN_GOTHMOG`, `ORO_RUN_CONTRACT`, `ORO_RUN_REQUEST` | les injecteurs, le contrat, le lanceur d'une demande | leurs répertoires de `~/runs` (le tableau ci-dessus) | ce que SEC18 dit ; `~/requests`, ce que juge le lanceur, en lecture seule |
 | Orodruin `ORO_MIGRATE` | la migration, une fois | `~/runs` entier | des données seulement, rien qu'on exécute |
@@ -587,7 +592,8 @@ Ce qui ne s'écrit plus : `scripts/` et `annatar/scenarios/` (le compose et `ANN
 scripts de `scripts/vm/` et les envoie à sa cible par Run Command ; il lit ses scénarios ; il
 n'écrit ni les uns ni les autres. Le montage reste pour qu'une modification locale serve sans
 reconstruire l'image, qui les porte aussi. `~/.annatar` sort du compose : la CLI d'Annatar n'y
-écrit rien, et son `.bashrc` est ce que lance `make annatar-shell`. Un script qui écrit,
+écrit rien, et son `.bashrc` est ce que lance `make annatar-shell` ; ce shell n'en monte que le
+`.bashrc`, en lecture seule, et l'historique, où il pose `HISTFILE`. Un script qui écrit,
 `setup_testdata.sh` (T1486), écrit sur la VM cible (`/mnt/testdata`), par Run Command : jamais sur
 l'hôte, jamais un endroit qu'on exécute. Les scénarios d'une campagne générée s'écrivent dans
 `runs/annatar/campaigns/<id>/scenarios/` : des données que seul Annatar lit, et qui ne nomment que

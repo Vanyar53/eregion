@@ -55,11 +55,21 @@ GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel \
 	-v $(HOME)/.cache/chroma:/root/.cache/chroma
 
-# SEC20 (#467) : ~/.annatar, l'historique du shell d'Annatar ; son .bashrc, que lance annatar-shell
-# (--init-file), en lecture seule par-dessus — le rouge n'écrit jamais ce que l'opérateur lance.
+# SEC20 (#467) : de ~/.annatar, le shell d'Annatar ne monte que deux fichiers — son .bashrc, qu'il
+# lance (--init-file), en lecture seule ; son historique, le seul en écriture, où HISTFILE le
+# pose. Jamais le répertoire : le rouge n'y pose rien que l'opérateur lance ensuite. Bash ajoute
+# à ce fichier ; il ne le tronque pas (sa troncature passe par un fichier voisin, que le conteneur
+# ne peut créer). ANNATAR_SHELL_FILES les crée avant, au nom de l'opérateur, et refuse un lien ou
+# autre chose qu'un fichier : Docker résoudrait le lien sur l'hôte et donnerait sa cible au rouge.
 ANNATAR_STATE := \
-	-v $(HOME)/.annatar:/root/.annatar \
-	-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro
+	-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro \
+	-v $(HOME)/.annatar/.bash_history:/root/.annatar/.bash_history \
+	-e HISTFILE=/root/.annatar/.bash_history
+ANNATAR_SHELL_FILES = for f in $$HOME/.annatar $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history; do \
+	test ! -L "$$f" || { echo "✗ $$f : un lien, rien ne part (SEC20)" >&2; exit 1; }; done && \
+	mkdir -p $$HOME/.annatar && touch $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history && \
+	for f in $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history; do \
+	test -f "$$f" || { echo "✗ $$f : pas un fichier, rien ne part (SEC20)" >&2; exit 1; }; done
 
 # ~/.glorfindel/injectors read-only, as ~/.glorfindel in the container: Annatar reads the
 # watch heartbeat there (V1, its purple-team feedback). Without it, every Docker run printed
@@ -502,8 +512,7 @@ console-rotate:
 # ── Shells ────────────────────────────────────────────────────────────────
 
 annatar-shell: build-annatar
-	@mkdir -p $(HOME)/.annatar
-	@touch $(HOME)/.annatar/.bashrc
+	@$(ANNATAR_SHELL_FILES)
 	@grep -q "alias ar=" $(HOME)/.annatar/.bashrc || echo "alias ar='annatar'" >> $(HOME)/.annatar/.bashrc
 	@$(RUNS_DIRS)
 	@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \

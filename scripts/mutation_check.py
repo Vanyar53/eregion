@@ -9979,9 +9979,11 @@ MUTANTS += [
     ("M3405", "make annatar-list writes the scenarios (SEC20)", MAKE,
      "/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) list",
      "/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list"),
-    ("M3406", "Annatar's shell writes the .bashrc it runs at its start (SEC20)", MAKE,
-     "\t-v $(HOME)/.annatar:/root/.annatar \\\n\t-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro\n",
-     "\t-v $(HOME)/.annatar:/root/.annatar\n"),
+    ("M3406", "Annatar's shell mounts ~/.annatar whole for its history: the .bashrc it runs written by the red "
+              "(SEC20)", MAKE,
+     "\t-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro \\\n"
+     "\t-v $(HOME)/.annatar/.bash_history:/root/.annatar/.bash_history \\\n",
+     "\t-v $(HOME)/.annatar:/root/.annatar \\\n"),
     ("M3407", "Annatar's compose service mounts ~/.annatar again: the shell's .bashrc written by the red (SEC20)",
      "docker-compose.yml", "      - ./scripts:/app/scripts:ro\n",
      "      - ./scripts:/app/scripts:ro\n      - ${HOME}/.annatar:/root/.annatar\n"),

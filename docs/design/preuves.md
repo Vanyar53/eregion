@@ -3345,8 +3345,10 @@ la marque de contournement retirée, le blocage tenu) ; puis retirées de nouvea
 l'épisode (L1Q) ne se resserrait qu'après cette écriture, jamais atteinte : « pas pire que la
 carte », en silence (L1). Sur la branche, la même séquence passait déjà, par un autre chemin (la
 marque n'existait plus) : la cause restait. **Correctif** (`reassert.py`) : la référence se resserre
-dès la lecture, en mémoire, avant toute écriture de la passe — ce qui va mieux, et, pire d'un côté,
-ce qui va mieux de l'autre (`drift_meet`, L1). Figés :
+dès la lecture, en mémoire, avant les écritures de l'entrée — ce qui va mieux, et, pire d'un côté,
+ce qui va mieux de l'autre (`drift_meet`, L1) ; jamais sur une lecture « ne couvre pas » (rien de
+parti), que l'ancien ordre ne resserrait pas. Pour une entrée que le premier temps a écrite, c'est la
+lecture du premier temps, reprise au second avec son prologue (ci-dessous). Figés :
 `test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said` (la séquence),
 `test_reassert.py::test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said`
 (rouges sur `main`).
@@ -3365,6 +3367,32 @@ qui écrit en `human_only` (M2995), ce qui a déjà été reposé (M2996), une d
 (M2999), réécrit la paire (M3150) ; la référence resserrée après la première écriture (M3152).
 Par leurs tests (et la machine pour M2990, M2991, M2994–M2997, M3151), deux tours à 60 séquences : M2990–M2999 et M3150–M3151, 12/12 à chaque tour ; M3152 2/2 par le harnais (il n'était pas encore écrit au premier tour de mesure : rien ne manquait à son entrée `TESTS`). M2980 et M2981 (le tri de L1Qr) 2/2 ; M2982 survivait (0/2) — avec les deux temps, une entrée fusionnée n'est triée qu'au second, quand le premier ne l'a pas lue : le test de l'entrée laissée au second temps gagne le cas fusionné, M2982 2/2 ensuite. **Les mutants des fichiers touchés** (`reassert.py`, `reassert_perimeters.py`, `reassert_said.py`, `perimeter.py`, `verify_block.py` : 96), un tour à 60 séquences : 93/96. M1645 survit, comme sur `main` (mesuré sur `main` 7ac1f37 : ses tests et la machine passent mutés) ; M38 n'est attrapé que par ses séquences figées, comme mesuré par L1Q. **M1646 survivait, un défaut du lot** : la référence resserrée avant les écritures l'était aussi sur une lecture « ne couvre pas » (rien de parti), que l'ancien ordre ne resserrait jamais — elle masquait la fin d'épisode que cette branche porte ; restreinte aux lectures que l'ancien ordre resserrait, M1646 2/2. Réancrés : M1648, M1649, M2194 (`reassert_said.py`),
 M1943, M2155, M3120.
+
+**Après la relecture 5.5 (bloquant).** (1) **Une entrée écrite au premier temps ne resserrait plus
+sa référence** : le second temps la finissait (`_rewrite_block`) sans le prologue de la lecture — le
+resserrement, `unverified_over`, le contournement de la première lecture. Avec un connecteur qui
+laisse les marques de l'entrée telles quelles (la sonde de la relecture), une dérive mieux d'un
+côté, pire de l'autre, écrite (« reposé une fois »), puis les mêmes règles reparties : « pas pire
+que la carte », aucune carte — `main` passait par le chemin ordinaire et le disait. Sur
+l'adaptateur Azure, l'écriture du blocage en entier efface elle-même les marques de dérive (L1Q :
+un nouvel épisode) : la disparition suivante est dite de toute façon — c'est pourquoi la machine,
+sur le faux Azure, ne pouvait pas l'atteindre, et aucune règle ne l'atteint sans changer
+l'adaptateur. **Correctif** : le second temps reprend la lecture du premier (`pair["read"]`) par le
+même prologue que toute entrée, puis la finit. Figés : `test_reassert.py::test_a_drift_better_and_worse_in_a_pass_that_writes_narrows_its_baseline`
+(périmètre et blocage de VM ; rouge avant le correctif pour le périmètre),
+`…::test_a_check_that_raised_is_over_once_the_first_time_reads_and_writes` (la carte d'une
+vérification qui levait, fermée dans la passe où le premier temps lit et écrit ; rouge avant) ;
+`test_invariant_regressions.py::test_a_pair_put_back_by_the_first_time_narrows_its_drift_like_any_read`
+(la séquence sur le faux Azure, verte avant et après : le côté de l'adaptateur). Mutants **M3153**
+(le resserrement sauté pour une entrée écrite au premier temps) et **M3154** (`unverified_over`
+sauté). (2) **I5 par VM ne valait que pour des modes mêlés** : `mixed` était vrai dès qu'une passe
+tirait un mode par VM, même le même pour toutes — la forme par VM, plus faible, remplaçait la forme
+forte. Mêlés seulement quand les modes diffèrent ou qu'un verrou est tenu ; un seul mode tiré pour
+toutes garde la forme d'avant, sur ce mode. (3) **Le coût** : une entrée de périmètre que le premier
+temps n'écrit pas est lue deux fois par passe (une vérification de plus, au premier temps). (4)
+**La fenêtre entre les deux temps** : un watch coupé entre eux laisse des paires reposées et
+marquées (`reasserted_at`) sans la carte « reposé une fois » ; la disparition suivante est dite
+« une deuxième fois » et n'est pas reposée — une carte de moins, jamais une disparition tue.
 
 **Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé (lot à part) ; la séquence réduite, rejouée sur la machine et le code de `main` 7ac1f37 pur (après MCG), y est rouge, sur le même U1. **Un second défaut ancien**, trouvé par l'exécution non mutée du harnais de mutation (une graine au hasard à 60) : « L1: the block on …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so » — une VM créée à l'ancienne adresse de Db--01, sous des écritures refusées, son adresse changée, une carte acquittée ; 24 règles réduites à la main à huit de `main`, aucune de L1Qs, rouges sur `main` 7ac1f37 pur comme sur la branche : figé en `xfail` strict (`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone`), hors du lot, routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet (`main` 7ac1f37 fusionné, MCG compris) : 5 933 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 343 mutants, sans faute ; `tests/unit/test_mutant_anchors.py` vert (le bloc de L1Qs au-dessus du repère « The mutants end here »).
 

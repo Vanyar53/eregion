@@ -1382,7 +1382,10 @@ class IsolationMachine(RuleBasedStateMachine):
         # A VM whose lock another writer holds is skipped by the pass (L1Qs): its write runs,
         # the next pass reads it — L1 and L3 wait for that pass, as for an operation running.
         vanished = [vm for vm in self.live if self._block_vanished(vm) and not _is_busy(vm)]
-        mixed = bool(_CURRENT.modes)
+        # Mixed only when the VMs' modes differ or a lock is held: one mode drawn for every VM keeps
+        # I5's strong form (L1Qs' review) — the per-VM form is the weaker one.
+        mixed = len(set(_CURRENT.modes.values())) > 1 or bool(_CURRENT.busy)
+        single = next(iter(set(_CURRENT.modes.values()) or {_CURRENT.mode}))     # the one mode, unmixed
         human = {vm for vm in self.live if _mode_of(vm) == "human_only"}
         shared = self._shared_with_writers(human) if mixed else {}
         cards_before = {e["id"] for e in escalations.pending()}
@@ -1441,7 +1444,7 @@ class IsolationMachine(RuleBasedStateMachine):
         for vm in self.live:
             reopenable = flows[("own", vm)] - flows[vm]
             assert after[vm] - flows[vm] <= reopenable, f"I5: the reassertion opened flows of {vm}"
-            if not mixed and _CURRENT.mode == "human_only":
+            if not mixed and single == "human_only":
                 assert after[vm] == flows[vm], f"I5: the reassertion acted on {vm} in human_only"
             elif vm in human:
                 # One mode per VM (L1Qs): a VM in human_only is not acted on — only what it
@@ -1459,7 +1462,7 @@ class IsolationMachine(RuleBasedStateMachine):
                                   reopenable)
         for vm in releasing:
             assert self._footprint(vm) <= footprints[vm], f"I9: the reassertion isolated {vm} again mid-release"
-        if not mixed and _CURRENT.mode == "human_only":
+        if not mixed and single == "human_only":
             assert {k: n["nsg"] for k, n in self.fake.nics.items()} == nics_before
         if mixed:
             # Nothing written for a VM in human_only (L1Qs): its NICs carry what they carried,

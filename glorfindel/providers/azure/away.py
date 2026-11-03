@@ -8,8 +8,10 @@ import re
 
 from glorfindel.providers.azure.nsg import _rule_name
 from glorfindel.providers.azure.turned import _aims_elsewhere, _held_by_turned, _turned_guard
-from glorfindel.response.ids import _parse_nsg_resource_id
+from glorfindel.providers.azure.quarantine import QUARANTINE_NSG_PREFIX
+from glorfindel.response.ids import _parse_nsg_resource_id, _parse_vm_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
+from glorfindel.response.unread import _own_unread
 
 # A block's name: its IP segment, then the VM, the NIC and its hash (sweep.py reads it alike).
 _BLOCK_RE = re.compile(r"^glorfindel-block-\d{1,3}(?:-\d{1,3}){3}(?:-\d{1,2})?-(?P<rest>.+?)(?:-out)?$")
@@ -17,6 +19,29 @@ _BLOCK_RE = re.compile(r"^glorfindel-block-\d{1,3}(?:-\d{1,3}){3}(?:-\d{1,2})?-(
 
 class AwayRulesMixin:
     """_away_rules, _away_split, _left_quarantine_rules (part of AzureConnector)."""
+
+    def _unread(self, resource_id: str, unverified: str, said=()) -> list[str]:
+        """_own_unread (I3U): this VM's isolation state unreadable, said — with where to look
+        before removing it, our quarantine NSG of its region (_quarantine_hint)."""
+        return _own_unread(resource_id, unverified, said, lambda: self._quarantine_hint(resource_id))
+
+    def _quarantine_hint(self, resource_id: str) -> str:
+        """Where a partial release may have left a NIC's rules, its state unreadable since (I3U,
+        review): our quarantine NSG of the VM's region (`nsg-glorfindel-quarantine-<région>`), in
+        the configured group, else the VM's — the NSGs its NICs carry now are not it. Read only
+        then; a region that can't be read is said as such."""
+        rg, vm_name = _parse_vm_resource_id(resource_id)
+        try:
+            regions = sorted({(t0.get("location") or "").lower() for t0 in
+                              self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)} - {""})
+        except Exception:
+            regions = []
+        try:
+            q_rg = self._quarantine_settings()[1] or rg
+        except Exception:
+            q_rg = f"{rg}, ou celui de la configuration"
+        names = " ou ".join(f"{QUARANTINE_NSG_PREFIX}-{r}" for r in regions) or f"{QUARANTINE_NSG_PREFIX}-<région>"
+        return f"{names} (groupe {q_rg})"
 
     @staticmethod
     def _quarantines_left(state: dict) -> dict:

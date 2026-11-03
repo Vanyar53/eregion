@@ -3013,6 +3013,82 @@ rejouées hors d'Hypothesis : vertes. `pytest` complet, `main` f1b9b24 fusionné
 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 087 mutants, sans faute. M3060–M3066 et
 M07 (réancré) : 8/8 à chaque tour (deux tours, après la fusion).
 
+**I3U (02/11, #440) : une levée avec un état devenu illisible ne dit jamais « levée faite ».**
+Relevé par la relecture d'I3R (sa sonde : une levée partielle, puis l'état rendu illisible). Une
+levée partielle écrit dans l'état ce que la reprise doit encore chercher : le NSG de quarantaine
+quitté (`quarantines_left`), les placements gardés. L'état devenu illisible ensuite (un disque, une
+écriture coupée), la reprise lisait un état vide, trouvait les cartes sur leur NSG, disait
+`released` et **effaçait le fichier illisible** — la paire restée sur le NSG de quarantaine, le seul
+fichier qui disait où la chercher perdu. `release.py` ne gardait l'état illisible que `if failed`
+(SEC4b : ne pas l'écrire par-dessus) ; rien ne disait qu'un état illisible est un inconnu pour la
+levée elle-même. **Cause** : l'absence lue comme « rien », A0 à l'envers. **Correctif**
+(`glorfindel/response/unread.py`, `_own_unread`) : l'état de la VM illisible, la levée fait ce
+qu'elle peut (les règles retrouvées par leur nom sont retirées, comme avant) puis dit
+`release_partial` et pourquoi — dit une fois : une raison qui nomme déjà le fichier (VM supprimée,
+I7S ; carte en quarantaine, SEC4b) en tient lieu —, le fichier gardé tel quel. Ceux qui lisent
+l'état suivent la même règle : `reset --from-azure` (`swept_partial`, l'aperçu compris),
+`verify_release` (`unreadable` : `glorfindel release`, qui la demande d'abord, lisait « vérifié » et
+effaçait le fichier, « No active isolation found on NSG — state cleared »), `glorfindel reset` sans
+`--from-azure` (« Nothing to reset » : il ne lisait que les états lisibles ; il lance la levée).
+`_clear_isolation_state` n'efface jamais un fichier illisible, qui que ce soit qui le demande
+(l'adaptateur AWS compris). Réparé, la reprise reprend le chemin normal ; retiré par l'opérateur, ce
+qu'il nommait est perdu — le message le dit (« après avoir cherché les règles glorfindel-iso de ses
+cartes »). L'oracle inchangé ; aucune règle de la machine ajoutée : une règle « l'état de la VM
+devient illisible » ferait juger I8 (« une isolation sur Azure sans état ») sur un état que le test
+a lui-même rendu illisible — l'oracle lit l'état par `_load_isolation_state`, illisible = absent —,
+et la double panne demande la séquence d'I3R. **Figée** :
+`test_a_partial_release_whose_state_turns_unreadable_never_says_released` (`test_invariant_regressions.py`,
+par l'état et l'état perdu avant, Db--01 aux deux cartes sur un NSG à elles — une carte nue attend
+déjà l'état illisible, SEC4b —, la levée d'I3R freinée une fois par un 429 sur la suppression d'une
+de ses règles sur le NSG de quarantaine, l'état rendu illisible, la levée rejouée, puis l'état
+réparé) : rouge sur `main` 4f0c3a5 par l'oracle inchangé, « I3: release said released, …/Db--01 is
+not back to its design », les deux. **Après la fusion d'I3C** (#436, #452) : les deux variantes
+tombaient (I8 sur l'état que le test venait de casser ; une première levée qui n'était plus
+partielle). Non pas un défaut : les étapes d'I3R (`_I3R_STEPS`) n'atteignent plus le monde d'I3R —
+la réaffirmation n'y réécrivait l'isolation sur le NSG de quarantaine que parce qu'une disparition
+dite sous l'id en minuscules n'était pas lue « déjà dite », ce qu'I3C corrige (tracé : plus aucune
+règle `glorfindel-iso` sur le NSG de quarantaine après les étapes) ; les 429 tirés tombaient alors
+ailleurs, une carte restait en quarantaine, et I8 lisait « sans état » le fichier que le test avait
+rendu illisible. Le monde est maintenant posé comme la graine 67 l'avait laissé, sans dépendre de ce
+défaut : Db--01 isolée, notre tag retiré du NSG de quarantaine, Db--01 isolée de nouveau (ses paires
+sur le NSG que portent ses cartes, la quarantaine elle-même : ce que faisait cette passe), le tag
+remis. Rouge sur `main` f20d3c8 sans le correctif d'I3U, pour la même raison (« I3: release said
+released »), les deux variantes ; vert avec. **Tests unitaires** (`test_release_away.py`, neuf, tous rouges
+sur `main`) : la double panne de la sonde (sans état et par l'état, redite deux fois, puis réparée),
+une isolation par règles (retirées, le fichier gardé, puis retiré par l'opérateur), la vérification,
+`glorfindel release` et `glorfindel reset` (code 2, le fichier gardé), `reset --from-azure` et son
+aperçu, l'effacement. **Mutants M3131–M3135** : la levée dit `released` quand rien d'autre n'a échoué
+(M3131), sans la raison (M3132), la vérification aveugle (M3133), le reset aveugle (M3134), le reset
+simple « Nothing to reset » (M3135) : 5/5 à chaque tour (deux tours). M1253 réancré (la condition
+perd `failed`). **M1254 masqué, puis de nouveau mesuré** : son test cassait l'état de la VM levée, que
+la levée dit maintenant ; il casse aussi celui d'une autre VM (le sien perdu), M1254 pris 2/2. Les
+130 mutants des quatre fichiers touchés, un tour : 117 pris ; parmi les autres, M36 et M1552
+survivent aussi sur `main` 4f0c3a5 (M36, mêmes graines 1..6, sur la base et la branche ; M1552, ses
+tests sur une copie de la base), le reste « fixed-only » ou équivalent comme avant.
+`release.py` passe à 498 lignes, `sweep.py` à 499.
+**Mesures.** Invariants, `--hypothesis-seed=N` : à 60 séquences, N = 1..40 et 61..80 (la graine 67
+d'I3R comprise), 60/60 vertes ; à 500, N = 1..8, 8/8 vertes.
+**Après la relecture d'I3U** (« ok », trois corrections). (1) **La porte de sortie dit où
+chercher** : « après avoir cherché les règles glorfindel-iso de ses cartes » ne disait pas où ; un
+opérateur aurait regardé les NSG que portent les cartes aujourd'hui, rien trouvé, retiré le fichier,
+et la levée suivante aurait dit `released`, la paire encore sur le NSG de quarantaine. Le message nomme
+maintenant `nsg-glorfindel-quarantine-<région>` et son groupe (`_quarantine_hint`, `away.py` : la
+région lue sur les cartes, le groupe de la configuration, sinon celui de la VM ; lu seulement quand
+l'état est illisible). Et la mise en garde ne disparaît plus avec le dédoublonnage : quand le message
+SEC4b d'une carte nomme déjà le fichier, la raison n'est pas redite, la mise en garde a sa ligne.
+Tests : la double panne vérifie le NSG nommé ;
+`test_the_warning_stays_when_a_nics_message_names_the_unreadable_file`. (2) **La garde de
+`_clear_isolation_state` mesurée** : M3190 (la garde retirée) ; M3191 (la mise en garde avalée par le
+dédoublonnage). M3131–M3135, M3190, M3191 : 7/7 à chaque tour (deux tours) ; M3132–M3134 réancrés (les
+appels passent par `self._unread`). (3) `docs/fichiers-cles.md` : vrai pour Azure ; l'adaptateur AWS
+garde le fichier mais dit encore `released`. `release.py` 497 lignes, `sweep.py` 498, `state.py` 497,
+`unread.py` 29.
+**Reste ouvert** : `verify_release` ne cherche pas sur le NSG de quarantaine quitté qu'un état
+**lisible** nomme (`quarantines_left`) — `glorfindel release` y lit « vérifié » et efface l'état, la
+paire restée (mesuré sur le faux Azure, hors du lot). L'adaptateur AWS
+(`glorfindel/providers/aws/isolation.py`) garde le fichier illisible (`_clear_isolation_state`) mais
+sa levée dit encore `released` sur lui.
+
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids
 des cartes de la réaffirmation portaient le nom de la VM tel que l'état le donne

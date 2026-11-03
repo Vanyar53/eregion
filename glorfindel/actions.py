@@ -46,6 +46,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.response.policy",
     "glorfindel.response.ids",
     "glorfindel.response.state",
+    "glorfindel.response.unread",
     "glorfindel.response.legacy_state",
     "glorfindel.response.locks",
     "glorfindel.providers.interface",

@@ -6396,3 +6396,79 @@ def test_a_block_said_again_as_the_disk_fills_keeps_a_card_through_an_unchecked_
             m.one_vm_one_state_file()
     finally:
         m.teardown()
+
+
+def _l1p_net():
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    return {"subnet_nsg": [r("allow-lateral-out", 100)], "edge_nsg": None,
+            "tier_rules": [r("allow-ssh", 150), r("deny-lateral-in", 130)],
+            "nics": {"web-nic": {"own": None, "rules": [r("allow-ssh", 100), r("allow-lateral-out", 100)],
+                                 "policy": True},
+                     "db-nic-0": {"own": None, "rules": [r("allow-ssh", 100), r("deny-lateral-in", 130)],
+                                  "policy": False},
+                     "db-nic-1": {"own": "tier", "rules": [r("allow-https", 100), r("allow-lateral-out", 100),
+                                                           r("deny-lateral-in", 130)], "policy": True},
+                     "api-nic": {"own": None, "rules": [r("allow-https", 100), r("deny-lateral-in", 130)],
+                                 "policy": True}},
+            "windows": None, "config": {"quarantine": True, "forensic": [], "readable": True, "rg": ""},
+            "legacy": None,
+            "data_subnet": [r("allow-https", 100), r("allow-lateral-out", 100), r("deny-lateral-in", 130)],
+            "data_primary": True}
+
+
+# The CI of PR #476 (I4P), glorfindel alone: 22 rules as Hypothesis shrank them, their draws as
+# printed. Red on `main` 593f8326, on I4P's head and on L1G: older than the three.
+_L1P_FIRST = ("said_then_back_after_a_full_disk", "bypass", DB, DB.lower(), None, False, 22, (200, _SUBNET))
+_L1P_LAST = ("said_then_back_after_a_full_disk", "bypass", DB, DB.lower(), ("subnet.get", "always-429"), False,
+             None, (200, _TIER), "allow-ssh", "non_disruptive", "non_disruptive", (1, "from-full"), "non_disruptive")
+_L1P_FOUND = (
+    ("reset_from_azure", WEB1, WEB1, None),
+    ("release", WEB1, WEB1, None),
+    ("bare_with_an_unknown_original", DB, DB.lower(), (7, "before-429"), _nic("rg-app1", "db-nic-0"), "release twice"),
+    _L1P_FIRST,
+    ("lose_everything", WEB1, WEB1.lower(), ("nic.get", "always-429"), API, _Q1, "reisolate"),
+    ("create_vm", "westeurope", "rg-app1", "api",
+     "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-tier", "Linux"),
+    ("interrupted_isolation", WEB1, WEB1.lower(), None, 1, "after-crash", ("vm.get", "always-429")),
+    ("said_then_back_after_a_full_disk", "unreadable state", "human_only", False, "human_only", (1, "from-full"),
+     "non_disruptive"),
+    ("customer_adds_rule", _SUBNET, "allow-ssh", 2000),
+    ("blocked_again_after_an_acknowledged_drift", WEB1, WEB1.lower(), ("subnet.get", "always-429"), 22, DB, False,
+     WEB1.lower(), None, "human_only"),
+    ("customer_sets_policy", _nic("rg-edge", "api-nic"), False),
+    ("reassert", "non_disruptive", (2, "after-crash")),
+    ("perimeters_on_two_subnets", DB, WEB2, 22, [WEB2, DB], WEB2.lower(), False, DB.lower(), False, "pairs", 2,
+     "busy", "busy", "busy", "non_disruptive", "non_disruptive", "non_disruptive", "human_only", "busy",
+     "human_only", "busy", "busy", "non_disruptive"),
+    ("quarantine_change_comes_back", API, API.lower(), ("nsg.get", "always-429"), False, True, _QUARANTINE_EDGE,
+     "non_disruptive", "no"),
+    ("reset_from_azure", _NEW_API_VM, _NEW_API_VM.lower(), (4, "after-crash")),
+    ("perimeters_on_two_subnets", DB, _NEW_API_VM, None, [DB, _NEW_API_VM], DB, False, _NEW_API_VM.lower(), False,
+     "pairs", 1, "human_only", "non_disruptive", "busy", "non_disruptive", "busy", "human_only"),
+    ("redeploy_nic", _nic("rg-edge", "api-nic")),
+    ("terraform_apply", _DATA),
+    ("taken_up_by_its_lowercase_id", DB, "block", 22, "non_disruptive", DB.lower(), None, "human_only",
+     "non_disruptive"),
+    ("interrupted_isolation", _NEW_API_VM, _NEW_API_VM, None, 10, "before-crash", (13, "after-429")),
+    ("said_then_back_after_a_full_disk", "bypass", WEB2, WEB2.lower(), None, True, (101, _SUBNET)),
+    ("interrupted_isolation", WEB1, WEB1, ("subnet.get", "always-429"), 7, "before-crash", ("nic.get", "always-429")),
+    _L1P_LAST)
+
+
+@pytest.mark.parametrize("steps", [_L1P_FOUND, (_L1P_FIRST, _L1P_LAST)], ids=["as found", "reduced"])
+def test_a_block_of_any_port_after_one_of_port_22_is_judged_on_every_port(monkeypatch, steps):
+    """L1P (#478): « L1: the block of …/Db--01 is bypassed by a customer allow (db-nic-1 on 443);
+    the reassertion doesn't say so ». Reduced by hand to two rules: Db--01 blocked for SSH (port
+    22; nothing of the customer's before our deny on nsg-subnet, the rule ends there) — db-nic-1's
+    pair moved to its subnet's NSG, nsg-data, allow-ssh passing before it on nsg-tier; then blocked
+    again, the port unknown (a pair on nsg-tier, behind allow-ssh), and allow-ssh widened into an
+    allow of all. The entry merged the second block and kept the first's 22 (`_save_block_state`
+    took a port only when known): the reassertion judged on 22 alone, which the pair on nsg-data
+    still holds, and read what reaches db-nic-1 on 443 — allow-https on nsg-data, the widened
+    allow-ssh on nsg-tier — an « exposure », unsaid. The oracle judges the port of the last block
+    (any port), as the code now does: a block written whole sets its port, None (any port) too.
+    Red on `main` 593f8326, both."""
+    _replay(monkeypatch, _l1p_net(), *steps)

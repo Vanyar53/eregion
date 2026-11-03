@@ -3,8 +3,9 @@
   "sample": "tests/fixtures/dagorlad_sample.json",
   "sample_sha256": "928c31316241222839d98f2839a87a5ffd920804f66c97a820b9e92e02e07f54",
   "images": {
-    "board.png": "78a3985f999f4e99a73c6f61b8dc7f3240f9a42f372f425dc0a5f97e8469104a",
-    "loop.webp": "9e89333d21a78fbb15cf03b18da8e51fd574321d392af22d236b9acf5851fb6a",
-    "runs.png": "125b1b48b4ad886819dd8b1e0537cfa1142b09f5417af8e8e38aa7d03c4a9a18"
+    "board.png": "8d1a506a42f041b1a749ac54c3f02a8a0a28965d5e248072fdf25634abcee347",
+    "drills.png": "4da841cbc38702020ff660017f4caf4fc7e12316cb08cb9f83c24b19e1f5b65c",
+    "loop.webp": "54f93ed956a7cc193df89ab527db609b1c1e5a2a8f17f62fb592039f8f82b103",
+    "runs.png": "2982729df30d73c582abc8d826c1dfb8bad696d9225b851271d595ddffbea540"
   }
 }

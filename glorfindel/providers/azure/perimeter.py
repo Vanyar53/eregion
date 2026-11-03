@@ -66,9 +66,14 @@ class PerimeterMixin:
         """The VM's NICs no NSG of which is the perimeter's: on another subnet (the perimeter
         lies on the primary NIC's). A perimeter block said `blocked` while one of them stayed
         open, and its promotion took their own block off them (RB1, review). Unreadable
-        NICs RAISE: never "all covered" on a guess."""
+        NICs RAISE: never "all covered" on a guess — nor "not covered": a NIC whose subnet
+        couldn't be read (a 429) has no NSG of its subnet in its views, and was named off the
+        perimeter it sits behind (L1Qs, I3G's seed 9)."""
         home = (nsg_rg.lower(), nsg_name.lower())
-        return [t for t in self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+        targets = self._get_vm_nic_targets(rg, vm_name, allow_no_nsg=True)
+        if unread := [t["nic_short"] for t in targets if t.get("subnet_unreadable")]:
+            raise RuntimeError(f"subnet of {', '.join(unread)} unreadable")
+        return [t for t in targets
                 if home not in {(v["nsg_rg"].lower(), v["nsg_name"].lower())
                                 for v in self._nic_nsg_views(t) if v.get("nsg_rg")}]
 

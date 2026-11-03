@@ -68,7 +68,10 @@ What must hold whatever happens:
 
 Oracles are the test's own: what was released, what was lost and when, who wrote what
 — never the markers and records the code under test leaves (a bug that deletes them
-must not earn an exemption).
+must not earn an exemption). The test's journal says only what the test did: the operator's
+acknowledgement of a block's drift card (`acked_drift`) holds while the block's rules are as
+they were then, and only a step that ends the block's episode drops it — an isolation of the
+same VM taken off and put back by the test does not (MAK, #481).
 
 GLORFINDEL_INVARIANT_EXAMPLES raises the number of sequences (default 60);
 GLORFINDEL_INVARIANT_STEPS their length (default 30);
@@ -2307,8 +2310,12 @@ class IsolationMachine(RuleBasedStateMachine):
             # since): bypassed, not held — the disappearance is not seen over by the code; it
             # is not this branch's episode.
             return
-        # Held again as before: the acknowledged episode is over, by the test's own journal.
-        getattr(self, "acked_drift", {}).pop(vm, None)
+        # Held again as before: the acknowledged episode is over, by the test's own journal —
+        # the block's only (MAK, #481). `acked_drift` is the acknowledgement of the VM's block,
+        # whoever recorded it (this branch, `operator_acknowledges`): the isolation branch neither
+        # took the block's rules off nor put them back, its episode goes on, the machine keeps it.
+        if not isolation:
+            getattr(self, "acked_drift", {}).pop(vm, None)
         self.reassert(_Drawn(data, fault=st.tuples(st.integers(1, 6), st.just("from-full")), mode=human))
         take_off()
         self.reassert(_Drawn(data, fault=None, mode=human))

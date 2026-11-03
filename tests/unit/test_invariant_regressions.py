@@ -5878,3 +5878,23 @@ def test_a_disappearance_beside_the_graphs_card_is_said_on_its_own(monkeypatch, 
         assert all(e.get("occurrences", 1) == 1 for e in said), f"an alert said again at every pass: {said}"
     finally:
         m.teardown()
+
+
+_NSG_WEB_NIC = "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-web-nic"
+
+
+# Seed 73 at 60 sequences (found by I3V's measure on cf1861b, #460), shrunk by Hypothesis to three
+# steps, its draws as printed. Red on `main` 5482fc1 and on every commit back to 1be01d3.
+def test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in(monkeypatch):
+    """I4G (#460): « I4: an operation on …/web cut off …/api ». web on an NSG of its own, isolated
+    there by an older version (the fixed-name deny-all pair, its single-NSG state kept); someone
+    turns the inbound deny-all into an allow; rg-app2/web deleted (its address free); api created
+    on web's NSG, at that address; web isolated again, then released. The release undid the older
+    record by its names: the guard every removal asks (`_held_by_turned`) knew our rules by
+    `glorfindel-iso-` and `glorfindel-block-` only — the older name, turned, was no rule of ours,
+    the guard returned at once, and the allow went: api lost what it let in from outside."""
+    _run(monkeypatch, _net(web_nic={"own": "dedicated"}, legacy=("web-nic", True)),
+         ("tamper_with_our_rule", "access", (_NSG_WEB_NIC, "glorfindel-isolation-deny-all")),
+         ("delete_vm", WEB2),
+         ("an_old_isolations_vm_isolated_again", (_NSG_WEB_NIC, WEB1), True, "rg-app1", "api", "Linux", None,
+          "release"))

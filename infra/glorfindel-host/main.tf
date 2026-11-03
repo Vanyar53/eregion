@@ -222,6 +222,32 @@ resource "azurerm_role_assignment" "session_drain" {
   principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
 }
 
+# La console du poste isole elle-même ce qu'un humain approuve, et coupe donc les sessions sous sa
+# propre identité (SEC17, relecture) : avant SEC17, son rôle Restore lui donnait Run Command sur
+# tout le groupe. Elle reçoit la coupure comme H0, VM par VM, sur les mêmes VM — plus étroit que
+# l'ancien droit. Pas le bot : il n'isole pas. Jamais l'identité de H0, qui l'a déjà ci-dessus.
+locals {
+  session_drain_others = {
+    for pair in setproduct(keys(var.session_drain_principals), var.session_drain_vms) :
+    "${pair[0]}/${pair[1]}" => { principal = var.session_drain_principals[pair[0]], vm = pair[1] }
+  }
+}
+
+resource "azurerm_role_assignment" "session_drain_principals" {
+  for_each             = local.session_drain_others
+  scope                = data.azurerm_virtual_machine.session_drain[each.value.vm].id
+  role_definition_name = "Eregion Glorfindel Session Drain"
+  principal_id         = each.value.principal
+  principal_type       = "ServicePrincipal"
+
+  lifecycle {
+    precondition {
+      condition     = lower(each.value.principal) != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)
+      error_message = "session_drain_principals nomme l'identité de H0 : elle a déjà la coupure (session_drain)."
+    }
+  }
+}
+
 # ── La neutralisation avant un restore, VM par VM, aux VM que le restore défend (SEC17) ───────
 # Run Command est sorti du rôle Restore (posé sur des groupes entiers) : « Eregion Glorfindel
 # Restore Neutralize » (infra/identities/glorfindel-restore-neutralize.json, créé une fois par

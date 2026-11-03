@@ -1,9 +1,0 @@
-# SEC17 : les principaux qui restaurent, par leur object id (jamais l'appId) — à copier en
-# restore_principals.auto.tfvars (ignoré par git), sur le poste de l'opérateur seulement :
-#   az ad sp show --id <appId-console> --query id -o tsv
-#   az ad sp show --id <appId-bot> --query id -o tsv
-# Jamais l'identité de H0 (le plan le refuse) : Glorfindel hébergé ne restaure pas.
-restore_principals = {
-  console = "00000000-0000-0000-0000-000000000000"
-  bot     = "00000000-0000-0000-0000-000000000000"
-}

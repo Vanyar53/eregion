@@ -157,6 +157,20 @@ def test_the_restore_role_restores_and_nothing_of_the_network():
     assert not [a for a in actions if a.startswith("Microsoft.Network/")]
 
 
+def test_the_console_gets_the_session_drain_vm_by_vm_the_bot_never():
+    """SEC17 review (M3265): the console isolates in its own process what a human approves — the
+    default path in human_only — and its isolation cuts the sessions under its identity. Its Run
+    Command came from the Restore role, on the group; it gets the drain VM by VM instead, as the
+    watch. The bot never isolates (Restore, Revert): no drain."""
+    ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    text = "\n".join(_logical_lines(ops))
+    block = text.split("for vm in <id de chaque VM défendue>; do", 1)[1].split("\ndone", 1)[0]
+    assert "for a in <appId-watch> <appId-console>; do" in block
+    assert '--role "Eregion Glorfindel Session Drain" --scope $vm' in block and "appId-bot" not in block
+    bot = (ROOT / "glorfindel" / "bot.py").read_text(encoding="utf-8")
+    assert "isolate_vm(" not in bot and "connector" not in bot     # the bot never isolates
+
+
 def test_the_restore_s_run_command_is_its_own_role_given_vm_by_vm_never_to_the_watch():
     """SEC17 (M3215, M3216): the restore's Run Command — the neutralization before the disks are
     swapped, a root command on the VM — out of the Restore role, which goes on whole groups,

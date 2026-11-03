@@ -2738,6 +2738,22 @@ def test_a_vm_outside_the_restore_s_list_is_restored_and_the_refusal_is_said(mon
     assert "restore_vms" in d["escalation_reason"]
 
 
+def test_a_refusal_after_the_harmless_command_ran_is_no_refusal_of_run_command(monkeypatch):
+    """SEC17 review (M3263): the harmless command ran; a 403 met afterwards (reading the
+    extensions) says nothing of Run Command's right on this VM — no « refused » flag, no card
+    naming the role; the release is held all the same (not neutralized for sure)."""
+    connector, posted = _restore_ready(monkeypatch)
+
+    def listing_refused(rg, vm_name):
+        raise RuntimeError("(AuthorizationFailed) does not have authorization to perform action "
+                           "'Microsoft.Compute/virtualMachines/extensions/read'")
+    monkeypatch.setattr(connector, "_replayable_scripts", listing_refused)
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
+    assert out["run_command_neutralized"] is False and "run_command_refused" not in out
+    assert "Restore Neutralize" not in out["run_command_error"] and posted
+
+
 def test_a_neutralization_that_failed_otherwise_says_no_refusal_on_the_card():
     from glorfindel.agent import _apply_release_precondition
     from glorfindel.cli import _build_recovery_signal

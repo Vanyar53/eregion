@@ -69,6 +69,17 @@ variable "session_drain_vms" {
   }
 }
 
+variable "session_drain_principals" {
+  description = "SEC17 (relecture) : les principaux du poste qui isolent eux-mêmes ce qu'un humain approuve, et coupent donc les sessions — la console (son object id, jamais son appId) : { console = \"<object id>\" }. « Eregion Glorfindel Session Drain » sur chaque VM de session_drain_vms, comme à H0, jamais sur le groupe. Pas le bot : il n'isole pas (Restore, Revert). Hors du dépôt : principals.auto.tfvars, ignoré par git. Jamais l'identité de H0, qui l'a déjà. Vide (défaut) : rien de plus."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for k, v in var.session_drain_principals : can(regex("^[a-z][a-z0-9-]{0,31}$", k)) && can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", v))]) && length(values(var.session_drain_principals)) == length(distinct([for v in values(var.session_drain_principals) : lower(v)]))
+    error_message = "session_drain_principals : un nom (console) vers l'object id d'un principal, chacun une fois."
+  }
+}
+
 variable "restore_vms" {
   description = "SEC17 : les VM du groupe du banc que le restore défend — « Eregion Glorfindel Restore Neutralize » (Run Command, la neutralisation de la dernière commande avant l'échange des disques) sur chacune, pour chaque principal de restore_principals, jamais sur le groupe. Gardée dans restore.auto.tfvars (commité). Une VM hors de la liste est restaurée quand même ; sa neutralisation est refusée, et dite sur la carte. Le rôle doit exister dans le tenant (docs/operations.md, « Identités Azure »)."
   type        = list(string)
@@ -81,7 +92,7 @@ variable "restore_vms" {
 }
 
 variable "restore_principals" {
-  description = "SEC17 : les principaux qui restaurent — celui de la console et celui du bot (leur object id, jamais leur appId), nommés : { console = \"<object id>\", bot = \"<object id>\" }. Hors du dépôt : restore_principals.auto.tfvars, ignoré par git, sur le poste de l'opérateur (restore_principals.auto.tfvars.example). Jamais l'identité de H0 : Glorfindel hébergé ne restaure pas. Vide (défaut) : aucune neutralisation attribuée."
+  description = "SEC17 : les principaux qui restaurent — celui de la console et celui du bot (leur object id, jamais leur appId), nommés : { console = \"<object id>\", bot = \"<object id>\" }. Hors du dépôt : principals.auto.tfvars, ignoré par git, sur le poste de l'opérateur (principals.auto.tfvars.example). Jamais l'identité de H0 : Glorfindel hébergé ne restaure pas. Vide (défaut) : aucune neutralisation attribuée."
   type        = map(string)
   default     = {}
 

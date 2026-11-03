@@ -258,9 +258,13 @@ class RestoreMixin:
         else:
             cmd = RunCommandInput(command_id="RunShellScript",
                                   script=["echo 'glorfindel: run command neutralized'"])
+        command_ran = False
         try:
             poller = self._compute.virtual_machines.begin_run_command(rg, vm_name, cmd)
             poller.result(timeout=600)
+            # SEC17 (review): past here a refusal is not the right of Run Command on this VM (the
+            # harmless command ran) — a listing of the extensions refused is no « refused » flag.
+            command_ran = True
             # result(timeout) returns at the deadline without raising: "neutralized"
             # must mean the harmless command actually finished (third review, T13).
             if not poller.done():
@@ -274,7 +278,7 @@ class RestoreMixin:
             return {"run_command_neutralized": True}
         except Exception as e:
             error = _first_line(e)[:_ERR_MAX]
-            refused = _is_iam_error(str(e))
+            refused = not command_ran and _is_iam_error(str(e))
             if refused:
                 error = (NEUTRALIZE_REFUSED + error)[:_ERR_MAX]
             _console.print(

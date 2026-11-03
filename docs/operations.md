@@ -475,7 +475,7 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
 | Service | Ce qu'il appelle sur Azure | Rôles, portée : les groupes inscrits |
 |---|---|---|
 | la watch | lit (journaux, NSG, NIC, coffre) ; isole, lève, bloque, débloque, instantané — seule, dans son mode ; coupe les sessions d'une VM qu'elle isole | `Reader`, `Log Analytics Reader` (le workspace), **Eregion Glorfindel Response** ; **Eregion Glorfindel Session Drain** sur chaque VM qu'elle défend |
-| la console | lit (audit, préparation, jobs) ; ce qu'un humain approuve : isoler, bloquer, instantané (dans son processus), lever, reset, restore (par la CLI qu'elle lance) | `Reader`, `Log Analytics Reader`, **Response**, **Eregion Glorfindel Restore** ; **Eregion Glorfindel Restore Neutralize** sur chaque VM que le restore défend |
+| la console | lit (audit, préparation, jobs) ; ce qu'un humain approuve : isoler, bloquer, instantané (dans son processus), lever, reset, restore (par la CLI qu'elle lance) | `Reader`, `Log Analytics Reader`, **Response**, **Eregion Glorfindel Restore** ; **Session Drain** sur chaque VM que Glorfindel défend (elle isole elle-même ce qu'un humain approuve, donc coupe les sessions) ; **Eregion Glorfindel Restore Neutralize** sur chaque VM que le restore défend |
 | le bot | lit les points de restauration ; ses boutons lancent la CLI : Restore, Revert (levée et déblocage) | `Reader`, **Response**, **Restore** ; **Restore Neutralize** sur chaque VM que le restore défend |
 
 - **Eregion Glorfindel Response** (`infra/identities/glorfindel-response.json`) : les écritures
@@ -496,8 +496,16 @@ services de Glorfindel, trois principaux, chacun avec ce que son code appelle vr
   le dit avant (`no_drain`), l'audit aussi (« Isolation permissions », avertissement). Le droit
   est lu sur la VM elle-même (`check_permissions`) ; tenu sur tout le groupe, il est dit comme
   plus que la réponse (`identity_beyond_response`). Sur H0, c'est Terraform qui l'attribue
-  (`infra/glorfindel-host/session_drain.auto.tfvars`, ci-dessous). La neutralisation avant un
-  restore a son propre rôle, ci-dessous (SEC17).
+  (`infra/glorfindel-host/session_drain.auto.tfvars`, ci-dessous). **La console aussi** (SEC17,
+  relecture) : elle isole dans son propre processus ce qu'un humain approuve (le chemin par défaut en
+  `human_only`), et la coupure des sessions part alors sous son identité. Avant SEC17, son rôle
+  Restore lui donnait Run Command sur tout le groupe ; elle reçoit la coupure VM par VM, sur les mêmes
+  VM que la watch — plus étroit, aucun droit en plus. **Pas le bot** : il n'isole pas (ses boutons
+  lancent Restore et Revert, une levée et un déblocage, sans Run Command). Sur H0, la console a
+  l'identité de la VM, qui tient déjà la coupure par `session_drain_vms` ; pour la console d'un poste
+  sur le banc, le Terraform de H0 la donne aussi (`session_drain_principals`, son object id dans
+  `principals.auto.tfvars`). La neutralisation avant un restore a son propre rôle, ci-dessous
+  (SEC17).
 - **Eregion Glorfindel Restore** (`infra/identities/glorfindel-restore.json`) : un restore en
   place depuis le coffre — VM désallouée, disques restaurés par le compte de transit, VM
   redémarrée. **Jamais à la watch** : Glorfindel ne restaure jamais seul, et même un bogue ou une
@@ -623,10 +631,13 @@ done
 for a in <appId-watch> <appId-console>; do
   az role assignment create --assignee $a --role "Log Analytics Reader" --scope $LAW
 done
-# La coupure des sessions (SEC11) : à la watch, sur chaque VM que Glorfindel défend, jamais
-# sur le groupe. L'id d'une VM : az vm show -g $RG -n <nom> --query id -o tsv
+# La coupure des sessions (SEC11) : à la watch et à la console (elle isole ce qu'un humain approuve,
+# SEC17), sur chaque VM que Glorfindel défend, jamais sur le groupe ; jamais au bot, qui n'isole pas.
+# L'id d'une VM : az vm show -g $RG -n <nom> --query id -o tsv
 for vm in <id de chaque VM défendue>; do
-  az role assignment create --assignee <appId-watch> --role "Eregion Glorfindel Session Drain" --scope $vm
+  for a in <appId-watch> <appId-console>; do
+    az role assignment create --assignee $a --role "Eregion Glorfindel Session Drain" --scope $vm
+  done
 done
 # La neutralisation avant un restore (SEC17) : à la console et au bot, sur chaque VM que le restore
 # défend, jamais sur le groupe, jamais à la watch. Sur le banc, c'est le Terraform de H0 qui la donne
@@ -684,23 +695,32 @@ la coupure refusée et dite, mais `no_drain` la tient en réserve à la prépara
 
 **Depuis un rôle Restore d'avant SEC17** (il tient Run Command, sur des groupes entiers, pour la
 console et le bot) : dans cet ordre, pour qu'aucune VM que le restore défend ne perde la
-neutralisation entre deux gestes —
+neutralisation, ni aucune VM défendue la coupure des sessions d'une isolation approuvée dans la
+console, entre deux gestes —
 
 1. **créer le rôle** de la neutralisation (une fois par tenant ; pour un second abonnement, l'ajouter
    aux portées du rôle existant, ci-dessus) ;
-2. **les principaux**, sur le poste seulement : `infra/glorfindel-host/restore_principals.auto.tfvars`,
-   copié de `restore_principals.auto.tfvars.example` (ignoré par git, jamais dans le dépôt), avec
+2. **les principaux**, sur le poste seulement : `infra/glorfindel-host/principals.auto.tfvars`,
+   copié de `principals.auto.tfvars.example` (ignoré par git, jamais dans le dépôt), avec
    l'**object id** de chacun (`az ad sp show --id <appId-console> --query id -o tsv`, de même pour le
-   bot) — jamais l'appId, jamais l'identité de H0 (le plan la refuse) ;
-3. **le plan**, relu : `make glorfindel-host-plan`. Il doit montrer quatre créations de
-   `azurerm_role_assignment.restore_neutralize` (`console/vm-celebrimbor-gondolin`,
-   `console/vm-celebrimbor-bree`, `bot/…`, `bot/…`), chacune à la portée d'une VM, le rôle
-   « Eregion Glorfindel Restore Neutralize », et **rien d'autre** : ni la VM de H0 remplacée, ni la
-   coupure des sessions touchée, ni une attribution sur un groupe ;
+   bot) — jamais l'appId, jamais l'identité de H0 (le plan la refuse) : `restore_principals` (la
+   console, le bot) et `session_drain_principals` (la console seule) ;
+3. **le plan**, relu : `make glorfindel-host-plan`. Il doit montrer six créations, et **rien
+   d'autre** : quatre de `azurerm_role_assignment.restore_neutralize` (`console/vm-celebrimbor-gondolin`,
+   `console/vm-celebrimbor-bree`, `bot/…`, `bot/…`, le rôle « Eregion Glorfindel Restore Neutralize »)
+   et deux de `azurerm_role_assignment.session_drain_principals` (`console/vm-celebrimbor-gondolin`,
+   `console/vm-celebrimbor-bree`, le rôle « Eregion Glorfindel Session Drain »), chacune à la portée
+   d'une VM ; ni la VM de H0 remplacée, ni la coupure de H0 touchée, ni une attribution sur un groupe ;
 4. **l'application** : `make glorfindel-host-up`, sans `YES` (le même plan, confirmé) ;
 5. **la vérification**, juste après : `terraform -chdir=infra/glorfindel-host output restore_neutralize`
-   (les quatre paires), et `az role assignment list --role "Eregion Glorfindel Restore Neutralize" --all
-   -o table` : deux portées de VM par principal, aucune de groupe, aucune pour la watch ni pour H0 ;
+   (les quatre paires) et `output session_drain_principals` (les deux), puis `az role assignment list
+   --role "Eregion Glorfindel Restore Neutralize" --all -o table` et de même pour « Session Drain » :
+   des portées de VM seulement, aucune de groupe, ni la neutralisation pour la watch ou H0, ni la
+   coupure pour le bot ;
+   **Hors du banc** (un déploiement sans H0, les principaux par la boucle `az` ci-dessus) : les gestes
+   2 à 5 sont les deux boucles `for vm in …` — la coupure à la watch et à la console sur chaque VM
+   défendue, la neutralisation à la console et au bot sur chaque VM que le restore défend —, puis la
+   même vérification par `az role assignment list` ;
 6. **seulement ensuite**, retirer Run Command du rôle Restore (`az role definition update`, le fichier
    du dépôt) ; puis `az role definition list --name "Eregion Glorfindel Restore" --query
    '[0].permissions[0].actions'` ne le montre plus ;
@@ -711,18 +731,21 @@ neutralisation entre deux gestes —
 ```bash
 sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-restore-neutralize.json > /tmp/eregion-role-restore-neutralize.json
 az role definition create --role-definition @/tmp/eregion-role-restore-neutralize.json   # 1
-cp infra/glorfindel-host/restore_principals.auto.tfvars.example infra/glorfindel-host/restore_principals.auto.tfvars
+cp infra/glorfindel-host/principals.auto.tfvars.example infra/glorfindel-host/principals.auto.tfvars
 #   2 : les deux object id dedans (az ad sp show --id <appId> --query id -o tsv)
-make glorfindel-host-plan                                                                 # 3 : quatre attributions, rien d'autre
+make glorfindel-host-plan                                                                 # 3 : six attributions, rien d'autre
 make glorfindel-host-up                                                                   # 4 : sans YES
 terraform -chdir=infra/glorfindel-host output restore_neutralize                         # 5
+terraform -chdir=infra/glorfindel-host output session_drain_principals
 az role assignment list --role "Eregion Glorfindel Restore Neutralize" --all -o table
+az role assignment list --role "Eregion Glorfindel Session Drain" --all -o table
 sed "s|<SUBSCRIPTION_ID>|$SUB|" infra/identities/glorfindel-restore.json > /tmp/eregion-role-restore.json
 az role definition update --role-definition @/tmp/eregion-role-restore.json              # 6 : sans Run Command
 ```
 
 Dans l'autre ordre, un restore entre les deux gestes restaure la VM sans neutraliser sa dernière
-commande : refusé et dit, la levée retenue, mais le disque restauré a pu la rejouer. Les
+commande : refusé et dit, la levée retenue, mais le disque restauré a pu la rejouer ; et une
+isolation approuvée dans la console isole la VM sans couper ses sessions (refusé, dit sur la carte). Les
 attributions vivent dans l'état de H0 : `make glorfindel-host-down` les retire avec la VM, le
 prochain `make glorfindel-host-up` les reprend ; une VM que Celebrimbor reconstruit perd la sienne
 (l'attribution porte l'id de la VM) jusqu'au prochain apply de H0.

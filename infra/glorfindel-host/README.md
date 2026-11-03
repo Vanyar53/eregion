@@ -42,9 +42,11 @@ seul sur le banc, dans le mode de chaque VM.
     jamais ce droit. Mais son état Terraform porte, pour le banc, « Eregion Glorfindel Restore
     Neutralize » (Run Command, sorti du rôle Restore) sur chaque VM de `restore_vms` (gondolin,
     bree — `restore.auto.tfvars`, commité), pour chaque principal qui restaure (`restore_principals` :
-    la console et le bot, leurs object id dans `restore_principals.auto.tfvars`, sur le poste,
-    ignoré par git ; `restore_principals.auto.tfvars.example`). Sans ce fichier, aucune
-    attribution ; l'identité de H0 parmi eux, le plan refuse. Les gestes, dans leur ordre :
+    la console et le bot, leurs object id dans `principals.auto.tfvars`, sur le poste,
+    ignoré par git ; `principals.auto.tfvars.example`). Sans ce fichier, aucune
+    attribution ; l'identité de H0 parmi eux, le plan refuse. Le même fichier donne la coupure des
+    sessions à la console du poste (`session_drain_principals`), VM par VM sur `session_drain_vms` :
+    elle isole elle-même ce qu'un humain approuve, et n'a plus Run Command par le rôle Restore. Les gestes, dans leur ordre :
     `docs/operations.md`, « Depuis un rôle Restore d'avant SEC17 ». `terraform output
     restore_neutralize` dit où elle est donnée. Une VM hors de la liste est restaurée quand même ;
     sa neutralisation est refusée, et dite sur la carte.

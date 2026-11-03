@@ -202,3 +202,61 @@ run "a_drain_vm_named_twice_whatever_its_case_is_refused" {
 
   expect_failures = [var.session_drain_vms]
 }
+
+# La console du poste isole elle-même ce qu'un humain approuve : la coupure des sessions, VM par VM,
+# sur les VM de session_drain_vms (relecture de SEC17) ; jamais au groupe, jamais l'identité de H0.
+run "the_console_gets_the_session_drain_on_each_drain_vm" {
+  command = plan
+
+  variables {
+    session_drain_principals = {
+      console = "aaaaaaaa-0000-0000-0000-000000000001"
+    }
+  }
+
+  assert {
+    condition     = toset(keys(azurerm_role_assignment.session_drain_principals)) == toset(["console/vm-celebrimbor-gondolin", "console/vm-celebrimbor-bree"])
+    error_message = "la console ne reçoit pas la coupure sur chaque VM de session_drain_vms"
+  }
+  assert {
+    condition     = alltrue([for a in azurerm_role_assignment.session_drain_principals : a.role_definition_name == "Eregion Glorfindel Session Drain" && a.scope != data.azurerm_resource_group.bench.id && a.principal_id == "aaaaaaaa-0000-0000-0000-000000000001"])
+    error_message = "la coupure de la console n'est pas Session Drain, à la portée d'une VM, pour son principal"
+  }
+  assert {
+    condition     = azurerm_role_assignment.session_drain_principals["console/vm-celebrimbor-gondolin"].scope == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-celebrimbor/providers/Microsoft.Compute/virtualMachines/vm-celebrimbor-gondolin"
+    error_message = "la coupure de la console n'est pas à la portée de sa VM"
+  }
+}
+
+run "without_a_drain_principal_only_h0_has_the_drain" {
+  command = plan
+
+  assert {
+    condition     = length(azurerm_role_assignment.session_drain_principals) == 0 && length(azurerm_role_assignment.session_drain) == 2
+    error_message = "sans principal du poste, la coupure n'est pas celle de H0 seul"
+  }
+}
+
+run "h0_s_own_identity_is_no_drain_principal" {
+  command = plan
+
+  override_resource {
+    target          = azurerm_linux_virtual_machine.host
+    override_during = plan
+    values = {
+      identity = {
+        type         = "SystemAssigned"
+        principal_id = "11111111-1111-1111-1111-111111111111"
+        tenant_id    = "22222222-2222-2222-2222-222222222222"
+      }
+    }
+  }
+
+  variables {
+    session_drain_principals = {
+      console = "11111111-1111-1111-1111-111111111111"
+    }
+  }
+
+  expect_failures = [azurerm_role_assignment.session_drain_principals]
+}

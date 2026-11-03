@@ -179,7 +179,7 @@ def test_host_terraform_reads_the_bench_and_is_no_target():
     tf = (HOST / "main.tf").read_text(encoding="utf-8")
     roles = re.findall(r'role_definition_name\s*=\s*"([^"]+)"', tf)
     assert sorted(roles) == ["Eregion Glorfindel Restore Neutralize", "Eregion Glorfindel Session Drain",
-                             "Log Analytics Reader", "Reader"]
+                             "Eregion Glorfindel Session Drain", "Log Analytics Reader", "Reader"]
     # SEC11 (R-03, after its review): the session drain on each VM of an explicit list, each read
     # on Azure (a typo fails the plan), never on the group; the list kept in the repository.
     drain = tf.split('resource "azurerm_role_assignment" "session_drain"', 1)[1].split("\n}", 1)[0]
@@ -224,8 +224,24 @@ def test_the_restore_s_neutralization_goes_to_each_vm_it_defends_never_to_h0():
     ignore = (HOST.parents[1] / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "!infra/glorfindel-host/restore.auto.tfvars" in ignore
     assert not [ln for ln in ignore if "restore_principals" in ln and ln.startswith("!")]
-    example = (HOST / "restore_principals.auto.tfvars.example").read_text(encoding="utf-8")
-    assert re.findall(r'"([0-9a-f-]{36})"', example) == ["00000000-0000-0000-0000-000000000000"] * 2
+    example = (HOST / "principals.auto.tfvars.example").read_text(encoding="utf-8")
+    assert re.findall(r'"([0-9a-f-]{36})"', example) == ["00000000-0000-0000-0000-000000000000"] * 3
+
+
+def test_the_console_of_a_workstation_gets_the_session_drain_vm_by_vm():
+    """SEC17 review (M3264): the console isolates what a human approves in its own process, and
+    the session drain runs under its identity — once Run Command leaves the Restore role, it gets
+    the drain on each VM of session_drain_vms, never on the group, never H0's identity; not the bot."""
+    tf = (HOST / "main.tf").read_text(encoding="utf-8")
+    res = tf.split('resource "azurerm_role_assignment" "session_drain_principals"', 1)[1].split("\n}\n", 1)[0]
+    assert "for_each             = local.session_drain_others" in res
+    assert "scope                = data.azurerm_virtual_machine.session_drain[each.value.vm].id" in res
+    assert 'role_definition_name = "Eregion Glorfindel Session Drain"' in res and "bench.id" not in res
+    assert "!= lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)" in res
+    assert "setproduct(keys(var.session_drain_principals), var.session_drain_vms)" in tf
+    example = (HOST / "principals.auto.tfvars.example").read_text(encoding="utf-8")
+    drain = example.split("session_drain_principals = {", 1)[1].split("}", 1)[0]
+    assert "console" in drain and "bot" not in drain
 
 
 @pytest.mark.parametrize("var", ["session_drain_vms", "restore_vms"])

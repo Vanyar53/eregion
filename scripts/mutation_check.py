@@ -8655,6 +8655,22 @@ MUTANTS += [
      '    return float(meta["stored_at"]) if _dated(meta) else time.time()\n'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_memory_age.py" for n in range(3260, 3263)})
+# SEC17, its 5.5 review: « refused » only for Run Command's own refusal; the console keeps the
+# session drain VM by VM once Run Command leaves the Restore role. M3263–M3265.
+MUTANTS += [
+    ("M3263", "a refusal met after the harmless command ran flagged as Run Command refused (SEC17, review)", RST,
+     "            refused = not command_ran and _is_iam_error(str(e))\n",
+     "            refused = _is_iam_error(str(e))\n"),
+    ("M3264", "the console's session drain on the bench's group, not VM by VM (SEC17, review)",
+     "infra/glorfindel-host/main.tf",
+     "  scope                = data.azurerm_virtual_machine.session_drain[each.value.vm].id\n",
+     "  scope                = data.azurerm_resource_group.bench.id\n"),
+    ("M3265", "the session drain given to the watch alone: the console's approved isolation cuts no session (SEC17, review)",
+     "docs/operations.md", "  for a in <appId-watch> <appId-console>; do\n    az role assignment create --assignee $a --role \"Eregion Glorfindel Session Drain\"",
+     "  for a in <appId-watch>; do\n    az role assignment create --assignee $a --role \"Eregion Glorfindel Session Drain\""),
+]
+TESTS.update({"M3263": "tests/unit/test_glorfindel.py -k refusal_after", "M3264": "tests/unit/test_glorfindel_host.py",
+              "M3265": "tests/unit/test_azure_roles.py"})
 # SEC17 (#451): the state files another process reads, written at once — never opened in place.
 # M3207–M3210.
 MUTANTS += [
@@ -8691,7 +8707,7 @@ TESTS.update({f"M{n}": "tests/unit/test_injector_channels.py" for n in range(321
 # `terraform test` (infra/glorfindel-host/tests/restore_neutralize.tftest.hcl, the CI's job).
 MUTANTS += [
     ("M3214", "a restore refused Run Command on a VM outside the list: the refusal not flagged (SEC17)", RST,
-     "            refused = _is_iam_error(str(e))\n", "            refused = False\n"),
+     "            refused = not command_ran and _is_iam_error(str(e))\n", "            refused = False\n"),   # re-anchored (review)
     ("M3215", "the card of a restored VM outside the list says not why its last command stayed (SEC17)", AGT,
      '        if neutralized is False and (signal.get("raw_signal") or {}).get("run_command_refused") is True:\n',
      "        if False:\n"),

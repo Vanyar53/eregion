@@ -254,8 +254,13 @@ def _settle_row(row: dict, extra) -> dict | None:
 
 def fold(rows: list[dict]) -> dict:
     """One card per VM and poll: the newest row, naming the others (`AuditCommands`, at most
-    FOLD_MAX, the newest first; `AuditCount`, all of them) — none sent unsaid."""
-    ordered = sorted(rows, key=lambda r: str(r.get("TimeGenerated") or ""), reverse=True)
+    FOLD_MAX; `AuditCount`, all of them) — none sent unsaid. The sensitive ones first, then the
+    unreadable, the newest first in each (review, AUD1): lines written after a real command, more
+    recent and more than FOLD_MAX, never push its text off the card."""
+    rank = {"sensitive": 2, "unreadable": 1}
+    ordered = sorted(rows, key=lambda r: (rank["sensitive"] if r.get("Sensitive") else
+                                          rank["unreadable"] if r.get("AuditRead") else 0,
+                                          str(r.get("TimeGenerated") or "")), reverse=True)
     newest = ordered[0]
     if len(ordered) == 1:
         return newest

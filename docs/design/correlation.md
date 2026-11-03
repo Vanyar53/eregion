@@ -268,8 +268,11 @@ ADM1 (`auditd.settle`) :
 - **Le programme est lu par son chemin** (`exe`, celui du noyau), puis ses arguments : `argv[0]` est à
   l'appelant (`exec -a vim /usr/sbin/useradd` reste `accounts`). Un argument écrit en hexadécimal par
   le noyau (il contient une espace, un guillemet, un caractère de contrôle) est décodé.
-- **Une carte par VM et par passe** : la commande la plus récente, qui nomme les autres
-  (`AuditCommands`, 20 au plus ; `AuditCount`, toutes) — aucune envoyée sans être dite. La carte est
+- **Une carte par VM et par passe** : les commandes sensibles d'abord, puis les illisibles, les plus récentes
+  en tête de chaque groupe — des lignes illisibles écrites après une vraie commande ne la poussent pas hors de la
+  carte (relecture d'AUD1) ; plus de 20 lignes forgées en forme de commandes sensibles le pourraient, `AuditCount`
+  les compte toutes —, qui nomme les autres (`AuditCommands`, 20 au plus ; `AuditCount`, toutes) —
+  aucune envoyée sans être dite. La carte est
   caractérisée (`root_command`) : un instantané seul en `non_disruptive` laisse sa carte (le plancher de
   `decide`).
 - **Dit** : `rule_status.json` garde, à chaque passe, ce que la fenêtre de la règle contient (`auditd` :

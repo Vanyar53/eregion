@@ -528,6 +528,33 @@ def test_a_fault_of_the_correlation_leaves_a_pending_root_shell_a_card(monkeypat
     assert snap["expected_count"] == 0 and "correlation: RuntimeError" in snap["last_error"]
 
 
+def test_lines_written_after_a_real_command_never_push_its_text_off_the_card():
+    """30 lines in local6, more recent than a real `cat /etc/shadow`, each a card of its own
+    (unreadable): the fold names the sensitive one first, never past its FOLD_MAX."""
+    lines = event(90, "cat", "/etc/shadow", minutes_ago=5)
+    lines += [_line(syscall(100 + i), minutes_ago=1) for i in range(30)]
+    p, rule, sent = _poller(lines)
+    [sig] = p.poll_once(rule)
+    card = _card(sig)
+    assert card["AuditCommand"] == "cat /etc/shadow" and card["Sensitive"] == "shadow"
+    assert card["AuditCount"] == 31 and len(card["AuditCommands"]) == auditd.FOLD_MAX
+    assert all(c["AuditRead"]["status"] == "unreadable" for c in card["AuditCommands"])
+
+
+def test_a_fault_of_the_expected_sudo_sets_nothing_aside_and_is_said(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("expected sudo down")
+    line = _line("admin1 : TTY=pts/0 ; PWD=/home/admin1 ; USER=root ; COMMAND=/usr/bin/apt update",
+                 facility="authpriv", process="sudo")
+    cfg = GlorfindelConfig(expected_sudo=ExpectedSudoConfig(admins=[ExpectedAdmins("vm-example-*", ["admin1"])]))
+    p, rule, sent = _poller([line], cfg, rule=SHIPPED["sudo-privilege-escalation"])
+    monkeypatch.setattr(p, "_judge_expected", boom)
+    [sig] = p.poll_once(rule)                      # the expected sudo, unjudged: a card
+    assert "COMMAND=/usr/bin/apt update" in _card(sig)["SyslogMessage"]
+    snap = p.status_snapshot()[0]
+    assert snap["expected_count"] == 0 and "expected_sudo: RuntimeError: expected sudo down" in snap["last_error"]
+
+
 def test_a_poll_that_raises_never_kills_the_rule_s_thread(monkeypatch):
     p, rule, sent = _poller([])
     rule.interval_s = 0.01

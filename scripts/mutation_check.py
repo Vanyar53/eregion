@@ -9299,6 +9299,18 @@ MUTANTS += [
      '            st.pop("last_error", None)\n'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_auditd.py" for n in range(3360, 3369)})
+# AUD1, its second review: the fold by time alone, ADM1's reading in fault unguarded. M3369–M3370.
+MUTANTS += [
+    ("M3369", "the fold by time alone: lines written after a real command push its text off the card (AUD1, review)",
+     _AUD,
+     '    ordered = sorted(rows, key=lambda r: (rank["sensitive"] if r.get("Sensitive") else\n'
+     '                                          rank["unreadable"] if r.get("AuditRead") else 0,\n',
+     "    ordered = sorted(rows, key=lambda r: (0,\n"),
+    ("M3370", "a fault of the expected sudo's reading stops the pass (AUD1, review)", "glorfindel/detection_rules.py",
+     "        except Exception as exc:  # the expected sudo: none set aside\n",
+     "        except ZeroDivisionError as exc:\n"),
+]
+TESTS.update({mid: "tests/unit/test_auditd.py" for mid in ("M3369", "M3370")})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

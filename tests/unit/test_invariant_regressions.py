@@ -5846,3 +5846,35 @@ def test_a_disappearance_said_by_the_canonical_id_is_said_once_after_the_lowerca
         assert not writes, "the disappearance put back after it was said"
     finally:
         m.teardown()
+
+
+@pytest.mark.parametrize("kind", ["isolation", "block"])
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+def test_a_disappearance_beside_the_graphs_card_is_said_on_its_own(monkeypatch, kind, mode):
+    """I3G (#446), measured by I3C's review (a probe): Db--01 isolated (blocked) on the subnet's
+    NSG, the graph's card on it — its check after the action failed, pending —; its rules taken off
+    by a `terraform apply`, a pass, twice, then a pass. The store folded each alert of the
+    reassertion into the graph's card (same action, resource, type, IP): in human_only the
+    disappearance said again at every pass, never notified; outside it, the second one (« ne la
+    repose pas ») folded into « reposée une fois », in silence — the VM no longer isolated
+    (blocked). L3, on the test's own journal: the graph's card keeps its words, the disappearance
+    has a card of its own, notified."""
+    from glorfindel import escalations
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        s = Script(DB, DB, None, kind == "isolation", mode, *([] if kind == "isolation" else [22]))
+        m.graph_card_before_a_disappearance(data=s)
+        assert not s.values, f"draws unused: {s.values}"
+        m.graph_cards_keep_their_words()
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
+        m.one_vm_one_state_file()
+        action = "isolate_vm" if kind == "isolation" else "block_suspicious_ip"
+        said = [e for e in escalations.all_escalations() if e.get("action") == action
+                and e["id"] not in m.graph_cards]
+        assert said and all(e["id"] in m.notified for e in said), f"an alert never notified: {said}"
+        assert all(e.get("occurrences", 1) == 1 for e in said), f"an alert said again at every pass: {said}"
+    finally:
+        m.teardown()

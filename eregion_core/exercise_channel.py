@@ -27,6 +27,11 @@ SEC5 holds the channel at its edges:
 - a storage bearer token goes only to an Azure Storage blob endpoint — ``https://<account>``
   and one of ``BLOB_SUFFIXES`` (the public cloud, then the sovereign ones), port 443, no user
   in the URL; any other URL is refused before a token is asked for (N-15, ``url_refusal``);
+  and only to the account the operator declared (SEC17, ``declared_refusal``): the two channels
+  (``EREGION_EXERCISE_CHANNEL``, ``EREGION_WATCH_CHANNEL``) and, on Orodruin, the scopes of
+  their containers (``EREGION_CHANNEL_SCOPE``, ``EREGION_WATCH_CHANNEL_SCOPE``, its contract's)
+  all name one account — Terraform's outputs. Another account, or declarations that disagree,
+  are refused and said, no token sent;
 - a pull reads what it is given within bounds (V-21): a blob at most ``MAX_BLOB_BYTES``, a
   listing page at most ``MAX_LISTING_BYTES``, at most ``MAX_BLOBS`` names listed and
   ``MAX_DOWNLOADS`` blobs downloaded per pull — read as a stream cut past the bound, never
@@ -54,6 +59,16 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 CHANNEL_ENV = "EREGION_EXERCISE_CHANNEL"
+# SEC17 (N-15): where the operator declares the channel's account — the two channels' URLs
+# (watch_channel.CHANNEL_ENV is the second) and, on Orodruin, their containers' scopes, which its
+# contract reads (eregion_core/orodruin.py CHANNEL_SCOPE_ENV, WATCH_SCOPE_ENV). Each from a
+# Terraform output of infra/orodruin (channel_url, watch_channel_url, channel_scope,
+# watch_channel_scope).
+DECLARED_URLS = ("EREGION_EXERCISE_CHANNEL", "EREGION_WATCH_CHANNEL")
+DECLARED_SCOPES = ("EREGION_CHANNEL_SCOPE", "EREGION_WATCH_CHANNEL_SCOPE")
+_SCOPE_ACCOUNT = re.compile(
+    r"^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.storage"
+    r"/storageaccounts/([a-z0-9]{3,24})/blobservices/default/containers/[^/]+$", re.IGNORECASE)
 STORAGE = "https://storage.azure.com/.default"
 API_VERSION = "2021-08-06"
 # A blob becomes a local file: only a plain run_id name, never a path.
@@ -159,9 +174,46 @@ def url_refusal(url: str) -> str:
     return "not an Azure Storage blob endpoint (https://<account>.blob.core.windows.net)"
 
 
+def account_of(url: str) -> str:
+    """The storage account an Azure Storage blob URL names — "" when it is not one."""
+    if url_refusal(url):
+        return ""
+    host = (urlsplit(url).hostname or "").lower()
+    return next(host[:-len(suffix)] for suffix in BLOB_SUFFIXES if host.endswith(suffix))
+
+
+def declared_accounts(env=None) -> dict[str, str]:
+    """``{variable: account}`` for each declaration of the channel's account that is set — the
+    two channels' URLs, the two containers' scopes; one that names no account: ``""``."""
+    env = os.environ if env is None else env
+    out: dict[str, str] = {}
+    for name in DECLARED_URLS:
+        value = (env.get(name) or "").strip().rstrip("/")
+        if value:
+            out[name] = account_of(value)
+    for name in DECLARED_SCOPES:
+        value = (env.get(name) or "").strip().rstrip("/")
+        if value:
+            m = _SCOPE_ACCOUNT.match(value)
+            out[name] = m.group(1).lower() if m else ""
+    return out
+
+
+def declared_refusal(url: str, env=None) -> str:
+    """Why a storage token must not go to ``url``'s account (SEC17, N-15) — "" when every
+    declaration that is set names that account. Declarations that disagree refuse every account:
+    which one is ours cannot be told."""
+    account = account_of(url)
+    others = {name: acct for name, acct in declared_accounts(env).items() if acct != account}
+    if not others:
+        return ""
+    said = ", ".join(f"{name}: {acct or 'no account'}" for name, acct in sorted(others.items()))
+    return f"the account {account or '?'} is not the one declared ({said})"
+
+
 def check_url(url: str) -> str:
     """``url``, or ChannelRefused — before any token is asked for."""
-    why = url_refusal(url)
+    why = url_refusal(url) or declared_refusal(url)
     if why:
         host = urlsplit(url or "").hostname or "?"
         raise ChannelRefused(f"channel {host!r} refused, no token sent: {why}")

@@ -469,6 +469,14 @@ class ExpectedSudoConfig:
 
 
 @dataclass
+class MemoryConfig:
+    """SEC17 (V-12): the memory of past cycles. ``max_age_days``: a cycle stored longer ago is no
+    precedent — left out of the search (glorfindel/memory.py), never erased. 90 days by default,
+    at most ten years."""
+    max_age_days: float = 90.0
+
+
+@dataclass
 class GlorfindelConfig:
     monitoring_backends: list[MonitoringBackendConfig] = field(default_factory=list)
     action_backends: list[ActionBackendConfig] = field(default_factory=list)
@@ -480,6 +488,8 @@ class GlorfindelConfig:
     never_block: list[str] = field(default_factory=list)
     # ADM1 (#284): the administrators' expected sudo, per VM or pattern of VMs.
     expected_sudo: ExpectedSudoConfig = field(default_factory=ExpectedSudoConfig)
+    # SEC17 (V-12): how old a past cycle may be to be given as a precedent.
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     def monitoring_backend(self, name: str) -> MonitoringBackendConfig | None:
         return next((b for b in self.monitoring_backends if b.name == name), None)
@@ -499,6 +509,15 @@ class GlorfindelConfig:
             exc.matches(asset_name) and exc.excludes_rule(rule_name)
             for exc in self.exceptions
         )
+
+
+def memory_max_age_days(path: str | Path | None = None) -> float:
+    """SEC17 (V-12): the memory's age bound, from the config — its default (90 days) when there
+    is no config, or one the watch refuses (it does not start on it, A3)."""
+    try:
+        return load_glorfindel_config(path).memory.max_age_days
+    except Exception:
+        return MemoryConfig().max_age_days
 
 
 NO_VAULT_MSG = ("Aucun coffre de sauvegarde configuré : action_backends (type "
@@ -562,7 +581,7 @@ def load_glorfindel_config(path: str | Path | None = None) -> GlorfindelConfig:
 _SECTIONS = {
     "monitoring_backends": "list", "action_backends": "list", "exceptions": "list",
     "autonomy": "table", "isolation": "table", "never_block": "list",
-    "expected_sudo": "table",
+    "expected_sudo": "table", "memory": "table",
 }
 _MONITORING_KEYS = ("name", "type", "workspace_id", "endpoint", "discovery")
 _DISCOVERY_KEYS = ("enabled", "interval_s")
@@ -573,6 +592,7 @@ _AUTONOMY_ASSET_KEYS = ("match", "mode")
 _ISOLATION_KEYS = ("quarantine_nsg", "quarantine_rg", "forensic_sources", "forensic_ports")
 _EXPECTED_SUDO_KEYS = ("admins", "sensitive_commands", "origin_proof")
 _EXPECTED_ADMIN_KEYS = ("match", "accounts", "origins")
+_MEMORY_KEYS = ("max_age_days",)
 # The backend types something reads (discovery.py, detection_rules.py, backup_vault()):
 # `type: azure_monitr` was a backend nothing used, in silence. A new type is added here.
 _MONITORING_TYPES = ("azure_monitor", "prometheus")
@@ -667,6 +687,22 @@ class _Checker:
             return default
         if not math.isfinite(value) or value <= 0:
             self.bad(f"{where}.{k}", f"un nombre de secondes positif est attendu, pas {value}")
+            return default
+        return float(value)
+
+    def days(self, raw: dict, k: str, where: str, default: float, ceiling: float) -> float:
+        """A number of days: finite, positive, at most ``ceiling`` (SEC17)."""
+        import math
+        value = raw.get(k)
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            self.bad(f"{where}.{k}", f"un nombre de jours est attendu (sans guillemets ni unité), "
+                                     f"pas {_shown(value)}")
+            return default
+        if not math.isfinite(value) or not 0 < value <= ceiling:
+            self.bad(f"{where}.{k}", f"un nombre de jours entre 0 (exclu) et {ceiling:g} est attendu, "
+                                     f"pas {value}")
             return default
         return float(value)
 
@@ -771,6 +807,13 @@ def _parse_config(data: dict) -> GlorfindelConfig:
 
     expected_sudo = _check_expected_sudo(sections["expected_sudo"], check)
 
+    # SEC17 (V-12): the age bound of the memory, read as strictly as the rest.
+    from glorfindel.memory import DEFAULT_MAX_AGE_DAYS, MAX_AGE_CEILING_DAYS
+    mem = sections["memory"]
+    check.keys(mem, "memory", _MEMORY_KEYS)
+    memory = MemoryConfig(max_age_days=check.days(mem, "max_age_days", "memory", DEFAULT_MAX_AGE_DAYS,
+                                                  MAX_AGE_CEILING_DAYS))
+
     if check.problems:
         n = len(check.problems)
         raise ConfigError(f"{n} problème{'s' if n > 1 else ''} :\n  - " + "\n  - ".join(check.problems))
@@ -782,6 +825,7 @@ def _parse_config(data: dict) -> GlorfindelConfig:
         isolation=isolation,
         never_block=never_block,
         expected_sudo=expected_sudo,
+        memory=memory,
     )
 
 

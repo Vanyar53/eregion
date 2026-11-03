@@ -7,7 +7,9 @@
 # l'isoler. Son identité managée lit le banc ici (Reader, Log Analytics Reader) ; le rôle de la
 # réponse sur le groupe du banc lui est attribué à la main, hors de cet état (la posture de H0,
 # BL1c : README.md, « Ce que la VM est »). La coupure des sessions, elle, est ici : VM par VM, aux
-# VM que Glorfindel défend (session_drain_vms, SEC11). README.md pour le déroulé.
+# VM que Glorfindel défend (session_drain_vms, SEC11) ; et la neutralisation avant un restore, VM
+# par VM, aux principaux qui restaurent (restore_vms, restore_principals, SEC17). README.md pour
+# le déroulé.
 
 terraform {
   required_providers {
@@ -218,4 +220,68 @@ resource "azurerm_role_assignment" "session_drain" {
   scope                = each.value.id
   role_definition_name = "Eregion Glorfindel Session Drain"
   principal_id         = azurerm_linux_virtual_machine.host.identity[0].principal_id
+}
+
+# La console du poste isole elle-même ce qu'un humain approuve, et coupe donc les sessions sous sa
+# propre identité (SEC17, relecture) : avant SEC17, son rôle Restore lui donnait Run Command sur
+# tout le groupe. Elle reçoit la coupure comme H0, VM par VM, sur les mêmes VM — plus étroit que
+# l'ancien droit. Pas le bot : il n'isole pas. Jamais l'identité de H0, qui l'a déjà ci-dessus.
+locals {
+  session_drain_others = {
+    for pair in setproduct(keys(var.session_drain_principals), var.session_drain_vms) :
+    "${pair[0]}/${pair[1]}" => { principal = var.session_drain_principals[pair[0]], vm = pair[1] }
+  }
+}
+
+resource "azurerm_role_assignment" "session_drain_principals" {
+  for_each             = local.session_drain_others
+  scope                = data.azurerm_virtual_machine.session_drain[each.value.vm].id
+  role_definition_name = "Eregion Glorfindel Session Drain"
+  principal_id         = each.value.principal
+  principal_type       = "ServicePrincipal"
+
+  lifecycle {
+    precondition {
+      condition     = lower(each.value.principal) != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)
+      error_message = "session_drain_principals nomme l'identité de H0 : elle a déjà la coupure (session_drain)."
+    }
+  }
+}
+
+# ── La neutralisation avant un restore, VM par VM, aux VM que le restore défend (SEC17) ───────
+# Run Command est sorti du rôle Restore (posé sur des groupes entiers) : « Eregion Glorfindel
+# Restore Neutralize » (infra/identities/glorfindel-restore-neutralize.json, créé une fois par
+# tenant), attribué à la portée de chaque VM de restore_vms (restore.auto.tfvars, commité), pour
+# chaque principal qui restaure (restore_principals : la console, le bot — leurs object id, hors
+# du dépôt). Un rôle à part de la coupure des sessions : d'autres principaux (jamais la watch),
+# une autre liste, et sur un hôte où une seule identité tiendrait les deux, deux attributions qui
+# ne se confondent pas. Jamais l'identité de H0 : il ne restaure pas (décision du 31/10). Chaque
+# nom relu sur Azure : une faute de frappe échoue au plan. `make glorfindel-host-down` les retire
+# avec le reste de cet état ; le prochain `make glorfindel-host-up` les reprend.
+data "azurerm_virtual_machine" "restore" {
+  for_each            = toset(var.restore_vms)
+  name                = each.value
+  resource_group_name = data.azurerm_resource_group.bench.name
+}
+
+locals {
+  restore_neutralize = {
+    for pair in setproduct(keys(var.restore_principals), var.restore_vms) :
+    "${pair[0]}/${pair[1]}" => { principal = var.restore_principals[pair[0]], vm = pair[1] }
+  }
+}
+
+resource "azurerm_role_assignment" "restore_neutralize" {
+  for_each             = local.restore_neutralize
+  scope                = data.azurerm_virtual_machine.restore[each.value.vm].id
+  role_definition_name = "Eregion Glorfindel Restore Neutralize"
+  principal_id         = each.value.principal
+  principal_type       = "ServicePrincipal"
+
+  lifecycle {
+    precondition {
+      condition     = lower(each.value.principal) != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)
+      error_message = "restore_principals nomme l'identité de H0 : Glorfindel hébergé ne restaure pas."
+    }
+  }
 }

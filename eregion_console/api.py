@@ -1913,30 +1913,41 @@ async def action_reject_rule(proposal_id: str) -> dict:
 _RESTORE_TRACKING = Path.home() / ".glorfindel" / "restore_in_progress.json"
 
 
-def _restore_start(vm_name: str, resource_id: str) -> None:
+def _restore_tracking_update(mutate) -> None:
+    """SEC17: the restores in progress, read then written at once (a temp file renamed over it,
+    0600 as the rest of the state) under a file lock — `/api/state` reading while a restore starts
+    or ends never finds the file empty or cut, and two restores ending together lose none."""
     import json as _json
-    data: dict = {}
-    try:
-        if _RESTORE_TRACKING.exists():
-            data = _json.loads(_RESTORE_TRACKING.read_text())
-    except Exception:
-        pass
-    data[vm_name] = {
-        "resource_id": resource_id,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
-    _RESTORE_TRACKING.parent.mkdir(parents=True, exist_ok=True)
-    _RESTORE_TRACKING.write_text(_json.dumps(data))
+    from glorfindel.response.locks import _file_lock
+    from glorfindel.response.state import _atomic_write_text
+    with _file_lock(_RESTORE_TRACKING.with_suffix(".lock")):
+        data: dict = {}
+        try:
+            if _RESTORE_TRACKING.exists():
+                data = _json.loads(_RESTORE_TRACKING.read_text())
+        except Exception:
+            pass
+        if not isinstance(data, dict):
+            data = {}
+        if mutate(data) is False:
+            return
+        _atomic_write_text(_RESTORE_TRACKING, _json.dumps(data))
+
+
+def _restore_start(vm_name: str, resource_id: str) -> None:
+    started = {"resource_id": resource_id, "started_at": datetime.now(timezone.utc).isoformat()}
+    _restore_tracking_update(lambda data: data.__setitem__(vm_name, started))
 
 
 def _restore_done(vm_name: str) -> None:
-    import json as _json
+    def done(data: dict):
+        if vm_name not in data:
+            return False                  # nothing to write
+        del data[vm_name]
+
     try:
-        if not _RESTORE_TRACKING.exists():
-            return
-        data = _json.loads(_RESTORE_TRACKING.read_text())
-        data.pop(vm_name, None)
-        _RESTORE_TRACKING.write_text(_json.dumps(data))
+        if _RESTORE_TRACKING.exists():
+            _restore_tracking_update(done)
     except Exception:
         pass
 

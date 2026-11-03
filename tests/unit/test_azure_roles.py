@@ -128,7 +128,7 @@ def test_the_response_role_holds_what_the_adapter_declares_and_nothing_broad():
     assert set(_role("session-drain")["Actions"]) == drain
     # The snapshot: an on-demand backup of the vault, never its restore.
     assert "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/backup/action" in actions
-    for role in (response, _role("restore"), _role("session-drain")):
+    for role in (response, _role("restore"), _role("session-drain"), _role("restore-neutralize")):
         assert role["IsCustom"] is True and not role["DataActions"] and not role["NotActions"]
         for a in role["Actions"]:
             assert "*" not in a and not a.lower().startswith("microsoft.authorization/"), a
@@ -155,6 +155,42 @@ def test_the_restore_role_restores_and_nothing_of_the_network():
     assert "Microsoft.RecoveryServices/Vaults/backupFabrics/protectionContainers/protectedItems/recoveryPoints/restore/action" in actions
     assert {"Microsoft.Compute/virtualMachines/deallocate/action", "Microsoft.Compute/virtualMachines/start/action"} <= actions
     assert not [a for a in actions if a.startswith("Microsoft.Network/")]
+
+
+def test_the_console_gets_the_session_drain_vm_by_vm_the_bot_never():
+    """SEC17 review (M3265): the console isolates in its own process what a human approves — the
+    default path in human_only — and its isolation cuts the sessions under its identity. Its Run
+    Command came from the Restore role, on the group; it gets the drain VM by VM instead, as the
+    watch. The bot never isolates (Restore, Revert): no drain."""
+    ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    text = "\n".join(_logical_lines(ops))
+    block = text.split("for vm in <id de chaque VM défendue>; do", 1)[1].split("\ndone", 1)[0]
+    assert "for a in <appId-watch> <appId-console>; do" in block
+    assert '--role "Eregion Glorfindel Session Drain" --scope $vm' in block and "appId-bot" not in block
+    bot = (ROOT / "glorfindel" / "bot.py").read_text(encoding="utf-8")
+    assert "isolate_vm(" not in bot and "connector" not in bot     # the bot never isolates
+
+
+def test_the_restore_s_run_command_is_its_own_role_given_vm_by_vm_never_to_the_watch():
+    """SEC17 (M3215, M3216): the restore's Run Command — the neutralization before the disks are
+    swapped, a root command on the VM — out of the Restore role, which goes on whole groups,
+    into a role of its own, given on each VM the restore defends, to the console and the bot."""
+    restore = _role("restore")
+    assert not any("runcommand" in a.lower() for a in restore["Actions"])
+    neutralize = _role("restore-neutralize")
+    assert neutralize["Name"] == "Eregion Glorfindel Restore Neutralize"
+    assert neutralize["Actions"] == ["Microsoft.Compute/virtualMachines/runCommand/action"]
+    assert "VM by VM" in neutralize["Description"] and "never to the watch" in neutralize["Description"]
+    assert neutralize["Name"] != _role("session-drain")["Name"]
+    ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    grants = [ln for ln in _logical_lines(ops) if "Eregion Glorfindel Restore Neutralize" in ln
+              and "az role assignment create" in ln]
+    assert grants and all("--scope $vm" in ln for ln in grants), grants
+    # Never to the watch's principal, in any command the documentation gives.
+    assert not [ln for ln in grants if "appId-watch" in ln], grants
+    restore_grants = [ln for ln in _logical_lines(ops) if '"Eregion Glorfindel Restore"' in ln
+                      and "az role assignment create" in ln]
+    assert restore_grants and not [ln for ln in restore_grants if "appId-watch" in ln]
 
 
 def _render(spec: str, env: dict) -> str:
@@ -247,7 +283,7 @@ def test_the_audit_and_the_readiness_advise_no_broad_role_and_never_the_restore_
     from glorfindel import audit, readiness
     names = {json.loads(p.read_text(encoding="utf-8"))["Name"] for p in ROLES.glob("*.json")}
     assert names == {"Eregion Glorfindel Response", "Eregion Glorfindel Restore",
-                     "Eregion Glorfindel Session Drain"}
+                     "Eregion Glorfindel Session Drain", "Eregion Glorfindel Restore Neutralize"}
     for module in (audit, readiness):
         text = re.sub(r"""["']\s*\n\s*f?["']""", "", inspect.getsource(module))
         roles = re.findall(r"--role\s+(?:'([^']+)'|(\S+))", text)

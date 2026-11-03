@@ -149,7 +149,9 @@ def drift_meet(said, now: dict):
             "held": sorted(set(said.get("held") or []) & set(now["held"])),
             "open": sorted(set(said.get("open") or []) & set(now["open"])),
             "unsure": sorted(set(said.get("unsure") or []) & set(now["unsure"])),
-            "blocked": bool(said.get("blocked")) or now["blocked"]}
+            "blocked": bool(said.get("blocked")) or now["blocked"],
+            "rules": {k: (now.get("rules") or {}).get(k) or (said.get("rules") or {}).get(k)       # there in either
+                      for k in {**(said.get("rules") or {}), **(now.get("rules") or {})}}}
 
 
 def unrecorded(vm: str, exc: Exception, ip: str = "") -> dict:

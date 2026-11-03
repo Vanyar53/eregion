@@ -48,6 +48,16 @@ variable "entra_logs_enabled" {
   nullable    = false
 }
 
+# ── auditd sur les VM du banc, ses lignes vers le workspace (AUD1, #408) ────────────────
+# Désactivé par défaut ; dans terraform.tfvars (persistant), jamais en `-var` d'une seule commande
+# (le prochain apply sans lui retirerait l'extension et la facilité). auditd.tf, docs/operations.md.
+variable "auditd_enabled" {
+  description = "auditd sur les VM du banc (la règle du CIS user_emulation, et root_command : les commandes d'un shell root sous l'auid de connexion), ses lignes par audisp-syslog vers local6, que la DCR envoie à Syslog : la règle auditd-sensitive-root-command de Glorfindel. Défaut false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 # G1 : les VM qui reçoivent le bruit bénin (chaos.tf). La source de vérité reste chaos.noise_vms
 # du config.yaml ; cette variable ne sert qu'à le remplacer le temps d'un plan — ce que fait
 # tests/chaos_noise.tftest.hcl, un local ne se remplaçant pas dans un test. Un second moyen

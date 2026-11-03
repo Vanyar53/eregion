@@ -14,6 +14,7 @@ The code that lived here (4 394 lines) is split by concern, nothing changed in i
     connector.py                AzureConnector, the subscription guard, the VM lock on writes
     nsg.py                      reading security rules by content
     turned.py                   our rules turned into an allow, the denies they wait behind (I5Q)
+    narrow.py                   an orphan rule narrowed to the addresses of the VMs held (U1G)
     network.py                  NICs and NSGs: reads, rule writes, names
     quarantine.py               the quarantine NSG
     isolation.py, release.py, verify.py      isolation by quarantine or by rules
@@ -56,6 +57,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.providers.azure.capabilities",
     "glorfindel.providers.azure.nsg",
     "glorfindel.providers.azure.turned",
+    "glorfindel.providers.azure.narrow",
     "glorfindel.providers.azure.quarantine",
     "glorfindel.providers.azure.network",
     "glorfindel.providers.azure.isolation",

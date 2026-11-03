@@ -8593,6 +8593,31 @@ CONTROL += [
 ]
 
 
+# AUC (#447): a VM's mode, its exceptions, compared to the config's names case ignored, as Azure
+# compares a VM's name; entries tied that disagree give the most prudent mode; the console's
+# change of mode updates the entry written with another case. M3180–M3184.
+MUTANTS += [
+    ("M3180", "a human_only pattern written in capitals misses the VM in lowercase: the default acts (AUC)", C,
+     "    mode: str\n\n    def matches(self, asset_name: str) -> bool:\n"
+     "        return vm_name_matches(asset_name, self.match)\n",
+     "    mode: str\n\n    def matches(self, asset_name: str) -> bool:\n"
+     "        return fnmatch.fnmatch(asset_name, self.match)\n"),
+    ("M3181", "an exact entry written in capitals no longer exact: a longer wildcard wins (AUC)", C,
+     "        exact = [r for r in self.assets if r.match.lower() == name]\n",
+     "        exact = [r for r in self.assets if r.match == asset_name]\n"),
+    ("M3182", "VM-A non_disruptive and vm-a human_only: the first listed wins, not the most prudent (AUC)", C,
+     "    return min(rules, key=lambda r: _MODE_PRUDENCE.get(r.mode, len(_MODE_PRUDENCE))).mode\n",
+     "    return rules[0].mode\n"),
+    ("M3183", "an exception written in capitals misses the VM in lowercase (AUC)", C,
+     "        return vm_name_matches(asset_name, self.asset_pattern)\n",
+     "        return fnmatch.fnmatch(asset_name, self.asset_pattern)\n"),
+    ("M3184", "the console's mode for vm-a added beside VM-A: the VM held in the other's mode (AUC)", C,
+     '        named = [e for e in assets if str(e.get("match") or "").lower() == asset_name.lower()]\n',
+     '        named = [e for e in assets if e.get("match") == asset_name][:1]\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_config.py" for n in range(3180, 3185)})
+
+
 def _copy_repo(dest: Path) -> None:
     files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
     for rel in files:

@@ -902,6 +902,17 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
 - Effets du refus : la watch **ne démarre pas** (code 2, le message en rouge) ; l'isolation est refusée
   avant toute écriture et la préparation dit `config_unreadable` (comme un YAML illisible, S1) ; la
   réaffirmation passe en alertes seules.
+- Noms de VM (AUC, #447) : `autonomy.assets[].match`, `exceptions[].asset_pattern` et
+  `expected_sudo.admins[].match` se comparent au nom de la VM **sans la casse**, comme Azure
+  (`VM-PROD-DB` nomme `vm-prod-db`) ; deux entrées d'`autonomy.assets` à égalité qui ne
+  s'accordent pas donnent le mode le plus prudent. Les comptes d'`expected_sudo` gardent leur
+  casse (un compte Linux la distingue). Une entrée écrite avec la casse de sa VM se lit comme
+  avant ; **une entrée écrite avec une autre casse, sans effet jusqu'ici, prend effet dans les
+  deux sens** : `human_only` tient enfin la VM, mais `non_disruptive` la rend autonome (après la
+  préparation) et une exception la retire de la surveillance (`vm-?: non_disruptive` sous un
+  défaut `human_only` rend `VM-A` autonome). Les noms sont ceux qu'Azure rend (la fin du
+  `resource_id` d'ARM, avec la casse de la création ; le `Computer` du Heartbeat pour les
+  exceptions) : relire `exceptions` et `autonomy.assets` face à eux avant de mettre H0 à jour.
 - Le fichier d'exemple (`glorfindel-config.yaml.example`) et le fragment de Celebrimbor
   (`make celebrimbor-output`) passent la lecture stricte (`tests/unit/test_config.py`).
 - **`never_block`** (SEC2, 28/10) : une liste d'adresses ou de préfixes CIDR que Glorfindel ne

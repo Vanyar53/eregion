@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **An operation on a VM never cuts off another through an older isolation turned into an allow** (I4G, #460, found by I3V's measure, seed 73; `docs/azure.md`, « Le refus total d'une ancienne version, retourné en autorisation » ; `docs/design/preuves.md`, « I4G »). The guard every removal by name asks (`_held_by_turned`, I4B) knew our rules by two prefixes, `glorfindel-iso-` and `glorfindel-block-`. An older version's isolation is named `glorfindel-isolation-deny-all` (`-out`, or VM-suffixed): turned into an allow by someone, it was no turned rule of ours, the guard answered « nothing to keep » without reading it, and the release of that older isolation — its reset too — took it off by its name. A VM given that NSG since lost what the allow let in (on `*`: every NIC behind the NSG). These names are ours for the guard now (`turned._OUR_NAMES`): the allow stays and is said (« gardée : notre règle glorfindel-isolation-deny-all, retournée en autorisation par quelqu'un… »), `release_partial` or `swept_partial`, the state kept; the deny of the pair goes. The same names count for the denies a turned rule waits behind (I5Q: the orphan sweep, a deleted VM's release) — more kept, never less. Tests: `tests/unit/test_turned_names.py` (11, 10 red on `main`), the frozen sequence `test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in` (red on `main` 5482fc1, the oracle unchanged); mutants M3270–M3272.
+
 ## [0.5.1] — 2026-11-03 — "every alert said"
 
 ### Added

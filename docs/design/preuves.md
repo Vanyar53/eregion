@@ -1242,6 +1242,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 | I4S | NSG jugé sans la carte d'une autre VM partie en quarantaine (ou nue) | le reset (ou la levée) de la VM restée seule supprimait l'ancienne isolation de l'autre : aucun flux, mais plus rien au retour de sa carte hors de Glorfindel |
+| I4G | ancienne isolation d'une VM (le refus total à nom fixe), retourné en autorisation par quelqu'un ; une nouvelle VM reçoit ce NSG | la levée (ou le reset) de la première retirait l'autorisation par son nom, la garde jamais demandée : **la nouvelle VM coupée** de ce qu'elle lui ouvrait |
 | I7S | isolation par règles sur un NSG partagé, état perdu, carte laissée nue, réisolée sur le NSG du subnet (lectures des NSG en 429), VM supprimée | la levée de la VM supprimée ne cherchait rien : `released`, la première isolation restée sur le NSG partagé, visant l'adresse que reçoit la VM suivante |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
@@ -3189,6 +3190,48 @@ isoler/lever, `block_then_isolate` deux fois, `taken_up_by_its_lowercase_id`, `o
 **Reste ouvert** : le reset ne cherche pas sur le NSG de quarantaine qu'il fait quitter lui-même, dans le même
 passage, à une carte encore en quarantaine (I3R) ; l'adaptateur AWS dit encore `released` sur un état illisible
 (I3U).
+
+**I4G (03/11, #460) : une opération sur une VM ne coupe jamais une autre VM, par une ancienne isolation retournée
+en autorisation.** La graine 73 à 60 séquences, laissée par I3V (ci-dessus) : rouge à chaque essai sur `main`
+jusqu'à `1be01d3`, verte ensuite à 60 parce que les tirages ont changé avec les règles d'I3G — le défaut restait.
+**La séquence** (trois étapes, ses tirages tels qu'Hypothesis les a réduits) : web sur un NSG à elle, isolée là par
+une ancienne version (le refus total à nom fixe, `glorfindel-isolation-deny-all` et `-out`, son état à un seul NSG
+gardé : `legacy=('web-nic', True)`), les autres cartes nues, sans quarantaine ; quelqu'un retourne le refus entrant
+en autorisation (`tamper_with_our_rule`, `access`) ; l'homonyme de rg-app2 supprimé (son adresse libérée) ; puis
+`an_old_isolations_vm_isolated_again` : api créée sur le NSG de web, à cette adresse, web isolée de nouveau (l'état
+ancien gardé sous `legacy`, I4E), levée. I4 : « an operation on …/web cut off …/api » — api perdait l'entrant
+depuis l'extérieur (22, 443) que l'allow lui ouvrait. **La cause** : la levée défait l'enregistrement ancien
+(`older.py`, `_undo_older`) par ses noms, chacun demandé d'abord à la garde (`turned._held_by_turned`, I4B : une
+règle à notre nom passée en allow qui ouvre une autre carte vivante reste). Mais la garde ne connaissait nos règles
+qu'à deux préfixes, `glorfindel-iso-` et `glorfindel-block-` (`_turned_allows`) : `glorfindel-isolation-…` n'en est
+pas un. Aucune règle retournée trouvée, `_turned_guard` rendait « rien à garder » sans lire la règle demandée —
+`_opens_another`, qui l'aurait gardée (sur `*`, api derrière ce NSG), jamais appelé —, et l'allow partait par son
+nom. Le reset (`sweep_vm_rules`, `legacy_named`) faisait de même. **Pourquoi l'oracle avait raison** (A0) : il ne
+lit pas cette allow comme le refus qu'elle était (`_world`, `untampered` : un nom d'ancienne version retourné ne
+se distingue pas de celui d'un homonyme) ; elle est à quelqu'un, elle ouvre api, et une levée de web ne change rien
+pour api — sauf rouvrir ce que seul un reste de web fermait (`reopenable`). **Correctif**
+(`glorfindel/providers/azure/turned.py`) : les noms d'une ancienne version sont des nôtres pour la garde
+(`_OUR_NAMES` : `glorfindel-iso-`, `glorfindel-block-`, `glorfindel-isolation-deny-all` — le nom fixe, `-out`, le
+suffixe d'une VM). L'allow reste, dite (« gardée : notre règle glorfindel-isolation-deny-all, retournée en
+autorisation par quelqu'un, vise * — toutes les cartes derrière ce NSG, dont api-nic-4 »), `release_partial` ou
+`swept_partial`, l'état gardé ; le refus de la paire part. Le même nom compte pour les refus qu'une règle retournée
+attend derrière (I5Q : le balayage des orphelines, la levée d'une VM supprimée) : on garde plus, jamais moins.
+Aucune règle de la machine ajoutée, retirée ni restreinte : `an_old_isolations_vm_isolated_again` (I4E) la tirait
+déjà. **Figée** : `test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in`
+(`test_invariant_regressions.py`, rejouée sans Hypothesis par `_run`) : rouge sur le code de `main` 5482fc1, par
+l'oracle inchangé, verte après. **Tests unitaires** (`test_turned_names.py`, onze, dix rouges sur `main`) : chaque
+forme du nom retournée en allow est une règle retournée des nôtres (le nom fixe, `-out`, suffixé, suffixé `-out`),
+un refus sous ce nom ou une allow du client n'en sont pas ; la levée et le reset de web gardent l'allow pour api et
+le disent, le refus de la paire part (le nom fixe entrant, le nom fixe `-out`, le nom suffixé) ; rien de retourné,
+la paire part et la levée dit `released` (verte sur `main` : garde le correctif de trop en faire). **Mutants
+M3270–M3272** : les noms d'une ancienne version retirés de la garde (M3270, la cause), le nom suffixé seul oublié
+(M3271), le nom `-out` oublié (M3272).
+**Mesures d'I4G.** Invariants, `--hypothesis-seed=N`, six à la fois : à 60 séquences, N = 73, 29, 1..18,
+**20/20 vertes** ; à 500, N = 73, 29, 7, 25, **4/4 vertes** (la graine 73 ne retombait plus à 60 sur `main` depuis
+I3G : seule la séquence figée prouve le correctif). Mutants M3270–M3272 : 3/3 par leurs tests à chaque tour (deux
+tours) ; les voisins sur `turned.py` et `older.py` (M1731, M1733, M1736, M1742, M1743, M1747, M1890, M1895–M1897,
+M1903, M1967, M1968, M2320–M2322) : 16/16, un tour. `pytest` complet : 5 928 réussis, 7 sautés ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 340 mutants, sans faute.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

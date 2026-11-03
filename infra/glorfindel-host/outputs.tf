@@ -17,6 +17,11 @@ output "session_drain_vms" {
   value       = sort(keys(azurerm_role_assignment.session_drain))
 }
 
+output "restore_neutralize" {
+  description = "SEC17 : où la neutralisation avant un restore est attribuée (« Eregion Glorfindel Restore Neutralize »), principal/VM — chaque VM de restore_vms, pour chaque principal de restore_principals."
+  value       = sort(keys(azurerm_role_assignment.restore_neutralize))
+}
+
 output "principal_id" {
   description = "Identité managée de la VM (Reader sur le banc, Log Analytics Reader sur son workspace ; la coupure des sessions sur chaque VM de session_drain_vms)."
   value       = azurerm_linux_virtual_machine.host.identity[0].principal_id

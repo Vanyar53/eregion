@@ -619,7 +619,9 @@ HOST_USER     ?= glorfindel
 # Sans OPERATOR_CIDR, ton IP publique du moment, en /32 (seule source SSH autorisée).
 OPERATOR_CIDR ?= $(shell curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null)/32
 # La coupure des sessions de H0 (SEC11, R-03) : infra/glorfindel-host/session_drain.auto.tfvars,
-# que Terraform lit de lui-même à chaque plan — rien à passer ici.
+# que Terraform lit de lui-même à chaque plan — rien à passer ici. De même la neutralisation avant
+# un restore (SEC17) : restore.auto.tfvars (commité) et restore_principals.auto.tfvars (les object
+# id de la console et du bot, sur le poste seulement, ignoré par git).
 HOST_VARS      = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)"
 HOST_IP        = $(shell $(HOST_TF) output -no-color -raw public_ip 2>/dev/null | grep -E '^[0-9.]+$$')
 # HOST_SSH_KEY : la clé privée qui va avec admin_ssh_public_key (terraform.tfvars), si ton agent

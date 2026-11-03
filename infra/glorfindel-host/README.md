@@ -38,6 +38,16 @@ seul sur le banc, dans le mode de chaque VM.
     Une VM de la liste que Celebrimbor reconstruit perd son attribution avec elle (l'attribution
     porte l'id de la VM) : elle la retrouve au prochain `make glorfindel-host-up` ; d'ici là, sa
     préparation dit `no_drain`, et elle agit en `human_only`.
+  - **La neutralisation avant un restore, VM par VM** (SEC17). H0 ne restaure pas, et ne reçoit
+    jamais ce droit. Mais son état Terraform porte, pour le banc, « Eregion Glorfindel Restore
+    Neutralize » (Run Command, sorti du rôle Restore) sur chaque VM de `restore_vms` (gondolin,
+    bree — `restore.auto.tfvars`, commité), pour chaque principal qui restaure (`restore_principals` :
+    la console et le bot, leurs object id dans `restore_principals.auto.tfvars`, sur le poste,
+    ignoré par git ; `restore_principals.auto.tfvars.example`). Sans ce fichier, aucune
+    attribution ; l'identité de H0 parmi eux, le plan refuse. Les gestes, dans leur ordre :
+    `docs/operations.md`, « Depuis un rôle Restore d'avant SEC17 ». `terraform output
+    restore_neutralize` dit où elle est donnée. Une VM hors de la liste est restaurée quand même ;
+    sa neutralisation est refusée, et dite sur la carte.
     Le test du module la tient (`tests/session_drain.tftest.hcl`).
   - **Un `make glorfindel-host-push` garde le mode de chaque VM** tel qu'il est sur H0
     (décision de Jonathan, 02/11 ; avant, SEC7 remettait toutes les VM en `human_only` à

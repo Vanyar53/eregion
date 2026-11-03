@@ -61,9 +61,33 @@ variable "session_drain_vms" {
   type        = list(string)
   default     = []
 
+  # Une VM chacune une fois, la casse ignorée comme Azure ignore celle d'un nom de VM (SEC17) :
+  # ["vm-a", "VM-A"] ferait deux attributions sur la même VM, la seconde refusée à l'apply (409).
   validation {
-    condition     = length(var.session_drain_vms) == length(distinct(var.session_drain_vms)) && alltrue([for n in var.session_drain_vms : can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", n))])
-    error_message = "session_drain_vms : des noms de VM, chacun une fois."
+    condition     = length(var.session_drain_vms) == length(distinct([for n in var.session_drain_vms : lower(n)])) && alltrue([for n in var.session_drain_vms : can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", n))])
+    error_message = "session_drain_vms : des noms de VM, chacun une fois (la casse ignorée)."
+  }
+}
+
+variable "restore_vms" {
+  description = "SEC17 : les VM du groupe du banc que le restore défend — « Eregion Glorfindel Restore Neutralize » (Run Command, la neutralisation de la dernière commande avant l'échange des disques) sur chacune, pour chaque principal de restore_principals, jamais sur le groupe. Gardée dans restore.auto.tfvars (commité). Une VM hors de la liste est restaurée quand même ; sa neutralisation est refusée, et dite sur la carte. Le rôle doit exister dans le tenant (docs/operations.md, « Identités Azure »)."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.restore_vms) == length(distinct([for n in var.restore_vms : lower(n)])) && alltrue([for n in var.restore_vms : can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", n))])
+    error_message = "restore_vms : des noms de VM, chacun une fois (la casse ignorée)."
+  }
+}
+
+variable "restore_principals" {
+  description = "SEC17 : les principaux qui restaurent — celui de la console et celui du bot (leur object id, jamais leur appId), nommés : { console = \"<object id>\", bot = \"<object id>\" }. Hors du dépôt : restore_principals.auto.tfvars, ignoré par git, sur le poste de l'opérateur (restore_principals.auto.tfvars.example). Jamais l'identité de H0 : Glorfindel hébergé ne restaure pas. Vide (défaut) : aucune neutralisation attribuée."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for k, v in var.restore_principals : can(regex("^[a-z][a-z0-9-]{0,31}$", k)) && can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", v))]) && length(values(var.restore_principals)) == length(distinct([for v in values(var.restore_principals) : lower(v)]))
+    error_message = "restore_principals : un nom (console, bot) vers l'object id d'un principal, chacun une fois."
   }
 }
 

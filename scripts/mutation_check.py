@@ -8672,6 +8672,36 @@ MUTANTS += [
      "            if m:\n                out[name] = m.group(1).lower()\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_injector_channels.py" for n in range(3211, 3214)})
+# SEC17 (#451): the restore's Run Command out of the Restore role, into « Eregion Glorfindel Restore
+# Neutralize », VM by VM, to the VMs the restore defends — a VM outside is restored, the refusal said
+# on the card; and a VM named twice in another case refused at the plan (AUC review). M3214–M3219.
+# The Terraform ones are caught by the files read (test_glorfindel_host.py), their behaviour by
+# `terraform test` (infra/glorfindel-host/tests/restore_neutralize.tftest.hcl, the CI's job).
+MUTANTS += [
+    ("M3214", "a restore refused Run Command on a VM outside the list: the refusal not flagged (SEC17)", RST,
+     "            refused = _is_iam_error(str(e))\n", "            refused = False\n"),
+    ("M3215", "the card of a restored VM outside the list says not why its last command stayed (SEC17)", AGT,
+     '        if neutralized is False and (signal.get("raw_signal") or {}).get("run_command_refused") is True:\n',
+     "        if False:\n"),
+    ("M3216", "Run Command back in the Restore role, on whole groups (SEC17)", "infra/identities/glorfindel-restore.json",
+     '  "Actions": [\n    "Microsoft.Compute/virtualMachines/deallocate/action",\n',
+     '  "Actions": [\n    "Microsoft.Compute/virtualMachines/runCommand/action",\n'
+     '    "Microsoft.Compute/virtualMachines/deallocate/action",\n'),
+    ("M3217", "the restore's neutralization given on the bench's group, not VM by VM (SEC17)", "infra/glorfindel-host/main.tf",
+     "  scope                = data.azurerm_virtual_machine.restore[each.value.vm].id\n",
+     "  scope                = data.azurerm_resource_group.bench.id\n"),
+    ("M3218", "session_drain_vms: vm-a and VM-A pass the plan, the second assignment fails at the apply (SEC17)",
+     "infra/glorfindel-host/variables.tf",
+     "    condition     = length(var.session_drain_vms) == length(distinct([for n in var.session_drain_vms : lower(n)]))",
+     "    condition     = length(var.session_drain_vms) == length(distinct(var.session_drain_vms))"),
+    ("M3219", "restore_vms: vm-a and VM-A pass the plan (SEC17)", "infra/glorfindel-host/variables.tf",
+     "    condition     = length(var.restore_vms) == length(distinct([for n in var.restore_vms : lower(n)]))",
+     "    condition     = length(var.restore_vms) == length(distinct(var.restore_vms))"),
+]
+TESTS.update({"M3214": "tests/unit/test_glorfindel.py -k restore_s_list",
+              "M3215": "tests/unit/test_glorfindel.py -k restore_s_list",
+              "M3216": "tests/unit/test_azure_roles.py", "M3217": "tests/unit/test_glorfindel_host.py",
+              "M3218": "tests/unit/test_glorfindel_host.py", "M3219": "tests/unit/test_glorfindel_host.py"})
 
 
 def _copy_repo(dest: Path) -> None:
@@ -8874,8 +8904,10 @@ MUTANTS += [
      '  scope                = each.value.id\n  role_definition_name = "Eregion Glorfindel Session Drain"',
      '  scope                = data.azurerm_resource_group.bench.id\n  role_definition_name = "Eregion Glorfindel Session Drain"'),
     ("M2899", "the module drains by default, without the list kept in the repository (SEC11, R-03)",
-     "infra/glorfindel-host/variables.tf", "  default     = []\n",
-     '  default     = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]\n'),
+     "infra/glorfindel-host/variables.tf",
+     "« Identités Azure »).\"\n  type        = list(string)\n  default     = []\n\n  # Une VM chacune une fois",
+     "« Identités Azure »).\"\n  type        = list(string)\n"
+     '  default     = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]\n\n  # Une VM chacune une fois'),     # re-anchored by SEC17: restore_vms has a default [] too
 ]
 TESTS.update({
     "M2892": "tests/unit/test_azure_roles.py",

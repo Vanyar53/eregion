@@ -2055,6 +2055,9 @@ def _build_recovery_signal(resource_id: str, restore_result: dict, restore_time_
             # outside the allowlist, a managed Run Command (A3) — the card names it.
             **({"replay_vectors": list(restore_result["replay_vectors"])}
                if restore_result.get("replay_vectors") else {}),
+            # SEC17: the VM is outside the list the restore defends (restore_vms): Run Command
+            # was refused there — the card says it, a flag set by the code, never Azure's words.
+            **({"run_command_refused": True} if restore_result.get("run_command_refused") is True else {}),
         },
         "context": {"run_id": run_id},
     })

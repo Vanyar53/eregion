@@ -1325,6 +1325,16 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
                 "Vérifier ces extensions (ou les retirer) et l'intégrité de la VM avant de lever "
                 "l'isolation.")
             return
+        if neutralized is False and (signal.get("raw_signal") or {}).get("run_command_refused") is True:
+            # SEC17: the VM is restored, outside the VMs the restore defends — say why.
+            d["escalation_reason"] = (
+                "Restauration terminée, mais la dernière commande Run Command n'a pas été "
+                "neutralisée avant : Run Command refusé sur cette VM, le rôle « Eregion Glorfindel "
+                "Restore Neutralize » n'y est pas (il se donne VM par VM, aux VM que le restore "
+                "défend : restore_vms). Le disque restauré a pu la rejouer au démarrage. Vérifier "
+                "l'intégrité de la VM avant de lever l'isolation ; l'ajouter à restore_vms si le "
+                "restore la défend.")
+            return
         d["escalation_reason"] = (
             ("Restauration terminée, mais la dernière commande Run Command n'a pas pu être "
              "neutralisée avant : " if neutralized is False else

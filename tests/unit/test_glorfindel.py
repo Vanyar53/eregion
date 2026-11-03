@@ -2708,6 +2708,45 @@ def test_restore_still_runs_when_run_command_cannot_be_neutralized(monkeypatch):
     assert out["run_command_neutralized"] is False
     assert "not running" in out["run_command_error"]
     assert posted                                    # recovery first
+    assert "run_command_refused" not in out          # a VM not running is no refusal of the right
+
+
+def test_a_vm_outside_the_restore_s_list_is_restored_and_the_refusal_is_said(monkeypatch):
+    """SEC17 (M3214): Run Command left the Restore role (whole groups) for « Eregion Glorfindel
+    Restore Neutralize », VM by VM — a VM outside restore_vms is restored anyway, and the card
+    says why its last command was not neutralized."""
+    from glorfindel.agent import _apply_release_precondition
+    from glorfindel.cli import _build_recovery_signal
+    connector, posted = _restore_ready(monkeypatch)
+    connector._compute.virtual_machines.begin_run_command.side_effect = RuntimeError(
+        "(AuthorizationFailed) The client 'x' does not have authorization to perform action "
+        "'Microsoft.Compute/virtualMachines/runCommand/action' over scope '/subscriptions/s/…/vm'")
+    out = connector.restore_from_backup(_RID, vault="rsv", wait=False, staging_storage="st",
+                                        before_attack_time=_AFTER_EVERY_POINT)
+    calls = [c[0] for c in connector._compute.mock_calls]
+    assert "virtual_machines.begin_deallocate" in calls and posted     # restored anyway
+    assert out["run_command_neutralized"] is False and out["run_command_refused"] is True
+    assert "Eregion Glorfindel Restore Neutralize" in out["run_command_error"]
+    assert "restore_vms" in out["run_command_error"] and "AuthorizationFailed" in out["run_command_error"]
+    signal = _build_recovery_signal(_RID, out, 60)
+    assert signal["raw_signal"]["run_command_refused"] is True
+    assert "run_command_error" not in signal["raw_signal"]      # Azure's words never reach the model
+    d = {"escalate": False, "action": "release_isolation"}
+    _apply_release_precondition(d, signal)
+    assert d["escalate"] is True and d["held_by"] == "release_precondition"
+    assert "Eregion Glorfindel Restore Neutralize" in d["escalation_reason"]
+    assert "restore_vms" in d["escalation_reason"]
+
+
+def test_a_neutralization_that_failed_otherwise_says_no_refusal_on_the_card():
+    from glorfindel.agent import _apply_release_precondition
+    from glorfindel.cli import _build_recovery_signal
+    signal = _build_recovery_signal(_RID, {"run_command_neutralized": False,
+                                           "run_command_error": "VM is not running"}, 60)
+    assert "run_command_refused" not in signal["raw_signal"]
+    d = {"escalate": False, "action": "release_isolation"}
+    _apply_release_precondition(d, signal)
+    assert d["escalate"] is True and "Restore Neutralize" not in d["escalation_reason"]
 
 
 def _drain_connector(message="glorfindel-drain-remaining=0", os_type="Linux", error=None):

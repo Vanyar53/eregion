@@ -27,7 +27,7 @@ from glorfindel.detectors import (  # noqa: E402  (after optional deps)
     is_identity_source,
     plane_of,
 )
-from glorfindel import correlation, expected_sudo  # noqa: E402
+from glorfindel import auditd, correlation, expected_sudo  # noqa: E402
 
 logger = logging.getLogger("glorfindel.detection_rules")
 
@@ -156,6 +156,9 @@ _INDICATOR_COLUMNS: list[tuple[str, str]] = [
     ("CallerIpAddress", "caller_ip"),
     ("PutBlobCount",    "blob_upload_count"),
     ("EgressBytes",     "egress_bytes"),
+    # AUD1: a command run as root by a human login, read by the poller in auditd's records
+    # (glorfindel/auditd.py) — before SyslogMessage, which the reader sets to those records.
+    ("AuditCommand",    "root_command"),
     ("SyslogMessage",   "syslog_event"),   # may be overridden below
 ]
 
@@ -1268,6 +1271,7 @@ class RulePoller:
                     "last_error": s.get("last_error", ""),
                     "match_count": s.get("match_count", 0),
                     **expected_counts(s),
+                    **({"auditd": s["auditd"]} if isinstance(s.get("auditd"), dict) else {}),
                 })
             return out
 
@@ -1362,6 +1366,10 @@ class RulePoller:
             return []
 
         targets = self._targets(rule)
+        # AUD1 (#408): auditd's execs of a human login as root, read before any signal and
+        # outside the lock — a command of ADM1's sensitive list stays, the rest is no card.
+        policy = getattr(self._cfg, "expected_sudo", None)
+        rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())
         routed = self._route(rule, rows, targets) if targets else {}
         judged = self._judge_expected(rule, routed)      # ADM1, outside the lock
         with self._lock:
@@ -1417,7 +1425,10 @@ class RulePoller:
                 # sent. Aggregated rows (one per attacker, per account…) each count.
                 events = [r for r in kept if r.get("TimeGenerated")]
                 send = [r for r in kept if not r.get("TimeGenerated")]
-                if events:
+                if events and rule.ttp == auditd.TTP:
+                    # AUD1: the newest exec, naming the others of this VM in its card.
+                    send.append(auditd.fold(events))
+                elif events:
                     send.append(max(events, key=lambda r: str(r["TimeGenerated"])))
                 # Capped per rule and poll (SEC2), as the control plane: the gravest rows
                 # first; the rest of this VM's in one card that names each of them.
@@ -1452,6 +1463,9 @@ class RulePoller:
                                        "origin_confirmed": expected_counts(st)["origin_confirmed"] + confirmed_n}
             if any(corr.values()):
                 st["correlation"] = correlation.add_counts(st.get("correlation"), corr, now_iso)
+            if rule.ttp == auditd.TTP:
+                # AUD1: what the rule's window holds at this poll — zero events says no line arrives.
+                st["auditd"] = auditd.window(audit_n, now_iso)
             # Recorded AFTER the dispatch: a crash in between re-sends (at least once)
             # rather than losing a detection (third review, detail).
             dispatched = st.setdefault("dispatched", {})

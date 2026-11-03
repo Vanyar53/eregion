@@ -1629,6 +1629,22 @@ def report(since_text: str, as_json: bool):
         console.print(f"[dim]{r['exercises']} exercise card(s) left out (an injector's window covered the VM)[/dim]")
     _print_expected_sudo(r["expected_sudo"])
     _print_memory(r["memory"])
+    _print_auditd()
+
+
+def _print_auditd() -> None:
+    """AUD1 (#408): what the audit rule's window held at its last poll — a human login's execs as
+    root, how many sensitive (cards), how many unreadable (cards). Zero events: no line arrives."""
+    from glorfindel import auditd
+    from glorfindel.detection_rules import _load_status
+    for name, st in sorted(_load_status().items()):
+        a = st.get("auditd") if isinstance(st, dict) else None
+        if not isinstance(a, dict):
+            continue
+        n = {k: int(a.get(k) or 0) if str(a.get(k) or 0).isdigit() else 0 for k in auditd.COUNTS}
+        at = _esc_markup("".join(c for c in str(a.get("at") or "")[:19] if c.isprintable()))
+        console.print(f"auditd (AUD1), {_esc_markup(name)}: {n['events']} root exec(s) of a human login in its window, "
+                      f"{n['sensitive']} sensitive, {n['unreadable']} unreadable (each a card) — last poll {at}")
 
 
 def _memory_said(m: dict) -> str:

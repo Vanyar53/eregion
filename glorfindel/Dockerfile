@@ -26,6 +26,9 @@ COPY analysis/ analysis/
 # detection_authoring.load_catalog(). Baked in so the image is self-contained; the
 # compose mount overrides it for live edits.
 COPY technique_catalog.yaml .
+# Eregion's reference drills (DG-d), listed and loaded by the console's Dagorlad; the client's own
+# live in ~/.eregion/console/drills, mounted with the console's directory.
+COPY drills/ drills/
 
 # The project alone: its dependencies are all above (--no-deps), nothing resolved here.
 RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .

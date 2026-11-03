@@ -609,8 +609,11 @@ def test_run_again_sends_the_same_wires_as_a_new_request():
     js = _js()
     assert "${again ? 'Run again' : 'Request run from Orodruin'}" in js
     assert "request() { if (!S.request) sendRequest(); }" in js
-    # The page writes nothing else: the follow is a GET, the one POST is the request (DG-b).
-    assert js.count("method: 'POST'") == 1
+    # The page writes nothing else: the follow is a GET; the two POSTs are the request (DG-b) and
+    # a drill kept (DG-d) — never a launch.
+    assert js.count("method: 'POST'") == 2
+    assert js.count("fetch('/api/dagorlad/requests', { method: 'POST'") == 1
+    assert js.count("fetch('/api/dagorlad/drills', { method: 'POST'") == 1
     assert "getJSON('/api/dagorlad/requests/' + encodeURIComponent(q.request))" in js
 
 

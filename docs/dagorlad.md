@@ -158,6 +158,59 @@ juge et la lance.
    publie son verdict et le statut de la demande ; sous le plan, la page dit « Orodruin: armed », ou
    « unknown here » tant qu'il n'a rien publié. La page suit alors chaque fil, en direct.
 
+## Garder et rejouer un drill
+
+Un **drill**, ce sont des fils gardés sous un nom, pour les rejouer : un exercice qu'on répète pour
+garder la dernière preuve sous 30 jours. Son exécution reste une demande, et chacun de ses fils, un
+run. **Charger un drill ne lance rien** : il pose des fils sur le tableau, comme si tu les avais
+tirés. La demande s'écrit ensuite par son propre bouton, et part par la commande.
+
+- **La ligne DRILLS**, entre le tableau et le plan : le nombre de drills, « Show » pour la liste, et
+  « Save as drill ».
+- **« Save as drill »** garde les fils tirés sous un nom (a-z, 0-9, `-`) et une description. Le drill
+  garde le **nom** de chaque VM, jamais son identifiant Azure, qui change quand Celebrimbor
+  reconstruit le banc. Il va dans `~/.eregion/console/drills/<nom>.yaml`, l'auteur `operator` et
+  l'heure notés ; jamais dans `runs/` ni `~/.glorfindel/` (Glorfindel reste aveugle). Un drill du
+  même nom n'est remplacé qu'après « Replace it ». Une cible qui n'est pas une VM inscrite lue
+  maintenant, ou dont le nom est porté par une autre VM inscrite (un jumeau copié d'un banc garde ses
+  noms) : rien n'est gardé, le drill reviendrait sur une autre VM.
+- **La liste** montre les drills de cette instance et ceux livrés avec Eregion (`drills/` dans le
+  dépôt : `bl1-reponse`, `sentinelle`). Un drill de l'instance du nom d'un drill livré le remplace
+  ici, et la liste le dit. Un fichier illisible est listé avec la raison.
+- **« Load »** pose les fils du drill. Sur des fils déjà tirés, la page demande d'abord.
+  - Un drill de l'instance se pose sur ses VM, par leur nom. Un nom que porte plus d'une VM inscrite
+    ne prend aucune VM : son fil se pose « à poser », chaque candidate dite par son groupe.
+  - **Un drill livré nomme une zone, jamais une VM** : ses fils se posent **« à poser »**, dans un
+    cadre au-dessus du plan, avec un bouton par VM inscrite de la zone, et « all ». À côté de chaque
+    VM, quand elle a joué cette technique ici pour la dernière fois ; la moins récente est marquée.
+    C'est un indice : rien n'est choisi à ta place. **La demande ne s'écrit pas** tant qu'un fil
+    attend ses VM.
+- **« YAML »** exporte le drill tel que son fichier le tient : pour ton Git, le jumeau, ou le proposer
+  comme drill de référence (une PR sur `drills/`).
+
+![Le drill livré bl1-reponse chargé sur le jeu d'exemple : ses deux fils « à poser », un bouton par VM inscrite de la zone bench, et la liste des drills](images/dagorlad/drills.png)
+
+En une commande, depuis ton poste : la commande tire le drill, pose ses fils sur les VM inscrites
+lues maintenant, les juge comme le fait le plan, écrit la demande, puis continue comme `REQUEST=`
+(l'affichage, les noms tapés des fils destructifs, « [y/N] », Orodruin) :
+
+```bash
+make orodruin-exercise DRILL=<nom> [TARGETS=<vm>,<vm>…|all] [DRY_RUN=1] [REQUEST_FROM=local]
+```
+
+- Le drill vient de l'instance de la console (H0, ou ton poste avec `REQUEST_FROM=local`), sinon des
+  drills livrés du dépôt. Un drill de l'instance qui est un lien est refusé : jamais suivi, et jamais
+  remplacé par le drill livré du même nom.
+- **Un drill livré attend `TARGETS`** : sans lui, la commande refuse et liste les VM candidates de
+  chaque fil. Chaque fil prend dans `TARGETS` les VM de sa zone ; `all`, toutes ; un nom candidat
+  d'aucun fil est refusé. Un drill de l'instance n'en a pas besoin.
+- Les VM sont lues par Azure avec ton identité (`AZURE_SUBSCRIPTION_ID`, `EREGION_BENCH`, comme
+  Orodruin), et chaque fil est jugé : un seul refusé (une panne en production…), et rien n'est envoyé.
+  Un nom que porte plus d'une VM inscrite est refusé, ses VM dites par leur groupe.
+  `DRILL_VMS=<liste.json>` lit les VM d'une liste plutôt que d'Azure (les tests, un poste sans accès),
+  et la commande le dit. `DRILL`, `TARGETS` et `DRILL_VMS` se donnent sur la ligne de commande, jamais
+  par l'environnement.
+
 ## Suivre une demande
 
 Une fois la demande écrite, le panneau du bas devient sa **chronologie** : une ligne par fil, dans
@@ -273,7 +326,7 @@ C'est ce que la vue Runs montre ensuite : la détection, sa décision, la carte,
 Les captures et la boucle de cette page et du README se rejouent sur le poste, jamais en CI :
 
 ```bash
-make console-shots                          # docs/images/dagorlad/ : board.png, runs.png, loop.webp
+make console-shots                          # docs/images/dagorlad/ : board.png, drills.png, runs.png, loop.webp
 make console-shots VIDEO=~/dagorlad.mp4     # et le tour complet, hors du dépôt
 python scripts/console_shots.py --check     # quels outils sont là ; ne rend rien
 ```

@@ -8781,112 +8781,6 @@ TESTS.update({"M3214": "tests/unit/test_glorfindel.py -k restore_s_list",
               "M3218": "tests/unit/test_glorfindel_host.py", "M3219": "tests/unit/test_glorfindel_host.py"})
 
 
-def _copy_repo(dest: Path) -> None:
-    files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
-    for rel in files:
-        src = REPO / rel
-        if src.is_file():
-            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest / rel)
-
-
-# What the component check (scripts/component_check.py, D1) adds to the module it makes absent.
-COMPONENT_ABSENT = "absent: component check"
-
-
-def unmeasurable(stdout: str) -> str | None:
-    """The first line of a test run saying a module could not be found, other than one the
-    component check made absent on purpose (D1) — a copy that cannot import its code is no
-    measure. Line by line: one module made absent must not cover another that is missing."""
-    for line in stdout.splitlines():
-        if "ModuleNotFoundError: No module named" in line and COMPONENT_ABSENT not in line:
-            return line.strip()
-    return None
-
-
-def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
-    """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
-    env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
-           "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
-        cwd=copy, env=env, capture_output=True, text=True)
-    missing = unmeasurable(proc.stdout)
-    if missing:
-        raise RuntimeError(f"{missing}\n{proc.stdout[-2000:]}")
-    if show and proc.returncode != 0:
-        print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])
-    return proc.returncode != 0
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--examples", type=int, default=60)
-    ap.add_argument("--rounds", type=int, default=3)
-    ap.add_argument("--only", default="")
-    ap.add_argument("--control", action="store_true",
-                    help="measure the control set (never used to shape the generation) instead")
-    ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2),
-                    help="mutants measured at once")
-    ap.add_argument("--min-caught", type=int, default=0,
-                    help="exit 1 if fewer mutants (equivalent and multi-host aside) are caught in every round")
-    args = ap.parse_args()
-    only = {m.strip() for m in args.only.split(",") if m.strip()}
-
-    with tempfile.TemporaryDirectory(prefix="glorfindel-mutants-") as tmp:
-        base = Path(tmp) / "base"
-        _copy_repo(base)
-        todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
-        # The unmutated copy must pass, or nothing below means anything.
-        for target in sorted({TESTS.get(m[0], INVARIANTS) for m in todo}):
-            if _run(base, args.examples, show=True, target=target):
-                print(f"{target} fails on the UNMUTATED code — fix that first")
-                return 2
-        def measure(mutant):
-            mid, title, rel, old, new, *why = mutant
-            copy = Path(tmp) / mid
-            shutil.copytree(base, copy)
-            target = copy / rel
-            if old is RENAME:
-                if not target.exists():
-                    return mid, title, "STALE", "file to rename is gone"
-                target.rename(copy / new)
-            else:
-                text = target.read_text()
-                if isinstance(old, tuple) != isinstance(new, tuple) or (
-                        isinstance(old, tuple) and len(old) != len(new)):
-                    return mid, title, "STALE", "old and new replacements do not pair up"
-                pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
-                for o, n in pairs:
-                    if text.count(o) != 1:
-                        return mid, title, "STALE", f"{text.count(o)} matches"
-                    text = text.replace(o, n)
-                target.write_text(text)
-            started = time.monotonic()
-            target = TESTS.get(mid, INVARIANTS)
-            caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))
-            # Caught by a fixed sequence only (tests/unit/test_invariant_regressions.py)?
-            fixed = (caught == 0 and target == INVARIANTS
-                     and _run(copy, 0, target="tests/unit/test_invariant_regressions.py"))
-            shutil.rmtree(copy, ignore_errors=True)
-            verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
-            if why and verdict != "CAUGHT":
-                verdict = why[0].split(":")[0]
-            row = (mid, title, verdict, f"{caught}/{args.rounds} ({time.monotonic() - started:.0f}s)")
-            print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
-            return row
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            rows = sorted(pool.map(measure, todo))
-    print(f"\nbudget {args.examples} sequences, {args.rounds} rounds:")
-    for mid, title, verdict, detail in rows:
-        print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
-    counted = [r for r in rows if r[2] not in ("EQUIVALENT", "MULTI-HOST", "STALE")]
-    caught = sum(1 for r in counted if r[2] == "CAUGHT")
-    print(f"\n{caught}/{len(counted)} caught in every round (equivalent and multi-host mutants aside)")
-    return 1 if caught < args.min_caught else 0
-
-
 # I3U (#440): a VM's own isolation state turned unreadable — a disk, a write cut short — after a
 # partial release that kept where to look (I3R): the retry read nothing, said `released` and deleted
 # the file, the pair left on the quarantine NSG. Never `released` nor `swept` now, the reason said,
@@ -8931,79 +8825,6 @@ TESTS.update({"M3190": f"{_I3U_UNIT}::test_clearing_a_state_never_deletes_an_unr
               "M3191": f"{_I3U_UNIT}::test_the_warning_stays_when_a_nics_message_names_the_unreadable_file"})
 
 
-# L1Qs (#424): a mode per VM and a perimeter on the data subnet in the machine; I3G's seed 9 — a NIC
-# whose subnet couldn't be read named off the perimeter it sits behind —; the perimeter alone, which
-# said « the IP reaches » a NIC another VM's perimeter cuts off; the reassertion of the blocks in two
-# times — every perimeter pair first; a drift's baseline narrowed before any write of the pass. M2990–M2999,
-# M3150–M3152 (the reserve, entered).
-RPB = "glorfindel/reassert_perimeters.py"
-_L1QS_REG = "tests/unit/test_invariant_regressions.py::"
-_L1QS_UNIT = "tests/unit/test_reassert.py::"
-_L1QS_SEED9 = (f"{_L1QS_REG}test_a_perimeter_block_never_names_uncovered_a_nic_whose_subnet_it_could_not_read "
-               f"{_L1QS_REG}test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered")
-_L1QS_OTHER = (f"{_L1QS_REG}test_a_nic_off_the_perimeter_another_perimeter_cuts_off_is_not_said_reached "
-               f"{_L1QS_REG}test_a_perimeter_beside_another_on_the_app_subnet_never_says_db_nic_0_reached")
-_L1QS_UNREAD = f"{_L1QS_REG}test_a_nic_off_the_perimeter_whose_other_perimeter_cant_be_read_is_unknown"
-_L1QS_TWO = (f"{_L1QS_UNIT}test_two_perimeters_on_two_subnets_are_both_put_back_before_a_block_is_read_again "
-             f"{_L1QS_REG}test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_off")
-_L1QS_FIRST = f"{_L1QS_UNIT}test_the_first_time_writes_only_what_the_second_would"
-_L1QS_DECIDE = '    return not (b.get("reasserted_at") or r._mode(autonomy, vm, ref) == "human_only")\n'
-_L1QS_OFF = '                    off = [n for n, s in stand.items() if s == "no"]\n'
-MUTANTS += [
-    ("M2990", "a NIC whose subnet couldn't be read (a 429) named off the perimeter it sits behind: « the IP still "
-              "reaches it » (L1Qs, I3G's seed 9)", PER,
-     '        if unread := [t["nic_short"] for t in targets if t.get("subnet_unreadable")]:\n',
-     "        if unread := []:\n"),
-    ("M2991", "the perimeter alone reads no other perimeter: a NIC off it another VM's cuts off said reached (L1Qs)",
-     VBL, _L1QS_OFF, '                    off = [n for n, s in stand.items() if s != "unknown"]\n'),
-    ("M2992", "another perimeter that can't be read taken for none: the NIC said reached (L1Qs)", VBL,
-     _L1QS_OFF, '                    off = [n for n, s in stand.items() if s != "holds"]\n'),
-    ("M2993", "another perimeter that can't be read taken for holding: the block verified (L1Qs, A0)", VBL,
-     "                    if unsure:\n", "                    if False:\n"),
-    ("M2994", "no first time: an entry read again before another's pair is back (L1Qs)", R,
-     "    put_back = put_back_perimeters(connector, autonomy, blocks, report)\n", "    put_back = {}\n"),
-    ("M2995", "the first time writes the pair of an entry in human_only (L1Qs, I5)", RPB,
-     _L1QS_DECIDE, '    return not b.get("reasserted_at")\n'),
-    ("M2996", "the first time writes again a pair put back once: two removals no longer deliberate (L1Qs)", RPB,
-     _L1QS_DECIDE, '    return not r._mode(autonomy, vm, ref) == "human_only"\n'),
-    ("M2997", "the first time retries at every pass a disappearance said and no worse (L1Qs)", RPB,
-     '    if (b.get("drift_alerted_at") and not r._worse(', "    if (False and not r._worse("),
-    ("M2998", "the second time ignores what the first put back: its pair read whole, « reposé » never said, or "
-              "said « ne le repose pas » (L1Qs)", R,
-     '                                ref=snapshot["resource_id"], put_back=put_back)\n',
-     '                                ref=snapshot["resource_id"])\n'),
-    ("M2999", "the first time's write refused, swallowed: the card says its rules rewritten (L1Qs)", R,
-     '    if pair is not None and pair["error"] is not None:\n        failed("subnet", pair["error"])\n',
-     '    if False:\n        failed("subnet", pair["error"])\n'),
-    ("M3150", "the second time writes the pair again over the first's (L1Qs)", R,
-     "    for scope in scopes[1:] if pair is not None else scopes:\n", "    for scope in scopes:\n"),
-    ("M3151", "the first time writes the pair of an entry an unblock holds (L1Qs, I9)", RPB,
-     '                        or r._held_by_an_operation(b, "unblock_failed", "unblocking_at")):\n',
-     "                        or False):\n"),
-    ("M3152", "the baseline narrowed after the pass's first write: refused (a full disk), the rules gone again "
-              "read « not worse than the card », unsaid (L1Qs, the machine)", R,
-     '    if b.get("drift_alerted_at") and _missing(verification):\n        # Better than its card, here,',
-     '    if False:\n        # Better than its card, here,'),
-]
-TESTS.update({
-    "M3152": (f"{_L1QS_UNIT}test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said "
-              f"{_L1QS_REG}test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said"),
-    "M2990": f"{_L1QS_SEED9} {INVARIANTS}", "M2991": f"{_L1QS_OTHER} {INVARIANTS}",
-    "M2992": _L1QS_UNREAD, "M2993": _L1QS_UNREAD,
-    "M2994": f"{_L1QS_TWO} {INVARIANTS}",
-    "M2995": f"{_L1QS_UNIT}test_a_block_in_human_only_is_said_once_its_neighbours_perimeter_is_back {INVARIANTS}",
-    "M2996": f"{_L1QS_FIRST} {INVARIANTS}", "M2997": f"{_L1QS_FIRST} {INVARIANTS}",
-    "M2998": _L1QS_TWO,
-    "M2999": f"{_L1QS_UNIT}test_a_pair_the_first_time_failed_to_write_is_never_said_put_back",
-    "M3150": _L1QS_TWO, "M3151": f"{_L1QS_FIRST} {INVARIANTS}",
-})
-# L1Qr's order, kept for an entry the first time left to the second (its check raised): measured there.
-TESTS.update({mid: f"{_L1QR} {_L1QS_UNIT}test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_"
-                   f"blocks {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
-
-
-if __name__ == "__main__":
-    sys.exit(main())
 # SEC11 (#417): rights at their narrowest — a perimeter names its subscription (R-19), Orodruin's
 # contract an allow-list (V-29), no fallback on the former shared principal (V-17), the session
 # drain VM by VM (R-03). M2880–M2899.
@@ -9287,3 +9108,206 @@ MUTANTS += [
 
 
 TESTS.update({"M3080": "tests/unit/test_exercise.py", "M3081": "tests/unit/test_exercise.py"})
+
+
+
+# MCG (#448): the harness's `__main__` guard stays its last statement, or the blocks a merge
+# leaves after it are never measured (54 of them on 02/11). M3185–M3186.
+MUTANTS += [
+    ("M3185", "a block left after the harness's __main__ guard: never run, never measured (MCG)",
+     "scripts/mutation_check.py", 'if __name__ == "__main__":\n    sys.exit(main())\n',
+     'if __name__ == "__main__":\n    sys.exit(main())\nTESTS.update({})\n'),
+    ("M3186", "mutant_anchors no longer reads what follows the harness's __main__ guard (MCG)",
+     "scripts/mutant_anchors.py",
+     '    faults += after_guard((root / "scripts/mutation_check.py").read_text())\n', ""),
+]
+TESTS.update({mid: "tests/unit/test_mutant_anchors.py" for mid in ("M3185", "M3186")})
+
+
+
+# L1Qs (#424): a mode per VM and a perimeter on the data subnet in the machine; I3G's seed 9 — a NIC
+# whose subnet couldn't be read named off the perimeter it sits behind —; the perimeter alone, which
+# said « the IP reaches » a NIC another VM's perimeter cuts off; the reassertion of the blocks in two
+# times — every perimeter pair first; a drift's baseline narrowed before any write of the pass. M2990–M2999,
+# M3150–M3152 (the reserve, entered).
+RPB = "glorfindel/reassert_perimeters.py"
+_L1QS_REG = "tests/unit/test_invariant_regressions.py::"
+_L1QS_UNIT = "tests/unit/test_reassert.py::"
+_L1QS_SEED9 = (f"{_L1QS_REG}test_a_perimeter_block_never_names_uncovered_a_nic_whose_subnet_it_could_not_read "
+               f"{_L1QS_REG}test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered")
+_L1QS_OTHER = (f"{_L1QS_REG}test_a_nic_off_the_perimeter_another_perimeter_cuts_off_is_not_said_reached "
+               f"{_L1QS_REG}test_a_perimeter_beside_another_on_the_app_subnet_never_says_db_nic_0_reached")
+_L1QS_UNREAD = f"{_L1QS_REG}test_a_nic_off_the_perimeter_whose_other_perimeter_cant_be_read_is_unknown"
+_L1QS_TWO = (f"{_L1QS_UNIT}test_two_perimeters_on_two_subnets_are_both_put_back_before_a_block_is_read_again "
+             f"{_L1QS_REG}test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_off")
+_L1QS_FIRST = f"{_L1QS_UNIT}test_the_first_time_writes_only_what_the_second_would"
+_L1QS_DECIDE = '    return not (b.get("reasserted_at") or r._mode(autonomy, vm, ref) == "human_only")\n'
+_L1QS_OFF = '                    off = [n for n, s in stand.items() if s == "no"]\n'
+MUTANTS += [
+    ("M2990", "a NIC whose subnet couldn't be read (a 429) named off the perimeter it sits behind: « the IP still "
+              "reaches it » (L1Qs, I3G's seed 9)", PER,
+     '        if unread := [t["nic_short"] for t in targets if t.get("subnet_unreadable")]:\n',
+     "        if unread := []:\n"),
+    ("M2991", "the perimeter alone reads no other perimeter: a NIC off it another VM's cuts off said reached (L1Qs)",
+     VBL, _L1QS_OFF, '                    off = [n for n, s in stand.items() if s != "unknown"]\n'),
+    ("M2992", "another perimeter that can't be read taken for none: the NIC said reached (L1Qs)", VBL,
+     _L1QS_OFF, '                    off = [n for n, s in stand.items() if s != "holds"]\n'),
+    ("M2993", "another perimeter that can't be read taken for holding: the block verified (L1Qs, A0)", VBL,
+     "                    if unsure:\n", "                    if False:\n"),
+    ("M2994", "no first time: an entry read again before another's pair is back (L1Qs)", R,
+     "    put_back = put_back_perimeters(connector, autonomy, blocks, report)\n", "    put_back = {}\n"),
+    ("M2995", "the first time writes the pair of an entry in human_only (L1Qs, I5)", RPB,
+     _L1QS_DECIDE, '    return not b.get("reasserted_at")\n'),
+    ("M2996", "the first time writes again a pair put back once: two removals no longer deliberate (L1Qs)", RPB,
+     _L1QS_DECIDE, '    return not r._mode(autonomy, vm, ref) == "human_only"\n'),
+    ("M2997", "the first time retries at every pass a disappearance said and no worse (L1Qs)", RPB,
+     '    if (b.get("drift_alerted_at") and not r._worse(', "    if (False and not r._worse("),
+    ("M2998", "the second time ignores what the first put back: its pair read whole, « reposé » never said, or "
+              "said « ne le repose pas » (L1Qs)", R,
+     '                                ref=snapshot["resource_id"], put_back=put_back)\n',
+     '                                ref=snapshot["resource_id"])\n'),
+    ("M2999", "the first time's write refused, swallowed: the card says its rules rewritten (L1Qs)", R,
+     '    if pair is not None and pair["error"] is not None:\n        failed("subnet", pair["error"])\n',
+     '    if False:\n        failed("subnet", pair["error"])\n'),
+    ("M3150", "the second time writes the pair again over the first's (L1Qs)", R,
+     "    for scope in scopes[1:] if pair is not None else scopes:\n", "    for scope in scopes:\n"),
+    ("M3151", "the first time writes the pair of an entry an unblock holds (L1Qs, I9)", RPB,
+     '                        or r._held_by_an_operation(b, "unblock_failed", "unblocking_at")):\n',
+     "                        or False):\n"),
+    ("M3152", "the baseline narrowed after the pass's first write: refused (a full disk), the rules gone again "
+              "read « not worse than the card », unsaid (L1Qs, the machine)", R,
+     '    if b.get("drift_alerted_at") and _missing(verification):\n        # Better than its card, here,',
+     '    if False:\n        # Better than its card, here,'),
+]
+TESTS.update({
+    "M3152": (f"{_L1QS_UNIT}test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said "
+              f"{_L1QS_REG}test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said"),
+    "M2990": f"{_L1QS_SEED9} {INVARIANTS}", "M2991": f"{_L1QS_OTHER} {INVARIANTS}",
+    "M2992": _L1QS_UNREAD, "M2993": _L1QS_UNREAD,
+    "M2994": f"{_L1QS_TWO} {INVARIANTS}",
+    "M2995": f"{_L1QS_UNIT}test_a_block_in_human_only_is_said_once_its_neighbours_perimeter_is_back {INVARIANTS}",
+    "M2996": f"{_L1QS_FIRST} {INVARIANTS}", "M2997": f"{_L1QS_FIRST} {INVARIANTS}",
+    "M2998": _L1QS_TWO,
+    "M2999": f"{_L1QS_UNIT}test_a_pair_the_first_time_failed_to_write_is_never_said_put_back",
+    "M3150": _L1QS_TWO, "M3151": f"{_L1QS_FIRST} {INVARIANTS}",
+})
+# L1Qr's order, kept for an entry the first time left to the second (its check raised): measured there.
+TESTS.update({mid: f"{_L1QR} {_L1QS_UNIT}test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_"
+                   f"blocks {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
+
+
+# The mutants end here. A new block goes above this line: the `__main__` guard stays the last
+# statement of this file, or what follows it is never measured (MCG, #448;
+# tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).
+
+
+
+def _copy_repo(dest: Path) -> None:
+    files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
+    for rel in files:
+        src = REPO / rel
+        if src.is_file():
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest / rel)
+
+
+# What the component check (scripts/component_check.py, D1) adds to the module it makes absent.
+COMPONENT_ABSENT = "absent: component check"
+
+
+def unmeasurable(stdout: str) -> str | None:
+    """The first line of a test run saying a module could not be found, other than one the
+    component check made absent on purpose (D1) — a copy that cannot import its code is no
+    measure. Line by line: one module made absent must not cover another that is missing."""
+    for line in stdout.splitlines():
+        if "ModuleNotFoundError: No module named" in line and COMPONENT_ABSENT not in line:
+            return line.strip()
+    return None
+
+
+def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
+    """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
+    env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
+           "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
+        cwd=copy, env=env, capture_output=True, text=True)
+    missing = unmeasurable(proc.stdout)
+    if missing:
+        raise RuntimeError(f"{missing}\n{proc.stdout[-2000:]}")
+    if show and proc.returncode != 0:
+        print("\n".join(line for line in proc.stdout.splitlines() if line.startswith("E ")) or proc.stdout[-3000:])
+    return proc.returncode != 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--examples", type=int, default=60)
+    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--only", default="")
+    ap.add_argument("--control", action="store_true",
+                    help="measure the control set (never used to shape the generation) instead")
+    ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2),
+                    help="mutants measured at once")
+    ap.add_argument("--min-caught", type=int, default=0,
+                    help="exit 1 if fewer mutants (equivalent and multi-host aside) are caught in every round")
+    args = ap.parse_args()
+    only = {m.strip() for m in args.only.split(",") if m.strip()}
+
+    with tempfile.TemporaryDirectory(prefix="glorfindel-mutants-") as tmp:
+        base = Path(tmp) / "base"
+        _copy_repo(base)
+        todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
+        # The unmutated copy must pass, or nothing below means anything.
+        for target in sorted({TESTS.get(m[0], INVARIANTS) for m in todo}):
+            if _run(base, args.examples, show=True, target=target):
+                print(f"{target} fails on the UNMUTATED code — fix that first")
+                return 2
+        def measure(mutant):
+            mid, title, rel, old, new, *why = mutant
+            copy = Path(tmp) / mid
+            shutil.copytree(base, copy)
+            target = copy / rel
+            if old is RENAME:
+                if not target.exists():
+                    return mid, title, "STALE", "file to rename is gone"
+                target.rename(copy / new)
+            else:
+                text = target.read_text()
+                if isinstance(old, tuple) != isinstance(new, tuple) or (
+                        isinstance(old, tuple) and len(old) != len(new)):
+                    return mid, title, "STALE", "old and new replacements do not pair up"
+                pairs = zip(old, new) if isinstance(old, tuple) else [(old, new)]
+                for o, n in pairs:
+                    if text.count(o) != 1:
+                        return mid, title, "STALE", f"{text.count(o)} matches"
+                    text = text.replace(o, n)
+                target.write_text(text)
+            started = time.monotonic()
+            target = TESTS.get(mid, INVARIANTS)
+            caught = sum(_run(copy, args.examples, target=target) for _ in range(args.rounds))
+            # Caught by a fixed sequence only (tests/unit/test_invariant_regressions.py)?
+            fixed = (caught == 0 and target == INVARIANTS
+                     and _run(copy, 0, target="tests/unit/test_invariant_regressions.py"))
+            shutil.rmtree(copy, ignore_errors=True)
+            verdict = "CAUGHT" if caught == args.rounds else ("flaky" if caught else ("FIXED-ONLY" if fixed else "SURVIVES"))
+            if why and verdict != "CAUGHT":
+                verdict = why[0].split(":")[0]
+            row = (mid, title, verdict, f"{caught}/{args.rounds} ({time.monotonic() - started:.0f}s)")
+            print(f"{mid} {verdict:8} {row[3]:14} {title}", flush=True)
+            return row
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            rows = sorted(pool.map(measure, todo))
+    print(f"\nbudget {args.examples} sequences, {args.rounds} rounds:")
+    for mid, title, verdict, detail in rows:
+        print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
+    counted = [r for r in rows if r[2] not in ("EQUIVALENT", "MULTI-HOST", "STALE")]
+    caught = sum(1 for r in counted if r[2] == "CAUGHT")
+    print(f"\n{caught}/{len(counted)} caught in every round (equivalent and multi-host mutants aside)")
+    return 1 if caught < args.min_caught else 0
+
+
+
+if __name__ == "__main__":
+    sys.exit(main())

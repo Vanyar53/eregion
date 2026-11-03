@@ -374,30 +374,12 @@ class BlockMixin:
         self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority["outbound"],
                             src="*", dst=ip)
 
-        promoted_from = None
+        promoted_from, kept, guarded = None, [], []
         if replace:
-            # Subnet rule now in place → drop the prior VM-scoped rules of the NICs behind it.
+            # Subnet rule now in place → drop the prior VM-scoped rules of the NICs behind it,
+            # each asked about first (I4P, _promote).
             prev = next((e for e in _load_block_entries(resource_id) if e.get("ip") == ip), None)
-            dropped, kept = [], []
-            for pl in (prev or {}).get("placements", []):
-                if off_ids is None or (pl.get("nic_id") or "").rstrip("/").lower() in off_ids:
-                    kept.append(pl)               # not behind the perimeter (or unknown): kept
-                    continue
-                for nm in (pl["rule"], f'{pl["rule"]}-out'):
-                    try:
-                        self._network.security_rules.begin_delete(pl["nsg_rg"], pl["nsg_name"], nm).result()
-                    except Exception:
-                        pass
-                dropped.append(pl["rule"])
-            # Legacy single-rule entry (no placements)
-            if prev and prev.get("rule") and not prev.get("placements") and prev["rule"] != rule_name:
-                old_rg, old_name = (prev.get("nsg") or f"{nsg_rg}/{nsg_name}").split("/", 1)
-                for nm in (prev["rule"], f'{prev["rule"]}-out'):
-                    try:
-                        self._network.security_rules.begin_delete(old_rg, old_name, nm).result()
-                    except Exception:
-                        pass
-                dropped.append(prev["rule"])
+            dropped, kept, guarded = self._promote(prev, off_ids, nic_id, f"{nsg_rg}/{nsg_name}", rule_name)
             if prev:
                 _clear_block_state(resource_id, ip)
             promoted_from = dropped or None
@@ -439,6 +421,12 @@ class BlockMixin:
         }
         if promoted_from:
             out["promoted_from"] = promoted_from
+        if guarded:
+            # I4P: said as the unblock says it (I4B), the status the VM's: the perimeter cuts
+            # the attacker off it whatever the rule kept behind it lets through elsewhere.
+            out["kept_rules"] = guarded
+            out["note"] += (" Kept by the promotion, its placement left in the state for the unblock: "
+                            + " ; ".join(guarded) + ".")
         if uncovered or unread:
             out["status"] = "blocked_partial"
             out["uncovered_nics" if uncovered else "nics_unread"] = uncovered or unread

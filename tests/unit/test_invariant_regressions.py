@@ -4,6 +4,8 @@ order it makes them — `_draw` takes the VM, the id it is reached with, the fau
 """
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from .fake_azure import ATTACKER, FakeAzure, _rule_record, key
@@ -5270,12 +5272,19 @@ def test_a_block_bypassed_after_the_role_is_taken_is_said(monkeypatch):
 def _replay(monkeypatch, net, *steps):
     """A sequence as Hypothesis printed it once shrunk: each rule with its draws, in order. A rule
     that leaves draws unused fails at once (`pytest.fail`, never an AssertionError a strict
-    `xfail` would count): the split between rules is checked rule by rule."""
+    `xfail` would count): the split between rules is checked rule by rule. A rule that takes no
+    draws (`recover`, `time_passes`) is called as Hypothesis calls it, without them."""
     invariant_env(monkeypatch)
     m = IsolationMachine()
     try:
         m.build(net)
         for rule, *draws in steps:
+            if not draws and "data" not in inspect.signature(getattr(m, rule)).parameters:
+                getattr(m, rule)()
+                m.never_more_open_than_designed()
+                m.customer_configuration_untouched()
+                m.one_vm_one_state_file()
+                continue
             s = Script(*draws)
             getattr(m, rule)(data=s)
             if s.values:
@@ -6327,75 +6336,217 @@ def test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_l
           "release"))
 
 
-_WEB_NIC_NSG = _NSG.format(rg="rg-app1", name="nsg-web-nic")
-_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
-_Q_OFF = {"quarantine": False, "rg": "", "forensic": [], "readable": True}
-_Q_ON = {"quarantine": True, "rg": "", "forensic": [], "readable": True}
-# Seed 42 at 500 (found by I5S's measure, #477, on its tree with `main` 41bef33 merged), every rule with
-# its draws in order, as Hypothesis left it (its shrinking stopped after five minutes).
-_SEED42_L1A = [
-    ("terraform_apply", _WEB_NIC_NSG),
-    ("perimeters_on_two_subnets",),
-    ("config_changes", _Q_OFF, True),
-    ("redeploy_nic", _nic("rg-app1", "db-nic-0")),
-    ("lose_state", WEB1),
-    ("perimeter_lifted_beside_a_block", WEB2, WEB2, None, WEB1, False, WEB1, 22),
-    ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, False, 22, (1, "from-full")),
-    ("config_changes", _Q_ON, True),
-    ("tamper_with_our_rule", "port"),
-    ("redeploy_nic", _nic("rg-app1", "db-nic-0")),
-    ("tags_lost",),
-    ("time_passes",),
-    ("time_passes",),
-    ("kept_at_the_lift", WEB2, WEB2, ("nic.get", "always-429"), "reset", True, "unblock", 22,
-     (_NSG.format(rg="rg-net", name="nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
-     _nic("rg-app2", "web-nic"), 0, 4, "rg-new", "web", None, "Linux", True),
-    ("reset_from_azure", _NEW_WEB, _NEW_WEB, None),
-    ("quarantine_change_comes_back", WEB1, WEB1, None, False, True,
-     _NSG.format(rg="rg-app2", name="nsg-glorfindel-quarantine-westeurope"), "human_only", "no", "human_only",
-     (4, "from-full"), False, "human_only"),
-]
+_I4P_TIER = key(_NSG.format(rg="rg-net", name="nsg-tier"))
+_I4P_WEB_BLOCK = "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"
+_I4P_DATA_SUBNET = "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/data"
 
 
-@pytest.mark.parametrize("found", [True, False], ids=["as found", "shrunk"])
-def test_a_block_said_again_as_the_disk_fills_keeps_a_card_through_an_unchecked_pass(monkeypatch, found):
-    """Seed 42 at 500 (L1A, #480), found by I5S's measure, red on `main` 41bef33 before I5S: « L1: the
-    block on …/rg-app1/…/web vanished from Azure; the reassertion neither put it back nor said so ».
-    Shrunk by hand to four rules of `main`, none of I5S's:
-    1. `said_then_back_after_a_full_disk` (« gone »): web of rg-app1 blocked (22) on its own NSG; its
-       rules taken off, said, acknowledged; put back during a full disk; taken off again, said — a
-       card « a disparu » pending;
-    2. `config_changes`: the quarantine turned on;
-    3. `kept_at_the_lift`: web of rg-app2 isolated in quarantine, blocked on nsg-subnet, its rule
-       turned, its address given to a new VM (rg-new/web), its state lost, unblocked;
-    4. `quarantine_change_comes_back`: web of rg-app1 isolated in quarantine; rg-app2's quarantine
-       stripped, a pass, said; the forensic access changed, a pass with the disk full from its 4th
-       write — the block of web said again; the configuration made unreadable, a pass.
-    The cause: in the full-disk pass, `reassert._alert` closed the pending card (« Remplacée : une
-    nouvelle alerte… ») before `escalations.record` wrote the new one, refused (ENOSPC): no card
-    left, `drift_alerted_at` kept from before. The next pass reads the block unverified (web behind
-    the quarantine, the configuration unreadable) and says nothing more. A card is closed in the
-    write of the card that replaces it now (`record(replaces=…)`): refused, the former still waits."""
-    steps = _SEED42_L1A if found else [_SEED42_L1A[i] for i in (6, 7, 13, 15)]
-    net = _net(subnet_nsg=[], web_nic={"own": "dedicated"})
-    net["config"] = {"forensic": ["10.9.9.9"], "rg": "", "quarantine": False, "readable": True}
+def test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in(monkeypatch):
+    """I4P (#466): « I4: a perimeter block on …/web cut off …/Db--01 ». web and Db--01's second
+    NIC share a tier NSG, Db--01's on the data subnet; web blocked for itself (on the tier, aimed
+    at 10.0.0.4); someone turns the inbound deny into an allow; web's address changes, Db--01's
+    second NIC given 10.0.0.4: the allow lets the attacker reach it. Then web's block promoted to
+    its subnet: the promotion took the VM rules off by their names, the guard never asked
+    (`_held_by_turned`, I4B) — Db--01 lost SSH from the attacker, out of the perimeter's reach.
+    Unseen before: a perimeter block was judged without the attacker's flows (`perimeter=True`);
+    the machine now compares them to what the perimeter rules alone close
+    (_cut_by_the_perimeter_alone). Only rules that existed before I4P."""
+    from .test_invariants import _TEMPLATES
+    ssh = [_rule("allow-ssh", 100, _TEMPLATES["allow-ssh"])]
+    _run(monkeypatch, _net(subnet_nsg=ssh, data_subnet=list(ssh), web_nic={"own": "tier"}, db_nic_1={"own": "tier"}),
+         ("block", WEB1, WEB1, None, None),
+         ("tamper_with_our_rule", "access", (_I4P_TIER, _I4P_WEB_BLOCK)),
+         ("customer_changes_ip", _nic("rg-app1", "web-nic"), 0, 20),
+         ("customer_changes_ip", _nic("rg-app1", "db-nic-1"), 0, 4),
+         ("block_perimeter", WEB1, WEB1, None, True))
+
+
+def test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_before_the_perimeter(monkeypatch):
+    """I4P, the machine's own (seed 3 at 60, `promoted_beside_a_turned_block`, on `main` 4ed889d):
+    web's NIC bare, its block on the subnet's NSG (aimed at 10.0.0.4); someone turns its outbound
+    deny into an allow; web's address changes; batch created on the data subnet, given the app
+    subnet's NSG as its NIC's, at 10.0.0.4; web promoted. The perimeter's `-out` lies on that NSG
+    after the turned allow: batch's way out to the attacker stood — until the promotion took the
+    allow off by its name. « I4: a perimeter block on …/web cut off …/batch ». Replayed step by step: the rule kept
+    to NICs' NSGs for a while (a subnet's NSG on a NIC of another subnet met an L1Qs oracle that read « shared » as
+    « behind the subnet » only, seed 7 at 500 — I4P's report); it draws this world again since I5S."""
+    from .test_invariants import _Drawn
     invariant_env(monkeypatch)
     m = IsolationMachine()
     try:
-        m.build(net)
-        for rule, *draws in steps:             # every rule but `time_passes` takes its draws, even none
-            if rule == "time_passes":
-                m.time_passes()
-                continue
-            s = Script(*draws)
-            getattr(m, rule)(data=s)
-            if s.values:
-                pytest.fail(f"{rule} left draws unused: {s.values}")
-            m.never_more_open_than_designed()
-            m.customer_configuration_untouched()
-            m.one_vm_one_state_file()
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        m.block(Script(WEB1, WEB1, None, 22))
+        m.tamper_with_our_rule(Script("access", (key(_SUBNET), f"{_I4P_WEB_BLOCK}-out")))
+        m.customer_changes_ip(Script(_nic("rg-app1", "web-nic"), 0, 4))
+        m._create_vm(_Drawn(Script("rg-app1", "batch", "Linux"),
+                            nsg=m.fake.nsgs[key(_SUBNET)]["id"]), "westeurope", subnet=_I4P_DATA_SUBNET)
+        assert any(v.endswith("/batch") for v in m.live), "batch created on the data subnet, on the app subnet's NSG"
+        m.block_perimeter(Script(WEB1, WEB1, None, True))
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
     finally:
         m.teardown()
+
+
+def test_the_promotion_never_cuts_off_a_vm_given_the_nics_nsg_on_another_subnet(monkeypatch):
+    """I4P, the machine's own once its rule keeps to NICs' NSGs (seed 7 at 500, on `main` 19d802d): web on an NSG of
+    its own, blocked there (aimed at 10.0.0.4); someone turns the inbound deny into an allow; web's address changes;
+    api created on the data subnet (SSH open there), given web's NSG, at 10.0.0.4; web promoted. The allow let the
+    attacker reach api over SSH; the promotion took it off by its name. « I4: a perimeter block on …/web cut off
+    …/api »."""
+    from .test_invariants import _TEMPLATES
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[_rule("allow-ssh", 100, _TEMPLATES["allow-ssh"])],
+                           web_nic={"own": "dedicated"}),
+         ("promoted_beside_a_turned_block", WEB1, WEB1, None, 22, (_NSG_WEB_NIC, _I4P_WEB_BLOCK), True, 0, 4,
+          _I4P_DATA_SUBNET, "rg-app1", "api", "Linux"))
+
+
+# I5S (#477): the per-VM I5 of a VM in human_only, widened to a writer's perimeter carried as its NIC's NSG
+# (Jonathan's decision, 03/11, A0) and bounded — on the subnet too — to what the perimeter rules the pass wrote
+# close on their own. The oracle's own controls: what it admits, what it still refuses.
+_I5S_PLAIN = "glorfindel-block-" + ATTACKER.replace(".", "-")
+_I5S_WEB2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web"
+_I5S_API1 = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+
+
+def test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared(monkeypatch):
+    """I5S, the machine's own (seed 7 at 500, `promoted_beside_a_turned_block` without I4P's restriction, three steps
+    as Hypothesis left them): web's NIC bare, its block on the app subnet's NSG; its inbound deny turned into an allow,
+    its address changed; api created on the data subnet, given that NSG as its NIC's, at 10.0.0.4; web promoted to its
+    subnet. Then web blocked on both, its rule turned, the address reused (`turned_then_address_reused`); then web of
+    rg-app2 blocked on the same subnet, the pair taken off, a pass with a mode per VM (`turned_perimeter_left_out`):
+    api of rg-app1 in human_only, web of rg-app2 a writer — the pair put back on nsg-subnet cuts api's way out to the
+    attacker (443), on the NIC that carries that NSG. Azure applies it
+    there as on the subnet: « I5: the reassertion acted on …/api in human_only » before I5S (the oracle read
+    « shared with a writer » as « behind its subnet » only); admitted now — the attacker's flows, closed by the
+    perimeter rules the pass wrote alone."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("promoted_beside_a_turned_block", WEB1, WEB1, None, 22, (key(_SUBNET), _I4P_WEB_BLOCK), True, 0, 4,
+          _I4P_DATA_SUBNET, "rg-app1", "api", "Linux"),
+         ("turned_then_address_reused", WEB1, WEB1, None, 22, "both", 22, (key(_SUBNET), _I4P_WEB_BLOCK),
+          "non_disruptive", False, 22, False, "rg-app1", "web", False, "non_disruptive"),
+         ("turned_perimeter_left_out", _I5S_WEB2, _I5S_WEB2, (1, "before-429"), DB, DB, 22, False, True,
+          "human_only", "human_only", "human_only", "human_only", (key(_SUBNET), f"{_I5S_PLAIN}-out"), "human_only",
+          "non_disruptive", "human_only", "human_only",
+          "non_disruptive", "human_only", "non_disruptive", "human_only", "non_disruptive"))
+
+
+def _i5s_world(monkeypatch, nic_nsg: bool = True):
+    """web blocked on the app subnet (its perimeter on nsg-subnet), the writer; Db--01 in human_only, db-nic-0 behind
+    that subnet, db-nic-1 on the data subnet — given nsg-subnet as its NIC's NSG, or not; the perimeter pair taken
+    off by someone; then the world as the pass finds it (`_before`)."""
+    from .test_invariants import _CURRENT
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    m.build(_net(subnet_nsg=[], data_subnet=[]))
+    assert m.connector.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")["status"].startswith("blocked")
+    if nic_nsg:
+        m.fake.nics[_nic("rg-app1", "db-nic-1")]["nsg"] = m.fake.nsgs[key(_SUBNET)]["id"]
+    pair = {n: m.fake.nsgs[key(_SUBNET)]["rules"].pop(n) for n in (_I5S_PLAIN, f"{_I5S_PLAIN}-out")}
+    monkeypatch.setattr(_CURRENT, "modes", {**{key(v): "non_disruptive" for v in m.live}, key(DB): "human_only"})
+    shares = m._shared_with_writers({DB})[DB]
+    assert shares["perimeter"] == {"db-nic-0"} and (not nic_nsg or shares["perimeter_nic"] == {"db-nic-1"}), shares
+    flows, _ = m._before()
+    return m, pair, shares, flows[DB]
+
+
+def _i5s_write(m, nsg: str, rec: dict):
+    """A write through the fake's API, in its journal — as the pass would make it."""
+    from types import SimpleNamespace
+    g = m.fake.nsgs[key(nsg)]
+    m.fake.network.security_rules.begin_create_or_update(
+        g["id"].split("/")[4], g["id"].rsplit("/", 1)[-1], rec["name"], SimpleNamespace(**rec)).result()
+
+
+def _i5s_done(m):
+    """The world moved by hand for a probe: no teardown — its release and its I2 would judge the probe's own
+    writes, not Glorfindel's."""
+    import shutil
+    shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_the_per_vm_i5_admits_a_writers_perimeter_carried_as_the_nics_nsg(monkeypatch):
+    """I5S: the writer's pair put back on nsg-subnet cuts the attacker off Db--01 behind the subnet (db-nic-0) and
+    on the NIC that carries that NSG (db-nic-1) — Azure applies the same rules to the same NSG, wherever it is
+    associated. Both admitted; before I5S, db-nic-1 read « the reassertion acted on …/Db--01 in human_only »."""
+    m, pair, shares, before = _i5s_world(monkeypatch)
+    try:
+        for rec in pair.values():
+            _i5s_write(m, _SUBNET, rec)
+        after = m._flows()[DB]
+        assert {f[0] for f in before - after} == {"db-nic-0", "db-nic-1"}
+        m._shut_shared(DB, before, after, shares, "I5: probe")
+        narrowed = {**shares, "perimeter_nic": set()}                       # the oracle before I5S
+        with pytest.raises(AssertionError, match="I5: probe acted on .*/Db--01 in human_only.*db-nic-1"):
+            m._shut_shared(DB, before, after, narrowed, "I5: probe")
+    finally:
+        _i5s_done(m)
+
+
+@pytest.mark.parametrize("nic, name", [
+    ("db-nic-0", "deny-attacker-out"),                     # behind the subnet: the hardening (M3391)
+    ("db-nic-1", "deny-attacker-out"),                     # the NIC's NSG: the widening's third condition (M3390)
+    ("db-nic-0", f"{_I5S_PLAIN}-web-web-nic-8b70f2-out"),  # a writer's VM rule is no perimeter rule (M3392)
+    ("db-nic-1", f"{_I5S_PLAIN}-web-web-nic-8b70f2-out"),
+])
+def test_the_per_vm_i5_refuses_what_no_perimeter_rule_closes(monkeypatch, nic, name):
+    """I5S, the bound: a writer's perimeter lies on the NSG, but what cuts Db--01 off the attacker is another rule
+    the pass wrote there — its source the NIC's addresses; a writer's VM rule or any other. Refused, behind the
+    subnet as on the NIC's NSG: before I5S, behind the subnet, any attacker flow passed."""
+    m, _pair, shares, before = _i5s_world(monkeypatch)
+    try:
+        ips = m.fake.nics[_nic("rg-app1", nic)]["ips"]
+        _i5s_write(m, _SUBNET, {**_rule_record(_rule(name, 4000, dict(
+            access="Deny", direction="Outbound", source_address_prefixes=list(ips),
+            destination_address_prefix=ATTACKER, destination_port_range="*"))), "name": name})
+        after = m._flows()[DB]
+        assert {f[0] for f in before - after} == {nic} and all(f[3] == ATTACKER for f in before - after)
+        with pytest.raises(AssertionError, match=f"I5: probe acted on .*/Db--01 in human_only.*{nic}"):
+            m._shut_shared(DB, before, after, shares, "I5: probe")
+    finally:
+        _i5s_done(m)
+
+
+@pytest.mark.parametrize("nic_nsg", [False, True])
+def test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds(monkeypatch, nic_nsg):
+    """I5S: the IP's own pair written on nsg-data — the data subnet's NSG, where no writer's perimeter lies — cuts
+    db-nic-1 off the attacker. Its NIC bare, it is neither behind a writer's subnet nor in `perimeter_nic`: refused,
+    though the rules bear the perimeter's names (the second condition, M3386). Carrying nsg-subnet as its NIC's NSG —
+    a writer's, whose pair is not put back —, it is in `perimeter_nic`, but what closes its flows lies on another NSG,
+    not the one it shares: refused too (I5S's review, M3384; before, the oracle of 714d3558 let it pass, the class of
+    M2995 — a pair written for a VM in human_only — hidden behind the writer's NSG on the NIC)."""
+    m, pair, shares, before = _i5s_world(monkeypatch, nic_nsg=nic_nsg)
+    try:
+        for rec in pair.values():
+            _i5s_write(m, _NSG.format(rg="rg-net", name="nsg-data"), rec)
+        after = m._flows()[DB]
+        assert {f[0] for f in before - after} == {"db-nic-1"}
+        with pytest.raises(AssertionError, match="I5: probe acted on .*/Db--01 in human_only.*db-nic-1"):
+            m._shut_shared(DB, before, after, shares, "I5: probe")
+    finally:
+        _i5s_done(m)
+
+
+def test_the_per_vm_i5_refuses_what_a_pair_written_wrong_closes_beside_the_attacker(monkeypatch):
+    """I5S, the first condition (I5S's review): the IP's `-out` written by the pass on the writer's NSG, but aimed at
+    `*` — a pair written wrong. It closes the attacker's way out of both NICs of Db--01, and the internet's and the
+    lateral peer's: those go elsewhere than the attacker, refused though the perimeter's rule alone closes them. The
+    third condition does not imply the first."""
+    m, _pair, shares, before = _i5s_world(monkeypatch)
+    try:
+        name = f"{_I5S_PLAIN}-out"
+        _i5s_write(m, _SUBNET, {**_rule_record(_rule(name, 4000, dict(
+            access="Deny", direction="Outbound", source_address_prefix="*", destination_address_prefix="*",
+            destination_port_range="*"))), "name": name})
+        after = m._flows()[DB]
+        shut = before - after
+        assert {f[0] for f in shut} == {"db-nic-0", "db-nic-1"} and any(f[3] != ATTACKER for f in shut), shut
+        with pytest.raises(AssertionError, match="I5: probe acted on .*/Db--01 in human_only"):
+            m._shut_shared(DB, before, after, shares, "I5: probe")
+        # The attacker's flows alone, as the pair writes them: admitted.
+        m._shut_shared(DB, before, before - {f for f in shut if f[3] == ATTACKER}, shares, "I5: probe")
+    finally:
+        _i5s_done(m)
 
 
 def _l1p_net():
@@ -6472,3 +6623,124 @@ def test_a_block_of_any_port_after_one_of_port_22_is_judged_on_every_port(monkey
     (any port), as the code now does: a block written whole sets its port, None (any port) too.
     Red on `main` 593f8326, both."""
     _replay(monkeypatch, _l1p_net(), *steps)
+
+
+def _mak_net(tier: bool) -> dict:
+    """The networks of the two CI runs of PR #476 (py3.11) that fell on MAK's L1: allow-ssh at 150 and
+    allow-https at 110 on the subnet's NSG, web-nic under a legacy isolation's own NSG; the second run
+    without the tier's rules nor the edge's NSG — same rules, same draws."""
+    r = _tpl
+    return {"subnet_nsg": [r("allow-ssh", 150), r("allow-https", 110), r("deny-lateral-in", 130)],
+            "edge_nsg": [] if tier else None,
+            "tier_rules": [r("allow-ssh", 100), r("allow-lateral-out", 100), r("deny-lateral-in", 130)] if tier else [],
+            "nics": {"web-nic": {"own": None, "rules": [r("allow-https", 100), r("deny-lateral-in", 130)],
+                                 "policy": True},
+                     "db-nic-0": {"own": None, "rules": [r("allow-https", 100)], "policy": False},
+                     "db-nic-1": {"own": None, "rules": [], "policy": False},
+                     "api-nic": {"own": None, "rules": [r("allow-lateral-out", 100), r("deny-lateral-in", 130)],
+                                 "policy": False}},
+            "windows": None, "config": {"quarantine": False, "forensic": [], "rg": "", "readable": True},
+            "legacy": ("web-nic", True), "data_subnet": None, "data_primary": False}
+
+
+_MAK_429 = ("nic.get", "always-429")
+_MAK_FOUND = (
+    ("recover",), ("recover",), ("recover",), ("recover",), ("recover",),
+    ("graph_card_before_a_disappearance", WEB1, WEB1, _MAK_429, False, "human_only", 22),
+    ("reassert", "human_only", None),
+    ("operator_acknowledges", 0),
+    ("graph_card_before_a_disappearance", WEB1, WEB1, _MAK_429, True, "human_only"),
+    ("another_subscription", WEB1, "isolate"),
+    ("operator_acknowledges", 0),
+    ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, _MAK_429, True, (1, "from-full")))
+_MAK_REDUCED = tuple(s for i, s in enumerate(_MAK_FOUND) if i not in (0, 1, 2, 3, 4, 9))
+
+
+@pytest.mark.parametrize(("tier", "steps"), [(True, _MAK_FOUND), (False, _MAK_FOUND), (True, _MAK_REDUCED)],
+                         ids=["as found", "as found, no tier", "reduced"])
+def test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block(monkeypatch, tier, steps):
+    """MAK (#481), the machine's, never the code's: two CI runs of PR #476 (py3.11, random seeds), shrunk
+    by Hypothesis to these twelve rules, their draws as printed: « L1: the block on …/rg-app1/…/web
+    vanished from Azure; the reassertion neither put it back nor said so ». web blocked (22) under the
+    graph's card, its rules taken off and said; then isolated under the graph's card, its rules taken
+    off: the pass says the isolation gone and the block gone (« a disparu »), the operator acknowledges
+    the block's card — the machine records it (`acked_drift`), the block's rules as they are then, both
+    absent. Then `said_then_back_after_a_full_disk` draws « gone » for web's isolation: its rules taken
+    off, said, acknowledged, put back, taken off again, said anew. Once the isolation was put back,
+    `_gone_comes_back` dropped `acked_drift[web]` whichever branch it ran — the block's acknowledgement,
+    that the isolation branch neither took off nor put back: the block's rules still as acknowledged,
+    its card closed by the operator for its episode (one card per disappearance, RB1), L1 counted it
+    unsaid. The code was right to say nothing more. Reduced by hand to six rules; red on `main`
+    de040e8c, all three."""
+    _replay(monkeypatch, _mak_net(tier), *steps)
+
+
+_WEB_NIC_NSG = _NSG.format(rg="rg-app1", name="nsg-web-nic")
+_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+_Q_OFF = {"quarantine": False, "rg": "", "forensic": [], "readable": True}
+_Q_ON = {"quarantine": True, "rg": "", "forensic": [], "readable": True}
+# Seed 42 at 500 (found by I5S's measure, #477, on its tree with `main` 41bef33 merged), every rule with
+# its draws in order, as Hypothesis left it (its shrinking stopped after five minutes).
+_SEED42_L1A = [
+    ("terraform_apply", _WEB_NIC_NSG),
+    ("perimeters_on_two_subnets",),
+    ("config_changes", _Q_OFF, True),
+    ("redeploy_nic", _nic("rg-app1", "db-nic-0")),
+    ("lose_state", WEB1),
+    ("perimeter_lifted_beside_a_block", WEB2, WEB2, None, WEB1, False, WEB1, 22),
+    ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, False, 22, (1, "from-full")),
+    ("config_changes", _Q_ON, True),
+    ("tamper_with_our_rule", "port"),
+    ("redeploy_nic", _nic("rg-app1", "db-nic-0")),
+    ("tags_lost",),
+    ("time_passes",),
+    ("time_passes",),
+    ("kept_at_the_lift", WEB2, WEB2, ("nic.get", "always-429"), "reset", True, "unblock", 22,
+     (_NSG.format(rg="rg-net", name="nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+     _nic("rg-app2", "web-nic"), 0, 4, "rg-new", "web", None, "Linux", True),
+    ("reset_from_azure", _NEW_WEB, _NEW_WEB, None),
+    ("quarantine_change_comes_back", WEB1, WEB1, None, False, True,
+     _NSG.format(rg="rg-app2", name="nsg-glorfindel-quarantine-westeurope"), "human_only", "no", "human_only",
+     (4, "from-full"), False, "human_only"),
+]
+
+
+@pytest.mark.parametrize("found", [True, False], ids=["as found", "shrunk"])
+def test_a_block_said_again_as_the_disk_fills_keeps_a_card_through_an_unchecked_pass(monkeypatch, found):
+    """Seed 42 at 500 (L1A, #480), found by I5S's measure, red on `main` 41bef33 before I5S: « L1: the
+    block on …/rg-app1/…/web vanished from Azure; the reassertion neither put it back nor said so ».
+    Shrunk by hand to four rules of `main`, none of I5S's:
+    1. `said_then_back_after_a_full_disk` (« gone »): web of rg-app1 blocked (22) on its own NSG; its
+       rules taken off, said, acknowledged; put back during a full disk; taken off again, said — a
+       card « a disparu » pending;
+    2. `config_changes`: the quarantine turned on;
+    3. `kept_at_the_lift`: web of rg-app2 isolated in quarantine, blocked on nsg-subnet, its rule
+       turned, its address given to a new VM (rg-new/web), its state lost, unblocked;
+    4. `quarantine_change_comes_back`: web of rg-app1 isolated in quarantine; rg-app2's quarantine
+       stripped, a pass, said; the forensic access changed, a pass with the disk full from its 4th
+       write — the block of web said again; the configuration made unreadable, a pass.
+    The cause: in the full-disk pass, `reassert._alert` closed the pending card (« Remplacée : une
+    nouvelle alerte… ») before `escalations.record` wrote the new one, refused (ENOSPC): no card
+    left, `drift_alerted_at` kept from before. The next pass reads the block unverified (web behind
+    the quarantine, the configuration unreadable) and says nothing more. A card is closed in the
+    write of the card that replaces it now (`record(replaces=…)`): refused, the former still waits."""
+    steps = _SEED42_L1A if found else [_SEED42_L1A[i] for i in (6, 7, 13, 15)]
+    net = _net(subnet_nsg=[], web_nic={"own": "dedicated"})
+    net["config"] = {"forensic": ["10.9.9.9"], "rg": "", "quarantine": False, "readable": True}
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(net)
+        for rule, *draws in steps:             # every rule but `time_passes` takes its draws, even none
+            if rule == "time_passes":
+                m.time_passes()
+                continue
+            s = Script(*draws)
+            getattr(m, rule)(data=s)
+            if s.values:
+                pytest.fail(f"{rule} left draws unused: {s.values}")
+            m.never_more_open_than_designed()
+            m.customer_configuration_untouched()
+            m.one_vm_one_state_file()
+    finally:
+        m.teardown()

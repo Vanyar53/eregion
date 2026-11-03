@@ -49,7 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 KEYS = ("EREGION_DISCORD_WEBHOOK_CI", "EREGION_DISCORD_WEBHOOK_AGENTS", "EREGION_DISCORD_BOT_TOKEN",
         "EREGION_DISCORD_LOTS_FORUM", "EREGION_DISCORD_MENTION", "EREGION_DISCORD_API",
         "EREGION_DISCORD_ROADMAP_CHANNEL", "EREGION_DISCORD_WEBHOOK_DEPLOY", "EREGION_DISCORD_WEBHOOK_RELEASES")
-UA = "DiscordBot (https://github.com/Vanyar53/eregion, 1)"
+UA = "DiscordBot (https://github.com/grootcyber/eregion, 1)"
 SILENT = 1 << 12  # SUPPRESS_NOTIFICATIONS: shown in the channel, no push, no sound
 RED, GREEN, BLUE, PURPLE, ORANGE, GREY = 0xE5484D, 0x30A46C, 0x3E63DD, 0x8E4EC6, 0xF76B15, 0x8B8D98
 RETRY_MAX_S = 5.0  # the longest 429 wait taken; a batch (roadmap_discord.py) can wait longer

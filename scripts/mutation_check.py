@@ -4959,8 +4959,8 @@ TESTS.update({f"M{n}": _RB1 for n in range(1620, 1635)})
 BLK = "glorfindel/providers/azure/blocks.py"
 MUTANTS += [
     ("M1635", "a promotion takes the block off every NIC, the ones off the perimeter's subnet too (RB1, review)",
-     BLK, "                if off_ids is None or (pl.get(\"nic_id\") or \"\").rstrip(\"/\").lower() in off_ids:\n",
-     "                if False:\n"),
+     PER, "            if off_ids is None or (pl.get(\"nic_id\") or \"\").rstrip(\"/\").lower() in off_ids:\n",
+     "            if False:\n"),
     ("M1636", "a perimeter block never names the NICs it doesn't cover: `blocked` said (RB1, review)", BLK,
      '        uncovered = [t["nic_short"] for t in off]\n', "        uncovered = []\n"),
     ("M1641", "a NIC off the perimeter's subnet read as blocked from the state: its rules gone, `blocked` (RB1, review)",
@@ -9183,7 +9183,8 @@ _I4G_UNIT = "tests/unit/test_turned_names.py"
 _I4G_SEQ = ("tests/unit/test_invariant_regressions.py::"
             "test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in")
 _I4G_OLDER = "    if not turned and not _turned_allows(nsgs, _OLDER_NAMES):\n"
-_I4G_BACK = '    back = "" if total or name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "\n'
+_I4G_BACK = ('    back = "la remettre en refus, ou " if name.lower().startswith("glorfindel-block-") and not total '
+             'else ""\n')
 MUTANTS += [
     ("M3270", "an older version's deny-all turned into an allow is never asked about by its name: its release "
               "takes it off, the VM given its NSG cut off (I4G)", TRN, _I4G_OLDER, "    if not turned:\n"),
@@ -9202,9 +9203,10 @@ MUTANTS += [
      '_TURNED_NAMES = ("glorfindel-iso-", "glorfindel-block-", "glorfindel-isolation-deny-all")\n'),
     ("M3274", "a turned allow on every address said to be put back as a deny: it would cut the VM it opens "
               "(I4G's review)", TRN, _I4G_BACK,
-     '    back = "" if name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "\n'),
+     '    back = "la remettre en refus, ou " if name.lower().startswith("glorfindel-block-") else ""\n'),
     ("M3275", "an older version's deny-all said to be put back as a deny (I4G's review)", TRN, _I4G_BACK,
-     '    back = "" if total else "la remettre en refus, ou "\n'),
+     '    back = "la remettre en refus, ou " if not name.lower().startswith("glorfindel-iso-") and not total '
+     'else ""\n'),
 ]
 TESTS.update({
     "M3270": f"{_I4G_SEQ} {_I4G_UNIT}",
@@ -9305,6 +9307,64 @@ TESTS.update({f"M{n}": _DGD_CON for n in (3373, 3378)})
 TESTS.update({f"M{n}": "tests/unit/test_makefile_exercise.py" for n in (3374, 3375, 3376, 3377)})
 
 
+
+# I4P (#466): the promotion of a block to the perimeter (`replace=True`) took the VM rules off by their names, the
+# guard every other removal by name asks never asked (I4B): one someone turned into an allow, which let the attacker
+# reach a VM off the perimeter (an old address taken up, a NIC's NSG shared with another subnet), went — that VM
+# was cut off. The pair kept whole, said, its placement in the state for the unblock; a failed delete kept too.
+# And the advice: « la remettre en refus » for a block's rule on one address only, never an isolation's.
+_I4P_UNIT = "tests/unit/test_promotion_guard.py"
+_I4P_SEQ_IN = ("tests/unit/test_invariant_regressions.py::"
+               "test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in")
+_I4P_SEQ_OUT = ("tests/unit/test_invariant_regressions.py::"
+                "test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_before_the_perimeter")
+_I4P_SEQ_NIC = ("tests/unit/test_invariant_regressions.py::"
+                "test_the_promotion_never_cuts_off_a_vm_given_the_nics_nsg_on_another_subnet")
+_I4P_ASK = ("            held = [w for n in names if (w := _held_by_turned(self._network, guard, nsg_rg, nsg_name, n, "
+            "nic, mates))]\n")
+_I4P_DEL = ("            held = held or next(([e] for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n))), "
+            "[])\n")
+_I4P_BACK = '    back = (name.lower().startswith("glorfindel-block-") and not total)\n'
+MUTANTS += [
+    ("M3350", "the promotion never asks the guard: a turned rule that lets the attacker reach a VM off the perimeter "
+              "taken off, that VM cut off (I4P)", PER, _I4P_ASK, "            held = []\n"),
+    ("M3351", "a pair the guard keeps left off the state: the unblock no longer finds it (I4P)", PER,
+     "            else:\n                kept.append(pl)\n        if prev and prev.get(\"rule\")",
+     "        if prev and prev.get(\"rule\")"),
+    ("M3352", "half a kept pair taken off: its deny goes, our own delete read as a disappearance next pass (I4P)",
+     PER, _I4P_DEL, _I4P_DEL + "            held and [self._delete_rule(nsg_rg, nsg_name, n) for n in names\n"
+     "                      if not any(f\"/{n} gardée\" in w for w in held)]\n"),
+    ("M3353", "what the promotion keeps never said (I4P)", BLK, "        if guarded:\n", "        if guarded and False:\n"),
+    ("M3354", "a delete the promotion couldn't make swallowed: the rule left on Azure, its placement off the state "
+              "(I4P)", PER, _I4P_DEL,
+     "            held = held or next(([e] for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n)) and False), "
+     "[])\n"),
+    ("M3355", "a legacy single-rule entry promoted without the guard (I4P)", PER,
+     "            if drops(old_rg, old_name, prev[\"rule\"], nic_id, [nic_id]):\n",
+     "            if [self._delete_rule(old_rg, old_name, n) for n in (prev[\"rule\"], f'{prev[\"rule\"]}-out')]:\n"),
+    ("M3356", "the promotion asks the guard about the inbound rule only: a turned `-out` taken off (I4P)", PER,
+     _I4P_ASK, _I4P_ASK.replace("for n in names if", "for n in names[:1] if")),
+    ("M3357", "an isolation's turned rule said to be put back as a deny: every flow of the VM it opens cut (I4P)",
+     TRN, _I4G_BACK, _I4G_BACK.replace('startswith("glorfindel-block-")',
+                                       'startswith(("glorfindel-block-", "glorfindel-iso-"))')),
+    ("M3358", "the promotion keeps every pair, nothing turned: the VM rules the perimeter supersedes left (I4P)", PER,
+     "            return not held\n", "            return False\n"),
+    ("M3359", "an orphan deny kept for an isolation's turned rule behind it says to put that rule back as a deny: "
+              "every flow of the VM at that address cut (I4P's review, I5Q)", TRN, _I4P_BACK,
+     "    back = not total\n"),
+]
+TESTS.update({
+    "M3350": f"{_I4P_SEQ_IN} {_I4P_SEQ_OUT} {_I4P_SEQ_NIC} {_I4P_UNIT}",
+    "M3351": _I4P_UNIT,
+    "M3352": _I4P_UNIT,
+    "M3353": _I4P_UNIT,
+    "M3354": _I4P_UNIT,
+    "M3355": _I4P_UNIT,
+    "M3356": _I4P_SEQ_OUT,
+    "M3357": _I4G_UNIT,
+    "M3358": _I4P_UNIT,
+    "M3359": _I4G_UNIT,
+})
 
 # AUD1 (#408): auditd's execs of a human login as root, read before any signal — the records read
 # whole or a card, ADM1's list (never a copy), the rule's filters, the bench's Terraform. M2760–M2779.
@@ -9846,6 +9906,52 @@ TESTS["M1861"] += f" {_L1A_UNIT}test_a_quarantine_whole_again_then_back_is_said_
 # A no longer closes then, and the test no longer reads a note. The same test as M1861's reads one.
 TESTS["M1865"] += f" {_L1A_UNIT}test_a_quarantine_whole_again_then_back_is_said_while_its_record_is_kept"
 
+
+# I5S (#477): the per-VM I5 oracle, widened by Jonathan's decision (03/11, A0) to a writer's perimeter carried as the
+# NIC's NSG of a VM in human_only, bounded by three conditions — the attacker's flows, a NIC in `perimeter_nic`,
+# closed by the perimeter rules the pass wrote alone, on a writer's perimeter NSG (the NSG shared, I5S's review) —
+# and the subnet's branch hardened by the third. The oracle's own mutants, each loosening one bound: measured by its
+# controls (tests/unit/test_invariant_regressions.py), which drive a world where the bound is the only thing that
+# refuses. The first condition is not implied by the third — a pair of the IP written wrong (aimed at `*`) closes
+# flows that go elsewhere —: its control is `…_what_a_pair_written_wrong_closes_beside_the_attacker`.
+# M3383 (the first condition), M3384, M3386, M3390–M3392.
+_I5S_CTRL = "tests/unit/test_invariant_regressions.py::"
+_I5S_TESTS = " ".join(_I5S_CTRL + t for t in (
+    "test_the_per_vm_i5_admits_a_writers_perimeter_carried_as_the_nics_nsg",
+    "test_the_per_vm_i5_refuses_what_no_perimeter_rule_closes",
+    "test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds",
+    "test_the_per_vm_i5_refuses_what_a_pair_written_wrong_closes_beside_the_attacker",
+    "test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared"))
+MUTANTS += [
+    ("M3383", "I5 per VM admits a flow that goes elsewhere than the attacker, closed by a pair of the IP written wrong "
+              "(aimed at `*`) — the first condition, not implied by the third (I5S's review)", INVARIANTS,
+     "            if f[3] != ATTACKER:\n                return False\n            if f[0] in shares[\"perimeter\"]:\n",
+     "            if f[0] in shares[\"perimeter\"]:\n"),
+    ("M3384", "I5 per VM counts the IP's pair written on any NSG: on one no writer holds, it passes for a NIC that "
+              "carries a writer's NSG — the class of M2995 hidden (I5S's review: the rule on the NSG shared)",
+     INVARIANTS,
+     '        closed = (self._closed_by_the_perimeter_alone(vm, before, on=shares["perimeters"])\n',
+     '        closed = (self._closed_by_the_perimeter_alone(vm, before)\n'),
+    ("M3386", "I5 per VM reads every NIC of a VM in human_only as carrying a writer's perimeter: the IP's pair "
+              "written on an NSG no writer holds passes (I5S, the second condition)", INVARIANTS,
+     '                "perimeter_nic": {s for s, n in nics.items() if key(n["nsg"] or "") in perimeters},\n',
+     '                "perimeter_nic": set(nics),\n'),
+    ("M3390", "I5 per VM admits any attacker flow of a NIC carrying a writer's perimeter, whatever closed it "
+              "(I5S, the widening's third condition)", INVARIANTS,
+     '            return f[0] in shares["perimeter_nic"] and f in closed     # the widening (I5S)\n',
+     '            return f[0] in shares["perimeter_nic"]\n'),
+    ("M3391", "I5 per VM admits any attacker flow of a NIC behind a writer's subnet, whatever closed it — the "
+              "oracle before I5S (the hardening undone)", INVARIANTS,
+     "                return f in closed                      # the hardening (I5S)\n",
+     "                return True\n"),
+    ("M3392", "what the perimeter alone closes counts a writer's VM rules as the perimeter's (I5S, I4P: the IP's "
+              "name alone)", INVARIANTS,
+     '            if e["op"] == "rule.write" and e["rule"] in (plain, f"{plain}-out") and e["nsg"] in nsgs:\n',
+     '            if e["op"] == "rule.write" and e["rule"].startswith(plain) and e["nsg"] in nsgs:\n'),
+]
+TESTS.update({f"M{n}": _I5S_TESTS for n in (3383, 3384, 3386, 3390, 3391, 3392)})
+
+
 # L1P (#478): a block written whole sets its entry's threat port, None (unknown: every port) too — the
 # entry kept an earlier block's 22, and the reassertion judged a block of any port on 22 alone: what
 # passed on 443 an « exposure », its bypass never said (L1; the CI of PR #476). A partial block adds
@@ -9885,6 +9991,40 @@ TESTS.update({
     "M3398": f"{_L1P_AGAIN} {_L1P_PERIMETER}",
     "M3399": "tests/unit/test_reassert.py::test_vanished_block_is_put_back_once_with_its_threat_port",
 })
+
+
+# MAK (#481): the machine's journal, never an oracle — `_gone_comes_back` dropped the acknowledgement of a VM's
+# block once an isolation of that VM was put back, and L1 read the block's acknowledged card unsaid (the CI of PR
+# #476). M3420–M3421 put the machine's defect back, or its kin (the frozen sequence, red: a false L1); M3422–M3423
+# are bugs of the code on that boundary, between a VM's isolation and its block — M3423 the frozen sequence still
+# sees with the fix. M3424 unused: a probe (a block's card taken for its isolation's by a prefix of its id) that
+# survived the frozen sequences, test_reassert.py and the invariants at 60 — not a bug a review found; likely as
+# good as equivalent (the block's card, closed with Glorfindel's note, reads « not said » at its next check).
+_MAK_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block")
+MUTANTS += [
+    ("M3420", "the machine forgets the acknowledgement of a VM's block when an isolation of that VM comes back: a "
+              "false L1 (MAK)", INVARIANTS,
+     '        if not isolation:\n            getattr(self, "acked_drift", {}).pop(vm, None)\n',
+     '        if True:\n            getattr(self, "acked_drift", {}).pop(vm, None)\n'),
+    ("M3421", "the machine never journals the operator's acknowledgement of a block's drift card: a false L1 "
+              "(MAK)", INVARIANTS,
+     '        if vm and ("disparu" in reason or "a échoué" in reason):\n'
+     '            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}\n',
+     '        if False:\n'
+     '            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}\n'),
+    ("M3422", "a block's disappearance read « said » on its VM's isolation card (MAK)", R,
+     "    if still_said(b, ref or vm, ip, _alert_id(vm, rid, ip), baseline, now_is):\n",
+     "    if still_said(b, ref or vm, ip, _alert_id(vm, rid), baseline, now_is):\n"),
+    ("M3423", "an isolation back keeps its drift mark and its episode: gone again behind its acknowledged card, "
+              "unsaid (MAK, L2C's review)", R,
+     ('        episode(ref or vm, "", over=True)        # back: a new episode next time, whatever write fails\n',
+      '            state.pop("drift_alerted_at", None)\n            _save_isolation_state(ref or vm, {**state, '
+      '"verified_at": now})\n'),
+     ('', '            _save_isolation_state(ref or vm, {**state, "verified_at": now})\n')),
+]
+TESTS.update({mid: _MAK_SEQ for mid in ("M3420", "M3421", "M3423")})
+TESTS["M3422"] = "tests/unit/test_reassert.py"
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

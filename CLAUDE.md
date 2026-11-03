@@ -14,7 +14,7 @@ L'atelier autour : **Celebrimbor** (`infra/terraform/`) construit et inscrit le 
 - **Jalon 0.3 — la boucle tourne** : socle O0 → E1 → O1 → R1 → G0, et H0 (Glorfindel sur une VM dédiée, pré-observation) ; piste IA B2 (élargi à la mémoire), IA0 ; B1 après la 0.3. **A1 (découpage d'`actions.py`) et MC0 (interface de fournisseur) faits le 26/10.** O1, H0, R1, G0 (infra réelle) se font avec Jonathan ; décisions du 15/10 dans `ROADMAP.md` ; `v0.2.0` publiée le 15/10.
 - Le SaaS vient plus tard (1.x) ; Eregion tourne en local ou dans une VM.
 
-**Repo** : https://github.com/Vanyar53/eregion
+**Repo** : https://github.com/grootcyber/eregion
 **Local** : `/home/jonathan/eregion/`, branch `main`, venv `.venv/` (créé par `make install`), `.envrc` charge les creds
 **Stack** : Python 3.12 (≥ 3.11 supporté — CI GitHub Actions sur 3.11 et 3.12), Azure SDK, LangGraph, LiteLLM (Anthropic défaut, OpenAI, Azure, Ollama, self-hosted), ChromaDB, Click, pytest
 **Docker** : `make build` → `eregion-annatar` + `eregion-glorfindel`. `make annatar-shell` (alias `ar`) / `make glorfindel-shell` (alias `gf`). State persisté dans `~/.annatar/` et `~/.glorfindel/`, cache ChromaDB dans `~/.cache/chroma/`. **Images non-root** : `make build` injecte l'UID/GID de l'opérateur (`id -u`/`id -g`) en build-arg → le container écrit le state bind-monté comme l'opérateur, pas root (sinon la CLI locale ne peut pas muter ce que le container a écrit → `PermissionError` sur `reset`/`unblock`). HOME reste `/root` (chowné), aucun chemin de mount ne change. Une seule fois après upgrade depuis l'ancienne image root : `make fix-state-ownership` (`chown` des fichiers root legacy).

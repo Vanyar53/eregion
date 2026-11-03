@@ -94,7 +94,7 @@ Les propriétés, vérifiées après chaque étape :
 | I2 | la configuration du client est ce qu'il a écrit en dernier ; une carte porte son NSG ou celui de quarantaine, jamais aucun ni un autre ; et, par auteur (journal des écritures de l'API), Glorfindel n'écrit que ce qui est à lui |
 | I3 | aucun succès sur un mensonge : chaque vérification qui dit vrai est vraie, à chaque étape |
 | I4 | une opération sur une VM ne change rien pour une autre, homonymes compris — et ne supprime jamais l'ancienne isolation d'une autre VM, même là où aucun flux ne le dit (I4S, lu dans le journal du test) |
-| I5 | la réaffirmation n'ouvre jamais rien, et n'écrit rien en `human_only` |
+| I5 | la réaffirmation n'ouvre jamais rien, et n'écrit rien en `human_only` ; avec un mode par VM, rien ne se ferme pour une VM en `human_only` que ce qu'elle partage avec une VM qui écrit — une quarantaine, ou les flux de l'attaquant que le seul périmètre reposé ferme, derrière son sous-réseau ou porté comme NSG de carte (L1Qs, I5S) |
 | I6 | une VM, un fichier d'état |
 | I7 | depuis tout état atteint, la levée ramène chaque VM à sa conception, ou la garde en quarantaine en disant ce qui manque |
 | I8 | ce qu'une opération laisse sur Azure est dans l'état |
@@ -1243,6 +1243,8 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 | I4S | NSG jugé sans la carte d'une autre VM partie en quarantaine (ou nue) | le reset (ou la levée) de la VM restée seule supprimait l'ancienne isolation de l'autre : aucun flux, mais plus rien au retour de sa carte hors de Glorfindel |
 | I4G | ancienne isolation d'une VM (le refus total à nom fixe), retourné en autorisation par quelqu'un ; une nouvelle VM reçoit ce NSG | la levée (ou le reset) de la première retirait l'autorisation par son nom, la garde jamais demandée : **la nouvelle VM coupée** de ce qu'elle lui ouvrait |
+| I4P | règle de blocage d'une VM retournée en autorisation par quelqu'un, qui laisse l'attaquant joindre une VM d'un autre subnet (l'adresse reprise, un NSG de carte partagé entre deux subnets) | la promotion en périmètre retirait la règle par son nom, la garde jamais demandée : **cette VM coupée**, hors de portée du périmètre — invisible, un blocage de périmètre étant jugé sans les flux de l'attaquant |
+
 | L1P | VM bloquée pour SSH (port 22), bloquée de nouveau, port inconnu ; une règle du client avant notre deny élargie (la CI de la PR #476) | l'entrée gardait le 22 : la réaffirmation jugeait le contournement sur le seul 22, ce qui passait sur 443 une « exposition » — **le contournement jamais dit** (L1) |
 | I7S | isolation par règles sur un NSG partagé, état perdu, carte laissée nue, réisolée sur le NSG du subnet (lectures des NSG en 429), VM supprimée | la levée de la VM supprimée ne cherchait rien : `released`, la première isolation restée sur le NSG partagé, visant l'adresse que reçoit la VM suivante |
 | L1A | dérive d'un blocage redite (pire) sur un disque qui se remplit : la carte en attente fermée, puis la nouvelle refusée ; la passe suivante ne peut pas vérifier le blocage (quarantaine, configuration illisible) | plus aucune carte, la marque d'avant lue « dit » : **le blocage disparu, en silence** |
@@ -3231,7 +3233,7 @@ VM a besoin de ce flux, le recréer sous un nom à elle, puis relancer » (`_ope
 par la relecture, déjà sur `main`) : la promotion d'un blocage en périmètre (`blocks.py`, `replace=True`) retire
 les règles de blocage par VM sans demander la garde — une d'elles retournée en allow, qui ouvre une autre VM hors
 du périmètre (un NSG de carte partagé entre deux subnets), partirait ; la machine ne le juge pas (un blocage est
-jugé sans les flux de l'attaquant, `perimeter=True`). Laissé à un lot.
+jugé sans les flux de l'attaquant, `perimeter=True`). Laissé à un lot (I4P, ci-dessous).
 Aucune règle de la machine ajoutée, retirée ni restreinte : `an_old_isolations_vm_isolated_again` (I4E) la tirait
 déjà. **Figée** : `test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in`
 (`test_invariant_regressions.py`, rejouée sans Hypothesis par `_run`) : rouge sur le code de `main` 5482fc1, par
@@ -3254,6 +3256,186 @@ M1903, M1967, M1968, M2320–M2322) : 16/16, un tour. `pytest` complet : 5 928 r
 M3270–M3275 et les seize voisins, 22/22 à chaque tour (deux tours) ; invariants à 60, N = 73, 29, 101, 202, 303,
 404, 505, 606, **8/8 vertes** ; `pytest` complet : 5 935 réussis, 7 sautés ; `ruff` propre ;
 `scripts/mutant_anchors.py` : 2 343 mutants, sans faute.
+
+**I4P (03/11, #466) : la promotion d'un blocage en blocage de sous-réseau ne coupe jamais une autre VM.** Le point
+ouvert de la relecture d'I4G, déjà sur `main`. **Le défaut** : promu (`block_suspicious_ip(scope="subnet",
+replace=True)`), un blocage par VM retirait ses règles par carte par leurs noms (`begin_delete`, les erreurs avalées),
+sans la garde que demande tout autre retrait par son nom (`turned._held_by_turned`, I4B). L'une d'elles retournée en
+autorisation par quelqu'un, qui laisse l'attaquant joindre une autre VM hors du périmètre (le périmètre ne couvre que
+le subnet de la carte primaire, RB1) — l'adresse qu'elle vise reprise par une carte d'un autre subnet sur le même NSG
+de carte, ou ce NSG donné depuis à une VM d'un autre subnet —, partait : cette VM perdait ce que l'allow lui ouvrait.
+**Pourquoi la machine ne le voyait pas** : un blocage de périmètre était jugé sans les flux de l'attaquant des autres
+VM (`_others_unchanged(perimeter=True)` : il les ferme sur son subnet, par conception), et `tamper_with_our_rule` ne
+change que l'accès, le port ou le protocole — la source reste l'attaquant : tout ce que l'allow ouvre est un flux de
+l'attaquant. **La propriété ajoutée** (A0 : rien de retiré ni de restreint) : I4 disait déjà « un blocage de périmètre
+ferme les flux de l'attaquant sur son subnet, **et seulement ceux-là** » ; la machine le vérifie maintenant
+(`_cut_by_the_perimeter_alone`) — d'une autre VM, l'opération ne coupe un flux de l'attaquant que si les règles de
+périmètre qu'elle a écrites (le journal des écritures du faux, le nom de l'IP seule) le ferment : le monde tel que
+l'opération l'a trouvé (`world_before`), ces règles ajoutées telles qu'elles sont maintenant. Ce qui était comparé
+avant l'est toujours (`_only_sealed` sur le reste) ; une VM en quarantaine est exemptée comme là. Elle ne restreint
+rien : elle ajoute une comparaison là où il n'y en avait aucune. **La règle qui pose ce monde**
+(`promoted_beside_a_turned_block`) : une VM bloquée pour elle-même, une de ses règles de blocage retournée en allow,
+l'adresse de la carte rendue ou non, une nouvelle VM sur **un autre subnet** de la région, sur le NSG de cette règle
+(et la plus basse adresse libre, souvent l'ancienne), puis la promotion, sans faute. Tirées une à une, ces étapes ne se
+rencontraient jamais : la machine crée une VM sur le premier subnet de sa région seulement (`_create_vm` prend
+maintenant un `subnet`, que seule cette règle donne : les tirages des autres règles ne changent pas). Sur `main`
+4ed889d, à 60 séquences, graines 1..8 : la graine 3 tombe par cette règle (« I4: a perimeter block on …/web cut off
+…/batch », la sortie vers l'attaquant d'une VM qui a reçu le NSG du subnet comme NSG de carte : la règle `-out`
+retournée y précède le `-out` du périmètre) ; sans la règle, la propriété seule, les huit graines passent — le cas
+était trop rare. **La règle restreinte aux NSG de carte**, après la fusion de L1Qs (#469) : à 500, graine 7, elle
+posait le NSG d'un subnet sur la carte d'une VM d'un autre subnet, et la réaffirmation à un mode par VM de L1Qs
+(I5) tombait — « the reassertion acted on …/api in human_only », un périmètre reposé pour une VM `non_disruptive`
+sur ce NSG coupant la sortie d'api, `human_only`. Le code fait ce qu'Azure fait (le NSG gouverne aussi cette
+carte) ; c'est l'exemption de l'oracle qui lit « partagé avec une VM qui écrit » comme « derrière ce subnet »
+seulement (`_shared_with_writers`). L'étendre aurait relâché I5 (A0) : la règle ne pose plus ce monde, que nulle
+autre ne tire, et le point est rendu à l'Orchestre (repris par I5S, ci-dessous, sur décision de Jonathan : l'oracle
+élargi et borné, la restriction levée). Restreinte, sur `main` 19d802d, elle fait tomber la graine 7 à
+500 (« I4: a perimeter block on …/web cut off …/api », SSH depuis l'attaquant, le NSG de web donné à api sur le
+subnet data) ; à 60, graines 1..10, aucune. **Trois séquences figées**, rouges sur `main` (`test_invariant_regressions.py`) :
+`test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in` (les règles d'avant I4P
+seules : web et la seconde carte de Db--01 sur le NSG tier, celle-ci sur le subnet data ; web bloquée, sa règle
+entrante retournée, l'adresse de web changée, 10.0.0.4 donnée à la carte de Db--01, la promotion — « I4: a perimeter
+block on …/web cut off …/Db--01 », SSH depuis l'attaquant) et
+`test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_before_the_perimeter` (la graine 3,
+réduite par Hypothesis, rejouée pas à pas : la règle ne pose plus ce monde) et
+`test_the_promotion_never_cuts_off_a_vm_given_the_nics_nsg_on_another_subnet` (la graine 7 à 500, la règle
+restreinte). **Le correctif** (`providers/azure/perimeter.py`, `_promote`, appelé par
+`blocks._block_ip_subnet`) : chacune des deux règles d'une paire est demandée à la garde ; l'une gardée, **la paire
+reste entière**, sur Azure et dans l'état (son placement gardé, pour le déblocage, qui redemande la garde : gardée de
+nouveau, `unblock_partial`) — à moitié retirée, la passe suivante aurait lu notre propre retrait comme une
+disparition. Un retrait qui échoue arrête ceux de la paire (`_delete_rule`, l'erreur dite) : la première refusée, la seconde n'est pas tentée, la paire reste entière ; la seconde refusée, la première est partie — dans les deux cas le placement reste dans l'état et le déblocage le relit (avant : avalé, la règle
+restée sur Azure, son placement sorti de l'état). Une entrée ancienne à règle unique passe par la même garde ; gardée,
+elle devient un placement de la carte primaire. **Le contrat de compte rendu** : le statut reste celui de la VM —
+`blocked` (ou `blocked_partial` pour une carte hors du périmètre, RB1) : le périmètre coupe l'attaquant de cette VM,
+quoi que la règle gardée laisse passer ailleurs, comme le blocage par VM d'I4A garde `blocked` avec `left_rules` ; ce
+qui reste est dit comme le déblocage le dit (I4B) — `kept_rules` (« rg-net/nsg-tier/glorfindel-block-… gardée : notre
+règle …, retournée en autorisation par quelqu'un, vise 10.0.0.4 — l'adresse de … maintenant : … »), repris dans
+`note` —, et absent de `promoted_from`. **La consigne** (`turned._opens_text`) : « la remettre en refus » n'est dite que
+d'une règle de blocage (`glorfindel-block-`) sur une adresse — remise en refus, elle ne coupe que l'attaquant de la VM
+qu'elle ouvre ; une règle d'isolation (`glorfindel-iso-`) sur l'adresse d'une autre carte vivante couperait tous les
+flux de cette VM de son côté ; sur `*` ou un refus total ancien, toutes les cartes derrière le NSG (I4G). Le commentaire
+du cas `("glorfindel-iso-web-web-nic-8b70f2", "10.0.0.5", True)` de `test_turned_names.py` (« a deny there cuts only
+it ») disait l'inverse de ce qu'il faisait : le cas attend maintenant `False`, et les cas d'un blocage (`True` sur une
+adresse, `False` sur `*`) sont ajoutés. **Tests unitaires** (`test_promotion_guard.py`, six) : le cas du lot sur un NSG
+tier et sur le NSG de web donné à batch depuis (batch garde ses flux, la paire entière, `blocked`, la règle dite, le
+placement dans l'état, le déblocage `unblock_partial` sans couper batch) ; rien de retourné, la paire part
+(`promoted_from`, verte sur `main` : garde le correctif de trop en faire) ; retournée mais visant l'adresse de web
+encore, elle part (verte sur `main`) ; un retrait refusé, dit, la seconde suppression jamais tentée après un premier refus, le placement relu par le déblocage (deux cas) ; une entrée ancienne, gardée. **Mutants
+M3350–M3358** : la garde jamais demandée (M3350, la cause), la paire gardée sortie de l'état (M3351), la paire à moitié
+retirée (M3352), rien dit (M3353), un retrait en échec avalé (M3354), l'entrée ancienne sans garde (M3355), la règle
+`-out` jamais demandée (M3356, la séquence de la graine 3), la consigne de remettre en refus une règle d'isolation
+(M3357), toute paire gardée (M3358). M1635, M3274 et M3275 suivent leurs lignes déplacées (`perimeter.py`, la
+nouvelle consigne), leur sens inchangé.
+**La relecture 5.5** (« ok » sur 814d15a) a relevé deux points, corrigés. (1) **La consigne d'I5Q**
+(`turned._turned_text`, le défaut déjà sur `main`) : un refus orphelin d'un blocage — l'attaquant seul — sur l'adresse
+d'une carte vivante, gardé pour une règle `glorfindel-iso-` retournée qui vise cette adresse (`_turned_behind` ne
+regarde pas le genre du nom), disait « la remettre en refus » : remise en refus, la règle d'isolation couperait tous
+les flux de cette VM de son côté. La condition est celle de `_opens_text` : « remettre en refus » pour une règle de
+blocage sur ses adresses seulement, sinon la retirer à la main ou recréer le flux sous un nom à elle
+(`_turned_behind` rend aussi les valeurs de la règle). Tests (`test_turned_names.py`) : la consigne, six cas, et le
+cas de bout en bout — le blocage de web sur le NSG du subnet, web supprimée, son état perdu, batch à 10.0.0.4 isolée
+puis son état perdu, sa règle d'isolation entrante retournée, une passe de la watch : le refus orphelin gardé, sa
+carte nomme la règle d'isolation sans jamais dire de la remettre en refus (rouge avant). Mutant **M3359** (la
+consigne pour toute règle sauf sur `*`). (2) **Un retrait qui échoue** : la doc disait « garde la paire » ; la
+seconde suppression était tentée après un premier refus. Elle ne l'est plus (`next` sur les retraits) : la première
+refusée, la paire reste entière ; la seconde refusée, la première est partie et le placement reste, relu par le
+déblocage — deux cas figés (`test_promotion_guard.py`), le déblocage les retire une fois le refus levé ; M3354 suit
+sa ligne.
+**Mesures d'I4P**, sur la tête rendue (après la fusion de `main` fe492e0, DG-d). Invariants,
+`--hypothesis-seed=N` : à 60 séquences, N = 1..18, 73, 101, **20/20 vertes** ; à 500, N = 1, 3, 7, 8675, **4/4
+vertes**. Avant la restriction de la règle, à 500, la graine 7 tombait sur l'exemption d'I5 dite plus haut, et la
+graine 42 sur L1 (« the block on …/rg-app1/…/web vanished from Azure; the reassertion neither put it back nor said
+so ») dans une séquence de quatorze étapes sans aucune promotion ni la règle d'I4P — un défaut hors du lot, comme
+celui de la graine 29 laissé à L1G (#461) ; non rejoué depuis, la base d'exemples restée vide. Mutants
+M3350–M3359 : 10/10 par leurs tests à chaque tour (deux tours, M3350, M3352, M3354 et M3359 mesurés de nouveau
+après la relecture) ; M1635, M3270–M3275 : 7/7 (deux tours) ; les quarante voisins sur `blocks.py`, `perimeter.py`
+et `turned.py` (RB1, I3P, I4A–I4D, I5Q, I5R, U7D, SEC2) : 40/40, un tour. `pytest` complet : 6 073 réussis, 7 sautés, 2 `xfail` (de L1Qs) ; `ruff`
+propre ; `scripts/mutant_anchors.py` : 2 396 mutants, sans faute.
+
+**I5S (03/11, #477) : l'oracle I5 par VM reconnaît un NSG de périmètre porté comme NSG de carte — élargi, borné,
+et la branche du sous-réseau durcie.** Le point rendu par I4P. **La décision de Jonathan** (03/11, option a, au
+titre d'A0) : élargir l'oracle, avec des bornes. C'est le seul lot où un oracle s'élargit ; rien de Glorfindel n'est
+touché. **Le cas** : une VM en `human_only` porte, comme NSG de carte, le NSG de sous-réseau sur lequel une VM qui
+écrit (`non_disruptive`) tient son périmètre ; la réaffirmation repose ce périmètre et la VM en `human_only` perd
+elle aussi sa sortie vers l'attaquant — Azure applique la même règle au même objet NSG, associé au sous-réseau ou à
+la carte. Le code a raison ; l'oracle de L1Qs (`_shared_with_writers`) lisait « partagé avec une VM qui écrit » comme
+« derrière ce sous-réseau » seulement, et disait « I5: the reassertion acted on …/api in human_only » (la graine 7 à
+500, la règle d'I4P sans sa restriction).
+
+**Ce qui s'élargit.** `_shared_with_writers` rend, à côté de `perimeter` (les cartes derrière le NSG de sous-réseau
+d'un périmètre d'écrivain) et de `quarantine`, **`perimeter_nic`** : les cartes de la VM en `human_only` dont le
+**NSG de carte** est un NSG de périmètre d'un écrivain — lu avant la passe, les écrivains comme avant (ni
+`human_only`, ni verrou tenu). Un flux coupé d'une telle carte n'est admis (`_shut_shared`) que si **trois
+conditions** tiennent : (1) il va vers l'attaquant ; (2) sa carte est dans `perimeter_nic` ; (3) il est fermé par
+**les seules règles de périmètre que la passe a écrites, sur le NSG partagé** — le calcul d'I4P, sorti de
+`_cut_by_the_perimeter_alone` en `_closed_by_the_perimeter_alone` : le monde tel que la passe l'a trouvé
+(`world_before`), plus les écritures du journal du faux au nom de l'IP seule (`glorfindel-block-<ip>` et son
+`-out`), telles qu'elles sont maintenant, et, pour I5, celles-là seules qui sont posées sur un NSG de périmètre
+d'un écrivain (`on`, l'ensemble `perimeters` lu avant la passe et gardé dans `shared[vm]`). I4 l'appelle sans ce
+filtre, à l'identique. Une règle de ces NSG qui gouverne une carte de `perimeter_nic` est son NSG de carte, ou le
+NSG de son sous-réseau — qu'un écrivain tient alors, la carte étant aussi dans `perimeter` : la règle qui ferme est
+toujours sur un NSG que la carte partage avec un écrivain. La condition (1) n'est pas impliquée par la (3) : une
+paire de l'IP mal écrite (une destination `*`) fermerait des flux qui vont ailleurs ; elle a son contrôle.
+**Ce qui se durcit.** La branche du sous-réseau admettait tout flux de l'attaquant d'une carte derrière le
+périmètre d'un écrivain, quoi qui le ferme ; elle demande maintenant la même condition (3). Une autre règle que la
+passe écrit sur ce NSG — la règle de VM d'un écrivain sur une adresse reprise, ou toute autre — et qui coupe la VM
+en `human_only` de l'attaquant n'est plus excusée par le périmètre voisin.
+**Ce qui ne bouge pas.** Une carte qui porte un NSG de quarantaine : tout flux admis, comme avant. Aucune règle
+écrite ni retirée au nom d'une carte en `human_only`, les NSG de ses cartes inchangés (les deux contrôles de L1Qs).
+Ce qui s'ouvre reste dans le dessin, pour toutes. La forme forte d'I5 quand un seul mode vaut pour toutes les VM
+(`mixed` faux). `_cut_by_the_perimeter_alone` (I4) rend ce qu'il rendait : son calcul a changé de place, sans filtre.
+
+**La règle d'I4P retrouve sa variante** : `promoted_beside_a_turned_block` pose de nouveau le NSG d'un sous-réseau
+sur la carte d'une VM d'un autre sous-réseau (le filtre `k not in subnet_nsgs` retiré). **La graine 7 à 500
+figée** (`test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared`, les trois règles telles
+qu'Hypothesis les a laissées) : web, sa carte nue, bloquée sur nsg-subnet ; sa règle entrante retournée, son adresse
+changée ; api créée sur le sous-réseau data, nsg-subnet pour NSG de carte, à 10.0.0.4 ; la promotion ; puis
+`turned_then_address_reused` et `turned_perimeter_left_out`, qui bloque web de rg-app2 sur le même sous-réseau,
+retire la paire et lance une passe à un mode par VM — api en `human_only`, web de rg-app2 écrivain : la paire
+reposée, la sortie d'api vers l'attaquant (443) se ferme, par elle seule. Rouge sur l'oracle
+étroit (`perimeter_nic` vide, mesuré), verte élargi. **Les contrôles de l'oracle** (`test_invariant_regressions.py`,
+huit ; web bloquée sur son sous-réseau, Db--01 en `human_only`, db-nic-0 derrière nsg-subnet, db-nic-1 sur le
+sous-réseau data, nsg-subnet pour NSG de carte, la paire retirée) : la paire reposée, admise sur les deux cartes —
+et refusée sur db-nic-1 par l'oracle d'avant ; une autre règle écrite sur nsg-subnet qui coupe une seule carte de
+l'attaquant (son nom quelconque, ou celui d'une règle de VM de web), refusée derrière le sous-réseau comme sur la
+carte (quatre cas) ; la paire de l'IP écrite sur nsg-data, qu'aucun écrivain ne tient, refusée — db-nic-1 nue
+derrière lui, et db-nic-1 qui porte nsg-subnet comme NSG de carte, la paire de nsg-subnet non reposée (le cas de la
+relecture, ci-dessous) ; le `-out` de l'IP écrit sur nsg-subnet vers `*`, qui ferme aussi les sorties vers
+internet et le pair latéral, refusé pour celles-là, admis pour celles de l'attaquant seules. **Mutants M3383,
+M3384, M3386, M3390–M3392**, sur l'oracle lui-même, mesurés par ces contrôles et la séquence figée : la condition 1
+lâchée (M3383, `f[3] != ATTACKER` retiré : la paire à destination `*` passe) ; la paire comptée sur n'importe quel
+NSG (M3384, le filtre `on` retiré) ; chaque carte lue comme portant un périmètre d'écrivain (M3386, la condition
+2) ; la condition 3 lâchée sur la carte (M3390) ou sur le sous-réseau (M3391 : l'oracle d'avant I5S) ; les règles
+de VM d'un écrivain comptées comme règles de périmètre (M3392, le calcul — qui borne aussi I4).
+**La relecture 5.5** (« bloquant » sur 714d3558). (1) **La condition 3 n'était pas liée au NSG partagé** :
+`closed` comptait la paire de l'IP écrite par la passe sur n'importe quel NSG. db-nic-1 portant nsg-subnet (un
+écrivain), la paire de nsg-subnet retirée, la paire écrite sur nsg-data (le NSG de son sous-réseau, qu'aucun
+écrivain ne tient) : db-nic-1 perdait ses sorties 443 vers l'attaquant ; l'oracle d'avant I5S refusait, celui de
+714d3558 admettait — un refus relâché, qui masquait la classe de M2995 (le premier temps qui écrit la paire d'une
+entrée en `human_only`) dès que la carte porte aussi le NSG d'un écrivain dont la paire n'est pas reposée.
+Corrigé : le filtre `on` (ci-dessus), dans les deux branches ; le contrôle et M3384 ajoutés. (2) La justification
+« la condition 1 est impliquée par la 3 » était inexacte (une paire à destination `*`) : son contrôle et M3383
+ajoutés.
+**Mesures d'I5S** (la branche d'I4P, 09b4e4f, plus ce lot). Avant l'élargissement, la restriction levée : à 500, la
+graine 7 tombe sur I5 (« …/api in human_only », la sortie 443 d'api-nic vers l'attaquant). Après : invariants,
+`--hypothesis-seed=N`, à 60 séquences, N = 1..18, 73, 101, **20/20 vertes** ; à 500, N = 1, 3, 7, 8675, **4/4
+vertes**. **Le durcissement n'a rien fait tomber** : aucune graine ne montre une coupure d'une VM en `human_only`
+par autre chose que le seul périmètre reposé. Sur la graine 7 à 500 (`GLORFINDEL_INVARIANT_STATS`), la branche du
+sous-réseau, durcie, est atteinte 18 fois, la branche de la carte, élargie, 2 fois ; une passe à un mode par VM,
+336 fois. Mutants M3386, M3390–M3392 : **4/4 par leurs tests à chaque tour** (deux tours). `pytest` complet :
+6 120 réussis, 7 sautés, 2 `xfail` (de L1Qs) ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 444 mutants, sans
+faute.
+**Mesures après la relecture** (le filtre `on`, 39952ec). À 60 séquences, N = 1..18, 73, 101, **20/20 vertes**. À
+500, N = 1, 2, 3, 5, 7, 11, **6/6 vertes** (graine 7 : la branche du sous-réseau atteinte 18 fois, celle de la carte
+2 fois, comme avant le filtre) ; N = 42 et 8675 tombent sur **L1**, hors du lot — « the block on …/rg-app1/…/web
+vanished from Azure; the reassertion neither put it back nor said so ». La graine 42 dans
+`quarantine_change_comes_back` puis la passe, comme la relecture l'a mesurée (verte sur 09b4e4f, les tirages y
+divergent) ; la graine 8675 dans la passe de `turned_perimeter_left_out` (web en `human_only`, après
+`operator_acknowledges` et `said_then_back_after_a_full_disk`), signalée par Hypothesis comme instable
+(`FlakyFailure` : la séquence ne retombe pas à la relecture), verte à 500 sur 718fc1b. Aucune ne passe par
+l'oracle d'I5 ni d'I4 : la famille « carte acquittée » de L1G (#475), à remesurer une fois L1G dans `main`. Mutants
+M3383, M3384, M3386, M3390–M3392 : **6/6 à chaque tour** (deux tours). `pytest` complet : 6 122 réussis, 7
+sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 446 mutants, sans faute.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids
@@ -3535,6 +3717,77 @@ marquées (`reasserted_at`) sans la carte « reposé une fois » ; la disparitio
 « une deuxième fois » et n'est pas reposée — une carte de moins, jamais une disparition tue.
 
 **Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé (lot à part) ; la séquence réduite, rejouée sur la machine et le code de `main` 7ac1f37 pur (après MCG), y est rouge, sur le même U1. **Un second défaut ancien**, trouvé par l'exécution non mutée du harnais de mutation (une graine au hasard à 60) : « L1: the block on …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so » — une VM créée à l'ancienne adresse de Db--01, sous des écritures refusées, son adresse changée, une carte acquittée ; 24 règles réduites à la main à huit de `main`, aucune de L1Qs, rouges sur `main` 7ac1f37 pur comme sur la branche : figé en `xfail` strict (`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone`), hors du lot, routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet (`main` 7ac1f37 fusionné, MCG compris) : 5 933 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 343 mutants, sans faute ; `tests/unit/test_mutant_anchors.py` vert (le bloc de L1Qs au-dessus du repère « The mutants end here »).
+
+**MAK (03/11, #481) : la machine oubliait l'acquittement d'un blocage quand une isolation revenait.**
+Un défaut de la machine, pas du code. Trouvé par L1A (#480) dans deux runs de la CI de la PR #476 (py3.11,
+graines au hasard), réduits par Hypothesis aux mêmes douze règles, sur deux réseaux (avec et sans les
+règles du tier) : « L1: the block on …/rg-app1/…/web vanished from Azure; the reassertion neither put it
+back nor said so ». Il faisait tomber la CI au hasard des graines.
+
+**La séquence.** web bloquée (22) sous la carte du graphe, ses règles retirées, une passe en `human_only`,
+une carte acquittée ; puis isolée sous la carte du graphe, ses règles retirées : la passe dit l'isolation
+partie et le blocage parti (« a disparu », ses deux règles absentes). L'opérateur acquitte la carte du
+blocage : la machine le note (`acked_drift[web]`, les règles du blocage telles qu'alors, absentes toutes
+deux). Puis `said_then_back_after_a_full_disk` tire « disparu » pour l'**isolation** de web : ses règles
+retirées, dites, acquittées, remises pendant un disque plein, retirées de nouveau, dites.
+
+**La cause, établie** (les cartes et le journal de la machine relevés après chaque règle). Une fois
+l'isolation remise, `_gone_comes_back` retirait `acked_drift[web]` sans regarder la branche tirée. Or
+cette entrée est l'acquittement du **blocage** de web, et la branche « isolation » n'en a ni retiré ni
+remis les règles. Les règles du blocage étaient toujours telles qu'à l'acquittement, et la carte
+acquittée le disait pour son épisode : une carte par disparition, par conception (RB1, L1G). Le code
+avait raison de ne rien dire de plus ; L1, son acquittement oublié, comptait le blocage comme tu. La
+sonde de L1A (retirer l'entrée pour la seule branche « blocage ») tenait la séquence.
+
+**Correctif** (`tests/unit/test_invariants.py`, `_gone_comes_back`), une ligne : `if not isolation:` devant
+le retrait. La branche « blocage » finit l'épisode qu'elle a tenu : elle a bloqué de nouveau, retiré ses
+règles, les a remises telles qu'avant, et l'épisode acquitté est fini, par le journal du test, comme
+avant. La branche « isolation » ne touche plus au journal du blocage. **Pourquoi ce n'est pas un
+relâchement** (A0) : l'oracle n'a pas bougé. L1 compte toujours un blocage acquitté pour dit **seulement**
+tant que ses règles sont exactement celles de l'acquittement (`_block_rules_now(v) == seen`, RB1).
+**La limite, ancienne** (l'instantané
+de RB1 et de L1G, hors de `_gone_comes_back`) : l'oracle compare des valeurs, jamais un épisode, et
+`acked_drift[vm]` n'est retiré que par la branche « blocage » de `_gone_comes_back`. Un blocage écrit de
+nouveau (`_block`), puis reparti à l'identique (`_ours_taken_off`), retrouve l'égalité : l'acquittement
+recompte pour un épisode neuf. La relecture l'a montré avec le mutant de L1Q (`response/state.py`,
+`for mark in ():`) : le code muet sur ce nouvel épisode, L1 passe. Ce n'est pas un défaut de MAK ; suivi dans
+l'issue #485, qui ajoutera une règle à la machine sans rien retirer (A0). Ce qui change ici, c'est le journal : il ne note que ce que le test a fait. Il oubliait un acquittement que
+l'opérateur avait donné et qu'aucune étape n'avait clos, et l'oracle jugeait alors un monde que le test
+n'avait pas fait. C'est la même famille que le tri des cartes de L1G (03e3b422) : la machine corrigée
+pour refléter ce que le test a fait, jamais pour qu'un code passe. La docstring de la machine le dit
+(« The test's journal says only what the test did »).
+
+**Figée.** `test_invariant_regressions.py::test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block` :
+les deux runs tels que trouvés (douze règles, leurs tirages tels qu'imprimés) et la séquence réduite à la
+main à six règles (sans les cinq `recover` ni `another_subscription`). En `xfail` strict au premier commit,
+rouges sur `main` de040e8c ; vertes avec le correctif. `_replay` appelle sans tirages une règle qui n'en
+prend pas (`recover`, `time_passes`).
+
+**Les journaux rejoués** (le cas imprimé, ses tirages, chaque invariant après chaque règle, par la
+conftest) : `i4p_ci_l1.log`, le L1 de L1P (Db--01 contourné sur 443), vert sur `main` (corrigé par L1P,
+#478), pas ce défaut ; `i4p_ci_l1_b.log` et `i4p_ci_l1_c.log`, ce défaut, rouges sur `main`, verts avec le
+correctif. **La graine 5 à 500** (Db--01, relevée par L1A, rejouée par ses tirages) reste rouge avec le
+correctif, sur le même L1 : ce n'est pas ce défaut — aucun `said_then_back_after_a_full_disk` dans sa
+séquence. Un vrai défaut, d'une autre cause (probablement la famille de la graine 29 de L1G, d'après L1A :
+une paire retournée au moment de l'acquittement), non corrigé ici, laissé à un lot de suite.
+
+**Mutants M3420–M3423**, 4/4 par leurs tests à chaque tour (deux tours, 60 séquences) : le défaut remis,
+l'acquittement oublié pour les deux branches (M3420) ; `operator_acknowledges` qui ne note plus
+l'acquittement d'une carte de dérive (M3421) — deux faux L1, sur la séquence figée ; la disparition d'un
+blocage lue « dite » sur la carte de l'isolation de sa VM (M3422, `test_reassert.py`) ; une isolation
+revenue qui garde sa marque et son épisode, partie de nouveau derrière sa carte acquittée, tue (M3423, la
+séquence figée : la branche « isolation » garde ses dents avec le correctif). M3424 n'est pas pris : une
+sonde (la carte du blocage prise pour celle de l'isolation par un préfixe de son id), qui survit à la
+séquence figée, à `test_reassert.py` et aux invariants à 60 — sans doute équivalente, la carte fermée avec
+la note de Glorfindel se lisant « non dite » à la vérification suivante.
+
+**Mesures de MAK.** Invariants avec le correctif, `--hypothesis-seed=N`, quatre à la fois : à 60 séquences,
+N = 1..20, **20/20 vertes** ; à 500, N = 42, 1..7, **7/8 vertes**. La graine 5 tombe, comme sur L1A, sur
+« L1: the block on …/rg-app1/…/Db--01 vanished from Azure » : sa séquence réduite (huit règles :
+`block_then_isolate`, `isolate`, `turned_perimeter_left_out`, `interrupted_isolation`,
+`someone_detaches_the_quarantine`, `customer_sets_policy`, `tamper_with_our_rule`, `operator_acknowledges`)
+ne passe jamais par `_gone_comes_back` — le défaut connu, hors du lot, ci-dessus. `pytest` complet :
+6 232 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 493 mutants, sans faute.
 
 **L1P (03/11, #478) : un blocage entier à port inconnu ne garde pas le port d'un blocage précédent.**
 Trouvé par la machine dans la CI de la PR #476 (I4P), Glorfindel seul : « L1: the block of …/Db--01 is
@@ -3840,16 +4093,16 @@ est fermée avant sa remplaçante.
   comme avant, `_gone_comes_back` retire `acked_drift[vm]` — l'acquittement du **blocage** de la VM, que cette
   branche n'a ni retiré ni remis : ses règles sont telles qu'à l'acquittement, la carte acquittée le dit pour
   son épisode, et L1 ne la compte plus. Sonde (jamais un correctif) : retirer l'entrée pour une branche
-  « blocage » seulement, la séquence passe. Le correctif est dans la machine, un lot de suite (l'oracle ne
-  change pas d'avis sur ce qui est dit : la tenue de ce qui a été acquitté).
+  « blocage » seulement, la séquence passe. Le correctif est dans la machine : MAK (#481,
+  fusionné ; l'oracle ne change pas d'avis sur ce qui est dit : la tenue de ce qui a été acquitté).
 - **La graine 5 à 500** : l'entrée fusionnée de Db--01 (paire de périmètre et règles de la VM), la paire
   retournée en autorisation et sa sortante absente, les règles de la VM parties, dites, la carte acquittée ;
   puis le blocage de périmètre d'une autre VM sur le même sous-réseau réécrit la paire (deny, entrée et
   sortie). Les règles de Db--01 toujours parties, la paire revenue : « mieux que la carte, pas pire », en
   silence. **Cause probable** : la famille de la graine 29 de L1G, une règle que la carte a lue absente (ou
   retournée), réécrite sous notre nom par une autre VM, sans finir l'épisode — ici sous une paire **retournée**
-  au moment de l'acquittement, peut-être lue par la carte autrement qu'absente (`rules_seen`). À établir dans
-  un lot de suite.
+  au moment de l'acquittement, peut-être lue par la carte autrement qu'absente (`rules_seen`). À établir : L1H
+  (#483).
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

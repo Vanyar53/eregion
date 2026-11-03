@@ -34,13 +34,17 @@ What must hold whatever happens:
       nor is a NIC said reached, off a perimeter block, that our perimeter on its own subnet cuts
       off (L1Qs);
   I4  an operation on one VM changes nothing for another — homonyms included (a
-      perimeter block closes the attacker's flows on its subnet, and only those; an
+      perimeter block closes the attacker's flows on its subnet, and only those: of
+      another VM, it cuts only what its perimeter rules close — I4P —; an
       unblock or a reset that lifts one opens them, never cuts one off — I4B —, and only
       those the lifted rules alone closed — I4C) — and
       never deletes another VM's older isolation, even where no flow tells (I4S);
   I5  the reassertion never opens anything, never acts on a VM it has no state for,
       and writes nothing to Azure in human_only — with a mode drawn per VM, nothing for a VM
-      in human_only: only what it shares with another closes for it (L1Qs);
+      in human_only: only what it shares with another closes for it (L1Qs) — a quarantine
+      NSG on its NIC; a writer's perimeter, behind its subnet or carried as its NIC's NSG
+      (I5S), and there only the attacker's flows the perimeter rules the pass wrote on a
+      writer's perimeter NSG — the NSG shared — close on their own;
   I6  one VM, one state file, whatever the case of the id it was reached with;
   I7  from any state reached, release brings every VM back to its design — or, when a
       NIC's original NSG can't be known or no longer exists, keeps that NIC in
@@ -68,7 +72,10 @@ What must hold whatever happens:
 
 Oracles are the test's own: what was released, what was lost and when, who wrote what
 — never the markers and records the code under test leaves (a bug that deletes them
-must not earn an exemption).
+must not earn an exemption). The test's journal says only what the test did: the operator's
+acknowledgement of a block's drift card (`acked_drift`) holds while the block's rules are as
+they were then, and only a step that ends the block's episode drops it — an isolation of the
+same VM taken off and put back by the test does not (MAK, #481).
 
 GLORFINDEL_INVARIANT_EXAMPLES raises the number of sequences (default 60);
 GLORFINDEL_INVARIANT_STEPS their length (default 30);
@@ -966,6 +973,39 @@ class IsolationMachine(RuleBasedStateMachine):
         alone = self._open(vm, world=without) | self._open(vm, own=True, world=without)
         return frozenset(f for f in alone - self._open(vm, world=w) if f[3] == ATTACKER)
 
+    def _cut_by_the_perimeter_alone(self, vm: str, before: frozenset, after: frozenset, what: str):
+        """I4 (I4P, #466): a perimeter block closes the attacker's flows on its subnet, and only
+        those — of another VM, it cuts only what the perimeter rules it wrote close: the world as
+        the operation found it (`world_before`), those rules added to it as the fake has them now
+        (its journal of API writes, the IP's name alone). Before, every attacker flow of another
+        VM was out of the comparison (`perimeter=True`): a promotion that took off a VM rule
+        someone turned into an allow, which let the attacker reach a VM off the perimeter (a
+        NIC's NSG shared with another subnet), cut that VM off unseen. Only ever stricter: what
+        was compared before still is (_only_sealed). A VM in quarantine: re-sealed, as there."""
+        lost = {f for f in before if f[3] == ATTACKER} - after
+        if not lost or self._in_quarantine(vm):
+            return
+        closed = self._closed_by_the_perimeter_alone(vm, before)
+        assert lost <= closed, f"{what} cut off {vm} ({sorted(lost - closed)[:3]})"
+
+    def _closed_by_the_perimeter_alone(self, vm: str, before: frozenset, on: set | None = None) -> frozenset:
+        """Of the VM's flows `before`, those the perimeter rules the operation wrote close on their
+        own: the world as the operation found it (`world_before`), those rules added to it as the
+        fake has them now (its journal of API writes since `_before`, the IP's name alone). I4's
+        bound (I4P) and I5's for a VM in human_only (I5S). `on`: only the writes on those NSGs —
+        for I5, the writers' perimeter NSGs read before the pass (I5S's review: the IP's pair
+        written on an NSG no writer holds closes nothing it shares); I4 counts every NSG."""
+        plain = "glorfindel-block-" + ATTACKER.replace(".", "-")
+        w = self.world_before
+        nsgs = {k: {**g, "rules": dict(g["rules"])} for k, g in w["nsgs"].items()}
+        for e in self.fake.journal[self.journal_at:]:
+            if on is not None and e.get("nsg") not in on:
+                continue
+            if e["op"] == "rule.write" and e["rule"] in (plain, f"{plain}-out") and e["nsg"] in nsgs:
+                if (r := self.fake.nsgs.get(e["nsg"], {}).get("rules", {}).get(e["rule"])) is not None:
+                    nsgs[e["nsg"]]["rules"][e["rule"]] = r
+        return before - self._open(vm, world={**w, "nsgs": nsgs})
+
     def _only_sealed(self, vm: str, before: frozenset, after: frozenset, what: str,
                      reopenable: frozenset = frozenset()):
         """Nothing opened — but what only another NIC's leftover rule closed (an IP that
@@ -993,6 +1033,9 @@ class IsolationMachine(RuleBasedStateMachine):
                 if perimeter == "lift":
                     self._attacker_never_cut(other, flows_before[other], flows[other], f"I4: an operation on {vm}",
                                              flows_before[("own", other)] - flows_before[other])
+                else:
+                    self._cut_by_the_perimeter_alone(other, flows_before[other], flows[other],
+                                                     f"I4: a perimeter block on {vm}")
             self._only_sealed(other, before, after, f"I4: an operation on {vm}",
                               flows_before[("own", other)] - before)
             assert self._state(other) == states_before[other], (
@@ -1489,14 +1532,10 @@ class IsolationMachine(RuleBasedStateMachine):
                 assert after[vm] == flows[vm], f"I5: the reassertion acted on {vm} in human_only"
             elif vm in human:
                 # One mode per VM (L1Qs): a VM in human_only is not acted on — only what it
-                # shares with a VM the pass may write for closes for it: a perimeter put back
-                # on its subnet (the attacker's flows), a quarantine NSG put back on its NIC.
+                # shares with a VM the pass may write for closes for it (_shut_shared).
                 # What opens stays within its design (above): a writer's own rule taken off, that
                 # an address reused had put in its way, frees it (I4B).
-                shut = flows[vm] - after[vm]
-                assert all(
-                    f[0] in shared[vm]["quarantine"] or (f[3] == ATTACKER and f[0] in shared[vm]["perimeter"])
-                    for f in shut), f"I5: the reassertion acted on {vm} in human_only ({sorted(shut)[:2]})"
+                self._shut_shared(vm, flows[vm], after[vm], shared[vm], "I5: the reassertion")
             elif not had_state[vm]:
                 strip = (lambda fl: frozenset(f for f in fl if f[3] != ATTACKER)) if perimeter else (lambda fl: fl)
                 self._only_sealed(vm, strip(flows[vm]), strip(after[vm]), "I5: the reassertion (no state)",
@@ -1521,8 +1560,11 @@ class IsolationMachine(RuleBasedStateMachine):
 
     def _shared_with_writers(self, human: set) -> dict:
         """For each VM in human_only, its NICs a VM the pass may write for shares (L1Qs): behind
-        the subnet NSG a writer's perimeter block lies on, or carrying a quarantine NSG (one per
-        region and group, shared by every isolation in it)."""
+        the subnet NSG a writer's perimeter block lies on (`perimeter`), or carrying that NSG as
+        their own NIC's NSG (`perimeter_nic`, I5S: Azure applies the same rules to the same NSG,
+        on a subnet or on a NIC), or carrying a quarantine NSG (one per region and group, shared
+        by every isolation in it). Read before the pass, with the writers' perimeter NSGs
+        (`perimeters`): the rules that close a shared flow must lie on one of them."""
         from .fake_azure import nsg_id
         writers = [vm for vm in self.live if vm not in human and not _is_busy(vm)]
         perimeters = {key(nsg_id(*e["nsg"].split("/", 1))) for vm in writers
@@ -1534,8 +1576,39 @@ class IsolationMachine(RuleBasedStateMachine):
             out[vm] = {
                 "perimeter": {s for s, n in nics.items()
                               if key(self.fake.subnets[key(n["subnet"])]["nsg"] or "") in perimeters},
-                "quarantine": {s for s, n in nics.items() if n["nsg"] and actions._is_quarantine_nsg(n["nsg"])}}
+                "perimeter_nic": {s for s, n in nics.items() if key(n["nsg"] or "") in perimeters},
+                "quarantine": {s for s, n in nics.items() if n["nsg"] and actions._is_quarantine_nsg(n["nsg"])},
+                "perimeters": set(perimeters)}
         return out
+
+    def _shut_shared(self, vm: str, before: frozenset, after: frozenset, shares: dict, what: str):
+        """I5 per VM (L1Qs, I5S): of a VM in human_only, a pass shuts only what it shares with a
+        writer — any flow of a NIC carrying a quarantine NSG put back; or a flow to the attacker
+        of a NIC behind a writer's perimeter, on its subnet or as its NIC's NSG (`perimeter_nic`,
+        widened by Jonathan's decision of 03/11, A0), that the perimeter rules the pass wrote on a
+        writer's perimeter NSG — the NSG shared — close on their own (_closed_by_the_perimeter_alone,
+        `on`). On another NSG, the IP's pair closes nothing shared: a rule there that governs a NIC
+        of `perimeter_nic` is its subnet's NSG, shared only if a writer holds it (`perimeter`).
+        Before I5S, any attacker flow of a NIC behind the subnet passed, whatever closed it: that
+        bound holds for both now. The first condition is not implied by the third: a pair of the
+        IP written wrong (a destination `*`) would close flows that go elsewhere."""
+        shut = before - after
+        closed = (self._closed_by_the_perimeter_alone(vm, before, on=shares["perimeters"])
+                  if shut else frozenset())
+
+        def shared(f) -> bool:
+            if f[0] in shares["quarantine"]:
+                return True
+            if f[3] != ATTACKER:
+                return False
+            if f[0] in shares["perimeter"]:
+                return f in closed                      # the hardening (I5S)
+            return f[0] in shares["perimeter_nic"] and f in closed     # the widening (I5S)
+        wrong = sorted(f for f in shut if not shared(f))
+        assert not wrong, f"{what} acted on {vm} in human_only ({wrong[:2]})"
+        for where, nics in (("behind its subnet", shares["perimeter"]), ("on its NIC's NSG", shares["perimeter_nic"])):
+            if any(f[0] in nics and f[3] == ATTACKER for f in shut):
+                _note(f"I5 per VM: a writer's perimeter shut a VM in human_only {where}")
 
     def _chain_start(self) -> tuple[set, int]:
         """The rules Glorfindel wrote with nothing else touching the world since (`chain`:
@@ -2006,9 +2079,10 @@ class IsolationMachine(RuleBasedStateMachine):
         if data.draw(st.booleans(), label="posture pass"):
             self.orphan_sweep(data)
 
-    def _create_vm(self, data, loc: str, reuse_nsg: str | None = None):
+    def _create_vm(self, data, loc: str, reuse_nsg: str | None = None, subnet: str | None = None):
         """reuse_nsg: the NSG of a deleted VM's NIC, offered too — a VM recreated by its
-        pipeline gets the NSG its predecessor had (the NSG outlives the VM)."""
+        pipeline gets the NSG its predecessor had (the NSG outlives the VM). subnet: another
+        subnet of the region than its first (I4P: a NIC's NSG shared across two subnets)."""
         if len(self.vms) >= len(_VMS) + 3:
             return
         rg = data.draw(st.sampled_from(["rg-app1", "rg-app2", "rg-new"]), label="rg")
@@ -2016,7 +2090,8 @@ class IsolationMachine(RuleBasedStateMachine):
         nic_name = f"{name}-nic-{len(self.vms)}"
         if key(vm_id(rg, name)) in {key(v) for v in self.vms} or key(nic_id(rg, nic_name)) in self.fake.nics:
             return
-        subnet = next(s["id"] for s in self.fake.subnets.values() if (s["id"].split("/")[4] == "rg-net") == (loc == _HUB))
+        subnet = subnet or next(s["id"] for s in self.fake.subnets.values()
+                                if (s["id"].split("/")[4] == "rg-net") == (loc == _HUB))
         nsgs = [None] + sorted({n["design_nsg"] for n in self.fake.nics.values()
                                if n["design_nsg"] and n["location"] == loc and key(n["design_nsg"]) in self.fake.nsgs}
                                | ({reuse_nsg} if reuse_nsg and key(reuse_nsg) in self.fake.nsgs else set()))
@@ -2307,8 +2382,12 @@ class IsolationMachine(RuleBasedStateMachine):
             # since): bypassed, not held — the disappearance is not seen over by the code; it
             # is not this branch's episode.
             return
-        # Held again as before: the acknowledged episode is over, by the test's own journal.
-        getattr(self, "acked_drift", {}).pop(vm, None)
+        # Held again as before: the acknowledged episode is over, by the test's own journal —
+        # the block's only (MAK, #481). `acked_drift` is the acknowledgement of the VM's block,
+        # whoever recorded it (this branch, `operator_acknowledges`): the isolation branch neither
+        # took the block's rules off nor put them back, its episode goes on, the machine keeps it.
+        if not isolation:
+            getattr(self, "acked_drift", {}).pop(vm, None)
         self.reassert(_Drawn(data, fault=st.tuples(st.integers(1, 6), st.just("from-full")), mode=human))
         take_off()
         self.reassert(_Drawn(data, fault=None, mode=human))
@@ -2616,6 +2695,41 @@ class IsolationMachine(RuleBasedStateMachine):
         self._block(mate, data.draw(st.sampled_from([mate, mate.lower()]), label="mate rid"), None,
                     data.draw(st.sampled_from([22, None]), label="threat_port"))
         self.unblock(_Drawn(data, vm=vm, rid=rid, fault=None))
+
+    @rule(data=st.data())
+    def promoted_beside_a_turned_block(self, data):
+        """A rare state made common (I4P, #466): a VM blocked for itself, one of its block
+        denies turned into an allow by someone, the NIC's address given up or not (on an NSG
+        that governed it alone, the rule is on every address), a new VM on ANOTHER subnet of
+        the region given that rule's NSG — and the lowest free address, often the old one:
+        the turned rule lets the attacker reach it —, then the block promoted to the
+        perimeter, unfaulted. Taken off by its name, the rule cut the new VM off where the
+        perimeter doesn't reach (I4, _cut_by_the_perimeter_alone). Drawn one by one, the
+        steps never met: a VM is created on its region's first subnet only."""
+        if len(self.vms) >= len(_VMS) + 3:
+            return
+        vm, rid, _ = self._draw(data)
+        self._block(vm, rid, None, data.draw(st.sampled_from([22, None]), label="threat_port"))
+        nics = {_nic_hash(n): key(n) for n in self.fake.vms[key(vm)]["nics"]}
+        mine = sorted((k, n) for k, g in self.fake.nsgs.items() for n, r in g["rules"].items()
+                      if n.startswith("glorfindel-block-") and r["access"].lower() == "deny"
+                      and n.removesuffix("-out").rsplit("-", 1)[-1] in nics)
+        if not mine:
+            return
+        nsg, name = data.draw(st.sampled_from(mine), label="rule")
+        self._tamper_with_our_rule(_Drawn(data, how="access", rule=(nsg, name)))
+        nic = self.fake.nics[nics[name.removesuffix("-out").rsplit("-", 1)[-1]]]
+        if data.draw(st.booleans(), label="its address given up"):
+            self._customer_changes_ip(_Drawn(data, nic=key(nic["id"])))
+        hub = nic["location"] == _HUB
+        others = sorted(s["id"] for k, s in self.fake.subnets.items()
+                        if k != key(nic["subnet"]) and (s["id"].split("/")[4] == "rg-net") == hub)
+        if not others:
+            return
+        self._create_vm(_Drawn(data, nsg=self.fake.nsgs[nsg]["id"]), nic["location"],
+                        subnet=data.draw(st.sampled_from(others), label="subnet"))
+        self._claims_after_a_change()
+        self.block_perimeter(_Drawn(data, vm=vm, rid=rid, fault=None, replace=True))
 
     @rule(data=st.data())
     def joins_an_old_isolation(self, data):

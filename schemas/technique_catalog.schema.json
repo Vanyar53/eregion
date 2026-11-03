@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/Vanyar53/eregion/schemas/technique_catalog.schema.v1.json",
+  "$id": "https://github.com/grootcyber/eregion/schemas/technique_catalog.schema.v1.json",
   "title": "Eregion Technique & Fault Catalog v1",
   "description": "The shared Annatar↔Glorfindel contract (technique_catalog.yaml). Per resource type: `techniques` (MITRE ATT&CK, read by Annatar's planner and Glorfindel's rule authoring) and, since E1, `faults` (declared failures for Gothmog, with their own id — a fault has no ATT&CK id). Faults sit in their own list so that neither technique loader picks them up.",
   "type": "object",

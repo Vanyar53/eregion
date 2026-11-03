@@ -82,7 +82,7 @@ COMPONENTS: dict[str, Component] = {
             "test_invariant_regressions.py", "test_invariant_regressions_aws.py", "test_invariants.py",
             "test_invariants_aws.py",
             "test_jobs.py", "test_llm_smoke.py", "test_locks.py", "test_memory_age.py", "test_orphan_sweep.py", "test_posture.py", "test_proposed_rules.py", "test_readiness.py",
-            "test_reassert.py", "test_release_away.py", "test_rule_layers.py", "test_rules_check.py", "test_runs_channel.py", "test_tui_actions.py", "test_turned_names.py", "test_unexpected_decision.py", "test_unreadable_state.py",
+            "test_promotion_guard.py", "test_reassert.py", "test_release_away.py", "test_rule_layers.py", "test_rules_check.py", "test_runs_channel.py", "test_tui_actions.py", "test_turned_names.py", "test_unexpected_decision.py", "test_unreadable_state.py",
         ),
     ),
     # Annatar — its executors, engines (Atomic Red Team), campaigns, signals.
@@ -117,7 +117,7 @@ TOGETHER = (
     "test_restore_moment.py",
     "test_signal_origin.py", "test_arm_urls.py",
     "test_decision_stability.py", "test_dependency_failures.py", "test_dependency_lock.py",
-    "test_docs_budget.py", "test_exercise.py", "test_exercise_e2e.py", "test_held.py", "test_dagorlad_blind.py", "test_githooks.py", "test_exercise_guard.py",
+    "test_docs_budget.py", "test_repo_owner.py", "test_exercise.py", "test_exercise_e2e.py", "test_held.py", "test_dagorlad_blind.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_fault_rate.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
     "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_exercise.py", "test_makefile_secrets.py", "test_bench_logs.py", "test_bench_auditd.py",

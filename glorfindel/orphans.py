@@ -241,6 +241,11 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
     # — what comes is said at once, what leaves only on a proof by its NIC.
     about = {e.get("id"): (e.get("resource_id") or "").lower() for e in escalations.all_escalations()}
     kept: dict[str, list[dict]] = {}
+    # L1A (#480): a card replaced is closed in the write of the card that replaces it — one of
+    # the rules it spoke for said again, or a card of its VM, which the store would fold into
+    # it —, never before: closed first, that write refused (a full disk), no card said the
+    # rule. Card → (its note, the rules it spoke for); those no card replaced close at the end.
+    replaced: dict[str, tuple[str, set[str]]] = {}
     for o in orphans:
         k = f"orphan-{o['nsg_id']}/{o['rule']}".lower()
         card = alerts.get(k)
@@ -277,8 +282,8 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             continue
         spoke_for = [k]
         if _pending(card):
-            escalations.resolve(card, note=_moved(o, about[card], now))
             spoke_for = [x for x, c in alerts.items() if c == card]
+            replaced[card] = (_moved(o, about[card], now), set(spoke_for))
         for x in spoke_for:
             del alerts[x]
 
@@ -305,10 +310,11 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         res = _resource(o).lower()
         for card in ({alerts.get(f"orphan-{o['nsg_id']}/{o['rule']}".lower())} | pending_of.get(res, set())) - {None}:
             if not all(_names(said.get(card, ""), g) for g in group[res]):
-                if _pending(card):
-                    escalations.resolve(card, note=f"Remplacée : {o['rule']} est gardée derrière "
-                                                   f"{o['turned']['rule']}, retournée en autorisation (I5Q).")
-                for k in [k for k, c in alerts.items() if c == card]:
+                spoke = {k for k, c in alerts.items() if c == card}
+                if _pending(card) and card not in replaced:
+                    replaced[card] = (f"Remplacée : {o['rule']} est gardée derrière "
+                                      f"{o['turned']['rule']}, retournée en autorisation (I5Q).", spoke)
+                for k in spoke:
                     del alerts[k]
     orphans = sorted(orphans, key=lambda o: not o.get("turned"))
 
@@ -393,6 +399,8 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             steps.append(f"Ou donner à {victims[0]} le mode non_disruptive (autonomy.assets de "
                          "glorfindel-config.yaml, ou la console) : la watch "
                          + ("la réduit seule." if narrow else "retire la règle seule."))
+        takes = {c: note for c, (note, spoke) in replaced.items()
+                 if k in spoke or about.get(c) == _resource(o).lower()}
         card = escalations.record(
             signal_id=sid,
             resource_id=_resource(o),
@@ -401,7 +409,10 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
             reason=reason,
             suggested_steps=steps,
             severity="high" if cut else "medium",
+            replaces=takes,
         )
+        for c in takes:
+            del replaced[c]                       # closed in that write
         if out.get("removed") is True:
             # A card of another rule of that VM, still pending, took this one in (the
             # store merges by VM): it stays open for that rule.
@@ -415,6 +426,9 @@ def _sweep(connector, autonomy, orphans: list[dict], report: list) -> None:
         cut_said[k] = _with_kept(o, kept.get(k, []))
         report.append({"kind": "orphan", "vm": victims[0] if victims else nsg_name,
                        "outcome": "failed" if out else "escalated", "detail": reason})
+    for c, (note, _) in replaced.items():           # replaced by no card of this pass
+        if _pending(c):
+            escalations.resolve(c, note=note)
     # A rule said that is no longer an orphan (gone, or its NIC is back): its card closes.
     # The store merges the cards of one VM: a card another standing rule shares stays.
     for k in [k for k in alerts if k not in current]:

@@ -6701,7 +6701,7 @@ def test_a_block_written_again_then_gone_as_acknowledged_is_a_new_episode(monkey
 
 
 @pytest.mark.xfail(strict=True, reason="L1E: a perimeter pair another VM wrote again, gone again before any pass, "
-                                       "said on that VM's card alone — a defect of the code, left to a follow-up lot")
+                                       "said on that VM's card alone — a defect of the code, L1W (#492)")
 def test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm(monkeypatch):
     """L1E (#485), found by hand through the machine's new rule (its journal clause), never by a seed: web
     of rg-app2 blocked on its subnet (the perimeter pair, one per IP and subnet), the pair taken off by a
@@ -6711,7 +6711,8 @@ def test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm(m
     only; rg-app2/web's entry keeps the marks of the card acknowledged before (the pair read absent, read
     absent again) and is silent. The values are those of the acknowledgement; the episode is not: the
     fake's journal shows Glorfindel's write of the pair since. L1 judges each VM's block. Green on the
-    machine of `main` d597a00e (values only); red with the new rule, on the code of `main`."""
+    machine of `main` d597a00e (values only); red with the new rule, on the code of `main`. Tracked in #492
+    (L1W). M3442 (the journal clause taken off the machine) makes it pass: strict, it is caught."""
     _replay(monkeypatch, _net(subnet_nsg=[]),
             ("block_perimeter", WEB2, WEB2, None, False),
             ("terraform_apply", _SUBNET),

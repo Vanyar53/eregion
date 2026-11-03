@@ -3747,7 +3747,11 @@ par un tiers, remise) ne clôt pas la disparition que la carte a dite — ce qui
 du même épisode ; le code le juge de même (`still_said`, L1G : une règle lue absente, écrite de nouveau sous
 notre nom, clôt l'épisode). Le blocage écrit en entier par le test, lui, clôt tout : un nouveau blocage, un
 nouvel épisode (L1Q, U1G), même quand il ne réécrit que des règles présentes (la paire d'un périmètre partie,
-les règles de la VM là).
+les règles de la VM là). **Le trou que laisse « vue absente »** (la relecture) : une règle lue retournée à
+l'acquittement — présente, donc —, remise en refus par Glorfindel, puis retournée de nouveau à l'identique
+avant une passe : les valeurs égales, l'épisode changé, et ni le blocage réécrit par le test ni la clause du
+journal ne le voient. C'est un contournement plutôt qu'une disparition ; un lot futur peut élargir la règle
+à une règle présente réécrite, si ses graines le permettent.
 
 **Pourquoi ce n'est pas un relâchement** (A0) : rien n'est retiré. L'égalité des valeurs reste exigée ; une
 condition s'y ajoute. Les quatre lecteurs de l'acquittement (L1 et L3 de `reassert`, `_said_on_its_own`,
@@ -3777,11 +3781,18 @@ relue absente) et se tait. Les valeurs sont celles de l'acquittement, l'épisode
 montre l'écriture de la paire par Glorfindel. **Lecture retenue** : L1 juge le blocage de chaque VM, et la
 carte de l'autre VM ne dit pas que celle-ci est rouverte. Une autre lecture est possible (la même paire,
 dite sur une carte qui la nomme) ; elle demanderait de resserrer la règle, ce qu'A0 ne permet qu'avant sa
-fusion — à trancher à la relecture. **Cause probable, non établie** : le code ne voit la paire revenue
+fusion — **tranché par la relecture 5.5 : un vrai défaut du code**, l'oracle juge par VM et la carte de
+rg-app1/web ne couvre pas rg-app2/web ; distinct de L1H (la paire écrite puis repartie entre deux passes,
+aucune lecture ne peut voir l'écriture). La clause n'est pas resserrée. Suivi dans **#492 (L1W)**.
+**Cause probable, non établie** : le code ne voit la paire revenue
 qu'à une passe (`still_said`, L1G) ; écrite et repartie entre deux passes, rien ne la lui montre (l'entrée de
 l'autre VM, son `blocked_at`, le pourrait). Figé en `xfail` strict,
 `test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm` : vert (XPASS) sur la machine
-de `main` d597a00e, rouge avec la règle, sur le code de `main`. Non corrigé ; laissé à un lot de suite.
+de `main` d597a00e, rouge avec la règle, sur le code de `main`. Non corrigé ; laissé à L1W (#492).
+**Mutant M3442** (de la machine, sur le modèle de M3421) : la clause du journal retirée ; attrapé par cette
+séquence (XPASS strict). Il la protège le jour où L1W corrigera le code et où l'`xfail` deviendra vert.
+Le repli muet de la place de l'acquittement (`acked_at`, absente : la clause éteinte) est devenu une
+assertion — un écrivain futur de `acked_drift` qui oublierait `_acked_at` échoue bruyamment.
 
 **Mesures de L1E.** Invariants avec la règle, `--hypothesis-seed=N`, quatre à la fois : à 60 séquences,
 N = 1..20, **20/20 vertes** ; à 500, N = 1..7 et 42, **8/8 vertes** — la graine 5, rouge à la mesure de MAK

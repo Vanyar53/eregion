@@ -1675,7 +1675,10 @@ class IsolationMachine(RuleBasedStateMachine):
         if seen is None or self._block_rules_now(vm) != seen:
             return False
         absent = {k for k, r in seen.items() if r is None}
-        at = getattr(self, "acked_at", {}).get(vm, len(self.fake.journal))
+        # Never a silent default (L1E, review): an acknowledgement written without its place in the journal
+        # would switch the journal clause off.
+        at = getattr(self, "acked_at", {}).get(vm)
+        assert at is not None, f"the machine: {vm}'s acknowledgement written without its place (_acked_at)"
         if any(e.get("op") == "rule.write" and (e["nsg"], e["rule"]) in absent for e in self.fake.journal[at:]):
             _note("an acknowledged episode ended: a rule it saw absent written since, gone again")
             return False

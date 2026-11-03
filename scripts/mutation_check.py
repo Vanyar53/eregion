@@ -9963,8 +9963,10 @@ TESTS["M3422"] = "tests/unit/test_reassert.py"
 # at the acknowledgement, values never an episode: a block written again whole, then gone again the same way,
 # was counted said by the card of the episode before. M3440 is MAK's review's probe of L1Q (the drift marks
 # kept by a block written again whole: the code silent on the new episode, L1 passed); M3441 its kin, the mark
-# of the card alone kept. Caught by the frozen sequence, with the machine's new rule. M3442–M3449 unused; a
-# third (`drift_said` alone kept) survives the sequence: the code reads it under its card's mark only.
+# of the card alone kept. Caught by the frozen sequence, with the machine's new rule. A third (`drift_said` alone
+# kept) survives the sequence: the code reads it under its card's mark only. M3442 is the machine's, after M3421:
+# the journal clause taken off — the strict `xfail` of L1W (#492) passes, caught; it keeps the clause once L1W
+# fixes the code. M3443–M3449 unused.
 _L1E_SEQ = ("tests/unit/test_invariant_regressions.py::"
             "test_a_block_written_again_then_gone_as_acknowledged_is_a_new_episode")
 MUTANTS += [
@@ -9974,7 +9976,15 @@ MUTANTS += [
               "the same way, unsaid (L1E)", STA, _L1Q_MARKS,
      '        for mark in () if partial else ("drift_said", "reasserted_at"):\n'),
 ]
+MUTANTS += [
+    ("M3442", "the machine ends an acknowledgement only by the block written again, never by its journal: a rule "
+              "seen absent written since, gone again, counted said (L1E, review)", INVARIANTS,
+     '        if any(e.get("op") == "rule.write" and (e["nsg"], e["rule"]) in absent for e in self.fake.journal[at:]):\n',
+     '        if False:\n'),
+]
 TESTS.update({mid: _L1E_SEQ for mid in ("M3440", "M3441")})
+TESTS["M3442"] = ("tests/unit/test_invariant_regressions.py::"
+                  "test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm")
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

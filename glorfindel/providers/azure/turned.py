@@ -13,17 +13,25 @@ from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.response.ids import _parse_nic_resource_id, _parse_nsg_resource_id
 from glorfindel.response.policy import _ERR_MAX, _first_line
 
+# Our names: the per-NIC isolation and block rules, and an older version's isolation —
+# its fixed name (AzureConnector.ISOLATION_RULE_NAME), `-out`, or VM-suffixed (I4G, #460).
+# Without the last, an older deny-all someone turned into an allow was no turned rule of
+# ours: the guard was skipped, its release took it off by name, and the VM given that NSG
+# since lost what it let in (the machine, seed 73).
+_OUR_NAMES = ("glorfindel-iso-", "glorfindel-block-", "glorfindel-isolation-deny-all")
+
 
 def _turned_allows(nsgs) -> list[tuple[str, set, str, str, list]]:
-    """Our rules, by their names, that someone turned into an allow (I5Q, #327): for
-    each, its NSG, the subnets that NSG governs, the side of the NIC it protects
-    ("destination" inbound, "source" outbound), its name, its addresses on that side."""
+    """Our rules, by their names (`_OUR_NAMES`), that someone turned into an allow (I5Q,
+    #327): for each, its NSG, the subnets that NSG governs, the side of the NIC it
+    protects ("destination" inbound, "source" outbound), its name, its addresses on that
+    side."""
     out = []
     for nsg in nsgs:
         subnets = {s.id.rstrip("/").lower() for s in (getattr(nsg, "subnets", None) or []) if getattr(s, "id", None)}
         for r in (getattr(nsg, "security_rules", None) or []):
             name = getattr(r, "name", "") or ""
-            if (not name.lower().startswith(("glorfindel-iso-", "glorfindel-block-"))
+            if (not name.lower().startswith(_OUR_NAMES)
                     or _enum_text(getattr(r, "access", "")) != "allow"):
                 continue
             side = "destination" if _enum_text(getattr(r, "direction", "")) == "inbound" else "source"

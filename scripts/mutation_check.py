@@ -9171,6 +9171,34 @@ MUTANTS += [
 TESTS.update({mid: "tests/unit/test_mutant_anchors.py" for mid in ("M3185", "M3186")})
 
 
+# I4G (#460): an older version's deny-all someone turned into an allow is one of our turned rules — the
+# guard every removal by name asks knew `glorfindel-iso-` and `glorfindel-block-` only, and the release of
+# that older isolation (its reset too) took the allow off: the VM given its NSG since was cut off (seed 73).
+_I4G_UNIT = "tests/unit/test_turned_names.py"
+_I4G_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in")
+_I4G_NAMES = '            if (not name.lower().startswith(_OUR_NAMES)\n'
+MUTANTS += [
+    ("M3270", "an older version's deny-all turned into an allow is no turned rule of ours: its release takes it "
+              "off, the VM given its NSG cut off (I4G)", TRN,
+     '_OUR_NAMES = ("glorfindel-iso-", "glorfindel-block-", "glorfindel-isolation-deny-all")\n',
+     '_OUR_NAMES = ("glorfindel-iso-", "glorfindel-block-")\n'),
+    ("M3271", "an older version's VM-suffixed deny-all turned into an allow is no turned rule of ours (I4G)", TRN,
+     _I4G_NAMES,
+     '            if (not (name.lower().startswith(_OUR_NAMES[:2]) or name.lower() in '
+     '("glorfindel-isolation-deny-all", "glorfindel-isolation-deny-all-out"))\n'),
+    ("M3272", "an older version's outbound deny-all turned into an allow is no turned rule of ours (I4G)", TRN,
+     _I4G_NAMES,
+     '            if (not (name.lower().startswith(_OUR_NAMES[:2]) or (name.lower().startswith(_OUR_NAMES[2]) '
+     'and not name.lower().endswith("-out")))\n'),
+]
+TESTS.update({
+    "M3270": f"{_I4G_SEQ} {_I4G_UNIT}",
+    "M3271": _I4G_UNIT,
+    "M3272": _I4G_UNIT,
+})
+
+
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;

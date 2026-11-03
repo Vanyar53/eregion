@@ -44,6 +44,9 @@ def hermetic_orodruin(tmp_path, monkeypatch):
     # No exercise channel, no return channel (#159): nothing reaches Azure Storage.
     monkeypatch.delenv("EREGION_EXERCISE_CHANNEL", raising=False)
     monkeypatch.delenv("EREGION_WATCH_CHANNEL", raising=False)
+    # SEC17 (N-15): nor the scopes that declare the channels' account (Orodruin's).
+    monkeypatch.delenv("EREGION_CHANNEL_SCOPE", raising=False)
+    monkeypatch.delenv("EREGION_WATCH_CHANNEL_SCOPE", raising=False)
     # DG-b: the console's requests in tmp, never ~/.eregion/console/requests.
     monkeypatch.setenv("EREGION_REQUESTS_DIR", str(tmp_path / "console-requests"))
     # IA0's index (analysis/campaign_report.py) in tmp, never ~/.eregion/analysis (#167).
@@ -329,6 +332,9 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     import glorfindel.expected_sudo as expected_sudo
     monkeypatch.setattr(expected_sudo, "_JOURNAL", home / "expected_sudo.jsonl")
     monkeypatch.setattr(discovery, "_CACHE_FILE", home / "discovered_assets.json")
+    # SEC17: the memory of past cycles, which `glorfindel report` now reads.
+    import glorfindel.memory as memory
+    monkeypatch.setattr(memory, "_DEFAULT_PATH", home / "cycles")
     monkeypatch.setattr(IncidentRegistry, "_DEFAULT_PATH", home / "incidents.jsonl")
     monkeypatch.setattr(readiness, "_STATE_FILE", home / "readiness.json")
     # SEC3: the recovery signals `glorfindel restore` keeps, and what this process vouched for.

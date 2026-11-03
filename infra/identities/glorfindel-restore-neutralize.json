@@ -1,0 +1,12 @@
+{
+  "Name": "Eregion Glorfindel Restore Neutralize",
+  "IsCustom": true,
+  "Description": "SEC17: the one right of a restore on the VM itself - Run Command, to make a harmless command the VM's last one before its disks are swapped (a restored disk replays the last Run Command at boot; the command is written in Glorfindel's code, never by the model). Assigned VM by VM, on the VMs the restore defends only (restore_vms, infra/glorfindel-host), to the principals that restore (the console's, the bot's) - never to the watch, never on a resource group: a VM without it is still restored, its neutralisation refused and said on the card. Taken out of Eregion Glorfindel Restore.",
+  "Actions": [
+    "Microsoft.Compute/virtualMachines/runCommand/action"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": ["/subscriptions/<SUBSCRIPTION_ID>"]
+}

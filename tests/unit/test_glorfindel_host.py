@@ -178,7 +178,8 @@ def test_the_modes_host_config_knows_are_glorfindel_s():
 def test_host_terraform_reads_the_bench_and_is_no_target():
     tf = (HOST / "main.tf").read_text(encoding="utf-8")
     roles = re.findall(r'role_definition_name\s*=\s*"([^"]+)"', tf)
-    assert sorted(roles) == ["Eregion Glorfindel Session Drain", "Log Analytics Reader", "Reader"]
+    assert sorted(roles) == ["Eregion Glorfindel Restore Neutralize", "Eregion Glorfindel Session Drain",
+                             "Eregion Glorfindel Session Drain", "Log Analytics Reader", "Reader"]
     # SEC11 (R-03, after its review): the session drain on each VM of an explicit list, each read
     # on Azure (a typo fails the plan), never on the group; the list kept in the repository.
     drain = tf.split('resource "azurerm_role_assignment" "session_drain"', 1)[1].split("\n}", 1)[0]
@@ -198,6 +199,58 @@ def test_host_terraform_reads_the_bench_and_is_no_target():
     assert "!infra/glorfindel-host/session_drain.auto.tfvars" in ignore
     assert not re.search(r'"eregion-(target|zone)"\s*=', tf)
     assert 'source_address_prefix      = var.operator_cidr' in tf
+
+
+def test_the_restore_s_neutralization_goes_to_each_vm_it_defends_never_to_h0():
+    """SEC17: « Eregion Glorfindel Restore Neutralize » on each VM of restore_vms, each read on
+    Azure, for each principal that restores — never on the group, never H0's own identity; the
+    list kept in the repository, the principals never (M3217)."""
+    tf = (HOST / "main.tf").read_text(encoding="utf-8")
+    res = tf.split('resource "azurerm_role_assignment" "restore_neutralize"', 1)[1].split("\n}\n", 1)[0]
+    assert "for_each             = local.restore_neutralize" in res
+    assert "scope                = data.azurerm_virtual_machine.restore[each.value.vm].id" in res
+    assert "bench.id" not in res and "principal_id         = each.value.principal" in res
+    assert "!= lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)" in res
+    vms = tf.split('data "azurerm_virtual_machine" "restore"', 1)[1].split("\n}", 1)[0]
+    assert "for_each            = toset(var.restore_vms)" in vms
+    assert "resource_group_name = data.azurerm_resource_group.bench.name" in vms
+    assert "setproduct(keys(var.restore_principals), var.restore_vms)" in tf
+    variables = (HOST / "variables.tf").read_text(encoding="utf-8")
+    assert re.search(r'variable "restore_vms" \{[^}]*default\s*=\s*\[\]', variables)
+    principals = variables.split('variable "restore_principals"', 1)[1].split("\n}\n", 1)[0]
+    assert "  default     = {}\n" in principals and "type        = map(string)" in principals
+    kept = (HOST / "restore.auto.tfvars").read_text(encoding="utf-8")
+    assert re.search(r'^restore_vms = \["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"\]$', kept, re.M)
+    ignore = (HOST.parents[1] / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "!infra/glorfindel-host/restore.auto.tfvars" in ignore
+    assert not [ln for ln in ignore if "restore_principals" in ln and ln.startswith("!")]
+    example = (HOST / "principals.auto.tfvars.example").read_text(encoding="utf-8")
+    assert re.findall(r'"([0-9a-f-]{36})"', example) == ["00000000-0000-0000-0000-000000000000"] * 3
+
+
+def test_the_console_of_a_workstation_gets_the_session_drain_vm_by_vm():
+    """SEC17 review (M3264): the console isolates what a human approves in its own process, and
+    the session drain runs under its identity — once Run Command leaves the Restore role, it gets
+    the drain on each VM of session_drain_vms, never on the group, never H0's identity; not the bot."""
+    tf = (HOST / "main.tf").read_text(encoding="utf-8")
+    res = tf.split('resource "azurerm_role_assignment" "session_drain_principals"', 1)[1].split("\n}\n", 1)[0]
+    assert "for_each             = local.session_drain_others" in res
+    assert "scope                = data.azurerm_virtual_machine.session_drain[each.value.vm].id" in res
+    assert 'role_definition_name = "Eregion Glorfindel Session Drain"' in res and "bench.id" not in res
+    assert "!= lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)" in res
+    assert "setproduct(keys(var.session_drain_principals), var.session_drain_vms)" in tf
+    example = (HOST / "principals.auto.tfvars.example").read_text(encoding="utf-8")
+    drain = example.split("session_drain_principals = {", 1)[1].split("}", 1)[0]
+    assert "console" in drain and "bot" not in drain
+
+
+@pytest.mark.parametrize("var", ["session_drain_vms", "restore_vms"])
+def test_a_vm_named_twice_in_another_case_is_refused_at_the_plan(var):
+    """SEC17 (AUC review, M3218, M3219): ["vm-a", "VM-A"] passed the validation, and the second
+    assignment failed at the apply (409) — Azure ignores a VM name's case; so does the list."""
+    variables = (HOST / "variables.tf").read_text(encoding="utf-8")
+    block = variables.split(f'variable "{var}"', 1)[1].split("\n}\n", 1)[0]
+    assert f"length(var.{var}) == length(distinct([for n in var.{var} : lower(n)]))" in block
 
 
 _spec_env = importlib.util.spec_from_file_location("host_env", HOST / "host_env.py")

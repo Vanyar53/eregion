@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from annatar.campaign.scope import Budget, Scope
+from eregion_core import runs_layout
 
 SCHEMA_VERSION = "1.0"
 
@@ -145,9 +146,10 @@ class CampaignManifest:
         self.updated_at = _utcnow()
 
 
-def campaigns_root(runs_dir: str | Path = "runs") -> Path:
-    return Path(runs_dir) / "campaigns"
+def campaigns_root(runs_dir: str | Path | None = None) -> Path:
+    """``<runs_dir>/campaigns`` — Annatar's own directory by default, ``runs/annatar`` (SEC18)."""
+    return Path(runs_layout.dir_of(runs_layout.ANNATAR) if runs_dir is None else runs_dir) / "campaigns"
 
 
-def campaign_dir(campaign_id: str, runs_dir: str | Path = "runs") -> Path:
+def campaign_dir(campaign_id: str, runs_dir: str | Path | None = None) -> Path:
     return campaigns_root(runs_dir) / campaign_id

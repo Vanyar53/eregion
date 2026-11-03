@@ -17,7 +17,7 @@ import pytest
 
 from eregion_core import exercise_request as xr
 from eregion_core import exercise_runner as er
-from eregion_core import orodruin
+from eregion_core import orodruin, runs_layout
 from eregion_core.exercise import exercises_dir
 from eregion_core.exercise_plan import Target, load_catalog
 
@@ -60,12 +60,14 @@ class Injectors:
         rid = f"run-{n}"
         request = argv[argv.index("--request") + 1]
         target = argv[argv.index("--target") + 1] if "--target" in argv else argv[3]
-        xdir = exercises_dir(self.runs)
+        fault = argv[0] == "gothmog"
+        own = runs_layout.dir_of("gothmog" if fault else "annatar", self.runs)   # SEC18
+        own.mkdir(parents=True, exist_ok=True)
+        xdir = exercises_dir(own)
         xdir.mkdir(parents=True, exist_ok=True)
         (xdir / f"{rid}.json").write_text(json.dumps(
             {"run_id": rid, "request": request, "targets": [target.lower()]}))
-        fault = argv[0] == "gothmog"
-        (self.runs / f"{rid}.json").write_text(json.dumps(
+        (own / f"{rid}.json").write_text(json.dumps(
             {"run_id": rid, "result": "PASS",
              "checks": {"revert_verified": "PASS" if (self.returned or not fault) else "FAIL"}}))
         with open(orodruin.audit_path(), "a") as f:

@@ -186,10 +186,10 @@ par un conteneur de stockage à Orodruin (`eregion_core/exercise_channel.py`) :
   (`<run_id>.json`). Un échec ne casse jamais le run : la fenêtre reste locale, et les cycles
   du run seront étiquetés « real ».
 - **Côté watch** : `load_windows` copie les fenêtres nouvelles ou changées dans
-  `runs/exercises/`, au plus toutes les 30 s. Seuls les noms simples sont acceptés, jamais un
+  `runs/glorfindel/exercises/` (son répertoire, SEC18), au plus toutes les 30 s. Seuls les noms simples sont acceptés, jamais un
   chemin. Si le canal est injoignable, les fenêtres locales comptent toujours.
 - **Le même conteneur porte aussi** une campagne finie (`campaigns/<id>/…`, #167) et le
-  rapport d'un run seul (`runs/<run_id>.json`, #193), sous un préfixe que le tirage des
+  rapport d'un run seul (le blob `runs/<run_id>.json`, #193), sous un préfixe que le tirage des
   fenêtres ignore. Rien ne change au contrat : même conteneur, même attribution, même portée.
   Seule la watch hébergée lit ces préfixes ; l'arrêt d'urgence ne relit que les fenêtres.
 - **Le lecteur ne croit pas la fenêtre sur parole (H-1, 26/10)** : qui écrit dans le conteneur

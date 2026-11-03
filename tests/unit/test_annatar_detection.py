@@ -3,15 +3,15 @@
 A detection counts for a run when it is of the run's technique, on its resource (compared
 without case: Log Analytics writes ``_ResourceId`` in lower case, Annatar emits ARM's
 casing — measured on the bench, 20/10) and seen at or after the attack. Its latency is
-measured from the run's ``attack_time``, the same way on both paths of the wait (the run's
-own ``runs/<run_id>_debug.jsonl`` and the RulePoller's ``watch-*`` files), and written in
-``runs/<run_id>.json``. No Azure, no LLM (mocked executor, a throwaway HOME, a fake clock).
+measured from the run's ``attack_time``, and written in ``runs/annatar/<run_id>.json``. A run
+learns of its detection through the return channel only (#159): the watch's files are not the
+red's to read (SEC18) — no channel, the detection is not measured. No Azure, no LLM (mocked
+executor, a throwaway HOME, a fake clock, a fake channel).
 """
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -150,35 +150,7 @@ def test_read_records_skips_bad_lines(tmp_path):
     assert read_records(tmp_path / "missing.jsonl") == []
 
 
-# ── _check_watch_files: the RulePoller path ───────────────────────────────────────────
-
-def test_watch_files_find_the_bench_record_with_annatar_casing(tmp_path):
-    """The bench record (lower-case id) is found from Annatar's id — before, None."""
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    # 12:14:01.41 → 12:15:58.89: the reference measured by hand on run 20261020T121319Z.
-    attack = datetime(2026, 10, 20, 12, 14, 1, 410000, tzinfo=timezone.utc).timestamp()
-    rec = _rulepoller_record(attack)
-    rec["signal"]["timestamp"] = "2026-10-20T12:15:58.894353+00:00"
-    (runs / "watch-t1136-001-local-account-creation-linux-v1-20261020T121559Z_debug.jsonl"
-     ).write_text(json.dumps(rec) + "\n")
-    # mtime is now, after the attack; the record's own time decides
-    assert Engine._check_watch_files(TTP, ANNATAR_RID, attack, runs_dir=runs) == 117.5
-
-
-def test_watch_files_ignore_an_earlier_detection_in_a_fresh_file(tmp_path):
-    """The file is fresh (another cycle appended after the attack) but its detection of
-    this technique on this VM came before the attack: not this run's (M99)."""
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    import time as _time
-    attack = _time.time() - 60
-    (runs / "watch-old-rule-x_debug.jsonl").write_text(
-        json.dumps(_rulepoller_record(attack - 300)) + "\n")
-    assert Engine._check_watch_files(TTP, ANNATAR_RID, attack, runs_dir=runs) is None
-
-
-# ── _wait_and_emit_feedback: both paths, same latency, same filter ───────────────────
+# ── _wait_and_emit_feedback: the return channel only (SEC18) ──────────────────────────
 
 class _Clock:
     """A fake clock for the engine module: sleep advances time (the wait never blocks)."""
@@ -193,20 +165,32 @@ class _Clock:
         self.now += s
 
 
+def _channel_detection(seen: float, ttp: str = TTP) -> dict:
+    """A detection as the hosted watch delivers it on the return channel (watch_channel.Publisher)."""
+    return {"event": "detection", "ttp": ttp, "resource_id": WATCH_RID, "detected_at": _iso(seen)}
+
+
 @pytest.fixture
 def waiting(tmp_path, monkeypatch):
-    """chdir to tmp, a throwaway HOME with a fresh watch heartbeat, a fake clock."""
+    """chdir to tmp, a fake clock, a return channel whose heartbeat is fresh and whose
+    detections are ``channel.detections`` — and the watch's files on this host, which the run
+    must never read (SEC18)."""
     import time as _time
+
+    from eregion_core import watch_channel
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     clock = _Clock(_time.time())
     monkeypatch.setattr(engine_module, "time", clock)
-    hb = tmp_path / "home" / ".glorfindel" / "watch_heartbeat"
-    hb.parent.mkdir(parents=True)
-    hb.write_text(_iso(clock.now))
-    (tmp_path / "runs").mkdir()
-    return SimpleNamespace(runs=tmp_path / "runs", clock=clock)
+    channel = SimpleNamespace(detections=[], heartbeat=None)
+    monkeypatch.setenv(watch_channel.CHANNEL_ENV, "https://account.blob.core.windows.net/watch")
+    monkeypatch.setattr(watch_channel, "read_detections", lambda run_id, **k: list(channel.detections))
+    monkeypatch.setattr(watch_channel, "read_heartbeat", lambda **k: channel.heartbeat or {
+        "at": _iso(clock.now), "since": _iso(clock.now - 86400), "windows": ["rid"]})
+    watch = tmp_path / "runs" / "glorfindel"
+    watch.mkdir(parents=True)
+    return SimpleNamespace(runs=watch, clock=clock, channel=channel)
 
 
 def _wait(attack_time: float, run_id: str = "rid"):
@@ -218,66 +202,76 @@ def _wait(attack_time: float, run_id: str = "rid"):
     return engine, emitted
 
 
-def test_wait_poll_path_records_the_latency(waiting):
+def test_wait_the_channel_path_records_the_latency(waiting):
     attack = waiting.clock.now - 150
-    (waiting.runs / "rid_debug.jsonl").write_text(json.dumps(_poll_record(attack, 118)) + "\n")
-    engine, emitted = _wait(attack)
-    assert (engine._detection_result, engine._detection_latency_s) == ("detected", 118.0)
-    assert emitted == []
-
-
-def test_wait_rulepoller_path_records_the_same_latency(waiting):
-    attack = waiting.clock.now - 150
-    (waiting.runs / "watch-rule-x_debug.jsonl").write_text(
-        json.dumps(_rulepoller_record(attack + 118)) + "\n")
+    waiting.channel.detections = [_channel_detection(attack + 118)]
     engine, emitted = _wait(attack)
     assert (engine._detection_result, engine._detection_latency_s) == ("detected", 118.0)
     assert emitted == []
 
 
 def test_wait_an_earlier_detection_is_a_miss(waiting):
-    """Only an earlier detection on the VM and technique: the run is missed, and
-    detection_missed is emitted — never 'detected' on another run's detection (M99)."""
+    """Only an earlier detection on the VM and technique, and a heartbeat that vouches for the
+    wait: the run is missed, and detection_missed is emitted — never 'detected' on another run's
+    detection (M99)."""
     attack = waiting.clock.now - 30
-    (waiting.runs / "watch-rule-x_debug.jsonl").write_text(
-        json.dumps(_rulepoller_record(attack - 200)) + "\n")
+    waiting.channel.detections = [_channel_detection(attack - 200)]
     engine, emitted = _wait(attack)
     assert engine._detection_result == "missed"
     assert engine._detection_latency_s is None
     assert emitted == ["detection_missed"]
 
 
-def test_wait_timeout_in_the_run_file_is_a_miss(waiting):
-    attack = waiting.clock.now - 30
-    (waiting.runs / "rid_debug.jsonl").write_text(
-        json.dumps({"signal": {"event": "detection_timeout", "ttp": TTP}}) + "\n")
+def test_wait_never_reads_the_watchs_files(waiting):
+    """SEC18 (N-05): the watch's own cycles on this host — a detection of this run in its file
+    and in a RulePoller file — are not the red's to read: the channel says nothing, its heartbeat
+    vouches, the run is missed."""
+    attack = waiting.clock.now - 150
+    (waiting.runs / "rid_debug.jsonl").write_text(json.dumps(_poll_record(attack, 118)) + "\n")
+    (waiting.runs / "watch-rule-x_debug.jsonl").write_text(json.dumps(_rulepoller_record(attack + 118)) + "\n")
     engine, emitted = _wait(attack)
-    assert engine._detection_result == "missed"
-    assert emitted == ["detection_missed"]
+    assert engine._detection_result == "missed" and emitted == ["detection_missed"]
 
 
-# ── The latency is written in runs/<run_id>.json, on both run paths ──────────────────
+def test_without_a_return_channel_the_detection_is_not_measured(waiting, monkeypatch, capsys):
+    """SEC18: no channel — even with a live local watch and its files beside — the run's
+    detection is unknown, said, never a miss: no detection_missed."""
+    from eregion_core import watch_channel
+    monkeypatch.delenv(watch_channel.CHANNEL_ENV)
+    attack = waiting.clock.now - 150
+    (waiting.runs / "rid_debug.jsonl").write_text(json.dumps(_poll_record(attack, 118)) + "\n")
+    engine, emitted = _wait(attack)
+    assert (engine._detection_result, engine._detection_latency_s, emitted) == ("unknown", None, [])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "no return channel" in out and "not Annatar's to read (SEC18)" in out
+
+
+# ── The latency is written in runs/annatar/<run_id>.json, on both run paths ──────────
 
 def _detect_at(after_s: float, seen: dict):
-    """A stand-in for the wait: the watch writes a RulePoller detection `after_s` after
-    the run's attack_time, then the real wait runs (with a heartbeat, it finds it at once)."""
+    """A stand-in for the wait: the return channel carries the watch's detection `after_s`
+    after the run's attack_time, then the real wait runs (it finds it at once)."""
+    from eregion_core import watch_channel, watch_gate
     real = Engine._wait_and_emit_feedback
 
     def fake(self, run_id, emitter, scenario, timeout_s, attack_time, stop_event=None):
         seen["attack_time"] = attack_time
-        Path("runs", "watch-rule-x_debug.jsonl").write_text(
-            json.dumps(_rulepoller_record(attack_time + after_s, ttp=scenario.mitre)) + "\n")
-        return real(self, run_id, emitter, scenario, timeout_s, attack_time, stop_event)
+        found = [_channel_detection(attack_time + after_s, ttp=scenario.mitre)]
+        with patch.dict("os.environ", {watch_channel.CHANNEL_ENV: "https://account.blob.core.windows.net/watch"}), \
+             patch.object(watch_gate, "channel_beat",
+                          lambda: watch_gate.Beat(watch_gate.CHANNEL, datetime.now(timezone.utc))), \
+             patch.object(watch_channel, "read_detections", lambda rid, **k: found):
+            return real(self, run_id, emitter, scenario, timeout_s, attack_time, stop_event)
 
     return fake
 
 
 def _report(tmp_path):
-    return json.loads(next((tmp_path / "runs").glob("2*.json")).read_text())
+    return json.loads(next((tmp_path / "runs" / "annatar").glob("2*.json")).read_text())
 
 
 def _attack_started(tmp_path) -> dict:
-    f = next((tmp_path / "runs").glob("2*_signals.jsonl"))
+    f = next((tmp_path / "runs" / "annatar").glob("2*_signals.jsonl"))
     return next(json.loads(x) for x in f.read_text().splitlines()
                 if x.strip() and json.loads(x)["event"] == "attack_started")
 

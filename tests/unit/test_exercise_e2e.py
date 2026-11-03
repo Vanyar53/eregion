@@ -74,7 +74,7 @@ def stage(tmp_path, monkeypatch):
                 return CliRunner().invoke(annatar_cli, argv[1:], catch_exceptions=False).exit_code
         assert argv[:2] == ["gothmog", "run"]
         factory = lambda session: ChaosStudio(session, credential=Cred(), http=world, subscription_id=SUB)  # noqa: E731
-        out = gothmog_engine.Engine(bench_factory=factory, runs_dir=tmp_path / "runs", sleep=clock.sleep,
+        out = gothmog_engine.Engine(bench_factory=factory, runs_dir=tmp_path / "runs" / "gothmog", sleep=clock.sleep,
                                     now=clock.now).run(argv[2], skip_confirm=True,
                                                        request=argv[argv.index("--request") + 1],
                                                        target=argv[argv.index("--target") + 1])
@@ -112,7 +112,9 @@ def test_a_request_goes_from_the_console_to_orodruin_and_its_injectors(stage):
     assert {w["request"] for w in windows.values()} == {req.id} and len(windows) == 3
     runs = [r for w in status.wires for r in w.runs]
     assert sorted(runs) == sorted(windows)
-    reports = [json.loads((tmp / "runs" / f"{r}.json").read_text()) for r in runs]
+    # SEC18: each run's report in its injector's own directory.
+    reports = [json.loads(next(p for p in (tmp / "runs" / i / f"{r}.json" for i in ("annatar", "gothmog"))
+                               if p.exists()).read_text()) for r in runs]
     assert [r["metrics"]["request"] for r in reports] == [req.id] * 3
     assert [r["metrics"]["kind"] for r in reports] == ["technique", "fault", "technique"]
     # The fault came back, verified, before the destructive technique went.

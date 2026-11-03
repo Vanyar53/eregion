@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Callable
 
 from eregion_core import exercise_request as xr
-from eregion_core import held, orodruin, watch_gate
+from eregion_core import channel_reader, held, orodruin, runs_layout, watch_gate
 from eregion_core.exercise import exercises_dir
 from eregion_core.exercise_plan import Target, judge, load_catalog, plan
 from eregion_core.inscription import Scope, TagEnrollment, rg_from_id, subscription_from_id
@@ -185,7 +185,7 @@ LOCK_FD_ENV = "EREGION_RUN_LOCK_FD"
 def lock_path() -> Path:
     """The one lock of « one run at a time » (R-10) — never a runs directory a command was given
     (``campaign run --runs-dir``): every command that acts takes this file."""
-    return Path(os.environ.get(LOCK_ENV) or Path("runs") / "orodruin" / "requests" / ".lock")
+    return Path(os.environ.get(LOCK_ENV) or runs_layout.dir_of(runs_layout.ORODRUIN) / "requests" / ".lock")
 
 
 def _holder(fd: int) -> str:
@@ -286,11 +286,9 @@ class Runner:
     # The status, kept on this host and published at each step.
     def _emit(self, status: Status) -> None:
         status.at = self.now().isoformat()
-        path = self.runs_dir / "orodruin" / "requests" / f"{status.request}.json"
+        path = runs_layout.dir_of(runs_layout.ORODRUIN, self.runs_dir) / "requests" / f"{status.request}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(status.to_dict(), indent=2), encoding="utf-8")
-        tmp.replace(path)
+        channel_reader.write_file(path, json.dumps(status.to_dict(), indent=2))   # SEC16, SEC18
         try:
             self.publish(status)
         except Exception as e:  # the run goes on: the operator sees it in the terminal
@@ -336,8 +334,10 @@ class Runner:
         return n
 
     def _windows(self, request_id: str) -> dict[str, dict]:
+        """The windows of the request's wires, each in its injector's own directory (SEC18)."""
         out = {}
-        for p in sorted(exercises_dir(self.runs_dir).glob("*.json")):
+        dirs = [exercises_dir(runs_layout.dir_of(w, self.runs_dir)) for w in runs_layout.INJECTORS]
+        for p in sorted(p for d in dict.fromkeys(dirs) for p in d.glob("*.json")):
             try:
                 w = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -347,10 +347,14 @@ class Runner:
         return out
 
     def _report(self, run_id: str) -> dict:
-        try:
-            return json.loads((self.runs_dir / f"{run_id}.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
+        """The wire's run report, from its injector's own directory (SEC18)."""
+        for w in runs_layout.INJECTORS:
+            try:
+                return json.loads((runs_layout.dir_of(w, self.runs_dir) / f"{run_id}.json")
+                                  .read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+        return {}
 
     def judge(self, req: xr.Request, typed: dict[int, str]):
         """Steps 2–3: the contract, then every wire. Returns the status, the verdicts, the cap,
@@ -441,10 +445,9 @@ class Runner:
         (a refusal, a crash), it never plays again here."""
         path = self._registry()
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"request": req.id, "at": req.at, "played": self.now().isoformat()}) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        # On disk before the judgment, a whole line, never through a link (SEC16, SEC18).
+        channel_reader.append_line(path, json.dumps({"request": req.id, "at": req.at,
+                                                     "played": self.now().isoformat()}), sync=True)
 
     def _run(self, req: xr.Request, typed: dict[int, str], lock_fd: int) -> Status:
         start = self.now()

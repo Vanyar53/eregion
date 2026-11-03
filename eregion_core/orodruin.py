@@ -516,11 +516,11 @@ def audit_path() -> Path:
 
 
 def _append(path: Path, record: dict) -> None:
+    from eregion_core.channel_reader import append_line
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
-        f.flush()
-        os.fsync(f.fileno())  # on disk before the call: a crash leaves the intent
+    # On disk before the call: a crash leaves the intent. A whole line, never through a link —
+    # in Orodruin's own directory, runs/orodruin/ (SEC16, SEC18).
+    append_line(path, json.dumps(record), sync=True)
 
 
 def push_offhost(run_id: str, line: str, *, created: bool, channel: str | None = None,

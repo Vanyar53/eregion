@@ -62,17 +62,18 @@ def test_glorfindel_starts_in_every_profile():
 
 def test_an_injector_never_runs_without_glorfindel():
     """V1 in compose: running an injector starts the watch, the injector reads its heartbeat
-    without being able to write it, and shares the runs/ the watch reads. SEC3 (N-05): of
-    ~/.glorfindel, only ~/.glorfindel/injectors, where the watch writes that heartbeat —
-    never the escalations, the isolation state, the client's rules."""
-    watch_runs = next(v for v in SERVICES["watch"]["volumes"] if v.endswith(":/app/runs"))
+    without being able to write it, and writes its own directory of runs/, which the watch
+    mounts read-only (SEC18). SEC3 (N-05): of ~/.glorfindel, only ~/.glorfindel/injectors, where
+    the watch writes that heartbeat — never the escalations, the isolation state, the client's
+    rules."""
     for name in INJECTORS:
+        own = f"${{EREGION_RUNS:-./runs}}/{name}:/app/runs/{name}"
+        assert own in SERVICES[name]["volumes"] and own + ":ro" in SERVICES["watch"]["volumes"], name
         s = SERVICES[name]
         assert "watch" in s["depends_on"], name
         assert "${HOME}/.glorfindel/injectors:/root/.glorfindel:ro" in s["volumes"], name
         assert [v for v in s["volumes"] if v.startswith("${HOME}/.glorfindel")] == [
             "${HOME}/.glorfindel/injectors:/root/.glorfindel:ro"], name
-        assert watch_runs in s["volumes"], name
         assert s["image"] == "eregion-annatar" and s["entrypoint"] == [name], name
         assert s["restart"] == "no" and s["profiles"] == [name], name
 
@@ -99,7 +100,8 @@ def test_without_a_team_the_names_are_those_h0_reads():
         s = SERVICES[name]
         assert _interpolate(s["container_name"], {}) == container
         vols = [_interpolate(v, {}) for v in s["volumes"]]
-        assert "./runs:/app/runs" in vols, name
+        own = {"watch": "glorfindel", "war-room": "console", "bot": "console"}[name]   # SEC18
+        assert f"./runs/{own}:/app/runs/{own}" in vols, name
         assert any(v.startswith("./glorfindel-config.yaml:/app/glorfindel-config.yaml") for v in vols), name
     assert [_interpolate(p, {}) for p in SERVICES["war-room"]["ports"]] == ["127.0.0.1:7007:7007"]
     team = {"EREGION_INSTANCE": "eregion-blue", "EREGION_CONSOLE_PORT": "7101"}
@@ -282,13 +284,14 @@ def test_team_start_starts_its_glorfindel(tmp_path, fake_docker, bot, argv):
 # No capability, no privilege gained, the root filesystem read-only: a process that takes a
 # container (a dependency, a crafted log line) cannot write the image's code nor gain rights.
 # What each one writes is a volume (the oracle, written here: what the code writes) or /tmp.
-WRITES = {
-    "watch": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma", "/root/.eregion/analysis"},
-    "war-room": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma", "/app/glorfindel-config.yaml",
+WRITES = {   # SEC18: of runs/, each writer's own directory only (tests/unit/test_runs_mounts.py)
+    "watch": {"/app/runs/glorfindel", "/app/runs/verdicts", "/root/.glorfindel", "/root/.cache/chroma",
+              "/root/.eregion/analysis"},
+    "war-room": {"/app/runs/console", "/root/.glorfindel", "/root/.cache/chroma", "/app/glorfindel-config.yaml",
                  "/root/.eregion/console"},
-    "bot": {"/app/runs", "/root/.glorfindel", "/root/.cache/chroma"},
-    "annatar": {"/app/runs", "/root/.annatar"},
-    "gothmog": {"/app/runs"},
+    "bot": {"/app/runs/console", "/root/.glorfindel", "/root/.cache/chroma"},
+    "annatar": {"/app/runs/annatar", "/app/runs/orodruin", "/root/.annatar"},
+    "gothmog": {"/app/runs/gothmog", "/app/runs/orodruin"},
 }
 
 
@@ -348,5 +351,5 @@ def test_h0_creates_the_consoles_directory_before_compose_mounts_it():
     [line] = [ln for ln in MAKEFILE.splitlines() if "deploy.sh" in ln and ln.startswith("\t$(HOST_SSH)")]
     assert line.index(".eregion/console/requests") < line.index("deploy.sh")
     deploy = (ROOT / "infra" / "glorfindel-host" / "deploy.sh").read_text(encoding="utf-8")
-    start = deploy.split("start() {", 1)[1].split("}", 1)[0]
+    start = deploy.split("start() {", 1)[1].split("\n}", 1)[0]   # the function, its own braces aside
     assert start.index(".eregion/console/requests") < start.index("docker compose")

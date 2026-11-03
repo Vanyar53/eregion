@@ -56,7 +56,7 @@ def _orodruin(tmp_path, *, state="done", scenarios=None, reports=("R1", "R2"), c
     """A finished campaign on Orodruin: its directory, its runs' reports — and beside them
     what must never leave: the runs' debug and signal files, another run, the campaign's
     scenarios and an older report."""
-    runs = tmp_path / "orodruin" / "runs"
+    runs = tmp_path / "orodruin" / "runs" / "annatar"   # SEC18: Annatar's own directory
     cdir = runs / "campaigns" / "C1"
     (cdir / "scenarios").mkdir(parents=True)
     (cdir / "scenarios" / "01.yaml").write_text("name: step 1\n")
@@ -288,7 +288,7 @@ def test_a_done_campaign_says_its_report_is_written_on_h0(tmp_path, container, s
     assert "campaigns/C1/manifest.json" in container.blobs
     text = said.getvalue()
     assert "Campaign published to H0 (3 file(s))" in text
-    assert "runs/campaigns/C1/report.md on H0" in text
+    assert "runs/glorfindel/campaigns/C1/report.md on H0" in text     # SEC18: the watch's own directory
 
 
 def test_an_aborted_campaign_says_its_report_is_to_write_by_hand(tmp_path, container, said):

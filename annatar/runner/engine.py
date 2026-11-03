@@ -4,12 +4,11 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 
 from rich.console import Console
 from rich.prompt import Confirm
 
-from annatar.runner.detection import detection_latency, has_timeout, read_records
+from annatar.runner.detection import detection_latency
 from annatar.runner.parser import ScenarioParser
 from annatar.runner.report import RUNS_DIR, RunReport
 from eregion_core.inscription import check_target
@@ -21,8 +20,6 @@ from eregion_core.orodruin import arm
 
 console = Console()
 
-# A watch file last written this long before the attack is not read (_check_watch_files).
-_MTIME_SLACK_S = 60.0
 # SEC5 (N-04): what Orodruin's journal says of a run --without-glorfindel, and its refusal in
 # production.
 WITHOUT_GLORFINDEL = "without_glorfindel"
@@ -252,7 +249,7 @@ class Engine:
             console.print(f"[red]Engine not runnable:[/red] {scenario.engine!r}")
             return RunOutcome(run_id, "unknown", error=f"engine: {scenario.engine!r} not runnable")
         finally:
-            close_window(run_id)
+            close_window(run_id, injector="annatar")
             if self.publish_report:  # its last save is done, the atomic's that raised too
                 carry_run(run_id, RUNS_DIR)
 
@@ -673,42 +670,49 @@ class Engine:
         attack_time: float,
         stop_event: threading.Event | None = None,
     ) -> None:
-        """Poll Glorfindel's debug.jsonl for the detection result.
+        """Wait for Glorfindel's detection of this run, through the return channel.
 
         A detection counts only if it is of the run's technique, on its resource (without
-        case), and seen at or after ``attack_time`` — the same rule on both paths (the run's
-        own file and the RulePoller's ``watch-*`` files, annatar/runner/detection.py). Its
+        case), and seen at or after ``attack_time`` (annatar/runner/detection.py). Its
         latency from ``attack_time`` is kept in ``_detection_latency_s``.
 
-        A watch on another host (Glorfindel hosted, the run on Orodruin) is reached through
-        the return channel (eregion_core/watch_channel.py, #159): its heartbeat, its
-        detections of the run's window, the same test. With no local watch, a miss needs a
-        heartbeat that vouches for the whole wait — else the run is ``unknown``.
+        SEC18 (N-05): the watch's files are not the red's to read — no injector mounts
+        ``runs/glorfindel/`` (eregion_core/runs_layout.py). A run learns of its detection only
+        through the return channel (eregion_core/watch_channel.py, #159): the hosted watch's
+        heartbeat and its detections of the run's window — or, without a storage channel, the
+        local channel of verdicts (``runs/verdicts/``, read-only to the red, its verdicts only;
+        the storage channel keeps the priority). With neither, the detection is not measured:
+        ``unknown``, never a miss. A miss needs a heartbeat that vouches for the whole wait —
+        else the run is ``unknown``.
 
-        If Glorfindel times out (detection_timeout event), emit a
-        detection_missed signal enriched with the scenario's detection_hints
-        so Glorfindel can propose an improved detection rule.
+        A miss the watch vouches for emits a detection_missed signal enriched with the
+        scenario's detection_hints, so Glorfindel can propose an improved detection rule.
         """
-        debug_path = Path("runs") / f"{run_id}_debug.jsonl"
-        channel = watch_channel.channel_url()
+        channel = watch_channel.source()
+        if not channel:
+            console.print(
+                "[yellow]Detection not measured — no return channel (EREGION_WATCH_CHANNEL) nor "
+                "local verdicts (runs/verdicts/): the watch's files are not Annatar's to read "
+                "(SEC18). No detection_missed.[/yellow]"
+            )
+            self._detection_result = "unknown"
+            if stop_event is not None:
+                stop_event.set()
+            return
 
-        def _local_watch() -> bool:
-            if debug_path.exists():
-                return True  # watch already responded
-            # The heartbeat's test is the gate's (eregion_core/watch_gate.py, V1).
-            return watch_gate.fresh(watch_gate.local_beat(),
-                                    datetime.fromtimestamp(time.time(), timezone.utc))
-
-        def _remote_watch() -> bool:
-            # None without a channel; an unreadable channel shows no watch.
-            return watch_gate.fresh(watch_gate.channel_beat(),
-                                    datetime.fromtimestamp(time.time(), timezone.utc))
+        def _watch_active() -> bool:
+            # An unreadable channel shows no watch. The heartbeat's test is the gate's
+            # (eregion_core/watch_gate.py, V1); the local channel's, the same (SEC18).
+            now = datetime.fromtimestamp(time.time(), timezone.utc)
+            if channel == watch_channel.STORAGE:
+                return watch_gate.fresh(watch_gate.channel_beat(), now)
+            try:
+                return watch_channel.recent(watch_channel._when(watch_channel.local_heartbeat().get("at")), now)
+            except Exception:
+                return False
 
         # The run started only with a live watch (V1, eregion_core/watch_gate.py). One that
         # stopped since, and is not back within 30 s, measures nothing: unknown.
-        def _watch_active() -> bool:
-            return _local_watch() or _remote_watch()
-
         if not _watch_active():
             # Retry for up to 30s in case the watch is restarting
             deadline_check = time.time() + 30
@@ -722,6 +726,8 @@ class Engine:
                     " measured (unknown).[/yellow]"
                 )
                 self._detection_result = "unknown"  # detection was not measured
+                if stop_event is not None:
+                    stop_event.set()
                 return
 
         wait_s = detection_timeout_s + 120
@@ -736,31 +742,16 @@ class Engine:
         result_event: str | None = None
         latency: float | None = None
         while time.time() < deadline:
-            # 1. Direct Annatar debug file (poll_detection path)
-            records = read_records(debug_path)
-            latency = detection_latency(records, scenario.mitre, emitter.resource_id, attack_time)
-            if latency is not None:
-                result_event = "detection"
-                break
-            if has_timeout(records):
-                result_event = "detection_timeout"
-                break
-            # 2. RulePoller watch-* files (different run_id, same TTP + resource)
-            latency = self._check_watch_files(scenario.mitre, emitter.resource_id, attack_time)
-            if latency is not None:
-                result_event = "detection"
-                break
-            # 3. The return channel: the hosted watch's detections of this run's window
-            latency = self._channel_latency(run_id, scenario.mitre, emitter.resource_id,
-                                            attack_time) if channel else None
+            # The return channel: the hosted watch's detections of this run's window
+            latency = self._channel_latency(run_id, scenario.mitre, emitter.resource_id, attack_time)
             if latency is not None:
                 result_event = "detection"
                 break
             time.sleep(poll_interval)
 
-        if result_event is None and channel and not _local_watch():
-            # Only the hosted watch could have seen it: its silence is a miss only if a
-            # heartbeat vouches for the whole wait.
+        if result_event is None:
+            # Only the watch could have seen it: its silence is a miss only if a heartbeat
+            # vouches for the whole wait — the storage channel's, else the local one's.
             result_event, latency, why = self._settle_through_channel(
                 run_id, scenario.mitre, emitter.resource_id, attack_time)
             if result_event is None:
@@ -784,16 +775,10 @@ class Engine:
                 stop_event.set()
             return
 
-        if result_event == "detection_timeout":
-            console.print(
-                "[yellow]⚠ Detection timeout — emitting detection_missed "
-                "so Glorfindel can propose an improved rule.[/yellow]"
-            )
-        else:
-            console.print(
-                "[dim]No Glorfindel response observed. "
-                "Is 'glorfindel watch' running? Emitting detection_missed anyway.[/dim]"
-            )
+        console.print(
+            "[yellow]⚠ Detection timeout — emitting detection_missed "
+            "so Glorfindel can propose an improved rule.[/yellow]"
+        )
 
         self._detection_result = "missed"  # timeout or no detection in window
         det = scenario.detection or {}
@@ -856,31 +841,3 @@ class Engine:
             if not transient or time.time() >= give_up:
                 return None, None, why
             time.sleep(watch_channel.TICK_S)
-
-    @staticmethod
-    def _check_watch_files(
-        ttp: str,
-        resource_id: str,
-        attack_time: float,
-        runs_dir: Path | None = None,
-    ) -> float | None:
-        """Scan runs/watch-*_debug.jsonl for a RulePoller detection of this run.
-
-        Returns the latency (seconds from ``attack_time``) of the earliest detection of
-        ``ttp`` on ``resource_id`` (compared without case) seen at or after the attack, else
-        None. Catches the case where RulePoller detects before poll_detection runs — the
-        watch file has a different run_id than the Annatar run. A file last written well
-        before the attack holds no detection of it and is not read (a slack: the file
-        system's clock is coarser than time.time(); the records' own times decide).
-        """
-        base = runs_dir if runs_dir is not None else Path("runs")
-        try:
-            candidates = [
-                f for f in base.glob("watch-*_debug.jsonl")
-                if f.stat().st_mtime >= attack_time - _MTIME_SLACK_S
-            ]
-        except OSError:
-            return None
-        found = [lat for lat in (detection_latency(read_records(path), ttp, resource_id, attack_time)
-                                 for path in candidates) if lat is not None]
-        return min(found) if found else None

@@ -110,7 +110,7 @@ def noise(bench, tmp_path):  # noqa: F811  (the imported fixture)
     def engine(**kw):
         factory = lambda session: ChaosStudio(session, credential=Cred(), http=state["world"],  # noqa: E731
                                               subscription_id=SUB)
-        return Engine(bench_factory=factory, runs_dir=tmp_path / "runs", sleep=clock.sleep,
+        return Engine(bench_factory=factory, runs_dir=tmp_path / "runs" / "gothmog", sleep=clock.sleep,
                       now=clock.now, **kw)
     return clock, make, engine
 

@@ -1,7 +1,7 @@
 """The five indicators of the finality (ROADMAP, « Vers la 1.0 »), shown on the console's overview.
 
-Computed from what this host keeps: the run reports (``runs/<id>.json``, under a published
-campaign too), the watch's cycles (``runs/*_debug.jsonl``), the cards (their verdicts) and the
+Computed from what this host keeps: the run reports (``runs/<writer>/<id>.json``, under a published
+campaign too — SEC18), the watch's cycles (``runs/glorfindel/*_debug.jsonl``), the cards (their verdicts) and the
 catalog — never from the exercise windows, emptied 7 days after they end (H-1), so 30 days hold.
 Nothing is invented: what cannot be measured is ``None``, and the page says why.
 

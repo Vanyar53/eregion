@@ -1,8 +1,9 @@
 """Where a signal comes from, and what the defender takes from there (SEC3, #274).
 
-`runs/` is written by the injectors (Annatar, Gothmog) as well as by Glorfindel: whoever can
-write there can write any line. The watch takes from `runs/*_signals.jsonl` only what an
-injector emits (the inventory of annatar/runner/engine.py; Gothmog writes `runs/gothmog/`,
+`runs/` is written by the injectors (Annatar, Gothmog) as well as by Glorfindel, each in its own
+directory (SEC18): whoever can write Annatar's can write any line there. The watch takes from
+`runs/annatar/*_signals.jsonl` only what an injector emits (the inventory of
+annatar/runner/engine.py; Gothmog writes `runs/gothmog/`,
 which the watch does not read), each for what it is:
 
   attack_started    "look": the watch runs ITS detection rule for the line's technique. From
@@ -44,6 +45,8 @@ import logging
 import re
 import threading
 from pathlib import Path
+
+from eregion_core import runs_layout
 
 log = logging.getLogger(__name__)
 
@@ -346,7 +349,11 @@ def _tail_lines(path: Path, limit: int | None = None) -> list[str]:
     return lines[1:] if size > limit else lines
 
 
-def attack_moment(resource_id: str, runs_dir="runs", isolated_at: float | None = None,
+# SEC18: where an injector's attack_started is read — Annatar's own directory, never elsewhere.
+SIGNALS_DIR = runs_layout.dir_of(runs_layout.ANNATAR)
+
+
+def attack_moment(resource_id: str, runs_dir=SIGNALS_DIR, isolated_at: float | None = None,
                   run_id: str = "", not_after: float | None = None):
     """When the attack on `resource_id` began, as the runs/ channel admits it (SEC4c):
     `(epoch, file name)`, or None when nothing says so.

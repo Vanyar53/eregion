@@ -144,7 +144,8 @@ def test_an_instances_drill_lays_again_on_its_vms(client):
 def test_a_shipped_drill_lays_its_wires_without_a_vm_with_their_candidates_and_a_hint(client, tmp_path):
     """Jonathan, 03/11: a selector's wire takes no VM by itself — its zone's candidates, and when
     each last ran the technique here (a hint, never a choice)."""
-    (tmp_path / "runs" / "run-old.json").write_text(json.dumps({
+    (tmp_path / "runs" / "annatar").mkdir(exist_ok=True)   # SEC18: Annatar's own directory
+    (tmp_path / "runs" / "annatar" / "run-old.json").write_text(json.dumps({
         "scenario": "acct", "run_id": "run-old", "mitre": "T1136.001", "result": "PASS",
         "metrics": {"run_format": 1, "kind": "technique", "injector": "annatar", "experiment_id": "T1136.001",
                     "attack_time": 1_700_000_000.0, "detection": "detected", "resource_id": RIVENDELL}}))
@@ -210,7 +211,8 @@ def test_a_name_two_enrolled_vms_bear_is_never_kept(twinned):
 
 def test_a_drill_whose_name_two_vms_bear_lays_it_to_place_never_on_one_unsaid(twinned, tmp_path):
     dr.save(dr.new("mine", [("T1136.001", "vm-celebrimbor-gondolin")]))
-    (tmp_path / "runs" / "run-t.json").write_text(json.dumps({
+    (tmp_path / "runs" / "annatar").mkdir(exist_ok=True)   # SEC18: Annatar's own directory
+    (tmp_path / "runs" / "annatar" / "run-t.json").write_text(json.dumps({
         "scenario": "acct", "run_id": "run-t", "mitre": "T1136.001", "result": "PASS",
         "metrics": {"run_format": 1, "kind": "technique", "injector": "annatar", "experiment_id": "T1136.001",
                     "attack_time": 1_700_000_000.0, "detection": "detected", "resource_id": TWIN_GONDOLIN}}))

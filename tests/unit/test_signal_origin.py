@@ -132,7 +132,7 @@ with open(sys.argv[1], "a") as f:
 def _run_watch(tmp_path, monkeypatch, lines, expect, prepare=None, slow_respond=0.0, slow_poll=0.0):
     """The watch (dry-run) on tmp_path/runs, HOME in tmp_path; `lines` appended by ANOTHER
     process once it runs. Returns (what reached respond, what the poll was asked, output).
-    `prepare(runs)`: what runs/ holds before the watch starts; `slow_respond`, `slow_poll`:
+    `prepare(signals)`: what runs/annatar/ holds before the watch starts; `slow_respond`, `slow_poll`:
     how long a decision, a search take (SEC8)."""
     from click.testing import CliRunner
 
@@ -142,9 +142,10 @@ def _run_watch(tmp_path, monkeypatch, lines, expect, prepare=None, slow_respond=
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(cli, "_INJECTORS_DIR", home / ".glorfindel" / "injectors")
     runs = tmp_path / "runs"
-    runs.mkdir()
+    signals = runs / "annatar"     # SEC18: an injector's signals, in Annatar's own directory
+    signals.mkdir(parents=True)
     if prepare is not None:
-        prepare(runs)
+        prepare(signals)
     responded: list[dict] = []
     polled: list[dict] = []
 
@@ -189,7 +190,7 @@ def _run_watch(tmp_path, monkeypatch, lines, expect, prepare=None, slow_respond=
             beat_seen.append(beat.is_file() and stat.S_IMODE(beat.stat().st_mode) == 0o644)
             inside[0] = True
             try:
-                subprocess.run([sys.executable, "-c", _FORGER, str(runs / "forged_signals.jsonl"),
+                subprocess.run([sys.executable, "-c", _FORGER, str(signals / "forged_signals.jsonl"),
                                 json.dumps(lines)], check=True, timeout=60)
             finally:
                 inside[0] = False

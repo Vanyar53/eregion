@@ -1,12 +1,13 @@
 """Gothmog's signals — ``fault_started``, ``fault_ended``, ``steady_state_restored``,
 ``revert_failed`` — in the shape of the injectors' signal (``eregion_core/signals.py``), but in a file
-Glorfindel's watch does not read: ``runs/gothmog/<run_id>_signals.jsonl``.
+Glorfindel's watch does not read: ``runs/gothmog/<run_id>_signals.jsonl``, Gothmog's own directory
+(SEC18, eregion_core/runs_layout.py).
 
-The watch sends every event of ``runs/*_signals.jsonl`` but ``attack_started`` straight to
+The watch sends every event of ``runs/annatar/*_signals.jsonl`` but ``attack_started`` straight to
 its decision graph (``glorfindel/cli.py``, ``_dispatch``): a ``fault_started`` there would
-start a decision cycle on the declaration itself, on any host where the watch shares
-``runs/``. Glorfindel learns of a fault by its exercise window (``kind: fault``) and by its
-own telemetry — what a real outage would give it.
+start a decision cycle on the declaration itself. Glorfindel learns of a fault by its exercise
+window (``kind: fault``) and by its own telemetry — what a real outage would give it. Written as
+every writer writes ``runs/`` (SEC16): one whole line, never through a link.
 """
 from __future__ import annotations
 
@@ -14,16 +15,19 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-SIGNALS_SUBDIR = "gothmog"
+from eregion_core import channel_reader, runs_layout
+
+SIGNALS_SUBDIR = runs_layout.GOTHMOG
 
 
 class SignalEmitter:
     def __init__(self, run_id: str, fault_id: str, targets: list[str],
-                 runs_dir: str | Path = "runs"):
+                 runs_dir: str | Path | None = None):
         self.run_id = run_id
         self.fault_id = fault_id
         self.targets = list(targets)
-        self.path = Path(runs_dir) / SIGNALS_SUBDIR / f"{run_id}_signals.jsonl"
+        runs_dir = runs_layout.dir_of(runs_layout.GOTHMOG) if runs_dir is None else runs_dir
+        self.path = Path(runs_dir) / f"{run_id}_signals.jsonl"
 
     def emit(self, event: str, raw_signal: dict | None = None, metrics: dict | None = None) -> dict:
         signal = {
@@ -40,6 +44,5 @@ class SignalEmitter:
                         "targets": self.targets, **(metrics or {})},
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(signal) + "\n")
+        channel_reader.append_line(self.path, json.dumps(signal))
         return signal

@@ -24,9 +24,10 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get update -q
+# Le verrou de dpkg attendu (les mises à jour automatiques le tiennent parfois au démarrage).
+apt-get -o DPkg::Lock::Timeout=300 update -q
 # auditd, et audispd-plugins qui porte audisp-syslog sous Ubuntu 22.04 (hypothèse A1).
-apt-get install -y -q auditd audispd-plugins
+apt-get -o DPkg::Lock::Timeout=300 install -y -q auditd audispd-plugins
 
 RULES=/etc/audit/rules.d/50-eregion-aud1.rules
 cat > "$RULES" <<'EOF'

@@ -384,15 +384,26 @@ def _real_dir(path: Path) -> bool:
         return False
 
 
+def pull_root(directory) -> str:
+    """The directory a pull writes into, made as before (``makedirs``) when absent — refused when
+    it is there and no real directory (a link): "" when it holds, else why (SEC18)."""
+    directory = Path(directory)
+    if os.path.lexists(directory):
+        return "" if _real_dir(directory) else f"{directory} n'est pas un répertoire (un lien ?) : jamais traversé"
+    try:
+        os.makedirs(directory)
+    except FileExistsError:
+        pass
+    return "" if _real_dir(directory) else f"{directory} n'est pas un répertoire (un lien ?) : jamais traversé"
+
+
 def parents_hold(root: Path, dst: Path) -> str:
-    """Make ``dst``'s parents under ``root`` (``root`` too), each a real directory — "" when they
-    are, else why: a link (or anything else) in the way is never created through nor crossed."""
+    """Make ``dst``'s parents under ``root``, each a real directory — "" when they are, else why:
+    a link (or anything else) in the way is never created through nor crossed. ``root`` itself is
+    never made: absent, nothing is written (a writer's directory is made by the deployment)."""
     root = Path(root)
     if not os.path.lexists(root):
-        try:
-            os.makedirs(root)
-        except FileExistsError:
-            pass
+        return f"{root} absent : rien n'est écrit (make runs-migrate le crée)"
     if not _real_dir(root):
         return f"{root} n'est pas un répertoire (un lien ?) : jamais traversé"
     d = root

@@ -789,6 +789,8 @@ def test_the_watch_lists_the_private_ips_once_for_its_attack_lines(tmp_path, mon
     monkeypatch.setattr(cli, "_INJECTORS_DIR", home / ".glorfindel" / "injectors")
     runs = tmp_path / "runs"
     (runs / "annatar").mkdir(parents=True)   # SEC18: the signals in Annatar's own directory
+    # Not this test's: the local channel of verdicts (its thread would outlive the test).
+    monkeypatch.setattr("eregion_core.watch_channel.start_local", lambda *a, **k: None)
     listed, polled = [], []
 
     class _Connector:

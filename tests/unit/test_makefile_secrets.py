@@ -124,9 +124,18 @@ def test_a_secret_passed_by_name_is_not(line):
 def _docker_calls(tmp_path, target, secrets):
     log = tmp_path / "docker.log"
     log.write_text("")
-    proc = subprocess.run(["make", "--no-print-directory", target], cwd=ROOT,
-                          env=_env(tmp_path, secrets), capture_output=True, text=True, timeout=120)
+    # Run for real: the target makes runs/<writer> before docker (SEC18, RUNS_DIRS) — in tmp,
+    # never in the repository (the Makefile read from it, the working directory a copy's).
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    for name in ("annatar", "glorfindel", "scripts"):
+        if not (work / name).is_symlink():
+            (work / name).symlink_to(ROOT / name)
+    proc = subprocess.run(["make", "--no-print-directory", "-f", str(ROOT / "Makefile"), target], cwd=work,
+                          env={**_env(tmp_path, secrets), "PWD": str(work)}, capture_output=True, text=True,
+                          timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (work / "runs" / "annatar").is_dir() and not (work / "annatar" / "runs").exists()
     lines = log.read_text().splitlines()
     runs = [(argv, env) for argv, env in zip(lines[::2], lines[1::2]) if " run " in f"{argv} "]
     assert runs, lines

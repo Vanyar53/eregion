@@ -9407,7 +9407,8 @@ MUTANTS += [
      '                return watch_channel.recent(watch_channel._when(watch_channel.local_heartbeat().get("at")), now)\n',
      "                return False\n"),
     ("M3329", "the local channel written beside the storage one (SEC18)", WCH,
-     "    if channel_url():\n        return None\n    publisher = LocalVerdicts(", "    publisher = LocalVerdicts("),
+     "    if channel_url():\n        return None\n    directory = Path(directory or local_dir())\n",
+     "    directory = Path(directory or local_dir())\n"),
 ]
 TESTS.update({**{f"M{n}": _VERDICTS for n in range(3321, 3330)}, "M3320": _SEC18_MOUNTS})
 

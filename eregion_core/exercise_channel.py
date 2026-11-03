@@ -390,7 +390,8 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
         return 0
     headers = auth_headers(credential, url)   # the URL refused first, before any directory
     from eregion_core import runs_layout
-    if why := runs_layout.parents_hold(Path(directory), Path(directory) / "w.json"):   # SEC18
+    # SEC18: never through a link — its directory, and what is below.
+    if why := runs_layout.pull_root(directory) or runs_layout.parents_hold(Path(directory), Path(directory) / "w.json"):
         raise RuntimeError(f"windows not pulled: {why}")
     written: list[str] = []
     try:
@@ -727,7 +728,7 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
             failed.add(m["cid"])
             continue
         from eregion_core import runs_layout
-        if runs_layout.parents_hold(Path(directory), local):   # SEC18: never through a link
+        if runs_layout.pull_root(directory) or runs_layout.parents_hold(Path(directory), local):   # SEC18
             failed.add(m["cid"])
             continue
         tmp = local.with_suffix(".json.tmp")
@@ -798,7 +799,7 @@ def pull_runs(directory: Path, *, refusal, channel: str | None = None, credentia
             skipped[rid] = f"refused: {why}"
             continue
         from eregion_core import runs_layout
-        if why := runs_layout.parents_hold(directory, mark):   # SEC18: never through a link
+        if why := runs_layout.pull_root(directory) or runs_layout.parents_hold(directory, mark):   # SEC18
             skipped[rid] = f"refused: {why}"
             continue
         mark.touch()  # the marker first: cut before the file, the next pull still writes it
@@ -899,7 +900,7 @@ def pull_orodruin(directory: Path, *, channel: str | None = None, credential=Non
             skipped[name] = f"refused: {why}"
             continue
         from eregion_core import runs_layout
-        if why := runs_layout.parents_hold(directory, local):   # SEC18: never through a link
+        if why := runs_layout.pull_root(directory) or runs_layout.parents_hold(directory, local):   # SEC18
             skipped[name] = f"refused: {why}"
             continue
         tmp = local.with_suffix(".json.tmp")

@@ -479,6 +479,8 @@ class LocalVerdicts(Publisher):
     ``attack_started`` (``note_poll``): on a workstation, the first way the watch detects a run."""
 
     def __init__(self, directory: Path, **kw):
+        # Its windows read without the pull: the local channel exists only without a storage one.
+        kw.setdefault("windows", lambda: load_windows(pull=False))
         super().__init__(str(directory), **kw)
         self.directory = Path(directory)
         source_windows = self._windows
@@ -528,7 +530,11 @@ def start_local(directory: Path | None = None, *, interval: float = TICK_S) -> L
     priority; None with one. A failure never reaches the watch."""
     if channel_url():
         return None
-    publisher = LocalVerdicts(Path(directory or local_dir()))
+    directory = Path(directory or local_dir())
+    if not os.path.lexists(directory) and os.path.isdir(directory.parent) \
+            and not os.path.islink(directory.parent):
+        directory.mkdir()   # its own directory, under a runs/ that is there — never a runs/ made
+    publisher = LocalVerdicts(directory)
     publisher.stopped = threading.Event()   # set: the thread ends (the tests)
 
     def loop() -> None:

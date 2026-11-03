@@ -377,7 +377,7 @@ def observe(now: datetime | None = None) -> list[dict]:
 
 
 def load_windows(directory: Path | None = None, *, now: datetime | None = None,
-                 seen: Path | None = None) -> list[dict]:
+                 seen: Path | None = None, pull: bool = True) -> list[dict]:
     """Every window believed (``window_refusal``, declared at its file's mtime); a
     malformed or refused file is skipped — said once, never fatal — and a window whose last
     moment is PURGE_AFTER_S old is purged (``_purge``). The default directory is refreshed
@@ -388,7 +388,8 @@ def load_windows(directory: Path | None = None, *, now: datetime | None = None,
     own, where the pull writes — the only one where a window is purged."""
     if directory is None:
         from eregion_core import exercise_channel
-        exercise_channel.pull_if_due(exercises_dir())
+        if pull:   # the local channel of verdicts reads without pulling (no storage channel there)
+            exercise_channel.pull_if_due(exercises_dir())
         seen = seen if seen is not None else seen_path()
     own = directory or exercises_dir()
     dirs = [d for d in ([directory] if directory is not None else windows_dirs()) if d.is_dir()]

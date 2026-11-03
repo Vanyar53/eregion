@@ -97,6 +97,7 @@ sans changement de texte, un module par préoccupation, aucun au-delà de 430 li
 | `perimeter.py` | le blocage de périmètre d'une entrée fusionnée : où il tient une carte, lequel une autre VM enregistre (RB1) |
 | `backup.py`, `restore.py` | points de restauration, statut d'un job de restauration, restauration |
 | `sweep.py`, `readers.py` | `reset` et règles orphelines ; droits, inventaire NSG, lectures de l'audit |
+| `narrow.py` | une règle orpheline réduite aux adresses des VM que Glorfindel tient, quand elle coupe aussi une VM qu'il ne tient pas (U1G) |
 | `turned.py` | nos règles retournées en autorisation (`_TURNED_NAMES`), et les refus qu'elles attendent derrière (I5Q) ; la garde de chaque retrait par son nom (`_held_by_turned`), qui lit aussi une ancienne version retournée sous son nom (`_OLDER_NAMES`, I4G) |
 | `sdk.py`, `capabilities.py`, `monitor.py` | préchauffage du SDK ; capacités déclarées ; Log Analytics |
 | `activity.py` | le journal d'activité (`AzureActivity`, AL1) : les écritures de Glorfindel écartées (son identité et ses opérations déclarées), ses règles marquées |

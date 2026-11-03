@@ -2674,9 +2674,9 @@ MUTANTS += [
     ("M1228", "an earlier version's state left readable by all (SEC3, V-27)", STA,
      "        _owner_only(directory)\n", ""),
     ("M1229", "Gothmog's container mounts the whole of ~/.glorfindel again (SEC3, N-05)", "docker-compose.yml",
-     "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "/app/runs/verdicts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n",
-     "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "/app/runs/verdicts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
     ("M1230", "the watch writes no heartbeat where the injectors read it: every run refused (SEC3, N-05)",
      GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
@@ -2739,9 +2739,10 @@ MUTANTS += [
     ("M802", "a listed crossing allowed at module level: the component imports the other on load (D1)",
      "scripts/component_check.py", "((rel, pkg) in CROSSINGS and not at_top)", "((rel, pkg) in CROSSINGS)"),
     ("M803", "Annatar's compose service no longer starts Glorfindel's watch (D1, V1)", "docker-compose.yml",
-     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"
-     "    depends_on:\n      - watch\n",
-     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"),
+     "      - ./scripts:/app/scripts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n    depends_on:\n      - watch\n",
+     "      - ./scripts:/app/scripts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"),
     ("M804", "Gothmog's compose service may write Glorfindel's state (D1)", "docker-compose.yml",
      "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
      "\n  # D1 : Gothmog",
@@ -2776,14 +2777,13 @@ MUTANTS += [
      "scripts/mutation_check.py",
      "COMPONENT_ABSENT not in line:\n            return line.strip()",
      "COMPONENT_ABSENT not in stdout:\n            return line.strip()"),
-    ("M849", "make profile-detection leaves ~/.annatar to docker: created as root (D1)", MAKE,
-     "profile-detection: glorfindel-start build-annatar\n\t@mkdir -p $(HOME)/.annatar\n",
-     "profile-detection: glorfindel-start build-annatar\n"),
     ("M870", "without Annatar, the reports' thread starts and fails every pass, never said at start (D1)",
      "glorfindel/cli.py", "        from analysis import campaign_report  # noqa: F401\n", ""),
 ]
 TESTS.update({f"M{n}": D1_COMPONENTS for n in range(845, 849)})
-TESTS["M849"] = D1_PROFILES
+# (M849, make profile-detection leaving ~/.annatar to docker, is gone with SEC20: no compose service
+# mounts ~/.annatar any more — its .bashrc is what make annatar-shell runs, M3407 —, so no profile
+# makes it; test_profiles.py still asks a profile to make every directory of $HOME its services mount.)
 TESTS["M870"] = "tests/unit/test_hosted_report.py"
 
 # HY1: no test writes in the repository (the conftest's guard), the quarantine locks' test on
@@ -9911,6 +9911,41 @@ MUTANTS += [
 ]
 TESTS.update({mid: _MAK_SEQ for mid in ("M3420", "M3421", "M3423")})
 TESTS["M3422"] = "tests/unit/test_reassert.py"
+
+
+# SEC20 (#467): the red never writes what the operator runs — no red container mounts read-write a
+# directory of code, scripts or configuration, nor what holds one, nor the .bashrc a red shell runs.
+# M3400–M3409.
+_SEC20 = "tests/unit/test_red_mounts.py"
+MUTANTS += [
+    ("M3400", "Annatar's compose service writes scripts/, which the operator runs (SEC20)", "docker-compose.yml",
+     "      - ./scripts:/app/scripts:ro\n", "      - ./scripts:/app/scripts\n"),
+    ("M3401", "Annatar's compose service writes its scenarios (SEC20)", "docker-compose.yml",
+     "      - ./annatar/scenarios:/app/annatar/scenarios:ro\n", "      - ./annatar/scenarios:/app/annatar/scenarios\n"),
+    ("M3402", "Annatar by hand (ANNATAR_VOLS) writes scripts/ (SEC20)", MAKE,
+     "\t-v $(PWD)/scripts:/app/scripts:ro \\\n", "\t-v $(PWD)/scripts:/app/scripts \\\n"),
+    ("M3403", "Annatar by hand (ANNATAR_VOLS) writes its scenarios (SEC20)", MAKE,
+     "\t-v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro \\\n",
+     "\t-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \\\n"),
+    ("M3404", "make annatar-validate writes the scenarios (SEC20)", MAKE,
+     "/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) validate",
+     "/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) validate"),
+    ("M3405", "make annatar-list writes the scenarios (SEC20)", MAKE,
+     "/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) list",
+     "/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list"),
+    ("M3406", "Annatar's shell writes the .bashrc it runs at its start (SEC20)", MAKE,
+     "\t-v $(HOME)/.annatar:/root/.annatar \\\n\t-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro\n",
+     "\t-v $(HOME)/.annatar:/root/.annatar\n"),
+    ("M3407", "Annatar's compose service mounts ~/.annatar again: the shell's .bashrc written by the red (SEC20)",
+     "docker-compose.yml", "      - ./scripts:/app/scripts:ro\n",
+     "      - ./scripts:/app/scripts:ro\n      - ${HOME}/.annatar:/root/.annatar\n"),
+    ("M3408", "the launcher of a request on Orodruin writes the requests it judges (SEC20)", MAKE,
+     "-v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)", "-v $$HOME/requests:/app/requests $(ORO_IMAGE)"),
+    ("M3409", "Orodruin's migration mounts its home whole: orodruin.env writable by the red (SEC20)", MAKE,
+     "-v $$HOME/runs:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate",
+     "-v $$HOME:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in range(3400, 3410)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

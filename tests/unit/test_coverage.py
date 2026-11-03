@@ -54,8 +54,9 @@ def runs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     api._cycle_cache.clear()
     api._matrix_cache.update(key=None, at=0.0, value=None)
-    d = tmp_path / "runs"
-    d.mkdir()
+    d = tmp_path / "runs" / "glorfindel"   # SEC18: the watch's own directory (H0: pulled there too)
+    d.mkdir(parents=True)
+    (d.parent / "console").mkdir()
     return d
 
 
@@ -552,7 +553,7 @@ def test_the_caches_forget_a_deleted_file(runs):
     _proven(runs, "r1", "T1110.001", 3)
     api.coverage_matrix()
     report = (runs / "r1.json").absolute()
-    debug = Path("runs") / "watch-1_debug.jsonl"
+    debug = Path("runs") / "glorfindel" / "watch-1_debug.jsonl"
     assert report in rr._report_cache and debug in api._cycle_cache
     (runs / "r1.json").unlink()
     (runs / "watch-1_debug.jsonl").unlink()

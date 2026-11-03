@@ -1,7 +1,8 @@
 """BL1 (#280) — the two indicators of the finality the bench had never filled: the time to
 contain and the share contained alone, computed by the code from a campaign's traces.
 
-    python -m analysis.containment runs/campaigns/<campaign_id> [--fault-run <run_id> …] [--json]
+    python -m analysis.containment runs/<writer>/campaigns/<campaign_id> [--fault-run <run_id> …] [--json]
+    (``runs/glorfindel/campaigns`` on H0, ``runs/annatar/campaigns`` here — SEC18)
 
 Definitions (docs/analysis.md, « Temps pour contenir et part contenue seule ») :
 
@@ -56,7 +57,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from eregion_core import channel_reader, run_report
+from eregion_core import channel_reader, run_report, runs_layout
 from eregion_core.run_report import CONTAINING as DISRUPTIVE   # C1: one list of what contains
 
 # The exercise window's grace (eregion_core/exercise.py GRACE_AFTER_S): how long after the
@@ -637,10 +638,12 @@ def read_cards(path: Path | None = None) -> list[dict]:
 
 def read_liftings(runs_dir: Path, since: float = 0.0) -> list[tuple]:
     """When containments were lifted, from the files: the operator's manual actions
-    (``runs/manual_actions.jsonl``), the watch's own releases (the debug files of ``runs/``
-    written since ``since``, a minute of slack) — ``(resource id, epoch, what it lifts)``."""
+    (``runs/console/manual_actions.jsonl``), the watch's own releases (the debug files of
+    ``runs/glorfindel/`` written since ``since``, a minute of slack) — ``(resource id, epoch, what
+    it lifts)``. Each from its writer's directory beside ``runs_dir`` (SEC18)."""
     out = []
-    paths = [Path(runs_dir) / "manual_actions.jsonl", *sorted(Path(runs_dir).glob("*_debug.jsonl"))]
+    watch = runs_layout.beside(runs_dir, runs_layout.GLORFINDEL)
+    paths = [runs_layout.beside(runs_dir, runs_layout.CONSOLE) / "manual_actions.jsonl", *sorted(watch.glob("*_debug.jsonl"))]
     for path in paths:
         try:   # SEC16: as the watch reads runs/ — a regular file, bounded, never blocking
             if channel_reader.lstat_regular(path).st_mtime < since - 60:
@@ -659,15 +662,18 @@ def read_liftings(runs_dir: Path, since: float = 0.0) -> list[tuple]:
 
 
 def _gothmog_reports(runs_dir: Path) -> dict[str, dict]:
+    """The fault runs' reports: in the campaign's runs directory (the watch's copy on H0), and in
+    Gothmog's own directory beside it (SEC18) — each kept only where its writer may write it."""
     out = {}
-    for path in sorted(Path(runs_dir).glob("*.json")):
+    dirs = dict.fromkeys([Path(runs_dir), runs_layout.beside(runs_dir, runs_layout.GOTHMOG)])
+    for path in [p for d in dirs for p in sorted(d.glob("*.json"))]:
         try:
             r = channel_reader.read_json(path)   # SEC16
         except (OSError, ValueError):
             continue
         if isinstance(r, dict) and isinstance(r.get("metrics"), dict) \
-                and run_report.kind_of(r) == "fault":       # C1's word, else Gothmog's
-            out[str(r.get("run_id") or path.stem)] = r
+                and run_report.kind_of(r) == "fault" and not runs_layout.report_refusal(path, r):
+            out[str(r.get("run_id") or path.stem)] = r       # C1's word, else Gothmog's
     return out
 
 
@@ -743,7 +749,7 @@ def own_records(runs_dir: Path) -> list[dict]:
     ``watch-*`` files aside."""
     from analysis import campaign_report as cr
     out = []
-    for path in sorted(Path(runs_dir).glob("*_debug.jsonl")):
+    for path in sorted(cr.watch_dir(runs_dir).glob("*_debug.jsonl")):   # SEC18: the watch's own
         if not path.name.startswith("watch-"):
             out += cr.read_records(path)
     return out
@@ -892,12 +898,11 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
     watch_records = cr._watch_files(runs_dir)
     channel = cr.from_channel(campaign_dir)
     incidents, taken, notes = [], set(), []
-    wdir = cr.windows_dir(runs_dir)
     own = own_records(runs_dir)
 
     def held_window(rid: str) -> dict | None:
         """The run's exercise window as this host holds it — believed, refused or purged."""
-        return cr._read_json(wdir / f"{rid}.json") or None
+        return cr._read_json(cr.window_path(runs_dir, rid)) or None   # SEC18: wherever it is held
 
     def window_of(rid: str) -> dict | None:
         """The run's exercise window, believed (H-1) — else None."""
@@ -913,7 +918,8 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
     # leaves out and for those the manifest does not give executed.
     span = campaign_interval(manifest, campaign_dir, runs_dir, notes)
     seen = {} if span is None else seen_runs(
-        [cr._read_json(p) for p in sorted(wdir.glob("*.json"))], watch_records(span[0]) + own,
+        [cr._read_json(p) for d in dict.fromkeys(p.parent for p in cr.window_paths(runs_dir, "x"))
+         for p in sorted(d.glob("*.json"))], watch_records(span[0]) + own,
         cards, *span)
 
     rows, left_out = [], []
@@ -925,7 +931,7 @@ def load(campaign_dir: Path, runs_dir: Path | None = None, *, fault_runs=(), car
             notes.append(f"run {rid} écarté : {why}")
             # Left out of the facts — but a run whose window this host holds, or that the watch
             # saw, stays an incident: unknown, never gone from the share (A0).
-            held = cr.safe_part(rid) and (wdir / f"{rid}.json").exists()
+            held = cr.safe_part(rid) and cr.window_path(runs_dir, rid).exists()
             if held or rid in seen:
                 how = " et ".join((seen.get(rid) or {}).get("how") or [_BY_WINDOW])
                 left_out.append(Incident(rid, str(s.get("ttp") or ""), str(s.get("target_resource_id") or ""),

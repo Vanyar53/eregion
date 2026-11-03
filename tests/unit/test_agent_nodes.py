@@ -733,7 +733,7 @@ def test_store_cycle_writes_debug_jsonl(tmp_path, monkeypatch, tmp_memory):
 
     store_cycle(_ready_state_for_store(), memory=tmp_memory)
 
-    debug_file = tmp_path / "runs" / "run001_debug.jsonl"
+    debug_file = tmp_path / "runs" / "glorfindel" / "run001_debug.jsonl"
     assert debug_file.exists()
     record = json.loads(debug_file.read_text())
     assert record["action"] == "isolate_vm"
@@ -748,7 +748,7 @@ def test_the_debug_line_says_real_traffic_or_an_exercise(tmp_path, monkeypatch, 
     from glorfindel.agent import store_cycle
     monkeypatch.chdir(tmp_path)
     (tmp_path / "runs").mkdir()
-    debug_file = tmp_path / "runs" / "run001_debug.jsonl"
+    debug_file = tmp_path / "runs" / "glorfindel" / "run001_debug.jsonl"
     for said in (("real", ""), ("exercise", "20261101T080000Z")):
         monkeypatch.setattr(agent_mod, "_cycle_source", lambda signal, said=said: said)
         store_cycle(_ready_state_for_store(), memory=tmp_memory)
@@ -764,7 +764,7 @@ def test_store_cycle_appends_on_multiple_calls(tmp_path, monkeypatch, tmp_memory
     store_cycle(_ready_state_for_store(), memory=tmp_memory)
     store_cycle(_ready_state_for_store(action="release_isolation"), memory=tmp_memory)
 
-    debug_file = tmp_path / "runs" / "run001_debug.jsonl"
+    debug_file = tmp_path / "runs" / "glorfindel" / "run001_debug.jsonl"
     lines = debug_file.read_text().strip().splitlines()
     assert len(lines) == 2
 
@@ -780,7 +780,7 @@ def test_store_cycle_no_jsonl_without_run_id(tmp_path, monkeypatch, tmp_memory):
 
     runs_dir = tmp_path / "runs"
     if runs_dir.exists():
-        assert list(runs_dir.glob("*_debug.jsonl")) == []
+        assert list(runs_dir.rglob("*_debug.jsonl")) == []
 
 
 def test_store_cycle_persists_to_memory(tmp_path, monkeypatch, tmp_memory):
@@ -1469,7 +1469,7 @@ def test_graph_read_only_write_blocked_escalates_not_silent(tmp_path, monkeypatc
     # cycle completed → stored, not silently aborted
     assert tmp_memory.count() == 1
     # debug file written
-    assert (tmp_path / "runs" / "run001_debug.jsonl").exists()
+    assert (tmp_path / "runs" / "glorfindel" / "run001_debug.jsonl").exists()
 
 
 def _azure_error(status_code: int, message: str):
@@ -1502,7 +1502,7 @@ def test_graph_azure_403_escalates_write_blocked(tmp_path, monkeypatch, tmp_memo
     assert final["outcome"]["status"] == "escalated"
     assert final["outcome"]["escalation_type"] == "write_blocked"
     assert tmp_memory.count() == 1
-    assert (tmp_path / "runs" / "run001_debug.jsonl").exists()
+    assert (tmp_path / "runs" / "glorfindel" / "run001_debug.jsonl").exists()
 
 
 def _graph_run(tmp_path, monkeypatch, tmp_memory, connector, action, event="detection",
@@ -1985,7 +1985,7 @@ def test_graph_llm_failure_records_cycle_failed_escalation_and_debug(tmp_path, m
     assert final["outcome"]["escalation_type"] == "cycle_failed"
     pending = escalations.pending()
     assert [e["escalation_type"] for e in pending] == ["cycle_failed"]
-    debug = (tmp_path / "runs" / "run001_debug.jsonl").read_text()
+    debug = (tmp_path / "runs" / "glorfindel" / "run001_debug.jsonl").read_text()
     assert "read timed out" in debug
     # The mode is resolved before the LLM call: the audit trail of a failed decision
     # names it too (it was empty — real run, 2026-10-05).
@@ -2148,7 +2148,7 @@ def test_respond_turns_an_unexpected_exception_into_cycle_failed(tmp_path, monke
 
     assert final["outcome"]["escalation_type"] == "cycle_failed"
     assert [e["escalation_type"] for e in escalations.pending()] == ["cycle_failed"]
-    assert "disk full" in (tmp_path / "runs" / "run001_debug.jsonl").read_text()
+    assert "disk full" in (tmp_path / "runs" / "glorfindel" / "run001_debug.jsonl").read_text()
 
 
 def test_cycle_failed_has_a_label():

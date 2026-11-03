@@ -237,7 +237,7 @@ def _without(tmp_path, monkeypatch, scenario, executor):
     with patch.object(Engine, "_get_executor_collector", return_value=(executor, None)), \
          patch.object(Engine, "_wait_and_emit_feedback", lambda *a, **k: waited.append(a)):
         res = CliRunner().invoke(cli, ["run", scenario, "--without-glorfindel", "--yes"])
-    reports = list((tmp_path / "runs").glob("2*Z.json"))
+    reports = list((tmp_path / "runs" / "annatar").glob("2*Z.json"))   # SEC18: Annatar's own directory
     return res, waited, json.loads(reports[0].read_text()) if reports else None
 
 
@@ -265,7 +265,7 @@ def test_a_run_with_glorfindel_says_nothing_of_it(tmp_path, monkeypatch):
     with patch.object(Engine, "_get_executor_collector", return_value=(_executor(), None)), \
          patch.object(Engine, "_wait_and_emit_feedback"):
         outcome = Engine().run(ATOMIC_YAML, skip_confirm=True)
-    m = json.loads((tmp_path / "runs" / f"{outcome.run_id}.json").read_text())["metrics"]
+    m = json.loads((tmp_path / "runs" / "annatar" / f"{outcome.run_id}.json").read_text())["metrics"]
     assert "without_glorfindel" not in m and "detection_note" not in m
 
 
@@ -292,7 +292,7 @@ def test_h0_pulls_the_report_of_a_run_without_glorfindel(real_gate, tmp_path, mo
     assert res.exit_code == 0, res.output
     rid = report["run_id"]
     assert f"runs/{rid}.json" in container.puts
-    h0 = tmp_path / "h0" / "runs"
+    h0 = tmp_path / "h0" / "runs" / "glorfindel"     # SEC18: the watch pulls into its own directory
     h0.mkdir(parents=True)
     pulled = channel.pull_runs(h0, refusal=run_report_refusal, channel=URL, credential=CRED,
                                get=container.get)
@@ -542,9 +542,10 @@ def test_the_console_counts_a_campaign_without_glorfindel_apart(tmp_path, monkey
     runs = tmp_path / "runs"
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for name, extra in (("C1", {"without_glorfindel": True}), ("C2", {})):
-        _done_manifest(runs / "campaigns" / name, **extra)
-        m = json.loads((runs / "campaigns" / name / "manifest.json").read_text())
-        (runs / "campaigns" / name / "manifest.json").write_text(json.dumps({**m, "created_at": now}))
+        cdir = runs / "annatar" / "campaigns" / name      # SEC18: Annatar's own directory
+        _done_manifest(cdir, **extra)
+        m = json.loads((cdir / "manifest.json").read_text())
+        (cdir / "manifest.json").write_text(json.dumps({**m, "created_at": now}))
     monkeypatch.setattr(api, "_RUNS", runs)
     got = {c["dir"]: c["without_glorfindel"] for c in asyncio.run(api.campaigns())["campaigns"]}
     assert got == {"C1": True, "C2": False}

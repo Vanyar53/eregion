@@ -49,7 +49,7 @@ from pathlib import Path
 
 from analysis import containment
 from analysis.containment import FaultRun
-from eregion_core import channel_reader, run_report
+from eregion_core import channel_reader, run_report, runs_layout
 
 NOT_STARTED = "rien n'a été injecté"
 NOT_SEEN = "son effet n'a pas été vu dans la télémétrie de Glorfindel : il ne mesure rien de sa réaction"
@@ -93,9 +93,10 @@ class Watch:
 
 def read_watch(runs_dir: Path, since: float = 0.0) -> Watch:
     """The watch's debug files (``watch-*_debug.jsonl``), each said read whole or not; a file
-    last written before ``since`` holds nothing of the period and is not read."""
+    last written before ``since`` holds nothing of the period and is not read. ``runs_dir``: the
+    runs root — the files are in the watch's own directory (SEC18)."""
     files, records = [], []
-    for path in sorted(Path(runs_dir).glob("watch-*_debug.jsonl")):
+    for path in sorted(runs_layout.dir_of(runs_layout.GLORFINDEL, runs_dir).glob("watch-*_debug.jsonl")):
         try:
             mtime = os.lstat(path).st_mtime   # SEC16: a link has no age here
         except OSError:
@@ -280,21 +281,25 @@ def rate(checked: list[FaultRun]) -> dict:
 
 
 def _reports(runs_dir: Path) -> dict[str, Path]:
-    """As the console finds them: ``runs/<run_id>.json``, else under its campaign."""
-    found = {p.stem: p for p in runs_dir.glob("campaigns/*/runs/*.json")}
-    found.update({p.stem: p for p in runs_dir.glob("*.json")})
-    return found
+    """As the console finds them, each in its writer's directory (SEC18): a run's own report,
+    else under its campaign."""
+    return runs_layout.run_reports(runs_dir)
 
 
 def _windows(runs_dir: Path, run_ids) -> dict[str, float]:
     """Each run's exercise window, its last moment, where it is still kept and believed (H-1:
     emptied a week after it ends)."""
-    from eregion_core.exercise import exercises_dir, last_moment, window_refusal
+    from eregion_core.exercise import last_moment, window_refusal, windows_dirs
     out = {}
     for rid in run_ids:
-        try:
-            window = channel_reader.read_json(exercises_dir(runs_dir) / f"{rid}.json")   # SEC16
-        except (OSError, ValueError):
+        window = None
+        for d in windows_dirs(runs_dir):   # SEC18: Gothmog's own, and the watch's (pulled)
+            try:
+                window = channel_reader.read_json(d / f"{rid}.json")   # SEC16
+                break
+            except (OSError, ValueError):
+                continue
+        if window is None:
             continue
         last = None if not isinstance(window, dict) or window_refusal(window) else last_moment(window)
         if last is not None:

@@ -115,7 +115,7 @@ def _h0(tmp_path, *, scenarios=None, watch=(), state="done", pulled=True, window
         attack=ATTACK.timestamp(), name="C1", start=T):
     """A campaign as H0 holds it once pulled: its manifest and its runs' reports under
     ``runs/campaigns/<id>/``, the runs' windows in ``runs/exercises/``, the watch's file."""
-    runs = tmp_path / "h0" / "runs"
+    runs = tmp_path / "h0" / "runs" / "glorfindel"   # SEC18: the watch's own directory
     cdir = runs / "campaigns" / name
     (cdir / "runs").mkdir(parents=True)
     scenarios = scenarios if scenarios is not None else [
@@ -486,7 +486,7 @@ def test_ready_takes_a_done_campaign_pulled_from_the_channel_with_its_runs(tmp_p
     campaign("F", scenarios=[_scen(1, "R1"), _scen(2, "R2", status="error")])  # R2: no report
     (campaign("G") / "manifest.json").write_text("{ half")
     campaign("H")
-    root = tmp_path / "h0" / "runs" / "campaigns"
+    root = tmp_path / "h0" / "runs" / "glorfindel" / "campaigns"     # SEC18: the watch's own directory
     assert [p.name for p in hr.ready(root, failed={"H"}, say=lambda m: None)] == ["A", "F"]
 
 
@@ -777,7 +777,7 @@ def _published(tmp_path, monkeypatch, *, watch=()):
         "campaign_id": "C1", "state": "done", "updated_at": _iso(T + timedelta(minutes=10)),
         "scenarios": [_scen(1, "R1"), _scen(2, "R2", detection="missed")]}))
     assert channel.publish_campaign(cdir, oro)[0] == "C1"
-    h0 = tmp_path / "h0" / "runs"
+    h0 = tmp_path / "h0" / "runs" / "glorfindel"   # SEC18: the watch's own directory, where it pulls
     h0.mkdir(parents=True)
     if watch:
         (h0 / "watch-account-creation-20261001T100300Z_debug.jsonl").write_text(

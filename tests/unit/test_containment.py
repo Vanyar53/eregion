@@ -253,13 +253,22 @@ def test_release_said_is_the_reassertions_own_words(bench):
 
 
 def test_read_liftings_reads_the_operator_and_the_watch(tmp_path):
-    (tmp_path / "manual_actions.jsonl").write_text(json.dumps(
+    """SEC18: the operator's gestures from the console's directory, the watch's releases from its
+    own — a gesture or a release written anywhere else is never read."""
+    console, watch = tmp_path / "console", tmp_path / "glorfindel"
+    console.mkdir()
+    watch.mkdir()
+    (console / "manual_actions.jsonl").write_text(json.dumps(
         {"timestamp": _iso(T0 + 200), "action": "reset", "signal": {"resource_id": VM},
          "outcome": {"status": "clean"}}) + "\n" + "not json\n")
-    (tmp_path / "restore-1_debug.jsonl").write_text(json.dumps(
+    (watch / "restore-1_debug.jsonl").write_text(json.dumps(
         {**_line("release_isolation", at=T0 + 400, status="released"),
          "signal": {"event": "recovery_complete", "resource_id": VM}}) + "\n")
-    assert sorted(t for _, t, _ in ct.read_liftings(tmp_path)) == [T0 + 200, T0 + 400]
+    (tmp_path / "annatar").mkdir()
+    for elsewhere in (watch / "manual_actions.jsonl", tmp_path / "annatar" / "x_debug.jsonl"):
+        elsewhere.write_text((console / "manual_actions.jsonl").read_text())
+    assert sorted(t for _, t, _ in ct.read_liftings(watch)) == [T0 + 200, T0 + 400]
+    assert sorted(t for _, t, _ in ct.read_liftings(tmp_path / "annatar")) == [T0 + 200, T0 + 400]
 
 
 # ── 4. The campaign's figures ─────────────────────────────────────────────────────────────
@@ -363,7 +372,7 @@ def test_one_decision_never_counts_for_two_incidents(tmp_path):
     detection — the earlier run has it; the later one's decision is unknown, said, never a
     second containment."""
     from eregion_core import exercise
-    runs = tmp_path / "runs"
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: a campaign pulled on H0
     cdir = runs / "campaigns" / "C1"
     cdir.mkdir(parents=True)
     now = datetime.now(timezone.utc)
@@ -402,7 +411,7 @@ def _channel_campaign(tmp_path):
     contained alone."""
     from eregion_core import exercise
     from eregion_core.exercise_channel import PULLED
-    runs = tmp_path / "runs"
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: a campaign pulled on H0
     cdir = runs / "campaigns" / "C1"
     (cdir / "runs").mkdir(parents=True)
     (cdir / PULLED).touch()
@@ -531,9 +540,9 @@ def bench(tmp_path, monkeypatch):
     conn._network, conn._compute = fake.network, fake.compute
     conn._subscription_id = "s"
     conn.recent_changes = lambda *a, **k: []
-    (tmp_path / "runs" / "campaigns" / "C1").mkdir(parents=True)
-    return {"fake": fake, "conn": conn, "vm": vm, "runs": tmp_path / "runs",
-            "cdir": tmp_path / "runs" / "campaigns" / "C1", "nsg": nsg}
+    (tmp_path / "runs" / "glorfindel" / "campaigns" / "C1").mkdir(parents=True)
+    return {"fake": fake, "conn": conn, "vm": vm, "runs": tmp_path / "runs" / "glorfindel", "root": tmp_path / "runs",
+            "cdir": tmp_path / "runs" / "glorfindel" / "campaigns" / "C1", "nsg": nsg}
 
 
 def _watch(conn, mode="non_disruptive"):
@@ -576,7 +585,7 @@ def _technique_run(b, rid, seq, detect=None):
     t0 = time.time()
     time.sleep(0.01)
     final = detect() if detect else None
-    exercise.close_window(rid)
+    exercise.close_window(rid, injector="annatar")
     (b["runs"] / f"{rid}.json").write_text(json.dumps({
         "scenario": "account-creation-atomic", "run_id": rid, "mitre": "T1136.001", "result": "PASS",
         "metrics": {"attack_time": t0, "detection": "detected" if detect else "missed",
@@ -612,7 +621,7 @@ def test_a_campaign_replayed_gives_both_indicators_and_the_fault_apart(bench):
     noise = _detect(agent, vm, action="isolate_vm", confidence=0.3)
     assert noise["outcome"]["executed"] is False
     f_end = datetime.now(timezone.utc)
-    exercise.close_window("gothmog-1")
+    exercise.close_window("gothmog-1", injector="gothmog")
     RunReport(scenario="VM shutdown", run_id="gothmog-1", mitre="", result="PASS",
               metrics={"injector": "gothmog", "fault": "vm-shutdown", "targets": [vm],
                        "fault_start": f_start.isoformat(), "fault_end": f_end.isoformat()},
@@ -667,7 +676,7 @@ def test_a_campaign_replayed_gives_both_indicators_and_the_fault_apart(bench):
     pytest.importorskip("httpx")
     import eregion_console.api as api
     from .console_client import console
-    monkeypatch_runs = patch.object(api, "_RUNS", b["runs"])
+    monkeypatch_runs = patch.object(api, "_RUNS", b["root"])
     with monkeypatch_runs:
         body = console().get("/api/campaigns/C1").json()
     s = body["containment"]["summary"]
@@ -692,7 +701,8 @@ def _sec9_window(rid, start, end=None, *, kind="technique", target=VM, request="
                          experiment="T1136.001 Create Account", targets=[target], destructive=False,
                          now=datetime.fromtimestamp(start, timezone.utc), request=request)
     if end is not None:
-        exercise.close_window(rid, now=datetime.fromtimestamp(end, timezone.utc))
+        exercise.close_window(rid, injector="annatar" if kind == "technique" else "gothmog",
+                              now=datetime.fromtimestamp(end, timezone.utc))
     path = exercise.exercises_dir() / f"{rid}.json"
     os.utime(path, (start, start))
     return path
@@ -716,7 +726,7 @@ def _sec9_campaign(tmp_path, runs, lines, *, cid="C1", written=WRITTEN, own_repo
     """A campaign as H0 holds it: its manifest (written at ``written``), each listed run's report
     under the campaign (``runs``: ``(run id, T0, status, detection)``), the watch's lines."""
     import os
-    root = tmp_path / "runs"
+    root = tmp_path / "runs" / "glorfindel"   # SEC18: a campaign pulled on H0, beside the cycles
     cdir = root / "campaigns" / cid
     (cdir / "runs").mkdir(parents=True, exist_ok=True)
     scenarios = []
@@ -797,7 +807,7 @@ def test_a_t0_without_its_window_is_not_timed(tmp_path):
     """M2845: no window on this host — the decision comes from the run's own debug file, the T0
     cannot be confronted: not timed, said."""
     cdir = _sec9_campaign(tmp_path, [("r1", T0, "executed", "detected")], [])
-    (tmp_path / "runs" / "r1_debug.jsonl").write_text(json.dumps(_line(seen=T0 + 60)) + "\n")
+    (tmp_path / "runs" / "glorfindel" / "r1_debug.jsonl").write_text(json.dumps(_line(seen=T0 + 60)) + "\n")
     (inc,) = ct.load(cdir, cards=[]).incidents
     assert inc.outcome == ct.CONTAINED and inc.time_to_contain_s is None
     assert "fenêtre d'exercice inconnue" in inc.t0_refused
@@ -922,8 +932,8 @@ def test_a_miss_the_watch_noted_is_counted_never_forgotten(tmp_path):
     own = _timeout("r3", T0 + 1500)
     own.pop("exercise_run")
     own["signal"]["context"] = {"run_id": "r3"}
-    (tmp_path / "runs").mkdir(exist_ok=True)
-    (tmp_path / "runs" / "r3_debug.jsonl").write_text(json.dumps(own) + "\n")
+    (tmp_path / "runs" / "glorfindel").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "runs" / "glorfindel" / "r3_debug.jsonl").write_text(json.dumps(own) + "\n")
     cdir = _sec9_campaign(tmp_path, [("r1", T0, "executed", "detected"), ("r2", T0 + 620, "error", "unknown")],
                           [_sec9_line("r1", seen=T0 + 120), _timeout("r2", T0 + 950)])
     c = ct.load(cdir, cards=[])
@@ -986,8 +996,8 @@ def test_a_report_cannot_move_its_t0_past_the_attack_time_the_watch_received(tmp
     got = _line(seen=T0, at=T0 + 625, verified_at=T0 + 620, ttp="T1486", signal_id="sig-poll")
     got["signal"].update(context={"run_id": "r1"},
                          raw_signal={"attack_time": T0, "detection_time_s": 600})
-    (tmp_path / "runs").mkdir(exist_ok=True)
-    (tmp_path / "runs" / "r1_debug.jsonl").write_text(json.dumps(got) + "\n")
+    (tmp_path / "runs" / "glorfindel").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "runs" / "glorfindel" / "r1_debug.jsonl").write_text(json.dumps(got) + "\n")
     cdir = _sec9_campaign(tmp_path, [("r1", T0 + 595, "executed", "detected")], [])
     (inc,) = ct.load(cdir, cards=[]).incidents
     assert inc.outcome == ct.CONTAINED and inc.time_to_contain_s is None

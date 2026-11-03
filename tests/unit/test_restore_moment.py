@@ -101,11 +101,12 @@ def test_the_console_proposes_the_exercise_s_moment_when_runs_gives_it(console, 
             "provider": "azure", "resource_id": VM, "resource_type": "vm", "ttp": "T1486", "severity": "high",
             "event": "attack_started", "raw_signal": {"attack_time": t0},
             "context": {"run_id": "20261029T100000Z", "scenario": "s"}}
-    (tmp_path / "runs" / "20261029T100000Z_signals.jsonl").write_text(json.dumps(line) + "\n")
+    (tmp_path / "runs" / "annatar").mkdir(exist_ok=True)     # SEC18: Annatar's own directory
+    (tmp_path / "runs" / "annatar" / "20261029T100000Z_signals.jsonl").write_text(json.dumps(line) + "\n")
     # An exercise card of that run (SEC8): the channel gives its moment.
     drill = _card(source="exercise", exercise_run="20261029T100000Z")
     d = console.get(f"/api/restore/plan/vm-example-01?escalation={drill}").json()
-    assert d["source"] == "exercise" and "attack_started de runs/20261029T100000Z_signals.jsonl" in d["why"]
+    assert d["source"] == "exercise" and "attack_started de runs/annatar/20261029T100000Z_signals.jsonl" in d["why"]
     escalations.resolve(drill)
     # A real card: the same line gives nothing — the card's first detection, and it is said.
     d = console.get(f"/api/restore/plan/vm-example-01?escalation={_card()}").json()
@@ -434,7 +435,7 @@ def test_the_bot_answers_within_discord_s_three_seconds(monkeypatch):
     bot = pytest.importorskip("glorfindel.bot")
     real = restore_plan.proposed_moment
 
-    def slow(rid, esc=None, runs_dir="runs", read_runs=True):
+    def slow(rid, esc=None, runs_dir=None, read_runs=True):
         if read_runs:
             time.sleep(4)
         return real(rid, esc, runs_dir=runs_dir, read_runs=read_runs)

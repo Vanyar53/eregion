@@ -114,7 +114,7 @@ def preflight(fault: str, without_glorfindel: bool):
 @cli.command()
 @click.argument("run_id")
 def report(run_id: str):
-    """Show a run's report (runs/<run_id>.json)."""
+    """Show a run's report (runs/gothmog/<run_id>.json)."""
     from gothmog.runner.report import RunReport
 
     raise SystemExit(0 if RunReport.display(run_id) else 1)

@@ -77,7 +77,11 @@ contre une réponse simulée seulement).
 
 **Les conteneurs durcis (V-34, SEC14).** Chaque `docker run` d'un injecteur sur Orodruin tourne comme
 le compose : racine en lecture seule, `/tmp` en tmpfs, aucune capacité, aucun gain de privilège
-(`ORO_HARDEN`). Il n'écrit que dans `~/runs`.
+(`ORO_HARDEN`). Il n'écrit que dans son répertoire de `~/runs` (SEC18, N-05) : Annatar dans
+`~/runs/annatar`, Gothmog dans `~/runs/gothmog`, l'un et l'autre dans `~/runs/orodruin` (le journal
+avant chaque appel, le verrou « un run à la fois », les statuts des demandes) ; le lanceur d'une demande
+monte les trois, puisqu'il lance les deux. Aucun ne monte `~/runs` entier : seule la migration de
+l'ancienne disposition le fait, une fois, à `make orodruin-push` (`ORO_MIGRATE`, `eregion_core/runs_layout.py`).
 
 Un run se lance ensuite depuis la VM (`make orodruin-ssh`, puis `docker run … annatar run …`) :
 le moteur relit le contrat au démarrage, journalise chaque appel dans `~/runs/orodruin/audit.jsonl`

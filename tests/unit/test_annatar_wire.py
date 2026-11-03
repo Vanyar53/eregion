@@ -74,7 +74,7 @@ def test_a_wire_runs_with_its_requests_id_in_its_window_its_journal_and_its_repo
     assert window["request"] == REQ and window["targets"] == [RID.lower()]
     assert window["kind"] == "technique" and window["experiment"].startswith("T1110.001")
     assert ARMED == [{"request": REQ}]                 # its session names the request
-    [report] = [json.loads(p.read_text()) for p in (tmp_path / "runs").glob("*.json")]
+    [report] = [json.loads(p.read_text()) for p in (tmp_path / "runs" / "annatar").glob("*.json")]
     assert report["metrics"]["request"] == REQ and report["metrics"]["experiment_id"] == "T1110.001"
     # The scenario lived only for the run: nothing of it under runs/.
     assert not list((tmp_path / "runs").rglob("*.yaml"))

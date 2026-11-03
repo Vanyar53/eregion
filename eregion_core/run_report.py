@@ -48,7 +48,7 @@ CONTAINING = ("isolate_vm", "block_suspicious_ip")
 
 @dataclass
 class RunReport:
-    """``runs/<run_id>.json``: what an injector writes at the end of a run, attack or fault."""
+    """``runs/<injector>/<run_id>.json``: what an injector writes at the end of a run, attack or fault."""
     scenario: str
     run_id: str
     mitre: str
@@ -60,8 +60,9 @@ class RunReport:
     def to_dict(self) -> dict:
         return asdict(self)
 
-    def save(self, runs_dir: str | Path = "runs") -> Path:
-        """Written at once (SEC17): a new file beside it, renamed over it — the watch, the console,
+    def save(self, runs_dir: str | Path) -> Path:
+        """Written at once (SEC17), in its injector's own directory (SEC18: ``runs_dir``,
+        ``runs/annatar`` or ``runs/gothmog``): a new file beside it, renamed over it — the watch, the console,
         the analysis and Orodruin's publisher read runs/ while a run writes; none finds a report
         empty or cut, and a link in its place is replaced, never followed (SEC16, ``write_file``)."""
         from eregion_core.channel_reader import write_file
@@ -191,9 +192,20 @@ def read_run(report, run_id: str = "", campaign: str = "") -> dict | None:
 _report_cache: dict[Path, tuple[tuple[int, int, int], dict | None]] = {}
 
 
+def _misplaced(path: Path, report) -> str:
+    """Why this report is not read from where it is (SEC18, ``runs_layout.report_refusal``) — said
+    once per file and reason; "" when it is read."""
+    from eregion_core import channel_reader, runs_layout
+    why = runs_layout.report_refusal(path, report)
+    if why and channel_reader.say_once(path, why):
+        print(f"[runs] {path} : {why}", flush=True)
+    return why
+
+
 def read_reports(reports: dict[str, Path], reader=None) -> list[dict]:
     """Every run of ``reports`` (run id → path), unified, whatever its date — a report that
-    cannot be read, or has no date, is left out. A report under ``campaigns/<id>/runs/`` is
+    cannot be read, or has no date, is left out, and so is one in an injector's directory that
+    says another injector (SEC18, said once). A report under ``campaigns/<id>/runs/`` is
     given its campaign. Each file is parsed once per version (``_report_cache``). ``reader``
     (path → its JSON, or None) reads a report — the console's says a refusal once in its log
     (SEC15, ``eregion_console/runs_reader.py``); by default, as the watch reads runs/: a regular
@@ -218,6 +230,8 @@ def read_reports(reports: dict[str, Path], reader=None) -> list[dict]:
                     r = channel_reader.read_json(path)
                 except (OSError, ValueError):
                     r = None
+            if r is not None and _misplaced(path, r):
+                r = None   # SEC18: an injector's directory holds that injector's runs only
             parent = path.parent
             campaign = parent.parent.name if parent.name == "runs" and parent.parent.parent.name == "campaigns" else ""
             hit = _report_cache[path] = (key, read_run(r, run_id, campaign) if r is not None else None)

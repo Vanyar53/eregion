@@ -14,9 +14,9 @@ Contract (see collab/design_campaign_manifest.md):
     rest of Glorfindel runs without Annatar (D1).
   - Re-reads the materialized artifact / proposal — NEVER regenerates (generation is
     non-deterministic; regenerating would break the regression test).
-  - Writes its verdict to a SEPARATE runs/campaigns/<id>/replay.json. One writer per file:
-    Annatar owns manifest.json, Glorfindel owns replay.json (no double-writer race on a
-    file Annatar rewrites atomically).
+  - Writes its verdict to a SEPARATE replay.json, in the watch's own directory
+    (runs/glorfindel/campaigns/<id>/replay.json, SEC18): Annatar owns manifest.json and its
+    directory, Glorfindel owns replay.json and its own (no writer in another's directory).
 
 Invariant: replay only READS detection data and re-runs a query; it activates nothing
 permanent. A replayed rule that would have caught the attack is still a PROPOSAL until a
@@ -34,7 +34,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from annatar.campaign.manifest import CampaignManifest, campaign_dir
+from annatar.campaign.manifest import CampaignManifest
+from eregion_core import runs_layout
 
 logger = logging.getLogger("glorfindel.campaign_replay")
 
@@ -119,7 +120,10 @@ def replay_campaign(
     verdict document. Pure except for the optional replay.json write — detector and
     proposals are injected so this is unit-testable with zero Azure/disk dependency.
     """
-    cdir = campaign_dir(campaign_id, runs_dir)
+    # SEC18: ``runs_dir`` is the runs root — the campaign is Annatar's, or the watch's copy (H0).
+    cdir = runs_layout.find_campaign(campaign_id, runs_dir)
+    if cdir is None:
+        raise FileNotFoundError(f"no campaign {campaign_id!r} under {runs_dir}")
     manifest = CampaignManifest.load(cdir)
     proposals = proposals if proposals is not None else []
 
@@ -159,7 +163,7 @@ def replay_campaign(
         "replays": replays,
     }
     if write:
-        _write_replay(cdir, doc)
+        _write_replay(runs_layout.campaign_output(cdir), doc)
     return doc
 
 

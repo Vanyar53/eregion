@@ -69,15 +69,16 @@ def isolation_time(resource_id: str) -> tuple[float | None, str]:
         return None, ""
 
 
-def exercise_moment(resource_id: str, runs_dir="runs", run_id: str = "",
+def exercise_moment(resource_id: str, runs_dir=None, run_id: str = "",
                     not_after: float | None = None) -> tuple[str, str]:
     """(ISO moment, why) from the attack_started of this VM and of run `run_id` the runs/
     channel admits — bounded by the VM's isolation when it is isolated, and by `not_after` (the
     card's first detection) — or ("", ""). No run: ("", "") — the channel is read for an
     exercise card only (SEC8)."""
-    from glorfindel.signal_origin import attack_moment
+    from glorfindel.signal_origin import SIGNALS_DIR, attack_moment
     if not run_id:
         return "", ""
+    runs_dir = SIGNALS_DIR if runs_dir is None else runs_dir   # SEC18: Annatar's own directory
     isolated_at, _ = isolation_time(resource_id)
     found = attack_moment(resource_id, runs_dir=runs_dir, isolated_at=isolated_at,
                           run_id=run_id, not_after=not_after)
@@ -85,7 +86,7 @@ def exercise_moment(resource_id: str, runs_dir="runs", run_id: str = "",
         return "", ""
     at, source = found
     return (datetime.fromtimestamp(at, tz=timezone.utc).isoformat(),
-            f"début de l'exercice sur cette VM : attack_started de runs/{source}, avant la "
+            f"début de l'exercice sur cette VM : attack_started de runs/annatar/{source}, avant la "
             "première détection de la carte")
 
 
@@ -119,7 +120,7 @@ def card_of(resource_id: str) -> dict | None:
     return min(cards, key=_first_seen) if cards else None
 
 
-def proposed_moment(resource_id: str, esc: dict | None = None, runs_dir="runs",
+def proposed_moment(resource_id: str, esc: dict | None = None, runs_dir=None,
                     read_runs: bool = True) -> dict:
     """What the restore field is filled with: {"before", "source", "why"}.
 

@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from eregion_core import channel_reader, runs_layout
 from eregion_core.signals import Signal, severity_for_ttp
 
 _PROVIDER_MAP: dict[str, str] = {
@@ -44,13 +45,15 @@ class SignalEmitter:
         scenario_mitre: str,
         target: dict,
         resource_id: str,
-        runs_dir: str | Path = "runs",
+        runs_dir: str | Path | None = None,
     ):
         self.run_id = run_id
         self.scenario_name = scenario_name
         self.scenario_mitre = scenario_mitre
         self.target = target
         self.resource_id = resource_id
+        # SEC18: Annatar's own directory, runs/annatar/ — the one the watch reads signals from.
+        runs_dir = runs_layout.dir_of(runs_layout.ANNATAR) if runs_dir is None else runs_dir
         self._output = Path(runs_dir) / f"{run_id}_signals.jsonl"
 
     def emit(
@@ -76,6 +79,6 @@ class SignalEmitter:
             },
         )
         self._output.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._output, "a") as f:
-            f.write(json.dumps(asdict(signal)) + "\n")
+        # SEC16, SEC18: one whole line, never through a link — as every writer writes runs/.
+        channel_reader.append_line(self._output, json.dumps(asdict(signal)))
         return signal

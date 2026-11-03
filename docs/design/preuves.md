@@ -3364,11 +3364,15 @@ d'un périmètre d'écrivain) et de `quarantine`, **`perimeter_nic`** : les cart
 **NSG de carte** est un NSG de périmètre d'un écrivain — lu avant la passe, les écrivains comme avant (ni
 `human_only`, ni verrou tenu). Un flux coupé d'une telle carte n'est admis (`_shut_shared`) que si **trois
 conditions** tiennent : (1) il va vers l'attaquant ; (2) sa carte est dans `perimeter_nic` ; (3) il est fermé par
-**les seules règles de périmètre que la passe a écrites** — le calcul d'I4P, sorti tel quel de
+**les seules règles de périmètre que la passe a écrites, sur le NSG partagé** — le calcul d'I4P, sorti de
 `_cut_by_the_perimeter_alone` en `_closed_by_the_perimeter_alone` : le monde tel que la passe l'a trouvé
 (`world_before`), plus les écritures du journal du faux au nom de l'IP seule (`glorfindel-block-<ip>` et son
-`-out`), telles qu'elles sont maintenant. La condition (1) est impliquée par la (3) — une règle de périmètre ne
-ferme que les flux de l'attaquant — ; elle reste écrite, pour qui lit l'oracle.
+`-out`), telles qu'elles sont maintenant, et, pour I5, celles-là seules qui sont posées sur un NSG de périmètre
+d'un écrivain (`on`, l'ensemble `perimeters` lu avant la passe et gardé dans `shared[vm]`). I4 l'appelle sans ce
+filtre, à l'identique. Une règle de ces NSG qui gouverne une carte de `perimeter_nic` est son NSG de carte, ou le
+NSG de son sous-réseau — qu'un écrivain tient alors, la carte étant aussi dans `perimeter` : la règle qui ferme est
+toujours sur un NSG que la carte partage avec un écrivain. La condition (1) n'est pas impliquée par la (3) : une
+paire de l'IP mal écrite (une destination `*`) fermerait des flux qui vont ailleurs ; elle a son contrôle.
 **Ce qui se durcit.** La branche du sous-réseau admettait tout flux de l'attaquant d'une carte derrière le
 périmètre d'un écrivain, quoi qui le ferme ; elle demande maintenant la même condition (3). Une autre règle que la
 passe écrit sur ce NSG — la règle de VM d'un écrivain sur une adresse reprise, ou toute autre — et qui coupe la VM
@@ -3376,7 +3380,7 @@ en `human_only` de l'attaquant n'est plus excusée par le périmètre voisin.
 **Ce qui ne bouge pas.** Une carte qui porte un NSG de quarantaine : tout flux admis, comme avant. Aucune règle
 écrite ni retirée au nom d'une carte en `human_only`, les NSG de ses cartes inchangés (les deux contrôles de L1Qs).
 Ce qui s'ouvre reste dans le dessin, pour toutes. La forme forte d'I5 quand un seul mode vaut pour toutes les VM
-(`mixed` faux). `_cut_by_the_perimeter_alone` (I4) rend ce qu'il rendait : son calcul a seulement changé de place.
+(`mixed` faux). `_cut_by_the_perimeter_alone` (I4) rend ce qu'il rendait : son calcul a changé de place, sans filtre.
 
 **La règle d'I4P retrouve sa variante** : `promoted_beside_a_turned_block` pose de nouveau le NSG d'un sous-réseau
 sur la carte d'une VM d'un autre sous-réseau (le filtre `k not in subnet_nsgs` retiré). **La graine 7 à 500
@@ -3387,15 +3391,28 @@ changée ; api créée sur le sous-réseau data, nsg-subnet pour NSG de carte, �
 retire la paire et lance une passe à un mode par VM — api en `human_only`, web de rg-app2 écrivain : la paire
 reposée, la sortie d'api vers l'attaquant (443) se ferme, par elle seule. Rouge sur l'oracle
 étroit (`perimeter_nic` vide, mesuré), verte élargi. **Les contrôles de l'oracle** (`test_invariant_regressions.py`,
-six ; web bloquée sur son sous-réseau, Db--01 en `human_only`, db-nic-0 derrière nsg-subnet, db-nic-1 sur le
+huit ; web bloquée sur son sous-réseau, Db--01 en `human_only`, db-nic-0 derrière nsg-subnet, db-nic-1 sur le
 sous-réseau data, nsg-subnet pour NSG de carte, la paire retirée) : la paire reposée, admise sur les deux cartes —
 et refusée sur db-nic-1 par l'oracle d'avant ; une autre règle écrite sur nsg-subnet qui coupe une seule carte de
 l'attaquant (son nom quelconque, ou celui d'une règle de VM de web), refusée derrière le sous-réseau comme sur la
-carte (quatre cas) ; la paire de l'IP écrite sur nsg-data, qu'aucun écrivain ne tient, db-nic-1 nue derrière lui,
-refusée. **Mutants M3386, M3390–M3392**, sur l'oracle lui-même, mesurés par ces contrôles et la séquence figée :
-chaque carte lue comme portant un périmètre d'écrivain (M3386, la condition 2) ; la condition 3 lâchée sur la carte
-(M3390) ou sur le sous-réseau (M3391 : l'oracle d'avant I5S) ; les règles de VM d'un écrivain comptées comme règles
-de périmètre (M3392, le calcul — qui borne aussi I4).
+carte (quatre cas) ; la paire de l'IP écrite sur nsg-data, qu'aucun écrivain ne tient, refusée — db-nic-1 nue
+derrière lui, et db-nic-1 qui porte nsg-subnet comme NSG de carte, la paire de nsg-subnet non reposée (le cas de la
+relecture, ci-dessous) ; le `-out` de l'IP écrit sur nsg-subnet vers `*`, qui ferme aussi les sorties vers
+internet et le pair latéral, refusé pour celles-là, admis pour celles de l'attaquant seules. **Mutants M3384,
+M3386, M3390–M3392**, sur l'oracle lui-même, mesurés par ces contrôles et la séquence figée : la paire comptée sur
+n'importe quel NSG (M3384, le filtre `on` retiré) ; chaque carte lue comme portant un périmètre d'écrivain (M3386,
+la condition 2) ; la condition 3 lâchée sur la carte (M3390) ou sur le sous-réseau (M3391 : l'oracle d'avant
+I5S) ; les règles de VM d'un écrivain comptées comme règles de périmètre (M3392, le calcul — qui borne aussi I4).
+La condition 1 lâchée (`f[3] != ATTACKER` retiré) est prise par son contrôle, mesurée à la main ; elle n'a pas
+d'entrée dans le harnais, faute d'un numéro dans la plage du lot.
+**La relecture 5.5** (« bloquant » sur 714d3558). (1) **La condition 3 n'était pas liée au NSG partagé** :
+`closed` comptait la paire de l'IP écrite par la passe sur n'importe quel NSG. db-nic-1 portant nsg-subnet (un
+écrivain), la paire de nsg-subnet retirée, la paire écrite sur nsg-data (le NSG de son sous-réseau, qu'aucun
+écrivain ne tient) : db-nic-1 perdait ses sorties 443 vers l'attaquant ; l'oracle d'avant I5S refusait, celui de
+714d3558 admettait — un refus relâché, qui masquait la classe de M2995 (le premier temps qui écrit la paire d'une
+entrée en `human_only`) dès que la carte porte aussi le NSG d'un écrivain dont la paire n'est pas reposée.
+Corrigé : le filtre `on` (ci-dessus), dans les deux branches ; le contrôle et M3384 ajoutés. (2) La justification
+« la condition 1 est impliquée par la 3 » était inexacte (une paire à destination `*`) : son contrôle est ajouté.
 **Mesures d'I5S** (la branche d'I4P, 09b4e4f, plus ce lot). Avant l'élargissement, la restriction levée : à 500, la
 graine 7 tombe sur I5 (« …/api in human_only », la sortie 443 d'api-nic vers l'attaquant). Après : invariants,
 `--hypothesis-seed=N`, à 60 séquences, N = 1..18, 73, 101, **20/20 vertes** ; à 500, N = 1, 3, 7, 8675, **4/4
@@ -3405,6 +3422,18 @@ sous-réseau, durcie, est atteinte 18 fois, la branche de la carte, élargie, 2 
 336 fois. Mutants M3386, M3390–M3392 : **4/4 par leurs tests à chaque tour** (deux tours). `pytest` complet :
 6 120 réussis, 7 sautés, 2 `xfail` (de L1Qs) ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 444 mutants, sans
 faute.
+**Mesures après la relecture** (le filtre `on`, 39952ec). À 60 séquences, N = 1..18, 73, 101, **20/20 vertes**. À
+500, N = 1, 2, 3, 5, 7, 11, **6/6 vertes** (graine 7 : la branche du sous-réseau atteinte 18 fois, celle de la carte
+2 fois, comme avant le filtre) ; N = 42 et 8675 tombent sur **L1**, hors du lot — « the block on …/rg-app1/…/web
+vanished from Azure; the reassertion neither put it back nor said so ». La graine 42 dans
+`quarantine_change_comes_back` puis la passe, comme la relecture l'a mesurée (verte sur 09b4e4f, les tirages y
+divergent) ; la graine 8675 dans la passe de `turned_perimeter_left_out` (web en `human_only`, après
+`operator_acknowledges` et `said_then_back_after_a_full_disk`), signalée par Hypothesis comme instable
+(`FlakyFailure` : la séquence ne retombe pas à la relecture), verte à 500 sur 718fc1b. Aucune ne passe par
+l'oracle d'I5 ni d'I4 : la famille « carte acquittée » de L1G (#475), à remesurer une fois L1G dans `main`. Mutants
+M3384, M3386, M3390–M3392 : **5/5 à chaque tour** (deux tours) ; la condition 1 lâchée, prise par son contrôle.
+`pytest` complet : 6 122 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 445
+mutants, sans faute.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

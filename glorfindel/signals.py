@@ -19,7 +19,11 @@ def load_signals(path: str | Path) -> list[Signal]:
     return signals
 
 
-def load_latest_signals(run_id: str, runs_dir: str | Path = "runs") -> list[Signal]:
+def load_latest_signals(run_id: str, runs_dir: str | Path | None = None) -> list[Signal]:
+    """A run's signals, from Annatar's own directory (SEC18, ``runs/annatar``) by default."""
+    if runs_dir is None:
+        from eregion_core import runs_layout
+        runs_dir = runs_layout.dir_of(runs_layout.ANNATAR)
     path = Path(runs_dir) / f"{run_id}_signals.jsonl"
     if not path.exists():
         raise FileNotFoundError(f"No signals file for run: {run_id}")

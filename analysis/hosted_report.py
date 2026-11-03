@@ -6,7 +6,7 @@ at the end of ``annatar campaign run`` it publishes the campaign to the exercise
 its manifest and its runs' reports, nothing else (eregion_core/exercise_channel.py). H0 has
 all the rest. ``glorfindel watch`` starts this on a thread of its own, only when
 ``EREGION_EXERCISE_CHANNEL`` is set: every PULL_EVERY_S it pulls the published campaigns
-into ``runs/campaigns/<id>/`` and writes ``report.md`` for each one that is ``done`` and has
+into ``runs/glorfindel/campaigns/<id>/`` (the watch's directory, SEC18) and writes ``report.md`` for each one that is ``done`` and has
 none — once. The decisions come from the watch's ``watch-*_debug.jsonl``
 (analysis/campaign_report.py, the rule of #157). The index ``campaign_runs`` stays on the
 VM's disk (``~/.eregion/analysis``, mounted into the container).
@@ -37,7 +37,7 @@ The report is visible in the watch's log (``make glorfindel-host-logs``) and on 
 (``make glorfindel-host-campaign-report CAMPAIGN=<id>``).
 
 The same pass pulls the report of each run launched alone from Orodruin (``annatar run``,
-``gothmog run``, #193) into ``runs/<run_id>.json``, where the console of the atelier reads
+``gothmog run``, #193) into ``runs/glorfindel/<run_id>.json``, where the console of the atelier reads
 its verdict (eregion_console/api.py): read against its shape first (H-1,
 analysis/campaign_schema.py), never over a report of a run of this host
 (eregion_core/exercise_channel.py ``pull_runs``). Why one was not pulled is said once.
@@ -369,7 +369,7 @@ def pull_runs(runs_dir: Path, *, channel: str | None = None, credential=None, ge
 
 def pull_orodruin(runs_dir: Path, *, channel: str | None = None, credential=None, get=None,
                   say=_say) -> int:
-    """Orodruin's verdict and the status of each request (DG-b), pulled into ``runs/orodruin/``
+    """Orodruin's verdict and the status of each request (DG-b), pulled into ``runs/glorfindel/orodruin/``
     once they have their shape — for the console, never read by the decision. Never raises."""
     where = Path(runs_dir) / exercise_channel.ORODRUIN
     try:

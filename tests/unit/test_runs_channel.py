@@ -597,9 +597,10 @@ def test_the_tui_never_reads_a_name_of_runs_as_markup(tmp_path, monkeypatch):
     from glorfindel import tui
     monkeypatch.chdir(tmp_path)
     runs = tmp_path / "runs"
-    runs.mkdir()
-    (runs / "[bold]x_signals.jsonl").write_bytes(_lines(1))
-    (runs / "[bold]x_debug.jsonl").symlink_to(tmp_path / "elsewhere")
+    (runs / "annatar").mkdir(parents=True)          # SEC18: each file in its writer's directory
+    (runs / "glorfindel").mkdir()
+    (runs / "annatar" / "[bold]x_signals.jsonl").write_bytes(_lines(1))
+    (runs / "glorfindel" / "[bold]x_debug.jsonl").symlink_to(tmp_path / "elsewhere")
     got = tui._load_feed()
     assert got[0] == "[yellow]⚠ \\[bold]x_debug.jsonl : un lien, jamais suivi — jamais lu[/yellow]"
     assert "\\[bold]x" in str(tui._feed_renderable(got, tui._current_run_label()).title)
@@ -641,10 +642,11 @@ def test_the_tui_feed_reads_runs_as_the_watch_never_blocking(tmp_path, monkeypat
     that run said, never read — within the guard."""
     from glorfindel import tui
     monkeypatch.chdir(tmp_path)
-    runs = tmp_path / "runs"
-    runs.mkdir()
+    runs = tmp_path / "runs" / "annatar"            # SEC18: the signals in Annatar's directory,
+    runs.mkdir(parents=True)                        # the cycles in the watch's
+    (tmp_path / "runs" / "glorfindel").mkdir()
     (runs / "r1_signals.jsonl").write_bytes(_lines(3))
-    fifo = runs / "r1_debug.jsonl"
+    fifo = tmp_path / "runs" / "glorfindel" / "r1_debug.jsonl"
     os.mkfifo(fifo)
     (tmp_path / "elsewhere").write_bytes(_lines(5))
     (runs / "z_signals.jsonl").symlink_to(tmp_path / "elsewhere")     # newer, never a candidate
@@ -775,8 +777,8 @@ def test_the_watch_debug_line_never_through_a_link_never_blocking_the_cycle_goes
     log, never at every cycle."""
     from glorfindel import agent
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "runs").mkdir()
-    f = tmp_path / "runs" / "r1_debug.jsonl"
+    (tmp_path / "runs" / "glorfindel").mkdir(parents=True)     # SEC18: the watch's own directory
+    f = tmp_path / "runs" / "glorfindel" / "r1_debug.jsonl"
     elsewhere = tmp_path / "elsewhere.jsonl"
     stop = threading.Event()
     if trap == "link":
@@ -814,8 +816,8 @@ def test_the_clis_manual_action_never_through_a_link_never_blocking(tmp_path, mo
     said once."""
     from glorfindel import cli
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "runs").mkdir()
-    f = tmp_path / "runs" / "manual_actions.jsonl"
+    (tmp_path / "runs" / "console").mkdir(parents=True)        # SEC18: the operator's hand's directory
+    f = tmp_path / "runs" / "console" / "manual_actions.jsonl"
     elsewhere = tmp_path / "elsewhere.jsonl"
     stop = threading.Event()
     if trap == "link":

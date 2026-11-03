@@ -7,6 +7,14 @@
 # nomment EREGION_INSTANCE (conteneurs), EREGION_CONSOLE_PORT, EREGION_RUNS et EREGION_CONFIG —
 # vides, ce sont les valeurs d'avant D1 (H0 et ses scripts lisent eregion-watch, eregion-war-room).
 
+# SEC18 (N-05, #455) : runs/ a un répertoire par écrivain (eregion_core/runs_layout.py) — glorfindel/
+# (la watch), console/ (la console, la CLI, le bot), annatar/, gothmog/, orodruin/, verdicts/ (le
+# canal local des verdicts, écrit par la watch). Chaque service monte en écriture le sien, en
+# lecture seule ceux qu'il lit, rien d'autre ; aucun ne monte runs/ entier, et le rouge ne monte ni
+# glorfindel/ ni console/ — du bleu, il ne voit que verdicts/, en lecture seule. `make glorfindel-start` crée ces répertoires
+# et déplace l'ancienne disposition (make runs-migrate) avant de démarrer. tests/unit/test_runs_mounts.py
+# tient ces montages, et ceux du Makefile et d'Orodruin.
+
 # M-3 (#183) : chaque conteneur ne reçoit que ses secrets. docker compose lit `.env` (sur H0,
 # host.env poussé) pour remplacer les ${…} ci-dessous, et rien d'autre : un conteneur ne voit
 # que les variables de sa liste `environment`. Les blocs :
@@ -122,7 +130,7 @@ services:
     command: glorfindel watch /app/runs
     restart: unless-stopped
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Elle
-    # n'écrit que dans ses montages (runs/, ~/.glorfindel, ~/.cache/chroma, ~/.eregion/analysis) et /tmp.
+    # n'écrit que dans ses montages (runs/glorfindel, ~/.glorfindel, ~/.cache/chroma, ~/.eregion/analysis) et /tmp.
     read_only: true
     tmpfs:
       - /tmp
@@ -131,7 +139,16 @@ services:
     environment:
       <<: [*env, *azure, *models, *webhook]
     volumes:
-      - ${EREGION_RUNS:-./runs}:/app/runs
+      # SEC18 : son répertoire en écriture (ses cycles ; sur H0, ce qu'elle tire du canal et les
+      # rapports de campagne) ; ceux des injecteurs en lecture seule (leurs signaux, leurs fenêtres,
+      # leurs rapports), celui de la console aussi (les levées de l'opérateur, pour l'analyse).
+      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel
+      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro
+      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro
+      - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro
+      # Le canal local des verdicts (sans canal retour du stockage) : le verdict d'un run, jamais le
+      # raisonnement — ce que le rouge lit du bleu (SEC18, eregion_core/watch_channel.py).
+      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts
       # P1 : la base livrée des règles, en lecture seule — aucun conteneur ne l'écrit plus.
       # Les règles du client (approuvées, remplacées, désactivées) vivent dans la couche du
       # client, ~/.glorfindel/client_rules.yaml (montage suivant), hors du dépôt : un
@@ -167,7 +184,7 @@ services:
     restart: unless-stopped
     profiles: ["bot"]
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
-    # n'écrit que dans ses montages (runs/, ~/.glorfindel, ~/.cache/chroma) et /tmp ; la CLI qu'il lance aussi.
+    # n'écrit que dans ses montages (runs/console, ~/.glorfindel, ~/.cache/chroma) et /tmp ; la CLI qu'il lance aussi.
     read_only: true
     tmpfs:
       - /tmp
@@ -181,9 +198,11 @@ services:
       DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       DISCORD_ALLOWED_ROLES: ${DISCORD_ALLOWED_ROLES:-}
     volumes:
-      # runs/ en écriture : ses boutons lancent la CLI de Glorfindel (restore, revert), qui y
-      # note l'action (manual_actions.jsonl) pour le fil de la console (SEC3).
-      - ${EREGION_RUNS:-./runs}:/app/runs
+      # SEC18 : runs/console en écriture — ses boutons lancent la CLI de Glorfindel (restore,
+      # revert), qui y note l'action (manual_actions.jsonl) pour le fil de la console (SEC3) ;
+      # runs/annatar en lecture seule : le moment d'un restore d'exercice (son attack_started).
+      - ${EREGION_RUNS:-./runs}/console:/app/runs/console
+      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro
       - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
       - ${HOME}/.cache/chroma:/root/.cache/chroma
@@ -207,7 +226,7 @@ services:
     command: eregion console --host 0.0.0.0 --port 7007
     restart: unless-stopped
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Elle
-    # n'écrit que dans ses montages (runs/, ~/.glorfindel, ~/.cache/chroma, la config : réécrite sur
+    # n'écrit que dans ses montages (runs/console, ~/.glorfindel, ~/.cache/chroma, la config : réécrite sur
     # place sous verrou, glorfindel/config.py ; ~/.eregion/console, ses demandes, DG-b) et /tmp ;
     # la CLI qu'elle lance aussi.
     read_only: true
@@ -226,9 +245,13 @@ services:
       # The names, besides the loopback ones, the console answers under (comma-separated).
       EREGION_CONSOLE_HOSTS: ${EREGION_CONSOLE_HOSTS:-}
     volumes:
-      # runs/ en écriture : la console y note les actions de l'opérateur (manual_actions.jsonl)
-      # et la vérification d'une action approuvée, pour le fil (SEC3).
-      - ${EREGION_RUNS:-./runs}:/app/runs
+      # SEC18 : runs/console en écriture — la console y note les actions de l'opérateur
+      # (manual_actions.jsonl) et la vérification d'une action approuvée, pour le fil (SEC3) ; les
+      # répertoires de la watch et des injecteurs en lecture seule (ce qu'elle montre).
+      - ${EREGION_RUNS:-./runs}/console:/app/runs/console
+      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro
+      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro
+      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro
       - ./eregion_console/static:/app/eregion_console/static:ro
       - ./glorfindel/rules:/app/glorfindel/rules:ro
       - ${HOME}/.glorfindel:/root/.glorfindel
@@ -264,8 +287,12 @@ services:
   # première minute, l'injecteur peut refuser), et son battement se lit dans
   # ~/.glorfindel/injectors, monté en lecture seule comme son ~/.glorfindel : la watch y écrit
   # son battement, rien d'autre, et Annatar ne lit aucun autre fichier de Glorfindel — les
-  # escalades, l'état d'isolation, les règles du client restent hors de portée du rouge (SEC3). runs/ est celui de la watch : elle y lit
-  # l'attack_started, et n'en prend que ce qu'un injecteur émet (glorfindel/signal_origin.py).
+  # escalades, l'état d'isolation, les règles du client restent hors de portée du rouge (SEC3). SEC18 :
+  # Annatar n'écrit que runs/annatar (la watch y lit l'attack_started, et n'en prend que ce qu'un
+  # injecteur émet, glorfindel/signal_origin.py) et runs/orodruin (le journal avant chaque appel, le
+  # verrou « un run à la fois ») ; il ne monte ni runs/glorfindel ni runs/console : il ne lit pas le
+  # raisonnement de la watch. Sa détection passe par le canal retour, ou, sans lui, par runs/verdicts
+  # en lecture seule : le verdict de son run, rien d'autre.
   # Lancé à la demande, il ne reste pas : `docker compose --profile annatar run --rm annatar <commande>`.
   annatar:
     image: eregion-annatar
@@ -274,8 +301,8 @@ services:
     restart: "no"
     profiles: ["annatar"]
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
-    # n'écrit que dans ses montages (runs/, ~/.annatar) et /tmp. Ni ~/.eregion/analysis ni
-    # ~/.cache/chroma : le rapport de fin de campagne s'écrit dans runs/, et l'index de l'IA
+    # n'écrit que dans ses montages (runs/annatar, runs/orodruin, ~/.annatar) et /tmp. Ni ~/.eregion/analysis ni
+    # ~/.cache/chroma : le rapport de fin de campagne s'écrit sur H0, et l'index de l'IA
     # d'analyse ne s'ouvre jamais ici — chromadb n'est pas dans l'image des injecteurs
     # (requirements/annatar.txt) ; la watch tient cet index (son montage ~/.eregion/analysis).
     read_only: true
@@ -289,7 +316,9 @@ services:
       ANNATAR_LLM_MODEL: ${ANNATAR_LLM_MODEL:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
-      - ${EREGION_RUNS:-./runs}:/app/runs
+      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar
+      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin
+      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro
       - ./annatar/scenarios:/app/annatar/scenarios
       - ./scripts:/app/scripts
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
@@ -308,7 +337,7 @@ services:
     restart: "no"
     profiles: ["gothmog"]
     # V-34 (SEC7) : aucune capacité, aucun gain de privilège, la racine en lecture seule. Il
-    # n'écrit que dans runs/ et /tmp.
+    # n'écrit que dans runs/gothmog, runs/orodruin et /tmp (SEC18).
     read_only: true
     tmpfs:
       - /tmp
@@ -318,7 +347,9 @@ services:
       <<: *injector
       EREGION_BENCH_WORKSPACE: ${EREGION_BENCH_WORKSPACE:-}
     volumes:
-      - ${EREGION_RUNS:-./runs}:/app/runs
+      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog
+      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin
+      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
       - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro
     depends_on:

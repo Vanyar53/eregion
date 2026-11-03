@@ -1,8 +1,9 @@
 """IA1 — the triage of a campaign: what needs a human, sorted, explained, each with a proposal
 that waits for a human's decision. The analysis AI writes no rule and acts on nothing.
 
-    python -m analysis.triage runs/campaigns/<id> [--infra DIR]     # → triage.md, triage.json
-    python -m analysis.triage decide runs/campaigns/<id> tri-1 approve --by <name> [--note …]
+    python -m analysis.triage runs/<writer>/campaigns/<id> [--infra DIR]   # → triage.md, triage.json
+    python -m analysis.triage decide runs/<writer>/campaigns/<id> tri-1 approve --by <name> [--note …]
+    (both written in the watch's directory, runs/glorfindel/campaigns/<id>/ — SEC18)
 
 **What is triaged is computed, never chosen by a model** (``items``). Each executed run that
 needs a look becomes an item, sorted by a fixed priority (``PRIORITY``): a missed technique
@@ -713,10 +714,18 @@ class Unreadable(ValueError):
 LOCK = ".triage.lock"
 
 
+def _out(campaign_dir: Path) -> Path:
+    """Where a campaign's triage is written and read: the watch's own directory (SEC18,
+    ``runs/glorfindel/campaigns/<id>``), whoever wrote the campaign."""
+    from eregion_core import runs_layout
+    return runs_layout.campaign_output(campaign_dir)
+
+
 @contextmanager
 def _locked(campaign_dir: Path):
     from eregion_core import channel_reader
-    fd = channel_reader.open_lock(Path(campaign_dir) / LOCK)   # SEC16: a regular file, never through a link
+    _out(campaign_dir).mkdir(parents=True, exist_ok=True)
+    fd = channel_reader.open_lock(_out(campaign_dir) / LOCK)   # SEC16: a regular file, never through a link
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)    # a decision is quick: wait for the other
         yield
@@ -734,7 +743,7 @@ def _write(path: Path, text: str) -> None:
 def load(campaign_dir: Path) -> Triage | None:
     """The triage written in ``campaign_dir`` (None: none) — ``Unreadable`` when it cannot be
     read back, never a trace."""
-    path = Path(campaign_dir) / JSON_NAME
+    path = _out(campaign_dir) / JSON_NAME
     try:
         return from_json(json.loads(path.read_text(encoding="utf-8")))
     except FileNotFoundError:
@@ -748,10 +757,11 @@ def _save(campaign_dir: Path, t: Triage, replace_decided: bool) -> Path:
     old = load(campaign_dir)
     if not replace_decided and old is not None and any(
             i.proposal is not None and i.proposal.status != PENDING for i in old.items):
-        raise Decided(f"{campaign_dir / JSON_NAME} holds a human's decision: not written over")
-    _write(campaign_dir / JSON_NAME, json.dumps(to_json(t), ensure_ascii=False, indent=2) + "\n")
-    _write(campaign_dir / MD_NAME, render(t))
-    return campaign_dir / MD_NAME
+        raise Decided(f"{_out(campaign_dir) / JSON_NAME} holds a human's decision: not written over")
+    out = _out(campaign_dir)
+    _write(out / JSON_NAME, json.dumps(to_json(t), ensure_ascii=False, indent=2) + "\n")
+    _write(out / MD_NAME, render(t))
+    return out / MD_NAME
 
 
 def save(campaign_dir: Path, t: Triage, *, replace_decided: bool = False) -> Path:
@@ -772,8 +782,8 @@ def decide(campaign_dir: Path, item_id: str, verdict: str, by: str, note: str = 
     if not str(by).strip():
         raise ValueError("a decision names the human who takes it (--by)")
     campaign_dir = Path(campaign_dir)
-    if not (campaign_dir / JSON_NAME).is_file():
-        raise ValueError(f"no {JSON_NAME} in {campaign_dir}")
+    if not (_out(campaign_dir) / JSON_NAME).is_file():
+        raise ValueError(f"no {JSON_NAME} in {_out(campaign_dir)}")
     with _locked(campaign_dir):
         t = load(campaign_dir)
         if t is None:

@@ -66,7 +66,9 @@ def _attack(rid: str, at: float, run_id: str = "20261029T100000Z", **over) -> di
 
 
 def _write_runs(runs: Path, name: str, lines: list[dict]) -> None:
-    runs.mkdir(exist_ok=True)
+    """An injector's signals, in Annatar's own directory under ``runs`` (SEC18)."""
+    runs = runs / "annatar"
+    runs.mkdir(parents=True, exist_ok=True)
     with open(runs / f"{name}_signals.jsonl", "a") as f:
         for line in lines:
             f.write(json.dumps(line) + "\n")
@@ -82,7 +84,7 @@ def test_the_moment_is_this_vm_s_earliest_admitted_attack(tmp_path):
     # Later, another VM's — and a line for this one written by anyone, even later:
     _write_runs(runs, "20261029T095000Z", [_attack(OTHER, now - 60, "20261029T095000Z"),
                                            _attack(VM, now - 30, "20261029T095000Z")])
-    at, source = signal_origin.attack_moment(VM, runs_dir=runs)
+    at, source = signal_origin.attack_moment(VM, runs_dir=runs / "annatar")
     assert at == pytest.approx(now - 1800, abs=1) and source == "20261029T090000Z_signals.jsonl"
 
 
@@ -95,7 +97,7 @@ def test_a_line_the_channel_refuses_gives_no_moment(tmp_path, line):
     line = json.loads(json.dumps(line))
     line["raw_signal"]["attack_time"] = time.time() - 600
     _write_runs(tmp_path / "runs", "20261029T100000Z", [line])
-    assert signal_origin.attack_moment(VM, runs_dir=tmp_path / "runs") is None
+    assert signal_origin.attack_moment(VM, runs_dir=tmp_path / "runs" / "annatar") is None
 
 
 def test_the_moment_is_bounded_around_the_isolation(tmp_path):
@@ -106,10 +108,10 @@ def test_the_moment_is_bounded_around_the_isolation(tmp_path):
     runs = tmp_path / "runs"
     _write_runs(runs, "a", [_attack(VM, isolated_at - 3 * 86400, "a")])     # days before
     _write_runs(runs, "b", [_attack(VM, isolated_at + 3600, "b")])          # after it
-    assert signal_origin.attack_moment(VM, runs_dir=runs) is None           # 8 h old: refused
-    assert signal_origin.attack_moment(VM, runs_dir=runs, isolated_at=isolated_at) is None
+    assert signal_origin.attack_moment(VM, runs_dir=runs / "annatar") is None           # 8 h old: refused
+    assert signal_origin.attack_moment(VM, runs_dir=runs / "annatar", isolated_at=isolated_at) is None
     _write_runs(runs, "c", [_attack(VM, isolated_at - 1200, "c")])
-    assert signal_origin.attack_moment(VM, runs_dir=runs, isolated_at=isolated_at) == (
+    assert signal_origin.attack_moment(VM, runs_dir=runs / "annatar", isolated_at=isolated_at) == (
         pytest.approx(isolated_at - 1200, abs=1), "c_signals.jsonl")
 
 
@@ -167,7 +169,7 @@ def test_restore_takes_this_vm_s_moment_and_says_why(tmp_path, monkeypatch):
     assert started == [(VM, datetime.fromtimestamp(t0, tz=timezone.utc).isoformat())]
     said = " ".join(out.output.split())
     assert "Point de restauration : 2026-10-29 08:00:00+00:00 (niveau coffre, immuable)" in said
-    assert "attack_started de runs/20261029T100000Z_signals.jsonl" in said
+    assert "attack_started de runs/annatar/20261029T100000Z_signals.jsonl" in said
 
 
 def test_restore_before_is_read_as_utc_and_wins(tmp_path, monkeypatch):
@@ -195,9 +197,9 @@ def test_a_line_dated_after_the_isolation_is_never_the_moment(tmp_path):
     isolated_at = time.time() - 3600
     runs = tmp_path / "runs"
     _write_runs(runs, "a", [_attack(VM, isolated_at + 290, "a")])
-    assert signal_origin.attack_moment(VM, runs_dir=runs, isolated_at=isolated_at) is None
+    assert signal_origin.attack_moment(VM, runs_dir=runs / "annatar", isolated_at=isolated_at) is None
     _write_runs(runs, "b", [_attack(VM, isolated_at, "b")])
-    assert signal_origin.attack_moment(VM, runs_dir=runs, isolated_at=isolated_at) == (
+    assert signal_origin.attack_moment(VM, runs_dir=runs / "annatar", isolated_at=isolated_at) == (
         pytest.approx(isolated_at, abs=1), "b_signals.jsonl")
 
 
@@ -221,8 +223,8 @@ def test_a_long_runs_file_is_read_from_its_end(tmp_path, monkeypatch):
     now = time.time()
     _write_runs(runs, "big", [_attack(VM, now - 1800, "big")] + [_attack(OTHER, now - 60, "big")] * 20
                 + [_attack(VM, now - 600, "big")])
-    assert (runs / "big_signals.jsonl").stat().st_size > 4 * 2048
-    at, _ = signal_origin.attack_moment(VM, runs_dir=runs)
+    assert (runs / "annatar" / "big_signals.jsonl").stat().st_size > 4 * 2048
+    at, _ = signal_origin.attack_moment(VM, runs_dir=runs / "annatar")
     assert at == pytest.approx(now - 600, abs=1)                 # the head, past the last 2 KiB, unread
 
 
@@ -230,16 +232,16 @@ def test_the_proposed_moment_is_the_exercise_s_else_the_card_s(tmp_path, monkeyp
     from glorfindel import restore_plan
     monkeypatch.setattr("glorfindel.actions._load_isolation_state", lambda rid: None)
     card = {"first_seen": "2026-10-29T08:12:00+00:00", "timestamp": "2026-10-29T09:00:00+00:00"}
-    got = restore_plan.proposed_moment(VM, card, runs_dir=tmp_path / "runs")
+    got = restore_plan.proposed_moment(VM, card, runs_dir=tmp_path / "runs" / "annatar")
     assert got["before"] == "2026-10-29T08:12:00+00:00" and got["source"] == "card"
     assert "l'attaque a commencé avant" in got["why"]
     t0 = time.time() - 900
     _write_runs(tmp_path / "runs", "20261029T100000Z", [_attack(VM, t0)])
     drill = {"first_seen": datetime.now(timezone.utc).isoformat(), "source": "exercise",
              "exercise_run": "20261029T100000Z"}
-    got = restore_plan.proposed_moment(VM, drill, runs_dir=tmp_path / "runs")
+    got = restore_plan.proposed_moment(VM, drill, runs_dir=tmp_path / "runs" / "annatar")
     assert got["source"] == "exercise" and got["before"] == datetime.fromtimestamp(t0, tz=timezone.utc).isoformat()
-    assert restore_plan.proposed_moment(OTHER, {}, runs_dir=tmp_path / "runs")["before"] == ""
+    assert restore_plan.proposed_moment(OTHER, {}, runs_dir=tmp_path / "runs" / "annatar")["before"] == ""
 
 
 def test_the_points_before_a_moment_put_the_one_restored_first(monkeypatch):
@@ -786,7 +788,9 @@ def test_the_watch_lists_the_private_ips_once_for_its_attack_lines(tmp_path, mon
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(cli, "_INJECTORS_DIR", home / ".glorfindel" / "injectors")
     runs = tmp_path / "runs"
-    runs.mkdir()
+    (runs / "annatar").mkdir(parents=True)   # SEC18: the signals in Annatar's own directory
+    # Not this test's: the local channel of verdicts (its thread would outlive the test).
+    monkeypatch.setattr("eregion_core.watch_channel.start_local", lambda *a, **k: None)
     listed, polled = [], []
 
     class _Connector:
@@ -830,7 +834,7 @@ def test_the_watch_lists_the_private_ips_once_for_its_attack_lines(tmp_path, mon
             return real_sleep(s)
         calls[0] += 1
         if calls[0] == 1:
-            subprocess.run([sys.executable, "-c", _FORGER, str(runs / "x_signals.jsonl"), json.dumps(lines)],
+            subprocess.run([sys.executable, "-c", _FORGER, str(runs / "annatar" / "x_signals.jsonl"), json.dumps(lines)],
                            check=True, timeout=60)
             return
         if calls[0] == 2:
@@ -845,6 +849,99 @@ def test_the_watch_lists_the_private_ips_once_for_its_attack_lines(tmp_path, mon
     assert result.exit_code == 0, result.output
     assert polled == [{"10.0.0.4": VM.lower()}] * 2, result.output
     assert len(listed) == 1
+
+
+def test_the_watch_without_a_storage_channel_writes_the_verdict_of_a_polled_detection(tmp_path, monkeypatch):
+    """SEC18, M3340, M3341: the watch, no storage channel, starts the local channel of verdicts; an
+    attack_started its rule resolves into a detection (the poll path) is a verdict there, in the
+    run's own directory — without it, the local heartbeat would vouch for a miss that is none."""
+    from eregion_core import watch_channel as wc
+    from glorfindel import cli
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(wc.CHANNEL_ENV, raising=False)
+    monkeypatch.delenv("EREGION_EXERCISES_DIR", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cli, "_INJECTORS_DIR", home / ".glorfindel" / "injectors")
+    runs = tmp_path / "runs"
+    (runs / "annatar" / "exercises").mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    rid = "20261103T100000Z"
+    (runs / "annatar" / "exercises" / f"{rid}.json").write_text(json.dumps({
+        "run_id": rid, "injector": "annatar", "kind": "technique", "experiment": "T1486 x",
+        "targets": [VM.lower()], "start": (now - timedelta(seconds=90)).isoformat(), "end": None,
+        "expires": (now + timedelta(hours=1)).isoformat(), "destructive": False}))
+    started = []
+    real_start = wc.start_local
+
+    def start_local(directory=None, **kw):
+        started.append(real_start(directory, interval=0.05))
+        return started[-1]
+    monkeypatch.setattr(wc, "start_local", start_local)
+
+    class _Connector:
+        def __init__(self, dry_run=False):
+            pass
+
+        def private_ip_owners(self):
+            return {}
+
+    class _Agent:
+        def __init__(self, **kw):
+            self.autonomy = SimpleNamespace(default="human_only", assets=[])
+            self.config_error = ""
+            self.connector = SimpleNamespace(permission_mode=lambda: "read_write")
+
+        def respond(self, data):
+            return {"action": "none", "escalate": False, "confidence": 0.0, "outcome": {}}
+
+    def _resolve(data, ip_owners=None):
+        return {**data, "event": "detection", "raw_signal": {**data["raw_signal"], "detection_time_s": 30}}
+
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", _Connector)
+    monkeypatch.setattr("glorfindel.actions.warm_up_azure_sdk", lambda: None)
+    monkeypatch.setattr("glorfindel.agent.GlorfindelAgent", _Agent)
+    monkeypatch.setattr("glorfindel.agent.resolve_attack_started", _resolve)
+    monkeypatch.setattr(cli, "_find_rules_file", lambda: None)
+    monkeypatch.setattr(cli, "_render_decision", lambda *a, **k: None)
+    monkeypatch.setattr("eregion_core.inscription.TagEnrollment", lambda *a, **k: (lambda rid: True))
+    import atexit
+    import signal as signalmod
+    monkeypatch.setattr(atexit, "register", lambda *a, **k: None)
+    monkeypatch.setattr(signalmod, "signal", lambda *a, **k: None)
+    real_sleep, calls = time.sleep, [0]
+    verdicts = runs / "verdicts" / "detections" / rid
+    attack = time.time() - 60
+
+    def _sleep(s):
+        if threading.current_thread() is not threading.main_thread() or s != 0:
+            return real_sleep(s)
+        calls[0] += 1
+        if calls[0] == 1:
+            subprocess.run([sys.executable, "-c", _FORGER, str(runs / "annatar" / f"{rid}_signals.jsonl"),
+                            json.dumps([_attack(VM, attack, rid)])], check=True, timeout=60)
+            return
+        if calls[0] == 2:
+            deadline = time.monotonic() + 10
+            while not list(verdicts.glob("*.json")) and time.monotonic() < deadline:
+                real_sleep(0.05)
+            raise KeyboardInterrupt
+        return real_sleep(0)
+
+    monkeypatch.setattr(cli.time, "sleep", _sleep)
+    try:
+        result = CliRunner().invoke(cli.cli, ["watch", str(runs), "--interval", "0"])
+        assert result.exit_code == 0, result.output
+        assert len(started) == 1 and started[0] is not None
+        [path] = list(verdicts.glob("*.json"))
+        doc = json.loads(path.read_text())
+        assert set(doc) == set(wc.VERDICT_FIELDS) and doc["run_id"] == rid and doc["rule"] == "poll"
+        assert doc["detected_at"] == datetime.fromtimestamp(attack + 30, timezone.utc).isoformat()
+    finally:
+        for pub in started:
+            if pub is not None:
+                pub.stopped.set()
 
 
 # ── The second correction: one restore at a time, a moment that is one ────────────────
@@ -981,10 +1078,10 @@ def test_the_proposal_never_falls_after_the_isolation(tmp_path, monkeypatch):
     isolated = "2026-10-29T08:00:00+00:00"
     monkeypatch.setattr("glorfindel.actions._load_isolation_state", lambda rid: {"isolated_at": isolated})
     card = {"first_seen": "2026-10-29T08:05:00+00:00"}
-    got = restore_plan.proposed_moment(VM, card, runs_dir=tmp_path / "runs")
+    got = restore_plan.proposed_moment(VM, card, runs_dir=tmp_path / "runs" / "annatar")
     assert got["before"] == isolated and "isolation de la VM" in got["why"]
     earlier = {"first_seen": "2026-10-29T07:55:00+00:00"}
-    assert restore_plan.proposed_moment(VM, earlier, runs_dir=tmp_path / "runs")["before"] == "2026-10-29T07:55:00+00:00"
+    assert restore_plan.proposed_moment(VM, earlier, runs_dir=tmp_path / "runs" / "annatar")["before"] == "2026-10-29T07:55:00+00:00"
     monkeypatch.setattr("glorfindel.config.resolve_backup_vault", lambda v=None: ("rsv-example", "rg-backup", "st"))
 
     class _Conn:

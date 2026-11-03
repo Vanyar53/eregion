@@ -439,13 +439,14 @@ def _load_feed(max_entries: int = 60) -> list[str]:
     """The last run's lines, read as the watch reads runs/ (SEC15, eregion_core/channel_reader.py):
     the end of each file, never the whole of it, never through a link, never blocking — a file
     that is not a regular one is said, never read."""
-    from eregion_core import channel_reader
+    from eregion_core import channel_reader, runs_layout
     runs = Path("runs")
     if not runs.exists():
         return ["[dim]No runs/ directory — start an annatar run[/dim]"]
-
-    sig_files = _regular_by_age(runs, "*_signals.jsonl")
-    dbg_files = _regular_by_age(runs, "*_debug.jsonl")
+    # SEC18: an injector's signals from Annatar's directory, the watch's cycles from its own.
+    sigs, dbgs = runs_layout.dir_of(runs_layout.ANNATAR), runs_layout.dir_of(runs_layout.GLORFINDEL)
+    sig_files = _regular_by_age(sigs, "*_signals.jsonl")
+    dbg_files = _regular_by_age(dbgs, "*_debug.jsonl")
 
     if not sig_files and not dbg_files:
         return ["[dim]No run data yet — start an annatar run[/dim]"]
@@ -456,8 +457,8 @@ def _load_feed(max_entries: int = 60) -> list[str]:
     refused: list[str] = []
 
     for path, fmt in [
-        (runs / f"{prefix}_signals.jsonl", _format_signal),
-        (runs / f"{prefix}_debug.jsonl", _format_debug),
+        (sigs / f"{prefix}_signals.jsonl", _format_signal),
+        (dbgs / f"{prefix}_debug.jsonl", _format_debug),
     ]:
         if not os.path.lexists(path):
             continue
@@ -496,7 +497,8 @@ def _feed_renderable(feed_lines: list[str], run_label: str) -> Panel:
 
 
 def _current_run_label() -> str:
-    runs = Path("runs")
+    from eregion_core import runs_layout
+    runs = runs_layout.dir_of(runs_layout.ANNATAR)   # SEC18
     if not runs.exists():
         return ""
     candidates = _regular_by_age(runs, "*_signals.jsonl")   # SEC15: a link has no age here
@@ -527,10 +529,12 @@ def run() -> None:
 
     def _maybe_reload() -> None:
         nonlocal last_mtime, run_label
+        from eregion_core import runs_layout
         runs = Path("runs")
         if not runs.exists():
             return
-        files = _regular_by_age(runs, "*_debug.jsonl") + _regular_by_age(runs, "*_signals.jsonl")
+        files = (_regular_by_age(runs_layout.dir_of(runs_layout.GLORFINDEL), "*_debug.jsonl")    # SEC18
+                 + _regular_by_age(runs_layout.dir_of(runs_layout.ANNATAR), "*_signals.jsonl"))
         if not files:
             return
         try:

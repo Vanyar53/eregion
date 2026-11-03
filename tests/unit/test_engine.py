@@ -64,7 +64,7 @@ def test_engine_emits_attack_started_exfil(tmp_path, monkeypatch):
          patch.object(engine, "_wait_and_emit_feedback"):
         engine.run(EXFIL_YAML, skip_confirm=True)
 
-    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    files = list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl"))
     assert len(files) == 1
     signals = [json.loads(ln) for ln in files[0].read_text().strip().splitlines() if ln.strip()]
     signal = next(s for s in signals if s["event"] == "attack_started")
@@ -89,7 +89,7 @@ def test_engine_emits_attack_started_ransomware(tmp_path, monkeypatch):
          patch.object(engine, "_wait_and_emit_feedback"):
         engine.run(RANSOMWARE_YAML, skip_confirm=True)
 
-    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    files = list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl"))
     signals = [json.loads(ln) for ln in files[0].read_text().strip().splitlines() if ln.strip()]
     signal = next(s for s in signals if s["event"] == "attack_started")
     assert signal["ttp"] == "T1486"
@@ -110,7 +110,7 @@ def test_engine_aborts_if_precheck_fails(tmp_path, monkeypatch):
     with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
         engine.run(RANSOMWARE_YAML, skip_confirm=True)
 
-    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    files = list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl"))
     assert files == []
 
 
@@ -128,7 +128,7 @@ def test_engine_aborts_if_preflight_fails(tmp_path, monkeypatch):
     with patch.object(engine, "_get_executor_collector", return_value=(executor, collector)):
         engine.run(RANSOMWARE_YAML, skip_confirm=True)
 
-    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    files = list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl"))
     assert files == []
     executor.run_script.assert_not_called()
 
@@ -146,77 +146,8 @@ def test_engine_skip_preflight_bypasses_check(tmp_path, monkeypatch):
         engine.run(EXFIL_YAML, skip_confirm=True)
 
     executor.check_preflight.assert_not_called()
-    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    files = list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl"))
     assert len(files) == 1
-
-
-# ── RulePoller watch-file detection ──────────────────────────────────────────
-
-def _watch_record(ttp: str, seen: float, rid: str = RESOURCE_ID) -> dict:
-    from datetime import datetime, timezone
-
-    return {"signal": {"event": "detection", "ttp": ttp, "resource_id": rid,
-                       "timestamp": datetime.fromtimestamp(seen, timezone.utc).isoformat()}}
-
-
-def test_check_watch_files_finds_matching_detection(tmp_path):
-    """_check_watch_files returns the latency when a watch file has a match after the attack."""
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    watch_file = runs / "watch-sudo-privilege-escalation-20260601T134025Z_debug.jsonl"
-    watch_file.write_text(json.dumps(_watch_record("T1548.003", 1000.0 + 42)) + "\n")
-
-    engine = Engine()
-    result = engine._check_watch_files("T1548.003", RESOURCE_ID, 1000.0, runs_dir=runs)
-    assert result == 42.0
-
-
-def test_check_watch_files_matches_the_watch_lower_case_resource_id(tmp_path):
-    """The watch writes Log Analytics' _ResourceId in lower case; Annatar emits ARM's
-    casing. Measured on the bench (20/10): compared as is, every RulePoller detection was
-    a miss (M98). Both casings, both ways."""
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    (runs / "watch-a_debug.jsonl").write_text(
-        json.dumps(_watch_record("T1136.001", 1000.0 + 10, rid=RESOURCE_ID.lower())) + "\n")
-    assert Engine._check_watch_files("T1136.001", RESOURCE_ID, 1000.0, runs_dir=runs) == 10.0
-    assert Engine._check_watch_files("T1136.001", RESOURCE_ID.lower(), 1000.0, runs_dir=runs) == 10.0
-    assert Engine._check_watch_files("T1136.001", RESOURCE_ID.upper(), 1000.0, runs_dir=runs) == 10.0
-
-
-def test_check_watch_files_ignores_wrong_ttp(tmp_path):
-    """_check_watch_files ignores files whose TTP does not match."""
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    watch_file = runs / "watch-something-20260601T000000Z_debug.jsonl"
-    watch_file.write_text(json.dumps(_watch_record("T1041", 1000.0 + 5)) + "\n")
-
-    engine = Engine()
-    result = engine._check_watch_files("T1548.003", RESOURCE_ID, 1000.0, runs_dir=runs)
-    assert result is None
-
-
-def test_check_watch_files_ignores_files_older_than_the_attack(tmp_path):
-    """A file last written before the attack holds no detection of it."""
-    import time as _time
-
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    watch_file = runs / "watch-old-20260101T000000Z_debug.jsonl"
-    attack = _time.time() + 120  # beyond the file system clock's slack
-    watch_file.write_text(json.dumps(_watch_record("T1548.003", attack + 5)) + "\n")
-
-    engine = Engine()
-    result = engine._check_watch_files("T1548.003", RESOURCE_ID, attack, runs_dir=runs)
-    assert result is None
-
-
-def test_check_watch_files_ignores_a_detection_before_the_attack(tmp_path):
-    """Same TTP, same VM, but seen before the attack: an earlier run's (M99)."""
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    (runs / "watch-a_debug.jsonl").write_text(json.dumps(_watch_record("T1548.003", 900.0)) + "\n")
-    assert Engine._check_watch_files("T1548.003", RESOURCE_ID, 1000.0, runs_dir=runs) is None
 
 
 # ── SEC3 (#274): no watcher of Glorfindel's state ─────────────────────────────────────
@@ -234,6 +165,19 @@ def test_the_injectors_read_nothing_of_glorfindels_state():
     assert 'event="attack_adapted"' not in (root / "annatar" / "runner" / "engine.py").read_text(encoding="utf-8")
 
 
+def test_the_injectors_never_read_the_watchs_directory():
+    """SEC18 (N-05): no code of Annatar or Gothmog names the watch's directory of runs/, nor the
+    console's, nor opens a cycle file of the watch — a run's detection comes through the return
+    channel only (the RulePoller watch files were read here until SEC18)."""
+    root = Path(__file__).resolve().parents[2]
+    words = ("runs_layout.GLORFINDEL", "runs_layout.CONSOLE", '"_debug.jsonl"', "_debug.jsonl\"",
+             '"watch-*', "_check_watch_files", '"runs/glorfindel', '"runs/console')
+    found = [f"{f.relative_to(root)}:{n}" for d in ("annatar", "gothmog") for f in (root / d).rglob("*.py")
+             for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
+             if any(w in line for w in words)]
+    assert found == []
+
+
 # ── Revue 2026-09 : la porte de sécurité refuse vraiment (RG ET VM) ───────────
 
 def _run_and_list_signals(tmp_path, monkeypatch, executor):
@@ -242,7 +186,7 @@ def _run_and_list_signals(tmp_path, monkeypatch, executor):
     with patch.object(engine, "_get_executor_collector", return_value=(executor, _make_collector())), \
          patch.object(engine, "_wait_and_emit_feedback"):
         outcome = engine.run(EXFIL_YAML, skip_confirm=True)
-    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    files = list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl"))
     return outcome, files
 
 
@@ -355,7 +299,7 @@ def test_a_local_script_run_writes_the_unified_run_format(tmp_path, monkeypatch)
     with patch.object(engine, "_get_executor_collector", return_value=(_make_executor(), _make_collector())), \
          patch.object(engine, "_wait_and_emit_feedback"):
         engine.run(EXFIL_YAML, skip_confirm=True)
-    report = json.loads(next((tmp_path / "runs").glob("2*.json")).read_text())
+    report = json.loads(next((tmp_path / "runs" / "annatar").glob("2*.json")).read_text())
     m = report["metrics"]
     assert (m["run_format"], m["kind"], m["injector"], m["experiment_id"]) == (RUN_FORMAT, "technique", "annatar", "T1041")
     assert m["resource_id"] == RESOURCE_ID      # M1887: the VM the watch's decision is attached on

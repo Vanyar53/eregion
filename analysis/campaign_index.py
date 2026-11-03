@@ -1,13 +1,13 @@
 """D-2 (#184): put past campaigns into the report's index, so that the next report can face
 its previous campaign.
 
-    python -m analysis.campaign_index runs/campaigns/<id> [runs/campaigns/<id> …]
-    python -m analysis.campaign_index --all runs/campaigns      # every done or aborted one
+    python -m analysis.campaign_index runs/<writer>/campaigns/<id> [… …]
+    python -m analysis.campaign_index --all runs/annatar/campaigns   # every done or aborted one, here
 
 On H0 (Jonathan; the index is on the VM's disk, mounted into the watch's container):
 
     make glorfindel-host-ssh
-    docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
+    docker exec eregion-watch python -m analysis.campaign_index --all runs/glorfindel/campaigns
 
 The choice of the previous campaign (analysis/campaign_report.py ``previous_campaign``)
 reads, on each run of the index, its campaign's state and start and the run's VM. A report

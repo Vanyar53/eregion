@@ -208,7 +208,7 @@ Pendant la campagne, dans la console : la carte de l'action autonome, et gondoli
 
 Une fois le run fini (le nettoyage de l'atomic est passé), la console fait **↩️ Release** sur
 gondolin. En ligne de commande, sur H0 :
-`docker exec eregion-watch glorfindel release <resource_id> --yes`. La levée est vérifiée sur
+`docker exec eregion-war-room glorfindel release <resource_id> --yes` — dans le conteneur de la console, qui écrit `runs/console/` : la watch le monte en lecture seule et n'y noterait pas la levée (SEC18). La levée est vérifiée sur
 Azure, et elle est notée au fil des actions.
 
 ### 6. Lire les indicateurs (5 min, puis le rapport ~25 min après)

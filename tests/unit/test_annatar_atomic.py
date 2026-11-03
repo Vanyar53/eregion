@@ -251,20 +251,20 @@ def _commands_run(executor) -> list[str]:
 
 def _signals(tmp_path):
     out = []
-    for f in (tmp_path / "runs").glob("*_signals.jsonl"):
+    for f in (tmp_path / "runs" / "annatar").glob("*_signals.jsonl"):
         out += [json.loads(x)["event"] for x in f.read_text().splitlines() if x.strip()]
     return out
 
 
 def _report(tmp_path):
-    return json.loads(next((tmp_path / "runs").glob("2*.json")).read_text())
+    return json.loads(next((tmp_path / "runs" / "annatar").glob("2*.json")).read_text())
 
 
 def test_atomic_run_emits_attack_started(tmp_path, monkeypatch):
     executor = _atomic_executor()
     _run_atomic(tmp_path, monkeypatch, executor)
 
-    files = list((tmp_path / "runs").glob("*_signals.jsonl"))
+    files = list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl"))
     assert len(files) == 1
     signals = [json.loads(ln) for ln in files[0].read_text().splitlines() if ln.strip()]
     started = next(s for s in signals if s["event"] == "attack_started")
@@ -350,17 +350,17 @@ def test_p12_detection_latency_is_measured_from_the_attack(tmp_path, monkeypatch
     import datetime as _dt
     import time as _time
 
+    from eregion_core import watch_channel, watch_gate
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "runs").mkdir()
     attack_time = _time.time() - 90  # attacked 90 s ago, detected 30 s after it
-    # The watch's record of the run's attack_started: its timestamp is the attack_started
-    # emission (63 s after the command, after the effect proof), not the detection.
-    emitted_ts = _dt.datetime.fromtimestamp(attack_time + 63, _dt.timezone.utc).isoformat()
-    (tmp_path / "runs" / "rid_debug.jsonl").write_text(json.dumps({"signal": {
-        "event": "detection", "ttp": "T1136.001", "resource_id": RESOURCE_ID,
-        "timestamp": emitted_ts,
-        "raw_signal": {"attack_time": attack_time, "detection_time_s": 30},
-    }}) + "\n")
+    # SEC18: the detection reaches the run through the return channel, as the hosted watch
+    # delivers it — dated when the watch saw it, never when the wait began.
+    seen = _dt.datetime.fromtimestamp(attack_time + 30, _dt.timezone.utc).isoformat()
+    monkeypatch.setenv(watch_channel.CHANNEL_ENV, "https://account.blob.core.windows.net/watch")
+    monkeypatch.setattr(watch_gate, "channel_beat",
+                        lambda: watch_gate.Beat(watch_gate.CHANNEL, _dt.datetime.now(_dt.timezone.utc)))
+    monkeypatch.setattr(watch_channel, "read_detections", lambda rid, **k: [
+        {"event": "detection", "ttp": "T1136.001", "resource_id": RESOURCE_ID.lower(), "detected_at": seen}])
     engine = Engine()
     scenario = SimpleNamespace(mitre="T1136.001", detection={}, detection_hints={})
     emitter = SimpleNamespace(resource_id=RESOURCE_ID, emit=lambda **k: None)
@@ -421,7 +421,7 @@ def test_atomic_refuses_dirty_start(tmp_path, monkeypatch):
     _run_atomic(tmp_path, monkeypatch, executor)
 
     assert not any("useradd" in c for c in _commands_run(executor))
-    assert list((tmp_path / "runs").glob("*_signals.jsonl")) == []
+    assert list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl")) == []
 
 
 # X7 — probes reach the VM substituted, never with a raw #{var} (M86).
@@ -519,7 +519,7 @@ def test_unknown_engine_reaching_the_runner_never_runs_as_local_script(tmp_path,
 def test_atomic_dry_run_shows_command_and_cleanup(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Engine(dry_run=True).run(ATOMIC_YAML, skip_confirm=True)
-    assert list((tmp_path / "runs").glob("*_signals.jsonl")) == []
+    assert list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl")) == []
 
 
 def test_atomic_run_writes_the_unified_run_format(tmp_path, monkeypatch):

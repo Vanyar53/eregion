@@ -218,12 +218,12 @@ annatar run annatar/scenarios/azure/account-creation-atomic.yaml  # R1 : un test
 #   #!/bin/<executor>. Le test est joué dans la VM par Run Command, puis son cleanup (toujours, même si la commande lève — rapport
 #   écrit, attack: ERROR). Cycle : état initial vérifié avant (départ propre exigé), effet prouvé juste après (sinon pas
 #   d'attack_started), état restauré après le cleanup (sinon le run est une erreur + commande de rattrapage affichée). La
-#   détection (detected/missed/unknown) est écrite dans runs/<run_id>.json. Un moteur inconnu est refusé (pas de run vide).
+#   détection (detected/missed/unknown) est écrite dans runs/annatar/<run_id>.json. Un moteur inconnu est refusé (pas de run vide).
 #   Les deux moteurs écrivent aussi metrics.detection_latency_s (#157) : secondes entre attack_time (T0, l'appel de la
 #   commande) et la détection notée par Glorfindel, null si non détecté (annatar report <run_id> l'affiche). Ne compte
 #   qu'une détection du même TTP, sur la même VM (resource_id comparé sans la casse : la watch écrit le _ResourceId de
 #   Log Analytics en minuscules), vue à partir de l'attaque — une détection antérieure est celle d'un autre run
-#   (annatar/runner/detection.py, même règle pour runs/<run_id>_debug.jsonl et les fichiers watch-*).
+#   (annatar/runner/detection.py, même règle pour runs/glorfindel/<run_id>_debug.jsonl et les fichiers watch-*).
 #   Depuis Orodruin (#159), la watch est sur H0 : avec EREGION_WATCH_CHANNEL, l'attente lit le canal retour (battement
 #   de cœur, detections/<run_id>/), même règle. Sans watch locale, `missed` exige un battement de cœur écrit après
 #   l'attente (jusqu'à 130 s de plus), par une watch démarrée avant l'attaque, qui connaît la fenêtre du run ; sinon
@@ -238,9 +238,9 @@ make glorfindel-host-fault-rate [DAYS=30] [JSON=1]   # sur H0 : les pannes prise
 make fault-rate [DAYS=30] [JSON=1]                   # le même taux, sur l'hôte de la watch seulement (ses runs/) ;
 #   ailleurs (Orodruin, un poste) chaque panne est « non mesurée » : les décisions n'y sont pas
 gothmog run vm-shutdown --dry-run            # la panne déclarée, sans appel Azure
-gothmog report <run_id>                      # runs/<run_id>.json (même forme qu'Annatar)
+gothmog report <run_id>                      # runs/gothmog/<run_id>.json (même forme qu'Annatar)
 #   Depuis Orodruin, avec EREGION_EXERCISE_CHANNEL (#193, pas encore mesuré sur le banc) : à la fin
-#   de `annatar run` comme de `gothmog run`, le rapport du run part vers H0 (runs/<run_id>.json dans
+#   de `annatar run` comme de `gothmog run`, le rapport du run part vers H0 (le blob runs/<run_id>.json dans
 #   le conteneur des fenêtres, sans droit nouveau), après la fermeture de sa fenêtre. La watch
 #   hébergée le tire dans son runs/ (une forme refusée n'est pas écrite, un rapport local jamais
 #   écrasé) : la page de son injecteur, dans la console, affiche son verdict. Un échec de publication est signalé
@@ -311,7 +311,7 @@ make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAM
 #   synthétisée. Le plan ne dépend ni de jsonschema ni de schemas/ (absents de l'image) : il valide
 #   l'expérience comme le run la lira (parser + sondes du moteur atomic) ; le schéma E1 est vérifié
 #   par les tests. Une entrée destructive (atomic ou script) demande --allow-destructive et un
-#   safe_target. Manifeste et scénarios dans ~/runs/campaigns/<id>/ (bind-monté). La commande n'est
+#   safe_target. Manifeste et scénarios dans ~/runs/glorfindel/campaigns/<id>/ (bind-monté). La commande n'est
 #   pas répétée à l'écran (CAMPAIGN_TARGET porte l'abonnement).
 make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (la watch de H0 répond selon le mode de chaque VM : gondolin non_disruptive) ; refusée sans watch vivante (V1)
 #   Chaque run passe par le moteur de son expérience (atomic ou script) ; sa détection (detected/
@@ -334,7 +334,7 @@ make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (la watch de H0 
 #   (annatar campaign run), la campagne n'est pas publiée non plus : H0 n'en écrit pas le
 #   rapport. L'image d'Orodruin doit être reconstruite pour écrire l'attack_time dans le rapport
 #   de chaque run : sans lui, aucune décision de la watch n'est rattachée au run.
-make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/campaigns/<id>/report.md sur H0
+make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/glorfindel/campaigns/<id>/report.md sur H0
 #   (à défaut, son report.error). Le thread campaign-report de la watch hébergée tire la campagne
 #   toutes les 30 s et écrit report.md une fois, quand elle est done et que le rapport de chaque run
 #   exécuté est arrivé, seulement pour une campagne tirée du canal (marqueur .pulled). Les
@@ -352,14 +352,14 @@ make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/campaigns/<id>/r
 #   sur la VM) ou lancer la commande à la main ci-dessous. Index campaign_runs dans
 #   ~/.eregion/analysis sur la VM (monté dans le conteneur ; montage et image au prochain
 #   redéploiement de H0). À la main, sur la VM, si le rapport automatique a été abandonné :
-#     docker exec eregion-watch python -m analysis.campaign_report runs/campaigns/<id>
+#     docker exec eregion-watch python -m analysis.campaign_report runs/glorfindel/campaigns/<id>
 #   D-2 (#184) : le rapport se compare à la campagne précédente, choisie dans l'index. Pour y
 #   verser les campagnes passées (idempotent, aucun appel au modèle), sur la VM :
-#     docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
+#     docker exec eregion-watch python -m analysis.campaign_index --all runs/glorfindel/campaigns
 #   quand aucun rapport n'est en attente (le fil campaign-report écrit dans le même index
 #   chromadb) : la liste de hosted_report.ready doit être vide —
-#     docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/campaigns'))])"
-#   (en local : python -m analysis.campaign_index --all runs/campaigns ; docs/analysis.md)
+#     docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/glorfindel/campaigns'))])"
+#   (en local : python -m analysis.campaign_index --all runs/annatar/campaigns ; docs/analysis.md)
 annatar campaign plan --target <resource_id> [--llm]   # en local (banc) ; --llm pour le planner LLM
 annatar campaign run <campaign_id> --yes               # ratifie le budget/scope et exécute
 
@@ -410,7 +410,7 @@ GLORFINDEL_DECISION_DRAWS=3         # D-1 : tirages qui doivent s'accorder avant
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only ; toute valeur sauf vide/0/false/no/off = lecture seule
 GLORFINDEL_OWN_CALLERS=<id>,<id>    # AL1 : identités de Glorfindel sur Azure, en plus des claims de son jeton (jeton d'application : appid/azp et oid ; jeton d'utilisateur, `az login` : l'oid seul — l'appid y est celui de la CLI, commun au tenant, dit une fois) et d'AZURE_CLIENT_ID ; ses écritures (isolation, quarantaine, blocage) dans le journal d'activité ne s'escaladent pas, seulement sur une cible qui est à lui (NSG de quarantaine, règle qu'un état d'isolation ou de blocage nomme — un nom glorfindel-* seul ne suffit pas —, règle du client dont une isolation a décalé la priorité, NIC mise en quarantaine) — son identité sur une autre ressource s'escalade, critique. Glorfindel lancé sous l'identité d'un opérateur écarte aussi les écritures de cet opérateur sur les ressources de Glorfindel ; un seul principal pour Annatar et Glorfindel (option A de .envrc.example) écarte de même celles d'Annatar. Journaux d'Entra ID (C2) : rien n'est écarté sous ces identités, elles y sont marquées (acteur ou cible, critique) ; y ajouter l'objet de l'application de Glorfindel pour qu'un identifiant ajouté à son inscription soit marqué
 GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le registre avant éviction (défaut 8h)
-EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un run seul (runs/<run_id>.json, #193) ; posé sur la watch, il démarre le thread campaign-report, qui tire les deux
+EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un run seul (le blob runs/<run_id>.json, tiré sur H0 dans runs/glorfindel/, #193) ; posé sur la watch, il démarre le thread campaign-report, qui tire les deux
 # Orodruin seulement (orodruin.env) : EREGION_CHANNEL_SCOPE (le conteneur, seule attribution hors du banc acceptée),
 # EREGION_MAX_INJECTIONS / EREGION_MAX_RUN_S (plafond du contrat), EREGION_BENCH_RG
 # Gothmog : EREGION_BENCH_WORKSPACE (Log Analytics du banc pour la sonde Heartbeat, défaut law-celebrimbor-amonsul)
@@ -963,7 +963,7 @@ jeton (`tests/unit/test_workflows.py`).
 
 Chaque service du compose tourne sans capacité (`cap_drop: [ALL]`), sans gain de privilège
 (`no-new-privileges:true`), la racine en lecture seule (`read_only: true`, `/tmp` en tmpfs) :
-il n'écrit que dans ses montages (`runs/`, `~/.glorfindel`, `~/.cache/chroma`,
+il n'écrit que dans ses montages (son répertoire de `runs/` — SEC18, ci-dessous —, `~/.glorfindel`, `~/.cache/chroma`,
 `~/.eregion/analysis` pour la watch ; `~/.annatar` pour Annatar), et la config que la console
 réécrit l'est sur place, sous verrou (`glorfindel/config.py`). `tests/unit/test_profiles.py`
 exige les quatre clés sur chaque service. Mesuré le 29/10 sur Docker (compose 5.5) : les
@@ -973,13 +973,116 @@ config, `/tmp`) passent, l'image et `/root` refusent, `CapEff` à zéro, `NoNewP
 le compose. Les `docker run` des injecteurs sur Orodruin (`ORO_RUN`, `ORO_RUN_REQUEST` du Makefile :
 `orodruin-check`, `orodruin-exercise`, `gothmog-*`, `orodruin-campaign-*`) portent les mêmes quatre
 réglages depuis SEC14 (`ORO_HARDEN`, `tests/unit/test_host_ssh.py`) ; à mesurer au premier run sur
-Orodruin qu'aucune écriture hors de `~/runs` et de `/tmp` n'y manque. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : son rapport de
-campagne s'écrit dans `runs/`, et l'index de l'IA d'analyse ne s'ouvre jamais dans son conteneur
+Orodruin qu'aucune écriture hors de son répertoire de `~/runs` et de `/tmp` n'y manque. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : le rapport de
+sa campagne s'écrit sur H0, par la watch, et l'index de l'IA d'analyse ne s'ouvre jamais dans son conteneur
 (chromadb n'est pas dans son image, `tests/unit/test_profiles.py`). Sur H0, la santé du CD lit
 le journal de chaque conteneur depuis la bascule : un « Read-only file system » que la release
 d'avant ne montrait pas (relu dans sa dernière heure, avant la bascule) est une régression, et
 H0 revient en arrière (`infra/glorfindel-host/cd/eregion_cd.py`, `read_only_errors`) ; le même
 avant et après est dit, jamais un retour ; un journal illisible est dit en orange, non prouvé.
+
+---
+
+## `runs/` : un répertoire par écrivain — le redéploiement coordonné (SEC18, #455)
+
+Depuis SEC18 (N-05), `runs/` n'est plus un répertoire que chaque service monte en écriture : chaque
+écrivain a le sien, que lui seul monte en écriture, et ceux qui le lisent en lecture seule
+(`eregion_core/runs_layout.py` ; la carte complète, avant et après, dans
+[`fichiers-cles.md`](fichiers-cles.md), « `runs/` — qui écrit, qui lit, qui monte ») :
+
+| Répertoire | Écrit par | Lu (lecture seule) par |
+|---|---|---|
+| `runs/glorfindel/` | la watch (ses cycles ; sur H0, ce qu'elle tire du canal ; les rapports et le tri des campagnes) | la console |
+| `runs/console/` | la console, la CLI de Glorfindel, le bot (`manual_actions.jsonl`) | la watch |
+| `runs/annatar/` | Annatar (ses signaux, ses rapports, ses fenêtres, ses campagnes) | la watch, le bot, la console |
+| `runs/gothmog/` | Gothmog (ses signaux, ses rapports, ses fenêtres) | la watch, la console |
+| `runs/orodruin/` | les injecteurs sur Orodruin et le lanceur d'une demande (journal, verrou, statuts) | — |
+| `runs/verdicts/` | la watch, sans canal retour du stockage : le verdict de chaque run, rien d'autre | Annatar, Gothmog |
+
+Le rouge ne monte ni `runs/glorfindel/` ni `runs/console/`. La détection d'un run d'Annatar se mesure
+par le canal retour du stockage (`EREGION_WATCH_CHANNEL`), qui garde la priorité ; sans lui — un poste
+—, par le canal local des verdicts, `runs/verdicts/`, que la watch écrit et que le rouge lit en
+lecture seule : la boucle purple locale garde sa mesure. Sans aucun des deux, elle est `unknown`,
+dite, jamais un raté. `annatar campaign run` sans canal vers H0 n'écrit plus le rapport de campagne :
+il dit le geste, `make campaign-report CAMPAIGN=<id>` (le rapport lit les cycles de la watch, que le
+rouge ne lit pas). Un lecteur ne lit un fichier que dans le répertoire de son écrivain ; ce qui est
+ailleurs n'est jamais lu, et la watch (dans son journal, toutes les minutes, chaque chose une fois),
+la console (dans le sien) et `make runs-survey` le disent.
+
+**La migration.** L'ancienne disposition (des fichiers à plat dans `runs/`) n'est jamais lue. Elle est
+déplacée une fois, **sur l'hôte**, avant que les services démarrent — aucun service ne monte `runs/`
+entier, aucun ne pourrait déplacer —, par `python3 -m eregion_core.runs_layout migrate <runs>` :
+`make glorfindel-start`, `glorfindel-restart`, `team-start` et `team-init` sur un poste, `deploy.sh`
+sur H0 (au démarrage des services, le CD compris), `make orodruin-push` (et `-push-dev`) sur
+Orodruin, dans un conteneur de l'image tout juste vérifiée — le seul qui monte `~/runs` entier, une
+fois. `make runs-migrate` la lance à la main, `make runs-survey` dit ce qui reste hors de place (code
+1 s'il y en a). Ses règles :
+- un fichier va au répertoire de son écrivain **quand il se reconnaît sans ambiguïté** : par son nom
+  (`*_debug.jsonl` → la watch, `*_signals.jsonl` à plat → Annatar, `manual_actions.jsonl` → la
+  console), par ce qu'il dit de lui (un rapport : `metrics.injector`, avant C1 une attaque est
+  d'Annatar ; une fenêtre : son `injector`, ou `channel_created` quand la watch l'a tirée), ou par un
+  marqueur du tirage à côté (`.pulled-runs/<run_id>`, le `.pulled` d'une campagne : à la watch) ; d'une
+  campagne d'Annatar, `report.md`, `report.error`, `triage.*` et `replay.json` vont à la watch ;
+  `runs/orodruin/` qui tient un `contract.json` est la copie de H0 (→ `runs/glorfindel/orodruin/`),
+  sinon c'est déjà le répertoire d'Orodruin ;
+- sinon il est **laissé où il est**, jamais lu, et dit avec le geste : le déplacer à la main vers
+  `runs/<écrivain>/` s'il est connu, sinon le garder à part ;
+- un fichier dont l'écrivain a déjà un fichier du même nom est laissé, dit : les deux sont gardés ;
+- **rien n'est jamais effacé** : un fichier est renommé (`os.rename`, son heure gardée — une fenêtre
+  reste datée comme avant), un répertoire de l'ancienne disposition retiré seulement une fois vide ;
+- relancée, elle ne déplace plus rien ;
+- **un répertoire d'écrivain qui est un lien** (ou un fichier) arrête tout, avant le moindre
+  déplacement (code 3) : monté, il donnerait sa cible à son écrivain. `RUNS_DIRS`, `ORO_DIRS` et
+  `deploy.sh` refusent de même de partir. Le geste : le retirer à la main (`rm`, jamais à travers
+  lui), puis relancer. Plus bas, un lien ou un tube est laissé, dit, jamais suivi ; un fichier est
+  déplacé par un lien dur puis l'ancien nom retiré — jamais par-dessus ce qui est là ;
+- quand l'ancienne disposition contient quelque chose (`python3 -m eregion_core.runs_layout
+  pending runs`), `make runs-migrate` et `deploy.sh` arrêtent d'abord `watch`, `war-room` et
+  `bot` : un fichier qu'ils écriraient pendant ce temps resterait de côté.
+
+Pourquoi déplacer plutôt que lire l'ancienne disposition ou l'abandonner : lire à plat garderait ce que
+SEC18 retire (un fichier à plat ne dit pas qui l'a écrit) ; l'abandonner ferait perdre l'histoire que
+lisent la couverture, les indicateurs et les rapports. Déplacer ce qui se reconnaît garde cette
+histoire. **Ce que la migration ne fait pas** : elle classe par le nom et par ce que dit le fichier,
+comme les lecteurs le croyaient avant SEC18 — un fichier écrit avant par un autre que son écrivain
+apparent (sur un poste où le rouge montait `runs/` en écriture) le reste. Ce qui tient, c'est ce qui
+s'écrit après. Sur H0, aucun injecteur ne tournait : tout `runs/` y était écrit par la watch et la
+console.
+
+**Le redéploiement, dans l'ordre — poste, H0, Orodruin.** Aucun run en vol pendant les trois (ni
+`make orodruin-exercise`, ni campagne, ni panne).
+1. **Le poste.** La branche fusionnée tirée : `make glorfindel-start` (il migre `runs/`, puis démarre
+   la watch et la console), puis `make runs-survey` — rien, ou chaque chose laissée et son geste.
+   Une équipe : `make team-start TEAM=<nom>`.
+2. **H0.** La release qui porte SEC18 publiée, son CD la déploie (`deploy.sh` migre
+   `~/eregion/runs` avant `docker compose up`) ; ou à la main, `make glorfindel-host-start REF=<tag>`.
+   Vérifier : `make glorfindel-host-logs` ne dit aucun « Canal runs/ : … jamais lu », et la console
+   montre les campagnes et les runs d'avant.
+3. **Orodruin.** `make orodruin-push REF=<le même tag>` : l'image vérifiée, chargée, puis `~/runs`
+   migré (`ORO_MIGRATE`) ; puis `make orodruin-check`.
+
+**Ce qui casse si l'ordre n'est pas tenu.**
+- **Le Makefile de SEC18 (le poste) face à l'image d'avant sur Orodruin** (l'étape 3 oubliée) :
+  chaque `docker run` monte `~/runs/annatar`, `~/runs/gothmog`, `~/runs/orodruin`, et l'injecteur
+  d'avant écrit à la racine de `/app/runs` — dans la racine en lecture seule du conteneur. Sa fenêtre
+  d'exercice ne s'écrit pas : le run s'arrête là, **avant de toucher sa cible**, en « Read-only file
+  system ». Rien n'agit, rien ne se mesure, jusqu'à `make orodruin-push`.
+- **L'image de SEC18 sur Orodruin face au Makefile d'avant** (un poste resté en arrière) : `~/runs`
+  monté entier, l'injecteur écrit dans ses répertoires ; rien ne casse, mais l'ancienne disposition
+  n'est pas migrée tant que `make orodruin-push` du poste à jour n'a pas tourné.
+- **Le canal entre Orodruin et H0 ne change pas** (les mêmes blobs, aux mêmes noms) : l'un à jour et
+  l'autre pas, les fenêtres, les rapports et les campagnes passent ; seul l'emplacement sur le disque
+  de H0 change.
+- **Un retour de H0 sous SEC18** (le CD qui revient sur la release d'avant si la santé échoue, ou
+  `make glorfindel-host-cd-rollback`) : le compose d'avant monte `runs/` entier et ne lit qu'à plat — il
+  ne voit plus ce que la migration a rangé. La console paraît vide d'historique ; la watch tire de
+  nouveau du canal les campagnes qui y restent et réécrit leur rapport (un appel au modèle d'analyse
+  par campagne `done` encore sur le canal, au plus trois tentatives). Le geste : redéployer une release
+  qui porte SEC18 ; sinon, remettre à la main le contenu de `runs/glorfindel/` et de `runs/console/` à
+  la racine de `runs/` (rien n'a été effacé).
+- **`docker compose up` sans `make`** (sans la migration) sur un poste neuf : docker crée les
+  répertoires manquants au nom de root ; la watch ne peut plus écrire ses cycles (« debug non écrit »,
+  dit une fois), la console ses gestes. Le geste : `make fix-state-ownership`, puis `make runs-migrate`.
 
 ---
 

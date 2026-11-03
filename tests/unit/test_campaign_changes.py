@@ -97,7 +97,7 @@ def _bench(tmp_path):
     """C0 (21/10) and C1 (23/10) share T1110.001 on vm-bench-01; C0 alone played T1041 on it,
     C1 alone T1136.001 on it and T1041 on vm-bench-02. Between them, CA (aborted) and CX
     (done, nothing in common); after C1, C2 (done, the same key)."""
-    runs = tmp_path / "runs"
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: a campaign pulled on H0, beside the cycles
     c0 = _campaign(runs, "C0", "2026-10-21T12:16:43Z", [
         _run(1, "P1", "T1110.001", latency=91.9, action="block_suspicious_ip", confidence=0.80, escalate=True),
         _run(2, "P2", "T1041", latency=130.1, action="isolate_vm", confidence=0.9, escalate=True)])
@@ -169,7 +169,7 @@ def test_a_campaign_whose_start_is_unknown_has_no_previous_one(tmp_path, index):
 
 def test_when_a_campaign_started(tmp_path):
     """Its first scenario's start, else its creation, else its id when it is a date."""
-    runs = tmp_path / "runs"
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: a campaign pulled on H0, beside the cycles
     first = _campaign(runs, "S", "2026-10-20T00:00:00Z", [
         {**_run(1, "S1", "T1041"), "started_at": "2026-10-21T10:00:00Z"},
         {**_run(2, "S2", "T1041"), "started_at": "2026-10-21T09:00:00Z"}])
@@ -845,7 +845,7 @@ def test_a_channel_campaign_did_not_start_after_h0_pulled_it(tmp_path, index):
     unknown — never the date it gave — and putting it in the index says so. Indexed before
     with that date (before D2b), it loses it: an upsert keeps a key it leaves out, so the
     unknown start is written ("")."""
-    runs = tmp_path / "runs"
+    runs = tmp_path / "runs" / "glorfindel"   # SEC18: a campaign pulled on H0, beside the cycles
     cdir = _from_channel(runs, "CH", "2026-10-25T00:00:00Z",
                          [_run(1, "H1", "T1110.001", latency=106.9)], pulled="2026-10-24T00:00:00Z")
     forged = cr._timestamp("2026-10-25T00:00:00Z")

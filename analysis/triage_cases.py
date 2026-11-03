@@ -114,7 +114,7 @@ CASES = [
 def build_case(case: Case, root: Path) -> dict:
     """The case's files under ``root``: the campaign directory and the paths ``triage.build``
     reads (catalog: the repository's)."""
-    runs = root / "runs"
+    runs = root / "runs" / "glorfindel"    # SEC18: a campaign pulled on H0, beside the watch's cycles
     cdir = runs / "campaigns" / case.name
     cdir.mkdir(parents=True)
     (cdir / "manifest.json").write_text(json.dumps(

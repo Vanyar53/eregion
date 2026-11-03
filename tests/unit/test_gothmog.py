@@ -211,7 +211,7 @@ def bench(tmp_path, monkeypatch):
     def engine(**kw):
         factory = lambda session: ChaosStudio(session, credential=Cred(), http=state["world"],  # noqa: E731
                                               subscription_id=SUB)
-        return Engine(bench_factory=factory, runs_dir=tmp_path / "runs", sleep=clock.sleep,
+        return Engine(bench_factory=factory, runs_dir=tmp_path / "runs" / "gothmog", sleep=clock.sleep,
                       now=clock.now, **kw)
     return clock, world, engine
 
@@ -249,7 +249,7 @@ def test_a_fault_runs_and_its_return_is_verified(bench, tmp_path):
     assert m["seen_down_at"] and m["execution_status"] == "Success" and not m["fallback_used"]
     assert 0 < m["time_to_restore_s"] <= 600
     # Recorded like Annatar's run: runs/<run_id>.json, the same keys.
-    saved = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    saved = json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())
     assert set(saved) == {"scenario", "run_id", "mitre", "result", "metrics", "thresholds", "checks"}
     # An exercise window of kind fault, on the target, closed.
     window = _window(out.run_id)
@@ -263,7 +263,7 @@ def test_the_probes_values_before_the_fault_are_in_the_report(bench, tmp_path):
     clock, world, engine = bench
     world()
     out = engine().run("vm-shutdown", skip_confirm=True)
-    m = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())["metrics"]
+    m = json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())["metrics"]
     assert set(m["before"]) == set(m["after"]) == {"vm-celebrimbor-gondolin"}
     before = {p["name"]: p for p in m["before"]["vm-celebrimbor-gondolin"]}
     assert set(before) == {p["name"] for p in m["after"]["vm-celebrimbor-gondolin"]}
@@ -287,7 +287,7 @@ def test_the_report_goes_to_h0_with_its_window(bench, tmp_path, monkeypatch):
         f"{out.run_id}.json", f"{out.run_id}.json", f"runs/{out.run_id}.json"]
     assert f"audit/{out.run_id}.jsonl" in container.puts
     published = json.loads(container.body(f"runs/{out.run_id}.json"))
-    assert published == json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    assert published == json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())
     assert published["checks"]["revert_verified"] == "PASS" and published["metrics"]["before"]
 
 
@@ -302,11 +302,11 @@ def test_the_start_is_journaled_before_it_is_sent(bench):
 
 
 def test_signals_stay_out_of_what_glorfindel_watch_reads(bench, tmp_path):
-    """The watch sends every runs/*_signals.jsonl event but attack_started to decide."""
+    """The watch sends every runs/annatar/*_signals.jsonl event but attack_started to decide (SEC18)."""
     clock, world, engine = bench
     world()
     engine().run("vm-shutdown", skip_confirm=True)
-    assert list((tmp_path / "runs").glob("*_signals.jsonl")) == []
+    assert list((tmp_path / "runs" / "annatar").glob("*_signals.jsonl")) == []   # SEC18
     assert list((tmp_path / "runs" / "gothmog").glob("*_signals.jsonl"))
 
 
@@ -428,7 +428,7 @@ def test_a_start_refused_injects_nothing_and_is_recorded(bench, tmp_path):
     out = engine().run("vm-shutdown", skip_confirm=True)
     assert out.result == "FAIL" and "AuthorizationFailed" in out.error
     assert w.started_at is None
-    assert (tmp_path / "runs" / f"{out.run_id}.json").exists()
+    assert (tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").exists()
     assert _window(out.run_id)["end"]  # the window opened for the start is closed
 
 
@@ -625,7 +625,7 @@ def test_a_fault_without_glorfindel_runs_and_its_report_says_so(bench, no_watch,
     world()
     out = engine().run("vm-shutdown", skip_confirm=True, without_glorfindel=True)
     assert out.result == "PASS", out.report["checks"]
-    m = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())["metrics"]
+    m = json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())["metrics"]
     assert m["without_glorfindel"] is True
     assert m["detection_note"] == "detection not measured, by choice"
 
@@ -636,7 +636,7 @@ def test_a_refused_fault_without_glorfindel_still_says_so(bench, no_watch, tmp_p
     world(vm_tags={})
     out = engine().run("vm-shutdown", skip_confirm=True, without_glorfindel=True)
     assert out.result == "REFUSED"
-    m = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())["metrics"]
+    m = json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())["metrics"]
     assert m["without_glorfindel"] is True
 
 
@@ -644,7 +644,7 @@ def test_a_fault_with_glorfindel_says_nothing_of_it(bench, tmp_path):
     clock, world, engine = bench
     world()
     out = engine().run("vm-shutdown", skip_confirm=True)
-    m = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())["metrics"]
+    m = json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())["metrics"]
     assert "without_glorfindel" not in m
 
 
@@ -720,7 +720,7 @@ def test_a_fault_run_writes_the_unified_run_format(bench, tmp_path):
     clock, world, engine = bench
     world()
     out = engine().run("vm-shutdown", skip_confirm=True)
-    saved = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    saved = json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())
     m = saved["metrics"]
     assert (m["run_format"], m["kind"], m["injector"], m["experiment_id"]) == (RUN_FORMAT, "fault", "gothmog", "vm-shutdown")
     run = read_run(saved)
@@ -739,7 +739,7 @@ def test_a_fault_from_a_request_writes_its_id_in_the_window_the_journal_and_the_
     assert out.result == "PASS", out.report["checks"]
     assert _window(out.run_id)["request"] == REQ
     assert {line["request"] for line in _audit()} == {REQ}
-    saved = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    saved = json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())
     assert saved["metrics"]["request"] == REQ and saved["metrics"]["experiment_id"] == "vm-shutdown"
 
 
@@ -843,7 +843,7 @@ def test_a_name_azure_does_not_give_is_a_refusal_said_never_an_exception(bench, 
     assert out.result == "REFUSED"
     assert out.error.startswith("typed_name: the target's name unreadable on Azure (RuntimeError: HTTP 403")
     assert w.writes == [] and _no_window()
-    report = json.loads((tmp_path / "runs" / f"{out.run_id}.json").read_text())
+    report = json.loads((tmp_path / "runs" / "gothmog" / f"{out.run_id}.json").read_text())
     assert report["result"] == "REFUSED"
 
 

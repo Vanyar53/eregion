@@ -9616,6 +9616,39 @@ TESTS.update({"M3340": "tests/unit/test_entries_calls.py::test_the_watch_without
               "M3342": _SEC18_LAYOUT, "M3343": _SEC18_MOUNTS})
 
 
+# I5S (#477): the per-VM I5 oracle, widened by Jonathan's decision (03/11, A0) to a writer's perimeter carried as the
+# NIC's NSG of a VM in human_only, bounded by three conditions — the attacker's flows, a NIC in `perimeter_nic`,
+# closed by the perimeter rules the pass wrote alone — and the subnet's branch hardened by the third. The oracle's
+# own mutants, each loosening one bound: measured by its controls (tests/unit/test_invariant_regressions.py), which
+# drive a world where the bound is the only thing that refuses. The first condition is implied by the third (a
+# perimeter rule closes only the attacker's flows): no mutant of its own, it would be equivalent. M3386, M3390–M3392.
+_I5S_CTRL = "tests/unit/test_invariant_regressions.py::"
+_I5S_TESTS = " ".join(_I5S_CTRL + t for t in (
+    "test_the_per_vm_i5_admits_a_writers_perimeter_carried_as_the_nics_nsg",
+    "test_the_per_vm_i5_refuses_what_no_perimeter_rule_closes",
+    "test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds",
+    "test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared"))
+MUTANTS += [
+    ("M3386", "I5 per VM reads every NIC of a VM in human_only as carrying a writer's perimeter: the IP's pair "
+              "written on an NSG no writer holds passes (I5S, the second condition)", INVARIANTS,
+     '                "perimeter_nic": {s for s, n in nics.items() if key(n["nsg"] or "") in perimeters},\n',
+     '                "perimeter_nic": set(nics),\n'),
+    ("M3390", "I5 per VM admits any attacker flow of a NIC carrying a writer's perimeter, whatever closed it "
+              "(I5S, the widening's third condition)", INVARIANTS,
+     '            return f[0] in shares["perimeter_nic"] and f in closed     # the widening (I5S)\n',
+     '            return f[0] in shares["perimeter_nic"]\n'),
+    ("M3391", "I5 per VM admits any attacker flow of a NIC behind a writer's subnet, whatever closed it — the "
+              "oracle before I5S (the hardening undone)", INVARIANTS,
+     "                return f in closed                      # the hardening (I5S)\n",
+     "                return True\n"),
+    ("M3392", "what the perimeter alone closes counts a writer's VM rules as the perimeter's (I5S, I4P: the IP's "
+              "name alone)", INVARIANTS,
+     '            if e["op"] == "rule.write" and e["rule"] in (plain, f"{plain}-out") and e["nsg"] in nsgs:\n',
+     '            if e["op"] == "rule.write" and e["rule"].startswith(plain) and e["nsg"] in nsgs:\n'),
+]
+TESTS.update({f"M{n}": _I5S_TESTS for n in (3386, 3390, 3391, 3392)})
+
+
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;
 # tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).

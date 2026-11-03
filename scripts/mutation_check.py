@@ -9838,6 +9838,47 @@ TESTS.update({"M3340": "tests/unit/test_entries_calls.py::test_the_watch_without
               "M3342": _SEC18_LAYOUT, "M3343": _SEC18_MOUNTS})
 
 
+# L1P (#478): a block written whole sets its entry's threat port, None (unknown: every port) too — the
+# entry kept an earlier block's 22, and the reassertion judged a block of any port on 22 alone: what
+# passed on 443 an « exposure », its bypass never said (L1; the CI of PR #476). A partial block adds
+# only a port it knows. And None reads as every port wherever the port is read. M3393–M3399.
+_L1P_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_block_of_any_port_after_one_of_port_22_is_judged_on_every_port")
+_L1P_UNIT = "tests/unit/test_glorfindel.py::"
+_L1P_AGAIN = f"{_L1P_UNIT}test_a_block_written_again_is_judged_on_its_own_port"
+_L1P_PARTIAL = f"{_L1P_UNIT}test_a_partial_block_adds_only_the_port_it_knows"
+_L1P_PERIMETER = f"{_L1P_UNIT}test_a_perimeter_block_of_unknown_port_is_judged_on_every_port"
+_L1P_KEEP = "        if threat_port is not None or not partial:\n"
+MUTANTS += [
+    ("M3393", "a block of unknown port written whole keeps an earlier block's 22: a bypass on 443 read as an "
+              "exposure, never said (L1P)", STA, _L1P_KEEP, "        if threat_port is not None:\n"),
+    ("M3394", "a partial block never adds the port it knows (L1P, the probe)", STA, _L1P_KEEP,
+     "        if not partial:\n"),
+    ("M3395", "a partial block of unknown port takes away the port of the block written whole (L1P)", STA,
+     _L1P_KEEP, "        if True:\n"),
+    ("M3396", "a VM's block of unknown port verified on port 22 alone (L1P)", VBL,
+     '            port = entry.get("threat_port")\n', '            port = entry.get("threat_port") or 22\n'),
+    ("M3397", "a perimeter block of unknown port verified on port 22 alone (L1P)", VBL,
+     '"outbound_dst": [ip], "port": entry.get("threat_port")})',
+     '"outbound_dst": [ip], "port": entry.get("threat_port") or 22})'),
+    ("M3398", "an unknown port read as no port: every inbound allow before a block an exposure (L1P)", NSG,
+     'port is None or direction == "outbound" or _rule_covers_port(r, port)),',
+     'direction == "outbound" or (port is not None and _rule_covers_port(r, port))),'),
+    ("M3399", "a block of unknown port put back by the reassertion as a block of port 22 (L1P)", R,
+     'connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port"))',
+     'connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port") or 22)'),
+]
+TESTS.update({
+    "M3393": f"{_L1P_SEQ} {_L1P_AGAIN}",
+    "M3394": _L1P_PARTIAL,
+    "M3395": _L1P_PARTIAL,
+    "M3396": _L1P_AGAIN,
+    "M3397": _L1P_PERIMETER,
+    "M3398": f"{_L1P_AGAIN} {_L1P_PERIMETER}",
+    "M3399": "tests/unit/test_reassert.py::test_vanished_block_is_put_back_once_with_its_threat_port",
+})
+
+
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;
 # tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).

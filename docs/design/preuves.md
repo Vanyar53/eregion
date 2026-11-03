@@ -1244,6 +1244,8 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I4S | NSG jugé sans la carte d'une autre VM partie en quarantaine (ou nue) | le reset (ou la levée) de la VM restée seule supprimait l'ancienne isolation de l'autre : aucun flux, mais plus rien au retour de sa carte hors de Glorfindel |
 | I4G | ancienne isolation d'une VM (le refus total à nom fixe), retourné en autorisation par quelqu'un ; une nouvelle VM reçoit ce NSG | la levée (ou le reset) de la première retirait l'autorisation par son nom, la garde jamais demandée : **la nouvelle VM coupée** de ce qu'elle lui ouvrait |
 | I4P | règle de blocage d'une VM retournée en autorisation par quelqu'un, qui laisse l'attaquant joindre une VM d'un autre subnet (l'adresse reprise, un NSG de carte partagé entre deux subnets) | la promotion en périmètre retirait la règle par son nom, la garde jamais demandée : **cette VM coupée**, hors de portée du périmètre — invisible, un blocage de périmètre étant jugé sans les flux de l'attaquant |
+
+| L1P | VM bloquée pour SSH (port 22), bloquée de nouveau, port inconnu ; une règle du client avant notre deny élargie (la CI de la PR #476) | l'entrée gardait le 22 : la réaffirmation jugeait le contournement sur le seul 22, ce qui passait sur 443 une « exposition » — **le contournement jamais dit** (L1) |
 | I7S | isolation par règles sur un NSG partagé, état perdu, carte laissée nue, réisolée sur le NSG du subnet (lectures des NSG en 429), VM supprimée | la levée de la VM supprimée ne cherchait rien : `released`, la première isolation restée sur le NSG partagé, visant l'adresse que reçoit la VM suivante |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
@@ -3628,6 +3630,46 @@ marquées (`reasserted_at`) sans la carte « reposé une fois » ; la disparitio
 « une deuxième fois » et n'est pas reposée — une carte de moins, jamais une disparition tue.
 
 **Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé (lot à part) ; la séquence réduite, rejouée sur la machine et le code de `main` 7ac1f37 pur (après MCG), y est rouge, sur le même U1. **Un second défaut ancien**, trouvé par l'exécution non mutée du harnais de mutation (une graine au hasard à 60) : « L1: the block on …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so » — une VM créée à l'ancienne adresse de Db--01, sous des écritures refusées, son adresse changée, une carte acquittée ; 24 règles réduites à la main à huit de `main`, aucune de L1Qs, rouges sur `main` 7ac1f37 pur comme sur la branche : figé en `xfail` strict (`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone`), hors du lot, routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet (`main` 7ac1f37 fusionné, MCG compris) : 5 933 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 343 mutants, sans faute ; `tests/unit/test_mutant_anchors.py` vert (le bloc de L1Qs au-dessus du repère « The mutants end here »).
+
+**L1P (03/11, #478) : un blocage entier à port inconnu ne garde pas le port d'un blocage précédent.**
+Trouvé par la machine dans la CI de la PR #476 (I4P), Glorfindel seul : « L1: the block of …/Db--01 is
+bypassed by a customer allow (db-nic-1 … 443); the reassertion doesn't say so », à l'étape 22, au second
+`_bypass_said` de `said_then_back_after_a_full_disk`. Rejouée à l'identique, rouge sur `main` 593f8326, sur la
+tête d'I4P et sur L1G : plus ancienne que les trois. **Cause, établie** (l'entrée relevée après chaque étape) :
+Db--01 bloquée pour SSH (port 22) — la paire de db-nic-1 déplacée sur le NSG de son sous-réseau, nsg-data,
+`allow-ssh` passant avant elle sur nsg-tier ; puis bloquée de nouveau, le port inconnu — une paire sur nsg-tier,
+derrière `allow-ssh` —, et `allow-ssh` élargie en une autorisation de tout. L'entrée fusionne le second blocage,
+et `_save_block_state` n'y posait le port que s'il était connu : elle gardait le 22. La réaffirmation jugeait
+donc sur le seul 22, que la paire de nsg-data tient encore, et lisait ce qui atteint db-nic-1 sur 443
+(`allow-https` sur nsg-data, l'`allow-ssh` élargie sur nsg-tier) comme une « exposition » : rien de dit.
+L'oracle juge sur le port du dernier blocage (tout port), le tirage de l'étape : il n'a pas changé (A0).
+
+**Correctif** (`glorfindel/response/state.py`, `_save_block_state`). Un blocage écrit en entier pose son port
+dans l'entrée, `None` compris — `None` se lit « tout port » ; un blocage partiel n'ajoute qu'un port connu,
+comme avant : il est tenu par sa marque (la réaffirmation et ses cartes le laissent à l'opérateur, l'oracle
+aussi, `_block_held`), et le blocage entier suivant pose le sien. **Les autres lecteurs du port**, relus : tous
+lisent déjà `None` comme tout port — `verify_block_ip` (les placements d'une VM, le périmètre seul, un
+périmètre qui tient, `_perimeter_holds`, ce qui reste d'une paire, `_half_bypassed`), tous par
+`_shadowing_rules` (`threat_port_open` vrai sans port) ; la réaffirmation repose un blocage avec le port de
+son entrée (`reassert.py`, `reassert_perimeters.py`) ; la console et la CLI lisent le `threat_port_open` de
+chaque placement, écrit à la pose — un placement d'un blocage antérieur que le nouveau ne réécrit pas garde
+son jugement d'alors (l'affichage seul ; la vérification relit Azure). L'adaptateur AWS écrit l'entrée par la
+même fonction et ne lit pas le port.
+
+**Figés** (`test_invariant_regressions.py`) : `test_a_block_of_any_port_after_one_of_port_22_is_judged_on_every_port`,
+la séquence telle que trouvée (22 règles) et réduite à la main à deux, rouges sur `main`. `test_glorfindel.py` :
+`test_a_block_written_again_is_judged_on_its_own_port` (22 puis inconnu : contourné ; inconnu puis 22 : une
+exposition), `test_a_partial_block_adds_only_the_port_it_knows`,
+`test_a_perimeter_block_of_unknown_port_is_judged_on_every_port` ; `test_reassert.py` : la repose avec son port,
+`None` compris. **Mutants M3393–M3399** (le défaut ; la sonde du diagnostic, `if not partial` ; un partiel qui
+retire un port ; `None` lu comme 22 par la vérification des placements, du périmètre seul ; `None` lu comme
+aucun port par `_shadowing_rules` ; la repose en 22) : 7/7 par leurs tests.
+
+**Mesures de L1P.** Invariants, `--hypothesis-seed=N` : à 60 séquences, N = 1..20, 20/20 vertes ; à 500,
+N = 1, 42, 322 et 8675, 4/4 vertes. Le défaut remis (M3393), la machine seule à 60 sur les graines 1..16 :
+16/16 vertes — elle n'y arrive que rarement (une fois dans la CI de #476) ; ses séquences figées et le test
+unitaire l'attrapent. M3393–M3399 : 7/7 par leurs tests. `pytest` complet : 6 201 réussis, 7 sautés, 2 `xfail` (ceux de L1Qs, hors du lot) ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 468 mutants et 32 du jeu de contrôle, sans faute.
 
 **L1G (03/11, #461) : un blocage disparu est reposé ou dit — la graine 29, et le L1 d'une adresse
 changée sous des écritures refusées.** Deux L1 anciens d'une même famille, « the block … vanished

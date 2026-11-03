@@ -9842,6 +9842,9 @@ TESTS.update({
 # M1861, realigned on the settled closure alone (its former text named `_resolve`, absent from the module: a
 # NameError, caught by any test of the line): the test that reads that note.
 TESTS["M1861"] += f" {_L1A_UNIT}test_a_quarantine_whole_again_then_back_is_said_while_its_record_is_kept"
+# M1865 (a closure with Glorfindel's note read as acknowledged): its test closed A before B's card was refused —
+# A no longer closes then, and the test no longer reads a note. The same test as M1861's reads one.
+TESTS["M1865"] += f" {_L1A_UNIT}test_a_quarantine_whole_again_then_back_is_said_while_its_record_is_kept"
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

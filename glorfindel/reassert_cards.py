@@ -85,9 +85,19 @@ def _resolve(card_id: str, note: str) -> None:
 
 
 def _record(**card) -> None:
+    """A card written — with, in the same write, the closure of those it `replaces` (L1A):
+    closed first, a write refused (a full disk) left the change with no card at all."""
     from glorfindel import escalations
-    escalations.record(**card)
-    new_pass()
+    try:
+        escalations.record(**card)
+    finally:
+        new_pass()
+
+
+def _close(replaced: dict[str, str]) -> None:
+    """Cards no new card replaces (the change said already, or acknowledged): closed now."""
+    for card, note in replaced.items():
+        _resolve(card, note=note)
 
 
 def _last_word(prefix: str, sid: str) -> bool:
@@ -252,8 +262,8 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
     stale = [e for e in cards if not same_sid(e.get("signal_id"), sid)]
     if same_sid(mark, sid) and not stale and (cards or _last_word(f"{prefix}-", sid)):
         return                                  # said: pending, or acknowledged (L2C)
-    for e in stale:
-        _resolve(e["id"], note="Contournement changé : une nouvelle carte le dit.")
+    # Closed in the write of the new card, never before it (L1A): refused, the former still waits.
+    replaced = {e["id"]: "Contournement changé : une nouvelle carte le dit." for e in stale}
     what = f"Le blocage de {ip} sur {vm}" if ip else f"L'isolation de {vm}"
     reason = (f"{what} est contourné{'' if ip else 'e'} : {_describe(found)} passe avant le deny "
               "de Glorfindel (NSG de la carte ou du sous-réseau). Remettre les règles n'y change rien ; "
@@ -266,7 +276,9 @@ def say_bypass(vm: str, rid: str, verification: dict, report: list[dict], ip: st
     if not any(same_sid(e.get("signal_id"), sid) for e in cards):
         _record(signal_id=sid, resource_id=rid, action=_BYPASS_ACTION, escalation_type=BYPASS_TYPE,
                 reason=reason, severity="high", suggested_steps=steps,
-                action_params={"ip": ip} if ip else None)
+                action_params={"ip": ip} if ip else None, replaces=replaced)
+    else:
+        _close(replaced)                        # its card waits already: the others close
     remember(sid)
     report.append({"kind": "block" if ip else "isolation", "vm": vm, **({"ip": ip} if ip else {}),
                    "outcome": "bypassed", "detail": reason})
@@ -390,10 +402,9 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
     stale = [e for e in cards if not same_sid(e.get("signal_id"), sid)]
     if same_sid(entry.get("left_said"), sid) and not stale and (cards or _last_word(prefix, sid)):
         return                                  # said: pending, or acknowledged (L2C)
-    for e in stale:
-        # Another set: the store folded its card into this one, which kept naming the
-        # former rules (L2C).
-        _resolve(e["id"], note="Autres règles laissées : une nouvelle carte les dit.")
+    # Another set: the store folded its card into this one, which kept naming the former rules
+    # (L2C). Closed in the write of the new card, never before it (L1A).
+    replaced = {e["id"]: "Autres règles laissées : une nouvelle carte les dit." for e in stale}
     what = " ; ".join(f"{x.get('rule')} ({x.get('nsg')}), "
                       + (f"à nous, vise {x.get('to')} et n'a pas pu être retirée ({x.get('on')})"
                          if x.get("kind") == "drop_failed" else
@@ -412,7 +423,10 @@ def say_left(vm: str, rid: str, ip: str, entry: dict, report: list[dict], ref: s
              "si elle l'est, la remplacer par une règle du client, hors du nom de Glorfindel."]
     if not any(same_sid(e.get("signal_id"), sid) for e in cards):
         _record(signal_id=sid, resource_id=rid, action=_LEFT_ACTION, escalation_type=LEFT_TYPE,
-                reason=reason, severity="medium", suggested_steps=steps, action_params={"ip": ip})
+                reason=reason, severity="medium", suggested_steps=steps, action_params={"ip": ip},
+                replaces=replaced)
+    else:
+        _close(replaced)
     _update_block_entry(ref or vm, ip, left_said=sid)
     report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
 
@@ -453,15 +467,17 @@ def say_unreadable_states(report: list[dict]) -> None:
     sid = f"{_STATE_PREFIX}{_digest(files)}" if files else ""
     alerts = _load_alerts()
     cards = [e for e in escalations.pending() if (e.get("signal_id") or "").startswith(_STATE_PREFIX)]
-    for e in cards:
-        if e.get("signal_id") != sid:
-            _resolve(e["id"], note="État local lisible de nouveau, ou autres fichiers illisibles.")
+    replaced = {e["id"]: "État local lisible de nouveau, ou autres fichiers illisibles." for e in cards
+                if e.get("signal_id") != sid}
+    said = any(e.get("signal_id") == sid for e in cards)
+    quiet = alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid))
+    if not files or said or quiet:
+        _close(replaced)                        # no new card: the others close now
     if not files:
         if alerts.pop("unreadable_states", None) is not None:
             _save_alerts(alerts)
         return
-    said = any(e.get("signal_id") == sid for e in cards)
-    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):
+    if quiet:
         return                                  # said: pending, or acknowledged (L2C)
     more = f" (+{len(files) - 5})" if len(files) > 5 else ""
     # What waits depends on which: a block file stops the orphan sweep only; an isolation
@@ -490,8 +506,10 @@ def say_unreadable_states(report: list[dict]) -> None:
                      "unknown » sur leur carte).")
     steps.append("La carte se ferme d'elle-même quand tout se lit de nouveau et que rien n'est mis de côté.")
     if not said:
+        # Another set: its card closed in the write of this one, never before it (L1A).
         _record(signal_id=sid, resource_id=_STATE_RESOURCE, action=_STATE_ACTION,
-                escalation_type=STATE_TYPE, reason=reason, severity="high", suggested_steps=steps)
+                escalation_type=STATE_TYPE, reason=reason, severity="high", suggested_steps=steps,
+                replaces=replaced)
     alerts["unreadable_states"] = sid
     _save_alerts(alerts)
     report.append({"kind": "state", "vm": "état local", "outcome": "escalated", "detail": reason})

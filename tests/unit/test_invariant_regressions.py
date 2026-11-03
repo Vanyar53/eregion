@@ -6673,3 +6673,74 @@ def test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block(monkeypatc
     unsaid. The code was right to say nothing more. Reduced by hand to six rules; red on `main`
     de040e8c, all three."""
     _replay(monkeypatch, _mak_net(tier), *steps)
+
+
+_WEB_NIC_NSG = _NSG.format(rg="rg-app1", name="nsg-web-nic")
+_NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
+_Q_OFF = {"quarantine": False, "rg": "", "forensic": [], "readable": True}
+_Q_ON = {"quarantine": True, "rg": "", "forensic": [], "readable": True}
+# Seed 42 at 500 (found by I5S's measure, #477, on its tree with `main` 41bef33 merged), every rule with
+# its draws in order, as Hypothesis left it (its shrinking stopped after five minutes).
+_SEED42_L1A = [
+    ("terraform_apply", _WEB_NIC_NSG),
+    ("perimeters_on_two_subnets",),
+    ("config_changes", _Q_OFF, True),
+    ("redeploy_nic", _nic("rg-app1", "db-nic-0")),
+    ("lose_state", WEB1),
+    ("perimeter_lifted_beside_a_block", WEB2, WEB2, None, WEB1, False, WEB1, 22),
+    ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, None, False, 22, (1, "from-full")),
+    ("config_changes", _Q_ON, True),
+    ("tamper_with_our_rule", "port"),
+    ("redeploy_nic", _nic("rg-app1", "db-nic-0")),
+    ("tags_lost",),
+    ("time_passes",),
+    ("time_passes",),
+    ("kept_at_the_lift", WEB2, WEB2, ("nic.get", "always-429"), "reset", True, "unblock", 22,
+     (_NSG.format(rg="rg-net", name="nsg-subnet"), "glorfindel-block-192-31-196-7-web-web-nic-80ab3c"),
+     _nic("rg-app2", "web-nic"), 0, 4, "rg-new", "web", None, "Linux", True),
+    ("reset_from_azure", _NEW_WEB, _NEW_WEB, None),
+    ("quarantine_change_comes_back", WEB1, WEB1, None, False, True,
+     _NSG.format(rg="rg-app2", name="nsg-glorfindel-quarantine-westeurope"), "human_only", "no", "human_only",
+     (4, "from-full"), False, "human_only"),
+]
+
+
+@pytest.mark.parametrize("found", [True, False], ids=["as found", "shrunk"])
+def test_a_block_said_again_as_the_disk_fills_keeps_a_card_through_an_unchecked_pass(monkeypatch, found):
+    """Seed 42 at 500 (L1A, #480), found by I5S's measure, red on `main` 41bef33 before I5S: « L1: the
+    block on …/rg-app1/…/web vanished from Azure; the reassertion neither put it back nor said so ».
+    Shrunk by hand to four rules of `main`, none of I5S's:
+    1. `said_then_back_after_a_full_disk` (« gone »): web of rg-app1 blocked (22) on its own NSG; its
+       rules taken off, said, acknowledged; put back during a full disk; taken off again, said — a
+       card « a disparu » pending;
+    2. `config_changes`: the quarantine turned on;
+    3. `kept_at_the_lift`: web of rg-app2 isolated in quarantine, blocked on nsg-subnet, its rule
+       turned, its address given to a new VM (rg-new/web), its state lost, unblocked;
+    4. `quarantine_change_comes_back`: web of rg-app1 isolated in quarantine; rg-app2's quarantine
+       stripped, a pass, said; the forensic access changed, a pass with the disk full from its 4th
+       write — the block of web said again; the configuration made unreadable, a pass.
+    The cause: in the full-disk pass, `reassert._alert` closed the pending card (« Remplacée : une
+    nouvelle alerte… ») before `escalations.record` wrote the new one, refused (ENOSPC): no card
+    left, `drift_alerted_at` kept from before. The next pass reads the block unverified (web behind
+    the quarantine, the configuration unreadable) and says nothing more. A card is closed in the
+    write of the card that replaces it now (`record(replaces=…)`): refused, the former still waits."""
+    steps = _SEED42_L1A if found else [_SEED42_L1A[i] for i in (6, 7, 13, 15)]
+    net = _net(subnet_nsg=[], web_nic={"own": "dedicated"})
+    net["config"] = {"forensic": ["10.9.9.9"], "rg": "", "quarantine": False, "readable": True}
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(net)
+        for rule, *draws in steps:             # every rule but `time_passes` takes its draws, even none
+            if rule == "time_passes":
+                m.time_passes()
+                continue
+            s = Script(*draws)
+            getattr(m, rule)(data=s)
+            if s.values:
+                pytest.fail(f"{rule} left draws unused: {s.values}")
+            m.never_more_open_than_designed()
+            m.customer_configuration_untouched()
+            m.one_vm_one_state_file()
+    finally:
+        m.teardown()

@@ -230,9 +230,9 @@ resource "azurerm_linux_virtual_machine" "host" {
   }
 
   # Docker seulement, au premier démarrage, sortie encore ouverte. L'image d'Annatar arrive
-  # ensuite par `make orodruin-push` (docker save | ssh), sans rouvrir la sortie : l'image que la
-  # CI a publiée, tirée par son digest et vérifiée sur le poste (CI3) — GHCR n'est pas dans la
-  # sortie d'Orodruin : ses blobs viennent de pkg-containers.githubusercontent.com, un nom du domaine
+  # ensuite par `make orodruin-push` (une archive | ssh docker load), sans rouvrir la sortie :
+  # l'image que la CI a publiée, vérifiée sur le poste (CI3), son archive bâtie des blobs du
+  # registre (OI1) — GHCR n'est pas dans la sortie d'Orodruin : ses blobs viennent de pkg-containers.githubusercontent.com, un nom du domaine
   # du contenu des utilisateurs de GitHub, qu'un NSG ne sait pas filtrer par nom.
   # Le mkdir de ~/.annatar ci-dessous est un reste : aucun docker run ne monte ~/.annatar sur
   # Orodruin (SEC20, tests/unit/test_red_mounts.py) ; il reste, car changer custom_data

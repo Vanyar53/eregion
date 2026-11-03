@@ -3068,6 +3068,134 @@ async def exercise_request(body: dict) -> JSONResponse:
     return JSONResponse(board.request_view(req, ordered, plan))
 
 
+# ── Dagorlad's drills (DG-d, docs/design/console.md §7, « Les drills ») ─────────────────────
+# Kept in the console's own directory (~/.eregion/console/drills), Eregion's shipped in drills/ —
+# never where the watch reads. Loading one places its wires on the board, nothing more: a selector's
+# wire waits for the operator's VMs (Jonathan, 03/11), the request is written by its own gesture.
+
+def _drill_candidates() -> tuple[list, str]:
+    """The enrolled VMs read now (``_bench_vms``), as a drill's wires may take them."""
+    from eregion_core import drill
+    vms, error = _bench_vms()
+    return drill.candidates(vms, _bench()), error
+
+
+def _last_runs() -> dict[tuple[str, str], float]:
+    """(experiment, VM) → when it last ran there, from every run report this host keeps: the hint
+    of the VM exercised the least recently — never a choice. A VM is its resource id (lowercase);
+    a run that names its VM only (a fault's targets) is keyed by that name (``name:<vm>``), read
+    for a candidate whose name no other candidate bears."""
+    from eregion_core import run_report
+    out: dict[tuple[str, str], float] = {}
+    for r in run_report.read_reports(_run_reports(), runs_reader.read_json):
+        at = r.get("at")
+        if not isinstance(at, (int, float)):
+            continue
+        keys = {f"name:{t.rstrip('/').rsplit('/', 1)[-1].lower()}" if "/" not in t.strip("/") else t.rstrip("/").lower()
+                for t in [str(r.get("resource_id") or ""), *(str(t) for t in r.get("targets") or [])] if t}
+        for vm in keys:
+            key = (str(r.get("experiment") or ""), vm)
+            out[key] = max(at, out.get(key, at))
+    return out
+
+
+@app.get("/api/dagorlad/drills")
+async def drills() -> dict:
+    """The drills of this instance and Eregion's shipped ones: name, layer, author, time,
+    description, wires — a file that cannot be read listed with why."""
+    from eregion_core import drill
+    return {"drills": await asyncio.to_thread(drill.listing)}
+
+
+@app.get("/api/dagorlad/drills/{name}")
+async def drill_placed(name: str) -> JSONResponse:
+    """A drill, placed on the VMs enrolled now: each wire's VMs — a named wire's own, or none for a
+    selector's, with its zone's candidates and when each last ran it here (a hint, never a
+    choice). Read only: nothing is written, nothing is launched."""
+    from eregion_core import drill
+    if not drill.valid_name(name):
+        return JSONResponse({"error": "not a drill's name"}, status_code=400)
+
+    def read() -> dict:
+        d = drill.find(name)
+        cands, error = _drill_candidates()
+        last = _last_runs()
+        placed = [p.to_dict() for p in drill.place(d, cands)]
+        named = [c.name.lower() for c in cands]
+        for p in placed:
+            for c in p["candidates"]:
+                ran = last.get((p["experiment"], c["resource_id"].lower()))
+                if ran is None and named.count(c["name"].lower()) == 1:
+                    ran = last.get((p["experiment"], f"name:{c['name'].lower()}"))
+                c["last_run_at"] = ran
+        return {**d.to_doc(), "layer": d.layer, "placed": placed, "targets_error": error}
+    try:
+        return JSONResponse(await asyncio.to_thread(read))
+    except drill.DrillRefused as exc:
+        return JSONResponse({"error": str(exc)[:300]}, status_code=404)
+
+
+@app.get("/api/dagorlad/drills/{name}/yaml")
+async def drill_yaml(name: str):
+    """The drill as its file holds it — the export, for Git, the twin, or a PR to the shipped ones."""
+    from fastapi.responses import PlainTextResponse
+    from eregion_core import drill
+    if not drill.valid_name(name):
+        return JSONResponse({"error": "not a drill's name"}, status_code=400)
+    try:
+        d = await asyncio.to_thread(drill.find, name)
+    except drill.DrillRefused as exc:
+        return JSONResponse({"error": str(exc)[:300]}, status_code=404)
+    return PlainTextResponse(drill.to_yaml(d), media_type="application/yaml",
+                             headers={"Content-Disposition": f'attachment; filename="{d.name}.yaml"'})
+
+
+@app.post("/api/dagorlad/drills")
+async def drill_save(body: dict) -> JSONResponse:
+    """« Save as drill »: the wires drawn, kept under a name in this instance — the console's own
+    directory, never the cloud nor where the watch reads. The browser sends, per wire, the
+    experiment and the target it drew; the drill keeps the VM's name, read now among the enrolled
+    VMs — never its resource id. Over a drill of the same name only with ``replace``."""
+    from eregion_core import drill
+    keys = set(body)
+    if not ({"name", "wires"} <= keys <= {"name", "description", "wires", "replace"}):
+        return JSONResponse({"error": "a drill is {\"name\", \"wires\": [...]} with an optional "
+                                      "\"description\" and \"replace\", nothing else"}, status_code=400)
+    wires, replace = body["wires"], body.get("replace", False)
+    if not isinstance(wires, list) or not 1 <= len(wires) <= drill.MAX_WIRES or not isinstance(replace, bool) \
+            or not all(isinstance(w, dict) and set(w) == {"experiment", "target"}
+                       and all(isinstance(w[k], str) for k in w) for w in wires):
+        return JSONResponse({"error": f"its wires are 1 to {drill.MAX_WIRES} of {{\"experiment\", \"target\"}}"},
+                            status_code=400)
+
+    def write() -> JSONResponse:
+        cands, error = _drill_candidates()
+        by_id = {c.resource_id.lower(): c for c in cands}
+        stray = [w["target"] for w in wires if w["target"].lower() not in by_id]
+        if stray:
+            why = error or "not an enrolled VM read now"
+            return JSONResponse({"error": f"{len(stray)} target(s) {why}: a drill keeps the names of enrolled "
+                                          "VMs — nothing is written"}, status_code=409)
+        # A drill keeps names: a name that several enrolled VMs bear (a twin copied from a bench)
+        # would come back on another VM — refused, never kept.
+        names = [c.name.lower() for c in cands]
+        twice = sorted({by_id[w["target"].lower()].name for w in wires
+                        if names.count(by_id[w["target"].lower()].name.lower()) > 1})
+        if twice:
+            return JSONResponse({"error": f"{', '.join(twice)}: a name several enrolled VMs bear here — a drill "
+                                          "keeps names, and would come back on another VM: nothing is written"},
+                                status_code=409)
+        try:
+            d = drill.new(body["name"], [(w["experiment"], by_id[w["target"].lower()].name) for w in wires],
+                          description=body.get("description") or "")
+            drill.save(d, replace=replace)
+        except drill.DrillRefused as exc:
+            exists = "exists already" in str(exc)
+            return JSONResponse({"error": str(exc)[:300], "exists": exists}, status_code=409 if exists else 400)
+        return JSONResponse({"saved": d.name, "drill": {**d.to_doc(), "layer": d.layer}})
+    return await asyncio.to_thread(write)
+
+
 def serve(host: str = "127.0.0.1", port: int = 7007) -> None:
     try:
         import uvicorn

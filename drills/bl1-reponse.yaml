@@ -1,0 +1,11 @@
+# A reference drill of Eregion (DG-d, docs/design/console.md §7): shipped, reviewed in a PR,
+# replaced by an update. Its targets are selectors — the operator gives their VMs when it is
+# placed (the board, or TARGETS= with make orodruin-exercise DRILL=).
+name: bl1-reponse
+author: eregion
+description: "BL1's measure (docs/banc-bl1.md): a fault not taken for an attack, then a public technique contained alone — on the bench."
+wires:
+  - experiment: vm-shutdown
+    target: {zone: bench}
+  - experiment: T1136.001
+    target: {zone: bench}

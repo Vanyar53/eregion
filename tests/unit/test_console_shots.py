@@ -401,7 +401,7 @@ def test_the_images_are_the_samples_and_small_enough():
     manifest = json.loads((IMAGES / cs.MANIFEST).read_text(encoding="utf-8"))
     assert manifest["sample_sha256"] == cs.sha256(cs.SAMPLE), (
         "the sample changed since the images were rendered: python scripts/console_shots.py")
-    assert sorted(manifest["images"]) == ["board.png", "loop.webp", "runs.png"]
+    assert sorted(manifest["images"]) == ["board.png", "drills.png", "loop.webp", "runs.png"]
     for name, digest in manifest["images"].items():
         data = (IMAGES / name).read_bytes()
         assert hashlib.sha256(data).hexdigest() == digest, f"{name} is not the one rendered"

@@ -87,7 +87,7 @@ class Recorder:
 
 
 class FakeMemory:
-    def __init__(self, path=None) -> None:
+    def __init__(self, path=None, **_) -> None:
         self.stored: list[dict] = []
 
     def retrieve_similar(self, signal, n=3):

@@ -1594,6 +1594,10 @@ def report(since_text: str, as_json: bool):
     r = escalations.observation_report(since)
     # ADM1: the administrators' sudo that opened no card — counted, never silent.
     r["expected_sudo"] = expected_sudo.summary(since)
+    # SEC17 (V-12): the past cycles the memory's age bound leaves out of the search — kept, counted.
+    from glorfindel.config import memory_max_age_days
+    from glorfindel.memory import age_census
+    r["memory"] = age_census(max_age_days=memory_max_age_days())
     if as_json:
         click.echo(_json.dumps(r, indent=2))
         return
@@ -1617,6 +1621,26 @@ def report(since_text: str, as_json: bool):
     if r.get("exercises"):
         console.print(f"[dim]{r['exercises']} exercise card(s) left out (an injector's window covered the VM)[/dim]")
     _print_expected_sudo(r["expected_sudo"])
+    _print_memory(r["memory"])
+
+
+def _memory_said(m: dict) -> str:
+    """SEC17 (V-12): the memory's real cycles by age — those the bound leaves out of the search
+    (too old, or stored before cycles were dated), kept and counted, never erased."""
+    days = f"{m.get('max_age_days', 0):g}"
+    if m.get("error"):
+        return f"[yellow]Memory: unreadable — {_esc_markup(''.join(c for c in str(m['error']) if c.isprintable()))}[/yellow]"
+    if m.get("absent"):
+        return f"Memory: none yet (age bound {days} days)"
+    said = (f"Memory: {m.get('real', 0)} real cycle(s), {m.get('within', 0)} within {days} days "
+            f"— {m.get('too_old', 0)} older left out of the search")
+    if m.get("undated"):
+        said += f", {m['undated']} undated (stored before cycles were dated) left out"
+    return said + " (kept, never erased)"
+
+
+def _print_memory(m: dict) -> None:
+    console.print(_memory_said(m))
 
 
 def _origin_proof_said(es: dict) -> str:
@@ -1965,10 +1989,12 @@ def revert(resource_id: str, yes: bool, dry_run: bool):
 @cli.command()
 @click.option("--memory-path", default=None)
 def memory_stats(memory_path: str | None):
-    """Show how many cycles are stored in memory."""
+    """Show how many cycles are stored in memory, and those its age bound leaves out (SEC17)."""
+    from glorfindel.config import memory_max_age_days
     from glorfindel.memory import CycleMemory
-    m = CycleMemory(path=memory_path)
+    m = CycleMemory(path=memory_path, max_age_days=memory_max_age_days())
     console.print(f"Cycles in memory: [cyan]{m.count()}[/cyan]")
+    console.print(_memory_said(m.age_census()))
 
 
 @cli.command("check-ttl")

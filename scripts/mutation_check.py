@@ -3595,7 +3595,8 @@ MUTANTS += [
     ("M1245", "the card of an uncontained detection never written (SEC4a, V-11)", AGT,
      "    _record_uncontained(state, source, exercise_run)\n", ""),
     ("M1246", "a signal given exercise cycles: the retrieval does not filter (SEC4a, V-12)", MEM,
-     '            where={"source": "real"},\n', ""),
+     '            where={"$and": [{"source": "real"}, {"stored_at": {"$gte": self._cutoff()}}]},\n',
+     '            where={"stored_at": {"$gte": self._cutoff()}},\n'),     # re-anchored by SEC17
     ("M1247", "a cycle's id taken from its signal and upserted: a reused id overwrites a real cycle (SEC4a, V-12)",
      MEM, ('cycle_id = f"cycle-{uuid.uuid4().hex}"', "self._collection.add("),
      ("cycle_id = f\"{cycle['signal_id']}_{cycle['action']}\"", "self._collection.upsert(")),
@@ -8616,6 +8617,32 @@ MUTANTS += [
      '        named = [e for e in assets if e.get("match") == asset_name][:1]\n'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_config.py" for n in range(3180, 3185)})
+
+
+# SEC17 (#451, V-12): the memory has an age — a cycle dated by the host when stored, the search
+# bounded by the config's age (90 days), what it leaves out counted and said. M3200–M3206.
+MUTANTS += [
+    ("M3200", "the search ignores a cycle's age: a year-old precedent weighs as yesterday's (SEC17, V-12)", MEM,
+     '            where={"$and": [{"source": "real"}, {"stored_at": {"$gte": self._cutoff()}}]},\n',
+     '            where={"source": "real"},\n'),
+    ("M3201", "a cycle dated by what it carries, not by the host: it stays young for ever (SEC17, V-12)", MEM,
+     '                "stored_at": int(self._clock()),\n',
+     '                "stored_at": int(cycle.get("stored_at") or self._clock()),\n'),
+    ("M3202", "the watch's agent never reads the config's age bound (SEC17, V-12)", AGT,
+     "        self.memory = CycleMemory(path=memory_path, max_age_days=memory_max_age_days())\n",
+     "        self.memory = CycleMemory(path=memory_path)\n"),
+    ("M3203", "an infinite or huge age bound accepted: every cycle young again (SEC17, V-12)", C,
+     "        if not math.isfinite(value) or not 0 < value <= ceiling:\n",
+     "        if value <= 0:\n"),
+    ("M3204", "an undated cycle counted as one within the bound (SEC17, V-12)", MEM,
+     "                undated += 1\n", "                within += 1\n"),
+    ("M3205", "the report silent on the cycles its age leaves out (SEC17, V-12)", GCLI,
+     '    _print_expected_sudo(r["expected_sudo"])\n    _print_memory(r["memory"])\n',
+     '    _print_expected_sudo(r["expected_sudo"])\n'),
+    ("M3206", "the report makes a memory on a host that has none (SEC17, V-12)", MEM,
+     "    if not storage_path.is_dir():\n", "    if False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_memory_age.py" for n in range(3200, 3207)})
 
 
 def _copy_repo(dest: Path) -> None:

@@ -329,6 +329,9 @@ def isolated_glorfindel_home(tmp_path, monkeypatch):
     import glorfindel.expected_sudo as expected_sudo
     monkeypatch.setattr(expected_sudo, "_JOURNAL", home / "expected_sudo.jsonl")
     monkeypatch.setattr(discovery, "_CACHE_FILE", home / "discovered_assets.json")
+    # SEC17: the memory of past cycles, which `glorfindel report` now reads.
+    import glorfindel.memory as memory
+    monkeypatch.setattr(memory, "_DEFAULT_PATH", home / "cycles")
     monkeypatch.setattr(IncidentRegistry, "_DEFAULT_PATH", home / "incidents.jsonl")
     monkeypatch.setattr(readiness, "_STATE_FILE", home / "readiness.json")
     # SEC3: the recovery signals `glorfindel restore` keeps, and what this process vouched for.

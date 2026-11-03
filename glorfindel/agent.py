@@ -269,7 +269,8 @@ def load_context(
     and is given no past cycle.
 
     The past cycles are real ones only, for every signal, an exercise's too (SEC4a, V-12):
-    never an exercise's cycle, nor one of unknown source."""
+    never an exercise's cycle, nor one of unknown source — and of a bounded age (SEC17):
+    never one stored longer ago than the memory's bound, nor one with no date."""
     from dataclasses import asdict
 
     signal = state["signal"]
@@ -2628,7 +2629,9 @@ class GlorfindelAgent:
         from glorfindel.actions import AzureConnector
 
         self.dry_run = dry_run
-        self.memory = CycleMemory(path=memory_path)
+        # SEC17 (V-12): a past cycle older than the config's bound (90 days) is no precedent.
+        from glorfindel.config import memory_max_age_days
+        self.memory = CycleMemory(path=memory_path, max_age_days=memory_max_age_days())
         self.connector = connector or AzureConnector(dry_run=dry_run)
         self.incidents = IncidentRegistry(path=incidents_path)
         self.model = model or glorfindel_model()

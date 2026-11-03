@@ -11,8 +11,9 @@ by its CD (infra/glorfindel-host/cd/eregion_cd.py), on the operator's machine fo
     published_image.py install-syft DEST                   syft (the SBOM), its archive pinned by its sha256
     published_image.py meta IMAGE --commit C               the workflow's names and labels ($GITHUB_OUTPUT)
     published_image.py pushed IMAGE --ref R                the workflow's push: R pushed, its digest said
-    published_image.py sign-blob FILE                      SEC19: FILE signed keyless (Jonathan), FILE.sigstore.json
-    published_image.py verify-blob FILE --identity I --issuer O   FILE signed by I through O
+    published_image.py harness-key [DIR]                   SEC19: the attestation's key pair (Jonathan, once)
+    published_image.py sign-blob FILE [--key K]            FILE signed by that key, offline, FILE.sigstore.json
+    published_image.py verify-blob FILE --pinned P | --pub F   FILE signed by the key P (host.env's form) or F
 
 What is trusted, and what is not (docs/operations.md, « Les images publiées ») :
 - **A registry tag is a hint, never a proof.** The workflow pushes ghcr.io/grootcyber/eregion-<image>
@@ -351,64 +352,186 @@ def verify(image: str, digest: str, commit: str, cosign: Path, slug: str = SOURC
         check_provenance(st, image, digest, commit, slug)
 
 
-# ── SEC19 (R-13): a file signed by a person, keyless ───────────────────────────────────
-# The harness's attestation (requirements/harness.json), signed by the maintainer's OIDC identity
-# (`make harness-sign`): its signature, its certificate and the transparency log's proof in one
-# bundle beside it. Who is expected, and by which issuer, comes from H0's config — never from here.
+# ── SEC19 (R-13): the harness's attestation signed by its author's own key ─────────────
+# A cosign key pair of the maintainer (`make harness-key`, Jonathan's decision of 03/11): its private
+# half encrypted by a passphrase he types, kept off the repository (~/.config/eregion/harness/); its
+# public half pinned in H0's config (EREGION_HARNESS_KEY in host.env), never in the repository. No
+# certificate, no identity, nothing sent to a transparency log: signed and verified offline
+# (measured on 03/11 with cosign v3.1.3, the network refused: `sign-blob --signing-config` with a
+# config that names no service writes a bundle holding the signature and the key's hint only;
+# `verify-blob --key … --insecure-ignore-tlog` verifies it, a wrong key or a changed file refused —
+# « invalid signature when validating ASN.1 encoded signature »; without --insecure-ignore-tlog it
+# fetches sigstore's trust root). v3.1.3 has no --tlog-upload any more (its help lists none), and
+# `--use-signing-config=false` alone still posts to rekor.sigstore.dev (measured: the POST refused
+# by the blocked network): only a signing config without Rekor keeps the signature off the log.
+# --insecure-ignore-sct is a certificate's, and a key's bundle has none: not needed (measured).
 BUNDLE_SUFFIX = ".sigstore.json"
-# What says that sigstore's trust root or the network did not answer — nothing proven, a wait. A
-# bundle is checked offline otherwise: any other failure is the file, its bundle or its signer.
-BLOB_UNREACHABLE = re.compile(r"TUF|tuf-repo-cdn|dial tcp|no such host|connection refused|i/o timeout"
-                              r"|TLS handshake|context deadline exceeded|timeout", re.I)
-ISSUER_RE = re.compile(r"https://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._~/-]*)?")
+HARNESS_KEY_ENV = "EREGION_HARNESS_KEY"
+KEY_PREFIX = "cosign"                   # cosign.key, cosign.pub in the key's directory
+# A signing config that names no service — no Fulcio, no Rekor, no timestamp authority: what
+# `cosign signing-config create` writes without a service (measured, v3.1.3).
+NO_SERVICES = '{"mediaType":"application/vnd.dev.sigstore.signingconfig.v0.2+json","rekorTlogConfig":{},"tsaConfig":{}}'
+_B64 = re.compile(r"[A-Za-z0-9+/]{40,2000}={0,2}")
 
 
 def bundle_of(path: Path) -> Path:
     return path.with_name(path.name + BUNDLE_SUFFIX)
 
 
-def verify_blob(path: Path, bundle: Path, identity: str, issuer: str, cosign: Path,
-                runner: Runner = run) -> None:
-    """`path` signed by `identity` (its certificate's subject) through `issuer` (its OIDC
-    issuer), the signature in `bundle` covering exactly these bytes; raises Unverified (refused,
-    said) or Unavailable (sigstore's trust root out of reach: a wait)."""
-    if not identity or not identity.strip() or any(c.isspace() for c in identity):
-        raise Unverified("aucune identité de signataire attendue (EREGION_HARNESS_SIGNER, dans la config de H0)")
-    if not ISSUER_RE.fullmatch(issuer or ""):
-        raise Unverified("aucun émetteur OIDC attendu, ou pas une URL https (EREGION_HARNESS_ISSUER, dans la config de H0)")
+def harness_key_dir() -> Path:
+    """Where `make harness-key` writes the pair: off the repository, the maintainer's own."""
+    return Path(os.environ.get("EREGION_HARNESS_KEY_DIR") or Path.home() / ".config" / "eregion" / "harness")
+
+
+def key_der(pinned: str) -> bytes:
+    """EREGION_HARNESS_KEY — the base64 of the public key's DER (SubjectPublicKeyInfo), on one line:
+    the body of cosign.pub without its two PEM lines. Raises Unverified when it is not one."""
+    text = (pinned or "").strip()
+    if not text:
+        raise Unverified(f"aucune clé de l'attestation déclarée sur H0 ({HARNESS_KEY_ENV} dans host.env)")
+    if not _B64.fullmatch(text):
+        raise Unverified(f"{HARNESS_KEY_ENV} illisible dans host.env : la clé publique (base64 d'une ligne, sans les lignes PEM ; make harness-key la donne)")
+    try:
+        der = base64.b64decode(text, validate=True)
+    except (ValueError, TypeError):
+        raise Unverified(f"{HARNESS_KEY_ENV} illisible dans host.env : pas du base64") from None
+    if der[:1] != b"\x30":
+        raise Unverified(f"{HARNESS_KEY_ENV} illisible dans host.env : pas une clé publique (DER)")
+    return der
+
+
+def pem_of(der: bytes) -> str:
+    body = base64.b64encode(der).decode()
+    return "-----BEGIN PUBLIC KEY-----\n" + "\n".join(body[i:i + 64] for i in range(0, len(body), 64)) \
+        + "\n-----END PUBLIC KEY-----\n"
+
+
+def pinned_of_pem(pem: str) -> str:
+    """The EREGION_HARNESS_KEY line of a cosign.pub."""
+    return "".join(ln.strip() for ln in pem.splitlines() if ln.strip() and not ln.startswith("-----"))
+
+
+def key_hint(der: bytes) -> str:
+    """What cosign writes in a bundle as the key's hint: the base64 of the DER's sha256 (measured)."""
+    return base64.b64encode(hashlib.sha256(der).digest()).decode()
+
+
+def _bundle_hint(bundle: Path) -> str:
+    try:
+        doc = json.loads(Path(bundle).read_text(encoding="utf-8"))
+        return str(((doc.get("verificationMaterial") or {}).get("publicKey") or {}).get("hint") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def bundle_refusal(bundle: Path) -> str:
+    """Why this bundle may not go in the repository — "" when it may: a signature and a key's hint,
+    never a certificate (it names its holder), never a transparency log's entry."""
+    try:
+        doc = json.loads(Path(bundle).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return f"illisible ({e})"
+    vm = doc.get("verificationMaterial") if isinstance(doc, dict) else None
+    if not isinstance(vm, dict) or not (vm.get("publicKey") or {}).get("hint"):
+        return "sans la clé qui l'a signé"
+    if "certificate" in vm or "x509CertificateChain" in vm:
+        return "il porte un certificat"
+    if vm.get("tlogEntries"):
+        return "il porte une entrée du journal de transparence"
+    return ""
+
+
+def verify_blob(path: Path, bundle: Path, pinned: str, cosign: Path, runner: Runner = run) -> None:
+    """`path` signed by the key pinned (EREGION_HARNESS_KEY's value), the signature in `bundle`
+    covering exactly these bytes — offline: no transparency log, no trust root. Raises Unverified,
+    said; cosign is never asked without a key, a bundle and a cosign that is the pinned one."""
+    der = key_der(pinned)
     if not Path(bundle).is_file():
         raise Unverified(f"{Path(path).name} n'est pas signée ({Path(bundle).name} absent)")
     if not cosign_ok(cosign):
         raise Unverified(f"cosign absent ou altéré ({cosign}) : il doit être {COSIGN_VERSION}, sha256 {COSIGN_SHA256[:12]}…")
-    res = runner([str(cosign), "verify-blob", "--bundle", str(bundle), "--certificate-identity", identity,
-                  "--certificate-oidc-issuer", issuer, "--timeout", COSIGN_TIMEOUT, str(path)])
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="harness-key-") as tmp:
+        pub = Path(tmp) / "harness.pub"          # 0600 in a 0700 directory, gone with it
+        fd = os.open(pub, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(pem_of(der))
+        res = runner([str(cosign), "verify-blob", "--key", str(pub), "--bundle", str(bundle),
+                      "--insecure-ignore-tlog", "--timeout", COSIGN_TIMEOUT, str(path)])
     if res.returncode == 0:
         return
-    said = f"{res.stderr or ''}\n{res.stdout or ''}"
-    if res.returncode == TIMEOUT_CODE or BLOB_UNREACHABLE.search(said):
-        raise Unavailable("cosign n'a rien pu prouver (signature de l'attestation) : réseau, sigstore ou délai",
-                          _last(res))
-    raise Unverified(f"la signature de {Path(path).name} ne tient pas : signée par une autre identité, "
-                     "ou elle ne couvre pas ce fichier", _last(res))
+    hint, want = _bundle_hint(bundle), key_hint(der)
+    if hint and hint != want:
+        raise Unverified(f"{Path(path).name} signée d'une autre clé (empreinte {hint[:12]}…, épinglée "
+                         f"{want[:12]}…)", _last(res))
+    raise Unverified(f"la signature de {Path(path).name} ne tient pas : elle ne couvre pas ce fichier, ou "
+                     "elle est illisible", _last(res))
 
 
-def sign_blob(path: Path, cosign: Path, runner: Runner | None = None) -> int:
-    """Jonathan's gesture: `path` signed keyless by his OIDC identity (a browser opens), the bundle
-    written beside it. cosign asks before publishing the identity in the transparency log."""
+def sign_blob(path: Path, key: Path, cosign: Path, runner: Runner | None = None) -> int:
+    """Jonathan's gesture: `path` signed by his key (cosign asks its passphrase), offline, the bundle
+    written beside it — kept only if it holds no certificate and no log entry."""
     if not Path(path).is_file():
         print(f"✗ {path} absent : make llm-compare … ATTEST=1 d'abord", file=sys.stderr)
+        return 1
+    if Path(key).is_symlink() or not Path(key).is_file():
+        print(f"✗ {key} absent (ou un lien) : make harness-key d'abord", file=sys.stderr)
         return 1
     if not cosign_ok(cosign):
         print(f"✗ cosign absent ou altéré ({cosign}) : python3 scripts/published_image.py install-cosign",
               file=sys.stderr)
         return 1
+    import tempfile
     bundle = bundle_of(Path(path))
-    argv = [str(cosign), "sign-blob", "--bundle", str(bundle), str(path)]
-    res = (runner or (lambda a: subprocess.run(a, check=False)))(argv)
+    with tempfile.TemporaryDirectory(prefix="harness-sign-") as tmp:
+        config = Path(tmp) / "no-services.json"
+        config.write_text(NO_SERVICES)
+        argv = [str(cosign), "sign-blob", "--key", str(key), "--signing-config", str(config),
+                "--bundle", str(bundle), "--yes", str(path)]
+        res = (runner or (lambda a: subprocess.run(a, check=False)))(argv)
     if res.returncode != 0:
         print(f"✗ cosign sign-blob a échoué (code {res.returncode}) : rien n'est signé", file=sys.stderr)
         return 1
+    why = bundle_refusal(bundle)
+    if why:
+        bundle.unlink(missing_ok=True)
+        print(f"✗ le paquet de signature ne va pas dans le dépôt : {why} — retiré, rien n'est signé", file=sys.stderr)
+        return 1
     print(f"✓ {path} signée : {bundle} — à commiter avec elle, dans la PR du verrou")
+    return 0
+
+
+def generate_key(dest: Path, cosign: Path, run_in=None) -> int:
+    """`make harness-key`, once: the pair drawn by cosign in `dest` (its private half encrypted by
+    the passphrase Jonathan types; 0600), never over a key already there, never through a link.
+    Prints the line to pin in host.env and the key's hint."""
+    dest = Path(dest)
+    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
+        print(f"✗ {dest} n'est pas un répertoire (un lien ?) : rien n'est écrit", file=sys.stderr)
+        return 1
+    key, pub = dest / f"{KEY_PREFIX}.key", dest / f"{KEY_PREFIX}.pub"
+    if os.path.lexists(key) or os.path.lexists(pub):
+        print(f"✗ {key} ou {pub} existe déjà : une clé n'est jamais remplacée ici (la retirer d'abord, puis "
+              "réépingler la nouvelle sur H0)", file=sys.stderr)
+        return 1
+    if not cosign_ok(cosign):
+        print(f"✗ cosign absent ou altéré ({cosign}) : python3 scripts/published_image.py install-cosign",
+              file=sys.stderr)
+        return 1
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(dest, 0o700)
+    env = {k: v for k, v in os.environ.items() if k != "COSIGN_PASSWORD"}   # typed, never passed
+    res = (run_in or (lambda a, cwd: subprocess.run(a, cwd=cwd, env=env, check=False)))(
+        [str(cosign), "generate-key-pair", "--output-key-prefix", KEY_PREFIX], dest)
+    if res.returncode != 0 or not key.is_file() or not pub.is_file():
+        print(f"✗ cosign generate-key-pair a échoué (code {res.returncode}) : aucune clé", file=sys.stderr)
+        return 1
+    os.chmod(key, 0o600)
+    pinned = pinned_of_pem(pub.read_text(encoding="utf-8"))
+    print(f"✓ la paire de l'attestation : {key} (privée, chiffrée, 0600), {pub}")
+    print("  À épingler dans infra/glorfindel-host/host.env, puis make glorfindel-host-push :")
+    print(f"{HARNESS_KEY_ENV}={pinned}")
+    print(f"# empreinte : {key_hint(key_der(pinned))}")
     return 0
 
 
@@ -568,7 +691,7 @@ def default_cosign() -> Path:
 def main(argv: list | None = None, runner: Runner = run) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("cmd", choices=["resolve", "verify", "fetch", "ids", "loaded", "install-cosign",
-                                   "install-syft", "meta", "pushed", "sign-blob", "verify-blob"])
+                                   "install-syft", "meta", "pushed", "harness-key", "sign-blob", "verify-blob"])
     p.add_argument("image", nargs="?", default="")
     p.add_argument("--commit", default="")
     p.add_argument("--digest", default="")
@@ -577,16 +700,21 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
     p.add_argument("--id", default="")
     p.add_argument("--expect", default="", help="loaded: the ids `ids` printed before the image left")
     p.add_argument("--cosign", default="")
-    p.add_argument("--identity", default="", help="verify-blob: the signer expected (never from the repository)")
-    p.add_argument("--issuer", default="", help="verify-blob: its OIDC issuer")
+    p.add_argument("--key", default="", help="sign-blob: the private key (default: harness-key's)")
+    p.add_argument("--pinned", default="", help="verify-blob: the key as host.env pins it (EREGION_HARNESS_KEY)")
+    p.add_argument("--pub", default="", help="verify-blob: a cosign.pub (default: harness-key's)")
     a = p.parse_args(argv)
     cosign = Path(a.cosign) if a.cosign else default_cosign()
     try:
+        if a.cmd == "harness-key":
+            return generate_key(Path(a.image) if a.image else harness_key_dir(), cosign)
         if a.cmd == "sign-blob":
-            return sign_blob(Path(a.image), cosign, None if runner is run else runner)
+            key = Path(a.key) if a.key else harness_key_dir() / f"{KEY_PREFIX}.key"
+            return sign_blob(Path(a.image), key, cosign, None if runner is run else runner)
         if a.cmd == "verify-blob":
-            verify_blob(Path(a.image), bundle_of(Path(a.image)), a.identity, a.issuer, cosign, runner)
-            print(f"✓ {a.image} : signée par l'identité attendue, la signature couvre ce fichier")
+            pinned = a.pinned or pinned_of_pem(Path(a.pub or harness_key_dir() / f"{KEY_PREFIX}.pub").read_text())
+            verify_blob(Path(a.image), bundle_of(Path(a.image)), pinned, cosign, runner)
+            print(f"✓ {a.image} : signée par la clé {key_hint(key_der(pinned))[:12]}…, la signature couvre ce fichier")
             return 0
         if a.cmd == "install-cosign":
             return install_cosign(Path(a.image) if a.image else cosign)

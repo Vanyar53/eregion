@@ -15,7 +15,9 @@ pour les injecteurs, la commande `glorfindel watch-key`). Tests : `tests/unit/te
 
 - **Une paire Ed25519**, tirée par la watch à son premier démarrage sans clé. La moitié privée :
   `~/.eregion/watch-key/watch_ed25519`, 32 octets bruts, mode 0600, son répertoire 0700, écrite en
-  `O_EXCL` (deux watches qui démarrent ensemble n'en écrivent jamais deux).
+  entier dans un fichier à part puis publié par un lien (`os.link`) : un disque plein ne laisse
+  jamais une clé vide sous son nom, et deux watches qui démarrent ensemble n'en écrivent jamais
+  deux. Une clé d'une autre taille est refusée, le geste dit : l'effacer, puis épingler la nouvelle.
 - **Un répertoire que seule la watch monte** (`docker-compose.yml`, le service `watch` ; `make
   glorfindel-watch`). Jamais dans `~/.glorfindel` : la console et le bot le montent, les injecteurs
   en montent une partie. Jamais sous `runs/`. La watch refuse une clé placée là, une clé lisible par
@@ -23,7 +25,8 @@ pour les injecteurs, la commande `glorfindel watch-key`). Tests : `tests/unit/te
   dit dans son journal. Ses battements partent alors sans signature, et les injecteurs les refusent.
 - **Le répertoire est créé avant les services**, au nom de l'opérateur (`make glorfindel-start`,
   `-restart`, `-dev`, `team-start`, `deploy.sh` sur H0). Laissé à docker, il serait à root, et la
-  watch ne pourrait pas tirer sa clé.
+  watch ne pourrait pas tirer sa clé. `make glorfindel-shell` ne la monte pas : une watch lancée
+  dans ce shell tirerait une clé éphémère, refusée par les injecteurs.
 - **La moitié publique s'épingle** : `make watch-key` (la watch de ce poste) ou
   `make glorfindel-host-watch-key` (celle de H0, lue dans son conteneur par SSH, clé d'hôte épinglée)
   donnent `export EREGION_WATCH_KEY=ed25519:<base64 de 32 octets>` et l'empreinte

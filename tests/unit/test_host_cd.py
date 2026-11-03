@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from .fake_discord import FakeDiscord
-from .fake_sigstore import Sigstore, blob_bundle
+from .fake_sigstore import Sigstore, blob_bundle, pinned, placeholder_key
 
 ROOT = Path(__file__).resolve().parents[2]
 AGENT = ROOT / "infra" / "glorfindel-host" / "cd" / "eregion_cd.py"
@@ -33,10 +33,11 @@ COSIGN_SHA = "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71" 
 GHCR_REPO = "grootcyber/eregion-glorfindel"
 MODEL = "anthropic/claude-sonnet-5-5"
 SECRET = "DEPLOY-SECRET-xyz"
-# SEC19 (R-13): the signer H0 expects of the harness's attestation, from its own config — placeholders
-# only, never a real address.
-SIGNER = ("maintainer@example.invalid", "https://issuer.example.invalid")
-H0_SIGNER_ENV = f"EREGION_HARNESS_SIGNER={SIGNER[0]}\nEREGION_HARNESS_ISSUER={SIGNER[1]}\n"
+# SEC19 (R-13): the key H0 pins for the harness's attestation, from its own config — placeholder keys
+# only, never a real one.
+SIGNER = placeholder_key("maintainer")
+OTHER_KEY = placeholder_key("someone else")
+H0_SIGNER_ENV = f"EREGION_HARNESS_KEY={pinned(SIGNER)}\n"
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None or shutil.which("bash") is None,
                                 reason="git and bash needed")
@@ -168,7 +169,7 @@ class H0:
         # unless the test gives its own bundle.
         att = c2_files.get("requirements/harness.json")
         if att is not None and signer and "requirements/harness.json.sigstore.json" not in c2_files:
-            c2_files["requirements/harness.json.sigstore.json"] = blob_bundle(att.encode(), *signer)
+            c2_files["requirements/harness.json.sigstore.json"] = blob_bundle(att.encode(), signer)
         self.home = tmp_path / "home"
         self.home.mkdir()
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "EREGION_", "FAKE_"))}
@@ -736,17 +737,16 @@ def _lock_files(**over):
 
 
 @pytest.mark.parametrize("signer, files, said", [
-    (None, {}, "n'est pas signée"),                                                     # M3254
-    (("someone@example.invalid", SIGNER[1]), {}, "signée par une autre identité"),      # M3255
-    (("maintainer@example.invalid", "https://other.example.invalid"), {}, "signée par une autre identité"),
+    (None, {}, "n'est pas signée"),                                                      # M3254
+    (OTHER_KEY, {}, "signée d'une autre clé"),                                           # M3255
     (SIGNER, {"requirements/harness.json.sigstore.json":                                 # M3256
-              blob_bundle(_attestation(_pass(NEW_LOCK, draws={PAIR: [_wrong()] * 3})).encode(), *SIGNER)},
+              blob_bundle(_attestation(_pass(NEW_LOCK, draws={PAIR: [_wrong()] * 3})).encode(), SIGNER)},
      "ne couvre pas ce fichier"),
 ])
 def test_an_attestation_not_signed_by_the_maintainer_is_refused_as_if_absent(tmp_path, fake, signer, files, said):
-    """Unsigned, signed by another identity or through another issuer, or a signature of another
-    file (here: of an attestation that regressed, swapped for a clean one): refused, said with the
-    mention — the lock's guard holds as without an attestation, nothing pulled."""
+    """Unsigned, signed by another key, or a signature of another file (here: of an attestation that
+    regressed, swapped for a clean one): refused, said with the mention — the lock's guard holds as
+    without an attestation, nothing pulled."""
     h0 = H0(tmp_path, fake, c2_files=_lock_files(**files), signer=signer)
     assert h0.run().returncode == 1
     assert h0.running() == {"v0.3.1"} and not any(c.startswith("pull") for c in h0.calls())
@@ -756,46 +756,48 @@ def test_an_attestation_not_signed_by_the_maintainer_is_refused_as_if_absent(tmp
     verify = [c for c in h0.sig.calls() if c[0] == "verify-blob"]
     if signer is None:
         assert verify == []                                   # no bundle: nothing to ask cosign
-    else:                                                     # the identity H0 expects, never the release's
-        assert verify[0][verify[0].index("--certificate-identity") + 1] == SIGNER[0]
+    else:                                                     # offline, H0's key, never the release's
+        assert "--insecure-ignore-tlog" in verify[0] and "--certificate-identity" not in verify[0]
 
 
-def test_without_a_signer_declared_on_h0_no_attestation_is_believed(tmp_path, fake):
-    """M3257: the identity comes from H0's config, never from the repository — unset, refused, the
-    gesture said (host.env), and cosign never asked."""
+@pytest.mark.parametrize("env, said", [
+    ("EREGION_CONSOLE_TOKEN=tok\n", "aucune clé de l'attestation déclarée sur H0"),       # M3257
+    ("EREGION_CONSOLE_TOKEN=tok\nEREGION_HARNESS_KEY=pas-une-clé\n", "illisible"),       # M3259
+])
+def test_without_a_readable_key_declared_on_h0_no_attestation_is_believed(tmp_path, fake, env, said):
+    """The key comes from H0's config, never from the repository — unset or unreadable, refused, the
+    gesture said (host.env, make harness-key), and cosign never asked."""
     h0 = H0(tmp_path, fake, c2_files=_lock_files())
-    (h0.vm / ".env").write_text("EREGION_CONSOLE_TOKEN=tok\n")
+    (h0.vm / ".env").write_text(env)
     assert h0.run().returncode == 1 and h0.running() == {"v0.3.1"}
     text = _alerts(h0)[0]["embeds"][0]["description"]
-    assert "aucun signataire de l'attestation déclaré sur H0" in text and "host.env" in text
+    assert said in text and "host.env" in text
     assert not any(c[0] == "verify-blob" for c in h0.sig.calls())
 
 
-def test_a_release_cannot_name_its_own_signer(tmp_path, fake):
-    """What the release carries (its .env.example, a harness.json naming a signer) is never read for
-    the identity: a bundle by the release's signer is refused."""
+def test_a_release_cannot_name_its_own_key(tmp_path, fake):
+    """What the release carries (an .env, an attestation naming a key) is never read for the key: a
+    bundle by the release's own key is refused."""
     att = json.loads(_attestation())
-    att["signer"] = "attacker@example.invalid"
+    att["key"] = pinned(OTHER_KEY)
     text = json.dumps(att)
-    h0 = H0(tmp_path, fake, signer=("attacker@example.invalid", SIGNER[1]),
-            c2_files=_lock_files(**{"requirements/harness.json": text, ".env": H0_SIGNER_ENV.replace(
-                "maintainer", "attacker")}))
+    h0 = H0(tmp_path, fake, signer=OTHER_KEY,
+            c2_files=_lock_files(**{"requirements/harness.json": text,
+                                    ".env": f"EREGION_HARNESS_KEY={pinned(OTHER_KEY)}\n"}))
     assert h0.run().returncode == 1 and h0.running() == {"v0.3.1"}
-    assert "signée par une autre identité" in _alerts(h0)[0]["embeds"][0]["description"]
+    assert "signée d'une autre clé" in _alerts(h0)[0]["embeds"][0]["description"]
 
 
-def test_sigstore_out_of_reach_is_a_wait_never_a_deployment(tmp_path, fake):
-    """M3258: the trust root unreachable proves nothing — the pass waits, said in the journal,
-    nothing moves; an hour of it, refused."""
+def test_the_attestation_is_verified_offline(tmp_path, fake):
+    """M3258: no transparency log, no trust root — cosign is told so (--insecure-ignore-tlog; without
+    it, it fetches sigstore's trust root: measured, and the fake answers so): deployed, nothing to
+    wait for."""
     h0 = H0(tmp_path, fake, c2_files=_lock_files())
-    res = h0.run(FAKE_COSIGN_NETWORK="1")
-    assert res.returncode == 0 and h0.running() == {"v0.3.1"} and _alerts(h0) == []
-    assert "signature de l'attestation non vérifiée" in res.stdout
-    state = json.loads((h0.cd / "state.json").read_text())
-    state["unavailable"]["v0.4.0:harness"] = 12
-    (h0.cd / "state.json").write_text(json.dumps(state))
-    assert h0.run(FAKE_COSIGN_NETWORK="1").returncode == 1 and h0.running() == {"v0.3.1"}
-    assert "ne se vérifie pas depuis une heure" in _alerts(h0)[0]["embeds"][0]["description"]
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"}
+    (call,) = [c for c in h0.sig.calls() if c[0] == "verify-blob"]
+    assert "--insecure-ignore-tlog" in call
 
 
 def test_a_lock_unchanged_asks_no_signature(h0):

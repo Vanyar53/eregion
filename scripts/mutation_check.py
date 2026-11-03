@@ -9963,15 +9963,15 @@ TESTS["M3422"] = "tests/unit/test_reassert.py"
 
 
 # SEC19 (#456): the watch's heartbeat signed by its own key, verified with the key the injector pins
-# (N-03); the harness's attestation signed by its author, verified by H0's CD against the identity
-# its own config expects (R-13). M3240–M3259.
+# (N-03); the harness's attestation signed by its author's own key, offline, verified by H0's CD with
+# the public key its own config pins (R-13). M3240–M3259.
 WKEY = "eregion_core/watch_key.py"
 CDA = "infra/glorfindel-host/cd/eregion_cd.py"
 _SEC19_KEY = "tests/unit/test_watch_key.py"
 _SEC19_CD = ("tests/unit/test_host_cd.py::test_an_attestation_not_signed_by_the_maintainer_is_refused_as_if_absent "
-             "tests/unit/test_host_cd.py::test_without_a_signer_declared_on_h0_no_attestation_is_believed "
-             "tests/unit/test_host_cd.py::test_sigstore_out_of_reach_is_a_wait_never_a_deployment "
-             "tests/unit/test_host_cd.py::test_a_release_cannot_name_its_own_signer")
+             "tests/unit/test_host_cd.py::test_without_a_readable_key_declared_on_h0_no_attestation_is_believed "
+             "tests/unit/test_host_cd.py::test_the_attestation_is_verified_offline "
+             "tests/unit/test_host_cd.py::test_a_release_cannot_name_its_own_key")
 MUTANTS += [
     ("M3240", "a watch key readable by others signs anyway (SEC19)", WKEY,
      '        if st.st_mode & 0o077:\n            raise KeyUnavailable(f"{path} is readable by others',
@@ -10012,26 +10012,24 @@ MUTANTS += [
      "  # n'est cru que signé par elle. Vide : refusé, et le refus dit le geste.\n"),
     ("M3254", "an attestation without its bundle believed (SEC19, R-13)", CDA,
      '    att.write_bytes(body or b"")\n', '    att.write_bytes(body or b"")\n    if sig is None:\n        return\n'),
-    ("M3255", "the attestation's signer taken whoever it is (SEC19, R-13)", PIM,
-     '"--certificate-identity", identity,', '"--certificate-identity-regexp", ".*",'),
+    ("M3255", "a bundle that names a key believed, whichever key signed it (SEC19, R-13)", PIM,
+     "    if res.returncode == 0:\n        return\n    hint, want = _bundle_hint(bundle), key_hint(der)\n",
+     "    if res.returncode == 0 or _bundle_hint(bundle):\n        return\n    hint, want = _bundle_hint(bundle), key_hint(der)\n"),
     ("M3256", "a signature that does not hold said, and the lock deployed anyway (SEC19, R-13)", CDA,
      '    except pim.Unverified as e:\n        raise Refused(f"{ATTESTATION} de {tag} refusée',
      '    except pim.Unverified as e:\n        print(e)\n        return\n        raise Refused(f"{ATTESTATION} de {tag} refusée'),
-    ("M3257", "no signer declared on H0: the attestation believed unsigned (SEC19, R-13)", CDA,
-     "    if not signer or not issuer:\n        raise Refused(",
-     "    if not signer or not issuer:\n        return\n        raise Refused("),
-    ("M3258", "sigstore out of reach: the attestation believed (SEC19, R-13)", CDA,
-     "    except pim.Unavailable as e:\n        if e.detail:\n            print(e.detail)\n        tries = (state",
-     "    except pim.Unavailable as e:\n        return\n        if e.detail:\n            print(e.detail)\n        tries = (state"),
-    ("M3259", "an empty identity handed to cosign: no signer checked (SEC19, R-13)", PIM,
-     "    if not identity or not identity.strip() or any(c.isspace() for c in identity):\n",
-     "    if False:\n"),
+    ("M3257", "no key declared on H0: the attestation believed unsigned (SEC19, R-13)", CDA,
+     "    if not pinned:\n        raise Refused(", "    if not pinned:\n        return\n        raise Refused("),
+    ("M3258", "the attestation checked against sigstore's log it was never sent to: every lock refused (SEC19, R-13)",
+     PIM, '"--insecure-ignore-tlog", "--timeout", COSIGN_TIMEOUT, str(path)]', '"--timeout", COSIGN_TIMEOUT, str(path)]'),
+    ("M3259", "the key H0 pins handed to cosign unread: an empty or broken key asks cosign (SEC19, R-13)", PIM,
+     "    der = key_der(pinned)\n    if not Path(bundle).is_file():\n",
+     '    der = base64.b64decode(pinned or "")\n    if not Path(bundle).is_file():\n'),
 ]
 TESTS.update({**{f"M{n}": _SEC19_KEY for n in range(3240, 3254) if n != 3244},
               "M3244": f"{_SEC19_KEY} tests/unit/test_watch_gate.py",
-              **{f"M{n}": _SEC19_CD for n in (3254, 3256, 3257, 3258)},
-              "M3255": f"tests/unit/test_published_image.py {_SEC19_CD}",
-              "M3259": "tests/unit/test_published_image.py"})
+              **{f"M{n}": _SEC19_CD for n in (3254, 3256, 3257)},
+              **{f"M{n}": f"tests/unit/test_published_image.py {_SEC19_CD}" for n in (3255, 3258, 3259)}})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

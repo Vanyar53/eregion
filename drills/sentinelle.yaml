@@ -3,7 +3,7 @@
 # placed (the board, or TARGETS= with make orodruin-exercise DRILL=).
 name: sentinelle
 author: eregion
-description: "The production rule's full chain on the empty sentinel VM: a public technique that destroys nothing."
+description: "T1136.001 on an enrolled VM of the production zone (the empty sentinel, for one): the production rule's full chain, a public technique that destroys nothing."
 wires:
   - experiment: T1136.001
     target: {zone: production}

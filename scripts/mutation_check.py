@@ -9266,13 +9266,41 @@ MUTANTS += [
     ("M3317", "the page writes a request while a drill's wire waits for its VMs (DG-d)", DJS,
      "Number(t.refused) === 0 && !S.pending.length;", "Number(t.refused) === 0;"),
     ("M3318", "make orodruin-exercise takes DRILL and TARGETS from the environment (DG-d)", MAKE,
-     '\t@case "$(origin DRILL) $(origin TARGETS)" in *environment*)', '\t@case "" in *environment*)'),
+     '\t@case "$(origin DRILL) $(origin TARGETS) $(origin DRILL_VMS)" in *environment*)', '\t@case "" in *environment*)'),
     ("M3319", "make orodruin-exercise DRILL= takes every VM of the zone when TARGETS is not given (DG-d)", MAKE,
      '--targets "$$EREGION_DRILL_TARGETS"', "--targets \"$${EREGION_DRILL_TARGETS:-all}\""),
 ]
 TESTS.update({f"M{n}": _DGD for n in range(3300, 3314)})
 TESTS.update({f"M{n}": _DGD_CON for n in range(3314, 3318)})
 TESTS.update({f"M{n}": "tests/unit/test_makefile_exercise.py" for n in (3318, 3319)})
+# DG-d, its 5.5 review: two VMs of one name (a twin copied from a bench), a drill's file that is a
+# link, the VMs' listing and the drill's name on the command line only, a cut listing said.
+# M3372–M3379.
+MUTANTS += [
+    ("M3372", "a name two enrolled VMs bear takes the first of them, unsaid (DG-d, review)", DRL,
+     "            if len(found) > 1:\n                # A twin copied from a bench keeps its names: never one of them taken unsaid.\n"
+     "                p.candidates = found\n                p.why = f\"{w.name} names {len(found)} enrolled VMs here\"\n",
+     "            if len(found) > 1:\n                p.targets = found[:1]\n"),
+    ("M3373", "« Save as drill » keeps a name two enrolled VMs bear (DG-d, review)", CON,
+     "        if twice:\n            return JSONResponse(", "        if False:\n            return JSONResponse("),
+    ("M3374", "make orodruin-exercise reaches H0 before the drill's name is checked (DG-d, review)", MAKE,
+     '\t@if [ -n "$$EREGION_DRILL" ]; then $(PYTHON) -m eregion_core.drill check-name "$$EREGION_DRILL"; \\\n',
+     '\t@if [ -n "$$EREGION_DRILL" ]; then true; \\\n'),
+    ("M3375", "a local drill that is a link followed, or the shipped one taken in its place (DG-d, review)", MAKE,
+     '\t     if [ -L "$$f" ]; then rc=4; elif', '\t     if false; then rc=4; elif'),
+    ("M3376", "a drill that is a link on H0 followed (DG-d, review)", MAKE,
+     "test ! -L .eregion/console/drills/$$n.yaml || exit 4; ", ""),
+    ("M3377", "make orodruin-exercise takes the VMs' listing from the environment (DG-d, review)", MAKE,
+     '"$(origin DRILL) $(origin TARGETS) $(origin DRILL_VMS)"', '"$(origin DRILL) $(origin TARGETS)"'),
+    ("M3378", "the hint of a VM read by its name: its namesake's last run taken for its own (DG-d, review)", CON,
+     "keys = {f\"name:{t.rstrip('/').rsplit('/', 1)[-1].lower()}\" if \"/\" not in t.strip(\"/\") else t.rstrip(\"/\").lower()",
+     "keys = {f\"name:{t.rstrip('/').rsplit('/', 1)[-1].lower()}\""),
+    ("M3379", "a layer of drills past its bound cut unsaid (DG-d, review)", DRL,
+     "        if more:\n            found[f\"…{layer}\"]", "        if False:\n            found[f\"…{layer}\"]"),
+]
+TESTS.update({f"M{n}": _DGD for n in (3372, 3379)})
+TESTS.update({f"M{n}": _DGD_CON for n in (3373, 3378)})
+TESTS.update({f"M{n}": "tests/unit/test_makefile_exercise.py" for n in (3374, 3375, 3376, 3377)})
 
 
 

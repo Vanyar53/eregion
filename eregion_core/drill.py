@@ -51,9 +51,6 @@ MAX_DESCRIPTION = 300
 MAX_DRILLS = 200
 
 DRILLS_ENV = "EREGION_DRILLS_DIR"
-# A listing of the bench's VMs read elsewhere (``TagEnrollment.vms``' shape, JSON): for the
-# operator's command without Azure access, and the tests.
-VMS_ENV = "EREGION_DRILL_VMS_FILE"
 
 # ASCII only, matched whole: a drill's name is a file's name and a word of a command.
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
@@ -219,20 +216,28 @@ def _regular(fd: int) -> bool:
     return stat.S_ISREG(os.fstat(fd).st_mode)
 
 
-def _files(directory: Path) -> list[Path]:
+def _files(directory: Path) -> tuple[list[Path], int]:
+    """The first MAX_DRILLS drill files of ``directory``, and how many more it holds."""
     try:
-        return sorted(p for p in directory.glob("*.yaml"))[:MAX_DRILLS]
+        paths = sorted(p for p in directory.glob("*.yaml"))
     except OSError:
-        return []
+        return [], 0
+    return paths[:MAX_DRILLS], max(0, len(paths) - MAX_DRILLS)
 
 
 def listing(shipped: Path | None = None, instance: Path | None = None) -> list[dict]:
     """Every drill of the two layers, the instance's over the shipped ones: name, layer, author,
     updated, description, wires — a file that cannot be read is listed with why (never left out
-    unsaid), and an instance's drill named as a shipped one says that it replaces it."""
+    unsaid), and an instance's drill named as a shipped one says that it replaces it. A layer of
+    more than MAX_DRILLS drills says how many are not listed."""
     found: dict[str, dict] = {}
     for layer, directory in ((SHIPPED, shipped or shipped_dir()), (INSTANCE, instance or instance_dir())):
-        for path in _files(Path(directory)):
+        paths, more = _files(Path(directory))
+        if more:
+            found[f"…{layer}"] = {"name": "…", "layer": layer, "author": "", "updated": "", "description": "",
+                                  "wires": [], "replaces": "",
+                                  "error": f"{more} more drill(s) in this layer, past the first {MAX_DRILLS}: not listed"}
+        for path in paths:
             entry = {"name": path.stem, "layer": layer, "author": "", "updated": "", "description": "",
                      "wires": [], "error": "", "replaces": ""}
             try:
@@ -362,7 +367,8 @@ def parse_targets(value: str | None) -> list[str] | str | None:
 
 def place(drill: Drill, cands: list[Candidate], targets: list[str] | str | None = None) -> list[Placed]:
     """Each wire of the drill on its VMs — never one chosen in the operator's place: a named wire
-    takes its VM when it is enrolled here; a selector's wire takes the VMs of its zone that
+    takes its VM when it is enrolled here, and only one is (a name that several enrolled VMs bear —
+    a twin copied from a bench — takes none, its VMs as candidates); a selector's wire takes the VMs of its zone that
     ``targets`` gives (a list of names, or ``all``) — none without it. ``targets`` names that no
     selector's wire can take are refused (``unknown_targets``)."""
     by_zone: dict[str, list[Candidate]] = {}
@@ -374,8 +380,13 @@ def place(drill: Drill, cands: list[Candidate], targets: list[str] | str | None 
         p = Placed(rank, w.experiment, name=w.name, zone=w.zone)
         if w.name:
             found = [c for c in cands if c.name.lower() == w.name.lower()]
-            p.targets = found[:1]
-            if not found:
+            if len(found) > 1:
+                # A twin copied from a bench keeps its names: never one of them taken unsaid.
+                p.candidates = found
+                p.why = f"{w.name} names {len(found)} enrolled VMs here"
+            elif found:
+                p.targets = found
+            else:
                 p.why = f"{w.name} is not an enrolled VM read here"
         else:
             zone = by_zone.get(w.zone, [])
@@ -408,11 +419,15 @@ def pairs(placed: list[Placed]) -> list[tuple[str, str]]:
 # ── On the operator's machine: a request from a drill (``make orodruin-exercise DRILL=``) ──
 
 def _read_vms(path: str | None) -> list[dict]:
+    """The bench's VMs read now by Azure with the operator's identity — or, given on the command
+    line only (``--vms``, ``make … DRILL_VMS=``), a listing read elsewhere (tests; a machine without
+    Azure access), said."""
     if path:
         with open(path, encoding="utf-8") as f:
             vms = json.load(f)
         if not isinstance(vms, list):
-            raise DrillRefused(f"{VMS_ENV}: not a list of VMs")
+            raise DrillRefused(f"--vms {path}: not a list of VMs")
+        print(f"the bench's VMs read from {path}, not from Azure", file=sys.stderr)
         return vms
     from eregion_core.inscription import TagEnrollment
     return TagEnrollment().vms(os.environ.get("AZURE_SUBSCRIPTION_ID", ""))
@@ -434,8 +449,13 @@ def request_from(drill: Drill, vms: list[dict], targets: list[str] | str | None,
     if waiting:
         lines = []
         for p in waiting:
-            names = " | ".join(c.name for c in p.candidates) or "none"
-            lines.append(f"  wire {p.rank} ({p.experiment}): {p.why}" + (f" — choose: {names}" if p.zone else ""))
+            if p.zone:
+                names = " | ".join(c.name for c in p.candidates) or "none"
+                lines.append(f"  wire {p.rank} ({p.experiment}): {p.why} — choose: {names}")
+            else:
+                said = " | ".join(f"{c.name} (group {c.resource_id.split('/')[4]}, zone {c.zone})" for c in p.candidates)
+                lines.append(f"  wire {p.rank} ({p.experiment}): {p.why}" + (
+                    f" — {said}: save the drill again from the board, on the VM meant" if said else ""))
         hint = "\n  give TARGETS=<vm>,<vm>… or TARGETS=all" if any(p.zone for p in waiting) else ""
         raise DrillRefused(f"the drill {drill.name} is not placed:\n" + "\n".join(lines) + hint)
     wires = pairs(placed)
@@ -465,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--layer", choices=(SHIPPED, INSTANCE), required=True)
     r.add_argument("--name", required=True, help="the drill asked for (DRILL=)")
     r.add_argument("--targets", default="")
+    r.add_argument("--vms", default="", help="a listing of the bench's VMs read elsewhere, not Azure")
     k = sub.add_parser("check-name")
     k.add_argument("name")
     args = ap.parse_args(argv)
@@ -479,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         if drill.name != args.name:
             raise DrillRefused(f"the drill read is {drill.name!r}, not {args.name!r}")
         targets = parse_targets(args.targets)
-        req = request_from(drill, _read_vms(os.environ.get(VMS_ENV)), targets, catalog=load_catalog(),
+        req = request_from(drill, _read_vms(args.vms or None), targets, catalog=load_catalog(),
                            bench=os.environ.get("EREGION_BENCH") or None)
     except (DrillRefused, OSError, ValueError) as e:
         lines = str(e).splitlines() or [""]

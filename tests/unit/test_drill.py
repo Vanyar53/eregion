@@ -200,6 +200,38 @@ def test_a_selectors_wire_takes_no_vm_until_the_operator_gives_them():
     assert dr.unknown_targets(given, ["vm-celebrimbor-bree"]) == ["vm-celebrimbor-bree"]
 
 
+# Review (03/11): a twin copied from a bench keeps its names — vm-celebrimbor-gondolin twice.
+TWIN_RG = f"/subscriptions/{SUB}/resourceGroups/rg-celebrimbor-twin/providers/Microsoft.Compute/virtualMachines/"
+TWINNED = [*VMS, {"name": "vm-celebrimbor-gondolin", "resource_id": TWIN_RG + "vm-celebrimbor-gondolin",
+                  "tags": {"eregion-target": "celebrimbor", "eregion-zone": "twin"}, "rg_tags": BENCH_RG}]
+
+
+def test_a_name_that_several_enrolled_vms_bear_takes_none_never_one_unsaid():
+    d = dr.new("x", [("T1110.001", "vm-celebrimbor-gondolin"), ("T1136.001", "vm-celebrimbor-rivendell")])
+    placed = dr.place(d, dr.candidates(TWINNED))
+    assert placed[0].targets == [] and placed[0].why == "vm-celebrimbor-gondolin names 2 enrolled VMs here"
+    assert {c.resource_id for c in placed[0].candidates} == {RG + "vm-celebrimbor-gondolin",
+                                                             TWIN_RG + "vm-celebrimbor-gondolin"}
+    assert [c.resource_id for c in placed[1].targets] == [RG + "vm-celebrimbor-rivendell"]   # one bearer: taken
+    with pytest.raises(dr.DrillRefused) as refused:
+        dr.request_from(d, TWINNED, None, catalog=load_catalog())
+    said = str(refused.value)
+    assert "names 2 enrolled VMs here" in said and "group rg-celebrimbor-twin, zone twin" in said
+    assert "group rg-celebrimbor, zone bench" in said
+
+
+def test_a_layer_past_its_bound_says_how_many_are_not_listed(tmp_path, monkeypatch):
+    monkeypatch.setattr(dr, "MAX_DRILLS", 2)
+    own = tmp_path / "own"
+    own.mkdir()
+    for k in range(3):
+        (own / f"d{k}.yaml").write_text(yaml.safe_dump(_doc(name=f"d{k}")))
+    listed = dr.listing(tmp_path / "none", own)
+    assert sorted(d["name"] for d in listed if not d["error"]) == ["d0", "d1"]
+    [cut] = [d for d in listed if d["error"]]
+    assert cut["layer"] == dr.INSTANCE and cut["error"].startswith("1 more drill(s) in this layer")
+
+
 @pytest.mark.parametrize("value, parsed", [("", None), ("  ", None), ("all", "all"),
                                            ("vm-a, vm-b", ["vm-a", "vm-b"])])
 def test_targets_is_nothing_all_or_names(value, parsed):
@@ -259,22 +291,27 @@ def test_a_drill_kept_reloaded_judged_and_played_again_on_orodruins_fake(tmp_pat
     assert plays[0] != plays[1]
 
 
-def test_the_command_writes_the_request_and_prints_its_id(tmp_path, monkeypatch, capsys):
+def test_the_command_writes_the_request_and_prints_its_id(tmp_path, capsys):
+    """The VMs from a listing given on the command line only (``--vms``: the tests, a machine
+    without Azure access), said — never an environment variable."""
     (tmp_path / "vms.json").write_text(json.dumps(VMS))
-    monkeypatch.setenv(dr.VMS_ENV, str(tmp_path / "vms.json"))
+    vms = ["--vms", str(tmp_path / "vms.json")]
     (tmp_path / "s.yaml").write_text(yaml.safe_dump(_doc(dr.SHIPPED, name="s")))
     out = tmp_path / "req.json"
-    assert dr.main(["request", str(tmp_path / "s.yaml"), str(out), "--layer", dr.SHIPPED, "--name", "s"]) == 1
+    assert dr.main(["request", str(tmp_path / "s.yaml"), str(out), "--layer", dr.SHIPPED, "--name", "s", *vms]) == 1
     assert "TARGETS=all" in capsys.readouterr().err and not out.exists()
     assert dr.main(["request", str(tmp_path / "s.yaml"), str(out), "--layer", dr.SHIPPED, "--name", "s",
-                    "--targets", "vm-celebrimbor-rivendell"]) == 0
-    rid = capsys.readouterr().out.strip().splitlines()[-1]
+                    "--targets", "vm-celebrimbor-rivendell", *vms]) == 0
+    said = capsys.readouterr()
+    rid = said.out.strip().splitlines()[-1]
+    assert "the bench's VMs read from" in said.err and "not from Azure" in said.err
     req = xr.load(out)
     assert req.id == rid and [w.target for w in req.wires] == [RG + "vm-celebrimbor-rivendell"]
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
     # The drill read is the one asked for.
     assert dr.main(["request", str(tmp_path / "s.yaml"), str(out), "--layer", dr.SHIPPED, "--name", "t",
-                    "--targets", "all"]) == 1
+                    "--targets", "all", *vms]) == 1
+    assert not hasattr(dr, "VMS_ENV")
 
 
 @pytest.mark.parametrize("name, code", [("bl1-reponse", 0), ("../x", 1), ("A", 1), ("x;id", 1), ("", 1)])

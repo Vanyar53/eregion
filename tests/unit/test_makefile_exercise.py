@@ -47,6 +47,7 @@ def fake_hosts(tmp_path):
         # DG-d: H0's instance drill, or « none here » (3): the command takes the shipped one then.
         "if cmd.startswith('test -e .eregion/console/drills/'):\n"
         f"    p = os.path.join({str(h0)!r}, 'drills', cmd.split()[2].rsplit('/', 1)[-1])\n"
+        "    sys.exit(4) if os.path.islink(p) and f'test ! -L {cmd.split()[2]} || exit 4' in cmd else None\n"
         "    sys.stdout.write(open(p).read()) if os.path.exists(p) else sys.exit(3)\n"))
     (bindir / "scp").write_text(common + (
         "for a in sys.argv[1:-1]:\n"
@@ -216,10 +217,13 @@ VMS = [{"name": n, "resource_id": VM.rsplit("/", 1)[0] + "/" + n, "rg_tags": {"e
 
 
 def _drill_env(tmp_path) -> dict:
-    """The bench's VMs as the command would read them (no Azure here), the bench's scope."""
+    """The bench's scope (the bench's VMs: ``_vms``, on the command line — no Azure here)."""
     (tmp_path / "vms.json").write_text(json.dumps(VMS))
-    return {"EREGION_DRILL_VMS_FILE": str(tmp_path / "vms.json"), "AZURE_SUBSCRIPTION_ID": SUB,
-            "EREGION_BENCH": "celebrimbor"}
+    return {"AZURE_SUBSCRIPTION_ID": SUB, "EREGION_BENCH": "celebrimbor"}
+
+
+def _vms(tmp_path) -> str:
+    return f"DRILL_VMS={tmp_path / 'vms.json'}"
 
 
 def _sent(oro: Path) -> dict:
@@ -232,12 +236,14 @@ def test_a_shipped_drill_goes_to_orodruin_on_the_vms_given(fake_hosts, tmp_path)
     """A shipped drill (drills/bl1-reponse.yaml: a fault, then T1136.001, on the bench), H0 holding
     no drill of that name: its wires on the VM given by TARGETS, a request, shown, sent."""
     bindir, h0, oro, calls = fake_hosts
-    res = _make(fake_hosts, "DRILL=bl1-reponse", "TARGETS=vm-celebrimbor-rivendell", stdin="y\n",
+    res = _make(fake_hosts, "DRILL=bl1-reponse", "TARGETS=vm-celebrimbor-rivendell", _vms(tmp_path), stdin="y\n",
                 env_extra=_drill_env(tmp_path))
     assert res.returncode == 0, res.stdout + res.stderr
     seen = calls()
     assert [c["cmd"] for c in seen] == ["ssh", "ssh", "scp", "ssh"]
-    assert seen[0]["argv"][-1].startswith("test -e .eregion/console/drills/bl1-reponse.yaml || exit 3; ")
+    f = ".eregion/console/drills/bl1-reponse.yaml"
+    # Absent (3): the shipped one; a link (4): refused, never followed nor replaced by the shipped one.
+    assert seen[0]["argv"][-1] == f"test -e {f} || test -L {f} || exit 3; test ! -L {f} || exit 4; cat {f}"
     req = _sent(oro)
     rivendell = VMS[1]["resource_id"]
     assert [(w["experiment"], w["target"]) for w in req["wires"]] == [("vm-shutdown", rivendell), ("T1136.001", rivendell)]
@@ -248,7 +254,7 @@ def test_a_shipped_drill_goes_to_orodruin_on_the_vms_given(fake_hosts, tmp_path)
 @needs_make
 def test_a_shipped_drill_without_targets_sends_nothing_and_lists_the_candidates(fake_hosts, tmp_path):
     bindir, h0, oro, calls = fake_hosts
-    res = _make(fake_hosts, "DRILL=bl1-reponse", stdin="y\n", env_extra=_drill_env(tmp_path))
+    res = _make(fake_hosts, "DRILL=bl1-reponse", _vms(tmp_path), stdin="y\n", env_extra=_drill_env(tmp_path))
     assert res.returncode != 0
     assert "choose: vm-celebrimbor-gondolin | vm-celebrimbor-rivendell" in res.stderr
     assert "TARGETS=all" in res.stderr and "nothing is sent" in res.stderr
@@ -262,7 +268,7 @@ def test_an_instance_drill_from_h0_lays_on_its_named_vms(fake_hosts, tmp_path):
     (h0 / "drills" / "ssh-mine.yaml").write_text(
         "name: ssh-mine\nauthor: operator\nupdated: '2026-11-03T10:00:00+00:00'\n"
         "wires:\n  - experiment: T1136.001\n    target: {name: vm-sentinel}\n")
-    res = _make(fake_hosts, "DRILL=ssh-mine", stdin="y\n", env_extra=_drill_env(tmp_path))
+    res = _make(fake_hosts, "DRILL=ssh-mine", _vms(tmp_path), stdin="y\n", env_extra=_drill_env(tmp_path))
     assert res.returncode == 0, res.stdout + res.stderr
     assert [(w["experiment"], w["target"]) for w in _sent(oro)["wires"]] == [("T1136.001", VMS[2]["resource_id"])]
     assert "drill ssh-mine (instance, 1 wire(s))" in res.stderr
@@ -271,7 +277,7 @@ def test_an_instance_drill_from_h0_lays_on_its_named_vms(fake_hosts, tmp_path):
 @needs_make
 def test_dry_run_of_a_drill_shows_and_asks_then_sends_nothing(fake_hosts, tmp_path):
     bindir, h0, oro, calls = fake_hosts
-    res = _make(fake_hosts, "DRILL=sentinelle", "TARGETS=all", "DRY_RUN=1", stdin="y\n",
+    res = _make(fake_hosts, "DRILL=sentinelle", "TARGETS=all", "DRY_RUN=1", _vms(tmp_path), stdin="y\n",
                 env_extra=_drill_env(tmp_path))
     assert res.returncode == 0, res.stdout + res.stderr
     assert "DRY_RUN : rien n'est envoyé" in res.stdout and "vm-sentinel" in res.stdout
@@ -283,21 +289,59 @@ def test_dry_run_of_a_drill_shows_and_asks_then_sends_nothing(fake_hosts, tmp_pa
     (("DRILL=bl1-reponse", f"REQUEST={RID}"), "pas les deux"),
     (("DRILL=../x",), "not a drill's name"),
     (("DRILL=x;id",), "not a drill's name"),
+    (("DRILL=A",), "not a drill's name"),
+])
+def test_a_drills_name_is_checked_before_any_command(fake_hosts, tmp_path, args, said):
+    res = _make(fake_hosts, *args, _vms(tmp_path), stdin="y\n", env_extra=_drill_env(tmp_path))
+    assert res.returncode != 0 and said in res.stdout + res.stderr
+    assert fake_hosts[3]() == []                                       # neither ssh nor scp
+
+
+@needs_make
+@pytest.mark.parametrize("args, said", [
     (("DRILL=nothing-here",), "pas de drill nothing-here"),
     (("DRILL=bl1-reponse", "TARGETS=vm-a;id"), "not a VM's name"),
     (("DRILL=bl1-reponse", "TARGETS=vm-sentinel"), "the candidate of no wire"),
 ])
 def test_a_drill_that_cannot_be_placed_sends_nothing(fake_hosts, tmp_path, args, said):
-    res = _make(fake_hosts, *args, stdin="y\n", env_extra=_drill_env(tmp_path))
+    res = _make(fake_hosts, *args, _vms(tmp_path), stdin="y\n", env_extra=_drill_env(tmp_path))
     assert res.returncode != 0 and said in res.stdout + res.stderr
     assert not any(fake_hosts[2].iterdir())
-    assert [c["cmd"] for c in fake_hosts[3]()] in ([], ["ssh"])          # at most the drill read
+    assert [c["cmd"] for c in fake_hosts[3]()] == ["ssh"]              # the drill read, nothing more
 
 
 @needs_make
-@pytest.mark.parametrize("var", ["DRILL", "TARGETS"])
-def test_drill_and_targets_are_never_read_from_the_environment(fake_hosts, tmp_path, var):
-    env = {**_drill_env(tmp_path), var: "bl1-reponse" if var == "DRILL" else "all"}
+def test_an_instance_drill_that_is_a_link_on_h0_is_never_read_nor_the_shipped_one_in_its_place(fake_hosts, tmp_path):
+    bindir, h0, oro, calls = fake_hosts
+    (h0 / "drills").mkdir()
+    (h0 / "elsewhere.yaml").write_text("name: bl1-reponse\n")
+    (h0 / "drills" / "bl1-reponse.yaml").symlink_to(h0 / "elsewhere.yaml")
+    res = _make(fake_hosts, "DRILL=bl1-reponse", "TARGETS=all", _vms(tmp_path), stdin="y\n",
+                env_extra=_drill_env(tmp_path))
+    assert res.returncode != 0 and "est un lien, jamais suivi" in res.stderr
+    assert [c["cmd"] for c in calls()] == ["ssh"] and not any(oro.iterdir())
+
+
+@needs_make
+@pytest.mark.parametrize("dangling", [False, True])
+def test_a_local_instance_drill_that_is_a_link_is_never_read_nor_the_shipped_one(fake_hosts, tmp_path, dangling):
+    bindir, h0, oro, calls = fake_hosts
+    own = tmp_path / ".eregion" / "console" / "drills"            # HOME is the fake's tmp
+    own.mkdir(parents=True)
+    if not dangling:
+        (tmp_path / "elsewhere.yaml").write_text("name: bl1-reponse\n")
+    (own / "bl1-reponse.yaml").symlink_to(tmp_path / "elsewhere.yaml")
+    res = _make(fake_hosts, "DRILL=bl1-reponse", "TARGETS=all", "REQUEST_FROM=local", _vms(tmp_path),
+                stdin="y\n", env_extra=_drill_env(tmp_path))
+    assert res.returncode != 0 and "est un lien, jamais suivi" in res.stderr
+    assert calls() == [] and not any(oro.iterdir())
+
+
+@needs_make
+@pytest.mark.parametrize("var", ["DRILL", "TARGETS", "DRILL_VMS"])
+def test_drill_targets_and_vms_are_never_read_from_the_environment(fake_hosts, tmp_path, var):
+    value = {"DRILL": "bl1-reponse", "TARGETS": "all", "DRILL_VMS": str(tmp_path / "vms.json")}[var]
+    env = {**_drill_env(tmp_path), var: value}
     args = () if var == "DRILL" else ("DRILL=bl1-reponse",)
     res = _make(fake_hosts, *args, stdin="y\n", env_extra=env)
     assert res.returncode != 0 and "viennent de l'environnement" in res.stderr

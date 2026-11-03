@@ -186,3 +186,43 @@ def test_the_page_lays_a_drill_and_never_writes_a_request_while_a_wire_waits():
     assert 'id="drills"' in (Path(api.__file__).parent / "static" / "dagorlad.html").read_text()
     # Loading lays wires, it writes no request: the only request is the button's.
     assert js.count("fetch('/api/dagorlad/requests'") == 1
+
+
+# ── Review (03/11): two VMs of one name — a twin copied from a bench keeps its names ────────
+
+TWIN_GONDOLIN = (RG.replace("/rg-celebrimbor/", "/rg-celebrimbor-twin/") + "vm-celebrimbor-gondolin")
+TWINNED = [*VMS, _vm(TWIN_GONDOLIN, {"eregion-target": "celebrimbor", "eregion-zone": "twin"})]
+
+
+@pytest.fixture()
+def twinned(client, monkeypatch):
+    monkeypatch.setattr(api, "READ_TARGETS", lambda subscription: TWINNED)
+    api._targets_cache.update(at=0.0, value=None)
+    return client
+
+
+def test_a_name_two_enrolled_vms_bear_is_never_kept(twinned):
+    r = _save(twinned, "x", ("T1110.001", TWIN_GONDOLIN))
+    assert r.status_code == 409 and "a name several enrolled VMs bear" in r.json()["error"]
+    assert _kept() == []
+    assert _save(twinned, "y", ("T1110.001", RIVENDELL)).status_code == 200       # one bearer: kept
+
+
+def test_a_drill_whose_name_two_vms_bear_lays_it_to_place_never_on_one_unsaid(twinned, tmp_path):
+    dr.save(dr.new("mine", [("T1136.001", "vm-celebrimbor-gondolin")]))
+    (tmp_path / "runs" / "run-t.json").write_text(json.dumps({
+        "scenario": "acct", "run_id": "run-t", "mitre": "T1136.001", "result": "PASS",
+        "metrics": {"run_format": 1, "kind": "technique", "injector": "annatar", "experiment_id": "T1136.001",
+                    "attack_time": 1_700_000_000.0, "detection": "detected", "resource_id": TWIN_GONDOLIN}}))
+    [p] = twinned.get("/api/dagorlad/drills/mine").json()["placed"]
+    assert p["targets"] == [] and p["why"] == "vm-celebrimbor-gondolin names 2 enrolled VMs here"
+    cands = {c["resource_id"]: c for c in p["candidates"]}
+    assert set(cands) == {GONDOLIN, TWIN_GONDOLIN}
+    # The hint is the VM's, by its resource id — never its namesake's.
+    assert cands[TWIN_GONDOLIN]["last_run_at"] == 1_700_000_000.0 and cands[GONDOLIN]["last_run_at"] is None
+
+
+def test_the_page_tells_two_vms_of_one_name_apart_and_offers_no_shipped_name():
+    js = (Path(api.__file__).parent / "static" / "dagorlad.js").read_text()
+    assert "const twice = w.candidates.filter(o => same(o.name, c.name)).length > 1;" in js
+    assert "name: S.loadedLayer === 'instance' ? S.loaded : ''" in js

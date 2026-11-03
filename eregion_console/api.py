@@ -3080,17 +3080,20 @@ def _drill_candidates() -> tuple[list, str]:
 
 
 def _last_runs() -> dict[tuple[str, str], float]:
-    """(experiment, VM name) → when it last ran there, from every run report this host keeps:
-    the hint of the VM exercised the least recently — never a choice."""
+    """(experiment, VM) → when it last ran there, from every run report this host keeps: the hint
+    of the VM exercised the least recently — never a choice. A VM is its resource id (lowercase);
+    a run that names its VM only (a fault's targets) is keyed by that name (``name:<vm>``), read
+    for a candidate whose name no other candidate bears."""
     from eregion_core import run_report
     out: dict[tuple[str, str], float] = {}
     for r in run_report.read_reports(_run_reports(), runs_reader.read_json):
         at = r.get("at")
         if not isinstance(at, (int, float)):
             continue
-        names = [str(r.get("resource_id") or ""), *(str(t) for t in r.get("targets") or [])]
-        for n in {n.rstrip("/").rsplit("/", 1)[-1].lower() for n in names if n}:
-            key = (str(r.get("experiment") or ""), n)
+        keys = {f"name:{t.rstrip('/').rsplit('/', 1)[-1].lower()}" if "/" not in t.strip("/") else t.rstrip("/").lower()
+                for t in [str(r.get("resource_id") or ""), *(str(t) for t in r.get("targets") or [])] if t}
+        for vm in keys:
+            key = (str(r.get("experiment") or ""), vm)
             out[key] = max(at, out.get(key, at))
     return out
 
@@ -3117,9 +3120,13 @@ async def drill_placed(name: str) -> JSONResponse:
         cands, error = _drill_candidates()
         last = _last_runs()
         placed = [p.to_dict() for p in drill.place(d, cands)]
+        named = [c.name.lower() for c in cands]
         for p in placed:
             for c in p["candidates"]:
-                c["last_run_at"] = last.get((p["experiment"], c["name"].lower()))
+                ran = last.get((p["experiment"], c["resource_id"].lower()))
+                if ran is None and named.count(c["name"].lower()) == 1:
+                    ran = last.get((p["experiment"], f"name:{c['name'].lower()}"))
+                c["last_run_at"] = ran
         return {**d.to_doc(), "layer": d.layer, "placed": placed, "targets_error": error}
     try:
         return JSONResponse(await asyncio.to_thread(read))
@@ -3168,6 +3175,15 @@ async def drill_save(body: dict) -> JSONResponse:
             why = error or "not an enrolled VM read now"
             return JSONResponse({"error": f"{len(stray)} target(s) {why}: a drill keeps the names of enrolled "
                                           "VMs — nothing is written"}, status_code=409)
+        # A drill keeps names: a name that several enrolled VMs bear (a twin copied from a bench)
+        # would come back on another VM — refused, never kept.
+        names = [c.name.lower() for c in cands]
+        twice = sorted({by_id[w["target"].lower()].name for w in wires
+                        if names.count(by_id[w["target"].lower()].name.lower()) > 1})
+        if twice:
+            return JSONResponse({"error": f"{', '.join(twice)}: a name several enrolled VMs bear here — a drill "
+                                          "keeps names, and would come back on another VM: nothing is written"},
+                                status_code=409)
         try:
             d = drill.new(body["name"], [(w["experiment"], by_id[w["target"].lower()].name) for w in wires],
                           description=body.get("description") or "")

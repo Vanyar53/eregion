@@ -34,6 +34,7 @@ const S = {
   drillsErr: '',
   pending: [],      // a loaded drill's wires waiting for their VMs: {experiment, zone, name, why, candidates}
   loaded: '',       // the drill last loaded or saved, by name
+  loadedLayer: '',  // its layer: a shipped drill's name is never offered to « Save as drill »
   loadAsk: '',      // a drill to load over the wires drawn: asked first
   saving: null,     // « Save as drill » open: {err, exists, name, desc}
   drillsOpen: false, // the list of drills shown (folded by default: the board holds 1440 × 900)
@@ -50,7 +51,9 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S.wires)); } catch (_) { /* private mode */ }
 }
 function savePending() {
-  try { localStorage.setItem(PENDING_KEY, JSON.stringify({ wires: S.pending, loaded: S.loaded })); } catch (_) { /* private mode */ }
+  try {
+    localStorage.setItem(PENDING_KEY, JSON.stringify({ wires: S.pending, loaded: S.loaded, layer: S.loadedLayer }));
+  } catch (_) { /* private mode */ }
 }
 // The request followed, running or over, kept in this browser (a convenience): a reload finds it.
 function saveRequest() {
@@ -127,7 +130,9 @@ const ACTIONS = {
   toggleDrills() { S.drillsOpen = !S.drillsOpen; renderDrills(); },
   saveOpen() {
     if (S.request || !S.wires.length) return;
-    S.saving = S.saving ? null : { err: '', exists: false, name: S.loaded, desc: '' };
+    // A shipped drill's name is not offered: saved under it, this instance's would replace the
+    // shipped one, and its wires would never be « to place » again.
+    S.saving = S.saving ? null : { err: '', exists: false, name: S.loadedLayer === 'instance' ? S.loaded : '', desc: '' };
     S.drillsOpen = true;
     renderDrills();
   },
@@ -632,12 +637,15 @@ function pendingBox() {
     const least = w.candidates.length > 1 ? leastRecent(w.candidates) : -1;
     const buttons = w.candidates.map((c, j) => {
       const ran = c.last_run_at != null ? `last ran here ${dur(Math.max(0, now - Number(c.last_run_at)))} ago` : 'never ran here';
-      return `<button type="button" class="mini" ${_on('click', 'place', p, j)} title="${esc(ran)}">${esc(c.name)}${j === least ? ' <span class="meta">· least recently</span>' : ''}</button>`;
+      // Two VMs of one name (a twin copied from a bench): each said by its group.
+      const group = String(c.resource_id).split('/')[4] || '';
+      const twice = w.candidates.filter(o => same(o.name, c.name)).length > 1;
+      return `<button type="button" class="mini" ${_on('click', 'place', p, j)} title="${esc(`${ran} · group ${group} · zone ${c.zone || '?'}`)}">${esc(c.name)}${twice ? ` <span class="meta">· ${esc(group)}</span>` : ''}${j === least ? ' <span class="meta">· least recently</span>' : ''}</button>`;
     }).join(' ');
-    const all = w.candidates.length > 1
+    const all = w.zone && w.candidates.length > 1
       ? `<button type="button" class="mini" ${_on('click', 'placeAll', p)} title="One wire per VM of the zone">all ${Number(w.candidates.length)}</button>` : '';
     return `<tr><td style="white-space:nowrap"><span class="rid">${esc(w.experiment)}</span> → ${w.zone ? `zone ${esc(w.zone)}` : esc(w.name)}</td>
-      <td class="wrap">${buttons} ${all}${w.candidates.length ? '' : `<span class="r-bad">${esc(w.why)}</span>`}</td>
+      <td class="wrap">${buttons} ${all}${w.zone && w.candidates.length ? '' : ` <span class="${w.candidates.length ? 'r-warn' : 'r-bad'}">${esc(w.why)}</span>`}</td>
       <td><button type="button" class="mini" ${_on('click', 'unplace', p)} title="Remove this wire">✕</button></td></tr>`;
   }).join('');
   return `<div class="pending"><b>TO PLACE</b> <span class="meta">${esc(S.loaded)}: these wires name no VM here —
@@ -717,9 +725,10 @@ async function loadDrill(name) {
     S.pending = placed.filter(p => !(p.targets || []).length).map(p => ({
       experiment: String(p.experiment), zone: String(p.zone || ''), name: String(p.name || ''), why: String(p.why || ''),
       candidates: (p.candidates || []).map(c => ({ name: String(c.name), resource_id: String(c.resource_id),
-        last_run_at: c.last_run_at == null ? null : Number(c.last_run_at) })),
+        zone: String(c.zone || ''), last_run_at: c.last_run_at == null ? null : Number(c.last_run_at) })),
     }));
     S.loaded = String(d.name || name);
+    S.loadedLayer = String(d.layer || '');
     S.drillsErr = d.targets_error ? `the enrolled VMs unreadable: ${d.targets_error}` : '';
     savePending(); saveRequest();
   } catch (e) {
@@ -743,7 +752,7 @@ async function saveDrill(replace) {
       f.err = d.error || `HTTP ${r.status}`; f.exists = d.exists === true;
       renderDrills(); return;
     }
-    S.saving = null; S.loaded = String(d.saved || body.name);
+    S.saving = null; S.loaded = String(d.saved || body.name); S.loadedLayer = 'instance';
     savePending();
   } catch (e) {
     f.err = e.message; renderDrills(); return;
@@ -754,6 +763,7 @@ function validPending(w) {
   return w && typeof w === 'object' && ['experiment', 'zone', 'name', 'why'].every(k => typeof w[k] === 'string')
     && Array.isArray(w.candidates) && w.candidates.length <= MAX_WIRES
     && w.candidates.every(c => c && typeof c.name === 'string' && typeof c.resource_id === 'string'
+      && (c.zone === undefined || typeof c.zone === 'string')
       && (c.last_run_at === null || typeof c.last_run_at === 'number'));
 }
 
@@ -800,6 +810,7 @@ async function refreshPlan() {
     const kept = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
     if (kept && Array.isArray(kept.wires)) S.pending = kept.wires.filter(validPending).slice(0, MAX_WIRES);
     if (kept && typeof kept.loaded === 'string') S.loaded = kept.loaded;
+    if (kept && typeof kept.layer === 'string') S.loadedLayer = kept.layer;
   } catch (_) { /* private mode, or something else there */ }
   // The request followed before the reload: read again — still running, its wires lock again.
   S.last = storedRequest();

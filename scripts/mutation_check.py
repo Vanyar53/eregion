@@ -6242,9 +6242,9 @@ MUTANTS += [
     ("M1942", "an isolation gone again read « already said » from its drift mark alone (L2C, review)", R,
      '    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):\n',
      '    if iso.get("drift_alerted_at"):\n'),
-    ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", R,
-     '    if b.get("drift_alerted_at") and not worse and drift_said(ref or vm, ip, _alert_id(vm, rid, ip)):\n',
-     '    if b.get("drift_alerted_at") and not worse:\n'),
+    ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", RSD,
+     "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not (_back(baseline, now) and _acknowledged(sid)))\n"),
     ("M1944", "an isolation held again, its mark kept: the episode not known over (L2C, review)", R,
      '    if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
      '    if False:\n'),
@@ -6429,7 +6429,8 @@ MUTANTS += [
      "        and not getattr(r, \"destination_application_security_groups\", None)\n", ""),
     ("M2184", "a bypassed block drops where each NIC stands: a card naming no NIC says « plus bloquée » under "
               "the perimeter (I3P)", VBL,
-     "                        \"open_nics\": open_nics, **said}\n", "                        }\n"),
+     "                        \"open_nics\": open_nics, **said, **self._rules_seen(cache, entry)}\n",
+     "                        **self._rules_seen(cache, entry)}\n"),
     ("M2185", "a NIC whose own block is passed never asked the perimeter: neither said held nor open (I3P)", VBL,
      "                            _stand(t0)\n", "                            pass\n"),
     ("M2186", "NICs unread left unsaid: rules gone on them said « n'est plus bloquée » (I3P, A0)", VBL,
@@ -8238,8 +8239,8 @@ MUTANTS += [
      "        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)\n",
      "        narrow_drift(ref or vm, ip, baseline if worse else now_is)\n"),
     ("M3121", "the baseline's meet keeps « not blocked »: a block held since, then gone, unsaid (L1)", RCA,
-     '            "blocked": bool(said.get("blocked")) or now["blocked"]}\n',
-     '            "blocked": bool(said.get("blocked"))}\n'),
+     '            "blocked": bool(said.get("blocked")) or now["blocked"],\n',
+     '            "blocked": bool(said.get("blocked")),\n'),
     ("M3122", "a refused write of the check card raises into the block's pass: its drift unsaid (L1)", RCA,
      "        except OSError as exc:\n            log.warning(\"reassert: carte « non vérifiée »",
      "        except ZeroDivisionError as exc:\n            log.warning(\"reassert: carte « non vérifiée »"),
@@ -9439,7 +9440,8 @@ MUTANTS += [
     ("M2996", "the first time writes again a pair put back once: two removals no longer deliberate (L1Qs)", RPB,
      _L1QS_DECIDE, '    return not r._mode(autonomy, vm, ref) == "human_only"\n'),
     ("M2997", "the first time retries at every pass a disappearance said and no worse (L1Qs)", RPB,
-     '    if (b.get("drift_alerted_at") and not r._worse(', "    if (False and not r._worse("),
+     "    if still_said(b, ref or vm, ip, r._alert_id(vm, rid, ip), ",
+     "    if False and still_said(b, ref or vm, ip, r._alert_id(vm, rid, ip), "),
     ("M2998", "the second time ignores what the first put back: its pair read whole, « reposé » never said, or "
               "said « ne le repose pas » (L1Qs)", R,
      '                                ref=snapshot["resource_id"], put_back=put_back)\n',
@@ -9485,6 +9487,72 @@ TESTS.update({
 TESTS.update({mid: f"{_L1QR} {_L1QS_UNIT}test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_"
                    f"blocks {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
 
+
+# L1G (#461): an acknowledged drift card holds while none of its rules is written again or more gone — seed 29
+# (another VM's perimeter wrote the pair a merged entry names, its own rules still gone) and L1Qs' `xfail` (rules
+# aimed at an old address, named gone, then deleted). The check says each rule as it read it (`rules_seen`).
+# M3280–M3288.
+_L1G_REG = "tests/unit/test_invariant_regressions.py::"
+_L1G_UNIT = "tests/unit/test_reassert.py::"
+_L1G_SEED = f"{_L1G_REG}test_a_merged_block_whose_pair_another_vm_wrote_again_after_its_card_is_said"
+_L1G_FAKE = f"{_L1G_REG}test_an_acknowledged_drift_whose_pair_another_perimeter_wrote_is_said_on_the_fake"
+_L1G_SEEN = f"{_L1G_REG}test_the_check_reads_each_rule_of_the_entry_by_what_it_does"
+_L1G_ADDR = f"{_L1G_REG}test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone"
+_L1G_BACK = (f"{_L1G_UNIT}test_a_pair_written_again_after_an_acknowledged_card_ends_its_episode "
+             f"{_L1G_UNIT}test_a_pair_written_again_after_an_acknowledged_card_is_put_back_outside_human_only "
+             f"{_L1G_UNIT}test_the_first_time_decides_on_an_acknowledged_episode_as_the_second")
+_L1G_GONE = f"{_L1G_UNIT}test_a_rule_read_there_then_deleted_is_a_rule_more_gone"
+_L1G_WORSE = "                or any(was is not None and is_ is None for was, is_ in _read_both(said, now)))\n"
+MUTANTS += [
+    ("M3280", "a rule written again after an acknowledged card never ends its episode: another VM's perimeter "
+              "writes the pair, the VM's own rules still gone, unsaid (L1G, seed 29)", RSD,
+     "    return isinstance(said, dict) and any(was is None and is_ is not None for was, is_ in _read_both(said, now))\n",
+     "    return False\n"),
+    ("M3281", "a rule written again ends the episode of a pending card too: a card more at each return (L1G, L1Q)",
+     RSD, "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not _back(baseline, now) and drift_said(key, ip, sid))\n"),
+    ("M3282", "a rule the card's check never read read back: an NSG listed since, said anew (L1G)", RSD,
+     "    return [(before[k], after[k]) for k in sorted(before.keys() & after.keys())]\n",
+     "    return [(before.get(k), after.get(k)) for k in sorted(before.keys() | after.keys())]\n"),
+    ("M3283", "a rule the card read there, now deleted, read « no worse »: gone by name both times, unsaid (L1G, "
+              "L1Qs' xfail)", RSD, _L1G_WORSE, "                or False)\n"),
+    ("M3284", "a rule written again read as a rule more gone: a pending card replaced at each return (L1G)", RSD,
+     _L1G_WORSE, "                or any(was is None and is_ is not None for was, is_ in _read_both(said, now)))\n"),
+    ("M3285", "the block's check never says its rules as it read them: both changes unsaid (L1G)", VBL,
+     '        return {"rules_seen": seen} if seen else {}\n', "        return {}\n"),
+    ("M3286", "the block's check says its rules by name only: a rule turned or aimed elsewhere reads the same "
+              "(L1G)", VBL,
+     '                seen[f"{rg}/{nsg}/{n}".lower()] = None if r is None else hashlib.sha1(\n',
+     '                seen[f"{rg}/{nsg}/{n}".lower()] = None if r is None else "there" or hashlib.sha1(\n'),
+    ("M3287", "the block's check leaves the merged perimeter's pair out of what it read: written again by "
+              "another VM, unsaid (L1G, seed 29)", VBL,
+     '        if entry.get("nsg") and entry.get("rule") and "/" in entry["nsg"]:\n            named.append(',
+     '        if False:\n            named.append('),
+    ("M3288", "the card keeps no record of its rules as read: both changes unsaid (L1G)", RSD,
+     '"blocked": v.get("verified") is True, "rules": dict(v.get("rules_seen") or {})}\n',
+     '"blocked": v.get("verified") is True}\n'),
+]
+# L1G's review: `rules_seen` is the reassertion's alone — never in a cycle's outcome (what the model sees among
+# its past cycles) nor in the console's record of a manual action. M3385 (M3289 is U1G's).
+MUTANTS += [
+    ("M3385", "a block's rules as read reach the cycle's outcome and the manual action's record: what the model "
+              "sees among its past cycles changes (L1G's review)", "glorfindel/response/policy.py",
+     "    return {k: v for k, v in verification.items() if k not in _REASSERTION_ONLY}\n",
+     "    return dict(verification)\n"),
+]
+TESTS["M3385"] = ("tests/unit/test_agent_nodes.py::test_a_blocks_rules_as_read_never_reach_the_cycle_the_model_sees "
+                  "tests/unit/test_api.py::test_an_approved_blocks_check_records_no_rule_as_read")
+TESTS.update({
+    "M3280": f"{_L1G_BACK} {_L1G_SEED} {_L1G_FAKE}",
+    "M3281": _L1G_BACK,
+    "M3282": f"{_L1G_UNIT}test_a_rule_the_cards_check_never_read_is_never_read_back",
+    "M3283": f"{_L1G_GONE} {_L1G_ADDR}",
+    "M3284": f"{_L1G_BACK} {_L1G_GONE}",
+    "M3285": f"{_L1G_SEEN} {_L1G_SEED} {_L1G_FAKE} {_L1G_ADDR}",
+    "M3286": _L1G_SEEN,
+    "M3287": f"{_L1G_SEEN} {_L1G_SEED} {_L1G_FAKE}",
+    "M3288": f"{_L1G_BACK} {_L1G_GONE} {_L1G_SEED} {_L1G_ADDR}",
+})
 
 # U1G (#463): a VM Glorfindel holds shielded the whole orphan rule — another live VM, held for nothing,
 # cut at another of the deleted NIC's addresses, stayed cut (U1; L1Qs' seed 10 at 500). The rule is

@@ -3534,6 +3534,101 @@ marquées (`reasserted_at`) sans la carte « reposé une fois » ; la disparitio
 
 **Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé (lot à part) ; la séquence réduite, rejouée sur la machine et le code de `main` 7ac1f37 pur (après MCG), y est rouge, sur le même U1. **Un second défaut ancien**, trouvé par l'exécution non mutée du harnais de mutation (une graine au hasard à 60) : « L1: the block on …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so » — une VM créée à l'ancienne adresse de Db--01, sous des écritures refusées, son adresse changée, une carte acquittée ; 24 règles réduites à la main à huit de `main`, aucune de L1Qs, rouges sur `main` 7ac1f37 pur comme sur la branche : figé en `xfail` strict (`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone`), hors du lot, routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet (`main` 7ac1f37 fusionné, MCG compris) : 5 933 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 343 mutants, sans faute ; `tests/unit/test_mutant_anchors.py` vert (le bloc de L1Qs au-dessus du repère « The mutants end here »).
 
+**L1G (03/11, #461) : un blocage disparu est reposé ou dit — la graine 29, et le L1 d'une adresse
+changée sous des écritures refusées.** Deux L1 anciens d'une même famille, « the block … vanished
+from Azure; the reassertion neither put it back nor said so », rouges sur `main` : la graine 29 à 60
+(trouvée par la mesure d'I3V, rouge aussi avant I3V) et le `xfail` strict figé par L1Qs. Dans les
+deux, une carte de dérive acquittée, puis les règles de l'entrée changent d'une façon que les noms
+seuls lisent « pas pire » ; la machine tient une carte acquittée pour dite seulement tant que les
+règles de l'entrée sont telles qu'à l'acquittement.
+
+**L'instabilité de la graine 29 venait de la machine.** La séquence réduite, rejouée avec ses
+tirages, passait une fois sur deux (et `FlakyStrategyDefinition` en réduisant). Ce n'était pas
+l'ordonnanceur de `race` : son entrelacement est tiré de la graine (`_Scheduler`), et deux
+exécutions de la séquence, comparées étape par étape (le journal du faux, le magasin, les états),
+divergeaient à `operator_acknowledges` et nulle part avant. La règle triait les cartes en attente
+par leur id — un uuid4, tiré à chaque exécution — : l'index tiré tombait sur la carte de web2 ou sur
+celle de web1 selon le tirage des uuid ; la suite de la séquence, et ses tirages, en dépendaient.
+**Correctif** (`tests/unit/test_invariants.py`) : les cartes dans l'ordre du magasin (le plus ancien
+d'abord, l'ordre où le code les écrit, `_reassert_block_cards`), pour `operator_acknowledges` et
+`blocked_again_after_an_acknowledged_drift` ; les tirages et la règle inchangés (A0 : rien d'affaibli,
+chaque carte reste atteignable). Rejouée vingt fois ensuite, la séquence tombe chaque fois sur le
+même chemin. `PYTHONHASHSEED` fixé ne la stabilisait pas : rien ne venait de l'ordre des ensembles.
+
+**La graine 29, sa cause.** web2 bloquée sur son sous-réseau (la 8ᵉ écriture répondue par un crash
+après qu'Azure l'a appliquée) puis pour elle-même (`race` : une entrée fusionnée) ; ses règles et sa
+paire parties, dites (« Glorfindel ne le repose pas »), la carte acquittée ; puis web1 bloquée sur le
+même sous-réseau (`block_turned_then_reasserted`) : son blocage de périmètre écrit la paire — une par
+IP et sous-réseau — que l'entrée de web2 nomme aussi. Les règles de web2 toujours parties, la paire
+revenue : « mieux que la carte, pas pire », en silence. **Correctif** (`glorfindel/reassert_said.py`,
+`still_said`) : une règle que la carte a lue absente, écrite de nouveau sous notre nom, clôt
+l'épisode d'une carte acquittée, comme un blocage écrit de nouveau (L1Q) : ce qui reste parti est
+reposé une fois, ou dit. Le premier temps décide de même (`reassert_perimeters._to_write`). Une règle
+remise à la main sans avoir été supprimée ne dit toujours rien
+(`test_a_drift_card_acknowledged_is_said_again_only_when_it_worsens[better]`, RB1) ; sous une carte
+en attente, ce qui revient resserre la référence, comme avant (L1Q).
+
+**Le `xfail` de L1Qs, sa cause.** Son adresse changée, les règles de rg-new/web, toujours sur Azure,
+visent l'ancienne : la vérification les nomme « parties » (`_block_pair_state` : `altered`, compté
+comme absent). Dites (« le reposer a échoué », écritures refusées), la carte acquittée, puis
+supprimées : parties par leur nom les deux fois, la suppression lue « pas pire ». **Correctif**
+(`reassert_said._worse`) : une règle que la carte a lue sur Azure, absente maintenant, est une règle
+de plus partie — dite, la carte en attente ou non. Le `xfail` est levé ; la séquence figée garde ses
+derniers tirages (la règle jouée jusqu'au bout).
+
+**Ce que la vérification dit de plus.** Pour les deux, `verify_block_ip` dit chaque règle de l'entrée
+telle qu'elle l'a lue (`rules_seen` : sa signature, `_rule_signature`, ou None absente), depuis les
+listages qu'elle a faits — aucune lecture de plus ; un NSG non listé, ou illisible, laisse ses règles
+dehors. La carte le garde (`_situation`, `drift_said`), la référence resserrée aussi (`drift_meet` :
+présente dans l'une ou l'autre). Seules les règles lues les deux fois comptent ; une entrée plus
+ancienne, ou un fournisseur qui ne le dit pas : comme avant, par les noms. **La signature ne sert
+encore à aucune décision** : `_back` et `_worse` ne regardent que la présence (None ou non). Elle est
+gardée pour une décision future (une règle retournée de nouveau, autrement) ; son mutant, M3286 (par
+le nom seul), n'est attrapé que par un test structurel
+(`test_the_check_reads_each_rule_of_the_entry_by_what_it_does`), aucun comportement ne le voit.
+**`rules_seen` est à la réaffirmation seule** (la relecture 5.5) : `verify_block_ip` le renvoie, et
+le nœud de vérification du graphe le versait dans l'`outcome` du cycle — que `memory._cycle_to_text`
+reprend, et que le modèle revoit parmi ses cycles passés —, la console dans le journal d'une action
+approuvée. Ce lot ne change rien à ce que voit le modèle : `response.policy.as_recorded` l'ôte aux
+deux (`agent.verify_action`, `eregion_console/api._verify_approved`) ; `_build_user_message`,
+`_SYSTEM_PROMPT` et `few_shot_examples.yaml` intouchés. Figés :
+`test_agent_nodes.py::test_a_blocks_rules_as_read_never_reach_the_cycle_the_model_sees`,
+`test_api.py::test_an_approved_blocks_check_records_no_rule_as_read` ; mutant **M3385** (M3289 est
+à U1G).
+
+**Figés.** `test_a_merged_block_whose_pair_another_vm_wrote_again_after_its_card_is_said` (la graine
+29 telle que trouvée, treize règles, l'index de la carte celui qui tombe sur web2 ; et réduite à la
+main à cinq) ; `test_an_acknowledged_drift_whose_pair_another_perimeter_wrote_is_said_on_the_fake` ;
+`test_the_check_reads_each_rule_of_the_entry_by_what_it_does` (au connecteur) ;
+`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone` (le `xfail` levé) ;
+`test_reassert.py` : la paire écrite de nouveau sous une carte acquittée (dite, ou reposée hors
+`human_only`) et sous une carte en attente (rien de plus), une règle lue là puis supprimée (les deux),
+remise à la main (rien), une règle que la carte n'a pas lue (rien), le premier temps qui décide de
+même. Rouges sur `main` 19d802d, chaque fois (les gardes « rien de plus » vertes sur les deux).
+
+**Mesures de L1G.** Invariants avec les correctifs, `--hypothesis-seed=N`, quatre à la fois : 60
+séquences, N = 1..20, **20/20 vertes**, et la graine 29 verte ; 500 séquences, N = 1..4, **4/4
+vertes**. La séquence de la graine 29 telle que trouvée, rejouée vingt fois : verte vingt fois sur la
+branche, rouge vingt fois sur le code de `main` 19d802d (les tests de la branche posés dessus).
+**Mutants M3280–M3288** : 9/9 par leurs tests à chaque tour (deux tours, 60 séquences) — l'épisode
+jamais clos par une règle écrite de nouveau (M3280), clos aussi sous une carte en attente (M3281), une
+règle que la carte n'a pas lue lue revenue (M3282), une règle lue là puis supprimée « pas pire »
+(M3283), une règle revenue comptée partie (M3284), la vérification qui ne dit pas ses règles (M3285),
+qui les dit par leur nom seul (M3286), qui laisse la paire fusionnée dehors (M3287), la carte qui ne
+les garde pas (M3288). Réancrés (2/2 chacun) : M1943 (dans `still_said`), M2184, M2997, M3121. **Les
+mutants des fichiers touchés** (`reassert.py`, `reassert_said.py`, `reassert_perimeters.py`,
+`reassert_cards.py`, `verify_block.py` : 151), un tour à 60 séquences : 148/151 ; M1645 survit, comme
+sur `main` (L1Qs) ; M19 et M38 ne sont attrapés que par leurs séquences figées, comme mesuré par L1Q.
+`pytest` complet : 5 984 réussis, 7 sautés, 1 `xfail` (le U1 de L1Qs, hors du lot) ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 367 mutants, sans faute.
+
+**Reste ouvert (L1G).** `_back` compare la lecture à la référence resserrée (la dernière passe sous
+l'épisode), non à ce que la carte a lu : une règle revenue pendant que la carte attendait resserre la
+référence, et l'acquittement qui suit ne voit plus ce retour. Ce n'est pas une régression — `main` ne
+le voyait pas davantage —, et il faut une double faute pour s'y taire : la règle revenue sous la carte
+en attente, puis acquittée, puis les autres règles de l'entrée encore parties sans rien de pire.
+Relevé par la relecture 5.5, laissé tel quel.
+
 **U1G (03/11, #463) : une règle orpheline ne coupe jamais une VM vivante parce qu'elle en coupe aussi une
 que Glorfindel tient.** La graine 10 à 500 de L1Qs, figée par lui en `xfail` strict
 (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`), rouge sur `main` 19d802d

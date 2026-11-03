@@ -6107,8 +6107,6 @@ def test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off(mo
           "rg-app1", "web", True, "non_disruptive", "non_disruptive"))
 
 
-@pytest.mark.xfail(strict=True, reason="L1, an older defect: the unmutated run of L1Qs' mutation harness, red on `main`, "
-                                       "out of this lot (#424)")
 def test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone(monkeypatch):
     """Found by the mutation harness's unmutated run while measuring L1Qs (a random seed at 60, 24
     rules, shrunk by hand to eight of `main`, none of L1Qs'): a new VM given Db--01's old address under
@@ -6116,7 +6114,14 @@ def test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone(mo
     (writes refused); its address changed; a quarantine change that comes back; the operator
     acknowledges a card; web's block taken up by its lowercase id. « L1: the block on …/rg-new/…/web
     vanished from Azure; the reassertion neither put it back nor said so ». Red on `main` 7ac1f37 as on
-    this branch: frozen, routed."""
+    L1Qs' branch: frozen in `xfail` there, routed (L1G, #461).
+
+    The cause (L1G): its address changed, rg-new/web's rules, still on Azure, aimed at the old one, are
+    named « gone » by the check — « a disparu ; le reposer a échoué » (writes refused) —, the card
+    acknowledged; then the rules deleted. Gone by name both times, the deletion read « no worse », in
+    silence. A rule the card's check read on Azure, now deleted, is a rule more gone (`rules_seen`,
+    `reassert_said._worse`): said. The last draws, past the pass that failed, play the rest of the
+    rule (the block taken up by its lowercase id, two passes)."""
     from .test_invariants import _TEMPLATES
 
     def r(name, prio):
@@ -6130,7 +6135,120 @@ def test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone(mo
          ("customer_changes_ip", '/subscriptions/s/resourcegroups/rg-new/providers/microsoft.network/networkinterfaces/web-nic-4', 0, 4),
          ("quarantine_change_comes_back", '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.compute/virtualmachines/web', None, True, True, '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'non_disruptive', 'role removed', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 2, 'non_disruptive', 'non_disruptive', 'human_only', (1, 'from-full'), True, 'human_only'),
          ("operator_acknowledges", 4),
-         ("taken_up_by_its_lowercase_id", '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', 'block', 22, 'human_only'))
+         ("taken_up_by_its_lowercase_id", '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', 'block', 22, 'human_only',
+          '/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.compute/virtualmachines/web', 22, 'human_only',
+          'non_disruptive'))
+
+
+def _seed29_rules():
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    return {
+        "subnet_nsg": [r("allow-ssh", 101), r("allow-https", 100), r("allow-lateral-out", 1200)],
+        "edge_nsg": [r("allow-https", 100), r("deny-lateral-in", 130)],
+        "tier_rules": [r("allow-https", 110)],
+        "nics": {"web-nic": {"own": "tier", "rules": [r("allow-https", 110), r("allow-lateral-out", 100)], "policy": True},
+                 "db-nic-0": {"own": "tier", "rules": [r("allow-ssh", 100), r("allow-lateral-out", 100)], "policy": False},
+                 "db-nic-1": {"own": None, "rules": [r("allow-ssh", 100), r("allow-https", 110)], "policy": False},
+                 "api-nic": {"own": None, "rules": [r("deny-lateral-in", 130)], "policy": False}},
+        "windows": None, "config": {"forensic": [], "quarantine": False, "rg": "", "readable": True},
+        "legacy": None, "data_subnet": [r("allow-ssh", 101), r("allow-https", 100), r("allow-lateral-out", 100)]}
+
+
+_SEED29_TURNED = ("/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-tier",
+                  "glorfindel-block-192-31-196-7-web-web-nic-8b70f2")
+
+
+@pytest.mark.parametrize("found", [True, False], ids=["as found", "shrunk"])
+def test_a_merged_block_whose_pair_another_vm_wrote_again_after_its_card_is_said(monkeypatch, found):
+    """Seed 29 at 60 (L1G, #461), found by I3V's measure, red on `main` before I3V: « L1: the block on
+    …/rg-app2/…/web vanished from Azure; the reassertion neither put it back nor said so ». web2 blocked
+    on its subnet (the 8th write answered by a crash after Azure applied it), then for itself (`race`:
+    one merged entry); its rules gone (`taken_up_by_its_lowercase_id`, on Db--01: its passes say web2's
+    disappearance — VM rules and pair —, « Glorfindel ne le repose pas »); the operator acknowledges that
+    card; then web1 blocked on the same subnet and for itself (`block_turned_then_reasserted`): its
+    perimeter block writes the pair web2's entry names too — one per IP and subnet —, and a pass outside
+    human_only. web2's own rules still gone, the pair back: « better than the card, not worse », in
+    silence — and the machine holds an acknowledged card for said only while its rules stay as they
+    were. A rule the card read absent, written again under our name, ends the episode, as a block
+    written again does (L1Q): what is still gone is put back once, or said (`reassert_said.still_said`).
+
+    Its instability (a pass one run in two, `FlakyStrategyDefinition` while shrinking) was the machine's,
+    never the code's: `operator_acknowledges` sorted the pending cards by their ids, a uuid4 drawn anew at
+    every run — the drawn index fell on web2's card or on web1's by chance. In the store's order now
+    (`_reassert_block_cards`), it is web2's every time; the race's interleaving was always the seed's.
+    Shrunk by hand to five rules of the thirteen, red on `main` too."""
+    steps = [
+        ("block_perimeter", WEB2, WEB2.lower(), (8, "after-crash"), False),
+        ("time_passes",), ("time_passes",), ("time_passes",), ("time_passes",),
+        ("race", WEB2, ("isolate", "release"), 614),
+        ("block_then_isolate", WEB1, WEB1.lower(), None, 22, (15, "before-429"), False, False),
+        ("time_passes",),
+        ("block_then_isolate", WEB1, WEB1, (9, "before-429"), None, (4, "before-429"), True, False),
+        ("taken_up_by_its_lowercase_id", DB, "isolation", "human_only", "human_only", "human_only"),
+        ("time_passes",), ("time_passes",),
+        ("operator_acknowledges", 0),
+        ("block_turned_then_reasserted", WEB1, WEB1, None, "both", 22, _SEED29_TURNED, "non_disruptive"),
+    ]
+    if not found:
+        steps = [steps[i] for i in (0, 5, 9, 12, 13)]
+    _run(monkeypatch, _seed29_rules(), *steps)
+
+
+def test_an_acknowledged_drift_whose_pair_another_perimeter_wrote_is_said_on_the_fake(monkeypatch):
+    """The cause of seed 29, on the fake alone (L1G): web2 blocked on its subnet and for itself, its
+    rules and its pair deleted; said in human_only, acknowledged. web1 blocked on the same subnet: the
+    pair is back, web2's own rules still gone — a new card says it (the pair holds web2's NIC: « l'IP
+    reste bloquée »). Set right by hand without being deleted, a rule says nothing (RB1, above)."""
+    import shutil
+
+    m = _merged_world(monkeypatch, _net(subnet_nsg=[]))
+    try:
+        rules = m.fake.nsgs[key(_SUBNET)]["rules"]
+        for n in (_PERIMETER, f"{_PERIMETER}-out", _WEB2_BLOCK, f"{_WEB2_BLOCK}-out"):
+            del rules[n]
+        m.reassert(Script("human_only", None))
+        (card,) = _cards(m)
+        assert "n'est plus bloquée" in card, card
+        m.operator_acknowledges(Script(0))                     # the machine's journal of it: L1
+        m.reassert(Script("human_only", None))
+        assert not _cards(m)                                   # the same: said
+        assert m.connector.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")["status"] == "blocked"
+        m.reassert(Script("human_only", None))
+        (card,) = _cards(m)
+        assert _WEB2_BLOCK in card and "reste bloquée" in card, card
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_the_check_reads_each_rule_of_the_entry_by_what_it_does(monkeypatch):
+    """`rules_seen` (L1G): each rule the entry names, as the check read it — None when absent, what
+    it does otherwise, the same while it is the same, another once turned or aimed elsewhere; from
+    the listings the check made, never a read more."""
+    import shutil
+
+    m = _merged_world(monkeypatch, _net(subnet_nsg=[]))
+    try:
+        rules = m.fake.nsgs[key(_SUBNET)]["rules"]
+        seen = m.connector.verify_block_ip(ATTACKER, WEB2)
+        assert seen.get("verified") is True, seen
+        before = seen["rules_seen"]
+        names = {k.rsplit("/", 1)[-1] for k in before}
+        assert names == {_PERIMETER, f"{_PERIMETER}-out", _WEB2_BLOCK, f"{_WEB2_BLOCK}-out"}, before
+        assert all(v for v in before.values()), before
+        assert m.connector.verify_block_ip(ATTACKER, WEB2)["rules_seen"] == before          # the same
+        rules[_WEB2_BLOCK]["destination_address_prefix"] = "10.0.0.99"                      # aimed elsewhere
+        del rules[f"{_WEB2_BLOCK}-out"]
+        after = m.connector.verify_block_ip(ATTACKER, WEB2)["rules_seen"]
+        k_in = next(k for k in after if k.endswith(_WEB2_BLOCK))
+        assert after[k_in] and after[k_in] != before[k_in], after
+        assert after[f"{k_in}-out"] is None, after
+        assert {k: v for k, v in after.items() if _WEB2_BLOCK not in k} == \
+            {k: v for k, v in before.items() if _WEB2_BLOCK not in k}, after
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)
 
 
 @pytest.mark.parametrize("merged", [True, False], ids=["merged", "perimeter alone"])

@@ -668,6 +668,26 @@ def test_verify_action_block_suspicious_ip_extracts_source_ip():
     assert result["outcome"]["verified"] is True
 
 
+def test_a_blocks_rules_as_read_never_reach_the_cycle_the_model_sees():
+    """L1G (#461): the block's check says each rule as it read it (`rules_seen`) — for the
+    reassertion alone. A cycle's outcome is stored (`memory._cycle_to_text`) and comes back to the
+    model among its past cycles: it never carries them, a block verified or not."""
+    from glorfindel.agent import verify_action
+    from glorfindel.memory import _cycle_to_text
+    seen = {"rg/nsg/glorfindel-block-185-220-101-1-vm-nic-abc123": "0f1e2d3c4b5a"}
+    for check in ({"verified": True, "method": "nsg_check", "rules_seen": seen},
+                  {"verified": False, "missing_rules": ["r"], "rules_seen": seen}):
+        connector = MagicMock()
+        connector.verify_block_ip.return_value = check
+        state = _state(action="block_suspicious_ip")
+        state["signal"]["raw_signal"] = {"detected_data": {"SourceIP": "185.220.101.1"}}
+        state["outcome"] = {"status": "blocked", "executed": True}
+        outcome = verify_action(state, connector=connector)["outcome"]
+        assert "rules_seen" not in outcome and outcome["verified"] is check["verified"]
+        text = _cycle_to_text({"action": "block_suspicious_ip", "outcome": outcome})
+        assert "rules_seen" not in text and "0f1e2d3c4b5a" not in text, text
+
+
 @pytest.mark.parametrize("action,check", [
     ("isolate_vm", "verify_isolation"), ("release_isolation", "verify_release"),
     ("block_suspicious_ip", "verify_block_ip")])

@@ -26,16 +26,16 @@ def _to_write(b: dict, verification: dict, autonomy, vm: str, rid: str, ip: str,
     held whole, never covered, nothing gone, a disappearance already said and no worse, in
     human_only, or put back once before — nothing written."""
     from glorfindel import reassert as r
-    from glorfindel.reassert_cards import drift_baseline, drift_said
+    from glorfindel.reassert_cards import drift_baseline
+    from glorfindel.reassert_said import still_said
     if verification.get("verified") is True and not verification.get("held_missing"):
         return False
     if verification.get("uncovered_nics") and not verification.get("missing_rules"):
         return False
     if not r._missing(verification):
         return False
-    if (b.get("drift_alerted_at") and not r._worse(drift_baseline(ref or vm, ip, b.get("drift_said")),
-                                                   r._situation(verification))
-            and drift_said(ref or vm, ip, r._alert_id(vm, rid, ip))):
+    if still_said(b, ref or vm, ip, r._alert_id(vm, rid, ip), drift_baseline(ref or vm, ip, b.get("drift_said")),
+                  r._situation(verification)):
         return False
     return not (b.get("reasserted_at") or r._mode(autonomy, vm, ref) == "human_only")
 

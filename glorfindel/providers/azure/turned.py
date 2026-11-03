@@ -53,27 +53,35 @@ def _chain(nic_nsg: dict, nic_subnets: dict):
     return governs
 
 
-def _turned_behind(cut: list[dict], side: str, turned: list, governs) -> tuple[str, str, str] | None:
+def _turned_behind(cut: list[dict], side: str, turned: list, governs) -> tuple[str, str, str, list] | None:
     """The first of our rules turned into an allow (I5Q, #327) that a deny of a NIC that no
     longer exists, cutting these NICs off, holds back: on the same side, aimed at the
     address of a NIC it cuts (or at all), on an NSG that `governs` that NIC. Taking the
     deny off would let through what that allow lets pass, which our block closes
     otherwise: the attacker reached a VM given a deleted VM's address and NSG, its
-    subnet's perimeter block standing behind the turned rule. (NSG, rule, address), or
+    subnet's perimeter block standing behind the turned rule. (NSG, rule, address, its values), or
     None. Prudent by design: whether a probe would get through is not evaluated — a
     turned rule on another port is enough to keep the deny, said."""
     for h in cut:
         for nsg_key, subnets, t_side, name, values in turned:
             if t_side == side and governs(h, nsg_key, subnets) and _takes_in(values, h["ip"]):
-                return nsg_key, name, h["ip"]
+                return nsg_key, name, h["ip"], values
     return None
 
 
 def _turned_text(t: tuple) -> str:
-    nsg_key, name, ip = t
+    """What to do with our turned rule a deny holds back (I5Q). « La remettre en refus » only for a
+    block's rule on its addresses (I4P's review, as _opens_text): put back, it denies the attacker
+    alone. An isolation's (`glorfindel-iso-`), put back on the address of a live NIC, would cut every
+    flow of that VM on its side; one on every address (`*`), every NIC behind its NSG."""
+    nsg_key, name, ip, values = t
+    total = any(str(v).strip().lower() in ("*", "any", "0.0.0.0/0") for v in values or ["*"])
+    back = (name.lower().startswith("glorfindel-block-") and not total)
     return (f"notre règle {name} ({nsg_key.rsplit('/', 1)[-1]}), retournée en autorisation par quelqu'un, "
-            f"vise {ip} : retirer ce refus laisserait passer ce qu'elle ouvre — la remettre en refus, ou la "
-            "retirer ; la watch retire alors celle-ci")
+            f"vise {ip} : retirer ce refus laisserait passer ce qu'elle ouvre — "
+            + ("la remettre en refus, ou la retirer ; la watch retire alors celle-ci" if back else
+               "la retirer à la main si elle n'est plus voulue ; si une autre VM a besoin de ce flux, le recréer "
+               "sous un nom à elle, puis retirer celle-là ; la watch retire alors celle-ci"))
 
 
 def _behind_turned(cut: list[dict], side: str, turned: list, nic_nsg: dict, nic_subnets: dict) -> str:
@@ -261,11 +269,13 @@ def _opens_another(nsg, rule, own: set, holders: dict, nic_nsg: dict, nic_subnet
 
 
 def _opens_text(name: str, to: str, on: str) -> str:
-    """Why it stays, and what to do. Aimed at every address (`*`), or an older version's deny-all
-    (`_OLDER_NAMES`), put back as a deny it would cut every NIC behind its NSG — the VM it opens
-    too (I4G's review): never advised then."""
+    """Why it stays, and what to do. Put back as a deny, only a block's rule on one address cuts
+    no more than the attacker off the VM it opens: on every address (`*`), or an older version's
+    deny-all (`_OLDER_NAMES`), it would cut every NIC behind its NSG (I4G's review); an
+    isolation's (`glorfindel-iso-`), every flow of the VM that holds that address now (I4P).
+    Never advised then."""
     total = to.strip().lower() in ("*", "any", "0.0.0.0/0")
-    back = "" if total or name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "
+    back = "la remettre en refus, ou " if name.lower().startswith("glorfindel-block-") and not total else ""
     return (f"notre règle {name}, retournée en autorisation par quelqu'un, vise {to} — {on} : la retirer "
             f"retirerait à cette VM ce qu'elle lui ouvre — {back}la retirer à la main si elle n'est plus "
             "voulue ; si une autre VM a besoin de ce flux, le recréer sous un nom à elle, puis relancer")

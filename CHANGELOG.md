@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-11-03 — "kept apart"
+
 ### Security
 - **runs/: one directory per writer, read-only for the others** (SEC18, #455, N-05; `docs/fichiers-cles.md`, « `runs/` — qui écrit, qui lit, qui monte »; `docs/design/modele-de-menace.md` §2; `docs/operations.md`, « `runs/` : un répertoire par écrivain — le redéploiement coordonné »). runs/ was one directory every service mounted read-write: the red wrote where the blue writes its decisions, and read its reasoning.
   - **The layout** (`eregion_core/runs_layout.py`): `runs/glorfindel/` (the watch: its cycles; on H0, what it pulls from the channel; the campaigns' reports and triage), `runs/console/` (the console, Glorfindel's CLI, the bot: `manual_actions.jsonl`), `runs/annatar/`, `runs/gothmog/` (each injector's signals, reports, windows; Annatar's campaigns), `runs/orodruin/` (on Orodruin: the journal before each call, the lock of « one run at a time », the requests' statuses). Each writer writes only its own, by SEC16's held writes — the injectors' signals, windows, journal and registry now too (`append_line`, `write_file`; `append_line` gains `sync`).

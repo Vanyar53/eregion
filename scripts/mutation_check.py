@@ -9305,6 +9305,104 @@ TESTS.update({f"M{n}": "tests/unit/test_makefile_exercise.py" for n in (3374, 33
 
 
 
+# AUD1 (#408): auditd's execs of a human login as root, read before any signal — the records read
+# whole or a card, ADM1's list (never a copy), the rule's filters, the bench's Terraform. M2760–M2779.
+_AUD = "glorfindel/auditd.py"
+_RULES_YAML = "glorfindel/rules/azure/detection_rules.yaml"
+MUTANTS += [
+    ("M2760", "two EXECVE records for one event: the first read, a line written at its serial chooses (AUD1)", _AUD,
+     "    if len(execves) != 1:\n", "    if not execves:\n"),
+    ("M2761", "two SYSCALL records for one event: the first read (AUD1)", _AUD,
+     "    if len(syscalls) != 1:\n", "    if not syscalls:\n"),
+    ("M2762", "a shell inside the root shell a card of its own: the list read with root_shell (AUD1)", _AUD,
+     'category = expected_sudo.listed(said["text"], extra)', 'category = expected_sudo.sensitive(said["text"], extra)'),
+    ("M2763", "the program read by argv[0], which the caller writes: `exec -a vim useradd` passes (AUD1)", _AUD,
+     '    text = f"{exe} {command}"\n', "    text = command\n"),
+    ("M2764", "an argument in hex not decoded (AUD1)", _AUD,
+     '    if re.fullmatch(r"(?:[0-9A-F]{2})+", value):\n', "    if False:\n"),
+    ("M2765", "an argument split over records read as whole (AUD1)", _AUD,
+     '    if re.search(r"(?:^|\\s)a[0-9]+(?:_len=|\\[)", execve):\n', "    if False:\n"),
+    ("M2766", "fewer arguments than argc read as the command (AUD1)", _AUD,
+     "    if len(found) != argc or any(i not in found for i in range(argc)):\n", "    if not found:\n"),
+    ("M2767", "a command longer than what is read judged on its start (AUD1)", _AUD,
+     '    if len(text) > _COMMAND_READ or "\\n" in text or "\\r" in text:\n',
+     '    if "\\n" in text or "\\r" in text:\n'),
+    ("M2768", "a row that is no human login's root exec cleared on what it says (AUD1)", _AUD,
+     "    if key not in KEYS or not (HUMAN_UID_MIN <= auid < UNSET) or euid != 0:\n",
+     "    if key not in KEYS:\n"),
+    ("M2769", "the rule reads a daemon's exec (auid unset) as a human login's (AUD1)", _RULES_YAML,
+     "and Auid >= 1000 and Auid != 4294967295 and Euid == 0", "and Auid >= 1000 and Euid == 0"),
+    ("M2770", "the rule reads an exec as another user than root (euid ≠ 0) (AUD1)", _RULES_YAML,
+     "and Auid != 4294967295 and Euid == 0", "and Auid != 4294967295"),
+    ("M2771", "the rule keeps one EXECVE record per event, never the set: a written line can hide (AUD1)",
+     _RULES_YAML, 'Execve = make_set_if(SyslogMessage, RecordType == "EXECVE", 4)',
+     'Execve = make_set_if(SyslogMessage, RecordType == "EXECVE", 1)'),
+    ("M2772", "the rule reads any program's line in local6, not the plugin's (AUD1)", _RULES_YAML,
+     '      | where ProcessName in ("audisp-syslog", "audispd")\n', ""),
+    ("M2773", "the folded card names only the newest command of its VM (AUD1)", _AUD,
+     "    if len(ordered) == 1:\n        return newest\n", "    if True:\n        return newest\n"),
+    ("M2774", "the poller no longer reads auditd's rows: every root exec a card (AUD1)", "glorfindel/detection_rules.py",
+     'rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())',
+     "audit_n = dict.fromkeys(auditd.COUNTS, 0)"),
+    ("M2775", "the config's sensitive_commands not applied in the root shell (AUD1)", "glorfindel/detection_rules.py",
+     'rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())',
+     "rows, audit_n = auditd.settle(rule.ttp, rows, ())"),
+    ("M2776", "a sensitive root command uncharacterized: a snapshot alone leaves no card (AUD1)",
+     "glorfindel/detection_rules.py", '    ("AuditCommand",    "root_command"),\n', ""),
+    ("M2777", "local6 collected by the bench's DCR with auditd off (AUD1)", "infra/terraform/monitoring.tf",
+     "var.auditd_enabled ? [local.auditd_facility] : []", "[local.auditd_facility]"),
+    ("M2778", "auditd's syslog plugin killed or stopped no longer sensitive (AUD1)", XSU,
+     "|auditd|audisp-syslog|audispd|mdatp|", "|auditd|mdatp|"),
+    ("M2779", "the root shell's rule not loaded: the CIS rule alone, a root shell's commands unseen (AUD1)",
+     "infra/terraform/scripts/auditd.sh",
+     "-a always,exit -F arch=b64 -F euid=0 -F auid>=1000 -F auid!=unset -S execve -k root_command\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_auditd.py" for n in range(2760, 2780)})
+TESTS.update({mid: "tests/unit/test_bench_auditd.py" for mid in ("M2777", "M2779")})
+# AUD1, its review: a forged line made the poll raise, no card left, the rule's thread dead.
+# The numbers read bounded, the row's reading caught, the reading steps and the loop guarded,
+# the records once on the card. M3360–M3368.
+MUTANTS += [
+    ("M3360", "a row whose reading raises stops the poll: no card, the real one lost (AUD1, review)", _AUD,
+     "        except Exception as exc:  # a line written to make the reading fail is a card, never a silence\n",
+     "        except ZeroDivisionError as exc:\n"),
+    ("M3361", "a number read by str.isdigit(): `²` makes int() raise (AUD1, review)", _AUD,
+     '    return int(v) if v is not None and re.fullmatch(r"[0-9]{1,10}", v) else None\n',
+     "    return int(v) if v is not None and v.isdigit() else None\n"),
+    ("M3362", "an argument's index read unbounded: 5 000 digits make int() raise (AUD1, review)", _AUD,
+     'a([0-9]{{1,4}})={_VALUE}', 'a(\\d+)={_VALUE}'),
+    ("M3363", "argc unbounded (AUD1, review)", _AUD,
+     '    if argc > ARGC_MAX:\n        return f"argc={argc} hors borne ({ARGC_MAX} au plus)"\n', ""),
+    ("M3364", "the records twice in the signal: Syscall and Execve kept on the card (AUD1, review)", _AUD,
+     '    rest = {k: v for k, v in row.items() if k not in ("Syscall", "Execve")}\n', "    rest = dict(row)\n"),
+    ("M3365", "a fault of the audit reading stops the pass (AUD1, review)", "glorfindel/detection_rules.py",
+     "        except Exception as exc:  # the audit reading: every row stays a card\n",
+     "        except ZeroDivisionError as exc:\n"),
+    ("M3366", "a fault of the correlation sets aside the root shells it did not settle (AUD1, review)",
+     "glorfindel/detection_rules.py",
+     '            for k in [k for k, e in judged.items() if "origins" in e]:\n                del judged[k]\n            corr = {}\n',
+     "            corr = {}\n"),
+    ("M3367", "one poll that raises kills the rule's thread (AUD1, review)", "glorfindel/detection_rules.py",
+     "            except Exception as exc:  # the rule's thread never dies of one poll (review, AUD1)\n",
+     "            except ZeroDivisionError as exc:\n"),
+    ("M3368", "a fault of a reading step not said: last_error cleared (AUD1, review)", "glorfindel/detection_rules.py",
+     '            if faults:\n                st["last_error"] = "; ".join(faults)[:500]\n            else:\n                st.pop("last_error", None)\n',
+     '            st.pop("last_error", None)\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_auditd.py" for n in range(3360, 3369)})
+# AUD1, its second review: the fold by time alone, ADM1's reading in fault unguarded. M3369–M3370.
+MUTANTS += [
+    ("M3369", "the fold by time alone: lines written after a real command push its text off the card (AUD1, review)",
+     _AUD,
+     '    ordered = sorted(rows, key=lambda r: (rank["sensitive"] if r.get("Sensitive") else\n'
+     '                                          rank["unreadable"] if r.get("AuditRead") else 0,\n',
+     "    ordered = sorted(rows, key=lambda r: (0,\n"),
+    ("M3370", "a fault of the expected sudo's reading stops the pass (AUD1, review)", "glorfindel/detection_rules.py",
+     "        except Exception as exc:  # the expected sudo: none set aside\n",
+     "        except ZeroDivisionError as exc:\n"),
+]
+TESTS.update({mid: "tests/unit/test_auditd.py" for mid in ("M3369", "M3370")})
+
 # L1Qs (#424): a mode per VM and a perimeter on the data subnet in the machine; I3G's seed 9 — a NIC
 # whose subnet couldn't be read named off the perimeter it sits behind —; the perimeter alone, which
 # said « the IP reaches » a NIC another VM's perimeter cuts off; the reassertion of the blocks in two

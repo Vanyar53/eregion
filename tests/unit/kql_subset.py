@@ -1,13 +1,16 @@
 """A KQL subset, evaluated in Python over rows in memory — the shipped Syslog rules run
 as written, on lines the test writes (SEC2). No Log Analytics, no Azure.
 
-Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`count()`,
-`arg_max(col, *)`), `project`, `order by`, `limit`; predicates `==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`,
-`has`, `!has`, `in (…)`, `matches regex`, `startswith`, `and`, `or`, `not(…)`; functions
-`ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`, `tostring()`. Anything
+Only what the Syslog rules use: a table, then `where`, `extend`, `summarize` (`arg_max(col, *)`
+alone, or `name = count()`, `countif(p)`, `min(col)`, `max(col)`, `take_any(col)`,
+`make_set_if(col, p, n)` — AUD1 —, several of them), `project`, `order by`, `limit`; predicates
+`==`, `!=`, `=~`, `<`, `<=`, `>`, `>=`, `has`, `!has`, `in (…)`, `matches regex`, `startswith`,
+`and`, `or`, `not(…)`; functions `ago()`, `extract()`, `isnotempty()`, `isnotnull()`, `toint()`,
+`tolong()`, `tostring()`. Anything
 else raises NotImplementedError: a rule this reader cannot follow fails its test, never
 passes it by accident. `has` is KQL's term match (case-insensitive, at term boundaries);
-regexes are read by Python's `re` (the patterns of the rules mean the same in RE2).
+regexes are read by Python's `re` in ASCII mode (`\\d` is 0–9 only, as in RE2: AUD1's review —
+`²` is a digit to Python's default `re`, not to Log Analytics).
 """
 from __future__ import annotations
 
@@ -156,7 +159,7 @@ class _Parser:
         if op == "matches" and tok[0] == "ident":
             self.take()
             self.take("ident", "regex")
-            pattern = re.compile(self.take("str")[1])
+            pattern = re.compile(self.take("str")[1], re.ASCII)
             return lambda r: pattern.search(str(left(r) or "")) is not None
         return left
 
@@ -214,10 +217,10 @@ class _Parser:
             (_, pat), (_, grp), (_, src) = args
 
             def extract(r):
-                m = re.search(pat(r), str(src(r) or ""))
+                m = re.search(pat(r), str(src(r) or ""), re.ASCII)
                 return (m.group(grp(r)) or "") if m else ""
             return extract
-        if name == "toint":
+        if name in ("toint", "tolong"):
             (_, f), = args
 
             def toint(r):
@@ -289,12 +292,18 @@ def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
         p.take("op", ")")
         agg = ("arg_max", key, None)
     else:
-        name = p.take("ident")[1]
-        p.take("op", "=")
-        p.take("ident", "count")
-        p.take("op", "(")
-        p.take("op", ")")
-        agg = ("count", None, name)
+        aggs = []
+        while True:
+            name = p.take("ident")[1]
+            p.take("op", "=")
+            fn = p.take("ident")[1]
+            if fn not in _AGGREGATES:
+                raise NotImplementedError(f"KQL subset: aggregation {fn}()")
+            aggs.append((name, fn, [f for _, f in p.args()]))
+            if not p.at(","):
+                break
+            p.take()
+        agg = ("aggs", None, aggs)
     p.take("ident", "by")
     by = [p.take("ident")[1]]
     while p.at(","):
@@ -305,9 +314,40 @@ def _summarize(p: _Parser, rows: list[dict]) -> list[dict]:
         groups.setdefault(tuple(r.get(c) for c in by), []).append(r)
     out = []
     for k, members in groups.items():
-        if agg[0] == "count":
-            out.append({**dict(zip(by, k)), agg[2]: len(members)})
+        if agg[0] == "aggs":
+            out.append({**dict(zip(by, k)), **{name: _AGGREGATES[fn](members, *fs) for name, fn, fs in agg[2]}})
         else:
             best = max(members, key=lambda r: r.get(agg[1]))
             out.append({**best, **dict(zip(by, k))})
     return out
+
+
+def _min(members, f):
+    vals = [v for v in (f(r) for r in members) if v is not None]
+    return min(vals) if vals else None
+
+
+def _max(members, f):
+    vals = [v for v in (f(r) for r in members) if v is not None]
+    return max(vals) if vals else None
+
+
+def _make_set_if(members, f, pred, n):
+    """KQL's make_set_if: the distinct values (nulls left out) of the rows the predicate keeps,
+    at most n (AUD1)."""
+    out = []
+    for r in members:
+        v = f(r)
+        if pred(r) and v is not None and v not in out and len(out) < n(r):
+            out.append(v)
+    return out
+
+
+_AGGREGATES = {
+    "count": lambda members: len(members),
+    "countif": lambda members, pred: sum(1 for r in members if pred(r)),
+    "min": _min,
+    "max": _max,
+    "take_any": lambda members, f: next((f(r) for r in members if f(r) is not None), None),
+    "make_set_if": _make_set_if,
+}

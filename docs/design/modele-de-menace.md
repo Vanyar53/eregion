@@ -368,8 +368,8 @@ _SEC17 (#451), 03/11. Chaque constat bas du second contre-audit du 02/11 porte i
   pour les formes connues** — sous sudo, ce qui s'y fait n'est jamais écrit —, sauf quand toutes les
   sessions SSH du compte viennent d'une origine qu'il déclare (COR1, ci-dessous). **La liste n'est pas
   exhaustive** : un script ou un programme non listé, lancé par un compte attendu (`sudo /tmp/x.py`),
-  passe sans carte. C'est l'angle mort assumé jusqu'à AUD1 (`auditd`, ce qui se fait réellement sous
-  root).
+  passe sans carte. Là où auditd est posé (AUD1, ci-dessous), les programmes que ce script lance en
+  root sont lus avec la même liste ; ailleurs, l'angle mort reste.
 - **Un shell root d'administrateur écarté par l'origine de ses sessions SSH** (COR1, #407 ;
   [`correlation.md`](correlation.md)). Si toutes les sessions du compte, ouvertes dans les 7 jours avant
   la ligne, viennent d'une plage déclarée (`origins`), le shell root n'ouvre pas de carte. C'est un
@@ -392,8 +392,24 @@ _SEC17 (#451), 03/11. Chaque constat bas du second contre-audit du 02/11 porte i
   source : les flux agrégés confirment une adresse, pas une session (une ligne forgée à la minute d'un
   vrai flux de l'origine passe) ; une session plus ancienne que 7 jours, ou un accès sans ligne de
   session, n'est toujours pas vue ; les tables et leurs colonnes sont des hypothèses jusqu'à la mesure
-  au banc (`docs/operations.md`, B1–B5, F1–F4). Lier une commande à sa session exacte demande
-  `auditd` (AUD1).
+  au banc (`docs/operations.md`, B1–B5, F1–F4). Là où auditd est posé, ce qu'un shell root écarté
+  par son origine fait de sensible fait une carte quand même (AUD1, ci-dessous).
+- **Une commande root lue dans les lignes d'auditd, sous l'identité de connexion** (AUD1, #408 ;
+  [`correlation.md`](correlation.md), « Ce que ferme AUD1 »). Sur le banc, derrière un drapeau désactivé
+  (`auditd_enabled`), la règle du CIS (`user_emulation`) et celle des commandes d'un shell root
+  (`root_command` : uid = euid = 0, que la première ne voit pas), leurs lignes par `audisp-syslog`
+  vers `Syslog` (`local6`). Une commande de la liste sensible d'ADM1 exécutée en root par une connexion
+  humaine (auid ≥ 1000) fait une carte qui nomme le compte, qu'il soit attendu ou non, quelle que soit
+  l'origine de sa session : les limites de COR1 et COR2 (une ligne de session forgée, une session plus
+  ancienne que 7 jours, un accès sans ligne de session) ne cachent plus ce qui se fait de sensible en
+  root. Ce qui le borne : la lecture se fait dans le code, avant la décision ; un enregistrement
+  manquant, deux pour un même événement, un argument coupé, une commande trop longue : carte (A0) — une
+  ligne écrite par `logger` ajoute une carte, n'en efface aucune. Ce qui reste ouvert : ce qui n'est
+  pas une exécution (une commande interne du shell, une redirection, un fichier écrit par un programme
+  déjà lancé), une copie renommée d'un programme, ce qui n'a pas d'auid d'un humain (un démon
+  compromis, Run Command, cron de root), le silence des lignes (un greffon tué par son numéro, une
+  limite de journald), le bruit des mises à jour et des outils de configuration ; la forme des lignes,
+  le volume et le coût sont des hypothèses jusqu'à la mesure au banc (`docs/operations.md`, A1–A13).
 - **Un jeton pour la console**, tous ses droits (frontière 1).
 - **Le principal du canari, `Network Contributor` sur son groupe** (P-04, P04). Il peut y créer une ressource réseau
   payante (une IP publique, une passerelle). Si le premier run demande plus, le repli est `Contributor` sur ce même groupe, écrit

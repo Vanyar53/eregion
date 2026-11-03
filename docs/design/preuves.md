@@ -1248,6 +1248,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | L1P | VM bloquée pour SSH (port 22), bloquée de nouveau, port inconnu ; une règle du client avant notre deny élargie (la CI de la PR #476) | l'entrée gardait le 22 : la réaffirmation jugeait le contournement sur le seul 22, ce qui passait sur 443 une « exposition » — **le contournement jamais dit** (L1) |
 | L1H | entrée fusionnée : la paire de périmètre retournée en autorisation, les règles de la VM retirées, dites, la carte acquittée ; puis la paire réécrite par le blocage de périmètre d'une autre VM (graine 5 à 500) | la carte avait lu la paire sur Azure (retournée), et le retour ne se lisait qu'à la présence : « mieux que la carte », **les règles de la VM, toujours parties, jamais redites** (L1) |
 | I7S | isolation par règles sur un NSG partagé, état perdu, carte laissée nue, réisolée sur le NSG du subnet (lectures des NSG en 429), VM supprimée | la levée de la VM supprimée ne cherchait rien : `released`, la première isolation restée sur le NSG partagé, visant l'adresse que reçoit la VM suivante |
+| L1A | dérive d'un blocage redite (pire) sur un disque qui se remplit : la carte en attente fermée, puis la nouvelle refusée ; la passe suivante ne peut pas vérifier le blocage (quarantaine, configuration illisible) | plus aucune carte, la marque d'avant lue « dit » : **le blocage disparu, en silence** |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
 séquences) a fait tomber I1 à l'étape même où quelqu'un passe le deny entrant de la quarantaine
@@ -4047,6 +4048,118 @@ blocage l'écrit.
 les quatre réancrés (M760, M778, M779, M1741) : 14/14 par leurs tests à chaque tour (deux tours). `pytest` complet :
 5 981 réussis, 7 sautés, 1 `xfail` (le L1 de L1Qs, hors du lot) ; `ruff` propre ; `scripts/mutant_anchors.py` :
 2 368 mutants, sans faute.
+
+**L1A (03/11, #480) : une carte n'est fermée que dans l'écriture de sa remplaçante.** La graine 42 à
+500, trouvée par la mesure d'I5S (#477) sur son arbre, `main` 41bef33 fusionné : « L1: the block on
+…/rg-app1/…/web vanished from Azure; the reassertion neither put it back nor said so ». Réduite à la
+main à quatre règles de `main`, aucune d'I5S : le défaut lui est antérieur.
+
+**La séquence.** `said_then_back_after_a_full_disk` (« disparu ») : web de rg-app1 bloquée (22) sur son
+propre NSG, ses règles retirées, dites, acquittées, remises pendant un disque plein, retirées de nouveau,
+dites — une carte « a disparu » en attente. `config_changes` : la quarantaine activée. `kept_at_the_lift` :
+web de rg-app2 isolée en quarantaine, puis bloquée, sa règle retournée, son adresse donnée à une nouvelle
+VM, son état perdu, débloquée. `quarantine_change_comes_back` : web de rg-app1 isolée en quarantaine ; la
+quarantaine de rg-app2 vidée, une passe, dite ; l'accès forensique changé, une passe sur un disque plein à
+partir de sa quatrième écriture ; la configuration rendue illisible, une passe — le L1.
+
+**La cause, établie** (chaque écriture du magasin relevée pendant la séquence). Dans la passe au disque
+plein, le blocage de web est redit (pire) : `reassert._alert` fermait la carte en attente (« Remplacée :
+une nouvelle alerte de réaffirmation la suit. »), écriture acceptée, **puis** écrivait la nouvelle —
+refusée (ENOSPC). Plus aucune carte du blocage ; l'OSError remonte à la passe (`unrecorded`), la marque
+`drift_alerted_at` reste celle d'avant, posée avec la carte fermée. La passe suivante lit le blocage
+`unverified` (web derrière la quarantaine, la configuration illisible) : la carte « non vérifiée » est
+écrite, mais elle ne dit pas le blocage disparu (L1 compte une carte de l'action, `block_suspicious_ip`),
+et `_reassert_block` s'arrête là — rien de plus. La même famille que L2C : ce qu'une écriture refusée
+n'a pas écrit, porté par ce qu'une écriture acceptée a fait, ici dans l'ordre de `_alert`. La sonde du
+worker d'I5S (la nouvelle carte écrite avant de fermer l'ancienne) tenait la séquence.
+
+**Correctif.** Les deux écritures n'en font plus qu'une : `escalations.record(replaces={id: note})` ferme
+les cartes en attente qu'elle remplace, avec leur note, **dans l'écriture même** de la nouvelle, avant le
+dédoublonnage (une carte remplacée n'absorbe jamais la nouvelle — c'est pour cela que `_alert` fermait
+d'abord). Refusée, rien ne change : l'ancienne carte attend toujours, l'OSError atteint la passe, la marque
+n'est pas posée (L1F) ; la passe suivante qui lit le blocage le redit. Une carte que l'opérateur a fermée
+entre-temps reste telle qu'il l'a laissée (son mot reste le dernier, `_last_word`). L'oracle n'a pas bougé
+(A0).
+
+**Les autres chemins, examinés.** Chaque endroit où Glorfindel ferme une carte, puis en écrit une autre à
+sa place :
+- `reassert._alert` (dérive d'une isolation ou d'un blocage, levée ou déblocage interrompus, périmètre qui
+  ne couvre pas) : corrigé, ci-dessus.
+- `say_bypass` (un contournement changé), `say_left` (un autre jeu de règles laissées),
+  `say_unreadable_states` (un autre jeu de fichiers illisibles) : fermaient les cartes périmées, puis
+  écrivaient — le magasin les aurait fondues sinon (même ressource, action, type). Même correctif
+  (`_record(replaces=…)`) ; sans nouvelle carte à écrire (la sienne attend déjà, acquittée, ou plus rien
+  d'illisible), elles se ferment comme avant.
+- `reassert_quarantine` : la carte d'un changement précédent du même NSG, fermée (« a encore changé »)
+  avant la carte du nouveau. Fermée dans son écriture ; une carte fermée parce que le NSG est entier, vide
+  ou disparu n'est remplacée par rien, et se ferme comme avant.
+- `orphans._sweep` : la carte d'une orpheline dont l'adresse est passée à une autre VM (U1O) et celle dite
+  avant le retournement d'une règle (I5Q) étaient fermées au début du balayage, leurs règles redites plus
+  bas. Elles sont gardées (`replaced`) et fermées dans l'écriture de la première carte qui dit une de leurs
+  règles, ou une carte de leur VM (que le magasin y fondrait) ; celles qu'aucune carte de la passe ne
+  remplace (la règle retirée seule, une écriture en cours sur la VM) se ferment en fin de balayage, comme
+  avant. Un `record` refusé coupe le balayage (`sweep_orphan_rules` le journalise) : l'ancienne carte attend.
+- Rien à faire : `say_unverified` ne ferme rien pour écrire (une carte en attente est mise à jour,
+  `refresh`) ; `unverified_over`, `unverified_released`, la fermeture d'un contournement qui tient de
+  nouveau, d'une quarantaine entière, d'une orpheline qui ne l'est plus, de `readiness` et de `posture`
+  ferment une carte parce que la situation est finie, sans remplaçante. Les fermetures humaines
+  (`glorfindel ack`, la console, le bot, la TUI) ne remplacent rien.
+
+**La marque `drift_alerted_at`.** Elle reste posée, à sa valeur d'avant, quand la carte est refusée : elle
+s'écrit après `_alert`, que l'OSError interrompt. Ce n'est plus un silence : sa carte attend toujours, et
+une passe qui relit le blocage pire le redit (L1Qs : la référence resserrée dès la lecture).
+
+**Figés.** `test_invariant_regressions.py::test_a_block_said_again_as_the_disk_fills_keeps_a_card_through_an_unchecked_pass`
+(telle que trouvée, seize règles, et réduite à quatre ; en `xfail` strict au premier commit, rouge sur
+`main` 41bef33, levé au correctif) ; `test_reassert.py` : `record(replaces=…)` refusé puis accepté, une
+fermeture de l'opérateur gardée ; la séquence à la main (une dérive redite sur un magasin plein, la passe
+suivante non vérifiable) ; une isolation disparue de nouveau ; un contournement changé ; un autre jeu de
+règles laissées ; un autre jeu d'états illisibles ; une quarantaine changée ; `test_orphan_sweep.py` : U1O
+et I5Q. Le magasin y refuse l'écriture qui **ajoute** une carte et accepte une fermeture : c'est l'ordre de
+la graine 42 (la faute de la machine, à partir de la n-ième écriture, tombe entre les deux). Rouges sur
+`main`, chacun. `test_a_change_whose_card_could_not_be_written_leaves_the_former_unsilenced` (L2Q)
+affirmait l'état intermédiaire du défaut (plus aucune carte après le refus) : il affirme maintenant que
+l'ancienne attend ; sa conclusion (le retour redit) est inchangée.
+
+**Mutants M3410–M3419**, 10/10 par leurs tests à chaque tour (deux tours, 60 séquences) : les cartes
+remplacées jamais fermées, la nouvelle fondue dans l'ancienne (M3410) ; une fermeture de l'opérateur
+écrasée (M3411) ; `_alert` qui ferme avant d'écrire (M3412, attrapé aussi par la séquence figée), de même
+le contournement (M3413), les règles laissées (M3414), les états illisibles (M3415), la quarantaine
+(M3416), l'orpheline d'U1O (M3417) et d'I5Q (M3419) ; l'orpheline remplacée hors de l'écriture, la
+nouvelle fondue dedans (M3418). **Réalignés** sur les lignes réécrites : M833, M1257, M1861, M1862,
+M1932, M1934, M1939, M1940, M1946, M2265, M3101, 2/2 chacun. M1861 nommait `_resolve`, absent de
+`reassert_quarantine.py` : un `NameError`, attrapé par tout test de la ligne. Réaligné sur la fermeture
+d'un NSG redevenu entier, sans note, il survivait (0/2) : un test le lit maintenant
+(`test_a_quarantine_whole_again_then_back_is_said_while_its_record_is_kept`, vert sur `main`), 2/2.
+
+M1865 (une fermeture de Glorfindel lue comme un acquittement, L2Q) survivait de même après le correctif : son
+test fermait A avant que la carte de B soit refusée, ce qui n'arrive plus ; le même test que M1861 le lit, 2/2.
+
+**Mesures de L1A.** Invariants, `--hypothesis-seed=N`, quatre à la fois : à 60 séquences, N = 1..20, **20/20
+vertes** ; à 500, N = 42, 1..7, **7/8 vertes**, **la graine 42 comprise**. La graine 5 à 500 tombe sur un autre
+L1 (ci-dessous). **Les mutants des fichiers touchés** (`reassert.py`, `reassert_cards.py`,
+`reassert_quarantine.py`, `orphans.py`, `escalations.py` : 187), un tour à 60 séquences : 183/187 ; M1645
+survit, comme sur `main` (L1Qs, L1G) ; M1865, ci-dessus, attrapé depuis. `pytest` complet : 6 231 réussis,
+7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 492 mutants, sans faute.
+
+**Hors du lot : deux L1, d'une autre cause**, rouges sur `main` 41bef33 comme sur la branche — aucune carte n'y
+est fermée avant sa remplaçante.
+- **La CI d'I4P** (#476, py3.11, une graine au hasard ; `nic.get` toujours en 429, `human_only`, port 22) :
+  le blocage de web dit, la carte acquittée ; puis `said_then_back_after_a_full_disk` tire la branche
+  « isolation » de la même VM. **Cause, établie : la machine, pas le code.** Une fois l'isolation remise
+  comme avant, `_gone_comes_back` retire `acked_drift[vm]` — l'acquittement du **blocage** de la VM, que cette
+  branche n'a ni retiré ni remis : ses règles sont telles qu'à l'acquittement, la carte acquittée le dit pour
+  son épisode, et L1 ne la compte plus. Sonde (jamais un correctif) : retirer l'entrée pour une branche
+  « blocage » seulement, la séquence passe. Le correctif est dans la machine : MAK (#481,
+  fusionné ; l'oracle ne change pas d'avis sur ce qui est dit : la tenue de ce qui a été acquitté).
+- **La graine 5 à 500** : l'entrée fusionnée de Db--01 (paire de périmètre et règles de la VM), la paire
+  retournée en autorisation et sa sortante absente, les règles de la VM parties, dites, la carte acquittée ;
+  puis le blocage de périmètre d'une autre VM sur le même sous-réseau réécrit la paire (deny, entrée et
+  sortie). Les règles de Db--01 toujours parties, la paire revenue : « mieux que la carte, pas pire », en
+  silence. **Cause probable** : la famille de la graine 29 de L1G, une règle que la carte a lue absente (ou
+  retournée), réécrite sous notre nom par une autre VM, sans finir l'épisode — ici sous une paire **retournée**
+  au moment de l'acquittement, peut-être lue par la carte autrement qu'absente (`rules_seen`). À établir : L1H
+  (#483).
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

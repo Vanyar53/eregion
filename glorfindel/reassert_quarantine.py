@@ -129,14 +129,19 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
 
     before = dict(alerts)
     said = set()
+    changed: dict[str, dict[str, str]] = {}            # NSG → the cards of a former change
     for e in cards:
         sid = e.get("signal_id") or ""
         k = _key(e.get("resource_id"))
         if k in altered and altered[k][0] == sid:
             said.add(sid)
-        elif k in altered or settled(k):
-            # changed; whole again, holds nothing, gone — Glorfindel's closure, with its note
-            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)
+        elif k in altered:
+            # Changed: closed in the write of the card that says the change, never before it —
+            # refused (a full disk), the NSG was left stripped with no card (L1A).
+            changed.setdefault(k, {})[e["id"]] = _CHANGED
+        elif settled(k):
+            # whole again, holds nothing, gone — Glorfindel's closure, with its note
+            escalations.resolve(e["id"], note=_SETTLED)
     for k in [k for k in alerts if settled(k)]:
         del alerts[k]
     history: list[dict] | None = None
@@ -154,6 +159,8 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
 
     for k, (signal_id, q) in altered.items():
         if signal_id in said or (alerts.get(k) == signal_id and acknowledged(k, signal_id)):
+            for card, note in changed.get(k, {}).items():   # no new card: the former close now
+                escalations.resolve(card, note=note)
             continue                            # said: still pending, or acknowledged
         nsg_id = q.get("nsg_id") or ""
         name = nsg_id.rstrip("/").rsplit("/", 1)[-1]
@@ -170,7 +177,7 @@ def _report_altered_quarantines(connector, report: list[dict], nsgs: list | None
                  "`glorfindel release <vm> --yes`."]
         escalations.record(signal_id=signal_id, resource_id=nsg_id, action="restore_quarantine_nsg",
                            escalation_type="quarantine_altered", reason=reason, severity="high",
-                           suggested_steps=steps)
+                           suggested_steps=steps, replaces=changed.get(k))
         alerts[k] = signal_id
         report.append({"kind": "quarantine", "vm": name, "outcome": "escalated", "detail": reason})
     if alerts != before:

@@ -145,8 +145,17 @@ def record(
     source: str = "",
     exercise_run: str = "",
     explanation: str = "",
+    replaces: dict[str, str] | None = None,
 ) -> str:
     """Append an escalation and return its id.
+
+    `replaces` (L1A, #480): the pending cards this one takes the place of, by id, each with
+    the note of its closure — closed in the same write as this card is written, never before.
+    Closed first, then the new card refused (a full disk), no card was left: the old one
+    closed, the mark of what was said kept from before, and a pass that could not read the
+    block again (its check unverified) said nothing — a disappearance in silence (L1). The
+    write refused, both stay as they were. Closed before the dedup below: a replaced card
+    never takes the new one in.
 
     Dedup: a pending escalation with the same action + resource_id + escalation_type
     is NOT duplicated — instead the standing one is kept as a single card and made
@@ -175,8 +184,10 @@ def record(
     rid_lower = resource_id.lower()
     now = datetime.now(timezone.utc).isoformat()
     steps = suggested_steps or []
-    if _STORE.exists():
-        lines = _STORE.read_text().splitlines()
+    lines = _STORE.read_text().splitlines() if _STORE.exists() else []
+    if replaces:
+        lines = _replaced(lines, replaces, now)
+    if lines:
         for i, line in enumerate(lines):
             if not line.strip():
                 continue
@@ -263,11 +274,30 @@ def record(
         "resolved_at": None,
     }
     # Rewritten whole, as every write of the store: an append seen half-done by a reader
-    # made its last line unreadable (SEC3, V-10).
-    lines = _STORE.read_text().splitlines() if _STORE.exists() else []
+    # made its last line unreadable (SEC3, V-10). The cards it replaces closed in it (L1A).
     _write_lines([ln for ln in lines if ln.strip()] + [json.dumps(esc, default=str)])
     _after_unlock(_notify, esc)
     return esc["id"]
+
+
+def _replaced(lines: list[str], replaces: dict[str, str], now: str) -> list[str]:
+    """The store's lines, each pending card of `replaces` closed with its note (L1A) — a card
+    closed since (by the operator) left as it is: its word stays the last."""
+    out = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except Exception:
+            out.append(line)
+            continue
+        if isinstance(e, dict) and e.get("id") in replaces and e.get("status") == "pending":
+            e["status"] = "resolved"
+            e["resolved_at"] = now
+            if replaces[e["id"]]:
+                e["resolution"] = replaces[e["id"]]
+            line = json.dumps(e, default=str)
+        out.append(line)
+    return out
 
 
 @_locked

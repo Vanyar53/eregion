@@ -1309,3 +1309,58 @@ def test_a_rule_changed_since_the_listing_is_not_narrowed(monkeypatch):
     out = c.remove_orphan_rule(orphan)
     assert not out.get("narrowed") and "a changé depuis la liste" in out["why"], out
     assert _side(r) == ["10.0.0.4", "10.0.0.6", "10.0.0.9"]
+
+
+# ── L1A (#480): a card replaced is closed in the write of the card that replaces it ─────
+
+def _new_cards_refused(monkeypatch):
+    """The escalations store refuses the write that adds a card (a full disk by then); a closure
+    goes through. Returns what gives the disk back."""
+    real = escalations._write_lines
+
+    def full(lines):
+        held = escalations._STORE.read_text().splitlines() if escalations._STORE.exists() else []
+        if len([ln for ln in lines if ln.strip()]) > len([ln for ln in held if ln.strip()]):
+            raise OSError(28, "No space left on device")
+        real(lines)
+    monkeypatch.setattr(escalations, "_write_lines", full)
+    return lambda: monkeypatch.setattr(escalations, "_write_lines", real)
+
+
+def test_a_card_whose_address_passed_keeps_waiting_while_its_successor_is_refused(monkeypatch):
+    """U1O's replacement, the new card refused: batch's card was closed first and no card said
+    the rule that cuts api — and a pass whose listing fails changes nothing, the rule unsaid
+    for as long. It is closed in the write of api's card now: refused, batch's card waits;
+    written next pass, it closes with its note."""
+    f, c, batch = _cut_new_vm(monkeypatch)
+    subnet = f.nics[key(nic_id("rg-new", "batch-nic"))]["subnet"]
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    api = _address_passes(f, subnet, ("rg-new", "batch-nic"))
+    give_back = _new_cards_refused(monkeypatch)
+    _watch_pass(c, "human_only")
+    give_back()
+    assert [(e["id"], e["status"]) for e in _orphan_cards()] == [(old["id"], "pending")]
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert key(card["resource_id"]) == key(api)
+    closed = next(e for e in _orphan_cards() if e["id"] == old["id"])
+    assert closed["status"] == "resolved" and closed["resolution"].startswith("Remplacée"), closed
+
+
+def test_a_card_said_before_the_turn_keeps_waiting_while_its_successor_is_refused(monkeypatch):
+    """I5Q's replacement, the new card refused: the card said before the turn waits — closed
+    first, the kept deny was said by no card. Written next pass, it closes with its note."""
+    f, c, g, perimeter, new = _held_world(monkeypatch)
+    _watch_pass(c, "human_only")
+    (old,) = _orphan_cards()
+    g["rules"][perimeter]["access"] = "Allow"
+    give_back = _new_cards_refused(monkeypatch)
+    _watch_pass(c, "human_only")
+    give_back()
+    assert [(e["id"], e["status"]) for e in _orphan_cards()] == [(old["id"], "pending")]
+    _watch_pass(c, "human_only")
+    (card,) = [e for e in _orphan_cards() if e["status"] == "pending"]
+    assert card["id"] != old["id"] and perimeter in card["reason"]
+    closed = next(e for e in _orphan_cards() if e["id"] == old["id"])
+    assert "(I5Q)" in closed["resolution"], closed

@@ -1654,8 +1654,8 @@ MUTANTS += [
      '                protocol="Udp", source_address_prefix="*", destination_address_prefix="*",\n'),
     ("M833", "the altered quarantine's card is closed at the next pass, its change standing (I1F)", RQ,
      "        if k in altered and altered[k][0] == sid:\n            said.add(sid)\n"
-     "        elif k in altered or settled(k):\n",
-     "        if k in altered or settled(k):\n"),
+     "        elif k in altered:\n",
+     "        if k in altered:\n"),
     # After the review (5.5): the watch's pass, an acknowledgement, an unknown.
     ("M834", "nothing recorded: the pass reads no quarantine NSG (I1F, review)", R,
      "    report: list[dict] = []\n    _whatever_the_state(connector, autonomy, report)\n    return report\n",
@@ -2674,9 +2674,9 @@ MUTANTS += [
     ("M1228", "an earlier version's state left readable by all (SEC3, V-27)", STA,
      "        _owner_only(directory)\n", ""),
     ("M1229", "Gothmog's container mounts the whole of ~/.glorfindel again (SEC3, N-05)", "docker-compose.yml",
-     "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "/app/runs/verdicts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n",
-     "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "/app/runs/verdicts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
     ("M1230", "the watch writes no heartbeat where the injectors read it: every run refused (SEC3, N-05)",
      GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
@@ -2739,9 +2739,10 @@ MUTANTS += [
     ("M802", "a listed crossing allowed at module level: the component imports the other on load (D1)",
      "scripts/component_check.py", "((rel, pkg) in CROSSINGS and not at_top)", "((rel, pkg) in CROSSINGS)"),
     ("M803", "Annatar's compose service no longer starts Glorfindel's watch (D1, V1)", "docker-compose.yml",
-     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"
-     "    depends_on:\n      - watch\n",
-     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"),
+     "      - ./scripts:/app/scripts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n    depends_on:\n      - watch\n",
+     "      - ./scripts:/app/scripts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"),
     ("M804", "Gothmog's compose service may write Glorfindel's state (D1)", "docker-compose.yml",
      "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
      "\n  # D1 : Gothmog",
@@ -2776,14 +2777,13 @@ MUTANTS += [
      "scripts/mutation_check.py",
      "COMPONENT_ABSENT not in line:\n            return line.strip()",
      "COMPONENT_ABSENT not in stdout:\n            return line.strip()"),
-    ("M849", "make profile-detection leaves ~/.annatar to docker: created as root (D1)", MAKE,
-     "profile-detection: glorfindel-start build-annatar\n\t@mkdir -p $(HOME)/.annatar\n",
-     "profile-detection: glorfindel-start build-annatar\n"),
     ("M870", "without Annatar, the reports' thread starts and fails every pass, never said at start (D1)",
      "glorfindel/cli.py", "        from analysis import campaign_report  # noqa: F401\n", ""),
 ]
 TESTS.update({f"M{n}": D1_COMPONENTS for n in range(845, 849)})
-TESTS["M849"] = D1_PROFILES
+# (M849, make profile-detection leaving ~/.annatar to docker, is gone with SEC20: no compose service
+# mounts ~/.annatar any more — its .bashrc is what make annatar-shell runs, M3407 —, so no profile
+# makes it; test_profiles.py still asks a profile to make every directory of $HOME its services mount.)
 TESTS["M870"] = "tests/unit/test_hosted_report.py"
 
 # HY1: no test writes in the repository (the conftest's guard), the quarantine locks' test on
@@ -3682,8 +3682,8 @@ MUTANTS += [
     ("M1256", "an unreadable state never said by the reassertion (SEC4b)", RCA,
      "    files = unreadable_states()\n", "    files = []\n"),
     ("M1257", "an unreadable state said again at every pass, its acknowledgement undone (SEC4b)", RCA,
-     '    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):\n',
-     "    if False:\n"),
+     '    quiet = alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid))\n',
+     "    quiet = False\n"),
     ("M1258", "a bypassed isolation never said by the reassertion (SEC4b, V-16)", R,
      "    say_bypass(vm, rid, verification, report, ref=ref)\n", ""),
     ("M1259", "a bypass said again at every pass, its acknowledgement undone (SEC4b, V-16)", RCA,
@@ -4484,7 +4484,7 @@ MUTANTS += [
     ("M1663", "a reference off main sent to Orodruin (CI3)", PIM,
      "    if on_main.returncode != 0:\n", "    if False:\n"),
     ("M1664", "any image id accepted on Orodruin after the load (CI3)", PIM,
-     " or a.id.strip() not in expected:", ":"),
+     "    if got not in ids_:\n", "    if False:\n"),
     ("M1665", "a digest that moved since the release was first seen deployed (V-22, CI3)", CD,
      "        if seen.get(tag, digest) != digest:\n", "        if False:\n"),
     ("M1666", "the publishing job not waited for: a release from before CI3 refused at once, or deployed "
@@ -4527,7 +4527,7 @@ MUTANTS += [
     ("M1698", "~/.eregion-image left naming the old image when the new one fails (CI3, review)", "Makefile",
      "\t $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \\\n", ""),
     ("M1699", "an image refused on Orodruin left there under its waiting tag (CI3, review)", "Makefile",
-     "\t else docker image rm $(ORO_INCOMING) >/dev/null 2>&1; $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n",
+     "\t else $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n",
      "\t else true; \\\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in (1690, 1691, 1692, 1693, 1694, 1697, 1698, 1699)})
@@ -6054,11 +6054,11 @@ MUTANTS += [
      "        if signal_id in said or (alerts.get(k) == signal_id and acknowledged(k, signal_id)):\n",
      "        if signal_id in said or alerts.get(k) == signal_id:\n"),
     ("M1861", "Glorfindel's closure of a quarantine card carries no note: read as the operator's (L2Q)", RQ,
-     '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
-     '            _resolve(e["id"], note="")\n'),
+     '            escalations.resolve(e["id"], note=_SETTLED)\n',
+     '            escalations.resolve(e["id"], note="")\n'),
     ("M1862", "a card closed because its change moved carries no note: read as acknowledged (L2Q)", RQ,
-     '            escalations.resolve(e["id"], note=_CHANGED if k in altered else _SETTLED)\n',
-     '            escalations.resolve(e["id"], note="" if k in altered else _SETTLED)\n'),
+     '            changed.setdefault(k, {})[e["id"]] = _CHANGED\n',
+     '            changed.setdefault(k, {})[e["id"]] = ""\n'),
     ("M1863", "the operator's word on another change silences this one (L2Q)", RQ,
      '        return (last is not None and last.get("signal_id") == signal_id\n',
      "        return (last is not None\n"),
@@ -6194,14 +6194,14 @@ MUTANTS += [
      '    if same_sid(mark, sid) and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
      '    if same_sid(mark, sid) and (cards or _last_word(f"{prefix}-", sid)):\n'),
     ("M1932", "an unreadable state that came back read « said » from state_alerts.json alone (L2C)", RCA,
-     '    if alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid)):\n',
-     '    if alerts.get("unreadable_states") == sid:\n'),
+     '    quiet = alerts.get("unreadable_states") == sid and (said or _last_word(_STATE_PREFIX, sid))\n',
+     '    quiet = alerts.get("unreadable_states") == sid\n'),
     ("M1933", "left rules back to a set already said read « said » from their mark alone (L2C)", RCA,
      '    if same_sid(entry.get("left_said"), sid) and not stale and (cards or _last_word(prefix, sid)):\n',
      '    if same_sid(entry.get("left_said"), sid):\n'),
     ("M1934", "another set of left rules folded into the former card, which keeps naming the former (L2C)", RCA,
-     '    for e in stale:\n        # Another set: the store folded its card into this one, which kept naming the\n',
-     '    for e in []:\n        # Another set: the store folded its card into this one, which kept naming the\n'),
+     '    replaced = {e["id"]: "Autres règles laissées : une nouvelle carte les dit." for e in stale}\n',
+     '    replaced = {}\n'),
     ("M1935", "a card Glorfindel closed itself read as the operator's acknowledgement (L2C)", RCA,
      '            and last.get("status") == "resolved" and not last.get("resolution"))\n',
      '            and last.get("status") == "resolved")\n'),
@@ -6215,11 +6215,11 @@ MUTANTS += [
      '            _resolve(e["id"], note="Plus contourné : le deny de Glorfindel tient de nouveau.")\n',
      '            _resolve(e["id"], note="")\n'),
     ("M1939", "an unreadable-state card closed by Glorfindel carries no note: read as acknowledged (L2C)", RCA,
-     '            _resolve(e["id"], note="État local lisible de nouveau, ou autres fichiers illisibles.")\n',
-     '            _resolve(e["id"], note="")\n'),
+     '    replaced = {e["id"]: "État local lisible de nouveau, ou autres fichiers illisibles." for e in cards\n',
+     '    replaced = {e["id"]: "" for e in cards\n'),
     ("M1940", "a left-rules card closed by Glorfindel carries no note: read as acknowledged (L2C)", RCA,
-     '        _resolve(e["id"], note="Autres règles laissées : une nouvelle carte les dit.")\n',
-     '        _resolve(e["id"], note="")\n'),
+     '    replaced = {e["id"]: "Autres règles laissées : une nouvelle carte les dit." for e in stale}\n',
+     '    replaced = {e["id"]: "" for e in stale}\n'),
     ("M1941", "the latest bypass card of any resource read for this one's acknowledgement (L2C)", RCA,
      '    if same_sid(mark, sid) and not stale and (cards or _last_word(f"{prefix}-", sid)):\n',
      '    if same_sid(mark, sid) and not stale and (cards or _last_word(_BYPASS_PREFIX, sid)):\n'),
@@ -6252,8 +6252,8 @@ MUTANTS += [
      '    if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
      '    if False:\n'),
     ("M1946", "a reassertion alert closes the card it replaces without a note: read as acknowledged (L2C, review)", R,
-     '            escalations.resolve(e["id"], note="Remplacée : une nouvelle alerte de réaffirmation la suit.")\n',
-     '            escalations.resolve(e["id"])\n'),
+     '    replaced = {e["id"]: "Remplacée : une nouvelle alerte de réaffirmation la suit." for e in escalations.pending()\n',
+     '    replaced = {e["id"]: "" for e in escalations.pending()\n'),
     ("M1947", "a drift card Glorfindel closed read as the operator's acknowledgement (L2C, review)", RCA,
      '    return last is not None and (last.get("status") == "pending" or not last.get("resolution"))\n',
      "    return last is not None\n"),
@@ -6588,7 +6588,7 @@ MUTANTS += [
      """            reason += "".join(f" Elle coupe aussi {h['ip']}, adresse de {_who(h)}." for h in cut[1:])\n""",
      "\n"),
     ("M2265", "the card replaced stays pending: it still says the former VM cut (U1O)", ORP,
-     "            escalations.resolve(card, note=_moved(o, about[card], now))\n",
+     "            replaced[card] = (_moved(o, about[card], now), set(spoke_for))\n",
      "            dict(card=card, note=_moved(o, about[card], now))\n"),
 ]
 TESTS.update({mid: f"{_U1O} tests/unit/test_invariant_regressions.py::test_an_orphan_kept_behind_a_turned_rule_is_said"
@@ -8095,8 +8095,8 @@ MUTANTS += [
      '    return f"reassert-{vm}-{_rid_hash(rid)}" + (f"-{ip}" if ip else "")'),
     ("M3101", "a new drift alert closes the former card only under the same case: one an older version said "
               "stays, the alert folded into it (I3C)", R,
-     "        if same_sid(e.get(\"signal_id\"), signal_id) or (same_vm and",
-     "        if e.get(\"signal_id\") == signal_id or (same_vm and"),
+     "                if same_sid(e.get(\"signal_id\"), signal_id) or (\n",
+     "                if e.get(\"signal_id\") == signal_id or (\n"),
     ("M3102", "the operator's word read on the cards of the same case only: an acknowledgement of an older "
               "version's card undone (I3C)", RCA,
      '    last = next((e for e in reversed(_history()) if (e.get("signal_id") or "").lower().startswith(prefix.lower())),\n',
@@ -9839,6 +9839,74 @@ TESTS.update({"M3340": "tests/unit/test_entries_calls.py::test_the_watch_without
               "M3342": _SEC18_LAYOUT, "M3343": _SEC18_MOUNTS})
 
 
+# L1A (#480): a card is closed in the write of the card that replaces it, never before — closed first,
+# the new card refused (a full disk) left none: the mark kept from before read « said », and a pass that
+# could not check the block (unverified) said nothing (seed 42 at 500, I5S). `escalations.record(replaces=…)`,
+# for the reassertion's alerts, its bypass, left-rules and unreadable-state cards, the quarantine's, the
+# orphans'. M3410–M3419.
+_L1A_UNIT = "tests/unit/test_reassert.py::"
+_L1A_ORP = "tests/unit/test_orphan_sweep.py::"
+_L1A_SEED = "tests/unit/test_invariant_regressions.py::test_a_block_said_again_as_the_disk_fills_keeps_a_card_through_an_unchecked_pass"
+_L1A_STORE = f"{_L1A_UNIT}test_a_card_replaced_is_closed_in_the_write_of_its_successor"
+_L1A_ALERT = (f"{_L1A_UNIT}test_a_block_said_again_on_a_full_store_keeps_its_card_while_unchecked "
+              f"{_L1A_UNIT}test_an_isolation_gone_again_on_a_full_store_keeps_its_card_and_no_mark")
+_L1A_ALERT_AT = ("    try:\n        escalations.record(signal_id=signal_id, escalation_type=\"verification_failed\", "
+                 "replaces=replaced, **kwargs)\n")
+_L1A_I5Q_AT = "                if _pending(card) and card not in replaced:\n"
+MUTANTS += [
+    ("M3410", "the cards a new one replaces never closed: it folds into the former, its text kept, no "
+              "notification (L1A)", ESC,
+     "    if replaces:\n        lines = _replaced(lines, replaces, now)\n", "    pass\n"),
+    ("M3411", "a card the operator closed meanwhile closed again by its replacement, with Glorfindel's note: "
+              "his word no longer the last (L1A)", ESC,
+     '        if isinstance(e, dict) and e.get("id") in replaces and e.get("status") == "pending":\n',
+     '        if isinstance(e, dict) and e.get("id") in replaces:\n'),
+    ("M3412", "a reassertion alert closes the card it replaces before writing its own: refused, no card, the "
+              "block gone unsaid while unchecked (L1A, seed 42)", R, _L1A_ALERT_AT,
+     "    for card, note in replaced.items():\n        escalations.resolve(card, note=note)\n"
+     "    try:\n        escalations.record(signal_id=signal_id, escalation_type=\"verification_failed\", **kwargs)\n"),
+    ("M3413", "a changed bypass closes the former card before writing its own (L1A)", RCA,
+     '    replaced = {e["id"]: "Contournement changé : une nouvelle carte le dit." for e in stale}\n',
+     '    replaced = {e["id"]: "Contournement changé : une nouvelle carte le dit." for e in stale}\n'
+     "    _close(replaced)\n"),
+    ("M3414", "another set of left rules closes the former card before writing its own (L1A)", RCA,
+     '    replaced = {e["id"]: "Autres règles laissées : une nouvelle carte les dit." for e in stale}\n',
+     '    replaced = {e["id"]: "Autres règles laissées : une nouvelle carte les dit." for e in stale}\n'
+     "    _close(replaced)\n"),
+    ("M3415", "another set of unreadable state files closes the former card before writing its own (L1A)", RCA,
+     "    if not files or said or quiet:\n", "    if True:\n"),
+    ("M3416", "a quarantine's change closes the former card before writing its own (L1A)", RQ,
+     '            changed.setdefault(k, {})[e["id"]] = _CHANGED\n',
+     '            escalations.resolve(e["id"], note=_CHANGED)\n'),
+    ("M3417", "an orphan's card whose address passed closed before the card that replaces it (L1A, U1O)", ORP,
+     "            replaced[card] = (_moved(o, about[card], now), set(spoke_for))\n",
+     "            escalations.resolve(card, note=_moved(o, about[card], now))\n"),
+    ("M3418", "an orphan's card replaced not closed in the write of its successor: the new one folds into it, "
+              "the former text kept (L1A, I5Q)", ORP, "            replaces=takes,\n", "            replaces={},\n"),
+    ("M3419", "an orphan's card said before the turn closed before the card that replaces it (L1A, I5Q)", ORP,
+     _L1A_I5Q_AT, '                if _pending(card) and card not in replaced and not escalations.resolve(card, note="R"):\n'),
+]
+TESTS.update({
+    "M3410": f"{_L1A_STORE} {_L1A_UNIT}test_second_removal_is_a_new_card_not_folded_into_the_first",
+    "M3411": _L1A_STORE,
+    "M3412": f"{_L1A_ALERT} {_L1A_SEED}",
+    "M3413": f"{_L1A_UNIT}test_a_bypass_changed_on_a_full_store_keeps_its_former_card",
+    "M3414": f"{_L1A_UNIT}test_left_rules_changed_on_a_full_store_keep_their_former_card",
+    "M3415": f"{_L1A_UNIT}test_an_unreadable_set_changed_on_a_full_store_keeps_its_former_card",
+    "M3416": (f"{_L1A_UNIT}test_a_quarantine_changed_on_a_full_store_keeps_its_former_card "
+              f"{_L1A_UNIT}test_a_change_whose_card_could_not_be_written_leaves_the_former_unsilenced"),
+    "M3417": f"{_L1A_ORP}test_a_card_whose_address_passed_keeps_waiting_while_its_successor_is_refused",
+    "M3418": f"{_L1A_ORP}test_a_card_said_before_the_turn_is_replaced_by_one_naming_it",
+    "M3419": f"{_L1A_ORP}test_a_card_said_before_the_turn_keeps_waiting_while_its_successor_is_refused",
+})
+# M1861, realigned on the settled closure alone (its former text named `_resolve`, absent from the module: a
+# NameError, caught by any test of the line): the test that reads that note.
+TESTS["M1861"] += f" {_L1A_UNIT}test_a_quarantine_whole_again_then_back_is_said_while_its_record_is_kept"
+# M1865 (a closure with Glorfindel's note read as acknowledged): its test closed A before B's card was refused —
+# A no longer closes then, and the test no longer reads a note. The same test as M1861's reads one.
+TESTS["M1865"] += f" {_L1A_UNIT}test_a_quarantine_whole_again_then_back_is_said_while_its_record_is_kept"
+
+
 # I5S (#477): the per-VM I5 oracle, widened by Jonathan's decision (03/11, A0) to a writer's perimeter carried as the
 # NIC's NSG of a VM in human_only, bounded by three conditions — the attacker's flows, a NIC in `perimeter_nic`,
 # closed by the perimeter rules the pass wrote alone, on a writer's perimeter NSG (the NSG shared, I5S's review) —
@@ -10002,6 +10070,71 @@ TESTS.update({
     "M3435": _L1H_KEYS,
     "M3436": _L1H_KEYS,
 })
+
+
+# OI1 (#488): the image of Annatar arrives whole on Orodruin — its OCI archive built from the registry's
+# blobs under the manifest cosign proved (never the operator's `docker save`, which gave a pulled image
+# without config or layers), each blob checked by its sha256 and its size first; and what Orodruin
+# reads back (docker image inspect) compared with that manifest, not its id alone. M3450–M3459.
+MUTANTS += [
+    ("M3450", "a blob's sha256 never checked: an altered layer sent to Orodruin (OI1)", PIM,
+     '    if "sha256:" + h.hexdigest() != digest:\n', "    if False:\n"),
+    ("M3451", "a blob read past its descriptor's size: a registry that never stops fills the disk (OI1)", PIM,
+     "                    if got > size:\n", "                    if False:\n"),
+    ("M3452", "a descriptor's size never bounded: a blob out of bounds fetched (OI1)", PIM,
+     "    if size > limit:\n", "    if False:\n"),
+    ("M3453", "a layer of an unexpected media type (a foreign one, served from elsewhere) taken (OI1)", PIM,
+     "    if mtype not in types:\n", "    if False:\n"),
+    ("M3454", "a manifest of an unexpected media type taken for an image's (OI1)", PIM,
+     "    if mtype not in MANIFEST_TYPES:\n", "    if False:\n"),
+    ("M3455", "the layers read back on Orodruin never compared with the config's (OI1)", PIM,
+     '    if layers != expect.get("diff_ids"):\n', "    if False:\n"),
+    ("M3456", "the user read back on Orodruin never compared with the config's (OI1)", PIM,
+     '    if (cfg.get("User") or "") != expect.get("user"):\n', "    if False:\n"),
+    ("M3457", "the config's commit never read: another commit's image archived under this digest (OI1)", PIM,
+     "        if rev != commit:\n", "        if False:\n"),
+    ("M3458", "an image that runs as root archived for the injectors (OI1)", PIM,
+     "        if not _not_root(user):\n", "        if False:\n"),
+    ("M3459", "the registry's token sent on to its storage, another host (OI1)", PIM,
+     '            new.headers.pop("Authorization", None)\n            new.unredirected_hdrs.pop("Authorization", None)\n',
+     "            pass\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3450, 3460)})
+# SEC20 (#467): the red never writes what the operator runs — no red container mounts read-write a
+# directory of code, scripts or configuration, nor what holds one, nor the .bashrc a red shell runs.
+# M3400–M3409.
+_SEC20 = "tests/unit/test_red_mounts.py"
+MUTANTS += [
+    ("M3400", "Annatar's compose service writes scripts/, which the operator runs (SEC20)", "docker-compose.yml",
+     "      - ./scripts:/app/scripts:ro\n", "      - ./scripts:/app/scripts\n"),
+    ("M3401", "Annatar's compose service writes its scenarios (SEC20)", "docker-compose.yml",
+     "      - ./annatar/scenarios:/app/annatar/scenarios:ro\n", "      - ./annatar/scenarios:/app/annatar/scenarios\n"),
+    ("M3402", "Annatar by hand (ANNATAR_VOLS) writes scripts/ (SEC20)", MAKE,
+     "\t-v $(PWD)/scripts:/app/scripts:ro \\\n", "\t-v $(PWD)/scripts:/app/scripts \\\n"),
+    ("M3403", "Annatar by hand (ANNATAR_VOLS) writes its scenarios (SEC20)", MAKE,
+     "\t-v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro \\\n",
+     "\t-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \\\n"),
+    ("M3404", "make annatar-validate writes the scenarios (SEC20)", MAKE,
+     "/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) validate",
+     "/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) validate"),
+    ("M3405", "make annatar-list writes the scenarios (SEC20)", MAKE,
+     "/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) list",
+     "/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list"),
+    ("M3406", "Annatar's shell mounts ~/.annatar whole for its history: the .bashrc it runs written by the red "
+              "(SEC20)", MAKE,
+     "\t-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro \\\n"
+     "\t-v $(HOME)/.annatar/.bash_history:/root/.annatar/.bash_history \\\n",
+     "\t-v $(HOME)/.annatar:/root/.annatar \\\n"),
+    ("M3407", "Annatar's compose service mounts ~/.annatar again: the shell's .bashrc written by the red (SEC20)",
+     "docker-compose.yml", "      - ./scripts:/app/scripts:ro\n",
+     "      - ./scripts:/app/scripts:ro\n      - ${HOME}/.annatar:/root/.annatar\n"),
+    ("M3408", "the launcher of a request on Orodruin writes the requests it judges (SEC20)", MAKE,
+     "-v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)", "-v $$HOME/requests:/app/requests $(ORO_IMAGE)"),
+    ("M3409", "Orodruin's migration mounts its home whole: orodruin.env writable by the red (SEC20)", MAKE,
+     "-v $$HOME/runs:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate",
+     "-v $$HOME:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in range(3400, 3410)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

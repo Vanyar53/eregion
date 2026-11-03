@@ -345,7 +345,7 @@ make glorfindel-dev     # auto-reload on code change (docker compose watch)
 make glorfindel-stop    # stop all services
 ```
 
-State, history, and ChromaDB model cache are persisted on the host (`~/.glorfindel/`, `~/.annatar/`, `~/.cache/chroma/`).
+State, history, and ChromaDB model cache are persisted on the host (`~/.glorfindel/`, `~/.cache/chroma/`; `~/.annatar/` holds only Annatar's shell: its `.bashrc` and its history).
 
 The images run **non-root** as your own UID/GID (baked in by `make build` via `id -u`/`id -g`), so the container and your local `glorfindel` CLI share the same host state without ownership clashes. Upgrading from an older root-built image once? Reclaim the files it wrote with `make fix-state-ownership`.
 
@@ -868,7 +868,7 @@ Coverage: 8 LangGraph nodes (incl. the propose_detection_rule branch), routing r
 Nothing of Eregion stays behind once these are gone. **First, nothing isolated or blocked**: `glorfindel list` must be empty — release or unblock what it lists (`glorfindel reset <resource_id> --yes`), or the VMs stay in quarantine once Glorfindel is gone.
 
 - **Containers and images**: `make glorfindel-stop`, then `docker rmi eregion-glorfindel eregion-annatar`.
-- **Local state**, on each host that ran it: `~/.glorfindel/` (isolation and block state, escalations, the console's token, the approved rules, the discovered assets, and the memory of past decisions, `~/.glorfindel/cycles/`), `~/.annatar/`, `~/.eregion/` (the campaign reports' index), `~/.cache/chroma/` (the embedding model) and `runs/` in the clone.
+- **Local state**, on each host that ran it: `~/.glorfindel/` (isolation and block state, escalations, the console's token, the approved rules, the discovered assets, and the memory of past decisions, `~/.glorfindel/cycles/`), `~/.annatar/` (the `.bashrc` and the history of Annatar's shell), `~/.eregion/` (the campaign reports' index), `~/.cache/chroma/` (the embedding model) and `runs/` in the clone.
 - **On Azure**: the quarantine NSGs Glorfindel created (`nsg-glorfindel-quarantine-<region>`, tagged `managed-by=glorfindel`), once no NIC carries one; the service principals — one per service, and a former shared one if you had it — with their role assignments (`az role assignment list --assignee <appId> --all`, then `az ad sp delete --id <appId>` and `az ad app delete --id <appId>`), then the two custom roles once nothing holds them (`az role definition delete --name "Eregion Glorfindel Response"`, the same for `"Eregion Glorfindel Restore"` and `"Eregion Glorfindel Session Drain"`); a diagnostic setting you added for Glorfindel (Activity Log, Entra ID). The bench and Orodruin, if you built them: `make celebrimbor-down CONFIRM=<instance>`, `make orodruin-down`.
 - **Elsewhere**: the Discord bot and webhooks you created for it; your provider's API key.
 

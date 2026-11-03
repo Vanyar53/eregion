@@ -557,20 +557,64 @@ l'envoyait par SSH : rien ne liait ce qu'Orodruin exécute à ce que la CI avait
    sur `origin/main` ; le digest de `ghcr.io/grootcyber/eregion-annatar:sha-<commit>`, lu sans jeton ;
    sa **signature** et sa **provenance** vérifiées par cosign (épinglé par son sha256) — le workflow
    `.github/workflows/publish.yml` de ce dépôt, sur `main`, déclenché par un push, **à ce commit** —,
-   la provenance relue ; l'image tirée **par ce digest**, ses étiquettes relues (le commit), étiquetée
-   `eregion-annatar:orodruin`. Un échec à n'importe quelle étape : rien n'est envoyé.
-2. **Avant l'envoi**, les identifiants qu'elle peut avoir une fois chargée sont calculés sur le
-   poste (`published_image.py ids`) : le digest lui-même, son manifeste linux/amd64, ou la
-   configuration de ce manifeste (l'identifiant du magasin classique de docker). `~/.eregion-image`
-   est effacé sur Orodruin.
-3. **Par SSH**, `docker save | docker load`, comme avant, **sous un tag d'attente**
-   (`eregion-annatar:incoming`) : **la sortie d'Orodruin reste fermée**, et l'image en service ne
-   bouge pas encore.
-4. **Sur Orodruin**, l'identifiant de l'image arrivée est relu (`docker image inspect -f {{.Id}}`) et
-   doit être l'un de ceux calculés. Alors seulement elle devient `eregion-annatar:orodruin`, le tag
-   d'attente est retiré, et `~/.eregion-image` est écrit (« commit digest »). Sinon elle est retirée,
-   `eregion-annatar:orodruin` n'a pas changé, et `~/.eregion-image` reste absent : il ne nomme jamais
-   l'ancienne image comme si elle était la nouvelle.
+   la provenance relue. Un échec à n'importe quelle étape : rien n'est envoyé.
+2. **L'archive, construite à partir des blobs du registre** (OI1, `published_image.py archive`), lus
+   sans jeton comme le manifeste : le manifeste linux/amd64 sous le digest prouvé (lui-même, ou celui
+   que son index nomme), puis sa configuration et ses couches, chacune **par son digest**. Avant le
+   premier octet, le manifeste est lu : un média attendu (un manifeste OCI ou docker v2, une
+   configuration, des couches tar, gzip ou zstd — jamais une couche « étrangère », servie
+   d'ailleurs), une taille bornée (4 Mo la configuration, 2 Go une couche, 4 Go toutes, 128 couches).
+   Chaque blob est ensuite vérifié **par son sha256 et sa taille** contre le manifeste **avant
+   d'entrer** dans l'archive ; la configuration doit dire le commit (son étiquette
+   `org.opencontainers.image.revision`), linux/amd64, un utilisateur autre que root. Un blob absent,
+   une empreinte fausse, une taille démesurée, un média inattendu : rien n'est envoyé, la cause est
+   dite, `~/.eregion-image` et l'image d'Orodruin n'ont pas bougé. L'archive est celle qu'écrit `docker
+   save` : `oci-layout`, `index.json` (qui la nomme `eregion-annatar:incoming`), le `manifest.json` de
+   docker et `blobs/sha256/…` — le manifeste dans ses propres octets, sa configuration, ses couches.
+   Avec elle, `expect.json` : ce qu'Orodruin devra relire. Un répertoire temporaire du poste, retiré à
+   la fin. Le registre répond à un blob par une redirection vers son stockage
+   (`pkg-containers.githubusercontent.com`) : le jeton du registre ne la suit pas sur un autre hôte,
+   comme le client de docker.
+3. **Par SSH**, `docker load` de cette archive, **sous un tag d'attente** (`eregion-annatar:incoming`) :
+   **la sortie d'Orodruin reste fermée**, et l'image en service ne bouge pas encore. `~/.eregion-image`
+   est effacé juste avant, et un reste d'`incoming` d'un envoi précédent retiré.
+4. **Sur Orodruin, l'image arrivée est relue** (`docker image inspect`, tout son JSON), puis comparée
+   sur le poste (`published_image.py loaded`) à ce qu'annoncent le manifeste prouvé et sa
+   configuration : son **identifiant** (celui du manifeste au magasin containerd de docker, le digest
+   de sa configuration au magasin classique — l'un des digests sous le digest vérifié), les **couches**
+   et l'**utilisateur** de sa configuration, sa plateforme, son commit. **Une image sans sa
+   configuration se relit sans couches ni utilisateur, ou pas du tout : refusée.** (La CLI de docker
+   applique `-f` de son côté : `docker image inspect -f {{.Id}}` et `docker image inspect` passent par
+   le même `GET /images/{name}/json`. L'issue a mesuré que `-f {{.Id}}` répondait pour l'image
+   incomplète : l'API rend alors un JSON partiel, l'identifiant sans configuration ni couches.)
+   Alors seulement elle
+   devient `eregion-annatar:orodruin`, le tag d'attente est retiré, et `~/.eregion-image` est écrit
+   (« commit digest »). Sinon elle est retirée, `eregion-annatar:orodruin` n'a pas changé, et
+   `~/.eregion-image` reste absent : il ne nomme jamais l'ancienne image comme si elle était la
+   nouvelle.
+
+**Pourquoi l'archive ne vient plus du `docker save` du poste** (OI1, #488, mesuré le 03/11). Sous
+Docker Desktop, avec le magasin d'images containerd, `docker save` d'une image **tirée** rend son
+index et son manifeste, sans configuration ni couches : environ 10 Ko pour environ 630 Mo, même après
+un `docker pull` complet (une image construite sur le poste s'exporte entière). Orodruin chargeait
+cette image incomplète ; son identifiant relu était bien l'un des attendus, et seul le `docker tag`
+qui suivait l'arrêtait (« failed to read config content: NotFound »), en laissant `incoming` sur
+Orodruin. Les blobs du registre ne dépendent ni du docker du poste, ni de son magasin. **Hypothèse, à
+confirmer** : le magasin containerd jette le contenu des couches compressées une fois décompressées,
+et l'exporteur de moby saute alors un manifeste dont les blobs manquent. OI1 n'en dépend pas.
+**Le digest de la configuration, au magasin containerd** : `docker image inspect` n'y donne pas le
+digest de la configuration, seulement celui du manifeste (l'identifiant). Les `diff_ids` et
+l'utilisateur ne suffiraient pas à eux seuls : une autre configuration peut porter les mêmes, avec
+une autre commande ou un autre environnement. Le lien est ailleurs : l'identifiant est le digest du
+**manifeste prouvé**, et containerd adresse le contenu — il lit la configuration par le digest que ce
+manifeste nomme, et refuse un blob dont le digest ne correspond pas. Les `diff_ids` et l'utilisateur
+relus prouvent alors que cette configuration-là est présente et lisible.
+
+**La limite** : `docker image inspect` ne dit pas si les couches sont dépaquetées. Au magasin
+containerd, une couche perdue après un chargement réussi ne se voit pas à la relecture. Un run de
+contrôle sans réseau avant le tag (`docker run --rm --network none --entrypoint true
+eregion-annatar:incoming`) le prouverait ; il change la surface d'Orodruin et se mesure au réel :
+lot de suite OI2 (#490).
 
 **Pourquoi Orodruin ne tire pas lui-même.** Le contrat garantit une sortie limitée au banc, aux API
 de contrôle du cloud et à l'API du modèle, vérifiée par une connexion hors périmètre qui échoue.
@@ -578,16 +622,18 @@ Tirer depuis GHCR demanderait `ghcr.io` et `pkg-containers.githubusercontent.com
 servis : un nom de `*.githubusercontent.com`, le domaine que GitHub donne aussi pour le contenu de ses
 utilisateurs (`api.github.com/meta`, `domains.packages`, lu le 29/10), et un NSG ne filtre que par
 adresse, pas par nom. L'ouvrir ouvrirait un chemin de sortie bien
-plus large que l'image. Vérifier sur le poste, puis relire l'identifiant sur Orodruin, garde la
-garantie et prouve l'image. Aucun changement Terraform n'est donc nécessaire pour CI3 (le
+plus large que l'image. Vérifier sur le poste, puis relire l'image sur Orodruin (son identifiant, ses
+couches, son utilisateur, depuis OI1), garde la garantie et prouve l'image. Aucun changement Terraform n'est donc nécessaire pour CI3 (le
 commentaire du `custom_data` seul a changé : il est hors du heredoc, un plan ne montre rien).
 
 **Le chemin de développement**, dit comme tel : `make orodruin-push-dev` construit l'image sur le
 poste, **non vérifiée**, pour essayer une branche avant sa fusion ; `~/.eregion-image` dit
 `dev <commit>`. Le contrat ne lit pas ce fichier : c'est une trace pour l'opérateur, pas une garde.
+Il passe encore par `docker save` : une image construite sur le poste s'exporte entière (mesuré le
+03/11), seule une image tirée perdait sa configuration et ses couches.
 
 **Ce qui reste ouvert** : l'image n'est vérifiée que sur le poste qui l'envoie ; un poste compromis
-enverrait autre chose et la relecture de l'identifiant, faite depuis ce même poste, ne le verrait
+enverrait autre chose et la relecture de l'image, comparée sur ce même poste, ne le verrait
 pas. Le contrat (`orodruin-check`) ne lit pas encore la provenance de l'image qu'il exécute —
 planifié.
 

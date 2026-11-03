@@ -162,7 +162,7 @@ def test_orodruin_presenting_another_key_is_refused_before_anything_runs(tmp_pat
 
 
 def test_every_command_toward_orodruin_checks_its_key_first():
-    """Each target whose recipe reaches Orodruin (ORO_SSH, SSH_OPTS: ssh, scp, docker save | ssh)
+    """Each target whose recipe reaches Orodruin (ORO_SSH, SSH_OPTS: ssh, scp, an archive | ssh docker load)
     waits on orodruin-known — orodruin-exercise too, unless DRY_RUN, which sends nothing; and
     Orodruin's ssh options never accept a key on first contact."""
     import re

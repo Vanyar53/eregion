@@ -405,12 +405,16 @@ def write_local(directory: Path, name: str, doc: dict) -> None:
     """Write one document of the local channel, held as SEC16 writes (``write_file``: at once,
     never through a link) — refused (ValueError) when it is not exactly a verdict or a
     heartbeat."""
+    from eregion_core import runs_layout
     from eregion_core.channel_reader import write_file
     why = beat_refusal(doc) if name == HEARTBEAT else verdict_refusal(doc)
     if why:
         raise ValueError(f"local channel: {name} refused — {why}")
     path = Path(directory) / name
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Its parents made without ever following a link (SEC18): a link in the way refuses.
+    why = runs_layout.parents_hold(Path(directory), path)
+    if why:
+        raise ValueError(f"local channel: {name} refused — {why}")
     write_file(path, json.dumps(doc, sort_keys=True))
 
 
@@ -525,14 +529,15 @@ def start_local(directory: Path | None = None, *, interval: float = TICK_S) -> L
     if channel_url():
         return None
     publisher = LocalVerdicts(Path(directory or local_dir()))
+    publisher.stopped = threading.Event()   # set: the thread ends (the tests)
 
     def loop() -> None:
-        while True:
+        while not publisher.stopped.is_set():
             try:
                 publisher.tick()
             except Exception as e:
                 publisher._report(f"local verdicts not written: {e}")
-            time.sleep(interval)
+            publisher.stopped.wait(interval)
 
     threading.Thread(target=loop, daemon=True, name="watch-verdicts").start()
     return publisher

@@ -388,8 +388,10 @@ def pull(directory: Path, *, channel: str | None = None, credential=None, get=No
     url = channel if channel is not None else channel_url()
     if not url:
         return 0
-    headers = auth_headers(credential, url)
-    directory.mkdir(parents=True, exist_ok=True)
+    headers = auth_headers(credential, url)   # the URL refused first, before any directory
+    from eregion_core import runs_layout
+    if why := runs_layout.parents_hold(Path(directory), Path(directory) / "w.json"):   # SEC18
+        raise RuntimeError(f"windows not pulled: {why}")
     written: list[str] = []
     try:
         _pull_windows(directory, url, headers, get, say, Budget(), written, seen)
@@ -724,7 +726,10 @@ def pull_campaigns(directory: Path, *, channel: str | None = None, credential=No
         if not r.ok:
             failed.add(m["cid"])
             continue
-        local.parent.mkdir(parents=True, exist_ok=True)
+        from eregion_core import runs_layout
+        if runs_layout.parents_hold(Path(directory), local):   # SEC18: never through a link
+            failed.add(m["cid"])
+            continue
         tmp = local.with_suffix(".json.tmp")
         tmp.write_bytes(body)
         tmp.replace(local)  # atomic: the report never reads half a manifest
@@ -792,9 +797,11 @@ def pull_runs(directory: Path, *, refusal, channel: str | None = None, credentia
         if why:
             skipped[rid] = f"refused: {why}"
             continue
-        marks.mkdir(parents=True, exist_ok=True)
+        from eregion_core import runs_layout
+        if why := runs_layout.parents_hold(directory, mark):   # SEC18: never through a link
+            skipped[rid] = f"refused: {why}"
+            continue
         mark.touch()  # the marker first: cut before the file, the next pull still writes it
-        directory.mkdir(parents=True, exist_ok=True)
         tmp = local.with_suffix(".json.tmp")
         tmp.write_bytes(content)
         tmp.replace(local)  # atomic: the console never reads half a report
@@ -891,7 +898,10 @@ def pull_orodruin(directory: Path, *, channel: str | None = None, credential=Non
         if why:
             skipped[name] = f"refused: {why}"
             continue
-        local.parent.mkdir(parents=True, exist_ok=True)
+        from eregion_core import runs_layout
+        if why := runs_layout.parents_hold(directory, local):   # SEC18: never through a link
+            skipped[name] = f"refused: {why}"
+            continue
         tmp = local.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(doc), encoding="utf-8")
         tmp.replace(local)

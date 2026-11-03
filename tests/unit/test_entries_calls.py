@@ -849,6 +849,99 @@ def test_the_watch_lists_the_private_ips_once_for_its_attack_lines(tmp_path, mon
     assert len(listed) == 1
 
 
+def test_the_watch_without_a_storage_channel_writes_the_verdict_of_a_polled_detection(tmp_path, monkeypatch):
+    """SEC18, M3340, M3341: the watch, no storage channel, starts the local channel of verdicts; an
+    attack_started its rule resolves into a detection (the poll path) is a verdict there, in the
+    run's own directory — without it, the local heartbeat would vouch for a miss that is none."""
+    from eregion_core import watch_channel as wc
+    from glorfindel import cli
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(wc.CHANNEL_ENV, raising=False)
+    monkeypatch.delenv("EREGION_EXERCISES_DIR", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cli, "_INJECTORS_DIR", home / ".glorfindel" / "injectors")
+    runs = tmp_path / "runs"
+    (runs / "annatar" / "exercises").mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    rid = "20261103T100000Z"
+    (runs / "annatar" / "exercises" / f"{rid}.json").write_text(json.dumps({
+        "run_id": rid, "injector": "annatar", "kind": "technique", "experiment": "T1486 x",
+        "targets": [VM.lower()], "start": (now - timedelta(seconds=90)).isoformat(), "end": None,
+        "expires": (now + timedelta(hours=1)).isoformat(), "destructive": False}))
+    started = []
+    real_start = wc.start_local
+
+    def start_local(directory=None, **kw):
+        started.append(real_start(directory, interval=0.05))
+        return started[-1]
+    monkeypatch.setattr(wc, "start_local", start_local)
+
+    class _Connector:
+        def __init__(self, dry_run=False):
+            pass
+
+        def private_ip_owners(self):
+            return {}
+
+    class _Agent:
+        def __init__(self, **kw):
+            self.autonomy = SimpleNamespace(default="human_only", assets=[])
+            self.config_error = ""
+            self.connector = SimpleNamespace(permission_mode=lambda: "read_write")
+
+        def respond(self, data):
+            return {"action": "none", "escalate": False, "confidence": 0.0, "outcome": {}}
+
+    def _resolve(data, ip_owners=None):
+        return {**data, "event": "detection", "raw_signal": {**data["raw_signal"], "detection_time_s": 30}}
+
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", _Connector)
+    monkeypatch.setattr("glorfindel.actions.warm_up_azure_sdk", lambda: None)
+    monkeypatch.setattr("glorfindel.agent.GlorfindelAgent", _Agent)
+    monkeypatch.setattr("glorfindel.agent.resolve_attack_started", _resolve)
+    monkeypatch.setattr(cli, "_find_rules_file", lambda: None)
+    monkeypatch.setattr(cli, "_render_decision", lambda *a, **k: None)
+    monkeypatch.setattr("eregion_core.inscription.TagEnrollment", lambda *a, **k: (lambda rid: True))
+    import atexit
+    import signal as signalmod
+    monkeypatch.setattr(atexit, "register", lambda *a, **k: None)
+    monkeypatch.setattr(signalmod, "signal", lambda *a, **k: None)
+    real_sleep, calls = time.sleep, [0]
+    verdicts = runs / "verdicts" / "detections" / rid
+    attack = time.time() - 60
+
+    def _sleep(s):
+        if threading.current_thread() is not threading.main_thread() or s != 0:
+            return real_sleep(s)
+        calls[0] += 1
+        if calls[0] == 1:
+            subprocess.run([sys.executable, "-c", _FORGER, str(runs / "annatar" / f"{rid}_signals.jsonl"),
+                            json.dumps([_attack(VM, attack, rid)])], check=True, timeout=60)
+            return
+        if calls[0] == 2:
+            deadline = time.monotonic() + 10
+            while not list(verdicts.glob("*.json")) and time.monotonic() < deadline:
+                real_sleep(0.05)
+            raise KeyboardInterrupt
+        return real_sleep(0)
+
+    monkeypatch.setattr(cli.time, "sleep", _sleep)
+    try:
+        result = CliRunner().invoke(cli.cli, ["watch", str(runs), "--interval", "0"])
+        assert result.exit_code == 0, result.output
+        assert len(started) == 1 and started[0] is not None
+        [path] = list(verdicts.glob("*.json"))
+        doc = json.loads(path.read_text())
+        assert set(doc) == set(wc.VERDICT_FIELDS) and doc["run_id"] == rid and doc["rule"] == "poll"
+        assert doc["detected_at"] == datetime.fromtimestamp(attack + 30, timezone.utc).isoformat()
+    finally:
+        for pub in started:
+            if pub is not None:
+                pub.stopped.set()
+
+
 # ── The second correction: one restore at a time, a moment that is one ────────────────
 
 @pytest.mark.parametrize("text", ["2999-01-01T00:00:00Z", "0001-01-01T00:00:00+01:00",

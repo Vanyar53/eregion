@@ -9262,7 +9262,8 @@ MUTANTS += [
      "docker-compose.yml", "      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro\n      - ./annatar/scenarios",
      "      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts\n      - ./annatar/scenarios"),
     ("M3321", "a verdict written whatever its fields (SEC18)", WCH,
-     "    if why:\n        raise ValueError(f\"local channel: {name} refused", "    if False:\n        raise ValueError(f\"local channel: {name} refused"),
+     "    if why:\n        raise ValueError(f\"local channel: {name} refused — {why}\")\n    path = Path(directory) / name\n",
+     "    if False:\n        raise ValueError(f\"local channel: {name} refused — {why}\")\n    path = Path(directory) / name\n"),
     ("M3322", "a verdict with a field more is admitted (SEC18)", WCH,
      "    if set(doc) != set(VERDICT_FIELDS):\n", "    if not set(VERDICT_FIELDS) <= set(doc):\n"),
     ("M3323", "a verdict's file named after the watch's own signal (SEC18)", WCH,
@@ -9317,6 +9318,26 @@ MUTANTS += [
 ]
 TESTS.update({**{f"M{n}": _SEC18_LAYOUT for n in (3330, 3331, 3332, 3336, 3337, 3339)},
               **{f"M{n}": _SEC18_MOUNTS for n in (3333, 3334, 3335, 3338)}})
+
+
+# SEC18, its second review: the watch's wiring of the local channel, a link among the blue's known
+# subdirectories, a team's services stopped before its migration. M3340–M3343.
+MUTANTS += [
+    ("M3340", "a detection by the poll gives no local verdict: the local heartbeat vouches for a false miss (SEC18)",
+     GCLI, "                    _watch_channel.note_poll(resolved)   # SEC18: the local verdict; never raises\n",
+     "                    pass\n"),
+    ("M3341", "the watch never starts the local channel of verdicts (SEC18)", GCLI,
+     "            _watch_channel = _wc.start_local(_layout.dir_of(_layout.VERDICTS, runs_dir))\n",
+     "            _watch_channel = None\n"),
+    ("M3342", "a link among the blue's known subdirectories goes unseen (SEC18, review)", LAYOUT,
+     "    paths += [dir_of(w, root) / sub for w, subs in BLUE_SUBDIRS.items() for sub in subs]\n", ""),
+    ("M3343", "a team's migration runs under its live services (SEC18, review)", MAKE,
+     '\t@if python3 -m eregion_core.runs_layout pending "$(TEAM_DIR)/runs"; then $(TEAM_COMPOSE) --profile bot stop watch war-room bot 2>/dev/null || true; fi\n',
+     ""),
+]
+TESTS.update({"M3340": "tests/unit/test_entries_calls.py::test_the_watch_without_a_storage_channel_writes_the_verdict_of_a_polled_detection",
+              "M3341": "tests/unit/test_entries_calls.py::test_the_watch_without_a_storage_channel_writes_the_verdict_of_a_polled_detection",
+              "M3342": _SEC18_LAYOUT, "M3343": _SEC18_MOUNTS})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

@@ -1220,6 +1220,7 @@ team-start: team-check build-glorfindel
 	@grep -qE '^EREGION_CONSOLE_PORT=[0-9]+' "$(TEAM_DIR)/team.env" \
 	  || { echo "✗ EREGION_CONSOLE_PORT absent de team.env : un port par équipe (7007 : make glorfindel-start)"; exit 1; }
 	mkdir -p "$(TEAM_DIR)/runs" "$(TEAM_DIR)/.glorfindel" "$(TEAM_DIR)/.cache/chroma" "$(TEAM_DIR)/.eregion/analysis" "$(TEAM_DIR)/.eregion/console/requests"
+	@if python3 -m eregion_core.runs_layout pending "$(TEAM_DIR)/runs"; then $(TEAM_COMPOSE) --profile bot stop watch war-room bot 2>/dev/null || true; fi
 	python3 -m eregion_core.runs_layout migrate "$(TEAM_DIR)/runs"
 	$(TEAM_COMPOSE)$(if $(BOT), --profile bot) up -d watch war-room$(if $(BOT), bot)
 	@echo "  Console de $(TEAM) → http://localhost:$$(sed -n 's/^EREGION_CONSOLE_PORT=//p' "$(TEAM_DIR)/team.env" | tail -1)"

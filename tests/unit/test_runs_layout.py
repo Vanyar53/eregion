@@ -279,16 +279,49 @@ def test_a_writers_directory_that_is_a_link_stops_the_migration_before_anything_
 
 
 def test_a_move_never_crosses_a_link_below_a_writers_directory(root, tmp_path):
-    """M3331: runs/glorfindel/campaigns a link: a campaign's report is never moved through it."""
+    """M3331: runs/annatar/campaigns a link: a campaign is never moved through it."""
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    (root / "glorfindel").mkdir(parents=True)
-    (root / "glorfindel" / "campaigns").symlink_to(elsewhere)
+    (root / "annatar").mkdir(parents=True)
+    (root / "annatar" / "campaigns").symlink_to(elsewhere)
     (root / "campaigns" / "C1").mkdir(parents=True)
-    (root / "campaigns" / "C1" / "report.md").write_text("# r\n")
+    (root / "campaigns" / "C1" / "manifest.json").write_text("{}")
     moved, left = L.migrate(root, say=lambda m: None)
-    assert list(elsewhere.iterdir()) == [] and (root / "campaigns" / "C1" / "report.md").is_file()
+    assert list(elsewhere.iterdir()) == [] and (root / "campaigns" / "C1" / "manifest.json").is_file()
     assert any("jamais traversé" in why for _, why in left)
+
+
+class _Credential:
+    def get_token(self, *scopes):
+        from types import SimpleNamespace
+        return SimpleNamespace(token="t")
+
+
+@pytest.mark.parametrize("sub", ["glorfindel/campaigns", "glorfindel/exercises", "glorfindel/orodruin",
+                                 "verdicts/detections"])
+def test_a_link_among_the_blues_known_subdirectories_stops_everything(root, tmp_path, sub):
+    """M3342: a link where the watch writes (the pull, the reports, the local verdicts) — the
+    migration stops before anything moves, and the watch's writes never go through it."""
+    from eregion_core import exercise_channel, watch_channel as wc
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / sub).parent.mkdir(parents=True)
+    (root / sub).symlink_to(elsewhere)
+    (root / "x_signals.jsonl").write_text("{}\n")
+    assert L.unsafe(root) == [root / sub]
+    with pytest.raises(L.Unsafe):
+        L.migrate(root, say=lambda m: None)
+    if sub == "verdicts/detections":
+        doc = {"run_id": "R1", "technique": "T1136.001", "verdict": "detected",
+               "detected_at": "2026-11-03T10:00:00+00:00", "rule": "r", "latency_s": 1.0,
+               "target": "/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachines/v"}
+        with pytest.raises(ValueError, match="jamais traversé"):
+            wc.write_local(root / "verdicts", "detections/R1/a.json", doc)
+    if sub == "glorfindel/exercises":
+        with pytest.raises(RuntimeError, match="jamais traversé"):
+            exercise_channel.pull(root / sub, channel="https://account.blob.core.windows.net/exercises",
+                                  credential=_Credential(), get=lambda *a, **k: None)
+    assert list(elsewhere.iterdir()) == []
 
 
 def test_a_link_deep_in_the_former_layout_is_left_and_said(root, tmp_path):

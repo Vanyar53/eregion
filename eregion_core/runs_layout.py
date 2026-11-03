@@ -384,9 +384,17 @@ def _real_dir(path: Path) -> bool:
         return False
 
 
-def _parents_hold(root: Path, dst: Path) -> str:
-    """Make ``dst``'s parents under ``root``, each a real directory — "" when they are, else why:
-    a link (or anything else) in the way is never created through nor crossed."""
+def parents_hold(root: Path, dst: Path) -> str:
+    """Make ``dst``'s parents under ``root`` (``root`` too), each a real directory — "" when they
+    are, else why: a link (or anything else) in the way is never created through nor crossed."""
+    root = Path(root)
+    if not os.path.lexists(root):
+        try:
+            os.makedirs(root)
+        except FileExistsError:
+            pass
+    if not _real_dir(root):
+        return f"{root} n'est pas un répertoire (un lien ?) : jamais traversé"
     d = root
     for part in dst.parent.relative_to(root).parts:
         d = d / part
@@ -413,7 +421,7 @@ def _move(src: Path, dst: Path, left: list, root: Path) -> int:
     if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
         left.append((src, "pas un fichier ordinaire (un lien, un tube) : jamais suivi"))
         return 0
-    why = _parents_hold(root, dst)
+    why = parents_hold(root, dst)
     if why:
         left.append((src, why))
         return 0
@@ -449,12 +457,19 @@ class Unsafe(OSError):
     give its writer what it points to. Nothing is moved, nothing should start."""
 
 
+# The known subdirectories of the blue's directories: a link there would make the watch (the pull,
+# the campaign report, the local verdicts) write where it points.
+BLUE_SUBDIRS = {GLORFINDEL: ("exercises", "campaigns", "orodruin"), CONSOLE: (), VERDICTS: ("detections",)}
+
+
 def unsafe(root=None) -> list[Path]:
-    """The writers' directories under ``root`` that exist and are no real directory, by lstat — a
-    link to one included (SEC18): what a mount would resolve elsewhere."""
+    """The writers' directories under ``root`` — and the known subdirectories of the blue's
+    (``BLUE_SUBDIRS``) — that exist and are no real directory, by lstat, a link to one included
+    (SEC18): what a mount, or the watch's own writes, would resolve elsewhere."""
     root = Path(ROOT if root is None else root)
-    return [dir_of(w, root) for w in WRITERS
-            if os.path.lexists(dir_of(w, root)) and not _real_dir(dir_of(w, root))]
+    paths = [dir_of(w, root) for w in WRITERS]
+    paths += [dir_of(w, root) / sub for w, subs in BLUE_SUBDIRS.items() for sub in subs]
+    return [p for p in paths if os.path.lexists(p) and not _real_dir(p)]
 
 
 def pending(root=None) -> bool:

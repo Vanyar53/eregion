@@ -147,6 +147,9 @@ def test_each_writers_directory_is_made_before_a_container_mounts_it():
         assert _variable(name).strip().startswith("$(ORO_DIRS) docker run"), name
     team = MAKEFILE.split("\nteam-start:", 1)[1].split("\n\n", 1)[0]
     assert 'runs_layout migrate "$(TEAM_DIR)/runs"' in team
+    # M3343: a team's services stopped first when its former layout holds something
+    stop = team.index('runs_layout pending "$(TEAM_DIR)/runs"')
+    assert stop < team.index("stop watch war-room bot") < team.index('runs_layout migrate "$(TEAM_DIR)/runs"')
 
 
 def test_h0_moves_the_former_layout_before_it_starts_the_services():

@@ -6021,3 +6021,37 @@ def test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said
          ("blocked_again_after_an_acknowledged_drift", _API1, _API1, None, None, DB, False, _API1, 22, "human_only"),
          ("graph_card_before_a_disappearance", _API1, _API1, ("nic.get", "always-429"), True, "non_disruptive"),
          ("said_then_back_after_a_full_disk", "gone", _API1, _API1, None, False, 22, (1, "from-full")))
+
+
+_TIER = "/subscriptions/s/resourcegroups/rg-net/providers/microsoft.network/networksecuritygroups/nsg-tier"
+_API_NEW = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/api"
+
+
+@pytest.mark.xfail(strict=True, reason="U1, an older defect of the orphan sweep: L1Qs' seed 10 at 500, red on `main`, "
+                                       "out of this lot (#424)")
+def test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off(monkeypatch):
+    """Found by the machine while measuring L1Qs (seed 10 at 500; 92 draws, shrunk by hand to four
+    rules of `main`, none of L1Qs'): Db--01 blocked on its subnet's NSG (nsg-tier, shared by its
+    NICs), one of its rules turned into an allow, its address given to a new VM `api`; api blocked,
+    one of its rules turned, its address changed, given to another; a customer changes web2's
+    address; web blocked on its subnet and for itself, turned, its address reused. The orphan sweep
+    leaves « glorfindel-block-…-db--01-db-nic-1-…-out » on nsg-tier, a live VM cut off by it (U1).
+    Red on `main` as on this branch: frozen, routed (not this lot's)."""
+    from .test_invariants import _TEMPLATES
+
+    def r(name, prio):
+        return _rule(name, prio, _TEMPLATES[name])
+    _run(monkeypatch, _net(tier_rules=[r("allow-ssh", 100), r("deny-lateral-in", 130)], legacy=("web-nic", False),
+                           web_nic={"own": "tier"}, db_nic_0={"own": "tier"}, db_nic_1={"own": "tier"}),
+         ("turned_then_address_reused", DB, DB, None, 22, "subnet",
+          (_TIER, "glorfindel-block-192-31-196-7-db--01-db-nic-0-0d0228"), "non_disruptive", False, 22, False,
+          "rg-new", "api", "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/"
+          "nsg-tier", "Linux", False, "non_disruptive"),
+         ("address_reused_under_a_turned_rule", _API_NEW, _API_NEW, None, 22,
+          (_TIER, "glorfindel-block-192-31-196-7-api-api-nic-4-4b1857"),
+          "/subscriptions/s/resourcegroups/rg-new/providers/microsoft.network/networkinterfaces/api-nic-4", 0, 4,
+          "rg-new", "web", None, "Linux"),
+         ("customer_changes_ip", _nic("rg-app2", "web-nic"), 0, 4),
+         ("turned_then_address_reused", WEB1, WEB1, None, None, "both", 22,
+          (_TIER, "glorfindel-block-192-31-196-7-api-api-nic-4-b-4b1857"), "human_only", False, 22, False,
+          "rg-app1", "web", True, "non_disruptive"))

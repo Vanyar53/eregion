@@ -3222,6 +3222,126 @@ blocage de `web`, puis le périmètre de Db--01 (le 6ᵉ appel en 429 avant écr
 db-nic-0 non couverte alors que le périmètre la coupe. Présent sur `main` (aucune ligne d'I3G ne
 touche le blocage de périmètre) ; dit dans le rapport, pour un lot à lui.
 
+**L1Qs (03/11, #424) : la réaffirmation en deux temps ; la machine tire un mode par VM et un
+périmètre sur le sous-réseau data.** La suite de L1Qr, trouvée par sa relecture : trois cas que la
+machine n'atteignait pas — deux entrées de périmètre sur deux sous-réseaux, une paire retournée qui
+ne revient pas dans la passe, le chemin du périmètre seul — et le défaut de la graine 9 qu'I3G
+avait trouvé sur `main`.
+
+**Les règles entrées** (A0 : des règles et des propriétés ajoutées, aucune retirée ni restreinte ;
+avec un seul mode pour toutes les VM, chaque oracle est celui d'avant). (1) `data_primary`, tiré en
+dernier dans le réseau : la carte principale de Db--01 sur le sous-réseau data — son blocage de
+périmètre y est posé, à côté de celui d'une VM du sous-réseau app ; Db--01 a une carte derrière
+chacun. (2) `reassert_by_vm` : une passe dont le mode est tiré **par VM** (`human_only`,
+`non_disruptive`) — ou dont le verrou est tenu par un autre écrivain (`busy`, par nom : deux VM d'un
+même nom le partagent ; la passe la saute, L1 attend la passe suivante, comme pour une opération en
+cours) ; le balayage des orphelines lit le mode par nom, le plus prudent. Avec des modes mêlés, I5
+s'étend VM par VM : une VM en `human_only` ne voit se fermer que ce qu'elle partage avec une VM pour
+laquelle la passe peut écrire (un périmètre posé sur son sous-réseau — les flux de l'attaquant —, un
+NSG de quarantaine sur sa carte) ; ses cartes gardent leur NSG ; aucune règle nommée pour une de ses
+cartes n'est écrite ni retirée ; ce qui s'ouvre reste dans son dessin (la borne d'I5 pour toutes). (3)
+`perimeters_on_two_subnets` : les deux blocages de périmètre, chacun fusionné ou non avec le blocage
+de sa VM, dans un ordre tiré ; nos règles retirées (toutes, les deux paires, ou l'une), une ou deux
+passes au mode tiré par VM. (4) `turned_perimeter_left_out` : une VM bloquée sur son sous-réseau,
+une voisine bloquée pour elle-même ; la paire retournée en allow (après une première remise, ou
+non), les règles de la voisine supprimées ; une passe où la paire ne revient pas — sa VM en
+`human_only`, ou son verrou tenu — et où la voisine, hors `human_only`, est réécrite à côté. Ce qui
+s'ouvre pour la voisine est dit (une carte de dérive ou de contournement en attente) ; l'opérateur
+acquitte ce qui est dit, le périmètre est levé (la première VM débloquée), une passe : ce qui s'ouvre
+depuis est dit de nouveau. (5) I3, une propriété ajoutée : « ne couvre pas … l'IP les atteint » n'est
+jamais dit — par la réponse du blocage de périmètre (`uncovered_nics`) ni par une carte de la
+réaffirmation — d'une carte que notre périmètre, intact sur son propre sous-réseau, coupe seul (sauf
+une carte dite avant que la passe y écrive ce périmètre, comme pour « n'est plus bloquée »).
+
+**Le défaut de la graine 9 (I3G), sa cause.** « I3: perimeter block named ['db-nic-0'] of …/Db--01
+uncovered, behind it ». Réduite à la main, la séquence d'I3G tient en une étape : Db--01 bloquée sur
+son sous-réseau, le 6ᵉ appel en 429 — la lecture du sous-réseau de db-nic-0 pendant que le blocage
+cherche les cartes hors du périmètre (`_off_perimeter`). `_get_vm_nic_targets` note le sous-réseau
+illisible (`subnet_unreadable`) et ne met dans la vue de la carte que son propre NSG : la carte, qui
+est derrière le périmètre, passait pour hors de lui, et la réponse disait « l'IP l'atteint encore »
+(`blocked_partial`). **Correctif** (`providers/azure/perimeter.py`) : une carte dont le sous-réseau
+n'a pu être lu n'est ni couverte ni hors du périmètre — `_off_perimeter` lève, le blocage dit ses
+cartes non lues (`nics_unread`), la vérification qu'elle ne peut conclure. Figés :
+`test_a_perimeter_block_never_names_uncovered_a_nic_whose_subnet_it_could_not_read` (la séquence
+telle que trouvée, quatre étapes, et réduite à une),
+`test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered` (au connecteur).
+
+**Le troisième cas de l'issue, trouvé par la machine** (graines 5 et 8 à 60, une seule règle,
+`data_primary`) : web bloquée sur le sous-réseau app, Db--01 sur le sien (data). db-nic-0, sur le
+sous-réseau app, est hors du périmètre de Db--01 et derrière celui de web, qui coupe l'attaquant. Le
+chemin du périmètre seul (`verify_block_ip`, une entrée sans placement) nommait les cartes hors de
+son sous-réseau sans lire le périmètre d'une autre entrée : « non couverte, l'IP l'atteint »
+(`blocked_partial`, puis la carte de la réaffirmation). **Correctif**
+(`providers/azure/verify_block.py`) : chaque carte hors du périmètre est demandée à `_perimeter_holds`
+— une règle de périmètre de l'IP sur un NSG qui la gouverne (celle d'une autre VM, l'autre
+sous-réseau) : tenue, elle est tenue (`held_by_perimeter`, vérifié) ; illisible, la vérification ne
+conclut pas (`perimeter_unread`) ; sinon non couverte. Le périmètre de web levé, db-nic-0 est de
+nouveau non couverte, et dite. Figés :
+`test_a_perimeter_beside_another_on_the_app_subnet_never_says_db_nic_0_reached` (les deux modes),
+`test_a_nic_off_the_perimeter_another_perimeter_cuts_off_is_not_said_reached`,
+`…whose_other_perimeter_cant_be_read_is_unknown`.
+
+**Le premier cas : la réaffirmation en deux temps, parce que la machine la demande.** Le troisième
+correctif fait lire à une entrée le périmètre d'une autre ; les deux paires retirées, l'entrée de
+Db--01 lue la première (l'ordre du listage : les deux tiennent un périmètre, le tri de L1Qr ne les
+départage pas) réécrivait sa paire et se relisait avec celle de web encore absente : « ses règles
+réécrites une fois, il ne tient pas en entier — l'IP n'est plus bloquée sur db-nic-0 » ; l'entrée de
+web reposait sa paire un instant plus tard. Faux à la fin de la passe ; l'oracle juge strictement une
+carte de réécriture (dite après sa propre relecture). Deux entrées qui ont chacune une carte derrière
+le périmètre de l'autre s'attendent l'une l'autre : aucun tri ne suffit. **Correctif**
+(`glorfindel/reassert_perimeters.py`, `reassert.py`) : **premier temps**, chaque entrée qui tient un
+périmètre (fusionnée ou non) est lue et, si le second temps l'écrirait, sa paire est reposée —
+décidé de même (`_to_write` : rien d'un blocage tenu, jamais couvert, rien de parti ; rien d'une
+disparition déjà dite et pas pire ; rien en `human_only` ; rien de déjà reposé ; rien sous un
+déblocage), marqué aussitôt (`reasserted_at`) ; **second temps**, chaque entrée relue et finie dans
+l'ordre de L1Qr — pour une entrée du premier temps : les règles de sa VM, la relecture, la carte
+(`_rewrite_block`, l'erreur du premier temps comptée, la lecture qui l'a décidée gardée pour la
+comparaison d'une dérive suivante). Une entrée que le premier temps n'a pu lire (sa lecture en échec)
+est faite au second ; les périmètres y restent avant les VM (le tri de L1Qr garde ce rôle, mesuré
+par `test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_blocks`). En
+`human_only` aussi : une entrée lue avant que la paire voisine revienne disait « n'est plus bloquée »
+d'une carte que cette paire recoupait (excusé par l'oracle, dit avant l'écriture ; faux à la fin de
+la passe) — lue au second temps, elle dit ce qui est. Figés :
+`test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_off` (web1 ou web2, nos
+règles retirées toutes ou les paires seules, Db--01 ou web listée la première ; 8/8 rouges sur
+`main`) ; `test_reassert.py` : les deux paires reposées avant toute relecture (les deux ordres), la
+VM en `human_only` dite après le retour de la paire voisine, une relecture en échec dite
+« réécrites », le premier temps qui n'écrit que ce que le second écrirait (déjà reposée, déjà dite,
+sous un déblocage), une écriture refusée au premier temps dite « a échoué », l'entrée laissée au
+second temps (perimètre seul ou fusionné). `_situation` et `_worse` passent dans
+`reassert_said.py` (`reassert.py` reste sous 500 lignes).
+
+**Trouvé par la machine sur le code d'un seul temps** (graine 1 à 500, rouge sur `main` ; réduit à
+la main de 30 règles à 4) : un blocage fusionné de `api` (une VM créée à l'adresse de web), ses règles
+retirées, dit en `human_only`, la carte acquittée ; les règles de la VM remises — mieux que la carte,
+la paire toujours absente — dans une passe dont la première écriture est refusée (un disque plein :
+la marque de contournement retirée, le blocage tenu) ; puis retirées de nouveau. La référence de
+l'épisode (L1Q) ne se resserrait qu'après cette écriture, jamais atteinte : « pas pire que la
+carte », en silence (L1). Sur la branche, la même séquence passait déjà, par un autre chemin (la
+marque n'existait plus) : la cause restait. **Correctif** (`reassert.py`) : la référence se resserre
+dès la lecture, en mémoire, avant toute écriture de la passe — ce qui va mieux, et, pire d'un côté,
+ce qui va mieux de l'autre (`drift_meet`, L1). Figés :
+`test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said` (la séquence),
+`test_reassert.py::test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said`
+(rouges sur `main`).
+
+**Le cas 2, mesuré : aucune alerte ne se tait.** `turned_perimeter_left_out` atteint la paire
+retournée qui ne revient pas (sa VM en `human_only` ou son verrou tenu, déjà reposée une fois ou
+non), la voisine réécrite à côté, l'acquittement, puis le périmètre levé : sur les 20 graines à 500, la règle atteinte 1 065 fois (la paire laissée hors de la passe 570 fois par `human_only`, 495 par un verrou tenu) ; sur les cinq dernières (16 à 20, le compteur entré en route), la voisine s'est ouverte 63 fois à côté de la paire retournée, dite chaque fois ; après l'acquittement et la levée, rien de nouveau ne s'est ouvert pour elle (0 fois) — la levée du périmètre n'ouvre que ce que la paire seule fermait, et la paire était déjà retournée. Ce qui
+s'ouvre pour la voisine est dit à chaque fois — sur une carte de dérive ou de contournement — et ce
+qui s'ouvre après l'acquittement et la levée l'est de nouveau. Rien de ce lot n'y a été corrigé.
+
+**Mutants M2990–M2999, M3150–M3152** (la réserve entamée, trois) : le sous-réseau illisible pris pour
+« hors du périmètre » (M2990) ; le périmètre seul qui ne lit pas l'autre (M2991), qui prend l'autre
+illisible pour absent (M2992) ou pour tenant (M2993) ; sans premier temps (M2994) ; un premier temps
+qui écrit en `human_only` (M2995), ce qui a déjà été reposé (M2996), une disparition dite et pas pire
+(M2997), sous un déblocage (M3151) ; un second temps qui ignore le premier (M2998), avale son échec
+(M2999), réécrit la paire (M3150) ; la référence resserrée après la première écriture (M3152).
+Par leurs tests (et la machine pour M2990, M2991, M2994–M2997, M3151), deux tours à 60 séquences : M2990–M2999 et M3150–M3151, 12/12 à chaque tour ; M3152 par ses deux tests. M2980 et M2981 (le tri de L1Qr) 2/2 ; M2982 survivait (0/2) — avec les deux temps, une entrée fusionnée n'est triée qu'au second, quand le premier ne l'a pas lue : le test de l'entrée laissée au second temps gagne le cas fusionné, qui l'attrape. Réancrés : M1648, M1649, M2194 (`reassert_said.py`),
+M1943, M2155, M3120.
+
+**Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet : 5 865 réussis, 7 sautés (avant la séquence figée en `xfail`) ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 315 mutants, sans faute.
+
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict
 (`test_an_orphan_kept_behind_a_turned_rule_is_said`). **Cause, établie** (la séquence rejouée, chaque

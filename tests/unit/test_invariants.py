@@ -13,6 +13,10 @@ names; another host writes a NIC right after Glorfindel did; an older version le
 its isolation (fixed names, single-NSG state); the clock moves on. Hypothesis shrinks
 any failure to the shortest sequence that breaks a property.
 
+A pass may draw a mode per VM, or find a VM's lock held by another writer (it skips it,
+L1 waits for the next pass); Db--01's primary NIC may lie on the data subnet, its perimeter
+there (L1Qs).
+
 What must hold whatever happens:
   I1  no VM is ever more reachable than its owner designed it — the design follows the
       customer's own changes; the forensic access the operator configured is the one
@@ -27,13 +31,16 @@ What must hold whatever happens:
       nothing of Glorfindel's left on the NICs, a verification that says True is true;
       what an unblock, a reset or a release keeps (taken off, another VM's flows would
       change) is said — partial, the rule named — never `unblocked`/`swept`/`released` (I4C);
+      nor is a NIC said reached, off a perimeter block, that our perimeter on its own subnet cuts
+      off (L1Qs);
   I4  an operation on one VM changes nothing for another — homonyms included (a
       perimeter block closes the attacker's flows on its subnet, and only those; an
       unblock or a reset that lifts one opens them, never cuts one off — I4B —, and only
       those the lifted rules alone closed — I4C) — and
       never deletes another VM's older isolation, even where no flow tells (I4S);
   I5  the reassertion never opens anything, never acts on a VM it has no state for,
-      and writes nothing to Azure in human_only;
+      and writes nothing to Azure in human_only — with a mode drawn per VM, nothing for a VM
+      in human_only: only what it shares with another closes for it (L1Qs);
   I6  one VM, one state file, whatever the case of the id it was reached with;
   I7  from any state reached, release brings every VM back to its design — or, when a
       NIC's original NSG can't be known or no longer exists, keeps that NIC in
@@ -2947,6 +2954,7 @@ class IsolationMachine(RuleBasedStateMachine):
         seen = getattr(self, "acked_drift", {}).get(vm)
         if seen is not None and self._block_rules_now(vm) == seen:
             return
+        _note(f"the block of a VM opened {when}")
         assert self._cards_on(vm), (
             f"L1: the block of {vm} lets {ATTACKER} through ({sorted(opened)[:2]}) {when}; nothing says so")
 

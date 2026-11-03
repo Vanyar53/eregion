@@ -386,7 +386,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 les injecteurs (garde V1 ; le guetteur des blocages d'Annatar, qui lisait blocks/ et
                                 émettait attack_adapted, est retiré) — leur conteneur monte ce dossier comme son
                                 ~/.glorfindel. La watch le crée au démarrage. 0644 (dossier 0755) : à lire par eux, rien
-                                de secret. Retiré à l'arrêt
+                                de secret. Retiré à l'arrêt. SEC19 (N-03) : signé par la clé de la watch (seq, key,
+                                sig), vérifié par l'injecteur avec EREGION_WATCH_KEY (docs/design/watch-key.md)
   watch_heartbeat             → le battement de la watch (V1 sur cet hôte, la console, le CD de H0) ; écrit d'un coup
                                 (un fichier à côté, renommé par-dessus), 0644 : jamais vide ni coupé (SEC17)
   exercise_seen.json          → SEC14 (V-20) : quand la watch a vu pour la première fois chaque fenêtre d'exercice écrite
@@ -526,7 +527,7 @@ Le rouge écrivait donc où le bleu écrit ses décisions, et lisait le raisonne
 | `runs/console/` | la console, la CLI de Glorfindel, le bot | `manual_actions.jsonl` | la watch (l'analyse des levées) |
 | `runs/annatar/` | Annatar | `*_signals.jsonl`, `<run_id>.json`, `exercises/`, `campaigns/<id>/` | la watch, le bot (le moment d'un restore), la console |
 | `runs/gothmog/` | Gothmog | `*_signals.jsonl`, `<run_id>.json`, `exercises/` | la watch, la console |
-| `runs/orodruin/` | les injecteurs sur l'hôte d'Orodruin et son lanceur | `audit.jsonl`, `requests/` (statuts, registre, verrou) | — |
+| `runs/orodruin/` | les injecteurs sur l'hôte d'Orodruin et son lanceur | `audit.jsonl`, `requests/` (statuts, registre, verrou), `.watch_seen.json` (SEC19 : le plus haut compteur de battement vu par clé, contre un rejeu) | — |
 | `runs/verdicts/` | la watch, sans canal retour du stockage (le canal local des verdicts) | `heartbeat.json` (`at`, `since`, `windows`, `perimeter`), `detections/<run_id>/<n>.json` (`run_id`, `technique`, `verdict`, `detected_at`, `rule`, `latency_s`, `target` — rien d'autre) | Annatar, Gothmog |
 
 Le rouge ne monte ni `runs/glorfindel/` ni `runs/console/` : il ne lit plus le raisonnement de la

@@ -407,15 +407,22 @@ d'Azure, compteur « Standard Private Endpoint », 29/10), environ 6,4 € par m
 il en faudrait deux, les VNet n'étant pas appairés. À mesurer après l'apply : `orodruin-check`,
 une fenêtre publiée et tirée par H0, le kill qui la ferme.
 
-**Le garde « jamais sans Glorfindel » (N-03, N-04).** Ce qu'il prouve : qu'une watch configurée
-pour l'abonnement de l'injecteur a écrit ce fichier (ou ce blob) il y a moins de 90 s — ou que
-quelqu'un qui peut écrire là l'a fait. Le battement porte un condensé de l'abonnement que la watch
+**Le garde « jamais sans Glorfindel » (N-03, N-04).** Ce qu'il prouve : que la watch qui détient
+sa clé a écrit ce fichier (ou ce blob), pour l'abonnement de l'injecteur, il y a moins de 90 s
+(SEC19, [`watch-key.md`](watch-key.md)). Le battement est signé par la clé Ed25519 de la watch ;
+l'injecteur le vérifie avec la clé publique épinglée de son côté, `EREGION_WATCH_KEY` dans
+`orodruin.env` (`make glorfindel-host-watch-key` la donne) — jamais lue dans le canal ni dans le
+battement. Sans clé épinglée, sans signature, d'une autre clé, à la signature qui ne tient pas ou au
+compteur rejoué : refusé avant tout appel au cloud, la raison dite. Le contrat d'Orodruin, lui, ne
+change pas : la clé épinglée n'est pas une de ses vérifications, c'est la garde qui la lit. Avant
+SEC19, le garde prouvait seulement que quelqu'un qui peut écrire là avait écrit un battement frais
+de ce périmètre. Le battement porte un condensé de l'abonnement que la watch
 lit (`perimeter`, 16 hex du sha256 ; jamais l'abonnement lui-même), que l'injecteur compare au
 sien : l'abonnement plutôt que l'hôte, parce que c'est ce que les deux côtés savent des mêmes
 cibles (un nom d'hôte ne se compare à rien : Orodruin et H0 sont deux hôtes, les conteneurs locaux
-deux autres). Ce qu'il ne prouve pas : une authentification (le condensé n'est pas un secret, le
-fichier est écrivable par l'hôte, le blob par la watch), ni que les workspaces de la watch voient
-la cible, ni sa santé au-delà de sa boucle de battement. Le garde est relu avant chaque action d'un
+deux autres) ; le condensé lie, la signature authentifie. Ce qu'il ne prouve pas : que les
+workspaces de la watch voient la cible, ni sa santé au-delà de sa boucle de battement ; et qui lit
+la clé privée de la watch (root sur son hôte) signe comme elle. Le garde est relu avant chaque action d'un
 run (chaque étape, la commande de l'atomic, le démarrage de la panne) ; `annatar clean` y passe.
 `--without-glorfindel` est refusé en zone `production`, et écrit au journal (`declared`).
 

@@ -334,7 +334,7 @@ def client(tmp_path, monkeypatch):
     from .console_client import console
     import eregion_console.api as api
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "glorfindel").mkdir(parents=True)   # SEC18: the watch's own directory
     monkeypatch.setenv("EREGION_CONSOLE_SECTIONS", "annatar,gothmog")
     monkeypatch.delenv("EREGION_BENCH", raising=False)
     vms = [{"resource_id": GONDOLIN, "name": "vm-celebrimbor-gondolin", "resource_group": "rg-celebrimbor",
@@ -377,7 +377,7 @@ def test_the_route_gives_the_wires_and_their_chronology(client, tmp_path):
            "confidence": 0.9, "action": "isolate_vm", "escalate": True,
            "outcome": {"status": "escalated", "executed": False, "escalation_type": "mode_hold"},
            "resolved_autonomy_mode": "human_only"}
-    (tmp_path / "runs" / "watch-1_debug.jsonl").write_text(json.dumps(rec) + "\n")
+    (tmp_path / "runs" / "glorfindel" / "watch-1_debug.jsonl").write_text(json.dumps(rec) + "\n")
     d = client.get(f"/api/dagorlad/requests/{rid}").json()
     assert d["written_here"] is True and d["phase"] == "running" and d["at"]
     [w] = d["wires"]
@@ -397,9 +397,9 @@ def test_the_route_confronts_a_runs_t0_with_the_windows_held_here(client, tmp_pa
             "signal": {"event": "attack_started", "ttp": "T1110.001", "resource_id": GONDOLIN,
                        "timestamp": _iso(received), "context": {"run_id": "run-live"},
                        "raw_signal": {"attack_time": received.timestamp()}}}
-    (tmp_path / "runs").mkdir(exist_ok=True)
-    (tmp_path / "runs" / "run-live_debug.jsonl").write_text(json.dumps(poll) + "\n")
-    (tmp_path / "runs" / "run-live.json").write_text(json.dumps(
+    (tmp_path / "runs" / "glorfindel").mkdir(parents=True, exist_ok=True)   # SEC18
+    (tmp_path / "runs" / "glorfindel" / "run-live_debug.jsonl").write_text(json.dumps(poll) + "\n")
+    (tmp_path / "runs" / "glorfindel" / "run-live.json").write_text(json.dumps(
         _report("run-live", at=now - timedelta(seconds=5), request=rid)))
     [w] = client.get(f"/api/dagorlad/requests/{rid}").json()["wires"]
     assert w["run"] == "run-live"
@@ -433,7 +433,7 @@ def test_following_a_request_writes_nothing_and_tells_the_watch_nothing(client, 
 def test_a_status_there_but_refused_is_said_never_not_carried_yet(client, tmp_path, doc, why):
     rid = client.post("/api/dagorlad/requests",
                       json={"wires": [{"experiment": "T1110.001", "target": GONDOLIN}]}).json()["request"]
-    d = tmp_path / "runs" / "orodruin" / "requests"
+    d = tmp_path / "runs" / "glorfindel" / "orodruin" / "requests"
     d.mkdir(parents=True)
     (d / f"{rid}.json").write_text(doc)
     out = client.get(f"/api/dagorlad/requests/{rid}").json()
@@ -451,7 +451,7 @@ def test_a_status_that_is_no_file_is_refused_said_never_not_carried_yet(client, 
     from .test_console import _guarded, _release_fifo
     rid = client.post("/api/dagorlad/requests",
                       json={"wires": [{"experiment": "T1110.001", "target": GONDOLIN}]}).json()["request"]
-    d = tmp_path / "runs" / "orodruin" / "requests"
+    d = tmp_path / "runs" / "glorfindel" / "orodruin" / "requests"
     d.mkdir(parents=True)
     stop = threading.Event()
     if trap == "pipe":
@@ -536,7 +536,7 @@ def test_the_line_says_a_t0_not_believed():
 def test_the_status_of_another_request_is_not_this_ones(client, tmp_path):
     rid = client.post("/api/dagorlad/requests",
                       json={"wires": [{"experiment": "T1110.001", "target": GONDOLIN}]}).json()["request"]
-    d = tmp_path / "runs" / "orodruin" / "requests"
+    d = tmp_path / "runs" / "glorfindel" / "orodruin" / "requests"
     d.mkdir(parents=True)
     other = "r-20261031T090000Z-123456"
     (d / f"{rid}.json").write_text(json.dumps({

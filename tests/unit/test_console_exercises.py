@@ -44,8 +44,9 @@ def runs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     api._cycle_cache.clear()
     api._heartbeat_cache.update(at=0.0, value=None)
-    d = tmp_path / "runs"
+    d = tmp_path / "runs" / "glorfindel"   # SEC18: the watch's own directory (H0: pulled there too)
     (d / "exercises").mkdir(parents=True)
+    (d.parent / "console").mkdir()
     return d
 
 
@@ -419,7 +420,7 @@ def test_runs_is_read_as_the_watch_reads_it_a_pipe_and_a_link_in_each_place(runs
              runs / "campaigns" / "c-link" / "manifest.json": elsewhere / "campaigns" / "c-link" / "manifest.json",
              runs / "orodruin" / "contract.json": elsewhere / "contract.json"}
     pipes = [runs / "exercises" / "run-pipe.json", runs / "watch-pipe_debug.jsonl", runs / "run-c.json",
-             runs / "campaigns" / "c-pipe" / "manifest.json", runs / "manual_actions.jsonl"]
+             runs / "campaigns" / "c-pipe" / "manifest.json", runs.parent / "console" / "manual_actions.jsonl"]
     for link, target in links.items():
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to(target)
@@ -560,7 +561,7 @@ def _campaign_with_traps(runs, tmp_path):
     for link, target in links.items():
         link.symlink_to(target)
     stop = threading.Event()
-    pipes = [runs / "watch-ssh_debug.jsonl", runs / "manual_actions.jsonl", runs / "g1.json",
+    pipes = [runs / "watch-ssh_debug.jsonl", runs.parent / "console" / "manual_actions.jsonl", runs / "g1.json",
              cdir / "runs" / "r1.json"]
     for pipe in pipes:
         os.mkfifo(pipe)

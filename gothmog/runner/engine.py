@@ -23,10 +23,10 @@ normal checked before, during and after, the return to the initial state verifie
                  engine's word
     6b watch     the Glorfindel watch read again (G1): ``checks.watch_after`` — alive before
                  the fault and after it, or its reaction is not known (analysis/fault_rate.py)
-    7  record    ``runs/<run_id>.json`` as Annatar's, the probes' values before and after
-                 in ``metrics.before`` / ``metrics.after``; window closed, and with an
-                 exercise channel the report goes to H0 with it (#193); signals in
-                 ``runs/gothmog/`` (``gothmog/signals/emitter.py``)
+    7  record    ``runs/gothmog/<run_id>.json`` (its own directory, SEC18) as Annatar's, the
+                 probes' values before and after in ``metrics.before`` / ``metrics.after``;
+                 window closed, and with an exercise channel the report goes to H0 with it
+                 (#193); signals beside it (``gothmog/signals/emitter.py``)
 
 ``preflight`` runs 0–3 with no session at all: a write there is refused by construction.
 """
@@ -43,7 +43,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.prompt import Confirm
 
-from eregion_core import run_report, watch_gate
+from eregion_core import run_report, runs_layout, watch_gate
 from eregion_core.exercise import close_window, open_window
 from eregion_core.exercise_channel import carry_run
 from eregion_core.inscription import BENCH_ENV, DEFAULT_BENCH, Scope, check_target, rg_from_id
@@ -155,12 +155,13 @@ def _utcnow() -> datetime:
 
 
 class Engine:
-    def __init__(self, *, bench_factory=None, runs_dir: str | Path = "runs",
+    def __init__(self, *, bench_factory=None, runs_dir: str | Path | None = None,
                  sleep=time.sleep, now=_utcnow, poll_s: float = POLL_S,
                  abort_margin_s: float = ABORT_MARGIN_S,
                  restore_timeout_s: float = RESTORE_TIMEOUT_S):
         self._bench_factory = bench_factory or (lambda session: ChaosStudio(session))
-        self.runs_dir = Path(runs_dir)
+        # SEC18: Gothmog's own directory, runs/gothmog/ — its report, its signals.
+        self.runs_dir = Path(runs_layout.dir_of(runs_layout.GOTHMOG) if runs_dir is None else runs_dir)
         self._sleep, self._now = sleep, now
         self.poll_s = poll_s
         self.abort_margin_s = abort_margin_s
@@ -338,7 +339,7 @@ class Engine:
         try:
             return self._inject(fault, run_id, bench, vms, seen, verdict, start)
         finally:
-            close_window(run_id)
+            close_window(run_id, injector="gothmog")
             carry_run(run_id, self.runs_dir)  # its report, to H0 with its window (#193)
 
     def _inject(self, fault, run_id, bench, vms, seen, verdict, run_start) -> RunOutcome:

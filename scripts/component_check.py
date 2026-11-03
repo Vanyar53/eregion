@@ -65,7 +65,7 @@ COMPONENTS: dict[str, Component] = {
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
             "test_exercise_channel.py", "test_exercise_plan.py", "test_exercise_request.py", "test_exercise_runner.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
-            "test_run_report.py", "test_drill.py",
+            "test_run_report.py", "test_runs_layout.py", "test_drill.py",
         ),
     ),
     # Glorfindel — the watch, the graph, the response, its providers. The console
@@ -77,7 +77,7 @@ COMPONENTS: dict[str, Component] = {
             "test_actions_split.py", "test_agent_nodes.py", "test_audit.py", "test_aws_adapter.py",
             "test_bot.py", "test_chat_escaping.py", "test_cli.py", "test_config.py", "test_detection_authoring.py",
             "test_detection_rules.py", "test_detectors.py", "test_discovery.py", "test_entries_calls.py",
-            "test_correlation.py", "test_expected_sudo.py", "test_forged_logs.py",
+            "test_auditd.py", "test_correlation.py", "test_expected_sudo.py", "test_forged_logs.py",
             "test_glorfindel.py",
             "test_invariant_regressions.py", "test_invariant_regressions_aws.py", "test_invariants.py",
             "test_invariants_aws.py",
@@ -120,12 +120,12 @@ TOGETHER = (
     "test_docs_budget.py", "test_exercise.py", "test_exercise_e2e.py", "test_held.py", "test_dagorlad_blind.py", "test_githooks.py", "test_exercise_guard.py",
     "test_experiment_schema.py", "test_fault_rate.py", "test_glorfindel_host.py", "test_host_console.py",
     "test_host_cd.py", "test_host_deploy.py", "test_hosted_report.py", "test_indicators.py",
-    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_exercise.py", "test_makefile_secrets.py", "test_bench_logs.py",
+    "test_makefile_bench.py", "test_makefile_campaign.py", "test_makefile_exercise.py", "test_makefile_secrets.py", "test_bench_logs.py", "test_bench_auditd.py",
     "test_notify_discord.py", "test_observation.py", "test_orodruin_kill.py", "test_orodruin_word.py", "test_palantir.py",
     "test_pip_audit_issues.py",
     "test_provider_boundary.py", "test_roadmap_discord.py",
     "test_repo_hermetic.py",
-    "test_run_channel.py", "test_state_writes.py", "test_watch_channel.py", "test_watch_gate.py",
+    "test_run_channel.py", "test_runs_mounts.py", "test_local_verdicts.py", "test_state_writes.py", "test_watch_channel.py", "test_watch_gate.py",
     "test_workflows.py", "test_readme.py", "test_image_check.py", "test_release.py", "test_published_image.py",
     "test_host_ssh.py", "test_azure_roles.py", "test_agent_token.py", "test_review_verdict.py",
     "test_mutant_anchors.py",
@@ -161,8 +161,6 @@ CROSSINGS = {
                                        "Annatar, the watch (which imports it before the "
                                        "thread) starts with the reports off, and "
                                        "says so",
-    ("annatar/cli.py", "analysis"): "the report written at the end of a campaign (IA0) — says "
-                                    "so when the package is missing",
 }
 # The code these rules hold: (directory, its own packages). The analysis AI is no component the
 # CI runs alone, but the watch loads it (IA0): what it reaches of another component is listed

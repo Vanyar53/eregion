@@ -62,7 +62,7 @@ def _on_orodruin(tmp_path, report=None, rid=RID):
 
 
 def _h0(tmp_path):
-    runs = tmp_path / "h0" / "runs"
+    runs = tmp_path / "h0" / "runs" / "glorfindel"     # SEC18: the watch pulls into its own directory
     runs.mkdir(parents=True)
     return runs
 
@@ -117,7 +117,7 @@ def test_annatar_run_publishes_its_report_after_its_last_save(tmp_path, monkeypa
     report = json.loads(container.body(published[0]))
     assert report["run_id"] == rid and report["result"] == "PASS"
     assert "detection" in report["metrics"]                 # the last save, after the wait
-    assert report == json.loads((tmp_path / "runs" / f"{rid}.json").read_text())
+    assert report == json.loads((tmp_path / "runs" / "annatar" / f"{rid}.json").read_text())   # SEC18
     window = container.puts.index(f"{rid}.json", 1)        # the window, once closed
     assert container.puts.index(published[0]) > window
     assert f"run report published to H0: runs/{rid}.json" in res.output
@@ -145,7 +145,7 @@ def test_a_campaign_run_leaves_its_report_to_the_campaign(tmp_path, monkeypatch,
     with patch.object(Engine, "_get_executor_collector", return_value=(_executor(), None)), \
          patch.object(Engine, "_wait_and_emit_feedback"):
         outcome = Engine().run(ATOMIC_YAML, skip_confirm=True)
-    assert outcome.error is None and (tmp_path / "runs" / f"{outcome.run_id}.json").exists()
+    assert outcome.error is None and (tmp_path / "runs" / "annatar" / f"{outcome.run_id}.json").exists()
     assert [n for n in container.puts if n.startswith("runs/")] == []
 
 
@@ -285,7 +285,7 @@ def test_the_console_shows_the_verdict_of_a_run_pulled_from_the_channel(tmp_path
     h0 = _h0(tmp_path)
     channel.pull(h0 / "exercises", channel=URL, credential=CRED, get=container.get)
     hr.tick(h0, say=lambda m: None)
-    monkeypatch.chdir(h0.parent)
+    monkeypatch.chdir(h0.parent.parent)
     monkeypatch.delenv("GLORFINDEL_WARROOM_TOKEN", raising=False)
     api._cycle_cache.clear()
     exercises = console().get("/api/exercises").json()["exercises"]

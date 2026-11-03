@@ -41,8 +41,9 @@ CATALOG = [{"kind": "technique", "id": "T1110.001", "status": "implemented"},
 def runs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     api._cycle_cache.clear()
-    d = tmp_path / "runs"
-    d.mkdir()
+    d = tmp_path / "runs" / "glorfindel"   # SEC18: the watch's own directory (H0: pulled there too)
+    d.mkdir(parents=True)
+    (d.parent / "console").mkdir()
     return d
 
 
@@ -273,7 +274,7 @@ def test_an_isolation_that_did_not_hold_is_not_contained_alone(runs):
                       all_cards=[card])
     assert out["alone"]["contained"] == 0 and out["contain"]["contain_s"] is None
     # The operator released it before the card: the card is no longer this containment's.
-    (runs / "manual_actions.jsonl").write_text(json.dumps(
+    (runs.parent / "console" / "manual_actions.jsonl").write_text(json.dumps(
         {"timestamp": (a + timedelta(minutes=3)).isoformat(), "action": "release_isolation",
          "signal": {"resource_id": VM}, "outcome": {"status": "released"}}) + "\n")
     out = ind.compute(ind.read_runs(api._run_reports(), since.timestamp()),
@@ -599,7 +600,7 @@ def test_the_debug_line_of_a_failed_cycle_is_written_whatever_its_label(tmp_path
     sig = {"signal_id": "s1", "event": "detection", "ttp": "T1110.001", "resource_id": VM,
            "timestamp": NOW.isoformat(), "context": {"run_id": "watch-x-1"}, "raw_signal": ["not", "a dict"]}
     record_cycle_failure(sig, RuntimeError("boom"), stage="decide", dry_run=True)
-    line = json.loads((tmp_path / "runs" / "watch-x-1_debug.jsonl").read_text().splitlines()[-1])
+    line = json.loads((tmp_path / "runs" / "glorfindel" / "watch-x-1_debug.jsonl").read_text().splitlines()[-1])
     assert (line["source"], line["exercise_run"]) == ("unknown", "")
 
 

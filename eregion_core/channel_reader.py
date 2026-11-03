@@ -1,8 +1,8 @@
 """How Eregion reads the runs/ channel (SEC8, #414): as an input it does not trust — one reader
 for every component (SEC16, #438): the watch, the console (eregion_console/runs_reader.py), the
-analysis (a campaign's report and page), Annatar's reading of the watch's files. And how they
-write there: a regular file only, never through a link, never blocking (``append_line``,
-``write_file``).
+analysis (a campaign's report and page). And how every writer writes there: a regular file only,
+never through a link, never blocking (``append_line``, ``write_file``) — each in its own
+directory, ``runs/<writer>/`` (SEC18, eregion_core/runs_layout.py), the others read-only to it.
 
 runs/ is written by other containers than the watch (the injectors, the console's CLI). The
 watch's loop reads it between the reassertion, the TTL checks and the heartbeat: a read that
@@ -225,10 +225,11 @@ _APPEND = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NONBLOCK", 0)
            | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
 
 
-def append_line(path, line: str, mode: int = 0o644) -> None:
+def append_line(path, line: str, mode: int = 0o644, *, sync: bool = False) -> None:
     """Append one whole line to a regular file of runs/, created when absent (SEC16): never
     through a link, never blocking — a pipe without a reader refuses at once —, anything but a
-    regular file refused (Refused), its line written whole in one write (``O_APPEND``)."""
+    regular file refused (Refused), its line written whole in one write (``O_APPEND``).
+    ``sync``: on disk before it returns (Orodruin's journal, its registry — SEC18)."""
     try:
         fd = os.open(path, _APPEND, mode)
     except OSError as exc:
@@ -241,6 +242,8 @@ def append_line(path, line: str, mode: int = 0o644) -> None:
         data = (line.rstrip("\n") + "\n").encode("utf-8")
         while data:
             data = data[os.write(fd, data):]
+        if sync:
+            os.fsync(fd)
     finally:
         os.close(fd)
 

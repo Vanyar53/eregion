@@ -218,12 +218,12 @@ annatar run annatar/scenarios/azure/account-creation-atomic.yaml  # R1 : un test
 #   #!/bin/<executor>. Le test est joué dans la VM par Run Command, puis son cleanup (toujours, même si la commande lève — rapport
 #   écrit, attack: ERROR). Cycle : état initial vérifié avant (départ propre exigé), effet prouvé juste après (sinon pas
 #   d'attack_started), état restauré après le cleanup (sinon le run est une erreur + commande de rattrapage affichée). La
-#   détection (detected/missed/unknown) est écrite dans runs/<run_id>.json. Un moteur inconnu est refusé (pas de run vide).
+#   détection (detected/missed/unknown) est écrite dans runs/annatar/<run_id>.json. Un moteur inconnu est refusé (pas de run vide).
 #   Les deux moteurs écrivent aussi metrics.detection_latency_s (#157) : secondes entre attack_time (T0, l'appel de la
 #   commande) et la détection notée par Glorfindel, null si non détecté (annatar report <run_id> l'affiche). Ne compte
 #   qu'une détection du même TTP, sur la même VM (resource_id comparé sans la casse : la watch écrit le _ResourceId de
 #   Log Analytics en minuscules), vue à partir de l'attaque — une détection antérieure est celle d'un autre run
-#   (annatar/runner/detection.py, même règle pour runs/<run_id>_debug.jsonl et les fichiers watch-*).
+#   (annatar/runner/detection.py, même règle pour runs/glorfindel/<run_id>_debug.jsonl et les fichiers watch-*).
 #   Depuis Orodruin (#159), la watch est sur H0 : avec EREGION_WATCH_CHANNEL, l'attente lit le canal retour (battement
 #   de cœur, detections/<run_id>/), même règle. Sans watch locale, `missed` exige un battement de cœur écrit après
 #   l'attente (jusqu'à 130 s de plus), par une watch démarrée avant l'attaque, qui connaît la fenêtre du run ; sinon
@@ -238,9 +238,9 @@ make glorfindel-host-fault-rate [DAYS=30] [JSON=1]   # sur H0 : les pannes prise
 make fault-rate [DAYS=30] [JSON=1]                   # le même taux, sur l'hôte de la watch seulement (ses runs/) ;
 #   ailleurs (Orodruin, un poste) chaque panne est « non mesurée » : les décisions n'y sont pas
 gothmog run vm-shutdown --dry-run            # la panne déclarée, sans appel Azure
-gothmog report <run_id>                      # runs/<run_id>.json (même forme qu'Annatar)
+gothmog report <run_id>                      # runs/gothmog/<run_id>.json (même forme qu'Annatar)
 #   Depuis Orodruin, avec EREGION_EXERCISE_CHANNEL (#193, pas encore mesuré sur le banc) : à la fin
-#   de `annatar run` comme de `gothmog run`, le rapport du run part vers H0 (runs/<run_id>.json dans
+#   de `annatar run` comme de `gothmog run`, le rapport du run part vers H0 (le blob runs/<run_id>.json dans
 #   le conteneur des fenêtres, sans droit nouveau), après la fermeture de sa fenêtre. La watch
 #   hébergée le tire dans son runs/ (une forme refusée n'est pas écrite, un rapport local jamais
 #   écrasé) : la page de son injecteur, dans la console, affiche son verdict. Un échec de publication est signalé
@@ -311,7 +311,7 @@ make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite> [CAM
 #   synthétisée. Le plan ne dépend ni de jsonschema ni de schemas/ (absents de l'image) : il valide
 #   l'expérience comme le run la lira (parser + sondes du moteur atomic) ; le schéma E1 est vérifié
 #   par les tests. Une entrée destructive (atomic ou script) demande --allow-destructive et un
-#   safe_target. Manifeste et scénarios dans ~/runs/campaigns/<id>/ (bind-monté). La commande n'est
+#   safe_target. Manifeste et scénarios dans ~/runs/glorfindel/campaigns/<id>/ (bind-monté). La commande n'est
 #   pas répétée à l'écran (CAMPAIGN_TARGET porte l'abonnement).
 make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (la watch de H0 répond selon le mode de chaque VM : gondolin non_disruptive) ; refusée sans watch vivante (V1)
 #   Chaque run passe par le moteur de son expérience (atomic ou script) ; sa détection (detected/
@@ -334,7 +334,7 @@ make orodruin-campaign-run CAMPAIGN=<id>     # joue la campagne (la watch de H0 
 #   (annatar campaign run), la campagne n'est pas publiée non plus : H0 n'en écrit pas le
 #   rapport. L'image d'Orodruin doit être reconstruite pour écrire l'attack_time dans le rapport
 #   de chaque run : sans lui, aucune décision de la watch n'est rattachée au run.
-make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/campaigns/<id>/report.md sur H0
+make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/glorfindel/campaigns/<id>/report.md sur H0
 #   (à défaut, son report.error). Le thread campaign-report de la watch hébergée tire la campagne
 #   toutes les 30 s et écrit report.md une fois, quand elle est done et que le rapport de chaque run
 #   exécuté est arrivé, seulement pour une campagne tirée du canal (marqueur .pulled). Les
@@ -352,14 +352,14 @@ make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/campaigns/<id>/r
 #   sur la VM) ou lancer la commande à la main ci-dessous. Index campaign_runs dans
 #   ~/.eregion/analysis sur la VM (monté dans le conteneur ; montage et image au prochain
 #   redéploiement de H0). À la main, sur la VM, si le rapport automatique a été abandonné :
-#     docker exec eregion-watch python -m analysis.campaign_report runs/campaigns/<id>
+#     docker exec eregion-watch python -m analysis.campaign_report runs/glorfindel/campaigns/<id>
 #   D-2 (#184) : le rapport se compare à la campagne précédente, choisie dans l'index. Pour y
 #   verser les campagnes passées (idempotent, aucun appel au modèle), sur la VM :
-#     docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
+#     docker exec eregion-watch python -m analysis.campaign_index --all runs/glorfindel/campaigns
 #   quand aucun rapport n'est en attente (le fil campaign-report écrit dans le même index
 #   chromadb) : la liste de hosted_report.ready doit être vide —
-#     docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/campaigns'))])"
-#   (en local : python -m analysis.campaign_index --all runs/campaigns ; docs/analysis.md)
+#     docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/glorfindel/campaigns'))])"
+#   (en local : python -m analysis.campaign_index --all runs/annatar/campaigns ; docs/analysis.md)
 annatar campaign plan --target <resource_id> [--llm]   # en local (banc) ; --llm pour le planner LLM
 annatar campaign run <campaign_id> --yes               # ratifie le budget/scope et exécute
 
@@ -410,7 +410,7 @@ GLORFINDEL_DECISION_DRAWS=3         # D-1 : tirages qui doivent s'accorder avant
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only ; toute valeur sauf vide/0/false/no/off = lecture seule
 GLORFINDEL_OWN_CALLERS=<id>,<id>    # AL1 : identités de Glorfindel sur Azure, en plus des claims de son jeton (jeton d'application : appid/azp et oid ; jeton d'utilisateur, `az login` : l'oid seul — l'appid y est celui de la CLI, commun au tenant, dit une fois) et d'AZURE_CLIENT_ID ; ses écritures (isolation, quarantaine, blocage) dans le journal d'activité ne s'escaladent pas, seulement sur une cible qui est à lui (NSG de quarantaine, règle qu'un état d'isolation ou de blocage nomme — un nom glorfindel-* seul ne suffit pas —, règle du client dont une isolation a décalé la priorité, NIC mise en quarantaine) — son identité sur une autre ressource s'escalade, critique. Glorfindel lancé sous l'identité d'un opérateur écarte aussi les écritures de cet opérateur sur les ressources de Glorfindel ; un seul principal pour Annatar et Glorfindel (option A de .envrc.example) écarte de même celles d'Annatar. Journaux d'Entra ID (C2) : rien n'est écarté sous ces identités, elles y sont marquées (acteur ou cible, critique) ; y ajouter l'objet de l'application de Glorfindel pour qu'un identifiant ajouté à son inscription soit marqué
 GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le registre avant éviction (défaut 8h)
-EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un run seul (runs/<run_id>.json, #193) ; posé sur la watch, il démarre le thread campaign-report, qui tire les deux
+EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un run seul (le blob runs/<run_id>.json, tiré sur H0 dans runs/glorfindel/, #193) ; posé sur la watch, il démarre le thread campaign-report, qui tire les deux
 # Orodruin seulement (orodruin.env) : EREGION_CHANNEL_SCOPE (le conteneur, seule attribution hors du banc acceptée),
 # EREGION_MAX_INJECTIONS / EREGION_MAX_RUN_S (plafond du contrat), EREGION_BENCH_RG
 # Gothmog : EREGION_BENCH_WORKSPACE (Log Analytics du banc pour la sonde Heartbeat, défaut law-celebrimbor-amonsul)
@@ -963,7 +963,7 @@ jeton (`tests/unit/test_workflows.py`).
 
 Chaque service du compose tourne sans capacité (`cap_drop: [ALL]`), sans gain de privilège
 (`no-new-privileges:true`), la racine en lecture seule (`read_only: true`, `/tmp` en tmpfs) :
-il n'écrit que dans ses montages (`runs/`, `~/.glorfindel`, `~/.cache/chroma`,
+il n'écrit que dans ses montages (son répertoire de `runs/` — SEC18, ci-dessous —, `~/.glorfindel`, `~/.cache/chroma`,
 `~/.eregion/analysis` pour la watch ; `~/.annatar` pour Annatar), et la config que la console
 réécrit l'est sur place, sous verrou (`glorfindel/config.py`). `tests/unit/test_profiles.py`
 exige les quatre clés sur chaque service. Mesuré le 29/10 sur Docker (compose 5.5) : les
@@ -973,13 +973,116 @@ config, `/tmp`) passent, l'image et `/root` refusent, `CapEff` à zéro, `NoNewP
 le compose. Les `docker run` des injecteurs sur Orodruin (`ORO_RUN`, `ORO_RUN_REQUEST` du Makefile :
 `orodruin-check`, `orodruin-exercise`, `gothmog-*`, `orodruin-campaign-*`) portent les mêmes quatre
 réglages depuis SEC14 (`ORO_HARDEN`, `tests/unit/test_host_ssh.py`) ; à mesurer au premier run sur
-Orodruin qu'aucune écriture hors de `~/runs` et de `/tmp` n'y manque. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : son rapport de
-campagne s'écrit dans `runs/`, et l'index de l'IA d'analyse ne s'ouvre jamais dans son conteneur
+Orodruin qu'aucune écriture hors de son répertoire de `~/runs` et de `/tmp` n'y manque. Annatar ne monte ni `~/.eregion/analysis` ni `~/.cache/chroma` : le rapport de
+sa campagne s'écrit sur H0, par la watch, et l'index de l'IA d'analyse ne s'ouvre jamais dans son conteneur
 (chromadb n'est pas dans son image, `tests/unit/test_profiles.py`). Sur H0, la santé du CD lit
 le journal de chaque conteneur depuis la bascule : un « Read-only file system » que la release
 d'avant ne montrait pas (relu dans sa dernière heure, avant la bascule) est une régression, et
 H0 revient en arrière (`infra/glorfindel-host/cd/eregion_cd.py`, `read_only_errors`) ; le même
 avant et après est dit, jamais un retour ; un journal illisible est dit en orange, non prouvé.
+
+---
+
+## `runs/` : un répertoire par écrivain — le redéploiement coordonné (SEC18, #455)
+
+Depuis SEC18 (N-05), `runs/` n'est plus un répertoire que chaque service monte en écriture : chaque
+écrivain a le sien, que lui seul monte en écriture, et ceux qui le lisent en lecture seule
+(`eregion_core/runs_layout.py` ; la carte complète, avant et après, dans
+[`fichiers-cles.md`](fichiers-cles.md), « `runs/` — qui écrit, qui lit, qui monte ») :
+
+| Répertoire | Écrit par | Lu (lecture seule) par |
+|---|---|---|
+| `runs/glorfindel/` | la watch (ses cycles ; sur H0, ce qu'elle tire du canal ; les rapports et le tri des campagnes) | la console |
+| `runs/console/` | la console, la CLI de Glorfindel, le bot (`manual_actions.jsonl`) | la watch |
+| `runs/annatar/` | Annatar (ses signaux, ses rapports, ses fenêtres, ses campagnes) | la watch, le bot, la console |
+| `runs/gothmog/` | Gothmog (ses signaux, ses rapports, ses fenêtres) | la watch, la console |
+| `runs/orodruin/` | les injecteurs sur Orodruin et le lanceur d'une demande (journal, verrou, statuts) | — |
+| `runs/verdicts/` | la watch, sans canal retour du stockage : le verdict de chaque run, rien d'autre | Annatar, Gothmog |
+
+Le rouge ne monte ni `runs/glorfindel/` ni `runs/console/`. La détection d'un run d'Annatar se mesure
+par le canal retour du stockage (`EREGION_WATCH_CHANNEL`), qui garde la priorité ; sans lui — un poste
+—, par le canal local des verdicts, `runs/verdicts/`, que la watch écrit et que le rouge lit en
+lecture seule : la boucle purple locale garde sa mesure. Sans aucun des deux, elle est `unknown`,
+dite, jamais un raté. `annatar campaign run` sans canal vers H0 n'écrit plus le rapport de campagne :
+il dit le geste, `make campaign-report CAMPAIGN=<id>` (le rapport lit les cycles de la watch, que le
+rouge ne lit pas). Un lecteur ne lit un fichier que dans le répertoire de son écrivain ; ce qui est
+ailleurs n'est jamais lu, et la watch (dans son journal, toutes les minutes, chaque chose une fois),
+la console (dans le sien) et `make runs-survey` le disent.
+
+**La migration.** L'ancienne disposition (des fichiers à plat dans `runs/`) n'est jamais lue. Elle est
+déplacée une fois, **sur l'hôte**, avant que les services démarrent — aucun service ne monte `runs/`
+entier, aucun ne pourrait déplacer —, par `python3 -m eregion_core.runs_layout migrate <runs>` :
+`make glorfindel-start`, `glorfindel-restart`, `team-start` et `team-init` sur un poste, `deploy.sh`
+sur H0 (au démarrage des services, le CD compris), `make orodruin-push` (et `-push-dev`) sur
+Orodruin, dans un conteneur de l'image tout juste vérifiée — le seul qui monte `~/runs` entier, une
+fois. `make runs-migrate` la lance à la main, `make runs-survey` dit ce qui reste hors de place (code
+1 s'il y en a). Ses règles :
+- un fichier va au répertoire de son écrivain **quand il se reconnaît sans ambiguïté** : par son nom
+  (`*_debug.jsonl` → la watch, `*_signals.jsonl` à plat → Annatar, `manual_actions.jsonl` → la
+  console), par ce qu'il dit de lui (un rapport : `metrics.injector`, avant C1 une attaque est
+  d'Annatar ; une fenêtre : son `injector`, ou `channel_created` quand la watch l'a tirée), ou par un
+  marqueur du tirage à côté (`.pulled-runs/<run_id>`, le `.pulled` d'une campagne : à la watch) ; d'une
+  campagne d'Annatar, `report.md`, `report.error`, `triage.*` et `replay.json` vont à la watch ;
+  `runs/orodruin/` qui tient un `contract.json` est la copie de H0 (→ `runs/glorfindel/orodruin/`),
+  sinon c'est déjà le répertoire d'Orodruin ;
+- sinon il est **laissé où il est**, jamais lu, et dit avec le geste : le déplacer à la main vers
+  `runs/<écrivain>/` s'il est connu, sinon le garder à part ;
+- un fichier dont l'écrivain a déjà un fichier du même nom est laissé, dit : les deux sont gardés ;
+- **rien n'est jamais effacé** : un fichier est renommé (`os.rename`, son heure gardée — une fenêtre
+  reste datée comme avant), un répertoire de l'ancienne disposition retiré seulement une fois vide ;
+- relancée, elle ne déplace plus rien ;
+- **un répertoire d'écrivain qui est un lien** (ou un fichier) arrête tout, avant le moindre
+  déplacement (code 3) : monté, il donnerait sa cible à son écrivain. `RUNS_DIRS`, `ORO_DIRS` et
+  `deploy.sh` refusent de même de partir. Le geste : le retirer à la main (`rm`, jamais à travers
+  lui), puis relancer. Plus bas, un lien ou un tube est laissé, dit, jamais suivi ; un fichier est
+  déplacé par un lien dur puis l'ancien nom retiré — jamais par-dessus ce qui est là ;
+- quand l'ancienne disposition contient quelque chose (`python3 -m eregion_core.runs_layout
+  pending runs`), `make runs-migrate` et `deploy.sh` arrêtent d'abord `watch`, `war-room` et
+  `bot` : un fichier qu'ils écriraient pendant ce temps resterait de côté.
+
+Pourquoi déplacer plutôt que lire l'ancienne disposition ou l'abandonner : lire à plat garderait ce que
+SEC18 retire (un fichier à plat ne dit pas qui l'a écrit) ; l'abandonner ferait perdre l'histoire que
+lisent la couverture, les indicateurs et les rapports. Déplacer ce qui se reconnaît garde cette
+histoire. **Ce que la migration ne fait pas** : elle classe par le nom et par ce que dit le fichier,
+comme les lecteurs le croyaient avant SEC18 — un fichier écrit avant par un autre que son écrivain
+apparent (sur un poste où le rouge montait `runs/` en écriture) le reste. Ce qui tient, c'est ce qui
+s'écrit après. Sur H0, aucun injecteur ne tournait : tout `runs/` y était écrit par la watch et la
+console.
+
+**Le redéploiement, dans l'ordre — poste, H0, Orodruin.** Aucun run en vol pendant les trois (ni
+`make orodruin-exercise`, ni campagne, ni panne).
+1. **Le poste.** La branche fusionnée tirée : `make glorfindel-start` (il migre `runs/`, puis démarre
+   la watch et la console), puis `make runs-survey` — rien, ou chaque chose laissée et son geste.
+   Une équipe : `make team-start TEAM=<nom>`.
+2. **H0.** La release qui porte SEC18 publiée, son CD la déploie (`deploy.sh` migre
+   `~/eregion/runs` avant `docker compose up`) ; ou à la main, `make glorfindel-host-start REF=<tag>`.
+   Vérifier : `make glorfindel-host-logs` ne dit aucun « Canal runs/ : … jamais lu », et la console
+   montre les campagnes et les runs d'avant.
+3. **Orodruin.** `make orodruin-push REF=<le même tag>` : l'image vérifiée, chargée, puis `~/runs`
+   migré (`ORO_MIGRATE`) ; puis `make orodruin-check`.
+
+**Ce qui casse si l'ordre n'est pas tenu.**
+- **Le Makefile de SEC18 (le poste) face à l'image d'avant sur Orodruin** (l'étape 3 oubliée) :
+  chaque `docker run` monte `~/runs/annatar`, `~/runs/gothmog`, `~/runs/orodruin`, et l'injecteur
+  d'avant écrit à la racine de `/app/runs` — dans la racine en lecture seule du conteneur. Sa fenêtre
+  d'exercice ne s'écrit pas : le run s'arrête là, **avant de toucher sa cible**, en « Read-only file
+  system ». Rien n'agit, rien ne se mesure, jusqu'à `make orodruin-push`.
+- **L'image de SEC18 sur Orodruin face au Makefile d'avant** (un poste resté en arrière) : `~/runs`
+  monté entier, l'injecteur écrit dans ses répertoires ; rien ne casse, mais l'ancienne disposition
+  n'est pas migrée tant que `make orodruin-push` du poste à jour n'a pas tourné.
+- **Le canal entre Orodruin et H0 ne change pas** (les mêmes blobs, aux mêmes noms) : l'un à jour et
+  l'autre pas, les fenêtres, les rapports et les campagnes passent ; seul l'emplacement sur le disque
+  de H0 change.
+- **Un retour de H0 sous SEC18** (le CD qui revient sur la release d'avant si la santé échoue, ou
+  `make glorfindel-host-cd-rollback`) : le compose d'avant monte `runs/` entier et ne lit qu'à plat — il
+  ne voit plus ce que la migration a rangé. La console paraît vide d'historique ; la watch tire de
+  nouveau du canal les campagnes qui y restent et réécrit leur rapport (un appel au modèle d'analyse
+  par campagne `done` encore sur le canal, au plus trois tentatives). Le geste : redéployer une release
+  qui porte SEC18 ; sinon, remettre à la main le contenu de `runs/glorfindel/` et de `runs/console/` à
+  la racine de `runs/` (rien n'a été effacé).
+- **`docker compose up` sans `make`** (sans la migration) sur un poste neuf : docker crée les
+  répertoires manquants au nom de root ; la watch ne peut plus écrire ses cycles (« debug non écrit »,
+  dit une fois), la console ses gestes. Le geste : `make fix-state-ownership`, puis `make runs-migrate`.
 
 ---
 
@@ -1060,7 +1163,10 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   que la forme de sudo : toujours une carte. Les shells root d'un administrateur (`sudo -i`,
   `sudo su -`, `bash`, `python -c`, `vim`, `less`, `screen`…) font **une carte pour les formes
   connues**, sauf origine attendue (ci-dessous) ; la liste n'est pas exhaustive — un script non
-  listé (`sudo /tmp/x.py`) passe sans carte, l'angle mort assumé jusqu'à AUD1 (`auditd`).
+  listé (`sudo /tmp/x.py`) passe sans carte — un angle mort qu'AUD1 réduit là où auditd est posé
+  (au banc, derrière `auditd_enabled` : « auditd au banc (AUD1) ») : chaque programme que ce script
+  ou ce shell lance en root, sous la connexion de l'administrateur, y est lu avec la même liste
+  sensible ; ce qu'il fait sans lancer de programme ne l'est pas.
   Éditer avec `sudoedit`. **Clé nouvelle**, comme `never_block` : une version
   antérieure refuse la config qui la porte — la watch ne démarrerait plus.
 
@@ -2107,9 +2213,238 @@ pas d'un journal absent.
 
 ---
 
+## auditd au banc (AUD1, #408)
+
+ADM1 et COR1 jugent un `sudo` vers root ; ce qui se fait ensuite dans un shell root, sudo ne l'écrit
+pas — COR2 le garde comme limite (une session plus ancienne que la fenêtre, un accès qui n'écrit
+aucune ligne de session). AUD1 pose `auditd` sur les VM du banc, derrière un drapeau désactivé, et la
+règle livrée `auditd-sensitive-root-command` lit ses lignes : une commande de la liste sensible d'ADM1,
+exécutée en root par une connexion humaine, fait une carte qui nomme le compte de connexion
+(`docs/design/correlation.md`, « Ce que ferme AUD1 »). **Rien ici n'a été planifié ni appliqué** :
+la forme réelle des lignes, le volume et le coût se mesurent au banc avec Jonathan. Les noms sont ceux
+du banc ; `<…>` est à remplacer, rien de réel dans ce dépôt.
+
+### Ce que le drapeau pose
+
+| Variable (`terraform.tfvars`) | Ressource | Ce qu'elle fait |
+|---|---|---|
+| `auditd_enabled = true` | `azurerm_virtual_machine_extension.auditd` (`eregion-auditd`, CustomScript 2.1), sur chaque VM de `local.vms` (gondolin, bree) | lance `infra/terraform/scripts/auditd.sh` : installe `auditd` et `audispd-plugins`, écrit `/etc/audit/rules.d/50-eregion-aud1.rules`, met `log_format = ENRICHED`, active le greffon `/etc/audit/plugins.d/syslog.conf` (`args = LOG_INFO LOG_LOCAL6`), recharge les règles, redémarre auditd, puis affiche les quatre règles chargées |
+| (la même) | `azurerm_monitor_data_collection_rule.celebrimbor` | ajoute `local6` aux facilités de toujours (`auth`, `authpriv`, `syslog`, `daemon`) : l'agent Azure Monitor l'envoie à la table `Syslog` |
+
+Les deux règles d'audit (et leurs pendantes `arch=b32`) :
+
+```
+-a always,exit -F arch=b64 -C euid!=uid -F auid!=unset -S execve -k user_emulation
+-a always,exit -F arch=b64 -F euid=0 -F auid>=1000 -F auid!=unset -S execve -k root_command
+```
+
+La première est celle des benchmarks CIS pour Linux (« actions as another user are always logged ») :
+un programme exécuté sous un autre utilisateur — `sudo` lui-même, `su`, un binaire setuid —, sous
+l'identité de connexion (`auid`) que le noyau garde à travers sudo et su. **Elle ne suffit pas pour un
+shell root** : sudo passe à uid = euid = 0 avant de lancer la commande, si bien qu'aucune commande du
+shell n'a `euid != uid`. La seconde écrit chaque exécution en root (euid 0) d'une connexion humaine
+(auid ≥ 1000, jamais unset), sous le même `auid` : c'est elle qui fait s'appliquer la liste sensible à
+l'intérieur du shell (hypothèse A8). Une exécution est écrite une fois, sous la clé de la première
+règle qui la prend.
+
+- **Désactivé par défaut**, dans `terraform.tfvars` (ignoré par git, persistant) : jamais dans
+  `config.yaml`, jamais en `-var` d'une commande (le prochain apply sans lui retirerait l'extension).
+  Toute instance du banc peut le poser : il ne touche que ses VM et sa DCR.
+- **Une extension, jamais le `custom_data`** : changer le `custom_data` remplace la VM.
+- Le contrat planifié contre un faux azurerm, sans Azure : `terraform -chdir=infra/terraform test`
+  (`infra/terraform/tests/auditd.tftest.hcl`, après un `init -backend=false`) ; le même contrat lu dans
+  les fichiers : `tests/unit/test_bench_auditd.py` (les clés, la facilité, le seuil humain : les mêmes
+  dans le script, la DCR, la règle et `glorfindel/auditd.py`).
+
+### L'acheminement : audisp-syslog vers Syslog
+
+Deux chemins possibles : l'agent Azure Monitor qui lit `/var/log/audit/audit.log` comme un journal
+texte, vers une table à lui (`*_CL`), ou le greffon syslog d'auditd (`audisp-syslog`) vers la table
+`Syslog`, par la DCR qui existe déjà. **AUD1 prend le second** :
+
+- c'est la table que lisent déjà ADM1, COR1 et le brute force, avec la même lecture (le KQL des règles,
+  `glorfindel/correlation.py`) et les mêmes tests (`tests/unit/kql_subset.py`) ;
+- il n'y a ni table à définir et à faire évoluer, ni point de collecte, ni transformation à tenir : une
+  facilité de plus dans la DCR ;
+- le prix au Go est le même (Analytics Logs) ; le volume, lui, est celui des enregistrements, quel que
+  soit le chemin.
+
+Ce qu'il coûte : une ligne écrite par `logger -p local6.info -t audisp-syslog` arrive au même endroit.
+Elle **ajoute** une carte (elle peut nommer un autre compte : à vérifier dans `ausearch` sur la VM),
+elle n'en **efface** aucune : deux enregistrements SYSCALL ou EXECVE pour un même événement font une
+carte, jamais le choix de l'un (A0). Le journal d'audit de la VM, lisible par root seul, garde tout. Si
+la mesure montre des lignes perdues en route (A10), le journal texte d'AMA devient le repli : un lot à
+part.
+
+### Le volume et le coût — l'estimation
+
+**La méthode** : un `execve` écrit un événement d'environ 6 enregistrements (SYSCALL, EXECVE, CWD,
+PATH pour le programme et pour son interpréteur, PROCTITLE : l'exemple d'exécution de la documentation
+d'auditd, « Understanding Audit Log Files » de Red Hat), chacun une ligne Syslog. Le texte : SYSCALL
+~550 octets, plus ~200 pour les champs ENRICHED ; EXECVE ~50 octets plus les arguments ; CWD ~50 ;
+PATH ~250 chacun ; PROCTITLE ~60 plus deux fois la ligne de commande en hexadécimal — **~1,4 Ko par
+exécution**. Les autres colonnes facturées d'une ligne Syslog (`Computer`, `HostName`, `HostIP`,
+`Facility`, `SeverityLevel`, `ProcessName`, `ProcessID`, `EventTime`, `_ResourceId`…) ajoutent
+~0,3 Ko par ligne, ~1,8 Ko par exécution : **~3 Ko par exécution (2 à 4 Ko)**. Le prix : 2,99 USD le
+Go en West Europe (Analytics Logs, au-delà des 5 premiers Go du mois par compte de facturation ;
+l'API publique des prix, lue le 30/10/2026 pour ID1, ci-dessus).
+
+**Ce qui n'est pas écrit** : un démon, l'agent de la VM et donc Run Command (Annatar, la routine de
+`make celebrimbor-workload`, la coupure des sessions), Gothmog et l'agent Chaos, les mises à jour
+automatiques (un minuteur systemd) n'ont pas d'`auid` ; les tâches cron de root ont l'`auid` 0. Aucun
+n'est un humain (A9).
+
+| Cas | Exécutions par jour | Volume par jour | Par mois |
+|---|---|---|---|
+| Le banc au repos (Annatar, Gothmog, Run Command, cron de root) | 0 | 0 | 0 |
+| bree, sa routine (`workload.sh` : cron sous `celebrimbor`, auid 1000 — `sudo nginx -t` et `sudo systemctl reload nginx` une fois par jour, `sudo journalctl --vacuum-time=14d` toutes les 6 h) | ~20 | ~60 Ko | < 0,01 USD |
+| Une session d'administration en SSH (les scripts du motd à la connexion, `sudo -i` et son profil, une centaine de commandes) | 150 à 300 | 0,5 à 1 Mo | — |
+| Un `sudo apt upgrade` (les scripts de maintenance des paquets, sous l'auid de l'administrateur) | 2 000 à 10 000 par mise à jour | 6 à 30 Mo | — |
+| Une VM tenue par un outil de configuration en SSH, en root par sudo (Ansible et `become` : l'auid de son compte), 1 000 tâches par jour | ~50 000 | ~150 Mo | ~4,5 Go, ~13 USD par VM |
+
+Sur le banc : **moins de 1 USD par mois**, tant qu'on n'y fait pas de gestion de configuration. Hors du
+banc, le dernier cas compte : c'est lui qui décide, VM par VM, s'il faut garder ces règles telles
+quelles (A12). La mesure (requête Q3, ci-dessous) remplace l'estimation après 24 h, puis 7 jours.
+
+### Avant le plan
+
+1. **D'abord la version** : H0 doit tourner une version qui porte la règle
+   `auditd-sensitive-root-command` (la release qui porte AUD1, déployée par le CD). Avant, les lignes
+   arrivent sans que rien ne les lise — sans dommage, mais sans mesure.
+2. **Le mode des VM, pour la mesure** : `make glorfindel-host-push HUMAN_ONLY=1` (tout en
+   `human_only`). gondolin et bree sont en `non_disruptive` sur H0 : chaque carte d'AUD1 y pourrait
+   lancer un instantané, et la routine de bree en fait une toutes les 6 h (A13). Les remettre comme
+   avant à la fin de la mesure.
+
+### Activer, vérifier le plan, appliquer
+
+```bash
+# 1. Dans infra/terraform/terraform.tfvars (persistant, ignoré par git) :
+#      auditd_enabled = true
+make celebrimbor-auditd-plan          # plan ciblé : l'extension d'auditd et la DCR seules (lecture seule)
+make celebrimbor-auditd-up YES=1      # une fois le plan relu
+```
+
+**Le plan doit montrer**, et rien d'autre :
+- `+ azurerm_virtual_machine_extension.auditd["bree"]` et `["gondolin"]` : `name = "eregion-auditd"`,
+  `publisher = "Microsoft.Azure.Extensions"`, `type = "CustomScript"`, `type_handler_version = "2.1"`,
+  `settings` (le script, en base64) ;
+- `~ azurerm_monitor_data_collection_rule.celebrimbor` : `facility_names` gagne `"local6"`, rien d'autre ;
+- `Plan: 2 to add, 1 to change, 0 to destroy`, et l'avertissement de Terraform sur le ciblage
+  (« Resource targeting is in effect ») — attendu.
+
+Un changement sur une VM (`azurerm_linux_virtual_machine.baseline`), le workspace ou le groupe (leurs
+dépendances, une dérive en attente) : **s'arrêter**, et le traiter à part par `make celebrimbor-plan`.
+
+**L'extension a-t-elle tourné ?** Le portail (la VM, « Extensions + applications », `eregion-auditd`,
+son statut et sa sortie : les quatre règles `key=user_emulation` et `key=root_command`), ou :
+`az vm extension show -g rg-celebrimbor --vm-name vm-celebrimbor-gondolin -n eregion-auditd --instance-view --query "instanceView.substatuses[].message" -o tsv`.
+Une sortie en erreur (« /sbin/audisp-syslog absent ») : A1.
+
+### Les opérations de test
+
+Chacune est connue et sans effet sur le banc. Noter l'heure UTC juste avant (`date -u +%FT%TZ`).
+
+1. **Un shell root et une commande sensible** : `ssh celebrimbor@<gondolin>`, `sudo -i`, `id`,
+   `cat /etc/shadow > /dev/null`, `ls /root`, `exit`, `exit`. Attendu sur H0 : la carte d'ADM1 (le shell
+   root de `sudo -i`, comme avant) et une carte `auditd-sensitive-root-command` qui nomme
+   `celebrimbor (auid 1000)`, la commande `cat /etc/shadow`, `Sensitive: shadow` ; `id` et `ls` n'en font
+   pas. `make glorfindel-host-report` : « auditd (AUD1), auditd-sensitive-root-command: N root exec(s) of
+   a human login in its window… ». Requêtes Q1, Q2.
+2. **Le même compte, sans sudo dans la ligne** : depuis la session, `sudo su -`, puis
+   `useradd aud1-test && userdel aud1-test`. Attendu : une carte (`accounts`), le compte de connexion
+   toujours nommé (A8).
+3. **Une ligne écrite à la main** : `logger -p local6.info -t audisp-syslog 'type=EXECVE
+   msg=audit(<instant:numéro> de l'événement du cat, lu par Q1): argc=1 a0="ls"'`. Attendu : une carte
+   « 2 enregistrements EXECVE pour un événement », jamais l'effacement de la première.
+4. **Run Command** : `az vm run-command invoke -g rg-celebrimbor -n vm-celebrimbor-gondolin
+   --command-id RunShellScript --scripts "cat /etc/shadow > /dev/null"`. Attendu : aucune ligne, aucune
+   carte (pas d'auid : A9).
+5. **Le bruit** (A13) : `sudo apt-get update && sudo apt-get install --reinstall -y cron` dans une
+   session SSH, puis compter les cartes et les lignes (Q2) ; noter la carte de la routine de bree à
+   l'heure suivante en `45 */6`.
+6. **Rien de perdu** (A10) : sur la VM, `sudo ausearch -k root_command --start <heure> | grep -c
+   'type=SYSCALL'`, à comparer au nombre d'événements de Q2 pour la même période ; et
+   `journalctl -u systemd-journald --since <heure> | grep -i suppressed`.
+
+### Les requêtes de mesure
+
+**Q1** (la forme des lignes) :
+
+```kusto
+Syslog
+| where TimeGenerated > ago(1h)
+| where Facility == "local6"
+| project TimeGenerated, Computer, Facility, SeverityLevel, ProcessName, SyslogMessage
+| order by TimeGenerated asc
+```
+
+**Q2** (les événements, leurs enregistrements) :
+
+```kusto
+Syslog
+| where TimeGenerated > ago(1d) and Facility == "local6"
+| extend AuditEvent = extract(@"msg=audit\((\d+\.\d+:\d+)\)", 1, SyslogMessage),
+         RecordType = extract(@"(?:^|\s)type=([A-Z_]+)\s", 1, SyslogMessage)
+| summarize Types = make_set(RecordType), Records = count() by Computer, AuditEvent
+| summarize Events = count(), RecordsPerEvent = avg(Records),
+            WithoutExecve = countif(set_has_element(Types, "SYSCALL") and not(set_has_element(Types, "EXECVE")))
+            by Computer
+```
+
+**Q3** (le volume, facturé) :
+
+```kusto
+Syslog
+| where TimeGenerated > ago(1d) and Facility == "local6"
+| summarize Rows = count(), MB = sum(_BilledSize) / 1e6 by Computer, bin(TimeGenerated, 1h)
+| order by TimeGenerated asc
+```
+
+Et la règle elle-même, telle que la watch la lance : `glorfindel rules check --live` (H2).
+
+### Les hypothèses d'AUD1
+
+Ce que le code suppose (`glorfindel/auditd.py`, la règle `auditd-sensitive-root-command`,
+`infra/terraform/scripts/auditd.sh`), d'après la documentation d'auditd (`auditd.conf(5)`,
+`audisp-syslog(8)`, `auditctl(8)`, le format des enregistrements du noyau) et d'Azure Monitor ; chacune
+avec sa mesure et ce qui change selon le résultat. (À ne pas confondre avec les A1–A8 d'ID1, plus haut.)
+Un changement de règle ou du lecteur est un lot de la session Glorfindel ; du script, de la session
+Infra.
+
+| | Hypothèse | Mesure | Si elle tient | Sinon |
+|---|---|---|---|---|
+| **A1** | Sous Ubuntu 22.04 (auditd 3.0), `audispd-plugins` installe `/sbin/audisp-syslog` ; ses greffons se lisent dans `/etc/audit/plugins.d/` | la sortie de l'extension ; `dpkg -L audispd-plugins \| grep syslog` | rien | corriger le paquet ou le chemin du script |
+| **A2** | `args = LOG_INFO LOG_LOCAL6` : la facilité `local6`, le niveau info ; l'agent les range dans `Syslog` avec `Facility == "local6"` | Q1 | rien | lire la facilité réelle : la DCR et la règle, ensemble (`tests/unit/test_bench_auditd.py`) |
+| **A3** | L'étiquette des lignes (`ProcessName`) est `audisp-syslog` (`audispd` sous auditd 2) | Q1 | rien | une autre étiquette : la règle ne voit rien — la corriger |
+| **A4** | `SyslogMessage` porte un enregistrement entier, l'étiquette ôtée, au format du noyau : `type=SYSCALL msg=audit(<s>.<ms>:<n>): … auid= uid= … euid= … tty= ses= comm= exe= … key="<clé>"`, une chaîne non sûre entre guillemets ou en hexadécimal | Q1 | rien | une autre forme (un préfixe, des champs réordonnés, une ligne coupée) : corriger la règle et le lecteur |
+| **A5** | Les enregistrements d'un événement partagent `msg=audit(…)` et arrivent ensemble : la règle ne voit pas un SYSCALL sans son EXECVE | Q2 (`WithoutExecve`) | rien | une carte « aucun enregistrement EXECVE » à tort, par passe : retenir la ligne une passe de plus (un lot) |
+| **A6** | `log_format = ENRICHED` atteint le greffon : le SYSCALL finit par `AUID="<compte>" UID="root" …` | Q1 | la carte nomme le compte | la carte dit « auid 1000 (nom absent de la ligne) » : lire le nom ailleurs (l'option `interpret` d'audisp-syslog remplace les numéros, donc pas elle), un lot |
+| **A7** | Le séparateur des champs ENRICHED (le caractère 0x1d) arrive tel quel ou en `#035` (rsyslog échappe les caractères de contrôle) : le lecteur lit les deux | Q1 | rien | un autre échappement : l'ajouter au lecteur |
+| **A8** | `sudo -i` puis une commande : `sudo` lui-même sous `user_emulation` (euid 0, uid du compte), la commande sous `root_command` (uid = euid = 0), l'auid du compte de connexion dans les deux ; `sudo su -` de même | opérations 1 et 2, Q1 | rien | une commande du shell absente : la règle d'audit, un lot de la session Infra |
+| **A9** | Une connexion humaine a un uid ≥ 1000 (`UID_MIN` de `/etc/login.defs`), et `pam_loginuid` pose l'auid à la connexion SSH (et pour cron) ; Run Command, les démons, cron de root n'ont pas d'auid ou l'auid 0 | `grep UID_MIN /etc/login.defs` ; `cat /proc/self/loginuid` en SSH et par Run Command ; opération 4 | rien | un humain sous 1000 : relever le seuil (la règle d'audit, la règle, le lecteur, ensemble) ; Run Command vu : l'exclure par son auid |
+| **A10** | Rien ne se perd sous une rafale (une mise à jour : des milliers d'exécutions, ~6 lignes chacune, en une minute) : ni journald (`RateLimitBurst`), ni rsyslog, ni la file d'auditd | opération 6 | rien | des lignes perdues : relever les limites de journald pour le greffon, ou passer au journal texte d'AMA (un lot) ; une commande perdue n'est pas vue |
+| **A11** | Une colonne `make_set_if` arrive du SDK comme une liste (ou son texte JSON) | la carte de l'opération 1 (son `AuditCommand`) ; `glorfindel rules check --live` | rien | une autre forme : le lecteur dit « aucun enregistrement » sur chaque ligne — le corriger |
+| **A12** | Le volume est celui de l'estimation : ~6 lignes et ~3 Ko facturés par exécution | Q3 à 24 h, puis à 7 jours, rapporté au nombre d'événements de Q2 | rien | au-delà : une transformation de la DCR qui ne garde de `local6` que SYSCALL et EXECVE (le journal de la VM garde le reste), ou les règles d'audit restreintes — à décider avec Jonathan |
+| **A13** | Le bruit reste rare : les scripts du motd à la connexion n'exécutent rien de la liste ; une mise à jour de paquets fait quelques cartes (ses scripts de maintenance touchent `/etc/systemd/system`, `useradd --system`, `setcap`…, sous l'auid de l'administrateur) ; la routine de bree en fait une toutes les 6 h (`journalctl --vacuum` : la catégorie `logs`, comme sa carte d'ADM1) | opérations 1 et 5, les cartes sur 24 h | rien | trop de cartes par mise à jour : en décider avec Jonathan — jamais un écart par le nom du programme parent, qu'un intrus choisirait (`dpkg -i` d'un paquet à lui) |
+
+**Le retour en arrière** : `auditd_enabled = false` (ou la ligne retirée), puis `make
+celebrimbor-auditd-plan` — il doit montrer `2 to destroy` (les extensions) et `1 to change` (la DCR
+sans `local6`) — et `make celebrimbor-auditd-up YES=1`. Supprimer l'extension ne défait rien sur la VM :
+auditd, ses règles et le greffon restent, leurs lignes ne sont plus collectées. Pour les retirer, sur
+chaque VM : `sudo rm /etc/audit/rules.d/50-eregion-aud1.rules`, `sudo sed -i 's/^active = yes/active =
+no/' /etc/audit/plugins.d/syslog.conf`, `sudo augenrules --load`, `sudo service auditd restart` (ou
+`sudo apt-get purge -y auditd audispd-plugins`). Les lignes déjà ingérées restent jusqu'à la fin de la
+rétention (30 jours).
+
+---
+
 ## Coûts réels (West Europe)
 
 - **Infra existante** : LLM API uniquement (Anthropic défaut), <$2/mois (~$0.05–0.10 par run)
 - **Infra Celebrimbor (Terraform)** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Jetable — `make celebrimbor-stop` pour pauser sans détruire. `make celebrimbor-up` montre le plan et demande « yes » ; `YES=1` l'applique sans le relire (SEC6, comme les autres cibles Terraform). ⚠️ **`celebrimbor-down` est GARDÉ** (suite incident 2026-06-25 où un `down` non scopé a emporté tout le baseline) : il est **symétrique de `up`** et **protège le baseline**. `make celebrimbor-down TOPO=multinic` → destruction **scopée** d'une topo (via `-target` sur son RG), baseline intact. `make celebrimbor-down` **sans arg refuse** et exige `CONFIRM=<instance>` pour un teardown total (baseline inclus). Retirer une topo proprement = `enabled: false` dans `config.yaml` + `make celebrimbor-up`. Convention : chaque topo définit `azurerm_resource_group.<topo>` (count) = la cible `-target`.
 - **Journaux d'activité et d'Entra ID au banc (ID1)**, s'ils sont activés : `AzureActivity` gratuite ; `AuditLogs` et `AADServicePrincipalSignInLogs` à 2,99 USD le Go en West Europe au-delà des 5 Go gratuits du mois — estimés à moins de 2 USD par mois sur le banc, à mesurer (« Les journaux d'activité et d'Entra ID au banc », ci-dessus).
+- **auditd au banc (AUD1)**, s'il est activé : les lignes d'auditd dans `Syslog` (local6), 2,99 USD le Go
+  en West Europe au-delà des 5 Go gratuits du mois — estimées à moins de 1 USD par mois sur le banc
+  (~3 Ko par exécution d'un humain en root), à mesurer (« auditd au banc (AUD1) », ci-dessus).
 - **Chaos Studio (G0)** : facturé à l'usage des expériences (une panne de 5 min sur une VM). Feu vert du 15/10 sur une estimation de 11 à 42 € par mois pour 2 à 4 campagnes (ROADMAP) ; le coût réel est à relever sur la facture après le premier run.

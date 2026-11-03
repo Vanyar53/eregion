@@ -1,5 +1,6 @@
-"""An Annatar run's report: ``runs/<run_id>.json``, the run format shared with Gothmog
-(``eregion_core/run_report.py``, C1). Here, only how Annatar prints it."""
+"""An Annatar run's report: ``runs/annatar/<run_id>.json`` — its own directory (SEC18,
+eregion_core/runs_layout.py) —, the run format shared with Gothmog (``eregion_core/run_report.py``,
+C1). Here, only how Annatar prints it."""
 from __future__ import annotations
 
 import json
@@ -7,10 +8,10 @@ from pathlib import Path
 
 from rich.console import Console
 
-from eregion_core import run_report
+from eregion_core import run_report, runs_layout
 
 console = Console()
-RUNS_DIR = Path("runs")
+RUNS_DIR = runs_layout.dir_of(runs_layout.ANNATAR)
 
 
 class RunReport(run_report.RunReport):

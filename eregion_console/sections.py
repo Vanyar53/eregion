@@ -49,20 +49,23 @@ def _json(path: Path):
 def found_runs(runs: Path) -> dict[str, dict[str, int]]:
     """What this host holds of each injector: exercise windows (a purged window's tombstone
     names no injector and counts for none), run reports (Gothmog's say so in
-    ``metrics.injector``; any other is Annatar's) and campaigns (Annatar's)."""
-    from eregion_core.exercise import exercises_dir
+    ``metrics.injector``; any other is Annatar's) and campaigns (Annatar's) — each read from
+    its writer's directory only (SEC18, eregion_core/runs_layout.py)."""
+    from eregion_core import runs_layout
+    from eregion_core.exercise import windows_dirs
     found = {i: {"windows": 0, "reports": 0, "campaigns": 0} for i in INJECTORS}
-    directory = exercises_dir(runs)
-    for path in directory.glob("*.json") if directory.is_dir() else []:
+    for path in [p for d in windows_dirs(runs) if d.is_dir() for p in d.glob("*.json")]:
         w = _json(path)
         if isinstance(w, dict) and w.get("injector") in found:
             found[w["injector"]]["windows"] += 1
-    for path in [*runs.glob("*.json"), *runs.glob("campaigns/*/runs/*.json")]:
+    for path in runs_layout.run_reports(runs).values():
         r = _json(path)
-        if not isinstance(r, dict) or not isinstance(r.get("metrics"), dict):
+        if not isinstance(r, dict) or not isinstance(r.get("metrics"), dict) \
+                or runs_layout.report_refusal(path, r):
             continue
         found["gothmog" if r["metrics"].get("injector") == "gothmog" else "annatar"]["reports"] += 1
-    found["annatar"]["campaigns"] = sum(1 for _ in runs.glob("campaigns/*/manifest.json"))
+    found["annatar"]["campaigns"] = sum(1 for c in runs_layout.campaign_dirs(runs)
+                                        if (c / "manifest.json").is_file())
     return found
 
 

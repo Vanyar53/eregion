@@ -28,7 +28,7 @@ def test_a_window_labels_its_target_only_and_ignores_case():
 
 def test_a_closed_window_keeps_a_grace_for_the_detection_lag_then_ends():
     open_window("r1", injector="annatar", kind="technique", experiment="T1486", targets=[VM], now=T0)
-    close_window("r1", now=_at(10))
+    close_window("r1", injector="annatar", now=_at(10))
     grace = GRACE_AFTER_S / 60
     assert source_of(VM, _at(10 + grace - 1)) == ("exercise", "r1")
     assert source_of(VM, _at(10 + grace + 1)) == ("real", "")

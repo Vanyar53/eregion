@@ -48,12 +48,16 @@ def test_bl1_targets_check_what_reaches_the_shell():
     under the image without « .. »."""
     phony = MAKEFILE.split(".PHONY:", 1)[1].split("\n\n", 1)[0]
     lines = MAKEFILE.splitlines()
+    # SEC18: the campaign in its writer's directory — Annatar's here (or the watch's copy), the
+    # watch's on H0.
+    where = {"campaign-containment": "analysis.containment $(or $(dir $(CAMPAIGN_DIR)),runs/annatar/campaigns/$(CAMPAIGN))",
+             "glorfindel-host-containment": "analysis.containment runs/glorfindel/campaigns/$(CAMPAIGN)"}
     for target in ("campaign-containment", "glorfindel-host-containment"):
         start = next(i for i, ln in enumerate(lines) if ln.split(" ")[0] == f"{target}:")
         recipe = "\n".join(ln for ln in lines[start + 1:start + 4] if ln.startswith("\t"))
         assert target in phony
         assert '*[!A-Za-z0-9._,-]*) echo "CAMPAIGN ou FAULT_RUNS invalide"; exit 1' in recipe
-        assert "analysis.containment runs/campaigns/$(CAMPAIGN)" in recipe
+        assert where[target] in recipe
     plan = _recipe("orodruin-campaign-plan")
     check = next(i for i, ln in enumerate(plan) if "CAMPAIGN_DECLARED invalide" in ln)
     run = next(i for i, ln in enumerate(plan) if "annatar campaign plan" in ln)

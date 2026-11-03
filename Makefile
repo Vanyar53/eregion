@@ -4,7 +4,7 @@ PIP    := .venv/bin/pip
 IMAGE_ANNATAR   := eregion-annatar
 IMAGE_GLORFINDEL := eregion-glorfindel
 SCENARIO ?= annatar/scenarios/azure/ransomware-vm.yaml
-SIGNALS  ?= $(shell ls runs/*_signals.jsonl 2>/dev/null | tail -1)
+SIGNALS  ?= $(shell ls runs/annatar/*_signals.jsonl 2>/dev/null | tail -1)
 
 # ── Celebrimbor (infra de test modulaire, jetable) ─────────────────────────
 # TF = module unifié infra/terraform/. INSTANCE = workspace Terraform (stack
@@ -64,20 +64,31 @@ ANNATAR_STATE := \
 # Only that directory (SEC3): the rest of ~/.glorfindel — escalations, isolation state, the
 # client's rules — stays out of the attacker's reach. Mounted once (ANNATAR_STATE no longer
 # mounts it too: annatar-shell had the same mount point twice).
+# SEC18 (N-05) : runs/ un répertoire par écrivain (eregion_core/runs_layout.py) — Annatar écrit
+# runs/annatar et runs/orodruin (le journal, le verrou), ne monte ni runs/glorfindel ni runs/console ;
+# runs/verdicts en lecture seule : le verdict de ses runs, sans canal retour du stockage.
 ANNATAR_VOLS := \
 	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \
 	-v $(PWD)/scripts:/app/scripts \
-	-v $(PWD)/runs:/app/runs \
+	-v $(PWD)/runs/annatar:/app/runs/annatar \
+	-v $(PWD)/runs/orodruin:/app/runs/orodruin \
+	-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \
 	$(if $(wildcard $(HOME)/.glorfindel/injectors),-v $(HOME)/.glorfindel/injectors:/root/.glorfindel:ro,)
 
+# Glorfindel à la main (la watch, la CLI) : son répertoire et celui des gestes de l'opérateur en
+# écriture, ceux des injecteurs en lecture seule (SEC18).
 GLORFINDEL_VOLS := \
-	-v $(PWD)/runs:/app/runs \
+	-v $(PWD)/runs/glorfindel:/app/runs/glorfindel \
+	-v $(PWD)/runs/console:/app/runs/console \
+	-v $(PWD)/runs/verdicts:/app/runs/verdicts \
+	-v $(PWD)/runs/annatar:/app/runs/annatar:ro \
+	-v $(PWD)/runs/gothmog:/app/runs/gothmog:ro \
 	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules:ro \
 	$(if $(wildcard $(PWD)/glorfindel-config.yaml),-v $(PWD)/glorfindel-config.yaml:/app/glorfindel-config.yaml,)
 
 # The images' CMD is the CLI itself: arguments REPLACE it, so the binary is named here
 # (`make annatar-run` ran `run` as a command and failed).
-DOCKER_ANNATAR = $(ANNATAR_AZURE_PICK) docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
+DOCKER_ANNATAR = $(RUNS_DIRS) && $(ANNATAR_AZURE_PICK) docker run --rm $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(IMAGE_ANNATAR) annatar
 GLORFINDEL_ENV := \
 	-e AZURE_WORKSPACE_ID \
 	-e AZURE_VM_RESOURCE_ID \
@@ -97,11 +108,11 @@ GLORFINDEL_ENV := \
 	-e GLORFINDEL_INCIDENT_TTL_S \
 	-e ORT_LOGGING_LEVEL_DEFAULT=3
 
-DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
+DOCKER_GLORFINDEL = $(RUNS_DIRS) && $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 	$(GLORFINDEL_ENV) \
 	$(IMAGE_GLORFINDEL) glorfindel
 
-.PHONY: help build build-annatar build-glorfindel fix-state-ownership check-azure-env \
+.PHONY: help build build-annatar build-glorfindel fix-state-ownership check-azure-env runs-migrate runs-survey \
 	annatar-run annatar-dry-run annatar-validate annatar-list \
 	glorfindel-respond glorfindel-dry-run glorfindel-watch \
 	glorfindel-release glorfindel-revert glorfindel-list \
@@ -110,7 +121,7 @@ DOCKER_GLORFINDEL = $(GLORFINDEL_AZURE_PICK) docker run --rm $(GLORFINDEL_AZURE_
 	annatar-shell glorfindel-shell \
 	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit providers-lock celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
-	celebrimbor-logs-plan celebrimbor-logs-up \
+	celebrimbor-logs-plan celebrimbor-logs-up celebrimbor-auditd-plan celebrimbor-auditd-up \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
@@ -192,6 +203,8 @@ help:
 	@echo "  make celebrimbor-output [INSTANCE=]         Fragment glorfindel-config.yaml généré"
 	@echo "  make celebrimbor-logs-plan                  Plan des seuls paramètres de diagnostic (abonnement, tenant : ID1)"
 	@echo "  make celebrimbor-logs-up [YES=1]            Les applique (activity_log_enabled / entra_logs_enabled du tfvars)"
+	@echo "  make celebrimbor-auditd-plan [INSTANCE=]    Plan d'auditd seul : l'extension des VM et la DCR (AUD1)"
+	@echo "  make celebrimbor-auditd-up [YES=1]          L'applique (auditd_enabled du tfvars ; false : le retire)"
 	@echo ""
 	@echo "Glorfindel hébergé (H0 : pré-observation, état Terraform séparé)"
 	@echo "  make glorfindel-host-plan [OPERATOR_CIDR=]   Plan (lecture seule)"
@@ -280,6 +293,25 @@ build-annatar:
 build-glorfindel:
 	docker build $(DOCKER_UIDGID) -f glorfindel/Dockerfile -t $(IMAGE_GLORFINDEL) .
 
+# SEC18 (N-05) : runs/ un répertoire par écrivain. Créés au nom de l'opérateur avant qu'un conteneur
+# les monte (laissés à docker, ils seraient à root) ; runs-migrate déplace l'ancienne disposition (des
+# fichiers à plat dans runs/) vers le répertoire de leur écrivain, laisse et dit ce qui ne se
+# reconnaît pas, n'efface rien — sur l'hôte, car aucun service ne monte runs/ entier.
+# A writer's directory that is a link (or a file) is never made nor mounted: docker would resolve it on
+# the host, and its writer would write where it points.
+RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \
+	{ test ! -L "$$d" && { test ! -e "$$d" || test -d "$$d"; }; } \
+	|| { echo "✗ $$d n'est pas un répertoire (un lien ?) : rien n'est monté — le retirer à la main (SEC18)" >&2; exit 1; }; \
+	mkdir -p "$$d"; done
+# The services stopped first when the former layout holds something: a file they would write meanwhile
+# (manual_actions.jsonl) would meet its moved twin and stay aside.
+runs-migrate:
+	@if python3 -m eregion_core.runs_layout pending runs; then docker compose stop watch war-room bot 2>/dev/null || true; fi
+	python3 -m eregion_core.runs_layout migrate runs
+
+runs-survey:
+	python3 -m eregion_core.runs_layout survey runs
+
 # One-time reclaim of state files written by the OLD root container (pre-non-root
 # image). New images write as the operator, so this is only needed once after upgrade.
 fix-state-ownership:
@@ -321,19 +353,22 @@ llm-smoke:
 #   make llm-compare MODELS=ollama/gemma4,ollama/qwen3.5 RUNS=5
 MODELS ?= ollama/gemma4,ollama/qwen3.5,ollama/qwen3,ollama/gemma3,ollama/qwen2.5,ollama/command-r7b
 # IA0 — the campaign report: facts from the files, claims by the analysis model, each checked
-# against the runs it cites. Writes runs/campaigns/<id>/report.md. Needs the model's API key.
+# against the runs it cites. Writes runs/glorfindel/campaigns/<id>/report.md (SEC18: the watch's
+# directory, whoever wrote the campaign). Needs the model's API key.
+CAMPAIGN_DIR = $(firstword $(wildcard runs/glorfindel/campaigns/$(CAMPAIGN)/manifest.json runs/annatar/campaigns/$(CAMPAIGN)/manifest.json))
 campaign-report:
-	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (ls runs/campaigns)"; exit 1; }
-	$(PYTHON) -m analysis.campaign_report runs/campaigns/$(CAMPAIGN)
+	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (ls runs/annatar/campaigns runs/glorfindel/campaigns)"; exit 1; }
+	@test -n "$(CAMPAIGN_DIR)" || { echo "campagne $(CAMPAIGN) introuvable sous runs/glorfindel/campaigns ni runs/annatar/campaigns"; exit 1; }
+	$(PYTHON) -m analysis.campaign_report $(dir $(CAMPAIGN_DIR))
 
 # BL1 — le temps pour contenir et la part contenue seule d'une campagne, calculés depuis ses fichiers
 # (analysis/containment.py) ; aucun modèle, rien d'écrit. FAULT_RUNS=<run Gothmog>[,<run>] : une
 # panne à rattacher en plus de celles qui la chevauchent sur une de ses cibles ; JSON=1 : en JSON.
 BL1_COMMA := ,
 campaign-containment:
-	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (ls runs/campaigns)"; exit 1; }
+	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (ls runs/annatar/campaigns runs/glorfindel/campaigns)"; exit 1; }
 	@case "$(CAMPAIGN)$(FAULT_RUNS)" in *[!A-Za-z0-9._,-]*) echo "CAMPAIGN ou FAULT_RUNS invalide"; exit 1;; esac
-	$(PYTHON) -m analysis.containment runs/campaigns/$(CAMPAIGN)$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)
+	$(PYTHON) -m analysis.containment $(or $(dir $(CAMPAIGN_DIR)),runs/annatar/campaigns/$(CAMPAIGN))$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)
 
 # G1 (#76) — le taux des pannes prises pour une attaque, sur toutes les pannes de Gothmog des DAYS
 # derniers jours (analysis/fault_rate.py) ; aucun modèle, rien d'écrit. JSON=1 : en JSON. Sur l'hôte
@@ -402,8 +437,9 @@ check-azure-env:
 	  elif [ -z "$$id" ]; then echo "ℹ $$s : aucune paire $${v}_AZURE_CLIENT_* — ce service démarre sans principal de service (l'identité managée de la VM s'il y en a une, sinon aucune) ; AZURE_CLIENT_* n'est jamais un repli (SEC11)."; fi; \
 	done
 
-glorfindel-start: check-azure-env build-glorfindel
+glorfindel-start: check-azure-env build-glorfindel runs-migrate
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
+	$(RUNS_DIRS)
 	docker compose up -d
 	@echo ""
 	@$(MAKE) --no-print-directory console-url || true
@@ -415,8 +451,9 @@ glorfindel-start: check-azure-env build-glorfindel
 glorfindel-stop:
 	docker compose down
 
-glorfindel-restart: check-azure-env build-glorfindel
+glorfindel-restart: check-azure-env build-glorfindel runs-migrate
 	mkdir -p $(HOME)/.glorfindel $(HOME)/.glorfindel/injectors $(HOME)/.cache/chroma $(HOME)/.eregion/analysis $(HOME)/.eregion/console $(HOME)/.eregion/console/requests runs
+	$(RUNS_DIRS)
 	docker compose up -d --build --force-recreate
 	@$(MAKE) --no-print-directory console-url || true
 
@@ -463,6 +500,7 @@ annatar-shell: build-annatar
 	@mkdir -p $(HOME)/.annatar
 	@touch $(HOME)/.annatar/.bashrc
 	@grep -q "alias ar=" $(HOME)/.annatar/.bashrc || echo "alias ar='annatar'" >> $(HOME)/.annatar/.bashrc
+	@$(RUNS_DIRS)
 	@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
 		$(IMAGE_ANNATAR) bash --init-file /root/.annatar/.bashrc
 
@@ -470,6 +508,7 @@ glorfindel-shell: build-glorfindel
 	@mkdir -p $(HOME)/.glorfindel
 	@touch $(HOME)/.glorfindel/.bashrc
 	@grep -q "alias gf=" $(HOME)/.glorfindel/.bashrc || echo "alias gf='glorfindel'" >> $(HOME)/.glorfindel/.bashrc
+	@$(RUNS_DIRS)
 	@$(GLORFINDEL_AZURE_PICK) docker run --rm -it $(GLORFINDEL_AZURE_ENV) $(GLORFINDEL_VOLS) $(GLORFINDEL_STATE) \
 		$(GLORFINDEL_ENV) \
 		$(IMAGE_GLORFINDEL) bash --init-file /root/.glorfindel/.bashrc
@@ -580,6 +619,26 @@ celebrimbor-logs-plan celebrimbor-logs-up:
 	@$(TF) init
 	@$(TF) workspace select default
 	@$(TF) $(if $(filter celebrimbor-logs-up,$@),apply$(if $(YES), -auto-approve),plan) $(LOGS_TARGETS)
+
+# AUD1 : auditd sur les VM du banc et local6 dans la DCR, seuls — plan et apply ciblés sur
+# l'extension d'auditd et la DCR, rien d'autre du banc (une dérive en attente sur une VM ou le
+# workspace, leurs dépendances, y paraîtrait : alors s'arrêter, et la traiter par
+# celebrimbor-plan). Ce qu'ils posent vient de terraform.tfvars (auditd_enabled : persistant),
+# jamais d'un -var d'ici. Remis à false, le même `celebrimbor-auditd-up` retire l'extension et
+# local6 (auditd reste sur la VM : docs/operations.md, « auditd au banc (AUD1) »).
+#   make celebrimbor-auditd-plan               # lecture seule
+#   make celebrimbor-auditd-up [YES=1]         # YES=1 : sans confirmation, plan relu avant
+AUDITD_TARGETS = -target=azurerm_virtual_machine_extension.auditd -target=azurerm_monitor_data_collection_rule.celebrimbor
+
+celebrimbor-auditd-plan:
+	@$(TF) init
+	@$(TF) workspace select $(INSTANCE)
+	@$(TF) plan $(AUDITD_TARGETS)
+
+celebrimbor-auditd-up:
+	@$(TF) init
+	@$(TF) workspace select $(INSTANCE)
+	@$(TF) apply$(if $(YES), -auto-approve) $(AUDITD_TARGETS)
 
 # H0 : la charge réelle de bree (petit site + routine d'admin), par Run Command —
 # jamais par le custom_data (le changer remplace la VM). Idempotent.
@@ -778,7 +837,7 @@ glorfindel-host-report: glorfindel-host-known
 glorfindel-host-campaign-report: glorfindel-host-known
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
 	@case "$(CAMPAIGN)" in *[!A-Za-z0-9._-]*) echo "CAMPAIGN invalide : $(CAMPAIGN)"; exit 1;; esac
-	$(HOST_SSH) 'cat eregion/runs/campaigns/$(CAMPAIGN)/report.md 2>/dev/null || { cat eregion/runs/campaigns/$(CAMPAIGN)/report.error 2>/dev/null; echo "pas encore de rapport pour $(CAMPAIGN)"; exit 1; }'
+	$(HOST_SSH) 'cat eregion/runs/glorfindel/campaigns/$(CAMPAIGN)/report.md 2>/dev/null || { cat eregion/runs/glorfindel/campaigns/$(CAMPAIGN)/report.error 2>/dev/null; echo "pas encore de rapport pour $(CAMPAIGN)"; exit 1; }'
 
 # BL1 (#280) : le temps pour contenir et la part contenue seule d'une campagne, calculés sur H0
 # depuis ses fichiers (analysis/containment.py) — lecture seule, aucun modèle. FAULT_RUNS= : une
@@ -786,7 +845,7 @@ glorfindel-host-campaign-report: glorfindel-host-known
 glorfindel-host-containment: glorfindel-host-known
 	@test -n "$(CAMPAIGN)" || { echo "CAMPAIGN=<id> requis (rendu par orodruin-campaign-plan)"; exit 1; }
 	@case "$(CAMPAIGN)$(FAULT_RUNS)" in *[!A-Za-z0-9._,-]*) echo "CAMPAIGN ou FAULT_RUNS invalide"; exit 1;; esac
-	$(HOST_SSH) 'docker exec eregion-watch python -m analysis.containment runs/campaigns/$(CAMPAIGN)$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)'
+	$(HOST_SSH) 'docker exec eregion-watch python -m analysis.containment runs/glorfindel/campaigns/$(CAMPAIGN)$(foreach r,$(subst $(BL1_COMMA), ,$(FAULT_RUNS)), --fault-run $(r))$(if $(JSON), --json)'
 
 # G1 (#76) : le même taux, sur H0, où sont les décisions de la watch — lecture seule, aucun modèle.
 glorfindel-host-fault-rate: glorfindel-host-known
@@ -880,8 +939,18 @@ ORO_IMAGE     := eregion-annatar:orodruin
 # l'abonnement, le plafond et la clé du modèle. V-34 (SEC14) : durci comme le compose — la racine
 # en lecture seule, /tmp en tmpfs, aucune capacité, aucun gain de privilège ; il n'écrit que dans
 # ~/runs. Tout docker run d'un injecteur sur Orodruin passe par ORO_HARDEN.
+# SEC18 (N-05) : ~/runs un répertoire par écrivain — Annatar écrit ~/runs/annatar, Gothmog
+# ~/runs/gothmog, tous deux ~/runs/orodruin (le journal avant chaque appel, le verrou « un run à la
+# fois », les statuts des demandes) ; le lanceur d'une demande, qui lance les deux, les trois. Aucun
+# ne monte ~/runs entier, sauf la migration de l'ancienne disposition (ORO_MIGRATE, à orodruin-push).
+# Les répertoires créés au nom de l'utilisateur de la VM avant chaque docker run (sinon à root).
 ORO_HARDEN     = --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true
-ORO_RUN        = docker run --rm $(ORO_HARDEN) --env-file orodruin.env -v $$HOME/runs:/app/runs $(ORO_IMAGE)
+ORO_DIRS       = for d in $$HOME/runs/annatar $$HOME/runs/gothmog $$HOME/runs/orodruin; do { test ! -L "$$d" && { test ! -e "$$d" || test -d "$$d"; }; } || { echo "✗ $$d : pas un répertoire (un lien ?), rien ne part (SEC18)" >&2; exit 1; }; mkdir -p "$$d"; done &&
+ORO_MOUNT      = -v $$HOME/runs/$(1):/app/runs/$(1)
+ORO_RUN        = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,annatar) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)
+ORO_RUN_GOTHMOG = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,gothmog) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)
+ORO_RUN_CONTRACT = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)
+ORO_MIGRATE    = docker run --rm $(ORO_HARDEN) -v $$HOME/runs:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate /app/runs --orodruin
 # PRINCIPAL / VM_ID : pour un kill même si l'état Terraform est illisible.
 ORO_PRINCIPAL  = $(or $(PRINCIPAL),$(shell $(ORO_TF) output -no-color -raw principal_id 2>/dev/null))
 ORO_VM_ID      = $(or $(VM_ID),$(shell $(ORO_TF) output -no-color -raw vm_id 2>/dev/null))
@@ -965,6 +1034,7 @@ orodruin-push: orodruin-known
 	   echo "✗ l'image arrivée sur Orodruin n'est pas celle vérifiée : retirée, eregion-annatar:orodruin n'a pas changé" >&2; \
 	   exit 1; fi
 	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
+	$(ORO_SSH) '$(ORO_MIGRATE)'
 
 # Le chemin de développement, dit comme tel : l'image construite sur ce poste, jamais vérifiée —
 # pour essayer une branche sur Orodruin avant sa fusion. ~/.eregion-image le dit (« dev »).
@@ -975,9 +1045,10 @@ orodruin-push-dev: orodruin-known
 	docker save $(ORO_IMAGE) | gzip | $(ORO_SSH) 'gunzip | docker load'
 	echo "dev $$(git rev-parse HEAD)" | $(ORO_SSH) 'cat > .eregion-image'
 	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
+	$(ORO_SSH) '$(ORO_MIGRATE)'
 
 orodruin-check: orodruin-known
-	$(ORO_SSH) '$(ORO_RUN) python -m eregion_core.orodruin'
+	$(ORO_SSH) '$(ORO_RUN_CONTRACT) python -m eregion_core.orodruin'
 
 # @ : la commande porte l'identifiant d'abonnement, on ne la répète pas à l'écran.
 orodruin-stop:
@@ -1013,7 +1084,7 @@ orodruin-kill:
 REQUEST ?=
 unexport REQUEST
 REQUEST_FROM  ?= h0
-ORO_RUN_REQUEST = docker run --rm $(ORO_HARDEN) --env-file orodruin.env -v $$HOME/runs:/app/runs -v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)
+ORO_RUN_REQUEST = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,annatar) $(call ORO_MOUNT,gothmog) $(call ORO_MOUNT,orodruin) -v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)
 orodruin-exercise: export EREGION_REQUEST_ID = $(value REQUEST)
 orodruin-exercise: export EREGION_DRILL = $(value DRILL)
 orodruin-exercise: export EREGION_DRILL_TARGETS = $(value TARGETS)
@@ -1080,19 +1151,19 @@ FAULT ?= vm-shutdown
 ORO_WITHOUT    = $(if $(filter 1 yes true,$(WITHOUT_GLORFINDEL)), --without-glorfindel)
 
 gothmog-preflight: orodruin-known
-	$(ORO_SSH) '$(ORO_RUN) gothmog preflight $(FAULT)$(ORO_WITHOUT)'
+	$(ORO_SSH) '$(ORO_RUN_GOTHMOG) gothmog preflight $(FAULT)$(ORO_WITHOUT)'
 
 gothmog-run: orodruin-known
-	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'
+	ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) '$(ORO_RUN_GOTHMOG) gothmog run $(FAULT) --yes$(ORO_WITHOUT)'
 
 # ── Campagne (R1 + IA0) — planifier puis lancer depuis Orodruin ───────────────
 # Même image, même identité qu'Annatar/Gothmog sur Orodruin. La campagne joue l'atomic
-# (T1136.001) avec d'autres techniques du catalogue ; le manifeste se pose dans ~/runs
+# (T1136.001) avec d'autres techniques du catalogue ; le manifeste se pose dans ~/runs/annatar
 # (bind-monté). Le rapport (IA0) s'écrit seul sur H0 (#167 — code, tests et mutants M126–M149, M159–M169, M180–M186 ;
 # rien de mesuré sur le banc) : à la fin, la campagne publie son
 # manifeste et les rapports de ses runs sur le canal des fenêtres (EREGION_EXERCISE_CHANNEL,
 # même conteneur, aucun droit de plus) ; la watch de H0 les tire et écrit
-# runs/campaigns/<id>/report.md, avec les décisions de Glorfindel — make
+# runs/glorfindel/campaigns/<id>/report.md, avec les décisions de Glorfindel — make
 # glorfindel-host-campaign-report CAMPAIGN=<id> pour le lire (docs/analysis.md).
 # Deux temps : `campaign plan` rend un id, `campaign run <id>` le joue (la watch sur H0 répond
 # selon le mode de chaque VM : gondolin et bree en non_disruptive, BL1c). ServerAliveInterval : une campagne dure longtemps (plusieurs
@@ -1184,6 +1255,7 @@ team-check:
 
 team-init: team-check
 	mkdir -p "$(TEAM_DIR)/runs"
+	python3 -m eregion_core.runs_layout migrate "$(TEAM_DIR)/runs"
 	@[ -f "$(TEAM_DIR)/team.env" ] || { cp team.env.example "$(TEAM_DIR)/team.env" && chmod 600 "$(TEAM_DIR)/team.env"; }
 	@[ -f "$(TEAM_DIR)/glorfindel-config.yaml" ] || cp glorfindel-config.yaml.example "$(TEAM_DIR)/glorfindel-config.yaml"
 	@echo "  À remplir : $(TEAM_DIR)/team.env (abonnement, principal, port) et glorfindel-config.yaml"
@@ -1196,6 +1268,8 @@ team-start: team-check build-glorfindel
 	@grep -qE '^EREGION_CONSOLE_PORT=[0-9]+' "$(TEAM_DIR)/team.env" \
 	  || { echo "✗ EREGION_CONSOLE_PORT absent de team.env : un port par équipe (7007 : make glorfindel-start)"; exit 1; }
 	mkdir -p "$(TEAM_DIR)/runs" "$(TEAM_DIR)/.glorfindel" "$(TEAM_DIR)/.cache/chroma" "$(TEAM_DIR)/.eregion/analysis" "$(TEAM_DIR)/.eregion/console/requests"
+	@if python3 -m eregion_core.runs_layout pending "$(TEAM_DIR)/runs"; then $(TEAM_COMPOSE) --profile bot stop watch war-room bot 2>/dev/null || true; fi
+	python3 -m eregion_core.runs_layout migrate "$(TEAM_DIR)/runs"
 	$(TEAM_COMPOSE)$(if $(BOT), --profile bot) up -d watch war-room$(if $(BOT), bot)
 	@echo "  Console de $(TEAM) → http://localhost:$$(sed -n 's/^EREGION_CONSOLE_PORT=//p' "$(TEAM_DIR)/team.env" | tail -1)"
 

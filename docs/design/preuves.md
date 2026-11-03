@@ -94,7 +94,7 @@ Les propriétés, vérifiées après chaque étape :
 | I2 | la configuration du client est ce qu'il a écrit en dernier ; une carte porte son NSG ou celui de quarantaine, jamais aucun ni un autre ; et, par auteur (journal des écritures de l'API), Glorfindel n'écrit que ce qui est à lui |
 | I3 | aucun succès sur un mensonge : chaque vérification qui dit vrai est vraie, à chaque étape |
 | I4 | une opération sur une VM ne change rien pour une autre, homonymes compris — et ne supprime jamais l'ancienne isolation d'une autre VM, même là où aucun flux ne le dit (I4S, lu dans le journal du test) |
-| I5 | la réaffirmation n'ouvre jamais rien, et n'écrit rien en `human_only` |
+| I5 | la réaffirmation n'ouvre jamais rien, et n'écrit rien en `human_only` ; avec un mode par VM, rien ne se ferme pour une VM en `human_only` que ce qu'elle partage avec une VM qui écrit — une quarantaine, ou les flux de l'attaquant que le seul périmètre reposé ferme, derrière son sous-réseau ou porté comme NSG de carte (L1Qs, I5S) |
 | I6 | une VM, un fichier d'état |
 | I7 | depuis tout état atteint, la levée ramène chaque VM à sa conception, ou la garde en quarantaine en disant ce qui manque |
 | I8 | ce qu'une opération laisse sur Azure est dans l'état |
@@ -3285,7 +3285,8 @@ posait le NSG d'un subnet sur la carte d'une VM d'un autre subnet, et la réaffi
 sur ce NSG coupant la sortie d'api, `human_only`. Le code fait ce qu'Azure fait (le NSG gouverne aussi cette
 carte) ; c'est l'exemption de l'oracle qui lit « partagé avec une VM qui écrit » comme « derrière ce subnet »
 seulement (`_shared_with_writers`). L'étendre aurait relâché I5 (A0) : la règle ne pose plus ce monde, que nulle
-autre ne tire, et le point est rendu à l'Orchestre. Restreinte, sur `main` 19d802d, elle fait tomber la graine 7 à
+autre ne tire, et le point est rendu à l'Orchestre (repris par I5S, ci-dessous, sur décision de Jonathan : l'oracle
+élargi et borné, la restriction levée). Restreinte, sur `main` 19d802d, elle fait tomber la graine 7 à
 500 (« I4: a perimeter block on …/web cut off …/api », SSH depuis l'attaquant, le NSG de web donné à api sur le
 subnet data) ; à 60, graines 1..10, aucune. **Trois séquences figées**, rouges sur `main` (`test_invariant_regressions.py`) :
 `test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in` (les règles d'avant I4P
@@ -3347,6 +3348,63 @@ M3350–M3359 : 10/10 par leurs tests à chaque tour (deux tours, M3350, M3352, 
 après la relecture) ; M1635, M3270–M3275 : 7/7 (deux tours) ; les quarante voisins sur `blocks.py`, `perimeter.py`
 et `turned.py` (RB1, I3P, I4A–I4D, I5Q, I5R, U7D, SEC2) : 40/40, un tour. `pytest` complet : 6 073 réussis, 7 sautés, 2 `xfail` (de L1Qs) ; `ruff`
 propre ; `scripts/mutant_anchors.py` : 2 396 mutants, sans faute.
+
+**I5S (03/11, #477) : l'oracle I5 par VM reconnaît un NSG de périmètre porté comme NSG de carte — élargi, borné,
+et la branche du sous-réseau durcie.** Le point rendu par I4P. **La décision de Jonathan** (03/11, option a, au
+titre d'A0) : élargir l'oracle, avec des bornes. C'est le seul lot où un oracle s'élargit ; rien de Glorfindel n'est
+touché. **Le cas** : une VM en `human_only` porte, comme NSG de carte, le NSG de sous-réseau sur lequel une VM qui
+écrit (`non_disruptive`) tient son périmètre ; la réaffirmation repose ce périmètre et la VM en `human_only` perd
+elle aussi sa sortie vers l'attaquant — Azure applique la même règle au même objet NSG, associé au sous-réseau ou à
+la carte. Le code a raison ; l'oracle de L1Qs (`_shared_with_writers`) lisait « partagé avec une VM qui écrit » comme
+« derrière ce sous-réseau » seulement, et disait « I5: the reassertion acted on …/api in human_only » (la graine 7 à
+500, la règle d'I4P sans sa restriction).
+
+**Ce qui s'élargit.** `_shared_with_writers` rend, à côté de `perimeter` (les cartes derrière le NSG de sous-réseau
+d'un périmètre d'écrivain) et de `quarantine`, **`perimeter_nic`** : les cartes de la VM en `human_only` dont le
+**NSG de carte** est un NSG de périmètre d'un écrivain — lu avant la passe, les écrivains comme avant (ni
+`human_only`, ni verrou tenu). Un flux coupé d'une telle carte n'est admis (`_shut_shared`) que si **trois
+conditions** tiennent : (1) il va vers l'attaquant ; (2) sa carte est dans `perimeter_nic` ; (3) il est fermé par
+**les seules règles de périmètre que la passe a écrites** — le calcul d'I4P, sorti tel quel de
+`_cut_by_the_perimeter_alone` en `_closed_by_the_perimeter_alone` : le monde tel que la passe l'a trouvé
+(`world_before`), plus les écritures du journal du faux au nom de l'IP seule (`glorfindel-block-<ip>` et son
+`-out`), telles qu'elles sont maintenant. La condition (1) est impliquée par la (3) — une règle de périmètre ne
+ferme que les flux de l'attaquant — ; elle reste écrite, pour qui lit l'oracle.
+**Ce qui se durcit.** La branche du sous-réseau admettait tout flux de l'attaquant d'une carte derrière le
+périmètre d'un écrivain, quoi qui le ferme ; elle demande maintenant la même condition (3). Une autre règle que la
+passe écrit sur ce NSG — la règle de VM d'un écrivain sur une adresse reprise, ou toute autre — et qui coupe la VM
+en `human_only` de l'attaquant n'est plus excusée par le périmètre voisin.
+**Ce qui ne bouge pas.** Une carte qui porte un NSG de quarantaine : tout flux admis, comme avant. Aucune règle
+écrite ni retirée au nom d'une carte en `human_only`, les NSG de ses cartes inchangés (les deux contrôles de L1Qs).
+Ce qui s'ouvre reste dans le dessin, pour toutes. La forme forte d'I5 quand un seul mode vaut pour toutes les VM
+(`mixed` faux). `_cut_by_the_perimeter_alone` (I4) rend ce qu'il rendait : son calcul a seulement changé de place.
+
+**La règle d'I4P retrouve sa variante** : `promoted_beside_a_turned_block` pose de nouveau le NSG d'un sous-réseau
+sur la carte d'une VM d'un autre sous-réseau (le filtre `k not in subnet_nsgs` retiré). **La graine 7 à 500
+figée** (`test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared`, les trois règles telles
+qu'Hypothesis les a laissées) : web, sa carte nue, bloquée sur nsg-subnet ; sa règle entrante retournée, son adresse
+changée ; api créée sur le sous-réseau data, nsg-subnet pour NSG de carte, à 10.0.0.4 ; la promotion ; puis
+`turned_then_address_reused` et `turned_perimeter_left_out`, qui bloque web de rg-app2 sur le même sous-réseau,
+retire la paire et lance une passe à un mode par VM — api en `human_only`, web de rg-app2 écrivain : la paire
+reposée, la sortie d'api vers l'attaquant (443) se ferme, par elle seule. Rouge sur l'oracle
+étroit (`perimeter_nic` vide, mesuré), verte élargi. **Les contrôles de l'oracle** (`test_invariant_regressions.py`,
+six ; web bloquée sur son sous-réseau, Db--01 en `human_only`, db-nic-0 derrière nsg-subnet, db-nic-1 sur le
+sous-réseau data, nsg-subnet pour NSG de carte, la paire retirée) : la paire reposée, admise sur les deux cartes —
+et refusée sur db-nic-1 par l'oracle d'avant ; une autre règle écrite sur nsg-subnet qui coupe une seule carte de
+l'attaquant (son nom quelconque, ou celui d'une règle de VM de web), refusée derrière le sous-réseau comme sur la
+carte (quatre cas) ; la paire de l'IP écrite sur nsg-data, qu'aucun écrivain ne tient, db-nic-1 nue derrière lui,
+refusée. **Mutants M3386, M3390–M3392**, sur l'oracle lui-même, mesurés par ces contrôles et la séquence figée :
+chaque carte lue comme portant un périmètre d'écrivain (M3386, la condition 2) ; la condition 3 lâchée sur la carte
+(M3390) ou sur le sous-réseau (M3391 : l'oracle d'avant I5S) ; les règles de VM d'un écrivain comptées comme règles
+de périmètre (M3392, le calcul — qui borne aussi I4).
+**Mesures d'I5S** (la branche d'I4P, 09b4e4f, plus ce lot). Avant l'élargissement, la restriction levée : à 500, la
+graine 7 tombe sur I5 (« …/api in human_only », la sortie 443 d'api-nic vers l'attaquant). Après : invariants,
+`--hypothesis-seed=N`, à 60 séquences, N = 1..18, 73, 101, **20/20 vertes** ; à 500, N = 1, 3, 7, 8675, **4/4
+vertes**. **Le durcissement n'a rien fait tomber** : aucune graine ne montre une coupure d'une VM en `human_only`
+par autre chose que le seul périmètre reposé. Sur la graine 7 à 500 (`GLORFINDEL_INVARIANT_STATS`), la branche du
+sous-réseau, durcie, est atteinte 18 fois, la branche de la carte, élargie, 2 fois ; une passe à un mode par VM,
+336 fois. Mutants M3386, M3390–M3392 : **4/4 par leurs tests à chaque tour** (deux tours). `pytest` complet :
+6 120 réussis, 7 sautés, 2 `xfail` (de L1Qs) ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 444 mutants, sans
+faute.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

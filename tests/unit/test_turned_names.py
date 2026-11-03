@@ -145,16 +145,28 @@ def test_a_true_orphan_goes_whatever_allow_an_older_name_carries_behind_it(monke
     assert cut < _flows(f, batch), "batch still cut off"
 
 
+_BLOCK = "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"
+
+
 @pytest.mark.parametrize("name, to, back", [
-    ("glorfindel-iso-web-web-nic-8b70f2", "10.0.0.5", True),     # one address: a deny there cuts only it
+    # A block's deny on one address: put back, it cuts only the attacker off the VM there.
+    (_BLOCK, "10.0.0.5", True),
+    (f"{_BLOCK}-out", "10.0.0.5", True),
+    # A block's on every address: every NIC behind the NSG would lose the attacker's flows it opens.
+    (_BLOCK, "*", False),
+    # An isolation's deny on one address cuts EVERY flow of the VM holding it now (I4P): never put back.
+    ("glorfindel-iso-web-web-nic-8b70f2", "10.0.0.5", False),
+    ("glorfindel-iso-web-web-nic-8b70f2-out", "10.0.0.5", False),
     ("glorfindel-iso-web-web-nic-8b70f2", "*", False),           # every NIC behind the NSG would be cut
     (FIXED, "10.0.0.5", False),                                  # an older version's deny-all, never put back
     (f"{FIXED}-out", "*", False)])
 def test_a_turned_allow_kept_says_what_to_do_without_cutting_the_vm_it_opens(name, to, back):
     """I4G's review: « la remettre en refus », said of a rule on `*` or of an older version's
-    deny-all on an NSG shared since, would cut every NIC behind it — the VM it opens too. Said
-    then: take it off by hand if no longer wanted; if another VM needs that flow, recreate it
-    under a name of its own, then run again."""
+    deny-all on an NSG shared since, would cut every NIC behind it — the VM it opens too. I4P:
+    said of an isolation's rule aimed at another live NIC's address, it would cut every flow of
+    that VM — it is advised for a block's rule on one address only (it denies the attacker, no
+    more). Said otherwise: take it off by hand if no longer wanted; if another VM needs that flow,
+    recreate it under a name of its own, then run again."""
     from glorfindel.providers.azure.turned import _opens_text
     said = _opens_text(name, to, "toutes les cartes derrière ce NSG, dont api-nic")
     assert ("la remettre en refus" in said) is back, said

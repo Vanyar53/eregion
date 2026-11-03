@@ -5898,3 +5898,40 @@ def test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_l
          ("delete_vm", WEB2),
          ("an_old_isolations_vm_isolated_again", (_NSG_WEB_NIC, WEB1), True, "rg-app1", "api", "Linux", None,
           "release"))
+
+
+_I4P_TIER = key(_NSG.format(rg="rg-net", name="nsg-tier"))
+_I4P_WEB_BLOCK = "glorfindel-block-192-31-196-7-web-web-nic-8b70f2"
+_I4P_DATA_SUBNET = "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/data"
+
+
+def test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in(monkeypatch):
+    """I4P (#466): « I4: a perimeter block on …/web cut off …/Db--01 ». web and Db--01's second
+    NIC share a tier NSG, Db--01's on the data subnet; web blocked for itself (on the tier, aimed
+    at 10.0.0.4); someone turns the inbound deny into an allow; web's address changes, Db--01's
+    second NIC given 10.0.0.4: the allow lets the attacker reach it. Then web's block promoted to
+    its subnet: the promotion took the VM rules off by their names, the guard never asked
+    (`_held_by_turned`, I4B) — Db--01 lost SSH from the attacker, out of the perimeter's reach.
+    Unseen before: a perimeter block was judged without the attacker's flows (`perimeter=True`);
+    the machine now compares them to what the perimeter rules alone close
+    (_cut_by_the_perimeter_alone). Only rules that existed before I4P."""
+    from .test_invariants import _TEMPLATES
+    ssh = [_rule("allow-ssh", 100, _TEMPLATES["allow-ssh"])]
+    _run(monkeypatch, _net(subnet_nsg=ssh, data_subnet=list(ssh), web_nic={"own": "tier"}, db_nic_1={"own": "tier"}),
+         ("block", WEB1, WEB1, None, None),
+         ("tamper_with_our_rule", "access", (_I4P_TIER, _I4P_WEB_BLOCK)),
+         ("customer_changes_ip", _nic("rg-app1", "web-nic"), 0, 20),
+         ("customer_changes_ip", _nic("rg-app1", "db-nic-1"), 0, 4),
+         ("block_perimeter", WEB1, WEB1, None, True))
+
+
+def test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_before_the_perimeter(monkeypatch):
+    """I4P, the machine's own (seed 3 at 60, `promoted_beside_a_turned_block`, on `main` 4ed889d):
+    web's NIC bare, its block on the subnet's NSG (aimed at 10.0.0.4); someone turns its outbound
+    deny into an allow; web's address changes; batch created on the data subnet, given the app
+    subnet's NSG as its NIC's, at 10.0.0.4; web promoted. The perimeter's `-out` lies on that NSG
+    after the turned allow: batch's way out to the attacker stood — until the promotion took the
+    allow off by its name. « I4: a perimeter block on …/web cut off …/batch »."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("promoted_beside_a_turned_block", WEB1, WEB1, None, 22, (key(_SUBNET), f"{_I4P_WEB_BLOCK}-out"), True, 0, 4,
+          _I4P_DATA_SUBNET, "rg-app1", "batch", "Linux"))

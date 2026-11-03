@@ -4958,8 +4958,8 @@ TESTS.update({f"M{n}": _RB1 for n in range(1620, 1635)})
 BLK = "glorfindel/providers/azure/blocks.py"
 MUTANTS += [
     ("M1635", "a promotion takes the block off every NIC, the ones off the perimeter's subnet too (RB1, review)",
-     BLK, "                if off_ids is None or (pl.get(\"nic_id\") or \"\").rstrip(\"/\").lower() in off_ids:\n",
-     "                if False:\n"),
+     PER, "            if off_ids is None or (pl.get(\"nic_id\") or \"\").rstrip(\"/\").lower() in off_ids:\n",
+     "            if False:\n"),
     ("M1636", "a perimeter block never names the NICs it doesn't cover: `blocked` said (RB1, review)", BLK,
      '        uncovered = [t["nic_short"] for t in off]\n', "        uncovered = []\n"),
     ("M1641", "a NIC off the perimeter's subnet read as blocked from the state: its rules gone, `blocked` (RB1, review)",
@@ -9180,7 +9180,8 @@ _I4G_UNIT = "tests/unit/test_turned_names.py"
 _I4G_SEQ = ("tests/unit/test_invariant_regressions.py::"
             "test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in")
 _I4G_OLDER = "    if not turned and not _turned_allows(nsgs, _OLDER_NAMES):\n"
-_I4G_BACK = '    back = "" if total or name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "\n'
+_I4G_BACK = ('    back = "la remettre en refus, ou " if name.lower().startswith("glorfindel-block-") and not total '
+             'else ""\n')
 MUTANTS += [
     ("M3270", "an older version's deny-all turned into an allow is never asked about by its name: its release "
               "takes it off, the VM given its NSG cut off (I4G)", TRN, _I4G_OLDER, "    if not turned:\n"),
@@ -9199,9 +9200,10 @@ MUTANTS += [
      '_TURNED_NAMES = ("glorfindel-iso-", "glorfindel-block-", "glorfindel-isolation-deny-all")\n'),
     ("M3274", "a turned allow on every address said to be put back as a deny: it would cut the VM it opens "
               "(I4G's review)", TRN, _I4G_BACK,
-     '    back = "" if name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "\n'),
+     '    back = "la remettre en refus, ou " if name.lower().startswith("glorfindel-block-") else ""\n'),
     ("M3275", "an older version's deny-all said to be put back as a deny (I4G's review)", TRN, _I4G_BACK,
-     '    back = "" if total else "la remettre en refus, ou "\n'),
+     '    back = "la remettre en refus, ou " if not name.lower().startswith("glorfindel-iso-") and not total '
+     'else ""\n'),
 ]
 TESTS.update({
     "M3270": f"{_I4G_SEQ} {_I4G_UNIT}",
@@ -9210,6 +9212,57 @@ TESTS.update({
     "M3273": _I4G_UNIT,
     "M3274": _I4G_UNIT,
     "M3275": _I4G_UNIT,
+})
+
+
+
+# I4P (#466): the promotion of a block to the perimeter (`replace=True`) took the VM rules off by their names, the
+# guard every other removal by name asks never asked (I4B): one someone turned into an allow, which let the attacker
+# reach a VM off the perimeter (an old address taken up, a NIC's NSG shared with another subnet), went — that VM
+# was cut off. The pair kept whole, said, its placement in the state for the unblock; a failed delete kept too.
+# And the advice: « la remettre en refus » for a block's rule on one address only, never an isolation's.
+_I4P_UNIT = "tests/unit/test_promotion_guard.py"
+_I4P_SEQ_IN = ("tests/unit/test_invariant_regressions.py::"
+               "test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in")
+_I4P_SEQ_OUT = ("tests/unit/test_invariant_regressions.py::"
+                "test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_before_the_perimeter")
+_I4P_ASK = ("            held = [w for n in names if (w := _held_by_turned(self._network, guard, nsg_rg, nsg_name, n, "
+            "nic, mates))]\n")
+_I4P_DEL = "            held = held or [e for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n))]\n"
+MUTANTS += [
+    ("M3350", "the promotion never asks the guard: a turned rule that lets the attacker reach a VM off the perimeter "
+              "taken off, that VM cut off (I4P)", PER, _I4P_ASK, "            held = []\n"),
+    ("M3351", "a pair the guard keeps left off the state: the unblock no longer finds it (I4P)", PER,
+     "            else:\n                kept.append(pl)\n        if prev and prev.get(\"rule\")",
+     "        if prev and prev.get(\"rule\")"),
+    ("M3352", "half a kept pair taken off: its deny goes, our own delete read as a disappearance next pass (I4P)",
+     PER, _I4P_DEL, _I4P_DEL + "            held and [self._delete_rule(nsg_rg, nsg_name, n) for n in names\n"
+     "                      if not any(f\"/{n} gardée\" in w for w in held)]\n"),
+    ("M3353", "what the promotion keeps never said (I4P)", BLK, "        if guarded:\n", "        if guarded and False:\n"),
+    ("M3354", "a delete the promotion couldn't make swallowed: the rule left on Azure, its placement off the state "
+              "(I4P)", PER, _I4P_DEL,
+     "            held = held or [e for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n)) and False]\n"),
+    ("M3355", "a legacy single-rule entry promoted without the guard (I4P)", PER,
+     "            if drops(old_rg, old_name, prev[\"rule\"], nic_id, [nic_id]):\n",
+     "            if [self._delete_rule(old_rg, old_name, n) for n in (prev[\"rule\"], f'{prev[\"rule\"]}-out')]:\n"),
+    ("M3356", "the promotion asks the guard about the inbound rule only: a turned `-out` taken off (I4P)", PER,
+     _I4P_ASK, _I4P_ASK.replace("for n in names if", "for n in names[:1] if")),
+    ("M3357", "an isolation's turned rule said to be put back as a deny: every flow of the VM it opens cut (I4P)",
+     TRN, _I4G_BACK, _I4G_BACK.replace('startswith("glorfindel-block-")',
+                                       'startswith(("glorfindel-block-", "glorfindel-iso-"))')),
+    ("M3358", "the promotion keeps every pair, nothing turned: the VM rules the perimeter supersedes left (I4P)", PER,
+     "            return not held\n", "            return False\n"),
+]
+TESTS.update({
+    "M3350": f"{_I4P_SEQ_IN} {_I4P_SEQ_OUT} {_I4P_UNIT}",
+    "M3351": _I4P_UNIT,
+    "M3352": _I4P_UNIT,
+    "M3353": _I4P_UNIT,
+    "M3354": _I4P_UNIT,
+    "M3355": _I4P_UNIT,
+    "M3356": _I4P_SEQ_OUT,
+    "M3357": _I4G_UNIT,
+    "M3358": _I4P_UNIT,
 })
 
 

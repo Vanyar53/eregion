@@ -261,11 +261,13 @@ def _opens_another(nsg, rule, own: set, holders: dict, nic_nsg: dict, nic_subnet
 
 
 def _opens_text(name: str, to: str, on: str) -> str:
-    """Why it stays, and what to do. Aimed at every address (`*`), or an older version's deny-all
-    (`_OLDER_NAMES`), put back as a deny it would cut every NIC behind its NSG — the VM it opens
-    too (I4G's review): never advised then."""
+    """Why it stays, and what to do. Put back as a deny, only a block's rule on one address cuts
+    no more than the attacker off the VM it opens: on every address (`*`), or an older version's
+    deny-all (`_OLDER_NAMES`), it would cut every NIC behind its NSG (I4G's review); an
+    isolation's (`glorfindel-iso-`), every flow of the VM that holds that address now (I4P).
+    Never advised then."""
     total = to.strip().lower() in ("*", "any", "0.0.0.0/0")
-    back = "" if total or name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "
+    back = "la remettre en refus, ou " if name.lower().startswith("glorfindel-block-") and not total else ""
     return (f"notre règle {name}, retournée en autorisation par quelqu'un, vise {to} — {on} : la retirer "
             f"retirerait à cette VM ce qu'elle lui ouvre — {back}la retirer à la main si elle n'est plus "
             "voulue ; si une autre VM a besoin de ce flux, le recréer sous un nom à elle, puis relancer")

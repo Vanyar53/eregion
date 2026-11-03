@@ -1054,10 +1054,17 @@ console.
 1. **Le poste.** La branche fusionnée tirée : `make glorfindel-start` (il migre `runs/`, puis démarre
    la watch et la console), puis `make runs-survey` — rien, ou chaque chose laissée et son geste.
    Une équipe : `make team-start TEAM=<nom>`.
-2. **H0.** La release qui porte SEC18 publiée, son CD la déploie (`deploy.sh` migre
-   `~/eregion/runs` avant `docker compose up`) ; ou à la main, `make glorfindel-host-start REF=<tag>`.
-   Vérifier : `make glorfindel-host-logs` ne dit aucun « Canal runs/ : … jamais lu », et la console
-   montre les campagnes et les runs d'avant.
+2. **H0.** **Avant de publier** la release qui porte SEC18 : `make glorfindel-host-cd-install`
+   depuis un checkout de `main` à jour, puis `make glorfindel-host-cd-check`, puis
+   `make glorfindel-host-cd-enable`. Le CD bascule par **son** `deploy.sh`, la copie installée dans
+   `~/.eregion-cd/`, jamais celui de la release (l'agent ne se remplace jamais lui-même,
+   [`infra/glorfindel-host/README.md`](../infra/glorfindel-host/README.md), « Le CD de H0 ») : celui
+   d'avant SEC18 ne migre pas, et `docker compose up` créerait `runs/glorfindel/`, `runs/console/` et
+   les autres au nom de root — la watch n'y écrirait plus ses cycles, la console ses gestes, la
+   migration suivante échouerait sur eux. Puis publier : le CD la déploie (`deploy.sh` migre
+   `~/eregion/runs` avant `docker compose up`) ; ou à la main, `make glorfindel-host-start REF=<tag>`,
+   qui lance le `deploy.sh` de la release. Vérifier : `make glorfindel-host-logs` ne dit aucun
+   « Canal runs/ : … jamais lu », et la console montre les campagnes et les runs d'avant.
 3. **Orodruin.** `make orodruin-push REF=<le même tag>` : l'image vérifiée, chargée, puis `~/runs`
    migré (`ORO_MIGRATE`) ; puis `make orodruin-check`.
 

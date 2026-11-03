@@ -391,6 +391,35 @@ def _js_set(name: str) -> set[str]:
     return set(re.findall(r"'([a-z_]+)'", m.group(1)))
 
 
+def _js_function(js: str, head: str) -> str:
+    start = js.index(head)
+    return js[start:js.index("\n}\n", start)]
+
+
+def test_a_card_of_the_reassertion_is_never_grouped_nor_acked_with_one_of_another_origin():
+    """I3G (#446): the store keeps the graph's card and the reassertion's alert on a VM apart; the
+    console grouped a VM's cards by action alone — one group under the first card's title, and one
+    Ack acknowledged both, the alert silenced unread. The group key carries the origin, told as the
+    store tells it (the same prefixes, any case); every Ack acknowledges one group's ids, and only
+    `_groupEscs` makes groups."""
+    import re
+    from glorfindel import escalations
+    js = _glorfindel_page()
+    prefixes = re.search(r"const _REASSERTION = \[(.*?)\];", js).group(1)
+    assert tuple(re.findall(r"'([^']+)'", prefixes)) == escalations._REASSERTION
+    origin = _js_function(js, "function _fromReassertion(e)")
+    assert "const sid = String(e.signal_id || '').toLowerCase();" in origin
+    assert "return _REASSERTION.some(p => sid.startsWith(p));" in origin
+    group = _js_function(js, "function _groupEscs(escs)")
+    assert "const key = e.action === 'improve_detection' ? e.id   // rules stay separate\n" \
+           "      : `${_fromReassertion(e) ? 'reassertion' : 'other'}|${e.action}`;" in group
+    acks = re.findall(r"_on\('click', '(?:doAckAll|ackAllAndClose)', ([^)]*)\)", js)
+    assert acks and set(acks) == {"ids"}
+    assert set(re.findall(r"const ids\s*= ([^;]*);", js)) == {"group.map(g => g.id).join(',')"}
+    assert len(re.findall(r"_groupEscs\(\w+\)\.map\(_renderEscGroup\)", js)) == js.count(".map(_renderEscGroup)") > 0
+    assert js.count("groups.map(group =>") == 1 and "const groups = _groupEscs(escs);" in js
+
+
 def test_every_card_type_has_a_label_in_the_console():
     """A new type showed under its raw name (quarantine_altered, control_plane_change…)."""
     import re

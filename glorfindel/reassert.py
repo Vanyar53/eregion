@@ -64,7 +64,7 @@ def _alert(signal_id: str, **kwargs) -> None:
     rid = (kwargs.get("resource_id") or "").rstrip("/").lower()
     ip = (kwargs.get("action_params") or {}).get("ip", "")
     vm = rid.rsplit("/", 1)[-1]
-    legacy = f"reassert-{vm}" + (f"-{ip}" if ip else "")
+    legacy = (f"reassert-{vm}" + (f"-{ip}" if ip else "")).lower()      # an IPv6 in capitals too (I3G)
     for e in escalations.pending():
         same_vm = (e.get("resource_id") or "").rstrip("/").lower() == rid
         if same_sid(e.get("signal_id"), signal_id) or (same_vm and (e.get("signal_id") or "").lower() == legacy):

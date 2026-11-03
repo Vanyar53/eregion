@@ -52,6 +52,9 @@ What must hold whatever happens:
       listing — its role removed (a hypothesis: no error, fake_azure), our tag taken off (I1S);
       as are, after a change that comes back, an isolation or a block a customer's allow
       passes, and a local state file unreadable (L2C, `said_then_back_after_a_full_disk`);
+  L3  what the reassertion says is said on a card of its own, and notified: a card of
+      another origin — the graph's, which the test writes — keeps the words the test gave
+      it, and a disappearance it says (L1) is never told by that card alone (I3G);
   U1  a rule left by a NIC that no longer exists, cutting a live NIC off, is reported (L28)
       — and the orphan sweep takes it off, nothing else (A3): after it, every live VM is
       back to its design, not only in its own view.
@@ -531,6 +534,10 @@ class IsolationMachine(RuleBasedStateMachine):
         self.out_of_sight: dict[str, str] = {}
         self.fake = _CURRENT.fake = FakeAzure(self.chaos)
         self.deleted: dict[str, list[str]] = {}         # VM id → its NIC ids, once deleted
+        # L3 (I3G): the cards the test wrote as the graph's (id → their words), and the ids of
+        # every card the operator was notified of (escalations._notify, invariant_env).
+        self.graph_cards: dict[str, str] = {}
+        self.notified = _CURRENT.notified = []
         self.detached: set[str] = set()                 # NICs someone left without any NSG
 
     @initialize(net=_networks())
@@ -1378,6 +1385,14 @@ class IsolationMachine(RuleBasedStateMachine):
             for vm in vanished:
                 assert not self._block_vanished(vm) or key(vm) in told, (
                     f"L1: the block on {vm} vanished from Azure; the reassertion neither put it back nor said so")
+            # L3 (I3G): told by a card the reassertion wrote — the graph's, which the test wrote,
+            # never tells it alone; L1 above counts any card of the action.
+            own = {key(e.get("resource_id", "")) for e in escalations.pending()
+                   if e.get("action") == "block_suspicious_ip" and e["id"] not in self.graph_cards}
+            own |= {key(v) for v, seen in acked.items() if self._block_rules_now(v) == seen}
+            for vm in vanished:
+                assert not self._block_vanished(vm) or key(vm) in own, (
+                    f"L3: the block on {vm} vanished from Azure; said only on the graph's card")
             # L2 (I1F): a quarantine NSG someone altered, still holding NICs, is whole
             # again or said — its NICs' state lost too (I1's exemption ends here).
             # Out of sight (I1S): its role removed, or our tag taken off, after L2 held on it
@@ -2647,6 +2662,75 @@ class IsolationMachine(RuleBasedStateMachine):
             self.reassert(_Drawn(data, fault=None))
         self.reassert(_Drawn(data, fault=None))
 
+    @rule(data=st.data())
+    def graph_card_before_a_disappearance(self, data):
+        """A rare state made common (I3G, #446): a VM isolated or blocked, and the graph's own card
+        on it — the check after its action failed (`verification_failed`, the RulePoller's signal
+        id, its confidence; for a block the IP and the threat port) —, still pending; then its rules
+        taken off Azure and a pass, twice, then a pass, the mode drawn once. The store folded every
+        alert of the reassertion into the graph's card: in human_only said again at every pass,
+        never notified; outside it, the second disappearance (« ne la repose pas ») folded into
+        « reposée une fois », in silence. Judged by L3, on the test's own journal: the card it wrote,
+        the notifications. Found by I3C's review (a probe): no rule wrote a graph's card before."""
+        vm, rid, _ = self._draw(data)
+        isolation = data.draw(st.booleans(), label="isolation")
+        mode = data.draw(st.sampled_from(["human_only", "non_disruptive"]), label="mode")
+        port = None if isolation else data.draw(st.sampled_from([22, None]), label="threat_port")
+        if isolation:
+            self._isolate(vm, rid, None)
+        else:
+            self._block(vm, rid, None, port)
+
+        def reached() -> frozenset:
+            return frozenset(f for f in (self._open(vm, forensic="now") if isolation
+                                         else self._attacker_flows(vm, port)) if f[3] not in (AZURE_DNS, AZURE_IMDS))
+        closed = reached()
+        if closed:
+            return                      # passed from the start (an allow before our deny): no hold to lose
+        action = "isolate_vm" if isolation else "block_suspicious_ip"
+        reason = (f"Vérification après {action} en échec sur {vm.rsplit('/', 1)[-1]} : "
+                  "une carte reste ouverte (graphe).")
+        cid = escalations.record(
+            signal_id=f"rule-ssh-brute-force-{_nic_hash(vm)}00", resource_id=rid, action=action,
+            escalation_type="verification_failed", reason=reason, confidence=0.9, severity="high",
+            action_params=None if isolation else {"ip": ATTACKER, **({"port": port} if port else {})},
+            rule_name="ssh-brute-force")
+        self.graph_cards.setdefault(cid, reason)
+        _note("the graph's card before a disappearance")
+        for take_off in (True, True, False):
+            if take_off:
+                self._ours_taken_off(vm)
+            self.reassert(_Drawn(data, fault=None, mode=mode))
+            if reached():
+                _note(f"gone beside the graph's card ({mode})")
+                self._said_on_its_own(vm, isolation)
+
+    def _said_on_its_own(self, vm: str, isolation: bool):
+        """L3 (I3G) after an unfaulted pass: the VM's isolation (block) recorded, no operation
+        holding it, open by the test's own measure — a pending card on the VM for its action (its
+        IP), one the test did not write as the graph's, and the operator notified of it. A drift
+        card the operator acknowledged, the rules as they were then, stays said (L1)."""
+        if isolation:
+            record = self._state(vm)
+            if (record is None or vm in self.releasing
+                    or any(record.get(k) for k in ("partial", "release_failed", "releasing_at"))):
+                return
+        else:
+            entry = next((b for b in actions._load_block_entries(vm) if b.get("ip") == ATTACKER), None)
+            if entry is None or self._block_held(vm, entry):
+                return
+            seen = getattr(self, "acked_drift", {}).get(vm)
+            if seen is not None and self._block_rules_now(vm) == seen:
+                return
+        action = "isolate_vm" if isolation else "block_suspicious_ip"
+        own = [e for e in escalations.pending() if key(e.get("resource_id") or "") == key(vm)
+               and e.get("action") == action and e["id"] not in self.graph_cards
+               and (e.get("action_params") or {}).get("ip") == (None if isolation else ATTACKER)]
+        assert own, (f"L3: the {'isolation' if isolation else 'block'} of {vm} is gone from Azure; "
+                     "no card of the reassertion's says it — the graph's alone")
+        assert any(e["id"] in self.notified for e in own), (
+            f"L3: the {'isolation' if isolation else 'block'} of {vm} is gone from Azure; its card was never notified")
+
     def _ours_taken_off(self, vm: str):
         """Every rule of Glorfindel's that governs the VM taken off Azure: a `terraform apply` on
         each customer NSG of its NICs and of their subnets, our quarantine NSG stripped when a
@@ -3436,6 +3520,17 @@ class IsolationMachine(RuleBasedStateMachine):
         assert harmful <= got, f"U1: orphan rules cutting a live NIC off, not reported: {sorted(harmful - got)}"
 
     @invariant()
+    def graph_cards_keep_their_words(self):
+        """L3 (I3G): a card the test wrote as the graph's keeps the words it gave it, pending or
+        closed — what the reassertion says is never written over it."""
+        if not self.graph_cards:
+            return
+        words = {e["id"]: e.get("reason") for e in escalations.all_escalations()}
+        for cid, reason in self.graph_cards.items():
+            assert words.get(cid) == reason, (
+                f"L3: the graph's card {cid} says « {(words.get(cid) or '')[:100]}… », not what the graph wrote")
+
+    @invariant()
     def one_vm_one_state_file(self):
         d = actions._ISOLATION_STATE_DIR
         if not d.exists():
@@ -3461,6 +3556,8 @@ def invariant_env(monkeypatch) -> None:
     monkeypatch.setattr(actions, "_atomic_write_text", chaotic_write)
     monkeypatch.setattr(reassert, "_mode", lambda autonomy, vm, ref="": _CURRENT.mode)
     monkeypatch.setattr(orphans, "_configured_mode", lambda autonomy, name: _CURRENT.mode)
+    # What reaches the operator (the webhook, the bot): the test's own journal of it (L3).
+    monkeypatch.setattr(escalations, "_notify", lambda esc: getattr(_CURRENT, "notified", []).append(esc["id"]))
     monkeypatch.setattr(config, "_DEFAULT_PATHS", list(config._DEFAULT_PATHS))
     monkeypatch.delenv("GLORFINDEL_QUARANTINE_NSG", raising=False)
     from datetime import datetime as _dt, timedelta as _td

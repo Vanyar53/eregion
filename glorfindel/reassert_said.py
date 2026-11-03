@@ -59,15 +59,55 @@ def _situation(v: dict) -> dict:
     return {"gone": sorted({str(n) for n in (v.get("missing_rules") or []) + (v.get("held_missing") or [])}),
             "held": sorted(v.get("held_by_perimeter") or []), "open": sorted(v.get("open_nics") or []),
             "unsure": sorted((v.get("perimeter_unread") or []) + (v.get("nics_unknown") or [])),
-            "blocked": v.get("verified") is True}
+            "blocked": v.get("verified") is True, "rules": dict(v.get("rules_seen") or {})}
+
+
+def _read_both(said: dict, now: dict) -> list[tuple]:
+    """(as the card's check read it, as now) for each rule both checks read: its signature, None
+    when absent (`rules_seen`, L1G). No record — an older entry, a provider that doesn't say: none."""
+    before, after = said.get("rules") or {}, now.get("rules") or {}
+    return [(before[k], after[k]) for k in sorted(before.keys() & after.keys())]
 
 
 def _worse(said, now: dict) -> bool:
     """Worse than what the card said: blocked no more, a rule more gone, a NIC more open or
-    unknown. Better or the same: nothing said again. No record (an older entry): as before."""
+    unknown. Better or the same: nothing said again. No record (an older entry): as before.
+    A rule more gone by what Azure holds, not by its name alone (L1G, #461): one the card read
+    there — turned, or aimed at an address its NIC no longer has, and named « gone » for it — now
+    deleted; said gone by name both times, its deletion went unsaid."""
     if not isinstance(said, dict):
         return False
     return bool((said.get("blocked") and not now["blocked"])
                 or set(now["gone"]) - set(said.get("gone") or [])
                 or set(now["open"]) - set(said.get("open") or [])
-                or set(now["unsure"]) - set(said.get("unsure") or []) - set(said.get("open") or []))
+                or set(now["unsure"]) - set(said.get("unsure") or []) - set(said.get("open") or [])
+                or any(was is not None and is_ is None for was, is_ in _read_both(said, now)))
+
+
+def _back(said, now: dict) -> bool:
+    """A rule the card's check read absent is on Azure again (L1G): someone wrote it under our
+    name since — Glorfindel itself, mostly: one VM's perimeter block writes the pair every entry
+    of that IP and subnet names."""
+    return isinstance(said, dict) and any(was is None and is_ is not None for was, is_ in _read_both(said, now))
+
+
+def _acknowledged(sid: str) -> bool:
+    """The latest card of this alert (`sid`, exact) was closed by the operator — Glorfindel's own
+    closures carry a note."""
+    from glorfindel.reassert_cards import _history, same_sid
+    last = next((e for e in reversed(_history()) if same_sid(e.get("signal_id"), sid)), None)
+    return last is not None and last.get("status") == "resolved" and not last.get("resolution")
+
+
+def still_said(b: dict, key: str, ip: str, sid: str, baseline, now: dict) -> bool:
+    """A block's disappearance already said, nothing to write nor to say: its mark, its card pending
+    or acknowledged (`drift_said`), no worse than the baseline — and, acknowledged, no rule of it
+    written again since (L1G, #461). The operator acknowledged what the card said; another VM's
+    perimeter block wrote the pair both entries name, the VM's own rules still gone: read « better,
+    not worse », the disappearance stayed unsaid. A rule written again ends the episode, as a block
+    written again does (L1Q): what is still gone is said anew. A rule set right by hand, without
+    being deleted, still says nothing (RB1); under a pending card, what came back narrows the
+    baseline (L1Q), as before."""
+    from glorfindel.reassert_cards import drift_said
+    return (bool(b.get("drift_alerted_at")) and not _worse(baseline, now)
+            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))

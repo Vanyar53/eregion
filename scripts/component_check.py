@@ -125,7 +125,7 @@ TOGETHER = (
     "test_pip_audit_issues.py",
     "test_provider_boundary.py", "test_roadmap_discord.py",
     "test_repo_hermetic.py",
-    "test_run_channel.py", "test_runs_mounts.py", "test_local_verdicts.py", "test_state_writes.py", "test_watch_channel.py", "test_watch_gate.py", "test_watch_key.py",
+    "test_run_channel.py", "test_runs_mounts.py", "test_red_mounts.py", "test_local_verdicts.py", "test_state_writes.py", "test_watch_channel.py", "test_watch_gate.py", "test_watch_key.py",
     "test_workflows.py", "test_readme.py", "test_image_check.py", "test_release.py", "test_published_image.py",
     "test_host_ssh.py", "test_azure_roles.py", "test_agent_token.py", "test_review_verdict.py",
     "test_mutant_anchors.py",

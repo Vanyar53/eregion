@@ -62,8 +62,21 @@ GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel \
 	-v $(HOME)/.cache/chroma:/root/.cache/chroma
 
+# SEC20 (#467) : de ~/.annatar, le shell d'Annatar ne monte que deux fichiers — son .bashrc, qu'il
+# lance (--init-file), en lecture seule ; son historique, le seul en écriture, où HISTFILE le
+# pose. Jamais le répertoire : le rouge n'y pose rien que l'opérateur lance ensuite. Bash ajoute
+# à ce fichier ; il ne le tronque pas (sa troncature passe par un fichier voisin, que le conteneur
+# ne peut créer). ANNATAR_SHELL_FILES les crée avant, au nom de l'opérateur, et refuse un lien ou
+# autre chose qu'un fichier : Docker résoudrait le lien sur l'hôte et donnerait sa cible au rouge.
 ANNATAR_STATE := \
-	-v $(HOME)/.annatar:/root/.annatar
+	-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro \
+	-v $(HOME)/.annatar/.bash_history:/root/.annatar/.bash_history \
+	-e HISTFILE=/root/.annatar/.bash_history
+ANNATAR_SHELL_FILES = for f in $$HOME/.annatar $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history; do \
+	test ! -L "$$f" || { echo "✗ $$f : un lien, rien ne part (SEC20)" >&2; exit 1; }; done && \
+	mkdir -p $$HOME/.annatar && touch $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history && \
+	for f in $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history; do \
+	test -f "$$f" || { echo "✗ $$f : pas un fichier, rien ne part (SEC20)" >&2; exit 1; }; done
 
 # ~/.glorfindel/injectors read-only, as ~/.glorfindel in the container: Annatar reads the
 # watch heartbeat there (V1, its purple-team feedback). Without it, every Docker run printed
@@ -74,9 +87,11 @@ ANNATAR_STATE := \
 # SEC18 (N-05) : runs/ un répertoire par écrivain (eregion_core/runs_layout.py) — Annatar écrit
 # runs/annatar et runs/orodruin (le journal, le verrou), ne monte ni runs/glorfindel ni runs/console ;
 # runs/verdicts en lecture seule : le verdict de ses runs, sans canal retour du stockage.
+# SEC20 (#467) : ses scénarios et les scripts qu'il envoie à sa cible, en lecture seule — le rouge
+# n'écrit jamais ce que l'opérateur lance (tests/unit/test_red_mounts.py).
 ANNATAR_VOLS := \
-	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \
-	-v $(PWD)/scripts:/app/scripts \
+	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro \
+	-v $(PWD)/scripts:/app/scripts:ro \
 	-v $(PWD)/runs/annatar:/app/runs/annatar \
 	-v $(PWD)/runs/orodruin:/app/runs/orodruin \
 	-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \
@@ -341,10 +356,10 @@ annatar-dry-run: build
 	@$(DOCKER_ANNATAR) run $(SCENARIO) --dry-run --yes
 
 annatar-validate:
-	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) validate $(SCENARIO)
+	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) validate $(SCENARIO)
 
 annatar-list:
-	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list
+	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) list
 
 # The signals of a run in a temporary file, then `glorfindel respond <file> --dry-run` — not
 # runs/: the watch takes from there only what an injector emits (SEC3).
@@ -534,8 +549,7 @@ console-rotate:
 # ── Shells ────────────────────────────────────────────────────────────────
 
 annatar-shell: build-annatar
-	@mkdir -p $(HOME)/.annatar
-	@touch $(HOME)/.annatar/.bashrc
+	@$(ANNATAR_SHELL_FILES)
 	@grep -q "alias ar=" $(HOME)/.annatar/.bashrc || echo "alias ar='annatar'" >> $(HOME)/.annatar/.bashrc
 	@$(RUNS_DIRS)
 	@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
@@ -1238,14 +1252,13 @@ orodruin-campaign-run: orodruin-known
 # Glorfindel est toujours là (docs/design/console.md, §2) : chaque profil démarre sa watch et la
 # console (glorfindel-start), puis prépare ce qu'il ajoute. Un injecteur n'agit que depuis un
 # Orodruin armé : sur ce poste, son image et les commandes qui ne touchent rien.
-# Les dossiers montés (~/.glorfindel, ~/.cache/chroma par glorfindel-start, ~/.annatar ici) sont
+# Les dossiers montés (~/.glorfindel, ~/.cache/chroma par glorfindel-start) sont
 # créés au nom de l'opérateur : laissés à docker, ils seraient à root. depends_on démarre la
 # watch, sans attendre son battement : la première minute, un injecteur peut refuser (V1).
 profile-discover: glorfindel-start
 	@echo "  Profil « découvrir » : Glorfindel seul, en observation — docs/profils/decouvrir.md"
 
 profile-detection: glorfindel-start build-annatar
-	@mkdir -p $(HOME)/.annatar
 	@echo "  Profil « ma détection marche-t-elle ? » : Glorfindel + Annatar — docs/profils/detection.md"
 	@echo "  Ici, rien ne touche le cloud : docker compose --profile annatar run --rm annatar list"
 	@echo "  Les attaques : depuis Orodruin (make orodruin-up, orodruin-push, orodruin-campaign-plan)"
@@ -1256,7 +1269,6 @@ profile-resilience: glorfindel-start build-annatar
 	@echo "  Les pannes : depuis Orodruin (make gothmog-preflight, gothmog-run)"
 
 profile-proven: glorfindel-start build-annatar
-	@mkdir -p $(HOME)/.annatar
 	@echo "  Profil « défense éprouvée » : Glorfindel + Annatar + Gothmog — docs/profils/eprouvee.md"
 	@echo "  Glorfindel hébergé : make glorfindel-host-up, glorfindel-host-start ; injecteurs : Orodruin"
 

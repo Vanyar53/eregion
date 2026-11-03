@@ -19,7 +19,7 @@ make glorfindel-stop                         # arrêt
 # Profils d'usage (D1) — docs/profils/ ; Glorfindel est dans chacun (il démarre sans profil compose)
 make profile-discover                        # = glorfindel-start : Glorfindel seul, en observation
 make profile-detection                       # + l'image d'Annatar ; profile-resilience : Gothmog ; profile-proven : tout
-                                             # (crée à ton nom ~/.glorfindel, ~/.cache/chroma, ~/.annatar : sinon root)
+                                             # (crée à ton nom ~/.glorfindel, ~/.cache/chroma : sinon root)
 docker compose --profile annatar run --rm annatar list          # APRÈS make profile-… : un injecteur à la demande ;
 docker compose --profile gothmog run --rm gothmog preflight vm-shutdown   # depends_on démarre la watch sans attendre
                                              # son battement : la 1re minute, il peut refuser (V1) ; sur un poste, contrat passive
@@ -973,7 +973,8 @@ plus pendant cette transition.
 Chaque service du compose tourne sans capacité (`cap_drop: [ALL]`), sans gain de privilège
 (`no-new-privileges:true`), la racine en lecture seule (`read_only: true`, `/tmp` en tmpfs) :
 il n'écrit que dans ses montages (son répertoire de `runs/` — SEC18, ci-dessous —, `~/.glorfindel`, `~/.cache/chroma`,
-`~/.eregion/analysis` pour la watch ; `~/.annatar` pour Annatar), et la config que la console
+`~/.eregion/analysis` pour la watch ; pour un injecteur, son répertoire de `runs/` et celui d'Orodruin
+— jamais ce que l'opérateur lance : ses scénarios et ses scripts en lecture seule, SEC20), et la config que la console
 réécrit l'est sur place, sous verrou (`glorfindel/config.py`). `tests/unit/test_profiles.py`
 exige les quatre clés sur chaque service. Mesuré le 29/10 sur Docker (compose 5.5) : les
 écritures de chaque service (escalades, état, découverte, ChromaDB, l'index d'analyse, la

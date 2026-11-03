@@ -11,6 +11,7 @@ from glorfindel.providers.azure.away import AwayRulesMixin
 from glorfindel.providers.azure.backup import BackupMixin
 from glorfindel.providers.azure.blocks import BlockMixin
 from glorfindel.providers.azure.capabilities import CAPABILITIES as AZURE_CAPABILITIES
+from glorfindel.providers.azure.gone import GoneVmMixin
 from glorfindel.providers.azure.isolation import IsolationMixin
 from glorfindel.providers.azure.network import NetworkMixin
 from glorfindel.providers.azure.older import OlderIsolationMixin
@@ -18,6 +19,7 @@ from glorfindel.providers.azure.perimeter import PerimeterMixin
 from glorfindel.providers.azure.quarantine import QuarantineMixin
 from glorfindel.providers.azure.readers import ReadersMixin
 from glorfindel.providers.azure.release import ReleaseMixin
+from glorfindel.providers.azure.reset_bare import ResetBareMixin
 from glorfindel.providers.azure.restore import RestoreMixin
 from glorfindel.providers.azure.sweep import SweepMixin
 from glorfindel.providers.azure.unblock import UnblockMixin
@@ -34,6 +36,7 @@ class AzureConnector(
     QuarantineMixin,
     IsolationMixin,
     ReleaseMixin,
+    GoneVmMixin,
     AwayRulesMixin,
     OlderIsolationMixin,
     VerifyMixin,
@@ -44,6 +47,7 @@ class AzureConnector(
     BackupMixin,
     RestoreMixin,
     SweepMixin,
+    ResetBareMixin,
     ReadersMixin,
     CloudConnector,
 ):

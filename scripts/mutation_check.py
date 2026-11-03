@@ -41,6 +41,8 @@ VER = "glorfindel/providers/azure/verify.py"
 UNB = "glorfindel/providers/azure/unblock.py"
 VBL = "glorfindel/providers/azure/verify_block.py"   # out of unblock.py (I4B)
 SWP = "glorfindel/providers/azure/sweep.py"
+GONE = "glorfindel/providers/azure/gone.py"           # a gone VM's, out of release.py (I3V)
+RBARE = "glorfindel/providers/azure/reset_bare.py"    # the reset's bare NICs, out of sweep.py (I3V)
 SDK = "glorfindel/providers/azure/sdk.py"
 FAC = "glorfindel/actions.py"                 # the façade (A1)
 PIF = "glorfindel/providers/interface.py"
@@ -242,13 +244,13 @@ MUTANTS = [
     ("M38", "a block gone behind the quarantine not reported (A0, L1)", VBL,
      "                                    held_missing += names",
      "                                    pass"),
-    ("M39", "reset reads a bare NIC's original from the tag only (A0)", SWP,
+    ("M39", "reset reads a bare NIC's original from the tag only (A0)", RBARE,
      "            if recorded is not _UNKNOWN:\n                original = recorded\n            elif q_bare is None:",
      "            if False:\n                original = recorded\n            elif q_bare is None:"),
     ("M40", "a deleted NSG's listing read as unreadable (A0, L1)", NET,
      "                cache[key] = [] if _is_not_found(exc) else None",
      "                cache[key] = None"),
-    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", SWP,
+    ("M41", "reset doesn't sweep the original it puts back on a bare NIC (A0)", RBARE,
      '            bare[t0["nic_id"]] = (original, q_bare)\n            if original:\n                views.append(self._original_view(t0, original))',
      '            bare[t0["nic_id"]] = (original, q_bare)'),
     # O0 (eighth pass): the six bugs the inscription's specification names.
@@ -1704,7 +1706,7 @@ MUTANTS += [
      '                elif recorded is _UNKNOWN and prior is _UNKNOWN and _held_or_unreadable(t["nic_id"]):',
      "                elif False:"),
     ("M861", "reset skips a bare NIC whose original is unknown: swept, an old isolation left without "
-             "state (I8F, I8)", SWP,
+             "state (I8F, I8)", RBARE,
      '                if recorded is _UNKNOWN and _held_in_quarantine(t0["nic_id"]):\n'
      "                    # In quarantine for our state",
      "                if False:\n                    # In quarantine for our state"),
@@ -1749,9 +1751,9 @@ MUTANTS += [
     ("M1044", "reset follows the state's 'none' over the tag of a NIC in quarantine (I8S)", SWP,
      "                elif original is None:\n                    # The state's \"none\" yields to our tag",
      "                elif False:\n                    # The state's \"none\" yields to our tag"),
-    ("M1045", "reset follows the state's 'none' over the tag of a bare NIC (I8S)", SWP,
+    ("M1045", "reset follows the state's 'none' over the tag of a bare NIC (I8S)", RBARE,
      "            if recorded is None and q_bare is not None:\n", "            if False:\n"),
-    ("M1046", "reset reads an unreadable tag of a bare NIC as the state's 'none': swept bare (I8S)", SWP,
+    ("M1046", "reset reads an unreadable tag of a bare NIC as the state's 'none': swept bare (I8S)", RBARE,
      "                if recorded is _UNKNOWN or recorded is None:\n", "                if recorded is _UNKNOWN:\n"),
     ("M1047", "verify_release follows the state's 'none' over a tag naming the NSG: says released (I8S)", VER,
      "            if original is _UNKNOWN or original is None:\n", "            if original is _UNKNOWN:\n"),
@@ -2568,7 +2570,7 @@ MUTANTS += [
               "'not found' (ISU)", REL,
      '                                raise self._original_gone(q_bare, t0["nic_id"], original, exc)\n',
      "                                raise\n"),
-    ("M1107", "a bare NIC whose original is gone: the reset says only 'not found' (ISU)", SWP,
+    ("M1107", "a bare NIC whose original is gone: the reset says only 'not found' (ISU)", RBARE,
      '                        raise self._original_gone(q_bare, t0["nic_id"], original, exc)\n',
      "                        raise\n"),
     ("M1108", "a NIC in quarantine whose original is gone: release and reset say only 'not found' (ISU)",
@@ -3672,7 +3674,7 @@ MUTANTS += [
      "                    if q_bare is None:\n                        # Bare by design, or in our quarantine for a state that can't be\n"
      "                        # read: unknown, never released on a guess (SEC4b).\n"
      "                        _held_in_quarantine(t0[\"nic_id\"])\n", ""),
-    ("M1255", "reset puts a bare NIC's original back from our tag beside an unreadable state (SEC4b)", SWP,
+    ("M1255", "reset puts a bare NIC's original back from our tag beside an unreadable state (SEC4b)", RBARE,
      "                failed_early.append(f'{t0[\"nic_short\"]}: carte sans NSG, {_first_line(exc)[:_ERR_MAX]}')\n"
      "                continue\n",
      "                recorded = _UNKNOWN\n"),
@@ -4738,20 +4740,20 @@ MUTANTS += [
     ("M1550", "a deleted VM's release looks nowhere: its rules left on a shared NSG, `released` (I7S)", REL,
      "                        + self._gone_vm_rules(resource_id, vm_name, list(known_nics), stuck))\n",
      "                        + [])\n"),
-    ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", REL,
+    ("M1551", "the NSGs that can't be listed: a deleted VM's release says `released` (I7S)", GONE,
      '            return failed + [f"{vm_name} supprimée : les règles de ses cartes n\'ont pas été cherchées sur les "\n'
      '                             f"NSG de l\'abonnement (liste illisible : {_first_line(exc)[:_ERR_MAX]}), "\n'
      '                             f"{_GONE_WORDS[act][0]} non vérifiée"]\n',
      "            return failed\n"),
     ("M1552", "a failed release of a deleted VM forgets its NICs: the retry looks for nothing (I7S)", REL,
      '                **({"known_nics": known} if known else {}),\n', ""),
-    ("M1553", "the NICs a failed release kept are not read again (I7S)", REL,
+    ("M1553", "the NICs a failed release kept are not read again (I7S)", GONE,
      '        kept = state.get("known_nics") if isinstance(state, dict) else None\n',
      "        kept = None\n"),
-    ("M1554", "the NICs of a deleted VM's blocks are not looked for (I7S)", REL,
+    ("M1554", "the NICs of a deleted VM's blocks are not looked for (I7S)", GONE,
      "        entries = [state, *(blocks if isinstance(blocks, list) else [])]\n",
      "        entries = [state]\n"),
-    ("M1555", "a deleted VM's outbound rule left: only the inbound name looked for (I7S)", REL,
+    ("M1555", "a deleted VM's outbound rule left: only the inbound name looked for (I7S)", GONE,
      '                      for n in (b, f"{b}-out")}\n', "                      for n in (b,)}\n"),       # I4A: both names
 ]
 TESTS.update({"M1550": f"{_I7S} {INVARIANTS}", **{f"M{n}": _I7S for n in range(1551, 1556)}})
@@ -4763,18 +4765,18 @@ MUTANTS += [
     ("M1556", "a gone VM's unreadable state: `released`, the only file that named its NICs cleared (I7S)", REL,
      "                return (self._gone_vm_unknown(resource_id or vm_name, vm_name)\n",
      "                return ([]\n"),
-    ("M1557", "a gone VM's unreadable isolation state not counted (I7S)", REL,
+    ("M1557", "a gone VM's unreadable isolation state not counted (I7S)", GONE,
      "        if _isolation_unreadable(vm_ref) or (\n", "        if False or (\n"),
-    ("M1558", "a gone VM's unreadable block state not counted (I7S)", REL,
+    ("M1558", "a gone VM's unreadable block state not counted (I7S)", GONE,
      '                block is not None and f"{_BLOCK_STATE_DIR.name}/{block.name}" in unreadable_states()):\n',
      "                False):\n"),
-    ("M1559", "a NIC kept and attached to a namesake VM: its isolation's rules taken (I7S)", REL,
+    ("M1559", "a NIC kept and attached to a namesake VM: its isolation's rules taken (I7S)", GONE,
      '        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()\n',
      "        if (True or not holder\n"),
-    ("M1600", "a kept NIC that can't be read taken as gone: its names looked for (I7S)", REL,
+    ("M1600", "a kept NIC that can't be read taken as gone: its names looked for (I7S)", GONE,
      "            if _is_not_found(exc):\n                return None\n            return f\"{vm_name} supprimée : carte",
      "            if True:\n                return None\n            return f\"{vm_name} supprimée : carte"),
-    ("M1601", "a kept NIC on a VM of another name taken for a namesake's: its rules left (I7S)", REL,
+    ("M1601", "a kept NIC on a VM of another name taken for a namesake's: its rules left (I7S)", GONE,
      '        if (not holder or holder.rsplit("/", 1)[-1].lower() != vm_name.lower()\n',
      "        if (not holder\n"),
 ]
@@ -5593,7 +5595,7 @@ MUTANTS += [
           "                        or self._delete_rule(p_rg, p_name, name)\n",
      "                        self._delete_rule(p_rg, p_name, name)\n"),
     ("M1735", "a deleted VM's release, its state lost, takes its denies off everywhere, a turned rule behind (I5Q)",
-     REL, "                    if why := held_back(nsg, r):\n", "                    if False and (why := held_back(nsg, r)):\n"),
+     GONE, "                    if why := held_back(nsg, r):\n", "                    if False and (why := held_back(nsg, r)):\n"),
     ("M1736", "a live VM's release held by its own turned rule: `release_partial` forever (I5Q)", "glorfindel/providers/azure/turned.py",
      '               if ip in holders and holders[ip] != own.rstrip("/").lower()\n',
      "               if ip in holders\n"),

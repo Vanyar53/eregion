@@ -467,11 +467,22 @@ function _matchColor(ts) {
   return (t && Date.now() - t < 30 * 60 * 1000) ? 'var(--orange)' : 'var(--dim)';
 }
 
-// Group escalations by action, render each group as one item (N dupes = single Ack All)
+// I3G (#446): the cards the reassertion writes — their signal ids, whatever their case, as the
+// store tells them (escalations._reassertion). Never grouped with a card of another origin: the
+// graph's card and the reassertion's alert on one VM made one group, under the first one's
+// title, and one Ack acknowledged both — the alert silenced unread.
+const _REASSERTION = ['reassert-', 'state-unreadable-'];
+function _fromReassertion(e) {
+  const sid = String(e.signal_id || '').toLowerCase();
+  return _REASSERTION.some(p => sid.startsWith(p));
+}
+
+// Group escalations by action and origin, render each group as one item (N dupes = single Ack All)
 function _groupEscs(escs) {
   const map = new Map();
   escs.forEach(e => {
-    const key = e.action === 'improve_detection' ? e.id : e.action; // rules stay separate
+    const key = e.action === 'improve_detection' ? e.id   // rules stay separate
+      : `${_fromReassertion(e) ? 'reassertion' : 'other'}|${e.action}`;
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(e);
   });

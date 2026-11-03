@@ -8543,8 +8543,8 @@ TESTS.update({f"M{n}": _SEC16 for n in range(3146, 3150)})
 
 # I3G (#446), found by I3C's review: the store folded an alert of the reassertion into the graph's
 # pending card of the same action, resource and type — its text kept or overwritten, never
-# notified, never read « said » by the reassertion; and the other way. M3170–M3176 (M3177–M3179
-# unused).
+# notified, never read « said » by the reassertion; and the other way. M3170–M3176; M3177 for the
+# console, which grouped them again under one Ack (M3178–M3179 unused).
 _I3G_UNIT = "tests/unit/test_reassert.py"
 _I3G_SEQ = ("tests/unit/test_invariant_regressions.py::"
             "test_a_disappearance_beside_the_graphs_card_is_said_on_its_own")
@@ -8571,8 +8571,15 @@ MUTANTS += [
               "the alert folded into it (I3G, in passing)", R,
      '    legacy = (f"reassert-{vm}" + (f"-{ip}" if ip else "")).lower()      # an IPv6 in capitals too (I3G)\n',
      '    legacy = f"reassert-{vm}" + (f"-{ip}" if ip else "")\n'),
+    ("M3177", "the console groups a VM's cards by action alone: the graph's card and the alert under one title, "
+              "one Ack for both (I3G)", GJS,
+     "    const key = e.action === 'improve_detection' ? e.id   // rules stay separate\n"
+     "      : `${_fromReassertion(e) ? 'reassertion' : 'other'}|${e.action}`;\n",
+     "    const key = e.action === 'improve_detection' ? e.id : e.action; // rules stay separate\n"),
 ]
 TESTS.update({
+    "M3177": "tests/unit/test_console.py::"
+             "test_a_card_of_the_reassertion_is_never_grouped_nor_acked_with_one_of_another_origin",
     "M3170": f"{_I3G_SEQ} {_I3G_FOLD} {_I3G_UNIT}::test_a_disappearance_beside_the_graphs_card_is_said_by_its_own",
     "M3171": _I3G_FOLD,
     "M3172": _I3G_FOLD,

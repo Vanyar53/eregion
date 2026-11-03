@@ -3117,10 +3117,15 @@ l'alerte qui ne la réécrit pas ; la clé d'avant A0 pour une IPv6 en majuscule
 `main`. **Mutants M3170–M3176** : le refus de fusion retiré (M3170), les ids de la réaffirmation lus
 avec leur casse (M3171), l'état illisible oublié (M3172), un seul sens tenu (M3173 : la carte du
 graphe se fond dans l'alerte ; M3174 : l'alerte dans la carte du graphe), la fusion par id de signal
-— de trop (M3175), la clé d'avant A0 sans minuscules (M3176). **Reste ouvert** : la console groupe les
-cartes d'une VM par action (`_groupEscs`) : la carte du graphe et l'alerte, deux cartes au magasin,
-s'y montrent dans un même groupe, sous le titre de la première, et « Ack » les acquitte ensemble
-(signalé à la session Console). Le magasin ne connaît l'origine que de la réaffirmation : les cartes
+— de trop (M3175), la clé d'avant A0 sans minuscules (M3176). **La console** groupait les cartes
+d'une VM par action seule (`_groupEscs`, la carte de la VM et sa fenêtre) : la carte du graphe et
+l'alerte, deux cartes au magasin, s'y montraient dans un même groupe, sous le titre de la première,
+et un « Ack » les acquittait ensemble — l'alerte tue sans avoir été lue. La clé du groupe porte
+maintenant l'origine (`_fromReassertion` : les mêmes préfixes que le magasin, toute casse) ; chaque
+« Ack » acquitte les ids d'un seul groupe. Le bot et le TUI acquittent carte par carte : rien à y
+changer. Pas de moteur JavaScript dans la suite : le test (`test_console.py`) lit le script — les
+préfixes égaux à ceux du magasin, la clé, chaque « Ack » sur les ids d'un groupe et chaque groupe fait
+par `_groupEscs` ; mutant **M3177** (la clé par action seule). **Reste ouvert** : le magasin ne connaît l'origine que de la réaffirmation : les cartes
 du TTL, des orphelines, de la posture n'ont pas d'homonyme du graphe aujourd'hui (leurs actions et
 leurs types), la règle ne les couvre pas.
 

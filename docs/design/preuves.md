@@ -3791,8 +3791,9 @@ whole again » 86 fois (« a drift acknowledged, the block written again », la 
 journal, **jamais** — aucune règle ne réécrit puis ne retire une règle vue absente entre l'acquittement et
 la passe suivante (le code ne repose rien sous une carte acquittée, et la paire d'un autre périmètre revenue
 à une passe change les valeurs). Elle tient ce que les valeurs manquent ; seule la séquence à la main ci-dessus
-l'atteint. Aucune graine rouge. `pytest` complet : 6 258 réussis, 7 sautés, 1 `xfail` (ci-dessus) ; `ruff`
-propre ; `scripts/mutant_anchors.py` : 2 505 mutants et 32 du jeu de contrôle, sans faute.
+l'atteint. Aucune graine rouge. Après la fusion de `main` 9ec02d22 (I5S) : à 60, N = 1..8, 8/8 vertes ; `pytest`
+complet : 6 267 réussis, 7 sautés, 1 `xfail` (ci-dessus) ; `ruff` propre ; `scripts/mutant_anchors.py` :
+2 511 mutants et 32 du jeu de contrôle, sans faute.
 
 **MAK (03/11, #481) : la machine oubliait l'acquittement d'un blocage quand une isolation revenait.**
 Un défaut de la machine, pas du code. Trouvé par L1A (#480) dans deux runs de la CI de la PR #476 (py3.11,

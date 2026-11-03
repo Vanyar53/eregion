@@ -75,7 +75,7 @@ HOST = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.I)
 FILE_EXTENSIONS = frozenset({"md", "py", "pyc", "json", "jsonl", "yaml", "yml", "png", "webp", "gif", "svg",
                              "html", "css", "js", "txt", "toml", "lock", "cfg", "ini", "tf", "tfvars", "hcl",
                              "mp4", "webm", "log", "patch", "diff", "example"})
-ALLOWED_HOSTS = ("github.com", "vanyar53.github.io", "example.com", "example.org", "example.net",
+ALLOWED_HOSTS = ("github.com", "grootcyber.github.io", "example.com", "example.org", "example.net",
                  "microsoft.compute")   # the provider of a VM's resource id, no host
 BENCH_NAME = re.compile(r"(?:rg-celebrimbor[a-z0-9-]*|vm-celebrimbor-[a-z0-9-]+|vm-sentinel)")
 # A file attached on GitHub (the tour's video) is named by a GUID of GitHub's, not of a deployment:

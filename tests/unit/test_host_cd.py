@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 AGENT = ROOT / "infra" / "glorfindel-host" / "cd" / "eregion_cd.py"
 PUBLISHED = ROOT / "scripts" / "published_image.py"
 COSIGN_SHA = "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"   # published_image.COSIGN_SHA256
-GHCR_REPO = "vanyar53/eregion-glorfindel"
+GHCR_REPO = "grootcyber/eregion-glorfindel"
 MODEL = "anthropic/claude-sonnet-5-5"
 SECRET = "DEPLOY-SECRET-xyz"
 
@@ -1925,7 +1925,7 @@ def test_a_signed_image_without_its_provenance_is_refused(h0):
 
 @pytest.mark.parametrize("change, said", [
     ({"commit": "c1"}, "provenance d'un autre commit"),
-    ({"name": "ghcr.io/vanyar53/eregion-annatar"}, "ne porte pas sur"),
+    ({"name": "ghcr.io/grootcyber/eregion-annatar"}, "ne porte pas sur"),
     ({"workflow": ".github/workflows/images.yml"}, "provenance d'ailleurs"),
     ({"runner": "self-hosted"}, "provenance d'ailleurs"),
 ])

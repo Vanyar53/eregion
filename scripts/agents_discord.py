@@ -52,7 +52,7 @@ import notify_discord as nd
 ROOT = Path(__file__).resolve().parents[1]
 ELROND_AGENTS = ("elrond-worker", "elrond-reviewer")
 STEP_STATE = {"worker": "en cours", "correction": "en correction", "relecture": "en relecture"}
-REPO = "Vanyar53/eregion"
+REPO = "grootcyber/eregion"
 ASK_DELAY_S = 30         # a question answered within it never pings: Jonathan was there
 STALE_S = 86400          # a launch refused after the hook saw it never comes back: gone after a day
 RECENT_MAX = 8

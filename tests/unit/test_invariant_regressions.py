@@ -4,6 +4,8 @@ order it makes them — `_draw` takes the VM, the id it is reached with, the fau
 """
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from .fake_azure import ATTACKER, FakeAzure, _rule_record, key
@@ -5270,12 +5272,19 @@ def test_a_block_bypassed_after_the_role_is_taken_is_said(monkeypatch):
 def _replay(monkeypatch, net, *steps):
     """A sequence as Hypothesis printed it once shrunk: each rule with its draws, in order. A rule
     that leaves draws unused fails at once (`pytest.fail`, never an AssertionError a strict
-    `xfail` would count): the split between rules is checked rule by rule."""
+    `xfail` would count): the split between rules is checked rule by rule. A rule that takes no
+    draws (`recover`, `time_passes`) is called as Hypothesis calls it, without them."""
     invariant_env(monkeypatch)
     m = IsolationMachine()
     try:
         m.build(net)
         for rule, *draws in steps:
+            if not draws and "data" not in inspect.signature(getattr(m, rule)).parameters:
+                getattr(m, rule)()
+                m.never_more_open_than_designed()
+                m.customer_configuration_untouched()
+                m.one_vm_one_state_file()
+                continue
             s = Script(*draws)
             getattr(m, rule)(data=s)
             if s.values:
@@ -6466,3 +6475,53 @@ def test_a_block_of_any_port_after_one_of_port_22_is_judged_on_every_port(monkey
     (any port), as the code now does: a block written whole sets its port, None (any port) too.
     Red on `main` 593f8326, both."""
     _replay(monkeypatch, _l1p_net(), *steps)
+
+
+def _mak_net(tier: bool) -> dict:
+    """The networks of the two CI runs of PR #476 (py3.11) that fell on MAK's L1: allow-ssh at 150 and
+    allow-https at 110 on the subnet's NSG, web-nic under a legacy isolation's own NSG; the second run
+    without the tier's rules nor the edge's NSG — same rules, same draws."""
+    r = _tpl
+    return {"subnet_nsg": [r("allow-ssh", 150), r("allow-https", 110), r("deny-lateral-in", 130)],
+            "edge_nsg": [] if tier else None,
+            "tier_rules": [r("allow-ssh", 100), r("allow-lateral-out", 100), r("deny-lateral-in", 130)] if tier else [],
+            "nics": {"web-nic": {"own": None, "rules": [r("allow-https", 100), r("deny-lateral-in", 130)],
+                                 "policy": True},
+                     "db-nic-0": {"own": None, "rules": [r("allow-https", 100)], "policy": False},
+                     "db-nic-1": {"own": None, "rules": [], "policy": False},
+                     "api-nic": {"own": None, "rules": [r("allow-lateral-out", 100), r("deny-lateral-in", 130)],
+                                 "policy": False}},
+            "windows": None, "config": {"quarantine": False, "forensic": [], "rg": "", "readable": True},
+            "legacy": ("web-nic", True), "data_subnet": None, "data_primary": False}
+
+
+_MAK_429 = ("nic.get", "always-429")
+_MAK_FOUND = (
+    ("recover",), ("recover",), ("recover",), ("recover",), ("recover",),
+    ("graph_card_before_a_disappearance", WEB1, WEB1, _MAK_429, False, "human_only", 22),
+    ("reassert", "human_only", None),
+    ("operator_acknowledges", 0),
+    ("graph_card_before_a_disappearance", WEB1, WEB1, _MAK_429, True, "human_only"),
+    ("another_subscription", WEB1, "isolate"),
+    ("operator_acknowledges", 0),
+    ("said_then_back_after_a_full_disk", "gone", WEB1, WEB1, _MAK_429, True, (1, "from-full")))
+_MAK_REDUCED = tuple(s for i, s in enumerate(_MAK_FOUND) if i not in (0, 1, 2, 3, 4, 9))
+
+
+@pytest.mark.parametrize(("tier", "steps"), [(True, _MAK_FOUND), (False, _MAK_FOUND), (True, _MAK_REDUCED)],
+                         ids=["as found", "as found, no tier", "reduced"])
+def test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block(monkeypatch, tier, steps):
+    """MAK (#481), the machine's, never the code's: two CI runs of PR #476 (py3.11, random seeds), shrunk
+    by Hypothesis to these twelve rules, their draws as printed: « L1: the block on …/rg-app1/…/web
+    vanished from Azure; the reassertion neither put it back nor said so ». web blocked (22) under the
+    graph's card, its rules taken off and said; then isolated under the graph's card, its rules taken
+    off: the pass says the isolation gone and the block gone (« a disparu »), the operator acknowledges
+    the block's card — the machine records it (`acked_drift`), the block's rules as they are then, both
+    absent. Then `said_then_back_after_a_full_disk` draws « gone » for web's isolation: its rules taken
+    off, said, acknowledged, put back, taken off again, said anew. Once the isolation was put back,
+    `_gone_comes_back` dropped `acked_drift[web]` whichever branch it ran — the block's acknowledgement,
+    that the isolation branch neither took off nor put back: the block's rules still as acknowledged,
+    its card closed by the operator for its episode (one card per disappearance, RB1), L1 counted it
+    unsaid. The code was right to say nothing more. Reduced by hand to six rules; red on `main`
+    de040e8c, all three."""
+    _replay(monkeypatch, _mak_net(tier), *steps)

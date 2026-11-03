@@ -41,6 +41,8 @@ variable "admin_username" {
 variable "eregion_repo" {
   description = "Dépôt cloné sur la VM."
   type        = string
+  # L'ancien nom, gardé (REN1) : cloné au premier démarrage par custom_data, le changer remplace la
+  # VM. La redirection de GitHub le sert ; à changer à la prochaine reconstruction de H0.
   default     = "https://github.com/Vanyar53/eregion.git"
 }
 

@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/Vanyar53/eregion/schemas/run_report.schema.json",
+  "$id": "https://github.com/grootcyber/eregion/schemas/run_report.schema.json",
   "title": "Report of one run, as H0 accepts it from the exercise channel (H-1)",
   "description": "The report of one run, an attack or a fault: annatar/runner/report.py and gothmog/runner/report.py write it, from the class both share (eregion_core/run_report.py, C1). The campaign report reads its run id and its attack time; the console's coverage matrix reads it whole (eregion_console/coverage.py). Other fields are allowed. Its run_id must also be the run's own (checked by analysis/campaign_schema.py, which runs on H0). A run --without-glorfindel (V1) says so in without_glorfindel, and then carries no detection verdict. Since C1 a report says what it is (run_format, kind, injector, experiment_id; resource_id for an attack): all optional, a report written before reads as before.",
   "type": "object",

@@ -9879,6 +9879,40 @@ TESTS.update({
 })
 
 
+# MAK (#481): the machine's journal, never an oracle — `_gone_comes_back` dropped the acknowledgement of a VM's
+# block once an isolation of that VM was put back, and L1 read the block's acknowledged card unsaid (the CI of PR
+# #476). M3420–M3421 put the machine's defect back, or its kin (the frozen sequence, red: a false L1); M3422–M3423
+# are bugs of the code on that boundary, between a VM's isolation and its block — M3423 the frozen sequence still
+# sees with the fix. M3424 unused: a probe (a block's card taken for its isolation's by a prefix of its id) that
+# survived the frozen sequences, test_reassert.py and the invariants at 60 — not a bug a review found; likely as
+# good as equivalent (the block's card, closed with Glorfindel's note, reads « not said » at its next check).
+_MAK_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block")
+MUTANTS += [
+    ("M3420", "the machine forgets the acknowledgement of a VM's block when an isolation of that VM comes back: a "
+              "false L1 (MAK)", INVARIANTS,
+     '        if not isolation:\n            getattr(self, "acked_drift", {}).pop(vm, None)\n',
+     '        if True:\n            getattr(self, "acked_drift", {}).pop(vm, None)\n'),
+    ("M3421", "the machine never journals the operator's acknowledgement of a block's drift card: a false L1 "
+              "(MAK)", INVARIANTS,
+     '        if vm and ("disparu" in reason or "a échoué" in reason):\n'
+     '            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}\n',
+     '        if False:\n'
+     '            self.acked_drift = {**getattr(self, "acked_drift", {}), vm: self._block_rules_now(vm)}\n'),
+    ("M3422", "a block's disappearance read « said » on its VM's isolation card (MAK)", R,
+     "    if still_said(b, ref or vm, ip, _alert_id(vm, rid, ip), baseline, now_is):\n",
+     "    if still_said(b, ref or vm, ip, _alert_id(vm, rid), baseline, now_is):\n"),
+    ("M3423", "an isolation back keeps its drift mark and its episode: gone again behind its acknowledged card, "
+              "unsaid (MAK, L2C's review)", R,
+     ('        episode(ref or vm, "", over=True)        # back: a new episode next time, whatever write fails\n',
+      '            state.pop("drift_alerted_at", None)\n            _save_isolation_state(ref or vm, {**state, '
+      '"verified_at": now})\n'),
+     ('', '            _save_isolation_state(ref or vm, {**state, "verified_at": now})\n')),
+]
+TESTS.update({mid: _MAK_SEQ for mid in ("M3420", "M3421", "M3423")})
+TESTS["M3422"] = "tests/unit/test_reassert.py"
+
+
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;
 # tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).

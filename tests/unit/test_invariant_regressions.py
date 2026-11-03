@@ -6445,8 +6445,6 @@ _MAK_REDUCED = tuple(s for i, s in enumerate(_MAK_FOUND) if i not in (0, 1, 2, 3
 
 @pytest.mark.parametrize(("tier", "steps"), [(True, _MAK_FOUND), (False, _MAK_FOUND), (True, _MAK_REDUCED)],
                          ids=["as found", "as found, no tier", "reduced"])
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "MAK (#481): `_gone_comes_back` drops the block's acknowledgement once an isolation is put back"))
 def test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block(monkeypatch, tier, steps):
     """MAK (#481), the machine's, never the code's: two CI runs of PR #476 (py3.11, random seeds), shrunk
     by Hypothesis to these twelve rules, their draws as printed: « L1: the block on …/rg-app1/…/web

@@ -905,6 +905,27 @@ Les cinq décisions, prises une à une le 30/10 :
 
 Lancer un drill : `make orodruin-exercise DRILL=<nom>`, ou la demande que Dagorlad prépare.
 
+**Les cibles d'un sélecteur ne sont jamais choisies à ta place** (Jonathan, 03/11, sur une page de
+schémas : les trois options, une VM, toutes, un tag de rôle). Le sélecteur est la zone seule ; aucun
+tag de rôle n'existe.
+- **Rien ne démarre tout seul.** Charger un drill pose des fils sur le tableau, rien de plus. Une
+  attaque ne part qu'après trois gestes humains : écrire la demande, la porter sur Orodruin (avec les
+  noms tapés et le « [y/N] »), et le jugement d'Orodruin. Un rejeu automatique n'est pas prévu.
+- **Un drill de l'instance** (cibles par nom) se pose tel qu'il a été gardé.
+- **Un drill livré** (cibles par sélecteur) se pose **sans cible** : chaque fil « à poser » montre
+  les VM inscrites de sa zone, un bouton par candidate et un bouton « toutes ». La VM exercée le
+  moins récemment pour cette technique est un indice, jamais un choix. La demande ne s'écrit pas tant
+  qu'un fil n'a pas de cible.
+- **En CLI, la même règle** : `make orodruin-exercise DRILL=<nom>` ; pour un drill livré,
+  `TARGETS=vm-a,vm-b` ou `TARGETS=all`. Sans `TARGETS`, la commande refuse et liste les candidates
+  de chaque fil. Chaque fil prend dans `TARGETS` les VM de sa zone ; un nom candidat d'aucun fil est
+  refusé.
+
+Écartés : une VM choisie par défaut (par ordre alphabétique, ou par rotation) — un choix caché,
+jamais parfait ; toutes les VM par défaut — un drill de 3 fils sur 3 VM fait 9 fils et touche tout
+le parc ; un tag de rôle — il touche l'infra et retarde DG-d, il peut venir plus tard affiner les
+candidates.
+
 ### Glorfindel reste aveugle
 
 Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
@@ -1169,3 +1190,45 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
   d'un fil verrouillé, une demande gardée prise quelle que soit sa forme, une carte bleue qui dit une
   demande finie.
 
+
+### Construit : les drills (DG-d, #350, 03/11)
+
+- **Le cœur** : `eregion_core/drill.py`, partagé (D1). Un drill a un nom (a-z, 0-9, `-`), un auteur
+  (`operator`, `annatar`, `eregion`), une description et une heure facultatives, et de 1 à 20 fils :
+  une expérience du catalogue et une cible. `read` est son seul lecteur, exact : un champ de plus, une
+  valeur d'une autre sorte, et il refuse. Un drill livré est d'Eregion et vise par zone seulement ;
+  celui de l'instance, par nom seulement. Jamais un identifiant de ressource, nulle part.
+- **Les couches** : `drills/` (livrés : `bl1-reponse`, la panne puis T1136.001 sur le banc, comme la
+  campagne déclarée de BL1 ; `sentinelle`, T1136.001 sur la zone production), copiés dans l'image de la
+  console ; `~/.eregion/console/drills/` (`EREGION_DRILLS_DIR`), le répertoire de la console, monté par
+  elle seule. Un drill de l'instance du nom d'un drill livré le remplace ici, et la liste le dit ; un
+  fichier illisible est listé avec la raison ; illisible dans l'instance, il n'est jamais remplacé en
+  silence par le livré. Un fichier se lit borné, jamais à travers un lien, et porte le nom de son
+  drill.
+- **« Save as drill »** : `POST /api/dagorlad/drills`, derrière SEC1 (jeton, origine, corps JSON). Le
+  navigateur envoie un nom, une description, et par fil l'expérience et la cible tirée. La console
+  garde le nom de chaque VM, lu parmi les VM inscrites lues maintenant (une autre cible : rien n'est
+  gardé), jamais son identifiant. L'écriture est entière (à côté, puis à sa place), en mode 600 dans
+  un répertoire 700 ; par-dessus un drill du même nom seulement avec `replace`.
+- **La liste et le chargement** : `GET /api/dagorlad/drills`, `GET /api/dagorlad/drills/<nom>`
+  (le drill placé sur les VM lues maintenant), `GET /api/dagorlad/drills/<nom>/yaml` (l'export). Charger
+  pose des fils, rien d'autre : un fil nommé sur sa VM ; un fil de sélecteur « à poser », avec les
+  candidates de sa zone et, pour chacune, quand elle a joué cette technique ici pour la dernière fois
+  (les rapports de run de l'hôte : un indice). La demande ne s'écrit pas tant qu'un fil attend ses VM.
+- **La commande** : `make orodruin-exercise DRILL=<nom> [TARGETS=…]`. Sur le poste, le drill de
+  l'instance (H0, ou le poste avec `REQUEST_FROM=local`), sinon le livré du dépôt ; ses fils posés sur
+  les VM inscrites lues par Azure avec l'identité de l'opérateur ; un drill livré sans `TARGETS` est
+  refusé, ses candidates listées ; chaque fil jugé par `exercise_plan` ; puis la demande, comme
+  `REQUEST=`. `DRILL` et `TARGETS` viennent de la ligne de commande, jamais de l'environnement.
+- **Vérifié dans Chromium** sur le jeu d'exemple (`scripts/console_shots.py`) : la ligne DRILLS sur le
+  Board, puis `bl1-reponse` chargé, ses deux fils « à poser » (`docs/images/dagorlad/drills.png`) ; aucune
+  erreur JS, aucune violation de CSP.
+- **Mutants M3300–M3319**, tous attrapés : un drill livré qui nomme une VM, un drill de l'instance par
+  sélecteur, un identifiant pris pour un nom, un champ de plus, un auteur faux ; **un fil de sélecteur
+  posé tout seul sur la première VM de sa zone** ; une VM donnée prise pour une autre zone ; une VM
+  donnée qu'aucun fil ne prend, tue ; un fil refusé envoyé ; un enregistrement par-dessus un autre ; le
+  livré pris à la place d'un drill de l'instance illisible ; un fichier lu à travers un lien, ou qui
+  porte un autre drill ; la commande qui fait la demande d'un autre drill ; la console qui garde les
+  identifiants, ou une cible non inscrite ; un drill chargé posé sur toutes les VM de sa zone ; la page
+  qui écrit la demande pendant qu'un fil attend ; `DRILL` lu de l'environnement ; `TARGETS` absent pris
+  pour `all`.

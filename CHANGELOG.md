@@ -4,6 +4,15 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added
+- **Dagorlad's drills: kept, laid again, played again** (DG-d, #350; `docs/dagorlad.md`, « Garder et rejouer un drill »; `docs/design/console.md` §7, « Les drills »). A drill is attacks and faults drawn towards targets, kept under a name — an exercise repeated to keep the last proof under 30 days. Its run stays a request, each of its wires a run.
+  - **The format, in the shared core** (`eregion_core/drill.py`, D1): a name, an author (`operator`, `annatar`, `eregion`), an optional description and time, 1 to 20 wires — an experiment and a target. One exact reader. **Never a resource id**: it changes when Celebrimbor rebuilds the bench.
+  - **In layers, as the detection rules**: Eregion's shipped drills in `drills/` (`bl1-reponse`: BL1's fault then T1136.001 on the bench; `sentinelle`: T1136.001 on the production zone's sentinel), reviewed in a PR, copied into the console's image, aiming **by zone**; the instance's in the console's own directory (`~/.eregion/console/drills/`), aiming **by name**, never where the watch reads. An instance's drill named as a shipped one replaces it there, said; an unreadable file is listed with why.
+  - **In Dagorlad**: a DRILLS line between the board and the plan; « Save as drill » keeps the wires drawn (`POST /api/dagorlad/drills`, behind SEC1: the token, the origin, a JSON body) by the names of their VMs, enrolled and read now, over a drill of the same name only on « Replace it »; the list, « Load », « YAML » (the export, for Git, the twin, or a PR to `drills/`). **Loading starts nothing**: it lays wires on the board.
+  - **Targets are never chosen in the operator's place** (Jonathan's decision, 03/11): a shipped drill's wire lays « to place », with a button per enrolled VM of its zone and « all », and when each last ran the technique here — a hint, never a choice; the request is not written while a wire waits.
+  - **From the operator's machine**: `make orodruin-exercise DRILL=<name> [TARGETS=<vm>,…|all]` — the instance's drill (H0, or `REQUEST_FROM=local`), else the shipped one; its wires laid on the enrolled VMs read by Azure with the operator's identity; a shipped drill without `TARGETS` is refused, its candidates listed; each wire judged by `exercise_plan`; then as `REQUEST=` (shown, names typed, `[y/N]`, Orodruin judging again). `DRILL` and `TARGETS` come from the command line only.
+  - Tests: the reader, the layers, the save, the placing, a drill kept, reloaded, judged and played again on Orodruin's fake (`test_drill.py`), the console's routes and page (`test_console_dagorlad_drills.py`), the command (`test_makefile_exercise.py`); the captures redone with `drills.png`; mutants M3300–M3319; M2016 re-anchored.
+
 ## [0.5.1] — 2026-11-03 — "every alert said"
 
 ### Added

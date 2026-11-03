@@ -333,7 +333,8 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     said, now_is = verification, _situation(verification)
     baseline = drift_baseline(ref or vm, ip, b.get("drift_said"))
     worse = _worse(baseline, now_is)
-    if b.get("drift_alerted_at") and _missing(verification):
+    never_covered = bool(verification.get("uncovered_nics") and not verification.get("missing_rules"))
+    if b.get("drift_alerted_at") and _missing(verification) and not never_covered:
         # Better than its card, here, before any write of the pass: what holds is the baseline — a
         # write refused below (a full disk) left it as the card said, and the rules gone again read
         # « not worse », in silence (L1Qs, the machine). Worse on one side: what got better (L1).

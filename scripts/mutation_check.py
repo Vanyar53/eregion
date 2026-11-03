@@ -9176,7 +9176,7 @@ MUTANTS += [
      "                        or False):\n"),
     ("M3152", "the baseline narrowed after the pass's first write: refused (a full disk), the rules gone again "
               "read « not worse than the card », unsaid (L1Qs, the machine)", R,
-     '    if b.get("drift_alerted_at") and _missing(verification):\n        # Better than its card, here,',
+     '    if b.get("drift_alerted_at") and _missing(verification) and not never_covered:\n        # Better than its card, here,',
      '    if False:\n        # Better than its card, here,'),
 ]
 TESTS.update({

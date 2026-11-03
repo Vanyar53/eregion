@@ -229,7 +229,7 @@ Modèle : CLI open source gratuit, SaaS payant pour multi-tenant + connecteurs a
 - **Bot Discord interactif** : un fil par VM, boutons ✓ Acknowledge / 📋 Command / 🔄 Restore / ↩️ Revert — exécutent les commandes Glorfindel directement depuis Discord
 - **War Room web** (`glorfindel war-room`, `make glorfindel-start`) — incident cards, live feed WebSocket, action buttons, infra map avec posture gaps
 - ~~**Annatar block watcher** — émet `attack_adapted` si Glorfindel bloque une IP en cours de run~~ — retiré le 28/10 (SEC3, #274) : il lisait l'état du défenseur, et ne voyait déjà plus rien (ancien nom de fichier)
-- Repo public : https://github.com/Vanyar53/eregion
+- Repo public : https://github.com/grootcyber/eregion
 - Coût exploitation : <$2/mois LLM API sur infra existante
 
 ---

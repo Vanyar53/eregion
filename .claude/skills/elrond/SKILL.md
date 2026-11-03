@@ -88,7 +88,7 @@ Index :
    python3 scripts/review_verdict.py body --lot <ID> --verdict <ok|changes|blocking> --head "$reviewed" --report <rapport> \
      | gh pr comment <n> --body-file -
    gh pr view <n> --json headRefOid,comments \
-     | python3 scripts/review_verdict.py check --reviewed "$reviewed" --author eregion-agents --author Vanyar53
+     | python3 scripts/review_verdict.py check --reviewed "$reviewed" --author eregion-agents --author grootcyber
    gh pr merge <n> --squash --match-head-commit "$reviewed"
    ```
 

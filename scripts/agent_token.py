@@ -24,7 +24,7 @@ Settings (environment):
   EREGION_AGENT_DIR      ~/.config/eregion-agents  (the App's ID and key: set up by the maintainer)
   EREGION_AGENTS_APP_ID  the App's ID (else <dir>/app_id)
   EREGION_AGENT_KEY      the private key, PEM (else <dir>/app.pem) — refused when others can read it
-  EREGION_AGENT_REPO     owner/name (Vanyar53/eregion)
+  EREGION_AGENT_REPO     owner/name (grootcyber/eregion)
   EREGION_AGENT_API      https://api.github.com
   EREGION_AGENT_CACHE    ~/.cache/eregion-agents/token.json
   EREGION_AGENT_GH       the real gh (else the first `gh` on PATH that is not this wrapper)
@@ -54,7 +54,7 @@ from pathlib import Path
 
 HOME = Path.home()
 API = (os.environ.get("EREGION_AGENT_API") or "https://api.github.com").rstrip("/")
-REPO = os.environ.get("EREGION_AGENT_REPO") or "Vanyar53/eregion"
+REPO = os.environ.get("EREGION_AGENT_REPO") or "grootcyber/eregion"
 DIR = Path(os.environ.get("EREGION_AGENT_DIR") or HOME / ".config" / "eregion-agents")
 CACHE = Path(os.environ.get("EREGION_AGENT_CACHE") or HOME / ".cache" / "eregion-agents" / "token.json")
 HOST = "github.com"

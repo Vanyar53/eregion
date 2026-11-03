@@ -108,7 +108,7 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
      python3 scripts/review_verdict.py body --lot <ID> --verdict ok --head "$reviewed" --report <rapport> \
        | gh pr comment <n> --body-file -
      gh pr view <n> --json headRefOid,comments \
-       | python3 scripts/review_verdict.py check --reviewed "$reviewed" --author eregion-agents --author Vanyar53
+       | python3 scripts/review_verdict.py check --reviewed "$reviewed" --author eregion-agents --author grootcyber
      gh pr merge <n> --squash --match-head-commit "$reviewed"
      ```
      `check` ne lit que les commentaires des auteurs nommés, l'App des sessions et le mainteneur : sur
@@ -157,7 +157,7 @@ Deux emballages, dans `scripts/agent-bin/` :
 - `gh` lance le vrai `gh` avec ce jeton (`GH_TOKEN`) et un dossier de config à part
   (`~/.config/eregion-agents/gh`). Il ne lit jamais celui du mainteneur. Sans jeton, il n'appelle rien ;
 - `git-credential-eregion-agent` est l'assistant d'identifiants de `git`. Il ne répond que pour
-  `https://github.com/Vanyar53/eregion`, et ne dit rien pour tout autre hôte ou dépôt.
+  `https://github.com/grootcyber/eregion`, et ne dit rien pour tout autre hôte ou dépôt.
 
 L'App a les droits que lui donne Jonathan, jamais plus. **Décision de Jonathan (02/11) : pas de
 droit *Workflows*.** Ses droits : *Contents*, *Pull requests* et *Issues* en écriture ; *Actions*,
@@ -242,9 +242,9 @@ Code lancées dans `~/eregion` basculent. Ce sont tes fichiers : une session ne 
      worktree, ou depuis un autre dossier) : elle n'a ni l'emballage ni la config `git` de l'App, et
      retombe sur tes identifiants. Lance les sessions depuis `~/eregion` ;
    - `command -v gh` donne `~/.local/bin/gh`, l'aiguilleur. Dans ton terminal ou un autre projet, il passe au `gh` du système ;
-   - `python3 ~/eregion/scripts/agent_token.py whoami` donne `jeton de l'App <ID> : Vanyar53/eregion ;
+   - `python3 ~/eregion/scripts/agent_token.py whoami` donne `jeton de l'App <ID> : grootcyber/eregion ;
      expire dans 59 min` (code 1 si le jeton atteint un autre dépôt) ;
-   - `gh api /installation/repositories -q '.repositories[].full_name'` donne `Vanyar53/eregion`, seul ;
+   - `gh api /installation/repositories -q '.repositories[].full_name'` donne `grootcyber/eregion`, seul ;
    - `gh api graphql -f query='{viewer{login}}'` donne `eregion-agents[bot]` (mesuré le 02/11). `gh api user` répond 403 (« Resource not accessible by integration ») : c'est le cas
      d'un jeton d'installation, la preuve que ce n'est plus ton compte ;
    - `git ls-remote --get-url origin` et `git remote get-url --push origin` donnent l'URL en `https://` ;
@@ -311,15 +311,15 @@ ci-dessous présents dans le ruleset « main »** : sans eux, une PR rouge devie
        - `image (annatar)`.
 
 **Vérifier :**
-- avec ton identité : `gh api repos/Vanyar53/eregion/rulesets` liste les deux règles, et
-  `gh api repos/Vanyar53/eregion/rulesets/<id>`, pour chacune, montre `bypass_actors` avec le rôle
-  admin (`"actor_type": "RepositoryRole"`, et `"actor_id": 5`, l'id habituel du rôle admin : à confirmer à la lecture). `gh api repos/Vanyar53/eregion/rules/branches/main`
+- avec ton identité : `gh api repos/grootcyber/eregion/rulesets` liste les deux règles, et
+  `gh api repos/grootcyber/eregion/rulesets/<id>`, pour chacune, montre `bypass_actors` avec le rôle
+  admin (`"actor_type": "RepositoryRole"`, et `"actor_id": 5`, l'id habituel du rôle admin : à confirmer à la lecture). `gh api repos/grootcyber/eregion/rules/branches/main`
   donne les règles actives sur `main`, dont les six checks ;
 - **un essai de la dérogation, depuis le web** : publie une release d'essai (`v0.0.0-sec12-essai`, une
   pré-version, sur `main`), vérifie qu'elle passe, puis supprime-la, avec son tag (la page de la
   release, puis Tags). Le CD de H0 ne la suit pas : une pré-version n'est pas la dernière release ;
-- **ce que voit H0, sans jeton** : `curl -s 'https://api.github.com/repos/Vanyar53/eregion/rulesets?targets=tag'`,
-  puis `curl -s https://api.github.com/repos/Vanyar53/eregion/rulesets/<id>`. Le CD lit la règle
+- **ce que voit H0, sans jeton** : `curl -s 'https://api.github.com/repos/grootcyber/eregion/rulesets?targets=tag'`,
+  puis `curl -s https://api.github.com/repos/grootcyber/eregion/rulesets/<id>`. Le CD lit la règle
   ainsi. GitHub ne dit pas si ces routes répondent sans jeton : c'est l'hypothèse à mesurer. Puis
   `make glorfindel-host-cd-status` dit, à la ligne « règle des tags », « 🔒 … réservé par la règle « tags v* » »
   — lue sans jeton, mesuré le 02/11 —, ou « la règle des tags n'a pas pu être lue » (`cd-check` ne la lit pas

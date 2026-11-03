@@ -40,7 +40,7 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      an injection or the memory here and never there; an attestation of the old format. What
      varies, or is wrong on both sides, is said in orange, never a refusal;
   4. the candidate eregion-glorfindel:<tag>, never built here (CI3): the image the CI published
-     for the commit (ghcr.io/vanyar53/eregion-glorfindel:sha-<commit>, a hint), its signature
+     for the commit (ghcr.io/grootcyber/eregion-glorfindel:sha-<commit>, a hint), its signature
      and its provenance proven by cosign — the publishing workflow of this repository, on main,
      at this commit — then pulled by its digest; its labels are the tag and the commit, it runs as
      H0's user; a digest that moved since the release was first seen is refused. The release's
@@ -103,7 +103,7 @@ except ImportError:   # an agent copied without it: what a rule says still never
 HOME = Path.home()
 CD_HOME = Path(os.environ.get("EREGION_CD_HOME") or HOME / ".eregion-cd")
 REPO = Path(os.environ.get("EREGION_CD_REPO") or HOME / "eregion")
-SLUG = os.environ.get("EREGION_CD_GITHUB_REPO") or "Vanyar53/eregion"
+SLUG = os.environ.get("EREGION_CD_GITHUB_REPO") or "grootcyber/eregion"
 API = (os.environ.get("EREGION_CD_GITHUB_API") or "https://api.github.com").rstrip("/")
 CONSOLE = (os.environ.get("EREGION_CD_CONSOLE") or "http://127.0.0.1:7007").rstrip("/")
 HEARTBEAT = Path(os.environ.get("EREGION_CD_HEARTBEAT") or HOME / ".glorfindel" / "watch_heartbeat")

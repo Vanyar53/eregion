@@ -328,7 +328,7 @@ def test_the_publishing_workflow_runs_only_on_a_push_to_this_repositorys_main():
     assert doc["on"] == {"push": {"branches": ["main"]}}
     (job,) = doc["jobs"].values()
     guard = job["if"].replace(" ", "")
-    for part in ("github.repository=='Vanyar53/eregion'", "github.ref=='refs/heads/main'",
+    for part in ("github.repository=='grootcyber/eregion'", "github.ref=='refs/heads/main'",
                  "github.event_name=='push'"):
         assert part in guard
     assert "||" not in guard
@@ -709,7 +709,7 @@ def test_the_canarys_token_names_its_environment_which_no_other_job_enters():
               for n, j in (_load(p).get("jobs") or {}).items() if isinstance(j, dict) and _environment(j) == "canary"]
     assert others == []
     section = _canary_section()
-    assert re.findall(r'"subject": "([^"]+)"', section) == ["repo:Vanyar53/eregion:environment:canary"]
+    assert re.findall(r'"subject": "([^"]+)"', section) == ["repo:grootcyber/eregion:environment:canary"]
     put = section.index('gh api -X PUT "repos/$REPO/environments/canary"')
     assert '"protected_branches": false, "custom_branch_policies": true' in section[put:put + 200]
     assert 'deployment-branch-policies" -f name=main -f type=branch' in section[put:]

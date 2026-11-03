@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/Vanyar53/eregion/schemas/experiment.schema.v1.json",
+  "$id": "https://github.com/grootcyber/eregion/schemas/experiment.schema.v1.json",
   "title": "Eregion Experiment v1",
   "description": "One description for a technique and a fault (E1, eighth pass). An experiment is what an injector runs against enrolled targets: a MITRE technique (Annatar) or a declared fault (Gothmog). `kind` absent means `technique`, `engine` absent means `local-script`, so the existing Annatar scenarios validate unchanged. Versioned by its $id (v1) and the optional `schema_version` field.",
   "type": "object",

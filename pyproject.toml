@@ -80,8 +80,8 @@ gothmog = "gothmog.cli:cli"
 eregion = "eregion_console.cli:cli"
 
 [project.urls]
-Homepage = "https://github.com/Vanyar53/eregion"
-Issues = "https://github.com/Vanyar53/eregion/issues"
+Homepage = "https://github.com/grootcyber/eregion"
+Issues = "https://github.com/grootcyber/eregion/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

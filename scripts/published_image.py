@@ -6,7 +6,10 @@ by its CD (infra/glorfindel-host/cd/eregion_cd.py), on the operator's machine fo
     published_image.py resolve IMAGE --commit C            the digest published for commit C
     published_image.py verify IMAGE --commit C [--digest D]  its signature and its provenance
     published_image.py fetch IMAGE --ref REF --tag NAME    resolved, verified, pulled by digest, tagged NAME
-    published_image.py loaded IMAGE --digest D --id ID     ID (docker's, on another host) is this image
+    published_image.py archive IMAGE --ref REF --tag NAME --out DIR   resolved, verified, its OCI archive
+                                                           built from the registry's blobs (OI1)
+    published_image.py loaded IMAGE --digest D --expect-file F --inspect J   the image docker read back
+                                                           on another host (J, `docker image inspect`) is this one
     published_image.py install-cosign DEST                 cosign, pinned by its sha256
     published_image.py install-syft DEST                   syft (the SBOM), its archive pinned by its sha256
     published_image.py meta IMAGE --commit C               the workflow's names and labels ($GITHUB_OUTPUT)
@@ -42,6 +45,7 @@ import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -76,6 +80,19 @@ MANIFEST_MAX = 4 * 1024 * 1024
 ACCEPT = ", ".join(("application/vnd.oci.image.index.v1+json", "application/vnd.oci.image.manifest.v1+json",
                     "application/vnd.docker.distribution.manifest.list.v2+json",
                     "application/vnd.docker.distribution.manifest.v2+json"))
+# OI1: what an archive of the image may hold — a manifest, its config, its layers, of these media
+# types only (a foreign layer, served from elsewhere, refused); and the bounds of their sizes,
+# read in the manifest before a byte is fetched (the image of Annatar: ~630 MB, 03/11).
+INDEX_TYPES = {"application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"}
+MANIFEST_TYPES = {"application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"}
+CONFIG_TYPES = {"application/vnd.oci.image.config.v1+json", "application/vnd.docker.container.image.v1+json"}
+LAYER_TYPES = {"application/vnd.oci.image.layer.v1.tar", "application/vnd.oci.image.layer.v1.tar+gzip",
+               "application/vnd.oci.image.layer.v1.tar+zstd", "application/vnd.docker.image.rootfs.diff.tar.gzip"}
+CONFIG_MAX = 4 * 1024 * 1024
+LAYER_MAX = 2 * 1024 ** 3
+IMAGE_MAX = 4 * 1024 ** 3                 # all its layers together
+LAYERS_MAX = 128
+CHUNK = 1 << 20
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 LABELS = '{{index .Config.Labels "org.opencontainers.image.version"}} ' \
@@ -143,7 +160,7 @@ def _last(res, n: int = 3) -> str:
 def _open(url: str, headers: dict, limit: int):
     req = urllib.request.Request(url, headers={"User-Agent": "eregion-published-image", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with _OPENER.open(req, timeout=30) as r:       # a redirect elsewhere never carries the token (OI1)
             body = r.read(limit + 1)
             if len(body) > limit:
                 raise Unverified(f"réponse démesurée du registre ({url.split('?')[0]})")
@@ -176,6 +193,13 @@ def _token(image: str, api: str) -> str:
 
 def manifest(image: str, ref: str, api: str = "") -> tuple[str, dict]:
     """(its digest — the sha256 of the bytes read —, the manifest) of `ref`, a tag or a digest."""
+    digest, doc, _raw, _type = _manifest(image, ref, api)
+    return digest, doc
+
+
+def _manifest(image: str, ref: str, api: str = "") -> tuple[str, dict, bytes, str]:
+    """manifest(), with the bytes read (OI1: they go in the archive as they are, their sha256 the
+    digest) and the media type the registry gave them."""
     api = (api or REGISTRY_API).rstrip("/")
     token = _token(image, api)
     url = f"{api}/v2/{repository(image)}/manifests/{ref}"
@@ -202,7 +226,7 @@ def manifest(image: str, ref: str, api: str = "") -> tuple[str, dict]:
         raise Unverified("manifeste illisible") from None
     if not isinstance(doc, dict):
         raise Unverified("manifeste illisible")
-    return digest, doc
+    return digest, doc, body, str(doc.get("mediaType") or headers.get("Content-Type") or "").split(";")[0].strip()
 
 
 def resolve(image: str, commit: str, api: str = "") -> str:
@@ -216,21 +240,25 @@ def ids(image: str, digest: str, api: str = "") -> set[str]:
     """What docker may call this image once loaded elsewhere: the digest itself, its linux/amd64
     manifest, that manifest's config (the image id of docker's classic store) — each a content
     address under the verified digest."""
-    out = {digest}
-    d, doc = manifest(image, digest, api)
-    if doc.get("manifests"):
-        plat = [m for m in doc["manifests"] if isinstance(m, dict)
+    d, doc, _raw, _type = platform_manifest(image, digest, api)
+    config = str((doc.get("config") or {}).get("digest") or "")
+    if not DIGEST_RE.fullmatch(config):
+        raise Unverified("manifeste sans configuration lisible")
+    return {digest, d, config}
+
+
+def platform_manifest(image: str, digest: str, api: str = "") -> tuple[str, dict, bytes, str]:
+    """The linux/amd64 manifest under `digest` (itself, or the one its index names): its digest,
+    its document, its bytes, its media type — each read by its digest."""
+    d, doc, raw, mtype = _manifest(image, digest, api)
+    if doc.get("manifests") or mtype in INDEX_TYPES:
+        plat = [m for m in doc.get("manifests") or [] if isinstance(m, dict)
                 and (m.get("platform") or {}).get("os") == "linux"
                 and (m.get("platform") or {}).get("architecture") == "amd64"]
         if not plat or not DIGEST_RE.fullmatch(str(plat[0].get("digest") or "")):
             raise Unverified("pas d'image linux/amd64 sous ce digest")
-        out.add(plat[0]["digest"])
-        d, doc = manifest(image, plat[0]["digest"], api)
-    config = str((doc.get("config") or {}).get("digest") or "")
-    if not DIGEST_RE.fullmatch(config):
-        raise Unverified("manifeste sans configuration lisible")
-    out.add(config)
-    return out
+        d, doc, raw, mtype = _manifest(image, plat[0]["digest"], api)
+    return d, doc, raw, mtype
 
 
 # ── the proof: cosign, then the provenance read again ────────────────────────────────
@@ -431,6 +459,249 @@ def pull(image: str, digest: str, name: str, commit: str, version: str = "", run
                          f"étiquettes : {ver!r} {rev!r}"[:400])
 
 
+# ── OI1: the archive, built from the registry's blobs ────────────────────────────────
+# `docker save` of a pulled image, on the operator's Docker Desktop (its containerd image store),
+# gave its index and its manifest, without config or layers (~10 KB for ~630 MB, measured on
+# 03/11): Orodruin loaded an image it could not tag. The archive no longer comes from the
+# operator's docker: each blob is read from the registry by its digest, under the manifest whose
+# digest cosign proved, its sha256 and its size checked against that manifest before it enters.
+
+class _NoAuthElsewhere(urllib.request.HTTPRedirectHandler):
+    """GHCR answers a blob with a redirect to its storage (pkg-containers.githubusercontent.com):
+    the registry's token never follows to another host, as docker's own client does."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(req.full_url).netloc:
+            new.headers.pop("Authorization", None)
+            new.unredirected_hdrs.pop("Authorization", None)
+        return new
+
+
+_OPENER = urllib.request.build_opener(_NoAuthElsewhere)
+
+
+def _descriptor(desc, what: str, types: set, limit: int) -> tuple[str, int]:
+    """A descriptor of the manifest: its digest, its size — a media type expected, a size bounded."""
+    if not isinstance(desc, dict):
+        raise Unverified(f"manifeste illisible : {what}")
+    digest, size, mtype = str(desc.get("digest") or ""), desc.get("size"), str(desc.get("mediaType") or "")
+    if not DIGEST_RE.fullmatch(digest):
+        raise Unverified(f"{what} sans digest sha256 lisible")
+    if mtype not in types:
+        shown = mtype if re.fullmatch(r"[a-z0-9.+/-]{1,100}", mtype) else "?"
+        raise Unverified(f"{what} {digest[:19]}… : média inattendu ({shown})")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise Unverified(f"{what} {digest[:19]}… sans taille lisible")
+    if size > limit:
+        raise Unverified(f"{what} {digest[:19]}… démesurée : {size} octets (au plus {limit})")
+    return digest, size
+
+
+def blob(image: str, digest: str, size: int, dest: Path, token: Callable[[bool], str], api: str = "") -> None:
+    """The blob `digest` read from the registry into `dest`: exactly `size` bytes, whose sha256 is
+    `digest` — else `dest` is removed and the blob refused. `token(fresh)`: the anonymous token,
+    asked again once if the registry no longer takes it (a long download)."""
+    api = (api or REGISTRY_API).rstrip("/")
+    url = f"{api}/v2/{repository(image)}/blobs/{digest}"
+    h, got = hashlib.sha256(), 0
+    for fresh in (False, True):
+        req = urllib.request.Request(url, headers={"User-Agent": "eregion-published-image",
+                                                   "Authorization": f"Bearer {token(fresh)}"})
+        try:
+            with _OPENER.open(req, timeout=60) as r, open(dest, "wb") as f:
+                h, got = hashlib.sha256(), 0
+                while True:
+                    chunk = r.read(min(CHUNK, size + 1 - got))
+                    if not chunk:
+                        break
+                    got += len(chunk)
+                    if got > size:
+                        raise Unverified(f"blob {digest[:19]}… plus long que les {size} octets du manifeste")
+                    h.update(chunk)
+                    f.write(chunk)
+            break
+        except urllib.error.HTTPError as e:
+            dest.unlink(missing_ok=True)
+            if e.code == 401 and not fresh:
+                continue
+            if e.code == 404:
+                raise Unverified(f"blob {digest[:19]}… absent du registre") from None
+            if e.code in (401, 403):
+                raise Unverified(f"blob {digest[:19]}… illisible sans jeton (HTTP {e.code})") from None
+            raise Unavailable(f"registre : HTTP {e.code} pour le blob {digest[:19]}…") from None
+        except Unverified:
+            dest.unlink(missing_ok=True)
+            raise
+        except (urllib.error.URLError, OSError) as e:
+            dest.unlink(missing_ok=True)
+            raise Unavailable(f"blob {digest[:19]}… interrompu : {type(e).__name__}") from None
+    if got != size:
+        dest.unlink(missing_ok=True)
+        raise Unverified(f"blob {digest[:19]}… de {got} octets, pas les {size} du manifeste")
+    if "sha256:" + h.hexdigest() != digest:
+        dest.unlink(missing_ok=True)
+        raise Unverified(f"blob {digest[:19]}… : son empreinte est sha256:{h.hexdigest()[:12]}…, pas la sienne")
+
+
+def _not_root(user: str) -> bool:
+    """A user other than root: neither empty, nor `root`, nor a uid that is 0 (`0`, `00`, `000:0`)."""
+    name = user.split(":", 1)[0].strip()
+    if name.isdigit():
+        return int(name) != 0
+    return name not in ("", "root")
+
+
+def _tag_names(tag: str) -> tuple[str, str]:
+    """`name:tag` as docker's loader reads it in an OCI archive's index (docker save writes both)."""
+    m = re.fullmatch(r"([a-z0-9][a-z0-9._-]{0,127}):([A-Za-z0-9_][A-Za-z0-9._-]{0,127})", tag or "")
+    if not m:
+        raise Unverified(f"tag invalide : {tag!r}")
+    return f"docker.io/library/{tag}", m.group(2)
+
+
+def _member(tar, name: str, data: bytes = b"", path: Path | None = None) -> None:
+    import io
+    import tarfile
+
+    info = tarfile.TarInfo(name)
+    info.mode, info.mtime = 0o644, 0
+    if path is None:
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    else:
+        info.size = path.stat().st_size
+        with open(path, "rb") as f:
+            tar.addfile(info, f)
+
+
+def build_archive(image: str, digest: str, commit: str, tag: str, out: Path, api: str = "") -> dict:
+    """The OCI archive of the linux/amd64 image under `digest` (a digest cosign proved), written
+    as out/image.tar — `oci-layout`, `index.json` naming `tag`, docker's `manifest.json`, then
+    `blobs/sha256/…`: the manifest's own bytes, its config, its layers — and what Orodruin must
+    read back once it is loaded, as out/expect.json (returned). Every blob is checked by its
+    sha256 and its size against the manifest before it enters; the config must name `commit` and
+    a user other than root. Anything else: nothing is written, the cause said."""
+    import tarfile
+
+    name, short = _tag_names(tag)
+    mdigest, doc, raw, mtype = platform_manifest(image, digest, api)
+    if mtype not in MANIFEST_TYPES:
+        shown = mtype if re.fullmatch(r"[a-z0-9.+/-]{1,100}", mtype) else "?"
+        raise Unverified(f"manifeste {mdigest[:19]}… : média inattendu ({shown or 'aucun'})")
+    cdigest, csize = _descriptor(doc.get("config"), "configuration", CONFIG_TYPES, CONFIG_MAX)
+    layers = doc.get("layers")
+    if not isinstance(layers, list) or not layers or len(layers) > LAYERS_MAX:
+        raise Unverified(f"manifeste {mdigest[:19]}… : {len(layers) if isinstance(layers, list) else 'aucune'} "
+                         f"couches (de 1 à {LAYERS_MAX})")
+    descs = [_descriptor(d, "couche", LAYER_TYPES, LAYER_MAX) for d in layers]
+    if sum(s for _, s in descs) > IMAGE_MAX:
+        raise Unverified(f"image démesurée : {sum(s for _, s in descs)} octets de couches (au plus {IMAGE_MAX})")
+    if len({d for d, _ in descs}) != len(descs) or cdigest in {d for d, _ in descs}:
+        raise Unverified(f"manifeste {mdigest[:19]}… : un blob nommé deux fois")
+    out.mkdir(parents=True, exist_ok=True)
+    final, part, scratch = out / "image.tar", out / "image.tar.part", out / "blob.part"
+    for p in (final, out / "expect.json"):
+        p.unlink(missing_ok=True)
+    held: dict = {}
+
+    def token(fresh: bool) -> str:
+        if fresh or "t" not in held:
+            held["t"] = _token(image, (api or REGISTRY_API).rstrip("/"))
+        return held["t"]
+
+    try:
+        blob(image, cdigest, csize, scratch, token, api)
+        try:
+            config = json.loads(scratch.read_bytes())
+        except ValueError:
+            raise Unverified(f"configuration {cdigest[:19]}… illisible") from None
+        if not isinstance(config, dict) or not isinstance(config.get("config") or {}, dict):
+            raise Unverified(f"configuration {cdigest[:19]}… illisible")
+        cfg = config.get("config") or {}
+        diff_ids = (config.get("rootfs") or {}).get("diff_ids") if isinstance(config.get("rootfs"), dict) else None
+        if (not isinstance(diff_ids, list) or len(diff_ids) != len(descs)
+                or not all(isinstance(x, str) and DIGEST_RE.fullmatch(x) for x in diff_ids)):
+            raise Unverified(f"configuration {cdigest[:19]}… : ses couches ne sont pas celles du manifeste")
+        if (config.get("os"), config.get("architecture")) != ("linux", "amd64"):
+            raise Unverified(f"configuration {cdigest[:19]}… : pas une image linux/amd64")
+        labels_ = cfg.get("Labels") if isinstance(cfg.get("Labels"), dict) else {}
+        rev = str(labels_.get("org.opencontainers.image.revision") or "")
+        if rev != commit:
+            said = rev[:12] if COMMIT_RE.fullmatch(rev) else "?"
+            raise Unverified(f"la configuration dit le commit {said}, pas {commit[:12]}", f"étiquette : {rev!r}"[:400])
+        user = cfg.get("User") if isinstance(cfg.get("User"), str) else ""
+        if not _not_root(user):
+            raise Unverified("l'image tourne en root : refusée (les injecteurs, jamais root)")
+        with tarfile.open(part, "w") as tar:
+            _member(tar, f"blobs/sha256/{mdigest.split(':', 1)[1]}", raw)
+            _member(tar, f"blobs/sha256/{cdigest.split(':', 1)[1]}", path=scratch)
+            for d, s in descs:
+                blob(image, d, s, scratch, token, api)
+                _member(tar, f"blobs/sha256/{d.split(':', 1)[1]}", path=scratch)
+            index = {"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
+                     "manifests": [{"mediaType": mtype, "digest": mdigest, "size": len(raw),
+                                    "annotations": {"io.containerd.image.name": name,
+                                                    "org.opencontainers.image.ref.name": short}}]}
+            legacy = [{"Config": f"blobs/sha256/{cdigest.split(':', 1)[1]}", "RepoTags": [tag],
+                       "Layers": [f"blobs/sha256/{d.split(':', 1)[1]}" for d, _ in descs]}]
+            _member(tar, "index.json", json.dumps(index).encode())
+            _member(tar, "manifest.json", json.dumps(legacy).encode())
+            _member(tar, "oci-layout", b'{"imageLayoutVersion":"1.0.0"}')
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    finally:
+        scratch.unlink(missing_ok=True)
+    expect = {"image": image, "digest": digest, "manifest": mdigest, "config": cdigest, "commit": commit,
+              "ids": sorted({digest, mdigest, cdigest}), "user": user, "diff_ids": diff_ids,
+              "os": "linux", "architecture": "amd64"}
+    os.replace(part, final)
+    (out / "expect.json").write_text(json.dumps(expect, indent=1) + "\n", encoding="utf-8")
+    return expect
+
+
+def check_loaded(expect: dict, inspected: str, digest: str) -> None:
+    """What docker says of the image loaded on Orodruin (`docker image inspect`, its JSON), read
+    against what the proven manifest announced: its id (the manifest's, under containerd's store;
+    its config's digest, under the classic store), the layers and the user of its config, its
+    platform and its commit. An image without its config reads back without layers nor user (docker's
+    API answers its id alone: the CLI applies -f on its side), or not at all: refused. The layers
+    are unpacked or not, docker's inspect does not say it (#490, OI2: a run before the tag)."""
+    if expect.get("digest") != digest or not DIGEST_RE.fullmatch(digest or ""):
+        raise Unverified(f"l'attendu n'est pas celui de {digest[:19]}…")
+    ids_ = expect.get("ids") or []
+    if not ids_ or not all(isinstance(x, str) and DIGEST_RE.fullmatch(x) for x in ids_):
+        raise Unverified("l'attendu est illisible")
+    try:
+        doc = json.loads(inspected or "")
+    except ValueError:
+        doc = None
+    if isinstance(doc, list) and len(doc) == 1:
+        doc = doc[0]
+    if not isinstance(doc, dict) or not doc:
+        raise Unverified("l'image arrivée ne se relit pas (docker image inspect) : sa configuration ou ses "
+                         "couches manquent")
+    got = str(doc.get("Id") or "").strip()
+    if got not in ids_:
+        shown = got[:19] if DIGEST_RE.fullmatch(got) else "?"
+        raise Unverified(f"l'image chargée ({shown}…) n'est pas {digest[:19]}…")
+    cfg = doc.get("Config") if isinstance(doc.get("Config"), dict) else {}
+    layers = (doc.get("RootFS") or {}).get("Layers") if isinstance(doc.get("RootFS"), dict) else None
+    wrong = []
+    if layers != expect.get("diff_ids"):
+        wrong.append("ses couches")
+    if (cfg.get("User") or "") != expect.get("user"):
+        wrong.append("son utilisateur")
+    if (doc.get("Os"), doc.get("Architecture")) != (expect.get("os"), expect.get("architecture")):
+        wrong.append("sa plateforme")
+    labels_ = cfg.get("Labels") if isinstance(cfg.get("Labels"), dict) else {}
+    if (labels_.get("org.opencontainers.image.revision") or "") != expect.get("commit"):
+        wrong.append("son commit")
+    if wrong:
+        raise Unverified(f"l'image chargée n'est pas celle du manifeste prouvé : {', '.join(wrong)}")
+
+
 def commit_of(ref: str, runner: Runner = run) -> str:
     """A tag or a commit id of origin/main, as a full commit (a branch moves: refused)."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", ref or ""):
@@ -504,15 +775,16 @@ def default_cosign() -> Path:
 
 def main(argv: list | None = None, runner: Runner = run) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("cmd", choices=["resolve", "verify", "fetch", "ids", "loaded", "install-cosign",
+    p.add_argument("cmd", choices=["resolve", "verify", "fetch", "archive", "ids", "loaded", "install-cosign",
                                    "install-syft", "meta", "pushed"])
     p.add_argument("image", nargs="?", default="")
     p.add_argument("--commit", default="")
     p.add_argument("--digest", default="")
     p.add_argument("--ref", default="")
     p.add_argument("--tag", default="")
-    p.add_argument("--id", default="")
-    p.add_argument("--expect", default="", help="loaded: the ids `ids` printed before the image left")
+    p.add_argument("--out", default="", help="archive: the directory of image.tar and expect.json")
+    p.add_argument("--expect-file", default="", help="loaded: the expect.json `archive` wrote before the image left")
+    p.add_argument("--inspect", default="", help="loaded: `docker image inspect` of the image arrived (a file, - for stdin)")
     p.add_argument("--cosign", default="")
     a = p.parse_args(argv)
     cosign = Path(a.cosign) if a.cosign else default_cosign()
@@ -540,12 +812,32 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
             _output({"ref": ref, "commit": commit, "digest": digest})
         elif a.cmd == "ids":
             print(" ".join(sorted(ids(a.image, a.digest))))
+        elif a.cmd == "archive":
+            if not a.out or not a.tag:
+                p.error("archive IMAGE --ref REF --tag NAME --out DIR")
+            ref = a.ref or latest_tag(runner)
+            commit = commit_of(ref, runner)
+            digest = resolve(a.image, commit)
+            verify(a.image, digest, commit, cosign, runner=runner)
+            expect = build_archive(a.image, digest, commit, a.tag, Path(a.out))
+            print(f"✓ archive de {reference(a.image)}@{digest[:19]}… : son manifeste, sa configuration et ses "
+                  f"{len(expect['diff_ids'])} couches, chacun vérifié par son sha256", file=sys.stderr)
+            _output({"ref": ref, "commit": commit, "digest": digest})
         elif a.cmd == "loaded":
-            expected = set(a.expect.split()) if a.expect.strip() else ids(a.image, a.digest)
-            if not all(DIGEST_RE.fullmatch(x) for x in expected) or a.id.strip() not in expected:
-                print(f"✗ l'image chargée ({a.id.strip()[:19] or '?'}…) n'est pas {a.digest[:19]}…", file=sys.stderr)
-                return 1
-            print(f"✓ l'image chargée est {reference(a.image)}@{a.digest}")
+            if not a.expect_file or not a.inspect:
+                p.error("loaded IMAGE --digest D --expect-file F --inspect J")
+            try:
+                expect = json.loads(Path(a.expect_file).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                expect = None
+            if not isinstance(expect, dict):
+                raise Unverified("attendu illisible (expect.json)")
+            try:
+                inspected = sys.stdin.read() if a.inspect == "-" else Path(a.inspect).read_text(encoding="utf-8")
+            except (OSError, ValueError):
+                inspected = ""
+            check_loaded(expect, inspected, a.digest)
+            print(f"✓ l'image chargée est {reference(a.image)}@{a.digest} : son id, ses couches, son utilisateur")
         elif a.cmd == "meta":
             _output(meta(a.image, a.commit))
         elif a.cmd == "pushed":

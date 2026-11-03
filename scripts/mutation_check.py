@@ -4484,7 +4484,7 @@ MUTANTS += [
     ("M1663", "a reference off main sent to Orodruin (CI3)", PIM,
      "    if on_main.returncode != 0:\n", "    if False:\n"),
     ("M1664", "any image id accepted on Orodruin after the load (CI3)", PIM,
-     " or a.id.strip() not in expected:", ":"),
+     "    if got not in ids_:\n", "    if False:\n"),
     ("M1665", "a digest that moved since the release was first seen deployed (V-22, CI3)", CD,
      "        if seen.get(tag, digest) != digest:\n", "        if False:\n"),
     ("M1666", "the publishing job not waited for: a release from before CI3 refused at once, or deployed "
@@ -4527,7 +4527,7 @@ MUTANTS += [
     ("M1698", "~/.eregion-image left naming the old image when the new one fails (CI3, review)", "Makefile",
      "\t $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \\\n", ""),
     ("M1699", "an image refused on Orodruin left there under its waiting tag (CI3, review)", "Makefile",
-     "\t else docker image rm $(ORO_INCOMING) >/dev/null 2>&1; $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n",
+     "\t else $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n",
      "\t else true; \\\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in (1690, 1691, 1692, 1693, 1694, 1697, 1698, 1699)})
@@ -10027,6 +10027,34 @@ TESTS.update({mid: _MAK_SEQ for mid in ("M3420", "M3421", "M3423")})
 TESTS["M3422"] = "tests/unit/test_reassert.py"
 
 
+# OI1 (#488): the image of Annatar arrives whole on Orodruin — its OCI archive built from the registry's
+# blobs under the manifest cosign proved (never the operator's `docker save`, which gave a pulled image
+# without config or layers), each blob checked by its sha256 and its size first; and what Orodruin
+# reads back (docker image inspect) compared with that manifest, not its id alone. M3450–M3459.
+MUTANTS += [
+    ("M3450", "a blob's sha256 never checked: an altered layer sent to Orodruin (OI1)", PIM,
+     '    if "sha256:" + h.hexdigest() != digest:\n', "    if False:\n"),
+    ("M3451", "a blob read past its descriptor's size: a registry that never stops fills the disk (OI1)", PIM,
+     "                    if got > size:\n", "                    if False:\n"),
+    ("M3452", "a descriptor's size never bounded: a blob out of bounds fetched (OI1)", PIM,
+     "    if size > limit:\n", "    if False:\n"),
+    ("M3453", "a layer of an unexpected media type (a foreign one, served from elsewhere) taken (OI1)", PIM,
+     "    if mtype not in types:\n", "    if False:\n"),
+    ("M3454", "a manifest of an unexpected media type taken for an image's (OI1)", PIM,
+     "    if mtype not in MANIFEST_TYPES:\n", "    if False:\n"),
+    ("M3455", "the layers read back on Orodruin never compared with the config's (OI1)", PIM,
+     '    if layers != expect.get("diff_ids"):\n', "    if False:\n"),
+    ("M3456", "the user read back on Orodruin never compared with the config's (OI1)", PIM,
+     '    if (cfg.get("User") or "") != expect.get("user"):\n', "    if False:\n"),
+    ("M3457", "the config's commit never read: another commit's image archived under this digest (OI1)", PIM,
+     "        if rev != commit:\n", "        if False:\n"),
+    ("M3458", "an image that runs as root archived for the injectors (OI1)", PIM,
+     "        if not _not_root(user):\n", "        if False:\n"),
+    ("M3459", "the registry's token sent on to its storage, another host (OI1)", PIM,
+     '            new.headers.pop("Authorization", None)\n            new.unredirected_hdrs.pop("Authorization", None)\n',
+     "            pass\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3450, 3460)})
 # SEC20 (#467): the red never writes what the operator runs — no red container mounts read-write a
 # directory of code, scripts or configuration, nor what holds one, nor the .bashrc a red shell runs.
 # M3400–M3409.

@@ -3398,13 +3398,12 @@ l'attaquant (son nom quelconque, ou celui d'une règle de VM de web), refusée d
 carte (quatre cas) ; la paire de l'IP écrite sur nsg-data, qu'aucun écrivain ne tient, refusée — db-nic-1 nue
 derrière lui, et db-nic-1 qui porte nsg-subnet comme NSG de carte, la paire de nsg-subnet non reposée (le cas de la
 relecture, ci-dessous) ; le `-out` de l'IP écrit sur nsg-subnet vers `*`, qui ferme aussi les sorties vers
-internet et le pair latéral, refusé pour celles-là, admis pour celles de l'attaquant seules. **Mutants M3384,
-M3386, M3390–M3392**, sur l'oracle lui-même, mesurés par ces contrôles et la séquence figée : la paire comptée sur
-n'importe quel NSG (M3384, le filtre `on` retiré) ; chaque carte lue comme portant un périmètre d'écrivain (M3386,
-la condition 2) ; la condition 3 lâchée sur la carte (M3390) ou sur le sous-réseau (M3391 : l'oracle d'avant
-I5S) ; les règles de VM d'un écrivain comptées comme règles de périmètre (M3392, le calcul — qui borne aussi I4).
-La condition 1 lâchée (`f[3] != ATTACKER` retiré) est prise par son contrôle, mesurée à la main ; elle n'a pas
-d'entrée dans le harnais, faute d'un numéro dans la plage du lot.
+internet et le pair latéral, refusé pour celles-là, admis pour celles de l'attaquant seules. **Mutants M3383,
+M3384, M3386, M3390–M3392**, sur l'oracle lui-même, mesurés par ces contrôles et la séquence figée : la condition 1
+lâchée (M3383, `f[3] != ATTACKER` retiré : la paire à destination `*` passe) ; la paire comptée sur n'importe quel
+NSG (M3384, le filtre `on` retiré) ; chaque carte lue comme portant un périmètre d'écrivain (M3386, la condition
+2) ; la condition 3 lâchée sur la carte (M3390) ou sur le sous-réseau (M3391 : l'oracle d'avant I5S) ; les règles
+de VM d'un écrivain comptées comme règles de périmètre (M3392, le calcul — qui borne aussi I4).
 **La relecture 5.5** (« bloquant » sur 714d3558). (1) **La condition 3 n'était pas liée au NSG partagé** :
 `closed` comptait la paire de l'IP écrite par la passe sur n'importe quel NSG. db-nic-1 portant nsg-subnet (un
 écrivain), la paire de nsg-subnet retirée, la paire écrite sur nsg-data (le NSG de son sous-réseau, qu'aucun
@@ -3412,7 +3411,8 @@ d'entrée dans le harnais, faute d'un numéro dans la plage du lot.
 714d3558 admettait — un refus relâché, qui masquait la classe de M2995 (le premier temps qui écrit la paire d'une
 entrée en `human_only`) dès que la carte porte aussi le NSG d'un écrivain dont la paire n'est pas reposée.
 Corrigé : le filtre `on` (ci-dessus), dans les deux branches ; le contrôle et M3384 ajoutés. (2) La justification
-« la condition 1 est impliquée par la 3 » était inexacte (une paire à destination `*`) : son contrôle est ajouté.
+« la condition 1 est impliquée par la 3 » était inexacte (une paire à destination `*`) : son contrôle et M3383
+ajoutés.
 **Mesures d'I5S** (la branche d'I4P, 09b4e4f, plus ce lot). Avant l'élargissement, la restriction levée : à 500, la
 graine 7 tombe sur I5 (« …/api in human_only », la sortie 443 d'api-nic vers l'attaquant). Après : invariants,
 `--hypothesis-seed=N`, à 60 séquences, N = 1..18, 73, 101, **20/20 vertes** ; à 500, N = 1, 3, 7, 8675, **4/4
@@ -3431,9 +3431,8 @@ divergent) ; la graine 8675 dans la passe de `turned_perimeter_left_out` (web en
 `operator_acknowledges` et `said_then_back_after_a_full_disk`), signalée par Hypothesis comme instable
 (`FlakyFailure` : la séquence ne retombe pas à la relecture), verte à 500 sur 718fc1b. Aucune ne passe par
 l'oracle d'I5 ni d'I4 : la famille « carte acquittée » de L1G (#475), à remesurer une fois L1G dans `main`. Mutants
-M3384, M3386, M3390–M3392 : **5/5 à chaque tour** (deux tours) ; la condition 1 lâchée, prise par son contrôle.
-`pytest` complet : 6 122 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 445
-mutants, sans faute.
+M3383, M3384, M3386, M3390–M3392 : **6/6 à chaque tour** (deux tours). `pytest` complet : 6 122 réussis, 7
+sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 446 mutants, sans faute.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

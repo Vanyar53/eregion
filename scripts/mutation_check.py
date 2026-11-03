@@ -9623,7 +9623,7 @@ TESTS.update({"M3340": "tests/unit/test_entries_calls.py::test_the_watch_without
 # controls (tests/unit/test_invariant_regressions.py), which drive a world where the bound is the only thing that
 # refuses. The first condition is not implied by the third — a pair of the IP written wrong (aimed at `*`) closes
 # flows that go elsewhere —: its control is `…_what_a_pair_written_wrong_closes_beside_the_attacker`.
-# M3384, M3386, M3390–M3392.
+# M3383 (the first condition), M3384, M3386, M3390–M3392.
 _I5S_CTRL = "tests/unit/test_invariant_regressions.py::"
 _I5S_TESTS = " ".join(_I5S_CTRL + t for t in (
     "test_the_per_vm_i5_admits_a_writers_perimeter_carried_as_the_nics_nsg",
@@ -9632,6 +9632,10 @@ _I5S_TESTS = " ".join(_I5S_CTRL + t for t in (
     "test_the_per_vm_i5_refuses_what_a_pair_written_wrong_closes_beside_the_attacker",
     "test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared"))
 MUTANTS += [
+    ("M3383", "I5 per VM admits a flow that goes elsewhere than the attacker, closed by a pair of the IP written wrong "
+              "(aimed at `*`) — the first condition, not implied by the third (I5S's review)", INVARIANTS,
+     "            if f[3] != ATTACKER:\n                return False\n            if f[0] in shares[\"perimeter\"]:\n",
+     "            if f[0] in shares[\"perimeter\"]:\n"),
     ("M3384", "I5 per VM counts the IP's pair written on any NSG: on one no writer holds, it passes for a NIC that "
               "carries a writer's NSG — the class of M2995 hidden (I5S's review: the rule on the NSG shared)",
      INVARIANTS,
@@ -9654,7 +9658,7 @@ MUTANTS += [
      '            if e["op"] == "rule.write" and e["rule"] in (plain, f"{plain}-out") and e["nsg"] in nsgs:\n',
      '            if e["op"] == "rule.write" and e["rule"].startswith(plain) and e["nsg"] in nsgs:\n'),
 ]
-TESTS.update({f"M{n}": _I5S_TESTS for n in (3384, 3386, 3390, 3391, 3392)})
+TESTS.update({f"M{n}": _I5S_TESTS for n in (3383, 3384, 3386, 3390, 3391, 3392)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

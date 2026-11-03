@@ -8542,6 +8542,54 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": _SEC16 for n in range(3146, 3150)})
 
+# I3G (#446), found by I3C's review: the store folded an alert of the reassertion into the graph's
+# pending card of the same action, resource and type — its text kept or overwritten, never
+# notified, never read « said » by the reassertion; and the other way. M3170–M3176; M3177 for the
+# console, which grouped them again under one Ack (M3178–M3179 unused).
+_I3G_UNIT = "tests/unit/test_reassert.py"
+_I3G_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_a_disappearance_beside_the_graphs_card_is_said_on_its_own")
+_I3G_FOLD = f"{_I3G_UNIT}::test_a_card_of_the_reassertion_never_folds_into_one_of_another_origin"
+_I3G_KEY = "                and _reassertion(e.get(\"signal_id\")) == _reassertion(signal_id)\n"
+MUTANTS += [
+    ("M3170", "the store folds a card of the reassertion into the graph's, and the reverse: the alert in "
+              "silence (I3G)", ESC, _I3G_KEY, ""),
+    ("M3171", "the reassertion's ids told by their case: one written in capitals folded into the graph's (I3G)",
+     ESC, '    return str(signal_id or "").lower().startswith(_REASSERTION)\n',
+     '    return str(signal_id or "").startswith(_REASSERTION)\n'),
+    ("M3172", "the unreadable-state card not the reassertion's: folded into a card of another origin (I3G)", ESC,
+     '_REASSERTION = ("reassert-", "state-unreadable-")\n', '_REASSERTION = ("reassert-",)\n'),
+    ("M3173", "the graph's re-fire folded into the alert: its words over the alert's, the alert read « said » "
+              "(I3G)", ESC, _I3G_KEY,
+     "                and (_reassertion(e.get(\"signal_id\")) or not _reassertion(signal_id))\n"),
+    ("M3174", "the alert folded into the graph's card (one way only): said again, never notified (I3G)", ESC,
+     _I3G_KEY, "                and (_reassertion(signal_id) or not _reassertion(e.get(\"signal_id\")))\n"),
+    ("M3175", "the fold keyed by the signal id: the graph's re-fires under another run's id never fold (I3G, "
+              "too much)", ESC, _I3G_KEY,
+     "                and _reassertion(e.get(\"signal_id\")) == _reassertion(signal_id)\n"
+     "                and e.get(\"signal_id\") == signal_id\n"),
+    ("M3176", "the former name-only key keeps the IP as written: its card for an IPv6 in capitals never closed, "
+              "the alert folded into it (I3G, in passing)", R,
+     '    legacy = (f"reassert-{vm}" + (f"-{ip}" if ip else "")).lower()      # an IPv6 in capitals too (I3G)\n',
+     '    legacy = f"reassert-{vm}" + (f"-{ip}" if ip else "")\n'),
+    ("M3177", "the console groups a VM's cards by action alone: the graph's card and the alert under one title, "
+              "one Ack for both (I3G)", GJS,
+     "    const key = e.action === 'improve_detection' ? e.id   // rules stay separate\n"
+     "      : `${_fromReassertion(e) ? 'reassertion' : 'other'}|${e.action}`;\n",
+     "    const key = e.action === 'improve_detection' ? e.id : e.action; // rules stay separate\n"),
+]
+TESTS.update({
+    "M3177": "tests/unit/test_console.py::"
+             "test_a_card_of_the_reassertion_is_never_grouped_nor_acked_with_one_of_another_origin",
+    "M3170": f"{_I3G_SEQ} {_I3G_FOLD} {_I3G_UNIT}::test_a_disappearance_beside_the_graphs_card_is_said_by_its_own",
+    "M3171": _I3G_FOLD,
+    "M3172": _I3G_FOLD,
+    "M3173": f"{_I3G_UNIT}::test_the_graphs_card_after_an_alert_never_overwrites_it",
+    "M3174": f"{_I3G_SEQ} {_I3G_UNIT}::test_a_disappearance_beside_the_graphs_card_is_said_by_its_own",
+    "M3175": f"{_I3G_UNIT}::test_a_card_still_folds_into_one_of_its_own_origin",
+    "M3176": f"{_I3G_UNIT}::test_a_drift_card_of_the_name_only_key_for_an_ipv6_in_capitals_is_closed_by_the_next",
+})
+
 
 # MC1 — the control set on AWS: plausible bugs of the AWS adapter, written before the
 # machine on AWS was shaped, never used to shape it (same discipline as C01–C16). The

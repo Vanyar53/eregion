@@ -9171,6 +9171,48 @@ MUTANTS += [
 TESTS.update({mid: "tests/unit/test_mutant_anchors.py" for mid in ("M3185", "M3186")})
 
 
+# I4G (#460): an older version's deny-all someone turned into an allow is ours for the guard of a removal by
+# that name (I4B) — the guard knew `glorfindel-iso-` and `glorfindel-block-` only, and the release of that
+# older isolation (its reset too) took the allow off: the VM given its NSG since was cut off (seed 73). Its
+# review: never for what a deny holds back (I5Q), or a true orphan that cuts a live VM is kept (U1); and a
+# deny-all is never to be put back (it would cut that VM too).
+_I4G_UNIT = "tests/unit/test_turned_names.py"
+_I4G_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in")
+_I4G_OLDER = "    if not turned and not _turned_allows(nsgs, _OLDER_NAMES):\n"
+_I4G_BACK = '    back = "" if total or name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "\n'
+MUTANTS += [
+    ("M3270", "an older version's deny-all turned into an allow is never asked about by its name: its release "
+              "takes it off, the VM given its NSG cut off (I4G)", TRN, _I4G_OLDER, "    if not turned:\n"),
+    ("M3271", "an older version's VM-suffixed deny-all turned into an allow is never asked about by its name (I4G)",
+     TRN, _I4G_OLDER,
+     "    if not turned and not [x for x in _turned_allows(nsgs, _OLDER_NAMES)\n"
+     '                           if x[3].lower() in ("glorfindel-isolation-deny-all", '
+     '"glorfindel-isolation-deny-all-out")]:\n'),
+    ("M3272", "an older version's outbound deny-all turned into an allow is never asked about by its name (I4G)",
+     TRN, _I4G_OLDER,
+     "    if not turned and not [x for x in _turned_allows(nsgs, _OLDER_NAMES) "
+     'if not x[3].lower().endswith("-out")]:\n'),
+    ("M3273", "an older version's name counted among the turned rules a deny holds back: a true orphan that cuts "
+              "a live VM kept (U1, I4G's review)", TRN,
+     '_TURNED_NAMES = ("glorfindel-iso-", "glorfindel-block-")\n',
+     '_TURNED_NAMES = ("glorfindel-iso-", "glorfindel-block-", "glorfindel-isolation-deny-all")\n'),
+    ("M3274", "a turned allow on every address said to be put back as a deny: it would cut the VM it opens "
+              "(I4G's review)", TRN, _I4G_BACK,
+     '    back = "" if name.lower().startswith(_OLDER_NAMES) else "la remettre en refus, ou "\n'),
+    ("M3275", "an older version's deny-all said to be put back as a deny (I4G's review)", TRN, _I4G_BACK,
+     '    back = "" if total else "la remettre en refus, ou "\n'),
+]
+TESTS.update({
+    "M3270": f"{_I4G_SEQ} {_I4G_UNIT}",
+    "M3271": _I4G_UNIT,
+    "M3272": _I4G_UNIT,
+    "M3273": _I4G_UNIT,
+    "M3274": _I4G_UNIT,
+    "M3275": _I4G_UNIT,
+})
+
+
 
 # AUD1 (#408): auditd's execs of a human login as root, read before any signal — the records read
 # whole or a card, ADM1's list (never a copy), the rule's filters, the bench's Terraform. M2760–M2779.

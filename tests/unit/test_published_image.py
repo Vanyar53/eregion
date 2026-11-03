@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from . import fake_oci
 from .fake_discord import FakeDiscord
 from .fake_sigstore import Sigstore, claims, envelope, statement
 
@@ -24,6 +25,7 @@ SCRIPT = ROOT / "scripts" / "published_image.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "publish.yml"
 C1, C2 = "1" * 40, "2" * 40
 GLOR = "grootcyber/eregion-glorfindel"
+ANNATAR = "grootcyber/eregion-annatar"
 
 
 @pytest.fixture
@@ -371,13 +373,270 @@ def test_labels_that_are_no_label_of_ours_are_never_quoted(pim):
     assert "evil" not in str(e.value) and "everyone" not in str(e.value) and "evil" in e.value.detail
 
 
-def test_loaded_with_the_ids_computed_before_the_image_left(pim):
-    good = "sha256:" + "c" * 64
-    assert pim.main(["loaded", "annatar", "--digest", "sha256:" + "a" * 64, "--expect", f"sha256:{'a' * 64} {good}",
-                     "--id", good]) == 0
-    assert pim.main(["loaded", "annatar", "--digest", "sha256:" + "a" * 64, "--expect", good,
-                     "--id", "sha256:" + "f" * 64]) == 1
-    assert pim.main(["loaded", "annatar", "--digest", "sha256:" + "a" * 64, "--expect", "x y", "--id", "x"]) == 1
+# ── OI1 (#488): the archive, built from the registry's blobs ──────────────────────────────────
+
+def _archive(pim, reg, tmp_path, image=None, tag="eregion-annatar:incoming"):
+    image = image or fake_oci.Image(C2)
+    digest = image.publish(reg, ANNATAR, f"sha-{C2}")
+    return image, pim.build_archive("annatar", digest, C2, tag, tmp_path / "out")
+
+
+def _members(path):
+    import tarfile
+    with tarfile.open(path) as t:
+        return {m.name: t.extractfile(m).read() for m in t.getmembers()}
+
+
+def _blob_requests(reg):
+    return [r for r in reg.requests if "/blobs/" in r["path"] or "/registry-cdn/" in r["path"]]
+
+
+@pytest.mark.parametrize("oci", [False, True])
+def test_the_archive_holds_the_manifest_its_config_and_its_layers_each_under_its_sha256(pim, reg, tmp_path, oci):
+    image, expect = _archive(pim, reg, tmp_path, fake_oci.Image(C2, oci=oci))
+    got = _members(tmp_path / "out" / "image.tar")
+    blobs = {n: data for n, data in got.items() if n.startswith("blobs/sha256/")}
+    assert set(blobs) == {f"blobs/sha256/{d.split(':', 1)[1]}" for d in image.blobs}
+    assert all(hashlib.sha256(data).hexdigest() == n.rsplit("/", 1)[1] for n, data in blobs.items())
+    index = json.loads(got["index.json"])
+    assert index["manifests"] == [{"mediaType": image.manifest["mediaType"], "digest": image.digest,
+                                   "size": len(image.raw), "annotations": {
+                                       "io.containerd.image.name": "docker.io/library/eregion-annatar:incoming",
+                                       "org.opencontainers.image.ref.name": "incoming"}}]
+    assert json.loads(got["manifest.json"]) == [{
+        "Config": f"blobs/sha256/{image.config_digest.split(':', 1)[1]}", "RepoTags": ["eregion-annatar:incoming"],
+        "Layers": [f"blobs/sha256/{d.split(':', 1)[1]}" for d in image.layers]}]
+    assert json.loads(got["oci-layout"]) == {"imageLayoutVersion": "1.0.0"}
+    assert expect == json.loads((tmp_path / "out" / "expect.json").read_text())
+    assert expect["ids"] == sorted({image.digest, image.config_digest})
+    assert (expect["user"], expect["diff_ids"], expect["commit"]) == ("app", image.diff_ids, C2)
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["expect.json", "image.tar"]
+
+
+@pytest.mark.parametrize("store", ["containerd", "classic"])
+def test_the_archive_loads_whole_and_reads_back_as_the_proven_manifest(pim, reg, tmp_path, store):
+    """docker load of the archive, both stores (tests/unit/fake_oci.py): its id, its layers, its
+    user and its commit read back by `docker image inspect` are the manifest's."""
+    import os
+    image, expect = _archive(pim, reg, tmp_path)
+    env = {**os.environ, "DOCKER_STATE": str(tmp_path / "docker"), "FAKE_STORE": store}
+    fake = [sys.executable, fake_oci.__file__, "docker"]
+    res = subprocess.run([*fake, "load"], input=(tmp_path / "out" / "image.tar").read_bytes(), env=env,
+                         capture_output=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    inspected = subprocess.run([*fake, "image", "inspect", "eregion-annatar:incoming"], env=env, capture_output=True,
+                               text=True, timeout=60).stdout
+    pim.check_loaded(expect, inspected, image.digest)
+    assert json.loads(inspected)[0]["Id"] == (image.digest if store == "containerd" else image.config_digest)
+
+
+def test_an_index_gives_its_linux_amd64_manifest_and_only_its_blobs(pim, reg, tmp_path):
+    amd, arm = fake_oci.Image(C2), fake_oci.Image(C2, salt="arm", os_arch=("linux", "arm64"))
+    amd.publish(reg, ANNATAR, None)
+    arm.publish(reg, ANNATAR, None)
+    index = {"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": [
+        {"digest": arm.digest, "platform": {"os": "linux", "architecture": "arm64"}},
+        {"digest": amd.digest, "platform": {"os": "linux", "architecture": "amd64"}}]}
+    top = reg.image(ANNATAR, f"sha-{C2}", index)
+    expect = pim.build_archive("annatar", top, C2, "eregion-annatar:incoming", tmp_path / "out")
+    assert expect["manifest"] == amd.digest and expect["ids"] == sorted({top, amd.digest, amd.config_digest})
+    fetched = {r["path"].rsplit("/", 1)[1] for r in _blob_requests(reg)}
+    assert fetched == {amd.config_digest, *amd.layers}
+    assert json.loads(_members(tmp_path / "out" / "image.tar")["index.json"])["manifests"][0]["digest"] == amd.digest
+
+
+def _refused(pim, reg, tmp_path, image, said, before_any_blob=False):
+    digest = image.publish(reg, ANNATAR, f"sha-{C2}")
+    with pytest.raises(pim.Unverified, match=said):
+        pim.build_archive("annatar", digest, C2, "eregion-annatar:incoming", tmp_path / "out")
+    left = sorted(p.name for p in (tmp_path / "out").iterdir()) if (tmp_path / "out").exists() else []
+    assert left == []                                     # no archive, no expectation, no part
+    if before_any_blob:
+        assert _blob_requests(reg) == []
+
+
+def test_a_layer_altered_in_the_registry_is_refused_by_its_sha256(pim, reg, tmp_path):
+    image = fake_oci.Image(C2)
+    reg_blobs = reg.registry.setdefault(ANNATAR, {"tags": {}, "blobs": {}})["blobs"]
+    image.publish(reg, ANNATAR, f"sha-{C2}")
+    reg_blobs[image.layers[0]] = bytes(len(image.blobs[image.layers[0]]))
+    with pytest.raises(pim.Unverified, match="son empreinte est"):
+        pim.build_archive("annatar", image.digest, C2, "eregion-annatar:incoming", tmp_path / "out")
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == []
+
+
+@pytest.mark.parametrize("which", ["config", "layer"])
+def test_a_blob_missing_from_the_registry_is_refused(pim, reg, tmp_path, which):
+    image = fake_oci.Image(C2)
+    image.publish(reg, ANNATAR, f"sha-{C2}")
+    del reg.registry[ANNATAR]["blobs"][image.config_digest if which == "config" else image.layers[-1]]
+    with pytest.raises(pim.Unverified, match="absent du registre"):
+        pim.build_archive("annatar", image.digest, C2, "eregion-annatar:incoming", tmp_path / "out")
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == []
+
+
+def test_a_blob_longer_or_shorter_than_its_descriptor_is_refused(pim, reg, tmp_path):
+    image = fake_oci.Image(C2)
+    image.publish(reg, ANNATAR, f"sha-{C2}")
+    reg.registry[ANNATAR]["blobs"][image.layers[0]] += b"tail"
+    with pytest.raises(pim.Unverified, match="plus long que"):
+        pim.build_archive("annatar", image.digest, C2, "eregion-annatar:incoming", tmp_path / "out")
+    reg.registry[ANNATAR]["blobs"][image.layers[0]] = image.blobs[image.layers[0]][:-4]
+    with pytest.raises(pim.Unverified, match="pas les"):
+        pim.build_archive("annatar", image.digest, C2, "eregion-annatar:incoming", tmp_path / "out")
+
+
+@pytest.mark.parametrize("where", ["layer", "config", "all"])
+def test_a_size_out_of_bounds_is_refused_before_a_byte_is_fetched(pim, reg, tmp_path, monkeypatch, where):
+    image = fake_oci.Image(C2)
+    if where == "layer":
+        image.manifest["layers"][0]["size"] = pim.LAYER_MAX + 1
+    elif where == "config":
+        image.manifest["config"]["size"] = pim.CONFIG_MAX + 1
+    else:
+        monkeypatch.setattr(pim, "IMAGE_MAX", sum(d["size"] for d in image.manifest["layers"]) - 1)
+    image.seal()
+    _refused(pim, reg, tmp_path, image, "démesurée", before_any_blob=True)
+
+
+@pytest.mark.parametrize("spoil, said", [
+    (lambda m: m["layers"][0].update(mediaType="application/vnd.docker.image.rootfs.foreign.diff.tar.gzip"),
+     "média inattendu"),
+    (lambda m: m["config"].update(mediaType="application/vnd.example.evil+json"), "média inattendu"),
+    (lambda m: m.update(mediaType="application/vnd.docker.distribution.manifest.v1+json"), "média inattendu"),
+    (lambda m: m["layers"][0].update(digest="sha512:" + "a" * 128), "sans digest sha256"),
+    (lambda m: m["layers"][0].update(size="12"), "sans taille lisible"),
+    (lambda m: m.update(layers=[]), "couches"),
+    (lambda m: m["layers"].append(dict(m["layers"][0])), "nommé deux fois"),
+])
+def test_a_manifest_that_is_not_one_of_ours_is_refused_before_a_byte_is_fetched(pim, reg, tmp_path, spoil, said):
+    image = fake_oci.Image(C2)
+    spoil(image.manifest)
+    image.seal()
+    _refused(pim, reg, tmp_path, image, said, before_any_blob=True)
+
+
+@pytest.mark.parametrize("image, said", [
+    (lambda: fake_oci.Image(C1), "dit le commit 111111111111"),
+    (lambda: fake_oci.Image(C2, user="root"), "en root"),
+    (lambda: fake_oci.Image(C2, user=""), "en root"),
+    (lambda: fake_oci.Image(C2, user="0:0"), "en root"),
+    (lambda: fake_oci.Image(C2, os_arch=("linux", "arm64")), "linux/amd64"),
+])
+def test_a_config_that_says_otherwise_is_refused(pim, reg, tmp_path, image, said):
+    _refused(pim, reg, tmp_path, image(), said)
+
+
+def test_the_registrys_token_never_follows_a_redirect_to_another_host(pim, reg, tmp_path):
+    """GHCR answers a blob by a redirect to its storage: the archive is built, the storage never
+    sees the registry's token (as docker's own client)."""
+    reg.registry_redirect = True
+    image, expect = _archive(pim, reg, tmp_path)
+    cdn = [r for r in reg.requests if r["path"].startswith("/registry-cdn/")]
+    assert len(cdn) == 1 + len(image.layers)
+    assert not [r for r in cdn if "Authorization" in r["headers"]]
+    assert expect["config"] == image.config_digest
+
+
+def test_a_token_the_registry_no_longer_takes_is_asked_again_once(pim, reg, tmp_path):
+    image = fake_oci.Image(C2)
+    image.publish(reg, ANNATAR, f"sha-{C2}")
+    prefix = f"/registry/v2/{ANNATAR}/blobs/{image.layers[1]}"
+    reg.fail[prefix] = 401
+    reg.once.add(prefix)
+    pim.build_archive("annatar", image.digest, C2, "eregion-annatar:incoming", tmp_path / "out")
+    # the manifest's, the blobs', then the blobs' asked again
+    assert len([r for r in reg.requests if r["path"].startswith("/registry/token")]) == 3
+    reg.fail[prefix] = 401                                   # every time: refused
+    reg.once.discard(prefix)
+    with pytest.raises(pim.Unverified, match="illisible sans jeton"):
+        pim.build_archive("annatar", image.digest, C2, "eregion-annatar:incoming", tmp_path / "out")
+
+
+def test_a_registry_that_breaks_off_proves_nothing(pim, reg, tmp_path):
+    image = fake_oci.Image(C2)
+    image.publish(reg, ANNATAR, f"sha-{C2}")
+    reg.fail[f"/registry/v2/{ANNATAR}/blobs/"] = 502
+    with pytest.raises(pim.Unavailable, match="HTTP 502"):
+        pim.build_archive("annatar", image.digest, C2, "eregion-annatar:incoming", tmp_path / "out")
+
+
+@pytest.mark.parametrize("tag", ["Eregion:incoming", "eregion-annatar", "x:y;rm", ""])
+def test_only_a_plain_tag_names_the_archive(pim, reg, tmp_path, tag):
+    with pytest.raises(pim.Unverified, match="tag invalide"):
+        _archive(pim, reg, tmp_path, tag=tag)
+
+
+# ── OI1: what Orodruin reads back, against the proven manifest ─────────────────────────────────
+
+def _expect(image, top=None):
+    top = top or image.digest
+    return {"image": "annatar", "digest": top, "manifest": image.digest, "config": image.config_digest, "commit": C2,
+            "ids": sorted({top, image.digest, image.config_digest}), "user": "app", "diff_ids": image.diff_ids,
+            "os": "linux", "architecture": "amd64"}
+
+
+def _inspected(image, **over):
+    doc = {"Id": image.digest, "Os": "linux", "Architecture": "amd64",
+           "Config": {"User": "app", "Labels": {"org.opencontainers.image.revision": C2}},
+           "RootFS": {"Type": "layers", "Layers": list(image.diff_ids)}}
+    for k, v in over.items():
+        if k in ("User", "Labels"):
+            doc["Config"][k] = v
+        elif k == "Layers":
+            doc["RootFS"]["Layers"] = v
+        else:
+            doc[k] = v
+    return json.dumps([doc])
+
+
+def test_an_image_read_back_as_its_manifest_announces_is_loaded(pim):
+    image = fake_oci.Image(C2)
+    pim.check_loaded(_expect(image), _inspected(image), image.digest)
+    pim.check_loaded(_expect(image), _inspected(image, Id=image.config_digest), image.digest)     # classic store
+
+
+@pytest.mark.parametrize("over, said", [
+    ({"Id": "sha256:" + "f" * 64}, "n'est pas"),
+    ({"Layers": []}, "ses couches"),
+    ({"User": "root"}, "son utilisateur"),
+    ({"Architecture": "arm64"}, "sa plateforme"),
+    ({"Labels": {"org.opencontainers.image.revision": C1}}, "son commit"),
+])
+def test_an_image_read_back_otherwise_is_refused(pim, over, said):
+    image = fake_oci.Image(C2)
+    with pytest.raises(pim.Unverified, match=said):
+        pim.check_loaded(_expect(image), _inspected(image, **over), image.digest)
+
+
+@pytest.mark.parametrize("inspected", ["", "[]", "not json", '[{"Id": 1}, {"Id": 2}]'])
+def test_an_image_that_cannot_be_read_back_is_refused(pim, inspected):
+    """docker image inspect of an image without its config fails, and says `[]` (#488)."""
+    image = fake_oci.Image(C2)
+    with pytest.raises(pim.Unverified, match="ne se relit pas"):
+        pim.check_loaded(_expect(image), inspected, image.digest)
+
+
+def test_an_expectation_of_another_digest_is_refused(pim):
+    image = fake_oci.Image(C2)
+    with pytest.raises(pim.Unverified, match="l'attendu"):
+        pim.check_loaded(_expect(image), _inspected(image), "sha256:" + "e" * 64)
+    with pytest.raises(pim.Unverified, match="illisible"):
+        pim.check_loaded({**_expect(image), "ids": ["x"]}, _inspected(image), image.digest)
+
+
+def test_loaded_on_the_command_line(pim, tmp_path, capsys):
+    image = fake_oci.Image(C2)
+    (tmp_path / "expect.json").write_text(json.dumps(_expect(image)))
+    (tmp_path / "good.json").write_text(_inspected(image))
+    (tmp_path / "other.json").write_text(_inspected(image, User="root"))
+    args = ["loaded", "annatar", "--digest", image.digest, "--expect-file", str(tmp_path / "expect.json")]
+    assert pim.main([*args, "--inspect", str(tmp_path / "good.json")]) == 0
+    assert pim.main([*args, "--inspect", str(tmp_path / "other.json")]) == 1
+    assert pim.main([*args, "--inspect", str(tmp_path / "absent.json")]) == 1
+    assert "ne se relit pas" in capsys.readouterr().err
+    with pytest.raises(SystemExit):                          # an id alone is no longer an answer
+        pim.main(["loaded", "annatar", "--digest", image.digest, "--id", image.digest])
 
 
 # ── the operator's side: a reference of main only ─────────────────────────────────────────────
@@ -417,13 +676,6 @@ def test_the_latest_tag(pim):
     assert pim.latest_tag(_git(tags="v0.4.6\nv0.4.5\n")) == "v0.4.6"
     with pytest.raises(pim.Unverified):
         pim.latest_tag(_git(tags=""))
-
-
-def test_loaded_accepts_only_an_id_under_the_verified_digest(pim, reg, capsys):
-    top = reg.image(GLOR, f"sha-{C2}", _manifest(C2))
-    config = _manifest(C2)["config"]["digest"]
-    assert pim.main(["loaded", "glorfindel", "--digest", top, "--id", config + "\n"]) == 0
-    assert pim.main(["loaded", "glorfindel", "--digest", top, "--id", "sha256:" + "f" * 64]) == 1
 
 
 # ── the workflow's side ──────────────────────────────────────────────────────────────────────
@@ -518,115 +770,190 @@ def _make_n(*args):
 
 
 def test_orodruin_gets_the_published_image_verified_here_never_one_built_here():
-    """make orodruin-push: no build — the digest resolved and proven on this machine, pulled by it,
-    loaded over SSH (Orodruin's egress stays closed), its id read back there against the digest."""
+    """make orodruin-push: no build, no docker save of this machine (OI1) — the digest resolved and
+    proven here, its archive built from the registry's blobs, loaded over SSH (Orodruin's egress
+    stays closed), read back there against the proven manifest."""
     out = _make_n("orodruin-push", "REF=v0.4.6")
-    assert "docker build" not in out
+    assert "docker build" not in out and "docker save" not in out and "docker pull" not in out
     lines = out.splitlines()
-    fetch = next(i for i, line in enumerate(lines) if "published_image.py fetch annatar" in line)
-    assert '--ref "$EREGION_DEPLOY_REF" --tag eregion-annatar:orodruin' in lines[fetch]
-    assert "|| exit 1" in lines[fetch]
-    rest = "\n".join(lines[fetch:])
-    order = [rest.index(s) for s in ("published_image.py ids annatar", "rm -f .eregion-image",
-                                     "docker save eregion-annatar:incoming", "published_image.py loaded annatar",
+    first = next(i for i, line in enumerate(lines) if "published_image.py archive annatar" in line)
+    assert ('--ref "$EREGION_DEPLOY_REF" --tag eregion-annatar:incoming --out "$tmp"' in lines[first])
+    rest = "\n".join(lines[first:])
+    order = [rest.index(s) for s in ("published_image.py archive annatar", "rm -f .eregion-image",
+                                     "'docker load' < \"$tmp/image.tar\"", "'docker image inspect eregion-annatar:incoming'",
+                                     "published_image.py loaded annatar",
                                      "docker tag eregion-annatar:incoming eregion-annatar:orodruin",
                                      "cat > .eregion-image")]
     assert order == sorted(order)
-    assert 'docker image inspect -f "{{.Id}}" eregion-annatar:incoming' in rest
+    assert '--expect-file "$tmp/expect.json" --inspect "$tmp/inspect.json"' in rest
+    assert "trap 'rm -rf \"$tmp\"' EXIT" in out
     assert "install-cosign" in out and "environment*" in out
 
 
+# The make target run for real, on fakes: the operator's docker and Orodruin's (tests/unit/fake_oci.py,
+# each its own state), ssh running the remote command against Orodruin's, the registry and cosign
+# (fake_discord.py, fake_sigstore.py), git; published_image.py itself, its pinned cosign's sha256 the fake's.
 PUSH_FAKES = {
-    # The operator's docker: `save` writes the image's id; the rest is kept in $LOCAL.
-    "docker": r'''#!/bin/bash
-state="${DOCKER_STATE:?}"; mkdir -p "$state"
-case "$1" in
-  tag) cp "$state/${2//[:\/]/_}" "$state/${3//[:\/]/_}" ;;
-  save) cat "$state/${2//[:\/]/_}" ;;
-  load) id=$(cat); [ -n "${FAKE_LOAD_ID:-}" ] && id="$FAKE_LOAD_ID"; echo "$id" > "$state/eregion-annatar_incoming"; echo "Loaded" ;;
-  image)
-    case "$2" in
-      rm) rm -f "$state/${3//[:\/]/_}" ;;
-      inspect) cat "$state/${5//[:\/]/_}" ;;
-    esac ;;
-esac
-''',
-    # ssh to Orodruin: the remote command, run here with Orodruin's own docker state and home.
-    "ssh": r'''#!/bin/bash
-cmd="${!#}"
-cd "$REMOTE_HOME" && DOCKER_STATE="$REMOTE_STATE" bash -c "$cmd"
-''',
+    "docker": '#!/bin/bash\nexec "$REAL_PYTHON" "$FAKE_OCI" docker "$@"\n',
+    "ssh": '#!/bin/bash\ncmd="${!#}"\ncd "$REMOTE_HOME" && DOCKER_STATE="$REMOTE_STATE" bash -c "$cmd"\n',
     "scp": "#!/bin/sh\nexit 0\n",
-    "git": "#!/bin/sh\nexit 0\n",
-    # python3: fetch and ids answered as published_image.py would; `loaded`, the real one.
-    "python3": r'''#!/bin/bash
-case "$2" in
-  install-cosign) exit 0 ;;
-  fetch) echo "ref=v0.4.6"; echo "commit=$FAKE_COMMIT"; echo "digest=$FAKE_DIGEST"
-         echo "$FAKE_CONFIG" > "$DOCKER_STATE/eregion-annatar_orodruin" ;;
-  ids) echo "$FAKE_DIGEST $FAKE_CONFIG" ;;
-  *) exec "$REAL_PYTHON" "$REAL_SCRIPT" "${@:2}" ;;
-esac
-''',
+    "git": '#!/bin/bash\n[ "$3" = rev-parse ] && { echo "$FAKE_COMMIT"; exit 0; }\nexit 0\n',
+    "python3": '#!/bin/bash\nexec "$REAL_PYTHON" "$PIM_WRAPPER" "${@:2}"\n',
 }
+PIM_WRAPPER = '''import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("published_image", os.environ["REAL_SCRIPT"])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.COSIGN_SHA256 = os.environ["FAKE_COSIGN_SHA256"]
+sys.exit(mod.main(sys.argv[1:]))
+'''
 
 
-def _push(tmp_path, **env):
+@pytest.fixture
+def orodruin(tmp_path, reg, sig):
+    """Orodruin before the push: eregion-annatar:orodruin, the image that ran (complete), and its
+    ~/.eregion-image; the image of C2 published, signed and attested."""
     import os
     import shutil
-    if shutil.which("make") is None or shutil.which("gzip") is None:
-        pytest.skip("make and gzip needed")
+    if shutil.which("make") is None:
+        pytest.skip("make needed")
     bin_ = tmp_path / "bin"
-    bin_.mkdir(exist_ok=True)
+    bin_.mkdir()
     for name, text in PUSH_FAKES.items():
         (bin_ / name).write_text(text)
         (bin_ / name).chmod(0o755)
+    (tmp_path / "pim_wrapper.py").write_text(PIM_WRAPPER)
     work, remote = tmp_path / "work", tmp_path / "orodruin"
-    (work / "infra" / "orodruin").mkdir(parents=True, exist_ok=True)
+    (work / "infra" / "orodruin").mkdir(parents=True)
     (work / "infra" / "orodruin" / "orodruin.env").write_text("X=1\n")
-    for d in (remote / "home", remote / "docker", tmp_path / "local"):
+    for d in (remote / "home", remote / "docker", tmp_path / "local", tmp_path / "home", tmp_path / "tmp",
+              tmp_path / "published"):
         d.mkdir(parents=True, exist_ok=True)
-    config = "sha256:" + "c" * 64
-    full = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "DOCKER_STATE": str(tmp_path / "local"),
-            "REMOTE_HOME": str(remote / "home"), "REMOTE_STATE": str(remote / "docker"),
-            "FAKE_COMMIT": C2, "FAKE_DIGEST": "sha256:" + "a" * 64, "FAKE_CONFIG": config,
-            "REAL_PYTHON": sys.executable, "REAL_SCRIPT": str(SCRIPT), **env}
-    full.pop("REF", None)
-    # Orodruin's host key check is test_host_ssh.py's (V-32, SEC14): taken as done here.
-    res = subprocess.run(["make", "--no-print-directory", "-C", str(work), "-f", str(ROOT / "Makefile"),
-                          "-o", "orodruin-known", "orodruin-push", "REF=v0.4.6", "ORO_IP=203.0.113.7",
-                          "ORO_SSH=ssh orodruin@203.0.113.7"], env=full, capture_output=True, text=True,
-                         timeout=120)
-    return res, remote, config
+    old = fake_oci.Image(C1, salt="old")
+    _load_on(remote / "docker", old, "eregion-annatar:orodruin")
+    (remote / "docker" / "calls").unlink()
+    (remote / "home" / ".eregion-image").write_text(f"{C1} {old.digest}\n")
+    new = fake_oci.Image(C2)
+    new.publish(reg, ANNATAR, f"sha-{C2}")
+    new.write(tmp_path / "published")
+    sig.publish(f"ghcr.io/{ANNATAR}", new.digest, "grootcyber/eregion", C2)
+    env = {**os.environ, **sig.env(), "PATH": f"{bin_}:{os.environ['PATH']}", "HOME": str(tmp_path / "home"),
+           "TMPDIR": str(tmp_path / "tmp"), "DOCKER_STATE": str(tmp_path / "local"),
+           "REMOTE_HOME": str(remote / "home"), "REMOTE_STATE": str(remote / "docker"),
+           "FAKE_OCI": str(Path(fake_oci.__file__)), "FAKE_PUBLISHED": str(tmp_path / "published"),
+           "FAKE_COMMIT": C2, "REAL_PYTHON": sys.executable, "REAL_SCRIPT": str(SCRIPT),
+           "PIM_WRAPPER": str(tmp_path / "pim_wrapper.py"), "EREGION_REGISTRY_API": f"{reg.base}/registry",
+           "EREGION_COSIGN": str(sig.path), "FAKE_COSIGN_SHA256": sig.sha256}
+    for k in ("REF", "FAKE_STORE", "FAKE_LOAD_DROP", "FAKE_LOAD_ID", "FAKE_LOAD_USER"):
+        env.pop(k, None)
+
+    class Run:
+        def __init__(self):
+            self.tmp, self.remote, self.old, self.new, self.env = tmp_path, remote, old, new, env
+
+        def push(self, **more):
+            return subprocess.run(["make", "--no-print-directory", "-C", str(work), "-f", str(ROOT / "Makefile"),
+                                   "-o", "orodruin-known", "orodruin-push", "REF=v0.4.6", "ORO_IP=203.0.113.7",
+                                   "ORO_SSH=ssh orodruin@203.0.113.7"], env={**env, **more},
+                                  capture_output=True, text=True, timeout=120)
+
+        def images(self, where="docker"):
+            p = remote / where / "images.json" if where == "docker" else tmp_path / "local" / "images.json"
+            return json.loads(p.read_text()) if p.exists() else {}
+
+        def calls(self, where="docker"):
+            p = (remote / "docker" if where == "docker" else tmp_path / "local") / "calls"
+            return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
+        def marker(self):
+            p = remote / "home" / ".eregion-image"
+            return p.read_text().split() if p.exists() else None
+    return Run()
 
 
-def test_orodruin_keeps_its_image_until_the_one_loaded_is_proven(tmp_path):
-    """Review of CI3: the image arrives under a waiting tag; only an id under the verified digest
-    becomes eregion-annatar:orodruin, and ~/.eregion-image is written only then."""
-    remote = tmp_path / "orodruin"
-    (remote / "docker").mkdir(parents=True)
-    (remote / "home").mkdir(parents=True)
-    (remote / "docker" / "eregion-annatar_orodruin").write_text("sha256:" + "0" * 64 + "\n")   # what ran before
-    (remote / "home" / ".eregion-image").write_text("old\n")
-    res, remote, config = _push(tmp_path)
+def _load_on(state, image, tag, store="containerd"):
+    """`image` loaded in the fake docker of `state`, under `tag` (its archive, as OI1 builds it)."""
+    import io
+    import os
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as t:
+        def add(n, data):
+            info = tarfile.TarInfo(n)
+            info.size = len(data)
+            t.addfile(info, io.BytesIO(data))
+        for d, data in image.blobs.items():
+            add(f"blobs/sha256/{d.split(':', 1)[1]}", data)
+        add("index.json", json.dumps({"manifests": [{"digest": image.digest, "annotations": {
+            "io.containerd.image.name": f"docker.io/library/{tag}"}}]}).encode())
+        add("manifest.json", json.dumps([{"Config": f"blobs/sha256/{image.config_digest.split(':', 1)[1]}",
+                                          "RepoTags": [tag], "Layers": [f"blobs/sha256/{d.split(':', 1)[1]}"
+                                                                        for d in image.layers]}]).encode())
+    env = {**os.environ, "DOCKER_STATE": str(state), "FAKE_STORE": store}
+    for k in ("FAKE_LOAD_DROP", "FAKE_LOAD_ID", "FAKE_LOAD_USER"):
+        env.pop(k, None)
+    res = subprocess.run([sys.executable, fake_oci.__file__, "docker", "load"], input=buf.getvalue(),
+                         capture_output=True, env=env, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+@pytest.mark.parametrize("store", ["containerd", "classic"])
+def test_the_image_arrives_whole_though_this_machines_docker_save_drops_config_and_layers(orodruin, store):
+    """#488, red on main: the operator's docker (Docker Desktop, containerd's store) saves a pulled
+    image as its index and its manifest, without config or layers. main sent that: Orodruin loaded
+    an image its own `docker tag` could not read, `loaded` passed it on its id alone. The archive is
+    now built from the registry's blobs: the operator's docker is never asked to save or pull."""
+    res = orodruin.push(FAKE_STORE=store)
     assert res.returncode == 0, res.stdout + res.stderr
-    assert (remote / "docker" / "eregion-annatar_orodruin").read_text().strip() == config
-    assert not (remote / "docker" / "eregion-annatar_incoming").exists()
-    assert (remote / "home" / ".eregion-image").read_text().split() == [C2, "sha256:" + "a" * 64]
+    img = orodruin.images()["eregion-annatar:orodruin"]
+    assert img["id"] == (orodruin.new.digest if store == "containerd" else orodruin.new.config_digest)
+    assert img["config"] == orodruin.new.config_digest
+    assert "eregion-annatar:incoming" not in orodruin.images()
+    assert orodruin.marker() == [C2, orodruin.new.digest]
+    assert not [c for c in orodruin.calls("local") if c[0] in ("save", "pull")]
+    assert list((orodruin.tmp / "tmp").iterdir()) == []            # the archive, removed
+    assert "chacun vérifié par son sha256" in res.stderr
 
 
-def test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_changes(tmp_path):
-    remote = tmp_path / "orodruin"
-    (remote / "docker").mkdir(parents=True)
-    (remote / "home").mkdir(parents=True)
-    before = "sha256:" + "0" * 64
-    (remote / "docker" / "eregion-annatar_orodruin").write_text(before + "\n")
-    (remote / "home" / ".eregion-image").write_text("old\n")
-    res, remote, _ = _push(tmp_path, FAKE_LOAD_ID="sha256:" + "f" * 64)
-    assert res.returncode != 0 and "retirée" in res.stderr
-    assert (remote / "docker" / "eregion-annatar_orodruin").read_text().strip() == before
-    assert not (remote / "docker" / "eregion-annatar_incoming").exists()
-    assert not (remote / "home" / ".eregion-image").exists()       # never one naming the old image
+def test_an_image_whose_config_the_store_loses_is_refused_incoming_removed(orodruin):
+    """`loaded` reads the image back (docker image inspect), not its id alone: an image without its
+    config cannot be inspected — refused, eregion-annatar:incoming removed, :orodruin as it was, and
+    ~/.eregion-image absent (never naming the old image as the new one)."""
+    res = orodruin.push(FAKE_LOAD_DROP="config")
+    assert res.returncode != 0 and "retirée" in res.stderr and "ne se relit pas" in res.stderr
+    images = orodruin.images()
+    assert "eregion-annatar:incoming" not in images
+    assert images["eregion-annatar:orodruin"]["manifest"] == orodruin.old.digest
+    assert orodruin.marker() is None
+
+
+@pytest.mark.parametrize("env, said", [
+    ({"FAKE_LOAD_ID": "sha256:" + "f" * 64}, "n'est pas"),
+    ({"FAKE_LOAD_USER": "root"}, "son utilisateur"),
+])
+def test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_changes(orodruin, env, said):
+    res = orodruin.push(**env)
+    assert res.returncode != 0 and "retirée" in res.stderr and said in res.stderr
+    images = orodruin.images()
+    assert "eregion-annatar:incoming" not in images
+    assert images["eregion-annatar:orodruin"]["manifest"] == orodruin.old.digest
+    assert orodruin.marker() is None
+
+
+@pytest.mark.parametrize("spoil, said", [
+    (lambda reg, img: reg.registry[ANNATAR]["blobs"].update({img.layers[1]: bytes(len(img.blobs[img.layers[1]]))}),
+     "son empreinte est"),
+    (lambda reg, img: reg.registry[ANNATAR]["blobs"].pop(img.config_digest), "absent du registre"),
+])
+def test_a_blob_altered_or_missing_stops_everything_before_anything_is_sent(orodruin, reg, spoil, said):
+    """Nothing reaches Orodruin — no ssh at all: its image, its ~/.eregion-image as they were."""
+    spoil(reg, orodruin.new)
+    res = orodruin.push()
+    assert res.returncode != 0 and said in res.stderr and "rien n'est envoyé" in res.stderr
+    assert orodruin.calls() == []
+    assert orodruin.images()["eregion-annatar:orodruin"]["manifest"] == orodruin.old.digest
+    assert orodruin.marker() == [C1, orodruin.old.digest]
+    assert list((orodruin.tmp / "tmp").iterdir()) == []
 
 
 def test_the_development_path_says_it_is_unverified():

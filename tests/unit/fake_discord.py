@@ -57,6 +57,9 @@ class FakeDiscord:
         self.registry: dict = {}
         self.registry_lie: dict[str, str] = {}
         self.registry_private: set[str] = set()
+        # OI1: blobs by their digest (the same store as the manifests, as a registry's); `redirect`:
+        # answered as GHCR does, by a redirect to its storage on another host (/registry-cdn/).
+        self.registry_redirect = False
         self.fail: dict[str, int] = {}       # path prefix → status (once if listed in self.once)
         self.once: set[str] = set()
         self.lock, self.next_id = threading.Lock(), 100
@@ -121,7 +124,7 @@ class FakeDiscord:
             parts = p.strip("/").split("/")
             if p.startswith("/gh/"):
                 return self._github(p, query)
-            if p.startswith("/registry/"):
+            if p.startswith(("/registry/", "/registry-cdn/")):
                 return self._registry(p, query, headers)
             if p == "/console/api/sections":
                 if headers.get("Authorization") != f"Bearer {self.console_token}":
@@ -249,6 +252,21 @@ class FakeDiscord:
             if repo in self.registry_private or repo not in self.registry:
                 return 403, {"errors": [{"code": "DENIED", "message": "requested access to the resource is denied"}]}, {}
             return 200, {"token": f"anon:{scope}"}, {}
+        if p.startswith("/registry-cdn/"):
+            repo, digest = p[len("/registry-cdn/"):].rsplit("/", 1)
+            raw = (self.registry.get(repo) or {"blobs": {}})["blobs"].get(digest)
+            return (200, raw, {}) if raw is not None else (404, {}, {})
+        if p.startswith("/registry/v2/") and "/blobs/" in p:
+            repo, digest = p[len("/registry/v2/"):].split("/blobs/", 1)
+            if repo in self.registry_private or headers.get("Authorization") != f"Bearer anon:repository:{repo}:pull":
+                return 401, {"errors": [{"code": "UNAUTHORIZED"}]}, {}
+            raw = (self.registry.get(repo) or {"blobs": {}})["blobs"].get(digest)
+            if raw is None:
+                return 404, {"errors": [{"code": "BLOB_UNKNOWN"}]}, {}
+            if self.registry_redirect:
+                port = self.base.rsplit(":", 1)[1]
+                return 307, b"", {"Location": f"http://localhost:{port}/registry-cdn/{repo}/{digest}"}
+            return 200, raw, {"Docker-Content-Digest": digest}
         if not p.startswith("/registry/v2/") or "/manifests/" not in p:
             return 404, {}, {}
         repo, ref = p[len("/registry/v2/"):].split("/manifests/", 1)

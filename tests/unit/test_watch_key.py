@@ -389,3 +389,80 @@ def test_cryptography_is_locked_in_both_images():
         text = (ROOT / "requirements" / lock).read_text()
         assert "\ncryptography==" in text, lock
     assert '"cryptography>=42"' in (ROOT / "pyproject.toml").read_text()
+
+
+def test_a_full_disk_leaves_no_partial_key_and_the_next_start_draws_it(tmp_path, monkeypatch):
+    """The key is drawn in a file of its own, then published by a link: a write that fails (ENOSPC)
+    leaves nothing under the key's name, and the next start draws it."""
+    import errno
+    d = tmp_path / "watch-key"
+    real = os.write
+
+    def full(fd, data):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(os, "write", full)
+    with pytest.raises(watch_key.KeyUnavailable, match="No space left"):
+        watch_key.load_or_create(d)
+    assert list(d.iterdir()) == []                       # no key, no temporary file left
+    monkeypatch.setattr(os, "write", real)
+    signer = watch_key.load_or_create(d)
+    assert (d / watch_key.KEY_FILE).stat().st_size == 32 and list(d.iterdir()) == [d / watch_key.KEY_FILE]
+    assert watch_key.load_or_create(d).public == signer.public
+
+
+def test_two_watches_drawing_together_keep_the_first_key(tmp_path, monkeypatch):
+    """The link refused (another watch published first): that key is the one, both read it."""
+    d = tmp_path / "watch-key"
+    first = watch_key.load_or_create(d)
+    real_read = watch_key._read_key
+    calls = []
+
+    def absent_once(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise FileNotFoundError(path)                 # read before the other watch published
+        return real_read(path)
+    monkeypatch.setattr(watch_key, "_read_key", absent_once)
+    assert watch_key.load_or_create(d).public == first.public
+    assert sorted(p.name for p in d.iterdir()) == [watch_key.KEY_FILE]
+
+
+def test_a_key_of_another_size_says_the_gesture(tmp_path):
+    d = tmp_path / "watch-key"
+    d.mkdir(mode=0o700)
+    fd = os.open(d / watch_key.KEY_FILE, os.O_WRONLY | os.O_CREAT, 0o600)
+    os.close(fd)
+    with pytest.raises(watch_key.KeyUnavailable, match="remove it.*pin the new public key"):
+        watch_key.load_or_create(d)
+
+
+def test_a_clock_set_back_is_named_in_the_replay_refusal(injector):
+    _write(injector, _signed(NOW - timedelta(seconds=10)))
+    assert gate.refusal(NOW) == ""
+    replay = {k: v for k, v in _signed(NOW - timedelta(seconds=20)).items() if k != "sig"}
+    replay["seq"] = 1
+    replay["sig"] = WATCH.sign(watch_key.DOMAIN_BEAT, replay)
+    _write(injector, replay)
+    assert "clock went back" in gate.refusal(NOW)
+
+
+def test_the_console_reads_the_gate_without_recording(monkeypatch):
+    """Dagorlad shows the gate as an injector reads it, never keeping the injectors' counter."""
+    from eregion_console import api
+    seen = {}
+    monkeypatch.setattr(gate, "refusal", lambda now=None, **kw: seen.update(kw) or "")
+    assert api._watch_refusal() == "" and seen == {"record": False}
+
+
+def test_only_the_watch_s_docker_run_mounts_the_key():
+    make = (ROOT / "Makefile").read_text()
+    users = [ln for ln in make.splitlines() if "$(WATCH_KEY_VOL)" in ln]
+    assert len(users) == 1
+    block = make[make.index("DOCKER_GLORFINDEL_WATCH ="):]
+    assert "$(WATCH_KEY_VOL)" in block[:block.index("\n\n")]
+    assert make.count("@$(DOCKER_GLORFINDEL_WATCH) watch runs/") == 1
+
+
+def test_the_shell_s_message_says_the_key_is_not_mounted_there(tmp_path):
+    with pytest.raises(watch_key.KeyUnavailable, match="glorfindel-shell it is not mounted"):
+        watch_key.read_public(tmp_path / "absent")

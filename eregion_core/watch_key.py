@@ -157,7 +157,9 @@ def _read_key(path: Path) -> bytes:
     finally:
         os.close(fd)
     if len(data) != 32:
-        raise KeyUnavailable(f"{path} is not an Ed25519 key ({len(data)} bytes, 32 expected)")
+        raise KeyUnavailable(f"{path} is not an Ed25519 key ({len(data)} bytes, 32 expected): remove it, "
+                             "let the watch draw another at its next start, then pin the new public key "
+                             "(make watch-key, make glorfindel-host-watch-key)")
     return data
 
 
@@ -178,15 +180,23 @@ def load_or_create(directory: Path | None = None) -> Signer:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
         raw = Ed25519PrivateKey.generate().private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+        # Drawn whole in a file of its own, then published by a link: the key's name never holds a
+        # partial key (a full disk, a crash), and two watches starting together never write two.
+        tmp = directory / f".{KEY_FILE}.{os.getpid()}.{os.urandom(6).hex()}"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        except FileExistsError:            # another watch drew it first: that one is the key
-            return Signer(_read_key(path))
-        try:
-            os.write(fd, raw)
-            os.fsync(fd)
+            try:
+                if os.write(fd, raw) != len(raw):
+                    raise OSError(f"short write of {tmp}")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            try:
+                os.link(tmp, path)
+            except FileExistsError:        # another watch drew it first: that one is the key
+                pass
         finally:
-            os.close(fd)
+            tmp.unlink(missing_ok=True)
         return Signer(_read_key(path))
     except KeyUnavailable:
         raise
@@ -204,7 +214,9 @@ def read_public(directory: Path | None = None) -> bytes:
         return Signer(_read_key(path)).public
     except FileNotFoundError:
         raise KeyUnavailable(f"no key in {directory}: the watch draws it at its first start "
-                             "(make glorfindel-start, or H0 deployed)") from None
+                             "(make glorfindel-start, or H0 deployed) — or this container does not mount it "
+                             "(only the watch's does: in make glorfindel-shell it is not mounted; make "
+                             "watch-key on the host reads it)") from None
     except ImportError as e:
         raise KeyUnavailable(f"cryptography absent ({e})") from None
     except OSError as e:
@@ -315,7 +327,8 @@ def remember(body: dict) -> str:
     if isinstance(top, int) and not isinstance(top, bool):
         if seq < top or (seq == top and sig != last.get("sig")):
             return (f"its counter ({seq}) is not above one already seen ({top}): an older heartbeat "
-                    "replayed")
+                    "replayed — or the watch's clock went back across a restart (the counter is its "
+                    "milliseconds): fix the clock, or wait until it passes the counter seen")
         if seq == top:
             return ""
     seen[fp] = {"seq": seq, "sig": sig}

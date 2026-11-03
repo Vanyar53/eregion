@@ -438,7 +438,9 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   rule_status.json            → état de polling des règles (last_poll, last_match, match_count, last_error ;
                                 `expected_sudo` : count, last, origin_count, origin_confirmed — ADM1, COR1, COR2 ;
                                 `correlation` : queries, origin, card, unknown, compromised, unchecked, confirmed,
-                                unconfirmed, last — COR1, COR2 ; lus par la console)
+                                unconfirmed, last — COR1, COR2 ; lus par la console ;
+                                `auditd` : events, sensitive, unreadable, at — AUD1, ce que la fenêtre de
+                                `auditd-sensitive-root-command` contient à sa dernière passe, lu par `glorfindel report`)
   expected_sudo.jsonl         → ADM1 : chaque sudo d'administrateur attendu écarté par le RulePoller (at, rule,
                                 asset, account, command ≤ 300 car., logged_at ; un shell root écarté par l'origine de
                                 ses sessions SSH : via « origin », origin — COR1 ; proof « bastion » ou « flows »

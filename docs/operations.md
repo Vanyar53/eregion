@@ -1049,7 +1049,10 @@ allumée), `exclude_all: "false"` sortait la VM de toutes les règles (un texte 
   que la forme de sudo : toujours une carte. Les shells root d'un administrateur (`sudo -i`,
   `sudo su -`, `bash`, `python -c`, `vim`, `less`, `screen`…) font **une carte pour les formes
   connues**, sauf origine attendue (ci-dessous) ; la liste n'est pas exhaustive — un script non
-  listé (`sudo /tmp/x.py`) passe sans carte, l'angle mort assumé jusqu'à AUD1 (`auditd`).
+  listé (`sudo /tmp/x.py`) passe sans carte — un angle mort qu'AUD1 réduit là où auditd est posé
+  (au banc, derrière `auditd_enabled` : « auditd au banc (AUD1) ») : chaque programme que ce script
+  ou ce shell lance en root, sous la connexion de l'administrateur, y est lu avec la même liste
+  sensible ; ce qu'il fait sans lancer de programme ne l'est pas.
   Éditer avec `sudoedit`. **Clé nouvelle**, comme `never_block` : une version
   antérieure refuse la config qui la porte — la watch ne démarrerait plus.
 
@@ -2096,9 +2099,238 @@ pas d'un journal absent.
 
 ---
 
+## auditd au banc (AUD1, #408)
+
+ADM1 et COR1 jugent un `sudo` vers root ; ce qui se fait ensuite dans un shell root, sudo ne l'écrit
+pas — COR2 le garde comme limite (une session plus ancienne que la fenêtre, un accès qui n'écrit
+aucune ligne de session). AUD1 pose `auditd` sur les VM du banc, derrière un drapeau désactivé, et la
+règle livrée `auditd-sensitive-root-command` lit ses lignes : une commande de la liste sensible d'ADM1,
+exécutée en root par une connexion humaine, fait une carte qui nomme le compte de connexion
+(`docs/design/correlation.md`, « Ce que ferme AUD1 »). **Rien ici n'a été planifié ni appliqué** :
+la forme réelle des lignes, le volume et le coût se mesurent au banc avec Jonathan. Les noms sont ceux
+du banc ; `<…>` est à remplacer, rien de réel dans ce dépôt.
+
+### Ce que le drapeau pose
+
+| Variable (`terraform.tfvars`) | Ressource | Ce qu'elle fait |
+|---|---|---|
+| `auditd_enabled = true` | `azurerm_virtual_machine_extension.auditd` (`eregion-auditd`, CustomScript 2.1), sur chaque VM de `local.vms` (gondolin, bree) | lance `infra/terraform/scripts/auditd.sh` : installe `auditd` et `audispd-plugins`, écrit `/etc/audit/rules.d/50-eregion-aud1.rules`, met `log_format = ENRICHED`, active le greffon `/etc/audit/plugins.d/syslog.conf` (`args = LOG_INFO LOG_LOCAL6`), recharge les règles, redémarre auditd, puis affiche les quatre règles chargées |
+| (la même) | `azurerm_monitor_data_collection_rule.celebrimbor` | ajoute `local6` aux facilités de toujours (`auth`, `authpriv`, `syslog`, `daemon`) : l'agent Azure Monitor l'envoie à la table `Syslog` |
+
+Les deux règles d'audit (et leurs pendantes `arch=b32`) :
+
+```
+-a always,exit -F arch=b64 -C euid!=uid -F auid!=unset -S execve -k user_emulation
+-a always,exit -F arch=b64 -F euid=0 -F auid>=1000 -F auid!=unset -S execve -k root_command
+```
+
+La première est celle des benchmarks CIS pour Linux (« actions as another user are always logged ») :
+un programme exécuté sous un autre utilisateur — `sudo` lui-même, `su`, un binaire setuid —, sous
+l'identité de connexion (`auid`) que le noyau garde à travers sudo et su. **Elle ne suffit pas pour un
+shell root** : sudo passe à uid = euid = 0 avant de lancer la commande, si bien qu'aucune commande du
+shell n'a `euid != uid`. La seconde écrit chaque exécution en root (euid 0) d'une connexion humaine
+(auid ≥ 1000, jamais unset), sous le même `auid` : c'est elle qui fait s'appliquer la liste sensible à
+l'intérieur du shell (hypothèse A8). Une exécution est écrite une fois, sous la clé de la première
+règle qui la prend.
+
+- **Désactivé par défaut**, dans `terraform.tfvars` (ignoré par git, persistant) : jamais dans
+  `config.yaml`, jamais en `-var` d'une commande (le prochain apply sans lui retirerait l'extension).
+  Toute instance du banc peut le poser : il ne touche que ses VM et sa DCR.
+- **Une extension, jamais le `custom_data`** : changer le `custom_data` remplace la VM.
+- Le contrat planifié contre un faux azurerm, sans Azure : `terraform -chdir=infra/terraform test`
+  (`infra/terraform/tests/auditd.tftest.hcl`, après un `init -backend=false`) ; le même contrat lu dans
+  les fichiers : `tests/unit/test_bench_auditd.py` (les clés, la facilité, le seuil humain : les mêmes
+  dans le script, la DCR, la règle et `glorfindel/auditd.py`).
+
+### L'acheminement : audisp-syslog vers Syslog
+
+Deux chemins possibles : l'agent Azure Monitor qui lit `/var/log/audit/audit.log` comme un journal
+texte, vers une table à lui (`*_CL`), ou le greffon syslog d'auditd (`audisp-syslog`) vers la table
+`Syslog`, par la DCR qui existe déjà. **AUD1 prend le second** :
+
+- c'est la table que lisent déjà ADM1, COR1 et le brute force, avec la même lecture (le KQL des règles,
+  `glorfindel/correlation.py`) et les mêmes tests (`tests/unit/kql_subset.py`) ;
+- il n'y a ni table à définir et à faire évoluer, ni point de collecte, ni transformation à tenir : une
+  facilité de plus dans la DCR ;
+- le prix au Go est le même (Analytics Logs) ; le volume, lui, est celui des enregistrements, quel que
+  soit le chemin.
+
+Ce qu'il coûte : une ligne écrite par `logger -p local6.info -t audisp-syslog` arrive au même endroit.
+Elle **ajoute** une carte (elle peut nommer un autre compte : à vérifier dans `ausearch` sur la VM),
+elle n'en **efface** aucune : deux enregistrements SYSCALL ou EXECVE pour un même événement font une
+carte, jamais le choix de l'un (A0). Le journal d'audit de la VM, lisible par root seul, garde tout. Si
+la mesure montre des lignes perdues en route (A10), le journal texte d'AMA devient le repli : un lot à
+part.
+
+### Le volume et le coût — l'estimation
+
+**La méthode** : un `execve` écrit un événement d'environ 6 enregistrements (SYSCALL, EXECVE, CWD,
+PATH pour le programme et pour son interpréteur, PROCTITLE : l'exemple d'exécution de la documentation
+d'auditd, « Understanding Audit Log Files » de Red Hat), chacun une ligne Syslog. Le texte : SYSCALL
+~550 octets, plus ~200 pour les champs ENRICHED ; EXECVE ~50 octets plus les arguments ; CWD ~50 ;
+PATH ~250 chacun ; PROCTITLE ~60 plus deux fois la ligne de commande en hexadécimal — **~1,4 Ko par
+exécution**. Les autres colonnes facturées d'une ligne Syslog (`Computer`, `HostName`, `HostIP`,
+`Facility`, `SeverityLevel`, `ProcessName`, `ProcessID`, `EventTime`, `_ResourceId`…) ajoutent
+~0,3 Ko par ligne, ~1,8 Ko par exécution : **~3 Ko par exécution (2 à 4 Ko)**. Le prix : 2,99 USD le
+Go en West Europe (Analytics Logs, au-delà des 5 premiers Go du mois par compte de facturation ;
+l'API publique des prix, lue le 30/10/2026 pour ID1, ci-dessus).
+
+**Ce qui n'est pas écrit** : un démon, l'agent de la VM et donc Run Command (Annatar, la routine de
+`make celebrimbor-workload`, la coupure des sessions), Gothmog et l'agent Chaos, les mises à jour
+automatiques (un minuteur systemd) n'ont pas d'`auid` ; les tâches cron de root ont l'`auid` 0. Aucun
+n'est un humain (A9).
+
+| Cas | Exécutions par jour | Volume par jour | Par mois |
+|---|---|---|---|
+| Le banc au repos (Annatar, Gothmog, Run Command, cron de root) | 0 | 0 | 0 |
+| bree, sa routine (`workload.sh` : cron sous `celebrimbor`, auid 1000 — `sudo nginx -t` et `sudo systemctl reload nginx` une fois par jour, `sudo journalctl --vacuum-time=14d` toutes les 6 h) | ~20 | ~60 Ko | < 0,01 USD |
+| Une session d'administration en SSH (les scripts du motd à la connexion, `sudo -i` et son profil, une centaine de commandes) | 150 à 300 | 0,5 à 1 Mo | — |
+| Un `sudo apt upgrade` (les scripts de maintenance des paquets, sous l'auid de l'administrateur) | 2 000 à 10 000 par mise à jour | 6 à 30 Mo | — |
+| Une VM tenue par un outil de configuration en SSH, en root par sudo (Ansible et `become` : l'auid de son compte), 1 000 tâches par jour | ~50 000 | ~150 Mo | ~4,5 Go, ~13 USD par VM |
+
+Sur le banc : **moins de 1 USD par mois**, tant qu'on n'y fait pas de gestion de configuration. Hors du
+banc, le dernier cas compte : c'est lui qui décide, VM par VM, s'il faut garder ces règles telles
+quelles (A12). La mesure (requête Q3, ci-dessous) remplace l'estimation après 24 h, puis 7 jours.
+
+### Avant le plan
+
+1. **D'abord la version** : H0 doit tourner une version qui porte la règle
+   `auditd-sensitive-root-command` (la release qui porte AUD1, déployée par le CD). Avant, les lignes
+   arrivent sans que rien ne les lise — sans dommage, mais sans mesure.
+2. **Le mode des VM, pour la mesure** : `make glorfindel-host-push HUMAN_ONLY=1` (tout en
+   `human_only`). gondolin et bree sont en `non_disruptive` sur H0 : chaque carte d'AUD1 y pourrait
+   lancer un instantané, et la routine de bree en fait une toutes les 6 h (A13). Les remettre comme
+   avant à la fin de la mesure.
+
+### Activer, vérifier le plan, appliquer
+
+```bash
+# 1. Dans infra/terraform/terraform.tfvars (persistant, ignoré par git) :
+#      auditd_enabled = true
+make celebrimbor-auditd-plan          # plan ciblé : l'extension d'auditd et la DCR seules (lecture seule)
+make celebrimbor-auditd-up YES=1      # une fois le plan relu
+```
+
+**Le plan doit montrer**, et rien d'autre :
+- `+ azurerm_virtual_machine_extension.auditd["bree"]` et `["gondolin"]` : `name = "eregion-auditd"`,
+  `publisher = "Microsoft.Azure.Extensions"`, `type = "CustomScript"`, `type_handler_version = "2.1"`,
+  `settings` (le script, en base64) ;
+- `~ azurerm_monitor_data_collection_rule.celebrimbor` : `facility_names` gagne `"local6"`, rien d'autre ;
+- `Plan: 2 to add, 1 to change, 0 to destroy`, et l'avertissement de Terraform sur le ciblage
+  (« Resource targeting is in effect ») — attendu.
+
+Un changement sur une VM (`azurerm_linux_virtual_machine.baseline`), le workspace ou le groupe (leurs
+dépendances, une dérive en attente) : **s'arrêter**, et le traiter à part par `make celebrimbor-plan`.
+
+**L'extension a-t-elle tourné ?** Le portail (la VM, « Extensions + applications », `eregion-auditd`,
+son statut et sa sortie : les quatre règles `key=user_emulation` et `key=root_command`), ou :
+`az vm extension show -g rg-celebrimbor --vm-name vm-celebrimbor-gondolin -n eregion-auditd --instance-view --query "instanceView.substatuses[].message" -o tsv`.
+Une sortie en erreur (« /sbin/audisp-syslog absent ») : A1.
+
+### Les opérations de test
+
+Chacune est connue et sans effet sur le banc. Noter l'heure UTC juste avant (`date -u +%FT%TZ`).
+
+1. **Un shell root et une commande sensible** : `ssh celebrimbor@<gondolin>`, `sudo -i`, `id`,
+   `cat /etc/shadow > /dev/null`, `ls /root`, `exit`, `exit`. Attendu sur H0 : la carte d'ADM1 (le shell
+   root de `sudo -i`, comme avant) et une carte `auditd-sensitive-root-command` qui nomme
+   `celebrimbor (auid 1000)`, la commande `cat /etc/shadow`, `Sensitive: shadow` ; `id` et `ls` n'en font
+   pas. `make glorfindel-host-report` : « auditd (AUD1), auditd-sensitive-root-command: N root exec(s) of
+   a human login in its window… ». Requêtes Q1, Q2.
+2. **Le même compte, sans sudo dans la ligne** : depuis la session, `sudo su -`, puis
+   `useradd aud1-test && userdel aud1-test`. Attendu : une carte (`accounts`), le compte de connexion
+   toujours nommé (A8).
+3. **Une ligne écrite à la main** : `logger -p local6.info -t audisp-syslog 'type=EXECVE
+   msg=audit(<instant:numéro> de l'événement du cat, lu par Q1): argc=1 a0="ls"'`. Attendu : une carte
+   « 2 enregistrements EXECVE pour un événement », jamais l'effacement de la première.
+4. **Run Command** : `az vm run-command invoke -g rg-celebrimbor -n vm-celebrimbor-gondolin
+   --command-id RunShellScript --scripts "cat /etc/shadow > /dev/null"`. Attendu : aucune ligne, aucune
+   carte (pas d'auid : A9).
+5. **Le bruit** (A13) : `sudo apt-get update && sudo apt-get install --reinstall -y cron` dans une
+   session SSH, puis compter les cartes et les lignes (Q2) ; noter la carte de la routine de bree à
+   l'heure suivante en `45 */6`.
+6. **Rien de perdu** (A10) : sur la VM, `sudo ausearch -k root_command --start <heure> | grep -c
+   'type=SYSCALL'`, à comparer au nombre d'événements de Q2 pour la même période ; et
+   `journalctl -u systemd-journald --since <heure> | grep -i suppressed`.
+
+### Les requêtes de mesure
+
+**Q1** (la forme des lignes) :
+
+```kusto
+Syslog
+| where TimeGenerated > ago(1h)
+| where Facility == "local6"
+| project TimeGenerated, Computer, Facility, SeverityLevel, ProcessName, SyslogMessage
+| order by TimeGenerated asc
+```
+
+**Q2** (les événements, leurs enregistrements) :
+
+```kusto
+Syslog
+| where TimeGenerated > ago(1d) and Facility == "local6"
+| extend AuditEvent = extract(@"msg=audit\((\d+\.\d+:\d+)\)", 1, SyslogMessage),
+         RecordType = extract(@"(?:^|\s)type=([A-Z_]+)\s", 1, SyslogMessage)
+| summarize Types = make_set(RecordType), Records = count() by Computer, AuditEvent
+| summarize Events = count(), RecordsPerEvent = avg(Records),
+            WithoutExecve = countif(set_has_element(Types, "SYSCALL") and not(set_has_element(Types, "EXECVE")))
+            by Computer
+```
+
+**Q3** (le volume, facturé) :
+
+```kusto
+Syslog
+| where TimeGenerated > ago(1d) and Facility == "local6"
+| summarize Rows = count(), MB = sum(_BilledSize) / 1e6 by Computer, bin(TimeGenerated, 1h)
+| order by TimeGenerated asc
+```
+
+Et la règle elle-même, telle que la watch la lance : `glorfindel rules check --live` (H2).
+
+### Les hypothèses d'AUD1
+
+Ce que le code suppose (`glorfindel/auditd.py`, la règle `auditd-sensitive-root-command`,
+`infra/terraform/scripts/auditd.sh`), d'après la documentation d'auditd (`auditd.conf(5)`,
+`audisp-syslog(8)`, `auditctl(8)`, le format des enregistrements du noyau) et d'Azure Monitor ; chacune
+avec sa mesure et ce qui change selon le résultat. (À ne pas confondre avec les A1–A8 d'ID1, plus haut.)
+Un changement de règle ou du lecteur est un lot de la session Glorfindel ; du script, de la session
+Infra.
+
+| | Hypothèse | Mesure | Si elle tient | Sinon |
+|---|---|---|---|---|
+| **A1** | Sous Ubuntu 22.04 (auditd 3.0), `audispd-plugins` installe `/sbin/audisp-syslog` ; ses greffons se lisent dans `/etc/audit/plugins.d/` | la sortie de l'extension ; `dpkg -L audispd-plugins \| grep syslog` | rien | corriger le paquet ou le chemin du script |
+| **A2** | `args = LOG_INFO LOG_LOCAL6` : la facilité `local6`, le niveau info ; l'agent les range dans `Syslog` avec `Facility == "local6"` | Q1 | rien | lire la facilité réelle : la DCR et la règle, ensemble (`tests/unit/test_bench_auditd.py`) |
+| **A3** | L'étiquette des lignes (`ProcessName`) est `audisp-syslog` (`audispd` sous auditd 2) | Q1 | rien | une autre étiquette : la règle ne voit rien — la corriger |
+| **A4** | `SyslogMessage` porte un enregistrement entier, l'étiquette ôtée, au format du noyau : `type=SYSCALL msg=audit(<s>.<ms>:<n>): … auid= uid= … euid= … tty= ses= comm= exe= … key="<clé>"`, une chaîne non sûre entre guillemets ou en hexadécimal | Q1 | rien | une autre forme (un préfixe, des champs réordonnés, une ligne coupée) : corriger la règle et le lecteur |
+| **A5** | Les enregistrements d'un événement partagent `msg=audit(…)` et arrivent ensemble : la règle ne voit pas un SYSCALL sans son EXECVE | Q2 (`WithoutExecve`) | rien | une carte « aucun enregistrement EXECVE » à tort, par passe : retenir la ligne une passe de plus (un lot) |
+| **A6** | `log_format = ENRICHED` atteint le greffon : le SYSCALL finit par `AUID="<compte>" UID="root" …` | Q1 | la carte nomme le compte | la carte dit « auid 1000 (nom absent de la ligne) » : lire le nom ailleurs (l'option `interpret` d'audisp-syslog remplace les numéros, donc pas elle), un lot |
+| **A7** | Le séparateur des champs ENRICHED (le caractère 0x1d) arrive tel quel ou en `#035` (rsyslog échappe les caractères de contrôle) : le lecteur lit les deux | Q1 | rien | un autre échappement : l'ajouter au lecteur |
+| **A8** | `sudo -i` puis une commande : `sudo` lui-même sous `user_emulation` (euid 0, uid du compte), la commande sous `root_command` (uid = euid = 0), l'auid du compte de connexion dans les deux ; `sudo su -` de même | opérations 1 et 2, Q1 | rien | une commande du shell absente : la règle d'audit, un lot de la session Infra |
+| **A9** | Une connexion humaine a un uid ≥ 1000 (`UID_MIN` de `/etc/login.defs`), et `pam_loginuid` pose l'auid à la connexion SSH (et pour cron) ; Run Command, les démons, cron de root n'ont pas d'auid ou l'auid 0 | `grep UID_MIN /etc/login.defs` ; `cat /proc/self/loginuid` en SSH et par Run Command ; opération 4 | rien | un humain sous 1000 : relever le seuil (la règle d'audit, la règle, le lecteur, ensemble) ; Run Command vu : l'exclure par son auid |
+| **A10** | Rien ne se perd sous une rafale (une mise à jour : des milliers d'exécutions, ~6 lignes chacune, en une minute) : ni journald (`RateLimitBurst`), ni rsyslog, ni la file d'auditd | opération 6 | rien | des lignes perdues : relever les limites de journald pour le greffon, ou passer au journal texte d'AMA (un lot) ; une commande perdue n'est pas vue |
+| **A11** | Une colonne `make_set_if` arrive du SDK comme une liste (ou son texte JSON) | la carte de l'opération 1 (son `AuditCommand`) ; `glorfindel rules check --live` | rien | une autre forme : le lecteur dit « aucun enregistrement » sur chaque ligne — le corriger |
+| **A12** | Le volume est celui de l'estimation : ~6 lignes et ~3 Ko facturés par exécution | Q3 à 24 h, puis à 7 jours, rapporté au nombre d'événements de Q2 | rien | au-delà : une transformation de la DCR qui ne garde de `local6` que SYSCALL et EXECVE (le journal de la VM garde le reste), ou les règles d'audit restreintes — à décider avec Jonathan |
+| **A13** | Le bruit reste rare : les scripts du motd à la connexion n'exécutent rien de la liste ; une mise à jour de paquets fait quelques cartes (ses scripts de maintenance touchent `/etc/systemd/system`, `useradd --system`, `setcap`…, sous l'auid de l'administrateur) ; la routine de bree en fait une toutes les 6 h (`journalctl --vacuum` : la catégorie `logs`, comme sa carte d'ADM1) | opérations 1 et 5, les cartes sur 24 h | rien | trop de cartes par mise à jour : en décider avec Jonathan — jamais un écart par le nom du programme parent, qu'un intrus choisirait (`dpkg -i` d'un paquet à lui) |
+
+**Le retour en arrière** : `auditd_enabled = false` (ou la ligne retirée), puis `make
+celebrimbor-auditd-plan` — il doit montrer `2 to destroy` (les extensions) et `1 to change` (la DCR
+sans `local6`) — et `make celebrimbor-auditd-up YES=1`. Supprimer l'extension ne défait rien sur la VM :
+auditd, ses règles et le greffon restent, leurs lignes ne sont plus collectées. Pour les retirer, sur
+chaque VM : `sudo rm /etc/audit/rules.d/50-eregion-aud1.rules`, `sudo sed -i 's/^active = yes/active =
+no/' /etc/audit/plugins.d/syslog.conf`, `sudo augenrules --load`, `sudo service auditd restart` (ou
+`sudo apt-get purge -y auditd audispd-plugins`). Les lignes déjà ingérées restent jusqu'à la fin de la
+rétention (30 jours).
+
+---
+
 ## Coûts réels (West Europe)
 
 - **Infra existante** : LLM API uniquement (Anthropic défaut), <$2/mois (~$0.05–0.10 par run)
 - **Infra Celebrimbor (Terraform)** : ~$25–35/mois (VM ~6h/jour + disques + IP + backup + LAW). Jetable — `make celebrimbor-stop` pour pauser sans détruire. `make celebrimbor-up` montre le plan et demande « yes » ; `YES=1` l'applique sans le relire (SEC6, comme les autres cibles Terraform). ⚠️ **`celebrimbor-down` est GARDÉ** (suite incident 2026-06-25 où un `down` non scopé a emporté tout le baseline) : il est **symétrique de `up`** et **protège le baseline**. `make celebrimbor-down TOPO=multinic` → destruction **scopée** d'une topo (via `-target` sur son RG), baseline intact. `make celebrimbor-down` **sans arg refuse** et exige `CONFIRM=<instance>` pour un teardown total (baseline inclus). Retirer une topo proprement = `enabled: false` dans `config.yaml` + `make celebrimbor-up`. Convention : chaque topo définit `azurerm_resource_group.<topo>` (count) = la cible `-target`.
 - **Journaux d'activité et d'Entra ID au banc (ID1)**, s'ils sont activés : `AzureActivity` gratuite ; `AuditLogs` et `AADServicePrincipalSignInLogs` à 2,99 USD le Go en West Europe au-delà des 5 Go gratuits du mois — estimés à moins de 2 USD par mois sur le banc, à mesurer (« Les journaux d'activité et d'Entra ID au banc », ci-dessus).
+- **auditd au banc (AUD1)**, s'il est activé : les lignes d'auditd dans `Syslog` (local6), 2,99 USD le Go
+  en West Europe au-delà des 5 Go gratuits du mois — estimées à moins de 1 USD par mois sur le banc
+  (~3 Ko par exécution d'un humain en root), à mesurer (« auditd au banc (AUD1) », ci-dessus).
 - **Chaos Studio (G0)** : facturé à l'usage des expériences (une panne de 5 min sur une VM). Feu vert du 15/10 sur une estimation de 11 à 42 € par mois pour 2 à 4 campagnes (ROADMAP) ; le coût réel est à relever sur la facture après le premier run.

@@ -397,6 +397,14 @@ def _watch_reassert_pass(connector, mode_override=None, lock=None, seen: dict | 
     return report
 
 
+def _write_watch_heartbeat(path: Path, at) -> None:
+    """The watch's heartbeat, written at once (SEC17): a temp file beside it, renamed over it —
+    never opened in place, so a reader (the injectors' gate, the console, the CD of H0, a second
+    watch) never finds it empty or cut. In the mode it always had, 0644: read by other processes."""
+    from glorfindel.response.state import _atomic_write_text
+    _atomic_write_text(path, at.isoformat(), mode=0o644)
+
+
 def _start_campaign_reports(runs_dir) -> bool:
     """The thread that writes the report of each campaign Orodruin publishes (IA0, #167;
     analysis/hosted_report.py) — only with an exercise channel. Never raises: a report,
@@ -841,9 +849,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     _INJECTOR_BEAT = _INJECTORS_DIR / "watch_heartbeat"
 
     def _write_heartbeat() -> None:
-        _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
         at = datetime.now(timezone.utc)
-        _HEARTBEAT.write_text(at.isoformat())
+        _write_watch_heartbeat(_HEARTBEAT, at)
         try:
             from eregion_core.watch_gate import beat_body
             from glorfindel.response.state import _atomic_write_text

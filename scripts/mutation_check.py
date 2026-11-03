@@ -8643,6 +8643,23 @@ MUTANTS += [
      "    if not storage_path.is_dir():\n", "    if False:\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_memory_age.py" for n in range(3200, 3207)})
+# SEC17 (#451): the state files another process reads, written at once — never opened in place.
+# M3207–M3210.
+MUTANTS += [
+    ("M3207", "the watch's heartbeat written in place: a reader finds it empty or cut (SEC17)", GCLI,
+     "    _atomic_write_text(path, at.isoformat(), mode=0o644)\n",
+     "    path.parent.mkdir(parents=True, exist_ok=True)\n    path.write_text(at.isoformat())\n"),
+    ("M3208", "the watch's heartbeat 0600: the CD of H0 and the console no longer read it (SEC17)", GCLI,
+     "    _atomic_write_text(path, at.isoformat(), mode=0o644)\n",
+     "    _atomic_write_text(path, at.isoformat(), mode=0o600)\n"),
+    ("M3209", "a run's report written in place in runs/ (SEC17)", "eregion_core/run_report.py",
+     "        write_file(path, json.dumps(self.to_dict(), indent=2))\n",
+     '        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")\n'),
+    ("M3210", "the console's restores in progress written in place (SEC17)", CON,
+     "        _atomic_write_text(_RESTORE_TRACKING, _json.dumps(data))\n",
+     "        _RESTORE_TRACKING.write_text(_json.dumps(data))\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_state_writes.py" for n in range(3207, 3211)})
 
 
 def _copy_repo(dest: Path) -> None:

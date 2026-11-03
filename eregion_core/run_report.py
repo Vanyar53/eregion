@@ -61,9 +61,13 @@ class RunReport:
         return asdict(self)
 
     def save(self, runs_dir: str | Path = "runs") -> Path:
+        """Written at once (SEC17): a new file beside it, renamed over it — the watch, the console,
+        the analysis and Orodruin's publisher read runs/ while a run writes; none finds a report
+        empty or cut, and a link in its place is replaced, never followed (SEC16, ``write_file``)."""
+        from eregion_core.channel_reader import write_file
         path = Path(runs_dir) / f"{self.run_id}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        write_file(path, json.dumps(self.to_dict(), indent=2))
         return path
 
 

@@ -8660,6 +8660,18 @@ MUTANTS += [
      "        _RESTORE_TRACKING.write_text(_json.dumps(data))\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_state_writes.py" for n in range(3207, 3211)})
+# SEC17 (#451, N-15): the storage token goes to the account the operator declared — the two
+# channels and Orodruin's scopes name one account, another is refused before a token. M3211–M3213.
+MUTANTS += [
+    ("M3211", "a channel URL of another account than the declared one receives the token (SEC17, N-15)", XCH,
+     "    why = url_refusal(url) or declared_refusal(url)\n", "    why = url_refusal(url)\n"),
+    ("M3212", "the return channel's URL no declaration: two channels on two accounts pass (SEC17, N-15)", XCH,
+     "    for name in DECLARED_URLS:\n", "    for name in DECLARED_URLS[:1]:\n"),
+    ("M3213", "a scope that names no account read as no declaration (SEC17, N-15)", XCH,
+     '            out[name] = m.group(1).lower() if m else ""\n',
+     "            if m:\n                out[name] = m.group(1).lower()\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_injector_channels.py" for n in range(3211, 3214)})
 
 
 def _copy_repo(dest: Path) -> None:

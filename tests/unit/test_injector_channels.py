@@ -375,6 +375,107 @@ def test_every_call_of_the_channels_checks_its_url(monkeypatch):
     assert asked == [] and sent == []
 
 
+# ── N-15 (SEC17): the token goes to the account the operator declared, and no other ─────
+
+OURS = "https://exampleaccount.blob.core.windows.net/exercises"
+OURS_WATCH = "https://exampleaccount.blob.core.windows.net/watch"
+THEIRS = "https://otheraccount.blob.core.windows.net/exercises"
+THEIRS_WATCH = "https://otheraccount.blob.core.windows.net/watch"
+SCOPE = ("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-orodruin/providers"
+         "/Microsoft.Storage/storageAccounts/{}/blobServices/default/containers/{}")
+
+
+def _asking():
+    asked = []
+    return asked, SimpleNamespace(get_token=lambda scope: asked.append(scope) or SimpleNamespace(token="t"))
+
+
+def test_the_account_is_read_from_a_blob_url():
+    assert channel.account_of("https://ExampleAccount.blob.core.windows.net/exercises/x.json") == "exampleaccount"
+    assert channel.account_of("https://exampleaccount.blob.core.chinacloudapi.cn/watch") == "exampleaccount"
+    assert channel.account_of("https://example.com/exercises") == ""
+
+
+def test_the_declared_account_receives_the_token(monkeypatch):
+    monkeypatch.setenv(channel.CHANNEL_ENV, OURS)
+    monkeypatch.setenv(wc.CHANNEL_ENV, OURS_WATCH)
+    monkeypatch.setenv(orodruin.CHANNEL_SCOPE_ENV, SCOPE.format("exampleaccount", "exercises"))
+    monkeypatch.setenv(orodruin.WATCH_SCOPE_ENV, SCOPE.format("ExampleAccount", "watch"))
+    asked, cred = _asking()
+    for url in (OURS, f"{OURS}/R1.json", OURS_WATCH, f"{OURS_WATCH}/heartbeat.json"):
+        assert channel.declared_refusal(url) == ""
+        channel.auth_headers(cred, url)
+    assert len(asked) == 4
+
+
+@pytest.mark.parametrize("name, value", [
+    ("EREGION_EXERCISE_CHANNEL", OURS),
+    ("EREGION_WATCH_CHANNEL", OURS_WATCH),
+    ("EREGION_CHANNEL_SCOPE", SCOPE.format("exampleaccount", "exercises")),
+    ("EREGION_WATCH_CHANNEL_SCOPE", SCOPE.format("exampleaccount", "watch")),
+])
+def test_another_account_than_the_declared_one_is_refused_before_a_token_is_asked(monkeypatch, name, value):
+    """M3211: a channel URL naming another account received the storage token."""
+    monkeypatch.setenv(name, value)
+    asked, cred = _asking()
+    assert "otheraccount is not the one declared" in channel.declared_refusal(THEIRS)
+    with pytest.raises(channel.ChannelRefused) as e:
+        channel.auth_headers(cred, THEIRS)
+    assert "no token sent" in str(e.value) and f"{name}: exampleaccount" in str(e.value)
+    assert asked == []
+
+
+def test_the_variables_read_are_the_channels_and_orodruin_s_scopes():
+    assert channel.DECLARED_URLS == (channel.CHANNEL_ENV, wc.CHANNEL_ENV)
+    assert channel.DECLARED_SCOPES == (orodruin.CHANNEL_SCOPE_ENV, orodruin.WATCH_SCOPE_ENV)
+
+
+def test_two_channels_that_name_two_accounts_refuse_both(monkeypatch):
+    """M3212: the exercise channel and the return channel on two accounts — which one is ours
+    cannot be told: neither receives the token."""
+    monkeypatch.setenv(channel.CHANNEL_ENV, OURS)
+    monkeypatch.setenv(wc.CHANNEL_ENV, THEIRS_WATCH)
+    asked, cred = _asking()
+    for url in (OURS, THEIRS_WATCH):
+        with pytest.raises(channel.ChannelRefused):
+            channel.auth_headers(cred, url)
+    assert asked == []
+
+
+def test_a_scope_that_names_no_account_is_no_declaration_of_ours(monkeypatch):
+    """A declaration that cannot be read is never an absent one (A0)."""
+    monkeypatch.setenv(orodruin.CHANNEL_SCOPE_ENV, "/subscriptions/s/resourceGroups/rg")
+    asked, cred = _asking()
+    assert "EREGION_CHANNEL_SCOPE: no account" in channel.declared_refusal(OURS)
+    with pytest.raises(channel.ChannelRefused):
+        channel.auth_headers(cred, OURS)
+    assert asked == []
+
+
+def test_without_a_declaration_the_url_is_the_operator_s_word():
+    """The limit, written in the threat model: with no channel set in the environment (a URL
+    passed by hand), any Azure Storage blob endpoint is taken as the operator's."""
+    assert channel.declared_accounts() == {}
+    assert channel.declared_refusal(THEIRS) == ""
+
+
+def test_every_call_of_the_channels_refuses_another_account(monkeypatch):
+    monkeypatch.setenv(channel.CHANNEL_ENV, OURS)
+    monkeypatch.setenv(wc.CHANNEL_ENV, OURS_WATCH)
+    asked, cred = _asking()
+    sent = []
+    monkeypatch.setattr(requests, "get", lambda *a, **k: sent.append(a) or None)
+    monkeypatch.setattr(requests, "put", lambda *a, **k: sent.append(a) or None)
+    for call in (lambda: channel.publish(_window(), channel=THEIRS, credential=cred),
+                 lambda: channel.pull(Path("/nonexistent-never-made"), channel=THEIRS, credential=cred),
+                 lambda: wc.read_heartbeat(channel=THEIRS_WATCH, credential=cred),
+                 lambda: wc.read_detections("R1", channel=THEIRS_WATCH, credential=cred),
+                 lambda: wc.Publisher(THEIRS_WATCH, credential=cred)._write("heartbeat.json", {})):
+        with pytest.raises(channel.ChannelRefused):
+            call()
+    assert asked == [] and sent == []
+
+
 # ── N-03: the heartbeat carries the watch's perimeter ─────────────────────────────────
 
 SUB = "00000000-0000-0000-0000-00000000aaaa"

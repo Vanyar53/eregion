@@ -402,9 +402,12 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 carte en quarantaine ou sans NSG, qui le disent — jamais l'isolation (son original inconnu
                                 n'est pas écrit). Une levée en échec ne l'écrit pas ; un nouvel état de sa VM (isolation,
                                 ré-isolation) le met de côté dans `isolation/aside/` (jamais plus un état, réparé ou non ; listé tant qu'il existe : le lire,
-                                reporter à la main dans l'état courant, le retirer) ; une
-                                levée ou un reset réussis d'une isolation sans carte en quarantaine ni nue l'effacent avec
-                                l'état. La réaffirmation le dit (`state_unreadable`). Le réparer ou le retirer à la main.
+                                reporter à la main dans l'état courant, le retirer) ; le fichier illisible de sa
+                                VM, une levée ou un reset Azure ne disent jamais fait (`release_partial`, `swept_partial`)
+                                et ne l'effacent jamais, ni rien d'autre (I3U) — l'adaptateur AWS garde le fichier mais
+                                sa levée dit encore `released`. La réaffirmation le dit (`state_unreadable`). Le réparer,
+                                ou le retirer à la main après avoir cherché les règles glorfindel-iso de ses cartes sur
+                                `nsg-glorfindel-quarantine-<région>` (que le message nomme).
                                 Isolation : `original_unknown` — les cartes en quarantaine dont l'original est inconnu
                                 (la levée demandera le tag). `bypass_said` — le contournement déjà dit (V-16, carte `bypassed`) ; blocage aussi.
                                 Blocage : `left_said` — les règles laissées déjà dites (I4A, carte `rule_left`). L2C : ces marques

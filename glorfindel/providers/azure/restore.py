@@ -4,9 +4,14 @@ never without knowing when it began (SEC4c) —, Run Command scripts neutralised
 """
 from __future__ import annotations
 
-from glorfindel.providers.azure.sdk import _enum_text, rest_post
+from glorfindel.providers.azure.sdk import _enum_text, _is_iam_error, rest_post
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _console, _ERR_MAX, _first_line
+
+# SEC17: why a restore did not neutralize the last Run Command on a VM outside the list.
+NEUTRALIZE_REFUSED = ("Run Command refusé sur cette VM : le rôle « Eregion Glorfindel Restore "
+                      "Neutralize » n'y est pas (il se donne VM par VM, aux VM que le restore "
+                      "défend : restore_vms) — ")
 
 
 def _has_vault_tier(rp) -> bool:
@@ -240,6 +245,10 @@ class RestoreMixin:
         address 168.63.129.16, which NSGs don't filter — measured 2026-10-05). Needs a
         running VM; on failure the restore still proceeds (recovery first) and the
         result says so, which holds the autonomous release.
+
+        SEC17: the right is given VM by VM, to the VMs the restore defends (« Eregion Glorfindel
+        Restore Neutralize », restore_vms) — refused on another VM, which is restored anyway:
+        ``run_command_refused`` says why on the card.
         """
         from azure.mgmt.compute.models import RunCommandInput
         os_type = _enum_text(getattr(getattr(vm.storage_profile, "os_disk", None), "os_type", "") or "")
@@ -249,9 +258,13 @@ class RestoreMixin:
         else:
             cmd = RunCommandInput(command_id="RunShellScript",
                                   script=["echo 'glorfindel: run command neutralized'"])
+        command_ran = False
         try:
             poller = self._compute.virtual_machines.begin_run_command(rg, vm_name, cmd)
             poller.result(timeout=600)
+            # SEC17 (review): past here a refusal is not the right of Run Command on this VM (the
+            # harmless command ran) — a listing of the extensions refused is no « refused » flag.
+            command_ran = True
             # result(timeout) returns at the deadline without raising: "neutralized"
             # must mean the harmless command actually finished (third review, T13).
             if not poller.done():
@@ -264,11 +277,15 @@ class RestoreMixin:
                         "run_command_error": "autres scripts rejouables sur la VM : " + ", ".join(others)}
             return {"run_command_neutralized": True}
         except Exception as e:
+            error = _first_line(e)[:_ERR_MAX]
+            refused = not command_ran and _is_iam_error(str(e))
+            if refused:
+                error = (NEUTRALIZE_REFUSED + error)[:_ERR_MAX]
             _console.print(
-                f"  [yellow]Run Command non neutralisée ({_first_line(e)[:_ERR_MAX]}) — le "
+                f"  [yellow]Run Command non neutralisée ({error}) — le "
                 "disque restauré peut rejouer la dernière commande au démarrage.[/yellow]")
-            return {"run_command_neutralized": False,
-                    "run_command_error": _first_line(e)[:_ERR_MAX]}
+            return {"run_command_neutralized": False, "run_command_error": error,
+                    **({"run_command_refused": True} if refused else {})}
 
     # Extensions a restored disk may run again without Glorfindel vouching for a script:
     # agents that take no command from the VM model — monitoring, security, backup,

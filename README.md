@@ -180,7 +180,7 @@ Each profile has a `docker compose` profile, a Make target and a page in [`docs/
 The fastest, safest way to see Glorfindel: point it at your existing Log Analytics Workspace with **read-only** credentials and watch a week of recommendations. It detects and reasons on your real signals but **cannot change anything on Azure** — no Contributor role, no write API. The pitch to a colleague: *"see what I'd have done on your real signals; I can't touch a thing."*
 
 **What leaves your machine.** Read-only on Azure is not "nothing leaves":
-- **To the model's provider** (Anthropic by default), on each decision: the detection's rows — log excerpts, with the VM's name and resource id, addresses, user and process names as the logs hold them —, the results of the investigative queries, the incident's context, a few similar past decisions from the local memory and the VM's isolation state. Proposing a detection rule (`glorfindel propose-rules`, the purple loop) sends the technique and the columns of your log tables (`getschema`). The model's answer is a proposal: deterministic guards decide what may run, whatever it says (the [threat model](docs/design/modele-de-menace.md), « Le fournisseur du modèle »).
+- **To the model's provider** (Anthropic by default), on each decision: the detection's rows — log excerpts, with the VM's name and resource id, addresses, user and process names as the logs hold them —, the results of the investigative queries, the incident's context, a few similar past decisions from the local memory (real ones, stored less than 90 days ago — `memory.max_age_days`) and the VM's isolation state. Proposing a detection rule (`glorfindel propose-rules`, the purple loop) sends the technique and the columns of your log tables (`getschema`). The model's answer is a proposal: deterministic guards decide what may run, whatever it says (the [threat model](docs/design/modele-de-menace.md), « Le fournisseur du modèle »).
 - **To your alert channel**, if you set one: each card, to the webhook or the Discord bot.
 - **Nowhere else**: the memory (ChromaDB) and its embedding model run locally; Eregion sends no telemetry of its own.
 
@@ -538,7 +538,7 @@ glorfindel ack --all                            # acknowledge all pending escala
 glorfindel verdict <id> right|wrong|unsure      # was the recommendation right? (observation, docs/observation.md)
 glorfindel report --since 4w                    # verdicts by action and rule, false rate of disruptive recommendations
 glorfindel check-ttl                            # release isolations older than TTL (default 4h)
-glorfindel memory-stats                         # ChromaDB cycle count
+glorfindel memory-stats                         # ChromaDB cycle count, and those its age bound leaves out
 glorfindel bot                                  # start the interactive Discord bot
 glorfindel dashboard                            # full-screen TUI: resources + feed + escalations
 eregion console [--sections annatar,gothmog]    # web console on http://localhost:7007 (pip install -e '.[console]' from the clone); loopback by default, always a token (drawn at the first start, or EREGION_CONSOLE_TOKEN)

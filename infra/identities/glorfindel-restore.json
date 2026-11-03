@@ -1,9 +1,8 @@
 {
   "Name": "Eregion Glorfindel Restore",
   "IsCustom": true,
-  "Description": "V-17 (SEC7): what a restore from Azure Backup that a human approved needs (the console, the bot) - the Run Command neutralised, the VM deallocated, its disks restored in place from the vault through the staging storage account, then started. Never given to the watch: Glorfindel never restores on its own. Assigned on the VM's resource group, the vault's and the staging account's. Reads come from Reader.",
+  "Description": "V-17 (SEC7): what a restore from Azure Backup that a human approved needs (the console, the bot) - the VM deallocated, its disks restored in place from the vault through the staging storage account, then started. Never given to the watch: Glorfindel never restores on its own. Assigned on the VM's resource group, the vault's and the staging account's. Reads come from Reader. Run Command, which neutralises the last command before the swap, is not here (SEC17): Eregion Glorfindel Restore Neutralize, VM by VM.",
   "Actions": [
-    "Microsoft.Compute/virtualMachines/runCommand/action",
     "Microsoft.Compute/virtualMachines/deallocate/action",
     "Microsoft.Compute/virtualMachines/start/action",
     "Microsoft.Compute/virtualMachines/write",

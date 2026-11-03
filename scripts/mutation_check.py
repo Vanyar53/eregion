@@ -3595,7 +3595,8 @@ MUTANTS += [
     ("M1245", "the card of an uncontained detection never written (SEC4a, V-11)", AGT,
      "    _record_uncontained(state, source, exercise_run)\n", ""),
     ("M1246", "a signal given exercise cycles: the retrieval does not filter (SEC4a, V-12)", MEM,
-     '            where={"source": "real"},\n', ""),
+     '            where={"$and": [{"source": "real"}, {"stored_at": {"$gte": cutoff}}]},\n',
+     '            where={"stored_at": {"$gte": cutoff}},\n'),     # re-anchored by SEC17
     ("M1247", "a cycle's id taken from its signal and upserted: a reused id overwrites a real cycle (SEC4a, V-12)",
      MEM, ('cycle_id = f"cycle-{uuid.uuid4().hex}"', "self._collection.add("),
      ("cycle_id = f\"{cycle['signal_id']}_{cycle['action']}\"", "self._collection.upsert(")),
@@ -8667,6 +8668,119 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_config.py" for n in range(3180, 3185)})
 
 
+# SEC17 (#451, V-12): the memory has an age — a cycle dated by the host when stored, the search
+# bounded by the config's age (90 days), what it leaves out counted and said. M3200–M3206.
+MUTANTS += [
+    ("M3200", "the search ignores a cycle's age: a year-old precedent weighs as yesterday's (SEC17, V-12)", MEM,
+     '            where={"$and": [{"source": "real"}, {"stored_at": {"$gte": cutoff}}]},\n',
+     '            where={"source": "real"},\n'),
+    ("M3201", "a cycle dated by what it carries, not by the host: it stays young for ever (SEC17, V-12)", MEM,
+     '                "stored_at": int(self._clock()),\n',
+     '                "stored_at": int(cycle.get("stored_at") or self._clock()),\n'),
+    ("M3202", "the watch's agent never reads the config's age bound (SEC17, V-12)", AGT,
+     "        self.memory = CycleMemory(path=memory_path, max_age_days=memory_max_age_days())\n",
+     "        self.memory = CycleMemory(path=memory_path)\n"),
+    ("M3203", "an infinite or huge age bound accepted: every cycle young again (SEC17, V-12)", C,
+     "        if not math.isfinite(value) or not 0 < value <= ceiling:\n",
+     "        if value <= 0:\n"),
+    ("M3204", "the cycles dated by the B2 floor not counted apart (SEC17, V-12)", MEM,
+     "            b2_dated += not _dated(meta or {})\n", "            b2_dated += 0\n"),   # re-anchored (B2)
+    ("M3205", "the report silent on the cycles its age leaves out (SEC17, V-12)", GCLI,
+     '    _print_expected_sudo(r["expected_sudo"])\n    _print_memory(r["memory"])\n',
+     '    _print_expected_sudo(r["expected_sudo"])\n'),
+    ("M3206", "the report makes a memory on a host that has none (SEC17, V-12)", MEM,
+     "    if not storage_path.is_dir():\n", "    if False:\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_memory_age.py" for n in range(3200, 3207)})
+# SEC17, decision of Jonathan (03/11): a real cycle with no date of its own is dated by the B2
+# floor (2026-10-16), never today, never left out at once. M3260–M3262.
+MUTANTS += [
+    ("M3260", "a cycle stored before SEC17 read as dated today: given for ever (SEC17, V-12, B2)", MEM,
+     "        if self._b2_within():\n", "        if True:\n"),
+    ("M3261", "a cycle stored before SEC17 left out at once, as before the decision (SEC17, V-12, B2)", MEM,
+     "        if self._b2_within():\n", "        if False:\n"),
+    ("M3262", "the census dates a cycle stored before SEC17 today (SEC17, V-12, B2)", MEM,
+     '    return float(meta["stored_at"]) if _dated(meta) else float(B2_FLOOR)\n',
+     '    return float(meta["stored_at"]) if _dated(meta) else time.time()\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_memory_age.py" for n in range(3260, 3263)})
+# SEC17, its 5.5 review: « refused » only for Run Command's own refusal; the console keeps the
+# session drain VM by VM once Run Command leaves the Restore role. M3263–M3265.
+MUTANTS += [
+    ("M3263", "a refusal met after the harmless command ran flagged as Run Command refused (SEC17, review)", RST,
+     "            refused = not command_ran and _is_iam_error(str(e))\n",
+     "            refused = _is_iam_error(str(e))\n"),
+    ("M3264", "the console's session drain on the bench's group, not VM by VM (SEC17, review)",
+     "infra/glorfindel-host/main.tf",
+     "  scope                = data.azurerm_virtual_machine.session_drain[each.value.vm].id\n",
+     "  scope                = data.azurerm_resource_group.bench.id\n"),
+    ("M3265", "the session drain given to the watch alone: the console's approved isolation cuts no session (SEC17, review)",
+     "docs/operations.md", "  for a in <appId-watch> <appId-console>; do\n    az role assignment create --assignee $a --role \"Eregion Glorfindel Session Drain\"",
+     "  for a in <appId-watch>; do\n    az role assignment create --assignee $a --role \"Eregion Glorfindel Session Drain\""),
+]
+TESTS.update({"M3263": "tests/unit/test_glorfindel.py -k refusal_after", "M3264": "tests/unit/test_glorfindel_host.py",
+              "M3265": "tests/unit/test_azure_roles.py"})
+# SEC17 (#451): the state files another process reads, written at once — never opened in place.
+# M3207–M3210.
+MUTANTS += [
+    ("M3207", "the watch's heartbeat written in place: a reader finds it empty or cut (SEC17)", GCLI,
+     "    _atomic_write_text(path, at.isoformat(), mode=0o644)\n",
+     "    path.parent.mkdir(parents=True, exist_ok=True)\n    path.write_text(at.isoformat())\n"),
+    ("M3208", "the watch's heartbeat 0600: the CD of H0 and the console no longer read it (SEC17)", GCLI,
+     "    _atomic_write_text(path, at.isoformat(), mode=0o644)\n",
+     "    _atomic_write_text(path, at.isoformat(), mode=0o600)\n"),
+    ("M3209", "a run's report written in place in runs/ (SEC17)", "eregion_core/run_report.py",
+     "        write_file(path, json.dumps(self.to_dict(), indent=2))\n",
+     '        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")\n'),
+    ("M3210", "the console's restores in progress written in place (SEC17)", CON,
+     "        _atomic_write_text(_RESTORE_TRACKING, _json.dumps(data))\n",
+     "        _RESTORE_TRACKING.write_text(_json.dumps(data))\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_state_writes.py" for n in range(3207, 3211)})
+# SEC17 (#451, N-15): the storage token goes to the account the operator declared — the two
+# channels and Orodruin's scopes name one account, another is refused before a token. M3211–M3213.
+MUTANTS += [
+    ("M3211", "a channel URL of another account than the declared one receives the token (SEC17, N-15)", XCH,
+     "    why = url_refusal(url) or declared_refusal(url)\n", "    why = url_refusal(url)\n"),
+    ("M3212", "the return channel's URL no declaration: two channels on two accounts pass (SEC17, N-15)", XCH,
+     "    for name in DECLARED_URLS:\n", "    for name in DECLARED_URLS[:1]:\n"),
+    ("M3213", "a scope that names no account read as no declaration (SEC17, N-15)", XCH,
+     '            out[name] = m.group(1).lower() if m else ""\n',
+     "            if m:\n                out[name] = m.group(1).lower()\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_injector_channels.py" for n in range(3211, 3214)})
+# SEC17 (#451): the restore's Run Command out of the Restore role, into « Eregion Glorfindel Restore
+# Neutralize », VM by VM, to the VMs the restore defends — a VM outside is restored, the refusal said
+# on the card; and a VM named twice in another case refused at the plan (AUC review). M3214–M3219.
+# The Terraform ones are caught by the files read (test_glorfindel_host.py), their behaviour by
+# `terraform test` (infra/glorfindel-host/tests/restore_neutralize.tftest.hcl, the CI's job).
+MUTANTS += [
+    ("M3214", "a restore refused Run Command on a VM outside the list: the refusal not flagged (SEC17)", RST,
+     "            refused = not command_ran and _is_iam_error(str(e))\n", "            refused = False\n"),   # re-anchored (review)
+    ("M3215", "the card of a restored VM outside the list says not why its last command stayed (SEC17)", AGT,
+     '        if neutralized is False and (signal.get("raw_signal") or {}).get("run_command_refused") is True:\n',
+     "        if False:\n"),
+    ("M3216", "Run Command back in the Restore role, on whole groups (SEC17)", "infra/identities/glorfindel-restore.json",
+     '  "Actions": [\n    "Microsoft.Compute/virtualMachines/deallocate/action",\n',
+     '  "Actions": [\n    "Microsoft.Compute/virtualMachines/runCommand/action",\n'
+     '    "Microsoft.Compute/virtualMachines/deallocate/action",\n'),
+    ("M3217", "the restore's neutralization given on the bench's group, not VM by VM (SEC17)", "infra/glorfindel-host/main.tf",
+     "  scope                = data.azurerm_virtual_machine.restore[each.value.vm].id\n",
+     "  scope                = data.azurerm_resource_group.bench.id\n"),
+    ("M3218", "session_drain_vms: vm-a and VM-A pass the plan, the second assignment fails at the apply (SEC17)",
+     "infra/glorfindel-host/variables.tf",
+     "    condition     = length(var.session_drain_vms) == length(distinct([for n in var.session_drain_vms : lower(n)]))",
+     "    condition     = length(var.session_drain_vms) == length(distinct(var.session_drain_vms))"),
+    ("M3219", "restore_vms: vm-a and VM-A pass the plan (SEC17)", "infra/glorfindel-host/variables.tf",
+     "    condition     = length(var.restore_vms) == length(distinct([for n in var.restore_vms : lower(n)]))",
+     "    condition     = length(var.restore_vms) == length(distinct(var.restore_vms))"),
+]
+TESTS.update({"M3214": "tests/unit/test_glorfindel.py -k restore_s_list",
+              "M3215": "tests/unit/test_glorfindel.py -k restore_s_list",
+              "M3216": "tests/unit/test_azure_roles.py", "M3217": "tests/unit/test_glorfindel_host.py",
+              "M3218": "tests/unit/test_glorfindel_host.py", "M3219": "tests/unit/test_glorfindel_host.py"})
+
+
 def _copy_repo(dest: Path) -> None:
     files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
     for rel in files:
@@ -8982,8 +9096,10 @@ MUTANTS += [
      '  scope                = each.value.id\n  role_definition_name = "Eregion Glorfindel Session Drain"',
      '  scope                = data.azurerm_resource_group.bench.id\n  role_definition_name = "Eregion Glorfindel Session Drain"'),
     ("M2899", "the module drains by default, without the list kept in the repository (SEC11, R-03)",
-     "infra/glorfindel-host/variables.tf", "  default     = []\n",
-     '  default     = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]\n'),
+     "infra/glorfindel-host/variables.tf",
+     "« Identités Azure »).\"\n  type        = list(string)\n  default     = []\n\n  # Une VM chacune une fois",
+     "« Identités Azure »).\"\n  type        = list(string)\n"
+     '  default     = ["vm-celebrimbor-gondolin", "vm-celebrimbor-bree"]\n\n  # Une VM chacune une fois'),     # re-anchored by SEC17: restore_vms has a default [] too
 ]
 TESTS.update({
     "M2892": "tests/unit/test_azure_roles.py",

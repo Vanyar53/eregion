@@ -269,7 +269,8 @@ def load_context(
     and is given no past cycle.
 
     The past cycles are real ones only, for every signal, an exercise's too (SEC4a, V-12):
-    never an exercise's cycle, nor one of unknown source."""
+    never an exercise's cycle, nor one of unknown source — and of a bounded age (SEC17):
+    never one stored longer ago than the memory's bound, nor one with no date."""
     from dataclasses import asdict
 
     signal = state["signal"]
@@ -1323,6 +1324,16 @@ def _apply_release_precondition(d: dict, signal: dict) -> None:
                 "démarrage et que Glorfindel ne peut pas garantir : " + ", ".join(vectors) + ". "
                 "Vérifier ces extensions (ou les retirer) et l'intégrité de la VM avant de lever "
                 "l'isolation.")
+            return
+        if neutralized is False and (signal.get("raw_signal") or {}).get("run_command_refused") is True:
+            # SEC17: the VM is restored, outside the VMs the restore defends — say why.
+            d["escalation_reason"] = (
+                "Restauration terminée, mais la dernière commande Run Command n'a pas été "
+                "neutralisée avant : Run Command refusé sur cette VM, le rôle « Eregion Glorfindel "
+                "Restore Neutralize » n'y est pas (il se donne VM par VM, aux VM que le restore "
+                "défend : restore_vms). Le disque restauré a pu la rejouer au démarrage. Vérifier "
+                "l'intégrité de la VM avant de lever l'isolation ; l'ajouter à restore_vms si le "
+                "restore la défend.")
             return
         d["escalation_reason"] = (
             ("Restauration terminée, mais la dernière commande Run Command n'a pas pu être "
@@ -2628,7 +2639,9 @@ class GlorfindelAgent:
         from glorfindel.actions import AzureConnector
 
         self.dry_run = dry_run
-        self.memory = CycleMemory(path=memory_path)
+        # SEC17 (V-12): a past cycle older than the config's bound (90 days) is no precedent.
+        from glorfindel.config import memory_max_age_days
+        self.memory = CycleMemory(path=memory_path, max_age_days=memory_max_age_days())
         self.connector = connector or AzureConnector(dry_run=dry_run)
         self.incidents = IncidentRegistry(path=incidents_path)
         self.model = model or glorfindel_model()

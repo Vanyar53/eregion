@@ -480,7 +480,7 @@ def test_the_measure_alone_drops_compose_s_empty_identity(tmp_path, monkeypatch,
 # ── 6. A campaign replayed end to end ──────────────────────────────────────────────────────
 
 class _Memory:
-    def __init__(self, path=None):
+    def __init__(self, path=None, **_):
         pass
 
     def retrieve_similar(self, signal, n=3):

@@ -9618,17 +9618,25 @@ TESTS.update({"M3340": "tests/unit/test_entries_calls.py::test_the_watch_without
 
 # I5S (#477): the per-VM I5 oracle, widened by Jonathan's decision (03/11, A0) to a writer's perimeter carried as the
 # NIC's NSG of a VM in human_only, bounded by three conditions — the attacker's flows, a NIC in `perimeter_nic`,
-# closed by the perimeter rules the pass wrote alone — and the subnet's branch hardened by the third. The oracle's
-# own mutants, each loosening one bound: measured by its controls (tests/unit/test_invariant_regressions.py), which
-# drive a world where the bound is the only thing that refuses. The first condition is implied by the third (a
-# perimeter rule closes only the attacker's flows): no mutant of its own, it would be equivalent. M3386, M3390–M3392.
+# closed by the perimeter rules the pass wrote alone, on a writer's perimeter NSG (the NSG shared, I5S's review) —
+# and the subnet's branch hardened by the third. The oracle's own mutants, each loosening one bound: measured by its
+# controls (tests/unit/test_invariant_regressions.py), which drive a world where the bound is the only thing that
+# refuses. The first condition is not implied by the third — a pair of the IP written wrong (aimed at `*`) closes
+# flows that go elsewhere —: its control is `…_what_a_pair_written_wrong_closes_beside_the_attacker`.
+# M3384, M3386, M3390–M3392.
 _I5S_CTRL = "tests/unit/test_invariant_regressions.py::"
 _I5S_TESTS = " ".join(_I5S_CTRL + t for t in (
     "test_the_per_vm_i5_admits_a_writers_perimeter_carried_as_the_nics_nsg",
     "test_the_per_vm_i5_refuses_what_no_perimeter_rule_closes",
     "test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds",
+    "test_the_per_vm_i5_refuses_what_a_pair_written_wrong_closes_beside_the_attacker",
     "test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared"))
 MUTANTS += [
+    ("M3384", "I5 per VM counts the IP's pair written on any NSG: on one no writer holds, it passes for a NIC that "
+              "carries a writer's NSG — the class of M2995 hidden (I5S's review: the rule on the NSG shared)",
+     INVARIANTS,
+     '        closed = (self._closed_by_the_perimeter_alone(vm, before, on=shares["perimeters"])\n',
+     '        closed = (self._closed_by_the_perimeter_alone(vm, before)\n'),
     ("M3386", "I5 per VM reads every NIC of a VM in human_only as carrying a writer's perimeter: the IP's pair "
               "written on an NSG no writer holds passes (I5S, the second condition)", INVARIANTS,
      '                "perimeter_nic": {s for s, n in nics.items() if key(n["nsg"] or "") in perimeters},\n',
@@ -9646,7 +9654,7 @@ MUTANTS += [
      '            if e["op"] == "rule.write" and e["rule"] in (plain, f"{plain}-out") and e["nsg"] in nsgs:\n',
      '            if e["op"] == "rule.write" and e["rule"].startswith(plain) and e["nsg"] in nsgs:\n'),
 ]
-TESTS.update({f"M{n}": _I5S_TESTS for n in (3386, 3390, 3391, 3392)})
+TESTS.update({f"M{n}": _I5S_TESTS for n in (3384, 3386, 3390, 3391, 3392)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

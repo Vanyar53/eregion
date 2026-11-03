@@ -6379,11 +6379,15 @@ def test_the_per_vm_i5_refuses_what_no_perimeter_rule_closes(monkeypatch, nic, n
         _i5s_done(m)
 
 
-def test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds(monkeypatch):
-    """I5S, the second condition: the IP's own pair written on nsg-data — the data subnet's NSG, where no writer's
-    perimeter lies — cuts db-nic-1 (its NIC bare) off the attacker. It is neither behind a writer's subnet nor in
-    `perimeter_nic`: refused, though its rules bear the perimeter's names (M3386)."""
-    m, pair, shares, before = _i5s_world(monkeypatch, nic_nsg=False)
+@pytest.mark.parametrize("nic_nsg", [False, True])
+def test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds(monkeypatch, nic_nsg):
+    """I5S: the IP's own pair written on nsg-data — the data subnet's NSG, where no writer's perimeter lies — cuts
+    db-nic-1 off the attacker. Its NIC bare, it is neither behind a writer's subnet nor in `perimeter_nic`: refused,
+    though the rules bear the perimeter's names (the second condition, M3386). Carrying nsg-subnet as its NIC's NSG —
+    a writer's, whose pair is not put back —, it is in `perimeter_nic`, but what closes its flows lies on another NSG,
+    not the one it shares: refused too (I5S's review, M3384; before, the oracle of 714d3558 let it pass, the class of
+    M2995 — a pair written for a VM in human_only — hidden behind the writer's NSG on the NIC)."""
+    m, pair, shares, before = _i5s_world(monkeypatch, nic_nsg=nic_nsg)
     try:
         for rec in pair.values():
             _i5s_write(m, _NSG.format(rg="rg-net", name="nsg-data"), rec)
@@ -6391,5 +6395,27 @@ def test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds(monkey
         assert {f[0] for f in before - after} == {"db-nic-1"}
         with pytest.raises(AssertionError, match="I5: probe acted on .*/Db--01 in human_only.*db-nic-1"):
             m._shut_shared(DB, before, after, shares, "I5: probe")
+    finally:
+        _i5s_done(m)
+
+
+def test_the_per_vm_i5_refuses_what_a_pair_written_wrong_closes_beside_the_attacker(monkeypatch):
+    """I5S, the first condition (I5S's review): the IP's `-out` written by the pass on the writer's NSG, but aimed at
+    `*` — a pair written wrong. It closes the attacker's way out of both NICs of Db--01, and the internet's and the
+    lateral peer's: those go elsewhere than the attacker, refused though the perimeter's rule alone closes them. The
+    third condition does not imply the first."""
+    m, _pair, shares, before = _i5s_world(monkeypatch)
+    try:
+        name = f"{_I5S_PLAIN}-out"
+        _i5s_write(m, _SUBNET, {**_rule_record(_rule(name, 4000, dict(
+            access="Deny", direction="Outbound", source_address_prefix="*", destination_address_prefix="*",
+            destination_port_range="*"))), "name": name})
+        after = m._flows()[DB]
+        shut = before - after
+        assert {f[0] for f in shut} == {"db-nic-0", "db-nic-1"} and any(f[3] != ATTACKER for f in shut), shut
+        with pytest.raises(AssertionError, match="I5: probe acted on .*/Db--01 in human_only"):
+            m._shut_shared(DB, before, after, shares, "I5: probe")
+        # The attacker's flows alone, as the pair writes them: admitted.
+        m._shut_shared(DB, before, before - {f for f in shut if f[3] == ATTACKER}, shares, "I5: probe")
     finally:
         _i5s_done(m)

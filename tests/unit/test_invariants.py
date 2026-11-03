@@ -43,8 +43,8 @@ What must hold whatever happens:
       and writes nothing to Azure in human_only — with a mode drawn per VM, nothing for a VM
       in human_only: only what it shares with another closes for it (L1Qs) — a quarantine
       NSG on its NIC; a writer's perimeter, behind its subnet or carried as its NIC's NSG
-      (I5S), and there only the attacker's flows the perimeter rules the pass wrote close
-      on their own;
+      (I5S), and there only the attacker's flows the perimeter rules the pass wrote on a
+      writer's perimeter NSG — the NSG shared — close on their own;
   I6  one VM, one state file, whatever the case of the id it was reached with;
   I7  from any state reached, release brings every VM back to its design — or, when a
       NIC's original NSG can't be known or no longer exists, keeps that NIC in
@@ -975,15 +975,19 @@ class IsolationMachine(RuleBasedStateMachine):
         closed = self._closed_by_the_perimeter_alone(vm, before)
         assert lost <= closed, f"{what} cut off {vm} ({sorted(lost - closed)[:3]})"
 
-    def _closed_by_the_perimeter_alone(self, vm: str, before: frozenset) -> frozenset:
+    def _closed_by_the_perimeter_alone(self, vm: str, before: frozenset, on: set | None = None) -> frozenset:
         """Of the VM's flows `before`, those the perimeter rules the operation wrote close on their
         own: the world as the operation found it (`world_before`), those rules added to it as the
         fake has them now (its journal of API writes since `_before`, the IP's name alone). I4's
-        bound (I4P) and I5's for a VM in human_only (I5S)."""
+        bound (I4P) and I5's for a VM in human_only (I5S). `on`: only the writes on those NSGs —
+        for I5, the writers' perimeter NSGs read before the pass (I5S's review: the IP's pair
+        written on an NSG no writer holds closes nothing it shares); I4 counts every NSG."""
         plain = "glorfindel-block-" + ATTACKER.replace(".", "-")
         w = self.world_before
         nsgs = {k: {**g, "rules": dict(g["rules"])} for k, g in w["nsgs"].items()}
         for e in self.fake.journal[self.journal_at:]:
+            if on is not None and e.get("nsg") not in on:
+                continue
             if e["op"] == "rule.write" and e["rule"] in (plain, f"{plain}-out") and e["nsg"] in nsgs:
                 if (r := self.fake.nsgs.get(e["nsg"], {}).get("rules", {}).get(e["rule"])) is not None:
                     nsgs[e["nsg"]]["rules"][e["rule"]] = r
@@ -1546,7 +1550,8 @@ class IsolationMachine(RuleBasedStateMachine):
         the subnet NSG a writer's perimeter block lies on (`perimeter`), or carrying that NSG as
         their own NIC's NSG (`perimeter_nic`, I5S: Azure applies the same rules to the same NSG,
         on a subnet or on a NIC), or carrying a quarantine NSG (one per region and group, shared
-        by every isolation in it). Read before the pass."""
+        by every isolation in it). Read before the pass, with the writers' perimeter NSGs
+        (`perimeters`): the rules that close a shared flow must lie on one of them."""
         from .fake_azure import nsg_id
         writers = [vm for vm in self.live if vm not in human and not _is_busy(vm)]
         perimeters = {key(nsg_id(*e["nsg"].split("/", 1))) for vm in writers
@@ -1559,18 +1564,24 @@ class IsolationMachine(RuleBasedStateMachine):
                 "perimeter": {s for s, n in nics.items()
                               if key(self.fake.subnets[key(n["subnet"])]["nsg"] or "") in perimeters},
                 "perimeter_nic": {s for s, n in nics.items() if key(n["nsg"] or "") in perimeters},
-                "quarantine": {s for s, n in nics.items() if n["nsg"] and actions._is_quarantine_nsg(n["nsg"])}}
+                "quarantine": {s for s, n in nics.items() if n["nsg"] and actions._is_quarantine_nsg(n["nsg"])},
+                "perimeters": set(perimeters)}
         return out
 
     def _shut_shared(self, vm: str, before: frozenset, after: frozenset, shares: dict, what: str):
         """I5 per VM (L1Qs, I5S): of a VM in human_only, a pass shuts only what it shares with a
         writer — any flow of a NIC carrying a quarantine NSG put back; or a flow to the attacker
         of a NIC behind a writer's perimeter, on its subnet or as its NIC's NSG (`perimeter_nic`,
-        widened by Jonathan's decision of 03/11, A0), that the perimeter rules the pass wrote
-        close on their own (_closed_by_the_perimeter_alone). Before I5S, any attacker flow of a
-        NIC behind the subnet passed, whatever closed it: that bound holds for both now."""
+        widened by Jonathan's decision of 03/11, A0), that the perimeter rules the pass wrote on a
+        writer's perimeter NSG — the NSG shared — close on their own (_closed_by_the_perimeter_alone,
+        `on`). On another NSG, the IP's pair closes nothing shared: a rule there that governs a NIC
+        of `perimeter_nic` is its subnet's NSG, shared only if a writer holds it (`perimeter`).
+        Before I5S, any attacker flow of a NIC behind the subnet passed, whatever closed it: that
+        bound holds for both now. The first condition is not implied by the third: a pair of the
+        IP written wrong (a destination `*`) would close flows that go elsewhere."""
         shut = before - after
-        closed = self._closed_by_the_perimeter_alone(vm, before) if shut else frozenset()
+        closed = (self._closed_by_the_perimeter_alone(vm, before, on=shares["perimeters"])
+                  if shut else frozenset())
 
         def shared(f) -> bool:
             if f[0] in shares["quarantine"]:

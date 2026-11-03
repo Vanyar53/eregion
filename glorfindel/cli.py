@@ -1914,7 +1914,7 @@ def _do_reset_from_azure(resource_id: str, yes: bool, dry_run: bool) -> None:
 
 def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = False) -> None:
     """Shared implementation for reset/revert."""
-    from glorfindel.actions import active_blocks, active_isolations, AzureConnector
+    from glorfindel.actions import _isolation_unreadable, active_blocks, active_isolations, AzureConnector
 
     resource_id = _resolve_resource_id(resource_id)
     if from_azure:
@@ -1927,6 +1927,9 @@ def _do_reset(resource_id: str, yes: bool, dry_run: bool, from_azure: bool = Fal
     rid_lower = resource_id.lower()
     isolations = [i for i in active_isolations() if i.get("resource_id", "").lower() == rid_lower]
     blocks = [b for b in active_blocks() if b.get("resource_id", "").lower() == rid_lower]
+    # Its isolation state unreadable is not "nothing to reset": the release says what it can't
+    # verify, the file kept (I3U, #440).
+    isolations = isolations or ([{"resource_id": resource_id}] if _isolation_unreadable(resource_id) else [])
 
     if not isolations and not blocks:
         console.print(f"[green]Nothing to reset on {resource_id.split('/')[-1]}.[/green]")

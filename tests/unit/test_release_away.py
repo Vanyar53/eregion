@@ -367,3 +367,153 @@ def test_a_rule_its_placement_kept_on_the_quarantine_nsg_is_said_once(monkeypatc
     assert out["status"] == "release_partial", out
     assert sum(_iso_name() in s and "gardée" in s for s in out["failed"]) == 1, out
     assert _iso_name() in f.nsgs[key(q)]["rules"]
+
+
+# ── I3U (#440) : un état devenu illisible ne dit jamais « levée faite » ────────────────────
+
+_BROKEN = '{"resource_id": '                     # a write cut short: not JSON
+
+
+def _partial_then_unreadable(monkeypatch, with_state: bool):
+    """I3R's retry, the double fault of its review's probe: the quarantine NSG unreadable, the
+    release gives web-nic its NSG back and keeps that NSG in its partial state; the NSG reads
+    again, then the state turns unreadable (a disk, a write cut short). Returns the world, the
+    state file and its readable text (what the operator repairs it to)."""
+    from glorfindel.actions import _clear_isolation_state
+    from glorfindel.response.state import _ISOLATION_STATE_DIR, _isolation_unreadable, _state_file
+    f, c, own, q = _in_quarantine(monkeypatch)
+    if not with_state:
+        _clear_isolation_state(WEB)
+    real = _refuse_listing(monkeypatch, f, q)
+    assert c.release_isolation(WEB)["status"] == "release_partial"
+    monkeypatch.setattr(f.network.security_rules, "list", real)
+    sf = _state_file(_ISOLATION_STATE_DIR, WEB)
+    text = sf.read_text()
+    assert "quarantines_left" in text and _iso_on(f, q)
+    sf.write_text(_BROKEN)
+    assert _isolation_unreadable(WEB)
+    return f, c, own, q, sf, text
+
+
+@pytest.mark.parametrize("with_state", [False, True])
+def test_a_partial_release_whose_state_turns_unreadable_never_says_released(monkeypatch, with_state):
+    """The probe of I3R's review: the retry read an empty state, found web-nic on its own NSG,
+    said `released` and deleted the unreadable file — the pair left on the quarantine NSG, the
+    only record of where to look gone. Now `release_partial`, the reason said, the file kept as
+    it is, again and again; repaired by the operator, the retry takes the normal path."""
+    f, c, own, q, sf, text = _partial_then_unreadable(monkeypatch, with_state)
+    for _ in range(2):
+        out = c.release_isolation(WEB)
+        assert out["status"] == "release_partial", out
+        assert [s for s in out["failed"] if f"isolation/{sf.name}" in s and "illisible" in s
+                and "levée non vérifiée" in s], out
+        assert sf.read_text() == _BROKEN and _iso_on(f, q)
+    # Where to look before removing it: the quarantine NSG, named — not the NSGs the NIC carries now,
+    # where nothing is found (I3U's review).
+    assert [s for s in out["failed"] if f"{q.rsplit('/', 1)[-1]} (groupe {q.split('/')[4]})" in s
+            and "avant de le retirer" in s], out
+    sf.write_text(text)                                                   # the operator repairs it
+    out = c.release_isolation(WEB)
+    assert out["status"] == "released", out
+    assert _iso_on(f, q) == [] and not sf.exists()
+
+
+def test_a_release_by_rules_on_an_unreadable_state_takes_them_off_and_keeps_the_file(monkeypatch):
+    """No quarantine: the rules are found by their names and taken off, as before — but what the
+    unreadable state may name besides is unknown: `release_partial`, the file kept. Removed by
+    the operator, the retry says `released`."""
+    from glorfindel.response.state import _ISOLATION_STATE_DIR, _state_file
+    f, c, own, _ = _world(monkeypatch)
+    f.nics[key(WEB_NIC)]["nsg"] = own
+    assert c.isolate_vm(WEB)["status"] == "isolated" and _iso_on(f, own)
+    sf = _state_file(_ISOLATION_STATE_DIR, WEB)
+    sf.write_text(_BROKEN)
+    out = c.release_isolation(WEB)
+    assert out["status"] == "release_partial", out
+    assert len([s for s in out["failed"] if "illisible" in s]) == 1, out
+    assert _iso_on(f, own) == [] and sf.read_text() == _BROKEN
+    sf.unlink()                                                           # the operator removes it
+    assert c.release_isolation(WEB)["status"] == "released"
+
+
+def test_the_verification_of_a_release_on_an_unreadable_state_is_never_verified(monkeypatch):
+    """`glorfindel release` asks verify_release first: « verified » — web-nic on its own NSG, the
+    quarantine NSG out of its sight — and it cleared the state file, « No active isolation
+    found ». Its own state unreadable: unknown."""
+    f, c, *_ = _partial_then_unreadable(monkeypatch, with_state=True)
+    v = c.verify_release(WEB)
+    assert v["verified"] is False and any("illisible" in u for u in v["unreadable"]), v
+
+
+def test_the_cli_release_keeps_an_unreadable_state_and_exits_2(monkeypatch):
+    """The CLI path of the same: never « state cleared », the file kept, exit 2."""
+    from click.testing import CliRunner
+
+    from glorfindel import cli
+    f, c, own, q, sf, _ = _partial_then_unreadable(monkeypatch, with_state=False)
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **_k: c)
+    monkeypatch.setattr(cli, "_record_manual_action", lambda *a, **k: None)     # runs/: not the test's
+    res = CliRunner().invoke(cli.cli, ["release", WEB, "--yes"])
+    assert res.exit_code == 2, res.output
+    assert "state cleared" not in res.output and "illisible" in res.output
+    assert sf.read_text() == _BROKEN and _iso_on(f, q)
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_reset_from_azure_on_an_unreadable_state_never_says_swept(monkeypatch, dry_run):
+    """`reset --from-azure` reads the state too (its older record, its originals): unreadable, it
+    said `swept` and deleted the file. Now `swept_partial`, said in the preview too, the file
+    kept; the rules it finds by name are taken off all the same."""
+    from glorfindel.response.state import _ISOLATION_STATE_DIR, _state_file
+    f, c, own, _ = _world(monkeypatch)
+    f.nics[key(WEB_NIC)]["nsg"] = own
+    assert c.isolate_vm(WEB)["status"] == "isolated"
+    sf = _state_file(_ISOLATION_STATE_DIR, WEB)
+    sf.write_text(_BROKEN)
+    out = c.sweep_vm_rules(WEB, dry_run=dry_run)
+    assert out["status"] == ("dry_run" if dry_run else "swept_partial"), out
+    assert [s for s in out["failed"] if "illisible" in s and "reset non vérifié" in s], out
+    assert sf.read_text() == _BROKEN
+    assert bool(_iso_on(f, own)) is dry_run
+
+
+def test_a_plain_reset_on_an_unreadable_state_is_not_nothing_to_reset(monkeypatch):
+    """`glorfindel reset` read the readable states only: « Nothing to reset », exit 0. The
+    release runs, says what it can't verify, exit 2, the file kept."""
+    from click.testing import CliRunner
+
+    from glorfindel import cli
+    f, c, own, q, sf, _ = _partial_then_unreadable(monkeypatch, with_state=True)
+    monkeypatch.setattr("glorfindel.actions.AzureConnector", lambda **_k: c)
+    monkeypatch.setattr(cli, "_record_manual_action", lambda *a, **k: None)     # runs/: not the test's
+    res = CliRunner().invoke(cli.cli, ["reset", WEB, "--yes"])
+    assert res.exit_code == 2 and "Nothing to reset" not in res.output, res.output
+    assert "illisible" in res.output and sf.read_text() == _BROKEN
+
+
+def test_clearing_a_state_never_deletes_an_unreadable_file(monkeypatch):
+    """Whoever asks (a provider's release, the CLI): an unreadable file is the operator's to
+    repair or remove — what it held is unknown (A0)."""
+    from glorfindel.actions import _clear_isolation_state
+    *_, sf, text = _partial_then_unreadable(monkeypatch, with_state=True)
+    _clear_isolation_state(WEB)
+    assert sf.read_text() == _BROKEN
+    sf.write_text(text)
+    _clear_isolation_state(WEB)
+    assert not sf.exists()
+
+
+def test_the_warning_stays_when_a_nics_message_names_the_unreadable_file(monkeypatch):
+    """web-nic still in quarantine, its VM's state unreadable: SEC4b's message for the NIC names
+    the file already, and I3U's line gave way to it — with the warning about where to look
+    (I3U's review). The reason is said once; the warning, naming the quarantine NSG, always."""
+    from glorfindel.response.state import _ISOLATION_STATE_DIR, _state_file
+    f, c, own, q = _in_quarantine(monkeypatch)
+    sf = _state_file(_ISOLATION_STATE_DIR, WEB)
+    sf.write_text(_BROKEN)
+    out = c.release_isolation(WEB)
+    assert out["status"] == "release_partial", out
+    named = [s for s in out["failed"] if f"isolation/{sf.name}" in s]
+    assert len([s for s in named if "état local illisible" in s]) == 1, out          # the reason, once
+    assert [s for s in named if "avant de le retirer" in s and q.rsplit("/", 1)[-1] in s], out
+    assert sf.read_text() == _BROKEN

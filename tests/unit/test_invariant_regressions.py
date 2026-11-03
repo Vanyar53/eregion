@@ -5617,6 +5617,63 @@ def test_a_nics_rules_on_the_quarantine_nsg_it_left_go_once_the_operator_gives_i
     _run(monkeypatch, _I3R_NET, *_I3R_STEPS, ("lose_state", DB), ("tags_lost", _SEC_Q))
 
 
+def _unreadable_then_repaired(m, vm: str, release) -> None:
+    """I3U: the VM's own state file turns unreadable (a disk, a write cut short); `release` runs
+    on it, then the operator repairs the file as it was."""
+    from glorfindel.response.state import _ISOLATION_STATE_DIR, _state_file
+    f = _state_file(_ISOLATION_STATE_DIR, vm)
+    text = f.read_text()
+    f.write_text('{"resource_id": ')
+    try:
+        release()
+        assert f.read_text() == '{"resource_id": ', "the unreadable state file was not kept as it is"
+    finally:
+        f.write_text(text)
+
+
+# Both NICs of Db--01 on an NSG of their own: a bare one waits for the unreadable state already (SEC4b).
+_I3U_NET = _net(quarantine=True, quarantine_rg="rg-sec", db_nic_0={"own": "dedicated"},
+                db_nic_1={"own": "dedicated"})
+
+
+@pytest.mark.parametrize("lost,fault", [(False, 10), (True, 30)], ids=["state", "state-lost"])
+def test_a_partial_release_whose_state_turns_unreadable_never_says_released(monkeypatch, lost, fault):
+    """I3U (#440), the double fault of I3R's review. I3R's world, built as seed 67 left it: Db--01
+    isolated by our quarantine NSG, which then loses its `managed-by` tag — Db--01 isolated again,
+    its NICs' deny pairs go on the NSG they carry, the quarantine NSG itself (not ours: « non
+    adopté ») —, the tag back. (Seed 67 got there through the reassertion, only because a
+    disappearance said under the lowercase id was not read « already said »; I3C, #436, fixed
+    that: `_I3R_STEPS` no longer lead there, this isolation again is what that pass did.) The
+    release, throttled once on the delete of one of the pairs there, says `release_partial`, the
+    NICs given their NSG back, the state keeping where to look (the placement; `quarantines_left`
+    when the state was lost before). That state turns unreadable: the retry read nothing, found
+    the NICs on their own NSG and said `released`, the rule left on the quarantine NSG —
+    « I3: release said released » — and deleted the file. Unchanged oracle; repaired by the
+    operator, the teardown's release takes the normal path."""
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_I3U_NET)
+        m.isolate(Script(DB, DB, None))
+        tags = m.fake.nsgs[key(_SEC_Q)]["tags"]
+        del tags["managed-by"]                       # someone takes our tag off
+        m.isolate(Script(DB, DB, None))              # by rules, on the NSG the NICs carry
+        tags["managed-by"] = "glorfindel"            # and puts it back
+        assert any(n.startswith("glorfindel-iso-") for n in m.fake.nsgs[key(_SEC_Q)]["rules"])
+        steps = [*((("lose_state", DB),) if lost else ()), ("release", DB, DB, (fault, "before-429"))]
+        for rule, *draws in steps:
+            getattr(m, rule)(data=Script(*draws))
+            m.never_more_open_than_designed()
+        from glorfindel.actions import _load_isolation_state
+        assert (_load_isolation_state(DB) or {}).get("release_failed"), "the first release was not partial"
+        _unreadable_then_repaired(m, DB, lambda: m.release(Script(DB, DB, None)))
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
+        m.one_vm_one_state_file()
+    finally:
+        m.teardown()
+
+
 def _r1d(name, priority, access, direction, source, destination, port="*"):
     return _rule(name, priority, dict(access=access, direction=direction, source_address_prefix=source,
                                       destination_address_prefix=destination, destination_port_range=port))

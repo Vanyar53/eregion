@@ -307,7 +307,7 @@ def _isolation_unreadable(vm_ref: str) -> bool:
 
 def _clear_isolation_state(vm_ref: str) -> None:
     f = _state_file(_ISOLATION_STATE_DIR, vm_ref)
-    if f is not None and f.exists():
+    if f is not None and f.exists() and not _isolation_unreadable(vm_ref):   # kept: the operator's (I3U)
         f.unlink()
 
 

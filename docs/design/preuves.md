@@ -1243,6 +1243,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 | I4S | NSG jugé sans la carte d'une autre VM partie en quarantaine (ou nue) | le reset (ou la levée) de la VM restée seule supprimait l'ancienne isolation de l'autre : aucun flux, mais plus rien au retour de sa carte hors de Glorfindel |
 | I4G | ancienne isolation d'une VM (le refus total à nom fixe), retourné en autorisation par quelqu'un ; une nouvelle VM reçoit ce NSG | la levée (ou le reset) de la première retirait l'autorisation par son nom, la garde jamais demandée : **la nouvelle VM coupée** de ce qu'elle lui ouvrait |
+| I4P | règle de blocage d'une VM retournée en autorisation par quelqu'un, qui laisse l'attaquant joindre une VM d'un autre subnet (l'adresse reprise, un NSG de carte partagé entre deux subnets) | la promotion en périmètre retirait la règle par son nom, la garde jamais demandée : **cette VM coupée**, hors de portée du périmètre — invisible, un blocage de périmètre étant jugé sans les flux de l'attaquant |
 | I7S | isolation par règles sur un NSG partagé, état perdu, carte laissée nue, réisolée sur le NSG du subnet (lectures des NSG en 429), VM supprimée | la levée de la VM supprimée ne cherchait rien : `released`, la première isolation restée sur le NSG partagé, visant l'adresse que reçoit la VM suivante |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
@@ -3229,7 +3230,7 @@ VM a besoin de ce flux, le recréer sous un nom à elle, puis relancer » (`_ope
 par la relecture, déjà sur `main`) : la promotion d'un blocage en périmètre (`blocks.py`, `replace=True`) retire
 les règles de blocage par VM sans demander la garde — une d'elles retournée en allow, qui ouvre une autre VM hors
 du périmètre (un NSG de carte partagé entre deux subnets), partirait ; la machine ne le juge pas (un blocage est
-jugé sans les flux de l'attaquant, `perimeter=True`). Laissé à un lot.
+jugé sans les flux de l'attaquant, `perimeter=True`). Laissé à un lot (I4P, ci-dessous).
 Aucune règle de la machine ajoutée, retirée ni restreinte : `an_old_isolations_vm_isolated_again` (I4E) la tirait
 déjà. **Figée** : `test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in`
 (`test_invariant_regressions.py`, rejouée sans Hypothesis par `_run`) : rouge sur le code de `main` 5482fc1, par
@@ -3252,6 +3253,65 @@ M1903, M1967, M1968, M2320–M2322) : 16/16, un tour. `pytest` complet : 5 928 r
 M3270–M3275 et les seize voisins, 22/22 à chaque tour (deux tours) ; invariants à 60, N = 73, 29, 101, 202, 303,
 404, 505, 606, **8/8 vertes** ; `pytest` complet : 5 935 réussis, 7 sautés ; `ruff` propre ;
 `scripts/mutant_anchors.py` : 2 343 mutants, sans faute.
+
+**I4P (03/11, #466) : la promotion d'un blocage en blocage de sous-réseau ne coupe jamais une autre VM.** Le point
+ouvert de la relecture d'I4G, déjà sur `main`. **Le défaut** : promu (`block_suspicious_ip(scope="subnet",
+replace=True)`), un blocage par VM retirait ses règles par carte par leurs noms (`begin_delete`, les erreurs avalées),
+sans la garde que demande tout autre retrait par son nom (`turned._held_by_turned`, I4B). L'une d'elles retournée en
+autorisation par quelqu'un, qui laisse l'attaquant joindre une autre VM hors du périmètre (le périmètre ne couvre que
+le subnet de la carte primaire, RB1) — l'adresse qu'elle vise reprise par une carte d'un autre subnet sur le même NSG
+de carte, ou ce NSG donné depuis à une VM d'un autre subnet —, partait : cette VM perdait ce que l'allow lui ouvrait.
+**Pourquoi la machine ne le voyait pas** : un blocage de périmètre était jugé sans les flux de l'attaquant des autres
+VM (`_others_unchanged(perimeter=True)` : il les ferme sur son subnet, par conception), et `tamper_with_our_rule` ne
+change que l'accès, le port ou le protocole — la source reste l'attaquant : tout ce que l'allow ouvre est un flux de
+l'attaquant. **La propriété ajoutée** (A0 : rien de retiré ni de restreint) : I4 disait déjà « un blocage de périmètre
+ferme les flux de l'attaquant sur son subnet, **et seulement ceux-là** » ; la machine le vérifie maintenant
+(`_cut_by_the_perimeter_alone`) — d'une autre VM, l'opération ne coupe un flux de l'attaquant que si les règles de
+périmètre qu'elle a écrites (le journal des écritures du faux, le nom de l'IP seule) le ferment : le monde tel que
+l'opération l'a trouvé (`world_before`), ces règles ajoutées telles qu'elles sont maintenant. Ce qui était comparé
+avant l'est toujours (`_only_sealed` sur le reste) ; une VM en quarantaine est exemptée comme là. Elle ne restreint
+rien : elle ajoute une comparaison là où il n'y en avait aucune. **La règle qui pose ce monde**
+(`promoted_beside_a_turned_block`) : une VM bloquée pour elle-même, une de ses règles de blocage retournée en allow,
+l'adresse de la carte rendue ou non, une nouvelle VM sur **un autre subnet** de la région, sur le NSG de cette règle
+(et la plus basse adresse libre, souvent l'ancienne), puis la promotion, sans faute. Tirées une à une, ces étapes ne se
+rencontraient jamais : la machine crée une VM sur le premier subnet de sa région seulement (`_create_vm` prend
+maintenant un `subnet`, que seule cette règle donne : les tirages des autres règles ne changent pas). Sur `main`
+4ed889d, à 60 séquences, graines 1..8 : la graine 3 tombe par cette règle (« I4: a perimeter block on …/web cut off
+…/batch », la sortie vers l'attaquant d'une VM qui a reçu le NSG du subnet comme NSG de carte : la règle `-out`
+retournée y précède le `-out` du périmètre) ; sans la règle, la propriété seule, les huit graines passent — le cas
+était trop rare. **Deux séquences figées**, rouges sur `main` (`test_invariant_regressions.py`) :
+`test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in` (les règles d'avant I4P
+seules : web et la seconde carte de Db--01 sur le NSG tier, celle-ci sur le subnet data ; web bloquée, sa règle
+entrante retournée, l'adresse de web changée, 10.0.0.4 donnée à la carte de Db--01, la promotion — « I4: a perimeter
+block on …/web cut off …/Db--01 », SSH depuis l'attaquant) et
+`test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_before_the_perimeter` (la graine 3,
+réduite par Hypothesis). **Le correctif** (`providers/azure/perimeter.py`, `_promote`, appelé par
+`blocks._block_ip_subnet`) : chacune des deux règles d'une paire est demandée à la garde ; l'une gardée, **la paire
+reste entière**, sur Azure et dans l'état (son placement gardé, pour le déblocage, qui redemande la garde : gardée de
+nouveau, `unblock_partial`) — à moitié retirée, la passe suivante aurait lu notre propre retrait comme une
+disparition. Un retrait qui échoue garde aussi la paire (`_delete_rule`, l'erreur dite ; avant : avalé, la règle
+restée sur Azure, son placement sorti de l'état). Une entrée ancienne à règle unique passe par la même garde ; gardée,
+elle devient un placement de la carte primaire. **Le contrat de compte rendu** : le statut reste celui de la VM —
+`blocked` (ou `blocked_partial` pour une carte hors du périmètre, RB1) : le périmètre coupe l'attaquant de cette VM,
+quoi que la règle gardée laisse passer ailleurs, comme le blocage par VM d'I4A garde `blocked` avec `left_rules` ; ce
+qui reste est dit comme le déblocage le dit (I4B) — `kept_rules` (« rg-net/nsg-tier/glorfindel-block-… gardée : notre
+règle …, retournée en autorisation par quelqu'un, vise 10.0.0.4 — l'adresse de … maintenant : … »), repris dans
+`note` —, et absent de `promoted_from`. **La consigne** (`turned._opens_text`) : « la remettre en refus » n'est dite que
+d'une règle de blocage (`glorfindel-block-`) sur une adresse — remise en refus, elle ne coupe que l'attaquant de la VM
+qu'elle ouvre ; une règle d'isolation (`glorfindel-iso-`) sur l'adresse d'une autre carte vivante couperait tous les
+flux de cette VM de son côté ; sur `*` ou un refus total ancien, toutes les cartes derrière le NSG (I4G). Le commentaire
+du cas `("glorfindel-iso-web-web-nic-8b70f2", "10.0.0.5", True)` de `test_turned_names.py` (« a deny there cuts only
+it ») disait l'inverse de ce qu'il faisait : le cas attend maintenant `False`, et les cas d'un blocage (`True` sur une
+adresse, `False` sur `*`) sont ajoutés. **Tests unitaires** (`test_promotion_guard.py`, six) : le cas du lot sur un NSG
+tier et sur le NSG de web donné à batch depuis (batch garde ses flux, la paire entière, `blocked`, la règle dite, le
+placement dans l'état, le déblocage `unblock_partial` sans couper batch) ; rien de retourné, la paire part
+(`promoted_from`, verte sur `main` : garde le correctif de trop en faire) ; retournée mais visant l'adresse de web
+encore, elle part (verte sur `main`) ; un retrait refusé, gardé et dit ; une entrée ancienne, gardée. **Mutants
+M3350–M3358** : la garde jamais demandée (M3350, la cause), la paire gardée sortie de l'état (M3351), la paire à moitié
+retirée (M3352), rien dit (M3353), un retrait en échec avalé (M3354), l'entrée ancienne sans garde (M3355), la règle
+`-out` jamais demandée (M3356, la séquence de la graine 3), la consigne de remettre en refus une règle d'isolation
+(M3357), toute paire gardée (M3358). M1635, M3274 et M3275 suivent leurs lignes déplacées (`perimeter.py`, la
+nouvelle consigne), leur sens inchangé.
 
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids

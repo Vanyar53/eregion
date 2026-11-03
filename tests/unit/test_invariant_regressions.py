@@ -6525,3 +6525,79 @@ def test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block(monkeypatc
     unsaid. The code was right to say nothing more. Reduced by hand to six rules; red on `main`
     de040e8c, all three."""
     _replay(monkeypatch, _mak_net(tier), *steps)
+
+
+def _l1h_net() -> dict:
+    """The network of seed 5 at 500 (L1A, #480): the tier's rules and the NICs' own, the subnet's NSG
+    empty, Db--01's primary NIC on the data subnet (no NSG of its own there)."""
+    r = _tpl
+    return {"subnet_nsg": [], "edge_nsg": None,
+            "tier_rules": [r("allow-ssh", 100), r("allow-lateral-out", 100), r("deny-lateral-in", 130)],
+            "nics": {"web-nic": {"own": None, "rules": [r("allow-ssh", 100), r("allow-lateral-out", 100),
+                                                        r("deny-lateral-in", 130)], "policy": True},
+                     "db-nic-0": {"own": None, "rules": [r("allow-ssh", 100), r("deny-lateral-in", 130)],
+                                  "policy": False},
+                     "db-nic-1": {"own": None, "rules": [r("allow-ssh", 100), r("allow-lateral-out", 100)],
+                                  "policy": False},
+                     "api-nic": {"own": None, "rules": [r("allow-ssh", 100), r("deny-lateral-in", 130)],
+                                 "policy": False}},
+            "windows": None, "config": {"quarantine": False, "forensic": [], "readable": True, "rg": ""},
+            "legacy": None, "data_subnet": None, "data_primary": True}
+
+
+_L1H_PAIR = (_SUBNET, _PERIMETER)
+_L1H_HO = ("human_only",) * 9
+# Db--01 blocked on its subnet, web1 blocked for itself; the pair turned, a pass in human_only (L1Qs' rule).
+_L1H_FIRST = ("turned_perimeter_left_out", DB, DB, None, WEB1, WEB1, 22, False, True, *_L1H_HO[:4], _L1H_PAIR,
+              *_L1H_HO)
+# web1 blocked on the subnet, Db--01 for itself: a merged entry, put back once, the pair turned, its own
+# rules taken off; said (« a disparu une deuxième fois »), acknowledged; web1 unblocked.
+_L1H_MERGED = ("turned_perimeter_left_out", WEB1, WEB1.lower(), None, DB, DB, None, True, True,
+               "busy", "non_disruptive", "human_only", "human_only", _L1H_PAIR, "busy", "human_only",
+               "non_disruptive", "non_disruptive", "non_disruptive", "non_disruptive", "busy", "human_only",
+               "non_disruptive")
+# web2 blocked on the same subnet: its perimeter block writes the pair Db--01's entry names; taken off,
+# a pass outside human_only — the pass puts it back for web2. The draws as found end there, where L1
+# fell; the rule played to its end after them (L1G's way): the pair turned again, held out in human_only,
+# the passes outside it.
+_L1H_LAST = ("turned_perimeter_left_out", WEB2, WEB2.lower(), ("nsg.get", "always-429"), WEB1, WEB1, None, False,
+             True, "non_disruptive", "non_disruptive", "non_disruptive", "non_disruptive",
+             _L1H_PAIR, "human_only", *("non_disruptive",) * 8)
+_L1H_FOUND = (
+    ("block_then_isolate", WEB1, WEB1, None, 22, None, True, True),
+    ("isolate", WEB1, WEB1, None),
+    _L1H_FIRST,
+    ("interrupted_isolation", WEB1, WEB1, None, 2, "before-crash", None),
+    ("someone_detaches_the_quarantine",),
+    ("block_then_isolate", WEB1, WEB1, None, 22, None, True, True),
+    ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), False),
+    ("turned_perimeter_left_out", WEB1, WEB1, None, WEB2, WEB2, 22, False, False, _L1H_PAIR, *_L1H_HO),
+    ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), False),
+    ("someone_detaches_the_quarantine",),
+    ("block_then_isolate", API, API, (9, "after-crash"), None, ("subnet.get", "always-429"), False, True),
+    _L1H_MERGED,
+    ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), True),
+    ("isolate", WEB1, WEB1, ("nsg.get", "always-429")),
+    ("tamper_with_our_rule", "protocol", (_SUBNET, _WEB2_BLOCK)),
+    ("operator_acknowledges", 0),
+    ("isolate", DB, DB.lower(), None),
+    ("someone_detaches_the_quarantine",),
+    ("customer_sets_policy", _nic("rg-app1", "db-nic-0"), False),
+    _L1H_LAST)
+
+
+@pytest.mark.xfail(strict=True, reason="L1H (#483): fixed in the next commit")
+@pytest.mark.parametrize("steps", [_L1H_FOUND, (_L1H_FIRST, _L1H_MERGED, _L1H_LAST)], ids=["as found", "reduced"])
+def test_an_acknowledged_drift_whose_turned_pair_another_perimeter_wrote_again_is_said(monkeypatch, steps):
+    """L1H (#483), seed 5 at 500 (L1A's measure, MAK's too): « L1: the block on …/Db--01 vanished from
+    Azure; the reassertion neither put it back nor said so ». Db--01's entry merged — its perimeter
+    pair on nsg-subnet and its own rules —, the pair turned into an allow, Db--01's own rules taken
+    off: the card says them gone and the pair too (turned: « gone » by what it does), the IP no
+    longer blocked on db-nic-0, db-nic-1; the operator acknowledges it. Then web2 blocked on the same
+    subnet: its perimeter block writes the pair — one per IP and subnet, the one Db--01's entry names
+    —, a deny again; taken off, a pass outside human_only puts it back for web2. Db--01's own rules
+    still gone, the pair whole: « better than the card, not worse », in silence — the card had read
+    the pair on Azure (turned), not absent, and `_back` looked at presence alone. The machine holds
+    an acknowledged card for said only while the entry's rules are as they were then. Reduced to
+    three rules of the twenty, through the conftest; red on `main` d597a00e, both."""
+    _replay(monkeypatch, _l1h_net(), *steps)

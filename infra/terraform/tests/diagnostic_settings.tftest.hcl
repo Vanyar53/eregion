@@ -30,6 +30,7 @@ variables {
   # des deux à false ; le défaut lui-même est tenu par tests/unit/test_bench_logs.py.
   activity_log_enabled = false
   entra_logs_enabled   = false
+  auditd_enabled       = false
 }
 
 run "both_off_nothing_of_the_subscription_nor_the_tenant" {

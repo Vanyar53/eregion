@@ -17,6 +17,7 @@ variables {
   # Hermétique face au terraform.tfvars de l'opérateur.
   activity_log_enabled = false
   entra_logs_enabled   = false
+  auditd_enabled       = false
 }
 
 run "noise_off_the_bench_plan_is_unchanged" {

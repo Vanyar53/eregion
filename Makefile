@@ -121,7 +121,7 @@ DOCKER_GLORFINDEL = $(RUNS_DIRS) && $(GLORFINDEL_AZURE_PICK) docker run --rm $(G
 	annatar-shell glorfindel-shell \
 	venv install lock audit test test-unit lint annatar-simulate annatar-simulate-gap clean release release-draft \
 	canary-jit providers-lock celebrimbor-init celebrimbor-plan celebrimbor-up celebrimbor-down celebrimbor-output celebrimbor-stop celebrimbor-start \
-	celebrimbor-logs-plan celebrimbor-logs-up \
+	celebrimbor-logs-plan celebrimbor-logs-up celebrimbor-auditd-plan celebrimbor-auditd-up \
 	glorfindel-host-init glorfindel-host-plan glorfindel-host-up glorfindel-host-down glorfindel-host-push \
 	glorfindel-host-start glorfindel-host-stop glorfindel-host-logs glorfindel-host-tunnel glorfindel-host-ssh \
 	glorfindel-host-cd-install glorfindel-host-cd-check glorfindel-host-cd-enable glorfindel-host-cd-disable \
@@ -203,6 +203,8 @@ help:
 	@echo "  make celebrimbor-output [INSTANCE=]         Fragment glorfindel-config.yaml généré"
 	@echo "  make celebrimbor-logs-plan                  Plan des seuls paramètres de diagnostic (abonnement, tenant : ID1)"
 	@echo "  make celebrimbor-logs-up [YES=1]            Les applique (activity_log_enabled / entra_logs_enabled du tfvars)"
+	@echo "  make celebrimbor-auditd-plan [INSTANCE=]    Plan d'auditd seul : l'extension des VM et la DCR (AUD1)"
+	@echo "  make celebrimbor-auditd-up [YES=1]          L'applique (auditd_enabled du tfvars ; false : le retire)"
 	@echo ""
 	@echo "Glorfindel hébergé (H0 : pré-observation, état Terraform séparé)"
 	@echo "  make glorfindel-host-plan [OPERATOR_CIDR=]   Plan (lecture seule)"
@@ -617,6 +619,26 @@ celebrimbor-logs-plan celebrimbor-logs-up:
 	@$(TF) init
 	@$(TF) workspace select default
 	@$(TF) $(if $(filter celebrimbor-logs-up,$@),apply$(if $(YES), -auto-approve),plan) $(LOGS_TARGETS)
+
+# AUD1 : auditd sur les VM du banc et local6 dans la DCR, seuls — plan et apply ciblés sur
+# l'extension d'auditd et la DCR, rien d'autre du banc (une dérive en attente sur une VM ou le
+# workspace, leurs dépendances, y paraîtrait : alors s'arrêter, et la traiter par
+# celebrimbor-plan). Ce qu'ils posent vient de terraform.tfvars (auditd_enabled : persistant),
+# jamais d'un -var d'ici. Remis à false, le même `celebrimbor-auditd-up` retire l'extension et
+# local6 (auditd reste sur la VM : docs/operations.md, « auditd au banc (AUD1) »).
+#   make celebrimbor-auditd-plan               # lecture seule
+#   make celebrimbor-auditd-up [YES=1]         # YES=1 : sans confirmation, plan relu avant
+AUDITD_TARGETS = -target=azurerm_virtual_machine_extension.auditd -target=azurerm_monitor_data_collection_rule.celebrimbor
+
+celebrimbor-auditd-plan:
+	@$(TF) init
+	@$(TF) workspace select $(INSTANCE)
+	@$(TF) plan $(AUDITD_TARGETS)
+
+celebrimbor-auditd-up:
+	@$(TF) init
+	@$(TF) workspace select $(INSTANCE)
+	@$(TF) apply$(if $(YES), -auto-approve) $(AUDITD_TARGETS)
 
 # H0 : la charge réelle de bree (petit site + routine d'admin), par Run Command —
 # jamais par le custom_data (le changer remplace la VM). Idempotent.

@@ -1,11 +1,12 @@
-# La corrélation, brique du produit (COR1, COR2)
+# La corrélation, brique du produit (COR1, COR2), et ce qu'auditd y ajoute (AUD1)
 
 Décision de Jonathan (02/11), après la relecture d'ADM1 : « faire le meilleur ». Une détection qui
 relie deux événements vaut plus que deux détections isolées. La corrélation fait donc partie du produit :
 c'est une brique réutilisable de Glorfindel, pas l'astuce d'une règle.
 
 Code : `glorfindel/correlation.py`. Tests : `tests/unit/test_correlation.py`. Issues : #407 (COR1),
-#427 (COR2, l'origine confirmée hors de la VM).
+#427 (COR2, l'origine confirmée hors de la VM). AUD1 (#408), qui ferme une partie de leurs limites par
+les lignes d'auditd : `glorfindel/auditd.py`, `tests/unit/test_auditd.py` — [ci-dessous](#ce-que-ferme-aud1-auditd).
 
 ## Où elle tourne
 
@@ -150,7 +151,8 @@ commence par « Connexion après brute force non vérifiée ». Les comptes port
   de 7 jours, pendant qu'un administrateur se connecte depuis le bastion, passe donc.
 - **Un accès qui n'écrit aucune ligne de session n'est pas vu.** C'est le cas d'un service qui tourne
   sous le compte, ou d'une ligne perdue à l'ingestion. Lier une commande à sa session exacte (son
-  terminal, son processus) demande `auditd` : c'est AUD1.
+  terminal, son processus) demande `auditd` : là où il est posé, AUD1 lit chaque commande du shell
+  root sous l'identité de connexion, quelle que soit l'origine de la session (ci-dessous).
 - **Sans source déclarée, un réducteur de bruit, pas une preuve** (décision de Jonathan, 02/11).
   Tout utilisateur local peut écrire une ligne de connexion sshd venant d'une origine déclarée
   (`logger -p auth.info -t sshd`). L'écart par origine ne tient donc que contre un administrateur
@@ -160,7 +162,9 @@ commence par « Connexion après brute force non vérifiée ». Les comptes port
   jamais une session réelle vue dans la fenêtre. **Avec une source déclarée, la limite de la ligne
   forgée est levée** (COR2, ci-dessous) : une ligne écrite par `logger` n'a pas de trace hors de la
   VM, et fait une carte. Le reste demeure ouvert, avec ou sans source : une session plus ancienne
-  que la fenêtre, un accès qui n'écrit aucune ligne de session ne sont toujours pas vus (AUD1, #408).
+  que la fenêtre, un accès qui n'écrit aucune ligne de session ne sont toujours pas vus par la
+  corrélation — mais, là où auditd est posé, ce qu'ils font de sensible en root fait une carte (AUD1,
+  ci-dessous).
 
 ## L'origine confirmée hors de la VM (COR2)
 
@@ -220,3 +224,97 @@ only » quand aucune source ne les a confirmés.
   connexion réussie juste avant les échecs est aussi suspecte. La dédup tient pour une ligne
   agrégée (la règle livrée). Pour une règle du client qui rend des lignes datées, la marque ne
   change pas l'identité.
+
+## Ce que ferme AUD1 (auditd)
+
+Décision de la feuille de route (#408), après COR2 : la bonne pratique des benchmarks CIS pour Linux
+est une règle `auditd` qui journalise toute commande exécutée sous un autre utilisateur, en gardant
+l'identité de connexion d'origine (`auid`). Le noyau pose l'`auid` à la connexion (`pam_loginuid`) et le
+garde à travers `sudo` et `su` : une commande lancée dans un shell root porte encore le compte qui
+s'est connecté.
+
+**Sur le banc, derrière un drapeau désactivé** (`auditd_enabled`, `infra/terraform/auditd.tf` ;
+`docs/operations.md`, « auditd au banc (AUD1) »), deux règles d'audit et le greffon syslog d'auditd
+(`audisp-syslog`, facilité `local6`, la DCR du banc) :
+
+- la règle du CIS, `-C euid!=uid -F auid!=unset -S execve -k user_emulation` : un programme exécuté
+  sous un autre utilisateur (`sudo` lui-même, `su`, un binaire setuid) ;
+- **ce qu'elle ne voit pas** : sudo passe à uid = euid = 0 avant de lancer la commande, et un shell root
+  a uid = euid = 0 — aucune de ses commandes n'a `euid != uid`. La seconde règle,
+  `-F euid=0 -F auid>=1000 -F auid!=unset -S execve -k root_command`, écrit chaque exécution en root
+  d'une connexion humaine, sous le même `auid`.
+
+**La règle livrée `auditd-sensitive-root-command`** (T1059.004) lit `Syslog`, `local6`, l'étiquette
+`audisp-syslog` : une ligne par exécution d'un humain (auid ≥ 1000, jamais unset) en root (euid 0), ses
+enregistrements SYSCALL et EXECVE réunis par événement (`msg=audit(<instant>:<numéro>)`), **tous** ceux
+de l'événement, jamais un choisi. Puis, dans le RulePoller, avant tout signal et hors du verrou, comme
+ADM1 (`auditd.settle`) :
+
+| La ligne | Ce qu'elle devient |
+|---|---|
+| lue en entier, sa commande dans la liste sensible d'ADM1 — `SENSITIVE_SHIPPED` et `sensitive_commands`, la même liste, jamais recopiée (`expected_sudo.listed`) | une carte : le compte de connexion (`LoginAccount`, « admin1 (auid 1001) » ; « auid 1001 (nom absent de la ligne) » sans le format ENRICHED), la commande (`AuditCommand`), la catégorie (`Sensitive`), le programme (`Exe`), le terminal et la session (`Tty`, `Session`) |
+| lue en entier, hors de la liste | rien : c'est la règle, pas un écart. Un `ls` du shell root n'est pas une détection ; le shell lui-même a été jugé sur la ligne de sudo (`sudo-privilege-escalation`) |
+| illisible ou ambiguë : pas d'EXECVE, deux SYSCALL ou deux EXECVE pour un événement, un argument coupé ou réparti sur plusieurs enregistrements, `argc` qui ne tombe pas juste, un champ illisible, un nombre hors borne (des chiffres autres qu'ASCII comme `²`, plus de 10 chiffres, `argc` au-delà de 256), une commande plus longue que ce qui est lu (1 024 caractères), une lecture qui lève | une carte qui dit pourquoi (`AuditRead`, A0) |
+
+- **Un compte attendu (ADM1) reste soumis à la liste**, comme pour sudo : `expected_sudo.admins`
+  n'écarte rien ici.
+- **Une ligne écrite pour faire échouer la lecture ne fait taire rien** (relecture d'AUD1) : chaque
+  ligne est lue bornée et à part, une lecture qui lève est une carte ; une étape de lecture du poller
+  en défaut (AUD1, ADM1, COR1) est dite (`last_error`) et la passe continue avec les lignes telles que
+  lues, rien d'écarté qui n'ait été lu ; une passe qui lève ne tue jamais le fil de la règle. Les
+  enregistrements ne sont sur la carte qu'une fois (`SyslogMessage`, 2 000 caractères chacun).
+- **Un shell n'est pas une catégorie** ici (`root_shell` d'ADM1 n'est pas lu) : à l'intérieur du shell
+  root, chaque commande est lue pour elle-même.
+- **Le programme est lu par son chemin** (`exe`, celui du noyau), puis ses arguments : `argv[0]` est à
+  l'appelant (`exec -a vim /usr/sbin/useradd` reste `accounts`). Un argument écrit en hexadécimal par
+  le noyau (il contient une espace, un guillemet, un caractère de contrôle) est décodé.
+- **Une carte par VM et par passe** : les commandes sensibles d'abord, puis les illisibles, les plus récentes
+  en tête de chaque groupe — des lignes illisibles écrites après une vraie commande ne la poussent pas hors de la
+  carte (relecture d'AUD1) ; plus de 20 lignes forgées en forme de commandes sensibles le pourraient, `AuditCount`
+  les compte toutes —, qui nomme les autres (`AuditCommands`, 20 au plus ; `AuditCount`, toutes) —
+  aucune envoyée sans être dite. La carte est
+  caractérisée (`root_command`) : un instantané seul en `non_disruptive` laisse sa carte (le plancher de
+  `decide`).
+- **Dit** : `rule_status.json` garde, à chaque passe, ce que la fenêtre de la règle contient (`auditd` :
+  `events`, `sensitive`, `unreadable`) — zéro événement dit qu'aucune ligne n'arrive ;
+  `glorfindel report` l'affiche.
+
+**Ce qu'AUD1 ferme**, là où auditd est posé :
+
+- **le shell root d'ADM1** : ce qui s'y fait de sensible fait une carte, et pas seulement ce que sudo
+  écrit ; un script non listé (`sudo /tmp/x.py`) est lu par les programmes qu'il lance ;
+- **les limites de COR1 et COR2** : un shell root écarté par l'origine de ses sessions — une ligne de
+  session forgée, une session plus ancienne que la fenêtre de 7 jours, un accès qui n'écrit aucune
+  ligne de session — ne cache plus ses commandes sensibles : l'`auid` porte la connexion, quelle que
+  soit l'origine que la corrélation a lue. L'écart de COR1 reste un réducteur de bruit sur le shell ;
+  AUD1 en lit le contenu.
+
+**Ce qui reste ouvert**, écrit ici :
+
+- **Ce qui n'est pas une exécution n'est pas vu** : une commande interne du shell et ses redirections
+  (`echo … >> /root/.ssh/authorized_keys`), un fichier lu ou écrit par un programme déjà lancé, du
+  code en ligne d'un interpréteur qui n'exécute rien. Les règles de surveillance de fichiers du CIS
+  (`-w /etc/shadow`, `-w /etc/sudoers`, `-w /etc/passwd`…) les verraient : un lot à part.
+- **La liste lit des noms** : une copie renommée d'un programme (`cp /usr/sbin/useradd /tmp/u`) ne
+  porte plus le sien.
+- **Sans `auid` d'un humain, rien n'est lu** : un démon compromis (un service, une page web), l'agent
+  de la VM (Run Command), les tâches cron de root (auid 0), une connexion directe de root (auid 0).
+  Le sujet d'AUD1 est l'identité de connexion d'un humain.
+- **Le silence n'est pas vu** : un greffon arrêté, auditd tué par son numéro de processus (`kill <pid>`
+  ne nomme rien), une ligne perdue par journald ou rsyslog (A10). Arrêter ou retirer auditd, son greffon
+  ou ses règles par leur nom est une commande sensible (`supervision`, `audit`, `log_config`), écrite
+  avant d'agir ; mais l'absence de lignes n'est pas une détection (pas de battement des lignes d'audit),
+  et les règles ne sont pas immuables sur le banc (`-e 2` demanderait un redémarrage pour les changer).
+- **Une ligne forgée ajoute une carte** : tout utilisateur de la VM peut écrire une ligne `local6`
+  étiquetée `audisp-syslog`. Elle n'en efface aucune (deux enregistrements pour un événement : une
+  carte), mais elle peut nommer un autre compte ; le journal d'audit de la VM (root seul, `ausearch`)
+  dit le vrai.
+- **Deux cartes pour un geste** : `sudo cat /etc/shadow` fait la carte d'ADM1 (la ligne de sudo) et
+  celle d'AUD1 (l'exécution) — deux sources, deux règles.
+- **Le bruit** : les scripts de maintenance d'une mise à jour de paquets, un outil de configuration
+  qui se connecte en SSH puis passe root (Ansible et `become`, sous l'auid de son compte) exécutent des
+  commandes de la liste — des cartes, et du volume (A12, A13). Un écart par le nom du programme parent
+  ne sera pas fait : un intrus le choisirait (`dpkg -i` d'un paquet à lui).
+- **La forme des lignes est une hypothèse** (la documentation d'auditd, du noyau et d'Azure Monitor,
+  pas une mesure) : A1–A13 dans `docs/operations.md`, « Les hypothèses d'AUD1 », à trancher au banc avec
+  Jonathan.

@@ -466,6 +466,16 @@ def _note(what: str) -> None:
     _SEEN[what] += 1
 
 
+def _reassert_block_cards() -> list[dict]:
+    """The reassertion's pending cards about a block, in the store's order — oldest first,
+    the order the code wrote them in (L1G). Never sorted by their ids: a uuid4, drawn anew
+    at every run, so a drawn index fell on another card from one replay to the next — the
+    sequence passed or failed by chance, and Hypothesis, its draws changing with it, called
+    the strategy flaky (seed 29 at 60)."""
+    return [e for e in escalations.pending()
+            if e.get("action") == "block_suspicious_ip" and (e.get("signal_id") or "").startswith("reassert-")]
+
+
 class _Drawn:
     """A rule's draws, some of them set: by label, a value, or a narrower strategy —
     the rest drawn as the rule would (a composite rule reuses the others, I1F)."""
@@ -2772,12 +2782,11 @@ class IsolationMachine(RuleBasedStateMachine):
         was neither put back nor said. Block cards only: the other kinds (quarantine,
         orphans, bypass) stay said by design once acknowledged, and their oracles count
         pending cards. A drift card acknowledged stays said for its episode (L1)."""
-        cards = sorted((e["id"], e.get("resource_id") or "", e.get("reason") or "") for e in escalations.pending()
-                       if e.get("action") == "block_suspicious_ip"
-                       and (e.get("signal_id") or "").startswith("reassert-"))
-        # Drawn first, with constraints that never depend on the state: what is pending may
-        # differ between two replays of a sequence (the race runner), and Hypothesis calls
-        # a draw that changes with it flaky.
+        cards = [(e["id"], e.get("resource_id") or "", e.get("reason") or "") for e in _reassert_block_cards()]
+        # Drawn first, with constraints that never depend on the state, and the cards taken in
+        # the store's order: sorted by their ids (a uuid4), what a drawn index fell on differed
+        # between two replays of a sequence — not the race runner, whose interleaving is the
+        # seed's — and Hypothesis called the draws that changed with it flaky (L1G, seed 29).
         pick = data.draw(st.integers(0, 7), label="card acknowledged")
         if not cards:
             return
@@ -2806,9 +2815,7 @@ class IsolationMachine(RuleBasedStateMachine):
         mate = data.draw(st.sampled_from(mates), label="mate")
         self.perimeter_lifted_beside_a_block(_Drawn(data, vm=mate, rid=mate, fault=None, mate=vm))
         self.reassert(_Drawn(data, fault=None, mode="human_only"))
-        cards = sorted((e["id"], key(e.get("resource_id") or "")) for e in escalations.pending()
-                       if e.get("action") == "block_suspicious_ip"
-                       and (e.get("signal_id") or "").startswith("reassert-"))
+        cards = [(e["id"], key(e.get("resource_id") or "")) for e in _reassert_block_cards()]
         mine = [i for i, (_, r) in enumerate(cards) if r == key(vm)]
         if mine:
             _note("a drift acknowledged, the block written again")

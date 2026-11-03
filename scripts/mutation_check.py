@@ -1923,8 +1923,8 @@ POS = "glorfindel/posture.py"
 RST = "glorfindel/providers/azure/restore.py"
 MUTANTS += [
     ("M760", "the orphan sweep alerts and never removes (A3, U1)", ORP,
-     "        if alone:\n            out = _remove(connector, o, victims)",
-     "        if False:\n            out = _remove(connector, o, victims)"),
+     "        if alone:\n            out = _remove(connector, o, locked)",
+     "        if False:\n            out = _remove(connector, o, locked)"),
     ("M761", "a live NIC's own rule taken for an orphan, and removed (A3, U1)", SWP,
      "                        or mark in marks or mark in live_names):",
      "                        or mark in live_names):"),
@@ -1987,9 +1987,9 @@ MUTANTS += [
     ("M777", "the orphan sweep left out of the watch's pass: it waits for a discovery that may be off (A3, D-B)",
      R, "    sweep_orphan_rules(connector, autonomy, report, nsgs)\n", ""),
     ("M778", "the rule of a recreated NIC under a VM Glorfindel isolates found removable (A3, first review)", SWP,
-     "                elif why := self._held_reason(cut, held):\n                    kept = why\n", ""),
+     "                elif why_held and narrow is None:\n                    kept = why_held\n", ""),
     ("M779", "the removal doesn't read the state again: an isolation recorded since is lifted (A3, first review)",
-     SWP, "        why = self._held_reason(orphan.get(\"cut\") or [], self._held_vms()) or _turned_still(",
+     SWP, "        why = self._held_reason(free, self._held_vms()) or _turned_still(",
      "        why = \"\" or _turned_still("),
     ("M880", "any error reading a NIC of our state taken for a 404: gone (A3, first review, X1)", SWP,
      "            if _is_not_found(exc):\n                return None\n            return f\"carte",
@@ -5631,8 +5631,8 @@ MUTANTS += [
      "glorfindel/orphans.py", '    orphans = sorted(orphans, key=lambda o: not o.get("turned"))\n',
      "    orphans = list(orphans)\n"),
     ("M1741", "the removal trusts the listing: a rule turned since, the deny taken off (I5Q)", SWP,
-     '        why = self._held_reason(orphan.get("cut") or [], self._held_vms()) or _turned_still(self._network, orphan)\n',
-     '        why = self._held_reason(orphan.get("cut") or [], self._held_vms())\n'),
+     '        why = self._held_reason(free, self._held_vms()) or _turned_still(self._network, {**orphan, "cut": free})\n',
+     '        why = self._held_reason(free, self._held_vms())\n'),
     ("M1742", "an NSG not read again before the removal read as holding no turned rule (I5Q)", TRN,
      "            return f\"NSG {k.rsplit('/', 1)[-1]} non relu avant le retrait ({_first_line(exc)[:_ERR_MAX]})\"\n",
      "            continue\n"),
@@ -6242,9 +6242,9 @@ MUTANTS += [
     ("M1942", "an isolation gone again read « already said » from its drift mark alone (L2C, review)", R,
      '    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):\n',
      '    if iso.get("drift_alerted_at"):\n'),
-    ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", R,
-     '    if b.get("drift_alerted_at") and not worse and drift_said(ref or vm, ip, _alert_id(vm, rid, ip)):\n',
-     '    if b.get("drift_alerted_at") and not worse:\n'),
+    ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", RSD,
+     "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not (_back(baseline, now) and _acknowledged(sid)))\n"),
     ("M1944", "an isolation held again, its mark kept: the episode not known over (L2C, review)", R,
      '    if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
      '    if False:\n'),
@@ -6429,7 +6429,8 @@ MUTANTS += [
      "        and not getattr(r, \"destination_application_security_groups\", None)\n", ""),
     ("M2184", "a bypassed block drops where each NIC stands: a card naming no NIC says « plus bloquée » under "
               "the perimeter (I3P)", VBL,
-     "                        \"open_nics\": open_nics, **said}\n", "                        }\n"),
+     "                        \"open_nics\": open_nics, **said, **self._rules_seen(cache, entry)}\n",
+     "                        **self._rules_seen(cache, entry)}\n"),
     ("M2185", "a NIC whose own block is passed never asked the perimeter: neither said held nor open (I3P)", VBL,
      "                            _stand(t0)\n", "                            pass\n"),
     ("M2186", "NICs unread left unsaid: rules gone on them said « n'est plus bloquée » (I3P, A0)", VBL,
@@ -8238,8 +8239,8 @@ MUTANTS += [
      "        narrow_drift(ref or vm, ip, drift_meet(baseline, now_is) if worse else now_is)\n",
      "        narrow_drift(ref or vm, ip, baseline if worse else now_is)\n"),
     ("M3121", "the baseline's meet keeps « not blocked »: a block held since, then gone, unsaid (L1)", RCA,
-     '            "blocked": bool(said.get("blocked")) or now["blocked"]}\n',
-     '            "blocked": bool(said.get("blocked"))}\n'),
+     '            "blocked": bool(said.get("blocked")) or now["blocked"],\n',
+     '            "blocked": bool(said.get("blocked")),\n'),
     ("M3122", "a refused write of the check card raises into the block's pass: its drift unsaid (L1)", RCA,
      "        except OSError as exc:\n            log.warning(\"reassert: carte « non vérifiée »",
      "        except ZeroDivisionError as exc:\n            log.warning(\"reassert: carte « non vérifiée »"),
@@ -9364,6 +9365,103 @@ TESTS.update({
     "M3358": _I4P_UNIT,
     "M3359": _I4G_UNIT,
 })
+# AUD1 (#408): auditd's execs of a human login as root, read before any signal — the records read
+# whole or a card, ADM1's list (never a copy), the rule's filters, the bench's Terraform. M2760–M2779.
+_AUD = "glorfindel/auditd.py"
+_RULES_YAML = "glorfindel/rules/azure/detection_rules.yaml"
+MUTANTS += [
+    ("M2760", "two EXECVE records for one event: the first read, a line written at its serial chooses (AUD1)", _AUD,
+     "    if len(execves) != 1:\n", "    if not execves:\n"),
+    ("M2761", "two SYSCALL records for one event: the first read (AUD1)", _AUD,
+     "    if len(syscalls) != 1:\n", "    if not syscalls:\n"),
+    ("M2762", "a shell inside the root shell a card of its own: the list read with root_shell (AUD1)", _AUD,
+     'category = expected_sudo.listed(said["text"], extra)', 'category = expected_sudo.sensitive(said["text"], extra)'),
+    ("M2763", "the program read by argv[0], which the caller writes: `exec -a vim useradd` passes (AUD1)", _AUD,
+     '    text = f"{exe} {command}"\n', "    text = command\n"),
+    ("M2764", "an argument in hex not decoded (AUD1)", _AUD,
+     '    if re.fullmatch(r"(?:[0-9A-F]{2})+", value):\n', "    if False:\n"),
+    ("M2765", "an argument split over records read as whole (AUD1)", _AUD,
+     '    if re.search(r"(?:^|\\s)a[0-9]+(?:_len=|\\[)", execve):\n', "    if False:\n"),
+    ("M2766", "fewer arguments than argc read as the command (AUD1)", _AUD,
+     "    if len(found) != argc or any(i not in found for i in range(argc)):\n", "    if not found:\n"),
+    ("M2767", "a command longer than what is read judged on its start (AUD1)", _AUD,
+     '    if len(text) > _COMMAND_READ or "\\n" in text or "\\r" in text:\n',
+     '    if "\\n" in text or "\\r" in text:\n'),
+    ("M2768", "a row that is no human login's root exec cleared on what it says (AUD1)", _AUD,
+     "    if key not in KEYS or not (HUMAN_UID_MIN <= auid < UNSET) or euid != 0:\n",
+     "    if key not in KEYS:\n"),
+    ("M2769", "the rule reads a daemon's exec (auid unset) as a human login's (AUD1)", _RULES_YAML,
+     "and Auid >= 1000 and Auid != 4294967295 and Euid == 0", "and Auid >= 1000 and Euid == 0"),
+    ("M2770", "the rule reads an exec as another user than root (euid ≠ 0) (AUD1)", _RULES_YAML,
+     "and Auid != 4294967295 and Euid == 0", "and Auid != 4294967295"),
+    ("M2771", "the rule keeps one EXECVE record per event, never the set: a written line can hide (AUD1)",
+     _RULES_YAML, 'Execve = make_set_if(SyslogMessage, RecordType == "EXECVE", 4)',
+     'Execve = make_set_if(SyslogMessage, RecordType == "EXECVE", 1)'),
+    ("M2772", "the rule reads any program's line in local6, not the plugin's (AUD1)", _RULES_YAML,
+     '      | where ProcessName in ("audisp-syslog", "audispd")\n', ""),
+    ("M2773", "the folded card names only the newest command of its VM (AUD1)", _AUD,
+     "    if len(ordered) == 1:\n        return newest\n", "    if True:\n        return newest\n"),
+    ("M2774", "the poller no longer reads auditd's rows: every root exec a card (AUD1)", "glorfindel/detection_rules.py",
+     'rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())',
+     "audit_n = dict.fromkeys(auditd.COUNTS, 0)"),
+    ("M2775", "the config's sensitive_commands not applied in the root shell (AUD1)", "glorfindel/detection_rules.py",
+     'rows, audit_n = auditd.settle(rule.ttp, rows, getattr(policy, "sensitive_commands", None) or ())',
+     "rows, audit_n = auditd.settle(rule.ttp, rows, ())"),
+    ("M2776", "a sensitive root command uncharacterized: a snapshot alone leaves no card (AUD1)",
+     "glorfindel/detection_rules.py", '    ("AuditCommand",    "root_command"),\n', ""),
+    ("M2777", "local6 collected by the bench's DCR with auditd off (AUD1)", "infra/terraform/monitoring.tf",
+     "var.auditd_enabled ? [local.auditd_facility] : []", "[local.auditd_facility]"),
+    ("M2778", "auditd's syslog plugin killed or stopped no longer sensitive (AUD1)", XSU,
+     "|auditd|audisp-syslog|audispd|mdatp|", "|auditd|mdatp|"),
+    ("M2779", "the root shell's rule not loaded: the CIS rule alone, a root shell's commands unseen (AUD1)",
+     "infra/terraform/scripts/auditd.sh",
+     "-a always,exit -F arch=b64 -F euid=0 -F auid>=1000 -F auid!=unset -S execve -k root_command\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_auditd.py" for n in range(2760, 2780)})
+TESTS.update({mid: "tests/unit/test_bench_auditd.py" for mid in ("M2777", "M2779")})
+# AUD1, its review: a forged line made the poll raise, no card left, the rule's thread dead.
+# The numbers read bounded, the row's reading caught, the reading steps and the loop guarded,
+# the records once on the card. M3360–M3368.
+MUTANTS += [
+    ("M3360", "a row whose reading raises stops the poll: no card, the real one lost (AUD1, review)", _AUD,
+     "        except Exception as exc:  # a line written to make the reading fail is a card, never a silence\n",
+     "        except ZeroDivisionError as exc:\n"),
+    ("M3361", "a number read by str.isdigit(): `²` makes int() raise (AUD1, review)", _AUD,
+     '    return int(v) if v is not None and re.fullmatch(r"[0-9]{1,10}", v) else None\n',
+     "    return int(v) if v is not None and v.isdigit() else None\n"),
+    ("M3362", "an argument's index read unbounded: 5 000 digits make int() raise (AUD1, review)", _AUD,
+     'a([0-9]{{1,4}})={_VALUE}', 'a(\\d+)={_VALUE}'),
+    ("M3363", "argc unbounded (AUD1, review)", _AUD,
+     '    if argc > ARGC_MAX:\n        return f"argc={argc} hors borne ({ARGC_MAX} au plus)"\n', ""),
+    ("M3364", "the records twice in the signal: Syscall and Execve kept on the card (AUD1, review)", _AUD,
+     '    rest = {k: v for k, v in row.items() if k not in ("Syscall", "Execve")}\n', "    rest = dict(row)\n"),
+    ("M3365", "a fault of the audit reading stops the pass (AUD1, review)", "glorfindel/detection_rules.py",
+     "        except Exception as exc:  # the audit reading: every row stays a card\n",
+     "        except ZeroDivisionError as exc:\n"),
+    ("M3366", "a fault of the correlation sets aside the root shells it did not settle (AUD1, review)",
+     "glorfindel/detection_rules.py",
+     '            for k in [k for k, e in judged.items() if "origins" in e]:\n                del judged[k]\n            corr = {}\n',
+     "            corr = {}\n"),
+    ("M3367", "one poll that raises kills the rule's thread (AUD1, review)", "glorfindel/detection_rules.py",
+     "            except Exception as exc:  # the rule's thread never dies of one poll (review, AUD1)\n",
+     "            except ZeroDivisionError as exc:\n"),
+    ("M3368", "a fault of a reading step not said: last_error cleared (AUD1, review)", "glorfindel/detection_rules.py",
+     '            if faults:\n                st["last_error"] = "; ".join(faults)[:500]\n            else:\n                st.pop("last_error", None)\n',
+     '            st.pop("last_error", None)\n'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_auditd.py" for n in range(3360, 3369)})
+# AUD1, its second review: the fold by time alone, ADM1's reading in fault unguarded. M3369–M3370.
+MUTANTS += [
+    ("M3369", "the fold by time alone: lines written after a real command push its text off the card (AUD1, review)",
+     _AUD,
+     '    ordered = sorted(rows, key=lambda r: (rank["sensitive"] if r.get("Sensitive") else\n'
+     '                                          rank["unreadable"] if r.get("AuditRead") else 0,\n',
+     "    ordered = sorted(rows, key=lambda r: (0,\n"),
+    ("M3370", "a fault of the expected sudo's reading stops the pass (AUD1, review)", "glorfindel/detection_rules.py",
+     "        except Exception as exc:  # the expected sudo: none set aside\n",
+     "        except ZeroDivisionError as exc:\n"),
+]
+TESTS.update({mid: "tests/unit/test_auditd.py" for mid in ("M3369", "M3370")})
 
 # L1Qs (#424): a mode per VM and a perimeter on the data subnet in the machine; I3G's seed 9 — a NIC
 # whose subnet couldn't be read named off the perimeter it sits behind —; the perimeter alone, which
@@ -9401,7 +9499,8 @@ MUTANTS += [
     ("M2996", "the first time writes again a pair put back once: two removals no longer deliberate (L1Qs)", RPB,
      _L1QS_DECIDE, '    return not r._mode(autonomy, vm, ref) == "human_only"\n'),
     ("M2997", "the first time retries at every pass a disappearance said and no worse (L1Qs)", RPB,
-     '    if (b.get("drift_alerted_at") and not r._worse(', "    if (False and not r._worse("),
+     "    if still_said(b, ref or vm, ip, r._alert_id(vm, rid, ip), ",
+     "    if False and still_said(b, ref or vm, ip, r._alert_id(vm, rid, ip), "),
     ("M2998", "the second time ignores what the first put back: its pair read whole, « reposé » never said, or "
               "said « ne le repose pas » (L1Qs)", R,
      '                                ref=snapshot["resource_id"], put_back=put_back)\n',
@@ -9448,6 +9547,129 @@ TESTS.update({mid: f"{_L1QR} {_L1QS_UNIT}test_a_perimeter_left_to_the_second_tim
                    f"blocks {INVARIANTS}" for mid in ("M2980", "M2981", "M2982")})
 
 
+# L1G (#461): an acknowledged drift card holds while none of its rules is written again or more gone — seed 29
+# (another VM's perimeter wrote the pair a merged entry names, its own rules still gone) and L1Qs' `xfail` (rules
+# aimed at an old address, named gone, then deleted). The check says each rule as it read it (`rules_seen`).
+# M3280–M3288.
+_L1G_REG = "tests/unit/test_invariant_regressions.py::"
+_L1G_UNIT = "tests/unit/test_reassert.py::"
+_L1G_SEED = f"{_L1G_REG}test_a_merged_block_whose_pair_another_vm_wrote_again_after_its_card_is_said"
+_L1G_FAKE = f"{_L1G_REG}test_an_acknowledged_drift_whose_pair_another_perimeter_wrote_is_said_on_the_fake"
+_L1G_SEEN = f"{_L1G_REG}test_the_check_reads_each_rule_of_the_entry_by_what_it_does"
+_L1G_ADDR = f"{_L1G_REG}test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone"
+_L1G_BACK = (f"{_L1G_UNIT}test_a_pair_written_again_after_an_acknowledged_card_ends_its_episode "
+             f"{_L1G_UNIT}test_a_pair_written_again_after_an_acknowledged_card_is_put_back_outside_human_only "
+             f"{_L1G_UNIT}test_the_first_time_decides_on_an_acknowledged_episode_as_the_second")
+_L1G_GONE = f"{_L1G_UNIT}test_a_rule_read_there_then_deleted_is_a_rule_more_gone"
+_L1G_WORSE = "                or any(was is not None and is_ is None for was, is_ in _read_both(said, now)))\n"
+MUTANTS += [
+    ("M3280", "a rule written again after an acknowledged card never ends its episode: another VM's perimeter "
+              "writes the pair, the VM's own rules still gone, unsaid (L1G, seed 29)", RSD,
+     "    return isinstance(said, dict) and any(was is None and is_ is not None for was, is_ in _read_both(said, now))\n",
+     "    return False\n"),
+    ("M3281", "a rule written again ends the episode of a pending card too: a card more at each return (L1G, L1Q)",
+     RSD, "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not _back(baseline, now) and drift_said(key, ip, sid))\n"),
+    ("M3282", "a rule the card's check never read read back: an NSG listed since, said anew (L1G)", RSD,
+     "    return [(before[k], after[k]) for k in sorted(before.keys() & after.keys())]\n",
+     "    return [(before.get(k), after.get(k)) for k in sorted(before.keys() | after.keys())]\n"),
+    ("M3283", "a rule the card read there, now deleted, read « no worse »: gone by name both times, unsaid (L1G, "
+              "L1Qs' xfail)", RSD, _L1G_WORSE, "                or False)\n"),
+    ("M3284", "a rule written again read as a rule more gone: a pending card replaced at each return (L1G)", RSD,
+     _L1G_WORSE, "                or any(was is None and is_ is not None for was, is_ in _read_both(said, now)))\n"),
+    ("M3285", "the block's check never says its rules as it read them: both changes unsaid (L1G)", VBL,
+     '        return {"rules_seen": seen} if seen else {}\n', "        return {}\n"),
+    ("M3286", "the block's check says its rules by name only: a rule turned or aimed elsewhere reads the same "
+              "(L1G)", VBL,
+     '                seen[f"{rg}/{nsg}/{n}".lower()] = None if r is None else hashlib.sha1(\n',
+     '                seen[f"{rg}/{nsg}/{n}".lower()] = None if r is None else "there" or hashlib.sha1(\n'),
+    ("M3287", "the block's check leaves the merged perimeter's pair out of what it read: written again by "
+              "another VM, unsaid (L1G, seed 29)", VBL,
+     '        if entry.get("nsg") and entry.get("rule") and "/" in entry["nsg"]:\n            named.append(',
+     '        if False:\n            named.append('),
+    ("M3288", "the card keeps no record of its rules as read: both changes unsaid (L1G)", RSD,
+     '"blocked": v.get("verified") is True, "rules": dict(v.get("rules_seen") or {})}\n',
+     '"blocked": v.get("verified") is True}\n'),
+]
+# L1G's review: `rules_seen` is the reassertion's alone — never in a cycle's outcome (what the model sees among
+# its past cycles) nor in the console's record of a manual action. M3385 (M3289 is U1G's).
+MUTANTS += [
+    ("M3385", "a block's rules as read reach the cycle's outcome and the manual action's record: what the model "
+              "sees among its past cycles changes (L1G's review)", "glorfindel/response/policy.py",
+     "    return {k: v for k, v in verification.items() if k not in _REASSERTION_ONLY}\n",
+     "    return dict(verification)\n"),
+]
+TESTS["M3385"] = ("tests/unit/test_agent_nodes.py::test_a_blocks_rules_as_read_never_reach_the_cycle_the_model_sees "
+                  "tests/unit/test_api.py::test_an_approved_blocks_check_records_no_rule_as_read")
+TESTS.update({
+    "M3280": f"{_L1G_BACK} {_L1G_SEED} {_L1G_FAKE}",
+    "M3281": _L1G_BACK,
+    "M3282": f"{_L1G_UNIT}test_a_rule_the_cards_check_never_read_is_never_read_back",
+    "M3283": f"{_L1G_GONE} {_L1G_ADDR}",
+    "M3284": f"{_L1G_BACK} {_L1G_GONE}",
+    "M3285": f"{_L1G_SEEN} {_L1G_SEED} {_L1G_FAKE} {_L1G_ADDR}",
+    "M3286": _L1G_SEEN,
+    "M3287": f"{_L1G_SEEN} {_L1G_SEED} {_L1G_FAKE}",
+    "M3288": f"{_L1G_BACK} {_L1G_GONE} {_L1G_SEED} {_L1G_ADDR}",
+})
+
+# U1G (#463): a VM Glorfindel holds shielded the whole orphan rule — another live VM, held for nothing,
+# cut at another of the deleted NIC's addresses, stayed cut (U1; L1Qs' seed 10 at 500). The rule is
+# narrowed to the held VMs' addresses: never deleted (the held VM's NIC recreated, it may be its
+# isolation), never narrowed past what was listed, a range or `*` kept whole. M3290–M3299.
+NRW = "glorfindel/providers/azure/narrow.py"
+_U1G_UNIT = "tests/unit/test_orphan_sweep.py::"
+_U1G_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off")
+_U1G_NARROWED = f"{_U1G_UNIT}test_a_rule_cutting_a_held_vm_and_another_is_narrowed_to_the_held_ones"
+_U1G_DONE = '            if out.get("narrowed") is True:\n                out = {**out, "removed": True}'
+MUTANTS += [
+    ("M3290", "a VM Glorfindel holds shields the whole orphan rule: the other VM it cuts stays cut (U1G, the "
+              "cause)", SWP, "                elif why_held and narrow is None:\n", "                elif why_held:\n"),
+    ("M3291", "a range read as an exact address: an orphan rule narrowed past what is read of it (U1G)", NRW,
+     "            ipaddress.ip_address(v.strip())\n", "            ipaddress.ip_network(v.strip(), strict=False)\n"),
+    ("M3292", "the write asks about every VM the rule cuts, the held one too: never narrowed (U1G)", SWP,
+     '        free = _freed(orphan.get("cut") or [], narrow)\n', '        free = orphan.get("cut") or []\n'),
+    ("M3293", "the write reads the turned rules again for every VM the rule cuts, the held one too: never "
+              "narrowed (U1G)", SWP, '_turned_still(self._network, {**orphan, "cut": free})\n',
+     "_turned_still(self._network, orphan)\n"),
+    ("M3294", "a rule changed since the listing narrowed all the same (U1G)", NRW,
+     '    if _enum_text(getattr(rule, "access", "")) != "deny" or now != sorted(v.strip() for v in listed or []):\n',
+     '    if _enum_text(getattr(rule, "access", "")) != "deny":\n'),
+    ("M3295", "the held VM's mode holds back the narrowing that changes nothing of it (U1G)", ORP,
+     '        victims = [_short(h.get("vm_id") or h.get("nic_id") or "") for h in freed]\n',
+     '        victims = [_short(h.get("vm_id") or h.get("nic_id") or "") for h in cut]\n'),
+    ("M3296", "in human_only, the card says to delete a rule that holds a held VM (U1G)", ORP,
+     '        if narrow:\n            delete = (f"az network nsg rule update',
+     '        if False:\n            delete = (f"az network nsg rule update'),
+    ("M3297", "a turned rule behind the deny for the held VM keeps the other VM cut (U1G)", SWP,
+     "                elif t := _turned_behind(free, side, turned, _chain(nic_nsg, nic_subnets)):\n",
+     "                elif t := _turned_behind(cut, side, turned, _chain(nic_nsg, nic_subnets)):\n"),
+    ("M3298", "the rule deleted instead of narrowed: the held VM's isolation goes with it (U1G)", SWP,
+     "        if narrow:\n            err = _narrow_rule(", "        if False:\n            err = _narrow_rule("),
+    ("M3299", "a rule narrowed said as not taken off: its card left pending (U1G)", ORP, _U1G_DONE,
+     '            if False:\n                out = {**out, "removed": True}'),
+]
+TESTS.update({
+    "M3290": f"{_U1G_SEQ} {_U1G_NARROWED}",
+    "M3291": f"{_U1G_UNIT}test_a_rule_with_a_range_is_kept_whole",
+    "M3292": _U1G_NARROWED,
+    "M3293": f"{_U1G_UNIT}test_a_turned_rule_of_the_held_vm_does_not_keep_the_other_cut",
+    "M3294": f"{_U1G_UNIT}test_a_rule_changed_since_the_listing_is_not_narrowed",
+    "M3295": f"{_U1G_UNIT}test_the_mode_that_counts_is_the_freed_vms",
+    "M3296": f"{_U1G_UNIT}test_in_human_only_the_card_says_to_narrow_never_to_delete",
+    "M3297": f"{_U1G_UNIT}test_a_turned_rule_of_the_held_vm_does_not_keep_the_other_cut",
+    "M3298": f"{_U1G_UNIT}test_the_rule_of_a_recreated_nic_keeps_the_isolation_and_frees_the_other {_U1G_NARROWED}",
+    "M3299": _U1G_NARROWED,
+})
+# U1G's 5.5 review: the sweep locks the held VM too — the narrowing reads the rule, then writes it
+# whole; a release of the held VM in between would see its deny written back. M3289.
+MUTANTS += [
+    ("M3289", "the sweep locks only the VMs a narrowing frees: a release of the held VM may run beside the "
+              "rewrite (U1G, 5.5 review)", ORP,
+     "            out = _remove(connector, o, locked)\n", "            out = _remove(connector, o, victims)\n"),
+]
+TESTS["M3289"] = f"{_U1G_UNIT}test_the_sweep_locks_the_held_vm_too_while_it_narrows"
 # SEC18 (N-05, #455): runs/ — one directory per writer, read-only for the others (eregion_core/
 # runs_layout.py). The mounts (compose, the Makefile's docker runs, H0's deployment), the writers'
 # own directories, the readers that read a file only where its writer writes it and say the rest,

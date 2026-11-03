@@ -389,3 +389,21 @@ def test_config_says_where_the_model_comes_from(client, monkeypatch):
     monkeypatch.setenv("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-5-5")
     llm = client.get("/api/config").json()["llm"]
     assert llm["model"] == "anthropic/claude-sonnet-5-5" and llm["source"] == "deployment"
+
+
+def test_an_approved_blocks_check_records_no_rule_as_read(monkeypatch):
+    """L1G (#461): a block approved from the console is checked as the agent checks its own; what
+    the check says for the reassertion alone (`rules_seen`) stays out of the manual action's
+    record, and out of what the approval returns."""
+    from glorfindel import cli
+    recorded = []
+    monkeypatch.setattr(cli, "_record_manual_action", lambda action, rid, out: recorded.append(out))
+    connector = MagicMock()
+    connector.verify_block_ip.return_value = {"verified": True, "method": "nsg_check",
+                                              "rules_seen": {"rg/nsg/r": "0f1e2d3c4b5a"}}
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"
+    out = api._verify_approved(connector, {"id": "e1"}, "block_suspicious_ip", rid, {"status": "blocked"},
+                               "203.0.113.9")
+    assert out["verified"] is True and "rules_seen" not in out
+    (rec,) = recorded
+    assert "rules_seen" not in rec and rec["verified"] is True

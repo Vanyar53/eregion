@@ -141,7 +141,7 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
 	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
-	orodruin-known orodruin-fingerprint watch-key glorfindel-host-watch-key \
+	orodruin-known orodruin-fingerprint watch-key glorfindel-host-watch-key harness-sign harness-verify \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment fault-rate \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
@@ -246,6 +246,7 @@ help:
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
 	@echo "  make orodruin-fingerprint                    L'empreinte de sa clé d'hôte, lue par Azure (ORO_SSH_FINGERPRINT)"
 	@echo "  make watch-key / glorfindel-host-watch-key   La clé publique de la watch (ici / H0), à épingler : EREGION_WATCH_KEY (SEC19)"
+	@echo "  make harness-sign                            Signe requirements/harness.json par ton identité (cosign keyless, SEC19)"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
 	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, annule le chaos, désalloue, ferme les fenêtres"
 	@echo "  make orodruin-exercise REQUEST=<id> [DRY_RUN=1]  Dagorlad : tire la demande de la console, l'affiche, fait taper"
@@ -400,6 +401,20 @@ report-eval:
 llm-compare:
 	$(if $(ATTEST),$(PYTHON) scripts/harness_attest.py --models $(MODELS) --runs $(or $(RUNS),3)$(if $(BASE), --base $(BASE)) --out requirements/harness.json,$(PYTHON) scripts/llm_smoke.py --models $(MODELS) --runs $(or $(RUNS),3))
 
+# SEC19 (R-13) : l'attestation signée par son auteur, sans clé (cosign keyless, ton identité OIDC : le
+# navigateur s'ouvre, et cosign demande avant de publier l'identité au journal de transparence de
+# sigstore). Après make llm-compare … ATTEST=1, dans la PR du verrou : la signature, son certificat
+# et la preuve du journal dans requirements/harness.json.sigstore.json, à commiter avec l'attestation.
+# Le CD de H0 la vérifie contre l'identité déclarée dans SA config (host.env), jamais le dépôt.
+harness-sign:
+	@python3 scripts/published_image.py install-cosign
+	@python3 scripts/published_image.py sign-blob requirements/harness.json
+
+# Ce que H0 en dira : make harness-verify SIGNER=<ton identité> ISSUER=<son émetteur> (les mêmes que host.env).
+harness-verify:
+	@test -n "$(SIGNER)" && test -n "$(ISSUER)" || { echo "SIGNER=<identité> ISSUER=<émetteur OIDC> : ceux de host.env (EREGION_HARNESS_SIGNER, EREGION_HARNESS_ISSUER)"; exit 2; }
+	@python3 scripts/published_image.py install-cosign
+	@python3 scripts/published_image.py verify-blob requirements/harness.json --identity "$(SIGNER)" --issuer "$(ISSUER)"
 
 # ── Glorfindel ────────────────────────────────────────────────────────────
 

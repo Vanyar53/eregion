@@ -4476,7 +4476,10 @@ MUTANTS += [
     ("M1659", "the provenance's subject name not read: another image's provenance accepted (CI3)", PIM,
      's.get("name") == reference(image) and ', ""),
     ("M1660", "cosign run without its pinned sha256 checked: an altered verifier trusted (CI3)", PIM,
-     "    if not cosign_ok(cosign):\n", "    if False:\n"),
+     "    if not cosign_ok(cosign):\n        raise Unverified(f\"cosign absent ou altéré ({cosign}) : il doit être "
+     "{COSIGN_VERSION}, sha256 {COSIGN_SHA256[:12]}…\")\n    ref = ",          # re-anchored (SEC19)
+     "    if False:\n        raise Unverified(f\"cosign absent ou altéré ({cosign}) : il doit être "
+     "{COSIGN_VERSION}, sha256 {COSIGN_SHA256[:12]}…\")\n    ref = "),
     ("M1661", "a downloaded cosign kept whatever its sha256 (CI3)", PIM,
      "    if hashlib.sha256(body).hexdigest() != COSIGN_SHA256:\n", "    if False:\n"),
     ("M1662", "the pulled image's commit label not read: another commit's image tagged as the release (CI3)", PIM,
@@ -9917,7 +9920,12 @@ TESTS["M3422"] = "tests/unit/test_reassert.py"
 # (N-03); the harness's attestation signed by its author, verified by H0's CD against the identity
 # its own config expects (R-13). M3240–M3259.
 WKEY = "eregion_core/watch_key.py"
+CDA = "infra/glorfindel-host/cd/eregion_cd.py"
 _SEC19_KEY = "tests/unit/test_watch_key.py"
+_SEC19_CD = ("tests/unit/test_host_cd.py::test_an_attestation_not_signed_by_the_maintainer_is_refused_as_if_absent "
+             "tests/unit/test_host_cd.py::test_without_a_signer_declared_on_h0_no_attestation_is_believed "
+             "tests/unit/test_host_cd.py::test_sigstore_out_of_reach_is_a_wait_never_a_deployment "
+             "tests/unit/test_host_cd.py::test_a_release_cannot_name_its_own_signer")
 MUTANTS += [
     ("M3240", "a watch key readable by others signs anyway (SEC19)", WKEY,
      '        if st.st_mode & 0o077:\n            raise KeyUnavailable(f"{path} is readable by others',
@@ -9956,9 +9964,28 @@ MUTANTS += [
      "  # n'est cru que signé par elle. Vide : refusé, et le refus dit le geste.\n"
      "  EREGION_WATCH_KEY: ${EREGION_WATCH_KEY:-}\n",
      "  # n'est cru que signé par elle. Vide : refusé, et le refus dit le geste.\n"),
+    ("M3254", "an attestation without its bundle believed (SEC19, R-13)", CDA,
+     '    att.write_bytes(body or b"")\n', '    att.write_bytes(body or b"")\n    if sig is None:\n        return\n'),
+    ("M3255", "the attestation's signer taken whoever it is (SEC19, R-13)", PIM,
+     '"--certificate-identity", identity,', '"--certificate-identity-regexp", ".*",'),
+    ("M3256", "a signature that does not hold said, and the lock deployed anyway (SEC19, R-13)", CDA,
+     '    except pim.Unverified as e:\n        raise Refused(f"{ATTESTATION} de {tag} refusée',
+     '    except pim.Unverified as e:\n        print(e)\n        return\n        raise Refused(f"{ATTESTATION} de {tag} refusée'),
+    ("M3257", "no signer declared on H0: the attestation believed unsigned (SEC19, R-13)", CDA,
+     "    if not signer or not issuer:\n        raise Refused(",
+     "    if not signer or not issuer:\n        return\n        raise Refused("),
+    ("M3258", "sigstore out of reach: the attestation believed (SEC19, R-13)", CDA,
+     "    except pim.Unavailable as e:\n        if e.detail:\n            print(e.detail)\n        tries = (state",
+     "    except pim.Unavailable as e:\n        return\n        if e.detail:\n            print(e.detail)\n        tries = (state"),
+    ("M3259", "an empty identity handed to cosign: no signer checked (SEC19, R-13)", PIM,
+     "    if not identity or not identity.strip() or any(c.isspace() for c in identity):\n",
+     "    if False:\n"),
 ]
 TESTS.update({**{f"M{n}": _SEC19_KEY for n in range(3240, 3254) if n != 3244},
-              "M3244": f"{_SEC19_KEY} tests/unit/test_watch_gate.py"})
+              "M3244": f"{_SEC19_KEY} tests/unit/test_watch_gate.py",
+              **{f"M{n}": _SEC19_CD for n in (3254, 3256, 3257, 3258)},
+              "M3255": f"tests/unit/test_published_image.py {_SEC19_CD}",
+              "M3259": "tests/unit/test_published_image.py"})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

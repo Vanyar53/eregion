@@ -31,7 +31,11 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      to be measured on H0); every check run of its commit
      completed, none red, the main one (lint + tests) and the image's (publish (glorfindel))
      among them (still running: wait for the next pass, said once; absent an hour: refused);
-  3. requirements/glorfindel.txt changed since what runs: requirements/harness.json holds two
+  3. requirements/glorfindel.txt changed since what runs: requirements/harness.json signed by the
+     maintainer (SEC19, R-13: cosign keyless, its bundle beside it, the identity and the issuer
+     H0's config expects — EREGION_HARNESS_SIGNER and EREGION_HARNESS_ISSUER in ~/eregion/.env,
+     never the repository; unsigned, another identity, a signature of another file: refused as
+     without an attestation), and it holds two
      passes of the harness for H0's model (H3) — the candidate on this lock (its sha256), the
      reference on the lock in service — 3 runs each, every case. Refused: a broken integration;
      a regression (a case right on every draw there, wrong on every draw here); any case losing
@@ -442,9 +446,65 @@ def h0_model(commit: str) -> str:
     return m.group(1) if m else ""
 
 
-def lock_guard(tag: str, commit: str, dep_commit: str, dep_ref: str = "") -> dict | None:
-    """A new lock is deployed only with the harness's attestation for it (M-3, H1), judged
-    against the lock in service (H3): what to say ({note, orange}), or Refused."""
+# SEC19 (R-13): who signs the harness's attestation, and through which OIDC issuer — H0's own
+# config (~/eregion/.env, pushed from host.env), never the repository: a release cannot name
+# its own signer. Unset: no attestation is believed, as if there were none.
+SIGNER_KEY, ISSUER_KEY = "EREGION_HARNESS_SIGNER", "EREGION_HARNESS_ISSUER"
+ATTESTATION_BUNDLE = ATTESTATION + pim.BUNDLE_SUFFIX
+
+
+def _show_bytes(commit: str, path: str) -> bytes | None:
+    res = subprocess.run(["git", "show", f"{commit}:{path}"], cwd=REPO, capture_output=True, check=False)
+    return res.stdout if res.returncode == 0 else None
+
+
+def signed_by(tag: str, commit: str, hint: str, state: dict | None = None) -> None:
+    """The attestation is believed only signed by the maintainer (SEC19, R-13): cosign keyless,
+    the identity and the issuer H0 expects, the signature covering exactly the file the release
+    carries. Unsigned, signed by another identity, or a signature of another file: Refused — the
+    lock's guard holds as without an attestation. Sigstore out of reach: a wait (an hour, then
+    refused), as for the images."""
+    signer, issuer = env_value(REPO / ".env", SIGNER_KEY), env_value(REPO / ".env", ISSUER_KEY)
+    held = f"la garde du verrou tient comme sans attestation : {hint}, puis make harness-sign"
+    if not signer or not issuer:
+        raise Refused(f"aucun signataire de l'attestation déclaré sur H0 ({SIGNER_KEY} et {ISSUER_KEY} dans "
+                      "host.env, puis make glorfindel-host-push) : l'attestation n'est crue que signée — "
+                      f"{held}")
+    work = CD_HOME / "harness-check"
+    work.mkdir(mode=0o700, parents=True, exist_ok=True)
+    att, bundle = work / "harness.json", work / ("harness.json" + pim.BUNDLE_SUFFIX)
+    for path in (att, bundle):
+        path.unlink(missing_ok=True)
+    body, sig = _show_bytes(commit, ATTESTATION), _show_bytes(commit, ATTESTATION_BUNDLE)
+    att.write_bytes(body or b"")
+    if sig is not None:
+        bundle.write_bytes(sig)
+    try:
+        pim.verify_blob(att, bundle, signer, issuer, COSIGN, runner=_run)
+    except pim.Unverified as e:
+        raise Refused(f"{ATTESTATION} de {tag} refusée : {discord_text(str(e))} — {held}", e.detail) from None
+    except pim.Unavailable as e:
+        if e.detail:
+            print(e.detail)
+        tries = (state if state is not None else {}).setdefault("unavailable", {})
+        key = f"{tag}:harness"
+        tries[key] = tries.get(key, 0) + 1
+        if tries[key] > UNAVAILABLE_PASSES:
+            raise Refused(f"la signature de {ATTESTATION} ne se vérifie pas depuis une heure : {discord_text(str(e))}",
+                          e.detail) from None
+        raise Quiet(f"{tag} : signature de l'attestation non vérifiée ({e}) ({tries[key]}/{UNAVAILABLE_PASSES})") from None
+    finally:
+        for path in (att, bundle):
+            path.unlink(missing_ok=True)
+    if state is not None:
+        state.get("unavailable", {}).pop(f"{tag}:harness", None)
+    print(f"{ATTESTATION} de {tag} : signée par l'identité attendue sur H0 ({pim.COSIGN_VERSION})")
+
+
+def lock_guard(tag: str, commit: str, dep_commit: str, dep_ref: str = "", state: dict | None = None) -> dict | None:
+    """A new lock is deployed only with the harness's attestation for it (M-3, H1), signed by the
+    maintainer (SEC19, ``signed_by``), judged against the lock in service (H3): what to say
+    ({note, orange}), or Refused."""
     if dep_commit and git("diff", "--quiet", dep_commit, commit, "--", LOCK, check=False).returncode == 0:
         return
     model = h0_model(commit)
@@ -456,6 +516,7 @@ def lock_guard(tag: str, commit: str, dep_commit: str, dep_ref: str = "") -> dic
     raw = git("show", f"{commit}:{ATTESTATION}", check=False)
     if raw.returncode != 0:
         raise Refused(f"{LOCK} a changé depuis ce qui tourne, sans attestation du harnais ({ATTESTATION}) : {hint}")
+    signed_by(tag, commit, hint, state)
     try:
         att = json.loads(raw.stdout)
         if not isinstance(att, dict):
@@ -1241,7 +1302,7 @@ def run_pass(check: bool = False, back_to: str = "") -> int:
         raise Quiet(f"{tag} tourne déjà")
     try:
         verify(tag, commit, dep_commit, state, dep_ref, back_to)
-        harness = lock_guard(tag, commit, dep_commit, dep_ref) or {}
+        harness = lock_guard(tag, commit, dep_commit, dep_ref, state) or {}
         rule, rule_said = tag_rule(tag)
         if rule != "held":     # SEC12: said, never a refusal (to measure: what GitHub shows without a token)
             title = (f"⚠️ {tag} : aucune règle du dépôt ne réserve son tag" if rule == "absent"

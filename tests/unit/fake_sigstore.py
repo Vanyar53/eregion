@@ -36,6 +36,17 @@ def match(claims):
         if claims.get(k) != v:
             return f"expected {k} to be {v!r}, got {claims.get(k)!r}"
     return ""
+if cmd == "verify-blob":
+    # SEC19 (R-13): a file signed keyless — its bundle names the signed bytes' sha256 and the signer.
+    import hashlib
+    bundle = json.loads(open(args[args.index("--bundle") + 1]).read())
+    if bundle.get("sha256") != hashlib.sha256(open(args[-1], "rb").read()).hexdigest():
+        sys.exit("Error: error verifying bundle: invalid signature when validating ASN.1 encoded signature")
+    why = match(bundle)
+    if why:
+        sys.exit(f"Error: none of the expected identities matched what was in the certificate: {why}")
+    print("Verified OK")
+    sys.exit(0)
 if cmd == "verify":
     claims = st.get("signed", {}).get(digest)
     why = "no signatures found" if claims is None else match(claims)
@@ -117,6 +128,13 @@ class Sigstore:
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines() if line.strip()]
+
+
+def blob_bundle(data: bytes, identity: str, issuer: str) -> str:
+    """SEC19: what `cosign sign-blob --bundle` writes, for the fake: the signed bytes' sha256 and
+    the signer's identity and issuer (a real bundle holds the signature, the certificate and the
+    transparency log's proof)."""
+    return json.dumps({"sha256": hashlib.sha256(data).hexdigest(), "identity": identity, "issuer": issuer})
 
 
 def envelope(statement_):

@@ -695,3 +695,87 @@ def test_the_pinned_syft_is_the_one_read_on_its_release():
     assert mod.SYFT_VERSION == "v1.51.1"
     assert mod.SYFT_SHA256 == "8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3"
     assert mod.SYFT_URL.endswith("/v1.51.1/syft_1.51.1_linux_amd64.tar.gz")
+
+
+# ── SEC19 (R-13): a file signed by a person, keyless ───────────────────────────────────
+
+ME = ("maintainer@example.invalid", "https://issuer.example.invalid")   # placeholders, never real
+
+
+def _blob(tmp_path, data=b'{"schema": "eregion.harness/2"}\n', signer=ME):
+    from .fake_sigstore import blob_bundle
+    f = tmp_path / "harness.json"
+    f.write_bytes(data)
+    if signer:
+        (tmp_path / "harness.json.sigstore.json").write_text(blob_bundle(data, *signer))
+    return f
+
+
+def test_a_file_signed_by_the_identity_expected_holds(pim, sig, tmp_path):
+    f = _blob(tmp_path)
+    pim.verify_blob(f, pim.bundle_of(f), *ME, sig.path)
+    (call,) = sig.calls()
+    assert call[:3] == ["verify-blob", "--bundle", str(pim.bundle_of(f))] and call[-1] == str(f)
+    assert call[call.index("--certificate-identity") + 1] == ME[0]
+    assert call[call.index("--certificate-oidc-issuer") + 1] == ME[1]
+
+
+@pytest.mark.parametrize("signer, said", [
+    (None, "n'est pas signée"),
+    (("someone@example.invalid", ME[1]), "une autre identité"),
+    ((ME[0], "https://other.example.invalid"), "une autre identité"),
+])
+def test_a_file_unsigned_or_signed_by_another_is_refused(pim, sig, tmp_path, signer, said):
+    f = _blob(tmp_path, signer=signer)
+    with pytest.raises(pim.Unverified, match=said):
+        pim.verify_blob(f, pim.bundle_of(f), *ME, sig.path)
+
+
+def test_a_signature_of_another_file_is_refused(pim, sig, tmp_path):
+    f = _blob(tmp_path)
+    f.write_bytes(b'{"schema": "eregion.harness/2", "changed": true}\n')
+    with pytest.raises(pim.Unverified, match="ne couvre pas ce fichier"):
+        pim.verify_blob(f, pim.bundle_of(f), *ME, sig.path)
+
+
+@pytest.mark.parametrize("identity, issuer", [("", ME[1]), ("a b@example.invalid", ME[1]), (ME[0], ""),
+                                              (ME[0], "http://issuer.example.invalid")])
+def test_without_an_identity_and_an_https_issuer_nothing_is_believed(pim, sig, tmp_path, identity, issuer):
+    """M3259: an empty identity would let cosign take any signer — refused before cosign runs."""
+    f = _blob(tmp_path)
+    with pytest.raises(pim.Unverified):
+        pim.verify_blob(f, pim.bundle_of(f), identity, issuer, sig.path)
+    assert sig.calls() == []
+
+
+def test_sigstore_out_of_reach_proves_nothing_either_way(pim, sig, tmp_path, monkeypatch):
+    f = _blob(tmp_path)
+    monkeypatch.setenv("FAKE_COSIGN_NETWORK", "1")
+    with pytest.raises(pim.Unavailable):
+        pim.verify_blob(f, pim.bundle_of(f), *ME, sig.path)
+
+
+def test_a_cosign_not_pinned_never_verifies_a_file(pim, sig, tmp_path, monkeypatch):
+    f = _blob(tmp_path)
+    monkeypatch.setattr(pim, "COSIGN_SHA256", "0" * 64)
+    with pytest.raises(pim.Unverified, match="altéré"):
+        pim.verify_blob(f, pim.bundle_of(f), *ME, sig.path)
+
+
+def test_signing_writes_the_bundle_beside_the_file_and_names_no_identity(pim, sig, tmp_path, capsys):
+    """Jonathan's gesture: cosign sign-blob --bundle, keyless — no identity passed, none written by
+    us (cosign asks, the browser opens); without --yes, cosign says the identity goes public."""
+    f = tmp_path / "harness.json"
+    f.write_text("{}\n")
+    seen = []
+    assert pim.sign_blob(f, sig.path, runner=lambda a: seen.append(a) or _done(a)) == 0
+    assert seen == [[str(sig.path), "sign-blob", "--bundle", str(tmp_path / "harness.json.sigstore.json"), str(f)]]
+    assert "--yes" not in seen[0] and "à commiter" in capsys.readouterr().out
+    assert pim.sign_blob(tmp_path / "absent.json", sig.path, runner=lambda a: _done(a)) == 1
+
+
+def test_the_command_line_verifies_a_file(pim, sig, tmp_path, capsys):
+    f = _blob(tmp_path)
+    assert pim.main(["verify-blob", str(f), "--identity", ME[0], "--issuer", ME[1], "--cosign", str(sig.path)]) == 0
+    assert pim.main(["verify-blob", str(f), "--identity", "x@example.invalid", "--issuer", ME[1],
+                     "--cosign", str(sig.path)]) == 1

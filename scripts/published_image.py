@@ -11,6 +11,8 @@ by its CD (infra/glorfindel-host/cd/eregion_cd.py), on the operator's machine fo
     published_image.py install-syft DEST                   syft (the SBOM), its archive pinned by its sha256
     published_image.py meta IMAGE --commit C               the workflow's names and labels ($GITHUB_OUTPUT)
     published_image.py pushed IMAGE --ref R                the workflow's push: R pushed, its digest said
+    published_image.py sign-blob FILE                      SEC19: FILE signed keyless (Jonathan), FILE.sigstore.json
+    published_image.py verify-blob FILE --identity I --issuer O   FILE signed by I through O
 
 What is trusted, and what is not (docs/operations.md, « Les images publiées ») :
 - **A registry tag is a hint, never a proof.** The workflow pushes ghcr.io/grootcyber/eregion-<image>
@@ -349,6 +351,67 @@ def verify(image: str, digest: str, commit: str, cosign: Path, slug: str = SOURC
         check_provenance(st, image, digest, commit, slug)
 
 
+# ── SEC19 (R-13): a file signed by a person, keyless ───────────────────────────────────
+# The harness's attestation (requirements/harness.json), signed by the maintainer's OIDC identity
+# (`make harness-sign`): its signature, its certificate and the transparency log's proof in one
+# bundle beside it. Who is expected, and by which issuer, comes from H0's config — never from here.
+BUNDLE_SUFFIX = ".sigstore.json"
+# What says that sigstore's trust root or the network did not answer — nothing proven, a wait. A
+# bundle is checked offline otherwise: any other failure is the file, its bundle or its signer.
+BLOB_UNREACHABLE = re.compile(r"TUF|tuf-repo-cdn|dial tcp|no such host|connection refused|i/o timeout"
+                              r"|TLS handshake|context deadline exceeded|timeout", re.I)
+ISSUER_RE = re.compile(r"https://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._~/-]*)?")
+
+
+def bundle_of(path: Path) -> Path:
+    return path.with_name(path.name + BUNDLE_SUFFIX)
+
+
+def verify_blob(path: Path, bundle: Path, identity: str, issuer: str, cosign: Path,
+                runner: Runner = run) -> None:
+    """`path` signed by `identity` (its certificate's subject) through `issuer` (its OIDC
+    issuer), the signature in `bundle` covering exactly these bytes; raises Unverified (refused,
+    said) or Unavailable (sigstore's trust root out of reach: a wait)."""
+    if not identity or not identity.strip() or any(c.isspace() for c in identity):
+        raise Unverified("aucune identité de signataire attendue (EREGION_HARNESS_SIGNER, dans la config de H0)")
+    if not ISSUER_RE.fullmatch(issuer or ""):
+        raise Unverified("aucun émetteur OIDC attendu, ou pas une URL https (EREGION_HARNESS_ISSUER, dans la config de H0)")
+    if not Path(bundle).is_file():
+        raise Unverified(f"{Path(path).name} n'est pas signée ({Path(bundle).name} absent)")
+    if not cosign_ok(cosign):
+        raise Unverified(f"cosign absent ou altéré ({cosign}) : il doit être {COSIGN_VERSION}, sha256 {COSIGN_SHA256[:12]}…")
+    res = runner([str(cosign), "verify-blob", "--bundle", str(bundle), "--certificate-identity", identity,
+                  "--certificate-oidc-issuer", issuer, "--timeout", COSIGN_TIMEOUT, str(path)])
+    if res.returncode == 0:
+        return
+    said = f"{res.stderr or ''}\n{res.stdout or ''}"
+    if res.returncode == TIMEOUT_CODE or BLOB_UNREACHABLE.search(said):
+        raise Unavailable("cosign n'a rien pu prouver (signature de l'attestation) : réseau, sigstore ou délai",
+                          _last(res))
+    raise Unverified(f"la signature de {Path(path).name} ne tient pas : signée par une autre identité, "
+                     "ou elle ne couvre pas ce fichier", _last(res))
+
+
+def sign_blob(path: Path, cosign: Path, runner: Runner | None = None) -> int:
+    """Jonathan's gesture: `path` signed keyless by his OIDC identity (a browser opens), the bundle
+    written beside it. cosign asks before publishing the identity in the transparency log."""
+    if not Path(path).is_file():
+        print(f"✗ {path} absent : make llm-compare … ATTEST=1 d'abord", file=sys.stderr)
+        return 1
+    if not cosign_ok(cosign):
+        print(f"✗ cosign absent ou altéré ({cosign}) : python3 scripts/published_image.py install-cosign",
+              file=sys.stderr)
+        return 1
+    bundle = bundle_of(Path(path))
+    argv = [str(cosign), "sign-blob", "--bundle", str(bundle), str(path)]
+    res = (runner or (lambda a: subprocess.run(a, check=False)))(argv)
+    if res.returncode != 0:
+        print(f"✗ cosign sign-blob a échoué (code {res.returncode}) : rien n'est signé", file=sys.stderr)
+        return 1
+    print(f"✓ {path} signée : {bundle} — à commiter avec elle, dans la PR du verrou")
+    return 0
+
+
 def install_cosign(dest: Path) -> int:
     """cosign, downloaded once, kept only if its sha256 is the pinned one."""
     if cosign_ok(dest):
@@ -505,7 +568,7 @@ def default_cosign() -> Path:
 def main(argv: list | None = None, runner: Runner = run) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("cmd", choices=["resolve", "verify", "fetch", "ids", "loaded", "install-cosign",
-                                   "install-syft", "meta", "pushed"])
+                                   "install-syft", "meta", "pushed", "sign-blob", "verify-blob"])
     p.add_argument("image", nargs="?", default="")
     p.add_argument("--commit", default="")
     p.add_argument("--digest", default="")
@@ -514,9 +577,17 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
     p.add_argument("--id", default="")
     p.add_argument("--expect", default="", help="loaded: the ids `ids` printed before the image left")
     p.add_argument("--cosign", default="")
+    p.add_argument("--identity", default="", help="verify-blob: the signer expected (never from the repository)")
+    p.add_argument("--issuer", default="", help="verify-blob: its OIDC issuer")
     a = p.parse_args(argv)
     cosign = Path(a.cosign) if a.cosign else default_cosign()
     try:
+        if a.cmd == "sign-blob":
+            return sign_blob(Path(a.image), cosign, None if runner is run else runner)
+        if a.cmd == "verify-blob":
+            verify_blob(Path(a.image), bundle_of(Path(a.image)), a.identity, a.issuer, cosign, runner)
+            print(f"✓ {a.image} : signée par l'identité attendue, la signature couvre ce fichier")
+            return 0
         if a.cmd == "install-cosign":
             return install_cosign(Path(a.image) if a.image else cosign)
         if a.cmd == "install-syft":

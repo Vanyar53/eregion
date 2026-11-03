@@ -218,7 +218,7 @@ annatar run annatar/scenarios/azure/account-creation-atomic.yaml  # R1 : un test
 #   #!/bin/<executor>. Le test est joué dans la VM par Run Command, puis son cleanup (toujours, même si la commande lève — rapport
 #   écrit, attack: ERROR). Cycle : état initial vérifié avant (départ propre exigé), effet prouvé juste après (sinon pas
 #   d'attack_started), état restauré après le cleanup (sinon le run est une erreur + commande de rattrapage affichée). La
-#   détection (detected/missed/unknown) est écrite dans runs/<injecteur>/<run_id>.json. Un moteur inconnu est refusé (pas de run vide).
+#   détection (detected/missed/unknown) est écrite dans runs/annatar/<run_id>.json. Un moteur inconnu est refusé (pas de run vide).
 #   Les deux moteurs écrivent aussi metrics.detection_latency_s (#157) : secondes entre attack_time (T0, l'appel de la
 #   commande) et la détection notée par Glorfindel, null si non détecté (annatar report <run_id> l'affiche). Ne compte
 #   qu'une détection du même TTP, sur la même VM (resource_id comparé sans la casse : la watch écrit le _ResourceId de
@@ -238,9 +238,9 @@ make glorfindel-host-fault-rate [DAYS=30] [JSON=1]   # sur H0 : les pannes prise
 make fault-rate [DAYS=30] [JSON=1]                   # le même taux, sur l'hôte de la watch seulement (ses runs/) ;
 #   ailleurs (Orodruin, un poste) chaque panne est « non mesurée » : les décisions n'y sont pas
 gothmog run vm-shutdown --dry-run            # la panne déclarée, sans appel Azure
-gothmog report <run_id>                      # runs/<injecteur>/<run_id>.json (même forme qu'Annatar)
+gothmog report <run_id>                      # runs/gothmog/<run_id>.json (même forme qu'Annatar)
 #   Depuis Orodruin, avec EREGION_EXERCISE_CHANNEL (#193, pas encore mesuré sur le banc) : à la fin
-#   de `annatar run` comme de `gothmog run`, le rapport du run part vers H0 (runs/<injecteur>/<run_id>.json dans
+#   de `annatar run` comme de `gothmog run`, le rapport du run part vers H0 (le blob runs/<run_id>.json dans
 #   le conteneur des fenêtres, sans droit nouveau), après la fermeture de sa fenêtre. La watch
 #   hébergée le tire dans son runs/ (une forme refusée n'est pas écrite, un rapport local jamais
 #   écrasé) : la page de son injecteur, dans la console, affiche son verdict. Un échec de publication est signalé
@@ -344,11 +344,11 @@ make glorfindel-host-campaign-report CAMPAIGN=<id>   # lit runs/glorfindel/campa
 #     docker exec eregion-watch python -m analysis.campaign_report runs/glorfindel/campaigns/<id>
 #   D-2 (#184) : le rapport se compare à la campagne précédente, choisie dans l'index. Pour y
 #   verser les campagnes passées (idempotent, aucun appel au modèle), sur la VM :
-#     docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
+#     docker exec eregion-watch python -m analysis.campaign_index --all runs/glorfindel/campaigns
 #   quand aucun rapport n'est en attente (le fil campaign-report écrit dans le même index
 #   chromadb) : la liste de hosted_report.ready doit être vide —
-#     docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/campaigns'))])"
-#   (en local : python -m analysis.campaign_index --all runs/campaigns ; docs/analysis.md)
+#     docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/glorfindel/campaigns'))])"
+#   (en local : python -m analysis.campaign_index --all runs/annatar/campaigns ; docs/analysis.md)
 annatar campaign plan --target <resource_id> [--llm]   # en local (banc) ; --llm pour le planner LLM
 annatar campaign run <campaign_id> --yes               # ratifie le budget/scope et exécute
 
@@ -399,7 +399,7 @@ GLORFINDEL_DECISION_DRAWS=3         # D-1 : tirages qui doivent s'accorder avant
 GLORFINDEL_READ_ONLY=1              # creds lecture seule (SP Reader) — mode observe-only ; toute valeur sauf vide/0/false/no/off = lecture seule
 GLORFINDEL_OWN_CALLERS=<id>,<id>    # AL1 : identités de Glorfindel sur Azure, en plus des claims de son jeton (jeton d'application : appid/azp et oid ; jeton d'utilisateur, `az login` : l'oid seul — l'appid y est celui de la CLI, commun au tenant, dit une fois) et d'AZURE_CLIENT_ID ; ses écritures (isolation, quarantaine, blocage) dans le journal d'activité ne s'escaladent pas, seulement sur une cible qui est à lui (NSG de quarantaine, règle qu'un état d'isolation ou de blocage nomme — un nom glorfindel-* seul ne suffit pas —, règle du client dont une isolation a décalé la priorité, NIC mise en quarantaine) — son identité sur une autre ressource s'escalade, critique. Glorfindel lancé sous l'identité d'un opérateur écarte aussi les écritures de cet opérateur sur les ressources de Glorfindel ; un seul principal pour Annatar et Glorfindel (option A de .envrc.example) écarte de même celles d'Annatar. Journaux d'Entra ID (C2) : rien n'est écarté sous ces identités, elles y sont marquées (acteur ou cible, critique) ; y ajouter l'objet de l'application de Glorfindel pour qu'un identifiant ajouté à son inscription soit marqué
 GLORFINDEL_DISCOVERY_RETENTION_H=8  # rétention d'une VM éteinte dans le registre avant éviction (défaut 8h)
-EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un run seul (runs/<injecteur>/<run_id>.json, #193) ; posé sur la watch, il démarre le thread campaign-report, qui tire les deux
+EREGION_EXERCISE_CHANNEL=https://…/exercises  # O1 : canal des fenêtres d'exercice (Orodruin publie, la watch hébergée lit) ; vide → fenêtres locales. Porte aussi les campagnes finies (campaigns/<id>/…, #167) et le rapport d'un run seul (le blob runs/<run_id>.json, tiré sur H0 dans runs/glorfindel/, #193) ; posé sur la watch, il démarre le thread campaign-report, qui tire les deux
 # Orodruin seulement (orodruin.env) : EREGION_CHANNEL_SCOPE (le conteneur, seule attribution hors du banc acceptée),
 # EREGION_MAX_INJECTIONS / EREGION_MAX_RUN_S (plafond du contrat), EREGION_BENCH_RG
 # Gothmog : EREGION_BENCH_WORKSPACE (Log Analytics du banc pour la sonde Heartbeat, défaut law-celebrimbor-amonsul)
@@ -1019,7 +1019,15 @@ fois. `make runs-migrate` la lance à la main, `make runs-survey` dit ce qui res
 - un fichier dont l'écrivain a déjà un fichier du même nom est laissé, dit : les deux sont gardés ;
 - **rien n'est jamais effacé** : un fichier est renommé (`os.rename`, son heure gardée — une fenêtre
   reste datée comme avant), un répertoire de l'ancienne disposition retiré seulement une fois vide ;
-- relancée, elle ne déplace plus rien.
+- relancée, elle ne déplace plus rien ;
+- **un répertoire d'écrivain qui est un lien** (ou un fichier) arrête tout, avant le moindre
+  déplacement (code 3) : monté, il donnerait sa cible à son écrivain. `RUNS_DIRS`, `ORO_DIRS` et
+  `deploy.sh` refusent de même de partir. Le geste : le retirer à la main (`rm`, jamais à travers
+  lui), puis relancer. Plus bas, un lien ou un tube est laissé, dit, jamais suivi ; un fichier est
+  déplacé par un lien dur puis l'ancien nom retiré — jamais par-dessus ce qui est là ;
+- quand l'ancienne disposition contient quelque chose (`python3 -m eregion_core.runs_layout
+  pending runs`), `make runs-migrate` et `deploy.sh` arrêtent d'abord `watch`, `war-room` et
+  `bot` : un fichier qu'ils écriraient pendant ce temps resterait de côté.
 
 Pourquoi déplacer plutôt que lire l'ancienne disposition ou l'abandonner : lire à plat garderait ce que
 SEC18 retire (un fichier à plat ne dit pas qui l'a écrit) ; l'abandonner ferait perdre l'histoire que

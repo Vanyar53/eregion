@@ -128,8 +128,18 @@ start() {
   # no service mounts the whole of runs/ — and those directories made as the operator. Nothing is
   # deleted; what is not told without ambiguity is left and said. A reference from before SEC18
   # has no runs_layout: its compose mounts runs/ whole, nothing to move.
+  # A writer's directory that is a link (or a file) is never mounted: docker would resolve it on the
+  # host. The services are stopped first when the former layout holds something to move.
   if [ -f eregion_core/runs_layout.py ]; then
-    python3 -m eregion_core.runs_layout migrate runs || die "runs/ : la migration de SEC18 a échoué — rien n'est démarré (docs/operations.md, « Le redéploiement de SEC18 »)"
+    local d
+    for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do
+      { [ ! -L "$d" ] && { [ ! -e "$d" ] || [ -d "$d" ]; }; } \
+        || die "$d n'est pas un répertoire (un lien ?) : rien n'est démarré — le retirer à la main (SEC18)"
+    done
+    if python3 -m eregion_core.runs_layout pending runs; then
+      docker compose --profile bot stop watch war-room bot || true
+    fi
+    python3 -m eregion_core.runs_layout migrate runs || die "runs/ : la migration de SEC18 a échoué — rien n'est démarré (docs/operations.md, « runs/ : un répertoire par écrivain — le redéploiement coordonné »)"
   fi
   docker compose --profile bot up -d watch war-room bot
 }

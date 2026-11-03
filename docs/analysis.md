@@ -86,7 +86,7 @@ H0 a tout cela. C'est donc là que le rapport s'écrit (option B, décidée le 2
 **Ce qu'Orodruin publie.** Avec `EREGION_EXERCISE_CHANNEL`, à la fin de `campaign run`, il
 publie la campagne dans le conteneur `exercises`, celui des fenêtres
 (`eregion_core/exercise_channel.py`, `publish_campaign`). Il publie deux sortes de fichiers :
-- `campaigns/<id>/runs/<injecteur>/<run_id>.json`, le rapport de chaque run, qui porte `attack_time` ;
+- le blob `campaigns/<id>/runs/<run_id>.json`, le rapport de chaque run (lu dans `runs/annatar/`), qui porte `attack_time` ;
 - `campaigns/<id>/manifest.json`, en dernier.
 
 Il ne publie rien d'autre : ni `_debug.jsonl`, ni `_signals.jsonl`, ni un autre run. Il ne
@@ -108,11 +108,11 @@ runs sans fin : il renvoie à `make campaign-report`.
 
 **Un run seul (#193, 26/10 ; code, tests et mutants M240–M246, pas encore mesuré sur le
 banc).** `annatar run` et `gothmog run` publient aussi leur rapport, à la fin du run, après la
-fermeture de la fenêtre : `runs/<injecteur>/<run_id>.json`, dans le même conteneur, sans droit de plus
+fermeture de la fenêtre : le blob `runs/<run_id>.json`, dans le même conteneur, sans droit de plus
 (`publish_run`). Un échec est signalé, jamais levé. Le thread `campaign-report` le tire à chaque
-passage vers `runs/<injecteur>/<run_id>.json` sur H0, où la console de l'atelier le lit (`pull_runs`) :
+passage vers `runs/glorfindel/<run_id>.json` sur H0 (le répertoire de la watch, SEC18), où la console de l'atelier le lit (`pull_runs`) :
 seulement un nom simple, et un rapport qui passe `run_report_refusal` (H-1). Il n'écrit jamais
-par-dessus un rapport que H0 n'a pas tiré lui-même : un marqueur `runs/.pulled-runs/<run_id>`
+par-dessus un rapport que H0 n'a pas tiré lui-même : un marqueur `runs/glorfindel/.pulled-runs/<run_id>`
 dit lesquels viennent du canal. Un rapport refusé n'est pas écrit, et la raison est dite une
 fois. Une campagne ne change pas : ses runs ne partent qu'avec elle, sous `campaigns/<id>/`.
 
@@ -123,7 +123,7 @@ fois. Une campagne ne change pas : ses runs ne partent qu'avec elle, sous `campa
    manifeste, un marqueur `.pulled`. Si le listage échoue, aucune campagne n'est due à ce
    tirage ; si un fichier d'une campagne échoue, cette campagne-là n'est pas due ;
 2. retient les campagnes prêtes (`ready`) : tirées du canal (le marqueur `.pulled`), `done`,
-   sans `report.md`, avec le `runs/<injecteur>/<run_id>.json` de chaque scénario exécuté, et des essais
+   sans `report.md`, avec le `runs/<run_id>.json` (sous la campagne tirée) de chaque scénario exécuté, et des essais
    encore permis. Une campagne locale du même dossier (une watch locale avec le canal posé)
    n'est jamais écrite par le thread. Un scénario en erreur peut avoir un `run_id` sans
    rapport : il n'est pas attendu, sinon la campagne n'aurait jamais de rapport. Un `run_id`
@@ -254,11 +254,11 @@ fichiers qui porte une `action` et qui remplit la règle de #157 (`annatar/runne
 
 La fin de la fenêtre est sa fin (ou son expiration, la plus tôt des deux) plus 15 min
 (`eregion_core/exercise.py`, `last_moment`, la borne de `live`). La fenêtre est lue dans
-`EREGION_EXERCISES_DIR`, sinon dans `<runs>/exercises`. La watch, elle, lit `./runs/exercises` :
-c'est le même dossier quand elle tourne sur `runs` depuis le dépôt, comme sur H0. De même, elle
-écrit ses `watch-*_debug.jsonl` dans `./runs`, quel que soit le `runs_dir` qu'on lui donne
-(`glorfindel/agent.py`), alors que le thread du rapport les cherche dans ce `runs_dir` : les deux
-coïncident quand la watch tourne sur `runs`, comme sur H0. Sans `attack_time` fini, sans
+`EREGION_EXERCISES_DIR`, sinon là où cet hôte la tient : le répertoire de la campagne
+(`runs/glorfindel/exercises` sur H0, où la watch tire les fenêtres ; `runs/annatar/exercises` pour
+une campagne d'Annatar sur ce poste), puis ceux des autres écrivains (SEC18, `window_paths`). La
+watch écrit ses `watch-*_debug.jsonl` dans son répertoire, `runs/glorfindel/`, et le rapport les y
+cherche, à côté du répertoire de la campagne (`watch_dir`). Sans `attack_time` fini, sans
 `resource_id` ou sans fenêtre lisible, aucune décision n'est rattachée : le rapport ne devine
 pas. Une décision d'une autre VM, ou vue hors de la fenêtre, ne compte jamais. Seul un run dont
 la décision est cherchée (exécuté, détecté ou de détection inconnue) en prend une dans les
@@ -473,7 +473,7 @@ maintenant l'état et le début de sa campagne, ainsi que sa VM. Un rapport écr
 indexés sans eux : ses runs ne sont jamais choisis. La commande les ajoute :
 
 ```bash
-python -m analysis.campaign_index --all runs/campaigns      # chaque campagne done ou aborted
+python -m analysis.campaign_index --all runs/glorfindel/campaigns      # chaque campagne done ou aborted (H0 ; en local, runs/annatar/campaigns)
 python -m analysis.campaign_index runs/glorfindel/campaigns/<id> …     # celles-ci
 ```
 
@@ -493,8 +493,8 @@ avec ce code :
 ```bash
 make glorfindel-host-ssh
 # aucun rapport en attente ? (liste vide attendue)
-docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/campaigns'))])"
-docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
+docker exec eregion-watch python -c "from pathlib import Path; from analysis import hosted_report as h; print([p.name for p in h.ready(Path('runs/glorfindel/campaigns'))])"
+docker exec eregion-watch python -m analysis.campaign_index --all runs/glorfindel/campaigns
 ```
 
 - **Quand aucun rapport n'est en attente.** Le fil `campaign-report` de la watch écrit dans le

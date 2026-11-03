@@ -258,3 +258,81 @@ def test_the_command_line(root, capsys):
     assert L.main(["migrate", str(root)]) == 0
     assert "2 laissé(s)" in capsys.readouterr().out
     assert L.main([]) == 2
+
+
+
+# ── The relecture of SEC18: links, kinds, collisions ────────────────────────────────────
+
+def test_a_writers_directory_that_is_a_link_stops_the_migration_before_anything_moves(root, tmp_path):
+    """M3330: runs/annatar pointing elsewhere — a mount would give its writer the link's target.
+    Nothing is moved, nothing made through it, the command fails and says the gesture."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    root.mkdir()
+    (root / "annatar").symlink_to(elsewhere)
+    (root / "x_signals.jsonl").write_text("{}\n")
+    with pytest.raises(L.Unsafe):
+        L.migrate(root, say=lambda m: None)
+    assert L.main(["migrate", str(root)]) == 3
+    assert list(elsewhere.iterdir()) == [] and (root / "x_signals.jsonl").is_file()
+    assert L.unsafe(root) == [root / "annatar"]
+
+
+def test_a_move_never_crosses_a_link_below_a_writers_directory(root, tmp_path):
+    """M3331: runs/glorfindel/campaigns a link: a campaign's report is never moved through it."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / "glorfindel").mkdir(parents=True)
+    (root / "glorfindel" / "campaigns").symlink_to(elsewhere)
+    (root / "campaigns" / "C1").mkdir(parents=True)
+    (root / "campaigns" / "C1" / "report.md").write_text("# r\n")
+    moved, left = L.migrate(root, say=lambda m: None)
+    assert list(elsewhere.iterdir()) == [] and (root / "campaigns" / "C1" / "report.md").is_file()
+    assert any("jamais traversé" in why for _, why in left)
+
+
+def test_a_link_deep_in_the_former_layout_is_left_and_said(root, tmp_path):
+    """M3339: below the top too, what is no regular file is never followed nor moved."""
+    target = tmp_path / "secret"
+    target.write_text("kept")
+    c = root / "campaigns" / "C1"
+    c.mkdir(parents=True)
+    (c / "manifest.json").symlink_to(target)
+    (c / "scenario.yaml").write_text("x")
+    moved, left = L.migrate(root, say=lambda m: None)
+    assert (root / "annatar" / "campaigns" / "C1" / "scenario.yaml").is_file()
+    assert not os.path.lexists(root / "annatar" / "campaigns" / "C1" / "manifest.json")
+    assert [p.name for p, _ in left] == ["manifest.json"] and target.read_text() == "kept"
+
+
+def test_the_former_layout_pending_says_when_to_stop_the_services(root):
+    root.mkdir()
+    for w in L.WRITERS:
+        (root / w).mkdir()
+    assert L.pending(root) is False and L.main(["pending", str(root)]) == 1
+    (root / "manual_actions.jsonl").write_text("{}\n")
+    assert L.pending(root) is True and L.main(["pending", str(root)]) == 0
+
+
+def test_a_report_in_annatars_directory_is_an_attack_and_in_gothmogs_a_fault(root):
+    """M3336: Annatar's directory naming its injector but saying ``fault`` would count as a fault
+    of Gothmog's — refused; likewise an attack in Gothmog's."""
+    a, g = root / "annatar" / "x.json", root / "gothmog" / "y.json"
+    assert L.report_refusal(a, {"metrics": {"injector": "annatar", "kind": "fault"}})
+    assert L.report_refusal(g, {"metrics": {"injector": "gothmog", "kind": "technique"}})
+    assert not L.report_refusal(a, {"metrics": {"injector": "annatar", "kind": "technique"}})
+    # M3233: the injector it names, whatever its kind
+    assert "un rapport de gothmog" in L.report_refusal(a, {"metrics": {"injector": "gothmog", "kind": "technique"}})
+    assert not L.report_refusal(g, {"metrics": {"injector": "gothmog"}})
+
+
+def test_a_window_in_an_injectors_directory_names_that_injector(root):
+    """M3337: a window of Gothmog's (a fault) in Annatar's directory is never believed — said."""
+    start = datetime.now(timezone.utc)
+    exercise.open_window("g1", injector="gothmog", kind="fault", experiment="vm-shutdown",
+                         targets=["/x/vm"], directory=root / "annatar" / "exercises")
+    exercise.open_window("a1", injector="annatar", kind="technique", experiment="T1110.001",
+                         targets=["/x/vm"], now=start)
+    got = exercise.load_windows(seen=root.parent / "seen.json")
+    assert [w["run_id"] for w in got] == ["a1"]
+    assert L.window_refusal_of(root / "annatar" / "exercises" / "g1.json", {"injector": "gothmog", "kind": "fault"})

@@ -411,7 +411,9 @@ def load_windows(directory: Path | None = None, *, now: datetime | None = None,
                           now, seen)
     out = []
     for path, w, declared in read:
-        why = window_refusal(w, now, declared) or unseen.get(str(path), "")
+        # SEC18: an injector's directory holds that injector's windows only.
+        why = (window_refusal(w, now, declared) or unseen.get(str(path), "")
+               or runs_layout.window_refusal_of(path, w))
         if why:
             if _refused.get(str(path)) != why:
                 _refused[str(path)] = why

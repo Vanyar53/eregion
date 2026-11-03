@@ -216,3 +216,51 @@ def test_the_console_reads_each_line_from_its_writers_directory_only(tmp_path, m
     out = capsys.readouterr().out
     for name in ("console/forged_signals.jsonl", "annatar/forged_debug.jsonl", "glorfindel/manual_actions.jsonl"):
         assert out.count(name) == 1, (name, out)
+
+
+
+def _shell(text: str, home: Path):
+    import subprocess
+    script = text.replace("$$", "$").rstrip().removesuffix("&&")
+    return subprocess.run(["bash", "-c", script], cwd=home, env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("name", ["RUNS_DIRS", "ORO_DIRS"])
+def test_a_writers_directory_that_is_a_link_is_never_made_nor_mounted(name, tmp_path):
+    """M3333, M3334: the workstation's and Orodruin's: a link in place of runs/annatar stops the
+    command before docker — its target never written."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "annatar").symlink_to(elsewhere)
+    res = _shell(_variable(name), tmp_path)
+    assert res.returncode != 0 and "lien" in res.stderr, res
+    assert list(elsewhere.iterdir()) == []
+    (tmp_path / "runs" / "annatar").unlink()
+    assert _shell(_variable(name), tmp_path).returncode == 0 and (tmp_path / "runs" / "annatar").is_dir()
+
+
+def test_h0_refuses_a_writers_directory_that_is_a_link(tmp_path):
+    """M3335: deploy.sh holds each writer's directory as a real one before anything starts, and
+    stops the services before moving a former layout."""
+    start = DEPLOY.split("\nstart() {", 1)[1].split("\n}", 1)[0]
+    check = start.index('[ ! -L "$d" ]')
+    assert check < start.index("python3 -m eregion_core.runs_layout migrate runs")
+    assert all(f"runs/{w}" in start for w in runs_layout.WRITERS)
+    assert start.index("runs_layout pending runs") < start.index("migrate runs ||")
+    assert "stop watch war-room bot" in start
+
+
+def test_the_console_holds_a_window_against_its_directory(tmp_path, monkeypatch):
+    """M3338: a window of Gothmog's in Annatar's directory is shown refused, never counted."""
+    pytest.importorskip("fastapi")
+    import eregion_console.api as api
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("EREGION_EXERCISES_DIR", raising=False)
+    d = tmp_path / "runs" / "annatar" / "exercises"
+    d.mkdir(parents=True)
+    (d / "g1.json").write_text(json.dumps({"run_id": "g1", "injector": "gothmog", "kind": "fault",
+                                           "start": "2026-11-03T10:00:00+00:00", "targets": []}))
+    [w] = api._read_windows()
+    assert "jamais crue" in w["refusal"] and api._held_windows() == {}

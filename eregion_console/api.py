@@ -2404,10 +2404,11 @@ def _held_windows() -> dict[str, dict]:
     believed, refused or purged (its tombstone): what an attack run's T0 is confronted with, as
     the campaign report does (SEC9, SEC15: ``indicators.t0_confronted``). Read only, as the watch
     reads runs/."""
+    from eregion_core import runs_layout
     from eregion_core.exercise import windows_dirs
     return {path.stem: w for directory in windows_dirs(_RUNS) if directory.is_dir()   # SEC18
             for path in sorted(directory.glob("*.json"))
-            if isinstance(w := runs_reader.read_json(path), dict)}
+            if isinstance(w := runs_reader.read_json(path), dict) and not runs_layout.window_refusal_of(path, w)}
 
 
 def _read_windows() -> list[dict]:
@@ -2416,6 +2417,7 @@ def _read_windows() -> list[dict]:
     without a run_id and a start (unreadable, or a purged window's tombstone) is skipped; the
     targets are kept only as a list of strings. ``refusal``: why Glorfindel does not believe
     the window, as written (``window_refusal``, H-1) — it is shown, never hidden."""
+    from eregion_core import runs_layout
     from eregion_core.exercise import window_refusal, windows_dirs
     now = datetime.now(timezone.utc)
     out = []
@@ -2431,7 +2433,8 @@ def _read_windows() -> list[dict]:
             targets = w.get("targets") if isinstance(w.get("targets"), list) else []
             out.append({**w, "run_id": str(w["run_id"]),
                         "targets": [t.lower() for t in targets if isinstance(t, str)],
-                        "refusal": window_refusal(w, now, declared)})
+                        # SEC18: held against its directory first
+                        "refusal": runs_layout.window_refusal_of(path, w) or window_refusal(w, now, declared)})
     return out
 
 

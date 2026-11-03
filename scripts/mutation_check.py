@@ -9226,9 +9226,9 @@ MUTANTS += [
      "        if False:\n            console.print(\n                \"[yellow]Detection not measured — no return channel (EREGION_WATCH_CHANNEL) nor"),
     ("M3233", "a report in Annatar's directory may say Gothmog: a forged fault counted (SEC18)", LAYOUT,
      "    if said != writer:\n        return f\"un rapport de", "    if False:\n        return f\"un rapport de"),
-    ("M3234", "the migration writes over a file its writer already has: one lost (SEC18)", LAYOUT,
-     "    if not os.path.lexists(dst):\n        dst.parent.mkdir(parents=True, exist_ok=True)\n",
-     "    if True:\n        dst.parent.mkdir(parents=True, exist_ok=True)\n"),
+    ("M3234", "the migration's collision never said as one: the twin kept unexplained (SEC18)", LAYOUT,
+     "    except FileExistsError:\n        left.append((src, f\"{dst} existe déjà",            # re-anchored (review)
+     "    except FileNotFoundError:\n        left.append((src, f\"{dst} existe déjà"),
     ("M3235", "the migration gives a report the watch pulled to Annatar (SEC18)", LAYOUT,
      "    if (root / _PULLED_RUNS / path.stem).exists():\n        return GLORFINDEL\n",
      "    if False:\n        return GLORFINDEL\n"),
@@ -9284,6 +9284,39 @@ MUTANTS += [
      "    if channel_url():\n        return None\n    publisher = LocalVerdicts(", "    publisher = LocalVerdicts("),
 ]
 TESTS.update({**{f"M{n}": _VERDICTS for n in range(3321, 3330)}, "M3320": _SEC18_MOUNTS})
+
+
+# SEC18, its review: a writer's directory that is a link, the kind of a report and of a window, the
+# moves that never cross nor overwrite. M3330–M3339.
+MUTANTS += [
+    ("M3330", "the migration goes on through a writer's directory that is a link (SEC18, review)", LAYOUT,
+     "    bad = unsafe(root)\n", "    bad = []\n"),
+    ("M3331", "a move crosses a link below a writer's directory (SEC18, review)", LAYOUT,
+     "        if not _real_dir(d):\n            return f\"{d} n'est pas un répertoire", "        if False:\n            return f\"{d} n'est pas un répertoire"),
+    ("M3332", "a move writes over what is there (SEC18, review)", LAYOUT,
+     "        os.link(src, dst, follow_symlinks=False)\n", "        os.replace(src, dst)\n        return 1\n"),
+    ("M3333", "the workstation makes and mounts a writer's directory that is a link (SEC18, review)", MAKE,
+     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \\\n"
+     "\t{ test ! -L \"$$d\" && { test ! -e \"$$d\" || test -d \"$$d\"; }; } \\\n",
+     "RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \\\n"
+     "\t{ true; } \\\n"),
+    ("M3334", "Orodruin mounts a writer's directory that is a link (SEC18, review)", MAKE,
+     'ORO_DIRS       = for d in $$HOME/runs/annatar $$HOME/runs/gothmog $$HOME/runs/orodruin; do { test ! -L "$$d" && { test ! -e "$$d" || test -d "$$d"; }; }',
+     'ORO_DIRS       = for d in $$HOME/runs/annatar $$HOME/runs/gothmog $$HOME/runs/orodruin; do { true; }'),
+    ("M3335", "H0 starts with a writer's directory that is a link (SEC18, review)", "infra/glorfindel-host/deploy.sh",
+     '      { [ ! -L "$d" ] && { [ ! -e "$d" ] || [ -d "$d" ]; }; } \\\n', "      true \\\n"),
+    ("M3336", "a fault in Annatar's directory counted as Gothmog's (SEC18, review)", LAYOUT,
+     "    if kind != _KIND[writer]:\n", "    if False:\n"),
+    ("M3337", "the watch believes a window of another injector in an injector's directory (SEC18, review)",
+     "eregion_core/exercise.py", "               or runs_layout.window_refusal_of(path, w))\n", "               )\n"),
+    ("M3338", "the console shows a window of another injector as believed (SEC18, review)", CON,
+     '"refusal": runs_layout.window_refusal_of(path, w) or window_refusal(w, now, declared)})',
+     '"refusal": window_refusal(w, now, declared)})'),
+    ("M3339", "a link deep in the former layout followed and moved (SEC18, review)", LAYOUT,
+     "    if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):\n", "    if False:\n"),
+]
+TESTS.update({**{f"M{n}": _SEC18_LAYOUT for n in (3330, 3331, 3332, 3336, 3337, 3339)},
+              **{f"M{n}": _SEC18_MOUNTS for n in (3333, 3334, 3335, 3338)}})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

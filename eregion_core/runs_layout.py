@@ -191,6 +191,26 @@ def report_refusal(path, report) -> str:
     said = m.get("injector") or (GOTHMOG if m.get("kind") == "fault" else ANNATAR)
     if said != writer:
         return f"un rapport de {said!s:.40} dans le répertoire de {writer} : jamais lu (SEC18)"
+    # What the readers count it as (run_report.kind_of): Annatar's runs are attacks, Gothmog's faults.
+    kind = m["kind"] if m.get("kind") in ("technique", "fault") else ("fault" if said == GOTHMOG else "technique")
+    if kind != _KIND[writer]:
+        return f"un rapport « {kind} » dans le répertoire de {writer} : jamais lu (SEC18)"
+    return ""
+
+
+_KIND = {ANNATAR: "technique", GOTHMOG: "fault"}
+
+
+def window_refusal_of(path, window) -> str:
+    """Why an exercise window is not believed from where it is — "" when it is (SEC18): in an
+    injector's directory, a window must name that injector, and its kind be that injector's; the
+    watch's directory holds the windows it pulled, of either."""
+    writer = writer_of(path)
+    if writer not in INJECTORS or not isinstance(window, dict):
+        return ""
+    if window.get("injector") != writer or window.get("kind") != _KIND[writer]:
+        return (f"une fenêtre de {str(window.get('injector'))[:40]} ({str(window.get('kind'))[:20]}) "
+                f"dans le répertoire de {writer} : jamais crue (SEC18)")
     return ""
 
 
@@ -356,20 +376,65 @@ def _plan(root: Path) -> tuple[list[tuple[Path, Path]], list[tuple[Path, str]]]:
     return moves, left
 
 
-def _move(src: Path, dst: Path, left: list) -> int:
-    """Rename ``src`` to ``dst``; a directory onto an existing one, entry by entry. A ``dst``
-    already there is never replaced: ``src`` is left, said. Returns the entries moved."""
-    if not os.path.lexists(dst):
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(src, dst)
-        return 1
-    if src.is_dir() and not src.is_symlink() and dst.is_dir() and not dst.is_symlink():
-        n = sum(_move(src / e.name, dst / e.name, left) for e in _entries(src))
+def _real_dir(path: Path) -> bool:
+    """``path`` is a directory itself — by lstat: never a link to one."""
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def _parents_hold(root: Path, dst: Path) -> str:
+    """Make ``dst``'s parents under ``root``, each a real directory — "" when they are, else why:
+    a link (or anything else) in the way is never created through nor crossed."""
+    d = root
+    for part in dst.parent.relative_to(root).parts:
+        d = d / part
+        if not os.path.lexists(d):
+            try:
+                os.mkdir(d)
+            except FileExistsError:
+                pass
+        if not _real_dir(d):
+            return f"{d} n'est pas un répertoire (un lien ?) : jamais traversé"
+    return ""
+
+
+def _move(src: Path, dst: Path, left: list, root: Path) -> int:
+    """Move ``src`` to ``dst``, never through a link, never over what is there: a regular file by
+    a hard link then the old name removed (``os.link`` refuses an existing ``dst``: the two are
+    kept, ``src`` left and said); a directory entry by entry; anything else (a link, a pipe) left
+    where it is, said. Returns the entries moved."""
+    try:
+        st = os.lstat(src)
+    except OSError as e:
+        left.append((src, f"non déplacé ({e.strerror or e})"))
+        return 0
+    if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+        left.append((src, "pas un fichier ordinaire (un lien, un tube) : jamais suivi"))
+        return 0
+    why = _parents_hold(root, dst)
+    if why:
+        left.append((src, why))
+        return 0
+    if stat.S_ISDIR(st.st_mode):
+        if os.path.lexists(dst) and not _real_dir(dst):
+            left.append((src, f"{dst} existe et n'est pas un répertoire : les deux sont gardés"))
+            return 0
+        if not os.path.lexists(dst):
+            os.mkdir(dst)
+            os.utime(dst, (st.st_atime, st.st_mtime))
+        n = sum(_move(src / e.name, dst / e.name, left, root) for e in _entries(src))
         _rmdir_empty(src)
         return n
-    left.append((src, f"{dst} existe déjà : les deux sont gardés, celui-ci n'est jamais lu — "
-                      "les comparer, puis garder l'un"))
-    return 0
+    try:
+        os.link(src, dst, follow_symlinks=False)
+    except FileExistsError:
+        left.append((src, f"{dst} existe déjà : les deux sont gardés, celui-ci n'est jamais lu — "
+                          "les comparer, puis garder l'un"))
+        return 0
+    os.unlink(src)
+    return 1
 
 
 def _rmdir_empty(path: Path) -> None:
@@ -379,19 +444,50 @@ def _rmdir_empty(path: Path) -> None:
         pass
 
 
+class Unsafe(OSError):
+    """A writer's directory of runs/ that is no real directory (a link, a file): mounted, it would
+    give its writer what it points to. Nothing is moved, nothing should start."""
+
+
+def unsafe(root=None) -> list[Path]:
+    """The writers' directories under ``root`` that exist and are no real directory, by lstat — a
+    link to one included (SEC18): what a mount would resolve elsewhere."""
+    root = Path(ROOT if root is None else root)
+    return [dir_of(w, root) for w in WRITERS
+            if os.path.lexists(dir_of(w, root)) and not _real_dir(dir_of(w, root))]
+
+
+def pending(root=None) -> bool:
+    """The former layout holds something to move: an entry at the top of ``root`` that is no
+    writer's directory (a dot aside, but the pull's marker), or H0's copy of Orodruin's statuses."""
+    root = Path(ROOT if root is None else root)
+    for e in _entries(root):
+        if e.name in WRITERS:
+            if e.name == ORODRUIN and (root / e.name / _CONTRACT).exists():
+                return True
+        elif not e.name.startswith(".") or e.name == _PULLED_RUNS:
+            return True
+    return False
+
+
 def migrate(root=None, say=print, writers=WRITERS) -> tuple[int, list[tuple[Path, str]]]:
     """Move the former layout under ``root`` to its writers' directories, creating ``writers``'
     (on Orodruin, ``ORODRUIN_HOST`` only); returns (entries moved, entries left aside and why),
-    each left said with the gesture to make. Nothing deleted; run again, nothing more moves."""
+    each left said with the gesture to make. Nothing deleted; run again, nothing more moves. A
+    writer's directory that is no real directory (a link) raises ``Unsafe`` before anything
+    moves."""
     root = Path(ROOT if root is None else root)
     root.mkdir(parents=True, exist_ok=True)
+    bad = unsafe(root)
+    if bad:
+        raise Unsafe(", ".join(str(b) for b in bad))
     for w in writers:
         dir_of(w, root).mkdir(exist_ok=True)
     moves, left = _plan(root)
     moved = 0
     for src, dst in moves:
         try:
-            moved += _move(src, dst, left)
+            moved += _move(src, dst, left, root)
         except OSError as e:
             left.append((src, f"non déplacé ({e.strerror or e})"))
     for c in _entries(root / "campaigns"):   # the former layout's directories, once emptied
@@ -399,7 +495,8 @@ def migrate(root=None, say=print, writers=WRITERS) -> tuple[int, list[tuple[Path
     for name in ("campaigns", "exercises"):
         _rmdir_empty(root / name)
     for w in writers:   # runs/orodruin/ moved away on H0: every writer keeps a directory
-        dir_of(w, root).mkdir(exist_ok=True)
+        if not os.path.lexists(dir_of(w, root)):
+            dir_of(w, root).mkdir()
     for path, why in left:
         say(f"  laissé : {path} — {why} ; jamais lu. Le déplacer à la main vers runs/<écrivain>/ "
             "s'il est connu, sinon le garder à part (rien n'est effacé)")
@@ -410,12 +507,21 @@ def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     host = "--orodruin" in args
     args = [a for a in args if a != "--orodruin"]
-    if not args or args[0] not in ("migrate", "survey"):
-        print("usage: python -m eregion_core.runs_layout migrate|survey [RUNS] [--orodruin]", file=sys.stderr)
+    if not args or args[0] not in ("migrate", "survey", "pending"):
+        print("usage: python -m eregion_core.runs_layout migrate|survey|pending [RUNS] [--orodruin]",
+              file=sys.stderr)
         return 2
     root = Path(args[1]) if len(args) > 1 else ROOT
+    if args[0] == "pending":   # 0: the former layout holds something to move (stop the services first)
+        return 0 if pending(root) else 1
     if args[0] == "migrate":
-        moved, left = migrate(root, writers=ORODRUIN_HOST if host else WRITERS)
+        try:
+            moved, left = migrate(root, writers=ORODRUIN_HOST if host else WRITERS)
+        except Unsafe as e:
+            print(f"✗ runs/ : {e} — pas un vrai répertoire (un lien ?) : rien n'est déplacé, rien ne doit "
+                  "démarrer. Le retirer à la main (rm, jamais à travers lui), puis relancer (SEC18)",
+                  file=sys.stderr)
+            return 3
         print(f"runs/ ({root}) : {moved} déplacé(s) vers leur écrivain, {len(left)} laissé(s) (SEC18)")
         return 0
     found = survey(root)

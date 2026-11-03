@@ -38,7 +38,7 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
 - `annatar run <scenario.yaml>` : setup → integrity check → attack → emit `attack_started`
 - Preflight check automatique : VM running + pas de règles `glorfindel-isolation-*` en place
 - Signal `attack_started` : `{T0, query, workspace_id}` via `annatar/signals/emitter.py`
-- Thread daemon feedback : poll `runs/<run_id>_debug.jsonl` → émet `detection_missed` si timeout (déclenche propose_detection_rule dans Glorfindel)
+- Thread daemon feedback (SEC18) : jamais les fichiers de la watch. Le verdict du run vient du canal retour du stockage (H0, Orodruin), sinon du canal local des verdicts `runs/verdicts/` (lecture seule, `eregion_core/watch_channel.py`) ; un raté que le battement garantit → `detection_missed` (déclenche propose_detection_rule) ; sans canal, `unknown`
 - Scénarios : `detection.hints` alimentent `propose_detection_rule` — soigner les `expected_indicators` et `failure_candidates`
 - `--dry-run` disponible, `--skip-preflight` pour bypasser le check VM
 - Fin de `annatar run` seul (#193) : avec `EREGION_EXERCISE_CHANNEL`, le rapport part vers H0
@@ -59,7 +59,7 @@ Tu es spécialisé sur l'agent offensif. Lis ce fichier en début de session.
   avec l'ingestion des Activity Logs : Stratus attaque le plan de contrôle, que Glorfindel ne lit
   pas encore, et son `warmup` crée sa propre VM.
 - **Marquage des exercices (B2, ✅ côté stockage 16/10)** : `Engine.run` ouvre une fenêtre
-  (`eregion_core/exercise.py`, `runs/exercises/<run_id>.json`) avant le setup et la ferme dans
+  (`eregion_core/exercise.py`, `runs/annatar/exercises/<run_id>.json`) avant le setup et la ferme dans
   un `finally` ; Glorfindel en tire la source de chaque cycle (`exercise` / `real`). Tout futur
   injecteur (adaptateur Atomic de R1, Gothmog) fait de même — mutants M57–M61.
 - **O0 (0.3, ✅ 14/10)** : le périmètre et le garde-fou de cible vivent dans

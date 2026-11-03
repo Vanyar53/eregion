@@ -351,5 +351,5 @@ def test_h0_creates_the_consoles_directory_before_compose_mounts_it():
     [line] = [ln for ln in MAKEFILE.splitlines() if "deploy.sh" in ln and ln.startswith("\t$(HOST_SSH)")]
     assert line.index(".eregion/console/requests") < line.index("deploy.sh")
     deploy = (ROOT / "infra" / "glorfindel-host" / "deploy.sh").read_text(encoding="utf-8")
-    start = deploy.split("start() {", 1)[1].split("}", 1)[0]
+    start = deploy.split("start() {", 1)[1].split("\n}", 1)[0]   # the function, its own braces aside
     assert start.index(".eregion/console/requests") < start.index("docker compose")

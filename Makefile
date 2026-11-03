@@ -293,8 +293,16 @@ build-glorfindel:
 # les monte (laissés à docker, ils seraient à root) ; runs-migrate déplace l'ancienne disposition (des
 # fichiers à plat dans runs/) vers le répertoire de leur écrivain, laisse et dit ce qui ne se
 # reconnaît pas, n'efface rien — sur l'hôte, car aucun service ne monte runs/ entier.
-RUNS_DIRS = mkdir -p runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts
+# A writer's directory that is a link (or a file) is never made nor mounted: docker would resolve it on
+# the host, and its writer would write where it points.
+RUNS_DIRS = for d in runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts; do \
+	{ test ! -L "$$d" && { test ! -e "$$d" || test -d "$$d"; }; } \
+	|| { echo "✗ $$d n'est pas un répertoire (un lien ?) : rien n'est monté — le retirer à la main (SEC18)" >&2; exit 1; }; \
+	mkdir -p "$$d"; done
+# The services stopped first when the former layout holds something: a file they would write meanwhile
+# (manual_actions.jsonl) would meet its moved twin and stay aside.
 runs-migrate:
+	@if python3 -m eregion_core.runs_layout pending runs; then docker compose stop watch war-room bot 2>/dev/null || true; fi
 	python3 -m eregion_core.runs_layout migrate runs
 
 runs-survey:
@@ -913,7 +921,7 @@ ORO_IMAGE     := eregion-annatar:orodruin
 # ne monte ~/runs entier, sauf la migration de l'ancienne disposition (ORO_MIGRATE, à orodruin-push).
 # Les répertoires créés au nom de l'utilisateur de la VM avant chaque docker run (sinon à root).
 ORO_HARDEN     = --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true
-ORO_DIRS       = mkdir -p $$HOME/runs/annatar $$HOME/runs/gothmog $$HOME/runs/orodruin &&
+ORO_DIRS       = for d in $$HOME/runs/annatar $$HOME/runs/gothmog $$HOME/runs/orodruin; do { test ! -L "$$d" && { test ! -e "$$d" || test -d "$$d"; }; } || { echo "✗ $$d : pas un répertoire (un lien ?), rien ne part (SEC18)" >&2; exit 1; }; mkdir -p "$$d"; done &&
 ORO_MOUNT      = -v $$HOME/runs/$(1):/app/runs/$(1)
 ORO_RUN        = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,annatar) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)
 ORO_RUN_GOTHMOG = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,gothmog) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)
@@ -1102,12 +1110,12 @@ gothmog-run: orodruin-known
 
 # ── Campagne (R1 + IA0) — planifier puis lancer depuis Orodruin ───────────────
 # Même image, même identité qu'Annatar/Gothmog sur Orodruin. La campagne joue l'atomic
-# (T1136.001) avec d'autres techniques du catalogue ; le manifeste se pose dans ~/runs
+# (T1136.001) avec d'autres techniques du catalogue ; le manifeste se pose dans ~/runs/annatar
 # (bind-monté). Le rapport (IA0) s'écrit seul sur H0 (#167 — code, tests et mutants M126–M149, M159–M169, M180–M186 ;
 # rien de mesuré sur le banc) : à la fin, la campagne publie son
 # manifeste et les rapports de ses runs sur le canal des fenêtres (EREGION_EXERCISE_CHANNEL,
 # même conteneur, aucun droit de plus) ; la watch de H0 les tire et écrit
-# runs/campaigns/<id>/report.md, avec les décisions de Glorfindel — make
+# runs/glorfindel/campaigns/<id>/report.md, avec les décisions de Glorfindel — make
 # glorfindel-host-campaign-report CAMPAIGN=<id> pour le lire (docs/analysis.md).
 # Deux temps : `campaign plan` rend un id, `campaign run <id>` le joue (la watch sur H0 répond
 # selon le mode de chaque VM : gondolin et bree en non_disruptive, BL1c). ServerAliveInterval : une campagne dure longtemps (plusieurs

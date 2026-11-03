@@ -1,8 +1,9 @@
 """IA1 — the triage of a campaign: what needs a human, sorted, explained, each with a proposal
 that waits for a human's decision. The analysis AI writes no rule and acts on nothing.
 
-    python -m analysis.triage runs/campaigns/<id> [--infra DIR]     # → triage.md, triage.json
-    python -m analysis.triage decide runs/campaigns/<id> tri-1 approve --by <name> [--note …]
+    python -m analysis.triage runs/<writer>/campaigns/<id> [--infra DIR]   # → triage.md, triage.json
+    python -m analysis.triage decide runs/<writer>/campaigns/<id> tri-1 approve --by <name> [--note …]
+    (both written in the watch's directory, runs/glorfindel/campaigns/<id>/ — SEC18)
 
 **What is triaged is computed, never chosen by a model** (``items``). Each executed run that
 needs a look becomes an item, sorted by a fixed priority (``PRIORITY``): a missed technique

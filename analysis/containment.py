@@ -1,7 +1,8 @@
 """BL1 (#280) — the two indicators of the finality the bench had never filled: the time to
 contain and the share contained alone, computed by the code from a campaign's traces.
 
-    python -m analysis.containment runs/campaigns/<campaign_id> [--fault-run <run_id> …] [--json]
+    python -m analysis.containment runs/<writer>/campaigns/<campaign_id> [--fault-run <run_id> …] [--json]
+    (``runs/glorfindel/campaigns`` on H0, ``runs/annatar/campaigns`` here — SEC18)
 
 Definitions (docs/analysis.md, « Temps pour contenir et part contenue seule ») :
 

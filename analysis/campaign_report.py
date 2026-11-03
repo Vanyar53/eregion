@@ -1,10 +1,11 @@
 """IA0 — the campaign report, written by a model, every claim tied to the runs it rests on.
 
-    python -m analysis.campaign_report runs/campaigns/<campaign_id>     # → report.md there
+    python -m analysis.campaign_report runs/<writer>/campaigns/<campaign_id>
+    # → runs/glorfindel/campaigns/<campaign_id>/report.md, the watch's directory (SEC18)
 
 What a campaign did is read from its files, never from a model: the manifest (techniques,
 run ids, detected / missed, latency) and, per run, Annatar's report and Glorfindel's
-decision file (`runs/<run_id>_debug.jsonl`). A campaign launched from Orodruin has no such
+decision file (`runs/glorfindel/<run_id>_debug.jsonl`). A campaign launched from Orodruin has no such
 file where its report is written (H0, analysis/hosted_report.py): the decision is then the
 first of the watch's `watch-*_debug.jsonl` that the rule of #157 gives the run — same
 technique, same VM without case, seen between its `attack_time` and the end of its exercise
@@ -207,9 +208,8 @@ def windows_dir(runs_dir: Path) -> Path:
     ``<runs_dir>/exercises``: one computation with the injector's and the watch's,
     ``eregion_core.exercise.exercises_dir``, given the report's runs directory.
 
-    The watch itself reads ``exercises_dir()`` (``./runs/exercises`` without the variable):
-    the same directory when it runs on ``runs`` from the repository, as on H0
-    (docker-compose.yml) and with ``make campaign-report``. A watch on another runs
+    SEC18: the campaign's writer's directory (``runs/glorfindel`` on H0, where the watch pulls;
+    ``runs/annatar`` here); ``window_paths`` then looks in the other writers' beside it. A watch on another runs
     directory reads its windows elsewhere; the report then pulls them again into its own
     (analysis/hosted_report.py ``tick``) — two copies of the same windows, never two
     answers."""

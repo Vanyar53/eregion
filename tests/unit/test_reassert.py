@@ -2296,3 +2296,202 @@ def test_a_drift_card_of_the_name_only_key_for_an_ipv6_in_capitals_is_closed_by_
     (old,) = [e for e in escalations.all_escalations() if e["signal_id"] == f"reassert-vm-{_IP6}"]
     (new,) = escalations.pending()
     assert old["status"] == "resolved" and old["resolution"] and "antérieure" not in new["reason"]
+
+
+# ── L1Qs (#424): the reassertion of the blocks in two times ────────────────────────────────
+
+def _two_perimeters(monkeypatch, listed, db_mode="non_disruptive"):
+    """web blocked on its subnet (pair1); db blocked on another subnet and for itself (pair2 and its
+    rule r-db, one merged entry), nic-a of db behind web's pair only (its own rule passed by an
+    allow), nic-b behind pair2 or r-db. Both pairs and r-db gone. The listing's order is `listed`."""
+    from glorfindel import actions as facade
+    from glorfindel import reassert as reassert_mod
+    rid = {v: f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/{v}"
+           for v in ("db", "web")}
+    for v in rid:
+        readiness.record_assessment(readiness._verdict(v, []), rid[v])
+    _save_block_state("web", _IP, rid["web"], nsg="rg/nsg-app", nsg_scope="subnet", rule="pair1",
+                      scoped=False, threat_port=22)
+    _save_block_state("db", _IP, rid["db"], nsg="rg/nsg-data", nsg_scope="subnet", rule="pair2",
+                      scoped=False, threat_port=22,
+                      placements=[{"nsg_rg": "rg", "nsg_name": "nsg-data", "rule": "r-db"}])
+    real = facade.active_blocks
+    monkeypatch.setattr(facade, "active_blocks", lambda: sorted(real(), key=lambda b: listed.index(b["vm_name"])))
+    monkeypatch.setattr(reassert_mod, "_mode", lambda a, vm, ref="": db_mode if vm == "db" else "non_disruptive")
+    world = {"pair1": False, "pair2": False, "db": False}
+    writes = []
+
+    def verify(ip, r):
+        if r.endswith("/web"):
+            return {"verified": True} if world["pair1"] else {"verified": False, "missing_rules": ["pair1"]}
+        gone = [n for n, k in (("pair2", "pair2"), ("r-db", "db")) if not world[k]]
+        held = (["nic-a"] if world["pair1"] else []) + (["nic-b"] if world["pair2"] or world["db"] else [])
+        opened = [n for n in ("nic-a", "nic-b") if n not in held]
+        if not gone:
+            return {"verified": True} if not opened else {"verified": False, "open_nics": opened}
+        if not opened:
+            return {"verified": True, "held_missing": gone, "held_by_perimeter": held}
+        return {"verified": False, "missing_rules": gone, "open_nics": opened,
+                **({"held_by_perimeter": held} if held else {})}
+
+    def block(ip, r, scope, threat_port=None):
+        vm = r.rsplit("/", 1)[-1]
+        writes.append((vm, scope))
+        world[("pair1" if vm == "web" else "pair2") if scope == "subnet" else vm] = True
+        return {"status": "blocked"}
+    c = MagicMock()
+    c.verify_block_ip.side_effect = verify
+    c.block_suspicious_ip.side_effect = block
+    return c, world, writes
+
+
+def _db_cards():
+    return [e["reason"] for e in escalations.pending()
+            if e.get("action") == "block_suspicious_ip" and e["resource_id"].endswith("/db")]
+
+
+@pytest.mark.parametrize("listed", [("db", "web"), ("web", "db")])
+def test_two_perimeters_on_two_subnets_are_both_put_back_before_a_block_is_read_again(monkeypatch, listed):
+    """L1Qs, the first case of #424: two entries each holding a perimeter, on two subnets, db with
+    a NIC behind each. Read entry after entry, db first (perimeters first, then the listing's
+    order): its pair and its rule rewritten, read again with web's pair still gone — « ses règles
+    réécrites une fois, il ne tient pas en entier — n'est plus bloquée sur nic-a »; web's entry put
+    its pair back a moment later: the card false once the pass ended. No order suits two entries
+    that wait for each other. Two times: every pair first, then each entry finished."""
+    c, world, writes = _two_perimeters(monkeypatch, listed)
+    reassert_active(c, _ACT)
+    assert all(world.values()), world
+    assert sorted(w for w in writes if w[1] == "subnet") == [("db", "subnet"), ("web", "subnet")], writes
+    assert writes.index(("db", "vm")) > max(writes.index(("db", "subnet")), writes.index(("web", "subnet")))
+    (card,) = _db_cards()
+    assert "reposé une fois" in card and "n'est plus bloquée" not in card, card
+    from glorfindel.actions import active_blocks
+    entries = {e["vm_name"]: e for e in active_blocks()}
+    assert entries["db"].get("reasserted_at") and entries["web"].get("reasserted_at")
+    assert not entries["db"].get("drift_alerted_at")
+
+
+@pytest.mark.parametrize("listed", [("db", "web"), ("web", "db")])
+def test_a_block_in_human_only_is_said_once_its_neighbours_perimeter_is_back(monkeypatch, listed):
+    """The same, db in human_only (its card, nothing written for it), web outside it: db read before
+    web's pair was put back said nic-a « n'est plus bloquée » — web's pair cut it off again a moment
+    later. Read in the second time: nic-a « reste bloquée », what is gone of db's own said."""
+    c, world, writes = _two_perimeters(monkeypatch, listed, db_mode="human_only")
+    reassert_active(c, _ACT)
+    assert writes == [("web", "subnet")], writes
+    (card,) = _db_cards()
+    assert "n'est plus bloquée sur nic-a" not in card and "pair2" in card, card
+
+
+def test_a_pair_put_back_by_the_first_time_whose_reread_fails_is_said_partial(monkeypatch):
+    """Its pair put back by the first time, the entry's re-read in the second raises: never left
+    unsaid, never « reposé » — the card says its rules rewritten, and what can't be read."""
+    c, world, writes = _two_perimeters(monkeypatch, ("web", "db"))
+    real = c.verify_block_ip.side_effect
+    seen = {"web": 0}
+
+    def verify(ip, r):
+        if r.endswith("/web"):
+            seen["web"] += 1
+            if seen["web"] == 2:
+                raise RuntimeError("(TooManyRequests) networkSecurityGroups")
+        return real(ip, r)
+    c.verify_block_ip.side_effect = verify
+    reassert_active(c, _ACT)
+    (card,) = [e["reason"] for e in escalations.pending() if e["resource_id"].endswith("/web")]
+    assert "réécrites une fois" in card and "relecture impossible" in card and "reposé une" not in card, card
+
+
+@pytest.mark.parametrize("listed", [("db", "web"), ("web", "db")])
+def test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_blocks(monkeypatch, listed):
+    """The first time leaves an entry it couldn't check (its read raised, a 429): the second puts
+    its pair back — before the VM blocks of its subnet, whatever the listing (L1Qr's order, kept
+    for that case)."""
+    from glorfindel import actions as facade
+    rid = {v: f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/{v}"
+           for v in ("db", "web")}
+    for v in rid:
+        readiness.record_assessment(readiness._verdict(v, []), rid[v])
+    _save_block_state("db", _IP, rid["db"], placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-db"}],
+                      threat_port=22)
+    _save_block_state("web", _IP, rid["web"], nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair",
+                      scoped=False, threat_port=22)
+    real = facade.active_blocks
+    monkeypatch.setattr(facade, "active_blocks", lambda: sorted(real(), key=lambda b: listed.index(b["vm_name"])))
+    world = {"pair": False, "db": False, "web reads": 0}
+
+    def verify(ip, r):
+        if r.endswith("/web"):
+            world["web reads"] += 1
+            if world["web reads"] == 1:
+                raise RuntimeError("(TooManyRequests) networkSecurityGroups")
+            return {"verified": True} if world["pair"] else {"verified": False, "missing_rules": ["pair"]}
+        if world["pair"]:
+            return {"verified": True} if world["db"] else {
+                "verified": True, "held_missing": ["r-db"], "held_by_perimeter": ["nic-a"]}
+        return {"verified": False, "missing_rules": [] if world["db"] else ["r-db"], "open_nics": ["nic-a"]}
+
+    def block(ip, r, scope, threat_port=None):
+        world["pair" if scope == "subnet" else r.rsplit("/", 1)[-1]] = True
+        return {"status": "blocked"}
+    c = MagicMock()
+    c.verify_block_ip.side_effect = verify
+    c.block_suspicious_ip.side_effect = block
+    reassert_active(c, _ACT)
+    assert world["pair"] and world["db"]
+    assert not [e["reason"] for e in escalations.pending() if "n'est plus bloquée" in e["reason"]]
+
+
+def _a_gone_perimeter(**extra):
+    """web blocked on its subnet alone, its pair gone from Azure; a write puts it back unless it fails."""
+    rid = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/web"
+    readiness.record_assessment(readiness._verdict("web", []), rid)
+    _save_block_state("web", _IP, rid, nsg="rg/nsg-app", nsg_scope="subnet", rule="pair", scoped=False,
+                      threat_port=22)
+    if extra:
+        from glorfindel.actions import _update_block_entry
+        _update_block_entry(rid, _IP, **extra)
+    world = {"pair": False, "fail": False}
+
+    def block(ip, r, scope, threat_port=None):
+        if world["fail"]:
+            raise RuntimeError("(AuthorizationFailed) securityRules/write")
+        world["pair"] = True
+        return {"status": "blocked"}
+    c = MagicMock()
+    c.verify_block_ip.side_effect = lambda ip, r: (
+        {"verified": True} if world["pair"] else {"verified": False, "missing_rules": ["pair", "pair-out"]})
+    c.block_suspicious_ip.side_effect = block
+    return c, world
+
+
+@pytest.mark.parametrize("case", ["put back once before", "said, no worse", "held by an unblock"])
+def test_the_first_time_writes_only_what_the_second_would(case):
+    """The first time decides as the second would (L1Qs): a pair put back once before is said,
+    never written again; a disappearance whose write failed, said and no worse, is not retried at
+    every pass; an entry an unblock holds is not written."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    extra = {"put back once before": {"reasserted_at": now}, "said, no worse": {},
+             "held by an unblock": {"unblocking_at": now}}[case]
+    c, world = _a_gone_perimeter(**extra)
+    if case == "said, no worse":
+        world["fail"] = True
+        reassert_active(c, _ACT)                 # the write refused: said, « a échoué »
+        assert c.block_suspicious_ip.call_count == 1
+        world["fail"] = False
+    calls = c.block_suspicious_ip.call_count
+    reassert_active(c, _ACT)
+    assert c.block_suspicious_ip.call_count == calls, c.block_suspicious_ip.call_args_list
+    assert not world["pair"]
+
+
+def test_a_pair_the_first_time_failed_to_write_is_never_said_put_back():
+    """The first time's write refused: the second time says it failed, never « réécrites » nor
+    « reposé » on a read that follows nothing written (L1Qs)."""
+    c, world = _a_gone_perimeter()
+    world["fail"] = True
+    reassert_active(c, _ACT)
+    (card,) = [e["reason"] for e in escalations.pending() if e.get("action") == "block_suspicious_ip"]
+    assert "le reposer a échoué" in card and "AuthorizationFailed" in card, card
+    assert c.block_suspicious_ip.call_count == 1

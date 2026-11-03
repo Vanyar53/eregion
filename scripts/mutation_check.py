@@ -5007,11 +5007,11 @@ TESTS.update({f"M{n}": _RB1 for n in range(1645, 1648)})
 # RB1, fourth review: a drift card said again when it worsens, never when it doesn't. M1648–M1649.
 MUTANTS += [
     ("M1648", "a drift worse than its card never said again: acknowledged, a perimeter deleted after it "
-              "opened the VM in silence (RB1, 4th review)", R,
+              "opened the VM in silence (RB1, 4th review)", RSD,
      "    if not isinstance(said, dict):\n        return False\n    return bool(",
      "    return False\n    return bool("),
     ("M1649", "a drift card said again at every pass, the same or better: one card per disappearance no more "
-              "(RB1, 4th review)", R,
+              "(RB1, 4th review)", RSD,
      '    return bool((said.get("blocked") and not now["blocked"])\n',
      '    return bool(True or (said.get("blocked") and not now["blocked"])\n'),
 ]
@@ -6468,7 +6468,7 @@ MUTANTS += [
     ("M2193", "a NIC whose rules can't be read named only after « reste bloquée » elsewhere (I3P, review, A0)", RSD,
      "    elif unsure or unknown:\n", "    elif unsure:\n"),
     ("M2194", "a drift card's record leaves out the NICs not judged: one turned open later, « not worse » (I3P, "
-              "review)", R,
+              "review)", RSD,
      '            "unsure": sorted((v.get("perimeter_unread") or []) + (v.get("nics_unknown") or [])),\n',
      '            "unsure": sorted(v.get("perimeter_unread") or []),\n'),
     ("M2195", "a NIC whose own block holds never recorded as proven: the perimeter block says it uncovered (I3P, "

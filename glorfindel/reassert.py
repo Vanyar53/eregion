@@ -25,8 +25,9 @@ from glorfindel.reassert_cards import (
     drift_baseline, drift_meet, drift_over, drift_said, episode, narrow_drift, new_pass, same_sid, say_bypass,
     say_left, say_unreadable_states, say_unverified, unrecorded, unverified_over, unverified_released,
 )
+from glorfindel.reassert_perimeters import put_back_perimeters
 from glorfindel.reassert_quarantine import _report_altered_quarantines
-from glorfindel.reassert_said import _block_drift
+from glorfindel.reassert_said import _block_drift, _situation, _worse
 
 log = logging.getLogger(__name__)
 
@@ -139,13 +140,16 @@ def reassert_active(connector, autonomy=None) -> list[dict]:
             # Its state not written (a full disk): said, and the others still read — a pass
             # cut off at the first VM never saw the next one held again (L2C, review).
             report.append(unrecorded(snapshot["vm_name"], exc))
-    for snapshot in _perimeters_first(active_blocks()):
+    blocks = _perimeters_first(active_blocks())
+    # Two times (L1Qs): every perimeter pair to put back, first; then each entry read and finished.
+    put_back = put_back_perimeters(connector, autonomy, blocks, report)
+    for snapshot in blocks:
         if not snapshot.get("resource_id"):
             continue
         try:
             with _vm_lock(snapshot["vm_name"], timeout=_LOCK_WAIT_S):
                 _reassert_block(connector, autonomy, snapshot["vm_name"], snapshot.get("ip", ""), report,
-                                ref=snapshot["resource_id"])
+                                ref=snapshot["resource_id"], put_back=put_back)
         except TimeoutError:
             continue
         except OSError as exc:
@@ -293,7 +297,8 @@ def _reassert_isolation(connector, autonomy, vm: str, report: list[dict], ref: s
     report.append({"kind": "isolation", "vm": vm, "outcome": outcome, "detail": reason})
 
 
-def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], ref: str = "") -> None:
+def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], ref: str = "",
+                    put_back: dict | None = None) -> None:
     from glorfindel.actions import _load_block_entries, _update_block_entry
 
     now = datetime.now(timezone.utc).isoformat()
@@ -303,6 +308,8 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     rid = b.get("resource_id", "")
     if not rid or not ip:
         return
+    # Its pair put back by the first time (L1Qs): finished here — its VM's rules, the re-read, the card.
+    pair = (put_back or {}).get((rid.rstrip("/").lower(), ip)) if b.get("scoped") is False else None
     say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)
     if _stale(b.get("unblocking_at")) and not b.get("stale_alerted_at"):
         reason = (f"Le déblocage de {ip} sur {vm} a été interrompu (commencé le "
@@ -314,6 +321,9 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         return
     if _held_by_an_operation(b, "unblock_failed", "unblocking_at"):
+        return
+    if pair is not None:
+        _rewrite_block(connector, b, vm, rid, ip, report, ref, now, pair["read"], pair)
         return
     try:
         verification = connector.verify_block_ip(ip, rid)
@@ -379,15 +389,29 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         episode(ref or vm, ip, over=False)
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         return
+    _rewrite_block(connector, b, vm, rid, ip, report, ref, now, said)
+
+
+def _rewrite_block(connector, b: dict, vm: str, rid: str, ip: str, report: list[dict], ref: str, now: str,
+                   said: dict, pair: dict | None = None) -> None:
+    """Write the entry's rules, read them again, say it — `said`, the read that decided it. `pair`:
+    its perimeter pair written by the first time (L1Qs), the write's error if any: its VM's rules
+    alone left to write."""
+    from glorfindel.actions import _update_block_entry
     # A merged entry (RB1): its perimeter AND its VM's placements, each put back — the
     # perimeter alone left a VM rule turned into an allow as it was.
     scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]
     errors: list[str] = []
-    for scope in scopes:
+
+    def failed(scope: str, exc) -> None:
+        errors.append(f"{exc}" if len(scopes) == 1 else f"{_SCOPE_WORDS[scope]} : {exc}")
+    if pair is not None and pair["error"] is not None:
+        failed("subnet", pair["error"])
+    for scope in scopes[1:] if pair is not None else scopes:
         try:
             connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port"))
         except Exception as exc:
-            errors.append(f"{exc}" if len(scopes) == 1 else f"{_SCOPE_WORDS[scope]} : {exc}")
+            failed(scope, exc)
     if len(errors) < len(scopes):
         _update_block_entry(ref or vm, ip, reasserted_at=now)
         # Said from Azure read again, never from the writes alone (A0): « reposé » only
@@ -427,26 +451,6 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
 
 
 _SCOPE_WORDS = {"subnet": "règle de périmètre", "vm": "règles de la VM"}
-
-
-def _situation(v: dict) -> dict:
-    """What a block card said (RB1, 4th review): the rules gone, the NICs still held, open,
-    unknown, whether the IP stayed blocked — kept in the entry to tell a worse one."""
-    return {"gone": sorted({str(n) for n in (v.get("missing_rules") or []) + (v.get("held_missing") or [])}),
-            "held": sorted(v.get("held_by_perimeter") or []), "open": sorted(v.get("open_nics") or []),
-            "unsure": sorted((v.get("perimeter_unread") or []) + (v.get("nics_unknown") or [])),
-            "blocked": v.get("verified") is True}
-
-
-def _worse(said, now: dict) -> bool:
-    """Worse than what the card said: blocked no more, a rule more gone, a NIC more open or
-    unknown. Better or the same: nothing said again. No record (an older entry): as before."""
-    if not isinstance(said, dict):
-        return False
-    return bool((said.get("blocked") and not now["blocked"])
-                or set(now["gone"]) - set(said.get("gone") or [])
-                or set(now["open"]) - set(said.get("open") or [])
-                or set(now["unsure"]) - set(said.get("unsure") or []) - set(said.get("open") or []))
 
 
 def ttl_alerts(ttl_h: float, now: datetime | None = None) -> list[dict]:

@@ -9129,7 +9129,7 @@ TESTS.update({mid: "tests/unit/test_mutant_anchors.py" for mid in ("M3185", "M31
 # whose subnet couldn't be read named off the perimeter it sits behind —; the perimeter alone, which
 # said « the IP reaches » a NIC another VM's perimeter cuts off; the reassertion of the blocks in two
 # times — every perimeter pair first; a drift's baseline narrowed before any write of the pass. M2990–M2999,
-# M3150–M3152 (the reserve, entered).
+# M3150–M3154 (the reserve, entered).
 RPB = "glorfindel/reassert_perimeters.py"
 _L1QS_REG = "tests/unit/test_invariant_regressions.py::"
 _L1QS_UNIT = "tests/unit/test_reassert.py::"
@@ -9179,7 +9179,19 @@ MUTANTS += [
      '    if b.get("drift_alerted_at") and _missing(verification) and not never_covered:\n        # Better than its card, here,',
      '    if False:\n        # Better than its card, here,'),
 ]
+MUTANTS += [
+    ("M3153", "an entry the first time wrote skips its first read's narrowing: better and worse, written, the same "
+              "rules gone again read « not worse », unsaid (L1Qs, 5.5 review)", R,
+     '    if b.get("drift_alerted_at") and _missing(verification) and not never_covered:\n',
+     '    if b.get("drift_alerted_at") and _missing(verification) and not never_covered and pair is None:\n'),
+    ("M3154", "an entry the first time wrote skips its first read's prologue: a check that raised stays carded "
+              "(L1Qs, 5.5 review)", R,
+     '    if verification.get("verified") is not None:\n        unverified_over(vm, rid, ip)\n',
+     '    if verification.get("verified") is not None and pair is None:\n        unverified_over(vm, rid, ip)\n'),
+]
 TESTS.update({
+    "M3153": f"{_L1QS_UNIT}test_a_drift_better_and_worse_in_a_pass_that_writes_narrows_its_baseline",
+    "M3154": f"{_L1QS_UNIT}test_a_check_that_raised_is_over_once_the_first_time_reads_and_writes",
     "M3152": (f"{_L1QS_UNIT}test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said "
               f"{_L1QS_REG}test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said"),
     "M2990": f"{_L1QS_SEED9} {INVARIANTS}", "M2991": f"{_L1QS_OTHER} {INVARIANTS}",

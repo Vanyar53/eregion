@@ -6081,3 +6081,59 @@ def test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone(mo
          ("quarantine_change_comes_back", '/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web', '/subscriptions/s/resourcegroups/rg-app2/providers/microsoft.compute/virtualmachines/web', None, True, True, '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 'non_disruptive', 'role removed', '/subscriptions/s/resourcegroups/rg-sec/providers/microsoft.network/networksecuritygroups/nsg-glorfindel-quarantine-westeurope', 2, 'non_disruptive', 'non_disruptive', 'human_only', (1, 'from-full'), True, 'human_only'),
          ("operator_acknowledges", 4),
          ("taken_up_by_its_lowercase_id", '/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/web', 'block', 22, 'human_only'))
+
+
+@pytest.mark.parametrize("merged", [True, False], ids=["merged", "perimeter alone"])
+def test_a_pair_put_back_by_the_first_time_narrows_its_drift_like_any_read(monkeypatch, merged):
+    """L1Qs' 5.5 review (blocking), on the fake: a block on its subnet (and for itself, merged), its
+    pair's inbound rule and its VM's rules gone while writes are refused — « le reposer a échoué »,
+    acknowledged; writes allowed again, the VM's rules back, the pair's outbound rule gone too: better
+    on one side, worse on the other — the first time puts the pair back, « reposé une fois »; then
+    the same rules gone again: said. The review's probe (a connector that leaves the entry's marks as
+    they are) found this last disappearance unsaid: the second time skipped its first read's
+    prologue — the baseline never narrowed (`test_reassert.py`, red before the fix). Here the Azure
+    adapter's write of the block clears the drift marks itself (L1Q: a block written whole is a new
+    episode), so the sequence is said either way — green before and after; kept, the adapter's side."""
+    import copy
+    import shutil
+
+    from glorfindel import escalations
+
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        c, rules = m.connector, m.fake.nsgs[key(_SUBNET)]["rules"]
+        assert c.block_suspicious_ip(ATTACKER, WEB2, scope="subnet")["status"] == "blocked"
+        if merged:
+            assert c.block_suspicious_ip(ATTACKER, WEB2, scope="vm", threat_port=22)["status"] == "blocked"
+        mine = [n for n in rules if n.startswith(_WEB2_BLOCK)]
+        first = [_PERIMETER] + mine                         # the inbound rule of the pair, the VM's rules
+        kept = {n: copy.deepcopy(rules[n]) for n in [*first, f"{_PERIMETER}-out"]}
+
+        def take_off(names):
+            for n in names:
+                rules.pop(n, None)
+            m._claims_after_a_change()
+
+        def cards():
+            return [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"
+                    and (e.get("signal_id") or "").startswith("reassert-")]
+        take_off(first)
+        m.fake.write_denied = True
+        m.reassert(Script("non_disruptive", None))
+        (card,) = cards()
+        assert "a échoué" in card["reason"], card["reason"]
+        escalations.resolve(card["id"])                                 # the operator acknowledges it
+        m.fake.write_denied = False
+        rules.update({n: copy.deepcopy(kept[n]) for n in mine})           # better: the VM's rules back
+        take_off([f"{_PERIMETER}-out"])                                   # worse: the pair's other half gone
+        m.reassert(Script("non_disruptive", None))
+        assert any("reposé une fois" in e["reason"] for e in cards()), [e["reason"] for e in cards()]
+        for e in cards():
+            escalations.resolve(e["id"])
+        take_off(first)                                                   # the same rules gone again
+        m.reassert(Script("non_disruptive", None))
+        assert cards(), "the same rules gone again after the pair put back were never said"
+    finally:
+        shutil.rmtree(m.home, ignore_errors=True)

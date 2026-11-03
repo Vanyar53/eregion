@@ -2530,3 +2530,70 @@ def test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_sai
     reassert_active(c, _HUMAN)                                    # gone again
     assert [e for e in escalations.pending() if e.get("action") == "block_suspicious_ip"], (
         "the rules gone again after a better pass were never said")
+
+
+def _gone_better_worse_gone(scoped: bool):
+    """L1Qs' 5.5 review (blocking): a block's pair and its VM's rule gone, the write refused — « a
+    échoué », acknowledged; then the VM's rule back and the pair's other half gone — better and worse
+    — written: « reposé une fois »; then the pair and the VM's rule gone again. A connector that leaves
+    the entry's marks as they are (the Azure adapter clears them on a whole write, L1Q). Returns the
+    cards the last pass made."""
+    readiness.record_assessment(readiness._verdict("vm", []), _RID)
+    if scoped:
+        _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                          placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-vm"}], threat_port=22)
+    else:
+        _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg-subnet", "rule": "r-vm"},
+                                                       {"nsg_rg": "rg", "nsg_name": "nsg-nic", "rule": "pair"}],
+                          threat_port=22)
+    world = {"fail": True, "whole": False, "now": None}
+
+    def block(ip, r, scope, threat_port=None):
+        if world["fail"]:
+            raise RuntimeError("(AuthorizationFailed) securityRules/write")
+        world["whole"] = True
+        return {"status": "blocked"}
+    c = MagicMock()
+    c.block_suspicious_ip.side_effect = block
+    c.verify_block_ip.side_effect = lambda ip, r: {"verified": True} if world["whole"] else world["now"]
+    world["now"] = {"verified": False, "missing_rules": ["pair", "r-vm"], "open_nics": ["nic-a"]}
+    reassert_active(c, _ACT)
+    for e in escalations.pending():
+        escalations.resolve(e["id"])                                     # the operator acknowledges it
+    world["fail"] = False
+    world["now"] = {"verified": False, "missing_rules": ["pair", "pair-out"], "open_nics": ["nic-a"]}
+    reassert_active(c, _ACT)
+    assert any("reposé une fois" in e["reason"] for e in escalations.pending())
+    world["whole"] = False
+    world["now"] = {"verified": False, "missing_rules": ["pair", "r-vm"], "open_nics": ["nic-a"]}
+    n = len(escalations.all_escalations())
+    reassert_active(c, _ACT)
+    return [e["reason"] for e in escalations.all_escalations()[n:]]
+
+
+@pytest.mark.parametrize("scoped", [True, False], ids=["perimeter, the first time", "vm block"])
+def test_a_drift_better_and_worse_in_a_pass_that_writes_narrows_its_baseline(scoped):
+    """The entry the first time writes (a perimeter) has the same first read as any: its baseline
+    narrowed — the VM's rule back is what holds —, the same rules gone again are worse than it, said.
+    It wasn't: the second time skipped the read's prologue for that entry (red before the fix; a VM
+    block, read by the second time alone, said it)."""
+    assert _gone_better_worse_gone(scoped), "the rules gone again after a pass that wrote were never said"
+
+
+def test_a_check_that_raised_is_over_once_the_first_time_reads_and_writes():
+    """The entry's check raised — said on its card (V-16); next pass, the first time reads it and puts
+    its pair back: the check answered, its card is closed in that pass, as for any entry read (the
+    second time shares the first read's prologue: `unverified_over`, the bypass)."""
+    readiness.record_assessment(readiness._verdict("vm", []), _RID)
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                      threat_port=22)
+    c = MagicMock()
+    c.verify_block_ip.side_effect = RuntimeError("(AuthorizationFailed) networkSecurityGroups/read")
+    reassert_active(c, _ACT)
+    assert [e for e in escalations.pending() if e.get("action") == "review_unverified"]
+    reads = iter([{"verified": False, "missing_rules": ["pair", "pair-out"]}, {"verified": True}])
+    c.verify_block_ip.side_effect = lambda ip, r: next(reads)
+    c.block_suspicious_ip.side_effect = None
+    c.block_suspicious_ip.return_value = {"status": "blocked"}
+    reassert_active(c, _ACT)
+    assert not [e for e in escalations.pending() if e.get("action") == "review_unverified"]

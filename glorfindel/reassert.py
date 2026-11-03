@@ -308,7 +308,8 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     rid = b.get("resource_id", "")
     if not rid or not ip:
         return
-    # Its pair put back by the first time (L1Qs): finished here — its VM's rules, the re-read, the card.
+    # Its pair put back by the first time (L1Qs): read by it — the same first read here (the baseline, the
+    # check's card, the bypass), then finished: its VM's rules, the re-read, the card.
     pair = (put_back or {}).get((rid.rstrip("/").lower(), ip)) if b.get("scoped") is False else None
     say_left(vm, rid, ip, b, report, ref)     # what the block left, aimed at another VM (I4A)
     if _stale(b.get("unblocking_at")) and not b.get("stale_alerted_at"):
@@ -322,11 +323,8 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         return
     if _held_by_an_operation(b, "unblock_failed", "unblocking_at"):
         return
-    if pair is not None:
-        _rewrite_block(connector, b, vm, rid, ip, report, ref, now, pair["read"], pair)
-        return
     try:
-        verification = connector.verify_block_ip(ip, rid)
+        verification = pair["read"] if pair is not None else connector.verify_block_ip(ip, rid)
     except Exception as exc:                                   # said once (V-16)
         say_unverified(vm, rid, exc, report, ip=ip)
         return
@@ -346,6 +344,8 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
     if b.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):
         episode(ref or vm, ip, over=True)        # back: a new episode next time, whatever write fails
     say_bypass(vm, rid, verification, report, ip=ip, ref=ref)
+    if pair is not None:
+        return _rewrite_block(connector, b, vm, rid, ip, report, ref, now, verification, pair)
     if verification.get("verified") is True and not verification.get("held_missing"):
         _update_block_entry(ref or vm, ip, verified_at=now, drift_alerted_at=None, uncovered_said=None)
         return

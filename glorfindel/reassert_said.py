@@ -51,3 +51,23 @@ def _block_drift(ip: str, vm: str, v: dict, again: bool = False, said: bool = Fa
              if unsure else "")
     tail += f" ; sur {', '.join(unknown)}, ses règles n'ont pas pu être lues" if unknown else ""
     return head + tail + (f"{names}." if said else ".")
+
+
+def _situation(v: dict) -> dict:
+    """What a block card said (RB1, 4th review): the rules gone, the NICs still held, open,
+    unknown, whether the IP stayed blocked — kept in the entry to tell a worse one."""
+    return {"gone": sorted({str(n) for n in (v.get("missing_rules") or []) + (v.get("held_missing") or [])}),
+            "held": sorted(v.get("held_by_perimeter") or []), "open": sorted(v.get("open_nics") or []),
+            "unsure": sorted((v.get("perimeter_unread") or []) + (v.get("nics_unknown") or [])),
+            "blocked": v.get("verified") is True}
+
+
+def _worse(said, now: dict) -> bool:
+    """Worse than what the card said: blocked no more, a rule more gone, a NIC more open or
+    unknown. Better or the same: nothing said again. No record (an older entry): as before."""
+    if not isinstance(said, dict):
+        return False
+    return bool((said.get("blocked") and not now["blocked"])
+                or set(now["gone"]) - set(said.get("gone") or [])
+                or set(now["open"]) - set(said.get("open") or [])
+                or set(now["unsure"]) - set(said.get("unsure") or []) - set(said.get("open") or []))

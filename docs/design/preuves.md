@@ -1242,6 +1242,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I8S | même scénario, reset ; deux groupes de quarantaine (relecture 5.5) | un 429 sur le tag : carte remise nue, X effacé ; le « aucun » trouvé dans un groupe l'emportait sur X dans l'autre |
 | I4F | NSG d'origine d'une carte en quarantaine (ou nue) jugé sans elle | le reset de la nouvelle VM prenait l'ancienne isolation d'une autre VM pour la sienne : **l'autre VM rouverte** |
 | I4S | NSG jugé sans la carte d'une autre VM partie en quarantaine (ou nue) | le reset (ou la levée) de la VM restée seule supprimait l'ancienne isolation de l'autre : aucun flux, mais plus rien au retour de sa carte hors de Glorfindel |
+| I4G | ancienne isolation d'une VM (le refus total à nom fixe), retourné en autorisation par quelqu'un ; une nouvelle VM reçoit ce NSG | la levée (ou le reset) de la première retirait l'autorisation par son nom, la garde jamais demandée : **la nouvelle VM coupée** de ce qu'elle lui ouvrait |
 | I7S | isolation par règles sur un NSG partagé, état perdu, carte laissée nue, réisolée sur le NSG du subnet (lectures des NSG en 429), VM supprimée | la levée de la VM supprimée ne cherchait rien : `released`, la première isolation restée sur le NSG partagé, visant l'adresse que reçoit la VM suivante |
 
 **I1F (27/10, #226) : un oracle qui lisait mal, et un trou derrière.** Le run profond (10 000
@@ -3190,6 +3191,68 @@ isoler/lever, `block_then_isolate` deux fois, `taken_up_by_its_lowercase_id`, `o
 passage, à une carte encore en quarantaine (I3R) ; l'adaptateur AWS dit encore `released` sur un état illisible
 (I3U).
 
+**I4G (03/11, #460) : une opération sur une VM ne coupe jamais une autre VM, par une ancienne isolation retournée
+en autorisation.** La graine 73 à 60 séquences, laissée par I3V (ci-dessus) : rouge à chaque essai sur `main`
+jusqu'à `1be01d3`, verte ensuite à 60 parce que les tirages ont changé avec les règles d'I3G — le défaut restait.
+**La séquence** (trois étapes, ses tirages tels qu'Hypothesis les a réduits) : web sur un NSG à elle, isolée là par
+une ancienne version (le refus total à nom fixe, `glorfindel-isolation-deny-all` et `-out`, son état à un seul NSG
+gardé : `legacy=('web-nic', True)`), les autres cartes nues, sans quarantaine ; quelqu'un retourne le refus entrant
+en autorisation (`tamper_with_our_rule`, `access`) ; l'homonyme de rg-app2 supprimé (son adresse libérée) ; puis
+`an_old_isolations_vm_isolated_again` : api créée sur le NSG de web, à cette adresse, web isolée de nouveau (l'état
+ancien gardé sous `legacy`, I4E), levée. I4 : « an operation on …/web cut off …/api » — api perdait l'entrant
+depuis l'extérieur (22, 443) que l'allow lui ouvrait. **La cause** : la levée défait l'enregistrement ancien
+(`older.py`, `_undo_older`) par ses noms, chacun demandé d'abord à la garde (`turned._held_by_turned`, I4B : une
+règle à notre nom passée en allow qui ouvre une autre carte vivante reste). Mais la garde ne connaissait nos règles
+qu'à deux préfixes, `glorfindel-iso-` et `glorfindel-block-` (`_turned_allows`) : `glorfindel-isolation-…` n'en est
+pas un. Aucune règle retournée trouvée, `_turned_guard` rendait « rien à garder » sans lire la règle demandée —
+`_opens_another`, qui l'aurait gardée (sur `*`, api derrière ce NSG), jamais appelé —, et l'allow partait par son
+nom. Le reset (`sweep_vm_rules`, `legacy_named`) faisait de même. **Pourquoi l'oracle avait raison** (A0) : il ne
+lit pas cette allow comme le refus qu'elle était (`_world`, `untampered` : un nom d'ancienne version retourné ne
+se distingue pas de celui d'un homonyme) ; elle est à quelqu'un, elle ouvre api, et une levée de web ne change rien
+pour api — sauf rouvrir ce que seul un reste de web fermait (`reopenable`). **Correctif**
+(`glorfindel/providers/azure/turned.py`) : deux listes de noms. `_OLDER_NAMES` (`glorfindel-isolation-deny-all` —
+le nom fixe, `-out`, le suffixe d'une VM) : une telle règle passée en allow fait lire la garde quand on demande à
+la retirer par ce nom — `_turned_guard` ne sort plus d'emblée, `_opens_another` la juge. L'allow reste, dite
+(« gardée : notre règle glorfindel-isolation-deny-all, retournée en autorisation par quelqu'un, vise * — toutes
+les cartes derrière ce NSG, dont api-nic-4 »), `release_partial` ou `swept_partial`, l'état gardé ; le refus de la
+paire part. `_TURNED_NAMES` (`glorfindel-iso-`, `glorfindel-block-`) reste seul pour I5Q, ce qu'un refus retient
+derrière lui (le balayage des orphelines, `_turned_still`, la levée d'une VM supprimée, `_cuts_all`, `_waits_for`).
+**La relecture 5.5** (« à corriger » sur 3beea571) : la première forme du correctif mettait le nom ancien dans une
+seule liste, qui servait aussi à I5Q. Une vraie orpheline (`glorfindel-iso-web-…`, web supprimée, son état perdu)
+devant une allow sur `*` sous un nom ancien — le sien, ou celui d'un client qui commence pareil — était gardée, et
+la VM qui avait repris l'adresse restait coupée (U1 ; l'oracle, `_behind_turned`, n'exempte que `iso-` et
+`block-` : la machine serait tombée en tirant ce monde). Les deux listes séparées, elle part comme sur `main` ;
+l'exemption de l'oracle n'est pas étendue (ce serait restreindre U1, A0). La relecture a relevé aussi la consigne :
+« la remettre en refus », dite d'un refus total ou d'une règle sur `*`, couperait toutes les cartes derrière son
+NSG, celle qu'elle ouvre comprise ; elle dit alors « la retirer à la main si elle n'est plus voulue ; si une autre
+VM a besoin de ce flux, le recréer sous un nom à elle, puis relancer » (`_opens_text`). **Reste ouvert** (relevé
+par la relecture, déjà sur `main`) : la promotion d'un blocage en périmètre (`blocks.py`, `replace=True`) retire
+les règles de blocage par VM sans demander la garde — une d'elles retournée en allow, qui ouvre une autre VM hors
+du périmètre (un NSG de carte partagé entre deux subnets), partirait ; la machine ne le juge pas (un blocage est
+jugé sans les flux de l'attaquant, `perimeter=True`). Laissé à un lot.
+Aucune règle de la machine ajoutée, retirée ni restreinte : `an_old_isolations_vm_isolated_again` (I4E) la tirait
+déjà. **Figée** : `test_an_older_isolations_release_never_cuts_off_the_vm_its_turned_deny_all_lets_in`
+(`test_invariant_regressions.py`, rejouée sans Hypothesis par `_run`) : rouge sur le code de `main` 5482fc1, par
+l'oracle inchangé, verte après. **Tests unitaires** (`test_turned_names.py`, dix-huit) : chaque
+forme du nom retournée en allow est lue pour son propre retrait (le nom fixe, `-out`, suffixé, suffixé `-out`),
+jamais parmi ce qu'un refus retient (I5Q) ; un refus sous ce nom ou une allow du client n'y sont pas ; la levée et le reset de web gardent l'allow pour api et
+le disent, le refus de la paire part (le nom fixe entrant, le nom fixe `-out`, le nom suffixé) ; rien de retourné,
+la paire part et la levée dit `released` (verte sur `main` : garde le correctif de trop en faire) ; la sonde de la
+relecture, une vraie orpheline devant une allow sous un nom ancien, retirée (U1 : trois noms, verte sur `main`,
+rouge sur 3beea571) ; la consigne, jamais « la remettre en refus » pour `*` ou un refus total. **Mutants
+M3270–M3275** : le nom ancien jamais lu pour son retrait (M3270, la cause), le nom suffixé oublié (M3271), le nom
+`-out` oublié (M3272), le nom ancien compté pour I5Q (M3273, la régression de la première forme), la consigne de
+remettre en refus une règle sur `*` (M3274) ou un refus total (M3275).
+**Mesures d'I4G.** Invariants, `--hypothesis-seed=N`, six à la fois : à 60 séquences, N = 73, 29, 1..18,
+**20/20 vertes** ; à 500, N = 73, 29, 7, 25, **4/4 vertes** (la graine 73 ne retombait plus à 60 sur `main` depuis
+I3G : seule la séquence figée prouve le correctif). Mutants M3270–M3272 : 3/3 par leurs tests à chaque tour (deux
+tours) ; les voisins sur `turned.py` et `older.py` (M1731, M1733, M1736, M1742, M1743, M1747, M1890, M1895–M1897,
+M1903, M1967, M1968, M2320–M2322) : 16/16, un tour. `pytest` complet : 5 928 réussis, 7 sautés ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 340 mutants, sans faute. **Après la relecture** (les deux listes, la consigne) :
+M3270–M3275 et les seize voisins, 22/22 à chaque tour (deux tours) ; invariants à 60, N = 73, 29, 101, 202, 303,
+404, 505, 606, **8/8 vertes** ; `pytest` complet : 5 935 réussis, 7 sautés ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 343 mutants, sans faute.
+
 **I3C (02/11, #436) : la réaffirmation retrouve ses cartes quelle que soit la casse du nom de la VM.**
 Trouvé par I3R (la graine 67 à 60, sa seconde passe), confirmé par sa relecture. **Cause** : les ids
 des cartes de la réaffirmation portaient le nom de la VM tel que l'état le donne
@@ -3322,6 +3385,154 @@ en 429 après écriture, l'état perdu, une isolation d'une ancienne version lai
 blocage de `web`, puis le périmètre de Db--01 (le 6ᵉ appel en 429 avant écriture) : la réponse nomme
 db-nic-0 non couverte alors que le périmètre la coupe. Présent sur `main` (aucune ligne d'I3G ne
 touche le blocage de périmètre) ; dit dans le rapport, pour un lot à lui.
+
+**L1Qs (03/11, #424) : la réaffirmation en deux temps ; la machine tire un mode par VM et un
+périmètre sur le sous-réseau data.** La suite de L1Qr, trouvée par sa relecture : trois cas que la
+machine n'atteignait pas — deux entrées de périmètre sur deux sous-réseaux, une paire retournée qui
+ne revient pas dans la passe, le chemin du périmètre seul — et le défaut de la graine 9 qu'I3G
+avait trouvé sur `main`.
+
+**Les règles entrées** (A0 : des règles et des propriétés ajoutées, aucune retirée ni restreinte ;
+avec un seul mode pour toutes les VM, chaque oracle est celui d'avant). (1) `data_primary`, tiré en
+dernier dans le réseau : la carte principale de Db--01 sur le sous-réseau data — son blocage de
+périmètre y est posé, à côté de celui d'une VM du sous-réseau app ; Db--01 a une carte derrière
+chacun. (2) `reassert_by_vm` : une passe dont le mode est tiré **par VM** (`human_only`,
+`non_disruptive`) — ou dont le verrou est tenu par un autre écrivain (`busy`, par nom : deux VM d'un
+même nom le partagent ; la passe la saute, L1 attend la passe suivante, comme pour une opération en
+cours) ; le balayage des orphelines lit le mode par nom, le plus prudent. Avec des modes mêlés, I5
+s'étend VM par VM : une VM en `human_only` ne voit se fermer que ce qu'elle partage avec une VM pour
+laquelle la passe peut écrire (un périmètre posé sur son sous-réseau — les flux de l'attaquant —, un
+NSG de quarantaine sur sa carte) ; ses cartes gardent leur NSG ; aucune règle nommée pour une de ses
+cartes n'est écrite ni retirée ; ce qui s'ouvre reste dans son dessin (la borne d'I5 pour toutes). (3)
+`perimeters_on_two_subnets` : les deux blocages de périmètre, chacun fusionné ou non avec le blocage
+de sa VM, dans un ordre tiré ; nos règles retirées (toutes, les deux paires, ou l'une), une ou deux
+passes au mode tiré par VM. (4) `turned_perimeter_left_out` : une VM bloquée sur son sous-réseau,
+une voisine bloquée pour elle-même ; la paire retournée en allow (après une première remise, ou
+non), les règles de la voisine supprimées ; une passe où la paire ne revient pas — sa VM en
+`human_only`, ou son verrou tenu — et où la voisine, hors `human_only`, est réécrite à côté. Ce qui
+s'ouvre pour la voisine est dit (une carte de dérive ou de contournement en attente) ; l'opérateur
+acquitte ce qui est dit, le périmètre est levé (la première VM débloquée), une passe : ce qui s'ouvre
+depuis est dit de nouveau. (5) I3, une propriété ajoutée : « ne couvre pas … l'IP les atteint » n'est
+jamais dit — par la réponse du blocage de périmètre (`uncovered_nics`) ni par une carte de la
+réaffirmation — d'une carte que notre périmètre, intact sur son propre sous-réseau, coupe seul (sauf
+une carte dite avant que la passe y écrive ce périmètre, comme pour « n'est plus bloquée »).
+
+**Le défaut de la graine 9 (I3G), sa cause.** « I3: perimeter block named ['db-nic-0'] of …/Db--01
+uncovered, behind it ». Réduite à la main, la séquence d'I3G tient en une étape : Db--01 bloquée sur
+son sous-réseau, le 6ᵉ appel en 429 — la lecture du sous-réseau de db-nic-0 pendant que le blocage
+cherche les cartes hors du périmètre (`_off_perimeter`). `_get_vm_nic_targets` note le sous-réseau
+illisible (`subnet_unreadable`) et ne met dans la vue de la carte que son propre NSG : la carte, qui
+est derrière le périmètre, passait pour hors de lui, et la réponse disait « l'IP l'atteint encore »
+(`blocked_partial`). **Correctif** (`providers/azure/perimeter.py`) : une carte dont le sous-réseau
+n'a pu être lu n'est ni couverte ni hors du périmètre — `_off_perimeter` lève, le blocage dit ses
+cartes non lues (`nics_unread`), la vérification qu'elle ne peut conclure. Figés :
+`test_a_perimeter_block_never_names_uncovered_a_nic_whose_subnet_it_could_not_read` (la séquence
+telle que trouvée, quatre étapes, et réduite à une),
+`test_a_nic_whose_subnet_cant_be_read_is_neither_covered_nor_uncovered` (au connecteur).
+
+**Le troisième cas de l'issue, trouvé par la machine** (graines 5 et 8 à 60, une seule règle,
+`data_primary`) : web bloquée sur le sous-réseau app, Db--01 sur le sien (data). db-nic-0, sur le
+sous-réseau app, est hors du périmètre de Db--01 et derrière celui de web, qui coupe l'attaquant. Le
+chemin du périmètre seul (`verify_block_ip`, une entrée sans placement) nommait les cartes hors de
+son sous-réseau sans lire le périmètre d'une autre entrée : « non couverte, l'IP l'atteint »
+(`blocked_partial`, puis la carte de la réaffirmation). **Correctif**
+(`providers/azure/verify_block.py`) : chaque carte hors du périmètre est demandée à `_perimeter_holds`
+— une règle de périmètre de l'IP sur un NSG qui la gouverne (celle d'une autre VM, l'autre
+sous-réseau) : tenue, elle est tenue (`held_by_perimeter`, vérifié) ; illisible, la vérification ne
+conclut pas (`perimeter_unread`) ; sinon non couverte. Le périmètre de web levé, db-nic-0 est de
+nouveau non couverte, et dite. Figés :
+`test_a_perimeter_beside_another_on_the_app_subnet_never_says_db_nic_0_reached` (les deux modes),
+`test_a_nic_off_the_perimeter_another_perimeter_cuts_off_is_not_said_reached`,
+`…whose_other_perimeter_cant_be_read_is_unknown`.
+
+**Le premier cas : la réaffirmation en deux temps, parce que la machine la demande.** Le troisième
+correctif fait lire à une entrée le périmètre d'une autre ; les deux paires retirées, l'entrée de
+Db--01 lue la première (l'ordre du listage : les deux tiennent un périmètre, le tri de L1Qr ne les
+départage pas) réécrivait sa paire et se relisait avec celle de web encore absente : « ses règles
+réécrites une fois, il ne tient pas en entier — l'IP n'est plus bloquée sur db-nic-0 » ; l'entrée de
+web reposait sa paire un instant plus tard. Faux à la fin de la passe ; l'oracle juge strictement une
+carte de réécriture (dite après sa propre relecture). Deux entrées qui ont chacune une carte derrière
+le périmètre de l'autre s'attendent l'une l'autre : aucun tri ne suffit. **Correctif**
+(`glorfindel/reassert_perimeters.py`, `reassert.py`) : **premier temps**, chaque entrée qui tient un
+périmètre (fusionnée ou non) est lue et, si le second temps l'écrirait, sa paire est reposée —
+décidé de même (`_to_write` : rien d'un blocage tenu, jamais couvert, rien de parti ; rien d'une
+disparition déjà dite et pas pire ; rien en `human_only` ; rien de déjà reposé ; rien sous un
+déblocage), marqué aussitôt (`reasserted_at`) ; **second temps**, chaque entrée relue et finie dans
+l'ordre de L1Qr — pour une entrée du premier temps : les règles de sa VM, la relecture, la carte
+(`_rewrite_block`, l'erreur du premier temps comptée, la lecture qui l'a décidée gardée pour la
+comparaison d'une dérive suivante). Une entrée que le premier temps n'a pu lire (sa lecture en échec)
+est faite au second ; les périmètres y restent avant les VM (le tri de L1Qr garde ce rôle, mesuré
+par `test_a_perimeter_left_to_the_second_time_is_still_put_back_before_the_vm_blocks`). En
+`human_only` aussi : une entrée lue avant que la paire voisine revienne disait « n'est plus bloquée »
+d'une carte que cette paire recoupait (excusé par l'oracle, dit avant l'écriture ; faux à la fin de
+la passe) — lue au second temps, elle dit ce qui est. Figés :
+`test_two_perimeters_on_two_subnets_never_say_a_nic_unblocked_the_other_cuts_off` (web1 ou web2, nos
+règles retirées toutes ou les paires seules, Db--01 ou web listée la première ; 8/8 rouges sur
+`main`) ; `test_reassert.py` : les deux paires reposées avant toute relecture (les deux ordres), la
+VM en `human_only` dite après le retour de la paire voisine, une relecture en échec dite
+« réécrites », le premier temps qui n'écrit que ce que le second écrirait (déjà reposée, déjà dite,
+sous un déblocage), une écriture refusée au premier temps dite « a échoué », l'entrée laissée au
+second temps (perimètre seul ou fusionné). `_situation` et `_worse` passent dans
+`reassert_said.py` (`reassert.py` reste sous 500 lignes).
+
+**Trouvé par la machine sur le code d'un seul temps** (graine 1 à 500, rouge sur `main` ; réduit à
+la main de 30 règles à 4) : un blocage fusionné de `api` (une VM créée à l'adresse de web), ses règles
+retirées, dit en `human_only`, la carte acquittée ; les règles de la VM remises — mieux que la carte,
+la paire toujours absente — dans une passe dont la première écriture est refusée (un disque plein :
+la marque de contournement retirée, le blocage tenu) ; puis retirées de nouveau. La référence de
+l'épisode (L1Q) ne se resserrait qu'après cette écriture, jamais atteinte : « pas pire que la
+carte », en silence (L1). Sur la branche, la même séquence passait déjà, par un autre chemin (la
+marque n'existait plus) : la cause restait. **Correctif** (`reassert.py`) : la référence se resserre
+dès la lecture, en mémoire, avant les écritures de l'entrée — ce qui va mieux, et, pire d'un côté,
+ce qui va mieux de l'autre (`drift_meet`, L1) ; jamais sur une lecture « ne couvre pas » (rien de
+parti), que l'ancien ordre ne resserrait pas. Pour une entrée que le premier temps a écrite, c'est la
+lecture du premier temps, reprise au second avec son prologue (ci-dessous). Figés :
+`test_a_drift_better_in_a_pass_refused_on_a_full_disk_then_gone_again_is_said` (la séquence),
+`test_reassert.py::test_a_drift_better_in_a_pass_whose_first_write_fails_then_gone_again_is_said`
+(rouges sur `main`).
+
+**Le cas 2, mesuré : aucune alerte ne se tait.** `turned_perimeter_left_out` atteint la paire
+retournée qui ne revient pas (sa VM en `human_only` ou son verrou tenu, déjà reposée une fois ou
+non), la voisine réécrite à côté, l'acquittement, puis le périmètre levé : sur les 20 graines à 500, la règle atteinte 1 065 fois (la paire laissée hors de la passe 570 fois par `human_only`, 495 par un verrou tenu) ; sur les cinq dernières (16 à 20, le compteur entré en route), la voisine s'est ouverte 63 fois à côté de la paire retournée, dite chaque fois ; après l'acquittement et la levée, rien de nouveau ne s'est ouvert pour elle (0 fois) — la levée du périmètre n'ouvre que ce que la paire seule fermait, et la paire était déjà retournée. Ce qui
+s'ouvre pour la voisine est dit à chaque fois — sur une carte de dérive ou de contournement — et ce
+qui s'ouvre après l'acquittement et la levée l'est de nouveau. Rien de ce lot n'y a été corrigé.
+
+**Mutants M2990–M2999, M3150–M3152** (la réserve entamée, trois) : le sous-réseau illisible pris pour
+« hors du périmètre » (M2990) ; le périmètre seul qui ne lit pas l'autre (M2991), qui prend l'autre
+illisible pour absent (M2992) ou pour tenant (M2993) ; sans premier temps (M2994) ; un premier temps
+qui écrit en `human_only` (M2995), ce qui a déjà été reposé (M2996), une disparition dite et pas pire
+(M2997), sous un déblocage (M3151) ; un second temps qui ignore le premier (M2998), avale son échec
+(M2999), réécrit la paire (M3150) ; la référence resserrée après la première écriture (M3152).
+Par leurs tests (et la machine pour M2990, M2991, M2994–M2997, M3151), deux tours à 60 séquences : M2990–M2999 et M3150–M3151, 12/12 à chaque tour ; M3152 2/2 par le harnais (il n'était pas encore écrit au premier tour de mesure : rien ne manquait à son entrée `TESTS`). M2980 et M2981 (le tri de L1Qr) 2/2 ; M2982 survivait (0/2) — avec les deux temps, une entrée fusionnée n'est triée qu'au second, quand le premier ne l'a pas lue : le test de l'entrée laissée au second temps gagne le cas fusionné, M2982 2/2 ensuite. **Les mutants des fichiers touchés** (`reassert.py`, `reassert_perimeters.py`, `reassert_said.py`, `perimeter.py`, `verify_block.py` : 96), un tour à 60 séquences : 93/96. M1645 survit, comme sur `main` (mesuré sur `main` 7ac1f37 : ses tests et la machine passent mutés) ; M38 n'est attrapé que par ses séquences figées, comme mesuré par L1Q. **M1646 survivait, un défaut du lot** : la référence resserrée avant les écritures l'était aussi sur une lecture « ne couvre pas » (rien de parti), que l'ancien ordre ne resserrait jamais — elle masquait la fin d'épisode que cette branche porte ; restreinte aux lectures que l'ancien ordre resserrait, M1646 2/2. Réancrés : M1648, M1649, M2194 (`reassert_said.py`),
+M1943, M2155, M3120.
+
+**Après la relecture 5.5 (bloquant).** (1) **Une entrée écrite au premier temps ne resserrait plus
+sa référence** : le second temps la finissait (`_rewrite_block`) sans le prologue de la lecture — le
+resserrement, `unverified_over`, le contournement de la première lecture. Avec un connecteur qui
+laisse les marques de l'entrée telles quelles (la sonde de la relecture), une dérive mieux d'un
+côté, pire de l'autre, écrite (« reposé une fois »), puis les mêmes règles reparties : « pas pire
+que la carte », aucune carte — `main` passait par le chemin ordinaire et le disait. Sur
+l'adaptateur Azure, l'écriture du blocage en entier efface elle-même les marques de dérive (L1Q :
+un nouvel épisode) : la disparition suivante est dite de toute façon — c'est pourquoi la machine,
+sur le faux Azure, ne pouvait pas l'atteindre, et aucune règle ne l'atteint sans changer
+l'adaptateur. **Correctif** : le second temps reprend la lecture du premier (`pair["read"]`) par le
+même prologue que toute entrée, puis la finit. Figés : `test_reassert.py::test_a_drift_better_and_worse_in_a_pass_that_writes_narrows_its_baseline`
+(périmètre et blocage de VM ; rouge avant le correctif pour le périmètre),
+`…::test_a_check_that_raised_is_over_once_the_first_time_reads_and_writes` (la carte d'une
+vérification qui levait, fermée dans la passe où le premier temps lit et écrit ; rouge avant) ;
+`test_invariant_regressions.py::test_a_pair_put_back_by_the_first_time_narrows_its_drift_like_any_read`
+(la séquence sur le faux Azure, verte avant et après : le côté de l'adaptateur). Mutants **M3153**
+(le resserrement sauté pour une entrée écrite au premier temps) et **M3154** (`unverified_over`
+sauté). (2) **I5 par VM ne valait que pour des modes mêlés** : `mixed` était vrai dès qu'une passe
+tirait un mode par VM, même le même pour toutes — la forme par VM, plus faible, remplaçait la forme
+forte. Mêlés seulement quand les modes diffèrent ou qu'un verrou est tenu ; un seul mode tiré pour
+toutes garde la forme d'avant, sur ce mode. (3) **Le coût** : une entrée de périmètre que le premier
+temps n'écrit pas est lue deux fois par passe (une vérification de plus, au premier temps). (4)
+**La fenêtre entre les deux temps** : un watch coupé entre eux laisse des paires reposées et
+marquées (`reasserted_at`) sans la carte « reposé une fois » ; la disparition suivante est dite
+« une deuxième fois » et n'est pas reposée — une carte de moins, jamais une disparition tue.
+
+**Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé (lot à part) ; la séquence réduite, rejouée sur la machine et le code de `main` 7ac1f37 pur (après MCG), y est rouge, sur le même U1. **Un second défaut ancien**, trouvé par l'exécution non mutée du harnais de mutation (une graine au hasard à 60) : « L1: the block on …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so » — une VM créée à l'ancienne adresse de Db--01, sous des écritures refusées, son adresse changée, une carte acquittée ; 24 règles réduites à la main à huit de `main`, aucune de L1Qs, rouges sur `main` 7ac1f37 pur comme sur la branche : figé en `xfail` strict (`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone`), hors du lot, routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet (`main` 7ac1f37 fusionné, MCG compris) : 5 933 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 343 mutants, sans faute ; `tests/unit/test_mutant_anchors.py` vert (le bloc de L1Qs au-dessus du repère « The mutants end here »).
 
 **U1O (30–31/10, #372) : la carte d'une orpheline suit la VM qu'elle coupe.** Le U1 de la graine
 9001 à 2 000, trouvé par la seconde relecture d'I4D, présent sur `main`, figé en `xfail` strict

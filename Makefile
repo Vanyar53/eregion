@@ -1024,7 +1024,7 @@ orodruin-push: orodruin-known
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
 	@git fetch -q --tags origin
 	@python3 scripts/published_image.py install-cosign
-	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; trap 'rm -rf "$$tmp"; exit 130' INT TERM HUP; \
 	 out=$$(python3 scripts/published_image.py archive annatar --ref "$$EREGION_DEPLOY_REF" --tag $(ORO_INCOMING) --out "$$tmp") \
 	   || { echo "✗ rien n'est envoyé : eregion-annatar:orodruin n'a pas changé" >&2; exit 1; }; \
 	 echo "$$out"; digest=$$(echo "$$out" | sed -n 's/^digest=//p'); commit=$$(echo "$$out" | sed -n 's/^commit=//p'); \

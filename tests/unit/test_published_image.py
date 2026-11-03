@@ -521,6 +521,9 @@ def test_a_manifest_that_is_not_one_of_ours_is_refused_before_a_byte_is_fetched(
     (lambda: fake_oci.Image(C2, user="root"), "en root"),
     (lambda: fake_oci.Image(C2, user=""), "en root"),
     (lambda: fake_oci.Image(C2, user="0:0"), "en root"),
+    (lambda: fake_oci.Image(C2, user="00"), "en root"),
+    (lambda: fake_oci.Image(C2, user="000:0"), "en root"),
+    (lambda: fake_oci.Image(C2, user="root:app"), "en root"),
     (lambda: fake_oci.Image(C2, os_arch=("linux", "arm64")), "linux/amd64"),
 ])
 def test_a_config_that_says_otherwise_is_refused(pim, reg, tmp_path, image, said):
@@ -536,6 +539,23 @@ def test_the_registrys_token_never_follows_a_redirect_to_another_host(pim, reg, 
     assert len(cdn) == 1 + len(image.layers)
     assert not [r for r in cdn if "Authorization" in r["headers"]]
     assert expect["config"] == image.config_digest
+
+
+def test_the_registrys_token_never_follows_a_manifest_redirected_to_another_host(pim, reg, tmp_path):
+    """The manifests too (the relecture of OI1): read through the same opener as the blobs."""
+    reg.registry_redirect_manifests = True
+    image = fake_oci.Image(C2)
+    digest = image.publish(reg, ANNATAR, f"sha-{C2}")
+    assert pim.resolve("annatar", C2) == digest
+    cdn = [r for r in reg.requests if r["path"].startswith("/registry-cdn/")]
+    assert len(cdn) == 1 and "Authorization" not in cdn[0]["headers"]
+
+
+@pytest.mark.parametrize("user, ok", [("app", True), ("1000", True), ("1000:1000", True), ("app:0", True),
+                                      ("0", False), ("00", False), ("000:0", False), ("root", False),
+                                      ("root:1000", False), ("", False), (" 0", False)])
+def test_root_is_root_whatever_its_spelling(pim, user, ok):
+    assert pim._not_root(user) is ok
 
 
 def test_a_token_the_registry_no_longer_takes_is_asked_again_once(pim, reg, tmp_path):
@@ -607,6 +627,15 @@ def test_an_image_read_back_otherwise_is_refused(pim, over, said):
     image = fake_oci.Image(C2)
     with pytest.raises(pim.Unverified, match=said):
         pim.check_loaded(_expect(image), _inspected(image, **over), image.digest)
+
+
+@pytest.mark.parametrize("partial", [{"Config": None, "RootFS": {"Type": "layers"}}, {}, {"Config": {}}])
+def test_an_image_without_its_config_reads_back_without_layers_nor_user_and_is_refused(pim, partial):
+    """docker's API answers the image without its config by its id alone (the CLI applies -f on its
+    side: `-f {{.Id}}` answered, #488): no layers, no user — refused."""
+    image = fake_oci.Image(C2)
+    with pytest.raises(pim.Unverified, match="ses couches, son utilisateur"):
+        pim.check_loaded(_expect(image), json.dumps([{"Id": image.digest, **partial}]), image.digest)
 
 
 @pytest.mark.parametrize("inspected", ["", "[]", "not json", '[{"Id": 1}, {"Id": 2}]'])
@@ -897,6 +926,22 @@ def _load_on(state, image, tag, store="containerd"):
     assert res.returncode == 0, res.stderr
 
 
+@pytest.mark.parametrize("signal", ["INT", "TERM", "HUP"])
+def test_an_interrupted_push_leaves_no_archive_behind(tmp_path, signal):
+    """~630 MB in TMPDIR: removed at a Ctrl-C too — dash runs no EXIT trap on a signal (relecture)."""
+    import os
+    import re
+    line = next(ln for ln in (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+                if "tmp=$$(mktemp -d)" in ln and "trap" in ln)
+    head = re.sub(r"\\$", "", line.lstrip("\t@")).replace("$$", "$")
+    (tmp_path / "t").mkdir()
+    res = subprocess.run(["/bin/sh", "-c", f"{head} kill -{signal} $$; sleep 5; echo continued"],
+                         env={**os.environ, "TMPDIR": str(tmp_path / "t")}, capture_output=True, text=True,
+                         timeout=30)
+    assert res.returncode != 0 and "continued" not in res.stdout
+    assert list((tmp_path / "t").iterdir()) == []
+
+
 @pytest.mark.parametrize("store", ["containerd", "classic"])
 def test_the_image_arrives_whole_though_this_machines_docker_save_drops_config_and_layers(orodruin, store):
     """#488, red on main: the operator's docker (Docker Desktop, containerd's store) saves a pulled
@@ -917,10 +962,12 @@ def test_the_image_arrives_whole_though_this_machines_docker_save_drops_config_a
 
 def test_an_image_whose_config_the_store_loses_is_refused_incoming_removed(orodruin):
     """`loaded` reads the image back (docker image inspect), not its id alone: an image without its
-    config cannot be inspected — refused, eregion-annatar:incoming removed, :orodruin as it was, and
-    ~/.eregion-image absent (never naming the old image as the new one)."""
+    config reads back as its id, without layers nor user (docker's API, the CLI applying -f on its
+    side) — refused, eregion-annatar:incoming removed, :orodruin as it was, and ~/.eregion-image
+    absent (never naming the old image as the new one)."""
     res = orodruin.push(FAKE_LOAD_DROP="config")
-    assert res.returncode != 0 and "retirée" in res.stderr and "ne se relit pas" in res.stderr
+    assert res.returncode != 0 and "retirée" in res.stderr
+    assert "ses couches" in res.stderr and "son utilisateur" in res.stderr
     images = orodruin.images()
     assert "eregion-annatar:incoming" not in images
     assert images["eregion-annatar:orodruin"]["manifest"] == orodruin.old.digest

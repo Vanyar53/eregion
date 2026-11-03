@@ -6,8 +6,9 @@ sha256 — and a fake docker that reads an archive as docker does, run as a prog
 Its state: $DOCKER_STATE/images.json ({name: record}) and $DOCKER_STATE/blobs/<hex>. Two stores,
 as measured on 03/11 (#488), $FAKE_STORE:
 - ``containerd`` (the default, Docker Desktop's and Orodruin's): an image's id is its manifest's
-  digest. An archive without its config loads, an image nobody can tag or inspect (« failed to
-  read config content: NotFound »), but `inspect -f {{.Id}}` answers; with its config, its layers
+  digest. An archive without its config loads, an image nobody can tag (« failed to read config
+  content: NotFound »); `docker image inspect` answers a partial JSON — its id, no config, no
+  layers (the CLI applies -f on its side: `-f {{.Id}}` answered, measured); with its config, its layers
   are unpacked — one missing, or not the config's diff id, and the load fails.
 - ``classic``: the id is the config's digest; the archive's manifest.json, its config and every
   layer must be there, each layer's diff id the config's.
@@ -222,8 +223,20 @@ def _inspect(s: Path, args: list) -> None:
     rec = _images(s).get(args[-1])
     if rec is None:
         _fail(f"No such image: {args[-1]}")
+    if rec.get("config") is None or _blob(s, rec["config"]) is None:
+        # Measured (#488): `-f {{.Id}}` answered for the image without its config — the CLI applies
+        # -f on its side, so the API (GET /images/{name}/json) answered 200: a partial JSON, its id,
+        # no config, no layers.
+        if fmt == "{{.Id}}":
+            print(rec["id"])
+            return
+        if fmt:
+            _fail("template: :1:8: executing \"\" at <.Config.Labels>: nil pointer evaluating")
+        print(json.dumps([{"Id": rec["id"], "RepoTags": [args[-1]], "Config": None,
+                           "RootFS": {"Type": "layers"}}], indent=4))
+        return
     if fmt == "{{.Id}}":
-        print(rec["id"])                  # measured: answered, the config gone or not
+        print(rec["id"])
         return
     cfg = _config(s, rec)
     labels = cfg["config"].get("Labels") or {}

@@ -60,6 +60,7 @@ class FakeDiscord:
         # OI1: blobs by their digest (the same store as the manifests, as a registry's); `redirect`:
         # answered as GHCR does, by a redirect to its storage on another host (/registry-cdn/).
         self.registry_redirect = False
+        self.registry_redirect_manifests = False      # the manifests too, to the same storage
         self.fail: dict[str, int] = {}       # path prefix → status (once if listed in self.once)
         self.once: set[str] = set()
         self.lock, self.next_id = threading.Lock(), 100
@@ -277,6 +278,9 @@ class FakeDiscord:
         raw = entry["blobs"].get(digest)
         if raw is None:
             return 404, {"errors": [{"code": "MANIFEST_UNKNOWN"}]}, {}
+        if self.registry_redirect_manifests:
+            port = self.base.rsplit(":", 1)[1]
+            return 307, b"", {"Location": f"http://localhost:{port}/registry-cdn/{repo}/{digest}"}
         return 200, raw, {"Docker-Content-Digest": self.registry_lie.get(digest, digest)}
 
     def webhook_posts(self, token):

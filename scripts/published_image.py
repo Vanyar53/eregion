@@ -160,7 +160,7 @@ def _last(res, n: int = 3) -> str:
 def _open(url: str, headers: dict, limit: int):
     req = urllib.request.Request(url, headers={"User-Agent": "eregion-published-image", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with _OPENER.open(req, timeout=30) as r:       # a redirect elsewhere never carries the token (OI1)
             body = r.read(limit + 1)
             if len(body) > limit:
                 raise Unverified(f"réponse démesurée du registre ({url.split('?')[0]})")
@@ -545,8 +545,11 @@ def blob(image: str, digest: str, size: int, dest: Path, token: Callable[[bool],
 
 
 def _not_root(user: str) -> bool:
-    name = user.split(":", 1)[0]
-    return name not in ("", "0", "root")
+    """A user other than root: neither empty, nor `root`, nor a uid that is 0 (`0`, `00`, `000:0`)."""
+    name = user.split(":", 1)[0].strip()
+    if name.isdigit():
+        return int(name) != 0
+    return name not in ("", "root")
 
 
 def _tag_names(tag: str) -> tuple[str, str]:
@@ -662,7 +665,9 @@ def check_loaded(expect: dict, inspected: str, digest: str) -> None:
     """What docker says of the image loaded on Orodruin (`docker image inspect`, its JSON), read
     against what the proven manifest announced: its id (the manifest's, under containerd's store;
     its config's digest, under the classic store), the layers and the user of its config, its
-    platform and its commit. An image without its config cannot be inspected: refused."""
+    platform and its commit. An image without its config reads back without layers nor user (docker's
+    API answers its id alone: the CLI applies -f on its side), or not at all: refused. The layers
+    are unpacked or not, docker's inspect does not say it (#490, OI2: a run before the tag)."""
     if expect.get("digest") != digest or not DIGEST_RE.fullmatch(digest or ""):
         raise Unverified(f"l'attendu n'est pas celui de {digest[:19]}…")
     ids_ = expect.get("ids") or []

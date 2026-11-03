@@ -6586,7 +6586,6 @@ _L1H_FOUND = (
     _L1H_LAST)
 
 
-@pytest.mark.xfail(strict=True, reason="L1H (#483): fixed in the next commit")
 @pytest.mark.parametrize("steps", [_L1H_FOUND, (_L1H_FIRST, _L1H_MERGED, _L1H_LAST)], ids=["as found", "reduced"])
 def test_an_acknowledged_drift_whose_turned_pair_another_perimeter_wrote_again_is_said(monkeypatch, steps):
     """L1H (#483), seed 5 at 500 (L1A's measure, MAK's too): « L1: the block on …/Db--01 vanished from
@@ -6598,6 +6597,8 @@ def test_an_acknowledged_drift_whose_turned_pair_another_perimeter_wrote_again_i
     —, a deny again; taken off, a pass outside human_only puts it back for web2. Db--01's own rules
     still gone, the pair whole: « better than the card, not worse », in silence — the card had read
     the pair on Azure (turned), not absent, and `_back` looked at presence alone. The machine holds
-    an acknowledged card for said only while the entry's rules are as they were then. Reduced to
-    three rules of the twenty, through the conftest; red on `main` d597a00e, both."""
+    an acknowledged card for said only while the entry's rules are as they were then. A rule of the
+    pair said gone while read there, holding now, is written again: the episode is over, what is
+    still gone said anew (`reassert_said._back`). Reduced to three rules of the twenty, through the
+    conftest; red on `main` d597a00e, both."""
     _replay(monkeypatch, _l1h_net(), *steps)

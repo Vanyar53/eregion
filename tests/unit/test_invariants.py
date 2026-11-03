@@ -1616,7 +1616,8 @@ class IsolationMachine(RuleBasedStateMachine):
     def _episode_over(self, vm: str):
         """The test wrote the VM's block whole (`_block`, `block_perimeter`): a new block, a new
         episode — the acknowledgement of the one before no longer counts it said (L1E)."""
-        getattr(self, "acked_drift", {}).pop(vm, None)
+        if getattr(self, "acked_drift", {}).pop(vm, None) is not None:
+            _note("an acknowledged episode ended: the block written whole again")
 
     def _ack_holds(self, vm: str) -> bool:
         """The operator's acknowledgement of the VM's block drift card counts its disappearance said
@@ -1631,8 +1632,10 @@ class IsolationMachine(RuleBasedStateMachine):
             return False
         absent = {k for k, r in seen.items() if r is None}
         at = getattr(self, "acked_at", {}).get(vm, len(self.fake.journal))
-        return not any(e.get("op") == "rule.write" and (e["nsg"], e["rule"]) in absent
-                       for e in self.fake.journal[at:])
+        if any(e.get("op") == "rule.write" and (e["nsg"], e["rule"]) in absent for e in self.fake.journal[at:]):
+            _note("an acknowledged episode ended: a rule it saw absent written since, gone again")
+            return False
+        return True
 
     def _no_drift_on_untouched(self, cards_before: set, quiet: set | None, named: dict):
         """I3, a drift that wasn't (RB1, second review): a block whose every rule — as its

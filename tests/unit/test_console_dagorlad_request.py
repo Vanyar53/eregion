@@ -147,20 +147,24 @@ def test_an_unwritable_directory_is_said_never_a_request_claimed(client, tmp_pat
     assert r.status_code == 503 and "not written" in r.json()["error"]
 
 
-def test_the_only_post_among_the_injectors_routes_is_the_request():
+def test_the_only_posts_among_the_injectors_routes_are_the_request_and_the_drill():
+    """Two writes, each a file of the console's own directory, neither a launch: a request for
+    Orodruin (DG-b), a drill kept (DG-d)."""
     posts = sorted(r.path for r in api.app.routes
                    if getattr(r, "path", "").startswith(("/api/dagorlad", "/dagorlad"))
                    and "POST" in (getattr(r, "methods", None) or set()))
-    assert posts == ["/api/dagorlad/requests"]
+    assert posts == ["/api/dagorlad/drills", "/api/dagorlad/requests"]
 
 
 def test_the_page_sends_two_identifiers_per_wire_and_takes_no_name():
     """The page shows what will be typed; it never collects it (§7: a name the console kept would
-    prove nothing). Its request is the wires' two identifiers, nothing else."""
+    prove nothing). Its request is the wires' two identifiers, nothing else. Its only fields are
+    a drill's name and description (DG-d, « Save as drill ») — never a VM's name."""
     static = Path(api.__file__).parent / "static"
     js = (static / "dagorlad.js").read_text(encoding="utf-8")
     html = (static / "dagorlad.html").read_text(encoding="utf-8")
-    assert "<input" not in js and "<input" not in html and "<textarea" not in js + html
+    assert (js + html).count("<input") == 2 and "<textarea" not in js + html
+    assert sorted(re.findall(r'<input id="([^"]+)"', js + html)) == ["drill-desc", "drill-name"]
     assert "wires: S.wires.map(w => ({ experiment: w[0], target: w[1] }))" in js
     assert "fetch('/api/dagorlad/requests', { method: 'POST'" in js
 

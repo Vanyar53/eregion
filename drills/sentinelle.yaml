@@ -1,0 +1,9 @@
+# A reference drill of Eregion (DG-d, docs/design/console.md §7): shipped, reviewed in a PR,
+# replaced by an update. Its targets are selectors — the operator gives their VMs when it is
+# placed (the board, or TARGETS= with make orodruin-exercise DRILL=).
+name: sentinelle
+author: eregion
+description: "T1136.001 on an enrolled VM of the production zone (the empty sentinel, for one): the production rule's full chain, a public technique that destroys nothing."
+wires:
+  - experiment: T1136.001
+    target: {zone: production}

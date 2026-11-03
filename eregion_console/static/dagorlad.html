@@ -134,6 +134,18 @@
     flex-shrink: 0; height: 34vh; min-height: 180px; overflow-y: auto; border-top: 1px solid var(--border);
     background: var(--bg1); padding: 10px 20px; font-size: 11px;
   }
+  /* ── The drills (DG-d): one line folded, the list scrolls inside a bounded height ── */
+  #drills {
+    flex-shrink: 0; max-height: 30vh; overflow-y: auto; border-top: 1px solid var(--border);
+    background: var(--bg1); padding: 6px 20px 0; font-size: 11px;
+  }
+  #drills a { color: var(--blue); text-decoration: none; }
+  #drills a:hover { text-decoration: underline; }
+  .saveform { display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: baseline; margin-bottom: 6px; }
+  .saveform input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px;
+                    font: inherit; padding: 2px 6px; }
+  .saveform input:focus-visible { outline: 1px solid var(--blue); }
+  .pending { border: 1px solid var(--yellow); border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; }
   .plan-head { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
   .plan-head b { letter-spacing: 1px; }
   .checks { display: flex; gap: 6px 18px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -179,6 +191,7 @@
   <div id="pills" aria-hidden="true"></div>
 </main>
 
+<section id="drills" aria-label="The drills: wires kept under a name, laid again"></section>
 <section id="plan" aria-label="The plan of the wires"></section>
 
 <script src="/static/console.js"></script>

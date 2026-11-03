@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dagorlad shown (DOC1, #365): the README's captures and loop, replayed from the sample data.
 
-    python scripts/console_shots.py                  # docs/images/dagorlad/: board.png, runs.png, loop.webp
+    python scripts/console_shots.py                  # docs/images/dagorlad/: board.png, drills.png, runs.png, loop.webp
     python scripts/console_shots.py --video ~/dagorlad.mp4   # and the whole tour, outside the repository
     python scripts/console_shots.py --check          # which tools are here; renders nothing
     make console-shots [VIDEO=~/dagorlad.mp4]
@@ -782,12 +782,19 @@ def render_shots(b: Browser, base: str, token: str, doc: dict, out: Path) -> dic
     open_board(b, base, token)
     draw(b, doc["board"])
     board = b.shot("png")
+    # DG-d: a shipped drill laid again over the wires drawn (asked first) — its wires waiting for the
+    # VMs the operator gives, never one chosen for them.
+    b.js("ACTIONS.toggleDrills(); ACTIONS.loadDrill('bl1-reponse'); ACTIONS.loadDrill('bl1-reponse'); true")
+    b.wait("S.loaded === 'bl1-reponse' && S.pending.length === 2 && document.querySelector('.pending')"
+           " && S.drills && S.drills.length > 0")
+    b.pump(0.6)
+    drills = b.shot("png")
     b.viewport(WIDTH, HEIGHT)
     b.go(f"{base}/dagorlad?view=runs")
     b.wait(RUNS_READY)
     b.pump(1.0)
     runs = b.shot("png")
-    return {"board.png": board, "runs.png": runs}
+    return {"board.png": board, "drills.png": drills, "runs.png": runs}
 
 
 def render_loop(b: Browser, base: str, token: str, doc: dict) -> bytes:

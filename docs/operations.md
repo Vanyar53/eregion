@@ -255,6 +255,17 @@ gothmog report <run_id>                      # runs/gothmog/<run_id>.json (même
 #      dit quels fils demanderont le nom de leur cible ; elle ne prend aucun nom.
 #   2. Sur ton poste :
 make orodruin-exercise REQUEST=r-20261030T075200Z-a1b2c3 [DRY_RUN=1] [REQUEST_FROM=local]
+#      Ou un drill (DG-d, docs/dagorlad.md, « Garder et rejouer un drill ») : la demande s'écrit sur ton
+#      poste, depuis le drill de l'instance (H0, ou REQUEST_FROM=local), sinon celui livré (drills/) :
+make orodruin-exercise DRILL=<nom> [TARGETS=<vm>,<vm>…|all] [DRY_RUN=1] [REQUEST_FROM=local]
+#      - DRILL vérifié avant toute commande (a-z, 0-9, -) ; DRILL, TARGETS et DRILL_VMS jamais lus de
+#        l'environnement ; un drill de l'instance qui est un lien : refusé, jamais suivi ni remplacé par le
+#        drill livré ; DRILL_VMS=<liste.json> lit les VM d'une liste (tests, poste sans accès Azure), dit ;
+#      - ses fils posés sur les VM inscrites lues maintenant par Azure, avec ton identité
+#        (AZURE_SUBSCRIPTION_ID, EREGION_BENCH) ; un drill livré attend TARGETS — sans lui, refusé, les
+#        candidates de chaque fil listées ; un nom que porte plus d'une VM inscrite : refusé, ses VM dites
+#        par leur groupe ; chaque fil jugé comme le plan le juge (un refusé : rien) ;
+#      - puis comme REQUEST= : affichée, les noms tapés, [y/N], Orodruin.
 #      - REQUEST vérifié avant toute commande (r-<heure UTC>-<6 hex>), jamais lu de l'environnement ;
 #      - la demande tirée de H0 par SSH, sa clé d'hôte vérifiée par son empreinte : HOST_SSH_FINGERPRINT
 #        est exigée (sans elle, rien n'est fait — jamais accept-new pour ce qui fait agir Orodruin) ;
@@ -1472,7 +1483,7 @@ premier step qui décide (`python3 scripts/image_check.py touched`).
   `.dockerignore`, `requirements/`, `pyproject.toml`, la config d'exemple, `docker-compose.yml` (il
   dit où la config est montée), et les paquets et fichiers copiés (`glorfindel/`, `annatar/`,
   `gothmog/`, `eregion_core/`, `eregion_console/`, `analysis/`, `scripts/`,
-  `technique_catalog.yaml`). `tests/unit/test_image_check.py` lit les `COPY` de chaque Dockerfile
+  `technique_catalog.yaml`, `drills/`). `tests/unit/test_image_check.py` lit les `COPY` de chaque Dockerfile
   (lignes continuées jointes, casse ignorée) et échoue si un chemin copié manque à la liste.
 - Un push sur `main` construit toujours, sans lire le diff. Un diff illisible construit aussi : la
   décision échoue fermée. De même (SEC7) : un HEAD qui n'est pas le commit de fusion de la PR

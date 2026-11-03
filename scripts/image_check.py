@@ -103,6 +103,7 @@ IMAGE_PATHS = (
     ".github/workflows/images.yml", ".dockerignore", "glorfindel/**", "annatar/**", "gothmog/**",
     "eregion_core/**", "eregion_console/**", "analysis/**", "scripts/**", "requirements/**",
     "pyproject.toml", "technique_catalog.yaml", "glorfindel-config.yaml.example", "docker-compose.yml",
+    "drills/**",
 )
 
 

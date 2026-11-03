@@ -346,6 +346,14 @@ eregion_core/exercise_request.py  → DG-b : la demande pour Orodruin (id, heure
                                     tapés à part (read_typed), le statut publié par Orodruin (read_status) ; écrite par
                                     la console dans ~/.eregion/console/requests/ (EREGION_REQUESTS_DIR) ; `confirm`, sur
                                     le poste (make orodruin-exercise) : affichée, les noms tapés
+eregion_core/drill.py             → DG-d : le drill de Dagorlad — son format et son seul lecteur (read : exact, un
+                                    drill livré vise par zone, celui de l'instance par nom, jamais un identifiant),
+                                    les couches (drills/ livrés ; ~/.eregion/console/drills/, EREGION_DRILLS_DIR), son
+                                    enregistrement (jamais par-dessus un autre sans replace), son placement (place : une
+                                    VM nommée, ou les VM qu'on donne à un sélecteur — aucune choisie à sa place) ; sur
+                                    le poste, la demande d'un drill (make orodruin-exercise DRILL= [TARGETS=])
+drills/                           → DG-d : les drills livrés avec Eregion, relus en PR (bl1-reponse, sentinelle) —
+                                    cibles par zone ; copiés dans l'image de la console
 eregion_core/exercise_runner.py   → DG-b, sur Orodruin : la demande jugée (contrat, codes de la console, nom tapé
                                     comparé au nom lu) puis ses fils l'un après l'autre (annatar wire, gothmog run
                                     --request), le plafond sur la demande entière ; statut dans runs/orodruin/requests/

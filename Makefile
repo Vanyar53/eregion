@@ -236,6 +236,8 @@ help:
 	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, annule le chaos, désalloue, ferme les fenêtres"
 	@echo "  make orodruin-exercise REQUEST=<id> [DRY_RUN=1]  Dagorlad : tire la demande de la console, l'affiche, fait taper"
 	@echo "                                               les noms des cibles destructives, la porte sur Orodruin qui la rejuge et la lance"
+	@echo "  make orodruin-exercise DRILL=<nom> [TARGETS=<vm>,…|all] [DRY_RUN=1]  un drill (DG-d) : ses fils posés sur les VM"
+	@echo "                                               inscrites (un drill livré attend TARGETS), en demande, puis comme REQUEST="
 	@echo "  make orodruin-down                           Détruit la VM et l'identité"
 	@echo ""
 	@echo "Gothmog (G0, G1) — une panne déclarée, depuis Orodruin (gothmog/README.md) :"
@@ -1062,18 +1064,42 @@ unexport REQUEST
 REQUEST_FROM  ?= h0
 ORO_RUN_REQUEST = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,annatar) $(call ORO_MOUNT,gothmog) $(call ORO_MOUNT,orodruin) -v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)
 orodruin-exercise: export EREGION_REQUEST_ID = $(value REQUEST)
+orodruin-exercise: export EREGION_DRILL = $(value DRILL)
+orodruin-exercise: export EREGION_DRILL_TARGETS = $(value TARGETS)
+orodruin-exercise: export EREGION_DRILL_VMS = $(value DRILL_VMS)
 orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known) $(if $(DRY_RUN),,orodruin-known)
 	@case "$(origin REQUEST)" in environment*) echo "REQUEST vient de l'environnement : rien n'est fait. La donner sur la ligne de commande : make orodruin-exercise REQUEST=<id>." >&2; exit 1;; esac
+	@case "$(origin DRILL) $(origin TARGETS) $(origin DRILL_VMS)" in *environment*) echo "DRILL, TARGETS et DRILL_VMS viennent de l'environnement : rien n'est fait. Les donner sur la ligne de commande : make orodruin-exercise DRILL=<nom> [TARGETS=…]." >&2; exit 1;; esac
+	@if [ -n "$$EREGION_REQUEST_ID" ] && [ -n "$$EREGION_DRILL" ]; then echo "REQUEST=<id> ou DRILL=<nom>, pas les deux : rien n'est fait." >&2; exit 1; fi
 	@case "$(REQUEST_FROM)" in h0|local) ;; *) echo "REQUEST_FROM=h0 ou local, pas « $(REQUEST_FROM) »" >&2; exit 1;; esac
 	@if [ "$(REQUEST_FROM)" = h0 ] && [ -z "$(HOST_SSH_FINGERPRINT)" ]; then echo "✗ HOST_SSH_FINGERPRINT requis : la demande vient de H0, sa clé d'hôte doit être vérifiée par son empreinte (infra/glorfindel-host/README.md, « SSH ») — jamais accept-new pour ce qui fait agir Orodruin. Rien n'est fait." >&2; exit 1; fi
-	@$(PYTHON) -m eregion_core.exercise_request check-id "$$EREGION_REQUEST_ID"
-	@d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT && id="$$EREGION_REQUEST_ID" && \
-	 if [ "$(REQUEST_FROM)" = local ]; then \
-	   cat "$(HOME)/.eregion/console/requests/$$id.json" > "$$d/$$id.json"; \
+	@if [ -n "$$EREGION_DRILL" ]; then $(PYTHON) -m eregion_core.drill check-name "$$EREGION_DRILL"; \
+	 else $(PYTHON) -m eregion_core.exercise_request check-id "$$EREGION_REQUEST_ID"; fi
+	@d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT && \
+	 if [ -n "$$EREGION_DRILL" ]; then \
+	   n="$$EREGION_DRILL"; layer=instance; rc=0; \
+	   if [ "$(REQUEST_FROM)" = local ]; then \
+	     f="$(HOME)/.eregion/console/drills/$$n.yaml"; \
+	     if [ -L "$$f" ]; then rc=4; elif [ -e "$$f" ]; then cat "$$f" > "$$d/$$n.yaml" || rc=1; else rc=3; fi; \
+	   else \
+	     test -n "$(HOST_IP)" || { echo "✗ Pas de H0 (HOST_IP) : make glorfindel-host-up, ou REQUEST_FROM=local" >&2; exit 1; }; \
+	     $(HOST_SSH) "test -e .eregion/console/drills/$$n.yaml || test -L .eregion/console/drills/$$n.yaml || exit 3; test ! -L .eregion/console/drills/$$n.yaml || exit 4; cat .eregion/console/drills/$$n.yaml" > "$$d/$$n.yaml" || rc=$$?; \
+	   fi; \
+	   if [ "$$rc" = 3 ]; then \
+	     layer=shipped; cat "drills/$$n.yaml" > "$$d/$$n.yaml" 2>/dev/null || { echo "✗ pas de drill $$n, ni dans l'instance de la console ni parmi ceux livrés (drills/) : rien n'est envoyé" >&2; exit 1; }; \
+	   elif [ "$$rc" = 4 ]; then echo "✗ le drill $$n de l'instance est un lien, jamais suivi — ni lui, ni le drill livré à sa place : rien n'est envoyé" >&2; exit 1; \
+	   elif [ "$$rc" != 0 ]; then echo "✗ le drill $$n ne se lit pas sur l'hôte de la console : rien n'est envoyé" >&2; exit 1; fi; \
+	   id=$$($(PYTHON) -m eregion_core.drill request "$$d/$$n.yaml" "$$d/drill-request.json" --layer "$$layer" --name "$$n" --targets "$$EREGION_DRILL_TARGETS" --vms "$$EREGION_DRILL_VMS") || exit 1; \
+	   mv "$$d/drill-request.json" "$$d/$$id.json"; \
 	 else \
-	   test -n "$(HOST_IP)" || { echo "✗ Pas de H0 (HOST_IP) : make glorfindel-host-up, ou REQUEST_FROM=local" >&2; exit 1; }; \
-	   $(HOST_SSH) "cat .eregion/console/requests/$$id.json" > "$$d/$$id.json"; \
-	 fi || { echo "✗ la demande $$id ne se lit pas sur l'hôte de la console : rien n'est envoyé" >&2; exit 1; }; \
+	   id="$$EREGION_REQUEST_ID"; \
+	   if [ "$(REQUEST_FROM)" = local ]; then \
+	     cat "$(HOME)/.eregion/console/requests/$$id.json" > "$$d/$$id.json"; \
+	   else \
+	     test -n "$(HOST_IP)" || { echo "✗ Pas de H0 (HOST_IP) : make glorfindel-host-up, ou REQUEST_FROM=local" >&2; exit 1; }; \
+	     $(HOST_SSH) "cat .eregion/console/requests/$$id.json" > "$$d/$$id.json"; \
+	   fi || { echo "✗ la demande $$id ne se lit pas sur l'hôte de la console : rien n'est envoyé" >&2; exit 1; }; \
+	 fi; \
 	 $(PYTHON) -m eregion_core.exercise_request confirm "$$d/$$id.json" "$$d/$$id.typed.json" --expect "$$id" || exit 1; \
 	 if [ -n "$(DRY_RUN)" ]; then \
 	   echo "DRY_RUN : rien n'est envoyé. Sans lui :"; \

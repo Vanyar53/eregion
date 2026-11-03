@@ -1679,9 +1679,11 @@ gh attestation verify oci://ghcr.io/grootcyber/eregion-glorfindel@sha256:<digest
 **H0** tire l'image de chaque release par son digest et la vérifie avant de la préflighter : son CD
 ne construit plus (`infra/glorfindel-host/README.md`, « Le CD de H0 »). **Orodruin** reçoit l'image
 d'Annatar publiée, vérifiée sur le poste : `make orodruin-push [REF=<tag|commit>]` (sans `REF`, le
-dernier tag `v*` : tant qu'il est d'avant CI3, il n'a pas d'image, donner `REF=`), sa sortie restant fermée (`docs/design/orodruin-contract.md`, « L'image des
+dernier tag `v*` : tant qu'il est d'avant CI3, il n'a pas d'image, et d'avant REN1, il est signé par l'ancien nom du dépôt ; donner `REF=`), sa sortie restant fermée (`docs/design/orodruin-contract.md`, « L'image des
 injecteurs »). `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
 **non vérifiée**, pour essayer une branche : `~/.eregion-image` sur Orodruin le dit (`dev <commit>`).
+
+**Après le renommage du compte (REN1, 03/11).** Les images ont suivi le compte : le nouvel espace répond, l'ancien rend 403, sans redirection (mesuré). Celles d'avant (la v0.5.2 et avant) sont signées par l'ancien nom du dépôt, que `published_image.py` ne reconnaît plus : un retour arrière vers elles est refusé, sur H0 comme sur Orodruin. **H0** : l'ordre dans `infra/glorfindel-host/README.md`, « REN1 change l'agent » (`cd-install`, la 0.5.3 publiée, `cd-check`, `cd-enable`). **Orodruin** : `make orodruin-push REF=<sha de la fusion de REN1>`, puis `make orodruin-check` ; sans `REF` (le dernier tag), seulement à partir de la 0.5.3.
 
 **L'image publique** : le dépôt l'est, l'image n'a aucun secret (elle n'a que le code et ses
 dépendances verrouillées ; les secrets sont dans `host.env` et `orodruin.env`, montés ou passés au

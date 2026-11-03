@@ -26,9 +26,10 @@ def _files() -> list[str]:
     listed = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True)
     if listed.returncode == 0 and listed.stdout.strip("\0"):
         return [f for f in listed.stdout.split("\0") if f]
-    skip = {".git", ".venv", "venv", ".claude", "node_modules", "site-packages", "__pycache__", "build", "dist"}
-    return [str(p.relative_to(ROOT)) for p in ROOT.rglob("*")
-            if p.is_file() and not skip & set(p.relative_to(ROOT).parts)]
+    skip = {".git", ".venv", "venv", "node_modules", "site-packages", "__pycache__", "build", "dist"}
+    return [str(rel) for p in ROOT.rglob("*")
+            if p.is_file() and not skip & set((rel := p.relative_to(ROOT)).parts)
+            and rel.parts[:2] != (".claude", "worktrees")]
 
 
 def _naming(rel: str) -> list[str]:

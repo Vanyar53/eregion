@@ -552,7 +552,7 @@ trop — l'échec est fermé, et il se corrige dans la liste, après lecture de 
 Avant CI3, `make orodruin-push` construisait l'image d'Annatar sur le poste de l'opérateur et
 l'envoyait par SSH : rien ne liait ce qu'Orodruin exécute à ce que la CI avait éprouvé (P-02).
 
-**Maintenant, `make orodruin-push [REF=<tag|commit>]`** (sans `REF`, le dernier tag `v*`) :
+**Maintenant, `make orodruin-push [REF=<tag|commit>]`** (sans `REF`, le dernier tag `v*` ; jusqu'à la 0.5.3, c'est la v0.5.2, signée par l'ancien nom du dépôt et refusée : `REF=<sha de la fusion de REN1>`) :
 1. **Sur le poste**, `scripts/published_image.py fetch annatar` : le commit de `REF`, qui doit être
    sur `origin/main` ; le digest de `ghcr.io/grootcyber/eregion-annatar:sha-<commit>`, lu sans jeton ;
    sa **signature** et sa **provenance** vérifiées par cosign (épinglé par son sha256) — le workflow

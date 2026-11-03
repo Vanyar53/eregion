@@ -8,9 +8,10 @@
 # vides, ce sont les valeurs d'avant D1 (H0 et ses scripts lisent eregion-watch, eregion-war-room).
 
 # SEC18 (N-05, #455) : runs/ a un répertoire par écrivain (eregion_core/runs_layout.py) — glorfindel/
-# (la watch), console/ (la console, la CLI, le bot), annatar/, gothmog/, orodruin/. Chaque service
-# monte en écriture le sien, en lecture seule ceux qu'il lit, rien d'autre ; aucun ne monte runs/
-# entier, et le rouge ne monte ni glorfindel/ ni console/. `make glorfindel-start` crée ces répertoires
+# (la watch), console/ (la console, la CLI, le bot), annatar/, gothmog/, orodruin/, verdicts/ (le
+# canal local des verdicts, écrit par la watch). Chaque service monte en écriture le sien, en
+# lecture seule ceux qu'il lit, rien d'autre ; aucun ne monte runs/ entier, et le rouge ne monte ni
+# glorfindel/ ni console/ — du bleu, il ne voit que verdicts/, en lecture seule. `make glorfindel-start` crée ces répertoires
 # et déplace l'ancienne disposition (make runs-migrate) avant de démarrer. tests/unit/test_runs_mounts.py
 # tient ces montages, et ceux du Makefile et d'Orodruin.
 
@@ -145,6 +146,9 @@ services:
       - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro
       - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro
       - ${EREGION_RUNS:-./runs}/console:/app/runs/console:ro
+      # Le canal local des verdicts (sans canal retour du stockage) : le verdict d'un run, jamais le
+      # raisonnement — ce que le rouge lit du bleu (SEC18, eregion_core/watch_channel.py).
+      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts
       # P1 : la base livrée des règles, en lecture seule — aucun conteneur ne l'écrit plus.
       # Les règles du client (approuvées, remplacées, désactivées) vivent dans la couche du
       # client, ~/.glorfindel/client_rules.yaml (montage suivant), hors du dépôt : un
@@ -287,7 +291,8 @@ services:
   # Annatar n'écrit que runs/annatar (la watch y lit l'attack_started, et n'en prend que ce qu'un
   # injecteur émet, glorfindel/signal_origin.py) et runs/orodruin (le journal avant chaque appel, le
   # verrou « un run à la fois ») ; il ne monte ni runs/glorfindel ni runs/console : il ne lit pas le
-  # raisonnement de la watch, sa détection passe par le canal retour.
+  # raisonnement de la watch. Sa détection passe par le canal retour, ou, sans lui, par runs/verdicts
+  # en lecture seule : le verdict de son run, rien d'autre.
   # Lancé à la demande, il ne reste pas : `docker compose --profile annatar run --rm annatar <commande>`.
   annatar:
     image: eregion-annatar
@@ -313,6 +318,7 @@ services:
     volumes:
       - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar
       - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin
+      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro
       - ./annatar/scenarios:/app/annatar/scenarios
       - ./scripts:/app/scripts
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
@@ -343,6 +349,7 @@ services:
     volumes:
       - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog
       - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin
+      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
       - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro
     depends_on:

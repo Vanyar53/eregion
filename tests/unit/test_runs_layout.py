@@ -36,7 +36,8 @@ def _report(injector=None, kind=None, rid="r1"):
 
 def test_each_writer_has_its_own_directory(root):
     assert [L.dir_of(w) for w in L.WRITERS] == [L.ROOT / w for w in
-                                                ("glorfindel", "console", "annatar", "gothmog", "orodruin")]
+                                                ("glorfindel", "console", "annatar", "gothmog", "orodruin",
+                                                 "verdicts")]
     assert L.dir_of(L.ANNATAR, root) == root / "annatar"
     with pytest.raises(ValueError):
         L.dir_of("runs")
@@ -221,11 +222,13 @@ def test_the_migration_on_h0_gives_the_pull_to_the_watch(root):
 
 
 def test_the_migration_on_orodruin_keeps_its_directory(root):
+    """And makes the injectors' host's directories only: no watch there, no local verdicts."""
     (root / "orodruin" / "requests").mkdir(parents=True)
     (root / "orodruin" / "audit.jsonl").write_text("{}\n")
     (root / "orodruin" / "requests" / "played.jsonl").write_text("{}\n")
-    L.migrate(root, say=lambda m: None)
-    assert (root / "orodruin" / "audit.jsonl").is_file() and not (root / "glorfindel" / "orodruin").exists()
+    assert L.main(["migrate", str(root), "--orodruin"]) == 0
+    assert (root / "orodruin" / "audit.jsonl").is_file() and not (root / "glorfindel").exists()
+    assert sorted(p.name for p in root.iterdir()) == ["annatar", "gothmog", "orodruin"]
 
 
 def test_the_migration_never_writes_over_what_is_there(root):

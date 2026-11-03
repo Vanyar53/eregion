@@ -9181,9 +9181,9 @@ _SEC18_MOUNTS, _SEC18_LAYOUT = "tests/unit/test_runs_mounts.py", "tests/unit/tes
 LAYOUT = "eregion_core/runs_layout.py"
 MUTANTS += [
     ("M3220", "the red mounts the watch's directory, read-only: it reads the blue's reasoning (SEC18)", "docker-compose.yml",
-     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ./annatar/scenarios",
-     "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar\n      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro\n"
-     "      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ./annatar/scenarios"),
+     "      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro\n      - ./annatar/scenarios",
+     "      - ${EREGION_RUNS:-./runs}/orodruin:/app/runs/orodruin\n      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro\n"
+     "      - ${EREGION_RUNS:-./runs}/glorfindel:/app/runs/glorfindel:ro\n      - ./annatar/scenarios"),
     ("M3221", "the watch mounts Annatar's directory read-write: a writer in another's directory (SEC18)",
      "docker-compose.yml",
      "      - ${EREGION_RUNS:-./runs}/annatar:/app/runs/annatar:ro\n      - ${EREGION_RUNS:-./runs}/gothmog:/app/runs/gothmog:ro\n"
@@ -9197,8 +9197,8 @@ MUTANTS += [
      "$(call ORO_MOUNT,annatar) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)\nORO_RUN_GOTHMOG",
      "-v $$HOME/runs:/app/runs $(ORO_IMAGE)\nORO_RUN_GOTHMOG"),
     ("M3224", "Annatar's docker run on the workstation mounts the watch's directory (SEC18)", MAKE,
-     "\t-v $(PWD)/runs/orodruin:/app/runs/orodruin \\\n\t$(if $(wildcard",
-     "\t-v $(PWD)/runs/orodruin:/app/runs/orodruin \\\n\t-v $(PWD)/runs/glorfindel:/app/runs/glorfindel:ro \\\n"
+     "\t-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \\\n\t$(if $(wildcard",
+     "\t-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \\\n\t-v $(PWD)/runs/glorfindel:/app/runs/glorfindel:ro \\\n"
      "\t$(if $(wildcard"),
     ("M3225", "the watch reads signals anywhere in runs/, not only from Annatar's directory (SEC18)", GCLI,
      "    _channel = ChannelReader(_layout.dir_of(_layout.ANNATAR, runs_dir), _say_channel)\n",
@@ -9222,8 +9222,8 @@ MUTANTS += [
      "            if path.parent == own:   # SEC18: an injector's directory is read-only here\n",
      "            if True:\n"),
     ("M3232", "a run without a return channel waits on what it cannot read: never said why (SEC18)", ENG,
-     "        if not channel:\n            console.print(\n                \"[yellow]Detection not measured — no return channel",
-     "        if False:\n            console.print(\n                \"[yellow]Detection not measured — no return channel"),
+     "        if not channel:\n            console.print(\n                \"[yellow]Detection not measured — no return channel (EREGION_WATCH_CHANNEL) nor",
+     "        if False:\n            console.print(\n                \"[yellow]Detection not measured — no return channel (EREGION_WATCH_CHANNEL) nor"),
     ("M3233", "a report in Annatar's directory may say Gothmog: a forged fault counted (SEC18)", LAYOUT,
      "    if said != writer:\n        return f\"un rapport de", "    if False:\n        return f\"un rapport de"),
     ("M3234", "the migration writes over a file its writer already has: one lost (SEC18)", LAYOUT,
@@ -9252,6 +9252,38 @@ TESTS.update({**{f"M{n}": _SEC18_MOUNTS for n in (3220, 3221, 3222, 3223, 3224, 
               "M3228": "tests/unit/test_runs_channel.py::test_the_clis_manual_action_never_through_a_link_never_blocking",
               "M3229": "tests/unit/test_signals.py",
               "M3232": "tests/unit/test_annatar_detection.py::test_without_a_return_channel_the_detection_is_not_measured"})
+
+
+# SEC18, the local channel of verdicts (decision of Jonathan, 03/11): the watch's verdicts, read-only to
+# the red, exactly their fields; read by a run without a storage channel only. M3320–M3329.
+_VERDICTS = "tests/unit/test_local_verdicts.py"
+MUTANTS += [
+    ("M3320", "Annatar mounts the local channel of verdicts read-write: the red writes the blue's verdict (SEC18)",
+     "docker-compose.yml", "      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts:ro\n      - ./annatar/scenarios",
+     "      - ${EREGION_RUNS:-./runs}/verdicts:/app/runs/verdicts\n      - ./annatar/scenarios"),
+    ("M3321", "a verdict written whatever its fields (SEC18)", WCH,
+     "    if why:\n        raise ValueError(f\"local channel: {name} refused", "    if False:\n        raise ValueError(f\"local channel: {name} refused"),
+    ("M3322", "a verdict with a field more is admitted (SEC18)", WCH,
+     "    if set(doc) != set(VERDICT_FIELDS):\n", "    if not set(VERDICT_FIELDS) <= set(doc):\n"),
+    ("M3323", "a verdict's file named after the watch's own signal (SEC18)", WCH,
+     '        leaf = hashlib.sha256(str(body.get("signal_id") or "").encode()).hexdigest()[:16]\n',
+     '        leaf = str(body.get("signal_id") or "")\n'),
+    ("M3324", "a run takes another run's verdict (SEC18)", WCH,
+     '("a verdict of another run" if doc["run_id"] != run_id else "")', '""'),
+    ("M3325", "a run takes a verdict of any shape (SEC18)", WCH,
+     "        why = verdict_refusal(doc) or (", '        why = "" or ('),
+    ("M3326", "the local channel read before the storage one (SEC18)", WCH,
+     "    if not url and channel is None and source() == LOCAL:\n        return local_heartbeat()\n",
+     "    if channel is None and os.path.lexists(local_dir() / HEARTBEAT):\n        return local_heartbeat()\n"),
+    ("M3327", "a run without a storage channel never reads the local one: the purple loop broken (SEC18)", ENG,
+     "        channel = watch_channel.source()\n", "        channel = watch_channel.channel_url()\n"),
+    ("M3328", "the local channel's heartbeat never read: a local watch seen gone (SEC18)", ENG,
+     '                return watch_channel.recent(watch_channel._when(watch_channel.local_heartbeat().get("at")), now)\n',
+     "                return False\n"),
+    ("M3329", "the local channel written beside the storage one (SEC18)", WCH,
+     "    if channel_url():\n        return None\n    publisher = LocalVerdicts(", "    publisher = LocalVerdicts("),
+]
+TESTS.update({**{f"M{n}": _VERDICTS for n in range(3321, 3330)}, "M3320": _SEC18_MOUNTS})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

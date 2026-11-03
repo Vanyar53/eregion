@@ -65,12 +65,14 @@ ANNATAR_STATE := \
 # client's rules — stays out of the attacker's reach. Mounted once (ANNATAR_STATE no longer
 # mounts it too: annatar-shell had the same mount point twice).
 # SEC18 (N-05) : runs/ un répertoire par écrivain (eregion_core/runs_layout.py) — Annatar écrit
-# runs/annatar et runs/orodruin (le journal, le verrou), ne monte ni runs/glorfindel ni runs/console.
+# runs/annatar et runs/orodruin (le journal, le verrou), ne monte ni runs/glorfindel ni runs/console ;
+# runs/verdicts en lecture seule : le verdict de ses runs, sans canal retour du stockage.
 ANNATAR_VOLS := \
 	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \
 	-v $(PWD)/scripts:/app/scripts \
 	-v $(PWD)/runs/annatar:/app/runs/annatar \
 	-v $(PWD)/runs/orodruin:/app/runs/orodruin \
+	-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \
 	$(if $(wildcard $(HOME)/.glorfindel/injectors),-v $(HOME)/.glorfindel/injectors:/root/.glorfindel:ro,)
 
 # Glorfindel à la main (la watch, la CLI) : son répertoire et celui des gestes de l'opérateur en
@@ -78,6 +80,7 @@ ANNATAR_VOLS := \
 GLORFINDEL_VOLS := \
 	-v $(PWD)/runs/glorfindel:/app/runs/glorfindel \
 	-v $(PWD)/runs/console:/app/runs/console \
+	-v $(PWD)/runs/verdicts:/app/runs/verdicts \
 	-v $(PWD)/runs/annatar:/app/runs/annatar:ro \
 	-v $(PWD)/runs/gothmog:/app/runs/gothmog:ro \
 	-v $(PWD)/glorfindel/rules:/app/glorfindel/rules:ro \
@@ -290,7 +293,7 @@ build-glorfindel:
 # les monte (laissés à docker, ils seraient à root) ; runs-migrate déplace l'ancienne disposition (des
 # fichiers à plat dans runs/) vers le répertoire de leur écrivain, laisse et dit ce qui ne se
 # reconnaît pas, n'efface rien — sur l'hôte, car aucun service ne monte runs/ entier.
-RUNS_DIRS = mkdir -p runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin
+RUNS_DIRS = mkdir -p runs/glorfindel runs/console runs/annatar runs/gothmog runs/orodruin runs/verdicts
 runs-migrate:
 	python3 -m eregion_core.runs_layout migrate runs
 
@@ -915,7 +918,7 @@ ORO_MOUNT      = -v $$HOME/runs/$(1):/app/runs/$(1)
 ORO_RUN        = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,annatar) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)
 ORO_RUN_GOTHMOG = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,gothmog) $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)
 ORO_RUN_CONTRACT = $(ORO_DIRS) docker run --rm $(ORO_HARDEN) --env-file orodruin.env $(call ORO_MOUNT,orodruin) $(ORO_IMAGE)
-ORO_MIGRATE    = docker run --rm $(ORO_HARDEN) -v $$HOME/runs:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate /app/runs
+ORO_MIGRATE    = docker run --rm $(ORO_HARDEN) -v $$HOME/runs:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate /app/runs --orodruin
 # PRINCIPAL / VM_ID : pour un kill même si l'état Terraform est illisible.
 ORO_PRINCIPAL  = $(or $(PRINCIPAL),$(shell $(ORO_TF) output -no-color -raw principal_id 2>/dev/null))
 ORO_VM_ID      = $(or $(VM_ID),$(shell $(ORO_TF) output -no-color -raw vm_id 2>/dev/null))

@@ -60,18 +60,6 @@ def test_the_refusal_says_what_to_set_before_anything_else(monkeypatch):
     assert "set EREGION_ANALYSIS_MODEL" in f"{type(e.value).__name__}: {str(e.value)[:120]}"
 
 
-def test_the_end_of_a_campaign_run_says_what_to_set(monkeypatch, tmp_path):
-    from annatar import cli
-
-    said = []
-    monkeypatch.setattr(cli.console, "print", lambda *a, **k: said.append(" ".join(map(str, a))))
-    long = "openai/a-deployment-name-long-enough-to-push-the-instruction-out-of-the-line"
-    monkeypatch.setenv("GLORFINDEL_LLM_MODEL", long)
-    monkeypatch.setattr(cr, "build", lambda cdir: separation.check_model(long))
-    cli._write_campaign_report(tmp_path)
-    assert "set EREGION_ANALYSIS_MODEL" in said[0] and not (tmp_path / "report.md").exists()
-
-
 @pytest.mark.parametrize("glorfindel, analysis, code", [
     ("anthropic/claude-haiku-5-5", "", 2),                       # the analysis' default, taken
     ("anthropic/claude-sonnet-5-5", "claude-sonnet-5-5", 2),

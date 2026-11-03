@@ -36,6 +36,8 @@ OWNERS = {
     # injector's there — the one directory of several writers, all of them red.
     "orodruin": {"annatar", "gothmog", "ANNATAR_VOLS", "ORO_RUN", "ORO_RUN_GOTHMOG", "ORO_RUN_CONTRACT",
                  "ORO_RUN_REQUEST"},
+    # The local channel of verdicts: the watch writes it, the red reads it, read-only.
+    "verdicts": {"watch", "GLORFINDEL_VOLS"},
 }
 RED = {"annatar", "gothmog", "ANNATAR_VOLS", "ORO_RUN", "ORO_RUN_GOTHMOG", "ORO_RUN_CONTRACT", "ORO_RUN_REQUEST"}
 # The Makefile's docker runs that mount runs/, by variable. ORO_MIGRATE mounts it whole, once.
@@ -89,18 +91,22 @@ def test_a_writers_directory_is_mounted_read_write_by_its_writers_only():
 
 def test_the_red_never_mounts_the_watchs_directory_nor_the_consoles():
     """M3220, M3224: neither read-write nor read-only — the watch's reasoning and the operator's
-    gestures are not the red's to read; its detection comes through the return channel."""
+    gestures are not the red's to read; its detection comes through the return channel, or the
+    local channel of verdicts, read-only: the one directory of the blue it sees (M3320)."""
     for who in RED:
         writers = {w for w, _, _ in _mounts()[who]}
         assert not writers & {"glorfindel", "console"}, (who, writers)
+        assert all(ro for w, _, ro in _mounts()[who] if w == "verdicts"), who
 
 
 def test_each_service_mounts_what_it_writes_and_reads():
-    want = {"watch": {("glorfindel", False), ("annatar", True), ("gothmog", True), ("console", True)},
+    want = {"watch": {("glorfindel", False), ("annatar", True), ("gothmog", True), ("console", True),
+                      ("verdicts", False)},
             "war-room": {("console", False), ("glorfindel", True), ("annatar", True), ("gothmog", True)},
             "bot": {("console", False), ("annatar", True)},
-            "annatar": {("annatar", False), ("orodruin", False)},
-            "gothmog": {("gothmog", False), ("orodruin", False)},
+            "annatar": {("annatar", False), ("orodruin", False), ("verdicts", True)},
+            "gothmog": {("gothmog", False), ("orodruin", False), ("verdicts", True)},
+            "ANNATAR_VOLS": {("annatar", False), ("orodruin", False), ("verdicts", True)},
             "ORO_RUN": {("annatar", False), ("orodruin", False)},
             "ORO_RUN_GOTHMOG": {("gothmog", False), ("orodruin", False)},
             "ORO_RUN_CONTRACT": {("orodruin", False)},
@@ -133,6 +139,10 @@ def test_each_writers_directory_is_made_before_a_container_mounts_it():
     assert "$(RUNS_DIRS) &&" in _variable("DOCKER_ANNATAR") and "$(RUNS_DIRS) &&" in _variable("DOCKER_GLORFINDEL")
     oro = _variable("ORO_DIRS")
     assert all(f"$$HOME/runs/{w}" in oro for w in ("annatar", "gothmog", "orodruin"))
+    # No watch on Orodruin: no local channel of verdicts there — the storage channel carries them.
+    assert "verdicts" not in oro and _variable("ORO_MIGRATE").rstrip().endswith("--orodruin")
+    for name in ("ORO_RUN", "ORO_RUN_GOTHMOG", "ORO_RUN_CONTRACT", "ORO_RUN_REQUEST"):
+        assert "verdicts" not in _variable(name), name
     for name in ("ORO_RUN", "ORO_RUN_GOTHMOG", "ORO_RUN_CONTRACT", "ORO_RUN_REQUEST"):
         assert _variable(name).strip().startswith("$(ORO_DIRS) docker run"), name
     team = MAKEFILE.split("\nteam-start:", 1)[1].split("\n\n", 1)[0]

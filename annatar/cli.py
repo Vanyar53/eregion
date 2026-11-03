@@ -478,9 +478,9 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
               help="Development campaign: no live Glorfindel watch required. Each run's "
                    "report says the detection was not measured, by choice.")
 @click.option("--report/--no-report", default=True,
-              help="Write the campaign report at the end (IA0, analysis/campaign_report.py); "
-                   "with EREGION_EXERCISE_CHANNEL, publish the campaign to H0, whose watch "
-                   "writes it (#167). --no-report: neither written nor published.")
+              help="With EREGION_EXERCISE_CHANNEL, publish the campaign to H0, whose watch "
+                   "writes its report (#167); without, say how to write it beside the watch "
+                   "(make campaign-report: never Annatar's, SEC18). --no-report: neither.")
 def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report):
     """Execute a planned campaign sequentially within its budget/scope."""
     from annatar.campaign.manifest import CampaignManifest, campaign_dir
@@ -593,21 +593,12 @@ def _publish_campaign(cdir, runs_dir, state, without_glorfindel=False) -> bool:
 
 
 def _write_campaign_report(cdir) -> None:
-    """IA0: the report writes itself at the end of a campaign. Never fails the campaign —
-    without the analysis package or a model key, it says so and how to write it later."""
-    try:
-        from analysis import campaign_report as cr
-        from eregion_core import channel_reader, runs_layout
-        rep = cr.build(cdir)
-        # SEC18: the analysis' files of a campaign go to the watch's directory, never Annatar's.
-        out = runs_layout.campaign_output(cdir) / "report.md"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        channel_reader.write_file(out, cr.render(rep))
-        console.print(f"[green]Campaign report → {out}[/green]  "
-                      f"{len(rep.kept)} claim(s) kept, {len(rep.rejected)} rejected by the check")
-    except Exception as exc:  # the campaign ran; its report can be written later
-        console.print(f"[yellow]Campaign report not written ({type(exc).__name__}: {str(exc)[:120]}) — "
-                      f"later: make campaign-report CAMPAIGN={cdir.name}[/yellow]")
+    """IA0 without a channel to H0: the report is the watch's to write, never Annatar's (SEC18 —
+    it reads the watch's cycles, which the red never reads, and writes in the watch's directory).
+    Said, with the gesture: the campaign has run, its verdicts are in its manifest."""
+    console.print(f"[yellow]Campaign report: written beside the watch, by the analysis — "
+                  f"make campaign-report CAMPAIGN={cdir.name} (Annatar never reads the watch's files, "
+                  f"SEC18)[/yellow]")
 
 
 @campaign.command(name="list")

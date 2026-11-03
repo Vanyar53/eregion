@@ -986,10 +986,15 @@ Depuis SEC18 (N-05), `runs/` n'est plus un répertoire que chaque service monte 
 | `runs/annatar/` | Annatar (ses signaux, ses rapports, ses fenêtres, ses campagnes) | la watch, le bot, la console |
 | `runs/gothmog/` | Gothmog (ses signaux, ses rapports, ses fenêtres) | la watch, la console |
 | `runs/orodruin/` | les injecteurs sur Orodruin et le lanceur d'une demande (journal, verrou, statuts) | — |
+| `runs/verdicts/` | la watch, sans canal retour du stockage : le verdict de chaque run, rien d'autre | Annatar, Gothmog |
 
-Le rouge ne monte ni `runs/glorfindel/` ni `runs/console/` : la détection d'un run d'Annatar se
-mesure par le canal retour seulement (`EREGION_WATCH_CHANNEL`) ; sans lui, elle est `unknown`, dite,
-jamais un raté. Un lecteur ne lit un fichier que dans le répertoire de son écrivain ; ce qui est
+Le rouge ne monte ni `runs/glorfindel/` ni `runs/console/`. La détection d'un run d'Annatar se mesure
+par le canal retour du stockage (`EREGION_WATCH_CHANNEL`), qui garde la priorité ; sans lui — un poste
+—, par le canal local des verdicts, `runs/verdicts/`, que la watch écrit et que le rouge lit en
+lecture seule : la boucle purple locale garde sa mesure. Sans aucun des deux, elle est `unknown`,
+dite, jamais un raté. `annatar campaign run` sans canal vers H0 n'écrit plus le rapport de campagne :
+il dit le geste, `make campaign-report CAMPAIGN=<id>` (le rapport lit les cycles de la watch, que le
+rouge ne lit pas). Un lecteur ne lit un fichier que dans le répertoire de son écrivain ; ce qui est
 ailleurs n'est jamais lu, et la watch (dans son journal, toutes les minutes, chaque chose une fois),
 la console (dans le sien) et `make runs-survey` le disent.
 

@@ -285,7 +285,8 @@ def test_team_start_starts_its_glorfindel(tmp_path, fake_docker, bot, argv):
 # container (a dependency, a crafted log line) cannot write the image's code nor gain rights.
 # What each one writes is a volume (the oracle, written here: what the code writes) or /tmp.
 WRITES = {   # SEC18: of runs/, each writer's own directory only (tests/unit/test_runs_mounts.py)
-    "watch": {"/app/runs/glorfindel", "/root/.glorfindel", "/root/.cache/chroma", "/root/.eregion/analysis"},
+    "watch": {"/app/runs/glorfindel", "/app/runs/verdicts", "/root/.glorfindel", "/root/.cache/chroma",
+              "/root/.eregion/analysis"},
     "war-room": {"/app/runs/console", "/root/.glorfindel", "/root/.cache/chroma", "/app/glorfindel-config.yaml",
                  "/root/.eregion/console"},
     "bot": {"/app/runs/console", "/root/.glorfindel", "/root/.cache/chroma"},

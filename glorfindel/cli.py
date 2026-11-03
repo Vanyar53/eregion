@@ -707,6 +707,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                             "— escalade cycle_failed enregistrée"
                         )
                     return
+                if _watch_channel is not None and hasattr(_watch_channel, "note_poll"):
+                    _watch_channel.note_poll(resolved)   # SEC18: the local verdict; never raises
                 resolved_sig = Signal(**{k: resolved.get(k, getattr(sig, k, ""))
                                          for k in sig.__dataclass_fields__})
                 _get_or_start_worker(resource_id).put((resolved, resolved_sig, False))
@@ -911,6 +913,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
         _watch_channel = _wc.start()
         if _watch_channel is not None:
             console.print(f"[dim]Canal retour : {_watch_channel.channel}[/dim]")
+        else:
+            # SEC18: no storage channel — the local channel of verdicts, the one directory of the
+            # blue the red mounts (read-only): a run's verdict, never the reasoning.
+            _watch_channel = _wc.start_local(_layout.dir_of(_layout.VERDICTS, runs_dir))
+            if _watch_channel is not None:
+                console.print(f"[dim]Canal des verdicts (local) : {_watch_channel.directory}/[/dim]")
         # IA0 (#167): the campaigns published by Orodruin get their report written here.
         # SEC18: everything it pulls and writes goes to the watch's own directory.
         if _start_campaign_reports(_layout.dir_of(_layout.GLORFINDEL, runs_dir)):

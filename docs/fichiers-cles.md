@@ -517,9 +517,14 @@ Le rouge écrivait donc où le bleu écrit ses décisions, et lisait le raisonne
 | `runs/annatar/` | Annatar | `*_signals.jsonl`, `<run_id>.json`, `exercises/`, `campaigns/<id>/` | la watch, le bot (le moment d'un restore), la console |
 | `runs/gothmog/` | Gothmog | `*_signals.jsonl`, `<run_id>.json`, `exercises/` | la watch, la console |
 | `runs/orodruin/` | les injecteurs sur l'hôte d'Orodruin et son lanceur | `audit.jsonl`, `requests/` (statuts, registre, verrou) | — |
+| `runs/verdicts/` | la watch, sans canal retour du stockage (le canal local des verdicts) | `heartbeat.json` (`at`, `since`, `windows`, `perimeter`), `detections/<run_id>/<n>.json` (`run_id`, `technique`, `verdict`, `detected_at`, `rule`, `latency_s`, `target` — rien d'autre) | Annatar, Gothmog |
 
 Le rouge ne monte ni `runs/glorfindel/` ni `runs/console/` : il ne lit plus le raisonnement de la
-watch, et sa détection se mesure par le canal retour seulement (`eregion_core/watch_channel.py`).
+watch. Sa détection se mesure par le canal retour du stockage (`eregion_core/watch_channel.py`) ;
+sans lui, par le canal local des verdicts, `runs/verdicts/`, en lecture seule — le verdict de ses
+runs, rien d'autre (`LocalVerdicts`, `local_detections`) ; sans aucun des deux, elle est inconnue.
+Il n'existe pas sur Orodruin, où le canal du stockage suffit (`make orodruin-push` migre avec
+`--orodruin`).
 
 Un lecteur ne cherche un fichier que dans le répertoire de son écrivain : un signal dans
 `runs/annatar/`, un cycle dans `runs/glorfindel/`, un geste dans `runs/console/`, une fenêtre dans
@@ -531,13 +536,13 @@ Montages après SEC18 (`tests/unit/test_runs_mounts.py` les tient) :
 
 | Où | Service | En écriture | En lecture seule |
 |---|---|---|---|
-| compose (poste, H0, une équipe) | `watch` | `glorfindel` | `annatar`, `gothmog`, `console` |
+| compose (poste, H0, une équipe) | `watch` | `glorfindel`, `verdicts` | `annatar`, `gothmog`, `console` |
 | compose | `war-room` (la console) | `console` | `glorfindel`, `annatar`, `gothmog` |
 | compose | `bot` | `console` | `annatar` |
-| compose | `annatar` | `annatar`, `orodruin` | — |
-| compose | `gothmog` | `gothmog`, `orodruin` | — |
-| Makefile `ANNATAR_VOLS` | Annatar à la main | `annatar`, `orodruin` | — |
-| Makefile `GLORFINDEL_VOLS` | Glorfindel à la main (la watch, la CLI) | `glorfindel`, `console` | `annatar`, `gothmog` |
+| compose | `annatar` | `annatar`, `orodruin` | `verdicts` |
+| compose | `gothmog` | `gothmog`, `orodruin` | `verdicts` |
+| Makefile `ANNATAR_VOLS` | Annatar à la main | `annatar`, `orodruin` | `verdicts` |
+| Makefile `GLORFINDEL_VOLS` | Glorfindel à la main (la watch, la CLI) | `glorfindel`, `console`, `verdicts` | `annatar`, `gothmog` |
 | Orodruin `ORO_RUN` | Annatar | `annatar`, `orodruin` | — |
 | Orodruin `ORO_RUN_GOTHMOG` | Gothmog | `gothmog`, `orodruin` | — |
 | Orodruin `ORO_RUN_CONTRACT` | le contrat (`orodruin-check`) | `orodruin` | — |

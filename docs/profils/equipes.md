@@ -14,7 +14,7 @@
   team.env                 ses identifiants et réglages (chmod 600), lus pour elle seule
   glorfindel-config.yaml   ses espaces Log Analytics, ses modes d'autonomie
   runs/                    ses runs et ses signaux, un répertoire par écrivain (glorfindel/, console/,
-                           annatar/, gothmog/, orodruin/ — SEC18), migrés par make team-start
+                           annatar/, gothmog/, orodruin/, verdicts/ — SEC18), migrés par make team-start
   .glorfindel/             son état : isolations, escalades, incidents, mémoire (ChromaDB)
   .cache/chroma/  .eregion/analysis/
 ```

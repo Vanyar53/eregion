@@ -679,18 +679,21 @@ class Engine:
         SEC18 (N-05): the watch's files are not the red's to read — no injector mounts
         ``runs/glorfindel/`` (eregion_core/runs_layout.py). A run learns of its detection only
         through the return channel (eregion_core/watch_channel.py, #159): the hosted watch's
-        heartbeat and its detections of the run's window. Without that channel, the detection
-        is not measured: ``unknown``, never a miss. A miss needs a heartbeat that vouches for
-        the whole wait — else the run is ``unknown``.
+        heartbeat and its detections of the run's window — or, without a storage channel, the
+        local channel of verdicts (``runs/verdicts/``, read-only to the red, its verdicts only;
+        the storage channel keeps the priority). With neither, the detection is not measured:
+        ``unknown``, never a miss. A miss needs a heartbeat that vouches for the whole wait —
+        else the run is ``unknown``.
 
         A miss the watch vouches for emits a detection_missed signal enriched with the
         scenario's detection_hints, so Glorfindel can propose an improved detection rule.
         """
-        channel = watch_channel.channel_url()
+        channel = watch_channel.source()
         if not channel:
             console.print(
-                "[yellow]Detection not measured — no return channel (EREGION_WATCH_CHANNEL): the "
-                "watch's files are not Annatar's to read (SEC18). No detection_missed.[/yellow]"
+                "[yellow]Detection not measured — no return channel (EREGION_WATCH_CHANNEL) nor "
+                "local verdicts (runs/verdicts/): the watch's files are not Annatar's to read "
+                "(SEC18). No detection_missed.[/yellow]"
             )
             self._detection_result = "unknown"
             if stop_event is not None:
@@ -698,10 +701,15 @@ class Engine:
             return
 
         def _watch_active() -> bool:
-            # None without a channel; an unreadable channel shows no watch. The heartbeat's
-            # test is the gate's (eregion_core/watch_gate.py, V1).
-            return watch_gate.fresh(watch_gate.channel_beat(),
-                                    datetime.fromtimestamp(time.time(), timezone.utc))
+            # An unreadable channel shows no watch. The heartbeat's test is the gate's
+            # (eregion_core/watch_gate.py, V1); the local channel's, the same (SEC18).
+            now = datetime.fromtimestamp(time.time(), timezone.utc)
+            if channel == watch_channel.STORAGE:
+                return watch_gate.fresh(watch_gate.channel_beat(), now)
+            try:
+                return watch_channel.recent(watch_channel._when(watch_channel.local_heartbeat().get("at")), now)
+            except Exception:
+                return False
 
         # The run started only with a live watch (V1, eregion_core/watch_gate.py). One that
         # stopped since, and is not back within 30 s, measures nothing: unknown.
@@ -743,7 +751,7 @@ class Engine:
 
         if result_event is None:
             # Only the watch could have seen it: its silence is a miss only if a heartbeat
-            # vouches for the whole wait.
+            # vouches for the whole wait — the storage channel's, else the local one's.
             result_event, latency, why = self._settle_through_channel(
                 run_id, scenario.mitre, emitter.resource_id, attack_time)
             if result_event is None:

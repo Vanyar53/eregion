@@ -11,7 +11,11 @@ by those who read it (docs/fichiers-cles.md, « runs/ — qui écrit, qui lit, q
   ``campaigns/``;
 - ``runs/gothmog/`` — Gothmog: ``*_signals.jsonl``, ``<run_id>.json``, ``exercises/``;
 - ``runs/orodruin/`` — the injectors on Orodruin's host and its runner: ``audit.jsonl``,
-  ``requests/`` (the statuses, the registry, the lock of « one run at a time »).
+  ``requests/`` (the statuses, the registry, the lock of « one run at a time »);
+- ``runs/verdicts/`` — the watch's local channel of verdicts (``eregion_core/watch_channel.py``,
+  ``LocalVerdicts``): ``heartbeat.json``, ``detections/<run_id>/`` — a run's verdict, never the
+  reasoning; the one directory of the blue the red mounts, read-only. Not on Orodruin, where the
+  storage channel carries them.
 
 A reader looks for a file only in the directory of the writer that writes it: a signal is read from
 ``annatar/`` only, a cycle from ``glorfindel/`` only, an operator's gesture from ``console/`` only.
@@ -41,7 +45,10 @@ from pathlib import Path
 
 ROOT = Path("runs")
 GLORFINDEL, CONSOLE, ANNATAR, GOTHMOG, ORODRUIN = "glorfindel", "console", "annatar", "gothmog", "orodruin"
-WRITERS = (GLORFINDEL, CONSOLE, ANNATAR, GOTHMOG, ORODRUIN)
+VERDICTS = "verdicts"   # written by the watch, read-only to the red (SEC18)
+WRITERS = (GLORFINDEL, CONSOLE, ANNATAR, GOTHMOG, ORODRUIN, VERDICTS)
+# What Orodruin's host holds: no watch there — its verdicts come by the storage channel.
+ORODRUIN_HOST = (ANNATAR, GOTHMOG, ORODRUIN)
 INJECTORS = (ANNATAR, GOTHMOG)
 
 # What a writer's directory may hold at its top: the patterns of its files, the names of its
@@ -53,6 +60,7 @@ _FILES = {
     ANNATAR: ("*_signals.jsonl", "*.json"),
     GOTHMOG: ("*_signals.jsonl", "*.json"),
     ORODRUIN: ("audit.jsonl",),
+    VERDICTS: ("heartbeat.json",),
 }
 _DIRS = {
     GLORFINDEL: ("campaigns", "exercises", "orodruin"),
@@ -60,6 +68,7 @@ _DIRS = {
     ANNATAR: ("campaigns", "exercises"),
     GOTHMOG: ("exercises",),
     ORODRUIN: ("requests",),
+    VERDICTS: ("detections",),
 }
 # The analysis' files of a campaign: in the watch's directory, whoever wrote the campaign.
 ANALYSIS_FILES = ("report.md", "report.error", ".report.lock", "triage.md", "triage.json",
@@ -370,13 +379,13 @@ def _rmdir_empty(path: Path) -> None:
         pass
 
 
-def migrate(root=None, say=print) -> tuple[int, list[tuple[Path, str]]]:
-    """Move the former layout under ``root`` to its writers' directories, creating them; returns
-    (entries moved, entries left aside and why), each left said with the gesture to make. Nothing
-    deleted; run again, nothing more moves."""
+def migrate(root=None, say=print, writers=WRITERS) -> tuple[int, list[tuple[Path, str]]]:
+    """Move the former layout under ``root`` to its writers' directories, creating ``writers``'
+    (on Orodruin, ``ORODRUIN_HOST`` only); returns (entries moved, entries left aside and why),
+    each left said with the gesture to make. Nothing deleted; run again, nothing more moves."""
     root = Path(ROOT if root is None else root)
     root.mkdir(parents=True, exist_ok=True)
-    for w in WRITERS:
+    for w in writers:
         dir_of(w, root).mkdir(exist_ok=True)
     moves, left = _plan(root)
     moved = 0
@@ -389,7 +398,7 @@ def migrate(root=None, say=print) -> tuple[int, list[tuple[Path, str]]]:
         _rmdir_empty(root / "campaigns" / c.name)
     for name in ("campaigns", "exercises"):
         _rmdir_empty(root / name)
-    for w in WRITERS:   # runs/orodruin/ moved away on H0: every writer keeps a directory
+    for w in writers:   # runs/orodruin/ moved away on H0: every writer keeps a directory
         dir_of(w, root).mkdir(exist_ok=True)
     for path, why in left:
         say(f"  laissé : {path} — {why} ; jamais lu. Le déplacer à la main vers runs/<écrivain>/ "
@@ -399,12 +408,14 @@ def migrate(root=None, say=print) -> tuple[int, list[tuple[Path, str]]]:
 
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    host = "--orodruin" in args
+    args = [a for a in args if a != "--orodruin"]
     if not args or args[0] not in ("migrate", "survey"):
-        print("usage: python -m eregion_core.runs_layout migrate|survey [RUNS]", file=sys.stderr)
+        print("usage: python -m eregion_core.runs_layout migrate|survey [RUNS] [--orodruin]", file=sys.stderr)
         return 2
     root = Path(args[1]) if len(args) > 1 else ROOT
     if args[0] == "migrate":
-        moved, left = migrate(root)
+        moved, left = migrate(root, writers=ORODRUIN_HOST if host else WRITERS)
         print(f"runs/ ({root}) : {moved} déplacé(s) vers leur écrivain, {len(left)} laissé(s) (SEC18)")
         return 0
     found = survey(root)

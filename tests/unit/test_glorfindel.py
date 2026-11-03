@@ -2888,6 +2888,46 @@ def test_ssh_block_is_not_bypassed_by_an_https_allow(monkeypatch):
     assert res["verified"] is True and [x["rule"] for x in res["exposure"]] == ["allow-https"]
 
 
+@pytest.mark.parametrize("first,then", [(22, None), (None, 22)], ids=["22 then any", "any then 22"])
+def test_a_block_written_again_is_judged_on_its_own_port(monkeypatch, first, then):
+    """L1P (#478): the same IP blocked again, written whole, merges into its entry — and its
+    port, None (unknown: every port is the threat's) too. The entry kept an earlier block's 22
+    when the later one came without a port: the verification judged on 22 alone and read the
+    allow-https before our deny an « exposure », verified — what passes on 443 never said."""
+    from glorfindel.actions import _load_block_entries
+    https = _nsg_rule("allow-https", 150, port="443")
+    connector, net = _block_env(monkeypatch, {"nsg": [https]})
+    connector.block_suspicious_ip("203.0.113.9", _RID, threat_port=first)
+    out = connector.block_suspicious_ip("203.0.113.9", _RID, threat_port=then)
+    [entry] = _load_block_entries("vm")
+    assert entry["threat_port"] == then
+    net.security_rules.list.side_effect = lambda rg, nsg: [https, *_block_pair(out["rule"], "203.0.113.9")]
+    res = connector.verify_block_ip("203.0.113.9", _RID)
+    if then is None:
+        assert "allow-https" in out["bypass"]
+        assert res["verified"] is False and "allow-https" in res["error"], res
+    else:
+        assert "bypass" not in out and "allow-https" in out["exposure"]
+        assert res["verified"] is True and [x["rule"] for x in res["exposure"]] == ["allow-https"]
+
+
+@pytest.mark.parametrize("whole,partial,kept", [(22, None, 22), (None, 22, 22), (22, 80, 80)],
+                         ids=["unknown kept", "known taken", "another known"])
+def test_a_partial_block_adds_only_the_port_it_knows(whole, partial, kept):
+    """L1P (#478), a partial block after one written whole: held by its mark (the reassertion
+    and its cards leave it to the operator), it adds a port it knows, never takes one away —
+    the next block written whole sets its own (its port, None too)."""
+    from glorfindel.actions import _load_block_entries, _save_block_state
+    a = {"nsg_rg": "rg", "nsg_name": "nsg-a", "scope": "nic", "rule": "r-a"}
+    _save_block_state("vm", "1.2.3.4", _RID, rule="r-a", placements=[a], threat_port=whole)
+    _save_block_state("vm", "1.2.3.4", _RID, rule="r-a", placements=[a], partial=True, threat_port=partial)
+    [entry] = _load_block_entries("vm")
+    assert entry["threat_port"] == kept and entry["partial"] is True
+    _save_block_state("vm", "1.2.3.4", _RID, rule="r-a", placements=[a])
+    [entry] = _load_block_entries("vm")
+    assert entry["threat_port"] is None and entry["partial"] is False
+
+
 def test_ssh_block_is_bypassed_by_an_ssh_allow(monkeypatch):
     connector, net = _block_env(monkeypatch, {"nsg": [_nsg_rule(**_BENCH_ALLOW_SSH)]})
     out = connector.block_suspicious_ip("203.0.113.9", _RID, threat_port=22)
@@ -4148,6 +4188,28 @@ def test_a_block_altered_inbound_and_bypassed_says_both(monkeypatch, how):
         connector = _blocked_on(monkeypatch, {"nic-a": lambda r: [allow, *pair(r)]})
         out = connector.verify_block_ip("192.31.196.7", _RID)
         assert out["missing_rules"] and "shadowed_by" not in out, out
+
+
+@pytest.mark.parametrize("port", [22, None], ids=["ssh", "any port"])
+def test_a_perimeter_block_of_unknown_port_is_judged_on_every_port(monkeypatch, port):
+    """L1P (#478): a perimeter block alone (one pair on the subnet's NSG), an allow-https
+    before it. Its threat port 22: an exposure, verified. Unknown (None): every port is the
+    threat's — the allow lets it through, bypassed; never read as port 22."""
+    from glorfindel.actions import AzureConnector, _save_block_state
+    rule = "glorfindel-block-192-31-196-7"
+    _save_block_state("vm", "192.31.196.7", _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule=rule,
+                      scoped=False, threat_port=port)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_off_perimeter", lambda *a, **k: [])
+    connector._network = MagicMock()
+    _listings(connector._network, {"nsg-subnet": [_nsg_rule("allow-https", 100, port="443"),
+                                                  *_block_pair(rule, "192.31.196.7", vm_ip="*")]})
+    out = connector.verify_block_ip("192.31.196.7", _RID)
+    if port is None:
+        assert out["verified"] is False and "allow-https" in out["error"], out
+    else:
+        assert out["verified"] is True and [x["rule"] for x in out["exposure"]] == ["allow-https"], out
 
 
 @pytest.mark.parametrize("gone", ["inbound altered", "outbound gone"])

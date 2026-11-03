@@ -441,7 +441,9 @@ def _save_block_state(
         # le <before the block>) » and was never put back outside human_only.
         for mark in () if partial else ("drift_alerted_at", "drift_said", "reasserted_at"):
             prev.pop(mark, None)
-        if threat_port is not None:
+        # The port of the last block written whole, None (every port) too: an earlier 22 kept hid a bypass
+        # on 443 (L1P, #478). A partial one, held by its mark, only adds a port it knows.
+        if threat_port is not None or not partial:
             prev["threat_port"] = threat_port
     _write_state(_BLOCK_STATE_DIR, vm_name, resource_id, entries)
 

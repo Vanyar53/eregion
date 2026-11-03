@@ -6367,9 +6367,9 @@ def test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_bef
     deny into an allow; web's address changes; batch created on the data subnet, given the app
     subnet's NSG as its NIC's, at 10.0.0.4; web promoted. The perimeter's `-out` lies on that NSG
     after the turned allow: batch's way out to the attacker stood — until the promotion took the
-    allow off by its name. « I4: a perimeter block on …/web cut off …/batch ». Replayed step by step: the rule keeps
-    to NICs' NSGs since (a subnet's NSG on a NIC of another subnet meets an L1Qs oracle that reads « shared » as
-    « behind the subnet » only, seed 7 at 500 — I4P's report)."""
+    allow off by its name. « I4: a perimeter block on …/web cut off …/batch ». Replayed step by step: the rule kept
+    to NICs' NSGs for a while (a subnet's NSG on a NIC of another subnet met an L1Qs oracle that read « shared » as
+    « behind the subnet » only, seed 7 at 500 — I4P's report); it draws this world again since I5S."""
     from .test_invariants import _Drawn
     invariant_env(monkeypatch)
     m = IsolationMachine()
@@ -6399,6 +6399,154 @@ def test_the_promotion_never_cuts_off_a_vm_given_the_nics_nsg_on_another_subnet(
                            web_nic={"own": "dedicated"}),
          ("promoted_beside_a_turned_block", WEB1, WEB1, None, 22, (_NSG_WEB_NIC, _I4P_WEB_BLOCK), True, 0, 4,
           _I4P_DATA_SUBNET, "rg-app1", "api", "Linux"))
+
+
+# I5S (#477): the per-VM I5 of a VM in human_only, widened to a writer's perimeter carried as its NIC's NSG
+# (Jonathan's decision, 03/11, A0) and bounded — on the subnet too — to what the perimeter rules the pass wrote
+# close on their own. The oracle's own controls: what it admits, what it still refuses.
+_I5S_PLAIN = "glorfindel-block-" + ATTACKER.replace(".", "-")
+_I5S_WEB2 = "/subscriptions/s/resourceGroups/rg-app2/providers/Microsoft.Compute/virtualMachines/web"
+_I5S_API1 = "/subscriptions/s/resourceGroups/rg-app1/providers/Microsoft.Compute/virtualMachines/api"
+
+
+def test_a_writers_perimeter_on_the_nic_of_a_vm_in_human_only_is_shared(monkeypatch):
+    """I5S, the machine's own (seed 7 at 500, `promoted_beside_a_turned_block` without I4P's restriction, three steps
+    as Hypothesis left them): web's NIC bare, its block on the app subnet's NSG; its inbound deny turned into an allow,
+    its address changed; api created on the data subnet, given that NSG as its NIC's, at 10.0.0.4; web promoted to its
+    subnet. Then web blocked on both, its rule turned, the address reused (`turned_then_address_reused`); then web of
+    rg-app2 blocked on the same subnet, the pair taken off, a pass with a mode per VM (`turned_perimeter_left_out`):
+    api of rg-app1 in human_only, web of rg-app2 a writer — the pair put back on nsg-subnet cuts api's way out to the
+    attacker (443), on the NIC that carries that NSG. Azure applies it
+    there as on the subnet: « I5: the reassertion acted on …/api in human_only » before I5S (the oracle read
+    « shared with a writer » as « behind its subnet » only); admitted now — the attacker's flows, closed by the
+    perimeter rules the pass wrote alone."""
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
+         ("promoted_beside_a_turned_block", WEB1, WEB1, None, 22, (key(_SUBNET), _I4P_WEB_BLOCK), True, 0, 4,
+          _I4P_DATA_SUBNET, "rg-app1", "api", "Linux"),
+         ("turned_then_address_reused", WEB1, WEB1, None, 22, "both", 22, (key(_SUBNET), _I4P_WEB_BLOCK),
+          "non_disruptive", False, 22, False, "rg-app1", "web", False, "non_disruptive"),
+         ("turned_perimeter_left_out", _I5S_WEB2, _I5S_WEB2, (1, "before-429"), DB, DB, 22, False, True,
+          "human_only", "human_only", "human_only", "human_only", (key(_SUBNET), f"{_I5S_PLAIN}-out"), "human_only",
+          "non_disruptive", "human_only", "human_only",
+          "non_disruptive", "human_only", "non_disruptive", "human_only", "non_disruptive"))
+
+
+def _i5s_world(monkeypatch, nic_nsg: bool = True):
+    """web blocked on the app subnet (its perimeter on nsg-subnet), the writer; Db--01 in human_only, db-nic-0 behind
+    that subnet, db-nic-1 on the data subnet — given nsg-subnet as its NIC's NSG, or not; the perimeter pair taken
+    off by someone; then the world as the pass finds it (`_before`)."""
+    from .test_invariants import _CURRENT
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    m.build(_net(subnet_nsg=[], data_subnet=[]))
+    assert m.connector.block_suspicious_ip(ATTACKER, WEB1, scope="subnet")["status"].startswith("blocked")
+    if nic_nsg:
+        m.fake.nics[_nic("rg-app1", "db-nic-1")]["nsg"] = m.fake.nsgs[key(_SUBNET)]["id"]
+    pair = {n: m.fake.nsgs[key(_SUBNET)]["rules"].pop(n) for n in (_I5S_PLAIN, f"{_I5S_PLAIN}-out")}
+    monkeypatch.setattr(_CURRENT, "modes", {**{key(v): "non_disruptive" for v in m.live}, key(DB): "human_only"})
+    shares = m._shared_with_writers({DB})[DB]
+    assert shares["perimeter"] == {"db-nic-0"} and (not nic_nsg or shares["perimeter_nic"] == {"db-nic-1"}), shares
+    flows, _ = m._before()
+    return m, pair, shares, flows[DB]
+
+
+def _i5s_write(m, nsg: str, rec: dict):
+    """A write through the fake's API, in its journal — as the pass would make it."""
+    from types import SimpleNamespace
+    g = m.fake.nsgs[key(nsg)]
+    m.fake.network.security_rules.begin_create_or_update(
+        g["id"].split("/")[4], g["id"].rsplit("/", 1)[-1], rec["name"], SimpleNamespace(**rec)).result()
+
+
+def _i5s_done(m):
+    """The world moved by hand for a probe: no teardown — its release and its I2 would judge the probe's own
+    writes, not Glorfindel's."""
+    import shutil
+    shutil.rmtree(m.home, ignore_errors=True)
+
+
+def test_the_per_vm_i5_admits_a_writers_perimeter_carried_as_the_nics_nsg(monkeypatch):
+    """I5S: the writer's pair put back on nsg-subnet cuts the attacker off Db--01 behind the subnet (db-nic-0) and
+    on the NIC that carries that NSG (db-nic-1) — Azure applies the same rules to the same NSG, wherever it is
+    associated. Both admitted; before I5S, db-nic-1 read « the reassertion acted on …/Db--01 in human_only »."""
+    m, pair, shares, before = _i5s_world(monkeypatch)
+    try:
+        for rec in pair.values():
+            _i5s_write(m, _SUBNET, rec)
+        after = m._flows()[DB]
+        assert {f[0] for f in before - after} == {"db-nic-0", "db-nic-1"}
+        m._shut_shared(DB, before, after, shares, "I5: probe")
+        narrowed = {**shares, "perimeter_nic": set()}                       # the oracle before I5S
+        with pytest.raises(AssertionError, match="I5: probe acted on .*/Db--01 in human_only.*db-nic-1"):
+            m._shut_shared(DB, before, after, narrowed, "I5: probe")
+    finally:
+        _i5s_done(m)
+
+
+@pytest.mark.parametrize("nic, name", [
+    ("db-nic-0", "deny-attacker-out"),                     # behind the subnet: the hardening (M3391)
+    ("db-nic-1", "deny-attacker-out"),                     # the NIC's NSG: the widening's third condition (M3390)
+    ("db-nic-0", f"{_I5S_PLAIN}-web-web-nic-8b70f2-out"),  # a writer's VM rule is no perimeter rule (M3392)
+    ("db-nic-1", f"{_I5S_PLAIN}-web-web-nic-8b70f2-out"),
+])
+def test_the_per_vm_i5_refuses_what_no_perimeter_rule_closes(monkeypatch, nic, name):
+    """I5S, the bound: a writer's perimeter lies on the NSG, but what cuts Db--01 off the attacker is another rule
+    the pass wrote there — its source the NIC's addresses; a writer's VM rule or any other. Refused, behind the
+    subnet as on the NIC's NSG: before I5S, behind the subnet, any attacker flow passed."""
+    m, _pair, shares, before = _i5s_world(monkeypatch)
+    try:
+        ips = m.fake.nics[_nic("rg-app1", nic)]["ips"]
+        _i5s_write(m, _SUBNET, {**_rule_record(_rule(name, 4000, dict(
+            access="Deny", direction="Outbound", source_address_prefixes=list(ips),
+            destination_address_prefix=ATTACKER, destination_port_range="*"))), "name": name})
+        after = m._flows()[DB]
+        assert {f[0] for f in before - after} == {nic} and all(f[3] == ATTACKER for f in before - after)
+        with pytest.raises(AssertionError, match=f"I5: probe acted on .*/Db--01 in human_only.*{nic}"):
+            m._shut_shared(DB, before, after, shares, "I5: probe")
+    finally:
+        _i5s_done(m)
+
+
+@pytest.mark.parametrize("nic_nsg", [False, True])
+def test_the_per_vm_i5_refuses_a_perimeter_rule_on_an_nsg_no_writer_holds(monkeypatch, nic_nsg):
+    """I5S: the IP's own pair written on nsg-data — the data subnet's NSG, where no writer's perimeter lies — cuts
+    db-nic-1 off the attacker. Its NIC bare, it is neither behind a writer's subnet nor in `perimeter_nic`: refused,
+    though the rules bear the perimeter's names (the second condition, M3386). Carrying nsg-subnet as its NIC's NSG —
+    a writer's, whose pair is not put back —, it is in `perimeter_nic`, but what closes its flows lies on another NSG,
+    not the one it shares: refused too (I5S's review, M3384; before, the oracle of 714d3558 let it pass, the class of
+    M2995 — a pair written for a VM in human_only — hidden behind the writer's NSG on the NIC)."""
+    m, pair, shares, before = _i5s_world(monkeypatch, nic_nsg=nic_nsg)
+    try:
+        for rec in pair.values():
+            _i5s_write(m, _NSG.format(rg="rg-net", name="nsg-data"), rec)
+        after = m._flows()[DB]
+        assert {f[0] for f in before - after} == {"db-nic-1"}
+        with pytest.raises(AssertionError, match="I5: probe acted on .*/Db--01 in human_only.*db-nic-1"):
+            m._shut_shared(DB, before, after, shares, "I5: probe")
+    finally:
+        _i5s_done(m)
+
+
+def test_the_per_vm_i5_refuses_what_a_pair_written_wrong_closes_beside_the_attacker(monkeypatch):
+    """I5S, the first condition (I5S's review): the IP's `-out` written by the pass on the writer's NSG, but aimed at
+    `*` — a pair written wrong. It closes the attacker's way out of both NICs of Db--01, and the internet's and the
+    lateral peer's: those go elsewhere than the attacker, refused though the perimeter's rule alone closes them. The
+    third condition does not imply the first."""
+    m, _pair, shares, before = _i5s_world(monkeypatch)
+    try:
+        name = f"{_I5S_PLAIN}-out"
+        _i5s_write(m, _SUBNET, {**_rule_record(_rule(name, 4000, dict(
+            access="Deny", direction="Outbound", source_address_prefix="*", destination_address_prefix="*",
+            destination_port_range="*"))), "name": name})
+        after = m._flows()[DB]
+        shut = before - after
+        assert {f[0] for f in shut} == {"db-nic-0", "db-nic-1"} and any(f[3] != ATTACKER for f in shut), shut
+        with pytest.raises(AssertionError, match="I5: probe acted on .*/Db--01 in human_only"):
+            m._shut_shared(DB, before, after, shares, "I5: probe")
+        # The attacker's flows alone, as the pair writes them: admitted.
+        m._shut_shared(DB, before, before - {f for f in shut if f[3] == ATTACKER}, shares, "I5: probe")
+    finally:
+        _i5s_done(m)
 
 
 def _l1p_net():

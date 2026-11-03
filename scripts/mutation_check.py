@@ -9226,6 +9226,8 @@ _I4P_SEQ_IN = ("tests/unit/test_invariant_regressions.py::"
                "test_the_promotion_never_cuts_off_the_vm_off_the_perimeter_a_turned_block_rule_lets_in")
 _I4P_SEQ_OUT = ("tests/unit/test_invariant_regressions.py::"
                 "test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_before_the_perimeter")
+_I4P_SEQ_NIC = ("tests/unit/test_invariant_regressions.py::"
+                "test_the_promotion_never_cuts_off_a_vm_given_the_nics_nsg_on_another_subnet")
 _I4P_ASK = ("            held = [w for n in names if (w := _held_by_turned(self._network, guard, nsg_rg, nsg_name, n, "
             "nic, mates))]\n")
 _I4P_DEL = "            held = held or [e for n in names if (e := self._delete_rule(nsg_rg, nsg_name, n))]\n"
@@ -9254,7 +9256,7 @@ MUTANTS += [
      "            return not held\n", "            return False\n"),
 ]
 TESTS.update({
-    "M3350": f"{_I4P_SEQ_IN} {_I4P_SEQ_OUT} {_I4P_UNIT}",
+    "M3350": f"{_I4P_SEQ_IN} {_I4P_SEQ_OUT} {_I4P_SEQ_NIC} {_I4P_UNIT}",
     "M3351": _I4P_UNIT,
     "M3352": _I4P_UNIT,
     "M3353": _I4P_UNIT,

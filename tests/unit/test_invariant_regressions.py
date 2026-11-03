@@ -6239,7 +6239,35 @@ def test_the_promotion_never_cuts_off_a_vm_whose_way_out_a_turned_rule_opens_bef
     deny into an allow; web's address changes; batch created on the data subnet, given the app
     subnet's NSG as its NIC's, at 10.0.0.4; web promoted. The perimeter's `-out` lies on that NSG
     after the turned allow: batch's way out to the attacker stood — until the promotion took the
-    allow off by its name. « I4: a perimeter block on …/web cut off …/batch »."""
-    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[]),
-         ("promoted_beside_a_turned_block", WEB1, WEB1, None, 22, (key(_SUBNET), f"{_I4P_WEB_BLOCK}-out"), True, 0, 4,
-          _I4P_DATA_SUBNET, "rg-app1", "batch", "Linux"))
+    allow off by its name. « I4: a perimeter block on …/web cut off …/batch ». Replayed step by step: the rule keeps
+    to NICs' NSGs since (a subnet's NSG on a NIC of another subnet meets an L1Qs oracle that reads « shared » as
+    « behind the subnet » only, seed 7 at 500 — I4P's report)."""
+    from .test_invariants import _Drawn
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[], data_subnet=[]))
+        m.block(Script(WEB1, WEB1, None, 22))
+        m.tamper_with_our_rule(Script("access", (key(_SUBNET), f"{_I4P_WEB_BLOCK}-out")))
+        m.customer_changes_ip(Script(_nic("rg-app1", "web-nic"), 0, 4))
+        m._create_vm(_Drawn(Script("rg-app1", "batch", "Linux"),
+                            nsg=m.fake.nsgs[key(_SUBNET)]["id"]), "westeurope", subnet=_I4P_DATA_SUBNET)
+        assert any(v.endswith("/batch") for v in m.live), "batch created on the data subnet, on the app subnet's NSG"
+        m.block_perimeter(Script(WEB1, WEB1, None, True))
+        m.never_more_open_than_designed()
+        m.customer_configuration_untouched()
+    finally:
+        m.teardown()
+
+
+def test_the_promotion_never_cuts_off_a_vm_given_the_nics_nsg_on_another_subnet(monkeypatch):
+    """I4P, the machine's own once its rule keeps to NICs' NSGs (seed 7 at 500, on `main` 19d802d): web on an NSG of
+    its own, blocked there (aimed at 10.0.0.4); someone turns the inbound deny into an allow; web's address changes;
+    api created on the data subnet (SSH open there), given web's NSG, at 10.0.0.4; web promoted. The allow let the
+    attacker reach api over SSH; the promotion took it off by its name. « I4: a perimeter block on …/web cut off
+    …/api »."""
+    from .test_invariants import _TEMPLATES
+    _run(monkeypatch, _net(subnet_nsg=[], data_subnet=[_rule("allow-ssh", 100, _TEMPLATES["allow-ssh"])],
+                           web_nic={"own": "dedicated"}),
+         ("promoted_beside_a_turned_block", WEB1, WEB1, None, 22, (_NSG_WEB_NIC, _I4P_WEB_BLOCK), True, 0, 4,
+          _I4P_DATA_SUBNET, "rg-app1", "api", "Linux"))

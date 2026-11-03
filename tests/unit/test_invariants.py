@@ -2650,9 +2650,14 @@ class IsolationMachine(RuleBasedStateMachine):
         vm, rid, _ = self._draw(data)
         self._block(vm, rid, None, data.draw(st.sampled_from([22, None]), label="threat_port"))
         nics = {_nic_hash(n): key(n) for n in self.fake.vms[key(vm)]["nics"]}
+        # On a NIC's NSG (the lot's case): a subnet's NSG given to a NIC of another subnet is a
+        # world the other rules never drew, and the per-VM human_only of the reassertion reads
+        # « shared with a writer » as « behind that subnet » only (L1Qs, seed 7 at 500) — said
+        # in I4P's report; its first measure, seed 3 at 60, is frozen.
+        subnet_nsgs = {key(s["nsg"] or "") for s in self.fake.subnets.values()}
         mine = sorted((k, n) for k, g in self.fake.nsgs.items() for n, r in g["rules"].items()
                       if n.startswith("glorfindel-block-") and r["access"].lower() == "deny"
-                      and n.removesuffix("-out").rsplit("-", 1)[-1] in nics)
+                      and n.removesuffix("-out").rsplit("-", 1)[-1] in nics and k not in subnet_nsgs)
         if not mine:
             return
         nsg, name = data.draw(st.sampled_from(mine), label="rule")

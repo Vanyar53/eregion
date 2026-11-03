@@ -178,8 +178,8 @@ Le tirage des rapports reste dans la watch de Glorfindel, qui est toujours là.
 Ils sont en tête de l'accueil, au-dessus des lignes des sections. Leur source est
 `GET /api/indicators`, calculée par `eregion_console/indicators.py`.
 
-**Sur 30 jours, à partir de ce que l'hôte garde** : les rapports de run (`runs/<id>.json`, et ceux
-des campagnes publiées), les cycles de la watch (`runs/*_debug.jsonl`), les cartes avec leurs
+**Sur 30 jours, à partir de ce que l'hôte garde** : les rapports de run (`runs/<injecteur>/<id>.json`, et ceux
+des campagnes publiées), les cycles de la watch (`runs/glorfindel/*_debug.jsonl`), les cartes avec leurs
 verdicts, et le catalogue. Jamais à partir des fenêtres d'exercice, vidées 7 jours après leur fin.
 
 **La décision d'un run** est l'enregistrement de la watch pour la détection que le run a comptée :
@@ -587,7 +587,7 @@ pages que Dagorlad remplace (`injector.html`, `injector.js`).
 où la Dernière Alliance des Elfes et des Hommes affronta l'armée de Sauron. Annatar est Sauron
 déguisé : c'est le terrain où l'on fait face à ses forces. Un nom de lieu, comme Eregion, pour la
 page qui réunit deux agents face au troisième ; l'onglet garde le nom seul, le rôle au survol (§0).
-Écartés : « Exercises », qui désigne déjà les fenêtres d'exercice du code (`runs/exercises/`, la
+Écartés : « Exercises », qui désigne déjà les fenêtres d'exercice du code (`runs/<injecteur>/exercises/`, la
 source `exercise`, le canal) ; « Playground », un bac à sable sans conséquence, alors que la
 phase (b) fait lancer de vraies attaques.
 
@@ -909,7 +909,7 @@ Lancer un drill : `make orodruin-exercise DRILL=<nom>`, ou la demande que Dagorl
 
 Une demande n'entre jamais dans ce que lit la décision. Ce qui le tient :
 1. **La demande n'est jamais là où la watch lit.** Elle n'est ni dans `runs/` (signaux, journaux de
-   debug), ni dans `runs/exercises/`, ni dans `~/.glorfindel/` (état, escalades), ni dans la mémoire.
+   debug), ni dans `runs/<injecteur>/exercises/`, ni dans `~/.glorfindel/` (état, escalades), ni dans la mémoire.
    Elle a son propre répertoire, celui de la console : `~/.eregion/console/` (`requests/`,
    `drills/`). Pas `~/.eregion/` entier : il porte aussi `analysis/`, que la watch monte en écriture,
    `teams/`, `cosign/`, `h0_known_hosts`, `host-backups/`. Ce qui l'établit :

@@ -5,17 +5,17 @@ sans écrire de règle ni agir. 27/10 (IA1) : il trie ce qui demande un humain, 
 son modèle à lui, et rien ne s'applique sans la décision d'un humain (en fin de page)._
 
 ```bash
-make campaign-report CAMPAIGN=<id>     # → runs/campaigns/<id>/report.md
+make campaign-report CAMPAIGN=<id>     # → runs/glorfindel/campaigns/<id>/report.md
 make report-eval                       # harnais : fidélité et instruction plantée, modèle réel
-python -m analysis.triage runs/campaigns/<id>                   # → triage.md, triage.json (IA1)
-python -m analysis.triage decide runs/campaigns/<id> tri-1 approve --by <nom>
+python -m analysis.triage runs/glorfindel/campaigns/<id>                   # → triage.md, triage.json (IA1)
+python -m analysis.triage decide runs/glorfindel/campaigns/<id> tri-1 approve --by <nom>
 python scripts/analysis_eval.py        # harnais : les cas d'analyse du tri, modèle réel
 make campaign-containment CAMPAIGN=<id> [FAULT_RUNS=<run>]       # BL1 : temps pour contenir, part contenue seule
 ```
 
 **Les faits viennent des fichiers, jamais d'un modèle** : le manifeste de la campagne
 (techniques, runs, détectée / manquée, latence), et pour chaque run le rapport d'Annatar et le
-fichier de décision de Glorfindel (`runs/<run_id>_debug.jsonl`). Les chiffres d'en-tête et le
+fichier de décision de Glorfindel (`runs/glorfindel/<run_id>_debug.jsonl`). Les chiffres d'en-tête et le
 tableau sont calculés.
 
 **Une campagne sans Glorfindel n'a pas de rapport** (V1, #214) : lancée `--without-glorfindel`,
@@ -86,7 +86,7 @@ H0 a tout cela. C'est donc là que le rapport s'écrit (option B, décidée le 2
 **Ce qu'Orodruin publie.** Avec `EREGION_EXERCISE_CHANNEL`, à la fin de `campaign run`, il
 publie la campagne dans le conteneur `exercises`, celui des fenêtres
 (`eregion_core/exercise_channel.py`, `publish_campaign`). Il publie deux sortes de fichiers :
-- `campaigns/<id>/runs/<run_id>.json`, le rapport de chaque run, qui porte `attack_time` ;
+- `campaigns/<id>/runs/<injecteur>/<run_id>.json`, le rapport de chaque run, qui porte `attack_time` ;
 - `campaigns/<id>/manifest.json`, en dernier.
 
 Il ne publie rien d'autre : ni `_debug.jsonl`, ni `_signals.jsonl`, ni un autre run. Il ne
@@ -108,9 +108,9 @@ runs sans fin : il renvoie à `make campaign-report`.
 
 **Un run seul (#193, 26/10 ; code, tests et mutants M240–M246, pas encore mesuré sur le
 banc).** `annatar run` et `gothmog run` publient aussi leur rapport, à la fin du run, après la
-fermeture de la fenêtre : `runs/<run_id>.json`, dans le même conteneur, sans droit de plus
+fermeture de la fenêtre : `runs/<injecteur>/<run_id>.json`, dans le même conteneur, sans droit de plus
 (`publish_run`). Un échec est signalé, jamais levé. Le thread `campaign-report` le tire à chaque
-passage vers `runs/<run_id>.json` sur H0, où la console de l'atelier le lit (`pull_runs`) :
+passage vers `runs/<injecteur>/<run_id>.json` sur H0, où la console de l'atelier le lit (`pull_runs`) :
 seulement un nom simple, et un rapport qui passe `run_report_refusal` (H-1). Il n'écrit jamais
 par-dessus un rapport que H0 n'a pas tiré lui-même : un marqueur `runs/.pulled-runs/<run_id>`
 dit lesquels viennent du canal. Un rapport refusé n'est pas écrit, et la raison est dite une
@@ -118,12 +118,12 @@ fois. Une campagne ne change pas : ses runs ne partent qu'avec elle, sous `campa
 
 **Quand H0 l'écrit.** `glorfindel watch` démarre le thread `campaign-report`
 (`analysis/hosted_report.py`), seulement avec `EREGION_EXERCISE_CHANNEL`. Toutes les 30 s, il :
-1. tire les campagnes dans `runs/campaigns/<id>/` (`pull_campaigns`). Il écrit les runs d'abord,
+1. tire les campagnes dans `runs/glorfindel/campaigns/<id>/` (`pull_campaigns`). Il écrit les runs d'abord,
    puis le manifeste, et seulement si tous les runs de la campagne sont arrivés ; à côté du
    manifeste, un marqueur `.pulled`. Si le listage échoue, aucune campagne n'est due à ce
    tirage ; si un fichier d'une campagne échoue, cette campagne-là n'est pas due ;
 2. retient les campagnes prêtes (`ready`) : tirées du canal (le marqueur `.pulled`), `done`,
-   sans `report.md`, avec le `runs/<run_id>.json` de chaque scénario exécuté, et des essais
+   sans `report.md`, avec le `runs/<injecteur>/<run_id>.json` de chaque scénario exécuté, et des essais
    encore permis. Une campagne locale du même dossier (une watch locale avec le canal posé)
    n'est jamais écrite par le thread. Un scénario en erreur peut avoir un `run_id` sans
    rapport : il n'est pas attendu, sinon la campagne n'aurait jamais de rapport. Un `run_id`
@@ -234,7 +234,7 @@ thread n'atteint la watch.
 Le compteur en mémoire survit à l'effacement de `report.error`. Pour relancer un rapport
 abandonné, effacer `report.error` ne suffit pas : redémarrer la watch (sur la VM,
 `docker restart eregion-watch`), ou écrire le rapport à la main
-(`docker exec eregion-watch python -m analysis.campaign_report runs/campaigns/<id>`).
+(`docker exec eregion-watch python -m analysis.campaign_report runs/glorfindel/campaigns/<id>`).
 
 **Où le lire.** Dans le journal de la watch (`make glorfindel-host-logs`, lignes
 `[campaign-report]`), ou avec `make glorfindel-host-campaign-report CAMPAIGN=<id>`, qui affiche
@@ -243,7 +243,7 @@ VM : `~/.eregion/analysis`, monté dans le conteneur de la watch (`docker-compos
 montage et l'image, qui copie maintenant `analysis/`, prendront effet au prochain redéploiement
 de H0, avec Jonathan.
 
-**D'où viennent les décisions.** `collect_facts` lit d'abord `runs/<run_id>_debug.jsonl`, quand
+**D'où viennent les décisions.** `collect_facts` lit d'abord `runs/glorfindel/<run_id>_debug.jsonl`, quand
 une watch tourne à côté du run. Sur H0, la watch hébergée écrit plutôt
 `watch-<règle>-<ts>_debug.jsonl`. La décision d'un run est alors la première détection de ces
 fichiers qui porte une `action` et qui remplit la règle de #157 (`annatar/runner/detection.py`,
@@ -474,7 +474,7 @@ indexés sans eux : ses runs ne sont jamais choisis. La commande les ajoute :
 
 ```bash
 python -m analysis.campaign_index --all runs/campaigns      # chaque campagne done ou aborted
-python -m analysis.campaign_index runs/campaigns/<id> …     # celles-ci
+python -m analysis.campaign_index runs/glorfindel/campaigns/<id> …     # celles-ci
 ```
 
 - Un run déjà dans l'index garde les faits avec lesquels il y est entré : ceux du rapport de
@@ -513,14 +513,14 @@ docker exec eregion-watch python -m analysis.campaign_index --all runs/campaigns
   lui ajoute l'état, le début et les VM, sans recalculer ses décisions.
 - **La campagne du 21/10** (`20261021T121643Z`) n'est jamais passée par H0 : son manifeste et
   les rapports de ses runs sont restés sur Orodruin. Il faut d'abord les copier sur H0, dans
-  `eregion/runs/campaigns/20261021T121643Z/` (le manifeste, et les rapports des runs dans
+  `eregion/runs/glorfindel/campaigns/20261021T121643Z/` (le manifeste, et les rapports des runs dans
   `runs/`), puis lancer la commande. Ses décisions sont alors lues dans les `watch-*` de H0,
-  bornées par les fenêtres de `runs/exercises/`.
+  bornées par les fenêtres de `runs/<injecteur>/exercises/`.
 - **Attention à la purge** : une fenêtre est vidée une semaine après sa fin
   (`PURGE_AFTER_S`). Une fois les fenêtres du 21/10 vidées, la décision de chacun de ses runs
   devient inconnue (« fenêtre absente »). La détection et la latence restent, puisqu'elles
   viennent du manifeste. Il faut donc verser cette campagne avant la purge : copier le dossier
-  et lancer `python -m analysis.campaign_report runs/campaigns/<id>` (le code d'aujourd'hui
+  et lancer `python -m analysis.campaign_report runs/glorfindel/campaigns/<id>` (le code d'aujourd'hui
   l'indexe, et un appel au modèle écrit son rapport), ou la commande ci-dessus, une fois ce
   code déployé. Dans les deux cas, les faits entrés dans l'index ne sont plus recalculés.
 
@@ -532,7 +532,7 @@ session de [`banc-bl1.md`](banc-bl1.md)._
 Deux indicateurs de la finalité, calculés par le code depuis les fichiers d'une campagne
 ([`analysis/containment.py`](../analysis/containment.py)), jamais par le modèle. Le rapport les
 rend dans sa section « Réponse ». La page de la campagne dans la console les recalcule, depuis les
-mêmes fichiers. `python -m analysis.containment runs/campaigns/<id> [--fault-run <run>] [--json]`
+mêmes fichiers. `python -m analysis.containment runs/glorfindel/campaigns/<id> [--fault-run <run>] [--json]`
 les donne seuls ; sur H0 : `make glorfindel-host-containment CAMPAIGN=<id>`. Lancée seule, la
 commande lit l'inscription des VM d'une campagne venue du canal comme le rapport
 (`check_enrollment`, H-1) : sans geste de plus (BL1c). `check_enrollment` retire d'abord les
@@ -558,7 +558,7 @@ mesure, le triage et l'index lancés à la main par `docker exec` atteignent l'i
      va de la relecture à la fin de la fenêtre du run, grâce comprise, sans dépasser le début du
      run suivant sur la même VM. Sans fenêtre, elle dure 15 min. Elle s'arrête aussi à la
      première levée connue de ce confinement sur la VM : une action de l'opérateur
-     (`runs/manual_actions.jsonl`) ou la levée de la watch sur un `recovery_complete`. Une levée
+     (`runs/console/manual_actions.jsonl`) ou la levée de la watch sur un `recovery_complete`. Une levée
      ne compte que pour ce qu'elle lève (release : une isolation ; unblock : un blocage ; reset :
      les deux), et seulement entière : une levée partielle, ou relue fausse, n'arrête rien.
 - **Le temps pour contenir** d'un incident contenu seul va du T0 à la relecture sur Azure. C'est
@@ -693,7 +693,7 @@ a rattaché une ligne ou une carte.
 
 Ne sont pas de la campagne, et c'est dit (« vu par la watch, compté avec … ») :
 - un run qu'un autre manifeste liste ;
-- un run qui a son propre rapport (`runs/<id>.json` : un run seul, une panne).
+- un run qui a son propre rapport (`runs/<injecteur>/<id>.json` : un run seul, une panne).
 
 La fenêtre d'une panne n'est jamais un incident. Un run vu par la watch n'est jamais oublié : inconnu
 n'est jamais rien (A0).
@@ -929,7 +929,7 @@ règles de Glorfindel comme des données, jamais sa mémoire.
 
 ### Le tri d'une campagne
 
-`python -m analysis.triage runs/campaigns/<id>` écrit `triage.md` et `triage.json` à côté du
+`python -m analysis.triage runs/glorfindel/campaigns/<id>` écrit `triage.md` et `triage.json` à côté du
 manifeste. Une campagne lancée `--without-glorfindel` n'a pas de tri, comme elle n'a pas de
 rapport (V1). Une campagne sans rien à trier n'appelle aucun modèle.
 
@@ -1023,7 +1023,7 @@ n'appelle ni Glorfindel, ni Azure, ni le modèle. Une proposition se décide une
 porte une décision n'est jamais réécrit par un nouveau tri (`Decided`).
 
 **Un seul écrivain à la fois** : `decide` et l'écriture d'un tri prennent un verrou `flock` sur
-`runs/campaigns/<id>/.triage.lock` (comme `.report.lock` du rapport sur H0). Deux décisions prises
+`runs/glorfindel/campaigns/<id>/.triage.lock` (comme `.report.lock` du rapport sur H0). Deux décisions prises
 en même temps sont gardées toutes les deux ; sans verrou, la seconde écriture perdait la première
 (un test le joue entre trois processus) ; un nouveau tri écrit pendant une décision ne la perd
 pas non plus (la décision attend, puis s'inscrit sur le nouveau tri ; un test le joue entre deux

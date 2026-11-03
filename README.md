@@ -513,7 +513,7 @@ glorfindel approve-rule <id>                    # apply a proposed rule to the c
 glorfindel rules                                # rules loaded: the shipped base, then the client's layer over it
 glorfindel reject-rule <id>                     # dismiss a proposed rule without applying it
 glorfindel propose-rules [--ttp T..]            # proactively author detection for uncovered techniques (cold-start)
-glorfindel respond runs/<run_id>_signals.jsonl  # post-run processing
+glorfindel respond runs/annatar/<run_id>_signals.jsonl  # post-run processing
 # ── Remediation actions — choose the right scope ─────────────────────────────
 #
 # VM state after an incident:

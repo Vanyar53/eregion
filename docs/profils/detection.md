@@ -34,7 +34,7 @@ make orodruin-campaign-run CAMPAIGN=<id>
 
 ## Jamais sans Glorfindel
 
-**Le service compose.** `annatar` dépend de la watch : le lancer la démarre, mais sans attendre son battement. Dans la première minute, le temps que la watch publie son premier battement, Annatar peut refuser d'agir : relance-le un peu plus tard. Il lit ce battement dans `~/.glorfindel/injectors`, en lecture seule : la watch l'y écrit pour lui, et le reste de `~/.glorfindel` (escalades, état d'isolation, règles du client) lui reste fermé. Il partage aussi `runs/` avec la watch, et c'est là qu'elle lit l'`attack_started` — elle n'en prend que ce qu'un injecteur émet.
+**Le service compose.** `annatar` dépend de la watch : le lancer la démarre, mais sans attendre son battement. Dans la première minute, le temps que la watch publie son premier battement, Annatar peut refuser d'agir : relance-le un peu plus tard. Il lit ce battement dans `~/.glorfindel/injectors`, en lecture seule : la watch l'y écrit pour lui, et le reste de `~/.glorfindel` (escalades, état d'isolation, règles du client) lui reste fermé. De `runs/`, il n'écrit que son répertoire, `runs/annatar/` (et `runs/orodruin/`, le journal et le verrou), que la watch monte en lecture seule : elle y lit l'`attack_started`, et n'en prend que ce qu'un injecteur émet. Il ne monte ni `runs/glorfindel/` (le raisonnement de la watch) ni `runs/console/` (les gestes de l'opérateur) : la détection d'un run se mesure par le canal retour seulement (SEC18, [`docs/operations.md`](../operations.md), « `runs/` : un répertoire par écrivain »).
 
 **Depuis Orodruin.** Annatar lit le battement de la watch hébergée sur le canal retour, `EREGION_WATCH_CHANNEL`. Sans battement vivant, il refuse avant tout appel au cloud.
 

@@ -34,7 +34,7 @@ préversion publique et hors du provider azurerm (09/2026).
 | 4. Injecter | fenêtre d'exercice ouverte (`kind: fault`, publiée vers la watch hébergée), démarrage **journalisé avant l'appel**, signal `fault_started` | — |
 | 5. Pendant | l'exécution suivie toutes les 30 s ; la panne doit être constatée : son **effet** déclaré (G1), la VM arrêtée ou le bruit vu dans Perf ; les sondes marquées `during` tiennent (G1) | une sonde `during` qui ne tient plus : l'expérience est **annulée** (le bruit n'est plus bénin) ; au-delà de sa durée + 5 min, ou du plafond : annulée ; Ctrl-C : annulée aussi |
 | 6. Après | les sondes à nouveau, Heartbeat **postérieur à la fin** de la panne, 10 min au plus ; un effet lu dans la télémétrie, pas encore vu, cherché encore entre son début et sa fin (l'ingestion a du retard) ; si le moteur n'a pas ramené la VM : le retour déclaré (`start_vm`, journalisé), puis les sondes encore ; enfin, la watch de Glorfindel relue (`checks.watch_after`, G1) | le retour n'est « vérifié » que par une sonde, jamais sur la parole du moteur ; un effet jamais vu fait échouer le run (`fault_effective`) ; une watch disparue aussi : la réaction de Glorfindel n'est pas connue |
-| 7. Enregistrer | `runs/<run_id>.json` comme Annatar, avec les valeurs des sondes avant et après (`metrics.before`, `metrics.after`, par VM) ; fenêtre fermée, puis, avec le canal, le rapport publié vers H0 (#193) ; signaux dans `runs/gothmog/` | — |
+| 7. Enregistrer | `runs/gothmog/<run_id>.json` comme Annatar, avec les valeurs des sondes avant et après (`metrics.before`, `metrics.after`, par VM) ; fenêtre fermée, puis, avec le canal, le rapport publié vers H0 (#193) ; signaux dans `runs/gothmog/` | — |
 
 **Les sondes d'état normal** ([`probes.py`](probes.py)) : la VM en marche (`PowerState/running`),
 son agent `Ready` (le système répond), son Heartbeat dans Log Analytics de moins de 10 minutes.
@@ -44,7 +44,7 @@ Tout passe par l'API de contrôle d'Azure (ARM), la seule sortie qu'Orodruin lai
 Log Analytics compris, par sa requête via ARM.
 
 **Les signaux ne vont pas où la watch décide.** La watch de Glorfindel envoie à son graphe de
-décision tout événement de `runs/*_signals.jsonl` sauf `attack_started` : un `fault_started` là
+décision tout événement de `runs/annatar/*_signals.jsonl` sauf `attack_started` : un `fault_started` là
 lancerait un cycle de décision sur la déclaration elle-même. Les signaux de Gothmog vont dans
 `runs/gothmog/<run_id>_signals.jsonl` ; Glorfindel apprend la panne par sa fenêtre d'exercice et
 par sa propre télémétrie, comme pour une vraie panne.

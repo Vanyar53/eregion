@@ -147,9 +147,13 @@ bout de son délai. Sans `flock`, ces tests échouent.
 **Tout verrou qu'une course peut prendre est celui de l'ordonnanceur.** Un verrou que la machine ne
 pilote pas, autour d'un point d'ordonnancement (un appel Azure, une écriture d'état), fige la course :
 l'opération arrêtée dedans attend son tour, l'autre bloque dans le verrou hors de sa vue, et I11 tombe
-sur « … never came back » sans que le code ait de défaut. Les verrous de fichiers locaux passent tous
-par `locks._file_lock`, lu à l'appel : les escalades (#292), les règles proposées (SEC4b), et le
-fichier de préparation (`readiness.json`) depuis I11g (#508).
+sur « … never came back » sans que le code ait de défaut. Les verrous de fichiers locaux qu'une
+course de la machine atteint passent par `locks._file_lock`, lu à l'appel : les escalades (#292), les
+règles proposées (SEC4b), et le fichier de préparation (`readiness.json`) depuis I11g (#508).
+D'autres tiennent encore un verrou de thread propre autour d'une écriture locale, hors de
+l'ordonnanceur : `incidents.py` (avant son `_file_lock`), `signal_origin.py` (`REFUSALS_FILE`),
+`posture.py` et `discovery.py`. Aucune course de la machine ne les atteint aujourd'hui ; un lot qui
+les y ferait entrer passe d'abord leur verrou par `_file_lock`.
 
 **Une course qui ne revient pas échoue, elle ne fige pas le job (U3F).** Un tour qui dure plus
 de 20 s (temps réel) fait échouer I11 : « operations stuck » ou « … never came back ». Le fil qui

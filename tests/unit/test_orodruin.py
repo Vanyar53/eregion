@@ -620,6 +620,49 @@ def test_the_channel_account_is_closed_to_all_but_orodruin_and_h0():
     assert 'condition     = var.watch_principal_id == "" || var.watch_subnet_id != ""' in account
 
 
+def test_the_return_channel_is_written_by_the_listed_watches_only():
+    """WC1 (#523): without H0, the watch of a workstation or a team writes the return channel. By
+    default (watch_principal_ids null) the hosted watch alone, at the addresses it had — its plan
+    unchanged; each watch listed reads `exercises` and writes `watch`, nothing more, never
+    Orodruin's own identity. Its behaviour: infra/orodruin/tests/watch_writers.tftest.hcl
+    (`terraform test`). Mutants M3660–M3663, M3669."""
+    variables = (ORODRUIN / "variables.tf").read_text(encoding="utf-8")
+    ids = variables.split('variable "watch_principal_ids"')[1].split("\n}\n")[0]
+    assert "type        = list(string)" in ids and "default     = null" in ids
+    assert ('can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))'
+            in ids)
+    assert "length(distinct([for id in var.watch_principal_ids : lower(id)]))" in ids
+    tf = _tf()
+    assert ("watch_writers       = var.watch_principal_ids == null ? compact([lower(var.watch_principal_id)])"
+            in tf)
+    assert ("hosted_watch_writes = var.watch_principal_id != \"\" && "
+            "contains(local.watch_writers, lower(var.watch_principal_id))") in tf
+    assert ("station_watches     = toset([for id in local.watch_writers : id if id != "
+            "lower(var.watch_principal_id)])") in tf
+    # H0: the same two assignments, at the same addresses (count), the same identity.
+    for name in ("channel_watch_reader", "watch_channel_writer"):
+        hosted = _block("azurerm_role_assignment", name)
+        assert "count                = local.hosted_watch_writes ? 1 : 0" in hosted
+        assert "principal_id         = var.watch_principal_id" in hosted
+    # A workstation's or a team's: one assignment each, the same role at the same container.
+    for name, role, container in (
+            ("channel_station_watch_reader", "Storage Blob Data Reader", "exercises"),
+            ("watch_channel_station_writer", "Storage Blob Data Contributor", "watch")):
+        station = _block("azurerm_role_assignment", name)
+        assert "for_each             = local.station_watches" in station
+        assert f'role_definition_name = "{role}"' in station
+        assert f"scope                = azurerm_storage_container.{container}.id" in station
+        assert "principal_id         = each.value" in station
+        assert 'principal_type       = "ServicePrincipal"' in station
+        assert ("condition     = each.value != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)"
+                in station)
+    tftest = (ORODRUIN / "tests" / "watch_writers.tftest.hcl").read_text(encoding="utf-8")
+    for run in ("by_default_the_hosted_watch_alone_as_before", "a_station_watch_alone_writes_watch_and_reads_exercises",
+                "several_watches_one_assignment_each_h0_kept_where_it_was", "a_list_without_h0_leaves_h0_out",
+                "orodruins_own_identity_never_writes_the_watch_channel", "an_identity_named_twice_is_refused"):
+        assert f'run "{run}"' in tftest, run
+
+
 def test_the_channel_keeps_its_blobs_for_a_bounded_time():
     """SEC5 (V-21): without a retention, the listing — alphabetical, the run_ids timestamps —
     would pass MAX_BLOBS and leave out the newest windows. The block blobs go once older than
@@ -652,6 +695,8 @@ def test_the_host_acts_on_the_bench_only_and_is_no_target():
         "channel_operator": "azurerm_storage_container.exercises.id",
         "watch_channel_reader": "azurerm_storage_container.watch.id",
         "watch_channel_writer": "azurerm_storage_container.watch.id",
+        "channel_station_watch_reader": "azurerm_storage_container.exercises.id",
+        "watch_channel_station_writer": "azurerm_storage_container.watch.id",
     }
     # The return channel (#159): Orodruin reads it, the hosted watch writes it.
     reader_of_watch = tf.split('resource "azurerm_role_assignment" "watch_channel_reader"')[1].split("\n}\n")[0]

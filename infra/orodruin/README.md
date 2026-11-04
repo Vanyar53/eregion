@@ -42,6 +42,44 @@ Contrat (garanties, vérifications, kill, mutants) :
   `orodruin.env` : `EREGION_WATCH_CHANNEL` (`watch_channel_url`) et `EREGION_WATCH_CHANNEL_SCOPE`
   (`watch_channel_scope`). Dans le `host.env` de Glorfindel : `EREGION_WATCH_CHANNEL`. Canal
   coupé → le run écrit `detection: unknown`, jamais `missed` (`docs/design/orodruin-contract.md`).
+- **Qui écrit le canal retour** (WC1, #523) : par défaut la watch de H0 seule, comme avant. Sans H0,
+  la watch d'un poste ou d'une équipe : `WATCH_PRINCIPALS=<id>[,<id>…]` (la variable
+  `watch_principal_ids`), voir ci-dessous.
+
+## Sans H0 : la watch d'un poste ou d'une équipe (WC1)
+
+Une watch qui tourne sur ton poste (`make glorfindel-start`, `make profile-discover`) ou pour une
+équipe (`make team-start`) publie son battement signé et ses détections sur le canal retour par le
+même chemin que H0 (`eregion_core/watch_channel.py`), sous **son** principal de service
+(`GLORFINDEL_AZURE_CLIENT_*`, jamais `ANNATAR_AZURE_CLIENT_*`). Il lui faut deux droits, et rien
+d'autre : lire `exercises` (les fenêtres) et écrire `watch`.
+
+- **L'identité** : l'*object id* du principal de service de la watch (l'application d'entreprise),
+  pas son *client id* : `az ad sp show --id <GLORFINDEL_AZURE_CLIENT_ID> --query id -o tsv`.
+- **Le plan** : `make orodruin-plan WATCH_PRINCIPALS=<object id> NO_WATCH=1`. `NO_WATCH=1` dit
+  qu'il n'y a pas de Glorfindel hébergé (SEC7). Avec H0, sa watch ne garde le canal que si son
+  identité est dans la liste (`terraform -chdir=infra/glorfindel-host output principal_id`) ;
+  sinon le Makefile refuse, sauf `NO_WATCH=1`.
+- **Ce que le Makefile vérifie** : `WATCH_PRINCIPALS` se donne sur la ligne de commande (jamais de
+  l'environnement), des GUID séparés par des virgules, sans espace, aucun deux fois ; jamais
+  développée par make. Le plan refuse aussi ce qui n'est pas un GUID, une identité nommée deux fois,
+  et l'identité d'Orodruin (un injecteur n'écrit jamais ce que dit la watch).
+- **Le réseau** : le pare-feu du compte admet déjà l'IP de l'opérateur (l'arrêt d'urgence). Une
+  watch sur ton poste passe par là ; ton IP a changé depuis le dernier apply, elle n'atteint plus le
+  canal, et les runs sont refusés (aucun battement frais). Une watch sur un autre hôte n'y entre pas.
+- **Sur le poste de la watch** : `EREGION_WATCH_CHANNEL` (`terraform output watch_channel_url`) et
+  `EREGION_EXERCISE_CHANNEL` (`channel_url`) dans ton environnement, ou dans le `team.env` de
+  l'équipe.
+- **Sur Orodruin** : la clé de cette watch épinglée dans `orodruin.env`, `EREGION_WATCH_KEY`
+  (`make watch-key` sur son poste), puis `make orodruin-push`. Un battement d'une autre clé, celui
+  de H0 compris, reste refusé (SEC19).
+- **Une watch à la fois** : le battement est un seul blob (`heartbeat.json`). Deux watches qui
+  publient en même temps l'écrasent tour à tour, et la garde refuse celle dont la clé n'est pas
+  épinglée. Plusieurs identités servent à passer de l'une à l'autre, pas à les faire tourner ensemble.
+
+Tests : `infra/orodruin/tests/watch_writers.tftest.hcl` (`terraform test`, fournisseur mocké),
+`tests/unit/test_makefile_bench.py`, `tests/unit/test_watch_key.py`. Mesure au banc : un run depuis
+Orodruin, la watch sur le poste, à faire avec Jonathan.
 
 ## Déroulé (avec Jonathan — c'est lui qui lance les apply)
 

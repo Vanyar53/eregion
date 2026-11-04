@@ -12,7 +12,7 @@
 | **H0** | Glorfindel hébergé : sa watch, sa console et son bot, sur une VM à lui | `infra/glorfindel-host/` |
 | **Orodruin** | l'hôte jetable des injecteurs : le seul endroit d'où une attaque part | `infra/orodruin/` |
 
-**Pourquoi H0.** Un injecteur n'agit que derrière une watch vivante (V1) : il lit son battement, signé par la clé de la watch, sur le canal retour. Aujourd'hui, seule l'identité de H0 peut écrire ce canal (voir [le cas sans H0](#le-cas-sans-h0--un-trou)).
+**Pourquoi H0.** Un injecteur n'agit que derrière une watch de Glorfindel vivante : avant toute action, il lit son battement (un fichier qu'elle réécrit chaque minute), signé par la clé de la watch, sur le canal retour, un conteneur de stockage partagé avec Orodruin. Sans battement de moins de 90 s, il refuse. Aujourd'hui, seule l'identité de H0 peut écrire ce canal (voir [le cas sans H0](#le-cas-sans-h0--un-trou)).
 
 **Comment lire ce guide.** Chaque étape dit d'où vient ce qu'elle affirme :
 - *lu dans le code* : le fichier est cité ;
@@ -23,13 +23,14 @@ Rien de ce guide n'a été rejoué sur Azure pour l'écrire : [a-rejouer.md](a-r
 
 ## Le coût et le temps
 
-| Étape | Temps | Coût (West Europe) | D'où |
-|---|---|---|---|
-| 1. Celebrimbor | ~5 min | ~25–35 $/mois, VM éteinte à 23 h UTC ; **plus bree, allumée en continu : ~71 €/mois** | README ; `infra/terraform/config.yaml` |
-| 3. H0 | **non mesuré** (cloud-init installe Docker et clone le dépôt) | ~61 €/mois en continu (D2als_v6), plus le disque et l'IP | `infra/glorfindel-host/README.md` |
-| 4. Orodruin | 5 min ; 30 min s'il faut le recréer | ~5–9 €/mois, désalloué entre les sessions | `docs/banc-bl1.md` ; `docs/design/orodruin-contract.md` |
-| 7. La première attaque | détection en 44,7 s (20/10) à 144 s (31/10) ; le rapport ~25 min après | le modèle : ~0,05–0,10 $ par run | `docs/banc-bl1.md`, README |
-| Chaos Studio (une panne, facultatif) | ~15 min | à l'usage : 11 à 42 €/mois estimés pour 2 à 4 campagnes | `docs/operations.md`, « Coûts réels » |
+| Étape | Région (défaut) | Temps | Coût | D'où |
+|---|---|---|---|---|
+| 1. Celebrimbor | `westeurope` (`infra/terraform/config.yaml`) | ~5 min | ~25–35 $/mois, VM éteinte à 23 h UTC ; **plus bree, allumée en continu : ~71 €/mois** | README ; `infra/terraform/config.yaml` |
+| 3. H0 | `francecentral` (`infra/glorfindel-host/variables.tf`) | la VM : **non mesuré** (cloud-init installe Docker et clone le dépôt) ; l'image construite sur H0 en 2 min 44 s (16/10) | ~61 €/mois en continu (D2als_v6), plus le disque et l'IP | `infra/glorfindel-host/README.md`, `variables.tf` |
+| 4. Orodruin | `francecentral` (`infra/orodruin/variables.tf`) | 5 min ; 30 min s'il faut le recréer | ~5–9 €/mois, désalloué entre les sessions | `docs/banc-bl1.md` ; `docs/design/orodruin-contract.md` |
+| 7. La première attaque | — | détection en 44,7 s (20/10) à 144 s (31/10) ; le rapport ~25 min après | le modèle : ~0,05–0,10 $ par run | `docs/banc-bl1.md`, README |
+| Chaos Studio (une panne, facultatif) | celle du banc | ~15 min | à l'usage : 11 à 42 €/mois estimés pour 2 à 4 campagnes | `docs/operations.md`, « Coûts réels » |
+| **Total, tout en place** | | | **~160 à 175 €/mois** : bree ~71 + H0 ~61 + le reste du banc ~23–32 (25–35 $) + Orodruin ~5–9, hors modèle et Chaos Studio | la somme des lignes ci-dessus |
 
 Entre deux sessions : `make orodruin-stop` et `make celebrimbor-stop` (bree épargnée ; `ALL=1` l'arrête aussi).
 
@@ -37,7 +38,12 @@ Entre deux sessions : `make orodruin-stop` et `make celebrimbor-stop` (bree épa
 
 - **Sur Azure.**
   - `Owner` sur l'abonnement : les rôles personnalisés et leurs attributions l'exigent.
-  - Le quota de la famille de VM (D2as_v6 pour le banc, D2als_v6 pour H0 et Orodruin) : `az vm list-usage -l westeurope -o table`.
+  - Le quota de la famille de VM, dans chaque région : D2as_v6 pour le banc, en `westeurope` ; D2als_v6 pour H0 et Orodruin, en `francecentral` par défaut (`location` de leur `variables.tf`).
+
+    ```bash
+    az vm list-usage -l westeurope -o table      # le banc
+    az vm list-usage -l francecentral -o table   # H0 et Orodruin
+    ```
 - **Sur le poste.**
   - `terraform` 1.5 ou plus, `az` (`az login`), `ssh` et une paire de clés SSH ;
   - `make install` : `glorfindel-host-env`, `-push` et `watch-key` lancent le venv.
@@ -104,12 +110,13 @@ Facultatif, recommandé : l'empreinte de sa clé d'hôte dans `.envrc` (`HOST_SS
 ## 4. Orodruin
 
 ```bash
-make orodruin-plan             # relire
-make orodruin-up YES=1         # 1er apply, sortie ouverte le temps d'installer Docker
+make orodruin-plan             # relire : ce plan est celui de la sortie FERMÉE (egress_locked=true)
+make orodruin-up               # 1er apply : il OUVRE la sortie (egress_locked=false), le temps d'installer Docker ;
+                               # son plan, différent de celui d'orodruin-plan, est montré : le relire, puis « yes »
 make orodruin-fingerprint      # l'empreinte de sa clé d'hôte, lue par Azure (Run Command)
 export ORO_SSH_FINGERPRINT=SHA256:…    # la ligne affichée, aussi dans .envrc : sans elle, rien ne part vers Orodruin
 make orodruin-ssh              # attendre ~/.orodruin-ready, puis exit
-make orodruin-lock YES=1       # 2e apply : la sortie se referme, l'identité reçoit ses droits sur chaque VM inscrite
+make orodruin-lock             # 2e apply : la sortie se referme ; son plan montré, « yes »
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env
 ```
 
@@ -117,7 +124,7 @@ Remplis `infra/orodruin/orodruin.env`, ignoré par git, depuis les sorties de so
 
 | Variable | Sa valeur |
 |---|---|
-| `AZURE_SUBSCRIPTION_ID` | celui du banc ; il doit être celui de la watch, sinon le battement est refusé (SEC5) |
+| `AZURE_SUBSCRIPTION_ID` | celui du banc ; il doit être celui de la watch : le battement porte un condensé de l'abonnement qu'elle lit, et l'injecteur refuse celui d'un autre |
 | `EREGION_EXERCISE_CHANNEL` | `terraform -chdir=infra/orodruin output -raw channel_url` |
 | `EREGION_CHANNEL_SCOPE` | `… output -raw channel_scope` |
 | `EREGION_WATCH_CHANNEL` | `… output -raw watch_channel_url` |
@@ -126,7 +133,9 @@ Remplis `infra/orodruin/orodruin.env`, ignoré par git, depuis les sorties de so
 
 Pas d'`AZURE_CLIENT_*` dans ce fichier : elles masqueraient l'identité managée. `make doctor PROFILE=bench` le refuse.
 
-*Lu dans le code : Makefile, `orodruin-*` ; `infra/orodruin/README.md`, « Déroulé ». Mesuré le 19/10 : la sortie fermée, `armed`, un premier run.*
+Chaque apply d'Orodruin, `up` comme `lock`, relit les VM inscrites et donne à son identité ses droits sur chacune (`vm_injector`, qui ne dépend pas de la sortie). `YES=1` appliquerait sans montrer le plan : à ne pas utiliser ici, surtout pour `orodruin-up`, dont le plan n'est pas celui d'`orodruin-plan`.
+
+*Lu dans le code : Makefile, `orodruin-*` ; `infra/orodruin/main.tf` ; `infra/orodruin/README.md`, « Déroulé ». Mesuré le 19/10 : la sortie fermée, `armed`, un premier run.*
 
 ## 5. Glorfindel démarre, et sa clé s'épingle chez Orodruin
 
@@ -141,7 +150,13 @@ make glorfindel-host-watch-key # export EREGION_WATCH_KEY=ed25519:… et son emp
 ```
 
 - **La clé.** La watch tire sa clé à son premier démarrage (`~/.eregion/watch-key` sur H0).
-- **Où l'épingler.** La ligne `EREGION_WATCH_KEY=ed25519:…` va dans `orodruin.env`. Mets-la aussi dans `host.env`, puis relance `make glorfindel-host-push` : la console de H0 montre alors la garde comme Orodruin la lit (Dagorlad).
+- **Où l'épingler.** La ligne `EREGION_WATCH_KEY=ed25519:…` va dans `orodruin.env`. Mets-la aussi dans `host.env` : la console de H0 vérifie alors le battement comme Orodruin le vérifie, et sa page d'exercice dit d'avance si un run serait refusé. `make glorfindel-host-push` ne fait que copier le fichier ; la console relit son environnement quand on la recrée, pas quand on la redémarre :
+
+  ```bash
+  make glorfindel-host-push
+  make glorfindel-host-ssh       # puis, sur H0 :
+  cd eregion && docker compose up -d war-room && exit
+  ```
 - **Puis l'image d'Annatar sur Orodruin, et le contrat :**
 
 ```bash
@@ -159,7 +174,7 @@ make doctor PROFILE=bench              # tout vert
 
 Rien à faire de plus : Celebrimbor inscrit ses VM à leur construction.
 - **Les tags.** gondolin et son groupe portent `eregion-target=celebrimbor` et `eregion-zone=bench` (`infra/terraform/locals.tf`). bree ne les porte pas (`enrolled: false`) : aucun injecteur ne la vise.
-- **Les droits.** `make orodruin-lock YES=1` donne à Orodruin ses droits sur chaque VM inscrite, et seulement elles. Une VM inscrite plus tard le redemande.
+- **Les droits.** Chaque apply d'Orodruin (`make orodruin-up`, `make orodruin-lock`) relit les VM inscrites et donne à son identité ses droits sur chacune, et seulement elles. Une VM inscrite plus tard : un nouveau `make orodruin-lock`.
 
 Le vérifier, c'est la vraie lecture de la zone :
 
@@ -173,6 +188,8 @@ Les injecteurs relisent l'inscription et la zone avant chaque action (`eregion_c
 ## 7. La première attaque, puis sa preuve (30 à 45 min)
 
 La technique : T1136.001, la création d'un compte local, par le test épinglé d'Atomic Red Team. Elle ne détruit rien, et son nettoyage retire le compte. La campagne déclarée la joue sur gondolin.
+
+**Ce qui compte ici : le verdict de détection.** `bl1-reponse.yaml` attend `contain` (Glorfindel isole ou bloque seul) : cette attente ne peut pas être tenue dans ce guide, par construction. H0 y tourne en `human_only`, en lecture seule : il détecte, recommande, et **retient** l'action. Le rapport dira donc « non contenu » : ce n'est pas un échec. Pour mesurer le confinement, voir l'étape 2, « Pour qu'il contienne seul ».
 
 ```bash
 make celebrimbor-start VM=gondolin       # elle s'éteint à 23 h UTC
@@ -226,6 +243,6 @@ Une watch qui tourne sur ton poste (`make profile-discover`) ne peut pas, aujour
   Sans canal, elle écrit le canal local des verdicts, `runs/verdicts/`. Orodruin ne le voit pas : il est sur une autre machine.
 - **Qui peut écrire ce canal.** Le Terraform d'Orodruin ne donne l'écriture du conteneur `watch` qu'à `watch_principal_id` (`infra/orodruin/main.tf`, `watch_channel_writer`). La lecture des fenêtres, il ne la donne qu'à lui aussi (`channel_watch_reader`).
 - **D'où vient cette identité.** Le Makefile la lit dans l'état de H0, et la pose sur la ligne de commande (`ORO_VARS`) : une valeur de `terraform.tfvars` ne la remplace pas. Une identité donnée sans le sous-réseau de H0 est refusée par le plan.
-- **Sans H0** (`NO_WATCH=1`), personne n'écrit le battement. Chaque run est refusé (V1), sauf `WITHOUT_GLORFINDEL=1` : un run de développement, dont la détection n'est pas mesurée, et le rapport le dit.
+- **Sans H0** (`NO_WATCH=1`), personne n'écrit le battement. Chaque run est refusé, faute de battement vivant, sauf `WITHOUT_GLORFINDEL=1` : un run de développement, dont la détection n'est pas mesurée, et le rapport le dit.
 
 Attribuer ces rôles à la main au principal d'une watch locale, puis poser son `EREGION_WATCH_CHANNEL` et sa clé dans `orodruin.env`, n'est ni codé, ni documenté, ni mesuré : **non vérifié**. [`docs/banc-bl1.md`](../banc-bl1.md) l'avait écarté le 30/10 (option b, « le canal retour cassé »). Ce sera un lot à part. Le profil « plusieurs équipes » ([`equipes.md`](../profils/equipes.md)) suppose ce même chemin pour la watch d'une équipe.

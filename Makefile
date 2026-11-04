@@ -317,7 +317,8 @@ help:
 # (scripts/doctor.py) : les outils, les variables (leur présence, jamais leur valeur), la
 # configuration, les dossiers d'état, le port de la console ; PROFILE=bench : le banc
 # (docs/demarrer/banc.md). Le venv s'il est là (la lecture stricte de la configuration),
-# sinon python3 : il tourne avant make install. 0 seulement si tout est vert.
+# sinon python3 : il tourne avant make install. 0 seulement si tout est vert ; le script rend 1 pour
+# un point à corriger, 2 pour un profil inconnu, et make en fait son propre code, 2, dans les deux cas.
 PROFILE ?= discover
 doctor:
 	@$(if $(wildcard .venv/bin/python),.venv/bin/python,python3) scripts/doctor.py --profile "$(PROFILE)"

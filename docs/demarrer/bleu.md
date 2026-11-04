@@ -105,8 +105,10 @@ La watch lit les règles à son démarrage. Ce geste se fait donc avant l'étape
 
 ```bash
 make doctor            # tout vert : « Tout est prêt. »
-make profile-discover  # construit l'image eregion-glorfindel (~1 min 15), démarre la watch et la console
+make profile-discover  # construit l'image eregion-glorfindel, puis démarre la watch et la console
 ```
+
+La construction de l'image a pris 72 s sans cache sur le poste de l'opérateur, l'image de base déjà tirée (29/10, [`docs/operations.md`](../operations.md), « La CI des images »), et 2 min 44 s sur la VM de H0 (16/10, `infra/glorfindel-host/variables.tf`). Sur ton poste, elle n'est **pas vérifiée** : le rejeu de ce guide n'avait pas de démon Docker.
 
 La cible finit par l'URL de la console, avec son jeton. Tu la retrouves par `make console-url`.
 - La console écoute sur `127.0.0.1:7007` seulement, et demande toujours ce jeton.
@@ -144,14 +146,19 @@ Avec Ollama (étape 2), les journaux restent chez toi. Le détail : le [README](
 ```bash
 make glorfindel-stop                     # arrête la watch et la console (docker compose down)
 docker rmi eregion-glorfindel
-rm -rf ~/.glorfindel ~/.cache/chroma ~/.eregion runs/   # l'état local : cartes, mémoire, jeton, clé de la watch
+ls ~/.eregion                            # d'abord : voir ce qu'il tient (ci-dessous)
+rm -rf ~/.glorfindel ~/.cache/chroma runs/                     # l'état de Glorfindel : cartes, mémoire, règles du client
+rm -rf ~/.eregion/console ~/.eregion/watch-key ~/.eregion/analysis   # le jeton de la console, la clé de la watch, l'index des rapports
 az role assignment delete --assignee <appId> --role "Log Analytics Reader" --scope /subscriptions/$SUB
 az role assignment delete --assignee <appId> --role Reader --scope /subscriptions/$SUB
 az role assignment list --assignee <appId> --all -o table   # vide
 az ad sp delete --id <appId> && az ad app delete --id <appId>
 ```
 
-- **Avant d'effacer `~/.eregion`**, vérifie qu'il ne tient rien d'autre : une instance d'équipe (`~/.eregion/teams/`) y vit aussi.
+- **`~/.eregion` ne s'efface pas en bloc.** Ce guide n'y écrit que `console/`, `watch-key/` et `analysis/`. Le reste vient d'autres usages, et se garde ou se retire en connaissance de cause :
+  - `host-backups/` : les copies de la mémoire et des verdicts d'un H0 (`make glorfindel-host-pull`), de vraies cartes ;
+  - `teams/` : les instances d'équipe (`make team-init`) ;
+  - `orodruin_known_hosts`, `h0_known_hosts` : les clés d'hôte épinglées du banc.
 - **En lecture seule, Glorfindel n'a rien isolé ni bloqué.** Hors lecture seule, `glorfindel list` doit d'abord être vide : voir « Remove Eregion » dans le [README](../../README.md#remove-eregion).
 - **La clé du modèle** se révoque chez son fournisseur.
 

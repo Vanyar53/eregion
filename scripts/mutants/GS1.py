@@ -17,7 +17,7 @@ MUTANTS = [
      """    return [Check(g, f"{provider} : {', '.join(keys)}", OK)]""",
      """    return [Check(g, f"{provider} : {', '.join(env.get(k, '') for k in keys)}", OK)]"""),
     ("M3622", "a value left from .envrc.example taken as filled (GS1)", DOCTOR,
-     "    return bool(_EXAMPLE.search(value))",
+     "    return bool(_EXAMPLE.fullmatch(value.strip()))",
      "    return False"),
     ("M3623", "a principal's pair half set taken as a principal (GS1)", DOCTOR,
      "    if have == (True, True):\n",

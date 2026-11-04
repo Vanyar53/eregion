@@ -1,5 +1,5 @@
 """GS1 (#520): make doctor checks what a first start needs, without the cloud nor the model, and
-never says a secret (scripts/doctor.py; mutants M3620–M3627 in scripts/mutants/GS1.py).
+never says a secret (scripts/doctor.py; mutants M3620–M3627 and M3629 in scripts/mutants/GS1.py).
 
 Every probe is swapped here: no docker, no port bound, no file of the operator read — the repo
 and the HOME are tmp directories.
@@ -165,6 +165,18 @@ def test_the_values_of_envrc_example_are_refused_as_unfilled():
     names = " ".join(failed(checks))
     for var in ("AZURE_SUBSCRIPTION_ID", "AZURE_TENANT_ID", "GLORFINDEL_AZURE_CLIENT_ID", "ANTHROPIC_API_KEY"):
         assert var in names, var
+
+
+@pytest.mark.parametrize("value,example", [
+    ("sk-ant-...", True), ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", True), ("x" * 40, True), ("...", True),
+    ("<appId>", True), ("ed25519:…", True), ("YOUR_LAW_WORKSPACE_GUID", True),
+    ("ssh-ed25519 AAAA... your-key-comment", True),
+    # A real value that merely holds one of those pieces is a value.
+    ("sk-ant-api03-abc...xyz", False), ("a1b2xxxxxxxxc3", False), ("p@ss<word>", False),
+    ("ssh-ed25519 AAAAC3Nza... me@host", False), (SUB, False),
+])
+def test_only_the_exact_example_forms_are_taken_for_unfilled(value, example):
+    assert doctor.example_value(value) is example
 
 
 def test_a_half_pair_fails_and_the_watch_needs_its_principal():

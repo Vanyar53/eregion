@@ -36,7 +36,7 @@ Trois rejeux du guide bleu, en utilisateur non root (uid 1000), et un de `make d
 |---|---|---|
 | 1 | `az ad sp create-for-rbac … --role Reader`, puis `Log Analytics Reader` | un `appId`, un `password` ; `az role assignment list --assignee <appId> --all` : ces deux rôles seulement |
 | 2–3 | `.envrc`, `glorfindel-config.yaml` avec le vrai espace | `make doctor` : « Tout est prêt. », code 0 |
-| 5 | `make profile-discover` sur un poste avec Docker | l'image construite (~1 min 15), deux conteneurs `eregion-watch` et `eregion-war-room` ; l'URL de la console à la fin |
+| 5 | `make profile-discover` sur un poste avec Docker | l'image construite (sa durée : jamais notée sur un poste neuf ; 72 s sans cache sur celui de l'opérateur, le 29/10), deux conteneurs `eregion-watch` et `eregion-war-room` ; l'URL de la console à la fin |
 | 6 | `make glorfindel-logs` | `Autonomy: default = human_only`, `Credentials: read_only`, `Observe-only deployment` ; puis, en moins d'une minute, `discovery: backend … heartbeat → N VM(s)` |
 | 6 | la console, page Glorfindel | les VM de l'espace, chacune en `human_only`, le badge `OBSERVE-ONLY` ; Annatar et Gothmog grisés ; l'accueil dit « PROOF none yet » |
 | 6 | quelques minutes plus tard | les cartes de posture : leur nombre, et leurs textes avec `action_backends: []` (le guide ne les a pas vues) |
@@ -57,7 +57,7 @@ Rien de ce guide n'a été rejoué de zéro. Les mesures citées sont celles des
 | 4 | `orodruin-up`, `-fingerprint`, `-lock` | l'empreinte lue par Run Command, puis `orodruin-ssh` accepté ; `orodruin-lock` referme la sortie |
 | 5 | `glorfindel-host-env` avec les deux canaux exportés, `-push`, `-start REF=<tag>` | `make glorfindel-host-logs` : `Canal retour : https://…/watch`, `Clé de la watch : SHA256:…` |
 | 5 | `make glorfindel-host-watch-key`, la ligne dans `orodruin.env`, `make orodruin-push REF=<tag>`, `make orodruin-check` | `armed` ; `make doctor PROFILE=bench` tout vert |
-| 7 | `orodruin-campaign-plan … CAMPAIGN_DECLARED=…bl1-reponse.yaml`, `orodruin-campaign-run` | `executed=1 detected=1` ; la carte de la détection sur H0, l'action retenue (`human_only`) |
+| 7 | `orodruin-campaign-plan … CAMPAIGN_DECLARED=…bl1-reponse.yaml`, `orodruin-campaign-run` | `executed=1 detected=1` ; la carte de la détection sur H0, l'action retenue (`human_only`). Le rapport dit « non contenu » : l'attente `contain` de `bl1-reponse.yaml` ne peut pas tenir en `human_only`, seul le verdict de détection compte ici |
 | 7 | ~25 min après : `make glorfindel-host-campaign-report CAMPAIGN=<id>` | le rapport ; la page Annatar de la console ; la preuve de T1136.001 datée sur l'accueil |
 | 8 | `orodruin-down`, `glorfindel-host-down`, `celebrimbor-down CONFIRM=default`, les rôles supprimés | plus aucun des trois groupes ; `az role definition list --custom-role-only true` sans les rôles d'Eregion |
 

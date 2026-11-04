@@ -1,6 +1,6 @@
 """GS1 (#520): the internal links of the README, the starting guides and the usage profiles lead
 somewhere — the file, and the heading its anchor names, as GitHub names it (scripts/doc_anchors.py;
-mutants M3628, M3629). Modelled on tests/unit/test_docs_budget.py, which keeps the links of
+mutant M3628). Modelled on tests/unit/test_docs_budget.py, which keeps the links of
 CLAUDE.md and the role files.
 """
 import importlib.util

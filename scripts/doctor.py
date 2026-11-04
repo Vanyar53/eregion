@@ -6,7 +6,8 @@ cloud nor the model.
     python3 scripts/doctor.py [--profile discover|bench]
 
 Each check prints ✓, ✗ with the command that fixes it, or · for something optional left out.
-Exit 0 only when no check failed; 2 for a profile it does not know.
+Exit 0 only when no check failed, 1 otherwise, 2 for a profile it does not know — through make,
+which gives a failed recipe its own code, 2 in both cases.
 
 **Nothing secret leaves it.** A variable is read for its presence and its shape only — set,
 its pair complete, not the example value left from `.envrc.example`, a key of the right form —
@@ -76,7 +77,15 @@ _GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 _WATCH_KEY = re.compile(r"^ed25519:([A-Za-z0-9+/]{43}=)$")
 _SSH_FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 # The values the examples ship: a placeholder left in place is no value.
-_EXAMPLE = re.compile(r"x{8}|\.\.\.|…|^<.*>$|YOUR_|your-key-comment|AAAA\.\.\.", re.IGNORECASE)
+# Only their exact forms: a real secret may well hold « ... » or an x run somewhere in it.
+_EXAMPLE = re.compile(
+    r"x+(?:-x+)*"                                   # xxxxxxxx-xxxx-…, xxxx…xxxx (.envrc.example)
+    r"|(?:sk-ant-|sk-|ed25519:|SHA256:)?(?:\.\.\.|…)"  # sk-ant-..., ..., ed25519:…, SHA256:…
+    r"|<[^<>]*>"                                    # <appId>, <password>, <ta clé>
+    r"|YOUR_LAW_WORKSPACE_GUID"
+    r"|ssh-ed25519 AAAA\.\.\. your-key-comment"     # terraform.tfvars.example
+    r"|https://<resource>\.openai\.azure\.com",
+    re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -89,7 +98,7 @@ class Check:
 
 def example_value(value: str) -> bool:
     """A value from an example file (.envrc.example, the tfvars example), never filled in."""
-    return bool(_EXAMPLE.search(value))
+    return bool(_EXAMPLE.fullmatch(value.strip()))
 
 
 def env_file(path: Path) -> dict[str, str] | None:

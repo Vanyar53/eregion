@@ -4,10 +4,12 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
-## [0.5.4] — 2026-11-04 — "nothing left unread"
-
+### Fixed
 - **The readiness file's lock is the shared lock of the local files** (I11g, #508, found by L1W's review; `docs/design/preuves.md`, « Le verrou de la préparation, hors de l'ordonnanceur »). The invariant machine failed I11 at seed 43 with 500 sequences, on `main` too: « op-1 never came back ». Two isolations at once, each refused the quarantine NSG by a policy, both record the refusal in `readiness.json`; the one stopped by the scheduler at its write held `readiness`'s own thread lock, which the scheduler does not drive, and the other blocked in it out of its sight. No deadlock in production (the holder waits for nothing else): the machine's blind spot, as the escalations store's lock was (#292). `readiness._locked` now takes `locks._file_lock` (a thread lock plus an flock), read at call time, on the same `readiness.lock` as before — an older console beside a newer watch still keeps out of its way. The machine already drives that lock; neither it nor its oracles change.
   - Tests: `test_invariant_regressions.py::test_two_isolations_at_once_that_both_record_a_quarantine_refusal` (as found, reduced to two rules, and the race alone at three orders; red on `main`), `…::test_a_race_whose_two_operations_rewrite_the_readiness_file`, `test_locks.py::test_two_processes_lose_no_readiness_record` and `…::test_the_readiness_lock_is_the_file_every_version_took`. Mutants M3550–M3553.
+
+## [0.5.4] — 2026-11-04 — "nothing left unread"
+
 ### Security
 - **The reader of the red's mounts refuses what it cannot read** (SEC20b, #494, found by SEC20's second review; `docs/fichiers-cles.md`, « Ce que le rouge monte en écriture »; `docs/design/modele-de-menace.md` §2). `tests/unit/test_red_mounts.py` read the current Makefile faithfully, but some forms make, docker or compose accept escaped it; none is in the Makefile today.
   - **Every launch, every mount**: launches are read as `docker run`, `docker create`, either as `docker container …`, whatever the spaces. Each launch's options are read as docker reads them, up to its image: a mount glued to `-v`, after `-v=`, in a group of short options (`-itv …`), by `--volume`, `--volume=` or `--mount`. `--volumes-from`, an option the reader does not know, a `--mount` key it does not read, and a launch behind docker's own options are refused. A recipe's continuation is read as the shell reads it, the two lines joined with nothing between; a comment continued onto the next line is refused, since the shell runs what follows.

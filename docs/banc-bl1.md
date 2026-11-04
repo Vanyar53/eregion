@@ -143,13 +143,15 @@ avant d'agir (O0), mais c'est ici qu'on le voit.
 ### 2. Orodruin (5 min ; 30 min s'il faut le recréer)
 
 ```bash
-make orodruin-start
-make orodruin-push REF=<le commit de main qui porte BL1>   # l'image publiée, vérifiée (CI3)
+make orodruin-start NO_UPDATE=1                            # sans la mise à jour à la dernière release (OI3) :
+make orodruin-push REF=<le commit de main qui porte BL1>   # l'image voulue ici, publiée, vérifiée (CI3)
 make orodruin-check                                        # attendu : armed
 ```
 
 S'il a été détruit, suivre `infra/orodruin/README.md`, « Déroulé » : `orodruin-plan`, puis
-`orodruin-up YES=1` et `orodruin-lock YES=1`, chacun après la relecture de son plan.
+`orodruin-up` et `orodruin-lock`, chacun en relisant le plan qu'il montre avant de le confirmer. Le
+premier apply ouvre la sortie (le temps d'installer Docker), le second la referme ; le plan
+d'`orodruin-plan` est celui de la sortie fermée, pas celui du premier apply.
 
 ### 3. La watch qui répond — option (a) (facultative, 10 min)
 

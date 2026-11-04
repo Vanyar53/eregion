@@ -10,6 +10,9 @@ by its CD (infra/glorfindel-host/cd/eregion_cd.py), on the operator's machine fo
                                                            built from the registry's blobs (OI1)
     published_image.py loaded IMAGE --digest D --expect-file F --inspect J   the image docker read back
                                                            on another host (J, `docker image inspect`) is this one
+    published_image.py age IMAGE (--read F [--no-marker] | --no-image) [--ref R]   OI3: the image in service
+                                                           on Orodruin (F: its tag's labels, then its
+                                                           ~/.eregion-image) against the latest release
     published_image.py install-cosign DEST                 cosign, pinned by its sha256
     published_image.py install-syft DEST                   syft (the SBOM), its archive pinned by its sha256
     published_image.py meta IMAGE --commit C               the workflow's names and labels ($GITHUB_OUTPUT)
@@ -935,6 +938,96 @@ def latest_tag(runner: Runner = run) -> str:
     return tags[0]
 
 
+# ── OI3 (#522): the image in service on Orodruin, against the latest release ───────────────────
+# What `make orodruin-push` writes in ~/.eregion-image once the image is tagged (« commit digest »),
+# and `make orodruin-push-dev` (« dev commit ») — read back by ssh, in read-only, at most MARKER_MAX
+# bytes. The latest release: the highest tag v* by version order (git's v:refname: v0.5.10 after
+# v0.5.9), as orodruin-push takes it without REF. The image against it: by commit, in git's history
+# (merge-base --is-ancestor), never by comparing two strings. Only an image provably older — its
+# commit an ancestor of the release's —, absent or unreadable is replaced; one newer, built here
+# (dev) or off the release's history is kept: never replaced unless asked.
+MARKER_MAX = 4096
+READ_MAX = 4400                                   # the labels' line and the marker (the Makefile's ORO_READ_MAX)
+VERIFIED_MARK = re.compile(r"([0-9a-f]{40}) (sha256:[0-9a-f]{64})\n?")
+DEV_MARK = re.compile(r"dev ([0-9a-f]{40})\n?")
+REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+REPLACED = ("older", "absent", "unreadable")      # what make orodruin-start pushes the release over
+
+
+def _ancestor(a: str, b: str, runner: Runner = run) -> bool:
+    """`a` in the history of `b` (git merge-base --is-ancestor: 0 yes, 1 no, else unreadable)."""
+    res = runner(["git", "-C", str(REPO), "merge-base", "--is-ancestor", a, b])
+    if res.returncode not in (0, 1):
+        raise Unverified(f"git ne compare pas {a[:12]} et {b[:12]} (code {res.returncode})", _last(res))
+    return res.returncode == 0
+
+
+def version_of(commit: str, runner: Runner = run) -> str:
+    """`commit` as a reader names it: its tag v* (the highest by version order), else its first
+    twelve characters after the last tag v* in its history."""
+    res = runner(["git", "-C", str(REPO), "tag", "--points-at", commit, "-l", "v*", "--sort=-v:refname"])
+    tags = [t for t in (res.stdout.split() if res.returncode == 0 else []) if REF_RE.fullmatch(t)]
+    if tags:
+        return f"{tags[0]} ({commit[:12]})"
+    res = runner(["git", "-C", str(REPO), "describe", "--tags", "--abbrev=0", "--match", "v*", commit])
+    after = res.stdout.strip() if res.returncode == 0 else ""
+    return f"{commit[:12]} (après {after})" if REF_RE.fullmatch(after) else commit[:12]
+
+
+def labelled(line: str) -> str:
+    """The revision in the labels docker read back from :orodruin (« version revision », either
+    perhaps `<no value>` or empty): a full commit, or ""."""
+    return next((w for w in (line or "").split() if COMMIT_RE.fullmatch(w)), "")
+
+
+def image_age(marker: str | None, ref: str = "", image: bool = True, revision: str | None = None,
+              runner: Runner = run) -> dict:
+    """The image in service on Orodruin (`marker`: the text of its ~/.eregion-image, None when the
+    file is absent; `image`: False when eregion-annatar:orodruin itself is absent; `revision`: the
+    commit its tag's label says, "" when it says none, None when not read) against the latest
+    release (or `ref`): {"state", "release", "release_commit", "said"}. state: equal, older, newer,
+    dev, diverged (kept), absent, unreadable (replaced) — a verified marker whose tag says another
+    commit is unreadable (a dev build loaded over it, its marker never written). Raises Unverified
+    when the release, or the image's commit, cannot be read here — nothing is decided."""
+    release = ref or latest_tag(runner)
+    if not REF_RE.fullmatch(release):
+        raise Unverified(f"release illisible : {release[:40]!r}")
+    rcommit = commit_of(release, runner)
+    named = f"{'dernière release' if not ref else 'release visée'} {release} ({rcommit[:12]})"
+    out = {"release": release, "release_commit": rcommit}
+    verified = VERIFIED_MARK.fullmatch(marker or "")
+    dev = DEV_MARK.fullmatch(marker or "")
+    if not image:
+        return {**out, "state": "absent", "said": f"aucune image eregion-annatar:orodruin sur Orodruin, {named}"}
+    if marker is None:
+        return {**out, "state": "absent",
+                "said": f"image sans ~/.eregion-image (un envoi coupé ?), {named}"}
+    if dev:
+        return {**out, "state": "dev",
+                "said": f"image dev {dev.group(1)[:12]}, construite sur un poste, non vérifiée "
+                        f"(make orodruin-push-dev), {named}"}
+    if not verified:
+        return {**out, "state": "unreadable", "said": f"~/.eregion-image illisible, {named}"}
+    commit = verified.group(1)
+    if revision is not None and revision != commit:
+        said = revision[:12] if revision else "aucun commit"
+        return {**out, "state": "unreadable",
+                "said": f"~/.eregion-image dit {commit[:12]}, le tag eregion-annatar:orodruin {said} : "
+                        f"illisible, {named}"}
+    if commit == rcommit:
+        return {**out, "state": "equal", "said": f"image {version_of(commit, runner)}, {named} : à jour"}
+    known = runner(["git", "-C", str(REPO), "cat-file", "-e", f"{commit}^{{commit}}"])
+    if known.returncode != 0:
+        raise Unverified(f"le commit de l'image en service ({commit[:12]}) est inconnu ici : git fetch origin, "
+                         f"ou make orodruin-push REF={release} pour la remplacer")
+    said = f"image {version_of(commit, runner)}, {named}"
+    if _ancestor(commit, rcommit, runner):
+        return {**out, "state": "older", "said": f"{said} : plus ancienne"}
+    if _ancestor(rcommit, commit, runner):
+        return {**out, "state": "newer", "said": f"{said} : plus récente"}
+    return {**out, "state": "diverged", "said": f"{said} : ni plus ancienne ni plus récente (hors de son histoire)"}
+
+
 # ── the workflow's side ─────────────────────────────────────────────────────────────
 
 def project_version(pyproject: Path = REPO / "pyproject.toml") -> str:
@@ -983,7 +1076,7 @@ def default_cosign() -> Path:
 
 def main(argv: list | None = None, runner: Runner = run) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("cmd", choices=["resolve", "verify", "fetch", "archive", "ids", "loaded", "install-cosign",
+    p.add_argument("cmd", choices=["resolve", "verify", "fetch", "archive", "ids", "loaded", "age", "install-cosign",
                                    "install-syft", "meta", "pushed", "harness-key", "sign-blob", "verify-blob"])
     p.add_argument("image", nargs="?", default="")
     p.add_argument("--commit", default="")
@@ -993,6 +1086,10 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
     p.add_argument("--out", default="", help="archive: the directory of image.tar and expect.json")
     p.add_argument("--expect-file", default="", help="loaded: the expect.json `archive` wrote before the image left")
     p.add_argument("--inspect", default="", help="loaded: `docker image inspect` of the image arrived (a file, - for stdin)")
+    p.add_argument("--read", default="", help="age: what Orodruin read back — the labels of :orodruin, a line, "
+                                              "then its ~/.eregion-image")
+    p.add_argument("--no-marker", action="store_true", help="age: ~/.eregion-image absent on Orodruin")
+    p.add_argument("--no-image", action="store_true", help="age: eregion-annatar:orodruin absent on Orodruin")
     p.add_argument("--cosign", default="")
     p.add_argument("--key", default="", help="sign-blob: the private key (default: harness-key's)")
     p.add_argument("--pinned", default="", help="verify-blob: the key as host.env pins it (EREGION_HARNESS_KEY)")
@@ -1064,6 +1161,24 @@ def main(argv: list | None = None, runner: Runner = run) -> int:
                 inspected = ""
             check_loaded(expect, inspected, a.digest)
             print(f"✓ l'image chargée est {reference(a.image)}@{a.digest} : son id, ses couches, son utilisateur")
+        elif a.cmd == "age":
+            if bool(a.read) == a.no_image:
+                p.error("age IMAGE (--read F [--no-marker] | --no-image) [--ref REF]")
+            marker, revision = None, None
+            if a.read:
+                try:
+                    with open(a.read, "rb") as f:
+                        raw = f.read(READ_MAX + 1)
+                    labels_, _, rest = raw.decode("utf-8").partition("\n")
+                    revision = labelled(labels_)
+                    marker = rest if len(raw) <= READ_MAX and len(rest.encode()) <= MARKER_MAX else "\0"
+                except (OSError, UnicodeDecodeError):
+                    marker = "\0"                 # unreadable: never taken for a commit
+                if a.no_marker:
+                    marker = None
+            age = image_age(marker, a.ref, image=not a.no_image, revision=revision, runner=runner)
+            print(("✓ " if age["state"] == "equal" else "  ") + age["said"], file=sys.stderr)
+            _output({k: age[k] for k in ("state", "release", "release_commit")})
         elif a.cmd == "meta":
             _output(meta(a.image, a.commit))
         elif a.cmd == "pushed":

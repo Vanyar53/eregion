@@ -11,7 +11,6 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
   - **One kill-chain order**, in the shared core (`eregion_core/proposal.py`): Annatar's planner reads it from there, and the console never imports Annatar's package (D1).
   - Checked end to end on the fake: BL1's declared campaign planned, its drill imported, kept as Annatar's, then launched by `make orodruin-exercise DRILL=<name>` against a fake ssh and scp — the request carried to Orodruin holds the campaign's chain, in its order. Tests: `test_drill_proposal.py`, `test_campaign_drill.py`, `test_console_dagorlad_annatar.py`; mutants M3560–M3579.
 
-### Fixed
 ## [0.5.4] — 2026-11-04 — "nothing left unread"
 
 ### Security

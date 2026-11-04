@@ -78,10 +78,10 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 
 | Version | Titre | Contenu | État |
 |---|---|---|---|
-| 0.5.0 | la boucle mesurée | OV1, ADM1, COR1, SID1, BL1c, RM1, CI4, L1Qr, I3R ; le second contre-audit (SEC8 à SEC15) | publiée (02/11) |
 | 0.5.1 | chaque alerte dite | COR2, I3C, I3G, I3U, AUC, MCG ; SEC16, SEC17, la suite de SEC12 | publiée (03/11) |
-| 0.5.2 | tenus à part | I3V, L1Qs, I4G, U1G, L1G, L1P ; SEC18 (un répertoire par écrivain dans `runs/`), AUD1, DG-d | brouillon |
-| 0.5.3 | — | après le renommage du compte (REN1) : SEC19 (la fin du second contre-audit), I4P, I5S, L1A, MAK, SEC20 | brouillon |
+| 0.5.2 | tenus à part | I3V, L1Qs, I4G, U1G, L1G, L1P ; SEC18 (un répertoire par écrivain dans `runs/`), AUD1, DG-d | publiée (03/11) |
+| 0.5.3 | signé, scellé | après le renommage du compte (REN1) : SEC19 (le battement et l'attestation signés, la fin du second contre-audit), SEC20, OI1, CON-K ; I4P, L1A, L1H ; I5S, MAK, L1E | brouillon |
+| 0.5.4 | — | OI2, L1W, SEC20b | en préparation |
 | 0.5.x | — | ID1, G1 au banc | plus tard |
 
 ### Les lots

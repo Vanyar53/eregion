@@ -505,7 +505,8 @@ resource "azurerm_role_assignment" "channel_operator" {
 # WC1 (#523) : qui lit les fenêtres et écrit le canal retour — une watch, ou plusieurs. Par défaut
 # (watch_principal_ids = null) la seule watch hébergée, H0, comme avant WC1. Sinon, chaque identité
 # listée : celle d'une watch de poste ou d'équipe, son principal de service (GLORFINDEL_AZURE_CLIENT_*),
-# jamais celui d'Annatar ni l'identité d'Orodruin. H0, s'il est listé, garde ses attributions d'avant
+# jamais l'identité d'Orodruin ni celle de l'opérateur (refusées au plan) ; jamais celle d'Annatar,
+# que Terraform ne connaît pas : l'opérateur nomme l'identité. H0, s'il est listé, garde ses attributions d'avant
 # (mêmes adresses dans l'état : son plan ne change pas) ; les autres en ont une chacune, au même rôle,
 # à la même portée. Pas un droit de plus : lire `exercises`, écrire `watch`. Le battement reste signé
 # par la clé de la watch, épinglée chez les injecteurs (SEC19) : un rédacteur de plus n'y fait pas
@@ -564,6 +565,10 @@ resource "azurerm_role_assignment" "channel_station_watch_reader" {
       condition     = each.value != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)
       error_message = "watch_principal_ids nomme l'identité d'Orodruin : elle n'est pas une watch, elle ne lit pas les fenêtres comme elle."
     }
+    precondition {
+      condition     = each.value != lower(data.azurerm_client_config.operator.object_id)
+      error_message = "watch_principal_ids nomme l'opérateur qui applique : il n'est pas une watch, il ne lit pas les fenêtres comme elle."
+    }
   }
 }
 
@@ -578,6 +583,10 @@ resource "azurerm_role_assignment" "watch_channel_station_writer" {
     precondition {
       condition     = each.value != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)
       error_message = "watch_principal_ids nomme l'identité d'Orodruin : un injecteur n'écrit jamais ce que dit la watch."
+    }
+    precondition {
+      condition     = each.value != lower(data.azurerm_client_config.operator.object_id)
+      error_message = "watch_principal_ids nomme l'opérateur qui applique (son az login) : il n'écrit jamais ce que dit la watch."
     }
   }
 }

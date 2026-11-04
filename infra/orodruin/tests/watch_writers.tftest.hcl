@@ -204,6 +204,17 @@ run "orodruins_own_identity_never_writes_the_watch_channel" {
   expect_failures = [azurerm_role_assignment.watch_channel_station_writer, azurerm_role_assignment.channel_station_watch_reader]
 }
 
+run "the_operators_own_login_never_writes_the_watch_channel" {
+  command = plan
+
+  variables {
+    # Le object_id du faux azurerm_client_config : l'opérateur qui applique.
+    watch_principal_ids = ["00000000-0000-0000-0000-0000000000EE"]
+  }
+
+  expect_failures = [azurerm_role_assignment.watch_channel_station_writer, azurerm_role_assignment.channel_station_watch_reader]
+}
+
 run "the_hosted_watch_without_its_subnet_is_still_refused" {
   command = plan
 

@@ -1,6 +1,7 @@
 """WC1 (#523): without H0, the watch of a workstation or a team writes Orodruin's return channel —
 watch_principal_ids in infra/orodruin (by default H0's alone, at the addresses it had), passed by
-`make orodruin-plan WATCH_PRINCIPALS=<id>[,<id>…]`, checked, never expanded by make. M3660–M3669.
+`make orodruin-plan WATCH_PRINCIPALS=<id>[,<id>…]`, checked, never expanded by make. M3660–M3669,
+M3695 (the review: the operator's own login refused).
 
 The Terraform ones are caught by the files read (tests/unit/test_orodruin.py), their behaviour by
 `terraform test` (infra/orodruin/tests/watch_writers.tftest.hcl); the Makefile's by running it
@@ -11,6 +12,17 @@ TFVARS = "infra/orodruin/variables.tf"
 MAKE = "Makefile"
 _TF_TEST = "tests/unit/test_orodruin.py -k return_channel_is_written_by_the_listed_watches_only"
 _MAKE_TEST = "tests/unit/test_makefile_bench.py"
+
+# The preconditions' messages, each one once in main.tf: what tells their anchors apart.
+_ORO_WRITER = ('"watch_principal_ids nomme l\'identité d\'Orodruin : un injecteur n\'écrit jamais ce que dit '
+               'la watch."')
+_ORO_READER = ('"watch_principal_ids nomme l\'identité d\'Orodruin : elle n\'est pas une watch, elle ne lit pas '
+               'les fenêtres comme elle."')
+_OP_WRITER = ('"watch_principal_ids nomme l\'opérateur qui applique (son az login) : il n\'écrit jamais ce que '
+              'dit la watch."')
+_OP_READER = ('"watch_principal_ids nomme l\'opérateur qui applique : il n\'est pas une watch, il ne lit pas '
+              'les fenêtres comme elle."')
+_OP_CONDITION = "      condition     = each.value != lower(data.azurerm_client_config.operator.object_id)\n"
 
 MUTANTS = [
     ("M3660", "a workstation's watch writes the exercise windows: a real attack passes for an exercise (WC1)", TF,
@@ -29,11 +41,16 @@ MUTANTS = [
      'resource "azurerm_role_assignment" "watch_channel_station_writer" {\n'
      "  for_each             = local.station_watches\n"
      "  scope                = azurerm_storage_account.channel.id\n"),
+    # A valid Terraform program, so that `terraform test` catches it too: the writer, then the reader.
     ("M3662", "Orodruin's own identity listed as a watch: an injector writes what the watch says (WC1)", TF,
-     "      condition     = each.value != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)\n"
-     '      error_message = "watch_principal_ids nomme l\'identité d\'Orodruin : un injecteur n\'écrit jamais ce que dit la watch."\n',
-     "      condition     = true\n"
-     '      error_message = "watch_principal_ids nomme l\'identité d\'Orodruin : un injecteur n\'écrit jamais ce que dit la watch."\n'),
+     ("      condition     = each.value != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)\n"
+      f"      error_message = {_ORO_WRITER}\n",
+      "      condition     = each.value != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)\n"
+      f"      error_message = {_ORO_READER}\n"),
+     ('      condition     = each.value != "x"\n'
+      f"      error_message = {_ORO_WRITER}\n",
+      '      condition     = each.value != "x"\n'
+      f"      error_message = {_ORO_READER}\n")),
     ("M3663", "watch_principal_ids takes what is no object id: a client id, a name, a path (WC1)", TFVARS,
      'can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))',
      "true"),
@@ -52,8 +69,13 @@ MUTANTS = [
     ("M3669", "watch_principal_ids unset no longer means H0: the bench's plan takes the channel from it (WC1)", TF,
      "watch_writers       = var.watch_principal_ids == null ? compact([lower(var.watch_principal_id)])",
      "watch_writers       = var.watch_principal_ids == null ? []"),
+    # Review of WC1: the operator's own login (who applies) listed as a watch — the writer, then the reader.
+    ("M3695", "the operator's az login listed as a watch: a human writes what the watch says (WC1)", TF,
+     (_OP_CONDITION + f"      error_message = {_OP_WRITER}\n", _OP_CONDITION + f"      error_message = {_OP_READER}\n"),
+     ('      condition     = each.value != "x"\n' + f"      error_message = {_OP_WRITER}\n",
+      '      condition     = each.value != "x"\n' + f"      error_message = {_OP_READER}\n")),
 ]
 TESTS = {
-    **{mid: _TF_TEST for mid in ("M3660", "M3661", "M3662", "M3663", "M3669")},
+    **{mid: _TF_TEST for mid in ("M3660", "M3661", "M3662", "M3663", "M3669", "M3695")},
     **{mid: _MAKE_TEST for mid in ("M3664", "M3665", "M3666", "M3667", "M3668")},
 }

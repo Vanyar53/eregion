@@ -625,7 +625,7 @@ def test_the_return_channel_is_written_by_the_listed_watches_only():
     default (watch_principal_ids null) the hosted watch alone, at the addresses it had — its plan
     unchanged; each watch listed reads `exercises` and writes `watch`, nothing more, never
     Orodruin's own identity. Its behaviour: infra/orodruin/tests/watch_writers.tftest.hcl
-    (`terraform test`). Mutants M3660–M3663, M3669."""
+    (`terraform test`). Mutants M3660–M3663, M3669, M3695."""
     variables = (ORODRUIN / "variables.tf").read_text(encoding="utf-8")
     ids = variables.split('variable "watch_principal_ids"')[1].split("\n}\n")[0]
     assert "type        = list(string)" in ids and "default     = null" in ids
@@ -656,10 +656,13 @@ def test_the_return_channel_is_written_by_the_listed_watches_only():
         assert 'principal_type       = "ServicePrincipal"' in station
         assert ("condition     = each.value != lower(azurerm_linux_virtual_machine.host.identity[0].principal_id)"
                 in station)
+        # Nor the operator who applies (their az login); Annatar's, Terraform does not know.
+        assert "condition     = each.value != lower(data.azurerm_client_config.operator.object_id)" in station
     tftest = (ORODRUIN / "tests" / "watch_writers.tftest.hcl").read_text(encoding="utf-8")
     for run in ("by_default_the_hosted_watch_alone_as_before", "a_station_watch_alone_writes_watch_and_reads_exercises",
                 "several_watches_one_assignment_each_h0_kept_where_it_was", "a_list_without_h0_leaves_h0_out",
-                "orodruins_own_identity_never_writes_the_watch_channel", "an_identity_named_twice_is_refused"):
+                "orodruins_own_identity_never_writes_the_watch_channel", "an_identity_named_twice_is_refused",
+                "the_operators_own_login_never_writes_the_watch_channel"):
         assert f'run "{run}"' in tftest, run
 
 

@@ -19,22 +19,9 @@ from typing import Any
 
 import yaml
 
-CANONICAL_TACTIC_ORDER: list[str] = [
-    "reconnaissance",
-    "resource-development",
-    "initial-access",
-    "execution",
-    "persistence",
-    "privilege-escalation",
-    "defense-evasion",
-    "credential-access",
-    "discovery",
-    "lateral-movement",
-    "collection",
-    "command-and-control",
-    "exfiltration",
-    "impact",
-]
+# The kill-chain order: one definition, in the shared core (DG-e), which the console's
+# « Ask Annatar for a drill » reads too — never this package (D1).
+from eregion_core.proposal import CANONICAL_TACTIC_ORDER, tactic_rank  # noqa: F401
 
 
 def _catalog_candidates(path: str | Path | None) -> list[Path]:
@@ -75,14 +62,6 @@ def implemented_techniques(
 ) -> list[dict[str, Any]]:
     """Techniques the synthesizer may materialize+execute now (``status: implemented``)."""
     return [e for e in catalog.values() if e.get("status") == "implemented"]
-
-
-def tactic_rank(tactic: str) -> int:
-    """Kill-chain ordering index; unknown tactics sort last (stable)."""
-    try:
-        return CANONICAL_TACTIC_ORDER.index(tactic)
-    except ValueError:
-        return len(CANONICAL_TACTIC_ORDER)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

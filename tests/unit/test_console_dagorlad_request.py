@@ -149,22 +149,26 @@ def test_an_unwritable_directory_is_said_never_a_request_claimed(client, tmp_pat
 
 def test_the_only_posts_among_the_injectors_routes_are_the_request_and_the_drill():
     """Two writes, each a file of the console's own directory, neither a launch: a request for
-    Orodruin (DG-b), a drill kept (DG-d)."""
+    Orodruin (DG-b), a drill kept (DG-d). And one POST that writes nothing: a drill's YAML
+    imported, placed on the board (DG-e; its body is too large for a query —
+    test_console_dagorlad_annatar.py checks that it writes nothing)."""
     posts = sorted(r.path for r in api.app.routes
                    if getattr(r, "path", "").startswith(("/api/dagorlad", "/dagorlad"))
                    and "POST" in (getattr(r, "methods", None) or set()))
-    assert posts == ["/api/dagorlad/drills", "/api/dagorlad/requests"]
+    assert posts == ["/api/dagorlad/drills", "/api/dagorlad/drills/import", "/api/dagorlad/requests"]
 
 
 def test_the_page_sends_two_identifiers_per_wire_and_takes_no_name():
     """The page shows what will be typed; it never collects it (§7: a name the console kept would
     prove nothing). Its request is the wires' two identifiers, nothing else. Its only fields are
-    a drill's name and description (DG-d, « Save as drill ») — never a VM's name."""
+    a drill's name and description (DG-d, « Save as drill ») and a drill's YAML to import (DG-e)
+    — never a VM's name."""
     static = Path(api.__file__).parent / "static"
     js = (static / "dagorlad.js").read_text(encoding="utf-8")
     html = (static / "dagorlad.html").read_text(encoding="utf-8")
-    assert (js + html).count("<input") == 2 and "<textarea" not in js + html
+    assert (js + html).count("<input") == 2 and (js + html).count("<textarea") == 1
     assert sorted(re.findall(r'<input id="([^"]+)"', js + html)) == ["drill-desc", "drill-name"]
+    assert re.findall(r'<textarea id="([^"]+)"', js + html) == ["drill-yaml"]
     assert "wires: S.wires.map(w => ({ experiment: w[0], target: w[1] }))" in js
     assert "fetch('/api/dagorlad/requests', { method: 'POST'" in js
 

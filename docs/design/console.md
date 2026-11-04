@@ -25,6 +25,7 @@ tourne.
 | Lots | **UI-1** : le socle, les sections modulaires et les corrections de doublons. **UI-2** : les cinq indicateurs. **Un lot Annatar et Gothmog** pour la vérification avant d'agir | un seul lot ; trois lots UI |
 | Carte sur un NSG (#248) | **une tuile NSG**, dans la rangée des VM : son nom, son groupe de ressources, ses cartes ; ni mode, ni sauvegarde, ni Snapshot | sous le nœud PROTECT ; garder la tuile de VM |
 | Ce que Glorfindel a fait seul (#248) | **une ligne verte sur la tuile, 24 h** : la note d'une carte qu'il a résolue lui-même (A3 : règle orpheline retirée) | dans le fil en direct ; rien dans la console |
+| Le drill d'une campagne d'Annatar dans Dagorlad (DG-e, 04/11) | **A, le drill écrit à côté du manifeste, puis « Import YAML »** : `annatar campaign plan` (sur Orodruin, qui n'écrit jamais les drills de la console) écrit le drill de la campagne et l'affiche ; Dagorlad le relit par le lecteur exact et le pose sur le tableau, sans rien écrire ; « Save as drill » le garde, auteur annatar. `campaign run` garde son exécution et écrit la demande équivalente | B : le drill écrit seul, sans import ; C : `campaign run` par le chemin des demandes (un second lot) |
 | Les blocages d'une VM (CON-K, 03/11) | **A, un résumé et une fenêtre** : repliée ou dépliée, la carte dit « BLOCKED ×N IPs · newest … · oldest … » ; dépliée, elle garde la dernière décision (son raisonnement) et « Manage the N blocks ▸ », qui ouvre la fenêtre : tous les blocages, du plus récent au plus ancien, filtrables, chacun avec « Extend to subnet » et « Unblock ». Un seul blocage : montré avec ses boutons, sans fenêtre | B : les trois plus récents et « and N more » ; C : une liste repliable qui défile dans la carte |
 
 **Choisi par défaut, sans objection :**
@@ -1285,3 +1286,36 @@ Dagorlad » ; le pas à pas, dans [`docs/operations.md`](../operations.md).
     combien ne sont pas listés ; `sentinelle` vise une VM inscrite de la zone production, la sentinelle
     par exemple.
   Mutants M3372–M3379.
+
+### Construit : les drills d'Annatar (DG-e, #351, 04/11)
+
+Les campagnes d'Annatar deviennent des drills dont Annatar est l'auteur (décision 3 du 30/10 ; la
+voie de la ligne de commande, décision A de Jonathan du 04/11, sur une page de schémas).
+- **Le cœur** : `eregion_core/proposal.py`. L'ordre de la kill-chain y a sa seule définition
+  (Annatar la lit de là). `chain` : les techniques implémentées du catalogue qui disent ne rien
+  détruire (une entrée qui ne le dit pas n'est jamais prise pour inoffensive), d'une VM, dans l'ordre
+  de la kill-chain, cinq par défaut. `campaign_drill` : le drill d'une campagne, auteur `annatar`, nommé
+  `annatar-<id de la campagne>`, passé par le lecteur unique des drills.
+- **« Ask Annatar for a drill »** : `GET /api/dagorlad/propose?target=<rid>`, lecture seule. Une VM
+  inscrite lue maintenant, choisie par l'opérateur (un bouton par VM) ; Annatar installé ici, sinon
+  rien. Le planificateur reste aveugle : il ne lit ni les règles ni les modes de Glorfindel, et la
+  console n'appelle jamais le modèle (le planificateur par le modèle reste
+  `annatar campaign plan --llm`, un geste de l'opérateur). Aucune technique destructive : l'opérateur
+  la tire à la main et tape son nom à la commande, comme pour tout fil. La console n'importe pas le
+  paquet d'Annatar (D1).
+- **« Import YAML »** : `POST /api/dagorlad/drills/import` (`{"yaml"}`), un POST parce que le corps
+  ne tient pas dans une adresse ; il n'écrit rien. Le drill est relu comme un drill de l'instance
+  (jamais celui d'Eregion), puis posé sur les VM inscrites lues maintenant, comme « Load ».
+- **« Save as drill »** garde l'auteur des fils du tableau : `annatar` quand Annatar les a proposés,
+  corrigés ou non ; jamais `eregion`. Un tableau vidé redevient celui de l'opérateur.
+- **La ligne de commande** : `annatar campaign plan` écrit `annatar-<id>.yaml` à côté du manifeste,
+  en mode 600 (une campagne déclarée : sa panne et sa technique, dans son ordre ; une campagne
+  planifiée : ses scénarios). Un drill que le lecteur refuse est dit, et la campagne reste
+  planifiée. `annatar campaign run` écrit une fois la demande équivalente (`r-….json`, le format de
+  Dagorlad) à côté du manifeste. Aucun lecteur ne la lit encore : c'est la référence à laquelle le
+  rejeu de son drill se comparera.
+- **Fini quand, sur le faux** (`test_console_dagorlad_annatar.py`) : `annatar campaign plan
+  --declared` (BL1, sur gondolin) écrit son drill ; il est importé (rien d'écrit), relu, gardé
+  (auteur annatar), puis lancé par `make orodruin-exercise DRILL=<nom>` contre un faux ssh et un faux
+  scp. La demande portée à Orodruin a la chaîne de la campagne, dans son ordre.
+- **Mutants M3560–M3579.**

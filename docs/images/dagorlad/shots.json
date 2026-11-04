@@ -3,9 +3,10 @@
   "sample": "tests/fixtures/dagorlad_sample.json",
   "sample_sha256": "928c31316241222839d98f2839a87a5ffd920804f66c97a820b9e92e02e07f54",
   "images": {
-    "board.png": "8d1a506a42f041b1a749ac54c3f02a8a0a28965d5e248072fdf25634abcee347",
-    "drills.png": "4da841cbc38702020ff660017f4caf4fc7e12316cb08cb9f83c24b19e1f5b65c",
-    "loop.webp": "54f93ed956a7cc193df89ab527db609b1c1e5a2a8f17f62fb592039f8f82b103",
-    "runs.png": "2982729df30d73c582abc8d826c1dfb8bad696d9225b851271d595ddffbea540"
+    "annatar.png": "855aec9573ef841e91f65bf1475c0325aef505020700a5b01916e62c7bb4bc76",
+    "board.png": "7162bc514c4bef9f09b99bb0f95ea6276050175621b83ade044bb9900d86002c",
+    "drills.png": "5a3b32541e2d7b4a7ed8c6d55e74a6d12aba84d7b1f9e6219cf36e95775470ba",
+    "loop.webp": "f3e2b1c3e44c8e21609d5df03d75afd373de4c9baa22095b74b8199fbd21ecda",
+    "runs.png": "0d5e2dc782f8c528ca4737050e848d86a8bc58fd5f1227aa09308fa8635c0a74"
   }
 }

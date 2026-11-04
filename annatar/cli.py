@@ -459,6 +459,14 @@ def campaign_plan(target, objective, max_scenarios, allow_destructive, use_llm, 
     console.print(f"[green]Planned campaign {cid}[/green] — {len(entries)} scenario(s):")
     for e in entries:
         console.print(f"  [{e.seq}] {e.tactic:22} {e.ttp}  {e.scenario_file}")
+    # DG-e (#351): the campaign as a drill, author Annatar, beside its manifest — Orodruin never
+    # writes the console's drills; the operator brings it to Dagorlad (« Import YAML », decision A
+    # of 04/11). A declared campaign's chain is its declaration's: its faults and techniques, in
+    # its order; a planned one's, the scenarios synthesized.
+    vm = target.rstrip("/").rsplit("/", 1)[-1]
+    pairs = ([(st.ref, vm) for st in decl.steps if st.kind in ("technique", "fault")] if declared_path
+             else [(e.ttp, vm) for e in entries])
+    _write_campaign_drill(cdir, cid, pairs, manifest.objective)
     console.print(
         f"\n[dim]Review {cdir}/manifest.json, then:[/dim] "
         f"annatar campaign run {cid} --yes"
@@ -511,6 +519,8 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report
             if m.state == "planned" and yes and not dry_run:
                 m.set_state("ratified")
                 m.save(cdir)
+            if not dry_run:
+                _write_campaign_request(cdir, m)
             result = CampaignRunner(cdir, dry_run=dry_run, without_glorfindel=without_glorfindel).run()
     except Busy as e:
         from rich.markup import escape   # the holder's name and the id, never read as markup
@@ -540,6 +550,43 @@ def campaign_run(campaign_id, yes, dry_run, runs_dir, without_glorfindel, report
         # complete: a script, or `make orodruin-campaign-run`, must see it.
         if result.state == "aborted":
             raise SystemExit(EXIT_RUN_FAILED)
+
+
+def _write_campaign_drill(cdir, cid, pairs, objective) -> None:
+    """The campaign's drill (``eregion_core.proposal.campaign_drill``), written whole beside its
+    manifest as ``<its name>.yaml`` — the name a drill's file bears, mode 600. One the drill's
+    reader refuses (more wires than its ceiling…) is said, the campaign planned all the same."""
+    from rich.markup import escape
+
+    from eregion_core import drill, proposal
+    try:
+        d = proposal.campaign_drill(cid, pairs, objective=objective)
+    except drill.DrillRefused as e:
+        console.print(f"[yellow]No drill for this campaign: {escape(str(e))}[/yellow]")
+        return
+    path = cdir / f"{d.name}.yaml"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(drill.to_yaml(d))
+    console.print(f"Drill {escape(d.name)} ({len(d.wires)} wire(s), author annatar): {escape(str(path))}\n"
+                  "[dim]  → Dagorlad, DRILLS, « Import YAML »: paste it, check its wires, then « Save as drill » "
+                  "keeps it — replayed as any drill, by its request.[/dim]")
+
+
+def _write_campaign_request(cdir, m) -> None:
+    """The request equivalent to the campaign (DG-e), in Dagorlad's format (``r-….json``, its
+    wires the campaign's scenarios in their order), written once beside the manifest — what a
+    replay of its drill compares with. Never stops the campaign: a failure is said."""
+    from rich.markup import escape
+
+    from eregion_core import exercise_request as xr
+    if any(cdir.glob("r-*.json")):
+        return
+    try:
+        req = xr.new([(e.ttp, e.target_resource_id) for e in m.scenarios])
+        xr.write(req, cdir)
+    except (xr.RequestRefused, OSError) as e:
+        console.print(f"[yellow]The campaign's request not written: {escape(str(e))}[/yellow]")
 
 
 _CAMPAIGN_HINT = ("lancer la watch de Glorfindel (ou la watch hébergée, vue par "

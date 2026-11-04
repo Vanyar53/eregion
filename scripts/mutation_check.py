@@ -9268,8 +9268,8 @@ MUTANTS += [
     ("M3315", "« Save as drill » takes a target that is no enrolled VM read now (DG-d)", CON,
      "        if stray:\n            why = error or", "        if False:\n            why = error or"),
     ("M3316", "a drill loaded on the board lays a selector's wires on every VM of its zone (DG-d)", CON,
-     "        placed = [p.to_dict() for p in drill.place(d, cands)]\n",
-     "        placed = [p.to_dict() for p in drill.place(d, cands, \"all\")]\n"),
+     "    placed = [p.to_dict() for p in drill.place(d, cands)]\n",
+     "    placed = [p.to_dict() for p in drill.place(d, cands, \"all\")]\n"),
     ("M3317", "the page writes a request while a drill's wire waits for its VMs (DG-d)", DJS,
      "Number(t.refused) === 0 && !S.pending.length;", "Number(t.refused) === 0;"),
     ("M3318", "make orodruin-exercise takes DRILL and TARGETS from the environment (DG-d)", MAKE,
@@ -10348,6 +10348,69 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
 
+
+# DG-e (#351): Annatar proposes drills — the chain in the shared core (kill-chain order, nothing
+# destructive nor undeclared, a VM's), a campaign's drill (Annatar its author, its declared fault
+# kept, the VM by its name, mode 600) and its request written once, never by a preview; « Ask
+# Annatar » on an enrolled VM by its id, only with Annatar set up; « Import YAML » that writes
+# nothing and reads an instance's drill only; « Save as drill » that keeps Annatar's authorship;
+# the page's draft. M3560–M3579.
+_DGE_CORE, _DGE_ANN, _DGE_CON = ("tests/unit/test_drill_proposal.py", "tests/unit/test_campaign_drill.py",
+                                 "tests/unit/test_console_dagorlad_annatar.py")
+_PROP = "eregion_core/proposal.py"
+MUTANTS += [
+    ("M3560", "a technique whose catalogue does not say it destroys nothing proposed as harmless (DG-e)", _PROP,
+     "and e.destructive is False\n", "and e.destructive is not True\n"),
+    ("M3561", "a destructive technique proposed by Annatar (DG-e)", _PROP,
+     "and e.destructive is False\n", "and True\n"),
+    ("M3562", "the proposal out of kill-chain order (DG-e)", _PROP,
+     "picked.sort(key=lambda e: (tactic_rank(e.tactic), e.id))", "picked.sort(key=lambda e: e.id)"),
+    ("M3563", "a proposal past the drills' ceiling (DG-e)", _PROP,
+     "n = max(1, min(int(max_wires), _drill.MAX_WIRES))", "n = max(1, int(max_wires))"),
+    ("M3564", "another resource's technique proposed on a VM (DG-e)", _PROP,
+     "              and e.resource_type == resource_type and (available", "              and (available"),
+    ("M3565", "a technique nothing runs yet proposed (DG-e)", _PROP,
+     'if e.kind == "technique" and e.status == "implemented" and', 'if e.kind == "technique" and'),
+    ("M3566", "a campaign's drill authored by the operator, not Annatar (DG-e)", _PROP,
+     "return _drill.new(drill_name(campaign_id), list(pairs), author=AUTHOR,",
+     'return _drill.new(drill_name(campaign_id), list(pairs), author="operator",'),
+    ("M3567", "a declared campaign's drill loses its fault (DG-e)", "annatar/cli.py",
+     'if st.kind in ("technique", "fault")]', 'if st.kind == "technique"]'),
+    ("M3568", "a campaign's drill names its VM by its resource id: no drill (DG-e)", "annatar/cli.py",
+     '    vm = target.rstrip("/").rsplit("/", 1)[-1]\n    pairs = (', "    vm = target\n    pairs = ("),
+    ("M3569", "a campaign's drill written readable by all (DG-e)", "annatar/cli.py",
+     "    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n    with os.fdopen(fd, \"w\", encoding=\"utf-8\") as f:\n        f.write(drill.to_yaml(d))",
+     "    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)\n    with os.fdopen(fd, \"w\", encoding=\"utf-8\") as f:\n        f.write(drill.to_yaml(d))"),
+    ("M3570", "a campaign's request written again at each run (DG-e)", "annatar/cli.py",
+     '    if any(cdir.glob("r-*.json")):\n        return\n', ""),
+    ("M3571", "a campaign's preview writes its request (DG-e)", "annatar/cli.py",
+     "            if not dry_run:\n                _write_campaign_request(cdir, m)\n",
+     "            if True:\n                _write_campaign_request(cdir, m)\n"),
+    ("M3572", "Annatar proposes on a VM found by its name: another group's (DG-e)", CON,
+     'found = [c for c in cands if want and c.resource_id.rstrip("/").lower() == want]',
+     'found = [c for c in cands if want and c.name.lower() == want.rsplit("/", 1)[-1]]'),
+    ("M3573", "Annatar proposes where it is not set up (DG-e)", CON,
+     '        if not any(x.get("id") == "annatar" and x.get("active") for x in seen.get("sections") or []):\n',
+     "        if False:\n"),
+    ("M3574", "« Import YAML » keeps the drill it reads (DG-e)", CON,
+     '        return JSONResponse(_placed_view(d, layer="import"))',
+     '        return JSONResponse({**_placed_view(d, layer="import"), "kept": str(drill.save(d, replace=True))})'),
+    ("M3575", "« Import YAML » takes Eregion's shipped drill for an instance's (DG-e)", CON,
+     "            d = drill.read(doc, drill.INSTANCE)\n",
+     '            d = drill.read(doc, drill.SHIPPED if (doc or {}).get("author") == "eregion" else drill.INSTANCE)\n'),
+    ("M3576", "« Save as drill » drops Annatar's authorship (DG-e)", CON,
+     "                          author=author, description=body.get(\"description\") or \"\")",
+     "                          description=body.get(\"description\") or \"\")"),
+    ("M3577", "the board's draft from Annatar not said Annatar's (DG-e)", DJS,
+     "    S.loaded = ''; S.loadedLayer = ''; S.author = 'annatar';\n", "    S.loaded = ''; S.loadedLayer = '';\n"),
+    ("M3578", "Annatar's proposal laid over the wires drawn without asking (DG-e)", DJS,
+     "if ((S.wires.length || S.pending.length) && S.asking.ask !== t.resource_id) {", "if (false) {"),
+    ("M3579", "a cleared board stays Annatar's (DG-e)", DJS,
+     "    S.author = 'operator'; S.loaded = ''; S.loadedLayer = '';\n", "    S.loaded = ''; S.loadedLayer = '';\n"),
+]
+TESTS.update({**{f"M{n}": _DGE_CORE for n in range(3560, 3567)},
+              **{f"M{n}": _DGE_ANN for n in range(3567, 3572)},
+              **{f"M{n}": _DGE_CON for n in range(3572, 3580)}})
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;

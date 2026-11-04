@@ -1,6 +1,9 @@
 """Check the mutants of scripts/mutation_check.py, and its control set, before a push: every id
 unique, every mutant one the harness can apply (else it skips it as STALE), and every mutant
-defined before the `__main__` guard of the harness (else the harness never sees it).
+defined before the `__main__` guard of the harness (else the harness never sees it). The two
+places a mutant is written are read: the harness's own blocks, and each lot's file,
+scripts/mutants/<lot>.py, which the harness loads (CI5, #512). An id two places take is a fault
+naming them; so is a lot's file without a mutant, or whose TESTS names another's mutant.
 
     python scripts/mutant_anchors.py            # the checkout this script is in
     python scripts/mutant_anchors.py /path/to/a/worktree
@@ -81,19 +84,58 @@ def after_guard(source: str, rel: str = "scripts/mutation_check.py") -> list[str
             + (f"; mutants never measured: {', '.join(ids)}" if ids else "")]
 
 
+HARNESS = "scripts/mutation_check.py"
+
+
+def places(mutants: list, lots: dict) -> dict[str, list[str]]:
+    """Where each id is defined: the harness's own blocks, and each lot's file (CI5,
+    scripts/mutants/<lot>.py), as many times as it is."""
+    total = collections.Counter(m[0] for m in mutants)
+    out: dict[str, list[str]] = collections.defaultdict(list)
+    for rel, lot in lots.items():
+        for m in lot["MUTANTS"] + lot["CONTROL"]:
+            out[m[0]].append(rel)
+            total[m[0]] -= 1
+    for mid, n in total.items():
+        out[mid] = [HARNESS] * n + out[mid]
+    return dict(out)
+
+
+def lot_faults(mutants: list, lots: dict) -> list[str]:
+    """An id taken twice (in two lots' files, in one, or in a lot's and the harness's), each
+    place named; a lot's file that defines no mutant (a name mistyped: `mutants = …`); a TESTS of
+    a lot that names another's mutant (it would take that mutant's tests: the loader leaves it)."""
+    faults = [f"{mid}: id used {len(at)} times ({', '.join(at)})"
+              for mid, at in places(mutants, lots).items() if len(at) > 1]
+    for rel, lot in lots.items():
+        own = {m[0] for m in lot["MUTANTS"] + lot["CONTROL"]}
+        if not own:
+            faults.append(f"{rel}: no mutant (MUTANTS = [...])")
+        foreign = sorted(set(lot["TESTS"]) - own)
+        if foreign:
+            faults.append(f"{rel}: TESTS names mutants it does not define ({', '.join(foreign)}): "
+                          "TESTS_ALSO adds tests to another's")
+        unknown = sorted(set(lot["TESTS_ALSO"]) - set(places(mutants, lots)))
+        if unknown:
+            faults.append(f"{rel}: TESTS_ALSO names mutants nobody defines ({', '.join(unknown)})")
+    return faults
+
+
 def check(root: Path) -> list[str]:
-    spec = importlib.util.spec_from_file_location("mutation_check", root / "scripts/mutation_check.py")
+    spec = importlib.util.spec_from_file_location("mutation_check", root / HARNESS)
     mc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mc)
     mutants = mc.MUTANTS + getattr(mc, "CONTROL", [])
     tracked = set(subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True,
                                  check=True).stdout.splitlines())
-    faults = [f"{mid}: id used {n} times" for mid, n in collections.Counter(m[0] for m in mutants).items()
-              if n > 1]
+    lots = getattr(mc, "LOTS", {})
+    faults = lot_faults(mutants, lots)
+    faults += [f"{rel}: not tracked by git (git add -N): the harness copies only tracked files"
+               for rel in lots if rel not in tracked]
     faults += [f for m in mutants if (f := _fault(m, getattr(mc, "RENAME", None), root, tracked))]
     faults += after_guard((root / "scripts/mutation_check.py").read_text())
-    print(f"{len(mc.MUTANTS)} mutants and {len(mutants) - len(mc.MUTANTS)} of the control set, "
-          f"{len(faults)} fault(s)")
+    print(f"{len(mc.MUTANTS)} mutants and {len(mutants) - len(mc.MUTANTS)} of the control set "
+          f"({len(lots)} lot file(s) in scripts/mutants/), {len(faults)} fault(s)")
     return faults
 
 

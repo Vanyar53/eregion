@@ -118,3 +118,99 @@ def test_mutant_anchors_reports_a_block_after_the_guard(tmp_path):
     (tmp_path / "scripts" / "mutation_check.py").write_text(
         body + after + '\n\nif __name__ == "__main__":\n    main()\n')
     assert anchors.check(tmp_path) == []
+
+
+# ── CI5 (#512): each lot's mutants in a file of its own, scripts/mutants/<lot>.py ─────
+
+LOTS_DIR = ROOT / "scripts" / "mutants"
+
+
+def _lot_file_ids(path: Path) -> tuple[set[str], dict]:
+    """What a lot's file defines, read here on its own (never through the harness's loader)."""
+    ns = {"RENAME": object(), "__name__": "a_lot_file"}
+    exec(compile(path.read_text(), str(path), "exec"), ns)
+    return {m[0] for m in ns.get("MUTANTS", []) + ns.get("CONTROL", [])}, ns.get("TESTS", {})
+
+
+def _lot_paths() -> list[Path]:
+    return sorted(p for p in LOTS_DIR.glob("*.py") if not p.name.startswith("_"))
+
+
+def test_every_lot_s_mutants_are_measured_by_the_harness_run_as_a_script():
+    """A lot's file is loaded before the `__main__` guard: the Monday measure, `--only`, sees
+    its mutants, and their tests, as an import does."""
+    paths = _lot_paths()
+    assert paths, "scripts/mutants/ holds at least CI5's file, the example of the form"
+    imported = _load(HARNESS, "mutation_check_ci5")
+    as_a_script = _ids_as_a_script()
+    for path in paths:
+        ids, tests = _lot_file_ids(path)
+        assert ids, path.name
+        assert sorted(ids - as_a_script) == [], path.name
+        assert sorted(ids - {m[0] for m in imported.MUTANTS + imported.CONTROL}) == [], path.name
+        assert {mid: imported.TESTS[mid] for mid in tests} == tests, path.name
+    assert {"M3580", "M3586"} <= _lot_file_ids(LOTS_DIR / "CI5.py")[0]
+
+
+def _lot(tmp_path: Path, name: str, text: str) -> tuple[str, dict]:
+    mc = _load(HARNESS, "mutation_check_ci5_lots")
+    path = tmp_path / name
+    path.write_text(text)
+    return f"scripts/mutants/{name}", mc.load_lot(path)
+
+
+_LOT_A = '''MUTANTS = [("M9001", "a bug of lot A", "a.py", "x", "y")]
+TESTS = {"M9001": "tests/unit/test_a.py"}
+'''
+_LOT_B = '''MUTANTS = [("M9001", "a bug of lot B, the same id", "b.py", "x", "y"),
+           ("M9002", "another bug of lot B", "b.py", "x", "y")]
+'''
+
+
+def test_two_lot_files_taking_one_id_are_a_fault_naming_both(tmp_path):
+    lots = dict([_lot(tmp_path, "LA.py", _LOT_A), _lot(tmp_path, "LB.py", _LOT_B)])
+    base = [("M01", "the harness's own", "c.py", "x", "y")]
+    mutants = base + [m for lot in lots.values() for m in lot["MUTANTS"]]
+    assert anchors.lot_faults(mutants, lots) == [
+        "M9001: id used 2 times (scripts/mutants/LA.py, scripts/mutants/LB.py)"]
+    # One lot alone is no fault; a lot taking an id of the harness's own blocks is one.
+    only_b = {"scripts/mutants/LB.py": lots["scripts/mutants/LB.py"]}
+    assert anchors.lot_faults(base + only_b["scripts/mutants/LB.py"]["MUTANTS"], only_b) == []
+    taken = dict([_lot(tmp_path, "LC.py", 'MUTANTS = [("M01", "a bug, the harness\'s id", "c.py", "x", "z")]\n')])
+    assert anchors.lot_faults(base + taken["scripts/mutants/LC.py"]["MUTANTS"], taken) == [
+        "M01: id used 2 times (scripts/mutation_check.py, scripts/mutants/LC.py)"]
+
+
+def test_a_lot_file_without_mutants_or_taking_another_s_tests_is_a_fault(tmp_path):
+    lots = dict([_lot(tmp_path, "LA.py", _LOT_A),
+                 _lot(tmp_path, "LD.py", 'mutants = [("M9003", "a name mistyped", "d.py", "x", "y")]\n'),
+                 _lot(tmp_path, "LE.py", 'MUTANTS = [("M9004", "a bug of E", "e.py", "x", "y")]\n'
+                                         'TESTS = {"M9001": "tests/unit/test_e.py"}\n'
+                                         'TESTS_ALSO = {"M9001": "tests/unit/test_e.py", "M9999": "t.py"}\n')])
+    mutants = [m for lot in lots.values() for m in lot["MUTANTS"]]
+    faults = anchors.lot_faults(mutants, lots)
+    assert "scripts/mutants/LD.py: no mutant (MUTANTS = [...])" in faults
+    assert any(f.startswith("scripts/mutants/LE.py: TESTS names mutants it does not define (M9001)") for f in faults)
+    assert "scripts/mutants/LE.py: TESTS_ALSO names mutants nobody defines (M9999)" in faults
+    assert len(faults) == 3
+
+
+def test_the_harness_loads_each_lot_s_file_its_tests_and_never_another_s(tmp_path):
+    """The loader itself, on a copy of the harness whose scripts/mutants/ holds two lots."""
+    (tmp_path / "scripts" / "mutants").mkdir(parents=True)
+    copy = tmp_path / "scripts" / "mutation_check.py"
+    copy.write_text(HARNESS.read_text())
+    (tmp_path / "scripts" / "mutants" / "LA.py").write_text(_LOT_A)
+    (tmp_path / "scripts" / "mutants" / "LF.py").write_text(
+        'MUTANTS = [("M9005", "a file renamed", "f.md", RENAME, "g.md")]\n'
+        'TESTS = {"M9005": "tests/unit/test_f.py", "M01": "tests/unit/test_f.py"}\n'
+        'TESTS_ALSO = {"M9001": "tests/unit/test_more.py", "M01": "tests/unit/test_more.py"}\n')
+    (tmp_path / "scripts" / "mutants" / "_helper.py").write_text("raise SystemExit('never loaded')\n")
+    mc = _load(copy, "mutation_check_ci5_copy")
+    assert list(mc.LOTS) == ["scripts/mutants/LA.py", "scripts/mutants/LF.py"]
+    ids = [m[0] for m in mc.MUTANTS]
+    assert ids[-2:] == ["M9001", "M9005"] and ids.count("M9001") == 1
+    assert mc.MUTANTS[-1][3] is mc.RENAME                      # the harness's own sentinel
+    assert mc.TESTS["M9001"] == "tests/unit/test_a.py tests/unit/test_more.py"
+    assert mc.TESTS["M9005"] == "tests/unit/test_f.py"
+    assert mc.TESTS["M01"] == f"{mc.INVARIANTS} tests/unit/test_more.py"   # its own, then the lot's

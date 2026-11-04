@@ -1812,8 +1812,17 @@ vérifié par son sha256 et sa taille avant d'y entrer ; ~630 Mo dans un répert
 chargée par SSH, puis relue sur Orodruin (`docker image inspect`) : son identifiant, ses couches, son
 utilisateur, son commit. Sous Docker Desktop, `docker save` d'une image tirée la rendait sans
 configuration ni couches (mesuré le 03/11). Un `eregion-annatar:incoming` laissé par un envoi qui a
-échoué est retiré au suivant. Mesurer, avec Jonathan : `make orodruin-push REF=<le commit de main>`, puis
-`make orodruin-check`. `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
+échoué est retiré au suivant. **Depuis OI2 (#490)**, l'image relue démarre une fois avant son tag :
+un run de contrôle qui ne lance que `true`, sans réseau, sans tirer, sans montage ni `orodruin.env`,
+durci comme les injecteurs (`ORO_HARDEN`), borné à 120 s (`ORO_CHECK_TIMEOUT=<s>` sur la ligne de
+commande). Il prouve les couches présentes et dépaquetées, ce que `docker image inspect` ne dit pas
+au magasin containerd. S'il échoue : « ✗ l'image vérifiée ne démarre pas sur Orodruin (run de
+contrôle sans réseau : <cause>) », l'image est retirée, `eregion-annatar:orodruin` n'a pas changé ;
+la cause suit les mots de docker. Pourquoi il reste dans le contrat :
+`docs/design/orodruin-contract.md`, « L'image des injecteurs ». Mesurer, avec Jonathan : `make
+orodruin-push REF=<le commit de main>` (la sortie dit « ✓ archive… », puis rien d'autre du run de
+contrôle quand il réussit ; sur Orodruin, `docker ps -a --filter name=eregion-annatar-check` est vide
+après), puis `make orodruin-check`. `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
 **non vérifiée**, pour essayer une branche : `~/.eregion-image` sur Orodruin le dit (`dev <commit>`).
 
 **Après le renommage du compte (REN1, 03/11).** Les images ont suivi le compte : le nouvel espace répond, l'ancien rend 403, sans redirection (mesuré). Celles d'avant (la v0.5.2 et avant) sont signées par l'ancien nom du dépôt, que `published_image.py` ne reconnaît plus : un retour arrière vers elles est refusé, sur H0 comme sur Orodruin. **H0** : l'ordre dans `infra/glorfindel-host/README.md`, « REN1 change l'agent » (`cd-install`, la 0.5.3 publiée, `cd-check`, `cd-enable`). **Orodruin** : `make orodruin-push REF=<sha de la fusion de REN1>`, puis `make orodruin-check` ; sans `REF` (le dernier tag), seulement à partir de la 0.5.3.

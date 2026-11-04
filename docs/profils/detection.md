@@ -24,10 +24,10 @@ docker compose --profile annatar run --rm annatar validate annatar/scenarios/azu
 docker compose --profile annatar run --rm annatar run annatar/scenarios/azure/ransomware-vm.yaml --dry-run
 ```
 
-**Les vraies attaques partent d'Orodruin.** La procédure est dans [`infra/orodruin/README.md`](../../infra/orodruin/README.md) :
+**Les vraies attaques partent d'Orodruin.** L'ordre complet, de zéro, est le guide [« Le banc complet : d'une attaque à sa preuve »](../demarrer/banc.md) : Celebrimbor, les identités, H0, Orodruin et ses clés épinglées (`ORO_SSH_FINGERPRINT`, `EREGION_WATCH_KEY`), l'inscription, une première attaque et sa preuve, puis le démontage. `make doctor PROFILE=bench` dit ce qui manque. En bref, une fois tout en place :
 
 ```bash
-make orodruin-up && make orodruin-lock && make orodruin-push && make orodruin-check   # armed ?
+make orodruin-check                                                  # armed ?
 make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite>
 make orodruin-campaign-run CAMPAIGN=<id>
 ```

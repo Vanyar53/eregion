@@ -62,11 +62,13 @@ make glorfindel-host-cd-enable               # puis : toute release publiée se 
 make glorfindel-host-cd-status | -cd-retry | -cd-disable | -cd-uninstall
 
 # Workflow opérateur — 3 terminaux (local sans Docker Compose)
+# Une attaque réelle ne part que d'un Orodruin armé (sur ce poste, l'injecteur reste passif : --dry-run,
+# validate, list) — l'ordre complet, de zéro : docs/demarrer/banc.md (GS1).
 glorfindel watch runs/                       # terminal 1 — réponses automatiques
-annatar run annatar/scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
+annatar run annatar/scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque (depuis Orodruin armé)
 glorfindel pending --watch                   # terminal 3 — alerting (poll 2s, NEW ESCALATION)
 
-# Setup scénario T1486 (avant chaque run)
+# Setup scénario T1486 (avant chaque run ; annatar clean et run, depuis Orodruin armé)
 annatar clean annatar/scenarios/azure/ransomware-vm.yaml   # nettoyage disque
 # ⚠ Attendre 10 min après annatar clean — les I/O du nettoyage peuvent déclencher
 #   ransomware-disk-write (ago(10m)) et fausser detection_time_s à 0.

@@ -215,6 +215,10 @@ glorfindel --version                         # 0.2.0
 #   docs/design/orodruin-contract.md, « SEC5 ».
 
 # Annatar
+annatar validate <scénario> | --all                 # le scénario (chemin ou nom), ou tous : chaque faute avec sa cause
+#   Code de sortie (AV1, #524) : 1 dès qu'un scénario est invalide (--all : la liste des fautifs à la fin) ou qu'un nom
+#   ne désigne rien ; 0 s'ils sont tous valides. `make annatar-validate [SCENARIO=…]` le lance dans l'image (sans
+#   SCENARIO : tous) et échoue de même. Un fichier vide ou qui n'est pas un mapping YAML est un scénario invalide, dit.
 annatar run annatar/scenarios/azure/<scenario>.yaml  # --dry-run disponible, --skip-preflight pour bypasser le check VM
 #   Code de sortie (#158) : 0 seulement pour un run allé au bout (détecté, manqué ou non mesuré), un --dry-run ou un
 #   « non » à la confirmation ; 1 pour tout refus (pas de watch de Glorfindel vivante, contrat d'Orodruin passif, cible non inscrite, départ sale, atomic

@@ -151,6 +151,23 @@ def test_invalid_scenario_exits_nonzero(tmp_path, monkeypatch):
     assert res.exit_code != 0
 
 
+def test_an_invalid_scenario_is_said_as_written_never_markup_nor_emoji(tmp_path, monkeypatch):
+    """AV1 (#524): the engine's « Invalid scenario » and the run's refusal line quote what the file
+    says: `[bold]` stays `[bold]`, `:fire:` stays `:fire:`."""
+    from rich.console import Console
+    monkeypatch.setattr("annatar.runner.engine.console", Console(width=1000))
+    monkeypatch.setattr("annatar.cli.console", Console(width=1000))
+    path = _variant(tmp_path, engine="[bold]stratus:fire:")
+    res = _invoke(tmp_path, monkeypatch, _executor(), path)
+    assert res.exit_code != 0
+    assert "🔥" not in res.output
+    lines = [line for line in res.output.splitlines()
+             if "engine '[bold]stratus:fire:' is not one of" in line]
+    assert len(lines) == 2, res.output        # « Invalid scenario: » and « ✗ run … scenario: »
+    assert lines[0].startswith("Invalid scenario:")
+    assert lines[1].startswith("✗ run ")
+
+
 def test_preflight_failure_exits_nonzero(tmp_path, monkeypatch):
     """local-script path: a stopped or isolated VM is refused, exit != 0."""
     executor = _executor(preflight=["VM is deallocated"])

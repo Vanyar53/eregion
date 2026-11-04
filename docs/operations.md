@@ -19,7 +19,7 @@ make glorfindel-stop                         # arrêt
 # Profils d'usage (D1) — docs/profils/ ; Glorfindel est dans chacun (il démarre sans profil compose)
 make profile-discover                        # = glorfindel-start : Glorfindel seul, en observation
 make profile-detection                       # + l'image d'Annatar ; profile-resilience : Gothmog ; profile-proven : tout
-                                             # (crée à ton nom ~/.glorfindel, ~/.cache/chroma, ~/.annatar : sinon root)
+                                             # (crée à ton nom ~/.glorfindel, ~/.cache/chroma : sinon root)
 docker compose --profile annatar run --rm annatar list          # APRÈS make profile-… : un injecteur à la demande ;
 docker compose --profile gothmog run --rm gothmog preflight vm-shutdown   # depends_on démarre la watch sans attendre
                                              # son battement : la 1re minute, il peut refuser (V1) ; sur un poste, contrat passive
@@ -971,7 +971,8 @@ plus pendant cette transition.
 Chaque service du compose tourne sans capacité (`cap_drop: [ALL]`), sans gain de privilège
 (`no-new-privileges:true`), la racine en lecture seule (`read_only: true`, `/tmp` en tmpfs) :
 il n'écrit que dans ses montages (son répertoire de `runs/` — SEC18, ci-dessous —, `~/.glorfindel`, `~/.cache/chroma`,
-`~/.eregion/analysis` pour la watch ; `~/.annatar` pour Annatar), et la config que la console
+`~/.eregion/analysis` pour la watch ; pour un injecteur, son répertoire de `runs/` et celui d'Orodruin
+— jamais ce que l'opérateur lance : ses scénarios et ses scripts en lecture seule, SEC20), et la config que la console
 réécrit l'est sur place, sous verrou (`glorfindel/config.py`). `tests/unit/test_profiles.py`
 exige les quatre clés sur chaque service. Mesuré le 29/10 sur Docker (compose 5.5) : les
 écritures de chaque service (escalades, état, découverte, ChromaDB, l'index d'analyse, la
@@ -1680,7 +1681,14 @@ gh attestation verify oci://ghcr.io/grootcyber/eregion-glorfindel@sha256:<digest
 ne construit plus (`infra/glorfindel-host/README.md`, « Le CD de H0 »). **Orodruin** reçoit l'image
 d'Annatar publiée, vérifiée sur le poste : `make orodruin-push [REF=<tag|commit>]` (sans `REF`, le
 dernier tag `v*` : tant qu'il est d'avant CI3, il n'a pas d'image, et d'avant REN1, il est signé par l'ancien nom du dépôt ; donner `REF=`), sa sortie restant fermée (`docs/design/orodruin-contract.md`, « L'image des
-injecteurs »). `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
+injecteurs »). **Depuis OI1 (#488)**, le docker du poste n'y prend plus part : l'archive est construite
+à partir des blobs du registre, sous le digest prouvé (`published_image.py archive`, chaque blob
+vérifié par son sha256 et sa taille avant d'y entrer ; ~630 Mo dans un répertoire temporaire, `TMPDIR`),
+chargée par SSH, puis relue sur Orodruin (`docker image inspect`) : son identifiant, ses couches, son
+utilisateur, son commit. Sous Docker Desktop, `docker save` d'une image tirée la rendait sans
+configuration ni couches (mesuré le 03/11). Un `eregion-annatar:incoming` laissé par un envoi qui a
+échoué est retiré au suivant. Mesurer, avec Jonathan : `make orodruin-push REF=<le commit de main>`, puis
+`make orodruin-check`. `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
 **non vérifiée**, pour essayer une branche : `~/.eregion-image` sur Orodruin le dit (`dev <commit>`).
 
 **Après le renommage du compte (REN1, 03/11).** Les images ont suivi le compte : le nouvel espace répond, l'ancien rend 403, sans redirection (mesuré). Celles d'avant (la v0.5.2 et avant) sont signées par l'ancien nom du dépôt, que `published_image.py` ne reconnaît plus : un retour arrière vers elles est refusé, sur H0 comme sur Orodruin. **H0** : l'ordre dans `infra/glorfindel-host/README.md`, « REN1 change l'agent » (`cd-install`, la 0.5.3 publiée, `cd-check`, `cd-enable`). **Orodruin** : `make orodruin-push REF=<sha de la fusion de REN1>`, puis `make orodruin-check` ; sans `REF` (le dernier tag), seulement à partir de la 0.5.3.

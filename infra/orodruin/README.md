@@ -54,7 +54,7 @@ make orodruin-fingerprint          # l'empreinte de sa clé d'hôte, lue sur la 
 make orodruin-ssh                  # attendre ~/.orodruin-ready, puis exit
 make orodruin-lock YES=1           # 2e apply : la sortie se referme (YES=1 : sans confirmation)
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env   # abonnement, plafond
-make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, signature et provenance vérifiés ici, puis docker save | ssh ; + orodruin.env
+make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, signature et provenance vérifiés ici, archive tirée des blobs du registre (OI1) | ssh docker load ; + orodruin.env
                                    # REF=<tag|commit> (défaut : le dernier tag v* — tant qu'il est d'avant CI3, il n'a pas d'image
                                    # publiée et la cible échoue : donner REF=<un commit de main d'après CI3>)
                                    # make orodruin-push-dev : construite ici, non vérifiée (développement)

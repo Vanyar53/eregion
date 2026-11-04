@@ -33,7 +33,7 @@ variable "vm_size" {
 }
 
 variable "admin_username" {
-  description = "Utilisateur de la VM ; les injecteurs tournent sous son HOME (~/runs, ~/.annatar)."
+  description = "Utilisateur de la VM ; les injecteurs tournent sous son HOME et n'en montent que ~/runs (aucun docker run ne monte ~/.annatar, SEC20)."
   type        = string
   default     = "orodruin"
 }

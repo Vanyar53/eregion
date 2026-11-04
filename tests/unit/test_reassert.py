@@ -2897,3 +2897,89 @@ def test_a_quarantine_whole_again_then_back_is_said_while_its_record_is_kept(mon
     reassert_pass(c, _ACT)
     (card,) = _cards("pending")
     assert card["signal_id"] == a["signal_id"] and card["id"] != a["id"]
+
+
+# ── L1H (#483): the pair the card read turned, written again by another perimeter ──
+
+_PAIR_TURNED = {"verified": False, "missing_rules": ["pair", "pair-out", "r", "r-out"], "open_nics": ["nic"],
+                "rules_seen": {"rg/nsg-subnet/pair": "turned", "rg/nsg-subnet/pair-out": "turned-out", **_VM_SEEN}}
+
+
+@pytest.mark.parametrize("acknowledged", [True, False], ids=["acknowledged", "pending"])
+def test_a_turned_pair_written_again_after_an_acknowledged_card_ends_its_episode(acknowledged):
+    """Seed 5 at 500's cause (L1H): a merged entry's pair turned into an allow — on Azure, « gone » by what
+    it does — and its VM's rules deleted: said, acknowledged; then another VM's perimeter block wrote the
+    pair over the turned one, a deny again, the VM's rules still gone. The card had read the pair there,
+    so nothing read « back » by presence alone: « better than the card, not worse », in silence. Said
+    anew now, as for a pair absent at the card (L1G); under a pending card, nothing more (L1Q)."""
+    c, card, after = _said_then(_PAIR_TURNED, _PAIR_BACK, acknowledged)
+    if acknowledged:
+        (new,) = after
+        assert new["id"] != card["id"] and "reste bloquée" in new["reason"], new["reason"]
+        assert "r, r-out" in new["reason"], new["reason"]               # what is still gone, by name
+    else:
+        assert [e["id"] for e in after] == [card["id"]]
+    c.block_suspicious_ip.assert_not_called()                  # human_only: said, never written
+
+
+def test_a_turned_pair_written_again_after_an_acknowledged_card_is_put_back_outside_human_only():
+    """The same outside human_only, never put back before: a new episode — the VM's rules written once."""
+    c, card, after = _said_then(_PAIR_TURNED, _PAIR_BACK, True, mode="non_disruptive")
+    assert "vm" in [k.kwargs.get("scope") for k in c.block_suspicious_ip.call_args_list], \
+        c.block_suspicious_ip.call_args_list                   # the VM's rules written again
+    assert [e for e in after if e["id"] != card["id"]], [e["reason"] for e in after]
+
+
+@pytest.mark.parametrize("then", ["turned otherwise", "a vm rule set right", "a pair held, changed"])
+def test_an_acknowledged_drift_whose_pair_did_not_come_back_says_nothing(then):
+    """Only the pair, only from « gone » to holding (L1H): the pair turned at the card and turned
+    otherwise since — still gone, no worse —; a VM's own rule turned, set right in place, the pair held
+    both times (RB1: its own block alone writes it, and ends the episode on its own, L1Q); the pair held
+    at the card, changed since and holding still — it was never said gone. Nothing said again."""
+    if then == "turned otherwise":
+        first, now = _PAIR_TURNED, {**_PAIR_TURNED, "rules_seen": {
+            "rg/nsg-subnet/pair": "turned-to-udp", "rg/nsg-subnet/pair-out": "turned-out", **_VM_SEEN}}
+    elif then == "a vm rule set right":
+        held = {"verified": True, "held_by_perimeter": ["nic"], "perimeter_rule": "pair"}
+        first = {**held, "held_missing": ["r", "r-out"],
+                 "rules_seen": {"rg/nsg-subnet/pair": "a1", "rg/nsg-subnet/pair-out": "a2",
+                                "rg/nsg/r": "turned", "rg/nsg/r-out": None}}
+        now = {**held, "held_missing": ["r-out"],
+               "rules_seen": {"rg/nsg-subnet/pair": "a1", "rg/nsg-subnet/pair-out": "a2",
+                              "rg/nsg/r": "set-right", "rg/nsg/r-out": None}}
+    else:
+        first = _PAIR_BACK
+        now = {**_PAIR_BACK, "rules_seen": {**_PAIR_BACK["rules_seen"], "rg/nsg-subnet/pair": "a1-moved"}}
+    _, _, after = _said_then(first, now, True)
+    assert not after, [e["reason"] for e in after]
+
+
+def test_the_pair_of_an_entry_is_named_by_its_nsg_and_rule():
+    """`_pair_keys`: the keys `rules_seen` gives the entry's perimeter pair — in lowercase, as the check
+    writes them —, none for a VM block nor for an entry that doesn't say where its pair is."""
+    from glorfindel.reassert_said import _pair_keys
+    assert _pair_keys({"scoped": False, "nsg": "rg/NSG-Subnet", "rule": "Pair"}) == {
+        "rg/nsg-subnet/pair", "rg/nsg-subnet/pair-out"}
+    assert _pair_keys({"scoped": True, "nsg": "rg/nsg-subnet", "rule": "pair"}) == set()
+    assert _pair_keys({"nsg": "rg/nsg-subnet", "rule": "pair"}) == set()
+    assert _pair_keys({"scoped": False, "nsg": "nsg-subnet", "rule": "pair"}) == set()
+    assert _pair_keys({"scoped": False, "nsg": "rg/nsg-subnet"}) == set()
+
+
+def test_the_first_time_decides_on_a_turned_pair_written_again_as_the_second():
+    """The first time decides as the second (L1Qs, `_to_write`): the acknowledged card read the pair
+    turned; written again since, the episode is over — what is gone is written."""
+    from glorfindel.reassert_cards import new_pass
+    from glorfindel.reassert_perimeters import _to_write
+
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                      threat_port=22)
+    _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                      threat_port=22)
+    reassert_active(_connector(verify_blk=_PAIR_TURNED), AutonomyConfig(default="human_only"))
+    (card,) = _block_cards()
+    escalations.resolve(card["id"])
+    new_pass()
+    b = _load_block_entries(_RID)[0]
+    assert _to_write(b, _PAIR_BACK, _ACT, "vm", _RID, _IP, _RID)
+    assert not _to_write(b, _PAIR_TURNED, _ACT, "vm", _RID, _IP, _RID)

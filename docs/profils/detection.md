@@ -14,7 +14,7 @@
 make profile-detection        # Glorfindel (watch + console) + l'image d'Annatar
 ```
 
-`make profile-detection` crée d'abord, à ton nom, `~/.glorfindel`, `~/.cache/chroma` et `~/.annatar`, que les services montent. Lance Annatar **après** elle : sinon docker crée ces dossiers au nom de root.
+`make profile-detection` crée d'abord, à ton nom, `~/.glorfindel` et `~/.cache/chroma`, que les services montent. Lance Annatar **après** elle : sinon docker crée ces dossiers au nom de root.
 
 **Sur ton poste, rien ne touche le cloud.** Le contrat d'Orodruin y est `passive`, et Annatar refuse d'agir. Ce que tu peux faire sans risque :
 

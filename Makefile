@@ -55,8 +55,21 @@ GLORFINDEL_STATE := \
 	-v $(HOME)/.glorfindel:/root/.glorfindel \
 	-v $(HOME)/.cache/chroma:/root/.cache/chroma
 
+# SEC20 (#467) : de ~/.annatar, le shell d'Annatar ne monte que deux fichiers — son .bashrc, qu'il
+# lance (--init-file), en lecture seule ; son historique, le seul en écriture, où HISTFILE le
+# pose. Jamais le répertoire : le rouge n'y pose rien que l'opérateur lance ensuite. Bash ajoute
+# à ce fichier ; il ne le tronque pas (sa troncature passe par un fichier voisin, que le conteneur
+# ne peut créer). ANNATAR_SHELL_FILES les crée avant, au nom de l'opérateur, et refuse un lien ou
+# autre chose qu'un fichier : Docker résoudrait le lien sur l'hôte et donnerait sa cible au rouge.
 ANNATAR_STATE := \
-	-v $(HOME)/.annatar:/root/.annatar
+	-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro \
+	-v $(HOME)/.annatar/.bash_history:/root/.annatar/.bash_history \
+	-e HISTFILE=/root/.annatar/.bash_history
+ANNATAR_SHELL_FILES = for f in $$HOME/.annatar $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history; do \
+	test ! -L "$$f" || { echo "✗ $$f : un lien, rien ne part (SEC20)" >&2; exit 1; }; done && \
+	mkdir -p $$HOME/.annatar && touch $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history && \
+	for f in $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history; do \
+	test -f "$$f" || { echo "✗ $$f : pas un fichier, rien ne part (SEC20)" >&2; exit 1; }; done
 
 # ~/.glorfindel/injectors read-only, as ~/.glorfindel in the container: Annatar reads the
 # watch heartbeat there (V1, its purple-team feedback). Without it, every Docker run printed
@@ -67,9 +80,11 @@ ANNATAR_STATE := \
 # SEC18 (N-05) : runs/ un répertoire par écrivain (eregion_core/runs_layout.py) — Annatar écrit
 # runs/annatar et runs/orodruin (le journal, le verrou), ne monte ni runs/glorfindel ni runs/console ;
 # runs/verdicts en lecture seule : le verdict de ses runs, sans canal retour du stockage.
+# SEC20 (#467) : ses scénarios et les scripts qu'il envoie à sa cible, en lecture seule — le rouge
+# n'écrit jamais ce que l'opérateur lance (tests/unit/test_red_mounts.py).
 ANNATAR_VOLS := \
-	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \
-	-v $(PWD)/scripts:/app/scripts \
+	-v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro \
+	-v $(PWD)/scripts:/app/scripts:ro \
 	-v $(PWD)/runs/annatar:/app/runs/annatar \
 	-v $(PWD)/runs/orodruin:/app/runs/orodruin \
 	-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \
@@ -328,10 +343,10 @@ annatar-dry-run: build
 	@$(DOCKER_ANNATAR) run $(SCENARIO) --dry-run --yes
 
 annatar-validate:
-	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) validate $(SCENARIO)
+	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) validate $(SCENARIO)
 
 annatar-list:
-	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list
+	docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) list
 
 # The signals of a run in a temporary file, then `glorfindel respond <file> --dry-run` — not
 # runs/: the watch takes from there only what an injector emits (SEC3).
@@ -497,8 +512,7 @@ console-rotate:
 # ── Shells ────────────────────────────────────────────────────────────────
 
 annatar-shell: build-annatar
-	@mkdir -p $(HOME)/.annatar
-	@touch $(HOME)/.annatar/.bashrc
+	@$(ANNATAR_SHELL_FILES)
 	@grep -q "alias ar=" $(HOME)/.annatar/.bashrc || echo "alias ar='annatar'" >> $(HOME)/.annatar/.bashrc
 	@$(RUNS_DIRS)
 	@$(ANNATAR_AZURE_PICK) docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE) \
@@ -1005,12 +1019,17 @@ orodruin-lock: orodruin-init orodruin-watch-guard
 # CI3 : l'image d'Annatar que la CI a publiée (publish.yml), jamais construite ici. Sur ce poste :
 # son digest lu sur GHCR pour le commit de REF (un tag, ou un commit de main ; sans REF, le dernier
 # tag v*), sa signature et sa provenance vérifiées par cosign (le workflow de publication, sur
-# main, à ce commit), tirée par ce digest. Puis chargée par SSH : la sortie d'Orodruin reste
-# fermée (son contrat). Les identifiants attendus sont calculés avant l'envoi ; l'image arrive sous
-# un tag d'attente (eregion-annatar:incoming) et ne devient eregion-annatar:orodruin que si son
-# identifiant relu sur Orodruin est l'un d'eux — sinon elle est retirée, rien n'a changé.
-# ~/.eregion-image est effacé avant, et n'est écrit (« commit digest ») qu'au succès. REF se donne
-# sur la ligne de commande, comme pour glorfindel-host-start. UID 1000 = l'utilisateur de la VM.
+# main, à ce commit). OI1 (#488) : son archive OCI construite à partir des blobs du registre, lus
+# sans jeton sous ce digest — le manifeste, sa configuration, ses couches, chacun vérifié par son
+# sha256 et sa taille avant d'y entrer —, jamais par le docker save de ce poste (sous Docker
+# Desktop, il rendait une image tirée sans configuration ni couches). Puis chargée par SSH : la
+# sortie d'Orodruin reste fermée (son contrat). L'image arrive sous un tag d'attente
+# (eregion-annatar:incoming) et ne devient eregion-annatar:orodruin que si elle se relit sur
+# Orodruin comme le manifeste prouvé l'annonce (son id, ses couches, son utilisateur, son commit) —
+# sinon elle est retirée, rien n'a changé. ~/.eregion-image est effacé avant, et n'est écrit
+# (« commit digest ») qu'au succès. REF se donne sur la ligne de commande, comme pour
+# glorfindel-host-start. UID 1000 = l'utilisateur de la VM. L'archive : un répertoire temporaire de
+# ce poste (TMPDIR ; ~630 Mo), retiré à la fin.
 ORO_INCOMING  := eregion-annatar:incoming
 orodruin-push: export EREGION_DEPLOY_REF = $(value REF)
 orodruin-push: orodruin-known
@@ -1019,18 +1038,20 @@ orodruin-push: orodruin-known
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
 	@git fetch -q --tags origin
 	@python3 scripts/published_image.py install-cosign
-	@out=$$(python3 scripts/published_image.py fetch annatar --ref "$$EREGION_DEPLOY_REF" --tag $(ORO_IMAGE)) || exit 1; \
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; trap 'rm -rf "$$tmp"; exit 130' INT TERM HUP; \
+	 out=$$(python3 scripts/published_image.py archive annatar --ref "$$EREGION_DEPLOY_REF" --tag $(ORO_INCOMING) --out "$$tmp") \
+	   || { echo "✗ rien n'est envoyé : eregion-annatar:orodruin n'a pas changé" >&2; exit 1; }; \
 	 echo "$$out"; digest=$$(echo "$$out" | sed -n 's/^digest=//p'); commit=$$(echo "$$out" | sed -n 's/^commit=//p'); \
-	 ids=$$(python3 scripts/published_image.py ids annatar --digest "$$digest") || exit 1; \
 	 $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \
-	 docker tag $(ORO_IMAGE) $(ORO_INCOMING) || exit 1; \
-	 if docker save $(ORO_INCOMING) | gzip | $(ORO_SSH) 'gunzip | docker load' \
-	    && id=$$($(ORO_SSH) 'docker image inspect -f "{{.Id}}" $(ORO_INCOMING)') \
-	    && python3 scripts/published_image.py loaded annatar --digest "$$digest" --expect "$$ids" --id "$$id"; then \
-	   docker image rm $(ORO_INCOMING) >/dev/null; \
+	 $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1; true'; \
+	 if $(ORO_SSH) 'docker load' < "$$tmp/image.tar" \
+	    && { $(ORO_SSH) 'docker image inspect $(ORO_INCOMING)' > "$$tmp/inspect.json"; \
+	         python3 scripts/published_image.py loaded annatar --digest "$$digest" --expect-file "$$tmp/expect.json" --inspect "$$tmp/inspect.json"; }; then \
 	   $(ORO_SSH) 'docker tag $(ORO_INCOMING) $(ORO_IMAGE) && docker image rm $(ORO_INCOMING) >/dev/null' \
-	   && echo "$$commit $$digest" | $(ORO_SSH) 'cat > .eregion-image'; \
-	 else docker image rm $(ORO_INCOMING) >/dev/null 2>&1; $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \
+	   && echo "$$commit $$digest" | $(ORO_SSH) 'cat > .eregion-image' \
+	   || { $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \
+	        echo "✗ l'image vérifiée n'a pas fini son arrivée (son tag, ou ~/.eregion-image) : ~/.eregion-image reste absent" >&2; exit 1; }; \
+	 else $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \
 	   echo "✗ l'image arrivée sur Orodruin n'est pas celle vérifiée : retirée, eregion-annatar:orodruin n'a pas changé" >&2; \
 	   exit 1; fi
 	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
@@ -1189,14 +1210,13 @@ orodruin-campaign-run: orodruin-known
 # Glorfindel est toujours là (docs/design/console.md, §2) : chaque profil démarre sa watch et la
 # console (glorfindel-start), puis prépare ce qu'il ajoute. Un injecteur n'agit que depuis un
 # Orodruin armé : sur ce poste, son image et les commandes qui ne touchent rien.
-# Les dossiers montés (~/.glorfindel, ~/.cache/chroma par glorfindel-start, ~/.annatar ici) sont
+# Les dossiers montés (~/.glorfindel, ~/.cache/chroma par glorfindel-start) sont
 # créés au nom de l'opérateur : laissés à docker, ils seraient à root. depends_on démarre la
 # watch, sans attendre son battement : la première minute, un injecteur peut refuser (V1).
 profile-discover: glorfindel-start
 	@echo "  Profil « découvrir » : Glorfindel seul, en observation — docs/profils/decouvrir.md"
 
 profile-detection: glorfindel-start build-annatar
-	@mkdir -p $(HOME)/.annatar
 	@echo "  Profil « ma détection marche-t-elle ? » : Glorfindel + Annatar — docs/profils/detection.md"
 	@echo "  Ici, rien ne touche le cloud : docker compose --profile annatar run --rm annatar list"
 	@echo "  Les attaques : depuis Orodruin (make orodruin-up, orodruin-push, orodruin-campaign-plan)"
@@ -1207,7 +1227,6 @@ profile-resilience: glorfindel-start build-annatar
 	@echo "  Les pannes : depuis Orodruin (make gothmog-preflight, gothmog-run)"
 
 profile-proven: glorfindel-start build-annatar
-	@mkdir -p $(HOME)/.annatar
 	@echo "  Profil « défense éprouvée » : Glorfindel + Annatar + Gothmog — docs/profils/eprouvee.md"
 	@echo "  Glorfindel hébergé : make glorfindel-host-up, glorfindel-host-start ; injecteurs : Orodruin"
 

@@ -2674,9 +2674,9 @@ MUTANTS += [
     ("M1228", "an earlier version's state left readable by all (SEC3, V-27)", STA,
      "        _owner_only(directory)\n", ""),
     ("M1229", "Gothmog's container mounts the whole of ~/.glorfindel again (SEC3, N-05)", "docker-compose.yml",
-     "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "/app/runs/verdicts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n",
-     "      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "/app/runs/verdicts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
     ("M1230", "the watch writes no heartbeat where the injectors read it: every run refused (SEC3, N-05)",
      GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
@@ -2739,9 +2739,10 @@ MUTANTS += [
     ("M802", "a listed crossing allowed at module level: the component imports the other on load (D1)",
      "scripts/component_check.py", "((rel, pkg) in CROSSINGS and not at_top)", "((rel, pkg) in CROSSINGS)"),
     ("M803", "Annatar's compose service no longer starts Glorfindel's watch (D1, V1)", "docker-compose.yml",
-     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"
-     "    depends_on:\n      - watch\n",
-     "      - ${HOME}/.annatar:/root/.annatar\n      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"),
+     "      - ./scripts:/app/scripts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n    depends_on:\n      - watch\n",
+     "      - ./scripts:/app/scripts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
+     "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n"),
     ("M804", "Gothmog's compose service may write Glorfindel's state (D1)", "docker-compose.yml",
      "      - ${HOME}/.glorfindel/injectors:/root/.glorfindel:ro\n    depends_on:\n      - watch\n"
      "\n  # D1 : Gothmog",
@@ -2776,14 +2777,13 @@ MUTANTS += [
      "scripts/mutation_check.py",
      "COMPONENT_ABSENT not in line:\n            return line.strip()",
      "COMPONENT_ABSENT not in stdout:\n            return line.strip()"),
-    ("M849", "make profile-detection leaves ~/.annatar to docker: created as root (D1)", MAKE,
-     "profile-detection: glorfindel-start build-annatar\n\t@mkdir -p $(HOME)/.annatar\n",
-     "profile-detection: glorfindel-start build-annatar\n"),
     ("M870", "without Annatar, the reports' thread starts and fails every pass, never said at start (D1)",
      "glorfindel/cli.py", "        from analysis import campaign_report  # noqa: F401\n", ""),
 ]
 TESTS.update({f"M{n}": D1_COMPONENTS for n in range(845, 849)})
-TESTS["M849"] = D1_PROFILES
+# (M849, make profile-detection leaving ~/.annatar to docker, is gone with SEC20: no compose service
+# mounts ~/.annatar any more — its .bashrc is what make annatar-shell runs, M3407 —, so no profile
+# makes it; test_profiles.py still asks a profile to make every directory of $HOME its services mount.)
 TESTS["M870"] = "tests/unit/test_hosted_report.py"
 
 # HY1: no test writes in the repository (the conftest's guard), the quarantine locks' test on
@@ -4484,7 +4484,7 @@ MUTANTS += [
     ("M1663", "a reference off main sent to Orodruin (CI3)", PIM,
      "    if on_main.returncode != 0:\n", "    if False:\n"),
     ("M1664", "any image id accepted on Orodruin after the load (CI3)", PIM,
-     " or a.id.strip() not in expected:", ":"),
+     "    if got not in ids_:\n", "    if False:\n"),
     ("M1665", "a digest that moved since the release was first seen deployed (V-22, CI3)", CD,
      "        if seen.get(tag, digest) != digest:\n", "        if False:\n"),
     ("M1666", "the publishing job not waited for: a release from before CI3 refused at once, or deployed "
@@ -4527,7 +4527,7 @@ MUTANTS += [
     ("M1698", "~/.eregion-image left naming the old image when the new one fails (CI3, review)", "Makefile",
      "\t $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \\\n", ""),
     ("M1699", "an image refused on Orodruin left there under its waiting tag (CI3, review)", "Makefile",
-     "\t else docker image rm $(ORO_INCOMING) >/dev/null 2>&1; $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n",
+     "\t else $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n",
      "\t else true; \\\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in (1690, 1691, 1692, 1693, 1694, 1697, 1698, 1699)})
@@ -6243,8 +6243,8 @@ MUTANTS += [
      '    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):\n',
      '    if iso.get("drift_alerted_at"):\n'),
     ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", RSD,
-     "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
-     "            and not (_back(baseline, now) and _acknowledged(sid)))\n"),
+     "            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)))\n"),
     ("M1944", "an isolation held again, its mark kept: the episode not known over (L2C, review)", R,
      '    if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
      '    if False:\n'),
@@ -9566,11 +9566,11 @@ _L1G_WORSE = "                or any(was is not None and is_ is None for was, is
 MUTANTS += [
     ("M3280", "a rule written again after an acknowledged card never ends its episode: another VM's perimeter "
               "writes the pair, the VM's own rules still gone, unsaid (L1G, seed 29)", RSD,
-     "    return isinstance(said, dict) and any(was is None and is_ is not None for was, is_ in _read_both(said, now))\n",
-     "    return False\n"),
+     '    before, after = said.get("rules") or {}, now.get("rules") or {}\n    gone_then',
+     "    return False\n    gone_then"),
     ("M3281", "a rule written again ends the episode of a pending card too: a card more at each return (L1G, L1Q)",
-     RSD, "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
-     "            and not _back(baseline, now) and drift_said(key, ip, sid))\n"),
+     RSD, "            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not _back(baseline, now, _pair_keys(b)) and drift_said(key, ip, sid))\n"),
     ("M3282", "a rule the card's check never read read back: an NSG listed since, said anew (L1G)", RSD,
      "    return [(before[k], after[k]) for k in sorted(before.keys() & after.keys())]\n",
      "    return [(before.get(k), after.get(k)) for k in sorted(before.keys() | after.keys())]\n"),
@@ -10053,6 +10053,116 @@ MUTANTS += [
 TESTS.update({mid: _L1E_SEQ for mid in ("M3440", "M3441")})
 TESTS["M3442"] = ("tests/unit/test_invariant_regressions.py::"
                   "test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm")
+
+
+# L1H (#483): a rule of the perimeter pair the card said gone while it read it there — turned —, holding now,
+# was written again (another entry's perimeter block, mostly): the acknowledged episode is over, what is still
+# gone said anew (seed 5 at 500). Only the pair, only from « gone » to holding; a VM's own rule set right in
+# place still says nothing (RB1). M3430–M3436.
+_L1H_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_acknowledged_drift_whose_turned_pair_another_perimeter_wrote_again_is_said")
+_L1H_UNIT = "tests/unit/test_reassert.py::"
+_L1H_BACK = (f"{_L1H_UNIT}test_a_turned_pair_written_again_after_an_acknowledged_card_ends_its_episode "
+             f"{_L1H_UNIT}test_a_turned_pair_written_again_after_an_acknowledged_card_is_put_back_outside_human_only "
+             f"{_L1H_UNIT}test_the_first_time_decides_on_a_turned_pair_written_again_as_the_second")
+_L1H_GUARD = f"{_L1H_UNIT}test_an_acknowledged_drift_whose_pair_did_not_come_back_says_nothing"
+_L1H_KEYS = f"{_L1H_UNIT}test_the_pair_of_an_entry_is_named_by_its_nsg_and_rule"
+_L1H_IF = '        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'
+_L1H_PAIRS = '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}".lower() for x in ("", "-out")}\n'
+MUTANTS += [
+    ("M3430", "the pair the card read turned, written again by another perimeter, never ends its acknowledged "
+              "episode: the VM's own rules still gone, unsaid (L1H, seed 5 at 500)", RSD,
+     "            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n"),
+    ("M3431", "any rule the card said gone and read there, holding now, ends the episode — a VM's own rule set "
+              "right by hand too: a card more (L1H, RB1)", RSD,
+     _L1H_IF, '        if k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'),
+    ("M3432", "the pair read back while still gone — turned otherwise: a card more, no worse (L1H)", RSD,
+     _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] in gone_then:\n'),
+    ("M3433", "the pair read back though the card never said it gone — held, changed since: a card more (L1H)",
+     RSD, _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] not in gone_now:\n'),
+    ("M3434", "the pair's outbound rule left out of the pair (L1H)", RSD,
+     _L1H_PAIRS, '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}".lower() for x in ("",)}\n'),
+    ("M3435", "the pair named in the entry's case, never the check's lowercase: never read back (L1H)", RSD,
+     _L1H_PAIRS, '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}" for x in ("", "-out")}\n'),
+    ("M3436", "a VM block's rules named a perimeter pair (L1H)", RSD,
+     '    if b.get("scoped") is not False or not b.get("rule") or "/" not in (b.get("nsg") or ""):\n',
+     '    if not b.get("rule") or "/" not in (b.get("nsg") or ""):\n'),
+]
+TESTS.update({
+    "M3430": f"{_L1H_SEQ} {_L1H_BACK}",
+    "M3431": f"{_L1H_GUARD} {_L1G_UNIT}test_an_acknowledged_drift_set_right_by_hand_says_nothing",
+    "M3432": _L1H_GUARD,
+    "M3433": _L1H_GUARD,
+    "M3434": _L1H_KEYS,
+    "M3435": _L1H_KEYS,
+    "M3436": _L1H_KEYS,
+})
+
+
+# OI1 (#488): the image of Annatar arrives whole on Orodruin — its OCI archive built from the registry's
+# blobs under the manifest cosign proved (never the operator's `docker save`, which gave a pulled image
+# without config or layers), each blob checked by its sha256 and its size first; and what Orodruin
+# reads back (docker image inspect) compared with that manifest, not its id alone. M3450–M3459.
+MUTANTS += [
+    ("M3450", "a blob's sha256 never checked: an altered layer sent to Orodruin (OI1)", PIM,
+     '    if "sha256:" + h.hexdigest() != digest:\n', "    if False:\n"),
+    ("M3451", "a blob read past its descriptor's size: a registry that never stops fills the disk (OI1)", PIM,
+     "                    if got > size:\n", "                    if False:\n"),
+    ("M3452", "a descriptor's size never bounded: a blob out of bounds fetched (OI1)", PIM,
+     "    if size > limit:\n", "    if False:\n"),
+    ("M3453", "a layer of an unexpected media type (a foreign one, served from elsewhere) taken (OI1)", PIM,
+     "    if mtype not in types:\n", "    if False:\n"),
+    ("M3454", "a manifest of an unexpected media type taken for an image's (OI1)", PIM,
+     "    if mtype not in MANIFEST_TYPES:\n", "    if False:\n"),
+    ("M3455", "the layers read back on Orodruin never compared with the config's (OI1)", PIM,
+     '    if layers != expect.get("diff_ids"):\n', "    if False:\n"),
+    ("M3456", "the user read back on Orodruin never compared with the config's (OI1)", PIM,
+     '    if (cfg.get("User") or "") != expect.get("user"):\n', "    if False:\n"),
+    ("M3457", "the config's commit never read: another commit's image archived under this digest (OI1)", PIM,
+     "        if rev != commit:\n", "        if False:\n"),
+    ("M3458", "an image that runs as root archived for the injectors (OI1)", PIM,
+     "        if not _not_root(user):\n", "        if False:\n"),
+    ("M3459", "the registry's token sent on to its storage, another host (OI1)", PIM,
+     '            new.headers.pop("Authorization", None)\n            new.unredirected_hdrs.pop("Authorization", None)\n',
+     "            pass\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3450, 3460)})
+# SEC20 (#467): the red never writes what the operator runs — no red container mounts read-write a
+# directory of code, scripts or configuration, nor what holds one, nor the .bashrc a red shell runs.
+# M3400–M3409.
+_SEC20 = "tests/unit/test_red_mounts.py"
+MUTANTS += [
+    ("M3400", "Annatar's compose service writes scripts/, which the operator runs (SEC20)", "docker-compose.yml",
+     "      - ./scripts:/app/scripts:ro\n", "      - ./scripts:/app/scripts\n"),
+    ("M3401", "Annatar's compose service writes its scenarios (SEC20)", "docker-compose.yml",
+     "      - ./annatar/scenarios:/app/annatar/scenarios:ro\n", "      - ./annatar/scenarios:/app/annatar/scenarios\n"),
+    ("M3402", "Annatar by hand (ANNATAR_VOLS) writes scripts/ (SEC20)", MAKE,
+     "\t-v $(PWD)/scripts:/app/scripts:ro \\\n", "\t-v $(PWD)/scripts:/app/scripts \\\n"),
+    ("M3403", "Annatar by hand (ANNATAR_VOLS) writes its scenarios (SEC20)", MAKE,
+     "\t-v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro \\\n",
+     "\t-v $(PWD)/annatar/scenarios:/app/annatar/scenarios \\\n"),
+    ("M3404", "make annatar-validate writes the scenarios (SEC20)", MAKE,
+     "/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) validate",
+     "/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) validate"),
+    ("M3405", "make annatar-list writes the scenarios (SEC20)", MAKE,
+     "/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) list",
+     "/app/annatar/scenarios --entrypoint annatar $(IMAGE_ANNATAR) list"),
+    ("M3406", "Annatar's shell mounts ~/.annatar whole for its history: the .bashrc it runs written by the red "
+              "(SEC20)", MAKE,
+     "\t-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro \\\n"
+     "\t-v $(HOME)/.annatar/.bash_history:/root/.annatar/.bash_history \\\n",
+     "\t-v $(HOME)/.annatar:/root/.annatar \\\n"),
+    ("M3407", "Annatar's compose service mounts ~/.annatar again: the shell's .bashrc written by the red (SEC20)",
+     "docker-compose.yml", "      - ./scripts:/app/scripts:ro\n",
+     "      - ./scripts:/app/scripts:ro\n      - ${HOME}/.annatar:/root/.annatar\n"),
+    ("M3408", "the launcher of a request on Orodruin writes the requests it judges (SEC20)", MAKE,
+     "-v $$HOME/requests:/app/requests:ro $(ORO_IMAGE)", "-v $$HOME/requests:/app/requests $(ORO_IMAGE)"),
+    ("M3409", "Orodruin's migration mounts its home whole: orodruin.env writable by the red (SEC20)", MAKE,
+     "-v $$HOME/runs:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate",
+     "-v $$HOME:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in range(3400, 3410)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

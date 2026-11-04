@@ -5,7 +5,10 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 ## CLI — référence complète
 
 ```bash
-# Workflow opérateur — Docker Compose (recommandé)
+# Workflow opérateur — Docker Compose (recommandé) ; le pas à pas, de zéro : docs/demarrer/ (GS1)
+make doctor [PROFILE=discover|bench]         # les prérequis (outils, variables présentes — jamais leur valeur —,
+                                             # config lue comme la watch, dossiers à ton nom, port 7007 ; bench : clés
+                                             # et canaux d'Orodruin et de H0) ; sans cloud ni modèle ; 0 si tout est vert, sinon 2 par make (1 du script)
 make glorfindel-start                        # lance watch + la console → http://localhost:7007
 make console-url                             # l'URL de la console avec son jeton (celui de l'environnement ou de .env,
                                              # sinon ~/.eregion/console/token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche
@@ -61,12 +64,18 @@ make glorfindel-host-cd-check                # à blanc : vérifie, construit à
 make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade
 make glorfindel-host-cd-status | -cd-retry | -cd-disable | -cd-uninstall
 
-# Workflow opérateur — 3 terminaux (local sans Docker Compose)
+# Workflow opérateur — 3 terminaux (local sans Docker Compose) : la watch et l'alerte, sur ce poste
 glorfindel watch runs/                       # terminal 1 — réponses automatiques
-annatar run annatar/scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
 glorfindel pending --watch                   # terminal 3 — alerting (poll 2s, NEW ESCALATION)
+# Le terminal 2, l'attaque, ne tourne plus sur ce poste (GS1). Ici l'injecteur est passif : --dry-run,
+# validate, list. Depuis Orodruin armé, un run ne croit que le battement du canal retour, que seule la
+# watch de H0 écrit : une watch de ce poste n'y parvient pas (WC1, #523, en cours). Le seul run possible
+# avec elle est un run de développement, détection non mesurée et dite au rapport :
+#   make orodruin-ssh, puis : annatar run <scénario> --yes --without-glorfindel   (dans le docker run durci)
+# La vraie boucle, mesurée : les cibles de campagne (make orodruin-campaign-plan / -run), la watch de
+# H0 répondant — l'ordre complet, de zéro : docs/demarrer/banc.md.
 
-# Setup scénario T1486 (avant chaque run)
+# Setup scénario T1486 (avant chaque run ; annatar clean et run, depuis Orodruin armé, comme ci-dessus)
 annatar clean annatar/scenarios/azure/ransomware-vm.yaml   # nettoyage disque
 # ⚠ Attendre 10 min après annatar clean — les I/O du nettoyage peuvent déclencher
 #   ransomware-disk-write (ago(10m)) et fausser detection_time_s à 0.

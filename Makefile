@@ -164,13 +164,16 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment fault-rate \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
 	team-check team-init team-start team-stop team-logs team-config components-check images-check \
-	console-shots
+	console-shots doctor
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
 help:
 	@echo ""
 	@echo "Eregion $(shell cat pyproject.toml | grep '^version' | cut -d'"' -f2)"
+	@echo ""
+	@echo "Démarrer (GS1) — docs/demarrer/"
+	@echo "  make doctor [PROFILE=discover|bench]  Les prérequis, vérifiés sans appeler ni le cloud ni le modèle"
 	@echo ""
 	@echo "Dev (local, no Docker)"
 	@echo "  make venv           Create .venv (python3 -m venv)"
@@ -308,6 +311,17 @@ help:
 	@echo "  INSTANCE    Workspace/stack du bench (default: default)"
 	@echo "  TOPO        Topos à activer, ex: TOPO=\"multinic,aks\""
 	@echo ""
+
+# ── Démarrer (GS1, #520) ──────────────────────────────────────────────────
+# Les prérequis d'un premier démarrage, vérifiés sans appeler ni le cloud ni le modèle
+# (scripts/doctor.py) : les outils, les variables (leur présence, jamais leur valeur), la
+# configuration, les dossiers d'état, le port de la console ; PROFILE=bench : le banc
+# (docs/demarrer/banc.md). Le venv s'il est là (la lecture stricte de la configuration),
+# sinon python3 : il tourne avant make install. 0 seulement si tout est vert ; le script rend 1 pour
+# un point à corriger, 2 pour un profil inconnu, et make en fait son propre code, 2, dans les deux cas.
+PROFILE ?= discover
+doctor:
+	@$(if $(wildcard .venv/bin/python),.venv/bin/python,python3) scripts/doctor.py --profile "$(PROFILE)"
 
 # ── Build ─────────────────────────────────────────────────────────────────
 

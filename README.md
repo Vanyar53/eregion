@@ -177,6 +177,8 @@ Each profile has a `docker compose` profile, a Make target and a page in [`docs/
 
 ## Evaluate on your infrastructure — read-only on Azure
 
+**The guide, step by step and replayed from zero** (French): [`docs/demarrer/bleu.md`](docs/demarrer/bleu.md) — one path (Docker, `make profile-discover`), checked first by `make doctor`. Below, the same evaluation in short.
+
 The fastest, safest way to see Glorfindel: point it at your existing Log Analytics Workspace with **read-only** credentials and watch a week of recommendations. It detects and reasons on your real signals but **cannot change anything on Azure** — no Contributor role, no write API. The pitch to a colleague: *"see what I'd have done on your real signals; I can't touch a thing."*
 
 **What leaves your machine.** Read-only on Azure is not "nothing leaves":
@@ -195,14 +197,15 @@ az role assignment create --assignee <appId> \
     --role "Log Analytics Reader" --scope /subscriptions/<SUBSCRIPTION_ID>
 ```
 
-**2. Install and wire the credentials**:
+**2. Install and wire the credentials** — this short path runs Glorfindel from the venv, which reads `AZURE_CLIENT_*` (the guide's Docker path sets `GLORFINDEL_AZURE_CLIENT_*` and `EREGION_CONSOLE_AZURE_CLIENT_*` instead, one pair per container):
 
 ```bash
 git clone https://github.com/grootcyber/eregion && cd eregion && make install
-export GLORFINDEL_AZURE_CLIENT_ID=<eval-sp-app-id>
-export GLORFINDEL_AZURE_CLIENT_SECRET=<eval-sp-secret>
+export AZURE_CLIENT_ID=<eval-sp-app-id>
+export AZURE_CLIENT_SECRET=<eval-sp-secret>
 export AZURE_TENANT_ID=<tenant-id>
 export AZURE_SUBSCRIPTION_ID=<subscription-id>
+export ANTHROPIC_API_KEY=<key>      # or GLORFINDEL_LLM_MODEL=ollama/<model> + GLORFINDEL_LLM_BASE_URL
 ```
 
 **3. Point Glorfindel at your workspace** — the LAW ID lives in `glorfindel-config.yaml`, **not** an env var (there is no `AZURE_WORKSPACE_ID`):
@@ -222,7 +225,8 @@ cp glorfindel-config.yaml.example glorfindel-config.yaml
 
 ```bash
 export GLORFINDEL_READ_ONLY=1
-glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
+mkdir -p runs && .venv/bin/glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml   # terminal 1
+.venv/bin/eregion console                                                                           # terminal 2, same variables
 ```
 
 `GLORFINDEL_READ_ONLY=1` guarantees no write API is ever called; `human_only` holds every recommended action *before* the connector is touched (you see `mode_hold` escalations, never permission errors).
@@ -231,7 +235,7 @@ glorfindel watch runs/ --rules glorfindel/rules/azure/detection_rules.yaml
 - **The Eregion console** (`eregion console` → http://localhost:7007; formerly the War Room, `glorfindel war-room` still works) — an overview, then a page per agent: **Glorfindel** (live cards, `OBSERVE-ONLY` badge, each escalation with the held action + confidence + forensic steps, the cards to judge), **Annatar** and **Gothmog** (what they ran and what Glorfindel made of it — greyed until this host holds their runs), and **Config**. Glorfindel is always there; Annatar and Gothmog require it. It listens on `127.0.0.1` by default (Docker publishes `127.0.0.1:7007`) and always asks for a token — the console can trigger real Azure actions. At its first start without `EREGION_CONSOLE_TOKEN`, it draws one and keeps it in `~/.eregion/console/token` (mode 600), its own directory, which no other service mounts. The token is never printed, so it never reaches the containers' logs: `make console-url` gives the URL to open (`make glorfindel-start` runs it), from the environment's token or that file. A session lasts 12 hours; `make console-rotate` draws a new token and ends every session of the former one. To choose the token, set `EREGION_CONSOLE_TOKEN` (its former name, `GLORFINDEL_WARROOM_TOKEN`, is still read); scripts send `Authorization: Bearer <token>`. It answers under `localhost` / `127.0.0.1` only, or a name listed in `EREGION_CONSOLE_HOSTS` (compose passes it), and refuses a change from another origin. Design: [`docs/design/console.md`](docs/design/console.md).
 - **`glorfindel pending`** — same on the CLI.
 
-> ⚠ **For the first observe run, disable `data-exfiltration-blob`** — it fires on `PutBlobCount >= 1` from any RFC-1918 source, too noisy on real workloads. Set `enabled: false` on that rule in [`detection_rules.yaml`](glorfindel/rules/azure/detection_rules.yaml) until the allowlist hardening lands. The other rules are safe to leave on.
+> ⚠ **For the first observe run, disable `data-exfiltration-blob`** — it fires on `PutBlobCount >= 1` from any RFC-1918 source, too noisy on real workloads. Turn it off in your own layer of rules, never in the shipped base (an update replaces it): `mkdir -p ~/.glorfindel && printf 'disable: [data-exfiltration-blob]\n' >> ~/.glorfindel/client_rules.yaml`, before the watch starts — it reads the rules at startup; `glorfindel rules` shows it off. The other rules are safe to leave on.
 
 ---
 
@@ -351,23 +355,19 @@ The images run **non-root** as your own UID/GID (baked in by `make build` via `i
 
 ### 3. Run your first attack/defense loop
 
+**No attack is launched from your machine.** Here the injectors stay passive: `annatar list`, `annatar validate`, `annatar run … --dry-run`, `gothmog preflight`; a real run is refused — no live watch here, or Orodruin's contract `passive` — and touches nothing. A real attack runs from **Orodruin**, the disposable host of the injectors, on enrolled targets only, behind a live Glorfindel watch whose signed heartbeat Orodruin reads on the return channel — today the hosted watch, H0 (a watch on your machine cannot reach Orodruin yet).
+
+The whole order, from zero — Celebrimbor, the identities, H0, Orodruin and its pinned keys, the enrollment, a first attack and its proof, the teardown — with the cost and the time of each step, is the bench guide (French): [`docs/demarrer/banc.md`](docs/demarrer/banc.md). `make doctor PROFILE=bench` says what is missing before the first attack.
+
+Once the bench, H0 and Orodruin stand, the first attack (T1136.001, a pinned Atomic Red Team test, on gondolin) and its proof:
+
 ```bash
-az vm start -g rg-celebrimbor -n vm-celebrimbor-gondolin   # VM auto-shuts down at 23:00 UTC
-
-# Setup T1486 (before each run — clean disk + fresh recovery point)
-annatar clean annatar/scenarios/azure/ransomware-vm.yaml           # wipe testdata disk
-glorfindel snapshot /subscriptions/.../vm-celebrimbor-gondolin --yes    # clean RP (~5-20min)
-
-glorfindel watch runs/                              # terminal 1 — Glorfindel watches for signals
-annatar run annatar/scenarios/azure/ransomware-vm.yaml      # terminal 2 — Annatar attacks
-
-# Cycle 1 (~71s): Glorfindel detects disk write spike → isolate_vm autonomously (stops exfil/spread)
-# Cycle 2: Glorfindel escalates restore_from_backup (disk encrypted — human approval required)
-
-glorfindel pending                                  # see escalation: restore_from_backup
-glorfindel restore /subscriptions/.../vm-celebrimbor-gondolin --yes   # terminal 3 (~20 min)
-
-# Glorfindel releases isolation automatically after restore completes
+make orodruin-check                      # armed
+make orodruin-campaign-plan CAMPAIGN_TARGET=<resource id of vm-celebrimbor-gondolin> \
+  CAMPAIGN_DECLARED=annatar/campaign/declared/bl1-reponse.yaml      # → the campaign's id
+make orodruin-campaign-run CAMPAIGN=<id>                             # the verdict: detected, missed or unknown
+make glorfindel-host-campaign-report CAMPAIGN=<id>                   # the report, written on H0
+make glorfindel-host-tunnel                                          # the console: the Annatar page
 ```
 
 ### 4. Simulate locally (no Azure required)
@@ -544,7 +544,7 @@ glorfindel dashboard                            # full-screen TUI: resources + f
 eregion console [--sections annatar,gothmog]    # web console on http://localhost:7007 (pip install -e '.[console]' from the clone); loopback by default, always a token (drawn at the first start, or EREGION_CONSOLE_TOKEN)
 eregion coverage [--json] [--check]             # the coverage matrix from runs/ (C1): each technique and fault, its last proof and state; --check exits 1 on a regression
 
-# Annatar
+# Annatar — acts only from an armed Orodruin (docs/demarrer/banc.md); here: list, validate, --dry-run
 annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
 annatar run annatar/scenarios/azure/data-exfiltration.yaml
 annatar run annatar/scenarios/azure/lateral-movement.yaml

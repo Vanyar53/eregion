@@ -2054,7 +2054,8 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   que `#roadmap` ne lirait pas (en-tête changé), rien n'y change,
   la commande le dit, et l'Orchestre tient le tableau à la main (`publiée` aussi, après la publication). Puis la branche `chore/release-X.Y.Z`, le commit
   `chore(release): X.Y.Z — CHANGELOG [X.Y.Z] « <titre> », version du paquet`, le push et la PR
-  (`gh pr create`). Refusé, sans rien écrire :
+  (`gh pr create`). Sa sortie et le corps de la PR disent que la porte de release tourne sur cette PR,
+  30 à 60 minutes, et qu'elle doit être verte avant la fusion. Refusé, sans rien écrire :
   - un arbre modifié, ou un HEAD qui n'est pas `origin/main` ;
   - une version qui n'est pas X.Y.Z, ou pas plus grande que la courante ;
   - un `[Unreleased]` vide ou qui n'a que des titres sans aucun fragment, ou une section `[X.Y.Z]` déjà là ;
@@ -2075,7 +2076,8 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 - **`make release-draft`**, après la fusion : le **brouillon** `vX.Y.Z — <titre>`, sur le sha complet
   d'`origin/main`. Celui-ci doit tenir la version : son `pyproject.toml` et la section `[X.Y.Z]` de son
   CHANGELOG. Les notes : `NOTES=fichier`, sinon cette section, avec au moins une ligne qui n'est pas un
-  titre. Refusé si le tag ou une release `vX.Y.Z` existe déjà, brouillon compris. Le brouillon est posé sur le tableau de `#agents`, avec un ping,
+  titre. Refusé si le tag ou une release `vX.Y.Z` existe déjà, brouillon compris, et tant que **la
+  porte de release** n'est pas verte sur un commit de même arbre qu'`origin/main` (ci-dessous). Le brouillon est posé sur le tableau de `#agents`, avec un ping,
   et sa carte va dans `#releases`, avec le résumé de ses notes (REL2) ; le lien donné est la liste des
   releases du dépôt, où le brouillon est en tête : GitHub change l'URL d'un brouillon à chaque
   édition (mesuré sur la 0.4.4). La PR de version et la publication vont aussi dans `#releases`
@@ -2086,8 +2088,9 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   doivent être verts : sinon le CD de H0 attend une heure, puis refuse la release, sans jamais la
   construire.
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
-  lit le code sur une liste blanche : quatre commandes `gh` seulement (`pr create`, `release list`,
-  `release create` avec `--draft`, `release edit` des seules notes), jamais `gh api`. Une commande ne
+  lit le code sur une liste blanche : cinq commandes `gh` seulement (`pr create`, `release list`,
+  `release create` avec `--draft`, `release edit` des seules notes, et un seul `gh api`, la lecture des
+  runs de la porte : `--method GET`, son chemin écrit en entier, CI6). Une commande ne
   part que par `run()`, avec une liste littérale qui commence par `git` ou `gh` ; ni shell, ni
   `os.system`. Aucun texte ne dit
   `draft`, sauf ce `--draft`. Une URL de `releases` n'est jamais appelée qu'en lecture. Publier déploie H0 (son CD, H1) : **Jonathan publie**, sur GitHub.
@@ -2097,6 +2100,95 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 
 Tests : `tests/unit/test_release.py`, sur un dépôt git jetable (un `origin` nu dans `tmp_path`) avec un
 faux `gh` et le faux Discord. Mutants M1160–M1169, M1430–M1439, M1470.
+
+### La porte de release (CI6, #514)
+
+**Décision de Jonathan (04/11)** : une release a toujours eu la mesure la plus forte, sur l'arbre
+qu'elle publie. La PR de version ne passait que la CI d'une PR (200 invariants après CI5) ; rien ne
+mesurait en entier le commit publié.
+
+**La batterie** (`.github/workflows/release-gate.yml`), un job par partie :
+- `invariants` : toute la suite, 2 000 séquences par machine d'invariants (Azure, AWS), sur Linux, la
+  base Hypothesis de la nuit rejouée d'abord ;
+- `mutants` (14 tranches) et `control` (2 tranches) : toute la mutation, `--examples 500 --rounds 2
+  --jobs 4`, jeu de contrôle compris. Un seul runner n'y suffit pas : 2 633 mutants le 04/11, et la mesure
+  du lundi (1 000 séquences) annulée à sa borne de 180 min le 02/11, avant son premier mutant. Chaque
+  tranche (`mutation_check.py --shard K/N --json …`) prend des cibles entières, par morceaux de huit
+  mutants au plus ; puis `mutants-total` (`--total`) vérifie que chaque tranche est là, une fois, au
+  même budget, que chaque mutant de l'arbre a été mesuré une fois exactement, et tient le compte au
+  `min_caught` de `mutants.yml` (14). Le jeu de contrôle est dit, jamais tenu à un compte ;
+- `terraform` : les tests Terraform de `ci.yml`, mot pour mot (providers simulés) ;
+- `macos` : le job macOS de `ci.yml`, mot pour mot, qu'une PR ne lance plus (CI5). **Il informe, il ne
+  bloque pas** (décision de Jonathan du 04/11, H1c, #518 : seuls les checks requis bloquent, comme pour
+  le CD de H0). H0 tourne sous Linux, et un runner que GitHub ne donne pas ne doit jamais retenir une
+  release : le macOS du commit de la 0.5.4 a été annulé faute de runner. Le job a `continue-on-error`,
+  donc son rouge ne change pas la conclusion du run, celle que lit `release-draft`. Son résultat est
+  dit dans le résumé du run (`$GITHUB_STEP_SUMMARY`) : celui de ses tests, et celui que voit le dernier
+  job.
+
+Le dernier job, « release gate », attend tous les autres, macOS compris, pour le dire. Il n'est vert que
+si chaque job qui bloque l'est (les invariants, les tranches de mutants et leur total, Terraform) : un
+job annulé (sa borne, un runner jamais pris) ou sauté compte comme rouge. Son résumé donne, job par job,
+le résultat et le rôle (bloque, ou informe). Chaque job a sa borne
+(`timeout-minutes`), les permissions sont `contents: read` et rien d'autre, chaque action est épinglée
+par commit. Chaque job extrait la tête de la PR exactement, jamais le commit de fusion que GitHub
+calcule : c'est cet arbre que `release-draft` compare.
+
+**Le déclencheur.**
+- **La PR de version** (`chore/release-X.Y.Z`, de ce dépôt) : la porte y tourne, et un rouge se voit
+  avant la fusion. Le workflow part sur toute PR qui change `pyproject.toml` (celle de version le fait
+  toujours), et ses jobs sautent si ce n'en est pas une : la batterie ne tourne jamais pour une autre PR.
+  Un nouveau push sur la PR annule le run qu'il remplace.
+- **Un dispatch sur `main`** (`gh workflow run release-gate.yml --ref main`), une fois, quand une autre
+  PR a fusionné entre la porte et la PR de version.
+- Pas sur un push de `main` : la batterie tournerait une seconde fois sur le même arbre, et un rouge
+  arriverait après la fusion. Le message `chore(release):` d'un push, lui, se choisit librement.
+- La porte n'est pas un check requis de `main`, et le CD de H0 ne change pas (il refuse déjà une
+  release dont un check est rouge sur son commit).
+
+**`make release-draft` la redemande.** Il lit les runs du workflow par `gh api` (`GET
+repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs`), garde ceux qui ont lancé la batterie (un
+dispatch, ou la PR `chore/release-…` de ce dépôt **vers `main`** : un run `pull_request` exécute le
+workflow de la base, qu'une PR vers une autre branche aurait pu changer), et prend le dernier démarré
+(`run_started_at` : un run relancé repart, son `created_at` ne bouge pas) dont l'arbre (`head_commit.tree_id`)
+est celui d'`origin/main` (`git rev-parse origin/main^{tree}`). Une squash-merge change le commit, pas
+l'arbre, si rien d'autre n'a fusionné entre-temps. Ce run doit être fini et vert. Sinon le brouillon est
+refusé, et la commande dit lequel, son état (en cours, rouge, annulé, sauté…), son commit et son lien.
+Sans run sur cet arbre, elle dit que quelque chose a fusionné après la porte, et comment la relancer sur
+`main`. Aucun moyen de passer outre : ni option, ni variable. `DRY_RUN=1` montre la vérification.
+L'App des sessions lit ces runs par son droit *Actions* en lecture (mesuré le 04/11 : une lecture réelle
+des runs de `mutants.yml` sous `eregion-agents[bot]`, l'arbre rendu identique à celui de `git`).
+
+**Sa durée : de 45 à 50 minutes estimées, au plus 60** (04/11 ; à remesurer sur le premier run réel).
+Ses parties tournent ensemble ; la plus longue fait la durée :
+
+| Job | Estimé sur un runner | D'où |
+|---|---|---|
+| `mutants`, une tranche sur 14 | ~45 min | une tranche sur dix : 1 423 s (24 min) sur un poste de 16 cœurs à `--jobs 4`, 255 mutants attrapés sur 258 ; un runner est 2,5 fois plus lent sur les invariants (machine d'Azure à 500 séquences : 132 s sur le poste, ~333 s sur un runner, d'après la nuit : 10 000 en 111 min le 04/11). Soit ~60 min pour un dixième, ~43 min pour un quatorzième, plus l'installation |
+| `invariants` (2 000) | ~35 min | la nuit du 04/11 : machine d'Azure 111 min et d'AWS 42 min pour 10 000, soit ~22 et ~8 min pour 2 000, plus le reste de la suite (4 à 9 min à 500 sur une PR) |
+| `control`, une tranche sur 2 | ~20 min | 16 mutants d'invariants par tranche, dont une dizaine survivent sur les 32 (`docs/design/preuves.md`) : deux tours entiers chacun |
+| `macos` (informe) | 4 à 6 min, s'il a un runner | `ci.yml`, 80 jobs mesurés du 15 au 29/10 |
+| `terraform` | 2 à 4 min | `ci.yml` |
+| `mutants-total`, `gate` | < 1 min chacun | |
+
+19 jobs en même temps : GitHub en donne 20 à un dépôt public. Une PR ouverte en parallèle en fait attendre
+quelques-uns. La mesure d'un seul runner n'était plus possible : la mesure du lundi à 1 000 séquences dure
+plus de 180 min (annulée à sa borne le 02/11). Chaque job a deux fois sa durée estimée pour borne : 90 min
+pour une tranche, 75 pour les invariants.
+
+**Si elle est rouge.**
+- **Un vrai rouge** (un invariant, un mutant survivant sous le seuil, un test) : la release attend. On le
+  corrige par un lot, puis la PR de version se refait sur `main`.
+- **Une panne de GitHub sur un job qui bloque** (un job annulé à sa borne, un runner Linux jamais pris) :
+  « Re-run failed jobs » ne relance que les jobs rouges, pas la batterie entière. C'est Jonathan qui le
+  fait : l'App n'a qu'*Actions* en lecture.
+- **Un macOS rouge, annulé ou sans runner** ne rend pas la porte rouge : il se lit dans le résumé du run,
+  et un vrai rouge macOS se corrige par un lot, comme sur `main` et la nuit (CI5).
+- **À mesurer au premier run réel** : la conclusion du run quand le job macOS, qui a `continue-on-error`,
+  est **annulé** (à sa borne, ou faute de runner) plutôt que rouge. Le cas rouge laisse le run vert (c'est
+  ce que fait `continue-on-error`). Le cas annulé n'est pas mesuré. Si GitHub conclut alors le run
+  `cancelled`, `release-draft` le refuse. Le recours est que Jonathan relance le seul job macOS
+  (« Re-run failed jobs »).
 
 ---
 

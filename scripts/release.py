@@ -17,7 +17,10 @@ an empty [Unreleased] without a fragment, a fragment malformed, a branch or a ta
 
 `draft`, once that pull request is merged: the release vX.Y.Z as a DRAFT, on the full sha of
 origin/main (which must hold the version: its pyproject.toml and its CHANGELOG's [X.Y.Z]), with
-the notes given or else the CHANGELOG's section. Refused: a tag or a release vX.Y.Z that exists.
+the notes given or else the CHANGELOG's section. Refused: a tag or a release vX.Y.Z that exists;
+and, with no way past it, the release gate (CI6, .github/workflows/release-gate.yml) not green on
+a commit whose tree is origin/main's — read by `gh api` (GET, the workflow's runs), said with
+its commit, its state and its link.
 The draft is put on #agents' board, pinged (scripts/agents_discord.py), its line and its ping
 deleted when the release is published (notify.yml); and its card goes to #releases, with a
 button to it and its notes in short, never pinged nor deleted (REL2, notify_discord.release_ready).
@@ -57,6 +60,17 @@ KINDS = ("Security", "Added", "Changed", "Fixed")
 FRAGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.md")
 HEADING = re.compile(r"### (\S.*?)\s*")
 MARKER = "<!-- #agents (REL1) : ping={ping} board={board} — effacés à la publication (notify.yml) -->"
+# CI6 (#514): the release gate, .github/workflows/release-gate.yml — the strongest measure, on the
+# tree published. Its duration, measured: docs/operations.md, « La porte de release ».
+GATE = "release-gate.yml"
+GATE_SAID = ("La porte de release (release-gate.yml : 2 000 invariants, la mutation complète, macOS, "
+             "Terraform) tourne sur cette PR, 30 à 60 minutes : elle doit être verte avant la fusion.")
+GATE_AGAIN = f"relance-la sur main : gh workflow run {GATE} --ref main (30 à 60 minutes), puis make release-draft"
+GATE_STATES = {"failure": "rouge", "cancelled": "annulée", "timed_out": "arrêtée à sa borne",
+               "skipped": "sautée", "startup_failure": "jamais démarrée", "action_required": "en attente d'une approbation",
+               "neutral": "neutre", "stale": "périmée"}
+SHA = re.compile(r"[0-9a-f]{40}")
+RUN_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/actions/runs/\d+")
 
 
 class Refused(Exception):
@@ -390,6 +404,7 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
             + (f" ; {len(removed)} fragment(s) de changes/ y sont assemblés, puis retirés" if removed else "")
             + (" ; dans ROADMAP.md, la ligne de la version passe à « brouillon » (« Les prochaines releases »)"
                if "ROADMAP.md" in edits else "") + ".\n\n"
+            f"{GATE_SAID}\n\n"
             f"Après la fusion : make release-draft VERSION={version} — un brouillon, que Jonathan publie.")
     shown = [["git", "switch", "-c", branch],          # what runs below, call by call
              ["git", "add", *staged],
@@ -409,6 +424,7 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
         say(f"changes/ : {len(removed)} fragment(s) assemblé(s) puis retiré(s) — {', '.join(removed)}"
             if removed else "changes/ : aucun fragment")
         say(roadmap_said)
+        say(f"\n{GATE_SAID}")
         say("\nÀ blanc (DRY_RUN=1) — rien n'est écrit ni poussé. Lancerait :")
         for c in shown:
             say(f"  {show(c)}")
@@ -436,7 +452,8 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
     except (Refused, OSError) as e:
         raise Halfway(_halfway(step, branch, str(e), removed)) from None
     say(roadmap_said)
-    say(f"\nPR ouverte. Après sa fusion : make release-draft VERSION={version}")
+    say(f"\nPR ouverte. {GATE_SAID}")
+    say(f"Après sa fusion : make release-draft VERSION={version}")
     return 0
 
 
@@ -475,6 +492,77 @@ def _releases(root: Path) -> list[str]:
         return [str(r.get("tagName")) for r in json.loads(out or "[]")]
     except (ValueError, AttributeError):
         raise Refused("gh release list : réponse illisible") from None
+
+
+def _plain(x, n: int) -> str:
+    """A value GitHub gave, said as text: its printable characters only, n at most."""
+    return "".join(c for c in str(x).strip() if c.isprintable())[:n]
+
+
+def _obj(x) -> dict:
+    return x if isinstance(x, dict) else {}
+
+
+def _gate_run(r: dict) -> bool:
+    """A run of the gate that ran its battery — its jobs' `if:`: a dispatch, or the version's pull
+    request from this repository's own chore/release-… branch. Any other pull request that
+    touches pyproject.toml starts the workflow too, its jobs skipped: never a gate."""
+    head, repo = _obj(r.get("head_repository")).get("full_name"), _obj(r.get("repository")).get("full_name")
+    if not head or head != repo:
+        return False
+    if r.get("event") == "workflow_dispatch":
+        return True
+    # A pull_request run runs its base's workflow: a chore/release-… pull request into another branch,
+    # its release-gate.yml changed there, could be green without the battery. Into main only.
+    bases = [_obj(_obj(pr).get("base")).get("ref") for pr in (r.get("pull_requests") or [])]
+    if not bases or any(b != "main" for b in bases):
+        return False
+    return r.get("event") == "pull_request" and str(r.get("head_branch") or "").startswith("chore/release-")
+
+
+def gate(root: Path, sha: str) -> tuple[bool, str]:
+    """(green, what to say): the gate's last run on a commit whose tree is the one of `sha`. The
+    tree, not the commit: the version's pull request is squash-merged, its head is never main's
+    commit — but its tree is, when nothing else merged in between. That run must be complete and
+    green; one running, red, cancelled or skipped refuses. Nothing lets a draft past it."""
+    tree = git(root, "rev-parse", f"{sha}^{{tree}}")
+    p = run(["gh", "api", "--method", "GET", "repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs?per_page=100"],
+            root, check=False)
+    if p.returncode != 0:
+        return False, (f"la porte de release ne se lit pas (gh api, code {p.returncode} : "
+                       f"{_plain(p.stderr or p.stdout, 200)}) — l'App les lit par son droit Actions en lecture")
+    try:
+        listed = json.loads(p.stdout or "{}").get("workflow_runs")
+    except (ValueError, AttributeError):
+        listed = None
+    if not isinstance(listed, list):
+        return False, "la porte de release : la réponse de gh api n'est pas une liste de runs"
+    # The last started: a run re-run keeps its created_at, its run_started_at moves (its last attempt).
+    runs = sorted((r for r in listed if isinstance(r, dict) and _gate_run(r)), reverse=True,
+                  key=lambda r: (str(r.get("run_started_at") or r.get("created_at") or ""),
+                                 r.get("id") if isinstance(r.get("id"), int) else 0))
+    same = [r for r in runs if _obj(r.get("head_commit")).get("tree_id") == tree]
+    if not same:
+        said = f"aucune porte de release sur l'arbre d'origin/main ({tree[:9]}, commit {sha[:9]})"
+        if runs:
+            said += (f" : la dernière, {_where(runs[0])}, a un autre arbre — quelque chose a fusionné après "
+                     "elle")
+        return False, f"{said} ; {GATE_AGAIN}"
+    r = same[0]
+    if r.get("status") != "completed":
+        return False, (f"la porte de release est en cours ({_plain(r.get('status'), 20)}), {_where(r)} : "
+                       "attends-la, verte (30 à 60 minutes)")
+    if r.get("conclusion") != "success":
+        state = GATE_STATES.get(str(r.get("conclusion")), _plain(r.get("conclusion"), 20))
+        return False, f"la porte de release est {state}, {_where(r)} : lis-la ; corrigée, {GATE_AGAIN}"
+    return True, f"la porte de release est verte sur l'arbre d'origin/main ({tree[:9]}), {_where(r)}"
+
+
+def _where(r: dict) -> str:
+    """Its commit and its link, as GitHub gives them — anything else said as unreadable."""
+    head, url = str(r.get("head_sha") or ""), str(r.get("html_url") or "")
+    return (f"sur {head[:9] if SHA.fullmatch(head) else '(commit illisible)'} "
+            f"({url if RUN_URL.fullmatch(url) else 'lien illisible'})")
 
 
 def releases_page(url: str) -> str:
@@ -528,6 +616,10 @@ def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = Fal
         refused.append("gh introuvable")
     elif tag in _releases(root):
         refused.append(f"une release {tag} existe déjà (brouillon compris)")
+    # CI6: the gate, green on origin/main's tree — read in a dry run too, never passed over.
+    green, gate_said = gate(root, sha) if shutil.which("gh") is not None else (False, "")
+    if not green:
+        refused.append(gate_said or "la porte de release n'est pas lue")
     if notes_file:
         try:
             text = Path(notes_file).expanduser().read_text(encoding="utf-8").strip("\n")
@@ -538,6 +630,8 @@ def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = Fal
     title = f"{tag} — {heading}" if heading else tag
 
     say(f"Brouillon {tag} « {title} » sur origin/main {sha}")
+    if green:
+        say(f"  ✓ {gate_said}")
     for r in refused:
         say(f"  ✗ {r}")
     if refused:

@@ -991,3 +991,158 @@ def test_the_advisories_are_read_on_each_push_and_pull_request_read_only():
     assert "secrets." not in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     checkout = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
     assert checkout and checkout[0]["with"]["persist-credentials"] is False
+
+
+# ── CI6 (#514): the release gate, the strongest measure on the tree a release publishes ──────
+# Jonathan, 04/11. Read from the file; its last job's script run against chosen `needs`.
+GATE = ROOT / ".github" / "workflows" / "release-gate.yml"
+GATE_SCOPE = ("github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') "
+              "&& github.event.pull_request.head.repo.full_name == github.repository)")
+GATE_REF = "${{ github.event.pull_request.head.sha || github.sha }}"
+MUTANT_SHARDS, CONTROL_SHARDS = 14, 2
+
+
+def _gate() -> dict:
+    return _load(GATE)
+
+
+def test_the_gate_runs_on_the_version_s_pull_request_or_by_dispatch_only():
+    """A pull request that changes pyproject.toml (a version's always does), or a dispatch: never a
+    push (main's checks stay what they are), a schedule, nor an event a fork runs with the default
+    branch's rights. A new push cancels the run it replaces: one battery per tree."""
+    doc = _gate()
+    assert doc["name"] == "Release gate"
+    assert doc["on"] == {"pull_request": {"paths": ["pyproject.toml"]}, "workflow_dispatch": None}
+    assert doc["concurrency"] == {"group": "release-gate-${{ github.event.pull_request.number || github.ref }}",
+                                  "cancel-in-progress": True}
+
+
+def test_every_job_of_the_gate_runs_only_for_a_version_or_a_dispatch():
+    """Any other pull request that touches pyproject.toml skips every job: the battery runs on this
+    repository's chore/release-… branch, or a dispatch. The last job runs whatever came before."""
+    jobs = _gate()["jobs"]
+    for name, job in jobs.items():
+        want = f"${{{{ always() && ({GATE_SCOPE}) }}}}" if name == "gate" else f"${{{{ {GATE_SCOPE} }}}}"
+        assert job.get("if") == want, (name, job.get("if"))
+
+
+def test_the_gate_holds_contents_read_and_nothing_else():
+    doc = _gate()
+    assert doc["permissions"] == {"contents": "read"}
+    assert all("permissions" not in job for job in doc["jobs"].values())
+    text = GATE.read_text(encoding="utf-8")
+    assert "secrets." not in text and "github.token" not in text and "GITHUB_TOKEN" not in text
+
+
+def test_every_job_of_the_gate_measures_the_pull_request_s_head_exactly():
+    """The tree release.py compares with origin/main's: the PR's head, never GitHub's merge commit."""
+    for name, job in _gate()["jobs"].items():
+        checkouts = [s for s in job["steps"] if str(s.get("uses") or "").startswith("actions/checkout@")]
+        if name == "gate":
+            assert checkouts == []                    # it reads `needs`, nothing of the repository
+            continue
+        assert len(checkouts) == 1 and checkouts[0]["with"] == {"ref": GATE_REF, "persist-credentials": False}, name
+
+
+def test_every_job_of_the_gate_is_bounded():
+    jobs = _gate()["jobs"]
+    for name, job in jobs.items():
+        bound = job.get("timeout-minutes")
+        assert isinstance(bound, int) and 0 < bound <= 180, (name, bound)
+        assert "continue-on-error" not in job, name
+        for step in job["steps"]:
+            assert "continue-on-error" not in step and "if" not in step, (name, step.get("name") or step.get("uses"))
+    assert jobs["invariants"]["timeout-minutes"] <= 75 and jobs["gate"]["timeout-minutes"] <= 5
+
+
+def test_the_gate_runs_every_test_with_2000_invariant_sequences_on_linux():
+    job = _gate()["jobs"]["invariants"]
+    assert job["runs-on"] == "ubuntu-latest"
+    (step,) = [s for s in job["steps"] if "pytest" in (s.get("run") or "")]
+    assert step["run"].startswith("python -m pytest tests/ -q")
+    assert step["env"] == {"GLORFINDEL_INVARIANT_EXAMPLES": "2000", "GLORFINDEL_INVARIANT_DB": ".hypothesis-invariants"}
+    assert any("actions/cache/restore" in (s.get("uses") or "") and s["with"]["path"] == ".hypothesis-invariants"
+               for s in job["steps"])
+
+
+def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
+    """`--examples 500 --rounds 2 --jobs 4`, each shard of the matrix once; the control set too; the
+    total checks every shard and holds the count to mutants.yml's `min_caught`."""
+    jobs = _gate()["jobs"]
+    for name, n, flag in (("mutants", MUTANT_SHARDS, ""), ("control", CONTROL_SHARDS, "--control ")):
+        job = jobs[name]
+        assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": list(range(1, n + 1))}}, name
+        (step,) = [s for s in job["steps"] if "mutation_check.py" in (s.get("run") or "")]
+        assert step["run"] == (f"python scripts/mutation_check.py {flag}--examples 500 --rounds 2 --jobs 4 "
+                               f'--shard "$SHARD/{n}" --json "{name}-$SHARD.json"'), step["run"]
+        assert step["env"] == {"SHARD": "${{ matrix.shard }}"}
+        (up,) = [s for s in job["steps"] if str(s.get("uses") or "").startswith("actions/upload-artifact@")]
+        assert up["with"]["name"] == f"{name}-${{{{ matrix.shard }}}}" and up["with"]["if-no-files-found"] == "error"
+    total = jobs["mutants-total"]
+    assert total["needs"] == ["mutants", "control"]
+    (step,) = [s for s in total["steps"] if "mutation_check.py" in (s.get("run") or "")]
+    assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
+                           f'--control-shards {CONTROL_SHARDS} --examples 500 --rounds 2 --min-caught "$MIN_CAUGHT"')
+    monday = _load(ROOT / ".github" / "workflows" / "mutants.yml")
+    (mstep,) = [s for s in monday["jobs"]["mutants"]["steps"] if "mutation_check.py" in (s.get("run") or "")]
+    default = re.fullmatch(r"\$\{\{ inputs\.min_caught \|\| '(\d+)' \}\}", mstep["env"]["MIN_CAUGHT"]).group(1)
+    assert default == monday["on"]["workflow_dispatch"]["inputs"]["min_caught"]["default"]
+    assert step["env"] == {"MIN_CAUGHT": default}
+    (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
+    assert down["with"] == {"path": "mutants-results"}
+
+
+def _run_steps(job: dict) -> list[dict]:
+    return [{k: s.get(k) for k in ("name", "run", "env")} for s in job["steps"] if s.get("run")]
+
+
+def test_the_gate_runs_ci_s_macos_job_and_its_terraform_tests_word_for_word():
+    """The macOS job a pull request no longer runs (CI5), and the Terraform tests: the same
+    commands as ci.yml's, so neither drifts from what the CI runs."""
+    ci, jobs = _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"], _gate()["jobs"]
+    assert jobs["macos"]["runs-on"] == ci["test-macos"]["runs-on"] == "macos-latest"
+    assert _run_steps(jobs["macos"]) == _run_steps(ci["test-macos"])
+    assert jobs["macos"]["timeout-minutes"] == ci["test-macos"]["timeout-minutes"]
+    assert _run_steps(jobs["terraform"]) == _run_steps(ci["terraform-test"])
+    assert {s.get("name"): s.get("run") for s in jobs["terraform"]["steps"] if s.get("name") in TF_RUNS} == TF_RUNS
+    assert jobs["terraform"]["env"] == ci["terraform-test"]["env"] == {"CHECKPOINT_DISABLE": "1"}
+
+
+def test_the_last_job_waits_for_every_other_one():
+    jobs = _gate()["jobs"]
+    assert jobs["gate"]["name"] == "release gate"
+    assert sorted(jobs["gate"]["needs"]) == sorted(n for n in jobs if n != "gate")
+    (step,) = jobs["gate"]["steps"]
+    assert step["env"] == {"NEEDS": "${{ toJSON(needs) }}"}
+
+
+def _gate_says(tmp_path, needs: dict) -> int:
+    import json
+    import subprocess
+    import sys
+    import textwrap
+    (step,) = _gate()["jobs"]["gate"]["steps"]
+    script = step["run"].split("<<'EOF'\n", 1)[1].rsplit("EOF", 1)[0]
+    path = tmp_path / "gate.py"
+    path.write_text(textwrap.dedent(script), encoding="utf-8")
+    return subprocess.run([sys.executable, str(path)], env={"NEEDS": json.dumps(needs)},
+                          capture_output=True, text=True).returncode
+
+
+@pytest.mark.parametrize("results, green", [
+    ({"a": "success", "b": "success"}, True),
+    ({"a": "success", "b": "failure"}, False),
+    ({"a": "success", "b": "cancelled"}, False),
+    ({"a": "skipped", "b": "success"}, False),
+    ({"a": "success", "b": None}, False),
+    ({}, False),
+])
+def test_the_last_job_is_green_only_when_every_job_is(tmp_path, results, green):
+    """Run as GitHub runs it: `needs` as JSON. A cancelled or skipped job is red."""
+    needs = {k: {"result": v, "outputs": {}} for k, v in results.items()}
+    assert (_gate_says(tmp_path, needs) == 0) is green
+
+
+def test_release_py_reads_this_workflow_by_its_file_name():
+    text = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+    assert 'GATE = "release-gate.yml"' in text and f"/actions/workflows/{GATE.name}/runs?" in text

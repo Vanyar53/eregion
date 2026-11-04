@@ -85,9 +85,9 @@ def test_the_same_tree_gives_the_same_shards():
 
 
 def test_the_repository_s_mutants_split_into_the_gate_s_shards():
-    """The gate's own numbers (release-gate.yml): ten shards of the mutants, two of the control set,
-    each one with something to measure, together the whole set."""
-    for every, n in ((mc.MUTANTS, 10), (mc.CONTROL, 2)):
+    """The gate's own numbers (release-gate.yml): fourteen shards of the mutants, two of the control
+    set, each one with something to measure, together the whole set."""
+    for every, n in ((mc.MUTANTS, 14), (mc.CONTROL, 2)):
         shards = [mc.shard_of(every, k, n) for k in range(1, n + 1)]
         assert all(shards) and sorted(m[0] for s in shards for m in s) == sorted(m[0] for m in every)
 

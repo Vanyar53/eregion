@@ -10561,6 +10561,26 @@ TESTS.update({
     "M3595": f"{_CI6_REL}test_a_run_that_is_not_the_gate_never_passes",
     "M3596": f"{_CI6_REL}test_a_run_that_is_not_the_gate_never_passes",
 })
+# CI6: the workflow's last job counts a cancelled or skipped job as red, and every job measures
+# the pull request's head. M3597–M3598.
+GATEWF = ".github/workflows/release-gate.yml"
+_CI6_WF = "tests/unit/test_workflows.py::"
+MUTANTS += [
+    ("M3597", "the gate's last job green with a skipped job (CI6)", GATEWF,
+     'all(job.get("result") == "success" for job in needs.values())',
+     'all(job.get("result") in ("success", "skipped") for job in needs.values())'),
+    ("M3598", "the gate measures GitHub's merge commit, not the pull request's head: another tree (CI6)", GATEWF,
+     "      # scripts/release.py compares that tree with origin/main's.\n"
+     "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0\n"
+     "        with:\n          ref: ${{ github.event.pull_request.head.sha || github.sha }}\n",
+     "      # scripts/release.py compares that tree with origin/main's.\n"
+     "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0\n"
+     "        with:\n"),
+]
+TESTS.update({
+    "M3597": f"{_CI6_WF}test_the_last_job_is_green_only_when_every_job_is",
+    "M3598": f"{_CI6_WF}test_every_job_of_the_gate_measures_the_pull_request_s_head_exactly",
+})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

@@ -1,0 +1,291 @@
+name: Release gate
+
+# CI6 (#514), Jonathan's decision of 04/11: a release always had the strongest measure, on the
+# tree it publishes. The battery: every test with 2 000 sequences per invariant machine (Linux),
+# the whole mutation at 500 sequences, two rounds, the control set included (in shards: on one
+# runner it outlasts any bound, scripts/mutation_check.py, « CI6 »), the macOS job, the Terraform
+# tests. A last job, « release gate », is green only when every other one is: a cancelled or a
+# skipped job counts as red. `make release-draft` (scripts/release.py) refuses a draft until a
+# run of this workflow is green on a commit whose tree is origin/main's — no flag, no variable
+# passes over it. docs/operations.md, « La porte de release »: its time, measured.
+#
+# When: on the version's pull request (chore/release-X.Y.Z, this repository's own: `make release`
+# opens it), so a red is seen before the merge; its squash-merge keeps the tree when nothing else
+# merged in between. Otherwise, a dispatch on main (`gh workflow run release-gate.yml --ref main`),
+# once. A version's pull request always changes pyproject.toml (its version): any other pull
+# request that does starts this workflow too, and its jobs skip — never the battery. A new push to
+# the pull request cancels the run it replaces: the battery never runs twice for one tree.
+# Not a required check of main, and nothing here is announced but its red (notify.yml).
+on:
+  pull_request:
+    paths: [pyproject.toml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Every test of the repository, the invariant machines (Azure and AWS) at 2 000 sequences each,
+  # replaying first the failures the night kept. Measured: docs/operations.md.
+  invariants:
+    name: tests, 2 000 invariant sequences (Linux)
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      # The tree measured is the pull request's head, exactly — never GitHub's merge with main:
+      # scripts/release.py compares that tree with origin/main's.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1   # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-v1
+
+      - name: Install
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
+        with:
+          path: .hypothesis-invariants
+          key: invariants-db-
+          restore-keys: invariants-db-
+
+      # One test runs each machine whole (about 22 min for Azure's at 2 000): a stack is written
+      # only after 40 min of one test, a hang said before the job's bound.
+      - name: Every test, 2 000 sequences per invariant machine
+        env:
+          GLORFINDEL_INVARIANT_EXAMPLES: "2000"
+          GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
+        run: python -m pytest tests/ -q -o faulthandler_timeout=2400
+
+  # The mutants, in fourteen shards, each its whole targets (scripts/mutation_check.py, shard_of).
+  # One shard of ten took 24 min on a 16-core workstation at --jobs 4 (04/11), about 60 on a
+  # runner (2.5 times slower on the invariants): fourteen bring a shard to about 45 min, and the
+  # gate's 19 jobs fit GitHub's 20 at once. The bound leaves twice that.
+  mutants:
+    name: mutants (shard ${{ matrix.shard }}/14)
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1   # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - name: Re-introduce each bug of the shard, run its tests
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: >-
+          python scripts/mutation_check.py --examples 500 --rounds 2 --jobs 4
+          --shard "$SHARD/14" --json "mutants-$SHARD.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: mutants-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # The control set (never used to shape the generation), in two shards: said, not held to a count.
+  control:
+    name: control set (shard ${{ matrix.shard }}/2)
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1   # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - name: Re-introduce each bug of the control set's shard, run the invariants
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: >-
+          python scripts/mutation_check.py --control --examples 500 --rounds 2 --jobs 4
+          --shard "$SHARD/2" --json "control-$SHARD.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with:
+          name: control-${{ matrix.shard }}
+          path: control-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # The shards put together: each mutant of this tree measured once, at this budget, and at least
+  # mutants.yml's `min_caught` caught in every round.
+  mutants-total:
+    name: mutants (every shard, the count)
+    needs: [mutants, control]
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333   # v8.0.2
+        with:
+          path: mutants-results
+
+      - name: Every mutant measured once, the count held
+        env:
+          MIN_CAUGHT: "14"
+        run: >-
+          python3 scripts/mutation_check.py --total mutants-results --shards 14 --control-shards 2
+          --examples 500 --rounds 2 --min-caught "$MIN_CAUGHT"
+
+  # ci.yml's macOS job, which a pull request no longer runs (CI5): the case-insensitive file system.
+  macos:
+    name: tests (macOS, case-insensitive file system)
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1   # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
+        with:
+          path: .hypothesis-invariants
+          key: invariants-db-
+          restore-keys: invariants-db-
+
+      - name: State and identity tests
+        env:
+          GLORFINDEL_INVARIANT_EXAMPLES: "500"
+          GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
+          GLORFINDEL_INVARIANT_NO_SHRINK: "1"
+        run: python -m pytest tests/unit/test_glorfindel.py tests/unit/test_readiness.py tests/unit/test_reassert.py tests/unit/test_invariants.py tests/unit/test_invariant_regressions.py -q -o faulthandler_timeout=480
+
+  # ci.yml's Terraform tests, word for word (tests/unit/test_workflows.py): mock providers, the
+  # locks read only, nothing applied.
+  terraform:
+    name: terraform test (mock providers)
+    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CHECKPOINT_DISABLE: "1"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install Terraform (HashiCorp's apt repository, pinned)
+        env:
+          HASHICORP_APT_FPR: D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
+          TERRAFORM_VERSION: 1.14.9-1
+        run: |
+          key="$RUNNER_TEMP/hashicorp.gpg"
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --batch --yes --dearmor -o "$key"
+          # One primary key, and that fingerprint is its own — a subkey's fpr line has the same form.
+          if ! gpg --batch --show-keys --with-colons "$key" \
+               | awk -F: -v f="$HASHICORP_APT_FPR" '$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'; then
+            echo "::error::HashiCorp's apt key is not the one primary key ${HASHICORP_APT_FPR} — Terraform not installed."
+            exit 1
+          fi
+          ring="$RUNNER_TEMP/hashicorp.kbx"
+          gpg --batch --no-default-keyring --keyring "$ring" --import "$key"
+          gpg --batch --no-default-keyring --keyring "$ring" --export "$HASHICORP_APT_FPR" \
+            | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"
+          terraform version
+
+      - name: Terraform test — Celebrimbor (mock providers)
+        run: |
+          terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir=infra/terraform test -no-color
+
+      - name: Terraform test — Glorfindel's host (mock providers)
+        run: |
+          terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir=infra/glorfindel-host validate -no-color
+          terraform -chdir=infra/glorfindel-host test -no-color
+
+      - name: Terraform validate — Orodruin
+        run: |
+          terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir=infra/orodruin validate -no-color
+
+  # Green only when every job above is: `always()`, so it runs and says so when one failed, was
+  # cancelled (its bound, a runner never acquired) or skipped — each of those is red here.
+  gate:
+    name: release gate
+    needs: [invariants, mutants, control, mutants-total, macos, terraform]
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job green — a cancelled or a skipped one is red
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          for name, job in sorted(needs.items()):
+              print(f"{name}: {job.get('result')}")
+          sys.exit(0 if needs and all(job.get("result") == "success" for job in needs.values()) else 1)
+          EOF

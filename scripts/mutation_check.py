@@ -4681,7 +4681,7 @@ MUTANTS += [
     ("M1161", "the current version released again: equal is not greater (REL1)", RELS,
      "new <= semver(current)", "new < semver(current)"),
     ("M1162", "an empty [Unreleased] released: a version with nothing in it (REL1)", RELS,
-     "    if not has_content(unreleased(changelog)):\n        refused.append(", "    if False:\n        refused.append("),
+     "    elif not has_content(unreleased(changelog)) and not frags:\n        refused.append(", "    elif False:\n        refused.append("),
     ("M1163", "a release cut from a HEAD that is not origin/main (REL1)", RELS,
      "    if head != main:\n", "    if False:\n"),
     ("M1164", "a draft created for a tag that exists already (REL1)", RELS,

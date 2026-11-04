@@ -6146,8 +6146,8 @@ MUTANTS += [
     ("M2087", "a resource of the canary named without its run's suffix: the matrix's lines collide (P04)", JIT_TF,
      '  name                = "nic-no-nsg-${var.suffix}"\n', '  name                = "nic-no-nsg"\n'),
     ("M2088", "a failed destroy deletes the canary's group, as the old fallback did (P04)", JIT_SH,
-     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 || sweep\n',
-     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 \\\n'
+     '  tf 0 destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 || sweep\n',
+     '  tf 0 destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 \\\n'
      '    || az group delete -n "$RG" --yes --no-wait >/dev/null 2>&1\n'),
     ("M2089", "azurerm 4.x and 5.x try to register resource providers the principal may not (P04)", JIT_SH,
      "  *) export ARM_RESOURCE_PROVIDER_REGISTRATIONS=none ;;\n", "  *) ;;\n"),
@@ -10298,6 +10298,37 @@ MUTANTS += [
 ]
 TESTS.update({**{f"M{n}": _CONK for n in (3387, 3388, 3389, *range(3460, 3469))},
               "M3469": "tests/unit/test_drill.py"})
+
+
+# CAN1 (#501): the azurerm canary says the end of a failed apply's error, through a filter that
+# takes out its identifiers, resource ids, GUIDs and IPs (a public log); a transient error is
+# said as such, and the line is inconclusive unless a check failed before it. M3500–M3509.
+_CAN1_R = "infra/canary/jit-terraform/redact.py"
+MUTANTS += [
+    ("M3500", "a resource id printed as it is (CAN1)", _CAN1_R,
+     "    text = rid.sub(rid_mark, text)\n", ""),
+    ("M3501", "az's stderr printed raw beside the filtered one (CAN1)", JIT_SH,
+     '  command az "$@" 2> "$OUT.az"\n  rc=$?\n',
+     '  command az "$@" 2> "$OUT.az"\n  rc=$?\n  cat "$OUT.az" >&2\n'),
+    ("M3502", "a GUID (a correlation id) printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b", re.I), "<guid>"),\n',
+     ""),
+    ("M3503", "an IPv4 address printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"(?<![\\d.])(?:\\d{1,3}\\.){3}\\d{1,3}(?:/\\d{1,2})?(?!\\d|\\.\\d)"), "<ip>"),\n', ""),
+    ("M3504", "an IPv6 address printed as it is (CAN1)", _CAN1_R,
+     "    return _IPV6.sub(_ipv6, text)\n", "    return text\n"),
+    ("M3505", "the canary's own identifiers kept when they are not GUIDs (CAN1)", _CAN1_R,
+     "        if len(value) >= _OWN_MIN:\n", "        if False:\n"),
+    ("M3506", "a line of Azure's printed bare: it can start a workflow command (CAN1)", _CAN1_R,
+     '    out += [f"   | {ln}" for ln in lines]\n', "    out += lines\n"),
+    ("M3507", "a transient error never said as such (CAN1)", _CAN1_R,
+     "        if name:\n", "        if False:\n"),
+    ("M3508", "a failed apply's output thrown away again (CAN1)", JIT_SH,
+     '|| say "terraform $1 failed (exit $rc)" "$OUT.tf" --tail 30 --verdict', "|| :"),
+    ("M3509", "a change seen before a transient error read as a passing hitch (CAN1)", JIT_SH,
+     'if [ "$CLEAN_FAIL" = 0 ] && [ -e "$WORK/.transient" ]; then', 'if [ -e "$WORK/.transient" ]; then'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(3500, 3510)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

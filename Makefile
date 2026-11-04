@@ -585,7 +585,8 @@ glorfindel-shell: build-glorfindel
 # Canary of the just-in-time isolation: re-checks, on the latest azurerm provider, the
 # Terraform behavior Glorfindel's isolation relies on (throwaway stack, ~5 min, free resources
 # only, in the group rg-eregion-canary — CANARY_RESOURCE_GROUP — that it never creates nor
-# deletes). Exit 1 = the behavior changed. Also daily in CI (canary-azurerm, OIDC).
+# deletes). Exit 1 = the behavior changed; 3 = inconclusive, a transient Azure error: re-run.
+# Also daily in CI (canary-azurerm, OIDC).
 canary-jit:
 	@infra/canary/jit-terraform/run.sh
 

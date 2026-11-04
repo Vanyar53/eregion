@@ -831,6 +831,20 @@ un secret client de longue durée, et son principal pouvait créer un groupe dan
 - **Sur un poste**, `make canary-jit` travaille dans le même groupe (`CANARY_RESOURCE_GROUP`
   pour un autre), avec la session `az` de l'opérateur ; sans le groupe, il s'arrête (code 2)
   sans rien créer.
+- **Une commande qui échoue dit la fin de son erreur, rien de réel** (CAN1, #501). Un
+  `terraform` raté (init, apply, destroy, un plan qui rend 1) imprime ses 30 dernières lignes,
+  un `az` son stderr, sur stderr, chaque ligne après `   | ` (aucune ligne d'Azure ne lance une
+  commande de workflow). Avant, `infra/canary/jit-terraform/redact.py` en retire les
+  identifiants du canari (abonnement, locataire, client), les ids de ressource
+  (`/subscriptions/…`, encodés dans une URL aussi), les GUID, un jeton, une adresse e-mail et
+  les IP (v4 et v6). Un filtre, pas `::add-mask::` : un masque ne cache qu'une valeur connue
+  d'avance — les trois identifiants, que GitHub masque déjà comme secrets —, jamais les GUID,
+  ids et adresses qu'une erreur d'Azure porte ; il ne vaut que dans Actions, pas pour un
+  `make canary-jit` collé dans une issue, et ne se teste pas hors ligne. Une erreur passagère
+  (429, `TooManyRequests`, `AnotherOperationInProgress`, `RetryableError`,
+  `ReferencedResourceNotProvisioned`) est dite comme telle ; **code 3 = non concluant** : la
+  mise en place a échoué sur elle, ou chaque vérification ratée est venue après elle — relancer
+  la ligne. Une vérification ratée avant toute erreur passagère reste un changement (code 1).
 
 **Les gestes de Jonathan, dans l'ordre** (une fois ; `<…>` à remplacer, rien de réel ici). Rien
 ne se lance depuis une session : ces commandes écrivent dans Entra ID, dans l'abonnement et dans

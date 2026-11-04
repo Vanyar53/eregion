@@ -438,6 +438,13 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 ne font taire un changement que si sa carte attend, ou si la dernière carte est la sienne, fermée par un humain.
                                 `drift_alerted_at` (relecture de L2C) : une disparition dite ne se tait que si la dernière carte de son alerte
                                 attend ou a été fermée par un humain, et que le watch n'a pas vu l'épisode fini (marque qui n'a pu s'effacer)
+  perimeter_writes.jsonl      → L1W (#492) : les écritures de paire de périmètre de Glorfindel (une par IP et sous-réseau),
+                                notées avant chaque écriture, une ligne chacune (`{"pair": "rg/nsg/règle", "at": …}`,
+                                ajoutée sans verrou, 0600, jamais à travers un lien ni ailleurs que dans un fichier
+                                ordinaire ; lue ligne à ligne ; `glorfindel/response/pair_journal.py`). Une paire notée après
+                                l'acquittement d'une carte qui la disait partie finit cet épisode, même repartie avant la
+                                passe. Jamais réécrit ni purgé (quelques lignes par blocage de périmètre) ; perdu ou
+                                illisible, le code revient à ce qu'il lisait avant L1W (la carte acquittée se tait)
   quarantine_alerts.json      → I1F : NSG de quarantaine → le changement déjà signalé (carte `quarantine_altered`) ;
                                 oublié quand le NSG est de nouveau entier, ne porte plus rien ou a disparu (relu par son ID : 404, I1S) — un acquittement ne relève pas de carte
                                 L2Q : ne fait taire un changement que si la dernière carte du NSG est la sienne, fermée par un humain (sans note)

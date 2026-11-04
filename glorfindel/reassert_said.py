@@ -112,17 +112,44 @@ def _back(said, now: dict, pair: set[str] = frozenset()) -> bool:
             return True
         # The pair's rules are judged by what they do alone (no address of a NIC): said gone while
         # read there, holding now, it was written again in another form.
-        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now:
+        # Read the same then and now, it was never written again: what tells « gone » from « holds »
+        # changed beside it, not the rule (L1W, L1H's review).
+        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now and was != is_:
             return True
     return False
 
 
-def _acknowledged(sid: str) -> bool:
-    """The latest card of this alert (`sid`, exact) was closed by the operator — Glorfindel's own
+def _acknowledged_card(sid: str) -> dict | None:
+    """The latest card of this alert (`sid`, exact), when the operator closed it — Glorfindel's own
     closures carry a note."""
     from glorfindel.reassert_cards import _history, same_sid
     last = next((e for e in reversed(_history()) if same_sid(e.get("signal_id"), sid)), None)
-    return last is not None and last.get("status") == "resolved" and not last.get("resolution")
+    return last if last is not None and last.get("status") == "resolved" and not last.get("resolution") else None
+
+
+def _acknowledged(sid: str) -> bool:
+    """The latest card of this alert (`sid`, exact) was closed by the operator."""
+    return _acknowledged_card(sid) is not None
+
+
+def _written_since(b: dict, said, sid: str) -> bool:
+    """The entry's perimeter pair, said gone by its card (absent, or there and turned) and never
+    seen back since (`said`, the baseline), written by Glorfindel since the operator acknowledged
+    that card (L1W, #492) — another VM's perimeter block, or the reassertion of another entry: the
+    pair every entry of that IP and subnet names. Written, then gone again before any pass, it reads
+    as the card read it: only Glorfindel's own journal of its writes (`pair_written_since`) shows
+    the episode is over. A pair held at the card, written again, ends nothing — it was never said
+    gone —, nor does a write before the acknowledgement, nor anything under a pending card."""
+    from glorfindel.response.pair_journal import pair_written_since
+    pair = _pair_keys(b)
+    if not pair or not isinstance(said, dict):
+        return False
+    gone = {str(n).lower() for n in said.get("gone") or []}
+    rules = said.get("rules") or {}
+    if not any(k.rsplit("/", 1)[-1] in gone or (k in rules and rules[k] is None) for k in pair):
+        return False
+    card = _acknowledged_card(sid)
+    return card is not None and pair_written_since(pair, card.get("resolved_at") or "")
 
 
 def still_said(b: dict, key: str, ip: str, sid: str, baseline, now: dict) -> bool:
@@ -132,8 +159,11 @@ def still_said(b: dict, key: str, ip: str, sid: str, baseline, now: dict) -> boo
     perimeter block wrote the pair both entries name, the VM's own rules still gone: read « better,
     not worse », the disappearance stayed unsaid. A rule written again ends the episode, as a block
     written again does (L1Q): what is still gone is said anew — the pair the card read turned too,
-    holding again (L1H, #483). A VM's own rule set right by hand, without being deleted, still says
-    nothing (RB1); under a pending card, what came back narrows the baseline (L1Q), as before."""
+    holding again (L1H, #483). Written again, then gone again before any pass, no reading shows it:
+    Glorfindel's own journal of its pair writes does (L1W, #492). A VM's own rule set right by hand,
+    without being deleted, still says nothing (RB1); under a pending card, what came back narrows the
+    baseline (L1Q), as before."""
     from glorfindel.reassert_cards import drift_said
     return (bool(b.get("drift_alerted_at")) and not _worse(baseline, now)
+            and not _written_since(b, baseline, sid)
             and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)) and drift_said(key, ip, sid))

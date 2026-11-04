@@ -10054,8 +10054,11 @@ MUTANTS += [
      '        if False:\n'),
 ]
 TESTS.update({mid: _L1E_SEQ for mid in ("M3440", "M3441")})
+# The `xfail` green since L1W (#492): M3442 is caught by the oracle's control, the code's journal lost.
 TESTS["M3442"] = ("tests/unit/test_invariant_regressions.py::"
-                  "test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm")
+                  "test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm "
+                  "tests/unit/test_invariant_regressions.py::"
+                  "test_a_perimeter_written_again_then_gone_with_its_journal_lost_is_refused")
 
 
 # SEC19 (#456): the watch's heartbeat signed by its own key, verified with the key the injector pins
@@ -10159,7 +10162,7 @@ _L1H_BACK = (f"{_L1H_UNIT}test_a_turned_pair_written_again_after_an_acknowledged
              f"{_L1H_UNIT}test_the_first_time_decides_on_a_turned_pair_written_again_as_the_second")
 _L1H_GUARD = f"{_L1H_UNIT}test_an_acknowledged_drift_whose_pair_did_not_come_back_says_nothing"
 _L1H_KEYS = f"{_L1H_UNIT}test_the_pair_of_an_entry_is_named_by_its_nsg_and_rule"
-_L1H_IF = '        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'
+_L1H_IF = '        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now and was != is_:\n'
 _L1H_PAIRS = '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}".lower() for x in ("", "-out")}\n'
 MUTANTS += [
     ("M3430", "the pair the card read turned, written again by another perimeter, never ends its acknowledged "
@@ -10168,11 +10171,11 @@ MUTANTS += [
      "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n"),
     ("M3431", "any rule the card said gone and read there, holding now, ends the episode — a VM's own rule set "
               "right by hand too: a card more (L1H, RB1)", RSD,
-     _L1H_IF, '        if k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'),
+     _L1H_IF, '        if k.rsplit("/", 1)[-1] in gone_then - gone_now and was != is_:\n'),
     ("M3432", "the pair read back while still gone — turned otherwise: a card more, no worse (L1H)", RSD,
-     _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] in gone_then:\n'),
+     _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] in gone_then and was != is_:\n'),
     ("M3433", "the pair read back though the card never said it gone — held, changed since: a card more (L1H)",
-     RSD, _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] not in gone_now:\n'),
+     RSD, _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] not in gone_now and was != is_:\n'),
     ("M3434", "the pair's outbound rule left out of the pair (L1H)", RSD,
      _L1H_PAIRS, '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}".lower() for x in ("",)}\n'),
     ("M3435", "the pair named in the entry's case, never the check's lowercase: never read back (L1H)", RSD,
@@ -10423,6 +10426,92 @@ MUTANTS += [
      "\t@case \"$$EREGION_CHECK_TIMEOUT\" in ''|0*|*[!0-9]*)", "\t@case \"\" in no)"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
+
+
+# L1W (#492): a perimeter pair another VM's block wrote again, gone again before any pass — no reading
+# shows the write: Glorfindel notes its own writes of a pair (`response/pair_journal.py`, before the write),
+# and an acknowledged card whose pair it said gone is over once that pair is noted after the
+# acknowledgement (`reassert_said._written_since`). And `_back` reads the pair back only if it reads
+# otherwise (`was != is_`, L1H's review). M3480–M3489.
+PJ = "glorfindel/response/pair_journal.py"
+_L1W_REG = "tests/unit/test_invariant_regressions.py::"
+_L1W_UNIT = "tests/unit/test_reassert.py::"
+_L1W_SEQ = f"{_L1W_REG}test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm"
+_L1W_SAID = f"{_L1W_UNIT}test_a_pair_written_again_by_another_vm_then_gone_after_an_acknowledged_card_is_said"
+_L1W_NOT = f"{_L1W_UNIT}test_an_acknowledged_drift_whose_pair_was_not_written_since_says_nothing"
+_L1W_JOURNAL = f"{_L1W_UNIT}test_the_journal_of_pair_writes_says_a_write_at_or_after_a_time"
+_L1W_NOTES = f"{_L1W_UNIT}test_a_perimeter_block_notes_its_pair_before_writing_it"
+MUTANTS += [
+    ("M3480", "an acknowledged card's pair written again by another VM, gone again before any pass, never ends "
+              "its episode: the first VM silent (L1W, the defect back)", RSD,
+     "            and not _written_since(b, baseline, sid)\n", "            and True\n"),
+    ("M3481", "the perimeter block never notes its pair: the write between two passes unknown (L1W)", BLK,
+     '        note_pair_write(f"{nsg_rg}/{nsg_name}", rule_name)\n', "        pass\n"),
+    ("M3482", "the pair noted after its write: one that reached Azure and then raised (a 429 after it) unnoted "
+              "(L1W)", BLK,
+     '        note_pair_write(f"{nsg_rg}/{nsg_name}", rule_name)\n'
+     '        self._put_deny_rule(nsg_rg, nsg_name, rule_name, "Inbound", priority["inbound"], src=ip, dst="*")\n'
+     '        self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority["outbound"],\n'
+     '                            src="*", dst=ip)\n',
+     '        self._put_deny_rule(nsg_rg, nsg_name, rule_name, "Inbound", priority["inbound"], src=ip, dst="*")\n'
+     '        self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority["outbound"],\n'
+     '                            src="*", dst=ip)\n'
+     '        note_pair_write(f"{nsg_rg}/{nsg_name}", rule_name)\n'),
+    ("M3483", "a write before the acknowledgement ends the episode: the card said what was, said again — and "
+              "again after each acknowledgement (L1W)", RSD,
+     '    return card is not None and pair_written_since(pair, card.get("resolved_at") or "")\n',
+     '    return card is not None and pair_written_since(pair, "")\n'),
+    ("M3484", "a pair written again ends the episode of a pending card too: the card that still says what is "
+              "replaced (L1W)", RSD,
+     "    card = _acknowledged_card(sid)\n", "    card = _acknowledged_card(sid) or {}\n"),
+    ("M3485", "a pair held at the card, written again by another VM, ends the episode: the VM's own rules said "
+              "again, put back outside human_only (L1W)", RSD,
+     '    if not any(k.rsplit("/", 1)[-1] in gone or (k in rules and rules[k] is None) for k in pair):\n',
+     "    if False:\n"),
+    ("M3486", "the pair noted in the case Azure gave it, never the check's lowercase: never found (L1W)", PJ,
+     '{"pair": f"{nsg}/{rule}".lower(), "at"', '{"pair": f"{nsg}/{rule}", "at"'),
+    ("M3487", "a line of the journal cut by a full disk ends its reading: the writes after it unseen (L1W)", PJ,
+     "            continue                     # a line cut by a full disk, or not ours\n",
+     "            return False\n"),
+    ("M3488", "a turned pair read the same, holding now, read as written again: a card more (L1W, L1H's review)",
+     RSD, _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'),
+    ("M3489", "the journal refused stops the perimeter block (L1W)", PJ,
+     "    except OSError as exc:\n        log.warning(", "    except ValueError as exc:\n        log.warning("),
+]
+TESTS.update({
+    "M3480": f"{_L1W_SEQ} {_L1W_SAID} "
+             f"{_L1W_UNIT}test_the_first_time_decides_on_a_pair_written_again_then_gone_as_the_second",
+    "M3481": f"{_L1W_SEQ} {_L1W_NOTES}",
+    "M3482": _L1W_NOTES,
+    "M3483": f"{_L1W_NOT} {_L1W_UNIT}test_a_pair_written_again_by_another_vm_then_gone_is_said_once_not_in_a_loop",
+    "M3484": _L1W_SAID,
+    "M3485": _L1W_NOT,
+    "M3486": f"{_L1W_JOURNAL} {_L1W_NOTES}",
+    "M3487": _L1W_JOURNAL,
+    "M3488": f"{_L1W_UNIT}test_a_turned_pair_holding_now_is_back_only_if_it_reads_otherwise",
+    "M3489": f"{_L1W_UNIT}test_a_journal_that_cannot_be_written_never_stops_the_block",
+})
+# L1W's review: the journal read line by line, a byte out of UTF-8 replaced (one forged line silenced
+# all of it), and never a link nor anything but a regular file in its place (`O_NOFOLLOW`, `fstat`, as
+# eregion_core/channel_reader.py). M3530–M3534.
+_L1W_LINK = f"{_L1W_UNIT}test_a_journal_that_is_not_a_regular_file_is_never_followed"
+MUTANTS += [
+    ("M3530", "the journal decoded whole and strict: one line out of UTF-8 silences every write (L1W, review)", PJ,
+     '    text = raw.decode("utf-8", errors="replace")\n', '    text = raw.decode("utf-8")\n'),
+    ("M3531", "a link in the journal's place followed: written into its target (L1W, review)", PJ,
+     '_JOURNAL_FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)',
+     '_JOURNAL_FLAGS = getattr(os, "O_NONBLOCK", 0)'),
+    ("M3532", "anything but a regular file taken for the journal: a pipe someone reads written into (L1W, "
+              "review)", PJ, "        if not stat.S_ISREG(os.fstat(fd).st_mode):\n", "        if False:\n"),
+    ("M3533", "the journal read through a link: another file's lines taken for Glorfindel's writes (L1W, "
+              "review)", PJ, "        fd = _open_journal(_pair_journal(), os.O_RDONLY)\n",
+     "        fd = os.open(_pair_journal(), os.O_RDONLY)\n"),
+    ("M3534", "the journal written through a link, opened as before the review (L1W, review)", PJ,
+     "        fd = _open_journal(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n",
+     "        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n"),
+]
+TESTS.update({"M3530": f"{_L1W_UNIT}test_a_line_out_of_utf8_never_silences_the_journal",
+              **{f"M{n}": _L1W_LINK for n in range(3531, 3535)}})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

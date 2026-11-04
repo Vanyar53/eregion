@@ -161,11 +161,16 @@ def fragments(root: Path) -> tuple[list[tuple[str, list[tuple[str, str]]]], list
     fragment malformed, or a file that is not one (README.md, which says the form, aside)."""
     where = root / CHANGES
     found, faults = [], []
+    if where.is_symlink():
+        return found, [f"{CHANGES} : un lien symbolique — le dossier des fragments est celui du dépôt"]
     if not where.is_dir():
         return found, faults
     for path in sorted(where.iterdir(), key=lambda p: p.name.casefold()):
         rel = f"{CHANGES}/{path.name}"
         if path.name == "README.md":
+            continue
+        if path.is_symlink():   # another fragment read twice, or a file from outside changes/
+            faults.append(f"{rel} : un lien symbolique — un fragment est un fichier à lui")
             continue
         if not path.is_file() or not FRAGMENT.fullmatch(path.name):
             faults.append(f"{rel} : changes/ ne tient que des fragments <lot>.md (et son README)")
@@ -418,6 +423,7 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
             (root / name).write_text(text, encoding="utf-8")
         step = "add"
         run(["git", "add", *staged], root)
+        step = "rm"
         if removed:   # in the version's commit: a fragment is never assembled twice
             run(["git", "rm", "-q", "--", *removed], root)
         step = "commit"
@@ -428,21 +434,27 @@ def prepare(root: Path, version: str, title: str, *, dry_run: bool = False, day:
         out = run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", subject, "--body", body], root)
         say(out.stdout.strip())
     except (Refused, OSError) as e:
-        raise Halfway(_halfway(step, branch, str(e))) from None
+        raise Halfway(_halfway(step, branch, str(e), removed)) from None
     say(roadmap_said)
     say(f"\nPR ouverte. Après sa fusion : make release-draft VERSION={version}")
     return 0
 
 
-def _halfway(step: str, branch: str, why: str) -> str:
+def _halfway(step: str, branch: str, why: str, removed: list[str] | tuple = ()) -> str:
     """What is left after a failure past `git switch -c`, and how to go on or back. Back: the
     branch's changes dropped, staged ones too (reset --hard), then where make release started —
-    `checkout -` takes a detached HEAD back, as `switch -` does not —, the branch deleted."""
+    `checkout -` takes a detached HEAD back, as `switch -` does not —, the branch deleted. The
+    fragments of changes/ (CI5) are removed in the version's commit: their `git rm` is said whole,
+    when it is left to do."""
     back = f"git reset -q --hard && git checkout -q - && git branch -D {branch}"
+    rm = f"git rm -q -- {' '.join(removed)} && " if removed else ""
     left, on = {
         "write": ("la branche, des fichiers peut-être à moitié écrits",
                   "revenir en arrière (ci-dessous), corriger, puis relancer make release"),
-        "add": ("la branche, les fichiers changés, rien de commité", "git add … && git commit, puis push et PR"),
+        "add": ("la branche, les fichiers changés, rien de commité",
+                f"git add … && {rm}git commit, puis push et PR"),
+        "rm": ("la branche, les fichiers changés et indexés, les fragments de changes/ pas encore retirés",
+               f"{rm}git commit, puis push et PR"),
         "commit": ("la branche, les fichiers changés, rien de commité", "git commit, puis push et PR"),
         "push": ("la branche et son commit, en local seulement",
                  f"git push -u origin {branch} && gh pr create --base main --head {branch}"),

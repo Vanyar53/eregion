@@ -4704,7 +4704,7 @@ TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1160, 1170)})
 ADS = "scripts/agents_discord.py"
 MUTANTS += [
     ("M1430", "a push or a pull request that fails after the branch exists said « nothing written » (REL1)", RELS,
-     "        raise Halfway(_halfway(step, branch, str(e))) from None\n", "        raise\n"),
+     "        raise Halfway(_halfway(step, branch, str(e), removed)) from None\n", "        raise\n"),
     ("M1431", "an [Unreleased] of headings only released: a version with nothing in it (REL1)", RELS,
      '    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())\n',
      "    return bool(text.strip())\n"),
@@ -10350,6 +10350,10 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
 
 
+# The mutants end here. A new block goes above this line: the `__main__` guard stays the last
+# statement of this file, or what follows it is never measured (MCG, #448;
+# tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).
+
 # The blocks above stay where they are. A lot's mutants now go into a file of their own,
 # scripts/mutants/<lot>.py, loaded here (CI5, #512): two lots in flight never write the same lines
 # of this file, so the merge of one never puts the other in conflict. A lot's file defines
@@ -10385,11 +10389,6 @@ for _lot in LOTS.values():
 for _lot in LOTS.values():
     for _mid, _also in _lot["TESTS_ALSO"].items():
         TESTS[_mid] = f"{TESTS.get(_mid, INVARIANTS)} {_also}"
-
-
-# The mutants end here: the `__main__` guard stays the last statement of this file, or what
-# follows it is never measured (MCG, #448; tests/unit/test_mutant_anchors.py and
-# scripts/mutant_anchors.py fail otherwise).
 
 
 

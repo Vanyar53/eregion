@@ -1508,6 +1508,55 @@ def test_a_malformed_fragment_is_refused_and_nothing_is_written(repo, tmp_path, 
     assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["pr", "create"]] == []
 
 
+@pytest.mark.parametrize("target, said", [
+    ("LA.md", "changes/LB.md : un lien symbolique"),                 # LA assembled twice, unseen by lost()
+    ("../outside.md", "changes/LB.md : un lien symbolique"),         # a file from outside changes/
+])
+def test_a_fragment_that_is_a_symbolic_link_is_refused(repo, tmp_path, capsys, target, said):
+    (repo / "outside.md").write_text("### Fixed\n- from outside\n", encoding="utf-8")
+    _with_fragments(repo, {"LA.md": FRAG_A})
+    (repo / "changes" / "LB.md").symlink_to(target)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "a link")
+    git(repo, "push", "-q", "origin", "main")
+    before, head = files(repo), git(repo, "rev-parse", "HEAD")
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 1
+    out = capsys.readouterr().out
+    assert refused(out, said) and "rien n'a été écrit" in out, out
+    assert files(repo) == before and git(repo, "rev-parse", "HEAD") == head
+
+
+def test_the_directory_of_fragments_as_a_symbolic_link_is_refused(repo, tmp_path, capsys):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "LX.md").write_text("### Fixed\n- from elsewhere\n", encoding="utf-8")
+    (repo / "changes").symlink_to(elsewhere)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "a linked directory")
+    git(repo, "push", "-q", "origin", "main")
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 1
+    assert refused(capsys.readouterr().out, "changes : un lien symbolique")
+
+
+def test_a_git_rm_that_fails_says_it_whole_and_how_to_go_on(repo, tmp_path, capsys, monkeypatch):
+    _with_fragments(repo, {"LB.md": FRAG_B, "LA.md": FRAG_A})
+    git(repo, "switch", "-q", "--detach", "origin/main")
+    real = rel.run
+
+    def run(cmd, cwd, **kw):
+        if cmd[:2] == ["git", "rm"]:
+            raise rel.Refused("`git rm -q …` a échoué (128) : refused by the test")
+        return real(cmd, cwd, **kw)
+    monkeypatch.setattr(rel, "run", run)
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 2
+    out = capsys.readouterr().out
+    assert "échec à l'étape « rm »" in out and "les fragments de changes/ pas encore retirés" in out
+    assert "Reprendre : git rm -q -- changes/LA.md changes/LB.md && git commit, puis push et PR" in out
+    monkeypatch.setattr(rel, "run", real)
+    _went_back(repo, out)
+    assert sorted(p.name for p in (repo / "changes").iterdir()) == ["LA.md", "LB.md", "README.md"]
+
+
 def test_without_fragments_the_cut_is_as_before(repo, capsys):
     """The transition: [Unreleased] alone is cut as it was written, its sections in its order."""
     _with_fragments(repo, {})

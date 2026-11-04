@@ -65,7 +65,7 @@ COMPONENTS: dict[str, Component] = {
         absent_deps=GLORFINDEL_ONLY_DEPS + ("litellm",),
         tests=(
             "test_exercise_channel.py", "test_exercise_plan.py", "test_exercise_request.py", "test_exercise_runner.py", "test_injector_channels.py", "test_llm_call.py", "test_models.py",
-            "test_run_report.py", "test_runs_layout.py", "test_drill.py",
+            "test_run_report.py", "test_runs_layout.py", "test_drill.py", "test_drill_proposal.py",
         ),
     ),
     # Glorfindel — the watch, the graph, the response, its providers. The console
@@ -93,7 +93,7 @@ COMPONENTS: dict[str, Component] = {
             "test_annatar_atomic.py", "test_annatar_cli.py", "test_annatar_detection.py",
             "test_annatar_run_exit.py", "test_annatar_wire.py", "test_campaign_channel.py", "test_campaign_declared.py",
             "test_campaign_manifest.py",
-            "test_campaign_planner.py", "test_campaign_runner.py", "test_campaign_synthesizer.py",
+            "test_campaign_planner.py", "test_campaign_runner.py", "test_campaign_synthesizer.py", "test_campaign_drill.py",
             "test_engine.py", "test_injector_guards.py", "test_inscription.py", "test_orodruin.py", "test_parser.py",
             "test_signals.py",
         ),
@@ -112,7 +112,7 @@ COMPONENTS: dict[str, Component] = {
 TOGETHER = (
     "test_activity_logs.py", "test_own_run_command.py", "test_agents_discord.py", "test_analysis_rules_parity.py", "test_entra_detection.py", "test_analysis_separation.py",
     "test_analysis_triage.py", "test_api.py", "test_campaign_changes.py", "test_campaign_replay.py", "test_campaign_report.py",
-    "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_shots.py", "test_docs_home.py", "test_console_dagorlad_request.py", "test_console_dagorlad_drills.py", "test_console_dagorlad_follow.py", "test_console_blocks.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
+    "test_components.py", "test_console.py", "test_console_dagorlad.py", "test_console_shots.py", "test_docs_home.py", "test_console_dagorlad_request.py", "test_console_dagorlad_drills.py", "test_console_dagorlad_follow.py", "test_console_dagorlad_annatar.py", "test_console_blocks.py", "test_containment.py", "test_console_escaping.py", "test_console_exercises.py", "test_profiles.py",
     "test_coverage.py",
     "test_restore_moment.py",
     "test_signal_origin.py", "test_arm_urls.py",

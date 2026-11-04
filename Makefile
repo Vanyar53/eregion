@@ -884,10 +884,17 @@ glorfindel-host-pull: glorfindel-host-known
 # IA1: then says whether the analysis AI still reasons with another model (analysis/separation.py):
 # Glorfindel's model shared with the analysis makes every campaign report refused on H0. Its
 # advice on a refusal (exit 2) only; an error (1, an image before IA1) is said; never fails.
+# OL1: first, host.env with the new model, on a copy, held to the rule of host_env.py --check (the
+# key its provider reads): refused, nothing is written, here nor on the VM.
 glorfindel-host-model: glorfindel-host-known
 	@test -n "$(MODEL)" || { echo "MODEL=anthropic/<modèle> requis (ou MODEL=default)"; exit 1; }
 	@case "$(MODEL)" in *[!A-Za-z0-9._/:-]*) echo "MODEL invalide : $(MODEL)"; exit 1;; esac
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@test -f $(HOST_ENV) || { echo "$(HOST_ENV) manquant (make glorfindel-host-env)"; exit 1; }
+	@c=$$(mktemp); sed '/^GLORFINDEL_LLM_MODEL=/d' $(HOST_ENV) > $$c; \
+	 [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> $$c; \
+	 $(PYTHON) infra/glorfindel-host/host_env.py --check $$c >/dev/null; rc=$$?; rm -f $$c; \
+	 [ $$rc -eq 0 ] || { echo "  rien d'écrit, ni ici ni sur H0 : $(HOST_ENV) doit d'abord porter ce que lit le fournisseur de $(MODEL) (OL1)"; exit 1; }
 	@f=$(HOST_ENV); sed -i '/^GLORFINDEL_LLM_MODEL=/d' $$f; \
 	 [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> $$f
 	@$(HOST_SSH) 'cd eregion && sed -i "/^GLORFINDEL_LLM_MODEL=/d" .env && \

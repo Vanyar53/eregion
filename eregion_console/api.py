@@ -2871,7 +2871,7 @@ def _watch_refusal() -> str:
     SEC5) — "" when one does."""
     from eregion_core import watch_gate
     try:
-        return watch_gate.refusal()
+        return watch_gate.refusal(record=False)   # SEC19: shown, never the injectors' counter
     except Exception as exc:
         return f"the watch's heartbeat unreadable: {exc}"[:300]
 

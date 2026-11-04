@@ -82,6 +82,9 @@ def test_a_detection_in_a_window_is_delivered_before_the_heartbeat():
                  "rule": "t1136-001-v1", "watch_run_id": "watch-t1136-001-v1-20261020T121559Z",
                  "exercise_run": w["run_id"]}
     beat = store.blobs["heartbeat.json"]
+    # SEC19: signed by the watch's key (drawn in tmp by conftest) — its counter, its key, its signature.
+    signed = {k: beat.pop(k) for k in ("seq", "key", "sig")}
+    assert isinstance(signed["seq"], int) and signed["key"].startswith("SHA256:") and len(signed["sig"]) == 88
     assert beat == {"at": (T0 + timedelta(minutes=3)).isoformat(),
                     "since": (T0 - timedelta(hours=1)).isoformat(),
                     "windows": [w["run_id"]],

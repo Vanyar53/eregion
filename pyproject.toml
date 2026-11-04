@@ -41,6 +41,12 @@ annatar = [
     # experiments (eregion_core/experiment.py) and calls IMDS and the channels with them.
     "jsonschema>=4.0",
     "requests>=2.31",
+    # SEC19 (N-03): the injectors verify the watch's signed heartbeat (eregion_core/watch_key.py,
+    # Ed25519). The watch signs with it too: locked in requirements/glorfindel.txt through
+    # azure-identity (msal, pyjwt) — declared in `glorfindel` with its next lock change, which
+    # brings the harness (H3): declared there alone, it changes that lock's text and asks a paid
+    # attestation for nothing. tests/unit/test_watch_key.py holds it in both locks.
+    "cryptography>=42",
 ]
 glorfindel = [
     "azure-mgmt-compute>=30.0",

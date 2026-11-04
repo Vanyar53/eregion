@@ -51,7 +51,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "READ_TARGETS", lambda subscription: VMS)
     api._targets_cache.update(at=0.0, value=None)
     monkeypatch.setattr(api, "_board_rules", lambda: ACTIVE_RULES)
-    monkeypatch.setattr(watch_gate, "refusal", lambda now=None: "")
+    monkeypatch.setattr(watch_gate, "refusal", lambda now=None, **kw: "")
     return console()
 
 
@@ -128,7 +128,7 @@ def test_the_browser_says_two_identifiers_never_the_verdict(client):
 
 
 def test_never_without_glorfindel(client, monkeypatch):
-    monkeypatch.setattr(watch_gate, "refusal", lambda now=None: "no heartbeat for 12 min")
+    monkeypatch.setattr(watch_gate, "refusal", lambda now=None, **kw: "no heartbeat for 12 min")
     p = _plan(client, f"T1110.001@{GONDOLIN}")
     assert p["wires"][0]["code"] == "no_watch"
     assert p["checks"][0]["ok"] is False and "12 min" in p["checks"][0]["text"]

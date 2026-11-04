@@ -366,7 +366,8 @@ def test_each_container_receives_only_its_secrets():
     # A new secret-looking variable must be placed above, never handed to every container.
     passed = set().union(*env.values())
     unplaced = {v for v in passed if _SECRET_WORDS.search(v) and v not in SECRETS}
-    assert unplaced <= {"AZURE_API_BASE", "AZURE_API_VERSION"}, unplaced
+    # EREGION_WATCH_KEY: the watch's PUBLIC key, pinned by the injectors and the console (SEC19).
+    assert unplaced <= {"AZURE_API_BASE", "AZURE_API_VERSION", "EREGION_WATCH_KEY"}, unplaced
     for service, needed in NEEDED.items():
         assert needed - set(env[service]) == set(), service
     # No container takes the whole .env: env_file would hand it every secret.

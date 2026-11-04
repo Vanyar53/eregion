@@ -1069,3 +1069,203 @@ def test_the_pinned_syft_is_the_one_read_on_its_release():
     assert mod.SYFT_VERSION == "v1.51.1"
     assert mod.SYFT_SHA256 == "8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3"
     assert mod.SYFT_URL.endswith("/v1.51.1/syft_1.51.1_linux_amd64.tar.gz")
+
+
+# ── SEC19 (R-13): the attestation signed by its author's own key, offline ───────────────
+
+def _keys():
+    from .fake_sigstore import pinned, placeholder_key
+    me, other = placeholder_key("maintainer"), placeholder_key("someone else")
+    return me, other, pinned(me)
+
+
+def _blob(tmp_path, data=b'{"schema": "eregion.harness/2"}\n', key="me"):
+    from .fake_sigstore import blob_bundle
+    me, other, _ = _keys()
+    f = tmp_path / "harness.json"
+    f.write_bytes(data)
+    if key:
+        (tmp_path / "harness.json.sigstore.json").write_text(blob_bundle(data, me if key == "me" else other))
+    return f
+
+
+def test_a_file_signed_by_the_key_pinned_holds_offline(pim, sig, tmp_path):
+    f = _blob(tmp_path)
+    pim.verify_blob(f, pim.bundle_of(f), _keys()[2], sig.path)
+    (call,) = sig.calls()
+    assert call[:2] == ["verify-blob", "--key"] and call[-1] == str(f)
+    assert "--insecure-ignore-tlog" in call and "--bundle" in call
+    assert not any(a.startswith("--certificate") for a in call)          # no identity, no certificate
+
+
+@pytest.mark.parametrize("key, said", [(None, "n'est pas signée"), ("other", "signée d'une autre clé")])
+def test_a_file_unsigned_or_signed_by_another_key_is_refused(pim, sig, tmp_path, key, said):
+    f = _blob(tmp_path, key=key)
+    with pytest.raises(pim.Unverified, match=said):
+        pim.verify_blob(f, pim.bundle_of(f), _keys()[2], sig.path)
+
+
+def test_a_signature_of_another_file_is_refused(pim, sig, tmp_path):
+    f = _blob(tmp_path)
+    f.write_bytes(b'{"schema": "eregion.harness/2", "changed": true}\n')
+    with pytest.raises(pim.Unverified, match="ne couvre pas ce fichier"):
+        pim.verify_blob(f, pim.bundle_of(f), _keys()[2], sig.path)
+
+
+@pytest.mark.parametrize("key", ["", "   ", "pas-une-clé", "AAAA", "QUJD" * 20])
+def test_without_a_readable_key_nothing_is_believed_and_cosign_is_never_asked(pim, sig, tmp_path, key):
+    """M3259: a key empty, not base64, too short, not a DER — refused before cosign runs."""
+    f = _blob(tmp_path)
+    with pytest.raises(pim.Unverified, match="EREGION_HARNESS_KEY"):
+        pim.verify_blob(f, pim.bundle_of(f), key, sig.path)
+    assert sig.calls() == []
+
+
+def test_a_cosign_not_pinned_never_verifies_a_file(pim, sig, tmp_path, monkeypatch):
+    f = _blob(tmp_path)
+    monkeypatch.setattr(pim, "COSIGN_SHA256", "0" * 64)
+    with pytest.raises(pim.Unverified, match="altéré"):
+        pim.verify_blob(f, pim.bundle_of(f), _keys()[2], sig.path)
+
+
+def test_the_pinned_form_is_the_body_of_cosign_pub_and_its_hint_cosign_s():
+    """EREGION_HARNESS_KEY: cosign.pub without its PEM lines, on one line (a compose .env holds one
+    line per key); its hint, the base64 of the DER's sha256 — what cosign writes in a bundle
+    (measured on 03/11)."""
+    import base64
+    import hashlib
+    spec = importlib.util.spec_from_file_location("published_image_form", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    me, _other, line = _keys()
+    pem = mod.pem_of(me)
+    assert pem.startswith("-----BEGIN PUBLIC KEY-----\n") and max(map(len, pem.splitlines())) <= 64
+    assert mod.pinned_of_pem(pem) == line and "\n" not in line
+    assert mod.key_der(line) == me
+    assert mod.key_hint(me) == base64.b64encode(hashlib.sha256(me).digest()).decode()
+
+
+def test_signing_is_offline_and_keeps_a_bundle_without_certificate(pim, sig, tmp_path, capsys):
+    """Jonathan's gesture: cosign sign-blob --key, with a signing config that names no service — no
+    log, no certificate; a bundle that would carry one is removed, never committed."""
+    from .fake_sigstore import blob_bundle
+    me = _keys()[0]
+    f = tmp_path / "harness.json"
+    f.write_text("{}\n")
+    key = tmp_path / "cosign.key"
+    key.write_text("encrypted")
+    seen = []
+
+    def runner(argv):
+        seen.append(argv)
+        cfg = json.loads(Path(argv[argv.index("--signing-config") + 1]).read_text())
+        assert cfg == {"mediaType": "application/vnd.dev.sigstore.signingconfig.v0.2+json",
+                       "rekorTlogConfig": {}, "tsaConfig": {}}
+        Path(argv[argv.index("--bundle") + 1]).write_text(blob_bundle(f.read_bytes(), me))
+        return _done(argv)
+    assert pim.sign_blob(f, key, sig.path, runner=runner) == 0
+    assert seen[0][:4] == [str(sig.path), "sign-blob", "--key", str(key)] and seen[0][-1] == str(f)
+    assert "--yes" not in seen[0]          # a cosign that would send anything still asks first
+    assert pim.bundle_refusal(pim.bundle_of(f)) == "" and "à commiter" in capsys.readouterr().out
+
+    def with_cert(argv):
+        Path(argv[argv.index("--bundle") + 1]).write_text(json.dumps(
+            {"verificationMaterial": {"publicKey": {"hint": "x"}, "certificate": {"rawBytes": "x"}}}))
+        return _done(argv)
+    assert pim.sign_blob(f, key, sig.path, runner=with_cert) == 1
+    assert not pim.bundle_of(f).exists()
+    assert pim.sign_blob(tmp_path / "absent.json", key, sig.path, runner=runner) == 1
+    link = tmp_path / "link.key"
+    link.symlink_to(key)
+    assert pim.sign_blob(f, link, sig.path, runner=runner) == 1
+
+
+@pytest.mark.parametrize("material, said", [({"publicKey": {"hint": "h"}, "tlogEntries": [{}]}, "journal"),
+                                            ({"publicKey": {"hint": "h"}, "x509CertificateChain": {}}, "certificat"),
+                                            ({}, "sans la clé")])
+def test_a_bundle_with_a_certificate_or_a_log_entry_never_goes_in_the_repository(pim, tmp_path, material, said):
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps({"verificationMaterial": material}))
+    assert said in pim.bundle_refusal(b)
+
+
+def test_the_key_pair_is_drawn_once_off_the_repository_never_over_one(pim, sig, tmp_path, capsys):
+    """make harness-key: cosign draws the pair in its directory (0700, the private half 0600, its
+    passphrase typed — never passed); the line to pin printed; a link, or a key already there, refused."""
+    me = _keys()[0]
+    seen = []
+
+    def run_in(argv, cwd):
+        seen.append((argv, cwd))
+        (Path(cwd) / "cosign.key").write_text("encrypted")
+        (Path(cwd) / "cosign.pub").write_text(pim.pem_of(me))
+        return _done(argv)
+    d = tmp_path / "harness"
+    assert pim.generate_key(d, sig.path, run_in=run_in, tty=True) == 0
+    assert seen[0][0] == [str(sig.path), "generate-key-pair", "--output-key-prefix", "cosign"] and seen[0][1] == d
+    import stat
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700 and stat.S_IMODE((d / "cosign.key").stat().st_mode) == 0o600
+    out = capsys.readouterr().out
+    assert f"EREGION_HARNESS_KEY={_keys()[2]}" in out and pim.key_hint(me)[:12] in out
+    assert pim.generate_key(d, sig.path, run_in=run_in, tty=True) == 1 and len(seen) == 1      # never over a key
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "elsewhere")
+    assert pim.generate_key(link, sig.path, run_in=run_in, tty=True) == 1 and len(seen) == 1
+
+
+def test_the_command_line_verifies_a_file(pim, sig, tmp_path):
+    f = _blob(tmp_path)
+    me, other, line = _keys()
+    from .fake_sigstore import pinned
+    assert pim.main(["verify-blob", str(f), "--pinned", line, "--cosign", str(sig.path)]) == 0
+    assert pim.main(["verify-blob", str(f), "--pinned", pinned(other), "--cosign", str(sig.path)]) == 1
+    pub = tmp_path / "cosign.pub"
+    pub.write_text(pim.pem_of(me))
+    assert pim.main(["verify-blob", str(f), "--pub", str(pub), "--cosign", str(sig.path)]) == 0
+
+
+def test_the_passphrase_is_never_passed_by_the_environment(pim, sig, tmp_path, monkeypatch):
+    """COSIGN_PASSWORD exported would sign, or draw a key, without anything typed: filtered out of
+    what cosign runs in, for the signature as for the key."""
+    assert "COSIGN_PASSWORD" not in pim.typed_env({"COSIGN_PASSWORD": "x", "PATH": "/bin"})
+    assert pim.typed_env({"PATH": "/bin"}) == {"PATH": "/bin"}
+    monkeypatch.setenv("COSIGN_PASSWORD", "exported-by-mistake")
+    seen = []
+
+    def run(argv, **kw):
+        seen.append(kw.get("env"))
+        return _done(argv, code=1)
+    monkeypatch.setattr(pim.subprocess, "run", run)
+    f = tmp_path / "harness.json"
+    f.write_text("{}\n")
+    key = tmp_path / "cosign.key"
+    key.write_text("encrypted")
+    assert pim.sign_blob(f, key, sig.path) == 1
+    assert pim.generate_key(tmp_path / "harness", sig.path, tty=True) == 1
+    assert len(seen) == 2 and all(env is not None and "COSIGN_PASSWORD" not in env for env in seen)
+
+
+def test_the_key_is_drawn_only_at_a_terminal_and_never_under_the_repository(pim, sig, tmp_path, capsys):
+    calls = []
+
+    def run_in(argv, cwd):
+        calls.append(argv)
+        return _done(argv)
+    assert pim.generate_key(tmp_path / "harness", sig.path, run_in=run_in, tty=False) == 1
+    assert "pas de terminal" in capsys.readouterr().err
+    assert pim.generate_key(ROOT / "requirements" / "harness-key", sig.path, run_in=run_in, tty=True) == 1
+    assert "dans le dépôt" in capsys.readouterr().err
+    assert calls == [] and not (ROOT / "requirements" / "harness-key").exists()
+
+
+def test_a_private_key_is_never_committed():
+    ignored = (ROOT / ".gitignore").read_text().splitlines()
+    assert "cosign.key" in ignored and "*.key" in ignored
+
+
+def test_verifying_without_a_key_says_the_gesture(pim, sig, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("EREGION_HARNESS_KEY_DIR", str(tmp_path / "no-key-here"))
+    f = _blob(tmp_path)
+    assert pim.main(["verify-blob", str(f), "--cosign", str(sig.path)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("✗ aucune clé à vérifier") and "PINNED=" in err and "Traceback" not in err

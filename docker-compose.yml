@@ -122,6 +122,9 @@ x-injector: &injector
   EREGION_CHANNEL_SCOPE: ${EREGION_CHANNEL_SCOPE:-}
   EREGION_WATCH_CHANNEL: ${EREGION_WATCH_CHANNEL:-}
   EREGION_WATCH_CHANNEL_SCOPE: ${EREGION_WATCH_CHANNEL_SCOPE:-}
+  # SEC19 (N-03) : la clé publique de la watch, épinglée de ce côté (make watch-key) — le battement
+  # n'est cru que signé par elle. Vide : refusé, et le refus dit le geste.
+  EREGION_WATCH_KEY: ${EREGION_WATCH_KEY:-}
 
 services:
   watch:
@@ -158,6 +161,9 @@ services:
       - ${HOME}/.cache/chroma:/root/.cache/chroma
       # IA0 (#167) : l'index campaign_runs du rapport de campagne, sur le disque de l'hôte.
       - ${HOME}/.eregion/analysis:/root/.eregion/analysis
+      # SEC19 (N-03) : la clé de la watch, tirée à son premier démarrage — monté ici seulement : ni
+      # la console, ni le bot, ni les injecteurs (eregion_core/watch_key.py).
+      - ${HOME}/.eregion/watch-key:/root/.eregion/watch-key
       - ${EREGION_CONFIG:-./glorfindel-config.yaml}:/app/glorfindel-config.yaml:ro
       - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro
     develop:
@@ -244,6 +250,8 @@ services:
       GLORFINDEL_WARROOM_TOKEN: ${GLORFINDEL_WARROOM_TOKEN:-}
       # The names, besides the loopback ones, the console answers under (comma-separated).
       EREGION_CONSOLE_HOSTS: ${EREGION_CONSOLE_HOSTS:-}
+      # SEC19 : la clé publique de la watch — Dagorlad montre la garde comme un injecteur la lit.
+      EREGION_WATCH_KEY: ${EREGION_WATCH_KEY:-}
     volumes:
       # SEC18 : runs/console en écriture — la console y note les actions de l'opérateur
       # (manual_actions.jsonl) et la vérification d'une action approuvée, pour le fil (SEC3) ; les

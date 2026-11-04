@@ -1,0 +1,401 @@
+"""SEC19 (N-03, #456): the watch's key — its heartbeat signed, verified by the injectors with a key
+pinned on their side.
+
+**The key.** An Ed25519 pair the watch alone holds. Its private half is drawn at the first start of
+a watch that has none, in ``~/.eregion/watch-key/watch_ed25519`` (32 raw bytes, mode 0600, its
+directory 0700): a directory only the watch's service mounts (docker-compose.yml) — never in
+``~/.glorfindel`` (the console and the bot mount it, the injectors a part of it), never under
+``runs/``. A key file readable by others, a link, another owner, a file of another size: refused,
+never used, and said (``KeyUnavailable``). ``glorfindel watch-key`` prints its public half and its
+fingerprint, for the operator to pin (``make watch-key``, ``make glorfindel-host-watch-key``).
+
+**The heartbeat signed.** What the watch writes for the injectors (``~/.glorfindel/injectors/
+watch_heartbeat``) and in the return channel (``heartbeat.json``) carries ``seq`` (a counter that
+only goes up: the milliseconds of its date, one more than the last when two fall in the same one),
+``key`` (the signer's fingerprint, said, never trusted) and ``sig``: the signature of the domain
+``DOMAIN_BEAT`` followed by the canonical JSON of every other field (sorted keys, no spaces) —
+the date, the perimeter, and on the channel ``since`` and ``windows`` as well.
+
+**The injectors' side** (eregion_core/watch_gate.py): the public key comes from
+``EREGION_WATCH_KEY`` only — the injector's environment (orodruin.env on Orodruin, the operator's on
+a workstation), never the channel nor the heartbeat itself. Refused, before any call to the cloud:
+no key pinned (the gesture said), a heartbeat unsigned, signed by another key, whose signature does
+not hold, or whose counter is below one already seen (``remember``: the highest counter seen per
+key, in ``runs/orodruin/.watch_seen.json``, the injectors' own directory; an older heartbeat
+replayed after a newer one).
+
+**FS1 takes this key up** (#413, docs/design/watch-key.md): one key, two uses, each signed under
+its own domain — a heartbeat never reads as an action of the queue, nor the reverse.
+
+``cryptography`` is imported where a key is drawn, used or checked, never at import: the
+fingerprint of a public key, and reading the pin, need the standard library only.
+"""
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import stat
+import threading
+from datetime import datetime
+from pathlib import Path
+
+KEY_ENV = "EREGION_WATCH_KEY"
+DOMAIN_BEAT = "eregion.watch-beat/1"
+# FS1 (#413) will sign its queue under "eregion.action-queue/1" — another domain, the same key.
+PREFIX = "ed25519:"
+KEY_FILE = "watch_ed25519"
+SEEN_NAME = ".watch_seen.json"
+SIGNED = ("seq", "key", "sig")       # what signing adds to a heartbeat
+_PIN = re.compile(r"^ed25519:([A-Za-z0-9+/]{43}=)$")
+_SIG = re.compile(r"^[A-Za-z0-9+/]{86}==$")
+
+# The tests point these at their own tmp dir (tests/unit/conftest.py): never the operator's.
+KEY_DIR: Path | None = None
+SEEN_FILE: Path | None = None
+
+PIN_GESTURE = (f"pin the watch's public key: {KEY_ENV}=ed25519:… in orodruin.env (Orodruin) or in "
+               "your environment (a workstation) — `make glorfindel-host-watch-key` (H0) or "
+               "`make watch-key` (this host) gives it")
+
+
+class KeyUnavailable(Exception):
+    """The watch's key cannot be used: what is wrong, and what to do."""
+
+
+def key_dir() -> Path:
+    return KEY_DIR if KEY_DIR is not None else Path.home() / ".eregion" / "watch-key"
+
+
+def fingerprint(public: bytes) -> str:
+    """``SHA256:`` and the base64 of the sha256 of the 32 raw bytes, without padding — the form
+    of an SSH fingerprint."""
+    return "SHA256:" + base64.b64encode(hashlib.sha256(public).digest()).decode().rstrip("=")
+
+
+def public_text(public: bytes) -> str:
+    return PREFIX + base64.b64encode(public).decode()
+
+
+def message(domain: str, body: dict) -> bytes:
+    """What is signed: the domain, a newline, then the canonical JSON of the body without ``sig``."""
+    rest = {k: v for k, v in body.items() if k != "sig"}
+    return domain.encode() + b"\n" + json.dumps(rest, sort_keys=True, separators=(",", ":"),
+                                                ensure_ascii=True).encode()
+
+
+# ── The watch's side ──────────────────────────────────────────────────────────────────
+
+class Signer:
+    """The watch's private key, in memory; ``sign`` under a domain, ``next_seq`` that only rises."""
+
+    def __init__(self, private: bytes):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        self._key = Ed25519PrivateKey.from_private_bytes(private)
+        self.public = self._key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        self.fingerprint = fingerprint(self.public)
+        self._seq = 0
+        self._lock = threading.Lock()
+
+    def next_seq(self, at: datetime) -> int:
+        with self._lock:
+            self._seq = max(self._seq + 1, int(at.timestamp() * 1000))
+            return self._seq
+
+    def sign(self, domain: str, body: dict) -> str:
+        return base64.b64encode(self._key.sign(message(domain, body))).decode()
+
+
+def _misplaced(directory: Path) -> str:
+    """Why the key may not live here — "" when it may: never in ~/.glorfindel (mounted by the
+    console, the bot, the injectors for their part), never under a runs/ directory."""
+    from eregion_core import runs_layout
+    real = directory.resolve()
+    for place, said in (((Path.home() / ".glorfindel").resolve(),
+                         "~/.glorfindel, which the console, the bot and the injectors mount"),
+                        (runs_layout.ROOT.resolve(), "runs/, which the injectors mount")):
+        if real == place or place in real.parents:
+            return f"{directory} is under {said}"
+    return ""
+
+
+def _held_dir(directory: Path) -> None:
+    """The key's directory: made 0700 when absent; a link or another owner's refused; its mode
+    brought back to 0700 when it is ours and wider."""
+    try:
+        st = os.lstat(directory)
+    except FileNotFoundError:
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        os.mkdir(directory, 0o700)
+        st = os.lstat(directory)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise KeyUnavailable(f"{directory} is not a directory (a link?): the key is not kept there")
+    if st.st_uid != os.getuid():
+        raise KeyUnavailable(f"{directory} belongs to uid {st.st_uid}, not to the watch's user "
+                             f"({os.getuid()}) — made by docker as root? `sudo chown {os.getuid()} {directory}`")
+    if st.st_mode & 0o077:
+        os.chmod(directory, 0o700)
+
+
+def _read_key(path: Path) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise KeyUnavailable(f"{path} is not a regular file")
+        if st.st_uid != os.getuid():
+            raise KeyUnavailable(f"{path} belongs to uid {st.st_uid}, not to the watch's user")
+        if st.st_mode & 0o077:
+            raise KeyUnavailable(f"{path} is readable by others (mode {stat.S_IMODE(st.st_mode):o}): "
+                                 "never used — a key seen by others is drawn again (remove it, then pin "
+                                 "the new public key)")
+        data = os.read(fd, 64)
+    finally:
+        os.close(fd)
+    if len(data) != 32:
+        raise KeyUnavailable(f"{path} is not an Ed25519 key ({len(data)} bytes, 32 expected): remove it, "
+                             "let the watch draw another at its next start, then pin the new public key "
+                             "(make watch-key, make glorfindel-host-watch-key)")
+    return data
+
+
+def _sweep(directory: Path) -> None:
+    """The temporaries of a draw a crash cut (between the link and the unlink): each a copy of the
+    private key — removed, a link removed itself, never what it points to."""
+    prefix = f".{KEY_FILE}."
+    with os.scandir(directory) as it:
+        for e in it:
+            if e.name.startswith(prefix) and not e.is_dir(follow_symlinks=False):
+                os.unlink(os.path.join(directory, e.name))
+
+
+def _fsync_dir(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def load_or_create(directory: Path | None = None) -> Signer:
+    """The watch's key: read from its directory, drawn there when absent — whole, in a file of its
+    own (``O_EXCL``, a unique name), fsync'd, then published by a link and the directory fsync'd:
+    a full disk or a crash never leaves a partial key under its name, and two watches starting
+    together never write two. A temporary a crash left (``.watch_ed25519.*``, a copy of the private
+    key) is swept first — removed, never followed. Raises KeyUnavailable."""
+    directory = Path(directory) if directory is not None else key_dir()
+    why = _misplaced(directory)
+    if why:
+        raise KeyUnavailable(why)
+    try:
+        _held_dir(directory)
+        _sweep(directory)
+        path = directory / KEY_FILE
+        try:
+            return Signer(_read_key(path))
+        except FileNotFoundError:
+            pass
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
+        raw = Ed25519PrivateKey.generate().private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+        # Drawn whole in a file of its own, then published by a link: the key's name never holds a
+        # partial key (a full disk, a crash), and two watches starting together never write two.
+        tmp = directory / f".{KEY_FILE}.{os.getpid()}.{os.urandom(6).hex()}"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            try:
+                if os.write(fd, raw) != len(raw):
+                    raise OSError(f"short write of {tmp}")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            try:
+                os.link(tmp, path)
+            except FileExistsError:        # another watch drew it first: that one is the key
+                pass
+        finally:
+            tmp.unlink(missing_ok=True)
+        _fsync_dir(directory)
+        return Signer(_read_key(path))
+    except KeyUnavailable:
+        raise
+    except ImportError as e:
+        raise KeyUnavailable(f"cryptography absent ({e}): no key") from None
+    except OSError as e:
+        raise KeyUnavailable(f"{directory}: {e}") from None
+
+
+def read_public(directory: Path | None = None) -> bytes:
+    """The public half of the key already drawn — never draws one. Raises KeyUnavailable."""
+    directory = Path(directory) if directory is not None else key_dir()
+    path = directory / KEY_FILE
+    try:
+        return Signer(_read_key(path)).public
+    except FileNotFoundError:
+        raise KeyUnavailable(f"no key in {directory}: the watch draws it at its first start "
+                             "(make glorfindel-start, or H0 deployed) — or this container does not mount it "
+                             "(only the watch's does: in make glorfindel-shell it is not mounted; make "
+                             "watch-key on the host reads it)") from None
+    except ImportError as e:
+        raise KeyUnavailable(f"cryptography absent ({e})") from None
+    except OSError as e:
+        raise KeyUnavailable(f"{path}: {e}") from None
+
+
+_shared: Signer | None = None
+_shared_lock = threading.Lock()
+
+
+def shared() -> tuple[Signer | None, str]:
+    """The watch process's signer, loaded once it loads: (signer, "") or (None, why). Tried again
+    at each call while it fails — a directory fixed is taken up without a restart."""
+    global _shared
+    with _shared_lock:
+        if _shared is not None and KEY_DIR is None:
+            return _shared, ""
+        try:
+            signer = load_or_create()
+        except KeyUnavailable as e:
+            return None, str(e)
+        if KEY_DIR is None:
+            _shared = signer
+        return signer, ""
+
+
+def sign_beat(body: dict, signer: Signer, at: datetime) -> dict:
+    """The heartbeat with its counter, its signer's fingerprint and its signature."""
+    out = {k: v for k, v in body.items() if k not in SIGNED}
+    out["seq"] = signer.next_seq(at)
+    out["key"] = signer.fingerprint
+    out["sig"] = signer.sign(DOMAIN_BEAT, out)
+    return out
+
+
+# ── The injectors' side ───────────────────────────────────────────────────────────────
+
+def parse_pin(text: str) -> tuple[bytes | None, str]:
+    """``ed25519:<base64 of 32 bytes>`` → (the key, ""); else (None, why)."""
+    text = (text or "").strip()
+    if not text:
+        return None, f"no watch key pinned ({KEY_ENV}): {PIN_GESTURE}"
+    m = _PIN.match(text)
+    if not m:
+        return None, f"{KEY_ENV} is not a watch key (ed25519:<base64 of 32 bytes>): {PIN_GESTURE}"
+    return base64.b64decode(m.group(1)), ""
+
+
+def pinned() -> tuple[bytes | None, str]:
+    """The key this injector trusts: its environment's, nothing else."""
+    return parse_pin(os.environ.get(KEY_ENV, ""))
+
+
+def _short(fp: str) -> str:
+    return fp[:19] + "…" if len(fp) > 19 else fp
+
+
+def verify_beat(body: dict, key: bytes) -> str:
+    """Why this heartbeat is not one the pinned key signed — "" when it is."""
+    sig = body.get("sig")
+    if sig is None:
+        return ("unsigned: a watch older than this injector (update Glorfindel), or one whose key is "
+                "unavailable (its log says why)")
+    want = fingerprint(key)
+    said = body.get("key")
+    if said != want:
+        return (f"signed by another key ({_short(str(said or 'none'))}) than the one pinned "
+                f"({_short(want)}): another watch, or a key drawn again — pin the new one if it is yours")
+    seq = body.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+        return "its counter (seq) is not a number"
+    if not isinstance(sig, str) or not _SIG.match(sig):
+        return "its signature is not one (64 bytes in base64)"
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except ImportError as e:
+        return f"cryptography absent ({e}): the signature cannot be checked"
+    try:
+        Ed25519PublicKey.from_public_bytes(key).verify(base64.b64decode(sig), message(DOMAIN_BEAT, body))
+    except (InvalidSignature, ValueError, binascii.Error):
+        return "its signature does not hold: changed after it was signed, or not signed by the pinned key"
+    return ""
+
+
+def seen_file() -> Path:
+    if SEEN_FILE is not None:
+        return SEEN_FILE
+    from eregion_core import runs_layout
+    return runs_layout.dir_of(runs_layout.ORODRUIN) / SEEN_NAME
+
+
+def remember(body: dict) -> str:
+    """Why this signed heartbeat is a replay — "" when it is not, and then its counter is kept as
+    the highest seen for its key. The same heartbeat read twice (its counter and its signature
+    those already seen) is no replay: the gate reads it before each action. Unwritable, the
+    file is not a refusal: what was read is still checked."""
+    path = seen_file()
+    fp, seq, sig = str(body.get("key")), body.get("seq"), body.get("sig")
+    try:
+        seen = json.loads(path.read_text())
+        if not isinstance(seen, dict):
+            seen = {}
+    except (OSError, ValueError):
+        seen = {}
+    last = seen.get(fp) if isinstance(seen.get(fp), dict) else {}
+    top = last.get("seq")
+    if isinstance(top, int) and not isinstance(top, bool):
+        if seq < top or (seq == top and sig != last.get("sig")):
+            return (f"its counter ({seq}) is not above one already seen ({top}): an older heartbeat "
+                    "replayed — or the watch's clock went back across a restart (the counter is its "
+                    "milliseconds): fix the clock, or wait until it passes the counter seen")
+        if seq == top:
+            return ""
+    seen[fp] = {"seq": seq, "sig": sig}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(seen, sort_keys=True))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return ""
+
+
+def proof(body: dict | None, *, record: bool = True) -> str:
+    """Why this heartbeat (as read: a dict, or None for a bare date) is not authenticated — ""
+    when the pinned key signed it and it replays nothing seen. ``record``: keep its counter (an
+    injector does; the console, which only shows the gate, does not)."""
+    key, why = pinned()
+    if key is None:
+        return why
+    if not isinstance(body, dict):
+        return "unsigned: a bare date, the watch's own file or an older watch (update Glorfindel)"
+    why = verify_beat(body, key)
+    if why or not record:
+        return why
+    return remember(body)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m eregion_core.watch_key public [DIR]``: the public key and its fingerprint."""
+    import sys
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] != "public":
+        print("usage: python -m eregion_core.watch_key public [DIR]")
+        return 2
+    try:
+        public = read_public(Path(args[1]) if len(args) > 1 else None)
+    except KeyUnavailable as e:
+        print(f"✗ {e}")
+        return 1
+    print(f"export {KEY_ENV}={public_text(public)}")
+    print(f"# empreinte : {fingerprint(public)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

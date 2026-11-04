@@ -285,6 +285,9 @@ def test_the_bench_needs_its_files_and_its_fingerprint(repo, home):
     names = failed(doctor.run_checks("bench", good_env(ORO_SSH_FINGERPRINT=None), home, repo, probes()))
     for said in ("ORO_SSH_FINGERPRINT", "orodruin.env absent", "host.env absent", "terraform.tfvars absent"):
         assert any(said in n for n in names), said
+    (repo / "glorfindel-config.yaml").unlink()
+    (cfg,) = [c for c in doctor.configuration(repo, "bench") if c.status == doctor.FAIL]
+    assert "make celebrimbor-output" in cfg.fix          # the bench's config is Celebrimbor's fragment
 
 
 def test_an_unknown_profile_is_refused(capsys):

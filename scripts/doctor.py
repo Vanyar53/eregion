@@ -168,7 +168,9 @@ def tools(profile: str, p: Probes, repo: Path) -> list[Check]:
                        else Check(g, "docker compose absent", FAIL,
                                   "installer le greffon compose : https://docs.docker.com/compose/install/"))
     out.append(Check(g, "az (Azure CLI)", OK) if p.which("az")
-               else Check(g, "az absent : il crée le principal et lit l'espace Log Analytics", FAIL,
+               else Check(g, "az absent : " + ("Terraform s'authentifie par lui, les rôles et orodruin-fingerprint l'appellent"
+                                              if profile == "bench" else "il crée le principal et lit l'espace Log Analytics"),
+                          FAIL,
                           "installer Azure CLI : https://learn.microsoft.com/cli/azure/install-azure-cli, puis az login"))
     if profile == "bench":
         for tool, why, fix in (
@@ -267,15 +269,17 @@ def variables(profile: str, env: Mapping[str, str]) -> list[Check]:
     return out
 
 
-def configuration(repo: Path) -> list[Check]:
+def configuration(repo: Path, profile: str = "discover") -> list[Check]:
     g = "configuration"
     path = repo / "glorfindel-config.yaml"
+    # On the bench, the file is Celebrimbor's fragment (its workspace, its vault) — not the example.
+    make = ("make celebrimbor-output, son fragment dans glorfindel-config.yaml" if profile == "bench"
+            else "cp glorfindel-config.yaml.example glorfindel-config.yaml")
     if path.is_dir():
         return [Check(g, "glorfindel-config.yaml est un dossier : docker l'a créé, le fichier manquait", FAIL,
-                      "rmdir glorfindel-config.yaml && cp glorfindel-config.yaml.example glorfindel-config.yaml")]
+                      f"rmdir glorfindel-config.yaml, puis {make}")]
     if not path.is_file():
-        return [Check(g, "glorfindel-config.yaml absent : la watch ne détecterait rien", FAIL,
-                      "cp glorfindel-config.yaml.example glorfindel-config.yaml")]
+        return [Check(g, "glorfindel-config.yaml absent : la watch ne détecterait rien", FAIL, make)]
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as e:
@@ -301,6 +305,7 @@ def configuration(repo: Path) -> list[Check]:
     good = [w for w in workspaces if w and w != WORKSPACE_PLACEHOLDER and _GUID.match(w)]
     out.append(Check(g, "l'espace Log Analytics renseigné (workspace_id)", OK) if good
                else Check(g, "aucun workspace_id renseigné : la watch ne lirait aucun journal", FAIL,
+                          make if profile == "bench" else
                           "az monitor log-analytics workspace show -g <groupe> -n <espace> --query customerId -o tsv "
                           "→ monitoring_backends[0].workspace_id"))
     return out
@@ -414,7 +419,7 @@ def bench(repo: Path, env: Mapping[str, str]) -> list[Check]:
 def run_checks(profile: str, env: Mapping[str, str], home: Path, repo: Path,
                probes: Probes | None = None) -> list[Check]:
     p = probes or Probes()
-    checks = tools(profile, p, repo) + variables(profile, env) + configuration(repo)
+    checks = tools(profile, p, repo) + variables(profile, env) + configuration(repo, profile)
     if profile == "discover":
         checks += state(home, repo, p.uid()) + port(env, p)
     else:

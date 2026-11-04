@@ -2,17 +2,33 @@
 
 [← le guide bleu](bleu.md) · [le banc](banc.md)
 
-**Pour Jonathan.** Les deux guides ont été rejoués de zéro le 04/11 (GS1, #520), dans un conteneur jetable : `docker run --rm python:3.12`, un clone de la branche, aucun montage de l'hôte. Le rejeu s'est arrêté là où il faudrait Azure, un modèle payant ou un démon Docker. Voici ce qui reste, dans l'ordre des guides, et ce qu'on doit y voir. Une étape vue telle quelle se coche ici, dans la PR qui la mesure.
+**Pour Jonathan.** Le guide bleu a été rejoué de zéro le 04/11 (GS1, #520), dans un conteneur jetable : `docker run --rm python:3.12`, un clone de la branche, aucun montage de l'hôte. Le rejeu s'est arrêté là où il faudrait Azure, un modèle payant ou un démon Docker. Voici ce qui reste, dans l'ordre des guides, et ce qu'on doit y voir. Une étape vue telle quelle se coche ici, dans la PR qui la mesure.
 
 ## Ce que le rejeu a couvert
 
-- Le clone, et `make doctor` avant toute variable : les outils manquants et les variables vides, chacun avec sa commande.
-- `.envrc` rempli de valeurs factices, et `glorfindel-config.yaml` avec un espace et `action_backends: []` : `make doctor` vert sur les variables et la configuration.
-- `make install` en 58 s, puis `make doctor` lit la configuration comme la watch la lit.
-- La règle bruyante coupée dans `~/.glorfindel/client_rules.yaml` : `glorfindel rules` la dit désactivée par la couche du client.
-- La console de démonstration, sans aucune variable d'Azure (`eregion console`) : son jeton tiré dans `~/.eregion/console/token` (mode 600), `make console-url` qui le donne. `make doctor` voit alors le port pris.
-- `annatar list`, `annatar validate --all`, `annatar run … --dry-run`, sans Azure. Un `annatar run` sans `--dry-run` sur le poste est refusé avant tout appel : « no live Glorfindel watch ».
-- `make -n profile-discover` : ce que la cible lancerait.
+Trois rejeux du guide bleu, en utilisateur non root (uid 1000), et un de `make doctor PROFILE=bench` :
+
+- **Le clone, puis `make doctor` avant toute variable.** Huit points rouges, chacun avec sa commande : docker, az, l'abonnement, le tenant, le principal de la watch, `GLORFINDEL_READ_ONLY`, la clé du modèle, la configuration.
+- **`.envrc` rempli de valeurs factices**, `glorfindel-config.yaml` avec un espace et `action_backends: []`. `make doctor` est vert sur les variables, le modèle, la configuration, les dossiers et le port. Restent rouges ce que le conteneur n'a pas : az et le démon Docker.
+- **Le CLI de Docker et son greffon compose, sans démon.**
+  - `docker compose config` rend la watch avec `GLORFINDEL_READ_ONLY=1` et la clé du modèle. La console a la même lecture seule, sans la clé du modèle, et publie le port 7007 seulement.
+  - `make profiles-check` est vert.
+  - `make -n profile-discover` montre la construction de l'image à l'UID de l'opérateur, les dossiers créés, puis `docker compose up -d`.
+- **`make install` en 54 à 58 s.** `make doctor` lit alors la configuration comme la watch la lit.
+- **La règle bruyante coupée** dans `~/.glorfindel/client_rules.yaml` : `glorfindel rules` la dit « désactivée par la couche du client ».
+- **La console de démonstration**, sans aucune variable d'Azure (`eregion console`).
+  - Elle répond en 3 s. Son jeton est tiré dans `~/.eregion/console/token` (mode 600), et `make console-url` le donne.
+  - `/` sans jeton répond 401. `/api/state` répond 200, avec `read_only: true` et `autonomy_default: human_only`.
+  - `make doctor` voit alors le port pris, par une console lancée hors de docker.
+- **Annatar, sans Azure.** `annatar list`, `annatar validate --all` (6 sur 6) et `annatar run … --dry-run` passent. Un `annatar run` sans `--dry-run` sur le poste est refusé avant tout appel : « no live Glorfindel watch ». L'indice renvoie maintenant au guide du banc.
+- **`make doctor PROFILE=bench`** sur un clone neuf : les outils du banc, les empreintes et les trois fichiers du banc, chacun avec sa commande ; `PROFILE=prod` est refusé, code 2.
+
+**Les accrocs trouvés, et corrigés.**
+- `docker info --format` sort en 0 sans démon : `make doctor` disait « docker répond ». Il exige maintenant une version du serveur (M3629).
+- Le bot, que le profil ne lance pas, était dit absent.
+- Sur le banc, la configuration se corrigeait par l'exemple, et non par `make celebrimbor-output`.
+- Le refus d'un run sur le poste ne disait pas où une attaque part.
+- Côté documentation : l'étape rouge du README et le lien cassé de `decouvrir.md` (avant le rejeu).
 
 ## Le guide bleu, sur Azure
 

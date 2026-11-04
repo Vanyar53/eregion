@@ -3228,3 +3228,261 @@ def test_l1o_a_pass_cut_between_its_two_times_ends_the_episode_too(monkeypatch, 
         (new,) = after
         assert "une deuxième fois" in new["reason"], new["reason"]
         assert _l1o_writes(c) == []
+
+
+# ── L1W (#492): a perimeter pair another VM wrote again, gone again before any pass ──
+
+_L1W_PAIR_GONE = {"verified": False, "missing_rules": ["pair", "pair-out"], "open_nics": ["nic"],
+              "rules_seen": dict(_PAIR_SEEN)}
+_L1W_PAIR_HELD = {"verified": True, "held_missing": ["r", "r-out"], "held_by_perimeter": ["nic"],
+                      "perimeter_rule": "pair",
+                      "rules_seen": {"rg/nsg-subnet/pair": "a1", "rg/nsg-subnet/pair-out": "a2", **_VM_SEEN}}
+
+
+def _another_vms_perimeter(pair: str = "pair") -> None:
+    """Another VM blocked on the same subnet: the pair, one per IP and subnet, written by Glorfindel."""
+    from glorfindel.response.pair_journal import note_pair_write
+    note_pair_write("rg/NSG-Subnet", pair)
+
+
+def _pair_said(first: dict, acknowledged: bool, written: str, mode: str = "human_only", merged: bool = False):
+    """A perimeter entry (merged with the VM's own rules or not) read `first` — said, in human_only —, the
+    card acknowledged or left pending; the pair written by another VM's perimeter block `written`
+    (« after » the acknowledgement, « before » it, « never »), gone again before any pass: read `first`
+    again, in `mode`. The connector, the card, the cards pending after."""
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                      threat_port=22)
+    if merged:
+        _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                          threat_port=22)
+    c = _connector(verify_blk=first)
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    (card,) = _block_cards()
+    if written == "before":
+        _another_vms_perimeter()
+    if acknowledged:
+        escalations.resolve(card["id"])
+    if written == "after":
+        _another_vms_perimeter()
+    c.verify_block_ip.return_value = first
+    reassert_active(c, AutonomyConfig(default=mode))
+    return c, card, _block_cards()
+
+
+@pytest.mark.parametrize("acknowledged", [True, False], ids=["acknowledged", "pending"])
+def test_a_pair_written_again_by_another_vm_then_gone_after_an_acknowledged_card_is_said(acknowledged):
+    """L1W (#492): web of rg-app2 blocked on its subnet, the pair taken off, said in human_only, the
+    card acknowledged; web of rg-app1 blocked on the same subnet writes the pair again, taken off again
+    before any pass. The reading is the card's — no pass saw it back —, and rg-app2/web's entry stayed
+    silent behind its acknowledged card. Glorfindel's journal of its pair writes ends the episode: said
+    anew, nothing written in human_only. Under a pending card, the card still says what is: nothing more."""
+    c, card, after = _pair_said(_L1W_PAIR_GONE, acknowledged, "after")
+    if acknowledged:
+        (new,) = after
+        assert new["id"] != card["id"] and "a disparu" in new["reason"], new["reason"]
+    else:
+        assert [e["id"] for e in after] == [card["id"]]
+    c.block_suspicious_ip.assert_not_called()                  # human_only: said, never written
+
+
+def test_a_pair_written_again_by_another_vm_then_gone_is_said_once_not_in_a_loop():
+    """Said anew once: the pass after reads the same, its card pending — nothing; acknowledged in turn,
+    no write of the pair since — nothing, pass after pass."""
+    c, _, after = _pair_said(_L1W_PAIR_GONE, True, "after")
+    (new,) = after
+    reassert_active(c, AutonomyConfig(default="human_only"))
+    assert [e["id"] for e in _block_cards()] == [new["id"]]
+    escalations.resolve(new["id"])
+    for _ in range(2):
+        reassert_active(c, AutonomyConfig(default="human_only"))
+        assert not _block_cards(), [e["reason"] for e in _block_cards()]
+    c.block_suspicious_ip.assert_not_called()
+
+
+def test_a_pair_written_again_by_another_vm_then_gone_is_put_back_once_outside_human_only():
+    """The same outside human_only, never put back before: a new episode — the pair written once (the
+    first time, L1Qs), said « reposé une fois »."""
+    c, card, after = _pair_said(_L1W_PAIR_GONE, True, "after", mode="non_disruptive")
+    assert [k.kwargs.get("scope") for k in c.block_suspicious_ip.call_args_list] == ["subnet"]
+    assert [e for e in after if e["id"] != card["id"] and "reposé une fois" in e["reason"]], \
+        [e["reason"] for e in after]
+    assert _load_block_entries(_RID)[0].get("reasserted_at")
+
+
+@pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
+@pytest.mark.parametrize("case", ["written before the acknowledgement", "never written", "another pair written",
+                                  "the pair held at the card"])
+def test_an_acknowledged_drift_whose_pair_was_not_written_since_says_nothing(case, mode):
+    """Only a write after the acknowledgement, only of the entry's pair, only of a pair the card said
+    gone (L1W): written between the card and its acknowledgement — gone again when the operator closed
+    it, the card still said what was —; never written; another IP's pair (another rule) written; the
+    pair held at the card, the VM's own rules gone, the pair written again since — never said gone,
+    nothing over. Nothing said, nothing written."""
+    if case == "written before the acknowledgement":
+        c, _, after = _pair_said(_L1W_PAIR_GONE, True, "before", mode=mode)
+    elif case == "never written":
+        c, _, after = _pair_said(_L1W_PAIR_GONE, True, "never", mode=mode)
+    elif case == "another pair written":
+        c, _, _ = _pair_said(_L1W_PAIR_GONE, True, "never", mode=mode)
+        _another_vms_perimeter("glorfindel-block-another-ip")
+        reassert_active(c, AutonomyConfig(default=mode))
+        after = _block_cards()
+    else:
+        c, _, after = _pair_said(_L1W_PAIR_HELD, True, "after", mode=mode, merged=True)
+    assert not after, [e["reason"] for e in after]
+    c.block_suspicious_ip.assert_not_called()
+
+
+def test_the_first_time_decides_on_a_pair_written_again_then_gone_as_the_second():
+    """The first time decides as the second (L1Qs, `_to_write`): the acknowledged card's pair written
+    since, gone again — the episode is over, the pair written; not written since: nothing."""
+    from glorfindel.reassert_cards import new_pass
+    from glorfindel.reassert_perimeters import _to_write
+
+    _save_block_state("vm", _IP, _RID, nsg="rg/nsg-subnet", nsg_scope="subnet", rule="pair", scoped=False,
+                      threat_port=22)
+    reassert_active(_connector(verify_blk=_L1W_PAIR_GONE), AutonomyConfig(default="human_only"))
+    (card,) = _block_cards()
+    escalations.resolve(card["id"])
+    new_pass()
+    b = _load_block_entries(_RID)[0]
+    assert not _to_write(b, _L1W_PAIR_GONE, _ACT, "vm", _RID, _IP, _RID)
+    _another_vms_perimeter()
+    new_pass()
+    assert _to_write(b, _L1W_PAIR_GONE, _ACT, "vm", _RID, _IP, _RID)
+
+
+def test_the_journal_of_pair_writes_says_a_write_at_or_after_a_time():
+    """`pair_written_since`: a write of one of the pairs at the time or after it; before it, another pair,
+    a line cut (a full disk), a journal absent — no. Beside the blocks' states, wherever they go."""
+    import json
+
+    import glorfindel.actions as actions
+    from glorfindel.response.pair_journal import _pair_journal, note_pair_write, pair_written_since
+
+    pairs = {"rg/nsg-subnet/pair", "rg/nsg-subnet/pair-out"}
+    assert _pair_journal().parent == actions._BLOCK_STATE_DIR.parent
+    assert not pair_written_since(pairs, "")                         # no journal
+    _pair_journal().parent.mkdir(parents=True, exist_ok=True)
+    _pair_journal().write_text('{"pair": "rg/nsg-subnet/pair", "at": "2026-11-0')   # cut by a full disk
+    note_pair_write("rg/NSG-Subnet", "Pair")                         # on a line of its own all the same
+    at = json.loads(_pair_journal().read_text().splitlines()[-1])["at"]
+    assert pair_written_since(pairs, at) and pair_written_since(pairs, "")
+    assert not pair_written_since(pairs, "2999-01-01T00:00:00+00:00")
+    assert not pair_written_since({"rg/nsg-subnet/other"}, "")
+    assert pair_written_since(pairs, "not a time")                   # an unknown acknowledgement: any write
+
+
+def test_a_perimeter_block_notes_its_pair_before_writing_it(monkeypatch):
+    """The Azure adapter notes the pair before its write: a write that reached Azure and then raised
+    (a 429 after it, a crash) is noted too — a card more, never one less (L1W)."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector
+    from glorfindel.response.pair_journal import pair_written_since
+
+    monkeypatch.setattr(actions, "_save_block_state", lambda *a, **k: None)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_subnet_nsg", lambda nic: ("rg", "Subnet-NSG"))
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    net.security_rules.begin_create_or_update.side_effect = RuntimeError("429 after the write")
+    connector._network = net
+    with pytest.raises(RuntimeError):
+        connector.block_suspicious_ip("192.31.196.47", _RID, scope="subnet")
+    assert pair_written_since({"rg/subnet-nsg/glorfindel-block-192-31-196-47"}, "")
+
+
+def test_a_journal_that_cannot_be_written_never_stops_the_block(monkeypatch, caplog):
+    """The journal refused (a directory in its place, a full disk): the perimeter block is written all the
+    same, the refusal logged — never in the way of the block (L1W)."""
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector
+    from glorfindel.response.pair_journal import _pair_journal
+
+    _pair_journal().mkdir(parents=True)
+    monkeypatch.setattr(actions, "_save_block_state", lambda *a, **k: None)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_subnet_nsg", lambda nic: ("rg", "subnet-nsg"))
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    connector._network = net
+    with caplog.at_level("WARNING"):
+        out = connector.block_suspicious_ip("192.31.196.47", _RID, scope="subnet")
+    assert out["status"].startswith("blocked"), out               # partial: the mock's NICs unread
+    assert net.security_rules.begin_create_or_update.call_count == 2
+    assert "written unnoted" in caplog.text
+
+
+def test_a_line_out_of_utf8_never_silences_the_journal():
+    """L1W's review: one line forged out of UTF-8 made the whole read raise — every write unseen, L1W's
+    case silent again. Read line by line, the byte replaced: that line is no pair of ours, the others
+    still read."""
+    from glorfindel.response.pair_journal import _pair_journal, note_pair_write, pair_written_since
+
+    _pair_journal().parent.mkdir(parents=True, exist_ok=True)
+    _pair_journal().write_bytes(b'{"pair": "rg/nsg-subnet/\xff\xfe", "at": "2026-11-04T00:00:00+00:00"}')
+    note_pair_write("rg/nsg-subnet", "pair")
+    assert pair_written_since({"rg/nsg-subnet/pair"}, "")
+
+
+@pytest.mark.parametrize("what", ["a link", "a pipe"])
+def test_a_journal_that_is_not_a_regular_file_is_never_followed(monkeypatch, caplog, what):
+    """L1W's review: a link (or a pipe) in the journal's place is never followed — opened `O_NOFOLLOW`,
+    then `fstat`, as `eregion_core/channel_reader.py`: its target untouched, nothing read from it, the
+    perimeter block written all the same, the journal said refused."""
+    import os
+
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector
+    from glorfindel.response.pair_journal import _pair_journal, pair_written_since
+
+    journal = _pair_journal()
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    target = journal.parent / "elsewhere.jsonl"
+    target.write_text('\n{"pair": "rg/subnet-nsg/glorfindel-block-192-31-196-47", "at": "2026-11-04T00:00:00+00:00"}')
+    before = target.read_bytes()
+    reader = None
+    if what == "a link":
+        journal.symlink_to(target)
+    else:
+        os.mkfifo(journal)
+        reader = os.open(journal, os.O_RDONLY | os.O_NONBLOCK)    # someone reads it: a write would pass
+    monkeypatch.setattr(actions, "_save_block_state", lambda *a, **k: None)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_subnet_nsg", lambda nic: ("rg", "subnet-nsg"))
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    connector._network = net
+    with caplog.at_level("WARNING"):
+        out = connector.block_suspicious_ip("192.31.196.47", _RID, scope="subnet")
+    assert out["status"].startswith("blocked"), out
+    assert net.security_rules.begin_create_or_update.call_count == 2
+    assert "written unnoted" in caplog.text
+    assert target.read_bytes() == before                             # never written through the link
+    assert not pair_written_since({"rg/subnet-nsg/glorfindel-block-192-31-196-47"}, "")   # nor read
+    if reader is not None:
+        try:
+            assert os.read(reader, 4096) == b""                          # nothing went into the pipe
+        finally:
+            os.close(reader)
+
+
+@pytest.mark.parametrize(("now_seen", "back"), [("turned", False), ("a deny again", True)],
+                         ids=["read the same", "written again"])
+def test_a_turned_pair_holding_now_is_back_only_if_it_reads_otherwise(now_seen, back):
+    """`_back` (L1H's review, L1W): the pair the card said gone while it read it there — turned —, holding
+    now, was written again only if it reads otherwise: read the same, what tells « gone » from « holds »
+    changed beside it."""
+    from glorfindel.reassert_said import _back, _pair_keys, _situation
+
+    out = "turned-out" if now_seen == "turned" else "a2"
+    now = {**_L1W_PAIR_HELD,
+           "rules_seen": {"rg/nsg-subnet/pair": now_seen, "rg/nsg-subnet/pair-out": out, **_VM_SEEN}}
+    pair = _pair_keys({"scoped": False, "nsg": "rg/nsg-subnet", "rule": "pair"})
+    assert _back(_situation(_PAIR_TURNED), _situation(now), pair) is back

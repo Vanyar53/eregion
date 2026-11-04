@@ -73,10 +73,18 @@ class ScenarioParser:
                 data = yaml.safe_load(f)
         except Exception as e:
             return ValidationResult(valid=False, errors=[f"YAML parse error: {e}"])
+        if not isinstance(data, dict):
+            # An empty file, a list, a bare string: said as a cause, never a TypeError that
+            # stops `annatar validate --all` before the other scenarios (AV1, #524).
+            kind = "empty" if data is None else f"a {type(data).__name__}"
+            return ValidationResult(valid=False, errors=[
+                f"a scenario is a YAML mapping of its fields; this file is {kind}"])
 
         # A non-local-script engine (atomic, R1) runs the experiment by its engine_ref;
         # it carries no local steps. local-script still needs its steps.
-        engine = data.get("engine", DEFAULT_ENGINE) if isinstance(data, dict) else DEFAULT_ENGINE
+        engine = data.get("engine", DEFAULT_ENGINE)
+        if not isinstance(engine, str):   # a list, a mapping: never a TypeError, said as written
+            engine = repr(engine)
         if engine not in KNOWN_ENGINES:
             errors.append(
                 f"engine '{engine}' is not one of {sorted(KNOWN_ENGINES)} — Annatar cannot "
@@ -85,14 +93,16 @@ class ScenarioParser:
         required = list(REQUIRED_FIELDS)
         if engine != DEFAULT_ENGINE:
             required.remove("steps")
-            if not (isinstance(data, dict) and data.get("engine_ref")):
+            if not data.get("engine_ref"):
                 errors.append(f"engine '{engine}' requires 'engine_ref'")
 
         for field_name in required:
             if field_name not in data:
                 errors.append(f"Missing required field: '{field_name}'")
 
-        if "target" in data:
+        if "target" in data and not isinstance(data["target"], dict):
+            errors.append("target must be a mapping (type, resource_group, …)")
+        elif "target" in data:
             if "type" not in data["target"]:
                 errors.append("target.type is required")
             if "resource_group" not in data["target"]:

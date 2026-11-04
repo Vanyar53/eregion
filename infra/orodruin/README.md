@@ -55,11 +55,16 @@ même chemin que H0 (`eregion_core/watch_channel.py`), sous **son** principal de
 d'autre : lire `exercises` (les fenêtres) et écrire `watch`.
 
 - **L'identité** : l'*object id* du principal de service de la watch (l'application d'entreprise),
-  pas son *client id* : `az ad sp show --id <GLORFINDEL_AZURE_CLIENT_ID> --query id -o tsv`.
+  pas son *client id* : `az ad sp show --id <GLORFINDEL_AZURE_CLIENT_ID> --query id -o tsv`. C'est
+  toi qui la nommes : Terraform ne connaît pas l'identité d'Annatar, il donne le droit à celle que
+  tu lui donnes. Le plan refuse seulement l'identité d'Orodruin et la tienne (celle qui applique).
 - **Le plan** : `make orodruin-plan WATCH_PRINCIPALS=<object id> NO_WATCH=1`. `NO_WATCH=1` dit
   qu'il n'y a pas de Glorfindel hébergé (SEC7). Avec H0, sa watch ne garde le canal que si son
   identité est dans la liste (`terraform -chdir=infra/glorfindel-host output principal_id`) ;
   sinon le Makefile refuse, sauf `NO_WATCH=1`.
+- **Chaque apply redonne la liste** : à chaque `orodruin-up` et `orodruin-lock` (une VM inscrite
+  plus tard, la sortie refermée), la même `WATCH_PRINCIPALS`, et `NO_WATCH=1` sans H0. Sans elles,
+  le plan retire ses droits à la watch du poste.
 - **Ce que le Makefile vérifie** : `WATCH_PRINCIPALS` se donne sur la ligne de commande (jamais de
   l'environnement), des GUID séparés par des virgules, sans espace, aucun deux fois ; jamais
   développée par make. Le plan refuse aussi ce qui n'est pas un GUID, une identité nommée deux fois,
@@ -76,6 +81,10 @@ d'autre : lire `exercises` (les fenêtres) et écrire `watch`.
 - **Une watch à la fois** : le battement est un seul blob (`heartbeat.json`). Deux watches qui
   publient en même temps l'écrasent tour à tour, et la garde refuse celle dont la clé n'est pas
   épinglée. Plusieurs identités servent à passer de l'une à l'autre, pas à les faire tourner ensemble.
+- **Les détections ne sont pas encore signées** : chaque identité listée, même une watch dont la clé
+  n'est pas épinglée, peut fausser le verdict d'un run, `detected` comme `missed`. C'est la mesure
+  qui est touchée, jamais une action : un injecteur n'agit que sur le battement signé. Les signer :
+  SEC21.
 
 Tests : `infra/orodruin/tests/watch_writers.tftest.hcl` (`terraform test`, fournisseur mocké),
 `tests/unit/test_makefile_bench.py`, `tests/unit/test_watch_key.py`. Mesure au banc : un run depuis
@@ -91,6 +100,8 @@ make orodruin-fingerprint          # l'empreinte de sa clé d'hôte, lue sur la 
                                    # export ORO_SSH_FINGERPRINT=SHA256:… dans ton environnement (V-32)
 make orodruin-ssh                  # attendre ~/.orodruin-ready, puis exit
 make orodruin-lock YES=1           # 2e apply : la sortie se referme (YES=1 : sans confirmation)
+                                   # sans H0 (WC1) : à chaque -up et -lock, la même WATCH_PRINCIPALS=<id> NO_WATCH=1,
+                                   # sinon le plan retire ses droits à la watch du poste
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env   # abonnement, plafond
 make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, signature et provenance vérifiés ici, archive tirée des blobs du registre (OI1) | ssh docker load ; + orodruin.env
                                    # REF=<tag|commit> (défaut : le dernier tag v* — tant qu'il est d'avant CI3, il n'a pas d'image

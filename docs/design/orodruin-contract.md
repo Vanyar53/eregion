@@ -269,14 +269,19 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   principal de service d'une watch de poste ou d'équipe (`GLORFINDEL_AZURE_CLIENT_*`), passé par
   `make orodruin-plan WATCH_PRINCIPALS=<id>[,<id>…] NO_WATCH=1`. Chacune reçoit exactement ce que
   reçoit H0 : `Storage Blob Data Reader` sur `exercises`, `Storage Blob Data Contributor` sur
-  `watch`, à la portée du conteneur, `principal_type = ServicePrincipal` (jamais un utilisateur, ni
-  l'`az login` de l'opérateur). Le plan refuse un non-GUID, une identité nommée deux fois, et
-  l'identité d'Orodruin ; le Makefile refuse une valeur venue de l'environnement, et une liste qui
-  retire le canal à H0 quand son état se lit, sauf `NO_WATCH=1`. Le contrat d'Orodruin ne change
-  pas : il ne lit que ses propres attributions. La garde non plus : elle ne croit qu'un battement
-  signé par la clé épinglée dans `orodruin.env` (SEC19) — un rédacteur de plus n'y fait pas croire
-  une autre clé. Une watch à la fois : le battement est un seul blob, deux watches l'écraseraient
-  tour à tour (`infra/orodruin/README.md`, « Sans H0 »).
+  `watch`, à la portée du conteneur, `principal_type = ServicePrincipal`. Le plan refuse un
+  non-GUID, une identité nommée deux fois, l'identité d'Orodruin et celle de l'opérateur qui
+  applique (`azurerm_client_config`) ; le Makefile refuse une valeur venue de l'environnement, et
+  une liste qui retire le canal à H0 quand son état se lit, sauf `NO_WATCH=1`. Celle d'Annatar,
+  Terraform ne la connaît pas : c'est l'opérateur qui nomme l'identité, et lui seul la tient hors de
+  la liste. Chaque `orodruin-up` et `orodruin-lock` redonne la même liste, sinon le plan retire ses
+  droits à la watch du poste. Le contrat d'Orodruin ne change pas : il ne lit que ses propres
+  attributions. La garde non plus : elle ne croit qu'un battement signé par la clé épinglée dans
+  `orodruin.env` (SEC19) — un rédacteur de plus n'y fait pas croire une autre clé. Les détections,
+  elles, ne sont pas encore signées : toute identité qui écrit `watch` peut fausser le verdict d'un
+  run, `detected` comme `missed` — la mesure, jamais une action (les signer : SEC21). Une watch à la
+  fois : le battement est un seul blob, deux watches l'écraseraient tour à tour
+  (`infra/orodruin/README.md`, « Sans H0 »).
 - **Sortie** : rien ne change (`Storage.FranceCentral` pour Orodruin ; la sortie de H0 n'est pas
   filtrée). `GLORFINDEL_READ_ONLY` porte sur l'infra observée, pas sur le stockage d'Eregion. Une
   watch de poste entre par l'IP de l'opérateur, que le pare-feu du compte admet déjà (WC1).

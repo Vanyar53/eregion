@@ -6700,27 +6700,50 @@ def test_a_block_written_again_then_gone_as_acknowledged_is_a_new_episode(monkey
     _replay(monkeypatch, net, *_L1E_STEPS)
 
 
-@pytest.mark.xfail(strict=True, reason="L1E: a perimeter pair another VM wrote again, gone again before any pass, "
-                                       "said on that VM's card alone — a defect of the code, L1W (#492)")
+_L1W_STEPS = (
+    ("block_perimeter", WEB2, WEB2, None, False),
+    ("terraform_apply", _SUBNET),
+    ("reassert", "human_only", None),
+    ("operator_acknowledges", 0),
+    ("block_perimeter", WEB1, WEB1, None, False),
+    ("terraform_apply", _SUBNET),
+    ("reassert", "human_only", None))
+
+
 def test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm(monkeypatch):
     """L1E (#485), found by hand through the machine's new rule (its journal clause), never by a seed: web
     of rg-app2 blocked on its subnet (the perimeter pair, one per IP and subnet), the pair taken off by a
     `terraform apply`, said in human_only, the operator acknowledges the card. Then web of rg-app1 blocked
     on the same subnet: the pair written again — the one rg-app2/web's entry names, that VM cut off
-    again —, and taken off again before any pass. The pass says the perimeter gone on rg-app1/web's card
-    only; rg-app2/web's entry keeps the marks of the card acknowledged before (the pair read absent, read
-    absent again) and is silent. The values are those of the acknowledgement; the episode is not: the
-    fake's journal shows Glorfindel's write of the pair since. L1 judges each VM's block. Green on the
-    machine of `main` d597a00e (values only); red with the new rule, on the code of `main`. Tracked in #492
-    (L1W). M3442 (the journal clause taken off the machine) makes it pass: strict, it is caught."""
-    _replay(monkeypatch, _net(subnet_nsg=[]),
-            ("block_perimeter", WEB2, WEB2, None, False),
-            ("terraform_apply", _SUBNET),
-            ("reassert", "human_only", None),
-            ("operator_acknowledges", 0),
-            ("block_perimeter", WEB1, WEB1, None, False),
-            ("terraform_apply", _SUBNET),
-            ("reassert", "human_only", None))
+    again —, and taken off again before any pass. The pass said the perimeter gone on rg-app1/web's card
+    only; rg-app2/web's entry kept the marks of the card acknowledged before (the pair read absent, read
+    absent again) and was silent. The values are those of the acknowledgement; the episode is not: the
+    fake's journal shows Glorfindel's write of the pair since. L1 judges each VM's block. Frozen in strict
+    `xfail` by L1E, red on the code of `main` eb6102f4; green since L1W (#492): Glorfindel notes its own
+    writes of a pair (`note_pair_write`), and an acknowledged card whose pair it said gone is over once
+    that pair is written after the acknowledgement (`reassert_said._written_since`)."""
+    _replay(monkeypatch, _net(subnet_nsg=[]), *_L1W_STEPS)
+
+
+def test_a_perimeter_written_again_then_gone_with_its_journal_lost_is_refused(monkeypatch):
+    """The oracle's own control (L1W), as L1B's: the same seven rules, Glorfindel's journal of its pair
+    writes lost before the last pass (a home wiped, the file deleted by hand) — the code back to what
+    `main` did, rg-app2/web silent. L1 must still refuse it: the machine's journal clause (L1E) sees the
+    write the code no longer knows of. Without it (M3442, the machine's values alone), L1 passes; this
+    keeps M3442 caught now the sequence above is green."""
+    from glorfindel.response.pair_journal import _pair_journal
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        for rule, *draws in _L1W_STEPS[:-1]:
+            getattr(m, rule)(data=Script(*draws))
+        assert _pair_journal().exists()                          # noted by both perimeter blocks
+        _pair_journal().unlink()
+        with pytest.raises(AssertionError, match="L1: the block on .*/rg-app2/.*/web vanished"):
+            m.reassert(data=Script(*_L1W_STEPS[-1][1:]))
+    finally:
+        m.teardown()
 
 
 _WEB_NIC_NSG =_NSG.format(rg="rg-app1", name="nsg-web-nic")

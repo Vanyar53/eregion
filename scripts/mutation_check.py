@@ -10,6 +10,10 @@ mutant, the code moved) — never counted as caught.
     python scripts/mutation_check.py                       # push budget (60), 3 rounds
     python scripts/mutation_check.py --examples 1000 --rounds 2
     python scripts/mutation_check.py --only M04,M13
+    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/10 --json m3.json
+    python scripts/mutation_check.py --total DIR --shards 10 --control-shards 2 --examples 500 --rounds 2
+    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/10 --json m3.json
+    python scripts/mutation_check.py --total DIR --shards 10 --control-shards 2 --examples 500 --rounds 2
 
 Each round draws new seeds. The table says, per mutant, how many rounds caught it.
 A mutant the invariants can't see by construction says why: EQUIVALENT (no behaviour
@@ -20,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -10512,6 +10518,16 @@ MUTANTS += [
 ]
 TESTS.update({"M3530": f"{_L1W_UNIT}test_a_line_out_of_utf8_never_silences_the_journal",
               **{f"M{n}": _L1W_LINK for n in range(3531, 3535)}})
+# CI6 (#514): the release gate's mutation in shards — `--total` refuses a shard measured at
+# another budget. M3599.
+_CI6_SH = "tests/unit/test_mutation_shards.py"
+MUTANTS += [
+    ("M3599", "the shards' total takes a shard measured at a lower budget (CI6)", "scripts/mutation_check.py",
+     '        if (doc.get("examples"), doc.get("rounds")) != (examples, rounds):\n', "        if False:\n"),
+]
+TESTS.update({
+    "M3599": f"{_CI6_SH}",
+})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
@@ -10558,7 +10574,120 @@ def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS
     return proc.returncode != 0
 
 
-def main() -> int:
+# ── CI6 (#514): the release gate measures every mutant, in shards ───────────────────────────
+# 2 633 mutants on 04/11, 58 of their targets running an invariant machine: on one runner, the
+# Monday measure (1 000 sequences) was cancelled at its 180 min bound on 02/11 before its first
+# mutant — the unmutated runs, one target after the other, had not ended. The release gate
+# (.github/workflows/release-gate.yml) gives each runner a shard (`--shard K/N`), each shard
+# writes what it measured (`--json`), and `--total` says whether, together, the shards measured
+# each mutant of this tree once, at the budget given — then holds the count to `--min-caught`.
+# A shard takes whole targets, cut into pieces of CHUNK mutants at most: a target's unmutated
+# run happens once per piece, never once per mutant. Pieces go heaviest first, each to the
+# lightest shard so far (a target that runs an invariant machine weighs HEAVY): the same tree,
+# the same shards, whichever runner asks.
+HEAVY = 8
+CHUNK = 8
+SHARD = re.compile(r"([1-9]\d*)/([1-9]\d*)")
+UNCOUNTED = ("EQUIVALENT", "MULTI-HOST", "STALE")
+
+
+def _heavy(target: str) -> bool:
+    return "test_invariants" in target
+
+
+def shard_of(todo: list, k: int, n: int, tests: dict | None = None) -> list:
+    """The mutants of shard k of n (1-based), in todo's order."""
+    tests = TESTS if tests is None else tests
+    groups: dict[str, list] = {}
+    for m in todo:
+        groups.setdefault(tests.get(m[0], INVARIANTS), []).append(m)
+    pieces = []
+    for target in sorted(groups):
+        ms = groups[target]
+        for i in range(0, len(ms), CHUNK):
+            part = ms[i:i + CHUNK]
+            pieces.append(((1 + len(part)) * (HEAVY if _heavy(target) else 1), target, i, part))
+    load, mine = [0] * n, set()
+    for _cost, _target, _i, part in sorted(pieces, key=lambda p: (-p[0], p[1], p[2])):
+        j = min(range(n), key=lambda s: (load[s], s))
+        load[j] += _cost
+        if j == k - 1:
+            mine.update(m[0] for m in part)
+    return [m for m in todo if m[0] in mine]
+
+
+def parse_shard(text: str) -> tuple[int, int]:
+    """`K/N`, 1 <= K <= N; ValueError otherwise."""
+    m = SHARD.fullmatch(text.strip())
+    if not m or int(m.group(1)) > int(m.group(2)):
+        raise ValueError(f"--shard {text!r}: K/N, 1 <= K <= N")
+    return int(m.group(1)), int(m.group(2))
+
+
+def caught_of(rows: list) -> tuple[int, int]:
+    """(caught in every round, counted): equivalent, multi-host and stale mutants aside."""
+    counted = [r for r in rows if r[2] not in UNCOUNTED]
+    return sum(1 for r in counted if r[2] == "CAUGHT"), len(counted)
+
+
+def total(where: Path, shards: int, control_shards: int, examples: int, rounds: int,
+          min_caught: int) -> int:
+    """The shards' results under `where` (*.json, as --json writes them), put together. 1 when a
+    shard is missing, given twice, or measured at another budget; when the shards together did
+    not measure each mutant of this tree (MUTANTS, CONTROL) exactly once; or when fewer than
+    min_caught of MUTANTS were caught in every round. The control set is said, never held to a
+    count: it measures what the suite was never shaped to find."""
+    problems: list[str] = []
+    found: dict[bool, dict[int, list]] = {False: {}, True: {}}
+    for path in sorted(where.rglob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            control, k, n = bool(doc["control"]), int(doc["shard"]), int(doc["shards"])
+            rows = [tuple(r) for r in doc["rows"]]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            problems.append(f"{path.name}: unreadable ({type(exc).__name__})")
+            continue
+        name = "control" if control else "mutants"
+        if (doc.get("examples"), doc.get("rounds")) != (examples, rounds):
+            problems.append(f"{path.name}: {name} measured at {doc.get('examples')} sequences, "
+                            f"{doc.get('rounds')} rounds — not {examples}, {rounds}")
+        if n != (control_shards if control else shards):
+            problems.append(f"{path.name}: {name} shard {k} of {n}, not of {control_shards if control else shards}")
+        if k in found[control]:
+            problems.append(f"{path.name}: {name} shard {k} given twice")
+        found[control].setdefault(k, []).extend(rows)
+    said = {}
+    for control, n, every in ((False, shards, MUTANTS), (True, control_shards, CONTROL)):
+        name = "control" if control else "mutants"
+        missing = sorted(set(range(1, n + 1)) - set(found[control]))
+        if missing:
+            problems.append(f"{name}: shard(s) {', '.join(map(str, missing))} of {n} missing")
+        rows = [r for shard_rows in found[control].values() for r in shard_rows]
+        measured = [r[0] for r in rows]
+        want = {m[0] for m in every}
+        twice = sorted({m for m in measured if measured.count(m) > 1})
+        unmeasured, foreign = sorted(want - set(measured)), sorted(set(measured) - want)
+        if twice:
+            problems.append(f"{name}: measured twice: {', '.join(twice[:10])}")
+        if unmeasured:
+            problems.append(f"{name}: {len(unmeasured)} never measured: {', '.join(unmeasured[:10])}")
+        if foreign:
+            problems.append(f"{name}: {len(foreign)} not of this tree: {', '.join(foreign[:10])}")
+        said[control] = caught_of(rows)
+        for mid, title, verdict, detail in sorted(rows):
+            if verdict != "CAUGHT":
+                print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
+    caught, counted = said[False]
+    print(f"\nbudget {examples} sequences, {rounds} rounds, {shards} + {control_shards} shards:")
+    print(f"mutants: {caught}/{counted} caught in every round (equivalent and multi-host mutants aside); "
+          f"at least {min_caught} wanted")
+    print(f"control: {said[True][0]}/{said[True][1]} caught in every round (said, not held)")
+    for p in problems:
+        print(f"  ✗ {p}")
+    return 1 if problems or caught < min_caught else 0
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--examples", type=int, default=60)
     ap.add_argument("--rounds", type=int, default=3)
@@ -10569,18 +10698,33 @@ def main() -> int:
                     help="mutants measured at once")
     ap.add_argument("--min-caught", type=int, default=0,
                     help="exit 1 if fewer mutants (equivalent and multi-host aside) are caught in every round")
-    args = ap.parse_args()
+    ap.add_argument("--shard", default="", help="K/N: measure the K-th of N shards only (CI6)")
+    ap.add_argument("--json", default="", help="write what was measured to this file (CI6)")
+    ap.add_argument("--total", default="", help="a directory of --json results: put the shards together (CI6)")
+    ap.add_argument("--shards", type=int, default=1, help="with --total: the shards of the mutants")
+    ap.add_argument("--control-shards", type=int, default=1, help="with --total: the shards of the control set")
+    args = ap.parse_args(argv)
+    if args.total:
+        return total(Path(args.total), args.shards, args.control_shards, args.examples, args.rounds,
+                     args.min_caught)
     only = {m.strip() for m in args.only.split(",") if m.strip()}
+    k, n = parse_shard(args.shard) if args.shard else (1, 1)
 
     with tempfile.TemporaryDirectory(prefix="glorfindel-mutants-") as tmp:
         base = Path(tmp) / "base"
         _copy_repo(base)
         todo = [m for m in (CONTROL if args.control else MUTANTS) if not only or m[0] in only]
-        # The unmutated copy must pass, or nothing below means anything.
-        for target in sorted({TESTS.get(m[0], INVARIANTS) for m in todo}):
-            if _run(base, args.examples, show=True, target=target):
-                print(f"{target} fails on the UNMUTATED code — fix that first")
-                return 2
+        todo = shard_of(todo, k, n) if n > 1 else todo
+        # The unmutated copy must pass, or nothing below means anything. Its targets at once, as
+        # the mutants are (CI6: one after the other, they outlasted the Monday run's bound).
+        targets = sorted({TESTS.get(m[0], INVARIANTS) for m in todo})
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            failing = [t for t, bad in zip(targets, pool.map(
+                lambda t: _run(base, args.examples, show=True, target=t), targets)) if bad]
+        for target in failing:
+            print(f"{target} fails on the UNMUTATED code — fix that first")
+        if failing:
+            return 2
         def measure(mutant):
             mid, title, rel, old, new, *why = mutant
             copy = Path(tmp) / mid
@@ -10617,12 +10761,15 @@ def main() -> int:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
             rows = sorted(pool.map(measure, todo))
-    print(f"\nbudget {args.examples} sequences, {args.rounds} rounds:")
+    print(f"\nbudget {args.examples} sequences, {args.rounds} rounds" + (f", shard {k}/{n}:" if n > 1 else ":"))
     for mid, title, verdict, detail in rows:
         print(f"  {mid}  {verdict:8}  {detail:16}  {title}")
-    counted = [r for r in rows if r[2] not in ("EQUIVALENT", "MULTI-HOST", "STALE")]
-    caught = sum(1 for r in counted if r[2] == "CAUGHT")
-    print(f"\n{caught}/{len(counted)} caught in every round (equivalent and multi-host mutants aside)")
+    caught, counted = caught_of(rows)
+    print(f"\n{caught}/{counted} caught in every round (equivalent and multi-host mutants aside)")
+    if args.json:
+        Path(args.json).write_text(json.dumps({
+            "control": args.control, "shard": k, "shards": n, "examples": args.examples,
+            "rounds": args.rounds, "rows": [list(r) for r in rows]}, indent=1) + "\n", encoding="utf-8")
     return 1 if caught < args.min_caught else 0
 
 

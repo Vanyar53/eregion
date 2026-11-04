@@ -6675,7 +6675,55 @@ def test_an_isolation_back_keeps_the_acknowledgement_of_the_vms_block(monkeypatc
     _replay(monkeypatch, _mak_net(tier), *steps)
 
 
-_WEB_NIC_NSG = _NSG.format(rg="rg-app1", name="nsg-web-nic")
+_L1E_STEPS = (
+    ("block", WEB1, WEB1, None, 22),
+    ("terraform_apply", _SUBNET),
+    ("reassert", "human_only", None),
+    ("operator_acknowledges", 0),
+    ("block", WEB1, WEB1, None, 22),
+    ("terraform_apply", _SUBNET),
+    ("reassert", "human_only", None))
+
+
+@pytest.mark.parametrize("net", [_mak_net(True), _net(subnet_nsg=[])], ids=["the review's network", "plain"])
+def test_a_block_written_again_then_gone_as_acknowledged_is_a_new_episode(monkeypatch, net):
+    """L1E (#485), the machine's oracle, found by MAK's review (a probe): web blocked (22), its rules
+    taken off by a `terraform apply` of the subnet's NSG, a pass in human_only says it gone, the
+    operator acknowledges the card — the machine records the block's rules as they are then, both
+    absent. Then web blocked again, whole, and its rules taken off again, the same way: absent both,
+    the values of the acknowledgement. L1 compared values, never an episode: the acknowledgement
+    counted again for this new disappearance. With the drift marks kept by a block written again
+    (L1Q's mutant, `response/state.py`, `for mark in ():`), the code said nothing of it, and L1
+    passed. The machine now ends the acknowledgement when the episode changes — the block written
+    whole by the test, or a rule the acknowledgement saw absent written since by Glorfindel (the
+    fake's journal) —, never by the code's marks (A0). Green on `main` d597a00e: the code says it."""
+    _replay(monkeypatch, net, *_L1E_STEPS)
+
+
+@pytest.mark.xfail(strict=True, reason="L1E: a perimeter pair another VM wrote again, gone again before any pass, "
+                                       "said on that VM's card alone — a defect of the code, L1W (#492)")
+def test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm(monkeypatch):
+    """L1E (#485), found by hand through the machine's new rule (its journal clause), never by a seed: web
+    of rg-app2 blocked on its subnet (the perimeter pair, one per IP and subnet), the pair taken off by a
+    `terraform apply`, said in human_only, the operator acknowledges the card. Then web of rg-app1 blocked
+    on the same subnet: the pair written again — the one rg-app2/web's entry names, that VM cut off
+    again —, and taken off again before any pass. The pass says the perimeter gone on rg-app1/web's card
+    only; rg-app2/web's entry keeps the marks of the card acknowledged before (the pair read absent, read
+    absent again) and is silent. The values are those of the acknowledgement; the episode is not: the
+    fake's journal shows Glorfindel's write of the pair since. L1 judges each VM's block. Green on the
+    machine of `main` d597a00e (values only); red with the new rule, on the code of `main`. Tracked in #492
+    (L1W). M3442 (the journal clause taken off the machine) makes it pass: strict, it is caught."""
+    _replay(monkeypatch, _net(subnet_nsg=[]),
+            ("block_perimeter", WEB2, WEB2, None, False),
+            ("terraform_apply", _SUBNET),
+            ("reassert", "human_only", None),
+            ("operator_acknowledges", 0),
+            ("block_perimeter", WEB1, WEB1, None, False),
+            ("terraform_apply", _SUBNET),
+            ("reassert", "human_only", None))
+
+
+_WEB_NIC_NSG =_NSG.format(rg="rg-app1", name="nsg-web-nic")
 _NEW_WEB = "/subscriptions/s/resourceGroups/rg-new/providers/Microsoft.Compute/virtualMachines/web"
 _Q_OFF = {"quarantine": False, "rg": "", "forensic": [], "readable": True}
 _Q_ON = {"quarantine": True, "rg": "", "forensic": [], "readable": True}

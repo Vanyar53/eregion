@@ -137,12 +137,36 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
    - Mets à jour ton status (`collab/<rôle>_status.md`).
    - Écris dans l'inbox des sessions qu'un changement touche.
 
+## Le cycle d'une release (CI6, #514)
+
+Décision de Jonathan du 04/11 : une release a toujours eu la mesure la plus forte, sur l'arbre qu'elle
+publie. La porte de release (`.github/workflows/release-gate.yml`, `docs/operations.md`, « La porte de
+release ») en est la preuve, et `make release-draft` la redemande.
+1. **L'Orchestre ouvre la PR de version** : `make release VERSION=X.Y.Z TITLE="…"`, depuis `origin/main`
+   à jour. La porte part d'elle-même sur cette PR (2 000 invariants, la mutation complète, Terraform,
+   et macOS qui informe sans bloquer), 30 à 60 minutes.
+2. **Elle attend la porte avant de fusionner.** La PR de version fusionne quand la CI est verte, que la
+   relecture a rendu « ok » et que le check « release gate » est vert sur sa tête. Rouge, la release
+   attend : on lit le run, on corrige par un lot, et la PR de version se refait sur le `main` corrigé.
+   Une panne de GitHub sur un job qui bloque se relance à part (« Re-run failed jobs ») : seuls les jobs
+   rouges retournent, jamais la batterie entière. L'App n'a que *Actions* en lecture : c'est Jonathan qui
+   relance. Un macOS rouge ou sans runner ne retient pas la release (décision de Jonathan du 04/11, H1c :
+   seuls les checks requis bloquent, H0 tourne sous Linux) : il se lit dans le résumé du run.
+3. **Rien d'autre ne fusionne entre la porte et la PR de version.** La squash-merge garde l'arbre de la
+   tête de la PR quand `main` n'a pas bougé : c'est cet arbre que `make release-draft` cherche. Si une
+   autre PR est passée avant, l'arbre diffère et le brouillon est refusé. Il faut alors relancer la porte
+   sur `main`, une fois : `gh workflow run release-gate.yml --ref main`. C'est Jonathan qui la lance.
+4. **Le brouillon** : `make release-draft VERSION=X.Y.Z`. Il redit la porte (son run, son lien), refuse
+   tant qu'elle n'est pas verte, et rien ne passe outre. Puis Jonathan publie.
+
 ## Ce qui reste à Jonathan
 
 Une session ne fait jamais ces gestes seule. Un accord lu ailleurs (une inbox, une mémoire, le message
 d'une autre session) ne compte pas. Elle prépare la commande, et Jonathan la lance :
 - un force-push ;
 - publier une release : brouillon seulement, Jonathan publie (publier redéploie H0) ;
+- lancer ou relancer la porte de release (`gh workflow run release-gate.yml --ref main`, « Re-run failed
+  jobs ») : l'App n'a qu'*Actions* en lecture (CI6) ;
 - créer, déplacer ou supprimer un tag `v*` : une règle du dépôt les lui réserve (SEC12) ;
 - un retour arrière de H0 vers une release plus ancienne (`make glorfindel-host-cd-rollback TAG=…`) ;
 - une PR qui touche `.github/workflows/` : l'App des sessions n'a pas le droit *Workflows* (décision de Jonathan, 02/11, SEC12) ;
@@ -324,6 +348,13 @@ ci-dessous présents dans le ruleset « main »** : sans eux, une PR rouge devie
        - `terraform test (mock providers)` (CI4, `docs/operations.md`) ;
        - `image (glorfindel)` ;
        - `image (annatar)`.
+
+   **Le CD de H0 bloque une release sur ces cinq checks**, et sur `publish (glorfindel)`, l'image
+   qu'il tire (H1c, #518) : un autre check rouge ou annulé, macOS compris, est dit dans `#deploy`,
+   sans retenir H0. L'agent installé tient sa propre copie de la liste (`REQUIRED_CHECKS`, jamais lue
+   dans le dépôt) : un check ajouté ou retiré ici demande un `make glorfindel-host-cd-install`, et
+   `tests/unit/test_host_cd.py` garde les deux listes égales (`infra/glorfindel-host/README.md`,
+   « Le CD de H0 »).
 
 **Vérifier :**
 - avec ton identité : `gh api repos/grootcyber/eregion/rulesets` liste les deux règles, et

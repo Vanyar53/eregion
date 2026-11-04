@@ -160,6 +160,10 @@ def test_a_half_pair_fails_and_the_watch_needs_its_principal():
     assert any("EREGION_CONSOLE_AZURE_CLIENT_ID / EREGION_CONSOLE_AZURE_CLIENT_SECRET" in n for n in failed(half))
     none = doctor.variables("discover", good_env(GLORFINDEL_AZURE_CLIENT_ID=None, GLORFINDEL_AZURE_CLIENT_SECRET=None))
     assert any("aucun principal pour la watch" in n for n in failed(none))
+    # The bot, which the discover profile does not start: its absence is not said, half set fails.
+    assert not any("bot" in c.name for c in doctor.variables("discover", good_env()))
+    assert any("GLORFINDEL_BOT_AZURE_CLIENT_ID" in n
+               for n in failed(doctor.variables("discover", good_env(GLORFINDEL_BOT_AZURE_CLIENT_ID=APP))))
 
 
 def test_observation_asks_for_read_only_as_glorfindel_reads_it():

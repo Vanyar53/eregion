@@ -56,9 +56,10 @@ PROVIDER_KEYS = {
     "mistral": ("MISTRAL_API_KEY",),
 }
 # The three services of Glorfindel, each its own principal (V-17, SEC11): the watch's pair is
-# required to read Azure; the console's and the bot's are optional, never half set.
-PAIRS = (("GLORFINDEL", "la watch", True), ("EREGION_CONSOLE", "la console", False),
-         ("GLORFINDEL_BOT", "le bot", False))
+# required to read Azure; the console's and the bot's are optional, never half set — the bot's
+# absence is not even said (`make profile-discover` does not start it).
+PAIRS = (("GLORFINDEL", "la watch", True, True), ("EREGION_CONSOLE", "la console", False, True),
+         ("GLORFINDEL_BOT", "le bot", False, False))
 # The directories the services mount, made as the operator by `make glorfindel-start` — left to
 # docker, they would be root's (Makefile, RUNS_DIRS ; docs/profils/README.md).
 STATE_DIRS = (".glorfindel", ".glorfindel/injectors", ".cache/chroma", ".eregion",
@@ -193,7 +194,11 @@ def _id(name: str, env: Mapping[str, str], g: str, fix: str) -> Check:
     return Check(g, f"{name}", OK)
 
 
-def _pair(prefix: str, who: str, required: bool, env: Mapping[str, str], g: str) -> Check:
+def _pair(prefix: str, who: str, required: bool, env: Mapping[str, str], g: str,
+          optional_said: bool = True) -> Check | None:
+    """The pair of a service: both set, or neither. An optional service left out is said only
+    when ``optional_said`` (the console, which the guide sets; never the bot, which it does not
+    start) — half set, it always fails."""
     cid, sec = f"{prefix}_AZURE_CLIENT_ID", f"{prefix}_AZURE_CLIENT_SECRET"
     have = (filled(env.get(cid)), filled(env.get(sec)))
     fix = (f"les deux, ou aucun : export {cid}=<appId> et {sec}=<password> "
@@ -203,8 +208,10 @@ def _pair(prefix: str, who: str, required: bool, env: Mapping[str, str], g: str)
     if have == (False, False) and not (env.get(cid) or env.get(sec)):
         if required:
             return Check(g, f"aucun principal pour {who} : elle ne lirait rien sur Azure", FAIL, fix)
-        return Check(g, f"aucun principal pour {who} (optionnel : sans lui, elle ne lit rien sur Azure)", WARN,
-                     f"le même principal Reader que la watch convient : {cid}, {sec}")
+        if optional_said:
+            return Check(g, f"aucun principal pour {who} (optionnel : sans lui, sa page Audit ne lit rien)", WARN,
+                         f"le même principal Reader que la watch convient : {cid}, {sec}")
+        return None
     return Check(g, f"{cid} / {sec} : paire incomplète, ou une valeur d'exemple", FAIL, fix)
 
 
@@ -239,7 +246,8 @@ def variables(profile: str, env: Mapping[str, str]) -> list[Check]:
     if profile == "discover":
         out.append(_id("AZURE_TENANT_ID", env, g,
                        "export AZURE_TENANT_ID=$(az account show --query tenantId -o tsv) dans .envrc"))
-        out += [_pair(prefix, who, required, env, g) for prefix, who, required in PAIRS]
+        out += [c for prefix, who, required, said in PAIRS
+                if (c := _pair(prefix, who, required, env, g, said)) is not None]
         ro = env.get("GLORFINDEL_READ_ONLY", "")
         out.append(Check(g, "GLORFINDEL_READ_ONLY : aucune écriture vers Azure", OK)
                    if ro.strip().lower() not in SWITCH_OFF
@@ -341,7 +349,7 @@ def port(env: Mapping[str, str], p: Probes) -> list[Check]:
     names = r.stdout.split() if r is not None and r.returncode == 0 else []
     if any(name.endswith("-war-room") for name in names):
         return [Check(g, f"{n} : la console d'Eregion y tourne déjà", OK)]
-    return [Check(g, f"{n} pris par un autre programme", FAIL,
+    return [Check(g, f"{n} pris par un autre programme (une console lancée hors de docker ?)", FAIL,
                   f"le libérer, ou EREGION_CONSOLE_PORT=<port libre> make profile-discover (ss -ltnp | grep {n})")]
 
 

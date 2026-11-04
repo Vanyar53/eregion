@@ -24,10 +24,10 @@ docker compose --profile annatar run --rm annatar validate annatar/scenarios/azu
 docker compose --profile annatar run --rm annatar run annatar/scenarios/azure/ransomware-vm.yaml --dry-run
 ```
 
-**Les vraies attaques partent d'Orodruin.** La procédure est dans [`infra/orodruin/README.md`](../../infra/orodruin/README.md) :
+**Les vraies attaques partent d'Orodruin.** L'ordre complet, de zéro, est le guide [« Le banc complet : d'une attaque à sa preuve »](../demarrer/banc.md) : Celebrimbor, les identités, H0, Orodruin et ses clés épinglées (`ORO_SSH_FINGERPRINT`, `EREGION_WATCH_KEY`), l'inscription, une première attaque et sa preuve, puis le démontage. `make doctor PROFILE=bench` dit ce qui manque. En bref, une fois tout en place :
 
 ```bash
-make orodruin-up && make orodruin-lock && make orodruin-push && make orodruin-check   # armed ?
+make orodruin-check                                                  # armed ?
 make orodruin-campaign-plan CAMPAIGN_TARGET=<resource_id de la VM inscrite>
 make orodruin-campaign-run CAMPAIGN=<id>
 ```
@@ -36,7 +36,7 @@ make orodruin-campaign-run CAMPAIGN=<id>
 
 **Le service compose.** `annatar` dépend de la watch : le lancer la démarre, mais sans attendre son battement. Dans la première minute, le temps que la watch publie son premier battement, Annatar peut refuser d'agir : relance-le un peu plus tard. Il lit ce battement dans `~/.glorfindel/injectors`, en lecture seule : la watch l'y écrit pour lui, et le reste de `~/.glorfindel` (escalades, état d'isolation, règles du client) lui reste fermé. De `runs/`, il n'écrit que son répertoire, `runs/annatar/` (et `runs/orodruin/`, le journal et le verrou), que la watch monte en lecture seule : elle y lit l'`attack_started`, et n'en prend que ce qu'un injecteur émet. Il ne monte ni `runs/glorfindel/` (le raisonnement de la watch) ni `runs/console/` (les gestes de l'opérateur). La détection d'un run se mesure par le canal retour du stockage, ou, sur ce poste, par le canal local des verdicts, `runs/verdicts/`, en lecture seule : le verdict de chaque run, jamais le raisonnement (SEC18, [`docs/operations.md`](../operations.md), « `runs/` : un répertoire par écrivain »).
 
-**Depuis Orodruin.** Annatar lit le battement de la watch hébergée sur le canal retour, `EREGION_WATCH_CHANNEL`. Sans battement vivant, il refuse avant tout appel au cloud.
+**Depuis Orodruin.** Annatar lit le battement de la watch hébergée sur le canal retour, `EREGION_WATCH_CHANNEL`. Sans battement vivant, il refuse avant tout appel au cloud. Sans H0, la watch de ce poste peut écrire ce canal : `make orodruin-plan WATCH_PRINCIPALS=<object id> NO_WATCH=1` lui en donne le droit, sa clé va dans `orodruin.env` (WC1, [`infra/orodruin/README.md`](../../infra/orodruin/README.md), « Sans H0 »).
 
 **La dérogation.** `--without-glorfindel` (Make : `WITHOUT_GLORFINDEL=1`) permet un run de développement. Le rapport le dit : « detection not measured, by choice ». Voir [`docs/operations.md`](../operations.md).
 

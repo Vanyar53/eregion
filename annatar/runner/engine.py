@@ -118,7 +118,8 @@ class Engine:
         try:
             scenario = self.parser.load(scenario_path)
         except ValueError as e:
-            console.print(f"[red]Invalid scenario:[/red] {e}")
+            from rich.markup import escape   # what the file says (AV1): never markup nor emoji
+            console.print(f"[red]Invalid scenario:[/red] {escape(str(e))}", emoji=False)
             return RunOutcome(run_id, "unknown", error=f"scenario: {e}", refused=True)
 
         console.rule(f"[bold cyan]Annatar — {scenario.name}[/bold cyan]")

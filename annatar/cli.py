@@ -118,10 +118,11 @@ EXIT_RUN_FAILED = 1
 # One hint per refusal, by the prefix Engine.run gives RunOutcome.error.
 _RUN_HINTS = (
     ("glorfindel:", "aucune watch de Glorfindel vivante : lancer `glorfindel watch` (ou la watch "
-                    "hébergée, vue par EREGION_WATCH_CHANNEL) ; rien n'a été touché. Run de "
+                    "hébergée, vue par EREGION_WATCH_CHANNEL) ; rien n'a été touché. Une vraie "
+                    "attaque part d'un Orodruin armé : docs/demarrer/banc.md. Run de "
                     "développement : --without-glorfindel (le rapport le dit)."),
     ("passive:", "contrat d'Orodruin passif : lancer depuis un Orodruin armé "
-                 "(ailleurs, un injecteur reste passif)."),
+                 "(ailleurs, un injecteur reste passif) — docs/demarrer/banc.md."),
     ("safety:", "cible hors banc ou non inscrite : tags eregion-target et eregion-zone "
                 "sur la VM et son groupe."),
     ("atomic:", "test atomic refusé (annatar/engines/atomic.py) ou sondes steady_state "
@@ -150,7 +151,9 @@ def run_exit_code(outcome) -> int:
 
 def _print_run_failure(outcome) -> None:
     """One line, plus a hint when the refusal is a known one (like _AnnatarCli)."""
-    console.print(f"[red]✗ run {outcome.run_id}: {outcome.error}[/red]")
+    from rich.markup import escape   # the error may quote the scenario file: never markup
+    console.print(f"[red]✗ run {escape(outcome.run_id)}: {escape(outcome.error)}[/red]",
+                  emoji=False)
     hint = next((h for prefix, h in _RUN_HINTS if outcome.error.startswith(prefix)), None)
     if hint:
         console.print(f"[dim]  → {hint}[/dim]")
@@ -221,6 +224,13 @@ def list_scenarios():
     list_available()
 
 
+# `annatar validate` exit codes (AV1, #524): a script or a CI that trusts validate reads the
+# code, not the console. One invalid scenario, or any invalid one under --all, exits 1 with
+# its cause (--all lists the invalid ones at the end); all valid: 0. A name that resolves to
+# nothing exits 1 too.
+EXIT_SCENARIO_INVALID = 1
+
+
 @cli.command()
 @click.argument("scenario", required=False)
 @click.option(
@@ -229,6 +239,9 @@ def list_scenarios():
 def validate(scenario: str | None, validate_all: bool):
     """Validate one scenario YAML or all available scenarios.
 
+    Exits 1 if the scenario is invalid (with --all: if any is, the invalid ones listed at the
+    end), 0 if all are valid.
+
     Examples:
         annatar validate annatar/scenarios/azure/ransomware-vm.yaml
         annatar validate azure-ransomware-vm
@@ -236,6 +249,9 @@ def validate(scenario: str | None, validate_all: bool):
     """
     import glob
     import os
+    from rich.markup import escape   # a path, a YAML error: said as they are, never markup
+    # ... and never an emoji code either: PyYAML copies the faulty line into its error, and
+    # Rich would print a `:fire:` of the file as an emoji (emoji=False on what the file says).
     from annatar.runner.parser import (
         ScenarioParser,
         scenarios_root,
@@ -251,40 +267,44 @@ def validate(scenario: str | None, validate_all: bool):
             console.print("[yellow]No scenarios found.[/yellow]")
             return
         project_root = root.parent.parent
-        failed = 0
+        invalid = []
         for f in files:
             result = parser.validate(f)
             rel = os.path.relpath(f, project_root)
             if result.valid:
-                console.print(f"[green]OK[/green]   {rel}")
+                console.print(f"[green]OK[/green]   {escape(rel)}", emoji=False)
             else:
-                failed += 1
-                console.print(f"[red]FAIL[/red] {rel}")
+                invalid.append(rel)
+                console.print(f"[red]FAIL[/red] {escape(rel)}", emoji=False)
                 for err in result.errors:
-                    console.print(f"     [dim]{err}[/dim]")
+                    console.print(f"     {escape(err)}", emoji=False)
         summary = f"{len(files)} scenario(s)"
-        if failed:
-            console.print(f"\n[red]{failed} failed[/red] / {summary}")
-        else:
-            console.print(f"\n[green]All {summary} valid[/green]")
+        if invalid:
+            console.print(f"\n[red]{len(invalid)} invalid[/red] / {summary}:")
+            for rel in invalid:
+                console.print(f"  [red]FAIL[/red] {escape(rel)}", emoji=False)
+            raise SystemExit(EXIT_SCENARIO_INVALID)
+        console.print(f"\n[green]All {summary} valid[/green]")
         return
 
     # Single scenario — resolve by name if needed
     path = scenario
-    if not __import__("os").path.exists(path):
+    if not os.path.exists(path):
         resolved = find_scenario_by_name(scenario)
         if resolved:
             path = resolved
         else:
-            console.print(f"[red]Not found:[/red] '{scenario}'")
-            raise SystemExit(1)
+            console.print(f"[red]Not found:[/red] '{escape(scenario)}'", emoji=False)
+            raise SystemExit(EXIT_SCENARIO_INVALID)
 
     result = parser.validate(path)
     if result.valid:
-        console.print(f"[green]OK[/green] {path} is valid")
-    else:
-        for err in result.errors:
-            console.print(f"[red]FAIL[/red] {err}")
+        console.print(f"[green]OK[/green] {escape(path)} is valid", emoji=False)
+        return
+    console.print(f"[red]FAIL[/red] {escape(path)} is invalid:", emoji=False)
+    for err in result.errors:
+        console.print(f"     {escape(err)}", emoji=False)
+    raise SystemExit(EXIT_SCENARIO_INVALID)
 
 
 @cli.command()

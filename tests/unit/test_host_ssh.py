@@ -121,10 +121,12 @@ def _make_oro(tmp_path, target, *args, presented="", az_out=""):
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "ssh.log"
     log.write_text("")
-    (bin_dir / "ssh").write_text('#!/bin/sh\necho "$*" >> "$FAKE_SSH_LOG"\n')
+    # printf, not echo: dash's echo would turn a remote command's « \n » into a line of its own (OI3).
+    (bin_dir / "ssh").write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_SSH_LOG"\n')
     (bin_dir / "ssh-keyscan").write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_PRESENTED"\n')
     (bin_dir / "az").write_text('#!/bin/sh\necho "az $*" >> "$FAKE_SSH_LOG"\nprintf "%s\\n" "$FAKE_AZ"\n')
-    for f in ("ssh", "ssh-keyscan", "az"):
+    (bin_dir / "git").write_text("#!/bin/sh\nexit 0\n")      # orodruin-check's git fetch: no network (OI3)
+    for f in ("ssh", "ssh-keyscan", "az", "git"):
         (bin_dir / f).chmod(0o755)
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "HOME": str(tmp_path),
            "FAKE_SSH_LOG": str(log), "FAKE_PRESENTED": presented, "FAKE_AZ": az_out}
@@ -142,8 +144,34 @@ def test_orodruin_presenting_its_pinned_key_is_written_then_trusted_alone(tmp_pa
                            f"ORO_KNOWN_HOSTS={known}", presented=line)
     assert res.returncode == 0, res.stderr
     assert known.read_text().strip() == line
-    assert len(calls) == 1 and f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known}" in calls[0]
-    assert "accept-new" not in calls[0] and "python -m eregion_core.orodruin" in calls[0]
+    # OI3: the image in service read first (~/.eregion-image), then the contract — each strict.
+    assert len(calls) == 2 and ".eregion-image" in calls[0] and "python -m eregion_core.orodruin" in calls[1]
+    assert all(f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known}" in c for c in calls)
+    assert not any("accept-new" in c for c in calls)
+
+
+STRICT_ORO = ("-o StrictHostKeyChecking=yes", "-o HostKeyAlgorithms=ssh-ed25519")
+
+
+def test_the_update_s_ssh_takes_the_pinned_key_alone(tmp_path):
+    """OI3: orodruin-update (run by orodruin-start) checks the host key first (orodruin-known), then
+    reads the image in service through SSH_OPTS — the known_hosts written from the pinned key, ed25519
+    only, never accept-new. The git here answers nothing: the comparison stops there, said."""
+    line, fp = _key(tmp_path, "oro")
+    known = tmp_path / "okh"
+    res, calls = _make_oro(tmp_path, "orodruin-update", f"ORO_SSH_FINGERPRINT={fp}",
+                           f"ORO_KNOWN_HOSTS={known}", presented=line)
+    assert known.read_text().strip() == line, res.stderr        # orodruin-known ran, before
+    assert calls and ".eregion-image" in calls[0], (calls, res.stderr)
+    for c in calls:
+        assert all(o in c for o in STRICT_ORO) and f"-o UserKnownHostsFile={known}" in c, c
+        assert "accept-new" not in c
+    assert res.returncode != 0 and "rien n'est mis à jour" in res.stderr
+
+
+def test_the_update_without_its_fingerprint_sends_nothing(tmp_path):
+    res, calls = _make_oro(tmp_path, "orodruin-update", presented="")
+    assert res.returncode != 0 and calls == [] and "ORO_SSH_FINGERPRINT requis" in res.stderr
 
 
 def test_orodruin_without_its_fingerprint_is_refused_never_accept_new(tmp_path):

@@ -126,7 +126,7 @@ def test_up_applies_without_confirmation_only_with_yes(yes, args):
 # watch's read of the channel and its subnet away. The Makefile refuses then, unless NO_WATCH=1.
 # A fake `terraform` answers the outputs; ORO_TF echoes: nothing is planned.
 
-def _oro(tmp_path, target, *args, principal="", subnet=""):
+def _oro(tmp_path, target, *args, principal="", subnet="", environ=None):
     fake = tmp_path / "tf"
     fake.write_text("#!/bin/sh\n"
                     'case "$*" in *principal_id*) [ -n "$FAKE_PRINCIPAL" ] && echo "$FAKE_PRINCIPAL" && exit 0;;\n'
@@ -135,6 +135,8 @@ def _oro(tmp_path, target, *args, principal="", subnet=""):
     fake.chmod(0o755)
     env = {**os.environ, "FAKE_PRINCIPAL": principal, "FAKE_SUBNET": subnet}
     env.pop("NO_WATCH", None)
+    env.pop("WATCH_PRINCIPALS", None)
+    env.update(environ or {})
     res = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), target,
                           f"HOST_TF={fake}", "ORO_TF=echo terraform", "OPERATOR_CIDR=198.51.100.1/32", *args],
                          env=env, capture_output=True, text=True, timeout=60)
@@ -165,3 +167,80 @@ def test_orodruin_plans_with_the_hosted_watch_state_or_no_watch_said(tmp_path):
     code, out, err = _oro(tmp_path, "orodruin-plan", "NO_WATCH=1")
     assert code == 0, err
     assert "terraform plan" in out
+
+
+# ── WC1 : sans H0, la watch d'un poste ou d'une équipe écrit le canal retour ──────────────
+# WATCH_PRINCIPALS=<id>[,<id>…] passe watch_principal_ids à terraform ; vide, rien de plus que
+# watch_principal_id (H0) : la ligne d'avant WC1. Vérifiée avant tout plan, jamais développée par
+# make ; H0 lisible ici et absent de la liste : refusé, sauf NO_WATCH=1. Mutants M3664–M3668.
+
+POSTE = "00000000-0000-0000-0000-0000000000c1"
+EQUIPE = "00000000-0000-0000-0000-0000000000C2"
+
+
+def test_without_watch_principals_the_line_is_the_one_before_wc1(tmp_path):
+    code, out, err = _oro(tmp_path, "orodruin-plan", principal=PRINCIPAL, subnet=SUBNET)
+    assert code == 0, err
+    assert "watch_principal_ids" not in out
+    assert out.strip().endswith(f"-var=watch_principal_id={PRINCIPAL}")
+
+
+@pytest.mark.parametrize("target", ["orodruin-plan", "orodruin-up", "orodruin-lock", "orodruin-down"])
+def test_a_station_watch_without_h0_is_passed_to_terraform(tmp_path, target):
+    code, out, err = _oro(tmp_path, target, f"WATCH_PRINCIPALS={POSTE}", "NO_WATCH=1")
+    assert code == 0, err
+    assert f'-var=watch_principal_ids=["{POSTE}"]' in out and "-var=watch_principal_id= " in out
+
+
+def test_several_watches_are_passed_in_lower_case_h0_among_them(tmp_path):
+    code, out, err = _oro(tmp_path, "orodruin-lock", f"WATCH_PRINCIPALS={PRINCIPAL.upper()},{POSTE},{EQUIPE}",
+                          principal=PRINCIPAL, subnet=SUBNET)
+    assert code == 0, err
+    assert f'-var=watch_principal_ids=["{PRINCIPAL}","{POSTE}","{EQUIPE.lower()}"]' in out
+    assert f"-var=watch_principal_id={PRINCIPAL}" in out
+    assert SUBNET not in out                       # still in terraform's environment only (M124)
+
+
+def test_a_list_that_leaves_h0_out_is_refused_unless_no_watch(tmp_path):
+    code, out, err = _oro(tmp_path, "orodruin-plan", f"WATCH_PRINCIPALS={POSTE}", principal=PRINCIPAL, subnet=SUBNET)
+    assert code != 0 and "terraform plan" not in out
+    assert "ne nomme pas la watch hébergée" in err and "NO_WATCH=1" in err
+    code, out, err = _oro(tmp_path, "orodruin-plan", f"WATCH_PRINCIPALS={POSTE}", "NO_WATCH=1",
+                          principal=PRINCIPAL, subnet=SUBNET)
+    assert code == 0, err
+
+
+def test_without_h0_watch_principals_alone_does_not_pass_the_guard(tmp_path):
+    """SEC7 holds: no H0 state here may be a state that does not read — NO_WATCH=1 says it."""
+    code, out, err = _oro(tmp_path, "orodruin-plan", f"WATCH_PRINCIPALS={POSTE}")
+    assert code != 0 and "terraform plan" not in out and "glorfindel-host ne se lit pas" in err
+
+
+@pytest.mark.parametrize("value", [
+    "eregion-glorfindel-watch",                     # a name, not an id
+    f"{POSTE}, {EQUIPE}",                           # a space
+    f"{POSTE},",                                    # an empty one
+    f"{POSTE}\n$(touch MARKER)",                    # a second line
+    f"{POSTE},{POSTE.upper()}",                     # the same one twice
+    "/subscriptions/00000000-0000-0000-0000-000000000000",
+])
+@pytest.mark.parametrize("target", ["orodruin-plan", "orodruin-down"])
+def test_a_watch_principals_that_is_no_list_of_ids_is_refused(tmp_path, value, target):
+    marker = tmp_path / "ran"
+    code, out, err = _oro(tmp_path, target, "WATCH_PRINCIPALS=" + value.replace("MARKER", str(marker)), "NO_WATCH=1")
+    assert code != 0 and "terraform" not in out.replace("terraform init", ""), out
+    assert "WATCH_PRINCIPALS" in err and "rien n'est fait" in err
+    assert not marker.exists()
+
+
+def test_watch_principals_is_never_expanded_by_make(tmp_path):
+    marker = tmp_path / "ran"
+    code, out, err = _oro(tmp_path, "orodruin-plan", f"WATCH_PRINCIPALS=$(shell touch {marker})", "NO_WATCH=1")
+    assert code != 0 and "terraform plan" not in out
+    assert not marker.exists() and "WATCH_PRINCIPALS invalide" in err
+
+
+def test_watch_principals_from_the_environment_is_refused(tmp_path):
+    code, out, err = _oro(tmp_path, "orodruin-plan", "NO_WATCH=1", environ={"WATCH_PRINCIPALS": POSTE})
+    assert code != 0 and "terraform plan" not in out
+    assert "vient de l'environnement" in err

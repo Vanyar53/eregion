@@ -157,20 +157,23 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-rollback glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
-	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
-	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
+	orodruin-init orodruin-watch-guard orodruin-watch-principals orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
+	orodruin-stop orodruin-start orodruin-update orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
 	orodruin-known orodruin-fingerprint watch-key glorfindel-host-watch-key harness-key harness-sign harness-verify \
 	gothmog-preflight gothmog-run \
 	orodruin-campaign-plan orodruin-campaign-run campaign-containment fault-rate \
 	profile-discover profile-detection profile-resilience profile-proven profiles-check \
 	team-check team-init team-start team-stop team-logs team-config components-check images-check \
-	console-shots
+	console-shots doctor
 
 # ── Help ──────────────────────────────────────────────────────────────────
 
 help:
 	@echo ""
 	@echo "Eregion $(shell cat pyproject.toml | grep '^version' | cut -d'"' -f2)"
+	@echo ""
+	@echo "Démarrer (GS1) — docs/demarrer/"
+	@echo "  make doctor [PROFILE=discover|bench]  Les prérequis, vérifiés sans appeler ni le cloud ni le modèle"
 	@echo ""
 	@echo "Dev (local, no Docker)"
 	@echo "  make venv           Create .venv (python3 -m venv)"
@@ -259,13 +262,17 @@ help:
 	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
 	@echo "  make orodruin-up   [YES=1]                   1er apply, sortie ouverte (installe Docker)"
 	@echo "  make orodruin-lock [YES=1]                   Referme la sortie (apply) ; YES=1 = sans confirmation"
+	@echo "    WATCH_PRINCIPALS=<id>[,<id>…] : les watches qui écrivent le canal retour (défaut : H0) ;"
+	@echo "    sans H0, avec NO_WATCH=1 — la watch d'un poste ou d'une équipe (WC1)"
 	@echo "  make orodruin-push [REF=<tag|commit>]        Image d'Annatar publiée (digest vérifié ici) + orodruin.env"
 	@echo "  make orodruin-push-dev                       Développement : l'image construite ici, non vérifiée"
-	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
+	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive ; l'image, et la dernière release"
 	@echo "  make orodruin-fingerprint                    L'empreinte de sa clé d'hôte, lue par Azure (ORO_SSH_FINGERPRINT)"
 	@echo "  make watch-key / glorfindel-host-watch-key   La clé publique de la watch (ici / H0), à épingler : EREGION_WATCH_KEY (SEC19)"
 	@echo "  make harness-key / harness-sign              La clé de l'attestation (une fois) / signer requirements/harness.json (SEC19)"
 	@echo "  make orodruin-stop / orodruin-start          Désalloue / rallume la VM (entre les sessions)"
+	@echo "  make orodruin-start [NO_UPDATE=1]            …et la met à jour : la dernière release, vérifiée, si son image est plus ancienne (OI3)"
+	@echo "  make orodruin-update [REF=<tag|commit>]      La même mise à jour, la VM déjà démarrée"
 	@echo "  make orodruin-kill [DRY_RUN=1]               URGENCE : révoque l'identité, annule le chaos, désalloue, ferme les fenêtres"
 	@echo "  make orodruin-exercise REQUEST=<id> [DRY_RUN=1]  Dagorlad : tire la demande de la console, l'affiche, fait taper"
 	@echo "                                               les noms des cibles destructives, la porte sur Orodruin qui la rejuge et la lance"
@@ -308,6 +315,17 @@ help:
 	@echo "  INSTANCE    Workspace/stack du bench (default: default)"
 	@echo "  TOPO        Topos à activer, ex: TOPO=\"multinic,aks\""
 	@echo ""
+
+# ── Démarrer (GS1, #520) ──────────────────────────────────────────────────
+# Les prérequis d'un premier démarrage, vérifiés sans appeler ni le cloud ni le modèle
+# (scripts/doctor.py) : les outils, les variables (leur présence, jamais leur valeur), la
+# configuration, les dossiers d'état, le port de la console ; PROFILE=bench : le banc
+# (docs/demarrer/banc.md). Le venv s'il est là (la lecture stricte de la configuration),
+# sinon python3 : il tourne avant make install. 0 seulement si tout est vert ; le script rend 1 pour
+# un point à corriger, 2 pour un profil inconnu, et make en fait son propre code, 2, dans les deux cas.
+PROFILE ?= discover
+doctor:
+	@$(if $(wildcard .venv/bin/python),.venv/bin/python,python3) scripts/doctor.py --profile "$(PROFILE)"
 
 # ── Build ─────────────────────────────────────────────────────────────────
 
@@ -870,10 +888,17 @@ glorfindel-host-pull: glorfindel-host-known
 # IA1: then says whether the analysis AI still reasons with another model (analysis/separation.py):
 # Glorfindel's model shared with the analysis makes every campaign report refused on H0. Its
 # advice on a refusal (exit 2) only; an error (1, an image before IA1) is said; never fails.
+# OL1: first, host.env with the new model, on a copy, held to the rule of host_env.py --check (the
+# key its provider reads): refused, nothing is written, here nor on the VM.
 glorfindel-host-model: glorfindel-host-known
 	@test -n "$(MODEL)" || { echo "MODEL=anthropic/<modèle> requis (ou MODEL=default)"; exit 1; }
 	@case "$(MODEL)" in *[!A-Za-z0-9._/:-]*) echo "MODEL invalide : $(MODEL)"; exit 1;; esac
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
+	@test -f $(HOST_ENV) || { echo "$(HOST_ENV) manquant (make glorfindel-host-env)"; exit 1; }
+	@c=$$(mktemp); sed '/^GLORFINDEL_LLM_MODEL=/d' $(HOST_ENV) > $$c; \
+	 [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> $$c; \
+	 $(PYTHON) infra/glorfindel-host/host_env.py --check $$c >/dev/null; rc=$$?; rm -f $$c; \
+	 [ $$rc -eq 0 ] || { echo "  rien d'écrit, ni ici ni sur H0 : $(HOST_ENV) doit d'abord porter ce que lit le fournisseur de $(MODEL) (OL1)"; exit 1; }
 	@f=$(HOST_ENV); sed -i '/^GLORFINDEL_LLM_MODEL=/d' $$f; \
 	 [ "$(MODEL)" = default ] || echo "GLORFINDEL_LLM_MODEL=$(MODEL)" >> $$f
 	@$(HOST_SSH) 'cd eregion && sed -i "/^GLORFINDEL_LLM_MODEL=/d" .env && \
@@ -979,7 +1004,17 @@ ORO_TF        := terraform -chdir=infra/orodruin
 ORO_USER      ?= orodruin
 # watch_principal_id : l'identité du Glorfindel hébergé, lectrice du canal des fenêtres (partie C).
 ORO_WATCH_ID   = $(shell $(HOST_TF) output -no-color -raw principal_id 2>/dev/null | grep -E '^[0-9a-f-]{36}$$')
-ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)" -var="watch_principal_id=$(ORO_WATCH_ID)"
+# WC1 (#523) : WATCH_PRINCIPALS=<id>[,<id>…] — les watches qui écrivent le canal retour et lisent
+# les fenêtres (watch_principal_ids) : l'object id du principal de service de la watch d'un poste ou
+# d'une équipe, celui de H0 s'il doit garder le canal. Vide : la watch de H0 seule, comme avant. Sur
+# la ligne de commande seulement, vérifiée (orodruin-watch-principals : des GUID, aucun deux fois),
+# jamais développée par make ($(value …), unexport — comme REF) ; passée à terraform par le shell.
+WATCH_PRINCIPALS ?=
+unexport WATCH_PRINCIPALS
+ORO_GUID       = [0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}
+ORO_WATCH_IDS  = $(if $(value WATCH_PRINCIPALS), -var="watch_principal_ids=$$(printf '%s' "$$EREGION_WATCH_PRINCIPALS" | tr A-F a-f | sed 's/[^,][^,]*/"&"/g; s/.*/[&]/')")
+ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)" -var="watch_principal_id=$(ORO_WATCH_ID)"$(ORO_WATCH_IDS)
+orodruin-plan orodruin-up orodruin-lock orodruin-down orodruin-watch-principals: export EREGION_WATCH_PRINCIPALS = $(value WATCH_PRINCIPALS)
 # SEC5 (V-31) : le sous-réseau et l'IP de H0, admis par le pare-feu du compte du canal — dans
 # l'environnement de terraform, jamais sur la ligne affichée (l'id du sous-réseau nomme
 # l'abonnement, M124).
@@ -1051,11 +1086,27 @@ orodruin-fingerprint:
 # sous-réseau de H0 seraient vides, et le plan retirerait la lecture du canal par la watch et
 # l'accès de son sous-réseau. NO_WATCH=1 : un Orodruin sans Glorfindel hébergé, voulu — 1 seulement
 # (NO_WATCH=0, ou toute autre valeur, ne contourne rien).
-orodruin-watch-guard:
+# WC1 : WATCH_PRINCIPALS ne retire pas non plus le canal à H0 sans le dire — H0 lisible ici et absent
+# de la liste : refusé, sauf NO_WATCH=1 (sans H0 : WATCH_PRINCIPALS=<id> NO_WATCH=1).
+orodruin-watch-guard: orodruin-watch-principals
 	@if [ "$(NO_WATCH)" != 1 ] && { [ -z "$(ORO_WATCH_ID)" ] || [ -z "$(ORO_WATCH_SUBNET)" ]; }; then \
 	  echo "✗ L'état de infra/glorfindel-host ne se lit pas ici (principal_id, subnet_id) : le plan retirerait" >&2; \
 	  echo "  à la watch hébergée la lecture du canal et l'accès de son sous-réseau. make glorfindel-host-init" >&2; \
 	  echo "  sur ce poste, ou NO_WATCH=1 pour un Orodruin sans Glorfindel hébergé." >&2; exit 1; fi
+	@if [ -n "$$EREGION_WATCH_PRINCIPALS" ] && [ "$(NO_WATCH)" != 1 ] \
+	   && ! printf ',%s,' "$$EREGION_WATCH_PRINCIPALS" | tr A-F a-f | grep -qF ",$(ORO_WATCH_ID),"; then \
+	  echo "✗ WATCH_PRINCIPALS ne nomme pas la watch hébergée (H0) : le plan lui retirerait le canal retour et" >&2; \
+	  echo "  la lecture des fenêtres. Ajoute son identité (terraform -chdir=infra/glorfindel-host output principal_id)," >&2; \
+	  echo "  ou NO_WATCH=1 pour un Orodruin sans Glorfindel hébergé." >&2; exit 1; fi
+
+# WC1 : WATCH_PRINCIPALS vérifiée avant tout plan — donnée sur la ligne de commande, des object ids
+# (GUID) séparés par des virgules, aucun deux fois ; sinon rien ne part.
+orodruin-watch-principals:
+	@case "$(origin WATCH_PRINCIPALS)" in environment*) [ -z "$$EREGION_WATCH_PRINCIPALS" ] || { echo "WATCH_PRINCIPALS vient de l'environnement : rien n'est fait. La donner sur la ligne de commande : make orodruin-plan WATCH_PRINCIPALS=<id>[,<id>…]." >&2; exit 1; };; esac
+	@[ -z "$$EREGION_WATCH_PRINCIPALS" ] || printf '%s' "$$EREGION_WATCH_PRINCIPALS" | tr '\n' ' ' | grep -Eqx '$(ORO_GUID)(,$(ORO_GUID))*' \
+	  || { echo "✗ WATCH_PRINCIPALS invalide : des object ids d'Entra ID (GUID) séparés par des virgules, sans espace — rien n'est fait." >&2; exit 1; }
+	@[ -z "$$EREGION_WATCH_PRINCIPALS" ] || [ -z "$$(printf '%s\n' "$$EREGION_WATCH_PRINCIPALS" | tr A-F a-f | tr , '\n' | sort | uniq -d)" ] \
+	  || { echo "✗ WATCH_PRINCIPALS nomme une identité deux fois : rien n'est fait." >&2; exit 1; }
 
 orodruin-plan: orodruin-init orodruin-watch-guard
 	$(ORO_TF) plan $(ORO_VARS)
@@ -1141,15 +1192,90 @@ orodruin-push-dev: orodruin-known
 	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
 	$(ORO_SSH) '$(ORO_MIGRATE)'
 
+# OI3 (#522) : l'image en service sur Orodruin, lue en lecture seule par SSH — docker qui répond (code 5 :
+# il ne répond pas, rien ne se lit : on s'arrête, jamais pris pour une image absente), les étiquettes de
+# son tag (version, révision ; code 4 : le tag absent), puis ~/.eregion-image (code 3 : absent ; au plus
+# 4 Ko), bornée aussi sur ce poste (ORO_READ_MAX) —, comparée sur ce poste à la dernière release
+# (published_image.py age : le plus haut tag v* par ordre de version, puis par commit dans l'histoire
+# de git, jamais deux chaînes ; un marqueur vérifié dont le tag dit un autre commit : illisible). Ses
+# états : equal ; older, absent, unreadable (remplacée par orodruin-start) ; newer, dev, diverged
+# (gardée : jamais remplacée sans qu'on le demande).
+ORO_IMAGE_READ = 'docker info >/dev/null 2>&1 || exit 5; l=$$(docker image inspect -f "{{index .Config.Labels \"org.opencontainers.image.version\"}} {{index .Config.Labels \"org.opencontainers.image.revision\"}}" $(ORO_IMAGE) 2>/dev/null) || exit 4; printf "%s\n" "$$l" | head -c 200 | tr -d "\n"; echo; test -e .eregion-image || exit 3; head -c 4096 .eregion-image'
+# Sur ce poste, la lecture est bornée (head -c, son code de sortie à part dans $$tmp/rc), puis son code
+# devient les options de published_image.py age. Une autre fin : docker ne répond pas (5), ou ssh n'a
+# pas abouti.
+ORO_READ_MAX   = 4400
+ORO_AGE_ARGS   = rc=$$(cat "$$tmp/rc" 2>/dev/null || echo 255); case $$rc in 0) set -- --read "$$tmp/read";; 3) set -- --read "$$tmp/read" --no-marker;; 4) set -- --no-image;; *) set --;; esac
+ORO_AGE_STATE  = state=$$(printf '%s\n' "$$out" | sed -n 's/^state=//p'); release=$$(printf '%s\n' "$$out" | sed -n 's/^release=//p')
+# Le make d'une étape suivante (orodruin-update, orodruin-push), jamais écrit $(MAKE) dans la
+# recette : make -n exécuterait cette ligne (et démarrerait la VM, enverrait l'image) au lieu de la montrer.
+ORO_SUBMAKE    = $(MAKE) --no-print-directory
+
+# L'image en service est dite avant le verdict, en avertissement : une image plus ancienne n'empêche
+# pas d'être armé, et le code de sortie reste celui du contrat.
 orodruin-check: orodruin-known
+	@timeout 30 git fetch -q --tags origin 2>/dev/null || echo "  ⚠ git fetch impossible : la dernière release est celle que ce poste connaît" >&2
+	@tmp=$$(mktemp -d) || exit 0; trap 'rm -rf "$$tmp"' EXIT; \
+	 { rc=0; $(ORO_SSH) $(ORO_IMAGE_READ) 2>/dev/null || rc=$$?; echo $$rc > "$$tmp/rc"; } | head -c $(ORO_READ_MAX) > "$$tmp/read"; $(ORO_AGE_ARGS); \
+	 [ $$# -gt 0 ] || { echo "  ⚠ l'image en service ne se lit pas (docker ou ssh, code $$rc)" >&2; exit 0; }; \
+	 out=$$(python3 scripts/published_image.py age annatar "$$@") || { echo "  ⚠ l'image en service ne se compare pas à la dernière release (ci-dessus)" >&2; exit 0; }; \
+	 $(ORO_AGE_STATE); case "$$release" in ''|-*|*[!A-Za-z0-9._-]*) exit 0;; esac; \
+	 case "$$state" in older) w="plus ancienne";; absent) w="absente";; unreadable) w="illisible";; *) w="";; esac; \
+	 [ -z "$$w" ] || echo "  ⚠ image $$w : make orodruin-start ou make orodruin-push REF=$$release (un avertissement : le contrat suit)" >&2
 	$(ORO_SSH) '$(ORO_RUN_CONTRACT) python -m eregion_core.orodruin'
 
 # @ : la commande porte l'identifiant d'abonnement, on ne la répète pas à l'écran.
 orodruin-stop:
 	@echo "az vm deallocate (vm-orodruin)" && az vm deallocate --ids "$(ORO_VM_ID)"
 
+# OI3 (#522) : rallumée, Orodruin se met à jour. Une fois que la VM répond en SSH (ssh-keyscan, rien
+# n'y est accepté : sa clé est vérifiée ensuite par orodruin-known), orodruin-update lit l'image en
+# service et la compare à la dernière release : plus ancienne, absente ou illisible, il lance le push
+# vérifié (orodruin-push REF=<la release>, tout ce qu'il fait, run de contrôle compris) ; égale, rien ;
+# plus récente (un commit de main poussé à la main, orodruin-push-dev), gardée. Une erreur : un code non
+# nul, la cause dite, rien d'armé, la VM démarrée (c'est dit). NO_UPDATE=1 : démarrée sans mise à jour.
+# REF (la release visée, défaut : la dernière) et NO_UPDATE se donnent sur la ligne de commande, lus
+# par le shell dans son environnement, validés avant tout envoi, jamais développés par make. Avant
+# az vm start aussi : ORO_SSH_FINGERPRINT posé (sauf NO_UPDATE=1, qui ne parle pas à la VM) et
+# ORO_CHECK_TIMEOUT (le run de contrôle du push) — sinon la VM démarrerait pour rien.
+# L'attente : 12 essais d'au plus 5 s, 5 s entre deux, 2 min au plus.
+unexport NO_UPDATE
+orodruin-start: export EREGION_DEPLOY_REF = $(value REF)
+orodruin-start: export EREGION_NO_UPDATE = $(value NO_UPDATE)
+orodruin-start: export EREGION_CHECK_TIMEOUT = $(value ORO_CHECK_TIMEOUT)
+orodruin-start: export EREGION_ORO_FINGERPRINT = $(value ORO_SSH_FINGERPRINT)
 orodruin-start:
+	@case "$(origin REF) $(origin NO_UPDATE)" in *environment*) echo "REF ou NO_UPDATE vient de l'environnement : rien n'est démarré. Sur la ligne de commande : make orodruin-start [NO_UPDATE=1] [REF=<tag ou commit>]" >&2; exit 1;; esac
+	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit) : rien n'est démarré" >&2; exit 1;; esac
+	@case "$$EREGION_NO_UPDATE" in ''|1) ;; *) echo "NO_UPDATE invalide : « $$EREGION_NO_UPDATE » (NO_UPDATE=1, ou rien) : rien n'est démarré" >&2; exit 1;; esac
+	@[ "$$EREGION_NO_UPDATE" = 1 ] || case "$$EREGION_ORO_FINGERPRINT" in SHA256:*[!A-Za-z0-9+/=]*|SHA256:) echo "ORO_SSH_FINGERPRINT illisible : rien n'est démarré (make orodruin-fingerprint)" >&2; exit 1;; SHA256:*) ;; *) echo "ORO_SSH_FINGERPRINT requis pour la mise à jour (la clé d'hôte d'Orodruin, make orodruin-fingerprint) : rien n'est démarré. Ou NO_UPDATE=1" >&2; exit 1;; esac
+	@case "$$EREGION_CHECK_TIMEOUT" in 0*|*[!0-9]*|'') echo "ORO_CHECK_TIMEOUT invalide : « $$EREGION_CHECK_TIMEOUT » (des secondes, au moins 1) : rien n'est démarré" >&2; exit 1;; esac
 	@echo "az vm start (vm-orodruin)" && az vm start --ids "$(ORO_VM_ID)"
+	@if [ "$$EREGION_NO_UPDATE" = 1 ]; then echo "  Démarrée sans mise à jour (NO_UPDATE=1) : l'image en service n'est ni lue ni changée ; make orodruin-check la dit"; exit 0; fi; \
+	 i=0; until ssh-keyscan -T 5 -t ed25519 "$(ORO_IP)" 2>/dev/null | grep -q .; do i=$$((i+1)); \
+	   [ $$i -lt 12 ] || { echo "✗ Orodruin ne répond pas en SSH (2 min) : rien n'est mis à jour, rien n'est armé. La VM reste démarrée : make orodruin-update quand elle répond, make orodruin-stop pour l'éteindre" >&2; exit 1; }; sleep 5; done; \
+	 $(ORO_SUBMAKE) orodruin-update || { echo "✗ La VM reste démarrée : make orodruin-stop pour l'éteindre, make orodruin-start NO_UPDATE=1 pour démarrer sans mise à jour" >&2; exit 1; }
+
+orodruin-update: export EREGION_DEPLOY_REF = $(value REF)
+orodruin-update: orodruin-known
+	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est mis à jour. La donner sur la ligne de commande : make orodruin-update REF=<tag ou commit> (REF= : la dernière release)." >&2; exit 1;; esac
+	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
+	@git fetch -q --tags origin || { echo "✗ git fetch : la dernière release ne se relit pas ; rien n'est mis à jour, rien n'est armé" >&2; exit 1; }
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; trap 'rm -rf "$$tmp"; exit 130' INT TERM HUP; \
+	 { rc=0; $(ORO_SSH) $(ORO_IMAGE_READ) || rc=$$?; echo $$rc > "$$tmp/rc"; } | head -c $(ORO_READ_MAX) > "$$tmp/read"; $(ORO_AGE_ARGS); \
+	 [ $$# -gt 0 ] || { case $$rc in 5) why="docker ne répond pas sur Orodruin";; *) why="ssh, code $$rc";; esac; \
+	   echo "✗ l'image en service ne se lit pas ($$why) : rien n'est mis à jour, rien n'est armé" >&2; exit 1; }; \
+	 out=$$(python3 scripts/published_image.py age annatar --ref "$$EREGION_DEPLOY_REF" "$$@") \
+	   || { echo "✗ l'image en service ne se compare pas à la release (ci-dessus) : rien n'est mis à jour, rien n'est armé" >&2; exit 1; }; \
+	 $(ORO_AGE_STATE); \
+	 case "$$release" in ''|-*|*[!A-Za-z0-9._-]*) echo "✗ release illisible : rien n'est mis à jour, rien n'est armé" >&2; exit 1;; esac; \
+	 case "$$state" in \
+	   equal) ;; \
+	   newer|dev|diverged) echo "  Gardée : elle n'est jamais remplacée sans qu'on le demande. Pour revenir à la release : make orodruin-push REF=$$release";; \
+	   older|absent|unreadable) echo "→ Mise à jour vérifiée : make orodruin-push REF=$$release (digest, signature, provenance, archive des blobs, relecture, run de contrôle, tag)"; \
+	     $(ORO_SUBMAKE) orodruin-push REF="$$release" || { echo "✗ La mise à jour a échoué (la cause ci-dessus) : rien n'est armé" >&2; exit 1; }; \
+	     echo "✓ Orodruin à jour : $$release. make orodruin-check : le contrat";; \
+	   *) echo "✗ état inconnu de l'image (« $$state ») : rien n'est mis à jour, rien n'est armé" >&2; exit 1;; esac
 
 # Urgence, depuis ton az login : révoquer d'abord, puis annuler le chaos en cours, désallouer, fermer
 # les fenêtres d'exercice ouvertes, et dire ce qui reste en vol (infra/orodruin/kill.py).
@@ -1228,7 +1354,7 @@ orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known) 
 	 scp -q $(SSH_OPTS) "$$d/$$id.json" "$$d/$$id.typed.json" $(ORO_USER)@$(ORO_IP):requests/ && \
 	 ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) "trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; "'$(ORO_RUN_REQUEST) python -m eregion_core.exercise_runner /app/requests/'"$$id"'.json'
 
-orodruin-down:
+orodruin-down: orodruin-watch-principals
 	$(ORO_TF) destroy $(ORO_VARS)$(if $(YES), -auto-approve)
 
 orodruin-ssh: orodruin-known

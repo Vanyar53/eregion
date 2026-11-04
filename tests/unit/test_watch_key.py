@@ -305,6 +305,60 @@ def test_the_hosted_watch_signs_its_channel_heartbeat_and_orodruin_believes_it(i
     assert gate.refusal().startswith(f"{gate.CHANNEL}: its signature does not hold")
 
 
+def test_a_workstation_watch_publishes_on_the_channel_as_h0_does(injector, monkeypatch):
+    """WC1 (#523): without H0, the watch of a workstation or a team writes the return channel by
+    the path H0's takes — ``watch_channel.start``, the storage token of its own principal (in the
+    compose, GLORFINDEL_AZURE_CLIENT_* → AZURE_CLIENT_*, never ANNATAR_*), its heartbeat signed by
+    its key. Orodruin reads it from the channel and believes it with that key pinned only: a
+    heartbeat of another key stays refused (SEC19). A fake container, no network."""
+    import requests
+    import azure.identity
+    from eregion_core import exercise_channel
+
+    watch_url = "https://exampleaccount.blob.core.windows.net/watch"
+    watch_sp = "00000000-0000-0000-0000-0000000000c1"   # the watch's principal, a placeholder
+    signer = watch_key.load_or_create()
+    c = FakeContainer(watch_url)
+    built: list[str | None] = []
+
+    class Credential:   # DefaultAzureCredential, as it reads the process's environment
+        def __init__(self):
+            built.append(os.environ.get("AZURE_CLIENT_ID"))
+
+        def get_token(self, scope):
+            assert scope == exercise_channel.STORAGE
+            return type("Token", (), {"token": "tok-watch"})()
+
+    class Thread:       # start()'s thread, never started: the test ticks it
+        def __init__(self, target, **_):
+            self.target = target
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(azure.identity, "DefaultAzureCredential", Credential)
+    monkeypatch.setattr(exercise_channel, "_credential", None)
+    monkeypatch.setattr(wc.threading, "Thread", Thread)
+    monkeypatch.setattr(requests, "put", c.put)
+    monkeypatch.setattr(requests, "get", c.get)
+    monkeypatch.setattr(wc, "load_windows", lambda: [])
+    monkeypatch.setenv(wc.CHANNEL_ENV, watch_url)
+    monkeypatch.setenv("AZURE_CLIENT_ID", watch_sp)
+
+    publisher = wc.start()
+    assert publisher is not None and publisher.channel == watch_url
+    publisher.tick()
+    assert built == [watch_sp] and set(c.tokens) == {"Bearer tok-watch"}
+    body = json.loads(c.body("heartbeat.json"))
+    assert body["key"] == signer.fingerprint and "sig" in body
+
+    # Orodruin's side: the same channel, the watch's key pinned in orodruin.env.
+    monkeypatch.setenv(watch_key.KEY_ENV, watch_key.public_text(signer.public))
+    assert gate.refusal(record=False) == ""
+    monkeypatch.setenv(watch_key.KEY_ENV, watch_key.public_text(OTHER.public))
+    assert "signed by another key" in gate.refusal(record=False)
+
+
 def test_a_watch_without_its_key_beats_unsigned_and_says_it(monkeypatch, tmp_path, capsys):
     blocked = tmp_path / "blocked"
     blocked.write_text("")

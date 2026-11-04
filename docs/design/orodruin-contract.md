@@ -97,8 +97,9 @@ reste en vol. Voir « L'arrêt d'urgence arrête ce qui tourne ».
 | Cible | Fait |
 |---|---|
 | `orodruin-up` | crée la VM et l'identité, état Terraform **séparé** de Celebrimbor |
-| `orodruin-check` | vérifie le contrat, affiche le verdict, n'écrit rien |
+| `orodruin-check` | vérifie le contrat, affiche le verdict, n'écrit rien ; dit l'image en service et la dernière release (OI3) |
 | `orodruin-stop` | éteint la VM sans la détruire (pause) |
+| `orodruin-start` | rallume la VM, puis la met à jour : la dernière release, vérifiée, si son image est plus ancienne (OI3) |
 | `orodruin-down` | détruit la VM et l'identité |
 | `orodruin-kill` | révoque l'identité, annule le chaos en cours, arrête la VM, ferme les fenêtres ouvertes (urgence) |
 
@@ -273,8 +274,29 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   fenêtres : déclarés sur le même conteneur, le rédacteur reste refusé. `REQUIRED_ACTIONS` et le
   rôle `injector` ne changent pas ; `orodruin-kill` supprime toutes les attributions de
   l'identité, celle-ci comprise.
+- **Qui est « la watch » (WC1, #523, 04/11)** : `watch_principal_ids`, une ou plusieurs identités ;
+  par défaut (`null`) celle de H0 seule, `watch_principal_id`, comme avant — mêmes attributions, aux
+  mêmes adresses de l'état : le plan de H0 et d'Orodruin ne change pas. Sans H0, l'*object id* du
+  principal de service d'une watch de poste ou d'équipe (`GLORFINDEL_AZURE_CLIENT_*`), passé par
+  `make orodruin-plan WATCH_PRINCIPALS=<id>[,<id>…] NO_WATCH=1`. Chacune reçoit exactement ce que
+  reçoit H0 : `Storage Blob Data Reader` sur `exercises`, `Storage Blob Data Contributor` sur
+  `watch`, à la portée du conteneur, `principal_type = ServicePrincipal`. Le plan refuse un
+  non-GUID, une identité nommée deux fois, l'identité d'Orodruin et celle de l'opérateur qui
+  applique (`azurerm_client_config`) ; le Makefile refuse une valeur venue de l'environnement, et
+  une liste qui retire le canal à H0 quand son état se lit, sauf `NO_WATCH=1`. Celle d'Annatar,
+  Terraform ne la connaît pas : c'est l'opérateur qui nomme l'identité, et lui seul la tient hors de
+  la liste. Chaque `orodruin-up` et `orodruin-lock` redonne la même liste, sinon le plan retire ses
+  droits à la watch du poste. Le contrat d'Orodruin ne change pas : il ne lit que ses propres
+  attributions. La garde non plus : elle ne croit qu'un battement signé par la clé épinglée dans
+  `orodruin.env` (SEC19) — un rédacteur de plus n'y fait pas croire une autre clé. Les détections
+  aussi sont signées par cette clé (SEC21) : un run ne compte pour « vu » que celles que la clé
+  épinglée a signées pour lui, et ne conclut à un `missed` que sur un battement qu'elle a signé —
+  un rédacteur de plus ne fausse pas la mesure, ce qu'il écrit est refusé et dit. Une watch à la
+  fois : le battement est un seul blob, deux watches l'écraseraient tour à tour
+  (`infra/orodruin/README.md`, « Sans H0 »).
 - **Sortie** : rien ne change (`Storage.FranceCentral` pour Orodruin ; la sortie de H0 n'est pas
-  filtrée). `GLORFINDEL_READ_ONLY` porte sur l'infra observée, pas sur le stockage d'Eregion.
+  filtrée). `GLORFINDEL_READ_ONLY` porte sur l'infra observée, pas sur le stockage d'Eregion. Une
+  watch de poste entre par l'IP de l'opérateur, que le pare-feu du compte admet déjà (WC1).
 - **Mutants** : M109 (battement de cœur sur une détection en attente), M110 (une VM hors fenêtre
   publiée), M111 (une fenêtre inconnue de la watch prouve un miss), M112 (une watch redémarrée
   prouve un miss), M113 (le contrat accepte un rôle d'écriture sur `watch`), M114 (le run conclut
@@ -412,7 +434,8 @@ d'Orodruin et de H0, par un point de terminaison de service `Microsoft.Storage` 
 règle d'IP n'a pas d'effet pour un client de la même région que le compte, ce qui est leur cas
 (francecentral) —, et les IP publiques d'Orodruin, de H0 (si l'un d'eux change de région) et de
 l'opérateur (l'arrêt d'urgence ferme les fenêtres depuis son poste ; une IP qui a changé depuis le
-dernier apply : le kill dit que les fenêtres n'ont pas été fermées, et quand elles expirent). Un
+dernier apply : le kill dit que les fenêtres n'ont pas été fermées, et quand elles expirent ; depuis
+WC1, la watch d'un poste passe par cette même IP, rien n'est ouvert de plus). Un
 point de terminaison privé n'est pas gratuit : 0,0088 € l'heure l'un (API publique des prix
 d'Azure, compteur « Standard Private Endpoint », 29/10), environ 6,4 € par mois, plus le trafic ;
 il en faudrait deux, les VNet n'étant pas appairés. À mesurer après l'apply : `orodruin-check`,
@@ -696,11 +719,61 @@ commentaire du `custom_data` seul a changé : il est hors du heredoc, un plan ne
 
 **Le chemin de développement**, dit comme tel : `make orodruin-push-dev` construit l'image sur le
 poste, **non vérifiée**, pour essayer une branche avant sa fusion ; `~/.eregion-image` dit
-`dev <commit>`. Le contrat ne lit pas ce fichier : c'est une trace pour l'opérateur, pas une garde.
+`dev <commit>`. Le contrat ne lit pas ce fichier : c'est une trace pour l'opérateur, pas une garde
+(depuis OI3, `make orodruin-start` le lit pour décider d'une mise à jour, voir plus bas).
 Il passe encore par `docker save` : une image construite sur le poste s'exporte entière (mesuré le
 03/11), seule une image tirée perdait sa configuration et ses couches.
 
-**Ce qui reste ouvert** : l'image n'est vérifiée que sur le poste qui l'envoie ; un poste compromis
+**À jour au démarrage** (OI3, #522, décision de Jonathan du 04/11). H0 se met à jour seul (son CD) ;
+Orodruin, éteint la plupart du temps et sans sortie vers le registre, restait sur l'image de son dernier
+`orodruin-push`. **`make orodruin-start`** rallume la VM, attend qu'elle réponde en SSH (`ssh-keyscan`,
+rien n'y est accepté : sa clé est vérifiée ensuite par `orodruin-known`), puis lit **en lecture seule**
+l'image en service : docker répond-il (`docker info`), le tag `eregion-annatar:orodruin` existe-t-il et
+quel commit dit son étiquette `org.opencontainers.image.revision`, que dit `~/.eregion-image` (au plus
+4 Ko ; la lecture est bornée aussi sur le poste). Sur le poste, `published_image.py age` la compare à la **dernière release** : le plus haut
+tag `v*` **par ordre de version** (celui que prend `orodruin-push` sans `REF` : `v0.5.10` après
+`v0.5.9`), puis **par commit, dans l'histoire de git** (`merge-base --is-ancestor`), jamais en
+comparant deux chaînes.
+- **Plus ancienne** (son commit dans l'histoire de la release), **absente** (ni tag, ni
+  `~/.eregion-image`) ou **illisible** (ni « commit digest », ni « dev commit » ; ou un « commit
+  digest » dont le tag dit un autre commit : un `orodruin-push-dev` coupé avant son marqueur, une
+  image chargée à la main — les images dev n'ont pas l'étiquette, leur marqueur `dev` garde son
+  comportement) : il le dit, puis
+  lance `orodruin-push REF=<la release>`, tel qu'il est — digest, signature, provenance, archive des
+  blobs, chargement, relecture, run de contrôle, tag, migration.
+- **Égale** : rien, en une ligne.
+- **Plus récente** (la release dans son histoire : un commit de `main` poussé à la main), **dev**
+  (`orodruin-push-dev`), ou **hors de l'histoire de la release** : gardée, jamais remplacée sans
+  qu'on le demande ; la commande pour revenir à la release est dite (`make orodruin-push REF=vY`).
+- **Une erreur** (la VM qui ne répond pas en 2 min, docker qui ne répond pas sur Orodruin — jamais pris
+  pour une image absente : le push effacerait `~/.eregion-image` avant de charger —, la lecture, un
+  commit de l'image inconnu du poste, une `REF` hors d'`origin/main`, le push, sa vérification, son run
+  de contrôle) : un code non nul, la cause dite, rien d'armé, et la VM qui reste démarrée, ce qui est
+  dit aussi (`make orodruin-stop`).
+- `NO_UPDATE=1` démarre sans rien lire ni changer, et le dit ; `REF=<tag|commit>` vise une autre
+  release que la dernière. Les deux se donnent sur la ligne de commande : validés avant tout (`az`
+  compris), lus par le shell dans son environnement, jamais développés par make, comme `REF` et
+  `ORO_CHECK_TIMEOUT` (OI2). Avant `az vm start` aussi : `ORO_SSH_FINGERPRINT` posé (sauf
+  `NO_UPDATE=1`) et `ORO_CHECK_TIMEOUT` — sans eux, la VM démarrerait pour rien. `make orodruin-update
+  [REF=…]` fait la même mise à jour, la VM déjà démarrée ; ses lectures passent par `orodruin-known`
+  et la clé épinglée, comme tout ce qui parle à Orodruin. `make -n orodruin-start` ne lance rien : le
+  make suivant n'est jamais écrit `$(MAKE)` dans la recette (`ORO_SUBMAKE`), que `make -n` exécuterait.
+
+**`make orodruin-check`** dit l'image et la dernière release (« image v0.5.3 (commit), dernière release
+v0.5.4 (commit) »), et, plus ancienne, absente ou illisible, « image plus ancienne (absente, illisible) :
+make orodruin-start ou make orodruin-push REF=v0.5.4 ». C'est un avertissement : une image plus
+ancienne n'empêche pas d'être armé, et le code de sortie reste celui
+du contrat. **Rien ne change** au réseau d'Orodruin, à son contrat, à sa garde de la watch, à
+`orodruin-push` ni à `orodruin-push-dev` : la mise à jour passe par le même push vérifié, depuis le
+poste. Le contrat ne lit toujours pas `~/.eregion-image` : le fichier décide d'une mise à jour, jamais
+d'un armement.
+
+**Ce qui reste ouvert, pour OI3** : `~/.eregion-image` et l'étiquette du tag sont la parole de
+l'image en service. Un marqueur et une image réécrits ensemble sur Orodruin, pour nommer un commit plus
+récent, retiendraient une mise à jour ; jamais l'inverse : une image n'est remplacée que par la
+release vérifiée.
+
+**Ce qui reste ouvert, depuis CI3** : l'image n'est vérifiée que sur le poste qui l'envoie ; un poste compromis
 enverrait autre chose et la relecture de l'image, comparée sur ce même poste, ne le verrait
 pas. Le contrat (`orodruin-check`) ne lit pas encore la provenance de l'image qu'il exécute —
 planifié.

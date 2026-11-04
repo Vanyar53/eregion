@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import click
+import pytest
 from click.testing import CliRunner
 
 from annatar.cli import _AnnatarCli
@@ -61,3 +62,199 @@ def test_subcommand_help_exits_zero_without_a_fake_error():
     result = CliRunner().invoke(cli, ["run", "--help"])
     assert result.exit_code == 0
     assert "✗" not in result.output
+
+
+# ── annatar validate says a failure by its exit code (AV1, #524) ────────────────
+# A script or a CI that trusts `annatar validate` (make annatar-validate) reads the code: an
+# invalid scenario exits 1 with its cause, --all exits 1 as soon as one is invalid and lists
+# them; all valid: 0.
+
+_VALID = ("name: av1-valid\ndescription: d\nmitre: T1486\n"
+          "target:\n  type: azure_vm\n  resource_group: rg\nsteps: []\n")
+_NO_TARGET = "name: av1-bad\ndescription: d\nmitre: T1486\nsteps: []\n"
+
+
+@pytest.fixture
+def wide_console(monkeypatch):
+    """The CLI's console, wide: a long tmp path is never wrapped across lines."""
+    from rich.console import Console
+    monkeypatch.setattr("annatar.cli.console", Console(width=1000))
+
+
+def _validate(*args):
+    from annatar.cli import cli
+    return CliRunner().invoke(cli, ["validate", *args])
+
+
+def _scenarios(tmp_path, monkeypatch, files: dict[str, str]):
+    """A scenarios root of its own: <tmp>/annatar/scenarios/azure/<name>."""
+    root = tmp_path / "annatar" / "scenarios"
+    (root / "azure").mkdir(parents=True)
+    for name, text in files.items():
+        (root / "azure" / name).write_text(text)
+    monkeypatch.setattr("annatar.runner.parser.scenarios_root", lambda: root)
+    return root
+
+
+def _invalid_listed(output: str) -> list[str]:
+    """The invalid scenarios the closing list of --all names, in order."""
+    assert " invalid / " in output, output
+    tail = output.split(" invalid / ", 1)[1].splitlines()[1:]
+    return [line.split("FAIL", 1)[1].strip() for line in tail if "FAIL" in line]
+
+
+def test_validate_one_invalid_scenario_exits_1_and_says_why(tmp_path, wide_console):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(_NO_TARGET)
+    res = _validate(str(bad))
+    assert res.exit_code == 1, res.output
+    assert f"FAIL {bad} is invalid" in res.output
+    assert "Missing required field: 'target'" in res.output
+    assert "Traceback" not in res.output
+
+
+def test_validate_one_valid_scenario_exits_0(tmp_path, wide_console):
+    good = tmp_path / "good.yaml"
+    good.write_text(_VALID)
+    res = _validate(str(good))
+    assert res.exit_code == 0, res.output
+    assert f"OK {good} is valid" in res.output
+
+
+def test_validate_a_name_that_resolves_to_nothing_exits_1(tmp_path, monkeypatch, wide_console):
+    _scenarios(tmp_path, monkeypatch, {"good.yaml": _VALID})
+    res = _validate("av1-no-such-scenario")
+    assert res.exit_code == 1, res.output
+    assert "Not found" in res.output
+
+
+def test_validate_all_exits_1_when_one_is_invalid_and_lists_the_invalid_ones(
+        tmp_path, monkeypatch, wide_console):
+    _scenarios(tmp_path, monkeypatch, {
+        "a-good.yaml": _VALID,
+        "b-bad.yaml": _NO_TARGET,
+        "c-good.yaml": _VALID.replace("av1-valid", "av1-valid-2"),
+        "d-broken.yaml": "name: [unclosed",
+    })
+    res = _validate("--all")
+    assert res.exit_code == 1, res.output
+    assert "2 invalid / 4 scenario(s)" in res.output
+    assert _invalid_listed(res.output) == ["annatar/scenarios/azure/b-bad.yaml",
+                                           "annatar/scenarios/azure/d-broken.yaml"]
+    # each cause said under its scenario
+    assert "Missing required field: 'target'" in res.output
+    assert "YAML parse error" in res.output
+    assert "All " not in res.output
+
+
+def test_validate_with_no_argument_is_all_and_exits_1_too(tmp_path, monkeypatch, wide_console):
+    _scenarios(tmp_path, monkeypatch, {"bad.yaml": "name: av1-bad\n"})
+    res = _validate()   # make annatar-validate with no SCENARIO
+    assert res.exit_code == 1, res.output
+    assert _invalid_listed(res.output) == ["annatar/scenarios/azure/bad.yaml"]
+
+
+def test_validate_all_valid_exits_0(tmp_path, monkeypatch, wide_console):
+    _scenarios(tmp_path, monkeypatch, {"a.yaml": _VALID, "b.yaml": _VALID})
+    res = _validate("--all")
+    assert res.exit_code == 0, res.output
+    assert "All 2 scenario(s) valid" in res.output
+    assert "invalid" not in res.output
+
+
+def test_validate_all_says_an_empty_or_list_file_and_goes_on_to_the_others(
+        tmp_path, monkeypatch, wide_console):
+    """An empty file, a YAML list or a target that is no mapping is a scenario that is invalid,
+    with its cause — not a TypeError that stops --all before the scenarios after it."""
+    _scenarios(tmp_path, monkeypatch, {
+        "a-empty.yaml": "",
+        "b-list.yaml": "- name: av1\n",
+        "c-target.yaml": _VALID.replace("target:\n  type: azure_vm\n  resource_group: rg\n",
+                                        "target: 3\n"),
+        "c2-engine.yaml": _VALID + "engine: [atomic]\n",
+        "d-bad.yaml": "name: av1-bad\n",
+        "e-good.yaml": _VALID,
+    })
+    res = _validate("--all")
+    assert res.exit_code == 1, res.output
+    assert not isinstance(res.exception, TypeError)
+    assert _invalid_listed(res.output) == [
+        f"annatar/scenarios/azure/{n}.yaml"
+        for n in ("a-empty", "b-list", "c-target", "c2-engine", "d-bad")]
+    assert "this file is empty" in res.output
+    assert "this file is a list" in res.output
+    assert "target must be a mapping" in res.output
+    assert "engine '['atomic']' is not one of" in res.output
+    assert "OK   annatar/scenarios/azure/e-good.yaml" in res.output
+
+
+def test_validate_says_the_cause_as_written_never_read_as_markup(tmp_path, wide_console):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(_VALID + "engine: '[bold]stratus'\nengine_ref: x\n")
+    res = _validate(str(bad))
+    assert res.exit_code == 1, res.output
+    assert "engine '[bold]stratus' is not one of" in res.output
+
+
+def test_validate_all_says_causes_and_names_as_written(tmp_path, monkeypatch, wide_console):
+    """--all prints a cause and a file name as the file has them: `[bold]` stays `[bold]`, under
+    each scenario and in the closing list."""
+    _scenarios(tmp_path, monkeypatch, {
+        "a-[bold]x.yaml": _NO_TARGET,
+        "b-engine.yaml": _VALID + "engine: '[bold]stratus'\nengine_ref: x\n",
+    })
+    res = _validate("--all")
+    assert res.exit_code == 1, res.output
+    assert "engine '[bold]stratus' is not one of" in res.output
+    # once under the scenario, once in the closing list
+    assert res.output.count("FAIL annatar/scenarios/azure/a-[bold]x.yaml") == 2, res.output
+    assert _invalid_listed(res.output) == ["annatar/scenarios/azure/a-[bold]x.yaml",
+                                           "annatar/scenarios/azure/b-engine.yaml"]
+
+
+def test_validate_says_a_name_not_found_as_written(tmp_path, monkeypatch, wide_console):
+    _scenarios(tmp_path, monkeypatch, {"good.yaml": _VALID})
+    res = _validate("[bold]no-such-scenario")
+    assert res.exit_code == 1, res.output
+    assert "Not found: '[bold]no-such-scenario'" in res.output
+
+
+def test_validate_all_never_turns_what_the_file_says_into_an_emoji(tmp_path, monkeypatch,
+                                                                   wide_console):
+    """A `:fire:` the file carries stays `:fire:`: in the YAML error, which quotes the file's
+    path, in a file name, in an engine."""
+    _scenarios(tmp_path, monkeypatch, {
+        "a-:fire:-yaml.yaml": "name: :fire: [unclosed\n",
+        "b-:fire:.yaml": _NO_TARGET,
+        "c-engine.yaml": _VALID + "engine: ':fire:'\nengine_ref: x\n",
+        "d-good-:fire:.yaml": _VALID,
+    })
+    res = _validate("--all")
+    assert res.exit_code == 1, res.output
+    assert "🔥" not in res.output
+    assert '/annatar/scenarios/azure/a-:fire:-yaml.yaml", line 1' in res.output   # the YAML error
+    assert "engine ':fire:' is not one of" in res.output
+    assert res.output.count("annatar/scenarios/azure/b-:fire:.yaml") == 2
+    assert "OK   annatar/scenarios/azure/d-good-:fire:.yaml" in res.output
+
+
+def test_validate_one_scenario_never_turns_what_the_file_says_into_an_emoji(tmp_path,
+                                                                            wide_console):
+    bad = tmp_path / ":fire:.yaml"
+    bad.write_text("name: :fire: [unclosed\n")
+    res = _validate(str(bad))
+    assert res.exit_code == 1, res.output
+    assert "🔥" not in res.output
+    assert f"FAIL {bad} is invalid" in res.output
+    assert f'in "{bad}", line 1' in res.output                    # the YAML error quotes the path
+    good = tmp_path / "good-:fire:.yaml"
+    good.write_text(_VALID)
+    res = _validate(str(good))
+    assert res.exit_code == 0, res.output
+    assert f"OK {good} is valid" in res.output
+
+
+def test_the_shipped_scenarios_all_validate():
+    """make annatar-validate with no SCENARIO keeps exiting 0 on what the repository ships."""
+    res = _validate("--all")
+    assert res.exit_code == 0, res.output

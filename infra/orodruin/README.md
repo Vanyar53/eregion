@@ -19,7 +19,7 @@ Contrat (garanties, vérifications, kill, mutants) :
   annuler une expérience, sur chaque expérience (SEC5, #182). Jamais d'écriture sur le groupe
   entier : bree, jamais inscrite, reste hors d'atteinte. Plus `Log Analytics Reader` sur l'espace
   de logs du banc. Rien d'autre : le contrat tient une liste de ce que chaque portée peut porter,
-  et tout autre droit le rend passif (SEC11, `docs/design/orodruin-contract.md`). Une VM inscrite plus tard : `make orodruin-lock YES=1` lui donne ses droits.
+  et tout autre droit le rend passif (SEC11, `docs/design/orodruin-contract.md`). Une VM inscrite plus tard : `make orodruin-lock` (son plan relu, puis confirmé) lui donne ses droits.
 - **Le compte du canal derrière son pare-feu** (SEC5) : seuls les sous-réseaux d'Orodruin et de
   H0 (points de terminaison de service) et les IP d'Orodruin, de H0 et de l'opérateur y entrent.
   Appliquer `infra/glorfindel-host` d'abord (le point de terminaison de H0), puis ce module.
@@ -50,23 +50,78 @@ Contrat (garanties, vérifications, kill, mutants) :
   publiée, le CD de H0 la déploie d'abord ; puis Orodruin (OI3, ou `make orodruin-push REF=<tag>`).
   Dans l'autre ordre, les runs d'Orodruin restent `unknown` (« unsigned … update Glorfindel ») tant
   que la watch n'est pas à jour (`docs/design/watch-key.md`, « Les détections signées »).
+- **Qui écrit le canal retour** (WC1, #523) : par défaut la watch de H0 seule, comme avant. Sans H0,
+  la watch d'un poste ou d'une équipe : `WATCH_PRINCIPALS=<id>[,<id>…]` (la variable
+  `watch_principal_ids`), voir ci-dessous.
+
+## Sans H0 : la watch d'un poste ou d'une équipe (WC1)
+
+Une watch qui tourne sur ton poste (`make glorfindel-start`, `make profile-discover`) ou pour une
+équipe (`make team-start`) publie son battement signé et ses détections sur le canal retour par le
+même chemin que H0 (`eregion_core/watch_channel.py`), sous **son** principal de service
+(`GLORFINDEL_AZURE_CLIENT_*`, jamais `ANNATAR_AZURE_CLIENT_*`). Il lui faut deux droits, et rien
+d'autre : lire `exercises` (les fenêtres) et écrire `watch`.
+
+- **L'identité** : l'*object id* du principal de service de la watch (l'application d'entreprise),
+  pas son *client id* : `az ad sp show --id <GLORFINDEL_AZURE_CLIENT_ID> --query id -o tsv`. C'est
+  toi qui la nommes : Terraform ne connaît pas l'identité d'Annatar, il donne le droit à celle que
+  tu lui donnes. Le plan refuse seulement l'identité d'Orodruin et la tienne (celle qui applique).
+- **Le plan** : `make orodruin-plan WATCH_PRINCIPALS=<object id> NO_WATCH=1`. `NO_WATCH=1` dit
+  qu'il n'y a pas de Glorfindel hébergé (SEC7). Avec H0, sa watch ne garde le canal que si son
+  identité est dans la liste (`terraform -chdir=infra/glorfindel-host output principal_id`) ;
+  sinon le Makefile refuse, sauf `NO_WATCH=1`.
+- **Chaque apply redonne la liste** : à chaque `orodruin-up` et `orodruin-lock` (une VM inscrite
+  plus tard, la sortie refermée), la même `WATCH_PRINCIPALS`, et `NO_WATCH=1` sans H0. Sans elles,
+  le plan retire ses droits à la watch du poste.
+- **Ce que le Makefile vérifie** : `WATCH_PRINCIPALS` se donne sur la ligne de commande (jamais de
+  l'environnement), des GUID séparés par des virgules, sans espace, aucun deux fois ; jamais
+  développée par make. Le plan refuse aussi ce qui n'est pas un GUID, une identité nommée deux fois,
+  et l'identité d'Orodruin (un injecteur n'écrit jamais ce que dit la watch).
+- **Le réseau** : le pare-feu du compte admet déjà l'IP de l'opérateur (l'arrêt d'urgence). Une
+  watch sur ton poste passe par là ; ton IP a changé depuis le dernier apply, elle n'atteint plus le
+  canal, et les runs sont refusés (aucun battement frais). Une watch sur un autre hôte n'y entre pas.
+- **Sur le poste de la watch** : `EREGION_WATCH_CHANNEL` (`terraform output watch_channel_url`) et
+  `EREGION_EXERCISE_CHANNEL` (`channel_url`) dans ton environnement, ou dans le `team.env` de
+  l'équipe.
+- **Sur Orodruin** : la clé de cette watch épinglée dans `orodruin.env`, `EREGION_WATCH_KEY`
+  (`make watch-key` sur son poste), puis `make orodruin-push`. Un battement d'une autre clé, celui
+  de H0 compris, reste refusé (SEC19).
+- **Une watch à la fois** : le battement est un seul blob (`heartbeat.json`). Deux watches qui
+  publient en même temps l'écrasent tour à tour, et la garde refuse celle dont la clé n'est pas
+  épinglée. Plusieurs identités servent à passer de l'une à l'autre, pas à les faire tourner ensemble.
+- **Les détections sont signées** (SEC21) : par la clé de la watch, comme son battement. Un run ne
+  compte une détection pour « vu » que vérifiée avec la clé épinglée dans `orodruin.env`, pour ce run
+  et ce signal ; et il ne conclut à un « missed » que sur un battement de fin d'attente qu'elle a
+  signé. Une identité listée dont la clé n'est pas épinglée ne fausse donc pas la mesure : ce qu'elle
+  écrit est refusé, dit, et le run est `unknown`. Ce qui reste ouvert : une détection retirée du
+  canal (`docs/design/watch-key.md`, « Ce que cela prouve, et ce que non »).
+
+Tests : `infra/orodruin/tests/watch_writers.tftest.hcl` (`terraform test`, fournisseur mocké),
+`tests/unit/test_makefile_bench.py`, `tests/unit/test_watch_key.py`. Mesure au banc : un run depuis
+Orodruin, la watch sur le poste, à faire avec Jonathan.
 
 ## Déroulé (avec Jonathan — c'est lui qui lance les apply)
 
 ```bash
 # 0. Lecture seule : quota de la famille, SKU, prix → vm_size (repli : D2als_v6)
-make orodruin-plan                 # relire le plan
-make orodruin-up YES=1             # 1er apply, sortie ouverte : la VM installe Docker
+make orodruin-plan                 # relire le plan : il est calculé sortie FERMÉE (egress_locked=true),
+                                   # celui du 2e apply, pas celui du 1er
+make orodruin-up                   # 1er apply, il OUVRE la sortie (egress_locked=false), le temps que la VM
+                                   # installe Docker : son plan est montré, relu, confirmé (jamais YES=1 ici :
+                                   # le plan relu au-dessus n'est pas celui qu'il applique)
 make orodruin-fingerprint          # l'empreinte de sa clé d'hôte, lue sur la VM par Azure (Run Command) :
                                    # export ORO_SSH_FINGERPRINT=SHA256:… dans ton environnement (V-32)
 make orodruin-ssh                  # attendre ~/.orodruin-ready, puis exit
-make orodruin-lock YES=1           # 2e apply : la sortie se referme (YES=1 : sans confirmation)
+make orodruin-lock                 # 2e apply, il REFERME la sortie : son plan montré, relu, confirmé
+                                   # sans H0 (WC1) : à chaque -up et -lock, la même WATCH_PRINCIPALS=<id> NO_WATCH=1,
+                                   # sinon le plan retire ses droits à la watch du poste
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env   # abonnement, plafond
 make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, signature et provenance vérifiés ici, archive tirée des blobs du registre (OI1) | ssh docker load ; + orodruin.env
                                    # REF=<tag|commit> (défaut : le dernier tag v* — tant qu'il est d'avant CI3, il n'a pas d'image
                                    # publiée et la cible échoue : donner REF=<un commit de main d'après CI3>)
                                    # make orodruin-push-dev : construite ici, non vérifiée (développement)
-make orodruin-check                # le contrat lu depuis la VM : armed ou passive
+make orodruin-check                # le contrat lu depuis la VM : armed ou passive ; avant lui, l'image en
+                                   # service et la dernière release (plus ancienne : un avertissement, OI3)
 ```
 
 **SSH : la clé d'hôte épinglée (V-32, SEC14).** Chaque commande du poste vers Orodruin
@@ -97,6 +152,32 @@ avant de l'exécuter, et s'arrête au plafond déclaré.
 
 Entre les sessions : `make orodruin-stop` (désalloue), `make orodruin-start`.
 
+**À jour au démarrage (OI3, #522).** Après une publication, `make orodruin-start` suffit : une fois
+la VM démarrée et qu'elle répond en SSH, il lit l'image en service (docker qui répond, le tag
+`eregion-annatar:orodruin` et le commit de son étiquette, `~/.eregion-image`, en lecture seule, par la
+clé d'hôte épinglée) et la compare, sur le poste, à la dernière release (le plus haut tag `v*` par
+ordre de version, puis par commit dans l'histoire de git). Un marqueur vérifié dont le tag dit un
+autre commit est illisible : la release est poussée.
+
+```bash
+make orodruin-start                # plus ancienne, absente ou illisible : il le dit, puis make orodruin-push
+                                   # REF=<la dernière release> (vérifiée, run de contrôle compris) ;
+                                   # égale : rien, en une ligne ; plus récente (un commit de main poussé à
+                                   # la main, orodruin-push-dev) : gardée, et la commande pour revenir est dite
+make orodruin-start NO_UPDATE=1    # démarrée sans rien lire ni changer
+make orodruin-start REF=v0.5.4     # une autre release visée que la dernière
+make orodruin-update [REF=…]       # la même mise à jour, la VM déjà démarrée
+```
+
+Une erreur (la VM qui ne répond pas en 2 min, docker qui ne répond pas sur Orodruin, la lecture, une
+`REF` hors d'`origin/main`, le push, sa vérification, son run de contrôle) : un code non nul, la cause
+dite, rien d'armé, et la VM reste démarrée (c'est dit : `make orodruin-stop` pour l'éteindre). `REF`
+et `NO_UPDATE` se donnent sur la ligne de commande (`NO_UPDATE=1`, ou rien), validés avant tout,
+jamais développés par make ; avant `az vm start` aussi, `ORO_SSH_FINGERPRINT` (sauf `NO_UPDATE=1`) et
+`ORO_CHECK_TIMEOUT`. `make -n orodruin-start` montre ses lignes et n'en lance aucune. Rien ne change au réseau
+d'Orodruin ni à son contrat : la mise à jour est le même `orodruin-push`, depuis le poste. Le détail :
+`docs/design/orodruin-contract.md`, « L'image des injecteurs », « À jour au démarrage ».
+
 **Urgence** : `make orodruin-kill` — depuis ton `az login`, quel que soit son abonnement
 courant. Le kill révoque toutes les attributions de rôle de l'identité **sur l'abonnement du
 contrat** (`AZURE_SUBSCRIPTION_ID` d'`orodruin.env`). Il annule ensuite les expériences de chaos
@@ -107,7 +188,7 @@ peut laisser arrêtée. Il sort en 1 si une étape a échoué.
 - `PRINCIPAL=`, `VM_ID=`, `SUBSCRIPTION=`, `CHANNEL=` servent si l'état Terraform ou
   `orodruin.env` est illisible.
 - Pour fermer les fenêtres, l'opérateur écrit sur le conteneur `exercises` (`channel_operator`,
-  posé par `make orodruin-lock YES=1`).
+  posé par `make orodruin-lock`).
 
 Le kill retire les droits hors de Terraform : `make orodruin-lock` les repose. Retirer un rôle ne
 prend pas effet à l'instant (cache du plan de contrôle) : c'est pour ça que la VM s'arrête aussi.

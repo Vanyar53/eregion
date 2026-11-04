@@ -110,7 +110,26 @@ variable "storage_service_tag" {
 }
 
 variable "watch_principal_id" {
-  description = "Identité managée du Glorfindel hébergé (H0) : lectrice du canal des fenêtres, rédactrice du canal retour (#159). Le Makefile la lit dans l'état de infra/glorfindel-host ; vide → ni lecteur ni rédacteur."
+  description = "Identité managée du Glorfindel hébergé (H0) : lectrice du canal des fenêtres, rédactrice du canal retour (#159), sauf si watch_principal_ids la laisse de côté. Le Makefile la lit dans l'état de infra/glorfindel-host ; vide → pas de watch hébergée."
   type        = string
   default     = ""
+}
+
+# WC1 (#523) : sans H0, la watch d'un poste ou d'une équipe parle à Orodruin. Chacune de ces
+# identités lit le canal des fenêtres (`exercises`) et écrit le canal retour (`watch`), rien
+# d'autre. null (défaut) → la seule watch hébergée, watch_principal_id, comme avant WC1.
+variable "watch_principal_ids" {
+  description = "Les identités des watches qui écrivent le canal retour et lisent celui des fenêtres : l'object id de leur principal de service (jamais son client id), ou de l'identité managée de H0. null (défaut) → [watch_principal_id]. Le Makefile la passe par WATCH_PRINCIPALS=<id>[,<id>…], sur la ligne de commande seulement."
+  type        = list(string)
+  default     = null
+
+  validation {
+    condition     = alltrue([for id in (var.watch_principal_ids == null ? [] : var.watch_principal_ids) : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))])
+    error_message = "watch_principal_ids : des object ids d'Entra ID (un GUID chacun), rien d'autre."
+  }
+
+  validation {
+    condition     = var.watch_principal_ids == null ? true : length(var.watch_principal_ids) == length(distinct([for id in var.watch_principal_ids : lower(id)]))
+    error_message = "watch_principal_ids : une identité nommée deux fois (la casse ne compte pas) — la seconde attribution échouerait à l'apply."
+  }
 }

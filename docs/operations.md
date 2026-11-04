@@ -5,7 +5,10 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 ## CLI — référence complète
 
 ```bash
-# Workflow opérateur — Docker Compose (recommandé)
+# Workflow opérateur — Docker Compose (recommandé) ; le pas à pas, de zéro : docs/demarrer/ (GS1)
+make doctor [PROFILE=discover|bench]         # les prérequis (outils, variables présentes — jamais leur valeur —,
+                                             # config lue comme la watch, dossiers à ton nom, port 7007 ; bench : clés
+                                             # et canaux d'Orodruin et de H0) ; sans cloud ni modèle ; 0 si tout est vert, sinon 2 par make (1 du script)
 make glorfindel-start                        # lance watch + la console → http://localhost:7007
 make console-url                             # l'URL de la console avec son jeton (celui de l'environnement ou de .env,
                                              # sinon ~/.eregion/console/token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche
@@ -61,12 +64,18 @@ make glorfindel-host-cd-check                # à blanc : vérifie, construit à
 make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade
 make glorfindel-host-cd-status | -cd-retry | -cd-disable | -cd-uninstall
 
-# Workflow opérateur — 3 terminaux (local sans Docker Compose)
+# Workflow opérateur — 3 terminaux (local sans Docker Compose) : la watch et l'alerte, sur ce poste
 glorfindel watch runs/                       # terminal 1 — réponses automatiques
-annatar run annatar/scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
 glorfindel pending --watch                   # terminal 3 — alerting (poll 2s, NEW ESCALATION)
+# Le terminal 2, l'attaque, ne tourne plus sur ce poste (GS1). Ici l'injecteur est passif : --dry-run,
+# validate, list. Depuis Orodruin armé, un run ne croit que le battement du canal retour, que seule la
+# watch de H0 écrit : une watch de ce poste n'y parvient pas (WC1, #523, en cours). Le seul run possible
+# avec elle est un run de développement, détection non mesurée et dite au rapport :
+#   make orodruin-ssh, puis : annatar run <scénario> --yes --without-glorfindel   (dans le docker run durci)
+# La vraie boucle, mesurée : les cibles de campagne (make orodruin-campaign-plan / -run), la watch de
+# H0 répondant — l'ordre complet, de zéro : docs/demarrer/banc.md.
 
-# Setup scénario T1486 (avant chaque run)
+# Setup scénario T1486 (avant chaque run ; annatar clean et run, depuis Orodruin armé, comme ci-dessus)
 annatar clean annatar/scenarios/azure/ransomware-vm.yaml   # nettoyage disque
 # ⚠ Attendre 10 min après annatar clean — les I/O du nettoyage peuvent déclencher
 #   ransomware-disk-write (ago(10m)) et fausser detection_time_s à 0.
@@ -206,6 +215,10 @@ glorfindel --version                         # 0.2.0
 #   docs/design/orodruin-contract.md, « SEC5 ».
 
 # Annatar
+annatar validate <scénario> | --all                 # le scénario (chemin ou nom), ou tous : chaque faute avec sa cause
+#   Code de sortie (AV1, #524) : 1 dès qu'un scénario est invalide (--all : la liste des fautifs à la fin) ou qu'un nom
+#   ne désigne rien ; 0 s'ils sont tous valides. `make annatar-validate [SCENARIO=…]` le lance dans l'image (sans
+#   SCENARIO : tous) et échoue de même. Un fichier vide ou qui n'est pas un mapping YAML est un scénario invalide, dit.
 annatar run annatar/scenarios/azure/<scenario>.yaml  # --dry-run disponible, --skip-preflight pour bypasser le check VM
 #   Code de sortie (#158) : 0 seulement pour un run allé au bout (détecté, manqué ou non mesuré), un --dry-run ou un
 #   « non » à la confirmation ; 1 pour tout refus (pas de watch de Glorfindel vivante, contrat d'Orodruin passif, cible non inscrite, départ sale, atomic
@@ -1925,6 +1938,31 @@ contrôle quand il réussit ; sur Orodruin, `docker ps -a --filter name=eregion-
 après), puis `make orodruin-check`. `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
 **non vérifiée**, pour essayer une branche : `~/.eregion-image` sur Orodruin le dit (`dev <commit>`).
 
+**Orodruin à jour au démarrage (OI3, #522).** H0 se met à jour seul ; Orodruin, éteint la plupart du
+temps, se met à jour à son démarrage : **après une publication, `make orodruin-start` suffit**. La VM
+démarrée et répondant en SSH (2 min au plus), `orodruin-update` vérifie sa clé d'hôte
+(`orodruin-known`) et lit l'image en service par elle, en lecture seule : docker qui répond, le tag
+`eregion-annatar:orodruin` et le commit de son étiquette, `~/.eregion-image`. `published_image.py
+age` la compare sur le poste à la dernière release : le plus haut tag `v*` par ordre de version, puis
+par commit dans l'histoire de git (`merge-base --is-ancestor`), jamais deux chaînes. Plus ancienne,
+absente ou illisible (un marqueur vérifié dont le tag dit un autre commit compris) : il le dit, puis
+lance `make orodruin-push REF=<la release>`, tel qu'il est (vérification, archive, relecture, run de
+contrôle d'OI2, tag, migration). Égale : rien, en une ligne. Plus récente (un commit de `main` poussé
+à la main), `dev` ou hors de l'histoire de la release : gardée, jamais remplacée sans qu'on le
+demande, et la commande pour revenir à la release est dite. Sur la moindre erreur (docker qui ne
+répond pas compris : jamais pris pour une image absente) : un code non nul, la cause dite, rien
+d'armé, la VM démarrée (c'est dit). `NO_UPDATE=1` démarre sans rien lire ; `REF=<tag|commit>` vise
+une autre release ; tous deux sur la ligne de commande, validés avant `az vm start`, jamais
+développés par make (venus de l'environnement, refusés) ; avant lui aussi, `ORO_SSH_FINGERPRINT`
+(sauf `NO_UPDATE=1`) et `ORO_CHECK_TIMEOUT`. `make -n orodruin-start` ne lance rien. `make
+orodruin-update [REF=…]` : la même mise à jour, la VM déjà démarrée. `make orodruin-check` dit, avant
+le verdict, « image vX (commit), dernière release vY (commit) », et, plus ancienne, absente ou
+illisible, « image plus ancienne (absente, illisible) : make orodruin-start ou make orodruin-push
+REF=vY » : un avertissement, son code reste celui du contrat. Tests : `tests/unit/test_published_image.py`
+(section OI3 : un vrai dépôt git jetable, v0.5.9 et v0.5.10, sur les faux d'OI1 et d'OI2),
+`tests/unit/test_host_ssh.py` (le SSH de la mise à jour) ; mutants M3630–M3639, M3685–M3693
+(`scripts/mutants/OI3.py`).
+
 **Après le renommage du compte (REN1, 03/11).** Les images ont suivi le compte : le nouvel espace répond, l'ancien rend 403, sans redirection (mesuré). Celles d'avant (la v0.5.2 et avant) sont signées par l'ancien nom du dépôt, que `published_image.py` ne reconnaît plus : un retour arrière vers elles est refusé, sur H0 comme sur Orodruin. **H0** : l'ordre dans `infra/glorfindel-host/README.md`, « REN1 change l'agent » (`cd-install`, la 0.5.3 publiée, `cd-check`, `cd-enable`). **Orodruin** : `make orodruin-push REF=<sha de la fusion de REN1>`, puis `make orodruin-check` ; sans `REF` (le dernier tag), seulement à partir de la 0.5.3.
 
 **L'image publique** : le dépôt l'est, l'image n'a aucun secret (elle n'a que le code et ses
@@ -2102,6 +2140,8 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 - **Une release qui change l'agent du CD** (`infra/glorfindel-host/cd/`, H1c par exemple) : `make
   glorfindel-host-cd-install` avant de la publier, depuis un checkout de `main` qui la porte.
   L'agent ne se remplace jamais lui-même (`infra/glorfindel-host/README.md`, « Le CD de H0 »).
+- **Après la publication** : H0 la déploie seul (son CD) ; pour Orodruin, `make orodruin-start` suffit
+  — son image plus ancienne que la release, il pousse celle-ci, vérifiée (OI3, « Les images publiées »).
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
   lit le code sur une liste blanche : cinq commandes `gh` seulement (`pr create`, `release list`,
   `release create` avec `--draft`, `release edit` des seules notes, et un seul `gh api`, la lecture des

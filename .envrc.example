@@ -7,7 +7,7 @@
 #
 # Anthropic (défaut)
 export ANTHROPIC_API_KEY=sk-ant-...
-# export GLORFINDEL_LLM_MODEL=anthropic/claude-sonnet-4-6
+# export GLORFINDEL_LLM_MODEL=anthropic/claude-sonnet-5-5   # le défaut (eregion_core/models.py)
 #
 # OpenAI
 # export GLORFINDEL_LLM_MODEL=openai/gpt-4o
@@ -121,8 +121,8 @@ export AZURE_SUBSCRIPTION_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 # export GLORFINDEL_KEEP_ISOLATED=1
 
 # Mode observe-only — principal Reader + Log Analytics Reader — aucune action write exécutée
-# Combine avec human_only (défaut) pour un déploiement zéro-risque en évaluation.
-# Voir CLAUDE.md → "Mode observe-only" pour le workflow complet.
+# Combine avec human_only (défaut) pour une évaluation sans écriture sur Azure.
+# Le pas à pas : docs/demarrer/bleu.md (make doctor vérifie ce fichier sans en afficher une valeur).
 # export GLORFINDEL_READ_ONLY=1
 
 # Gate de confiance — action autonome avec confidence < seuil → escaladée (défaut 0.7)

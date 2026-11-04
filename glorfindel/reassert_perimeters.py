@@ -47,7 +47,7 @@ def put_back_perimeters(connector, autonomy, blocks: list[dict], report: list[di
     An entry whose lock is held, or whose check raises, is left to the second time."""
     from glorfindel import reassert as r
     from glorfindel.actions import _load_block_entries, _update_block_entry, _vm_lock
-    from glorfindel.reassert_cards import unrecorded
+    from glorfindel.reassert_cards import episode, unrecorded
 
     done: dict = {}
     for snapshot in blocks:
@@ -75,8 +75,13 @@ def put_back_perimeters(connector, autonomy, blocks: list[dict], report: list[di
                 done[(rid.rstrip("/").lower(), ip)] = {"error": err, "read": verification}
                 if err is None:
                     # Written: marked at once, as the second time would — a pass cut off between
-                    # the two times never puts it back a second time as a first.
-                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat())
+                    # the two times never puts it back a second time as a first. Its episode ends in
+                    # the same write, over in memory first (L1O, #507, as `_rewrite_block`): the second
+                    # time skipped (its lock held), the marks kept, a pair gone again read « already
+                    # said » behind the acknowledged card, whatever the connector writes of the entry.
+                    episode(ref, ip, over=True)
+                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat(),
+                                        drift_alerted_at=None, drift_said=None)
         except TimeoutError:
             continue
         except OSError as exc:

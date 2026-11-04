@@ -3000,14 +3000,29 @@ def _l1o_merged() -> None:
                       threat_port=22)
 
 
-def _l1o_failed_then_acknowledged():
-    """The way of L1G, without the journal, its first half: a merged entry read with everything gone
-    (`_GONE_BOTH`), outside human_only; putting it back fails on both scopes — said, marked
-    (`drift_alerted_at`, `drift_said`), the episode open —; the operator acknowledges the card. Then the
-    pair is written again by another VM's perimeter block (one pair per IP and subnet), the VM's own
-    rules still gone: the connector reads `_PAIR_BACK` from now on. The connector, the card."""
-    _l1o_merged()
-    c = _connector(verify_blk=_GONE_BOTH)
+# The VM's own block alone (no first time: `_rewrite_block` writes it all): both rules gone; then its
+# inbound rule written again by someone, read there (`_back`), its outbound still gone.
+_L1O_VM_GONE = {"verified": False, "missing_rules": ["r", "r-out"], "open_nics": ["nic"], "rules_seen": dict(_VM_SEEN)}
+_L1O_VM_BACK = {"verified": False, "missing_rules": ["r-out"], "open_nics": ["nic"],
+                "rules_seen": {"rg/nsg/r": "a", "rg/nsg/r-out": None}}
+# kind → (the first read, everything gone; the read after, something back, something still gone)
+_L1O_KINDS = {"vm": (_L1O_VM_GONE, _L1O_VM_BACK), "merged": (_GONE_BOTH, _PAIR_BACK)}
+
+
+def _l1o_failed_then_acknowledged(kind: str = "merged"):
+    """The way of L1G, without the journal, its first half: the entry — the VM's own block (`vm`: written by
+    `_rewrite_block` alone) or merged with its perimeter (`merged`: the pair by the first time) — read with
+    everything gone, outside human_only; putting it back fails — said, marked (`drift_alerted_at`,
+    `drift_said`), the episode open —; the operator acknowledges the card. Then a rule of it is written
+    again by someone (merged: another VM's perimeter block writes the pair), the rest still gone: the
+    connector reads that from now on. The connector, the card, what it reads now."""
+    first, then = _L1O_KINDS[kind]
+    if kind == "merged":
+        _l1o_merged()
+    else:
+        _save_block_state("vm", _IP, _RID, placements=[{"nsg_rg": "rg", "nsg_name": "nsg", "rule": "r"}],
+                          threat_port=22)
+    c = _connector(verify_blk=first)
     blocked = c.block_suspicious_ip.side_effect
     c.block_suspicious_ip.side_effect = RuntimeError("429 Too Many Requests")
     report = reassert_active(c, _ACT)
@@ -3016,37 +3031,45 @@ def _l1o_failed_then_acknowledged():
     escalations.resolve(card["id"])
     c.block_suspicious_ip.side_effect = blocked
     c.block_suspicious_ip.reset_mock()
-    c.verify_block_ip.return_value = _PAIR_BACK
-    return c, card
+    c.verify_block_ip.return_value = then
+    return c, card, then
 
 
-def _l1o_put_back_once():
-    """The way of L1G, whole: after the acknowledged failure, the pair read back ends that episode
-    (`_back`, L1G), the VM's rules put back once, read whole — « reposé une fois ». The mocked connector
-    never rewrites the entry (the Azure adapter's own state write does, see `docs/design/preuves.md`):
-    what the reassertion itself writes is what is tested. The connector, the card « reposé une fois »."""
-    c, _ = _l1o_failed_then_acknowledged()
+def _l1o_put_back_once(kind: str = "merged"):
+    """The way of L1G, whole: after the acknowledged failure, the rule read back ends that episode
+    (`_back`, L1G), what is still gone put back once, read whole — « reposé une fois ». The mocked
+    connector never rewrites the entry (the Azure adapter's own state write does, see
+    `docs/design/preuves.md`): what the reassertion itself writes is what is tested. The connector, the
+    card « reposé une fois », the read before the put-back."""
+    c, _, then = _l1o_failed_then_acknowledged(kind)
     report = reassert_active(c, _ACT)
     assert [r["outcome"] for r in report] == ["reapplied"], report
     (put_back,) = _block_cards()
     assert "reposé une fois" in put_back["reason"], put_back["reason"]
+    assert _l1o_writes(c) == (["vm"] if kind == "vm" else ["subnet", "vm"])
     c.block_suspicious_ip.reset_mock()
-    return c, put_back
+    return c, put_back, then
 
 
+_L1O_KIND = pytest.mark.parametrize("kind", ["vm", "merged"])
+
+
+@_L1O_KIND
 @pytest.mark.parametrize("acknowledged", [False, True], ids=["pending", "acknowledged"])
 @pytest.mark.parametrize("mode", ["human_only", "non_disruptive"])
-def test_l1o_put_back_after_an_acknowledged_failure_then_gone_again_is_said_a_second_time(mode, acknowledged):
+def test_l1o_put_back_after_an_acknowledged_failure_then_gone_again_is_said_a_second_time(mode, acknowledged,
+                                                                                           kind):
     """L1O (#507), the way of L1G: put back once after an acknowledged failure, then gone again before the
-    next pass — as it was read when it was put back, the VM's own rules taken off again. The entry kept the
-    marks of the failure, the episode stayed open, the card « reposé une fois » pending or acknowledged:
-    « already said, no worse », in silence — yet that card says « s'il disparaît encore, Glorfindel
-    alertera sans le reposer ». The episode ends in the write of `reasserted_at`: said « une deuxième
-    fois », never written again, in either mode (L1Q: put back once at most; nothing in human_only)."""
-    c, put_back = _l1o_put_back_once()
+    next pass — as it was read when it was put back. The entry kept the marks of the failure, the episode
+    stayed open, the card « reposé une fois » pending or acknowledged: « already said, no worse », in
+    silence — yet that card says « s'il disparaît encore, Glorfindel alertera sans le reposer ». The
+    episode ends in the write of `reasserted_at` — `_rewrite_block`'s (`vm`), the first time's too
+    (`merged`): said « une deuxième fois », never written again, in either mode (L1Q: put back once at
+    most; nothing in human_only)."""
+    c, put_back, then = _l1o_put_back_once(kind)
     if acknowledged:
         escalations.resolve(put_back["id"])
-    c.verify_block_ip.return_value = _PAIR_BACK                 # gone again, as read when it was put back
+    c.verify_block_ip.return_value = then                       # gone again, as read when it was put back
     reassert_active(c, AutonomyConfig(default=mode))
     after = [e for e in _block_cards() if e["id"] != put_back["id"]]
     assert after, "gone again after « reposé une fois », unsaid"
@@ -3055,22 +3078,24 @@ def test_l1o_put_back_after_an_acknowledged_failure_then_gone_again_is_said_a_se
     assert _l1o_writes(c) == []
 
 
-def test_l1o_the_put_back_takes_the_marks_off_in_the_write_of_reasserted_at():
+@_L1O_KIND
+def test_l1o_the_put_back_takes_the_marks_off_in_the_write_of_reasserted_at(kind):
     """The episode over on disk too: `reasserted_at` written, `drift_alerted_at` and `drift_said` taken off
     in the same write — a restart, or a reader of the state, never sees a « said » episode over."""
-    _l1o_put_back_once()
+    _l1o_put_back_once(kind)
     (b,) = _load_block_entries(_RID)
     assert b.get("reasserted_at")
     assert not b.get("drift_alerted_at") and not b.get("drift_said"), b
 
 
-def test_l1o_said_a_second_time_once_then_nothing_never_written_again():
+@_L1O_KIND
+def test_l1o_said_a_second_time_once_then_nothing_never_written_again(kind):
     """No loop: said « une deuxième fois » once; the passes after read the same — its card pending,
     nothing; acknowledged, nothing more, pass after pass. Never written again outside human_only (L1Q)."""
-    c, put_back = _l1o_put_back_once()
-    c.verify_block_ip.return_value = _PAIR_BACK
+    c, put_back, then = _l1o_put_back_once(kind)
+    c.verify_block_ip.return_value = then
     reassert_active(c, _ACT)
-    (second,) =[e for e in _block_cards() if e["id"] != put_back["id"]]
+    (second,) = [e for e in _block_cards() if e["id"] != put_back["id"]]
     for _ in range(2):
         reassert_active(c, _ACT)
         assert [e["id"] for e in _block_cards() if e["id"] != put_back["id"]] == [second["id"]]
@@ -3082,13 +3107,27 @@ def test_l1o_said_a_second_time_once_then_nothing_never_written_again():
     assert _l1o_writes(c) == []
 
 
-def test_l1o_the_episode_is_over_even_when_the_write_of_its_end_is_refused(monkeypatch):
+@_L1O_KIND
+def test_l1o_the_episode_is_over_even_when_the_write_of_its_end_is_refused(monkeypatch, kind):
     """Over first, in memory, whatever the write does: the write of `reasserted_at` refused (a full disk),
     the failure's marks stay on disk — read alone, with the episode still open, the pass after said
     nothing of rules still gone. Said again (the put-back unrecorded, `unrecorded` says it may be)."""
-    import glorfindel.actions as actions
+    c, card, then = _l1o_failed_then_acknowledged(kind)
+    undo = _l1o_refuse_reasserted_at(monkeypatch)
+    report = reassert_active(c, _ACT)
+    assert report and all(r["outcome"] == "failed" for r in report), report     # unrecorded, said
+    (b,) = _load_block_entries(_RID)
+    assert b.get("drift_alerted_at") and not b.get("reasserted_at")             # the marks of the failure
+    undo()
+    c.verify_block_ip.return_value = then
+    reassert_active(c, _ACT)
+    assert [e for e in _block_cards() if e["id"] != card["id"]], "the rules still gone, unsaid"
 
-    c, card = _l1o_failed_then_acknowledged()
+
+def _l1o_refuse_reasserted_at(monkeypatch):
+    """The write of `reasserted_at` refused (a full disk), every other write let through: undone by the
+    returned function."""
+    import glorfindel.actions as actions
     real = actions._update_block_entry
 
     def refused(vm_ref, ip, **fields):
@@ -3096,14 +3135,7 @@ def test_l1o_the_episode_is_over_even_when_the_write_of_its_end_is_refused(monke
             raise OSError(28, "No space left on device")
         return real(vm_ref, ip, **fields)
     monkeypatch.setattr(actions, "_update_block_entry", refused)
-    report = reassert_active(c, _ACT)
-    assert report and all(r["outcome"] == "failed" for r in report), report     # unrecorded, said
-    (b,) = _load_block_entries(_RID)
-    assert b.get("drift_alerted_at") and not b.get("reasserted_at")             # the marks of the failure
-    monkeypatch.setattr(actions, "_update_block_entry", real)
-    c.verify_block_ip.return_value = _PAIR_BACK
-    reassert_active(c, _ACT)
-    assert [e for e in _block_cards() if e["id"] != card["id"]], "the rules still gone, unsaid"
+    return lambda: monkeypatch.setattr(actions, "_update_block_entry", real)
 
 
 def test_l1o_a_partial_put_back_still_marks_its_episode():
@@ -3129,3 +3161,70 @@ def test_l1o_a_partial_put_back_still_marks_its_episode():
         reassert_active(c, _ACT)
         assert [e["id"] for e in _block_cards()] == [card["id"]], [e["reason"] for e in _block_cards()]
     assert _l1o_writes(c) == []
+
+
+def test_l1o_after_a_restart_the_episode_ended_in_memory_is_never_reopened(monkeypatch):
+    """The closure in memory (`_EPISODE_OPEN`), alone (L1O's review): a merged entry, everything gone,
+    the put-back fails (429), its card acknowledged; the watch restarts (its memory empty: the
+    disappearance is no longer « said »); the pass after puts the block back, the write of
+    `reasserted_at` refused — the failure's marks stay on disk. Gone again: with the episode left open
+    in memory (`over=False`), the acknowledged card and the marks read « already said », no card and no
+    write. Over: said, or put back again (`reasserted_at` never written, as `unrecorded` warns)."""
+    from glorfindel import reassert_cards
+
+    _l1o_merged()
+    c = _connector(verify_blk=_GONE_BOTH)
+    blocked = c.block_suspicious_ip.side_effect
+    c.block_suspicious_ip.side_effect = RuntimeError("429 Too Many Requests")
+    assert [r["outcome"] for r in reassert_active(c, _ACT)] == ["failed"]
+    (card,) = _block_cards()
+    escalations.resolve(card["id"])
+    reassert_active(c, _ACT)
+    assert not _block_cards()                                   # acknowledged, the same: nothing
+    reassert_cards._EPISODE_OPEN.clear()                        # the watch restarted
+    reassert_cards._HISTORY.clear()
+    c.block_suspicious_ip.side_effect = blocked
+    c.verify_block_ip.return_value = _GONE_BOTH
+    undo = _l1o_refuse_reasserted_at(monkeypatch)
+    report = reassert_active(c, _ACT)
+    assert report and all(r["outcome"] == "failed" for r in report), report     # unrecorded, said
+    undo()
+    (b,) = _load_block_entries(_RID)
+    assert b.get("drift_alerted_at") and not b.get("reasserted_at"), b
+    c.block_suspicious_ip.reset_mock()
+    c.verify_block_ip.return_value = _GONE_BOTH                 # gone again
+    reassert_active(c, _ACT)
+    assert _block_cards() or _l1o_writes(c), "gone again, nothing said nor written"
+
+
+@pytest.mark.parametrize("write", ["written", "refused"])
+def test_l1o_a_pass_cut_between_its_two_times_ends_the_episode_too(monkeypatch, write):
+    """The first time (L1Qs) ends the episode in its write of `reasserted_at`, as `_rewrite_block` does —
+    the core whole, whatever the connector writes of the entry (MC0, L1O's review). A merged entry said
+    after a failed put-back, its card acknowledged; the pair written again by another VM (`_back`): the
+    first time puts it back, the second time skipped (its lock held). Then everything gone again, as the
+    card read it. Marks kept and the episode open, the acknowledged card read « already said »: silent.
+    Written: marks off on disk, said « une deuxième fois », never written again; the write refused: over
+    in memory all the same, said (and put back, `reasserted_at` never written)."""
+    from glorfindel import reassert
+
+    c, card, _ = _l1o_failed_then_acknowledged("merged")
+    real_block = reassert._reassert_block
+    monkeypatch.setattr(reassert, "_reassert_block", lambda *a, **k: None)     # the second time skipped
+    undo = _l1o_refuse_reasserted_at(monkeypatch) if write == "refused" else (lambda: None)
+    reassert_active(c, _ACT)
+    undo()
+    monkeypatch.setattr(reassert, "_reassert_block", real_block)
+    assert _l1o_writes(c) == ["subnet"]
+    (b,) = _load_block_entries(_RID)
+    if write == "written":
+        assert b.get("reasserted_at") and not b.get("drift_alerted_at") and not b.get("drift_said"), b
+    c.block_suspicious_ip.reset_mock()
+    c.verify_block_ip.return_value = _GONE_BOTH                 # gone again, as the card read it
+    reassert_active(c, _ACT)
+    after = [e for e in _block_cards() if e["id"] != card["id"]]
+    assert after, "the pair put back by the first time, gone again: unsaid"
+    if write == "written":
+        (new,) = after
+        assert "une deuxième fois" in new["reason"], new["reason"]
+        assert _l1o_writes(c) == []

@@ -10369,6 +10369,28 @@ MUTANTS += [
      '    if outcome == "failed":\n        # "Already alerted" is written only once the card exists.'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_reassert.py -k l1o" for n in range(3540, 3545)})
+# L1O's review: the closure in memory alone (`over=False` emptied `_NARROWED` too, so nothing held it),
+# and the first time (L1Qs) ending the episode in its own write of `reasserted_at`. M3545–M3548.
+_L1O_FIRST = ("                    episode(ref, ip, over=True)\n"
+              "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat(),\n"
+              "                                        drift_alerted_at=None, drift_said=None)\n")
+MUTANTS += [
+    ("M3545", "« reposé une fois » reopens the episode in memory: after a restart and a refused write, gone "
+              "again in silence (L1O, review)", R, _L1O_END,
+     "        episode(ref or vm, ip, over=False)\n"
+     "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n"),
+    ("M3546", "the first time keeps the marks on disk (L1O, review)", "glorfindel/reassert_perimeters.py",
+     _L1O_FIRST, "                    episode(ref, ip, over=True)\n"
+                 "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat())\n"),
+    ("M3547", "the first time leaves the episode open in memory: its write refused, gone again unsaid (L1O, review)",
+     "glorfindel/reassert_perimeters.py", _L1O_FIRST,
+     "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat(),\n"
+     "                                        drift_alerted_at=None, drift_said=None)\n"),
+    ("M3548", "the first time never ends the episode: the second time skipped, the pair gone again unsaid "
+              "(L1O, review)", "glorfindel/reassert_perimeters.py", _L1O_FIRST,
+     "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat())\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py -k l1o" for n in range(3545, 3549)})
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;

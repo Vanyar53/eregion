@@ -78,6 +78,18 @@ def test_an_injector_never_runs_without_glorfindel():
         assert s["restart"] == "no" and s["profiles"] == [name], name
 
 
+def test_a_workstation_watch_publishes_on_the_channels_under_its_own_principal():
+    """WC1 (#523): the watch of a workstation (make glorfindel-start) or a team (make team-start)
+    gets both of Orodruin's channels and its own principal — the one infra/orodruin lists in
+    watch_principal_ids —, never Annatar's: what it writes on the return channel is the watch's."""
+    env = {k: str(v) for k, v in SERVICES["watch"]["environment"].items()}
+    assert env["AZURE_CLIENT_ID"] == "${GLORFINDEL_AZURE_CLIENT_ID:-}"
+    assert env["AZURE_CLIENT_SECRET"] == "${GLORFINDEL_AZURE_CLIENT_SECRET:-}"
+    assert env["EREGION_WATCH_CHANNEL"] == "${EREGION_WATCH_CHANNEL:-}"
+    assert env["EREGION_EXERCISE_CHANNEL"] == "${EREGION_EXERCISE_CHANNEL:-}"
+    assert not [v for v in env.values() if "ANNATAR_" in v]
+
+
 def test_an_injector_gets_its_own_principal_and_none_of_glorfindels_secrets():
     for name in INJECTORS:
         env = {k: str(v) for k, v in SERVICES[name]["environment"].items()}

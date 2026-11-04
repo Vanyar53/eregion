@@ -4095,10 +4095,24 @@ premiers, pour le blocage de la VM seul (`vm` : `_rewrite_block` écrit tout) et
 Sur le code de `main` 8710dba7, 16 des 18 sont rouges ; les deux verts sont des gardes. Dans
 `test_invariant_regressions.py`, `test_a_block_put_back_once_acknowledged_then_gone_again_is_said_a_second_time`
 rejoue la voie de L1G par la machine : la promesse de la carte, de bout en bout. Elle est verte sur `main`
-(l'adaptateur) et gardée. **La voie de L1W** n'a pas de test unitaire ici : L1W (PR #509) n'était pas sur
-`main` à la réalisation, et sans son journal cette voie n'existe pas (le défaut de L1W se tait avant). Son
-test, sur le modèle de `_pair_said` de L1W en `non_disruptive` suivi d'une passe qui relit la paire partie,
-reste à ajouter après la fusion. **A0** : ni l'oracle ni la machine n'ont bougé.
+(l'adaptateur) et gardée.
+
+**La voie de L1W**, ajoutée après sa fusion (`main` 6899bfb6) — sans son journal, elle n'existe pas : le
+défaut de L1W se tait avant.
+- `test_reassert.py::test_l1o_the_way_of_l1w_put_back_once_then_written_again_and_gone_is_said_once` :
+  `_pair_said` de L1W en `non_disruptive`, la paire reposée une fois par le premier temps ; puis réécrite
+  par le blocage de périmètre d'une autre VM (notée dans `perimeter_writes.jsonl`) et repartie avant la
+  passe suivante. Dite « une deuxième fois », rien d'écrit, et jamais deux fois (deux passes la carte en
+  attente, deux passes acquittée). Trois ordres : la carte « reposé une fois » en attente, ou acquittée
+  après l'écriture — rouges sur `main` 6899bfb6, le journal de L1W ne lit qu'une écriture postérieure à un
+  acquittement —, ou acquittée avant l'écriture, que le journal de L1W dit aussi : une garde.
+- `test_invariant_regressions.py::test_a_pair_put_back_once_written_again_by_another_perimeter_then_gone_is_said_for_each_vm_once` :
+  par la machine, les six premières règles de L1W, une passe à modes mêlés (rg-app2/web hors `human_only`)
+  qui repose la paire une fois, web de rg-app1 bloquée de nouveau sur le sous-réseau, la paire retirée, une
+  passe. Une carte pour chaque VM, « une deuxième fois » pour rg-app2/web, rien de plus à la passe
+  suivante. Verte sur `main` 6899bfb6 aussi (l'adaptateur).
+
+**A0** : ni l'oracle ni la machine n'ont bougé.
 
 **Mutants M3540–M3548**, 9/9 par leurs tests à chaque tour (deux tours) :
 - M3540, le défaut remis ;
@@ -4131,7 +4145,9 @@ avant `_rewrite_block`).
 Remesuré après la relecture (le premier temps compris), mêmes résultats : 20/20 à 60, 6/8 à 500 (les
 graines 1 et 6, sur le même L1). `pytest` complet (sur `main` 8710dba7) : 6 529 réussis, 7 sautés, 1 `xfail`
 (celui de L1E, que L1W lève) ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 610 mutants et 32 du jeu de
-contrôle, sans faute.
+contrôle, sans faute. Après la fusion de L1W (`main` 6899bfb6) et le test de sa voie : `pytest` complet,
+6 653 réussis, 7 sautés, plus aucun `xfail` ; `scripts/mutant_anchors.py`, 2 642 mutants et 32 du jeu de
+contrôle, sans faute ; M3540–M3548 9/9 et M3480–M3489 (L1W) 10/10, un tour.
 
 **L1P (03/11, #478) : un blocage entier à port inconnu ne garde pas le port d'un blocage précédent.**
 Trouvé par la machine dans la CI de la PR #476 (I4P), Glorfindel seul : « L1: the block of …/Db--01 is

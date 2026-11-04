@@ -6922,3 +6922,39 @@ def test_a_block_put_back_once_acknowledged_then_gone_again_is_said_a_second_tim
     that does not rewrite the entry: `test_reassert.py`, `test_l1o_*`). Kept as the promise of the card,
     end to end: « s'il disparaît encore, Glorfindel alertera »."""
     _replay(monkeypatch, _net(subnet_nsg=[], web_nic={"own": "dedicated"}), *_L1O_STEPS)
+
+
+def test_a_pair_put_back_once_written_again_by_another_perimeter_then_gone_is_said_for_each_vm_once(monkeypatch):
+    """L1O (#507), the way of L1W through the machine: L1W's six first rules (web of rg-app2 blocked on its
+    subnet, the pair taken off, said in human_only, acknowledged; web of rg-app1 blocked on the same subnet,
+    the pair taken off again); a pass with mixed modes — rg-app2/web outside human_only, the others in it —
+    puts the pair back once for rg-app2/web (the first time, L1Qs), « reposé une fois ». Then web of rg-app1
+    blocked on the subnet again (the pair noted in `perimeter_writes.jsonl`), the pair taken off before any
+    pass. L1 judges each VM's block; the pass after says nothing more for either. Green on `main` 6899bfb6
+    as with L1O: the Azure adapter's state write already ended the episode (see the section L1O)."""
+    from glorfindel import escalations
+    from .test_invariants import _reassert_block_cards
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        modes = {key(WEB1): "human_only", key(WEB2): "non_disruptive"}
+        steps = (*_L1W_STEPS[:-1],
+                 ("reassert_by_vm", *[modes.get(key(v), "human_only") for v in m.live], "human_only", None),
+                 ("block_perimeter", WEB1, WEB1, None, False),
+                 ("terraform_apply", _SUBNET),
+                 ("reassert", "human_only", None))
+        for rule, *draws in steps:
+            s = Script(*draws)
+            getattr(m, rule)(data=s)
+            assert not s.values, f"{rule} left draws unused: {s.values}"
+            m.never_more_open_than_designed()
+        said = {e["id"]: key(e.get("resource_id") or "") for e in _reassert_block_cards()
+                if e.get("status") == "pending"}
+        assert {key(WEB1), key(WEB2)} <= set(said.values()), sorted(said.values())
+        assert any("une deuxième fois" in e["reason"] for e in escalations.pending()
+                   if key(e.get("resource_id") or "") == key(WEB2)), "rg-app2/web: not said a second time"
+        m.reassert(data=Script("human_only", None))             # the pass after: nothing more
+        assert {e["id"] for e in _reassert_block_cards() if e.get("status") == "pending"} == set(said)
+    finally:
+        m.teardown()

@@ -3486,3 +3486,42 @@ def test_a_turned_pair_holding_now_is_back_only_if_it_reads_otherwise(now_seen, 
            "rules_seen": {"rg/nsg-subnet/pair": now_seen, "rg/nsg-subnet/pair-out": out, **_VM_SEEN}}
     pair = _pair_keys({"scoped": False, "nsg": "rg/nsg-subnet", "rule": "pair"})
     assert _back(_situation(_PAIR_TURNED), _situation(now), pair) is back
+
+
+# ── L1O (#507), the way of L1W: put back once, written again by another perimeter, gone before the next pass ──
+
+@pytest.mark.parametrize("order", ["pending", "written, then acknowledged", "acknowledged, then written"])
+def test_l1o_the_way_of_l1w_put_back_once_then_written_again_and_gone_is_said_once(order):
+    """L1O (#507), the way of L1W: the pair said gone, the card acknowledged, written again by another VM's
+    perimeter block (`perimeter_writes.jsonl`) and gone again — L1W ends that episode, the first time puts
+    the pair back once outside human_only, « reposé une fois ». Then another VM's perimeter block writes
+    the pair again (noted in the journal), and it goes again before the next pass, as the put-back read it.
+    The card « reposé une fois » pending, or acknowledged after that write: the journal says nothing (L1W
+    reads a write after an acknowledgement only), the marks of the first card kept and its episode open
+    read « already said » — silent before L1O. Said « une deuxième fois », never written again; and never
+    twice: the passes after, its card pending then acknowledged, nothing more. Acknowledged before the
+    write, L1W's journal says it too: a guard."""
+    c, card, _ = _pair_said(_L1W_PAIR_GONE, True, "after", mode="non_disruptive")
+    (put_back,) = [e for e in _block_cards() if e["id"] != card["id"]]
+    assert "reposé une fois" in put_back["reason"], put_back["reason"]
+    if order == "acknowledged, then written":
+        escalations.resolve(put_back["id"])
+    _another_vms_perimeter()                                    # another VM's perimeter block: the pair again
+    if order == "written, then acknowledged":
+        escalations.resolve(put_back["id"])
+    c.block_suspicious_ip.reset_mock()
+    c.verify_block_ip.return_value = _L1W_PAIR_GONE             # gone again before the next pass
+    reassert_active(c, _ACT)
+    seen = {card["id"], put_back["id"]}
+    after = [e for e in _block_cards() if e["id"] not in seen]
+    assert after, "put back once, written again by another VM, gone again: unsaid"
+    (second,) = after
+    assert "une deuxième fois" in second["reason"] and "ne le repose pas" in second["reason"], second["reason"]
+    for _ in range(2):
+        reassert_active(c, _ACT)
+        assert [e["id"] for e in _block_cards() if e["id"] not in seen] == [second["id"]]
+    escalations.resolve(second["id"])
+    for _ in range(2):
+        reassert_active(c, _ACT)
+        assert [e["id"] for e in _block_cards() if e["id"] not in seen] == [], [e["reason"] for e in _block_cards()]
+    assert _l1o_writes(c) == []

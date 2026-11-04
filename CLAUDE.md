@@ -135,7 +135,7 @@ python scripts/mutation_check.py [--examples 500 --rounds 2 --jobs 8]   # mesure
 ## Conventions
 
 - **À chaque commit** : mettre à jour la doc concernée (README, `docs/`, CHANGELOG) + générer résumé claude.ai ; `CLAUDE.md` seulement quand une règle ou une convention change — il reste sous 25 Ko (`tests/unit/test_docs_budget.py` échoue au-delà), le détail va dans `docs/`
-- **Releases** : une session prépare une release en brouillon (`gh release create --draft`), jamais publiée ; seul Jonathan la publie, et seul lui crée un tag `v*` (une règle du dépôt, SEC12). Publier, c'est déployer H0 : son CD la tire, la vérifie, la préflighte, bascule et revient en arrière si besoin (H1, `infra/glorfindel-host/README.md`, « Le CD de H0 ») ; il refuse une release plus ancienne que ce qui tourne, sauf retour arrière demandé sur H0
+- **Releases** : une session prépare une release en brouillon (`gh release create --draft`), jamais publiée, après la porte de release verte sur l'arbre d'`origin/main` (CI6, `docs/sessions.md`) ; seul Jonathan la publie, et seul lui crée un tag `v*` (une règle du dépôt, SEC12). Publier, c'est déployer H0 : son CD la tire, la vérifie, la préflighte, bascule et revient en arrière si besoin (H1, `infra/glorfindel-host/README.md`, « Le CD de H0 ») ; il refuse une release plus ancienne que ce qui tourne, sauf retour arrière demandé sur H0
 - `target:` = ressource attaquée, `detection:` = infra surveillance (workspace_id ici)
 - `prerequisites:` = KQL vérification + instructions setup dans chaque scénario
 - `setup_testdata.sh` uniquement dans T1486

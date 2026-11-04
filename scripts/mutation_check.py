@@ -10528,6 +10528,39 @@ MUTANTS += [
 TESTS.update({
     "M3599": f"{_CI6_SH}",
 })
+# CI6: `make release-draft` refuses until the gate is green on a commit of origin/main's tree, and
+# the version's pull request says it. M3590–M3596.
+_CI6_REL = "tests/unit/test_release.py::"
+MUTANTS += [
+    ("M3590", "the draft made whatever the gate says: no gate, red, running (CI6)", RELS,
+     "    if gate_said and not green:\n        refused.append(gate_said)\n",
+     "    if False:\n        refused.append(gate_said)\n"),
+    ("M3591", "the gate looked for on main's commit, not its tree: a squash-merge never passes (CI6)", RELS,
+     '    same = [r for r in runs if _obj(r.get("head_commit")).get("tree_id") == tree]\n',
+     '    same = [r for r in runs if _obj(r.get("head_commit")).get("id") == sha]\n'),
+    ("M3592", "the version's pull request says nothing of the gate: merged before it is green (CI6)", RELS,
+     '            f"{GATE_SAID}\\n\\n"\n', '            ""\n'),
+    ("M3593", "a cancelled or skipped gate taken for green (CI6)", RELS,
+     '    if r.get("conclusion") != "success":\n',
+     '    if r.get("conclusion") not in ("success", "cancelled", "skipped"):\n'),
+    ("M3594", "the gate's oldest run on the tree decides: a red after a green never seen (CI6)", RELS,
+     "    runs = sorted((r for r in listed if isinstance(r, dict) and _gate_run(r)), reverse=True,\n",
+     "    runs = sorted((r for r in listed if isinstance(r, dict) and _gate_run(r)), reverse=False,\n"),
+    ("M3595", "any run of the workflow taken for the gate: another pull request's, its jobs skipped (CI6)", RELS,
+     '    return r.get("event") == "pull_request" and str(r.get("head_branch") or "").startswith("chore/release-")\n',
+     "    return True\n"),
+    ("M3596", "a fork's run taken for the gate (CI6)", RELS,
+     "    if not head or head != repo:\n        return False\n", "    if False:\n        return False\n"),
+]
+TESTS.update({
+    "M3590": f"{_CI6_REL}test_without_a_gate_the_draft_is_refused_and_says_how_to_run_it",
+    "M3591": f"{_CI6_REL}test_the_gate_green_on_the_pr_head_passes_a_squash_merge_of_the_same_tree",
+    "M3592": f"{_CI6_REL}test_the_version_s_pull_request_says_the_gate_runs_on_it_and_must_be_green",
+    "M3593": f"{_CI6_REL}test_a_gate_that_is_not_green_refuses_with_its_state_and_its_link",
+    "M3594": f"{_CI6_REL}test_the_last_run_on_the_tree_decides",
+    "M3595": f"{_CI6_REL}test_a_run_that_is_not_the_gate_never_passes",
+    "M3596": f"{_CI6_REL}test_a_run_that_is_not_the_gate_never_passes",
+})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

@@ -9269,8 +9269,8 @@ MUTANTS += [
     ("M3315", "« Save as drill » takes a target that is no enrolled VM read now (DG-d)", CON,
      "        if stray:\n            why = error or", "        if False:\n            why = error or"),
     ("M3316", "a drill loaded on the board lays a selector's wires on every VM of its zone (DG-d)", CON,
-     "        placed = [p.to_dict() for p in drill.place(d, cands)]\n",
-     "        placed = [p.to_dict() for p in drill.place(d, cands, \"all\")]\n"),
+     "    placed = [p.to_dict() for p in drill.place(d, cands)]\n",
+     "    placed = [p.to_dict() for p in drill.place(d, cands, \"all\")]\n"),
     ("M3317", "the page writes a request while a drill's wire waits for its VMs (DG-d)", DJS,
      "Number(t.refused) === 0 && !S.pending.length;", "Number(t.refused) === 0;"),
     ("M3318", "make orodruin-exercise takes DRILL and TARGETS from the environment (DG-d)", MAKE,
@@ -10427,6 +10427,43 @@ MUTANTS += [
      "\t@case \"$$EREGION_CHECK_TIMEOUT\" in ''|0*|*[!0-9]*)", "\t@case \"\" in no)"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
+# I11g (#508): the readiness file's lock is the shared lock of the local files (`_file_lock`), read
+# at call time — the invariant machine's scheduler drives it; the file it flocks is the one every
+# version took. M3550–M3553.
+RDY = "glorfindel/readiness.py"
+_I11G_LOCK = ("    from glorfindel.response.locks import _file_lock\n"
+              "    with _file_lock(_STATE_FILE.with_suffix(\".lock\")):\n        yield\n")
+MUTANTS += [
+    ("M3550", "the readiness file's own thread lock again, out of the scheduler's sight: two isolations "
+              "that record a quarantine refusal at once, one never comes back (I11g)", RDY,
+     (_I11G_LOCK, "_STATE_FILE = Path.home() / \".glorfindel\" / \"readiness.json\"\n"),
+     ("    import fcntl\n    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)\n"
+      "    with _own_lock, open(_STATE_FILE.with_suffix(\".lock\"), \"a\") as fh:\n"
+      "        fcntl.flock(fh, fcntl.LOCK_EX)\n        yield\n",
+      "_STATE_FILE = Path.home() / \".glorfindel\" / \"readiness.json\"\n"
+      "import threading  # noqa: E402\n_own_lock = threading.Lock()\n")),
+    ("M3551", "a readiness record rewritten without the lock: two writers read before either writes, "
+              "one refusal lost (I11g)", RDY,
+     "    with _locked():\n        data = _read()\n        found = _find(data, ref)\n",
+     "    with contextlib.nullcontext():\n        data = _read()\n        found = _find(data, ref)\n"),
+    ("M3552", "the readiness lock on readiness.json.lock: an older console on readiness.lock writes "
+              "beside a newer watch (I11g)", RDY,
+     "    with _file_lock(_STATE_FILE.with_suffix(\".lock\")):\n",
+     "    with _file_lock(_STATE_FILE.with_name(_STATE_FILE.name + \".lock\")):\n"),
+    ("M3553", "the readiness file's lock taken at import: the scheduler's, set later, never reaches it "
+              "(I11g)", RDY,
+     ("log = logging.getLogger(__name__)\n", "    from glorfindel.response.locks import _file_lock\n    with"),
+     ("from glorfindel.response.locks import _file_lock  # noqa: E402\n\nlog = logging.getLogger(__name__)\n",
+      "    with")),
+]
+_I11G_RACES = ("tests/unit/test_invariant_regressions.py::test_two_isolations_at_once_that_both_record_a_"
+               "quarantine_refusal tests/unit/test_invariant_regressions.py::test_a_race_whose_two_operations_"
+               "rewrite_the_readiness_file")
+TESTS.update({"M3550": _I11G_RACES, "M3553": _I11G_RACES,
+              "M3551": f"{_I11G_RACES} tests/unit/test_locks.py",
+              "M3552": "tests/unit/test_locks.py -k readiness"})
+
+
 # L1O (#507): « reposé une fois » ends its episode in the write of `reasserted_at` — the drift marks
 # taken off, the episode over in memory first; a put-back that doesn't hold whole marks a new one after its
 # card. Gone again before the next pass: said « une deuxième fois », never written again. M3540–M3544.
@@ -10471,6 +10508,74 @@ MUTANTS += [
      "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat())\n"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_reassert.py -k l1o" for n in range(3545, 3549)})
+
+# DG-e (#351): Annatar proposes drills — the chain in the shared core (kill-chain order, nothing
+# destructive nor undeclared, a VM's), a campaign's drill (Annatar its author, its declared fault
+# kept, a technique left out by the synthesizer left out of it, the VM by its name, mode 600); « Ask
+# Annatar » on an enrolled VM by its id, only with Annatar set up; « Import YAML » that writes
+# nothing, reads an instance's drill only and refuses a YAML nested too deep; « Save as drill »
+# that keeps Annatar's authorship; the page's draft. M3560–M3579.
+_DGE_CORE, _DGE_ANN, _DGE_CON = ("tests/unit/test_drill_proposal.py", "tests/unit/test_campaign_drill.py",
+                                 "tests/unit/test_console_dagorlad_annatar.py")
+_PROP = "eregion_core/proposal.py"
+MUTANTS += [
+    ("M3560", "a technique whose catalogue does not say it destroys nothing proposed as harmless (DG-e)", _PROP,
+     "and e.destructive is False\n", "and e.destructive is not True\n"),
+    ("M3561", "a destructive technique proposed by Annatar (DG-e)", _PROP,
+     "and e.destructive is False\n", "and True\n"),
+    ("M3562", "the proposal out of kill-chain order (DG-e)", _PROP,
+     "picked.sort(key=lambda e: (tactic_rank(e.tactic), e.id))", "picked.sort(key=lambda e: e.id)"),
+    ("M3563", "a proposal past the drills' ceiling (DG-e)", _PROP,
+     "n = max(1, min(int(max_wires), _drill.MAX_WIRES))", "n = max(1, int(max_wires))"),
+    ("M3564", "another resource's technique proposed on a VM (DG-e)", _PROP,
+     "              and e.resource_type == resource_type and (available", "              and (available"),
+    ("M3565", "a technique nothing runs yet proposed (DG-e)", _PROP,
+     'if e.kind == "technique" and e.status == "implemented" and', 'if e.kind == "technique" and'),
+    ("M3566", "a campaign's drill authored by the operator, not Annatar (DG-e)", _PROP,
+     "return _drill.new(drill_name(campaign_id), list(pairs), author=AUTHOR,",
+     'return _drill.new(drill_name(campaign_id), list(pairs), author="operator",'),
+    ("M3567", "a declared campaign's drill loses its fault (DG-e)", "annatar/cli.py",
+     'if st.kind == "fault" or (st.kind == "technique" and st.ref in kept)]',
+     'if st.kind == "technique" and st.ref in kept]'),
+    ("M3568", "a campaign's drill names its VM by its resource id: no drill (DG-e)", "annatar/cli.py",
+     '    vm = target.rstrip("/").rsplit("/", 1)[-1]\n    kept = {', "    vm = target\n    kept = {"),
+    ("M3569", "a campaign's drill written readable by all (DG-e)", "annatar/cli.py",
+     "        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n        created = True\n",
+     "        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)\n        created = True\n"),
+    ("M3570", "a YAML nested past the parser's depth answered by a 500 (DG-e)", CON,
+     "        except (yaml.YAMLError, RecursionError):   # nested past the parser's depth: never a 500\n",
+     "        except yaml.YAMLError:\n"),
+    ("M3571", "a declared campaign's drill keeps a technique the synthesizer left out (DG-e)", "annatar/cli.py",
+     'if st.kind == "fault" or (st.kind == "technique" and st.ref in kept)]',
+     'if st.kind in ("fault", "technique")]'),
+    ("M3572", "Annatar proposes on a VM found by its name: another group's (DG-e)", CON,
+     'found = [c for c in cands if want and c.resource_id.rstrip("/").lower() == want]',
+     'found = [c for c in cands if want and c.name.lower() == want.rsplit("/", 1)[-1]]'),
+    ("M3573", "Annatar proposes where it is not set up (DG-e)", CON,
+     '        if not any(x.get("id") == "annatar" and x.get("active") for x in seen.get("sections") or []):\n',
+     "        if False:\n"),
+    ("M3574", "« Import YAML » keeps the drill it reads (DG-e)", CON,
+     '        return JSONResponse(_placed_view(d, layer="import"))',
+     '        return JSONResponse({**_placed_view(d, layer="import"), "kept": str(drill.save(d, replace=True))})'),
+    ("M3575", "« Import YAML » takes Eregion's shipped drill for an instance's (DG-e)", CON,
+     "            d = drill.read(doc, drill.INSTANCE)\n",
+     '            d = drill.read(doc, drill.SHIPPED if (doc or {}).get("author") == "eregion" else drill.INSTANCE)\n'),
+    ("M3576", "« Save as drill » drops Annatar's authorship (DG-e)", CON,
+     "                          author=author, description=body.get(\"description\") or \"\")",
+     "                          description=body.get(\"description\") or \"\")"),
+    ("M3577", "the board's draft from Annatar not said Annatar's (DG-e)", DJS,
+     "    S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = ''; S.author = 'annatar';\n",
+     "    S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = '';\n"),
+    ("M3578", "Annatar's proposal laid over the wires drawn without asking (DG-e)", DJS,
+     "if ((S.wires.length || S.pending.length) && S.asking.ask !== t.resource_id) {", "if (false) {"),
+    ("M3579", "a cleared board stays Annatar's (DG-e)", DJS,
+     "    S.author = 'operator'; S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = '';\n",
+     "    S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = '';\n"),
+]
+TESTS.update({**{f"M{n}": _DGE_CORE for n in range(3560, 3567)},
+              **{f"M{n}": _DGE_ANN for n in (3567, 3568, 3569, 3571)},
+              **{f"M{n}": _DGE_CON for n in (3570, *range(3572, 3580))}})
+
 
 # L1W (#492): a perimeter pair another VM's block wrote again, gone again before any pass — no reading
 # shows the write: Glorfindel notes its own writes of a pair (`response/pair_journal.py`, before the write),

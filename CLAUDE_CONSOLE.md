@@ -65,6 +65,10 @@ GET  /api/dagorlad/board              → cartes rouges (catalogue), Glorfindel,
 GET  /api/dagorlad/plan?wire=<exp>@<rid>… → chaque fil jugé comme Orodruin le jugerait, et l'attendu
 POST /api/dagorlad/requests           → DG-b : {"wires": [{"experiment", "target"}]} — jugés, puis la demande écrite dans
      ~/.eregion/console/requests/ seulement ; la réponse donne `make orodruin-exercise REQUEST=<id>` (aucun nom tapé ici)
+GET  /api/dagorlad/drills            → DG-d : les drills de l'instance et les livrés ; /<nom> : posé sur les VM inscrites ; /<nom>/yaml : l'export
+POST /api/dagorlad/drills            → « Save as drill » : {"name", "wires", "description"?, "replace"?, "author"?} (author : operator | annatar)
+GET  /api/dagorlad/propose?target=<rid> → DG-e : la chaîne d'Annatar sur une VM inscrite (catalogue, jamais Glorfindel) — rien n'est écrit
+POST /api/dagorlad/drills/import     → DG-e : {"yaml"} — un drill relu par le lecteur exact, posé comme « Load » — rien n'est écrit
 GET  /api/dagorlad/requests/<id>      → la demande écrite ici ou non, ses fils, son statut publié par Orodruin (runs/orodruin/),
      sa phase (written, running, over) et la chronologie de chaque fil (DG-c, eregion_console/follow.py) — lecture seule
 GET  /api/dagorlad/stop               → « Stop all » : make orodruin-kill, les fenêtres ouvertes et leurs cibles, ce qui reste en vol

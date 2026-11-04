@@ -3205,22 +3205,28 @@ async def drill_placed(name: str) -> JSONResponse:
         return JSONResponse({"error": "not a drill's name"}, status_code=400)
 
     def read() -> dict:
-        d = drill.find(name)
-        cands, error = _drill_candidates()
-        last = _last_runs()
-        placed = [p.to_dict() for p in drill.place(d, cands)]
-        named = [c.name.lower() for c in cands]
-        for p in placed:
-            for c in p["candidates"]:
-                ran = last.get((p["experiment"], c["resource_id"].lower()))
-                if ran is None and named.count(c["name"].lower()) == 1:
-                    ran = last.get((p["experiment"], f"name:{c['name'].lower()}"))
-                c["last_run_at"] = ran
-        return {**d.to_doc(), "layer": d.layer, "placed": placed, "targets_error": error}
+        return _placed_view(drill.find(name))
     try:
         return JSONResponse(await asyncio.to_thread(read))
     except drill.DrillRefused as exc:
         return JSONResponse({"error": str(exc)[:300]}, status_code=404)
+
+
+def _placed_view(d, layer: str = "") -> dict:
+    """A drill placed on the VMs enrolled now, as « Load » lays it: each wire's VMs, or its
+    candidates with when each last ran it here (a hint, never a choice)."""
+    from eregion_core import drill
+    cands, error = _drill_candidates()
+    last = _last_runs()
+    placed = [p.to_dict() for p in drill.place(d, cands)]
+    named = [c.name.lower() for c in cands]
+    for p in placed:
+        for c in p["candidates"]:
+            ran = last.get((p["experiment"], c["resource_id"].lower()))
+            if ran is None and named.count(c["name"].lower()) == 1:
+                ran = last.get((p["experiment"], f"name:{c['name'].lower()}"))
+            c["last_run_at"] = ran
+    return {**d.to_doc(), "layer": layer or d.layer, "placed": placed, "targets_error": error}
 
 
 @app.get("/api/dagorlad/drills/{name}/yaml")
@@ -3246,9 +3252,14 @@ async def drill_save(body: dict) -> JSONResponse:
     VMs — never its resource id. Over a drill of the same name only with ``replace``."""
     from eregion_core import drill
     keys = set(body)
-    if not ({"name", "wires"} <= keys <= {"name", "description", "wires", "replace"}):
+    if not ({"name", "wires"} <= keys <= {"name", "description", "wires", "replace", "author"}):
         return JSONResponse({"error": "a drill is {\"name\", \"wires\": [...]} with an optional "
-                                      "\"description\" and \"replace\", nothing else"}, status_code=400)
+                                      "\"description\", \"replace\" and \"author\", nothing else"}, status_code=400)
+    # Annatar's when it proposed the wires (DG-e): kept as its proposal, corrected or not. Never
+    # Eregion's: Eregion's drills are the shipped ones, reviewed in a PR.
+    author = body.get("author", "operator")
+    if author not in _SAVED_AUTHORS:
+        return JSONResponse({"error": f"its author is {' or '.join(_SAVED_AUTHORS)}"}, status_code=400)
     wires, replace = body["wires"], body.get("replace", False)
     if not isinstance(wires, list) or not 1 <= len(wires) <= drill.MAX_WIRES or not isinstance(replace, bool) \
             or not all(isinstance(w, dict) and set(w) == {"experiment", "target"}
@@ -3275,13 +3286,78 @@ async def drill_save(body: dict) -> JSONResponse:
                                 status_code=409)
         try:
             d = drill.new(body["name"], [(w["experiment"], by_id[w["target"].lower()].name) for w in wires],
-                          description=body.get("description") or "")
+                          author=author, description=body.get("description") or "")
             drill.save(d, replace=replace)
         except drill.DrillRefused as exc:
             exists = "exists already" in str(exc)
             return JSONResponse({"error": str(exc)[:300], "exists": exists}, status_code=409 if exists else 400)
         return JSONResponse({"saved": d.name, "drill": {**d.to_doc(), "layer": d.layer}})
     return await asyncio.to_thread(write)
+
+
+_SAVED_AUTHORS = ("operator", "annatar")
+
+
+@app.get("/api/dagorlad/propose")
+async def drill_propose(target: str = "", wires: int = 5) -> JSONResponse:
+    """« Ask Annatar for a drill » (DG-e, #351): Annatar's chain on the VM the operator chose — the
+    catalogue's implemented techniques that destroy nothing, in kill-chain order
+    (``eregion_core.proposal.chain``). Blind: the catalogue and the target, never Glorfindel's
+    rules nor its modes. Read only: nothing written, nothing launched, the model never called —
+    the board lays it as a draft the operator corrects, keeps and requests."""
+    from eregion_console import sections
+    from eregion_core import proposal
+    from eregion_core.exercise_plan import load_catalog
+
+    def read() -> JSONResponse:
+        cands, error = _drill_candidates()
+        want = target.rstrip("/").lower()
+        found = [c for c in cands if want and c.resource_id.rstrip("/").lower() == want]
+        if not found:
+            return JSONResponse({"error": error or "not an enrolled VM read now: Annatar proposes on the VM you "
+                                                   "choose among them"}, status_code=404)
+        try:
+            seen = sections.status(_RUNS)
+        except ValueError:
+            seen = {"sections": []}
+        if not any(x.get("id") == "annatar" and x.get("active") for x in seen.get("sections") or []):
+            return JSONResponse({"error": "Annatar is not set up here: nothing it proposed could run"}, status_code=409)
+        ids = proposal.chain(load_catalog(), max_wires=wires)
+        if not ids:
+            return JSONResponse({"error": "no implemented technique of the catalogue that destroys nothing, "
+                                          "for a VM"}, status_code=409)
+        vm = found[0]
+        return JSONResponse({"author": proposal.AUTHOR, "target": vm.__dict__,
+                             "wires": [{"experiment": e, "target": vm.resource_id} for e in ids]})
+    return await asyncio.to_thread(read)
+
+
+@app.post("/api/dagorlad/drills/import")
+async def drill_import(body: dict) -> JSONResponse:
+    """« Import YAML » (DG-e, Jonathan's decision A of 04/11): a drill's YAML — the drill
+    `annatar campaign plan` wrote beside its campaign on Orodruin, or an export — read by the
+    drill's one exact reader as an instance's, then placed on the VMs enrolled now, as « Load »
+    lays it. Nothing is written: « Save as drill » keeps it, the request launches it."""
+    import yaml
+
+    from eregion_core import drill
+    if set(body) != {"yaml"} or not isinstance(body.get("yaml"), str):
+        return JSONResponse({"error": "an import is {\"yaml\": \"<the drill>\"}, nothing else"}, status_code=400)
+    text = body["yaml"]
+    if len(text.encode("utf-8")) > drill.MAX_BYTES:
+        return JSONResponse({"error": f"larger than a drill's {drill.MAX_BYTES} bytes"}, status_code=400)
+
+    def read() -> JSONResponse:
+        try:
+            doc = yaml.safe_load(text)
+        except (yaml.YAMLError, RecursionError):   # nested past the parser's depth: never a 500
+            return JSONResponse({"error": "not YAML"}, status_code=400)
+        try:
+            d = drill.read(doc, drill.INSTANCE)
+        except drill.DrillRefused as exc:
+            return JSONResponse({"error": str(exc)[:300]}, status_code=400)
+        return JSONResponse(_placed_view(d, layer="import"))
+    return await asyncio.to_thread(read)
 
 
 def serve(host: str = "127.0.0.1", port: int = 7007) -> None:

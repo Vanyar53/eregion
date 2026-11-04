@@ -27,6 +27,14 @@ on:
 permissions:
   contents: read
 
+# CI5 (#512): a new push on a pull request cancels the run it replaces. Never on main nor in a merge
+# queue: there the group is the run itself (its id), never cancelled nor held pending by another.
+# No `paths` filter (above): the first step already skips the build of a pull request that touches
+# no image, its required checks green.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   image:
     name: image (${{ matrix.image }})

@@ -7,13 +7,30 @@ name: Components
 # Glorfindel in each: every compose profile renders its services (make profiles-check).
 # The full suite stays in ci.yml.
 
+# CI5 (#512): on a pull request, not for a change of prose alone — no component's code, test or data
+# can change in it, and ci.yml runs the whole suite on every pull request anyway. A `paths-ignore`
+# rather than a list of what to watch: the tests read code, YAML, JSON, the Makefile, the compose
+# file; a list that missed one would skip a run that must fail. Its checks (`<component> alone`,
+# `compose profiles…`) are not required by the rule of main: a workflow skipped by a path filter
+# leaves a required check « expected » for ever (tests/unit/test_workflows.py holds it). A push to
+# main always runs.
 on:
   push:
     branches: [main]
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "changes/**"
+      - "LICENSE"
 
 permissions:
   contents: read
+
+# CI5: a new push on a pull request cancels the run it replaces; never on main (the run's own group).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   component:

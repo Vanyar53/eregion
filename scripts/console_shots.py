@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dagorlad shown (DOC1, #365): the README's captures and loop, replayed from the sample data.
 
-    python scripts/console_shots.py                  # docs/images/dagorlad/: board.png, drills.png, runs.png, loop.webp
+    python scripts/console_shots.py                  # docs/images/dagorlad/: board.png, drills.png, annatar.png, runs.png, loop.webp
     python scripts/console_shots.py --video ~/dagorlad.mp4   # and the whole tour, outside the repository
     python scripts/console_shots.py --check          # which tools are here; renders nothing
     make console-shots [VIDEO=~/dagorlad.mp4]
@@ -789,12 +789,20 @@ def render_shots(b: Browser, base: str, token: str, doc: dict, out: Path) -> dic
            " && S.drills && S.drills.length > 0")
     b.pump(0.6)
     drills = b.shot("png")
+    # DG-e: Annatar's chain asked on the VM the operator chose — a draft on the board, nothing kept.
+    b.js("ACTIONS.clear(); ACTIONS.askOpen(); true")
+    b.wait("document.querySelector('[data-on-click=\"askAnnatar\"]')")
+    b.js(f"ACTIONS.askAnnatar({blue_index(b, 'vm-celebrimbor-gondolin')}); true")
+    b.wait("S.author === 'annatar' && S.wires.length > 0 && !S.asking")
+    b.wait(plan_settled(b.js("S.wires.length")))
+    b.pump(0.6)
+    annatar = b.shot("png")
     b.viewport(WIDTH, HEIGHT)
     b.go(f"{base}/dagorlad?view=runs")
     b.wait(RUNS_READY)
     b.pump(1.0)
     runs = b.shot("png")
-    return {"board.png": board, "drills.png": drills, "runs.png": runs}
+    return {"board.png": board, "drills.png": drills, "annatar.png": annatar, "runs.png": runs}
 
 
 def render_loop(b: Browser, base: str, token: str, doc: dict) -> bytes:

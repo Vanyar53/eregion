@@ -211,6 +211,33 @@ make orodruin-exercise DRILL=<nom> [TARGETS=<vm>,<vm>…|all] [DRY_RUN=1] [REQUE
   et la commande le dit. `DRILL`, `TARGETS` et `DRILL_VMS` se donnent sur la ligne de commande, jamais
   par l'environnement.
 
+### Ce qu'Annatar propose
+
+Annatar propose des drills, dont il est l'auteur ; c'est toi qui les gardes et qui les lances.
+
+- **« Ask Annatar for a drill »**, sur la ligne DRILLS : un bouton par VM inscrite. Tu choisis la
+  VM, Annatar pose sur le tableau sa chaîne (la section Annatar active ici : ses traces dans `runs/`,
+  ou `EREGION_CONSOLE_SECTIONS`) : les techniques du catalogue qui tournent et ne
+  détruisent rien, dans l'ordre de la kill-chain, cinq au plus. Il lit le catalogue et la VM,
+  jamais les règles ni les modes de Glorfindel, et la console n'appelle pas le modèle. Rien n'est
+  écrit, rien ne démarre : ce sont des fils en brouillon, à corriger (retirer un fil, en tirer un
+  autre, une technique destructive à la main), puis à garder par « Save as drill ». Sur des fils
+  déjà tirés, la page demande d'abord.
+- **« Import YAML »** : le drill d'une campagne. `annatar campaign plan` (sur Orodruin, par
+  `make orodruin-campaign-plan`) écrit à côté de son manifeste le drill de la campagne,
+  `annatar-<id de la campagne>.yaml`, et en affiche le chemin. Colle son contenu : il est relu par le
+  même lecteur que les autres drills, puis posé sur les VM inscrites lues maintenant, comme
+  « Load ». Une VM qu'il nomme et qui n'est pas inscrite ici attend « à poser ». Rien n'est gardé
+  avant « Save as drill ». Une campagne planifiée avec `--allow-destructive` peut porter une
+  technique destructive : son fil est jugé par le plan puis par Orodruin, comme tout fil, et son nom
+  de cible se tape à la commande.
+- **Gardé, il reste celui d'Annatar** : la liste le montre avec l'auteur `annatar`, que tu aies
+  corrigé ses fils ou non. Il se rejoue comme tout drill : sa demande, puis
+  `make orodruin-exercise DRILL=<nom>`. C'est ainsi qu'une campagne garde sa dernière preuve sous
+  30 jours.
+
+![La chaîne qu'Annatar propose sur gondolin, dans le jeu d'exemple : des fils en brouillon, « proposed by Annatar », à corriger puis à garder](images/dagorlad/annatar.png)
+
 ## Suivre une demande
 
 Une fois la demande écrite, le panneau du bas devient sa **chronologie** : une ligne par fil, dans
@@ -326,7 +353,7 @@ C'est ce que la vue Runs montre ensuite : la détection, sa décision, la carte,
 Les captures et la boucle de cette page et du README se rejouent sur le poste, jamais en CI :
 
 ```bash
-make console-shots                          # docs/images/dagorlad/ : board.png, drills.png, runs.png, loop.webp
+make console-shots                          # docs/images/dagorlad/ : board.png, drills.png, annatar.png, runs.png, loop.webp
 make console-shots VIDEO=~/dagorlad.mp4     # et le tour complet, hors du dépôt
 python scripts/console_shots.py --check     # quels outils sont là ; ne rend rien
 ```

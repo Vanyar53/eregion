@@ -72,6 +72,8 @@ GET  /api/dagorlad/stop               → « Stop all » : make orodruin-kill, l
 
 POST /api/action/release/<vm>         → lever isolation NSG
 POST /api/action/revert/<vm>          → reset complet (release + unblock toutes IPs)
+POST /api/action/block-promote/<vm>?ip=<ip> → étend CE blocage au sous-réseau ; `said`/`whole` : ce que la règle laisse de côté (CON-K)
+POST /api/action/unblock/<vm>?ip=<ip> → retire CE blocage seul (`glorfindel unblock`), l'IP cherchée parmi ceux de la VM (CON-K)
 GET  /api/restore/plan/<vm>?escalation=<id>[&before=<ISO>] → le moment proposé, d'où, les points d'avant (lecture seule, SEC4c)
 POST /api/action/restore/<vm>         → Azure Backup restore de la carte {"escalation": <id>, "before": <ISO>} (jamais une carte ancrée, SEC1 ; jamais sans moment, SEC4c)
 POST /api/action/ack/<esc_id>         → acquitter escalade

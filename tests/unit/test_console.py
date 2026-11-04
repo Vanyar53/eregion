@@ -956,7 +956,7 @@ def test_read_only_greys_the_buttons_that_write(runs):
     assert "const action = b.getAttribute('data-on-click') || '';" in guard
     assert "if (_WRITE_HANDLERS.includes(action)) {" in guard
     names = set(re.findall(r"'(\w+)'", js[js.index("const _WRITE_HANDLERS = ["):js.index("];", js.index("const _WRITE_HANDLERS = ["))]))
-    assert names == {"doApproveAction", "confirmRestore", "doSnapshot", "confirmRelease", "confirmUnblock",
+    assert names == {"doApproveAction", "confirmRestore", "doSnapshot", "confirmRelease", "confirmUnblockIp",
                      "confirmReset", "confirmExtendSubnet", "approveActionAndClose", "approveScoped",
                      "snapshotAndClose"}
     table = js[js.index("const ACTIONS = {"):js.index("\n};", js.index("const ACTIONS = {"))]

@@ -85,7 +85,7 @@ glorfindel pending --watch                   # alerting temps réel
 #   blocked  = règle NSG deny sur une IP     → glorfindel unblock (dé-bloquer l'IP)
 #   les deux → glorfindel reset (reset complet)
 #
-# Console :   ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux)
+# Console :   ↩️ Release (isolated) | ↩️ Unblock (cette IP seule) | ⟳ Reset (les deux)
 # TUI :       x:release  u:unblock  v:reset  r:restore (demande le moment, pré-rempli ; Entrée :
 #             les points d'avant, y : --before ; le refus reste à l'écran — SEC4c)
 #

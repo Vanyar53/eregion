@@ -294,11 +294,46 @@ function showCoverageModal(idx) {
   document.getElementById('modal').classList.add('open');
 }
 
-// "Extend to subnet" affordance for an existing VM-scoped block (operator decision).
-// Hidden once the block is already subnet-wide (scoped === false).
+// "Extend to subnet" affordance for an existing VM-scoped block (operator decision), on ITS IP:
+// never the VM's first block (CON-K). Hidden once the block is already subnet-wide (scoped === false).
 function _extendBtn(s, vmName) {
   if (!s || s.scoped === false) return '';
-  return `<button class="action" ${_on('click', 'confirmExtendSubnet', vmName)} style="font-size:9px;padding:2px 7px;color:var(--orange)" title="Block this IP for every VM on the subnet">⚠ Extend to subnet</button>`;
+  return `<button class="action" ${_on('click', 'confirmExtendSubnet', vmName, s.ip)} style="font-size:9px;padding:2px 7px;color:var(--orange)" title="Block this IP for every VM on the subnet">⚠ Extend to subnet</button>`;
+}
+
+// A VM's blocks, newest first (CON-K). A subnet-wide one lives on the PROTECT card.
+function _blocksOf(states) {
+  const t = s => new Date(s.since || 0).getTime() || 0;
+  return (states || []).filter(s => s.type === 'blocked' && s.scoped !== false).sort((a, b) => t(b) - t(a));
+}
+
+function _ageShort(ts) {
+  const s = ts ? Math.floor((Date.now() - new Date(ts).getTime()) / 1000) : NaN;
+  if (!(s >= 0)) return '?';
+  return s < 3600 ? Math.max(1, Math.floor(s / 60)) + 'm' : s < 172800 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd';
+}
+
+// Several blocks: one line says them all, the card keeps its height whatever their number; the
+// list, filterable, each with its buttons, is in its window (decision A of 03/11, showBlocks).
+// The window finds its VM by its resource id: two VMs of one name never mixed up.
+function _blocksSummary(bs, resourceId) {
+  const n = Number(bs.length);
+  return `<span class="badge blocked" style="font-size:9px;cursor:pointer" ${_on('click', 'showBlocks', resourceId)}
+    title="Every block of this VM, newest first">BLOCKED ×${n} IPs · newest ${_ageShort(bs[0].since)} · oldest ${_ageShort(bs[n - 1].since)}</span>`;
+}
+
+function _manageBtn(bs, resourceId) {
+  return `<button class="action" ${_on('click', 'showBlocks', resourceId)} style="font-size:9px;padding:2px 7px">Manage the ${Number(bs.length)} blocks ▸</button>`;
+}
+
+function _blockBadge(s, vmName) {
+  return `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vmName)}`;
+}
+
+// One block's own buttons: each acts on its IP alone — Unblock takes off that block, the VM's
+// other blocks and its isolation stay (it was a reset of them all).
+function _blockBtns(s, vmName) {
+  return `${_extendBtn(s, vmName)}<button class="action danger" ${_on('click', 'confirmUnblockIp', vmName, s.ip, s.scoped === false, s.nsg || '')} style="font-size:9px;padding:2px 7px" title="Remove the block of this IP only">↩️ Unblock</button>`;
 }
 
 function cliCommand(esc) {
@@ -1044,7 +1079,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     if (s.type === 'blocked' && s.scoped === false) {
       const key = s.nsg || 'subnet';
       if (!subnetGroups.has(key)) subnetGroups.set(key, []);
-      subnetGroups.get(key).push({ ip: s.ip, since: s.since, vm_name: r.vm_name });
+      subnetGroups.get(key).push({ ip: s.ip, since: s.since, vm_name: r.vm_name, nsg: s.nsg || '' });
     }
   }));
   // Full NSG landscape. Prefer the real NSG inventory (/api/nsgs, list_nsgs) — it counts
@@ -1114,7 +1149,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
         ${ips.map(b => `
           <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:3px">
             <span class="badge blocked" style="font-size:9px;cursor:default">⚠ ${_attr(b.ip)} · ${age(b.since)}</span>
-            <button class="action danger" ${_on('click', 'confirmUnblock', b.vm_name)} style="font-size:9px;padding:1px 6px;margin-left:auto">↩️ Unblock</button>
+            <button class="action danger" ${_on('click', 'confirmUnblockIp', b.vm_name, b.ip, true, b.nsg)} style="font-size:9px;padding:1px 6px;margin-left:auto">↩️ Unblock</button>
           </div>`).join('')}
       </div>`).join('');
   const protectBody = protectExpanded
@@ -1422,13 +1457,17 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
         ${totalEscs} escalation${totalEscs > 1 ? 's' : ''}${!isExpanded ? ' ▸' : ''}</span>`
     : '';
 
+  // Several blocks: one summary line, the list in its window (CON-K) — one badge per IP made the
+  // card as long as the list.
+  const blocks = _blocksOf(states);
   const stateBadges = [
     restoreInfo ? `<span class="badge restoring" style="font-size:9px">🔄 RESTORING · ${_attr(restoreInfo.elapsed_label)}</span>` : '',
-    ...states.map(s => s.type === 'isolated'
-      ? `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `${_on('click', 'showIsolationModal', vm_name)}` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`
-      : `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
-           ${!isExpanded ? `${_on('click', 'showIsolationModal', vm_name)}` : ''}>BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`),
+    ...states.filter(s => s.type === 'isolated').map(s =>
+      `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
+           ${!isExpanded ? `${_on('click', 'showIsolationModal', vm_name)}` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`),
+    ...(blocks.length > 1 ? [_blocksSummary(blocks, resource_id)] : blocks.map(s =>
+      `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
+           ${!isExpanded ? `${_on('click', 'showIsolationModal', vm_name)}` : ''}>BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`)),
     escBadge,
   ].filter(Boolean).join('');
 
@@ -1480,9 +1519,10 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
       badge   = s ? `<span class="badge isolated" style="font-size:9px;cursor:default">ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}` : '';
       corrBtn = `<button class="action danger" ${_on('click', 'confirmRelease', vm_name)} style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Release</button>`;
     } else if (a.action === 'block_suspicious_ip' && isBlocked) {
-      const s = states.find(s => s.type === 'blocked');
-      badge   = s ? `<span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}` : '';
-      corrBtn = `${_extendBtn(s, vm_name)}<button class="action danger" ${_on('click', 'confirmUnblock', vm_name)} style="font-size:9px;padding:2px 7px;margin-left:auto">↩️ Unblock</button>`;
+      // The latest decision keeps its row; the blocks are all said, never the first one alone
+      // (CON-K: it hid the others) — one shown with its buttons, several in their window.
+      badge   = blocks.length > 1 ? _blocksSummary(blocks, resource_id) : _blockBadge(blocks[0], vm_name);
+      corrBtn = blocks.length > 1 ? _manageBtn(blocks, resource_id) : _blockBtns(blocks[0], vm_name);
     }
 
     const meta = [
@@ -1517,12 +1557,10 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     </div>`);
   }
   if (isBlocked && !coveredByDec.has('block_suspicious_ip')) {
-    states.filter(s => s.type === 'blocked').forEach(s => fallbackRows.push(
-      `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        <span class="badge blocked" style="font-size:9px;cursor:default">BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}
-        ${_extendBtn(s, vm_name)}
-        <button class="action danger" ${_on('click', 'confirmUnblock', vm_name)} style="font-size:9px;padding:2px 7px">↩️ Unblock</button>
-      </div>`));
+    fallbackRows.push(`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        ${blocks.length > 1 ? _blocksSummary(blocks, resource_id) + _manageBtn(blocks, resource_id)
+                            : _blockBadge(blocks[0], vm_name) + _blockBtns(blocks[0], vm_name)}
+      </div>`);
   }
   if (isIsolated && isBlocked) fallbackRows.push(
     `<button class="action danger" ${_on('click', 'confirmReset', vm_name)} style="font-size:9px;padding:2px 7px">⟳ Reset</button>`);
@@ -1908,43 +1946,138 @@ async function doRelease(vmName) {
   finally { _pendingActions.delete(vmName); refreshState(); }
 }
 
-function confirmUnblock(vmName) {
+// A confirmation opened from the blocks' window: a plain modal again (its Cancel, its width).
+function _plainModal() {
+  document.getElementById('modal-cancel').style.display = '';
+  document.querySelector('.modal').classList.remove('wide');
+}
+
+// Unblock ONE IP (CON-K): its block alone goes; the VM's other blocks and its isolation stay.
+// Its reach said as it is: a block extended to the subnet (`wide`) goes from the subnet's NSG,
+// every VM there reachable from the IP again — never said « on this VM ».
+function confirmUnblockIp(vmName, ip, wide, nsg) {
+  _plainModal();
   openModal(
-    'Unblock IPs — ' + vmName,
-    'Remove all NSG IP block rules on this VM.',
-    `glorfindel revert ${vmName} --yes`,
+    wide ? `Unblock ${ip} subnet-wide — ${nsg || vmName}` : `Unblock ${ip} — ${vmName}`,
+    wide ? `Remove the subnet-wide block of ${ip} (NSG ${nsg || '?'}): every VM on the subnet is reachable from ${ip} again.`
+         : `Remove the block of ${ip} on this VM. Its other blocks, and its isolation if any, stay.`,
+    `glorfindel unblock --yes -- ${ip} ${vmName}`,
     '↩️ Unblock',
     'danger',
-    () => doRevert(vmName),
+    () => doUnblockIp(vmName, ip),
   );
 }
 
-// Promote an existing VM-scoped block to the whole subnet (operator decision).
-function confirmExtendSubnet(vmName) {
+async function doUnblockIp(vmName, ip) {
+  if (_guardReadOnly()) return;
+  toast(`↩️ Unblocking ${ip} on ${vmName}…`);
+  _pendingActions.add(vmName); renderInfra();
+  try {
+    const r = await _post(`/api/action/unblock/${_seg(vmName)}?${new URLSearchParams({ ip })}`);
+    const d = await r.json();
+    if (d.ok && d.not_found) toast(`? No block rule of ${ip} found on ${vmName} — already removed?`, 8000);
+    else if (d.ok) toast(`✓ ${ip} unblocked on ${vmName}`);
+    else if (d.capability_gap) toast('✗ ' + d.error, 8000);
+    else toast(`✗ Unblock of ${ip} failed: ` + (d.error || _cliTail(d.stdout) || d.stderr || '?'), 10000);
+  } catch (e) { toast('✗ ' + e.message); }
+  finally { _pendingActions.delete(vmName); refreshState(); }
+}
+
+// Promote ONE VM-scoped block, the row's, to the whole subnet (operator decision).
+function confirmExtendSubnet(vmName, ip) {
+  _plainModal();
   openModal(
-    'Extend block to subnet — ' + vmName,
-    'This blocks the IP for EVERY VM on the subnet (and future ones), replacing the '
+    `Extend the block of ${ip} to the subnet — ${vmName}`,
+    `This blocks ${ip} for EVERY VM on the subnet (and future ones), replacing the `
       + 'VM-scoped rule with one subnet-wide rule. The subnet rule is placed before the '
       + 'VM rule is removed — no protection gap.',
     '',
     '⚠ Extend to subnet',
     'danger',
-    () => doBlockPromote(vmName),
+    () => doBlockPromote(vmName, ip),
   );
 }
 
-async function doBlockPromote(vmName) {
+async function doBlockPromote(vmName, ip) {
   if (_guardReadOnly()) return;
-  toast('▶ Extending block to subnet…');
+  toast(`▶ Extending the block of ${ip} to the subnet…`);
   try {
-    const r = await _post(`/api/action/block-promote/${_seg(vmName)}`);
+    const r = await _post(`/api/action/block-promote/${_seg(vmName)}?${new URLSearchParams({ ip })}`);
     const d = await r.json();
     if (d.permission_denied) { toast('✗ Cannot execute: read-only credentials'); return; }
     if (d.capability_gap) { toast('✗ ' + d.error, 8000); return; }
     if (d.error) { toast('✗ ' + d.error, 6000); return; }
-    toast('✓ Block extended to the whole subnet');
+    // « The whole subnet » only when the outcome says the subnet rule holds whole: a NIC on another
+    // subnet, a rule kept, an allow before the deny are said, by name (CON-K).
+    if (d.whole === true) toast(`✓ Block of ${d.ip} extended to the whole subnet`);
+    else _showPromotionSaid(vmName, d);
     refreshState();
   } catch (e) { toast('✗ ' + e.message); }
+}
+
+function _showPromotionSaid(vmName, d) {
+  const said = Array.isArray(d.said) && d.said.length ? d.said : ['The outcome could not be read: check the subnet NSG.'];
+  document.getElementById('modal').dataset.owner = '';
+  // Never told short of the subnet: other ports still reachable (exposure) leave the subnet covered.
+  document.getElementById('modal-title').textContent = `⚠ Block of ${d.ip} extended — what it leaves out`;
+  document.getElementById('modal-body').innerHTML =
+    `<div style="margin-bottom:6px">${_attr(vmName)}: the subnet rule is in place; what it leaves out:</div>`
+    + said.map(x => `<div style="color:var(--orange);margin:4px 0 4px 8px">• ${_attr(x)}</div>`).join('');
+  document.getElementById('modal-cmd').style.display = 'none';
+  document.getElementById('modal-cancel').style.display = 'none';
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = 'Close'; btn.className = 'action';
+  btn.onclick = () => { closeModal(); document.getElementById('modal-cancel').style.display = ''; };
+  document.getElementById('modal').classList.add('open');
+}
+
+// Every block of a VM, newest first, filterable, each row with its own buttons (decision A of
+// 03/11). A snapshot of the state when opened: a row's button opens its confirmation in its place.
+function showBlocks(resourceId) {
+  const want = String(resourceId || '').toLowerCase();
+  const r = (_state?.resources || []).find(x => String(x.resource_id || '').toLowerCase() === want);
+  const vmName = r?.vm_name || want.split('/').pop();
+  const bs = _blocksOf(r?.states);
+  document.getElementById('modal').dataset.owner = '';
+  document.getElementById('modal-title').textContent = `Blocks — ${vmName}`;
+  document.getElementById('modal-cmd').style.display = 'none';
+  document.getElementById('modal-cancel').style.display = 'none';
+  const body = document.getElementById('modal-body');
+  body.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <span>${Number(bs.length)} blocked IP${bs.length === 1 ? '' : 's'}, newest first</span>
+      <input id="blocks-filter" type="search" placeholder="filter: IP, NSG…" aria-label="Filter the blocks"
+        style="margin-left:auto;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font:inherit"
+        ${_on('input', 'filterBlocks')}>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr style="text-align:left;color:var(--dim)"><th>IP</th><th>since</th><th>where</th><th></th></tr></thead>
+      <tbody>${bs.map(s => `<tr data-filter="${_attr(`${s.ip} ${s.nsg || ''} ${s.nsg_scope || ''}`.toLowerCase())}" style="border-top:1px solid var(--border)">
+        <td style="padding:5px 6px 5px 0;color:var(--text)">${_attr(s.ip)}</td>
+        <td style="padding:5px 6px 5px 0;white-space:nowrap">${age(s.since)}</td>
+        <td style="padding:5px 6px 5px 0">${_scopeNote(s)}${_nicNote(s, vmName)}</td>
+        <td style="padding:5px 0;text-align:right;white-space:nowrap">${_blockBtns(s, vmName)}</td>
+      </tr>`).join('')}</tbody>
+    </table>
+    <div id="blocks-none" style="display:${bs.length ? 'none' : 'block'};margin-top:6px">${bs.length ? 'Nothing matches.' : 'No active block on this VM.'}</div>`;
+  const btn = document.getElementById('modal-confirm');
+  btn.textContent = 'Close'; btn.className = 'action';
+  btn.onclick = () => { closeModal(); document.getElementById('modal-cancel').style.display = ''; };
+  document.querySelector('.modal').classList.add('wide');
+  document.getElementById('modal').classList.add('open');
+  _applyReadOnlyGuards(body);
+}
+
+function filterBlocks() {
+  if (!(_target instanceof HTMLInputElement)) return;
+  const q = _target.value.trim().toLowerCase();
+  let shown = 0;
+  document.querySelectorAll('#modal-body tr[data-filter]').forEach(tr => {
+    const hit = !q || tr.dataset.filter.includes(q);
+    tr.style.display = hit ? '' : 'none';
+    shown += hit ? 1 : 0;
+  });
+  const none = document.getElementById('blocks-none');
+  if (none) none.style.display = shown ? 'none' : 'block';
 }
 
 function confirmReset(vmName) {
@@ -2218,7 +2351,7 @@ function _guardReadOnly() {
 // named by its action (data-on-click, #257), exactly. Ack / Cmd / Approve-rule stay active (local only).
 const _WRITE_HANDLERS = [
   'doApproveAction', 'confirmRestore', 'doSnapshot',
-  'confirmRelease', 'confirmUnblock', 'confirmReset', 'confirmExtendSubnet',
+  'confirmRelease', 'confirmUnblockIp', 'confirmReset', 'confirmExtendSubnet',
   // The modals' own buttons that run the same writes.
   'approveActionAndClose', 'approveScoped', 'snapshotAndClose',
 ];
@@ -3085,10 +3218,11 @@ async function refreshNsgs() {
 let _event = null, _target = null;     // the event an action runs for, and its element
 
 const ACTIONS = {
-  confirmExtendSubnet, confirmRelease, confirmReset, confirmRestore, confirmUnblock, doAckAll,
+  confirmExtendSubnet, confirmRelease, confirmReset, confirmRestore, confirmUnblockIp, doAckAll,
   doApproveAction, doApproveRule, doRejectRule, doSnapshot, focusJudge, judgeCard, openActivation,
   openCommandModal, refreshAuditVm, refreshBackups, restorePoints, showCoverageModal, showEscModal,
   showIsolationModal, showReasoning, showRuleByIdx, toggleAsset, toggleBackend, closeModal,
+  filterBlocks, showBlocks,                       // a VM's blocks, in their window (CON-K)
   _glowNsgVms,
   stop() {},                                      // only keeps the click from the element around
   ackAllAndClose(ids) { doAckAll(ids); closeModal(); },
@@ -3127,7 +3261,7 @@ const ACTIONS = {
 
 // mouseenter and mouseleave do not bubble: read from mouseover and mouseout, the move from one
 // child to another left out.
-const _EVENTS = { click: 'click', change: 'change', dragstart: 'dragstart', dragend: 'dragend',
+const _EVENTS = { click: 'click', change: 'change', input: 'input', dragstart: 'dragstart', dragend: 'dragend',
                   dragover: 'dragover', dragleave: 'dragleave', drop: 'drop',
                   mouseover: 'mouseenter', mouseout: 'mouseleave' };
 

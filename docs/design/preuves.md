@@ -252,6 +252,17 @@ mesurés (M2880–M2899, M3030–M3036 de SEC11 ; M2940–M2959, M3075–M3081 d
   un JSON valide. Remesurés après la fusion de COR2, I3C, AUC, I3U, I3G et SEC17 (03/11, `--rounds 1`),
   M2899 réancré par SEC17 compris : 54 sur 54 attrapés.
 
+### Un fichier de mutants par lot (CI5)
+
+Chaque lot ajoutait son bloc au même endroit du harnais, juste avant la garde : à chaque fusion, les
+autres PR entraient en conflit. Depuis CI5 (#512), un lot écrit ses mutants dans
+`scripts/mutants/<lot>.py` (`MUTANTS`, `TESTS`, au besoin `TESTS_ALSO`, ses chemins en chaînes), que
+`scripts/mutation_check.py` charge après ses blocs, avant sa garde. Les blocs existants restent où ils
+sont. `scripts/mutant_anchors.py` lit les deux endroits : un id pris deux fois nomme chaque fichier,
+un fichier sans mutant ou dont `TESTS` nomme le mutant d'un autre est une faute, et le harnais
+n'applique jamais ce `TESTS` étranger. Mutants M3585 (un id pris par deux fichiers de lot n'est plus
+vu) et M3586 (les fichiers de lot jamais chargés) : attrapés par `tests/unit/test_mutant_anchors.py`.
+
 ### Les pannes des dépendances (G2)
 
 Les invariants modélisent les pannes d'Azure sous l'isolation (429, crash, 403, disque plein).

@@ -2017,7 +2017,7 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   - une version qui n'est pas X.Y.Z, ou pas plus grande que la courante ;
   - un `[Unreleased]` vide ou qui n'a que des titres sans aucun fragment, ou une section `[X.Y.Z]` déjà là ;
   - un fragment mal formé (une section autre que les quatre, deux fois la même, vide, un autre titre,
-    du texte avant la première section, pas en UTF-8), ou un fichier de `changes/` qui n'est pas un
+    du texte avant la première section, pas en UTF-8, un lien symbolique), ou un fichier de `changes/` qui n'est pas un
     fragment ni son README : chacun nommé, avec sa ligne ;
   - la branche ou le tag `vX.Y.Z` qui existe déjà ;
   - un titre vide, sur deux lignes, ou avec un guillemet droit.

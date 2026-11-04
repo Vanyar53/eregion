@@ -25,7 +25,7 @@ Tu relis un lot. Tu ne modifies rien : ni édition, ni commit, ni push.
    - **Critères :** chaque critère « Fini quand » est-il vraiment tenu, et avec quelle preuve ?
    - **Justesse :** cas limites, chemins d'échec, concurrence, gestion des erreurs.
    - **Tests :** testent-ils vraiment ? Un mutant évident survivrait-il ? Les mutants exigés par la fiche sont-ils là, et attrapés ?
-   - **Périmètre :** rien en dehors du lot, et aucune réécriture sans rapport avec lui.
+   - **Périmètre :** rien en dehors du lot, et aucune réécriture sans rapport avec lui. L'entrée de CHANGELOG est un fragment `changes/<lot>.md` bien formé (`changes/README.md`), jamais sous `[Unreleased]` ; les mutants sont dans leur fichier, `scripts/mutants/<lot>.py`, jamais dans les blocs de `scripts/mutation_check.py`.
    - **Sûreté :** les règles du dépôt sont-elles respectées ?
      - inscription, zones et gardes ;
      - `dry_run` dans les tests ;

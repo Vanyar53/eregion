@@ -65,8 +65,11 @@ GLORFINDEL_STATE := \
 # SEC20 (#467) : de ~/.annatar, le shell d'Annatar ne monte que deux fichiers — son .bashrc, qu'il
 # lance (--init-file), en lecture seule ; son historique, le seul en écriture, où HISTFILE le
 # pose. Jamais le répertoire : le rouge n'y pose rien que l'opérateur lance ensuite. Bash ajoute
-# à ce fichier ; il ne le tronque pas (sa troncature passe par un fichier voisin, que le conteneur
-# ne peut créer). ANNATAR_SHELL_FILES les crée avant, au nom de l'opérateur, et refuse un lien ou
+# à ce fichier ; il ne le tronque pas (sa troncature écrit un fichier voisin puis le renomme sur
+# l'historique : le conteneur ne peut créer ce voisin ; avec l'image root de repli, UID=0, il le
+# crée dans sa propre couche ; le renommage sur un fichier monté échoue, une règle du noyau non
+# mesurée ici, et bash efface alors le voisin, lu dans son code, non mesuré — SEC20b).
+# ANNATAR_SHELL_FILES les crée avant, au nom de l'opérateur, et refuse un lien ou
 # autre chose qu'un fichier : Docker résoudrait le lien sur l'hôte et donnerait sa cible au rouge.
 ANNATAR_STATE := \
 	-v $(HOME)/.annatar/.bashrc:/root/.annatar/.bashrc:ro \

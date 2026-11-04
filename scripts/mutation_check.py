@@ -6152,8 +6152,8 @@ MUTANTS += [
     ("M2087", "a resource of the canary named without its run's suffix: the matrix's lines collide (P04)", JIT_TF,
      '  name                = "nic-no-nsg-${var.suffix}"\n', '  name                = "nic-no-nsg"\n'),
     ("M2088", "a failed destroy deletes the canary's group, as the old fallback did (P04)", JIT_SH,
-     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 || sweep\n',
-     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 \\\n'
+     '  tf 0 destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 || sweep\n',
+     '  tf 0 destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 \\\n'
      '    || az group delete -n "$RG" --yes --no-wait >/dev/null 2>&1\n'),
     ("M2089", "azurerm 4.x and 5.x try to register resource providers the principal may not (P04)", JIT_SH,
      "  *) export ARM_RESOURCE_PROVIDER_REGISTRATIONS=none ;;\n", "  *) ;;\n"),
@@ -6174,7 +6174,7 @@ MUTANTS += [
      "docs/operations.md", 'az role assignment create --role "Network Contributor" \\\n',
      "az role assignment create --role Contributor \\\n"),
     ("M2114", "the runner's second signal cuts the canary's cleanup short: the quarantine NSG left (P04)", JIT_SH,
-     "  trap '' INT TERM\n  echo \"== cleanup\"\n", "  echo \"== cleanup\"\n"),
+     "  trap '' INT TERM\n  # The verdict is said", "  # The verdict is said"),
     ("M2115", "the canary's login traced: the OIDC token written whole into the job's log (P04)", CAN,
      "          jwt=$(curl -fsS", "          set -x\n          jwt=$(curl -fsS"),
     ("M2116", "the canary's step runs run.sh as a child: a cancel's signals reach the step's bash only (P04)",
@@ -10581,6 +10581,65 @@ TESTS.update({
     "M3597": f"{_CI6_WF}test_the_last_job_is_green_only_when_every_job_is",
     "M3598": f"{_CI6_WF}test_every_job_of_the_gate_measures_the_pull_request_s_head_exactly",
 })
+
+
+# CAN1 (#501): the azurerm canary says the end of a failed apply's error, through a filter that
+# takes out its identifiers, resource ids, GUIDs and IPs (a public log); a transient error is
+# said as such, and the line is inconclusive unless a check failed before it. M3500–M3509.
+_CAN1_R = "infra/canary/jit-terraform/redact.py"
+MUTANTS += [
+    ("M3500", "a resource id printed as it is (CAN1)", _CAN1_R,
+     "    text = rid.sub(rid_mark, text)\n", ""),
+    ("M3501", "az's stderr printed raw beside the filtered one (CAN1)", JIT_SH,
+     '  command az "$@" 2> "$OUT.az"\n  rc=$?\n',
+     '  command az "$@" 2> "$OUT.az"\n  rc=$?\n  cat "$OUT.az" >&2\n'),
+    ("M3502", "a GUID (a correlation id) printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b", re.I), "<guid>"),\n',
+     ""),
+    ("M3503", "an IPv4 address printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"(?<![\\d.])(?:\\d{1,3}\\.){3}\\d{1,3}(?:/\\d{1,2})?(?!\\d|\\.\\d)"), "<ip>"),\n', ""),
+    ("M3504", "an IPv6 address printed as it is (CAN1)", _CAN1_R,
+     "    return _IPV6.sub(_ipv6, text)\n", "    return text\n"),
+    ("M3505", "the canary's own identifiers kept when they are not GUIDs (CAN1)", _CAN1_R,
+     "        if len(value) >= _OWN_MIN:\n", "        if False:\n"),
+    ("M3506", "a line of Azure's printed bare: it can start a workflow command (CAN1)", _CAN1_R,
+     '    out += [f"   | {ln}" for ln in lines]\n', "    out += lines\n"),
+    ("M3507", "a transient error never said as such (CAN1)", _CAN1_R,
+     "        if name:\n", "        if False:\n"),
+    ("M3508", "a failed apply's output thrown away again (CAN1)", JIT_SH,
+     '|| say "terraform $1 failed (exit $rc)" "$OUT.tf" --tail 30 --verdict', "|| :"),
+    ("M3509", "a change seen before a transient error read as a passing hitch (CAN1)", JIT_SH,
+     'if [ "$CLEAN_FAIL" = 0 ] && [ -e "$WORK/.transient" ]; then', 'if [ -e "$WORK/.transient" ]; then'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(3500, 3510)})
+# CAN1, after its review: the historical `##[name]` commands the runner reads anywhere in a
+# line, more real forms (an IPv6 after a word and a colon, a tenant's domain, a SAS, a GUID
+# without dashes, an opaque bearer token, an id escaped in JSON), a 429 read as a status only,
+# a filter that fails saying nothing of the text, a cleanup that asks for no re-run. M3510–M3519.
+MUTANTS += [
+    ("M3510", "a line's ##[add-mask] left whole: the runner reads it anywhere in the line (CAN1)", _CAN1_R,
+     '    while "##[" in line:\n        line = line.replace("##[", "# #[")\n', ""),
+    ("M3511", "an IPv6 after a word and a colon printed as it is (CAN1)", _CAN1_R,
+     '_IPV6 = re.compile(r"(?<!\\w)', '_IPV6 = re.compile(r"(?<![\\w:])'),
+    ("M3512", "a tenant's domain (*.onmicrosoft.com) printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[\\w-]+\\.onmicrosoft\\.com\\b", re.I), "<tenant-domain>"),\n', ""),
+    ("M3513", "a SAS's signature and expiry printed as they are (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b(sig|se)=[^&\\s\\"\'<>]+"), r"\\1=<sas>"),\n', ""),
+    ("M3514", "a GUID without its dashes printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[0-9a-f]{32}\\b", re.I), "<guid>"),\n', ""),
+    ("M3515", "an opaque bearer token printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\bBearer\\s+[^\\s\\"\',;]+", re.I), "Bearer <token>"),\n', ""),
+    ("M3516", "a resource id escaped in JSON printed as it is (CAN1)", _CAN1_R,
+     'r"(?:\\\\?/|%2F)subscriptions(?:\\\\?/|%2F)', 'r"(?:/|%2F)subscriptions(?:/|%2F)'),
+    ("M3517", "a 429 anywhere, a timestamp's milliseconds too, said transient (CAN1)", _CAN1_R,
+     '("429", re.compile(r"\\bstatus(?:\\s*code)?\\"?\\s*[:=]?\\s*\\"?429\\b|\\b429\\s*\\(|\\bHTTP(?:/[\\d.]+)?\\s+429\\b", re.I)),',
+     '("429", re.compile(r"\\b429\\b")),'),
+    ("M3518", "a filter that failed: the raw text printed in its place (CAN1)", JIT_SH,
+     '    *) echo "   $1: its output withheld (the filter failed)" >&2 ;;', '    *) cat "$2" >&2 ;;'),
+    ("M3519", "a transient error in the cleanup asks for a re-run of the checks (CAN1)", JIT_SH,
+     "  SAY_CONTEXT=cleanup\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(3510, 3520)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

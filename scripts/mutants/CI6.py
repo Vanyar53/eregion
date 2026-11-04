@@ -54,3 +54,32 @@ TESTS = {
     "M3601": f"{_REL}test_a_pull_request_into_another_branch_never_passes",
     "M3602": f"{_REL}test_a_gate_said_nothing_still_refuses",
 }
+
+# The workflow's own (.github/workflows/release-gate.yml).
+GATE = ".github/workflows/release-gate.yml"
+_WF = "tests/unit/test_workflows.py::"
+MUTANTS += [
+    ("M3597", "the gate's last job green with a skipped job (CI6)", GATE,
+     'all(job.get("result") == "success" for job in blocking.values())',
+     'all(job.get("result") in ("success", "skipped") for job in blocking.values())'),
+    ("M3598", "the gate measures GitHub's merge commit, not the pull request's head: another tree (CI6)", GATE,
+     "      # scripts/release.py compares that tree with origin/main's.\n"
+     "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0\n"
+     "        with:\n          ref: ${{ github.event.pull_request.head.sha || github.sha }}\n",
+     "      # scripts/release.py compares that tree with origin/main's.\n"
+     "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0\n"
+     "        with:\n"),
+    ("M3603", "macOS red fails the gate's run: a runner GitHub never gives holds a release back (CI6, H1c)",
+     GATE, "    timeout-minutes: 25\n    continue-on-error: true\n", "    timeout-minutes: 25\n"),
+    ("M3604", "Terraform taken for informative beside macOS: its red never blocks (CI6, H1c)", GATE,
+     "          INFORMATIVE: macos\n", "          INFORMATIVE: macos terraform\n"),
+    ("M3605", "the gate's last job asks macOS to be green again (CI6, H1c)", GATE,
+     "blocking = {k: v for k, v in needs.items() if k not in informative}", "blocking = dict(needs)"),
+]
+TESTS.update({
+    "M3597": f"{_WF}test_the_last_job_is_green_only_when_every_job_that_blocks_is",
+    "M3598": f"{_WF}test_every_job_of_the_gate_measures_the_pull_request_s_head_exactly",
+    "M3603": f"{_WF}test_macos_informs_and_never_blocks",
+    "M3604": f"{_WF}test_the_last_job_waits_for_every_other_one",
+    "M3605": f"{_WF}test_the_last_job_is_green_only_when_every_job_that_blocks_is",
+})

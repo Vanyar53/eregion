@@ -10168,7 +10168,7 @@ MUTANTS += [
     ("M3466", "the page says « the whole subnet » on any promotion that ran (CON-K)", GJS,
      "if (d.whole === true) toast(", "if (d.ok) toast("),
     ("M3467", "the decision row shows the VM's first block alone, the others hidden (CON-K)", GJS,
-     "badge   = blocks.length > 1 ? _blocksSummary(blocks, vm_name) : _blockBadge(blocks[0], vm_name);",
+     "badge   = blocks.length > 1 ? _blocksSummary(blocks, resource_id) : _blockBadge(blocks[0], vm_name);",
      "badge   = _blockBadge(blocks[0], vm_name);"),
     ("M3468", "« Extend to subnet » sent without its row's IP (CON-K)", GJS,
      "_on('click', 'confirmExtendSubnet', vmName, s.ip)", "_on('click', 'confirmExtendSubnet', vmName)"),

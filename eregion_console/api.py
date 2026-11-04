@@ -1589,7 +1589,15 @@ async def action_unblock(vm_name: str, ip: str = "") -> dict:
         [_bin(), "unblock", "--yes", "--", block["ip"], block["resource_id"]],
         capture_output=True, text=True, timeout=600,   # one rule pair per NIC; cut midway = half unblocked
     )
-    return {**_subprocess_result(result), "ip": block["ip"]}
+    out = {**_subprocess_result(result), "ip": block["ip"]}
+    # No rule found (the CLI's `not_found`, exit 0): said as such, never « unblocked ».
+    if out["ok"] and _UNBLOCK_NOT_FOUND in (result.stdout or ""):
+        out["not_found"] = True
+    return out
+
+
+# What `glorfindel unblock` says when it finds no rule of the IP (glorfindel/cli.py, `unblock`).
+_UNBLOCK_NOT_FOUND = "No block rules found for"
 
 
 @app.post("/api/action/snapshot/{vm_name}")

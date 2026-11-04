@@ -284,22 +284,31 @@ la ligne, et disait « the whole subnet » quoi que la promotion laisse de côt�
 - **La carte** (décision A du 03/11) : plusieurs blocages tiennent en une ligne (`_blocksSummary` :
   leur nombre, l'âge du plus récent et du plus ancien), repliée comme dépliée ; la carte garde sa
   hauteur. La fenêtre (`showBlocks`) les liste du plus récent au plus ancien, filtrables par adresse
-  ou NSG, chacun avec ses boutons. Un seul : montré avec ses boutons. Un blocage étendu au sous-réseau
+  ou NSG, chacun avec ses boutons ; elle trouve sa VM par son identifiant de ressource, jamais par son
+  nom (deux VM d'un même nom). Un seul : montré avec ses boutons. Un blocage étendu au sous-réseau
   reste sur la carte PROTECT.
 - **Chaque bouton nomme son adresse** : `POST /api/action/block-promote/<vm>?ip=…` et
   `POST /api/action/unblock/<vm>?ip=…`. L'adresse est cherchée parmi les blocages actifs de cette VM
   (`_vm_block`) : sans adresse, ou une qu'elle ne bloque pas, la route refuse et rien ne part ; deux VM
   de ce nom, refusé (T1). « Unblock » lance `glorfindel unblock --yes -- <ip> <id>` : les autres
-  blocages et l'isolation restent ; un retrait partiel (code 2) est dit en échec. Le bouton « Unblock »
-  d'un blocage étendu au sous-réseau, sur la carte PROTECT, aussi.
+  blocages et l'isolation restent ; un retrait partiel (code 2) est dit en échec, une adresse dont
+  aucune règle n'est trouvée est dite telle (« already removed? »), jamais « unblocked ». Le bouton
+  « Unblock » d'un blocage étendu au sous-réseau, sur la carte PROTECT, aussi ; sa confirmation dit sa
+  portée : la règle part du NSG du sous-réseau, et toutes les VM qui y sont redeviennent joignables
+  depuis l'adresse. La commande montrée est l'argv lancé.
 - **La promotion dit ce qu'elle laisse de côté** (`_promotion_said`) : une carte réseau sur un autre
   sous-réseau, ou illisible (`blocked_partial`) ; une règle gardée par la promotion (I4P,
   `kept_rules`) ; une autorisation qui passe avant le deny (`bypass`) ; d'autres ports encore
-  joignables (`exposure`). Chacun est nommé comme le connecteur le nomme, échappé, dans une fenêtre.
+  joignables (`exposure`). Chacun est nommé comme le connecteur le nomme, échappé, dans une fenêtre
+  (« extended — what it leaves out » : d'autres ports joignables laissent le sous-réseau couvert).
   « Extended to the whole subnet » n'apparaît que si la réponse dit `whole`.
 - **Le conseil des drills** (suite de DG-d) : pour un nom que portent plusieurs VM inscrites, la
   commande dit « load it on the board and choose the VM there ». Enregistré de nouveau, le drill
   nommerait la VM de la même façon.
+- **La relecture 5.5 (04/11)** a fait corriger : la confirmation d'« Unblock » disait « on this VM » pour
+  un blocage étendu au sous-réseau ; la fenêtre cherchait sa VM par son nom ; une adresse sans règle
+  trouvée se disait « unblocked » ; la commande montrée n'était pas l'argv lancé ; la fenêtre d'une
+  promotion disait « not the whole subnet » quand seuls d'autres ports restaient joignables.
 - Tests : `tests/unit/test_console_blocks.py`.
 
 ### Ce qui vient du dehors (#254)

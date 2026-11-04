@@ -315,14 +315,15 @@ function _ageShort(ts) {
 
 // Several blocks: one line says them all, the card keeps its height whatever their number; the
 // list, filterable, each with its buttons, is in its window (decision A of 03/11, showBlocks).
-function _blocksSummary(bs, vmName) {
+// The window finds its VM by its resource id: two VMs of one name never mixed up.
+function _blocksSummary(bs, resourceId) {
   const n = Number(bs.length);
-  return `<span class="badge blocked" style="font-size:9px;cursor:pointer" ${_on('click', 'showBlocks', vmName)}
+  return `<span class="badge blocked" style="font-size:9px;cursor:pointer" ${_on('click', 'showBlocks', resourceId)}
     title="Every block of this VM, newest first">BLOCKED ×${n} IPs · newest ${_ageShort(bs[0].since)} · oldest ${_ageShort(bs[n - 1].since)}</span>`;
 }
 
-function _manageBtn(bs, vmName) {
-  return `<button class="action" ${_on('click', 'showBlocks', vmName)} style="font-size:9px;padding:2px 7px">Manage the ${Number(bs.length)} blocks ▸</button>`;
+function _manageBtn(bs, resourceId) {
+  return `<button class="action" ${_on('click', 'showBlocks', resourceId)} style="font-size:9px;padding:2px 7px">Manage the ${Number(bs.length)} blocks ▸</button>`;
 }
 
 function _blockBadge(s, vmName) {
@@ -332,7 +333,7 @@ function _blockBadge(s, vmName) {
 // One block's own buttons: each acts on its IP alone — Unblock takes off that block, the VM's
 // other blocks and its isolation stay (it was a reset of them all).
 function _blockBtns(s, vmName) {
-  return `${_extendBtn(s, vmName)}<button class="action danger" ${_on('click', 'confirmUnblockIp', vmName, s.ip)} style="font-size:9px;padding:2px 7px" title="Remove the block of this IP only">↩️ Unblock</button>`;
+  return `${_extendBtn(s, vmName)}<button class="action danger" ${_on('click', 'confirmUnblockIp', vmName, s.ip, s.scoped === false, s.nsg || '')} style="font-size:9px;padding:2px 7px" title="Remove the block of this IP only">↩️ Unblock</button>`;
 }
 
 function cliCommand(esc) {
@@ -1078,7 +1079,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
     if (s.type === 'blocked' && s.scoped === false) {
       const key = s.nsg || 'subnet';
       if (!subnetGroups.has(key)) subnetGroups.set(key, []);
-      subnetGroups.get(key).push({ ip: s.ip, since: s.since, vm_name: r.vm_name });
+      subnetGroups.get(key).push({ ip: s.ip, since: s.since, vm_name: r.vm_name, nsg: s.nsg || '' });
     }
   }));
   // Full NSG landscape. Prefer the real NSG inventory (/api/nsgs, list_nsgs) — it counts
@@ -1148,7 +1149,7 @@ function _renderModules(rules, detectBackends, recoverBackends, resources) {
         ${ips.map(b => `
           <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:3px">
             <span class="badge blocked" style="font-size:9px;cursor:default">⚠ ${_attr(b.ip)} · ${age(b.since)}</span>
-            <button class="action danger" ${_on('click', 'confirmUnblockIp', b.vm_name, b.ip)} style="font-size:9px;padding:1px 6px;margin-left:auto">↩️ Unblock</button>
+            <button class="action danger" ${_on('click', 'confirmUnblockIp', b.vm_name, b.ip, true, b.nsg)} style="font-size:9px;padding:1px 6px;margin-left:auto">↩️ Unblock</button>
           </div>`).join('')}
       </div>`).join('');
   const protectBody = protectExpanded
@@ -1464,7 +1465,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     ...states.filter(s => s.type === 'isolated').map(s =>
       `<span class="badge isolated" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
            ${!isExpanded ? `${_on('click', 'showIsolationModal', vm_name)}` : ''}>ISOLATED · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`),
-    ...(blocks.length > 1 ? [_blocksSummary(blocks, vm_name)] : blocks.map(s =>
+    ...(blocks.length > 1 ? [_blocksSummary(blocks, resource_id)] : blocks.map(s =>
       `<span class="badge blocked" style="font-size:9px${!isExpanded ? ';cursor:pointer' : ''}"
            ${!isExpanded ? `${_on('click', 'showIsolationModal', vm_name)}` : ''}>BLOCKED ${_attr(s.ip)} · ${age(s.since)}</span>${_scopeNote(s)}${_nicNote(s, vm_name)}`)),
     escBadge,
@@ -1520,8 +1521,8 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
     } else if (a.action === 'block_suspicious_ip' && isBlocked) {
       // The latest decision keeps its row; the blocks are all said, never the first one alone
       // (CON-K: it hid the others) — one shown with its buttons, several in their window.
-      badge   = blocks.length > 1 ? _blocksSummary(blocks, vm_name) : _blockBadge(blocks[0], vm_name);
-      corrBtn = blocks.length > 1 ? _manageBtn(blocks, vm_name) : _blockBtns(blocks[0], vm_name);
+      badge   = blocks.length > 1 ? _blocksSummary(blocks, resource_id) : _blockBadge(blocks[0], vm_name);
+      corrBtn = blocks.length > 1 ? _manageBtn(blocks, resource_id) : _blockBtns(blocks[0], vm_name);
     }
 
     const meta = [
@@ -1557,7 +1558,7 @@ function _renderAssetNode(resource, vmEscs, detEscs, restoreByVm, slotIdx = 0) {
   }
   if (isBlocked && !coveredByDec.has('block_suspicious_ip')) {
     fallbackRows.push(`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        ${blocks.length > 1 ? _blocksSummary(blocks, vm_name) + _manageBtn(blocks, vm_name)
+        ${blocks.length > 1 ? _blocksSummary(blocks, resource_id) + _manageBtn(blocks, resource_id)
                             : _blockBadge(blocks[0], vm_name) + _blockBtns(blocks[0], vm_name)}
       </div>`);
   }
@@ -1952,12 +1953,15 @@ function _plainModal() {
 }
 
 // Unblock ONE IP (CON-K): its block alone goes; the VM's other blocks and its isolation stay.
-function confirmUnblockIp(vmName, ip) {
+// Its reach said as it is: a block extended to the subnet (`wide`) goes from the subnet's NSG,
+// every VM there reachable from the IP again — never said « on this VM ».
+function confirmUnblockIp(vmName, ip, wide, nsg) {
   _plainModal();
   openModal(
-    `Unblock ${ip} — ${vmName}`,
-    `Remove the block of ${ip} on this VM. Its other blocks, and its isolation if any, stay.`,
-    `glorfindel unblock ${ip} ${vmName} --yes`,
+    wide ? `Unblock ${ip} subnet-wide — ${nsg || vmName}` : `Unblock ${ip} — ${vmName}`,
+    wide ? `Remove the subnet-wide block of ${ip} (NSG ${nsg || '?'}): every VM on the subnet is reachable from ${ip} again.`
+         : `Remove the block of ${ip} on this VM. Its other blocks, and its isolation if any, stay.`,
+    `glorfindel unblock --yes -- ${ip} ${vmName}`,
     '↩️ Unblock',
     'danger',
     () => doUnblockIp(vmName, ip),
@@ -1971,7 +1975,8 @@ async function doUnblockIp(vmName, ip) {
   try {
     const r = await _post(`/api/action/unblock/${_seg(vmName)}?${new URLSearchParams({ ip })}`);
     const d = await r.json();
-    if (d.ok) toast(`✓ ${ip} unblocked on ${vmName}`);
+    if (d.ok && d.not_found) toast(`? No block rule of ${ip} found on ${vmName} — already removed?`, 8000);
+    else if (d.ok) toast(`✓ ${ip} unblocked on ${vmName}`);
     else if (d.capability_gap) toast('✗ ' + d.error, 8000);
     else toast(`✗ Unblock of ${ip} failed: ` + (d.error || _cliTail(d.stdout) || d.stderr || '?'), 10000);
   } catch (e) { toast('✗ ' + e.message); }
@@ -2013,9 +2018,10 @@ async function doBlockPromote(vmName, ip) {
 function _showPromotionSaid(vmName, d) {
   const said = Array.isArray(d.said) && d.said.length ? d.said : ['The outcome could not be read: check the subnet NSG.'];
   document.getElementById('modal').dataset.owner = '';
-  document.getElementById('modal-title').textContent = `⚠ Block of ${d.ip} extended — not the whole subnet`;
+  // Never told short of the subnet: other ports still reachable (exposure) leave the subnet covered.
+  document.getElementById('modal-title').textContent = `⚠ Block of ${d.ip} extended — what it leaves out`;
   document.getElementById('modal-body').innerHTML =
-    `<div style="margin-bottom:6px">${_attr(vmName)}: the subnet rule is in place, but it leaves out:</div>`
+    `<div style="margin-bottom:6px">${_attr(vmName)}: the subnet rule is in place; what it leaves out:</div>`
     + said.map(x => `<div style="color:var(--orange);margin:4px 0 4px 8px">• ${_attr(x)}</div>`).join('');
   document.getElementById('modal-cmd').style.display = 'none';
   document.getElementById('modal-cancel').style.display = 'none';
@@ -2027,8 +2033,10 @@ function _showPromotionSaid(vmName, d) {
 
 // Every block of a VM, newest first, filterable, each row with its own buttons (decision A of
 // 03/11). A snapshot of the state when opened: a row's button opens its confirmation in its place.
-function showBlocks(vmName) {
-  const r = (_state?.resources || []).find(x => x.vm_name === vmName);
+function showBlocks(resourceId) {
+  const want = String(resourceId || '').toLowerCase();
+  const r = (_state?.resources || []).find(x => String(x.resource_id || '').toLowerCase() === want);
+  const vmName = r?.vm_name || want.split('/').pop();
   const bs = _blocksOf(r?.states);
   document.getElementById('modal').dataset.owner = '';
   document.getElementById('modal-title').textContent = `Blocks — ${vmName}`;

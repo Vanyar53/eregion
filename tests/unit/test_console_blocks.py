@@ -135,6 +135,7 @@ def test_the_page_says_the_whole_subnet_only_when_the_outcome_holds_it_whole():
     assert "if (d.whole === true) toast(`✓ Block of ${d.ip} extended to the whole subnet`);" in body
     assert "else _showPromotionSaid(vmName, d);" in body
     assert JS.count("extended to the whole subnet") == 1, "said once, on the whole branch"
+    assert JS.count("not the whole subnet") == 0, "other ports reachable leave the subnet covered"
     said = JS[JS.index("function _showPromotionSaid"):JS.index("\n}\n", JS.index("function _showPromotionSaid"))]
     assert "said.map(x => `<div style=\"color:var(--orange);margin:4px 0 4px 8px\">• ${_attr(x)}</div>`)" in said
     assert "?${new URLSearchParams({ ip })}" in body, "the row's IP sent"
@@ -162,6 +163,18 @@ def test_unblock_takes_off_a_subnet_wide_block_by_its_ip(client, ran):
     assert [a[1:] for a in ran] == [["unblock", "--yes", "--", OLD, WEB]], ran
 
 
+def test_an_unblock_that_finds_no_rule_is_said_so_never_unblocked(client, blocks, monkeypatch):
+    """`glorfindel unblock` finds no rule of the IP (`not_found`, exit 0): the console says
+    « already removed? », never « ✓ unblocked » (the review of 90078a78)."""
+    import subprocess
+    monkeypatch.setattr(api.subprocess, "run", lambda argv, **_: subprocess.CompletedProcess(
+        argv, 0, stdout=f"No block rules found for {OLD} — already removed?\n", stderr=""))
+    d = client.post("/api/action/unblock/web", json={}, params={"ip": OLD}).json()
+    assert d["ok"] and d["not_found"] is True, d
+    body = _fn("doUnblockIp")
+    assert body.index("if (d.ok && d.not_found)") < body.index("else if (d.ok) toast(`✓"), body
+
+
 def test_a_partial_unblock_is_not_ok(client, blocks, monkeypatch):
     """`glorfindel unblock` exits 2 when rules stay: the console says it failed."""
     import subprocess
@@ -180,8 +193,10 @@ def test_an_ambiguous_vm_name_is_refused(client, connector, ran, route):
     assert r.status_code == 409 and "2 VMs" in r.json()["error"] and ran == [] and connector.calls == []
 
 
-def test_the_cli_reads_the_routes_argv(monkeypatch):
-    """`unblock --yes -- <ip> <rid>`, as the route runs it: the IP and the VM, in that order."""
+@pytest.mark.parametrize("status", ["ok", "not_found"])
+def test_the_cli_reads_the_routes_argv(monkeypatch, status):
+    """`unblock --yes -- <ip> <rid>`, as the route runs it: the IP and the VM, in that order; and
+    its `not_found` said in the words the route reads (`_UNBLOCK_NOT_FOUND`), only then."""
     from click.testing import CliRunner
 
     from glorfindel.cli import cli
@@ -193,11 +208,12 @@ def test_the_cli_reads_the_routes_argv(monkeypatch):
 
         def unblock_ip(self, ip, rid):
             seen.append((ip, rid))
-            return {"status": "ok", "deleted_rules": []}
+            return {"status": status, "deleted_rules": []}
     monkeypatch.setattr("glorfindel.actions.AzureConnector", _C)
     monkeypatch.setattr("glorfindel.cli._record_manual_action", lambda *a, **k: None)
     r = CliRunner().invoke(cli, ["unblock", "--yes", "--", OLD, WEB])
     assert r.exit_code == 0 and seen == [(OLD, WEB)], r.output
+    assert (api._UNBLOCK_NOT_FOUND in r.output) == (status == "not_found"), r.output
 
 
 # ── The card: several blocks in one line, the list in its window ─────────────────────────────
@@ -214,10 +230,10 @@ def test_the_card_says_several_blocks_in_one_line_never_one_badge_each():
     card = _fn("_renderAssetNode")
     assert "const blocks = _blocksOf(states);" in card
     assert "states.find(s => s.type === 'blocked')" not in card, "a block chosen for the row hides the others"
-    assert "...(blocks.length > 1 ? [_blocksSummary(blocks, vm_name)] : blocks.map(s =>" in card
-    assert "badge   = blocks.length > 1 ? _blocksSummary(blocks, vm_name) : _blockBadge(blocks[0], vm_name);" in card
-    assert "corrBtn = blocks.length > 1 ? _manageBtn(blocks, vm_name) : _blockBtns(blocks[0], vm_name);" in card
-    assert "${blocks.length > 1 ? _blocksSummary(blocks, vm_name) + _manageBtn(blocks, vm_name)" in card
+    assert "...(blocks.length > 1 ? [_blocksSummary(blocks, resource_id)] : blocks.map(s =>" in card
+    assert "badge   = blocks.length > 1 ? _blocksSummary(blocks, resource_id) : _blockBadge(blocks[0], vm_name);" in card
+    assert "corrBtn = blocks.length > 1 ? _manageBtn(blocks, resource_id) : _blockBtns(blocks[0], vm_name);" in card
+    assert "${blocks.length > 1 ? _blocksSummary(blocks, resource_id) + _manageBtn(blocks, resource_id)" in card
     assert "BLOCKED ×${n} IPs · newest ${_ageShort(bs[0].since)} · oldest ${_ageShort(bs[n - 1].since)}" in _fn("_blocksSummary")
     order = _fn("_blocksOf")
     assert "sort((a, b) => t(b) - t(a))" in order and "s.scoped !== false" in order
@@ -226,9 +242,15 @@ def test_the_card_says_several_blocks_in_one_line_never_one_badge_each():
 def test_each_row_acts_on_its_own_ip():
     """The window lists every block with its buttons; each button names its row's IP."""
     assert "_on('click', 'confirmExtendSubnet', vmName, s.ip)" in _fn("_extendBtn")
-    assert "_on('click', 'confirmUnblockIp', vmName, s.ip)" in _fn("_blockBtns")
+    assert "_on('click', 'confirmUnblockIp', vmName, s.ip, s.scoped === false, s.nsg || '')" in _fn("_blockBtns")
+    # The window finds its VM by its resource id (two VMs of one name: never the other's blocks).
+    assert "_on('click', 'showBlocks', resourceId)" in _fn("_blocksSummary") + _fn("_manageBtn")
     win = _fn("showBlocks")
+    assert "find(x => String(x.resource_id || '').toLowerCase() === want)" in win
+    assert "x.vm_name ===" not in win
     assert "_blocksOf(r?.states)" in win and "${_blockBtns(s, vmName)}" in win
+    # The command shown is the argv the route runs.
+    assert "`glorfindel unblock --yes -- ${ip} ${vmName}`" in _fn("confirmUnblockIp")
     assert "_on('input', 'filterBlocks')" in win and "_applyReadOnlyGuards(body);" in win
     assert "/api/action/unblock/${_seg(vmName)}?${new URLSearchParams({ ip })}" in _fn("doUnblockIp")
     assert "confirmUnblock(" not in JS and "doRevert(vmName, ip)" not in JS, "no row runs a reset"
@@ -238,5 +260,11 @@ def test_each_row_acts_on_its_own_ip():
 
 
 def test_the_subnet_wide_row_unblocks_its_ip():
-    """The PROTECT card's subnet-wide row: its IP, never a reset of its VM."""
-    assert "_on('click', 'confirmUnblockIp', b.vm_name, b.ip)" in JS
+    """The PROTECT card's subnet-wide row: its IP, never a reset of its VM — and its confirmation
+    says its reach: the subnet's NSG, every VM there reachable from the IP again, never « on this
+    VM » (the review of 90078a78)."""
+    assert "_on('click', 'confirmUnblockIp', b.vm_name, b.ip, true, b.nsg)" in JS
+    confirm = _fn("confirmUnblockIp")
+    assert ("wide ? `Remove the subnet-wide block of ${ip} (NSG ${nsg || '?'}): every VM on the subnet "
+            "is reachable from ${ip} again.`") in confirm
+    assert ": `Remove the block of ${ip} on this VM." in confirm

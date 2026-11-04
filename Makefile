@@ -1087,13 +1087,17 @@ orodruin-lock: orodruin-init orodruin-watch-guard
 ORO_INCOMING  := eregion-annatar:incoming
 ORO_CHECK_NAME := eregion-annatar-check
 ORO_CHECK_TIMEOUT := 120
-ORO_CHECK_RUN  = timeout -k 10 $(ORO_CHECK_TIMEOUT) docker run --rm $(ORO_HARDEN) --pull never --network none --name $(ORO_CHECK_NAME) --entrypoint true $(ORO_INCOMING)
+# Dans la commande distante, le délai sort des apostrophes : EREGION_CHECK_TIMEOUT, validé avant (des
+# chiffres), jamais développé par make ($(value …), unexport — comme REF) : « $(…) » n'y est pas exécuté.
+unexport ORO_CHECK_TIMEOUT
+ORO_CHECK_RUN  =timeout -k 10 '"$$EREGION_CHECK_TIMEOUT"' docker run --rm $(ORO_HARDEN) --pull never --network none --no-healthcheck --name $(ORO_CHECK_NAME) --entrypoint true $(ORO_INCOMING)
 orodruin-push: export EREGION_DEPLOY_REF = $(value REF)
+orodruin-push: export EREGION_CHECK_TIMEOUT = $(value ORO_CHECK_TIMEOUT)
 orodruin-push: orodruin-known
 	@test -f infra/orodruin/orodruin.env || { echo "!! infra/orodruin/orodruin.env manquant (copier orodruin.env.example)"; exit 1; }
 	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est envoyé. La donner sur la ligne de commande : make orodruin-push REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
-	@case "$(ORO_CHECK_TIMEOUT)" in ''|0|*[!0-9]*) echo "ORO_CHECK_TIMEOUT invalide : « $(ORO_CHECK_TIMEOUT) » (des secondes, au moins 1)" >&2; exit 1;; esac
+	@case "$$EREGION_CHECK_TIMEOUT" in ''|0*|*[!0-9]*) echo "ORO_CHECK_TIMEOUT invalide : « $$EREGION_CHECK_TIMEOUT » (des secondes, au moins 1)" >&2; exit 1;; esac
 	@git fetch -q --tags origin
 	@python3 scripts/published_image.py install-cosign
 	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; trap 'rm -rf "$$tmp"; exit 130' INT TERM HUP; \
@@ -1107,8 +1111,8 @@ orodruin-push: orodruin-known
 	         python3 scripts/published_image.py loaded annatar --digest "$$digest" --expect-file "$$tmp/expect.json" --inspect "$$tmp/inspect.json"; }; then \
 	   rc=0; $(ORO_SSH) '$(ORO_CHECK_RUN)' || rc=$$?; \
 	   if [ "$$rc" != 0 ]; then \
-	     $(ORO_SSH) 'docker rm -f $(ORO_CHECK_NAME) >/dev/null 2>&1; docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \
-	     case $$rc in 124|137) why="délai de $(ORO_CHECK_TIMEOUT) s dépassé";; 125) why="docker n'a pas pu créer le conteneur : une couche absente ou non dépaquetée ?";; \
+	     $(ORO_SSH) 'timeout 30 docker rm -f $(ORO_CHECK_NAME) >/dev/null 2>&1; docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \
+	     case $$rc in 124|137) why="délai de $$EREGION_CHECK_TIMEOUT s dépassé";; 125) why="docker n'a pas pu créer le conteneur : une couche absente ou non dépaquetée ?";; \
 	       126|127) why="true ne s'exécute pas dans l'image";; 255) why="ssh n'a pas abouti";; *) why="code $$rc";; esac; \
 	     echo "✗ l'image vérifiée ne démarre pas sur Orodruin (run de contrôle sans réseau : $$why) : retirée, eregion-annatar:orodruin n'a pas changé" >&2; \
 	     exit 1; fi; \

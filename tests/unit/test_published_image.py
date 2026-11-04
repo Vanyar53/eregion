@@ -999,8 +999,8 @@ def test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_cha
 # ── OI2 (#490): a control run before the tag — the layers present and unpacked ──────────────────
 
 CHECK_RUN = ["run", "--rm", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--security-opt",
-             "no-new-privileges:true", "--pull", "never", "--network", "none", "--name", "eregion-annatar-check",
-             "--entrypoint", "true", "eregion-annatar:incoming"]
+             "no-new-privileges:true", "--pull", "never", "--network", "none", "--no-healthcheck", "--name",
+             "eregion-annatar-check", "--entrypoint", "true", "eregion-annatar:incoming"]
 
 
 def _refused_at_the_check(orodruin, res, said):
@@ -1019,8 +1019,8 @@ def test_a_layer_lost_after_the_load_is_refused_by_the_control_run(orodruin, sto
     """#490, red on main: a layer the store lost after a load that succeeded. docker image inspect
     reads the config — its layers listed from it, its id, its user, all as proven —, `loaded` passes,
     and main tagged the image :orodruin, to fail at its first run. The control run creates a container
-    from it: refused, the cause said (docker's own words, then ours), incoming removed, :orodruin and
-    ~/.eregion-image as a refusal leaves them."""
+    from it: refused, the cause said (docker's own words, then ours), incoming removed, :orodruin
+    unchanged, ~/.eregion-image absent (as under OI1: it never names the old image as the new one)."""
     res = orodruin.push(FAKE_STORE=store, FAKE_LOAD_DROP="layer")
     _refused_at_the_check(orodruin, res, "une couche absente ou non dépaquetée")
     assert "failed to prepare snapshot" in res.stderr
@@ -1051,12 +1051,16 @@ def test_a_control_run_that_hangs_is_cut_at_its_bound_and_its_container_taken_of
     _refused_at_the_check(orodruin, res, "délai de 1 s dépassé")
 
 
-@pytest.mark.parametrize("bound", ["0", "", "1; touch pwned", "-5"])
+@pytest.mark.parametrize("bound", ["0", "00", "000", "", "1; touch pwned", "-5", "$(shell touch pwned)",
+                                   "1'; touch pwned; '"])
 def test_a_bound_that_is_no_number_of_seconds_sends_nothing(orodruin, bound):
-    """ORO_CHECK_TIMEOUT goes into the remote command: seconds, at least one, or nothing is sent."""
+    """ORO_CHECK_TIMEOUT goes into the remote command: seconds, at least one, or nothing is sent —
+    `timeout 00` sets no bound at all. Taken as REF is, never expanded by make before it is checked:
+    a `$(shell …)` given runs nowhere."""
     res = orodruin.push(f"ORO_CHECK_TIMEOUT={bound}")
     assert res.returncode != 0 and "ORO_CHECK_TIMEOUT invalide" in res.stderr
-    assert orodruin.calls() == [] and not (orodruin.remote / "home" / "pwned").exists()
+    assert orodruin.calls() == []
+    assert not [p for p in orodruin.tmp.rglob("pwned")]
     assert orodruin.marker() == [C1, orodruin.old.digest]
 
 

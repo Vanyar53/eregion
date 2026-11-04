@@ -10302,13 +10302,13 @@ TESTS.update({**{f"M{n}": _CONK for n in (3387, 3388, 3389, *range(3460, 3469))}
 # true alone, no network, never pulled, nothing of the host, hardened, bounded; a failure removes it,
 # its cause said, :orodruin unchanged. M3470–M3479.
 _OI2_CHECK = "\t   rc=0; $(ORO_SSH) '$(ORO_CHECK_RUN)' || rc=$$?; \\\n"
-_OI2_FAIL_RM = ("\t     $(ORO_SSH) 'docker rm -f $(ORO_CHECK_NAME) >/dev/null 2>&1; docker image rm $(ORO_INCOMING) "
+_OI2_FAIL_RM = ("\t     $(ORO_SSH) 'timeout 30 docker rm -f $(ORO_CHECK_NAME) >/dev/null 2>&1; docker image rm $(ORO_INCOMING) "
                 ">/dev/null 2>&1'; \\\n")
 MUTANTS += [
     ("M3470", "no control run: an image with a layer lost after its load tagged :orodruin (OI2)", MAKE,
      _OI2_CHECK, "\t   rc=0; \\\n"),
     ("M3471", "the control run with the network (OI2)", MAKE,
-     "--pull never --network none --name $(ORO_CHECK_NAME)", "--pull never --name $(ORO_CHECK_NAME)"),
+     "--pull never --network none --no-healthcheck", "--pull never --no-healthcheck"),
     ("M3472", "the control run may pull an image missing (OI2)", MAKE,
      "$(ORO_HARDEN) --pull never --network none", "$(ORO_HARDEN) --network none"),
     ("M3473", "the control run not hardened as the injectors' runs (OI2)", MAKE,
@@ -10316,7 +10316,7 @@ MUTANTS += [
     ("M3474", "the control run starts the image's own entrypoint, not true (OI2)", MAKE,
      " --entrypoint true $(ORO_INCOMING)", " $(ORO_INCOMING)"),
     ("M3475", "the control run never bounded: a run that hangs holds the push (OI2)", MAKE,
-     "timeout -k 10 $(ORO_CHECK_TIMEOUT) docker run", "docker run"),
+     "timeout -k 10 '\"$$EREGION_CHECK_TIMEOUT\"' docker run", "docker run"),
     ("M3476", "a control run cut leaves its container: incoming, held by it, never removed (OI2)", MAKE,
      _OI2_FAIL_RM, "\t     $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n"),
     ("M3477", "the control run made before the image is read back: an image not the proven one started "
@@ -10332,6 +10332,21 @@ MUTANTS += [
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3470, 3480)})
 TESTS["M3473"] = "tests/unit/test_published_image.py tests/unit/test_host_ssh.py"
+# OI2's review: the bound disabled by `00` (timeout 00 sets none), the bound expanded by make before it
+# is checked, no healthcheck, the check container unnamed. M3520–M3524.
+MUTANTS += [
+    ("M3520", "a bound of 00 taken: timeout 00 sets none (OI2, review)", MAKE,
+     "\"$$EREGION_CHECK_TIMEOUT\" in ''|0*|*[!0-9]*)", "\"$$EREGION_CHECK_TIMEOUT\" in ''|0|*[!0-9]*)"),
+    ("M3521", "the control run runs the image's healthcheck (OI2, review)", MAKE,
+     " --no-healthcheck --name $(ORO_CHECK_NAME)", " --name $(ORO_CHECK_NAME)"),
+    ("M3522", "ORO_CHECK_TIMEOUT exported by make, so expanded: a $(shell …) given runs (OI2, review)",
+     MAKE, "unexport ORO_CHECK_TIMEOUT\n", ""),
+    ("M3523", "the check container unnamed: a run cut leaves a container nobody takes off (OI2, review)", MAKE,
+     " --name $(ORO_CHECK_NAME) --entrypoint true", " --entrypoint true"),
+    ("M3524", "the bound never checked before it goes into the remote command (OI2, review)", MAKE,
+     "\t@case \"$$EREGION_CHECK_TIMEOUT\" in ''|0*|*[!0-9]*)", "\t@case \"\" in no)"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

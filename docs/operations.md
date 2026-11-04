@@ -1814,11 +1814,12 @@ utilisateur, son commit. Sous Docker Desktop, `docker save` d'une image tirée l
 configuration ni couches (mesuré le 03/11). Un `eregion-annatar:incoming` laissé par un envoi qui a
 échoué est retiré au suivant. **Depuis OI2 (#490)**, l'image relue démarre une fois avant son tag :
 un run de contrôle qui ne lance que `true`, sans réseau, sans tirer, sans montage ni `orodruin.env`,
-durci comme les injecteurs (`ORO_HARDEN`), borné à 120 s (`ORO_CHECK_TIMEOUT=<s>` sur la ligne de
-commande). Il prouve les couches présentes et dépaquetées, ce que `docker image inspect` ne dit pas
-au magasin containerd. S'il échoue : « ✗ l'image vérifiée ne démarre pas sur Orodruin (run de
-contrôle sans réseau : <cause>) », l'image est retirée, `eregion-annatar:orodruin` n'a pas changé ;
-la cause suit les mots de docker. Pourquoi il reste dans le contrat :
+durci comme les injecteurs (`ORO_HARDEN`), sans healthcheck, borné à 120 s (`ORO_CHECK_TIMEOUT=<s>`
+sur la ligne de commande : des chiffres, au moins 1, sans zéro en tête ; sinon rien n'est envoyé).
+Il prouve les couches présentes et dépaquetées, ce que `docker image inspect` ne dit pas au magasin
+containerd. S'il échoue : « ✗ l'image vérifiée ne démarre pas sur Orodruin (run de contrôle sans
+réseau : <cause>) », l'image est retirée, `eregion-annatar:orodruin` n'a pas changé et
+`~/.eregion-image` reste absent ; la cause suit les mots de docker. Pourquoi il reste dans le contrat :
 `docs/design/orodruin-contract.md`, « L'image des injecteurs ». Mesurer, avec Jonathan : `make
 orodruin-push REF=<le commit de main>` (la sortie dit « ✓ archive… », puis rien d'autre du run de
 contrôle quand il réussit ; sur Orodruin, `docker ps -a --filter name=eregion-annatar-check` est vide

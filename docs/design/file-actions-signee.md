@@ -648,3 +648,16 @@ acquittements), et l'état que la console écrit encore ?**
    la watch.
 3. **Pas de FS1f.** Ce que ça change : la file ne protège que les gestes sur Azure, et l'état local
    reste le maillon faible.
+
+## Les décisions de Jonathan (04/11)
+
+| Question | Décision |
+|---|---|
+| Q1, qui signe | Une clé Ed25519 par service (console, bot), épinglée chez la watch ; la watch signe ses propositions sous `eregion.action-queue/1`. |
+| Q2, le restore | **Un exécuteur de restore à part** (FS1g). Le bouton reste dans la console et le bot : en pleine urgence, l'opérateur n'écrit pas de commande. Le clic dépose une demande signée ; l'exécuteur, seul à tenir Restore et Restore Neutralize, la vérifie, rejoue les gardes et restaure. La watch ne restaure jamais (SEC7). C'est aussi la seule voie propre vers un restore autonome encadré, si on le veut un jour. |
+| Q3, H0 | IMDS coupé à la console, au bot et à l'exécuteur par une règle `DOCKER-USER` que pose `deploy.sh`. L'identité managée reste à la watch ; les autres ont leur principal (lecteur, ou restore pour l'exécuteur) ; un conteneur qui joint IMDS refuse de démarrer. À mesurer au banc. |
+| Q4, la CLI | L'appel direct reste, sous l'identité de la watch : c'est l'issue de secours. Le modèle de menace le dit. |
+| Q5, l'état local | FS1f fait partie du prérequis avant toute VM hors du banc. |
+
+Les lots, dans l'ordre : FS1a, FS1b, FS1c, FS1d, FS1e, FS1f, FS1g (17 à 24 jours estimés).
+

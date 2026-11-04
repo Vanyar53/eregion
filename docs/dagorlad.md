@@ -216,7 +216,8 @@ make orodruin-exercise DRILL=<nom> [TARGETS=<vm>,<vm>…|all] [DRY_RUN=1] [REQUE
 Annatar propose des drills, dont il est l'auteur ; c'est toi qui les gardes et qui les lances.
 
 - **« Ask Annatar for a drill »**, sur la ligne DRILLS : un bouton par VM inscrite. Tu choisis la
-  VM, Annatar pose sur le tableau sa chaîne : les techniques du catalogue qui tournent et ne
+  VM, Annatar pose sur le tableau sa chaîne (la section Annatar active ici : ses traces dans `runs/`,
+  ou `EREGION_CONSOLE_SECTIONS`) : les techniques du catalogue qui tournent et ne
   détruisent rien, dans l'ordre de la kill-chain, cinq au plus. Il lit le catalogue et la VM,
   jamais les règles ni les modes de Glorfindel, et la console n'appelle pas le modèle. Rien n'est
   écrit, rien ne démarre : ce sont des fils en brouillon, à corriger (retirer un fil, en tirer un
@@ -227,7 +228,9 @@ Annatar propose des drills, dont il est l'auteur ; c'est toi qui les gardes et q
   `annatar-<id de la campagne>.yaml`, et en affiche le chemin. Colle son contenu : il est relu par le
   même lecteur que les autres drills, puis posé sur les VM inscrites lues maintenant, comme
   « Load ». Une VM qu'il nomme et qui n'est pas inscrite ici attend « à poser ». Rien n'est gardé
-  avant « Save as drill ».
+  avant « Save as drill ». Une campagne planifiée avec `--allow-destructive` peut porter une
+  technique destructive : son fil est jugé par le plan puis par Orodruin, comme tout fil, et son nom
+  de cible se tape à la commande.
 - **Gardé, il reste celui d'Annatar** : la liste le montre avec l'auteur `annatar`, que tu aies
   corrigé ses fils ou non. Il se rejoue comme tout drill : sa demande, puis
   `make orodruin-exercise DRILL=<nom>`. C'est ainsi qu'une campagne garde sa dernière preuve sous

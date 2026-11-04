@@ -39,6 +39,7 @@ const S = {
   pending: [],      // a loaded drill's wires waiting for their VMs: {experiment, zone, name, why, candidates}
   loaded: '',       // the drill last loaded or saved, by name
   loadedLayer: '',  // its layer: a shipped drill's name is never offered to « Save as drill »
+  loadedDesc: '',   // its description, offered again by « Save as drill »
   loadAsk: '',      // a drill to load over the wires drawn: asked first
   saving: null,     // « Save as drill » open: {err, exists, name, desc}
   drillsOpen: false, // the list of drills shown (folded by default: the board holds 1440 × 900)
@@ -61,7 +62,7 @@ function save() {
 function savePending() {
   try {
     localStorage.setItem(PENDING_KEY, JSON.stringify({ wires: S.pending, loaded: S.loaded, layer: S.loadedLayer,
-                                                       author: S.author }));
+                                                       desc: S.loadedDesc, author: S.author }));
   } catch (_) { /* private mode */ }
 }
 // The request followed, running or over, kept in this browser (a convenience): a reload finds it.
@@ -116,12 +117,13 @@ const ACTIONS = {
     if (S.request || k < 0 || k >= S.wires.length) return;
     S.wires.splice(k, 1);
     S.note = '';
-    save(); refreshPlan();
+    if (!S.wires.length && !S.pending.length) S.author = 'operator';   // an empty board is the operator's
+    save(); savePending(); refreshPlan();
   },
   clear() {
     if (S.request) return;
     S.wires = []; S.picked = null; S.note = ''; S.last = null; S.follow = null; S.pending = [];
-    S.author = 'operator'; S.loaded = ''; S.loadedLayer = '';
+    S.author = 'operator'; S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = '';
     save(); saveRequest(); savePending(); refreshPlan();
   },
   // Phase (b): the request, written by the console in its own directory — never a launch. Over,
@@ -142,8 +144,8 @@ const ACTIONS = {
     if (S.request || !S.wires.length) return;
     // A shipped drill's name is not offered: saved under it, this instance's would replace the
     // shipped one, and its wires would never be « to place » again.
-    S.saving = S.saving ? null : { err: '', exists: false,
-      name: ['instance', 'import'].includes(S.loadedLayer) ? S.loaded : '', desc: '' };
+    const own = ['instance', 'import'].includes(S.loadedLayer);
+    S.saving = S.saving ? null : { err: '', exists: false, name: own ? S.loaded : '', desc: own ? S.loadedDesc : '' };
     S.drillsOpen = true;
     renderDrills();
   },
@@ -805,6 +807,7 @@ function layDrill(d, name) {
   }));
   S.loaded = String(d.name || name);
   S.loadedLayer = String(d.layer || '');
+  S.loadedDesc = String(d.description || '');
   // A shipped drill (Eregion's) kept here is the operator's: the instance never holds Eregion's.
   S.author = AUTHORS.includes(d.author) ? d.author : 'operator';
   S.drillsErr = d.targets_error ? `the enrolled VMs unreadable: ${d.targets_error}` : '';
@@ -821,7 +824,7 @@ async function askAnnatar(t) {
     const wires = Array.isArray(d.wires) ? d.wires : [];
     S.wires = []; S.pending = []; S.last = null; S.follow = null;
     lay(wires.map(w => [String(w.experiment), String(w.target)]));
-    S.loaded = ''; S.loadedLayer = ''; S.author = 'annatar';
+    S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = ''; S.author = 'annatar';
     S.asking = null;
     S.note = `Annatar proposed ${Number(S.wires.length)} wire(s) on ${t.name}: correct them, keep them (Save as drill), then request the run`;
     save(); savePending(); saveRequest();
@@ -868,6 +871,7 @@ async function saveDrill(replace) {
       renderDrills(); return;
     }
     S.saving = null; S.loaded = String(d.saved || body.name); S.loadedLayer = 'instance';
+    S.loadedDesc = body.description || '';
     savePending();
   } catch (e) {
     f.err = e.message; renderDrills(); return;
@@ -927,6 +931,7 @@ async function refreshPlan() {
     if (kept && typeof kept.loaded === 'string') S.loaded = kept.loaded;
     if (kept && typeof kept.layer === 'string') S.loadedLayer = kept.layer;
     if (kept && AUTHORS.includes(kept.author)) S.author = kept.author;
+    if (kept && typeof kept.desc === 'string') S.loadedDesc = kept.desc.slice(0, 300);
   } catch (_) { /* private mode, or something else there */ }
   // The request followed before the reload: read again — still running, its wires lock again.
   S.last = storedRequest();

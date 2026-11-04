@@ -321,3 +321,12 @@ def test_the_command_writes_the_request_and_prints_its_id(tmp_path, capsys):
 @pytest.mark.parametrize("name, code", [("bl1-reponse", 0), ("../x", 1), ("A", 1), ("x;id", 1), ("", 1)])
 def test_a_drills_name_is_checked_before_anything(name, code):
     assert dr.main(["check-name", name]) == code
+
+
+def test_a_drill_file_nested_past_the_parsers_depth_is_refused_never_raised(tmp_path):
+    """DG-e's review: `[` × 500 — yaml.safe_load raises RecursionError, which the reader let through.
+    Now refused as any file that is not YAML."""
+    path = tmp_path / "deep.yaml"
+    path.write_text("[" * 500 + "]" * 500, encoding="utf-8")
+    with pytest.raises(dr.DrillRefused, match="is not YAML"):
+        dr.load_file(path, dr.INSTANCE)

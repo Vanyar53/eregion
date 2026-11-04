@@ -227,4 +227,4 @@ def test_a_drill_whose_name_two_vms_bear_lays_it_to_place_never_on_one_unsaid(tw
 def test_the_page_tells_two_vms_of_one_name_apart_and_offers_no_shipped_name():
     js = (Path(api.__file__).parent / "static" / "dagorlad.js").read_text()
     assert "const twice = w.candidates.filter(o => same(o.name, c.name)).length > 1;" in js
-    assert "name: ['instance', 'import'].includes(S.loadedLayer) ? S.loaded : ''" in js
+    assert "const own = ['instance', 'import'].includes(S.loadedLayer);" in js and "name: own ? S.loaded : ''" in js

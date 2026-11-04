@@ -366,7 +366,6 @@ annatar campaign plan --target <resource_id> [--llm]   # en local (banc) ; --llm
 #   DG-e : écrit aussi le drill de la campagne (auteur annatar), annatar-<id>.yaml à côté du
 #   manifeste — à coller dans Dagorlad, « Import YAML », puis « Save as drill » (docs/dagorlad.md)
 annatar campaign run <campaign_id> --yes               # ratifie le budget/scope et exécute
-#   DG-e : écrit une fois, à côté du manifeste, la demande équivalente (r-….json, le format de Dagorlad)
 
 # Simulation locale sans Azure — les signaux d'un run dans un fichier temporaire, puis
 # `glorfindel respond <fichier> --dry-run` (pas de watch, pas runs/ : SEC3) ; une clé de modèle

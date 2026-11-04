@@ -10351,10 +10351,10 @@ TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520,
 
 # DG-e (#351): Annatar proposes drills — the chain in the shared core (kill-chain order, nothing
 # destructive nor undeclared, a VM's), a campaign's drill (Annatar its author, its declared fault
-# kept, the VM by its name, mode 600) and its request written once, never by a preview; « Ask
+# kept, a technique left out by the synthesizer left out of it, the VM by its name, mode 600); « Ask
 # Annatar » on an enrolled VM by its id, only with Annatar set up; « Import YAML » that writes
-# nothing and reads an instance's drill only; « Save as drill » that keeps Annatar's authorship;
-# the page's draft. M3560–M3579.
+# nothing, reads an instance's drill only and refuses a YAML nested too deep; « Save as drill »
+# that keeps Annatar's authorship; the page's draft. M3560–M3579.
 _DGE_CORE, _DGE_ANN, _DGE_CON = ("tests/unit/test_drill_proposal.py", "tests/unit/test_campaign_drill.py",
                                  "tests/unit/test_console_dagorlad_annatar.py")
 _PROP = "eregion_core/proposal.py"
@@ -10375,17 +10375,19 @@ MUTANTS += [
      "return _drill.new(drill_name(campaign_id), list(pairs), author=AUTHOR,",
      'return _drill.new(drill_name(campaign_id), list(pairs), author="operator",'),
     ("M3567", "a declared campaign's drill loses its fault (DG-e)", "annatar/cli.py",
-     'if st.kind in ("technique", "fault")]', 'if st.kind == "technique"]'),
+     'if st.kind == "fault" or (st.kind == "technique" and st.ref in kept)]',
+     'if st.kind == "technique" and st.ref in kept]'),
     ("M3568", "a campaign's drill names its VM by its resource id: no drill (DG-e)", "annatar/cli.py",
-     '    vm = target.rstrip("/").rsplit("/", 1)[-1]\n    pairs = (', "    vm = target\n    pairs = ("),
+     '    vm = target.rstrip("/").rsplit("/", 1)[-1]\n    kept = {', "    vm = target\n    kept = {"),
     ("M3569", "a campaign's drill written readable by all (DG-e)", "annatar/cli.py",
-     "    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n    with os.fdopen(fd, \"w\", encoding=\"utf-8\") as f:\n        f.write(drill.to_yaml(d))",
-     "    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)\n    with os.fdopen(fd, \"w\", encoding=\"utf-8\") as f:\n        f.write(drill.to_yaml(d))"),
-    ("M3570", "a campaign's request written again at each run (DG-e)", "annatar/cli.py",
-     '    if any(cdir.glob("r-*.json")):\n        return\n', ""),
-    ("M3571", "a campaign's preview writes its request (DG-e)", "annatar/cli.py",
-     "            if not dry_run:\n                _write_campaign_request(cdir, m)\n",
-     "            if True:\n                _write_campaign_request(cdir, m)\n"),
+     "        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n        created = True\n",
+     "        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)\n        created = True\n"),
+    ("M3570", "a YAML nested past the parser's depth answered by a 500 (DG-e)", CON,
+     "        except (yaml.YAMLError, RecursionError):   # nested past the parser's depth: never a 500\n",
+     "        except yaml.YAMLError:\n"),
+    ("M3571", "a declared campaign's drill keeps a technique the synthesizer left out (DG-e)", "annatar/cli.py",
+     'if st.kind == "fault" or (st.kind == "technique" and st.ref in kept)]',
+     'if st.kind in ("fault", "technique")]'),
     ("M3572", "Annatar proposes on a VM found by its name: another group's (DG-e)", CON,
      'found = [c for c in cands if want and c.resource_id.rstrip("/").lower() == want]',
      'found = [c for c in cands if want and c.name.lower() == want.rsplit("/", 1)[-1]]'),
@@ -10402,15 +10404,17 @@ MUTANTS += [
      "                          author=author, description=body.get(\"description\") or \"\")",
      "                          description=body.get(\"description\") or \"\")"),
     ("M3577", "the board's draft from Annatar not said Annatar's (DG-e)", DJS,
-     "    S.loaded = ''; S.loadedLayer = ''; S.author = 'annatar';\n", "    S.loaded = ''; S.loadedLayer = '';\n"),
+     "    S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = ''; S.author = 'annatar';\n",
+     "    S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = '';\n"),
     ("M3578", "Annatar's proposal laid over the wires drawn without asking (DG-e)", DJS,
      "if ((S.wires.length || S.pending.length) && S.asking.ask !== t.resource_id) {", "if (false) {"),
     ("M3579", "a cleared board stays Annatar's (DG-e)", DJS,
-     "    S.author = 'operator'; S.loaded = ''; S.loadedLayer = '';\n", "    S.loaded = ''; S.loadedLayer = '';\n"),
+     "    S.author = 'operator'; S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = '';\n",
+     "    S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = '';\n"),
 ]
 TESTS.update({**{f"M{n}": _DGE_CORE for n in range(3560, 3567)},
-              **{f"M{n}": _DGE_ANN for n in range(3567, 3572)},
-              **{f"M{n}": _DGE_CON for n in range(3572, 3580)}})
+              **{f"M{n}": _DGE_ANN for n in (3567, 3568, 3569, 3571)},
+              **{f"M{n}": _DGE_CON for n in (3570, *range(3572, 3580))}})
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;

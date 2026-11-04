@@ -144,6 +144,7 @@ def test_an_imported_name_not_enrolled_here_waits_never_placed_on_another(client
 
 @pytest.mark.parametrize("body, said", [
     ({"yaml": "name: [unclosed"}, "not YAML"),
+    ({"yaml": "[" * 500 + "]" * 500}, "not YAML"),          # nested past the parser's depth: never a 500
     ({"yaml": (Path(dr.shipped_dir()) / "bl1-reponse.yaml").read_text()}, "never Eregion's"),
     ({"yaml": "name: x\nauthor: operator\nupdated: '2026-11-04T10:00:00+00:00'\nwires:\n"
               "  - experiment: T1136.001\n    target: {resource_id: /subscriptions/x}\n"}, "target is exactly"),
@@ -156,9 +157,13 @@ def test_an_import_the_drills_reader_refuses_lays_nothing(client, body, said):
     assert _written() == []
 
 
-def test_an_import_past_a_drills_size_is_refused(client):
+def test_an_import_past_a_drills_size_is_refused(client, monkeypatch):
+    """SEC1 refuses it first: a body past _MAX_BODY (64 KB) is a 413 before any route. The route's
+    own bound stays, in depth — reached here with the boundary's raised."""
+    assert _import(client, "#" * (dr.MAX_BYTES + 1)).status_code == 413 and _written() == []
+    monkeypatch.setattr(api, "_MAX_BODY", 4 * dr.MAX_BYTES)
     r = _import(client, "#" * (dr.MAX_BYTES + 1))
-    assert r.status_code in (400, 413) and _written() == []
+    assert r.status_code == 400 and "larger than a drill's" in r.json()["error"] and _written() == []
 
 
 # ── « Save as drill »: kept as Annatar's ────────────────────────────────────────────────────
@@ -210,6 +215,10 @@ def test_the_page_imports_through_the_one_reader_and_keeps_only_by_save():
     assert "S.author = AUTHORS.includes(d.author) ? d.author : 'operator';" in _fn("layDrill")
     assert "const AUTHORS = ['operator', 'annatar'];" in JS
     assert re.search(r"S\.wires = \[\]; S\.picked = null;[^\n]*\n\s*S\.author = 'operator';", JS), "a cleared board is the operator's"
+    unwire = JS[JS.index("  unwire(k) {"):JS.index("  clear() {")]
+    assert "if (!S.wires.length && !S.pending.length) S.author = 'operator';" in unwire, "its last wire removed too"
+    # « Save as drill » offers again the description of the drill loaded or imported.
+    assert "desc: own ? S.loadedDesc : ''" in JS and "S.loadedDesc = String(d.description || '');" in _fn("layDrill")
 
 
 # ── The end to end, on the fake: proposed as a drill, read, kept, launched by the operator ──────

@@ -3350,7 +3350,7 @@ async def drill_import(body: dict) -> JSONResponse:
     def read() -> JSONResponse:
         try:
             doc = yaml.safe_load(text)
-        except yaml.YAMLError:
+        except (yaml.YAMLError, RecursionError):   # nested past the parser's depth: never a 500
             return JSONResponse({"error": "not YAML"}, status_code=400)
         try:
             d = drill.read(doc, drill.INSTANCE)

@@ -25,7 +25,7 @@ tourne.
 | Lots | **UI-1** : le socle, les sections modulaires et les corrections de doublons. **UI-2** : les cinq indicateurs. **Un lot Annatar et Gothmog** pour la vérification avant d'agir | un seul lot ; trois lots UI |
 | Carte sur un NSG (#248) | **une tuile NSG**, dans la rangée des VM : son nom, son groupe de ressources, ses cartes ; ni mode, ni sauvegarde, ni Snapshot | sous le nœud PROTECT ; garder la tuile de VM |
 | Ce que Glorfindel a fait seul (#248) | **une ligne verte sur la tuile, 24 h** : la note d'une carte qu'il a résolue lui-même (A3 : règle orpheline retirée) | dans le fil en direct ; rien dans la console |
-| Le drill d'une campagne d'Annatar dans Dagorlad (DG-e, 04/11) | **A, le drill écrit à côté du manifeste, puis « Import YAML »** : `annatar campaign plan` (sur Orodruin, qui n'écrit jamais les drills de la console) écrit le drill de la campagne et l'affiche ; Dagorlad le relit par le lecteur exact et le pose sur le tableau, sans rien écrire ; « Save as drill » le garde, auteur annatar. `campaign run` garde son exécution et écrit la demande équivalente | B : le drill écrit seul, sans import ; C : `campaign run` par le chemin des demandes (un second lot) |
+| Le drill d'une campagne d'Annatar dans Dagorlad (DG-e, 04/11) | **A, le drill écrit à côté du manifeste, puis « Import YAML »** : `annatar campaign plan` (sur Orodruin, qui n'écrit jamais les drills de la console) écrit le drill de la campagne et l'affiche ; Dagorlad le relit par le lecteur exact et le pose sur le tableau, sans rien écrire ; « Save as drill » le garde, auteur annatar. `campaign run` garde son exécution | B : le drill écrit seul, sans import ; C : `campaign run` par le chemin des demandes (un second lot) |
 | Les blocages d'une VM (CON-K, 03/11) | **A, un résumé et une fenêtre** : repliée ou dépliée, la carte dit « BLOCKED ×N IPs · newest … · oldest … » ; dépliée, elle garde la dernière décision (son raisonnement) et « Manage the N blocks ▸ », qui ouvre la fenêtre : tous les blocages, du plus récent au plus ancien, filtrables, chacun avec « Extend to subnet » et « Unblock ». Un seul blocage : montré avec ses boutons, sans fenêtre | B : les trois plus récents et « and N more » ; C : une liste repliable qui défile dans la carte |
 
 **Choisi par défaut, sans objection :**
@@ -1297,23 +1297,32 @@ voie de la ligne de commande, décision A de Jonathan du 04/11, sur une page de 
   de la kill-chain, cinq par défaut. `campaign_drill` : le drill d'une campagne, auteur `annatar`, nommé
   `annatar-<id de la campagne>`, passé par le lecteur unique des drills.
 - **« Ask Annatar for a drill »** : `GET /api/dagorlad/propose?target=<rid>`, lecture seule. Une VM
-  inscrite lue maintenant, choisie par l'opérateur (un bouton par VM) ; Annatar installé ici, sinon
-  rien. Le planificateur reste aveugle : il ne lit ni les règles ni les modes de Glorfindel, et la
+  inscrite lue maintenant, choisie par l'opérateur (un bouton par VM) ; la section Annatar active
+  (`sections.status` : ses traces dans `runs/`, ou `EREGION_CONSOLE_SECTIONS`), sinon rien — ce que
+  disent aussi les cartes rouges du tableau. Le planificateur reste aveugle : il ne lit ni les règles ni les modes de Glorfindel, et la
   console n'appelle jamais le modèle (le planificateur par le modèle reste
   `annatar campaign plan --llm`, un geste de l'opérateur). Aucune technique destructive : l'opérateur
   la tire à la main et tape son nom à la commande, comme pour tout fil. La console n'importe pas le
   paquet d'Annatar (D1).
 - **« Import YAML »** : `POST /api/dagorlad/drills/import` (`{"yaml"}`), un POST parce que le corps
   ne tient pas dans une adresse ; il n'écrit rien. Le drill est relu comme un drill de l'instance
-  (jamais celui d'Eregion), puis posé sur les VM inscrites lues maintenant, comme « Load ».
+  (jamais celui d'Eregion), puis posé sur les VM inscrites lues maintenant, comme « Load ». Un YAML
+  imbriqué au-delà de la profondeur du lecteur est refusé (400), jamais une erreur 500 ; la frontière
+  de la console refuse d'abord un corps de plus de 64 Ko (413).
 - **« Save as drill »** garde l'auteur des fils du tableau : `annatar` quand Annatar les a proposés,
-  corrigés ou non ; jamais `eregion`. Un tableau vidé redevient celui de l'opérateur.
+  corrigés ou non ; jamais `eregion`. Un tableau vidé, ou dont le dernier fil est retiré, redevient
+  celui de l'opérateur. Après « Load » ou « Import », le nom et la description du drill lu sont
+  proposés.
 - **La ligne de commande** : `annatar campaign plan` écrit `annatar-<id>.yaml` à côté du manifeste,
-  en mode 600 (une campagne déclarée : sa panne et sa technique, dans son ordre ; une campagne
-  planifiée : ses scénarios). Un drill que le lecteur refuse est dit, et la campagne reste
-  planifiée. `annatar campaign run` écrit une fois la demande équivalente (`r-….json`, le format de
-  Dagorlad) à côté du manifeste. Aucun lecteur ne la lit encore : c'est la référence à laquelle le
-  rejeu de son drill se comparera.
+  en mode 600. Sa chaîne : les scénarios synthétisés (une technique que le synthétiseur écarte n'y est
+  pas) ; une campagne déclarée y garde aussi ses pannes, dans l'ordre de la déclaration. Un drill que
+  le lecteur refuse, ou qui ne s'écrit pas, est dit (jamais un fichier à moitié écrit), et la campagne
+  reste planifiée. `annatar campaign run` ne change pas.
+- **La relecture 5.5 (04/11)** a fait corriger : un YAML imbriqué (`[` × 500) levait une erreur 500 à
+  l'import et traversait `load_file` (DG-d) ; un drill non écrit faisait tomber `campaign plan` ;
+  le drill d'une campagne déclarée gardait une technique écartée par le synthétiseur ; le dernier fil
+  retiré laissait « proposed by Annatar ». La demande que `campaign run` écrivait à côté du manifeste,
+  que rien ne lisait, est retirée du lot : elle reviendra avec son lecteur (l'option C).
 - **Fini quand, sur le faux** (`test_console_dagorlad_annatar.py`) : `annatar campaign plan
   --declared` (BL1, sur gondolin) écrit son drill ; il est importé (rien d'écrit), relu, gardé
   (auteur annatar), puis lancé par `make orodruin-exercise DRILL=<nom>` contre un faux ssh et un faux

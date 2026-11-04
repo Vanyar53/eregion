@@ -214,7 +214,7 @@ Three rules the tests hold:
 - **Text from outside reaching a chat** (the model's words, names from Azure, a rule's name) goes through `glorfindel/chat_text.py` (`tests/unit/test_chat_escaping.py`); the console has its own rule (`scripts/console_escaping.py`).
 - **Install from the repository** (`make install`, or `pip install -e '.[console]'`), never from a package index by name (`tests/unit/test_readme.py`).
 - **A change's CHANGELOG entry goes in its own file**, `changes/<lot>.md` (its form: `changes/README.md`), never under `[Unreleased]`; its mutants in `scripts/mutants/<lot>.py`, never in `scripts/mutation_check.py`'s blocks (CI5). Two pull requests in flight never write the same lines.
-- **The release pull request** bumps `pyproject.toml`, the `CHANGELOG.md` (the fragments of `changes/` assembled under `[X.Y.Z]`, then removed) and the README's « **Status — vX.Y.Z.** » together (`tests/unit/test_readme.py`). `make release` opens it, and `make release-draft` creates the draft after its merge. Neither publishes (`tests/unit/test_release.py`); `docs/operations.md`, « Packaging et version ».
+- **The release pull request** bumps `pyproject.toml`, the `CHANGELOG.md` (the fragments of `changes/` assembled under `[X.Y.Z]`, then removed) and the README's « **Status — vX.Y.Z.** » together (`tests/unit/test_readme.py`). `make release` opens it, the release gate (`.github/workflows/release-gate.yml`, 30 to 60 minutes) runs on it and must be green before the merge, and `make release-draft` creates the draft after its merge — refused until the gate is green on main's tree (CI6). Neither publishes (`tests/unit/test_release.py`); `docs/operations.md`, « Packaging et version ».
 
 ## Pull requests
 

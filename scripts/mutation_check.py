@@ -10347,7 +10347,28 @@ MUTANTS += [
      "\t@case \"$$EREGION_CHECK_TIMEOUT\" in ''|0*|*[!0-9]*)", "\t@case \"\" in no)"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
-
+# L1O (#507): « reposé une fois » ends its episode in the write of `reasserted_at` — the drift marks
+# taken off, the episode over in memory first; a put-back that doesn't hold whole marks a new one after its
+# card. Gone again before the next pass: said « une deuxième fois », never written again. M3540–M3544.
+_L1O_END = ("        episode(ref or vm, ip, over=True)\n"
+            "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n")
+MUTANTS += [
+    ("M3540", "« reposé une fois » keeps the episode open: gone again before the next pass, unsaid (L1O)", R,
+     _L1O_END, "        _update_block_entry(ref or vm, ip, reasserted_at=now)\n"),
+    ("M3541", "the episode ended on disk alone: its write refused, the rules still gone unsaid (L1O)", R,
+     _L1O_END,
+     "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n"),
+    ("M3542", "the episode ended in memory alone: the marks of « said » left on disk (L1O)", R,
+     _L1O_END, "        episode(ref or vm, ip, over=True)\n"
+               "        _update_block_entry(ref or vm, ip, reasserted_at=now)\n"),
+    ("M3543", "the put-back unmarked: put back again at every disappearance (L1O, L1Q)", R,
+     _L1O_END, "        episode(ref or vm, ip, over=True)\n"
+               "        _update_block_entry(ref or vm, ip, drift_alerted_at=None, drift_said=None)\n"),
+    ("M3544", "a put-back that doesn't hold whole left unmarked: « une deuxième fois » at every pass (L1O)", R,
+     '    if outcome != "reapplied":\n        # "Already alerted" is written only once the card exists.',
+     '    if outcome == "failed":\n        # "Already alerted" is written only once the card exists.'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py -k l1o" for n in range(3540, 3545)})
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;

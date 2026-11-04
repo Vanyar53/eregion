@@ -144,6 +144,17 @@ Le `flock` qui sépare les processus est testé à part, sur de vrais processus
 l'ID canonique et l'ID en minuscules prennent le même verrou, une tâche de fond renonce au
 bout de son délai. Sans `flock`, ces tests échouent.
 
+**Tout verrou qu'une course peut prendre est celui de l'ordonnanceur.** Un verrou que la machine ne
+pilote pas, autour d'un point d'ordonnancement (un appel Azure, une écriture d'état), fige la course :
+l'opération arrêtée dedans attend son tour, l'autre bloque dans le verrou hors de sa vue, et I11 tombe
+sur « … never came back » sans que le code ait de défaut. Les verrous de fichiers locaux qu'une
+course de la machine atteint passent par `locks._file_lock`, lu à l'appel : les escalades (#292), les
+règles proposées (SEC4b), et le fichier de préparation (`readiness.json`) depuis I11g (#508).
+D'autres tiennent encore un verrou de thread propre autour d'une écriture locale, hors de
+l'ordonnanceur : `incidents.py` (avant son `_file_lock`), `signal_origin.py` (`REFUSALS_FILE`),
+`posture.py` et `discovery.py`. Aucune course de la machine ne les atteint aujourd'hui ; un lot qui
+les y ferait entrer passe d'abord leur verrou par `_file_lock`.
+
 **Une course qui ne revient pas échoue, elle ne fige pas le job (U3F).** Un tour qui dure plus
 de 20 s (temps réel) fait échouer I11 : « operations stuck » ou « … never came back ». Le fil qui
 attendait son tour y restait, ses verrous pris, et le teardown qui les prend ensuite attendait
@@ -1482,6 +1493,44 @@ tout verrou réel qu'une course peut prendre doit être celui de l'ordonnanceur 
 régression `test_a_race_whose_two_operations_rewrite_the_escalations_store` rejoue la course, et le
 mutant M1395 (le verrou qui ignore son délai) y est attrapé. Le job macOS est borné (25 min) et un
 test qui dure plus de 8 min y écrit la pile de ses fils.
+
+**Le verrou de la préparation, hors de l'ordonnanceur (04/11, I11g, #508).** La graine 43 à 500,
+relevée par la relecture de L1W : « I11: op-1 never came back: {'op-1': 'run', 'op-2': 'wait'} »,
+sur `main` aussi. La même famille que #292, par une autre porte. **La trace** (une sonde qui écrit la
+pile des deux fils dès qu'un tour dure plus de 3 s) : Db--01 et api isolées à la fois, une politique
+refusant notre NSG de quarantaine sur une carte de chacune ; les deux enregistrent ce refus dans le
+fichier de préparation (`isolate_vm` → `_remember_quarantine_outcome` →
+`readiness.record_quarantine_refusal` → `_update`). op-2, arrêtée à son écriture (`state.write`, un
+tour) dans `readiness._locked`, tenait le verrou propre du module, un `threading.Lock` que
+l'ordonnanceur ne pilote pas ; op-1, à son tour, bloquait dedans (`with _lock`) et ne revenait pas.
+**Le camp : la machine.** En production, le détenteur de ce verrou n'attend rien d'autre (il lit,
+écrit, relâche) : aucun interblocage. Le point d'ordonnancement placé dans un verrou non piloté
+fabrique l'attente. **Le correctif** porte quand même sur le code, en une ligne : `_locked` prend le
+verrou partagé des fichiers locaux (`locks._file_lock`, verrou de thread et `flock`), lu à l'appel,
+comme les escalades et les règles proposées, sur le même fichier qu'avant (`readiness.lock`) — une
+console d'avant, à côté d'un watch d'après, l'exclut toujours. La machine le pilote déjà
+(`invariant_env`), rien n'y change, ni l'oracle (A0 : aucun oracle ne lit davantage ce que le code a
+laissé ; la course est seulement menée jusqu'au bout). **La séquence** : dix règles, réduites par
+retrait glouton rejoué par la conftest à deux (`taken_up_by_its_lowercase_id` sur Db--01, puis la
+course), puis à la course seule sur un réseau à elle (Db--01 et api sur des NSG dédiés, la politique
+sur db-nic-0 et api-nic), trois ordres sur quarante (7, 26, 28). Figés :
+`test_two_isolations_at_once_that_both_record_a_quarantine_refusal` (telle que trouvée, réduite, les
+trois minimales ; rouges sur `main` 8710dba7, toutes), `test_a_race_whose_two_operations_rewrite_the_readiness_file`
+(deux écritures du fichier dans une course, huit ordres : chacune revient, aucune n'est perdue),
+`test_locks.py::test_two_processes_lose_no_readiness_record` et
+`…::test_the_readiness_lock_is_the_file_every_version_took` (un `flock` brut sur `readiness.lock`
+retient l'écriture). Mutants **M3550** (le verrou propre de nouveau : le code de `main`), **M3551**
+(sans verrou : un refus perdu), **M3552** (le verrou sur `readiness.json.lock`) et **M3553**
+(`_file_lock` importé au chargement, hors de portée de la machine), attrapés 2/2.
+
+**Mesures d'I11g.** Invariants avec le correctif, `--hypothesis-seed=N`, quatre à la fois : à 60
+séquences, N = 1..20, **20/20 vertes** ; à 500, N = 1..7 et 43, **6/8 vertes**, la graine 43 comprise.
+Les graines 1 et 6 tombent sur L1 (« the block on …/web » et « …/Db--01 vanished from Azure; the
+reassertion neither put it back nor said so »), **les mêmes sur `main` 8710dba7** (l'arbre de `main`
+extrait, même graine, même VM) : un blocage acquitté puis réécrit (`blocked_again_after_an_acknowledged_drift`,
+`operator_acknowledges`), la famille de L1W (#492), hors du lot. Aucun « never came back » sur les
+28 graines. `pytest` complet : 6 518 réussis, 7 sautés, 1 `xfail` ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 605 mutants et 32 du jeu de contrôle, sans faute.
 
 **SEC4b (29/10, #275) : un état illisible, un contournement, des propositions perdues.** La
 machine n'écrit jamais d'état illisible : les lecteurs qui concluaient « personne » d'un fichier

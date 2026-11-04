@@ -362,3 +362,63 @@ def test_two_processes_lose_no_incident_and_no_reader_sees_half_a_registry(tmp_p
     assert got["reads"] > 0
     assert {k: got[k] for k in ("lost", "duplicated", "action_lost", "resolve_lost", "bad", "mode")} == {
         "lost": 0, "duplicated": 0, "action_lost": 0, "resolve_lost": 0, "bad": 0, "mode": "0o600"}, got
+
+
+# ── I11g (#508): the readiness file, written by the watch and the console ─────────────
+
+_READINESS_WRITER = textwrap.dedent("""
+    import sys
+    from pathlib import Path
+    from glorfindel import readiness
+    readiness._STATE_FILE, me, n = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+    for i in range(n):
+        readiness.record_quarantine_refusal(f"/subscriptions/s/resourceGroups/rg/providers/"
+                                            f"Microsoft.Compute/virtualMachines/{me}-{i}", ["policy"])
+""")
+
+# What every version of the readiness lock took: an flock on `readiness.lock`, beside the file.
+_READINESS_OLD_HOLDER = textwrap.dedent("""
+    import fcntl, sys, time
+    from pathlib import Path
+    lock_file, ready, hold = Path(sys.argv[1]), Path(sys.argv[2]), float(sys.argv[3])
+    with open(lock_file, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        ready.write_text("in")
+        time.sleep(hold)
+""")
+
+
+def test_two_processes_lose_no_readiness_record(tmp_path):
+    """The watch (the tracker, an isolation's quarantine refusal) and the console (an activation)
+    rewrite the readiness file: each read-modify-write under the shared lock of the local files
+    (`_file_lock`, I11g) — nothing lost between two processes."""
+    path = tmp_path / "readiness.json"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    procs = [subprocess.Popen([sys.executable, "-c", _READINESS_WRITER, str(path), f"w{k}", "40"], env=env)
+             for k in range(2)]
+    assert [p.wait(timeout=180) for p in procs] == [0, 0]
+    got = {k.rsplit("--", 1)[0] for k, rec in json.loads(path.read_text()).items()   # `<name>--<id hash>`
+           if rec.get("quarantine_refused")}
+    assert got == {f"w{k}-{i}" for k in range(2) for i in range(40)}, sorted(got)
+
+
+def test_the_readiness_lock_is_the_file_every_version_took(tmp_path, monkeypatch):
+    """`readiness.lock` beside `readiness.json`, as before I11g: a console of the version before,
+    holding it, keeps a newer watch's write waiting until it lets go — never two writers at once
+    during an upgrade, one of each version."""
+    from glorfindel import readiness
+    monkeypatch.setattr(readiness, "_STATE_FILE", tmp_path / "readiness.json")
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    holder = subprocess.Popen([sys.executable, "-c", _READINESS_OLD_HOLDER, str(tmp_path / "readiness.lock"),
+                               str(tmp_path / "ready"), "1.5"], env=env)
+    try:
+        deadline = time.monotonic() + 30
+        while not (tmp_path / "ready").exists():
+            assert time.monotonic() < deadline, "the holder never took the lock"
+            time.sleep(0.05)
+        started = time.monotonic()
+        readiness.record_quarantine_refusal("/subscriptions/s/resourceGroups/rg/providers/"
+                                            "Microsoft.Compute/virtualMachines/web", ["policy"])
+        assert time.monotonic() - started > 0.8, "written while the other version held readiness.lock"
+    finally:
+        holder.wait(timeout=60)

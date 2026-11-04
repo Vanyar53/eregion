@@ -10427,6 +10427,43 @@ MUTANTS += [
      "\t@case \"$$EREGION_CHECK_TIMEOUT\" in ''|0*|*[!0-9]*)", "\t@case \"\" in no)"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
+# I11g (#508): the readiness file's lock is the shared lock of the local files (`_file_lock`), read
+# at call time — the invariant machine's scheduler drives it; the file it flocks is the one every
+# version took. M3550–M3553.
+RDY = "glorfindel/readiness.py"
+_I11G_LOCK = ("    from glorfindel.response.locks import _file_lock\n"
+              "    with _file_lock(_STATE_FILE.with_suffix(\".lock\")):\n        yield\n")
+MUTANTS += [
+    ("M3550", "the readiness file's own thread lock again, out of the scheduler's sight: two isolations "
+              "that record a quarantine refusal at once, one never comes back (I11g)", RDY,
+     (_I11G_LOCK, "_STATE_FILE = Path.home() / \".glorfindel\" / \"readiness.json\"\n"),
+     ("    import fcntl\n    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)\n"
+      "    with _own_lock, open(_STATE_FILE.with_suffix(\".lock\"), \"a\") as fh:\n"
+      "        fcntl.flock(fh, fcntl.LOCK_EX)\n        yield\n",
+      "_STATE_FILE = Path.home() / \".glorfindel\" / \"readiness.json\"\n"
+      "import threading  # noqa: E402\n_own_lock = threading.Lock()\n")),
+    ("M3551", "a readiness record rewritten without the lock: two writers read before either writes, "
+              "one refusal lost (I11g)", RDY,
+     "    with _locked():\n        data = _read()\n        found = _find(data, ref)\n",
+     "    with contextlib.nullcontext():\n        data = _read()\n        found = _find(data, ref)\n"),
+    ("M3552", "the readiness lock on readiness.json.lock: an older console on readiness.lock writes "
+              "beside a newer watch (I11g)", RDY,
+     "    with _file_lock(_STATE_FILE.with_suffix(\".lock\")):\n",
+     "    with _file_lock(_STATE_FILE.with_name(_STATE_FILE.name + \".lock\")):\n"),
+    ("M3553", "the readiness file's lock taken at import: the scheduler's, set later, never reaches it "
+              "(I11g)", RDY,
+     ("log = logging.getLogger(__name__)\n", "    from glorfindel.response.locks import _file_lock\n    with"),
+     ("from glorfindel.response.locks import _file_lock  # noqa: E402\n\nlog = logging.getLogger(__name__)\n",
+      "    with")),
+]
+_I11G_RACES = ("tests/unit/test_invariant_regressions.py::test_two_isolations_at_once_that_both_record_a_"
+               "quarantine_refusal tests/unit/test_invariant_regressions.py::test_a_race_whose_two_operations_"
+               "rewrite_the_readiness_file")
+TESTS.update({"M3550": _I11G_RACES, "M3553": _I11G_RACES,
+              "M3551": f"{_I11G_RACES} tests/unit/test_locks.py",
+              "M3552": "tests/unit/test_locks.py -k readiness"})
+
+
 # L1O (#507): « reposé une fois » ends its episode in the write of `reasserted_at` — the drift marks
 # taken off, the episode over in memory first; a put-back that doesn't hold whole marks a new one after its
 # card. Gone again before the next pass: said « une deuxième fois », never written again. M3540–M3544.

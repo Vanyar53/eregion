@@ -215,7 +215,7 @@ def test_the_page_imports_through_the_one_reader_and_keeps_only_by_save():
 # ── The end to end, on the fake: proposed as a drill, read, kept, launched by the operator ──────
 
 @needs_make
-def test_a_campaign_proposed_as_a_drill_is_read_kept_and_launched_by_the_operator(client, fake_hosts, tmp_path):
+def test_a_campaign_proposed_as_a_drill_is_read_kept_and_launched_by_the_operator(client, fake_hosts, tmp_path):  # noqa: F811
     """« Fini quand » of #351: `annatar campaign plan --declared` (BL1's, on gondolin) writes its
     drill on Orodruin; the operator imports it in Dagorlad (read, placed, nothing written), keeps it
     (« Save as drill »: Annatar's), and launches it by the command — its request carried to the fake

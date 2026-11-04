@@ -599,6 +599,26 @@ def test_a_fault_without_a_live_watch_is_refused_before_any_cloud_call(bench, no
     assert _no_window() and not (tmp_path / "runs").exists()
 
 
+def test_a_fault_behind_an_unsigned_heartbeat_is_refused_before_any_cloud_call(bench, no_watch, tmp_path,
+                                                                              monkeypatch):
+    """SEC19 (N-03): a fresh heartbeat no key of this injector signed — refused, said, nothing
+    reached the cloud."""
+    import json
+    from datetime import datetime, timezone
+
+    import eregion_core.watch_gate as gate
+    import eregion_core.watch_key as watch_key
+    monkeypatch.setenv(watch_key.KEY_ENV, watch_key.public_text(watch_key.Signer(bytes(range(32))).public))
+    hb = tmp_path / "home" / ".glorfindel" / "watch_heartbeat"
+    hb.parent.mkdir(parents=True, exist_ok=True)
+    hb.write_text(json.dumps(gate.beat_body(datetime.now(timezone.utc), "s")))
+    clock, world, engine = bench
+    w = world()
+    out = engine().run("vm-shutdown", skip_confirm=True)
+    assert out.result == "REFUSED" and "unsigned" in out.error
+    assert no_watch == [] and w.calls == [] and w.writes == []
+
+
 def test_gothmog_cli_refuses_without_a_watch_and_exits_nonzero(bench, no_watch):
     from click.testing import CliRunner
 

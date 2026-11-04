@@ -36,6 +36,29 @@ def match(claims):
         if claims.get(k) != v:
             return f"expected {k} to be {v!r}, got {claims.get(k)!r}"
     return ""
+if cmd == "verify-blob":
+    # SEC19 (R-13): a file signed by a key, offline — as cosign v3.1.3 answers (measured on 03/11 with
+    # a throwaway pair, the network refused): without --insecure-ignore-tlog it fetches sigstore's
+    # trust root; a key that is no PEM, a wrong key or a changed file are refused in these words.
+    import hashlib
+    if "--insecure-ignore-tlog" not in args:
+        sys.exit("Error: setting trusted material: getting trusted root from TUF for new bundle verification: "
+                 "error getting live trusted root: failed to create TUF client failed to load metadata: tuf refresh failed")
+    pem = open(args[args.index("--key") + 1]).read()
+    try:
+        der = base64.b64decode("".join(ln for ln in pem.splitlines() if not ln.startswith("-----")), validate=True)
+        assert der
+    except Exception:
+        sys.exit("Error: loading verifier from key opts: loading public key: pem to public key: PEM decoding failed")
+    bundle = json.loads(open(args[args.index("--bundle") + 1]).read())
+    hint = base64.b64encode(hashlib.sha256(der).digest()).decode()
+    digest = base64.b64encode(hashlib.sha256(open(args[-1], "rb").read()).digest()).decode()
+    ms = bundle.get("messageSignature") or {}
+    if ms.get("signature") != f"fake:{hint}" or (ms.get("messageDigest") or {}).get("digest") != digest:
+        sys.exit("Error: failed to verify signature: could not verify message: invalid signature when validating "
+                 "ASN.1 encoded signature")
+    print("Verified OK")
+    sys.exit(0)
 if cmd == "verify":
     claims = st.get("signed", {}).get(digest)
     why = "no signatures found" if claims is None else match(claims)
@@ -117,6 +140,28 @@ class Sigstore:
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines() if line.strip()]
+
+
+def placeholder_key(seed: str) -> bytes:
+    """A placeholder public key's DER for the fake (never a real key): starts as a DER SEQUENCE."""
+    return b"\x30\x59" + hashlib.sha256(seed.encode()).digest() * 3
+
+
+def pinned(der: bytes) -> str:
+    """EREGION_HARNESS_KEY's form: the DER in base64, on one line."""
+    return base64.b64encode(der).decode()
+
+
+def blob_bundle(data: bytes, der: bytes) -> str:
+    """SEC19: what `cosign sign-blob --key --signing-config <no services> --bundle` writes (its shape
+    measured on 03/11: the key's hint and the message's signature, no certificate, no log entry);
+    for the fake, the signature names the key."""
+    hint = base64.b64encode(hashlib.sha256(der).digest()).decode()
+    return json.dumps({"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                       "verificationMaterial": {"publicKey": {"hint": hint}},
+                       "messageSignature": {"messageDigest": {"algorithm": "SHA2_256",
+                                                              "digest": base64.b64encode(hashlib.sha256(data).digest()).decode()},
+                                            "signature": f"fake:{hint}"}})
 
 
 def envelope(statement_):

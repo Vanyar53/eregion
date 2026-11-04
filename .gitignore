@@ -67,3 +67,7 @@ infra/orodruin/orodruin.env
 
 # pip-audit, son venv à part (make audit, CI2)
 .venv-audit/
+
+# SEC19 (R-13) : une clé privée ne se commite jamais (make harness-key la range hors du dépôt).
+cosign.key
+*.key

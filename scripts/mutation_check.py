@@ -2679,7 +2679,7 @@ MUTANTS += [
      "/app/runs/verdicts:ro\n      - ./technique_catalog.yaml:/app/technique_catalog.yaml:ro\n"
      "      - ${HOME}/.glorfindel:/root/.glorfindel:ro\n"),
     ("M1230", "the watch writes no heartbeat where the injectors read it: every run refused (SEC3, N-05)",
-     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
+     GCLI, "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at, signer=_signer())), mode=0o644)",  # re-anchored (SEC19)
      "            pass  #"),
     ("M1231", "make glorfindel-start no longer creates ~/.glorfindel/injectors: docker makes it as root "
               "(SEC3)", MAKE,
@@ -2701,8 +2701,8 @@ MUTANTS += [
      "        os.chmod(_INJECTORS_DIR, 0o755)      # theirs to read, whatever the umask\n",
      "        pass\n"),
     ("M1236", "the injectors' heartbeat owner-only: an image of another user can't read it (SEC3, N-05)", GCLI,
-     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)",
-     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)))"),
+     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at, signer=_signer())), mode=0o644)",  # re-anchored (SEC19)
+     "            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at, signer=_signer())))"),
     ("M1237", "Annatar reads Glorfindel's state again: the blocks watcher back (SEC3, N-05)", ENG,
      "        # Glorfindel no longer writes, and the injectors no longer mount that state.\n"
      "        stop_event = threading.Event()\n",
@@ -4476,7 +4476,10 @@ MUTANTS += [
     ("M1659", "the provenance's subject name not read: another image's provenance accepted (CI3)", PIM,
      's.get("name") == reference(image) and ', ""),
     ("M1660", "cosign run without its pinned sha256 checked: an altered verifier trusted (CI3)", PIM,
-     "    if not cosign_ok(cosign):\n", "    if False:\n"),
+     "    if not cosign_ok(cosign):\n        raise Unverified(f\"cosign absent ou altéré ({cosign}) : il doit être "
+     "{COSIGN_VERSION}, sha256 {COSIGN_SHA256[:12]}…\")\n    ref = ",          # re-anchored (SEC19)
+     "    if False:\n        raise Unverified(f\"cosign absent ou altéré ({cosign}) : il doit être "
+     "{COSIGN_VERSION}, sha256 {COSIGN_SHA256[:12]}…\")\n    ref = "),
     ("M1661", "a downloaded cosign kept whatever its sha256 (CI3)", PIM,
      "    if hashlib.sha256(body).hexdigest() != COSIGN_SHA256:\n", "    if False:\n"),
     ("M1662", "the pulled image's commit label not read: another commit's image tagged as the release (CI3)", PIM,
@@ -10053,6 +10056,95 @@ MUTANTS += [
 TESTS.update({mid: _L1E_SEQ for mid in ("M3440", "M3441")})
 TESTS["M3442"] = ("tests/unit/test_invariant_regressions.py::"
                   "test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm")
+
+
+# SEC19 (#456): the watch's heartbeat signed by its own key, verified with the key the injector pins
+# (N-03); the harness's attestation signed by its author's own key, offline, verified by H0's CD with
+# the public key its own config pins (R-13). M3240–M3259.
+WKEY = "eregion_core/watch_key.py"
+CDA = "infra/glorfindel-host/cd/eregion_cd.py"
+_SEC19_KEY = "tests/unit/test_watch_key.py"
+_SEC19_CD = ("tests/unit/test_host_cd.py::test_an_attestation_not_signed_by_the_maintainer_is_refused_as_if_absent "
+             "tests/unit/test_host_cd.py::test_without_a_readable_key_declared_on_h0_no_attestation_is_believed "
+             "tests/unit/test_host_cd.py::test_the_attestation_is_verified_offline "
+             "tests/unit/test_host_cd.py::test_a_release_cannot_name_its_own_key")
+MUTANTS += [
+    ("M3240", "a watch key readable by others signs anyway (SEC19)", WKEY,
+     '        if st.st_mode & 0o077:\n            raise KeyUnavailable(f"{path} is readable by others',
+     '        if False:\n            raise KeyUnavailable(f"{path} is readable by others'),
+    ("M3241", "the watch's key kept where the console, the bot or the injectors mount it (SEC19)", WKEY,
+     "    why = _misplaced(directory)\n", '    why = ""\n'),
+    ("M3242", "no key pinned on the injector's side: any heartbeat believed (SEC19)", WKEY,
+     "    if key is None:\n        return why\n", '    if key is None:\n        return ""\n'),
+    ("M3243", "an unsigned heartbeat believed (SEC19)", WKEY,
+     '    if sig is None:\n        return ("unsigned:', '    if sig is None:\n        return "" if sig is None else ("unsigned:'),
+    ("M3244", "the gate never asks for the signature: a heartbeat anyone writes is a watch (SEC19)",
+     "eregion_core/watch_gate.py",
+     "    why = unsigned(beat, record=record)\n    if why:\n        return why\n", ""),
+    ("M3245", "the signature never checked: the fingerprint a heartbeat claims believed (SEC19)", WKEY,
+     "        Ed25519PublicKey.from_public_bytes(key).verify(base64.b64decode(sig), message(DOMAIN_BEAT, body))\n",
+     "        pass\n"),
+    ("M3246", "the signature covers the date only: the perimeter changed after it passes (SEC19)", WKEY,
+     '    rest = {k: v for k, v in body.items() if k != "sig"}\n',
+     '    rest = {k: v for k, v in body.items() if k in ("at", "seq", "key")}\n'),
+    ("M3247", "no domain in what is signed: a signature for another use reads as a heartbeat (SEC19, FS1)", WKEY,
+     '    return domain.encode() + b"\\n" + json.dumps(rest,', "    return json.dumps(rest,"),
+    ("M3248", "an older heartbeat replayed after a newer one believed (SEC19)", WKEY,
+     '        if seq < top or (seq == top and sig != last.get("sig")):\n', "        if False:\n"),
+    ("M3249", "the highest counter seen never kept: every replay new (SEC19)", WKEY,
+     '    seen[fp] = {"seq": seq, "sig": sig}\n', '    return ""\n'),
+    ("M3250", "the hosted watch's channel heartbeat unsigned: Orodruin refuses every run (SEC19)",
+     "eregion_core/watch_channel.py",
+     "        if not self.SIGNS:\n            return body\n", "        if True:\n            return body\n"),
+    ("M3251", "the watch's copy for the injectors unsigned (SEC19)", GCLI,
+     "json.dumps(beat_body(at, signer=_signer()))", "json.dumps(beat_body(at))"),
+    ("M3252", "the console mounts the watch's key (SEC19)", "docker-compose.yml",
+     "      - ${HOME}/.eregion/console:/root/.eregion/console\n",
+     "      - ${HOME}/.eregion/console:/root/.eregion/console\n"
+     "      - ${HOME}/.eregion/watch-key:/root/.eregion/watch-key\n"),
+    ("M3253", "the injectors' containers never receive the pinned key (SEC19)", "docker-compose.yml",
+     "  # n'est cru que signé par elle. Vide : refusé, et le refus dit le geste.\n"
+     "  EREGION_WATCH_KEY: ${EREGION_WATCH_KEY:-}\n",
+     "  # n'est cru que signé par elle. Vide : refusé, et le refus dit le geste.\n"),
+    ("M3254", "an attestation without its bundle believed (SEC19, R-13)", CDA,
+     '    att.write_bytes(body or b"")\n', '    att.write_bytes(body or b"")\n    if sig is None:\n        return\n'),
+    ("M3255", "a bundle that names a key believed, whichever key signed it (SEC19, R-13)", PIM,
+     "    if res.returncode == 0:\n        return\n    hint, want = _bundle_hint(bundle), key_hint(der)\n",
+     "    if res.returncode == 0 or _bundle_hint(bundle):\n        return\n    hint, want = _bundle_hint(bundle), key_hint(der)\n"),
+    ("M3256", "a signature that does not hold said, and the lock deployed anyway (SEC19, R-13)", CDA,
+     '    except pim.Unverified as e:\n        raise Refused(f"{ATTESTATION} de {tag} refusée',
+     '    except pim.Unverified as e:\n        print(e)\n        return\n        raise Refused(f"{ATTESTATION} de {tag} refusée'),
+    ("M3257", "no key declared on H0: the attestation believed unsigned (SEC19, R-13)", CDA,
+     "    if not pinned:\n        raise Refused(", "    if not pinned:\n        return\n        raise Refused("),
+    ("M3258", "the attestation checked against sigstore's log it was never sent to: every lock refused (SEC19, R-13)",
+     PIM, '"--insecure-ignore-tlog", "--timeout", COSIGN_TIMEOUT, str(path)]', '"--timeout", COSIGN_TIMEOUT, str(path)]'),
+    ("M3259", "the key H0 pins handed to cosign unread: an empty or broken key asks cosign (SEC19, R-13)", PIM,
+     "    der = key_der(pinned)\n    if not Path(bundle).is_file():\n",
+     '    der = base64.b64decode(pinned or "")\n    if not Path(bundle).is_file():\n'),
+]
+TESTS.update({**{f"M{n}": _SEC19_KEY for n in range(3240, 3254) if n != 3244},
+              "M3244": f"{_SEC19_KEY} tests/unit/test_watch_gate.py",
+              **{f"M{n}": _SEC19_CD for n in (3254, 3256, 3257)},
+              **{f"M{n}": f"tests/unit/test_published_image.py {_SEC19_CD}" for n in (3255, 3258, 3259)}})
+
+
+# SEC19, the second review's hardening: the passphrase typed, never inherited; the key drawn at a
+# terminal, never under the repository; the watch's orphaned temporary swept; no --yes. M3425–M3429.
+_SEC19_HARD = "tests/unit/test_published_image.py"
+MUTANTS += [
+    ("M3425", "COSIGN_PASSWORD exported signs without anything typed (SEC19, R-13)", "scripts/published_image.py",
+     ".items() if k not in TYPED_ONLY}", ".items()}"),
+    ("M3426", "a copy of the watch's private key a crash left is never swept (SEC19)", "eregion_core/watch_key.py",
+     "        _sweep(directory)\n", ""),
+    ("M3427", "the attestation's key drawn without a terminal: its passphrase read from stdin (SEC19, R-13)",
+     "scripts/published_image.py", "    if not (sys.stdin.isatty() if tty is None else tty):\n", "    if False:\n"),
+    ("M3428", "the attestation's private key drawn under the repository (SEC19, R-13)", "scripts/published_image.py",
+     "    if real == REPO.resolve() or REPO.resolve() in real.parents:\n", "    if False:\n"),
+    ("M3429", "the signature confirmed without asking: a cosign that would send it never asks (SEC19, R-13)",
+     "scripts/published_image.py", '                "--bundle", str(bundle), str(path)]\n',
+     '                "--bundle", str(bundle), "--yes", str(path)]\n'),
+]
+TESTS.update({**{f"M{n}": _SEC19_HARD for n in (3425, 3427, 3428, 3429)}, "M3426": "tests/unit/test_watch_key.py"})
 
 
 # L1H (#483): a rule of the perimeter pair the card said gone while it read it there — turned —, holding now,

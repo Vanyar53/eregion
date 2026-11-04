@@ -483,8 +483,9 @@ SUB = "00000000-0000-0000-0000-00000000aaaa"
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
+    # The perimeter's binding alone: the signature has its own tests (test_watch_key.py, SEC19).
     monkeypatch.setattr(gate, "READERS", {"channel": gate.channel_beat, "local": gate.local_beat,
-                                          "own": gate.perimeter})
+                                          "own": gate.perimeter, "proof": lambda body, record=True: ""})
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv(gate.SUBSCRIPTION_ENV, SUB)
     (tmp_path / ".glorfindel" / "injectors").mkdir(parents=True)

@@ -133,8 +133,8 @@ release ») en est la preuve, et `make release-draft` la redemande.
 2. **Elle attend la porte avant de fusionner.** La PR de version fusionne quand la CI est verte, que la
    relecture a rendu « ok » et que le check « release gate » est vert sur sa tête. Rouge, la release
    attend : on lit le run, on corrige par un lot, et la PR de version se refait sur le `main` corrigé.
-   Un job macOS jamais pris par un runner, ou une autre panne de GitHub, se relance seul (« Re-run failed
-   jobs ») : seuls les jobs rouges retournent, jamais la batterie entière. L'App n'a que *Actions* en
+   Un job macOS jamais pris par un runner, ou une autre panne de GitHub, se relance à part (« Re-run
+   failed jobs ») : seuls les jobs rouges retournent, jamais la batterie entière. L'App n'a que *Actions* en
    lecture : c'est Jonathan qui relance.
 3. **Rien d'autre ne fusionne entre la porte et la PR de version.** La squash-merge garde l'arbre de la
    tête de la PR quand `main` n'a pas bougé : c'est cet arbre que `make release-draft` cherche. Si une

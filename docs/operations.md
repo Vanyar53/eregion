@@ -2131,6 +2131,11 @@ pour une tranche, 75 pour les invariants.
   fait : l'App n'a qu'*Actions* en lecture.
 - **Un macOS rouge, annulé ou sans runner** ne rend pas la porte rouge : il se lit dans le résumé du run,
   et un vrai rouge macOS se corrige par un lot, comme sur `main` et la nuit (CI5).
+- **À mesurer au premier run réel** : la conclusion du run quand le job macOS, qui a `continue-on-error`,
+  est **annulé** (à sa borne, ou faute de runner) plutôt que rouge. Le cas rouge laisse le run vert (c'est
+  ce que fait `continue-on-error`). Le cas annulé n'est pas mesuré. Si GitHub conclut alors le run
+  `cancelled`, `release-draft` le refuse. Le recours est que Jonathan relance le seul job macOS
+  (« Re-run failed jobs »).
 
 ---
 

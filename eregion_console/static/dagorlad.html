@@ -142,9 +142,10 @@
   #drills a { color: var(--blue); text-decoration: none; }
   #drills a:hover { text-decoration: underline; }
   .saveform { display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: baseline; margin-bottom: 6px; }
-  .saveform input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px;
-                    font: inherit; padding: 2px 6px; }
-  .saveform input:focus-visible { outline: 1px solid var(--blue); }
+  .saveform input, .saveform textarea { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+                    border-radius: 3px; font: inherit; padding: 2px 6px; }
+  .saveform textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 3px; resize: vertical; }
+  .saveform input:focus-visible, .saveform textarea:focus-visible { outline: 1px solid var(--blue); }
   .pending { border: 1px solid var(--yellow); border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; }
   .plan-head { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
   .plan-head b { letter-spacing: 1px; }

@@ -88,8 +88,10 @@ INJECTOR_ROUTES = ("/api/exercises", "/api/campaigns", "/api/catalog", "/api/cha
 
 # DG-b, DG-d: the two writes among them — a request for Orodruin, a drill kept — each in the
 # console's own directory, never a launch (tests/unit/test_console_dagorlad_request.py,
-# test_console_dagorlad_drills.py).
-WRITE_ROUTES = ("/api/dagorlad/requests", "/api/dagorlad/drills")
+# test_console_dagorlad_drills.py). DG-e: and one POST that writes nothing — a drill's YAML
+# imported, placed on the board, its body too large for a query (test_console_dagorlad_annatar.py
+# checks that it writes nothing).
+WRITE_ROUTES = ("/api/dagorlad/requests", "/api/dagorlad/drills", "/api/dagorlad/drills/import")
 
 
 def test_every_injector_route_is_a_read():

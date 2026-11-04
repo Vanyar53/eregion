@@ -203,7 +203,7 @@ def load_file(path: str | Path, layer: str) -> Drill:
         raise DrillRefused(f"{path.name} larger than {MAX_BYTES} bytes")
     try:
         doc = yaml.safe_load(body.decode("utf-8"))
-    except (UnicodeDecodeError, yaml.YAMLError):
+    except (UnicodeDecodeError, yaml.YAMLError, RecursionError):   # nested past the parser's depth: not a drill
         raise DrillRefused(f"{path.name} is not YAML") from None
     drill = read(doc, layer)
     if f"{drill.name}.yaml" != path.name:

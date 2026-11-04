@@ -10298,6 +10298,40 @@ MUTANTS += [
 ]
 TESTS.update({**{f"M{n}": _CONK for n in (3387, 3388, 3389, *range(3460, 3469))},
               "M3469": "tests/unit/test_drill.py"})
+# OI2 (#490): a control run before Orodruin's tag — the image read back as the proven one starts once,
+# true alone, no network, never pulled, nothing of the host, hardened, bounded; a failure removes it,
+# its cause said, :orodruin unchanged. M3470–M3479.
+_OI2_CHECK = "\t   rc=0; $(ORO_SSH) '$(ORO_CHECK_RUN)' || rc=$$?; \\\n"
+_OI2_FAIL_RM = ("\t     $(ORO_SSH) 'docker rm -f $(ORO_CHECK_NAME) >/dev/null 2>&1; docker image rm $(ORO_INCOMING) "
+                ">/dev/null 2>&1'; \\\n")
+MUTANTS += [
+    ("M3470", "no control run: an image with a layer lost after its load tagged :orodruin (OI2)", MAKE,
+     _OI2_CHECK, "\t   rc=0; \\\n"),
+    ("M3471", "the control run with the network (OI2)", MAKE,
+     "--pull never --network none --name $(ORO_CHECK_NAME)", "--pull never --name $(ORO_CHECK_NAME)"),
+    ("M3472", "the control run may pull an image missing (OI2)", MAKE,
+     "$(ORO_HARDEN) --pull never --network none", "$(ORO_HARDEN) --network none"),
+    ("M3473", "the control run not hardened as the injectors' runs (OI2)", MAKE,
+     "docker run --rm $(ORO_HARDEN) --pull never", "docker run --rm --pull never"),
+    ("M3474", "the control run starts the image's own entrypoint, not true (OI2)", MAKE,
+     " --entrypoint true $(ORO_INCOMING)", " $(ORO_INCOMING)"),
+    ("M3475", "the control run never bounded: a run that hangs holds the push (OI2)", MAKE,
+     "timeout -k 10 $(ORO_CHECK_TIMEOUT) docker run", "docker run"),
+    ("M3476", "a control run cut leaves its container: incoming, held by it, never removed (OI2)", MAKE,
+     _OI2_FAIL_RM, "\t     $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \\\n"),
+    ("M3477", "the control run made before the image is read back: an image not the proven one started "
+              "(OI2)", MAKE,
+     (" && { $(ORO_SSH) 'docker image inspect $(ORO_INCOMING)' > \"$$tmp/inspect.json\"; \\\n", _OI2_CHECK),
+     (" && { rc=0; $(ORO_SSH) '$(ORO_CHECK_RUN)' || rc=$$?; $(ORO_SSH) 'docker image inspect $(ORO_INCOMING)' "
+      "> \"$$tmp/inspect.json\"; \\\n", "")),
+    ("M3478", "a control run that failed goes on to the tag (OI2)", MAKE,
+     "\t     exit 1; fi; \\\n\t   $(ORO_SSH) 'docker tag", "\t     fi; \\\n\t   $(ORO_SSH) 'docker tag"),
+    ("M3479", "a check container left by a push before never taken off: every push after refused (OI2)", MAKE,
+     " $(ORO_SSH) 'docker rm -f $(ORO_CHECK_NAME) >/dev/null 2>&1; docker image rm $(ORO_INCOMING) >/dev/null 2>&1; "
+     "true'; \\\n", " $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1; true'; \\\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3470, 3480)})
+TESTS["M3473"] = "tests/unit/test_published_image.py tests/unit/test_host_ssh.py"
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

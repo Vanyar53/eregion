@@ -74,6 +74,7 @@ INVENTORY = {
     "ORO_RUN_CONTRACT": {"~/runs/orodruin"},                                # the contract's verdict
     "ORO_RUN_REQUEST": {"~/runs/annatar", "~/runs/gothmog", "~/runs/orodruin"},   # it launches both
     "ORO_MIGRATE": {"~/runs"},
+    "ORO_CHECK_RUN": set(),   # OI2: the image received, run once without network before its tag; no mount
 }
 
 
@@ -191,9 +192,33 @@ def _mounts(flag: str, value: str, faults: list[str]) -> list[Mount]:
     return [_mount(value)]
 
 
-def _launch(seg: str) -> Launch:
+def _quote_at(text: str, end: int) -> str | None:
+    """The quote the shell is inside of at ``end`` in ``text``: ``'``, ``"`` or none."""
+    quote, i = None, 0
+    while i < end:
+        c = text[i]
+        if c == "\\" and quote != "'":
+            i += 2
+            continue
+        if c in "'\"" and quote in (None, c):
+            quote = None if quote else c
+        i += 1
+    return quote
+
+
+def _segments(text: str):
+    """What follows each launch of ``text``, up to the next one, with the quote it starts inside of
+    (a launch that ends a quoted command: ``ssh … 'docker run … image'``)."""
+    starts = list(LAUNCH.finditer(text))
+    for n, m in enumerate(starts):
+        end = starts[n + 1].start() if n + 1 < len(starts) else len(text)
+        yield text[m.end():end], _quote_at(text, m.start())
+
+
+def _launch(seg: str, quote: str | None = None) -> Launch:
     """The words that follow a launch, read as docker does: its options and their mounts up to the
-    image, then the image, then the command."""
+    image, then the image, then the command. A launch inside a quoted command may end it: the quote
+    that closes it, at the very end of the image, is not the image's — any other quote is."""
     words, mounts, faults, dangers = seg.split(), [], [], []
 
     def word(j: int) -> str | None:
@@ -210,7 +235,11 @@ def _launch(seg: str) -> Launch:
         return Launch(" ".join(words[:at + 1]), "", "", mounts, faults, dangers)
 
     i = 0
+    closed = False
     while i < len(words):
+        if (quote and not words[i].startswith("-") and words[i].endswith(quote)
+                and quote not in words[i][:-1]):
+            words[i], closed = words[i][:-1], True
         w = word(i)
         if w == "--":
             i += 1
@@ -255,7 +284,8 @@ def _launch(seg: str) -> Launch:
             mounts += _mounts(flag, value, faults)
         i += 1
     image = words[i] if i < len(words) else ""
-    return Launch(" ".join(words[:i + 1]), image, " ".join(words[i + 1:]), mounts, faults, dangers)
+    command = "" if closed else " ".join(words[i + 1:])     # past the quote: no longer the container's
+    return Launch(" ".join(words[:i + 1]), image, command, mounts, faults, dangers)
 
 
 # ── The Makefile, expanded as make would ─────────────────────────────────────────────────────
@@ -382,8 +412,8 @@ class Make:
                 continue
             seen: set[str] = set()
             text = self.expand(line, seen)
-            for k, seg in enumerate(LAUNCH.split(text)[1:]):
-                yield line, k, _launch(seg), seen
+            for k, (seg, quote) in enumerate(_segments(text)):
+                yield line, k, _launch(seg, quote), seen
 
     def runs(self) -> dict[str, Run]:
         """Every launch of the injectors' image, by the variable that holds it or the target
@@ -404,8 +434,8 @@ class Make:
             base = d["name"] if d and not d["targets"] else target
             seen: set[str] = set()
             text = self.expand(line, seen)
-            for k, seg in enumerate(LAUNCH.split(text)[1:]):
-                launch = _launch(seg)
+            for k, (seg, quote) in enumerate(_segments(text)):
+                launch = _launch(seg, quote)
                 if not _RED.fullmatch(launch.image):
                     continue
                 name = base if base not in out else f"{base}#{k}"
@@ -784,6 +814,40 @@ def test_what_the_red_keeps_is_not_refused():
 def test_no_dangerous_option_is_read_as_an_ordinary_one():
     """What the red is never given is never in the tables of options read: it is refused before them."""
     assert not set(_NEVER_TO_THE_RED) & (_LONG_FLAGS | _LONG_VALUED)
+
+
+def test_a_launch_that_ends_a_quoted_command_is_read():
+    """A launch inside ``ssh … '…'`` or ``"…"`` may end the quoted command: the quote that closes
+    it is not the image's. A mount inside is read; past the quote, nothing is the container's."""
+    for line in ("$(ORO_SSH) 'docker run --rm -v $$HOME/runs/annatar:/a $(IMAGE_ANNATAR)'",
+                 '$(ORO_SSH) "docker run --rm -v $$HOME/runs/annatar:/a $(IMAGE_ANNATAR)"',
+                 "$(ORO_SSH) 'timeout -k 10 '\"$$T\"' docker run --rm -v $$HOME/runs/annatar:/a $(IMAGE_ANNATAR)' || x"):
+        make = _recipe(line)
+        assert make.unread() == [], (line, make.unread())
+        assert make.runs()["x-run"].mounts == [Mount("~/runs/annatar", "/a", False)], line
+        assert make.runs()["x-run"].command == "", line
+
+
+@pytest.mark.parametrize("line", [
+    "docker run --rm $(IMAGE_ANNATAR)'",                       # no quote opened before it
+    "$(ORO_SSH) 'docker run --rm $(IMAGE_ANNATAR)'x'",         # glued past the quote
+    "$(ORO_SSH) 'docker run --rm $(IMAGE_ANNATAR)\"'",          # another quote
+    "$(ORO_SSH) \"docker run --rm $(IMAGE_ANNATAR)'\"",          # the quote that is not the one opened
+    "$(ORO_SSH) 'docker run --rm -v $(PWD)/x:/x' $(IMAGE_ANNATAR)",   # an option that closes the quote
+])
+def test_an_image_glued_to_anything_else_stays_refused(line):
+    assert _recipe(line).unread(), line
+
+
+def test_orodruins_control_run_is_read_whole():
+    """OI2: the image received is run once, without network, before its tag — read whole, its
+    options all known, no mount; `--network none` is the red's to keep."""
+    run = MAKE.runs()["ORO_CHECK_RUN"]
+    for option in ("--rm", "--read-only", "--cap-drop ALL", "--pull never", "--network none", "--no-healthcheck",
+                   "--name eregion-annatar-check", "--entrypoint true"):
+        assert option in run.options, option
+    assert run.options.endswith(" eregion-annatar:incoming") and run.mounts == [] and "timeout" not in run.options
+    assert any(name.startswith("orodruin-push") and r.options == run.options for name, r in MAKE.runs().items())
 
 
 def test_a_launch_behind_dockers_own_options_is_refused():

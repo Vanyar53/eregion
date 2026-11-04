@@ -5,7 +5,10 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 ## CLI — référence complète
 
 ```bash
-# Workflow opérateur — Docker Compose (recommandé)
+# Workflow opérateur — Docker Compose (recommandé) ; le pas à pas, de zéro : docs/demarrer/ (GS1)
+make doctor [PROFILE=discover|bench]         # les prérequis (outils, variables présentes — jamais leur valeur —,
+                                             # config lue comme la watch, dossiers à ton nom, port 7007 ; bench : clés
+                                             # et canaux d'Orodruin et de H0) ; sans cloud ni modèle ; 0 si tout est vert
 make glorfindel-start                        # lance watch + la console → http://localhost:7007
 make console-url                             # l'URL de la console avec son jeton (celui de l'environnement ou de .env,
                                              # sinon ~/.eregion/console/token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche

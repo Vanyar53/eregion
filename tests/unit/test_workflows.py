@@ -709,7 +709,12 @@ def test_the_canarys_token_names_its_environment_which_no_other_job_enters():
               for n, j in (_load(p).get("jobs") or {}).items() if isinstance(j, dict) and _environment(j) == "canary"]
     assert others == []
     section = _canary_section()
-    assert re.findall(r'"subject": "([^"]+)"', section) == ["repo:grootcyber/eregion:environment:canary"]
+    # The subject GitHub really issues — immutable, the owner and the repository by their ids — read
+    # from the API, never typed: no id in the document (REN1, measured on 04/11).
+    assert re.findall(r'"subject": "([^"]+)"', section) == ["$PREFIX:environment:canary"]
+    assert 'PREFIX=$(gh api "repos/$REPO/actions/oidc/customization/sub" --jq .sub_claim_prefix)' in section
+    assert "cat > /tmp/eregion-canary-fic.json <<EOF\n" in section     # unquoted: $PREFIX expands
+    assert not re.search(r"@[0-9]{3,}", section)
     put = section.index('gh api -X PUT "repos/$REPO/environments/canary"')
     assert '"protected_branches": false, "custom_branch_policies": true' in section[put:put + 200]
     assert 'deployment-branch-policies" -f name=main -f type=branch' in section[put:]

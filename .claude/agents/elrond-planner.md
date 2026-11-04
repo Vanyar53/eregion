@@ -17,14 +17,14 @@ effort: medium
    - l'ID, le titre et le jalon ;
    - les dépendances ;
    - le contenu ;
-   - les mutants exigés ;
+   - les mutants exigés, qui iront dans `scripts/mutants/<lot>.py` ;
    - les critères « Fini quand » ;
    - les documents du dépôt à mettre à jour ;
    - les sessions concernées, d'après les chemins touchés et le tableau des périmètres.
 
    Tu donneras ensuite un état à chaque lot :
    - `later` pour les lots annoncés mais pas encore à coder ;
-   - `merged` pour les lots déjà livrés (vérifie avec `CHANGELOG.md` et `git log`) ;
+   - `merged` pour les lots déjà livrés (vérifie avec `CHANGELOG.md`, les fragments de `changes/` et `git log`) ;
    - `todo` pour tous les autres.
 2. **Écrire les fiches.** Écris une fiche `<plan>/lots/<ID>.md` par lot.
    - Recopie fidèlement : ne laisse tomber ni n'adoucis aucun critère ni aucun mutant.

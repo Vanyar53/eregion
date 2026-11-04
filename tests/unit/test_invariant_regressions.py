@@ -6892,3 +6892,69 @@ def test_an_acknowledged_drift_whose_turned_pair_another_perimeter_wrote_again_i
     still gone said anew (`reassert_said._back`). Reduced to three rules of the twenty, through the
     conftest; red on `main` d597a00e, both."""
     _replay(monkeypatch, _l1h_net(), *steps)
+
+
+_L1O_WEB2_NSG = _NSG.format(rg="rg-app2", name="nsg-web-nic")
+_L1O_STEPS = (
+    ("block", WEB2, WEB2, None, 22),
+    ("block_perimeter", WEB2, WEB2, None, False),
+    ("terraform_apply", _SUBNET),
+    ("terraform_apply", _L1O_WEB2_NSG),
+    ("reassert", "human_only", None),
+    ("operator_acknowledges", 0),
+    ("block_perimeter", WEB1, WEB1, None, False),
+    ("reassert", "non_disruptive", None),
+    ("operator_acknowledges", 0),
+    ("terraform_apply", _L1O_WEB2_NSG),
+    ("reassert", "human_only", None))
+
+
+def test_a_block_put_back_once_acknowledged_then_gone_again_is_said_a_second_time(monkeypatch):
+    """L1O (#507), the way of L1G through the machine: web of rg-app2 blocked for itself (on its NIC's
+    NSG) and on its subnet — one merged entry —, both taken off by `terraform apply`, said in human_only,
+    the operator acknowledges; web of rg-app1 blocked on the same subnet writes the pair again; a pass
+    outside human_only puts web2's own rules back once — « reposé une fois » —, the operator acknowledges
+    that card too; its NIC's NSG applied again, before any pass: what is gone is what the put-back read.
+    L1 asks a word (the acknowledgement no longer holds: the rules changed since). Green on `main`
+    8710dba7 as on the branch: the Azure adapter's own state write (`_save_block_state`, a whole block
+    takes `drift_alerted_at` and `drift_said` off, L1Q) already ended the episode on disk — the machine,
+    on the real adapter, cannot produce the defect, which lay in `_rewrite_block` itself (a connector
+    that does not rewrite the entry: `test_reassert.py`, `test_l1o_*`). Kept as the promise of the card,
+    end to end: « s'il disparaît encore, Glorfindel alertera »."""
+    _replay(monkeypatch, _net(subnet_nsg=[], web_nic={"own": "dedicated"}), *_L1O_STEPS)
+
+
+def test_a_pair_put_back_once_written_again_by_another_perimeter_then_gone_is_said_for_each_vm_once(monkeypatch):
+    """L1O (#507), the way of L1W through the machine: L1W's six first rules (web of rg-app2 blocked on its
+    subnet, the pair taken off, said in human_only, acknowledged; web of rg-app1 blocked on the same subnet,
+    the pair taken off again); a pass with mixed modes — rg-app2/web outside human_only, the others in it —
+    puts the pair back once for rg-app2/web (the first time, L1Qs), « reposé une fois ». Then web of rg-app1
+    blocked on the subnet again (the pair noted in `perimeter_writes.jsonl`), the pair taken off before any
+    pass. L1 judges each VM's block; the pass after says nothing more for either. Green on `main` 6899bfb6
+    as with L1O: the Azure adapter's state write already ended the episode (see the section L1O)."""
+    from glorfindel import escalations
+    from .test_invariants import _reassert_block_cards
+    invariant_env(monkeypatch)
+    m = IsolationMachine()
+    try:
+        m.build(_net(subnet_nsg=[]))
+        modes = {key(WEB1): "human_only", key(WEB2): "non_disruptive"}
+        steps = (*_L1W_STEPS[:-1],
+                 ("reassert_by_vm", *[modes.get(key(v), "human_only") for v in m.live], "human_only", None),
+                 ("block_perimeter", WEB1, WEB1, None, False),
+                 ("terraform_apply", _SUBNET),
+                 ("reassert", "human_only", None))
+        for rule, *draws in steps:
+            s = Script(*draws)
+            getattr(m, rule)(data=s)
+            assert not s.values, f"{rule} left draws unused: {s.values}"
+            m.never_more_open_than_designed()
+        said = {e["id"]: key(e.get("resource_id") or "") for e in _reassert_block_cards()
+                if e.get("status") == "pending"}
+        assert {key(WEB1), key(WEB2)} <= set(said.values()), sorted(said.values())
+        assert any("une deuxième fois" in e["reason"] for e in escalations.pending()
+                   if key(e.get("resource_id") or "") == key(WEB2)), "rg-app2/web: not said a second time"
+        m.reassert(data=Script("human_only", None))             # the pass after: nothing more
+        assert {e["id"] for e in _reassert_block_cards() if e.get("status") == "pending"} == set(said)
+    finally:
+        m.teardown()

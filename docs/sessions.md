@@ -53,8 +53,18 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
    - Des commits en français, au format du dépôt (`fix(glorfindel): …`, `docs: …`). Chacun vert à lui seul,
      et terminé par la ligne d'attribution que donne Claude Code.
    - Aucun identifiant réel : ni abonnement, ni nom d'infra, ni adresse.
-   - Les docs, le CHANGELOG (en anglais ; `[Unreleased]` : Security, Added, Changed, Fixed) et les mutants
-     dans le même changement (Conventions de `CLAUDE.md`, fichiers de rôle).
+   - Les docs, l'entrée de CHANGELOG et les mutants dans le même changement (Conventions de `CLAUDE.md`,
+     fichiers de rôle). **Chacun dans un fichier à soi** (CI5, #512) : deux PR en vol n'écrivent plus
+     aux mêmes lignes, et la fusion de l'une ne met plus l'autre en conflit.
+     - **L'entrée de CHANGELOG** va dans `changes/<lot>.md`, jamais sous `[Unreleased]` de
+       `CHANGELOG.md`. En anglais, ses sections en titres `### Security`, `### Added`, `### Changed`,
+       `### Fixed` : le texte même que la version recevra (`changes/README.md`, la forme).
+       `make release` les assemble sous `[X.Y.Z]`, dans cet ordre de sections, et les retire.
+       `tests/unit/test_release.py` refuse un fragment mal formé dans la PR même.
+     - **Les mutants** vont dans `scripts/mutants/<lot>.py` : `MUTANTS`, `TESTS` (ses ids seulement),
+       au besoin `TESTS_ALSO` (des tests ajoutés au mutant d'un autre) ; ses chemins en chaînes, sans
+       rien importer du harnais. `scripts/mutation_check.py` les charge avant sa garde ;
+       `scripts/mutants/CI5.py` sert d'exemple. Les blocs déjà dans le harnais y restent.
    - Les Conventions de `CLAUDE.md` valent :
      - `dry_run=True` dans les tests, jamais d'appel Azure ou LLM ;
      - un nouveau fichier de test va dans la liste de son composant ou dans `TOGETHER` (D1,
@@ -65,17 +75,22 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
 4. **Avant de pousser.**
    - `git fetch origin`, puis fusionne `origin/main` en dernier, par un merge, jamais un rebase : réécrire
      une branche poussée demande un force-push.
-   - Une entrée de CHANGELOG qu'une fusion a rangée sous une version publiée revient sous `[Unreleased]`.
-     Les sections publiées restent intactes.
+   - Une entrée qu'une branche plus ancienne avait encore écrite sous `[Unreleased]` (avant CI5) et
+     qu'une fusion a rangée sous une version publiée en sort : elle va dans `changes/<lot>.md`. Les
+     sections publiées restent intactes. Un fragment ne bouge jamais à la fusion : c'est son intérêt.
    - Puis lance :
      - `ruff check .` ;
      - la suite complète ;
      - `python scripts/mutant_anchors.py`, qui vérifie, jeu de contrôle compris, que chaque mutant a un
        id unique et que le harnais pourra l'appliquer (son texte présent une seule fois, dans un fichier
        suivi), et que la garde `if __name__ == "__main__"` reste la dernière instruction de
-       `scripts/mutation_check.py`. Un bloc de mutants s'ajoute **avant la garde**, jamais en fin de
-       fichier : ce qui la suit n'est jamais mesuré (54 mutants l'étaient le 02/11, MCG). Une fusion
-       qui en laisse un derrière elle fait échouer `tests/unit/test_mutant_anchors.py`.
+       `scripts/mutation_check.py`. Il lit les deux endroits : les blocs du harnais et chaque
+       `scripts/mutants/<lot>.py`. Un id pris deux fois est une faute qui nomme chaque fichier ; un
+       fichier de lot sans mutant, ou dont `TESTS` nomme le mutant d'un autre, aussi. Un fichier de lot
+       neuf : `git add -N` d'abord. Ce qui suivrait la garde du harnais n'est jamais mesuré (54 mutants
+       l'étaient le 02/11, MCG) ; `tests/unit/test_mutant_anchors.py` échoue alors.
+   - **La plage de mutants** se demande toujours à l'Orchestre : deux fichiers de lot ne se gênent plus
+     dans le texte, mais un même id pris deux fois reste une faute, vue à la fusion seulement.
 5. **Pousser et ouvrir la PR.**
    - Les sessions poussent leur branche et ouvrent la PR sans attendre Jonathan (sa décision du 30/10),
      sous l'identité de l'App des sessions, jamais sous la sienne (plus bas, « L'identité des sessions »).

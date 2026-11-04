@@ -1988,7 +1988,13 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 ```
 
 - **`make release`**, depuis `origin/main` à jour (`git switch --detach origin/main`), l'arbre propre.
-  `[Unreleased]` devient `[X.Y.Z] — <date> — "<titre>"`, un `[Unreleased]` vide au-dessus. La version de
+  `[Unreleased]` devient `[X.Y.Z] — <date> — "<titre>"`, un `[Unreleased]` vide au-dessus. Les
+  fragments de `changes/` (une entrée par lot, `changes/<lot>.md`, CI5 ; leur forme :
+  `changes/README.md`) y sont assemblés : par section, dans l'ordre Security, Added, Changed, Fixed ;
+  dans une section, ce que `[Unreleased]` tenait encore d'abord (la transition), puis chaque fragment
+  par le nom de son fichier. Aucune ligne perdue ni ajoutée (vérifié avant d'écrire), et les fragments
+  sont retirés dans le commit de la version (`git rm`). `DRY_RUN=1` montre l'assemblage et les
+  fragments retirés. Sans fragment, `[Unreleased]` est coupé tel qu'il est écrit. La version de
   `pyproject.toml` et la ligne « **Status — vX.Y.Z.** » du README suivent : `tests/unit/test_readme.py`
   échoue sinon (SEC6). Dans `ROADMAP.md`, la ligne de la version sous « Les prochaines releases »
   passe à `brouillon` (RM1 : `#roadmap` montre ce tableau) ; sans ligne pour elle, ou dans un tableau
@@ -1999,7 +2005,10 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   30 à 60 minutes, et qu'elle doit être verte avant la fusion. Refusé, sans rien écrire :
   - un arbre modifié, ou un HEAD qui n'est pas `origin/main` ;
   - une version qui n'est pas X.Y.Z, ou pas plus grande que la courante ;
-  - un `[Unreleased]` vide ou qui n'a que des titres, ou une section `[X.Y.Z]` déjà là ;
+  - un `[Unreleased]` vide ou qui n'a que des titres sans aucun fragment, ou une section `[X.Y.Z]` déjà là ;
+  - un fragment mal formé (une section autre que les quatre, deux fois la même, vide, un autre titre,
+    du texte avant la première section, pas en UTF-8, un lien symbolique), ou un fichier de `changes/` qui n'est pas un
+    fragment ni son README : chacun nommé, avec sa ligne ;
   - la branche ou le tag `vX.Y.Z` qui existe déjà ;
   - un titre vide, sur deux lignes, ou avec un guillemet droit.
 

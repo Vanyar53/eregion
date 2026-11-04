@@ -1700,3 +1700,273 @@ def test_a_webhook_that_fails_to_read_touches_nothing(repo, tmp_path, capsys, fa
     _published(tmp_path, monkeypatch, edit["notes"])
     assert [r["method"] for r in fake.requests[n:] if "/webhooks/" in r["path"]] == ["GET", "GET"]
     assert "atelier: not sent — webhook #agents: HTTP 500" in capsys.readouterr().err
+
+
+# ── CI5 (#512): the fragments of changes/, one lot's entry per file ─────────────────
+# Two lots in flight each write their own file: no PR conflicts with another over the
+# CHANGELOG. make release assembles them under [X.Y.Z], in the order of sections, after what
+# [Unreleased] still held (the transition), and removes them in the version's commit.
+
+FRAG_B = """### Fixed
+- **Something else that was wrong** (LB, #2).
+  - Tests: `test_b.py`.
+
+### Security
+- **A boundary held** (LB, #2).
+"""
+FRAG_A = """
+### Changed
+- **A thing done another way** (LA, #1).
+
+  A paragraph inside the entry, after a blank line.
+"""
+FRAG_C = "### Added\n- **A thing added** (lc, #3).\n"
+CHANGES_README = "# changes/\n\nOne lot's entry per file.\n"
+# The version's section as it must read: Security, Added, Changed, Fixed; within a section what
+# [Unreleased] held first, then each fragment by its file's name (LA, LB, then lc: case aside).
+ASSEMBLED = """### Security
+- **A boundary held** (LB, #2).
+
+### Added
+- **A release in two commands** (REL1).
+- **A thing added** (lc, #3).
+
+### Changed
+- **A thing done another way** (LA, #1).
+
+  A paragraph inside the entry, after a blank line.
+
+### Fixed
+- Something that was wrong.
+- **Something else that was wrong** (LB, #2).
+  - Tests: `test_b.py`."""
+
+
+def _with_fragments(work, fragments: dict, readme: bool = True):
+    (work / "changes").mkdir(exist_ok=True)
+    if readme:
+        (work / "changes" / "README.md").write_text(CHANGES_README, encoding="utf-8")
+    for name, text in fragments.items():
+        path = work / "changes" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", "fragments")
+    git(work, "push", "-q", "origin", "main")
+
+
+def _non_blank(text: str) -> list[str]:
+    return sorted(x for x in text.splitlines() if x.strip() and not x.startswith("### "))
+
+
+def test_fragments_are_assembled_under_the_version_in_the_order_of_sections_then_removed(repo, capsys):
+    _with_fragments(repo, {"LB.md": FRAG_B, "LA.md": FRAG_A, "lc.md": FRAG_C})
+    before = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert rel.main(["prepare", "0.4.4", "--title", "assembled", "--date", "2026-11-04"]) == 0, \
+        capsys.readouterr().out
+    after = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    heading, text = rel.section(after, "0.4.4")
+    assert heading == "assembled" and text == ASSEMBLED
+    assert rel.sections_named(text) == ["Security", "Added", "Changed", "Fixed"]
+    # No line lost, none added: [Unreleased]'s and every fragment's, each as many times.
+    assert _non_blank(text) == _non_blank(rel.unreleased(before) + FRAG_A + FRAG_B + FRAG_C)
+    assert rel.unreleased(after).strip() == ""
+    assert after.split('## [0.4.4] — 2026-11-04 — "assembled"\n\n')[0] == (
+        "# Changelog\n\nNotable changes to Eregion.\n\n## [Unreleased]\n\n")
+    assert after.endswith(before[before.index("## [0.4.3]"):])                 # the versions before, intact
+    # Removed in the version's commit, the README kept; nothing left in the tree.
+    status = git(repo, "show", "--name-status", "--format=", "HEAD").splitlines()
+    assert sorted(status) == sorted(["M\tCHANGELOG.md", "M\tREADME.md", "M\tpyproject.toml",
+                                     "D\tchanges/LA.md", "D\tchanges/LB.md", "D\tchanges/lc.md"])
+    assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]
+    assert git(repo, "status", "--porcelain") == ""
+    assert "3 fragment(s) de changes/ y sont assemblés, puis retirés" in git(repo, "log", "-1", "--format=%b")
+
+
+def test_fragments_alone_make_a_release(repo, capsys):
+    """[Unreleased] empty once every lot writes a fragment: they are enough."""
+    _empty_unreleased(repo)
+    _with_fragments(repo, {"LA.md": FRAG_A, "lc.md": FRAG_C})
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0, capsys.readouterr().out
+    _, text = rel.section((repo / "CHANGELOG.md").read_text(encoding="utf-8"), "0.4.4")
+    assert rel.sections_named(text) == ["Added", "Changed"]
+    assert _non_blank(text) == _non_blank(FRAG_A + FRAG_C)
+
+
+def test_the_dry_run_shows_the_assembly_and_writes_nothing(repo, tmp_path, capsys):
+    _with_fragments(repo, {"LB.md": FRAG_B, "LA.md": FRAG_A})
+    head = git(repo, "rev-parse", "HEAD")
+    assert rel.main(["prepare", "0.4.4", "--title", "x", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "+### Security" in out and "+- **A boundary held** (LB, #2)." in out
+    assert "changes/ : 2 fragment(s) assemblé(s) puis retiré(s) — changes/LA.md, changes/LB.md" in out
+    assert "git rm -q -- changes/LA.md changes/LB.md" in out
+    assert sorted(p.name for p in (repo / "changes").iterdir()) == ["LA.md", "LB.md", "README.md"]
+    assert git(repo, "rev-parse", "HEAD") == head and git(repo, "status", "--porcelain") == ""
+    assert gh_calls(tmp_path) == []
+
+
+@pytest.mark.parametrize("name, text, said", [
+    ("LX.md", "### Removed\n- gone\n", "changes/LX.md : ligne 1 : la section « Removed » n'est pas Security, Added"),
+    ("LX.md", "- an entry\n### Fixed\n- x\n", "changes/LX.md : ligne 1 : du texte avant la première section"),
+    ("LX.md", "### Fixed\n- x\n## [0.9.9]\n", "changes/LX.md : ligne 3 : un titre autre que « ### <section> »"),
+    ("LX.md", "### Fixed\n- x\n#### Detail\n", "un titre autre que « ### <section> » (#### Detail)"),
+    ("LX.md", "### Fixed\n\n### Added\n- x\n", "changes/LX.md : la section « Fixed » est vide"),
+    ("LX.md", "### Fixed\n- x\n### Fixed\n- y\n", "changes/LX.md : ligne 3 : la section « Fixed » deux fois"),
+    ("LX.md", "\n\n", "changes/LX.md : aucune section"),
+    ("LX.md", "###Fixed\n- x\n", "un titre autre que « ### <section> »"),
+    ("LX.md", b"### Fixed\n- caf\xe9\n", "changes/LX.md : pas en UTF-8"),
+    ("notes.txt", "### Fixed\n- x\n", "changes/notes.txt : changes/ ne tient que des fragments <lot>.md"),
+    ("sub/LX.md", "### Fixed\n- x\n", "changes/sub : changes/ ne tient que des fragments"),
+])
+def test_a_malformed_fragment_is_refused_and_nothing_is_written(repo, tmp_path, capsys, name, text, said):
+    _with_fragments(repo, {"LA.md": FRAG_A, name: text})
+    before, head = files(repo), git(repo, "rev-parse", "HEAD")
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 1
+    out = capsys.readouterr().out
+    assert refused(out, said) and "rien n'a été écrit" in out, out
+    assert files(repo) == before and git(repo, "rev-parse", "HEAD") == head
+    assert (repo / "changes" / "LA.md").exists()
+    assert [c for c in gh_calls(tmp_path) if c["args"][:2] == ["pr", "create"]] == []
+
+
+@pytest.mark.parametrize("target, said", [
+    ("LA.md", "changes/LB.md : un lien symbolique"),                 # LA assembled twice, unseen by lost()
+    ("../outside.md", "changes/LB.md : un lien symbolique"),         # a file from outside changes/
+])
+def test_a_fragment_that_is_a_symbolic_link_is_refused(repo, tmp_path, capsys, target, said):
+    (repo / "outside.md").write_text("### Fixed\n- from outside\n", encoding="utf-8")
+    _with_fragments(repo, {"LA.md": FRAG_A})
+    (repo / "changes" / "LB.md").symlink_to(target)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "a link")
+    git(repo, "push", "-q", "origin", "main")
+    before, head = files(repo), git(repo, "rev-parse", "HEAD")
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 1
+    out = capsys.readouterr().out
+    assert refused(out, said) and "rien n'a été écrit" in out, out
+    assert files(repo) == before and git(repo, "rev-parse", "HEAD") == head
+
+
+def test_the_directory_of_fragments_as_a_symbolic_link_is_refused(repo, tmp_path, capsys):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "LX.md").write_text("### Fixed\n- from elsewhere\n", encoding="utf-8")
+    (repo / "changes").symlink_to(elsewhere)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "a linked directory")
+    git(repo, "push", "-q", "origin", "main")
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 1
+    assert refused(capsys.readouterr().out, "changes : un lien symbolique")
+
+
+def test_a_git_rm_that_fails_says_it_whole_and_how_to_go_on(repo, tmp_path, capsys, monkeypatch):
+    _with_fragments(repo, {"LB.md": FRAG_B, "LA.md": FRAG_A})
+    git(repo, "switch", "-q", "--detach", "origin/main")
+    real = rel.run
+
+    def run(cmd, cwd, **kw):
+        if cmd[:2] == ["git", "rm"]:
+            raise rel.Refused("`git rm -q …` a échoué (128) : refused by the test")
+        return real(cmd, cwd, **kw)
+    monkeypatch.setattr(rel, "run", run)
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 2
+    out = capsys.readouterr().out
+    assert "échec à l'étape « rm »" in out and "les fragments de changes/ pas encore retirés" in out
+    assert "Reprendre : git rm -q -- changes/LA.md changes/LB.md && git commit, puis push et PR" in out
+    monkeypatch.setattr(rel, "run", real)
+    _went_back(repo, out)
+    assert sorted(p.name for p in (repo / "changes").iterdir()) == ["LA.md", "LB.md", "README.md"]
+
+
+def test_without_fragments_the_cut_is_as_before(repo, capsys):
+    """The transition: [Unreleased] alone is cut as it was written, its sections in its order."""
+    _with_fragments(repo, {})
+    before = files(repo)["CHANGELOG.md"]
+    assert rel.main(["prepare", "0.4.4", "--title", "x", "--date", "2026-11-04"]) == 0
+    assert files(repo)["CHANGELOG.md"] == before.replace(
+        "## [Unreleased]\n\n", '## [Unreleased]\n\n## [0.4.4] — 2026-11-04 — "x"\n\n', 1)
+    assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]
+
+
+def test_a_line_lost_or_added_by_the_assembly_is_said():
+    """The check prepare makes before writing: every line, as many times as written."""
+    frag = "- one\n- two\n- two\n"
+    assert rel.lost([frag], "### Fixed\n- one\n- two\n- two") == []
+    assert rel.lost([frag], "### Fixed\n- one\n- two") == ["- two"]
+    assert rel.lost([frag], "### Fixed\n- one\n- two\n- two\n- three") == ["- three"]
+    assert rel.lost(["### Added\n- a\n", "### Fixed\n- b\n"], "### Fixed\n- b\n\n### Added\n- a") == []
+
+
+_HARNESS_STUB = ('MUTANTS = []\nTESTS = {}\n\n\n# The mutants end here.\n\n\n'
+                 'if __name__ == "__main__":\n    pass\n')
+
+
+def _lot_branch(work, lot: str, n: int, old_way: bool) -> None:
+    """A lot in flight from main: its CHANGELOG entry and its mutants, the old way (both in the
+    shared files, at the place every lot writes) or CI5's (a file of its own, each)."""
+    git(work, "switch", "-q", "-c", f"lot/{lot}{'-old' if old_way else ''}", "main")
+    entry, mutant = f"- **Lot {lot}'s change** ({lot}, #{n}).", f'("M{n}", "a bug of {lot}", "a.py", "x", "y")'
+    if old_way:
+        log = (work / "CHANGELOG.md").read_text(encoding="utf-8")
+        (work / "CHANGELOG.md").write_text(log.replace("## [Unreleased]\n\n", f"## [Unreleased]\n\n### Fixed\n{entry}\n\n", 1),
+                                           encoding="utf-8")
+        harness = (work / "scripts" / "mutation_check.py").read_text(encoding="utf-8")
+        (work / "scripts" / "mutation_check.py").write_text(
+            harness.replace("\n\n# The mutants end here.", f"MUTANTS += [{mutant}]\n\n\n# The mutants end here.", 1),
+            encoding="utf-8")
+    else:
+        (work / "changes" / f"{lot}.md").write_text(f"### Fixed\n{entry}\n", encoding="utf-8")
+        (work / "scripts" / "mutants" / f"{lot}.py").write_text(
+            f'MUTANTS = [{mutant}]\nTESTS = {{"M{n}": "tests/unit/test_{lot.lower()}.py"}}\n', encoding="utf-8")
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", f"lot {lot}")
+    git(work, "switch", "-q", "main")
+
+
+def test_two_lots_in_flight_merge_without_conflict_and_both_are_released(repo, capsys):
+    """The probe of CI5: two branches from the same main, each with its CHANGELOG entry and its
+    mutants. The old way, the second merge conflicts (CHANGELOG.md and the harness, at the same
+    lines); CI5's way, both merge clean, the harness loads both lots, the release assembles both."""
+    mc = _load("mutation_check")
+    (repo / "scripts" / "mutants").mkdir(parents=True)
+    (repo / "scripts" / "mutation_check.py").write_text(_HARNESS_STUB, encoding="utf-8")
+    (repo / "scripts" / "mutants" / "_keep.py").write_text("", encoding="utf-8")
+    _with_fragments(repo, {})
+    for lot, n in (("LA", 9101), ("LB", 9102)):
+        _lot_branch(repo, lot, n, old_way=True)
+        _lot_branch(repo, lot, n, old_way=False)
+    head = git(repo, "rev-parse", "main")
+
+    # The old way: the first merges, the second conflicts on both shared files.
+    assert subprocess.run(["git", "merge", "-q", "--no-edit", "lot/LA-old"], cwd=repo).returncode == 0
+    second = subprocess.run(["git", "merge", "--no-edit", "lot/LB-old"], cwd=repo, capture_output=True, text=True,
+                            env={**os.environ, "LC_ALL": "C"})   # git says CONFLICT in English
+    assert second.returncode != 0
+    assert "CONFLICT (content): Merge conflict in CHANGELOG.md" in second.stdout
+    assert "CONFLICT (content): Merge conflict in scripts/mutation_check.py" in second.stdout
+    git(repo, "merge", "--abort")
+    git(repo, "reset", "-q", "--hard", head)
+
+    # CI5's way: both merge clean, in either order.
+    for lot in ("LB", "LA"):
+        merged = subprocess.run(["git", "merge", "--no-edit", f"lot/{lot}"], cwd=repo, capture_output=True, text=True,
+                                env={**os.environ, "LC_ALL": "C"})
+        assert merged.returncode == 0 and "CONFLICT" not in merged.stdout, merged.stdout
+    lots = {p.name: mc.load_lot(p) for p in mc.lot_files(repo / "scripts" / "mutants")}
+    assert {name: [m[0] for m in lot["MUTANTS"]] for name, lot in lots.items()} == {
+        "LA.py": ["M9101"], "LB.py": ["M9102"]}
+    git(repo, "push", "-q", "origin", "main")
+    assert rel.main(["prepare", "0.4.4", "--title", "two lots"]) == 0, capsys.readouterr().out
+    _, text = rel.section((repo / "CHANGELOG.md").read_text(encoding="utf-8"), "0.4.4")
+    assert text.split("### Fixed\n")[1].splitlines() == [
+        "- Something that was wrong.", "- **Lot LA's change** (LA, #9101).", "- **Lot LB's change** (LB, #9102)."]
+    assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]
+
+
+def test_the_repository_s_fragments_are_well_formed():
+    """A fragment malformed fails its own pull request, never the release that comes later."""
+    found, faults = rel.fragments(ROOT)
+    assert faults == []
+    for rel_path, parts in found:
+        assert parts and all(name in rel.KINDS for name, _ in parts), rel_path

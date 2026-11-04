@@ -25,6 +25,7 @@ import concurrent.futures
 import json
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -4685,7 +4686,7 @@ MUTANTS += [
     ("M1161", "the current version released again: equal is not greater (REL1)", RELS,
      "new <= semver(current)", "new < semver(current)"),
     ("M1162", "an empty [Unreleased] released: a version with nothing in it (REL1)", RELS,
-     "    if not has_content(unreleased(changelog)):\n        refused.append(", "    if False:\n        refused.append("),
+     "    elif not has_content(unreleased(changelog)) and not frags:\n        refused.append(", "    elif False:\n        refused.append("),
     ("M1163", "a release cut from a HEAD that is not origin/main (REL1)", RELS,
      "    if head != main:\n", "    if False:\n"),
     ("M1164", "a draft created for a tag that exists already (REL1)", RELS,
@@ -4707,7 +4708,7 @@ TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1160, 1170)})
 ADS = "scripts/agents_discord.py"
 MUTANTS += [
     ("M1430", "a push or a pull request that fails after the branch exists said « nothing written » (REL1)", RELS,
-     "        raise Halfway(_halfway(step, branch, str(e))) from None\n", "        raise\n"),
+     "        raise Halfway(_halfway(step, branch, str(e), removed)) from None\n", "        raise\n"),
     ("M1431", "an [Unreleased] of headings only released: a version with nothing in it (REL1)", RELS,
      '    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())\n',
      "    return bool(text.strip())\n"),
@@ -10430,7 +10431,50 @@ MUTANTS += [
      "\t@case \"$$EREGION_CHECK_TIMEOUT\" in ''|0*|*[!0-9]*)", "\t@case \"\" in no)"),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
-
+# L1O (#507): « reposé une fois » ends its episode in the write of `reasserted_at` — the drift marks
+# taken off, the episode over in memory first; a put-back that doesn't hold whole marks a new one after its
+# card. Gone again before the next pass: said « une deuxième fois », never written again. M3540–M3544.
+_L1O_END = ("        episode(ref or vm, ip, over=True)\n"
+            "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n")
+MUTANTS += [
+    ("M3540", "« reposé une fois » keeps the episode open: gone again before the next pass, unsaid (L1O)", R,
+     _L1O_END, "        _update_block_entry(ref or vm, ip, reasserted_at=now)\n"),
+    ("M3541", "the episode ended on disk alone: its write refused, the rules still gone unsaid (L1O)", R,
+     _L1O_END,
+     "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n"),
+    ("M3542", "the episode ended in memory alone: the marks of « said » left on disk (L1O)", R,
+     _L1O_END, "        episode(ref or vm, ip, over=True)\n"
+               "        _update_block_entry(ref or vm, ip, reasserted_at=now)\n"),
+    ("M3543", "the put-back unmarked: put back again at every disappearance (L1O, L1Q)", R,
+     _L1O_END, "        episode(ref or vm, ip, over=True)\n"
+               "        _update_block_entry(ref or vm, ip, drift_alerted_at=None, drift_said=None)\n"),
+    ("M3544", "a put-back that doesn't hold whole left unmarked: « une deuxième fois » at every pass (L1O)", R,
+     '    if outcome != "reapplied":\n        # "Already alerted" is written only once the card exists.',
+     '    if outcome == "failed":\n        # "Already alerted" is written only once the card exists.'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py -k l1o" for n in range(3540, 3545)})
+# L1O's review: the closure in memory alone (`over=False` emptied `_NARROWED` too, so nothing held it),
+# and the first time (L1Qs) ending the episode in its own write of `reasserted_at`. M3545–M3548.
+_L1O_FIRST = ("                    episode(ref, ip, over=True)\n"
+              "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat(),\n"
+              "                                        drift_alerted_at=None, drift_said=None)\n")
+MUTANTS += [
+    ("M3545", "« reposé une fois » reopens the episode in memory: after a restart and a refused write, gone "
+              "again in silence (L1O, review)", R, _L1O_END,
+     "        episode(ref or vm, ip, over=False)\n"
+     "        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)\n"),
+    ("M3546", "the first time keeps the marks on disk (L1O, review)", "glorfindel/reassert_perimeters.py",
+     _L1O_FIRST, "                    episode(ref, ip, over=True)\n"
+                 "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat())\n"),
+    ("M3547", "the first time leaves the episode open in memory: its write refused, gone again unsaid (L1O, review)",
+     "glorfindel/reassert_perimeters.py", _L1O_FIRST,
+     "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat(),\n"
+     "                                        drift_alerted_at=None, drift_said=None)\n"),
+    ("M3548", "the first time never ends the episode: the second time skipped, the pair gone again unsaid "
+              "(L1O, review)", "glorfindel/reassert_perimeters.py", _L1O_FIRST,
+     "                    _update_block_entry(ref, ip, reasserted_at=r.datetime.now(timezone.utc).isoformat())\n"),
+]
+TESTS.update({f"M{n}": "tests/unit/test_reassert.py -k l1o" for n in range(3545, 3549)})
 
 # L1W (#492): a perimeter pair another VM's block wrote again, gone again before any pass — no reading
 # shows the write: Glorfindel notes its own writes of a pair (`response/pair_journal.py`, before the write),
@@ -10675,6 +10719,42 @@ TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(351
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;
 # tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).
+
+# The blocks above stay where they are. A lot's mutants now go into a file of their own,
+# scripts/mutants/<lot>.py, loaded here (CI5, #512): two lots in flight never write the same lines
+# of this file, so the merge of one never puts the other in conflict. A lot's file defines
+#   MUTANTS = [(id, bug class, file, text in the code today, text that re-introduces the bug[, why]), …]
+#   TESTS = {id: "test paths", …}        # its own ids only; the invariants when absent
+#   TESTS_ALSO = {id: "test paths", …}   # optional: tests added to another mutant's, at its end
+#   CONTROL = […]                        # optional, rare: the control set
+# and its paths as plain strings (it imports nothing of this file). A mutant that renames its file
+# names RENAME, which the loader gives it. scripts/mutant_anchors.py checks them as the others: an
+# id taken twice, in two files or here, is a fault naming each place.
+LOTS_DIR = REPO / "scripts" / "mutants"
+
+
+def lot_files(where: Path = LOTS_DIR) -> list[Path]:
+    """The lots' files, by name; `_…` ones (helpers) aside."""
+    return sorted((p for p in where.glob("*.py") if not p.name.startswith("_")), key=lambda p: p.name.casefold())
+
+
+def load_lot(path: Path) -> dict:
+    """What a lot's file defines: its MUTANTS, TESTS, TESTS_ALSO and CONTROL."""
+    ns = runpy.run_path(str(path), init_globals={"RENAME": RENAME})
+    return {"MUTANTS": list(ns.get("MUTANTS", [])), "TESTS": dict(ns.get("TESTS", {})),
+            "TESTS_ALSO": dict(ns.get("TESTS_ALSO", {})), "CONTROL": list(ns.get("CONTROL", []))}
+
+
+# Each lot's file, by its path from the repository's root: what it defines.
+LOTS = {p.relative_to(REPO).as_posix(): load_lot(p) for p in lot_files()}
+for _lot in LOTS.values():
+    MUTANTS += _lot["MUTANTS"]
+    CONTROL += _lot["CONTROL"]
+    _own = {m[0] for m in _lot["MUTANTS"] + _lot["CONTROL"]}
+    TESTS.update({mid: t for mid, t in _lot["TESTS"].items() if mid in _own})   # never another's
+for _lot in LOTS.values():
+    for _mid, _also in _lot["TESTS_ALSO"].items():
+        TESTS[_mid] = f"{TESTS.get(_mid, INVARIANTS)} {_also}"
 
 
 

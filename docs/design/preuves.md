@@ -1508,6 +1508,15 @@ retient l'écriture). Mutants **M3550** (le verrou propre de nouveau : le code d
 (sans verrou : un refus perdu), **M3552** (le verrou sur `readiness.json.lock`) et **M3553**
 (`_file_lock` importé au chargement, hors de portée de la machine), attrapés 2/2.
 
+**Mesures d'I11g.** Invariants avec le correctif, `--hypothesis-seed=N`, quatre à la fois : à 60
+séquences, N = 1..20, **20/20 vertes** ; à 500, N = 1..7 et 43, **6/8 vertes**, la graine 43 comprise.
+Les graines 1 et 6 tombent sur L1 (« the block on …/web » et « …/Db--01 vanished from Azure; the
+reassertion neither put it back nor said so »), **les mêmes sur `main` 8710dba7** (l'arbre de `main`
+extrait, même graine, même VM) : un blocage acquitté puis réécrit (`blocked_again_after_an_acknowledged_drift`,
+`operator_acknowledges`), la famille de L1W (#492), hors du lot. Aucun « never came back » sur les
+28 graines. `pytest` complet : 6 518 réussis, 7 sautés, 1 `xfail` ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 605 mutants et 32 du jeu de contrôle, sans faute.
+
 **SEC4b (29/10, #275) : un état illisible, un contournement, des propositions perdues.** La
 machine n'écrit jamais d'état illisible : les lecteurs qui concluaient « personne » d'un fichier
 qu'ils ne lisaient pas (`_held_in_quarantine` pour `verify_release`, `_recorded_original` pour la

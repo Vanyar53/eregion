@@ -121,7 +121,9 @@ jobs:
   # Linux CI could not see it.
   # CI5 (#512): on a push to main and every night, never on a pull request — GitHub often never
   # acquires a macOS runner (« The job was not acquired by Runner »), and the sessions' App cannot
-  # re-run it. Not a required check any more (docs/operations.md, « La CI, plus rapide »).
+  # re-run it. Not a required check any more (docs/operations.md, « La CI, plus rapide »). A macOS
+  # red or cancelled on a release's commit makes H0's CD refuse to deploy it: Jonathan re-runs the
+  # job (the App cannot) before publishing.
   test-macos:
     name: tests (macOS, case-insensitive file system)
     if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
@@ -160,13 +162,15 @@ jobs:
         run: python -m pytest tests/unit/test_glorfindel.py tests/unit/test_readiness.py tests/unit/test_reassert.py tests/unit/test_invariants.py tests/unit/test_invariant_regressions.py -q -o faulthandler_timeout=480
 
   # CI5 (#512): macOS no longer runs on a pull request, so its red on main is the first sign — an
-  # issue says it, or a comment on the one still open (by its exact title). `issues: write` here
+  # issue says it, or a comment on the one still open (by its exact title, opened by this workflow:
+  # github-actions). Cancelled counts as red: a timeout or a runner never acquired says
+  # `cancelled`, nothing cancels a run of main, and H0's CD counts it red. `issues: write` here
   # alone, never on a pull request, and nothing of the repository runs: no checkout, no action,
   # only gh with this text — it writes no key of the dependency audit's issues (SEC7).
   macos-red:
     name: macOS red on main, an issue
     needs: test-macos
-    if: ${{ !cancelled() && needs.test-macos.result == 'failure' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+    if: ${{ !cancelled() && (needs.test-macos.result == 'failure' || needs.test-macos.result == 'cancelled') && (github.event_name == 'push' || github.event_name == 'schedule') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -180,11 +184,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SHA: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
+          RESULT: ${{ needs.test-macos.result }}
         run: |
-          body="Le job « tests (macOS, case-insensitive file system) » est rouge sur main ($EVENT), au commit $SHA : $RUN_URL
+          body="Le job « tests (macOS, case-insensitive file system) » est rouge ou annulé sur main ($EVENT : $RESULT), au commit $SHA : $RUN_URL
 
-          Il ne tourne plus sur les PR (CI5, #512) : ce rouge est le premier signe. Fermer l'issue quand main est vert sur macOS."
-          open=$(gh issue list --state open --limit 500 --json number,title \
+          Il ne tourne plus sur les PR (CI5, #512) : ce rouge est le premier signe. Un macOS rouge ou annulé sur le commit d'une release fait refuser son déploiement par le CD de H0 : relancer le job (l'App ne le peut pas) avant de publier. Fermer l'issue quand main est vert sur macOS."
+          open=$(gh issue list --state open --author app/github-actions --limit 500 --json number,title \
             | python3 -c 'import json, os, sys; print(next((str(i["number"]) for i in json.load(sys.stdin) if i["title"] == os.environ["TITLE"]), ""))')
           if [ -n "$open" ]; then
             gh issue comment "$open" --body "$body"

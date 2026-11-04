@@ -1102,43 +1102,66 @@ def test_the_night_of_ci_yml_is_macos_s_alone():
 
 
 def test_a_red_macos_on_main_opens_an_issue_or_comments_the_open_one():
+    """Red or cancelled: a timeout or a runner never acquired says `cancelled`, nothing cancels a
+    run of main, and H0's CD counts it red (CI5, review)."""
     job = _load(CI)["jobs"]["macos-red"]
     assert job["needs"] == "test-macos" and isinstance(job.get("timeout-minutes"), int)
     when = {(e, r): bool(_expr(job["if"], e, needs={"test-macos": r}))
             for e in EVENTS for r in ("failure", "success", "skipped", "cancelled")}
-    assert {k for k, v in when.items() if v} == {("push", "failure"), ("schedule", "failure")}
+    assert {k for k, v in when.items() if v} == {("push", "failure"), ("schedule", "failure"),
+                                                 ("push", "cancelled"), ("schedule", "cancelled")}
     assert _expr(job["if"], "push", needs={"test-macos": "failure"}, cancelled=True) is False
 
 
-def _fake_gh(bin_: Path, log: Path, issues: list) -> None:
+# A fake gh: each call logged on one line; `issue list` answers the issues given, only those of the
+# author asked for when --author is passed, as GitHub filters them.
+_FAKE_GH_LIST = r'''
+author=""; prev=""
+for a in "$@"; do [ "$prev" = "--author" ] && author="$a"; prev="$a"; done
+AUTHOR="$author" python3 -c 'import json, os, sys; a = os.environ["AUTHOR"]; print(json.dumps([i for i in json.load(open(sys.argv[1])) if not a or i["author"] == a]))' "$ISSUES"
+'''
+
+
+def _fake_gh(bin_: Path, log: Path, issues: list) -> Path:
     import json
+    data = bin_.parent / "issues.json"
+    data.write_text(json.dumps(issues))
     _fake(bin_ / "gh", f'printf "gh %s\\n" "$(printf "%s" "$*" | tr "\\n" " ")" >> {log}\n'
-                       f'if [ "$1 $2" = "issue list" ]; then echo \'{json.dumps(issues)}\'; fi\n')
+                       f'if [ "$1 $2" = "issue list" ]; then {_FAKE_GH_LIST}fi\n')
+    return data
+
+
+BOT = "app/github-actions"
+TITLE = "CI : les tests macOS sont rouges sur main"
 
 
 @pytest.mark.parametrize("issues, expected", [
     ([], "create"),
-    ([{"number": 3, "title": "CI : les tests macOS sont rouges sur main (autre)"}], "create"),
-    ([{"number": 9, "title": "CI : les tests macOS sont rouges sur main"}], "comment"),
+    ([{"number": 3, "title": TITLE + " (autre)", "author": BOT}], "create"),
+    ([{"number": 5, "title": TITLE, "author": "someone"}], "create"),          # the same title, not ours
+    ([{"number": 5, "title": TITLE, "author": "someone"}, {"number": 9, "title": TITLE, "author": BOT}],
+     "comment"),
 ])
 def test_the_issue_script_creates_one_or_comments_the_open_one(tmp_path, issues, expected):
     job = _load(CI)["jobs"]["macos-red"]
     (step,) = job["steps"]
     bin_, log = tmp_path / "bin", tmp_path / "gh.log"
     bin_.mkdir()
-    _fake_gh(bin_, log, issues)
+    data = _fake_gh(bin_, log, issues)
     env = {k: str(v) for k, v in step["env"].items() if "${{" not in str(v)}
-    env |= {"RUN_URL": "https://example.org/run/1", "SHA": "abc123", "EVENT": "push", "GH_TOKEN": "t", "GH_REPO": "o/r"}
+    env |= {"RUN_URL": "https://example.org/run/1", "SHA": "abc123", "EVENT": "push", "RESULT": "cancelled",
+            "GH_TOKEN": "t", "GH_REPO": "o/r", "ISSUES": str(data)}
     res = _sh(step["run"], env, tmp_path, bin_)
     assert res.returncode == 0, res
     calls = log.read_text().splitlines()
-    assert calls[0].startswith("gh issue list --state open")
+    assert calls[0].startswith(f"gh issue list --state open --author {BOT} "), calls
     assert len(calls) == 2, calls
     if expected == "create":
-        assert calls[1].startswith("gh issue create --title CI : les tests macOS sont rouges sur main --body ")
+        assert calls[1].startswith(f"gh issue create --title {TITLE} --body ")
     else:
         assert calls[1].startswith("gh issue comment 9 --body ")
-    assert "abc123" in calls[1] and "https://example.org/run/1" in calls[1] and "(push)" in calls[1]
+    assert "abc123" in calls[1] and "https://example.org/run/1" in calls[1] and "(push : cancelled)" in calls[1]
+    assert "rouge ou annulé" in calls[1] and "relancer le job" in calls[1]
 
 
 PR_WORKFLOWS = ("ci.yml", "images.yml", "components.yml")

@@ -1505,36 +1505,91 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
         return _friendly_azure_error(e, action)
 
 
-@app.post("/api/action/block-promote/{vm_name}")
-async def action_block_promote(vm_name: str) -> dict:
-    """Extend an existing VM-scoped block to the whole subnet (all VMs).
+def _vm_block(vm_name: str, ip: str) -> tuple[dict | None, str]:
+    """The active block of `ip` on the VM the console names (CON-K): the row's own block, never
+    the VM's first one. The VM resolved as every action resolves it (two VMs of that name:
+    refused, AmbiguousVM); the IP matched against its blocks, never taken as the request gives it.
+    (block, "") or (None, why)."""
+    from glorfindel.actions import active_blocks
 
-    Reads the IP from the active block and re-blocks with scope="subnet", replace=True.
-    The connector places the subnet-wide rule first, then removes the redundant VM rule
-    (create-then-delete) → no protection window. Operator decision, never autonomous.
-    """
-    from glorfindel.actions import AzureConnector, active_blocks
-
-    block = next(
-        (b for b in active_blocks() if b["resource_id"].split("/")[-1] == vm_name),
-        None,
-    )
-    if not block:
-        return {"error": f"No active block found for {vm_name}"}
-    ip = block.get("ip", "")
-    rid = block["resource_id"]
+    ip = (ip or "").strip()
     if not ip:
-        return {"error": f"Active block for {vm_name} has no IP"}
+        return None, f"Which IP? A block of {vm_name} is acted on by its IP, never guessed."
+    resource_id = _find_resource_id(vm_name)
+    if not resource_id:
+        return None, f"No active block found for {vm_name}"
+    want = resource_id.rstrip("/").lower()
+    block = next((b for b in active_blocks()
+                  if (b.get("resource_id") or "").rstrip("/").lower() == want and b.get("ip") == ip), None)
+    if not block:
+        return None, f"{ip} is not blocked on {vm_name} (already removed?)"
+    return block, ""
+
+
+def _promotion_said(result: dict) -> list[str]:
+    """What a promotion leaves short of the whole subnet (CON-K), each said as the connector says
+    it: the VM's NICs the subnet rule does not cover or could not read, the rules it kept (I4P),
+    an allow that passes before the deny, the ports it leaves reachable. Empty only when the
+    subnet rule holds for the VM whole — the one case the console says « the whole subnet »."""
+    said = []
+    if result.get("uncovered_nics"):
+        said.append("Not behind the subnet rule, on another subnet: "
+                    + ", ".join(str(n) for n in result["uncovered_nics"])
+                    + f" — {result.get('ip', 'the IP')} still reaches them; block the VM too to cut them off.")
+    if result.get("nics_unread"):
+        said.append(f"The VM's NICs unreadable ({result['nics_unread']}): what the subnet rule covers "
+                    "of it is unverified.")
+    said += [f"Kept by the promotion: {k}" for k in result.get("kept_rules") or []]
+    said += [str(result[k]) for k in ("bypass", "exposure") if result.get(k)]
+    if result.get("status") != "blocked" and not said:
+        said.append(f"Status {result.get('status') or 'unknown'}: {result.get('note') or 'nothing said'}")
+    return said
+
+
+@app.post("/api/action/block-promote/{vm_name}")
+async def action_block_promote(vm_name: str, ip: str = "") -> dict:
+    """Extend ONE VM-scoped block to the whole subnet (all VMs) — the block of `ip`, the row's.
+
+    Re-blocks that IP with scope="subnet", replace=True. The connector places the subnet-wide
+    rule first, then removes the redundant VM rule (create-then-delete) → no protection window.
+    Operator decision, never autonomous. The outcome says what the subnet rule leaves out
+    (`said`, `whole`): a partial promotion is never told as the whole subnet (CON-K).
+    """
+    from glorfindel.actions import AzureConnector
+
+    block, why = _vm_block(vm_name, ip)
+    if not block:
+        return {"error": why}
+    if block.get("scoped", True) is False:
+        return {"error": f"{block['ip']} is already blocked for the whole subnet ({block.get('nsg', '?')})"}
 
     try:
         connector = AzureConnector(dry_run=False)
         result = await asyncio.to_thread(
-            connector.block_suspicious_ip, ip, rid, "subnet", True)
-        return {"ok": True, "ip": ip, "scope": "subnet", "result": result}
+            connector.block_suspicious_ip, block["ip"], block["resource_id"], "subnet", True)
+        said = _promotion_said(result)
+        return {"ok": True, "ip": block["ip"], "scope": "subnet", "result": result,
+                "said": said, "whole": not said}
     except PermissionError as e:
         return {"error": str(e), "permission_denied": True}
     except Exception as e:
         return _friendly_azure_error(e, "block_suspicious_ip")
+
+
+@app.post("/api/action/unblock/{vm_name}")
+async def action_unblock(vm_name: str, ip: str = "") -> dict:
+    """Unblock ONE IP of this VM (CON-K): the VM's other blocks and its isolation stay. Through
+    the CLI, as a release is (`glorfindel unblock`: the connector's unblock, the state, the manual
+    action recorded; a partial unblock exits 2, its remaining rules in its output)."""
+    block, why = _vm_block(vm_name, ip)
+    if not block:
+        return {"error": why}
+    result = await asyncio.to_thread(
+        subprocess.run,
+        [_bin(), "unblock", "--yes", "--", block["ip"], block["resource_id"]],
+        capture_output=True, text=True, timeout=600,   # one rule pair per NIC; cut midway = half unblocked
+    )
+    return {**_subprocess_result(result), "ip": block["ip"]}
 
 
 @app.post("/api/action/snapshot/{vm_name}")

@@ -529,7 +529,7 @@ glorfindel restore <resource_id> --yes          # Azure Backup restore: newest p
 glorfindel jobs <vm-name> [--refresh]           # snapshot/restore job status
 glorfindel list                                 # all VMs with active actions (isolation + blocked IPs)
 #
-# Console buttons:    ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (both)
+# Console buttons:    ↩️ Release (isolated) | ↩️ Unblock (that IP alone) | ⟳ Reset (both)
 # TUI keyboard:       x:release  u:unblock  v:reset  r:restore
 glorfindel pending                              # list pending escalations
 glorfindel pending --watch                      # stay running, print new escalations as they arrive

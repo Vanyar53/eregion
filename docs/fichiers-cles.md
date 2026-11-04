@@ -252,7 +252,7 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           Langage couleur : orange = peut agir, bleu = observe. Tue « absence de badge = actif ».
                           Mode autonomie : dropdown de Config (défaut global) + badge par carte cliquable
                           → popover capacité (ce que Glorfindel fait seul par mode, lit /api/state.capability)
-                          boutons ↩️ Release (isolated) | ↩️ Unblock (blocked IP) | ⟳ Reset (les deux) | 🔄 Restore
+                          boutons ↩️ Release (isolated) | ↩️ Unblock (cette IP seule) | ⟳ Reset (les deux) | 🔄 Restore
                           grisage read-only préventif (_applyReadOnlyGuards) : write désactivés en observe-only,
                           Ack/Cmd restent actifs. Badge VM OFFLINE (heartbeat >15min, reste grisée, rétention 8h).
                           Approve & execute paramétré : block_suspicious_ip en 1-clic (action_params.ip ou invite)

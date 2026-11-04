@@ -25,6 +25,7 @@ tourne.
 | Lots | **UI-1** : le socle, les sections modulaires et les corrections de doublons. **UI-2** : les cinq indicateurs. **Un lot Annatar et Gothmog** pour la vérification avant d'agir | un seul lot ; trois lots UI |
 | Carte sur un NSG (#248) | **une tuile NSG**, dans la rangée des VM : son nom, son groupe de ressources, ses cartes ; ni mode, ni sauvegarde, ni Snapshot | sous le nœud PROTECT ; garder la tuile de VM |
 | Ce que Glorfindel a fait seul (#248) | **une ligne verte sur la tuile, 24 h** : la note d'une carte qu'il a résolue lui-même (A3 : règle orpheline retirée) | dans le fil en direct ; rien dans la console |
+| Les blocages d'une VM (CON-K, 03/11) | **A, un résumé et une fenêtre** : repliée ou dépliée, la carte dit « BLOCKED ×N IPs · newest … · oldest … » ; dépliée, elle garde la dernière décision (son raisonnement) et « Manage the N blocks ▸ », qui ouvre la fenêtre : tous les blocages, du plus récent au plus ancien, filtrables, chacun avec « Extend to subnet » et « Unblock ». Un seul blocage : montré avec ses boutons, sans fenêtre | B : les trois plus récents et « and N more » ; C : une liste repliable qui défile dans la carte |
 
 **Choisi par défaut, sans objection :**
 - `/atelier` redirige vers `/`.
@@ -271,6 +272,35 @@ Après I1F, AL1, C2 et A3 (27/10) :
 - M573 : le fil perd `held_by`.
 - M574 : une résolution reste sur la tuile au-delà de 24 h.
 - M575 : un acquittement passe pour un geste de Glorfindel.
+
+### Les blocages d'une VM (CON-K, #498, 04/11)
+
+Avant : dépliée, une carte rattachait à sa ligne de décision le premier blocage de la VM et taisait
+les autres, dès qu'une décision de blocage avait moins de 24 h ; repliée, un badge par adresse
+l'allongeait sans fin. « Extend to subnet » promouvait le premier blocage de la VM, quelle que soit
+la ligne, et disait « the whole subnet » quoi que la promotion laisse de côté. « Unblock » lançait un
+`reset` : tous les blocages et l'isolation.
+
+- **La carte** (décision A du 03/11) : plusieurs blocages tiennent en une ligne (`_blocksSummary` :
+  leur nombre, l'âge du plus récent et du plus ancien), repliée comme dépliée ; la carte garde sa
+  hauteur. La fenêtre (`showBlocks`) les liste du plus récent au plus ancien, filtrables par adresse
+  ou NSG, chacun avec ses boutons. Un seul : montré avec ses boutons. Un blocage étendu au sous-réseau
+  reste sur la carte PROTECT.
+- **Chaque bouton nomme son adresse** : `POST /api/action/block-promote/<vm>?ip=…` et
+  `POST /api/action/unblock/<vm>?ip=…`. L'adresse est cherchée parmi les blocages actifs de cette VM
+  (`_vm_block`) : sans adresse, ou une qu'elle ne bloque pas, la route refuse et rien ne part ; deux VM
+  de ce nom, refusé (T1). « Unblock » lance `glorfindel unblock --yes -- <ip> <id>` : les autres
+  blocages et l'isolation restent ; un retrait partiel (code 2) est dit en échec. Le bouton « Unblock »
+  d'un blocage étendu au sous-réseau, sur la carte PROTECT, aussi.
+- **La promotion dit ce qu'elle laisse de côté** (`_promotion_said`) : une carte réseau sur un autre
+  sous-réseau, ou illisible (`blocked_partial`) ; une règle gardée par la promotion (I4P,
+  `kept_rules`) ; une autorisation qui passe avant le deny (`bypass`) ; d'autres ports encore
+  joignables (`exposure`). Chacun est nommé comme le connecteur le nomme, échappé, dans une fenêtre.
+  « Extended to the whole subnet » n'apparaît que si la réponse dit `whole`.
+- **Le conseil des drills** (suite de DG-d) : pour un nom que portent plusieurs VM inscrites, la
+  commande dit « load it on the board and choose the VM there ». Enregistré de nouveau, le drill
+  nommerait la VM de la même façon.
+- Tests : `tests/unit/test_console_blocks.py`.
 
 ### Ce qui vient du dehors (#254)
 

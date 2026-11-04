@@ -455,7 +455,7 @@ def request_from(drill: Drill, vms: list[dict], targets: list[str] | str | None,
             else:
                 said = " | ".join(f"{c.name} (group {c.resource_id.split('/')[4]}, zone {c.zone})" for c in p.candidates)
                 lines.append(f"  wire {p.rank} ({p.experiment}): {p.why}" + (
-                    f" — {said}: save the drill again from the board, on the VM meant" if said else ""))
+                    f" — {said}: load it on the board and choose the VM there" if said else ""))
         hint = "\n  give TARGETS=<vm>,<vm>… or TARGETS=all" if any(p.zone for p in waiting) else ""
         raise DrillRefused(f"the drill {drill.name} is not placed:\n" + "\n".join(lines) + hint)
     wires = pairs(placed)

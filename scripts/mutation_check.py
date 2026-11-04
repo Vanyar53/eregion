@@ -10135,6 +10135,49 @@ MUTANTS += [
      "-v $$HOME:/app/runs $(ORO_IMAGE) python -m eregion_core.runs_layout migrate"),
 ]
 TESTS.update({f"M{n}": _SEC20 for n in range(3400, 3410)})
+# CON-K (#498): a VM's blocks in the console — each button acts on its row's IP (never the VM's first
+# block), an unblock takes off that IP alone (never a reset), a promotion says what it leaves out of
+# the subnet (never « the whole subnet » then), the card says several blocks in one line; and the
+# drills' advice for an ambiguous name. M3387–M3389, M3460–M3469.
+_CONK = "tests/unit/test_console_blocks.py"
+MUTANTS += [
+    ("M3387", "a row's button acts on the VM's first block, whatever its IP (CON-K)", CON,
+     '(b.get("resource_id") or "").rstrip("/").lower() == want and b.get("ip") == ip), None)',
+     '(b.get("resource_id") or "").rstrip("/").lower() == want), None)'),
+    ("M3388", "no IP named: the VM's first block taken in its place (CON-K)", CON,
+     '        return None, f"Which IP? A block of {vm_name} is acted on by its IP, never guessed."\n',
+     '        ip = next((b.get("ip") for b in active_blocks() if (b.get("resource_id") or "")'
+     '.rstrip("/").split("/")[-1] == vm_name), "")\n'),
+    ("M3389", "the IP of another VM's block taken for this VM's (CON-K)", CON,
+     '                  if (b.get("resource_id") or "").rstrip("/").lower() == want and b.get("ip") == ip',
+     '                  if b.get("ip") == ip'),
+    ("M3460", "a block already subnet-wide promoted again (CON-K)", CON,
+     '    if block.get("scoped", True) is False:\n', "    if False:\n"),
+    ("M3461", "a promotion always said whole, whatever it leaves out (CON-K)", CON,
+     '"said": said, "whole": not said}', '"said": said, "whole": True}'),
+    ("M3462", "a NIC on another subnet, which the attacker still reaches, never named (CON-K)", CON,
+     '    if result.get("uncovered_nics"):\n', "    if False:\n"),
+    ("M3463", "a rule the promotion kept (I4P) never said (CON-K)", CON,
+     '    said += [f"Kept by the promotion: {k}" for k in result.get("kept_rules") or []]\n',
+     "    said += []\n"),
+    ("M3464", "an allow that passes before the subnet deny never said (CON-K)", CON,
+     'for k in ("bypass", "exposure")', 'for k in ("exposure",)'),
+    ("M3465", "a row's Unblock runs a reset: every block and the isolation taken off (CON-K)", CON,
+     '[_bin(), "unblock", "--yes", "--", block["ip"], block["resource_id"]],',
+     '[_bin(), "reset", block["resource_id"], "--yes"],'),
+    ("M3466", "the page says « the whole subnet » on any promotion that ran (CON-K)", GJS,
+     "if (d.whole === true) toast(", "if (d.ok) toast("),
+    ("M3467", "the decision row shows the VM's first block alone, the others hidden (CON-K)", GJS,
+     "badge   = blocks.length > 1 ? _blocksSummary(blocks, vm_name) : _blockBadge(blocks[0], vm_name);",
+     "badge   = _blockBadge(blocks[0], vm_name);"),
+    ("M3468", "« Extend to subnet » sent without its row's IP (CON-K)", GJS,
+     "_on('click', 'confirmExtendSubnet', vmName, s.ip)", "_on('click', 'confirmExtendSubnet', vmName)"),
+    ("M3469", "an ambiguous name's advice: save the drill again, as ambiguous as before (CON-K)",
+     "eregion_core/drill.py", "load it on the board and choose the VM there",
+     "save the drill again from the board, on the VM meant"),
+]
+TESTS.update({**{f"M{n}": _CONK for n in (3387, 3388, 3389, *range(3460, 3469))},
+              "M3469": "tests/unit/test_drill.py"})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

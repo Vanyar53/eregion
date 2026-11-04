@@ -218,6 +218,10 @@ def test_a_name_that_several_enrolled_vms_bear_takes_none_never_one_unsaid():
     said = str(refused.value)
     assert "names 2 enrolled VMs here" in said and "group rg-celebrimbor-twin, zone twin" in said
     assert "group rg-celebrimbor, zone bench" in said
+    # The board chooses among them, the drill loaded (CON-K): saved again, it would name the VM
+    # the same way, as ambiguous as before.
+    assert said.endswith("vm-celebrimbor-gondolin (group rg-celebrimbor-twin, zone twin): "
+                         "load it on the board and choose the VM there"), said
 
 
 def test_a_layer_past_its_bound_says_how_many_are_not_listed(tmp_path, monkeypatch):

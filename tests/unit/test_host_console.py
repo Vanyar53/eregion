@@ -12,6 +12,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -291,6 +292,37 @@ def test_push_checks_the_token_before_anything_reaches_the_vm():
     recipe = text.split("\nglorfindel-host-push: glorfindel-host-known\n", 1)[1].split("\n\n", 1)[0]
     check = recipe.index("host_env.py --check infra/glorfindel-host/host.env")
     assert check < recipe.index("scp ")
+
+
+def test_a_model_change_checks_its_key_before_anything_is_written():
+    """OL1: `make glorfindel-host-model` rewrote GLORFINDEL_LLM_MODEL here and on the VM with no
+    check — H0 restarted without its new model's key. The rule runs first, on a copy."""
+    text = (ROOT / "Makefile").read_text(encoding="utf-8")
+    recipe = text.split("\nglorfindel-host-model: glorfindel-host-known\n", 1)[1].split("\n\n", 1)[0]
+    check = recipe.index("host_env.py --check $$c")
+    assert check < recipe.index("sed -i") < recipe.index("$(HOST_SSH)")
+
+
+@needs_make
+@pytest.mark.parametrize("model, refused", [("ollama/llama3.1", True), ("openai/gpt-4o", False)])
+def test_a_model_change_refused_writes_nothing_here_nor_on_the_vm(tmp_path, model, refused):
+    """Refused (an Ollama model without its address), host.env is left as it was and no ssh
+    runs — HOST_SSH is `false` here: reached, it fails the target all the same, after host.env
+    took the new model."""
+    content = f"{NEW}={TOK_NEW}\nOPENAI_API_KEY=fake-key\nGLORFINDEL_LLM_MODEL=openai/gpt-4o-mini\n"
+    path = _host_env(tmp_path, content)
+    res = _make(tmp_path, "glorfindel-host-model", f"MODEL={model}", f"HOST_ENV={path}",
+                "HOST_IP=203.0.113.9", "HOST_SSH=false", "HOST_SSH_FINGERPRINT=",
+                f"PYTHON={sys.executable}")
+    assert res.returncode != 0                     # refused, or the fake ssh reached
+    written = path.read_text(encoding="utf-8")
+    if refused:
+        assert written == content
+        assert "rien d'écrit" in res.stdout and "GLORFINDEL_LLM_BASE_URL" in res.stderr
+        assert TOK_NEW not in res.stdout + res.stderr and "fake-key" not in res.stdout + res.stderr
+    else:
+        assert written.endswith(f"GLORFINDEL_LLM_MODEL={model}\n")
+        assert "rien d'écrit" not in res.stdout
 
 
 @needs_make

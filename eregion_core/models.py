@@ -76,15 +76,18 @@ def model_provider(model: str) -> str:
 
 
 def required_env(model: str, base_url: str = "") -> tuple[str, ...]:
-    """The variables `model` needs, by its provider: its key (Azure OpenAI: its address too); a
-    local model (Ollama), GLORFINDEL_LLM_BASE_URL alone; an OpenAI-compatible model served at
-    GLORFINDEL_LLM_BASE_URL (self-hosted, `openai/<model>`: the OpenAI client sends no key when
-    there is none), nothing. Raises UnknownProvider."""
+    """The variables `model` needs, by its provider: its key (Azure OpenAI: its address too, or
+    GLORFINDEL_LLM_BASE_URL in its place — the watch passes it as `base_url`, which LiteLLM takes
+    for the address); a local model (Ollama), GLORFINDEL_LLM_BASE_URL alone; an OpenAI-compatible
+    model served at GLORFINDEL_LLM_BASE_URL (self-hosted, `openai/<model>`: the OpenAI client
+    sends no key when there is none), nothing. Raises UnknownProvider."""
     provider = model_provider(model)
     if provider in LOCAL_PROVIDERS:
         return () if base_url else (BASE_URL,)
     if provider == "openai" and base_url:
         return ()
+    if provider == "azure" and base_url:
+        return ("AZURE_API_KEY",)
     return PROVIDER_ENV[provider]
 
 

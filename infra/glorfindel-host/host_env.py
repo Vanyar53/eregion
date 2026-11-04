@@ -22,13 +22,16 @@ leave the console on the VM without a token. Never prints the token.
 
 The model's key is the one its provider reads (OL1, #525; the rule: eregion_core/models.py,
 `required_env`): ANTHROPIC_API_KEY for anthropic/… or the default, OPENAI_API_KEY for
-openai/…, AZURE_API_KEY and AZURE_API_BASE for azure/…, MISTRAL_API_KEY for mistral/…; no key
-for a local model (ollama/…), but GLORFINDEL_LLM_BASE_URL — in the watch's container, LiteLLM's
-default address is the container itself; nothing for an OpenAI-compatible model served at
-GLORFINDEL_LLM_BASE_URL (self-hosted). An unknown provider is refused, with the list. The
-message names what is missing, never a value; `--check` holds a host.env to the same rule
-before the push. The analysis model (EREGION_ANALYSIS_MODEL) writes the campaign reports,
-never a decision: its missing key is said, not refused.
+openai/…, AZURE_API_KEY and AZURE_API_BASE (or GLORFINDEL_LLM_BASE_URL in its place) for
+azure/…, MISTRAL_API_KEY for mistral/…; no key for a local model (ollama/…), but
+GLORFINDEL_LLM_BASE_URL — in the watch's container, LiteLLM's default address is the container
+itself; nothing for an OpenAI-compatible model served at GLORFINDEL_LLM_BASE_URL (self-hosted).
+An unknown provider is refused, with the list. The message names what is missing, never a
+value. host.env carries only the keys of the configured models' providers, never another
+provider's. `--check` (and `make glorfindel-host-model`, before it writes anything) holds a
+host.env to the same rule, its model's variables read as the watch receives them. The analysis
+model (EREGION_ANALYSIS_MODEL) writes the campaign reports, never a decision: its missing key,
+or a local analysis model (it does not read GLORFINDEL_LLM_BASE_URL), is said, not refused.
 """
 from __future__ import annotations
 
@@ -40,14 +43,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from eregion_core.models import (  # noqa: E402
-    DEFAULT_ANALYSIS_MODEL, PROVIDER_ENV, UnknownProvider, missing_env, model_provider,
+    BASE_URL, DEFAULT_ANALYSIS_MODEL, LOCAL_PROVIDERS, PROVIDER_ENV, UnknownProvider, missing_env,
+    model_provider,
 )
 
-COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID", "ANTHROPIC_API_KEY",
-          "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", "OPENAI_API_KEY",
-          # OL1: the other providers' variables. docker-compose.yml (x-models) passes them to
-          # the watch, but host.env never carried them: an azure/… or mistral/… H0 had no key.
-          "MISTRAL_API_KEY", "AZURE_API_KEY", "AZURE_API_BASE", "AZURE_API_VERSION",
+# OL1: every provider's variables — docker-compose.yml (x-models) passes them all to the watch.
+# host.env carries only those of the configured models' providers (carried_keys), never another
+# provider's key: an operator's .envrc may hold several.
+MODEL_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "MISTRAL_API_KEY", "AZURE_API_KEY",
+              "AZURE_API_BASE", "AZURE_API_VERSION")
+COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID",
+          "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", *MODEL_KEYS,
           "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
           "DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_PING_ROLE",
           "DISCORD_ALLOWED_USERS", "DISCORD_ALLOWED_ROLES",
@@ -74,14 +80,28 @@ def model_missing(environ: dict) -> tuple[str, list[str]]:
         raise SystemExit(f"{MODEL}: {exc}") from None
 
 
+def _analysis_provider(environ: dict) -> str:
+    """The analysis model's provider, "" when it names none known."""
+    try:
+        return model_provider(environ.get(ANALYSIS, "") or DEFAULT_ANALYSIS_MODEL)
+    except UnknownProvider:
+        return ""
+
+
 def analysis_warning(environ: dict) -> str:
     """What the analysis model lacks, said: it writes the campaign reports (IA1), never a
-    decision — a report without its key is given up after 3 attempts. "" when nothing."""
-    try:
-        provider = model_provider(environ.get(ANALYSIS, "") or DEFAULT_ANALYSIS_MODEL)
-    except UnknownProvider:
+    decision — a report that fails is given up after 3 attempts. "" when nothing. A local
+    analysis model is said too: the analysis never passes GLORFINDEL_LLM_BASE_URL
+    (analysis/campaign_report.py, analysis/triage.py), so it would call the watch's container."""
+    provider = _analysis_provider(environ)
+    if not provider:
         return (f"⚠ {ANALYSIS} ne nomme aucun fournisseur connu ({', '.join(PROVIDER_ENV)}) : "
                 "les rapports de campagne échoueront.")
+    if provider in LOCAL_PROVIDERS:
+        return (f"⚠ l'IA d'analyse ({ANALYSIS}) est un modèle local, mais elle ne lit pas "
+                f"{BASE_URL} : dans le conteneur de la watch, elle viserait le conteneur lui-même, "
+                "et les rapports de campagne échoueront. Garde un modèle d'analyse d'un fournisseur, "
+                "avec sa clé.")
     lacking = [k for k in PROVIDER_ENV[provider] if not environ.get(k)]
     if not lacking:
         return ""
@@ -90,13 +110,26 @@ def analysis_warning(environ: dict) -> str:
             f"un autre modèle dans {ANALYSIS}.")
 
 
+def carried_keys(environ: dict) -> set[str]:
+    """The model variables host.env carries: those of the decision model's provider (its own
+    key, even when a self-hosted endpoint does not require it) and of the analysis model's;
+    AZURE_API_VERSION with an azure/… model only. Never another provider's key."""
+    providers = {model_provider(environ.get(MODEL, "")), _analysis_provider(environ)} - {""}
+    keys = {k for p in providers for k in PROVIDER_ENV[p]}
+    if "azure" in providers:
+        keys.add("AZURE_API_VERSION")
+    return keys
+
+
 def host_env(environ: dict) -> dict:
     missing = [k for k in REQUIRED if not environ.get(k)]
     provider, lacking = model_missing(environ)
     if missing or lacking:
-        why = f" — {', '.join(lacking)} for the model's provider, {provider} ({MODEL})" if lacking else ""
-        raise SystemExit(f"missing in the environment (load .envrc): {', '.join(missing + lacking)}{why}")
-    out ={k: environ[k] for k in COPIED if environ.get(k)}
+        said = missing + ([f"{', '.join(lacking)} (the model's provider, {provider}, {MODEL})"]
+                          if lacking else [])
+        raise SystemExit(f"missing in the environment (load .envrc): {'; '.join(said)}")
+    carried = carried_keys(environ)
+    out = {k: environ[k] for k in COPIED if environ.get(k) and (k not in MODEL_KEYS or k in carried)}
     out["GLORFINDEL_READ_ONLY"] = "1"
     # A powered-off VM stays on the map a week (default 8 h): gondolin, off between
     # exercises, kept vanishing from the observed fleet.
@@ -117,6 +150,17 @@ def read_env(path: Path) -> dict:
             key, value = line.split("=", 1)
             out[key.strip()] = re.sub(r"\s+#.*$", "", value.strip()).strip()
     return out
+
+
+def model_value(value: str) -> str:
+    """A model's variable of a host.env read by read_env, as the watch receives it: a pair of
+    quotes around it removed, as compose removes them (`KEY=""` is empty); a value that is only
+    a comment (`KEY=   # note`, which compose keeps as « # note ») is no key nor model: empty.
+    The console's token keeps read_env's reading — the Makefile and status.sh share it."""
+    v = value.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    return "" if v.startswith("#") else v
 
 
 def token_name(env: dict) -> str:
@@ -141,7 +185,7 @@ def check(dst: str) -> int:
                          f"pushed, the console on the VM would run without one. Set {TOKEN} "
                          "(python -c 'import secrets; print(secrets.token_urlsafe(24))').")
     # OL1: the key the model's provider reads — pushed without it, the watch could not decide.
-    provider, lacking = model_missing(env)
+    provider, lacking = model_missing({k: model_value(env.get(k, "")) for k in (MODEL, BASE_URL, *MODEL_KEYS)})
     if lacking:
         raise SystemExit(f"{dst}: {', '.join(lacking)} empty — the model's provider, {provider} "
                          f"({MODEL}), needs it: pushed, the watch could not decide.")

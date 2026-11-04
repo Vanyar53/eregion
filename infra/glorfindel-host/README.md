@@ -93,16 +93,26 @@ seul sur le banc, dans le mode de chaque VM.
   |---|---|
   | `anthropic/…`, ou vide (le défaut) | `ANTHROPIC_API_KEY` |
   | `openai/…` | `OPENAI_API_KEY` |
-  | `azure/…` (Azure OpenAI) | `AZURE_API_KEY` et `AZURE_API_BASE` (`AZURE_API_VERSION` copié s'il est posé) |
+  | `azure/…` (Azure OpenAI) | `AZURE_API_KEY`, et `AZURE_API_BASE` ou `GLORFINDEL_LLM_BASE_URL` à sa place (la watch la passe en `base_url`, que LiteLLM prend pour l'adresse) ; `AZURE_API_VERSION` copié s'il est posé |
   | `mistral/…` | `MISTRAL_API_KEY` |
   | `ollama/…`, `ollama_chat/…` | aucune clé, mais `GLORFINDEL_LLM_BASE_URL` : dans le conteneur de la watch, l'adresse par défaut de LiteLLM (`localhost:11434`) est le conteneur lui-même |
-  | `openai/…` servi par `GLORFINDEL_LLM_BASE_URL` (auto-hébergé, compatible OpenAI) | rien |
+  | `openai/…` servi par `GLORFINDEL_LLM_BASE_URL` (auto-hébergé, compatible OpenAI) | rien (`OPENAI_API_KEY` copié s'il est posé, pour un point d'accès qui en demande une) |
 
   Un autre fournisseur, ou un modèle sans préfixe, est refusé, avec la liste. Le message dit ce
-  qui manque, jamais une valeur. `make glorfindel-host-push` tient le `host.env` à la même règle
-  (`host_env.py --check`). L'IA d'analyse (`EREGION_ANALYSIS_MODEL`, Haiku par défaut) écrit les
-  rapports de campagne, jamais une décision : sa clé absente est dite, pas refusée — avec un
-  modèle local, pose aussi un modèle d'analyse local, ou sa clé, sinon chaque rapport échoue.
+  qui manque, jamais une valeur. `host.env` ne porte que les clés des fournisseurs des modèles
+  configurés (celui de la décision, celui de l'analyse) : une autre clé de ton `.envrc` ne va
+  jamais sur H0. `make glorfindel-host-push` tient le `host.env` à la même règle
+  (`host_env.py --check`), ses variables de modèle lues comme la watch les reçoit (une paire de
+  guillemets retirée ; `KEY=""` ou `KEY=   # note` vide) ; `make glorfindel-host-model` aussi,
+  sur une copie, avant d'écrire quoi que ce soit, ici ou sur la VM.
+
+  L'IA d'analyse (`EREGION_ANALYSIS_MODEL`, Haiku par défaut) écrit les rapports de campagne,
+  jamais une décision : ce qui lui manque est dit, pas refusé. Elle ne lit pas encore
+  `GLORFINDEL_LLM_BASE_URL` (`analysis/campaign_report.py`, `analysis/triage.py`) : un modèle
+  d'analyse local viserait le conteneur de la watch, et chaque rapport échouerait — c'est dit
+  aussi. Avec un modèle de décision local, garde donc un modèle d'analyse d'un fournisseur, avec
+  sa clé, ou accepte que les rapports de campagne échouent. Brancher l'adresse dans l'analyse
+  reste à faire (hors d'OL1).
 
 Coût : D2als_v6 (2 vCPU, 4 Go), environ 61 € par mois en continu (API de tarifs Azure, 16/10) — 27 € en B2als_v2 si le quota Basv2 est accordé —, plus
 le disque et l'IP publique.

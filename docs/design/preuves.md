@@ -3935,6 +3935,91 @@ N = 1..20, **20/20 vertes** ; à 500, N = 42, 1..7, **7/8 vertes**. La graine 5 
 ne passe jamais par `_gone_comes_back` — le défaut connu, hors du lot, ci-dessus. `pytest` complet :
 6 232 réussis, 7 sautés ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 493 mutants, sans faute.
 
+**L1O (04/11, #507) : « reposé une fois » finit son épisode ; reparti avant la passe suivante, le blocage
+est dit « une deuxième fois ».** Trouvé par la relecture de L1W (#492). Sur `reapplied`, `_rewrite_block`
+(`glorfindel/reassert.py`) écrivait `reasserted_at`, gardait les marques de l'épisode d'avant
+(`drift_alerted_at`, `drift_said`) et laissait cet épisode ouvert en mémoire (`episode`). Un blocage reposé
+une fois pouvait repartir avant la passe suivante, tel que la repose l'avait lu. `still_said` le lisait alors
+« déjà dit, pas pire » : la carte « reposé une fois », en attente ou acquittée, était la dernière de
+l'alerte. La passe se taisait, alors que cette carte dit « s'il disparaît encore, Glorfindel alertera sans
+le reposer ». Deux voies y mènent :
+- **celle de L1G** : une repose échouée, sa carte acquittée, puis une règle de la paire écrite de nouveau
+  par le blocage de périmètre d'une autre VM. `_back` clôt l'épisode acquitté, et la repose suit ;
+- **celle de L1W** : la paire réécrite puis repartie entre deux passes, que le journal de L1W montre,
+  reposée par le premier temps hors `human_only`. L'autre VM doit être en `human_only`, sinon sa propre
+  repose remet la paire entière.
+
+**Le correctif.** L'épisode se termine dans l'écriture de `reasserted_at`. `episode(clé, ip, over=True)`
+vient d'abord, en mémoire, quoi que fasse l'écriture ; puis `drift_alerted_at` et `drift_said` sont ôtés dans
+la même écriture que `reasserted_at`. La disparition suivante n'est plus « déjà dite » : `reasserted_at`
+posé, elle est dite « une deuxième fois » et jamais reposée (L1Q, « reposé une fois au plus »). Rien ne
+s'écrit en `human_only`. Une repose qui ne tient pas en entier (`partial`) marque un nouvel épisode après sa
+carte, comme avant : cette carte attend, et la passe suivante qui lit la même chose se tait.
+
+Le premier temps (`reassert_perimeters.put_back_perimeters`) n'est pas touché. Ce qu'il écrit, le second
+temps le finit dans `_rewrite_block`, qui passe par cette écriture dès qu'une écriture a réussi. Une passe
+coupée entre les deux temps garde les marques d'avant ; la suite est dite par la carte d'avant si elle
+attend (elle dit encore ce qui est), ou par le journal de L1W si elle a été acquittée.
+
+**Où le défaut se voyait.** Dans la logique propre de la réaffirmation, avec un connecteur qui ne réécrit pas
+l'entrée : les connecteurs simulés des tests unitaires, et les sondes de la relecture. Sur Azure,
+l'adaptateur réécrit l'entrée à chaque blocage entier : `_save_block_state` ôte `drift_alerted_at`,
+`drift_said` et `reasserted_at` (L1Q). Les marques sur disque tombaient donc déjà, et `still_said` lisait
+l'épisode fini malgré la mémoire restée ouverte. Mesuré par la machine, rejoué par la conftest :
+- la voie de L1G (onze règles, la séquence figée ci-dessous) dit « une deuxième fois », sur le code de
+  `main` 8710dba7 comme avec le correctif ;
+- la voie de L1W (les sept règles de L1W ; une passe à modes mêlés, rg-app2/web hors `human_only` et
+  rg-app1/web en `human_only` ; la paire retirée ; une passe) dit aussi « une deuxième fois », sur la
+  branche L1W 5b2700b6, sans ce correctif.
+
+La machine, qui passe par l'adaptateur réel, ne peut donc pas produire le défaut : « la machine le tire
+rarement » (l'issue) ne s'est pas vérifié. Le cœur ne dépend plus de cet effet de bord de l'adaptateur. Un
+fournisseur dont le blocage n'écrit pas l'entrée ainsi (MC0) y retombait, comme une écriture AWS dite
+partielle (`partial=bool(bypass)`, les marques gardées) que la passe aurait relue entière.
+
+**Figés.** Dans `test_reassert.py`, sur un connecteur simulé qui ne réécrit pas l'entrée :
+- `test_l1o_put_back_after_an_acknowledged_failure_then_gone_again_is_said_a_second_time` : la voie de L1G,
+  la carte « reposé une fois » en attente ou acquittée, dans les deux modes. Elle est dite « une deuxième
+  fois », et rien n'est écrit ;
+- `test_l1o_the_put_back_takes_the_marks_off_in_the_write_of_reasserted_at` : l'entrée sur disque ;
+- `test_l1o_said_a_second_time_once_then_nothing_never_written_again` : pas de boucle. La carte en attente,
+  rien de plus ; acquittée, rien, passe après passe ; jamais reposé ;
+- `test_l1o_the_episode_is_over_even_when_the_write_of_its_end_is_refused` : l'écriture refusée (un disque
+  plein). Les marques de l'échec restent sur disque, l'épisode est fini en mémoire, et la passe suivante
+  dit. Elle repose aussi, puisque `reasserted_at` n'a jamais été écrit : c'est ce que `unrecorded`
+  annonce ;
+- `test_l1o_a_partial_put_back_still_marks_its_episode` : la garde du correctif, verte sur `main`.
+
+Sur le code de `main` 8710dba7, sept des huit sont rouges ; la dernière est la garde. Dans
+`test_invariant_regressions.py`, `test_a_block_put_back_once_acknowledged_then_gone_again_is_said_a_second_time`
+rejoue la voie de L1G par la machine : la promesse de la carte, de bout en bout. Elle est verte sur `main`
+(l'adaptateur) et gardée. **La voie de L1W** n'a pas de test unitaire ici : L1W (PR #509) n'était pas sur
+`main` à la réalisation, et sans son journal cette voie n'existe pas (le défaut de L1W se tait avant). Son
+test, sur le modèle de `_pair_said` de L1W en `non_disruptive` suivi d'une passe qui relit la paire partie,
+reste à ajouter après la fusion. **A0** : ni l'oracle ni la machine n'ont bougé.
+
+**Mutants M3540–M3544**, 5/5 par leurs tests à chaque tour (deux tours) :
+- M3540, le défaut remis ;
+- M3541, l'épisode fini sur disque seul : l'écriture refusée, il reste ouvert ;
+- M3542, l'épisode fini en mémoire seul, les marques gardées sur disque ;
+- M3543, `reasserted_at` oublié : reposé à chaque disparition ;
+- M3544, une repose partielle non marquée : « une deuxième fois » à chaque passe.
+
+Un mutant `episode(over=False)` n'est pas pris par ces tests, et n'est pas compté. Les marques ôtées,
+l'épisode ouvert en mémoire ne fait rien taire. Sous une écriture refusée, la carte acquittée de l'échec et
+la paire revenue (`_back`) disent quand même. Mesuré contre `test_reassert.py` et
+`test_invariant_regressions.py` entiers : il survit. Il est équivalent ici.
+
+**Mesures de L1O.** Invariants avec le correctif, `--hypothesis-seed=N`, quatre à la fois, par la conftest :
+- à 60 séquences, N = 1..20 : **20/20 vertes** ;
+- à 500, N = 1..7 et 42 : **6/8 vertes**. Les graines 1 et 6 tombent sur L1 (« the block on …/rg-app1/…/web »,
+  et « …/Db--01 vanished from Azure ; the reassertion neither put it back nor said so »). Elles tombent sur le
+  même L1, pour la même VM, sur le code de `main` 8710dba7 pur : ce n'est pas ce lot. Sur la branche L1W
+  5b2700b6 avec ce correctif, les huit graines sont vertes : c'est le défaut que L1W corrige.
+
+`pytest` complet (sur `main` 8710dba7) : 6 519 réussis, 7 sautés, 1 `xfail` (celui de L1E, que L1W lève) ;
+`ruff` propre ; `scripts/mutant_anchors.py` : 2 606 mutants et 32 du jeu de contrôle, sans faute.
+
 **L1P (03/11, #478) : un blocage entier à port inconnu ne garde pas le port d'un blocage précédent.**
 Trouvé par la machine dans la CI de la PR #476 (I4P), Glorfindel seul : « L1: the block of …/Db--01 is
 bypassed by a customer allow (db-nic-1 … 443); the reassertion doesn't say so », à l'étape 22, au second

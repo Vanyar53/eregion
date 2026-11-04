@@ -4,6 +4,14 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Security
+- **The reader of the red's mounts refuses what it cannot read** (SEC20b, #494, found by SEC20's second review; `docs/fichiers-cles.md`, « Ce que le rouge monte en écriture »; `docs/design/modele-de-menace.md` §2). `tests/unit/test_red_mounts.py` read the current Makefile faithfully, but some forms make, docker or compose accept escaped it; none is in the Makefile today.
+  - **Every launch, every mount**: launches are read as `docker run`, `docker create`, either as `docker container …`, whatever the spaces. Each launch's options are read as docker reads them, up to its image: a mount glued to `-v`, after `-v=`, in a group of short options (`-itv …`), by `--volume`, `--volume=` or `--mount`. `--volumes-from`, an option the reader does not know, a `--mount` key it does not read, and a launch behind docker's own options are refused.
+  - **No reference left unexpanded** in a launch's options, `$(HOME)`, `$(PWD)` and `$$HOME` aside: a variable of a `define` or of an included file, `$(shell …)`, a variable of the shell. And no `include`, `-include`, `sinclude`, `define`, `undefine` or `$(eval …)` in the Makefile: refused rather than read, since reading them would make the test a second make, and the Makefile needs none; nor a recipe's `$(MAKE)` told to read another makefile or directory (`-f`, `-C`).
+  - **Compose reads its one file**: a recipe's compose launch given another file (`-f`, `--file`, `--project-directory`, `COMPOSE_FILE`) is refused, and so is any file beside `docker-compose.yml` that compose would take in its place or merge on its own (`compose.yaml`, `compose.yml`, `docker-compose.yaml`, their overrides, `docker-compose.override.yml` among them). The compose file includes no other (`include`), no service extends another or takes its mounts (`extends`, `volumes_from`), every image is written plainly.
+  - **The shell's history with the fallback root image** (`UID=0`): appended, never truncated, as with the operator's image. The neighbour file bash truncates through is made in the container's own layer, and its rename onto the mounted file fails; nothing reaches the host. A session longer than `HISTSIZE` is not kept, with either image (the Makefile's comment and `docs/fichiers-cles.md` say it).
+  - Mutants M3490–M3497 (each form, which SEC20's reader missed) and M3498–M3499 (`ANNATAR_SHELL_FILES`: the link check removed, the files made before it). The shell probe runs with its own `HOME` and `HISTFILE`.
+
 ## [0.5.3] — 2026-11-04 — "signed and sealed"
 
 ### Security

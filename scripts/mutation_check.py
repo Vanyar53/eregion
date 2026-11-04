@@ -10298,6 +10298,45 @@ MUTANTS += [
 ]
 TESTS.update({**{f"M{n}": _CONK for n in (3387, 3388, 3389, *range(3460, 3469))},
               "M3469": "tests/unit/test_drill.py"})
+# SEC20b (#494): the reader of the red's mounts (tests/unit/test_red_mounts.py) refuses what it
+# cannot read — each form a mount, a launch, a reference, a directive or compose takes that the
+# reader of SEC20 did not see —, and the shell's files checked before they are made. M3490–M3499.
+MUTANTS += [
+    ("M3490", "Annatar by hand writes glorfindel/, its mount written with `-v=` (SEC20b)", MAKE,
+     "\t-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \\\n\t$(if $(wildcard $(HOME)/.glorfindel/injectors)",
+     "\t-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \\\n\t-v=$(PWD)/glorfindel:/app/glorfindel \\\n"
+     "\t$(if $(wildcard $(HOME)/.glorfindel/injectors)"),
+    ("M3491", "make annatar-validate writes scripts/, its mount glued to `-v` (SEC20b)", MAKE,
+     "docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) "
+     "validate",
+     "docker run --rm -v$(PWD)/scripts:/app/scripts -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro "
+     "--entrypoint annatar $(IMAGE_ANNATAR) validate"),
+    ("M3492", "Annatar's shell writes the repository whole, its mount in a group of short options (SEC20b)", MAKE,
+     "docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE)",
+     "docker run --rm -itv $(PWD):/app $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE)"),
+    ("M3493", "make annatar-list launches a second container by `docker container run`, writing scripts/ (SEC20b)",
+     MAKE, "--entrypoint annatar $(IMAGE_ANNATAR) list\n",
+     "--entrypoint annatar $(IMAGE_ANNATAR) list && docker container run --rm -v $(PWD)/scripts:/app/scripts "
+     "$(IMAGE_ANNATAR) list\n"),
+    ("M3494", "Annatar's mounts read from a file at make time, never seen (SEC20b)", MAKE,
+     "\t-v $(PWD)/scripts:/app/scripts:ro \\\n",
+     "\t-v $(PWD)/scripts:/app/scripts:ro \\\n\t$(shell cat $(HOME)/.annatar-mounts 2>/dev/null) \\\n"),
+    ("M3495", "the Makefile includes a file this reader never reads (SEC20b)", MAKE,
+     "IMAGE_ANNATAR   := eregion-annatar\n", "-include local.mk\nIMAGE_ANNATAR   := eregion-annatar\n"),
+    ("M3496", "a recipe's compose reads a second file, never read here (SEC20b)", MAKE,
+     "docker compose up -d --build --force-recreate",
+     "docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build --force-recreate"),
+    ("M3497", "a docker-compose.override.yml beside the compose, merged by compose, never read here (SEC20b)",
+     ".dockerignore", RENAME, "docker-compose.override.yml"),
+    ("M3498", "Annatar's shell no longer checks its files for a link: docker writes the link's target (SEC20b)",
+     MAKE, "\ttest ! -L \"$$f\" || { echo \"✗ $$f : un lien, rien ne part (SEC20)\" >&2; exit 1; }; done && \\\n",
+     "\ttrue; done && \\\n"),
+    ("M3499", "Annatar's shell makes its files before it checks them: a link's target written (SEC20b)", MAKE,
+     "ANNATAR_SHELL_FILES = for f in",
+     "ANNATAR_SHELL_FILES = mkdir -p $$HOME/.annatar && touch $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history"
+     " && for f in"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in range(3490, 3500)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

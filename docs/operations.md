@@ -793,10 +793,11 @@ un secret client de longue durée, et son principal pouvait créer un groupe dan
 - **Aucun secret de longue durée.** Le job demande à GitHub un jeton OIDC (`id-token: write`, à ce
   seul job), valable quelques minutes, qu'Entra ID échange contre le principal `eregion-canary`.
   Son identifiant fédéré ne fait confiance qu'à l'environnement `canary` de ce dépôt
-  (`repo:grootcyber/eregion:environment:canary`), que seul `main` peut déployer (sa règle de
+  (son sujet immuable, `repo:grootcyber@<id du compte>/eregion@<id du dépôt>:environment:canary`),
+  que seul `main` peut déployer (sa règle de
   branches) : un run lancé sur une autre branche, une PR ou un fork n'obtient rien, et le jeton
   d'un autre job de `main` — celui de `publish.yml`, dont le sujet est
-  `repo:grootcyber/eregion:ref:refs/heads/main` — non plus. Terraform lit le jeton lui-même
+  `repo:grootcyber@<…>/eregion@<…>:ref:refs/heads/main` — non plus. Terraform lit le jeton lui-même
   (`ARM_USE_OIDC`, et `ACTIONS_ID_TOKEN_REQUEST_URL` / `…_TOKEN`, que le runner pose) ; `az`, dont le canari se sert
   pour le NSG de quarantaine, se connecte avec le même genre de jeton (`az login
   --federated-token`), tiré par `curl` : aucune action tierce. `ARM_USE_CLI=false` : Terraform
@@ -854,11 +855,15 @@ EOF
 gh api -X POST "repos/$REPO/environments/canary/deployment-branch-policies" -f name=main -f type=branch
 gh api "repos/$REPO/environments/canary/deployment-branch-policies" --jq '.branch_policies[].name'  # main, seul
 
-# 3. L'identifiant fédéré : l'environnement canary de ce dépôt seulement.
-cat > /tmp/eregion-canary-fic.json <<'EOF'
+# 3. L'identifiant fédéré : l'environnement canary de ce dépôt seulement. Son sujet est celui que
+#    GitHub émet vraiment pour ce dépôt — immuable, le compte et le dépôt par leurs identifiants —,
+#    lu sur l'API plutôt que tapé : aucun identifiant dans ce document.
+PREFIX=$(gh api "repos/$REPO/actions/oidc/customization/sub" --jq .sub_claim_prefix)
+echo "$PREFIX"                                   # repo:grootcyber@<id du compte>/eregion@<id du dépôt>
+cat > /tmp/eregion-canary-fic.json <<EOF
 {"name": "eregion-canary-environment",
  "issuer": "https://token.actions.githubusercontent.com",
- "subject": "repo:grootcyber/eregion:environment:canary",
+ "subject": "$PREFIX:environment:canary",
  "audiences": ["api://AzureADTokenExchange"],
  "description": "canary-azurerm.yml, environment canary (main only)"}
 EOF
@@ -962,10 +967,16 @@ réseau payante (une IP publique, une passerelle) — seul un job de l'environne
 jeton (`tests/unit/test_workflows.py`).
 
 **Si le compte du dépôt change de nom** (REN1, novembre 2026 : `Vanyar53` → `grootcyber`) : le sujet
-du jeton porte le login du propriétaire, et Entra ID ne reconnaît plus l'ancien. Avant le
-renommage, un deuxième identifiant fédéré au nouveau sujet (le fichier du 3., un autre `name`),
+du jeton porte le login du propriétaire, et Entra ID ne reconnaît plus l'ancien. Mesuré le 04/11 :
+depuis le renommage, GitHub émet pour ce dépôt un **sujet immuable** (`use_immutable_subject`, lu
+sur `repos/$REPO/actions/oidc/customization/sub`), qui nomme le compte et le dépôt avec leurs
+identifiants, `repo:grootcyber@<id du compte>/eregion@<id du dépôt>:…`. Un identifiant fédéré au
+sujet par nom ne correspond plus (`AADSTS700213`) ; le 3., qui lit le préfixe sur l'API, donne le
+bon. Le sujet immuable vaut mieux : il ne dépend plus d'un nom qu'un autre pourrait prendre, un
+identifiant ne se reprend pas. Le nom y reste : un prochain renommage le changera sans doute
+encore. Avant lui, un deuxième identifiant fédéré au nouveau sujet (le 3., un autre `name`),
 l'ancien gardé ; après le premier canari vert, l'ancien retiré (`az ad app federated-credential
-delete --id "$APP" --federated-credential-id <son id>`). « Un seul, ce sujet-là » (le 3.) ne vaut
+delete --id "$APP" --federated-credential-id <son nom>`). « Un seul, ce sujet-là » (le 3.) ne vaut
 plus pendant cette transition.
 
 ## Les conteneurs durcis (V-34, SEC7)

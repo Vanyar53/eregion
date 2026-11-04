@@ -1168,9 +1168,9 @@ def test_init_never_upgrades_the_providers_on_its_own():
     """Review of #402, point 1: nowhere in the repository does `init` upgrade the providers — the
     lock would be rewritten without a PR — but in `make providers-lock`, the wanted upgrade, and
     the canary (infra/canary/: the latest azurerm, by design). Every tracked file is read, docs
-    and this file aside."""
-    import subprocess
-    files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    and this file aside. Outside a checkout (the mutants' copy), the tree (MUT1, #503)."""
+    from .tracked_files import tracked
+    files = tracked(ROOT)
     upgrade = re.compile(r"""\binit\b.*-upgrade|["']init["']\s*,\s*["']-upgrade["']""")
     lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
     start = next(i for i, ln in enumerate(lines) if ln.startswith("providers-lock:"))

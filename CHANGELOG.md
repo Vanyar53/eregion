@@ -12,6 +12,11 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
   - **A transient error said as such** (a 429 status — never a timestamp's `…:29.429` —, `TooManyRequests`, `AnotherOperationInProgress`, `RetryableError`, `ReferencedResourceNotProvisioned`), and a new exit, **3 = inconclusive**: a failed setup, or failed checks that all came after a transient error — re-run the line. A check that failed before any transient error is still a change (exit 1). In the cleanup, a transient error asks for no re-run: the verdict is said.
   - The workflow does not change. Tests: `test_workflows.py`, `test_can1_*` (the filter on a loaded sample, the NIC's failed apply, a failed setup, an az error, the group's read, a change before a 429, a filter that fails, a 429 in a timestamp, a transient cleanup). Mutants M3500–M3519; M2088 and M2114 follow the cleanup's new lines.
 
+### Fixed
+- **The mutation harness measures again** (MUT1, #503). Since CI4 (02/11), `test_init_never_upgrades_the_providers_on_its_own` ran `git ls-files` with `check=True` in the harness's copy, which is no git repository: every mutant measured by the whole of `test_workflows.py` stopped the run at the check of the unmutated code (exit 2), the weekly run included. One list of the tracked files now, `tests/unit/tracked_files.py`, shared with `test_repo_owner.py` and `test_entries_calls.py`: git's, or — outside a checkout — the tree, without `.git`, the environments, the caches and `.claude/worktrees`.
+  - Measured: `mutation_check.py --only M2081,M2110,M1280 --rounds 1` measures again (3/3 caught); every mutant of `test_workflows.py` (M2080–M2089, M2110–M2116, M1280, M1281, M1350, M1486, M1567, M1669): 23/23 caught, no survivor.
+  - Test: `test_repo_owner.py`, `test_mut1_*` (a tree outside a checkout, and git's own list in it).
+
 ## [0.5.3] — 2026-11-04 — "signed and sealed"
 
 ### Security

@@ -63,4 +63,4 @@ Rien de ce guide n'a été rejoué de zéro. Les mesures citées sont celles des
 
 ## Le cas sans H0
 
-Ce n'est pas une étape à rejouer, c'est un trou : une watch du poste ne peut pas écrire le canal retour d'Orodruin ([banc.md](banc.md#le-cas-sans-h0--un-trou)). Un lot à part le codera, puis le mesurera ici.
+Depuis WC1 (#523), la watch du poste peut écrire le canal retour d'Orodruin ([banc.md](banc.md#sans-h0--la-watch-de-ton-poste)). Codé et testé sans Azure ; la mesure au banc reste à faire : un run depuis Orodruin, la watch sur le poste, la garde qui passe avec sa clé épinglée et refuse une autre clé.

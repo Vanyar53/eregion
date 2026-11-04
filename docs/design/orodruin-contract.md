@@ -264,8 +264,28 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   fenêtres : déclarés sur le même conteneur, le rédacteur reste refusé. `REQUIRED_ACTIONS` et le
   rôle `injector` ne changent pas ; `orodruin-kill` supprime toutes les attributions de
   l'identité, celle-ci comprise.
+- **Qui est « la watch » (WC1, #523, 04/11)** : `watch_principal_ids`, une ou plusieurs identités ;
+  par défaut (`null`) celle de H0 seule, `watch_principal_id`, comme avant — mêmes attributions, aux
+  mêmes adresses de l'état : le plan de H0 et d'Orodruin ne change pas. Sans H0, l'*object id* du
+  principal de service d'une watch de poste ou d'équipe (`GLORFINDEL_AZURE_CLIENT_*`), passé par
+  `make orodruin-plan WATCH_PRINCIPALS=<id>[,<id>…] NO_WATCH=1`. Chacune reçoit exactement ce que
+  reçoit H0 : `Storage Blob Data Reader` sur `exercises`, `Storage Blob Data Contributor` sur
+  `watch`, à la portée du conteneur, `principal_type = ServicePrincipal`. Le plan refuse un
+  non-GUID, une identité nommée deux fois, l'identité d'Orodruin et celle de l'opérateur qui
+  applique (`azurerm_client_config`) ; le Makefile refuse une valeur venue de l'environnement, et
+  une liste qui retire le canal à H0 quand son état se lit, sauf `NO_WATCH=1`. Celle d'Annatar,
+  Terraform ne la connaît pas : c'est l'opérateur qui nomme l'identité, et lui seul la tient hors de
+  la liste. Chaque `orodruin-up` et `orodruin-lock` redonne la même liste, sinon le plan retire ses
+  droits à la watch du poste. Le contrat d'Orodruin ne change pas : il ne lit que ses propres
+  attributions. La garde non plus : elle ne croit qu'un battement signé par la clé épinglée dans
+  `orodruin.env` (SEC19) — un rédacteur de plus n'y fait pas croire une autre clé. Les détections,
+  elles, ne sont pas encore signées : toute identité qui écrit `watch` peut fausser le verdict d'un
+  run, `detected` comme `missed` — la mesure, jamais une action (les signer : SEC21). Une watch à la
+  fois : le battement est un seul blob, deux watches l'écraseraient tour à tour
+  (`infra/orodruin/README.md`, « Sans H0 »).
 - **Sortie** : rien ne change (`Storage.FranceCentral` pour Orodruin ; la sortie de H0 n'est pas
-  filtrée). `GLORFINDEL_READ_ONLY` porte sur l'infra observée, pas sur le stockage d'Eregion.
+  filtrée). `GLORFINDEL_READ_ONLY` porte sur l'infra observée, pas sur le stockage d'Eregion. Une
+  watch de poste entre par l'IP de l'opérateur, que le pare-feu du compte admet déjà (WC1).
 - **Mutants** : M109 (battement de cœur sur une détection en attente), M110 (une VM hors fenêtre
   publiée), M111 (une fenêtre inconnue de la watch prouve un miss), M112 (une watch redémarrée
   prouve un miss), M113 (le contrat accepte un rôle d'écriture sur `watch`), M114 (le run conclut
@@ -402,7 +422,8 @@ d'Orodruin et de H0, par un point de terminaison de service `Microsoft.Storage` 
 règle d'IP n'a pas d'effet pour un client de la même région que le compte, ce qui est leur cas
 (francecentral) —, et les IP publiques d'Orodruin, de H0 (si l'un d'eux change de région) et de
 l'opérateur (l'arrêt d'urgence ferme les fenêtres depuis son poste ; une IP qui a changé depuis le
-dernier apply : le kill dit que les fenêtres n'ont pas été fermées, et quand elles expirent). Un
+dernier apply : le kill dit que les fenêtres n'ont pas été fermées, et quand elles expirent ; depuis
+WC1, la watch d'un poste passe par cette même IP, rien n'est ouvert de plus). Un
 point de terminaison privé n'est pas gratuit : 0,0088 € l'heure l'un (API publique des prix
 d'Azure, compteur « Standard Private Endpoint », 29/10), environ 6,4 € par mois, plus le trafic ;
 il en faudrait deux, les VNet n'étant pas appairés. À mesurer après l'apply : `orodruin-check`,

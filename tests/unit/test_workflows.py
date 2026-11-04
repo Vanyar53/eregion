@@ -1127,11 +1127,24 @@ def test_the_terraform_tests_run_on_each_push_and_pull_request():
     assert checkout["with"]["persist-credentials"] is False
     assert job["env"]["CHECKPOINT_DISABLE"] == "1"
     # Every module with Terraform tests has them run here: Celebrimbor's, and Glorfindel's host
-    # since SEC11 — each named in a step that runs its `test`.
+    # since SEC11 — each named in a step that runs its `test`. Orodruin's since WC1, once its step
+    # is in the workflow (TF_AWAITING_STEP): until then its `validate` still runs.
     tested = {p.parent.parent.name for p in ROOT.glob("infra/*/tests/*.tftest.hcl")}
-    assert tested == {"terraform", "glorfindel-host"}
+    assert tested == {"terraform", "glorfindel-host", "orodruin"}
     for module in tested:
-        assert any(f"terraform -chdir=infra/{module} test -no-color" in str(s.get("run") or "") for s in steps), module
+        runs_it = any(f"terraform -chdir=infra/{module} test -no-color" in str(s.get("run") or "") for s in steps)
+        # Awaiting, it is not run yet; run, it is awaiting no more — the list empties itself.
+        assert runs_it is (module not in TF_AWAITING_STEP), module
+    for module in TF_AWAITING_STEP:
+        assert any(f"terraform -chdir=infra/{module} validate -no-color" in str(s.get("run") or "")
+                   for s in steps), module
+
+
+# A module whose tests wait for their step in ci.yml: a session never writes under .github/ (the
+# agents' App has no Workflows permission, SEC12) — Jonathan adds the step, then empties this. WC1
+# (#523): `terraform -chdir=infra/orodruin test -no-color` after its `validate`, in « Terraform
+# validate — Orodruin » (and TF_RUNS above).
+TF_AWAITING_STEP = {"orodruin": "WC1 (#523): infra/orodruin/tests/watch_writers.tftest.hcl"}
 
 
 def test_every_terraform_test_only_plans():

@@ -42,6 +42,53 @@ Contrat (garanties, vérifications, kill, mutants) :
   `orodruin.env` : `EREGION_WATCH_CHANNEL` (`watch_channel_url`) et `EREGION_WATCH_CHANNEL_SCOPE`
   (`watch_channel_scope`). Dans le `host.env` de Glorfindel : `EREGION_WATCH_CHANNEL`. Canal
   coupé → le run écrit `detection: unknown`, jamais `missed` (`docs/design/orodruin-contract.md`).
+- **Qui écrit le canal retour** (WC1, #523) : par défaut la watch de H0 seule, comme avant. Sans H0,
+  la watch d'un poste ou d'une équipe : `WATCH_PRINCIPALS=<id>[,<id>…]` (la variable
+  `watch_principal_ids`), voir ci-dessous.
+
+## Sans H0 : la watch d'un poste ou d'une équipe (WC1)
+
+Une watch qui tourne sur ton poste (`make glorfindel-start`, `make profile-discover`) ou pour une
+équipe (`make team-start`) publie son battement signé et ses détections sur le canal retour par le
+même chemin que H0 (`eregion_core/watch_channel.py`), sous **son** principal de service
+(`GLORFINDEL_AZURE_CLIENT_*`, jamais `ANNATAR_AZURE_CLIENT_*`). Il lui faut deux droits, et rien
+d'autre : lire `exercises` (les fenêtres) et écrire `watch`.
+
+- **L'identité** : l'*object id* du principal de service de la watch (l'application d'entreprise),
+  pas son *client id* : `az ad sp show --id <GLORFINDEL_AZURE_CLIENT_ID> --query id -o tsv`. C'est
+  toi qui la nommes : Terraform ne connaît pas l'identité d'Annatar, il donne le droit à celle que
+  tu lui donnes. Le plan refuse seulement l'identité d'Orodruin et la tienne (celle qui applique).
+- **Le plan** : `make orodruin-plan WATCH_PRINCIPALS=<object id> NO_WATCH=1`. `NO_WATCH=1` dit
+  qu'il n'y a pas de Glorfindel hébergé (SEC7). Avec H0, sa watch ne garde le canal que si son
+  identité est dans la liste (`terraform -chdir=infra/glorfindel-host output principal_id`) ;
+  sinon le Makefile refuse, sauf `NO_WATCH=1`.
+- **Chaque apply redonne la liste** : à chaque `orodruin-up` et `orodruin-lock` (une VM inscrite
+  plus tard, la sortie refermée), la même `WATCH_PRINCIPALS`, et `NO_WATCH=1` sans H0. Sans elles,
+  le plan retire ses droits à la watch du poste.
+- **Ce que le Makefile vérifie** : `WATCH_PRINCIPALS` se donne sur la ligne de commande (jamais de
+  l'environnement), des GUID séparés par des virgules, sans espace, aucun deux fois ; jamais
+  développée par make. Le plan refuse aussi ce qui n'est pas un GUID, une identité nommée deux fois,
+  et l'identité d'Orodruin (un injecteur n'écrit jamais ce que dit la watch).
+- **Le réseau** : le pare-feu du compte admet déjà l'IP de l'opérateur (l'arrêt d'urgence). Une
+  watch sur ton poste passe par là ; ton IP a changé depuis le dernier apply, elle n'atteint plus le
+  canal, et les runs sont refusés (aucun battement frais). Une watch sur un autre hôte n'y entre pas.
+- **Sur le poste de la watch** : `EREGION_WATCH_CHANNEL` (`terraform output watch_channel_url`) et
+  `EREGION_EXERCISE_CHANNEL` (`channel_url`) dans ton environnement, ou dans le `team.env` de
+  l'équipe.
+- **Sur Orodruin** : la clé de cette watch épinglée dans `orodruin.env`, `EREGION_WATCH_KEY`
+  (`make watch-key` sur son poste), puis `make orodruin-push`. Un battement d'une autre clé, celui
+  de H0 compris, reste refusé (SEC19).
+- **Une watch à la fois** : le battement est un seul blob (`heartbeat.json`). Deux watches qui
+  publient en même temps l'écrasent tour à tour, et la garde refuse celle dont la clé n'est pas
+  épinglée. Plusieurs identités servent à passer de l'une à l'autre, pas à les faire tourner ensemble.
+- **Les détections ne sont pas encore signées** : chaque identité listée, même une watch dont la clé
+  n'est pas épinglée, peut fausser le verdict d'un run, `detected` comme `missed`. C'est la mesure
+  qui est touchée, jamais une action : un injecteur n'agit que sur le battement signé. Les signer :
+  SEC21.
+
+Tests : `infra/orodruin/tests/watch_writers.tftest.hcl` (`terraform test`, fournisseur mocké),
+`tests/unit/test_makefile_bench.py`, `tests/unit/test_watch_key.py`. Mesure au banc : un run depuis
+Orodruin, la watch sur le poste, à faire avec Jonathan.
 
 ## Déroulé (avec Jonathan — c'est lui qui lance les apply)
 
@@ -56,6 +103,8 @@ make orodruin-fingerprint          # l'empreinte de sa clé d'hôte, lue sur la 
                                    # export ORO_SSH_FINGERPRINT=SHA256:… dans ton environnement (V-32)
 make orodruin-ssh                  # attendre ~/.orodruin-ready, puis exit
 make orodruin-lock                 # 2e apply, il REFERME la sortie : son plan montré, relu, confirmé
+                                   # sans H0 (WC1) : à chaque -up et -lock, la même WATCH_PRINCIPALS=<id> NO_WATCH=1,
+                                   # sinon le plan retire ses droits à la watch du poste
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env   # abonnement, plafond
 make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, signature et provenance vérifiés ici, archive tirée des blobs du registre (OI1) | ssh docker load ; + orodruin.env
                                    # REF=<tag|commit> (défaut : le dernier tag v* — tant qu'il est d'avant CI3, il n'a pas d'image

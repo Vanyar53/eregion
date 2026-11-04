@@ -874,7 +874,8 @@ def check_loaded(expect: dict, inspected: str, digest: str) -> None:
     its config's digest, under the classic store), the layers and the user of its config, its
     platform and its commit. An image without its config reads back without layers nor user (docker's
     API answers its id alone: the CLI applies -f on its side), or not at all: refused. The layers
-    are unpacked or not, docker's inspect does not say it (#490, OI2: a run before the tag)."""
+    are unpacked or not, docker's inspect does not say it: the control run of make orodruin-push,
+    after this and before the tag, proves them (OI2, #490)."""
     if expect.get("digest") != digest or not DIGEST_RE.fullmatch(digest or ""):
         raise Unverified(f"l'attendu n'est pas celui de {digest[:19]}…")
     ids_ = expect.get("ids") or []

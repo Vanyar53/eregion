@@ -6,6 +6,7 @@ The code that lived here (4 394 lines) is split by concern, nothing changed in i
     policy.py                   which actions run alone, errors, verdicts
     ids.py                      resource ids
     state.py                    local state (~/.glorfindel/isolation, blocks)
+    pair_journal.py             Glorfindel's own writes of perimeter pairs (L1W)
     legacy_state.py             an older version's isolation record, kept by a new one (I4E)
     locks.py                    one writer per VM, per quarantine NSG
   glorfindel/providers/         the provider interface (MC0)
@@ -49,6 +50,7 @@ _MODULES = tuple(_importlib.import_module(name) for name in (
     "glorfindel.response.policy",
     "glorfindel.response.ids",
     "glorfindel.response.state",
+    "glorfindel.response.pair_journal",
     "glorfindel.response.unread",
     "glorfindel.response.legacy_state",
     "glorfindel.response.locks",

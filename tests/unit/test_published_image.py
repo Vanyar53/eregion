@@ -811,6 +811,7 @@ def test_orodruin_gets_the_published_image_verified_here_never_one_built_here():
     order = [rest.index(s) for s in ("published_image.py archive annatar", "rm -f .eregion-image",
                                      "'docker load' < \"$tmp/image.tar\"", "'docker image inspect eregion-annatar:incoming'",
                                      "published_image.py loaded annatar",
+                                     "docker run --rm --read-only --tmpfs /tmp --cap-drop ALL",
                                      "docker tag eregion-annatar:incoming eregion-annatar:orodruin",
                                      "cat > .eregion-image")]
     assert order == sorted(order)
@@ -873,18 +874,23 @@ def orodruin(tmp_path, reg, sig):
            "FAKE_COMMIT": C2, "REAL_PYTHON": sys.executable, "REAL_SCRIPT": str(SCRIPT),
            "PIM_WRAPPER": str(tmp_path / "pim_wrapper.py"), "EREGION_REGISTRY_API": f"{reg.base}/registry",
            "EREGION_COSIGN": str(sig.path), "FAKE_COSIGN_SHA256": sig.sha256}
-    for k in ("REF", "FAKE_STORE", "FAKE_LOAD_DROP", "FAKE_LOAD_ID", "FAKE_LOAD_USER"):
+    for k in ("REF", "FAKE_STORE", "FAKE_LOAD_DROP", "FAKE_LOAD_ID", "FAKE_LOAD_USER", "FAKE_RUN_HANG",
+              "FAKE_RUN_EXIT"):
         env.pop(k, None)
 
     class Run:
         def __init__(self):
             self.tmp, self.remote, self.old, self.new, self.env = tmp_path, remote, old, new, env
 
-        def push(self, **more):
+        def push(self, *args, **more):
             return subprocess.run(["make", "--no-print-directory", "-C", str(work), "-f", str(ROOT / "Makefile"),
                                    "-o", "orodruin-known", "orodruin-push", "REF=v0.4.6", "ORO_IP=203.0.113.7",
-                                   "ORO_SSH=ssh orodruin@203.0.113.7"], env={**env, **more},
+                                   "ORO_SSH=ssh orodruin@203.0.113.7", *args], env={**env, **more},
                                   capture_output=True, text=True, timeout=120)
+
+        def containers(self):
+            p = remote / "docker" / "containers.json"
+            return json.loads(p.read_text()) if p.exists() else {}
 
         def images(self, where="docker"):
             p = remote / where / "images.json" if where == "docker" else tmp_path / "local" / "images.json"
@@ -979,12 +985,100 @@ def test_an_image_whose_config_the_store_loses_is_refused_incoming_removed(orodr
     ({"FAKE_LOAD_USER": "root"}, "son utilisateur"),
 ])
 def test_an_image_loaded_that_is_not_the_one_verified_is_removed_and_nothing_changes(orodruin, env, said):
+    """…and never run, not even for the control run (OI2): only the image read back as the proven one
+    starts."""
     res = orodruin.push(**env)
     assert res.returncode != 0 and "retirée" in res.stderr and said in res.stderr
     images = orodruin.images()
     assert "eregion-annatar:incoming" not in images
     assert images["eregion-annatar:orodruin"]["manifest"] == orodruin.old.digest
     assert orodruin.marker() is None
+    assert not [c for c in orodruin.calls() if c[0] == "run"]
+
+
+# ── OI2 (#490): a control run before the tag — the layers present and unpacked ──────────────────
+
+CHECK_RUN = ["run", "--rm", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--security-opt",
+             "no-new-privileges:true", "--pull", "never", "--network", "none", "--no-healthcheck", "--name",
+             "eregion-annatar-check", "--entrypoint", "true", "eregion-annatar:incoming"]
+
+
+def _refused_at_the_check(orodruin, res, said):
+    assert res.returncode != 0, res.stdout + res.stderr
+    images = orodruin.images()
+    assert images["eregion-annatar:orodruin"]["manifest"] == orodruin.old.digest, res.stderr
+    assert orodruin.marker() is None
+    assert "eregion-annatar:incoming" not in images
+    assert "ne démarre pas" in res.stderr and said in res.stderr and "retirée" in res.stderr
+    assert orodruin.containers() == {}
+    assert not [c for c in orodruin.calls() if c[0] == "tag"]
+
+
+@pytest.mark.parametrize("store", ["containerd", "classic"])
+def test_a_layer_lost_after_the_load_is_refused_by_the_control_run(orodruin, store):
+    """#490, red on main: a layer the store lost after a load that succeeded. docker image inspect
+    reads the config — its layers listed from it, its id, its user, all as proven —, `loaded` passes,
+    and main tagged the image :orodruin, to fail at its first run. The control run creates a container
+    from it: refused, the cause said (docker's own words, then ours), incoming removed, :orodruin
+    unchanged, ~/.eregion-image absent (as under OI1: it never names the old image as the new one)."""
+    res = orodruin.push(FAKE_STORE=store, FAKE_LOAD_DROP="layer")
+    _refused_at_the_check(orodruin, res, "une couche absente ou non dépaquetée")
+    assert "failed to prepare snapshot" in res.stderr
+
+
+def test_the_control_run_takes_nothing_from_the_host_and_reaches_nothing(orodruin):
+    """The control run, as run on Orodruin: true alone, no network, never pulled, no mount, no
+    environment, no capability, read-only, hardened as every injector's run (ORO_HARDEN) — after the
+    image is read back as the proven one, before its tag; and gone after (--rm)."""
+    res = orodruin.push()
+    assert res.returncode == 0, res.stdout + res.stderr
+    calls = orodruin.calls()
+    kinds = [c[0] if c[0] != "image" else c[1] for c in calls]
+    runs = [c for c in calls[:kinds.index("tag")] if c[0] == "run"]     # then, the migration (ORO_MIGRATE)
+    assert runs == [CHECK_RUN]
+    assert kinds.index("load") < kinds.index("inspect") < kinds.index("run") < kinds.index("tag")
+    assert orodruin.containers() == {}
+    assert orodruin.images()["eregion-annatar:orodruin"]["manifest"] == orodruin.new.digest
+
+
+def test_a_control_run_that_hangs_is_cut_at_its_bound_and_its_container_taken_off(orodruin):
+    """Bounded: cut at ORO_CHECK_TIMEOUT, its container (left by the run killed) taken off — else it
+    would hold incoming, which no `image rm` could remove."""
+    import time
+    started = time.monotonic()
+    res = orodruin.push("ORO_CHECK_TIMEOUT=1", FAKE_RUN_HANG="20")
+    assert time.monotonic() - started < 15
+    _refused_at_the_check(orodruin, res, "délai de 1 s dépassé")
+
+
+@pytest.mark.parametrize("bound", ["0", "00", "000", "", "1; touch pwned", "-5", "$(shell touch pwned)",
+                                   "1'; touch pwned; '"])
+def test_a_bound_that_is_no_number_of_seconds_sends_nothing(orodruin, bound):
+    """ORO_CHECK_TIMEOUT goes into the remote command: seconds, at least one, or nothing is sent —
+    `timeout 00` sets no bound at all. Taken as REF is, never expanded by make before it is checked:
+    a `$(shell …)` given runs nowhere."""
+    res = orodruin.push(f"ORO_CHECK_TIMEOUT={bound}")
+    assert res.returncode != 0 and "ORO_CHECK_TIMEOUT invalide" in res.stderr
+    assert orodruin.calls() == []
+    assert not [p for p in orodruin.tmp.rglob("pwned")]
+    assert orodruin.marker() == [C1, orodruin.old.digest]
+
+
+@pytest.mark.parametrize("code, said", [("127", "true ne s'exécute pas"), ("1", "code 1")])
+def test_a_control_run_that_fails_is_refused_its_cause_said(orodruin, code, said):
+    res = orodruin.push(FAKE_RUN_EXIT=code)
+    _refused_at_the_check(orodruin, res, said)
+
+
+def test_a_check_container_left_by_a_push_before_is_taken_off_first(orodruin):
+    """A push cut while its control run ran leaves its container: taken off with the incoming left,
+    or the next push could never name its own."""
+    (orodruin.remote / "docker" / "containers.json").write_text(
+        json.dumps({"eregion-annatar-check": "eregion-annatar:incoming"}))
+    res = orodruin.push()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert orodruin.containers() == {}
+    assert orodruin.marker() == [C2, orodruin.new.digest]
 
 
 @pytest.mark.parametrize("spoil, said", [

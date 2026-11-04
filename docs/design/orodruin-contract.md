@@ -594,11 +594,24 @@ l'envoyait par SSH : rien ne liait ce qu'Orodruin exécute à ce que la CI avait
    applique `-f` de son côté : `docker image inspect -f {{.Id}}` et `docker image inspect` passent par
    le même `GET /images/{name}/json`. L'issue a mesuré que `-f {{.Id}}` répondait pour l'image
    incomplète : l'API rend alors un JSON partiel, l'identifiant sans configuration ni couches.)
-   Alors seulement elle
-   devient `eregion-annatar:orodruin`, le tag d'attente est retiré, et `~/.eregion-image` est écrit
-   (« commit digest »). Sinon elle est retirée, `eregion-annatar:orodruin` n'a pas changé, et
-   `~/.eregion-image` reste absent : il ne nomme jamais l'ancienne image comme si elle était la
-   nouvelle.
+5. **Un run de contrôle, avant le tag** (OI2, #490) : l'image relue, et seulement elle, démarre une
+   fois sur Orodruin —
+   `timeout -k 10 120 docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --security-opt
+   no-new-privileges:true --pull never --network none --no-healthcheck --name eregion-annatar-check
+   --entrypoint true eregion-annatar:incoming`. Créer un conteneur demande ses couches, présentes et
+   dépaquetées : ce que la relecture ne dit pas (voir plus bas). S'il échoue, ou dépasse 120 s
+   (`ORO_CHECK_TIMEOUT=<s>` sur la ligne de commande : des chiffres, au moins 1 s, sans zéro en tête
+   — `timeout 00` ne borne rien —, validés avant tout envoi et jamais développés par make, comme
+   `REF`), son conteneur (`timeout 30 docker rm -f`) et `incoming` sont retirés, la cause est dite
+   (les mots de docker, puis les nôtres : le délai, docker qui n'a pas pu créer le conteneur — « une
+   couche absente ou non dépaquetée ? » —, `true` qui ne s'exécute pas, ssh, ou le code),
+   `eregion-annatar:orodruin` n'a pas changé et `~/.eregion-image` reste absent. Un conteneur de
+   contrôle laissé par un envoi coupé est retiré au début du suivant, avec l'`incoming` qui restait.
+
+   Alors seulement elle devient `eregion-annatar:orodruin`, le tag d'attente est retiré, et
+   `~/.eregion-image` est écrit (« commit digest »). Sinon elle est retirée,
+   `eregion-annatar:orodruin` n'a pas changé, et `~/.eregion-image` reste absent : il ne nomme jamais
+   l'ancienne image comme si elle était la nouvelle.
 
 **Pourquoi l'archive ne vient plus du `docker save` du poste** (OI1, #488, mesuré le 03/11). Sous
 Docker Desktop, avec le magasin d'images containerd, `docker save` d'une image **tirée** rend son
@@ -617,11 +630,48 @@ une autre commande ou un autre environnement. Le lien est ailleurs : l'identifia
 manifeste nomme, et refuse un blob dont le digest ne correspond pas. Les `diff_ids` et l'utilisateur
 relus prouvent alors que cette configuration-là est présente et lisible.
 
-**La limite** : `docker image inspect` ne dit pas si les couches sont dépaquetées. Au magasin
-containerd, une couche perdue après un chargement réussi ne se voit pas à la relecture. Un run de
-contrôle sans réseau avant le tag (`docker run --rm --network none --entrypoint true
-eregion-annatar:incoming`) le prouverait ; il change la surface d'Orodruin et se mesure au réel :
-lot de suite OI2 (#490).
+**Ce que la relecture ne dit pas, et le run de contrôle** (OI2, #490). `docker image inspect` ne dit
+pas si les couches sont présentes ni dépaquetées : au magasin containerd, `RootFS.Layers` vient de la
+configuration, et `docker tag` ne lit qu'elle. Une couche perdue **après** un chargement réussi
+passait la relecture et le tag, et ne se voyait qu'au premier run (dans les faux, la migration
+d'`orodruin-push` : `make` sortait en erreur, `:orodruin` déjà remplacée). Le run de contrôle
+(étape 5) crée un conteneur : docker doit alors monter chaque couche de la configuration, et refuse
+s'il en manque une. Le risque restait faible : l'archive porte toutes les couches, vérifiées une à
+une, ses fichiers d'index sont écrits en dernier (une archive tronquée ne se charge pas), et le reste
+d'un envoi précédent est retiré avant.
+
+**Le run de contrôle au regard du contrat : il reste dans la surface permise.** Les six garanties,
+une à une :
+- **Périmètre réseau** : `--network none` ne donne au conteneur que sa boucle locale, aucune
+  interface vers l'extérieur — moins que la sortie fermée du contrat, qui admet le banc, le cloud et
+  le modèle. `--pull never` : une image absente n'est jamais demandée à un registre (docker
+  tenterait Docker Hub, hors périmètre ; la sortie fermée refuserait, mais rien ne part).
+- **Identité limitée** : l'identité managée ne se lit que par IMDS (`169.254.169.254`), donc par le
+  réseau : sans réseau, le conteneur ne peut pas obtenir de jeton. Aucune attribution, aucun droit
+  ne change.
+- **Cibles inscrites, plafond** : rien n'est injecté. `--entrypoint true` remplace la commande de
+  l'image : ni Python, ni Annatar, ni Gothmog ne démarrent, aucune cible n'est lue ni touchée, rien
+  ne compte au plafond.
+- **Audit** : aucun appel au cloud, donc rien à journaliser avant ; le journal (`~/runs/orodruin`)
+  n'est pas monté.
+- **Arrêt d'urgence** : rien ne tourne au-delà du délai borné (120 s, puis `KILL` 10 s après) ; le
+  conteneur est retiré (`--rm`, et `docker rm -f`, lui-même borné à 30 s, sur un échec) ; aucun
+  healthcheck de l'image ne tourne (`--no-healthcheck`).
+- Et ce qu'il ne prend pas de l'hôte : aucun montage (`-v`), ni `orodruin.env` (l'abonnement, la
+  clé du modèle, le canal), ni variable d'environnement ; la racine en lecture seule, `/tmp` en
+  tmpfs, aucune capacité, aucun gain de privilège — `ORO_HARDEN`, le durcissement de tout `docker
+  run` d'un injecteur sur Orodruin (V-34) — et l'utilisateur de l'image, non root (relu à l'étape 4).
+
+Il ne démarre **que l'image relue comme celle du manifeste prouvé** : jamais avant l'étape 4 (une
+image d'un autre digest, d'un autre utilisateur ou sans sa configuration n'est jamais lancée), sur
+une image dont chaque blob a été vérifié par son sha256 sur le poste, signée et attestée par
+`publish.yml`. Le seul code de l'image qui s'exécute est son `/bin/true`, et il s'exécute dans une
+surface plus étroite que les vrais runs qui suivent le tag : la migration (`ORO_MIGRATE`), avec le
+réseau du contrat et `~/runs` monté ; puis les injecteurs, avec `orodruin.env`. Le run de contrôle n'ajoute donc rien à ce
+qu'Orodruin peut faire ; il avance seulement, dans un conteneur qui ne peut rien, le premier
+démarrage de l'image. Le contrat (`orodruin-check`) n'est pas lu avant : il dit si un injecteur peut
+agir, et rien n'agit ici. Il se mesure au réel, avec Jonathan (`make orodruin-push REF=…`, voir
+`docs/operations.md`).
 
 **Pourquoi Orodruin ne tire pas lui-même.** Le contrat garantit une sortie limitée au banc, aux API
 de contrôle du cloud et à l'API du modèle, vérifiée par une connexion hors périmètre qui échoue.

@@ -19,7 +19,7 @@ Contrat (garanties, vérifications, kill, mutants) :
   annuler une expérience, sur chaque expérience (SEC5, #182). Jamais d'écriture sur le groupe
   entier : bree, jamais inscrite, reste hors d'atteinte. Plus `Log Analytics Reader` sur l'espace
   de logs du banc. Rien d'autre : le contrat tient une liste de ce que chaque portée peut porter,
-  et tout autre droit le rend passif (SEC11, `docs/design/orodruin-contract.md`). Une VM inscrite plus tard : `make orodruin-lock YES=1` lui donne ses droits.
+  et tout autre droit le rend passif (SEC11, `docs/design/orodruin-contract.md`). Une VM inscrite plus tard : `make orodruin-lock` (son plan relu, puis confirmé) lui donne ses droits.
 - **Le compte du canal derrière son pare-feu** (SEC5) : seuls les sous-réseaux d'Orodruin et de
   H0 (points de terminaison de service) et les IP d'Orodruin, de H0 et de l'opérateur y entrent.
   Appliquer `infra/glorfindel-host` d'abord (le point de terminaison de H0), puis ce module.
@@ -47,12 +47,15 @@ Contrat (garanties, vérifications, kill, mutants) :
 
 ```bash
 # 0. Lecture seule : quota de la famille, SKU, prix → vm_size (repli : D2als_v6)
-make orodruin-plan                 # relire le plan
-make orodruin-up YES=1             # 1er apply, sortie ouverte : la VM installe Docker
+make orodruin-plan                 # relire le plan : il est calculé sortie FERMÉE (egress_locked=true),
+                                   # celui du 2e apply, pas celui du 1er
+make orodruin-up                   # 1er apply, il OUVRE la sortie (egress_locked=false), le temps que la VM
+                                   # installe Docker : son plan est montré, relu, confirmé (jamais YES=1 ici :
+                                   # le plan relu au-dessus n'est pas celui qu'il applique)
 make orodruin-fingerprint          # l'empreinte de sa clé d'hôte, lue sur la VM par Azure (Run Command) :
                                    # export ORO_SSH_FINGERPRINT=SHA256:… dans ton environnement (V-32)
 make orodruin-ssh                  # attendre ~/.orodruin-ready, puis exit
-make orodruin-lock YES=1           # 2e apply : la sortie se referme (YES=1 : sans confirmation)
+make orodruin-lock                 # 2e apply, il REFERME la sortie : son plan montré, relu, confirmé
 cp infra/orodruin/orodruin.env.example infra/orodruin/orodruin.env   # abonnement, plafond
 make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, signature et provenance vérifiés ici, archive tirée des blobs du registre (OI1) | ssh docker load ; + orodruin.env
                                    # REF=<tag|commit> (défaut : le dernier tag v* — tant qu'il est d'avant CI3, il n'a pas d'image
@@ -91,9 +94,11 @@ avant de l'exécuter, et s'arrête au plafond déclaré.
 Entre les sessions : `make orodruin-stop` (désalloue), `make orodruin-start`.
 
 **À jour au démarrage (OI3, #522).** Après une publication, `make orodruin-start` suffit : une fois
-la VM démarrée et qu'elle répond en SSH, il lit l'image en service (le tag `eregion-annatar:orodruin`
-et `~/.eregion-image`, en lecture seule) et la compare, sur le poste, à la dernière release (le plus
-haut tag `v*` par ordre de version, puis par commit dans l'histoire de git).
+la VM démarrée et qu'elle répond en SSH, il lit l'image en service (docker qui répond, le tag
+`eregion-annatar:orodruin` et le commit de son étiquette, `~/.eregion-image`, en lecture seule, par la
+clé d'hôte épinglée) et la compare, sur le poste, à la dernière release (le plus haut tag `v*` par
+ordre de version, puis par commit dans l'histoire de git). Un marqueur vérifié dont le tag dit un
+autre commit est illisible : la release est poussée.
 
 ```bash
 make orodruin-start                # plus ancienne, absente ou illisible : il le dit, puis make orodruin-push
@@ -105,10 +110,12 @@ make orodruin-start REF=v0.5.4     # une autre release visée que la dernière
 make orodruin-update [REF=…]       # la même mise à jour, la VM déjà démarrée
 ```
 
-Une erreur (la VM qui ne répond pas en 2 min, la lecture, le push, sa vérification, son run de
-contrôle) : un code non nul, la cause dite, rien d'armé, et la VM reste démarrée (c'est dit :
-`make orodruin-stop` pour l'éteindre). `REF` et `NO_UPDATE` se donnent sur la ligne de commande
-(`NO_UPDATE=1`, ou rien), validés avant tout, jamais développés par make. Rien ne change au réseau
+Une erreur (la VM qui ne répond pas en 2 min, docker qui ne répond pas sur Orodruin, la lecture, une
+`REF` hors d'`origin/main`, le push, sa vérification, son run de contrôle) : un code non nul, la cause
+dite, rien d'armé, et la VM reste démarrée (c'est dit : `make orodruin-stop` pour l'éteindre). `REF`
+et `NO_UPDATE` se donnent sur la ligne de commande (`NO_UPDATE=1`, ou rien), validés avant tout,
+jamais développés par make ; avant `az vm start` aussi, `ORO_SSH_FINGERPRINT` (sauf `NO_UPDATE=1`) et
+`ORO_CHECK_TIMEOUT`. `make -n orodruin-start` montre ses lignes et n'en lance aucune. Rien ne change au réseau
 d'Orodruin ni à son contrat : la mise à jour est le même `orodruin-push`, depuis le poste. Le détail :
 `docs/design/orodruin-contract.md`, « L'image des injecteurs », « À jour au démarrage ».
 
@@ -122,7 +129,7 @@ peut laisser arrêtée. Il sort en 1 si une étape a échoué.
 - `PRINCIPAL=`, `VM_ID=`, `SUBSCRIPTION=`, `CHANNEL=` servent si l'état Terraform ou
   `orodruin.env` est illisible.
 - Pour fermer les fenêtres, l'opérateur écrit sur le conteneur `exercises` (`channel_operator`,
-  posé par `make orodruin-lock YES=1`).
+  posé par `make orodruin-lock`).
 
 Le kill retire les droits hors de Terraform : `make orodruin-lock` les repose. Retirer un rôle ne
 prend pas effet à l'instant (cache du plan de contrôle) : c'est pour ça que la VM s'arrête aussi.

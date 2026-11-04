@@ -1,7 +1,9 @@
 """OI3 (#522): make orodruin-start brings Orodruin up to the latest release, verified — the image in
 service (~/.eregion-image, :orodruin) read back, compared on the workstation to the latest tag v* by
 version order then by commit in git's history (scripts/published_image.py age), the verified push
-when it is older, absent or unreadable, kept when newer; make orodruin-check says it. M3630–M3639.
+when it is older, absent or unreadable, kept when newer; make orodruin-check says it. M3630–M3639,
+and the review's M3685–M3693 (the update's SSH, docker down, the tag's label, what is checked before
+the VM starts, the wait, the dry run).
 """
 PIM = "scripts/published_image.py"
 MAKEFILE = "Makefile"
@@ -39,9 +41,34 @@ MUTANTS = [
      '@case "$(origin REF) $(origin NO_UPDATE)" in *environment*)',
      '@case "$(origin REF) $(origin NO_UPDATE)" in *nowhere*)'),
     ("M3639", "orodruin-check never says the image is older (OI3)", MAKEFILE,
-     '	 case "$$state" in older|absent|unreadable) echo "  ⚠ plus ancienne',
-     '	 case "$$state" in never) echo "  ⚠ plus ancienne'),
+     'case "$$state" in older) w="plus ancienne";;',
+     'case "$$state" in older) w="";;'),
+    # The review of OI3 (M3685–M3693).
+    ("M3685", "the update's read of the image through a bare ssh: no pinned key, no ed25519 only (OI3)", MAKEFILE,
+     '{ rc=0; $(ORO_SSH) $(ORO_IMAGE_READ) || rc=$$?;',
+     '{ rc=0; ssh $(ORO_USER)@$(ORO_IP) $(ORO_IMAGE_READ) || rc=$$?;'),
+    ("M3686", "orodruin-update without orodruin-known: Orodruin's host key never checked (OI3)", MAKEFILE,
+     "orodruin-update: orodruin-known\n", "orodruin-update:\n"),
+    ("M3687", "a docker that does not answer read as an image absent: pushed, ~/.eregion-image erased (OI3)",
+     MAKEFILE, "'docker info >/dev/null 2>&1 || exit 5; ", "'"),
+    ("M3688", "a verified marker trusted though its tag says another commit: never pushed (OI3)", PIM,
+     "    if revision is not None and revision != commit:\n", "    if False:\n"),
+    ("M3689", "ORO_SSH_FINGERPRINT checked only after the VM started (OI3)", MAKEFILE,
+     '@[ "$$EREGION_NO_UPDATE" = 1 ] || case "$$EREGION_ORO_FINGERPRINT" in',
+     '@true || case "$$EREGION_ORO_FINGERPRINT" in'),
+    ("M3690", "ORO_CHECK_TIMEOUT checked only after the VM started (OI3)", MAKEFILE,
+     "@case \"$$EREGION_CHECK_TIMEOUT\" in 0*|*[!0-9]*|'') echo \"ORO_CHECK_TIMEOUT invalide : « "
+     "$$EREGION_CHECK_TIMEOUT » (des secondes, au moins 1) : rien n'est démarré\"",
+     "@case \"$$EREGION_CHECK_TIMEOUT\" in x-never) echo \"ORO_CHECK_TIMEOUT invalide : « "
+     "$$EREGION_CHECK_TIMEOUT » (des secondes, au moins 1) : rien n'est démarré\""),
+    ("M3691", "the start never waits for the VM to answer (OI3)", MAKEFILE,
+     'until ssh-keyscan -T 5 -t ed25519 "$(ORO_IP)" 2>/dev/null | grep -q .;', "until true;"),
+    ("M3692", "orodruin-check never says an image absent (OI3)", MAKEFILE,
+     'absent) w="absente";; ', ""),
+    ("M3693", "the sub-make written $(MAKE) in the recipe: make -n starts the VM (OI3)", MAKEFILE,
+     "	 $(ORO_SUBMAKE) orodruin-update ||", "	 $(MAKE) --no-print-directory orodruin-update ||"),
 ]
+_H = "tests/unit/test_host_ssh.py::"
 TESTS = {
     "M3630": _OLDER,
     "M3631": _KEPT,
@@ -53,4 +80,13 @@ TESTS = {
     "M3637": _T + "test_no_update_starts_the_vm_and_says_it_reads_nothing",
     "M3638": _T + "test_values_refused_start_nothing_and_send_nothing",
     "M3639": _T + "test_the_check_says_the_image_and_the_latest_release_a_warning_never_a_refusal",
+    "M3685": _H + "test_the_update_s_ssh_takes_the_pinned_key_alone",
+    "M3686": _H + "test_the_update_s_ssh_takes_the_pinned_key_alone " + _H + "test_the_update_without_its_fingerprint_sends_nothing",
+    "M3687": _T + "test_a_docker_that_does_not_answer_is_never_taken_for_an_absent_image",
+    "M3688": _T + "test_a_verified_marker_whose_tag_says_another_commit_is_unreadable_the_release_pushed",
+    "M3689": _T + "test_what_the_update_needs_is_checked_before_the_vm_starts",
+    "M3690": _T + "test_what_the_update_needs_is_checked_before_the_vm_starts",
+    "M3691": _T + "test_a_vm_that_never_answers_stops_nonzero_nothing_sent",
+    "M3692": _T + "test_the_check_says_an_image_absent_or_unreadable_too",
+    "M3693": _T + "test_a_dry_run_of_the_start_runs_nothing",
 }

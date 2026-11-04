@@ -26,6 +26,8 @@ than the archive's (a different image). Every call: $DOCKER_STATE/calls.
 125, « failed to prepare snapshot »); then runs it — $FAKE_RUN_HANG=<s>: it hangs that long first;
 $FAKE_RUN_EXIT=<n>: its command exits n — and, under `--rm`, removes it. A container left (its run
 killed) holds its image: `image rm` of that name refuses, `rm -f` takes it off.
+
+`info` (OI3) answers; $FAKE_DOCKER_DOWN: the daemon answers nothing, every call fails.
 """
 import gzip
 import hashlib
@@ -320,7 +322,14 @@ def docker(args: list) -> None:
     s = _state()
     with open(s / "calls", "a") as f:
         f.write(json.dumps(args) + "\n")
+    if os.environ.get("FAKE_DOCKER_DOWN"):        # OI3: the daemon does not answer, to anything
+        sys.stderr.write("Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+                         "Is the docker daemon running?\n")
+        sys.exit(1)
     images = _images(s)
+    if args[0] == "info":
+        print("Server Version: fake")
+        return None
     if args[0] == "load":
         return _load(s)
     if args[0] == "save":

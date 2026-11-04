@@ -1143,14 +1143,20 @@ orodruin-push-dev: orodruin-known
 	scp $(SSH_OPTS) infra/orodruin/orodruin.env $(ORO_USER)@$(ORO_IP):orodruin.env
 	$(ORO_SSH) '$(ORO_MIGRATE)'
 
-# OI3 (#522) : l'image en service sur Orodruin, lue en lecture seule par SSH — son tag (code 4 : absent),
-# puis ~/.eregion-image (code 3 : absent ; au plus 4 Ko) —, comparée sur ce poste à la dernière release
+# OI3 (#522) : l'image en service sur Orodruin, lue en lecture seule par SSH — docker qui répond (code 5 :
+# il ne répond pas, rien ne se lit : on s'arrête, jamais pris pour une image absente), les étiquettes de
+# son tag (version, révision ; code 4 : le tag absent), puis ~/.eregion-image (code 3 : absent ; au plus
+# 4 Ko), bornée aussi sur ce poste (ORO_READ_MAX) —, comparée sur ce poste à la dernière release
 # (published_image.py age : le plus haut tag v* par ordre de version, puis par commit dans l'histoire
-# de git, jamais deux chaînes). Ses états : equal ; older, absent, unreadable (remplacée par
-# orodruin-start) ; newer, dev, diverged (gardée : jamais remplacée sans qu'on le demande).
-ORO_IMAGE_READ = 'docker image inspect -f "{{.Id}}" $(ORO_IMAGE) >/dev/null 2>&1 || exit 4; test -e .eregion-image || exit 3; head -c 4096 .eregion-image'
-# Le code de la lecture en options de published_image.py age ; une autre fin : ssh n'a pas abouti.
-ORO_AGE_ARGS   = case $$rc in 0) set -- --marker "$$tmp/marker";; 3) set -- --marker "$$tmp/none";; 4) set -- --marker "$$tmp/none" --no-image;; *) set --;; esac
+# de git, jamais deux chaînes ; un marqueur vérifié dont le tag dit un autre commit : illisible). Ses
+# états : equal ; older, absent, unreadable (remplacée par orodruin-start) ; newer, dev, diverged
+# (gardée : jamais remplacée sans qu'on le demande).
+ORO_IMAGE_READ = 'docker info >/dev/null 2>&1 || exit 5; l=$$(docker image inspect -f "{{index .Config.Labels \"org.opencontainers.image.version\"}} {{index .Config.Labels \"org.opencontainers.image.revision\"}}" $(ORO_IMAGE) 2>/dev/null) || exit 4; printf "%s\n" "$$l" | head -c 200 | tr -d "\n"; echo; test -e .eregion-image || exit 3; head -c 4096 .eregion-image'
+# Sur ce poste, la lecture est bornée (head -c, son code de sortie à part dans $$tmp/rc), puis son code
+# devient les options de published_image.py age. Une autre fin : docker ne répond pas (5), ou ssh n'a
+# pas abouti.
+ORO_READ_MAX   = 4400
+ORO_AGE_ARGS   = rc=$$(cat "$$tmp/rc" 2>/dev/null || echo 255); case $$rc in 0) set -- --read "$$tmp/read";; 3) set -- --read "$$tmp/read" --no-marker;; 4) set -- --no-image;; *) set --;; esac
 ORO_AGE_STATE  = state=$$(printf '%s\n' "$$out" | sed -n 's/^state=//p'); release=$$(printf '%s\n' "$$out" | sed -n 's/^release=//p')
 # Le make d'une étape suivante (orodruin-update, orodruin-push), jamais écrit $(MAKE) dans la
 # recette : make -n exécuterait cette ligne (et démarrerait la VM, enverrait l'image) au lieu de la montrer.
@@ -1161,11 +1167,12 @@ ORO_SUBMAKE    = $(MAKE) --no-print-directory
 orodruin-check: orodruin-known
 	@timeout 30 git fetch -q --tags origin 2>/dev/null || echo "  ⚠ git fetch impossible : la dernière release est celle que ce poste connaît" >&2
 	@tmp=$$(mktemp -d) || exit 0; trap 'rm -rf "$$tmp"' EXIT; \
-	 rc=0; $(ORO_SSH) $(ORO_IMAGE_READ) > "$$tmp/marker" 2>/dev/null || rc=$$?; $(ORO_AGE_ARGS); \
-	 [ $$# -gt 0 ] || { echo "  ⚠ l'image en service ne se lit pas (ssh, code $$rc)" >&2; exit 0; }; \
+	 { rc=0; $(ORO_SSH) $(ORO_IMAGE_READ) 2>/dev/null || rc=$$?; echo $$rc > "$$tmp/rc"; } | head -c $(ORO_READ_MAX) > "$$tmp/read"; $(ORO_AGE_ARGS); \
+	 [ $$# -gt 0 ] || { echo "  ⚠ l'image en service ne se lit pas (docker ou ssh, code $$rc)" >&2; exit 0; }; \
 	 out=$$(python3 scripts/published_image.py age annatar "$$@") || { echo "  ⚠ l'image en service ne se compare pas à la dernière release (ci-dessus)" >&2; exit 0; }; \
 	 $(ORO_AGE_STATE); case "$$release" in ''|-*|*[!A-Za-z0-9._-]*) exit 0;; esac; \
-	 case "$$state" in older|absent|unreadable) echo "  ⚠ plus ancienne : make orodruin-start ou make orodruin-push REF=$$release (un avertissement : le contrat suit)" >&2;; esac
+	 case "$$state" in older) w="plus ancienne";; absent) w="absente";; unreadable) w="illisible";; *) w="";; esac; \
+	 [ -z "$$w" ] || echo "  ⚠ image $$w : make orodruin-start ou make orodruin-push REF=$$release (un avertissement : le contrat suit)" >&2
 	$(ORO_SSH) '$(ORO_RUN_CONTRACT) python -m eregion_core.orodruin'
 
 # @ : la commande porte l'identifiant d'abonnement, on ne la répète pas à l'écran.
@@ -1179,18 +1186,25 @@ orodruin-stop:
 # plus récente (un commit de main poussé à la main, orodruin-push-dev), gardée. Une erreur : un code non
 # nul, la cause dite, rien d'armé, la VM démarrée (c'est dit). NO_UPDATE=1 : démarrée sans mise à jour.
 # REF (la release visée, défaut : la dernière) et NO_UPDATE se donnent sur la ligne de commande, lus
-# par le shell dans son environnement, validés avant tout envoi, jamais développés par make.
+# par le shell dans son environnement, validés avant tout envoi, jamais développés par make. Avant
+# az vm start aussi : ORO_SSH_FINGERPRINT posé (sauf NO_UPDATE=1, qui ne parle pas à la VM) et
+# ORO_CHECK_TIMEOUT (le run de contrôle du push) — sinon la VM démarrerait pour rien.
+# L'attente : 12 essais d'au plus 5 s, 5 s entre deux, 2 min au plus.
 unexport NO_UPDATE
 orodruin-start: export EREGION_DEPLOY_REF = $(value REF)
 orodruin-start: export EREGION_NO_UPDATE = $(value NO_UPDATE)
+orodruin-start: export EREGION_CHECK_TIMEOUT = $(value ORO_CHECK_TIMEOUT)
+orodruin-start: export EREGION_ORO_FINGERPRINT = $(value ORO_SSH_FINGERPRINT)
 orodruin-start:
 	@case "$(origin REF) $(origin NO_UPDATE)" in *environment*) echo "REF ou NO_UPDATE vient de l'environnement : rien n'est démarré. Sur la ligne de commande : make orodruin-start [NO_UPDATE=1] [REF=<tag ou commit>]" >&2; exit 1;; esac
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit) : rien n'est démarré" >&2; exit 1;; esac
 	@case "$$EREGION_NO_UPDATE" in ''|1) ;; *) echo "NO_UPDATE invalide : « $$EREGION_NO_UPDATE » (NO_UPDATE=1, ou rien) : rien n'est démarré" >&2; exit 1;; esac
+	@[ "$$EREGION_NO_UPDATE" = 1 ] || case "$$EREGION_ORO_FINGERPRINT" in SHA256:*[!A-Za-z0-9+/=]*|SHA256:) echo "ORO_SSH_FINGERPRINT illisible : rien n'est démarré (make orodruin-fingerprint)" >&2; exit 1;; SHA256:*) ;; *) echo "ORO_SSH_FINGERPRINT requis pour la mise à jour (la clé d'hôte d'Orodruin, make orodruin-fingerprint) : rien n'est démarré. Ou NO_UPDATE=1" >&2; exit 1;; esac
+	@case "$$EREGION_CHECK_TIMEOUT" in 0*|*[!0-9]*|'') echo "ORO_CHECK_TIMEOUT invalide : « $$EREGION_CHECK_TIMEOUT » (des secondes, au moins 1) : rien n'est démarré" >&2; exit 1;; esac
 	@echo "az vm start (vm-orodruin)" && az vm start --ids "$(ORO_VM_ID)"
 	@if [ "$$EREGION_NO_UPDATE" = 1 ]; then echo "  Démarrée sans mise à jour (NO_UPDATE=1) : l'image en service n'est ni lue ni changée ; make orodruin-check la dit"; exit 0; fi; \
 	 i=0; until ssh-keyscan -T 5 -t ed25519 "$(ORO_IP)" 2>/dev/null | grep -q .; do i=$$((i+1)); \
-	   [ $$i -lt 24 ] || { echo "✗ Orodruin ne répond pas en SSH (2 min) : rien n'est mis à jour, rien n'est armé. La VM reste démarrée : make orodruin-update quand elle répond, make orodruin-stop pour l'éteindre" >&2; exit 1; }; sleep 5; done; \
+	   [ $$i -lt 12 ] || { echo "✗ Orodruin ne répond pas en SSH (2 min) : rien n'est mis à jour, rien n'est armé. La VM reste démarrée : make orodruin-update quand elle répond, make orodruin-stop pour l'éteindre" >&2; exit 1; }; sleep 5; done; \
 	 $(ORO_SUBMAKE) orodruin-update || { echo "✗ La VM reste démarrée : make orodruin-stop pour l'éteindre, make orodruin-start NO_UPDATE=1 pour démarrer sans mise à jour" >&2; exit 1; }
 
 orodruin-update: export EREGION_DEPLOY_REF = $(value REF)
@@ -1199,8 +1213,9 @@ orodruin-update: orodruin-known
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
 	@git fetch -q --tags origin || { echo "✗ git fetch : la dernière release ne se relit pas ; rien n'est mis à jour, rien n'est armé" >&2; exit 1; }
 	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; trap 'rm -rf "$$tmp"; exit 130' INT TERM HUP; \
-	 rc=0; $(ORO_SSH) $(ORO_IMAGE_READ) > "$$tmp/marker" || rc=$$?; $(ORO_AGE_ARGS); \
-	 [ $$# -gt 0 ] || { echo "✗ l'image en service ne se lit pas (ssh, code $$rc) : rien n'est mis à jour, rien n'est armé" >&2; exit 1; }; \
+	 { rc=0; $(ORO_SSH) $(ORO_IMAGE_READ) || rc=$$?; echo $$rc > "$$tmp/rc"; } | head -c $(ORO_READ_MAX) > "$$tmp/read"; $(ORO_AGE_ARGS); \
+	 [ $$# -gt 0 ] || { case $$rc in 5) why="docker ne répond pas sur Orodruin";; *) why="ssh, code $$rc";; esac; \
+	   echo "✗ l'image en service ne se lit pas ($$why) : rien n'est mis à jour, rien n'est armé" >&2; exit 1; }; \
 	 out=$$(python3 scripts/published_image.py age annatar --ref "$$EREGION_DEPLOY_REF" "$$@") \
 	   || { echo "✗ l'image en service ne se compare pas à la release (ci-dessus) : rien n'est mis à jour, rien n'est armé" >&2; exit 1; }; \
 	 $(ORO_AGE_STATE); \

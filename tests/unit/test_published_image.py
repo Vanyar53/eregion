@@ -1376,7 +1376,7 @@ START_FAKES = {
     **PUSH_FAKES,
     "git": '#!/bin/bash\n[ "$1" = -C ] && shift 2\n[ "$1" = fetch ] && exit 0\nexec "$REAL_GIT" -C "$FAKE_REPO" "$@"\n',
     "az": '#!/bin/sh\necho "az $*" >> "$FAKE_AZ_LOG"\n',
-    "ssh-keyscan": '#!/bin/sh\n[ -n "$FAKE_SILENT" ] || echo "$FAKE_KEYSCAN"\n',
+    "ssh-keyscan": '#!/bin/sh\necho "$*" >> "$FAKE_AZ_LOG.keyscan"\n[ -n "$FAKE_SILENT" ] || echo "$FAKE_KEYSCAN"\n',
     "sleep": "#!/bin/sh\nexit 0\n",
 }
 ORO_IP_T = "203.0.113.7"
@@ -1409,6 +1409,7 @@ def start(tmp_path, reg, sig):
     git("switch", "-q", "-c", "side", commits["v0.5.9"])
     git("commit", "-q", "--allow-empty", "-m", "side")
     commits["side"] = git("rev-parse", "HEAD")
+    commits["unknown"] = "f" * 40                         # an image of a commit this repository never saw
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     for name, text in START_FAKES.items():
@@ -1575,10 +1576,69 @@ def test_a_failed_push_stops_nonzero_nothing_armed_the_vm_said_started(start):
 
 
 def test_an_image_whose_commit_is_unknown_here_decides_nothing(start):
-    start.serve("v0.5.9", f"{'f' * 40} {start.images_['v0.5.9'].digest}\n")
+    start.serve("unknown")
     res = start.run()
     assert res.returncode != 0 and "inconnu ici" in res.stderr and "La VM reste démarrée" in res.stderr
-    assert start.loads() == [] and start.served() == start.images_["v0.5.9"].digest
+    assert start.loads() == [] and start.served() == start.images_["unknown"].digest
+
+
+@pytest.mark.parametrize("name", ["head", "v0.5.9"])
+def test_a_verified_marker_whose_tag_says_another_commit_is_unreadable_the_release_pushed(start, name):
+    """The marker says the release; :orodruin is another build (orodruin-push-dev cut before its
+    marker, or anything loaded by hand): its label read back, `unreadable`, the release pushed."""
+    start.serve(name, f"{start.commits['v0.5.10']} {start.images_['v0.5.10'].digest}\n")
+    res = start.run()
+    assert f"le tag eregion-annatar:orodruin {start.commits[name][:12]}" in res.stderr, res.stderr
+    _updated(start, res)
+
+
+def test_a_docker_that_does_not_answer_is_never_taken_for_an_absent_image(start):
+    """Docker down on Orodruin: nothing reads (code 5), the start stops — never a push, which would
+    erase ~/.eregion-image before loading anything."""
+    start.serve("v0.5.9")
+    res = start.run(FAKE_DOCKER_DOWN="1")
+    assert res.returncode != 0 and "docker ne répond pas sur Orodruin" in res.stderr
+    assert "La VM reste démarrée" in res.stderr and "make orodruin-push REF" not in res.stdout
+    assert start.marker() == [start.commits["v0.5.9"], start.images_["v0.5.9"].digest]
+
+
+def test_a_ref_off_main_is_refused_nothing_pushed(start):
+    start.serve("v0.5.9")
+    res = start.run(f"REF={start.commits['side']}")
+    assert res.returncode != 0 and "n'est pas sur origin/main" in res.stderr
+    assert start.loads() == [] and start.marker() == [start.commits["v0.5.9"], start.images_["v0.5.9"].digest]
+
+
+@pytest.mark.parametrize("args, env, said", [
+    ([], {"ORO_SSH_FINGERPRINT": ""}, "ORO_SSH_FINGERPRINT requis"),
+    ([], {"ORO_SSH_FINGERPRINT": "SHA256:a;b"}, "ORO_SSH_FINGERPRINT illisible"),
+    (["ORO_CHECK_TIMEOUT=0"], {}, "ORO_CHECK_TIMEOUT invalide"),
+    (["ORO_CHECK_TIMEOUT=$(shell touch pwned)"], {}, "ORO_CHECK_TIMEOUT invalide"),
+])
+def test_what_the_update_needs_is_checked_before_the_vm_starts(start, args, env, said):
+    start.serve("v0.5.9")
+    res = start.run(*args, **env)
+    assert res.returncode != 0 and said in res.stderr
+    assert start.az() == [] and start.calls() == [] and not list(start.tmp.rglob("pwned"))
+
+
+def test_no_update_needs_no_fingerprint(start):
+    start.serve("v0.5.9")
+    res = start.run("NO_UPDATE=1", ORO_SSH_FINGERPRINT="")
+    assert res.returncode == 0, res.stderr
+    assert len(start.az()) == 1 and start.calls() == []
+
+
+def test_a_dry_run_of_the_start_runs_nothing(start):
+    """make -n orodruin-start shows its lines and runs none: no az, no ssh-keyscan, no ssh — the
+    sub-makes are never written $(MAKE) in the recipe, which make -n would run."""
+    start.serve("v0.5.9")
+    res = start.run("-n")
+    assert res.returncode == 0, res.stderr
+    assert "az vm start" in res.stdout and "orodruin-update" in res.stdout
+    assert start.az() == [] and start.calls() == []
+    assert not (start.tmp / "az.log.keyscan").exists()               # not even the wait
+    assert start.marker() == [start.commits["v0.5.9"], start.images_["v0.5.9"].digest]
 
 
 def test_a_vm_that_never_answers_stops_nonzero_nothing_sent(start):
@@ -1631,6 +1691,16 @@ def test_the_check_says_the_image_and_the_latest_release_a_warning_never_a_refus
     assert res.returncode == 0, res.stdout + res.stderr           # the contract's code: armed here
     c = start.commits
     assert f"image {name} ({c[name][:12]}), dernière release v0.5.10 ({c['v0.5.10'][:12]})" in res.stderr
-    assert ("plus ancienne : make orodruin-start ou make orodruin-push REF=v0.5.10" in res.stderr) == warned
+    assert ("image plus ancienne : make orodruin-start ou make orodruin-push REF=v0.5.10" in res.stderr) == warned
     assert start.loads() == [] and start.az() == []
     assert start.calls()[-1][0] == "run" and start.calls()[-1][-3:] == ["python", "-m", "eregion_core.orodruin"]
+
+
+@pytest.mark.parametrize("spoil, word", [(_no_marker, "absente"), (_marker("garbage\n"), "illisible")])
+def test_the_check_says_an_image_absent_or_unreadable_too(start, spoil, word):
+    start.serve("v0.5.10")
+    spoil(start)
+    res = start.run(target="orodruin-check")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert f"⚠ image {word} : make orodruin-start ou make orodruin-push REF=v0.5.10" in res.stderr
+    assert start.loads() == []

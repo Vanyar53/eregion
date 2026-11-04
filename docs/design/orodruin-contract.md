@@ -695,40 +695,52 @@ Il passe encore par `docker save` : une image construite sur le poste s'exporte 
 Orodruin, éteint la plupart du temps et sans sortie vers le registre, restait sur l'image de son dernier
 `orodruin-push`. **`make orodruin-start`** rallume la VM, attend qu'elle réponde en SSH (`ssh-keyscan`,
 rien n'y est accepté : sa clé est vérifiée ensuite par `orodruin-known`), puis lit **en lecture seule**
-l'image en service : le tag `eregion-annatar:orodruin` existe-t-il, et que dit `~/.eregion-image` (au
-plus 4 Ko). Sur le poste, `published_image.py age` la compare à la **dernière release** : le plus haut
+l'image en service : docker répond-il (`docker info`), le tag `eregion-annatar:orodruin` existe-t-il et
+quel commit dit son étiquette `org.opencontainers.image.revision`, que dit `~/.eregion-image` (au plus
+4 Ko ; la lecture est bornée aussi sur le poste). Sur le poste, `published_image.py age` la compare à la **dernière release** : le plus haut
 tag `v*` **par ordre de version** (celui que prend `orodruin-push` sans `REF` : `v0.5.10` après
 `v0.5.9`), puis **par commit, dans l'histoire de git** (`merge-base --is-ancestor`), jamais en
 comparant deux chaînes.
 - **Plus ancienne** (son commit dans l'histoire de la release), **absente** (ni tag, ni
-  `~/.eregion-image`) ou **illisible** (ni « commit digest », ni « dev commit ») : il le dit, puis
+  `~/.eregion-image`) ou **illisible** (ni « commit digest », ni « dev commit » ; ou un « commit
+  digest » dont le tag dit un autre commit : un `orodruin-push-dev` coupé avant son marqueur, une
+  image chargée à la main — les images dev n'ont pas l'étiquette, leur marqueur `dev` garde son
+  comportement) : il le dit, puis
   lance `orodruin-push REF=<la release>`, tel qu'il est — digest, signature, provenance, archive des
   blobs, chargement, relecture, run de contrôle, tag, migration.
 - **Égale** : rien, en une ligne.
 - **Plus récente** (la release dans son histoire : un commit de `main` poussé à la main), **dev**
   (`orodruin-push-dev`), ou **hors de l'histoire de la release** : gardée, jamais remplacée sans
   qu'on le demande ; la commande pour revenir à la release est dite (`make orodruin-push REF=vY`).
-- **Une erreur** (la VM qui ne répond pas en 2 min, la lecture, un commit de l'image inconnu du poste,
-  le push, sa vérification, son run de contrôle) : un code non nul, la cause dite, rien d'armé, et la
-  VM qui reste démarrée, ce qui est dit aussi (`make orodruin-stop`).
+- **Une erreur** (la VM qui ne répond pas en 2 min, docker qui ne répond pas sur Orodruin — jamais pris
+  pour une image absente : le push effacerait `~/.eregion-image` avant de charger —, la lecture, un
+  commit de l'image inconnu du poste, une `REF` hors d'`origin/main`, le push, sa vérification, son run
+  de contrôle) : un code non nul, la cause dite, rien d'armé, et la VM qui reste démarrée, ce qui est
+  dit aussi (`make orodruin-stop`).
 - `NO_UPDATE=1` démarre sans rien lire ni changer, et le dit ; `REF=<tag|commit>` vise une autre
   release que la dernière. Les deux se donnent sur la ligne de commande : validés avant tout (`az`
   compris), lus par le shell dans son environnement, jamais développés par make, comme `REF` et
-  `ORO_CHECK_TIMEOUT` (OI2). `make orodruin-update [REF=…]` fait la même mise à jour, la VM déjà
-  démarrée.
+  `ORO_CHECK_TIMEOUT` (OI2). Avant `az vm start` aussi : `ORO_SSH_FINGERPRINT` posé (sauf
+  `NO_UPDATE=1`) et `ORO_CHECK_TIMEOUT` — sans eux, la VM démarrerait pour rien. `make orodruin-update
+  [REF=…]` fait la même mise à jour, la VM déjà démarrée ; ses lectures passent par `orodruin-known`
+  et la clé épinglée, comme tout ce qui parle à Orodruin. `make -n orodruin-start` ne lance rien : le
+  make suivant n'est jamais écrit `$(MAKE)` dans la recette (`ORO_SUBMAKE`), que `make -n` exécuterait.
 
 **`make orodruin-check`** dit l'image et la dernière release (« image v0.5.3 (commit), dernière release
-v0.5.4 (commit) »), et, plus ancienne, « make orodruin-start ou make orodruin-push REF=v0.5.4 ». C'est
-un avertissement : une image plus ancienne n'empêche pas d'être armé, et le code de sortie reste celui
+v0.5.4 (commit) »), et, plus ancienne, absente ou illisible, « image plus ancienne (absente, illisible) :
+make orodruin-start ou make orodruin-push REF=v0.5.4 ». C'est un avertissement : une image plus
+ancienne n'empêche pas d'être armé, et le code de sortie reste celui
 du contrat. **Rien ne change** au réseau d'Orodruin, à son contrat, à sa garde de la watch, à
 `orodruin-push` ni à `orodruin-push-dev` : la mise à jour passe par le même push vérifié, depuis le
 poste. Le contrat ne lit toujours pas `~/.eregion-image` : le fichier décide d'une mise à jour, jamais
 d'un armement.
 
-**Ce qui reste ouvert** : `~/.eregion-image` est la parole de l'image en service, écrite par le push.
-Un fichier réécrit sur Orodruin pour nommer un commit plus récent retiendrait une mise à jour, jamais
-l'inverse : une image n'est remplacée que par la release vérifiée. Le relire contre le tag lui-même
-(l'étiquette `org.opencontainers.image.revision` de `:orodruin`) le fermerait. L'image n'est vérifiée que sur le poste qui l'envoie ; un poste compromis
+**Ce qui reste ouvert, pour OI3** : `~/.eregion-image` et l'étiquette du tag sont la parole de
+l'image en service. Un marqueur et une image réécrits ensemble sur Orodruin, pour nommer un commit plus
+récent, retiendraient une mise à jour ; jamais l'inverse : une image n'est remplacée que par la
+release vérifiée.
+
+**Ce qui reste ouvert, depuis CI3** : l'image n'est vérifiée que sur le poste qui l'envoie ; un poste compromis
 enverrait autre chose et la relecture de l'image, comparée sur ce même poste, ne le verrait
 pas. Le contrat (`orodruin-check`) ne lit pas encore la provenance de l'image qu'il exécute —
 planifié.

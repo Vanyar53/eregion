@@ -9,8 +9,9 @@ the changelog, the historical notes, the canary's note on the rename, and the de
 `eregion_repo`, cloned once through custom_data (changing it replaces the VM).
 """
 import re
-import subprocess
 from pathlib import Path
+
+from .tracked_files import tracked
 
 ROOT = Path(__file__).resolve().parents[2]
 OLD = re.compile("vanyar" + "53", re.IGNORECASE)   # split: this file never names it
@@ -22,14 +23,8 @@ KEPT = {"CHANGELOG.md": None, "docs/historique.md": None,
 
 def _files() -> list[str]:
     """Every tracked file: git's list, or — outside a checkout (the mutants' copy) — the tree,
-    the environments and caches aside."""
-    listed = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True)
-    if listed.returncode == 0 and listed.stdout.strip("\0"):
-        return [f for f in listed.stdout.split("\0") if f]
-    skip = {".git", ".venv", "venv", "node_modules", "site-packages", "__pycache__", "build", "dist"}
-    return [str(rel) for p in ROOT.rglob("*")
-            if p.is_file() and not skip & set((rel := p.relative_to(ROOT)).parts)
-            and rel.parts[:2] != (".claude", "worktrees")]
+    the environments and caches aside (tests/unit/tracked_files.py, MUT1)."""
+    return tracked(ROOT)
 
 
 def _naming(rel: str) -> list[str]:
@@ -63,3 +58,19 @@ def test_the_owner_is_the_new_login_where_it_is_trusted():
     for rel in ("docs/sessions.md", ".claude/skills/elrond/SKILL.md"):
         reviewers = re.findall(r"--author (\S+)", (ROOT / rel).read_text(encoding="utf-8"))
         assert f"{NEW}" in reviewers, rel
+
+
+def test_mut1_the_tracked_files_are_listed_in_a_checkout_and_outside_one(tmp_path):
+    """MUT1 (#503): the mutants' copy is no git repository. The list falls back on the tree there,
+    without .git, the environments, the caches or the agents' worktrees; in the checkout, it is
+    git's own."""
+    for rel in ("README.md", "src/m.py", ".claude/skills/s.py", ".git/HEAD", ".venv/lib/x.py",
+                "src/__pycache__/m.cpython-312.pyc", ".pytest_cache/v", ".claude/worktrees/a/b.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x")
+    assert tracked(tmp_path) == [".claude/skills/s.py", "README.md", "src/m.py"]
+    assert tracked(tmp_path, "*.py") == [".claude/skills/s.py", "src/m.py"]
+    import subprocess
+    git = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True)
+    if git.returncode == 0 and git.stdout:
+        assert tracked(ROOT) == [f for f in git.stdout.split("\0") if f]

@@ -853,14 +853,18 @@ class Engine:
         heartbeat written after the wait: everything the watch noted before it was then
         delivered, so a last read of the detections settles it. Returns ("detection",
         latency, "") — ("detection_timeout", None, "") for a miss the watch vouches for —
-        or (None, None, why) when it cannot vouch: the run is unknown."""
+        or (None, None, why) when it cannot vouch: the run is unknown. On the storage channel the
+        heartbeat that vouches is the watch's only once the pinned key signed it (SEC21): unsigned,
+        another key, replayed — unknown, never a miss."""
         until = time.time()
         give_up = until + watch_channel.SETTLE_S
         while True:
             try:
+                heartbeat = watch_channel.read_heartbeat()
                 why = watch_channel.miss_unprovable(
-                    watch_channel.read_heartbeat(), run_id=run_id,
-                    attack_time=attack_time, until=until)
+                    heartbeat, run_id=run_id, attack_time=attack_time, until=until)
+                # SEC21: a heartbeat that would prove a miss is believed only signed by the pinned key.
+                why = why or watch_gate.miss_proof(heartbeat)
                 if not why:
                     latency = detection_latency(
                         watch_channel.as_records(self._vouched(run_id)),

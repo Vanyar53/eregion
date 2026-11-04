@@ -255,7 +255,9 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   (`EREGION_WATCH_KEY`), pour ce run et sous le nom de son signal (SEC21) : non signé, d'une autre
   clé ou pour un autre usage, altéré, recopié d'un autre run ou d'un autre signal, il est refusé,
   jamais compté, et dit (la console, le journal d'Orodruin, `metrics.detection_refused` du
-  rapport) ; un run qui n'a vu que des détections refusées est `unknown`, jamais `missed`. Depuis
+  rapport) ; un run qui n'a vu que des détections refusées est `unknown`, jamais `missed`. Le
+  battement qui prouve un `missed` n'est cru, lui aussi, que signé par la clé épinglée
+  (`watch_gate.miss_proof`) : non signé, d'une autre clé ou rejoué, le run est `unknown`. Depuis
   WC1, d'autres identités que H0 peuvent écrire `watch` : seule la clé épinglée fait un « vu ». `missed` exige un battement de cœur écrit **après la fin de l'attente**, par une watch
   **démarrée avant l'attaque**, qui **connaît la fenêtre du run**, et une liste lue sans erreur
   (`miss_unprovable`). Tout le reste donne `unknown` : canal absent, injoignable ou refusé,
@@ -277,7 +279,7 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   publiée), M111 (une fenêtre inconnue de la watch prouve un miss), M112 (une watch redémarrée
   prouve un miss), M113 (le contrat accepte un rôle d'écriture sur `watch`), M114 (le run conclut
   à un miss sans demander au canal), M115 (un canal illisible lu comme un miss) ; les détections
-  signées, M3700–M3719 (`scripts/mutants/SEC21.py`, `tests/unit/test_signed_detections.py`).
+  signées, M3700–M3720 (`scripts/mutants/SEC21.py`, `tests/unit/test_signed_detections.py`).
 
 **Mesuré le 20/10** : la définition de Storage Blob Data Reader lue sur Azure (`az role
 definition list`) est exactement l'ensemble accepté ; Contributor y ajoute `blobs/write`,

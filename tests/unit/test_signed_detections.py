@@ -447,3 +447,59 @@ def test_the_report_says_what_was_refused(capsys):
               thresholds={}, checks={}).render()
     out = capsys.readouterr().out
     assert "Refused on the return channel" in out and "[bold]x[/bold]" in out
+
+
+# ── The heartbeat that proves a miss: the watch's, signed by the pinned key ───────────
+
+@pytest.fixture
+def proving(channel, monkeypatch):
+    """The gate's own proof, not the conftest's stand-in: the pinned key decides. ``beat(signer,
+    **over)`` makes the channel's heartbeat — written now, by a watch up for a day, that knows the
+    run — signed by ``signer`` (None: unsigned)."""
+    monkeypatch.setitem(gate.READERS, "proof", watch_key.proof)
+
+    def beat(signer=WATCH, **over):
+        def read(**_):
+            now = datetime.fromtimestamp(channel.clock.now, timezone.utc)
+            body = {"at": now.isoformat(), "since": _iso(channel.clock.now - 86400), "windows": [RUN],
+                    "perimeter": ""}
+            body = watch_key.sign_beat(body, signer, now) if signer is not None else body
+            return {**body, **over}
+        monkeypatch.setattr(wc, "read_heartbeat", read)
+    channel.beat = beat
+    return channel
+
+
+@pytest.mark.parametrize("signer, said", [(None, "unsigned"), (OTHER, "signed by another key")],
+                         ids=["unsigned", "another-key"])
+def test_a_heartbeat_the_pinned_key_did_not_sign_never_proves_a_miss(proving, capsys, signer, said):
+    """M3720: whoever can write the channel — a silence vouched for by a heartbeat that is not the
+    watch's is unknown, said, never a miss (no detection_missed, no rule proposed)."""
+    proving.beat(signer)
+    engine, emitted = _wait(proving.clock.now - 30)
+    assert engine._detection_result == "unknown" and emitted == []
+    out = capsys.readouterr().out
+    assert "Detection not measured" in out and said in out
+
+
+def test_a_replayed_heartbeat_never_proves_a_miss(proving, capsys):
+    """M3720: a heartbeat whose counter is below one this injector already saw — a replay."""
+    watch_key.remember({"key": WATCH.fingerprint, "seq": 10 ** 15, "sig": "seen"})
+    proving.beat()
+    engine, emitted = _wait(proving.clock.now - 30)
+    assert engine._detection_result == "unknown" and emitted == []
+    assert "not above one already seen" in capsys.readouterr().out
+
+
+def test_a_heartbeat_the_pinned_key_signed_proves_a_silence_a_miss(proving):
+    """The watch's own heartbeat, after the wait, covering the run's window: a miss, as before."""
+    proving.beat()
+    engine, emitted = _wait(proving.clock.now - 30)
+    assert engine._detection_result == "missed" and emitted == ["detection_missed"]
+
+
+def test_a_heartbeat_changed_after_its_signature_never_proves_a_miss(proving):
+    """The pinned key's heartbeat, its windows rewritten after the signature: refused."""
+    proving.beat(windows=[RUN, "another-run"])
+    engine, emitted = _wait(proving.clock.now - 30)
+    assert engine._detection_result == "unknown" and emitted == []

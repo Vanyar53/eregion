@@ -211,6 +211,17 @@ def unsigned(beat: Beat, record: bool = True) -> str:
     return f"{beat.where}: {why}" if why else ""
 
 
+def miss_proof(body) -> str:
+    """SEC21 (#530): why this heartbeat of the return channel, read at the end of a run's wait to
+    prove a miss, is not the watch's, signed by the key this injector pins — "" when it is. The
+    gate's own proof (``unsigned``): unsigned, another key, a signature that does not hold, a
+    counter replayed — never a miss, whoever can write the channel. "" too when the run reads the
+    local channel of verdicts (SEC18: unsigned by design, the watch's own directory)."""
+    if watch_channel.source() != watch_channel.STORAGE:
+        return ""
+    return unsigned(Beat(CHANNEL, None, body=body if isinstance(body, dict) else None))
+
+
 def refusal(now: datetime | None = None, *, record: bool = True) -> str:
     """Why no live Glorfindel watch of this injector's targets stands behind this run — ""
     when one does. The return channel decides when it is set (the watch is hosted elsewhere: a

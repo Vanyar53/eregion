@@ -112,7 +112,14 @@ dans la console du run, dans le journal d'Orodruin (`detection_refused`, la lign
 `Session.declare`) et dans le rapport du run (`metrics.detection_refused`, au plus 20, chacune
 bornée). Un run dont aucune détection n'est crue et qui en a vu de refusées est **`unknown`, jamais
 `missed`** : un `detection_missed` ferait proposer une règle pour une technique peut-être détectée.
-Une détection signée à côté d'une refusée compte, et le refus est dit. Le canal local des verdicts
+Une détection signée à côté d'une refusée compte, et le refus est dit.
+
+**Le battement qui prouve un « missed »** est vérifié comme celui de la garde. Un run conclut à un
+miss seulement sur le battement de fin d'attente (`miss_unprovable`, #159). Sur le canal de stockage,
+ce battement n'est cru que signé par la clé épinglée (`watch_gate.miss_proof`, la preuve même de la
+garde). Non signé, d'une autre clé, à la signature qui ne tient pas, ou au compteur déjà dépassé
+(un rejeu) : le run est `unknown`, la raison dite, sans `detection_missed`. Un « missed » ne vient
+donc lui aussi que de la watch, quel que soit le nombre de rédacteurs du canal. Le canal local des verdicts
 (SEC18, `runs/verdicts/`) ne change pas : ses verdicts gardent leurs champs exacts, sans signature ;
 seule la watch de ce poste l'écrit, le rouge le lit en lecture seule, et il ne sert qu'en l'absence
 de canal de stockage.
@@ -140,8 +147,12 @@ injecteur.
 
 **Pour une détection (SEC21)** : prouvé, la watch qui détient cette clé l'a publiée, pour ce run et
 ce signal, telle qu'elle est lue — un « vu » ne vient plus que d'elle, quelle que soit l'identité
-qui écrit le canal. **Ouvert** : la signature ne dit rien d'une détection absente ; un « missed »
-repose sur le battement de fin d'attente et sur la liste des détections lues.
+qui écrit le canal ; un « missed » ne repose que sur un battement qu'elle a signé.
+
+**Ouvert** :
+- le battement ne dit pas quelles détections il couvre (ni leur nombre, ni un condensé de chaque
+  fenêtre) ;
+- une détection retirée du canal, sous un battement vrai, ne se voit pas.
 
 ## FS1 reprend cette clé (#413)
 

@@ -1,7 +1,7 @@
 """SEC21 (#530): the detections of the return channel signed by the watch's key, under their own
 domain, verified by the injectors with the key they pin — never counted for « seen » when they are
 not the watch's, for this run and this signal; said in the console, Orodruin's journal and the
-run's report. M3700–M3719.
+run's report; the heartbeat that proves a miss verified by that key too. M3700–M3720.
 """
 WKEY = "eregion_core/watch_key.py"
 WCH = "eregion_core/watch_channel.py"
@@ -67,5 +67,8 @@ MUTANTS = [
     ("M3719", "Annatar's report never shows what the channel refused (SEC21)", REPORT,
      "        if isinstance(refused, list) and refused:   # SEC21: never counted, said\n",
      "        if False:\n"),
+    # After the coordinator's review: the heartbeat that proves a miss, verified as the gate's is.
+    ("M3720", "a heartbeat unsigned, of another key or replayed proves a miss: a rule proposed for a silence no watch vouched for (SEC21)",
+     ENG, "                why = why or watch_gate.miss_proof(heartbeat)\n", "                why = why\n"),
 ]
-TESTS = {f"M{n}": _TESTS for n in range(3700, 3720)}
+TESTS = {f"M{n}": _TESTS for n in range(3700, 3721)}

@@ -10337,6 +10337,30 @@ MUTANTS += [
      " && for f in"),
 ]
 TESTS.update({f"M{n}": _SEC20 for n in range(3490, 3500)})
+# SEC20b, its review: a recipe's continuation joined as the shell joins it, a comment continued onto
+# a launch, what the red is never given refused by name, another container's mounts. M3525–M3529.
+MUTANTS += [
+    ("M3525", "make annatar-list's options cut by a continuation: the shell glues them, scripts/ written (SEC20b)",
+     MAKE, "docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar "
+           "$(IMAGE_ANNATAR) list\n",
+     "docker run --rm -e X=1\\\n\t$(IMAGE_ANNATAR) -v $(PWD)/scripts:/app/scripts -v "
+     "$(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) list\n"),
+    ("M3526", "a recipe's comment continued onto a launch that writes scripts/ (SEC20b)", MAKE,
+     "--entrypoint annatar $(IMAGE_ANNATAR) list\n",
+     "--entrypoint annatar $(IMAGE_ANNATAR) list\n\t# une note \\\n"
+     "\tdocker run --rm -v $(PWD)/scripts:/app/scripts $(IMAGE_ANNATAR) list\n"),
+    ("M3527", "--cap-add moved to the options read as ordinary: a red launch given more capabilities (SEC20b)",
+     "tests/unit/test_red_mounts.py",
+     ('"--stop-signal", "--log-driver", "--log-opt", "--volume"', '"--cap-add": True, '),
+     ('"--stop-signal", "--log-driver", "--log-opt", "--cap-add", "--volume"', '')),
+    ("M3528", "Orodruin's contract mounts the watch's volumes, which no reader sees (SEC20b)", MAKE,
+     "ORO_RUN_CONTRACT = $(ORO_DIRS) docker run --rm $(ORO_HARDEN)",
+     "ORO_RUN_CONTRACT = $(ORO_DIRS) docker run --rm --volumes-from eregion-watch $(ORO_HARDEN)"),
+    ("M3529", "Orodruin's injectors run without their seccomp profile (SEC20b)", MAKE,
+     "ORO_HARDEN     = --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true",
+     "ORO_HARDEN     = --read-only --tmpfs /tmp --cap-drop ALL --security-opt seccomp=unconfined"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in range(3525, 3530)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

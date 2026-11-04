@@ -17,7 +17,9 @@ forms. What such a reader would not see is refused (SEC20, SEC20b #494): a varia
 defined twice or appended to; a directive that makes make read what this reader does not (an
 included file, a ``define``, an ``$(eval …)``); in a launch's options, a reference left unexpanded
 — the home and the clone aside — or a word not plain, an option it does not know, another
-container's mounts; a launch whose image is not written plainly, or behind docker's own options; a
+container's mounts, what the red is never given (the host's devices or namespaces, more
+capabilities, its confinement lifted); a comment continued onto the next line (a recipe's
+continuation is read as the shell joins it); a launch whose image is not written plainly, or behind docker's own options; a
 `compose run` that adds a mount; a compose launch told to read another file, or a file beside the
 compose that compose would merge on its own. No container starts.
 """
@@ -126,9 +128,17 @@ _SHORT_VALUED = set("acehlmpuwv")
 _LONG_FLAGS = {"--rm", "--read-only", "--init", "--interactive", "--tty", "--detach", "--quiet",
                "--publish-all", "--no-healthcheck"}
 _LONG_VALUED = {"--env", "--env-file", "--entrypoint", "--tmpfs", "--cap-drop", "--security-opt", "--name",
-                "--user", "--workdir", "--network", "--publish", "--label", "--hostname", "--memory",
-                "--cpus", "--pull", "--platform", "--add-host", "--restart", "--stop-signal", "--log-driver",
-                "--log-opt", "--volume", "--mount", "--volumes-from"}
+                "--user", "--workdir", "--network", "--net", "--ipc", "--uts", "--publish", "--label",
+                "--hostname", "--memory", "--cpus", "--pull", "--platform", "--add-host", "--restart",
+                "--stop-signal", "--log-driver", "--log-opt", "--volume", "--mount", "--volumes-from"}
+# What a red launch is never given — the host's devices, processes, namespaces, more capabilities,
+# its confinement lifted —, refused by name, read before the tables above: none of these is ever in
+# them (test_no_dangerous_option_is_read_as_an_ordinary_one). True: it takes a value.
+_NEVER_TO_THE_RED = {"--privileged": False, "--device": True, "--cap-add": True, "--pid": True, "--userns": True}
+# Options read, but some of their values never given to the red: the host's namespace (or another
+# container's), a confinement other than « no new privileges ».
+_NEVER_AS = {"--network": r"host|container:.*", "--net": r"host|container:.*", "--ipc": r"host|container:.*",
+             "--uts": r"host", "--security-opt": r"(?!no-new-privileges(?::true|=true)?$).*"}
 _MOUNTS = {"-v": "volume", "--volume": "volume", "--mount": "mount", "--volumes-from": "from"}
 _MOUNT_KEYS = {"type": "type", "source": "src", "src": "src", "target": "dst", "destination": "dst",
                "dst": "dst", "readonly": "ro", "ro": "ro"}
@@ -146,6 +156,7 @@ class Launch(NamedTuple):
     command: str          # what follows its image, up to the next launch
     mounts: list[Mount]
     faults: list[str]     # what this reader does not read in it: the launch refused
+    dangers: list[str]    # what it gives that the red is never given: refused for a red launch
 
 
 def _bind(spec: str, faults: list[str]) -> list[Mount]:
@@ -183,7 +194,7 @@ def _mounts(flag: str, value: str, faults: list[str]) -> list[Mount]:
 def _launch(seg: str) -> Launch:
     """The words that follow a launch, read as docker does: its options and their mounts up to the
     image, then the image, then the command."""
-    words, mounts, faults = seg.split(), [], []
+    words, mounts, faults, dangers = seg.split(), [], [], []
 
     def word(j: int) -> str | None:
         if j >= len(words):
@@ -196,7 +207,7 @@ def _launch(seg: str) -> Launch:
 
     def unread(why: str, at: int) -> Launch:
         faults.append(why)
-        return Launch(" ".join(words[:at + 1]), "", "", mounts, faults)
+        return Launch(" ".join(words[:at + 1]), "", "", mounts, faults, dangers)
 
     i = 0
     while i < len(words):
@@ -210,6 +221,13 @@ def _launch(seg: str) -> Launch:
         flag, value = None, None
         if w.startswith("--"):
             flag, eq, value = w.partition("=")
+            if flag in _NEVER_TO_THE_RED:
+                dangers.append(f"{w}: never given to the red")
+                if _NEVER_TO_THE_RED[flag] and not eq:
+                    i += 1
+                    word(i)
+                i += 1
+                continue
             if flag in _LONG_FLAGS:
                 i += 1
                 continue
@@ -231,17 +249,35 @@ def _launch(seg: str) -> Launch:
                 break
         if flag and value is None:
             return unread(f"{flag}: its value missing", i)
+        if flag in _NEVER_AS and re.fullmatch(_NEVER_AS[flag], value):
+            dangers.append(f"{flag} {value}: never given to the red")
         if flag in _MOUNTS:
             mounts += _mounts(flag, value, faults)
         i += 1
     image = words[i] if i < len(words) else ""
-    return Launch(" ".join(words[:i + 1]), image, " ".join(words[i + 1:]), mounts, faults)
+    return Launch(" ".join(words[:i + 1]), image, " ".join(words[i + 1:]), mounts, faults, dangers)
 
 
 # ── The Makefile, expanded as make would ─────────────────────────────────────────────────────
 
 def _logical(text: str) -> list[str]:
-    return text.replace("\\\n", " ").splitlines()
+    """The logical lines, as make joins them: outside a recipe, a backslash-newline is a space; in a
+    recipe (a line that starts with a tab), make passes it to the shell, the next line's tab taken
+    off, and the shell joins the two lines with nothing between them."""
+    out, cur = [], None
+    for raw in text.split("\n"):
+        if cur is None:
+            cur = raw
+        elif cur.startswith("\t"):
+            cur += raw.removeprefix("\t")
+        else:
+            cur += " " + raw
+        if cur.endswith("\\"):
+            cur = cur[:-1]
+            continue
+        out.append(cur)
+        cur = None
+    return out if cur is None else [*out, cur]
 
 
 # A variable's definition: global (`X = …`, `:=`, `?=`, `+=`, `export X = …`, `override …`) or for
@@ -258,6 +294,13 @@ _DIRECTIVE = re.compile(r"^\s*(?:(?:override|export|private)\s+)*(?:define|undef
                         r"|^\s*(?:-?include|sinclude)\b|\$[({]eval\b")
 # A recipe's make told to read another makefile, or this one from another directory: its launches
 # never read here, so refused.
+# What decides how make runs a recipe — a shell of its own (`SHELL`, `.SHELLFLAGS`), the recipe
+# as one script (`.ONESHELL`), an object loaded into make (`load`): refused, the Makefile sets none.
+_MAKE_SETTING = re.compile(r"(?:^|[\s:])(?:SHELL|\.SHELLFLAGS)\s*(?::{1,3}|[?+!])?=|^\s*\.ONESHELL\s*:"
+                           r"|^\s*-?load\b")
+# A comment continued onto the next line: in a recipe, the shell ends it there and runs what
+# follows; never read here, so refused.
+_CONTINUED_COMMENT = re.compile(r"^\s*#.*\\$")
 _SUBMAKE = re.compile(r"\$[({]MAKE[)}](?P<rest>[^;&|]*)")
 _SUBMAKE_FILE = re.compile(r"(?:^|\s)(?:-[A-Za-z]*[fC]|--(?:file|makefile|directory)\b)")
 
@@ -273,6 +316,7 @@ class Make:
     """A Makefile read as make would: its logical lines, its variables, its docker runs."""
 
     def __init__(self, text: str):
+        self.text = text
         self.lines = _logical(text)
         self.defs: dict[str, list[tuple[str, str]]] = {}   # every definition: (op, how)
         # The global values, in order: make keeps the last (`+=` appends to the one before it, a
@@ -381,15 +425,19 @@ class Make:
             if line.lstrip().startswith("#"):
                 continue
             said = line.strip()[:160]
-            if _DIRECTIVE.search(line):
+            if _DIRECTIVE.search(line) or (not line.startswith("\t") and _MAKE_SETTING.search(line)):
                 out.append(f"{said}: a directive of make this reader does not follow")
             if any(_SUBMAKE_FILE.search(m["rest"]) for m in _SUBMAKE.finditer(line)):
                 out.append(f"{said}: a make told to read another makefile (a directive this reader does not follow)")
             if _DOCKER_OPTIONS.search(self.expand(line)):
                 out.append(f"{said}: docker's own options before its command, never read here")
+        out += [f"{raw.strip()[:160]}: a comment continued onto the next line, never read here"
+                for raw in self.text.split("\n") if _CONTINUED_COMMENT.match(raw)]
         for line, _, launch, _ in self._launches():
             said = line.strip()[:160]
             out += [f"{said}: {fault}" for fault in launch.faults]
+            if _RED.fullmatch(launch.image):
+                out += [f"{said}: {danger}" for danger in launch.dangers]
             if not launch.faults and not _IMAGE.fullmatch(launch.image):
                 out.append(f"{said}: an image not written plainly ({launch.image or 'none'})")
         return out
@@ -695,13 +743,14 @@ def test_a_read_only_mount_is_read_read_only():
 
 
 @pytest.mark.parametrize("form", [
-    "--volumes-from other",                                                         # another container's mounts
+    "--volumes-from other", "--volumes-from=other:ro",                              # another container's mounts
     "--mount type=bind,source=$(PWD)/scripts,target=/app/scripts,bind-propagation=shared",   # a key not read
     "--mount type=bind,target=/app/scripts",                                        # no source
     "-v /app/scripts",                                                              # no source
-    "--privileged", "-x", "--device=/dev/null",                                     # options not known here
+    "-x", "--oom-score-adj=1",                                                      # options not known here
 ])
 def test_what_a_launch_holds_beyond_this_reader_is_refused(form):
+    """M3528 (SEC20b): another container's mounts, a `--mount` not read whole, an option not known."""
     assert _recipe(f"docker run --rm {form} $(IMAGE_ANNATAR) list").unread(), form
 
 
@@ -711,6 +760,30 @@ def test_every_launch_form_is_read(launch):
     """M3493 (SEC20b): `docker container run`, `docker create`, whatever the spaces — a launch."""
     make = _recipe(f"{launch} --rm -v $(PWD)/scripts:/app/scripts $(IMAGE_ANNATAR) list")
     assert make.unread() == [] and _writes(_red(make)["x-run"], "scripts"), launch
+
+
+@pytest.mark.parametrize("form", [
+    "--privileged", "--privileged=true", "--device /dev/sda", "--device=/dev/sda", "--cap-add SYS_ADMIN",
+    "--cap-add=ALL", "--pid host", "--pid=container:x", "--userns host", "--ipc host", "--ipc=container:x",
+    "--uts host", "--network host", "--net=host", "--network container:x", "--security-opt apparmor=unconfined",
+    "--security-opt=seccomp=unconfined", "--security-opt label=disable",
+])
+def test_what_the_red_is_never_given_is_refused_by_name(form):
+    """M3527, M3529 (SEC20b): the host's devices, processes and namespaces, more capabilities, a
+    confinement lifted — never given to a red launch, refused by name, not as options unknown."""
+    make = _recipe(f"docker run --rm {form} $(IMAGE_ANNATAR) list")
+    assert any("never given to the red" in r for r in make.unread()), make.unread()
+
+
+def test_what_the_red_keeps_is_not_refused():
+    for form in ("--security-opt no-new-privileges:true", "--security-opt=no-new-privileges", "--network bridge",
+                 "--cap-drop ALL", "--ipc private"):
+        assert _recipe(f"docker run --rm {form} $(IMAGE_ANNATAR) list").unread() == [], form
+
+
+def test_no_dangerous_option_is_read_as_an_ordinary_one():
+    """What the red is never given is never in the tables of options read: it is refused before them."""
+    assert not set(_NEVER_TO_THE_RED) & (_LONG_FLAGS | _LONG_VALUED)
 
 
 def test_a_launch_behind_dockers_own_options_is_refused():
@@ -735,6 +808,24 @@ def test_a_reference_left_unexpanded_is_refused(reference):
     assert any("unexpanded" in r for r in variable.unread()), variable.unread()
 
 
+def test_a_recipes_continuation_joins_its_lines_with_nothing_between():
+    """M3525 (SEC20b): in a recipe, make passes a backslash-newline to the shell, the next line's tab
+    taken off, and the shell joins the lines with nothing between — a word cut there is one word.
+    Outside a recipe, make joins with a space."""
+    make = _recipe("docker run --rm -e X=1\\", "$(IMAGE_ANNATAR) -v $(PWD)/scripts:/app/scripts $(IMAGE_ANNATAR) list")
+    assert _writes(_red(make)["x-run"], "scripts"), _red(make)["x-run"]
+    assert _logical("X := a\\\n\tb\n") == ["X := a \tb", ""]
+    assert _logical("t:\n\tdocker run --rm\\\n\t\t-v a:b\n") == ["t:", "\tdocker run --rm\t-v a:b", ""]
+
+
+def test_a_comment_continued_onto_the_next_line_is_refused():
+    """M3526 (SEC20b): the shell ends a recipe's comment at its line and runs what follows; a reader
+    that skips the comment would miss it — refused."""
+    make = _recipe("# une note \\", "docker run --rm -v $(PWD)/scripts:/app/scripts $(IMAGE_ANNATAR) list")
+    assert any("comment continued" in r for r in make.unread()), make.unread()
+    assert any("comment continued" in r for r in Make(MAKEFILE + "\n# a note \\\nX := 1\n").unread())
+
+
 def test_the_three_references_allowed_are_read():
     make = _recipe("docker run --rm -v $(HOME)/runs/annatar:/a -v $(PWD)/runs/annatar:/b -v $$HOME/runs/annatar:/c "
                    "$(IMAGE_ANNATAR) list")
@@ -748,10 +839,13 @@ def test_the_three_references_allowed_are_read():
     "override define EXTRA\nendef", "export define EXTRA\nendef", "undefine ANNATAR_VOLS",
     "$(eval ANNATAR_VOLS += -v $(PWD):/app)", "x-eval:\n\t$(eval ANNATAR_VOLS := -v $(PWD):/app)",
     "${eval EXTRA := 1}",
+    "SHELL := /bin/sh", "SHELL = ./x", "export SHELL := ./x", "x-run: SHELL := ./x", ".SHELLFLAGS := -ec",
+    ".ONESHELL:", "load ./x.so", "-load x.so",
 ])
 def test_a_directive_that_reads_beyond_this_reader_is_refused(directive):
     """M3495 (SEC20b): `include` and its kin, `define`, `undefine`, `$(eval …)` make make read
-    what this reader does not — refused, never read."""
+    what this reader does not; `SHELL`, `.SHELLFLAGS`, `.ONESHELL`, `load` change how it runs a
+    recipe — refused, never read."""
     make = Make(MAKEFILE + "\n" + directive + "\n")
     assert any("directive" in r for r in make.unread()), make.unread()
 

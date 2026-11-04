@@ -1527,6 +1527,72 @@ def test_a_line_lost_or_added_by_the_assembly_is_said():
     assert rel.lost(["### Added\n- a\n", "### Fixed\n- b\n"], "### Fixed\n- b\n\n### Added\n- a") == []
 
 
+_HARNESS_STUB = ('MUTANTS = []\nTESTS = {}\n\n\n# The mutants end here.\n\n\n'
+                 'if __name__ == "__main__":\n    pass\n')
+
+
+def _lot_branch(work, lot: str, n: int, old_way: bool) -> None:
+    """A lot in flight from main: its CHANGELOG entry and its mutants, the old way (both in the
+    shared files, at the place every lot writes) or CI5's (a file of its own, each)."""
+    git(work, "switch", "-q", "-c", f"lot/{lot}{'-old' if old_way else ''}", "main")
+    entry, mutant = f"- **Lot {lot}'s change** ({lot}, #{n}).", f'("M{n}", "a bug of {lot}", "a.py", "x", "y")'
+    if old_way:
+        log = (work / "CHANGELOG.md").read_text(encoding="utf-8")
+        (work / "CHANGELOG.md").write_text(log.replace("## [Unreleased]\n\n", f"## [Unreleased]\n\n### Fixed\n{entry}\n\n", 1),
+                                           encoding="utf-8")
+        harness = (work / "scripts" / "mutation_check.py").read_text(encoding="utf-8")
+        (work / "scripts" / "mutation_check.py").write_text(
+            harness.replace("\n\n# The mutants end here.", f"MUTANTS += [{mutant}]\n\n\n# The mutants end here.", 1),
+            encoding="utf-8")
+    else:
+        (work / "changes" / f"{lot}.md").write_text(f"### Fixed\n{entry}\n", encoding="utf-8")
+        (work / "scripts" / "mutants" / f"{lot}.py").write_text(
+            f'MUTANTS = [{mutant}]\nTESTS = {{"M{n}": "tests/unit/test_{lot.lower()}.py"}}\n', encoding="utf-8")
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", f"lot {lot}")
+    git(work, "switch", "-q", "main")
+
+
+def test_two_lots_in_flight_merge_without_conflict_and_both_are_released(repo, capsys):
+    """The probe of CI5: two branches from the same main, each with its CHANGELOG entry and its
+    mutants. The old way, the second merge conflicts (CHANGELOG.md and the harness, at the same
+    lines); CI5's way, both merge clean, the harness loads both lots, the release assembles both."""
+    mc = _load("mutation_check")
+    (repo / "scripts" / "mutants").mkdir(parents=True)
+    (repo / "scripts" / "mutation_check.py").write_text(_HARNESS_STUB, encoding="utf-8")
+    (repo / "scripts" / "mutants" / "_keep.py").write_text("", encoding="utf-8")
+    _with_fragments(repo, {})
+    for lot, n in (("LA", 9101), ("LB", 9102)):
+        _lot_branch(repo, lot, n, old_way=True)
+        _lot_branch(repo, lot, n, old_way=False)
+    head = git(repo, "rev-parse", "main")
+
+    # The old way: the first merges, the second conflicts on both shared files.
+    assert subprocess.run(["git", "merge", "-q", "--no-edit", "lot/LA-old"], cwd=repo).returncode == 0
+    second = subprocess.run(["git", "merge", "--no-edit", "lot/LB-old"], cwd=repo, capture_output=True, text=True,
+                            env={**os.environ, "LC_ALL": "C"})   # git says CONFLICT in English
+    assert second.returncode != 0
+    assert "CONFLICT (content): Merge conflict in CHANGELOG.md" in second.stdout
+    assert "CONFLICT (content): Merge conflict in scripts/mutation_check.py" in second.stdout
+    git(repo, "merge", "--abort")
+    git(repo, "reset", "-q", "--hard", head)
+
+    # CI5's way: both merge clean, in either order.
+    for lot in ("LB", "LA"):
+        merged = subprocess.run(["git", "merge", "--no-edit", f"lot/{lot}"], cwd=repo, capture_output=True, text=True,
+                                env={**os.environ, "LC_ALL": "C"})
+        assert merged.returncode == 0 and "CONFLICT" not in merged.stdout, merged.stdout
+    lots = {p.name: mc.load_lot(p) for p in mc.lot_files(repo / "scripts" / "mutants")}
+    assert {name: [m[0] for m in lot["MUTANTS"]] for name, lot in lots.items()} == {
+        "LA.py": ["M9101"], "LB.py": ["M9102"]}
+    git(repo, "push", "-q", "origin", "main")
+    assert rel.main(["prepare", "0.4.4", "--title", "two lots"]) == 0, capsys.readouterr().out
+    _, text = rel.section((repo / "CHANGELOG.md").read_text(encoding="utf-8"), "0.4.4")
+    assert text.split("### Fixed\n")[1].splitlines() == [
+        "- Something that was wrong.", "- **Lot LA's change** (LA, #9101).", "- **Lot LB's change** (LB, #9102)."]
+    assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]
+
+
 def test_the_repository_s_fragments_are_well_formed():
     """A fragment malformed fails its own pull request, never the release that comes later."""
     found, faults = rel.fragments(ROOT)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -10349,9 +10350,46 @@ MUTANTS += [
 TESTS.update({f"M{n}": "tests/unit/test_published_image.py" for n in range(3520, 3525)})
 
 
-# The mutants end here. A new block goes above this line: the `__main__` guard stays the last
-# statement of this file, or what follows it is never measured (MCG, #448;
-# tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).
+# The blocks above stay where they are. A lot's mutants now go into a file of their own,
+# scripts/mutants/<lot>.py, loaded here (CI5, #512): two lots in flight never write the same lines
+# of this file, so the merge of one never puts the other in conflict. A lot's file defines
+#   MUTANTS = [(id, bug class, file, text in the code today, text that re-introduces the bug[, why]), …]
+#   TESTS = {id: "test paths", …}        # its own ids only; the invariants when absent
+#   TESTS_ALSO = {id: "test paths", …}   # optional: tests added to another mutant's, at its end
+#   CONTROL = […]                        # optional, rare: the control set
+# and its paths as plain strings (it imports nothing of this file). A mutant that renames its file
+# names RENAME, which the loader gives it. scripts/mutant_anchors.py checks them as the others: an
+# id taken twice, in two files or here, is a fault naming each place.
+LOTS_DIR = REPO / "scripts" / "mutants"
+
+
+def lot_files(where: Path = LOTS_DIR) -> list[Path]:
+    """The lots' files, by name; `_…` ones (helpers) aside."""
+    return sorted((p for p in where.glob("*.py") if not p.name.startswith("_")), key=lambda p: p.name.casefold())
+
+
+def load_lot(path: Path) -> dict:
+    """What a lot's file defines: its MUTANTS, TESTS, TESTS_ALSO and CONTROL."""
+    ns = runpy.run_path(str(path), init_globals={"RENAME": RENAME})
+    return {"MUTANTS": list(ns.get("MUTANTS", [])), "TESTS": dict(ns.get("TESTS", {})),
+            "TESTS_ALSO": dict(ns.get("TESTS_ALSO", {})), "CONTROL": list(ns.get("CONTROL", []))}
+
+
+# Each lot's file, by its path from the repository's root: what it defines.
+LOTS = {p.relative_to(REPO).as_posix(): load_lot(p) for p in lot_files()}
+for _lot in LOTS.values():
+    MUTANTS += _lot["MUTANTS"]
+    CONTROL += _lot["CONTROL"]
+    _own = {m[0] for m in _lot["MUTANTS"] + _lot["CONTROL"]}
+    TESTS.update({mid: t for mid, t in _lot["TESTS"].items() if mid in _own})   # never another's
+for _lot in LOTS.values():
+    for _mid, _also in _lot["TESTS_ALSO"].items():
+        TESTS[_mid] = f"{TESTS.get(_mid, INVARIANTS)} {_also}"
+
+
+# The mutants end here: the `__main__` guard stays the last statement of this file, or what
+# follows it is never measured (MCG, #448; tests/unit/test_mutant_anchors.py and
+# scripts/mutant_anchors.py fail otherwise).
 
 
 

@@ -255,7 +255,7 @@ prérequis avant toute VM hors du banc (« Ouvert »).
 
 **Où c'est** (SEC7) : `infra/identities/` et [`docs/operations.md`](../operations.md), « Identités Azure » ; `docker-compose.yml` ; `infra/glorfindel-host/known_host.sh` ; tests `tests/unit/test_azure_roles.py`, `tests/unit/test_profiles.py`, `tests/unit/test_host_ssh.py`, `tests/unit/test_makefile_bench.py`, `infra/glorfindel-host/tests/session_drain.tftest.hcl` (SEC11). La demande de Dagorlad (DG-b) : `eregion_core/exercise_runner.py`, `make orodruin-exercise`, [`orodruin-contract.md`](orodruin-contract.md), « La demande de Dagorlad » ; tests `tests/unit/test_exercise_runner.py`, `tests/unit/test_makefile_exercise.py`, `tests/unit/test_exercise_e2e.py`, `tests/unit/test_orodruin_word.py`.
 
-**Ouvert** : un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule, par une file signée — planifié : #413 ; une identité managée par conteneur sur un même hôte — planifié ; l'identité unique de H0, partagée par la watch, la console et le bot — planifié ; signer les détections par la clé de la watch, sous un domaine à part — planifié.
+**Ouvert** : un journal hors de l'hôte que son identité ne peut pas effacer — planifié ; le canal sans point de terminaison public — planifié  ; l'action approuvée confiée à la watch seule, par une file signée — planifié : #413 ; une identité managée par conteneur sur un même hôte — planifié ; l'identité unique de H0, partagée par la watch, la console et le bot — planifié ; signer les détections par la clé de la watch, sous un domaine à part — planifié : #530.
 
 ---
 

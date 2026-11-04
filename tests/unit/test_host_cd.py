@@ -12,10 +12,12 @@ The agent (infra/glorfindel-host/cd/eregion_cd.py) runs as on H0, installed in i
   published_image.py pinned to its sha256 (the test's copy only).
 No network, no VM, no Docker.
 """
+import ast
 import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -624,23 +626,258 @@ def test_a_tag_off_main_is_refused_said_and_not_tried_again(h0):
     assert h0.run().returncode == 0 and len(h0.posts()) == 1 and not any(c.startswith("build") for c in h0.calls())
 
 
-def test_a_red_ci_is_refused(h0):
-    h0.fake.gh["checks"][h0.commits["c2"]] = [
-        {"name": "lint + tests (py3.12)", "status": "completed", "conclusion": "success"},
-        {"name": "tests (macOS)", "status": "completed", "conclusion": "failure"}]
+# H1c (#518): the checks that hold a release — the five the rule of main requires, and the job that
+# publishes the image the CD pulls. Every other check is only said.
+REQUIRED = ("lint + tests (py3.11)", "lint + tests (py3.12)", "terraform test (mock providers)",
+            "image (annatar)", "image (glorfindel)")
+HOLDING = REQUIRED + ("publish (glorfindel)",)
+MACOS = "tests (macOS, case-insensitive file system)"
+
+
+def _check(name, conclusion="success", status="completed", app="github-actions"):
+    """A check run, as GitHub lists it: made by GitHub Actions unless `app` names another."""
+    return {"name": name, "status": status, "conclusion": conclusion if status == "completed" else None,
+            "app": {"slug": app} if app else None}
+
+
+def _checks(h0, *others, **over):
+    """c2's checks: every holding one green unless `over` says otherwise (a conclusion, a status
+    still running, or None: absent), and `others` beside them."""
+    runs = []
+    for name in HOLDING:
+        state = over.get(name, "success")
+        if state is None:
+            continue
+        runs.append(_check(name, status=state) if state in ("queued", "in_progress") else _check(name, state))
+    h0.fake.gh["checks"][h0.commits["c2"]] = runs + list(others)
+
+
+@pytest.mark.parametrize("name", HOLDING)
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
+def test_a_required_check_red_or_cancelled_is_refused(h0, name, conclusion):
+    """A check that holds, red or cancelled: refused as before H1c, said with the mention."""
+    _checks(h0, **{name: conclusion})
     assert h0.run().returncode == 1
-    assert h0.running() == {"v0.3.1"} and "CI rouge" in _alerts(h0)[0]["embeds"][0]["description"]
-    assert "tests (macOS)" in _alerts(h0)[0]["embeds"][0]["description"]
+    _nothing_moved(h0)
+    desc = _alerts(h0)[0]["embeds"][0]["description"]
+    assert "CI rouge" in desc and name in desc and h0.outcome("v0.4.0") == "refused"
+
+
+@pytest.mark.parametrize("macos", [_check(MACOS, "cancelled"), _check(MACOS, status="queued"),
+                                   _check(MACOS, "failure"), _check(MACOS, "startup_failure")])
+def test_macos_cancelled_or_queued_without_a_runner_never_holds_a_release(h0, macos):
+    """The 04/11 case: the 0.5.4's commit green but for macOS, cancelled for want of a runner. The
+    release deploys; a red or cancelled macOS is said, in orange, without the mention."""
+    _checks(h0, macos)
+    res = h0.run()
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert h0.running() == {"v0.4.0"} and h0.outcome("v0.4.0") == "deployed" and not _alerts(h0)
+    told = [p for p in h0.posts() if "non requis" in p["embeds"][0]["title"]]
+    if macos["status"] == "queued":       # still running: never waited for, nothing to say
+        assert told == []
+    else:
+        (post,) = told
+        assert MACOS in post["embeds"][0]["description"] and "sans retenir H0" in post["embeds"][0]["description"]
+        assert post.get("content") != "<@42>"
+    assert f"« {MACOS} »" in res.stdout and "ne sont que dits" in res.stdout
+
+
+def test_a_check_not_required_red_is_said_once_per_tag_never_holding_h0(h0):
+    """Said in the pass that waits for a required one, and never again for that tag."""
+    _checks(h0, _check("dependency advisories", "failure"), _check("core alone", "cancelled"),
+            _check("notify"), **{"image (annatar)": "in_progress"})
+    assert h0.run().returncode == 0 and h0.run().returncode == 0
+    assert h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") is None
+    titles = _titles(h0)
+    assert titles == ["⚠️ v0.4.0 : 2 check(s) non requis en échec", "⏳ v0.4.0 attend sa CI"]
+    desc = h0.posts()[0]["embeds"][0]["description"]
+    assert "dependency advisories" in desc and "core alone" in desc and "notify" not in desc
+    _checks(h0, _check("dependency advisories", "failure"), _check("core alone", "cancelled"))
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+    assert sum("non requis" in t for t in _titles(h0)) == 1 and not _alerts(h0)
+
+
+def test_a_check_name_is_said_without_a_mention_a_link_or_markdown(h0):
+    """Any app may name a check run (SEC6): what #deploy says of it mentions no one, links nowhere."""
+    _checks(h0, _check("x <@42> @everyone [a](https://example.invalid) **b** `c`", "failure"),
+            _check("see https://evil.example/login", "failure"), _check("on evil.example.org/x:y", "cancelled"))
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+    (post,) = [p for p in h0.posts() if "non requis" in p["embeds"][0]["title"]]
+    desc = post["embeds"][0]["description"]
+    names = desc.rsplit(", sur ", 1)[0]                     # the names said; the CD's own words after
+    assert not any(c in names for c in "<@[]*`:/") and not _alerts(h0)
+    assert "https://" not in desc and "example.invalid" not in desc and "evil.example" not in desc
+    assert desc.count("‹url›") == 2 and "‹hôte›" in desc and "3 check(s)" in post["embeds"][0]["title"]
+
+
+def test_a_required_check_completed_without_a_green_conclusion_is_refused_never_taken_for_green(h0):
+    """No conclusion, or one this agent does not know: the CD never fails open."""
+    for conclusion in (None, "weird"):
+        h0.fake.requests.clear()
+        (h0.cd / "state.json").unlink(missing_ok=True)
+        _checks(h0, **{"image (glorfindel)": "success"})
+        h0.fake.gh["checks"][h0.commits["c2"]][4]["conclusion"] = conclusion
+        assert h0.run().returncode == 1, conclusion
+        _nothing_moved(h0)
+        assert "sans conclusion verte" in _refusal(h0)[1] and "image (glorfindel)" in _refusal(h0)[1]
+
+
+@pytest.mark.parametrize("twice, refused", [
+    ((_check("lint + tests (py3.12)", "failure"), _check("lint + tests (py3.12)")), True),
+    ((_check("lint + tests (py3.12)"), _check("lint + tests (py3.12)", "cancelled")), True),
+    ((_check("lint + tests (py3.12)", status="in_progress"), _check("lint + tests (py3.12)")), False),
+    ((_check("lint + tests (py3.12)"), _check("lint + tests (py3.12)", status="queued")), False)])
+def test_a_required_check_listed_twice_holds_on_its_worst_run(h0, twice, refused):
+    """Two runs of one name (a re-run, a second suite): red in either refuses, either still running waits."""
+    _checks(h0, *twice, **{"lint + tests (py3.12)": None})
+    res = h0.run()
+    assert h0.running() == {"v0.3.1"}
+    if refused:
+        assert res.returncode == 1 and "CI rouge" in _refusal(h0)[1]
+    else:
+        assert res.returncode == 0 and h0.outcome("v0.4.0") is None and _titles(h0) == ["⏳ v0.4.0 attend sa CI"]
+
+
+def test_another_apps_green_never_stands_for_a_required_job_its_red_still_holds(h0):
+    """Only GitHub Actions' runs count for a check that holds: another app with checks:write naming a
+    run as a required job, green, fills nothing; red or still running, it holds the release."""
+    name = "terraform test (mock providers)"
+    _checks(h0, _check(name, app="some-app"), **{name: None})
+    assert h0.run().returncode == 0 and h0.running() == {"v0.3.1"}
+    assert _titles(h0) == [f"⏳ v0.4.0 attend sa CI requise (« {name} »)"]
+    _checks(h0, _check(name, app=None), **{name: None})            # no app said: not GitHub Actions
+    assert h0.run().returncode == 0 and h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") is None
+    _checks(h0, _check(name, status="in_progress", app="some-app"))
+    assert h0.run().returncode == 0 and h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") is None
+    _checks(h0, _check(name, "failure", app="some-app"))
+    assert h0.run().returncode == 1 and "CI rouge" in _refusal(h0)[1]
+    _nothing_moved(h0)
+
+
+def test_another_apps_green_beside_the_actions_run_changes_nothing(h0):
+    _checks(h0, _check("image (annatar)", app="some-app"))
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+
+
+@pytest.mark.parametrize("red", [True, False])
+def test_a_required_check_on_the_second_page_counts(h0, red):
+    """GitHub pages the check runs: a required one red, or present, only on page 2 is read."""
+    h0.fake.check_runs_per_page = 5
+    late = _check("lint + tests (py3.11)", "failure" if red else "success")
+    # Page 1: three checks not required, then two that hold; page 2: the other three, then the late one.
+    h0.fake.gh["checks"][h0.commits["c2"]] = ([_check("notify"), _check("roadmap"), _check("core alone")]
+                                              + [_check(n) for n in HOLDING if n != late["name"]] + [late])
+    res = h0.run()
+    pages = [r["path"] for r in h0.fake.requests if "/check-runs" in r["path"]]
+    assert len(pages) == 2, pages
+    if red:
+        assert res.returncode == 1 and "lint + tests (py3.11)" in _refusal(h0)[1]
+        _nothing_moved(h0)
+    else:
+        assert res.returncode == 0 and h0.running() == {"v0.4.0"}
+
+
+def test_a_required_check_still_running_is_waited_for_said_once(h0):
+    for name in REQUIRED:
+        h0.fake.requests.clear()
+        (h0.cd / "state.json").unlink(missing_ok=True)
+        _checks(h0, **{name: "in_progress"})
+        assert h0.run().returncode == 0 and h0.run().returncode == 0
+        assert h0.running() == {"v0.3.1"} and _titles(h0) == ["⏳ v0.4.0 attend sa CI"], name
+        assert name in h0.posts()[0]["embeds"][0]["description"]
+
+
+def test_a_check_not_required_still_running_never_delays_the_release(h0):
+    _checks(h0, _check(MACOS, status="in_progress"), _check("compose profiles (Glorfindel in each)", status="queued"))
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+    assert [t.split(" ")[0] for t in _titles(h0)] == ["🚀", "✅"]
+
+
+@pytest.mark.parametrize("name", REQUIRED)
+def test_a_required_check_absent_is_waited_for_an_hour_then_refused(h0, name):
+    _checks(h0, _check(MACOS), **{name: None})
+    assert h0.run().returncode == 0 and h0.outcome("v0.4.0") is None
+    assert _titles(h0) == [f"⏳ v0.4.0 attend sa CI requise (« {name} »)"]
+    state = json.loads((h0.cd / "state.json").read_text())
+    assert state["waits"] == {f"v0.4.0 {name}": 1}
+    state["waits"][f"v0.4.0 {name}"] = 12
+    (h0.cd / "state.json").write_text(json.dumps(state))
+    assert h0.run().returncode == 1 and h0.outcome("v0.4.0") == "refused"
+    _nothing_moved(h0)
+    assert f"le check requis « {name} » n'a pas tourné" in _refusal(h0)[1]
+
+
+@pytest.mark.parametrize("neighbour, target", [
+    ("lint + tests (py3.12) beta", "lint + tests (py3.12)"), ("lint + tests", "lint + tests (py3.11)"),
+    ("image (glorfindel)-fork", "image (glorfindel)"), ("Image (annatar)", "image (annatar)"),
+    ("terraform test (mock providers) / x", "terraform test (mock providers)"),
+    ("publish (glorfindel) extra", "publish (glorfindel)")])
+def test_a_check_with_a_neighbouring_name_never_passes_for_a_required_one(h0, neighbour, target):
+    """Compared by the whole name: a check named like a required one, green, while the required one
+    is absent, is waited for; red, it is only said."""
+    _checks(h0, _check(neighbour), **{target: None})
+    assert h0.run().returncode == 0 and h0.running() == {"v0.3.1"} and h0.outcome("v0.4.0") is None
+    assert _titles(h0)[0].startswith("⏳ v0.4.0 attend")
+    h0.fake.requests.clear()
+    _checks(h0, _check(neighbour, "failure"))
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"} and not _alerts(h0)
+
+
+def test_the_required_checks_are_the_ones_docs_sessions_lists():
+    """REQUIRED_CHECKS, a constant of the installed agent, equal to the rule of main as
+    docs/sessions.md lists it (« Les règles du dépôt », Require status checks to pass)."""
+    text = (ROOT / "docs" / "sessions.md").read_text(encoding="utf-8")
+    block = text.split("**Require status checks to pass**", 1)[1].split("**Vérifier :**", 1)[0]
+    listed = re.findall(r"^\s+- `([^`]+)`", block, re.M)
+    src = AGENT.read_text(encoding="utf-8")
+    (agent,) = [ast.literal_eval(node.value) for node in ast.parse(src).body if isinstance(node, ast.Assign)
+                and [getattr(t, "id", "") for t in node.targets] == ["REQUIRED_CHECKS"]]
+    assert sorted(agent) == sorted(listed) and len(agent) == len(set(agent)) == 5, (agent, listed)
+    assert MACOS not in agent and set(agent) == set(REQUIRED)
+    assert 'PUBLISH_CHECK = "publish (glorfindel)"' in src and "BLOCKING = REQUIRED_CHECKS + (PUBLISH_CHECK,)" in src
+
+
+def test_the_dry_run_shows_what_holds_and_what_is_only_said(h0):
+    """make glorfindel-host-cd-check: both groups, in the terminal and in #deploy."""
+    _checks(h0, _check(MACOS, "cancelled"), _check("notify"), _check("core alone"))
+    res = h0.run("check")
+    assert res.returncode == 0, res.stdout + res.stderr
+    _nothing_moved(h0)
+    (post,) = h0.posts()
+    desc = post["embeds"][0]["description"]
+    assert post["embeds"][0]["title"] == "✅ À blanc : v0.4.0 est prête"
+    for text in (desc, res.stdout):
+        held, told = text.split("bloquent (les requis de main, l'image publiée) : ", 1)[1].split(
+            "\nne sont que dits : ", 1)
+        told = told.splitlines()[0]
+        assert all(f"« {n} » vert" in held for n in HOLDING) and MACOS not in held
+        assert told == f"« {MACOS} » annulé ; 2 vert(s)"
+    # The release running already: the dry run reads its checks too.
+    assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
+    h0.fake.requests.clear()
+    res = h0.run("check")
+    assert res.returncode == 0, res.stdout + res.stderr
+    (post,) = h0.posts()
+    assert "ses checks : bloquent" in post["embeds"][0]["description"]
+    assert f"« {MACOS} » annulé" in post["embeds"][0]["description"]
+
+
+def test_the_dry_run_refuses_a_required_check_red_and_says_the_others_only(h0):
+    _checks(h0, _check(MACOS, "cancelled"), **{"terraform test (mock providers)": "failure"})
+    res = h0.run("check")
+    assert res.returncode == 1 and "« terraform test (mock providers) » rouge" in res.stdout
+    (post,) = h0.posts()
+    assert post["embeds"][0]["title"] == "⛔ À blanc : v0.4.0 serait refusée"
+    assert "terraform test (mock providers)" in post["embeds"][0]["description"]
+    assert MACOS not in post["embeds"][0]["description"]
 
 
 def test_a_ci_still_running_waits_said_once_then_deploys(h0):
-    c2 = h0.commits["c2"]
-    h0.fake.gh["checks"][c2] = [{"name": "lint + tests (py3.12)", "status": "in_progress", "conclusion": None}]
+    _checks(h0, **{"lint + tests (py3.12)": "in_progress"})
     assert h0.run().returncode == 0 and h0.run().returncode == 0
     assert h0.running() == {"v0.3.1"} and [t.split(" ")[0] for t in _titles(h0)] == ["⏳"]
     assert h0.outcome("v0.4.0") is None
-    h0.fake.gh["checks"][c2] = [{"name": n, "status": "completed", "conclusion": "success"}
-                                for n in ("lint + tests (py3.12)", "publish (glorfindel)")]
+    _checks(h0)
     assert h0.run().returncode == 0 and h0.running() == {"v0.4.0"}
 
 
@@ -1423,9 +1660,10 @@ def test_the_main_ci_job_is_waited_for_an_hour_then_refused(h0):
     assert h0.run().returncode == 0 and h0.run().returncode == 0
     assert [t.split(" ")[0] for t in _titles(h0)] == ["⏳"] and h0.outcome("v0.4.0") is None
     state = json.loads((h0.cd / "state.json").read_text())
-    state["waits"]["v0.4.0"] = 12
+    state["waits"]["v0.4.0 lint + tests (py3.11)"] = 12
     (h0.cd / "state.json").write_text(json.dumps(state))
-    assert h0.run().returncode == 1 and "CI principale" in _alerts(h0)[0]["embeds"][0]["description"]
+    assert h0.run().returncode == 1
+    assert "« lint + tests (py3.11) » n'a pas tourné" in _alerts(h0)[0]["embeds"][0]["description"]
 
 
 def test_the_version_is_compared_exactly(h0):
@@ -2086,8 +2324,7 @@ def test_a_registry_that_does_not_answer_is_waited_for_said_once_never_a_refusal
 
 def test_a_release_without_the_publishing_job_waits_an_hour_then_is_refused_never_built(h0):
     """A release from before CI3: no « publish (glorfindel) » on its commit."""
-    h0.fake.gh["checks"][h0.commits["c2"]] = [{"name": "lint + tests (py3.12)", "status": "completed",
-                                                "conclusion": "success"}]
+    _checks(h0, **{"publish (glorfindel)": None})
     assert h0.run().returncode == 0
     assert _titles(h0) == ["⏳ v0.4.0 attend son image publiée"]
     state = json.loads((h0.cd / "state.json").read_text())

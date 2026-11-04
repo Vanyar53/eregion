@@ -349,6 +349,13 @@ ci-dessous présents dans le ruleset « main »** : sans eux, une PR rouge devie
        - `image (glorfindel)` ;
        - `image (annatar)`.
 
+   **Le CD de H0 bloque une release sur ces cinq checks**, et sur `publish (glorfindel)`, l'image
+   qu'il tire (H1c, #518) : un autre check rouge ou annulé, macOS compris, est dit dans `#deploy`,
+   sans retenir H0. L'agent installé tient sa propre copie de la liste (`REQUIRED_CHECKS`, jamais lue
+   dans le dépôt) : un check ajouté ou retiré ici demande un `make glorfindel-host-cd-install`, et
+   `tests/unit/test_host_cd.py` garde les deux listes égales (`infra/glorfindel-host/README.md`,
+   « Le CD de H0 »).
+
 **Vérifier :**
 - avec ton identité : `gh api repos/grootcyber/eregion/rulesets` liste les deux règles, et
   `gh api repos/grootcyber/eregion/rulesets/<id>`, pour chacune, montre `bypass_actors` avec le rôle

@@ -13,6 +13,10 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
   - **The shell's history with the fallback root image** (`UID=0`): appended, never truncated, as with the operator's image. The neighbour file bash truncates through is made in the container's own layer, and its rename onto the mounted file fails (`EBUSY`, a rule of the kernel, not measured here: no container); bash then removes the neighbour (read in its code, not measured); nothing reaches the host. Measured without a container (bash 5.2): a directory that refuses the neighbour leaves the history appended, never truncated. A session longer than `HISTSIZE` is not kept, with either image (the Makefile's comment and `docs/fichiers-cles.md` say it).
   - Mutants M3490–M3497 and M3525–M3529 (each form, which SEC20's reader missed, `--volumes-from` aside) and M3498–M3499 (`ANNATAR_SHELL_FILES`: the link check removed, the files made before it). The shell probe runs with its own `HOME` and `HISTFILE`.
 
+### Fixed
+- **The canary's OIDC subject is the immutable one GitHub issues** (REN1, #470; `docs/operations.md`, « Le canari azurerm, sans secret »). Since the account's rename, GitHub issues for this repository the subject `repo:<owner>@<owner id>/<repository>@<repository id>:…` (`use_immutable_subject`, read on `repos/…/actions/oidc/customization/sub`): the subject by name that REN1's entry gave (`[0.5.3]`) never matched — every line of the canary failed at its login, `AADSTS700213` (measured on 04/11). The procedure now reads the prefix from the API, so no id enters the repository; the federated credential trusts the immutable subject, and the two by name are removed (Jonathan, 04/11). Better than before: the subject no longer rests on a name someone else could take — an id is never given again. The name stays in it, so a later rename will likely change it again.
+  - Tests: `test_workflows.py` — the subject read from the API, the heredoc left to expand it, no id in the section.
+
 ## [0.5.3] — 2026-11-04 — "signed and sealed"
 
 ### Security

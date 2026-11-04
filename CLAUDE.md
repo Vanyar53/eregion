@@ -84,7 +84,7 @@ Actions inconnues proposées → escalade automatique, humain valide et codifie.
 ## Tests
 
 ```bash
-pytest                    # ~1650 tests (~40s ; 60 séquences d'invariants, 500 en CI ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/ ni dans le dépôt (HY1, garde de session)
+pytest                    # ~1650 tests (~40s ; 60 séquences d'invariants ; en CI, PR 200, push 500 ~1 min), 0 appel Azure, 0 appel LLM, 0 écriture ~/.glorfindel/ ni dans le dépôt (HY1, garde de session)
                           # Hermétique par construction (conftest) : TOUS les chemins ~/.glorfindel redirigés
                           # vers tmp, et le glorfindel-config.yaml local ignoré (avant : avec une config locale,
                           # les tests de graphe lançaient de vraies requêtes KQL via `investigate`, suite 5× plus lente).
@@ -119,7 +119,7 @@ pytest tests/unit/test_invariants.py         # L24/L26 : invariants (Hypothesis,
                           # VM supprimée ou créée, tags, config illisible, règles de Glorfindel retournées, autre hôte,
                           # anciennes isolations, horloge). 15 propriétés (I1–I12, L1, L2, U1 — docstring du fichier),
                           # oracles tirés du journal du test, jamais des marqueurs du code (A0).
-                          # GLORFINDEL_INVARIANT_EXAMPLES (défaut 60 ; push 500, nuit 10 000), _STEPS (30),
+                          # GLORFINDEL_INVARIANT_EXAMPLES (défaut 60 ; PR 200, push 500, nuit 10 000), _STEPS (30),
                           # _DB (base Hypothesis : rejoue les échecs mémorisés), _STATS=1 -s, _NO_SHRINK=1.
 pytest tests/unit/test_invariant_regressions.py  # séquences trouvées par la machine, figées (L26, L27)
 pytest tests/unit/test_locks.py               # L27 : _vm_lock / _quarantine_lock entre vrais processus (flock)

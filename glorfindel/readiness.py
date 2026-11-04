@@ -30,14 +30,12 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 _STATE_FILE = Path.home() / ".glorfindel" / "readiness.json"
-_lock = threading.Lock()
 
 # Read errors, not limitations: on a VM that was autonomous, one is confirmed on the
 # next pass before the VM is held (a throttled API must not flap the mode).
@@ -328,16 +326,18 @@ def _now() -> str:
 @contextlib.contextmanager
 def _locked():
     """The watch (tracker) and the console (activation) are two processes writing the
-    same file: a thread lock plus an flock around every read-modify-write."""
-    with _lock:
-        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_STATE_FILE.with_suffix(".lock"), "a") as fh:
-            try:
-                import fcntl
-                fcntl.flock(fh, fcntl.LOCK_EX)
-            except ImportError:          # not POSIX: the thread lock only
-                pass
-            yield
+    same file: a thread lock plus an flock on `readiness.lock` around every
+    read-modify-write — the file every version took (an older console beside a newer
+    watch keeps out of its way).
+
+    The shared lock of the local files (`_file_lock`, as the escalations and the proposed
+    rules), read at call time: the invariant machine's scheduler drives it. Its own thread
+    lock was out of the scheduler's sight: two isolations at once that both recorded a
+    quarantine refusal, one stopped at its write inside it, left the other blocked there —
+    I11 « op-1 never came back » (seed 43 at 500, I11g, #508)."""
+    from glorfindel.response.locks import _file_lock
+    with _file_lock(_STATE_FILE.with_suffix(".lock")):
+        yield
 
 
 def _read() -> dict:

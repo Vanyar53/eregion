@@ -9,7 +9,11 @@
 // locked until the request is over, then each keeps its last result. A drill (DG-d) keeps the wires
 // drawn under a name (POST /api/dagorlad/drills) and lays them again (GET /api/dagorlad/drills/<name>):
 // loading one starts nothing, and a shipped drill's wire waits for the VMs the operator gives it —
-// never one chosen in their place (Jonathan, 03/11). Needs console.js and exercises.js.
+// never one chosen in their place (Jonathan, 03/11). Annatar proposes drills (DG-e): « Ask Annatar
+// for a drill » lays its chain on a VM the operator chose (GET /api/dagorlad/propose, read only), and
+// « Import YAML » lays a drill's YAML — a campaign's, written on Orodruin (POST
+// /api/dagorlad/drills/import, nothing written): a draft the operator corrects, keeps and requests.
+// Needs console.js and exercises.js.
 Console.init('dagorlad');
 document.title = 'Eregion — Dagorlad';
 const $ = id => document.getElementById(id);
@@ -35,10 +39,15 @@ const S = {
   pending: [],      // a loaded drill's wires waiting for their VMs: {experiment, zone, name, why, candidates}
   loaded: '',       // the drill last loaded or saved, by name
   loadedLayer: '',  // its layer: a shipped drill's name is never offered to « Save as drill »
+  loadedDesc: '',   // its description, offered again by « Save as drill »
   loadAsk: '',      // a drill to load over the wires drawn: asked first
   saving: null,     // « Save as drill » open: {err, exists, name, desc}
   drillsOpen: false, // the list of drills shown (folded by default: the board holds 1440 × 900)
+  author: 'operator', // who proposed the wires on the board: Annatar's chain stays its own once kept (DG-e)
+  asking: null,     // « Ask Annatar for a drill » open: {err, ask} — ask: a VM to propose on over the wires drawn
+  importing: null,  // « Import YAML » open: {err, ask}
 };
+const AUTHORS = ['operator', 'annatar'];   // what « Save as drill » keeps: never Eregion's (the shipped ones)
 const KEY = 'console.dagorlad.wires';
 const REQ_KEY = 'console.dagorlad.request';
 const PENDING_KEY = 'console.dagorlad.pending';
@@ -52,7 +61,8 @@ function save() {
 }
 function savePending() {
   try {
-    localStorage.setItem(PENDING_KEY, JSON.stringify({ wires: S.pending, loaded: S.loaded, layer: S.loadedLayer }));
+    localStorage.setItem(PENDING_KEY, JSON.stringify({ wires: S.pending, loaded: S.loaded, layer: S.loadedLayer,
+                                                       desc: S.loadedDesc, author: S.author }));
   } catch (_) { /* private mode */ }
 }
 // The request followed, running or over, kept in this browser (a convenience): a reload finds it.
@@ -107,11 +117,13 @@ const ACTIONS = {
     if (S.request || k < 0 || k >= S.wires.length) return;
     S.wires.splice(k, 1);
     S.note = '';
-    save(); refreshPlan();
+    if (!S.wires.length && !S.pending.length) S.author = 'operator';   // an empty board is the operator's
+    save(); savePending(); refreshPlan();
   },
   clear() {
     if (S.request) return;
     S.wires = []; S.picked = null; S.note = ''; S.last = null; S.follow = null; S.pending = [];
+    S.author = 'operator'; S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = '';
     save(); saveRequest(); savePending(); refreshPlan();
   },
   // Phase (b): the request, written by the console in its own directory — never a launch. Over,
@@ -132,7 +144,8 @@ const ACTIONS = {
     if (S.request || !S.wires.length) return;
     // A shipped drill's name is not offered: saved under it, this instance's would replace the
     // shipped one, and its wires would never be « to place » again.
-    S.saving = S.saving ? null : { err: '', exists: false, name: S.loadedLayer === 'instance' ? S.loaded : '', desc: '' };
+    const own = ['instance', 'import'].includes(S.loadedLayer);
+    S.saving = S.saving ? null : { err: '', exists: false, name: own ? S.loaded : '', desc: own ? S.loadedDesc : '' };
     S.drillsOpen = true;
     renderDrills();
   },
@@ -145,6 +158,29 @@ const ACTIONS = {
     loadDrill(name);
   },
   loadCancel() { S.loadAsk = ''; renderDrills(); },
+  // ── Annatar's proposals (DG-e): drafts laid on the board, never kept nor launched from here ──
+  askOpen() {
+    if (S.request) return;
+    S.asking = S.asking ? null : { err: '', ask: '' };
+    S.importing = null; S.drillsOpen = true;
+    renderDrills();
+  },
+  // On the VM the operator chose — over the wires drawn only once asked.
+  askAnnatar(j) {
+    const t = S.board && S.board.targets[j];
+    if (!t || !S.asking || S.request) return;
+    if ((S.wires.length || S.pending.length) && S.asking.ask !== t.resource_id) {
+      S.asking.ask = t.resource_id; renderDrills(); return;
+    }
+    askAnnatar(t);
+  },
+  importOpen() {
+    if (S.request) return;
+    S.importing = S.importing ? null : { err: '', ask: false };
+    S.asking = null; S.drillsOpen = true;
+    renderDrills();
+  },
+  importYaml() { importYaml(); },
   // A wire waiting for its VMs: the operator gives one, or all of its zone's candidates.
   place(p, j) {
     const w = S.pending[p];
@@ -689,6 +725,36 @@ function saveForm() {
     <span class="meta">${Number(S.wires.length)} wire(s), kept by the names of their VMs — never their ids${left}</span>
     ${f.err ? `<div class="err">${esc(f.err)}</div>` : ''}</div>`;
 }
+// « Ask Annatar for a drill »: one button per enrolled VM — the operator's choice, never Annatar's.
+function askForm() {
+  const f = S.asking;
+  const targets = (S.board && S.board.targets) || [];
+  const drawn = S.wires.length + S.pending.length;
+  const buttons = targets.map((t, j) => `<button type="button" class="mini" ${_on('click', 'askAnnatar', j)}
+      title="${esc(`${t.resource_id} · zone ${t.zone}`)}">${esc(t.name)} <span class="meta">· ${esc(t.zone)}</span></button>`).join(' ');
+  const ask = f.ask ? targets.findIndex(t => same(t.resource_id, f.ask)) : -1;
+  return `<div class="saveform">
+    <span class="meta">Annatar lays a chain of the catalogue's implemented techniques that destroy nothing, in kill-chain order,
+      on the VM you choose — it reads the catalogue and the VM, never Glorfindel's rules or modes. Nothing is written, nothing starts.</span>
+    <span>${buttons || '<span class="r-bad">no enrolled VM read now</span>'}</span>
+    ${ask >= 0 ? `<span class="r-warn">replace the ${Number(drawn)} wire(s) drawn?</span>
+      <button type="button" class="mini" ${_on('click', 'askAnnatar', ask)}>Replace</button>` : ''}
+    <button type="button" class="mini" ${_on('click', 'askOpen')}>Cancel</button>
+    ${f.err ? `<div class="err">${esc(f.err)}</div>` : ''}</div>`;
+}
+// « Import YAML »: a campaign's drill (`annatar campaign plan` writes it beside its manifest), or an export.
+function importForm() {
+  const f = S.importing;
+  const drawn = S.wires.length + S.pending.length;
+  return `<div class="saveform">
+    <label style="flex:1 1 100%">drill YAML <textarea id="drill-yaml" rows="6" spellcheck="false"
+      placeholder="name: annatar-20261104t101500z&#10;author: annatar&#10;wires: …">${esc(f.text || '')}</textarea></label>
+    <button type="button" class="mini" ${_on('click', 'importYaml')}>${f.ask ? 'Replace' : 'Place on the board'}</button>
+    <button type="button" class="mini" ${_on('click', 'importOpen')}>Cancel</button>
+    ${f.ask ? `<span class="r-warn">replace the ${Number(drawn)} wire(s) drawn?</span>` : ''}
+    <span class="meta">read by the drills' one reader, placed on the VMs enrolled now — nothing is kept until « Save as drill »</span>
+    ${f.err ? `<div class="err">${esc(f.err)}</div>` : ''}</div>`;
+}
 function renderDrills() {
   const box = $('drills');
   if (!box) return;
@@ -698,9 +764,14 @@ function renderDrills() {
       <button type="button" class="mini" ${_on('click', 'toggleDrills')}>${S.drillsOpen ? 'Hide' : 'Show'}</button>
       <button type="button" class="mini" ${_on('click', 'saveOpen')}${can ? '' : ' disabled'}
         title="${can ? 'Keep the wires drawn under a name, in this instance' : 'Draw wires first — and no request running'}">Save as drill</button>
+      <button type="button" class="mini" ${_on('click', 'askOpen')}${S.request ? ' disabled' : ''}
+        title="Annatar proposes a chain on a VM you choose — a draft on the board, nothing starts">Ask Annatar for a drill</button>
+      <button type="button" class="mini" ${_on('click', 'importOpen')}${S.request ? ' disabled' : ''}
+        title="Lay a drill's YAML — a campaign's, written on Orodruin — on the board">Import YAML</button>
+      ${S.author === 'annatar' && (S.wires.length || S.pending.length) ? '<span class="chip c-blue" title="Kept as Annatar\'s proposal, corrected or not">proposed by Annatar</span>' : ''}
       ${S.drillsErr ? `<span class="r-bad">${esc(S.drillsErr)}</span>` : ''}</div>`;
   if (!S.drillsOpen) { box.innerHTML = head; return; }
-  box.innerHTML = head + (S.saving ? saveForm() : '') + (ds.length ? `<table class="t">${ds.map(drillRow).join('')}</table>`
+  box.innerHTML = head + (S.saving ? saveForm() : '') + (S.asking ? askForm() : '') + (S.importing ? importForm() : '') + (ds.length ? `<table class="t">${ds.map(drillRow).join('')}</table>`
     : `<div class="empty">${S.drills ? 'No drill yet: draw wires, then « Save as drill ».' : 'reading the drills…'}</div>`);
 }
 async function loadDrills() {
@@ -719,20 +790,66 @@ async function loadDrill(name) {
   try {
     const d = await getJSON(`/api/dagorlad/drills/${encodeURIComponent(name)}`);
     if (d.error) throw new Error(d.error);
-    const placed = Array.isArray(d.placed) ? d.placed : [];
-    S.wires = []; S.last = null; S.follow = null;
-    lay(placed.flatMap(p => (p.targets || []).map(c => [String(p.experiment), String(c.resource_id)])));
-    S.pending = placed.filter(p => !(p.targets || []).length).map(p => ({
-      experiment: String(p.experiment), zone: String(p.zone || ''), name: String(p.name || ''), why: String(p.why || ''),
-      candidates: (p.candidates || []).map(c => ({ name: String(c.name), resource_id: String(c.resource_id),
-        zone: String(c.zone || ''), last_run_at: c.last_run_at == null ? null : Number(c.last_run_at) })),
-    }));
-    S.loaded = String(d.name || name);
-    S.loadedLayer = String(d.layer || '');
-    S.drillsErr = d.targets_error ? `the enrolled VMs unreadable: ${d.targets_error}` : '';
-    savePending(); saveRequest();
+    layDrill(d, name);
   } catch (e) {
     S.drillsErr = `the drill ${name} — ${e.message}`;
+  }
+  renderDrills(); refreshPlan();
+}
+function layDrill(d, name) {
+  const placed = Array.isArray(d.placed) ? d.placed : [];
+  S.wires = []; S.last = null; S.follow = null;
+  lay(placed.flatMap(p => (p.targets || []).map(c => [String(p.experiment), String(c.resource_id)])));
+  S.pending = placed.filter(p => !(p.targets || []).length).map(p => ({
+    experiment: String(p.experiment), zone: String(p.zone || ''), name: String(p.name || ''), why: String(p.why || ''),
+    candidates: (p.candidates || []).map(c => ({ name: String(c.name), resource_id: String(c.resource_id),
+      zone: String(c.zone || ''), last_run_at: c.last_run_at == null ? null : Number(c.last_run_at) })),
+  }));
+  S.loaded = String(d.name || name);
+  S.loadedLayer = String(d.layer || '');
+  S.loadedDesc = String(d.description || '');
+  // A shipped drill (Eregion's) kept here is the operator's: the instance never holds Eregion's.
+  S.author = AUTHORS.includes(d.author) ? d.author : 'operator';
+  S.drillsErr = d.targets_error ? `the enrolled VMs unreadable: ${d.targets_error}` : '';
+  savePending(); saveRequest();
+}
+// « Ask Annatar for a drill »: its chain on the VM given, laid as a draft — the wires drawn replaced
+// (asked first), nothing written, nothing launched; « Save as drill » keeps it as Annatar's.
+async function askAnnatar(t) {
+  const f = S.asking;
+  try {
+    const r = await fetch(`/api/dagorlad/propose?target=${encodeURIComponent(t.resource_id)}`, { cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+    const wires = Array.isArray(d.wires) ? d.wires : [];
+    S.wires = []; S.pending = []; S.last = null; S.follow = null;
+    lay(wires.map(w => [String(w.experiment), String(w.target)]));
+    S.loaded = ''; S.loadedLayer = ''; S.loadedDesc = ''; S.author = 'annatar';
+    S.asking = null;
+    S.note = `Annatar proposed ${Number(S.wires.length)} wire(s) on ${t.name}: correct them, keep them (Save as drill), then request the run`;
+    save(); savePending(); saveRequest();
+  } catch (e) {
+    if (f) { f.err = e.message; f.ask = ''; }
+  }
+  renderDrills(); refreshPlan();
+}
+// « Import YAML »: a drill's YAML read by the server's one reader, placed as « Load » places it —
+// over the wires drawn only once asked. Nothing is written until « Save as drill ».
+async function importYaml() {
+  const f = S.importing;
+  if (!f || S.request) return;
+  const text = ($('drill-yaml') && $('drill-yaml').value) || '';
+  if (!text.trim()) { f.err = 'paste a drill\'s YAML first'; renderDrills(); return; }
+  if ((S.wires.length || S.pending.length) && !f.ask) { f.ask = true; f.text = text; renderDrills(); return; }
+  try {
+    const r = await fetch('/api/dagorlad/drills/import', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                         body: JSON.stringify({ yaml: text }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+    layDrill(d, String(d.name || ''));
+    S.importing = null;
+  } catch (e) {
+    f.err = e.message; f.ask = false; f.text = text;
   }
   renderDrills(); refreshPlan();
 }
@@ -744,6 +861,7 @@ async function saveDrill(replace) {
   const body = { name: f.name.trim(), wires: S.wires.map(w => ({ experiment: w[0], target: w[1] })) };
   if (f.desc.trim()) body.description = f.desc.trim();
   if (replace) body.replace = true;
+  if (S.author === 'annatar') body.author = 'annatar';
   try {
     const r = await fetch('/api/dagorlad/drills', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                                    body: JSON.stringify(body) });
@@ -753,6 +871,7 @@ async function saveDrill(replace) {
       renderDrills(); return;
     }
     S.saving = null; S.loaded = String(d.saved || body.name); S.loadedLayer = 'instance';
+    S.loadedDesc = body.description || '';
     savePending();
   } catch (e) {
     f.err = e.message; renderDrills(); return;
@@ -811,6 +930,8 @@ async function refreshPlan() {
     if (kept && Array.isArray(kept.wires)) S.pending = kept.wires.filter(validPending).slice(0, MAX_WIRES);
     if (kept && typeof kept.loaded === 'string') S.loaded = kept.loaded;
     if (kept && typeof kept.layer === 'string') S.loadedLayer = kept.layer;
+    if (kept && AUTHORS.includes(kept.author)) S.author = kept.author;
+    if (kept && typeof kept.desc === 'string') S.loadedDesc = kept.desc.slice(0, 300);
   } catch (_) { /* private mode, or something else there */ }
   // The request followed before the reload: read again — still running, its wires lock again.
   S.last = storedRequest();

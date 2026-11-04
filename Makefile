@@ -1079,12 +1079,25 @@ orodruin-lock: orodruin-init orodruin-watch-guard
 # (« commit digest ») qu'au succès. REF se donne sur la ligne de commande, comme pour
 # glorfindel-host-start. UID 1000 = l'utilisateur de la VM. L'archive : un répertoire temporaire de
 # ce poste (TMPDIR ; ~630 Mo), retiré à la fin.
+# OI2 (#490) : relue, elle démarre une fois avant son tag — un run de contrôle qui ne lance que true,
+# sans réseau, sans tirer, sans rien de l'hôte (ni montage, ni orodruin.env), durci comme les
+# injecteurs (ORO_HARDEN), borné (ORO_CHECK_TIMEOUT secondes, KILL 10 s après). Au magasin
+# containerd, docker image inspect lit la configuration : seul un conteneur créé prouve les couches
+# présentes et dépaquetées. Un échec : l'image est retirée, la cause dite, :orodruin n'a pas changé.
 ORO_INCOMING  := eregion-annatar:incoming
+ORO_CHECK_NAME := eregion-annatar-check
+ORO_CHECK_TIMEOUT := 120
+# Dans la commande distante, le délai sort des apostrophes : EREGION_CHECK_TIMEOUT, validé avant (des
+# chiffres), jamais développé par make ($(value …), unexport — comme REF) : « $(…) » n'y est pas exécuté.
+unexport ORO_CHECK_TIMEOUT
+ORO_CHECK_RUN  =timeout -k 10 '"$$EREGION_CHECK_TIMEOUT"' docker run --rm $(ORO_HARDEN) --pull never --network none --no-healthcheck --name $(ORO_CHECK_NAME) --entrypoint true $(ORO_INCOMING)
 orodruin-push: export EREGION_DEPLOY_REF = $(value REF)
+orodruin-push: export EREGION_CHECK_TIMEOUT = $(value ORO_CHECK_TIMEOUT)
 orodruin-push: orodruin-known
 	@test -f infra/orodruin/orodruin.env || { echo "!! infra/orodruin/orodruin.env manquant (copier orodruin.env.example)"; exit 1; }
 	@case "$(origin REF)" in environment*) echo "REF vient de l'environnement (« $$EREGION_DEPLOY_REF ») : rien n'est envoyé. La donner sur la ligne de commande : make orodruin-push REF=<tag ou commit> (REF= : le dernier tag v*)." >&2; exit 1;; esac
 	@case "$$EREGION_DEPLOY_REF" in -*|*[!A-Za-z0-9._-]*) echo "REF invalide : « $$EREGION_DEPLOY_REF » (un tag ou un commit)" >&2; exit 1;; esac
+	@case "$$EREGION_CHECK_TIMEOUT" in ''|0*|*[!0-9]*) echo "ORO_CHECK_TIMEOUT invalide : « $$EREGION_CHECK_TIMEOUT » (des secondes, au moins 1)" >&2; exit 1;; esac
 	@git fetch -q --tags origin
 	@python3 scripts/published_image.py install-cosign
 	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; trap 'rm -rf "$$tmp"; exit 130' INT TERM HUP; \
@@ -1092,10 +1105,17 @@ orodruin-push: orodruin-known
 	   || { echo "✗ rien n'est envoyé : eregion-annatar:orodruin n'a pas changé" >&2; exit 1; }; \
 	 echo "$$out"; digest=$$(echo "$$out" | sed -n 's/^digest=//p'); commit=$$(echo "$$out" | sed -n 's/^commit=//p'); \
 	 $(ORO_SSH) 'rm -f .eregion-image' || exit 1; \
-	 $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1; true'; \
+	 $(ORO_SSH) 'docker rm -f $(ORO_CHECK_NAME) >/dev/null 2>&1; docker image rm $(ORO_INCOMING) >/dev/null 2>&1; true'; \
 	 if $(ORO_SSH) 'docker load' < "$$tmp/image.tar" \
 	    && { $(ORO_SSH) 'docker image inspect $(ORO_INCOMING)' > "$$tmp/inspect.json"; \
 	         python3 scripts/published_image.py loaded annatar --digest "$$digest" --expect-file "$$tmp/expect.json" --inspect "$$tmp/inspect.json"; }; then \
+	   rc=0; $(ORO_SSH) '$(ORO_CHECK_RUN)' || rc=$$?; \
+	   if [ "$$rc" != 0 ]; then \
+	     $(ORO_SSH) 'timeout 30 docker rm -f $(ORO_CHECK_NAME) >/dev/null 2>&1; docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \
+	     case $$rc in 124|137) why="délai de $$EREGION_CHECK_TIMEOUT s dépassé";; 125) why="docker n'a pas pu créer le conteneur : une couche absente ou non dépaquetée ?";; \
+	       126|127) why="true ne s'exécute pas dans l'image";; 255) why="ssh n'a pas abouti";; *) why="code $$rc";; esac; \
+	     echo "✗ l'image vérifiée ne démarre pas sur Orodruin (run de contrôle sans réseau : $$why) : retirée, eregion-annatar:orodruin n'a pas changé" >&2; \
+	     exit 1; fi; \
 	   $(ORO_SSH) 'docker tag $(ORO_INCOMING) $(ORO_IMAGE) && docker image rm $(ORO_INCOMING) >/dev/null' \
 	   && echo "$$commit $$digest" | $(ORO_SSH) 'cat > .eregion-image' \
 	   || { $(ORO_SSH) 'docker image rm $(ORO_INCOMING) >/dev/null 2>&1'; \

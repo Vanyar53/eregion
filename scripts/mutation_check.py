@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -4681,7 +4682,7 @@ MUTANTS += [
     ("M1161", "the current version released again: equal is not greater (REL1)", RELS,
      "new <= semver(current)", "new < semver(current)"),
     ("M1162", "an empty [Unreleased] released: a version with nothing in it (REL1)", RELS,
-     "    if not has_content(unreleased(changelog)):\n        refused.append(", "    if False:\n        refused.append("),
+     "    elif not has_content(unreleased(changelog)) and not frags:\n        refused.append(", "    elif False:\n        refused.append("),
     ("M1163", "a release cut from a HEAD that is not origin/main (REL1)", RELS,
      "    if head != main:\n", "    if False:\n"),
     ("M1164", "a draft created for a tag that exists already (REL1)", RELS,
@@ -4703,7 +4704,7 @@ TESTS.update({f"M{n}": "tests/unit/test_release.py" for n in range(1160, 1170)})
 ADS = "scripts/agents_discord.py"
 MUTANTS += [
     ("M1430", "a push or a pull request that fails after the branch exists said « nothing written » (REL1)", RELS,
-     "        raise Halfway(_halfway(step, branch, str(e))) from None\n", "        raise\n"),
+     "        raise Halfway(_halfway(step, branch, str(e), removed)) from None\n", "        raise\n"),
     ("M1431", "an [Unreleased] of headings only released: a version with nothing in it (REL1)", RELS,
      '    return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())\n',
      "    return bool(text.strip())\n"),
@@ -10576,6 +10577,42 @@ TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(351
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;
 # tests/unit/test_mutant_anchors.py and scripts/mutant_anchors.py fail otherwise).
+
+# The blocks above stay where they are. A lot's mutants now go into a file of their own,
+# scripts/mutants/<lot>.py, loaded here (CI5, #512): two lots in flight never write the same lines
+# of this file, so the merge of one never puts the other in conflict. A lot's file defines
+#   MUTANTS = [(id, bug class, file, text in the code today, text that re-introduces the bug[, why]), …]
+#   TESTS = {id: "test paths", …}        # its own ids only; the invariants when absent
+#   TESTS_ALSO = {id: "test paths", …}   # optional: tests added to another mutant's, at its end
+#   CONTROL = […]                        # optional, rare: the control set
+# and its paths as plain strings (it imports nothing of this file). A mutant that renames its file
+# names RENAME, which the loader gives it. scripts/mutant_anchors.py checks them as the others: an
+# id taken twice, in two files or here, is a fault naming each place.
+LOTS_DIR = REPO / "scripts" / "mutants"
+
+
+def lot_files(where: Path = LOTS_DIR) -> list[Path]:
+    """The lots' files, by name; `_…` ones (helpers) aside."""
+    return sorted((p for p in where.glob("*.py") if not p.name.startswith("_")), key=lambda p: p.name.casefold())
+
+
+def load_lot(path: Path) -> dict:
+    """What a lot's file defines: its MUTANTS, TESTS, TESTS_ALSO and CONTROL."""
+    ns = runpy.run_path(str(path), init_globals={"RENAME": RENAME})
+    return {"MUTANTS": list(ns.get("MUTANTS", [])), "TESTS": dict(ns.get("TESTS", {})),
+            "TESTS_ALSO": dict(ns.get("TESTS_ALSO", {})), "CONTROL": list(ns.get("CONTROL", []))}
+
+
+# Each lot's file, by its path from the repository's root: what it defines.
+LOTS = {p.relative_to(REPO).as_posix(): load_lot(p) for p in lot_files()}
+for _lot in LOTS.values():
+    MUTANTS += _lot["MUTANTS"]
+    CONTROL += _lot["CONTROL"]
+    _own = {m[0] for m in _lot["MUTANTS"] + _lot["CONTROL"]}
+    TESTS.update({mid: t for mid, t in _lot["TESTS"].items() if mid in _own})   # never another's
+for _lot in LOTS.values():
+    for _mid, _also in _lot["TESTS_ALSO"].items():
+        TESTS[_mid] = f"{TESTS.get(_mid, INVARIANTS)} {_also}"
 
 
 

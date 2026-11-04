@@ -28,7 +28,9 @@ Tu réalises un lot, et seulement celui-là.
    Suis `CLAUDE.md` et `CONTRIBUTING.md` :
    - aucun appel Azure ni LLM dans les tests ;
    - un `HOME` jetable ;
-   - README, la doc concernée (`docs/`) et `CHANGELOG.md` mis à jour si le comportement change ; `CLAUDE.md` seulement si une règle ou une convention change.
+   - README et la doc concernée (`docs/`) mis à jour si le comportement change ; `CLAUDE.md` seulement si une règle ou une convention change ;
+   - l'entrée de CHANGELOG dans `changes/<lot>.md`, jamais sous `[Unreleased]` de `CHANGELOG.md` (la forme : `changes/README.md`) ;
+   - les mutants dans `scripts/mutants/<lot>.py`, jamais dans les blocs de `scripts/mutation_check.py` ; puis `git add -N` sur ce fichier, et `python scripts/mutant_anchors.py`.
 
    Reste dans le lot : tout le reste va dans ton rapport.
 4. **Vérifier et commiter.** Lance `pytest` (ou le sous-ensemble que la fiche indique), puis `ruff check .`. Fais des commits petits et cohérents, au format du dépôt : `feat(<portée>): …`, en français.

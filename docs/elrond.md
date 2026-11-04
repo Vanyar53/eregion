@@ -29,12 +29,12 @@ palantir.py          lit les transcripts : quel modèle a répondu, arrêts des 
 
 Dans le dépôt, depuis une session Claude Code :
 
-1. `/elrond init <feuille de route> <mandat du codeur>`. Le planificateur écrit le plan dans `~/.claude/elrond/eregion/`. Les lots déjà livrés sont repérés grâce au `CHANGELOG.md` et à `git log`, et marqués `merged`.
+1. `/elrond init <feuille de route> <mandat du codeur>`. Le planificateur écrit le plan dans `~/.claude/elrond/eregion/`. Les lots déjà livrés sont repérés grâce au `CHANGELOG.md`, aux fragments de `changes/` (une entrée par lot, pas encore assemblée par une release) et à `git log`, et marqués `merged`.
 2. Relire l'index proposé et ajuster l'en-tête de `plan.md` (`Parallel`, `Review policy`). Puis donner le feu vert.
 3. `/elrond run` lance les prochains lots prêts ; `/elrond run O1 R1` lance des lots précis.
 4. `/elrond status` donne l'avancement. `/elrond review <lot>` force une relecture.
 
-Chaque lot produit une branche locale `lot/<id>-…`. elrond ne pousse rien et n'ouvre aucune PR sans demande explicite dans la session. Pour les lots que Jonathan délègue, la session principale pousse, ouvre la PR et fusionne après une CI verte et une relecture Opus 5.5 « ok » ([sessions.md](sessions.md)). La PR suit le modèle du dépôt, qui indique le modèle et le verdict de relecture.
+Chaque lot produit une branche locale `lot/<id>-…`. Son entrée de CHANGELOG va dans `changes/<lot>.md` et ses mutants dans `scripts/mutants/<lot>.py` (CI5, [sessions.md](sessions.md), « Le travail ») : des lots qui tournent en parallèle n'écrivent jamais les mêmes lignes, et leurs PR fusionnent l'une après l'autre sans conflit. elrond ne pousse rien et n'ouvre aucune PR sans demande explicite dans la session. Pour les lots que Jonathan délègue, la session principale pousse, ouvre la PR et fusionne après une CI verte et une relecture Opus 5.5 « ok » ([sessions.md](sessions.md)). La PR suit le modèle du dépôt, qui indique le modèle et le verdict de relecture.
 
 ## Le plan et le journal
 

@@ -19,6 +19,7 @@ from glorfindel.providers.azure.sdk import _enum_text
 from glorfindel.providers.azure.turned import _waits_for
 from glorfindel.response.ids import _parse_vm_resource_id
 from glorfindel.response.policy import _first_line, PartialActionError, blockable_ip
+from glorfindel.response.pair_journal import note_pair_write
 from glorfindel.response.state import _clear_block_state, _load_block_entries, _save_block_state
 
 
@@ -370,6 +371,9 @@ class BlockMixin:
         existing = list(self._network.security_rules.list(nsg_rg, nsg_name))
         # Put back by the reassertion, it keeps its place (see _pair_priorities).
         priority = _pair_priorities(existing, rule_name, f"{rule_name}-out", 200, 10)
+        # Noted before it is written (L1W, #492): the pair every entry of this IP and subnet names —
+        # another VM's acknowledged drift is over once it is written again, even gone again before a pass.
+        note_pair_write(f"{nsg_rg}/{nsg_name}", rule_name)
         self._put_deny_rule(nsg_rg, nsg_name, rule_name, "Inbound", priority["inbound"], src=ip, dst="*")
         self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority["outbound"],
                             src="*", dst=ip)

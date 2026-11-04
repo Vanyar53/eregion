@@ -6146,8 +6146,8 @@ MUTANTS += [
     ("M2087", "a resource of the canary named without its run's suffix: the matrix's lines collide (P04)", JIT_TF,
      '  name                = "nic-no-nsg-${var.suffix}"\n', '  name                = "nic-no-nsg"\n'),
     ("M2088", "a failed destroy deletes the canary's group, as the old fallback did (P04)", JIT_SH,
-     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 || sweep\n',
-     '  terraform destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 >/dev/null 2>&1 \\\n'
+     '  tf 0 destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 || sweep\n',
+     '  tf 0 destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 \\\n'
      '    || az group delete -n "$RG" --yes --no-wait >/dev/null 2>&1\n'),
     ("M2089", "azurerm 4.x and 5.x try to register resource providers the principal may not (P04)", JIT_SH,
      "  *) export ARM_RESOURCE_PROVIDER_REGISTRATIONS=none ;;\n", "  *) ;;\n"),
@@ -6168,7 +6168,7 @@ MUTANTS += [
      "docs/operations.md", 'az role assignment create --role "Network Contributor" \\\n',
      "az role assignment create --role Contributor \\\n"),
     ("M2114", "the runner's second signal cuts the canary's cleanup short: the quarantine NSG left (P04)", JIT_SH,
-     "  trap '' INT TERM\n  echo \"== cleanup\"\n", "  echo \"== cleanup\"\n"),
+     "  trap '' INT TERM\n  # The verdict is said", "  # The verdict is said"),
     ("M2115", "the canary's login traced: the OIDC token written whole into the job's log (P04)", CAN,
      "          jwt=$(curl -fsS", "          set -x\n          jwt=$(curl -fsS"),
     ("M2116", "the canary's step runs run.sh as a child: a cancel's signals reach the step's bash only (P04)",
@@ -10054,8 +10054,11 @@ MUTANTS += [
      '        if False:\n'),
 ]
 TESTS.update({mid: _L1E_SEQ for mid in ("M3440", "M3441")})
+# The `xfail` green since L1W (#492): M3442 is caught by the oracle's control, the code's journal lost.
 TESTS["M3442"] = ("tests/unit/test_invariant_regressions.py::"
-                  "test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm")
+                  "test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm "
+                  "tests/unit/test_invariant_regressions.py::"
+                  "test_a_perimeter_written_again_then_gone_with_its_journal_lost_is_refused")
 
 
 # SEC19 (#456): the watch's heartbeat signed by its own key, verified with the key the injector pins
@@ -10159,7 +10162,7 @@ _L1H_BACK = (f"{_L1H_UNIT}test_a_turned_pair_written_again_after_an_acknowledged
              f"{_L1H_UNIT}test_the_first_time_decides_on_a_turned_pair_written_again_as_the_second")
 _L1H_GUARD = f"{_L1H_UNIT}test_an_acknowledged_drift_whose_pair_did_not_come_back_says_nothing"
 _L1H_KEYS = f"{_L1H_UNIT}test_the_pair_of_an_entry_is_named_by_its_nsg_and_rule"
-_L1H_IF = '        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'
+_L1H_IF = '        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now and was != is_:\n'
 _L1H_PAIRS = '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}".lower() for x in ("", "-out")}\n'
 MUTANTS += [
     ("M3430", "the pair the card read turned, written again by another perimeter, never ends its acknowledged "
@@ -10168,11 +10171,11 @@ MUTANTS += [
      "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n"),
     ("M3431", "any rule the card said gone and read there, holding now, ends the episode — a VM's own rule set "
               "right by hand too: a card more (L1H, RB1)", RSD,
-     _L1H_IF, '        if k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'),
+     _L1H_IF, '        if k.rsplit("/", 1)[-1] in gone_then - gone_now and was != is_:\n'),
     ("M3432", "the pair read back while still gone — turned otherwise: a card more, no worse (L1H)", RSD,
-     _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] in gone_then:\n'),
+     _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] in gone_then and was != is_:\n'),
     ("M3433", "the pair read back though the card never said it gone — held, changed since: a card more (L1H)",
-     RSD, _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] not in gone_now:\n'),
+     RSD, _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] not in gone_now and was != is_:\n'),
     ("M3434", "the pair's outbound rule left out of the pair (L1H)", RSD,
      _L1H_PAIRS, '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}".lower() for x in ("",)}\n'),
     ("M3435", "the pair named in the entry's case, never the check's lowercase: never read back (L1H)", RSD,
@@ -10298,6 +10301,82 @@ MUTANTS += [
 ]
 TESTS.update({**{f"M{n}": _CONK for n in (3387, 3388, 3389, *range(3460, 3469))},
               "M3469": "tests/unit/test_drill.py"})
+# SEC20b (#494): the reader of the red's mounts (tests/unit/test_red_mounts.py) refuses what it
+# cannot read — each form a mount, a launch, a reference, a directive or compose takes that the
+# reader of SEC20 did not see —, and the shell's files checked before they are made. M3490–M3499.
+MUTANTS += [
+    ("M3490", "Annatar by hand writes glorfindel/, its mount written with `-v=` (SEC20b)", MAKE,
+     "\t-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \\\n\t$(if $(wildcard $(HOME)/.glorfindel/injectors)",
+     "\t-v $(PWD)/runs/verdicts:/app/runs/verdicts:ro \\\n\t-v=$(PWD)/glorfindel:/app/glorfindel \\\n"
+     "\t$(if $(wildcard $(HOME)/.glorfindel/injectors)"),
+    ("M3491", "make annatar-validate writes scripts/, its mount glued to `-v` (SEC20b)", MAKE,
+     "docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) "
+     "validate",
+     "docker run --rm -v$(PWD)/scripts:/app/scripts -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro "
+     "--entrypoint annatar $(IMAGE_ANNATAR) validate"),
+    ("M3492", "Annatar's shell writes the repository whole, its mount in a group of short options (SEC20b)", MAKE,
+     "docker run --rm -it $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE)",
+     "docker run --rm -itv $(PWD):/app $(ANNATAR_AZURE_ENV) $(ANNATAR_VOLS) $(ANNATAR_STATE)"),
+    ("M3493", "make annatar-list launches a second container by `docker container run`, writing scripts/ (SEC20b)",
+     MAKE, "--entrypoint annatar $(IMAGE_ANNATAR) list\n",
+     "--entrypoint annatar $(IMAGE_ANNATAR) list && docker container run --rm -v $(PWD)/scripts:/app/scripts "
+     "$(IMAGE_ANNATAR) list\n"),
+    ("M3494", "Annatar's mounts read from a file at make time, never seen (SEC20b)", MAKE,
+     "\t-v $(PWD)/scripts:/app/scripts:ro \\\n",
+     "\t-v $(PWD)/scripts:/app/scripts:ro \\\n\t$(shell cat $(HOME)/.annatar-mounts 2>/dev/null) \\\n"),
+    ("M3495", "the Makefile includes a file this reader never reads (SEC20b)", MAKE,
+     "IMAGE_ANNATAR   := eregion-annatar\n", "-include local.mk\nIMAGE_ANNATAR   := eregion-annatar\n"),
+    ("M3496", "a recipe's compose reads a second file, never read here (SEC20b)", MAKE,
+     "docker compose up -d --build --force-recreate",
+     "docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build --force-recreate"),
+    ("M3497", "a docker-compose.override.yml beside the compose, merged by compose, never read here (SEC20b)",
+     ".dockerignore", RENAME, "docker-compose.override.yml"),
+    ("M3498", "Annatar's shell no longer checks its files for a link: docker writes the link's target (SEC20b)",
+     MAKE, "\ttest ! -L \"$$f\" || { echo \"✗ $$f : un lien, rien ne part (SEC20)\" >&2; exit 1; }; done && \\\n",
+     "\ttrue; done && \\\n"),
+    ("M3499", "Annatar's shell makes its files before it checks them: a link's target written (SEC20b)", MAKE,
+     "ANNATAR_SHELL_FILES = for f in",
+     "ANNATAR_SHELL_FILES = mkdir -p $$HOME/.annatar && touch $$HOME/.annatar/.bashrc $$HOME/.annatar/.bash_history"
+     " && for f in"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in range(3490, 3500)})
+# SEC20b, its review: a recipe's continuation joined as the shell joins it, a comment continued onto
+# a launch, what the red is never given refused by name, another container's mounts. M3525–M3529.
+MUTANTS += [
+    ("M3525", "make annatar-list's options cut by a continuation: the shell glues them, scripts/ written (SEC20b)",
+     MAKE, "docker run --rm -v $(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar "
+           "$(IMAGE_ANNATAR) list\n",
+     "docker run --rm -e X=1\\\n\t$(IMAGE_ANNATAR) -v $(PWD)/scripts:/app/scripts -v "
+     "$(PWD)/annatar/scenarios:/app/annatar/scenarios:ro --entrypoint annatar $(IMAGE_ANNATAR) list\n"),
+    ("M3526", "a recipe's comment continued onto a launch that writes scripts/ (SEC20b)", MAKE,
+     "--entrypoint annatar $(IMAGE_ANNATAR) list\n",
+     "--entrypoint annatar $(IMAGE_ANNATAR) list\n\t# une note \\\n"
+     "\tdocker run --rm -v $(PWD)/scripts:/app/scripts $(IMAGE_ANNATAR) list\n"),
+    ("M3527", "--cap-add moved to the options read as ordinary: a red launch given more capabilities (SEC20b)",
+     "tests/unit/test_red_mounts.py",
+     ('"--stop-signal", "--log-driver", "--log-opt", "--volume"', '"--cap-add": True, '),
+     ('"--stop-signal", "--log-driver", "--log-opt", "--cap-add", "--volume"', '')),
+    ("M3528", "Orodruin's contract mounts the watch's volumes, which no reader sees (SEC20b)", MAKE,
+     "ORO_RUN_CONTRACT = $(ORO_DIRS) docker run --rm $(ORO_HARDEN)",
+     "ORO_RUN_CONTRACT = $(ORO_DIRS) docker run --rm --volumes-from eregion-watch $(ORO_HARDEN)"),
+    ("M3529", "Orodruin's injectors run without their seccomp profile (SEC20b)", MAKE,
+     "ORO_HARDEN     = --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true",
+     "ORO_HARDEN     = --read-only --tmpfs /tmp --cap-drop ALL --security-opt seccomp=unconfined"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in range(3525, 3530)})
+# SEC20b after OI2: a launch that ends a quoted command (`ssh '… image'`) is read, its closing quote
+# not the image's — Orodruin's control run read whole. M3535–M3536.
+MUTANTS += [
+    ("M3535", "Orodruin's control run mounts the home whole, read only once its quote is read (SEC20b, OI2)", MAKE,
+     "--name $(ORO_CHECK_NAME) --entrypoint true $(ORO_INCOMING)",
+     "--name $(ORO_CHECK_NAME) --entrypoint true -v $$HOME:/app $(ORO_INCOMING)"),
+    ("M3536", "the quote that closes a quoted command taken for the image's: the control run never read (SEC20b)",
+     "tests/unit/test_red_mounts.py", "            words[i], closed = words[i][:-1], True\n",
+     "            closed = True\n"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in (3535, 3536)})
+
+
 # OI2 (#490): a control run before Orodruin's tag — the image read back as the proven one starts once,
 # true alone, no network, never pulled, nothing of the host, hardened, bounded; a failure removes it,
 # its cause said, :orodruin unchanged. M3470–M3479.
@@ -10415,6 +10494,152 @@ MUTANTS += [
 TESTS.update({**{f"M{n}": _DGE_CORE for n in range(3560, 3567)},
               **{f"M{n}": _DGE_ANN for n in (3567, 3568, 3569, 3571)},
               **{f"M{n}": _DGE_CON for n in (3570, *range(3572, 3580))}})
+
+
+# L1W (#492): a perimeter pair another VM's block wrote again, gone again before any pass — no reading
+# shows the write: Glorfindel notes its own writes of a pair (`response/pair_journal.py`, before the write),
+# and an acknowledged card whose pair it said gone is over once that pair is noted after the
+# acknowledgement (`reassert_said._written_since`). And `_back` reads the pair back only if it reads
+# otherwise (`was != is_`, L1H's review). M3480–M3489.
+PJ = "glorfindel/response/pair_journal.py"
+_L1W_REG = "tests/unit/test_invariant_regressions.py::"
+_L1W_UNIT = "tests/unit/test_reassert.py::"
+_L1W_SEQ = f"{_L1W_REG}test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm"
+_L1W_SAID = f"{_L1W_UNIT}test_a_pair_written_again_by_another_vm_then_gone_after_an_acknowledged_card_is_said"
+_L1W_NOT = f"{_L1W_UNIT}test_an_acknowledged_drift_whose_pair_was_not_written_since_says_nothing"
+_L1W_JOURNAL = f"{_L1W_UNIT}test_the_journal_of_pair_writes_says_a_write_at_or_after_a_time"
+_L1W_NOTES = f"{_L1W_UNIT}test_a_perimeter_block_notes_its_pair_before_writing_it"
+MUTANTS += [
+    ("M3480", "an acknowledged card's pair written again by another VM, gone again before any pass, never ends "
+              "its episode: the first VM silent (L1W, the defect back)", RSD,
+     "            and not _written_since(b, baseline, sid)\n", "            and True\n"),
+    ("M3481", "the perimeter block never notes its pair: the write between two passes unknown (L1W)", BLK,
+     '        note_pair_write(f"{nsg_rg}/{nsg_name}", rule_name)\n', "        pass\n"),
+    ("M3482", "the pair noted after its write: one that reached Azure and then raised (a 429 after it) unnoted "
+              "(L1W)", BLK,
+     '        note_pair_write(f"{nsg_rg}/{nsg_name}", rule_name)\n'
+     '        self._put_deny_rule(nsg_rg, nsg_name, rule_name, "Inbound", priority["inbound"], src=ip, dst="*")\n'
+     '        self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority["outbound"],\n'
+     '                            src="*", dst=ip)\n',
+     '        self._put_deny_rule(nsg_rg, nsg_name, rule_name, "Inbound", priority["inbound"], src=ip, dst="*")\n'
+     '        self._put_deny_rule(nsg_rg, nsg_name, f"{rule_name}-out", "Outbound", priority["outbound"],\n'
+     '                            src="*", dst=ip)\n'
+     '        note_pair_write(f"{nsg_rg}/{nsg_name}", rule_name)\n'),
+    ("M3483", "a write before the acknowledgement ends the episode: the card said what was, said again — and "
+              "again after each acknowledgement (L1W)", RSD,
+     '    return card is not None and pair_written_since(pair, card.get("resolved_at") or "")\n',
+     '    return card is not None and pair_written_since(pair, "")\n'),
+    ("M3484", "a pair written again ends the episode of a pending card too: the card that still says what is "
+              "replaced (L1W)", RSD,
+     "    card = _acknowledged_card(sid)\n", "    card = _acknowledged_card(sid) or {}\n"),
+    ("M3485", "a pair held at the card, written again by another VM, ends the episode: the VM's own rules said "
+              "again, put back outside human_only (L1W)", RSD,
+     '    if not any(k.rsplit("/", 1)[-1] in gone or (k in rules and rules[k] is None) for k in pair):\n',
+     "    if False:\n"),
+    ("M3486", "the pair noted in the case Azure gave it, never the check's lowercase: never found (L1W)", PJ,
+     '{"pair": f"{nsg}/{rule}".lower(), "at"', '{"pair": f"{nsg}/{rule}", "at"'),
+    ("M3487", "a line of the journal cut by a full disk ends its reading: the writes after it unseen (L1W)", PJ,
+     "            continue                     # a line cut by a full disk, or not ours\n",
+     "            return False\n"),
+    ("M3488", "a turned pair read the same, holding now, read as written again: a card more (L1W, L1H's review)",
+     RSD, _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'),
+    ("M3489", "the journal refused stops the perimeter block (L1W)", PJ,
+     "    except OSError as exc:\n        log.warning(", "    except ValueError as exc:\n        log.warning("),
+]
+TESTS.update({
+    "M3480": f"{_L1W_SEQ} {_L1W_SAID} "
+             f"{_L1W_UNIT}test_the_first_time_decides_on_a_pair_written_again_then_gone_as_the_second",
+    "M3481": f"{_L1W_SEQ} {_L1W_NOTES}",
+    "M3482": _L1W_NOTES,
+    "M3483": f"{_L1W_NOT} {_L1W_UNIT}test_a_pair_written_again_by_another_vm_then_gone_is_said_once_not_in_a_loop",
+    "M3484": _L1W_SAID,
+    "M3485": _L1W_NOT,
+    "M3486": f"{_L1W_JOURNAL} {_L1W_NOTES}",
+    "M3487": _L1W_JOURNAL,
+    "M3488": f"{_L1W_UNIT}test_a_turned_pair_holding_now_is_back_only_if_it_reads_otherwise",
+    "M3489": f"{_L1W_UNIT}test_a_journal_that_cannot_be_written_never_stops_the_block",
+})
+# L1W's review: the journal read line by line, a byte out of UTF-8 replaced (one forged line silenced
+# all of it), and never a link nor anything but a regular file in its place (`O_NOFOLLOW`, `fstat`, as
+# eregion_core/channel_reader.py). M3530–M3534.
+_L1W_LINK = f"{_L1W_UNIT}test_a_journal_that_is_not_a_regular_file_is_never_followed"
+MUTANTS += [
+    ("M3530", "the journal decoded whole and strict: one line out of UTF-8 silences every write (L1W, review)", PJ,
+     '    text = raw.decode("utf-8", errors="replace")\n', '    text = raw.decode("utf-8")\n'),
+    ("M3531", "a link in the journal's place followed: written into its target (L1W, review)", PJ,
+     '_JOURNAL_FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)',
+     '_JOURNAL_FLAGS = getattr(os, "O_NONBLOCK", 0)'),
+    ("M3532", "anything but a regular file taken for the journal: a pipe someone reads written into (L1W, "
+              "review)", PJ, "        if not stat.S_ISREG(os.fstat(fd).st_mode):\n", "        if False:\n"),
+    ("M3533", "the journal read through a link: another file's lines taken for Glorfindel's writes (L1W, "
+              "review)", PJ, "        fd = _open_journal(_pair_journal(), os.O_RDONLY)\n",
+     "        fd = os.open(_pair_journal(), os.O_RDONLY)\n"),
+    ("M3534", "the journal written through a link, opened as before the review (L1W, review)", PJ,
+     "        fd = _open_journal(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n",
+     "        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n"),
+]
+TESTS.update({"M3530": f"{_L1W_UNIT}test_a_line_out_of_utf8_never_silences_the_journal",
+              **{f"M{n}": _L1W_LINK for n in range(3531, 3535)}})
+
+
+# CAN1 (#501): the azurerm canary says the end of a failed apply's error, through a filter that
+# takes out its identifiers, resource ids, GUIDs and IPs (a public log); a transient error is
+# said as such, and the line is inconclusive unless a check failed before it. M3500–M3509.
+_CAN1_R = "infra/canary/jit-terraform/redact.py"
+MUTANTS += [
+    ("M3500", "a resource id printed as it is (CAN1)", _CAN1_R,
+     "    text = rid.sub(rid_mark, text)\n", ""),
+    ("M3501", "az's stderr printed raw beside the filtered one (CAN1)", JIT_SH,
+     '  command az "$@" 2> "$OUT.az"\n  rc=$?\n',
+     '  command az "$@" 2> "$OUT.az"\n  rc=$?\n  cat "$OUT.az" >&2\n'),
+    ("M3502", "a GUID (a correlation id) printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b", re.I), "<guid>"),\n',
+     ""),
+    ("M3503", "an IPv4 address printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"(?<![\\d.])(?:\\d{1,3}\\.){3}\\d{1,3}(?:/\\d{1,2})?(?!\\d|\\.\\d)"), "<ip>"),\n', ""),
+    ("M3504", "an IPv6 address printed as it is (CAN1)", _CAN1_R,
+     "    return _IPV6.sub(_ipv6, text)\n", "    return text\n"),
+    ("M3505", "the canary's own identifiers kept when they are not GUIDs (CAN1)", _CAN1_R,
+     "        if len(value) >= _OWN_MIN:\n", "        if False:\n"),
+    ("M3506", "a line of Azure's printed bare: it can start a workflow command (CAN1)", _CAN1_R,
+     '    out += [f"   | {ln}" for ln in lines]\n', "    out += lines\n"),
+    ("M3507", "a transient error never said as such (CAN1)", _CAN1_R,
+     "        if name:\n", "        if False:\n"),
+    ("M3508", "a failed apply's output thrown away again (CAN1)", JIT_SH,
+     '|| say "terraform $1 failed (exit $rc)" "$OUT.tf" --tail 30 --verdict', "|| :"),
+    ("M3509", "a change seen before a transient error read as a passing hitch (CAN1)", JIT_SH,
+     'if [ "$CLEAN_FAIL" = 0 ] && [ -e "$WORK/.transient" ]; then', 'if [ -e "$WORK/.transient" ]; then'),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(3500, 3510)})
+# CAN1, after its review: the historical `##[name]` commands the runner reads anywhere in a
+# line, more real forms (an IPv6 after a word and a colon, a tenant's domain, a SAS, a GUID
+# without dashes, an opaque bearer token, an id escaped in JSON), a 429 read as a status only,
+# a filter that fails saying nothing of the text, a cleanup that asks for no re-run. M3510–M3519.
+MUTANTS += [
+    ("M3510", "a line's ##[add-mask] left whole: the runner reads it anywhere in the line (CAN1)", _CAN1_R,
+     '    while "##[" in line:\n        line = line.replace("##[", "# #[")\n', ""),
+    ("M3511", "an IPv6 after a word and a colon printed as it is (CAN1)", _CAN1_R,
+     '_IPV6 = re.compile(r"(?<!\\w)', '_IPV6 = re.compile(r"(?<![\\w:])'),
+    ("M3512", "a tenant's domain (*.onmicrosoft.com) printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[\\w-]+\\.onmicrosoft\\.com\\b", re.I), "<tenant-domain>"),\n', ""),
+    ("M3513", "a SAS's signature and expiry printed as they are (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b(sig|se)=[^&\\s\\"\'<>]+"), r"\\1=<sas>"),\n', ""),
+    ("M3514", "a GUID without its dashes printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[0-9a-f]{32}\\b", re.I), "<guid>"),\n', ""),
+    ("M3515", "an opaque bearer token printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\bBearer\\s+[^\\s\\"\',;]+", re.I), "Bearer <token>"),\n', ""),
+    ("M3516", "a resource id escaped in JSON printed as it is (CAN1)", _CAN1_R,
+     'r"(?:\\\\?/|%2F)subscriptions(?:\\\\?/|%2F)', 'r"(?:/|%2F)subscriptions(?:/|%2F)'),
+    ("M3517", "a 429 anywhere, a timestamp's milliseconds too, said transient (CAN1)", _CAN1_R,
+     '("429", re.compile(r"\\bstatus(?:\\s*code)?\\"?\\s*[:=]?\\s*\\"?429\\b|\\b429\\s*\\(|\\bHTTP(?:/[\\d.]+)?\\s+429\\b", re.I)),',
+     '("429", re.compile(r"\\b429\\b")),'),
+    ("M3518", "a filter that failed: the raw text printed in its place (CAN1)", JIT_SH,
+     '    *) echo "   $1: its output withheld (the filter failed)" >&2 ;;', '    *) cat "$2" >&2 ;;'),
+    ("M3519", "a transient error in the cleanup asks for a re-run of the checks (CAN1)", JIT_SH,
+     "  SAY_CONTEXT=cleanup\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(3510, 3520)})
+
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last
 # statement of this file, or what follows it is never measured (MCG, #448;

@@ -196,6 +196,64 @@ def test_validate_says_the_cause_as_written_never_read_as_markup(tmp_path, wide_
     assert "engine '[bold]stratus' is not one of" in res.output
 
 
+def test_validate_all_says_causes_and_names_as_written(tmp_path, monkeypatch, wide_console):
+    """--all prints a cause and a file name as the file has them: `[bold]` stays `[bold]`, under
+    each scenario and in the closing list."""
+    _scenarios(tmp_path, monkeypatch, {
+        "a-[bold]x.yaml": _NO_TARGET,
+        "b-engine.yaml": _VALID + "engine: '[bold]stratus'\nengine_ref: x\n",
+    })
+    res = _validate("--all")
+    assert res.exit_code == 1, res.output
+    assert "engine '[bold]stratus' is not one of" in res.output
+    # once under the scenario, once in the closing list
+    assert res.output.count("FAIL annatar/scenarios/azure/a-[bold]x.yaml") == 2, res.output
+    assert _invalid_listed(res.output) == ["annatar/scenarios/azure/a-[bold]x.yaml",
+                                           "annatar/scenarios/azure/b-engine.yaml"]
+
+
+def test_validate_says_a_name_not_found_as_written(tmp_path, monkeypatch, wide_console):
+    _scenarios(tmp_path, monkeypatch, {"good.yaml": _VALID})
+    res = _validate("[bold]no-such-scenario")
+    assert res.exit_code == 1, res.output
+    assert "Not found: '[bold]no-such-scenario'" in res.output
+
+
+def test_validate_all_never_turns_what_the_file_says_into_an_emoji(tmp_path, monkeypatch,
+                                                                   wide_console):
+    """A `:fire:` the file carries stays `:fire:`: in the YAML error, which quotes the file's
+    path, in a file name, in an engine."""
+    _scenarios(tmp_path, monkeypatch, {
+        "a-:fire:-yaml.yaml": "name: :fire: [unclosed\n",
+        "b-:fire:.yaml": _NO_TARGET,
+        "c-engine.yaml": _VALID + "engine: ':fire:'\nengine_ref: x\n",
+        "d-good-:fire:.yaml": _VALID,
+    })
+    res = _validate("--all")
+    assert res.exit_code == 1, res.output
+    assert "🔥" not in res.output
+    assert '/annatar/scenarios/azure/a-:fire:-yaml.yaml", line 1' in res.output   # the YAML error
+    assert "engine ':fire:' is not one of" in res.output
+    assert res.output.count("annatar/scenarios/azure/b-:fire:.yaml") == 2
+    assert "OK   annatar/scenarios/azure/d-good-:fire:.yaml" in res.output
+
+
+def test_validate_one_scenario_never_turns_what_the_file_says_into_an_emoji(tmp_path,
+                                                                            wide_console):
+    bad = tmp_path / ":fire:.yaml"
+    bad.write_text("name: :fire: [unclosed\n")
+    res = _validate(str(bad))
+    assert res.exit_code == 1, res.output
+    assert "🔥" not in res.output
+    assert f"FAIL {bad} is invalid" in res.output
+    assert f'in "{bad}", line 1' in res.output                    # the YAML error quotes the path
+    good = tmp_path / "good-:fire:.yaml"
+    good.write_text(_VALID)
+    res = _validate(str(good))
+    assert res.exit_code == 0, res.output
+    assert f"OK {good} is valid" in res.output
+
+
 def test_the_shipped_scenarios_all_validate():
     """make annatar-validate with no SCENARIO keeps exiting 0 on what the repository ships."""
     res = _validate("--all")

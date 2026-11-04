@@ -150,7 +150,9 @@ def run_exit_code(outcome) -> int:
 
 def _print_run_failure(outcome) -> None:
     """One line, plus a hint when the refusal is a known one (like _AnnatarCli)."""
-    console.print(f"[red]✗ run {outcome.run_id}: {outcome.error}[/red]")
+    from rich.markup import escape   # the error may quote the scenario file: never markup
+    console.print(f"[red]✗ run {escape(outcome.run_id)}: {escape(outcome.error)}[/red]",
+                  emoji=False)
     hint = next((h for prefix, h in _RUN_HINTS if outcome.error.startswith(prefix)), None)
     if hint:
         console.print(f"[dim]  → {hint}[/dim]")
@@ -247,6 +249,8 @@ def validate(scenario: str | None, validate_all: bool):
     import glob
     import os
     from rich.markup import escape   # a path, a YAML error: said as they are, never markup
+    # ... and never an emoji code either: PyYAML copies the faulty line into its error, and
+    # Rich would print a `:fire:` of the file as an emoji (emoji=False on what the file says).
     from annatar.runner.parser import (
         ScenarioParser,
         scenarios_root,
@@ -267,17 +271,17 @@ def validate(scenario: str | None, validate_all: bool):
             result = parser.validate(f)
             rel = os.path.relpath(f, project_root)
             if result.valid:
-                console.print(f"[green]OK[/green]   {escape(rel)}")
+                console.print(f"[green]OK[/green]   {escape(rel)}", emoji=False)
             else:
                 invalid.append(rel)
-                console.print(f"[red]FAIL[/red] {escape(rel)}")
+                console.print(f"[red]FAIL[/red] {escape(rel)}", emoji=False)
                 for err in result.errors:
-                    console.print(f"     {escape(err)}")
+                    console.print(f"     {escape(err)}", emoji=False)
         summary = f"{len(files)} scenario(s)"
         if invalid:
             console.print(f"\n[red]{len(invalid)} invalid[/red] / {summary}:")
             for rel in invalid:
-                console.print(f"  [red]FAIL[/red] {escape(rel)}")
+                console.print(f"  [red]FAIL[/red] {escape(rel)}", emoji=False)
             raise SystemExit(EXIT_SCENARIO_INVALID)
         console.print(f"\n[green]All {summary} valid[/green]")
         return
@@ -289,16 +293,16 @@ def validate(scenario: str | None, validate_all: bool):
         if resolved:
             path = resolved
         else:
-            console.print(f"[red]Not found:[/red] '{escape(scenario)}'")
+            console.print(f"[red]Not found:[/red] '{escape(scenario)}'", emoji=False)
             raise SystemExit(EXIT_SCENARIO_INVALID)
 
     result = parser.validate(path)
     if result.valid:
-        console.print(f"[green]OK[/green] {escape(path)} is valid")
+        console.print(f"[green]OK[/green] {escape(path)} is valid", emoji=False)
         return
-    console.print(f"[red]FAIL[/red] {escape(path)} is invalid:")
+    console.print(f"[red]FAIL[/red] {escape(path)} is invalid:", emoji=False)
     for err in result.errors:
-        console.print(f"     {escape(err)}")
+        console.print(f"     {escape(err)}", emoji=False)
     raise SystemExit(EXIT_SCENARIO_INVALID)
 
 

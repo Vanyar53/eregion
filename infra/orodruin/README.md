@@ -42,6 +42,14 @@ Contrat (garanties, vérifications, kill, mutants) :
   `orodruin.env` : `EREGION_WATCH_CHANNEL` (`watch_channel_url`) et `EREGION_WATCH_CHANNEL_SCOPE`
   (`watch_channel_scope`). Dans le `host.env` de Glorfindel : `EREGION_WATCH_CHANNEL`. Canal
   coupé → le run écrit `detection: unknown`, jamais `missed` (`docs/design/orodruin-contract.md`).
+  Le battement et chaque détection sont signés par la clé de la watch (SEC19, SEC21) ; un run ne
+  compte une détection que vérifiée avec `EREGION_WATCH_KEY` d'`orodruin.env`, la clé déjà épinglée
+  pour le battement — aucune épingle de plus. Une détection refusée (non signée, d'une autre clé,
+  altérée, recopiée) est dite dans la sortie du run, dans `runs/orodruin/audit.jsonl`
+  (`detection_refused`) et dans le rapport ; le run est `unknown`. **Le passage** : la release
+  publiée, le CD de H0 la déploie d'abord ; puis Orodruin (OI3, ou `make orodruin-push REF=<tag>`).
+  Dans l'autre ordre, les runs d'Orodruin restent `unknown` (« unsigned … update Glorfindel ») tant
+  que la watch n'est pas à jour (`docs/design/watch-key.md`, « Les détections signées »).
 
 ## Déroulé (avec Jonathan — c'est lui qui lance les apply)
 

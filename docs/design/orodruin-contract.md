@@ -235,6 +235,10 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
     `watch_run_id`. Un blob par couple (fenêtre, détection), seulement pour une VM à laquelle la
     watch a attribué la détection et qu'une fenêtre couvre à son heure. Jamais le reste du parc,
     jamais une ligne non attribuée.
+  - **Signés tous deux par la clé de la watch**, chacun sous son domaine : le battement depuis
+    SEC19, chaque détection depuis SEC21 (#530) — `key` et `sig`, la signature de
+    `eregion.watch-detection/1` et du JSON canonique de tous les autres champs : le run
+    (`exercise_run`), le signal (`signal_id`), ce qui a été vu, quand ([`watch-key.md`](watch-key.md)).
 - **Côté watch** : le RulePoller note chaque détection en mémoire (aucune écriture, rien qui
   puisse échouer). Un thread tire les fenêtres, publie les couples pas encore livrés, puis écrit
   le battement de cœur **seulement quand plus rien n'attend** : un battement de cœur garantit que
@@ -247,8 +251,12 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   fin, sans détection, le run attend jusqu'à 130 s un battement de cœur écrit après l'attente,
   puis relit les détections une dernière fois (une détection vue tout à la fin, livrée après,
   compte encore).
-- **Échec vers `unknown`.** `detected` exige un blob de détection, que seule la watch peut
-  écrire. `missed` exige un battement de cœur écrit **après la fin de l'attente**, par une watch
+- **Échec vers `unknown`.** `detected` exige un blob de détection signé par la clé épinglée
+  (`EREGION_WATCH_KEY`), pour ce run et sous le nom de son signal (SEC21) : non signé, d'une autre
+  clé ou pour un autre usage, altéré, recopié d'un autre run ou d'un autre signal, il est refusé,
+  jamais compté, et dit (la console, le journal d'Orodruin, `metrics.detection_refused` du
+  rapport) ; un run qui n'a vu que des détections refusées est `unknown`, jamais `missed`. Depuis
+  WC1, d'autres identités que H0 peuvent écrire `watch` : seule la clé épinglée fait un « vu ». `missed` exige un battement de cœur écrit **après la fin de l'attente**, par une watch
   **démarrée avant l'attaque**, qui **connaît la fenêtre du run**, et une liste lue sans erreur
   (`miss_unprovable`). Tout le reste donne `unknown` : canal absent, injoignable ou refusé,
   battement de cœur périmé, fenêtre jamais reçue par la watch (le canal des fenêtres en panne :
@@ -268,7 +276,8 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
 - **Mutants** : M109 (battement de cœur sur une détection en attente), M110 (une VM hors fenêtre
   publiée), M111 (une fenêtre inconnue de la watch prouve un miss), M112 (une watch redémarrée
   prouve un miss), M113 (le contrat accepte un rôle d'écriture sur `watch`), M114 (le run conclut
-  à un miss sans demander au canal), M115 (un canal illisible lu comme un miss).
+  à un miss sans demander au canal), M115 (un canal illisible lu comme un miss) ; les détections
+  signées, M3700–M3719 (`scripts/mutants/SEC21.py`, `tests/unit/test_signed_detections.py`).
 
 **Mesuré le 20/10** : la définition de Storage Blob Data Reader lue sur Azure (`az role
 definition list`) est exactement l'ensemble accepté ; Contributor y ajoute `blobs/write`,

@@ -10,10 +10,8 @@ mutant, the code moved) — never counted as caught.
     python scripts/mutation_check.py                       # push budget (60), 3 rounds
     python scripts/mutation_check.py --examples 1000 --rounds 2
     python scripts/mutation_check.py --only M04,M13
-    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/10 --json m3.json
-    python scripts/mutation_check.py --total DIR --shards 10 --control-shards 2 --examples 500 --rounds 2
-    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/10 --json m3.json
-    python scripts/mutation_check.py --total DIR --shards 10 --control-shards 2 --examples 500 --rounds 2
+    python scripts/mutation_check.py --examples 500 --rounds 2 --shard 3/14 --json m3.json   # the release gate's
+    python scripts/mutation_check.py --total DIR --shards 14 --control-shards 2 --examples 500 --rounds 2
 
 Each round draws new seeds. The table says, per mutant, how many rounds caught it.
 A mutant the invariants can't see by construction says why: EQUIVALENT (no behaviour
@@ -10533,8 +10531,8 @@ TESTS.update({
 _CI6_REL = "tests/unit/test_release.py::"
 MUTANTS += [
     ("M3590", "the draft made whatever the gate says: no gate, red, running (CI6)", RELS,
-     "    if gate_said and not green:\n        refused.append(gate_said)\n",
-     "    if False:\n        refused.append(gate_said)\n"),
+     "    if not green:\n        refused.append(gate_said or ",
+     "    if False:\n        refused.append(gate_said or "),
     ("M3591", "the gate looked for on main's commit, not its tree: a squash-merge never passes (CI6)", RELS,
      '    same = [r for r in runs if _obj(r.get("head_commit")).get("tree_id") == tree]\n',
      '    same = [r for r in runs if _obj(r.get("head_commit")).get("id") == sha]\n'),
@@ -10560,6 +10558,24 @@ TESTS.update({
     "M3594": f"{_CI6_REL}test_the_last_run_on_the_tree_decides",
     "M3595": f"{_CI6_REL}test_a_run_that_is_not_the_gate_never_passes",
     "M3596": f"{_CI6_REL}test_a_run_that_is_not_the_gate_never_passes",
+})
+# CI6's review: a run re-run decides by its last start; a pull request's run is the gate only into
+# main; a gate that says nothing still refuses. M3600–M3602.
+MUTANTS += [
+    ("M3600", "the gate's runs ordered by their creation: a run re-run red after a green dispatch unseen "
+              "(CI6, review)", RELS,
+     '(str(r.get("run_started_at") or r.get("created_at") or ""),', '(str(r.get("created_at") or ""),'),
+    ("M3601", "a chore/release-… pull request into another branch taken for the gate: its base's workflow ran "
+              "(CI6, review)", RELS,
+     '    if not bases or any(b != "main" for b in bases):\n', "    if False:\n"),
+    ("M3602", "a gate that says nothing lets the draft past (CI6, review)", RELS,
+     "    if not green:\n        refused.append(gate_said or ",
+     "    if gate_said and not green:\n        refused.append(gate_said or "),
+]
+TESTS.update({
+    "M3600": f"{_CI6_REL}test_a_run_re_run_after_a_green_one_decides",
+    "M3601": f"{_CI6_REL}test_a_pull_request_into_another_branch_never_passes",
+    "M3602": f"{_CI6_REL}test_a_gate_said_nothing_still_refuses",
 })
 # CI6: the workflow's last job counts a cancelled or skipped job as red, and every job measures
 # the pull request's head. M3597–M3598.

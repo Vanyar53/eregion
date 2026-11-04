@@ -359,6 +359,11 @@ def _gate_run(r: dict) -> bool:
         return False
     if r.get("event") == "workflow_dispatch":
         return True
+    # A pull_request run runs its base's workflow: a chore/release-… pull request into another branch,
+    # its release-gate.yml changed there, could be green without the battery. Into main only.
+    bases = [_obj(_obj(pr).get("base")).get("ref") for pr in (r.get("pull_requests") or [])]
+    if not bases or any(b != "main" for b in bases):
+        return False
     return r.get("event") == "pull_request" and str(r.get("head_branch") or "").startswith("chore/release-")
 
 
@@ -379,8 +384,10 @@ def gate(root: Path, sha: str) -> tuple[bool, str]:
         listed = None
     if not isinstance(listed, list):
         return False, "la porte de release : la réponse de gh api n'est pas une liste de runs"
+    # The last started: a run re-run keeps its created_at, its run_started_at moves (its last attempt).
     runs = sorted((r for r in listed if isinstance(r, dict) and _gate_run(r)), reverse=True,
-                  key=lambda r: (str(r.get("created_at") or ""), r.get("id") if isinstance(r.get("id"), int) else 0))
+                  key=lambda r: (str(r.get("run_started_at") or r.get("created_at") or ""),
+                                 r.get("id") if isinstance(r.get("id"), int) else 0))
     same = [r for r in runs if _obj(r.get("head_commit")).get("tree_id") == tree]
     if not same:
         said = f"aucune porte de release sur l'arbre d'origin/main ({tree[:9]}, commit {sha[:9]})"
@@ -458,8 +465,8 @@ def draft(root: Path, version: str, notes_file: str = "", *, dry_run: bool = Fal
         refused.append(f"une release {tag} existe déjà (brouillon compris)")
     # CI6: the gate, green on origin/main's tree — read in a dry run too, never passed over.
     green, gate_said = gate(root, sha) if shutil.which("gh") is not None else (False, "")
-    if gate_said and not green:
-        refused.append(gate_said)
+    if not green:
+        refused.append(gate_said or "la porte de release n'est pas lue")
     if notes_file:
         try:
             text = Path(notes_file).expanduser().read_text(encoding="utf-8").strip("\n")

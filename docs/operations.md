@@ -2078,7 +2078,9 @@ calcule : c'est cet arbre que `release-draft` compare.
 
 **`make release-draft` la redemande.** Il lit les runs du workflow par `gh api` (`GET
 repos/{owner}/{repo}/actions/workflows/release-gate.yml/runs`), garde ceux qui ont lancé la batterie (un
-dispatch, ou la PR `chore/release-…` de ce dépôt), et prend le dernier dont l'arbre (`head_commit.tree_id`)
+dispatch, ou la PR `chore/release-…` de ce dépôt **vers `main`** : un run `pull_request` exécute le
+workflow de la base, qu'une PR vers une autre branche aurait pu changer), et prend le dernier démarré
+(`run_started_at` : un run relancé repart, son `created_at` ne bouge pas) dont l'arbre (`head_commit.tree_id`)
 est celui d'`origin/main` (`git rev-parse origin/main^{tree}`). Une squash-merge change le commit, pas
 l'arbre, si rien d'autre n'a fusionné entre-temps. Ce run doit être fini et vert. Sinon le brouillon est
 refusé, et la commande dit lequel, son état (en cours, rouge, annulé, sauté…), son commit et son lien.

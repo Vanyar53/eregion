@@ -159,12 +159,17 @@ def files(work):
 
 
 def gate_run(work, ref="origin/main", *, conclusion="success", status="completed", event="pull_request",
-             branch="chore/release-0.4.4", head_repo="o/r", run_id=41, created="2026-11-04T10:00:00Z"):
-    """A run of release-gate.yml, as GitHub lists it, on `ref`'s commit and tree (CI6)."""
+             branch="chore/release-0.4.4", head_repo="o/r", run_id=41, created="2026-11-04T10:00:00Z",
+             started=None, base="main"):
+    """A run of release-gate.yml, as GitHub lists it, on `ref`'s commit and tree (CI6): a pull
+    request's names its pull request, its base `base`; `started` is its last attempt's start."""
     sha = git(work, "rev-parse", f"{ref}^{{commit}}")
+    prs = ([{"number": 300, "head": {"ref": branch, "sha": sha}, "base": {"ref": base}}]
+           if event == "pull_request" and base is not None else [])
     return {"id": run_id, "event": event, "status": status,
             "conclusion": conclusion if status == "completed" else None,
             "head_sha": sha, "head_branch": branch, "created_at": created,
+            "run_started_at": started or created, "pull_requests": prs,
             "html_url": f"https://github.com/o/r/actions/runs/{run_id}",
             "head_commit": {"id": sha, "tree_id": git(work, "rev-parse", f"{ref}^{{tree}}")},
             "repository": {"full_name": "o/r"}, "head_repository": {"full_name": head_repo}}
@@ -681,6 +686,44 @@ def test_the_last_run_on_the_tree_decides(repo, tmp_path, capsys, older, newer, 
     capsys.readouterr()
     assert rel.main(["release-draft", "0.4.4"]) == (0 if passes else 1)
     assert "actions/runs/4" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("again, status, passes", [
+    ("failure", "completed", False), (None, "in_progress", False), ("success", "completed", True),
+])
+def test_a_run_re_run_after_a_green_one_decides(repo, tmp_path, capsys, again, status, passes):
+    """The review of CI6: a run re-run keeps its created_at, its run_started_at moves. The PR's run
+    A red, a dispatch B green on the same tree, then A re-run — red again, or still running: A
+    decides, not B."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, conclusion=again, status=status, run_id=3, created="2026-11-04T09:00:00Z",
+                      started="2026-11-04T13:00:00Z"),
+             gate_run(repo, run_id=4, created="2026-11-04T11:00:00Z", event="workflow_dispatch", branch="main"))
+    capsys.readouterr()
+    assert rel.main(["release-draft", "0.4.4"]) == (0 if passes else 1)
+    assert "actions/runs/3" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("base", ["release-0.4", "develop", None])
+def test_a_pull_request_into_another_branch_never_passes(repo, tmp_path, capsys, base):
+    """A pull_request run runs its base's workflow: a chore/release-… PR into another branch, whose
+    release-gate.yml could be changed there, is never the gate. Nor a run that names no PR."""
+    assert rel.main(["prepare", "0.4.4", "--title", "x"]) == 0
+    merge_release(repo, gate=False)
+    set_gate(gate_run(repo, base=base))
+    capsys.readouterr()
+    _gate_refuses(capsys, tmp_path, "aucune porte de release sur l'arbre d'origin/main")
+
+
+def test_a_gate_said_nothing_still_refuses(repo, tmp_path, capsys, monkeypatch):
+    """Review of CI6: not green refuses, whatever it says — an empty word never lets a draft past."""
+    prepared(repo, capsys)
+    monkeypatch.setattr(rel, "gate", lambda root, sha: (False, ""))
+    capsys.readouterr()
+    assert rel.main(["release-draft", "0.4.4"]) == 1
+    out = capsys.readouterr().out
+    assert "  ✗ la porte de release n'est pas lue" in out and _drafted(tmp_path) == []
 
 
 @pytest.mark.parametrize("change", [

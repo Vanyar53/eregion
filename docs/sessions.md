@@ -128,14 +128,15 @@ Décision de Jonathan du 04/11 : une release a toujours eu la mesure la plus for
 publie. La porte de release (`.github/workflows/release-gate.yml`, `docs/operations.md`, « La porte de
 release ») en est la preuve, et `make release-draft` la redemande.
 1. **L'Orchestre ouvre la PR de version** : `make release VERSION=X.Y.Z TITLE="…"`, depuis `origin/main`
-   à jour. La porte part d'elle-même sur cette PR (2 000 invariants, la mutation complète, macOS,
-   Terraform), 30 à 60 minutes.
+   à jour. La porte part d'elle-même sur cette PR (2 000 invariants, la mutation complète, Terraform,
+   et macOS qui informe sans bloquer), 30 à 60 minutes.
 2. **Elle attend la porte avant de fusionner.** La PR de version fusionne quand la CI est verte, que la
    relecture a rendu « ok » et que le check « release gate » est vert sur sa tête. Rouge, la release
    attend : on lit le run, on corrige par un lot, et la PR de version se refait sur le `main` corrigé.
-   Un job macOS jamais pris par un runner, ou une autre panne de GitHub, se relance à part (« Re-run
-   failed jobs ») : seuls les jobs rouges retournent, jamais la batterie entière. L'App n'a que *Actions* en
-   lecture : c'est Jonathan qui relance.
+   Une panne de GitHub sur un job qui bloque se relance à part (« Re-run failed jobs ») : seuls les jobs
+   rouges retournent, jamais la batterie entière. L'App n'a que *Actions* en lecture : c'est Jonathan qui
+   relance. Un macOS rouge ou sans runner ne retient pas la release (décision de Jonathan du 04/11, H1c :
+   seuls les checks requis bloquent, H0 tourne sous Linux) : il se lit dans le résumé du run.
 3. **Rien d'autre ne fusionne entre la porte et la PR de version.** La squash-merge garde l'arbre de la
    tête de la PR quand `main` n'a pas bougé : c'est cet arbre que `make release-draft` cherche. Si une
    autre PR est passée avant, l'arbre diffère et le brouillon est refusé. Il faut alors relancer la porte

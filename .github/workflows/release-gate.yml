@@ -3,9 +3,9 @@ name: Release gate
 # CI6 (#514), Jonathan's decision of 04/11: a release always had the strongest measure, on the
 # tree it publishes. The battery: every test with 2 000 sequences per invariant machine (Linux),
 # the whole mutation at 500 sequences, two rounds, the control set included (in shards: on one
-# runner it outlasts any bound, scripts/mutation_check.py, « CI6 »), the macOS job, the Terraform
-# tests. A last job, « release gate », is green only when every other one is: a cancelled or a
-# skipped job counts as red. `make release-draft` (scripts/release.py) refuses a draft until a
+# runner it outlasts any bound, scripts/mutation_check.py, « CI6 »), the Terraform tests — and the
+# macOS job, which informs and never blocks. A last job, « release gate », is green only when every
+# job that blocks is: a cancelled or a skipped job counts as red. `make release-draft` (scripts/release.py) refuses a draft until a
 # run of this workflow is green on a commit whose tree is origin/main's — no flag, no variable
 # passes over it. docs/operations.md, « La porte de release »: its time, measured.
 #
@@ -182,11 +182,16 @@ jobs:
           --examples 500 --rounds 2 --min-caught "$MIN_CAUGHT"
 
   # ci.yml's macOS job, which a pull request no longer runs (CI5): the case-insensitive file system.
+  # It informs, never blocks (Jonathan, 04/11, H1c #518: only the required checks block): H0 runs
+  # Linux, and a runner GitHub never gives must never hold a release back — the 0.5.4's macOS was
+  # cancelled for want of one. `continue-on-error`: its red leaves the run's conclusion, the one
+  # release-draft reads, to the jobs that block; its outcome is said in the run's summary.
   macos:
-    name: tests (macOS, case-insensitive file system)
+    name: tests (macOS, case-insensitive file system — informs, never blocks)
     if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: macos-latest
     timeout-minutes: 25
+    continue-on-error: true
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
         with:
@@ -210,11 +215,21 @@ jobs:
           restore-keys: invariants-db-
 
       - name: State and identity tests
+        id: tests
         env:
           GLORFINDEL_INVARIANT_EXAMPLES: "500"
           GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
           GLORFINDEL_INVARIANT_NO_SHRINK: "1"
         run: python -m pytest tests/unit/test_glorfindel.py tests/unit/test_readiness.py tests/unit/test_reassert.py tests/unit/test_invariants.py tests/unit/test_invariant_regressions.py -q -o faulthandler_timeout=480
+
+      # Said whatever came before: the step's own outcome (the job's, masked by continue-on-error,
+      # would read green).
+      - name: Said in the run's summary, never blocking
+        if: always()
+        env:
+          OUTCOME: ${{ steps.tests.outcome }}
+        run: >-
+          echo "macOS (informe, ne bloque pas la porte) : tests ${OUTCOME:-pas lancés}" >> "$GITHUB_STEP_SUMMARY"
 
   # ci.yml's Terraform tests, word for word (tests/unit/test_workflows.py): mock providers, the
   # locks read only, nothing applied.
@@ -269,8 +284,9 @@ jobs:
           terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/orodruin validate -no-color
 
-  # Green only when every job above is: `always()`, so it runs and says so when one failed, was
-  # cancelled (its bound, a runner never acquired) or skipped — each of those is red here.
+  # Green only when every job that blocks is: `always()`, so it runs and says so when one failed,
+  # was cancelled (its bound, a runner never acquired) or skipped — each of those is red here.
+  # It waits for macOS too, to say it in the summary, but never asks it to be green (INFORMATIVE).
   gate:
     name: release gate
     needs: [invariants, mutants, control, mutants-total, macos, terraform]
@@ -278,14 +294,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Every job green — a cancelled or a skipped one is red
+      - name: Every job that blocks green — a cancelled or a skipped one is red
         env:
           NEEDS: ${{ toJSON(needs) }}
+          INFORMATIVE: macos
         run: |
           python3 - <<'EOF'
           import json, os, sys
           needs = json.loads(os.environ["NEEDS"])
+          informative = set(os.environ.get("INFORMATIVE", "").split())
+          blocking = {k: v for k, v in needs.items() if k not in informative}
+          green = bool(blocking) and all(job.get("result") == "success" for job in blocking.values())
+          lines = ["| Job | Résultat | |", "|---|---|---|"]
           for name, job in sorted(needs.items()):
-              print(f"{name}: {job.get('result')}")
-          sys.exit(0 if needs and all(job.get("result") == "success" for job in needs.values()) else 1)
+              role = "informe, ne bloque pas" if name in informative else "bloque"
+              lines.append(f"| {name} | {job.get('result')} | {role} |")
+          lines += ["", "**Porte de release verte**" if green else "**Porte de release rouge**"]
+          print("\n".join(lines))
+          if os.environ.get("GITHUB_STEP_SUMMARY"):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write("\n".join(lines) + "\n")
+          sys.exit(0 if green else 1)
           EOF

@@ -1281,6 +1281,7 @@ GATE_SCOPE = ("github.event_name == 'workflow_dispatch' || (startsWith(github.he
               "&& github.event.pull_request.head.repo.full_name == github.repository)")
 GATE_REF = "${{ github.event.pull_request.head.sha || github.sha }}"
 MUTANT_SHARDS, CONTROL_SHARDS = 14, 2
+MACOS_SAID = "Said in the run's summary, never blocking"
 
 
 def _gate() -> dict:
@@ -1330,9 +1331,12 @@ def test_every_job_of_the_gate_is_bounded():
     for name, job in jobs.items():
         bound = job.get("timeout-minutes")
         assert isinstance(bound, int) and 0 < bound <= 180, (name, bound)
-        assert "continue-on-error" not in job, name
+        # Only macOS may fail without failing the run: it informs (H1c, #518).
+        assert ("continue-on-error" not in job) is (name != "macos"), name
         for step in job["steps"]:
-            assert "continue-on-error" not in step and "if" not in step, (name, step.get("name") or step.get("uses"))
+            assert "continue-on-error" not in step, (name, step.get("name") or step.get("uses"))
+            if "if" in step:                          # macOS's summary alone, said whatever came before
+                assert (name, step.get("name"), step["if"]) == ("macos", MACOS_SAID, "always()"), (name, step)
     assert jobs["invariants"]["timeout-minutes"] <= 75 and jobs["gate"]["timeout-minutes"] <= 5
 
 
@@ -1382,7 +1386,7 @@ def test_the_gate_runs_ci_s_macos_job_and_its_terraform_tests_word_for_word():
     commands as ci.yml's, so neither drifts from what the CI runs."""
     ci, jobs = _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"], _gate()["jobs"]
     assert jobs["macos"]["runs-on"] == ci["test-macos"]["runs-on"] == "macos-latest"
-    assert _run_steps(jobs["macos"]) == _run_steps(ci["test-macos"])
+    assert [s for s in _run_steps(jobs["macos"]) if s["name"] != MACOS_SAID] == _run_steps(ci["test-macos"])
     assert jobs["macos"]["timeout-minutes"] == ci["test-macos"]["timeout-minutes"]
     assert _run_steps(jobs["terraform"]) == _run_steps(ci["terraform-test"])
     assert {s.get("name"): s.get("run") for s in jobs["terraform"]["steps"] if s.get("name") in TF_RUNS} == TF_RUNS
@@ -1394,20 +1398,37 @@ def test_the_last_job_waits_for_every_other_one():
     assert jobs["gate"]["name"] == "release gate"
     assert sorted(jobs["gate"]["needs"]) == sorted(n for n in jobs if n != "gate")
     (step,) = jobs["gate"]["steps"]
-    assert step["env"] == {"NEEDS": "${{ toJSON(needs) }}"}
+    # It waits for macOS too, to say it — and asks nothing of it: macOS alone informs.
+    assert step["env"] == {"NEEDS": "${{ toJSON(needs) }}", "INFORMATIVE": "macos"}
 
 
-def _gate_says(tmp_path, needs: dict) -> int:
+def test_macos_informs_and_never_blocks():
+    """Jonathan, 04/11 (H1c, #518): only what is required blocks. H0 runs Linux, and a runner GitHub
+    never gives must never hold a release back — the 0.5.4's macOS was cancelled for want of one.
+    The job fails without failing the run (`continue-on-error`), and says its tests' own outcome in
+    the run's summary, whatever came before."""
+    job = _gate()["jobs"]["macos"]
+    assert job["continue-on-error"] is True
+    (tests,) = [s for s in job["steps"] if "pytest" in (s.get("run") or "")]
+    (said,) = [s for s in job["steps"] if s.get("name") == MACOS_SAID]
+    assert tests["id"] == "tests" and said["if"] == "always()"
+    assert said["env"] == {"OUTCOME": "${{ steps.tests.outcome }}"}
+    assert '>> "$GITHUB_STEP_SUMMARY"' in said["run"] and "ne bloque pas" in said["run"]
+    assert job["steps"].index(said) == len(job["steps"]) - 1
+
+
+def _gate_says(tmp_path, needs: dict) -> tuple[int, str]:
     import json
     import subprocess
     import sys
     import textwrap
     (step,) = _gate()["jobs"]["gate"]["steps"]
     script = step["run"].split("<<'EOF'\n", 1)[1].rsplit("EOF", 1)[0]
-    path = tmp_path / "gate.py"
+    path, summary = tmp_path / "gate.py", tmp_path / "summary.md"
     path.write_text(textwrap.dedent(script), encoding="utf-8")
-    return subprocess.run([sys.executable, str(path)], env={"NEEDS": json.dumps(needs)},
-                          capture_output=True, text=True).returncode
+    env = {"NEEDS": json.dumps(needs), "INFORMATIVE": step["env"]["INFORMATIVE"], "GITHUB_STEP_SUMMARY": str(summary)}
+    code = subprocess.run([sys.executable, str(path)], env=env, capture_output=True, text=True).returncode
+    return code, summary.read_text(encoding="utf-8") if summary.exists() else ""
 
 
 @pytest.mark.parametrize("results, green", [
@@ -1417,11 +1438,23 @@ def _gate_says(tmp_path, needs: dict) -> int:
     ({"a": "skipped", "b": "success"}, False),
     ({"a": "success", "b": None}, False),
     ({}, False),
+    # macOS informs: red, cancelled, skipped, never acquired — the gate as the others say.
+    ({"a": "success", "macos": "failure"}, True),
+    ({"a": "success", "macos": "cancelled"}, True),
+    ({"a": "success", "macos": "skipped"}, True),
+    ({"a": "cancelled", "macos": "success"}, False),
+    ({"macos": "success"}, False),                       # nothing that blocks: never green
 ])
-def test_the_last_job_is_green_only_when_every_job_is(tmp_path, results, green):
-    """Run as GitHub runs it: `needs` as JSON. A cancelled or skipped job is red."""
+def test_the_last_job_is_green_only_when_every_job_that_blocks_is(tmp_path, results, green):
+    """Run as GitHub runs it: `needs` as JSON. A cancelled or skipped job that blocks is red; each
+    job and its role said in the run's summary."""
     needs = {k: {"result": v, "outputs": {}} for k, v in results.items()}
-    assert (_gate_says(tmp_path, needs) == 0) is green
+    code, summary = _gate_says(tmp_path, needs)
+    assert (code == 0) is green
+    assert ("**Porte de release verte**" if green else "**Porte de release rouge**") in summary
+    for k, v in results.items():
+        role = "informe, ne bloque pas" if k == "macos" else "bloque"
+        assert f"| {k} | {v} | {role} |" in summary, summary
 
 
 def test_release_py_reads_this_workflow_by_its_file_name():

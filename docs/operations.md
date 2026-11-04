@@ -2055,11 +2055,19 @@ mesurait en entier le commit publié.
   mutants au plus ; puis `mutants-total` (`--total`) vérifie que chaque tranche est là, une fois, au
   même budget, que chaque mutant de l'arbre a été mesuré une fois exactement, et tient le compte au
   `min_caught` de `mutants.yml` (14). Le jeu de contrôle est dit, jamais tenu à un compte ;
-- `macos` : le job macOS de `ci.yml`, mot pour mot, qu'une PR ne lance plus (CI5) ;
-- `terraform` : les tests Terraform de `ci.yml`, mot pour mot (providers simulés).
+- `terraform` : les tests Terraform de `ci.yml`, mot pour mot (providers simulés) ;
+- `macos` : le job macOS de `ci.yml`, mot pour mot, qu'une PR ne lance plus (CI5). **Il informe, il ne
+  bloque pas** (décision de Jonathan du 04/11, H1c, #518 : seuls les checks requis bloquent, comme pour
+  le CD de H0). H0 tourne sous Linux, et un runner que GitHub ne donne pas ne doit jamais retenir une
+  release : le macOS du commit de la 0.5.4 a été annulé faute de runner. Le job a `continue-on-error`,
+  donc son rouge ne change pas la conclusion du run, celle que lit `release-draft`. Son résultat est
+  dit dans le résumé du run (`$GITHUB_STEP_SUMMARY`) : celui de ses tests, et celui que voit le dernier
+  job.
 
-Le dernier job, « release gate », attend tous les autres. Il n'est vert que si chacun l'est : un job
-annulé (sa borne, un runner jamais pris) ou sauté compte comme rouge. Chaque job a sa borne
+Le dernier job, « release gate », attend tous les autres, macOS compris, pour le dire. Il n'est vert que
+si chaque job qui bloque l'est (les invariants, les tranches de mutants et leur total, Terraform) : un
+job annulé (sa borne, un runner jamais pris) ou sauté compte comme rouge. Son résumé donne, job par job,
+le résultat et le rôle (bloque, ou informe). Chaque job a sa borne
 (`timeout-minutes`), les permissions sont `contents: read` et rien d'autre, chaque action est épinglée
 par commit. Chaque job extrait la tête de la PR exactement, jamais le commit de fusion que GitHub
 calcule : c'est cet arbre que `release-draft` compare.
@@ -2097,7 +2105,7 @@ Ses parties tournent ensemble ; la plus longue fait la durée :
 | `mutants`, une tranche sur 14 | ~45 min | une tranche sur dix : 1 423 s (24 min) sur un poste de 16 cœurs à `--jobs 4`, 255 mutants attrapés sur 258 ; un runner est 2,5 fois plus lent sur les invariants (machine d'Azure à 500 séquences : 132 s sur le poste, ~333 s sur un runner, d'après la nuit : 10 000 en 111 min le 04/11). Soit ~60 min pour un dixième, ~43 min pour un quatorzième, plus l'installation |
 | `invariants` (2 000) | ~35 min | la nuit du 04/11 : machine d'Azure 111 min et d'AWS 42 min pour 10 000, soit ~22 et ~8 min pour 2 000, plus le reste de la suite (4 à 9 min à 500 sur une PR) |
 | `control`, une tranche sur 2 | ~20 min | 16 mutants d'invariants par tranche, dont une dizaine survivent sur les 32 (`docs/design/preuves.md`) : deux tours entiers chacun |
-| `macos` | 4 à 6 min | `ci.yml`, 80 jobs mesurés du 15 au 29/10 |
+| `macos` (informe) | 4 à 6 min, s'il a un runner | `ci.yml`, 80 jobs mesurés du 15 au 29/10 |
 | `terraform` | 2 à 4 min | `ci.yml` |
 | `mutants-total`, `gate` | < 1 min chacun | |
 
@@ -2109,9 +2117,11 @@ pour une tranche, 75 pour les invariants.
 **Si elle est rouge.**
 - **Un vrai rouge** (un invariant, un mutant survivant sous le seuil, un test) : la release attend. On le
   corrige par un lot, puis la PR de version se refait sur `main`.
-- **Une panne de GitHub** (un runner macOS jamais pris, un job annulé à sa borne) : « Re-run failed jobs »
-  ne relance que les jobs rouges, pas la batterie entière. C'est Jonathan qui le fait : l'App n'a
-  qu'*Actions* en lecture.
+- **Une panne de GitHub sur un job qui bloque** (un job annulé à sa borne, un runner Linux jamais pris) :
+  « Re-run failed jobs » ne relance que les jobs rouges, pas la batterie entière. C'est Jonathan qui le
+  fait : l'App n'a qu'*Actions* en lecture.
+- **Un macOS rouge, annulé ou sans runner** ne rend pas la porte rouge : il se lit dans le résumé du run,
+  et un vrai rouge macOS se corrige par un lot, comme sur `main` et la nuit (CI5).
 
 ---
 

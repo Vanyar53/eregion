@@ -3719,6 +3719,83 @@ marquées (`reasserted_at`) sans la carte « reposé une fois » ; la disparitio
 
 **Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé (lot à part) ; la séquence réduite, rejouée sur la machine et le code de `main` 7ac1f37 pur (après MCG), y est rouge, sur le même U1. **Un second défaut ancien**, trouvé par l'exécution non mutée du harnais de mutation (une graine au hasard à 60) : « L1: the block on …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so » — une VM créée à l'ancienne adresse de Db--01, sous des écritures refusées, son adresse changée, une carte acquittée ; 24 règles réduites à la main à huit de `main`, aucune de L1Qs, rouges sur `main` 7ac1f37 pur comme sur la branche : figé en `xfail` strict (`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone`), hors du lot, routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet (`main` 7ac1f37 fusionné, MCG compris) : 5 933 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 343 mutants, sans faute ; `tests/unit/test_mutant_anchors.py` vert (le bloc de L1Qs au-dessus du repère « The mutants end here »).
 
+**L1W (04/11, #492) : une paire de périmètre réécrite par un autre périmètre, puis repartie entre deux
+passes, est dite pour chaque VM.** Le défaut du code que la règle de L1E a trouvé à la main (ci-dessous) :
+web de rg-app2 bloquée sur son sous-réseau, la paire retirée, dite en `human_only`, la carte acquittée ;
+web de rg-app1 bloquée sur le même sous-réseau réécrit la paire (une par IP et sous-réseau), retirée de
+nouveau avant toute passe. La passe ne le disait que sur la carte de rg-app1/web ; l'entrée de rg-app2/web
+se taisait. **La cause, établie** : `still_said` (L1G, L1H) ne voit une paire revenue qu'à une passe, par
+`_back` — une règle lue absente (ou retournée) à la carte, présente maintenant. Ici la lecture est celle de
+la carte, et aucune lecture d'Azure ne peut montrer une écriture faite et défaite entre deux passes.
+
+**Le signal choisi : le journal des écritures de paire de Glorfindel** (`glorfindel/response/pair_journal.py`,
+`~/.glorfindel/perimeter_writes.jsonl`), comparé à l'heure de l'acquittement (`resolved_at` de la carte).
+Le blocage de périmètre (`_block_ip_subnet`, le seul écrivain d'une paire, qu'il vienne de l'opérateur, du
+graphe ou de la réaffirmation) note la paire **avant** de l'écrire ; une carte acquittée qui disait la paire
+partie (absente, ou là mais retournée) et jamais revue depuis (la référence) finit son épisode dès que la
+paire est notée à l'acquittement ou après (`reassert_said._written_since`, dans `still_said`, que le premier
+temps lit aussi par `_to_write`) : ce qui reste parti est dit de nouveau, ou reposé une fois hors
+`human_only`. **Pourquoi pas la piste de la fiche** (le `blocked_at` d'une autre entrée de la même IP qui
+nomme la même paire, postérieur au `drift_alerted_at`) :
+- `blocked_at` n'est écrit qu'à la création d'une entrée ; un blocage de périmètre sur une entrée qui
+  existait (un blocage de VM promu, un deuxième blocage) réécrit la paire sans le bouger ;
+- l'entrée de l'autre VM peut disparaître (débloquée) : l'écriture qu'elle portait avec elle ;
+- `drift_alerted_at` est écrit à l'horloge de la réaffirmation, l'acquittement à celle du magasin des cartes :
+  la machine avance la première seule (`time_passes`), et une comparaison des deux mêle deux horloges. Le
+  journal et `resolved_at` sont à la même ;
+- l'heure de la carte, et non de l'acquittement, rouvrait l'épisode sur une écriture faite **avant**
+  l'acquittement : la carte disait encore ce qui était quand l'opérateur l'a fermée.
+
+Le journal, c'est ce que la relecture de L1H proposait (#492). **Avant l'écriture** : une écriture qui a
+atteint Azure puis levé (un 429 après, un crash — les pannes « after » du faux) est notée aussi ; une écriture
+refusée avant Azure aussi : une carte de plus, jamais une de moins. **Ajouté, sans verrou** (`O_APPEND`, une
+ligne par écriture, chacune sur sa propre ligne : une ligne coupée par un disque plein n'emporte pas la
+suivante) ; un journal refusé n'arrête jamais le blocage, il est journalisé. Hors de `_atomic_write_text` :
+le journal n'est pas un état réécrit entier, et ses écritures ne décalent pas les pannes de disque plein
+que les séquences figées comptent. **La paire seule, et dite partie à la carte** : une paire tenue à la
+carte, réécrite à l'identique par un autre blocage, ne finit rien (elle n'a jamais été dite partie : sans
+quoi la carte des règles propres de la VM revenait à chaque blocage d'une voisine). **Sous une carte en
+attente, rien de plus** : la carte dit encore ce qui est. **Dite une fois** : la nouvelle carte attend ; acquittée
+à son tour, l'écriture est d'avant elle.
+
+**Et `was != is_` dans `_back`** (la suggestion de la relecture de L1H) : une paire retournée à la carte, qui
+tient maintenant, n'est relue « écrite de nouveau » que si sa signature a changé. Lue à l'identique, ce qui
+distingue « partie » de « tient » a bougé à côté d'elle (le port du blocage), pas la règle.
+
+**A0** : l'oracle n'a pas bougé, ni la machine. La correction est dans Glorfindel, qui dit de lui-même ce
+qu'il a écrit ; jamais les marques du code ne nourrissent l'oracle (la machine juge par le journal du faux,
+L1E). Le code dit plus qu'avant, jamais moins. **Ce que ça coûte** : un journal perdu (le home effacé, le
+fichier supprimé) ramène le code à ce qu'il lisait avant L1W, la carte acquittée muette sur ce cas ; une écriture
+de paire refusée avant Azure, notée, compte comme écrite (une carte de plus). Le coût assumé de L1H (une paire
+retournée remise à la main lue comme écrite de nouveau) **reste** : l'oracle le demande (les valeurs ont changé
+depuis l'acquittement, L1 exige un mot), le journal ne le lève donc pas.
+
+**Figés.** `test_invariant_regressions.py::test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm` :
+l'`xfail` strict de L1E levé, rouge sur le code de `main` eb6102f4 (`--runxfail` : « L1: the block on
+…/rg-app2/…/web vanished from Azure; the reassertion neither put it back nor said so »), vert avec le
+correctif. **Le contrôle de l'oracle** (comme celui de L1B) :
+`test_a_perimeter_written_again_then_gone_with_its_journal_lost_is_refused` — les mêmes sept règles, le
+journal du code supprimé avant la dernière passe : L1 doit refuser. Sans la clause du journal de la machine
+(M3442), L1 passe : c'est lui qui garde M3442 attrapé depuis que la séquence est verte. `test_reassert.py` :
+la carte acquittée (dite, rien d'écrit en `human_only`) ou en attente (rien de plus) ; hors `human_only` (la
+paire reposée une fois, par le premier temps) ; dite une fois, pas en boucle ; rien quand la paire a été écrite
+avant l'acquittement, jamais écrite, quand une autre paire l'a été, quand la paire tenait à la carte (dans les
+deux modes) ; le premier temps décide comme le second ; le journal (à l'heure ou après, une ligne coupée,
+absent, la casse) ; l'adaptateur note la paire avant de l'écrire, et un journal refusé n'arrête pas le blocage ;
+`_back` et `was != is_`.
+
+**Mutants M3480–M3489**, 10/10 par leurs tests à chaque tour (deux tours, 60 séquences) : le défaut remis
+(M3480) ; la paire jamais notée (M3481), notée après l'écriture (M3482) ; une écriture d'avant l'acquittement
+qui compte (M3483), une carte en attente aussi (M3484), une paire tenue à la carte aussi (M3485) ; la paire notée
+dans la casse d'Azure (M3486) ; une ligne coupée qui arrête la lecture (M3487) ; `was != is_` retiré (M3488) ;
+un journal refusé qui arrête le blocage (M3489). Remesurés (deux tours) : M3442 (par le contrôle de l'oracle),
+M3280, M3281, M3430–M3433 (leurs ancres suivent la nouvelle condition de `_back`), attrapés.
+
+**Mesures de L1W.** Invariants avec le correctif, `--hypothesis-seed=N`, quatre à la fois : à 60 séquences,
+N = 1..20, **20/20 vertes** ; à 500, N = 1..7 et 42, **8/8 vertes**. `pytest` complet (sur `main` eb6102f4) :
+6 515 réussis, 7 sautés, plus aucun `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 596 mutants et 32
+du jeu de contrôle, sans faute.
+
 **L1E (03/11, #485) : l'acquittement d'un blocage ne compte jamais pour un épisode neuf.** Un trou de
 l'oracle de la machine, pas de Glorfindel, présent sur `main` depuis RB1. C'est la limite que MAK a écrite
 (« La limite, ancienne », ci-dessous) : L1 tenait un blocage acquitté pour dit tant que ses règles valaient
@@ -3790,9 +3867,11 @@ aucune lecture ne peut voir l'écriture). La clause n'est pas resserrée. Suivi 
 qu'à une passe (`still_said`, L1G) ; écrite et repartie entre deux passes, rien ne la lui montre (l'entrée de
 l'autre VM, son `blocked_at`, le pourrait). Figé en `xfail` strict,
 `test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm` : vert (XPASS) sur la machine
-de `main` d597a00e, rouge avec la règle, sur le code de `main`. Non corrigé ; laissé à L1W (#492).
+de `main` d597a00e, rouge avec la règle, sur le code de `main`. Non corrigé ; laissé à L1W (#492) —
+**corrigé par L1W** (ci-dessus), l'`xfail` levé.
 **Mutant M3442** (de la machine, sur le modèle de M3421) : la clause du journal retirée ; attrapé par cette
-séquence (XPASS strict). Il la protège le jour où L1W corrigera le code et où l'`xfail` deviendra vert.
+séquence (XPASS strict). Il la protège le jour où L1W corrigera le code et où l'`xfail` deviendra vert —
+depuis L1W, par le contrôle de l'oracle (le journal du code perdu, L1 doit refuser).
 Le repli muet de la place de l'acquittement (`acked_at`, absente : la clause éteinte) est devenu une
 assertion — un écrivain futur de `acked_drift` qui oublierait `_acked_at` échoue bruyamment.
 

@@ -4,6 +4,9 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Fixed
+- **A perimeter pair another VM wrote again, gone again before any pass, is said for each VM** (L1W, #492; `docs/design/preuves.md`, « L1W »; `docs/glorfindel.md`, « Réaffirmation »). Found by L1E's rule and frozen in strict `xfail`: web of rg-app2 blocked on its subnet, the pair taken off, said in human_only, the card acknowledged; web of rg-app1 blocked on the same subnet wrote the pair again (one per IP and subnet), taken off again before any pass. Azure read as the card had read, and rg-app2/web's entry stayed silent behind its acknowledged card — only rg-app1/web's card said it. **Glorfindel now notes its own writes of a perimeter pair**, before each write (`~/.glorfindel/perimeter_writes.jsonl`, `glorfindel/response/pair_journal.py`, appended, 0600): an acknowledged card that said the pair gone (absent, or there and turned) is over once that pair is noted after its acknowledgement (`reassert_said._written_since`) — what is still gone is said anew, or put back once outside human_only. A pair held at the card, a write before the acknowledgement, a pending card: nothing more. A write that reached Azure and then raised is noted too (a card more, never one less); a journal refused never stops the block, it is logged. And `_back` reads a turned pair back only if it reads otherwise now (`was != is_`, L1H's review). The oracle and the machine unchanged (A0). Tests: the `xfail` lifted, the oracle's control (`test_a_perimeter_written_again_then_gone_with_its_journal_lost_is_refused`, which keeps M3442 caught), `test_reassert.py` (acknowledged or pending, in human_only or not, said once and not in a loop, the first time, the journal, the adapter). Mutants M3480–M3489.
+
 ## [0.5.3] — 2026-11-04 — "signed and sealed"
 
 ### Security

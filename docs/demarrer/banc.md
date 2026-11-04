@@ -12,7 +12,7 @@
 | **H0** | Glorfindel hébergé : sa watch, sa console et son bot, sur une VM à lui | `infra/glorfindel-host/` |
 | **Orodruin** | l'hôte jetable des injecteurs : le seul endroit d'où une attaque part | `infra/orodruin/` |
 
-**Pourquoi H0.** Un injecteur n'agit que derrière une watch de Glorfindel vivante : avant toute action, il lit son battement (un fichier qu'elle réécrit chaque minute), signé par la clé de la watch, sur le canal retour, un conteneur de stockage partagé avec Orodruin. Sans battement de moins de 90 s, il refuse. Aujourd'hui, seule l'identité de H0 peut écrire ce canal (voir [le cas sans H0](#le-cas-sans-h0--un-trou)).
+**Pourquoi H0.** Un injecteur n'agit que derrière une watch de Glorfindel vivante : avant toute action, il lit son battement (un fichier qu'elle réécrit chaque minute), signé par la clé de la watch, sur le canal retour, un conteneur de stockage partagé avec Orodruin. Sans battement de moins de 90 s, il refuse. Ce guide le fait écrire par H0 ; sans H0, la watch de ton poste peut l'écrire (voir [sans H0](#sans-h0--la-watch-de-ton-poste)).
 
 **Comment lire ce guide.** Chaque étape dit d'où vient ce qu'elle affirme :
 - *lu dans le code* : le fichier est cité ;
@@ -102,7 +102,7 @@ make glorfindel-host-up        # la VM ; confirmation demandée
 ```
 
 La VM seule, pour l'instant. Glorfindel y démarre à l'étape 5, une fois les canaux d'Orodruin connus.
-- **Orodruin lit l'état de H0** : son identité et son sous-réseau, pour lui ouvrir le canal. `orodruin-plan`, `-up` et `-lock` refusent sans cet état (`orodruin-watch-guard`).
+- **Orodruin lit l'état de H0** : son identité et son sous-réseau, pour lui ouvrir le canal. `orodruin-plan`, `-up` et `-lock` refusent sans cet état (`orodruin-watch-guard`), sauf `NO_WATCH=1` (sans H0 : [la watch de ton poste](#sans-h0--la-watch-de-ton-poste)).
 - **H0 a besoin des canaux d'Orodruin** dans son `host.env`.
 
 Facultatif, recommandé : l'empreinte de sa clé d'hôte dans `.envrc` (`HOST_SSH_FINGERPRINT`, relevée sur la VM : [`infra/glorfindel-host/README.md`](../../infra/glorfindel-host/README.md), « SSH »). Sans elle, chaque commande vers H0 dit qu'elle accepte la première clé vue.
@@ -232,17 +232,21 @@ rm -f infra/orodruin/orodruin.env infra/glorfindel-host/host.env ~/.eregion/orod
 - **Un rôle encore attribué** quelque part n'est pas supprimé : `az role assignment list --role "<nom>" --all -o table`.
 - **Le reste** (Discord, la clé du modèle) : le README, « Remove Eregion ».
 
-## Le cas sans H0 : un trou
+## Sans H0 : la watch de ton poste
 
-Une watch qui tourne sur ton poste (`make profile-discover`) ne peut pas, aujourd'hui, prouver qu'elle vit à Orodruin. Ce chemin n'existe pas dans le code :
+Une watch qui tourne sur ton poste peut écrire le canal retour à la place de H0 (WC1, #523) :
 
-- **Ce que la watch publie.** Avec `EREGION_WATCH_CHANNEL` posé, elle publie sur le canal retour, sous sa propre identité (`DefaultAzureCredential`, `eregion_core/exercise_channel.py`) :
-  - `heartbeat.json`, toutes les 60 s, signé ;
-  - `detections/<run_id>/…`, pour les VM d'une fenêtre ouverte.
+```bash
+az ad sp show --id "$GLORFINDEL_AZURE_CLIENT_ID" --query id -o tsv   # l'object id du principal de ta watch
+make orodruin-plan WATCH_PRINCIPALS=<object id> NO_WATCH=1
+make orodruin-lock WATCH_PRINCIPALS=<object id> NO_WATCH=1          # les mêmes options à chaque -up et -lock
+```
 
-  Sans canal, elle écrit le canal local des verdicts, `runs/verdicts/`. Orodruin ne le voit pas : il est sur une autre machine.
-- **Qui peut écrire ce canal.** Le Terraform d'Orodruin ne donne l'écriture du conteneur `watch` qu'à `watch_principal_id` (`infra/orodruin/main.tf`, `watch_channel_writer`). La lecture des fenêtres, il ne la donne qu'à lui aussi (`channel_watch_reader`).
-- **D'où vient cette identité.** Le Makefile la lit dans l'état de H0, et la pose sur la ligne de commande (`ORO_VARS`) : une valeur de `terraform.tfvars` ne la remplace pas. Une identité donnée sans le sous-réseau de H0 est refusée par le plan.
-- **Sans H0** (`NO_WATCH=1`), personne n'écrit le battement. Chaque run est refusé, faute de battement vivant, sauf `WITHOUT_GLORFINDEL=1` : un run de développement, dont la détection n'est pas mesurée, et le rapport le dit.
+- **Ce qu'elle reçoit.** La lecture des fenêtres et l'écriture du canal retour, rien d'autre. Sans les mêmes options, un apply suivant les lui retire.
+- **Sur ton poste.** `EREGION_WATCH_CHANNEL` et `EREGION_EXERCISE_CHANNEL` (`terraform -chdir=infra/orodruin output`), puis `make glorfindel-start`.
+- **Dans `orodruin.env`.** La clé de ta watch (`make watch-key`), puis `make orodruin-push`. Un battement d'une autre clé reste refusé.
+- **Le réseau.** Elle passe par ton IP, que le pare-feu du compte du canal admet déjà. Ton IP a changé depuis le dernier apply : le canal ne se lit plus, et chaque run est refusé.
 
-Attribuer ces rôles à la main au principal d'une watch locale, puis poser son `EREGION_WATCH_CHANNEL` et sa clé dans `orodruin.env`, n'est ni codé, ni documenté, ni mesuré : **non vérifié**. [`docs/banc-bl1.md`](../banc-bl1.md) l'avait écarté le 30/10 (option b, « le canal retour cassé »). Ce sera un lot à part. Le profil « plusieurs équipes » ([`equipes.md`](../profils/equipes.md)) suppose ce même chemin pour la watch d'une équipe.
+Détail : [`infra/orodruin/README.md`](../../infra/orodruin/README.md), « Sans H0 ». Le profil « plusieurs équipes » ([`equipes.md`](../profils/equipes.md)) prend ce même chemin.
+
+*Lu dans le code et testé sans Azure (`infra/orodruin/tests/watch_writers.tftest.hcl`, `tests/unit/test_makefile_bench.py`, `tests/unit/test_watch_key.py`) : **la mesure au banc reste à faire**.*

@@ -28,9 +28,10 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
      cannot order (merge-base: 128), refused — never taken for newer; whether a rule of the repository reserves its tag (its
      creation, update and deletion) read without a token, and said: seen with the start, in
      orange when absent or unreadable — never a refusal (what GitHub shows without a token is
-     to be measured on H0); every check run of its commit
-     completed, none red, the main one (lint + tests) and the image's (publish (glorfindel))
-     among them (still running: wait for the next pass, said once; absent an hour: refused);
+     to be measured on H0); the checks that hold it (H1c: the five the rule of main requires,
+     REQUIRED_CHECKS, and the image's, publish (glorfindel)) completed, none red (still running:
+     wait for the next pass, said once; absent an hour: refused); every other check only said —
+     red or cancelled, once per tag, in orange; still running, never waited for;
   3. requirements/glorfindel.txt changed since what runs: requirements/harness.json signed by the
      maintainer's key (SEC19, R-13: its bundle beside it, verified offline with the public key H0's
      config pins — EREGION_HARNESS_KEY in ~/eregion/.env, never the repository; no key declared,
@@ -146,10 +147,25 @@ CONTAINERS = ("eregion-watch", "eregion-war-room", "eregion-bot")
 VERSION = '{{index .Config.Labels "org.opencontainers.image.version"}}'
 LABELS = VERSION + ' {{index .Config.Labels "org.opencontainers.image.revision"}}'
 RED = {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
-MAIN_CHECK = "lint + tests"   # the CI's own job (ci.yml): a commit without it is not verified
-# CI3: the job that publishes the commit's image (publish.yml) — waited for like the CI's own.
+# H1c (#518, Jonathan, 04/11): a release is never held because GitHub gave no runner. Only these
+# checks hold it — the five the rule of main requires (docs/sessions.md, « Les règles du dépôt »;
+# tests/unit/test_host_cd.py keeps the two lists equal) — a constant of the installed agent, never
+# read from the repository nor from the release: a release never says what holds it back.
+REQUIRED_CHECKS = ("lint + tests (py3.11)", "lint + tests (py3.12)", "terraform test (mock providers)",
+                   "image (annatar)", "image (glorfindel)")
+# CI3: the job that publishes the commit's image (publish.yml) — the CD pulls it: held like a required one.
 PUBLISH_CHECK = "publish (glorfindel)"
+# Compared by their whole name: « lint + tests (py3.12) beta » is not « lint + tests (py3.12) ». Every
+# other check (macOS, the components, the compose profiles, the advisories…) is only said: red or
+# cancelled, once per tag, never a refusal; still running, never waited for.
+BLOCKING = REQUIRED_CHECKS + (PUBLISH_CHECK,)
 MAIN_CHECK_PASSES = 12        # an hour of passes before a missing check is a refusal
+CHECKS_SAID = 8               # checks named in #deploy; the others counted
+GREEN = {"success", "neutral", "skipped"}
+CHECK_WORDS = {"success": "vert", "neutral": "neutre", "skipped": "sauté", "failure": "rouge",
+               "cancelled": "annulé", "timed_out": "hors délai", "action_required": "action requise",
+               "startup_failure": "pas démarré", "stale": "périmé", "queued": "en file", "in_progress": "en cours",
+               "waiting": "en attente", "requested": "demandé", "pending": "en attente"}
 COSIGN = CD_HOME / "cosign"   # pinned (published_image.COSIGN_SHA256), checked before each use
 TAG_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 # SEC12: a release's version, compared with what runs. A tag of another shape is compared by its
@@ -336,7 +352,9 @@ def older(tag: str, commit: str, dep_ref: str, dep_commit: str, floor: dict | No
     return "", True
 
 
-def verify(tag: str, commit: str, dep_commit: str, state: dict, dep_ref: str = "", back_to: str = "") -> None:
+def verify(tag: str, commit: str, dep_commit: str, state: dict, dep_ref: str = "", back_to: str = "",
+           check: bool = False) -> str:
+    """Refused, waited for (Quiet), or what the commit's checks say: the two groups (H1c)."""
     if not is_ancestor(commit, "refs/remotes/origin/main"):
         raise Refused(f"son tag n'est pas sur main ({commit[:12]}) : seule une release de main se déploie")
     # SEC12: whoever can publish a release (or mark an old one « latest ») never takes H0 back on
@@ -351,31 +369,109 @@ def verify(tag: str, commit: str, dep_commit: str, state: dict, dep_ref: str = "
     if why and tag != back_to:
         raise Refused(f"{why} : jamais de retour arrière sans qu'on le demande sur H0 "
                       f"(make glorfindel-host-cd-rollback TAG={tag})")
-    runs = check_runs(commit)
-    red = sorted({str(r.get("name", "?")) for r in runs if r.get("conclusion") in RED})
+    held, told = ci_groups(check_runs(commit))
+    said = ci_said(held, told)
+    print(f"checks de {commit[:12]} :\n{said}")
+    # H1c: a check that holds (required, or the image's) red or cancelled refuses, as before; any
+    # other is said, once per tag, and never holds H0.
+    red = [n for n, s in held.items() if s and s[0] in RED]
     if red:
-        raise Refused(f"CI rouge sur {commit[:12]} : {', '.join(red)}")
-    if not runs or any(r.get("status") != "completed" for r in runs):
-        say_once(state, tag, "ci", f"⏳ {tag} attend sa CI", f"commit {commit[:12]} : pas encore verte, "
-                 "le CD repasse toutes les 5 minutes", color=nd.BLUE)
-        raise Quiet(f"{tag} : CI en cours")
-    # Another workflow may finish before the CI's job is even created: waited for, an hour. The
+        raise Refused(f"CI rouge sur {commit[:12]}, un check requis : {_names(red)}")
+    if not check:
+        say_told(state, tag, commit, told)
+    running = [n for n, s in held.items() if s and not s[1]]
+    if running:
+        say_once(state, tag, "ci", f"⏳ {tag} attend sa CI", f"commit {commit[:12]} : {_names(running)} pas encore "
+                 "terminé(s) — le CD repasse toutes les 5 minutes", color=nd.BLUE)
+        raise Quiet(f"{tag} : CI en cours ({_names(running)})")
+    # Another workflow may finish before a required job is even created: waited for, an hour. The
     # job that publishes the image too (CI3): a release from before it has none — refused then.
-    # Each check has its own count: an hour for the CI's job, then an hour for the image's.
-    for name, what, kind in ((MAIN_CHECK, "sa CI principale", "ci-main"), (PUBLISH_CHECK, "son image publiée", "ci-image")):
-        if any(str(r.get("name", "")).startswith(name) for r in runs):
+    # Each check has its own count: an hour for the first one absent, then an hour for the next.
+    for name in BLOCKING:
+        if held[name] is not None:
             continue
         waits = state.setdefault("waits", {})
-        key = tag if name == MAIN_CHECK else f"{tag} {name}"
+        key = f"{tag} {name}"
         waits[key] = waits.get(key, 0) + 1
+        what, kind = (("son image publiée", "ci-image") if name == PUBLISH_CHECK
+                      else (f"sa CI requise (« {name} »)", f"ci-absent {name}"))
         if waits[key] <= MAIN_CHECK_PASSES:
             say_once(state, tag, kind, f"⏳ {tag} attend {what}", f"pas encore de « {name} » "
                      f"sur {commit[:12]}", color=nd.BLUE)
             raise Quiet(f"{tag} : « {name} » absent ({waits[key]}/{MAIN_CHECK_PASSES})")
-        if name == MAIN_CHECK:
-            raise Refused(f"la CI principale ({MAIN_CHECK}) n'a pas tourné sur {commit[:12]}, en une heure")
+        if name != PUBLISH_CHECK:
+            raise Refused(f"le check requis « {name} » n'a pas tourné sur {commit[:12]}, en une heure "
+                          "(les checks requis de main : docs/sessions.md, « Les règles du dépôt »)")
         raise Refused(f"aucune image publiée pour {commit[:12]} (« {PUBLISH_CHECK} » absent en une heure : une "
                       "release d'avant CI3 ?) — H0 ne construit plus : publier une release de main d'après CI3")
+    return said
+
+
+def _ci_state(runs: list[dict]) -> tuple[str, bool]:
+    """One check's runs as one state (its word, done): red when any of them is, still running
+    when any of them is not completed, else its conclusion."""
+    for r in runs:
+        if r.get("conclusion") in RED:
+            return str(r["conclusion"]), True
+    for r in runs:
+        if r.get("status") != "completed":
+            return _code(r.get("status")) or "pending", False
+    return _code(runs[0].get("conclusion")) or "?", True
+
+
+def ci_groups(runs: list[dict]) -> tuple[dict, dict]:
+    """H1c: the commit's check runs in two groups, by their whole name, {name: (word, done)}: what
+    holds the release (BLOCKING, in its order; None when absent), and what is only said."""
+    by: dict[str, list[dict]] = {}
+    for r in runs:
+        by.setdefault(str(r.get("name") or "?"), []).append(r)
+    held = {n: _ci_state(by[n]) if n in by else None for n in BLOCKING}
+    told = {n: _ci_state(rs) for n, rs in sorted(by.items()) if n not in BLOCKING}
+    return held, told
+
+
+def _word(state: tuple[str, bool] | None) -> str:
+    if state is None:
+        return "absent"
+    return CHECK_WORDS.get(state[0], state[0])     # a word _code already reduced
+
+
+def _check_name(name: str) -> str:
+    """A check's name as GitHub gives it, toward #deploy (SEC6): letters, digits and what a job's
+    name holds here (spaces, + , . : ( ) / -); anything else, a mention, a link, Markdown, made ·."""
+    return re.sub(r"[^0-9A-Za-zÀ-ÿ .,:()+/-]", "·", " ".join(str(name).split()))[:100]
+
+
+def _names(names: list[str]) -> str:
+    said = ", ".join(f"« {_check_name(n)} »" for n in names[:CHECKS_SAID])
+    return said + (f" et {len(names) - CHECKS_SAID} autre(s)" if len(names) > CHECKS_SAID else "")
+
+
+def ci_said(held: dict, told: dict) -> str:
+    """The two groups, said (the dry run, the journal): every check that holds, with its state;
+    of the others, those neither green nor done named, the green counted."""
+    block = " ; ".join(f"« {_check_name(n)} » {_word(s)}" for n, s in held.items())
+    off = [n for n, s in told.items() if s[0] not in GREEN]
+    named = " ; ".join(f"« {_check_name(n)} » {_word(told[n])}" for n in off[:CHECKS_SAID])
+    if len(off) > CHECKS_SAID:
+        named += f" ; et {len(off) - CHECKS_SAID} autre(s)"
+    return (f"bloquent (les requis de main, l'image publiée) : {block}\n"
+            f"ne sont que dits : {named + ' ; ' if named else ''}{len(told) - len(off)} vert(s)")
+
+
+def say_told(state: dict, tag: str, commit: str, told: dict) -> None:
+    """A check that does not hold the release, red or cancelled: said in #deploy, once per tag and
+    per check, in orange, without the mention — it never holds H0 (H1c)."""
+    said = state["said"].setdefault(tag, [])
+    new = [n for n, s in told.items() if s[0] in RED and f"ci-told {n}" not in said]
+    if not new:
+        return
+    said += [f"ci-told {n}" for n in new]
+    listed = " ; ".join(f"« {_check_name(n)} » {_word(told[n])}" for n in new[:CHECKS_SAID])
+    if len(new) > CHECKS_SAID:
+        listed += f" ; et {len(new) - CHECKS_SAID} autre(s)"
+    say(f"⚠️ {tag} : {len(new)} check(s) non requis en échec", f"{listed}, sur {commit[:12]} — dit, sans "
+        "retenir H0 : seuls les checks requis de main et l'image publiée bloquent une release", color=nd.ORANGE)
 
 
 def check_runs(commit: str) -> list[dict]:
@@ -1213,9 +1309,15 @@ def check_running(tag: str, commit: str, url: str, state: dict) -> int:
     finally:
         sh("docker", "image", "rm", f"{IMAGE}:{name}", check=False)
         save_state(state)
+    # H1c: what would hold the next release, and what would only be said — read on this one's commit.
+    try:
+        held, told = ci_groups(check_runs(commit))
+        checks = ci_said(held, told)
+    except Quiet as e:
+        checks = f"ses checks ne se lisent pas ({e})"
     say(f"✅ À blanc : {tag}, en service, tirée par son digest, vérifiée et préflightée",
         f"{digest[:19]}… signée et attestée ; rien n'a bougé ; make glorfindel-host-cd-enable pour que le CD "
-        "déploie la prochaine release", color=nd.GREEN, url=url)
+        f"déploie la prochaine release\nses checks : {checks}", color=nd.GREEN, url=url)
     return 0
 
 
@@ -1288,7 +1390,7 @@ def run_pass(check: bool = False, back_to: str = "") -> int:
             return check_running(tag, commit, url, state)
         raise Quiet(f"{tag} tourne déjà")
     try:
-        verify(tag, commit, dep_commit, state, dep_ref, back_to)
+        checks = verify(tag, commit, dep_commit, state, dep_ref, back_to, check=check)
         harness = lock_guard(tag, commit, dep_commit, dep_ref) or {}
         rule, rule_said = tag_rule(tag)
         if rule != "held":     # SEC12: said, never a refusal (to measure: what GitHub shows without a token)
@@ -1326,7 +1428,7 @@ def run_pass(check: bool = False, back_to: str = "") -> int:
         save_state(state)
     if check:
         say(f"✅ À blanc : {tag} est prête", f"vérifiée, son image publiée tirée par son digest et prouvée, préflight passé ; H0 reste sur {dep_ref}. "
-            "make glorfindel-host-cd-enable pour que le CD la déploie.", color=nd.GREEN, url=url)
+            f"make glorfindel-host-cd-enable pour que le CD la déploie.\n{checks}", color=nd.GREEN, url=url)
         return 0
     started = time.monotonic()
     base = reference_check()           # what runs, before it moves: the rules it detects with

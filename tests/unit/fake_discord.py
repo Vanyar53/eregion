@@ -229,8 +229,11 @@ class FakeDiscord:
             return (200, self.gh["release"], {}) if self.gh["release"] else (404, {"message": "Not Found"}, {})
         if p.startswith("/gh/repos/o/r/commits/") and p.endswith("/check-runs"):
             sha = p.split("/")[-2]
+            # The checks that hold a release (H1c: the five main requires, the image's), green.
             runs = self.gh["checks"].get(sha, [{"name": n, "status": "completed", "conclusion": "success"}
-                                               for n in ("lint + tests (py3.12)", "publish (glorfindel)")])
+                                               for n in ("lint + tests (py3.11)", "lint + tests (py3.12)",
+                                                         "terraform test (mock providers)", "image (annatar)",
+                                                         "image (glorfindel)", "publish (glorfindel)")])
             return 200, {"total_count": len(runs), "check_runs": runs}, {}
         return 404, {}, {}
 

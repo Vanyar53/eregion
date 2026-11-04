@@ -3049,7 +3049,7 @@ MUTANTS += [
      '    if not is_ancestor(commit, "refs/remotes/origin/main"):', "    if False:"),
     ("M1006", "a release with a red CI deployed (H1)", CD, "    if red:\n", "    if False:\n"),
     ("M1007", "a release deployed while its CI still runs (H1)", CD,
-     '    if not runs or any(r.get("status") != "completed" for r in runs):', "    if False:"),
+     '    if running:\n        say_once(state, tag, "ci"', '    if False:\n        say_once(state, tag, "ci"'),  # re-anchored (H1c)
     ("M1008", "a release older than what runs deployed over it (H1)", CD,
      "            if before:\n", "            if False:\n"),
     ("M1009", "a new lock deployed without the harness: the guard never runs (H1)", CD,
@@ -4492,7 +4492,7 @@ MUTANTS += [
      "        if seen.get(tag, digest) != digest:\n", "        if False:\n"),
     ("M1666", "the publishing job not waited for: a release from before CI3 refused at once, or deployed "
               "before its image is attested (CI3)", CD,
-     ', (PUBLISH_CHECK, "son image publiée", "ci-image")):', "):"),
+     "BLOCKING = REQUIRED_CHECKS + (PUBLISH_CHECK,)\n", "BLOCKING = REQUIRED_CHECKS\n"),   # re-anchored (H1c)
     ("M1667", "the image's user not compared with H0's: a release that cannot write its state deployed (CI3)", CD,
      "    if res.returncode != 0 or said != mine:\n", "    if res.returncode != 0:\n"),
     ("M1668", "an unverified image made a silent wait instead of a refusal said with the mention (CI3)", CD,
@@ -4524,7 +4524,7 @@ MUTANTS += [
     ("M1695", "a registry or sigstore out of reach waited for without end (CI3, review)", CD,
      "        if tries[tag] > UNAVAILABLE_PASSES:\n", "        if False:\n"),
     ("M1696", "the CI's wait and the image's share one count (CI3, review)", CD,
-     '        key = tag if name == MAIN_CHECK else f"{tag} {name}"\n', "        key = tag\n"),
+     '        key = f"{tag} {name}"\n', "        key = tag\n"),       # re-anchored (H1c)
     ("M1697", "the registry's header quoted as it came, toward #deploy (SEC6, CI3, review)", PIM,
      'shown = f"{said[:19]}…" if DIGEST_RE.fullmatch(said) else "un en-tête illisible"', "shown = said"),
     ("M1698", "~/.eregion-image left naming the old image when the new one fails (CI3, review)", "Makefile",

@@ -277,7 +277,7 @@ Une fois la bascule vérifiée :
 ## Les règles du dépôt (SEC12, Jonathan)
 
 **Settings → Rules → Rulesets → New ruleset**, deux fois. Les rulesets s'ajoutent à la protection
-classique de `main`, sans la remplacer. **Ne retire la protection classique qu'une fois les six checks
+classique de `main`, sans la remplacer. **Ne retire la protection classique qu'une fois les cinq checks
 ci-dessous présents dans le ruleset « main »** : sans eux, une PR rouge deviendrait fusionnable.
 
 1. **« tags v* » (New tag ruleset).**
@@ -302,19 +302,26 @@ ci-dessous présents dans le ruleset « main »** : sans eux, une PR rouge devie
      - **Restrict deletions** et **Block force pushes** ;
      - **Require a pull request before merging** : 0 approbation requise (un seul mainteneur, et
        l'App ne peut pas approuver sa propre PR), méthode **Squash** ;
-     - **Require status checks to pass**, les **six** checks, source GitHub Actions :
+     - **Require status checks to pass**, les **cinq** checks, source GitHub Actions (macOS n'en est
+       plus depuis CI5 : il ne tourne plus sur une PR, `docs/operations.md`, « La CI, plus rapide ») :
        - `lint + tests (py3.11)` ;
        - `lint + tests (py3.12)` ;
-       - `tests (macOS, case-insensitive file system)` ;
        - `terraform test (mock providers)` (CI4, `docs/operations.md`) ;
        - `image (glorfindel)` ;
        - `image (annatar)`.
+
+   **Le CD de H0 bloque une release sur ces cinq checks**, et sur `publish (glorfindel)`, l'image
+   qu'il tire (H1c, #518) : un autre check rouge ou annulé, macOS compris, est dit dans `#deploy`,
+   sans retenir H0. L'agent installé tient sa propre copie de la liste (`REQUIRED_CHECKS`, jamais lue
+   dans le dépôt) : un check ajouté ou retiré ici demande un `make glorfindel-host-cd-install`, et
+   `tests/unit/test_host_cd.py` garde les deux listes égales (`infra/glorfindel-host/README.md`,
+   « Le CD de H0 »).
 
 **Vérifier :**
 - avec ton identité : `gh api repos/grootcyber/eregion/rulesets` liste les deux règles, et
   `gh api repos/grootcyber/eregion/rulesets/<id>`, pour chacune, montre `bypass_actors` avec le rôle
   admin (`"actor_type": "RepositoryRole"`, et `"actor_id": 5`, l'id habituel du rôle admin : à confirmer à la lecture). `gh api repos/grootcyber/eregion/rules/branches/main`
-  donne les règles actives sur `main`, dont les six checks ;
+  donne les règles actives sur `main`, dont les cinq checks ;
 - **un essai de la dérogation, depuis le web** : publie une release d'essai (`v0.0.0-sec12-essai`, une
   pré-version, sur `main`), vérifie qu'elle passe, puis supprime-la, avec son tag (la page de la
   release, puis Tags). Le CD de H0 ne la suit pas : une pré-version n'est pas la dernière release ;

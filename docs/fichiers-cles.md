@@ -635,6 +635,7 @@ noyau, non mesurée ici (aucun conteneur).
 | Makefile `annatar-validate`, `annatar-list` | Annatar | rien | — |
 | Orodruin `ORO_RUN`, `ORO_RUN_GOTHMOG`, `ORO_RUN_CONTRACT`, `ORO_RUN_REQUEST` | les injecteurs, le contrat, le lanceur d'une demande | leurs répertoires de `~/runs` (le tableau ci-dessus) | ce que SEC18 dit ; `~/requests`, ce que juge le lanceur, en lecture seule |
 | Orodruin `ORO_MIGRATE` | la migration, une fois | `~/runs` entier | des données seulement, rien qu'on exécute |
+| Orodruin `ORO_CHECK_RUN` (`orodruin-push`, OI2) | l'image reçue, lancée une fois sans réseau avant son tag | rien | — (aucun montage) |
 
 Ce qui ne s'écrit plus : `scripts/` et `annatar/scenarios/` (le compose et `ANNATAR_VOLS`, et
 `annatar-validate`, `annatar-list` pour les scénarios) passent en lecture seule. Annatar lit les

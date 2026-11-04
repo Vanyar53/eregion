@@ -41,6 +41,7 @@ from hypothesis import strategies as st
 from glorfindel import agent, kql, signal_origin
 
 from . import kql_subset
+from .tracked_files import tracked
 
 ROOT = Path(__file__).resolve().parents[2]
 SUB = "00000000-0000-0000-0000-0000000000cc"
@@ -544,13 +545,8 @@ def _calls_without_timeout(source: str) -> list[int]:
 
 def _python_files() -> list[str]:
     """The repository's Python files: git's list, or — outside a checkout (the mutants' copy)
-    — the tree, the environments and caches aside."""
-    listed = subprocess.run(["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True)
-    if listed.returncode == 0 and listed.stdout.strip():
-        return listed.stdout.split()
-    skip = {".git", ".venv", "venv", ".claude", "node_modules", "site-packages", "__pycache__", "build", "dist"}
-    return [str(p.relative_to(ROOT)) for p in ROOT.rglob("*.py")
-            if not skip & set(p.relative_to(ROOT).parts)]
+    — the tree, the environments and caches aside (tests/unit/tracked_files.py, MUT1)."""
+    return tracked(ROOT, "*.py")
 
 
 def test_every_http_call_of_the_repository_has_a_timeout():

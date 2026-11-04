@@ -1246,6 +1246,7 @@ Aucun de ces défauts n'avait été vu en revue. Chacun a son test et sa séquen
 | I4P | règle de blocage d'une VM retournée en autorisation par quelqu'un, qui laisse l'attaquant joindre une VM d'un autre subnet (l'adresse reprise, un NSG de carte partagé entre deux subnets) | la promotion en périmètre retirait la règle par son nom, la garde jamais demandée : **cette VM coupée**, hors de portée du périmètre — invisible, un blocage de périmètre étant jugé sans les flux de l'attaquant |
 
 | L1P | VM bloquée pour SSH (port 22), bloquée de nouveau, port inconnu ; une règle du client avant notre deny élargie (la CI de la PR #476) | l'entrée gardait le 22 : la réaffirmation jugeait le contournement sur le seul 22, ce qui passait sur 443 une « exposition » — **le contournement jamais dit** (L1) |
+| L1H | entrée fusionnée : la paire de périmètre retournée en autorisation, les règles de la VM retirées, dites, la carte acquittée ; puis la paire réécrite par le blocage de périmètre d'une autre VM (graine 5 à 500) | la carte avait lu la paire sur Azure (retournée), et le retour ne se lisait qu'à la présence : « mieux que la carte », **les règles de la VM, toujours parties, jamais redites** (L1) |
 | I7S | isolation par règles sur un NSG partagé, état perdu, carte laissée nue, réisolée sur le NSG du subnet (lectures des NSG en 429), VM supprimée | la levée de la VM supprimée ne cherchait rien : `released`, la première isolation restée sur le NSG partagé, visant l'adresse que reçoit la VM suivante |
 | L1A | dérive d'un blocage redite (pire) sur un disque qui se remplit : la carte en attente fermée, puis la nouvelle refusée ; la passe suivante ne peut pas vérifier le blocage (quarantaine, configuration illisible) | plus aucune carte, la marque d'avant lue « dit » : **le blocage disparu, en silence** |
 
@@ -3718,6 +3719,62 @@ marquées (`reasserted_at`) sans la carte « reposé une fois » ; la disparitio
 
 **Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé (lot à part) ; la séquence réduite, rejouée sur la machine et le code de `main` 7ac1f37 pur (après MCG), y est rouge, sur le même U1. **Un second défaut ancien**, trouvé par l'exécution non mutée du harnais de mutation (une graine au hasard à 60) : « L1: the block on …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so » — une VM créée à l'ancienne adresse de Db--01, sous des écritures refusées, son adresse changée, une carte acquittée ; 24 règles réduites à la main à huit de `main`, aucune de L1Qs, rouges sur `main` 7ac1f37 pur comme sur la branche : figé en `xfail` strict (`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone`), hors du lot, routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet (`main` 7ac1f37 fusionné, MCG compris) : 5 933 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 343 mutants, sans faute ; `tests/unit/test_mutant_anchors.py` vert (le bloc de L1Qs au-dessus du repère « The mutants end here »).
 
+**L1H (03/11, #483) : la paire retournée qu'un autre périmètre réécrit clôt l'épisode acquitté.**
+La graine 5 à 500, relevée par la mesure de L1A (#480) et restée rouge avec le correctif de MAK : « L1: the
+block on …/rg-app1/…/Db--01 vanished from Azure; the reassertion neither put it back nor said so ». Un défaut
+de Glorfindel, pas de la machine : la famille de la graine 29 de L1G, par une autre porte.
+
+**La cause, établie** (l'entrée de Db--01, ses règles sur Azure, l'acquittement noté par la machine, ses
+cartes et les décisions de `still_said` relevés avant et après chaque passe, la séquence rejouée par ses
+tirages, par la conftest). web1 bloquée sur son sous-réseau, Db--01 pour elle-même : une entrée fusionnée,
+la paire de périmètre sur nsg-subnet et les règles de db-nic-0 et db-nic-1. La paire reposée une fois, puis
+retournée en autorisation, les règles de Db--01 retirées : la passe dit « a disparu une deuxième fois »,
+les règles de la VM et la paire (retournée : « partie » par ce qu'elle fait) — l'IP n'est plus bloquée sur
+db-nic-0, db-nic-1. L'opérateur acquitte la carte ; la machine le note (`acked_drift`). web1 débloquée.
+Puis web2 (rg-app2), sur le même sous-réseau, bloquée sur son périmètre : elle écrit la paire — une par IP
+et sous-réseau, celle que l'entrée de Db--01 nomme aussi —, un refus de nouveau ; la paire supprimée, une
+passe hors `human_only`. Le premier temps lit Db--01 toute partie (pire que la carte), mais elle a déjà été
+reposée une fois : rien d'écrit ; il repose la paire pour web2. Le second temps relit Db--01 : ses règles
+toujours parties, la paire entière, l'IP tenue par le périmètre — « mieux que la carte, pas pire ». Et
+`_back` (L1G) ne voyait revenir qu'une règle que la carte avait lue **absente** ; celle-ci l'avait lue sur
+Azure, retournée (une signature, pas None). L'épisode acquitté couvrait donc les règles de la VM, en silence.
+L'oracle : la carte acquittée ne vaut dite que tant que les règles de l'entrée sont celles de
+l'acquittement (RB1, L1G) — la paire a changé, L1 demande un mot. La machine dit ce que le test a fait :
+l'acquittement est celui de l'opérateur, aucune étape ne l'a clos, la paire a bien été réécrite.
+
+**Correctif** (`glorfindel/reassert_said.py`, `_back`, `_pair_keys`). Une règle de la paire de périmètre de
+l'entrée que la carte a dite partie en la lisant là, et qui tient maintenant, a été écrite de nouveau — le
+blocage de périmètre d'une autre VM, le plus souvent : l'épisode acquitté est fini, ce qui reste parti est
+reposé une fois, ou dit, comme pour une paire absente à la carte (L1G). Le premier temps décide de même
+(`reassert_perimeters._to_write`, par `still_said`). **La paire seule** : c'est la seule règle qu'une autre
+entrée écrit ; les règles propres à une VM, seul son blocage les écrit, et il clôt l'épisode de lui-même
+(L1Q). Une règle de la VM retournée puis remise en place à la main ne dit toujours rien
+(`test_an_acknowledged_drift_set_right_by_hand_says_nothing`, RB1). **Ce que ça coûte** : une paire retournée
+remise à la main, non supprimée, se lit comme écrite de nouveau — Glorfindel ne distingue pas les deux sur
+Azure (même signature) ; une carte de plus plutôt qu'une disparition tue, comme L1Q l'a voulu. Sous une
+carte en attente, rien de plus (la référence se resserre, comme avant). **A0** : l'oracle n'a pas bougé, ni
+la machine.
+
+**Figés.** `test_invariant_regressions.py::test_an_acknowledged_drift_whose_turned_pair_another_perimeter_wrote_again_is_said` :
+la séquence telle que trouvée (vingt règles, leurs tirages) et réduite à trois (`turned_perimeter_left_out`
+trois fois, par retrait glouton rejoué) ; la dernière règle jouée jusqu'au bout après les tirages trouvés,
+qui s'arrêtaient où L1 tombait (comme L1G). En `xfail` strict au premier commit, rouges sur `main` d597a00e.
+`test_reassert.py` : la paire retournée écrite de nouveau sous une carte acquittée (dite, rien d'écrit en
+`human_only`) ou en attente (rien de plus), hors `human_only` (les règles de la VM écrites), le premier temps ;
+rien de plus quand la paire reste retournée autrement, quand une règle de la VM est remise en place, quand
+une paire qui tenait change ; `_pair_keys`. Les quatre tests de comportement rouges sur le code de `main`,
+les gardes vertes sur les deux.
+
+**Mutants M3430–M3436**, 7/7 par leurs tests à chaque tour (deux tours, 60 séquences) : le défaut remis
+(M3430) ; toute règle lue revenue, celle de la VM comprise (M3431) ; la paire lue revenue encore partie
+(M3432), ou sans avoir été dite partie (M3433) ; la règle sortante hors de la paire (M3434) ; les clés dans
+la casse de l'entrée (M3435) ; un blocage de VM pris pour un périmètre (M3436). Réancrés (2/2 chacun) :
+M1943, M3280 (`_back` qui ne voit plus rien revenir), M3281.
+
+**Mesures de L1H.** Invariants avec le correctif, `--hypothesis-seed=N`, quatre à la fois : à 60 séquences,
+N = 1..20, **20/20 vertes** ; à 500, N = 1..7 et 42, **8/8 vertes**, la graine 5 comprise. `pytest` complet : 6 266 réussis, 7 sautés ; `ruff` propre ;
+`scripts/mutant_anchors.py` : 2 510 mutants et 32 du jeu de contrôle, sans faute.
+
 **MAK (03/11, #481) : la machine oubliait l'acquittement d'un blocage quand une isolation revenait.**
 Un défaut de la machine, pas du code. Trouvé par L1A (#480) dans deux runs de la CI de la PR #476 (py3.11,
 graines au hasard), réduits par Hypothesis aux mêmes douze règles, sur deux réseaux (avec et sans les
@@ -3769,7 +3826,7 @@ conftest) : `i4p_ci_l1.log`, le L1 de L1P (Db--01 contourné sur 443), vert sur 
 correctif. **La graine 5 à 500** (Db--01, relevée par L1A, rejouée par ses tirages) reste rouge avec le
 correctif, sur le même L1 : ce n'est pas ce défaut — aucun `said_then_back_after_a_full_disk` dans sa
 séquence. Un vrai défaut, d'une autre cause (probablement la famille de la graine 29 de L1G, d'après L1A :
-une paire retournée au moment de l'acquittement), non corrigé ici, laissé à un lot de suite.
+une paire retournée au moment de l'acquittement), non corrigé ici, laissé à un lot de suite : L1H (#483, ci-dessus).
 
 **Mutants M3420–M3423**, 4/4 par leurs tests à chaque tour (deux tours, 60 séquences) : le défaut remis,
 l'acquittement oublié pour les deux branches (M3420) ; `operator_acknowledges` qui ne note plus

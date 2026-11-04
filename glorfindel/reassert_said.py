@@ -84,11 +84,37 @@ def _worse(said, now: dict) -> bool:
                 or any(was is not None and is_ is None for was, is_ in _read_both(said, now)))
 
 
-def _back(said, now: dict) -> bool:
+def _pair_keys(b: dict) -> set[str]:
+    """The keys (`rules_seen`) of the entry's perimeter pair — the one rule pair another entry writes
+    too: one per IP and subnet, every entry of that IP and subnet names it. None for a VM block
+    (`scoped` not False), nor for an entry that doesn't say where its pair is."""
+    if b.get("scoped") is not False or not b.get("rule") or "/" not in (b.get("nsg") or ""):
+        return set()
+    return {f"{b['nsg']}/{b['rule']}{x}".lower() for x in ("", "-out")}
+
+
+def _back(said, now: dict, pair: set[str] = frozenset()) -> bool:
     """A rule the card's check read absent is on Azure again (L1G): someone wrote it under our
     name since — Glorfindel itself, mostly: one VM's perimeter block writes the pair every entry
-    of that IP and subnet names."""
-    return isinstance(said, dict) and any(was is None and is_ is not None for was, is_ in _read_both(said, now))
+    of that IP and subnet names. And a rule of the perimeter pair (`pair`, its keys) the card said
+    gone though it read it there — turned —, holding now in another form (L1H, #483): another
+    entry's perimeter block wrote the pair over the turned one, the card had read it on Azure, and
+    presence alone read nothing back. A VM's own rules are written by its own block alone, which
+    ends the episode on its own (L1Q): turned, then set right in place, still nothing (RB1)."""
+    if not isinstance(said, dict):
+        return False
+    before, after = said.get("rules") or {}, now.get("rules") or {}
+    gone_then = {str(n).lower() for n in said.get("gone") or []}
+    gone_now = {str(n).lower() for n in now.get("gone") or []}
+    for k in sorted(before.keys() & after.keys()):
+        was, is_ = before[k], after[k]
+        if was is None and is_ is not None:
+            return True
+        # The pair's rules are judged by what they do alone (no address of a NIC): said gone while
+        # read there, holding now, it was written again in another form.
+        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now:
+            return True
+    return False
 
 
 def _acknowledged(sid: str) -> bool:
@@ -105,9 +131,9 @@ def still_said(b: dict, key: str, ip: str, sid: str, baseline, now: dict) -> boo
     written again since (L1G, #461). The operator acknowledged what the card said; another VM's
     perimeter block wrote the pair both entries name, the VM's own rules still gone: read « better,
     not worse », the disappearance stayed unsaid. A rule written again ends the episode, as a block
-    written again does (L1Q): what is still gone is said anew. A rule set right by hand, without
-    being deleted, still says nothing (RB1); under a pending card, what came back narrows the
-    baseline (L1Q), as before."""
+    written again does (L1Q): what is still gone is said anew — the pair the card read turned too,
+    holding again (L1H, #483). A VM's own rule set right by hand, without being deleted, still says
+    nothing (RB1); under a pending card, what came back narrows the baseline (L1Q), as before."""
     from glorfindel.reassert_cards import drift_said
     return (bool(b.get("drift_alerted_at")) and not _worse(baseline, now)
-            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))
+            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)) and drift_said(key, ip, sid))

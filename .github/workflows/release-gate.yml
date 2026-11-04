@@ -24,9 +24,11 @@ on:
 permissions:
   contents: read
 
+# As ci.yml (CI5): a new push on the pull request cancels the run it replaces; a dispatch on main is
+# never cancelled nor held pending by another (its group is the run itself).
 concurrency:
-  group: release-gate-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Every test of the repository, the invariant machines (Azure and AWS) at 2 000 sequences each,
@@ -232,9 +234,10 @@ jobs:
           echo "macOS (informe, ne bloque pas la porte) : tests ${OUTCOME:-pas lancés}" >> "$GITHUB_STEP_SUMMARY"
 
   # ci.yml's Terraform tests, word for word (tests/unit/test_workflows.py): mock providers, the
-  # locks read only, nothing applied.
+  # locks read only, nothing applied. Its own name: never one of main's required checks (a check of
+  # that name here, on a workflow a path filter skips, would stand for ci.yml's).
   terraform:
-    name: terraform test (mock providers)
+    name: terraform test (release gate)
     if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15

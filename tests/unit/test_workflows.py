@@ -1295,8 +1295,20 @@ def test_the_gate_runs_on_the_version_s_pull_request_or_by_dispatch_only():
     doc = _gate()
     assert doc["name"] == "Release gate"
     assert doc["on"] == {"pull_request": {"paths": ["pyproject.toml"]}, "workflow_dispatch": None}
-    assert doc["concurrency"] == {"group": "release-gate-${{ github.event.pull_request.number || github.ref }}",
-                                  "cancel-in-progress": True}
+    # As ci.yml (CI5): a new push on the pull request cancels the run it replaces, a dispatch never.
+    assert doc["concurrency"] == {
+        "group": "${{ github.workflow }}-${{ github.event_name == 'pull_request' && "
+                 "format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"}
+
+
+def test_no_job_of_the_gate_takes_the_name_of_a_ci_check():
+    """The gate runs under a path filter: a check named as one of ci.yml's (a required check of
+    main) would stand for it on the version's pull request, or stay « expected »."""
+    names = lambda doc: {str(job.get("name", key)) for key, job in doc["jobs"].items()}  # noqa: E731
+    ci = _load(ROOT / ".github" / "workflows" / "ci.yml")
+    assert names(_gate()) & names(ci) == set()
+    assert _gate()["jobs"]["terraform"]["name"] == "terraform test (release gate)"
 
 
 def test_every_job_of_the_gate_runs_only_for_a_version_or_a_dispatch():

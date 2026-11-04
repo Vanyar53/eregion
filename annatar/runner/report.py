@@ -32,7 +32,9 @@ class RunReport(run_report.RunReport):
             console.print(f"[bold]Detection:[/bold] {self.metrics['detection']}{after}")
         refused = self.metrics.get("detection_refused")
         if isinstance(refused, list) and refused:   # SEC21: never counted, said
-            console.print("[bold]Refused on the return channel[/bold] (never counted, SEC21):")
+            total = self.metrics.get("detection_refused_total")
+            total = total if isinstance(total, int) and not isinstance(total, bool) else len(refused)
+            console.print(f"[bold]Refused on the return channel[/bold]: {total} (never counted, SEC21):")
             for why in refused[:20]:   # what the channel holds, never read as markup
                 console.print("  - " + str(why)[:400], markup=False, style="yellow")
         console.print("[dim]Detection and RTO metrics are owned by Glorfindel.[/dim]")

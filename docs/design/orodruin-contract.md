@@ -279,7 +279,7 @@ le canal des fenêtres dans l'autre sens : un conteneur `watch` dans le même co
   publiée), M111 (une fenêtre inconnue de la watch prouve un miss), M112 (une watch redémarrée
   prouve un miss), M113 (le contrat accepte un rôle d'écriture sur `watch`), M114 (le run conclut
   à un miss sans demander au canal), M115 (un canal illisible lu comme un miss) ; les détections
-  signées, M3700–M3720 (`scripts/mutants/SEC21.py`, `tests/unit/test_signed_detections.py`).
+  signées, M3700–M3724 (`scripts/mutants/SEC21.py`, `tests/unit/test_signed_detections.py`).
 
 **Mesuré le 20/10** : la définition de Storage Blob Data Reader lue sur Azure (`az role
 definition list`) est exactement l'ensemble accepté ; Contributor y ajoute `blobs/write`,

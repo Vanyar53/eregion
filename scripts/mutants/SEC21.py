@@ -1,7 +1,7 @@
 """SEC21 (#530): the detections of the return channel signed by the watch's key, under their own
 domain, verified by the injectors with the key they pin — never counted for « seen » when they are
 not the watch's, for this run and this signal; said in the console, Orodruin's journal and the
-run's report; the heartbeat that proves a miss verified by that key too. M3700–M3720.
+run's report; the heartbeat that proves a miss verified by that key too. M3700–M3724.
 """
 WKEY = "eregion_core/watch_key.py"
 WCH = "eregion_core/watch_channel.py"
@@ -42,12 +42,12 @@ MUTANTS = [
      "        why = no_key if key is None else watch_key.detection_refusal(\n",
      '        why = "" if key is None else watch_key.detection_refusal(\n'),
     ("M3710", "the refusals of one read unbounded: a writer of the channel floods the run (SEC21)", WCH,
-     "        elif len(refused) < MAX_REFUSED:\n", "        else:\n"),
+     "        if len(refused) < MAX_REFUSED:\n", "        if True:\n"),
     ("M3711", "the run counts the channel's detections as written, never vouched (SEC21)", ENG,
-     "        found, refused = watch_channel.vouched_detections(run_id)\n",
-     "        found, refused = watch_channel.read_detections(run_id), []\n"),
+     "        found, refused, total = watch_channel.vouched_detections(run_id)\n",
+     "        found, refused, total = watch_channel.read_detections(run_id), [], 0\n"),
     ("M3712", "a run whose detections were all refused concludes to a miss: a rule proposed for it (SEC21)", ENG,
-     '            if result_event == "detection_timeout" and self._detection_refused:\n',
+     '            if result_event == "detection_timeout" and self._detection_refused_total:\n',
      "            if False:\n"),
     ("M3713", "a detection refused never written in Orodruin's journal (SEC21)", ENG,
      '                    self._session.declare("detection_refused", why)\n', "                    pass\n"),
@@ -70,5 +70,17 @@ MUTANTS = [
     # After the coordinator's review: the heartbeat that proves a miss, verified as the gate's is.
     ("M3720", "a heartbeat unsigned, of another key or replayed proves a miss: a rule proposed for a silence no watch vouched for (SEC21)",
      ENG, "                why = why or watch_gate.miss_proof(heartbeat)\n", "                why = why\n"),
+    # After the review of 7ae1ca6c: the refusals all counted, the run's list bounded, the
+    # fingerprint a blob claims said printable only.
+    ("M3721", "the refusals of a read never counted: 500 refused say 20, and the run concludes to a miss (SEC21)", WCH,
+     "        total += 1\n", ""),
+    ("M3722", "the run's list of refusals unbounded: a writer that rotates its blobs floods the journal (SEC21)", ENG,
+     "            if len(self._detection_refused) >= watch_channel.MAX_REFUSED:\n                break",
+     "            if False:\n                break"),
+    ("M3723", "the fingerprint a blob claims said as written: an escape sequence to the terminal (SEC21, SEC19)", WKEY,
+     '    fp = _UNPRINTABLE.sub("?", fp)\n', ""),
+    ("M3724", "the run says the refusals it lists, not how many were refused (SEC21)", ENG,
+     '                result_event, why = None, (f"{self._detection_refused_total} detection(s) on the "\n',
+     '                result_event, why = None, (f"{len(self._detection_refused)} detection(s) on the "\n'),
 ]
-TESTS = {f"M{n}": _TESTS for n in range(3700, 3721)}
+TESTS = {f"M{n}": _TESTS for n in range(3700, 3725)}

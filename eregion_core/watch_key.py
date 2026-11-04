@@ -317,7 +317,13 @@ def pinned() -> tuple[bytes | None, str]:
     return parse_pin(os.environ.get(KEY_ENV, ""))
 
 
+_UNPRINTABLE = re.compile(r"[^\x20-\x7e]")
+
+
 def _short(fp: str) -> str:
+    """A fingerprint as said — the one a heartbeat or a detection claims is the channel's text:
+    printable ASCII only (SEC21: never an escape sequence to the terminal nor the report)."""
+    fp = _UNPRINTABLE.sub("?", fp)
     return fp[:19] + "…" if len(fp) > 19 else fp
 
 

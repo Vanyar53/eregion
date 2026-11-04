@@ -97,6 +97,7 @@ class Engine:
         # SEC21 (#530): the detections of the return channel refused (unsigned, another key, copied…)
         # — each said once, in the console, Orodruin's journal and the run's report.
         self._detection_refused: list[str] = []
+        self._detection_refused_total = 0
         self._session = None
 
     def run(self, scenario_path: str, skip_confirm: bool = False):
@@ -109,6 +110,7 @@ class Engine:
         self._detection_result = "unknown"
         self._detection_latency_s = None
         self._detection_refused = []
+        self._detection_refused_total = 0
         self._session = None
 
         # An invalid scenario (an unknown engine among them, review R1 point 2) is a clean
@@ -410,6 +412,7 @@ class Engine:
         metrics["detection_latency_s"] = self._detection_latency_s
         if self._detection_refused:   # SEC21: never counted, said in the report
             metrics["detection_refused"] = list(self._detection_refused)
+            metrics["detection_refused_total"] = self._detection_refused_total
         report.metrics = metrics
         report.save()
         return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
@@ -586,6 +589,7 @@ class Engine:
         metrics["detection_latency_s"] = self._detection_latency_s
         if self._detection_refused:   # SEC21: never counted, said in the atomic run's report too
             metrics["detection_refused"] = list(self._detection_refused)
+            metrics["detection_refused_total"] = self._detection_refused_total
         report.metrics = metrics
         report.save()
         return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
@@ -765,11 +769,11 @@ class Engine:
             # vouches for the whole wait — the storage channel's, else the local one's.
             result_event, latency, why = self._settle_through_channel(
                 run_id, scenario.mitre, emitter.resource_id, attack_time)
-            if result_event == "detection_timeout" and self._detection_refused:
+            if result_event == "detection_timeout" and self._detection_refused_total:
                 # SEC21: a detection the run could not believe is no silence — a watch older than
                 # this injector, or a hand on the channel: never a miss, never seen.
-                result_event, why = None, (f"{len(self._detection_refused)} detection(s) on the return "
-                                           "channel refused (SEC21)")
+                result_event, why = None, (f"{self._detection_refused_total} detection(s) on the "
+                                           "return channel refused (SEC21)")
             if result_event is None:
                 console.print(
                     f"[yellow]Detection not measured — the hosted watch cannot vouch for"
@@ -820,12 +824,17 @@ class Engine:
 
     def _vouched(self, run_id: str) -> list[dict]:
         """SEC21 (#530): the detections of this run the pinned key signed; each other refused,
-        said once — in the console, in Orodruin's journal, and kept for the run's report. Raises
-        when the channel cannot be read."""
-        found, refused = watch_channel.vouched_detections(run_id)
+        said once — in the console, in Orodruin's journal, and kept for the run's report —, up to
+        MAX_REFUSED for the run: the rest only counted. ``_detection_refused_total``: the most
+        refused in one read of the channel (each read lists every blob of the run). Raises when the
+        channel cannot be read."""
+        found, refused, total = watch_channel.vouched_detections(run_id)
+        self._detection_refused_total = max(self._detection_refused_total, total)
         for why in refused:
             if why in self._detection_refused:
                 continue
+            if len(self._detection_refused) >= watch_channel.MAX_REFUSED:
+                break   # a writer that rotates its blobs never floods the journal nor the report
             self._detection_refused.append(why)
             # What the channel holds is never read as markup.
             console.print(f"A detection on the return channel refused — never counted (SEC21): {why}",

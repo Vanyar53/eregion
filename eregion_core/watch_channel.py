@@ -332,14 +332,15 @@ def read_named(run_id: str, *, channel: str | None = None, credential=None,
     return out
 
 
-# What a run keeps of the refusals of one read: enough to say them, never a flood (a writer of
-# the channel may file up to MAX_BLOBS of them).
+# What a run keeps of the refusals to say them: enough to say them, never a flood (a writer of
+# the channel may file up to MAX_BLOBS of them, and rotate them) — the rest counted only.
 MAX_REFUSED = 20
 
 
 def vouched_detections(run_id: str, *, channel: str | None = None, credential=None,
-                       get=None) -> tuple[list[dict], list[str]]:
-    """SEC21 (#530): (the detections a run may count, the refusals to say). On the storage
+                       get=None) -> tuple[list[dict], list[str], int]:
+    """SEC21 (#530): (the detections a run may count, the refusals to say — MAX_REFUSED at most —,
+    how many were refused in all). On the storage
     channel, only those the key this injector pins (``EREGION_WATCH_KEY``, never a key read in
     the channel) signed under ``DOMAIN_DETECTION``, for this run, under their own signal's name;
     each other — unsigned (a watch older than this lot), another key, another domain, a field
@@ -350,18 +351,20 @@ def vouched_detections(run_id: str, *, channel: str | None = None, credential=No
     from eregion_core import watch_key
     url = channel if channel is not None else channel_url()
     if not url and channel is None and source() == LOCAL:
-        return local_detections(run_id), []
+        return local_detections(run_id), [], 0
     named = read_named(run_id, channel=url, credential=credential, get=get)
     key, no_key = watch_key.pinned()
-    kept, refused = [], []
+    kept, refused, total = [], [], 0
     for leaf, record in named:
         why = no_key if key is None else watch_key.detection_refusal(
             record, key, run_id=run_id, signal_id=leaf)
         if not why:
             kept.append(record)
-        elif len(refused) < MAX_REFUSED:
+            continue
+        total += 1
+        if len(refused) < MAX_REFUSED:
             refused.append(f"{DETECTIONS}/{run_id}/{leaf}.json: {why}"[:400])
-    return kept, refused
+    return kept, refused, total
 
 
 def as_records(detections: list[dict]) -> list[dict]:

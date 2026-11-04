@@ -6,7 +6,7 @@ A detection that is unsigned, signed by another key or for another use, changed 
 signed, or copied from another run or another signal is never counted for « seen »: the run says
 it — in its console, in Orodruin's journal, in its report — and, refused alone, it is ``unknown``,
 never ``missed``. On the fake container of the channel (tests/unit/fake_container.py): no
-network, no Azure, a fake clock; the keys are fixed seeds, never a real key. Mutants M3700–M3719
+network, no Azure, a fake clock; the keys are fixed seeds, never a real key. Mutants M3700–M3724
 (scripts/mutants/SEC21.py) are measured here.
 """
 from __future__ import annotations
@@ -75,13 +75,14 @@ def _file(c: FakeContainer, name: str, body) -> None:
 
 
 def _vouched(c: FakeContainer, run=RUN):
-    return wc.vouched_detections(run, channel=URL, credential=CRED, get=c.get)
+    """(kept, refused) — the total of refusals is read where it is the point."""
+    return wc.vouched_detections(run, channel=URL, credential=CRED, get=c.get)[:2]
 
 
 # ── The watch signs, the injector believes ────────────────────────────────────────────
 
 def test_a_detection_the_pinned_key_signed_is_believed(pinned):
-    """M3700, M3701: every detection published carries the watch's fingerprint and its signature
+    """M3700, M3702: every detection published carries the watch's fingerprint and its signature
     — believed with the key pinned, nothing refused."""
     c = _published()
     body = json.loads(c.body(_blob()))
@@ -92,7 +93,7 @@ def test_a_detection_the_pinned_key_signed_is_believed(pinned):
 
 
 def test_the_signature_covers_the_run_the_signal_what_was_seen_and_when(pinned):
-    """M3702: what is signed is the domain, then every field but ``sig`` — run, signal, technique,
+    """What is signed is the domain, then every field but ``sig`` — run, signal, technique,
     resource, rule, time."""
     body = json.loads(_published().body(_blob()))
     signed = watch_key.message(watch_key.DOMAIN_DETECTION, body)
@@ -131,7 +132,7 @@ def _claims_the_pinned_key() -> dict:
 
 
 REFUSALS = [
-    # (what is filed under detections/RUN/SID.json, what the refusal says) — M3703–M3709
+    # (what is filed under detections/RUN/SID.json, what the refusal says) — M3701, M3703–M3708
     ({k: v for k, v in _signed_body().items() if k not in ("key", "sig")}, "unsigned"),
     (_signed_body(signer=OTHER), "signed by another key"),
     (_claims_the_pinned_key(), "its signature does not hold"),
@@ -140,6 +141,8 @@ REFUSALS = [
     (_signed_body(detected_at=(T0 + timedelta(seconds=1)).isoformat()), "its signature does not hold"),
     (_signed_body(resource_id=VM.replace("gondolin", "bree")), "its signature does not hold"),
     (_signed_body(extra="a field more"), "its signature does not hold"),
+    ({k: v for k, v in _signed_body().items() if k != "rule"}, "its signature does not hold"),
+    (_signed_body(detected_at=1793787300), "its signature does not hold"),
     (_signed_body(run="20261103T090000Z"), "a detection of another run"),
     (_signed_body(sid="rule-t1136-001-v1-ffffffff"), "a detection of another signal"),
     (_signed_body(sig="A" * 86 + "=="), "its signature does not hold"),
@@ -150,7 +153,8 @@ REFUSALS = [
 
 @pytest.mark.parametrize("body, said", REFUSALS, ids=[
     "unsigned", "another-key", "claims-the-pinned-key", "another-domain", "technique-changed",
-    "time-changed", "resource-changed", "field-added", "another-run", "another-signal",
+    "time-changed", "resource-changed", "field-added", "field-removed", "type-changed",
+    "another-run", "another-signal",
     "forged-signature", "no-signature", "not-an-object"])
 def test_a_detection_the_pinned_key_did_not_sign_for_this_run_and_signal_is_refused(pinned, body, said):
     c = FakeContainer(URL)
@@ -161,7 +165,7 @@ def test_a_detection_the_pinned_key_did_not_sign_for_this_run_and_signal_is_refu
 
 
 def test_a_detection_copied_from_another_run_is_refused_there_and_believed_in_its_own(pinned):
-    """M3708: the same signed blob, under another run's prefix — its own run believes it, the
+    """M3707: the same signed blob, under another run's prefix — its own run believes it, the
     other never does."""
     c = _published()
     _file(c, _blob(run="20261104T120000Z"), json.loads(c.body(_blob())))
@@ -171,7 +175,7 @@ def test_a_detection_copied_from_another_run_is_refused_there_and_believed_in_it
 
 
 def test_a_detection_copied_under_another_signal_s_name_is_refused(pinned):
-    """M3709: filed again under another name in its own run — the copy is refused, the original
+    """M3708: filed again under another name in its own run — the copy is refused, the original
     kept."""
     c = _published()
     _file(c, _blob(sid="rule-x-copy"), json.loads(c.body(_blob())))
@@ -181,7 +185,7 @@ def test_a_detection_copied_under_another_signal_s_name_is_refused(pinned):
 
 
 def test_without_a_key_pinned_no_detection_counts_and_the_gate_refuses_as_sec19_does(monkeypatch):
-    """M3710: no key pinned — every detection refused with SEC19's own words and gesture, and the
+    """M3709: no key pinned — every detection refused with SEC19's own words and gesture, and the
     gate refuses the run before it (SEC19)."""
     monkeypatch.delenv(watch_key.KEY_ENV, raising=False)
     kept, refused = _vouched(_published())
@@ -190,17 +194,31 @@ def test_without_a_key_pinned_no_detection_counts_and_the_gate_refuses_as_sec19_
     assert watch_key.proof({"at": T0.isoformat()}).startswith(f"no watch key pinned ({watch_key.KEY_ENV})")
 
 
-def test_the_refusals_of_one_read_are_bounded(pinned):
-    """M3711: a writer of the channel may file many — a run keeps MAX_REFUSED to say, no more."""
+def test_the_refusals_of_one_read_are_bounded_and_all_counted(pinned):
+    """M3710, M3721: a writer of the channel may file many — a read keeps MAX_REFUSED to say, no
+    more, and counts them all: 25 refused say 25."""
     c = FakeContainer(URL)
     for n in range(wc.MAX_REFUSED + 5):
         _file(c, _blob(sid=f"rule-forged-{n:03d}"), {"event": "detection"})
-    kept, refused = _vouched(c)
-    assert kept == [] and len(refused) == wc.MAX_REFUSED
+    kept, refused, total = wc.vouched_detections(RUN, channel=URL, credential=CRED, get=c.get)
+    assert kept == [] and len(refused) == wc.MAX_REFUSED and total == 25
+
+
+def test_a_fingerprint_the_channel_claims_is_said_printable_only(pinned):
+    """M3723: the ``key`` a blob claims is the channel's text — never an escape sequence to the
+    terminal nor the report, for a detection as for a heartbeat (SEC19)."""
+    forged = _signed_body(signer=OTHER, key="SHA256:\x1b[2J\x1b]0;owned\x07abc")
+    c = FakeContainer(URL)
+    _file(c, _blob(), forged)
+    _, refused = _vouched(c)
+    assert "signed by another key" in refused[0] and "\x1b" not in refused[0] and "\x07" not in refused[0]
+    beat = {**gate.beat_body(T0, signer=OTHER), "key": "SHA256:\x1b[31mred"}
+    why = watch_key.verify_beat(beat, WATCH.public)
+    assert why.startswith("signed by another key") and "\x1b" not in why
 
 
 def test_a_watch_without_its_key_publishes_its_detection_unsigned_and_says_it(monkeypatch, tmp_path, capsys, pinned):
-    """M3712: without a key the detection goes unsigned — said once in the watch's log — and the
+    """M3717: without a key the detection goes unsigned — said once in the watch's log — and the
     injector never counts it."""
     blocked = tmp_path / "blocked"
     blocked.write_text("")
@@ -250,7 +268,8 @@ def test_the_heartbeat_is_signed_as_before_and_still_believed(pinned, monkeypatc
 
 
 def test_a_detection_s_signature_never_reads_as_a_heartbeat(pinned):
-    """M3713: the pinned key's signature, made for a detection, put on a heartbeat — refused."""
+    """The pinned key's signature, made for a detection, put on a heartbeat — refused (the
+    heartbeat's own check, SEC19: the domains keep the uses apart)."""
     body = {k: v for k, v in gate.beat_body(T0, signer=WATCH).items() if k != "sig"}
     forged = {**body, "sig": WATCH.sign(watch_key.DOMAIN_DETECTION, body)}
     assert watch_key.verify_beat(forged, WATCH.public).startswith("its signature does not hold")
@@ -323,7 +342,7 @@ def test_a_signed_detection_is_the_run_s_detection(channel):
 
 
 def test_an_unsigned_detection_is_never_seen_nor_a_miss_and_it_is_said(channel, capsys):
-    """M3714, M3715, M3716: a watch older than this injector (or a hand on the channel) — the run
+    """M3704, M3711, M3712, M3713, M3716: a watch older than this injector (or a hand on the channel) — the run
     is unknown, never detected, never missed (no detection_missed: no rule proposed); the refusal
     said in the console and in Orodruin's journal, once."""
     attack = channel.clock.now - 150
@@ -341,7 +360,7 @@ def test_an_unsigned_detection_is_never_seen_nor_a_miss_and_it_is_said(channel, 
 
 
 def test_a_forged_detection_beside_a_signed_one_leaves_the_signed_one_counted(channel):
-    """M3714: the signed detection counts; the forged one, of another run, is said."""
+    """M3707: the signed detection counts; the forged one, of another run, is said."""
     attack = channel.clock.now - 150
     _file(channel.container, _blob(sid="rule-forged"), _detection_at(attack + 5, run="20261103T090000Z",
                                                                      sid="rule-forged"))
@@ -368,7 +387,7 @@ def test_without_a_refusal_a_vouched_silence_is_still_a_miss(channel):
 
 
 def test_a_refused_detection_is_written_in_the_run_s_report(channel, tmp_path, monkeypatch):
-    """M3717: the run's report keeps what was refused (``metrics.detection_refused``), and its
+    """M3714: the run's report keeps what was refused (``metrics.detection_refused``), and its
     detection unknown."""
     from tests.unit.test_annatar_atomic import ATOMIC_YAML, _atomic_executor
     monkeypatch.chdir(tmp_path)
@@ -391,6 +410,7 @@ def test_a_refused_detection_is_written_in_the_run_s_report(channel, tmp_path, m
     report = json.loads(next((tmp_path / "runs" / "annatar").glob("2*.json")).read_text())
     assert report["metrics"]["detection"] == "unknown"
     assert len(report["metrics"]["detection_refused"]) == 1 and "unsigned" in report["metrics"]["detection_refused"][0]
+    assert report["metrics"]["detection_refused_total"] == 1
 
 
 def test_a_refused_detection_is_written_in_a_local_script_run_s_report(channel, tmp_path, monkeypatch):
@@ -416,7 +436,7 @@ def test_a_refused_detection_is_written_in_a_local_script_run_s_report(channel, 
 
 
 def test_a_refused_detection_is_written_in_orodruin_s_journal(channel, tmp_path, monkeypatch):
-    """M3718: the run's own session declares it — on Orodruin's disk, the line of the run."""
+    """M3713: the run's own session declares it — on Orodruin's disk, the line of the run."""
     import os
 
     import eregion_core.orodruin as orodruin
@@ -502,4 +522,48 @@ def test_a_heartbeat_changed_after_its_signature_never_proves_a_miss(proving):
     """The pinned key's heartbeat, its windows rewritten after the signature: refused."""
     proving.beat(windows=[RUN, "another-run"])
     engine, emitted = _wait(proving.clock.now - 30)
+    assert engine._detection_result == "unknown" and emitted == []
+
+
+# ── Many refused: all counted, MAX_REFUSED said ──────────────────────────────────────
+
+def test_twenty_five_refused_detections_say_twenty_five(channel, capsys):
+    """M3721, M3724: the run says how many were refused in all, not only the ones it lists."""
+    attack = channel.clock.now - 150
+    for n in range(25):
+        _file(channel.container, _blob(sid=f"rule-forged-{n:03d}"), {"event": "detection"})
+    engine, emitted = _wait(attack)
+    assert engine._detection_result == "unknown" and emitted == []
+    assert engine._detection_refused_total == 25 and len(engine._detection_refused) == wc.MAX_REFUSED
+    out = " ".join(capsys.readouterr().out.split())   # as said, whatever the terminal's width
+    assert "25 detection(s) on the return channel refused" in out
+
+
+def test_a_writer_that_rotates_its_blobs_never_floods_the_journal(channel, monkeypatch):
+    """M3722: new refused blobs at every read — the run keeps and journals MAX_REFUSED, no more."""
+    reads = iter(range(10 ** 6))
+
+    def rotating(run_id, **_):
+        n = next(reads)
+        return [(f"rule-rot-{n:05d}-{i:02d}", {"event": "detection"}) for i in range(wc.MAX_REFUSED)]
+    monkeypatch.setattr(wc, "read_named", rotating)
+    journal = _Journal()
+    engine, emitted = _wait(channel.clock.now - 150, session=journal)
+    assert next(reads) > 3   # read again and again during the wait
+    assert engine._detection_result == "unknown" and emitted == []
+    assert len(engine._detection_refused) == wc.MAX_REFUSED and len(journal.lines) == wc.MAX_REFUSED
+    assert engine._detection_refused_total == wc.MAX_REFUSED
+
+
+def test_a_heartbeat_the_gate_believed_before_the_run_replayed_at_the_end_never_proves_a_miss(proving):
+    """The gate's real proof accepts the watch's heartbeat before the run; the same heartbeat,
+    replayed after the wait, never vouches for it: unknown, no detection_missed."""
+    now = datetime.fromtimestamp(proving.clock.now, timezone.utc)
+    before = watch_key.sign_beat({"at": now.isoformat(), "since": _iso(proving.clock.now - 86400),
+                                  "windows": [RUN], "perimeter": "p"}, WATCH, now)
+    gate.READERS.update(channel=lambda: gate.Beat(gate.CHANNEL, now, perimeter="p", body=dict(before)),
+                        own=lambda: "p")
+    assert gate.refusal(now) == ""
+    with patch.object(wc, "read_heartbeat", lambda **_: dict(before)):
+        engine, emitted = _wait(proving.clock.now - 30)
     assert engine._detection_result == "unknown" and emitted == []

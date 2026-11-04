@@ -103,14 +103,19 @@ qu'il lit, sous le nom de son propre signal (`watch_channel.vouched_detections`,
 | aucune clé épinglée | les mots de SEC19, `no watch key pinned (EREGION_WATCH_KEY)` et le geste — la garde a déjà refusé le run avant tout appel au cloud |
 | une détection sans signature (une watch d'avant SEC21, une main qui écrit là, une watch sans clé) | `unsigned`, et le geste : mettre Glorfindel à jour |
 | signée d'une autre clé | `signed by another key`, les deux empreintes |
-| une signature qui ne tient pas : un champ changé ou ajouté après la signature, l'empreinte de la clé épinglée recopiée, une signature faite pour un battement | `its signature does not hold` |
+| une signature qui ne tient pas : un champ changé, ajouté, retiré ou d'un autre type après la signature, l'empreinte de la clé épinglée recopiée, une signature faite pour un battement | `its signature does not hold` |
 | recopiée d'un autre run | `a detection of another run (…) copied here` |
 | recopiée sous le nom d'un autre signal | `a detection of another signal (…) copied under this name` |
 
 Une détection refusée **n'est jamais comptée pour « vu »**. Elle est dite, une fois par blob :
 dans la console du run, dans le journal d'Orodruin (`detection_refused`, la ligne du run,
-`Session.declare`) et dans le rapport du run (`metrics.detection_refused`, au plus 20, chacune
-bornée). Un run dont aucune détection n'est crue et qui en a vu de refusées est **`unknown`, jamais
+`Session.declare`) et dans le rapport du run (`metrics.detection_refused`, chacune bornée). Les
+vingt premières du run seulement (`MAX_REFUSED`, pour le run entier, pas pour chaque lecture) : un
+rédacteur qui ferait tourner ses blobs n'inonde ni le journal ni le rapport. Les autres sont
+comptées : `metrics.detection_refused_total`, le plus grand nombre de refus dans une lecture du
+canal (chaque lecture liste tous les blobs du run), et la sortie du run dit ce nombre. L'empreinte
+qu'un blob prétend (`key`) n'est dite qu'en ASCII imprimable, pour une détection comme pour un
+battement : jamais une séquence d'échappement vers le terminal ni le rapport. Un run dont aucune détection n'est crue et qui en a vu de refusées est **`unknown`, jamais
 `missed`** : un `detection_missed` ferait proposer une règle pour une technique peut-être détectée.
 Une détection signée à côté d'une refusée compte, et le refus est dit.
 

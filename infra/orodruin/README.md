@@ -58,7 +58,8 @@ make orodruin-push                 # l'image d'Annatar publiée (CI3) : digest, 
                                    # REF=<tag|commit> (défaut : le dernier tag v* — tant qu'il est d'avant CI3, il n'a pas d'image
                                    # publiée et la cible échoue : donner REF=<un commit de main d'après CI3>)
                                    # make orodruin-push-dev : construite ici, non vérifiée (développement)
-make orodruin-check                # le contrat lu depuis la VM : armed ou passive
+make orodruin-check                # le contrat lu depuis la VM : armed ou passive ; avant lui, l'image en
+                                   # service et la dernière release (plus ancienne : un avertissement, OI3)
 ```
 
 **SSH : la clé d'hôte épinglée (V-32, SEC14).** Chaque commande du poste vers Orodruin
@@ -88,6 +89,28 @@ le moteur relit le contrat au démarrage, journalise chaque appel dans `~/runs/o
 avant de l'exécuter, et s'arrête au plafond déclaré.
 
 Entre les sessions : `make orodruin-stop` (désalloue), `make orodruin-start`.
+
+**À jour au démarrage (OI3, #522).** Après une publication, `make orodruin-start` suffit : une fois
+la VM démarrée et qu'elle répond en SSH, il lit l'image en service (le tag `eregion-annatar:orodruin`
+et `~/.eregion-image`, en lecture seule) et la compare, sur le poste, à la dernière release (le plus
+haut tag `v*` par ordre de version, puis par commit dans l'histoire de git).
+
+```bash
+make orodruin-start                # plus ancienne, absente ou illisible : il le dit, puis make orodruin-push
+                                   # REF=<la dernière release> (vérifiée, run de contrôle compris) ;
+                                   # égale : rien, en une ligne ; plus récente (un commit de main poussé à
+                                   # la main, orodruin-push-dev) : gardée, et la commande pour revenir est dite
+make orodruin-start NO_UPDATE=1    # démarrée sans rien lire ni changer
+make orodruin-start REF=v0.5.4     # une autre release visée que la dernière
+make orodruin-update [REF=…]       # la même mise à jour, la VM déjà démarrée
+```
+
+Une erreur (la VM qui ne répond pas en 2 min, la lecture, le push, sa vérification, son run de
+contrôle) : un code non nul, la cause dite, rien d'armé, et la VM reste démarrée (c'est dit :
+`make orodruin-stop` pour l'éteindre). `REF` et `NO_UPDATE` se donnent sur la ligne de commande
+(`NO_UPDATE=1`, ou rien), validés avant tout, jamais développés par make. Rien ne change au réseau
+d'Orodruin ni à son contrat : la mise à jour est le même `orodruin-push`, depuis le poste. Le détail :
+`docs/design/orodruin-contract.md`, « L'image des injecteurs », « À jour au démarrage ».
 
 **Urgence** : `make orodruin-kill` — depuis ton `az login`, quel que soit son abonnement
 courant. Le kill révoque toutes les attributions de rôle de l'identité **sur l'abonnement du

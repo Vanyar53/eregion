@@ -1864,6 +1864,25 @@ contrôle quand il réussit ; sur Orodruin, `docker ps -a --filter name=eregion-
 après), puis `make orodruin-check`. `make orodruin-push-dev` garde l'ancien chemin, l'image construite sur le poste,
 **non vérifiée**, pour essayer une branche : `~/.eregion-image` sur Orodruin le dit (`dev <commit>`).
 
+**Orodruin à jour au démarrage (OI3, #522).** H0 se met à jour seul ; Orodruin, éteint la plupart du
+temps, se met à jour à son démarrage : **après une publication, `make orodruin-start` suffit**. La VM
+démarrée et répondant en SSH, `orodruin-update` lit l'image en service (le tag
+`eregion-annatar:orodruin` et `~/.eregion-image`, en lecture seule) et `published_image.py age` la
+compare sur le poste à la dernière release : le plus haut tag `v*` par ordre de version, puis par
+commit dans l'histoire de git (`merge-base --is-ancestor`), jamais deux chaînes. Plus ancienne,
+absente ou illisible : il le dit, puis lance `make orodruin-push REF=<la release>`, tel qu'il est
+(vérification, archive, relecture, run de contrôle d'OI2, tag, migration). Égale : rien, en une ligne.
+Plus récente (un commit de `main` poussé à la main), `dev` ou hors de l'histoire de la release :
+gardée, jamais remplacée sans qu'on le demande, et la commande pour revenir à la release est dite. Sur
+la moindre erreur : un code non nul, la cause dite, rien d'armé, la VM démarrée (c'est dit).
+`NO_UPDATE=1` démarre sans rien lire ; `REF=<tag|commit>` vise une autre release ; tous deux sur la
+ligne de commande, validés avant `az vm start`, jamais développés par make (venus de l'environnement,
+refusés). `make orodruin-update [REF=…]` : la même mise à jour, la VM déjà démarrée. `make
+orodruin-check` dit, avant le verdict, « image vX (commit), dernière release vY (commit) », et, plus
+ancienne, « make orodruin-start ou make orodruin-push REF=vY » : un avertissement, son code reste celui
+du contrat. Tests : `tests/unit/test_published_image.py` (section OI3 : un vrai dépôt git jetable,
+v0.5.9 et v0.5.10, sur les faux d'OI1 et d'OI2) ; mutants M3630–M3639 (`scripts/mutants/OI3.py`).
+
 **Après le renommage du compte (REN1, 03/11).** Les images ont suivi le compte : le nouvel espace répond, l'ancien rend 403, sans redirection (mesuré). Celles d'avant (la v0.5.2 et avant) sont signées par l'ancien nom du dépôt, que `published_image.py` ne reconnaît plus : un retour arrière vers elles est refusé, sur H0 comme sur Orodruin. **H0** : l'ordre dans `infra/glorfindel-host/README.md`, « REN1 change l'agent » (`cd-install`, la 0.5.3 publiée, `cd-check`, `cd-enable`). **Orodruin** : `make orodruin-push REF=<sha de la fusion de REN1>`, puis `make orodruin-check` ; sans `REF` (le dernier tag), seulement à partir de la 0.5.3.
 
 **L'image publique** : le dépôt l'est, l'image n'a aucun secret (elle n'a que le code et ses
@@ -2034,6 +2053,8 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
   Avant de cliquer « Publish », les checks `publish (glorfindel)` et `publish (annatar)` de ce commit
   doivent être verts : sinon le CD de H0 attend une heure, puis refuse la release, sans jamais la
   construire.
+- **Après la publication** : H0 la déploie seul (son CD) ; pour Orodruin, `make orodruin-start` suffit
+  — son image plus ancienne que la release, il pousse celle-ci, vérifiée (OI3, « Les images publiées »).
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
   lit le code sur une liste blanche : quatre commandes `gh` seulement (`pr create`, `release list`,
   `release create` avec `--draft`, `release edit` des seules notes), jamais `gh api`. Une commande ne

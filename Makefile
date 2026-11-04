@@ -157,7 +157,7 @@ DOCKER_GLORFINDEL_WATCH = $(WATCH_KEY_DIR) && $(RUNS_DIRS) && $(GLORFINDEL_AZURE
 	glorfindel-host-cd-status glorfindel-host-cd-retry glorfindel-host-cd-rollback glorfindel-host-cd-uninstall \
 	glorfindel-host-env glorfindel-host-report glorfindel-host-url glorfindel-host-status glorfindel-host-pull \
 	glorfindel-host-model glorfindel-host-campaign-report glorfindel-host-containment glorfindel-host-fault-rate glorfindel-host-known celebrimbor-workload \
-	orodruin-init orodruin-watch-guard orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
+	orodruin-init orodruin-watch-guard orodruin-watch-principals orodruin-plan orodruin-up orodruin-lock orodruin-push orodruin-push-dev orodruin-check \
 	orodruin-stop orodruin-start orodruin-kill orodruin-down orodruin-ssh orodruin-exercise \
 	orodruin-known orodruin-fingerprint watch-key glorfindel-host-watch-key harness-key harness-sign harness-verify \
 	gothmog-preflight gothmog-run \
@@ -259,6 +259,8 @@ help:
 	@echo "  make orodruin-plan [OPERATOR_CIDR=]          Plan (lecture seule)"
 	@echo "  make orodruin-up   [YES=1]                   1er apply, sortie ouverte (installe Docker)"
 	@echo "  make orodruin-lock [YES=1]                   Referme la sortie (apply) ; YES=1 = sans confirmation"
+	@echo "    WATCH_PRINCIPALS=<id>[,<id>…] : les watches qui écrivent le canal retour (défaut : H0) ;"
+	@echo "    sans H0, avec NO_WATCH=1 — la watch d'un poste ou d'une équipe (WC1)"
 	@echo "  make orodruin-push [REF=<tag|commit>]        Image d'Annatar publiée (digest vérifié ici) + orodruin.env"
 	@echo "  make orodruin-push-dev                       Développement : l'image construite ici, non vérifiée"
 	@echo "  make orodruin-check                          Le contrat, lu depuis la VM : armed ou passive"
@@ -979,7 +981,17 @@ ORO_TF        := terraform -chdir=infra/orodruin
 ORO_USER      ?= orodruin
 # watch_principal_id : l'identité du Glorfindel hébergé, lectrice du canal des fenêtres (partie C).
 ORO_WATCH_ID   = $(shell $(HOST_TF) output -no-color -raw principal_id 2>/dev/null | grep -E '^[0-9a-f-]{36}$$')
-ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)" -var="watch_principal_id=$(ORO_WATCH_ID)"
+# WC1 (#523) : WATCH_PRINCIPALS=<id>[,<id>…] — les watches qui écrivent le canal retour et lisent
+# les fenêtres (watch_principal_ids) : l'object id du principal de service de la watch d'un poste ou
+# d'une équipe, celui de H0 s'il doit garder le canal. Vide : la watch de H0 seule, comme avant. Sur
+# la ligne de commande seulement, vérifiée (orodruin-watch-principals : des GUID, aucun deux fois),
+# jamais développée par make ($(value …), unexport — comme REF) ; passée à terraform par le shell.
+WATCH_PRINCIPALS ?=
+unexport WATCH_PRINCIPALS
+ORO_GUID       = [0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}
+ORO_WATCH_IDS  = $(if $(value WATCH_PRINCIPALS), -var="watch_principal_ids=$$(printf '%s' "$$EREGION_WATCH_PRINCIPALS" | tr A-F a-f | sed 's/[^,][^,]*/"&"/g; s/.*/[&]/')")
+ORO_VARS       = -var-file=../terraform/terraform.tfvars -var="operator_cidr=$(OPERATOR_CIDR)" -var="watch_principal_id=$(ORO_WATCH_ID)"$(ORO_WATCH_IDS)
+orodruin-plan orodruin-up orodruin-lock orodruin-down orodruin-watch-principals: export EREGION_WATCH_PRINCIPALS = $(value WATCH_PRINCIPALS)
 # SEC5 (V-31) : le sous-réseau et l'IP de H0, admis par le pare-feu du compte du canal — dans
 # l'environnement de terraform, jamais sur la ligne affichée (l'id du sous-réseau nomme
 # l'abonnement, M124).
@@ -1051,11 +1063,27 @@ orodruin-fingerprint:
 # sous-réseau de H0 seraient vides, et le plan retirerait la lecture du canal par la watch et
 # l'accès de son sous-réseau. NO_WATCH=1 : un Orodruin sans Glorfindel hébergé, voulu — 1 seulement
 # (NO_WATCH=0, ou toute autre valeur, ne contourne rien).
-orodruin-watch-guard:
+# WC1 : WATCH_PRINCIPALS ne retire pas non plus le canal à H0 sans le dire — H0 lisible ici et absent
+# de la liste : refusé, sauf NO_WATCH=1 (sans H0 : WATCH_PRINCIPALS=<id> NO_WATCH=1).
+orodruin-watch-guard: orodruin-watch-principals
 	@if [ "$(NO_WATCH)" != 1 ] && { [ -z "$(ORO_WATCH_ID)" ] || [ -z "$(ORO_WATCH_SUBNET)" ]; }; then \
 	  echo "✗ L'état de infra/glorfindel-host ne se lit pas ici (principal_id, subnet_id) : le plan retirerait" >&2; \
 	  echo "  à la watch hébergée la lecture du canal et l'accès de son sous-réseau. make glorfindel-host-init" >&2; \
 	  echo "  sur ce poste, ou NO_WATCH=1 pour un Orodruin sans Glorfindel hébergé." >&2; exit 1; fi
+	@if [ -n "$$EREGION_WATCH_PRINCIPALS" ] && [ "$(NO_WATCH)" != 1 ] \
+	   && ! printf ',%s,' "$$EREGION_WATCH_PRINCIPALS" | tr A-F a-f | grep -qF ",$(ORO_WATCH_ID),"; then \
+	  echo "✗ WATCH_PRINCIPALS ne nomme pas la watch hébergée (H0) : le plan lui retirerait le canal retour et" >&2; \
+	  echo "  la lecture des fenêtres. Ajoute son identité (terraform -chdir=infra/glorfindel-host output principal_id)," >&2; \
+	  echo "  ou NO_WATCH=1 pour un Orodruin sans Glorfindel hébergé." >&2; exit 1; fi
+
+# WC1 : WATCH_PRINCIPALS vérifiée avant tout plan — donnée sur la ligne de commande, des object ids
+# (GUID) séparés par des virgules, aucun deux fois ; sinon rien ne part.
+orodruin-watch-principals:
+	@case "$(origin WATCH_PRINCIPALS)" in environment*) [ -z "$$EREGION_WATCH_PRINCIPALS" ] || { echo "WATCH_PRINCIPALS vient de l'environnement : rien n'est fait. La donner sur la ligne de commande : make orodruin-plan WATCH_PRINCIPALS=<id>[,<id>…]." >&2; exit 1; };; esac
+	@[ -z "$$EREGION_WATCH_PRINCIPALS" ] || printf '%s' "$$EREGION_WATCH_PRINCIPALS" | tr '\n' ' ' | grep -Eqx '$(ORO_GUID)(,$(ORO_GUID))*' \
+	  || { echo "✗ WATCH_PRINCIPALS invalide : des object ids d'Entra ID (GUID) séparés par des virgules, sans espace — rien n'est fait." >&2; exit 1; }
+	@[ -z "$$EREGION_WATCH_PRINCIPALS" ] || [ -z "$$(printf '%s\n' "$$EREGION_WATCH_PRINCIPALS" | tr A-F a-f | tr , '\n' | sort | uniq -d)" ] \
+	  || { echo "✗ WATCH_PRINCIPALS nomme une identité deux fois : rien n'est fait." >&2; exit 1; }
 
 orodruin-plan: orodruin-init orodruin-watch-guard
 	$(ORO_TF) plan $(ORO_VARS)
@@ -1228,7 +1256,7 @@ orodruin-exercise: $(if $(filter local,$(REQUEST_FROM)),,glorfindel-host-known) 
 	 scp -q $(SSH_OPTS) "$$d/$$id.json" "$$d/$$id.typed.json" $(ORO_USER)@$(ORO_IP):requests/ && \
 	 ssh $(SSH_OPTS) -o ServerAliveInterval=60 $(ORO_USER)@$(ORO_IP) "trap 'rm -f requests/$$id.typed.json' EXIT HUP INT TERM; "'$(ORO_RUN_REQUEST) python -m eregion_core.exercise_runner /app/requests/'"$$id"'.json'
 
-orodruin-down:
+orodruin-down: orodruin-watch-principals
 	$(ORO_TF) destroy $(ORO_VARS)$(if $(YES), -auto-approve)
 
 orodruin-ssh: orodruin-known

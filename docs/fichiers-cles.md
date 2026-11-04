@@ -590,8 +590,14 @@ Il refuse :
   ne se verrait pas. Il refuse aussi un mot qui n'est pas du texte simple, une option qu'il ne
   connaît pas (il ne saurait pas quel mot est l'image), `--volumes-from` (les montages d'un autre
   conteneur), un `--mount` dont il ne lit pas une clé, et un lancement derrière les options propres
-  de docker ;
-- **dans le Makefile**, `include`, `-include`, `sinclude`, `define`, `undefine` et `$(eval …)`. Ils
+  de docker. Une continuation de recette se lit comme le shell la lit, sans rien entre les deux
+  lignes ; un commentaire continué sur la ligne suivante est refusé (le shell exécute ce qui suit) ;
+- **ce qu'un lancement rouge ne reçoit jamais**, refusé par son nom et non plus comme une option
+  inconnue : `--privileged`, `--device`, `--cap-add`, `--pid`, `--userns`, `--ipc` ou `--network`
+  sur l'hôte (ou un autre conteneur), `--uts host`, une `--security-opt` autre que
+  `no-new-privileges:true`. Aucune n'est dans la table des options lues ;
+- **dans le Makefile**, `include`, `-include`, `sinclude`, `define`, `undefine` et `$(eval …)` ;
+  `SHELL`, `.SHELLFLAGS`, `.ONESHELL` et `load`, qui changent la manière dont make lance une recette. Ils
   sont refusés plutôt que lus : les lire ferait de ce test un second make (son chemin de recherche,
   un fichier manquant qu'une règle reconstruit, l'ordre d'une évaluation), et le Makefile n'en a
   besoin d'aucun. De même, un `$(MAKE)` de recette à qui l'on nomme un autre makefile ou un autre
@@ -604,14 +610,16 @@ Il refuse :
   prend les montages d'un autre (`volumes_from`), et chaque image s'écrit en clair.
 
 Le Makefile actuel ne donne aucun refus. Chaque forme a sa sonde dans le test, et chaque cas son
-mutant (M3490–M3497) ; aucun n'était vu par le lecteur de SEC20.
+mutant (M3490–M3497, M3525–M3529) ; aucun n'était vu par le lecteur de SEC20, hors de
+`--volumes-from` (M3528), déjà refusé.
 
 **L'historique avec l'image root de repli** (`UID=0`, une image construite sans les build-args de
 `make build`). Bash ajoute à l'historique de même et ne le tronque pas, mais pas pour la même raison.
 Sa troncature écrit un fichier voisin, puis le renomme sur l'historique. Avec l'image de
 l'opérateur, le conteneur ne peut créer ce voisin : `/root/.annatar` est le point de montage que
 docker crée, à root. Avec l'image root, il le crée, dans la couche du conteneur, jamais sur l'hôte ;
-le renommage sur un fichier monté échoue (`EBUSY`, un point de montage), et bash efface le voisin.
+le renommage sur un fichier monté échoue (`EBUSY`, un point de montage), et bash efface alors le
+voisin — lu dans son code, non mesuré.
 Dans les deux cas, une session de plus de `HISTSIZE` commandes réécrit l'historique entier par ce
 même voisin : elle n'est pas gardée. Le fichier reste à l'opérateur, qui l'a créé
 (`ANNATAR_SHELL_FILES`). Mesuré sans conteneur, bash 5.2 : un répertoire qui refuse le voisin donne

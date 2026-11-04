@@ -228,7 +228,9 @@ def test_a_push_replays_the_failures_the_night_kept_on_both_machines():
     assert runs and all((ROOT / m).is_file() for m in _MACHINES), runs     # under tests/, run by it
     env = runs[0].get("env") or {}
     assert env.get("GLORFINDEL_INVARIANT_DB") == ".hypothesis-invariants", env
-    assert env.get("GLORFINDEL_INVARIANT_EXAMPLES") == "500", env
+    # CI5 (#512): 500 on a push to main, 200 on a pull request.
+    assert _expr(env.get("GLORFINDEL_INVARIANT_EXAMPLES"), "push") == "500", env
+    assert _expr(env.get("GLORFINDEL_INVARIANT_EXAMPLES"), "pull_request") == "200", env
 
 
 @pytest.mark.parametrize("job", ["test", "test-macos"])
@@ -276,10 +278,23 @@ def _writes_issues(perms) -> bool:
 
 
 def test_only_the_dependency_audit_may_write_issues():
+    """And, beside it, ci.yml's `macos-red` job alone (CI5): never on a pull request, nothing of the
+    repository run (no checkout, no action), its text fixed — it cannot write the audit's key."""
     docs = {p.name: _load(p) for p in WORKFLOWS}
     assert all("permissions" in doc for doc in docs.values()), "a workflow without its permissions"
     writers = {name for name, doc in docs.items() if any(_writes_issues(p) for p in _permission_sets(doc))}
-    assert writers == {"pip-audit.yml"}
+    assert writers == {"pip-audit.yml", "ci.yml"}
+    ci = docs["ci.yml"]
+    assert not _writes_issues(ci["permissions"])
+    jobs = {name for name, job in ci["jobs"].items() if _writes_issues(job.get("permissions"))}
+    assert jobs == {"macos-red"}
+    job = ci["jobs"]["macos-red"]
+    assert job["permissions"] == {"issues": "write"}
+    assert [s for s in job["steps"] if s.get("uses")] == []
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "eregion-pip-audit" not in text and "--label" not in "".join(s.get("run", "") for s in job["steps"])
+    for event in ("pull_request", "pull_request_target", "workflow_run", "workflow_dispatch"):
+        assert _expr(job["if"], event, needs={"test-macos": "failure"}) is False, event
 
 
 @pytest.mark.parametrize("perms, writes", [
@@ -819,8 +834,11 @@ def test_the_terraform_tests_run_on_each_push_and_pull_request():
     assert isinstance(job.get("timeout-minutes"), int) and job["timeout-minutes"] <= 30
     steps = job["steps"]
     assert {s.get("name"): s.get("run") for s in steps if s.get("name") in TF_RUNS} == TF_RUNS
-    # Nothing that would keep it green on a failure, nor skip a step.
-    assert "continue-on-error" not in job and "if" not in job
+    # Nothing that would keep it green on a failure, nor skip a step; skipped at night only (CI5:
+    # the night of ci.yml is macOS's), never on a push or a pull request.
+    assert "continue-on-error" not in job
+    assert {e: _runs(job, e) for e in ("push", "pull_request", "schedule")} == {
+        "push": True, "pull_request": True, "schedule": False}
     for step in steps:
         assert "continue-on-error" not in step and "if" not in step, step.get("name") or step.get("uses")
         assert "||" not in str(step.get("run") or ""), step.get("name")
@@ -991,3 +1009,218 @@ def test_the_advisories_are_read_on_each_push_and_pull_request_read_only():
     assert "secrets." not in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     checkout = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
     assert checkout and checkout[0]["with"]["persist-credentials"] is False
+
+
+# ── CI5 (#512): a faster CI — macOS off the pull requests, 200 invariants there, cancelled when
+# replaced, Components not run for prose ───────────────────────────────────────────────────────
+# An expression of GitHub's (`${{ … }}`) evaluated here for one event: the subset the workflows use
+# (==, !=, &&, ||, !, parentheses, strings, format(), cancelled()), each name looked up in what
+# GitHub would give. && and || return an operand, as Python's `and` / `or` do.
+
+_TOKEN = re.compile(r"'[^']*'|&&|\|\||!=|==|!|\(|\)|,|\d+|[A-Za-z_][\w.\-]*|\s+")
+
+
+def _expr(text, event: str, *, needs: dict | None = None, number: int = 7, run_id: int = 4242,
+          workflow: str = "CI", cancelled: bool = False):
+    if not isinstance(text, str):
+        return text
+    kw = {"needs": needs, "number": number, "run_id": run_id, "workflow": workflow, "cancelled": cancelled}
+    whole = re.fullmatch(r"\s*\$\{\{((?:(?!\}\}).)*)\}\}\s*", text, re.S)
+    if not whole:   # a plain value, or a template: each ${{ … }} replaced by its value
+        return re.sub(r"\$\{\{((?:(?!\}\}).)*)\}\}", lambda x: str(_expr("${{" + x.group(1) + "}}", event, **kw)),
+                      text)
+    m = whole
+    names = {"github.event_name": event, "github.run_id": str(run_id), "github.workflow": workflow,
+             "github.event.pull_request.number": number if event in ("pull_request", "pull_request_target") else None,
+             "github.ref": "refs/heads/main"}
+    names |= {f"needs.{job}.result": result for job, result in (needs or {}).items()}
+    out, at, src = [], 0, m.group(1)
+    while at < len(src):
+        tok = _TOKEN.match(src, at)
+        assert tok, f"cannot read {src[at:]!r}"
+        t, at = tok.group(0), tok.end()
+        if t.isspace():
+            continue
+        if t in ("&&", "||", "!"):
+            out.append({"&&": " and ", "||": " or ", "!": " not "}[t])
+        elif t in ("==", "!=", "(", ")", ",") or t.startswith("'") or t.isdigit():
+            out.append(t)
+        elif t == "cancelled":
+            out.append("_cancelled")
+        elif t == "format":
+            out.append("_format")
+        else:
+            assert t in names, f"a name this evaluator does not know: {t}"
+            out.append(repr(names[t]))
+    def _format(fmt, *args):
+        return fmt.format(*args)
+    return eval("".join(out), {"__builtins__": {}}, {"_cancelled": lambda: cancelled, "_format": _format})
+
+
+def test_the_expression_reader_reads_as_github_does():
+    assert _expr("${{ github.event_name == 'pull_request' && '200' || '500' }}", "pull_request") == "200"
+    assert _expr("${{ github.event_name == 'pull_request' && '200' || '500' }}", "push") == "500"
+    assert _expr("${{ !cancelled() && needs.a.result == 'failure' }}", "push", needs={"a": "failure"}) is True
+    assert _expr("${{ !cancelled() && needs.a.result == 'failure' }}", "push", needs={"a": "failure"},
+                 cancelled=True) is False
+    assert _expr("${{ format('pr-{0}', github.event.pull_request.number) }}", "pull_request", number=12) == "pr-12"
+    assert _expr("plain", "push") == "plain"
+
+
+CI = ROOT / ".github" / "workflows" / "ci.yml"
+MACOS = "tests (macOS, case-insensitive file system)"
+EVENTS = ("push", "pull_request", "schedule")
+
+
+def _runs(job: dict, event: str) -> bool:
+    """Whether a job runs on this event, by its `if` (one without runs)."""
+    needs = job.get("needs") or []
+    needs = [needs] if isinstance(needs, str) else needs
+    return "if" not in job or bool(_expr(job["if"], event, needs={n: "success" for n in needs}))
+
+
+def test_macos_runs_on_a_push_to_main_and_at_night_never_on_a_pull_request():
+    doc = _load(CI)
+    assert {"push", "pull_request", "schedule"} <= _events(doc)
+    assert doc["on"]["push"] == {"branches": ["main"]} and doc["on"]["schedule"]
+    macos = doc["jobs"]["test-macos"]
+    assert macos["name"] == MACOS
+    assert {e: _runs(macos, e) for e in EVENTS} == {"push": True, "pull_request": False, "schedule": True}
+    # Its budget stays 500: it never runs on a pull request.
+    (step,) = [s for s in macos["steps"] if "test_invariants.py" in (s.get("run") or "")]
+    assert step["env"]["GLORFINDEL_INVARIANT_EXAMPLES"] == "500"
+
+
+def test_the_night_of_ci_yml_is_macos_s_alone():
+    """On the schedule the other jobs do not run: the audit would turn red on main's commit for an
+    advisory, and H0's CD refuses a release whose commit has a red check-run."""
+    doc = _load(CI)
+    for name, job in doc["jobs"].items():
+        if name in ("test-macos", "macos-red"):
+            continue
+        assert {e: _runs(job, e) for e in EVENTS} == {"push": True, "pull_request": True, "schedule": False}, name
+
+
+def test_a_red_macos_on_main_opens_an_issue_or_comments_the_open_one():
+    job = _load(CI)["jobs"]["macos-red"]
+    assert job["needs"] == "test-macos" and isinstance(job.get("timeout-minutes"), int)
+    when = {(e, r): bool(_expr(job["if"], e, needs={"test-macos": r}))
+            for e in EVENTS for r in ("failure", "success", "skipped", "cancelled")}
+    assert {k for k, v in when.items() if v} == {("push", "failure"), ("schedule", "failure")}
+    assert _expr(job["if"], "push", needs={"test-macos": "failure"}, cancelled=True) is False
+
+
+def _fake_gh(bin_: Path, log: Path, issues: list) -> None:
+    import json
+    _fake(bin_ / "gh", f'printf "gh %s\\n" "$(printf "%s" "$*" | tr "\\n" " ")" >> {log}\n'
+                       f'if [ "$1 $2" = "issue list" ]; then echo \'{json.dumps(issues)}\'; fi\n')
+
+
+@pytest.mark.parametrize("issues, expected", [
+    ([], "create"),
+    ([{"number": 3, "title": "CI : les tests macOS sont rouges sur main (autre)"}], "create"),
+    ([{"number": 9, "title": "CI : les tests macOS sont rouges sur main"}], "comment"),
+])
+def test_the_issue_script_creates_one_or_comments_the_open_one(tmp_path, issues, expected):
+    job = _load(CI)["jobs"]["macos-red"]
+    (step,) = job["steps"]
+    bin_, log = tmp_path / "bin", tmp_path / "gh.log"
+    bin_.mkdir()
+    _fake_gh(bin_, log, issues)
+    env = {k: str(v) for k, v in step["env"].items() if "${{" not in str(v)}
+    env |= {"RUN_URL": "https://example.org/run/1", "SHA": "abc123", "EVENT": "push", "GH_TOKEN": "t", "GH_REPO": "o/r"}
+    res = _sh(step["run"], env, tmp_path, bin_)
+    assert res.returncode == 0, res
+    calls = log.read_text().splitlines()
+    assert calls[0].startswith("gh issue list --state open")
+    assert len(calls) == 2, calls
+    if expected == "create":
+        assert calls[1].startswith("gh issue create --title CI : les tests macOS sont rouges sur main --body ")
+    else:
+        assert calls[1].startswith("gh issue comment 9 --body ")
+    assert "abc123" in calls[1] and "https://example.org/run/1" in calls[1] and "(push)" in calls[1]
+
+
+PR_WORKFLOWS = ("ci.yml", "images.yml", "components.yml")
+
+
+@pytest.mark.parametrize("workflow", PR_WORKFLOWS)
+def test_a_new_push_on_a_pull_request_cancels_the_run_it_replaces_never_on_main(workflow):
+    doc = _load(ROOT / ".github" / "workflows" / workflow)
+    c = doc["concurrency"]
+    pr = [_expr(c["group"], "pull_request", number=12, run_id=n, workflow=doc["name"]) for n in (1, 2)]
+    assert pr[0] == pr[1] == f"{doc['name']}-pr-12"                       # one group per pull request
+    assert _expr(c["group"], "pull_request", number=13, workflow=doc["name"]) != pr[0]
+    assert _expr(c["cancel-in-progress"], "pull_request") is True
+    for event in ("push", "schedule", "merge_group"):
+        runs = {_expr(c["group"], event, run_id=n, workflow=doc["name"]) for n in (1, 2)}
+        assert len(runs) == 2, (event, runs)                             # its own group: never held pending
+        assert _expr(c["cancel-in-progress"], event) is False
+
+
+def test_no_other_workflow_cancels_a_run_in_progress():
+    """Publish, Notify, the canary, the night: never cancelled by a newer run."""
+    for path in WORKFLOWS:
+        doc = _load(path)
+        c = doc.get("concurrency") or {}
+        if path.name in PR_WORKFLOWS:
+            continue
+        assert str(c.get("cancel-in-progress", False)).lower() in ("false", "none"), path.name
+
+
+# The checks the rule of main requires, as docs/sessions.md lists them (Jonathan sets the rule:
+# docs/operations.md, « La CI, plus rapide »).
+def _required() -> list[str]:
+    text = (ROOT / "docs" / "sessions.md").read_text(encoding="utf-8")
+    block = text.split("**Require status checks to pass**", 1)[1].split("**Vérifier :**", 1)[0]
+    return re.findall(r"^\s+- `([^`]+)`", block, re.M)
+
+
+def _check_names(doc: dict) -> set[str]:
+    """The check-run names of a workflow's jobs, a one-axis matrix expanded."""
+    out = set()
+    for key, job in doc["jobs"].items():
+        name = job.get("name", key)
+        axes = ((job.get("strategy") or {}).get("matrix") or {})
+        for axis, values in axes.items():
+            if f"${{{{ matrix.{axis} }}}}" in name:
+                out |= {name.replace(f"${{{{ matrix.{axis} }}}}", str(v)) for v in values}
+                break
+        else:
+            out.add(name)
+    return out
+
+
+def test_the_required_checks_run_on_every_pull_request_and_macos_is_not_one():
+    required = _required()
+    assert len(required) == 5 and MACOS not in required, required
+    on_prs = set()
+    for path in WORKFLOWS:
+        doc = _load(path)
+        if "pull_request" not in _events(doc):
+            continue
+        pr = doc["on"]["pull_request"] or {}
+        names = _check_names(doc)
+        # A workflow a path filter skips leaves a required check « expected » for ever.
+        if "paths" in pr or "paths-ignore" in pr:
+            assert not names & set(required), (path.name, names & set(required))
+        for key, job in doc["jobs"].items():
+            if _runs(job, "pull_request"):
+                on_prs |= _check_names({"jobs": {key: job}})
+    assert set(required) <= on_prs, set(required) - on_prs
+
+
+def test_components_skips_prose_alone_on_a_pull_request_and_always_runs_on_main():
+    doc = _load(ROOT / ".github" / "workflows" / "components.yml")
+    assert doc["on"]["push"] == {"branches": ["main"]}                     # no filter on main
+    ignored = doc["on"]["pull_request"]["paths-ignore"]
+    assert set(ignored) == {"**/*.md", "docs/**", "changes/**", "LICENSE"}
+    assert "paths" not in doc["on"]["pull_request"]
+    # Images keeps no filter: its first step decides, its required checks green (CI1).
+    assert "paths" not in (_load(ROOT / ".github" / "workflows" / "images.yml")["on"]["pull_request"] or {})
+
+
+def test_the_gesture_on_the_rule_of_main_is_written():
+    ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    section = ops.split("## La CI, plus rapide (CI5", 1)[1].split("\n## ", 1)[0]
+    assert f"« {MACOS} »" in section and "Require status checks to pass" in section

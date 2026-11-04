@@ -1619,6 +1619,42 @@ Décidé par Jonathan le 31/10, sur le modèle du verrou Python. Chaque module (
 
 ---
 
+## La CI, plus rapide (CI5, #512, 04/11)
+
+Décision de Jonathan du 04/11 : la CI était trop lente les jours où plusieurs lots fusionnent.
+Trois leviers, plus deux le jour même (la file d'attente des runners : avec trois PR qui poussent
+en même temps, une vingtaine de jobs, les runs attendaient jusqu'à 15 minutes).
+
+- **Plus de conflits entre PR** : l'entrée de CHANGELOG d'un lot dans `changes/<lot>.md`, ses
+  mutants dans `scripts/mutants/<lot>.py` ([sessions.md](sessions.md), « Le travail »).
+- **macOS hors des PR** (`ci.yml`, `tests (macOS, case-insensitive file system)`). GitHub l'annulait
+  souvent faute de machine (« The job was not acquired by Runner »), et l'App des sessions ne peut
+  pas le relancer. Il tourne sur un push sur `main` et chaque nuit (`schedule`, 02:41 UTC ; la nuit
+  de `ci.yml` est la sienne seule : l'audit des dépendances, rouge un soir d'avis, rendrait rouge le
+  commit de `main`, et le CD de H0 refuse une release dont un check est rouge). Un rouge sur `main`
+  ouvre l'issue « CI : les tests macOS sont rouges sur main », ou commente celle qui est ouverte
+  (job `macos-red`, `issues: write` à lui seul, jamais sur une PR, sans checkout ni action).
+- **200 séquences d'invariants sur une PR**, 500 sur un push sur `main`, 10 000 la nuit
+  (`invariants.yml`, inchangé).
+- **Un push sur une PR annule le run qu'il remplace** (`concurrency`, `cancel-in-progress`) : CI,
+  Images, Components. Jamais sur `main` ni la nuit : le groupe y est le run lui-même (son id), qui
+  n'est ni annulé ni mis en attente par un autre. Publish, Notify, le canari, la nuit : inchangés.
+- **Components ne tourne pas pour de la prose seule** sur une PR (`paths-ignore` : `**/*.md`,
+  `docs/**`, `changes/**`, `LICENSE`) ; toujours sur `main`. Ses checks ne sont pas requis : un
+  workflow sauté par un filtre de chemins laisserait un check requis « en attente » pour toujours.
+  Images ne prend pas de filtre : son premier pas saute déjà la construction d'une PR qui ne touche
+  aucune image, ses checks requis verts (CI1).
+
+**Le geste de Jonathan, à la fusion de CI5b** : dans **Settings → Rules → Rulesets → « main » →
+Require status checks to pass**, retirer « tests (macOS, case-insensitive file system) » des checks
+requis (et de la protection classique de `main`, si elle le liste encore). Restent les cinq de
+[sessions.md](sessions.md), « Les règles du dépôt ». Un job sauté par son `if` se rapporte « Skipped »,
+que GitHub compte comme réussi : le laisser requis ne bloquerait pas une PR, mais le check ne dirait
+plus rien. Aucun autre check requis ne change : ceux de Components ne l'étaient pas, et Images garde
+les siens. Vérifier : `gh api repos/grootcyber/eregion/rules/branches/main` ne liste plus macOS.
+
+---
+
 ## La CI des images (CI1, #267, 29/10)
 
 Avant CI1, la CI ne construisait aucune image : compose était seulement rendu (`make

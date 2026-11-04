@@ -161,7 +161,11 @@ PUBLISH_CHECK = "publish (glorfindel)"
 BLOCKING = REQUIRED_CHECKS + (PUBLISH_CHECK,)
 MAIN_CHECK_PASSES = 12        # an hour of passes before a missing check is a refusal
 CHECKS_SAID = 8               # checks named in #deploy; the others counted
+# A check that holds passes only with one of these conclusions: none, or one unknown, is no green.
 GREEN = {"success", "neutral", "skipped"}
+# The app whose runs a check that holds counts (`app.slug` of a check run; github-actions on every
+# run of main's commits, read on 04/11): another app's green never stands for a required job.
+ACTIONS_APP = "github-actions"
 CHECK_WORDS = {"success": "vert", "neutral": "neutre", "skipped": "sauté", "failure": "rouge",
                "cancelled": "annulé", "timed_out": "hors délai", "action_required": "action requise",
                "startup_failure": "pas démarré", "stale": "périmé", "queued": "en file", "in_progress": "en cours",
@@ -377,6 +381,12 @@ def verify(tag: str, commit: str, dep_commit: str, state: dict, dep_ref: str = "
     red = [n for n, s in held.items() if s and s[0] in RED]
     if red:
         raise Refused(f"CI rouge sur {commit[:12]}, un check requis : {_names(red)}")
+    # Completed, and not green: no conclusion, or one this agent does not know — never taken for
+    # green (a CD that fails open is no gate).
+    odd = [n for n, s in held.items() if s and s[1] and s[0] not in GREEN]
+    if odd:
+        raise Refused(f"un check requis terminé sans conclusion verte sur {commit[:12]} : "
+                      + ", ".join(f"« {_check_name(n)} » ({_word(held[n])})" for n in odd[:CHECKS_SAID]))
     if not check:
         say_told(state, tag, commit, told)
     running = [n for n, s in held.items() if s and not s[1]]
@@ -408,15 +418,33 @@ def verify(tag: str, commit: str, dep_commit: str, state: dict, dep_ref: str = "
 
 
 def _ci_state(runs: list[dict]) -> tuple[str, bool]:
-    """One check's runs as one state (its word, done): red when any of them is, still running
-    when any of them is not completed, else its conclusion."""
+    """One check's runs (one or several of the same name) as one state (its word, done): red when
+    any of them is; still running when any of them is not completed; green only when every one is
+    (GREEN); else the first word that is not ('?' for no conclusion)."""
     for r in runs:
         if r.get("conclusion") in RED:
             return str(r["conclusion"]), True
     for r in runs:
         if r.get("status") != "completed":
             return _code(r.get("status")) or "pending", False
-    return _code(runs[0].get("conclusion")) or "?", True
+    for r in runs:
+        if r.get("conclusion") not in GREEN:
+            return _code(r.get("conclusion")) or "?", True
+    return str(runs[0]["conclusion"]), True
+
+
+def _by_actions(run: dict) -> bool:
+    """A check run GitHub Actions made (`app.slug`, read on main's commits): the workflows of the
+    repository. Another app with checks:write could name a run as a required job."""
+    app = run.get("app")
+    return isinstance(app, dict) and app.get("slug") == ACTIONS_APP
+
+
+def _holding(runs: list[dict]) -> list[dict]:
+    """What counts for a check that holds: GitHub Actions' runs; another app's only when red or
+    not done — it may hold the release, its green never counts (it never fills an absent job)."""
+    return [r for r in runs if _by_actions(r) or not (r.get("status") == "completed"
+                                                      and r.get("conclusion") in GREEN)]
 
 
 def ci_groups(runs: list[dict]) -> tuple[dict, dict]:
@@ -425,7 +453,8 @@ def ci_groups(runs: list[dict]) -> tuple[dict, dict]:
     by: dict[str, list[dict]] = {}
     for r in runs:
         by.setdefault(str(r.get("name") or "?"), []).append(r)
-    held = {n: _ci_state(by[n]) if n in by else None for n in BLOCKING}
+    counted = {n: _holding(by.get(n, [])) for n in BLOCKING}
+    held = {n: _ci_state(counted[n]) if counted[n] else None for n in BLOCKING}
     told = {n: _ci_state(rs) for n, rs in sorted(by.items()) if n not in BLOCKING}
     return held, told
 
@@ -437,9 +466,14 @@ def _word(state: tuple[str, bool] | None) -> str:
 
 
 def _check_name(name: str) -> str:
-    """A check's name as GitHub gives it, toward #deploy (SEC6): letters, digits and what a job's
-    name holds here (spaces, + , . : ( ) / -); anything else, a mention, a link, Markdown, made ·."""
-    return re.sub(r"[^0-9A-Za-zÀ-ÿ .,:()+/-]", "·", " ".join(str(name).split()))[:100]
+    """A check's name as GitHub gives it, toward #deploy (SEC6): a URL, an address, a host name
+    made ‹url›, ‹hôte› (_SCRUB); then letters, digits and what a job's name holds here (spaces,
+    + , . ( ) -) only — no « : » nor « / », so no link Discord would make; anything else, a
+    mention, Markdown, made ·."""
+    s = " ".join(str(name).split())
+    for pattern, mark in _SCRUB:
+        s = pattern.sub(f"‹{mark.strip('<>')}›", s)
+    return re.sub(r"[^0-9A-Za-zÀ-ÿ .,()+‹›-]", "·", s)[:100]
 
 
 def _names(names: list[str]) -> str:

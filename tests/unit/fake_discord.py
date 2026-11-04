@@ -44,6 +44,8 @@ class FakeDiscord:
     def __init__(self):
         self.requests, self.messages, self.threads, self.runs = [], {}, [], []
         self.roadmap: list[dict] = []        # #roadmap's messages, newest first
+        # H1c: the check runs' page size, as GitHub pages them (None: the asked per_page, 100 at most).
+        self.check_runs_per_page: int | None = None
         self.gh = {"milestones": [], "issues": [], "pulls": [], "release": None, "checks": {},
                    "releases": {},   # by tag: published ones only, as GitHub answers (a draft: 404)
                    # SEC12: the repository's rulesets, as read without a token (None: a 404) — by
@@ -229,12 +231,16 @@ class FakeDiscord:
             return (200, self.gh["release"], {}) if self.gh["release"] else (404, {"message": "Not Found"}, {})
         if p.startswith("/gh/repos/o/r/commits/") and p.endswith("/check-runs"):
             sha = p.split("/")[-2]
-            # The checks that hold a release (H1c: the five main requires, the image's), green.
-            runs = self.gh["checks"].get(sha, [{"name": n, "status": "completed", "conclusion": "success"}
+            # The checks that hold a release (H1c: the five main requires, the image's), green, run by
+            # GitHub Actions; paged as GitHub pages them.
+            runs = self.gh["checks"].get(sha, [{"name": n, "status": "completed", "conclusion": "success",
+                                                "app": {"slug": "github-actions"}}
                                                for n in ("lint + tests (py3.11)", "lint + tests (py3.12)",
                                                          "terraform test (mock providers)", "image (annatar)",
                                                          "image (glorfindel)", "publish (glorfindel)")])
-            return 200, {"total_count": len(runs), "check_runs": runs}, {}
+            page = int((query.get("page") or ["1"])[0])
+            per = self.check_runs_per_page or min(100, int((query.get("per_page") or ["30"])[0]))
+            return 200, {"total_count": len(runs), "check_runs": runs[(page - 1) * per: page * per]}, {}
         return 404, {}, {}
 
     def image(self, repo, tag, manifest):

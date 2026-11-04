@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-11-04 — "signed and sealed"
+
 ### Security
 - **The watch's heartbeat signed, the harness's attestation signed by its author** (SEC19, #456; N-03 and R-13 of the second counter-audit, now held; `docs/design/watch-key.md`; `docs/design/modele-de-menace.md`; `docs/operations.md`, « Le battement signé, l'attestation signée — les gestes »; `infra/glorfindel-host/README.md`, « SEC19 change l'agent » and « La signature de l'attestation »).
   - **The watch's key** (`eregion_core/watch_key.py`): an Ed25519 pair drawn at the watch's first start in `~/.eregion/watch-key/` (0600 in 0700), a directory only the watch's service mounts — never `~/.glorfindel` (the console, the bot, the injectors mount it), never `runs/`. A key readable by others, a link, another owner, another size, a misplaced directory: never used, said; the heartbeats then go unsigned, and the injectors refuse them. The directory is made as the operator before the services start (`make glorfindel-start`/`-restart`/`-dev`, `team-start`, H0's `deploy.sh`). `glorfindel watch-key`, `make watch-key`, `make glorfindel-host-watch-key` give its public half (`EREGION_WATCH_KEY=ed25519:…`) and its fingerprint, never the private one.

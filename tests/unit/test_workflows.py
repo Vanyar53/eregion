@@ -228,7 +228,9 @@ def test_a_push_replays_the_failures_the_night_kept_on_both_machines():
     assert runs and all((ROOT / m).is_file() for m in _MACHINES), runs     # under tests/, run by it
     env = runs[0].get("env") or {}
     assert env.get("GLORFINDEL_INVARIANT_DB") == ".hypothesis-invariants", env
-    assert env.get("GLORFINDEL_INVARIANT_EXAMPLES") == "500", env
+    # CI5 (#512): 500 on a push to main, 200 on a pull request.
+    assert _expr(env.get("GLORFINDEL_INVARIANT_EXAMPLES"), "push") == "500", env
+    assert _expr(env.get("GLORFINDEL_INVARIANT_EXAMPLES"), "pull_request") == "200", env
 
 
 @pytest.mark.parametrize("job", ["test", "test-macos"])
@@ -276,10 +278,23 @@ def _writes_issues(perms) -> bool:
 
 
 def test_only_the_dependency_audit_may_write_issues():
+    """And, beside it, ci.yml's `macos-red` job alone (CI5): never on a pull request, nothing of the
+    repository run (no checkout, no action), its text fixed — it cannot write the audit's key."""
     docs = {p.name: _load(p) for p in WORKFLOWS}
     assert all("permissions" in doc for doc in docs.values()), "a workflow without its permissions"
     writers = {name for name, doc in docs.items() if any(_writes_issues(p) for p in _permission_sets(doc))}
-    assert writers == {"pip-audit.yml"}
+    assert writers == {"pip-audit.yml", "ci.yml"}
+    ci = docs["ci.yml"]
+    assert not _writes_issues(ci["permissions"])
+    jobs = {name for name, job in ci["jobs"].items() if _writes_issues(job.get("permissions"))}
+    assert jobs == {"macos-red"}
+    job = ci["jobs"]["macos-red"]
+    assert job["permissions"] == {"issues": "write"}
+    assert [s for s in job["steps"] if s.get("uses")] == []
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "eregion-pip-audit" not in text and "--label" not in "".join(s.get("run", "") for s in job["steps"])
+    for event in ("pull_request", "pull_request_target", "workflow_run", "workflow_dispatch"):
+        assert _expr(job["if"], event, needs={"test-macos": "failure"}) is False, event
 
 
 @pytest.mark.parametrize("perms, writes", [
@@ -1100,8 +1115,11 @@ def test_the_terraform_tests_run_on_each_push_and_pull_request():
     assert isinstance(job.get("timeout-minutes"), int) and job["timeout-minutes"] <= 30
     steps = job["steps"]
     assert {s.get("name"): s.get("run") for s in steps if s.get("name") in TF_RUNS} == TF_RUNS
-    # Nothing that would keep it green on a failure, nor skip a step.
-    assert "continue-on-error" not in job and "if" not in job
+    # Nothing that would keep it green on a failure, nor skip a step; skipped at night only (CI5:
+    # the night of ci.yml is macOS's), never on a push or a pull request.
+    assert "continue-on-error" not in job
+    assert {e: _runs(job, e) for e in ("push", "pull_request", "schedule")} == {
+        "push": True, "pull_request": True, "schedule": False}
     for step in steps:
         assert "continue-on-error" not in step and "if" not in step, step.get("name") or step.get("uses")
         assert "||" not in str(step.get("run") or ""), step.get("name")
@@ -1272,3 +1290,442 @@ def test_the_advisories_are_read_on_each_push_and_pull_request_read_only():
     assert "secrets." not in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     checkout = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
     assert checkout and checkout[0]["with"]["persist-credentials"] is False
+
+
+# ── CI6 (#514): the release gate, the strongest measure on the tree a release publishes ──────
+# Jonathan, 04/11. Read from the file; its last job's script run against chosen `needs`.
+GATE = ROOT / ".github" / "workflows" / "release-gate.yml"
+GATE_SCOPE = ("github.event_name == 'workflow_dispatch' || (startsWith(github.head_ref, 'chore/release-') "
+              "&& github.event.pull_request.head.repo.full_name == github.repository)")
+GATE_REF = "${{ github.event.pull_request.head.sha || github.sha }}"
+MUTANT_SHARDS, CONTROL_SHARDS = 14, 2
+MACOS_SAID = "Said in the run's summary, never blocking"
+
+
+def _gate() -> dict:
+    return _load(GATE)
+
+
+def test_the_gate_runs_on_the_version_s_pull_request_or_by_dispatch_only():
+    """A pull request that changes pyproject.toml (a version's always does), or a dispatch: never a
+    push (main's checks stay what they are), a schedule, nor an event a fork runs with the default
+    branch's rights. A new push cancels the run it replaces: one battery per tree."""
+    doc = _gate()
+    assert doc["name"] == "Release gate"
+    assert doc["on"] == {"pull_request": {"paths": ["pyproject.toml"]}, "workflow_dispatch": None}
+    # As ci.yml (CI5): a new push on the pull request cancels the run it replaces, a dispatch never.
+    assert doc["concurrency"] == {
+        "group": "${{ github.workflow }}-${{ github.event_name == 'pull_request' && "
+                 "format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"}
+
+
+def test_no_job_of_the_gate_takes_the_name_of_a_ci_check():
+    """The gate runs under a path filter: a check named as one of ci.yml's (a required check of
+    main) would stand for it on the version's pull request, or stay « expected »."""
+    names = lambda doc: {str(job.get("name", key)) for key, job in doc["jobs"].items()}  # noqa: E731
+    ci = _load(ROOT / ".github" / "workflows" / "ci.yml")
+    assert names(_gate()) & names(ci) == set()
+    assert _gate()["jobs"]["terraform"]["name"] == "terraform test (release gate)"
+
+
+def test_every_job_of_the_gate_runs_only_for_a_version_or_a_dispatch():
+    """Any other pull request that touches pyproject.toml skips every job: the battery runs on this
+    repository's chore/release-… branch, or a dispatch. The last job runs whatever came before."""
+    jobs = _gate()["jobs"]
+    for name, job in jobs.items():
+        want = f"${{{{ always() && ({GATE_SCOPE}) }}}}" if name == "gate" else f"${{{{ {GATE_SCOPE} }}}}"
+        assert job.get("if") == want, (name, job.get("if"))
+
+
+def test_the_gate_holds_contents_read_and_nothing_else():
+    doc = _gate()
+    assert doc["permissions"] == {"contents": "read"}
+    assert all("permissions" not in job for job in doc["jobs"].values())
+    text = GATE.read_text(encoding="utf-8")
+    assert "secrets." not in text and "github.token" not in text and "GITHUB_TOKEN" not in text
+
+
+def test_every_job_of_the_gate_measures_the_pull_request_s_head_exactly():
+    """The tree release.py compares with origin/main's: the PR's head, never GitHub's merge commit."""
+    for name, job in _gate()["jobs"].items():
+        checkouts = [s for s in job["steps"] if str(s.get("uses") or "").startswith("actions/checkout@")]
+        if name == "gate":
+            assert checkouts == []                    # it reads `needs`, nothing of the repository
+            continue
+        assert len(checkouts) == 1 and checkouts[0]["with"] == {"ref": GATE_REF, "persist-credentials": False}, name
+
+
+def test_every_job_of_the_gate_is_bounded():
+    jobs = _gate()["jobs"]
+    for name, job in jobs.items():
+        bound = job.get("timeout-minutes")
+        assert isinstance(bound, int) and 0 < bound <= 180, (name, bound)
+        # Only macOS may fail without failing the run: it informs (H1c, #518).
+        assert ("continue-on-error" not in job) is (name != "macos"), name
+        for step in job["steps"]:
+            assert "continue-on-error" not in step, (name, step.get("name") or step.get("uses"))
+            if "if" in step:                          # macOS's summary alone, said whatever came before
+                assert (name, step.get("name"), step["if"]) == ("macos", MACOS_SAID, "always()"), (name, step)
+    assert jobs["invariants"]["timeout-minutes"] <= 75 and jobs["gate"]["timeout-minutes"] <= 5
+
+
+def test_the_gate_runs_every_test_with_2000_invariant_sequences_on_linux():
+    job = _gate()["jobs"]["invariants"]
+    assert job["runs-on"] == "ubuntu-latest"
+    (step,) = [s for s in job["steps"] if "pytest" in (s.get("run") or "")]
+    assert step["run"].startswith("python -m pytest tests/ -q")
+    assert step["env"] == {"GLORFINDEL_INVARIANT_EXAMPLES": "2000", "GLORFINDEL_INVARIANT_DB": ".hypothesis-invariants"}
+    assert any("actions/cache/restore" in (s.get("uses") or "") and s["with"]["path"] == ".hypothesis-invariants"
+               for s in job["steps"])
+
+
+def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
+    """`--examples 500 --rounds 2 --jobs 4`, each shard of the matrix once; the control set too; the
+    total checks every shard and holds the count to mutants.yml's `min_caught`."""
+    jobs = _gate()["jobs"]
+    for name, n, flag in (("mutants", MUTANT_SHARDS, ""), ("control", CONTROL_SHARDS, "--control ")):
+        job = jobs[name]
+        assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": list(range(1, n + 1))}}, name
+        (step,) = [s for s in job["steps"] if "mutation_check.py" in (s.get("run") or "")]
+        assert step["run"] == (f"python scripts/mutation_check.py {flag}--examples 500 --rounds 2 --jobs 4 "
+                               f'--shard "$SHARD/{n}" --json "{name}-$SHARD.json"'), step["run"]
+        assert step["env"] == {"SHARD": "${{ matrix.shard }}"}
+        (up,) = [s for s in job["steps"] if str(s.get("uses") or "").startswith("actions/upload-artifact@")]
+        assert up["with"]["name"] == f"{name}-${{{{ matrix.shard }}}}" and up["with"]["if-no-files-found"] == "error"
+    total = jobs["mutants-total"]
+    assert total["needs"] == ["mutants", "control"]
+    (step,) = [s for s in total["steps"] if "mutation_check.py" in (s.get("run") or "")]
+    assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
+                           f'--control-shards {CONTROL_SHARDS} --examples 500 --rounds 2 --min-caught "$MIN_CAUGHT"')
+    monday = _load(ROOT / ".github" / "workflows" / "mutants.yml")
+    (mstep,) = [s for s in monday["jobs"]["mutants"]["steps"] if "mutation_check.py" in (s.get("run") or "")]
+    default = re.fullmatch(r"\$\{\{ inputs\.min_caught \|\| '(\d+)' \}\}", mstep["env"]["MIN_CAUGHT"]).group(1)
+    assert default == monday["on"]["workflow_dispatch"]["inputs"]["min_caught"]["default"]
+    assert step["env"] == {"MIN_CAUGHT": default}
+    (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
+    assert down["with"] == {"path": "mutants-results"}
+
+
+def _run_steps(job: dict) -> list[dict]:
+    return [{k: s.get(k) for k in ("name", "run", "env")} for s in job["steps"] if s.get("run")]
+
+
+def test_the_gate_runs_ci_s_macos_job_and_its_terraform_tests_word_for_word():
+    """The macOS job a pull request no longer runs (CI5), and the Terraform tests: the same
+    commands as ci.yml's, so neither drifts from what the CI runs."""
+    ci, jobs = _load(ROOT / ".github" / "workflows" / "ci.yml")["jobs"], _gate()["jobs"]
+    assert jobs["macos"]["runs-on"] == ci["test-macos"]["runs-on"] == "macos-latest"
+    assert [s for s in _run_steps(jobs["macos"]) if s["name"] != MACOS_SAID] == _run_steps(ci["test-macos"])
+    assert jobs["macos"]["timeout-minutes"] == ci["test-macos"]["timeout-minutes"]
+    assert _run_steps(jobs["terraform"]) == _run_steps(ci["terraform-test"])
+    assert {s.get("name"): s.get("run") for s in jobs["terraform"]["steps"] if s.get("name") in TF_RUNS} == TF_RUNS
+    assert jobs["terraform"]["env"] == ci["terraform-test"]["env"] == {"CHECKPOINT_DISABLE": "1"}
+
+
+def test_the_last_job_waits_for_every_other_one():
+    jobs = _gate()["jobs"]
+    assert jobs["gate"]["name"] == "release gate"
+    assert sorted(jobs["gate"]["needs"]) == sorted(n for n in jobs if n != "gate")
+    (step,) = jobs["gate"]["steps"]
+    # It waits for macOS too, to say it — and asks nothing of it: macOS alone informs.
+    assert step["env"] == {"NEEDS": "${{ toJSON(needs) }}", "INFORMATIVE": "macos"}
+
+
+def test_macos_informs_and_never_blocks():
+    """Jonathan, 04/11 (H1c, #518): only what is required blocks. H0 runs Linux, and a runner GitHub
+    never gives must never hold a release back — the 0.5.4's macOS was cancelled for want of one.
+    The job fails without failing the run (`continue-on-error`), and says its tests' own outcome in
+    the run's summary, whatever came before."""
+    job = _gate()["jobs"]["macos"]
+    assert job["continue-on-error"] is True
+    (tests,) = [s for s in job["steps"] if "pytest" in (s.get("run") or "")]
+    (said,) = [s for s in job["steps"] if s.get("name") == MACOS_SAID]
+    assert tests["id"] == "tests" and said["if"] == "always()"
+    assert said["env"] == {"OUTCOME": "${{ steps.tests.outcome }}"}
+    assert '>> "$GITHUB_STEP_SUMMARY"' in said["run"] and "ne bloque pas" in said["run"]
+    assert job["steps"].index(said) == len(job["steps"]) - 1
+
+
+def _gate_says(tmp_path, needs: dict) -> tuple[int, str]:
+    import json
+    import subprocess
+    import sys
+    import textwrap
+    (step,) = _gate()["jobs"]["gate"]["steps"]
+    script = step["run"].split("<<'EOF'\n", 1)[1].rsplit("EOF", 1)[0]
+    path, summary = tmp_path / "gate.py", tmp_path / "summary.md"
+    path.write_text(textwrap.dedent(script), encoding="utf-8")
+    env = {"NEEDS": json.dumps(needs), "INFORMATIVE": step["env"]["INFORMATIVE"], "GITHUB_STEP_SUMMARY": str(summary)}
+    code = subprocess.run([sys.executable, str(path)], env=env, capture_output=True, text=True).returncode
+    return code, summary.read_text(encoding="utf-8") if summary.exists() else ""
+
+
+@pytest.mark.parametrize("results, green", [
+    ({"a": "success", "b": "success"}, True),
+    ({"a": "success", "b": "failure"}, False),
+    ({"a": "success", "b": "cancelled"}, False),
+    ({"a": "skipped", "b": "success"}, False),
+    ({"a": "success", "b": None}, False),
+    ({}, False),
+    # macOS informs: red, cancelled, skipped, never acquired — the gate as the others say.
+    ({"a": "success", "macos": "failure"}, True),
+    ({"a": "success", "macos": "cancelled"}, True),
+    ({"a": "success", "macos": "skipped"}, True),
+    ({"a": "cancelled", "macos": "success"}, False),
+    ({"macos": "success"}, False),                       # nothing that blocks: never green
+])
+def test_the_last_job_is_green_only_when_every_job_that_blocks_is(tmp_path, results, green):
+    """Run as GitHub runs it: `needs` as JSON. A cancelled or skipped job that blocks is red; each
+    job and its role said in the run's summary."""
+    needs = {k: {"result": v, "outputs": {}} for k, v in results.items()}
+    code, summary = _gate_says(tmp_path, needs)
+    assert (code == 0) is green
+    assert ("**Porte de release verte**" if green else "**Porte de release rouge**") in summary
+    for k, v in results.items():
+        role = "informe, ne bloque pas" if k == "macos" else "bloque"
+        assert f"| {k} | {v} | {role} |" in summary, summary
+
+
+def test_release_py_reads_this_workflow_by_its_file_name():
+    text = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+    assert 'GATE = "release-gate.yml"' in text and f"/actions/workflows/{GATE.name}/runs?" in text
+
+
+# ── CI5 (#512): a faster CI — macOS off the pull requests, 200 invariants there, cancelled when
+# replaced, Components not run for prose ───────────────────────────────────────────────────────
+# An expression of GitHub's (`${{ … }}`) evaluated here for one event: the subset the workflows use
+# (==, !=, &&, ||, !, parentheses, strings, format(), cancelled()), each name looked up in what
+# GitHub would give. && and || return an operand, as Python's `and` / `or` do.
+
+_TOKEN = re.compile(r"'[^']*'|&&|\|\||!=|==|!|\(|\)|,|\d+|[A-Za-z_][\w.\-]*|\s+")
+
+
+def _expr(text, event: str, *, needs: dict | None = None, number: int = 7, run_id: int = 4242,
+          workflow: str = "CI", cancelled: bool = False):
+    if not isinstance(text, str):
+        return text
+    kw = {"needs": needs, "number": number, "run_id": run_id, "workflow": workflow, "cancelled": cancelled}
+    whole = re.fullmatch(r"\s*\$\{\{((?:(?!\}\}).)*)\}\}\s*", text, re.S)
+    if not whole:   # a plain value, or a template: each ${{ … }} replaced by its value
+        return re.sub(r"\$\{\{((?:(?!\}\}).)*)\}\}", lambda x: str(_expr("${{" + x.group(1) + "}}", event, **kw)),
+                      text)
+    m = whole
+    names = {"github.event_name": event, "github.run_id": str(run_id), "github.workflow": workflow,
+             "github.event.pull_request.number": number if event in ("pull_request", "pull_request_target") else None,
+             "github.ref": "refs/heads/main"}
+    names |= {f"needs.{job}.result": result for job, result in (needs or {}).items()}
+    out, at, src = [], 0, m.group(1)
+    while at < len(src):
+        tok = _TOKEN.match(src, at)
+        assert tok, f"cannot read {src[at:]!r}"
+        t, at = tok.group(0), tok.end()
+        if t.isspace():
+            continue
+        if t in ("&&", "||", "!"):
+            out.append({"&&": " and ", "||": " or ", "!": " not "}[t])
+        elif t in ("==", "!=", "(", ")", ",") or t.startswith("'") or t.isdigit():
+            out.append(t)
+        elif t == "cancelled":
+            out.append("_cancelled")
+        elif t == "format":
+            out.append("_format")
+        else:
+            assert t in names, f"a name this evaluator does not know: {t}"
+            out.append(repr(names[t]))
+    def _format(fmt, *args):
+        return fmt.format(*args)
+    return eval("".join(out), {"__builtins__": {}}, {"_cancelled": lambda: cancelled, "_format": _format})
+
+
+def test_the_expression_reader_reads_as_github_does():
+    assert _expr("${{ github.event_name == 'pull_request' && '200' || '500' }}", "pull_request") == "200"
+    assert _expr("${{ github.event_name == 'pull_request' && '200' || '500' }}", "push") == "500"
+    assert _expr("${{ !cancelled() && needs.a.result == 'failure' }}", "push", needs={"a": "failure"}) is True
+    assert _expr("${{ !cancelled() && needs.a.result == 'failure' }}", "push", needs={"a": "failure"},
+                 cancelled=True) is False
+    assert _expr("${{ format('pr-{0}', github.event.pull_request.number) }}", "pull_request", number=12) == "pr-12"
+    assert _expr("plain", "push") == "plain"
+
+
+CI = ROOT / ".github" / "workflows" / "ci.yml"
+MACOS = "tests (macOS, case-insensitive file system)"
+EVENTS = ("push", "pull_request", "schedule")
+
+
+def _runs(job: dict, event: str) -> bool:
+    """Whether a job runs on this event, by its `if` (one without runs)."""
+    needs = job.get("needs") or []
+    needs = [needs] if isinstance(needs, str) else needs
+    return "if" not in job or bool(_expr(job["if"], event, needs={n: "success" for n in needs}))
+
+
+def test_macos_runs_on_a_push_to_main_and_at_night_never_on_a_pull_request():
+    doc = _load(CI)
+    assert {"push", "pull_request", "schedule"} <= _events(doc)
+    assert doc["on"]["push"] == {"branches": ["main"]} and doc["on"]["schedule"]
+    macos = doc["jobs"]["test-macos"]
+    assert macos["name"] == MACOS
+    assert {e: _runs(macos, e) for e in EVENTS} == {"push": True, "pull_request": False, "schedule": True}
+    # Its budget stays 500: it never runs on a pull request.
+    (step,) = [s for s in macos["steps"] if "test_invariants.py" in (s.get("run") or "")]
+    assert step["env"]["GLORFINDEL_INVARIANT_EXAMPLES"] == "500"
+
+
+def test_the_night_of_ci_yml_is_macos_s_alone():
+    """On the schedule the other jobs do not run: the audit would turn red on main's commit for an
+    advisory, and H0's CD refuses a release whose commit has a red check-run."""
+    doc = _load(CI)
+    for name, job in doc["jobs"].items():
+        if name in ("test-macos", "macos-red"):
+            continue
+        assert {e: _runs(job, e) for e in EVENTS} == {"push": True, "pull_request": True, "schedule": False}, name
+
+
+def test_a_red_macos_on_main_opens_an_issue_or_comments_the_open_one():
+    """Red or cancelled: a timeout or a runner never acquired says `cancelled`, nothing cancels a
+    run of main, and H0's CD counts it red (CI5, review)."""
+    job = _load(CI)["jobs"]["macos-red"]
+    assert job["needs"] == "test-macos" and isinstance(job.get("timeout-minutes"), int)
+    when = {(e, r): bool(_expr(job["if"], e, needs={"test-macos": r}))
+            for e in EVENTS for r in ("failure", "success", "skipped", "cancelled")}
+    assert {k for k, v in when.items() if v} == {("push", "failure"), ("schedule", "failure"),
+                                                 ("push", "cancelled"), ("schedule", "cancelled")}
+    assert _expr(job["if"], "push", needs={"test-macos": "failure"}, cancelled=True) is False
+
+
+# A fake gh: each call logged on one line; `issue list` answers the issues given, only those of the
+# author asked for when --author is passed, as GitHub filters them.
+_FAKE_GH_LIST = r'''
+author=""; prev=""
+for a in "$@"; do [ "$prev" = "--author" ] && author="$a"; prev="$a"; done
+AUTHOR="$author" python3 -c 'import json, os, sys; a = os.environ["AUTHOR"]; print(json.dumps([i for i in json.load(open(sys.argv[1])) if not a or i["author"] == a]))' "$ISSUES"
+'''
+
+
+def _fake_gh(bin_: Path, log: Path, issues: list) -> Path:
+    import json
+    data = bin_.parent / "issues.json"
+    data.write_text(json.dumps(issues))
+    _fake(bin_ / "gh", f'printf "gh %s\\n" "$(printf "%s" "$*" | tr "\\n" " ")" >> {log}\n'
+                       f'if [ "$1 $2" = "issue list" ]; then {_FAKE_GH_LIST}fi\n')
+    return data
+
+
+BOT = "app/github-actions"
+TITLE = "CI : les tests macOS sont rouges sur main"
+
+
+@pytest.mark.parametrize("issues, expected", [
+    ([], "create"),
+    ([{"number": 3, "title": TITLE + " (autre)", "author": BOT}], "create"),
+    ([{"number": 5, "title": TITLE, "author": "someone"}], "create"),          # the same title, not ours
+    ([{"number": 5, "title": TITLE, "author": "someone"}, {"number": 9, "title": TITLE, "author": BOT}],
+     "comment"),
+])
+def test_the_issue_script_creates_one_or_comments_the_open_one(tmp_path, issues, expected):
+    job = _load(CI)["jobs"]["macos-red"]
+    (step,) = job["steps"]
+    bin_, log = tmp_path / "bin", tmp_path / "gh.log"
+    bin_.mkdir()
+    data = _fake_gh(bin_, log, issues)
+    env = {k: str(v) for k, v in step["env"].items() if "${{" not in str(v)}
+    env |= {"RUN_URL": "https://example.org/run/1", "SHA": "abc123", "EVENT": "push", "RESULT": "cancelled",
+            "GH_TOKEN": "t", "GH_REPO": "o/r", "ISSUES": str(data)}
+    res = _sh(step["run"], env, tmp_path, bin_)
+    assert res.returncode == 0, res
+    calls = log.read_text().splitlines()
+    assert calls[0].startswith(f"gh issue list --state open --author {BOT} "), calls
+    assert len(calls) == 2, calls
+    if expected == "create":
+        assert calls[1].startswith(f"gh issue create --title {TITLE} --body ")
+    else:
+        assert calls[1].startswith("gh issue comment 9 --body ")
+    assert "abc123" in calls[1] and "https://example.org/run/1" in calls[1] and "(push : cancelled)" in calls[1]
+    assert "rouge ou annulé" in calls[1] and "relancer le job" in calls[1]
+
+
+PR_WORKFLOWS = ("ci.yml", "images.yml", "components.yml", "release-gate.yml")
+
+
+@pytest.mark.parametrize("workflow", PR_WORKFLOWS)
+def test_a_new_push_on_a_pull_request_cancels_the_run_it_replaces_never_on_main(workflow):
+    doc = _load(ROOT / ".github" / "workflows" / workflow)
+    c = doc["concurrency"]
+    pr = [_expr(c["group"], "pull_request", number=12, run_id=n, workflow=doc["name"]) for n in (1, 2)]
+    assert pr[0] == pr[1] == f"{doc['name']}-pr-12"                       # one group per pull request
+    assert _expr(c["group"], "pull_request", number=13, workflow=doc["name"]) != pr[0]
+    assert _expr(c["cancel-in-progress"], "pull_request") is True
+    for event in ("push", "schedule", "merge_group"):
+        runs = {_expr(c["group"], event, run_id=n, workflow=doc["name"]) for n in (1, 2)}
+        assert len(runs) == 2, (event, runs)                             # its own group: never held pending
+        assert _expr(c["cancel-in-progress"], event) is False
+
+
+def test_no_other_workflow_cancels_a_run_in_progress():
+    """Publish, Notify, the canary, the night: never cancelled by a newer run."""
+    for path in WORKFLOWS:
+        doc = _load(path)
+        c = doc.get("concurrency") or {}
+        if path.name in PR_WORKFLOWS:
+            continue
+        assert str(c.get("cancel-in-progress", False)).lower() in ("false", "none"), path.name
+
+
+# The checks the rule of main requires, as docs/sessions.md lists them (Jonathan sets the rule:
+# docs/operations.md, « La CI, plus rapide »).
+def _required() -> list[str]:
+    text = (ROOT / "docs" / "sessions.md").read_text(encoding="utf-8")
+    block = text.split("**Require status checks to pass**", 1)[1].split("**Vérifier :**", 1)[0]
+    return re.findall(r"^\s+- `([^`]+)`", block, re.M)
+
+
+def _check_names(doc: dict) -> set[str]:
+    """The check-run names of a workflow's jobs, a one-axis matrix expanded."""
+    out = set()
+    for key, job in doc["jobs"].items():
+        name = job.get("name", key)
+        axes = ((job.get("strategy") or {}).get("matrix") or {})
+        for axis, values in axes.items():
+            if f"${{{{ matrix.{axis} }}}}" in name:
+                out |= {name.replace(f"${{{{ matrix.{axis} }}}}", str(v)) for v in values}
+                break
+        else:
+            out.add(name)
+    return out
+
+
+def test_the_required_checks_run_on_every_pull_request_and_macos_is_not_one():
+    required = _required()
+    assert len(required) == 5 and MACOS not in required, required
+    on_prs = set()
+    for path in WORKFLOWS:
+        doc = _load(path)
+        if "pull_request" not in _events(doc):
+            continue
+        pr = doc["on"]["pull_request"] or {}
+        names = _check_names(doc)
+        # A workflow a path filter skips leaves a required check « expected » for ever.
+        if "paths" in pr or "paths-ignore" in pr:
+            assert not names & set(required), (path.name, names & set(required))
+            continue                        # its jobs never stand for a required check (CI6)
+        for key, job in doc["jobs"].items():
+            if _runs(job, "pull_request"):
+                on_prs |= _check_names({"jobs": {key: job}})
+    assert set(required) <= on_prs, set(required) - on_prs
+
+
+def test_components_skips_prose_alone_on_a_pull_request_and_always_runs_on_main():
+    doc = _load(ROOT / ".github" / "workflows" / "components.yml")
+    assert doc["on"]["push"] == {"branches": ["main"]}                     # no filter on main
+    ignored = doc["on"]["pull_request"]["paths-ignore"]
+    assert set(ignored) == {"**/*.md", "docs/**", "changes/**", "LICENSE"}
+    assert "paths" not in doc["on"]["pull_request"]
+    # Images keeps no filter: its first step decides, its required checks green (CI1).
+    assert "paths" not in (_load(ROOT / ".github" / "workflows" / "images.yml")["on"]["pull_request"] or {})
+
+
+def test_the_gesture_on_the_rule_of_main_is_written():
+    ops = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    section = ops.split("## La CI, plus rapide (CI5", 1)[1].split("\n## ", 1)[0]
+    assert f"« {MACOS} »" in section and "Require status checks to pass" in section

@@ -1,6 +1,6 @@
 name: Invariants (deep)
 
-# The invariant tests run 500 random sequences on every push: the machine on Azure
+# The invariant tests run 200 random sequences on a pull request, 500 on a push to main (ci.yml, CI5): the machine on Azure
 # (tests/unit/test_invariants.py) and the same machine on the simulated AWS
 # (tests/unit/test_invariants_aws.py, MC1). Every night, ten thousand each: new seeds each
 # time, on both kinds of file system. A failure prints the shortest sequence that breaks a

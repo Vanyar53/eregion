@@ -833,18 +833,29 @@ un secret client de longue durée, et son principal pouvait créer un groupe dan
   sans rien créer.
 - **Une commande qui échoue dit la fin de son erreur, rien de réel** (CAN1, #501). Un
   `terraform` raté (init, apply, destroy, un plan qui rend 1) imprime ses 30 dernières lignes,
-  un `az` son stderr, sur stderr, chaque ligne après `   | ` (aucune ligne d'Azure ne lance une
-  commande de workflow). Avant, `infra/canary/jit-terraform/redact.py` en retire les
-  identifiants du canari (abonnement, locataire, client), les ids de ressource
-  (`/subscriptions/…`, encodés dans une URL aussi), les GUID, un jeton, une adresse e-mail et
-  les IP (v4 et v6). Un filtre, pas `::add-mask::` : un masque ne cache qu'une valeur connue
-  d'avance — les trois identifiants, que GitHub masque déjà comme secrets —, jamais les GUID,
-  ids et adresses qu'une erreur d'Azure porte ; il ne vaut que dans Actions, pas pour un
-  `make canary-jit` collé dans une issue, et ne se teste pas hors ligne. Une erreur passagère
-  (429, `TooManyRequests`, `AnotherOperationInProgress`, `RetryableError`,
-  `ReferencedResourceNotProvisioned`) est dite comme telle ; **code 3 = non concluant** : la
-  mise en place a échoué sur elle, ou chaque vérification ratée est venue après elle — relancer
-  la ligne. Une vérification ratée avant toute erreur passagère reste un changement (code 1).
+  un `az` son stderr (la lecture du groupe comprise), sur stderr. Avant,
+  `infra/canary/jit-terraform/redact.py` en retire les identifiants du canari (abonnement,
+  locataire, client), les ids de ressource (`/subscriptions/…`, encodés dans une URL ou échappés
+  en JSON, `\/subscriptions\/…`), les GUID (avec ou sans tirets), un jeton (un JWT, ou ce qui
+  suit `Bearer`), la signature et l'échéance d'un SAS (`sig=`, `se=`), le domaine d'un locataire
+  (`*.onmicrosoft.com`), une adresse e-mail et les IP (v4 et v6, après un mot et deux-points
+  aussi). Un filtre, pas `::add-mask::` : un masque ne cache qu'une valeur connue d'avance — les
+  trois identifiants, que GitHub masque déjà comme secrets —, jamais les GUID, ids et adresses
+  qu'une erreur d'Azure porte ; il ne vaut que dans Actions, pas pour un `make canary-jit` collé
+  dans une issue, et ne se teste pas hors ligne. Ce qui est tenu contre les **commandes de
+  workflow** : le runner en lit deux formes (`actions/runner`, `ActionCommand.cs`) —
+  `::nom::valeur` en début de ligne, espaces de tête ôtés, que le préfixe `   | ` de chaque
+  ligne écarte, et l'ancienne `##[nom]valeur` n'importe où dans la ligne, dont chaque `##[`
+  devient `# #[`. Ligne par ligne plutôt qu'un `::stop-commands::<jeton>` autour du bloc : rien
+  à refermer, un bloc coupé (un job tué, une ligne tronquée) ne laisse rien d'ouvert. Le
+  filtre n'imprime qu'une fois tout filtré, et `run.sh` n'imprime ce qu'il a dit que sur ses
+  codes 0 et 3 : s'il échoue, « output withheld », rien du texte, ses propres erreurs tues.
+  Une erreur passagère (un statut 429 — jamais un horodatage `…:29.429` —, `TooManyRequests`,
+  `AnotherOperationInProgress`, `RetryableError`, `ReferencedResourceNotProvisioned`) est dite
+  comme telle ; **code 3 = non concluant** : la mise en place a échoué sur elle, ou chaque
+  vérification ratée est venue après elle — relancer la ligne. Une vérification ratée avant
+  toute erreur passagère reste un changement (code 1). Au nettoyage, une erreur passagère est
+  dite sans demander de relance : le verdict est déjà rendu.
 
 **Les gestes de Jonathan, dans l'ordre** (une fois ; `<…>` à remplacer, rien de réel ici). Rien
 ne se lance depuis une session : ces commandes écrivent dans Entra ID, dans l'abonnement et dans

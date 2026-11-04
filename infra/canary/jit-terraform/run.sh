@@ -8,8 +8,9 @@
 #
 # Its logs are public (GitHub Actions, a public repository). A failed terraform says the end
 # of its output, an az its stderr, only through redact.py: the canary's identifiers, resource
-# ids, GUIDs, tokens, e-mail addresses and IPs taken out first (CAN1, #501). Nothing else of
-# theirs is printed.
+# ids, GUIDs, tokens, a SAS's signature, a tenant's domain, e-mail addresses and IPs taken out
+# first, no workflow command left (::name:: nor ##[name]; CAN1, #501). Nothing else of theirs
+# is printed — and nothing at all if the filter fails.
 #
 # Needs: terraform, az (logged in), ARM_SUBSCRIPTION_ID or AZURE_SUBSCRIPTION_ID, and the
 # resource group it works in, created once (CANARY_RESOURCE_GROUP, default rg-eregion-canary;
@@ -32,26 +33,21 @@ case "$CONSTRAINT" in
   *" 3."*|"3."*|*"=3."*) export ARM_SKIP_PROVIDER_REGISTRATION=true ;;
   *) export ARM_RESOURCE_PROVIDER_REGISTRATIONS=none ;;
 esac
-az group show -n "$RG" -o none >/dev/null 2>&1 \
-  || { echo "resource group $RG not found or not readable: create it once (docs/operations.md)"; exit 2; }
 WORK="$(mktemp -d)"
-cp "$SRC/main.tf" "$WORK/"
-sed -i "s/version = \"~> 4.0\"/version = \"$CONSTRAINT\"/" "$WORK/main.tf"
-cd "$WORK"
 OUT="$WORK/.canary-out"
-TFV=(-var "suffix=$SUFFIX" -var "resource_group=$RG" -input=false -no-color)
-Q="nsg-glorfindel-quarantine-canary-$SUFFIX"
-FAILED=0
-CLEAN_FAIL=0     # a check failed before any transient error: a change, not a passing hitch
+SAY_CONTEXT=check   # what a transient error asks: a re-run (check), nothing more (cleanup)
 
 # A command's output, said through the filter only (redact.py), on stderr: stdout may be a
-# $(…) capture. The filter's exit 3 = a transient error, noted for the verdict.
+# $(…) capture. What the filter said is printed on its exits 0 and 3 alone — on any other,
+# nothing of it (it may have stopped halfway), its own errors silenced too. Exit 3 = a
+# transient error, noted for the verdict.
 say() {  # say <label> <file> [redact.py options…]
   local rc=0
-  python3 -I "$SRC/redact.py" --label "$1" "${@:3}" < "$2" >&2 || rc=$?
+  python3 -I "$SRC/redact.py" --label "$1" --context "$SAY_CONTEXT" "${@:3}" < "$2" \
+    > "$OUT.said" 2>/dev/null || rc=$?
   case $rc in
-    0) ;;
-    3) : > "$WORK/.transient" ;;
+    0) cat "$OUT.said" >&2 ;;
+    3) cat "$OUT.said" >&2; : > "$WORK/.transient" ;;
     *) echo "   $1: its output withheld (the filter failed)" >&2 ;;
   esac
 }
@@ -83,6 +79,21 @@ setup_failed() {
   exit 2
 }
 
+if ! az group show -n "$RG" -o none; then
+  echo "resource group $RG not found or not readable: create it once (docs/operations.md)"
+  code=2
+  [ ! -e "$WORK/.transient" ] || code=3
+  rm -rf "$WORK"
+  exit "$code"
+fi
+cp "$SRC/main.tf" "$WORK/"
+sed -i "s/version = \"~> 4.0\"/version = \"$CONSTRAINT\"/" "$WORK/main.tf"
+cd "$WORK"
+TFV=(-var "suffix=$SUFFIX" -var "resource_group=$RG" -input=false -no-color)
+Q="nsg-glorfindel-quarantine-canary-$SUFFIX"
+FAILED=0
+CLEAN_FAIL=0     # a check failed before any transient error: a change, not a passing hitch
+
 # This run's resources, found by their tag, NICs first: an NSG or a VNet still in use cannot go.
 # The tag is filtered on the client, by equality: az refuses --tag with -g. One list per type,
 # by the network commands (Network Contributor's own reads; the suffix is validated above).
@@ -101,6 +112,8 @@ cleanup() {
   # A second signal (the runner's SIGTERM some 7.5 s after its SIGINT) must not cut the cleanup
   # short: ignored from here on. SIGKILL, which follows, cannot be.
   trap '' INT TERM
+  # The verdict is said: a transient error here asks for no re-run of the checks.
+  SAY_CONTEXT=cleanup
   echo "== cleanup"
   tf 0 destroy -auto-approve "${TFV[@]}" -var nic_tag=v2 || sweep
   # Created outside Terraform, as Glorfindel does: never in its state.

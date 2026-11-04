@@ -6168,7 +6168,7 @@ MUTANTS += [
      "docs/operations.md", 'az role assignment create --role "Network Contributor" \\\n',
      "az role assignment create --role Contributor \\\n"),
     ("M2114", "the runner's second signal cuts the canary's cleanup short: the quarantine NSG left (P04)", JIT_SH,
-     "  trap '' INT TERM\n  echo \"== cleanup\"\n", "  echo \"== cleanup\"\n"),
+     "  trap '' INT TERM\n  # The verdict is said", "  # The verdict is said"),
     ("M2115", "the canary's login traced: the OIDC token written whole into the job's log (P04)", CAN,
      "          jwt=$(curl -fsS", "          set -x\n          jwt=$(curl -fsS"),
     ("M2116", "the canary's step runs run.sh as a child: a cancel's signals reach the step's bash only (P04)",
@@ -10329,6 +10329,34 @@ MUTANTS += [
      'if [ "$CLEAN_FAIL" = 0 ] && [ -e "$WORK/.transient" ]; then', 'if [ -e "$WORK/.transient" ]; then'),
 ]
 TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(3500, 3510)})
+# CAN1, after its review: the historical `##[name]` commands the runner reads anywhere in a
+# line, more real forms (an IPv6 after a word and a colon, a tenant's domain, a SAS, a GUID
+# without dashes, an opaque bearer token, an id escaped in JSON), a 429 read as a status only,
+# a filter that fails saying nothing of the text, a cleanup that asks for no re-run. M3510–M3519.
+MUTANTS += [
+    ("M3510", "a line's ##[add-mask] left whole: the runner reads it anywhere in the line (CAN1)", _CAN1_R,
+     '    while "##[" in line:\n        line = line.replace("##[", "# #[")\n', ""),
+    ("M3511", "an IPv6 after a word and a colon printed as it is (CAN1)", _CAN1_R,
+     '_IPV6 = re.compile(r"(?<!\\w)', '_IPV6 = re.compile(r"(?<![\\w:])'),
+    ("M3512", "a tenant's domain (*.onmicrosoft.com) printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[\\w-]+\\.onmicrosoft\\.com\\b", re.I), "<tenant-domain>"),\n', ""),
+    ("M3513", "a SAS's signature and expiry printed as they are (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b(sig|se)=[^&\\s\\"\'<>]+"), r"\\1=<sas>"),\n', ""),
+    ("M3514", "a GUID without its dashes printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\b[0-9a-f]{32}\\b", re.I), "<guid>"),\n', ""),
+    ("M3515", "an opaque bearer token printed as it is (CAN1)", _CAN1_R,
+     '    (re.compile(r"\\bBearer\\s+[^\\s\\"\',;]+", re.I), "Bearer <token>"),\n', ""),
+    ("M3516", "a resource id escaped in JSON printed as it is (CAN1)", _CAN1_R,
+     'r"(?:\\\\?/|%2F)subscriptions(?:\\\\?/|%2F)', 'r"(?:/|%2F)subscriptions(?:/|%2F)'),
+    ("M3517", "a 429 anywhere, a timestamp's milliseconds too, said transient (CAN1)", _CAN1_R,
+     '("429", re.compile(r"\\bstatus(?:\\s*code)?\\"?\\s*[:=]?\\s*\\"?429\\b|\\b429\\s*\\(|\\bHTTP(?:/[\\d.]+)?\\s+429\\b", re.I)),',
+     '("429", re.compile(r"\\b429\\b")),'),
+    ("M3518", "a filter that failed: the raw text printed in its place (CAN1)", JIT_SH,
+     '    *) echo "   $1: its output withheld (the filter failed)" >&2 ;;', '    *) cat "$2" >&2 ;;'),
+    ("M3519", "a transient error in the cleanup asks for a re-run of the checks (CAN1)", JIT_SH,
+     "  SAY_CONTEXT=cleanup\n", ""),
+]
+TESTS.update({f"M{n}": "tests/unit/test_workflows.py -k can1" for n in range(3510, 3520)})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

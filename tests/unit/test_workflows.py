@@ -532,7 +532,8 @@ case " ${FAKE_BLOCK:-} " in       # FAKE_BLOCK="apply destroy": wait there until
 esac
 case "$1" in
   version) echo '{"provider_selections": {"registry.terraform.io/hashicorp/azurerm": "4.81.0"}}' ;;
-  destroy) exit "${FAKE_DESTROY_RC:-0}" ;;
+  destroy) [ -z "${FAKE_DESTROY_OUT:-}" ] || cat "$FAKE_DESTROY_OUT"
+           exit "${FAKE_DESTROY_RC:-0}" ;;
   # CAN1: an apply that fails, saying what a file holds (the setup's, or the NIC's update)
   apply) case " $* " in *" nic_tag=v2 "*) out="${FAKE_APPLY2_OUT:-}" ;; *) out="${FAKE_APPLY1_OUT:-}" ;; esac
          if [ -n "$out" ]; then cat "$out"; exit 1; fi ;;
@@ -559,6 +560,8 @@ if a[:2] == ["resource", "list"] and "--tag" in a and ("-g" in a or "--resource-
     sys.exit(2)
 state, name = Path(os.environ["FAKE_STATE"]), opt("-n")
 if a[:2] == ["group", "show"]:
+    if os.environ.get("FAKE_GROUP_ERR"):                # CAN1: the group's read refused, said
+        print(Path(os.environ["FAKE_GROUP_ERR"]).read_text(), file=sys.stderr)
     sys.exit(int(os.environ.get("FAKE_GROUP_RC", "0")))
 elif a[:3] == ["network", "nsg", "show"]:
     print(f"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/{name}")
@@ -593,7 +596,7 @@ def _fake_py(path: Path, body: str) -> None:
 
 def _run_canary(tmp_path: Path, **env):
     bin_, state = tmp_path / "bin", tmp_path / "state"
-    bin_.mkdir()
+    bin_.mkdir(exist_ok=True)               # a test may have put a fake of its own there first
     state.mkdir()
     _fake(bin_ / "terraform", _FAKE_TERRAFORM)
     _fake_py(bin_ / "az", _FAKE_AZ)
@@ -800,7 +803,11 @@ CAN1_REAL = [CAN1_SUB, CAN1_TENANT, CAN1_CLIENT, CAN1_CORRELATION, "10.0.0.4", "
              "2001:db8::1", "fe80:0:0:0:200:f8ff:fe21:67cf", "ops@example.com", "eyJhbGciOi",
              "/subscriptions/", "%2Fsubscriptions%2F",
              # a resource id's end: it goes whole, never its subscription alone
-             "resourceGroups/", "%2FresourceGroups", "Microsoft.Network/"]
+             "resourceGroups/", "%2FresourceGroups", "Microsoft.Network/",
+             # review of c914ccd0: escaped in JSON, a tenant's domain, a SAS, a GUID without its
+             # dashes, an opaque bearer token, an IPv6 after a word and a colon
+             "\\/subscriptions\\/", "resourceGroups\\/", "contoso-canary.onmicrosoft.com", "AbC%2Bsecret",
+             "2026-11-05T00", "0a1b2c3d11114222833344445555abcd", "opaque-token-xyz123", "db8::"]
 CAN1_GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 CAN1_IPV4 = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 CAN1_ENV = {"ARM_SUBSCRIPTION_ID": CAN1_SUB, "ARM_TENANT_ID": CAN1_TENANT, "ARM_CLIENT_ID": CAN1_CLIENT}
@@ -822,8 +829,15 @@ def _can1_error(code: str = "AnotherOperationInProgress", status: str = "409 (40
         f"GET https://management.azure.com/subscriptions%2F{CAN1_SUB}%2FresourceGroups?api-version=2024-05-01",
         f"PUT ?resource=%2Fsubscriptions%2F{CAN1_SUB}%2FresourceGroups%2Frg-eregion-canary",
         "token eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl",
+        '{"id":"\\/subscriptions\\/' + CAN1_SUB + '\\/resourceGroups\\/rg-eregion-canary\\/providers'
+        '\\/Microsoft.Network\\/networkInterfaces\\/nic-with-nsg-gh1-1-0"}',
+        "AADSTS700016: application not found in the directory contoso-canary.onmicrosoft.com.",
+        "blob https://stcanary.blob.core.windows.net/c?sv=2024-05-04&se=2026-11-05T00%3A00Z&sig=AbC%2Bsecret%3D",
+        "request 0a1b2c3d11114222833344445555abcd, Authorization: Bearer opaque-token-xyz123",
+        "address:2001:db8::1, at 2026-11-04T12:03:29.429+00:00",
         "::add-mask::nothing",
         "::stop-commands::canary",
+        "Error: tag value ##[add-mask]PASS and ###[set-output name=x]y",
         "",
         "  with azurerm_network_interface.with_nsg,",
         '  on main.tf line 52, in resource "azurerm_network_interface" "with_nsg":',
@@ -834,11 +848,13 @@ def _can1_error(code: str = "AnotherOperationInProgress", status: str = "409 (40
 
 def _can1_clean(text: str) -> None:
     """Nothing real in what the canary printed: no value of the sample, no GUID, no IPv4, and no
-    line that could start a workflow command."""
+    line that could start a workflow command — `::name::` at a line's start, leading spaces
+    aside, or the historical `##[name]` anywhere in it (actions/runner, ActionCommand.cs)."""
     left = [v for v in CAN1_REAL if v.lower() in text.lower()]
     assert left == [], left
     assert not CAN1_GUID.search(text) and not CAN1_IPV4.search(text), text
     assert not [ln for ln in text.splitlines() if ln.lstrip().startswith("::")], text
+    assert "##[" not in text, text
 
 
 def _can1_module():
@@ -869,7 +885,9 @@ def test_can1_the_filter_takes_out_every_real_form_of_a_loaded_error(tmp_path):
     _can1_clean(out)
     for kept in ("AnotherOperationInProgress", "409 (409 Conflict)", "azurerm_network_interface.with_nsg",
                  "main.tf line 52", 'Network Interface Name: "nic-with-nsg-gh1-1-0"', "12:03:04", "4.81.0",
-                 "<subscription>", "<tenant>", "<client>", "<resource-id>", "<guid>", "<ip>", "<email>", "<token>"):
+                 "<subscription>", "<tenant>", "<client>", "<resource-id>", "<guid>", "<ip>", "<email>", "<token>",
+                 "<tenant-domain>", "se=<sas>", "sig=<sas>", "Bearer <token>", "address:<ip>",
+                 '{"id":"<resource-id>"}', "# #[add-mask]PASS", "## #[set-output", "12:03:29.429+00:00"):
         assert kept in out, (kept, out)
     lines = out.splitlines()
     assert lines[0] == "   terraform apply failed (exit 1); its end, ids, GUIDs and addresses masked:"
@@ -976,7 +994,70 @@ def test_can1_the_canary_prints_no_command_output_but_through_the_filter():
               and 'say "terraform' not in ln]
     assert raw_tf == [], raw_tf
     assert 'command az "$@" 2> "$OUT.az"' in text
-    assert re.search(r'python3 -I "\$SRC/redact\.py" .*< "\$2" >&2', text)
+    # the filter's words kept aside, its errors silenced; printed on its exits 0 and 3 alone
+    assert re.search(r'python3 -I "\$SRC/redact\.py" .*< "\$2" \\\n\s+> "\$OUT\.said" 2>/dev/null', text)
+    # every az, the group's read first, through the wrapper: defined before it is called
+    assert text.index("\naz() {") < text.index("az group show")
+    assert not [ln for ln in code if "command az" in ln and 'command az "$@" 2> "$OUT.az"' not in ln]
+
+
+@pytest.mark.parametrize("text, transient", [
+    ("Error: InvalidResourceReference at 2026-11-04T12:03:29.429+00:00", False),   # milliseconds, no status
+    ("Error: request 1429 failed, code 4290", False),
+    ("unexpected status 429 (429 Too Many Requests)", True),
+    ("StatusCode=429 -- Original Error: x", True),
+    ('{"status": 429, "message": "slow down"}', True),
+    ("HTTP/1.1 429", True),
+])
+def test_can1_a_429_is_a_status_never_a_timestamps_milliseconds(text, transient):
+    """Review of c914ccd0: `…:29.429+00:00` said « transient ». A 429 counts as a status only."""
+    out, rc = _can1_module().report(text, "terraform apply failed (exit 1)", 30, True, {})
+    assert (rc == 3) is transient, out
+
+
+def test_can1_a_filter_that_fails_says_nothing_of_the_text(tmp_path):
+    """The filter stopped halfway (a fake python3 that echoes the text, raw, then exits 1): the
+    canary says the output was withheld, and nothing of it reaches the log."""
+    import sys
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    _fake(bin_ / "python3", f'for a in "$@"; do case "$a" in */redact.py) cat; echo "Traceback: raw" >&2; exit 1;; '
+                            f'esac; done\nexec {sys.executable} "$@"\n')
+    err = tmp_path / "apply2.out"
+    err.write_text(_can1_error())
+    res, _calls, both = _can1_run(tmp_path, FAKE_APPLY2_OUT=str(err))
+    _can1_clean(both)
+    assert "terraform apply failed (exit 1): its output withheld (the filter failed)" in res.stderr, both
+    assert "Traceback" not in both and "plan line" not in both
+    assert res.returncode == 1 and "CHANGED" in res.stdout, both       # no transient error was said
+
+
+def test_can1_a_transient_error_in_the_cleanup_asks_for_no_re_run(tmp_path):
+    """The checks passed; the destroy then fails on a 429: said, the sweep follows, and the line
+    stays green — never « re-run this line before reading a change »."""
+    err = tmp_path / "destroy.out"
+    err.write_text(_can1_error("TooManyRequests", "429 (429 Too Many Requests)"))
+    res, _calls, both = _can1_run(tmp_path, FAKE_DESTROY_RC="1", FAKE_DESTROY_OUT=str(err))
+    _can1_clean(both)
+    assert res.returncode == 0 and "PASS" in res.stdout, both
+    assert "terraform destroy failed (exit 1); its end" in res.stderr and "sweeping" in res.stdout
+    assert "transient (429): Azure said to retry — the cleanup goes on" in res.stderr, res.stderr
+    assert "re-run this line" not in both
+
+
+@pytest.mark.parametrize("code, rc", [("AuthorizationFailed", 2), ("TooManyRequests", 3)])
+def test_can1_the_groups_read_goes_through_the_wrapper(tmp_path, code, rc):
+    """`az group show` was silenced, outside the wrapper: its error is said now, filtered — a
+    transient one makes the line inconclusive (3), any other a setup error (2)."""
+    err = tmp_path / "group.err"
+    err.write_text(f"ERROR: ({code}) The client '{CAN1_CLIENT}' with object id '{CAN1_CORRELATION}' "
+                   f"has no read on scope '{CAN1_RID}'.\nCode: {code}")
+    res, calls, both = _can1_run(tmp_path, FAKE_GROUP_RC="1", FAKE_GROUP_ERR=str(err))
+    _can1_clean(both)
+    assert res.returncode == rc and "create it once" in res.stdout, both
+    assert "az group show -n failed (exit 1); its end" in res.stderr and code in res.stderr, both
+    assert not [c for c in calls if c.startswith(("terraform", "az network"))]
+    assert not list(tmp_path.glob("tmp.*")), "the stack's copy left behind"
 
 
 # ── CI4 (#389): the Terraform tests run on each push and pull request, the providers locked ──

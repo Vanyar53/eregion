@@ -1,9 +1,11 @@
 """OI1 (#488): an image as the registry holds it — a manifest, its config, its layers, each by its
 sha256 — and a fake docker that reads an archive as docker does, run as a program:
 
-    python fake_oci.py docker load|save|pull|tag|image inspect|image rm|run …
+    python fake_oci.py docker load|save|pull|tag|image inspect|image rm|run|rm …
 
-Its state: $DOCKER_STATE/images.json ({name: record}) and $DOCKER_STATE/blobs/<hex>. Two stores,
+Its state: $DOCKER_STATE/images.json ({name: record}), $DOCKER_STATE/blobs/<hex>, the layers
+unpacked ($DOCKER_STATE/snapshots/<diff id hex>) and the containers ($DOCKER_STATE/containers.json,
+{name: image}). Two stores,
 as measured on 03/11 (#488), $FAKE_STORE:
 - ``containerd`` (the default, Docker Desktop's and Orodruin's): an image's id is its manifest's
   digest. An archive without its config loads, an image nobody can tag (« failed to read config
@@ -14,8 +16,16 @@ as measured on 03/11 (#488), $FAKE_STORE:
   layer must be there, each layer's diff id the config's.
 `save` of an image pulled from a registry gives its index and its manifest only (the defect
 measured under Docker Desktop: ~10 KB for ~630 MB); of an image loaded, the whole archive.
-$FAKE_LOAD_DROP=config: the store loses the config after the load. $FAKE_LOAD_ID, $FAKE_LOAD_USER:
-another id, another user than the archive's (a different image). Every call: $DOCKER_STATE/calls.
+$FAKE_LOAD_DROP=config: the store loses the config after the load; =layer (OI2, #490): its last
+layer, the blob and the snapshot — the config still read, `docker image inspect` whole, its layers
+listed from the config (`RootFS.Layers`). $FAKE_LOAD_ID, $FAKE_LOAD_USER: another id, another user
+than the archive's (a different image). Every call: $DOCKER_STATE/calls.
+
+`run` (OI2) creates its container as docker does: the image named, never pulled under `--pull never`
+(and never reached otherwise: no registry), its config read, every layer of it unpacked (else exit
+125, « failed to prepare snapshot »); then runs it — $FAKE_RUN_HANG=<s>: it hangs that long first;
+$FAKE_RUN_EXIT=<n>: its command exits n — and, under `--rm`, removes it. A container left (its run
+killed) holds its image: `image rm` of that name refuses, `rm -f` takes it off.
 """
 import gzip
 import hashlib
@@ -24,6 +34,7 @@ import json
 import os
 import sys
 import tarfile
+import time
 from pathlib import Path
 
 MANIFEST_V2 = "application/vnd.docker.distribution.manifest.v2+json"
@@ -140,9 +151,27 @@ def _name(n: str) -> str:
     return n.removeprefix("docker.io/library/")
 
 
-def _fail(text: str) -> None:
+def _fail(text: str, code: int = 1) -> None:
     sys.stderr.write(f"Error response from daemon: {text}\n")
-    sys.exit(1)
+    sys.exit(code)
+
+
+def _unpack(s: Path, diff_id: str) -> None:
+    (s / "snapshots").mkdir(exist_ok=True)
+    (s / "snapshots" / diff_id.split(":", 1)[1]).touch()
+
+
+def _unpacked(s: Path, diff_id: str) -> bool:
+    return (s / "snapshots" / diff_id.split(":", 1)[1]).exists()
+
+
+def _containers(s: Path) -> dict:
+    p = s / "containers.json"
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
+def _save_containers(s: Path, containers: dict) -> None:
+    (s / "containers.json").write_text(json.dumps(containers, indent=1))
 
 
 def _load(s: Path) -> None:
@@ -172,6 +201,8 @@ def _load(s: Path) -> None:
                 _fail(f"open {path}: no such file or directory")
             if sha(gzip.decompress(data)) != cfg["rootfs"]["diff_ids"][i]:
                 _fail("invalid diffID for layer")
+            _put(s, data)
+            _unpack(s, cfg["rootfs"]["diff_ids"][i])
         name, mdigest, cdigest = legacy["RepoTags"][0], "", sha(cfg_raw)
         ident = cdigest
         _put(s, cfg_raw)
@@ -196,6 +227,7 @@ def _load(s: Path) -> None:
                 if sha(gzip.decompress(data)) != cfg["rootfs"]["diff_ids"][i]:
                     _fail("failed to unpack image: wrong diff id")
                 _put(s, data)
+                _unpack(s, cfg["rootfs"]["diff_ids"][i])
         ident = mdigest
     images = _images(s)
     rec = {"id": os.environ.get("FAKE_LOAD_ID") or ident, "manifest": mdigest,
@@ -203,6 +235,12 @@ def _load(s: Path) -> None:
            "user": os.environ.get("FAKE_LOAD_USER"), "loaded": True}
     if rec["config"] and _blob(s, rec["config"]) is None:
         rec["config"] = None
+    if os.environ.get("FAKE_LOAD_DROP") == "layer":       # the last layer lost after the load
+        lost = json.loads(_blob(s, cdigest))["rootfs"]["diff_ids"][-1]
+        (s / "snapshots" / lost.split(":", 1)[1]).unlink()
+        if mdigest:
+            gone = json.loads(_blob(s, mdigest))["layers"][-1]["digest"]
+            (s / "blobs" / gone.split(":", 1)[1]).unlink()
     images[name] = rec
     _save_images(s, images)
     print(f"Loaded image: {name}")
@@ -306,6 +344,10 @@ def docker(args: list) -> None:
         _save_images(s, images)
         return None
     if args[:2] == ["image", "rm"]:
+        held = [c for c, img in _containers(s).items() if img == args[2]]
+        if held:
+            _fail(f'conflict: unable to remove repository reference "{args[2]}" (must force) - container '
+                  f"{held[0]} is using its referenced image")
         if images.pop(args[2], None) is None:
             _fail(f"No such image: {args[2]}")
         _save_images(s, images)
@@ -313,8 +355,53 @@ def docker(args: list) -> None:
     if args[:2] == ["image", "inspect"]:
         return _inspect(s, args[2:])
     if args[0] == "run":
+        return _run(s, images, args[1:])
+    if args[:2] == ["rm", "-f"]:
+        containers = _containers(s)
+        if containers.pop(args[2], None) is None:
+            _fail(f"No such container: {args[2]}")
+        _save_containers(s, containers)
         return None
     _fail(f"fake docker: {args}")
+
+
+# The options of `docker run` that take a value (those the tests pass).
+_RUN_VALUED = {"--network", "--name", "--entrypoint", "--pull", "--cap-drop", "--security-opt", "--tmpfs",
+               "-v", "--volume", "-e", "--env", "--env-file", "-u", "--user", "-w", "--workdir"}
+
+
+def _run(s: Path, images: dict, args: list) -> None:
+    opts, i = {}, 0
+    while i < len(args) and args[i].startswith("-"):
+        valued = args[i] in _RUN_VALUED
+        opts.setdefault(args[i], []).append(args[i + 1] if valued else True)
+        i += 2 if valued else 1
+    name = args[i]
+    rec = images.get(name)
+    if rec is None:
+        sys.stderr.write(f"Unable to find image '{name}' locally\n")
+        if (opts.get("--pull") or ["missing"])[-1] == "never":
+            _fail(f"No such image: {name}", 125)
+        _fail(f"pull access denied for {name.split(':')[0]}, repository does not exist", 125)
+    raw = _blob(s, rec["config"]) if rec.get("config") else None
+    if raw is None:
+        _fail(f"failed to create container: content digest {rec.get('config') or '?'}: not found", 125)
+    for diff_id in json.loads(raw)["rootfs"]["diff_ids"]:
+        if not _unpacked(s, diff_id):
+            _fail(f"failed to create container: failed to prepare snapshot: snapshot {diff_id} does not "
+                  "exist: not found", 125)
+    containers = _containers(s)
+    cname = (opts.get("--name") or [f"c{len(containers)}"])[-1]
+    if cname in containers:
+        _fail(f'Conflict. The container name "/{cname}" is already in use by another container', 125)
+    containers[cname] = name
+    _save_containers(s, containers)
+    time.sleep(float(os.environ.get("FAKE_RUN_HANG") or 0))
+    if "--rm" in opts:
+        containers = _containers(s)
+        containers.pop(cname, None)
+        _save_containers(s, containers)
+    sys.exit(int(os.environ.get("FAKE_RUN_EXIT") or 0))
 
 
 if __name__ == "__main__":

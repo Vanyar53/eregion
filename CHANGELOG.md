@@ -4,6 +4,8 @@ Notable changes to Eregion. The format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-11-04 — "nothing left unread"
+
 ### Changed
 - **The azurerm canary says the end of a failed command's error, nothing real in its public log** (CAN1, #501; `docs/operations.md`, « Le canari azurerm, sans secret »). The 04/11 run's 5.0 line went red on « apply updating the NIC succeeds », then green on its third attempt: `run.sh` had sent the apply's output to `/dev/null`, so nobody could tell a passing 429 from a change of Azure.
   - **Said now**: a terraform command that fails (init, apply, destroy, a plan's exit 1 — its exit 2 is its answer) prints its last 30 lines, an az command its stderr (the group's read too), both on stderr.

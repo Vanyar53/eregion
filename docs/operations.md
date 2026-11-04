@@ -1633,7 +1633,13 @@ en même temps, une vingtaine de jobs, les runs attendaient jusqu'à 15 minutes)
   de `ci.yml` est la sienne seule : l'audit des dépendances, rouge un soir d'avis, rendrait rouge le
   commit de `main`, et le CD de H0 refuse une release dont un check est rouge). Un rouge sur `main`
   ouvre l'issue « CI : les tests macOS sont rouges sur main », ou commente celle qui est ouverte
-  (job `macos-red`, `issues: write` à lui seul, jamais sur une PR, sans checkout ni action).
+  (job `macos-red`, `issues: write` à lui seul, jamais sur une PR, sans checkout ni action). Un
+  macOS annulé compte comme rouge : un délai dépassé ou un runner jamais obtenu remontent
+  `cancelled`, et rien n'annule un run de `main`. L'issue cherchée est celle de ce workflow
+  (`--author app/github-actions`) : une issue du même titre ouverte par un autre n'est pas la sienne.
+  **Un macOS rouge ou annulé sur le commit d'une release fait refuser son déploiement par le CD de
+  H0** (il compte `cancelled` comme rouge) : Jonathan relance le job (l'App ne le peut pas) avant
+  de publier.
 - **200 séquences d'invariants sur une PR**, 500 sur un push sur `main`, 10 000 la nuit
   (`invariants.yml`, inchangé).
 - **Un push sur une PR annule le run qu'il remplace** (`concurrency`, `cancel-in-progress`) : CI,

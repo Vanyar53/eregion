@@ -6869,3 +6869,96 @@ def test_an_acknowledged_drift_whose_turned_pair_another_perimeter_wrote_again_i
     still gone said anew (`reassert_said._back`). Reduced to three rules of the twenty, through the
     conftest; red on `main` d597a00e, both."""
     _replay(monkeypatch, _l1h_net(), *steps)
+
+
+# ── I11g (#508): the readiness file's lock is the scheduler's ──────────────────────────────
+
+def _i11g_rules(*pairs):
+    from .test_invariants import _TEMPLATES
+    return [_rule(name, prio, _TEMPLATES[name]) for name, prio in pairs]
+
+
+# Seed 43 at 500 sequences, as Hypothesis printed it.
+_I11G_NET = {
+    "subnet_nsg": _i11g_rules(("allow-https", 100), ("allow-lateral-out", 120)),
+    "edge_nsg": _i11g_rules(("allow-ssh", 101), ("allow-lateral-out", 100)),
+    "tier_rules": _i11g_rules(("allow-ssh", 150), ("allow-https", 1100)),
+    "nics": {
+        "web-nic": {"own": "tier", "policy": True, "rules": _i11g_rules(
+            ("allow-https", 110), ("allow-lateral-out", 100), ("deny-lateral-in", 130))},
+        "db-nic-0": {"own": "dedicated", "policy": True,
+                     "rules": _i11g_rules(("allow-ssh", 1000), ("allow-https", 100))},
+        "db-nic-1": {"own": "dedicated", "policy": False, "rules": _i11g_rules(("deny-lateral-in", 130))},
+        "api-nic": {"own": "dedicated", "policy": True,
+                    "rules": _i11g_rules(("allow-ssh", 150), ("allow-lateral-out", 100))},
+    },
+    "windows": "Db--01",
+    "config": {"rg": "", "forensic": ["10.9.9.9"], "quarantine": True, "readable": True},
+    "legacy": ("api-nic", False), "data_subnet": None, "data_primary": True,
+}
+_I11G_NSG_DB0 = "/subscriptions/s/resourcegroups/rg-app1/providers/microsoft.network/networksecuritygroups/nsg-db-nic-0"
+_I11G_NSG_API = "/subscriptions/s/resourcegroups/rg-edge/providers/microsoft.network/networksecuritygroups/nsg-api-nic"
+_I11G_TAKEN_UP = ("taken_up_by_its_lowercase_id", DB, "isolation", "non_disruptive", "human_only", "non_disruptive")
+_I11G_RACE = ("concurrently", DB, "isolate", 0, API, "isolate", "human_only", 1822705116)
+_I11G_FOUND = (
+    ("reset_from_azure", API, API, ("nic.get", "always-429")),
+    ("someone_detaches_the_quarantine",),
+    ("delete_vm", WEB2),
+    ("reassert", "non_disruptive", (15, "after-429")),
+    ("terraform_apply", _I11G_NSG_DB0),
+    _I11G_TAKEN_UP,
+    ("customer_removes_rule", _I11G_NSG_DB0, "allow-https"),
+    ("concurrently", WEB1, "reassert", 3, "release", "non_disruptive", 540525683),
+    ("customer_deletes_nsg", _I11G_NSG_API),
+    _I11G_RACE)
+# Db--01 and api on NSGs of their own, a policy refusing the quarantine on db-nic-0 and api-nic:
+# both isolations record a quarantine refusal (readiness), in these orders one inside the other's.
+_I11G_MINIMAL = {"quarantine": True, "db_nic_0": {"own": "dedicated", "policy": True},
+                 "api_nic": {"own": "dedicated", "policy": True}}
+
+
+@pytest.mark.parametrize("net,steps", [
+    (_I11G_NET, _I11G_FOUND),
+    (_I11G_NET, (_I11G_TAKEN_UP, _I11G_RACE)),
+    *[(_net(**_I11G_MINIMAL), (("concurrently", DB, "isolate", 0, API, "isolate", "human_only", seed),))
+      for seed in (7, 26, 28)],
+], ids=["as found", "reduced", "minimal seed 7", "minimal seed 26", "minimal seed 28"])
+def test_two_isolations_at_once_that_both_record_a_quarantine_refusal(monkeypatch, net, steps):
+    """I11g (#508), seed 43 at 500 sequences: « I11: op-1 never came back: {'op-1': 'run', 'op-2':
+    'wait'} ». Db--01 and api isolated at once, a policy refusing our quarantine NSG on a NIC of
+    each: both record the refusal in the readiness file (`readiness.record_quarantine_refusal`).
+    op-2 stopped at its write (a turn of the scheduler, `state.write`) inside the file's lock —
+    readiness's own thread lock, out of the scheduler's sight; op-1, given its turn, blocked in it
+    and never came back. Not a deadlock of the code (the lock's holder waits for nothing else, it
+    writes and lets go): a lock the machine did not drive. The lock is the shared one of the local
+    files now (`locks._file_lock`, read at call time), as the escalations' (I3F, #292). Reduced by
+    greedy removal of the ten rules, replayed through the conftest, to two; then to the race alone,
+    on a network of its own, three orders of forty. Red on `main` 8710dba7, every one."""
+    import functools
+    from . import test_invariants
+    # A turn takes milliseconds: a thread that never comes back fails in seconds, not twenty.
+    monkeypatch.setattr(test_invariants, "_Scheduler", functools.partial(test_invariants._Scheduler, timeout=5))
+    _replay(monkeypatch, net, *steps)
+
+
+def test_a_race_whose_two_operations_rewrite_the_readiness_file(monkeypatch):
+    """The same at its root (I11g, #508): two operations of a race that each rewrite the readiness
+    file, for two VMs. Each order of the two ends — neither blocked out of the scheduler's sight —
+    and both records are there: one read-modify-write after the other, never two reads before
+    either writes (a refusal lost, and the VM's reason for its mode with it)."""
+    from glorfindel import readiness
+    from .test_invariants import _CURRENT, _Chaos, _Scheduler
+    invariant_env(monkeypatch)
+    monkeypatch.setattr(_CURRENT, "chaos", _Chaos())
+    try:
+        for seed in range(8):
+            readiness._STATE_FILE.unlink(missing_ok=True)
+            _CURRENT.scheduler = _Scheduler(seed, timeout=5)
+            out = _CURRENT.scheduler.run([
+                ("op-1", lambda: readiness.record_quarantine_refusal(DB, ["policy"])),
+                ("op-2", lambda: readiness.record_quarantine_refusal(API, ["policy"]))])
+            assert all(exc is None for _, exc in out.values()), (seed, out)
+            assert all(readiness._raw(vm).get("quarantine_refused") for vm in (DB, API)), (
+                seed, readiness._read())
+    finally:
+        _CURRENT.scheduler = None

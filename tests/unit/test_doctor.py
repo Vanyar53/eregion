@@ -42,7 +42,7 @@ def good_env(**over) -> dict:
 class Recorder:
     """Every command the doctor would run, answered as told."""
 
-    def __init__(self, rc=0, stdout=""):
+    def __init__(self, rc=0, stdout="29.0.0\n"):
         self.calls, self.rc, self.stdout = [], rc, stdout
 
     def __call__(self, cmd):
@@ -115,6 +115,18 @@ def test_one_failure_exits_1_and_says_the_command_that_fixes_it(repo, home):
     assert doctor.exit_code(checks) == 1
     text = doctor.render(checks)
     assert "→ installer Docker" in text and "1 point(s) à corriger" in text
+
+
+def test_docker_without_its_daemon_fails_though_the_cli_exits_0(repo, home):
+    """Measured at the replay: with no daemon, `docker info --format` prints nothing and exits 0."""
+    checks = doctor.run_checks("discover", good_env(), home, repo, probes(run=Recorder(rc=0, stdout="")))
+    assert any("son démon ne répond pas" in n for n in failed(checks))
+
+
+def test_a_run_refused_on_a_workstation_points_to_the_bench_guide():
+    from annatar.cli import _RUN_HINTS
+    hints = dict(_RUN_HINTS)
+    assert "docs/demarrer/banc.md" in hints["glorfindel:"] and "docs/demarrer/banc.md" in hints["passive:"]
 
 
 def test_an_optional_thing_missing_is_said_but_never_fails(repo, home):

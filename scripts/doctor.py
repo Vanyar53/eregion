@@ -156,8 +156,10 @@ def tools(profile: str, p: Probes, repo: Path) -> list[Check]:
         if not p.which("docker"):
             out.append(Check(g, "docker absent", FAIL, "installer Docker : https://docs.docker.com/get-docker/"))
         else:
+            # Without a daemon, `docker info --format` still exits 0 (measured at the replay,
+            # docker 27.3): only a server version printed says the daemon answered.
             r = p.run(["docker", "info", "--format", "{{.ServerVersion}}"])
-            out.append(Check(g, "docker répond", OK) if r is not None and r.returncode == 0
+            out.append(Check(g, "docker répond", OK) if r is not None and r.returncode == 0 and r.stdout.strip()
                        else Check(g, "docker installé, mais son démon ne répond pas", FAIL,
                                   "démarrer Docker ; sous Linux, ton utilisateur dans le groupe docker "
                                   "(sudo usermod -aG docker $USER, puis rouvrir la session)"))

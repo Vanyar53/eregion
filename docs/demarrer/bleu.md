@@ -111,6 +111,7 @@ make profile-discover  # construit l'image eregion-glorfindel (~1 min 15), déma
 La cible finit par l'URL de la console, avec son jeton. Tu la retrouves par `make console-url`.
 - La console écoute sur `127.0.0.1:7007` seulement, et demande toujours ce jeton.
 - Le port est pris ? `EREGION_CONSOLE_PORT=<port> make profile-discover`, puis `EREGION_CONSOLE_PORT=<port> make console-url`.
+- La watch redémarre en boucle ? `make glorfindel-logs` dit pourquoi. Le cas le plus courant : « glorfindel-config.yaml refusé ». La watch ne démarre pas sur une configuration mal écrite, et le message nomme chaque clé fautive. Sans le venv, `make doctor` ne lit le fichier que pour son `workspace_id` ; après `make install`, il le lit comme la watch.
 
 ## 6. Ce que tu dois voir, et quand
 

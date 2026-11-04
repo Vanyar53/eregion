@@ -422,7 +422,12 @@ def _rewrite_block(connector, b: dict, vm: str, rid: str, ip: str, report: list[
         except Exception as exc:
             failed(scope, exc)
     if len(errors) < len(scopes):
-        _update_block_entry(ref or vm, ip, reasserted_at=now)
+        # Written again: the episode ends in the write of `reasserted_at` (L1O, #507) — over first, in
+        # memory, whatever that write does. Its marks kept, the card « reposé une fois » pending read
+        # « already said »: gone again before the next pass, as it was read here, in silence — yet that
+        # card says « s'il disparaît encore, Glorfindel alertera ». Not whole, its card opens a new one.
+        episode(ref or vm, ip, over=True)
+        _update_block_entry(ref or vm, ip, reasserted_at=now, drift_alerted_at=None, drift_said=None)
         # Said from Azure read again, never from the writes alone (A0): « reposé » only
         # for a block that holds whole.
         try:

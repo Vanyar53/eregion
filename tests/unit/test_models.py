@@ -30,3 +30,19 @@ def test_an_empty_variable_means_the_default(monkeypatch):
     assert models.annatar_model() == models.DEFAULT_ANNATAR_MODEL   # its own (19/10)
     monkeypatch.setenv("GLORFINDEL_LLM_MODEL", "anthropic/claude-sonnet-5-5")
     assert models.glorfindel_model() == "anthropic/claude-sonnet-5-5"
+
+
+def test_the_variables_a_model_needs_follow_its_provider():
+    """OL1 (#525): the rule H0's host.env applies (infra/glorfindel-host/host_env.py), defined
+    once in the core for whoever checks a deployment — tests/unit/test_glorfindel_host.py holds
+    the oracle for each provider."""
+    import pytest
+
+    from eregion_core import models
+    assert models.model_provider("") == models.model_provider(models.DEFAULT_LLM_MODEL) == "anthropic"
+    assert models.required_env("mistral/mistral-large-latest") == ("MISTRAL_API_KEY",)
+    assert models.required_env("ollama/llama3.1") == ("GLORFINDEL_LLM_BASE_URL",)
+    assert models.required_env("ollama/llama3.1", base_url="http://ollama:11434") == ()
+    assert models.missing_env("azure/gpt-4o", {"AZURE_API_KEY": "fake-key"}) == ["AZURE_API_BASE"]
+    with pytest.raises(models.UnknownProvider):
+        models.required_env("gemini/gemini-pro")

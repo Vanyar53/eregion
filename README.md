@@ -545,6 +545,7 @@ eregion console [--sections annatar,gothmog]    # web console on http://localhos
 eregion coverage [--json] [--check]             # the coverage matrix from runs/ (C1): each technique and fault, its last proof and state; --check exits 1 on a regression
 
 # Annatar — acts only from an armed Orodruin (docs/demarrer/banc.md); here: list, validate, --dry-run
+annatar validate --all                                            # check every scenario (or one: a path or a name); exits 1 if one is invalid
 annatar run annatar/scenarios/azure/ransomware-vm.yaml            # run a scenario (--dry-run available)
 annatar run annatar/scenarios/azure/data-exfiltration.yaml
 annatar run annatar/scenarios/azure/lateral-movement.yaml

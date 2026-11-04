@@ -1745,9 +1745,15 @@ job par image décide lui-même, dans son premier step, de construire ou de pass
 `notify.yml`. `tests/unit/test_workflows.py` exige que chaque workflow lancé par un push, une PR ou
 la nuit y figure, sauf ses exceptions écrites (Notify lui-même, Roadmap, vert par conception).
 
-**Et le CD de H0** : il exige que tous les checks du commit d'une release soient verts. Un job
-`image` rouge sur `main` fait donc refuser la release, avant même son préflight. L'étape 2 de #267,
-décidée par Jonathan le 29/10 : la section suivante.
+**Et le CD de H0** : il ne bloque une release que sur les cinq checks requis de `main` et sur
+`publish (glorfindel)`, l'image qu'il tire (H1c, #518, décision de Jonathan du 04/11). `image
+(glorfindel)` et `image (annatar)` en sont : un job `image` rouge sur `main` fait donc refuser la
+release, avant même son préflight. Un autre check rouge ou annulé (macOS sans runner, un composant,
+les profils compose) est dit dans `#deploy`, en orange, sans retenir H0 ; en cours, il ne retarde
+rien (`infra/glorfindel-host/README.md`, « Le CD de H0 », point 2). La liste est une constante de
+l'agent installé, `REQUIRED_CHECKS`, égale à celle de `docs/sessions.md` (« Les règles du dépôt »)
+par un test : un check requis ajouté ou retiré demande les deux, puis `make
+glorfindel-host-cd-install`. L'étape 2 de #267, décidée par Jonathan le 29/10 : la section suivante.
 
 ## Les images publiées (CI3, #267, 29/10)
 
@@ -1902,9 +1908,9 @@ rafraîchissement du verrou sans contrôle).
   et reste vert ; un audit en échec est dit, jamais rouge (le passage hebdomadaire l'est). **Jamais
   rouge sur un push** : ses deux étapes, l'installation de pip-audit (PyPI qui ne répond pas) et
   l'audit, continuent en erreur (`continue-on-error` sur les étapes, pas sur le job), le check-run
-  reste vert. Le CD de H0 lit tous les check-runs du commit d'une release : un avis
-  publié en amont ne doit pas retenir une release qui tourne avec la même dépendance — le passage
-  hebdomadaire le dit, par son issue.
+  reste vert. Un avis publié en amont ne doit pas retenir une release qui tourne avec la même
+  dépendance — le passage hebdomadaire le dit, par son issue. Depuis H1c, ce check n'est pas de
+  ceux qui bloquent le CD de H0 : rouge, il serait dit dans `#deploy`, sans retenir la release.
 - **pip-audit a son propre verrou**, `requirements/audit.txt` (issu de `requirements/audit.in`,
   version épinglée), avec empreintes. Il s'installe dans un venv à part, jamais dans l'image ni
   dans `dev.txt`. Le workflow utilise le Python du runner, sans action tierce. Son seul secret est
@@ -2030,8 +2036,13 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 - **L'image de la release** (CI3) : le commit que vise le brouillon a déjà ses deux images publiées,
   attestées et signées (`publish.yml` tourne sur la tête de chaque push sur `main`, « Les images publiées »).
   Avant de cliquer « Publish », les checks `publish (glorfindel)` et `publish (annatar)` de ce commit
-  doivent être verts : sinon le CD de H0 attend une heure, puis refuse la release, sans jamais la
-  construire.
+  doivent être verts. Sans `publish (glorfindel)`, le CD de H0 attend une heure, puis refuse la
+  release, sans jamais la construire ; rouge ou annulé, il la refuse. `publish (annatar)` sert
+  Orodruin : le CD le dit seulement (H1c). Le CD ne bloque aussi que sur les cinq checks requis de
+  `main` : un macOS annulé faute de runner ne retient plus la release.
+- **Une release qui change l'agent du CD** (`infra/glorfindel-host/cd/`, H1c par exemple) : `make
+  glorfindel-host-cd-install` avant de la publier, depuis un checkout de `main` qui la porte.
+  L'agent ne se remplace jamais lui-même (`infra/glorfindel-host/README.md`, « Le CD de H0 »).
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
   lit le code sur une liste blanche : quatre commandes `gh` seulement (`pr create`, `release list`,
   `release create` avec `--draft`, `release edit` des seules notes), jamais `gh api`. Une commande ne

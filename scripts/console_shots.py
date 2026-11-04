@@ -391,7 +391,7 @@ def install(api, doc: dict, put=setattr) -> None:
     put(inscription.TagEnrollment, "vms", lambda self, subscription, **kw: [dict(v) for v in vms])
     put(api, "READ_TARGETS", lambda subscription: [dict(v) for v in vms])
     put(api, "_board_rules", lambda: rules)
-    put(watch_gate, "refusal", lambda now=None: "")
+    put(watch_gate, "refusal", lambda now=None, **kw: "")
     bench_scope = inscription.Scope.for_bench
 
     def for_bench(cls):

@@ -179,7 +179,9 @@ glorfindel --version                         # 0.2.0
 #   configuré (EREGION_WATCH_CHANNEL : la watch hébergée vue d'Orodruin — un fichier de cet hôte n'en dit
 #   rien) ; sinon le fichier local ~/.glorfindel/watch_heartbeat (une watch sur le même hôte ; `make
 #   annatar-run` monte sa copie, ~/.glorfindel/injectors — SEC3). Un battement de moins de 90 s, et pas daté de plus de 10 s dans le futur (le
-#   décalage des horloges H0 ↔ Orodruin) : la watch vit. Sinon : refus, code 1, et le message dit depuis quand
+#   décalage des horloges H0 ↔ Orodruin), signé par la clé de la watch et vérifié avec EREGION_WATCH_KEY, la clé
+#   publique épinglée de ce côté (SEC19 ; make watch-key, make glorfindel-host-watch-key) : la watch vit. Non
+#   signé, d'une autre clé, rejoué, ou aucune clé épinglée : refusé, la raison dite. Sinon : refus, code 1, et le message dit depuis quand
 #   date le dernier battement (« never » s'il n'y en a pas, la raison entre parenthèses : pas de fichier, canal
 #   illisible… ; « in the future » si une horloge est fausse). Rien n'a été touché : ni contrat d'Orodruin, ni
 #   cible, ni fenêtre, ni rapport. Une campagne sans watch est refusée entière (une ligne, code 1, son état
@@ -1101,6 +1103,106 @@ console.
 
 ---
 
+## Le battement signé, l'attestation signée — les gestes (SEC19, #456)
+
+**Ce qui change.** Un injecteur ne croit plus le battement de la watch que **signé par la clé de la
+watch**, vérifié avec la clé publique épinglée de son côté (`EREGION_WATCH_KEY`, N-03 ;
+[`docs/design/watch-key.md`](design/watch-key.md)). Le CD de H0 ne croit plus l'attestation du
+harnais que **signée par ta clé** (une paire cosign à toi, sans journal public : aucune adresse
+publiée, ni dans le dépôt ni chez sigstore), sa clé publique épinglée dans la config de H0 (R-13 ;
+`infra/glorfindel-host/README.md`, « L'attestation du harnais »). Sans clé épinglée, un injecteur
+refuse tout run et le dit, et Dagorlad refuse toute demande ; sans clé déclarée sur H0, le CD
+refuse tout nouveau verrou et le dit. Rien ne se déploie en silence.
+
+**La clé de l'attestation, une fois** (Jonathan) : `make harness-key`. cosign tire la paire dans
+`~/.config/eregion/harness/` (0700), la clé privée chiffrée par la phrase de passe que tu tapes —
+jamais dans `.envrc`, jamais dans un fichier du dépôt ; **une phrase vide laisse la clé sans
+protection** —, `cosign.key` en 0600 ; la commande refuse hors d'un terminal (cosign lirait la phrase
+sur l'entrée standard), une destination sous le dépôt (`*.key` est aussi dans `.gitignore`), un lien
+ou une clé déjà là ; `COSIGN_PASSWORD` n'est jamais passé à cosign, ni ici ni par `make harness-sign` :
+la phrase se tape à chaque fois, et imprime la ligne à épingler, `EREGION_HARNESS_KEY=…` : le DER de la
+clé publique (`cosign.pub` sans ses deux lignes PEM) en base64, **sur une ligne, sans guillemets**
+(le CD lit `host.env` comme compose, une ligne par clé, et garderait les guillemets). Les sessions
+tournent sous ton utilisateur Unix (SEC12) et s'interdisent de lire `~/.config/eregion/` : la
+phrase de passe est ce qui protège la clé d'une session qui l'enfreindrait. Plus fort, en option :
+une clé matérielle (`cosign generate-key-pair --sk`, puis `sign-blob --sk`), jamais sur disque.
+
+**L'ordre (Jonathan), pour la 0.5.3 — REN1 et SEC19 ensemble.** Une installation de l'agent faite
+selon la seule liste de REN1, avant la fusion de SEC19, est à refaire (étape 2) : l'agent d'avant
+ne crée pas le répertoire de la clé de la watch et ne lit pas `EREGION_HARNESS_KEY`.
+
+1. **La clé de l'attestation sur H0.** `make harness-key` (ci-dessus) ; sa ligne
+   `EREGION_HARNESS_KEY=…` dans `infra/glorfindel-host/host.env` ; puis
+   `source .envrc && make glorfindel-host-push`. Cette clé ne va dans aucun conteneur ; seul le CD
+   la lit, jamais le dépôt.
+2. **L'agent du CD, avant de publier.** `make glorfindel-host-cd-install` depuis un checkout de
+   `main` qui porte REN1 et SEC19 (`make glorfindel-host-cd-disable` d'abord pour voir la release à
+   blanc avant qu'elle se déploie) : son `deploy.sh` crée `~/.eregion/watch-key` au nom de
+   l'utilisateur de H0 avant que le compose ne le monte (laissé à docker, il serait à root, et la
+   watch n'aurait pas de clé).
+3. **La release** publiée (la 0.5.3).
+4. `make glorfindel-host-cd-check` (« ✅ À blanc : v0.5.3 est prête »), puis
+   `make glorfindel-host-cd-enable`. Le verrou de Glorfindel ne change pas dans SEC19 : aucune
+   attestation n'est demandée pour cette release.
+5. **La clé de la watch de H0.** Une fois la release en service : `make glorfindel-host-watch-key`
+   (lue dans le conteneur de la watch, par SSH, clé d'hôte épinglée). Sa ligne
+   `EREGION_WATCH_KEY=ed25519:…` dans `host.env` et dans `infra/orodruin/orodruin.env` ; puis
+   `source .envrc && make glorfindel-host-push`, et **sur H0** (`make glorfindel-host-ssh`)
+   `cd eregion && docker compose up -d war-room` : la console relit son environnement (`restart` ne
+   le relit pas). Entre la release et ce geste, Dagorlad refuse toute demande (« no watch key
+   pinned ») : c'est attendu.
+6. **Orodruin.** `make orodruin-push REF=v0.5.3` (l'image des injecteurs qui vérifie, et
+   `orodruin.env`), puis `make orodruin-check`. Un exercice lancé avant l'étape 5 est refusé
+   (« no watch key pinned ») : c'est attendu.
+7. **Ce poste.** `make glorfindel-restart` : la watch locale tire sa clé dans `~/.eregion/watch-key/`
+   (créé en 0700 par la cible) et dit son empreinte dans `make glorfindel-logs`. Puis
+   `make watch-key`, sa ligne `export EREGION_WATCH_KEY=ed25519:…` dans ton `.envrc`,
+   `source .envrc`, et **`make glorfindel-restart` de nouveau** : la console locale n'avait pas la
+   clé au premier démarrage. Sans elle, `make annatar-run` et Gothmog refusent (« no watch key
+   pinned »).
+8. **Au prochain verrou** : `make llm-compare … ATTEST=1`, puis `make harness-sign`, puis
+   `make harness-verify`, les deux fichiers dans la PR du verrou (« Verrou des dépendances »,
+   ci-dessous).
+
+**`make glorfindel-shell` ne monte pas la clé de la watch** (elle n'est montée que là où tourne la
+watch : `make glorfindel-start`, `make glorfindel-watch`). Dans ce shell, `glorfindel watch-key` dit
+qu'il ne la trouve pas — elle est sur l'hôte : `make watch-key`. Une watch lancée depuis ce shell
+tirerait une clé éphémère, dans le conteneur, que les injecteurs refuseraient (« signed by another
+key ») : lancer la watch par `make glorfindel-start`.
+
+**La règle de passage** (l'attestation) : la signature est exigée à chaque changement de
+`requirements/glorfindel.txt`, dès l'agent de SEC19 installé ; une release qui garde le verrou n'en
+demande pas, comme avant. Aucune attestation antérieure n'est relue : chacune est liée au sha256 de
+son verrou, et un nouveau verrou demande une nouvelle attestation — la première signée sera donc
+celle du prochain verrou, faite en même temps. Pas de grâce par date ni par commit : la date est
+dans le fichier, écrit par qui le fusionne, et aucune attestation d'avant SEC19 ne peut porter un
+verrou à venir. Un retour arrière (`make glorfindel-host-cd-rollback`) vers une release d'avant
+SEC19 dont le verrou diffère de celui en service est refusé (son attestation n'est pas signée) ; le
+secours reste `make glorfindel-host-start REF=<tag>`.
+
+**La rotation, la révocation.** Changer de clé : `make harness-key` dans un autre répertoire
+(`python3 scripts/published_image.py harness-key <dir>`, ou l'ancienne retirée d'abord), la nouvelle
+ligne dans `host.env`, `make glorfindel-host-push`, puis re-signer l'attestation du verrou en attente
+(`make harness-sign KEY=<dir>/cosign.key`). Révoquer : vider `EREGION_HARNESS_KEY` dans `host.env` et
+pousser — plus aucun nouveau verrou n'est cru. Une clé volée signe comme toi jusque-là. Après une
+rotation, un retour arrière vers une release dont le verrou diffère de celui en service, et dont
+l'attestation est signée par l'ancienne clé, est refusé (« signée d'une autre clé ») : le secours
+reste `make glorfindel-host-start REF=<tag>`.
+
+**Si l'ordre n'est pas tenu** :
+- la release publiée avant l'étape 2 : `~/.eregion/watch-key` est créé par docker, au nom de root ;
+  la watch le dit en rouge (« Clé de la watch indisponible ») et ses battements partent sans
+  signature, refusés par les injecteurs à jour. Sur H0 (`make glorfindel-host-ssh`) :
+  `sudo chown "$USER": ~/.eregion/watch-key && chmod 700 ~/.eregion/watch-key && docker restart eregion-watch`,
+  puis l'étape 2 ;
+- un nouveau verrou avant l'étape 1 : refusé (« aucune clé de l'attestation déclarée sur H0 »),
+  puis `make glorfindel-host-cd-retry` une fois `host.env` poussé ;
+- la clé de la watch retirée ou tirée à nouveau (une VM reconstruite, une clé vide après un disque
+  plein : la watch dit « remove it ») : « signed by another key » chez les injecteurs ; refaire
+  l'étape 5 (et la 7 pour ce poste).
+
+---
+
 ## Configuration — `glorfindel-config.yaml` lue strictement (A3, 27/10)
 
 Le fichier est lu clé par clé : une clé que rien ne lit, une valeur du mauvais type, `"false"` entre
@@ -1400,6 +1502,29 @@ make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1             # référenc
 make llm-compare MODELS=<modèle de H0> RUNS=3 ATTEST=1 BASE=v0.4.6 # H0 tourne sur une autre release
 git add requirements/harness.json       # dans la PR du verrou
 ```
+
+**Puis la signer** (SEC19, R-13 : le CD ne croit l'attestation que signée par ta clé) :
+
+```bash
+make harness-sign                       # la clé de make harness-key ; cosign demande sa phrase de passe
+make harness-verify                     # ta cosign.pub locale ; PINNED=<valeur de EREGION_HARNESS_KEY> : la clé de host.env
+git add requirements/harness.json requirements/harness.json.sigstore.json
+```
+
+`make harness-sign` installe cosign épinglé (`published_image.py install-cosign`), puis signe
+l'attestation **hors ligne**, avec la clé privée de `make harness-key`
+(`~/.config/eregion/harness/cosign.key`) : `cosign sign-blob --key … --signing-config <aucun
+service> --bundle …`. Rien n'est envoyé à un journal de transparence, aucun certificat n'est
+délivré : `requirements/harness.json.sigstore.json` ne porte que la signature et l'indice de la
+clé (le sha256 de sa clé publique), et la commande le refuse s'il portait un certificat ou une
+entrée du journal. Mesuré le 03/11 avec cosign v3.1.3 et une paire jetable, le réseau coupé :
+v3.1.3 n'a plus `--tlog-upload` ; `--use-signing-config=false` seul envoie encore à
+rekor.sigstore.dev ; seule une config de signature sans service garde la signature hors du
+journal. Toute modification de l'attestation après la signature la rend invalide : la signer en
+dernier. **`make harness-verify` lit par défaut ta `cosign.pub` locale, pas la clé de `host.env`** :
+pour vérifier exactement ce que H0 croira, `make harness-verify PINNED=<la valeur de
+EREGION_HARNESS_KEY>`. Le CD la vérifie avec la clé publique épinglée dans `host.env` (`EREGION_HARNESS_KEY`),
+jamais avec ce que dit le dépôt (`infra/glorfindel-host/README.md`, « L'attestation du harnais »).
 
 **Deux passages** (H3, #324, `scripts/harness_attest.py`). Le harnais tourne d'abord sur la
 référence : le verrou de la release en service, installé avec `--require-hashes` dans un venv

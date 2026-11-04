@@ -855,6 +855,23 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
     # — not the whole of ~/.glorfindel (escalations, isolation state, the client's rules).
     # The watch writes its heartbeat there too, the one thing they read (V1).
     _INJECTOR_BEAT = _INJECTORS_DIR / "watch_heartbeat"
+    # SEC19 (N-03): the watch's key, drawn at its first start (~/.eregion/watch-key, a directory
+    # only the watch mounts); its fingerprint said, for the operator to pin it on the injectors'
+    # side (make watch-key). Unavailable: the heartbeats go unsigned — the injectors refuse them.
+    from eregion_core import watch_key as _watch_key
+    _key_said = [""]
+
+    def _signer():
+        signer, why = _watch_key.shared()
+        said = f"ok {signer.fingerprint}" if signer else why
+        if said != _key_said[0]:
+            _key_said[0] = said
+            if signer:
+                console.print(f"[dim]Clé de la watch : {signer.fingerprint} (make watch-key pour l'épingler)[/dim]")
+            else:
+                console.print(f"[red]Clé de la watch indisponible — battements non signés, les injecteurs "
+                              f"les refusent (SEC19) :[/red] {why}")
+        return signer
 
     def _write_heartbeat() -> None:
         at = datetime.now(timezone.utc)
@@ -864,8 +881,8 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
             from glorfindel.response.state import _atomic_write_text
             # SEC5 (N-03): with the perimeter it watches (a digest of its subscription), which
             # the injectors compare with their own (eregion_core/watch_gate.py). For them to
-            # read: nothing secret.
-            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at)), mode=0o644)
+            # read: nothing secret. SEC19: signed by the watch's key.
+            _atomic_write_text(_INJECTOR_BEAT, json.dumps(beat_body(at, signer=_signer())), mode=0o644)
         except OSError as exc:          # a directory docker made as root: the watch goes on
             console.print(f"[yellow]Battement pour les injecteurs non écrit ({exc}) — "
                           "`make glorfindel-start` crée ~/.glorfindel/injectors[/yellow]")
@@ -2039,6 +2056,21 @@ def revert(resource_id: str, yes: bool, dry_run: bool):
     """Alias for 'reset' (deprecated name)."""
     console.print("[dim]Note: 'revert' is an alias — prefer 'glorfindel reset'[/dim]")
     _do_reset(resource_id, yes, dry_run)
+
+
+@cli.command("watch-key")
+@click.option("--create", is_flag=True, help="Draw the key when there is none (the watch does it at its first start).")
+def watch_key_cmd(create: bool):
+    """The watch's public key and its fingerprint, to pin on the injectors' side (SEC19, N-03):
+    EREGION_WATCH_KEY in orodruin.env, or in the operator's environment. Never the private key."""
+    from eregion_core import watch_key
+    try:
+        public = watch_key.load_or_create().public if create else watch_key.read_public()
+    except watch_key.KeyUnavailable as e:
+        click.echo(f"✗ {e}", err=True)
+        sys.exit(1)
+    click.echo(f"export {watch_key.KEY_ENV}={watch_key.public_text(public)}")
+    click.echo(f"# empreinte : {watch_key.fingerprint(public)}")
 
 
 @cli.command()

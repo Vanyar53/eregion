@@ -47,7 +47,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "READ_TARGETS", lambda subscription: VMS)
     api._targets_cache.update(at=0.0, value=None)
     monkeypatch.setattr(api, "_board_rules", lambda: [])
-    monkeypatch.setattr(watch_gate, "refusal", lambda now=None: "")
+    monkeypatch.setattr(watch_gate, "refusal", lambda now=None, **kw: "")
     return console()
 
 
@@ -100,7 +100,7 @@ def test_a_request_with_a_refused_wire_is_never_written(client, wire, code):
 
 
 def test_no_live_watch_no_request(client, monkeypatch):
-    monkeypatch.setattr(watch_gate, "refusal", lambda now=None: "no heartbeat")
+    monkeypatch.setattr(watch_gate, "refusal", lambda now=None, **kw: "no heartbeat")
     r = _post(client, ("T1110.001", GONDOLIN))
     assert r.status_code == 409
     assert {w["code"] for w in r.json()["plan"]["wires"]} == {"no_watch"}

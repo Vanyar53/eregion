@@ -3719,6 +3719,95 @@ marquées (`reasserted_at`) sans la carte « reposé une fois » ; la disparitio
 
 **Mesures de L1Qs.** Invariants avec les règles, `--hypothesis-seed=N`, 500 séquences, quatre à la fois : N = 1..20, **19/20 vertes** ; la graine 10 tombe sur U1 — « live VMs still cut off by orphan rules after the sweep: nsg-tier, glorfindel-block-…-db--01-db-nic-1-…-out » —, une séquence de 92 tirages réduite à la main à quatre règles de `main`, aucune de L1Qs, rouge sur `main` comme sur la branche : un défaut ancien du balayage des orphelines, hors du lot, figé en `xfail` strict (`test_an_orphan_out_rule_left_by_a_vm_whose_address_passed_on_is_taken_off`) et routé (lot à part) ; la séquence réduite, rejouée sur la machine et le code de `main` 7ac1f37 pur (après MCG), y est rouge, sur le même U1. **Un second défaut ancien**, trouvé par l'exécution non mutée du harnais de mutation (une graine au hasard à 60) : « L1: the block on …/rg-new/…/web vanished from Azure; the reassertion neither put it back nor said so » — une VM créée à l'ancienne adresse de Db--01, sous des écritures refusées, son adresse changée, une carte acquittée ; 24 règles réduites à la main à huit de `main`, aucune de L1Qs, rouges sur `main` 7ac1f37 pur comme sur la branche : figé en `xfail` strict (`test_a_block_whose_address_changed_under_writes_refused_is_said_when_gone`), hors du lot, routé. La règle `perimeters_on_two_subnets` atteinte 399 fois, une passe à modes mêlés 6 285 fois. Sur le code d'un seul temps (les correctifs de la graine 9 et du périmètre seul en place, `reassert.py` de `main`), à 500 : la graine 1 tombe (L1, la référence, ci-dessus), la graine 2 sur l'oracle I5 par VM écrit trop strict d'abord (une ouverture dans le dessin, la règle d'un écrivain retirée : relâché à la borne d'I5, ci-dessus), 3 à 6 vertes. `pytest` complet (`main` 7ac1f37 fusionné, MCG compris) : 5 933 réussis, 7 sautés, 2 `xfail` ; `ruff` propre ; `scripts/mutant_anchors.py` : 2 343 mutants, sans faute ; `tests/unit/test_mutant_anchors.py` vert (le bloc de L1Qs au-dessus du repère « The mutants end here »).
 
+**L1E (03/11, #485) : l'acquittement d'un blocage ne compte jamais pour un épisode neuf.** Un trou de
+l'oracle de la machine, pas de Glorfindel, présent sur `main` depuis RB1. C'est la limite que MAK a écrite
+(« La limite, ancienne », ci-dessous) : L1 tenait un blocage acquitté pour dit tant que ses règles valaient
+celles de l'acquittement (`_block_rules_now(v) == seen`, RB1, L1G) — des valeurs, jamais un épisode — et
+`acked_drift[vm]` n'était retiré que par la branche « blocage » de `_gone_comes_back` (MAK).
+
+**La séquence** (la sonde de la relecture de MAK, en règles de la machine) : web bloquée (22), ses règles
+retirées par un `terraform apply` du NSG de son sous-réseau, une passe en `human_only` le dit (« a disparu »),
+l'opérateur acquitte la carte — la machine note les règles du blocage telles qu'alors, absentes toutes deux.
+Puis web bloquée de nouveau, en entier, et ses règles retirées de nouveau, de même : absentes toutes deux,
+les valeurs de l'acquittement. L'acquittement recomptait pour cette disparition neuve. Avec les marques de
+dérive gardées par un blocage écrit de nouveau (le mutant de L1Q, `response/state.py`, la boucle
+`for mark in ():`), le code se taisait, et L1 passait. Le code de `main` le dit : ce n'est pas un défaut de
+Glorfindel, c'est un mutant qu'aucun oracle ne voyait.
+
+**La règle ajoutée** (`tests/unit/test_invariants.py`, `_ack_holds`, `_acked_at`, `_episode_over`).
+L'acquittement cesse de compter quand l'épisode change :
+- **le test réécrit le blocage en entier** — `_block` ou `block_perimeter` rendu « blocked », sans erreur,
+  la condition où la machine le note déjà écrit en entier (`reblocked`, L1B) ;
+- **ou le journal du faux montre une écriture de Glorfindel, après l'acquittement, sur une règle que
+  l'acquittement a vue absente** — un blocage reposé, la paire qu'un périmètre d'une autre VM a écrite
+  (la graine 29 de L1G). Reparties depuis, ses valeurs sont celles de l'acquittement ; l'épisode, non.
+
+Le journal est celui du faux (`fake.journal`, qui a écrit quoi : toute écriture par l'API est de Glorfindel,
+le test joue les autres sur les dictionnaires), jamais les marques du code (`drift_alerted_at`, `drift_said`).
+**Pourquoi seulement les règles vues absentes** : réécrire une règle que la carte a lue présente (retournée
+par un tiers, remise) ne clôt pas la disparition que la carte a dite — ce qui reste parti l'est toujours,
+du même épisode ; le code le juge de même (`still_said`, L1G : une règle lue absente, écrite de nouveau sous
+notre nom, clôt l'épisode). Le blocage écrit en entier par le test, lui, clôt tout : un nouveau blocage, un
+nouvel épisode (L1Q, U1G), même quand il ne réécrit que des règles présentes (la paire d'un périmètre partie,
+les règles de la VM là). **Le trou que laisse « vue absente »** (la relecture) : une règle lue retournée à
+l'acquittement — présente, donc —, remise en refus par Glorfindel, puis retournée de nouveau à l'identique
+avant une passe : les valeurs égales, l'épisode changé, et ni le blocage réécrit par le test ni la clause du
+journal ne le voient. C'est un contournement plutôt qu'une disparition ; un lot futur peut élargir la règle
+à une règle présente réécrite, si ses graines le permettent.
+
+**Pourquoi ce n'est pas un relâchement** (A0) : rien n'est retiré. L'égalité des valeurs reste exigée ; une
+condition s'y ajoute. Les quatre lecteurs de l'acquittement (L1 et L3 de `reassert`, `_said_on_its_own`,
+`_open_said`) passent par `_ack_holds` ; les trois endroits qui le notent (`operator_acknowledges`,
+`_gone_comes_back`, `turned_perimeter_left_out`) notent aussi sa place dans le journal. L1 exige donc une
+carte dans plus de cas qu'avant, jamais dans moins.
+
+**Figée.** `test_invariant_regressions.py::test_a_block_written_again_then_gone_as_acknowledged_is_a_new_episode` :
+sept règles (`block`, `terraform_apply`, `reassert`, `operator_acknowledges`, `block`, `terraform_apply`,
+`reassert`), sur le réseau de la relecture (`_mak_net`) et sur un réseau simple. Verte sur `main` d597a00e ;
+rouge avec le mutant de L1Q sur la machine de la branche ; verte avec ce mutant sur la machine de `main`
+(le trou, mesuré).
+
+**Mutants M3440–M3441**, 2/2 par la séquence figée à chaque tour (deux tours) : la boucle des marques de
+L1Q vidée (`for mark in ():`, M3440, la sonde de la relecture de MAK) ; la marque de la carte seule gardée
+(`("drift_said", "reasserted_at")`, M3441). Une troisième sonde, `drift_said` seul gardé, survit à la
+séquence : le code ne le lit que sous la marque de la carte, sans doute équivalente ; non prise. Les mutants
+voisins, remesurés avec la règle (deux tours) : M2150, M2154 (L1Q), M3420, M3421, M3423 (MAK), attrapés.
+
+**Un défaut du code, trouvé par la règle (sa clause du journal), à la main, jamais par une graine.**
+web de rg-app2 bloquée sur son sous-réseau (la paire de périmètre, une par IP et sous-réseau), la paire
+retirée par un `terraform apply`, dite en `human_only`, la carte acquittée ; puis web de rg-app1 bloquée sur
+le même sous-réseau : la paire écrite de nouveau — celle que nomme l'entrée de rg-app2/web, coupée de
+nouveau —, puis retirée de nouveau avant toute passe. La passe dit le périmètre parti sur la carte de
+rg-app1/web seule ; l'entrée de rg-app2/web garde les marques de la carte acquittée (la paire lue absente,
+relue absente) et se tait. Les valeurs sont celles de l'acquittement, l'épisode non : le journal du faux
+montre l'écriture de la paire par Glorfindel. **Lecture retenue** : L1 juge le blocage de chaque VM, et la
+carte de l'autre VM ne dit pas que celle-ci est rouverte. Une autre lecture est possible (la même paire,
+dite sur une carte qui la nomme) ; elle demanderait de resserrer la règle, ce qu'A0 ne permet qu'avant sa
+fusion — **tranché par la relecture 5.5 : un vrai défaut du code**, l'oracle juge par VM et la carte de
+rg-app1/web ne couvre pas rg-app2/web ; distinct de L1H (la paire écrite puis repartie entre deux passes,
+aucune lecture ne peut voir l'écriture). La clause n'est pas resserrée. Suivi dans **#492 (L1W)**.
+**Cause probable, non établie** : le code ne voit la paire revenue
+qu'à une passe (`still_said`, L1G) ; écrite et repartie entre deux passes, rien ne la lui montre (l'entrée de
+l'autre VM, son `blocked_at`, le pourrait). Figé en `xfail` strict,
+`test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm` : vert (XPASS) sur la machine
+de `main` d597a00e, rouge avec la règle, sur le code de `main`. Non corrigé ; laissé à L1W (#492).
+**Mutant M3442** (de la machine, sur le modèle de M3421) : la clause du journal retirée ; attrapé par cette
+séquence (XPASS strict). Il la protège le jour où L1W corrigera le code et où l'`xfail` deviendra vert.
+Le repli muet de la place de l'acquittement (`acked_at`, absente : la clause éteinte) est devenu une
+assertion — un écrivain futur de `acked_drift` qui oublierait `_acked_at` échoue bruyamment.
+
+**Mesures de L1E.** Invariants avec la règle, `--hypothesis-seed=N`, quatre à la fois : à 60 séquences,
+N = 1..20, **20/20 vertes** ; à 500, N = 1..7 et 42, **8/8 vertes** — la graine 5, rouge à la mesure de MAK
+(un L1 de Db--01, d'une autre cause), verte ici, sa cause non étudiée. **La règle atteinte**
+(`GLORFINDEL_INVARIANT_STATS=1`, graine 1 à 500) : « an acknowledged episode ended: the block written
+whole again » 86 fois (« a drift acknowledged, the block written again », la règle de L1Q, 68) ; la clause du
+journal, **jamais** — aucune règle ne réécrit puis ne retire une règle vue absente entre l'acquittement et
+la passe suivante (le code ne repose rien sous une carte acquittée, et la paire d'un autre périmètre revenue
+à une passe change les valeurs). Elle tient ce que les valeurs manquent ; seule la séquence à la main ci-dessus
+l'atteint. Aucune graine rouge. Après la fusion de `main` 9ec02d22 (I5S) : à 60, N = 1..8, 8/8 vertes ; `pytest`
+complet : 6 267 réussis, 7 sautés, 1 `xfail` (ci-dessus) ; `ruff` propre ; `scripts/mutant_anchors.py` :
+2 511 mutants et 32 du jeu de contrôle, sans faute.
+
 **L1H (03/11, #483) : la paire retournée qu'un autre périmètre réécrit clôt l'épisode acquitté.**
 La graine 5 à 500, relevée par la mesure de L1A (#480) et restée rouge avec le correctif de MAK : « L1: the
 block on …/rg-app1/…/Db--01 vanished from Azure; the reassertion neither put it back nor said so ». Un défaut
@@ -3808,7 +3897,7 @@ de RB1 et de L1G, hors de `_gone_comes_back`) : l'oracle compare des valeurs, ja
 nouveau (`_block`), puis reparti à l'identique (`_ours_taken_off`), retrouve l'égalité : l'acquittement
 recompte pour un épisode neuf. La relecture l'a montré avec le mutant de L1Q (`response/state.py`,
 `for mark in ():`) : le code muet sur ce nouvel épisode, L1 passe. Ce n'est pas un défaut de MAK ; suivi dans
-l'issue #485, qui ajoutera une règle à la machine sans rien retirer (A0). Ce qui change ici, c'est le journal : il ne note que ce que le test a fait. Il oubliait un acquittement que
+l'issue #485, qui ajoutera une règle à la machine sans rien retirer (A0) — c'est L1E, ci-dessus. Ce qui change ici, c'est le journal : il ne note que ce que le test a fait. Il oubliait un acquittement que
 l'opérateur avait donné et qu'aucune étape n'avait clos, et l'oracle jugeait alors un monde que le test
 n'avait pas fait. C'est la même famille que le tri des cartes de L1G (03e3b422) : la machine corrigée
 pour refléter ce que le test a fait, jamais pour qu'un code passe. La docstring de la machine le dit

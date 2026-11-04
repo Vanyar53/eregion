@@ -30,6 +30,7 @@ import annatar.runner.engine as engine_module
 import eregion_core.exercise_channel as channel
 import eregion_core.watch_channel as wc
 import eregion_core.watch_gate as gate
+import eregion_core.watch_key as watch_key
 from analysis.campaign_schema import run_report_refusal
 from annatar.campaign.manifest import Budget, CampaignManifest, ScenarioEntry, Scope, campaign_dir
 from annatar.campaign.runner import CampaignRunner
@@ -42,9 +43,14 @@ ROOT = Path(__file__).resolve().parents[2]
 SUB = "00000000-0000-0000-0000-00000000aaaa"   # a placeholder, never a real subscription
 
 
+# SEC19: the watch's key, drawn for these tests (a fixed seed: never a real key), pinned by real_gate.
+SIGNER = watch_key.Signer(bytes(range(32)))
+
+
 def _beat(at: datetime, subscription: str | None = None) -> str:
-    """The heartbeat a watch of this subscription writes for the injectors (SEC5, N-03)."""
-    return json.dumps(gate.beat_body(at, subscription))
+    """The heartbeat a watch of this subscription writes for the injectors (SEC5, N-03), signed
+    by its key (SEC19)."""
+    return json.dumps(gate.beat_body(at, subscription, signer=SIGNER))
 WATCH = "https://storodruin.blob.core.windows.net/watch"
 NOW = datetime(2026, 10, 27, 9, 0, tzinfo=timezone.utc)
 
@@ -58,6 +64,7 @@ def real_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv(gate.SUBSCRIPTION_ENV, SUB)
     monkeypatch.delenv(wc.CHANNEL_ENV, raising=False)
+    monkeypatch.setenv(watch_key.KEY_ENV, watch_key.public_text(SIGNER.public))
     hb = tmp_path / "home" / ".glorfindel" / "watch_heartbeat"
     hb.parent.mkdir(parents=True)
     return hb
@@ -212,6 +219,21 @@ def test_annatar_refuses_and_says_never(real_gate, cloud, tmp_path, monkeypatch)
     real_gate.unlink(missing_ok=True)
     res = _run(tmp_path, monkeypatch, ATOMIC_YAML)
     assert res.exit_code != 0 and "last heartbeat never" in res.output
+    assert cloud.calls == []
+
+
+@pytest.mark.parametrize("pinned, said", [(True, "unsigned"), (False, "no watch key pinned")])
+def test_annatar_refuses_a_heartbeat_it_cannot_authenticate_before_any_cloud_call(
+        real_gate, cloud, tmp_path, monkeypatch, pinned, said):
+    """SEC19 (N-03): a fresh heartbeat of the right subscription, unsigned — or no key pinned to
+    check it — and nothing reaches the cloud; the reason said."""
+    real_gate.write_text(json.dumps(gate.beat_body(datetime.now(timezone.utc), SUB)))
+    if not pinned:
+        real_gate.write_text(_beat(datetime.now(timezone.utc), SUB))
+        monkeypatch.delenv(watch_key.KEY_ENV)
+    res = _run(tmp_path, monkeypatch, ATOMIC_YAML)
+    out = " ".join(res.output.split())        # rich wraps the line
+    assert res.exit_code != 0 and "no live Glorfindel watch" in out and said in out
     assert cloud.calls == []
 
 

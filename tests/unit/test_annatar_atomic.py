@@ -346,7 +346,7 @@ def test_p11b_cleanup_and_after_probe_raise(tmp_path, monkeypatch):
 # P12 — the detection latency is measured from the attack, not from the start of the wait
 # (which on the atomic path begins only after cleanup — the old measure was always ~0).
 # Since #157 it is written: detection time − attack_time (tests/unit/test_annatar_detection.py).
-def test_p12_detection_latency_is_measured_from_the_attack(tmp_path, monkeypatch):
+def test_p12_detection_latency_is_measured_from_the_attack(tmp_path, monkeypatch, signed_channel):
     import datetime as _dt
     import time as _time
 
@@ -359,8 +359,9 @@ def test_p12_detection_latency_is_measured_from_the_attack(tmp_path, monkeypatch
     monkeypatch.setenv(watch_channel.CHANNEL_ENV, "https://account.blob.core.windows.net/watch")
     monkeypatch.setattr(watch_gate, "channel_beat",
                         lambda: watch_gate.Beat(watch_gate.CHANNEL, _dt.datetime.now(_dt.timezone.utc)))
-    monkeypatch.setattr(watch_channel, "read_detections", lambda rid, **k: [
-        {"event": "detection", "ttp": "T1136.001", "resource_id": RESOURCE_ID.lower(), "detected_at": seen}])
+    # SEC21: signed by the watch's key, which the injector pins.
+    monkeypatch.setattr(watch_channel, "read_named", lambda rid, **k: [signed_channel.sign(
+        {"event": "detection", "ttp": "T1136.001", "resource_id": RESOURCE_ID.lower(), "detected_at": seen}, rid)])
     engine = Engine()
     scenario = SimpleNamespace(mitre="T1136.001", detection={}, detection_hints={})
     emitter = SimpleNamespace(resource_id=RESOURCE_ID, emit=lambda **k: None)

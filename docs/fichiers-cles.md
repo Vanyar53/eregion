@@ -484,7 +484,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
   .bashrc                     → alias ar (chargé par make annatar-shell, --init-file, en lecture seule
                                 dans le conteneur : le rouge ne l'écrit jamais)
   .bash_history               → historique bash persistant, le seul fichier en écriture (HISTFILE posé par
-                                make annatar-shell) ; bash y ajoute, il ne le tronque pas
+                                make annatar-shell) ; bash y ajoute, il ne le tronque pas — l'image
+                                root de repli (UID=0) aussi (SEC20b, « Ce que le rouge monte en écriture »)
 
 ~/.cache/chroma/              → modèle ONNX ChromaDB (79MB, téléchargé une seule fois)
 ```
@@ -573,10 +574,57 @@ _SEC20 (#467), 03/11. **Le rouge n'écrit jamais ce que l'opérateur exécute** 
 d'injecteur (Annatar, Gothmog) ne monte en écriture aucun répertoire de code, de scripts ou de
 configuration que l'opérateur, la watch ou un `make` lance ensuite, ni ce qui en contient un (le
 dépôt entier, le `HOME` entier). `tests/unit/test_red_mounts.py` tient cette carte : il lit le
-compose et chaque `docker run` de l'image des injecteurs dans le Makefile, du poste et d'Orodruin,
-et refuse ce qu'il ne saurait lire — une variable d'un tel `docker run` définie deux fois ou
-complétée par `+=`, un `docker run` dont l'image ne s'écrit pas en clair, un `docker compose … run`
-qui ajoute un montage._
+compose et chaque lancement de l'image des injecteurs dans le Makefile (`docker run`, `docker
+create`, `docker container …`), du poste et d'Orodruin, et refuse ce qu'il ne saurait lire — une
+variable d'un tel lancement définie deux fois ou complétée par `+=`, un lancement dont l'image ne
+s'écrit pas en clair, un `docker compose … run` qui ajoute un montage._
+
+**Le lecteur refuse ce qu'il ne sait pas lire** (SEC20b, #494, 04/11). Les options d'un lancement
+se lisent comme docker les lit, jusqu'à son image : un montage sous toutes ses formes (`-v x`,
+`-v=x`, `-vx`, dans un groupe d'options courtes comme `-itv x`, `--volume`, `--volume=`, `--mount`).
+Il refuse :
+
+- **dans les options d'un lancement**, toute référence qu'il laisse non développée, hors de
+  `$(HOME)`, `$(PWD)` et `$$HOME` : une variable d'un `define` ou d'un fichier inclus,
+  `$(shell …)`, une variable du shell. Ce que make ou le shell en ferait, un montage parmi d'autres,
+  ne se verrait pas. Il refuse aussi un mot qui n'est pas du texte simple, une option qu'il ne
+  connaît pas (il ne saurait pas quel mot est l'image), `--volumes-from` (les montages d'un autre
+  conteneur), un `--mount` dont il ne lit pas une clé, et un lancement derrière les options propres
+  de docker. Une continuation de recette se lit comme le shell la lit, sans rien entre les deux
+  lignes ; un commentaire continué sur la ligne suivante est refusé (le shell exécute ce qui suit) ;
+- **ce qu'un lancement rouge ne reçoit jamais**, refusé par son nom et non plus comme une option
+  inconnue : `--privileged`, `--device`, `--cap-add`, `--pid`, `--userns`, `--ipc` ou `--network`
+  sur l'hôte (ou un autre conteneur), `--uts host`, une `--security-opt` autre que
+  `no-new-privileges:true`. Aucune n'est dans la table des options lues ;
+- **dans le Makefile**, `include`, `-include`, `sinclude`, `define`, `undefine` et `$(eval …)` ;
+  `SHELL`, `.SHELLFLAGS`, `.ONESHELL` et `load`, qui changent la manière dont make lance une recette. Ils
+  sont refusés plutôt que lus : les lire ferait de ce test un second make (son chemin de recherche,
+  un fichier manquant qu'une règle reconstruit, l'ordre d'une évaluation), et le Makefile n'en a
+  besoin d'aucun. De même, un `$(MAKE)` de recette à qui l'on nomme un autre makefile ou un autre
+  répertoire (`-f`, `-C`) ;
+- **côté compose**, un lancement de recette (`run`, `up`, `create`, `start`, `restart`, `watch`) à
+  qui l'on nomme un autre fichier (`-f`, `--file`, `--project-directory`, `COMPOSE_FILE`), et, à
+  côté de `docker-compose.yml`, tout fichier que compose prendrait à sa place ou fusionnerait seul :
+  `compose.yaml`, `compose.yml`, `docker-compose.yaml`, et leurs `*.override.*`. Le compose
+  n'inclut aucun autre fichier (`include`), aucun service n'en étend un autre (`extends`) ni ne
+  prend les montages d'un autre (`volumes_from`), et chaque image s'écrit en clair.
+
+Le Makefile actuel ne donne aucun refus. Chaque forme a sa sonde dans le test, et chaque cas son
+mutant (M3490–M3497, M3525–M3529, M3535–M3536) ; aucun n'était vu par le lecteur de SEC20, hors de
+`--volumes-from` (M3528), déjà refusé.
+
+**L'historique avec l'image root de repli** (`UID=0`, une image construite sans les build-args de
+`make build`). Bash ajoute à l'historique de même et ne le tronque pas, mais pas pour la même raison.
+Sa troncature écrit un fichier voisin, puis le renomme sur l'historique. Avec l'image de
+l'opérateur, le conteneur ne peut créer ce voisin : `/root/.annatar` est le point de montage que
+docker crée, à root. Avec l'image root, il le crée, dans la couche du conteneur, jamais sur l'hôte ;
+le renommage sur un fichier monté échoue (`EBUSY`, un point de montage), et bash efface alors le
+voisin — lu dans son code, non mesuré.
+Dans les deux cas, une session de plus de `HISTSIZE` commandes réécrit l'historique entier par ce
+même voisin : elle n'est pas gardée. Le fichier reste à l'opérateur, qui l'a créé
+(`ANNATAR_SHELL_FILES`). Mesuré sans conteneur, bash 5.2 : un répertoire qui refuse le voisin donne
+un historique ajouté, jamais tronqué. Le renommage refusé sur un point de montage est une règle du
+noyau, non mesurée ici (aucun conteneur).
 
 | Où | Conteneur | En écriture | Ce qu'il y écrit |
 |---|---|---|---|
@@ -587,6 +635,7 @@ qui ajoute un montage._
 | Makefile `annatar-validate`, `annatar-list` | Annatar | rien | — |
 | Orodruin `ORO_RUN`, `ORO_RUN_GOTHMOG`, `ORO_RUN_CONTRACT`, `ORO_RUN_REQUEST` | les injecteurs, le contrat, le lanceur d'une demande | leurs répertoires de `~/runs` (le tableau ci-dessus) | ce que SEC18 dit ; `~/requests`, ce que juge le lanceur, en lecture seule |
 | Orodruin `ORO_MIGRATE` | la migration, une fois | `~/runs` entier | des données seulement, rien qu'on exécute |
+| Orodruin `ORO_CHECK_RUN` (`orodruin-push`, OI2) | l'image reçue, lancée une fois sans réseau avant son tag | rien | — (aucun montage) |
 
 Ce qui ne s'écrit plus : `scripts/` et `annatar/scenarios/` (le compose et `ANNATAR_VOLS`, et
 `annatar-validate`, `annatar-list` pour les scénarios) passent en lecture seule. Annatar lit les

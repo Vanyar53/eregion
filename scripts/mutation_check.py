@@ -10361,6 +10361,17 @@ MUTANTS += [
      "ORO_HARDEN     = --read-only --tmpfs /tmp --cap-drop ALL --security-opt seccomp=unconfined"),
 ]
 TESTS.update({f"M{n}": _SEC20 for n in range(3525, 3530)})
+# SEC20b after OI2: a launch that ends a quoted command (`ssh '… image'`) is read, its closing quote
+# not the image's — Orodruin's control run read whole. M3535–M3536.
+MUTANTS += [
+    ("M3535", "Orodruin's control run mounts the home whole, read only once its quote is read (SEC20b, OI2)", MAKE,
+     "--name $(ORO_CHECK_NAME) --entrypoint true $(ORO_INCOMING)",
+     "--name $(ORO_CHECK_NAME) --entrypoint true -v $$HOME:/app $(ORO_INCOMING)"),
+    ("M3536", "the quote that closes a quoted command taken for the image's: the control run never read (SEC20b)",
+     "tests/unit/test_red_mounts.py", "            words[i], closed = words[i][:-1], True\n",
+     "            closed = True\n"),
+]
+TESTS.update({f"M{n}": _SEC20 for n in (3535, 3536)})
 
 
 # OI2 (#490): a control run before Orodruin's tag — the image read back as the proven one starts once,

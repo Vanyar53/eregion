@@ -610,7 +610,7 @@ Il refuse :
   prend les montages d'un autre (`volumes_from`), et chaque image s'écrit en clair.
 
 Le Makefile actuel ne donne aucun refus. Chaque forme a sa sonde dans le test, et chaque cas son
-mutant (M3490–M3497, M3525–M3529) ; aucun n'était vu par le lecteur de SEC20, hors de
+mutant (M3490–M3497, M3525–M3529, M3535–M3536) ; aucun n'était vu par le lecteur de SEC20, hors de
 `--volumes-from` (M3528), déjà refusé.
 
 **L'historique avec l'image root de repli** (`UID=0`, une image construite sans les build-args de

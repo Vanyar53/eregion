@@ -6246,8 +6246,8 @@ MUTANTS += [
      '    if iso.get("drift_alerted_at") and drift_said(ref or vm, "", _alert_id(vm, rid)):\n',
      '    if iso.get("drift_alerted_at"):\n'),
     ("M1943", "a block gone again read « already said » from its drift mark alone (L2C, review)", RSD,
-     "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
-     "            and not (_back(baseline, now) and _acknowledged(sid)))\n"),
+     "            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)))\n"),
     ("M1944", "an isolation held again, its mark kept: the episode not known over (L2C, review)", R,
      '    if iso.get("drift_alerted_at") and verification.get("verified") is not None and not _missing(verification):\n',
      '    if False:\n'),
@@ -9569,11 +9569,11 @@ _L1G_WORSE = "                or any(was is not None and is_ is None for was, is
 MUTANTS += [
     ("M3280", "a rule written again after an acknowledged card never ends its episode: another VM's perimeter "
               "writes the pair, the VM's own rules still gone, unsaid (L1G, seed 29)", RSD,
-     "    return isinstance(said, dict) and any(was is None and is_ is not None for was, is_ in _read_both(said, now))\n",
-     "    return False\n"),
+     '    before, after = said.get("rules") or {}, now.get("rules") or {}\n    gone_then',
+     "    return False\n    gone_then"),
     ("M3281", "a rule written again ends the episode of a pending card too: a card more at each return (L1G, L1Q)",
-     RSD, "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
-     "            and not _back(baseline, now) and drift_said(key, ip, sid))\n"),
+     RSD, "            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not _back(baseline, now, _pair_keys(b)) and drift_said(key, ip, sid))\n"),
     ("M3282", "a rule the card's check never read read back: an NSG listed since, said anew (L1G)", RSD,
      "    return [(before[k], after[k]) for k in sorted(before.keys() & after.keys())]\n",
      "    return [(before.get(k), after.get(k)) for k in sorted(before.keys() | after.keys())]\n"),
@@ -10117,6 +10117,51 @@ MUTANTS += [
      '                "--bundle", str(bundle), "--yes", str(path)]\n'),
 ]
 TESTS.update({**{f"M{n}": _SEC19_HARD for n in (3425, 3427, 3428, 3429)}, "M3426": "tests/unit/test_watch_key.py"})
+
+
+# L1H (#483): a rule of the perimeter pair the card said gone while it read it there — turned —, holding now,
+# was written again (another entry's perimeter block, mostly): the acknowledged episode is over, what is still
+# gone said anew (seed 5 at 500). Only the pair, only from « gone » to holding; a VM's own rule set right in
+# place still says nothing (RB1). M3430–M3436.
+_L1H_SEQ = ("tests/unit/test_invariant_regressions.py::"
+            "test_an_acknowledged_drift_whose_turned_pair_another_perimeter_wrote_again_is_said")
+_L1H_UNIT = "tests/unit/test_reassert.py::"
+_L1H_BACK = (f"{_L1H_UNIT}test_a_turned_pair_written_again_after_an_acknowledged_card_ends_its_episode "
+             f"{_L1H_UNIT}test_a_turned_pair_written_again_after_an_acknowledged_card_is_put_back_outside_human_only "
+             f"{_L1H_UNIT}test_the_first_time_decides_on_a_turned_pair_written_again_as_the_second")
+_L1H_GUARD = f"{_L1H_UNIT}test_an_acknowledged_drift_whose_pair_did_not_come_back_says_nothing"
+_L1H_KEYS = f"{_L1H_UNIT}test_the_pair_of_an_entry_is_named_by_its_nsg_and_rule"
+_L1H_IF = '        if k in pair and k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'
+_L1H_PAIRS = '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}".lower() for x in ("", "-out")}\n'
+MUTANTS += [
+    ("M3430", "the pair the card read turned, written again by another perimeter, never ends its acknowledged "
+              "episode: the VM's own rules still gone, unsaid (L1H, seed 5 at 500)", RSD,
+     "            and not (_back(baseline, now, _pair_keys(b)) and _acknowledged(sid)) and drift_said(key, ip, sid))\n",
+     "            and not (_back(baseline, now) and _acknowledged(sid)) and drift_said(key, ip, sid))\n"),
+    ("M3431", "any rule the card said gone and read there, holding now, ends the episode — a VM's own rule set "
+              "right by hand too: a card more (L1H, RB1)", RSD,
+     _L1H_IF, '        if k.rsplit("/", 1)[-1] in gone_then - gone_now:\n'),
+    ("M3432", "the pair read back while still gone — turned otherwise: a card more, no worse (L1H)", RSD,
+     _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] in gone_then:\n'),
+    ("M3433", "the pair read back though the card never said it gone — held, changed since: a card more (L1H)",
+     RSD, _L1H_IF, '        if k in pair and k.rsplit("/", 1)[-1] not in gone_now:\n'),
+    ("M3434", "the pair's outbound rule left out of the pair (L1H)", RSD,
+     _L1H_PAIRS, '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}".lower() for x in ("",)}\n'),
+    ("M3435", "the pair named in the entry's case, never the check's lowercase: never read back (L1H)", RSD,
+     _L1H_PAIRS, '    return {f"{b[\'nsg\']}/{b[\'rule\']}{x}" for x in ("", "-out")}\n'),
+    ("M3436", "a VM block's rules named a perimeter pair (L1H)", RSD,
+     '    if b.get("scoped") is not False or not b.get("rule") or "/" not in (b.get("nsg") or ""):\n',
+     '    if not b.get("rule") or "/" not in (b.get("nsg") or ""):\n'),
+]
+TESTS.update({
+    "M3430": f"{_L1H_SEQ} {_L1H_BACK}",
+    "M3431": f"{_L1H_GUARD} {_L1G_UNIT}test_an_acknowledged_drift_set_right_by_hand_says_nothing",
+    "M3432": _L1H_GUARD,
+    "M3433": _L1H_GUARD,
+    "M3434": _L1H_KEYS,
+    "M3435": _L1H_KEYS,
+    "M3436": _L1H_KEYS,
+})
 
 
 # OI1 (#488): the image of Annatar arrives whole on Orodruin — its OCI archive built from the registry's

@@ -297,9 +297,99 @@ def test_every_host_env_variable_reaches_the_containers():
     EREGION_WATCH_CHANNEL to host.env and not to the list — the hosted watch would never
     have published its heartbeat (found 20/10, before deployment)."""
     passed = set().union(*_compose_env().values())
-    operator = {k: "x" for k in host_env.COPIED}
+    operator = {k: "x" for k in host_env.COPIED} | {"GLORFINDEL_LLM_MODEL": "anthropic/x"}
     carried = set(host_env.host_env(operator))
     assert carried - passed == set()
+
+
+# ── OL1 (#525) : la clé du fournisseur du modèle configuré, seule ───────────────────────────
+# The oracle is written here, never read from eregion_core/models.py: what LiteLLM reads for
+# each provider (its prefix in GLORFINDEL_LLM_MODEL), on H0, where the watch runs in a container.
+_BASE = "GLORFINDEL_LLM_BASE_URL"
+PROVIDER_CASES = [
+    ("", {}, ("ANTHROPIC_API_KEY",)),                                  # the default's
+    ("anthropic/claude-sonnet-4-6", {}, ("ANTHROPIC_API_KEY",)),
+    ("openai/gpt-4o", {}, ("OPENAI_API_KEY",)),
+    ("azure/gpt-4o", {}, ("AZURE_API_KEY", "AZURE_API_BASE")),
+    ("mistral/mistral-large-latest", {}, ("MISTRAL_API_KEY",)),
+    # Local: no key, but an address — LiteLLM's default, localhost, is the watch's container.
+    ("ollama/llama3.1", {}, (_BASE,)),
+    ("ollama_chat/llama3.1", {}, (_BASE,)),
+    # An OpenAI-compatible model served at the base URL (self-hosted): nothing.
+    ("openai/mistral-7b", {_BASE: "http://my-server:8000"}, ()),
+    # A base URL never waives a provider's own key (a proxy in front of Anthropic still takes it).
+    ("anthropic/claude-sonnet-4-6", {_BASE: "http://proxy:4000"}, ("ANTHROPIC_API_KEY",)),
+]
+
+
+@pytest.mark.parametrize("model, extra, needed", PROVIDER_CASES)
+def test_host_env_requires_only_the_key_of_the_models_provider(model, extra, needed):
+    """#525: ANTHROPIC_API_KEY was required whatever the model — even ollama/…, whose logs
+    never leave. Now only what the provider reads; each one missing is named, never a value."""
+    operator = {"AZURE_SUBSCRIPTION_ID": "sub", "GLORFINDEL_LLM_MODEL": model, **extra,
+                **{k: f"fake-{k.lower()}" for k in needed}}
+    env = host_env.host_env(operator)          # nothing else is asked: no Anthropic key by default
+    assert {k: env[k] for k in needed} == {k: operator[k] for k in needed}   # carried to the watch
+    for k in needed:
+        with pytest.raises(SystemExit) as exc:
+            host_env.host_env({key: v for key, v in operator.items() if key != k})
+        message = str(exc.value)
+        assert k in message and "GLORFINDEL_LLM_MODEL" in message
+        assert "fake-" not in message and (not model or model not in message)
+
+
+@pytest.mark.parametrize("model", ["gemini/gemini-pro", "claude-sonnet-4-6", "anthropic/",
+                                   "sk-ant-fake-secret-pasted-here", "bedrock/anthropic.claude"])
+def test_host_env_refuses_an_unknown_provider_with_the_list_never_the_value(model):
+    operator = {"AZURE_SUBSCRIPTION_ID": "sub", "GLORFINDEL_LLM_MODEL": model,
+                "ANTHROPIC_API_KEY": "fake-key", "OPENAI_API_KEY": "fake-key"}
+    with pytest.raises(SystemExit) as exc:
+        host_env.host_env(operator)
+    message = str(exc.value)
+    assert "GLORFINDEL_LLM_MODEL" in message and "no known provider" in message
+    assert all(p in message for p in ("anthropic", "openai", "azure", "mistral", "ollama"))
+    assert model not in message and "fake-key" not in message
+
+
+def test_the_subscription_is_still_required_beside_the_model():
+    with pytest.raises(SystemExit) as exc:
+        host_env.host_env({"GLORFINDEL_LLM_MODEL": "ollama/llama3.1", _BASE: "http://ollama:11434"})
+    assert "AZURE_SUBSCRIPTION_ID" in str(exc.value)
+
+
+def test_check_holds_a_host_env_to_the_models_provider(tmp_path, capsys):
+    """make glorfindel-host-push runs `--check`: a host.env whose model lacks its provider's
+    variable is refused before the push, named, never a value; a local model needs no key."""
+    path = tmp_path / "host.env"
+    path.write_text("EREGION_CONSOLE_TOKEN=fake-token\nGLORFINDEL_LLM_MODEL=ollama/llama3.1\n",
+                    encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        host_env.check(str(path))
+    assert _BASE in str(exc.value) and "fake-token" not in str(exc.value)
+    path.write_text(path.read_text(encoding="utf-8") + f"{_BASE}=http://ollama:11434\n", encoding="utf-8")
+    assert host_env.check(str(path)) == 0                  # no ANTHROPIC_API_KEY in it
+    path.write_text("EREGION_CONSOLE_TOKEN=fake-token\nANTHROPIC_API_KEY=\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        host_env.check(str(path))                          # the default model: Anthropic's key
+    assert "ANTHROPIC_API_KEY" in str(exc.value)
+    assert "fake-token" not in capsys.readouterr().out
+
+
+def test_a_local_model_without_the_analysis_key_is_said_not_refused(tmp_path, monkeypatch, capsys):
+    """The analysis model (Haiku by default) writes the campaign reports, never a decision: a
+    local decision model with no Anthropic key writes host.env, and says the reports would fail."""
+    for k in list(host_env.COPIED):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub")
+    monkeypatch.setenv("GLORFINDEL_LLM_MODEL", "ollama/llama3.1")
+    monkeypatch.setenv(_BASE, "http://ollama:11434")
+    host_env.main(str(tmp_path / "a.env"))
+    err = capsys.readouterr().err
+    assert "ANTHROPIC_API_KEY" in err and "rapports de campagne" in err
+    assert "ANTHROPIC_API_KEY" not in (tmp_path / "a.env").read_text(encoding="utf-8")
+    monkeypatch.setenv("EREGION_ANALYSIS_MODEL", "ollama/qwen3")
+    host_env.main(str(tmp_path / "b.env"))
+    assert capsys.readouterr().err == ""
 
 
 # ── M-3 (#183) : un environnement par conteneur ───────────────────────────────────────────
@@ -392,7 +482,7 @@ def _interpolate(spec: str, dotenv: dict) -> str:
 def test_the_generated_host_env_reaches_each_container_with_only_its_secrets():
     """host.env (host_env.py) is the one .env compose reads on H0: render each container's
     environment from it as compose would, then look for every secret's value."""
-    operator = {k: f"value-of-{k}" for k in host_env.COPIED}
+    operator = {k: f"value-of-{k}" for k in host_env.COPIED} | {"GLORFINDEL_LLM_MODEL": "anthropic/x"}
     dotenv = host_env.host_env(operator)
     rendered = {s: {k: _interpolate(v, dotenv) for k, v in e.items()} for s, e in _compose_env().items()}
     values = {s: set(e.values()) for s, e in rendered.items()}

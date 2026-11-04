@@ -19,6 +19,16 @@ GLORFINDEL_WARROOM_TOKEN: it stays valid, nothing to rename. `--check` (run by
 `make glorfindel-host-push`) says which name carries it — the console's rule: the new name
 when it is not empty, else the former — and refuses a host.env with neither: pushed, it would
 leave the console on the VM without a token. Never prints the token.
+
+The model's key is the one its provider reads (OL1, #525; the rule: eregion_core/models.py,
+`required_env`): ANTHROPIC_API_KEY for anthropic/… or the default, OPENAI_API_KEY for
+openai/…, AZURE_API_KEY and AZURE_API_BASE for azure/…, MISTRAL_API_KEY for mistral/…; no key
+for a local model (ollama/…), but GLORFINDEL_LLM_BASE_URL — in the watch's container, LiteLLM's
+default address is the container itself; nothing for an OpenAI-compatible model served at
+GLORFINDEL_LLM_BASE_URL (self-hosted). An unknown provider is refused, with the list. The
+message names what is missing, never a value; `--check` holds a host.env to the same rule
+before the push. The analysis model (EREGION_ANALYSIS_MODEL) writes the campaign reports,
+never a decision: its missing key is said, not refused.
 """
 from __future__ import annotations
 
@@ -28,8 +38,16 @@ import secrets
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from eregion_core.models import (  # noqa: E402
+    DEFAULT_ANALYSIS_MODEL, PROVIDER_ENV, UnknownProvider, missing_env, model_provider,
+)
+
 COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID", "ANTHROPIC_API_KEY",
           "GLORFINDEL_LLM_MODEL", "GLORFINDEL_LLM_BASE_URL", "OPENAI_API_KEY",
+          # OL1: the other providers' variables. docker-compose.yml (x-models) passes them to
+          # the watch, but host.env never carried them: an azure/… or mistral/… H0 had no key.
+          "MISTRAL_API_KEY", "AZURE_API_KEY", "AZURE_API_BASE", "AZURE_API_VERSION",
           "GLORFINDEL_WEBHOOK_URL", "GLORFINDEL_BACKUP_VAULT",
           "DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_PING_ROLE",
           "DISCORD_ALLOWED_USERS", "DISCORD_ALLOWED_ROLES",
@@ -37,17 +55,48 @@ COPIED = ("AZURE_SUBSCRIPTION_ID", "AZURE_WORKSPACE_ID", "ANTHROPIC_API_KEY",
           # IA1: the analysis AI's model, never Glorfindel's — the hosted watch writes the
           # campaign reports with it (analysis/hosted_report.py).
           "EREGION_ANALYSIS_MODEL")
-REQUIRED = ("AZURE_SUBSCRIPTION_ID", "ANTHROPIC_API_KEY")
+# The model's key is required by its provider (model_missing), never here.
+REQUIRED = ("AZURE_SUBSCRIPTION_ID",)
+MODEL = "GLORFINDEL_LLM_MODEL"
+ANALYSIS = "EREGION_ANALYSIS_MODEL"
 # The console's token, and its former name (eregion_console/api.py, console_token).
 TOKEN = "EREGION_CONSOLE_TOKEN"
 LEGACY_TOKEN = "GLORFINDEL_WARROOM_TOKEN"
 
 
+def model_missing(environ: dict) -> tuple[str, list[str]]:
+    """(the provider of the decision model, the variables it needs that `environ` leaves
+    empty). An unknown provider: SystemExit, with the list — never the value."""
+    model = environ.get(MODEL, "")
+    try:
+        return model_provider(model), missing_env(model, environ)
+    except UnknownProvider as exc:
+        raise SystemExit(f"{MODEL}: {exc}") from None
+
+
+def analysis_warning(environ: dict) -> str:
+    """What the analysis model lacks, said: it writes the campaign reports (IA1), never a
+    decision — a report without its key is given up after 3 attempts. "" when nothing."""
+    try:
+        provider = model_provider(environ.get(ANALYSIS, "") or DEFAULT_ANALYSIS_MODEL)
+    except UnknownProvider:
+        return (f"⚠ {ANALYSIS} ne nomme aucun fournisseur connu ({', '.join(PROVIDER_ENV)}) : "
+                "les rapports de campagne échoueront.")
+    lacking = [k for k in PROVIDER_ENV[provider] if not environ.get(k)]
+    if not lacking:
+        return ""
+    return (f"⚠ l'IA d'analyse ({ANALYSIS}, vide : {DEFAULT_ANALYSIS_MODEL}) lit "
+            f"{', '.join(lacking)}, vide : les rapports de campagne échoueront. Pose la clé, ou "
+            f"un autre modèle dans {ANALYSIS}.")
+
+
 def host_env(environ: dict) -> dict:
     missing = [k for k in REQUIRED if not environ.get(k)]
-    if missing:
-        raise SystemExit(f"missing in the environment (load .envrc): {', '.join(missing)}")
-    out = {k: environ[k] for k in COPIED if environ.get(k)}
+    provider, lacking = model_missing(environ)
+    if missing or lacking:
+        why = f" — {', '.join(lacking)} for the model's provider, {provider} ({MODEL})" if lacking else ""
+        raise SystemExit(f"missing in the environment (load .envrc): {', '.join(missing + lacking)}{why}")
+    out ={k: environ[k] for k in COPIED if environ.get(k)}
     out["GLORFINDEL_READ_ONLY"] = "1"
     # A powered-off VM stays on the map a week (default 8 h): gondolin, off between
     # exercises, kept vanishing from the observed fleet.
@@ -91,6 +140,11 @@ def check(dst: str) -> int:
         raise SystemExit(f"{dst}: no console token ({TOKEN}, or its former name {LEGACY_TOKEN}) — "
                          f"pushed, the console on the VM would run without one. Set {TOKEN} "
                          "(python -c 'import secrets; print(secrets.token_urlsafe(24))').")
+    # OL1: the key the model's provider reads — pushed without it, the watch could not decide.
+    provider, lacking = model_missing(env)
+    if lacking:
+        raise SystemExit(f"{dst}: {', '.join(lacking)} empty — the model's provider, {provider} "
+                         f"({MODEL}), needs it: pushed, the watch could not decide.")
     if name == LEGACY_TOKEN:
         print(f"{dst}: console token under its former name, {LEGACY_TOKEN} — valid, nothing to rename")
     else:
@@ -107,6 +161,8 @@ def main(dst: str) -> int:
     if env.get("DISCORD_BOT_TOKEN") and not (env.get("DISCORD_ALLOWED_USERS") or env.get("DISCORD_ALLOWED_ROLES")):
         print("⚠ DISCORD_ALLOWED_USERS / DISCORD_ALLOWED_ROLES vides : les boutons du bot refuseront "
               "tout clic (fermé par défaut). Ajoute ton id Discord à host.env.", file=sys.stderr)
+    if warning := analysis_warning(env):
+        print(warning, file=sys.stderr)
     path.touch(mode=0o600)
     path.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")
     print(f"{dst}: " + ", ".join(env))

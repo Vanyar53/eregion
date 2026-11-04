@@ -256,7 +256,8 @@ def test_a_new_host_gets_the_new_name_only(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize("case", ["new", "old (H0)", "new empty, old set", "both, they differ"])
 def test_check_accepts_either_name_and_never_prints_the_token(tmp_path, case, capsys):
     content, token = CASES[case]
-    assert host_env.check(str(_host_env(tmp_path, content))) == 0
+    # OL1: --check also wants the key of the model's provider (the default: Anthropic's).
+    assert host_env.check(str(_host_env(tmp_path, "ANTHROPIC_API_KEY=fake-key\n" + content))) == 0
     out = capsys.readouterr().out
     assert token not in out
     if token == TOK_OLD:

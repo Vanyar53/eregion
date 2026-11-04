@@ -85,6 +85,24 @@ seul sur le banc, dans le mode de chaque VM.
   Alertes : Discord ou webhook, en sortie.
 - **Sans secret dans Terraform.** La clé du modèle et les jetons sont dans `host.env`
   (ignoré par git), copié à la main sur la VM. Aucun secret Azure : l'identité managée.
+- **La clé du fournisseur configuré, seule** (OL1, #525). `make glorfindel-host-env` exige ce que
+  lit le fournisseur de `GLORFINDEL_LLM_MODEL` (son préfixe ; la règle :
+  `eregion_core/models.py`, `required_env`), et rien d'autre :
+
+  | `GLORFINDEL_LLM_MODEL` | Exigé |
+  |---|---|
+  | `anthropic/…`, ou vide (le défaut) | `ANTHROPIC_API_KEY` |
+  | `openai/…` | `OPENAI_API_KEY` |
+  | `azure/…` (Azure OpenAI) | `AZURE_API_KEY` et `AZURE_API_BASE` (`AZURE_API_VERSION` copié s'il est posé) |
+  | `mistral/…` | `MISTRAL_API_KEY` |
+  | `ollama/…`, `ollama_chat/…` | aucune clé, mais `GLORFINDEL_LLM_BASE_URL` : dans le conteneur de la watch, l'adresse par défaut de LiteLLM (`localhost:11434`) est le conteneur lui-même |
+  | `openai/…` servi par `GLORFINDEL_LLM_BASE_URL` (auto-hébergé, compatible OpenAI) | rien |
+
+  Un autre fournisseur, ou un modèle sans préfixe, est refusé, avec la liste. Le message dit ce
+  qui manque, jamais une valeur. `make glorfindel-host-push` tient le `host.env` à la même règle
+  (`host_env.py --check`). L'IA d'analyse (`EREGION_ANALYSIS_MODEL`, Haiku par défaut) écrit les
+  rapports de campagne, jamais une décision : sa clé absente est dite, pas refusée — avec un
+  modèle local, pose aussi un modèle d'analyse local, ou sa clé, sinon chaque rapport échoue.
 
 Coût : D2als_v6 (2 vCPU, 4 Go), environ 61 € par mois en continu (API de tarifs Azure, 16/10) — 27 € en B2als_v2 si le quota Basv2 est accordé —, plus
 le disque et l'IP publique.
@@ -141,7 +159,8 @@ son onglet est grisé. Les anciennes adresses (`/atelier`, `/api/atelier/*`) red
   aucune ligne de commande (curl le lit sur son entrée) ; il dit « jeton refusé » si la console
   le refuse, « aucun jeton » s'il n'y en a pas. `make glorfindel-host-push` vérifie d'abord le
   `host.env` (`host_env.py --check`) : il dit sous quel nom est le jeton, sans sa valeur, et
-  refuse un fichier sans jeton (la console tournerait sans) ou dont le jeton est un commentaire.
+  refuse un fichier sans jeton (la console tournerait sans) ou dont le jeton est un commentaire —
+  ou sans la clé du fournisseur de son modèle (OL1, plus haut).
 - **Avant UI-1** : une référence antérieure (`v0.3.0` et avant) ne lit que
   `GLORFINDEL_WARROOM_TOKEN`. Un `host.env` neuf, qui n'a que `EREGION_CONSOLE_TOKEN`, se déploie
   donc avec une référence qui contient UI-1 (`REF=<commit>` ou un tag postérieur) : sinon la War
@@ -263,8 +282,8 @@ Vue d'ensemble, l'onglet Glorfindel ; un ancien favori `/atelier` mène à `/`.
    for c in eregion-watch eregion-war-room eregion-bot; do echo "$c: $(docker exec $c env | cut -d= -f1 | grep -E 'KEY|TOKEN|SECRET|WEBHOOK' | grep -v '^GPG_KEY$' | sort | tr '\n' ' ')"; done
    ```
    (`GPG_KEY` vient de l'image `python:3.12-slim` : l'empreinte publique de la clé qui signe
-   Python, pas un secret ; la commande l'écarte.) Attendu : la watch, `ANTHROPIC_API_KEY` (et les
-   autres clés de modèle, vides), `AZURE_CLIENT_SECRET` (vide), `GLORFINDEL_WEBHOOK_URL` ; la War
+   Python, pas un secret ; la commande l'écarte.) Attendu : la watch, la clé de son fournisseur
+   (`ANTHROPIC_API_KEY` par défaut ; les autres clés de modèle, vides), `AZURE_CLIENT_SECRET` (vide), `GLORFINDEL_WEBHOOK_URL` ; la War
    Room (la console depuis UI-1), `GLORFINDEL_WARROOM_TOKEN` (et `EREGION_CONSOLE_TOKEN` depuis
    UI-1, l'un des deux vide), `AZURE_CLIENT_SECRET`, `GLORFINDEL_WEBHOOK_URL` ; le bot,
    `DISCORD_BOT_TOKEN`, `AZURE_CLIENT_SECRET`. Aucune autre. La watch et la War Room ont aussi

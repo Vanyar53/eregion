@@ -118,10 +118,11 @@ EXIT_RUN_FAILED = 1
 # One hint per refusal, by the prefix Engine.run gives RunOutcome.error.
 _RUN_HINTS = (
     ("glorfindel:", "aucune watch de Glorfindel vivante : lancer `glorfindel watch` (ou la watch "
-                    "hébergée, vue par EREGION_WATCH_CHANNEL) ; rien n'a été touché. Run de "
+                    "hébergée, vue par EREGION_WATCH_CHANNEL) ; rien n'a été touché. Une vraie "
+                    "attaque part d'un Orodruin armé : docs/demarrer/banc.md. Run de "
                     "développement : --without-glorfindel (le rapport le dit)."),
     ("passive:", "contrat d'Orodruin passif : lancer depuis un Orodruin armé "
-                 "(ailleurs, un injecteur reste passif)."),
+                 "(ailleurs, un injecteur reste passif) — docs/demarrer/banc.md."),
     ("safety:", "cible hors banc ou non inscrite : tags eregion-target et eregion-zone "
                 "sur la VM et son groupe."),
     ("atomic:", "test atomic refusé (annatar/engines/atomic.py) ou sondes steady_state "

@@ -5,7 +5,10 @@ _Extrait tel quel de `CLAUDE.md` le 2026-10-15 (lot DX1) : la CLI, les workflows
 ## CLI — référence complète
 
 ```bash
-# Workflow opérateur — Docker Compose (recommandé)
+# Workflow opérateur — Docker Compose (recommandé) ; le pas à pas, de zéro : docs/demarrer/ (GS1)
+make doctor [PROFILE=discover|bench]         # les prérequis (outils, variables présentes — jamais leur valeur —,
+                                             # config lue comme la watch, dossiers à ton nom, port 7007 ; bench : clés
+                                             # et canaux d'Orodruin et de H0) ; sans cloud ni modèle ; 0 si tout est vert, sinon 2 par make (1 du script)
 make glorfindel-start                        # lance watch + la console → http://localhost:7007
 make console-url                             # l'URL de la console avec son jeton (celui de l'environnement ou de .env,
                                              # sinon ~/.eregion/console/token, attendu CONSOLE_WAIT=20 s) ; glorfindel-start l'affiche
@@ -61,12 +64,18 @@ make glorfindel-host-cd-check                # à blanc : vérifie, construit à
 make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade
 make glorfindel-host-cd-status | -cd-retry | -cd-disable | -cd-uninstall
 
-# Workflow opérateur — 3 terminaux (local sans Docker Compose)
+# Workflow opérateur — 3 terminaux (local sans Docker Compose) : la watch et l'alerte, sur ce poste
 glorfindel watch runs/                       # terminal 1 — réponses automatiques
-annatar run annatar/scenarios/azure/ransomware-vm.yaml  # terminal 2 — attaque
 glorfindel pending --watch                   # terminal 3 — alerting (poll 2s, NEW ESCALATION)
+# Le terminal 2, l'attaque, ne tourne plus sur ce poste (GS1). Ici l'injecteur est passif : --dry-run,
+# validate, list. Depuis Orodruin armé, un run ne croit que le battement du canal retour, que seule la
+# watch de H0 écrit : une watch de ce poste n'y parvient pas (WC1, #523, en cours). Le seul run possible
+# avec elle est un run de développement, détection non mesurée et dite au rapport :
+#   make orodruin-ssh, puis : annatar run <scénario> --yes --without-glorfindel   (dans le docker run durci)
+# La vraie boucle, mesurée : les cibles de campagne (make orodruin-campaign-plan / -run), la watch de
+# H0 répondant — l'ordre complet, de zéro : docs/demarrer/banc.md.
 
-# Setup scénario T1486 (avant chaque run)
+# Setup scénario T1486 (avant chaque run ; annatar clean et run, depuis Orodruin armé, comme ci-dessus)
 annatar clean annatar/scenarios/azure/ransomware-vm.yaml   # nettoyage disque
 # ⚠ Attendre 10 min après annatar clean — les I/O du nettoyage peuvent déclencher
 #   ransomware-disk-write (ago(10m)) et fausser detection_time_s à 0.
@@ -1658,15 +1667,17 @@ en même temps, une vingtaine de jobs, les runs attendaient jusqu'à 15 minutes)
   souvent faute de machine (« The job was not acquired by Runner »), et l'App des sessions ne peut
   pas le relancer. Il tourne sur un push sur `main` et chaque nuit (`schedule`, 02:41 UTC ; la nuit
   de `ci.yml` est la sienne seule : l'audit des dépendances, rouge un soir d'avis, rendrait rouge le
-  commit de `main`, et le CD de H0 refuse une release dont un check est rouge). Un rouge sur `main`
+  commit de `main` ; depuis H1c, le CD de H0 le dirait sans retenir la release). Un rouge sur `main`
   ouvre l'issue « CI : les tests macOS sont rouges sur main », ou commente celle qui est ouverte
   (job `macos-red`, `issues: write` à lui seul, jamais sur une PR, sans checkout ni action). Un
   macOS annulé compte comme rouge : un délai dépassé ou un runner jamais obtenu remontent
   `cancelled`, et rien n'annule un run de `main`. L'issue cherchée est celle de ce workflow
   (`--author app/github-actions`) : une issue du même titre ouverte par un autre n'est pas la sienne.
-  **Un macOS rouge ou annulé sur le commit d'une release fait refuser son déploiement par le CD de
-  H0** (il compte `cancelled` comme rouge) : Jonathan relance le job (l'App ne le peut pas) avant
-  de publier.
+  **Un macOS rouge ou annulé sur le commit d'une release ne retient pas le CD de H0** (H1c, #518) :
+  macOS n'est pas un check requis de `main`, le CD le dit dans `#deploy`, en orange, sans mention,
+  et déploie. Seuls les cinq checks requis et `publish (glorfindel)` bloquent
+  (`infra/glorfindel-host/README.md`, « Le CD de H0 », point 2). L'agent installé avant H1c, lui,
+  le refuse encore : `make glorfindel-host-cd-install` avant de publier la release qui porte H1c.
 - **200 séquences d'invariants sur une PR**, 500 sur un push sur `main`, 10 000 la nuit
   (`invariants.yml`, inchangé).
 - **Un push sur une PR annule le run qu'il remplace** (`concurrency`, `cancel-in-progress`) : CI,
@@ -1789,9 +1800,15 @@ job par image décide lui-même, dans son premier step, de construire ou de pass
 `notify.yml`. `tests/unit/test_workflows.py` exige que chaque workflow lancé par un push, une PR ou
 la nuit y figure, sauf ses exceptions écrites (Notify lui-même, Roadmap, vert par conception).
 
-**Et le CD de H0** : il exige que tous les checks du commit d'une release soient verts. Un job
-`image` rouge sur `main` fait donc refuser la release, avant même son préflight. L'étape 2 de #267,
-décidée par Jonathan le 29/10 : la section suivante.
+**Et le CD de H0** : il ne bloque une release que sur les cinq checks requis de `main` et sur
+`publish (glorfindel)`, l'image qu'il tire (H1c, #518, décision de Jonathan du 04/11). `image
+(glorfindel)` et `image (annatar)` en sont : un job `image` rouge sur `main` fait donc refuser la
+release, avant même son préflight. Un autre check rouge ou annulé (macOS sans runner, un composant,
+les profils compose) est dit dans `#deploy`, en orange, sans retenir H0 ; en cours, il ne retarde
+rien (`infra/glorfindel-host/README.md`, « Le CD de H0 », point 2). La liste est une constante de
+l'agent installé, `REQUIRED_CHECKS`, égale à celle de `docs/sessions.md` (« Les règles du dépôt »)
+par un test : un check requis ajouté ou retiré demande les deux, puis `make
+glorfindel-host-cd-install`. L'étape 2 de #267, décidée par Jonathan le 29/10 : la section suivante.
 
 ## Les images publiées (CI3, #267, 29/10)
 
@@ -1946,9 +1963,9 @@ rafraîchissement du verrou sans contrôle).
   et reste vert ; un audit en échec est dit, jamais rouge (le passage hebdomadaire l'est). **Jamais
   rouge sur un push** : ses deux étapes, l'installation de pip-audit (PyPI qui ne répond pas) et
   l'audit, continuent en erreur (`continue-on-error` sur les étapes, pas sur le job), le check-run
-  reste vert. Le CD de H0 lit tous les check-runs du commit d'une release : un avis
-  publié en amont ne doit pas retenir une release qui tourne avec la même dépendance — le passage
-  hebdomadaire le dit, par son issue.
+  reste vert. Un avis publié en amont ne doit pas retenir une release qui tourne avec la même
+  dépendance — le passage hebdomadaire le dit, par son issue. Depuis H1c, ce check n'est pas de
+  ceux qui bloquent le CD de H0 : rouge, il serait dit dans `#deploy`, sans retenir la release.
 - **pip-audit a son propre verrou**, `requirements/audit.txt` (issu de `requirements/audit.in`,
   version épinglée), avec empreintes. Il s'installe dans un venv à part, jamais dans l'image ni
   dans `dev.txt`. Le workflow utilise le Python du runner, sans action tierce. Son seul secret est
@@ -2076,8 +2093,13 @@ make release-draft VERSION=0.4.4 [NOTES=notes.md] [DRY_RUN=1]   # après sa fusi
 - **L'image de la release** (CI3) : le commit que vise le brouillon a déjà ses deux images publiées,
   attestées et signées (`publish.yml` tourne sur la tête de chaque push sur `main`, « Les images publiées »).
   Avant de cliquer « Publish », les checks `publish (glorfindel)` et `publish (annatar)` de ce commit
-  doivent être verts : sinon le CD de H0 attend une heure, puis refuse la release, sans jamais la
-  construire.
+  doivent être verts. Sans `publish (glorfindel)`, le CD de H0 attend une heure, puis refuse la
+  release, sans jamais la construire ; rouge ou annulé, il la refuse. `publish (annatar)` sert
+  Orodruin : le CD le dit seulement (H1c). Le CD ne bloque aussi que sur les cinq checks requis de
+  `main` : un macOS annulé faute de runner ne retient plus la release.
+- **Une release qui change l'agent du CD** (`infra/glorfindel-host/cd/`, H1c par exemple) : `make
+  glorfindel-host-cd-install` avant de la publier, depuis un checkout de `main` qui la porte.
+  L'agent ne se remplace jamais lui-même (`infra/glorfindel-host/README.md`, « Le CD de H0 »).
 - **Aucun chemin ne publie** : rien ne fait d'un brouillon une release. `tests/unit/test_release.py`
   lit le code sur une liste blanche : cinq commandes `gh` seulement (`pr create`, `release list`,
   `release create` avec `--draft`, `release edit` des seules notes, et un seul `gh api`, la lecture des

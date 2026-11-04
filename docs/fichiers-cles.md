@@ -440,7 +440,8 @@ infra/terraform/              → module Celebrimbor : infra de test Azure modul
                                 attend ou a été fermée par un humain, et que le watch n'a pas vu l'épisode fini (marque qui n'a pu s'effacer)
   perimeter_writes.jsonl      → L1W (#492) : les écritures de paire de périmètre de Glorfindel (une par IP et sous-réseau),
                                 notées avant chaque écriture, une ligne chacune (`{"pair": "rg/nsg/règle", "at": …}`,
-                                ajoutée sans verrou, 0600 ; `glorfindel/response/pair_journal.py`). Une paire notée après
+                                ajoutée sans verrou, 0600, jamais à travers un lien ni ailleurs que dans un fichier
+                                ordinaire ; lue ligne à ligne ; `glorfindel/response/pair_journal.py`). Une paire notée après
                                 l'acquittement d'une carte qui la disait partie finit cet épisode, même repartie avant la
                                 passe. Jamais réécrit ni purgé (quelques lignes par blocage de périmètre) ; perdu ou
                                 illisible, le code revient à ce qu'il lisait avant L1W (la carte acquittée se tait)

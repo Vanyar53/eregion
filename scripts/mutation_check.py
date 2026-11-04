@@ -10366,6 +10366,27 @@ TESTS.update({
     "M3488": f"{_L1W_UNIT}test_a_turned_pair_holding_now_is_back_only_if_it_reads_otherwise",
     "M3489": f"{_L1W_UNIT}test_a_journal_that_cannot_be_written_never_stops_the_block",
 })
+# L1W's review: the journal read line by line, a byte out of UTF-8 replaced (one forged line silenced
+# all of it), and never a link nor anything but a regular file in its place (`O_NOFOLLOW`, `fstat`, as
+# eregion_core/channel_reader.py). M3530–M3534.
+_L1W_LINK = f"{_L1W_UNIT}test_a_journal_that_is_not_a_regular_file_is_never_followed"
+MUTANTS += [
+    ("M3530", "the journal decoded whole and strict: one line out of UTF-8 silences every write (L1W, review)", PJ,
+     '    text = raw.decode("utf-8", errors="replace")\n', '    text = raw.decode("utf-8")\n'),
+    ("M3531", "a link in the journal's place followed: written into its target (L1W, review)", PJ,
+     '_JOURNAL_FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)',
+     '_JOURNAL_FLAGS = getattr(os, "O_NONBLOCK", 0)'),
+    ("M3532", "anything but a regular file taken for the journal: a pipe someone reads written into (L1W, "
+              "review)", PJ, "        if not stat.S_ISREG(os.fstat(fd).st_mode):\n", "        if False:\n"),
+    ("M3533", "the journal read through a link: another file's lines taken for Glorfindel's writes (L1W, "
+              "review)", PJ, "        fd = _open_journal(_pair_journal(), os.O_RDONLY)\n",
+     "        fd = os.open(_pair_journal(), os.O_RDONLY)\n"),
+    ("M3534", "the journal written through a link, opened as before the review (L1W, review)", PJ,
+     "        fd = _open_journal(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n",
+     "        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n"),
+]
+TESTS.update({"M3530": f"{_L1W_UNIT}test_a_line_out_of_utf8_never_silences_the_journal",
+              **{f"M{n}": _L1W_LINK for n in range(3531, 3535)}})
 
 
 # The mutants end here. A new block goes above this line: the `__main__` guard stays the last

@@ -3768,7 +3768,15 @@ L1E). Le code dit plus qu'avant, jamais moins. **Ce que ça coûte** : un journa
 fichier supprimé) ramène le code à ce qu'il lisait avant L1W, la carte acquittée muette sur ce cas ; une écriture
 de paire refusée avant Azure, notée, compte comme écrite (une carte de plus). Le coût assumé de L1H (une paire
 retournée remise à la main lue comme écrite de nouveau) **reste** : l'oracle le demande (les valeurs ont changé
-depuis l'acquittement, L1 exige un mot), le journal ne le lève donc pas.
+depuis l'acquittement, L1 exige un mot), le journal ne le lève donc pas. **Les horloges** : `resolved_at` et
+le journal suivent la même horloge murale ; si elle recule entre l'acquittement et l'écriture, l'écriture est
+datée d'avant l'acquittement et ignorée — le code revient à ce qu'il faisait avant L1W, jamais pire.
+**Durci à la relecture** : le journal est lu ligne à ligne, un octet hors UTF-8 remplacé (une seule ligne
+forgée faisait lever toute la lecture, et le cas de L1W redevenait muet) ; il n'est ouvert, en écriture comme
+en lecture, que sans suivre un lien (`O_NOFOLLOW`) et s'il est un fichier ordinaire (`fstat`, comme
+`eregion_core/channel_reader.py`) — un lien ou un tube à sa place est refusé, sa cible intacte, le blocage
+écrit quand même et le refus dit. Mutants M3530–M3534 (le décodage strict, le lien suivi, `fstat` retiré, la
+lecture et l'écriture ouvertes comme avant), 5/5 à chaque tour (deux tours).
 
 **Figés.** `test_invariant_regressions.py::test_a_perimeter_written_again_by_another_vm_then_gone_is_said_for_each_vm` :
 l'`xfail` strict de L1E levé, rouge sur le code de `main` eb6102f4 (`--runxfail` : « L1: the block on

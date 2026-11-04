@@ -3172,6 +3172,62 @@ def test_a_journal_that_cannot_be_written_never_stops_the_block(monkeypatch, cap
     assert "written unnoted" in caplog.text
 
 
+def test_a_line_out_of_utf8_never_silences_the_journal():
+    """L1W's review: one line forged out of UTF-8 made the whole read raise — every write unseen, L1W's
+    case silent again. Read line by line, the byte replaced: that line is no pair of ours, the others
+    still read."""
+    from glorfindel.response.pair_journal import _pair_journal, note_pair_write, pair_written_since
+
+    _pair_journal().parent.mkdir(parents=True, exist_ok=True)
+    _pair_journal().write_bytes(b'{"pair": "rg/nsg-subnet/\xff\xfe", "at": "2026-11-04T00:00:00+00:00"}')
+    note_pair_write("rg/nsg-subnet", "pair")
+    assert pair_written_since({"rg/nsg-subnet/pair"}, "")
+
+
+@pytest.mark.parametrize("what", ["a link", "a pipe"])
+def test_a_journal_that_is_not_a_regular_file_is_never_followed(monkeypatch, caplog, what):
+    """L1W's review: a link (or a pipe) in the journal's place is never followed — opened `O_NOFOLLOW`,
+    then `fstat`, as `eregion_core/channel_reader.py`: its target untouched, nothing read from it, the
+    perimeter block written all the same, the journal said refused."""
+    import os
+
+    import glorfindel.actions as actions
+    from glorfindel.actions import AzureConnector
+    from glorfindel.response.pair_journal import _pair_journal, pair_written_since
+
+    journal = _pair_journal()
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    target = journal.parent / "elsewhere.jsonl"
+    target.write_text('\n{"pair": "rg/subnet-nsg/glorfindel-block-192-31-196-47", "at": "2026-11-04T00:00:00+00:00"}')
+    before = target.read_bytes()
+    reader = None
+    if what == "a link":
+        journal.symlink_to(target)
+    else:
+        os.mkfifo(journal)
+        reader = os.open(journal, os.O_RDONLY | os.O_NONBLOCK)    # someone reads it: a write would pass
+    monkeypatch.setattr(actions, "_save_block_state", lambda *a, **k: None)
+    connector = AzureConnector(dry_run=False)
+    monkeypatch.setattr(connector, "_ensure_clients", lambda: None)
+    monkeypatch.setattr(connector, "_get_primary_nic_id", lambda rg, vm: "nic-id")
+    monkeypatch.setattr(connector, "_get_subnet_nsg", lambda nic: ("rg", "subnet-nsg"))
+    net = MagicMock()
+    net.security_rules.list.return_value = []
+    connector._network = net
+    with caplog.at_level("WARNING"):
+        out = connector.block_suspicious_ip("192.31.196.47", _RID, scope="subnet")
+    assert out["status"].startswith("blocked"), out
+    assert net.security_rules.begin_create_or_update.call_count == 2
+    assert "written unnoted" in caplog.text
+    assert target.read_bytes() == before                             # never written through the link
+    assert not pair_written_since({"rg/subnet-nsg/glorfindel-block-192-31-196-47"}, "")   # nor read
+    if reader is not None:
+        try:
+            assert os.read(reader, 4096) == b""                          # nothing went into the pipe
+        finally:
+            os.close(reader)
+
+
 @pytest.mark.parametrize(("now_seen", "back"), [("turned", False), ("a deny again", True)],
                          ids=["read the same", "written again"])
 def test_a_turned_pair_holding_now_is_back_only_if_it_reads_otherwise(now_seen, back):

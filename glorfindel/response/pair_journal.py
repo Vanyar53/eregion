@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +26,23 @@ def _pair_journal() -> Path:
     return state._BLOCK_STATE_DIR.parent / "perimeter_writes.jsonl"
 
 
+_JOURNAL_FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_journal(path: Path, flags: int) -> int:
+    """The journal opened without following a link (`O_NOFOLLOW`), then `fstat`: anything but a
+    regular file — a link, a pipe, a device — refused, never written nor read (as
+    `eregion_core/channel_reader.py`)."""
+    fd = os.open(path, flags | _JOURNAL_FLAGS, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{path} n'est pas un fichier ordinaire : refusé")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def note_pair_write(nsg: str, rule: str) -> None:
     """A perimeter pair (`nsg` « rg/name », `rule` its inbound name) about to be written by
     Glorfindel. Noted before the write — one that reached Azure and then raised (a crash, a 429
@@ -35,7 +53,7 @@ def note_pair_write(nsg: str, rule: str) -> None:
     path = _pair_journal()
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        fd = _open_journal(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
         try:
             os.write(fd, line.encode())
         finally:
@@ -49,9 +67,17 @@ def pair_written_since(pairs: set[str], since: str) -> bool:
     `since` or after (an ISO time; empty or unreadable: ever — a card more). Unread (no journal,
     an unreadable one): no."""
     try:
-        text = _pair_journal().read_text()
-    except (OSError, UnicodeDecodeError):
+        fd = _open_journal(_pair_journal(), os.O_RDONLY)
+    except OSError:
         return False
+    try:
+        with os.fdopen(fd, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return False
+    # Line by line, an undecodable byte replaced: one line forged out of UTF-8 never silences the
+    # others (L1W's review) — it reads as no pair of ours.
+    text = raw.decode("utf-8", errors="replace")
     try:
         floor = datetime.fromisoformat(since) if since else None
     except ValueError:

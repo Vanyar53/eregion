@@ -105,8 +105,9 @@ jobs:
       # SEC14 (R-14): syft from its release archive, pinned by its sha256 (scripts/published_image.py,
       # SYFT_*) — never fetched at its latest by an action, in the job that signs. The same version
       # anchore/sbom-action v0.24.2 ran: the same SBOM, of the image loaded and proven above.
+      # CI8 (#566): the download retried (scripts/retry.sh), its sha256 checked at each attempt.
       - name: syft
-        run: python3 scripts/published_image.py install-syft "$RUNNER_TEMP/syft"
+        run: bash scripts/retry.sh python3 scripts/published_image.py install-syft "$RUNNER_TEMP/syft"
 
       - name: SBOM
         env:
@@ -131,7 +132,7 @@ jobs:
       # The same cosign H0 runs, pinned by its sha256 (scripts/published_image.py, COSIGN_*): no
       # installer action, the very binary that verifies on H0 signs here.
       - name: cosign
-        run: python3 scripts/published_image.py install-cosign "$RUNNER_TEMP/cosign"
+        run: bash scripts/retry.sh python3 scripts/published_image.py install-cosign "$RUNNER_TEMP/cosign"
 
       - name: Sign (keyless)
         env:

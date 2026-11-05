@@ -87,6 +87,23 @@ def isolated_watch_key(tmp_path, monkeypatch):
     monkeypatch.delenv(watch_key.KEY_ENV, raising=False)
 
 
+@pytest.fixture
+def signed_channel(monkeypatch):
+    """SEC21 (#530): the watch's key — a fixed seed, never a real key — pinned for this injector
+    (``EREGION_WATCH_KEY``); ``sign(record, run_id)`` gives ``(signal, body)`` as the watch files
+    it on the return channel, ``detections/<run_id>/<signal>.json``, signed under its domain."""
+    from types import SimpleNamespace
+
+    import eregion_core.watch_key as watch_key
+    signer = watch_key.Signer(bytes(range(32)))
+    monkeypatch.setenv(watch_key.KEY_ENV, watch_key.public_text(signer.public))
+
+    def sign(record: dict, run_id: str = "rid", n: int = 0) -> tuple[str, dict]:
+        sid = str(record.get("signal_id") or f"rule-t1136-001-v1-{n:08x}")
+        return sid, watch_key.sign_detection({**record, "signal_id": sid, "exercise_run": run_id}, signer)
+    return SimpleNamespace(signer=signer, sign=sign)
+
+
 @pytest.fixture(autouse=True)
 def isolated_escalations_store(tmp_path, monkeypatch):
     """Redirect escalations._STORE to a temp file.

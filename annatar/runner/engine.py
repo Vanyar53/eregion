@@ -94,6 +94,11 @@ class Engine:
         self.parser = ScenarioParser()
         self._detection_result = "unknown"
         self._detection_latency_s = None
+        # SEC21 (#530): the detections of the return channel refused (unsigned, another key, copied…)
+        # — each said once, in the console, Orodruin's journal and the run's report.
+        self._detection_refused: list[str] = []
+        self._detection_refused_total = 0
+        self._session = None
 
     def run(self, scenario_path: str, skip_confirm: bool = False):
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -104,6 +109,9 @@ class Engine:
             run_id += f"-{secrets.token_hex(2)}"
         self._detection_result = "unknown"
         self._detection_latency_s = None
+        self._detection_refused = []
+        self._detection_refused_total = 0
+        self._session = None
 
         # An invalid scenario (an unknown engine among them, review R1 point 2) is a clean
         # refusal with an outcome the campaign can read, never a raw traceback.
@@ -164,6 +172,7 @@ class Engine:
         if session is None:
             console.print(f"[red]Orodruin passive — nothing touched:[/red] {verdict.reasons()}")
             return RunOutcome(run_id, "unknown", error=f"passive: {verdict.reasons()}", refused=True)
+        self._session = session   # SEC21: a detection refused is written in its journal
         if self.without_glorfindel:
             # SEC5 (N-04): in Orodruin's journal too, not only in the run's report.
             session.declare(WITHOUT_GLORFINDEL, watch_gate.NOT_MEASURED)
@@ -402,6 +411,9 @@ class Engine:
         # itself, after the wait.
         metrics["detection"] = self._detection_result
         metrics["detection_latency_s"] = self._detection_latency_s
+        if self._detection_refused:   # SEC21: never counted, said in the report
+            metrics["detection_refused"] = list(self._detection_refused)
+            metrics["detection_refused_total"] = self._detection_refused_total
         report.metrics = metrics
         report.save()
         return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
@@ -576,6 +588,9 @@ class Engine:
         # proof, about a minute later).
         metrics["detection"] = self._detection_result
         metrics["detection_latency_s"] = self._detection_latency_s
+        if self._detection_refused:   # SEC21: never counted, said in the atomic run's report too
+            metrics["detection_refused"] = list(self._detection_refused)
+            metrics["detection_refused_total"] = self._detection_refused_total
         report.metrics = metrics
         report.save()
         return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
@@ -755,6 +770,11 @@ class Engine:
             # vouches for the whole wait — the storage channel's, else the local one's.
             result_event, latency, why = self._settle_through_channel(
                 run_id, scenario.mitre, emitter.resource_id, attack_time)
+            if result_event == "detection_timeout" and self._detection_refused_total:
+                # SEC21: a detection the run could not believe is no silence — a watch older than
+                # this injector, or a hand on the channel: never a miss, never seen.
+                result_event, why = None, (f"{self._detection_refused_total} detection(s) on the "
+                                           "return channel refused (SEC21)")
             if result_event is None:
                 console.print(
                     f"[yellow]Detection not measured — the hosted watch cannot vouch for"
@@ -803,35 +823,61 @@ class Engine:
         if stop_event is not None:
             stop_event.set()
 
-    @staticmethod
-    def _channel_latency(run_id: str, ttp: str, resource_id: str,
+    def _vouched(self, run_id: str) -> list[dict]:
+        """SEC21 (#530): the detections of this run the pinned key signed; each other refused,
+        said once — in the console, in Orodruin's journal, and kept for the run's report —, up to
+        MAX_REFUSED for the run: the rest only counted. ``_detection_refused_total``: the most
+        refused in one read of the channel (each read lists every blob of the run). Raises when the
+        channel cannot be read."""
+        found, refused, total = watch_channel.vouched_detections(run_id)
+        self._detection_refused_total = max(self._detection_refused_total, total)
+        for why in refused:
+            if why in self._detection_refused:
+                continue
+            if len(self._detection_refused) >= watch_channel.MAX_REFUSED:
+                break   # a writer that rotates its blobs never floods the journal nor the report
+            self._detection_refused.append(why)
+            # What the channel holds is never read as markup.
+            console.print(f"A detection on the return channel refused — never counted (SEC21): {why}",
+                          markup=False, style="yellow")
+            if self._session is not None:
+                try:
+                    self._session.declare("detection_refused", why)
+                except Exception as e:  # the journal said its own failure; the run goes on
+                    console.print(f"[yellow]Not journaled: {e}[/yellow]")
+        return found
+
+    def _channel_latency(self, run_id: str, ttp: str, resource_id: str,
                          attack_time: float) -> float | None:
         """The latency of this run's detection in the return channel, else None — an
         unreadable channel included: only the end of the wait decides what that means."""
         try:
-            found = watch_channel.read_detections(run_id)
+            found = self._vouched(run_id)
         except Exception:
             return None
         return detection_latency(watch_channel.as_records(found), ttp, resource_id, attack_time)
 
-    @staticmethod
-    def _settle_through_channel(run_id: str, ttp: str, resource_id: str,
+    def _settle_through_channel(self, run_id: str, ttp: str, resource_id: str,
                                 attack_time: float) -> tuple[str | None, float | None, str]:
         """The wait is over and the channel showed no detection. Wait (up to SETTLE_S) for a
         heartbeat written after the wait: everything the watch noted before it was then
         delivered, so a last read of the detections settles it. Returns ("detection",
         latency, "") — ("detection_timeout", None, "") for a miss the watch vouches for —
-        or (None, None, why) when it cannot vouch: the run is unknown."""
+        or (None, None, why) when it cannot vouch: the run is unknown. On the storage channel the
+        heartbeat that vouches is the watch's only once the pinned key signed it (SEC21): unsigned,
+        another key, replayed — unknown, never a miss."""
         until = time.time()
         give_up = until + watch_channel.SETTLE_S
         while True:
             try:
+                heartbeat = watch_channel.read_heartbeat()
                 why = watch_channel.miss_unprovable(
-                    watch_channel.read_heartbeat(), run_id=run_id,
-                    attack_time=attack_time, until=until)
+                    heartbeat, run_id=run_id, attack_time=attack_time, until=until)
+                # SEC21: a heartbeat that would prove a miss is believed only signed by the pinned key.
+                why = why or watch_gate.miss_proof(heartbeat)
                 if not why:
                     latency = detection_latency(
-                        watch_channel.as_records(watch_channel.read_detections(run_id)),
+                        watch_channel.as_records(self._vouched(run_id)),
                         ttp, resource_id, attack_time)
                     if latency is not None:
                         return "detection", latency, ""

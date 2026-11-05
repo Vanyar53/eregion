@@ -24,8 +24,18 @@ not hold, or whose counter is below one already seen (``remember``: the highest 
 key, in ``runs/orodruin/.watch_seen.json``, the injectors' own directory; an older heartbeat
 replayed after a newer one).
 
-**FS1 takes this key up** (#413, docs/design/watch-key.md): one key, two uses, each signed under
-its own domain — a heartbeat never reads as an action of the queue, nor the reverse.
+**The detections signed (SEC21, #530).** Each detection the watch publishes on the return channel
+(``detections/<run_id>/<signal_id>.json``) carries ``key`` and ``sig`` too: the signature of the
+domain ``DOMAIN_DETECTION`` — never the heartbeat's — followed by the canonical JSON of every
+other field: the run (``exercise_run``), the signal (``signal_id``), what was seen (``event``,
+``ttp``, ``resource_id``, ``rule``, ``watch_run_id``) and when (``detected_at``). An injector
+believes one only when the pinned key signed it under that domain, for the run it reads and under
+the signal's own name (``detection_refusal``): unsigned, another key, another domain, a field
+changed, copied from another run or another signal — never counted, and said.
+
+**FS1 takes this key up** (#413, docs/design/watch-key.md): one key, three uses, each signed under
+its own domain — a heartbeat never reads as a detection nor as an action of the queue, nor the
+reverse.
 
 ``cryptography`` is imported where a key is drawn, used or checked, never at import: the
 fingerprint of a public key, and reading the pin, need the standard library only.
@@ -45,11 +55,14 @@ from pathlib import Path
 
 KEY_ENV = "EREGION_WATCH_KEY"
 DOMAIN_BEAT = "eregion.watch-beat/1"
+# SEC21 (#530): a detection of the return channel — the same key, its own domain.
+DOMAIN_DETECTION = "eregion.watch-detection/1"
 # FS1 (#413) will sign its queue under "eregion.action-queue/1" — another domain, the same key.
 PREFIX = "ed25519:"
 KEY_FILE = "watch_ed25519"
 SEEN_NAME = ".watch_seen.json"
 SIGNED = ("seq", "key", "sig")       # what signing adds to a heartbeat
+SIGNED_DETECTION = ("key", "sig")    # what signing adds to a detection (SEC21)
 _PIN = re.compile(r"^ed25519:([A-Za-z0-9+/]{43}=)$")
 _SIG = re.compile(r"^[A-Za-z0-9+/]{86}==$")
 
@@ -275,6 +288,17 @@ def sign_beat(body: dict, signer: Signer, at: datetime) -> dict:
     return out
 
 
+def sign_detection(body: dict, signer: Signer) -> dict:
+    """SEC21: a detection of the return channel with its signer's fingerprint and its signature,
+    under ``DOMAIN_DETECTION`` — every other field covered: its run, its signal, what was seen,
+    when. No counter: what binds it is its run and its signal, which the reader compares with
+    the blob it read."""
+    out = {k: v for k, v in body.items() if k not in SIGNED_DETECTION}
+    out["key"] = signer.fingerprint
+    out["sig"] = signer.sign(DOMAIN_DETECTION, out)
+    return out
+
+
 # ── The injectors' side ───────────────────────────────────────────────────────────────
 
 def parse_pin(text: str) -> tuple[bytes | None, str]:
@@ -293,7 +317,13 @@ def pinned() -> tuple[bytes | None, str]:
     return parse_pin(os.environ.get(KEY_ENV, ""))
 
 
+_UNPRINTABLE = re.compile(r"[^\x20-\x7e]")
+
+
 def _short(fp: str) -> str:
+    """A fingerprint as said — the one a heartbeat or a detection claims is the channel's text:
+    printable ASCII only (SEC21: never an escape sequence to the terminal nor the report)."""
+    fp = _UNPRINTABLE.sub("?", fp)
     return fp[:19] + "…" if len(fp) > 19 else fp
 
 
@@ -322,6 +352,44 @@ def verify_beat(body: dict, key: bytes) -> str:
         Ed25519PublicKey.from_public_bytes(key).verify(base64.b64decode(sig), message(DOMAIN_BEAT, body))
     except (InvalidSignature, ValueError, binascii.Error):
         return "its signature does not hold: changed after it was signed, or not signed by the pinned key"
+    return ""
+
+
+UNSIGNED_DETECTION = ("unsigned: a watch older than this injector (update Glorfindel — H0 by its CD, a "
+                      "workstation's by make glorfindel-restart), or one whose key is unavailable (its "
+                      "log says why)")
+
+
+def detection_refusal(body, key: bytes, *, run_id: str, signal_id: str) -> str:
+    """SEC21: why this detection, read as ``detections/<run_id>/<signal_id>.json``, is not one the
+    pinned key signed for this run and this signal — "" when it is. Never counted for « seen »
+    when it is not, whatever it says."""
+    if not isinstance(body, dict):
+        return "not a JSON object"
+    sig = body.get("sig")
+    if sig is None:
+        return UNSIGNED_DETECTION
+    want = fingerprint(key)
+    if body.get("key") != want:
+        return (f"signed by another key ({_short(str(body.get('key') or 'none'))}) than the one "
+                f"pinned ({_short(want)}): another watch, or a key drawn again — pin the new one if it is yours")
+    if not isinstance(sig, str) or not _SIG.match(sig):
+        return "its signature is not one (64 bytes in base64)"
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except ImportError as e:
+        return f"cryptography absent ({e}): the signature cannot be checked"
+    try:
+        Ed25519PublicKey.from_public_bytes(key).verify(base64.b64decode(sig),
+                                                       message(DOMAIN_DETECTION, body))
+    except (InvalidSignature, ValueError, binascii.Error):
+        return ("its signature does not hold: changed after it was signed, signed for another use "
+                "(a heartbeat), or not by the pinned key")
+    if body.get("exercise_run") != run_id:
+        return f"a detection of another run ({str(body.get('exercise_run'))[:40]!r}) copied here"
+    if body.get("signal_id") != signal_id:
+        return f"a detection of another signal ({str(body.get('signal_id'))[:64]!r}) copied under this name"
     return ""
 
 

@@ -18,6 +18,11 @@ Two kinds of blob:
   the watch attributed the detection to and that a window covers at the detection's time.
   Never the rest of the fleet.
 
+Both signed by the watch's key (eregion_core/watch_key.py), each under its own domain: the
+heartbeat since SEC19, each detection since SEC21 (#530) — its run, its signal, what was seen and
+when. A run believes a detection only when the key it pins signed it, for this run and under this
+signal's name (``vouched_detections``); any other is never counted for « seen », and said.
+
 Every failure falls toward ``unknown``, never ``detected`` nor ``missed``: a run concludes
 to a miss only on a heartbeat written after its wait, by a watch up since before the
 attack, that knows the run's window (``miss_unprovable``).
@@ -109,6 +114,7 @@ class Publisher:
         self._put = put
         self._signer = signer
         self._unsigned = ""
+        self._unsigned_detection = ""
         self._windows = windows or load_windows
         self.since = (now or _now()).isoformat()
         self._lock = threading.Lock()
@@ -163,7 +169,7 @@ class Publisher:
                     continue
                 try:
                     self._write(f"{DETECTIONS}/{run}/{r['signal_id']}.json",
-                                {**r, "exercise_run": run})
+                                self._signed_detection({**r, "exercise_run": run}))
                     self._sent.add((run, r["signal_id"]))
                 except Exception as e:
                     waiting += 1
@@ -199,6 +205,22 @@ class Publisher:
             return body
         self._unsigned = ""
         return watch_key.sign_beat(body, signer, now)
+
+    def _signed_detection(self, body: dict) -> dict:
+        """SEC21 (#530): a detection signed by the watch's key, under its own domain — its run, its
+        signal, what was seen and when. Without a key it goes unsigned (the injectors never count
+        it), said once."""
+        if self.SIGNS is False:      # the local channel of verdicts: its exact fields (SEC18)
+            return body
+        from eregion_core import watch_key
+        signer, why = (self._signer, "") if self._signer is not None else watch_key.shared()
+        if signer is None:
+            if why != self._unsigned_detection:
+                print(f"[watch-channel] detection not signed ({why}): the injectors never count it (SEC21)")
+            self._unsigned_detection = why
+            return body
+        self._unsigned_detection = ""
+        return watch_key.sign_detection(body, signer)
 
     def _write(self, name: str, body: dict) -> None:
         import requests
@@ -266,12 +288,23 @@ def read_heartbeat(*, channel: str | None = None, credential=None, get=None) -> 
 
 def read_detections(run_id: str, *, channel: str | None = None, credential=None,
                     get=None) -> list[dict]:
-    """Every detection the watch delivered for this run's window. Raises when the channel
-    is unset or a listed detection cannot be read — a detection unread is never a miss. Without
-    a storage channel, the local one's (SEC18, ``local_detections``) when there is one."""
+    """Every detection the watch delivered for this run's window, as written — signed or not:
+    what the console shows. Raises when the channel is unset or a listed detection cannot be read
+    — a detection unread is never a miss. Without a storage channel, the local one's (SEC18,
+    ``local_detections``) when there is one. A run counts only ``vouched_detections`` (SEC21)."""
     url = channel if channel is not None else channel_url()
     if not url and channel is None and source() == LOCAL:
         return local_detections(run_id)
+    return [record for _, record in read_named(run_id, channel=url, credential=credential, get=get)
+            if isinstance(record, dict)]
+
+
+def read_named(run_id: str, *, channel: str | None = None, credential=None,
+               get=None) -> list[tuple[str, object]]:
+    """The storage channel's detections of this run, each with the name of its blob — the signal
+    it is filed under, ``detections/<run_id>/<signal>.json`` —, as read: what ``vouched_detections``
+    checks. Raises when the channel is unset or a listed detection cannot be read."""
+    url = channel if channel is not None else channel_url()
     if not url:
         raise RuntimeError(f"{CHANNEL_ENV} is not set")
     if not _SAFE.match(run_id):
@@ -295,10 +328,43 @@ def read_detections(run_id: str, *, channel: str | None = None, credential=None,
         if not name.startswith(prefix) or not leaf.endswith(".json") \
                 or not _SAFE.match(leaf[:-5]):
             continue
-        record = json.loads(_get(f"{url}/{name}", get, credential))
-        if isinstance(record, dict):
-            out.append(record)
+        out.append((leaf[:-5], json.loads(_get(f"{url}/{name}", get, credential))))
     return out
+
+
+# What a run keeps of the refusals to say them: enough to say them, never a flood (a writer of
+# the channel may file up to MAX_BLOBS of them, and rotate them) — the rest counted only.
+MAX_REFUSED = 20
+
+
+def vouched_detections(run_id: str, *, channel: str | None = None, credential=None,
+                       get=None) -> tuple[list[dict], list[str], int]:
+    """SEC21 (#530): (the detections a run may count, the refusals to say — MAX_REFUSED at most —,
+    how many were refused in all). On the storage
+    channel, only those the key this injector pins (``EREGION_WATCH_KEY``, never a key read in
+    the channel) signed under ``DOMAIN_DETECTION``, for this run, under their own signal's name;
+    each other — unsigned (a watch older than this lot), another key, another domain, a field
+    changed, copied from another run or another signal, or no key pinned — is refused and said,
+    never counted for « seen ». Without a storage channel, the local channel's verdicts as before
+    (SEC18: the watch's own directory, the red's view read-only), nothing refused. Raises as
+    ``read_named`` does."""
+    from eregion_core import watch_key
+    url = channel if channel is not None else channel_url()
+    if not url and channel is None and source() == LOCAL:
+        return local_detections(run_id), [], 0
+    named = read_named(run_id, channel=url, credential=credential, get=get)
+    key, no_key = watch_key.pinned()
+    kept, refused, total = [], [], 0
+    for leaf, record in named:
+        why = no_key if key is None else watch_key.detection_refusal(
+            record, key, run_id=run_id, signal_id=leaf)
+        if not why:
+            kept.append(record)
+            continue
+        total += 1
+        if len(refused) < MAX_REFUSED:
+            refused.append(f"{DETECTIONS}/{run_id}/{leaf}.json: {why}"[:400])
+    return kept, refused, total
 
 
 def as_records(detections: list[dict]) -> list[dict]:

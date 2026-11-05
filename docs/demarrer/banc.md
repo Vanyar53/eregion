@@ -201,7 +201,7 @@ make orodruin-campaign-run CAMPAIGN=<id>
 
 La preuve, à trois endroits :
 - **Le verdict.** La fin de la campagne, sur Orodruin, le compte : `executed=1 detected=… missed=…` (`annatar/cli.py`). Le rapport du run dit `detected`, `missed` ou `unknown`.
-  - `unknown` ne veut jamais dire « manqué » : le canal était muet, ou la watch ne connaissait pas la fenêtre du run (`docs/design/orodruin-contract.md`, « Échec vers `unknown` »).
+  - `unknown` ne veut jamais dire « manqué » : le canal était muet, la watch ne connaissait pas la fenêtre du run, ou ce qu'il disait n'était pas signé par la clé épinglée (une watch d'avant SEC21 : « unsigned … update Glorfindel ») (`docs/design/orodruin-contract.md`, « Échec vers `unknown` »).
   - Le rapport du run part ensuite vers H0 par le canal des fenêtres.
 - **Le rapport de la campagne**, écrit seul sur H0, environ 25 min après : `make glorfindel-host-campaign-report CAMPAIGN=<id>`.
 - **La console de H0** : `make glorfindel-host-tunnel`, puis l'URL qu'il affiche.
@@ -244,7 +244,7 @@ make orodruin-lock WATCH_PRINCIPALS=<object id> NO_WATCH=1          # les mêmes
 
 - **Ce qu'elle reçoit.** La lecture des fenêtres et l'écriture du canal retour, rien d'autre. Sans les mêmes options, un apply suivant les lui retire.
 - **Sur ton poste.** `EREGION_WATCH_CHANNEL` et `EREGION_EXERCISE_CHANNEL` (`terraform -chdir=infra/orodruin output`), puis `make glorfindel-start`.
-- **Dans `orodruin.env`.** La clé de ta watch (`make watch-key`), puis `make orodruin-push`. Un battement d'une autre clé reste refusé.
+- **Dans `orodruin.env`.** La clé de ta watch (`make watch-key`), puis `make orodruin-push`. Un battement ou une détection d'une autre clé reste refusé (SEC19, SEC21).
 - **Le réseau.** Elle passe par ton IP, que le pare-feu du compte du canal admet déjà. Ton IP a changé depuis le dernier apply : le canal ne se lit plus, et chaque run est refusé.
 
 Détail : [`infra/orodruin/README.md`](../../infra/orodruin/README.md), « Sans H0 ». Le profil « plusieurs équipes » ([`equipes.md`](../profils/equipes.md)) prend ce même chemin.

@@ -42,6 +42,14 @@ Contrat (garanties, vérifications, kill, mutants) :
   `orodruin.env` : `EREGION_WATCH_CHANNEL` (`watch_channel_url`) et `EREGION_WATCH_CHANNEL_SCOPE`
   (`watch_channel_scope`). Dans le `host.env` de Glorfindel : `EREGION_WATCH_CHANNEL`. Canal
   coupé → le run écrit `detection: unknown`, jamais `missed` (`docs/design/orodruin-contract.md`).
+  Le battement et chaque détection sont signés par la clé de la watch (SEC19, SEC21) ; un run ne
+  compte une détection que vérifiée avec `EREGION_WATCH_KEY` d'`orodruin.env`, la clé déjà épinglée
+  pour le battement — aucune épingle de plus. Une détection refusée (non signée, d'une autre clé,
+  altérée, recopiée) est dite dans la sortie du run, dans `runs/orodruin/audit.jsonl`
+  (`detection_refused`) et dans le rapport ; le run est `unknown`. **Le passage** : la release
+  publiée, le CD de H0 la déploie d'abord ; puis Orodruin (OI3, ou `make orodruin-push REF=<tag>`).
+  Dans l'autre ordre, les runs d'Orodruin restent `unknown` (« unsigned … update Glorfindel ») tant
+  que la watch n'est pas à jour (`docs/design/watch-key.md`, « Les détections signées »).
 - **Qui écrit le canal retour** (WC1, #523) : par défaut la watch de H0 seule, comme avant. Sans H0,
   la watch d'un poste ou d'une équipe : `WATCH_PRINCIPALS=<id>[,<id>…]` (la variable
   `watch_principal_ids`), voir ci-dessous.
@@ -81,10 +89,12 @@ d'autre : lire `exercises` (les fenêtres) et écrire `watch`.
 - **Une watch à la fois** : le battement est un seul blob (`heartbeat.json`). Deux watches qui
   publient en même temps l'écrasent tour à tour, et la garde refuse celle dont la clé n'est pas
   épinglée. Plusieurs identités servent à passer de l'une à l'autre, pas à les faire tourner ensemble.
-- **Les détections ne sont pas encore signées** : chaque identité listée, même une watch dont la clé
-  n'est pas épinglée, peut fausser le verdict d'un run, `detected` comme `missed`. C'est la mesure
-  qui est touchée, jamais une action : un injecteur n'agit que sur le battement signé. Les signer :
-  SEC21.
+- **Les détections sont signées** (SEC21) : par la clé de la watch, comme son battement. Un run ne
+  compte une détection pour « vu » que vérifiée avec la clé épinglée dans `orodruin.env`, pour ce run
+  et ce signal ; et il ne conclut à un « missed » que sur un battement de fin d'attente qu'elle a
+  signé. Une identité listée dont la clé n'est pas épinglée ne fausse donc pas la mesure : ce qu'elle
+  écrit est refusé, dit, et le run est `unknown`. Ce qui reste ouvert : une détection retirée du
+  canal (`docs/design/watch-key.md`, « Ce que cela prouve, et ce que non »).
 
 Tests : `infra/orodruin/tests/watch_writers.tftest.hcl` (`terraform test`, fournisseur mocké),
 `tests/unit/test_makefile_bench.py`, `tests/unit/test_watch_key.py`. Mesure au banc : un run depuis

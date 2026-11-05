@@ -171,10 +171,11 @@ def _channel_detection(seen: float, ttp: str = TTP) -> dict:
 
 
 @pytest.fixture
-def waiting(tmp_path, monkeypatch):
+def waiting(tmp_path, monkeypatch, signed_channel):
     """chdir to tmp, a fake clock, a return channel whose heartbeat is fresh and whose
-    detections are ``channel.detections`` — and the watch's files on this host, which the run
-    must never read (SEC18)."""
+    detections are ``channel.detections``, signed by the watch's key the injector pins (SEC21) —
+    ``channel.raw`` holds ``(signal, body)`` filed as they are, signed or not — and the watch's
+    files on this host, which the run must never read (SEC18)."""
     import time as _time
 
     from eregion_core import watch_channel
@@ -183,9 +184,10 @@ def waiting(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     clock = _Clock(_time.time())
     monkeypatch.setattr(engine_module, "time", clock)
-    channel = SimpleNamespace(detections=[], heartbeat=None)
+    channel = SimpleNamespace(detections=[], raw=[], heartbeat=None, signed=signed_channel)
     monkeypatch.setenv(watch_channel.CHANNEL_ENV, "https://account.blob.core.windows.net/watch")
-    monkeypatch.setattr(watch_channel, "read_detections", lambda run_id, **k: list(channel.detections))
+    monkeypatch.setattr(watch_channel, "read_named", lambda run_id, **k: [
+        signed_channel.sign(d, run_id, n) for n, d in enumerate(channel.detections)] + list(channel.raw))
     monkeypatch.setattr(watch_channel, "read_heartbeat", lambda **k: channel.heartbeat or {
         "at": _iso(clock.now), "since": _iso(clock.now - 86400), "windows": ["rid"]})
     watch = tmp_path / "runs" / "glorfindel"
@@ -251,16 +253,20 @@ def test_without_a_return_channel_the_detection_is_not_measured(waiting, monkeyp
 def _detect_at(after_s: float, seen: dict):
     """A stand-in for the wait: the return channel carries the watch's detection `after_s`
     after the run's attack_time, then the real wait runs (it finds it at once)."""
-    from eregion_core import watch_channel, watch_gate
+    from eregion_core import watch_channel, watch_gate, watch_key
     real = Engine._wait_and_emit_feedback
+    signer = watch_key.Signer(bytes(range(32)))   # SEC21: the watch's key, a fixed seed
 
     def fake(self, run_id, emitter, scenario, timeout_s, attack_time, stop_event=None):
         seen["attack_time"] = attack_time
-        found = [_channel_detection(attack_time + after_s, ttp=scenario.mitre)]
-        with patch.dict("os.environ", {watch_channel.CHANNEL_ENV: "https://account.blob.core.windows.net/watch"}), \
+        found = [("rule-1", watch_key.sign_detection(
+            {**_channel_detection(attack_time + after_s, ttp=scenario.mitre),
+             "signal_id": "rule-1", "exercise_run": run_id}, signer))]
+        with patch.dict("os.environ", {watch_channel.CHANNEL_ENV: "https://account.blob.core.windows.net/watch",
+                                       watch_key.KEY_ENV: watch_key.public_text(signer.public)}), \
              patch.object(watch_gate, "channel_beat",
                           lambda: watch_gate.Beat(watch_gate.CHANNEL, datetime.now(timezone.utc))), \
-             patch.object(watch_channel, "read_detections", lambda rid, **k: found):
+             patch.object(watch_channel, "read_named", lambda rid, **k: found):
             return real(self, run_id, emitter, scenario, timeout_s, attack_time, stop_event)
 
     return fake

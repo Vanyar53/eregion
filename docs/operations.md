@@ -1154,6 +1154,17 @@ console.
 
 ---
 
+## Les détections signées — le passage (SEC21, #530)
+
+Chaque détection du canal retour est signée par la clé de la watch (la même que le battement, un
+autre domaine), et un injecteur ne la compte que vérifiée avec `EREGION_WATCH_KEY`
+([`docs/design/watch-key.md`](design/watch-key.md), « Les détections signées »). **Aucun geste de
+clé** : ni clé nouvelle, ni épingle nouvelle. **L'ordre** : la release publiée → le CD de H0 la
+déploie (sa watch signe) → Orodruin (OI3, ou `make orodruin-push REF=<tag>`) → une watch de poste
+ou d'équipe : `make glorfindel-restart`. Une watch encore d'avant, des injecteurs à jour : les
+runs sont `unknown`, chaque détection refusée dite (« unsigned … update Glorfindel ») dans la
+sortie du run, le journal d'Orodruin et le rapport — jamais `missed`, jamais `detected`.
+
 ## Le battement signé, l'attestation signée — les gestes (SEC19, #456)
 
 **Ce qui change.** Un injecteur ne croit plus le battement de la watch que **signé par la clé de la

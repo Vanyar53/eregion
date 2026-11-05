@@ -76,6 +76,9 @@ def test_a_detection_in_a_window_is_delivered_before_the_heartbeat():
     name = f"detections/{w['run_id']}/rule-t1136-001-v1-ab12cd34.json"
     assert store.order == [name, "heartbeat.json"]
     d = store.blobs[name]
+    # SEC21: signed by the watch's key (drawn in tmp by conftest) — its key, its signature.
+    signed = {k: d.pop(k) for k in ("key", "sig")}
+    assert signed["key"].startswith("SHA256:") and len(signed["sig"]) == 88
     assert d == {"event": "detection", "signal_id": "rule-t1136-001-v1-ab12cd34",
                  "ttp": "T1136.001", "resource_id": VM.lower(),
                  "detected_at": (T0 + timedelta(minutes=2, seconds=29)).isoformat(),
@@ -385,11 +388,12 @@ class FakeChannel:
             at = min(at, min(pending) - 1)
         return {"at": _iso(at), "since": _iso(self.since), "windows": self.windows}
 
-    def read_detections(self, run_id):
+    def read_named(self, run_id, sign):
+        """The detections delivered by now, signed by the watch's key (SEC21)."""
         self._check()
         self.reads += 1
-        return [{k: v for k, v in d.items() if k != "_after"} for d in self.detections
-                if d.get("_after", 0) <= self.clock.now]
+        return [sign({k: v for k, v in d.items() if k != "_after"}, run_id, n)
+                for n, d in enumerate(self.detections) if d.get("_after", 0) <= self.clock.now]
 
 
 @pytest.fixture
@@ -401,7 +405,8 @@ def remote(waiting, monkeypatch):  # noqa: F811  (the imported fixture)
     def install(**kw):
         fake = FakeChannel(waiting.clock, **kw)
         monkeypatch.setattr(wc, "read_heartbeat", lambda **_: fake.read_heartbeat())
-        monkeypatch.setattr(wc, "read_detections", lambda run_id, **_: fake.read_detections(run_id))
+        monkeypatch.setattr(wc, "read_named",
+                            lambda run_id, **_: fake.read_named(run_id, waiting.channel.signed.sign))
         return fake
     waiting.install = install
     return waiting

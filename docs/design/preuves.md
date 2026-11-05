@@ -389,11 +389,19 @@ et le verdict reste le même :
     de propriétés : `DRAWS`) ;
   - ou quand il court contre de vrais processus et de vraies horloges (`TIMED` : `test_locks.py`,
     `test_exercise.py`) ;
+  - ou quand un test qu'elle lance démarre un thread ou un processus, dans son corps ou par une
+    fonction ou une classe de son fichier qu'il appelle (`RACES`, relecture de CI10a : la course
+    bloquée de M1346, les deux isolations en même temps de M3550 et M3553, les huit threads de
+    `test_ensure_clients_thread_safe_single_init`, les gardes de `test_runs_channel.py`, le thread de
+    la watch dans `test_action_queue_watch.py`). Une cible lance les tests qu'elle nomme, un fichier
+    entier, ou ceux d'un fichier dont le nom porte un mot de son `-k`. Une simple mention compte aussi
+    (`test_release.py` nomme `multiprocessing` dans une liste) : la règle penche vers deux tours ;
   - ou quand son mutant est `TIMING`, ou qu'un de ses fichiers est illisible.
 
-  Toute autre cible a un tour. La ligne d'un mutant dit les siens (`1/1`), et le JSON d'une tranche
-  aussi (`mutant_rounds`). Le jeu de contrôle suit la même règle : ses cibles sont des machines, il
-  garde ses deux tours.
+  Toute autre cible a un tour. M3289 en garde un : son test épie les verrous du balayage sur un seul
+  thread, les mêmes appels dans le même ordre à chaque fois. La ligne d'un mutant dit ses tours
+  (`1/1`), et le JSON d'une tranche aussi (`mutant_rounds`). **Le jeu de contrôle garde ses tours
+  d'office**, quelle que soit sa cible : il mesure ce que la suite n'a jamais été faite pour trouver.
 - **Les mutants du CD contre les tests qui les attrapent** (`--narrow FILE`). Un mutant dont la cible
   est un fichier lourd entier est mesuré une fois sur ce fichier, sans `-x` : ses deux tests les plus
   rapides qui l'attrapent (`NARROW`) deviennent sa cible, s'ils l'attrapent à chaque tour ; sinon il
@@ -402,7 +410,11 @@ et le verdict reste le même :
   (`WHOLE` la garde, et `--narrow` la remesure). `scripts/mutant_anchors.py` dit une entrée qui ne
   s'applique plus, ou un test que son fichier ne définit plus. Ce qu'on perd : la redondance. Un
   mutant que 21 tests attrapaient n'est plus mesuré que contre 2 ; si l'un s'affaiblit, la porte dit
-  `SURVIVES` (visible, jamais silencieux), et on le remesure. Resserrés le 05/11 : les 96 mutants
+  `SURVIVES` (visible, jamais silencieux), et on le remesure. Un id de paramètre est positionnel
+  (`[twice0-True]`) : un lot qui réordonne les paramètres garde la fonction et perd le nœud. Une
+  collecte de leurs fichiers (`pytest --collect-only`, environ 1 s) dit chaque nœud resserré qui n'est
+  plus collecté, dans `mutant_anchors.py` et dans la suite. Les copies des mutants de `--narrow` sont
+  faites d'une copie vierge, jamais de celle où son run non muté a tourné. Resserrés le 05/11 : les 96 mutants
   de `test_host_cd.py` entier (M1014 garde sa cible), 29 des 30 de `test_release.py` (M1164 n'est
   attrapé que par une erreur d'indentation à la collecte), les 51 de `test_published_image.py`. Un
   test dont l'id de paramètre a des espaces (un document JSON) est pris entier, tous ses paramètres.
@@ -429,7 +441,9 @@ le plan qui pèse les runs laissés au job `invariants`, `--machines` qui prend 
 des tests qui manquent un tour gardés, une erreur jamais comptée, les plus lents gardés, une mesure
 de deux tours prise pour un, une mesure sur le fichier entier prise pour celle de la cible resserrée,
 les copies des mutants faites de celle des runs non mutés, une entrée qui ne s'applique plus jamais
-dite.
+dite. Après la relecture, M4255–M4259 : un nœud que pytest ne collecte plus jamais dit, le jeu de
+contrôle en un tour, les copies de `--narrow` faites de celle de son run non muté, une course sur
+de vrais threads en un tour, des threads démarrés par une fonction ou une classe jamais vus.
 
 ### Les pannes des dépendances (G2)
 

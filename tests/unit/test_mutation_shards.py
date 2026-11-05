@@ -910,6 +910,7 @@ def _files(monkeypatch, tmp_path, files: dict) -> None:
         (tmp_path / rel).write_text(text)
     monkeypatch.setattr(mc, "REPO", tmp_path)
     monkeypatch.setattr(mc, "_SOURCES", {})
+    monkeypatch.setattr(mc, "_RACERS", {})
 
 
 _PLAIN = "def test_x():\n    assert True\n"
@@ -946,8 +947,9 @@ def test_the_rule_on_this_tree_keeps_the_rounds_where_chance_plays():
                   "tests/unit/test_entries_calls.py", "tests/unit/test_unexpected_decision.py",
                   "tests/unit/test_locks.py -k concurrent", "tests/unit/test_exercise.py"):
         assert mc.rounds_of(m, drawn, 2) == 2, drawn
-    for plain in ("tests/unit/test_host_cd.py", "tests/unit/test_invariant_regressions.py",
-                  "tests/unit/test_console.py", "tests/unit/test_release.py"):
+    for plain in ("tests/unit/test_host_cd.py", "tests/unit/test_published_image.py",
+                  "tests/unit/test_correlation.py", "tests/unit/test_glorfindel.py -k drain",
+                  "tests/unit/test_invariant_regressions.py::test_an_isolation_gone_under_a_bypass_is_said_gone"):
         assert mc.rounds_of(m, plain, 2) == 1, plain
 
 
@@ -1271,3 +1273,112 @@ def test_a_shard_leaves_the_machines_only_to_a_gate_that_runs_them():
         pytest_run = next(line for line in gate["invariants"].splitlines() if "-m pytest" in line).split()
         assert "tests/" in pytest_run or all(m in pytest_run for m in machines), pytest_run
     assert all("--skip-machine-baseline" not in run for run in _steps("mutants.yml").values())
+
+
+# ── CI10a, review: the races on real threads, the control set, narrow's own copies ───────────
+
+_THREADS = '''import threading
+
+
+def _two_at_once(f):
+    ts = [threading.Thread(target=f) for _ in range(2)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+
+
+class _Beside:
+    def __init__(self):
+        self.t = threading.Thread(target=lambda: None, daemon=True)
+
+
+def test_plain():
+    assert True
+
+
+def test_threads_itself():
+    t = threading.Thread(target=lambda: None)
+    t.start()
+    t.join()
+
+
+def test_through_a_helper():
+    _two_at_once(lambda: None)
+
+
+def test_through_a_class():
+    _Beside()
+'''
+
+
+def test_a_target_whose_test_starts_a_thread_keeps_its_rounds(monkeypatch, tmp_path):
+    """A race on real threads draws no seed, yet a round may not see what the other does: a test
+    that starts a thread or a process — itself, or through a function or a class of its file —
+    keeps its rounds; the file's other tests do not. A target runs the tests it names, the file
+    whole, or those whose names hold a word of its -k."""
+    _files(monkeypatch, tmp_path, {"tests/unit/test_t.py": _THREADS})
+    m = ("M1", "bug", "code.py", "a", "b")
+    f = "tests/unit/test_t.py"
+    assert mc.racers(f) == {"test_threads_itself", "test_through_a_helper", "test_through_a_class"}
+    assert mc.rounds_of(m, f"{f}::test_plain", 2) == 1
+    for node in ("test_threads_itself", "test_through_a_helper", "test_through_a_class[x-1]"):
+        assert mc.rounds_of(m, f"{f}::{node}", 2) == 2, node
+    assert mc.rounds_of(m, f, 2) == 2                                     # the file whole
+    assert mc.rounds_of(m, f"{f} -k plain", 2) == 1
+    assert mc.rounds_of(m, f"{f} -k 'helper or plain'", 2) == 2
+
+
+def test_the_races_on_this_tree_keep_their_rounds():
+    """On the tree (the review's list): the stuck race (M1346), two isolations at once (M3550,
+    M3553), the clients' eight threads, the runs channel's watchdog threads, the watch's thread
+    in the action queue's tests keep their rounds. The sweep's lock (M3289) is checked by a spy
+    on one thread: the same calls in the same order each time — one round."""
+    m = ("M1", "bug", "code.py", "a", "b")
+    for mid in ("M1346", "M3550", "M3553"):
+        assert mc.rounds_of(m, mc.TESTS[mid], 2) == 2, mid
+    for raced in ("tests/unit/test_glorfindel.py::test_ensure_clients_thread_safe_single_init",
+                  "tests/unit/test_runs_channel.py", "tests/unit/test_action_queue_watch.py"):
+        assert mc.rounds_of(m, raced, 2) == 2, raced
+    assert mc.rounds_of(m, mc.TESTS["M3289"], 2) == 1
+
+
+def test_the_control_set_keeps_its_rounds_whatever_its_target(tmp_path, monkeypatch):
+    """The control set measures what the suite was never shaped to find: its rounds always, even
+    on a target no chance moves — never because its targets happen to be machines."""
+    _files(monkeypatch, tmp_path, {"tests/unit/test_plain.py": _PLAIN})
+    monkeypatch.setattr(mc, "MUTANTS", [])
+    monkeypatch.setattr(mc, "CONTROL", [("C1", "control", "code.py", "line 1\n", "LINE 1\n")])
+    monkeypatch.setattr(mc, "TESTS", {"C1": "tests/unit/test_plain.py"})
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text(
+        "line 1\n")))
+    runs: list = []
+
+    def run(copy, examples, show=False, target=mc.INVARIANTS):
+        runs.append(copy.name)
+        return copy.name != "base"
+    monkeypatch.setattr(mc, "_run", run)
+    out = tmp_path / "c.json"
+    assert mc.main(["--control", "--rounds", "2", "--jobs", "1", "--json", str(out)]) == 0
+    assert runs.count("C1") == 2 and json.loads(out.read_text())["mutant_rounds"] == {"C1": 2}
+    assert mc.rounds_of(mc.CONTROL[0], "tests/unit/test_plain.py", 2, control=True) == 2
+
+
+def test_narrow_copies_its_mutants_from_a_pristine_copy(tmp_path, monkeypatch):
+    """`--narrow`: what the unmutated run wrote (a cache, a database) never reaches a mutant's
+    copy — each is made of a pristine copy, as main() makes them."""
+    mutants = [(f"M{i}", f"bug {i}", "code.py", "a\n", "b\n") for i in range(2)]
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text("a\n")))
+    seen: list = []
+
+    def pytest_(copy, examples, target, *more):
+        if copy.name == "base":
+            (copy / ".hypothesis").mkdir()
+            return type("P", (), {"returncode": 0, "stdout": ""})()
+        seen.append((copy / ".hypothesis").exists())
+        _junit(Path(more[0].split("=", 1)[1]), [("tests.unit.test_cd", "test_a", 1.0, "failure")])
+        return type("P", (), {"returncode": 1, "stdout": ""})()
+    monkeypatch.setattr(mc, "_pytest", pytest_)
+    monkeypatch.setattr(mc, "_run", lambda copy, examples, show=False, target=mc.INVARIANTS: True)
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    path = tmp_path / "narrowed.json"
+    assert mc.narrow("tests/unit/test_cd.py", mutants, 60, 2, 1, path=path, say=lambda *a, **k: None) == 0
+    assert seen == [False, False]

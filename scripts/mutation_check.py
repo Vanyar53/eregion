@@ -31,6 +31,7 @@ known survivor caught in every round is said, never red: take its reason off by 
 from __future__ import annotations
 
 import argparse
+import ast
 import concurrent.futures
 import heapq
 import importlib
@@ -10983,13 +10984,65 @@ def machine(target: str) -> bool:
     return any(MACHINE.search(_source(f) or "") for f in files_of(target))
 
 
+# CI10a, review: a race on real threads draws no seed either, and TIMED did not see it (M1346's
+# stuck race, M3550's two isolations at once). A test races when it starts a thread or a process —
+# in its own body, or through a function of its file it calls (RACES). A target runs the tests it
+# names, or a file's whole, or those of a file whose names hold a word of its `-k`.
+RACES = re.compile(r"threading\.|\bThread\(|Barrier\(|ThreadPoolExecutor|ProcessPoolExecutor|"
+                   r"multiprocessing|\.Popen\(|_Scheduler\(")
+_RACERS: dict[str, frozenset | None] = {}
+
+
+def racers(rel: str) -> frozenset | None:
+    """The tests of a file that start a thread or a process; None when it cannot be read."""
+    if rel not in _RACERS:
+        source = _source(rel)
+        try:
+            tree = ast.parse(source) if source is not None else None
+        except SyntaxError:
+            tree = None
+        if tree is None:
+            _RACERS[rel] = None
+        else:
+            funcs = {n.name: ast.get_source_segment(source, n) or "" for n in ast.walk(tree)
+                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            classes = {n.name: ast.get_source_segment(source, n) or "" for n in ast.walk(tree)
+                       if isinstance(n, ast.ClassDef)}
+            direct = {name for name, text in (classes | funcs).items() if RACES.search(text)}
+            _RACERS[rel] = frozenset(
+                name for name, text in funcs.items() if name.startswith("test")
+                and (name in direct or any(c in direct for c in re.findall(r"\b(\w+)\(", text))))
+    return _RACERS[rel]
+
+
+def races(target: str) -> bool:
+    """True when a test the target runs starts a thread or a process."""
+    words = target.split()
+    keys = {w for i, word in enumerate(words) if word == "-k" and i + 1 < len(words)
+            for w in re.findall(r"[A-Za-z_]\w*", words[i + 1]) if w not in ("and", "or", "not")}
+    for word in words:
+        path, _, rest = word.partition("::")
+        if not path.endswith(".py"):
+            continue
+        found = racers(path)
+        if found is None:
+            return True
+        name = rest.split("::")[-1].split("[")[0] if rest else ""
+        if any(t == name if name else (not keys or any(k in t for k in keys)) for t in found):
+            return True
+    return False
+
+
 def chance(target: str) -> bool:
     """True when a second round of this target can tell something the first did not."""
-    return any(f in TIMED or (s := _source(f)) is None or DRAWS.search(s) for f in files_of(target))
+    return any(f in TIMED or (s := _source(f)) is None or DRAWS.search(s) for f in files_of(target)) or races(target)
 
 
-def rounds_of(mutant, target: str, rounds: int) -> int:
-    """The rounds a mutant takes: all of them where chance plays, else one."""
+def rounds_of(mutant, target: str, rounds: int, control: bool = False) -> int:
+    """The rounds a mutant takes: all of them where chance plays, and always in the control set
+    (CI10a, review: it measures what the suite was never shaped to find), else one."""
+    if control:
+        return rounds
     return rounds if mark(mutant) == "TIMING" or chance(target) else min(rounds, 1)
 
 
@@ -11068,7 +11121,7 @@ def costs(todo: list, tests: dict, durations: dict, skip: bool = False) -> tuple
     for m in todo:
         target = tests.get(m[0], INVARIANTS)
         groups.setdefault(target, []).append(m[0])
-        rounds[target] = max(rounds.get(target, 1), rounds_of(m, target, DURATIONS_BUDGET[1]))
+        rounds[target] = max(rounds.get(target, 1), rounds_of(m, target, DURATIONS_BUDGET[1], m in CONTROL))
     mutant, unmutated = {}, {}
     for target, ids in groups.items():
         estimate = UNIT * (HEAVY if _heavy(target) else 1)
@@ -11201,7 +11254,7 @@ def as_today(doc: dict, mutants: dict, tree: dict) -> tuple[dict, set]:
             moved.add(mid)
             continue
         r_then = rounds.get(mid, doc.get("rounds"))
-        r_now = rounds_of(tree[mid], today, DURATIONS_BUDGET[1])
+        r_now = rounds_of(tree[mid], today, DURATIONS_BUDGET[1], tree[mid] in CONTROL)
         ok = isinstance(r_then, int) and not isinstance(r_then, bool) and r_then > 0
         out[mid] = s * r_now / r_then if ok else s
     return out, moved
@@ -11419,8 +11472,11 @@ def narrow(file: str, todo: list, examples: int, rounds: int, jobs: int, path: P
     in each of `rounds` rounds — else it keeps FILE whole. narrowed.json keeps the others' entries."""
     path = NARROWED if path is None else path
     with tempfile.TemporaryDirectory(prefix="glorfindel-narrow-") as tmp:
-        base = Path(tmp) / "base"
-        _copy_repo(base)
+        # Each mutant's copy is made of the pristine one, never of the copy the unmutated run
+        # wrote in (CI10a, review: as main() does, M4188).
+        pristine, base = Path(tmp) / "pristine", Path(tmp) / "base"
+        _copy_repo(pristine)
+        shutil.copytree(pristine, base)
         if _pytest(base, examples, file).returncode != 0:
             say(f"{file} fails on the UNMUTATED code — fix that first")
             return 2
@@ -11428,7 +11484,7 @@ def narrow(file: str, todo: list, examples: int, rounds: int, jobs: int, path: P
         def one(mutant):
             mid = mutant[0]
             copy = Path(tmp) / mid
-            shutil.copytree(base, copy)
+            shutil.copytree(pristine, copy)
             try:
                 if (stale := apply_mutant(mutant, copy)) is not None:
                     return mid, None, f"STALE ({stale}): keeps {file} whole"
@@ -11596,7 +11652,7 @@ def main(argv: list[str] | None = None) -> int:
                 return mid, title, "STALE", stale
             started = time.monotonic()
             target = TESTS.get(mid, INVARIANTS)
-            rounds = rounds_of(mutant, target, args.rounds)
+            rounds = rounds_of(mutant, target, args.rounds, args.control)
             caught = sum(_run(copy, args.examples, target=target) for _ in range(rounds))
             # Caught by a fixed sequence only (tests/unit/test_invariant_regressions.py)?
             fixed = (caught == 0 and target == INVARIANTS
@@ -11654,7 +11710,7 @@ def main(argv: list[str] | None = None) -> int:
             "targets": {r: round(ran[r][1], 1) for r in sorted(ran)},
             # CI10a: what each mutant was measured on, and in how many rounds.
             "mutant_targets": {m[0]: TESTS.get(m[0], INVARIANTS) for m in sorted(todo)},
-            "mutant_rounds": {m[0]: rounds_of(m, TESTS.get(m[0], INVARIANTS), args.rounds) for m in sorted(todo)},
+            "mutant_rounds": {m[0]: rounds_of(m, TESTS.get(m[0], INVARIANTS), args.rounds, args.control) for m in sorted(todo)},
         }, indent=1) + "\n", encoding="utf-8")
     return 1 if unknown and not args.json else 0
 

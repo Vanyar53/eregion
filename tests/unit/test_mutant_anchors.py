@@ -326,4 +326,25 @@ def test_a_narrowed_entry_that_no_longer_applies_or_names_a_lost_test_is_a_fault
 
 
 def test_the_tree_s_narrowed_entries_all_apply():
-    assert anchors.narrowed_faults(_load(HARNESS, "mutation_check_ci10a_tree"), ROOT) == []
+    assert anchors.narrowed_faults(_load(HARNESS, "mutation_check_ci10a_tree"), ROOT, collect=True) == []
+
+
+def test_a_narrowed_node_pytest_no_longer_collects_is_a_fault(tmp_path):
+    """CI10a, review: a parameter's id is positional (`[twice0-True]`): a lot that reorders its
+    parameters keeps the function, and the node is gone — the gate's unmutated run would fail, or
+    the mutant survive. One collection of the files says each node pytest does not collect; a
+    node without its parameter's id stands for each of them."""
+    import types
+    mc = _load(HARNESS, "mutation_check_ci10a_collect")
+    (tmp_path / "scripts" / "mutants").mkdir(parents=True)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_cd.py").write_text(
+        "import pytest\n\n\n@pytest.mark.parametrize('x', ['b', 'a'])\ndef test_p(x):\n    pass\n")
+    entries = {"M1": {"whole": "tests/test_cd.py", "tests": "tests/test_cd.py::test_p[a] tests/test_cd.py::test_p"},
+               "M2": {"whole": "tests/test_cd.py", "tests": "tests/test_cd.py::test_p[c]"}}
+    (tmp_path / "scripts" / "mutants" / "narrowed.json").write_text(json.dumps({"mutants": entries}))
+    fake = types.SimpleNamespace(load_narrowed=mc.load_narrowed, WHOLE={"M1": "tests/test_cd.py", "M2": "tests/test_cd.py"})
+    assert anchors.narrowed_faults(fake, tmp_path) == []                   # the function is still there
+    faults = anchors.narrowed_faults(fake, tmp_path, collect=True)
+    assert faults == ["M2: its narrowed test tests/test_cd.py::test_p[c] is not collected (a test renamed, "
+                      "a parameter's id moved): run --narrow tests/test_cd.py again"]

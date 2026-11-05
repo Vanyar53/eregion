@@ -25,6 +25,7 @@ from __future__ import annotations
 import ast
 import collections
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -142,15 +143,39 @@ def reason_faults(mutants: list, marks: tuple) -> list[str]:
     return faults
 
 
-def narrowed_faults(mc, root: Path) -> list[str]:
+def uncollected(root: Path, nodes: list[str]) -> list[str]:
+    """The nodes pytest does not collect in `root` — a test renamed, a parameter's id that moved
+    (`[twice0-True]` is positional: reordering its parameters changes it). One `--collect-only` of
+    their files, whole: a node that is not there would stop pytest from listing the others. A node
+    without its parameter's id stands for each of them."""
+    files = sorted({n.partition("::")[0] for n in nodes})
+    if not files:
+        return []
+    proc = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-o", "addopts=",
+                           "-p", "no:cacheprovider", *files], cwd=root, capture_output=True, text=True,
+                          env={**os.environ, "PYTHONPATH": str(root), "PYTHONDONTWRITEBYTECODE": "1"})
+    collected = {line.strip() for line in proc.stdout.splitlines() if "::" in line}
+    return [n for n in sorted(set(nodes))
+            if n not in collected and not any(c.startswith(n + "[") for c in collected)]
+
+
+def narrowed_faults(mc, root: Path, collect: bool = False) -> list[str]:
     """CI10a: an entry of scripts/mutants/narrowed.json that no longer applies (its mutant gone, or
     its lot's target no longer the whole file it was measured on: `--narrow` it again), or a node
-    of it that its file no longer defines — the harness would run a test that is not there."""
+    of it that its file no longer defines — the harness would run a test that is not there. With
+    `collect` (the script, the suite), each node pytest does not collect too."""
     load = getattr(mc, "load_narrowed", None)
     if load is None:
         return []
     whole, faults = getattr(mc, "WHOLE", {}), []
-    for mid, entry in sorted(load(root / NARROWED).items()):
+    entries = load(root / NARROWED)
+    if collect:
+        nodes = [n for mid, e in entries.items() if mid in whole for n in e["tests"].split()]
+        lost = set(uncollected(root, nodes))
+        faults += [f"{mid}: its narrowed test {n} is not collected (a test renamed, a parameter's id "
+                   f"moved): run --narrow {e['whole']} again"
+                   for mid, e in sorted(entries.items()) if mid in whole for n in e["tests"].split() if n in lost]
+    for mid, entry in sorted(entries.items()):
         if mid not in whole:
             faults.append(f"{mid}: its narrowed.json entry no longer applies (its mutant gone, or its target "
                           f"no longer {entry['whole']}): run --narrow {entry['whole']} again")
@@ -181,7 +206,7 @@ def check(root: Path) -> list[str]:
     faults += [f for m in mutants if (f := _fault(m, getattr(mc, "RENAME", None), root, tracked))]
     faults += after_guard((root / "scripts/mutation_check.py").read_text())
     faults += reason_faults(mutants, tuple(getattr(mc, "KNOWN_MARKS", ())))
-    faults += narrowed_faults(mc, root)
+    faults += narrowed_faults(mc, root, collect=True)
     if (root / NARROWED).exists() and NARROWED not in tracked:
         faults.append(f"{NARROWED}: not tracked by git: the gate would measure the whole files")
     print(f"{len(mc.MUTANTS)} mutants and {len(mutants) - len(mc.MUTANTS)} of the control set "

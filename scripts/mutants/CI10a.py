@@ -31,7 +31,7 @@ MUTANTS = [
      '    return rounds if mark(mutant) == "TIMING" or chance(target) else min(rounds, 1)\n',
      '    return rounds\n'),
     ("M4174", "main() measures each mutant in the rounds asked, its rule never read (CI10a)", HARNESS,
-     "            rounds = rounds_of(mutant, target, args.rounds)\n",
+     "            rounds = rounds_of(mutant, target, args.rounds, args.control)\n",
      "            rounds = args.rounds\n"),
     ("M4175", "no file is a machine: --machines selects nothing, the gate's shards rerun the machines (CI10a)",
      HARNESS,
@@ -84,8 +84,8 @@ MUTANTS = [
      "        if False:\n"),
     ("M4188", "the mutants copied from the copy the unmutated runs write in: their database in each mutant's "
               "(CI10a)", HARNESS,
-     "            shutil.copytree(pristine, copy)\n",
-     "            shutil.copytree(unmutated_copy, copy)\n"),
+     "            shutil.copytree(pristine, copy)\n            if (stale",
+     "            shutil.copytree(unmutated_copy, copy)\n            if (stale"),
     ("M4189", "a narrowed entry that no longer applies unsaid: its stale nodes checked as if they did "
               "(CI10a)", ANCHORS,
      "        if mid not in whole:\n",
@@ -112,4 +112,36 @@ TESTS = {
     "M4187": f"{_SH}test_update_drops_a_measure_on_another_target",
     "M4188": f"{_SH}test_unmutated_runs_write_nowhere_a_mutant_reads",
     "M4189": f"{_MA}test_a_narrowed_entry_that_no_longer_applies_or_names_a_lost_test_is_a_fault",
+}
+
+# CI10a, review: a narrowed node pytest no longer collects, the control set's rounds, narrow's own
+# copies, the races on real threads (M4255–M4259).
+MUTANTS += [
+    ("M4255", "a narrowed node pytest no longer collects unsaid: a parameter reordered, the gate red on its "
+              "unmutated run (CI10a, review)", ANCHORS,
+     "        lost = set(uncollected(root, nodes))\n",
+     "        lost = set()\n"),
+    ("M4256", "the control set in one round on a target no chance moves: half its measure (CI10a, review)",
+     HARNESS,
+     "    if control:\n        return rounds\n",
+     "    if False:\n        return rounds\n"),
+    ("M4257", "--narrow copies its mutants from the copy its unmutated run wrote in (CI10a, review)", HARNESS,
+     "            shutil.copytree(pristine, copy)\n            try:\n",
+     "            shutil.copytree(base, copy)\n            try:\n"),
+    ("M4258", "a race on real threads measured in one round: the stuck race, two isolations at once "
+              "(CI10a, review)", HARNESS,
+     "for f in files_of(target)) or races(target)\n",
+     "for f in files_of(target))\n"),
+    ("M4259", "a test that starts its threads through a helper or a class taken for deterministic "
+              "(CI10a, review)", HARNESS,
+     '                and (name in direct or any(c in direct for c in re.findall(r"\\b(\\w+)\\(", text))))\n',
+     "                and name in direct)\n"),
+]
+TESTS |= {
+    "M4255": f"{_MA}test_a_narrowed_node_pytest_no_longer_collects_is_a_fault",
+    "M4256": f"{_SH}test_the_control_set_keeps_its_rounds_whatever_its_target",
+    "M4257": f"{_SH}test_narrow_copies_its_mutants_from_a_pristine_copy",
+    "M4258": f"{_SH}test_a_target_whose_test_starts_a_thread_keeps_its_rounds "
+             f"{_SH}test_the_races_on_this_tree_keep_their_rounds",
+    "M4259": f"{_SH}test_a_target_whose_test_starts_a_thread_keeps_its_rounds",
 }

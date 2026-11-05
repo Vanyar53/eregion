@@ -17,14 +17,18 @@ What a read answers:
     a token that cannot be had), a delay (no connection, no answer in time), or a list
     longer than `MAX_PAGES` (an absence in it could not be told).
 
-Only Graph's own host is ever called: a path is a path (`/applications/<id>`), and a next page
-is followed only on that host.
+Only Graph's own host is ever called: a path is a path (`/applications/<id>`), a next page is
+followed only on that host, and a redirection never (`allow_redirects=False`: a 3xx is an error).
+The time: 5 s to connect and 15 s for each wait on the socket (not for the whole answer); the
+token's own fetch has no bound here; a plan's reads have one budget in all (`deadline`).
 """
 from __future__ import annotations
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPE = "https://graph.microsoft.com/.default"
 # Connection in 5 s, an answer in 15 s: a button the operator waits on, and a card being written.
+# The 15 s bound each wait on the socket (requests' read timeout), not the whole answer; getting
+# the token (azure.identity) has no bound of its own. A caller's `deadline` bounds its reads in all.
 TIMEOUT_S = (5, 15)
 MAX_PAGES = 5
 
@@ -44,10 +48,10 @@ class NoGraph:
     def __init__(self, why: str):
         self.why = why
 
-    def get(self, path: str, params: dict | None = None):
+    def get(self, path: str, params: dict | None = None, deadline: float | None = None):
         raise Unreadable(self.why, "off")
 
-    def list(self, path: str, params: dict | None = None):
+    def list(self, path: str, params: dict | None = None, deadline: float | None = None):
         raise Unreadable(self.why, "off")
 
 
@@ -77,14 +81,22 @@ class GraphReader:
         except Exception as exc:
             raise Unreadable(f"jeton de Graph indisponible ({type(exc).__name__})", "right") from None
 
-    def _get(self, url: str, params: dict | None):
+    def _get(self, url: str, params: dict | None, deadline: float | None = None):
         if not url.startswith(GRAPH + "/"):
             raise Unreadable("adresse hors de Graph refusée", "error")
+        import time
+
         import requests
         session = self._session or requests
+        timeout = self._timeout
+        if deadline is not None:        # the caller's budget in all (a plan: entra_items.PLAN_BUDGET_S)
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise Unreadable("budget de lecture de Graph dépassé", "delay")
+            timeout = (min(timeout[0], left), min(timeout[1], left))
         try:
             r = session.get(url, headers={"Authorization": f"Bearer {self._token()}"},
-                            params=params, timeout=self._timeout)
+                            params=params, timeout=timeout, allow_redirects=False)
         except requests.Timeout:
             raise Unreadable(f"Graph n'a pas répondu à temps ({self._timeout[1]} s)", "delay") from None
         except requests.ConnectionError:
@@ -97,6 +109,8 @@ class GraphReader:
         if status in (401, 403):
             code = _code(r)
             raise Unreadable(f"droit absent sur Graph ({status}{' ' + code if code else ''})", "right")
+        if 300 <= status < 400:         # never followed: Graph's answer is on Graph's host, or none
+            raise Unreadable(f"Graph a répondu une redirection ({status}) : non suivie", "error")
         if status != 200:
             raise Unreadable(f"Graph a répondu {status}", "error")
         try:
@@ -107,16 +121,17 @@ class GraphReader:
             raise Unreadable("réponse de Graph illisible (pas un objet)", "error")
         return body
 
-    def get(self, path: str, params: dict | None = None):
-        """The object at `path`, None if Graph says it does not exist, else `Unreadable`."""
+    def get(self, path: str, params: dict | None = None, deadline: float | None = None):
+        """The object at `path`, None if Graph says it does not exist, else `Unreadable`.
+        `deadline` (time.monotonic): no read past it, each socket wait bounded by what is left."""
         if not path.startswith("/") or "://" in path:
             raise Unreadable("chemin de Graph refusé", "error")
-        return self._get(GRAPH + path, params)
+        return self._get(GRAPH + path, params, deadline)
 
-    def list(self, path: str, params: dict | None = None) -> list[dict] | None:
+    def list(self, path: str, params: dict | None = None, deadline: float | None = None) -> list[dict] | None:
         """Every item of a collection (its pages followed, at most `MAX_PAGES`), None if the
         collection's owner does not exist."""
-        body = self.get(path, params)
+        body = self.get(path, params, deadline)
         if body is None:
             return None
         items = list(body.get("value") or [])
@@ -124,7 +139,7 @@ class GraphReader:
             nxt = body.get("@odata.nextLink")
             if not nxt:
                 return [i for i in items if isinstance(i, dict)]
-            body = self._get(str(nxt), None)
+            body = self._get(str(nxt), None, deadline)
             if body is None:
                 return None
             items += list(body.get("value") or [])

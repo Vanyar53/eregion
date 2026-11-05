@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from glorfindel.providers.azure.entra_items import (
     GRAPH_URL, UNREAD, _CONSENT, _ROLE, _Reads, _disable_principal, _item, _object_param, _param,
-    _revoke_sessions, _user_actor, _v, graph_id, guid, scope_id, when, words,
+    _revoke_sessions, _user_actor, _v, graph_id, guid, role_key, scope_id, when, words,
 )
 
 # ── A consent ──────────────────────────────────────────────────────────────────────────────
@@ -19,7 +19,8 @@ def _consent_items(row: dict, reads: _Reads, event_at: str) -> list[dict]:
         items.append(_item(
             "Identifier l'application cliente (modifiedProperties de l'événement) avant tout blocage : la "
             "cible est sans doute le principal de la ressource (Microsoft Graph) — le désactiver couperait "
-            "tout le tenant", why_human="la cliente n'est pas nommée par le journal"))
+            "tout le tenant", why_human="la cliente n'est pas nommée par le journal",
+            unchecked="Graph ne peut pas le vérifier : l'application cliente n'est pas nommée, son octroi peut tenir encore"))
     else:
         cp = _param("id du principal de l'application cliente", client, "log")
         name = row.get("TargetName") if op == "consent to application" else ""
@@ -104,16 +105,27 @@ def _role_items(row: dict, reads: _Reads, event_at: str) -> list[dict]:
     if member:
         found = reads.list(f"/roleManagement/directory/{coll}",
                            {"$filter": f"principalId eq '{member}'", "$expand": "roleDefinition"})
-    matched = []
-    if isinstance(found, list) and role_name:
-        matched = [a for a in found
-                   if str(((a.get("roleDefinition") or {}).get("displayName")) or "").lower() == role_name.lower()]
+    # Matched by the role's name, its aliases folded (« Company Administrator » is Global Administrator's
+    # former name: C2 keeps it, Graph says the new one); an assignment whose role's name is not read
+    # (roleDefinition not expanded, no displayName) is never taken for another role — a candidate.
+    matched, candidates = [], []
+    for a in found if isinstance(found, list) else []:
+        if not isinstance(a, dict):
+            continue
+        rd = a.get("roleDefinition") if isinstance(a.get("roleDefinition"), dict) else {}
+        if role_name and rd.get("displayName") and role_key(rd.get("displayName")) == role_key(role_name):
+            matched.append(a)
+        else:
+            candidates.append({"id": graph_id(a.get("id")), "roleDefinitionId": guid(a.get("roleDefinitionId")),
+                               "name": str(rd.get("displayName") or "")[:120]})
     check_by_name = ({"kind": "role_gone", "member": member, "role_name": role_name, "eligible": eligible}
                      if member and role_name else None)
     for a in matched:
         aid, rdef, scope = graph_id(a.get("id")), guid(a.get("roleDefinitionId")), scope_id(a.get("directoryScopeId"))
         if not (aid and rdef and scope):
+            candidates.append({"id": aid, "roleDefinitionId": rdef, "name": role_name[:120]})
             continue
+        rd = a.get("roleDefinition") if isinstance(a.get("roleDefinition"), dict) else {}
         triple = f"\"principalId\":\"{member}\",\"roleDefinitionId\":\"{rdef}\",\"directoryScopeId\":\"{scope}\""
         if eligible:
             end = when((((a.get("scheduleInfo") or {}).get("expiration")) or {}).get("endDateTime"))
@@ -134,10 +146,14 @@ def _role_items(row: dict, reads: _Reads, event_at: str) -> list[dict]:
             command=command, side_effect="un administrateur légitime ou un pipeline perd le rôle : ses écritures "
                                          "suivantes échouent en 403",
             rollback=back + " (la même attribution, un nouvel id)",
-            check={"kind": "role_gone", "member": member, "role_definition_id": rdef, "eligible": eligible}))
+            check={"kind": "role_gone", "member": member, "role_definition_id": rdef,
+                   "template_id": guid(rd.get("templateId")), "role_name": role_name, "eligible": eligible}))
     if not items:
-        why = ("aucune attribution de ce rôle lue sur le membre : déjà retirée ?" if isinstance(found, list) and role_name
-               else "le journal ne nomme pas le rôle" if not role_name else reads.why or "non lu")
+        why = ("le journal ne nomme pas le rôle" if not role_name
+               else reads.why or "non lu" if not isinstance(found, list)
+               else f"le membre tient {len(candidates)} attribution(s), aucune lue sous le nom « {role_name} » : "
+                    "à choisir parmi les candidates, à la main" if candidates
+               else "aucune attribution sur le membre : déjà retirée ?")
         aid_p = _param("id de l'attribution", "", "", why)
         items.append(_item(
             f"Retirer l'attribution {'éligible ' if eligible else ''}du rôle « {role_name or 'non lu'} »",
@@ -148,6 +164,8 @@ def _role_items(row: dict, reads: _Reads, event_at: str) -> list[dict]:
             side_effect="un administrateur légitime ou un pipeline perd le rôle",
             rollback="recréer l'attribution avec le même rôle, le même membre, la même portée",
             check=check_by_name, verifiable=True))
+        if candidates:
+            items[-1]["candidates"] = candidates[:20]
     if mtype.lower() == "user" and member:
         items.append(_revoke_sessions(member, event_at, str(row.get("TargetName") or "le membre ajouté")))
     author = _user_actor(row)

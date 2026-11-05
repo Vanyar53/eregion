@@ -50,6 +50,17 @@ def words(value) -> str:
     return v if _WORDS.fullmatch(v) else ""
 
 
+# The names a directory role goes by: Global Administrator's former name, still read in some logs
+# (entra.PRIVILEGED_ROLES keeps it) — on Graph, the new one. Lowercase.
+ROLE_ALIASES = {"company administrator": "global administrator"}
+
+
+def role_key(name) -> str:
+    """A role's name as compared: lowercase, its alias folded."""
+    n = str(name or "").strip().lower()
+    return ROLE_ALIASES.get(n, n)
+
+
 def when(value) -> str:
     v = str(value or "").strip()
     return v if _WHEN.fullmatch(v) else ""
@@ -67,22 +78,40 @@ class _Unread:
 UNREAD = _Unread()
 
 
+# The plan is written in `decide`, on the queue of the card's anchor VM: its reads of Graph have one
+# budget in all (a real detection on that VM waits behind it), and stop at the first delay or right
+# missing — the next read would only wait or be refused the same way.
+PLAN_BUDGET_S = 20.0
+
+
 class _Reads:
-    def __init__(self, reader):
+    def __init__(self, reader, budget_s: float = PLAN_BUDGET_S):
+        import time
         self.reader = reader
         self.why = ""
         self.done = 0
+        self.stopped = False
+        self._clock = time.monotonic
+        self.deadline = self._clock() + budget_s
 
     def _call(self, how: str, path: str, params=None):
         if self.reader is None:
             self.why = self.why or "Graph non lu (aucun lecteur)"
             return UNREAD
+        if self.stopped:
+            return UNREAD
+        if self._clock() >= self.deadline:
+            self.stopped = True
+            self.why = self.why or f"budget de lecture du plan dépassé ({PLAN_BUDGET_S:.0f} s)"
+            return UNREAD
         try:
-            out = getattr(self.reader, how)(path, params)
+            out = getattr(self.reader, how)(path, params, deadline=self.deadline)
             self.done += 1
             return out
         except Unreadable as exc:
             self.why = self.why or str(exc)
+            if exc.kind in ("delay", "right", "off"):
+                self.stopped = True
             return UNREAD
         except Exception as exc:        # a reader's bug is said, never taken for an answer
             self.why = self.why or f"Graph : {type(exc).__name__}"
@@ -110,15 +139,17 @@ def _v(p: dict) -> str:
 def _item(what: str, *, verb: str = "", target: dict | None = None, params: list | None = None,
           command: str = "", before: str = "", side_effect: str = "", rollback: str = "",
           check: dict | None = None, optional: bool = False, by: str = "executor", why_human: str = "",
-          find: str = "", verifiable: bool = False) -> dict:
+          find: str = "", verifiable: bool = False, unchecked: str = "") -> dict:
     """`verifiable`: what Verify reads afterwards, even when its check could not be written (a
-    parameter not read: then « unreadable », never « held »)."""
+    parameter not read: then « unreadable », never « held »). `unchecked`: a step of the
+    remediation Graph cannot check, and why — counted in the verdict, always « unreadable »."""
     params = params or []
     return {"verb": verb, "by": by if verb else "human", "why_human": why_human, "what": what,
             "target": target or {}, "params": params, "command": command,
             "complete": bool(command) and all(p["read"] for p in params),
             "find": find, "before": before, "side_effect": side_effect, "rollback": rollback,
-            "check": check, "verifiable": verifiable or check is not None, "optional": optional}
+            "check": check, "verifiable": verifiable or check is not None or bool(unchecked),
+            "unchecked": unchecked, "optional": optional}
 
 
 def _target(kind: str, oid: str, name) -> dict:

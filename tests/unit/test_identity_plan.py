@@ -145,6 +145,23 @@ def test_the_model_reads_no_identity_verb_and_its_prompt_is_unchanged():
     assert f"Destructive actions {sorted(MODEL_GATED_ACTIONS)}" in agent._SYSTEM_PROMPT
 
 
+# The sha256 of what the model reads, rendered at 982af36d (before IR1a) and after: the source
+# changed (MODEL_GATED_ACTIONS), the text did not — the proof that spares the run end to end
+# (CLAUDE.md, Conventions; Jonathan's decision of 05/11). An edit of the prompt changes them: then
+# the run end to end, and these digests updated with it.
+PROMPT_SHA256 = "36b767e85ac8ac327e2b630055787536f70d37c2d631421f7734c8ec1d24fb86"
+TOOL_SHA256 = "e14c15f091757c070e45c9854d558fa3b049915e54fc7f7f80c8f86d3d6617c2"
+
+
+def test_what_the_model_reads_is_byte_for_byte_what_it_was_before_ir1a():
+    import hashlib
+    import json
+
+    from glorfindel import agent
+    assert hashlib.sha256(agent._SYSTEM_PROMPT.encode()).hexdigest() == PROMPT_SHA256
+    assert hashlib.sha256(json.dumps(agent._DECISION_TOOL, sort_keys=True).encode()).hexdigest() == TOOL_SHA256
+
+
 def test_the_identity_decision_keeps_no_action_and_its_plan_never_reaches_the_model(monkeypatch, tenant):
     from glorfindel import agent
     monkeypatch.setattr(graph, "default_reader", lambda: tenant)
@@ -230,7 +247,8 @@ def test_a_privileged_role_its_assignment_read_and_the_members_sessions(tenant):
     assert remove["command"] == ("az rest --method DELETE --url https://graph.microsoft.com/v1.0/roleManagement/"
                                  f"directory/roleAssignments/{ASSIGNMENT}")
     assert f'"principalId":"{USER}","roleDefinitionId":"{ROLE_DEF}","directoryScopeId":"/"' in remove["rollback"]
-    assert remove["check"] == {"kind": "role_gone", "member": USER, "role_definition_id": ROLE_DEF, "eligible": False}
+    assert remove["check"] == {"kind": "role_gone", "member": USER, "role_definition_id": ROLE_DEF, "template_id": "",
+                               "role_name": "Global Administrator", "eligible": False}
     revokes = [i for i in plan["items"] if i["verb"] == "entra_revoke_sessions"]
     assert [(r["target"]["id"], r["optional"]) for r in revokes] == [(USER, False), (ADMIN, True)]
 
@@ -429,8 +447,9 @@ class _Session:
     def __init__(self, *answers):
         self.answers, self.urls = list(answers), []
 
-    def get(self, url, headers=None, params=None, timeout=None):
+    def get(self, url, headers=None, params=None, timeout=None, allow_redirects=True):
         self.urls.append(url)
+        self.redirects = allow_redirects
         a = self.answers.pop(0)
         if isinstance(a, Exception):
             raise a
@@ -497,3 +516,146 @@ def test_graph_is_read_only_from_the_azure_adapter():
             if p.suffix in (".py", ".js", ".html") and "graph.microsoft.com" in p.read_text(encoding="utf-8"):
                 hits.append(p.relative_to(ROOT).as_posix())
     assert hits and all(h.startswith("glorfindel/providers/azure/") for h in hits), hits
+
+
+# ── Relecture 1 (05/11) : a role by its alias, a step Graph cannot check, the budget, an absence ──
+
+def test_a_role_logged_under_its_former_name_is_found_and_never_held_while_assigned(tenant):
+    """C2 keeps « Company Administrator » — Graph names it Global Administrator: the same role."""
+    plan = _plan(_row("role", RoleName="Company Administrator"), tenant)
+    remove = plan["items"][0]
+    assert remove["complete"] and remove["command"].endswith(f"roleAssignments/{ASSIGNMENT}")
+    assert entra_check.verify(plan, tenant, now=NOW)["items"][0]["state"] == "not_held"
+    by_name = entra_check.check_item({"kind": "role_gone", "member": USER, "role_name": "Company Administrator",
+                                      "eligible": False}, tenant)
+    assert by_name["state"] == "not_held"
+
+
+def test_an_assignment_whose_role_is_not_read_is_a_candidate_never_held(tenant):
+    """The role's name not read (roleDefinition not expanded): never « already removed? », never held."""
+    tenant.roles.clear()                                     # the definition comes back without a name
+    plan = _plan(_row("role"), tenant)
+    remove = plan["items"][0]
+    assert not remove["complete"] and "déjà retirée" not in remove["params"][0]["why"]
+    assert "aucune lue sous le nom" in remove["params"][0]["why"]
+    assert [c["id"] for c in remove["candidates"]] == [ASSIGNMENT]
+    assert entra_check.verify(plan, tenant, now=NOW)["items"][0]["state"] == "unreadable"
+    tenant.role_assignments.clear()
+    assert entra_check.verify(plan, tenant, now=NOW)["items"][0]["state"] == "held"
+
+
+def test_a_member_with_other_roles_is_shown_them_never_already_removed(tenant):
+    tenant.roles["00000000-0000-0000-0000-0000000000e8"] = "Security Reader"
+    tenant.role_assignments[0]["roleDefinitionId"] = "00000000-0000-0000-0000-0000000000e8"
+    plan = _plan(_row("role"), tenant)
+    remove = plan["items"][0]
+    assert "le membre tient 1 attribution(s)" in remove["params"][0]["why"]
+    assert remove["candidates"][0]["name"] == "Security Reader"
+
+
+def test_a_consent_without_its_client_is_never_held_whatever_else_holds(tenant):
+    """Its client not named, the grant may stand: the card is unreadable, never held, even with the
+    consenter's sessions revoked."""
+    tenant.users[ADMIN]["signInSessionsValidFromDateTime"] = "2026-11-05T10:20:00Z"
+    plan = _plan(_row("consent", EntraOperation="Add delegated permission grant", TargetId=RES), tenant)
+    out = entra_check.verify(plan, tenant, now=NOW)
+    assert out["verdict"] == "unreadable"
+    first = out["items"][0]
+    assert first["state"] == "unreadable" and first["why"].startswith("Graph ne peut pas le vérifier")
+
+
+def test_glorfindels_plan_is_never_held_its_renewal_unchecked(tenant):
+    plan = _plan(_row("credential", GlorfindelManaged=True), tenant)
+    tenant.apps[APP]["passwordCredentials"] = []
+    out = entra_check.verify(plan, tenant, now=NOW)
+    assert out["verdict"] == "unreadable"
+    assert out["items"][0]["why"].startswith("Graph ne peut pas le vérifier")
+
+
+def test_a_review_stays_out_of_the_verdict(tenant):
+    plan = _plan(_row("role"), tenant)
+    out = entra_check.verify(plan, tenant, now=NOW)
+    assert not any(i["what"].startswith("Revoir") for i in out["items"])
+
+
+@pytest.mark.parametrize("obj", [None, {"id": APP}, {"id": APP, "passwordCredentials": None, "keyCredentials": []}])
+def test_a_credential_check_with_no_field_or_no_object_is_unreadable(obj):
+    g = FakeGraph()
+    if obj is not None:
+        g.apps[APP] = obj
+    out = entra_check.check_item({"kind": "credential_gone", "collection": "applications", "id": APP,
+                                  "key_id": KEY}, g)
+    assert out["state"] == "unreadable"
+
+
+def test_a_grant_list_graph_did_not_give_is_unreadable(monkeypatch):
+    g = FakeGraph()
+    monkeypatch.setattr(g, "list", lambda path, params=None, deadline=None: None)
+    for check in ({"kind": "grant_gone", "client": SP, "grant_id": GRANT}, {"kind": "consent_gone", "client": SP}):
+        assert entra_check.check_item(check, g)["state"] == "unreadable"
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+class _SlowSession:
+    """A Graph that waits: each read takes `wait` seconds of the clock, cut at its timeout."""
+
+    def __init__(self, clock, wait, answer):
+        self.clock, self.wait, self.answer, self.calls = clock, wait, answer, 0
+
+    def get(self, url, headers=None, params=None, timeout=None, allow_redirects=True):
+        import requests
+        self.calls += 1
+        if self.wait >= timeout[1]:
+            self.clock.t += timeout[1]
+            raise requests.Timeout()
+        self.clock.t += self.wait
+        return _Resp(self.answer)
+
+
+def _queue_time(monkeypatch, wait, answer):
+    """How long an identity card holds the queue of its anchor VM (`decide`), on the clock."""
+    import time
+
+    from glorfindel import agent
+    clock = _Clock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    session = _SlowSession(clock, wait, answer)
+    cred = SimpleNamespace(get_token=lambda scope: SimpleNamespace(token="t"))
+    monkeypatch.setattr(graph, "default_reader", lambda: GraphReader(credential=cred, session=session))
+    row = entra.prepare_rows([_row("consent")], set())[0]
+    sig = {"resource_id": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
+           "severity": "high", "context": {"plane": "identity"},
+           "raw_signal": {"detection_source": "azure_entra", "first_result_row": row}}
+    start = clock.t
+    d = agent._identity_decision({"signal": sig, "dry_run": False})
+    assert d["action"] == "" and d["identity_plan"]["graph"]["read"] is False
+    return clock.t - start, session.calls
+
+
+def test_a_mute_graph_holds_the_anchor_vms_queue_one_read_only(monkeypatch):
+    elapsed, calls = _queue_time(monkeypatch, wait=60, answer=200)
+    assert calls == 1 and elapsed <= 15
+
+
+def test_a_slow_graph_holds_the_anchor_vms_queue_less_than_25_s(monkeypatch):
+    elapsed, calls = _queue_time(monkeypatch, wait=9, answer=503)
+    assert elapsed < 25 and elapsed <= entra_plan_budget()
+
+
+def entra_plan_budget():
+    from glorfindel.providers.azure.entra_items import PLAN_BUDGET_S
+    return PLAN_BUDGET_S
+
+
+def test_a_redirection_is_never_followed():
+    r, s = _reader(_Resp(302, {}))
+    with pytest.raises(Unreadable) as exc:
+        r.get(f"/applications/{APP}")
+    assert exc.value.kind == "error" and s.redirects is False

@@ -458,7 +458,7 @@ Les codes de refus de FS1 (§2.11) valent tels quels. Il s'y ajoute `not_enrolle
 
 | Identité | Sur Entra ID |
 |---|---|
-| la watch | **aucune écriture, jamais.** Les journaux par Log Analytics Reader, comme aujourd'hui. Avec IR1a, une lecture de Graph pour écrire le plan et vérifier le geste d'un humain : `Application.Read.All`, `RoleManagement.Read.Directory`, `User.Read.All` (droits exacts à mesurer) |
+| la watch | **aucune écriture, jamais.** Les journaux par Log Analytics Reader, comme aujourd'hui. Avec IR1a, une lecture de Graph pour écrire le plan et vérifier le geste d'un humain, quatre permissions d'application : `Application.Read.All` (les identifiants, l'état et les rôles d'application d'une application ou d'un principal), `DelegatedPermissionGrant.Read.All` (les octrois délégués d'une application cliente, `oauth2PermissionGrants` : aucune des trois autres ne les lit), `RoleManagement.Read.Directory` (les attributions de rôles d'annuaire, actives et éligibles), `User.Read.All` (`signInSessionsValidFromDateTime`) — droits exacts à mesurer (hypothèse 10), les commandes dans `docs/operations.md` |
 | la console, le bot | aucune (FS1 : lecteurs) |
 | l'exécuteur de restore (FS1g) | aucune |
 | **l'exécuteur d'identité** | `Application.ReadWrite.OwnedBy`, et la **propriété** de chaque application inscrite et de son principal, posée par IDI1 (Celebrimbor), jamais par lui ; `User.RevokeSessions.All`, borné par le code aux utilisateurs inscrits (Q3) ; **User Administrator à la portée de l'unité administrative du banc**, avec Directory Readers au tenant que la doc exige pour qu'un principal s'en serve, et `User.EnableDisableAccount.All` + `User.Read.All` si l'unité n'est pas restreinte (§3.6) ; Attribute Assignment Reader à la portée de l'ensemble d'attributs d'Eregion (§3.6) ; Log Analytics Reader sur le workspace, pour relire la preuve |
@@ -734,6 +734,8 @@ l'exécuteur, le refus d'inscrire une identité qui tient un rôle privilégié 
 Graph en écriture (décision du Q6), et la liste `never_target`, partagée. **IDI1b** (§3.6) porte
 l'utilisateur de test, qui n'a pas de `tags` : l'appartenance à l'unité du banc et la clé d'ARM
 transposée en attribut de sécurité. Les verbes sur un utilisateur attendent IDI1b.
+
+**Pour IR1c** (relecture d'IR1a, 05/11) : les étapes en texte (`entra_plan.steps_text`, que lisent la TUI et `glorfindel pending`) écrivent tel quel un nom choisi par un attaquant ; un nom qui contient des accents graves peut y dessiner un faux bloc de commande. La console échappe ce texte et le bot le traite en Markdown, mais la sortie en terminal non : IR1c le neutralise (les noms hors des accents graves, ou échappés) avant qu'un verbe ne parte d'une carte.
 
 **Ce qui n'est pas prévu** : le retrait d'un rôle ou d'un consentement par Eregion (décision du
 Q2) ; la réinitialisation d'un mot de passe ; un utilisateur hors de l'unité du banc ; une identité

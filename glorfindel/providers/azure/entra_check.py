@@ -8,7 +8,9 @@ of the card:
   - else `unreadable` if one is unreadable, or if nothing could be checked;
   - else `held`.
 An optional item (the author's sessions, « if the author is not expected ») is checked and said,
-never counted in the verdict.
+never counted in the verdict; a review (« review what the member did ») is neither. A step of the
+remediation Graph cannot check (identify a consent's client, renew Glorfindel's credentials) is
+counted, `unreadable` with its own reason: the card is never held while it waits.
 
 Each path is built again from ids checked again here (`entra_plan.guid`, `graph_id`): a plan is
 read from the card's store, never trusted to name a path.
@@ -17,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from glorfindel.providers.azure.entra_items import graph_id, guid, when
+from glorfindel.providers.azure.entra_items import graph_id, guid, role_key, when
 from glorfindel.providers.azure.graph import Unreadable
 
 HELD, NOT_HELD, UNREADABLE = "held", "not_held", "unreadable"
@@ -44,10 +46,13 @@ def _credential_gone(c: dict, reader) -> dict:
     if coll not in _COLLECTIONS or not (oid and key):
         return _r(UNREADABLE, "vérification mal formée")
     obj = reader.get(f"/{coll}/{oid}", {"$select": "id,passwordCredentials,keyCredentials"})
-    if obj is None:
-        return _r(HELD, "l'objet n'existe plus dans Graph")
-    keys = {guid(k.get("keyId")) for f in ("passwordCredentials", "keyCredentials")
-            for k in (obj.get(f) or []) if isinstance(k, dict)}
+    if not isinstance(obj, dict):
+        return _r(UNREADABLE, "l'objet n'est pas rendu par Graph (supprimé ?) : rien ne dit que l'identifiant "
+                              "est retiré")
+    fields = [obj.get(f) for f in ("passwordCredentials", "keyCredentials")]
+    if not all(isinstance(f, list) for f in fields):
+        return _r(UNREADABLE, "passwordCredentials ou keyCredentials non rendus par Graph")
+    keys = {guid(k.get("keyId")) for f in fields for k in f if isinstance(k, dict)}
     return _r(NOT_HELD, f"le keyId {key} est encore sur l'objet") if key in keys else \
         _r(HELD, f"le keyId {key} n'est plus sur l'objet")
 
@@ -95,15 +100,25 @@ def _sessions_revoked(c: dict, reader) -> dict:
     return _r(NOT_HELD, f"sessions valides depuis {since.isoformat()}, avant l'événement : pas révoquées")
 
 
-def _grants(client: str, reader):
-    return reader.list("/oauth2PermissionGrants", {"$filter": f"clientId eq '{client}'"})
+class _NotAList(Exception):
+    """A collection Graph did not give as a list (or a 404): never read as « empty »."""
+
+
+def _grants(client: str, reader) -> list:
+    grants = reader.list("/oauth2PermissionGrants", {"$filter": f"clientId eq '{client}'"})
+    if not isinstance(grants, list):
+        raise _NotAList("les octrois de l'application cliente ne sont pas rendus par Graph")
+    return grants
 
 
 def _grant_gone(c: dict, reader) -> dict:
     client, gid = guid(c.get("client")), graph_id(c.get("grant_id"))
     if not (client and gid):
         return _r(UNREADABLE, "vérification mal formée")
-    grants = _grants(client, reader) or []
+    try:
+        grants = _grants(client, reader)
+    except _NotAList as exc:
+        return _r(UNREADABLE, str(exc))
     return _r(NOT_HELD, "l'octroi est encore là") if gid in {str(g.get("id") or "") for g in grants} \
         else _r(HELD, "l'octroi n'y est plus")
 
@@ -123,27 +138,52 @@ def _consent_gone(c: dict, reader) -> dict:
     client = guid(c.get("client"))
     if not client:
         return _r(UNREADABLE, "vérification mal formée")
-    grants = _grants(client, reader) or []
-    roles = reader.list(f"/servicePrincipals/{client}/appRoleAssignments") or []
+    try:
+        grants = _grants(client, reader)
+    except _NotAList as exc:
+        return _r(UNREADABLE, str(exc))
+    roles = reader.list(f"/servicePrincipals/{client}/appRoleAssignments")
+    if not isinstance(roles, list):
+        return _r(UNREADABLE, "les attributions de l'application cliente ne sont pas rendues par Graph")
     if grants or roles:
         return _r(NOT_HELD, f"{len(grants)} octroi(s) et {len(roles)} attribution(s) encore là")
     return _r(HELD, "aucun octroi ni attribution pour l'application cliente")
 
 
 def _role_gone(c: dict, reader) -> dict:
+    """The member holds no assignment of this role: by the role definition's ids (its id, its
+    template's), or by its name, its alias folded (« Company Administrator » is Global
+    Administrator). An assignment whose role is not read — its definition not expanded, no name —
+    while only the name can tell: unreadable, never held."""
     member = guid(c.get("member"))
-    rdef, name = guid(c.get("role_definition_id")), str(c.get("role_name") or "").strip().lower()
-    if not member or not (rdef or name):
+    ids = {guid(c.get("role_definition_id")), guid(c.get("template_id"))} - {""}
+    name = role_key(c.get("role_name"))
+    if not member or not (ids or name):
         return _r(UNREADABLE, "vérification mal formée")
     coll = "roleEligibilitySchedules" if c.get("eligible") else "roleAssignments"
     found = reader.list(f"/roleManagement/directory/{coll}",
                         {"$filter": f"principalId eq '{member}'", "$expand": "roleDefinition"})
     if found is None:
         return _r(HELD, "le membre n'existe plus dans Graph")
-    left = [a for a in found if (rdef and guid(a.get("roleDefinitionId")) == rdef)
-            or (name and str(((a.get("roleDefinition") or {}).get("displayName")) or "").lower() == name)]
-    return _r(NOT_HELD, f"{len(left)} attribution(s) de ce rôle encore là") if left else \
-        _r(HELD, "le membre ne tient plus ce rôle")
+    if not isinstance(found, list):
+        return _r(UNREADABLE, "les attributions du membre ne sont pas rendues par Graph")
+    left, unsure = 0, 0
+    for a in found:
+        if not isinstance(a, dict):
+            unsure += 1
+            continue
+        rd = a.get("roleDefinition") if isinstance(a.get("roleDefinition"), dict) else {}
+        theirs = {guid(a.get("roleDefinitionId")), guid(rd.get("id")), guid(rd.get("templateId"))} - {""}
+        if ids & theirs or (name and rd.get("displayName") and role_key(rd.get("displayName")) == name):
+            left += 1
+        elif not ids and not rd.get("displayName"):
+            unsure += 1                  # only the name could tell, and it is not read
+    if left:
+        return _r(NOT_HELD, f"{left} attribution(s) de ce rôle encore là")
+    if unsure:
+        return _r(UNREADABLE, f"{unsure} attribution(s) du membre sans nom de rôle lisible : rien ne dit "
+                              "qu'elles ne sont pas ce rôle")
+    return _r(HELD, "le membre ne tient plus ce rôle")
 
 
 CHECKS = {"credential_gone": _credential_gone, "federated_gone": _federated_gone, "disabled": _disabled,
@@ -175,7 +215,9 @@ def verify(plan: dict, reader, *, requested_at: str = "", now: datetime | None =
     for i in (plan or {}).get("items") or []:
         if not isinstance(i, dict) or not i.get("verifiable"):
             continue                      # a step nothing can check (« review what the member did »)
-        r = {"n": i.get("n"), "what": str(i.get("what") or "")[:300], **check_item(i.get("check"), reader),
+        state = (check_item(i.get("check"), reader) if i.get("check") or not i.get("unchecked")
+                 else _r(UNREADABLE, str(i["unchecked"])))
+        r = {"n": i.get("n"), "what": str(i.get("what") or "")[:300], **state,
              "optional": bool(i.get("optional"))}
         items.append(r)
         if not r["optional"]:

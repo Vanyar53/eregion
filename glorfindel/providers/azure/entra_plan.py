@@ -106,7 +106,8 @@ def build(row: dict, reader=None, *, protected=None, now: datetime | None = None
         for i in items:
             i.update(by="human", why_human=_GLORFINDEL)
         items.insert(0, _item("Renouveler les identifiants de Glorfindel, puis revoir ce qu'ils ont fait "
-                              "(geste de l'opérateur)", why_human=_GLORFINDEL))
+                              "(geste de l'opérateur)", why_human=_GLORFINDEL,
+                              unchecked="Graph ne peut pas le vérifier : le renouvellement des identifiants de Glorfindel se dit par l'opérateur"))
     for i in items:
         if i["by"] != "executor":
             continue

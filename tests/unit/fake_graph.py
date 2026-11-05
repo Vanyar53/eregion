@@ -35,7 +35,7 @@ class FakeGraph:
                               "error": "Graph a répondu 503",
                               "delay": "Graph n'a pas répondu à temps (15 s)"}[self.fail], self.fail)
 
-    def get(self, path: str, params: dict | None = None):
+    def get(self, path: str, params: dict | None = None, deadline: float | None = None):
         self.calls.append(("get", path, params))
         self._fail()
         if m := re.fullmatch(r"/applications/" + _ID, path):
@@ -59,7 +59,7 @@ class FakeGraph:
                                          "displayName": self.roles.get(r["roleDefinitionId"], "")}}
                 for r in rows if r["principalId"] == p]
 
-    def list(self, path: str, params: dict | None = None):
+    def list(self, path: str, params: dict | None = None, deadline: float | None = None):
         self.calls.append(("list", path, params))
         self._fail()
         if path == "/oauth2PermissionGrants":

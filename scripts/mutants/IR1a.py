@@ -3,7 +3,7 @@ list, never autonomous, always a human's, never in what the model reads; the pla
 Graph or the log, never invented, never a value of the log that is no id in a command; the check
 never « held » without Graph's answer; Graph read only, its answers told apart; Glorfindel's
 identity and never_target turned into a human's steps; the plan on the card, escaped on the page.
-M3880–M3899, measured by tests/unit/test_identity_plan.py and
+M3880–M3899 and M3955–M3964 (the first review), measured by tests/unit/test_identity_plan.py and
 tests/unit/test_console_identity_plan.py (the page: tests/unit/test_console_escaping.py)."""
 POLICY = "glorfindel/response/policy.py"
 AGENT = "glorfindel/agent.py"
@@ -39,8 +39,8 @@ MUTANTS = [
      '    return v if _WORDS.fullmatch(v) else ""\n',
      '    return v\n'),
     ("M3887", "Graph unreadable taken for « no such object » (IR1a)", ITEMS,
-     "            self.why = self.why or str(exc)\n            return UNREAD\n",
-     "            self.why = self.why or str(exc)\n            return None\n"),
+     "                self.stopped = True\n            return UNREAD\n",
+     "                self.stopped = True\n            return None\n"),
     ("M3888", "a parameter not read shown as read: the command says complete (IR1a)", ITEMS,
      '    return {"name": name, "value": "", "from": "", "read": False, "why": why or "non lu"}\n',
      '    return {"name": name, "value": "", "from": "", "read": True, "why": why or "non lu"}\n'),
@@ -77,8 +77,41 @@ MUTANTS = [
     ("M3899", "a consent outside its flow blocks the resource's principal: the whole tenant cut (IR1a)", GRANTS,
      '    client = guid(row.get("TargetId")) if op == "consent to application" else guid(row.get("ClientId"))\n',
      '    client = guid(row.get("TargetId"))\n'),
+    # Relecture 1 (05/11): M3955–M3964.
+    ("M3955", "a role logged under its former name never matched: still assigned, said held (IR1a r1)", ITEMS,
+     'ROLE_ALIASES = {"company administrator": "global administrator"}\n',
+     'ROLE_ALIASES = {}\n'),
+    ("M3956", "an assignment whose role's name is not read taken for another role: held (IR1a r1)", CHECK,
+     "            unsure += 1                  # only the name could tell, and it is not read\n",
+     "            pass\n"),
+    ("M3957", "a member still holding assignments said « already removed? » (IR1a r1)", GRANTS,
+     '                    "à choisir parmi les candidates, à la main" if candidates\n',
+     '                    "à choisir parmi les candidates, à la main" if False\n'),
+    ("M3958", "a consent without its client left out of the verdict: held while the grant stands (IR1a r1)", GRANTS,
+     "            unchecked=\"Graph ne peut pas le vérifier : l'application cliente n'est pas nommée, son octroi "
+     "peut tenir encore\"))\n",
+     "            ))\n"),
+    ("M3959", "Glorfindel's renewal left out of the verdict: held before the operator said it (IR1a r1)", PLAN,
+     "                              unchecked=\"Graph ne peut pas le vérifier : le renouvellement des identifiants "
+     "de Glorfindel se dit par l'opérateur\"))\n",
+     "                              ))\n"),
+    ("M3960", "the plan reads on after a delay: a mute Graph holds the anchor VM's queue (IR1a r1)", ITEMS,
+     '            if exc.kind in ("delay", "right", "off"):\n',
+     '            if False:\n'),
+    ("M3961", "the plan's budget not handed to the reader: a slow Graph past 20 s (IR1a r1)", ITEMS,
+     "            out = getattr(self.reader, how)(path, params, deadline=self.deadline)\n",
+     "            out = getattr(self.reader, how)(path, params, deadline=None)\n"),
+    ("M3962", "a credential's fields absent read as empty: removed (IR1a r1)", CHECK,
+     '    fields = [obj.get(f) for f in ("passwordCredentials", "keyCredentials")]\n',
+     '    fields = [obj.get(f) or [] for f in ("passwordCredentials", "keyCredentials")]\n'),
+    ("M3963", "grants Graph did not give read as none: the grant said removed (IR1a r1)", CHECK,
+     '    grants = reader.list("/oauth2PermissionGrants", {"$filter": f"clientId eq \'{client}\'"})\n',
+     '    grants = reader.list("/oauth2PermissionGrants", {"$filter": f"clientId eq \'{client}\'"}) or []\n'),
+    ("M3964", "a redirection followed off Graph (IR1a r1)", GRAPH,
+     "                            params=params, timeout=timeout, allow_redirects=False)\n",
+     "                            params=params, timeout=timeout)\n"),
 ]
-TESTS = {f"M{n}": _PLAN for n in range(3880, 3900)}
+TESTS = {f"M{n}": _PLAN for n in list(range(3880, 3900)) + list(range(3955, 3965))}
 TESTS["M3884"] = _CONSOLE
 TESTS["M3898"] = f"{_CONSOLE} tests/unit/test_console_escaping.py"
 TESTS["M3899"] = f"{_PLAN} tests/unit/test_entra_detection.py"

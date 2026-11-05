@@ -202,7 +202,7 @@ def _workflow_jobs() -> list[str]:
 
 WORKFLOW_JOBS = _workflow_jobs()
 MACOS_JOB = rel.INFORMATIVE["macos"]
-SHARD_JOB = "mutants (shard 3/14)"
+SHARD_JOB = "mutants (shard 3/10)"
 _JOB_IDS = itertools.count(5000)
 
 
@@ -1201,17 +1201,16 @@ def _gate_with(repo, capsys, jobs, *, run_conclusion="failure"):
 
 
 def test_the_jobs_that_inform_and_the_total_are_the_workflow_s():
-    """One source: release.py's INFORMATIVE is the total's own (its step's INFORMATIVE, by id), each
-    named as the workflow names it; GATE_JOB is the total's name; the total needs every other job,
-    and a job that informs, and only one, has continue-on-error. Every job that is neither blocks."""
+    """One source: release.py's INFORMATIVE are the workflow's jobs that inform — those with
+    continue-on-error, and the only ones the total does not need (CI10b, #581: it no longer waits
+    for them) —, each named as the workflow names it; GATE_JOB is the total's name; the total needs
+    every other job. Every job that is neither blocks."""
     import yaml
     doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-gate.yml").read_text(encoding="utf-8"))
     jobs = doc["jobs"]
     (total_id,) = [k for k, v in jobs.items() if v["name"] == rel.GATE_JOB]
-    (step,) = [s for s in jobs[total_id]["steps"] if "INFORMATIVE" in (s.get("env") or {})]
-    assert set(step["env"]["INFORMATIVE"].split()) == set(rel.INFORMATIVE)
     assert {k: jobs[k]["name"] for k in rel.INFORMATIVE} == rel.INFORMATIVE
-    assert sorted(jobs[total_id]["needs"]) == sorted(k for k in jobs if k != total_id)
+    assert sorted(jobs[total_id]["needs"]) == sorted(k for k in jobs if k != total_id and k not in rel.INFORMATIVE)
     assert [k for k, v in jobs.items() if v.get("continue-on-error") is True] == list(rel.INFORMATIVE)
     assert MACOS_JOB in WORKFLOW_JOBS and SHARD_JOB in WORKFLOW_JOBS and rel.GATE_JOB in WORKFLOW_JOBS
 
@@ -1270,8 +1269,10 @@ def test_every_job_green_says_nothing_more_whatever_the_run_s_conclusion(repo, t
     assert line.endswith("(https://github.com/o/r/actions/runs/41)")
 
 
-@pytest.mark.parametrize("name", [SHARD_JOB, "tests, 2 000 invariant sequences (Linux)", "control set (shard 2/2)",
-                                  "mutants (every shard, the count)", "terraform test (release gate)"])
+@pytest.mark.parametrize("name", [SHARD_JOB, "tests, 2 000 invariant sequences — Azure's machine (Linux)",
+                                  "tests, 2 000 invariant sequences — every other test (Linux)",
+                                  "control set (shard 2/2)", "mutants (every shard, the count)",
+                                  "terraform test (release gate)"])
 @pytest.mark.parametrize("conclusion, said", [
     ("failure", "rouge"), ("cancelled", "annulé"), ("skipped", "sauté"), ("timed_out", "arrêté à sa borne"),
 ])
@@ -1385,8 +1386,9 @@ def test_two_jobs_of_one_name_in_one_attempt_refuse(repo, tmp_path, capsys, atte
 
 
 def test_the_workflow_s_job_names_are_unique():
-    """What the fake GitHub gives, one job per name, as GitHub's attempt does."""
-    assert len(WORKFLOW_JOBS) == len(set(WORKFLOW_JOBS)) == 21
+    """What the fake GitHub gives, one job per name, as GitHub's attempt does — 18 since CI10b (#581):
+    ten shards for fourteen, the tests in two jobs."""
+    assert len(WORKFLOW_JOBS) == len(set(WORKFLOW_JOBS)) == 18
 
 
 def test_99_jobs_still_read(repo, tmp_path, capsys):

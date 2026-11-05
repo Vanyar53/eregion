@@ -25,9 +25,9 @@ jobs:
     # The night is macOS's: the Linux suite runs on each pull request and each push.
     if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
-    # Bounded, as the macOS job: 4-10 min usually (80 jobs measured, 15-29/10) — a race of
-    # the invariants that never comes back fails in its turn's time (I11), but a hang
-    # elsewhere would run six hours (U3F).
+    # Bounded, as the macOS job: 11-16 min in one process (CI9, 05/11), less in four (CI10b) —
+    # a race of the invariants that never comes back fails in its turn's time (I11), but a
+    # hang elsewhere would run six hours (U3F).
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -65,6 +65,12 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      # CI10b (#581, L16): every mutant still applies to this tree, on each pull request and each
+      # push — one made stale by another merge is seen at the merge, never at the next release gate
+      # (M825, M945 and M1225 were, on main: #299). Under a second, nothing installed for it.
+      - name: Mutants anchored to this tree
+        run: python scripts/mutant_anchors.py
+
       # MC0 (A1): no provider SDK outside its adapter (glorfindel/providers/<name>/ in
       # Glorfindel), and every provider declares its capabilities. Named on its own so a
       # breach shows here, before the long tests (which run it again).
@@ -85,9 +91,12 @@ jobs:
           # invariants.yml's.
           GLORFINDEL_INVARIANT_EXAMPLES: ${{ github.event_name == 'pull_request' && '200' || '500' }}
           GLORFINDEL_INVARIANT_DB: .hypothesis-invariants
-        # As on macOS: a test still running after 8 min (the step takes 4-9) writes every
-        # thread's stack to the log — a hang says where it waits before the job's bound.
-        run: python -m pytest tests/ -q -o faulthandler_timeout=480
+        # CI10b (#581, L8): in four processes (pytest-xdist, from the dev lock), test by test
+        # (`--dist load`): the same tests at the same budget, on both Pythons, each process a
+        # share of the suite — measured: docs/operations.md, « La CI, plus rapide ».
+        # As on macOS: a test still running after 8 min writes every thread's stack to the log —
+        # a hang says where it waits before the job's bound.
+        run: python -m pytest tests/ -q -n 4 --dist load -o faulthandler_timeout=480
 
   # SEC14 (P-03): the advisories of the locks on each push and pull request, read only — the issues
   # are pip-audit.yml's, weekly. On a pull request, red only for an advisory with a fixed version

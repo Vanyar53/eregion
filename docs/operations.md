@@ -125,6 +125,9 @@ glorfindel verdict <id> right|wrong|unsure [--note "…"]  # observation : la re
 glorfindel report [--since 7d|4w|all] [--json]  # verdicts par action et par règle, taux de disruptives fausses
                                              # (docs/observation.md — le critère « 4 semaines en human_only »)
 glorfindel check-ttl                         # escalade les isolations au-delà du TTL (ne lève JAMAIS — quatrième passe Q1)
+glorfindel identity-contract                 # IR1b : le contrat de l'exécuteur d'identité, lu avec SON identité
+                                             # (EREGION_IDENTITY_EXECUTOR_* et EREGION_TENANT_ID) : armed ou
+                                             # passive, chaque droit en trop nommé (beyond_contract) ; 0 si armed
 
 # Audit remédiation — vérifier que Glorfindel peut agir avant l'incident
 glorfindel activate <vm|resource_id>         # réponse autonome pour une VM : contrôle de préparation,
@@ -834,6 +837,105 @@ Pour un principal de service : les mêmes permissions dans son inscription d'app
 « Accorder le consentement d'administrateur ». **Jamais** une permission en écriture
 (`*.ReadWrite.*`) : la liste refusée de la conception (§3.4) vaut pour la watch comme pour toute
 identité d'Eregion. La lecture de Graph, ce que voit `Verify`, ce qui manque : `docs/glorfindel.md`.
+
+### L'exécuteur d'identité : son application et son contrat (IR1b, #572)
+
+L'**exécuteur d'identité** répondra à une identité volée (IR1c) : retirer l'identifiant ajouté,
+désactiver puis réactiver un principal, révoquer les sessions, désactiver un utilisateur de test —
+toujours sur l'approbation d'un humain, jamais seul, jamais la watch
+([`design/reponse-identite.md`](design/reponse-identite.md), §3.3 à §3.5). IR1b pose son
+**application** (Terraform de H0, désactivée par défaut) et son **contrat**, lu à son démarrage ;
+il n'écrit encore rien : ses verbes sont le travail d'IR1c.
+
+**Ses droits** — la liste fermée du contrat (`glorfindel/providers/azure/identity_contract.py`) :
+
+| Droit | Où | Posé par | Pour |
+|---|---|---|---|
+| `Application.ReadWrite.OwnedBy` (Graph, application) | les seules applications dont il est **propriétaire** | `infra/glorfindel-host/identity_executor.tf` | retirer un identifiant, désactiver et réactiver un principal ; la propriété des applications inscrites vient d'IDI1 (Celebrimbor), jamais de lui |
+| `User.RevokeSessions.All` (Graph, application) | le tenant ; le code la borne aux utilisateurs inscrits (décision du Q3) | `identity_executor.tf` | révoquer les sessions |
+| `Log Analytics Reader` | le workspace du banc | `identity_executor.tf` | relire lui-même la preuve d'un constat |
+| Directory Readers | le tenant (`/`) | IDI1b (Celebrimbor) | lire ses propres droits ; un principal ne se sert d'un rôle borné qu'avec lui |
+| User Administrator | l'unité administrative du banc seule (`/administrativeUnits/<id>`, l'`id` épinglé) | IDI1b | désactiver un utilisateur de test |
+| Attribute Assignment Reader | l'ensemble d'attributs d'Eregion seul (`/attributeSets/<nom>`) | IDI1b | lire l'inscription d'un utilisateur |
+
+**Ce qu'il ne fait jamais** : tenir un droit de la liste refusée (`RoleManagement.ReadWrite.Directory`,
+`RoleEligibilitySchedule.ReadWrite.Directory`, `RoleAssignmentSchedule.ReadWrite.Directory`,
+`AppRoleAssignment.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All`,
+`Application.ReadWrite.All`, `Directory.ReadWrite.All` ; Global Administrator, Privileged Role
+Administrator, Privileged Authentication Administrator, Application Administrator, Cloud
+Application Administrator, et User Administrator ailleurs qu'à l'unité du banc) ; retirer un rôle
+ou un consentement (un plan, que l'humain exécute avec son compte) ; prendre l'identité managée de
+H0 (celle de la watch : il n'a que son certificat, jamais `DefaultAzureCredential`) ; posséder
+autre chose qu'une application inscrite et son principal (ni lui-même, ni une identité de
+Glorfindel, d'Orodruin, d'Annatar ou d'un opérateur, ni un groupe) ; être la cible de qui que ce
+soit (`EREGION_IDENTITY_EXECUTOR_CLIENT_ID` rejoint `eregion_core/never_target.py`).
+
+**Le contrat, lu à son démarrage** (`identity_contract.start`, `glorfindel identity-contract`) —
+comme celui d'Orodruin, rien n'est écrit :
+- son **jeton Graph**, sans appel : un jeton d'application (pas de `scp`), du tenant déclaré
+  (`tid`) et de son application (`appid`) ; ses permissions (`roles`) et ses rôles d'annuaire au
+  tenant (`wids`) dans la liste ;
+- **Graph, en lecture seule** (un GET, `graph.GraphReader`) : ses permissions d'application, chacune
+  nommée par sa ressource (Microsoft Graph seule) ; ses rôles d'annuaire, actifs, chacun reconnu par
+  l'`id` de sa définition (jamais son nom, ni le `templateId` qu'un rôle personnalisé peut choisir),
+  à sa seule portée, et aucun rôle éligible ; ce qu'il possède. Une permission ne compte comme tenue
+  que si le jeton **et** les attributions la disent.
+- **`armed`** : rien en trop. Un droit qui manque n'arme ni ne désarme : il retire seulement les
+  verbes qui en ont besoin (`Verdict.allows`, `VERB_RIGHTS`).
+- **`passive`**, et il refuse de démarrer (`Passive`) : un droit en trop, `beyond_contract` (le
+  droit nommé : refusé, inconnu, hors de sa portée, éligible, sur une autre API, une identité
+  protégée possédée) ; un contrat illisible, `contract_unreadable` (une variable absente ou mal
+  formée, un jeton qu'il n'a pas, un jeton d'un autre tenant ou d'une autre application, une
+  lecture de Graph qui échoue, la liste `never_target` illisible alors qu'il possède des objets).
+
+**Son environnement** (jamais dans le dépôt) : `EREGION_TENANT_ID` (le tenant du banc, le nom
+d'IDI1), `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` (`terraform output identity_executor_client_id`),
+`EREGION_IDENTITY_EXECUTOR_CERTIFICATE` (le chemin de son certificat et de sa clé, sur H0), et pour
+ses rôles bornés `EREGION_BENCH_ADMIN_UNIT_ID` et `EREGION_IDENTITY_ATTRIBUTE_SET` (les sorties
+d'IDI1b ; sans elles, User Administrator ou Attribute Assignment Reader le rendent passif) ; et
+`EREGION_OPERATOR_OBJECT_ID`, pour lire `never_target`.
+
+**Les gestes de Jonathan, dans l'ordre** (rien n'est appliqué par une session) :
+
+1. **Le plan propre d'abord** : `make glorfindel-host-plan` ne montre rien à changer.
+2. **Activer** : `cp infra/glorfindel-host/identity_executor.auto.tfvars.example
+   infra/glorfindel-host/identity_executor.auto.tfvars` (ignoré par git, sur le poste seulement) ;
+   `identity_executor_enabled = true`, le certificat vide pour l'instant.
+3. **Le plan, relu** : `make glorfindel-host-plan`. Il doit montrer **cinq créations, et rien
+   d'autre** : `azuread_application.identity_executor[0]` (`eregion-glorfindel-identity-executor`,
+   `AzureADMyOrg`), `azuread_service_principal.identity_executor[0]`, deux
+   `azuread_app_role_assignment.identity_executor` (`Application.ReadWrite.OwnedBy`,
+   `User.RevokeSessions.All`, sur le principal de Microsoft Graph), et
+   `azurerm_role_assignment.identity_executor_logs_reader[0]` (`Log Analytics Reader`, à la portée
+   du workspace du banc). Ni la VM de H0 remplacée, ni une autre attribution touchée.
+4. **Appliquer** : `make glorfindel-host-up`, **sans `YES`** (le même plan, confirmé), sous un
+   `az login` qui peut créer une application et **consentir des permissions d'application de
+   Microsoft Graph** (Administrateur des rôles privilégiés, ou Administrateur général) : chaque
+   `azuread_app_role_assignment` est ce consentement.
+5. **Vérifier** : `terraform -chdir=infra/glorfindel-host output identity_executor_client_id` et
+   `output identity_executor_object_id` ; puis
+   `az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/<object id>/appRoleAssignments"`
+   montre les deux permissions, et rien d'autre ; `az role assignment list --assignee <object id>
+   --all -o table` montre `Log Analytics Reader` sur le workspace seul.
+6. **Le protéger** : `EREGION_IDENTITY_EXECUTOR_CLIENT_ID=<client id>` dans `orodruin.env` (la garde
+   d'une identité ne le vise jamais) ; et transmettre l'object id à IDI1b (ses rôles bornés) et à
+   IDI1 (la propriété des applications inscrites).
+7. **Le certificat** (avec IR1c, qui monte le conteneur) : la clé tirée sur H0, dans un répertoire
+   que seul l'exécuteur monte ; sa partie publique (PEM, `BEGIN CERTIFICATE`, jamais une clé : le
+   plan la refuse) dans `identity_executor_certificate`, puis les gestes 3 et 4 (une création de
+   plus, `azuread_application_certificate.identity_executor[0]`).
+8. **Le contrat, mesuré** : avec son environnement, `glorfindel identity-contract` → `armed` attendu
+   une fois IDI1b appliqué ; avant IDI1b, ses propres lectures de Graph échouent sans Directory
+   Readers (hypothèse 10) : `passive`, `contract_unreadable`, ce qui est juste.
+
+**Retirer** : `identity_executor_enabled = false` (ou le fichier ôté), puis les gestes 3 et 4 : le
+plan montre les mêmes destructions. `make glorfindel-host-down` le retire avec le reste de l'état de H0.
+
+**Les hypothèses** (§5 de la conception, à mesurer sur le tenant du banc) : les droits qu'il faut
+pour lire ses propres droits (10) ; `wids` ne porte que les rôles au tenant, jamais un rôle borné à
+une unité ; les identifiants des rôles intégrés que le contrat épingle (`DIRECTORY_READERS`,
+`USER_ADMINISTRATOR`, `ATTRIBUTE_ASSIGNMENT_READER`, `REFUSED_ROLES`) — un identifiant faux rend
+l'exécuteur passif, jamais armé à tort.
 
 ## Le canari azurerm, sans secret (P-04, 30/10)
 

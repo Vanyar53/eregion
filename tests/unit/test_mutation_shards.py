@@ -347,7 +347,9 @@ def test_the_repository_s_durations_hold_only_ids_and_relative_test_paths():
     assert all(re.fullmatch(r"[MC]\d+", k) and isinstance(v, int) and v >= 1 for k, v in doc["mutants"].items())
     assert all(k.startswith("tests/") and isinstance(v, int) for k, v in doc["targets"].items())
     assert "/home/" not in text and "/tmp/" not in text and "\\\\" not in text
-    assert len(doc["mutants"]) >= 2800                       # the gate's runs of 05/11, at least
+    # The gate's runs of 05/11, at least — a mutant narrowed since (CI10a) waits for its next measure.
+    assert len(doc["mutants"]) + len(mc.WHOLE) >= 2900 and not set(doc["mutants"]) & set(mc.WHOLE)
+    assert len(doc["targets"]) >= 500                        # their unmutated runs too (CI10a)
 
 
 def test_the_plan_says_each_shard_and_the_heaviest(capsys):

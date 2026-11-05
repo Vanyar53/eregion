@@ -3084,7 +3084,7 @@ MUTANTS += [
     ("M1018", "a release with another agent never said: H0 keeps an old CD in silence (H1)", CD,
      "        drift, note, lost = agent_drift(tag)\n", '        drift, note, lost = [], "", False\n'),
     ("M1019", "a heartbeat from before the switch taken for health (H1)", CD,
-     "        if HEARTBEAT.stat().st_mtime < since:", "        if False:"),
+     "    if now == seen:\n", "    if False:\n"),     # H1d: the beat judged by its identity
 ]
 TESTS.update({f"M{n}": "tests/unit/test_host_cd.py" for n in range(1005, 1020)})
 MUTANTS += [

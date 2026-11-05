@@ -153,15 +153,21 @@ la mesure.
 (`eregion_core/watch_channel.py`, `Publisher._covers`). Pour chaque fenêtre qu'il nomme dans
 `windows`, c'est la liste triée des `signal_id` de chaque détection livrée pour elle, une fenêtre
 sans détection a une liste vide. Par exemple : `"covers": {"20261104T101500Z": ["rule-t1136-001-v1-ab12cd34"]}`.
-- **Livrée** veut dire écrite et acquittée par le stockage avant ce battement. La watch ne bat
-  jamais tant qu'une détection attend : chaque détection listée était donc dans le canal avant que
-  le battement y soit.
+- **Livrée** veut dire écrite et acquittée par le stockage avant ce battement, à ce tour ou à un
+  tour d'avant : chaque battement suivant liste encore ce qui a été livré avant lui. Chaque fenêtre
+  ne liste que ses propres détections. La watch ne bat jamais tant qu'une détection attend : chaque
+  détection listée était donc dans le canal avant que le battement y soit.
 - **Sous la signature existante**, sans changer de domaine (`eregion.watch-beat/1`). Retirer une
   détection de la liste, ou retirer le champ, défait la signature. Un domaine nouveau aurait fait
   refuser tout battement par la garde des injecteurs d'avant, donc tout run.
 - **Borné** : 256 détections par fenêtre au plus (`MAX_COVERED`). Au-delà, la fenêtre reste dans
   `windows` mais sort de `covers` : son run ne peut pas conclure à un « missed ». Un run du banc en
   voit quelques-unes ; une liste vaut une quarantaine d'octets par détection.
+- **Un budget pour toutes les fenêtres** : `covers`, tel qu'écrit, pèse au plus la moitié de ce
+  qu'un injecteur lit d'un blob (`MAX_COVERS_BYTES = MAX_BLOB_BYTES / 2`, 512 Kio). Au-delà, la
+  watch retire les fenêtres les plus lourdes d'abord, et le dit une fois dans son journal. Leurs runs
+  sont `unknown`, et le run le dit. Sans ce budget, vers 64 fenêtres pleines, le battement aurait
+  dépassé 1 Mio : le lecteur le refuserait, et la garde V1 refuserait tout run.
 - **La watch garde ce qu'elle a livré** aussi longtemps qu'une fenêtre peut vivre : elle oublie une
   détection après `KEEP_S` (deux heures plus la grâce), la plus longue vie d'une fenêtre.
 - **Le canal local des verdicts (SEC18) ne change pas** : son battement garde exactement
@@ -180,7 +186,7 @@ clé épinglée (`vouched_detections`).
 | une détection relue que le battement ne liste pas (livrée après lui) | admise : rien ne manque |
 | une détection couverte absente (retirée, ou remplacée par un blob refusé) | `unknown`, jamais `missed` ; le blob manquant dit |
 | un battement sans `covers` (une watch d'avant ce lot) | `unknown`, avec la raison et le geste : mettre Glorfindel à jour |
-| un battement qui ne liste pas le run (plus de 256 détections) | `unknown`, et c'est dit |
+| un battement qui ne liste pas le run (plus de 256 détections, ou au-delà du budget) | `unknown`, et c'est dit |
 | un `covers` réécrit par une main | la signature ne tient pas (SEC21) : `unknown` |
 
 **Une détection manquante est dite à trois endroits :**
@@ -190,7 +196,9 @@ clé épinglée (`vouched_detections`).
   nombre entier).
 
 Chaque blob n'est dit qu'une fois, et seulement les vingt premiers (`MAX_MISSING`) ; les autres sont
-comptés. Le nom d'un signal n'y est dit qu'en caractères de nom de blob, jamais une séquence
+comptés. Une détection couverte remplacée par un blob refusé est dite deux fois : refusée (SEC21)
+et manquante. La raison du run dit le refus d'abord, puis le manque. Le règlement de fin d'attente
+conclut lui-même à `unknown`, sans compter sur une conversion par l'appelant. Le nom d'un signal n'y est dit qu'en caractères de nom de blob, jamais une séquence
 d'échappement. Une détection du run relue et vouchée donne toujours « detected », même si une autre
 couverte manque : une preuve du « vu » n'est jamais retirée.
 
@@ -236,6 +244,10 @@ détection retirée du canal sous un battement vrai donne `unknown`, dite, jamai
 **Ce qui reste** :
 - une détection que la watch n'a jamais notée (sa règle n'a pas tiré, l'ingestion a dépassé
   l'attente) : un vrai raté, mesuré comme tel ;
+- une détection livrée entre le battement que le run lit et sa liste des détections, puis retirée
+  avant cette liste : le battement lu ne la couvre pas, son retrait ne se voit pas. La fenêtre dure
+  le temps entre deux lectures (moins d'une seconde), et la détection doit être arrivée après la fin
+  de l'attente ;
 - le canal local des verdicts (SEC18) : ni signé ni couvert, le répertoire de la seule watch du
   poste, que le rouge monte en lecture seule ;
 - qui lit la clé privée signe comme la watch, comme avant.

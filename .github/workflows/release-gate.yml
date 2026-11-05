@@ -172,8 +172,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The shards put together: each mutant of this tree measured once, at this budget, and at least
-  # mutants.yml's `min_caught` caught in every round.
+  # The shards put together: each mutant of this tree measured once, at this budget, and none
+  # survived a round outside the known survivors (CI6e, #553) — a known survivor caught is said.
   mutants-total:
     name: mutants (every shard, the count)
     needs: [mutants, control]
@@ -190,12 +190,10 @@ jobs:
         with:
           path: mutants-results
 
-      - name: Every mutant measured once, the count held
-        env:
-          MIN_CAUGHT: "14"
+      - name: Every mutant measured once, no survivor outside the known ones
         run: >-
           python3 scripts/mutation_check.py --total mutants-results --shards 14 --control-shards 2
-          --examples 500 --rounds 2 --min-caught "$MIN_CAUGHT"
+          --examples 500 --rounds 2
 
   # ci.yml's macOS job, which a pull request no longer runs (CI5): the case-insensitive file system.
   # It informs, never blocks (Jonathan, 04/11, H1c #518: only the required checks block): H0 runs

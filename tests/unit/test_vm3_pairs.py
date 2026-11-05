@@ -477,9 +477,9 @@ def test_the_cap_counts_the_revert_steps(tmp_path, monkeypatch, cap, refused):
     """Command, cleanup, one revert step and two probes three times: 9 calls."""
     import eregion_core.orodruin as orodruin
 
-    monkeypatch.setattr(orodruin, "READERS", {
-        "identity": lambda: [], "network": lambda: [],
-        "cap": lambda: ([], {"max_injections": cap, "max_run_s": 3600})})
+    # Every reader as the suite has it (identity, graph, network…), but the cap.
+    monkeypatch.setitem(orodruin.READERS, "cap",
+                        lambda: ([], {"max_injections": cap, "max_run_s": 3600}))
     ex = _probe_executor()
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
     if refused:

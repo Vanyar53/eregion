@@ -80,7 +80,7 @@ Tenue par l'Orchestre (RM1, 02/11). Une ligne par release qui se prépare : sa v
 |---|---|---|---|
 | 0.5.3 | signé, scellé | après le renommage du compte (REN1) : SEC19 (le battement et l'attestation signés, la fin du second contre-audit), SEC20, OI1, CON-K ; I4P, L1A, L1H ; I5S, MAK, L1E | publiée (04/11) |
 | 0.5.4 | rien de non lu | OI2 (un run de contrôle avant le tag d'Orodruin), SEC20b, L1W ; CAN1, MUT1 (le harnais mesure de nouveau) | brouillon |
-| 0.5.5 | — | CI5, CI6 (une CI plus rapide, une porte de release) ; DG-e, L1O, I11g | en préparation |
+| 0.5.5 | — | CI5, CI6 (une CI plus rapide, une porte de release) ; DG-e, L1O, I11g | brouillon |
 | 0.5.x | — | ID1, G1 au banc | plus tard |
 
 ### Les lots

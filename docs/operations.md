@@ -2680,6 +2680,100 @@ pas d'un journal absent.
 
 ---
 
+## L'identité de test du banc (IDI1, #546)
+
+R2 (#79) jouera des techniques d'identité (Stratus Red Team) sur Entra ID. Une identité d'Entra ID ne
+porte pas de tag ARM : elle s'inscrit par **deux clés, une par plan** — les `tags` de l'application
+dans Microsoft Graph (`eregion-target=celebrimbor`, `eregion-zone=bench`) **et** le groupe du banc qui
+la nomme (`eregion-identities=<object id>`) — et passe la même garde qu'une VM (`docs/architecture.md`,
+« Une identité d'Entra ID » ; `eregion_core/inscription.py`). Le Terraform est prêt, désactivé ; rien
+ici n'a été planifié ni appliqué. Ce qui suit se fait avec Jonathan, `<…>` à remplacer, rien de réel
+dans ce dépôt.
+
+### Ce que le Terraform pose, et sous quelle variable
+
+| Où | Variable | Ressource | Droit pour l'apply |
+|---|---|---|---|
+| `infra/orodruin` | `graph_read_enabled = true` | `azuread_app_role_assignment.graph_read` : le rôle d'application `Application.Read.All` de Microsoft Graph à l'identité d'Orodruin | rôle d'Entra **Administrateur des rôles privilégiés** (ou Administrateur général) : un consentement d'administrateur |
+| `infra/terraform` | `entra_test_identity_enabled = true` | `azuread_application.bench_test` (`app-celebrimbor-test`, mono-tenant, tags du banc, sans secret), `azuread_service_principal.bench_test`, et le tag `eregion-identities` sur `rg-celebrimbor` | créer une application : **Développeur d'applications** (ou plus) ; écrire les tags du groupe du banc |
+
+- **Désactivées par défaut**, chacune dans un `terraform.tfvars` ignoré par git, jamais en `-var`
+  d'une commande (le prochain apply sans lui retirerait ce qu'elle pose). Celebrimbor : instance
+  `default` seule (le plan le dit sinon).
+- **Le provider `azuread`** arrive avec ce lot dans les deux modules (verrouillé, CI4) : le premier
+  `make celebrimbor-plan` ou `make orodruin-plan` l'installe ; il prend ton `az login`, jamais un
+  principal.
+- **Le contrat d'Orodruin** relit son jeton Graph à chaque démarrage : `Application.Read.All`, ou
+  rien ; tout autre droit dans Graph, ou un rôle d'annuaire, le rend `passive`
+  (`docs/design/orodruin-contract.md`, « IDI1 »).
+- Contrats planifiés contre de faux providers : `infra/orodruin/tests/graph_read.tftest.hcl`,
+  `infra/terraform/tests/entra_identity.tftest.hcl` (`terraform test`).
+
+### Les gestes, dans l'ordre
+
+```bash
+# 0. Lecture seule : le tenant et l'identité que prendront les deux modules, et tes rôles d'Entra.
+az account show --query "{tenant:tenantId, user:user.name, type:user.type}" -o table
+az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf/microsoft.graph.directoryRole?\$select=displayName" \
+  --query "value[].displayName" -o tsv        # Privileged Role Administrator (ou Global Administrator) attendu
+                                              # — un rôle PIM éligible : l'activer d'abord
+
+# 1. Orodruin — la lecture de Graph, seule.
+echo 'graph_read_enabled = true' >> infra/orodruin/terraform.tfvars   # ignoré par git
+make orodruin-plan                 # doit montrer : data.azuread_application_published_app_ids.well_known[0]
+                                   # et data.azuread_service_principal.msgraph[0] lus ;
+                                   # + azuread_app_role_assignment.graph_read[0] (principal_object_id = l'identité
+                                   # d'Orodruin, output principal_id) ; Plan: 1 to add, 0 to change, 0 to destroy
+make orodruin-lock                 # l'apply, sortie FERMÉE : son plan montré, relu, confirmé
+
+# 2. orodruin.env — ce que la garde sait avant de lire (sorties de Terraform, jamais dans le dépôt).
+terraform -chdir=infra/orodruin output -raw tenant_id              # → EREGION_TENANT_ID=
+terraform -chdir=infra/orodruin output -raw operator_object_id     # → EREGION_OPERATOR_OBJECT_ID=
+terraform -chdir=infra/orodruin output -raw protected_identities   # → EREGION_PROTECTED_IDENTITIES=
+make orodruin-push REF=<le commit de main de ce lot, ou la release qui le porte>   # l'image et orodruin.env
+
+# 3. Le contrat, relu : armed attendu.
+make orodruin-check                # passive « graph_directory_role <valeur> » : la valeur `wids` d'un principal
+                                   # sans rôle n'est pas celle qu'on croyait (hypothèse) — la noter, s'arrêter ;
+                                   # passive « graph_unlisted_right » : un droit de plus dans Graph, le retirer
+
+# 4. Celebrimbor — l'identité de test et la clé du groupe, seules.
+echo 'entra_test_identity_enabled = true' >> infra/terraform/terraform.tfvars
+make celebrimbor-identity-plan     # doit montrer, et rien d'autre :
+                                   # + azuread_application.bench_test[0] : display_name = "app-celebrimbor-test",
+                                   #   sign_in_audience = "AzureADMyOrg", tags = ["eregion-target=celebrimbor", "eregion-zone=bench"],
+                                   #   aucun password, aucun required_resource_access
+                                   # + azuread_service_principal.bench_test[0]
+                                   # ~ azurerm_resource_group.celebrimbor : tags + "eregion-identities" = (known after apply)
+                                   # Plan: 2 to add, 1 to change, 0 to destroy ; « Resource targeting is in effect » attendu
+make celebrimbor-identity-up YES=1 # une fois le plan relu
+
+# 5. La garde, lue depuis Orodruin : l'identité de test est inscrite.
+make orodruin-identity ID=$(terraform -chdir=infra/terraform output -raw entra_test_identity_object_id)
+                                   # attendu : « non-destructive technique: allowed (zone bench) »,
+                                   #           « destructive technique: allowed (zone bench) »
+```
+
+Un autre changement au plan d'une de ces étapes (une dérive des tags du groupe, une VM, le canal) :
+**s'arrêter**, et le traiter à part (`make celebrimbor-plan`, `make orodruin-plan`).
+
+**Ce que Glorfindel verra** : la création de l'application et de son principal, la pose du tag
+(`AuditLogs`, `AzureActivity`) — des cartes `identity_change` et `control_plane_change`, jamais une
+action, si les journaux d'ID1 sont activés.
+
+**Revenir en arrière** : `entra_test_identity_enabled = false`, puis `make celebrimbor-identity-plan`
+(`2 to destroy, 1 to change`) et `make celebrimbor-identity-up YES=1` ; `graph_read_enabled = false`,
+puis `make orodruin-plan` (`1 to destroy`) et `make orodruin-lock`. `make orodruin-kill` ne retire que
+les attributions ARM d'Orodruin, pas son rôle dans Graph : le retirer ainsi, à part.
+
+**À mesurer au banc** : la valeur `wids` du jeton Graph d'une identité managée (le contrat la suppose,
+`APP_DEFAULT_WIDS`) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
+documentation des service tags le dit) ; le délai du jeton en cache après l'attribution (jusqu'à 24 h :
+`make orodruin-check` peut dire l'ancien jeton) ; les tags d'une application lus par Graph tels que
+Terraform les pose.
+
+---
+
 ## auditd au banc (AUD1, #408)
 
 ADM1 et COR1 jugent un `sudo` vers root ; ce qui se fait ensuite dans un shell root, sudo ne l'écrit

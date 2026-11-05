@@ -301,7 +301,7 @@ blocages (ACL réseau du sous-réseau) — ni isolation par règles, ni `session
 | Concept | Sens |
 |---|---|
 | Cible | ressource qu'on a le droit d'éprouver |
-| Inscription | marque posée à la construction (tags `eregion-target=<banc>` et `eregion-zone` sur la cible et son groupe) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
+| Inscription | marque posée à la construction (tags `eregion-target=<banc>` et `eregion-zone` sur la cible et son groupe ; pour une identité d'Entra ID, deux clés : ses tags Graph et `eregion-identities` sur le groupe du banc, IDI1) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
 | Zone | `bench`, `twin` ou `production` — ce qu'une expérience a le droit d'y faire |
 | Contrôle réseau | ce qui autorise ou refuse le trafic : isoler, bloquer, lever |
 | Télémétrie | où arrivent les logs et les métriques |
@@ -331,6 +331,28 @@ Seule la zone `bench` sert en 0.3 ; les deux autres sont codées et testées (O0
 route 1.0 envisage, en production, des pannes des seules dépendances de Glorfindel (modèle,
 télémétrie, configuration), jamais des charges du client : O0 les refuse comme toute panne ; une
 exception, si elle vient, viendra par un lot explicite.
+
+#### Une identité d'Entra ID (IDI1, #546)
+
+Une identité d'Entra ID ne porte pas de tag ARM. Elle s'inscrit par **deux clés, une par plan**,
+comme une VM l'est par son groupe et par elle-même (`identity_enrollment`, `eregion_core/inscription.py`) :
+
+| Clé | Où | Ce qu'elle dit | Qui peut l'écrire |
+|---|---|---|---|
+| Entra | les `tags` de l'**application** (Microsoft Graph) | `eregion-target=<banc>`, `eregion-zone=<zone>` | ses propriétaires (tout membre peut inscrire une application), les administrateurs d'applications |
+| ARM | le groupe du banc | `eregion-identities=<object id de l'application …>`, sa zone `eregion-zone` | qui écrit sur le groupe du banc — les mêmes que pour inscrire une VM |
+
+Une clé seule n'ouvre rien : une marque posée dans Entra ne suffit pas, et les deux zones doivent
+concorder. La garde refuse aussi : un tenant que le périmètre ne nomme pas (`EREGION_TENANT_ID`) ; un
+jeton du lecteur ou une application d'un autre tenant (`tid`, `appOwnerOrganizationId`) ; une
+application multi-tenant (elle atteint d'autres tenants) ; un principal qui n'est pas celui d'une
+application (`servicePrincipalType` : une identité managée, celle de Glorfindel ou d'Orodruin, n'est
+jamais une cible) ; le lecteur lui-même, l'opérateur, les identités protégées (Orodruin, les watches),
+et une application dont le principal possède l'une d'elles ; sans l'opérateur nommé
+(`EREGION_OPERATOR_OBJECT_ID`), toute identité. En `production`, la zone décide comme pour une VM :
+une technique non destructive seule. Une lecture qui échoue refuse. Celebrimbor crée et inscrit une
+identité de test du banc (`infra/terraform/entra_identity.tf`, désactivée par défaut) ; Orodruin la
+lit avec `Application.Read.All` et rien d'autre dans Graph (`infra/orodruin`, `graph_read_enabled`).
 
 ### Le cycle d'une expérience
 

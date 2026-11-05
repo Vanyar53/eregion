@@ -1,6 +1,11 @@
 # La réponse à une identité volée (IR1, #547) — conception
 
-> **Statut : conception, 05/11, sans code.** C2 détecte un vol d'identité dans Entra ID, mais n'y
+> **IR1a fait (#552, 05/11)** : le plan sur chaque carte `identity_change`, ses paramètres lus dans
+> Graph en lecture seule, les commandes complètes, le bouton Verify (held, not held, unreadable),
+> `IDENTITY_ACTIONS`, la liste `never_target` d'IDI1 lue — `docs/glorfindel.md`, « Identités », et
+> `docs/design/console.md`. Le reste (IR1b à IR1e) est encore une conception.
+>
+> **Statut : conception, 05/11.** C2 détecte un vol d'identité dans Entra ID, mais n'y
 > répond pas : l'escalade donne des commandes à taper. Ce document prépare la réponse : retirer,
 > révoquer, désactiver, toujours sur l'approbation d'un humain. Jonathan a tranché les six
 > questions du §7 le 05/11 (la section finale, « Les décisions de Jonathan ») ; le document est
@@ -708,7 +713,7 @@ En jours de travail effectif, à ±50 %, comme la ROADMAP.
 
 | Lot | Contenu | Attend | Sessions | Estimation |
 |---|---|---|---|---|
-| **IR1a** | **Le plan et sa vérification, en lecture seule.** Le plan écrit par le code sur chaque carte `identity_change` (§3.2), avec ses paramètres lus dans Graph ; les commandes complètes, sans `<id>` à chercher ; le bouton **Vérifier**, qui relit Graph et dit « tenu » ou « pas tenu », noté au fil. La liste `never_target` dans `eregion_core/` (partagée avec IDI1). `IDENTITY_ACTIONS` disjoint d'`AUTONOMOUS_ACTIONS`. Graph seulement dans `glorfindel/providers/azure/` (`test_provider_boundary.py`). Un faux Graph, des tests, des mutants. | rien pour le code ; ID1 pour la mesure | Glorfindel, Console | 3–4 j |
+| **IR1a** (fait, 05/11) | **Le plan et sa vérification, en lecture seule.** Le plan écrit par le code sur chaque carte `identity_change` (§3.2), avec ses paramètres lus dans Graph ; les commandes complètes, sans `<id>` à chercher ; le bouton **Vérifier**, qui relit Graph et dit « tenu » ou « pas tenu », noté au fil. La liste `never_target` dans `eregion_core/` (partagée avec IDI1). `IDENTITY_ACTIONS` disjoint d'`AUTONOMOUS_ACTIONS`. Graph seulement dans `glorfindel/providers/azure/` (`test_provider_boundary.py`). Un faux Graph, des tests, des mutants. | rien pour le code ; ID1 pour la mesure | Glorfindel, Console | 3–4 j |
 | **IR1b** | **Le contrat de l'exécuteur** : la liste refusée, la lecture de ses droits, `beyond_contract` ; `docs/operations.md` (« Identités Azure ») ; l'application de l'exécuteur en Terraform, désactivée par défaut, ses permissions consenties par Jonathan. | IR1a | Glorfindel, Infra | 2 j |
 | **IDI1b** | **L'inscription d'un utilisateur de test** (§3.6) : l'unité administrative restreinte du banc, ses utilisateurs de test sans rôle, le User Administrator à sa portée et Directory Readers pour l'exécuteur, l'ensemble d'attributs d'Eregion, en Terraform de Celebrimbor désactivé par défaut (plan et apply par Jonathan) ; la garde en deux moitiés (l'appartenance, l'attribut), la même que pour une VM ; tests sans réseau, mutants. | IDI1 (#546) | Infra, Glorfindel | 2–3 j |
 | **IR1c** | **L'exécuteur d'identité** : les verbes du §3.3, la vérification de la demande et de la proposition, les gardes (inscription, zone, `never_target`, débit, clé de l'opérateur, preuve, état), l'état pour le retour, les reçus signés, les cartes critiques. Les verbes déposés par la console, la commande du poste pour les verbes lourds. | FS1a, FS1b (la file), FS1g (le modèle d'exécuteur), IDI1 et IDI1b (l'inscription et la propriété), IR1b | Glorfindel, Console | 5–7 j |

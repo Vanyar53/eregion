@@ -107,6 +107,10 @@ glorfindel/
                           isolation qu'il a enregistrée — `drains_at` de l'état — est une carte critique),
                           entra.py (AzureEntraDetector, C2 : les journaux d'Entra ID, détection seule ; seuils en code,
                           identité de Glorfindel marquée acteur ou cible, jamais écartée ; texte et étapes des cartes)
+                          graph.py (IR1a : Microsoft Graph en lecture seule, un GET et rien d'autre ; Unreadable : un droit,
+                          une erreur, un délai), entra_plan.py + entra_items.py + entra_grants.py (IR1a : le plan d'une carte
+                          identity_change, par le code, ses ids lus dans Graph, jamais inventés), entra_check.py (IR1a : Verify,
+                          held / not_held / unreadable, jamais held sans la réponse de Graph)
                           backup.py : check_backup_points ; list_backup_items(vault, rg) → inventaire RSV vault-wide (protected items + last RP/state),
                           indépendant de l'état des VMs (source de vérité backup même VM éteinte). Cheap leg : 1 appel
                           paginé, pas de count RP par item (count = check_backup_points par VM, opt-in). Read-only OK.

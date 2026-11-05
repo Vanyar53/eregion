@@ -3,8 +3,9 @@
 One runner cannot measure 2 633 mutants at 500 sequences within any bound: the gate gives each
 runner a shard (`--shard K/N`), each writes what it measured (`--json`), and `--total` says
 whether the shards together measured each mutant of the tree once, at the budget given, then
-holds the count to `--min-caught`. Here on mutants and results written by the test: no test
-suite runs, nothing is copied but a file of the test's own.
+whether a counted mutant survived a round outside the known survivors (CI6e, #553: `--min-caught`
+before). Here on mutants and results written by the test: no test suite runs, nothing is copied
+but a file of the test's own.
 """
 from __future__ import annotations
 
@@ -404,24 +405,16 @@ def world(monkeypatch, tmp_path):
     return mutants, control, results
 
 
-def _total(results, min_caught=8, shards=2, control_shards=2, examples=500, rounds=2):
-    return mc.total(results, shards, control_shards, examples, rounds, min_caught)
+def _total(results, shards=2, control_shards=2, examples=500, rounds=2):
+    return mc.total(results, shards, control_shards, examples, rounds)
 
 
-def test_every_shard_there_every_mutant_once_the_count_held(world, capsys):
+def test_every_shard_there_every_mutant_once_none_survived(world, capsys):
     _, _, results = world
     assert _total(results) == 0
     out = capsys.readouterr().out
-    assert "mutants: 8/8 caught in every round" in out and "at least 8 wanted" in out
+    assert "mutants: 8/8 caught in every round" in out and "0 survived a round outside the known survivors" in out
     assert "control: 4/4 caught in every round (said, not held)" in out and "✗" not in out
-
-
-def test_fewer_caught_than_wanted_is_red(world, capsys):
-    mutants, _, results = world
-    _result(results / "mutants-1", "mutants-1", [_row(m, "SURVIVES") for m in mutants[0::2]], shard=1, shards=2)
-    assert _total(results, min_caught=5) == 1
-    assert _total(results, min_caught=4) == 0
-    assert "M000  SURVIVES" in capsys.readouterr().out
 
 
 def test_the_control_set_is_said_never_held(world, capsys):
@@ -435,7 +428,7 @@ def test_the_control_set_is_said_never_held(world, capsys):
 def test_a_shard_missing_is_red(world, capsys):
     _, _, results = world
     (results / "mutants-2" / "mutants-2.json").unlink()
-    assert _total(results, min_caught=0) == 1
+    assert _total(results) == 1
     out = capsys.readouterr().out
     assert "✗ mutants: shard(s) 2 of 2 missing" in out and "4 never measured" in out
 
@@ -472,7 +465,7 @@ def test_a_mutant_never_measured_or_not_of_this_tree_is_red(world, capsys):
     mutants, _, results = world
     rows = [_row(m) for m in mutants[0::2]][1:] + [("M999", "elsewhere", "CAUGHT", "2/2")]
     _result(results / "mutants-1", "mutants-1", rows, shard=1, shards=2)
-    assert _total(results, min_caught=0) == 1
+    assert _total(results) == 1
     out = capsys.readouterr().out
     assert "mutants: 1 never measured: M000" in out and "mutants: 1 not of this tree: M999" in out
 
@@ -482,7 +475,7 @@ def test_a_mutant_never_measured_or_not_of_this_tree_is_red(world, capsys):
 def test_a_result_that_cannot_be_read_is_red(world, capsys, text):
     _, _, results = world
     (results / "mutants-1" / "mutants-1.json").write_text(text, encoding="utf-8")
-    assert _total(results, min_caught=0) == 1
+    assert _total(results) == 1
     assert "mutants-1.json: unreadable" in capsys.readouterr().out
 
 
@@ -490,16 +483,18 @@ def test_nothing_measured_is_red(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mc, "MUTANTS", _mutants(3))
     monkeypatch.setattr(mc, "CONTROL", [])
     (tmp_path / "empty").mkdir()
-    assert mc.total(tmp_path / "empty", 1, 1, 500, 2, 0) == 1
+    assert mc.total(tmp_path / "empty", 1, 1, 500, 2) == 1
 
 
 def test_equivalent_multi_host_and_stale_are_not_counted(world, capsys):
+    """CI6e: not counted, they stay so — never a survivor, known or not, whatever their reason."""
     mutants, _, results = world
     rows = [_row(mutants[0], "EQUIVALENT"), _row(mutants[2], "MULTI-HOST"), _row(mutants[4], "STALE"),
             _row(mutants[6])]
     _result(results / "mutants-1", "mutants-1", rows, shard=1, shards=2)
-    assert _total(results, min_caught=5) == 0
-    assert "mutants: 5/5 caught" in capsys.readouterr().out
+    assert _total(results) == 0
+    out = capsys.readouterr().out
+    assert "mutants: 5/5 caught" in out and "0 survived a round outside" in out and "✗" not in out
 
 
 # ── a shard measured, end to end: what --json writes is what --total reads ──────────────────
@@ -528,12 +523,13 @@ def test_a_shard_s_json_is_what_the_total_reads(tmp_path, monkeypatch, capsys):
                         "--json", str(out / f"m{k}.json")]) == 0
     assert sorted(baselines) == sorted(mc.TESTS.values())          # each target's unmutated run, once
     capsys.readouterr()
-    assert mc.main(["--total", str(out), "--shards", "3", "--control-shards", "0", "--examples", "500", "--rounds", "2",
-                    "--min-caught", "5"]) == 0
+    total = ["--total", str(out), "--shards", "3", "--control-shards", "0", "--examples", "500", "--rounds", "2"]
+    assert mc.main(total) == 1                                      # M3 survived, no reason: red
     said = capsys.readouterr().out
     assert "mutants: 5/6 caught in every round" in said and "M3  SURVIVES" in said
-    assert mc.main(["--total", str(out), "--shards", "3", "--control-shards", "0", "--examples", "500", "--rounds", "2",
-                    "--min-caught", "6"]) == 1
+    assert "✗ M3  SURVIVES 0/2" in said and "bug 3" in said
+    mutants[3] = (*mutants[3], "TIMING: a race its tests see at times")   # now a known survivor
+    assert mc.main(total) == 0 and "✗" not in capsys.readouterr().out
 
 
 def test_a_shard_s_json_says_each_mutant_s_seconds_and_each_target_s(tmp_path, monkeypatch):
@@ -718,7 +714,7 @@ def test_a_failed_preparation_never_catches_a_mutant(tmp_path, monkeypatch, caps
     monkeypatch.setattr(mc, "prepare_embedding_model", REAL_PREPARE)
     _harness(monkeypatch, [], survives=tuple(f"M{i}" for i in range(6)))
     out = tmp_path / "m.json"
-    assert mc.main(["--rounds", "2", "--jobs", "2", "--json", str(out), "--min-caught", "1"]) == 1
+    assert mc.main(["--rounds", "2", "--jobs", "2", "--json", str(out)]) == 0   # a shard: the total holds it
     assert {r[2] for r in json.loads(out.read_text())["rows"]} == {"SURVIVES"}
     assert "could not be prepared" in capsys.readouterr().out
 
@@ -751,3 +747,148 @@ def test_with_the_model_there_nothing_goes_out(monkeypatch):
     monkeypatch.setattr(onnx, "_download", no_network)
     said: list = []
     assert REAL_PREPARE(say=lambda *a, **k: said.append(a)) is True, said
+
+
+
+# ── CI6e (#553): red as soon as a mutant survives outside the known survivors ────────────────
+
+def _known(m, why="TIMING: a race its tests see only at times"):
+    return (*m[:5], why)
+
+
+@pytest.mark.parametrize("verdict", ["SURVIVES", "flaky", "FIXED-ONLY"])
+def test_an_unknown_survivor_is_red_with_its_id_and_title(world, capsys, verdict):
+    """A counted mutant that survived a round — none, one of two, or caught by a fixed sequence
+    only — and carries no reason: red, said with its id and its title, whatever the count."""
+    mutants, _, results = world
+    rows = [_row(m) for m in mutants[0::2]]
+    rows[1] = _row(mutants[2], verdict)
+    _result(results / "mutants-1", "mutants-1", rows, shard=1, shards=2)
+    assert _total(results) == 1
+    out = capsys.readouterr().out
+    assert f"✗ M002  {verdict} 2/2 (3s): bug 2 — survived a round, and is no known survivor" in out
+    assert "1 survived a round outside the known survivors" in out and "✗ M000" not in out
+
+
+def test_a_known_survivor_does_nothing(world, monkeypatch, capsys):
+    """A survivor whose reason the harness reads (its mark, then a colon): counted, never red."""
+    mutants, _, results = world
+    monkeypatch.setattr(mc, "MUTANTS", [_known(m) if m[0] == "M002" else m for m in mutants])
+    rows = [_row(mutants[0]), _row(mutants[2], "TIMING"), _row(mutants[4]), _row(mutants[6])]
+    _result(results / "mutants-1", "mutants-1", rows, shard=1, shards=2)
+    assert _total(results) == 0
+    out = capsys.readouterr().out
+    assert "mutants: 7/8 caught in every round" in out and "(1 known)" in out
+    assert "✗" not in out and "known survivor no more" not in out
+
+
+def test_a_known_survivor_caught_is_said_to_take_off_the_list_never_red(world, monkeypatch, capsys):
+    mutants, _, results = world
+    monkeypatch.setattr(mc, "MUTANTS", [_known(m, "EQUIVALENT: no behaviour tells it apart")
+                                        if m[0] == "M004" else m for m in mutants])
+    assert _total(results) == 0
+    out = capsys.readouterr().out
+    assert ("· M004  caught in every round (2/2 (3s)), a known survivor no more: take its reason "
+            "(EQUIVALENT) off by hand — bug 4") in out
+    assert "✗" not in out
+
+
+def test_a_reason_the_harness_cannot_read_makes_no_known_survivor(world, monkeypatch, capsys):
+    """Its mark unknown, no colon, nothing before it: the reason is not read — its survivor is red."""
+    mutants, _, results = world
+    for why in ("FLAKY: at times", "EQUIVALENT no colon", ": nothing before", None):
+        assert mc.mark(_known(mutants[2], why)) == ""
+    assert [mc.mark(_known(mutants[0], f"{w}: why")) for w in mc.KNOWN_MARKS] == list(mc.KNOWN_MARKS)
+    monkeypatch.setattr(mc, "MUTANTS", [_known(m, "FLAKY: at times") if m[0] == "M002" else m for m in mutants])
+    rows = [_row(mutants[0]), _row(mutants[2], "SURVIVES"), _row(mutants[4]), _row(mutants[6])]
+    _result(results / "mutants-1", "mutants-1", rows, shard=1, shards=2)
+    assert _total(results) == 1
+    assert "✗ M002  SURVIVES" in capsys.readouterr().out
+
+
+def test_the_control_set_s_survivors_are_said_never_red(world, capsys):
+    _, control, results = world
+    _result(results / "control-2", "control-2", [_row(m, "SURVIVES") for m in control[1::2]], control=True,
+            shard=2, shards=2)
+    assert _total(results) == 0
+    out = capsys.readouterr().out
+    assert "control: 2/4 caught" in out and "✗" not in out
+
+
+def test_a_run_of_its_own_is_red_on_an_unknown_survivor_a_shard_leaves_it_to_the_total(
+        tmp_path, monkeypatch, capsys):
+    """Without --json (a run of its own, `--only`): red, said. A shard (--json) writes and says
+    it, its upload never stopped: the total holds it. The control set: never red."""
+    mutants = _harness(monkeypatch, [])
+    assert mc.main(["--rounds", "2", "--jobs", "2"]) == 1
+    out = capsys.readouterr().out
+    assert "✗ M3  SURVIVES 0/2" in out and "bug 3" in out
+    assert mc.main(["--rounds", "2", "--jobs", "2", "--json", str(tmp_path / "m.json")]) == 0
+    assert "✗ M3  SURVIVES" in capsys.readouterr().out
+    assert {r[0]: r[2] for r in json.loads((tmp_path / "m.json").read_text())["rows"]}["M3"] == "SURVIVES"
+    mutants[3] = _known(mutants[3])
+    assert mc.main(["--rounds", "2", "--jobs", "2"]) == 0
+    monkeypatch.setattr(mc, "CONTROL", [m[:5] for m in mutants])
+    monkeypatch.setattr(mc, "MUTANTS", [])
+    assert mc.main(["--control", "--rounds", "2", "--jobs", "2"]) == 0
+    assert "✗" not in capsys.readouterr().out
+
+
+def test_a_known_survivor_s_row_says_its_mark_an_unread_reason_its_verdict(tmp_path, monkeypatch):
+    """The row of a known survivor that survived says its reason's mark; a reason not read leaves
+    the verdict measured — never a mark the total would take for a reason."""
+    mutants = _harness(monkeypatch, [], survives=("M3", "M4"))
+    mutants[3] = _known(mutants[3], "MULTI-HOST: needs a second host")
+    mutants[4] = _known(mutants[4], "FLAKY: at times")
+    out = tmp_path / "m.json"
+    assert mc.main(["--rounds", "1", "--jobs", "2", "--json", str(out)]) == 0
+    rows = {r[0]: r[2] for r in json.loads(out.read_text())["rows"]}
+    assert (rows["M3"], rows["M4"], rows["M0"]) == ("MULTI-HOST", "SURVIVES", "CAUGHT")
+
+
+def test_min_caught_is_gone_never_taken_silently(capsys):
+    """`--min-caught` held 14 of 2 850: gone (CI6e). The workflows and the harness come from one
+    tree: a flag left would only hide that it no longer holds anything — refused, loudly."""
+    with pytest.raises(SystemExit) as exc:
+        mc.main(["--total", "x", "--min-caught", "14"])
+    assert exc.value.code == 2 and "--min-caught" in capsys.readouterr().err
+
+
+def test_a_timing_survivor_caught_in_no_round_is_said_apart_never_red(world, monkeypatch, capsys):
+    """CI6e, review: a TIMING reason excuses a mutant at 0 of N as at 1 of N. Caught in no round of
+    this run, it is said apart — its race test should catch it at times — and the total stays green:
+    a race may just not have come. Caught at times, it is nothing."""
+    mutants, _, results = world
+    timing = "TIMING: tests/unit/test_race.py catches it 1 round in 2"
+    monkeypatch.setattr(mc, "MUTANTS", [_known(m, timing) if m[0] in ("M002", "M004") else m for m in mutants])
+    rows = [_row(mutants[0]), ("M002", "bug 2", "TIMING", "0/2 (3s)"), ("M004", "bug 4", "TIMING", "1/2 (3s)"),
+            _row(mutants[6])]
+    _result(results / "mutants-1", "mutants-1", rows, shard=1, shards=2)
+    assert _total(results) == 0
+    out = capsys.readouterr().out
+    assert "! M002  TIMING 0/2 (3s): bug 2 — a known survivor caught in no round of this run" in out
+    assert "! M004" not in out and "✗" not in out
+    assert [r[0] for r in mc.never_caught(rows, mc.MUTANTS)] == ["M002"]
+    assert mc.never_caught([("M002", "bug 2", "CAUGHT", "2/2 (3s)"), ("M000", "bug 0", "SURVIVES", "0/2")],
+                           mc.MUTANTS) == []
+
+
+def test_a_run_of_its_own_says_a_timing_survivor_caught_in_no_round(monkeypatch, capsys):
+    mutants = _harness(monkeypatch, [])
+    mutants[3] = _known(mutants[3], "TIMING: tests/unit/test_race.py catches it at times")
+    assert mc.main(["--rounds", "2", "--jobs", "2"]) == 0
+    assert "! M3  TIMING 0/2" in capsys.readouterr().out
+
+
+def test_every_run_of_a_copy_carries_the_harness_s_mark(tmp_path, monkeypatch):
+    """CI6e, second review: each run of a copy — the unmutated one and each mutant's — has
+    EREGION_MUTANT_RUN set: the tree's meta-test skips there, never a killer by construction."""
+    seen = []
+
+    def run(cmd, cwd=None, env=None, capture_output=False, text=False):
+        seen.append(env)
+        return type("P", (), {"returncode": 0, "stdout": "1 passed"})()
+    monkeypatch.setattr(mc.subprocess, "run", run)
+    monkeypatch.delenv(mc.MUTANT_RUN, raising=False)
+    assert mc._run(tmp_path, 60, target="tests/unit/test_x.py") is False
+    assert seen[0][mc.MUTANT_RUN] == "1" and mc.MUTANT_RUN == "EREGION_MUTANT_RUN"

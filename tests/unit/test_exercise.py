@@ -338,6 +338,52 @@ def test_the_record_keeps_every_writers_windows_between_processes(tmp_path):
     assert len(json.loads(reg.read_text())) == 6 * 15
 
 
+_HOLDER = """
+import fcntl, sys, time
+from pathlib import Path
+lock_file, ready, stop = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+with open(lock_file, "a") as fh:
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    ready.write_text("in")
+    deadline = time.monotonic() + 60
+    while not stop.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+"""
+
+
+def test_the_record_waits_for_another_process_s_write(tmp_path):
+    """CI6e (#553, M3077): the race above loses an entry between processes only at times. Here,
+    every time: while another process holds the record's flock, reading windows here — which
+    writes the record — waits, and goes through once it lets go."""
+    import os
+    import subprocess
+    import sys
+    import threading
+    import time
+    from pathlib import Path
+    reg = tmp_path / "glorfindel" / "exercise_seen.json"
+    reg.parent.mkdir(parents=True)
+    d = tmp_path / "x"
+    _write(d, _local("r1", start=_at(0)))
+    ready, stop = tmp_path / "held", tmp_path / "let-go"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    holder = subprocess.Popen([sys.executable, "-c", _HOLDER, str(reg.with_name(reg.name + ".lock")),
+                               str(ready), str(stop)], env=env)
+    done = threading.Event()
+    try:
+        deadline = time.monotonic() + 30
+        while not ready.exists():
+            assert time.monotonic() < deadline, "the holder never took the lock"
+            time.sleep(0.05)
+        threading.Thread(target=lambda: (exercise.load_windows(d, now=_at(1), seen=reg), done.set()),
+                         daemon=True).start()
+        assert not done.wait(0.6), "the record written while another process held its flock"
+    finally:
+        stop.touch()
+        assert holder.wait(timeout=60) == 0
+    assert done.wait(30) and "r1" in json.loads(reg.read_text())
+
+
 # ── SEC14, second review: the transition — a copy pulled before the record existed ─────────────
 
 def _pulled_before(tmp_path, window, *, forged_created=None):

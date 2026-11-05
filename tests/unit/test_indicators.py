@@ -467,6 +467,22 @@ def test_a_request_held_here_but_unreadable_is_said_on_the_tile(runs):
     assert c["contain_s"] == 80.0       # still believed: the request is said unread, not the T0 refused
 
 
+def test_the_overview_says_a_report_it_refuses_in_the_console_s_log_once(runs, tmp_path, capsys):
+    """CI6e (#553, M3007): the overview reads its run reports through the console's reader
+    (SEC15, eregion_console/runs_reader.py) — a link in runs/ is never followed, and is said in
+    the console's log, once, whatever the number of reads. Here the overview reads it alone: no
+    other page says it first."""
+    a = NOW - timedelta(days=2)
+    _report(runs, "r1", "T1110.001", a)
+    _report(runs, "elsewhere", "T1110.001", a, where=tmp_path)       # of the right shape, elsewhere
+    (runs / "r2.json").symlink_to(tmp_path / "elsewhere.json")
+    reports = {"r1": runs / "r1.json", "r2": runs / "r2.json"}
+    for _ in range(2):
+        assert [r["run_id"] for r in ind.read_runs(reports, 0.0)] == ["r1"]
+    out = capsys.readouterr().out
+    assert out.count("r2.json —") == 1 and "un lien, jamais suivi" in out
+
+
 def test_the_exercises_tile_says_a_t0_not_believed():
     from pathlib import Path
     js = (Path(api.__file__).parent / "static" / "injector.js").read_text()

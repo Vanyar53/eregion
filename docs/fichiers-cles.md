@@ -205,7 +205,8 @@ eregion_console/                → la console d'Eregion (`eregion console`, doc
                           /api/discovered — assets découverts (lecture fraîche JSON à chaque appel)
                           /api/jobs/<vm> — état du job snapshot/restore en cours (lit active_jobs/<vm>.json)
                           /api/exercises[?injector=], /api/campaigns[/<id>], /api/catalog[?kind=], /api/channel,
-                          /api/channel/detections/<run_id> — Annatar et Gothmog, GET seulement ;
+                          /api/channel/detections/<run_id> (chaque détection signed ou refused, CON-S) —
+                          Annatar et Gothmog, GET seulement ;
                           /api/sections ; /runs/<id> → la section de l'injecteur ; /atelier → / et
                           /api/atelier/* → /api/* (308, jusqu'à la 1.0)
   sections.py           → sections actives : Glorfindel toujours, Annatar et Gothmog dès que l'hôte a leurs runs

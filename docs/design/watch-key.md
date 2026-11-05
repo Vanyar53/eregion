@@ -119,6 +119,11 @@ battement : jamais une séquence d'échappement vers le terminal ni le rapport. 
 `missed`** : un `detection_missed` ferait proposer une règle pour une technique peut-être détectée.
 Une détection signée à côté d'une refusée compte, et le refus est dit.
 
+**La console de l'hôte** marque chaque détection de la même façon (CON-S, #534) : la vue Runs de
+Dagorlad (`GET /api/channel/detections/<run_id>`) juge chaque blob par `detection_refusal`, avec la
+clé épinglée sur la console (`EREGION_WATCH_KEY`). Elle le dit `signed`, ou `refused` avec la raison du
+run. Sans clé épinglée, aucune n'y est présentée comme vérifiée ([`console.md`](console.md)).
+
 **Le battement qui prouve un « missed »** est vérifié comme celui de la garde. Un run conclut à un
 miss seulement sur le battement de fin d'attente (`miss_unprovable`, #159). Sur le canal de stockage,
 ce battement n'est cru que signé par la clé épinglée (`watch_gate.miss_proof`, la preuve même de la

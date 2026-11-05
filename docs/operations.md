@@ -2910,20 +2910,38 @@ Deux des trois paires de VM3 lisent auditd : T1059.004 (un shell depuis `/tmp`, 
 et T1070.002 (une altération d'un journal sous `/var/log`). Leurs règles auditd ne sont PAS dans
 `scripts/auditd.sh` : Azure n'autorise qu'une extension CustomScript par VM, et AUD1 la tient ; et le
 volume de `shell_exec` (chaque `execve` de `dash`/`bash`) noierait le signal humain d'AUD1 s'il passait
-avec `auditd_enabled`. Elles sont donc dans `infra/terraform/scripts/vm3_auditd.sh` — un geste manuel,
-tracé par la variable `vm3_auditd_enabled` (désactivée, non câblée).
+avec `auditd_enabled`. Elles sont dans `infra/terraform/scripts/vm3_auditd.sh`, un geste manuel —
+aucune variable Terraform ne les pose.
 
-Pour mesurer ces deux paires sur le banc, avec Jonathan :
-1. `auditd_enabled = true` dans `terraform.tfvars`, puis `make celebrimbor-auditd-up YES=1` (pose
-   auditd, le greffon audisp-syslog vers `local6`, la collecte DCR — « auditd au banc (AUD1) »).
-2. Sur chaque VM du banc (`gondolin`, `bree`) : `sudo bash infra/terraform/scripts/vm3_auditd.sh`
-   (pose `/etc/audit/rules.d/60-eregion-vm3.rules` : la surveillance `-w /var/log -p wa` et les
-   `execve` de shell, clés `log_tamper` et `shell_exec`, puis `augenrules --load`).
+Pour mesurer les trois paires sur le banc, avec Jonathan, depuis le poste, à la racine du dépôt :
+1. `cron_logs_enabled = true` et `auditd_enabled = true` dans `terraform.tfvars` ; montrer le plan
+   (`make celebrimbor-auditd-plan`), puis `make celebrimbor-auditd-up YES=1` (auditd, le greffon
+   audisp-syslog vers `local6`, et la DCR — qui reçoit aussi la facilité `cron`).
+2. Le dépôt n'est pas sur les VM : le script y part par Run Command, une fois par VM du banc :
+   ```bash
+   for vm in vm-celebrimbor-gondolin vm-celebrimbor-bree; do
+     az vm run-command invoke -g rg-celebrimbor -n "$vm" --command-id RunShellScript \
+       --scripts @infra/terraform/scripts/vm3_auditd.sh
+   done
+   ```
+   (pose `/etc/audit/rules.d/60-eregion-vm3.rules` — la surveillance `-w /var/log -p wa` et les
+   `execve` de shell, clés `log_tamper` et `shell_exec` — puis `augenrules --load` ; auditd n'est pas
+   redémarré : Ubuntu refuse `systemctl restart auditd`).
+3. Vérifier que les lignes arrivent : `Syslog | where Facility == 'cron'` et
+   `Syslog | where Facility == 'local6' and SyslogMessage has_any ('log_tamper', 'shell_exec')`.
+4. Depuis Orodruin armé, la watch vivante, un run de chaque : `annatar run` sur
+   `cron-persistence-atomic.yaml`, `shell-execution-atomic.yaml`, `log-clearing-atomic.yaml`
+   (`annatar/scenarios/azure/`). Les deux destructives (cron, journaux) sur le banc seulement.
+5. Après le run cron : le test laisse `/tmp/notevil` (la crontab de root) et `/tmp/persistevil` ; le
+   revert du scénario les retire après le cleanup, et la sonde d'après le vérifie. Si le cleanup a
+   échoué, le revert ne tourne pas (`/tmp/notevil` reste la seule copie de la crontab de root) : le run
+   affiche le cleanup puis le revert à lancer à la main, dans cet ordre.
 
-Le défaire : `sudo rm /etc/audit/rules.d/60-eregion-vm3.rules`, `sudo augenrules --load`. Les colonnes
-et la forme des lignes restent des HYPOTHÈSES (A0, AUD1), à mesurer. Limite connue : un `echo 0>` sur un
-journal EXISTANT (troncature par un redirect de shell) n'est pas vu par la surveillance de répertoire —
-seule la création d'une nouvelle entrée l'est (ce que fait l'atomic sur son chemin jetable).
+Le défaire : `--scripts "rm -f /etc/audit/rules.d/60-eregion-vm3.rules && augenrules --load"` par Run
+Command, et `cron_logs_enabled = false`. Les colonnes et la forme des lignes restent des HYPOTHÈSES (A0,
+AUD1), à mesurer : les comm et exe réels du bruit, la forme des enregistrements PATH, la facilité où
+`crontab` écrit, le volume de `shell_exec`, et si un `echo 0>` sur un journal existant (O_TRUNC) est vu
+par la surveillance du répertoire.
 
 ---
 

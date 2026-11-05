@@ -133,27 +133,73 @@ az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 Trois techniques sur VM passent de `planned` à `implemented`, chacune une paire rouge (un test
 Atomic Red Team épinglé, `engine: atomic`) et bleue (une règle de détection livrée). Le rouge se joue
 depuis Orodruin sur une cible inscrite ; les tests choisis tournent sur Ubuntu sans dépendance réseau
-sortante. `engine_args` règle les arguments d'un test vendorisé sans modifier le fichier épinglé (le
-ping vers la boucle locale, le journal écrasé vers un chemin jetable que le cleanup supprime).
+sortante.
+
+**`engine_args`** règle les arguments d'un test vendorisé sans modifier le fichier épinglé : le ping
+vers la boucle locale, le journal écrasé vers un chemin jetable que le cleanup supprime. Ils sont tenus
+à trois endroits :
+- l'adaptateur (`annatar/engines/atomic.py`) refuse une clé que le test ne déclare pas dans ses
+  `input_arguments`, et une valeur hors de `[A-Za-z0-9._/:-]` (une espace, un `;`, un `$`, un guillemet
+  n'atteignent jamais le shell) ;
+- le parser refuse un `engine_args` qui n'est pas un mapping ;
+- **le catalogue décide** : des `engine_args` autres que ceux de l'entrée rendent le run inconnu, donc
+  destructif (`catalog_destructive`, SEC5 V-19) — jamais en production. Le synthétiseur de campagne
+  écrit et joue ceux de l'entrée.
 
 | TTP | Atomic (guid) | Règle bleue | Télémétrie | Seuil |
 |---|---|---|---|---|
 | T1053.003 cron | Replace crontab (435057fb) | `t1053-003-cron-crontab-replace` | Syslog facilité **cron** | `crontab` écrit REPLACE/DELETE (pas LIST, pas CMD) |
-| T1059.004 shell | Create and Execute Bash Shell Script (7e7ac3ed) | `t1059-004-shell-from-world-writable` | Syslog **local6** (auditd) | un `execve` de shell (clé `shell_exec`) + un argument sous `/tmp`, `/dev/shm`, `/var/tmp` |
-| T1070.002 effacement de journaux | Overwrite Linux Log (d304b2dc) | `t1070-002-log-tamper` | Syslog **local6** (auditd) | une écriture sous `/var/log` (clé `log_tamper`) par un comm hors des démons de journalisation |
+| T1059.004 shell | Create and Execute Bash Shell Script (7e7ac3ed) | `t1059-004-shell-from-world-writable` | Syslog **local6** (auditd) | un `execve` de shell (clé `shell_exec`) et un script sous `/tmp`, `/dev/shm`, `/var/tmp` (1er argument, ou 2e après une option) |
+| T1070.002 effacement de journaux | Overwrite Linux Log (d304b2dc) | `t1070-002-log-tamper` | Syslog **local6** (auditd) | un événement de clé `log_tamper` dont l'écrivain (`exe`) n'est ni un démon de journalisation ni un écrivain connu sur ses seuls fichiers |
 
-T1070.002 est **destructive** : banc seulement, refusée en production par l'inscription
-(`safe_target: sandbox_disposable`, catalogue). Les trois règles sont testées sur des lignes réalistes
-et sur le bruit bénin connu (cron d'apt, logrotate, unattended-upgrades) qui ne doit jamais déclencher.
+**Deux paires destructives, banc seulement**, refusées en production par l'inscription
+(`safe_target: sandbox_disposable`, catalogue) :
+- T1070.002 écrase un journal (sur son chemin jetable) ;
+- T1053.003 **remplace toute la crontab de root** : `crontab -l > /tmp/notevil`, puis
+  `crontab /tmp/persistevil` ; son cleanup la rétablit depuis `/tmp/notevil`, un chemin prévisible. Un
+  fichier posé là par un autre deviendrait la crontab de root : la sonde refuse un départ où
+  `/tmp/notevil` ou `/tmp/persistevil` existent. Le cleanup amont ne les retire pas : le **revert du
+  scénario** (le champ `revert` du schéma E1, décidé le 05/11) les retire, après le cleanup — qui lit
+  `/tmp/notevil` — et seulement s'il a tourné ; un cleanup en échec garde la copie de la crontab pour
+  l'opérateur. La sonde d'après le vérifie, et le run finit propre. Le fichier vendorisé n'est pas
+  touché.
+
+**Le revert d'un atomic** (`revert_commands`, `annatar/engines/atomic.py`) ne connaît qu'une action,
+`remove_files` : des chemins (leurs `#{var}` remplis par les arguments du test), chacun un chemin simple
+sous `/tmp/` ou `/var/tmp/`, sans `..`, envoyés en `rm -f --` (un fichier ou un lien, jamais un
+répertoire). Le catalogue le fixe comme les `engine_args` : un scénario dont le revert n'est pas celui
+de son entrée est une technique inconnue, donc destructive, jamais en production (SEC5, V-19).
+
+Les trois règles sont testées sur des lignes réalistes et sur le bruit bénin connu qui ne doit jamais
+déclencher : cron d'apt, logrotate, unattended-upgrades, et pour `log_tamper` le fil de rsyslog
+(`rs:main Q:Reg`, son comm en hexadécimal), sshd (wtmp, btmp, lastlog), useradd (lastlog, faillog),
+waagent et les extensions sous `/var/log/azure/`, dpkg et apt.
+
+**Ce que chaque règle ne voit pas, ou voit de trop :**
+- **cron** se déclenche aussi sur toute édition légitime (`crontab -e`, une installation qui écrit une
+  crontab), et pendant un run sur le REPLACE du cleanup (une carte de plus dans la fenêtre).
+- **`log_tamper`** juge l'écrivain par `exe` (le chemin que le noyau écrit) et par les chemins touchés,
+  jamais par `comm`, que l'attaquant choisit ; un écrivain connu (sshd, l'agent, apt) n'est écarté que
+  si **toutes** les entrées touchées sont ses fichiers, et un événement sans entrée lue reste une carte.
+  Un démon (rsyslogd, journald, logrotate, auditd) est écarté entièrement : un `logrotate` lancé avec une
+  configuration choisie pour tronquer un journal n'est pas vu. Un `echo 0>` sur un journal **existant**
+  (une ouverture O_TRUNC) devrait être vu par la surveillance `-w /var/log -p wa` : c'est une
+  **hypothèse à mesurer** au banc, comme la forme des lignes PATH (chemins absolus).
+- **La règle shell** ne voit pas : un chemin relatif (`sh ./x` depuis `/tmp` — l'enregistrement CWD
+  n'est pas lu), une commande `sh -c '…'` de plusieurs mots (auditd l'écrit en hexadécimal), un chemin
+  qu'auditd écrit en hexadécimal (une espace, un guillemet), un script au-delà du deuxième argument,
+  un autre interpréteur que dash et bash.
 
 **Télémétrie à activer pour la mesure réelle** (désactivée par défaut, « gestes de Jonathan ») :
 - cron (T1053.003) : la facilité `cron` dans la DCR — `cron_logs_enabled` (`infra/terraform/monitoring.tf`) ;
 - local6 (T1059.004, T1070.002) : auditd (`auditd_enabled`, AUD1) + les règles de VM3
   (`infra/terraform/scripts/vm3_auditd.sh`, `docs/operations.md` « Les règles auditd de VM3 »).
 
-La règle shell est distincte d'`auditd-sensitive-root-command` (elle aussi T1059.004) : celle-ci ne lit
-que les commandes d'une connexion **humaine** en root (auid ≥ 1000), qu'un run par Run Command (auid non
-posé) ne déclenche pas. Le poller réserve la lecture « racine humaine » d'AUD1 (settle, fold, fenêtre) à
-cette seule règle ; la règle shell passe à côté. **Limite** : un `echo 0>` d'un shell sur un journal
-EXISTANT (openat O_TRUNC) n'est pas vu par la surveillance de répertoire — seule une nouvelle entrée
-l'est (ce que fait l'atomic sur son chemin jetable).
+**La lecture AUD1 reste le défaut.** La règle shell est distincte d'`auditd-sensitive-root-command`
+(elle aussi T1059.004) : celle-ci ne lit que les commandes d'une connexion **humaine** en root (auid
+≥ 1000), qu'un run par Run Command (auid non posé) ne déclenche pas. Le poller lit en « racine humaine »
+(settle, fold, fenêtre) **toute** règle T1059.004, celles du client sous n'importe quel nom comprises, et
+ce qui n'en a pas la forme devient une carte illisible (A0) ; seule une liste explicite par nom en est
+exemptée (`glorfindel/auditd.py`, `EXEMPT_RULES` : la règle shell livrée). La règle shell borne ses
+enregistrements (1000 caractères, quatre au plus) et ses lignes se distinguent par leur événement
+(`AuditEvent`, deux événements du même instant restent deux).

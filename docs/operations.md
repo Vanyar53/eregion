@@ -58,7 +58,7 @@ make glorfindel-host-tunnel                  # tunnel + « Console → http://lo
                                              # EREGION_CONSOLE_TOKEN s'il n'est pas vide, sinon GLORFINDEL_WARROOM_TOKEN
                                              # (l'ancien nom reste valide, rien à renommer) ; -url : l'URL seule
 make glorfindel-host-status                  # tout tourne ? lit le jeton sur la VM sous l'un ou l'autre nom, sans l'afficher
-make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console
+make glorfindel-host-push                    # host_env.py --check d'abord : refuse un host.env sans jeton de la console (et dit, sans refuser, une variable de never_target vide, NT1)
 make glorfindel-host-cd-install              # le CD de H0 (H1) : agent dans ~/.eregion-cd/, timer désactivé ; README, « Le CD de H0 »
 make glorfindel-host-cd-check                # à blanc : vérifie, construit à côté, préflight (config sous A3), sans basculer
 make glorfindel-host-cd-enable               # puis : toute release publiée se déploie (5 min), retour arrière si malade
@@ -403,6 +403,9 @@ DISCORD_CHANNEL_ID=...              # ID du channel (clic droit → Copy Channel
 DISCORD_PING_ROLE=...               # ID du rôle à pinger à l'ouverture d'un fil (optionnel)
 DISCORD_ALLOWED_USERS=111,222       # M-3 : ids des utilisateurs qui peuvent cliquer les boutons des cartes
 DISCORD_ALLOWED_ROLES=333           # M-3 : ids des rôles autorisés ; les deux vides → tous les boutons refusent (fermé par défaut), refus journalisé
+EREGION_OPERATOR_OBJECT_ID=...      # NT1 : never_target (eregion_core/never_target.py), à la watch seule (plan d'identité, IR1a) ; recopiée dans host.env ; source : terraform -chdir=infra/orodruin output -raw operator_object_id ; vide → liste illisible, tout verbe une étape de l'humain
+EREGION_PROTECTED_IDENTITIES=...    # NT1 : idem ; source : output protected_identities d'Orodruin, plus identity_executor_object_id de H0 (« L'exécuteur d'identité », geste 6)
+EREGION_IDENTITY_EXECUTOR_CLIENT_ID=...  # NT1 : idem ; source : terraform -chdir=infra/glorfindel-host output -raw identity_executor_client_id (vide : exécuteur non activé)
 # L'atelier dans Discord (N1, docs/atelier-discord.md) — à part de la défense : jamais sur H0, host_env.py ne les recopie pas
 EREGION_DISCORD_WEBHOOK_CI=...              # webhook de #ci (secret GitHub : notify.yml)
 EREGION_DISCORD_WEBHOOK_AGENTS=...          # webhook de #agents (poste de l'opérateur : hooks d'elrond)
@@ -945,9 +948,41 @@ Attribute Assignment Reader le rendent passif. Et `EREGION_OPERATOR_OBJECT_ID`, 
    (`identity_executor_object_id`) ajouté à `EREGION_PROTECTED_IDENTITIES`, pas seulement le client
    id : `never_target` compare l'un et l'autre. Puis transmettre l'object id à IDI1b (ses rôles
    bornés, `entra_identity_executor_object_id` de Celebrimbor) et à IDI1 (la propriété des
-   applications inscrites). **Limite** : le compose ne passe pas encore à la watch les variables de
-   `never_target` (ni celle-ci, ni `EREGION_OPERATOR_OBJECT_ID`) ; sans elles, sa liste est illisible
-   et tout verbe de son plan devient une étape de l'humain — fermé, mais à brancher (IR1c).
+   applications inscrites). **Côté watch** (NT1, #583) : le compose passe à la watch, et à elle
+   seule, les trois variables de `never_target` — `EREGION_OPERATOR_OBJECT_ID`,
+   `EREGION_PROTECTED_IDENTITIES`, `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` ; ni la console ni le bot ne
+   lisent la liste. `host_env.py` les recopie de ton environnement dans `host.env`, comme le reste :
+   pose-les d'abord dans ton `.envrc`, depuis leurs sorties Terraform —
+
+   | Variable | Sa source |
+   |---|---|
+   | `EREGION_OPERATOR_OBJECT_ID` | `terraform -chdir=infra/orodruin output -raw operator_object_id` |
+   | `EREGION_PROTECTED_IDENTITIES` | `terraform -chdir=infra/orodruin output -raw protected_identities`, plus `terraform -chdir=infra/glorfindel-host output -raw identity_executor_object_id`, séparés par des virgules |
+   | `EREGION_IDENTITY_EXECUTOR_CLIENT_ID` | `terraform -chdir=infra/glorfindel-host output -raw identity_executor_client_id` (vide tant que l'exécuteur n'est pas activé) |
+
+   — ou, sur un `host.env` déjà écrit, ajoute les trois lignes à la main (son jeton ne change pas).
+   Un **principal d'Annatar de poste** dans le tenant du banc (`ANNATAR_AZURE_CLIENT_ID`) : son
+   object id s'ajoute aussi à `EREGION_PROTECTED_IDENTITIES`. Ne recopie dans `host.env` ni
+   `ANNATAR_AZURE_CLIENT_ID` ni `GLORFINDEL_AZURE_CLIENT_ID` : le compose en ferait l'`AZURE_CLIENT_ID`
+   d'un service (V-17), et sur H0, `DefaultAzureCredential` chercherait une identité assignée qui
+   n'existe pas.
+   L'écriture de `host.env` et `host_env.py --check` (lancé par `make glorfindel-host-push`) disent
+   une variable vide, ou une entrée qui n'est pas un object id, avec sa source, jamais sa valeur
+   (le client id de l'exécuteur vide, en `ℹ` : rien à faire tant qu'il n'est pas activé) ;
+   **ils ne refusent jamais une absence** : sans la liste, ou mal écrite, elle est illisible et
+   tout verbe d'un plan devient une étape de l'humain — fermé, pas une panne. Ils refusent en
+   revanche une valeur **mal écrite**, de n'importe quelle variable recopiée : un saut de ligne, un
+   retour chariot, un guillemet, un `$` ou une barre oblique inverse dans une valeur (une paire de
+   guillemets autour d'elle est retirée, comme le fait compose), refusés à l'écriture — un saut de
+   ligne ajouterait à `host.env` une variable à lui (la file signée allumée, avec une clé venue de
+   la valeur), un guillemet resté ouvert ferait refuser tout le fichier par compose, et rien ne
+   démarrerait sur H0, un `$` serait interpolé par compose ; `--check` refuse une ligne dont la
+   valeur ouvre un guillemet sans le fermer, ou porte une barre oblique inverse entre guillemets
+   (compose lit `\"` comme un guillemet échappé : la valeur avalerait la ligne suivante). Édité à
+   la main, `host.env` s'écrit donc sans guillemets. La variable est nommée, jamais sa valeur. Puis
+   `make glorfindel-host-push`, et sur H0 `cd ~/eregion && docker compose up -d watch` : la watch
+   est recréée avec le nouvel `.env` — un `docker restart` ne relit pas `.env`, elle garderait son
+   ancien environnement.
 7. **Le certificat** (avec IR1c, qui monte le conteneur) : la clé tirée sur H0, dans un répertoire
    que seul l'exécuteur monte ; sa partie publique (PEM, `BEGIN CERTIFICATE`, jamais une clé : le
    plan la refuse) dans `identity_executor_certificate`, puis les gestes 3 et 4 (une création de
@@ -3171,10 +3206,12 @@ az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf/microso
   --query "value[].displayName" -o tsv        # Privileged Role Administrator (ou Global Administrator) attendu
                                               # — un rôle PIM éligible : l'activer d'abord
 
-# 0 bis. Dès la release qui porte IDI1, avant tout autre geste : la mesure de `wids`.
-make orodruin-check                # le droit Graph n'est pas encore déclaré (EREGION_TENANT_ID absent d'orodruin.env) :
-                                   # « ⚠ graph_directory_role <valeur> » est DIT, sans passer passive — noter la valeur ;
-                                   # rien : l'hypothèse APP_DEFAULT_WIDS tient. Puis IDI1s (#559) rendra ce cas strict
+# 0 bis. FAIT le 05/11 (#559) : la mesure de `wids`, au premier orodruin-check après la v0.5.6, droit Graph
+#        non déclaré — armed, aucune note graph : l'hypothèse APP_DEFAULT_WIDS tient. Depuis IDI1s, un `wids`
+#        inconnu est passive, déclaré ou non ; à refaire seulement sur un nouvel Orodruin :
+make orodruin-check                # armed attendu ; passive « graph_directory_role <valeur> » : un rôle d'annuaire
+                                   # sur l'identité d'Orodruin — le retirer, s'arrêter ; « ⚠ graph_unreadable » :
+                                   # le jeton Graph introuvable, seulement DIT tant que le droit n'est pas déclaré
 
 # 1. Orodruin — la lecture de Graph, seule.
 echo 'graph_read_enabled = true' >> infra/orodruin/terraform.tfvars   # ignoré par git
@@ -3197,9 +3234,13 @@ terraform -chdir=infra/orodruin output -raw protected_identities   # → EREGION
 make orodruin-push REF=<le commit de main de ce lot, ou la release qui le porte>   # l'image et orodruin.env
 
 # 3. Le contrat, relu : armed attendu.
-make orodruin-check                # passive « graph_directory_role <valeur> » : la valeur `wids` d'un principal
-                                   # sans rôle n'est pas celle qu'on croyait (hypothèse) — la noter, s'arrêter ;
-                                   # passive « graph_unlisted_right » : un droit de plus dans Graph, le retirer
+make orodruin-check                # passive « graph_directory_role <valeur> » : un rôle d'annuaire posé sur l'identité
+                                   # d'Orodruin (à retirer), ou une valeur par défaut changée par Microsoft — les
+                                   # rôles d'application vont dans `roles`, pas dans `wids`. S'arrêter, comparer le
+                                   # GUID à la liste des rôles intégrés, vérifier dans Graph qu'aucun rôle n'est
+                                   # attribué à l'identité ;
+                                   # passive « graph_unlisted_right » : un droit de plus dans Graph, le retirer ;
+                                   # passive « graph_unreadable » : le droit déclaré, le jeton Graph introuvable
 
 # 4. Celebrimbor — l'identité de test et la clé du groupe, seules.
 echo 'entra_test_identity_enabled = true' >> infra/terraform/terraform.tfvars
@@ -3239,11 +3280,14 @@ les attributions ARM d'Orodruin, pas son rôle dans Graph : le retirer ainsi, à
 éligible, une appartenance à un groupe, un objet possédé, une permission d'application (aucune n'est
 admise) — la garde le dit (`make orodruin-identity`). L'identité de test n'en a aucun ; ne lui en donner aucun.
 
-**À mesurer au banc** : la valeur `wids` du jeton Graph d'Orodruin, au premier `make orodruin-check`
-après la release (geste 0 bis : dite, sans passer passive tant que le droit Graph n'est pas déclaré),
-puis IDI1s (#559) rendra strict ce cas non déclaré ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
-échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; la valeur `wids` du jeton Graph d'une identité managée (le contrat la suppose,
-`APP_DEFAULT_WIDS`) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
+**Mesuré le 05/11** (#559, geste 0 bis) : la valeur `wids` du jeton Graph d'Orodruin, droit Graph non
+déclaré — `armed`, aucune note `graph` : absente, ou `APP_DEFAULT_WIDS`. IDI1s a rendu strict le cas non
+déclaré : un `wids` inconnu est `passive` ; seul un jeton Graph introuvable reste dit sans déclaration
+(un Orodruin sans droit Graph ne tombe pas, et l'absence de jeton n'est pas un privilège).
+
+**À mesurer au banc** : le `wids` une fois les deux rôles d'application posés et le droit déclaré
+(geste 3 : `armed` attendu) ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
+échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
 documentation des service tags le dit) ; le délai du jeton en cache après l'attribution (jusqu'à 24 h :
 `make orodruin-check` peut dire l'ancien jeton) ; les tags d'une application lus par Graph tels que
 Terraform les pose.

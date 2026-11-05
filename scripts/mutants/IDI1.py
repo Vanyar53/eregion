@@ -5,8 +5,8 @@ refusing (eregion_core/inscription.py). Orodruin holds Application.Read.All in M
 nothing else, its contract reading its Graph token (eregion_core/orodruin.py, infra/orodruin).
 M3810–M3819 (the guard), M3860–M3864 (the contract, Terraform, make); M3900–M3906 (05/11: a
 privileged identity never enrolled, the shared list of eregion_core/never_target.py); M3907–M3909,
-M3940–M3944 (the review: what it owns, the Graph guarantee declared, no app permission admitted,
-Celebrimbor's tenant, each token to its own API).
+M3940, M3942–M3944 (the review: what it owns, the Graph guarantee declared, no app permission
+admitted, Celebrimbor's tenant, each token to its own API); M3941 retired by IDI1s (#559).
 
 The guard's are caught by tests/unit/test_identity_inscription.py, on a fake Graph; the contract's
 and Orodruin's Terraform by tests/unit/test_orodruin.py (their plan: infra/orodruin/tests/
@@ -92,8 +92,8 @@ MUTANTS = [
      "        if False:\n            return f\"{' and '.join(missing)} not read"),
     ("M3940", "an undeclared Graph role arms: an Orodruin granted a Graph right by nobody's choice (IDI1)", ORO,
      '    if not declared and claims.get("roles"):\n', "    if False:\n"),
-    ("M3941", "an undeclared wids outside the hypothesis is passive: every Orodruin falls at the release (IDI1)", ORO,
-     "        what = _miss if declared else _note\n", "        what = _miss\n"),
+    # M3941 (an undeclared wids outside the hypothesis made passive) retired by IDI1s (#559): that is
+    # now the contract, the hypothesis measured — scripts/mutants/IDI1s.py, M4225.
     ("M3942", "application permissions that read are admitted before any technique of R2 needs one (IDI1)", INS,
      "ADMITTED_APP_PERMISSIONS: tuple[str, ...] = ()\n",
      'ADMITTED_APP_PERMISSIONS: tuple[str, ...] = ("User.Read.All", "Mail.Read", "Files.Read", '
@@ -112,6 +112,6 @@ TESTS = {
     **{f"M{n}": _GUARD for n in range(3900, 3906)},
     "M3906": _CONTRACT,
     **{mid: _GUARD for mid in ("M3907", "M3908", "M3909", "M3942", "M3944")},
-    **{mid: _CONTRACT for mid in ("M3940", "M3941")},
+    "M3940": _CONTRACT,
     "M3943": _BENCH,
 }

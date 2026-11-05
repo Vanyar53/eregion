@@ -98,6 +98,9 @@ class Engine:
         # — each said once, in the console, Orodruin's journal and the run's report.
         self._detection_refused: list[str] = []
         self._detection_refused_total = 0
+        # SEC21b (#535): the detections the watch's heartbeat covers that the run could not read back.
+        self._detection_missing: list[str] = []
+        self._detection_missing_total = 0
         self._session = None
 
     def run(self, scenario_path: str, skip_confirm: bool = False):
@@ -111,6 +114,8 @@ class Engine:
         self._detection_latency_s = None
         self._detection_refused = []
         self._detection_refused_total = 0
+        self._detection_missing = []
+        self._detection_missing_total = 0
         self._session = None
 
         # An invalid scenario (an unknown engine among them, review R1 point 2) is a clean
@@ -414,6 +419,7 @@ class Engine:
         if self._detection_refused:   # SEC21: never counted, said in the report
             metrics["detection_refused"] = list(self._detection_refused)
             metrics["detection_refused_total"] = self._detection_refused_total
+        self._missing_metrics(metrics)
         report.metrics = metrics
         report.save()
         return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
@@ -591,6 +597,7 @@ class Engine:
         if self._detection_refused:   # SEC21: never counted, said in the atomic run's report too
             metrics["detection_refused"] = list(self._detection_refused)
             metrics["detection_refused_total"] = self._detection_refused_total
+        self._missing_metrics(metrics)
         report.metrics = metrics
         report.save()
         return RunOutcome(run_id, self._detection_result, self._detection_latency_s)
@@ -773,8 +780,7 @@ class Engine:
             if result_event == "detection_timeout" and self._detection_refused_total:
                 # SEC21: a detection the run could not believe is no silence — a watch older than
                 # this injector, or a hand on the channel: never a miss, never seen.
-                result_event, why = None, (f"{self._detection_refused_total} detection(s) on the "
-                                           "return channel refused (SEC21)")
+                result_event, why = None, self._refused_why()
             if result_event is None:
                 console.print(
                     f"[yellow]Detection not measured — the hosted watch cannot vouch for"
@@ -823,6 +829,35 @@ class Engine:
         if stop_event is not None:
             stop_event.set()
 
+    def _refused_why(self) -> str:
+        return f"{self._detection_refused_total} detection(s) on the return channel refused (SEC21)"
+
+    def _missing_metrics(self, metrics: dict) -> None:
+        """SEC21b: what the heartbeat covers and the run could not read back, in its report."""
+        if self._detection_missing:
+            metrics["detection_missing"] = list(self._detection_missing)
+            metrics["detection_missing_total"] = self._detection_missing_total
+
+    def _covered(self, heartbeat: dict, run_id: str, found: list[dict]) -> str:
+        """SEC21b (#535): why the run's silence is no miss although the watch's heartbeat vouches
+        for the wait — a detection it covers missing from what the run read back after it, a watch
+        older than this injector, a run it leaves out —, "" when it is one. Each missing blob said
+        once — in the console, in Orodruin's journal, in the run's report —, MAX_MISSING at most."""
+        why, missing, total = watch_channel.uncovered(heartbeat, run_id, found)
+        self._detection_missing_total = max(self._detection_missing_total, total)
+        for name in missing:
+            if name in self._detection_missing or len(self._detection_missing) >= watch_channel.MAX_MISSING:
+                continue
+            self._detection_missing.append(name)
+            console.print(f"A detection the watch's heartbeat covers is missing from the return channel "
+                          f"— never a miss (SEC21b): {name}", markup=False, style="yellow")
+            if self._session is not None:
+                try:
+                    self._session.declare("detection_missing", f"{name}: covered by the watch's heartbeat, absent")
+                except Exception as e:  # the journal said its own failure; the run goes on
+                    console.print(f"[yellow]Not journaled: {e}[/yellow]")
+        return why
+
     def _vouched(self, run_id: str) -> list[dict]:
         """SEC21 (#530): the detections of this run the pinned key signed; each other refused,
         said once — in the console, in Orodruin's journal, and kept for the run's report —, up to
@@ -865,7 +900,8 @@ class Engine:
         latency, "") — ("detection_timeout", None, "") for a miss the watch vouches for —
         or (None, None, why) when it cannot vouch: the run is unknown. On the storage channel the
         heartbeat that vouches is the watch's only once the pinned key signed it (SEC21): unsigned,
-        another key, replayed — unknown, never a miss."""
+        another key, replayed — unknown, never a miss; and its silence a miss only once every
+        detection that heartbeat covers for the run is read back, after it (SEC21b)."""
         until = time.time()
         give_up = until + watch_channel.SETTLE_S
         while True:
@@ -876,11 +912,20 @@ class Engine:
                 # SEC21: a heartbeat that would prove a miss is believed only signed by the pinned key.
                 why = why or watch_gate.miss_proof(heartbeat)
                 if not why:
+                    # Read after the heartbeat: every detection it covers was written before it.
+                    found = self._vouched(run_id)
                     latency = detection_latency(
-                        watch_channel.as_records(self._vouched(run_id)),
-                        ttp, resource_id, attack_time)
+                        watch_channel.as_records(found), ttp, resource_id, attack_time)
                     if latency is not None:
                         return "detection", latency, ""
+                    # SEC21b: a silence is a miss only once all the heartbeat covers was read back.
+                    if watch_channel.source() == watch_channel.STORAGE:
+                        why = self._covered(heartbeat, run_id, found)
+                    if why:
+                        # Unknown here, whatever the caller does — the refusals (SEC21) said first.
+                        if self._detection_refused_total:
+                            why = f"{self._refused_why()}; {why}"
+                        return None, None, why   # SEC21b: never a miss
                     return "detection_timeout", None, ""
             except Exception as e:
                 why = f"channel unreadable: {e}"

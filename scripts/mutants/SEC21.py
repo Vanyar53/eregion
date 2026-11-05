@@ -80,7 +80,7 @@ MUTANTS = [
     ("M3723", "the fingerprint a blob claims said as written: an escape sequence to the terminal (SEC21, SEC19)", WKEY,
      '    fp = _UNPRINTABLE.sub("?", fp)\n', ""),
     ("M3724", "the run says the refusals it lists, not how many were refused (SEC21)", ENG,
-     '                result_event, why = None, (f"{self._detection_refused_total} detection(s) on the "\n',
-     '                result_event, why = None, (f"{len(self._detection_refused)} detection(s) on the "\n'),
+     '        return f"{self._detection_refused_total} detection(s) on the return channel refused (SEC21)"\n',
+     '        return f"{len(self._detection_refused)} detection(s) on the return channel refused (SEC21)"\n'),
 ]
 TESTS = {f"M{n}": _TESTS for n in range(3700, 3725)}

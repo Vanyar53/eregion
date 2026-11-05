@@ -188,8 +188,10 @@ def waiting(tmp_path, monkeypatch, signed_channel):
     monkeypatch.setenv(watch_channel.CHANNEL_ENV, "https://account.blob.core.windows.net/watch")
     monkeypatch.setattr(watch_channel, "read_named", lambda run_id, **k: [
         signed_channel.sign(d, run_id, n) for n, d in enumerate(channel.detections)] + list(channel.raw))
+    # SEC21b: the watch's heartbeat lists what it delivered for the run — here, every detection filed.
     monkeypatch.setattr(watch_channel, "read_heartbeat", lambda **k: channel.heartbeat or {
-        "at": _iso(clock.now), "since": _iso(clock.now - 86400), "windows": ["rid"]})
+        "at": _iso(clock.now), "since": _iso(clock.now - 86400), "windows": ["rid"],
+        "covers": {"rid": sorted(signed_channel.sign(d, "rid", n)[0] for n, d in enumerate(channel.detections))}})
     watch = tmp_path / "runs" / "glorfindel"
     watch.mkdir(parents=True)
     return SimpleNamespace(runs=watch, clock=clock, channel=channel)

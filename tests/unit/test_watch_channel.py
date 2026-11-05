@@ -91,6 +91,8 @@ def test_a_detection_in_a_window_is_delivered_before_the_heartbeat():
     assert beat == {"at": (T0 + timedelta(minutes=3)).isoformat(),
                     "since": (T0 - timedelta(hours=1)).isoformat(),
                     "windows": [w["run_id"]],
+                    # SEC21b: the detection it delivered for the window, listed.
+                    "covers": {w["run_id"]: ["rule-t1136-001-v1-ab12cd34"]},
                     "perimeter": ""}   # SEC5 (N-03): no AZURE_SUBSCRIPTION_ID in the tests
 
 
@@ -386,7 +388,11 @@ class FakeChannel:
                    if _epoch(d["detected_at"]) <= self.clock.now < d.get("_after", 0)]
         if pending:
             at = min(at, min(pending) - 1)
-        return {"at": _iso(at), "since": _iso(self.since), "windows": self.windows}
+        # SEC21b: what it delivered by now, listed for each window it knows.
+        delivered = sorted(str(d.get("signal_id") or f"rule-t1136-001-v1-{n:08x}")
+                           for n, d in enumerate(self.detections) if d.get("_after", 0) <= self.clock.now)
+        return {"at": _iso(at), "since": _iso(self.since), "windows": self.windows,
+                "covers": {w: delivered for w in self.windows}}
 
     def read_named(self, run_id, sign):
         """The detections delivered by now, signed by the watch's key (SEC21)."""

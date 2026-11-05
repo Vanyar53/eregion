@@ -27,6 +27,15 @@ def _load():
 
 
 mc = _load()
+# The harness's own preparation of ChromaDB's model (CI6b), before any test below replaces it.
+REAL_PREPARE = mc.prepare_embedding_model
+
+
+@pytest.fixture(autouse=True)
+def _no_model(monkeypatch):
+    """main() never prepares ChromaDB's real model here (CI6b): no network, no 80 MB. The tests of
+    the preparation put the real one back, on a fake ChromaDB."""
+    monkeypatch.setattr(mc, "prepare_embedding_model", lambda say=print: None)
 
 
 def _mutants(n, prefix="X"):
@@ -269,3 +278,142 @@ def test_an_unmutated_target_that_fails_stops_the_shard(tmp_path, monkeypatch, c
     monkeypatch.setattr(mc, "_run", lambda copy, examples, show=False, target=mc.INVARIANTS: copy.name == "base")
     assert mc.main(["--json", str(tmp_path / "m.json")]) == 2
     assert "fails on the UNMUTATED code" in capsys.readouterr().out and not (tmp_path / "m.json").exists()
+
+
+# ── CI6b (#538): ChromaDB's model made ready once, before any run in parallel ──────────────
+# At the gate's first real run (05/11), the unmutated runs, started at once on a fresh runner,
+# each fetched ChromaDB's embedding model into the same ~/.cache/chroma and read one another's
+# half-written file: two shards of fourteen red on the unmutated code. Here on a fake ChromaDB.
+
+def _fake_chromadb(monkeypatch, fails: Exception | None = None) -> list:
+    """A fake `chromadb.utils.embedding_functions`: its DefaultEmbeddingFunction notes each call
+    (the texts it was given), and raises `fails` if given."""
+    import types
+    calls: list = []
+
+    class DefaultEmbeddingFunction:
+        def __call__(self, texts):
+            calls.append(list(texts))
+            if fails is not None:
+                raise fails
+            return [[0.0] * 3 for _ in texts]
+    fake = types.ModuleType(mc.EMBEDDING)
+    fake.DefaultEmbeddingFunction = DefaultEmbeddingFunction
+    monkeypatch.setitem(sys.modules, mc.EMBEDDING, fake)
+    return calls
+
+
+def _harness(monkeypatch, events: list, survives=("M3",)):
+    """main()'s copy of the repository and its test runs replaced, each run noted in `events`."""
+    mutants = [(f"M{i}", f"bug {i}", "code.py", f"line {i}\n", f"LINE {i}\n") for i in range(6)]
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    monkeypatch.setattr(mc, "CONTROL", [])
+    monkeypatch.setattr(mc, "TESTS", {m[0]: f"tests/unit/test_{m[0]}.py" for m in mutants})
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text(
+        "".join(m[3] for m in mutants))))
+
+    def run(copy, examples, show=False, target=mc.INVARIANTS):
+        events.append(("run", copy.name))
+        if copy.name == "base":
+            return False
+        return not any(f"LINE {m[1:]}" in (copy / "code.py").read_text() for m in survives)
+    monkeypatch.setattr(mc, "_run", run)
+    return mutants
+
+
+def test_the_model_is_prepared_once_before_any_run_never_by_each(tmp_path, monkeypatch):
+    """Once, in the harness's own process, before the unmutated runs (started at once) and the
+    mutants' — the defect back if each run fetches it, or if the harness never does."""
+    events: list = []
+    monkeypatch.setattr(mc, "prepare_embedding_model", lambda say=print: events.append("prepare") or True)
+    _harness(monkeypatch, events)
+    assert mc.main(["--rounds", "1", "--jobs", "4", "--json", str(tmp_path / "m.json")]) == 0
+    runs = [e for e in events if e != "prepare"]
+    assert events.count("prepare") == 1 and events[0] == "prepare", events[:5]
+    assert len(runs) == 6 + 6                                   # six unmutated targets, six mutants
+
+
+def test_the_model_is_prepared_by_chromadb_s_default_embedding_function_on_one_text(monkeypatch, capsys):
+    calls = _fake_chromadb(monkeypatch)
+    assert REAL_PREPARE() is True
+    assert len(calls) == 1 and len(calls[0]) == 1 and isinstance(calls[0][0], str)
+    assert "embedding model: ready" in capsys.readouterr().out
+
+
+def test_without_chromadb_nothing_is_prepared_nor_said(monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, mc.EMBEDDING, None)        # import fails: not installed
+    assert REAL_PREPARE() is None
+    assert capsys.readouterr().out == ""
+
+
+def test_chromadb_that_cannot_start_is_said_never_raised(tmp_path, monkeypatch, capsys):
+    """CI6b's review: chromadb 1.5.9 raises a RuntimeError on its own import when sqlite3 is too old
+    (chromadb/__init__.py). There, but unable to start: said and False, never a trace that stops
+    the harness — and never None, taken for ChromaDB absent."""
+    (tmp_path / "chromadb_ci6b_cannot_start.py").write_text(
+        'raise RuntimeError("Your system has an unsupported version of sqlite3. Chroma requires sqlite3 >= 3.35.0.")\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(mc, "EMBEDDING", "chromadb_ci6b_cannot_start")
+    monkeypatch.delitem(sys.modules, "chromadb_ci6b_cannot_start", raising=False)
+    assert REAL_PREPARE() is False
+    said = capsys.readouterr().out
+    assert "could not be prepared" in said and "RuntimeError: Your system has an unsupported version of sqlite3" in said
+
+
+def test_a_preparation_that_fails_is_said_and_the_runs_go_on_as_before(tmp_path, monkeypatch, capsys):
+    """Without a network, say: the error said whole, never hidden, and the runs go on — each may
+    fetch the model itself; nothing about the preparation is a verdict."""
+    calls = _fake_chromadb(monkeypatch, OSError("no route to the model's host"))
+    monkeypatch.setattr(mc, "prepare_embedding_model", REAL_PREPARE)
+    events: list = []
+    _harness(monkeypatch, events)
+    out = tmp_path / "m.json"
+    assert mc.main(["--rounds", "1", "--jobs", "4", "--json", str(out)]) == 0
+    said = capsys.readouterr().out
+    assert len(calls) == 1
+    assert "could not be prepared" in said and "OSError: no route to the model's host" in said
+    assert sum(1 for e in events if e == ("run", "base")) == 6  # every unmutated run, as before
+    rows = {r[0]: r[2] for r in json.loads(out.read_text())["rows"]}
+    assert rows == {"M0": "CAUGHT", "M1": "CAUGHT", "M2": "CAUGHT", "M3": "SURVIVES", "M4": "CAUGHT",
+                    "M5": "CAUGHT"}
+
+
+def test_a_failed_preparation_never_catches_a_mutant(tmp_path, monkeypatch, capsys):
+    """Every mutant passing its tests survives, the preparation failed or not."""
+    _fake_chromadb(monkeypatch, ValueError("Downloaded file does not match expected SHA256 hash"))
+    monkeypatch.setattr(mc, "prepare_embedding_model", REAL_PREPARE)
+    _harness(monkeypatch, [], survives=tuple(f"M{i}" for i in range(6)))
+    out = tmp_path / "m.json"
+    assert mc.main(["--rounds", "2", "--jobs", "2", "--json", str(out), "--min-caught", "1"]) == 1
+    assert {r[2] for r in json.loads(out.read_text())["rows"]} == {"SURVIVES"}
+    assert "could not be prepared" in capsys.readouterr().out
+
+
+def test_the_runs_see_the_home_the_model_was_prepared_in(tmp_path, monkeypatch):
+    """ChromaDB's place is Path.home()/.cache/chroma: each run inherits the harness's HOME, so it
+    reads the model the harness made ready — never a home of its own."""
+    import subprocess
+    seen: list = []
+    monkeypatch.setattr(mc.subprocess, "run", lambda cmd, **kw: seen.append(kw["env"]) or
+                        subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""))
+    assert mc._run(tmp_path, 1, target="tests/unit/test_x.py") is False
+    (env,) = seen
+    assert env.get("HOME") == mc.os.environ.get("HOME")
+    assert Path(env["HOME"]).expanduser() == Path.home()
+
+
+def test_with_the_model_there_nothing_goes_out(monkeypatch):
+    """chromadb itself (the locked version): its model there, the preparation never downloads."""
+    pytest.importorskip("chromadb")
+    import importlib
+    onnx = importlib.import_module("chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2").ONNXMiniLM_L6_V2
+    files = ("config.json", "model.onnx", "special_tokens_map.json", "tokenizer_config.json", "tokenizer.json",
+             "vocab.txt")
+    if not all((Path(onnx.DOWNLOAD_PATH) / onnx.EXTRACTED_FOLDER_NAME / f).exists() for f in files):
+        pytest.skip("ChromaDB's model is not in ~/.cache/chroma here (ci.yml restores it)")
+
+    def no_network(self, url, fname, chunk_size=1024):
+        raise AssertionError(f"downloaded {url}")
+    monkeypatch.setattr(onnx, "_download", no_network)
+    said: list = []
+    assert REAL_PREPARE(say=lambda *a, **k: said.append(a)) is True, said

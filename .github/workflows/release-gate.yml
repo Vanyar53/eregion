@@ -58,8 +58,13 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
+
+      # CI8 (#566): ChromaDB's embedding model, fetched before the tests in a step of its own — its
+      # download alone retried, never the tests. The cache restored, nothing leaves.
+      - name: ChromaDB's embedding model (fetched when the cache misses, retried)
+        run: bash scripts/retry.sh python scripts/chroma_model.py
 
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
         with:
@@ -101,7 +106,7 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
 
       # ChromaDB's embedding model, as the invariants and ci.yml restore it: the harness makes it ready
@@ -110,6 +115,11 @@ jobs:
         with:
           path: ~/.cache/chroma
           key: chroma-onnx-v1
+
+      # CI8 (#566): the model fetched here, retried, when the cache misses — the harness then finds
+      # it ready (CI6b). The mutation itself is never retried.
+      - name: ChromaDB's embedding model (fetched when the cache misses, retried)
+        run: bash scripts/retry.sh python scripts/chroma_model.py
 
       - name: Re-introduce each bug of the shard, run its tests
         env:
@@ -148,7 +158,7 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
 
       # ChromaDB's embedding model, as the invariants and ci.yml restore it: the harness makes it ready
@@ -157,6 +167,10 @@ jobs:
         with:
           path: ~/.cache/chroma
           key: chroma-onnx-v1
+
+      # CI8 (#566): as the mutants' — the model's download alone retried, never the measure.
+      - name: ChromaDB's embedding model (fetched when the cache misses, retried)
+        run: bash scripts/retry.sh python scripts/chroma_model.py
 
       - name: Re-introduce each bug of the control set's shard, run the invariants
         env:
@@ -221,7 +235,7 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --require-hashes -r requirements/dev.txt
+          bash scripts/retry.sh python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
 
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
@@ -269,7 +283,9 @@ jobs:
           TERRAFORM_VERSION: 1.14.9-1
         run: |
           key="$RUNNER_TEMP/hashicorp.gpg"
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --batch --yes --dearmor -o "$key"
+          # CI8 (#566): the downloads retried (scripts/retry.sh), the key's check never.
+          bash scripts/retry.sh curl -fsSL -o "$RUNNER_TEMP/hashicorp.asc" https://apt.releases.hashicorp.com/gpg
+          gpg --batch --yes --dearmor -o "$key" "$RUNNER_TEMP/hashicorp.asc"
           # One primary key, and that fingerprint is its own — a subkey's fpr line has the same form.
           if ! gpg --batch --show-keys --with-colons "$key" \
                | awk -F: -v f="$HASHICORP_APT_FPR" '$1=="pub"{n++;p=1;next} $1=="fpr"&&p{k=$10;p=0} END{exit !(n==1&&k==f)}'; then
@@ -282,23 +298,33 @@ jobs:
             | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
             | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
-          sudo apt-get update -qq && sudo apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"
+          bash scripts/retry.sh sudo apt-get update -qq
+          bash scripts/retry.sh sudo apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"
           terraform version
+
+      # CI8 (#566): the providers' download in a step of its own, retried; the test never.
+      - name: Terraform init — Celebrimbor (the locked providers, retried)
+        run: bash scripts/retry.sh terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color
 
       - name: Terraform test — Celebrimbor (mock providers)
         run: |
-          terraform -chdir=infra/terraform init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/terraform test -no-color
+
+      # CI8 (#566): the providers' download in a step of its own, retried; the test never.
+      - name: Terraform init — Glorfindel's host (the locked providers, retried)
+        run: bash scripts/retry.sh terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color
 
       - name: Terraform test — Glorfindel's host (mock providers)
         run: |
-          terraform -chdir=infra/glorfindel-host init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/glorfindel-host validate -no-color
           terraform -chdir=infra/glorfindel-host test -no-color
 
+      # CI8 (#566): the providers' download in a step of its own, retried; the validation never.
+      - name: Terraform init — Orodruin (the locked providers, retried)
+        run: bash scripts/retry.sh terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
+
       - name: Terraform validate — Orodruin
         run: |
-          terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
           terraform -chdir=infra/orodruin validate -no-color
 
   # Green only when every job that blocks is: `always()`, so it runs and says so when one failed,

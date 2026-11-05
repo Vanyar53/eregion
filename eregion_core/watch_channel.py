@@ -288,8 +288,9 @@ def read_heartbeat(*, channel: str | None = None, credential=None, get=None) -> 
 
 def read_detections(run_id: str, *, channel: str | None = None, credential=None,
                     get=None) -> list[dict]:
-    """Every detection the watch delivered for this run's window, as written — signed or not:
-    what the console shows. Raises when the channel is unset or a listed detection cannot be read
+    """Every detection the watch delivered for this run's window, as written — signed or not,
+    never verified (the console judges each one as the run does, CON-S: ``read_named`` and
+    ``watch_key.detection_refusal``). Raises when the channel is unset or a listed detection cannot be read
     — a detection unread is never a miss. Without a storage channel, the local one's (SEC18,
     ``local_detections``) when there is one. A run counts only ``vouched_detections`` (SEC21)."""
     url = channel if channel is not None else channel_url()

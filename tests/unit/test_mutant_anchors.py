@@ -260,19 +260,27 @@ def test_a_timing_reason_names_the_race_test_that_catches_it_at_times():
     assert anchors.reason_faults([(*bare[:5], "EQUIVALENT: no test needed")], marks) == []
 
 
+# The harness's mark on the runs of a copy it measures (scripts/mutation_check.py, MUTANT_RUN).
+MUTANT_RUN = "EREGION_MUTANT_RUN"
+NEVER_A_KILLER = ("a meta-test of the tree, never a killer: in a copy the harness mutates, the mutant "
+                  "applied has left its own text, and this test would catch it by construction")
+
+
 def test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads():
     """CI6e, review: a mutant whose text left the code (STALE) is never counted — and until now passed
     in silence, no CI running scripts/mutant_anchors.py on the tree. Here, in the ordinary suite:
     every mutant of the tree (the control set too) applies as the harness applies it, its ids are
-    unique, its reason is one the harness reads. The files the harness copies: git's, or — in the
-    harness's own copy, which has no .git — every file there (it copied only git's)."""
+    unique, its reason is one the harness reads. In a copy the harness mutates, it skips, and says why
+    (second review): there it would catch every mutant whose target holds it (M3186, M3585)."""
+    import os
     import time
+
+    import pytest
+    if os.environ.get(MUTANT_RUN):
+        pytest.skip(NEVER_A_KILLER)
     started = time.monotonic()
-    if (ROOT / ".git").exists():
-        tracked = set(subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True,
-                                     check=True).stdout.splitlines())
-    else:
-        tracked = {p.relative_to(ROOT).as_posix() for p in ROOT.rglob("*") if p.is_file()}
+    tracked = set(subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True,
+                                 check=True).stdout.splitlines())
     mc = _load(HARNESS, "mutation_check_tree")
     mutants = mc.MUTANTS + mc.CONTROL
     faults = anchors.lot_faults(mutants, mc.LOTS)
@@ -280,3 +288,15 @@ def test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads():
     faults += anchors.reason_faults(mutants, mc.KNOWN_MARKS)
     assert faults == [], faults[:10]
     assert time.monotonic() - started < 30
+
+
+def test_the_tree_s_meta_test_skips_in_a_copy_the_harness_mutates_and_says_why(monkeypatch):
+    """CI6e, second review: run with the harness's mark, the meta-test above skips, its reason said —
+    never a failure that would count as a kill. Without the mark (the ordinary suite), it runs: it is
+    collected there on its own; never re-run here, where a copy the harness made has no .git."""
+    import pytest
+    monkeypatch.setenv(MUTANT_RUN, "1")
+    with pytest.raises(pytest.skip.Exception, match="never a killer"):
+        test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads()
+    mc = _load(HARNESS, "mutation_check_mark")
+    assert mc.MUTANT_RUN == MUTANT_RUN

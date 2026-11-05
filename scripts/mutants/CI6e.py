@@ -64,7 +64,10 @@ TESTS_ALSO = {
 
 
 # After its review: a TIMING survivor caught in no round said apart, never red (M3965–M3967); a
-# TIMING reason names its race test (M3968); a mutant gone STALE fails the ordinary suite (M3969).
+# TIMING reason names its race test (M3968). A mutant gone STALE fails the ordinary suite
+# (test_mutant_anchors.py), a meta-test no mutant can measure: in a mutated copy the mutant applied
+# leaves its own text, and it would catch any mutant by construction — so it skips in the harness's
+# copies (second review), the harness's mark and the skip measured instead (M4020, M4021).
 _NEVER = ('        if r[0] in reasons and r[2] not in UNCOUNTED and r[2] != "CAUGHT" and m and '
           'int(m.group(1)) == 0:\n')
 MUTANTS += [
@@ -78,14 +81,18 @@ MUTANTS += [
      _NEVER, _NEVER.replace("int(m.group(1)) == 0", "int(m.group(1)) < int(m.group(2))")),
     ("M3968", "a TIMING reason that names no race test passes the check before a push (CI6e, review)", ANCHORS,
      '        elif word == "TIMING" and "test_" not in m[5]:\n', "        elif False:\n"),
-    ("M3969", "the harness's code reworded, its mutants never re-anchored: STALE, and no test says it "
-              "(CI6e, review)", HARNESS,
-     "    return 1 if unknown and not args.json else 0\n", "    return 1 if (unknown and not args.json) else 0\n"),
+    ("M4020", "the harness's runs of a copy unmarked: the tree's meta-test catches every mutant whose "
+              "target holds it, by construction (CI6e, second review)", HARNESS,
+     '    env[MUTANT_RUN] = "1"\n', ""),
+    ("M4021", "the tree's meta-test never skips in a mutated copy: M3186, M3585 caught by construction "
+              "(CI6e, second review)", "tests/unit/test_mutant_anchors.py",
+     "    if os.environ.get(MUTANT_RUN):\n        pytest.skip(NEVER_A_KILLER)\n", ""),
 ]
 TESTS.update({
     "M3965": f"{_SH}test_a_timing_survivor_caught_in_no_round_is_said_apart_never_red",
     "M3966": f"{_SH}test_a_timing_survivor_caught_in_no_round_is_said_apart_never_red",
     "M3967": f"{_SH}test_a_timing_survivor_caught_in_no_round_is_said_apart_never_red",
     "M3968": f"{_MA}test_a_timing_reason_names_the_race_test_that_catches_it_at_times",
-    "M3969": f"{_MA}test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads",
+    "M4020": f"{_SH}test_every_run_of_a_copy_carries_the_harness_s_mark",
+    "M4021": f"{_MA}test_the_tree_s_meta_test_skips_in_a_copy_the_harness_mutates_and_says_why",
 })

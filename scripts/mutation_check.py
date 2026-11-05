@@ -10802,10 +10802,18 @@ def unmeasurable(stdout: str) -> str | None:
     return None
 
 
+# CI6e, second review: set in every run of a copy the harness measures. The tree's meta-test
+# (tests/unit/test_mutant_anchors.py: every mutant of the tree applies) skips there, said: in a
+# mutated copy the mutant applied has left its own text, and the test would catch every mutant whose
+# target holds it, by construction (M3186, M3585) — never a killer.
+MUTANT_RUN = "EREGION_MUTANT_RUN"
+
+
 def _run(copy: Path, examples: int, show: bool = False, target: str = INVARIANTS) -> bool:
     """True if `target` (test paths, space-separated) FAILS on this copy (the mutant is caught)."""
     env = {**os.environ, "GLORFINDEL_INVARIANT_EXAMPLES": str(examples), "GLORFINDEL_INVARIANT_NO_SHRINK": "1",
            "PYTHONPATH": str(copy), "PYTHONDONTWRITEBYTECODE": "1"}
+    env[MUTANT_RUN] = "1"
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *target.split(), "-q", "-x", "-p", "no:cacheprovider"],
         cwd=copy, env=env, capture_output=True, text=True)

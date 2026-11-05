@@ -878,3 +878,17 @@ def test_a_run_of_its_own_says_a_timing_survivor_caught_in_no_round(monkeypatch,
     mutants[3] = _known(mutants[3], "TIMING: tests/unit/test_race.py catches it at times")
     assert mc.main(["--rounds", "2", "--jobs", "2"]) == 0
     assert "! M3  TIMING 0/2" in capsys.readouterr().out
+
+
+def test_every_run_of_a_copy_carries_the_harness_s_mark(tmp_path, monkeypatch):
+    """CI6e, second review: each run of a copy — the unmutated one and each mutant's — has
+    EREGION_MUTANT_RUN set: the tree's meta-test skips there, never a killer by construction."""
+    seen = []
+
+    def run(cmd, cwd=None, env=None, capture_output=False, text=False):
+        seen.append(env)
+        return type("P", (), {"returncode": 0, "stdout": "1 passed"})()
+    monkeypatch.setattr(mc.subprocess, "run", run)
+    monkeypatch.delenv(mc.MUTANT_RUN, raising=False)
+    assert mc._run(tmp_path, 60, target="tests/unit/test_x.py") is False
+    assert seen[0][mc.MUTANT_RUN] == "1" and mc.MUTANT_RUN == "EREGION_MUTANT_RUN"

@@ -133,3 +133,11 @@ variable "watch_principal_ids" {
     error_message = "watch_principal_ids : une identité nommée deux fois (la casse ne compte pas) — la seconde attribution échouerait à l'apply."
   }
 }
+
+# IDI1 (#546) : la lecture de Microsoft Graph, pour la garde des identités d'Entra ID (R2).
+variable "graph_read_enabled" {
+  description = "Le rôle d'application Microsoft Graph Application.Read.All pour l'identité d'Orodruin : la garde d'une identité d'Entra ID lit l'application et son principal (IDI1). Rien d'autre dans Graph — le contrat le relit dans son jeton. L'apply demande un az login Administrateur des rôles privilégiés (ou général). Défaut false."
+  type        = bool
+  default     = false
+  nullable    = false
+}

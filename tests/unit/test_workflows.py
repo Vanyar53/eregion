@@ -1144,7 +1144,8 @@ def test_the_terraform_tests_run_on_each_push_and_pull_request():
 # agents' App has no Workflows permission, SEC12) — Jonathan adds the step, then empties this. WC1
 # (#523): `terraform -chdir=infra/orodruin test -no-color` after its `validate`, in « Terraform
 # validate — Orodruin » (and TF_RUNS above).
-TF_AWAITING_STEP = {"orodruin": "WC1 (#523): infra/orodruin/tests/watch_writers.tftest.hcl"}
+TF_AWAITING_STEP = {"orodruin": "WC1 (#523): infra/orodruin/tests/watch_writers.tftest.hcl; "
+                                "IDI1 (#546): infra/orodruin/tests/graph_read.tftest.hcl"}
 
 
 def test_every_terraform_test_only_plans():

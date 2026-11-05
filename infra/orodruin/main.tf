@@ -13,6 +13,11 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    # IDI1 (#546) : le droit de lecture de Microsoft Graph de l'identité d'Orodruin (graph_read_enabled).
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
   }
   required_version = ">= 1.5"
 }
@@ -32,6 +37,11 @@ provider "azurerm" {
 }
 
 data "azurerm_subscription" "current" {}
+
+# Le tenant de l'abonnement, sous le az login de l'opérateur (comme azurerm) : jamais un principal.
+provider "azuread" {
+  tenant_id = data.azurerm_subscription.current.tenant_id
+}
 
 locals {
   name = "orodruin"
@@ -589,4 +599,32 @@ resource "azurerm_role_assignment" "watch_channel_station_writer" {
       error_message = "watch_principal_ids nomme l'opérateur qui applique (son az login) : il n'écrit jamais ce que dit la watch."
     }
   }
+}
+
+# ── IDI1 (#546) : lire les applications d'Entra ID, et rien d'autre dans Microsoft Graph ────────
+# La garde d'une identité (eregion_core/inscription.py, GraphEnrollment) lit l'application, son
+# principal de service et ce qu'il possède : `Application.Read.All`, un rôle d'application de
+# Microsoft Graph, en lecture seule. Le contrat (eregion_core/orodruin.py, assess_graph) relit le
+# jeton Graph de l'identité : ce rôle seul, aucun autre, aucun rôle d'annuaire ; un droit Graph de
+# plus → `passive`, comme une attribution ARM hors du banc.
+#
+# Désactivé par défaut : `graph_read_enabled = true` dans terraform.tfvars d'Orodruin, puis `make
+# orodruin-plan`, puis `make orodruin-up YES=1` — par Jonathan, sous un az login qui tient le rôle
+# d'Entra Administrateur des rôles privilégiés (ou Administrateur général) : attribuer un rôle
+# d'application de Microsoft Graph est un consentement d'administrateur. Graph est trouvé par son
+# identifiant publié (azuread_application_published_app_ids), jamais écrit ici.
+data "azuread_application_published_app_ids" "well_known" {
+  count = var.graph_read_enabled ? 1 : 0
+}
+
+data "azuread_service_principal" "msgraph" {
+  count     = var.graph_read_enabled ? 1 : 0
+  client_id = data.azuread_application_published_app_ids.well_known[0].result["MicrosoftGraph"]
+}
+
+resource "azuread_app_role_assignment" "graph_read" {
+  count               = var.graph_read_enabled ? 1 : 0
+  app_role_id         = data.azuread_service_principal.msgraph[0].app_role_ids["Application.Read.All"]
+  principal_object_id = azurerm_linux_virtual_machine.host.identity[0].principal_id
+  resource_object_id  = data.azuread_service_principal.msgraph[0].object_id
 }

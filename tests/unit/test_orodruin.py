@@ -16,6 +16,7 @@ SUB = "sub-123"
 BENCH = f"/subscriptions/{SUB}/resourceGroups/rg-celebrimbor"
 HOLDS = {
     "identity": lambda: [],
+    "graph": lambda: [],
     "network": lambda: [],
     "cap": lambda: ([], {"max_injections": 20, "max_run_s": 3600}),
 }
@@ -35,6 +36,7 @@ def test_a_contract_that_holds_is_armed():
 
 @pytest.mark.parametrize("name, result, code", [
     ("identity", [orodruin._miss("identity_outside_bench", "x")], "identity_outside_bench"),
+    ("graph", [orodruin._miss("graph_unlisted_right", "x")], "graph_unlisted_right"),
     ("network", [orodruin._miss("network_open", "1.1.1.1:443")], "network_open"),
     ("cap", ([orodruin._miss("cap_missing", "x")], {}), "cap_missing"),
 ])
@@ -44,7 +46,7 @@ def test_one_missing_guarantee_makes_it_passive(name, result, code):
     assert [m["code"] for m in verdict.missing] == [code]
 
 
-@pytest.mark.parametrize("name", ["identity", "network", "cap"])
+@pytest.mark.parametrize("name", ["identity", "graph", "network", "cap"])
 def test_a_contract_that_cannot_be_read_is_passive(name):
     def boom():
         raise RuntimeError("API unreachable")
@@ -343,6 +345,64 @@ def test_read_identity_asks_for_its_own_assignments_at_every_scope(monkeypatch):
     assert calls[0][1]["$filter"] == "assignedTo('oid-orodruin')"
     assert calls[0][0] == f"{orodruin.ARM}/subscriptions/{SUB}/providers/Microsoft.Authorization/roleAssignments"
     assert [m["code"] for m in missing] == ["identity_outside_bench"]  # page 2 counted
+
+
+# ── graph: Application.Read.All and nothing else in Microsoft Graph (IDI1) ──────
+
+def _graph_token(**claims):
+    body = {"aud": "https://graph.microsoft.com", "oid": "00000000-0000-0000-0000-0000000000a0",
+            "idtyp": "app", **claims}
+    payload = base64.urlsafe_b64encode(json.dumps(body).encode()).decode().rstrip("=")
+    return f"h.{payload}.s"
+
+
+class _GraphCredential:
+    def __init__(self, token):
+        self.token, self.scopes = token, []
+
+    def get_token(self, scope):
+        self.scopes.append(scope)
+        return MagicMock(token=self.token)
+
+
+@pytest.mark.parametrize("claims", [
+    {},                                                        # graph_read_enabled off: no role
+    {"roles": ["Application.Read.All"]},                       # on: the guard's read
+    {"roles": ["Application.Read.All"], "wids": ["0997a1d0-0d1d-4acb-b408-d5ca73121e90"]},
+])
+def test_the_graph_read_alone_holds(claims):
+    """IDI1: no Graph right, or the identity guard's read alone — and the token is the host's own,
+    asked for Graph (no Graph call)."""
+    cred = _GraphCredential(_graph_token(**claims))
+    assert orodruin.read_graph(credential=cred) == []
+    assert cred.scopes == ["https://graph.microsoft.com/.default"]
+
+
+@pytest.mark.parametrize("claims, code", [
+    ({"roles": ["Application.ReadWrite.All"]}, "graph_unlisted_right"),
+    ({"roles": ["Application.Read.All", "Application.ReadWrite.OwnedBy"]}, "graph_unlisted_right"),
+    ({"roles": ["Directory.Read.All"]}, "graph_unlisted_right"),
+    ({"roles": ["User.ReadWrite.All"]}, "graph_unlisted_right"),
+    ({"roles": ["application.read.all"]}, "graph_unlisted_right"),     # not as Graph writes it
+    ({"wids": ["62e90394-69f5-4237-9190-012177145e10"]}, "graph_directory_role"),
+    ({"scp": "Application.Read.All"}, "graph_unlisted_right"),         # a user's token
+    ({"roles": "Application.Read.All"}, "graph_unlisted_right"),       # not a list
+])
+def test_any_other_graph_right_makes_it_passive(claims, code):
+    """IDI1: one more Graph right — a write, a wider read, a directory role, a user's token — and
+    the contract falls, as an ARM assignment outside the bench makes it fall (M3860, M3861)."""
+    missing = orodruin.read_graph(credential=_GraphCredential(_graph_token(**claims)))
+    assert [m["code"] for m in missing] == [code]
+    verdict = orodruin.check(_readers(graph=lambda: missing))
+    assert verdict.verdict == orodruin.PASSIVE
+
+
+def test_a_graph_token_that_cannot_be_had_is_passive():
+    class NoToken:
+        def get_token(self, scope):
+            raise RuntimeError("IMDS unreachable")
+    verdict = orodruin.check(_readers(graph=lambda: orodruin.read_graph(credential=NoToken())))
+    assert [m["code"] for m in verdict.missing] == ["graph_unreadable"]
 
 
 # ── network and cap ────────────────────────────────────────────────────────────
@@ -730,3 +790,35 @@ def test_the_egress_is_closed_by_default_and_the_state_is_its_own():
     locked = variables.split('variable "egress_locked"')[1].split("\n}\n")[0]
     assert "default     = true" in locked
     assert "backend" not in tf  # local state in infra/orodruin, never Celebrimbor's
+
+
+def test_the_one_graph_right_is_application_read_all_off_by_default():
+    """IDI1 (#546): one Microsoft Graph app role, Application.Read.All — the contract's own list —
+    to Orodruin's identity, on Graph's principal found by its published id, off by default; no
+    other azuread resource in the module (M3862, M3863). Its plan: tests/graph_read.tftest.hcl."""
+    tf = _tf()
+    assert set(re.findall(r'resource "(azuread_\w+)" "(\w+)"', tf)) == {("azuread_app_role_assignment", "graph_read")}
+    grant = tf.split('resource "azuread_app_role_assignment" "graph_read"')[1].split("\n}\n")[0]
+    assert "count               = var.graph_read_enabled ? 1 : 0" in grant
+    roles = re.findall(r'app_role_ids\["([^"]+)"\]', tf)
+    assert roles == ["Application.Read.All"] and set(roles) == orodruin.GRAPH_READ_ONLY
+    assert "principal_object_id = azurerm_linux_virtual_machine.host.identity[0].principal_id" in grant
+    assert "resource_object_id  = data.azuread_service_principal.msgraph[0].object_id" in grant
+    assert 'result["MicrosoftGraph"]' in tf
+    variables = (ORODRUIN / "variables.tf").read_text(encoding="utf-8")
+    flag = variables.split('variable "graph_read_enabled"')[1].split("\n}\n")[0]
+    assert "default     = false" in flag and "nullable    = false" in flag
+    outputs = (ORODRUIN / "outputs.tf").read_text(encoding="utf-8")
+    for name in ("tenant_id", "operator_object_id", "protected_identities"):
+        assert f'output "{name}"' in outputs, name
+    assert "data.azurerm_client_config.operator.object_id" in outputs.split('output "operator_object_id"')[1]
+    protected = outputs.split('output "protected_identities"')[1].split("\n}\n")[0]
+    assert "azurerm_linux_virtual_machine.host.identity[0].principal_id" in protected
+    assert "local.watch_writers" in protected
+    env = (ORODRUIN / "orodruin.env.example").read_text(encoding="utf-8")
+    for var in ("EREGION_TENANT_ID=", "EREGION_OPERATOR_OBJECT_ID=", "EREGION_PROTECTED_IDENTITIES="):
+        assert f"\n{var}\n" in env, var
+    tftest = (ORODRUIN / "tests" / "graph_read.tftest.hcl").read_text(encoding="utf-8")
+    for run in ("by_default_no_right_in_microsoft_graph", "enabled_application_read_all_alone_to_orodruin",
+                "what_the_guard_knows_before_reading", "the_listed_watches_are_protected_too"):
+        assert f'run "{run}"' in tftest, run

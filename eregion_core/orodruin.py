@@ -9,6 +9,8 @@ guardrails hold — otherwise the injector stays passive and touches nothing.
                           group (which VMs: Terraform's choice, by their tags — the
                           contract does not read their inscription; O0 does, at each run);
                           and nothing else: what it holds is an allow-list (SEC11)
+        graph             its Microsoft Graph token: no right there but Application.Read.All
+                          (the identity guard's read, IDI1), no directory role, no user's
         network           a connection outside the perimeter fails
         cap               the declared cap is read and compared to the ceiling
         kill              revoke the identity, cancel the chaos experiments, stop the
@@ -105,6 +107,19 @@ AUTHZ_READ_ONLY = frozenset({
     "microsoft.authorization/roledefinitions/read",
 })
 
+# IDI1 (#546): what the identity may hold in Microsoft Graph — reading applications and their
+# principals, for the identity guard (eregion_core/inscription.py, GraphEnrollment), and
+# nothing else: no write there, no other API permission, no directory role. Read from the
+# identity's own Graph token, its app roles (``roles``) and its directory roles (``wids``):
+# no Graph call, no right needed to read it — infra/orodruin's graph_read_enabled off, the
+# token carries none and the guarantee holds.
+GRAPH = "https://graph.microsoft.com"
+GRAPH_READ_ONLY = frozenset({"Application.Read.All"})
+# A ``wids`` value seen in the app-only tokens of service principals that hold no directory role
+# (published decoded tokens of managed identities) — not a built-in role's template id.
+# Hypothesis, to measure on Orodruin (`make orodruin-check`): any other value is a role, passive.
+APP_DEFAULT_WIDS = frozenset({"0997a1d0-0d1d-4acb-b408-d5ca73121e90"})
+
 # Outside the perimeter (bench control plane, Entra ID, the model's API): reaching any
 # of these means the egress is open. Addresses, not names — DNS stays allowed.
 NETWORK_PROBES = (("1.1.1.1", 443), ("9.9.9.9", 443))
@@ -196,12 +211,15 @@ def watch_scope(env=None) -> str:
     return channel_scope(env, WATCH_SCOPE_ENV)
 
 
+def _token_claims(token: str) -> dict:
+    payload = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
 def _token_oid(token: str) -> str:
     """The principal the token was issued to — who this host IS, read from the token
     itself rather than from a setting that could drift."""
-    payload = token.split(".")[1]
-    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    return claims["oid"]
+    return _token_claims(token)["oid"]
 
 
 def _allowed(action: str, perms: list[dict]) -> bool:
@@ -416,6 +434,37 @@ def read_identity(*, credential=None, get=None) -> list[dict]:
         experiments=_has_experiments(get, headers, bench))
 
 
+def assess_graph(claims: dict) -> list[dict]:
+    """The Graph guarantee from the claims of the identity's own Graph token (IDI1): an app's
+    token (a user's carries ``scp``), its app roles within ``GRAPH_READ_ONLY``, no directory
+    role (``wids``, but ``APP_DEFAULT_WIDS``). An unknown right refuses (A0)."""
+    missing = []
+    if claims.get("scp") or not isinstance(claims.get("roles", []), list) \
+            or not isinstance(claims.get("wids", []), list):
+        missing.append(_miss("graph_unlisted_right",
+                             "not an application's token (a user's scopes, or claims of no list)"))
+        return missing
+    unlisted = sorted({str(r) for r in claims.get("roles") or []} - GRAPH_READ_ONLY)
+    if unlisted:
+        missing.append(_miss("graph_unlisted_right",
+                             f"{', '.join(unlisted)} in Microsoft Graph: the injectors read applications, "
+                             "nothing else (graph_read_enabled)"))
+    roles = sorted({str(w).lower() for w in claims.get("wids") or []} - APP_DEFAULT_WIDS)
+    if roles:
+        missing.append(_miss("graph_directory_role",
+                             f"directory role {', '.join(roles)}: an injector holds none in Entra ID"))
+    return missing
+
+
+def read_graph(*, credential=None) -> list[dict]:
+    """The identity's own Microsoft Graph token, asked for and read — no Graph call (IMDS gives
+    it on Orodruin, Entra ID being in the perimeter)."""
+    if credential is None:
+        from azure.identity import DefaultAzureCredential
+        credential = DefaultAzureCredential()
+    return assess_graph(_token_claims(credential.get_token(f"{GRAPH}/.default").token))
+
+
 def read_network(*, probes=NETWORK_PROBES, connect=None) -> list[dict]:
     """A TCP connection to each probe outside the perimeter must fail."""
     connect = connect or socket.create_connection
@@ -448,7 +497,7 @@ def read_cap(env=None) -> tuple[list[dict], dict]:
     return missing, cap
 
 
-READERS = {"identity": read_identity, "network": read_network, "cap": read_cap}
+READERS = {"identity": read_identity, "graph": read_graph, "network": read_network, "cap": read_cap}
 
 
 def check(readers: dict | None = None) -> Verdict:
@@ -457,7 +506,7 @@ def check(readers: dict | None = None) -> Verdict:
     readers = readers or READERS
     missing: list[dict] = []
     cap: dict = {}
-    for name in ("identity", "network", "cap"):
+    for name in ("identity", "graph", "network", "cap"):
         try:
             result = readers[name]()
         except Exception as e:

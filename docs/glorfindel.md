@@ -286,10 +286,48 @@ Types d'escalade : `control_plane_change` (détection sur le journal d'activité
 qu'un humain peut lancer (un type approuvable en un clic avec son action, ou `verification_failed`
 pour son reset) porte `proposal` : ce que la watch propose (la carte, l'action, la cible, l'adresse
 et le port, le type, l'heure, son compteur), signé par sa clé de SEC19 sous `eregion.action-queue/1`
-(`eregion_core/action_queue.py`, `docs/design/file-actions-signee.md` §2.4, §7). Signée de nouveau
-quand la carte se rafraîchit. Une carte écrite par la console, le bot ou la CLI n'en porte pas ; une
-clé indisponible n'empêche jamais la carte. **Personne ne la lit encore pour agir** : la console et
-le bot gardent l'appel direct jusqu'à FS1b.
+(`eregion_core/action_queue.py`, `docs/design/file-actions-signee.md` §2.4, §7). Une carte revue
+garde sa proposition tant qu'elle tient (cette clé, la carte telle qu'elle est) et qu'elle a moins de
+10 min (`escalations.RESIGN_AFTER_S`, FS1b) ; au-delà, ou la carte changée, elle est signée de
+nouveau. Une carte écrite par la console, le bot ou la CLI n'en porte pas ; une clé indisponible
+n'empêche jamais la carte.
+
+**La watch relève la file d'actions signée (FS1b, #563) — derrière `EREGION_ACTION_QUEUE=1`
+seulement.** Sans ce drapeau (le défaut), rien ne change : aucune file n'est lue, la console et le
+bot gardent l'appel direct. Avec lui, un fil à part de la watch (`glorfindel/queue_watch.py`,
+jamais la boucle ni le battement) relève chaque seconde `runs/console/queue/` et `runs/bot/queue/`
+(montés en lecture seule chez elle), au plus 16 demandes par service et par passage. Chaque demande
+reçoit d'abord un reçu `received` (la watch ne juge jamais deux fois une demande ; un arrêt entre la
+réclamation et la fin laisse ce reçu, et le démarrage suivant la dit `failed`, `interrupted`, sans
+jamais la rejouer), puis passe, du moins cher au plus cher et sans appel au cloud avant
+l'exécution : la vérification de FS1a (§2.8, étapes 1 à 9 ; le débit est compté **avant** le
+registre, si bien qu'une clé de service prise ne le remplit pas), son nom qui doit être son nonce,
+le rattachement (étape 10 : la proposition de cette watch sur la carte, non consommée ; ou, sans
+carte, ce que la watch tient : une isolation, des blocages, le blocage de cette IP sur cette VM —
+sinon `nothing_to_undo`), les **gardes de la console rejouées** (étape 11, `glorfindel/approval.py`,
+le même code que la console appelle : l'approbation en un clic, **son âge lu sur l'`issued_at`
+signé de la proposition**, jamais sur `last_seen`, un restore après la carte ; une seule adresse hors
+de `never_block` et une portée `vm` ou `subnet` ; la VM du périmètre de la watch ; l'humain qu'une
+demande du bot nomme, relu contre la copie de `DISCORD_ALLOWED_USERS`/`DISCORD_ALLOWED_ROLES` de la
+watch), la posture (étape 12 : `read_only`), puis la proposition consommée (écrite avant
+l'exécution : une proposition, une exécution, un échec compris). Le reçu passe alors `accepted`, et
+la demande s'exécute dans un fil de travail, sous `_vm_lock`, avec les fonctions de la watch : celles
+du connecteur, celles de la CLI pour la levée et le reset (`glorfindel/gestures.py`, sorties de
+`cli.py`), la vérification d'après (`approval.verify_approved`, une carte `verification_failed` si
+elle n'est pas `True`), la carte réglée ; le reçu dit `done` ou `failed`. Les gardes du modèle (la
+porte de confiance, les tirages, le mode) ne s'appliquent pas : c'est l'approbation d'un humain.
+
+Reçus et statut : `runs/glorfindel/queue/<service>-<id>.json` et `status.json` (la posture, les
+empreintes épinglées par service, depuis quand, les refus comptés), signés par la clé de la watch
+sous `eregion.action-queue/1` (`kind` signé : un reçu ne se lit jamais comme une proposition). Un
+refus du groupe critique (`unsigned`, `unknown_key`, `bad_signature`, `wrong_service`, `replayed`,
+`verb_not_allowed`) fait une carte `queue_tampered`, **critique**, décidée par le code, sans action,
+au plus une par service et par heure ; un registre illisible (`seen_store_unavailable`), une carte
+`queue_unavailable`. Le registre (`~/.eregion/watch-queue/` : `seen.json`, `consumed.json`) que seule
+la watch monte est écrit durablement (le fichier, puis son répertoire, `fsync`) et, illisible sous
+quelque forme que ce soit, refuse — il ne lève jamais. Les clés épinglées : `EREGION_QUEUE_KEYS`
+dans l'environnement de la watch (`make queue-keys`, `docs/operations.md`). Tests :
+`tests/unit/test_action_queue_watch.py` ; mutants M3975–M4014.
 
 L'escalade porte `action_params` (dict, vide par défaut) pour les actions paramétrées — ex. `block_suspicious_ip` → `{"ip": ...}` extrait du signal via `_extract_suspicious_ip` (même source que `execute_action`). Permet à la console « Approve & execute » d'exécuter en 1 clic une action qui n'est pas à `resource_id` seul. Commit `9583ec6`.
 

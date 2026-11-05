@@ -60,7 +60,14 @@ def sign_proposals(signer_of) -> None:
     _PROPOSER = signer_of
 
 
-def _propose(e: dict) -> None:
+# FS1b (§7, « Ne re-signer qu'au-delà d'un âge »): a card seen again keeps the proposal it carries
+# while that one still stands (this watch's, for the card as it is) and is younger than this —
+# re-signed at each refresh, its digest changed under a request just named. Short enough for the
+# age of an approval, read from the proposal's signed issued_at, to stay right.
+RESIGN_AFTER_S = 600
+
+
+def _propose(e: dict, seen_again: bool = False) -> None:
     if _PROPOSER is None:
         return
     try:
@@ -68,8 +75,12 @@ def _propose(e: dict) -> None:
         if not action_queue.proposable(e):
             return
         signer = _PROPOSER()
-        if signer is not None:
-            e["proposal"] = action_queue.sign_proposal(e, signer, datetime.now(timezone.utc))
+        if signer is None:
+            return
+        now = datetime.now(timezone.utc)
+        if seen_again and action_queue.proposal_fresh(e, e.get("proposal"), signer.public, now, RESIGN_AFTER_S):
+            return
+        e["proposal"] = action_queue.sign_proposal(e, signer, now)
     except Exception:       # the card first: a proposal is never worth a card lost
         pass
 
@@ -141,6 +152,8 @@ _ESCALATION_LABELS = {
     "telemetry_gap": "télémétrie incomplète (requêtes d'enquête en échec)",
     "unstable_decision": "décision instable (les tirages ne s'accordent pas)",
     "readiness_hold": "VM retenue en observation (préparation)",
+    "queue_tampered": "file d'actions : une demande que son service n'a pas écrite (FS1b)",
+    "queue_unavailable": "file d'actions : le registre de la watch illisible (FS1b)",
     "control_plane_change": "plan de contrôle modifié (détection seule)",
     "identity_change": "identité modifiée dans Entra ID (détection seule)",
     "protected_address": "adresse protégée (jamais bloquée)",
@@ -270,7 +283,7 @@ def record(
                     if explanation:
                         e["explanation"] = explanation
                     e["updated_at"] = now
-                _propose(e)     # FS1a: signed again, seen again
+                _propose(e, seen_again=True)     # FS1a, FS1b: seen again — signed again past an age
                 lines[i] = json.dumps(e, default=str)
                 _write_lines(lines)
                 return e["id"]
@@ -372,7 +385,7 @@ def refresh(escalation_id: str, reason: str, **fields) -> bool:
             now = datetime.now(timezone.utc).isoformat()
             e.setdefault("first_reason", e.get("reason", ""))
             e.update(fields, reason=reason, updated_at=now, last_seen=now)
-            _propose(e)     # FS1a: signed again, seen again
+            _propose(e, seen_again=True)     # FS1a, FS1b: seen again — signed again past an age
             lines[i], done = json.dumps(e, default=str), True
     if done:
         _write_lines(lines)
@@ -635,7 +648,7 @@ DISRUPTIVE_ACTIONS = ("isolate_vm", "block_suspicious_ip")
 # Cards that are not a decision on a detection: posture, housekeeping, proposals.
 _NOT_DECISIONS = {"posture_gap", "orphan_rule", "quarantine_altered", "proposed_rule", "readiness_hold",
                   "ttl_exceeded", "detection_blocked", "bypassed", "state_unreadable", "rule_left",
-                  "unverified"}
+                  "unverified", "queue_tampered", "queue_unavailable"}
 
 
 def all_escalations() -> list[dict]:

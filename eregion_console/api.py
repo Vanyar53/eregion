@@ -352,7 +352,28 @@ class _TokenAuthMiddleware:
             receive = await _json_body(scope, receive, send)
             if receive is None:
                 return
+        # FS1b: who asks, as a request of the action queue says it (by.session) — a short HMAC of
+        # the session's date of issue, never the token; the Bearer's own.
+        _SESSION_TAG.set(_session_tag(conn, token, by_cookie, cookie))
         await self.app(scope, receive, send)
+
+
+import contextvars  # noqa: E402
+
+_SESSION_TAG: contextvars.ContextVar[str] = contextvars.ContextVar("eregion_console_session", default="")
+_SESSION_TAG_LABEL = b"eregion-console-by/1"
+
+
+def _session_tag(conn, token: str, by_cookie: bool, cookie: str) -> str:
+    """8 hex of an HMAC keyed by the token: over the session's date of issue for a cookie, over
+    « bearer » for a script — two browsers told apart in the watch's journal, the token never
+    in a request (§2.7)."""
+    import hashlib
+    what = b"bearer"
+    if by_cookie:
+        value = conn.cookies.get(cookie) or ""
+        what = b"cookie." + value.split(".")[1].encode() if value.count(".") == 2 else b"cookie"
+    return hmac.new(token.encode(), _SESSION_TAG_LABEL + b"." + what, hashlib.sha256).hexdigest()[:8]
 
 
 async def _refuse(scope, receive, send, status: int, error: str) -> None:
@@ -511,6 +532,24 @@ async def _have_a_token() -> None:
         print(f"  ✗ console token: {_TOKEN_FILE} unreadable ({exc}) — every request is refused; "
               f"set {TOKEN_ENV}.", flush=True)
     _say_retired()
+
+
+@app.on_event("startup")
+async def _have_a_queue_key() -> None:
+    """FS1b: behind EREGION_ACTION_QUEUE=1 only, the console's key of the action queue drawn at its
+    start (~/.eregion/console/queue_ed25519), its fingerprint said — for `make queue-keys` to pin it
+    at the watch before the first click. Without the flag: nothing."""
+    if not _queue_on():
+        return
+    from eregion_core import action_queue as _aq
+    from eregion_core import watch_key as _wk
+    try:
+        signer = _aq.load_service_key("console")
+    except _wk.KeyUnavailable as exc:
+        print(f"  ✗ action queue: the console's key is unavailable ({exc}) — its requests are not written.", flush=True)
+        return
+    print(f"  action queue: the console's key {signer.fingerprint} — pin it at the watch "
+          f"({_aq.KEYS_ENV}, make queue-keys).", flush=True)
 
 
 def _say_retired() -> None:
@@ -1129,12 +1168,45 @@ def _subprocess_result(result: "subprocess.CompletedProcess[str]") -> dict:
     return out
 
 
+def _queue_on() -> bool:
+    """EREGION_ACTION_QUEUE=1 (FS1b): false by default — the direct call stays."""
+    from eregion_core.action_queue import enabled
+    return enabled()
+
+
+async def _queued(verb: str, resource_id: str, *, ip: str = "", scope: str = "", card=None,
+                  approved: str = "", extra: dict | None = None) -> dict:
+    """FS1b, behind EREGION_ACTION_QUEUE=1: the gesture deposited as a request signed by the
+    console's key, the watch's receipt awaited and answered as the direct call answered
+    (eregion_console/action_requests.py). The gesture noted in runs/console for the feed, from the
+    receipt, as the direct call notes it."""
+    from eregion_console import action_requests
+    by = {"via": "console-token", "session": _SESSION_TAG.get()}
+    asked = await asyncio.to_thread(action_requests.ask, verb, resource_id, root=_RUNS, by=by, ip=ip,
+                                    scope=scope, card=card)
+    out = action_requests.answer(asked, **(extra or {}))
+    receipt = asked.get("receipt") or {}
+    if receipt.get("state") in ("done", "failed") and verb != "snapshot":
+        try:
+            from glorfindel.cli import _record_manual_action
+            from glorfindel.queue_watch import ACTION_OF_VERB
+            _record_manual_action(ACTION_OF_VERB[verb], resource_id, {
+                **(receipt.get("result") or {}), **(receipt.get("verification") or {}),
+                "ip": ip, "via": "queue", "request": asked.get("request", ""),
+                **({"approved_escalation": approved} if approved else {})})
+        except Exception:
+            pass
+    return out
+
+
 @app.post("/api/action/release/{vm_name}")
 async def action_release(vm_name: str) -> dict:
     """Release isolation only — use after restore when the VM is clean."""
     resource_id = _find_resource_id(vm_name)
     if not resource_id:
         return {"error": f"No active isolation found for {vm_name}"}
+    if _queue_on():
+        return await _queued("release_isolation", resource_id)
     result = await asyncio.to_thread(
         subprocess.run,
         [_bin(), "release", resource_id, "--yes"],
@@ -1149,6 +1221,8 @@ async def action_revert(vm_name: str) -> dict:
     resource_id = _find_resource_id(vm_name)
     if not resource_id:
         return {"error": f"No active actions found for {vm_name}"}
+    if _queue_on():
+        return await _queued("reset", resource_id)
     result = await asyncio.to_thread(
         subprocess.run,
         [_bin(), "reset", resource_id, "--yes"],
@@ -1319,98 +1393,30 @@ async def set_autonomy_default(body: dict) -> dict:
 
 def _verify_approved(connector, esc: dict, action: str, resource_id: str, result: dict,
                      ip: str = "") -> dict:
-    """Verify an action approved from the War Room, as the agent verifies its own, and
-    leave a trace in runs/ for the feed. The approve route used to execute without
-    either (real run, 2026-10-05). A failed check becomes a verification_failed
-    escalation — the approval itself resolved the mode_hold one."""
-    from glorfindel import escalations as _esc
-    from glorfindel.actions import isolation_verdict
-    try:
-        if action == "isolate_vm":
-            verification = isolation_verdict(connector.verify_isolation(resource_id), result)
-        elif action == "release_isolation":
-            verification = connector.verify_release(resource_id)
-        else:
-            from glorfindel.response.policy import as_recorded
-            verification = as_recorded(connector.verify_block_ip(ip, resource_id))   # L1G: the reassertion's
-    except Exception as e:
-        verification = {"verified": None, "error": f"vérification impossible : {e}"}
-    try:
+    """Verify an action approved from the console, as the agent verifies its own, and leave a
+    trace in runs/console for the feed — the shared check (glorfindel/approval.py, FS1b), the
+    watch's for a request of the queue."""
+    from glorfindel import approval
+
+    def _record(action: str, resource_id: str, outcome: dict) -> None:
         from glorfindel.cli import _record_manual_action
-        _record_manual_action(action, resource_id, {
-            **(result or {}), **verification, "approved_escalation": esc.get("id", "")})
-    except Exception:
-        pass
-    # Not verified is not a success either (fourth review, Q11): a check that couldn't
-    # conclude leaves a card too, as the agent's own cycle now does.
-    if verification.get("verified") is not True:
-        failed = verification.get("verified") is False
-        _esc.record(
-            signal_id=f"approve-{esc.get('id', '')}", resource_id=resource_id, action=action,
-            escalation_type="verification_failed",
-            reason=(f"Action '{action}' approuvée et exécutée, mais "
-                    + ("la vérification a échoué : " if failed else "elle n'a pas pu être vérifiée : ")
-                    + f"{verification.get('error', 'check failed' if failed else 'Azure illisible')}"),
-            ttp=esc.get("ttp", ""), severity=esc.get("severity", ""),
-        )
-    return verification
+        _record_manual_action(action, resource_id, outcome)
+    return approval.verify_approved(connector, esc, action, resource_id, result, ip, record=_record)
 
 
-# Escalation types whose held action a human may run in one click. Not
-# unattributed_signal: its card is anchored on a VM the detection did NOT name —
-# approving isolated that VM (fourth review, Q4).
-_APPROVABLE_TYPES = {"mode_hold", "low_confidence", "uncharacterized_signal", "release_hold",
-                     "telemetry_gap", "unstable_decision"}
-
-
-def _approval_max_age_h() -> float:
-    """GLORFINDEL_APPROVAL_MAX_AGE_H, 2 h when unset or malformed. `nan` and `inf` parsed:
-    `age > nan` is never true, and a card of any age could be executed (G2) — both are
-    2 h. Zero or negative stays as written: one-click approval closed on purpose
-    (`_approval_refusal` refuses every card), never reopened to 2 h."""
-    import math
-    try:
-        value = float(os.environ.get("GLORFINDEL_APPROVAL_MAX_AGE_H") or "2")
-    except ValueError:
-        return 2.0
-    if math.isnan(value) or value == math.inf:
-        return 2.0
-    return value
+# Escalation types whose held action a human may run in one click — the queue's own list
+# (FS1b: imported, never copied). Not unattributed_signal: its card is anchored on a VM the
+# detection did NOT name — approving isolated that VM (fourth review, Q4).
+from eregion_core.action_queue import APPROVABLE_TYPES as _APPROVABLE_TYPES  # noqa: E402,F401
+# FS1b: the guards of a click, shared with the watch, which replays them on a request of the
+# queue (glorfindel/approval.py) — called here as they were, the card dated by its last_seen.
+from glorfindel.approval import approval_max_age_h as _approval_max_age_h  # noqa: E402,F401
 
 
 def _approval_refusal(esc: dict, vm_name: str) -> str | None:
-    """Why this card can't be executed in one click any more, or None."""
-    from datetime import datetime, timezone
-    etype = esc.get("escalation_type", "")
-    if etype == "unattributed_signal":
-        return ("Détection non attribuée : la carte est ancrée sur une VM que la détection "
-                "ne nomme pas. Identifier la VM concernée, puis agir depuis la CLI.")
-    if etype not in _APPROVABLE_TYPES:
-        return f"Ce type de carte ({etype or '?'}) ne s'exécute pas en un clic."
-    seen = esc.get("last_seen") or esc.get("timestamp") or ""
-    try:
-        seen_dt = datetime.fromisoformat(seen)
-    except ValueError:
-        return "Carte sans date lisible : relancer l'analyse plutôt que l'exécuter."
-    max_age_h = _approval_max_age_h()
-    if max_age_h <= 0:
-        # Closed on purpose: no card of any age — a card dated a little ahead of this
-        # clock included (`age > 0` let it through) — runs in one click.
-        return ("Approbation en un clic fermée (GLORFINDEL_APPROVAL_MAX_AGE_H ≤ 0) : "
-                "agir depuis la CLI.")
-    age_h = (datetime.now(timezone.utc) - seen_dt).total_seconds() / 3600
-    if age_h > max_age_h:
-        return (f"Carte vieille de {age_h:.1f} h : l'état de la VM a pu changer (restore, levée). "
-                "Acquitter et laisser la détection se reproduire, ou agir depuis la CLI.")
-    try:
-        from glorfindel import jobs as _jobs
-        rec = json.loads((_jobs._RECOVERY_DIR / f"{vm_name}.json").read_text())
-        if datetime.fromisoformat(rec["last_restore_at"]) > seen_dt:
-            return ("Un restore a eu lieu après cette carte : l'exécuter agirait sur une VM "
-                    "restaurée. Acquitter la carte.")
-    except (OSError, ValueError, KeyError):
-        pass
-    return None
+    """Why this card can't be executed in one click any more, or None (glorfindel/approval.py)."""
+    from glorfindel.approval import approval_refusal
+    return approval_refusal(esc, vm_name)
 
 
 @app.post("/api/action/approve/{esc_id}")
@@ -1440,6 +1446,8 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
             ip = single_host_ip(ip)
         except ValueError as e:
             return {"error": str(e)}
+    if _queue_on():
+        return await _approve_queued(esc, ip, scope)
 
     try:
         from glorfindel.actions import AzureConnector
@@ -1505,6 +1513,32 @@ async def action_approve(esc_id: str, ip: str = "", scope: str = "vm") -> dict:
         return _friendly_azure_error(e, action)
 
 
+async def _approve_queued(esc: dict, ip: str, scope: str) -> dict:
+    """FS1b: an approval deposited as a request bound to the card and to the proposal the watch
+    signed on it — a card without one (written before FS1, or by another hand) is refused here as
+    the watch would refuse it."""
+    from eregion_core import action_queue as _aq
+    action, resource_id = esc.get("action", ""), esc.get("resource_id", "")
+    verb = _aq.VERB_OF_ACTION.get(action)
+    if verb is None:
+        return {"error": f"Action '{action}' non supportée par la console — CLI : glorfindel respond {resource_id}"}
+    proposal = esc.get("proposal")
+    if not isinstance(proposal, dict):
+        return {"error": _aq.REFUSALS["proposal_missing"], "refused": "proposal_missing", "via": "queue"}
+    card = (esc["id"], _aq.digest(proposal))
+    if verb != "block_ip":
+        return await _queued(verb, resource_id, card=card, approved=esc["id"], extra={"action": action})
+    block_ip = ip or esc.get("ip") or (esc.get("action_params") or {}).get("ip") or ""
+    if not block_ip:
+        return {"needs_ip": True, "error": (
+            "This escalation doesn't carry the IP — enter the IP to block, "
+            f"or run: glorfindel block <ip> {resource_id} --yes")}
+    block_scope = scope if scope in ("vm", "subnet") else "vm"
+    # The proposal's address is the card's: the request names it, or the human's when it has none.
+    return await _queued(verb, resource_id, ip=block_ip, scope=block_scope, card=card, approved=esc["id"],
+                         extra={"action": action, "ip": block_ip, "scope": block_scope})
+
+
 def _vm_block(vm_name: str, ip: str) -> tuple[dict | None, str]:
     """The active block of `ip` on the VM the console names (CON-K): the row's own block, never
     the VM's first one. The VM resolved as every action resolves it (two VMs of that name:
@@ -1562,6 +1596,13 @@ async def action_block_promote(vm_name: str, ip: str = "") -> dict:
         return {"error": why}
     if block.get("scoped", True) is False:
         return {"error": f"{block['ip']} is already blocked for the whole subnet ({block.get('nsg', '?')})"}
+    if _queue_on():
+        out = await _queued("promote_block", block["resource_id"], ip=block["ip"], scope="vm",
+                            extra={"ip": block["ip"], "scope": "subnet"})
+        if out.get("ok"):
+            said = _promotion_said(out.get("result") or {})
+            out.update(said=said, whole=not said)
+        return out
 
     try:
         connector = AzureConnector(dry_run=False)
@@ -1584,6 +1625,11 @@ async def action_unblock(vm_name: str, ip: str = "") -> dict:
     block, why = _vm_block(vm_name, ip)
     if not block:
         return {"error": why}
+    if _queue_on():
+        out = await _queued("unblock_ip", block["resource_id"], ip=block["ip"], extra={"ip": block["ip"]})
+        if out.get("ok") and (out.get("result") or {}).get("status") == "not_found":
+            out["not_found"] = True
+        return out
     result = await asyncio.to_thread(
         subprocess.run,
         [_bin(), "unblock", "--yes", "--", block["ip"], block["resource_id"]],
@@ -1611,6 +1657,11 @@ async def action_snapshot(vm_name: str) -> dict:
     vault, vault_rg, _ = resolve_backup_vault()
     if not vault:
         return {"error": NO_VAULT_MSG}
+    if _queue_on():
+        out = await _queued("snapshot", resource_id)
+        if out.get("ok"):
+            out.update(status="started", job_id=(out.get("result") or {}).get("job_id"), resource_id=resource_id)
+        return out
 
     from glorfindel.actions import AzureConnector
     from glorfindel.jobs import start_snapshot as _start_snapshot

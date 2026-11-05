@@ -72,6 +72,8 @@ const ESC_LABELS = {
   unverified:          'not verified (the check fails)',
   account_compromised: 'account maybe compromised (brute force, then a login)',
   compromise_unchecked: 'login after a brute force not checked',
+  queue_tampered:      'action queue: a request its service did not write',
+  queue_unavailable:   'action queue: the watch\'s register unreadable',
 };
 
 // Cards anchored on a VM the detection does not name (an Activity Log row, an identity,
@@ -82,7 +84,7 @@ const _ANCHORED_TYPES = new Set(['control_plane_change', 'identity_change', 'una
 const _DETECTION_ONLY = new Set(['control_plane_change', 'identity_change']);
 const _NOT_DECISIONS = new Set(['posture_gap', 'orphan_rule', 'quarantine_altered', 'proposed_rule',
   'readiness_hold', 'ttl_exceeded', 'detection_blocked', 'bypassed', 'state_unreadable', 'rule_left',
-  'unverified']);
+  'unverified', 'queue_tampered', 'queue_unavailable']);
 function _isAnchored(e) { return _ANCHORED_TYPES.has(e.escalation_type); }
 // A card on an NSG (a quarantine altered, an orphan rule no VM holds) gets an NSG tile.
 function _isNsgId(rid) { return /\/providers\/microsoft\.network\/networksecuritygroups\//i.test(rid || ''); }

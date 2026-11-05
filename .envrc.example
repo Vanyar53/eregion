@@ -172,3 +172,11 @@ export ORT_LOGGING_LEVEL_DEFAULT=3
 # Vide : tout run est refusé, et le refus le dit. Celle de H0, pour Orodruin, va dans
 # infra/orodruin/orodruin.env (make glorfindel-host-watch-key), jamais ici.
 # export EREGION_WATCH_KEY=ed25519:...
+
+# ── La file d'actions signée (FS1b) ────────────────────────────────────────────
+# « 1 » : la console et le bot déposent leurs gestes, signés par leur clé ; la watch les juge et les
+# exécute. Vide (le défaut) : rien ne change, l'appel direct reste. Les clés publiques des deux
+# services, épinglées chez la watch : la ligne que `make queue-keys` imprime, une fois la console
+# et le bot démarrés avec la file (docs/operations.md, « La file d'actions signée »).
+# export EREGION_ACTION_QUEUE=1
+# export EREGION_QUEUE_KEYS=console=ed25519:...,bot=ed25519:...

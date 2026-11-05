@@ -135,15 +135,45 @@ def test_a_signer_that_fails_never_stops_the_card(watch):
     assert "proposal" not in _card(_record(action="snapshot"))
 
 
-def test_a_card_seen_again_is_signed_again(watch):
+def test_a_card_seen_again_keeps_its_proposal_until_it_is_older_than_an_age(watch, monkeypatch):
+    """FS1b (§7): re-signed at each refresh, the proposal changed its digest under a request just
+    named for it (``proposal_mismatch``). Kept while it stands and is younger than
+    RESIGN_AFTER_S; past it, signed again — the age of an approval, read from its issued_at,
+    stays right."""
     cid = _record()
     first = _card(cid)["proposal"]
     assert _record() == cid                                  # the same card, seen again
+    assert _card(cid)["proposal"] == first
+    assert escalations.refresh(cid, "said again")
+    assert _card(cid)["proposal"] == first
+    monkeypatch.setattr(escalations, "RESIGN_AFTER_S", 0)
+    assert _record() == cid
     again = _card(cid)["proposal"]
     assert again["seq"] > first["seq"] and aq.digest(again) != aq.digest(first)
     assert aq.watch_refusal(again, "proposal", WATCH.public) == ""
     assert escalations.refresh(cid, "said again")
     assert _card(cid)["proposal"]["seq"] > again["seq"]
+
+
+def test_a_card_changed_since_its_proposal_is_signed_again_at_once(watch):
+    """The card seen again with another port (its action_params): the proposal no longer stands for
+    it — signed again, whatever its age."""
+    cid = escalations.record(signal_id="watch-rule-2", resource_id=VM, action="block_suspicious_ip",
+                             escalation_type="low_confidence", reason="held", action_params={"ip": IP, "port": 22})
+    first = _card(cid)["proposal"]
+    assert escalations.refresh(cid, "said again", action_params={"ip": IP, "port": 2222})
+    again = _card(cid)["proposal"]
+    assert again["port"] == 2222 and again["seq"] > first["seq"]
+
+
+def test_a_proposal_of_another_key_on_a_card_seen_again_is_signed_again(watch):
+    cid = _record()
+    store = escalations._STORE
+    lines = [json.loads(x) for x in store.read_text().splitlines()]
+    lines[0]["proposal"] = aq.sign_proposal(lines[0], STRANGER, datetime.now(timezone.utc))
+    store.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    _record()
+    assert _card(cid)["proposal"]["key"] == WATCH.fingerprint
 
 
 def test_a_card_written_before_fs1_gets_its_proposal_when_the_watch_sees_it_again():
@@ -196,7 +226,13 @@ def test_a_request_naming_another_proposal_is_refused(watch):
     stale = aq.Request(**{**req.__dict__, "proposal": "sha256:" + "ab" * 32})
     assert _refusal(card, stale) == "proposal_mismatch"
     cid = card["id"]
-    _record()                                                 # the card seen again: a new proposal
+    _record()                                                 # seen again, young: kept (FS1b)
+    assert aq.proposal_refusal(_card(cid), req, watch_public=WATCH.public) is None
+    escalations.RESIGN_AFTER_S, kept = 0, escalations.RESIGN_AFTER_S
+    try:
+        _record()                                             # past the age: a new proposal
+    finally:
+        escalations.RESIGN_AFTER_S = kept
     assert _refusal(_card(cid), req) == "proposal_mismatch"
 
 
@@ -287,13 +323,14 @@ def test_the_cards_proposed_are_those_the_console_approves_in_one_click():
     assert set(aq.VERB_OF_ACTION.values()) <= set(aq.VERBS)
 
 
-def test_nothing_reads_the_proposal_to_act_yet():
-    """FS1a: no behaviour change — the console's approval and the bot's buttons never read it."""
+def test_the_decision_never_reads_the_proposal():
+    """FS1a, FS1b: the proposal is read to act by the watch's queue only (glorfindel/queue_watch.py)
+    — behind EREGION_ACTION_QUEUE=1, which tests/unit/test_action_queue_watch.py holds; the
+    decision never reads it."""
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]
-    for rel in ("eregion_console/api.py", "glorfindel/bot.py", "glorfindel/agent.py"):
-        text = (root / rel).read_text()
-        assert "action_queue" not in text and '"proposal"' not in text, rel
+    text = (root / "glorfindel/agent.py").read_text()
+    assert "action_queue" not in text and '"proposal"' not in text
 
 
 def test_an_old_proposal_signed_long_ago_still_says_when(watch):

@@ -9,6 +9,7 @@ from pathlib import Path
 import discord
 from discord import app_commands
 from rich.console import Console
+from rich.markup import escape as _esc_markup
 
 from glorfindel import escalations as esc_module
 from glorfindel.chat_text import discord_code, discord_text
@@ -472,11 +473,45 @@ class _ExecuteButton(discord.ui.Button):
         )
 
         channel = interaction.channel
-        asyncio.create_task(_execute_and_report(self.esc, self.cli_args, channel, self._run,
+        user = interaction.user
+        asyncio.create_task(_execute_and_report(self.esc, self.cli_args, channel, lambda: self._run(user),
                                                 interaction.message, self.view))
 
-    def _run(self) -> tuple[int, str]:
+    def _run(self, user=None) -> tuple[int, str]:
+        # FS1b: behind EREGION_ACTION_QUEUE=1, the Revert is a request of the queue, signed by the
+        # bot's key — the watch judges it and runs it; without the flag, the CLI as before.
+        from eregion_core import action_queue
+        if action_queue.enabled() and self.cli_args[:1] == ["revert"]:
+            return _queue_reset(self.esc, user)
         return _run_cli(self.cli_args)
+
+
+def _queue_reset(esc: dict, user) -> tuple[int, str]:
+    """FS1b (docs/design/file-actions-signee.md §2.7): the Revert of a card ``verification_failed``
+    as a request of the queue — the verb ``reset``, bound to the card and to the proposal the watch
+    signed on it, the human named by Discord (``by``: their id and their name, said, never proved).
+    (0, what the receipt says) once ``done``; 1 otherwise — the card stays open."""
+    from eregion_core import action_queue as aq
+    card = _current(esc["id"]) or esc
+    proposal = card.get("proposal")
+    if not isinstance(proposal, dict):
+        return 1, f"refusé (proposal_missing) : {aq.REFUSALS['proposal_missing']}"
+    by = {"via": "discord", "user": str(getattr(user, "id", "") or ""),
+          "name": str(getattr(user, "display_name", "") or "")[:100]}
+    asked = aq.ask("bot", "reset", str(card.get("resource_id") or ""), by=by,
+                   card=(card["id"], aq.digest(proposal)))
+    if "receipt" not in asked:
+        return 1, f"file d'actions : {asked.get('error', '?')}"
+    r = asked["receipt"]
+    said = f"file d'actions ({asked['request'][:8]}) : {r['state']}"
+    if r.get("code"):
+        said += f" — {r['code']}"
+    if r.get("reason"):
+        said += f" : {r['reason']}"
+    result = r.get("result") or {}
+    if result.get("status"):
+        said += f"\nreset → {result['status']}"
+    return (0 if r["state"] == "done" else 1), said
 
 
 def _run_cli(cli_args: list[str]) -> tuple[int, str]:
@@ -1100,6 +1135,22 @@ class GlorfindelBot(discord.Client):
         return thread if isinstance(thread, discord.Thread) else None
 
 
+def _say_queue_key() -> None:
+    """FS1b: behind EREGION_ACTION_QUEUE=1 only, the bot's key of the action queue drawn at its start
+    (~/.eregion/bot/queue_ed25519), its fingerprint said — `make queue-keys` pins it at the watch."""
+    from eregion_core import action_queue, watch_key
+    if not action_queue.enabled():
+        return
+    try:
+        signer = action_queue.load_service_key("bot")
+    except watch_key.KeyUnavailable as exc:
+        _console.print(f"[red]File d'actions : la clé du bot est indisponible ({_esc_markup(str(exc))}) — "
+                       "son Revert n'est pas demandé[/red]")
+        return
+    _console.print(f"[dim]  → File d'actions : clé du bot {signer.fingerprint} (make queue-keys pour "
+                   "l'épingler chez la watch)[/dim]")
+
+
 def run() -> None:
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     channel_id_str = os.environ.get("DISCORD_CHANNEL_ID", "")
@@ -1126,5 +1177,6 @@ def run() -> None:
         _console.print(
             f"[yellow]⚠ {_ALLOWED_USERS_ENV} et {_ALLOWED_ROLES_ENV} vides : tous les boutons "
             "refusent (fermé par défaut). Les cartes se jugent dans la console (page Glorfindel, TO JUDGE).[/yellow]")
+    _say_queue_key()
     bot = GlorfindelBot(channel_id=int(channel_id_str), ping_role=ping_role, button_policy=policy)
     bot.run(token, log_handler=None)

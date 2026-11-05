@@ -127,3 +127,33 @@ glorfindel reset <resource_id> --yes     # reset complet
 # Vérification NSG directe si besoin
 az network nsg rule list -g rg-celebrimbor --nsg-name nsg-celebrimbor -o table
 ```
+
+## VM3 : trois paires de plus (#548)
+
+Trois techniques sur VM passent de `planned` à `implemented`, chacune une paire rouge (un test
+Atomic Red Team épinglé, `engine: atomic`) et bleue (une règle de détection livrée). Le rouge se joue
+depuis Orodruin sur une cible inscrite ; les tests choisis tournent sur Ubuntu sans dépendance réseau
+sortante. `engine_args` règle les arguments d'un test vendorisé sans modifier le fichier épinglé (le
+ping vers la boucle locale, le journal écrasé vers un chemin jetable que le cleanup supprime).
+
+| TTP | Atomic (guid) | Règle bleue | Télémétrie | Seuil |
+|---|---|---|---|---|
+| T1053.003 cron | Replace crontab (435057fb) | `t1053-003-cron-crontab-replace` | Syslog facilité **cron** | `crontab` écrit REPLACE/DELETE (pas LIST, pas CMD) |
+| T1059.004 shell | Create and Execute Bash Shell Script (7e7ac3ed) | `t1059-004-shell-from-world-writable` | Syslog **local6** (auditd) | un `execve` de shell (clé `shell_exec`) + un argument sous `/tmp`, `/dev/shm`, `/var/tmp` |
+| T1070.002 effacement de journaux | Overwrite Linux Log (d304b2dc) | `t1070-002-log-tamper` | Syslog **local6** (auditd) | une écriture sous `/var/log` (clé `log_tamper`) par un comm hors des démons de journalisation |
+
+T1070.002 est **destructive** : banc seulement, refusée en production par l'inscription
+(`safe_target: sandbox_disposable`, catalogue). Les trois règles sont testées sur des lignes réalistes
+et sur le bruit bénin connu (cron d'apt, logrotate, unattended-upgrades) qui ne doit jamais déclencher.
+
+**Télémétrie à activer pour la mesure réelle** (désactivée par défaut, « gestes de Jonathan ») :
+- cron (T1053.003) : la facilité `cron` dans la DCR — `cron_logs_enabled` (`infra/terraform/monitoring.tf`) ;
+- local6 (T1059.004, T1070.002) : auditd (`auditd_enabled`, AUD1) + les règles de VM3
+  (`infra/terraform/scripts/vm3_auditd.sh`, `docs/operations.md` « Les règles auditd de VM3 »).
+
+La règle shell est distincte d'`auditd-sensitive-root-command` (elle aussi T1059.004) : celle-ci ne lit
+que les commandes d'une connexion **humaine** en root (auid ≥ 1000), qu'un run par Run Command (auid non
+posé) ne déclenche pas. Le poller réserve la lecture « racine humaine » d'AUD1 (settle, fold, fenêtre) à
+cette seule règle ; la règle shell passe à côté. **Limite** : un `echo 0>` d'un shell sur un journal
+EXISTANT (openat O_TRUNC) n'est pas vu par la surveillance de répertoire — seule une nouvelle entrée
+l'est (ce que fait l'atomic sur son chemin jetable).

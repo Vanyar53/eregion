@@ -2904,6 +2904,27 @@ no/' /etc/audit/plugins.d/syslog.conf`, `sudo augenrules --load`, `sudo service 
 `sudo apt-get purge -y auditd audispd-plugins`). Les lignes déjà ingérées restent jusqu'à la fin de la
 rétention (30 jours).
 
+### Les règles auditd de VM3 (#548)
+
+Deux des trois paires de VM3 lisent auditd : T1059.004 (un shell depuis `/tmp`, `/dev/shm`, `/var/tmp`)
+et T1070.002 (une altération d'un journal sous `/var/log`). Leurs règles auditd ne sont PAS dans
+`scripts/auditd.sh` : Azure n'autorise qu'une extension CustomScript par VM, et AUD1 la tient ; et le
+volume de `shell_exec` (chaque `execve` de `dash`/`bash`) noierait le signal humain d'AUD1 s'il passait
+avec `auditd_enabled`. Elles sont donc dans `infra/terraform/scripts/vm3_auditd.sh` — un geste manuel,
+tracé par la variable `vm3_auditd_enabled` (désactivée, non câblée).
+
+Pour mesurer ces deux paires sur le banc, avec Jonathan :
+1. `auditd_enabled = true` dans `terraform.tfvars`, puis `make celebrimbor-auditd-up YES=1` (pose
+   auditd, le greffon audisp-syslog vers `local6`, la collecte DCR — « auditd au banc (AUD1) »).
+2. Sur chaque VM du banc (`gondolin`, `bree`) : `sudo bash infra/terraform/scripts/vm3_auditd.sh`
+   (pose `/etc/audit/rules.d/60-eregion-vm3.rules` : la surveillance `-w /var/log -p wa` et les
+   `execve` de shell, clés `log_tamper` et `shell_exec`, puis `augenrules --load`).
+
+Le défaire : `sudo rm /etc/audit/rules.d/60-eregion-vm3.rules`, `sudo augenrules --load`. Les colonnes
+et la forme des lignes restent des HYPOTHÈSES (A0, AUD1), à mesurer. Limite connue : un `echo 0>` sur un
+journal EXISTANT (troncature par un redirect de shell) n'est pas vu par la surveillance de répertoire —
+seule la création d'une nouvelle entrée l'est (ce que fait l'atomic sur son chemin jetable).
+
 ---
 
 ## Coûts réels (West Europe)

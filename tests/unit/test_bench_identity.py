@@ -82,7 +82,12 @@ def test_the_module_locks_azuread():
     lock = (TF / ".terraform.lock.hcl").read_text(encoding="utf-8")
     assert 'provider "registry.terraform.io/hashicorp/azuread"' in lock
     main = (TF / "main.tf").read_text(encoding="utf-8")
-    assert 'source  = "hashicorp/azuread"' in main and 'provider "azuread" {}' in main
+    assert 'source  = "hashicorp/azuread"' in main
+    # Bound to the bench subscription's tenant: an az login on another tenant writes nothing there
+    # (relecture of IDI1, M3943) — read without a count, so the plan off changes nothing.
+    assert 'provider "azuread" {\n  tenant_id = data.azurerm_subscription.bench.tenant_id\n}' in main
+    assert 'data "azurerm_subscription" "bench" {}' in main
+    assert main.count('provider "azuread"') == 1
     tftest = (TF / "tests" / "entra_identity.tftest.hcl").read_text(encoding="utf-8")
     for run in ("off_nothing_in_the_tenant_the_group_as_always", "on_both_keys_one_per_plane"):
         assert f'run "{run}"' in tftest, run

@@ -365,19 +365,28 @@ class _GraphCredential:
         return MagicMock(token=self.token)
 
 
+DECLARED = {"EREGION_TENANT_ID": "00000000-0000-0000-0000-0000000000f0"}
+UNDECLARED: dict = {}
+
+
+@pytest.mark.parametrize("env", [DECLARED, UNDECLARED])
+def test_no_graph_right_holds_declared_or_not(env):
+    """IDI1: graph_read_enabled off, the token carries no role — armed, either way."""
+    cred = _GraphCredential(_graph_token())
+    assert orodruin.read_graph(credential=cred, env=env) == []
+    assert cred.scopes == ["https://graph.microsoft.com/.default"]
+
+
 @pytest.mark.parametrize("claims", [
-    {},                                                        # graph_read_enabled off: no role
-    {"roles": ["Application.Read.All"]},                       # on: the guard's reads
+    {"roles": ["Application.Read.All"]},
     {"roles": ["Application.Read.All", "RoleManagement.Read.Directory"]},
     {"roles": ["RoleManagement.Read.Directory", "Application.Read.All"],
      "wids": ["0997a1d0-0d1d-4acb-b408-d5ca73121e90"]},
 ])
-def test_the_graph_read_alone_holds(claims):
-    """IDI1: no Graph right, or the identity guard's reads alone — and the token is the host's own,
-    asked for Graph (no Graph call)."""
-    cred = _GraphCredential(_graph_token(**claims))
-    assert orodruin.read_graph(credential=cred) == []
-    assert cred.scopes == ["https://graph.microsoft.com/.default"]
+def test_declared_the_guard_s_graph_reads_alone_hold(claims):
+    """Declared (orodruin.env names the tenant), the identity guard's reads alone — and the token
+    is the host's own, asked for Graph (no Graph call)."""
+    assert orodruin.read_graph(credential=_GraphCredential(_graph_token(**claims)), env=DECLARED) == []
 
 
 @pytest.mark.parametrize("claims, code", [
@@ -392,21 +401,62 @@ def test_the_graph_read_alone_holds(claims):
     ({"scp": "Application.Read.All"}, "graph_unlisted_right"),         # a user's token
     ({"roles": "Application.Read.All"}, "graph_unlisted_right"),       # not a list
 ])
-def test_any_other_graph_right_makes_it_passive(claims, code):
-    """IDI1: one more Graph right — a write, a wider read, a directory role, a user's token — and
-    the contract falls, as an ARM assignment outside the bench makes it fall (M3860, M3861)."""
-    missing = orodruin.read_graph(credential=_GraphCredential(_graph_token(**claims)))
+def test_declared_any_other_graph_right_makes_it_passive(claims, code):
+    """IDI1, declared: one more Graph right — a write, a wider read, a directory role, a user's
+    token — and the contract falls, as an ARM assignment outside the bench makes it fall (M3860,
+    M3861, M3906)."""
+    missing = orodruin.read_graph(credential=_GraphCredential(_graph_token(**claims)), env=DECLARED)
     assert [m["code"] for m in missing] == [code]
     verdict = orodruin.check(_readers(graph=lambda: missing))
     assert verdict.verdict == orodruin.PASSIVE
 
 
-def test_a_graph_token_that_cannot_be_had_is_passive():
+def test_declared_a_graph_token_that_cannot_be_had_is_passive():
     class NoToken:
         def get_token(self, scope):
             raise RuntimeError("IMDS unreachable")
-    verdict = orodruin.check(_readers(graph=lambda: orodruin.read_graph(credential=NoToken())))
+    verdict = orodruin.check(_readers(graph=lambda: orodruin.read_graph(credential=NoToken(), env=DECLARED)))
     assert [m["code"] for m in verdict.missing] == ["graph_unreadable"]
+
+
+@pytest.mark.parametrize("roles", [["Application.Read.All"], ["Application.ReadWrite.All"], ["Mail.Send"]])
+def test_undeclared_any_graph_role_is_a_right_nobody_declared(roles):
+    """Undeclared (every Orodruin before IDI1's gestures): an app role in the token, even the
+    guard's own read, is passive — graph_undeclared_right (M3940)."""
+    missing = orodruin.read_graph(credential=_GraphCredential(_graph_token(roles=roles)), env=UNDECLARED)
+    assert "graph_undeclared_right" in [m["code"] for m in missing]
+    assert not orodruin.check(_readers(graph=lambda: missing)).armed
+
+
+def test_undeclared_a_graph_directory_role_is_said_not_passive(capsys, monkeypatch):
+    """The wids hypothesis is not measured yet: undeclared, a value outside APP_DEFAULT_WIDS is
+    said by orodruin-check, with its value, and the contract stays armed (M3941)."""
+    wid = "00000000-0000-0000-0000-0000000000e7"
+    result = orodruin.read_graph(credential=_GraphCredential(_graph_token(wids=[wid])), env=UNDECLARED)
+    verdict = orodruin.check(_readers(graph=lambda: result))
+    assert verdict.armed and verdict.missing == []
+    assert [n["code"] for n in verdict.notes] == ["graph_directory_role"] and wid in verdict.notes[0]["detail"]
+    monkeypatch.setattr(orodruin, "check", lambda: verdict)
+    monkeypatch.setattr(orodruin, "publish_contract", lambda v: True)
+    assert orodruin.main() == 0
+    out = capsys.readouterr().out
+    assert "orodruin: armed" in out and f"⚠ graph_directory_role: directory role {wid}" in out
+    # Never published: the console sees the verdict and its codes, not what is only said.
+    assert orodruin.contract_doc(verdict)["codes"] == []
+
+
+def test_undeclared_a_graph_token_that_cannot_be_had_is_said_not_passive():
+    class NoToken:
+        def get_token(self, scope):
+            raise RuntimeError("IMDS unreachable")
+    verdict = orodruin.check(_readers(graph=lambda: orodruin.read_graph(credential=NoToken(), env=UNDECLARED)))
+    assert verdict.armed and [n["code"] for n in verdict.notes] == ["graph_unreadable"]
+
+
+def test_the_graph_read_is_declared_by_the_tenant_in_orodruin_env():
+    assert orodruin.graph_declared(DECLARED) and not orodruin.graph_declared({"EREGION_TENANT_ID": "  "})
+    assert not orodruin.graph_declared({})
+    assert orodruin.GRAPH_DECLARED_ENV == "EREGION_TENANT_ID"
 
 
 # ── network and cap ────────────────────────────────────────────────────────────

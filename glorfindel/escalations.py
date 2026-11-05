@@ -46,6 +46,34 @@ def _after_unlock(call, arg) -> None:
         pending_calls.append((call, arg))
 
 
+# FS1a (#551, docs/design/file-actions-signee.md §2.4): who signs the proposals — set by the watch
+# alone (glorfindel/cli.py, `watch`: its key, SEC19). A card the watch writes that holds an action
+# (`action_queue.proposable`) carries the proposal it signs, signed again when the card is seen
+# again; a card the console, the bot or the CLI writes carries none. Nobody reads it yet to act
+# (FS1b). A signer unavailable, or a signature that fails, never stops a card being written.
+_PROPOSER = None
+
+
+def sign_proposals(signer_of) -> None:
+    """The watch's: `signer_of()` gives its key's Signer, or None while it is unavailable."""
+    global _PROPOSER
+    _PROPOSER = signer_of
+
+
+def _propose(e: dict) -> None:
+    if _PROPOSER is None:
+        return
+    try:
+        from eregion_core import action_queue
+        if not action_queue.proposable(e):
+            return
+        signer = _PROPOSER()
+        if signer is not None:
+            e["proposal"] = action_queue.sign_proposal(e, signer, datetime.now(timezone.utc))
+    except Exception:       # the card first: a proposal is never worth a card lost
+        pass
+
+
 def _write_lines(lines: list[str]) -> None:
     """The whole store, through a temporary file: owner-only (0600), never half-written."""
     from glorfindel.response.state import _atomic_write_text
@@ -242,6 +270,7 @@ def record(
                     if explanation:
                         e["explanation"] = explanation
                     e["updated_at"] = now
+                _propose(e)     # FS1a: signed again, seen again
                 lines[i] = json.dumps(e, default=str)
                 _write_lines(lines)
                 return e["id"]
@@ -275,9 +304,11 @@ def record(
         "resolved_at": None,
     }
     if identity_plan:
-        # IR1a: the plan of an identity card, and the thread of its checks (« Verify »).
+        # IR1a: the plan of an identity card, and the thread of its checks (« Verify »). Never a
+        # proposal of FS1a: an identity card holds no action (`action_queue.proposed_verbs`).
         esc["identity_plan"] = identity_plan
         esc["identity_checks"] = []
+    _propose(esc)       # FS1a: the watch's proposal, when the card holds an action
     # Rewritten whole, as every write of the store: an append seen half-done by a reader
     # made its last line unreadable (SEC3, V-10). The cards it replaces closed in it (L1A).
     _write_lines([ln for ln in lines if ln.strip()] + [json.dumps(esc, default=str)])
@@ -341,6 +372,7 @@ def refresh(escalation_id: str, reason: str, **fields) -> bool:
             now = datetime.now(timezone.utc).isoformat()
             e.setdefault("first_reason", e.get("reason", ""))
             e.update(fields, reason=reason, updated_at=now, last_seen=now)
+            _propose(e)     # FS1a: signed again, seen again
             lines[i], done = json.dumps(e, default=str), True
     if done:
         _write_lines(lines)

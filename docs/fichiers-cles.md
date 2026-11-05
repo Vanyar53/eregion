@@ -25,6 +25,14 @@ eregion_core/channel_reader.py  → SEC8, SEC16 : le seul lecteur de runs/, pour
                                    travers un lien, jamais bloquant, une lecture bornée ; et l'écriture tenue de
                                    même (append_line : une ligne entière ; write_file : un fichier remplacé, un lien
                                    jamais suivi). Jusqu'à SEC16 : glorfindel/channel_reader.py.
+eregion_core/action_queue.py    → FS1a (#551) : la file d'actions signée, son format et sa vérification — la demande
+                                   d'un service (console, bot) signée par sa clé sous eregion.action-request/1, la
+                                   proposition que la watch signe sur ses cartes sous eregion.action-queue/1, les verbes
+                                   (liste fermée, ceux de chaque service), les refus (liste fermée, REFUSALS) ;
+                                   verify_request (pur : forme, signature, clé épinglée EREGION_QUEUE_KEYS, service,
+                                   fraîcheur, nonce, verbe, débit), proposal_refusal ; la clé d'un service tirée par le
+                                   code de watch_key (~/.eregion/console|bot/queue_ed25519). Personne ne la lit encore
+                                   pour agir (FS1b) — docs/design/file-actions-signee.md
 eregion_core/runs_layout.py     → SEC18 (N-05) : runs/ un répertoire par écrivain — glorfindel/, console/, annatar/,
                                    gothmog/, orodruin/ ; ce que chacun tient (belongs), où un lecteur trouve les
                                    campagnes et les rapports (campaign_dirs, find_campaign, run_reports), où l'analyse

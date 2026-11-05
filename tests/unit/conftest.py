@@ -86,6 +86,12 @@ def isolated_watch_key(tmp_path, monkeypatch):
     monkeypatch.setattr(watch_key, "KEY_DIR", tmp_path / "watch-key")
     monkeypatch.setattr(watch_key, "SEEN_FILE", tmp_path / "watch_seen.json")
     monkeypatch.delenv(watch_key.KEY_ENV, raising=False)
+    # FS1a: the services' keys of the action queue and the watch's register of nonces in tmp, never
+    # ~/.eregion/console, ~/.eregion/bot nor ~/.eregion/watch-queue; no key pinned from the operator's.
+    import eregion_core.action_queue as action_queue
+    monkeypatch.setattr(action_queue, "KEY_ROOT", tmp_path / "service-keys")
+    monkeypatch.setattr(action_queue, "QUEUE_DIR", tmp_path / "watch-queue")
+    monkeypatch.delenv(action_queue.KEYS_ENV, raising=False)
 
 
 @pytest.fixture
@@ -121,6 +127,8 @@ def isolated_escalations_store(tmp_path, monkeypatch):
         return
     import glorfindel.escalations as esc_module
     monkeypatch.setattr(esc_module, "_STORE", tmp_path / "escalations.jsonl")
+    # FS1a: the signer of the proposals the watch command installs never outlives its test.
+    monkeypatch.setattr(esc_module, "_PROPOSER", None)
 
 
 @pytest.fixture(autouse=True)

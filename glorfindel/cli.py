@@ -902,6 +902,12 @@ def watch(runs_dir: str, dry_run: bool, model: str, memory_path: str | None, int
                               f"les refusent (SEC19) :[/red] {why}")
         return signer
 
+    # FS1a (#551): each card this watch writes that holds an action carries the proposal it signs
+    # with this key (eregion_core/action_queue.py, under eregion.action-queue/1) — nobody reads it
+    # yet to act (FS1b); the console and the bot keep their direct call.
+    from glorfindel import escalations as _escalations
+    _escalations.sign_proposals(_signer)
+
     def _write_heartbeat() -> None:
         at = datetime.now(timezone.utc)
         _write_watch_heartbeat(_HEARTBEAT, at)

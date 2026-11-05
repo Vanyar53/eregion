@@ -32,7 +32,9 @@ Contrat (garanties, vérifications, kill, mutants) :
   donne à l'identité d'Orodruin les rôles d'application `Application.Read.All` et
   `RoleManagement.Read.Directory` de Graph, et rien d'autre — la garde d'une identité d'Entra ID
   (`eregion_core/inscription.py`) lit l'application, son principal, ses permissions et ses rôles
-  d'annuaire (une identité privilégiée n'est jamais inscrite). Le contrat relit son jeton Graph : un autre droit, ou un rôle d'annuaire, et il est
+  d'annuaire (une identité privilégiée n'est jamais inscrite). Le contrat n'est strict sur Graph qu'une
+  fois le droit **déclaré** — `EREGION_TENANT_ID` dans `orodruin.env` ; avant, un rôle Graph le rend
+  passif, une hypothèse non mesurée (`wids`) est seulement dite. Le contrat relit son jeton Graph : un autre droit, ou un rôle d'annuaire, et il est
   passif. L'apply demande un `az login` Administrateur des rôles privilégiés (ou général). Trois
   sorties pour `orodruin.env` : `tenant_id`, `operator_object_id`, `protected_identities` (sans
   l'opérateur, la garde refuse toute identité). Les gestes, dans l'ordre : `docs/operations.md`,

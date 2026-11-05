@@ -6,7 +6,15 @@
 #   terraform -chdir=infra/terraform test
 # tests/unit/test_bench_identity.py tient le même contrat en lisant les fichiers.
 
-mock_provider "azurerm" {}
+mock_provider "azurerm" {
+  # Le tenant de l'abonnement, auquel azuread est lié (main.tf).
+  mock_data "azurerm_subscription" {
+    defaults = {
+      id        = "/subscriptions/00000000-0000-0000-0000-000000000000"
+      tenant_id = "00000000-0000-0000-0000-0000000000f0"
+    }
+  }
+}
 mock_provider "azapi" {}
 mock_provider "null" {}
 mock_provider "azuread" {}
@@ -45,6 +53,14 @@ run "off_nothing_in_the_tenant_the_group_as_always" {
   assert {
     condition     = azurerm_resource_group.celebrimbor.tags["eregion-target"] == "celebrimbor" && azurerm_resource_group.celebrimbor.tags["eregion-zone"] == "bench"
     error_message = "le groupe du banc perd son inscription"
+  }
+  assert {
+    condition     = azurerm_resource_group.celebrimbor.tags == tomap(local.common_tags)
+    error_message = "désactivée, l'identité change quand même les tags du groupe du banc"
+  }
+  assert {
+    condition     = data.azurerm_subscription.bench.tenant_id == "00000000-0000-0000-0000-0000000000f0"
+    error_message = "le tenant d'azuread n'est pas lu de l'abonnement du banc"
   }
 }
 

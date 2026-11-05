@@ -39,6 +39,12 @@ class Scenario:
     raw: dict
     engine: str = DEFAULT_ENGINE   # local-script (today's scripts) or atomic (R1)
     engine_ref: str | None = None  # the engine's id for this experiment (atomic test ref)
+    # VM3 (#548): overrides for the engine's input arguments. For `atomic`, they fill the test's
+    # `input_arguments` over its upstream defaults (annatar/engines/atomic.py), so a vendored
+    # test runs on an enrolled target without an outbound dependency (a ping to a loopback
+    # address) and restores its initial state (a log overwrite confined to a disposable path).
+    # The vendored file is never edited — only the values the catalog's params allow.
+    engine_args: dict = field(default_factory=dict)
 
 
 class ScenarioParser:
@@ -64,6 +70,7 @@ class ScenarioParser:
             raw=data,
             engine=data.get("engine", DEFAULT_ENGINE),
             engine_ref=data.get("engine_ref"),
+            engine_args=data.get("engine_args") or {},
         )
 
     def validate(self, path: str) -> ValidationResult:

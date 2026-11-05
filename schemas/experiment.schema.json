@@ -19,6 +19,11 @@
       "type": "string",
       "description": "The engine's identifier for this experiment — a Stratus technique id, a Chaos Studio experiment name. Unused by local-script (the steps carry the scripts)."
     },
+    "engine_args": {
+      "type": "object",
+      "description": "VM3 (#548): overrides for the engine's input arguments. For `atomic`, they fill a vendored test's input_arguments over its upstream defaults, so the test runs on an enrolled target with no outbound dependency and restores its initial state. The vendored file is never edited.",
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
     "name": { "type": "string" },
     "description": { "type": "string" },
     "version": { "type": "string" },

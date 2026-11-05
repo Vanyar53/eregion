@@ -162,7 +162,9 @@ class Engine:
             from annatar.engines.atomic import AtomicError, resolve_ref
 
             try:
-                resolved = resolve_ref(scenario.engine_ref)
+                resolved = resolve_ref(
+                    scenario.engine_ref, getattr(scenario, "engine_args", None) or None
+                )
             except AtomicError as e:
                 console.print(f"[red]Atomic unresolved:[/red] {e}")
                 return RunOutcome(run_id, "unknown", error=f"atomic: {e}", refused=True)
@@ -637,7 +639,9 @@ class Engine:
             from annatar.engines.atomic import AtomicError, resolve_ref
 
             try:
-                resolved = resolve_ref(scenario.engine_ref)
+                resolved = resolve_ref(
+                    scenario.engine_ref, getattr(scenario, "engine_args", None) or None
+                )
             except AtomicError as e:
                 console.print(f"  [red]atomic unresolved:[/red] {e}")
                 return

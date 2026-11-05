@@ -55,7 +55,8 @@ The trigger is Jonathan publishing a release (sessions prepare drafts). A pass:
   6. the image running now tagged by its reference (refused when there is none: no switch
      without a way back); the switch (deploy.sh --activate), then the health for a few
      minutes: three containers running, never restarted, built from the tag; the watch's
-     heartbeat written after the switch; the console answering; no « Read-only file system » in
+     heartbeat rewritten after the switch (another file than the one there once the switch has
+     returned — never two readings of the wall clock, H1d); the console answering; no « Read-only file system » in
      their journals since the switch that the release before did not show (V-34); and, once they are, every
      rule the release loads run once on its backend, read-only, in the watch's container
      (`glorfindel rules check --live`, H2) — the same check run in what ran, before the
@@ -989,8 +990,20 @@ def _with_unread(proof: dict, unread: set) -> dict:
     return out
 
 
-def health_once(ref: str, since: float) -> str:
-    """'' when healthy, else why not."""
+def beat() -> tuple[int, int] | None:
+    """The watch's heartbeat as a file, never as a time (H1d): (its inode, its mtime in ns), None
+    when there is none. The watch rewrites it by a rename (SEC17): each beat is a new file, made
+    while the one before is still there — another inode, whatever the wall clock says."""
+    try:
+        st = HEARTBEAT.stat()
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns)
+
+
+def health_once(ref: str, seen: tuple[int, int] | None) -> str:
+    """'' when healthy, else why not. `seen`: the beat as it was once the switch had returned
+    (`beat()`) — the watch has beaten since when the beat is another one."""
     for name in CONTAINERS:
         res = sh("docker", "inspect", "-f", "{{.State.Status}} {{.RestartCount}} " + VERSION, name, check=False)
         parts = res.stdout.split()
@@ -1000,11 +1013,11 @@ def health_once(ref: str, since: float) -> str:
             return f"{name} : {parts[0]}, {parts[1]} redémarrage(s)"
         if parts[2] != ref:
             return f"{name} tourne sur {parts[2]}, pas {ref}"
-    try:
-        if HEARTBEAT.stat().st_mtime < since:
-            return "la watch n'a pas battu depuis la bascule"
-    except OSError:
+    now = beat()
+    if now is None:
         return "aucun battement de la watch"
+    if now == seen:
+        return "la watch n'a pas battu depuis la bascule"
     token = env_value(REPO / ".env", "EREGION_CONSOLE_TOKEN") or env_value(REPO / ".env", "GLORFINDEL_WARROOM_TOKEN")
     req = urllib.request.Request(f"{CONSOLE}/api/sections",
                                  headers={"Authorization": f"Bearer {token}"} if token else {})
@@ -1175,8 +1188,13 @@ def reference_check() -> dict:
             "read_only": read_only}
 
 
-def health(ref: str, since: float, rules: bool = False, base: dict | None = None) -> tuple[str, dict]:
+def health(ref: str, since: float, seen: tuple[int, int] | None, rules: bool = False,
+           base: dict | None = None) -> tuple[str, dict]:
     """Watched for HEALTH_S: ('', proof) when healthy at the end, else (the last reason, proof).
+    `since` (a Unix time, before the switch) bounds the journals read; `seen`, the watch's beat
+    taken once the switch has returned (the watch before it stopped, and gone: H1d) — the health
+    asks for another one. Taken before the switch, it would let the old watch's last beat, made
+    while the switch stops it and left by a SIGKILL, stand for the new one's.
     With `rules` (the release switched to, not the one gone back to): once the containers are
     healthy, every rule run once (H2) with what is left of the health (healthy only at its last
     look: one second, then said unproven) and read against `base` — a regression ends the
@@ -1186,7 +1204,7 @@ def health(ref: str, since: float, rules: bool = False, base: dict | None = None
     known_ro = set((base or {}).get("read_only") or [])
     unread: set = set()
     while True:
-        why = health_once(ref, since)
+        why = health_once(ref, seen)
         if rules and not why:
             # V-34 (SEC7): a write the read-only root refuses, since the switch, in a container whose
             # journal said nothing of it before — a regression, H0 goes back. The way back
@@ -1320,7 +1338,9 @@ def resume(state: dict, tag: str, cut: dict) -> int:
             "reprend au prochain passage", color=nd.BLUE, url=url)
         return 0
     # What ran was checked before the switch, and written down with it: a cut pass reads it back.
-    why, proof = health(tag, float(cut.get("at") or 0), rules=True, base=cut.get("base"))
+    # The watch runs the release now (the one before is gone): its beat now, and another one asked.
+    seen = beat()
+    why, proof = health(tag, float(cut.get("at") or 0), seen, rules=True, base=cut.get("base"))
     code = conclude(state, tag, dep_ref, why, url, "passage repris après une interruption ; santé verte", proof)
     if cut.get("asked") and code == 0:
         left_behind(state, dep_ref, tag)
@@ -1474,7 +1494,8 @@ def run_pass(check: bool = False, back_to: str = "") -> int:
     proof: dict = {}
     try:
         activate(tag)
-        why, proof = health(tag, since, rules=True, base=base)
+        seen = beat()               # the switch returned: the watch before has stopped (H1d)
+        why, proof = health(tag, since, seen, rules=True, base=base)
     except Unhealthy as e:
         why = str(e)
     code = conclude(state, tag, dep_ref, why, url,
@@ -1503,7 +1524,8 @@ def rollback(ref: str) -> str:
         activate(ref)
     except Unhealthy as e:
         return str(e)
-    return health(ref, since)[0]
+    seen = beat()                   # the release left has stopped: its last beat is no health (H1d)
+    return health(ref, since, seen)[0]
 
 
 def locked(fn):

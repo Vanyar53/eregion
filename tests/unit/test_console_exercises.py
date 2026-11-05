@@ -349,19 +349,22 @@ def test_channel_unreadable_is_said_never_raised(runs, client, monkeypatch):
     assert "403" in rc["error"] and "alive" not in rc
 
 
-def test_delivered_detections(runs, client, monkeypatch):
+def test_delivered_detections(runs, client, monkeypatch, signed_channel):
+    """Each detection judged as the injectors judge it (CON-S; the cases in
+    tests/unit/test_console_signed_detections.py)."""
     from eregion_core import watch_channel
     assert client.get("/api/channel/detections/run-a").json() == \
         {"configured": False, "detections": []}
     monkeypatch.setenv("EREGION_WATCH_CHANNEL", "https://acct.blob.core.windows.net/watch")
-    monkeypatch.setattr(watch_channel, "read_detections",
-                        lambda rid: [{"signal_id": "s1", "exercise_run": rid}])
-    assert client.get("/api/channel/detections/run-a").json()["detections"] == \
-        [{"signal_id": "s1", "exercise_run": "run-a"}]
+    named = [signed_channel.sign({"signal_id": "s1"}, "run-a")]
+    monkeypatch.setattr(watch_channel, "read_named", lambda rid: named)
+    got = client.get("/api/channel/detections/run-a").json()["detections"]
+    assert [(d["signal"], d["state"], d["detection"]["exercise_run"]) for d in got] == \
+        [("s1", "signed", "run-a")]
 
     def _unsafe(rid):
         raise ValueError(rid)
-    monkeypatch.setattr(watch_channel, "read_detections", _unsafe)
+    monkeypatch.setattr(watch_channel, "read_named", _unsafe)
     assert "plain name" in client.get("/api/channel/detections/x..y").json()["error"]
 
 

@@ -88,7 +88,15 @@ La réponse arrive par `SendMessage`, plus tard. N'attends pas sans rien faire :
        `scripts/mutants/<lot>.py`. Un id pris deux fois est une faute qui nomme chaque fichier ; un
        fichier de lot sans mutant, ou dont `TESTS` nomme le mutant d'un autre, aussi. Un fichier de lot
        neuf : `git add -N` d'abord. Ce qui suivrait la garde du harnais n'est jamais mesuré (54 mutants
-       l'étaient le 02/11, MCG) ; `tests/unit/test_mutant_anchors.py` échoue alors.
+       l'étaient le 02/11, MCG) ; `tests/unit/test_mutant_anchors.py` échoue alors. Une raison
+       illisible aussi est une faute (CI6e).
+   - **Tes mutants, tous attrapés.** Depuis CI6e (#553), la porte de release et la mesure du lundi sont
+     rouges dès qu'un mutant compté survit à un tour sans raison que le harnais lit. Une raison commence
+     par `EQUIVALENT:`, `MULTI-HOST:` ou `TIMING:`, et doit être vraie, vérifiable à la lecture du code ;
+     jamais une raison pour faire passer la porte. Une raison `TIMING:` nomme le test de course qui
+     l'attrape par moments (`test_…`, `mutant_anchors.py` l'exige) ; un `TIMING` attrapé à aucun tour
+     d'un run est dit à part par le total, sans rouge. Un survivant se tue d'abord par un test. Un run
+     `--only` sur tes mutants sort en 1 s'il en reste un.
    - **La plage de mutants** se demande toujours à l'Orchestre : deux fichiers de lot ne se gênent plus
      dans le texte, mais un même id pris deux fois reste une faute, vue à la fusion seulement.
 5. **Pousser et ouvrir la PR.**

@@ -2432,8 +2432,12 @@ mesurait en entier le commit publié.
   du lundi (1 000 séquences) annulée à sa borne de 180 min le 02/11, avant son premier mutant. Chaque
   tranche (`mutation_check.py --shard K/N --json …`) prend des cibles entières, coupées en morceaux
   selon leur poids mesuré (CI6d, ci-dessous) ; puis `mutants-total` (`--total`) vérifie que chaque tranche est là, une fois, au
-  même budget, que chaque mutant de l'arbre a été mesuré une fois exactement, et tient le compte au
-  `min_caught` de `mutants.yml` (14). Le jeu de contrôle est dit, jamais tenu à un compte.
+  même budget, que chaque mutant de l'arbre a été mesuré une fois exactement, puis qu'aucun mutant
+  compté n'a survécu à un tour hors de la liste des survivants connus (CI6e, #553 ; avant,
+  `min_caught`, 14 sur 2 850). Un survivant inconnu y est rouge, dit avec son identifiant et sa
+  description ; un survivant connu attrapé est dit, pour qu'on retire sa raison
+  (`docs/design/preuves.md`, « Rouge dès qu'un mutant survit hors de la liste connue »). Le jeu de
+  contrôle est dit, jamais tenu.
   **Le modèle de ChromaDB, une fois** (CI6b, #538). Les runs du code non muté d'une tranche partent en
   même temps. Au premier run réel de la porte (PR #537, 05/11), sur un runner neuf, chacun téléchargeait
   le modèle d'embedding de ChromaDB (environ 80 Mo) dans le même `~/.cache/chroma`, et lisait le fichier
@@ -2646,15 +2650,16 @@ estimée : 90 min pour une tranche, 75 pour les invariants.
 
 **La mesure du lundi passe aux tranches** (CI6d). `mutants.yml` tourne comme la porte : 14 tranches des
 mutants, 2 du jeu de contrôle, découpées sur les mêmes durées, puis leur total (`--total`, au budget du
-dispatch, 1 000 séquences et deux tours par défaut, tenu à `min_caught`). Il part même si une tranche a
+dispatch, 1 000 séquences et deux tours par défaut, tenu à la liste connue comme la porte). Il part même si une tranche a
 échoué, le run annulé à part : une tranche manquante y est rouge. 17 jobs, sous les 20 de GitHub ; à
 1 000 séquences, les machines d'invariants prennent deux fois plus : 150 min de borne par tranche. Ses
 actions sont celles de la porte, épinglées par commit. Les entrées du dispatch passent par
 l'environnement, jamais dans le texte du script (SEC6).
 
 **Si elle est rouge.**
-- **Un vrai rouge** (un invariant, un mutant survivant sous le seuil, un test) : la release attend. On le
-  corrige par un lot, puis la PR de version se refait sur `main`.
+- **Un vrai rouge** (un invariant, un mutant qui survit hors de la liste connue, un test) : la release
+  attend. On le corrige par un lot, qui tue le mutant par un test ou écrit sa raison si elle est vraie
+  (`EQUIVALENT`, `MULTI-HOST`, `TIMING`), puis la PR de version se refait sur `main`.
 - **Une panne de GitHub sur un job qui bloque** (un job annulé à sa borne, un runner Linux jamais pris) :
   « Re-run failed jobs » ne relance que les jobs rouges, pas la batterie entière. C'est Jonathan qui le
   fait : l'App n'a qu'*Actions* en lecture.

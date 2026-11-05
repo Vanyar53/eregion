@@ -182,15 +182,16 @@
           }
         },
         "revert": {
-          "description": "VM3 (#548): the scenario's own return after an atomic's cleanup — the files the upstream test leaves in a temporary directory, removed (annatar/engines/atomic.py, revert_commands). The vendored file is never edited. A scenario's revert other than its entry's makes the run unknown, so destructive (SEC5, V-19).",
+          "description": "VM3 (#548): the scenario's own return after an atomic's cleanup — the files the upstream test leaves in a temporary directory, removed (annatar/engines/atomic.py, revert_commands), each step only once the probe it names (requires_probe, VM3b) holds again after the cleanup. The vendored file is never edited. A scenario's revert other than its entry's makes the run unknown, so destructive (SEC5, V-19).",
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["name", "action", "paths"],
+            "required": ["name", "action", "paths", "requires_probe"],
             "additionalProperties": false,
             "properties": {
               "name": { "type": "string", "minLength": 1 },
               "action": { "type": "string", "enum": ["remove_files"] },
+              "requires_probe": { "type": "string", "minLength": 1, "description": "VM3b: the steady_state probe that must hold again after the cleanup before this step runs — the cleanup's call not raising is no proof." },
               "paths": {
                 "type": "array",
                 "minItems": 1,

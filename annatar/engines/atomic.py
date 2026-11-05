@@ -57,7 +57,7 @@ _ARG_VALUE = re.compile(r"^[A-Za-z0-9._/:-]+$")
 # the files the test leaves behind its upstream cleanup, in a temporary directory only.
 REVERT_ACTIONS = frozenset({"remove_files"})
 _REVERT_DIRS = ("/tmp/", "/var/tmp/")
-_REVERT_KEYS = frozenset({"name", "action", "paths"})
+_REVERT_KEYS = frozenset({"name", "action", "paths", "requires_probe"})
 
 
 class AtomicError(ValueError):
@@ -137,7 +137,9 @@ def _resolve_args(test: dict, overrides) -> dict:
 
     An override reaches a shell command as written, so it is held (fail closed): a mapping
     only, each key one of the test's own ``input_arguments``, each value a string or a number
-    of ``_ARG_VALUE``'s characters (no space, no quote, no ``;``, ``$``, ``|``, ``&``…). Whether
+    of ``_ARG_VALUE``'s characters (no space, no quote, no ``;``, ``$``, ``|``, ``&``…), and
+    never starting with ``-`` (VM3b: ``-rf`` or ``--help`` in an argument's place is an option of
+    the command it lands in, not a value). Whether
     the values are the catalog's is the catalog's question (``catalog_destructive``)."""
     declared = test.get("input_arguments") or {}
     args = {name: (spec or {}).get("default") for name, spec in declared.items()}
@@ -159,6 +161,11 @@ def _resolve_args(test: dict, overrides) -> dict:
             raise AtomicError(
                 f"engine_args {name!r}: {str(value)[:80]!r} is not a plain value "
                 f"({_ARG_VALUE.pattern}) — refused, never sent to a shell"
+            )
+        if str(value).startswith("-"):   # VM3b: an option in an argument's place
+            raise AtomicError(
+                f"engine_args {name!r}: {str(value)[:80]!r} — never a leading '-' (the command "
+                "it lands in would read it as an option) — refused, never sent to a shell"
             )
         args[name] = value
     return args
@@ -191,14 +198,19 @@ def _finalize(executor_name: str, text: str, guid: str, what: str) -> str:
     return f"#!/bin/{executor_name}\n{text}"
 
 
-def revert_commands(revert, resolved: ResolvedAtomic) -> list[tuple[str, str]]:
+def revert_commands(revert, resolved: ResolvedAtomic) -> list[tuple[str, str, str]]:
     """The scenario's ``revert`` (E1), as the commands the runner sends AFTER the atomic's own
-    cleanup — ``[(name, command)]``, ``[]`` when there is none (VM3, #548).
+    cleanup — ``[(name, command, requires_probe)]``, ``[]`` when there is none (VM3, #548).
 
     An upstream cleanup may restore the state and still leave its own files: T1053.003's keeps
     root's crontab in ``/tmp/notevil`` and the evil one in ``#{tmp_cron}``. The vendored test is
     never edited; the scenario says what to remove, and only that (fail closed): a list of
-    steps, each ``{name, action: remove_files, paths: [...]}`` and nothing else; each path, its
+    steps, each ``{name, action: remove_files, paths: [...], requires_probe}`` and nothing else;
+    ``requires_probe`` names one of the scenario's steady-state probes (VM3b; that it is one,
+    the runner's ``_atomic_probe_error`` checks): the step runs only once that probe, run after
+    the cleanup, holds again — the cleanup's call not raising does not say it restored what the
+    files were kept for (T1053.003: root's crontab back, the evil line gone, before
+    ``/tmp/notevil`` is removed). Each path, its
     ``#{var}`` filled with the test's arguments, an absolute plain path (``_ARG_VALUE``, no
     ``..``) inside ``/tmp/`` or ``/var/tmp/``. The command is ``rm -f --``: a file or a link,
     never a directory, never what a link points to. Whether this revert is the catalog's is the
@@ -214,7 +226,8 @@ def revert_commands(revert, resolved: ResolvedAtomic) -> list[tuple[str, str]]:
                               f"{type(step).__name__}")
         extra = sorted(set(map(str, step)) - _REVERT_KEYS)
         if extra:
-            raise AtomicError(f"revert step {i}: {extra} — only name, action and paths")
+            raise AtomicError(f"revert step {i}: {extra} — only name, action, paths and "
+                              "requires_probe")
         name = step.get("name")
         if not isinstance(name, str) or not name.strip():
             raise AtomicError(f"revert step {i}: needs a name")
@@ -236,7 +249,13 @@ def revert_commands(revert, resolved: ResolvedAtomic) -> list[tuple[str, str]]:
                     f"{' or '.join(_REVERT_DIRS)} — refused, never sent to a shell"
                 )
             filled.append(path)
-        commands.append((name, "#!/bin/sh\nrm -f -- " + " ".join(filled)))
+        gate = step.get("requires_probe")
+        if not isinstance(gate, str) or not gate.strip():
+            raise AtomicError(
+                f"revert {name!r}: needs requires_probe, the steady_state probe that must hold "
+                "after the cleanup before anything is removed"
+            )
+        commands.append((name, "#!/bin/sh\nrm -f -- " + " ".join(filled), gate))
     return commands
 
 

@@ -1265,6 +1265,39 @@ reste `make glorfindel-host-start REF=<tag>`.
 
 ---
 
+## La file d'actions signée — les clés des services (FS1b, #563)
+
+**Rien à faire tant que `EREGION_ACTION_QUEUE` est vide** : c'est le défaut, l'appel direct de la
+console et du bot reste, et aucune file n'est lue. Le drapeau se pose avec FS1c, mesuré au banc
+(`docs/design/file-actions-signee.md`, §4.2) ; ces gestes sont préparés, **pas encore à faire**.
+
+Avec `EREGION_ACTION_QUEUE=1` (dans `.envrc` sur un poste, dans `host.env` sur H0 — pour les trois
+services : la watch le lit aussi), la console et le bot ne font plus que déposer une demande signée
+par **leur propre clé**, que la watch juge et exécute. Chacun tire sa clé à son premier démarrage
+avec le drapeau, dans le répertoire que lui seul monte : `~/.eregion/console/queue_ed25519` et
+`~/.eregion/bot/queue_ed25519` (32 octets, 0600 ; `make glorfindel-start` et `deploy.sh` créent
+`~/.eregion/bot` et `~/.eregion/watch-queue` au nom de l'opérateur, en 0700, avant que docker ne les
+crée au nom de root). La watch **épingle** leurs clés publiques, dans son environnement seulement :
+
+1. **Ce poste** : `make glorfindel-restart` avec le drapeau, puis `make queue-keys` — la ligne
+   `export EREGION_QUEUE_KEYS=console=ed25519:…,bot=ed25519:…` (le bot seulement s'il tourne,
+   profil `bot`) dans ton `.envrc`, puis `make glorfindel-restart`. Jamais la clé privée.
+2. **H0** : la release déployée avec le drapeau dans `host.env`, puis
+   `make glorfindel-host-queue-keys` (par SSH, la clé d'hôte épinglée) : la ligne
+   `EREGION_QUEUE_KEYS=…` dans `host.env`, puis `make glorfindel-host-push`.
+3. **La copie des autorisés du bot** chez la watch : `DISCORD_ALLOWED_USERS` et
+   `DISCORD_ALLOWED_ROLES` passent aussi à la watch (le compose), qui relit l'humain qu'une demande du
+   bot nomme ; vides chez elle, le Revert du bot est refusé (`guard`).
+
+Sans clé épinglée pour un service, la watch refuse chacune de ses demandes (`no_key_pinned`) et le
+dit au démarrage ; une clé tirée de nouveau est refusée avec les deux empreintes (`unknown_key`,
+une carte critique) : épingler la nouvelle. Le registre de la watch (`~/.eregion/watch-queue/`, les
+nonces vus et les propositions exécutées) est à elle seule ; illisible, elle refuse tout et le dit
+(`queue_unavailable`) — le réparer ou le retirer, la watch le recrée. Les reçus et le statut :
+`runs/glorfindel/queue/` (le bot en monte ce seul sous-répertoire, en lecture seule).
+
+---
+
 ## Configuration — `glorfindel-config.yaml` lue strictement (A3, 27/10)
 
 Le fichier est lu clé par clé : une clé que rien ne lit, une valeur du mauvais type, `"false"` entre

@@ -357,6 +357,41 @@ ne l'était pas.
   changée, recopiée, pas un objet, sans clé, une valeur qui n'est pas une clé, la borne, la parité avec
   `vouched_detections`, la page, le compose) ; mutants M3750–M3759 (`scripts/mutants/CON-S.py`).
 
+### Les gestes d'écriture par la file d'actions signée (FS1b, #563, 05/11)
+
+**Derrière `EREGION_ACTION_QUEUE=1` seulement** ; faux par défaut, et alors rien ne change : chaque
+route garde son appel direct, aucune demande n'est écrite (`tests/unit/test_action_queue_watch.py`
+le prouve). Avec le drapeau, les routes d'écriture — Approve & execute (`/api/action/approve/{id}` :
+isoler, bloquer, instantané, lever), Release, Reset (`revert`), Extend to subnet (`block-promote`),
+Unblock, Snapshot — n'appellent plus Azure : elles déposent une **demande signée par la clé de la
+console** (`~/.eregion/console/queue_ed25519`, tirée au démarrage de la console avec le drapeau, son
+empreinte dite) dans `runs/console/queue/<id>.json`, puis attendent le reçu de la watch
+(`runs/glorfindel/queue/console-<id>.json`) : `accepted` ou `refused` dans la vie de la demande
+(120 s, plus l'écart d'horloge), puis `done` ou `failed` (600 s au plus, comme la CLI). La route
+répond comme avant à partir du reçu (`ok`, `result`, `verification` ; un refus : `error` et
+`refused`, son code) et porte `via: "queue"` et l'id de la demande ; la demande est retirée une fois
+répondue, et celles qu'aucune réponse n'a retirées le sont au bout d'une heure. Le geste est noté
+dans `runs/console/manual_actions.jsonl` (le fil, les indicateurs) à partir du reçu, comme l'appel
+direct le notait. Le restore n'y passe pas (FS1g).
+- **Les gardes de la console restent, et la watch les rejoue** : `_approval_refusal` et
+  `_verify_approved` appellent le code partagé `glorfindel/approval.py` ; `_APPROVABLE_TYPES` est
+  `action_queue.APPROVABLE_TYPES`, importé, plus recopié. La console juge d'abord pour dire tout de
+  suite ; la watch juge ensuite, sur sa propre lecture (l'âge de la carte : l'`issued_at` signé de sa
+  proposition, jamais `last_seen`).
+- **La demande d'une approbation nomme la carte et le condensé de la proposition** que la watch a
+  signée dessus : une carte sans proposition (d'avant FS1, ou d'une autre main) est refusée tout de
+  suite, `proposal_missing`, avec ce qu'en dit la watch. L'adresse saisie quand la carte n'en a pas
+  part dans la demande ; celle d'une carte qui en a une ne se remplace pas.
+- **L'humain** : `by.via = "console-token"` et `by.session`, 8 caractères hexadécimaux d'une HMAC par
+  le jeton de la date d'émission de la session (le cookie ; « bearer » pour un script), jamais le
+  jeton — deux navigateurs séparés au journal de la watch, rien de plus (§2.7).
+- **Sans watch** (arrêtée, sans le drapeau, sans la clé de la console épinglée) : la route dit
+  « the watch did not take the request in 120 s » et le geste à faire.
+- **À FS1c** : la file par défaut, les routes asynchrones (`GET /api/queue/<id>`), les boutons grisés
+  selon le statut que la watch publie (`runs/glorfindel/queue/status.json`, signé).
+- Code : `eregion_console/action_requests.py`, `eregion_core/action_queue.py` (`ask`, `deposit`,
+  `await_receipt`) ; conception : [`file-actions-signee.md`](file-actions-signee.md).
+
 ### Ce qui vient du dehors (#254)
 
 Une carte, une règle, une ligne du fil, une erreur : du texte d'Azure (le nom d'une ressource, d'une

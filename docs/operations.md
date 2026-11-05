@@ -2171,8 +2171,8 @@ mesurait en entier le commit publié.
 - `mutants` (14 tranches) et `control` (2 tranches) : toute la mutation, `--examples 500 --rounds 2
   --jobs 4`, jeu de contrôle compris. Un seul runner n'y suffit pas : 2 633 mutants le 04/11, et la mesure
   du lundi (1 000 séquences) annulée à sa borne de 180 min le 02/11, avant son premier mutant. Chaque
-  tranche (`mutation_check.py --shard K/N --json …`) prend des cibles entières, par morceaux de huit
-  mutants au plus ; puis `mutants-total` (`--total`) vérifie que chaque tranche est là, une fois, au
+  tranche (`mutation_check.py --shard K/N --json …`) prend des cibles entières, coupées en morceaux
+  selon leur poids mesuré (CI6d, ci-dessous) ; puis `mutants-total` (`--total`) vérifie que chaque tranche est là, une fois, au
   même budget, que chaque mutant de l'arbre a été mesuré une fois exactement, et tient le compte au
   `min_caught` de `mutants.yml` (14). Le jeu de contrôle est dit, jamais tenu à un compte.
   **Le modèle de ChromaDB, une fois** (CI6b, #538). Les runs du code non muté d'une tranche partent en
@@ -2277,22 +2277,84 @@ les lectures réelles ci-dessus ont rendu 200 sous son jeton d'installation. Tes
 `tests/unit/test_release.py`, sur des réponses simulées du faux `gh` ; mutants M3770–M3785
 (`scripts/mutants/CI6c.py`).
 
-**Sa durée : de 45 à 50 minutes estimées, au plus 60** (04/11 ; à remesurer sur le premier run réel).
-Ses parties tournent ensemble ; la plus longue fait la durée :
+**Les tranches découpées sur les durées mesurées** (CI6d, #545). Les deux premiers runs réels de la
+porte (05/11 : 41997986094 sur la PR de la 0.5.5, 42009742778 en dispatch sur `main`) ont duré 73 et
+60 min, leurs tranches de 22 à 60 min dans l'un, de 26 à 72 dans l'autre. Trois causes, mesurées dans
+leurs artefacts et leurs journaux :
+- **L'estimation était fausse.** Elle pesait chaque mutant 1 (8 sur une machine d'invariants) et chaque
+  run du code non muté 1. Or les 97 mutants de `tests/unit/test_host_cd.py` font à eux seuls un quart du
+  total (environ 280 s chacun, 456 min sur 1 709), et la médiane d'un mutant hors des machines n'est que
+  de 13 s.
+- **Les runs du code non muté** prennent de 8 à 18 min par tranche, environ un tiers de sa durée :
+  `tests/unit/test_invariant_regressions.py tests/unit/test_invariants.py` passe en entier même quand
+  ses mutants tombent en quelques secondes. L'estimation ne les voyait pas.
+- **Les runners ne vont pas tous à la même vitesse.** Les mêmes mutants, dans la même tranche, ont pris
+  1,5 à 2 fois plus longtemps d'un run à l'autre : la tranche 12 a duré 36 min dans un run, 72 dans
+  l'autre (rapport médian des mutants : 1,77) ; la 11 et la 13, l'inverse (0,6 et 0,7). Aucun découpage
+  ne rattrape un runner lent.
 
-| Job | Estimé sur un runner | D'où |
+Ce qui change :
+- **Le JSON d'une tranche** (`--json`) dit, en secondes, la mesure de chaque mutant (sa copie comprise,
+  `seconds`) et le run non muté de chaque cible (`targets`). Les lignes et `--total` ne changent pas.
+- **`scripts/mutants/durations.json`** garde ces durées, au budget de la porte (500 séquences, deux
+  tours). `python scripts/mutation_check.py --update-durations DIR…` le réécrit à partir des artefacts
+  d'un ou plusieurs runs (`gh run download <run> -D <dossier>`), ceux d'avant CI6d compris (leurs
+  secondes sont dans le détail des lignes). Pour chaque mutant et chaque cible, il garde la plus petite
+  mesure : un runner lent ralentit toute sa tranche d'un même facteur. Il ne retient que les mutants et
+  les cibles de l'arbre, et que les résultats au budget de la porte : ni chemin d'une machine, ni
+  identifiant. Ce qui n'a pas été mesuré garde sa valeur ; ce que l'arbre n'a plus disparaît. Il a été
+  amorcé sur les deux runs du 05/11 (2 851 mutants) ; les runs du code non muté seront mesurés au
+  prochain run de la porte. Donner deux runs vaut mieux qu'un.
+- **Le découpage** (`shard_of`) pèse un mutant par sa mesure ; sans mesure, par la médiane des mutants
+  mesurés de sa cible, sinon par l'estimation d'avant (13 s, huit fois plus sur une machine
+  d'invariants). Un morceau pèse ses mutants plus le run non muté de sa cible ; sans mesure, ce run vaut
+  un tour de son mutant le plus lent, au moins l'estimation. Une cible n'est coupée en morceaux que si
+  ses mutants pèsent plus d'un quart de la part d'une tranche (`PIECES`), jamais selon leur nombre :
+  chaque morceau refait son run non muté. Les morceaux vont du plus lourd au plus léger, chacun à la
+  tranche la moins chargée. Le même arbre et le même fichier donnent les mêmes tranches, quel que soit
+  le runner, et chaque mutant est dans une tranche exactement. Le fichier absent ou illisible, c'est
+  l'estimation qui découpe (dit). Une durée qui n'en est pas une, dans le fichier ou dans un résultat
+  (0, qui veut dire « non mesuré », plus d'un jour — 86 400 s —, une valeur non finie ou hors des
+  flottants), est écartée et dite avec le nom du fichier : l'estimation la remplace, jamais une
+  exception qui arrête la tranche. `--plan 0` est refusé comme un mauvais `--shard`.
+- **Dans une tranche**, les runs non mutés puis les mutants partent du plus lourd au plus léger : un
+  mutant de 20 min lancé en dernier faisait la queue de la tranche.
+- **`python scripts/mutation_check.py --plan 14`** dit le temps estimé de chaque tranche, sans rien
+  mesurer (`--control --plan 2` pour le jeu de contrôle).
+
+**Sa durée : environ 41 minutes estimées sur un runner ordinaire**, celle de sa tranche de mutants la
+plus lourde, telle que ce fichier la découpe aujourd'hui (05/11, sur les durées mesurées ;
+avant CI6d, 60 et 73 min mesurées). L'estimation reprend les mesures des deux runs (la plus petite de
+chaque mutant), et les runs non mutés chronométrés un par un sur un poste, ramenés à un runner par un
+facteur ajusté sur les débuts de tranche des 32 journaux (écart type de 2,9 min). Ses parties tournent
+ensemble ; la plus longue fait la durée :
+
+| Job | Sur un runner | D'où |
 |---|---|---|
-| `mutants`, une tranche sur 14 | ~45 min | une tranche sur dix : 1 423 s (24 min) sur un poste de 16 cœurs à `--jobs 4`, 255 mutants attrapés sur 258 ; un runner est 2,5 fois plus lent sur les invariants (machine d'Azure à 500 séquences : 132 s sur le poste, ~333 s sur un runner, d'après la nuit : 10 000 en 111 min le 04/11). Soit ~60 min pour un dixième, ~43 min pour un quatorzième, plus l'installation |
-| `invariants` (2 000) | ~35 min | la nuit du 04/11 : machine d'Azure 111 min et d'AWS 42 min pour 10 000, soit ~22 et ~8 min pour 2 000, plus le reste de la suite (4 à 9 min à 500 sur une PR) |
-| `control`, une tranche sur 2 | ~20 min | 16 mutants d'invariants par tranche, dont une dizaine survivent sur les 32 (`docs/design/preuves.md`) : deux tours entiers chacun |
-| `macos` (informe) | 4 à 6 min, s'il a un runner | `ci.yml`, 80 jobs mesurés du 15 au 29/10 |
-| `terraform` | 2 à 4 min | `ci.yml` |
+| `mutants`, une tranche sur 14 | ~41 min estimées, la plus lourde (de 36 à 41 ; installation ~1 min comprise) | avant CI6d, de 22 à 72 min mesurées. Une fois les runs non mutés mesurés par la porte et le fichier mis à jour, les tranches se resserrent (de 39 à 42 min estimées) ; la plus lourde reste vers 41 |
+| `invariants` (2 000) | 22 à 36 min mesurées | les deux runs du 05/11 |
+| `control`, une tranche sur 2 | ~31 min estimées | avant CI6d, de 24 à 36 min mesurées : 16 mutants d'invariants par tranche, dont une dizaine survivent (deux tours entiers chacun) |
+| `macos` (informe) | 4 à 8 min, s'il a un runner | les deux runs du 05/11 |
+| `terraform` | moins d'1 min | les deux runs du 05/11 |
 | `mutants-total`, `gate` | < 1 min chacun | |
+
+**Ce que le découpage ne rattrape pas** : un runner lent. Le plus lent mesuré le 05/11 (1,77 fois) porte
+une tranche de 41 min à environ 72 ; un runner 1,2 fois plus lent qu'ordinaire reste sous 50. Le plus
+long mutant seul (C15, ou M36 sur un runner lent : 21 min) et le plus long run non muté (environ 10 min)
+restent loin de la part d'une tranche : rien d'indivisible n'empêche les 45 min.
 
 19 jobs en même temps : GitHub en donne 20 à un dépôt public. Une PR ouverte en parallèle en fait attendre
 quelques-uns. La mesure d'un seul runner n'était plus possible : la mesure du lundi à 1 000 séquences dure
-plus de 180 min (annulée à sa borne le 02/11). Chaque job a deux fois sa durée estimée pour borne : 90 min
-pour une tranche, 75 pour les invariants.
+plus de 180 min (annulée à sa borne le 02/11). Chaque job a pour borne environ deux fois sa durée
+estimée : 90 min pour une tranche, 75 pour les invariants.
+
+**La mesure du lundi passe aux tranches** (CI6d). `mutants.yml` tourne comme la porte : 14 tranches des
+mutants, 2 du jeu de contrôle, découpées sur les mêmes durées, puis leur total (`--total`, au budget du
+dispatch, 1 000 séquences et deux tours par défaut, tenu à `min_caught`). Il part même si une tranche a
+échoué, le run annulé à part : une tranche manquante y est rouge. 17 jobs, sous les 20 de GitHub ; à
+1 000 séquences, les machines d'invariants prennent deux fois plus : 150 min de borne par tranche. Ses
+actions sont celles de la porte, épinglées par commit. Les entrées du dispatch passent par
+l'environnement, jamais dans le texte du script (SEC6).
 
 **Si elle est rouge.**
 - **Un vrai rouge** (un invariant, un mutant survivant sous le seuil, un test) : la release attend. On le

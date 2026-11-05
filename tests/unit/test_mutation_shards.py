@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -52,45 +53,309 @@ def _tests(mutants, heavy_every=5):
 
 # ── the shards ──────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("n", [1, 2, 3, 7, 10])
-def test_the_shards_measure_each_mutant_once(n):
+def _durations(todo, seed=7, targets=None):
+    """Durations as a gate's run measures them: most mutants a few seconds, some minutes."""
+    import random
+    rnd = random.Random(seed)
+    return {"mutants": {m[0]: float(rnd.choice([3, 5, 8, 13, 21, 300, 900])) for m in todo},
+            "targets": dict(targets or {})}
+
+
+@pytest.mark.parametrize("measured", [False, True], ids=["estimated", "measured"])
+@pytest.mark.parametrize("n", [1, 2, 3, 7, 10, 14])
+def test_the_shards_measure_each_mutant_once(n, measured):
     todo = _mutants(97)
     tests = _tests(todo)
-    shards = [mc.shard_of(todo, k, n, tests) for k in range(1, n + 1)]
+    durations = _durations(todo) if measured else mc.no_durations()
+    shards = [mc.shard_of(todo, k, n, tests, durations) for k in range(1, n + 1)]
     ids = [m[0] for s in shards for m in s]
     assert sorted(ids) == sorted(m[0] for m in todo)          # each once, none lost
     for s in shards:
         assert s == [m for m in todo if m in s]                # in todo's order
 
 
-def test_a_target_s_mutants_stay_together_up_to_a_chunk():
-    """A target's unmutated run happens once per piece: its mutants are cut in pieces of CHUNK at
-    most, never spread one by one."""
-    todo = _mutants(40)
-    tests = {m[0]: mc.INVARIANTS for m in todo[:20]} | {m[0]: "tests/unit/test_a.py" for m in todo[20:]}
-    n = 6
-    owners: dict[str, set] = {}
-    for k in range(1, n + 1):
-        for m in mc.shard_of(todo, k, n, tests):
-            owners.setdefault(tests[m[0]], set()).add(k)
-    assert len(owners[mc.INVARIANTS]) <= -(-20 // mc.CHUNK)
-    assert len(owners["tests/unit/test_a.py"]) <= -(-20 // mc.CHUNK)
-
-
 def test_the_heavy_targets_are_spread_across_the_shards():
-    """A target that runs an invariant machine weighs HEAVY: they never all land in one shard."""
+    """Unmeasured, a target that runs an invariant machine weighs HEAVY: they never all land in one
+    shard."""
     todo = _mutants(60)
     tests = {m[0]: (f"tests/unit/test_invariants.py tests/unit/test_h{i}.py" if i < 12 else f"tests/unit/t{i}.py")
              for i, m in enumerate(todo)}
-    heavy = [sum(1 for m in mc.shard_of(todo, k, 4, tests) if mc._heavy(tests[m[0]])) for k in range(1, 5)]
+    heavy = [sum(1 for m in mc.shard_of(todo, k, 4, tests, mc.no_durations()) if mc._heavy(tests[m[0]]))
+             for k in range(1, 5)]
     assert sum(heavy) == 12 and max(heavy) - min(heavy) <= 1, heavy
 
 
 def test_the_same_tree_gives_the_same_shards():
+    """The same mutants, targets and durations — in another order of the file's keys, on another
+    runner — give the same shards."""
     todo = _mutants(50)
     tests = _tests(todo)
-    assert [mc.shard_of(todo, k, 5, tests) for k in range(1, 6)] == [mc.shard_of(list(todo), k, 5, dict(tests))
-                                                                      for k in range(1, 6)]
+    durations = _durations(todo)
+    shuffled = {kind: dict(reversed(list(v.items()))) for kind, v in durations.items()}
+    for d1, d2 in ((mc.no_durations(), mc.no_durations()), (durations, shuffled)):
+        assert ([mc.shard_of(todo, k, 5, tests, d1) for k in range(1, 6)]
+                == [mc.shard_of(list(todo), k, 5, dict(tests), d2) for k in range(1, 6)])
+
+
+# ── CI6d (#545): the shards cut on the durations measured ──────────────────────────────────
+# The gate's first two runs (05/11): 22 to 72 min a shard, on an estimate that weighed every
+# mutant alike. Here on durations the test writes: no gate, no artifact.
+
+def _loads(todo, n, tests, durations):
+    mutant, unmutated, _ = mc.costs(todo, tests, durations)
+    out = []
+    for mine in mc.shards_of(todo, n, tests, durations):
+        targets = {tests[i] for i in mine}
+        out.append(sum(mutant[i] for i in mine) + sum(unmutated[t] for t in targets))
+    return out
+
+
+def test_the_shards_weigh_each_mutant_by_its_measure():
+    """Twenty mutants a target each, two of them measured at 15 min, the others at 5 s: the two
+    long ones never share a shard, and each shard carries its share — not a count of mutants."""
+    todo = _mutants(20)
+    tests = {m[0]: f"tests/unit/test_{i}.py" for i, m in enumerate(todo)}
+    durations = {"mutants": {m[0]: 5.0 for m in todo} | {"X003": 900.0, "X011": 900.0},
+                 "targets": {t: 1.0 for t in tests.values()}}
+    shards = mc.shards_of(todo, 2, tests, durations)
+    assert [len({"X003", "X011"} & s) for s in shards] == [1, 1], shards
+    assert [len(s) for s in shards] == [10, 10]
+
+
+def test_a_measured_mutant_outweighs_the_estimate():
+    """The estimate weighs every light mutant UNIT seconds: one measured at an hour goes alone,
+    and its shard takes nothing else of the measured world."""
+    todo = _mutants(12)
+    tests = {m[0]: f"tests/unit/test_{i}.py" for i, m in enumerate(todo)}
+    durations = {"mutants": {"X000": 3600.0}, "targets": {}}
+    first, second = mc.shards_of(todo, 2, tests, durations)
+    assert (first, len(second)) == ({"X000"}, 11)
+    estimated = mc.shards_of(todo, 2, tests, mc.no_durations())
+    assert sorted(len(s) for s in estimated) == [6, 6]
+
+
+def test_a_target_s_unmutated_run_is_weighed_once_per_piece():
+    """A target whose unmutated run takes half an hour, its one mutant a second: it weighs its
+    run, and the other targets go to the other shard."""
+    todo = _mutants(9)
+    tests = {m[0]: f"tests/unit/test_{i}.py" for i, m in enumerate(todo)}
+    durations = {"mutants": {m[0]: 1.0 for m in todo},
+                 "targets": {t: 60.0 for t in tests.values()} | {"tests/unit/test_0.py": 1800.0}}
+    assert mc.shards_of(todo, 2, tests, durations)[0] == {"X000"}
+    assert _loads(todo, 2, tests, durations) == [1801.0, 8 * 61.0]
+
+
+def test_an_unmeasured_mutant_weighs_its_target_s_median_else_the_estimate():
+    todo = _mutants(5)
+    tests = {"X000": "tests/unit/test_a.py", "X001": "tests/unit/test_a.py", "X002": "tests/unit/test_a.py",
+             "X003": "tests/unit/test_b.py", "X004": mc.INVARIANTS}
+    durations = {"mutants": {"X000": 40.0, "X001": 100.0}, "targets": {}}
+    mutant, unmutated, groups = mc.costs(todo, tests, durations)
+    assert mutant == {"X000": 40.0, "X001": 100.0, "X002": 70.0, "X003": mc.UNIT, "X004": mc.UNIT * mc.HEAVY}
+    # unmeasured, the unmutated run: one round of its slowest mutant, never less than the estimate
+    assert unmutated == {"tests/unit/test_a.py": 100.0 / mc.DURATIONS_BUDGET[1], "tests/unit/test_b.py": mc.UNIT,
+                         mc.INVARIANTS: mc.UNIT * mc.HEAVY}
+    assert groups["tests/unit/test_a.py"] == ["X000", "X001", "X002"]
+    durations["targets"]["tests/unit/test_a.py"] = 7.0
+    assert mc.costs(todo, tests, durations)[1]["tests/unit/test_a.py"] == 7.0      # measured, it is its own
+
+
+def test_a_heavy_target_is_cut_by_its_weight_a_light_one_stays_whole():
+    """Sixty mutants of one target, 5 s each, stay one piece: their unmutated run happens once.
+    Sixty of another at 10 min each are cut, and spread over every shard."""
+    light, heavy = _mutants(60, "L"), _mutants(60, "H")
+    todo = light + heavy
+    tests = {m[0]: "tests/unit/test_light.py" for m in light} | {m[0]: "tests/unit/test_heavy.py" for m in heavy}
+    durations = {"mutants": {m[0]: 5.0 for m in light} | {m[0]: 600.0 for m in heavy},
+                 "targets": {"tests/unit/test_light.py": 30.0, "tests/unit/test_heavy.py": 300.0}}
+    n = 6
+    shards = mc.shards_of(todo, n, tests, durations)
+    owners = lambda prefix: {k for k, s in enumerate(shards) if any(i.startswith(prefix) for i in s)}  # noqa: E731
+    assert len(owners("L")) == 1 and owners("H") == set(range(n))
+    pieces = [p for p in mc.pieces_of(todo, n, tests, durations) if p[1] == "tests/unit/test_heavy.py"]
+    assert len(pieces) > n and all(p[0] == 300.0 + 600.0 * len(p[3]) for p in pieces)
+    loads = _loads(todo, n, tests, durations)
+    assert max(loads) - min(loads) <= 600.0 + 300.0, loads    # within one mutant and one run
+
+
+def test_the_heaviest_shard_is_near_the_share():
+    """On durations spread as the gate's are, the heaviest shard stays within a tenth of the
+    share — the old count-based cut left it at twice the lightest."""
+    todo = _mutants(400)
+    tests = {m[0]: (mc.INVARIANTS if i % 9 == 0 else f"tests/unit/test_t{i // 7}.py") for i, m in enumerate(todo)}
+    durations = _durations(todo, seed=3)
+    loads = _loads(todo, 14, tests, durations)
+    share = sum(loads) / 14
+    assert max(loads) <= 1.1 * share, (max(loads), share)
+
+
+def test_the_pools_take_the_heaviest_first():
+    cost = {"a": 1.0, "b": 30.0, "c": 30.0, "d": 5.0}
+    assert mc.heaviest_first(["a", "b", "c", "d", "e"], cost) == ["b", "c", "d", "a", "e"]
+    assert mc._wall([30.0, 20.0, 5.0, 5.0], 2) == 30.0 and mc._wall([5.0, 5.0, 20.0, 30.0], 2) == 35.0
+
+
+# ── the durations' file ─────────────────────────────────────────────────────────────────────
+
+def test_the_durations_file_absent_reads_as_nothing_measured(tmp_path):
+    assert mc.load_durations(tmp_path / "none.json") == mc.no_durations()
+
+
+@pytest.mark.parametrize("text", ["not json", "[]", '{"mutants": 3}', '{"mutants": [1, 2]}'])
+def test_a_durations_file_that_cannot_be_read_is_said_and_the_estimate_cuts(tmp_path, text):
+    path = tmp_path / "durations.json"
+    path.write_text(text, encoding="utf-8")
+    said: list = []
+    assert mc.load_durations(path, say=lambda *a, **k: said.append(a[0])) == mc.no_durations()
+    assert said and "unreadable" in said[0] and "estimate" in said[0]
+
+
+def test_an_entry_that_is_not_a_duration_is_left_out(tmp_path):
+    """Negative, a string, a boolean, 0 (« not measured »), past a float (10**400: OverflowError),
+    not finite, or above a day (1e308): left out, the estimate weighs it, and it is said with the
+    file's name — never a trace that stops the shard (CI6d, review)."""
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"mutants": {"M1": 4, "M2": -1, "M3": "9", "M4": True, "M5": 2.5, "M6": 10**400,
+                                            "M7": 1e308, "M8": 0, "M9": mc.MAX_SECONDS},
+                                "targets": {"t": float("inf"), "u": 0, "v": 86_400.5, "w": 30}}), encoding="utf-8")
+    said: list = []
+    assert mc.load_durations(path, say=lambda *a, **k: said.append(a[0])) == {
+        "mutants": {"M1": 4.0, "M5": 2.5, "M9": float(mc.MAX_SECONDS)}, "targets": {"w": 30.0}}
+    assert said == [f"durations.json: 6 mutants not a duration (above 0, at most {mc.MAX_SECONDS} s) — left out, "
+                    "the estimate weighs them",
+                    f"durations.json: 3 targets not a duration (above 0, at most {mc.MAX_SECONDS} s) — left out, "
+                    "the estimate weighs them"]
+
+
+def test_durations_at_zero_never_put_every_mutant_in_the_first_shard(tmp_path):
+    """A file of zeros is a file of nothing measured: the estimate cuts, every shard has its share."""
+    todo = _mutants(40)
+    tests = {m[0]: f"tests/unit/test_{i}.py" for i, m in enumerate(todo)}
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"mutants": {m[0]: 0 for m in todo}, "targets": {t: 0 for t in tests.values()}}),
+                    encoding="utf-8")
+    durations = mc.load_durations(path, say=lambda *a, **k: None)
+    assert sorted(len(s) for s in mc.shards_of(todo, 4, tests, durations)) == [10, 10, 10, 10]
+
+
+def test_a_duration_past_any_bound_never_stops_the_cut(tmp_path):
+    """Read from a file, the largest durations stay finite: the cut never meets inf, nor NaN."""
+    todo = _mutants(30)
+    tests = {m[0]: "tests/unit/test_one.py" for m in todo}
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"mutants": {m[0]: (10**400 if i % 2 else mc.MAX_SECONDS) for i, m in enumerate(todo)},
+                                "targets": {"tests/unit/test_one.py": 1e308}}), encoding="utf-8")
+    durations = mc.load_durations(path, say=lambda *a, **k: None)
+    shards = [mc.shard_of(todo, k, 3, tests, durations) for k in (1, 2, 3)]
+    assert sorted(m[0] for s in shards for m in s) == sorted(m[0] for m in todo)
+
+
+def _shard_json(where: Path, name, seconds=None, targets=None, rows=None, examples=500, rounds=2, legacy=None):
+    """A shard's --json: `legacy` {id: s} in the rows' detail only, as before CI6d."""
+    rows = list(rows or [])
+    rows += [[mid, "bug", "CAUGHT", f"2/2 ({s}s)"] for mid, s in (legacy or {}).items()]
+    rows += [[mid, "bug", "CAUGHT", "2/2 (0s)"] for mid in (seconds or {})]
+    doc = {"control": False, "shard": 1, "shards": 1, "examples": examples, "rounds": rounds, "rows": rows}
+    if seconds is not None:
+        doc["seconds"] = seconds
+    if targets is not None:
+        doc["targets"] = targets
+    where.mkdir(parents=True, exist_ok=True)
+    (where / f"{name}.json").write_text(json.dumps(doc), encoding="utf-8")
+
+
+@pytest.fixture
+def tree(monkeypatch):
+    """Five mutants of this tree, two targets."""
+    mutants = _mutants(5, "M")
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    monkeypatch.setattr(mc, "CONTROL", [])
+    monkeypatch.setattr(mc, "TESTS", {"M000": "tests/unit/test_a.py", "M001": "tests/unit/test_a.py"})
+    return mutants
+
+
+def test_the_update_takes_each_smallest_measure_of_the_runs_given(tree, tmp_path):
+    """Two runs: a slower runner slows a whole shard alike, so each mutant and each unmutated run
+    keeps its smallest measure. Before CI6d, the seconds were in the rows' detail: read too."""
+    path = tmp_path / "durations.json"
+    _shard_json(tmp_path / "run1" / "mutants-1", "mutants-1", seconds={"M000": 40.4, "M001": 9.0},
+                targets={"tests/unit/test_a.py": 120.0, mc.INVARIANTS: 300.0})
+    _shard_json(tmp_path / "run2" / "mutants-1", "mutants-1", seconds={"M000": 80.0, "M001": 3.0},
+                targets={"tests/unit/test_a.py": 200.0})
+    _shard_json(tmp_path / "run2" / "mutants-2", "mutants-2", legacy={"M002": 700, "M003": 12})
+    assert mc.update_durations([tmp_path / "run1", tmp_path / "run2"], path, say=lambda *a, **k: None) == 0
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["mutants"] == {"M000": 40, "M001": 3, "M002": 700, "M003": 12}
+    assert doc["targets"] == {mc.INVARIANTS: 300, "tests/unit/test_a.py": 120}
+    assert (doc["examples"], doc["rounds"]) == mc.DURATIONS_BUDGET
+    assert mc.load_durations(path)["mutants"]["M000"] == 40.0
+
+
+def test_the_update_keeps_what_was_not_measured_and_drops_what_the_tree_lost(tree, tmp_path):
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"mutants": {"M000": 10, "M004": 55, "M999": 7},
+                                "targets": {"tests/unit/test_gone.py": 30, "tests/unit/test_a.py": 9}}),
+                    encoding="utf-8")
+    _shard_json(tmp_path / "run" / "m", "m", seconds={"M000": 20.0, "M777": 5.0, "/home/someone/x": 1.0},
+                targets={"/tmp/elsewhere/test_x.py": 4.0, "tests/unit/test_a.py": 11.0})
+    assert mc.update_durations([tmp_path / "run"], path, say=lambda *a, **k: None) == 0
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["mutants"] == {"M000": 20, "M004": 55}                # measured anew, kept; gone, foreign out
+    assert doc["targets"] == {"tests/unit/test_a.py": 11}
+    assert str(tmp_path) not in path.read_text(encoding="utf-8") and "/home/" not in path.read_text(encoding="utf-8")
+
+
+def test_the_update_counts_only_the_gate_s_budget(tree, tmp_path):
+    path = tmp_path / "durations.json"
+    _shard_json(tmp_path / "run" / "a", "a", seconds={"M000": 900.0}, examples=1000)
+    _shard_json(tmp_path / "run" / "b", "b", seconds={"M001": 900.0}, rounds=3)
+    _shard_json(tmp_path / "run" / "c", "c", seconds={"M002": 8.0})
+    said: list = []
+    assert mc.update_durations([tmp_path / "run"], path, say=lambda *a, **k: said.append(a[0])) == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["mutants"] == {"M002": 8}
+    assert sum("left out" in s for s in said) == 2 and any("1000 sequences" in s for s in said)
+
+
+def test_the_update_leaves_out_a_measure_that_is_not_a_duration_and_says_it(tree, tmp_path):
+    """A row of before CI6d with an absurd detail (400 digits: inf), a measure at 0 or past a day:
+    left out, said, the file written — never `round(inf)` (CI6d, review)."""
+    path = tmp_path / "durations.json"
+    _shard_json(tmp_path / "run" / "m", "mutants-1", seconds={"M001": 0, "M002": 1e308, "M003": 7.0})
+    _shard_json(tmp_path / "run" / "old", "mutants-2", legacy={"M000": "9" * 400, "M004": 12})
+    said: list = []
+    assert mc.update_durations([tmp_path / "run"], path, say=lambda *a, **k: said.append(a[0])) == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["mutants"] == {"M003": 7, "M004": 12}
+    assert any("mutants-2.json: 1 mutants (rows) not a duration" in s for s in said), said
+    assert any("mutants-1.json: 2 mutants not a duration" in s for s in said), said
+
+
+def test_an_update_with_nothing_read_changes_nothing(tree, tmp_path):
+    path = tmp_path / "durations.json"
+    path.write_text('{"mutants": {"M000": 10}, "targets": {}}', encoding="utf-8")
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "bad.json").write_text("not json", encoding="utf-8")
+    assert mc.update_durations([tmp_path / "run"], path, say=lambda *a, **k: None) == 1
+    assert path.read_text(encoding="utf-8") == '{"mutants": {"M000": 10}, "targets": {}}'
+
+
+def test_the_repository_s_durations_hold_only_ids_and_relative_test_paths():
+    """The versioned file: no machine's path, no identifier — mutant ids and the tree's targets."""
+    text = mc.DURATIONS.read_text(encoding="utf-8")
+    doc = json.loads(text)
+    assert (doc["examples"], doc["rounds"]) == mc.DURATIONS_BUDGET
+    assert all(re.fullmatch(r"[MC]\d+", k) and isinstance(v, int) and v >= 1 for k, v in doc["mutants"].items())
+    assert all(k.startswith("tests/") and isinstance(v, int) for k, v in doc["targets"].items())
+    assert "/home/" not in text and "/tmp/" not in text and "\\\\" not in text
+    assert len(doc["mutants"]) >= 2800                       # the gate's runs of 05/11, at least
+
+
+def test_the_plan_says_each_shard_and_the_heaviest(capsys):
+    todo = _mutants(30)
+    tests = {m[0]: f"tests/unit/test_{i % 5}.py" for i, m in enumerate(todo)}
+    durations = _durations(todo, targets={t: 20.0 for t in tests.values()})
+    shards = mc.plan(todo, 3, 4, tests, durations)
+    assert len(shards) == 3 and sum(c for c, _, _ in shards) == 30
+    assert all(s > 0 for _, _, s in shards)
 
 
 def test_the_repository_s_mutants_split_into_the_gate_s_shards():
@@ -269,6 +534,75 @@ def test_a_shard_s_json_is_what_the_total_reads(tmp_path, monkeypatch, capsys):
     assert "mutants: 5/6 caught in every round" in said and "M3  SURVIVES" in said
     assert mc.main(["--total", str(out), "--shards", "3", "--control-shards", "0", "--examples", "500", "--rounds", "2",
                     "--min-caught", "6"]) == 1
+
+
+def test_a_shard_s_json_says_each_mutant_s_seconds_and_each_target_s(tmp_path, monkeypatch):
+    """CI6d: what the durations' file is made of, written by the shard itself — each mutant's measure
+    and each target's unmutated run, in seconds; the rows as before, the total reading them alike."""
+    mutants = [(f"M{i}", f"bug {i}", "code.py", f"line {i}\n", f"LINE {i}\n") for i in range(4)]
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    monkeypatch.setattr(mc, "CONTROL", [])
+    monkeypatch.setattr(mc, "TESTS", {"M0": "tests/unit/test_a.py", "M1": "tests/unit/test_a.py",
+                                      "M2": "tests/unit/test_b.py", "M3": "tests/unit/test_c.py"})
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text(
+        "".join(m[3] for m in mutants))))
+    clock = iter(range(0, 10_000, 5))
+    monkeypatch.setattr(mc.time, "monotonic", lambda: float(next(clock)))
+    monkeypatch.setattr(mc, "_run", lambda copy, examples, show=False, target=mc.INVARIANTS: copy.name != "base")
+    out = tmp_path / "m.json"
+    assert mc.main(["--rounds", "1", "--jobs", "1", "--json", str(out)]) == 0
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert sorted(doc["seconds"]) == ["M0", "M1", "M2", "M3"] and all(s > 0 for s in doc["seconds"].values())
+    assert sorted(doc["targets"]) == ["tests/unit/test_a.py", "tests/unit/test_b.py", "tests/unit/test_c.py"]
+    assert all(s > 0 for s in doc["targets"].values())
+    assert [r[2] for r in doc["rows"]] == ["CAUGHT"] * 4
+    assert mc._result_durations(doc) == (doc["seconds"], doc["targets"])
+
+
+def test_a_shard_runs_its_heaviest_first(tmp_path, monkeypatch):
+    """The unmutated runs, then the mutants, each pool the heaviest first by the durations measured:
+    a long run started last would make the shard's tail."""
+    mutants = [(f"M{i}", f"bug {i}", "code.py", f"line {i}\n", f"LINE {i}\n") for i in range(4)]
+    monkeypatch.setattr(mc, "MUTANTS", mutants)
+    monkeypatch.setattr(mc, "CONTROL", [])
+    monkeypatch.setattr(mc, "TESTS", {m[0]: f"tests/unit/test_{m[0]}.py" for m in mutants})
+    monkeypatch.setattr(mc, "load_durations", lambda path=None, say=print: {
+        "mutants": {"M0": 1.0, "M1": 50.0, "M2": 9.0, "M3": 400.0},
+        "targets": {"tests/unit/test_M0.py": 90.0, "tests/unit/test_M1.py": 2.0, "tests/unit/test_M2.py": 30.0,
+                    "tests/unit/test_M3.py": 1.0}})
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: (dest.mkdir(parents=True), (dest / "code.py").write_text(
+        "".join(m[3] for m in mutants))))
+    order: list = []
+
+    def run(copy, examples, show=False, target=mc.INVARIANTS):
+        order.append(("base" if copy.name == "base" else "mutant", target))
+        return copy.name != "base"
+    monkeypatch.setattr(mc, "_run", run)
+    assert mc.main(["--rounds", "1", "--jobs", "1"]) == 0
+    assert order == [("base", "tests/unit/test_M0.py"), ("base", "tests/unit/test_M2.py"),
+                     ("base", "tests/unit/test_M1.py"), ("base", "tests/unit/test_M3.py"),
+                     ("mutant", "tests/unit/test_M3.py"), ("mutant", "tests/unit/test_M1.py"),
+                     ("mutant", "tests/unit/test_M2.py"), ("mutant", "tests/unit/test_M0.py")]
+
+
+@pytest.mark.parametrize("n", ["0", "-3", "x", "1.5"])
+def test_a_plan_of_no_shard_is_refused_as_a_shard_is(n, capsys):
+    """`--plan 0` (or negative) refused before anything is read, as a bad `--shard` is."""
+    with pytest.raises(SystemExit) as exc:
+        mc.main(["--plan", n])
+    assert exc.value.code == 2 and "a number of shards, 1 or more" in capsys.readouterr().err
+
+
+def test_the_plan_measures_nothing(monkeypatch, capsys):
+    """`--plan N`: each shard's estimate said, nothing copied, nothing run."""
+    monkeypatch.setattr(mc, "MUTANTS", _mutants(20, "M"))
+    monkeypatch.setattr(mc, "TESTS", {})
+    monkeypatch.setattr(mc, "load_durations", lambda path=None, say=print: mc.no_durations())
+    monkeypatch.setattr(mc, "_copy_repo", lambda dest: pytest.fail("copied"))
+    monkeypatch.setattr(mc, "_run", lambda *a, **k: pytest.fail("ran"))
+    assert mc.main(["--plan", "3", "--jobs", "4"]) == 0
+    said = capsys.readouterr().out
+    assert "3 shards of 20 mutants" in said and "shard  3/3" in said and "heaviest: shard" in said
 
 
 def test_an_unmutated_target_that_fails_stops_the_shard(tmp_path, monkeypatch, capsys):

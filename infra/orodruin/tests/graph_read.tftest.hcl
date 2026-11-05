@@ -1,7 +1,8 @@
-# IDI1 (#546) : le seul droit d'Orodruin dans Microsoft Graph — Application.Read.All, pour la garde
-# d'une identité d'Entra ID — désactivé par défaut ; et ce que la garde sait avant de lire (le
-# tenant, l'opérateur, les identités protégées). Planifié contre de faux azurerm et azuread, aucun
-# appel à Azure ni à Graph ; tous les identifiants sont des exemples. À la main :
+# IDI1 (#546) : les seuls droits d'Orodruin dans Microsoft Graph — Application.Read.All et
+# RoleManagement.Read.Directory, pour la garde d'une identité d'Entra ID — désactivés par défaut ; et
+# ce que la garde sait avant de lire (le tenant, l'opérateur, les identités protégées). Planifié contre
+# de faux azurerm et azuread, aucun appel à Azure ni à Graph ; tous les identifiants sont des exemples.
+# À la main :
 #   terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly
 #   terraform -chdir=infra/orodruin test
 # tests/unit/test_bench_identity.py tient le même contrat en lisant les fichiers.
@@ -42,8 +43,10 @@ mock_provider "azuread" {
     defaults = {
       object_id = "00000000-0000-0000-0000-0000000000a8"
       app_role_ids = {
-        "Application.Read.All"      = "00000000-0000-0000-0000-0000000000d1"
-        "Application.ReadWrite.All" = "00000000-0000-0000-0000-0000000000d2"
+        "Application.Read.All"               = "00000000-0000-0000-0000-0000000000d1"
+        "Application.ReadWrite.All"          = "00000000-0000-0000-0000-0000000000d2"
+        "RoleManagement.Read.Directory"      = "00000000-0000-0000-0000-0000000000d3"
+        "RoleManagement.ReadWrite.Directory" = "00000000-0000-0000-0000-0000000000d4"
       }
     }
   }
@@ -97,7 +100,7 @@ run "by_default_no_right_in_microsoft_graph" {
   }
 }
 
-run "enabled_application_read_all_alone_to_orodruin" {
+run "enabled_the_two_reads_alone_to_orodruin" {
   command = plan
 
   variables {
@@ -105,20 +108,20 @@ run "enabled_application_read_all_alone_to_orodruin" {
   }
 
   assert {
-    condition     = length(azuread_app_role_assignment.graph_read) == 1
-    error_message = "graph_read_enabled = true ne donne pas la lecture de Graph"
+    condition     = toset(keys(azuread_app_role_assignment.graph_read)) == toset(["Application.Read.All", "RoleManagement.Read.Directory"])
+    error_message = "graph_read_enabled = true ne donne pas exactement les deux lectures de Graph"
   }
   assert {
-    condition     = azuread_app_role_assignment.graph_read[0].app_role_id == "00000000-0000-0000-0000-0000000000d1"
-    error_message = "le rôle donné n'est pas Application.Read.All (une écriture, ou un autre droit)"
+    condition     = toset([for a in azuread_app_role_assignment.graph_read : a.app_role_id]) == toset(["00000000-0000-0000-0000-0000000000d1", "00000000-0000-0000-0000-0000000000d3"])
+    error_message = "un rôle donné n'est pas une des deux lectures (une écriture, ou un autre droit)"
   }
   assert {
-    condition     = azuread_app_role_assignment.graph_read[0].principal_object_id == "00000000-0000-0000-0000-0000000000a0"
-    error_message = "le rôle va à une autre identité que celle d'Orodruin"
+    condition     = alltrue([for a in azuread_app_role_assignment.graph_read : a.principal_object_id == "00000000-0000-0000-0000-0000000000a0"])
+    error_message = "un rôle va à une autre identité que celle d'Orodruin"
   }
   assert {
-    condition     = azuread_app_role_assignment.graph_read[0].resource_object_id == "00000000-0000-0000-0000-0000000000a8"
-    error_message = "le rôle est pris sur un autre principal que Microsoft Graph"
+    condition     = alltrue([for a in azuread_app_role_assignment.graph_read : a.resource_object_id == "00000000-0000-0000-0000-0000000000a8"])
+    error_message = "un rôle est pris sur un autre principal que Microsoft Graph"
   }
 }
 

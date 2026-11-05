@@ -367,11 +367,13 @@ class _GraphCredential:
 
 @pytest.mark.parametrize("claims", [
     {},                                                        # graph_read_enabled off: no role
-    {"roles": ["Application.Read.All"]},                       # on: the guard's read
-    {"roles": ["Application.Read.All"], "wids": ["0997a1d0-0d1d-4acb-b408-d5ca73121e90"]},
+    {"roles": ["Application.Read.All"]},                       # on: the guard's reads
+    {"roles": ["Application.Read.All", "RoleManagement.Read.Directory"]},
+    {"roles": ["RoleManagement.Read.Directory", "Application.Read.All"],
+     "wids": ["0997a1d0-0d1d-4acb-b408-d5ca73121e90"]},
 ])
 def test_the_graph_read_alone_holds(claims):
-    """IDI1: no Graph right, or the identity guard's read alone — and the token is the host's own,
+    """IDI1: no Graph right, or the identity guard's reads alone — and the token is the host's own,
     asked for Graph (no Graph call)."""
     cred = _GraphCredential(_graph_token(**claims))
     assert orodruin.read_graph(credential=cred) == []
@@ -382,6 +384,8 @@ def test_the_graph_read_alone_holds(claims):
     ({"roles": ["Application.ReadWrite.All"]}, "graph_unlisted_right"),
     ({"roles": ["Application.Read.All", "Application.ReadWrite.OwnedBy"]}, "graph_unlisted_right"),
     ({"roles": ["Directory.Read.All"]}, "graph_unlisted_right"),
+    ({"roles": ["Application.Read.All", "RoleManagement.ReadWrite.Directory"]}, "graph_unlisted_right"),
+    ({"roles": ["RoleManagement.Read.All"]}, "graph_unlisted_right"),
     ({"roles": ["User.ReadWrite.All"]}, "graph_unlisted_right"),
     ({"roles": ["application.read.all"]}, "graph_unlisted_right"),     # not as Graph writes it
     ({"wids": ["62e90394-69f5-4237-9190-012177145e10"]}, "graph_directory_role"),
@@ -792,16 +796,18 @@ def test_the_egress_is_closed_by_default_and_the_state_is_its_own():
     assert "backend" not in tf  # local state in infra/orodruin, never Celebrimbor's
 
 
-def test_the_one_graph_right_is_application_read_all_off_by_default():
-    """IDI1 (#546): one Microsoft Graph app role, Application.Read.All — the contract's own list —
-    to Orodruin's identity, on Graph's principal found by its published id, off by default; no
-    other azuread resource in the module (M3862, M3863). Its plan: tests/graph_read.tftest.hcl."""
+def test_the_graph_rights_are_the_two_reads_off_by_default():
+    """IDI1 (#546): two Microsoft Graph app roles, Application.Read.All and RoleManagement.Read.Directory —
+    the contract's own list — to Orodruin's identity, on Graph's principal found by its published id,
+    off by default; no other azuread resource in the module (M3862, M3863). Its plan:
+    tests/graph_read.tftest.hcl."""
     tf = _tf()
     assert set(re.findall(r'resource "(azuread_\w+)" "(\w+)"', tf)) == {("azuread_app_role_assignment", "graph_read")}
     grant = tf.split('resource "azuread_app_role_assignment" "graph_read"')[1].split("\n}\n")[0]
-    assert "count               = var.graph_read_enabled ? 1 : 0" in grant
-    roles = re.findall(r'app_role_ids\["([^"]+)"\]', tf)
-    assert roles == ["Application.Read.All"] and set(roles) == orodruin.GRAPH_READ_ONLY
+    assert "for_each            = local.graph_read_roles" in grant
+    roles = re.search(r'graph_read_roles = var\.graph_read_enabled \? toset\(\[([^\]]*)\]\) : toset\(\[\]\)', tf)
+    assert roles and set(re.findall(r'"([^"]+)"', roles.group(1))) == orodruin.GRAPH_READ_ONLY
+    assert "app_role_ids[each.value]" in grant
     assert "principal_object_id = azurerm_linux_virtual_machine.host.identity[0].principal_id" in grant
     assert "resource_object_id  = data.azuread_service_principal.msgraph[0].object_id" in grant
     assert 'result["MicrosoftGraph"]' in tf
@@ -819,6 +825,6 @@ def test_the_one_graph_right_is_application_read_all_off_by_default():
     for var in ("EREGION_TENANT_ID=", "EREGION_OPERATOR_OBJECT_ID=", "EREGION_PROTECTED_IDENTITIES="):
         assert f"\n{var}\n" in env, var
     tftest = (ORODRUIN / "tests" / "graph_read.tftest.hcl").read_text(encoding="utf-8")
-    for run in ("by_default_no_right_in_microsoft_graph", "enabled_application_read_all_alone_to_orodruin",
+    for run in ("by_default_no_right_in_microsoft_graph", "enabled_the_two_reads_alone_to_orodruin",
                 "what_the_guard_knows_before_reading", "the_listed_watches_are_protected_too"):
         assert f'run "{run}"' in tftest, run

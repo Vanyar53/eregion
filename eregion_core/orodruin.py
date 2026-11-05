@@ -9,8 +9,8 @@ guardrails hold — otherwise the injector stays passive and touches nothing.
                           group (which VMs: Terraform's choice, by their tags — the
                           contract does not read their inscription; O0 does, at each run);
                           and nothing else: what it holds is an allow-list (SEC11)
-        graph             its Microsoft Graph token: no right there but Application.Read.All
-                          (the identity guard's read, IDI1), no directory role, no user's
+        graph             its Microsoft Graph token: no right there but the identity guard's
+                          reads (GRAPH_READ_ONLY, IDI1), no directory role, no user's
         network           a connection outside the perimeter fails
         cap               the declared cap is read and compared to the ceiling
         kill              revoke the identity, cancel the chaos experiments, stop the
@@ -108,13 +108,15 @@ AUTHZ_READ_ONLY = frozenset({
 })
 
 # IDI1 (#546): what the identity may hold in Microsoft Graph — reading applications and their
-# principals, for the identity guard (eregion_core/inscription.py, GraphEnrollment), and
-# nothing else: no write there, no other API permission, no directory role. Read from the
+# principals (Application.Read.All), and the directory's role assignments, active and eligible
+# (RoleManagement.Read.Directory: a privileged identity is never enrolled), for the identity guard
+# (eregion_core/inscription.py, GraphEnrollment) — and nothing else: no write there, no other API
+# permission, no directory role. Read from the
 # identity's own Graph token, its app roles (``roles``) and its directory roles (``wids``):
 # no Graph call, no right needed to read it — infra/orodruin's graph_read_enabled off, the
 # token carries none and the guarantee holds.
 GRAPH = "https://graph.microsoft.com"
-GRAPH_READ_ONLY = frozenset({"Application.Read.All"})
+GRAPH_READ_ONLY = frozenset({"Application.Read.All", "RoleManagement.Read.Directory"})
 # A ``wids`` value seen in the app-only tokens of service principals that hold no directory role
 # (published decoded tokens of managed identities) — not a built-in role's template id.
 # Hypothesis, to measure on Orodruin (`make orodruin-check`): any other value is a role, passive.

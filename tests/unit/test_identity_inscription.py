@@ -1,9 +1,10 @@
 """IDI1 (#546): an identity of Entra ID is enrolled for the bench by two keys, one per plane — the
 application's own tags in Microsoft Graph name the bench and the zone, the bench's resource group
 names the application (``eregion-identities``) — and passes the same guard as a VM: of the named
-tenant, an application's principal, never a protected identity, its zone deciding. A read that
-fails refuses. All against a fake Graph and a fake ARM: no network, no Azure, no Graph; every
-identifier here is an example. Mutants M3810–M3819 (scripts/mutants/IDI1.py)."""
+tenant, an application's principal, never an identity of the shared list (eregion_core/never_target.py),
+never a privileged one, its zone deciding. A read that fails refuses. All against a fake Graph and a
+fake ARM: no network, no Azure, no Graph; every identifier here is an example. Mutants M3810–M3819,
+M3900–M3905 (scripts/mutants/IDI1.py)."""
 import base64
 import json
 from types import SimpleNamespace
@@ -16,7 +17,9 @@ from eregion_core.inscription import (
     check_identity,
     identity_enrollment,
     main,
+    privilege_refusal,
 )
+from eregion_core.never_target import NeverTarget
 
 TENANT = "00000000-0000-0000-0000-0000000000f0"
 OTHER_TENANT = "00000000-0000-0000-0000-0000000000f9"
@@ -28,9 +31,9 @@ APP_ID = "00000000-0000-0000-0000-0000000000c2"     # its appId (client id)
 SP = "00000000-0000-0000-0000-0000000000c3"         # its service principal
 SUB = "00000000-0000-0000-0000-000000000000"
 
-SCOPE = IdentityScope(bench="celebrimbor", tenant_id=TENANT, operator_id=OPERATOR,
-                      protected=frozenset({ORODRUIN, H0}), subscription_id=SUB,
-                      resource_group="rg-celebrimbor")
+NEVER = NeverTarget(ids=frozenset({ORODRUIN, H0, OPERATOR}), operators=frozenset({OPERATOR}))
+SCOPE = IdentityScope(bench="celebrimbor", tenant_id=TENANT, subscription_id=SUB,
+                      resource_group="rg-celebrimbor", never=NEVER)
 TOKEN = {"tid": TENANT, "oid": ORODRUIN, "appid": "00000000-0000-0000-0000-0000000000a1"}
 
 
@@ -41,7 +44,10 @@ def _identity(**over):
           "appOwnerOrganizationId": TENANT}
     app.update(over.pop("app", {}))
     sp.update(over.pop("sp", {}))
-    return {"application": app, "service_principal": sp, "owned": over.pop("owned", [])}
+    out = {"application": app, "service_principal": sp, "owned": [], "assigned_to": [], "member_of": [],
+           "app_roles_held": [], "directory_roles": []}
+    out.update(over)
+    return out
 
 
 RG = {"eregion-target": "celebrimbor", "eregion-zone": "bench", "eregion-identities": APP}
@@ -174,7 +180,7 @@ def test_a_protected_identity_is_never_a_target(where, value):
 
 
 def test_the_reader_itself_is_never_a_target():
-    scope = IdentityScope(**{**SCOPE.__dict__, "protected": frozenset()})
+    scope = IdentityScope(**{**SCOPE.__dict__, "never": NeverTarget(ids=frozenset({OPERATOR}), operators=frozenset({OPERATOR}))})
     assert not _verdict(_identity(sp={"id": ORODRUIN}), scope=scope).allowed
     assert not _verdict(token={**TOKEN, "appid": APP_ID}, scope=scope).allowed
 
@@ -188,8 +194,9 @@ def test_an_application_that_owns_a_protected_identity_refuses():
 def test_without_the_operator_no_identity_is_accepted():
     """The operator's object id comes from infra/orodruin (terraform output operator_object_id):
     without it, the guard refuses every identity (M3815)."""
-    v = _verdict(scope=IdentityScope(**{**SCOPE.__dict__, "operator_id": ""}))
+    v = _verdict(scope=IdentityScope(**{**SCOPE.__dict__, "never": NeverTarget(ids=NEVER.ids)}))
     assert not v.allowed and "EREGION_OPERATOR_OBJECT_ID" in v.reason
+    assert not _verdict(scope=IdentityScope(**{**SCOPE.__dict__, "never": None})).allowed
 
 
 def test_the_scope_comes_from_the_environment():
@@ -197,19 +204,20 @@ def test_the_scope_comes_from_the_environment():
            "EREGION_PROTECTED_IDENTITIES": f"{ORODRUIN},{H0}", "GLORFINDEL_OWN_CALLERS": "x,00000000-0000-0000-0000-0000000000b9",
            "AZURE_SUBSCRIPTION_ID": SUB, "EREGION_BENCH": "celebrimbor-blue"}
     scope = IdentityScope.for_bench(env)
-    assert scope.tenant_id == TENANT and scope.operator_id == OPERATOR and scope.bench == "celebrimbor-blue"
-    assert scope.protected == {ORODRUIN, H0, "00000000-0000-0000-0000-0000000000b9"}
-    assert scope.resource_group == "rg-celebrimbor-blue" and not scope.errors
+    assert scope.tenant_id == TENANT and scope.bench == "celebrimbor-blue"
+    assert scope.never.operators == {OPERATOR} and not scope.never.refusal()
+    assert scope.never.ids == {ORODRUIN, H0, OPERATOR, "00000000-0000-0000-0000-0000000000b9"}
+    assert scope.resource_group == "rg-celebrimbor-blue"
     assert IdentityScope.for_bench({**env, "EREGION_BENCH_RG": "rg-celebrimbor"}).resource_group == "rg-celebrimbor"
-    assert IdentityScope.for_bench({}).tenant_id == "" and IdentityScope.for_bench({}).operator_id == ""
+    assert IdentityScope.for_bench({}).tenant_id == "" and IdentityScope.for_bench({}).never.refusal()
 
 
 def test_a_protected_list_written_wrong_refuses_everything():
-    """A typo in the list would leave an identity unprotected, unsaid."""
-    scope = IdentityScope.for_bench({"EREGION_TENANT_ID": TENANT, "EREGION_OPERATOR_OBJECT_ID": OPERATOR,
-                                     "EREGION_PROTECTED_IDENTITIES": f"{ORODRUIN},{H0[:-1]}"})
-    assert scope.errors
-    assert not _verdict(scope=IdentityScope(**{**SCOPE.__dict__, "errors": scope.errors})).allowed
+    """A typo in the list would leave an identity unprotected, unsaid (M3815)."""
+    never = NeverTarget.from_env({"EREGION_OPERATOR_OBJECT_ID": OPERATOR,
+                                  "EREGION_PROTECTED_IDENTITIES": f"{ORODRUIN},{H0[:-1]}"})
+    assert never.refusal()
+    assert not _verdict(scope=IdentityScope(**{**SCOPE.__dict__, "never": never})).allowed
 
 
 def test_an_unknown_bench_refuses():
@@ -265,6 +273,12 @@ class FakeGraph:
             f"{g}/applications/{APP}": identity["application"],
             f"{g}/servicePrincipals(appId='{APP_ID}')": identity["service_principal"],
             f"{g}/servicePrincipals/{SP}/ownedObjects": {"value": [{"id": o} for o in identity["owned"]]},
+            f"{g}/servicePrincipals/{SP}/appRoleAssignedTo": {"value": [{"id": o} for o in identity["assigned_to"]]},
+            f"{g}/servicePrincipals/{SP}/transitiveMemberOf": {"value": [{"id": o} for o in identity["member_of"]]},
+            f"{g}/servicePrincipals/{SP}/appRoleAssignments": {"value": [
+                {"resourceId": h["resourceId"], "appRoleId": h["appRoleId"]} for h in identity["app_roles_held"]]},
+            f"{g}/roleManagement/directory/roleAssignments": {"value": identity["directory_roles"]},
+            f"{g}/roleManagement/directory/roleEligibilityScheduleInstances": {"value": []},
             f"https://management.azure.com/subscriptions/{SUB}/resourceGroups/rg-celebrimbor":
                 {"tags": RG if rg is None else rg},
         }
@@ -298,12 +312,17 @@ def test_the_reader_refuses_what_the_guard_refuses():
     assert not v.allowed and "eregion-identities" in v.reason
 
 
-@pytest.mark.parametrize("which", ["applications", "servicePrincipals(appId", "ownedObjects", "resourceGroups"])
+@pytest.mark.parametrize("which", ["applications", "servicePrincipals(appId", "ownedObjects", "appRoleAssignedTo",
+                                   "transitiveMemberOf", "appRoleAssignments", "roleAssignments",
+                                   "roleEligibilityScheduleInstances", "resourceGroups"])
 @pytest.mark.parametrize("status", [401, 403, 404, 429, 500])
 def test_a_read_that_fails_refuses(which, status):
-    """Never enrolled by default (M3817)."""
+    """Never enrolled by default (M3817) — a tenant without PIM whose eligibility read fails
+    included: everything is then refused, said (to measure on the bench)."""
     graph = FakeGraph()
-    url = next(u for u in graph.routes if which in u)
+    ends = {"applications": f"/applications/{APP}", "servicePrincipals(appId": f"(appId='{APP_ID}')",
+            "roleAssignments": "/directory/roleAssignments", "resourceGroups": "/resourceGroups/rg-celebrimbor"}
+    (url,) = [u for u in graph.routes if u.endswith(ends.get(which, f"/{which}"))]
     graph.fail[url] = status
     v = _reader(graph).check(APP, kind="technique", destructive=False)
     assert not v.allowed and "unreadable" in v.reason
@@ -327,7 +346,7 @@ def test_an_id_that_is_no_object_id_is_read_nowhere(app):
 
 def test_a_scope_that_cannot_judge_asks_for_no_token():
     cred, graph = _Credential(), FakeGraph()
-    scope = IdentityScope(**{**SCOPE.__dict__, "operator_id": ""})
+    scope = IdentityScope(**{**SCOPE.__dict__, "never": NeverTarget()})
     v = GraphEnrollment(scope=scope, credential=cred, get=graph).check(APP, kind="technique", destructive=False)
     assert not v.allowed and cred.asked == [] and graph.calls == []
 
@@ -365,3 +384,125 @@ def test_the_command_says_what_may_run(monkeypatch, capsys):
     monkeypatch.setattr("eregion_core.inscription.GraphEnrollment",
                         lambda: _reader(FakeGraph(rg={"eregion-target": "celebrimbor"})))
     assert main(["identity", APP]) == 1
+
+
+# ── A privileged identity is never enrolled (05/11: IR1's executor will own what is enrolled) ──
+
+GRAPH_SP = "00000000-0000-0000-0000-0000000000a8"     # Microsoft Graph's principal in the tenant
+ROLE = {"principalId": SP, "roleDefinitionId": "00000000-0000-0000-0000-0000000000e1", "directoryScopeId": "/"}
+
+
+def test_an_identity_with_a_directory_role_is_never_enrolled():
+    """Active or eligible, at the tenant or an administrative unit's scope: any role (M3900, M3901)."""
+    v = _verdict(_identity(directory_roles=[ROLE]))
+    assert not v.allowed and "directory role" in v.reason
+    assert not _verdict(_identity(directory_roles=[{**ROLE, "directoryScopeId": "/administrativeUnits/x"}])).allowed
+
+
+def test_a_member_of_a_group_is_never_enrolled():
+    """A group can carry a directory role or an Azure role: a membership refuses (M3903)."""
+    v = _verdict(_identity(member_of=["00000000-0000-0000-0000-0000000000e9"]))
+    assert not v.allowed and "member of a group" in v.reason
+
+
+@pytest.mark.parametrize("value", ["Application.ReadWrite.All", "Directory.ReadWrite.All", "AppRoleAssignment.ReadWrite.All",
+                                   "RoleManagement.ReadWrite.Directory", "Mail.Send", "User.Invite.All",
+                                   "Sites.FullControl.All", "User.ReadBasic.All", "", "Files.Read.All.Write"])
+def test_an_application_permission_that_is_not_a_read_is_never_enrolled(value):
+    """A write in Graph, or a permission not named as a read (or not named): refused (M3902)."""
+    held = [{"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d2", "value": value}]
+    v = _verdict(_identity(app_roles_held=held))
+    assert not v.allowed and "application permission" in v.reason
+
+
+@pytest.mark.parametrize("value", ["User.Read.All", "Application.Read.All", "AuditLog.Read.All", "Files.Read"])
+def test_an_application_permission_that_reads_passes(value):
+    held = [{"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d1", "value": value}]
+    assert _verdict(_identity(app_roles_held=held)).allowed
+
+
+def test_privileges_not_read_refuse():
+    for key in ("directory_roles", "member_of", "app_roles_held"):
+        identity = _identity()
+        identity.pop(key)
+        assert privilege_refusal(identity), key
+        assert not _verdict(identity).allowed, key
+
+
+# ── The shared list of identities never targeted (eregion_core/never_target.py) ──────────
+
+@pytest.mark.parametrize("sp", [{"appRoles": [{"id": "00000000-0000-0000-0000-0000000000e2", "value": "Data.Read"}]},
+                                {"oauth2PermissionScopes": [{"value": "user_impersonation"}]}])
+def test_the_principal_of_a_resource_is_never_a_target(sp):
+    """An API others call: its owner would rule what they reach (M3904)."""
+    v = _verdict(_identity(sp=sp))
+    assert not v.allowed and "principal of a resource" in v.reason
+    v = _verdict(_identity(assigned_to=["00000000-0000-0000-0000-0000000000e3"]))
+    assert not v.allowed and "principal of a resource" in v.reason
+
+
+def test_microsoft_s_applications_are_never_targets():
+    """Registered in Microsoft's tenant: refused by its home tenant, no Microsoft id written here."""
+    v = _verdict(_identity(sp={"appOwnerOrganizationId": OTHER_TENANT}))
+    assert not v.allowed and "Microsoft" in v.reason
+
+
+@pytest.mark.parametrize("name", ["ANNATAR_AZURE_CLIENT_ID", "GLORFINDEL_AZURE_CLIENT_ID", "AZURE_CLIENT_ID",
+                                  "GLORFINDEL_OWN_CALLERS", "EREGION_PROTECTED_IDENTITIES", "EREGION_OPERATOR_OBJECT_ID"])
+def test_annatar_glorfindel_and_the_operators_are_never_targets(name):
+    """By their client id (appId) or object id, whichever the variable holds."""
+    env = {"EREGION_OPERATOR_OBJECT_ID": OPERATOR, name: APP_ID}
+    never = NeverTarget.from_env(env)
+    if name == "EREGION_OPERATOR_OBJECT_ID":
+        never = NeverTarget.from_env({name: f"{OPERATOR},{APP_ID}"})
+    assert never.covers(APP_ID) and never.covers(APP_ID.upper())
+    v = _verdict(scope=IdentityScope(**{**SCOPE.__dict__, "never": never}))
+    assert not v.allowed and "protected identity" in v.reason
+
+
+def test_covers_says_whether_an_object_id_is_never_a_target():
+    """The interface IR1a reads: listed → True; not listed → False; unreadable → True for all (M3905)."""
+    never = NeverTarget.from_env({"EREGION_OPERATOR_OBJECT_ID": OPERATOR, "EREGION_PROTECTED_IDENTITIES": H0})
+    assert never.covers(H0) and never.covers(OPERATOR) and not never.covers(APP)
+    assert never.covers("not-an-id")
+    assert NeverTarget.from_env({"EREGION_PROTECTED_IDENTITIES": H0}).covers(APP)              # no operator
+    assert NeverTarget.from_env({"EREGION_OPERATOR_OBJECT_ID": f"{OPERATOR},oops"}).covers(APP)  # a typo
+    assert NeverTarget.from_env({"EREGION_OPERATOR_OBJECT_ID": OPERATOR, "ANNATAR_AZURE_CLIENT_ID": "x"}).covers(APP)
+
+
+def test_never_target_is_in_the_shared_core():
+    """D1: eregion_core alone, no component imported — IR1a's executor reads the same list."""
+    import ast
+    from pathlib import Path
+    tree = ast.parse((Path(__file__).resolve().parents[2] / "eregion_core" / "never_target.py").read_text())
+    mods = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    mods |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert not {m for m in mods if m.split(".")[0] in ("glorfindel", "annatar", "gothmog", "azure")}
+
+
+# ── The reader names each application permission by its resource's own list ──────────────
+
+def test_the_reader_names_a_permission_by_its_resource_and_refuses_a_write():
+    g = "https://graph.microsoft.com/v1.0"
+    held = [{"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d2"}]
+    graph = FakeGraph(_identity(app_roles_held=held), owned_pages={
+        f"{g}/servicePrincipals/{GRAPH_SP}": {"id": GRAPH_SP, "appRoles": [
+            {"id": "00000000-0000-0000-0000-0000000000d1", "value": "Application.Read.All"},
+            {"id": "00000000-0000-0000-0000-0000000000d2", "value": "Application.ReadWrite.All"}]}})
+    v = _reader(graph).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and "Application.ReadWrite.All" in v.reason
+    graph.routes[f"{g}/servicePrincipals/{SP}/appRoleAssignments"] = {"value": [
+        {"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d1"}]}
+    assert _reader(graph).check(APP, kind="technique", destructive=False).allowed
+    # A role its resource does not list: not named, refused.
+    graph.routes[f"{g}/servicePrincipals/{SP}/appRoleAssignments"] = {"value": [
+        {"resourceId": GRAPH_SP, "appRoleId": "00000000-0000-0000-0000-0000000000d9"}]}
+    assert not _reader(graph).check(APP, kind="technique", destructive=False).allowed
+
+
+def test_the_reader_asks_the_directory_roles_of_the_principal_only():
+    graph = FakeGraph(_identity(directory_roles=[ROLE]))
+    v = _reader(graph).check(APP, kind="technique", destructive=False)
+    assert not v.allowed and "directory role" in v.reason
+    asked = {u: p for u, _, p in graph.calls if "roleManagement" in u}
+    assert len(asked) == 2 and all(p == {"$filter": f"principalId eq '{SP}'"} for p in asked.values())

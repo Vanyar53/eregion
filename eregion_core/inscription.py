@@ -36,11 +36,13 @@ plane, the way a VM is by its group and itself — ``identity_enrollment``:
 
 Either key alone opens nothing: an application's owner (any member may register one) writes
 its tags, but not the bench's group. The tenant is named (``EREGION_TENANT_ID``) and must be
-the token's and the application's home (a multi-tenant application reaches other tenants:
-refused); the principal is an application's (a managed identity — Glorfindel's, Orodruin's —
-never is); the operator's identity is named (``EREGION_OPERATOR_OBJECT_ID``) or nothing is
-accepted; the reader itself, the identities listed as protected, and an application that owns
-one of them are never targets. A read that fails refuses.
+the token's; a multi-tenant application reaches other tenants: refused. Who is never a target —
+Glorfindel, Orodruin, Annatar, the operators, Microsoft's and other tenants' applications, the
+principal of a resource, whoever owns one of them — is the shared list of
+``eregion_core/never_target.py``; unreadable, nothing is accepted. A privileged identity is never
+enrolled (``privilege_refusal``): a directory role active or eligible, a membership, an
+application permission that is not a read — IR1's executor will own what is enrolled. A read that
+fails refuses.
 """
 
 from __future__ import annotations
@@ -49,6 +51,10 @@ import fnmatch
 import os
 import re
 from dataclasses import dataclass, field
+
+from eregion_core.never_target import NeverTarget
+from eregion_core.never_target import guid as _guid
+from eregion_core.never_target import ids as _ids
 
 TARGET_TAG = "eregion-target"
 ZONE_TAG = "eregion-zone"
@@ -408,57 +414,38 @@ class TagEnrollment:
 
 IDENTITIES_TAG = "eregion-identities"
 TENANT_ENV = "EREGION_TENANT_ID"
-OPERATOR_ENV = "EREGION_OPERATOR_OBJECT_ID"
-PROTECTED_ENV = "EREGION_PROTECTED_IDENTITIES"
 BENCH_RG_ENV = "EREGION_BENCH_RG"
-# The identity Glorfindel acts under, as it names itself (glorfindel/providers/azure/activity.py).
-_GLORFINDEL_ENVS = ("GLORFINDEL_OWN_CALLERS", "AZURE_CLIENT_ID")
 # What an application must be to be enrolled: of this tenant only (a multi-tenant one reaches
-# other tenants), its principal an application's (a managed identity never is a target).
+# other tenants). Who is never a target: eregion_core/never_target.py.
 SINGLE_TENANT = "AzureADMyOrg"
-APPLICATION_PRINCIPAL = "Application"
 _GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-
-
-def _guid(value) -> str:
-    """``value`` in lower case if it is an object id (a GUID), else ""."""
-    v = str(value or "").strip().lower()
-    return v if _GUID.fullmatch(v) else ""
-
-
-def _ids(raw: str) -> tuple[set[str], list[str]]:
-    """The object ids of a list (commas or spaces), and what in it is no object id."""
-    items = [x for x in re.split(r"[,\s]+", raw or "") if x]
-    return {_guid(x) for x in items if _guid(x)}, [x for x in items if not _guid(x)]
+# An application permission an enrolled identity may hold: a read, as Graph names one (« X.Read »,
+# « X.Read.All »), never a write — IR1's executor will own what is enrolled, and owning an
+# application is being able to act as it. Anything else, or a role whose name is not read, refuses.
+_READ_ONLY_ROLE = re.compile(r"[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*\.Read(?:\.All)?")
 
 
 @dataclass(frozen=True)
 class IdentityScope:
     """What the reader knows of the bench's tenant before it reads anything: the bench, the
-    tenant, the operator, the identities that are never targets — named, or nothing passes."""
+    tenant, the identities that are never targets (``NeverTarget``) — named, or nothing passes."""
 
     bench: str = DEFAULT_BENCH
     tenant_id: str = ""
-    operator_id: str = ""
-    protected: frozenset[str] = frozenset()
     subscription_id: str = ""
     resource_group: str = ""
-    errors: tuple[str, ...] = ()
+    never: NeverTarget | None = None
 
     @classmethod
     def for_bench(cls, env=None) -> "IdentityScope":
         """From the environment of the process (orodruin.env on Orodruin: terraform output of
-        infra/orodruin). An id written wrong in the protected list refuses everything — a typo
-        there would leave an identity unprotected, unsaid."""
+        infra/orodruin)."""
         env = os.environ if env is None else env
         bench = (env.get(BENCH_ENV) or DEFAULT_BENCH).strip()
-        protected, bad = _ids(env.get(PROTECTED_ENV) or "")
-        for name in _GLORFINDEL_ENVS:
-            protected |= _ids(env.get(name) or "")[0]
-        errors = tuple(f"{PROTECTED_ENV} holds what is no object id: {x[:40]!r}" for x in bad)
-        return cls(bench=bench, tenant_id=_guid(env.get(TENANT_ENV)), operator_id=_guid(env.get(OPERATOR_ENV)),
-                   protected=frozenset(protected), subscription_id=(env.get(SUBSCRIPTION_ENV) or "").strip(),
-                   resource_group=(env.get(BENCH_RG_ENV) or f"rg-{bench}").strip(), errors=errors)
+        return cls(bench=bench, tenant_id=_guid(env.get(TENANT_ENV)),
+                   subscription_id=(env.get(SUBSCRIPTION_ENV) or "").strip(),
+                   resource_group=(env.get(BENCH_RG_ENV) or f"rg-{bench}").strip(),
+                   never=NeverTarget.from_env(env))
 
 
 def _scope_refusal(scope: IdentityScope) -> str:
@@ -467,12 +454,9 @@ def _scope_refusal(scope: IdentityScope) -> str:
         return f"unknown bench '{scope.bench}' — Celebrimbor only"
     if not scope.tenant_id:
         return f"the scope names no tenant ({TENANT_ENV}): no identity is enrolled outside a named tenant"
-    if not scope.operator_id:
-        return (f"the scope names no operator ({OPERATOR_ENV}): without it, the operator's own identity "
-                "could not be told apart — no identity is accepted")
-    if scope.errors:
-        return "; ".join(scope.errors)
-    return ""
+    if scope.never is None:
+        return "the identities never targeted are not read: no identity is accepted"
+    return scope.never.refusal()
 
 
 def _graph_tags(tags) -> tuple[dict[str, str], str]:
@@ -490,13 +474,35 @@ def _graph_tags(tags) -> tuple[dict[str, str], str]:
     return out, ""
 
 
+def privilege_refusal(identity: dict) -> str:
+    """Why this identity is privileged — never enrolled — or "". ``identity``: ``directory_roles``
+    (its directory role assignments, active and eligible, at any scope), ``member_of`` (the groups
+    and roles it is a member of, transitively: a group can carry a role), ``app_roles_held`` (the
+    application permissions it holds, each with the ``value`` its resource names it by)."""
+    roles = identity.get("directory_roles")
+    if roles is None or identity.get("member_of") is None or identity.get("app_roles_held") is None:
+        return "its roles and permissions are not read: a privileged identity is never enrolled"
+    if roles:
+        return (f"it holds {len(roles)} directory role(s), active or eligible: a privileged identity is "
+                "never enrolled (IR1 will own what is enrolled)")
+    if identity["member_of"]:
+        return "it is a member of a group or a directory role (a group can carry a role): never enrolled"
+    for held in identity["app_roles_held"]:
+        value = str(held.get("value") or "")
+        if not _READ_ONLY_ROLE.fullmatch(value) or "write" in value.lower():
+            return (f"it holds the application permission '{value or held.get('appRoleId')}', not a read: "
+                    "a privileged identity is never enrolled")
+    return ""
+
+
 def identity_enrollment(identity: dict, rg_tags: dict | None, *, scope: IdentityScope,
                         token: dict) -> GuardResult:
     """Is this application enrolled for the bench? ``identity`` as Graph returned it —
     ``application`` (id, appId, signInAudience, tags), ``service_principal`` (id, appId,
-    servicePrincipalType, appOwnerOrganizationId), ``owned`` (the object ids its principal
-    owns); ``rg_tags``, the tags of the bench's group; ``token``, the claims of the reader's
-    own Graph token (tid, oid, appid). The zone is the application's, the group's agreeing."""
+    servicePrincipalType, appOwnerOrganizationId, appRoles, oauth2PermissionScopes), ``owned``,
+    ``assigned_to``, and what ``privilege_refusal`` reads; ``rg_tags``, the tags of the bench's
+    group; ``token``, the claims of the reader's own Graph token (tid, oid, appid). The zone is
+    the application's, the group's agreeing."""
     why = _scope_refusal(scope)
     if why:
         return GuardResult(False, why)
@@ -508,24 +514,17 @@ def identity_enrollment(identity: dict, rg_tags: dict | None, *, scope: Identity
     app_oid, app_id, sp_oid = _guid(app.get("id")), _guid(app.get("appId")), _guid(sp.get("id"))
     if not (app_oid and app_id and sp_oid) or _guid(sp.get("appId")) != app_id:
         return GuardResult(False, "the application and its service principal cannot be told apart")
-    if str(sp.get("servicePrincipalType") or "") != APPLICATION_PRINCIPAL:
-        return GuardResult(False, f"a principal of type '{sp.get('servicePrincipalType')}', not an "
-                                  "application's: a managed identity is never a target")
-    if _guid(sp.get("appOwnerOrganizationId")) != tenant:
-        return GuardResult(False, "the application is registered in another tenant")
+    # Never a target: Glorfindel, Orodruin, Annatar, the operators, Microsoft's and other tenants'
+    # applications, the principal of a resource, whoever owns one of them (never_target.py).
+    why = scope.never.why(identity, tenant=tenant, token=token)
+    if why:
+        return GuardResult(False, why)
     if str(app.get("signInAudience") or "") != SINGLE_TENANT:
         return GuardResult(False, f"the application signs in '{app.get('signInAudience')}', not "
                                   f"{SINGLE_TENANT} alone: it reaches other tenants")
-
-    # Never a target: the reader itself, the operator, the identities listed as protected —
-    # nor an application whose principal owns one of them (its credentials would rule it).
-    never = set(scope.protected) | {scope.operator_id}
-    never |= {x for x in (_guid(token.get("oid")), _guid(token.get("appid"))) if x}
-    if never & {app_oid, app_id, sp_oid}:
-        return GuardResult(False, "a protected identity (the reader, Glorfindel, Orodruin, the "
-                                  "operator) is never a target")
-    if never & {_guid(o) for o in identity.get("owned") or []}:
-        return GuardResult(False, "the application's principal owns a protected identity")
+    why = privilege_refusal(identity)
+    if why:
+        return GuardResult(False, why)
 
     # The ARM key: the bench's group, enrolled, names this application.
     rg = _tags(rg_tags)
@@ -583,10 +582,12 @@ def token_claims(token: str) -> dict:
 
 class GraphEnrollment:
     """Whether an application is enrolled, read now with the reader's own identity: Orodruin's,
-    which holds ``Application.Read.All`` in Microsoft Graph and nothing else there (its contract
-    checks it: eregion_core/orodruin.py), and Reader on the bench's group. Three Graph reads (the
-    application, its principal, what the principal owns) and one of ARM (the group's tags), each
-    URL built from an object id checked first. Any failure refuses: never enrolled by default."""
+    which holds ``Application.Read.All`` and ``RoleManagement.Read.Directory`` in Microsoft Graph and
+    nothing else there (its contract checks it: eregion_core/orodruin.py), and Reader on the
+    bench's group. Graph: the application, its principal (with its roles and scopes), what the
+    principal owns, who holds a role on it, its memberships, its application permissions (each
+    named by its resource), its directory roles active and eligible; ARM: the group's tags. Each
+    URL is built from an object id checked first. Any failure refuses: never enrolled by default."""
 
     MAX_PAGES = 10
 
@@ -605,8 +606,22 @@ class GraphEnrollment:
         import requests
         r = (self._get or requests.get)(url, headers=headers, params=params, timeout=15)
         if not r.ok:
-            raise RuntimeError(f"HTTP {r.status_code} reading {url.rsplit('/', 1)[-1][:60]}")
+            raise RuntimeError(f"HTTP {r.status_code} reading {url.split('?')[0].rsplit('/', 1)[-1][:60]}")
         return r.json()
+
+    def _pages(self, url: str, headers: dict, params: dict | None) -> list[dict]:
+        """Every item of a Graph listing; its next page in Graph only, read whole or refused."""
+        out: list[dict] = []
+        for _ in range(self.MAX_PAGES):
+            body = self._read(url, headers, params)
+            out += [o for o in body.get("value") or [] if isinstance(o, dict)]
+            url, params = str(body.get("@odata.nextLink") or ""), None
+            if not url:
+                return out
+            # The token goes to Microsoft Graph only: a next page elsewhere is refused.
+            if not url.startswith(_GRAPH_V1 + "/"):
+                raise RuntimeError("a next page outside Microsoft Graph: refused")
+        raise RuntimeError("too many pages: not read whole")
 
     def read(self, app_object_id: str) -> tuple[dict, dict, dict]:
         """(the identity as Graph says it, the bench group's tags, the reader's token claims)."""
@@ -619,34 +634,40 @@ class GraphEnrollment:
             raise ValueError("the bench's subscription or group is not named as one")
         token = self._token(_GRAPH_SCOPE)
         claims = token_claims(token)
-        graph = {"Authorization": f"Bearer {token}"}
-        app = self._read(f"{_GRAPH_V1}/applications/{oid}", graph,
-                         {"$select": "id,appId,signInAudience,tags"})
+        g = {"Authorization": f"Bearer {token}"}
+        app = self._read(f"{_GRAPH_V1}/applications/{oid}", g, {"$select": "id,appId,signInAudience,tags"})
         app_id = _guid(app.get("appId"))
         if not app_id:
             raise RuntimeError("the application names no appId")
-        sp = self._read(f"{_GRAPH_V1}/servicePrincipals(appId='{app_id}')", graph,
-                        {"$select": "id,appId,servicePrincipalType,appOwnerOrganizationId"})
+        sp = self._read(f"{_GRAPH_V1}/servicePrincipals(appId='{app_id}')", g, {
+            "$select": "id,appId,servicePrincipalType,appOwnerOrganizationId,appRoles,oauth2PermissionScopes"})
         sp_oid = _guid(sp.get("id"))
         if not sp_oid:
             raise RuntimeError("the service principal names no id")
-        owned: list[str] = []
-        url, params = f"{_GRAPH_V1}/servicePrincipals/{sp_oid}/ownedObjects", {"$select": "id"}
-        for _ in range(self.MAX_PAGES):
-            body = self._read(url, graph, params)
-            owned += [str(o.get("id") or "") for o in body.get("value") or []]
-            url, params = str(body.get("@odata.nextLink") or ""), None
-            if not url:
-                break
-            # The token goes to Microsoft Graph only: a next page elsewhere is refused.
-            if not url.startswith(_GRAPH_V1 + "/"):
-                raise RuntimeError("a next page outside Microsoft Graph: refused")
-        else:
-            raise RuntimeError("too many pages of owned objects: not read whole")
+        base = f"{_GRAPH_V1}/servicePrincipals/{sp_oid}"
+        owned = [str(o.get("id") or "") for o in self._pages(f"{base}/ownedObjects", g, {"$select": "id"})]
+        assigned_to = [str(o.get("id") or "") for o in self._pages(f"{base}/appRoleAssignedTo", g, None)]
+        member_of = [str(o.get("id") or "") for o in self._pages(f"{base}/transitiveMemberOf", g, {"$select": "id"})]
+        # Its application permissions, each named by its resource's own list of roles.
+        held = []
+        names: dict[str, dict[str, str]] = {}
+        for a in self._pages(f"{base}/appRoleAssignments", g, None):
+            rid, role = _guid(a.get("resourceId")), _guid(a.get("appRoleId"))
+            if not rid or not role:
+                raise RuntimeError("an application permission names no resource or role")
+            if rid not in names:
+                res = self._read(f"{_GRAPH_V1}/servicePrincipals/{rid}", g, {"$select": "id,appRoles"})
+                names[rid] = {_guid(r.get("id")): str(r.get("value") or "") for r in res.get("appRoles") or []}
+            held.append({"appRoleId": role, "resourceId": rid, "value": names[rid].get(role, "")})
+        # Its directory roles, active and eligible (PIM), at any scope.
+        flt = {"$filter": f"principalId eq '{sp_oid}'"}
+        roles = self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleAssignments", g, flt)
+        roles += self._pages(f"{_GRAPH_V1}/roleManagement/directory/roleEligibilityScheduleInstances", g, flt)
         arm = {"Authorization": f"Bearer {self._token(_ARM_SCOPE)}"}
         group = self._read(f"{ARM}/subscriptions/{sub}/resourceGroups/{rg}", arm, {"api-version": _RG_API})
-        return ({"application": app, "service_principal": sp, "owned": owned},
-                group.get("tags") or {}, claims)
+        identity = {"application": app, "service_principal": sp, "owned": owned, "assigned_to": assigned_to,
+                    "member_of": member_of, "app_roles_held": held, "directory_roles": roles}
+        return identity, group.get("tags") or {}, claims
 
     def check(self, app_object_id: str, *, kind: str, destructive: bool | None) -> GuardResult:
         """The verdict for an experiment on this application, read now. The scope is judged

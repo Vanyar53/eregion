@@ -1247,7 +1247,8 @@ Depuis SEC18 (N-05), `runs/` n'est plus un répertoire que chaque service monte 
 | Répertoire | Écrit par | Lu (lecture seule) par |
 |---|---|---|
 | `runs/glorfindel/` | la watch (ses cycles ; sur H0, ce qu'elle tire du canal ; les rapports et le tri des campagnes) | la console |
-| `runs/console/` | la console, la CLI de Glorfindel, le bot (`manual_actions.jsonl`) | la watch |
+| `runs/console/` | la console, la CLI de Glorfindel (`manual_actions.jsonl` ; `queue/`, FS1b) | la watch |
+| `runs/bot/` | le bot et la CLI qu'il lance (`manual_actions.jsonl`, FS1c ; `queue/`, FS1b) | la watch, la console |
 | `runs/annatar/` | Annatar (ses signaux, ses rapports, ses fenêtres, ses campagnes) | la watch, le bot, la console |
 | `runs/gothmog/` | Gothmog (ses signaux, ses rapports, ses fenêtres) | la watch, la console |
 | `runs/orodruin/` | les injecteurs sur Orodruin et le lanceur d'une demande (journal, verrou, statuts) | — |
@@ -1458,11 +1459,12 @@ reste `make glorfindel-host-start REF=<tag>`.
 
 ---
 
-## La file d'actions signée — les clés des services (FS1b, #563)
+## La file d'actions signée — les clés des services (FS1b, #563 ; FS1c, #571)
 
-**Rien à faire tant que `EREGION_ACTION_QUEUE` est vide** : c'est le défaut, l'appel direct de la
-console et du bot reste, et aucune file n'est lue. Le drapeau se pose avec FS1c, mesuré au banc
-(`docs/design/file-actions-signee.md`, §4.2) ; ces gestes sont préparés, **pas encore à faire**.
+**Rien à faire tant que `EREGION_ACTION_QUEUE` est vide** : c'est encore le défaut, l'appel direct
+de la console et du bot reste, et aucune file n'est lue. FS1c prépare la bascule sans la faire : le
+drapeau se pose à la main pour la mesure au banc (ci-dessous, « La mesure au banc »), et le défaut
+ne changera qu'après elle (`docs/design/file-actions-signee.md`, §4.2, §9).
 
 Avec `EREGION_ACTION_QUEUE=1` (dans `.envrc` sur un poste, dans `host.env` sur H0 — pour les trois
 services : la watch le lit aussi), la console et le bot ne font plus que déposer une demande signée
@@ -1475,19 +1477,68 @@ crée au nom de root). La watch **épingle** leurs clés publiques, dans son env
 1. **Ce poste** : `make glorfindel-restart` avec le drapeau, puis `make queue-keys` — la ligne
    `export EREGION_QUEUE_KEYS=console=ed25519:…,bot=ed25519:…` (le bot seulement s'il tourne,
    profil `bot`) dans ton `.envrc`, puis `make glorfindel-restart`. Jamais la clé privée.
-2. **H0** : la release déployée avec le drapeau dans `host.env`, puis
-   `make glorfindel-host-queue-keys` (par SSH, la clé d'hôte épinglée) : la ligne
-   `EREGION_QUEUE_KEYS=…` dans `host.env`, puis `make glorfindel-host-push`.
+2. **H0** : **les clés d'abord, le drapeau ensuite**. `make glorfindel-host-queue-keys` (par SSH,
+   la clé d'hôte épinglée) tire la clé de la console et celle du bot dans leurs conteneurs s'ils n'en
+   ont pas encore (`pin <service> --draw`, sans le drapeau) et imprime `EREGION_QUEUE_KEYS=…` ; cette
+   ligne et `EREGION_ACTION_QUEUE=1` vont dans `host.env` ensemble, puis `make glorfindel-host-push`.
+   `host_env.py --check` (que le push lance) refuse le drapeau sans la clé de la console, ou sans
+   celle du bot quand `DISCORD_BOT_TOKEN` est posé, et un drapeau autre que « 1 ».
+   `make glorfindel-host-env` ne recopie jamais ces deux variables de ton `.envrc` : ce sont les clés
+   de ce poste, H0 a les siennes.
 3. **La copie des autorisés du bot** chez la watch : `DISCORD_ALLOWED_USERS` et
    `DISCORD_ALLOWED_ROLES` passent aussi à la watch (le compose), qui relit l'humain qu'une demande du
    bot nomme ; vides chez elle, le Revert du bot est refusé (`guard`).
 
 Sans clé épinglée pour un service, la watch refuse chacune de ses demandes (`no_key_pinned`) et le
-dit au démarrage ; une clé tirée de nouveau est refusée avec les deux empreintes (`unknown_key`,
+dit au démarrage (chaque clé qui manque ou qui est fausse) ; la console grise ses boutons d'écriture
+et dit pourquoi (le statut signé de la watch) ; une clé tirée de nouveau est refusée avec les deux empreintes (`unknown_key`,
 une carte critique) : épingler la nouvelle. Le registre de la watch (`~/.eregion/watch-queue/`, les
 nonces vus et les propositions exécutées) est à elle seule ; illisible, elle refuse tout et le dit
 (`queue_unavailable`) — le réparer ou le retirer, la watch le recrée. Les reçus et le statut :
 `runs/glorfindel/queue/` (le bot en monte ce seul sous-répertoire, en lecture seule).
+
+**Avec le drapeau, les gestes sont asynchrones (FS1c)** : une route de la console rend aussitôt l'id
+de sa demande, et la page suit son reçu (`GET /api/queue/<id>` : reçue, acceptée, puis faite,
+échouée ou refusée, et pourquoi) ; le bot dit chaque état dans le fil de la VM. Un « Approve »
+grisé dit pourquoi en survol : la watch arrêtée (son statut a plus de 60 s), en lecture seule, ou qui
+n'épingle pas la clé de la console. « signed by … the watch's key pinned here is … » : la clé de la
+watch tirée de nouveau — épingler la nouvelle (`EREGION_WATCH_KEY`, `make glorfindel-host-watch-key`).
+Plus de 4 gestes à la fois dans une console : le cinquième est refusé (503), à refaire — avec ou
+sans le drapeau. Un geste prend sa place à son entrée et la garde jusqu'au bout : refusé, rien n'est
+fait ; accepté, son action, sa vérification et sa note ont toujours lieu.
+
+**Limite connue** : avec le drapeau, un geste de la console n'est noté (`manual_actions.jsonl`, le
+fil, les levées) que lorsqu'une lecture le règle — la page qui suit son reçu, ou l'état d'une page
+ouverte. Si la console est arrêtée au moment du reçu final et qu'aucune page ne relit son état avant
+le balayage de ses demandes (une heure), le geste fait n'est pas noté ; son reçu signé, lui, reste 2 h
+dans `runs/glorfindel/queue/`. La piste, plus tard : une tâche de fond de la console qui règle ses
+demandes sans attendre une lecture. Le Revert du bot, lui, est noté par le bot à la fin de son suivi
+(`runs/bot/manual_actions.jsonl`) ; un bot redémarré pendant ce suivi ne le reprend pas.
+
+### La mesure au banc (FS1c) — l'ordre des gestes de Jonathan
+
+Sur H0 et le banc (gondolin), avec la release de FS1c déployée. Chaque étape se vérifie avant la
+suivante ; aucune n'est faite par une session.
+
+1. **Les clés** : `make glorfindel-host-queue-keys` — la ligne `EREGION_QUEUE_KEYS=console=…,bot=…`
+   (le drapeau n'est pas encore posé : rien ne change sur H0).
+2. **Le drapeau** : cette ligne et `EREGION_ACTION_QUEUE=1` dans `host.env`, puis
+   `make glorfindel-host-push` (le `--check` les tient ensemble), et le redémarrage des trois
+   services. Au démarrage, la watch ne dit aucune clé manquante ; la console dit sa clé, et ses
+   boutons d'écriture ne sont plus grisés une fois le statut de la watch publié (10 s).
+3. **Une approbation de bout en bout** : une carte d'isolation de gondolin approuvée dans la console
+   — la page dit « deposited », « received », « accepted », puis « executed » ; le reçu signé
+   (`runs/glorfindel/queue/console-<id>.json`), la vérification, la carte réglée, le geste au fil.
+   Puis sa levée (Release) par la file, et un Revert du bot sur une carte `verification_failed` : le
+   bot dit le reçu dans le fil de la VM. Et une demande non signée déposée à la main dans
+   `runs/console/queue/` : refusée (`unsigned`), une carte critique `queue_tampered`, rien sur Azure.
+4. **Le retour** : `EREGION_ACTION_QUEUE=` (vide) dans `host.env`, `make glorfindel-host-push` — la
+   console et le bot reprennent l'appel direct, aucune file n'est lue ; `EREGION_QUEUE_KEYS` peut
+   rester (la prochaine bascule n'aura que le drapeau à poser).
+
+**La bascule du défaut**, après cette mesure, est une ligne : `action_queue.enabled` vrai sauf
+`EREGION_ACTION_QUEUE=0` (l'appel direct, le temps d'une release), dans un lot à part — puis FS1d
+(les identités lectrices), dont la release de la bascule doit précéder les gestes.
 
 ---
 

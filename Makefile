@@ -1133,12 +1133,16 @@ glorfindel-host-watch-key: glorfindel-host-known
 # démarrage de chaque service avec EREGION_ACTION_QUEUE=1, dans ~/.eregion/console et ~/.eregion/bot ;
 # jamais la clé privée. queue-keys : celles de ce poste ; glorfindel-host-queue-keys : celles de H0,
 # lues dans leurs conteneurs par SSH, clé d'hôte épinglée (V-32).
+# FS1c : sur H0, les clés d'abord, le drapeau ensuite — `pin … --draw` tire la clé du service dans son
+# propre conteneur s'il n'en a pas encore, sans le drapeau ; la ligne imprimée va dans host.env avec
+# EREGION_ACTION_QUEUE=1, en un seul push (host_env.py --check refuse le drapeau sans la clé de la
+# console, ni sans celle du bot quand il tourne). Le bot arrêté : sa clé manque, et c'est dit.
 queue-keys:
 	@$(PYTHON) -m eregion_core.action_queue public
 
 glorfindel-host-queue-keys: glorfindel-host-known
 	@test -n "$(HOST_IP)" || { echo "Pas de VM : make glorfindel-host-up d'abord"; exit 1; }
-	@$(HOST_SSH) 'c=$$(docker exec eregion-war-room python -m eregion_core.action_queue pin console) && b=$$(docker exec eregion-bot python -m eregion_core.action_queue pin bot) && echo "EREGION_QUEUE_KEYS=$$c,$$b"'
+	@$(HOST_SSH) 'c=$$(docker exec eregion-war-room python -m eregion_core.action_queue pin console --draw) || exit 1; b=$$(docker exec eregion-bot python -m eregion_core.action_queue pin bot --draw 2>/dev/null) || { b=; echo "# le bot ne tourne pas sur H0 : sa clé n est pas épinglée (son Revert sera refusé, no_key_pinned)" >&2; }; echo "EREGION_QUEUE_KEYS=$$c$${b:+,$$b}"'
 
 # L'empreinte de la clé d'hôte d'Orodruin, lue sur la VM par le plan de contrôle d'Azure (ton az
 # login, Run Command) — jamais par SSH, qu'elle sert à vérifier. Une fois par VM (reconstruite :

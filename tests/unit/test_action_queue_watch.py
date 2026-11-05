@@ -40,8 +40,13 @@ ALLOWED = {"DISCORD_ALLOWED_USERS": "111"}
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
+    return make_world(tmp_path, monkeypatch)
+
+
+def make_world(tmp_path, monkeypatch) -> dict:
     """web on a subnet whose NSG lets SSH in, a real connector on the in-memory Azure; runs/ and
-    the watch's register in tmp; the watch's key signs its proposals; isolation by rules."""
+    the watch's register in tmp; the watch's key signs its proposals; isolation by rules (also
+    test_action_queue_async.py's world, FS1c)."""
     for var in ("GLORFINDEL_WEBHOOK_URL", "DISCORD_BOT_TOKEN", "GLORFINDEL_READ_ONLY",
                 "GLORFINDEL_APPROVAL_MAX_AGE_H", "DISCORD_ALLOWED_USERS", "DISCORD_ALLOWED_ROLES"):
         monkeypatch.delenv(var, raising=False)
@@ -695,9 +700,20 @@ def test_without_the_flag_the_console_calls_as_before_and_deposits_nothing(world
     assert not aq.request_dir("console", world["root"]).exists()
 
 
+def _followed(client, out: dict, timeout_s: float = 10.0) -> dict:
+    """FS1c: the route answered at once with its request; the page follows its receipt."""
+    assert out.get("pending") and out["via"] == "queue" and out["request"], out
+    deadline = time.monotonic() + timeout_s
+    while True:
+        got = client.get(f"/api/queue/{out['request']}").json()
+        if not got.get("pending") or time.monotonic() > deadline:
+            return got
+        time.sleep(0.05)
+
+
 def test_with_the_flag_a_click_gives_a_request_the_watch_and_the_route_answers(world, monkeypatch):
     """§4.3, the end to end: an approval click → a request signed by the console's key → the watch
-    → its receipt → the route's answer. The console never calls Azure."""
+    → its receipt → the answer the page follows (FS1c). The console never calls Azure."""
     pytest.importorskip("fastapi")
     api, client = _console(world, monkeypatch)
     monkeypatch.setenv(aq.FLAG_ENV, "1")
@@ -706,7 +722,7 @@ def test_with_the_flag_a_click_gives_a_request_the_watch_and_the_route_answers(w
     monkeypatch.setattr(AzureConnector, "__init__", lambda *a, **k: pytest.fail("the console built a connector"))
     card = _card()
     with _Picker(world["q"]):
-        out = client.post(f"/api/action/approve/{card['id']}", json={}).json()
+        out = _followed(client, client.post(f"/api/action/approve/{card['id']}", json={}).json())
     assert out.get("ok") and out["via"] == "queue", out
     assert out["verification"]["verified"] is True
     assert not _flows(world)
@@ -725,7 +741,7 @@ def test_with_the_flag_a_refusal_is_the_routes_error(world, monkeypatch):
     world["q"].read_only = True
     card = _card()
     with _Picker(world["q"]):
-        out = client.post(f"/api/action/approve/{card['id']}", json={}).json()
+        out = _followed(client, client.post(f"/api/action/approve/{card['id']}", json={}).json())
     assert out["refused"] == "read_only" and "error" in out and _flows(world)
 
 
@@ -739,19 +755,33 @@ def test_with_the_flag_and_no_watch_the_console_says_it(world, monkeypatch):
     assert not list(aq.request_dir("console", world["root"]).glob("*.json")), "withdrawn"
 
 
+class _Thread:
+    """A Discord thread as the bot writes in it: what it was told, in order."""
+
+    def __init__(self):
+        self.said: list[str] = []
+
+    async def send(self, text):
+        self.said.append(text)
+
+
 def test_the_bot_deposits_its_revert_behind_the_flag(world, monkeypatch):
+    """FS1c: deposited, then the receipt followed without a thread held — each state said."""
     pytest.importorskip("discord")
+    import asyncio
     from glorfindel import bot
     monkeypatch.setenv(aq.FLAG_ENV, "1")
     world["q"].pins = {"console": CONSOLE.public, "bot": aq.load_service_key("bot").public}
     world["conn"].isolate_vm(WEB)
     card = _card("isolate_vm", "verification_failed")
     user = type("U", (), {"id": 111, "display_name": "an operator"})()
+    thread = _Thread()
     with _Picker(world["q"]):
-        code, said = bot._queue_reset(card, user)
+        code, said = asyncio.run(bot._queue_revert(card, user, thread, poll_s=0.02))
     assert code == 0 and "done" in said, said
     assert _flows(world)
     assert (world["root"] / "bot" / "queue").is_dir()
+    assert "déposée" in thread.said[0], thread.said
 
 
 def test_without_the_flag_the_bots_revert_runs_the_cli(world, monkeypatch):
@@ -759,9 +789,10 @@ def test_without_the_flag_the_bots_revert_runs_the_cli(world, monkeypatch):
     from glorfindel import bot
     ran = []
     monkeypatch.setattr(bot, "_run_cli", lambda args: ran.append(args) or (0, "ok"))
-    monkeypatch.setattr(bot, "_queue_reset", lambda *a: pytest.fail("deposited without the flag"))
+    monkeypatch.setattr(bot, "_deposit_reset", lambda *a: pytest.fail("deposited without the flag"))
     button = bot._ExecuteButton.__new__(bot._ExecuteButton)
     button.cli_args, button.esc = ["revert", WEB, "--yes"], {"id": "c1"}
+    assert button._queued() is False
     assert button._run(None) == (0, "ok") and ran == [["revert", WEB, "--yes"]]
 
 

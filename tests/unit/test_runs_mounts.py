@@ -29,7 +29,8 @@ DEPLOY = (ROOT / "infra" / "glorfindel-host" / "deploy.sh").read_text(encoding="
 # The writers of each directory: compose services, and the Makefile's docker runs by their variable.
 OWNERS = {
     "glorfindel": {"watch", "GLORFINDEL_VOLS"},
-    "console": {"war-room", "bot", "GLORFINDEL_VOLS"},
+    # FS1c: the bot no longer — its gestures go to runs/bot, its own.
+    "console": {"war-room", "GLORFINDEL_VOLS"},
     "annatar": {"annatar", "ANNATAR_VOLS", "ORO_RUN", "ORO_RUN_REQUEST"},
     "gothmog": {"gothmog", "ORO_RUN_GOTHMOG", "ORO_RUN_REQUEST"},
     # One run at a time on the injectors' host (R-10): its lock and its journal are every
@@ -125,8 +126,9 @@ def test_the_red_never_mounts_the_watchs_directory_nor_the_consoles():
 def test_each_service_mounts_what_it_writes_and_reads():
     want = {"watch": {("glorfindel", False), ("annatar", True), ("gothmog", True), ("console", True),
                       ("verdicts", False), ("bot", True)},
-            "war-room": {("console", False), ("glorfindel", True), ("annatar", True), ("gothmog", True)},
-            "bot": {("console", False), ("annatar", True), ("bot", False), ("glorfindel", True)},
+            "war-room": {("console", False), ("glorfindel", True), ("annatar", True), ("gothmog", True),
+                         ("bot", True)},
+            "bot": {("annatar", True), ("bot", False), ("glorfindel", True)},
             "annatar": {("annatar", False), ("orodruin", False), ("verdicts", True)},
             "gothmog": {("gothmog", False), ("orodruin", False), ("verdicts", True)},
             "ANNATAR_VOLS": {("annatar", False), ("orodruin", False), ("verdicts", True)},

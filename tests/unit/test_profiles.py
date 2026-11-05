@@ -112,7 +112,7 @@ def test_without_a_team_the_names_are_those_h0_reads():
         s = SERVICES[name]
         assert _interpolate(s["container_name"], {}) == container
         vols = [_interpolate(v, {}) for v in s["volumes"]]
-        own = {"watch": "glorfindel", "war-room": "console", "bot": "console"}[name]   # SEC18
+        own = {"watch": "glorfindel", "war-room": "console", "bot": "bot"}[name]   # SEC18, FS1c
         assert f"./runs/{own}:/app/runs/{own}" in vols, name
         assert any(v.startswith("./glorfindel-config.yaml:/app/glorfindel-config.yaml") for v in vols), name
     assert [_interpolate(p, {}) for p in SERVICES["war-room"]["ports"]] == ["127.0.0.1:7007:7007"]
@@ -301,7 +301,7 @@ WRITES = {   # SEC18: of runs/, each writer's own directory only (tests/unit/tes
               "/root/.eregion/analysis"},
     "war-room": {"/app/runs/console", "/root/.glorfindel", "/root/.cache/chroma", "/app/glorfindel-config.yaml",
                  "/root/.eregion/console"},
-    "bot": {"/app/runs/console", "/root/.glorfindel", "/root/.cache/chroma"},
+    "bot": {"/app/runs/bot", "/root/.glorfindel", "/root/.cache/chroma", "/root/.eregion/bot"},   # FS1c
     "annatar": {"/app/runs/annatar", "/app/runs/orodruin"},   # SEC20: not ~/.annatar, its .bashrc the shell runs
     "gothmog": {"/app/runs/gothmog", "/app/runs/orodruin"},
 }

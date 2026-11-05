@@ -298,7 +298,8 @@ jobs:
             | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
             | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
-          bash scripts/retry.sh sudo apt-get update -qq
+          # A transient error on an index fails the update (apt-get --error-on=any): retried, never a W: and 0.
+          bash scripts/retry.sh sudo apt-get update -qq -o APT::Update::Error-Mode=any
           bash scripts/retry.sh sudo apt-get install -y -qq "terraform=${TERRAFORM_VERSION}"
           terraform version
 
@@ -323,7 +324,7 @@ jobs:
       - name: Terraform init — Orodruin (the locked providers, retried)
         run: bash scripts/retry.sh terraform -chdir=infra/orodruin init -backend=false -lockfile=readonly -input=false -no-color
 
-      - name: Terraform validate — Orodruin
+      - name: Terraform test — Orodruin (mock providers)
         run: |
           terraform -chdir=infra/orodruin validate -no-color
           terraform -chdir=infra/orodruin test -no-color

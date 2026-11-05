@@ -1107,7 +1107,7 @@ TF_RUNS = {
         "terraform -chdir=infra/glorfindel-host test -no-color\n",
     "Terraform init — Orodruin (the locked providers, retried)": _TF_INIT.format("orodruin"),
     # CI7 (#554): the watch channel's writers (WC1) and Microsoft Graph's reads (IDI1).
-    "Terraform validate — Orodruin":
+    "Terraform test — Orodruin (mock providers)":
         "terraform -chdir=infra/orodruin validate -no-color\n"
         "terraform -chdir=infra/orodruin test -no-color\n",
 }
@@ -1152,8 +1152,9 @@ def test_the_terraform_tests_run_on_each_push_and_pull_request():
 
 # A module whose tests wait for their step in ci.yml (Jonathan pushes what touches .github/: the
 # agents' App has no Workflows permission, SEC12). Empty since CI7 (#554): Orodruin's tests
-# (WC1 watch_writers, IDI1 graph_read) run in « Terraform validate — Orodruin ». A module that
-# gains tests before its step is listed here, with its reason, and the test above holds it.
+# (WC1 watch_writers, IDI1 graph_read) run in « Terraform test — Orodruin (mock providers) », the
+# step « Terraform validate — Orodruin » renamed. A module that gains tests before its step is
+# listed here, with its reason, and the test above holds it.
 TF_AWAITING_STEP: dict[str, str] = {}
 
 
@@ -1922,6 +1923,10 @@ def test_ci8_every_download_is_retried():
         for ln in _lines(str(step.get("run") or "")):
             if DOWNLOADS.search(ln):
                 assert ln.startswith(RETRY), (wf, job, step.get("name"), ln)
+            # A transient error on an index is a W: and exit 0 by default: retry.sh would see no
+            # failure, and apt-get install then fail three times (review of CI8).
+            if "apt-get update" in ln:
+                assert "-o APT::Update::Error-Mode=any" in ln, (wf, job, ln)
     for path in WORKFLOWS:
         for job_name, job in (_load(path).get("jobs") or {}).items():
             steps = job.get("steps") or []

@@ -380,6 +380,8 @@ class _ShellVM:
         )
         fake.chmod(0o755)
         self.failing: set[str] = set()   # labels whose call raises (a Run Command that failed)
+        # labels whose call raises once the script ran (VM3b: a Run Command that timed out late)
+        self.failing_after: set[str] = set()
 
     def run_command(self, cmd, label=""):
         if any(f in label for f in self.failing):
@@ -387,6 +389,8 @@ class _ShellVM:
         out = subprocess.run(["sh", "-c", cmd.replace("/tmp/", f"{self.tmp}/")],
                              capture_output=True, text=True, timeout=20,
                              env={"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.tmp)})
+        if any(f in label for f in self.failing_after):
+            raise RuntimeError(f"Run Command timed out: {label}")
         return out.stdout
 
     def left(self) -> list[str]:
@@ -428,10 +432,13 @@ def test_without_the_revert_the_simulated_run_is_not_restored(tmp_path, monkeypa
     assert vm.store.read_text() == ROOT_CRONTAB and vm.left() == ["notevil", "persistevil"]
 
 
-def test_a_failed_cleanup_keeps_root_crontab_backup(tmp_path, monkeypatch):
-    """A cleanup that failed may still need /tmp/notevil: the revert is not run, the file stays."""
+@pytest.mark.parametrize("ran", [False, True])
+def test_a_failed_cleanup_keeps_root_crontab_backup(tmp_path, monkeypatch, ran):
+    """A cleanup that failed may still need /tmp/notevil: the revert is not run, the file stays.
+    Even when its script ran before the call failed (VM3b): the probe the revert waits on would
+    hold then, but a cleanup in error is never followed by the revert."""
     vm = _ShellVM(tmp_path)
-    vm.failing.add(" cleanup")
+    (vm.failing_after if ran else vm.failing).add(" cleanup")
     ex = _shell_executor(vm)
     out = _run(tmp_path, monkeypatch, _scenario("T1053.003"), ex)
     assert out.error

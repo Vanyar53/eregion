@@ -509,8 +509,9 @@ MUTANTS = [
       "        errors = _runtime_atomic_errors(path)\n"),
      ("", "        errors = []\n")),
     ("M118", "the synthesizer accepts an engine_ref the adapter cannot resolve (#165)", SYN,
-     '    try:\n        resolve_ref(engine_ref)\n    except AtomicError as e:\n'
-     '        return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")\n',
+     '    try:\n        # the entry\'s revert too (VM3: what the upstream cleanup leaves, removed after it).\n'
+     '        revert_commands(revert, resolve_ref(engine_ref, engine_args))\n    except AtomicError as e:\n'
+     '        return SynthesisResult(False, f"{ttp}: engine_ref unresolved — {e}")\n',   # re-anchored (VM3)
      "    pass\n"),
     ("M119", "the catalog schema accepts an implemented atomic without steady_state (#165)", CATSCHEMA,
      '                  "const": "atomic"\n', '                  "const": "atomic-never"\n'),

@@ -2721,7 +2721,7 @@ az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf/microso
 # 0 bis. Dès la release qui porte IDI1, avant tout autre geste : la mesure de `wids`.
 make orodruin-check                # le droit Graph n'est pas encore déclaré (EREGION_TENANT_ID absent d'orodruin.env) :
                                    # « ⚠ graph_directory_role <valeur> » est DIT, sans passer passive — noter la valeur ;
-                                   # rien : l'hypothèse APP_DEFAULT_WIDS tient. Puis un lot rendra ce cas strict
+                                   # rien : l'hypothèse APP_DEFAULT_WIDS tient. Puis IDI1s (#559) rendra ce cas strict
 
 # 1. Orodruin — la lecture de Graph, seule.
 echo 'graph_read_enabled = true' >> infra/orodruin/terraform.tfvars   # ignoré par git
@@ -2783,12 +2783,12 @@ puis `make orodruin-plan` (`2 to destroy`) et `make orodruin-lock`. `make orodru
 les attributions ARM d'Orodruin, pas son rôle dans Graph : le retirer ainsi, à part.
 
 **Une identité privilégiée n'est jamais inscrite** (décision du 05/11) : un rôle d'annuaire actif ou
-éligible, une appartenance à un groupe, une permission d'application qui n'est pas une lecture — la
-garde le dit (`make orodruin-identity`). L'identité de test n'en a aucun ; ne lui en donner aucun.
+éligible, une appartenance à un groupe, un objet possédé, une permission d'application (aucune n'est
+admise) — la garde le dit (`make orodruin-identity`). L'identité de test n'en a aucun ; ne lui en donner aucun.
 
 **À mesurer au banc** : la valeur `wids` du jeton Graph d'Orodruin, au premier `make orodruin-check`
 après la release (geste 0 bis : dite, sans passer passive tant que le droit Graph n'est pas déclaré),
-puis on rendra strict ce cas non déclaré ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
+puis IDI1s (#559) rendra strict ce cas non déclaré ; la lecture des rôles éligibles (PIM) sur un tenant sans Entra ID P2 — si elle
 échoue, toute identité est refusée, et c'est dit (une décision de Jonathan, alors) ; la valeur `wids` du jeton Graph d'une identité managée (le contrat la suppose,
 `APP_DEFAULT_WIDS`) ; qu'`AzureActiveDirectory` couvre bien `graph.microsoft.com` depuis Orodruin (la
 documentation des service tags le dit) ; le délai du jeton en cache après l'attribution (jusqu'à 24 h :

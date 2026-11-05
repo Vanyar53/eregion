@@ -119,7 +119,8 @@ AUTHZ_READ_ONLY = frozenset({
 # Orodruin before IDI1's gestures — an app role in the token is a right nobody declared, passive
 # (``graph_undeclared_right``); a directory role (``wids``) outside ``APP_DEFAULT_WIDS``, or a
 # token that cannot be had, is SAID by orodruin-check, never passive: the hypothesis on ``wids``
-# is measured at the first orodruin-check after the release, then the undeclared case turns strict.
+# is measured at the first orodruin-check after the release, then the undeclared case turns strict
+# (IDI1s, #559).
 GRAPH = "https://graph.microsoft.com"
 GRAPH_READ_ONLY = frozenset({"Application.Read.All", "RoleManagement.Read.Directory"})
 # A ``wids`` value seen in the app-only tokens of service principals that hold no directory role

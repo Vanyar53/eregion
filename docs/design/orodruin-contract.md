@@ -629,7 +629,7 @@ identité, et sans lui elle refuse toute identité — une variable de plus dira
 | un jeton Graph qu'on ne peut avoir | dit (`⚠ graph_unreadable`), sans passer `passive` | `passive`, `graph_unreadable` |
 
 Ce qui est dit (`Verdict.notes`) n'arme ni ne désarme, et n'est pas publié pour la console. La valeur
-de `wids` se mesure au premier `orodruin-check` après la release ; on rendra ensuite strict le cas non
+de `wids` se mesure au premier `orodruin-check` après la release ; IDI1s (#559) rendra ensuite strict le cas non
 déclaré. Mutants M3940, M3941. Mutants M3860, M3861, M3906 (le contrat), M3862, M3863 (Terraform). Tests :
 `tests/unit/test_orodruin.py`, `infra/orodruin/tests/graph_read.tftest.hcl`.
 

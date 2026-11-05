@@ -40,8 +40,8 @@ the token's; a multi-tenant application reaches other tenants: refused. Who is n
 Glorfindel, Orodruin, Annatar, the operators, Microsoft's and other tenants' applications, the
 principal of a resource, whoever owns one of them — is the shared list of
 ``eregion_core/never_target.py``; unreadable, nothing is accepted. A privileged identity is never
-enrolled (``privilege_refusal``): a directory role active or eligible, a membership, an
-application permission that is not a read — IR1's executor will own what is enrolled. A read that
+enrolled (``privilege_refusal``): a directory role active or eligible, a membership, an object
+owned, an application permission (none is admitted) — IR1's executor will own what is enrolled. A read that
 fails refuses.
 """
 

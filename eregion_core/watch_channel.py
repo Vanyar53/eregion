@@ -10,10 +10,12 @@ nothing is published or read, and a run sees only the local watch files, as befo
 
 Two kinds of blob:
 
-- ``heartbeat.json`` — ``at`` (when written), ``since`` (when the watch started) and
-  ``windows`` (the run_id of every exercise window open or in grace that the watch knows).
+- ``heartbeat.json`` — ``at`` (when written), ``since`` (when the watch started),
+  ``windows`` (the run_id of every exercise window open or in grace that the watch knows) and
+  ``covers`` (SEC21b, #535: for each of those windows, the sorted ``signal_id`` of every
+  detection delivered for it — a window with more than MAX_COVERED left out).
   Written only once every detection noted so far is delivered: a heartbeat vouches for
-  what came before it.
+  what came before it, and says which.
 - ``detections/<run_id>/<signal_id>.json`` — one per (window, detection), only for a VM
   the watch attributed the detection to and that a window covers at the detection's time.
   Never the rest of the fleet.
@@ -25,7 +27,9 @@ signal's name (``vouched_detections``); any other is never counted for « seen �
 
 Every failure falls toward ``unknown``, never ``detected`` nor ``missed``: a run concludes
 to a miss only on a heartbeat written after its wait, by a watch up since before the
-attack, that knows the run's window (``miss_unprovable``).
+attack, that knows the run's window (``miss_unprovable``), and once every detection that
+heartbeat covers for the run is read back, vouched (``uncovered``, SEC21b): a detection removed
+from the channel under a true heartbeat is ``unknown``, said, never a miss.
 
 **The local channel of verdicts (SEC18, #455).** A watch with no storage channel — on a
 workstation, beside its injectors — writes the same two kinds of document in a directory of its
@@ -73,6 +77,13 @@ KEEP_S = MAX_DURATION_S + GRACE_AFTER_S
 # After its wait, a run waits this long for a heartbeat that covers it (one missed beat).
 SETTLE_S = 2 * HEARTBEAT_EVERY_S + 2 * TICK_S
 STALE = "no heartbeat since the end of the wait"
+# SEC21b (#535): the heartbeat lists, for each window it knows, the detections delivered for it —
+# at most this many for one window; beyond, the window is left out, and its run cannot conclude to
+# a miss (unknown, said). A run of the bench sees a handful.
+COVERS = "covers"
+MAX_COVERED = 256
+# The missing detections a run says — the rest counted only.
+MAX_MISSING = 20
 # A blob name part: a run_id or a signal_id, never a path.
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -180,16 +191,32 @@ class Publisher:
             return
         from eregion_core.watch_gate import perimeter  # watch_gate reads this module
 
+        known = sorted(w["run_id"] for w in windows if live(w, now))
         self._write(HEARTBEAT, self._signed({
             "at": now.isoformat(),
             "since": self.since,
-            "windows": sorted(w["run_id"] for w in windows if live(w, now)),
+            "windows": known,
+            # SEC21b (#535): what this heartbeat vouches for — signed with the rest.
+            COVERS: self._covers(known),
             # SEC5 (N-03): the subscription this watch reads, as a digest — what binds this
             # heartbeat to the targets of a run (eregion_core/watch_gate.py).
             "perimeter": perimeter(),
         }, now))
         self._last_beat = now
         self._report("")
+
+    def _covers(self, runs: list[str]) -> dict[str, list[str]]:
+        """SEC21b (#535): for each window the heartbeat knows, the sorted ``signal_id`` of every
+        detection delivered for it — each write acknowledged before this heartbeat is written. A
+        window with more than MAX_COVERED is left out: its run cannot conclude to a miss. What a
+        live window covers is still held (``_sent`` keeps a detection KEEP_S, the longest a window
+        lives)."""
+        out = {}
+        for run in runs:
+            ids = sorted(s for r, s in self._sent if r == run)
+            if len(ids) <= MAX_COVERED:
+                out[run] = ids
+        return out
 
     def _signed(self, body: dict, now: datetime) -> dict:
         """SEC19 (N-03): the heartbeat signed by the watch's key — every field, ``since`` and
@@ -387,6 +414,40 @@ def recent(at: datetime | None, now: datetime | None = None) -> bool:
         return False
     age = ((now or _now()) - at).total_seconds()
     return -CLOCK_SKEW_S <= age < FRESH_S
+
+
+NOT_COVERING = ("the heartbeat does not say which detections it covers: a watch older than this "
+                "injector (update Glorfindel — H0 by its CD, a workstation's by make glorfindel-restart)")
+
+
+def uncovered(heartbeat: dict, run_id: str, vouched: list[dict]) -> tuple[str, list[str], int]:
+    """SEC21b (#535): why this heartbeat, which would prove the run's silence a miss, covers a
+    detection the run did not read back — ("", [], 0) when every one it lists for the run is among
+    ``vouched`` (the detections the pinned key signed, read AFTER this heartbeat: each it lists was
+    written before it, so only a hand on the channel can have removed it). A detection read that it
+    does not list (delivered after it) is admitted. Else (why, the blobs missing — MAX_MISSING at
+    most —, how many): never a miss. A heartbeat without ``covers`` (a watch older than this
+    injector) or that leaves the run out (more than MAX_COVERED) proves no miss either. The storage
+    channel's only: the local channel's heartbeat holds exactly BEAT_FIELDS (SEC18)."""
+    covers = heartbeat.get(COVERS)
+    if covers is None:
+        return NOT_COVERING, [], 0
+    if not isinstance(covers, dict):
+        return f"the heartbeat's {COVERS} is not an object", [], 0
+    listed = covers.get(run_id)
+    if listed is None:
+        return (f"the heartbeat does not list this run's detections: more than {MAX_COVERED} "
+                "(MAX_COVERED) — a miss cannot be proven"), [], 0
+    if not isinstance(listed, list) or not all(isinstance(x, str) for x in listed):
+        return f"the heartbeat's {COVERS} for this run is not a list of signals", [], 0
+    read = {d.get("signal_id") for d in vouched if isinstance(d, dict)}
+    missing = sorted(set(listed) - read)
+    if not missing:
+        return "", [], 0
+    said = [f"{DETECTIONS}/{run_id}/{re.sub(r'[^A-Za-z0-9_.-]', '?', sid)[:128]}.json"
+            for sid in missing[:MAX_MISSING]]
+    return (f"{len(missing)} of the {len(set(listed))} detection(s) the watch's heartbeat covers for "
+            "this run absent from the channel — removed by a hand on it? (SEC21b)"), said, len(missing)
 
 
 def miss_unprovable(heartbeat: dict, *, run_id: str, attack_time, until) -> str:

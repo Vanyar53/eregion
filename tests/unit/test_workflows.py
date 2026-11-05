@@ -2015,6 +2015,54 @@ def test_ci8_a_command_stopped_by_a_signal_is_never_run_again(tmp_path, code):
     assert res.returncode == code and len(calls) == 1 and slept == []
 
 
+_CATCHES = r'''import pathlib, signal, sys, time
+def stop(*_):
+    print("caught, exit 1", flush=True)
+    sys.exit(1)
+signal.signal(signal.SIGINT, stop)
+signal.signal(signal.SIGTERM, stop)
+with open(sys.argv[1], "a") as runs:
+    runs.write("run\n")
+pathlib.Path(sys.argv[2]).touch()
+time.sleep(30)
+'''
+
+
+@pytest.mark.parametrize("signame, code", [("SIGINT", 130), ("SIGTERM", 143)])
+def test_ci8_a_signal_is_a_stop_even_when_the_command_catches_it_and_exits_1(tmp_path, signame, code):
+    """pip and Terraform catch SIGINT and exit 1 (review of CI8): the job's cancel, sent to the
+    process group while the command runs, stops retry.sh — one attempt, no wait, its own exit code."""
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    slept, runs, started = tmp_path / "slept", tmp_path / "runs", tmp_path / "started"
+    _fake(bin_ / "sleep", f'echo "$1" >> "{slept}"\n')
+    prog = tmp_path / "catches.py"
+    prog.write_text(_CATCHES)
+    env = {"PATH": f"{bin_}:{os.environ.get('PATH', '')}", "HOME": str(tmp_path)}
+    proc = subprocess.Popen(["bash", str(RETRY_SH), sys.executable, str(prog), str(runs), str(started)],
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            cwd=tmp_path, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 20
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert started.exists(), "the command never started"
+        os.killpg(proc.pid, getattr(signal, signame))
+        out, _ = proc.communicate(timeout=20)
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+    assert "caught, exit 1" in out                            # the command did catch it, and exited 1
+    assert proc.returncode == code, out
+    assert runs.read_text().splitlines() == ["run"] and not slept.exists(), out
+    assert f"stopped by {signame}" in out and "attempt 2/3" not in out
+
+
 def test_ci8_the_command_said_in_a_workflow_message_cannot_end_it(tmp_path):
     """A `%` or a line break of the command, escaped as GitHub reads its messages: the warning stays
     one line, its text the command's; the command itself gets its arguments untouched."""

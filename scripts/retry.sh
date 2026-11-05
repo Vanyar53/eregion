@@ -28,6 +28,11 @@ said=${said//\%/%25}
 said=${said//$'\r'/%0D}
 said=${said//$'\n'/%0A}
 
+# A signal received is a stop, whatever the command then returns: pip and Terraform catch SIGINT and
+# exit 1, which would read as a failure to try again. Bash runs the trap once the command has exited.
+trap 'echo "::error::retry.sh: stopped by SIGINT: never run again"; exit 130' INT
+trap 'echo "::error::retry.sh: stopped by SIGTERM: never run again"; exit 143' TERM
+
 n=1
 while :; do
   echo "retry.sh: attempt $n/$attempts: $said"

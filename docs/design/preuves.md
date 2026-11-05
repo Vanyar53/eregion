@@ -296,7 +296,12 @@ silence : aucune CI ne lançait `mutant_anchors.py` sur l'arbre, et
 `tests/unit/test_mutant_anchors.py::test_every_mutant_of_the_tree_applies_and_says_a_reason_it_reads`
 le fait désormais dans la suite ordinaire, en moins d'une seconde. Chaque mutant de l'arbre, jeu de
 contrôle compris, doit s'appliquer comme le harnais l'applique, avec un identifiant unique et une
-raison lisible.
+raison lisible. C'est un méta-test, jamais un tueur. Dans une copie que le harnais mute, le mutant
+appliqué a retiré son propre texte, et ce test y attraperait par construction tout mutant dont la
+cible le contient : M3186 et M3585, qui ciblent `test_mutant_anchors.py` entier (seconde
+relecture). Le harnais pose donc `EREGION_MUTANT_RUN=1` dans chaque run d'une copie (`_run`), et le
+méta-test s'y saute en le disant. Aucun mutant ne peut mesurer ce test lui-même : il échoue dans
+toute copie mutée. La marque et le saut sont mesurés à sa place.
 
 **Le contrôle** (`judge`, dans `scripts/mutation_check.py`) :
 - **Un mutant compté qui survit à un tour** sans raison lue est rouge, avec son identifiant et sa
@@ -362,10 +367,11 @@ marque, un run seul vert, une tranche rouge, une raison illisible acceptée par
 `mutant_anchors.py`. Mesurés le 05/11, 60 séquences et deux tours (`--only`, avec les six, M1224,
 M1281 et M3731 réancrés) : **19 sur 19 attrapés à chaque tour**. M1224 a été dit « survivant connu
 attrapé : retirer sa raison (TIMING) », avant que sa raison soit retirée. Après la relecture, mutants
-M3965–M3969 : un `TIMING` attrapé à aucun tour que personne ne dit, ou qui rend le total rouge ; un
-`TIMING` attrapé par moments dit jamais attrapé ; une raison `TIMING` sans test acceptée ; le code du
-harnais reformulé sans réancrer ses mutants, qu'aucun test ne voit. Remesurés avec les six et M1224,
-60 séquences et deux tours : **22 sur 22 attrapés à chaque tour**.
+M3965–M3968 : un `TIMING` attrapé à aucun tour que personne ne dit, ou qui rend le total rouge ; un
+`TIMING` attrapé par moments dit jamais attrapé ; une raison `TIMING` sans test acceptée. Un premier
+M3969 (le code du harnais reformulé sans réancrer ses mutants) n'était attrapé que par construction,
+par le méta-test : il est retiré. Après la seconde relecture, M4020 (les runs d'une copie sans la
+marque du harnais) et M4021 (le méta-test qui ne se saute plus dans une copie mutée).
 
 ### Les pannes des dépendances (G2)
 

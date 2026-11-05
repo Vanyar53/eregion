@@ -312,6 +312,51 @@ la ligne, et disait « the whole subnet » quoi que la promotion laisse de côt�
   promotion disait « not the whole subnet » quand seuls d'autres ports restaient joignables.
 - Tests : `tests/unit/test_console_blocks.py`.
 
+### Les détections du canal retour : signées ou refusées (CON-S, #534, 05/11)
+
+Avant : la route `GET /api/channel/detections/<run_id>` rendait chaque blob du canal retour tel
+qu'écrit, et la vue Runs les montrait tous sous « DELIVERED TO THE RUN ». Depuis SEC21 (#530), un
+injecteur ne compte que les détections signées par la clé épinglée ; la console montrait aussi
+celles qu'il refuse. Aucune décision n'en dépendait, mais l'opérateur pouvait croire mesuré ce qui
+ne l'était pas.
+
+- **La même vérification que les injecteurs** : la route lit les blobs du run par
+  `watch_channel.read_named`, puis juge chacun par `watch_key.detection_refusal`, avec la clé que
+  donne `watch_key.pinned` : celle de l'environnement de la console (`EREGION_WATCH_KEY`), jamais une
+  clé lue dans le canal. Chaque détection est rendue `{"signal", "state", "why", "detection"}` :
+  `signed` (la clé épinglée l'a signée, pour ce run, sous le nom de son signal), ou `refused` et la
+  raison, mot pour mot celle du run (`watch_channel.vouched_detections` dit la même chose des mêmes
+  blobs). `detection` est le blob tel qu'écrit, `null` s'il n'est pas un objet.
+- **Sans clé épinglée**, ou une valeur qui n'en est pas une : `key` vaut `{"pinned": false, "why"}`,
+  les mots et le geste de SEC19 (`make watch-key`, `make glorfindel-host-watch-key`). Chaque
+  détection est alors refusée avec ces mots, même une que la watch a signée : aucune n'est présentée
+  comme vérifiée. Avec une clé : `{"pinned": true, "fingerprint"}`.
+- **Les comptes** : `signed`, `refused` (tous les refus), `refused_shown`. La route ne montre que
+  `MAX_REFUSED` détections refusées au plus (20, la borne du run, SEC21) : un rédacteur du canal qui
+  y dépose des centaines de blobs n'inonde pas la page. Les autres sont comptées. Une détection signée
+  est toujours montrée, quelle que soit sa place dans la liste.
+- **La clé dont on parle** : la console juge avec son propre `EREGION_WATCH_KEY`, l'injecteur avec
+  celui d'Orodruin (`orodruin.env`). Les deux doivent épingler la même clé publique, celle de la
+  watch ; sinon leurs verdicts peuvent différer. L'empreinte affichée en tête permet de les comparer
+  (`make glorfindel-host-watch-key` donne celle de la watch de H0).
+- **Sans canal de stockage**, la route ne juge rien, comme avant : elle répond `configured: false`.
+  Le canal local des verdicts (SEC18, `runs/verdicts/`) n'est pas lu par elle.
+- **La page** (`injector.js`, `channelDetections`) : le titre dit « ON THE RETURN CHANNEL FOR THIS
+  RUN — the run counts only those signed by the key it pins — judged here with the key pinned on this
+  console », jamais « delivered ». En tête, l'empreinte
+  épinglée et les comptes, ou, sans clé, « no watch key pinned on this console: no detection
+  verified » et le geste. Chaque ligne porte `SIGNED` ou `REFUSED`, puis sa raison. `SIGNED` exige que
+  la page ait vu la clé épinglée **et** que le serveur ait dit `signed`. Une ligne refusée est grisée.
+  La raison, l'empreinte, le TTP, la règle et la VM passent par `esc`, et les comptes par `Number`
+  (#254). Aucun script en ligne (#257).
+- **Le compose** : le service de la console (`war-room`) reçoit déjà `EREGION_WATCH_KEY` depuis SEC19,
+  la clé **publique**. Il ne monte pas le répertoire de la clé privée. Aucun droit nouveau. Sur H0, la
+  ligne `EREGION_WATCH_KEY=` de `host.env` doit être remplie (`docs/demarrer/banc.md`, étape 5). Sinon
+  la console le dit sur chaque détection.
+- Tests : `tests/unit/test_console_signed_detections.py` (signée, non signée, d'une autre clé,
+  changée, recopiée, pas un objet, sans clé, une valeur qui n'est pas une clé, la borne, la parité avec
+  `vouched_detections`, la page, le compose) ; mutants M3750–M3759 (`scripts/mutants/CON-S.py`).
+
 ### Ce qui vient du dehors (#254)
 
 Une carte, une règle, une ligne du fil, une erreur : du texte d'Azure (le nom d'une ressource, d'une

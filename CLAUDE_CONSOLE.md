@@ -60,7 +60,8 @@ GET  /api/coverage[?kind=technique|fault]  → la matrice de couverture (C1) : p
 GET  /api/exercises?since=7d[&injector=…]  → fenêtres d'exercice + cycles, cartes et rapport de run de chacune
 GET  /api/campaigns[/<id>]            → manifestes ; en détail, faits du rapport de campagne + report.md
 GET  /api/channel                     → battement local, fenêtres vivantes, battement publié (canal retour)
-GET  /api/channel/detections/<run_id> → détections livrées au run
+GET  /api/channel/detections/<run_id> → chaque détection du canal retour, signed ou refused et pourquoi, jugée comme
+     le run la juge (SEC21) avec EREGION_WATCH_KEY ; sans clé épinglée, aucune vérifiée ; refusées montrées ≤ MAX_REFUSED (CON-S)
 GET  /api/dagorlad/board              → cartes rouges (catalogue), Glorfindel, cibles inscrites (zone, mode)
 GET  /api/dagorlad/plan?wire=<exp>@<rid>… → chaque fil jugé comme Orodruin le jugerait, et l'attendu
 POST /api/dagorlad/requests           → DG-b : {"wires": [{"experiment", "target"}]} — jugés, puis la demande écrite dans

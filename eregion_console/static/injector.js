@@ -42,7 +42,8 @@ const S = {
   errors: {},
   open: new Set(),          // expanded rows: 'w:<run_id>' / 'c:<dir>' / 'm:<technique or fault>'
   campDetail: {},           // dir → {facts, report_md} | {error} | 'loading'
-  delivered: {},            // run_id → {detections} | {error} | 'loading'
+  delivered: {},            // run_id → {configured, key: {pinned, fingerprint | why}, detections: [{signal, state: signed|refused, why, detection}],
+                            //   signed, refused, refused_shown} (CON-S) | {configured: false} | {error} | 'loading'
   showReport: new Set(),    // campaign dirs whose report.md is shown
   focus: null,              // the row a link opened (?run=, ?campaign=): scrolled to once
 };
@@ -194,11 +195,34 @@ function renderWindowDetail(w) {
   if (d === 'loading') rc = '<span style="color:var(--dim)">reading…</span>';
   else if (d && d.error) rc = `<span style="color:var(--red)">${esc(d.error)}</span>`;
   else if (d && d.configured === false) rc = '<span style="color:var(--dim)">no return channel configured on this host</span>';
-  else if (d) rc = d.detections.length
-    ? `<table class="t">${d.detections.map(x => `<tr><td>${hms(x.detected_at)}</td><td>${esc(x.ttp)}</td><td>${esc(x.rule)}</td><td>${esc(vmName(x.resource_id))}</td></tr>`).join('')}</table>`
-    : '<span style="color:var(--dim)">nothing delivered for this run</span>';
-  parts.push(`<div class="dsec s-green"><div class="dtitle">DELIVERED TO THE RUN (return channel)</div>${rc}</div>`);
+  else if (d) rc = channelDetections(d);
+  parts.push(`<div class="dsec s-green"><div class="dtitle">ON THE RETURN CHANNEL FOR THIS RUN — the run counts only those signed by the key it pins — judged here with the key pinned on this console</div>${rc}</div>`);
   return `<div class="detail">${parts.join('')}</div>`;
+}
+
+// CON-S (#534): each detection of the return channel as the injectors judge it (SEC21) — signed by
+// the key pinned on this console, or refused with why, never counted. Without a key pinned, none
+// is shown as verified, whatever the server says of it.
+function channelDetections(d) {
+  const key = d.key || {};
+  const pinned = key.pinned === true;
+  const signed = Number(d.signed), refused = Number(d.refused), shown = Number(d.refused_shown);
+  const head = pinned
+    ? `<div class="kv"><span><b>key pinned</b> ${esc(key.fingerprint)}</span><span><b>signed</b> ${signed}</span>` +
+      `<span${refused ? ' style="color:var(--red)"' : ''}><b>refused</b> ${refused}${refused > shown ? ` (${shown} shown)` : ''}</span></div>`
+    : `<div style="color:var(--red)">no watch key pinned on this console: no detection verified, none counted here — ${esc(key.why)}</div>`;
+  const items = d.detections || [];
+  if (!items.length) return head + '<span style="color:var(--dim)">nothing on the return channel for this run</span>';
+  const rows = items.map(x => {
+    const ok = pinned && x.state === 'signed';
+    const det = x.detection || {};
+    const chip = ok
+      ? '<span class="chip c-ok" title="signed by the pinned key, for this run and this signal: the run counts it">SIGNED</span>'
+      : '<span class="chip c-bad" title="never counted by the run">REFUSED</span>';
+    return `<tr${ok ? '' : ' style="color:var(--dim)"'}><td>${chip}</td><td>${hms(det.detected_at)}</td><td>${esc(det.ttp)}</td>` +
+      `<td>${esc(det.rule)}</td><td>${esc(vmName(det.resource_id))}</td><td>${ok ? '' : esc(x.why)}</td></tr>`;
+  }).join('');
+  return `${head}<table class="t">${rows}</table>${refused > shown ? `<div style="color:var(--dim)">${refused - shown} more refused, counted only</div>` : ''}`;
 }
 
 // ── Campaigns (Annatar's) ─────────────────────────────────────────────────────────────

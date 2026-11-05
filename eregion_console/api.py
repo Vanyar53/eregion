@@ -2847,18 +2847,39 @@ async def channel() -> dict:
 
 @app.get("/api/channel/detections/{run_id}")
 async def delivered(run_id: str) -> dict:
-    """The detections the watch delivered on the return channel for this run's window — what
-    the run on Orodruin read, or will read."""
-    from eregion_core import watch_channel
+    """The detections filed on the return channel for this run's window — what the run on
+    Orodruin read, or will read —, each judged as the injectors judge it (CON-S, #534; SEC21):
+    ``signed`` when the key pinned on this console (``EREGION_WATCH_KEY``, never a key read in the
+    channel) signed it, for this run, under its own signal's name (``watch_key.detection_refusal``);
+    else ``refused``, with why — the run never counts it. Without a key pinned, every one is
+    refused, the gesture said: none is shown as verified. The refused ones shown are MAX_REFUSED at
+    most, as a run keeps them; ``refused`` counts them all."""
+    from eregion_core import watch_channel, watch_key
     if not watch_channel.channel_url():
         return {"configured": False, "detections": []}
     try:
-        detections = await asyncio.to_thread(watch_channel.read_detections, run_id)
+        named = await asyncio.to_thread(watch_channel.read_named, run_id)
     except ValueError:
         return {"error": "run id: a plain name"}
     except Exception as exc:
         return {"error": f"return channel unreadable: {exc}"[:300]}
-    return {"configured": True, "detections": detections}
+    key, no_key = watch_key.pinned()
+    shown, signed, refused = [], 0, 0
+    for signal, record in named:
+        why = no_key if key is None else watch_key.detection_refusal(
+            record, key, run_id=run_id, signal_id=signal)
+        if not why:
+            signed += 1
+        else:
+            refused += 1
+            if refused > watch_channel.MAX_REFUSED:
+                continue
+        shown.append({"signal": signal, "state": "refused" if why else "signed", "why": why[:400],
+                      "detection": record if isinstance(record, dict) else None})
+    pin = ({"pinned": True, "fingerprint": watch_key.fingerprint(key)} if key is not None
+           else {"pinned": False, "why": no_key})
+    return {"configured": True, "key": pin, "detections": shown, "signed": signed,
+            "refused": refused, "refused_shown": min(refused, watch_channel.MAX_REFUSED)}
 
 
 # ── Dagorlad's board (docs/design/console.md, §7, phase a): read only ───────────────────────

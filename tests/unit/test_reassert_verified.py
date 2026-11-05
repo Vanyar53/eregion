@@ -191,9 +191,13 @@ def test_azure_isolation_put_back_behind_an_allow_is_not_reposed(monkeypatch):
     _ours_gone(f, "glorfindel-iso")
     report = reassert_active(c, _ACT)
     iso = [r for r in report if r["kind"] == "isolation"]
-    assert [r["outcome"] for r in iso] == ["partial"], report
+    # Its re-read says the bypass at once, on its own card after the put-back's (RW3), as a block's does.
+    assert [r["outcome"] for r in iso] == ["partial", "bypassed"], report
     (card,) = _cards("isolate_vm")
     assert "ne tient pas en entier : Isolation contournée" in card["reason"] and "allow-ssh" in card["reason"]
+    assert "relue, elle ne tient pas (isolation contournée" in card["reason"], card["reason"]
+    (bypass,) = _cards("review_bypass")
+    assert "allow-ssh" in bypass["reason"]
     assert "reposée une fois" not in card["reason"] and "alertera" not in card["reason"]
     state = _load_isolation_state(_AZ_WEB)
     assert state.get("reasserted_at") and state.get("drift_alerted_at")
@@ -217,7 +221,7 @@ def test_azure_isolation_put_back_behind_an_allow_keeps_its_isolation_time(monke
     """The TTL (RW2's review): Azure's write sets `isolated_at` anew; the put-back that does not hold
     keeps the original, as a whole one does — the TTL counts from the isolation, not from its put-back."""
     f, c, since = _azure_isolated_behind_an_allow(monkeypatch)
-    assert [r["outcome"] for r in reassert_active(c, _ACT) if r["kind"] == "isolation"] == ["partial"]
+    assert [r["outcome"] for r in reassert_active(c, _ACT) if r["kind"] == "isolation"] == ["partial", "bypassed"]
     assert _load_isolation_state(_AZ_WEB)["isolated_at"] == since
 
 

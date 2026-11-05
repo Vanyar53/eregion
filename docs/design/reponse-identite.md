@@ -5,6 +5,14 @@
 > `IDENTITY_ACTIONS`, la liste `never_target` d'IDI1 lue — `docs/glorfindel.md`, « Identités », et
 > `docs/design/console.md`. Le reste (IR1b à IR1e) est encore une conception.
 >
+> **IDI1b écrit (#573, 05/11), rien appliqué** : l'hypothèse 13 est tranchée sur le fournisseur
+> verrouillé — `azuread` 3.10.0 ne sait créer ni une unité restreinte, ni un ensemble d'attributs, ni
+> l'attribut sur un utilisateur ; il sait l'appartenance et un rôle à la portée d'une unité. L'unité et
+> l'ensemble se créent par l'API de Graph (`infra/terraform/scripts/entra_bench_unit.py`), le reste en
+> Terraform (`infra/terraform/entra_bench_unit.tf`, désactivé) ; la garde en deux moitiés est
+> `user_enrollment` (`eregion_core/inscription.py`). Les gestes : `docs/operations.md`, « Les
+> utilisateurs de test du banc (IDI1b) ».
+>
 > **Statut : conception, 05/11.** C2 détecte un vol d'identité dans Entra ID, mais n'y
 > répond pas : l'escalade donne des commandes à taper. Ce document prépare la réponse : retirer,
 > révoquer, désactiver, toujours sur l'approbation d'un humain. Jonathan a tranché les six
@@ -581,8 +589,14 @@ Administrator. Le fichier crée :
   Directory Readers au tenant, pour le principal de l'exécuteur : la doc dit qu'un principal de
   service ne se sert d'un rôle borné qu'avec une lecture du répertoire au tenant.
 
-**Hypothèse** : le fournisseur `azuread` de Terraform sait créer une unité restreinte ; sinon, la
-même chose par l'API de Graph, dans le même fichier. À vérifier dans IDI1b.
+**Hypothèse 13, tranchée dans IDI1b** (le schéma du fournisseur verrouillé, `azuread` 3.10.0) : il ne
+sait pas créer une unité restreinte (`azuread_administrative_unit` n'a pas `isMemberManagementRestricted`),
+ni un ensemble d'attributs, ni une définition, ni l'attribut sur un utilisateur. L'unité et l'ensemble
+se créent donc par l'API de Graph (`POST /directory/administrativeUnits` avec
+`"isMemberManagementRestricted": true`, `POST /directory/attributeSets`,
+`POST /directory/customSecurityAttributeDefinitions`), une fois, par `make celebrimbor-unit-prepare` ;
+l'attribut sur chaque utilisateur, par `PATCH /users/<id>`, que Terraform lance avant l'appartenance.
+L'appartenance et les rôles de l'exécuteur restent en Terraform.
 
 **Le rôle à sa portée, et ses limites** :
 - User Administrator, à cette portée, « Can manage all aspects of users and groups, including
@@ -699,8 +713,10 @@ Jonathan, avant d'être écrite comme un fait.
     Administrator borné révoque leurs sessions. Si c'est le cas, la permission large n'atteint plus
     que des utilisateurs non inscrits, que le code refuse déjà : la retirer serait alors à proposer
     à Jonathan.
-13. Le fournisseur `azuread` de Terraform crée une unité restreinte, son rôle borné et les
-    attributs de sécurité personnalisés ; sinon, l'API de Graph.
+13. ~~Le fournisseur `azuread` de Terraform crée une unité restreinte, son rôle borné et les
+    attributs de sécurité personnalisés ; sinon, l'API de Graph.~~ **Tranchée (IDI1b, sur le schéma
+    d'`azuread` 3.10.0)** : le rôle borné, oui (`azuread_directory_role_assignment`,
+    `directory_scope_id`) ; l'unité restreinte et les attributs, non — par l'API de Graph.
 14. La licence P1 qu'exige un administrateur d'unité, pour un principal de service.
 15. Un attribut de sécurité personnalisé se lit par Attribute Assignment Reader à la portée de son
     ensemble, et aucun rôle de l'exécuteur ne l'écrit.

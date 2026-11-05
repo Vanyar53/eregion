@@ -301,7 +301,7 @@ blocages (ACL réseau du sous-réseau) — ni isolation par règles, ni `session
 | Concept | Sens |
 |---|---|
 | Cible | ressource qu'on a le droit d'éprouver |
-| Inscription | marque posée à la construction (tags `eregion-target=<banc>` et `eregion-zone` sur la cible et son groupe ; pour une identité d'Entra ID, deux clés : ses tags Graph et `eregion-identities` sur le groupe du banc, IDI1) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
+| Inscription | marque posée à la construction (tags `eregion-target=<banc>` et `eregion-zone` sur la cible et son groupe ; pour une identité d'Entra ID, deux clés : ses tags Graph et `eregion-identities` sur le groupe du banc, IDI1 ; pour un utilisateur de test, deux moitiés : l'unité administrative restreinte du banc qui le tient et l'attribut `Eregion` sur lui, IDI1b) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
 | Zone | `bench`, `twin` ou `production` — ce qu'une expérience a le droit d'y faire |
 | Contrôle réseau | ce qui autorise ou refuse le trafic : isoler, bloquer, lever |
 | Télémétrie | où arrivent les logs et les métriques |
@@ -359,8 +359,8 @@ une permission d'application — aucune n'est admise tant qu'une technique de R2
 zone décide comme pour une VM : une technique non destructive seule. Une lecture qui échoue refuse.
 Celebrimbor crée et inscrit une identité de test du banc (`infra/terraform/entra_identity.tf`,
 désactivée par défaut) ; Orodruin la lit avec `Application.Read.All` et `RoleManagement.Read.Directory`,
-rien d'autre dans Graph (`infra/orodruin`, `graph_read_enabled`). Les utilisateurs de test viendront
-par une unité administrative (IDI1b) ; ici, une application seule.
+rien d'autre dans Graph (`infra/orodruin`, `graph_read_enabled`). Un utilisateur de test s'inscrit
+autrement (IDI1b, ci-dessous) ; ici, une application seule.
 
 **Limite acceptée au banc** (Jonathan, 05/11) : la garde ne lit ni les rôles Azure (RBAC) de
 l'identité hors du groupe du banc, ni ses consentements délégués (`oauth2PermissionGrants`).
@@ -378,6 +378,34 @@ toute identité qui ne vient pas de Celebrimbor.
 
 La clé ARM porte la confiance (qui écrit sur le groupe du banc peut déjà y inscrire une VM) ; la clé
 Entra porte la zone et dit, sur l'identité elle-même, qu'elle est au banc.
+
+#### Un utilisateur de test d'Entra ID (IDI1b, #573)
+
+Un utilisateur n'a pas de `tags`. Il s'inscrit par **deux moitiés**, la même forme que pour une VM
+(`user_enrollment`, `eregion_core/inscription.py`) :
+
+| Moitié | Où | Ce qu'elle dit | Qui peut l'écrire |
+|---|---|---|---|
+| l'unité | l'**unité administrative restreinte** du banc le tient ; son `id` est épinglé (`EREGION_BENCH_ADMIN_UNIT_ID`, la sortie `entra_bench_unit_id` de Celebrimbor), jamais cherché par son nom | l'utilisateur est au banc, en zone `bench` (l'unité est celle de Celebrimbor) | un Administrateur des rôles privilégiés ou général, ou un administrateur à la portée de l'unité ; chaque entrée s'écrit dans `AuditLogs` |
+| l'attribut | un attribut de sécurité personnalisé de l'ensemble `Eregion`, sur l'utilisateur | `Eregion.eregionTarget=<banc>`, `Eregion.eregionZone=<zone>` (un nom d'attribut n'admet pas le tiret : la garde fait la correspondance avec `eregion-target`) | un Administrateur d'attribution d'attributs seulement : ni User Administrator, ni l'Administrateur général par défaut |
+
+Une moitié qui manque, deux moitiés qui ne s'accordent pas (un autre banc, une zone qui n'est pas celle
+de l'unité), une unité qui n'est pas restreinte ou pas celle qui est épinglée, des attributs que le
+lecteur ne peut pas lire : refusé. La garde refuse aussi : un invité (un utilisateur d'un autre
+tenant) ; un membre d'une autre unité administrative ; une identité de `never_target` (un opérateur,
+un compte de secours, le lecteur) ; **un utilisateur privilégié** — un rôle d'annuaire actif ou
+éligible, une appartenance à un groupe ou à un rôle, un objet possédé, un rôle d'application. Une
+lecture qui échoue refuse.
+
+**Pourquoi restreinte** : dans une unité restreinte, seuls les administrateurs à sa portée gèrent ses
+membres ; une permission de Graph large ne les touche pas. L'exécuteur d'IR1 y tient User
+Administrator, borné à l'unité, et ne peut ni inscrire ni désinscrire un utilisateur : il n'écrit ni
+l'appartenance ni l'attribut. Le fournisseur `azuread` 3.10.0 ne sait pas créer une unité restreinte,
+ni un ensemble d'attributs (hypothèse 13 de `docs/design/reponse-identite.md`, tranchée sur le schéma
+du fournisseur verrouillé) : Celebrimbor les crée par l'API de Graph
+(`infra/terraform/scripts/entra_bench_unit.py`, `make celebrimbor-unit-prepare`), puis Terraform pose
+les utilisateurs, leur attribut, leur appartenance et les rôles de l'exécuteur
+(`infra/terraform/entra_bench_unit.tf`, désactivé par défaut).
 
 ### Le cycle d'une expérience
 

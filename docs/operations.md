@@ -2344,6 +2344,14 @@ quelques-uns. La mesure d'un seul runner n'était plus possible : la mesure du l
 plus de 180 min (annulée à sa borne le 02/11). Chaque job a pour borne environ deux fois sa durée
 estimée : 90 min pour une tranche, 75 pour les invariants.
 
+**La mesure du lundi passe aux tranches** (CI6d). `mutants.yml` tourne comme la porte : 14 tranches des
+mutants, 2 du jeu de contrôle, découpées sur les mêmes durées, puis leur total (`--total`, au budget du
+dispatch, 1 000 séquences et deux tours par défaut, tenu à `min_caught`). Il part même si une tranche a
+échoué, le run annulé à part : une tranche manquante y est rouge. 17 jobs, sous les 20 de GitHub ; à
+1 000 séquences, les machines d'invariants prennent deux fois plus : 150 min de borne par tranche. Ses
+actions sont celles de la porte, épinglées par commit. Les entrées du dispatch passent par
+l'environnement, jamais dans le texte du script (SEC6).
+
 **Si elle est rouge.**
 - **Un vrai rouge** (un invariant, un mutant survivant sous le seuil, un test) : la release attend. On le
   corrige par un lot, puis la PR de version se refait sur `main`.

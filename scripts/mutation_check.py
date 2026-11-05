@@ -3455,7 +3455,8 @@ _CANARY_CHECK = (
     "            exit 1\n          fi\n")
 MUTANTS += [
     ("M1350", "an input reaches run: inside format(): the check stopped at the first } (SEC6)",
-     ".github/workflows/mutants.yml", '--examples "$EXAMPLES"', "--examples ${{ format('{0}', inputs.examples) }}"),
+     ".github/workflows/mutants.yml", 'mutation_check.py --examples "$EXAMPLES"',   # CI6d: in shards
+     "mutation_check.py --examples ${{ format('{0}', inputs.examples) }}"),
     ("M1351", "the canary trusts whatever key HashiCorp's URL serves: no fingerprint check (SEC6)",
      ".github/workflows/canary-azurerm.yml",
      _CANARY_CHECK, ""),

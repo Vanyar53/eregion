@@ -3,6 +3,11 @@ name: Mutants
 # Measures the invariant tests: re-introduces, one at a time, bugs Glorfindel really
 # had (scripts/mutation_check.py). Red when fewer than `min_caught` are caught in every
 # round — the invariants lost strength. 15 of 17 at the push budget on 2026-10-12.
+# In the release gate's shards (CI6d, #545): on one runner, the measure outlasted its 180 min
+# bound (02/11) — fourteen shards of the mutants, two of the control set, cut on the durations
+# the gate measured (scripts/mutants/durations.json), then their total, as release-gate.yml:
+# each mutant of the tree measured once, at this budget. 17 jobs: GitHub gives a public
+# repository 20 at once.
 on:
   schedule:
     - cron: "41 4 * * 1"
@@ -22,15 +27,22 @@ permissions:
   contents: read
 
 jobs:
+  # A shard of the gate takes about 45 min at 500 sequences; at 1 000 the invariant machines take
+  # twice as long: 150 leaves room.
   mutants:
+    name: mutants (shard ${{ matrix.shard }}/14)
     runs-on: ubuntu-latest
-    # 93 min on 2026-10-26; MC1 adds 24 mutants that run the machine on AWS (and its
-    # unit cases): 180 leaves room.
-    timeout-minutes: 180
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1   # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
@@ -40,13 +52,98 @@ jobs:
           python -m pip install --require-hashes -r requirements/dev.txt
           python -m pip install --no-deps --no-build-isolation -e .
 
+      # ChromaDB's embedding model, as the gate and ci.yml restore it (CI6b).
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-v1
+
       # The inputs go through the environment, never into the script's text (SEC6,
       # tests/unit/test_workflows.py): a value is a value, not shell.
-      - name: Re-introduce each bug, run the invariants
+      - name: Re-introduce each bug of the shard, run its tests
+        env:
+          EXAMPLES: ${{ inputs.examples || '1000' }}
+          ROUNDS: ${{ inputs.rounds || '2' }}
+          SHARD: ${{ matrix.shard }}
+        run: >-
+          python scripts/mutation_check.py --examples "$EXAMPLES" --rounds "$ROUNDS" --jobs 4
+          --shard "$SHARD/14" --json "mutants-$SHARD.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: mutants-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # The control set (never used to shape the generation), in two shards: said, not held to a count.
+  control:
+    name: control set (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1   # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25   # v5.1.0
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-v1
+
+      - name: Re-introduce each bug of the control set's shard, run the invariants
+        env:
+          EXAMPLES: ${{ inputs.examples || '1000' }}
+          ROUNDS: ${{ inputs.rounds || '2' }}
+          SHARD: ${{ matrix.shard }}
+        run: >-
+          python scripts/mutation_check.py --control --examples "$EXAMPLES" --rounds "$ROUNDS" --jobs 4
+          --shard "$SHARD/2" --json "control-$SHARD.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with:
+          name: control-${{ matrix.shard }}
+          path: control-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # The shards put together: each mutant of the tree measured once, at this budget, and at least
+  # `min_caught` caught in every round. It runs whatever came before, the run cancelled aside: a
+  # shard missing (red, or past its bound) is red here.
+  mutants-total:
+    name: mutants (every shard, the count)
+    needs: [mutants, control]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333   # v8.0.2
+        with:
+          path: mutants-results
+
+      - name: Every mutant measured once, the count held
         env:
           MIN_CAUGHT: ${{ inputs.min_caught || '14' }}
           EXAMPLES: ${{ inputs.examples || '1000' }}
           ROUNDS: ${{ inputs.rounds || '2' }}
         run: >-
-          python scripts/mutation_check.py --jobs 4 --min-caught "$MIN_CAUGHT"
-          --examples "$EXAMPLES" --rounds "$ROUNDS"
+          python3 scripts/mutation_check.py --total mutants-results --shards 14 --control-shards 2
+          --examples "$EXAMPLES" --rounds "$ROUNDS" --min-caught "$MIN_CAUGHT"

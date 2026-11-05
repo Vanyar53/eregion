@@ -33,7 +33,6 @@ TAGGED_WITHOUT_SECRETS = {
     ("components.yml", "actions/setup-python@v6"), ("components.yml", "actions/cache@v5"),
     ("invariants.yml", "actions/setup-python@v6"), ("invariants.yml", "actions/cache/restore@v5"),
     ("invariants.yml", "actions/cache/save@v5"),
-    ("mutants.yml", "actions/setup-python@v6"),
 }
 
 
@@ -1412,12 +1411,58 @@ def test_the_gate_runs_the_whole_mutation_in_shards_control_set_included():
     assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
                            f'--control-shards {CONTROL_SHARDS} --examples 500 --rounds 2 --min-caught "$MIN_CAUGHT"')
     monday = _load(ROOT / ".github" / "workflows" / "mutants.yml")
-    (mstep,) = [s for s in monday["jobs"]["mutants"]["steps"] if "mutation_check.py" in (s.get("run") or "")]
+    (mstep,) = [s for s in monday["jobs"]["mutants-total"]["steps"] if "mutation_check.py" in (s.get("run") or "")]
     default = re.fullmatch(r"\$\{\{ inputs\.min_caught \|\| '(\d+)' \}\}", mstep["env"]["MIN_CAUGHT"]).group(1)
     assert default == monday["on"]["workflow_dispatch"]["inputs"]["min_caught"]["default"]
     assert step["env"] == {"MIN_CAUGHT": default}
     (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
     assert down["with"] == {"path": "mutants-results"}
+
+
+# CI6d (#545): the Monday measure in the gate's shards — on one runner it outlasted its 180 min.
+MONDAY = ROOT / ".github" / "workflows" / "mutants.yml"
+MONDAY_INPUTS = {"EXAMPLES": "${{ inputs.examples || '1000' }}", "ROUNDS": "${{ inputs.rounds || '2' }}"}
+
+
+def test_the_monday_measure_runs_in_the_gate_s_shards_and_their_total():
+    """Fourteen shards of the mutants and two of the control set, as release-gate.yml cuts them, then
+    their total: each mutant of the tree measured once, at the dispatcher's budget, the count held
+    to `min_caught` — never more jobs than GitHub gives a public repository at once (20)."""
+    doc, gate = _load(MONDAY), _gate()["jobs"]
+    jobs = doc["jobs"]
+    assert doc["on"]["schedule"] == [{"cron": "41 4 * * 1"}] and doc["permissions"] == {"contents": "read"}
+    assert set(jobs) == {"mutants", "control", "mutants-total"}
+    for name, n, flag in (("mutants", MUTANT_SHARDS, ""), ("control", CONTROL_SHARDS, "--control ")):
+        job = jobs[name]
+        assert job["strategy"] == gate[name]["strategy"] == {"fail-fast": False,
+                                                             "matrix": {"shard": list(range(1, n + 1))}}
+        steps = job["steps"]
+        (step,) = [s for s in steps if "mutation_check.py" in (s.get("run") or "")]
+        assert step["run"] == (f'python scripts/mutation_check.py {flag}--examples "$EXAMPLES" --rounds "$ROUNDS" '
+                               f'--jobs 4 --shard "$SHARD/{n}" --json "{name}-$SHARD.json"'), step["run"]
+        assert step["env"] == {**MONDAY_INPUTS, "SHARD": "${{ matrix.shard }}"}
+        (up,) = [s for s in steps if str(s.get("uses") or "").startswith("actions/upload-artifact@")]
+        assert up["with"]["name"] == f"{name}-${{{{ matrix.shard }}}}" and up["with"]["if-no-files-found"] == "error"
+        restore = [i for i, s in enumerate(steps) if s.get("with") == CHROMA_CACHE]
+        assert len(restore) == 1 and restore[0] < steps.index(step), name
+        assert 0 < job["timeout-minutes"] <= 180
+    total = jobs["mutants-total"]
+    assert total["needs"] == ["mutants", "control"] and total["if"] == "${{ !cancelled() }}"
+    (step,) = [s for s in total["steps"] if "mutation_check.py" in (s.get("run") or "")]
+    assert step["run"] == (f"python3 scripts/mutation_check.py --total mutants-results --shards {MUTANT_SHARDS} "
+                           f'--control-shards {CONTROL_SHARDS} --examples "$EXAMPLES" --rounds "$ROUNDS" '
+                           '--min-caught "$MIN_CAUGHT"')
+    assert step["env"] == {**MONDAY_INPUTS, "MIN_CAUGHT": "${{ inputs.min_caught || '14' }}"}
+    (down,) = [s for s in total["steps"] if str(s.get("uses") or "").startswith("actions/download-artifact@")]
+    assert down["with"] == {"path": "mutants-results"}
+    width = sum(len(j.get("strategy", {}).get("matrix", {}).get("shard", [None])) for j in jobs.values())
+    assert width == MUTANT_SHARDS + CONTROL_SHARDS + 1 <= 20
+    # the gate's own actions, pinned by commit, and the checkout's credentials never kept
+    assert all(PINNED.match(a) for a in _actions(doc)), _actions(doc)
+    assert set(_actions(doc)) <= set(_actions(_gate()))
+    for job in jobs.values():
+        (checkout,) = [s for s in job["steps"] if str(s.get("uses") or "").startswith("actions/checkout@")]
+        assert checkout["with"] == {"persist-credentials": False}
 
 
 CHROMA_CACHE = {"path": "~/.cache/chroma", "key": "chroma-onnx-v1"}

@@ -262,11 +262,14 @@ resource_types:
               expect: TMP_ABSENT
         # VM3 (décision du 05/11) : le revert du scénario (E1), joué APRÈS le cleanup amont (qui
         # lit /tmp/notevil) et seulement s'il a tourné — le fichier vendorisé n'est pas touché.
+        # VM3b : il attend une sonde, plus l'appel — cron-entry-absent revenue à ABSENT après le
+        # cleanup (la crontab de root rétablie) ; sinon il est sauté et /tmp/notevil reste.
         # Le catalogue le fixe : un autre revert rend la technique inconnue (catalog_destructive).
         revert:
           - name: remove-tmp-files
             action: remove_files
             paths: ["/tmp/notevil", "#{tmp_cron}"]
+            requires_probe: cron-entry-absent
         # B3 (VM3) : il remplace TOUTE la crontab de root (crontab -l > /tmp/notevil, puis
         # crontab /tmp/persistevil) et la rétablit depuis /tmp → altère l'état système, banc seulement.
         destructive: true

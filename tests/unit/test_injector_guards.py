@@ -183,8 +183,11 @@ def test_a_script_the_catalog_does_not_name_is_destructive(tmp_path, monkeypatch
 
 
 def test_an_atomic_the_catalog_does_not_pin_is_unknown():
+    from annatar.campaign.catalog import load_catalog
+
+    probes = load_catalog()["T1136.001"]["steady_state"]["probes"]   # VM3b: its own probes
     assert catalog_destructive("T1136.001", engine="atomic",
-                               engine_ref=f"T1136.001/{GUID}") is False
+                               engine_ref=f"T1136.001/{GUID}", probes=probes) is False
     assert catalog_destructive("T1136.001", engine="atomic", engine_ref="T1136.001/other") is None
     assert catalog_destructive("T1136.001", engine="stratus", engine_ref=f"T1136.001/{GUID}") is None
     assert catalog_destructive("T9999") is None

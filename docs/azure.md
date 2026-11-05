@@ -139,12 +139,20 @@ sortante.
 vers la boucle locale, le journal écrasé vers un chemin jetable que le cleanup supprime. Ils sont tenus
 à trois endroits :
 - l'adaptateur (`annatar/engines/atomic.py`) refuse une clé que le test ne déclare pas dans ses
-  `input_arguments`, et une valeur hors de `[A-Za-z0-9._/:-]` (une espace, un `;`, un `$`, un guillemet
-  n'atteignent jamais le shell) ;
+  `input_arguments`, une valeur hors de `[A-Za-z0-9._/:-]` (une espace, un `;`, un `$`, un guillemet
+  n'atteignent jamais le shell), et une valeur qui commence par `-` (VM3b : `-rf` ou `--help` à la place
+  d'un argument serait une option de la commande où il tombe, pas une valeur) ;
 - le parser refuse un `engine_args` qui n'est pas un mapping ;
 - **le catalogue décide** : des `engine_args` autres que ceux de l'entrée rendent le run inconnu, donc
   destructif (`catalog_destructive`, SEC5 V-19) — jamais en production. Le synthétiseur de campagne
   écrit et joue ceux de l'entrée.
+
+**Les sondes aussi (VM3b).** Le `verify` d'une sonde est une commande que Run Command lance en root, trois
+fois par run. `catalog_destructive` compare donc les sondes de `steady_state` à celles de l'entrée, dans
+l'ordre, `verify` et `expect` compris, comme l'`engine_ref`, les `engine_args` et le `revert`. Une sonde
+différente rend le run inconnu, donc destructif : refusé en production, et refusé partout si le scénario
+se dit `destructive: false`. Les quatre scénarios atomic livrés (celui de R1, `account-creation-atomic`,
+compris) ont exactement les sondes de leur entrée (`tests/unit/test_vm3b_suites.py`).
 
 | TTP | Atomic (guid) | Règle bleue | Télémétrie | Seuil |
 |---|---|---|---|---|
@@ -160,14 +168,19 @@ vers la boucle locale, le journal écrasé vers un chemin jetable que le cleanup
   fichier posé là par un autre deviendrait la crontab de root : la sonde refuse un départ où
   `/tmp/notevil` ou `/tmp/persistevil` existent. Le cleanup amont ne les retire pas : le **revert du
   scénario** (le champ `revert` du schéma E1, décidé le 05/11) les retire, après le cleanup — qui lit
-  `/tmp/notevil` — et seulement s'il a tourné ; un cleanup en échec garde la copie de la crontab pour
-  l'opérateur. La sonde d'après le vérifie, et le run finit propre. Le fichier vendorisé n'est pas
-  touché.
+  `/tmp/notevil` — et seulement une fois la sonde `cron-entry-absent` revenue à `ABSENT` après lui
+  (VM3b : la crontab de root rétablie). L'appel du cleanup qui ne lève pas ne prouve rien : Run Command
+  ne lève pas sur un script en échec. Si la sonde ne revient pas, le revert est sauté, `/tmp/notevil`
+  (la copie de la crontab) reste pour l'opérateur, et le run le dit (`checks.revert: SKIPPED`,
+  `metrics.revert_skipped`, l'erreur du run). La sonde d'après vérifie le tout, et le run finit propre.
+  Le fichier vendorisé n'est pas touché.
 
 **Le revert d'un atomic** (`revert_commands`, `annatar/engines/atomic.py`) ne connaît qu'une action,
 `remove_files` : des chemins (leurs `#{var}` remplis par les arguments du test), chacun un chemin simple
 sous `/tmp/` ou `/var/tmp/`, sans `..`, envoyés en `rm -f --` (un fichier ou un lien, jamais un
-répertoire). Le catalogue le fixe comme les `engine_args` : un scénario dont le revert n'est pas celui
+répertoire). Chaque étape nomme la sonde qu'elle attend (`requires_probe`, VM3b), une des sondes du
+scénario, refusée avant que le contrat soit armé sinon ; le plafond d'appels compte cette sonde en plus
+de l'étape. Le catalogue le fixe comme les `engine_args` : un scénario dont le revert n'est pas celui
 de son entrée est une technique inconnue, donc destructive, jamais en production (SEC5, V-19).
 
 Les trois règles sont testées sur des lignes réalistes et sur le bruit bénin connu qui ne doit jamais
@@ -182,7 +195,15 @@ waagent et les extensions sous `/var/log/azure/`, dpkg et apt.
   jamais par `comm`, que l'attaquant choisit ; un écrivain connu (sshd, l'agent, apt) n'est écarté que
   si **toutes** les entrées touchées sont ses fichiers, et un événement sans entrée lue reste une carte.
   Un démon (rsyslogd, journald, logrotate, auditd) est écarté entièrement : un `logrotate` lancé avec une
-  configuration choisie pour tronquer un journal n'est pas vu. Un `echo 0>` sur un journal **existant**
+  configuration choisie pour tronquer un journal n'est pas vu. Le resserrer couperait le bruit réel :
+  tourner tous les journaux est son travail, et son `exe` ne dit pas qui l'a lancé.
+- **L'agent Azure dans `log_tamper` (VM3b).** Ses binaires (`/var/lib/waagent/`, `/opt/microsoft/`) ne
+  sont écartés que sur `/var/log/azure/`. L'interpréteur `python3` du système (`/usr/bin/python3` ou
+  `python3.N` exactement, rien qui commence seulement ainsi) est écarté sur `/var/log/azure/`,
+  `waagent.log` et `unattended-upgrades`. Le retirer perdrait le bruit réel : waagent, le gestionnaire
+  de l'agent de supervision et unattended-upgrades sont des scripts, **leur `exe` est l'interpréteur**,
+  et auditd ne nomme pas le script (proctitle et comm sont à l'attaquant). **Limite** : un script
+  python3 quelconque qui écrit ces fichiers-là n'est pas vu ; sur tout autre journal, il l'est. Un `echo 0>` sur un journal **existant**
   (une ouverture O_TRUNC) devrait être vu par la surveillance `-w /var/log -p wa` : c'est une
   **hypothèse à mesurer** au banc, comme la forme des lignes PATH (chemins absolus).
 - **La règle shell** ne voit pas : un chemin relatif (`sh ./x` depuis `/tmp` — l'enregistrement CWD

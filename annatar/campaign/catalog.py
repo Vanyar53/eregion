@@ -124,9 +124,31 @@ def _plain_revert(revert: Any) -> str | None:
     return json.dumps(revert, sort_keys=True, default=str)
 
 
+def _plain_probes(probes: Any) -> str | None:
+    """Steady-state probes (VM3b) as compared: each probe, in order, as canonical text; "[]"
+    for none; None for what is no list — never equal to the catalog's. A probe's ``verify`` is
+    a command too: Run Command runs it as root, three times a run."""
+    if probes is None:
+        return "[]"
+    if not isinstance(probes, list):
+        return None
+    return json.dumps(probes, sort_keys=True, default=str)
+
+
+def probes_of(steady_state: Any) -> Any:
+    """The probes of a ``steady_state`` as written: its ``probes``; None for none; what is no
+    mapping stands for itself, so it compares to nothing."""
+    if steady_state is None:
+        return None
+    if not isinstance(steady_state, dict):
+        return steady_state
+    return steady_state.get("probes")
+
+
 def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
                         engine_args: dict[str, Any] | None = None,
                         revert: list[Any] | None = None,
+                        probes: list[Any] | None = None,
                         scripts: list[str] | tuple[str, ...] | None = None,
                         catalog: dict[str, dict[str, Any]] | None = None) -> bool | None:
     """Does the catalog say this technique destroys or alters data? ``None`` when it does not
@@ -136,7 +158,9 @@ def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
     the catalog names. An atomic (``engine: atomic``) must be the entry's own ``engine_ref``;
     with the entry's own ``engine_args`` (VM3: an argument the catalog does not set, or sets
     otherwise, makes it another run than the one it vouched for), and the entry's own
-    ``revert`` (VM3: the steps a scenario runs after the atomic's cleanup are commands too);
+    ``revert`` (VM3: the steps a scenario runs after the atomic's cleanup are commands too),
+    and the entry's own steady-state ``probes`` (VM3b: each ``verify`` is a command Run Command
+    runs as root — another probe is another run);
     a local script, the entry's ``reference_script`` or one of its ``setup_scripts`` — each of
     ``scripts``, when given —, its content the one the entry pins (``script_sha256``, SEC14
     V-19: a path is not a content; ``scripts/`` may be written). Another test, another script,
@@ -153,6 +177,9 @@ def catalog_destructive(ttp: str, *, engine: str = "", engine_ref: str = "",
             return None
         mine = _plain_revert(revert)
         if mine is None or mine != _plain_revert(entry.get("revert")):
+            return None
+        seen = _plain_probes(probes)
+        if seen is None or seen != _plain_probes(probes_of(entry.get("steady_state"))):
             return None
     elif scripts:
         known = {entry.get("reference_script")} | set(entry.get("setup_scripts") or [])

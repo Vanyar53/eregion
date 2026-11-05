@@ -48,12 +48,16 @@ steady_state:
 
 # The scenario's own return (E1 `revert`, decided 05/11): run AFTER the atomic's cleanup (which
 # reads /tmp/notevil) and only once it ran; it removes the two files the test leaves (`rm -f --`,
-# inside /tmp/ only — annatar/engines/atomic.py, revert_commands). The vendored file is never
-# touched. It must be the catalog entry's: another revert makes the run unknown, so destructive.
+# inside /tmp/ only — annatar/engines/atomic.py, revert_commands). VM3b: it waits on a probe, not
+# on the call — cron-entry-absent back to ABSENT after the cleanup (root's crontab restored);
+# otherwise it is skipped, /tmp/notevil stays for the operator, and the run says so. The vendored
+# file is never touched. It must be the catalog entry's (and so must the probes above): another
+# makes the run unknown, so destructive.
 revert:
   - name: remove-tmp-files
     action: remove_files
     paths: ["/tmp/notevil", "#{tmp_cron}"]
+    requires_probe: cron-entry-absent
 
 detection:
   timeout: "600s"

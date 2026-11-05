@@ -48,6 +48,16 @@ variable "entra_logs_enabled" {
   nullable    = false
 }
 
+# ── Une identité de test du banc dans Entra ID, inscrite (IDI1, #546) ───────────────────
+# Désactivée par défaut ; dans terraform.tfvars, jamais en `-var` d'une seule commande (le prochain
+# apply sans lui la détruirait). entra_identity.tf, docs/operations.md.
+variable "entra_test_identity_enabled" {
+  description = "Une application et son principal de service dans le tenant du banc, mono-tenant, sans secret, inscrits par les deux clés (ses tags Graph eregion-target et eregion-zone, eregion-identities sur le groupe du banc) : la cible des techniques d'identité (R2). Instance canonique seule. Droit : créer une application (Développeur d'applications, ou plus). Défaut false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 # ── auditd sur les VM du banc, ses lignes vers le workspace (AUD1, #408) ────────────────
 # Désactivé par défaut ; dans terraform.tfvars (persistant), jamais en `-var` d'une seule commande
 # (le prochain apply sans lui retirerait l'extension et la facilité). auditd.tf, docs/operations.md.

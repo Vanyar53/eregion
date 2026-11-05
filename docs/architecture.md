@@ -301,7 +301,7 @@ blocages (ACL réseau du sous-réseau) — ni isolation par règles, ni `session
 | Concept | Sens |
 |---|---|
 | Cible | ressource qu'on a le droit d'éprouver |
-| Inscription | marque posée à la construction (tags `eregion-target=<banc>` et `eregion-zone` sur la cible et son groupe) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
+| Inscription | marque posée à la construction (tags `eregion-target=<banc>` et `eregion-zone` sur la cible et son groupe ; pour une identité d'Entra ID, deux clés : ses tags Graph et `eregion-identities` sur le groupe du banc, IDI1) ; sans elle, aucun injecteur n'agit ; elle porte la zone de la cible |
 | Zone | `bench`, `twin` ou `production` — ce qu'une expérience a le droit d'y faire |
 | Contrôle réseau | ce qui autorise ou refuse le trafic : isoler, bloquer, lever |
 | Télémétrie | où arrivent les logs et les métriques |
@@ -331,6 +331,53 @@ Seule la zone `bench` sert en 0.3 ; les deux autres sont codées et testées (O0
 route 1.0 envisage, en production, des pannes des seules dépendances de Glorfindel (modèle,
 télémétrie, configuration), jamais des charges du client : O0 les refuse comme toute panne ; une
 exception, si elle vient, viendra par un lot explicite.
+
+#### Une identité d'Entra ID (IDI1, #546)
+
+Une identité d'Entra ID ne porte pas de tag ARM. Elle s'inscrit par **deux clés, une par plan**,
+comme une VM l'est par son groupe et par elle-même (`identity_enrollment`, `eregion_core/inscription.py`) :
+
+| Clé | Où | Ce qu'elle dit | Qui peut l'écrire |
+|---|---|---|---|
+| Entra | les `tags` de l'**application** (Microsoft Graph) | `eregion-target=<banc>`, `eregion-zone=<zone>` | ses propriétaires (tout membre peut inscrire une application), les administrateurs d'applications |
+| ARM | le groupe du banc | `eregion-identities=<object id de l'application …>`, sa zone `eregion-zone` | qui écrit sur le groupe du banc — les mêmes que pour inscrire une VM |
+
+Une clé seule n'ouvre rien : une marque posée dans Entra ne suffit pas, et les deux zones doivent
+concorder. La garde refuse aussi : un tenant que le périmètre ne nomme pas (`EREGION_TENANT_ID`) ; un
+jeton du lecteur ou une application d'un autre tenant (`tid`, `appOwnerOrganizationId`) ; une
+application multi-tenant (elle atteint d'autres tenants) ; un principal qui n'est pas celui d'une
+application. **Jamais une cible**, la liste partagée d'`eregion_core/never_target.py` (que lira aussi
+l'exécuteur d'IR1) : l'identité de Glorfindel, celle d'Orodruin, celle d'Annatar, les opérateurs, les
+applications de Microsoft et de tout autre tenant, le principal d'une ressource (une identité managée,
+une API qui expose des rôles ou que d'autres appellent), une application dont le principal possède
+l'une d'elles ; sans opérateur nommé (`EREGION_OPERATOR_OBJECT_ID`), ou une liste mal écrite, toute
+identité. **Jamais une identité privilégiée** (décision du 05/11 : l'exécuteur d'IR1 deviendra
+propriétaire des identités inscrites, et être propriétaire d'une application, c'est pouvoir agir comme
+elle) : un rôle d'annuaire, actif ou éligible, à toute portée ; une appartenance à un groupe (un groupe
+peut porter un rôle) ; un objet possédé (posséder un groupe ou un principal à rôle, c'est le tenir) ;
+une permission d'application — aucune n'est admise tant qu'une technique de R2 n'en exige pas. En `production`, la
+zone décide comme pour une VM : une technique non destructive seule. Une lecture qui échoue refuse.
+Celebrimbor crée et inscrit une identité de test du banc (`infra/terraform/entra_identity.tf`,
+désactivée par défaut) ; Orodruin la lit avec `Application.Read.All` et `RoleManagement.Read.Directory`,
+rien d'autre dans Graph (`infra/orodruin`, `graph_read_enabled`). Les utilisateurs de test viendront
+par une unité administrative (IDI1b) ; ici, une application seule.
+
+**Limite acceptée au banc** (Jonathan, 05/11) : la garde ne lit ni les rôles Azure (RBAC) de
+l'identité hors du groupe du banc, ni ses consentements délégués (`oauth2PermissionGrants`).
+L'identité de test de Celebrimbor n'en a aucun. IDI2 (#556) devra lever cette limite avant d'inscrire
+toute identité qui ne vient pas de Celebrimbor.
+
+**Pourquoi cette forme** (D, deux clés), plutôt que :
+
+| Option | Ce qui l'a écartée |
+|---|---|
+| les attributs de sécurité personnalisés d'Entra seuls | la marque la mieux cloisonnée (seul un Administrateur de l'attribution les écrit), mais deux rôles d'Entra de plus pour Jonathan, un droit Graph de plus pour le lecteur, et un provider Terraform qui ne les gère pas (hypothèse) |
+| les `tags` du seul principal de service | ce sont l'union des siens et de ceux de son application : le tenant d'origine d'une application multi-tenant les écrit ; et tout propriétaire d'application aussi |
+| une unité administrative (restreinte) | elle ne prend pas les principaux de service, seulement utilisateurs, groupes et appareils — retenue pour les utilisateurs de test (IDI1b) |
+| une liste en configuration (orodruin.env) | une marque qui ne vit pas avec l'identité ni avec le banc : rien ne la relie à ce que Celebrimbor a construit, et une coquille inscrit une identité de production |
+
+La clé ARM porte la confiance (qui écrit sur le groupe du banc peut déjà y inscrire une VM) ; la clé
+Entra porte la zone et dit, sur l'identité elle-même, qu'elle est au banc.
 
 ### Le cycle d'une expérience
 

@@ -455,7 +455,7 @@ def test_atomic_refuses_when_cap_too_low(tmp_path, monkeypatch):
     import eregion_core.orodruin as orodruin
 
     monkeypatch.setattr(orodruin, "READERS", {
-        "identity": lambda: [], "network": lambda: [],
+        "identity": lambda: [], "graph": lambda: [], "network": lambda: [],
         "cap": lambda: ([], {"max_injections": 3, "max_run_s": 3600})})
     executor = _atomic_executor()
     outcome = _run_atomic(tmp_path, monkeypatch, executor)

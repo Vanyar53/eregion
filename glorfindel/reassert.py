@@ -328,7 +328,9 @@ def _reassert_block(connector, autonomy, vm: str, ip: str, report: list[dict], r
         _update_block_entry(ref or vm, ip, stale_alerted_at=now)
         report.append({"kind": "block", "vm": vm, "ip": ip, "outcome": "escalated", "detail": reason})
         return
-    if _held_by_an_operation(b, "unblock_failed", "unblocking_at"):
+    # Its `partial` mark written by the first time's own write of its pair (RW1): finished here, said.
+    if _held_by_an_operation({**b, "partial": False} if (pair or {}).get("partial") else b,
+                             "unblock_failed", "unblocking_at"):
         return
     try:
         verification = pair["read"] if pair is not None else connector.verify_block_ip(ip, rid)
@@ -412,15 +414,24 @@ def _rewrite_block(connector, b: dict, vm: str, rid: str, ip: str, report: list[
     scopes = (["subnet", "vm"] if b.get("placements") else ["subnet"]) if b.get("scoped") is False else ["vm"]
     errors: list[str] = []
 
-    def failed(scope: str, exc) -> None:
-        errors.append(f"{exc}" if len(scopes) == 1 else f"{_SCOPE_WORDS[scope]} : {exc}")
+    short: list[str] = []         # written, but the provider said it does not hold whole (RW1)
+
+    def failed(scope: str, exc, into: list[str] = errors) -> None:
+        into.append(f"{exc}" if len(scopes) == 1 else f"{_SCOPE_WORDS[scope]} : {exc}")
     if pair is not None and pair["error"] is not None:
         failed("subnet", pair["error"])
+    if pair is not None and pair.get("partial"):
+        failed("subnet", pair["partial"], short)
     for scope in scopes[1:] if pair is not None else scopes:
         try:
-            connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port"))
+            put = connector.block_suspicious_ip(ip, rid, scope=scope, threat_port=b.get("threat_port"))
         except Exception as exc:
             failed(scope, exc)
+            continue
+        # Read as it is answered, raised or not (RW1, #513): AWS's `failed` wrote nothing.
+        status, why = _write_said(put)
+        if status:
+            failed(scope, why, errors if status == "failed" else short)
     if len(errors) < len(scopes):
         # Written again: the episode ends in the write of `reasserted_at` (L1O, #507) — over first, in
         # memory, whatever that write does. Its marks kept, the card « reposé une fois » pending read
@@ -436,21 +447,27 @@ def _rewrite_block(connector, b: dict, vm: str, rid: str, ip: str, report: list[
             after = {"verified": None, "error": f"relecture impossible : {exc}"}
         # A write that failed is never « reposé », whatever the reading says: an unreadable
         # perimeter read as whole, and the error was swallowed (RB1, review).
+        reposed = False
         if after.get("verified") is True and not after.get("held_missing") and not errors:
+            reposed = not short          # the provider's word: a write it said partial is never « reposé » (RW1)
+        if reposed:
             reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure : reposé une fois. "
                       "S'il disparaît encore, Glorfindel alertera sans le reposer.")
             outcome = "reapplied"
         else:
             say_bypass(vm, rid, after, report, ip=ip, ref=ref)
             said = after
+            notes = ([f"échec : {' ; '.join(errors)}"] if errors else []) + (
+                [f"en partie selon le fournisseur : {' ; '.join(short)}"] if short else [])
             reason = (f"Le blocage de {ip} sur {vm} avait disparu d'Azure ; ses règles réécrites une fois"
-                      + (f" (échec : {' ; '.join(errors)})" if errors else "")
+                      + (f" ({' ; '.join(notes)})" if notes else "")
                       + ", il ne tient pas en entier — " + _block_drift(ip, vm, after, said=True)
                       + f" Glorfindel ne les réécrit pas de nouveau : `glorfindel unblock {ip} {rid} --yes` si "
-                      "c'est voulu, sinon re-bloquer.")
+                      "c'est voulu, sinon re-bloquer." + _held_partial(ref or vm, ip))
             outcome = "partial"
     else:
-        reason = f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {' ; '.join(errors)}"
+        reason = (f"Le blocage de {ip} sur {vm} a disparu d'Azure ; le reposer a échoué : {' ; '.join(errors)}"
+                  + _held_partial(ref or vm, ip))
         outcome = "failed"
     _alert(_alert_id(vm, rid, ip), resource_id=rid, action="block_suspicious_ip",
            reason=reason, action_params={"ip": ip})
@@ -465,6 +482,34 @@ def _rewrite_block(connector, b: dict, vm: str, rid: str, ip: str, report: list[
 
 
 _SCOPE_WORDS = {"subnet": "règle de périmètre", "vm": "règles de la VM"}
+
+
+def _write_said(put) -> tuple[str, str]:
+    """What a block's write answered without raising (RW1, #513): (`failed` | `partial` | "", why).
+
+    AWS answers `failed` when no ACL entry can be placed, `partial` when an entry does not hold at
+    its read-back — neither raises. Read as written, a `failed` made the card say « ses règles
+    réécrites une fois » of rules never written, and `reasserted_at` kept it from ever being tried
+    again; a `partial` left its entry marked, out of every later pass, its card unsaid or promising
+    « s'il disparaît encore, Glorfindel alertera ». Azure raises instead (PartialActionError); its
+    `blocked_partial` — a perimeter written, NICs of another subnet not behind it — is left to the
+    re-read, which says what holds."""
+    status = put.get("status") if isinstance(put, dict) else None
+    if status not in ("failed", "partial"):
+        return "", ""
+    why = " ; ".join(
+        (f"{x['acl']} : {x.get('reason')}" if x.get("acl") else f"{x.get('reason')}")
+        for x in put.get("bypass") or [] if isinstance(x, dict) and x.get("reason"))
+    return status, why or str(put.get("error") or f"le fournisseur répond « {status} »")
+
+
+def _held_partial(ref: str, ip: str) -> str:
+    """Its entry marked `partial` by the provider's write: no pass reads it again (`_held_by_an_operation`)
+    until it is blocked again whole or unblocked — said so, never « Glorfindel alertera » (RW1)."""
+    from glorfindel.actions import _load_block_entries
+    b = next((e for e in _load_block_entries(ref) if e.get("ip") == ip), None) or {}
+    return (" Noté partiel par le fournisseur : la réaffirmation ne le relit plus avant un nouveau blocage "
+            "entier ou un déblocage.") if b.get("partial") else ""
 
 
 def ttl_alerts(ttl_h: float, now: datetime | None = None) -> list[dict]:

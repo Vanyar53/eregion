@@ -20,3 +20,9 @@ vm_shutdown_email    = "you@example.com"
 # Optionnel (VM3, #548) — la facilité cron dans la DCR, pour la détection de persistance cron
 # (T1053.003). Désactivé par défaut ; à poser ici, jamais en -var (monitoring.tf).
 # cron_logs_enabled = true
+
+# Optionnel (IDI1) — une identité de test du banc dans Entra ID (une application et son principal,
+# mono-tenant, sans secret), inscrite par les deux clés. Désactivée par défaut ; à poser ici, jamais
+# en -var. Puis : make celebrimbor-identity-plan, et make celebrimbor-identity-up YES=1
+# (docs/operations.md, « L'identité de test du banc (IDI1) »).
+# entra_test_identity_enabled = true
